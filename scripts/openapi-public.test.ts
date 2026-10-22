@@ -16,7 +16,7 @@ const ok = (description: string, ref: string) => ({
 // schema chain (Order -> Line -> Money), a shared response component and schemas nothing listed uses.
 const source = {
   openapi: '3.1.0',
-  info: { title: 'Combined', version: '1.0.0' },
+  info: { title: 'Combined', description: 'Internal title for every microservice', version: '1.0.0' },
   tags: [
     { name: 'Orders', description: 'Order lifecycle' },
     { name: 'Internal', description: 'Not for the public' },
@@ -138,6 +138,19 @@ describe('openapi-public.mjs', () => {
     expect(keysAt(out, 'components', 'parameters')).toEqual(['OrderId']);
     expect(keysAt(out, 'components')).not.toContain('securitySchemes');
     expect(at(out, 'tags')).toEqual([{ name: 'Orders', description: 'Order lifecycle' }]);
+  });
+
+  it('replaces the source title and description with the public ones and keeps its version', () => {
+    const result = run(['getOrder'], { ...source, info: { ...source.info, version: '7.8.9' } });
+
+    expect(result.status).toBe(0);
+    const out = readOut();
+    expect(at(out, 'info', 'title')).toBe('Many Oars API');
+    expect(at(out, 'info', 'version')).toBe('7.8.9');
+    const description = at(out, 'info', 'description');
+    expect(typeof description === 'string' && description !== '' && !description.includes('\n')).toBe(true);
+    expect(description).not.toContain('Internal');
+    expect(JSON.stringify(at(out, 'info'))).not.toContain('Combined');
   });
 
   it('drops a path whose only operations are not listed', () => {
