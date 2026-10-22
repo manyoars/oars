@@ -1,6 +1,8 @@
 [
+  "createAgentPrice",
   "deployWorkload",
   "exchange",
   "getWorkload",
-  "registerWorkload"
+  "registerWorkload",
+  "upsertBillingCustomer"
 ]

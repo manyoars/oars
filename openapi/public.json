@@ -20,6 +20,72 @@
         ],
         "type": "string"
       },
+      "CreatePriceInput": {
+        "properties": {
+          "amountUsd": {
+            "example": "9.99",
+            "format": "decimal",
+            "type": "string"
+          },
+          "credits": {
+            "description": "Credits a CREDIT_PACK grants; null for other kinds",
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "displayName": {
+            "maxLength": 120,
+            "minLength": 1,
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/PriceKind"
+          },
+          "priceRef": {
+            "description": "Stable handle the agent charges by",
+            "example": "pro-monthly",
+            "minLength": 1,
+            "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "amountUsd",
+          "displayName",
+          "kind",
+          "priceRef"
+        ]
+      },
+      "CustomerView": {
+        "properties": {
+          "countryCode": {
+            "type": "string"
+          },
+          "createdAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "customerRef": {
+            "type": "string"
+          },
+          "email": {
+            "type": "string"
+          },
+          "regionCode": {
+            "type": "string"
+          },
+          "updatedAt": {
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "countryCode",
+          "createdAt",
+          "customerRef",
+          "updatedAt"
+        ]
+      },
       "DeploymentStatus": {
         "properties": {
           "agentId": {
@@ -205,6 +271,55 @@
           "accessToken"
         ]
       },
+      "PriceKind": {
+        "enum": [
+          "ONE_TIME",
+          "RECURRING_MONTHLY",
+          "CREDIT_PACK"
+        ],
+        "type": "string"
+      },
+      "PriceView": {
+        "properties": {
+          "active": {
+            "type": "boolean"
+          },
+          "amountUsd": {
+            "format": "decimal",
+            "type": "string"
+          },
+          "createdAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "credits": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "displayName": {
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/PriceKind"
+          },
+          "priceRef": {
+            "type": "string"
+          },
+          "updatedAt": {
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "active",
+          "amountUsd",
+          "createdAt",
+          "displayName",
+          "kind",
+          "priceRef",
+          "updatedAt"
+        ]
+      },
       "ProblemDetail": {
         "properties": {
           "actionUrl": {
@@ -374,6 +489,42 @@
           "PLATFORM"
         ],
         "type": "string"
+      },
+      "UpsertCustomerInput": {
+        "properties": {
+          "countryCode": {
+            "description": "ISO 3166-1 alpha-2 country; only US customers are supported",
+            "example": "US",
+            "pattern": "^[A-Za-z]{2}$",
+            "type": "string"
+          },
+          "customerRef": {
+            "description": "The agent's own stable, opaque id for this customer",
+            "example": "cus-42",
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:@-]*$",
+            "type": "string"
+          },
+          "email": {
+            "description": "Optional; kept minimal (spec §12)",
+            "format": "email",
+            "maxLength": 254,
+            "minLength": 0,
+            "type": "string"
+          },
+          "regionCode": {
+            "description": "For US customers, the two-letter state (required)",
+            "example": "CA",
+            "maxLength": 3,
+            "minLength": 0,
+            "type": "string"
+          }
+        },
+        "required": [
+          "countryCode",
+          "customerRef"
+        ]
       },
       "UserResponse": {
         "description": "User information response",
@@ -1529,12 +1680,423 @@
           "OIDC"
         ]
       }
+    },
+    "/billing/agents/{workloadId}/prices": {
+      "post": {
+        "operationId": "createAgentPrice",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workloadId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreatePriceInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/PriceView"
+                }
+              }
+            },
+            "description": "An identical price already existed"
+          },
+          "201": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/PriceView"
+                }
+              }
+            },
+            "description": "Created"
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Invalid amount, kind or credits"
+          },
+          "401": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "402": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Payment Required"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "WORKLOAD_NOT_OWNED"
+          },
+          "404": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "IDEMPOTENCY_CONFLICT: the priceRef exists with different terms"
+          },
+          "413": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Content Too Large"
+          },
+          "422": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Unprocessable Content"
+          },
+          "423": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Locked"
+          },
+          "429": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Too Many Requests"
+          },
+          "451": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Unavailable For Legal Reasons"
+          },
+          "500": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          },
+          "502": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Bad Gateway"
+          },
+          "503": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          },
+          "504": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Gateway Timeout"
+          }
+        },
+        "summary": "Create a price (re-posting identical terms is a replay)",
+        "tags": [
+          "public",
+          "Billing prices"
+        ]
+      }
+    },
+    "/billing/customers": {
+      "post": {
+        "operationId": "upsertBillingCustomer",
+        "parameters": [
+          {
+            "description": "The agent's SDK key (aorsk_…)",
+            "in": "header",
+            "name": "X-Agent-SDK-Key",
+            "required": true
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpsertCustomerInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/CustomerView"
+                }
+              }
+            },
+            "description": "Updated"
+          },
+          "201": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/CustomerView"
+                }
+              }
+            },
+            "description": "Created"
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "CUSTOMER_REGION_NOT_SUPPORTED, or a malformed field"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "SDK_KEY_INVALID"
+          },
+          "402": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Payment Required"
+          },
+          "403": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "WORKLOAD_NOT_ACTIVE"
+          },
+          "413": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Content Too Large"
+          },
+          "422": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Unprocessable Content"
+          },
+          "423": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Locked"
+          },
+          "429": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Too Many Requests"
+          },
+          "451": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Unavailable For Legal Reasons"
+          },
+          "500": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          },
+          "502": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Bad Gateway"
+          },
+          "503": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          },
+          "504": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Gateway Timeout"
+          }
+        },
+        "summary": "Create or update a customer by its customerRef",
+        "tags": [
+          "Billing customers",
+          "public"
+        ]
+      }
     }
   },
   "tags": [
     {
       "description": "Hosted workload registration and lifecycle",
       "name": "Workloads"
+    },
+    {
+      "description": "Agent API: create and update end customers",
+      "name": "Billing customers"
+    },
+    {
+      "description": "Developer API: an agent's prices",
+      "name": "Billing prices"
     },
     {
       "description": "Keycloak OIDC federation endpoints",
