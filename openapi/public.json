@@ -942,7 +942,7 @@
     }
   },
   "info": {
-    "description": "The AOR platform calls the Many Oars CLI and starter templates make: deploy a workload, read it, exchange a token.",
+    "description": "The AOR platform calls that the Many Oars CLI and starter templates make: deploy a workload, read it, exchange a token.",
     "title": "Many Oars API",
     "version": "1.0.0"
   },
