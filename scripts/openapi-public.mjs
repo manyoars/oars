@@ -20,7 +20,7 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 // The source's title and description name the platform's internal services, so the public spec states its own; only the
 // version is carried over. The public spec E32 produces replaces this file whole.
 const PUBLIC_TITLE = 'Many Oars API';
-const PUBLIC_DESCRIPTION = 'The AOR platform calls the Many Oars CLI and starter templates make: deploy a workload, read it, exchange a token.';
+const PUBLIC_DESCRIPTION = 'The AOR platform calls that the Many Oars CLI and starter templates make: deploy a workload, read it, exchange a token.';
 
 /**
  * @param {unknown} value
