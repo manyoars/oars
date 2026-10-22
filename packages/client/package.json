@@ -1,0 +1,22 @@
+{
+  "name": "@manyoars/oars-client",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Typed client for the Many Oars public API: types generated from openapi/public.json and a thin openapi-fetch wrapper",
+  "license": "Apache-2.0",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "generate": "node scripts/generate.mjs",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "openapi-fetch": "^0.17.0"
+  },
+  "devDependencies": {
+    "openapi-typescript": "^7.13.0"
+  }
+}
