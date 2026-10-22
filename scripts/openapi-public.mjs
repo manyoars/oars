@@ -5,7 +5,8 @@
 //
 // Exit 0: written. Exit 1: the source or the list is unusable, a listed operationId is not in the source (each one is
 // named), or a $ref points at a component the source lacks. Exit 2: bad usage. The output is deterministic: object keys
-// sorted at every depth, two-space indent, one trailing newline, and no path of the machine that ran it.
+// sorted at every depth, two-space indent, one trailing newline, and no path of the machine that ran it. Its info.title
+// and info.description are fixed in this file; info.version is the source's.
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -16,6 +17,10 @@ import { parseArgs } from 'node:util';
 
 const HTTP_METHODS = ['get', 'put', 'post', 'delete', 'options', 'head', 'patch', 'trace'];
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+// The source's title and description name the platform's internal services, so the public spec states its own; only the
+// version is carried over. The public spec E32 produces replaces this file whole.
+const PUBLIC_TITLE = 'Many Oars API';
+const PUBLIC_DESCRIPTION = 'The AOR platform calls the Many Oars CLI and starter templates make: deploy a workload, read it, exchange a token.';
 
 /**
  * @param {unknown} value
@@ -142,7 +147,7 @@ const filterSpec = (source, operationIds) => {
   /** @type {JsonObject} */
   const result = {
     openapi: source['openapi'] ?? null,
-    info: source['info'] ?? null,
+    info: { title: PUBLIC_TITLE, description: PUBLIC_DESCRIPTION, version: isObject(source['info']) ? (source['info']['version'] ?? null) : null },
     tags: sourceTags.filter((tag) => isObject(tag) && usedTags.has(tag['name'])),
     paths,
     components,
