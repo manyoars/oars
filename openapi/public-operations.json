@@ -1,0 +1,6 @@
+[
+  "deployWorkload",
+  "exchange",
+  "getWorkload",
+  "registerWorkload"
+]
