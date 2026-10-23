@@ -149,7 +149,7 @@ describe('openapi-public.mjs', () => {
     expect(at(out, 'info', 'version')).toBe('7.8.9');
     const description = at(out, 'info', 'description');
     expect(description).toBe(
-      'The AOR platform calls that the Many Oars CLI and starter templates make: deploy a workload, read it, exchange a token.',
+      'The AOR platform calls that the Many Oars CLI and starter templates make: deploy a workload, read it, exchange a token, set prices and customers, reserve and settle credits, take a payment.',
     );
     expect(description).not.toContain('Internal');
     expect(JSON.stringify(at(out, 'info'))).not.toContain('Combined');

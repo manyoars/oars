@@ -1,8 +1,13 @@
 [
+  "balance",
+  "commit",
   "createAgentPrice",
+  "createCharge",
   "deployWorkload",
   "exchange",
   "getWorkload",
   "registerWorkload",
+  "release",
+  "reserve",
   "upsertBillingCustomer"
 ]
