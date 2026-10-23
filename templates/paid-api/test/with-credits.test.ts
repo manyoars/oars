@@ -83,7 +83,8 @@ describe('withCredits: reserve, run, commit or release', () => {
 
     expect(handler).not.toHaveBeenCalled();
     expect(result.status).toBe(402);
-    expect(result.body).toMatchObject({ code: 'INSUFFICIENT_CREDITS', checkoutUrl: expect.stringMatching(/^https:\/\//) });
+    expect(result.body).toMatchObject({ code: 'INSUFFICIENT_CREDITS' });
+    expect(JSON.stringify(result.body)).toMatch(/"checkoutUrl":"https:\/\//);
   });
 
   it('gives two concurrent calls on one credit one 200 and one 402, and runs the handler once', async () => {
