@@ -39,7 +39,7 @@ default command never sets it. On the platform, `AOR_SDK_KEY` is injected.
 | `POST /v1/tasks` | bearer | `{url}`: costs one credit when the audit is returned; send an `Idempotency-Key` to retry safely |
 
 The token is the buyer's only secret: the server stores nothing and bills under `cus_` plus the SHA-256 of the token, so a
-leaked `customerRef` cannot spend credits. Keep the token secret; losing it loses the credits until token recovery ships.
+leaked `customerRef` cannot spend credits. Keep the token secret. If you lose it, your credits are kept: token recovery (coming soon) issues a new token for them.
 
 ## The task
 
