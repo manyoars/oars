@@ -1,0 +1,18 @@
+# The platform's template catalog entry for per-task-agent (aor.agent.templates.catalog takes a list). Keys are kebab-case
+# because Spring binds them; the API serves them as camelCase AgentTemplateResponse, and `public-ingress` is `public` on that wire.
+# The image digest is the release's: the per-task-agent-v<semver> workflow prints it and the first release fills it in.
+- template-id: per-task-agent
+  name: Per-task agent
+  description: A job your customers pay for per finished task, through credit packs
+  manifest:
+    name: Per-task agent
+    services:
+      - name: agent
+        image: ghcr.io/manyoars/per-task-agent@sha256:<release digest>
+        port: 8080
+        public-ingress: true
+        cpu-millicores: 500
+        memory-mib: 512
+  starter-prices:
+    - { price-ref: task-1, display-name: 1 task, amount-usd: 9.00, kind: CREDIT_PACK, credits: 1 }
+    - { price-ref: tasks-5, display-name: 5 tasks, amount-usd: 40.00, kind: CREDIT_PACK, credits: 5 }
