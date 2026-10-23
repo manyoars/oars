@@ -3,7 +3,7 @@
 // names the violation in the `sl-violations` header; createBilling surfaces that as a BillingProblem with status 422.
 import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { type Billing, createBilling } from '../src/billing.js';
+import { type Billing, createBilling } from '../../src/billing.js';
 import { type PrismServer, startPrism } from './prism.js';
 
 const RESERVATION_ID = randomUUID();

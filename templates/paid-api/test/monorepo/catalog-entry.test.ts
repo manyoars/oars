@@ -4,14 +4,14 @@ import { readFileSync } from 'node:fs';
 import { Ajv } from 'ajv';
 import { describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
-import { loadConfig } from '../src/config.js';
+import { loadConfig } from '../../src/config.js';
 import { agentTemplateSchema } from './agent-template-schema.js';
 
 const read = (relative: string): string => readFileSync(new URL(relative, import.meta.url), 'utf8');
 
 const isRecord = (value: unknown): value is { [key: string]: unknown } => typeof value === 'object' && value !== null && !Array.isArray(value);
 
-const publicSpec: unknown = JSON.parse(read('../../../openapi/public.json'));
+const publicSpec: unknown = JSON.parse(read('../../../../openapi/public.json'));
 const components = isRecord(publicSpec) && isRecord(publicSpec['components']) ? publicSpec['components'] : {};
 const schemas = isRecord(components['schemas']) ? components['schemas'] : {};
 
@@ -37,7 +37,7 @@ const strict = (node: unknown): unknown => {
   return 'properties' in node ? { ...copy, additionalProperties: false } : copy;
 };
 
-const entries: unknown = parse(read('../catalog-entry.yaml'));
+const entries: unknown = parse(read('../../catalog-entry.yaml'));
 const entry: unknown = Array.isArray(entries) ? entries[0] : undefined;
 
 // OpenAPI's int32/int64/decimal formats are not JSON Schema formats, and the spec carries `example`; neither is under test.

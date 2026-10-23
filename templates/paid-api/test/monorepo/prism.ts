@@ -21,7 +21,7 @@ export interface PrismOptions {
   edit?: (spec: string) => string;
 }
 
-const SPEC = fileURLToPath(new URL('../../../openapi/public.json', import.meta.url));
+const SPEC = fileURLToPath(new URL('../../../../openapi/public.json', import.meta.url));
 const START_TIMEOUT_MS = 45_000;
 
 // Springdoc declares every billing response as `*/*`, which Prism cannot serialize (it answers 500 to a valid call). Billing

@@ -24,7 +24,7 @@ crash. Buyers are stateless: a bearer token `oc_...` minted by `POST /v1/custome
 
 ```sh
 OARS_DEV_FAKE_BILLING=1 npm run dev      # in-memory fake billing, nothing is charged; never set it in production
-npm test                                 # unit tests, the contract test against Prism, the catalog entry check
+npm test                                 # the unit tests
 ```
 
 Without `AOR_SDK_KEY` the server refuses to start; the platform injects the key.
