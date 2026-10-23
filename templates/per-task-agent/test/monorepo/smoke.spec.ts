@@ -167,7 +167,7 @@ describe('the image, billing holding the credit', () => {
     const response = await task(url, await mintToken(url));
 
     expect(response.status).toBe(422);
-    expect(response.headers.get('X-Credits-Charged')).toBeNull();
+    expect(response.headers.get('X-Credits-Charged')).toBe('0');
     expect((await json(response))['code']).toBe('URL_NOT_ALLOWED');
     expect(await stack?.container.logs()).toContain('"event":"task-failed","code":"URL_NOT_ALLOWED"');
   });
