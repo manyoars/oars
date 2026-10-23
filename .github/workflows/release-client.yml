@@ -3,9 +3,9 @@ name: release-client
 # Publishes @manyoars/oars-client to npm on a tag client-v<semver>: the same `just check` as ci, a guard that the tag's version
 # is packages/client/package.json's, then `npm publish` with provenance. No such tag exists until the first release.
 #
-# Auth: npm trusted publishing (OIDC, no stored secret) once the package has a trusted publisher configured on npmjs.com
-# (package settings, GitHub Actions, repository manyoars/oars, workflow release-client.yml). npm tries OIDC first and falls
-# back to the NPM_TOKEN repository secret when one is set. The first publish of a new package needs that token.
+# Auth: npm trusted publishing (OIDC), no stored secret. The package's trusted publisher on npmjs.com names the GitHub
+# Actions repository manyoars/oars and the workflow file release-client.yml (both case-sensitive, no environment), so do
+# not rename this file or add an environment.
 on:
   push:
     tags: ['client-v*']
@@ -29,7 +29,7 @@ jobs:
         run: |
           semver="${GITHUB_REF_NAME#client-v}"
           if ! printf '%s' "$semver" | grep -Eq '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'; then
-            echo "::error::$GITHUB_REF_NAME is not client-v<semver>"
+            echo "::error::$GITHUB_REF_NAME is not client-v<major.minor.patch> (prerelease tags are not published)"
             exit 1
           fi
           package="$(node -p "require('./packages/client/package.json').version")"
@@ -53,9 +53,4 @@ jobs:
             exit 1
           fi
       - name: Publish
-        env:
-          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: |
-          # With no secret set, npm authenticates through OIDC alone; with one, it is the fallback.
-          if [ -n "$NPM_TOKEN" ]; then export NODE_AUTH_TOKEN="$NPM_TOKEN"; fi
-          npm publish -w packages/client --provenance --access public
+        run: npm publish -w packages/client --provenance --access public
