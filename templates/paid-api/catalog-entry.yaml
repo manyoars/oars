@@ -1,0 +1,18 @@
+# The platform's template catalog entry for paid-api (aor.agent.templates.catalog takes a list). Keys are kebab-case because
+# Spring binds them; the API serves them as camelCase AgentTemplateResponse, and `public-ingress` is `public` on that wire.
+# The image digest is the release's: the paid-api-v<semver> workflow prints it and the first release fills it in.
+- template-id: paid-api
+  name: Paid API
+  description: An HTTP API that charges per call through credit packs
+  manifest:
+    name: Paid API
+    services:
+      - name: api
+        image: ghcr.io/manyoars/paid-api@sha256:<release digest>
+        port: 8080
+        public-ingress: true
+        cpu-millicores: 250
+        memory-mib: 256
+  starter-prices:
+    - { price-ref: calls-100, display-name: 100 calls, amount-usd: 5.00, kind: CREDIT_PACK, credits: 100 }
+    - { price-ref: calls-1000, display-name: "1,000 calls", amount-usd: 40.00, kind: CREDIT_PACK, credits: 1000 }
