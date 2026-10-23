@@ -35,6 +35,15 @@ describe('withCredits: reserve, run, commit or release', () => {
     expect(reserve).toHaveBeenCalledExactlyOnceWith({ customerRef: CUSTOMER, credits: 1, ttlSeconds: 45, idempotencyKey: 'k-1' });
   });
 
+  it('holds for the ttlSeconds a template asks for, such as a long task needing more than the default', async () => {
+    const { clock, fake } = setup();
+    const reserve = vi.spyOn(fake, 'reserve');
+
+    await withCredits(fake, { customerRef: CUSTOMER, key: 'k-1', now: clock.now, ttlSeconds: 60 }, counting(ok));
+
+    expect(reserve).toHaveBeenCalledExactlyOnceWith({ customerRef: CUSTOMER, credits: 1, ttlSeconds: 60, idempotencyKey: 'k-1' });
+  });
+
   it('commits a 2xx and answers with the handler result and the credits charged', async () => {
     const { clock, fake } = setup();
 
