@@ -1,0 +1,28 @@
+{
+  "name": "@manyoars/template-paid-api",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Many Oars starter template: an HTTP API that charges per successful call through prepaid credits",
+  "license": "Apache-2.0",
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "dev": "tsx watch src/main.ts",
+    "build": "esbuild src/main.ts --bundle --platform=node --format=esm --target=node24 --outfile=dist/main.js",
+    "start": "node dist/main.js",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@hono/node-server": "^2.1.5",
+    "@manyoars/oars-client": "*",
+    "hono": "^4.13.13"
+  },
+  "devDependencies": {
+    "@stoplight/prism-cli": "^5.16.0",
+    "esbuild": "^0.28.2",
+    "tsx": "^4.23.15"
+  }
+}
