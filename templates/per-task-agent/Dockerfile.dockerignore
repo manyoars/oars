@@ -1,4 +1,4 @@
-# Read by BuildKit for templates/paid-api/Dockerfile (build context: the repository root).
+# Read by BuildKit for templates/per-task-agent/Dockerfile (build context: the repository root).
 **/node_modules
 **/dist
 .git
