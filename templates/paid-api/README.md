@@ -64,7 +64,10 @@ prices in the Billing tab and the refs in `OARS_PRICE_REFS`.
 ```sh
 npm test                  # the unit tests
 npm run test:monorepo    # monorepo only: the contract test against Prism, the catalog entry and README checks
+docker build -f templates/paid-api/Dockerfile -t paid-api .   # monorepo only: from the repository root
+OARS_SMOKE_IMAGE=paid-api npm run test:smoke                  # monorepo only: the image against Prism (needs Docker)
 ```
 
 `catalog-entry.yaml` is the platform's catalog entry for this template; its image digest is filled in by the release.
-`test/monorepo/` holds the tests that need the Many Oars monorepo around the template (they read its `openapi/public.json`). Delete that folder in your copy; `npm test` skips it anyway.
+`test/monorepo/` holds the tests that need the Many Oars monorepo around the template (they read its `openapi/public.json` or its
+workflow, or build its image). Delete that folder in your copy; `npm test` skips it anyway.

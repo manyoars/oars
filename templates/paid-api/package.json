@@ -14,7 +14,8 @@
     "start": "node dist/main.js",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "test:monorepo": "vitest run --config vitest.monorepo.config.ts"
+    "test:monorepo": "vitest run --config vitest.monorepo.config.ts",
+    "test:smoke": "vitest run --config vitest.smoke.config.ts"
   },
   "dependencies": {
     "@hono/node-server": "^2.1.5",
