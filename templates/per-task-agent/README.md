@@ -70,8 +70,7 @@ link-local and `fdaa::/16` addresses, connects to the address it checked, and re
 `src/billing.ts` (`withCredits`) reserves one credit, runs the task, commits on a 2xx and releases on anything else. The
 response leaves only after the commit succeeds. The task has a 45-second budget, so the synchronous request stays inside the
 edge proxy's idle limit, and the hold is a 60-second hold (`HOLD_TTL_SECONDS`), so a task that runs to its
-limit is still settled before the hold lapses. Both numbers come from the Many Oars 1T minimum design, section 2.3
-(`docs/superpowers/specs/2026-10-21-many-oars-1t-minimum-design.md` in the platform repository).
+limit is still settled before the hold lapses. Both numbers come from the Many Oars 1T minimum design, section 2.3.
 
 - A 4xx, a 5xx, a timeout or a thrown error releases the credit and the buyer pays nothing.
 - No credit gives 402 with a `checkoutUrl` and the task never runs. Two tasks racing for the last credit get one hold and
