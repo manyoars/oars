@@ -3,7 +3,8 @@
 FROM node:24-slim AS build
 WORKDIR /repo
 COPY . .
-RUN npm ci --workspace templates/per-task-agent
+RUN npm ci --workspace packages/client --workspace templates/per-task-agent
+RUN npm run build --workspace packages/client
 RUN npm run build --workspace templates/per-task-agent
 
 # The bundle carries every dependency, so the runtime image needs nothing from npm.

@@ -16,7 +16,8 @@ const packedPaths = (): string[] => {
   expect(npm.status, npm.stderr).toBe(0);
   const parsed: unknown = JSON.parse(npm.stdout);
   // npm 12 keys the result by workspace name; older npm lists the packages in an array.
-  const [entry] = Array.isArray(parsed) ? parsed : isRecord(parsed) ? Object.values(parsed) : [];
+  const entries: unknown[] = Array.isArray(parsed) ? parsed : isRecord(parsed) ? Object.values(parsed) : [];
+  const entry = entries[0];
   const files = isRecord(entry) ? entry.files : undefined;
   if (!Array.isArray(files)) throw new Error(`npm pack --json listed no files: ${npm.stdout}`);
   return files.map((file: unknown) => (isRecord(file) && typeof file.path === 'string' ? file.path : '?'));
