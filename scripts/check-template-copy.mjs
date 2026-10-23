@@ -1,7 +1,7 @@
 // Proves what a developer gets: a copy of a starter template, made outside the monorepo, installs the packed
 // @manyoars/oars-client in place of the registry version and passes its own unit tests. Packs the client (its prepack builds
 // dist/), copies each template by the copy rule in scripts/template-copy.mjs into a temp folder, npm-installs it there with
-// no lockfile and no workspace, and runs `npm test`.
+// no lockfile and no workspace, and runs `npm run typecheck` and `npm test`.
 //
 //   node scripts/check-template-copy.mjs [template ...]     (default: every template; npm run check:template-copy)
 //
@@ -66,12 +66,13 @@ try {
       throw new Error(`${name}: ${installed} is not the packed client ${version} (dist/index.js present, no src/)`);
     }
 
+    run('npm run typecheck', copy);
     const summary = run('npm test', copy)
       .split('\n')
       .filter((line) => /^\s*(Test Files|Tests)\s/.test(line))
       .map((line) => line.trim())
       .join('; ');
-    console.log(`${name}: installed oars-client ${version} from the tarball outside the monorepo; ${summary}`);
+    console.log(`${name}: installed oars-client ${version} from the tarball outside the monorepo; typecheck clean; ${summary}`);
   }
 } catch (error) {
   console.error(error instanceof Error ? error.message : error);
