@@ -9,8 +9,8 @@ installs or imports to do that:
 |------|------------|-------|
 | `packages/client` | `@manyoars/oars-client`: TypeScript types generated from `openapi/public.json` and a thin `openapi-fetch` wrapper that adds the bearer token, `Idempotency-Key` and `User-Agent` | here |
 | `openapi/public.json` | The slice of the platform API that the CLI and the templates call, generated from the platform's OpenAPI by `scripts/openapi-public.mjs` and the operation list in `openapi/public-operations.json` | here |
-| `templates/paid-api` | Starter template: an HTTP API that charges per call | to come |
-| `templates/per-task-agent` | Starter template: a job that charges per finished task | to come |
+| `templates/paid-api` | Starter template: an HTTP API that charges per call | here |
+| `templates/per-task-agent` | Starter template: a job that charges per finished task | here |
 | `packages/cli` | `@manyoars/oars`, the `oars` command: `login`, `templates`, `deploy`, `status`, `test-charge` | to come |
 
 ## Develop
@@ -19,11 +19,14 @@ Node 24 (LTS) and [`just`](https://github.com/casey/just).
 
 ```sh
 npm ci
-just check     # lint, typecheck and unit tests; CI runs the same recipe
+just check     # billing sync, lint, typecheck and unit tests; CI runs the same recipe
 ```
 
 `just check` includes a staleness test: it regenerates the client's types from `openapi/public.json` and fails when
 `packages/client/src/generated/schema.d.ts` differs.
+
+It also runs `scripts/check-billing-sync.mjs`, which fails (naming both paths) when the two templates' `src/billing.ts`
+differ. The file holds all the money handling and is one file in every template: change both copies or neither.
 
 ## The public API spec
 

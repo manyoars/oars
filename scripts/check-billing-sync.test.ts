@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -70,5 +70,22 @@ describe('scripts/check-billing-sync.mjs', () => {
     place('per-task-agent', 'src/billing.ts', 'b');
 
     expect(run().err).toMatch(/same change in both|identical|byte for byte/i);
+  });
+});
+
+describe('where the sync check runs', () => {
+  const repo = (file: string): string => readFileSync(fileURLToPath(new URL(`../${file}`, import.meta.url)), 'utf8');
+
+  it('is the first step of the root check script, so a drifted copy stops `just check` before anything slower runs', () => {
+    const manifest: unknown = JSON.parse(repo('package.json'));
+    const scripts = typeof manifest === 'object' && manifest !== null && 'scripts' in manifest ? manifest.scripts : undefined;
+    const check = typeof scripts === 'object' && scripts !== null && 'check' in scripts ? scripts.check : undefined;
+
+    expect(typeof check === 'string' ? check.split('&&')[0]?.trim() : undefined).toBe('node scripts/check-billing-sync.mjs');
+  });
+
+  it('reaches CI, which runs `just check`, which runs the root check script', () => {
+    expect(repo('.github/workflows/ci.yml')).toMatch(/^\s*- run: just check$/m);
+    expect(repo('justfile')).toMatch(/^check:\r?\n\s+npm run check\r?$/m);
   });
 });
