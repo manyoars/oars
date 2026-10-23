@@ -24,7 +24,9 @@ describe('createFakeBilling follows R7', () => {
     const refused = outcomes.filter((outcome) => outcome.status === 'rejected');
     expect(outcomes.filter((outcome) => outcome.status === 'fulfilled')).toHaveLength(1);
     expect(refused).toHaveLength(4);
-    expect(refused[0]?.reason).toMatchObject({ code: 'INSUFFICIENT_CREDITS', actionUrl: expect.stringMatching(/^https:\/\//) });
+    const reason: unknown = refused[0]?.reason;
+    expect(reason).toMatchObject({ code: 'INSUFFICIENT_CREDITS' });
+    expect(reason instanceof BillingProblem && reason.actionUrl).toMatch(/^https:\/\//);
   });
 
   it('replays a live HELD reservation under its key with replayed: true', async () => {
@@ -46,7 +48,8 @@ describe('createFakeBilling follows R7', () => {
     const two = await fake.reserve(hold('k-1'));
 
     expect([one.replayCount, two.replayCount]).toEqual([1, 2]);
-    expect(one).toMatchObject({ status: 'COMMITTED', replayed: true, committedAt: expect.any(String) });
+    expect(one).toMatchObject({ status: 'COMMITTED', replayed: true });
+    expect(Date.parse(one.committedAt ?? '')).not.toBeNaN();
   });
 
   it('takes a new hold for a RELEASED key and for an EXPIRED one, and keeps the old row', async () => {
