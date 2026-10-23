@@ -8,7 +8,7 @@
     name: Per-task agent
     services:
       - name: agent
-        image: ghcr.io/manyoars/per-task-agent@sha256:<release digest>
+        image: ghcr.io/manyoars/per-task-agent@sha256:b88bb11504236ad97349f6a4ad820a98c16eef670e9aa2f93c157019406aecd6
         port: 8080
         public-ingress: true
         cpu-millicores: 500

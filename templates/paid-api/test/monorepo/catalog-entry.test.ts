@@ -66,11 +66,11 @@ describe('catalog-entry.yaml', () => {
     expect(validate.errors?.map((error) => error.keyword).sort()).toEqual(['additionalProperties', 'additionalProperties', 'minimum', 'minimum']);
   });
 
-  it('names the image by digest, never a tag, and leaves the digest to the release', () => {
+  it('names the image by digest, never a tag', () => {
     const wire = toWire(entry);
     const image = JSON.stringify(wire).match(/"image":"([^"]+)"/)?.[1];
 
-    expect(image).toBe('ghcr.io/manyoars/paid-api@sha256:<release digest>');
+    expect(image).toMatch(/^ghcr\.io\/manyoars\/paid-api@sha256:[0-9a-f]{64}$/);
   });
 
   it('serves one public service on port 8080, with the size the design fixes', () => {

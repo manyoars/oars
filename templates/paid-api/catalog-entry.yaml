@@ -8,7 +8,7 @@
     name: Paid API
     services:
       - name: api
-        image: ghcr.io/manyoars/paid-api@sha256:<release digest>
+        image: ghcr.io/manyoars/paid-api@sha256:bc18de1da5b0a0fbdc18d6d68aa9da4f89a0ab118a2c18921a1247b09d9d4146
         port: 8080
         public-ingress: true
         cpu-millicores: 250
