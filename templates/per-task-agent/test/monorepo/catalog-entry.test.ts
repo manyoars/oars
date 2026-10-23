@@ -94,7 +94,7 @@ describe('the AgentTemplateResponse schema', () => {
   it('is swapped for the generated one as soon as openapi/public.json carries it', () => {
     expect(
       Object.keys(schemas),
-      'openapi/public.json now has AgentTemplateResponse: validate the catalog entry against it and delete test/agent-template-schema.ts',
+      'openapi/public.json now has AgentTemplateResponse: validate the catalog entry against it and delete test/monorepo/agent-template-schema.ts',
     ).not.toContain('AgentTemplateResponse');
   });
 });

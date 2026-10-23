@@ -5,8 +5,8 @@
 //   OARS_SMOKE_IMAGE=<image> npm run test:smoke -w templates/paid-api
 // after `docker build`, and so can you. Without OARS_SMOKE_IMAGE it fails; it never skips.
 //
-// The container cannot send Prism a `Prefer: code=402` header, so each Prism serves a copy of the spec with the reserve
-// (and commit) responses pinned: one refuses the hold with a 402, the other holds and commits one credit.
+// The container cannot send Prism a `Prefer: code=409` header, so each Prism serves a copy of the spec with the reserve
+// (and commit) responses pinned: one refuses the hold with a 409, the other holds and commits one credit.
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { CHARGING_SENTENCE } from '../../src/app.js';
 import { type Container, startContainer } from './container.js';
@@ -62,9 +62,9 @@ const committedOne: Pin = {
 };
 const noCredits: Pin = {
   path: RESERVE_PATH,
-  status: '402',
+  status: '409',
   schema: 'ProblemDetail',
-  example: { status: 402, code: 'INSUFFICIENT_CREDITS', actionUrl: CHECKOUT_URL },
+  example: { status: 409, code: 'INSUFFICIENT_CREDITS', actionUrl: CHECKOUT_URL },
 };
 
 const image = process.env['OARS_SMOKE_IMAGE'] ?? '';
