@@ -16,7 +16,8 @@
     "lint": "eslint --max-warnings 0 .",
     "typecheck": "tsc --noEmit && npm run typecheck --workspaces --if-present",
     "test": "vitest run",
-    "check": "node scripts/check-billing-sync.mjs && npm run lint && npm run typecheck && npm run test"
+    "build": "npm run build -w packages/client",
+    "check": "node scripts/check-billing-sync.mjs && npm run build && npm run lint && npm run typecheck && npm run test"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

@@ -3,7 +3,8 @@
 FROM node:24-slim AS build
 WORKDIR /repo
 COPY . .
-RUN npm ci --workspace templates/paid-api
+RUN npm ci --workspace packages/client --workspace templates/paid-api
+RUN npm run build --workspace packages/client
 RUN npm run build --workspace templates/paid-api
 
 # The bundle carries every dependency, so the runtime image needs nothing from npm.
