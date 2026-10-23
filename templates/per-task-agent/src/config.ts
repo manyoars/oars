@@ -1,0 +1,41 @@
+import { DEFAULT_API_URL } from '@manyoars/oars-client';
+
+export class ConfigError extends Error {}
+
+export interface Config {
+  port: number;
+  apiUrl: string;
+  priceRefs: string[];
+  /** Absent only when the dev flag selected the fake billing. */
+  sdkKey?: string;
+  fakeBilling: boolean;
+  /** Set by the developer as an agent secret; with it a model writes a short summary on top of the findings. */
+  anthropicApiKey?: string;
+}
+
+// Until the agent API can list an agent's own prices (request R1), the refs the starter template ships.
+const STARTER_PRICE_REFS = ['task-1', 'tasks-5'];
+
+/** Fails closed: without AOR_SDK_KEY the server does not start, unless OARS_DEV_FAKE_BILLING is exactly `1`. */
+export const loadConfig = (env: NodeJS.ProcessEnv): Config => {
+  const fakeBilling = env['OARS_DEV_FAKE_BILLING'] === '1';
+  const sdkKey = env['AOR_SDK_KEY']?.trim();
+  if (!fakeBilling && (sdkKey === undefined || sdkKey === '')) {
+    throw new ConfigError('AOR_SDK_KEY is not set; the platform injects it. For local development set OARS_DEV_FAKE_BILLING=1.');
+  }
+  const port = Number(env['PORT'] ?? '8080');
+  if (!Number.isInteger(port) || port < 1 || port > 65_535) throw new ConfigError(`PORT must be a port number, got "${env['PORT'] ?? ''}"`);
+  const refs = (env['OARS_PRICE_REFS'] ?? '')
+    .split(',')
+    .map((ref) => ref.trim())
+    .filter((ref) => ref !== '');
+  const anthropicApiKey = env['ANTHROPIC_API_KEY']?.trim();
+  return {
+    port,
+    apiUrl: env['OARS_API_URL'] ?? DEFAULT_API_URL,
+    priceRefs: refs.length > 0 ? refs : STARTER_PRICE_REFS,
+    sdkKey: sdkKey === '' ? undefined : sdkKey,
+    fakeBilling,
+    anthropicApiKey: anthropicApiKey === '' ? undefined : anthropicApiKey,
+  };
+};

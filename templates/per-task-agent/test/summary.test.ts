@@ -17,7 +17,7 @@ const reply = (body: unknown, status = 200): Promise<Response> => Promise.resolv
 
 describe('createSummarizer', () => {
   it('posts the findings to the Anthropic messages API with the key, and returns the text it wrote', async () => {
-    const send = vi.fn((_request: Request) => reply({ content: [{ type: 'text', text: '  A thin page: add a description.  ' }] }));
+    const send = vi.fn<(request: Request) => Promise<Response>>(() => reply({ content: [{ type: 'text', text: '  A thin page: add a description.  ' }] }));
     const signal = new AbortController().signal;
 
     const summary = await createSummarizer({ apiKey: KEY, fetch: send })(audit, signal);
@@ -30,13 +30,14 @@ describe('createSummarizer', () => {
     expect(request?.headers.get('anthropic-version')).toBe('2023-06-01');
     expect(request?.headers.get('content-type')).toBe('application/json');
     const body: unknown = await request?.json();
-    expect(body).toMatchObject({ model: expect.stringMatching(/^claude-/), max_tokens: expect.any(Number) });
+    expect(body).toMatchObject({ model: 'claude-haiku-5-5' });
+    expect(body).toHaveProperty('max_tokens');
     expect(JSON.stringify(body)).toContain('Acme');
     expect(JSON.stringify(body)).not.toContain(KEY);
   });
 
   it('tells the model the page text is untrusted data, not instructions', async () => {
-    const send = vi.fn((_request: Request) => reply({ content: [{ type: 'text', text: 'ok' }] }));
+    const send = vi.fn<(request: Request) => Promise<Response>>(() => reply({ content: [{ type: 'text', text: 'ok' }] }));
 
     await createSummarizer({ apiKey: KEY, fetch: send })(audit, new AbortController().signal);
 

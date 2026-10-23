@@ -1,9 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
-import { CHARGING_SENTENCE, createApp, HOLD_TTL_SECONDS, TASK_BUDGET_MS } from '../src/app.js';
+import { CHARGING_SENTENCE, createApp, HOLD_TTL_SECONDS, TASK_BUDGET_MS, type TaskLogEntry } from '../src/app.js';
 import { type Audit } from '../src/audit.js';
 import { BillingProblem, customerRefFor, mintToken, reservationKey } from '../src/billing.js';
 import { createFakeBilling } from '../src/fake-billing.js';
 import { FetchFailed, FetchRefused, type Page } from '../src/fetch-page.js';
+import { type Summarizer } from '../src/summary.js';
 import { createClock, flush } from './support.js';
 
 const PRICE_REFS = ['task-1', 'tasks-5'];
@@ -22,11 +23,11 @@ const aPage = (overrides: Partial<Page> = {}): Page => ({
 
 type Fetch = (url: string, signal: AbortSignal) => Promise<Page>;
 
-const setup = (credits = 3, extra: { fetchPage?: Fetch; summarize?: (audit: Audit, signal: AbortSignal) => Promise<string>; taskBudgetMs?: number; summaryBudgetMs?: number } = {}) => {
+const setup = (credits = 3, extra: { fetchPage?: Fetch; summarize?: (audit: Audit, signal: AbortSignal) => Promise<string>; taskBudgetMs?: number; summaryBudgetMs?: number; log?: (entry: TaskLogEntry) => void } = {}) => {
   const clock = createClock();
   const fake = createFakeBilling({ now: clock.now });
   const fetchPage = vi.fn<Fetch>(extra.fetchPage ?? (() => Promise.resolve(aPage())));
-  const app = createApp({ billing: fake, priceRefs: PRICE_REFS, now: clock.now, fetchPage, summarize: extra.summarize, taskBudgetMs: extra.taskBudgetMs, summaryBudgetMs: extra.summaryBudgetMs });
+  const app = createApp({ billing: fake, priceRefs: PRICE_REFS, now: clock.now, fetchPage, summarize: extra.summarize, taskBudgetMs: extra.taskBudgetMs, summaryBudgetMs: extra.summaryBudgetMs, log: extra.log });
   const token = mintToken();
   const customerRef = customerRefFor(token);
   fake.grant(customerRef, credits);
@@ -187,14 +188,15 @@ describe('POST /v1/tasks', () => {
 
     expect(response.status).toBe(200);
     expect(response.headers.get('X-Credits-Charged')).toBe('1');
-    expect(await response.json()).toMatchObject({
+    const body: unknown = await response.json();
+    expect(body).toMatchObject({
       url,
       finalUrl: 'https://acme.example/',
       https: true,
       title: 'Acme Widgets: handmade widgets for everyone',
       h1: ['Widgets'],
-      checks: expect.arrayContaining([{ check: 'title', result: 'pass', message: expect.any(String) }]),
     });
+    expect(JSON.stringify(body)).toContain('"check":"title","result":"pass"');
     expect(fetchPage).toHaveBeenCalledExactlyOnceWith(url, expect.any(AbortSignal));
     await expectPosition(app, token, 2);
   });
@@ -219,12 +221,12 @@ describe('POST /v1/tasks', () => {
   });
 
   it('answers 402 with the checkout URL for a buyer with no credits, and fetches nothing', async () => {
-    const { app, token, fetchPage } = setup(0);
+    const { app, token, customerRef, fetchPage } = setup(0);
 
     const response = await submit(app, token);
 
     expect(response.status).toBe(402);
-    expect(await response.json()).toMatchObject({ code: 'INSUFFICIENT_CREDITS', checkoutUrl: expect.stringMatching(/^https:\/\//) });
+    expect(await response.json()).toMatchObject({ code: 'INSUFFICIENT_CREDITS', checkoutUrl: `https://checkout.example/packs/${customerRef}` });
     expect(fetchPage).not.toHaveBeenCalled();
   });
 
@@ -278,8 +280,8 @@ describe('POST /v1/tasks', () => {
   });
 
   it('gives two concurrent tasks racing for the last credit one hold and one immediate 402, and runs one audit', async () => {
-    const gate = Promise.withResolvers<void>();
-    const { app, token, fetchPage } = setup(1, {
+    const gate = Promise.withResolvers<undefined>();
+    const { app, token, customerRef, fetchPage } = setup(1, {
       fetchPage: async () => {
         await gate.promise;
         return aPage();
@@ -291,8 +293,8 @@ describe('POST /v1/tasks', () => {
     const loser = await submit(app, token);
 
     expect(loser.status).toBe(402);
-    expect(await loser.json()).toMatchObject({ checkoutUrl: expect.stringMatching(/^https:\/\//) });
-    gate.resolve();
+    expect(await loser.json()).toMatchObject({ checkoutUrl: `https://checkout.example/packs/${customerRef}` });
+    gate.resolve(undefined);
     expect((await winner).status).toBe(200);
     expect(fetchPage).toHaveBeenCalledOnce();
     await expectPosition(app, token, 0);
@@ -377,7 +379,7 @@ describe('POST /v1/tasks', () => {
     });
 
     it('is written on top of the findings, from the same audit and the task budget signal', async () => {
-      const summarize = vi.fn((_audit: Audit, _signal: AbortSignal) => Promise.resolve('A solid page.'));
+      const summarize = vi.fn<Summarizer>(() => Promise.resolve('A solid page.'));
       const { app, token, fetchPage } = setup(3, { summarize });
 
       const body = await (await submit(app, token)).json();
@@ -388,19 +390,24 @@ describe('POST /v1/tasks', () => {
       expect(fetchPage).toHaveBeenCalledOnce();
     });
 
-    it('does not fail the task when the model call fails: the findings stand, the credit is spent, no summary', async () => {
-      const { app, token } = setup(3, { summarize: () => Promise.reject(new Error('529 overloaded sk-ant-secret')) });
+    it('fails the task when the model call fails: 502, the credit goes back, the cause is logged and not told to the buyer', async () => {
+      const log = vi.fn<(entry: TaskLogEntry) => void>();
+      const { app, token, fake } = setup(3, { summarize: () => Promise.reject(new Error('529 overloaded')), log });
+      const commit = vi.spyOn(fake, 'commit');
 
       const response = await submit(app, token);
 
-      expect(response.status).toBe(200);
-      expect(response.headers.get('X-Credits-Charged')).toBe('1');
+      expect(response.status).toBe(502);
+      expect(response.headers.get('X-Credits-Charged')).toBe('0');
       const text = JSON.stringify(await response.json());
-      expect(text).not.toContain('summary');
-      expect(text).not.toContain('sk-ant');
+      expect(text).toContain('SUMMARY_FAILED');
+      expect(text).not.toContain('529');
+      expect(commit).not.toHaveBeenCalled();
+      expect(log).toHaveBeenCalledExactlyOnceWith({ event: 'task-failed', code: 'SUMMARY_FAILED', cause: 'Error: 529 overloaded' });
+      await expectPosition(app, token, 3);
     });
 
-    it('gives up on a slow model after its own short budget, so a finished audit is still delivered', async () => {
+    it('gives up on a slow model after its own short budget, and that fails the task the same way', async () => {
       const { app, token } = setup(3, {
         summaryBudgetMs: 20,
         summarize: (_audit, signal) =>
@@ -413,12 +420,14 @@ describe('POST /v1/tasks', () => {
 
       const response = await submit(app, token);
 
-      expect(response.status).toBe(200);
-      expect(await response.json()).not.toHaveProperty('summary');
+      expect(response.status).toBe(502);
+      expect(await response.json()).toMatchObject({ code: 'SUMMARY_FAILED' });
+      expect(response.headers.get('X-Credits-Charged')).toBe('0');
+      await expectPosition(app, token, 3);
     });
 
     it('is never called for a task that failed', async () => {
-      const summarize = vi.fn((_audit: Audit, _signal: AbortSignal) => Promise.resolve('unused'));
+      const summarize = vi.fn<Summarizer>(() => Promise.resolve('unused'));
       const { app, token } = setup(3, { summarize, fetchPage: () => Promise.resolve(aPage({ status: 404 })) });
 
       await submit(app, token);

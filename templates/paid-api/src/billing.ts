@@ -122,8 +122,8 @@ export const createBilling = (options: { apiUrl: string; sdkKey: string; fetch?:
 export interface HandlerResult { status: number; body: unknown }
 /** creditsCharged is what billing committed (0 for a failure or a free replay) and absent when billing refused the call. */
 export interface CallResult extends HandlerResult { retryAfter?: number; creditsCharged?: number }
-/** `key` is the reservation Idempotency-Key from reservationKey(). */
-export interface CreditCall { customerRef: string; key: string; now?: () => number; timeoutMs?: number }
+/** `key` is the reservation Idempotency-Key from reservationKey(); `ttlSeconds` is how long the hold lasts (default 45, over the 30 s handler). */
+export interface CreditCall { customerRef: string; key: string; now?: () => number; timeoutMs?: number; ttlSeconds?: number }
 
 const failure = (status: number, code: string, message: string): HandlerResult => ({ status, body: { code, message } });
 
@@ -159,7 +159,7 @@ export const withCredits = async (
   const timeoutMs = call.timeoutMs ?? HANDLER_TIMEOUT_MS;
   let hold: Reservation;
   try {
-    hold = await billing.reserve({ customerRef: call.customerRef, credits: 1, ttlSeconds: HOLD_TTL_SECONDS, idempotencyKey: call.key });
+    hold = await billing.reserve({ customerRef: call.customerRef, credits: 1, ttlSeconds: call.ttlSeconds ?? HOLD_TTL_SECONDS, idempotencyKey: call.key });
   } catch (error) {
     return buyerResponse(toProblem(error));
   }
