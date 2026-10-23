@@ -3,5 +3,5 @@
   "compilerOptions": {
     "lib": ["ES2024"]
   },
-  "include": ["src", "test", "vitest.config.ts", "vitest.monorepo.config.ts"]
+  "include": ["src", "test", "vitest.config.ts", "vitest.monorepo.config.ts", "vitest.smoke.config.ts"]
 }
