@@ -1,0 +1,61 @@
+name: release-client
+
+# Publishes @manyoars/oars-client to npm on a tag client-v<semver>: the same `just check` as ci, a guard that the tag's version
+# is packages/client/package.json's, then `npm publish` with provenance. No such tag exists until the first release.
+#
+# Auth: npm trusted publishing (OIDC, no stored secret) once the package has a trusted publisher configured on npmjs.com
+# (package settings, GitHub Actions, repository manyoars/oars, workflow release-client.yml). npm tries OIDC first and falls
+# back to the NPM_TOKEN repository secret when one is set. The first publish of a new package needs that token.
+on:
+  push:
+    tags: ['client-v*']
+
+permissions:
+  contents: read
+  id-token: write # npm trusted publishing and the signed provenance statement
+
+concurrency:
+  group: release-client-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    # GitHub-hosted runners only: this repository is public.
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Check the tag is client-v<semver> and matches the package version
+        run: |
+          semver="${GITHUB_REF_NAME#client-v}"
+          if ! printf '%s' "$semver" | grep -Eq '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?$'; then
+            echo "::error::$GITHUB_REF_NAME is not client-v<semver>"
+            exit 1
+          fi
+          package="$(node -p "require('./packages/client/package.json').version")"
+          if [ "$semver" != "$package" ]; then
+            echo "::error::$GITHUB_REF_NAME does not match packages/client/package.json version $package"
+            exit 1
+          fi
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: npm
+          registry-url: https://registry.npmjs.org
+      - uses: extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3 # v4.0.0
+      - run: npm ci
+      - run: just check
+      - name: Check npm supports trusted publishing (11.5.1 or later)
+        run: |
+          npm_version="$(npm --version)"
+          if [ "$(printf '%s\n' 11.5.1 "$npm_version" | sort -V | head -n 1)" != 11.5.1 ]; then
+            echo "::error::npm $npm_version is older than 11.5.1, which trusted publishing needs"
+            exit 1
+          fi
+      - name: Publish
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          # With no secret set, npm authenticates through OIDC alone; with one, it is the fallback.
+          if [ -n "$NPM_TOKEN" ]; then export NODE_AUTH_TOKEN="$NPM_TOKEN"; fi
+          npm publish -w packages/client --provenance --access public
