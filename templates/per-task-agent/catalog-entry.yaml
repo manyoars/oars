@@ -1,6 +1,6 @@
 # The platform's template catalog entry for per-task-agent (aor.agent.templates.catalog takes a list). Keys are kebab-case
 # because Spring binds them; the API serves them as camelCase AgentTemplateResponse, and `public-ingress` is `public` on that wire.
-# The image digest is the release's: the per-task-agent-v<semver> workflow prints it and the first release fills it in.
+# The image is pinned by digest, never a tag: each per-task-agent-v<semver> release prints its digest.
 - template-id: per-task-agent
   name: Per-task agent
   description: A job your customers pay for per finished task, through credit packs
