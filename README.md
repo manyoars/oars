@@ -19,7 +19,7 @@ Node 24 (LTS) and [`just`](https://github.com/casey/just).
 
 ```sh
 npm ci
-just check     # billing sync, lint, typecheck and unit tests; CI runs the same recipe
+just check     # billing sync, client build, lint, typecheck and unit tests; CI runs the same recipe
 ```
 
 `just check` includes a staleness test: it regenerates the client's types from `openapi/public.json` and fails when
