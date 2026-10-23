@@ -62,8 +62,9 @@ prices in the Billing tab and the refs in `OARS_PRICE_REFS`.
 ## Test
 
 ```sh
-npm test            # unit tests, the contract test against Prism, the catalog entry check
+npm test                  # the unit tests
+npm run test:monorepo    # monorepo only: the contract test against Prism, the catalog entry and README checks
 ```
 
 `catalog-entry.yaml` is the platform's catalog entry for this template; its image digest is filled in by the release.
-The contract, catalog and charging-sentence tests read `openapi/public.json` and this README from the Many Oars monorepo.
+`test/monorepo/` holds the tests that need the Many Oars monorepo around the template (they read its `openapi/public.json`). Delete that folder in your copy; `npm test` skips it anyway.
