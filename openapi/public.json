@@ -20,6 +20,131 @@
         ],
         "type": "string"
       },
+      "ChargeKind": {
+        "enum": [
+          "CHARGE",
+          "SUBSCRIPTION_INVOICE",
+          "CREDIT_PACK"
+        ],
+        "type": "string"
+      },
+      "ChargeMode": {
+        "enum": [
+          "CHECKOUT",
+          "OFF_SESSION"
+        ],
+        "type": "string"
+      },
+      "ChargeStatus": {
+        "enum": [
+          "PENDING",
+          "SUCCEEDED",
+          "FAILED",
+          "PARTIALLY_REFUNDED",
+          "REFUNDED",
+          "DISPUTED"
+        ],
+        "type": "string"
+      },
+      "ChargeView": {
+        "properties": {
+          "chargeId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "checkoutUrl": {
+            "description": "CHECKOUT: the hosted page to send the customer to",
+            "type": "string"
+          },
+          "createdAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "failureCode": {
+            "description": "The processor's decline code when it refused",
+            "type": "string"
+          },
+          "flaggedReason": {
+            "$ref": "#/components/schemas/FlaggedReason"
+          },
+          "grossUsd": {
+            "format": "decimal",
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/ChargeKind"
+          },
+          "livemode": {
+            "description": "true for LIVE billing mode",
+            "type": "boolean"
+          },
+          "mode": {
+            "$ref": "#/components/schemas/ChargeMode"
+          },
+          "platformFeeUsd": {
+            "format": "decimal",
+            "type": "string"
+          },
+          "refundedUsd": {
+            "format": "decimal",
+            "type": "string"
+          },
+          "settledAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/ChargeStatus"
+          }
+        },
+        "required": [
+          "chargeId",
+          "createdAt",
+          "grossUsd",
+          "kind",
+          "livemode",
+          "mode",
+          "platformFeeUsd",
+          "refundedUsd",
+          "status"
+        ]
+      },
+      "CreateChargeInput": {
+        "properties": {
+          "cancelUrl": {
+            "description": "CHECKOUT only: where the customer lands after cancelling",
+            "maxLength": 2048,
+            "minLength": 0,
+            "pattern": "^https?://.+",
+            "type": "string"
+          },
+          "customerRef": {
+            "maxLength": 128,
+            "minLength": 1,
+            "type": "string"
+          },
+          "mode": {
+            "$ref": "#/components/schemas/ChargeMode"
+          },
+          "priceRef": {
+            "maxLength": 64,
+            "minLength": 1,
+            "type": "string"
+          },
+          "successUrl": {
+            "description": "CHECKOUT only: where the customer lands after paying",
+            "maxLength": 2048,
+            "minLength": 0,
+            "pattern": "^https?://.+",
+            "type": "string"
+          }
+        },
+        "required": [
+          "customerRef",
+          "mode",
+          "priceRef"
+        ]
+      },
       "CreatePriceInput": {
         "properties": {
           "amountUsd": {
@@ -54,6 +179,37 @@
           "displayName",
           "kind",
           "priceRef"
+        ]
+      },
+      "CreditBalanceView": {
+        "properties": {
+          "creditsAvailable": {
+            "description": "creditsRemaining less creditsHeld, never below 0",
+            "format": "int64",
+            "type": "integer"
+          },
+          "creditsHeld": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "creditsRemaining": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "customerRef": {
+            "type": "string"
+          },
+          "livemode": {
+            "description": "true for LIVE billing mode",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "creditsAvailable",
+          "creditsHeld",
+          "creditsRemaining",
+          "customerRef",
+          "livemode"
         ]
       },
       "CustomerView": {
@@ -177,6 +333,13 @@
           "value"
         ]
       },
+      "FlaggedReason": {
+        "description": "Why the charge was refused after reaching the processor",
+        "enum": [
+          "REGION_NOT_SUPPORTED"
+        ],
+        "type": "string"
+      },
       "ImagePullCredential": {
         "properties": {
           "password": {
@@ -227,7 +390,7 @@
             "uniqueItems": true
           },
           "refreshToken": {
-            "description": "JWT refresh token for obtaining new access tokens. Present ONLY on non-cookie API-client flows (API-key auth, OIDC exchange, body-token refresh); browser flows (login, 2FA verify, cookie refresh) deliver the refresh token exclusively via the scoped httpOnly cookie and omit this field",
+            "description": "JWT refresh token for obtaining new access tokens. Present ONLY on non-cookie API-client flows (OIDC exchange, body-token refresh); browser flows (login, 2FA verify, cookie refresh) deliver the refresh token exclusively via the scoped httpOnly cookie and omit this field",
             "type": "string"
           },
           "requires2fa": {
@@ -420,6 +583,158 @@
         "required": [
           "name",
           "services"
+        ]
+      },
+      "ReservationCommitView": {
+        "properties": {
+          "committedCredits": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "creditsRemaining": {
+            "description": "The customer's balance in this mode after the commit",
+            "format": "int64",
+            "type": "integer"
+          },
+          "replayed": {
+            "description": "true when the reservation was already committed",
+            "type": "boolean"
+          },
+          "reservationId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/ReservationStatus"
+          }
+        },
+        "required": [
+          "committedCredits",
+          "creditsRemaining",
+          "replayed",
+          "reservationId",
+          "status"
+        ]
+      },
+      "ReservationReleaseView": {
+        "properties": {
+          "replayed": {
+            "description": "true when the reservation was already released or expired",
+            "type": "boolean"
+          },
+          "reservationId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/ReservationStatus"
+          }
+        },
+        "required": [
+          "replayed",
+          "reservationId",
+          "status"
+        ]
+      },
+      "ReservationStatus": {
+        "enum": [
+          "HELD",
+          "COMMITTED",
+          "RELEASED",
+          "EXPIRED"
+        ],
+        "type": "string"
+      },
+      "ReservationView": {
+        "properties": {
+          "committedAt": {
+            "description": "When the hold was committed; only on a COMMITTED reservation",
+            "format": "date-time",
+            "type": "string"
+          },
+          "credits": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "expiresAt": {
+            "description": "When the hold lapses and its credits are given back",
+            "format": "date-time",
+            "type": "string"
+          },
+          "replayCount": {
+            "description": "How many times a COMMITTED reservation was replayed under its key",
+            "format": "int32",
+            "type": "integer"
+          },
+          "replayed": {
+            "description": "true when this key already had a live reservation",
+            "type": "boolean"
+          },
+          "reservationId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/ReservationStatus"
+          }
+        },
+        "required": [
+          "credits",
+          "expiresAt",
+          "replayCount",
+          "replayed",
+          "reservationId",
+          "status"
+        ]
+      },
+      "ReserveCreditsInput": {
+        "properties": {
+          "cancelUrl": {
+            "description": "Where the pack checkout returns the customer on cancel",
+            "maxLength": 2048,
+            "minLength": 0,
+            "pattern": "^https?://.+",
+            "type": "string"
+          },
+          "credits": {
+            "example": 5,
+            "format": "int64",
+            "maximum": 1000000,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "customerRef": {
+            "example": "cus-42",
+            "maxLength": 128,
+            "minLength": 1,
+            "type": "string"
+          },
+          "packRef": {
+            "description": "Credit pack to offer when credits run out; default: the cheapest pack that covers the shortfall, else the largest",
+            "maxLength": 64,
+            "minLength": 0,
+            "type": "string"
+          },
+          "successUrl": {
+            "description": "Where the pack checkout returns the customer after paying",
+            "maxLength": 2048,
+            "minLength": 0,
+            "pattern": "^https?://.+",
+            "type": "string"
+          },
+          "ttlSeconds": {
+            "description": "How long the hold lasts before its credits are given back, at most 300",
+            "example": 60,
+            "format": "int32",
+            "maximum": 300,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "credits",
+          "customerRef",
+          "ttlSeconds"
         ]
       },
       "Role": {
@@ -942,7 +1257,7 @@
     }
   },
   "info": {
-    "description": "The AOR platform calls that the Many Oars CLI and starter templates make: deploy a workload, read it, exchange a token.",
+    "description": "The AOR platform calls that the Many Oars CLI and starter templates make: deploy a workload, read it, exchange a token, set prices and customers, reserve and settle credits, take a payment.",
     "title": "Many Oars API",
     "version": "1.0.0"
   },
@@ -950,8 +1265,19 @@
   "paths": {
     "/agents/workloads": {
       "post": {
-        "description": "Resolves each image to its linux/amd64 platform manifest digest, verifies it against its registry, derives the workload fingerprint and returns the SDK key exactly once.",
+        "description": "Resolves each image to its linux/amd64 platform manifest digest, verifies it against its registry, derives the workload fingerprint and returns the SDK key exactly once. A retry under the same Idempotency-Key and body replays the registration (200, the workload as it is now, without the SDK key: rotate it with POST /agents/workloads/{workloadId}/sdk-key/rotate if the first response was lost).",
         "operationId": "registerWorkload",
+        "parameters": [
+          {
+            "description": "Optional, scoped to the caller. A retry with the same key and body replays the registration instead of failing with WORKLOAD_FINGERPRINT_EXISTS; the same key with another body is IDEMPOTENCY_CONFLICT. A UUID or 64 hexadecimal characters.",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -963,6 +1289,16 @@
           "required": true
         },
         "responses": {
+          "200": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkloadResponse"
+                }
+              }
+            },
+            "description": "Replay: this Idempotency-Key already registered this registration body (manifest and secret values); the workload is returned without an SDK key"
+          },
           "201": {
             "content": {
               "*/*": {
@@ -1031,7 +1367,7 @@
                 }
               }
             },
-            "description": "WORKLOAD_FINGERPRINT_EXISTS (the caller already has a live or suspended workload with this artifact set), IMAGE_DIGEST_UNVERIFIED"
+            "description": "WORKLOAD_FINGERPRINT_EXISTS (the caller already has a live or suspended workload with this artifact set), IMAGE_DIGEST_UNVERIFIED, IDEMPOTENCY_CONFLICT (the Idempotency-Key registered a different manifest or other secret values)"
           },
           "413": {
             "content": {
@@ -1884,6 +2220,980 @@
         ]
       }
     },
+    "/billing/charges": {
+      "post": {
+        "operationId": "createCharge",
+        "parameters": [
+          {
+            "description": "Unique per charge; a retry with the same key returns the same charge",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The agent's SDK key (aorsk_…)",
+            "in": "header",
+            "name": "X-Agent-SDK-Key",
+            "required": true
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateChargeInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChargeView"
+                }
+              }
+            },
+            "description": "Replay of an earlier Idempotency-Key"
+          },
+          "201": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChargeView"
+                }
+              }
+            },
+            "description": "Created (PENDING, or FAILED with failureCode)"
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "PRICE_INACTIVE, CUSTOMER_REGION_NOT_SUPPORTED (customer, or saved card's country), or a malformed body"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "SDK_KEY_INVALID"
+          },
+          "402": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Payment Required"
+          },
+          "403": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "PRICE_NOT_FOUND"
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "WORKLOAD_NOT_ACTIVE, ACCOUNT_NOT_READY, PAYMENT_METHOD_REQUIRED, IDEMPOTENCY_CONFLICT"
+          },
+          "413": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Content Too Large"
+          },
+          "422": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Unprocessable Content"
+          },
+          "423": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Locked"
+          },
+          "429": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "RATE_LIMITED (off-session charges per agent)"
+          },
+          "451": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Unavailable For Legal Reasons"
+          },
+          "500": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          },
+          "502": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Bad Gateway"
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "The processor is unreachable; retry with the same Idempotency-Key"
+          },
+          "504": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Gateway Timeout"
+          }
+        },
+        "summary": "Charge a customer: a hosted checkout or their saved card, off-session",
+        "tags": [
+          "Billing charges",
+          "public"
+        ]
+      }
+    },
+    "/billing/credits/reservations": {
+      "post": {
+        "operationId": "reserve",
+        "parameters": [
+          {
+            "description": "Unique per hold; a retry with the same key replays a live hold, a released or expired key takes a new one",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The agent's SDK key (aorsk_…)",
+            "in": "header",
+            "name": "X-Agent-SDK-Key",
+            "required": true
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReserveCreditsInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReservationView"
+                }
+              }
+            },
+            "description": "HELD, or the live reservation under this key with replayed: true"
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "A malformed body, a ttl outside 1..300 or a missing Idempotency-Key"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "SDK_KEY_INVALID"
+          },
+          "402": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Payment Required"
+          },
+          "403": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "INSUFFICIENT_CREDITS (actionUrl: a credit-pack checkout), IDEMPOTENCY_CONFLICT, WORKLOAD_NOT_ACTIVE"
+          },
+          "413": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Content Too Large"
+          },
+          "422": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Unprocessable Content"
+          },
+          "423": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Locked"
+          },
+          "429": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "RATE_LIMITED (credit operations per agent)"
+          },
+          "451": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Unavailable For Legal Reasons"
+          },
+          "500": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          },
+          "502": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Bad Gateway"
+          },
+          "503": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          },
+          "504": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Gateway Timeout"
+          }
+        },
+        "summary": "Hold a customer's prepaid credits for a short TTL",
+        "tags": [
+          "public",
+          "Billing credit reservations"
+        ]
+      }
+    },
+    "/billing/credits/reservations/{reservationId}/commit": {
+      "post": {
+        "operationId": "commit",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "reservationId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "description": "The agent's SDK key (aorsk_…)",
+            "in": "header",
+            "name": "X-Agent-SDK-Key",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReservationCommitView"
+                }
+              }
+            },
+            "description": "COMMITTED (idempotent: a repeat answers replayed: true)"
+          },
+          "400": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Bad Request"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "SDK_KEY_INVALID"
+          },
+          "402": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Payment Required"
+          },
+          "403": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "RESERVATION_NOT_FOUND"
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "RESERVATION_EXPIRED, RESERVATION_RELEASED"
+          },
+          "413": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Content Too Large"
+          },
+          "422": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Unprocessable Content"
+          },
+          "423": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Locked"
+          },
+          "429": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "RATE_LIMITED (credit operations per agent)"
+          },
+          "451": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Unavailable For Legal Reasons"
+          },
+          "500": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          },
+          "502": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Bad Gateway"
+          },
+          "503": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          },
+          "504": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Gateway Timeout"
+          }
+        },
+        "summary": "Turn a hold into a consumption",
+        "tags": [
+          "public",
+          "Billing credit reservations"
+        ]
+      }
+    },
+    "/billing/credits/reservations/{reservationId}/release": {
+      "post": {
+        "operationId": "release",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "reservationId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "description": "The agent's SDK key (aorsk_…)",
+            "in": "header",
+            "name": "X-Agent-SDK-Key",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReservationReleaseView"
+                }
+              }
+            },
+            "description": "RELEASED (idempotent: a released or expired one answers replayed: true)"
+          },
+          "400": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Bad Request"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "SDK_KEY_INVALID"
+          },
+          "402": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Payment Required"
+          },
+          "403": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "RESERVATION_NOT_FOUND"
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "RESERVATION_COMMITTED"
+          },
+          "413": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Content Too Large"
+          },
+          "422": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Unprocessable Content"
+          },
+          "423": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Locked"
+          },
+          "429": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "RATE_LIMITED (credit operations per agent)"
+          },
+          "451": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Unavailable For Legal Reasons"
+          },
+          "500": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          },
+          "502": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Bad Gateway"
+          },
+          "503": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          },
+          "504": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Gateway Timeout"
+          }
+        },
+        "summary": "Give a hold's credits back",
+        "tags": [
+          "public",
+          "Billing credit reservations"
+        ]
+      }
+    },
+    "/billing/credits/{customerRef}": {
+      "get": {
+        "operationId": "balance",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "customerRef",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The agent's SDK key (aorsk_…)",
+            "in": "header",
+            "name": "X-Agent-SDK-Key",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreditBalanceView"
+                }
+              }
+            },
+            "description": "The balance (0 for an unknown customer)"
+          },
+          "400": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Bad Request"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "SDK_KEY_INVALID"
+          },
+          "402": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Payment Required"
+          },
+          "403": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "413": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Content Too Large"
+          },
+          "422": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Unprocessable Content"
+          },
+          "423": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Locked"
+          },
+          "429": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Too Many Requests"
+          },
+          "451": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Unavailable For Legal Reasons"
+          },
+          "500": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          },
+          "502": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Bad Gateway"
+          },
+          "503": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          },
+          "504": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Gateway Timeout"
+          }
+        },
+        "summary": "A customer's prepaid credits in the agent's current billing mode",
+        "tags": [
+          "public",
+          "Billing credits"
+        ]
+      }
+    },
     "/billing/customers": {
       "post": {
         "operationId": "upsertBillingCustomer",
@@ -2095,8 +3405,20 @@
       "name": "Billing customers"
     },
     {
+      "description": "Agent API: charge a customer at a declared price",
+      "name": "Billing charges"
+    },
+    {
       "description": "Developer API: an agent's prices",
       "name": "Billing prices"
+    },
+    {
+      "description": "Agent API: consume and read prepaid credits",
+      "name": "Billing credits"
+    },
+    {
+      "description": "Agent API: hold prepaid credits, then commit or release the hold",
+      "name": "Billing credit reservations"
     },
     {
       "description": "Keycloak OIDC federation endpoints",
