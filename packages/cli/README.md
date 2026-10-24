@@ -19,7 +19,7 @@ npx @manyoars/oars <command>
 
 ## Commands
 
-`oars --help` lists `login`, `logout`, `deploy`, `status` and `test-charge`. `oars --version` prints the version.
+`oars --help` lists the commands below (`oars help <command>` shows one command's flags). `oars --version` prints the version.
 
 These flags work on every command:
 
@@ -42,8 +42,9 @@ Revokes the stored login and deletes it.
 
 Registers a workload, creates its prices and deploys it. Pass exactly one of `--template`, `--image` or `--manifest`. It stops at the first failed step and exits 9 (see below).
 
-- `--image <ref>` deploys an image pinned by digest (`name@sha256:...`). Companions: `--name <name>`, `--port <n>` (default 8080), `--public`, `--cpu-millicores <n>` (default 250), `--memory-mib <n>` (default 256), `--always-on`.
+- `--image <ref>` deploys an image pinned by digest (`name@sha256:...`). Companions: `--name <name>`, `--port <n>` (default 8080), `--public`, `--cpu-millicores <n>` (default 250), `--memory-mib <n>` (default 256).
 - `--manifest <file>` deploys a JSON workload manifest.
+- `--always-on` keeps the public service running instead of idling. It works with `--image` and `--manifest`.
 - `--template <id>` names a starter template. It exits 2 for now, because the public API does not list templates yet; companions `--price <ref>` (repeatable) and `--no-prices` wait with it.
 - `--price-file <file>` is a JSON array of prices to create (with `--image` or `--manifest`).
 - `--secret <NAME=value>` and `--secret-from-env <NAME>` add a workload secret; both repeat. Prefer `--secret-from-env`, which keeps the value out of your shell history.
