@@ -70,7 +70,9 @@ describe('resolveAuthToken', () => {
     const h = harness();
     await h.deps.store.write(stored('2026-10-22T00:00:00Z'));
     server.use(discovery, tokenEndpoint([{ error: 'invalid_grant' }]).handler);
-    await expect(resolveAuthToken(h.deps)).rejects.toMatchObject({ exitCode: ExitCode.AUTH, message: expect.stringContaining('oars login') });
+    const failure = await resolveAuthToken(h.deps).catch((error: unknown) => error);
+    expect(failure).toMatchObject({ exitCode: ExitCode.AUTH });
+    expect(failure instanceof Error ? failure.message : '').toContain('oars login');
   });
 
   it('exits 3 when there is neither an API key nor a stored login', async () => {

@@ -21,7 +21,7 @@ const run = async (answers: Array<Response | Error>, random = 0.5) => {
   const outcome = await fetchWithRetry(request).catch((error: unknown) => error);
   return { outcome, sent, sleeps };
 };
-const status = (code: number, headers: HeadersInit = {}) => new Response('{}', { status: code, headers });
+const status = (code: number, headers: Record<string, string> = {}) => new Response('{}', { status: code, headers });
 
 describe('retryingFetch', () => {
   it.each([502, 503, 504])('retries %i three times, then returns the last response', async (code) => {
