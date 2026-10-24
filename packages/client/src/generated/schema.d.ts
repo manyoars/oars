@@ -78,7 +78,42 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/billing/agents/{workloadId}/mode": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** An agent's billing mode */
+        get: operations["getAgentBillingMode"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/billing/agents/{workloadId}/prices": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List an agent's prices */
+        get: operations["listAgentPrices"];
+        put?: never;
+        /** Create a price (re-posting identical terms is a replay) */
+        post: operations["createAgentPrice"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/billing/agents/{workloadId}/test-charges": {
         parameters: {
             query?: never;
             header?: never;
@@ -87,8 +122,8 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Create a price (re-posting identical terms is a replay) */
-        post: operations["createAgentPrice"];
+        /** Charge the agent's test customer at one of its prices, in test mode */
+        post: operations["createAgentTestCharge"];
         delete?: never;
         options?: never;
         head?: never;
@@ -206,6 +241,20 @@ export interface components {
         /** @enum {string} */
         AgentStatus: "PENDING" | "RUNNING" | "STOPPED" | "FAILED" | "TERMINATED";
         /** @enum {string} */
+        BillingMode: "TEST" | "LIVE";
+        BillingModeView: {
+            billingMode: components["schemas"]["BillingMode"];
+            /**
+             * Format: date-time
+             * @description When the agent last went LIVE
+             */
+            liveEnabledAt?: string;
+            /** Format: date-time */
+            updatedAt?: string;
+            /** Format: uuid */
+            workloadId: string;
+        };
+        /** @enum {string} */
         ChargeKind: "CHARGE" | "SUBSCRIPTION_INVOICE" | "CREDIT_PACK";
         /** @enum {string} */
         ChargeMode: "CHECKOUT" | "OFF_SESSION";
@@ -261,6 +310,10 @@ export interface components {
              * @description Stable handle the agent charges by
              * @example pro-monthly
              */
+            priceRef: string;
+        };
+        CreateTestChargeInput: {
+            /** @example basic */
             priceRef: string;
         };
         CreditBalanceView: {
@@ -325,7 +378,7 @@ export interface components {
             value: string;
         };
         /**
-         * @description Why the charge was refused after reaching the processor
+         * @description REGION_NOT_SUPPORTED when the region check canceled it
          * @enum {string}
          */
         FlaggedReason: "REGION_NOT_SUPPORTED";
@@ -362,6 +415,66 @@ export interface components {
         };
         OidcExchangeRequest: {
             accessToken: string;
+        };
+        PagePriceView: {
+            /** @description Page content */
+            content: components["schemas"]["PriceView"][];
+            /** @description True if this page has no content */
+            empty: boolean;
+            /** @description True if this is the first page */
+            first: boolean;
+            /** @description True if this is the last page */
+            last: boolean;
+            /**
+             * Format: int32
+             * @description Zero-indexed page number
+             */
+            number: number;
+            /**
+             * Format: int32
+             * @description Number of elements on this page
+             */
+            numberOfElements: number;
+            pageable: components["schemas"]["PageableObject"];
+            /**
+             * Format: int32
+             * @description Requested page size
+             */
+            size: number;
+            sort: components["schemas"]["SortObject"];
+            /**
+             * Format: int64
+             * @description Total element count across all pages
+             */
+            totalElements: number;
+            /**
+             * Format: int32
+             * @description Total page count
+             */
+            totalPages: number;
+        };
+        /** @description Echo of the requested pageable */
+        PageableObject: {
+            /**
+             * Format: int64
+             * @description Offset of the first element on this page
+             */
+            offset: number;
+            /**
+             * Format: int32
+             * @description Zero-indexed page number
+             */
+            pageNumber: number;
+            /**
+             * Format: int32
+             * @description Requested page size
+             */
+            pageSize: number;
+            /** @description True if paging is requested */
+            paged: boolean;
+            sort: components["schemas"]["SortObject"];
+            /** @description True if pagination is disabled (unpaged) */
+            unpaged: boolean;
         };
         /** @enum {string} */
         PriceKind: "ONE_TIME" | "RECURRING_MONTHLY" | "CREDIT_PACK";
@@ -498,6 +611,15 @@ export interface components {
             readyReplicas: number;
             /** Format: int32 */
             restarts: number;
+        };
+        /** @description Sort descriptor applied to the query */
+        SortObject: {
+            /** @description True if the sort is empty (equivalent to unsorted) */
+            empty: boolean;
+            /** @description True if any sort orders are applied */
+            sorted: boolean;
+            /** @description True if no sort orders are applied */
+            unsorted: boolean;
         };
         /** @enum {string} */
         StopReason: "CREATOR" | "COMPUTE_DEBT" | "PLATFORM";
@@ -1339,6 +1461,327 @@ export interface operations {
             };
         };
     };
+    getAgentBillingMode: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workloadId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The mode (TEST until the agent first goes live) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "*/*": components["schemas"]["BillingModeView"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "*/*": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "*/*": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Payment Required */
+            402: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "*/*": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description WORKLOAD_NOT_OWNED */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description WORKLOAD_NOT_FOUND */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "*/*": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Content Too Large */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "*/*": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Unprocessable Content */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "*/*": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Locked */
+            423: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "*/*": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Too Many Requests */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "*/*": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Unavailable For Legal Reasons */
+            451: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "*/*": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "*/*": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Bad Gateway */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "*/*": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "*/*": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Gateway Timeout */
+            504: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "*/*": components["schemas"]["ProblemDetail"];
+                };
+            };
+        };
+    };
+    listAgentPrices: {
+        parameters: {
+            query?: {
+                /** @description Zero-based page index (0..N) */
+                page?: number;
+                /** @description The size of the page to be returned */
+                size?: number;
+                /** @description Sorting criteria in the format: property,(asc|desc). Default sort order is ascending. Multiple sort criteria are supported. */
+                sort?: string[];
+            };
+            header?: never;
+            path: {
+                workloadId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description A page of prices */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "*/*": components["schemas"]["PagePriceView"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "*/*": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "*/*": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Payment Required */
+            402: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "*/*": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description WORKLOAD_NOT_OWNED */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description WORKLOAD_NOT_FOUND */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "*/*": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Content Too Large */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "*/*": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Unprocessable Content */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "*/*": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Locked */
+            423: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "*/*": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Too Many Requests */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "*/*": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Unavailable For Legal Reasons */
+            451: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "*/*": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "*/*": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Bad Gateway */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "*/*": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "*/*": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Gateway Timeout */
+            504: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "*/*": components["schemas"]["ProblemDetail"];
+                };
+            };
+        };
+    };
     createAgentPrice: {
         parameters: {
             query?: never;
@@ -1496,6 +1939,179 @@ export interface operations {
                 };
                 content: {
                     "*/*": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Gateway Timeout */
+            504: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "*/*": components["schemas"]["ProblemDetail"];
+                };
+            };
+        };
+    };
+    createAgentTestCharge: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Unique per test charge; a retry with the same key returns it */
+                "Idempotency-Key": string;
+            };
+            path: {
+                workloadId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateTestChargeInput"];
+            };
+        };
+        responses: {
+            /** @description Replay of an earlier Idempotency-Key */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "*/*": components["schemas"]["ChargeView"];
+                };
+            };
+            /** @description The test charge (PENDING until its webhook settles it) */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "*/*": components["schemas"]["ChargeView"];
+                };
+            };
+            /** @description PRICE_INACTIVE, a monthly price, or a missing Idempotency-Key */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "*/*": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Payment Required */
+            402: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "*/*": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description WORKLOAD_NOT_OWNED */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description WORKLOAD_NOT_FOUND or PRICE_NOT_FOUND */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description TEST_MODE_ONLY (the agent is LIVE), IDEMPOTENCY_CONFLICT */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Content Too Large */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "*/*": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Unprocessable Content */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "*/*": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Locked */
+            423: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "*/*": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Too Many Requests */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "*/*": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Unavailable For Legal Reasons */
+            451: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "*/*": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "*/*": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Bad Gateway */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "*/*": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description The processor is unreachable; retry with the same Idempotency-Key */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetail"];
                 };
             };
             /** @description Gateway Timeout */
