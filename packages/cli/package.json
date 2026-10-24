@@ -1,6 +1,6 @@
 {
   "name": "@manyoars/oars",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "The oars CLI: log in to Many Oars, list the starter templates and deploy an agent",
   "license": "Apache-2.0",
   "repository": {
@@ -16,13 +16,15 @@
     "oars": "./dist/bin.js"
   },
   "files": [
-    "dist"
+    "dist",
+    "parity/deploy-plans"
   ],
   "publishConfig": {
     "access": "public"
   },
   "scripts": {
     "build": "node scripts/build.mjs",
+    "prepack": "npm run build",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:live": "vitest run --config vitest.live.config.ts"

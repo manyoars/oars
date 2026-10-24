@@ -6,6 +6,8 @@ node_modules/
 dist/
 build/
 coverage/
+# The golden deploy plans copied into the CLI package by its build (parity/deploy-plans/ is the source)
+packages/cli/parity/
 *.tsbuildinfo
 
 # Logs
