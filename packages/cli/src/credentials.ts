@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { mkdir, open, readFile, rename, rm } from 'node:fs/promises';
-import { join } from 'node:path';
+import { join, posix, win32 } from 'node:path';
 
 /** What `oars login` keeps: the Keycloak refresh token and the platform access token the exchange returned for it. */
 export interface StoredCredentials {
@@ -35,10 +35,16 @@ const isStoredCredentials = (value: unknown): value is StoredCredentials =>
 
 const isMissing = (error: unknown): boolean => error instanceof Error && 'code' in error && error.code === 'ENOENT';
 
-/** `%APPDATA%` on Windows (the user-profile ACL keeps it private), `$XDG_CONFIG_HOME` or `~/.config` elsewhere. */
+/**
+ * `%APPDATA%` on Windows (the user-profile ACL keeps it private), `$XDG_CONFIG_HOME` or `~/.config` elsewhere. An empty or
+ * relative value counts as unset, as the XDG spec has it: a relative one would put the credentials under the cwd, which
+ * could be a git checkout.
+ */
 export const defaultConfigDir = (env: NodeJS.ProcessEnv, platform: NodeJS.Platform, home: string): string => {
-  if (platform === 'win32') return env.APPDATA ?? join(home, 'AppData', 'Roaming');
-  return env.XDG_CONFIG_HOME ?? join(home, '.config');
+  const windows = platform === 'win32';
+  const configured = windows ? env.APPDATA : env.XDG_CONFIG_HOME;
+  if (configured !== undefined && (windows ? win32 : posix).isAbsolute(configured)) return configured;
+  return windows ? join(home, 'AppData', 'Roaming') : join(home, '.config');
 };
 
 /**

@@ -1,7 +1,7 @@
 import { mkdirSync, readdirSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { fileCredentialStore, type StoredCredentials } from './credentials.js';
+import { defaultConfigDir, fileCredentialStore, type StoredCredentials } from './credentials.js';
 import { harness } from './test-support.js';
 
 const creds: StoredCredentials = {
@@ -12,6 +12,35 @@ const creds: StoredCredentials = {
   accessToken: 'a1',
   expiresAt: '2099-01-01T00:00:00Z',
 };
+
+describe('defaultConfigDir', () => {
+  const home = join('home', 'dev');
+  const WINDOWS_HOME = join(home, 'AppData', 'Roaming');
+  const XDG_HOME = join(home, '.config');
+
+  it('uses an absolute APPDATA on Windows and an absolute XDG_CONFIG_HOME elsewhere', () => {
+    expect(defaultConfigDir({ APPDATA: 'C:/Users/dev/AppData/Roaming' }, 'win32', home)).toBe('C:/Users/dev/AppData/Roaming');
+    expect(defaultConfigDir({ XDG_CONFIG_HOME: '/srv/xdg' }, 'linux', home)).toBe('/srv/xdg');
+    expect(defaultConfigDir({ XDG_CONFIG_HOME: '/srv/xdg' }, 'darwin', home)).toBe('/srv/xdg');
+  });
+
+  // The XDG spec treats an empty or relative value as unset; a relative one would put the credentials under the cwd, perhaps a git checkout.
+  it.each([
+    ['win32', 'APPDATA', '', WINDOWS_HOME],
+    ['win32', 'APPDATA', 'Roaming', WINDOWS_HOME],
+    ['win32', 'APPDATA', 'C:Roaming', WINDOWS_HOME],
+    ['linux', 'XDG_CONFIG_HOME', '', XDG_HOME],
+    ['linux', 'XDG_CONFIG_HOME', 'xdg', XDG_HOME],
+    ['linux', 'XDG_CONFIG_HOME', './xdg', XDG_HOME],
+  ] as const)('on %s treats %s=%j as unset and falls back to the home default', (platform, name, value, expected) => {
+    expect(defaultConfigDir({ [name]: value }, platform, home)).toBe(expected);
+  });
+
+  it('falls back to the home default when the variable is absent', () => {
+    expect(defaultConfigDir({}, 'win32', home)).toBe(WINDOWS_HOME);
+    expect(defaultConfigDir({}, 'linux', home)).toBe(XDG_HOME);
+  });
+});
 
 describe('fileCredentialStore', () => {
   it('round-trips credentials under <dir>/oars/credentials.json and deletes them', async () => {
