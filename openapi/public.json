@@ -20,6 +20,37 @@
         ],
         "type": "string"
       },
+      "BillingMode": {
+        "enum": [
+          "TEST",
+          "LIVE"
+        ],
+        "type": "string"
+      },
+      "BillingModeView": {
+        "properties": {
+          "billingMode": {
+            "$ref": "#/components/schemas/BillingMode"
+          },
+          "liveEnabledAt": {
+            "description": "When the agent last went LIVE",
+            "format": "date-time",
+            "type": "string"
+          },
+          "updatedAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "workloadId": {
+            "format": "uuid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "billingMode",
+          "workloadId"
+        ]
+      },
       "ChargeKind": {
         "enum": [
           "CHARGE",
@@ -181,6 +212,19 @@
           "priceRef"
         ]
       },
+      "CreateTestChargeInput": {
+        "properties": {
+          "priceRef": {
+            "example": "basic",
+            "maxLength": 64,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "priceRef"
+        ]
+      },
       "CreditBalanceView": {
         "properties": {
           "creditsAvailable": {
@@ -334,7 +378,7 @@
         ]
       },
       "FlaggedReason": {
-        "description": "Why the charge was refused after reaching the processor",
+        "description": "REGION_NOT_SUPPORTED when the region check canceled it",
         "enum": [
           "REGION_NOT_SUPPORTED"
         ],
@@ -432,6 +476,112 @@
         },
         "required": [
           "accessToken"
+        ]
+      },
+      "PagePriceView": {
+        "properties": {
+          "content": {
+            "description": "Page content",
+            "items": {
+              "$ref": "#/components/schemas/PriceView"
+            },
+            "type": "array"
+          },
+          "empty": {
+            "description": "True if this page has no content",
+            "type": "boolean"
+          },
+          "first": {
+            "description": "True if this is the first page",
+            "type": "boolean"
+          },
+          "last": {
+            "description": "True if this is the last page",
+            "type": "boolean"
+          },
+          "number": {
+            "description": "Zero-indexed page number",
+            "format": "int32",
+            "type": "integer"
+          },
+          "numberOfElements": {
+            "description": "Number of elements on this page",
+            "format": "int32",
+            "type": "integer"
+          },
+          "pageable": {
+            "$ref": "#/components/schemas/PageableObject"
+          },
+          "size": {
+            "description": "Requested page size",
+            "format": "int32",
+            "type": "integer"
+          },
+          "sort": {
+            "$ref": "#/components/schemas/SortObject"
+          },
+          "totalElements": {
+            "description": "Total element count across all pages",
+            "format": "int64",
+            "type": "integer"
+          },
+          "totalPages": {
+            "description": "Total page count",
+            "format": "int32",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "content",
+          "empty",
+          "first",
+          "last",
+          "number",
+          "numberOfElements",
+          "pageable",
+          "size",
+          "sort",
+          "totalElements",
+          "totalPages"
+        ]
+      },
+      "PageableObject": {
+        "description": "Echo of the requested pageable",
+        "properties": {
+          "offset": {
+            "description": "Offset of the first element on this page",
+            "format": "int64",
+            "type": "integer"
+          },
+          "pageNumber": {
+            "description": "Zero-indexed page number",
+            "format": "int32",
+            "type": "integer"
+          },
+          "pageSize": {
+            "description": "Requested page size",
+            "format": "int32",
+            "type": "integer"
+          },
+          "paged": {
+            "description": "True if paging is requested",
+            "type": "boolean"
+          },
+          "sort": {
+            "$ref": "#/components/schemas/SortObject"
+          },
+          "unpaged": {
+            "description": "True if pagination is disabled (unpaged)",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "offset",
+          "pageNumber",
+          "pageSize",
+          "paged",
+          "sort",
+          "unpaged"
         ]
       },
       "PriceKind": {
@@ -795,6 +945,28 @@
           "ready",
           "readyReplicas",
           "restarts"
+        ]
+      },
+      "SortObject": {
+        "description": "Sort descriptor applied to the query",
+        "properties": {
+          "empty": {
+            "description": "True if the sort is empty (equivalent to unsorted)",
+            "type": "boolean"
+          },
+          "sorted": {
+            "description": "True if any sort orders are applied",
+            "type": "boolean"
+          },
+          "unsorted": {
+            "description": "True if no sort orders are applied",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "empty",
+          "sorted",
+          "unsorted"
         ]
       },
       "StopReason": {
@@ -2017,7 +2189,405 @@
         ]
       }
     },
+    "/billing/agents/{workloadId}/mode": {
+      "get": {
+        "operationId": "getAgentBillingMode",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workloadId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/BillingModeView"
+                }
+              }
+            },
+            "description": "The mode (TEST until the agent first goes live)"
+          },
+          "400": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Bad Request"
+          },
+          "401": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "402": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Payment Required"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "WORKLOAD_NOT_OWNED"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "WORKLOAD_NOT_FOUND"
+          },
+          "409": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "413": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Content Too Large"
+          },
+          "422": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Unprocessable Content"
+          },
+          "423": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Locked"
+          },
+          "429": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Too Many Requests"
+          },
+          "451": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Unavailable For Legal Reasons"
+          },
+          "500": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          },
+          "502": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Bad Gateway"
+          },
+          "503": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          },
+          "504": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Gateway Timeout"
+          }
+        },
+        "summary": "An agent's billing mode",
+        "tags": [
+          "public",
+          "Billing mode"
+        ]
+      }
+    },
     "/billing/agents/{workloadId}/prices": {
+      "get": {
+        "operationId": "listAgentPrices",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workloadId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Zero-based page index (0..N)",
+            "in": "query",
+            "name": "page",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "The size of the page to be returned",
+            "in": "query",
+            "name": "size",
+            "required": false,
+            "schema": {
+              "default": 20,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Sorting criteria in the format: property,(asc|desc). Default sort order is ascending. Multiple sort criteria are supported.",
+            "in": "query",
+            "name": "sort",
+            "required": false,
+            "schema": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/PagePriceView"
+                }
+              }
+            },
+            "description": "A page of prices"
+          },
+          "400": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Bad Request"
+          },
+          "401": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "402": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Payment Required"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "WORKLOAD_NOT_OWNED"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "WORKLOAD_NOT_FOUND"
+          },
+          "409": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "413": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Content Too Large"
+          },
+          "422": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Unprocessable Content"
+          },
+          "423": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Locked"
+          },
+          "429": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Too Many Requests"
+          },
+          "451": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Unavailable For Legal Reasons"
+          },
+          "500": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          },
+          "502": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Bad Gateway"
+          },
+          "503": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          },
+          "504": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Gateway Timeout"
+          }
+        },
+        "summary": "List an agent's prices",
+        "tags": [
+          "public",
+          "Billing prices"
+        ]
+      },
       "post": {
         "operationId": "createAgentPrice",
         "parameters": [
@@ -2217,6 +2787,218 @@
         "tags": [
           "public",
           "Billing prices"
+        ]
+      }
+    },
+    "/billing/agents/{workloadId}/test-charges": {
+      "post": {
+        "operationId": "createAgentTestCharge",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workloadId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Unique per test charge; a retry with the same key returns it",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateTestChargeInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChargeView"
+                }
+              }
+            },
+            "description": "Replay of an earlier Idempotency-Key"
+          },
+          "201": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChargeView"
+                }
+              }
+            },
+            "description": "The test charge (PENDING until its webhook settles it)"
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "PRICE_INACTIVE, a monthly price, or a missing Idempotency-Key"
+          },
+          "401": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "402": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Payment Required"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "WORKLOAD_NOT_OWNED"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "WORKLOAD_NOT_FOUND or PRICE_NOT_FOUND"
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "TEST_MODE_ONLY (the agent is LIVE), IDEMPOTENCY_CONFLICT"
+          },
+          "413": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Content Too Large"
+          },
+          "422": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Unprocessable Content"
+          },
+          "423": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Locked"
+          },
+          "429": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Too Many Requests"
+          },
+          "451": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Unavailable For Legal Reasons"
+          },
+          "500": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          },
+          "502": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Bad Gateway"
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "The processor is unreachable; retry with the same Idempotency-Key"
+          },
+          "504": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Gateway Timeout"
+          }
+        },
+        "summary": "Charge the agent's test customer at one of its prices, in test mode",
+        "tags": [
+          "Billing test charges",
+          "public"
         ]
       }
     },
@@ -3407,6 +4189,14 @@
     {
       "description": "Agent API: charge a customer at a declared price",
       "name": "Billing charges"
+    },
+    {
+      "description": "Developer API: switch an agent between test and live billing",
+      "name": "Billing mode"
+    },
+    {
+      "description": "Developer API: run a real test-mode charge",
+      "name": "Billing test charges"
     },
     {
       "description": "Developer API: an agent's prices",
