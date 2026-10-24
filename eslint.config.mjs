@@ -27,6 +27,13 @@ export default defineConfig(
     },
   },
   {
+    // openid-client marks allowInsecureRequests deprecated "only to make it stand out", not because it is going away. It is the
+    // library's supported switch for a plain-http issuer, and oidc.ts calls it for a loopback issuer only (the local stack's
+    // Keycloak). Scoped to this one file here because inline directives are off above.
+    files: ['packages/cli/src/oidc.ts'],
+    rules: { '@typescript-eslint/no-deprecated': 'off' },
+  },
+  {
     // The scripts are plain Node ESM, type-checked by tsc through JSDoc (checkJs), not by typed linting.
     files: ['**/*.{js,mjs}'],
     extends: [tseslint.configs.disableTypeChecked],

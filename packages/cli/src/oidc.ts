@@ -6,11 +6,6 @@ export const CLIENT_ID = 'oars-cli';
 const SCOPE = 'openid email profile';
 const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]']);
 
-// openid-client marks allowInsecureRequests deprecated only "to stand out"; it is the supported switch for a plain-http issuer on
-// loopback, and discovery recognizes it by identity. Looked up by name because the lint config has no inline escape for no-deprecated.
-const isExtension = (value: unknown): value is (config: client.Configuration) => void => typeof value === 'function';
-const allowInsecure: unknown = Reflect.get(client, 'allowInsecureRequests');
-
 export interface OidcContext {
   /** The CLI's version, sent as `User-Agent: oars/<version>`. */
   version: string;
@@ -82,7 +77,7 @@ export const discover = async (issuerUrl: string, context: OidcContext): Promise
   try {
     return await client.discovery(issuer, CLIENT_ID, undefined, client.None(), {
       [client.customFetch]: userAgentFetch(context),
-      execute: loopback && isExtension(allowInsecure) ? [allowInsecure] : [],
+      execute: loopback ? [client.allowInsecureRequests] : [],
     });
   } catch (error) {
     throw failure(context.step, error);
