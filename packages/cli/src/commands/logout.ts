@@ -8,7 +8,7 @@ export const logout = async (deps: RunDeps): Promise<Outcome> => {
   const stored = await deps.store.read();
   if (stored !== undefined) {
     try {
-      await revokeRefreshToken(await discover(stored.issuerUrl, { version: deps.version, step: STEP }), stored.refreshToken, STEP);
+      await revokeRefreshToken(await discover(stored.issuerUrl, { ...deps, step: STEP }), stored.refreshToken, STEP);
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error);
       deps.io.stderr(`The refresh token could not be revoked (${reason}); it stops working by itself when idle.\n`);
