@@ -16,7 +16,7 @@
     "lint": "eslint --max-warnings 0 .",
     "typecheck": "tsc --noEmit && npm run typecheck --workspaces --if-present",
     "test": "vitest run",
-    "build": "npm run build -w packages/client",
+    "build": "npm run build -w packages/client && npm run build -w packages/cli",
     "check:template-copy": "node scripts/check-template-copy.mjs",
     "check": "node scripts/check-billing-sync.mjs && npm run build && npm run lint && npm run typecheck && npm run test"
   },

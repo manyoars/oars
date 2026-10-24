@@ -1,0 +1,40 @@
+{
+  "name": "@manyoars/oars",
+  "version": "0.0.0",
+  "description": "The oars CLI: log in to Many Oars, list the starter templates and deploy an agent",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/manyoars/oars.git",
+    "directory": "packages/cli"
+  },
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "bin": {
+    "oars": "./dist/bin.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:live": "vitest run --config vitest.live.config.ts"
+  },
+  "dependencies": {
+    "@manyoars/oars-client": "^0.1.1",
+    "commander": "^15.0.0",
+    "openid-client": "^6.8.8"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.64.1",
+    "msw": "^3.0.3",
+    "typescript": "~5.9.3"
+  }
+}
