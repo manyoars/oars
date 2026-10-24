@@ -2,7 +2,7 @@ import type { components } from '@manyoars/oars-client';
 
 export type ProblemDetail = components['schemas']['ProblemDetail'];
 
-/** Design §3.2's exit-code table. Exit 9 (a partial deploy) belongs to slice 5's deploy sequence. */
+/** Design §3.2's exit-code table. */
 export const ExitCode = {
   OK: 0,
   UNEXPECTED: 1,
@@ -49,6 +49,14 @@ export const exitCodeForProblem = (status: number, problem?: ProblemDetail): Exi
   return ExitCode.UNEXPECTED;
 };
 
+/** What a deploy that stopped after registering leaves behind: the workload, the key shown only once, and the command that resumes. */
+export interface PartialDeploy {
+  workloadId: string;
+  /** Only when the run that failed minted it: no rerun can show it again. */
+  sdkKey?: string;
+  rerun: string;
+}
+
 /** A failure the CLI reports and exits on. `step` names where it happened in `--json` documents. */
 export class CliError extends Error {
   constructor(
@@ -56,6 +64,7 @@ export class CliError extends Error {
     readonly exitCode: ExitCode,
     readonly step: string,
     readonly problem: ProblemDetail = { title: message },
+    readonly partial?: PartialDeploy,
   ) {
     super(message);
     this.name = 'CliError';

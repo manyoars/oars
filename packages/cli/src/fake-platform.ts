@@ -111,7 +111,7 @@ export const fakePlatform = (options: PlatformOptions = {}) => {
     ),
     http.post(`${API}/billing/agents/${WORKLOAD_ID}/prices`, ({ request }) =>
       answer(request, (body) => {
-        const priceRef = typeof body === 'object' && body !== null ? Reflect.get(body, 'priceRef') : undefined;
+        const priceRef: unknown = typeof body === 'object' && body !== null ? Reflect.get(body, 'priceRef') : undefined;
         if (priceFailures > 0 && priceRef === options.failPrice) {
           priceFailures -= 1;
           return { status: 422, body: { code: 'PRICE_INACTIVE', title: 'The price is inactive' } };
