@@ -3,6 +3,12 @@ name: ci
 on:
   push:
   pull_request:
+  workflow_dispatch:
+    inputs:
+      live-login:
+        description: Also run the live login against a throwaway Keycloak (needs the AOR_PLATFORM_* settings and OARS_LIVE_* secrets)
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -39,3 +45,34 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run check:template-copy
+
+  # Opt-in (Actions > ci > Run workflow > live-login): the CLI's device flow against a real Keycloak holding T67's realm, with
+  # Playwright approving the code on the verification page. The realm file lives in the private platform repo, so the job reads
+  # it with a token; a user of that realm comes from the OARS_LIVE_* secrets. Nothing else of the platform runs: a stub answers
+  # the token exchange, so the check covers Keycloak, the device flow and the CLI.
+  live-login:
+    if: github.event_name == 'workflow_dispatch' && inputs.live-login
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      OARS_LIVE_USERNAME: ${{ secrets.OARS_LIVE_USERNAME }}
+      OARS_LIVE_PASSWORD: ${{ secrets.OARS_LIVE_PASSWORD }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ vars.AOR_PLATFORM_REPOSITORY }}
+          token: ${{ secrets.AOR_PLATFORM_READ_TOKEN }}
+          path: .aor-platform
+          sparse-checkout: k8s/keycloak-realm.json
+          sparse-checkout-cone-mode: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: npm
+      - uses: extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3 # v4.0.0
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - run: just live-keycloak .aor-platform/k8s/keycloak-realm.json
+      - run: curl --fail --silent --show-error --retry 60 --retry-delay 2 --retry-connrefused --retry-all-errors --output /dev/null http://localhost:8180/realms/aor/.well-known/openid-configuration
+      - run: just live-login
