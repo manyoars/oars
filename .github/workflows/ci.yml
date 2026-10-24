@@ -54,13 +54,15 @@ jobs:
     if: github.event_name == 'workflow_dispatch' && inputs.live-login
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    env:
-      OARS_LIVE_USERNAME: ${{ secrets.OARS_LIVE_USERNAME }}
-      OARS_LIVE_PASSWORD: ${{ secrets.OARS_LIVE_PASSWORD }}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # persist-credentials: false keeps both tokens out of .git/config, and the login secrets reach only the last step, so
+      # none of them is readable by the install scripts `npm ci` runs.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
           repository: ${{ vars.AOR_PLATFORM_REPOSITORY }}
           token: ${{ secrets.AOR_PLATFORM_READ_TOKEN }}
           path: .aor-platform
@@ -76,3 +78,6 @@ jobs:
       - run: just live-keycloak .aor-platform/k8s/keycloak-realm.json
       - run: curl --fail --silent --show-error --retry 60 --retry-delay 2 --retry-connrefused --retry-all-errors --output /dev/null http://localhost:8180/realms/aor/.well-known/openid-configuration
       - run: just live-login
+        env:
+          OARS_LIVE_USERNAME: ${{ secrets.OARS_LIVE_USERNAME }}
+          OARS_LIVE_PASSWORD: ${{ secrets.OARS_LIVE_PASSWORD }}
