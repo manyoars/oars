@@ -8,6 +8,7 @@ import { chromium } from '@playwright/test';
 import { describe, expect, it } from 'vitest';
 import { run, type RunDeps } from './cli.js';
 import { fileCredentialStore } from './credentials.js';
+import { fileJournalStore } from './journal.js';
 import { ExitCode } from './errors.js';
 import { discover, refreshTokens } from './oidc.js';
 
@@ -126,6 +127,7 @@ const loginThenLogout = async ({ api, configDir, username, password }: Session):
       },
     },
     store: fileCredentialStore(configDir),
+    journal: fileJournalStore(configDir),
     version: '0.0.0-live',
     sleep: (ms) => sleep(ms),
     random: Math.random,

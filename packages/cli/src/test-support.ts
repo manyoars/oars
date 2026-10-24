@@ -6,6 +6,7 @@ import { setupServer } from 'msw/node';
 import { afterAll, afterEach, beforeAll } from 'vitest';
 import type { RunDeps } from './cli.js';
 import { fileCredentialStore } from './credentials.js';
+import { fileJournalStore } from './journal.js';
 
 export const ISSUER = 'http://localhost:8180/realms/aor';
 export const API = 'https://api.test';
@@ -127,6 +128,7 @@ export const harness = (env: NodeJS.ProcessEnv = {}): Harness => {
     env: { OARS_API_URL: API, OARS_ISSUER_URL: ISSUER, ...env },
     io: { stdout: (text) => out.push(text), stderr: (text) => err.push(text) },
     store: fileCredentialStore(configDir),
+    journal: fileJournalStore(configDir),
     version: '9.9.9',
     sleep: (ms) => {
       sleeps.push(ms);

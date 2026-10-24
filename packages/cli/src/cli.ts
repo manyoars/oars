@@ -4,12 +4,15 @@ import { login } from './commands/login.js';
 import { logout } from './commands/logout.js';
 import type { CredentialStore } from './credentials.js';
 import { CliError, ExitCode } from './errors.js';
+import type { JournalStore } from './journal.js';
 
 /** Everything the CLI takes from its process, so the tests can stand in for each. */
 export interface RunDeps {
   env: NodeJS.ProcessEnv;
   io: { stdout: (text: string) => void; stderr: (text: string) => void };
   store: CredentialStore;
+  /** Where `deploy` keeps its progress between a failed run and the rerun. */
+  journal: JournalStore;
   /** Sent as `User-Agent: oars/<version>` and printed by `--version`. */
   version: string;
   sleep: (ms: number) => Promise<void>;
