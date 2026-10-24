@@ -40,9 +40,9 @@ describe('the tarball npm pack would make', () => {
     paths = packedPaths();
   }, 120_000);
 
-  it('lists the bin oars runs, the built CLI, package.json and LICENSE', () => {
+  it('lists the bin oars runs, the built CLI, package.json, README.md and LICENSE', () => {
     expect(paths, 'run `npm run build -w packages/cli` first').toEqual(
-      expect.arrayContaining(['dist/bin.js', 'dist/cli.js', 'dist/cli.d.ts', 'package.json', 'LICENSE']),
+      expect.arrayContaining(['dist/bin.js', 'dist/cli.js', 'dist/cli.d.ts', 'package.json', 'README.md', 'LICENSE']),
     );
   });
 
@@ -81,9 +81,9 @@ describe('the tarball npm pack would make', () => {
     expect(unwanted).toEqual([]);
   });
 
-  it('lists nothing but dist/, the golden plans and the two files npm always adds', () => {
+  it('lists nothing but dist/, the golden plans and the three files npm always adds', () => {
     expect(
-      paths.filter((path) => !path.startsWith('dist/') && !path.startsWith('parity/deploy-plans/') && !['package.json', 'LICENSE'].includes(path)),
+      paths.filter((path) => !path.startsWith('dist/') && !path.startsWith('parity/deploy-plans/') && !['package.json', 'README.md', 'LICENSE'].includes(path)),
     ).toEqual([]);
   });
 });
