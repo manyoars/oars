@@ -18,7 +18,7 @@ export const exchangeKeycloakToken = async (deps: RunDeps, apiUrl: string, keycl
 
 const refreshLogin = async (deps: RunDeps, stored: StoredCredentials): Promise<string> => {
   const step = 'auth';
-  const config = await discover(stored.issuerUrl, { version: deps.version, step });
+  const config = await discover(stored.issuerUrl, { ...deps, step });
   const tokens = await refreshTokens(config, stored.refreshToken, step);
   // Keycloak rotates the refresh token on every use, so the old one is already dead: save the new one before anything can fail.
   const rotated: StoredCredentials = { ...stored, refreshToken: tokens.refreshToken ?? stored.refreshToken };

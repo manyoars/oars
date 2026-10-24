@@ -19,7 +19,7 @@ export const login = async (deps: RunDeps, options: LoginOptions): Promise<Outco
   if (issuerUrl === undefined || issuerUrl === '') {
     throw new CliError('No Keycloak issuer URL: pass --issuer-url or set OARS_ISSUER_URL.', ExitCode.USAGE, 'usage');
   }
-  const config = await discover(issuerUrl, { version: deps.version, step: STEP });
+  const config = await discover(issuerUrl, { ...deps, step: STEP });
   const device = await startDeviceAuthorization(config, STEP);
   const url = device.verification_uri_complete ?? device.verification_uri;
   deps.io.stderr(`To sign in, open ${url}\nand confirm the code ${device.user_code}\n`);

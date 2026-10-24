@@ -164,7 +164,7 @@ const loginThenLogout = async ({ api, configDir, username, password }: Session):
   expect(await deps.store.read()).toBeUndefined();
 
   // Revoked at Keycloak, not merely forgotten locally: the old refresh token is refused.
-  const config = await discover(ISSUER_URL, { version: deps.version, step: 'live' });
+  const config = await discover(ISSUER_URL, { ...deps, step: 'live' });
   await expect(refreshTokens(config, refreshToken, 'live')).rejects.toMatchObject({ exitCode: ExitCode.AUTH });
 };
 

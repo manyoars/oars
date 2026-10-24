@@ -1,12 +1,13 @@
 import * as client from 'openid-client';
 import { CliError, ExitCode, unreachableError } from './errors.js';
+import { retryingFetch, type RetryDeps } from './retry.js';
 
 /** The public Keycloak client T67 registers for the CLI: device authorization grant only. */
 export const CLIENT_ID = 'oars-cli';
 const SCOPE = 'openid email profile';
 const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]']);
 
-export interface OidcContext {
+export interface OidcContext extends RetryDeps {
   /** The CLI's version, sent as `User-Agent: oars/<version>`. */
   version: string;
   /** Names where a failure happened in `--json` documents. */
@@ -20,15 +21,22 @@ export interface KeycloakTokens {
   refreshToken?: string;
 }
 
-const userAgentFetch =
-  ({ version, step }: OidcContext): client.CustomFetch =>
-  async (url, options) => {
+/**
+ * Every call to Keycloak sends `User-Agent: oars/<version>` and gets design §3.2's retries, except the token endpoint:
+ * it rotates the refresh token, so a request it may have processed is never repeated blindly (device polling repeats
+ * by itself). `isTokenEndpoint` is told which URL that is once discovery has found it.
+ */
+const keycloakFetch = ({ version, step, sleep, random }: OidcContext, isTokenEndpoint: (url: string) => boolean): client.CustomFetch => {
+  const retrying = retryingFetch((request) => fetch(request), { sleep, random });
+  return async (url, options) => {
+    const request = new Request(url, { ...options, headers: { ...options.headers, 'user-agent': `oars/${version}` } });
     try {
-      return await fetch(url, { ...options, headers: { ...options.headers, 'user-agent': `oars/${version}` } });
+      return await (isTokenEndpoint(url) ? fetch(request) : retrying(request));
     } catch (error) {
       throw unreachableError(step, error);
     }
   };
+};
 
 /** The CliError the library wrapped on its way out of our fetch, if any (it puts an unrecognized error in `cause`). */
 const wrapped = (error: unknown): CliError | undefined => {
@@ -74,11 +82,15 @@ export const discover = async (issuerUrl: string, context: OidcContext): Promise
   }
   const loopback = issuer.protocol === 'http:' && LOOPBACK_HOSTS.has(issuer.hostname);
   if (issuer.protocol !== 'https:' && !loopback) throw usage(`The issuer URL must use https (http is accepted for localhost only): ${issuerUrl}`);
+  let tokenEndpoint: string | undefined;
   try {
-    return await client.discovery(issuer, CLIENT_ID, undefined, client.None(), {
-      [client.customFetch]: userAgentFetch(context),
+    const config = await client.discovery(issuer, CLIENT_ID, undefined, client.None(), {
+      [client.customFetch]: keycloakFetch(context, (url) => tokenEndpoint !== undefined && new URL(url).href === tokenEndpoint),
       execute: loopback ? [client.allowInsecureRequests] : [],
     });
+    const endpoint = config.serverMetadata().token_endpoint;
+    tokenEndpoint = endpoint === undefined ? undefined : new URL(endpoint).href;
+    return config;
   } catch (error) {
     throw failure(context.step, error);
   }
