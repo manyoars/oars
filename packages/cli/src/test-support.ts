@@ -14,7 +14,7 @@ export const server = setupServer();
 /** Starts the shared msw server for one test file; an unmocked request fails the test. */
 export const useServer = (): void => {
   beforeAll(() => {
-    server.listen({ onUnhandledRequest: 'error' });
+    server.listen({ onUnhandledFrame: 'error' });
   });
   afterEach(() => {
     server.resetHandlers();
@@ -34,7 +34,8 @@ export const discovery = http.get(`${ISSUER}/.well-known/openid-configuration`, 
   }),
 );
 
-export const deviceAuthorization = (interval = 0) =>
+// openid-client rejects an interval of 0 (RFC 8628 wants a positive one), so the polls in these tests wait 20 ms.
+export const deviceAuthorization = (interval = 0.02) =>
   http.post(`${ISSUER}/protocol/openid-connect/auth/device`, () =>
     HttpResponse.json({
       device_code: 'dev-code',
