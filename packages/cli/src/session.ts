@@ -16,6 +16,8 @@ export const exchangeKeycloakToken = async (deps: RunDeps, apiUrl: string, keycl
   return unwrap(step, await client.POST('/auth/oidc/exchange', { body: { accessToken: keycloakAccessToken } }));
 };
 
+const sameUrl = (a: string, b: string): boolean => a.replace(/\/+$/, '') === b.replace(/\/+$/, '');
+
 const refreshLogin = async (deps: RunDeps, stored: StoredCredentials): Promise<string> => {
   const step = 'auth';
   const config = await discover(stored.issuerUrl, { ...deps, step });
@@ -29,14 +31,17 @@ const refreshLogin = async (deps: RunDeps, stored: StoredCredentials): Promise<s
 };
 
 /**
- * The bearer token for an API call. `OARS_API_KEY` wins over a stored login and touches no network; otherwise the stored
- * access token while it is valid, else one refreshed through Keycloak and exchanged.
+ * The bearer token for an API call to `apiUrl`. `OARS_API_KEY` wins over a stored login and touches no network; otherwise the
+ * stored access token while it is valid, else one refreshed through Keycloak and exchanged. A stored login belongs to the API
+ * it was made against: for any other `apiUrl` the call exits 2 and sends nothing, so one deployment's refresh token never
+ * reaches another host.
  */
-export const resolveAuthToken = async (deps: RunDeps): Promise<string> => {
+export const resolveAuthToken = async (deps: RunDeps, apiUrl: string): Promise<string> => {
   const key = deps.env.OARS_API_KEY;
   if (key !== undefined && key !== '') return key;
   const stored = await deps.store.read();
   if (stored === undefined) throw new CliError('Not logged in. Run "oars login", or set OARS_API_KEY.', ExitCode.AUTH, 'auth');
+  if (!sameUrl(stored.apiUrl, apiUrl)) throw new CliError(`not logged in to ${apiUrl}; run oars login --api-url ${apiUrl}`, ExitCode.USAGE, 'auth');
   if (Date.parse(stored.expiresAt) - EXPIRY_SKEW_MS > deps.now()) return stored.accessToken;
   return refreshLogin(deps, stored);
 };
