@@ -24,17 +24,30 @@ export interface KeycloakTokens {
 /**
  * Every call to Keycloak sends `User-Agent: oars/<version>` and gets design §3.2's retries, except the token endpoint:
  * it rotates the refresh token, so a request it may have processed is never repeated blindly (device polling repeats
- * by itself). `isTokenEndpoint` is told which URL that is once discovery has found it.
+ * by itself). `isTokenEndpoint` is told which URL that is once discovery has found it. A 502-504 or 429 that is still the
+ * answer once the retries are spent (or the token endpoint's single attempt) is design §3.2's exit 8 or 7 here, because
+ * handed on, the library would call it an unexpected status (exit 1).
  */
 const keycloakFetch = ({ version, step, sleep, random }: OidcContext, isTokenEndpoint: (url: string) => boolean): client.CustomFetch => {
   const retrying = retryingFetch((request) => fetch(request), { sleep, random });
   return async (url, options) => {
     const request = new Request(url, { ...options, headers: { ...options.headers, 'user-agent': `oars/${version}` } });
+    let response: Response;
     try {
-      return await (isTokenEndpoint(url) ? fetch(request) : retrying(request));
+      response = await (isTokenEndpoint(url) ? fetch(request) : retrying(request));
     } catch (error) {
       throw unreachableError(step, error);
     }
+    const { status } = response;
+    if (status === 429 || status === 502 || status === 503 || status === 504) {
+      void response.body?.cancel().catch(() => undefined);
+      if (status === 429) {
+        const title = 'Keycloak is rate limiting this client. Wait a moment, then run the command again.';
+        throw new CliError(title, ExitCode.RATE_LIMITED, step, { code: 'RATE_LIMITED', title, status });
+      }
+      throw unreachableError(step, new Error(`Keycloak answered HTTP ${String(status)}`));
+    }
+    return response;
   };
 };
 

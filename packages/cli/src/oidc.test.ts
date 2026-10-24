@@ -75,6 +75,39 @@ describe('Keycloak calls retry transient failures', () => {
     expect(sleeps).toHaveLength(3);
   });
 
+  // Design §3.2 rows 7 and 8 hold after the retries run out: the last 5xx or 429 is an exit 8 or 7, not the library's "unexpected status" (exit 1).
+  it.each([[502], [503], [504]])('exits 8 after three retries when discovery always answers %i', async (status) => {
+    const { context: retrying, sleeps } = contextOf();
+    let requests = 0;
+    server.use(
+      http.get(`${ISSUER}/.well-known/openid-configuration`, () => {
+        requests += 1;
+        return HttpResponse.json({}, { status });
+      }),
+    );
+    const failure = await discover(ISSUER, retrying).catch((error: unknown) => error);
+    expect(failure).toMatchObject({ exitCode: ExitCode.UNREACHABLE, step: 'login', message: `Cannot reach the server: Keycloak answered HTTP ${String(status)}` });
+    expect(sleeps).toHaveLength(3);
+    expect(requests).toBe(4);
+  });
+
+  it('exits 7 after three retries when discovery always answers 429 with a Retry-After', async () => {
+    const { context: retrying, sleeps } = contextOf();
+    server.use(http.get(`${ISSUER}/.well-known/openid-configuration`, () => HttpResponse.json({}, { status: 429, headers: { 'Retry-After': '2' } })));
+    const failure = await discover(ISSUER, retrying).catch((error: unknown) => error);
+    expect(failure).toMatchObject({ exitCode: ExitCode.RATE_LIMITED, step: 'login', problem: { code: 'RATE_LIMITED', status: 429 } });
+    expect(sleeps).toHaveLength(3);
+    expect(Math.min(...sleeps)).toBeGreaterThanOrEqual(2000);
+  });
+
+  it('exits 7 at once when a 429 names no wait (nothing to retry)', async () => {
+    const { context: retrying, sleeps } = contextOf();
+    server.use(http.get(`${ISSUER}/.well-known/openid-configuration`, () => HttpResponse.json({}, { status: 429 })));
+    const failure = await discover(ISSUER, retrying).catch((error: unknown) => error);
+    expect(failure).toMatchObject({ exitCode: ExitCode.RATE_LIMITED, step: 'login' });
+    expect(sleeps).toHaveLength(0);
+  });
+
   it('retries the device authorization POST once after a 502', async () => {
     const { context: retrying, sleeps } = contextOf();
     server.use(discovery, http.post(`${ISSUER}/protocol/openid-connect/auth/device`, () => HttpResponse.json({}, { status: 502 }), { once: true }), deviceAuthorization());
@@ -100,7 +133,24 @@ describe('Keycloak calls retry transient failures', () => {
         return HttpResponse.json({}, { status: 503 });
       }),
     );
-    await expect(refreshTokens(await discover(ISSUER, retrying), 'r1', 'api')).rejects.toBeInstanceOf(CliError);
+    const failure = await refreshTokens(await discover(ISSUER, { ...retrying, step: 'api' }), 'r1', 'api').catch((error: unknown) => error);
+    expect(failure).toMatchObject({ exitCode: ExitCode.UNREACHABLE, step: 'api', message: 'Cannot reach the server: Keycloak answered HTTP 503' });
+    expect(requests).toBe(1);
+    expect(sleeps).toHaveLength(0);
+  });
+
+  it('exits 7 on a 429 from the token endpoint, sent exactly once', async () => {
+    const { context: retrying, sleeps } = contextOf();
+    let requests = 0;
+    server.use(
+      discovery,
+      http.post(TOKEN, () => {
+        requests += 1;
+        return HttpResponse.json({}, { status: 429, headers: { 'Retry-After': '1' } });
+      }),
+    );
+    const failure = await refreshTokens(await discover(ISSUER, { ...retrying, step: 'api' }), 'r1', 'api').catch((error: unknown) => error);
+    expect(failure).toMatchObject({ exitCode: ExitCode.RATE_LIMITED, step: 'api' });
     expect(requests).toBe(1);
     expect(sleeps).toHaveLength(0);
   });
