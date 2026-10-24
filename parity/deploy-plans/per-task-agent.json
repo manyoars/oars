@@ -1,0 +1,34 @@
+[
+  {
+    "method": "POST",
+    "path": "/agents/workloads",
+    "body": {
+      "name": "Per-task agent",
+      "services": [
+        {
+          "name": "agent",
+          "image": "ghcr.io/manyoars/per-task-agent@sha256:b88bb11504236ad97349f6a4ad820a98c16eef670e9aa2f93c157019406aecd6",
+          "port": 8080,
+          "public": true,
+          "cpuMillicores": 500,
+          "memoryMib": 512
+        }
+      ]
+    }
+  },
+  {
+    "method": "POST",
+    "path": "/billing/agents/{workloadId}/prices",
+    "body": { "priceRef": "task-1", "displayName": "1 task", "amountUsd": "9.00", "kind": "CREDIT_PACK", "credits": 1 }
+  },
+  {
+    "method": "POST",
+    "path": "/billing/agents/{workloadId}/prices",
+    "body": { "priceRef": "tasks-5", "displayName": "5 tasks", "amountUsd": "40.00", "kind": "CREDIT_PACK", "credits": 5 }
+  },
+  {
+    "method": "POST",
+    "path": "/agents/workloads/{workloadId}/deploy",
+    "body": null
+  }
+]
