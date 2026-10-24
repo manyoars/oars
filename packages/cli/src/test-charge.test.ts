@@ -1,8 +1,9 @@
+import { http, HttpResponse } from 'msw';
 import { describe, expect, it } from 'vitest';
 import { run } from './cli.js';
 import { ExitCode } from './errors.js';
 import { fakePlatform, WORKLOAD_ID } from './fake-platform.js';
-import { harness, useServer } from './test-support.js';
+import { API, harness, server, useServer } from './test-support.js';
 
 useServer();
 
@@ -17,6 +18,16 @@ describe('oars test-charge', () => {
     expect(platform.calls).toEqual([{ method: 'POST', path: `/billing/agents/${WORKLOAD_ID}/test-charges`, body: { priceRef: 'calls-100' }, key: KEY, status: 201 }]);
     expect(h.out).toHaveLength(1);
     expect(JSON.parse(h.out[0] ?? '')).toEqual({ ok: true, chargeId: 'cccccccc-dddd-4eee-8fff-000000000000', status: 'SUCCEEDED' });
+  });
+
+  it('--json on a LIVE agent: the whole failure document on stdout, exit 4, nothing on stderr', async () => {
+    const h = harness({ OARS_API_KEY: 'key-123' });
+    const problem = { code: 'TEST_MODE_ONLY', title: 'Test charges are only for TEST-mode agents', detail: `Agent ${WORKLOAD_ID} is LIVE` };
+    server.use(http.post(`${API}/billing/agents/${WORKLOAD_ID}/test-charges`, () => HttpResponse.json(problem, { status: 409, headers: { 'Content-Type': 'application/problem+json' } })));
+    expect(await run(['test-charge', WORKLOAD_ID, '--price', 'calls-100', '--idempotency-key', 'K', '--json'], h.deps)).toBe(ExitCode.INVALID);
+    expect(h.out).toHaveLength(1);
+    expect(JSON.parse(h.out[0] ?? '')).toEqual({ ok: false, step: 'test-charge', problem: { ...problem, status: 409 } });
+    expect(h.err).toEqual([]);
   });
 
   it('without --price uses the one active price', async () => {
