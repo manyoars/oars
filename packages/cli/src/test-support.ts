@@ -1,4 +1,4 @@
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { http, HttpResponse } from 'msw';
@@ -11,6 +11,13 @@ export const ISSUER = 'http://localhost:8180/realms/aor';
 export const API = 'https://api.test';
 export const server = setupServer();
 
+const configDirs: string[] = [];
+
+/** Removes the config directories `harness()` made so far: each holds token-shaped credentials files. */
+export const removeTestDirs = (): void => {
+  for (const dir of configDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+};
+
 /** Starts the shared msw server for one test file; an unmocked request fails the test. */
 export const useServer = (): void => {
   beforeAll(() => {
@@ -18,6 +25,7 @@ export const useServer = (): void => {
   });
   afterEach(() => {
     server.resetHandlers();
+    removeTestDirs();
   });
   afterAll(() => {
     server.close();
@@ -110,6 +118,7 @@ export interface Harness {
 
 export const harness = (env: NodeJS.ProcessEnv = {}): Harness => {
   const configDir = mkdtempSync(join(tmpdir(), 'oars-cli-test-'));
+  configDirs.push(configDir);
   const out: string[] = [];
   const err: string[] = [];
   const sleeps: number[] = [];

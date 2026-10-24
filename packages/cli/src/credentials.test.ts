@@ -1,8 +1,8 @@
 import { mkdirSync, readdirSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import { defaultConfigDir, fileCredentialStore, type StoredCredentials } from './credentials.js';
-import { harness } from './test-support.js';
+import { harness, removeTestDirs } from './test-support.js';
 
 const creds: StoredCredentials = {
   issuerUrl: 'http://localhost:8180/realms/aor',
@@ -12,6 +12,8 @@ const creds: StoredCredentials = {
   accessToken: 'a1',
   expiresAt: '2099-01-01T00:00:00Z',
 };
+
+afterEach(removeTestDirs);
 
 describe('defaultConfigDir', () => {
   const home = join('home', 'dev');
