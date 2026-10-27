@@ -7,7 +7,7 @@ describe('the charging sentence', () => {
   it('reads the same in README.md and in the GET / body', async () => {
     const readme = readFileSync(new URL('../../README.md', import.meta.url), 'utf8').replace(/\s+/g, ' ');
     const billing = createFakeBilling({ now: Date.now });
-    const app = createApp({ billing, recovery: createFakeRecovery({ billing, now: Date.now }), priceRefs: ['calls-100'] });
+    const app = createApp({ billing, recovery: createFakeRecovery({ billing, now: Date.now }), priceRefs: ['calls-100'], checkoutUrls: { successUrl: 'https://agent.test/?checkout=success', cancelUrl: 'https://agent.test/?checkout=cancel' } });
 
     const body: unknown = await (await app.request('/')).json();
 

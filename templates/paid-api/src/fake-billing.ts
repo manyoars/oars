@@ -1,7 +1,7 @@
 // An in-memory stand-in for billing that follows R7's reservation rules. It backs `OARS_DEV_FAKE_BILLING=1` (local
 // development, no SDK key) and the unit tests, so a test of withCredits proves the same replay behavior billing has.
 import { randomBytes, randomUUID } from 'node:crypto';
-import { type Balance, type Billing, BillingProblem, type Commit, type Reservation } from './billing.js';
+import { type Balance, type Billing, BillingProblem, type CheckoutUrls, type Commit, type Reservation } from './billing.js';
 import type { Recovery } from './recovery.js';
 
 export interface FakeBilling extends Billing {
@@ -35,6 +35,10 @@ const settled = <T>(work: () => T): Promise<T> =>
   new Promise((resolve) => {
     resolve(work());
   });
+
+// Billing's rule for a CHECKOUT charge: both URLs, each an http(s) URL (ChargeService, and the spec's pattern).
+const hasUrls = (urls: Partial<CheckoutUrls>): boolean =>
+  [urls.successUrl, urls.cancelUrl].every((url) => url !== undefined && /^https?:\/\/.+/.test(url));
 
 const refuse = (status: number, code: string): BillingProblem => new BillingProblem({ status, code });
 
@@ -96,9 +100,10 @@ export const createFakeBilling = (options: { now: () => number }): FakeBilling =
       settled(() => {
         live(customerRef);
       }),
-    checkout: (customerRef, priceRef) =>
+    checkout: (customerRef, priceRef, urls) =>
       settled(() => {
         live(customerRef);
+        if (!hasUrls(urls)) throw refuse(400, 'VALIDATION_ERROR');
         const credits = PACKS.get(priceRef);
         if (credits === undefined) throw refuse(404, 'PRICE_NOT_FOUND');
         balances.set(customerRef, balanceOf(customerRef) + credits);

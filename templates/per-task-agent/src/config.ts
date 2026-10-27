@@ -9,6 +9,8 @@ export interface Config {
   /** Absent only when the dev flag selected the fake billing. */
   sdkKey?: string;
   fakeBilling: boolean;
+  /** This agent's own public URL, no trailing slash: where Checkout returns the buyer. */
+  publicUrl: string;
   /** Set by the developer as an agent secret; with it a model writes a short summary on top of the findings. */
   anthropicApiKey?: string;
 }
@@ -16,7 +18,7 @@ export interface Config {
 // Until the agent API can list an agent's own prices (request R1), the refs the starter template ships.
 const STARTER_PRICE_REFS = ['task-1', 'tasks-5'];
 
-/** Fails closed: without AOR_SDK_KEY the server does not start, unless OARS_DEV_FAKE_BILLING is exactly `1`. */
+/** Fails closed: without AOR_SDK_KEY or OARS_PUBLIC_URL the server does not start, unless OARS_DEV_FAKE_BILLING is exactly `1`. */
 export const loadConfig = (env: NodeJS.ProcessEnv): Config => {
   const fakeBilling = env['OARS_DEV_FAKE_BILLING'] === '1';
   const sdkKey = env['AOR_SDK_KEY']?.trim();
@@ -30,12 +32,20 @@ export const loadConfig = (env: NodeJS.ProcessEnv): Config => {
     .map((ref) => ref.trim())
     .filter((ref) => ref !== '');
   const anthropicApiKey = env['ANTHROPIC_API_KEY']?.trim();
+  const publicUrl = env['OARS_PUBLIC_URL']?.trim().replace(/\/+$/, '') ?? '';
+  if (publicUrl === '' && !fakeBilling) {
+    throw new ConfigError('OARS_PUBLIC_URL is not set; set it to the public https URL of this agent, where Checkout returns the buyer.');
+  }
+  if (publicUrl !== '' && !/^https?:\/\/[^\s?#]+$/.test(publicUrl)) {
+    throw new ConfigError(`OARS_PUBLIC_URL must be an http(s) URL with no query or fragment, got "${publicUrl}"`);
+  }
   return {
     port,
     apiUrl: env['OARS_API_URL'] ?? DEFAULT_API_URL,
     priceRefs: refs.length > 0 ? refs : STARTER_PRICE_REFS,
     sdkKey: sdkKey === '' ? undefined : sdkKey,
     fakeBilling,
+    publicUrl: publicUrl === '' ? `http://localhost:${String(port)}` : publicUrl,
     anthropicApiKey: anthropicApiKey === '' ? undefined : anthropicApiKey,
   };
 };

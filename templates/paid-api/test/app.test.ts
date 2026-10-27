@@ -5,13 +5,14 @@ import { createFakeBilling, createFakeRecovery } from '../src/fake-billing.js';
 import { RECOVERY_SENTENCE } from '../src/recovery.js';
 import { bodyOf, createClock } from './support.js';
 
+const CHECKOUT_URLS = { successUrl: 'https://agent.test/?checkout=success', cancelUrl: 'https://agent.test/?checkout=cancel' };
 const PRICE_REFS = ['calls-100', 'calls-1000'];
 
 const setup = (credits = 3) => {
   const clock = createClock();
   const fake = createFakeBilling({ now: clock.now });
   const recovery = createFakeRecovery({ billing: fake, now: clock.now });
-  const app = createApp({ billing: fake, recovery, priceRefs: PRICE_REFS, now: clock.now });
+  const app = createApp({ billing: fake, recovery, priceRefs: PRICE_REFS, checkoutUrls: CHECKOUT_URLS, now: clock.now });
   const token = mintToken();
   const customerRef = customerRefFor(token);
   fake.grant(customerRef, credits);
@@ -122,7 +123,7 @@ describe('POST /v1/credits/checkout', () => {
 
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({ checkoutUrl: 'https://checkout.example/fake/calls-100' });
-    expect(checkout).toHaveBeenCalledExactlyOnceWith(customerRef, 'calls-100');
+    expect(checkout).toHaveBeenCalledExactlyOnceWith(customerRef, 'calls-100', CHECKOUT_URLS);
   });
 
   it('maps an unknown price to 400', async () => {

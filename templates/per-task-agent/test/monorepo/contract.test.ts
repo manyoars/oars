@@ -3,7 +3,7 @@
 // names the violation in the `sl-violations` header; createBilling surfaces that as a BillingProblem with status 422.
 import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { type Billing, createBilling } from '../../src/billing.js';
+import { type Billing, checkoutUrlsFor, createBilling } from '../../src/billing.js';
 import { type Recovery, createRecovery } from '../../src/recovery.js';
 import { type PrismServer, startPrism } from './prism.js';
 
@@ -30,7 +30,7 @@ describe('billing calls against Prism serving openapi/public.json', () => {
   });
 
   it('checkout creates a CHECKOUT charge and returns the checkout URL', async () => {
-    const { checkoutUrl } = await billing.checkout('cus_contract', 'task-1');
+    const { checkoutUrl } = await billing.checkout('cus_contract', 'task-1', checkoutUrlsFor('https://agent.example'));
 
     expect(checkoutUrl).toEqual(expect.any(String));
   });

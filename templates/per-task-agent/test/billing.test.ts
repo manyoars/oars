@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { BillingProblem, buyerResponse, createBilling, customerRefFor, mintToken, reservationKey } from '../src/billing.js';
+import { BillingProblem, buyerResponse, checkoutUrlsFor, createBilling, customerRefFor, mintToken, reservationKey } from '../src/billing.js';
 
 const CHECKOUT = 'https://checkout.example/pack/abc';
 
@@ -149,6 +149,15 @@ describe('buyerResponse', () => {
 
     expect(response.status).toBe(503);
     expect(JSON.stringify(response.body)).not.toContain('10.0.0.1');
+  });
+});
+
+describe('checkoutUrlsFor', () => {
+  it('builds both URLs from the configured public URL', () => {
+    expect(checkoutUrlsFor('https://agent.example')).toEqual({
+      successUrl: 'https://agent.example/?checkout=success',
+      cancelUrl: 'https://agent.example/?checkout=cancel',
+    });
   });
 });
 
