@@ -41,6 +41,8 @@ jobs:
           node-version: 24
           cache: npm
       - run: npm ci
+      # The client's entry is its built dist/, which a fresh checkout lacks, so build it before any typecheck, test, or build.
+      - run: npm run build -w packages/client
       - run: npm run typecheck -w templates/per-task-agent
       - run: npm test -w templates/per-task-agent
       - run: npm run test:monorepo -w templates/per-task-agent
