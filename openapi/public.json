@@ -20,6 +20,42 @@
         ],
         "type": "string"
       },
+      "BillingErrorCode": {
+        "description": "The billing error catalog (spec §9.2, §13). Branch on the code, never on the detail text.\n\n| Code | Status | Meaning |\n|---|---|---|\n| `SDK_KEY_INVALID` | 401 | The X-Agent-SDK-Key header is missing, malformed, revoked or unknown. |\n| `WORKLOAD_NOT_ACTIVE` | 409 | The agent's workload is no longer active. |\n| `WORKLOAD_NOT_FOUND` | 404 | No agent with this id. |\n| `WORKLOAD_NOT_OWNED` | 403 | The agent belongs to another developer. |\n| `PRICE_NOT_FOUND` | 404 | The agent has no price with this priceRef. |\n| `PRICE_INACTIVE` | 400 | The price is deactivated; activate it or use another price. |\n| `PRICE_AMOUNT_IMMUTABLE` | 409 | A charge or subscription already references the price; create a new one. |\n| `CUSTOMER_REGION_NOT_SUPPORTED` | 400 | Only US customers (the 50 states and DC) can be charged; the customer is elsewhere. |\n| `ACCOUNT_NOT_READY` | 409 | The developer's payout account cannot take live charges yet; a human finishes onboarding at actionUrl. |\n| `SELLER_IDENTITY_INCOMPLETE` | 409 | The agent's seller identity lacks a display name, support email or refund-policy URL; set them before going live. |\n| `STRIPE_TERMS_URL_NOT_SET` | 409 | The agent has a terms URL but the developer's Stripe account has none in its public business details; actionUrl is where to set it. |\n| `PAYMENT_METHOD_REQUIRED` | 409 | An off-session charge needs a saved card; use a CHECKOUT charge first. |\n| `IDEMPOTENCY_CONFLICT` | 409 | This Idempotency-Key was already used with a different request body. |\n| `INSUFFICIENT_CREDITS` | 409 | The customer has too few credits; actionUrl is a credit-pack checkout. |\n| `REFUND_EXCEEDS_REMAINING` | 409 | The refund is larger than what remains refundable on the charge. |\n| `CHARGE_NOT_REFUNDABLE` | 409 | The charge cannot be refunded through the API: not posted yet, flagged, disputed, failed or fully refunded. |\n| `TEST_MODE_ONLY` | 409 | The operation runs only in TEST mode (test charges). |\n| `RATE_LIMITED` | 429 | Too many requests for this agent or key; retry after the Retry-After seconds. |\n| `PAYOUT_COUNTRY_NOT_SUPPORTED` | 400 | Payout accounts are US-only at launch; the developer's country is elsewhere. |\n| `HUMAN_SESSION_REQUIRED` | 403 | A signed-in person must make this change; an API key or a connected agent tool cannot (payout account). |\n| `TOPUP_AMOUNT_INVALID` | 400 | A compute top-up is a whole-cent USD amount within the minimum and maximum. |\n| `TOPUP_NOT_FOUND` | 404 | No compute top-up with this id for the caller. |\n| `FEE_POLICY_INVALID` | 400 | The fee-policy version breaks a policy rule (admin API). |\n| `RESERVATION_NOT_FOUND` | 404 | No credit reservation with this id for the agent. |\n| `RESERVATION_EXPIRED` | 409 | The credit reservation lapsed before it was committed; reserve again. |\n| `RESERVATION_RELEASED` | 409 | The credit reservation was released; it can no longer be committed. |\n| `RESERVATION_COMMITTED` | 409 | The credit reservation was already committed; it can no longer be released. |\n| `IDEMPOTENCY_KEY_INVALID` | 400 | The Idempotency-Key is not a UUID or 64 hexadecimal characters. |\n| `CUSTOMER_REVOKED` | 410 | The customerRef was replaced by a token recovery; every agent billing call on it, the customer upsert included, is refused. |\n| `RECOVERY_LINK_INVALID` | 410 | The recovery link is unknown, already used, expired, voided by a newer link, or for another agent. |\n",
+        "enum": [
+          "SDK_KEY_INVALID",
+          "WORKLOAD_NOT_ACTIVE",
+          "WORKLOAD_NOT_FOUND",
+          "WORKLOAD_NOT_OWNED",
+          "PRICE_NOT_FOUND",
+          "PRICE_INACTIVE",
+          "PRICE_AMOUNT_IMMUTABLE",
+          "CUSTOMER_REGION_NOT_SUPPORTED",
+          "ACCOUNT_NOT_READY",
+          "SELLER_IDENTITY_INCOMPLETE",
+          "STRIPE_TERMS_URL_NOT_SET",
+          "PAYMENT_METHOD_REQUIRED",
+          "IDEMPOTENCY_CONFLICT",
+          "INSUFFICIENT_CREDITS",
+          "REFUND_EXCEEDS_REMAINING",
+          "CHARGE_NOT_REFUNDABLE",
+          "TEST_MODE_ONLY",
+          "RATE_LIMITED",
+          "PAYOUT_COUNTRY_NOT_SUPPORTED",
+          "HUMAN_SESSION_REQUIRED",
+          "TOPUP_AMOUNT_INVALID",
+          "TOPUP_NOT_FOUND",
+          "FEE_POLICY_INVALID",
+          "RESERVATION_NOT_FOUND",
+          "RESERVATION_EXPIRED",
+          "RESERVATION_RELEASED",
+          "RESERVATION_COMMITTED",
+          "IDEMPOTENCY_KEY_INVALID",
+          "CUSTOMER_REVOKED",
+          "RECOVERY_LINK_INVALID"
+        ],
+        "type": "string"
+      },
       "BillingMode": {
         "enum": [
           "TEST",
@@ -49,6 +85,43 @@
         "required": [
           "billingMode",
           "workloadId"
+        ]
+      },
+      "BillingProblem": {
+        "description": "A billing rejection (RFC 7807). Branch on `code`, never on `detail`. `code` is absent on an uncoded rejection: a plain 404 such as the subscription read's, a 503, or a Bean Validation 400 (rulings #40).",
+        "properties": {
+          "actionUrl": {
+            "description": "A URL where a human completes the step that clears this rejection",
+            "type": "string"
+          },
+          "code": {
+            "$ref": "#/components/schemas/BillingErrorCode"
+          },
+          "detail": {
+            "type": "string"
+          },
+          "instance": {
+            "type": "string"
+          },
+          "requestId": {
+            "type": "string"
+          },
+          "status": {
+            "format": "int32",
+            "type": "integer"
+          },
+          "title": {
+            "type": "string"
+          },
+          "type": {
+            "example": "https://api.tradeaor.com/problems/price-not-found",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "title",
+          "type"
         ]
       },
       "ChargeKind": {
@@ -658,6 +731,11 @@
           "requestId": {
             "type": "string"
           },
+          "requiredVersion": {
+            "description": "The version of the legal documents the caller must accept to clear a LEGAL_REACCEPTANCE_REQUIRED rejection. Present only on that rejection.",
+            "format": "int32",
+            "type": "integer"
+          },
           "status": {
             "format": "int32",
             "type": "integer"
@@ -679,6 +757,61 @@
             "type": "array"
           }
         }
+      },
+      "RecoveryRedemptionView": {
+        "properties": {
+          "creditsRemaining": {
+            "description": "The new customer's credit balance in the agent's billing mode",
+            "format": "int64",
+            "type": "integer"
+          },
+          "customerRef": {
+            "type": "string"
+          },
+          "revokedCustomers": {
+            "description": "How many customers with the recovery email were revoked",
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "creditsRemaining",
+          "customerRef",
+          "revokedCustomers"
+        ]
+      },
+      "RecoveryRequestView": {
+        "properties": {
+          "accepted": {
+            "description": "Always true",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "accepted"
+        ]
+      },
+      "RedeemRecoveryInput": {
+        "properties": {
+          "newCustomerRef": {
+            "description": "The customerRef of the new bearer token; it receives the credits",
+            "example": "cus-43",
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:@-]*$",
+            "type": "string"
+          },
+          "recoveryToken": {
+            "description": "The token from the emailed recovery link (the fragment after #)",
+            "maxLength": 128,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "newCustomerRef",
+          "recoveryToken"
+        ]
       },
       "RegisterWorkloadRequest": {
         "properties": {
@@ -733,6 +866,20 @@
         "required": [
           "name",
           "services"
+        ]
+      },
+      "RequestRecoveryInput": {
+        "properties": {
+          "email": {
+            "example": "buyer@example.com",
+            "format": "email",
+            "maxLength": 254,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "email"
         ]
       },
       "ReservationCommitView": {
@@ -973,6 +1120,7 @@
         "enum": [
           "CREATOR",
           "COMPUTE_DEBT",
+          "COMPUTE_CAP",
           "PLATFORM"
         ],
         "type": "string"
@@ -1187,7 +1335,7 @@
             "type": "string"
           },
           "monthlyReservedCostUsd": {
-            "description": "Monthly reserved compute cost in USD at the applicable rates",
+            "description": "Estimated compute cost in USD of the configured replicas over a 730-hour month, at the current rate version for the size the agent host allocates (vCPU is normalized: one shared CPU = 0.0625); absent when no agent host is configured to size the services",
             "format": "decimal",
             "type": "string"
           },
@@ -1246,7 +1394,6 @@
           "fingerprint",
           "hasImagePullSecret",
           "id",
-          "monthlyReservedCostUsd",
           "name",
           "secretNames",
           "services",
@@ -1441,7 +1588,7 @@
         "operationId": "registerWorkload",
         "parameters": [
           {
-            "description": "Optional, scoped to the caller. A retry with the same key and body replays the registration instead of failing with WORKLOAD_FINGERPRINT_EXISTS; the same key with another body is IDEMPOTENCY_CONFLICT. A UUID or 64 hexadecimal characters.",
+            "description": "Optional, scoped to the caller. A retry with the same key and body replays the registration instead of failing with WORKLOAD_FINGERPRINT_EXISTS; the same key with another body is IDEMPOTENCY_CONFLICT. Must be a UUID or 64 hexadecimal characters; any other value is a 400 IDEMPOTENCY_KEY_INVALID.",
             "in": "header",
             "name": "Idempotency-Key",
             "required": false,
@@ -1904,7 +2051,7 @@
                 }
               }
             },
-            "description": "PLATFORM_STEWARDED, WORKLOAD_TERMINATED, WORKLOAD_SUSPENDED"
+            "description": "PLATFORM_STEWARDED, WORKLOAD_TERMINATED, WORKLOAD_SUSPENDED, COMPUTE_CAP_REACHED, COMPUTE_CREDIT_EXHAUSTED (actionUrl: add compute credit)"
           },
           "413": {
             "content": {
@@ -2246,23 +2393,23 @@
           },
           "403": {
             "content": {
-              "application/problem+json": {
+              "*/*": {
                 "schema": {
                   "$ref": "#/components/schemas/ProblemDetail"
                 }
               }
             },
-            "description": "WORKLOAD_NOT_OWNED"
+            "description": "Forbidden"
           },
           "404": {
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemDetail"
+                  "$ref": "#/components/schemas/BillingProblem"
                 }
               }
             },
-            "description": "WORKLOAD_NOT_FOUND"
+            "description": "WORKLOAD_NOT_FOUND (an unknown agent, or another developer's)"
           },
           "409": {
             "content": {
@@ -2465,7 +2612,7 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemDetail"
+                  "$ref": "#/components/schemas/BillingProblem"
                 }
               }
             },
@@ -2475,7 +2622,7 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemDetail"
+                  "$ref": "#/components/schemas/BillingProblem"
                 }
               }
             },
@@ -2636,7 +2783,7 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemDetail"
+                  "$ref": "#/components/schemas/BillingProblem"
                 }
               }
             },
@@ -2666,7 +2813,7 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemDetail"
+                  "$ref": "#/components/schemas/BillingProblem"
                 }
               }
             },
@@ -2686,7 +2833,7 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemDetail"
+                  "$ref": "#/components/schemas/BillingProblem"
                 }
               }
             },
@@ -2804,7 +2951,7 @@
             }
           },
           {
-            "description": "Unique per test charge; a retry with the same key returns it",
+            "description": "Unique per test charge; a retry with the same key returns it. Must be a UUID or 64 hexadecimal characters; any other value is a 400 IDEMPOTENCY_KEY_INVALID.",
             "in": "header",
             "name": "Idempotency-Key",
             "required": true,
@@ -2848,7 +2995,7 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemDetail"
+                  "$ref": "#/components/schemas/BillingProblem"
                 }
               }
             },
@@ -2878,7 +3025,7 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemDetail"
+                  "$ref": "#/components/schemas/BillingProblem"
                 }
               }
             },
@@ -2888,7 +3035,7 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemDetail"
+                  "$ref": "#/components/schemas/BillingProblem"
                 }
               }
             },
@@ -2898,7 +3045,7 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemDetail"
+                  "$ref": "#/components/schemas/BillingProblem"
                 }
               }
             },
@@ -2978,7 +3125,7 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemDetail"
+                  "$ref": "#/components/schemas/BillingProblem"
                 }
               }
             },
@@ -3007,7 +3154,7 @@
         "operationId": "createCharge",
         "parameters": [
           {
-            "description": "Unique per charge; a retry with the same key returns the same charge",
+            "description": "Unique per charge; a retry with the same key returns the same charge. Must be a UUID or 64 hexadecimal characters; any other value is a 400 IDEMPOTENCY_KEY_INVALID.",
             "in": "header",
             "name": "Idempotency-Key",
             "required": true,
@@ -3057,7 +3204,7 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemDetail"
+                  "$ref": "#/components/schemas/BillingProblem"
                 }
               }
             },
@@ -3067,7 +3214,7 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemDetail"
+                  "$ref": "#/components/schemas/BillingProblem"
                 }
               }
             },
@@ -3097,7 +3244,7 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemDetail"
+                  "$ref": "#/components/schemas/BillingProblem"
                 }
               }
             },
@@ -3107,11 +3254,21 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemDetail"
+                  "$ref": "#/components/schemas/BillingProblem"
                 }
               }
             },
-            "description": "WORKLOAD_NOT_ACTIVE, ACCOUNT_NOT_READY, PAYMENT_METHOD_REQUIRED, IDEMPOTENCY_CONFLICT"
+            "description": "WORKLOAD_NOT_ACTIVE, ACCOUNT_NOT_READY, PAYMENT_METHOD_REQUIRED, IDEMPOTENCY_CONFLICT, STRIPE_TERMS_URL_NOT_SET (a checkout that asks for the seller's terms, whose Stripe account has no terms URL in its public details)"
+          },
+          "410": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BillingProblem"
+                }
+              }
+            },
+            "description": "CUSTOMER_REVOKED"
           },
           "413": {
             "content": {
@@ -3147,7 +3304,7 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemDetail"
+                  "$ref": "#/components/schemas/BillingProblem"
                 }
               }
             },
@@ -3187,7 +3344,7 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemDetail"
+                  "$ref": "#/components/schemas/BillingProblem"
                 }
               }
             },
@@ -3216,7 +3373,7 @@
         "operationId": "reserve",
         "parameters": [
           {
-            "description": "Unique per hold; a retry with the same key replays a live hold, a released or expired key takes a new one",
+            "description": "Unique per hold; a retry with the same key replays a live hold, a released or expired key takes a new one. Must be a UUID or 64 hexadecimal characters; any other value is a 400 IDEMPOTENCY_KEY_INVALID.",
             "in": "header",
             "name": "Idempotency-Key",
             "required": true,
@@ -3256,7 +3413,7 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemDetail"
+                  "$ref": "#/components/schemas/BillingProblem"
                 }
               }
             },
@@ -3266,7 +3423,7 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemDetail"
+                  "$ref": "#/components/schemas/BillingProblem"
                 }
               }
             },
@@ -3306,11 +3463,21 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemDetail"
+                  "$ref": "#/components/schemas/BillingProblem"
                 }
               }
             },
             "description": "INSUFFICIENT_CREDITS (actionUrl: a credit-pack checkout), IDEMPOTENCY_CONFLICT, WORKLOAD_NOT_ACTIVE"
+          },
+          "410": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BillingProblem"
+                }
+              }
+            },
+            "description": "CUSTOMER_REVOKED"
           },
           "413": {
             "content": {
@@ -3346,7 +3513,7 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemDetail"
+                  "$ref": "#/components/schemas/BillingProblem"
                 }
               }
             },
@@ -3455,7 +3622,7 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemDetail"
+                  "$ref": "#/components/schemas/BillingProblem"
                 }
               }
             },
@@ -3485,7 +3652,7 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemDetail"
+                  "$ref": "#/components/schemas/BillingProblem"
                 }
               }
             },
@@ -3495,7 +3662,7 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemDetail"
+                  "$ref": "#/components/schemas/BillingProblem"
                 }
               }
             },
@@ -3535,7 +3702,7 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemDetail"
+                  "$ref": "#/components/schemas/BillingProblem"
                 }
               }
             },
@@ -3644,7 +3811,7 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemDetail"
+                  "$ref": "#/components/schemas/BillingProblem"
                 }
               }
             },
@@ -3674,7 +3841,7 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemDetail"
+                  "$ref": "#/components/schemas/BillingProblem"
                 }
               }
             },
@@ -3684,7 +3851,7 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemDetail"
+                  "$ref": "#/components/schemas/BillingProblem"
                 }
               }
             },
@@ -3724,7 +3891,7 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemDetail"
+                  "$ref": "#/components/schemas/BillingProblem"
                 }
               }
             },
@@ -3832,7 +3999,7 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemDetail"
+                  "$ref": "#/components/schemas/BillingProblem"
                 }
               }
             },
@@ -3877,6 +4044,16 @@
               }
             },
             "description": "Conflict"
+          },
+          "410": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BillingProblem"
+                }
+              }
+            },
+            "description": "CUSTOMER_REVOKED"
           },
           "413": {
             "content": {
@@ -4022,7 +4199,7 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemDetail"
+                  "$ref": "#/components/schemas/BillingProblem"
                 }
               }
             },
@@ -4032,7 +4209,7 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemDetail"
+                  "$ref": "#/components/schemas/BillingProblem"
                 }
               }
             },
@@ -4072,11 +4249,21 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemDetail"
+                  "$ref": "#/components/schemas/BillingProblem"
                 }
               }
             },
             "description": "WORKLOAD_NOT_ACTIVE"
+          },
+          "410": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BillingProblem"
+                }
+              }
+            },
+            "description": "CUSTOMER_REVOKED"
           },
           "413": {
             "content": {
@@ -4175,6 +4362,406 @@
           "public"
         ]
       }
+    },
+    "/billing/customers/recovery-redemptions": {
+      "post": {
+        "operationId": "redeemBuyerRecovery",
+        "parameters": [
+          {
+            "description": "Unique per redemption; a retry with the same key answers the first result. Must be a UUID or 64 hexadecimal characters; any other value is a 400 IDEMPOTENCY_KEY_INVALID.",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The agent's SDK key (aorsk_…)",
+            "in": "header",
+            "name": "X-Agent-SDK-Key",
+            "required": true
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RedeemRecoveryInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/RecoveryRedemptionView"
+                }
+              }
+            },
+            "description": "Redeemed (or a replay of the same key)"
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BillingProblem"
+                }
+              }
+            },
+            "description": "A malformed body or a missing Idempotency-Key"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BillingProblem"
+                }
+              }
+            },
+            "description": "SDK_KEY_INVALID"
+          },
+          "402": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Payment Required"
+          },
+          "403": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BillingProblem"
+                }
+              }
+            },
+            "description": "IDEMPOTENCY_CONFLICT"
+          },
+          "410": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BillingProblem"
+                }
+              }
+            },
+            "description": "RECOVERY_LINK_INVALID (unknown, used, expired or voided), CUSTOMER_REVOKED"
+          },
+          "413": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Content Too Large"
+          },
+          "422": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Unprocessable Content"
+          },
+          "423": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Locked"
+          },
+          "429": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BillingProblem"
+                }
+              }
+            },
+            "description": "RATE_LIMITED (redemption attempts per agent per minute)"
+          },
+          "451": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Unavailable For Legal Reasons"
+          },
+          "500": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          },
+          "502": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Bad Gateway"
+          },
+          "503": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          },
+          "504": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Gateway Timeout"
+          }
+        },
+        "summary": "Move a buyer's credits to a new customerRef with a recovery link token",
+        "tags": [
+          "Billing customers",
+          "public"
+        ]
+      }
+    },
+    "/billing/customers/recovery-requests": {
+      "post": {
+        "description": "Always 202 with the same body, whether or not the email holds credits. When it does, the link is mailed to the address.",
+        "operationId": "requestBuyerRecovery",
+        "parameters": [
+          {
+            "description": "The agent's SDK key (aorsk_…)",
+            "in": "header",
+            "name": "X-Agent-SDK-Key",
+            "required": true
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RequestRecoveryInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/RecoveryRequestView"
+                }
+              }
+            },
+            "description": "Accepted"
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BillingProblem"
+                }
+              }
+            },
+            "description": "A malformed body"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BillingProblem"
+                }
+              }
+            },
+            "description": "SDK_KEY_INVALID"
+          },
+          "402": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Payment Required"
+          },
+          "403": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "413": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Content Too Large"
+          },
+          "422": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Unprocessable Content"
+          },
+          "423": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Locked"
+          },
+          "429": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BillingProblem"
+                }
+              }
+            },
+            "description": "RATE_LIMITED (per email per hour, or per agent per hour)"
+          },
+          "451": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Unavailable For Legal Reasons"
+          },
+          "500": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          },
+          "502": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Bad Gateway"
+          },
+          "503": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          },
+          "504": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Gateway Timeout"
+          }
+        },
+        "summary": "Email a buyer a token recovery link",
+        "tags": [
+          "Billing customers",
+          "public"
+        ]
+      }
     }
   },
   "tags": [
@@ -4187,12 +4774,12 @@
       "name": "Billing customers"
     },
     {
-      "description": "Agent API: charge a customer at a declared price",
-      "name": "Billing charges"
-    },
-    {
       "description": "Developer API: switch an agent between test and live billing",
       "name": "Billing mode"
+    },
+    {
+      "description": "Agent API: charge a customer at a declared price",
+      "name": "Billing charges"
     },
     {
       "description": "Developer API: run a real test-mode charge",

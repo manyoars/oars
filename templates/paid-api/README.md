@@ -35,9 +35,14 @@ default command never sets it. On the platform, `AOR_SDK_KEY` is injected.
 | `POST /v1/credits/checkout` | bearer | `{priceRef}` returns `{checkoutUrl}` to buy a pack |
 | `GET /v1/credits` | bearer | The buyer's balance |
 | `POST /v1/transform` | bearer | Costs one credit on a 2xx; send an `Idempotency-Key` to retry safely |
+| `POST /v1/recover` | none | `{email}`, the one used at checkout: always 202, whether or not it holds credits; if it does, a link that works once for 15 minutes is emailed. 5 requests a minute per client address |
+| `GET /recover` | none | The page the link opens: one click trades the link for a new token with the same credits and stops the old one |
+| `POST /v1/recover/redeem` | none | What that page calls: `{recoveryToken}` returns the new token once |
 
 The token is the buyer's only secret: the server stores nothing and bills under `cus_` plus the SHA-256 of the token, so a
-leaked `customerRef` cannot spend credits. Keep the token secret. If you lose it, your credits are kept: token recovery (coming soon) issues a new token for them.
+leaked `customerRef` cannot spend credits. Keep the token secret. A lost token keeps its credits; recover it at `/recover`:
+`POST /v1/recover` with the email you used at checkout (or open `/recover`), and the emailed link gives you a new token with
+the same credits and stops the old one. A buyer who never bought holds no credits and just mints a new token.
 
 ## How a call is charged
 

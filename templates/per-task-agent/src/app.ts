@@ -12,6 +12,7 @@ import {
   withCredits,
 } from './billing.js';
 import { FetchFailed, type FetchFailedCode, FetchRefused, type FetchRefusedCode, type Page } from './fetch-page.js';
+import { RECOVERY_ENDPOINTS, RECOVERY_SENTENCE, type Recovery, recoveryRoutes } from './recovery.js';
 import type { Summarizer } from './summary.js';
 
 export const CHARGING_SENTENCE =
@@ -28,6 +29,7 @@ export interface TaskLogEntry { event: 'task-failed'; code: string; cause: strin
 
 export interface AppOptions {
   billing: Billing;
+  recovery: Recovery;
   priceRefs: string[];
   now?: () => number;
   fetchPage: (url: string, signal: AbortSignal) => Promise<Page>;
@@ -96,12 +98,14 @@ export const createApp = (options: AppOptions): Hono => {
       name: 'Per-task agent',
       description: 'A job that audits a landing page and charges per finished task through prepaid credits.',
       charging: CHARGING_SENTENCE,
+      recovery: RECOVERY_SENTENCE,
       priceRefs: options.priceRefs,
       endpoints: [
         { method: 'POST', path: '/v1/customers', auth: 'none', description: 'Mint your bearer token (shown once). Body: {countryCode, regionCode?}. Keep it secret.' },
         { method: 'POST', path: '/v1/credits/checkout', auth: 'bearer', description: 'Buy credits. Body: {priceRef}. Returns {checkoutUrl}.' },
         { method: 'GET', path: '/v1/credits', auth: 'bearer', description: 'Your credit balance.' },
         { method: 'POST', path: '/v1/tasks', auth: 'bearer', description: 'One credit per finished task. Body: {url}. Audits the page and returns the findings. Send an Idempotency-Key to retry safely.' },
+        ...RECOVERY_ENDPOINTS,
       ],
     }),
   );
@@ -179,6 +183,8 @@ export const createApp = (options: AppOptions): Hono => {
     const call = { customerRef, key, now: options.now, timeoutMs: options.taskBudgetMs ?? TASK_BUDGET_MS, ttlSeconds: HOLD_TTL_SECONDS };
     return reply(await withCredits(billing, call, (signal) => task(url, signal)));
   });
+
+  app.route('/', recoveryRoutes({ recovery: options.recovery, now: options.now }));
 
   app.notFound(() => reply({ status: 404, body: { code: 'NOT_FOUND', message: 'No such endpoint. GET / lists them.' } }));
 

@@ -81,7 +81,7 @@ export interface Billing {
 }
 
 // Resolves with the data, or throws the BillingProblem billing answered (status 0 when it never answered).
-const settle = async <T>(call: Promise<{ data?: T; error?: Schemas['ProblemDetail']; response: Response }>): Promise<T> => {
+export const settle = async <T>(call: Promise<{ data?: T; error?: Schemas['ProblemDetail']; response: Response }>): Promise<T> => {
   let outcome;
   try {
     outcome = await call;

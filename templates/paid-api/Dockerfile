@@ -12,6 +12,8 @@ FROM node:24-slim
 ENV NODE_ENV=production
 WORKDIR /app
 COPY --from=build /repo/templates/paid-api/dist/main.js dist/main.js
+# GET /recover serves this page, read from public/ next to dist/.
+COPY --from=build /repo/templates/paid-api/public public
 # The bundle is an ES module and no package.json says so here.
 RUN printf '{"type":"module"}\n' > package.json
 USER node

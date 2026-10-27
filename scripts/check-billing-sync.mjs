@@ -1,5 +1,6 @@
 // Fails when the templates' copies of a shared file differ. `src/billing.ts` is one file in every template: it holds all the
-// money handling, so a fix to one copy that misses the other is a bug waiting in a template developers copy.
+// money handling, so a fix to one copy that misses the other is a bug waiting in a template developers copy. `src/recovery.ts`
+// (token recovery: the routes, the per-IP limit and billing's two calls) is shared for the same reason.
 //
 //   node scripts/check-billing-sync.mjs [repository root]
 //
@@ -8,9 +9,9 @@ import { readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-// The first template is the reference. Slice 10 adds 'src/recovery.ts' to SYNCED.
+// The first template is the reference.
 const TEMPLATES = ['paid-api', 'per-task-agent'];
-const SYNCED = ['src/billing.ts'];
+const SYNCED = ['src/billing.ts', 'src/recovery.ts'];
 
 const root = resolve(process.argv[2] ?? join(dirname(fileURLToPath(import.meta.url)), '..'));
 

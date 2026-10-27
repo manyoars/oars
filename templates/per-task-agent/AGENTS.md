@@ -21,8 +21,8 @@ nothing. With an `ANTHROPIC_API_KEY` secret a model adds a short `summary`; with
 ## Rules
 
 - Charge only through `src/billing.ts`. Do not call billing from a route, and never add Stripe or any payment processor.
-  `src/billing.ts` is a byte-for-byte copy of `templates/paid-api/src/billing.ts`; in the Many Oars monorepo `just check`
-  fails when they differ, so change both or neither.
+  `src/billing.ts` and `src/recovery.ts` (token recovery) are byte-for-byte copies of the files in `templates/paid-api/src/`;
+  in the Many Oars monorepo `just check` fails when they differ, so change both or neither.
 - Any fetch of an address the buyer chose goes through `src/fetch-page.ts`: it refuses private, loopback, link-local and
   `fdaa::/16` addresses after DNS resolution and again on every redirect hop (at most 5). Do not add a second way to fetch a
   buyer's URL, and do not weaken that file's tests.

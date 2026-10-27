@@ -14,10 +14,13 @@ describe('Dockerfile', () => {
     for (const stage of stages) expect(stage).toMatch(/^FROM node:24-slim( AS \w+)?$/i);
   });
 
-  it('copies only the built bundle into the last stage', () => {
+  it('copies only the built bundle and the recovery page into the last stage', () => {
     const last = lines.slice(lines.map((line) => line.toUpperCase().startsWith('FROM ')).lastIndexOf(true));
 
-    expect(last.filter((line) => /^COPY\s/i.test(line))).toEqual([expect.stringMatching(/^COPY --from=build .*dist\/main\.js/i)]);
+    expect(last.filter((line) => /^COPY\s/i.test(line))).toEqual([
+      expect.stringMatching(/^COPY --from=build .*dist\/main\.js/i),
+      expect.stringMatching(/^COPY --from=build \S*\/public public$/i),
+    ]);
   });
 
   it('runs as the non-root node user and listens on 8080', () => {
