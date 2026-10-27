@@ -1,12 +1,13 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { createApp } from '../../src/app.js';
-import { createFakeBilling } from '../../src/fake-billing.js';
+import { createFakeBilling, createFakeRecovery } from '../../src/fake-billing.js';
 
 describe('the charging sentence', () => {
   it('reads the same in README.md and in the GET / body', async () => {
     const readme = readFileSync(new URL('../../README.md', import.meta.url), 'utf8').replace(/\s+/g, ' ');
-    const app = createApp({ billing: createFakeBilling({ now: Date.now }), priceRefs: ['calls-100'] });
+    const billing = createFakeBilling({ now: Date.now });
+    const app = createApp({ billing, recovery: createFakeRecovery({ billing, now: Date.now }), priceRefs: ['calls-100'] });
 
     const body: unknown = await (await app.request('/')).json();
 

@@ -1,15 +1,17 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { createApp } from '../../src/app.js';
-import { createFakeBilling } from '../../src/fake-billing.js';
+import { createFakeBilling, createFakeRecovery } from '../../src/fake-billing.js';
 
 const read = (name: string): string => readFileSync(new URL(`../../${name}`, import.meta.url), 'utf8');
 const flat = (name: string): string => read(name).replace(/\s+/g, ' ');
 
 describe('the charging sentence', () => {
   it('reads the same in README.md and in the GET / body', async () => {
+    const billing = createFakeBilling({ now: Date.now });
     const app = createApp({
-      billing: createFakeBilling({ now: Date.now }),
+      billing,
+      recovery: createFakeRecovery({ billing, now: Date.now }),
       priceRefs: ['task-1'],
       fetchPage: () => Promise.reject(new Error('GET / fetches nothing')),
     });

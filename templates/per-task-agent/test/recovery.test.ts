@@ -20,7 +20,7 @@ const setup = (credits = 99) => {
   const customerRef = customerRefFor(token);
   billing.grant(customerRef, credits);
   recovery.bind(customerRef, EMAIL);
-  const send = (path: string, body: unknown, ip: string = IP): Promise<Response> =>
+  const send = async (path: string, body: unknown, ip: string = IP): Promise<Response> =>
     app.request(path, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'CF-Connecting-IP': ip },
@@ -41,7 +41,8 @@ describe('POST /v1/recover', () => {
     const knownBody = await known.text();
     expect(knownBody).toBe(await unknown.text());
     expect(JSON.parse(knownBody)).toMatchObject({ accepted: true });
-    expect(recovery.outbox).toEqual([{ email: EMAIL, token: expect.stringMatching(/^[A-Za-z0-9_-]{43}$/) }]);
+    expect(recovery.outbox.map((mail) => mail.email)).toEqual([EMAIL]);
+    expect(recovery.outbox[0]?.token).toMatch(/^[A-Za-z0-9_-]{43}$/);
   });
 
   it('sends billing the trimmed email and nothing else', async () => {
@@ -97,7 +98,7 @@ describe('POST /v1/recover', () => {
   it('counts a request without a client-IP header against the socket address', async () => {
     const { app } = setup();
     let asked = 0;
-    const ask = (address: string): Promise<Response> => {
+    const ask = async (address: string): Promise<Response> => {
       asked += 1;
       return app.request(
         '/v1/recover',
@@ -155,7 +156,10 @@ describe('POST /v1/recover/redeem', () => {
     const token = String(body['token']);
     expect(token).toMatch(/^oc_[A-Za-z0-9_-]{43}$/);
     expect(body).toEqual({ token, customerRef: customerRefFor(token), creditsRemaining: 99 });
-    expect(redeem).toHaveBeenCalledExactlyOnceWith({ recoveryToken: link, newCustomerRef: customerRefFor(token), idempotencyKey: expect.stringMatching(UUID) });
+    expect(redeem).toHaveBeenCalledOnce();
+    const sent = redeem.mock.calls[0]?.[0];
+    expect(sent).toEqual({ recoveryToken: link, newCustomerRef: customerRefFor(token), idempotencyKey: sent?.idempotencyKey });
+    expect(sent?.idempotencyKey).toMatch(UUID);
     expect(JSON.stringify(redeem.mock.calls)).not.toContain(token);
     expect((await billing.balance(customerRefFor(token))).creditsRemaining).toBe(99);
 
