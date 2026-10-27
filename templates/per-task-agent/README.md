@@ -34,7 +34,7 @@ default command never sets it. On the platform, `AOR_SDK_KEY` is injected; set `
 |------|------|--------------|
 | `GET /healthz` | none | Liveness |
 | `GET /` | none | The endpoints, the price refs and the charging sentence, as JSON |
-| `POST /v1/customers` | none | Mints a bearer token `oc_...` (shown once) for `{countryCode, regionCode?}` |
+| `POST /v1/customers` | none | Mints a bearer token `oc_...` (shown once) for `{countryCode, regionCode}`; `regionCode`, the two-letter state, is required for `US` |
 | `POST /v1/credits/checkout` | bearer | `{priceRef}` returns `{checkoutUrl}` to buy a pack |
 | `GET /v1/credits` | bearer | The buyer's balance |
 | `POST /v1/tasks` | bearer | `{url}`: costs one credit when the audit is returned; send an `Idempotency-Key` to retry safely |

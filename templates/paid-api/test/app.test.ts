@@ -86,6 +86,54 @@ describe('POST /v1/customers', () => {
     expect(upsert).not.toHaveBeenCalled();
   });
 
+  it.each([
+    [{ countryCode: 'US' }],
+    [{ countryCode: 'us' }],
+    [{ countryCode: 'US', regionCode: '' }],
+    [{ countryCode: 'US', regionCode: 'N' }],
+    [{ countryCode: 'US', regionCode: 'ZZ' }],
+    [{ countryCode: 'US', regionCode: 'PR' }],
+    [{ countryCode: 'US', regionCode: 'NYC' }],
+  ])('answers 400 INVALID_REQUEST for the US body %j before calling billing', async (body) => {
+    const { app, fake } = setup();
+    const upsert = vi.spyOn(fake, 'upsertCustomer');
+
+    const response = await app.request('/v1/customers', post(body));
+
+    expect(response.status).toBe(400);
+    const reply = await bodyOf(response);
+    expect(reply['code']).toBe('INVALID_REQUEST');
+    expect(String(reply['message'])).toContain('regionCode');
+    expect(upsert).not.toHaveBeenCalled();
+  });
+
+  it('accepts a US state in any case and sends billing the upper-case code', async () => {
+    const { app, fake } = setup();
+    const upsert = vi.spyOn(fake, 'upsertCustomer');
+
+    const response = await app.request('/v1/customers', post({ countryCode: 'us', regionCode: 'dc' }));
+
+    expect(response.status).toBe(201);
+    expect(upsert).toHaveBeenCalledExactlyOnceWith(expect.any(String), { countryCode: 'US', regionCode: 'DC' });
+  });
+
+  it('leaves the region of another country to billing, which refuses it with 403', async () => {
+    const { app, fake } = setup();
+    const upsert = vi.spyOn(fake, 'upsertCustomer');
+
+    await app.request('/v1/customers', post({ countryCode: 'DE' }));
+
+    expect(upsert).toHaveBeenCalledOnce();
+  });
+
+  it('says on GET / that regionCode is required for US', async () => {
+    const { app } = setup();
+
+    const body = await bodyOf(await app.request('/'));
+
+    expect(JSON.stringify(body)).toContain('regionCode (required for US');
+  });
+
   it('passes a billing refusal through the buyer mapping', async () => {
     const { app, fake } = setup();
     vi.spyOn(fake, 'upsertCustomer').mockRejectedValue(new BillingProblem({ status: 422, code: 'CUSTOMER_REGION_NOT_SUPPORTED' }));
