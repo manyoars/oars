@@ -134,4 +134,15 @@ describe('createFakeBilling follows R7', () => {
 
     await expect(fake.checkout(CUSTOMER, 'nope')).rejects.toMatchObject({ status: 404, code: 'PRICE_NOT_FOUND' });
   });
+
+  it.each([
+    ['successUrl', { cancelUrl: 'https://agent.test/?checkout=cancel' }],
+    ['cancelUrl', { successUrl: 'https://agent.test/?checkout=success' }],
+    ['both', {}],
+  ])('refuses a CHECKOUT charge without %s with the 400 problem billing sends', async (_missing, urls) => {
+    const { fake } = setup(0);
+
+    await expect(fake.checkout(CUSTOMER, 'task-1', urls as { successUrl: string; cancelUrl: string })).rejects.toMatchObject({ status: 400, code: 'VALIDATION_ERROR' });
+    expect((await fake.balance(CUSTOMER)).creditsRemaining).toBe(0);
+  });
 });

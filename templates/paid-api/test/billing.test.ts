@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { BillingProblem, buyerResponse, customerRefFor, mintToken, reservationKey } from '../src/billing.js';
+import { BillingProblem, buyerResponse, createBilling, customerRefFor, mintToken, reservationKey } from '../src/billing.js';
 
 const CHECKOUT = 'https://checkout.example/pack/abc';
 
@@ -149,5 +149,26 @@ describe('buyerResponse', () => {
 
     expect(response.status).toBe(503);
     expect(JSON.stringify(response.body)).not.toContain('10.0.0.1');
+  });
+});
+
+describe('createBilling checkout', () => {
+  it('sends successUrl and cancelUrl with the CHECKOUT charge', async () => {
+    const bodies: unknown[] = [];
+    const billing = createBilling({
+      apiUrl: 'https://billing.test',
+      sdkKey: 'aorsk_test',
+      fetch: async (request) => {
+        bodies.push(await request.json());
+        return Response.json({ checkoutUrl: CHECKOUT });
+      },
+    });
+
+    const result = await billing.checkout('cus_a', 'calls-100', { successUrl: 'https://agent.test/?checkout=success', cancelUrl: 'https://agent.test/?checkout=cancel' });
+
+    expect(result).toEqual({ checkoutUrl: CHECKOUT });
+    expect(bodies).toEqual([
+      { customerRef: 'cus_a', priceRef: 'calls-100', mode: 'CHECKOUT', successUrl: 'https://agent.test/?checkout=success', cancelUrl: 'https://agent.test/?checkout=cancel' },
+    ]);
   });
 });
