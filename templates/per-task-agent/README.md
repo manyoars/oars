@@ -16,11 +16,12 @@ curl -X POST localhost:8080/v1/customers -d '{"countryCode":"US","regionCode":"N
 ```
 
 Without `AOR_SDK_KEY` the server refuses to start; `OARS_DEV_FAKE_BILLING=1` is the only way around that, and the image's
-default command never sets it. On the platform, `AOR_SDK_KEY` is injected.
+default command never sets it. On the platform, `AOR_SDK_KEY` is injected; set `OARS_PUBLIC_URL` to the agent's public URL.
 
 | Variable | Default | Meaning |
 |----------|---------|---------|
 | `AOR_SDK_KEY` | none, required | The agent's SDK key; the platform injects it |
+| `OARS_PUBLIC_URL` | none, required unless `OARS_DEV_FAKE_BILLING=1` | This agent's public URL; Checkout returns the buyer to `<it>/?checkout=success` or `<it>/?checkout=cancel`. The server refuses to start without it |
 | `OARS_API_URL` | `https://api.manyoars.com` | Where billing lives |
 | `OARS_PRICE_REFS` | `task-1,tasks-5` | The price refs `GET /` advertises, comma separated |
 | `OARS_DEV_FAKE_BILLING` | unset | `1` selects the in-memory fake, for local development only |

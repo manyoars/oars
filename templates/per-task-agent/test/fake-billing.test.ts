@@ -4,6 +4,7 @@ import { createFakeBilling } from '../src/fake-billing.js';
 import { createClock } from './support.js';
 
 const CUSTOMER = 'cus_buyer';
+const URLS = { successUrl: 'https://agent.test/?checkout=success', cancelUrl: 'https://agent.test/?checkout=cancel' };
 
 const hold = (key: string) => ({ customerRef: CUSTOMER, credits: 1, ttlSeconds: 45, idempotencyKey: key });
 
@@ -123,7 +124,7 @@ describe('createFakeBilling follows R7', () => {
   it('credits a bought pack at once, so local development needs no checkout', async () => {
     const { fake } = setup(0);
 
-    const { checkoutUrl } = await fake.checkout(CUSTOMER, 'tasks-5');
+    const { checkoutUrl } = await fake.checkout(CUSTOMER, 'tasks-5', URLS);
 
     expect(checkoutUrl).toMatch(/^https?:\/\//);
     expect((await fake.balance(CUSTOMER)).creditsRemaining).toBe(5);
@@ -132,7 +133,7 @@ describe('createFakeBilling follows R7', () => {
   it('refuses an unknown price ref with 404 PRICE_NOT_FOUND', async () => {
     const { fake } = setup(0);
 
-    await expect(fake.checkout(CUSTOMER, 'nope')).rejects.toMatchObject({ status: 404, code: 'PRICE_NOT_FOUND' });
+    await expect(fake.checkout(CUSTOMER, 'nope', URLS)).rejects.toMatchObject({ status: 404, code: 'PRICE_NOT_FOUND' });
   });
 
   it.each([

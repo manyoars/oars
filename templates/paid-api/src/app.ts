@@ -4,6 +4,7 @@ import {
   BillingProblem,
   buyerResponse,
   type CallResult,
+  type CheckoutUrls,
   customerRefFor,
   mintToken,
   reservationKey,
@@ -19,6 +20,7 @@ export interface AppOptions {
   billing: Billing;
   recovery: Recovery;
   priceRefs: string[];
+  checkoutUrls: CheckoutUrls;
   now?: () => number;
   /** Handler timeout for the paid call; the default is withCredits' 30 seconds. */
   timeoutMs?: number;
@@ -95,7 +97,7 @@ export const createApp = (options: AppOptions): Hono => {
     const body = parseJson(await c.req.text());
     const priceRef = isRecord(body) ? body['priceRef'] : undefined;
     if (typeof priceRef !== 'string' || priceRef === '') return invalid('priceRef is required.');
-    return reply({ status: 200, body: await billing.checkout(customerRef, priceRef) });
+    return reply({ status: 200, body: await billing.checkout(customerRef, priceRef, options.checkoutUrls) });
   });
 
   app.get('/v1/credits', async (c) => {

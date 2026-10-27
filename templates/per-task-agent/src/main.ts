@@ -1,6 +1,6 @@
 import { serve } from '@hono/node-server';
 import { createApp } from './app.js';
-import { type Billing, createBilling } from './billing.js';
+import { type Billing, checkoutUrlsFor, createBilling } from './billing.js';
 import { type Config, ConfigError, loadConfig } from './config.js';
 import { createFakeBilling, createFakeRecovery } from './fake-billing.js';
 import { createPageFetcher } from './fetch-page.js';
@@ -26,6 +26,7 @@ try {
     billing,
     recovery,
     priceRefs: config.priceRefs,
+    checkoutUrls: checkoutUrlsFor(config.publicUrl),
     fetchPage: createPageFetcher({ resolve: dnsResolve, transport: nodeTransport }),
     summarize: config.anthropicApiKey === undefined ? undefined : createSummarizer({ apiKey: config.anthropicApiKey, fetch: (request) => fetch(request) }),
     log: (entry) => {

@@ -13,6 +13,7 @@ describe('the charging sentence', () => {
       billing,
       recovery: createFakeRecovery({ billing, now: Date.now }),
       priceRefs: ['task-1'],
+      checkoutUrls: { successUrl: 'https://agent.test/?checkout=success', cancelUrl: 'https://agent.test/?checkout=cancel' },
       fetchPage: () => Promise.reject(new Error('GET / fetches nothing')),
     });
 

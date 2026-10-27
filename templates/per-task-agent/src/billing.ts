@@ -71,9 +71,18 @@ export const buyerResponse = (problem: BillingProblem): BuyerResponse => {
 };
 
 // --- billing calls ----------------------------------------------------------------------------------------------------
+/** Where Checkout sends the buyer after paying and after cancelling; billing refuses a CHECKOUT charge without both. */
+export interface CheckoutUrls { successUrl: string; cancelUrl: string }
+
+/** Built from the configured public URL only, never from a request's Host or Origin, which the buyer controls. */
+export const checkoutUrlsFor = (publicUrl: string): CheckoutUrls => ({
+  successUrl: `${publicUrl}/?checkout=success`,
+  cancelUrl: `${publicUrl}/?checkout=cancel`,
+});
+
 export interface Billing {
   upsertCustomer: (customerRef: string, region: { countryCode: string; regionCode?: string }) => Promise<void>;
-  checkout: (customerRef: string, priceRef: string) => Promise<{ checkoutUrl: string }>;
+  checkout: (customerRef: string, priceRef: string, urls: CheckoutUrls) => Promise<{ checkoutUrl: string }>;
   balance: (customerRef: string) => Promise<Balance>;
   reserve: (hold: { customerRef: string; credits: number; ttlSeconds: number; idempotencyKey: string }) => Promise<Reservation>;
   commit: (reservationId: string) => Promise<Commit>;
@@ -101,9 +110,9 @@ export const createBilling = (options: { apiUrl: string; sdkKey: string; fetch?:
     upsertCustomer: async (customerRef, region) => {
       await settle(client.POST('/billing/customers', { params: { header }, body: { customerRef, ...region } }));
     },
-    checkout: async (customerRef, priceRef) => {
+    checkout: async (customerRef, priceRef, urls) => {
       const params = { header: { ...header, 'Idempotency-Key': randomUUID() } };
-      const { checkoutUrl } = await settle(client.POST('/billing/charges', { params, body: { customerRef, priceRef, mode: 'CHECKOUT' } }));
+      const { checkoutUrl } = await settle(client.POST('/billing/charges', { params, body: { customerRef, priceRef, mode: 'CHECKOUT', ...urls } }));
       if (checkoutUrl === undefined) throw new BillingProblem({ status: 502, code: 'CHECKOUT_URL_MISSING' });
       return { checkoutUrl };
     },

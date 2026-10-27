@@ -5,6 +5,7 @@ import {
   BillingProblem,
   buyerResponse,
   type CallResult,
+  type CheckoutUrls,
   customerRefFor,
   type HandlerResult,
   mintToken,
@@ -31,6 +32,7 @@ export interface AppOptions {
   billing: Billing;
   recovery: Recovery;
   priceRefs: string[];
+  checkoutUrls: CheckoutUrls;
   now?: () => number;
   fetchPage: (url: string, signal: AbortSignal) => Promise<Page>;
   /** Present only when the developer set ANTHROPIC_API_KEY. */
@@ -128,7 +130,7 @@ export const createApp = (options: AppOptions): Hono => {
     const body = parseJson(await c.req.text());
     const priceRef = isRecord(body) ? body['priceRef'] : undefined;
     if (typeof priceRef !== 'string' || priceRef === '') return invalid('priceRef is required.');
-    return reply({ status: 200, body: await billing.checkout(customerRef, priceRef) });
+    return reply({ status: 200, body: await billing.checkout(customerRef, priceRef, options.checkoutUrls) });
   });
 
   app.get('/v1/credits', async (c) => {

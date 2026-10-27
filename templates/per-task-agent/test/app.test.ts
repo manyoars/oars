@@ -8,6 +8,7 @@ import { FetchFailed, FetchRefused, type Page } from '../src/fetch-page.js';
 import { type Summarizer } from '../src/summary.js';
 import { bodyOf, createClock, flush } from './support.js';
 
+const CHECKOUT_URLS = { successUrl: 'https://agent.test/?checkout=success', cancelUrl: 'https://agent.test/?checkout=cancel' };
 const PRICE_REFS = ['task-1', 'tasks-5'];
 
 const HTML = '<html><head><title>Acme Widgets: handmade widgets for everyone</title></head><body><h1>Widgets</h1></body></html>';
@@ -29,7 +30,7 @@ const setup = (credits = 3, extra: { fetchPage?: Fetch; summarize?: (audit: Audi
   const fake = createFakeBilling({ now: clock.now });
   const recovery = createFakeRecovery({ billing: fake, now: clock.now });
   const fetchPage = vi.fn<Fetch>(extra.fetchPage ?? (() => Promise.resolve(aPage())));
-  const app = createApp({ billing: fake, recovery, priceRefs: PRICE_REFS, now: clock.now, fetchPage, summarize: extra.summarize, taskBudgetMs: extra.taskBudgetMs, summaryBudgetMs: extra.summaryBudgetMs, log: extra.log });
+  const app = createApp({ billing: fake, recovery, priceRefs: PRICE_REFS, checkoutUrls: CHECKOUT_URLS, now: clock.now, fetchPage, summarize: extra.summarize, taskBudgetMs: extra.taskBudgetMs, summaryBudgetMs: extra.summaryBudgetMs, log: extra.log });
   const token = mintToken();
   const customerRef = customerRefFor(token);
   fake.grant(customerRef, credits);
@@ -141,7 +142,7 @@ describe('POST /v1/credits/checkout', () => {
 
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({ checkoutUrl: 'https://checkout.example/fake/task-1' });
-    expect(checkout).toHaveBeenCalledExactlyOnceWith(customerRef, 'task-1');
+    expect(checkout).toHaveBeenCalledExactlyOnceWith(customerRef, 'task-1', CHECKOUT_URLS);
   });
 
   it('maps an unknown price to 400', async () => {
