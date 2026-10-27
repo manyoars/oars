@@ -137,13 +137,14 @@ describe('createFakeBilling follows R7', () => {
   });
 
   it.each([
-    ['successUrl', { cancelUrl: 'https://agent.test/?checkout=cancel' }],
-    ['cancelUrl', { successUrl: 'https://agent.test/?checkout=success' }],
-    ['both', {}],
+    ['successUrl', { ...URLS, successUrl: '' }],
+    ['cancelUrl', { ...URLS, cancelUrl: '' }],
+    ['both', { successUrl: '', cancelUrl: '' }],
+    ['an http(s) successUrl', { ...URLS, successUrl: 'javascript:alert(1)' }],
   ])('refuses a CHECKOUT charge without %s with the 400 problem billing sends', async (_missing, urls) => {
     const { fake } = setup(0);
 
-    await expect(fake.checkout(CUSTOMER, 'task-1', urls as { successUrl: string; cancelUrl: string })).rejects.toMatchObject({ status: 400, code: 'VALIDATION_ERROR' });
+    await expect(fake.checkout(CUSTOMER, 'task-1', urls)).rejects.toMatchObject({ status: 400, code: 'VALIDATION_ERROR' });
     expect((await fake.balance(CUSTOMER)).creditsRemaining).toBe(0);
   });
 });

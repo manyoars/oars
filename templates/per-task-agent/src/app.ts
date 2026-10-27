@@ -78,6 +78,11 @@ const reply = (result: CallResult): Response => {
   return Response.json(result.body, { status: result.status, headers });
 };
 
+// The 50 states and DC, as billing's RegionPolicy takes them; a territory or military code is not a state.
+const US_STATES = new Set(
+  'AL AK AZ AR CA CO CT DE FL GA HI ID IL IN IA KS KY LA ME MD MA MI MN MS MO MT NE NV NH NJ NM NY NC ND OH OK OR PA RI SC SD TN TX UT VT VA WA WV WI WY DC'.split(' '),
+);
+
 const invalid = (message: string): Response => reply({ status: 400, body: { code: 'INVALID_REQUEST', message } });
 
 const unauthorized = (): Response =>
@@ -103,7 +108,7 @@ export const createApp = (options: AppOptions): Hono => {
       recovery: RECOVERY_SENTENCE,
       priceRefs: options.priceRefs,
       endpoints: [
-        { method: 'POST', path: '/v1/customers', auth: 'none', description: 'Mint your bearer token (shown once). Body: {countryCode, regionCode?}. Keep it secret.' },
+        { method: 'POST', path: '/v1/customers', auth: 'none', description: 'Mint your bearer token (shown once). Body: {countryCode, regionCode (required for US: the two-letter state, DC included)}. Keep it secret.' },
         { method: 'POST', path: '/v1/credits/checkout', auth: 'bearer', description: 'Buy credits. Body: {priceRef}. Returns {checkoutUrl}.' },
         { method: 'GET', path: '/v1/credits', auth: 'bearer', description: 'Your credit balance.' },
         { method: 'POST', path: '/v1/tasks', auth: 'bearer', description: 'One credit per finished task. Body: {url}. Audits the page and returns the findings. Send an Idempotency-Key to retry safely.' },
@@ -118,9 +123,14 @@ export const createApp = (options: AppOptions): Hono => {
     const regionCode = isRecord(body) ? body['regionCode'] : undefined;
     if (typeof countryCode !== 'string' || !/^[A-Za-z]{2}$/.test(countryCode)) return invalid('countryCode must be a two-letter ISO country code.');
     if (regionCode !== undefined && (typeof regionCode !== 'string' || regionCode.length > 3)) return invalid('regionCode must be a short region code.');
+    // Billing answers a US customer with no valid state 403 "region not supported"; say what is wrong before calling it.
+    const state = typeof regionCode === 'string' ? regionCode.trim().toUpperCase() : undefined;
+    if (countryCode.toUpperCase() === 'US' && (state === undefined || !US_STATES.has(state))) {
+      return invalid('regionCode is required for a US customer: send the two-letter state, for example "NY".');
+    }
     const token = mintToken();
     const customerRef = customerRefFor(token);
-    await billing.upsertCustomer(customerRef, { countryCode: countryCode.toUpperCase(), ...(regionCode === undefined ? {} : { regionCode }) });
+    await billing.upsertCustomer(customerRef, { countryCode: countryCode.toUpperCase(), ...(state === undefined ? {} : { regionCode: state }) });
     return reply({ status: 201, body: { token, customerRef } });
   });
 
