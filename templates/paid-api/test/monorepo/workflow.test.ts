@@ -18,8 +18,14 @@ const stepIndex = (needle: string): number =>
   steps.findIndex((step) => [step['uses'], step['run'], step['name']].some((field) => typeof field === 'string' && field.includes(needle)));
 
 describe('.github/workflows/template-paid-api.yml', () => {
-  it('runs only on a paid-api-v tag, on one GitHub-hosted job', () => {
-    expect(asRecord(workflow['on'])).toEqual({ push: { tags: ['paid-api-v*'] } });
+  it('runs on a paid-api-v tag and on a main push touching the template, the client or the workflow, on one GitHub-hosted job', () => {
+    expect(asRecord(workflow['on'])).toEqual({
+      push: {
+        tags: ['paid-api-v*'],
+        branches: ['main'],
+        paths: ['templates/paid-api/**', 'packages/client/**', '.github/workflows/template-paid-api.yml'],
+      },
+    });
     expect(Object.keys(jobs)).toEqual(['release']);
     expect(release['runs-on']).toBe('ubuntu-latest');
   });
@@ -45,6 +51,26 @@ describe('.github/workflows/template-paid-api.yml', () => {
 
     expect(order.every((index) => index >= 0)).toBe(true);
     expect(order).toEqual([...order].sort((first, second) => first - second));
+  });
+
+  it('builds the client right after npm ci, before any typecheck, test or build', () => {
+    const client = stepIndex('npm run build -w packages/client');
+
+    expect(client).toBe(stepIndex('npm ci') + 1);
+    expect(client).toBeLessThan(stepIndex('npm run typecheck'));
+    expect(client).toBeLessThan(stepIndex('docker/build-push-action'));
+  });
+
+  it('publishes only on a tag: the version, login, push, attestation and release steps are tag-gated, the build is not', () => {
+    const gated = (needle: string): unknown => steps[stepIndex(needle)]?.['if'];
+    const pushed = steps.find((step) => asRecord(step['with'])['push'] === true);
+    const tagOnly = "startsWith(github.ref, 'refs/tags/')";
+
+    for (const needle of ['Read the version', 'docker/login-action', 'attest-build-provenance', 'gh release']) expect(gated(needle)).toBe(tagOnly);
+    expect(pushed?.['if']).toBe(tagOnly);
+    for (const needle of ['npm ci', 'npm run typecheck', 'npm test', 'test:monorepo', 'Build the image for the smoke test', 'npm run test:smoke']) {
+      expect(gated(needle)).toBeUndefined();
+    }
   });
 
   it('builds for linux/amd64 from the repository root and pushes ghcr.io/manyoars/paid-api:<semver>', () => {

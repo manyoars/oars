@@ -6,6 +6,13 @@ name: template-per-task-agent
 on:
   push:
     tags: ['per-task-agent-v*']
+    # A push to main that touches this template, the client, or this file runs every step up to the image build, so a broken
+    # template build shows on main instead of at release time. Nothing is published from main.
+    branches: [main]
+    paths:
+      - 'templates/per-task-agent/**'
+      - 'packages/client/**'
+      - '.github/workflows/template-per-task-agent.yml'
 
 permissions:
   contents: write # the release notes
@@ -29,6 +36,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Read the version from the tag
         id: version
+        if: startsWith(github.ref, 'refs/tags/')
         run: |
           semver="${GITHUB_REF_NAME#per-task-agent-v}"
           if ! printf '%s' "$semver" | grep -Eq '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?$'; then
@@ -61,13 +69,15 @@ jobs:
         env:
           OARS_SMOKE_IMAGE: per-task-agent:smoke
         run: npm run test:smoke -w templates/per-task-agent
-      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+      - if: startsWith(github.ref, 'refs/tags/')
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Push the image
         id: push
+        if: startsWith(github.ref, 'refs/tags/')
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
@@ -79,13 +89,15 @@ jobs:
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
             org.opencontainers.image.version=${{ steps.version.outputs.semver }}
             org.opencontainers.image.licenses=Apache-2.0
-      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+      - if: startsWith(github.ref, 'refs/tags/')
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-name: ${{ env.IMAGE }}
           subject-digest: ${{ steps.push.outputs.digest }}
           push-to-registry: true
       # Catalogs pin image@sha256:<digest>, never a tag, so the digest goes where the release's reader looks first.
       - name: Write the digest into the release notes
+        if: startsWith(github.ref, 'refs/tags/')
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
