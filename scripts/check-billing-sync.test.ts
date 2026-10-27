@@ -65,6 +65,31 @@ describe('scripts/check-billing-sync.mjs', () => {
     expect(err).toContain(missing);
   });
 
+  it('fails on a difference in src/recovery.ts and names both paths, though billing.ts matches', () => {
+    place('paid-api', 'src/billing.ts', 'a');
+    place('per-task-agent', 'src/billing.ts', 'a');
+    const first = place('paid-api', 'src/recovery.ts', 'export const x = 1;\n');
+    const second = place('per-task-agent', 'src/recovery.ts', 'export const x = 2;\n');
+
+    const { status, err } = run();
+
+    expect(status).toBe(1);
+    expect(err).toContain(first);
+    expect(err).toContain(second);
+  });
+
+  it('fails and names the path when one src/recovery.ts is missing', () => {
+    place('paid-api', 'src/billing.ts', 'a');
+    place('per-task-agent', 'src/billing.ts', 'a');
+    place('paid-api', 'src/recovery.ts', 'a');
+    const missing = join(root, 'templates', 'per-task-agent', 'src', 'recovery.ts');
+
+    const { status, err } = run();
+
+    expect(status).toBe(1);
+    expect(err).toContain(missing);
+  });
+
   it('says how to repair it', () => {
     place('paid-api', 'src/billing.ts', 'a');
     place('per-task-agent', 'src/billing.ts', 'b');
