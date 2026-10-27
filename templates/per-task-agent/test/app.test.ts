@@ -2,10 +2,11 @@ import { describe, expect, it, vi } from 'vitest';
 import { CHARGING_SENTENCE, createApp, HOLD_TTL_SECONDS, TASK_BUDGET_MS, type TaskLogEntry } from '../src/app.js';
 import { type Audit } from '../src/audit.js';
 import { BillingProblem, customerRefFor, mintToken, reservationKey } from '../src/billing.js';
-import { createFakeBilling } from '../src/fake-billing.js';
+import { createFakeBilling, createFakeRecovery } from '../src/fake-billing.js';
+import { RECOVERY_SENTENCE } from '../src/recovery.js';
 import { FetchFailed, FetchRefused, type Page } from '../src/fetch-page.js';
 import { type Summarizer } from '../src/summary.js';
-import { createClock, flush } from './support.js';
+import { bodyOf, createClock, flush } from './support.js';
 
 const PRICE_REFS = ['task-1', 'tasks-5'];
 
@@ -26,12 +27,13 @@ type Fetch = (url: string, signal: AbortSignal) => Promise<Page>;
 const setup = (credits = 3, extra: { fetchPage?: Fetch; summarize?: (audit: Audit, signal: AbortSignal) => Promise<string>; taskBudgetMs?: number; summaryBudgetMs?: number; log?: (entry: TaskLogEntry) => void } = {}) => {
   const clock = createClock();
   const fake = createFakeBilling({ now: clock.now });
+  const recovery = createFakeRecovery({ billing: fake, now: clock.now });
   const fetchPage = vi.fn<Fetch>(extra.fetchPage ?? (() => Promise.resolve(aPage())));
-  const app = createApp({ billing: fake, priceRefs: PRICE_REFS, now: clock.now, fetchPage, summarize: extra.summarize, taskBudgetMs: extra.taskBudgetMs, summaryBudgetMs: extra.summaryBudgetMs, log: extra.log });
+  const app = createApp({ billing: fake, recovery, priceRefs: PRICE_REFS, now: clock.now, fetchPage, summarize: extra.summarize, taskBudgetMs: extra.taskBudgetMs, summaryBudgetMs: extra.summaryBudgetMs, log: extra.log });
   const token = mintToken();
   const customerRef = customerRefFor(token);
   fake.grant(customerRef, credits);
-  return { app, clock, fake, token, customerRef, fetchPage };
+  return { app, clock, fake, recovery, token, customerRef, fetchPage };
 };
 
 const authorization = (token: string) => ({ Authorization: `Bearer ${token}` });
@@ -434,6 +436,41 @@ describe('POST /v1/tasks', () => {
 
       expect(summarize).not.toHaveBeenCalled();
     });
+  });
+});
+
+describe('token recovery', () => {
+  const EMAIL = 'buyer@example.com';
+
+  it('is described on GET /: the sentence buyers are told and the three calls', async () => {
+    const { app } = setup();
+
+    const body = await bodyOf(await app.request('/'));
+
+    expect(body['recovery']).toBe(RECOVERY_SENTENCE);
+    const endpoints = JSON.stringify(body['endpoints']);
+    for (const path of ['/v1/recover', '/recover', '/v1/recover/redeem']) expect(endpoints).toContain(path);
+  });
+
+  it('keeps the credits of a lost token: ask, follow the emailed link, and the old token is dead while the new one holds the rest', async () => {
+    const { app, recovery, token: lost, customerRef } = setup(100);
+    recovery.bind(customerRef, EMAIL);
+    await app.request('/v1/tasks', post({ url: 'https://acme.example/' }, authorization(lost)));
+    expect(await bodyOf(await app.request('/v1/credits', { headers: authorization(lost) }))).toMatchObject({ creditsRemaining: 99 });
+
+    expect((await app.request('/v1/recover', post({ email: EMAIL }))).status).toBe(202);
+    const link = recovery.outbox.at(-1)?.token ?? '';
+    const redeemed = await app.request('/v1/recover/redeem', post({ recoveryToken: link }));
+
+    expect(redeemed.status).toBe(200);
+    const found = String((await bodyOf(redeemed))['token']);
+    for (const [method, path] of [['GET', '/v1/credits'], ['POST', '/v1/credits/checkout'], ['POST', '/v1/tasks']]) {
+      const refused = await app.request(path ?? '', { ...post({}, authorization(lost)), method });
+      expect(refused.status).toBe(401);
+      expect(await bodyOf(refused)).toMatchObject({ code: 'CUSTOMER_REVOKED', recover: '/recover' });
+    }
+    expect(await bodyOf(await app.request('/v1/credits', { headers: authorization(found) }))).toMatchObject({ creditsRemaining: 99 });
+    expect((await app.request('/v1/tasks', post({ url: 'https://acme.example/' }, authorization(found)))).status).toBe(200);
   });
 });
 

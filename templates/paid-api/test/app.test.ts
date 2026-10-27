@@ -1,19 +1,21 @@
 import { describe, expect, it, vi } from 'vitest';
 import { CHARGING_SENTENCE, createApp } from '../src/app.js';
 import { BillingProblem, customerRefFor, mintToken, reservationKey } from '../src/billing.js';
-import { createFakeBilling } from '../src/fake-billing.js';
-import { createClock } from './support.js';
+import { createFakeBilling, createFakeRecovery } from '../src/fake-billing.js';
+import { RECOVERY_SENTENCE } from '../src/recovery.js';
+import { bodyOf, createClock } from './support.js';
 
 const PRICE_REFS = ['calls-100', 'calls-1000'];
 
 const setup = (credits = 3) => {
   const clock = createClock();
   const fake = createFakeBilling({ now: clock.now });
-  const app = createApp({ billing: fake, priceRefs: PRICE_REFS, now: clock.now });
+  const recovery = createFakeRecovery({ billing: fake, now: clock.now });
+  const app = createApp({ billing: fake, recovery, priceRefs: PRICE_REFS, now: clock.now });
   const token = mintToken();
   const customerRef = customerRefFor(token);
   fake.grant(customerRef, credits);
-  return { app, clock, fake, token, customerRef };
+  return { app, clock, fake, recovery, token, customerRef };
 };
 
 const authorization = (token: string) => ({ Authorization: `Bearer ${token}` });
@@ -226,6 +228,41 @@ describe('POST /v1/transform', () => {
     expect(response.status).toBe(409);
     expect(response.headers.get('Retry-After')).toBe('45');
     expect(await response.json()).toMatchObject({ code: 'REQUEST_IN_PROGRESS' });
+  });
+});
+
+describe('token recovery', () => {
+  const EMAIL = 'buyer@example.com';
+
+  it('is described on GET /: the sentence buyers are told and the three calls', async () => {
+    const { app } = setup();
+
+    const body = await bodyOf(await app.request('/'));
+
+    expect(body['recovery']).toBe(RECOVERY_SENTENCE);
+    const endpoints = JSON.stringify(body['endpoints']);
+    for (const path of ['/v1/recover', '/recover', '/v1/recover/redeem']) expect(endpoints).toContain(path);
+  });
+
+  it('keeps the credits of a lost token: ask, follow the emailed link, and the old token is dead while the new one holds the rest', async () => {
+    const { app, recovery, token: lost, customerRef } = setup(100);
+    recovery.bind(customerRef, EMAIL);
+    await app.request('/v1/transform', post({ text: 'Hello there.' }, authorization(lost)));
+    expect(await bodyOf(await app.request('/v1/credits', { headers: authorization(lost) }))).toMatchObject({ creditsRemaining: 99 });
+
+    expect((await app.request('/v1/recover', post({ email: EMAIL }))).status).toBe(202);
+    const link = recovery.outbox.at(-1)?.token ?? '';
+    const redeemed = await app.request('/v1/recover/redeem', post({ recoveryToken: link }));
+
+    expect(redeemed.status).toBe(200);
+    const found = String((await bodyOf(redeemed))['token']);
+    for (const [method, path] of [['GET', '/v1/credits'], ['POST', '/v1/credits/checkout'], ['POST', '/v1/transform']]) {
+      const refused = await app.request(path ?? '', { ...post({}, authorization(lost)), method });
+      expect(refused.status).toBe(401);
+      expect(await bodyOf(refused)).toMatchObject({ code: 'CUSTOMER_REVOKED', recover: '/recover' });
+    }
+    expect(await bodyOf(await app.request('/v1/credits', { headers: authorization(found) }))).toMatchObject({ creditsRemaining: 99 });
+    expect((await app.request('/v1/transform', post({ text: 'Hello there.' }, authorization(found)))).status).toBe(200);
   });
 });
 
