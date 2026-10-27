@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<meta name="robots" content="noindex">
+<title>Recover your token</title>
+<style>
+  body { font: 16px/1.5 system-ui, sans-serif; margin: 0; padding: 2rem 1rem; color: #1a1a1a; background: #fafafa; }
+  main { max-width: 34rem; margin: 0 auto; }
+  h1 { font-size: 1.5rem; }
+  h2 { font-size: 1.1rem; margin-top: 2rem; }
+  button, input { font: inherit; padding: 0.5rem 0.75rem; }
+  input { width: 100%; box-sizing: border-box; margin-bottom: 0.5rem; }
+  code { display: block; padding: 0.75rem; background: #fff; border: 1px solid #ccc; word-break: break-all; user-select: all; }
+  #status { margin-top: 1.5rem; font-weight: 600; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Recover your token</h1>
+  <section id="redeem" hidden>
+    <p>Your link is ready. One click gives you a new token with the same credits, and your old token stops working.</p>
+    <button id="redeem-button" type="button">Get my new token</button>
+    <div id="new-token-box" hidden>
+      <p>This is your new token. Copy it now and keep it secret: it is shown once.</p>
+      <code id="new-token"></code>
+    </div>
+  </section>
+  <section>
+    <h2>Need a link?</h2>
+    <p>Enter the email you used at checkout. If it holds credits here, we email you a link that works once, for 15 minutes.</p>
+    <label for="email">Email</label>
+    <input id="email" type="email" autocomplete="email" placeholder="you@example.com">
+    <button id="send-link" type="button">Email me a link</button>
+  </section>
+  <p id="status" role="status" aria-live="polite"></p>
+</main>
+<script>
+(() => {
+  'use strict';
+  const byId = (id) => document.getElementById(id);
+  const redeemSection = byId('redeem');
+  const redeemButton = byId('redeem-button');
+  const tokenBox = byId('new-token-box');
+  const tokenOut = byId('new-token');
+  const note = byId('status');
+  const email = byId('email');
+  const sendLink = byId('send-link');
+
+  const show = (text) => {
+    note.textContent = text;
+  };
+  const credits = (count) => `${count} credit${count === 1 ? '' : 's'}`;
+  const post = async (path, payload) => {
+    const response = await fetch(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+    const body = await response.json().catch(() => ({}));
+    return { ok: response.ok, status: response.status, body };
+  };
+  const failure = (status, body) =>
+    status === 429 ? 'Too many requests. Wait a little, then try again.' : (body.message ?? 'Something went wrong. Try again.');
+  const unreachable = 'Could not reach the server. Check your connection and try again.';
+
+  // The link token rides in the fragment, which a browser never sends to a server or a Referer. It leaves this page only in
+  // the body of the POST below, after the buyer clicks (a mail scanner that opens the link spends nothing).
+  const fragment = location.hash.slice(1);
+  let link = /^[A-Za-z0-9_-]{1,128}$/.test(fragment) ? fragment : '';
+  if (fragment !== '') history.replaceState(null, '', location.pathname);
+  redeemSection.hidden = link === '';
+  tokenBox.hidden = true;
+  if (fragment !== '' && link === '') show('That link looks incomplete. Ask for a new one below.');
+
+  redeemButton.addEventListener('click', async () => {
+    if (link === '') return;
+    redeemButton.disabled = true;
+    show('Getting your new token...');
+    try {
+      const { ok, status, body } = await post('/v1/recover/redeem', { recoveryToken: link });
+      // A used, expired or replaced link is dead for good; anything else (a busy server) may be tried again.
+      const spent = ok || status === 410;
+      if (spent) link = '';
+      redeemButton.disabled = spent;
+      if (ok) {
+        tokenOut.textContent = body.token;
+        tokenBox.hidden = false;
+        show(`Done. Your new token holds ${credits(body.creditsRemaining)}. Your old token no longer works.`);
+      } else {
+        show(failure(status, body));
+      }
+    } catch {
+      redeemButton.disabled = false;
+      show(unreachable);
+    }
+  });
+
+  sendLink.addEventListener('click', async () => {
+    sendLink.disabled = true;
+    try {
+      const { status, body } = await post('/v1/recover', { email: email.value.trim() });
+      show(failure(status, body));
+    } catch {
+      show(unreachable);
+    }
+    sendLink.disabled = false;
+  });
+})();
+</script>
+</body>
+</html>

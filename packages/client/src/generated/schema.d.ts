@@ -232,6 +232,43 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/billing/customers/recovery-redemptions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Move a buyer's credits to a new customerRef with a recovery link token */
+        post: operations["redeemBuyerRecovery"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/billing/customers/recovery-requests": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Email a buyer a token recovery link
+         * @description Always 202 with the same body, whether or not the email holds credits. When it does, the link is mailed to the address.
+         */
+        post: operations["requestBuyerRecovery"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -240,6 +277,44 @@ export interface components {
         AgentHealthStatus: "HEALTHY" | "DEGRADED" | "UNHEALTHY" | "UNKNOWN";
         /** @enum {string} */
         AgentStatus: "PENDING" | "RUNNING" | "STOPPED" | "FAILED" | "TERMINATED";
+        /**
+         * @description The billing error catalog (spec §9.2, §13). Branch on the code, never on the detail text.
+         *
+         *     | Code | Status | Meaning |
+         *     |---|---|---|
+         *     | `SDK_KEY_INVALID` | 401 | The X-Agent-SDK-Key header is missing, malformed, revoked or unknown. |
+         *     | `WORKLOAD_NOT_ACTIVE` | 409 | The agent's workload is no longer active. |
+         *     | `WORKLOAD_NOT_FOUND` | 404 | No agent with this id. |
+         *     | `WORKLOAD_NOT_OWNED` | 403 | The agent belongs to another developer. |
+         *     | `PRICE_NOT_FOUND` | 404 | The agent has no price with this priceRef. |
+         *     | `PRICE_INACTIVE` | 400 | The price is deactivated; activate it or use another price. |
+         *     | `PRICE_AMOUNT_IMMUTABLE` | 409 | A charge or subscription already references the price; create a new one. |
+         *     | `CUSTOMER_REGION_NOT_SUPPORTED` | 400 | Only US customers (the 50 states and DC) can be charged; the customer is elsewhere. |
+         *     | `ACCOUNT_NOT_READY` | 409 | The developer's payout account cannot take live charges yet; a human finishes onboarding at actionUrl. |
+         *     | `SELLER_IDENTITY_INCOMPLETE` | 409 | The agent's seller identity lacks a display name, support email or refund-policy URL; set them before going live. |
+         *     | `STRIPE_TERMS_URL_NOT_SET` | 409 | The agent has a terms URL but the developer's Stripe account has none in its public business details; actionUrl is where to set it. |
+         *     | `PAYMENT_METHOD_REQUIRED` | 409 | An off-session charge needs a saved card; use a CHECKOUT charge first. |
+         *     | `IDEMPOTENCY_CONFLICT` | 409 | This Idempotency-Key was already used with a different request body. |
+         *     | `INSUFFICIENT_CREDITS` | 409 | The customer has too few credits; actionUrl is a credit-pack checkout. |
+         *     | `REFUND_EXCEEDS_REMAINING` | 409 | The refund is larger than what remains refundable on the charge. |
+         *     | `CHARGE_NOT_REFUNDABLE` | 409 | The charge cannot be refunded through the API: not posted yet, flagged, disputed, failed or fully refunded. |
+         *     | `TEST_MODE_ONLY` | 409 | The operation runs only in TEST mode (test charges). |
+         *     | `RATE_LIMITED` | 429 | Too many requests for this agent or key; retry after the Retry-After seconds. |
+         *     | `PAYOUT_COUNTRY_NOT_SUPPORTED` | 400 | Payout accounts are US-only at launch; the developer's country is elsewhere. |
+         *     | `HUMAN_SESSION_REQUIRED` | 403 | A signed-in person must make this change; an API key or a connected agent tool cannot (payout account). |
+         *     | `TOPUP_AMOUNT_INVALID` | 400 | A compute top-up is a whole-cent USD amount within the minimum and maximum. |
+         *     | `TOPUP_NOT_FOUND` | 404 | No compute top-up with this id for the caller. |
+         *     | `FEE_POLICY_INVALID` | 400 | The fee-policy version breaks a policy rule (admin API). |
+         *     | `RESERVATION_NOT_FOUND` | 404 | No credit reservation with this id for the agent. |
+         *     | `RESERVATION_EXPIRED` | 409 | The credit reservation lapsed before it was committed; reserve again. |
+         *     | `RESERVATION_RELEASED` | 409 | The credit reservation was released; it can no longer be committed. |
+         *     | `RESERVATION_COMMITTED` | 409 | The credit reservation was already committed; it can no longer be released. |
+         *     | `IDEMPOTENCY_KEY_INVALID` | 400 | The Idempotency-Key is not a UUID or 64 hexadecimal characters. |
+         *     | `CUSTOMER_REVOKED` | 410 | The customerRef was replaced by a token recovery; every agent billing call on it, the customer upsert included, is refused. |
+         *     | `RECOVERY_LINK_INVALID` | 410 | The recovery link is unknown, already used, expired, voided by a newer link, or for another agent. |
+         * @enum {string}
+         */
+        BillingErrorCode: "SDK_KEY_INVALID" | "WORKLOAD_NOT_ACTIVE" | "WORKLOAD_NOT_FOUND" | "WORKLOAD_NOT_OWNED" | "PRICE_NOT_FOUND" | "PRICE_INACTIVE" | "PRICE_AMOUNT_IMMUTABLE" | "CUSTOMER_REGION_NOT_SUPPORTED" | "ACCOUNT_NOT_READY" | "SELLER_IDENTITY_INCOMPLETE" | "STRIPE_TERMS_URL_NOT_SET" | "PAYMENT_METHOD_REQUIRED" | "IDEMPOTENCY_CONFLICT" | "INSUFFICIENT_CREDITS" | "REFUND_EXCEEDS_REMAINING" | "CHARGE_NOT_REFUNDABLE" | "TEST_MODE_ONLY" | "RATE_LIMITED" | "PAYOUT_COUNTRY_NOT_SUPPORTED" | "HUMAN_SESSION_REQUIRED" | "TOPUP_AMOUNT_INVALID" | "TOPUP_NOT_FOUND" | "FEE_POLICY_INVALID" | "RESERVATION_NOT_FOUND" | "RESERVATION_EXPIRED" | "RESERVATION_RELEASED" | "RESERVATION_COMMITTED" | "IDEMPOTENCY_KEY_INVALID" | "CUSTOMER_REVOKED" | "RECOVERY_LINK_INVALID";
         /** @enum {string} */
         BillingMode: "TEST" | "LIVE";
         BillingModeView: {
@@ -253,6 +328,20 @@ export interface components {
             updatedAt?: string;
             /** Format: uuid */
             workloadId: string;
+        };
+        /** @description A billing rejection (RFC 7807). Branch on `code`, never on `detail`. `code` is absent on an uncoded rejection: a plain 404 such as the subscription read's, a 503, or a Bean Validation 400 (rulings #40). */
+        BillingProblem: {
+            /** @description A URL where a human completes the step that clears this rejection */
+            actionUrl?: string;
+            code?: components["schemas"]["BillingErrorCode"];
+            detail?: string;
+            instance?: string;
+            requestId?: string;
+            /** Format: int32 */
+            status: number;
+            title: string;
+            /** @example https://api.tradeaor.com/problems/price-not-found */
+            type: string;
         };
         /** @enum {string} */
         ChargeKind: "CHARGE" | "SUBSCRIPTION_INVOICE" | "CREDIT_PACK";
@@ -502,6 +591,11 @@ export interface components {
             instance?: string;
             paymentId?: string;
             requestId?: string;
+            /**
+             * Format: int32
+             * @description The version of the legal documents the caller must accept to clear a LEGAL_REACCEPTANCE_REQUIRED rejection. Present only on that rejection.
+             */
+            requiredVersion?: number;
             /** Format: int32 */
             status?: number;
             /** Format: date-time */
@@ -509,6 +603,32 @@ export interface components {
             title?: string;
             type?: string;
             violations?: components["schemas"]["Violation"][];
+        };
+        RecoveryRedemptionView: {
+            /**
+             * Format: int64
+             * @description The new customer's credit balance in the agent's billing mode
+             */
+            creditsRemaining: number;
+            customerRef: string;
+            /**
+             * Format: int64
+             * @description How many customers with the recovery email were revoked
+             */
+            revokedCustomers: number;
+        };
+        RecoveryRequestView: {
+            /** @description Always true */
+            accepted: boolean;
+        };
+        RedeemRecoveryInput: {
+            /**
+             * @description The customerRef of the new bearer token; it receives the credits
+             * @example cus-43
+             */
+            newCustomerRef: string;
+            /** @description The token from the emailed recovery link (the fragment after #) */
+            recoveryToken: string;
         };
         RegisterWorkloadRequest: {
             /** @description Whether the workload's public service is kept running instead of idling into the host's standby. Null means false. */
@@ -521,6 +641,13 @@ export interface components {
             name: string;
             secrets?: components["schemas"]["EnvVar"][];
             services: components["schemas"]["WorkloadServiceSpec"][];
+        };
+        RequestRecoveryInput: {
+            /**
+             * Format: email
+             * @example buyer@example.com
+             */
+            email: string;
         };
         ReservationCommitView: {
             /** Format: int64 */
@@ -622,7 +749,7 @@ export interface components {
             unsorted: boolean;
         };
         /** @enum {string} */
-        StopReason: "CREATOR" | "COMPUTE_DEBT" | "PLATFORM";
+        StopReason: "CREATOR" | "COMPUTE_DEBT" | "COMPUTE_CAP" | "PLATFORM";
         UpsertCustomerInput: {
             /**
              * @description ISO 3166-1 alpha-2 country; only US customers are supported
@@ -733,9 +860,9 @@ export interface components {
             instrumentId?: string;
             /**
              * Format: decimal
-             * @description Monthly reserved compute cost in USD at the applicable rates
+             * @description Estimated compute cost in USD of the configured replicas over a 730-hour month, at the current rate version for the size the agent host allocates (vCPU is normalized: one shared CPU = 0.0625); absent when no agent host is configured to size the services
              */
-            monthlyReservedCostUsd: string;
+            monthlyReservedCostUsd?: string;
             name: string;
             /** @description Plaintext SDK key. Present only in the registration response. */
             sdkKey?: string;
@@ -821,7 +948,7 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
-                /** @description Optional, scoped to the caller. A retry with the same key and body replays the registration instead of failing with WORKLOAD_FINGERPRINT_EXISTS; the same key with another body is IDEMPOTENCY_CONFLICT. A UUID or 64 hexadecimal characters. */
+                /** @description Optional, scoped to the caller. A retry with the same key and body replays the registration instead of failing with WORKLOAD_FINGERPRINT_EXISTS; the same key with another body is IDEMPOTENCY_CONFLICT. Must be a UUID or 64 hexadecimal characters; any other value is a 400 IDEMPOTENCY_KEY_INVALID. */
                 "Idempotency-Key"?: string;
             };
             path?: never;
@@ -1210,7 +1337,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["ProblemDetail"];
                 };
             };
-            /** @description PLATFORM_STEWARDED, WORKLOAD_TERMINATED, WORKLOAD_SUSPENDED */
+            /** @description PLATFORM_STEWARDED, WORKLOAD_TERMINATED, WORKLOAD_SUSPENDED, COMPUTE_CAP_REACHED, COMPUTE_CREDIT_EXHAUSTED (actionUrl: add compute credit) */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -1508,22 +1635,22 @@ export interface operations {
                     "*/*": components["schemas"]["ProblemDetail"];
                 };
             };
-            /** @description WORKLOAD_NOT_OWNED */
+            /** @description Forbidden */
             403: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/problem+json": components["schemas"]["ProblemDetail"];
+                    "*/*": components["schemas"]["ProblemDetail"];
                 };
             };
-            /** @description WORKLOAD_NOT_FOUND */
+            /** @description WORKLOAD_NOT_FOUND (an unknown agent, or another developer's) */
             404: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/problem+json": components["schemas"]["ProblemDetail"];
+                    "application/problem+json": components["schemas"]["BillingProblem"];
                 };
             };
             /** @description Conflict */
@@ -1678,7 +1805,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/problem+json": components["schemas"]["ProblemDetail"];
+                    "application/problem+json": components["schemas"]["BillingProblem"];
                 };
             };
             /** @description WORKLOAD_NOT_FOUND */
@@ -1687,7 +1814,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/problem+json": components["schemas"]["ProblemDetail"];
+                    "application/problem+json": components["schemas"]["BillingProblem"];
                 };
             };
             /** @description Conflict */
@@ -1821,7 +1948,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/problem+json": components["schemas"]["ProblemDetail"];
+                    "application/problem+json": components["schemas"]["BillingProblem"];
                 };
             };
             /** @description Unauthorized */
@@ -1848,7 +1975,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/problem+json": components["schemas"]["ProblemDetail"];
+                    "application/problem+json": components["schemas"]["BillingProblem"];
                 };
             };
             /** @description Not Found */
@@ -1866,7 +1993,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/problem+json": components["schemas"]["ProblemDetail"];
+                    "application/problem+json": components["schemas"]["BillingProblem"];
                 };
             };
             /** @description Content Too Large */
@@ -1956,7 +2083,7 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
-                /** @description Unique per test charge; a retry with the same key returns it */
+                /** @description Unique per test charge; a retry with the same key returns it. Must be a UUID or 64 hexadecimal characters; any other value is a 400 IDEMPOTENCY_KEY_INVALID. */
                 "Idempotency-Key": string;
             };
             path: {
@@ -1994,7 +2121,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/problem+json": components["schemas"]["ProblemDetail"];
+                    "application/problem+json": components["schemas"]["BillingProblem"];
                 };
             };
             /** @description Unauthorized */
@@ -2021,7 +2148,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/problem+json": components["schemas"]["ProblemDetail"];
+                    "application/problem+json": components["schemas"]["BillingProblem"];
                 };
             };
             /** @description WORKLOAD_NOT_FOUND or PRICE_NOT_FOUND */
@@ -2030,7 +2157,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/problem+json": components["schemas"]["ProblemDetail"];
+                    "application/problem+json": components["schemas"]["BillingProblem"];
                 };
             };
             /** @description TEST_MODE_ONLY (the agent is LIVE), IDEMPOTENCY_CONFLICT */
@@ -2039,7 +2166,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/problem+json": components["schemas"]["ProblemDetail"];
+                    "application/problem+json": components["schemas"]["BillingProblem"];
                 };
             };
             /** @description Content Too Large */
@@ -2111,7 +2238,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/problem+json": components["schemas"]["ProblemDetail"];
+                    "application/problem+json": components["schemas"]["BillingProblem"];
                 };
             };
             /** @description Gateway Timeout */
@@ -2129,7 +2256,7 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
-                /** @description Unique per charge; a retry with the same key returns the same charge */
+                /** @description Unique per charge; a retry with the same key returns the same charge. Must be a UUID or 64 hexadecimal characters; any other value is a 400 IDEMPOTENCY_KEY_INVALID. */
                 "Idempotency-Key": string;
                 /** @description The agent's SDK key (aorsk_…) */
                 "X-Agent-SDK-Key": string;
@@ -2167,7 +2294,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/problem+json": components["schemas"]["ProblemDetail"];
+                    "application/problem+json": components["schemas"]["BillingProblem"];
                 };
             };
             /** @description SDK_KEY_INVALID */
@@ -2176,7 +2303,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/problem+json": components["schemas"]["ProblemDetail"];
+                    "application/problem+json": components["schemas"]["BillingProblem"];
                 };
             };
             /** @description Payment Required */
@@ -2203,16 +2330,25 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/problem+json": components["schemas"]["ProblemDetail"];
+                    "application/problem+json": components["schemas"]["BillingProblem"];
                 };
             };
-            /** @description WORKLOAD_NOT_ACTIVE, ACCOUNT_NOT_READY, PAYMENT_METHOD_REQUIRED, IDEMPOTENCY_CONFLICT */
+            /** @description WORKLOAD_NOT_ACTIVE, ACCOUNT_NOT_READY, PAYMENT_METHOD_REQUIRED, IDEMPOTENCY_CONFLICT, STRIPE_TERMS_URL_NOT_SET (a checkout that asks for the seller's terms, whose Stripe account has no terms URL in its public details) */
             409: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/problem+json": components["schemas"]["ProblemDetail"];
+                    "application/problem+json": components["schemas"]["BillingProblem"];
+                };
+            };
+            /** @description CUSTOMER_REVOKED */
+            410: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["BillingProblem"];
                 };
             };
             /** @description Content Too Large */
@@ -2248,7 +2384,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/problem+json": components["schemas"]["ProblemDetail"];
+                    "application/problem+json": components["schemas"]["BillingProblem"];
                 };
             };
             /** @description Unavailable For Legal Reasons */
@@ -2284,7 +2420,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/problem+json": components["schemas"]["ProblemDetail"];
+                    "application/problem+json": components["schemas"]["BillingProblem"];
                 };
             };
             /** @description Gateway Timeout */
@@ -2302,7 +2438,7 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
-                /** @description Unique per hold; a retry with the same key replays a live hold, a released or expired key takes a new one */
+                /** @description Unique per hold; a retry with the same key replays a live hold, a released or expired key takes a new one. Must be a UUID or 64 hexadecimal characters; any other value is a 400 IDEMPOTENCY_KEY_INVALID. */
                 "Idempotency-Key": string;
                 /** @description The agent's SDK key (aorsk_…) */
                 "X-Agent-SDK-Key": string;
@@ -2331,7 +2467,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/problem+json": components["schemas"]["ProblemDetail"];
+                    "application/problem+json": components["schemas"]["BillingProblem"];
                 };
             };
             /** @description SDK_KEY_INVALID */
@@ -2340,7 +2476,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/problem+json": components["schemas"]["ProblemDetail"];
+                    "application/problem+json": components["schemas"]["BillingProblem"];
                 };
             };
             /** @description Payment Required */
@@ -2376,7 +2512,16 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/problem+json": components["schemas"]["ProblemDetail"];
+                    "application/problem+json": components["schemas"]["BillingProblem"];
+                };
+            };
+            /** @description CUSTOMER_REVOKED */
+            410: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["BillingProblem"];
                 };
             };
             /** @description Content Too Large */
@@ -2412,7 +2557,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/problem+json": components["schemas"]["ProblemDetail"];
+                    "application/problem+json": components["schemas"]["BillingProblem"];
                 };
             };
             /** @description Unavailable For Legal Reasons */
@@ -2500,7 +2645,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/problem+json": components["schemas"]["ProblemDetail"];
+                    "application/problem+json": components["schemas"]["BillingProblem"];
                 };
             };
             /** @description Payment Required */
@@ -2527,7 +2672,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/problem+json": components["schemas"]["ProblemDetail"];
+                    "application/problem+json": components["schemas"]["BillingProblem"];
                 };
             };
             /** @description RESERVATION_EXPIRED, RESERVATION_RELEASED */
@@ -2536,7 +2681,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/problem+json": components["schemas"]["ProblemDetail"];
+                    "application/problem+json": components["schemas"]["BillingProblem"];
                 };
             };
             /** @description Content Too Large */
@@ -2572,7 +2717,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/problem+json": components["schemas"]["ProblemDetail"];
+                    "application/problem+json": components["schemas"]["BillingProblem"];
                 };
             };
             /** @description Unavailable For Legal Reasons */
@@ -2660,7 +2805,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/problem+json": components["schemas"]["ProblemDetail"];
+                    "application/problem+json": components["schemas"]["BillingProblem"];
                 };
             };
             /** @description Payment Required */
@@ -2687,7 +2832,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/problem+json": components["schemas"]["ProblemDetail"];
+                    "application/problem+json": components["schemas"]["BillingProblem"];
                 };
             };
             /** @description RESERVATION_COMMITTED */
@@ -2696,7 +2841,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/problem+json": components["schemas"]["ProblemDetail"];
+                    "application/problem+json": components["schemas"]["BillingProblem"];
                 };
             };
             /** @description Content Too Large */
@@ -2732,7 +2877,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/problem+json": components["schemas"]["ProblemDetail"];
+                    "application/problem+json": components["schemas"]["BillingProblem"];
                 };
             };
             /** @description Unavailable For Legal Reasons */
@@ -2820,7 +2965,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/problem+json": components["schemas"]["ProblemDetail"];
+                    "application/problem+json": components["schemas"]["BillingProblem"];
                 };
             };
             /** @description Payment Required */
@@ -2857,6 +3002,15 @@ export interface operations {
                 };
                 content: {
                     "*/*": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description CUSTOMER_REVOKED */
+            410: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["BillingProblem"];
                 };
             };
             /** @description Content Too Large */
@@ -2982,7 +3136,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/problem+json": components["schemas"]["ProblemDetail"];
+                    "application/problem+json": components["schemas"]["BillingProblem"];
                 };
             };
             /** @description SDK_KEY_INVALID */
@@ -2991,7 +3145,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/problem+json": components["schemas"]["ProblemDetail"];
+                    "application/problem+json": components["schemas"]["BillingProblem"];
                 };
             };
             /** @description Payment Required */
@@ -3027,7 +3181,16 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/problem+json": components["schemas"]["ProblemDetail"];
+                    "application/problem+json": components["schemas"]["BillingProblem"];
+                };
+            };
+            /** @description CUSTOMER_REVOKED */
+            410: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["BillingProblem"];
                 };
             };
             /** @description Content Too Large */
@@ -3064,6 +3227,341 @@ export interface operations {
                 };
                 content: {
                     "*/*": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Unavailable For Legal Reasons */
+            451: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "*/*": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "*/*": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Bad Gateway */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "*/*": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "*/*": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Gateway Timeout */
+            504: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "*/*": components["schemas"]["ProblemDetail"];
+                };
+            };
+        };
+    };
+    redeemBuyerRecovery: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Unique per redemption; a retry with the same key answers the first result. Must be a UUID or 64 hexadecimal characters; any other value is a 400 IDEMPOTENCY_KEY_INVALID. */
+                "Idempotency-Key": string;
+                /** @description The agent's SDK key (aorsk_…) */
+                "X-Agent-SDK-Key": string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RedeemRecoveryInput"];
+            };
+        };
+        responses: {
+            /** @description Redeemed (or a replay of the same key) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "*/*": components["schemas"]["RecoveryRedemptionView"];
+                };
+            };
+            /** @description A malformed body or a missing Idempotency-Key */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["BillingProblem"];
+                };
+            };
+            /** @description SDK_KEY_INVALID */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["BillingProblem"];
+                };
+            };
+            /** @description Payment Required */
+            402: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "*/*": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "*/*": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "*/*": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description IDEMPOTENCY_CONFLICT */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["BillingProblem"];
+                };
+            };
+            /** @description RECOVERY_LINK_INVALID (unknown, used, expired or voided), CUSTOMER_REVOKED */
+            410: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["BillingProblem"];
+                };
+            };
+            /** @description Content Too Large */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "*/*": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Unprocessable Content */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "*/*": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Locked */
+            423: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "*/*": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description RATE_LIMITED (redemption attempts per agent per minute) */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["BillingProblem"];
+                };
+            };
+            /** @description Unavailable For Legal Reasons */
+            451: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "*/*": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "*/*": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Bad Gateway */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "*/*": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "*/*": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Gateway Timeout */
+            504: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "*/*": components["schemas"]["ProblemDetail"];
+                };
+            };
+        };
+    };
+    requestBuyerRecovery: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description The agent's SDK key (aorsk_…) */
+                "X-Agent-SDK-Key": string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RequestRecoveryInput"];
+            };
+        };
+        responses: {
+            /** @description Accepted */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "*/*": components["schemas"]["RecoveryRequestView"];
+                };
+            };
+            /** @description A malformed body */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["BillingProblem"];
+                };
+            };
+            /** @description SDK_KEY_INVALID */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["BillingProblem"];
+                };
+            };
+            /** @description Payment Required */
+            402: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "*/*": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "*/*": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "*/*": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "*/*": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Content Too Large */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "*/*": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Unprocessable Content */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "*/*": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Locked */
+            423: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "*/*": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description RATE_LIMITED (per email per hour, or per agent per hour) */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["BillingProblem"];
                 };
             };
             /** @description Unavailable For Legal Reasons */

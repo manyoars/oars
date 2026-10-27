@@ -458,14 +458,21 @@ describe('token recovery', () => {
     await app.request('/v1/tasks', post({ url: 'https://acme.example/' }, authorization(lost)));
     expect(await bodyOf(await app.request('/v1/credits', { headers: authorization(lost) }))).toMatchObject({ creditsRemaining: 99 });
 
-    expect((await app.request('/v1/recover', post({ email: EMAIL }))).status).toBe(202);
+    // The edge proxy names the client; a bare in-process request has no socket to read.
+    expect((await app.request('/v1/recover', post({ email: EMAIL }, { 'CF-Connecting-IP': '203.0.113.7' }))).status).toBe(202);
     const link = recovery.outbox.at(-1)?.token ?? '';
     const redeemed = await app.request('/v1/recover/redeem', post({ recoveryToken: link }));
 
     expect(redeemed.status).toBe(200);
     const found = String((await bodyOf(redeemed))['token']);
-    for (const [method, path] of [['GET', '/v1/credits'], ['POST', '/v1/credits/checkout'], ['POST', '/v1/tasks']]) {
-      const refused = await app.request(path ?? '', { ...post({}, authorization(lost)), method });
+    // Each call carries a body that passes validation, so the 401 can only come from billing refusing the revoked customerRef.
+    const calls = [
+      { path: '/v1/credits', init: { headers: authorization(lost) } },
+      { path: '/v1/credits/checkout', init: post({ priceRef: 'calls-100' }, authorization(lost)) },
+      { path: '/v1/tasks', init: post({ url: 'https://acme.example/' }, authorization(lost)) },
+    ];
+    for (const { path, init } of calls) {
+      const refused = await app.request(path, init);
       expect(refused.status).toBe(401);
       expect(await bodyOf(refused)).toMatchObject({ code: 'CUSTOMER_REVOKED', recover: '/recover' });
     }

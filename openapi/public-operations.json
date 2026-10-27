@@ -9,8 +9,10 @@
   "getAgentBillingMode",
   "getWorkload",
   "listAgentPrices",
+  "redeemBuyerRecovery",
   "registerWorkload",
   "release",
+  "requestBuyerRecovery",
   "reserve",
   "upsertBillingCustomer"
 ]

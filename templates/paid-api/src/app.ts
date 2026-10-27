@@ -9,6 +9,7 @@ import {
   reservationKey,
   withCredits,
 } from './billing.js';
+import { RECOVERY_ENDPOINTS, RECOVERY_SENTENCE, type Recovery, recoveryRoutes } from './recovery.js';
 import { transform } from './transform.js';
 
 export const CHARGING_SENTENCE =
@@ -16,6 +17,7 @@ export const CHARGING_SENTENCE =
 
 export interface AppOptions {
   billing: Billing;
+  recovery: Recovery;
   priceRefs: string[];
   now?: () => number;
   /** Handler timeout for the paid call; the default is withCredits' 30 seconds. */
@@ -63,12 +65,14 @@ export const createApp = (options: AppOptions): Hono => {
       name: 'Paid API',
       description: 'A JSON API that charges per successful call through prepaid credits.',
       charging: CHARGING_SENTENCE,
+      recovery: RECOVERY_SENTENCE,
       priceRefs: options.priceRefs,
       endpoints: [
         { method: 'POST', path: '/v1/customers', auth: 'none', description: 'Mint your bearer token (shown once). Body: {countryCode, regionCode?}. Keep it secret.' },
         { method: 'POST', path: '/v1/credits/checkout', auth: 'bearer', description: 'Buy credits. Body: {priceRef}. Returns {checkoutUrl}.' },
         { method: 'GET', path: '/v1/credits', auth: 'bearer', description: 'Your credit balance.' },
         { method: 'POST', path: '/v1/transform', auth: 'bearer', description: 'One credit per call. Body: {text}. Send an Idempotency-Key to retry safely.' },
+        ...RECOVERY_ENDPOINTS,
       ],
     }),
   );
@@ -113,6 +117,8 @@ export const createApp = (options: AppOptions): Hono => {
       await withCredits(billing, { customerRef, key, now: options.now, timeoutMs: options.timeoutMs }, () => Promise.resolve({ status: 200, body: transform(text) })),
     );
   });
+
+  app.route('/', recoveryRoutes({ recovery: options.recovery, now: options.now }));
 
   app.notFound(() => reply({ status: 404, body: { code: 'NOT_FOUND', message: 'No such endpoint. GET / lists them.' } }));
 

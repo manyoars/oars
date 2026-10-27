@@ -30,9 +30,11 @@ const run = () => {
 };
 
 describe('scripts/check-billing-sync.mjs', () => {
-  it('passes when the two templates carry the same src/billing.ts', () => {
+  it('passes when the two templates carry the same src/billing.ts and src/recovery.ts', () => {
     place('paid-api', 'src/billing.ts', 'export const x = 1;\n');
     place('per-task-agent', 'src/billing.ts', 'export const x = 1;\n');
+    place('paid-api', 'src/recovery.ts', 'export const y = 1;\n');
+    place('per-task-agent', 'src/recovery.ts', 'export const y = 1;\n');
 
     expect(run()).toMatchObject({ status: 0, err: '' });
   });

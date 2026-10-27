@@ -87,21 +87,25 @@ describe('POST /v1/recover', () => {
 
   it('keeps a count per IP, so another address is not limited', async () => {
     const { send } = setup();
-    for (let asked = 0; asked < 5; asked += 1) await send('/v1/recover', { email: EMAIL });
+    // A different email each time, so the 429 below is the IP limit and not billing's limit per email.
+    for (let asked = 0; asked < 5; asked += 1) await send('/v1/recover', { email: `buyer${String(asked)}@example.com` });
 
-    expect((await send('/v1/recover', { email: EMAIL })).status).toBe(429);
-    expect((await send('/v1/recover', { email: EMAIL }, '198.51.100.2')).status).toBe(202);
+    expect((await send('/v1/recover', { email: 'buyer5@example.com' })).status).toBe(429);
+    expect((await send('/v1/recover', { email: 'buyer5@example.com' }, '198.51.100.2')).status).toBe(202);
   });
 
   it('counts a request without a client-IP header against the socket address', async () => {
     const { app } = setup();
-    const ask = (address: string): Promise<Response> =>
-      app.request(
+    let asked = 0;
+    const ask = (address: string): Promise<Response> => {
+      asked += 1;
+      return app.request(
         '/v1/recover',
-        { method: 'POST', body: JSON.stringify({ email: EMAIL }) },
+        { method: 'POST', body: JSON.stringify({ email: `buyer${String(asked)}@example.com` }) },
         { incoming: { socket: { remoteAddress: address } } },
       );
-    for (let asked = 0; asked < 5; asked += 1) await ask('192.0.2.10');
+    };
+    for (let count = 0; count < 5; count += 1) await ask('192.0.2.10');
 
     expect((await ask('192.0.2.10')).status).toBe(429);
     expect((await ask('192.0.2.11')).status).toBe(202);
