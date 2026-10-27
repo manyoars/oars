@@ -127,10 +127,9 @@ describe('POST /v1/recover', () => {
   });
 
   it.each([
-    [new BillingProblem({ status: 401, code: 'SDK_KEY_INVALID' })],
-    [new BillingProblem({ status: 409, code: 'WORKLOAD_NOT_ACTIVE' })],
+    [new BillingProblem({ status: 500, code: 'INTERNAL' })],
     [new BillingProblem({ status: 0, code: 'BILLING_UNREACHABLE', detail: 'connect ECONNREFUSED 10.0.0.7' })],
-  ])('answers a bare 503 for %s, so a stopped workload says nothing about the buyer', async (problem) => {
+  ])('answers a bare 503 for %s, so billing trouble says nothing about the buyer', async (problem) => {
     const { send, recovery } = setup();
     vi.spyOn(recovery, 'request').mockRejectedValue(problem);
 
@@ -138,6 +137,22 @@ describe('POST /v1/recover', () => {
 
     expect(response.status).toBe(503);
     expect(await bodyOf(response)).toEqual({ code: 'UNAVAILABLE', message: 'This service is not available right now. Try again.' });
+  });
+});
+
+describe('POST /v1/recover when billing rejects the request', () => {
+  it.each([
+    [new BillingProblem({ status: 401, code: 'SDK_KEY_INVALID' })],
+    [new BillingProblem({ status: 409, code: 'WORKLOAD_NOT_ACTIVE' })],
+  ])('answers 502 UPSTREAM_REJECTED for %s', async (problem) => {
+    const { send, recovery } = setup();
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    vi.spyOn(recovery, 'request').mockRejectedValue(problem);
+
+    const response = await send('/v1/recover', { email: EMAIL });
+
+    expect(response.status).toBe(502);
+    expect(await bodyOf(response)).toMatchObject({ code: 'UPSTREAM_REJECTED' });
   });
 });
 

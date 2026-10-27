@@ -483,14 +483,30 @@ describe('token recovery', () => {
 });
 
 describe('errors', () => {
-  it('answers a billing problem that is not a buyer matter with a bare 503', async () => {
+  it('answers a billing 5xx that is not a buyer matter with a bare 503', async () => {
     const { app, fake, token } = setup();
-    vi.spyOn(fake, 'balance').mockRejectedValue(new BillingProblem({ status: 409, code: 'WORKLOAD_NOT_ACTIVE', detail: 'workload w-1 suspended' }));
+    vi.spyOn(fake, 'balance').mockRejectedValue(new BillingProblem({ status: 500, code: 'INTERNAL', detail: 'workload w-1 suspended' }));
 
     const response = await app.request('/v1/credits', { headers: authorization(token) });
 
     expect(response.status).toBe(503);
-    expect(JSON.stringify(await response.json())).not.toContain('w-1');
+    const body = await bodyOf(response);
+    expect(body).toMatchObject({ code: 'UNAVAILABLE' });
+    expect(JSON.stringify(body)).not.toContain('w-1');
+  });
+
+  it('answers an unlisted billing 4xx with 502 UPSTREAM_REJECTED, not 503, and logs it', async () => {
+    const { app, fake, token } = setup();
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    vi.spyOn(fake, 'balance').mockRejectedValue(new BillingProblem({ status: 409, code: 'WORKLOAD_NOT_ACTIVE', detail: 'workload w-1 suspended' }));
+
+    const response = await app.request('/v1/credits', { headers: authorization(token) });
+
+    expect(response.status).toBe(502);
+    const body = JSON.stringify(await bodyOf(response));
+    expect(body).toContain('UPSTREAM_REJECTED');
+    expect(body).not.toContain('w-1');
+    expect(warn).toHaveBeenCalledOnce();
   });
 
   it('answers any other failure with a generic 500 that leaks nothing', async () => {
