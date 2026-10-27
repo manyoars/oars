@@ -31,6 +31,7 @@ export class BillingProblem extends Error {
   readonly code: string;
   readonly actionUrl?: string;
   readonly retryAfterSeconds?: number;
+  readonly detail?: string;
 
   constructor(init: ProblemInit) {
     const code = init.code ?? init.type?.split('/').pop()?.toUpperCase().replaceAll('-', '_') ?? 'UNKNOWN';
@@ -39,6 +40,7 @@ export class BillingProblem extends Error {
     this.code = code;
     this.actionUrl = init.actionUrl;
     this.retryAfterSeconds = init.retryAfterSeconds;
+    this.detail = init.detail;
   }
 }
 
@@ -59,9 +61,17 @@ const BUYER_RULES = new Map<string, { status: number; message: string }>([
   ['RECOVERY_LINK_INVALID', { status: 410, message: 'That link has expired or was already used.' }],
 ]);
 
-/** Spec 1 §13 problem type to buyer response. Unlisted codes (a suspended workload, a bad SDK key, ...) get a bare 503. */
+/**
+ * Spec 1 §13 problem type to buyer response. An unlisted 4xx (a suspended workload, a bad SDK key, a rejected request, ...)
+ * is a fault on our side the buyer cannot fix: it is logged, with no keys or tokens, and answered 502 UPSTREAM_REJECTED.
+ * Anything else unlisted (billing 5xx, no answer) gets a bare 503 UNAVAILABLE.
+ */
 export const buyerResponse = (problem: BillingProblem): BuyerResponse => {
   const rule = BUYER_RULES.get(problem.code);
+  if (rule === undefined && problem.status >= 400 && problem.status < 500) {
+    console.warn(JSON.stringify({ event: 'billing-rejected', status: problem.status, code: problem.code, detail: problem.detail }));
+    return { status: 502, body: { code: 'UPSTREAM_REJECTED', message: 'This service could not complete the request. Try again later.' } };
+  }
   if (rule === undefined) return { status: 503, body: { code: 'UNAVAILABLE', message: 'This service is not available right now. Try again.' } };
   const response: BuyerResponse = { status: rule.status, body: { code: problem.code, message: rule.message } };
   if (problem.code === 'INSUFFICIENT_CREDITS' && problem.actionUrl !== undefined) response.body.checkoutUrl = problem.actionUrl;

@@ -1,5 +1,9 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { BillingProblem, buyerResponse, checkoutUrlsFor, createBilling, customerRefFor, mintToken, reservationKey } from '../src/billing.js';
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 const CHECKOUT = 'https://checkout.example/pack/abc';
 
@@ -109,19 +113,47 @@ describe('buyerResponse', () => {
   });
 
   it.each([
-    ['WORKLOAD_NOT_ACTIVE', 409],
-    ['SDK_KEY_INVALID', 401],
-    ['ACCOUNT_NOT_READY', 409],
+    ['BILLING_UNREACHABLE', 0],
     ['SOMETHING_NEW', 500],
-    ['RESERVATION_NOT_FOUND', 404],
-  ])('maps %s to a bare 503 with no internal detail and no /recover pointer', (code, status) => {
+    ['BAD_GATEWAY', 502],
+  ])('maps %s (status %i) to a bare 503 UNAVAILABLE with no internal detail and no /recover pointer', (code, status) => {
     const response = buyerResponse(problem(code, { status, detail: 'workload w-123 is suspended for non-payment', actionUrl: CHECKOUT }));
 
     expect(response.status).toBe(503);
+    expect(response.body.code).toBe('UNAVAILABLE');
     const text = JSON.stringify(response.body);
     expect(text).not.toContain('recover');
     expect(text).not.toContain('w-123');
     expect(text).not.toContain(CHECKOUT);
+  });
+
+  it.each([
+    ['WORKLOAD_NOT_ACTIVE', 409],
+    ['SDK_KEY_INVALID', 401],
+    ['ACCOUNT_NOT_READY', 409],
+    ['RESERVATION_NOT_FOUND', 404],
+    ['VALIDATION_ERROR', 400],
+  ])('maps the unlisted 4xx %s (%i) to 502 UPSTREAM_REJECTED, logs it, and leaks no detail', (code, status) => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+    const response = buyerResponse(problem(code, { status, detail: 'workload w-123 is suspended for non-payment', actionUrl: CHECKOUT }));
+
+    expect(response.status).toBe(502);
+    expect(response.body.code).toBe('UPSTREAM_REJECTED');
+    const text = JSON.stringify(response.body);
+    expect(text).not.toContain('recover');
+    expect(text).not.toContain('w-123');
+    expect(text).not.toContain(CHECKOUT);
+    expect(warn).toHaveBeenCalledExactlyOnceWith(JSON.stringify({ event: 'billing-rejected', status, code, detail: 'workload w-123 is suspended for non-payment' }));
+  });
+
+  it('logs nothing for a 503 path or a listed code', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+    buyerResponse(problem('SOMETHING_NEW', { status: 500 }));
+    buyerResponse(problem('PRICE_NOT_FOUND', { status: 404 }));
+
+    expect(warn).not.toHaveBeenCalled();
   });
 
   it('points only CUSTOMER_REVOKED at /recover', () => {
