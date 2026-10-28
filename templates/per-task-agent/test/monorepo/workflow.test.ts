@@ -70,7 +70,7 @@ describe('.github/workflows/template-per-task-agent.yml', () => {
 
   it('builds and saves the image in the image job, tests and smoke-tests the loaded image in the check job, then loads it, logs in, pushes, attests, and writes the digest in the release job, in that order', () => {
     const built = [imageIndex('docker/build-push-action'), imageIndex('upload-artifact')];
-    const checked = [stepIndex('download-artifact'), stepIndex('docker load'), stepIndex('npm test'), stepIndex('test:monorepo'), stepIndex('npm run test:smoke')];
+    const checked = [stepIndex('npm test'), stepIndex('test:monorepo'), stepIndex('download-artifact'), stepIndex('docker load'), stepIndex('npm run test:smoke')];
     const released = [
       releaseIndex('download-artifact'),
       releaseIndex('docker load'),
