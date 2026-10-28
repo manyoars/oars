@@ -147,10 +147,21 @@ describe('buyerResponse', () => {
     expect(warn).toHaveBeenCalledExactlyOnceWith(JSON.stringify({ event: 'billing-rejected', status, code, detail: 'workload w-123 is suspended for non-payment' }));
   });
 
-  it('logs nothing for a 503 path or a listed code', () => {
+  it.each([
+    ['BILLING_UNREACHABLE', 0],
+    ['SOMETHING_NEW', 500],
+    ['BAD_GATEWAY', 502],
+  ])('logs the code and status of %s (status %i) when it hides it as a bare 503, and nothing else', (code, status) => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
 
-    buyerResponse(problem('SOMETHING_NEW', { status: 500 }));
+    buyerResponse(problem(code, { status, detail: 'connect ECONNREFUSED 10.0.0.7', actionUrl: CHECKOUT }));
+
+    expect(warn).toHaveBeenCalledExactlyOnceWith(JSON.stringify({ event: 'billing-unavailable', status, code }));
+  });
+
+  it('logs nothing for a listed code', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+
     buyerResponse(problem('PRICE_NOT_FOUND', { status: 404 }));
 
     expect(warn).not.toHaveBeenCalled();
