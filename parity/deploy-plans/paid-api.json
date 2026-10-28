@@ -7,7 +7,7 @@
       "services": [
         {
           "name": "api",
-          "image": "ghcr.io/manyoars/paid-api@sha256:e14a54f17fdebb1ee102daa355e13e576d7dff8e82a6b4d26542b367fafc135b",
+          "image": "ghcr.io/manyoars/paid-api@sha256:c24de301f3b29f912c6235046b1f964a213b8437e496ba4b9f9de362e094b13f",
           "port": 8080,
           "public": true,
           "cpuMillicores": 250,

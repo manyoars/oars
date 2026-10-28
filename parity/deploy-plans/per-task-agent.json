@@ -7,7 +7,7 @@
       "services": [
         {
           "name": "agent",
-          "image": "ghcr.io/manyoars/per-task-agent@sha256:bea19ac5b21e06898d5ad70ee84fdad66ab641b3c10f9afeaf998ef4ec24092a",
+          "image": "ghcr.io/manyoars/per-task-agent@sha256:3dfe58ccacfcf8bf136e487e0dd6152092d26e6349f9671a2c46f78a097c07b3",
           "port": 8080,
           "public": true,
           "cpuMillicores": 500,
