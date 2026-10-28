@@ -140,6 +140,19 @@ describe('POST /v1/recover', () => {
   });
 });
 
+describe('POST /v1/recover when billing answers a problem the template does not list', () => {
+  it('logs the problem code and status, and nothing the buyer sent, while the buyer gets a bare 503', async () => {
+    const { send, recovery } = setup();
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    vi.spyOn(recovery, 'request').mockRejectedValue(new BillingProblem({ status: 500, code: 'INTERNAL', detail: 'secret detail' }));
+
+    const response = await send('/v1/recover', { email: EMAIL });
+
+    expect(response.status).toBe(503);
+    expect(warn).toHaveBeenCalledExactlyOnceWith(JSON.stringify({ event: 'billing-unavailable', status: 500, code: 'INTERNAL' }));
+  });
+});
+
 describe('POST /v1/recover when billing rejects the request', () => {
   it.each([
     [new BillingProblem({ status: 401, code: 'SDK_KEY_INVALID' })],
