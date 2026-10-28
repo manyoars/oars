@@ -15,12 +15,14 @@ curl -X POST localhost:8080/v1/customers -d '{"countryCode":"US","regionCode":"N
 ```
 
 Without `AOR_SDK_KEY` the server refuses to start; `OARS_DEV_FAKE_BILLING=1` is the only way around that, and the image's
-default command never sets it. On the platform, `AOR_SDK_KEY` and `OARS_PUBLIC_URL` are injected; do not declare either in the manifest. Outside the platform, set `OARS_PUBLIC_URL` to an http(s) URL with no query or fragment (`src/config.ts:37`); trailing slashes are stripped.
+default command never sets it. On the platform, `AOR_SDK_KEY` and `OARS_PUBLIC_URL` are injected; do not declare either in
+the manifest. Outside the platform, set `OARS_PUBLIC_URL` to an http(s) URL with no query or fragment (`loadConfig` in
+`src/config.ts`); trailing slashes are stripped.
 
 | Variable | Default | Meaning |
 |----------|---------|---------|
 | `AOR_SDK_KEY` | none, required | The agent's SDK key; the platform injects it |
-| `OARS_PUBLIC_URL` | none, required unless `OARS_DEV_FAKE_BILLING=1` | This agent's public URL; the platform injects it, so set it only for a local run. Checkout returns the buyer to `<it>/?checkout=success` or `<it>/?checkout=cancel`. The server refuses to start without it |
+| `OARS_PUBLIC_URL` | none, required unless `OARS_DEV_FAKE_BILLING=1`, which defaults it to `http://localhost:<PORT>` | This agent's public URL; the platform injects it, so set it only outside the platform. Checkout returns the buyer to `<it>/?checkout=success` or `<it>/?checkout=cancel`. The server refuses to start without it |
 | `OARS_API_URL` | `https://api.manyoars.com` | Where billing lives |
 | `OARS_PRICE_REFS` | `calls-100,calls-1000` | The price refs `GET /` advertises, comma separated |
 | `OARS_DEV_FAKE_BILLING` | unset | `1` selects the in-memory fake, for local development only |
