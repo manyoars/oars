@@ -30,8 +30,8 @@ describe.each(['paid-api', 'per-task-agent'])('a copy of %s', (template) => {
     return isRecord(found) ? found : {};
   };
 
-  it('drops test/monorepo, Dockerfile.dockerignore and the monorepo and smoke vitest configs', () => {
-    for (const dropped of ['test/monorepo', 'Dockerfile.dockerignore', 'vitest.monorepo.config.ts', 'vitest.smoke.config.ts']) {
+  it('drops test/monorepo, Dockerfile.dockerignore and the monorepo, smoke, and e2e vitest configs', () => {
+    for (const dropped of ['test/monorepo', 'Dockerfile.dockerignore', 'vitest.monorepo.config.ts', 'vitest.smoke.config.ts', 'vitest.e2e.config.ts']) {
       expect(existsSync(join(copy, dropped)), dropped).toBe(false);
     }
   });
@@ -49,7 +49,7 @@ describe.each(['paid-api', 'per-task-agent'])('a copy of %s', (template) => {
 
   it('drops the dev dependencies and scripts only the monorepo tests use and keeps the rest', () => {
     for (const dev of ['@stoplight/prism-cli', 'ajv', 'yaml']) expect(section('devDependencies'), dev).not.toHaveProperty(dev);
-    for (const script of ['test:monorepo', 'test:smoke']) expect(section('scripts'), script).not.toHaveProperty(script);
+    for (const script of ['test:monorepo', 'test:smoke', 'test:e2e']) expect(section('scripts'), script).not.toHaveProperty(script);
 
     expect(Object.keys(section('devDependencies'))).toEqual(expect.arrayContaining(['esbuild', 'tsx']));
     expect(Object.keys(section('dependencies'))).toEqual(expect.arrayContaining(['hono']));

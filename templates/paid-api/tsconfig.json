@@ -17,5 +17,5 @@
     "skipLibCheck": true,
     "noEmit": true
   },
-  "include": ["src", "test", "vitest.config.ts", "vitest.monorepo.config.ts", "vitest.smoke.config.ts"]
+  "include": ["src", "test", "vitest.config.ts", "vitest.monorepo.config.ts", "vitest.smoke.config.ts", "vitest.e2e.config.ts"]
 }

@@ -69,8 +69,9 @@ const mailIdsTo = async (email: string): Promise<string[]> => {
   expect(response.status, 'Mailpit GET /api/v1/messages').toBe(200);
   const { messages } = await json(response);
   if (!Array.isArray(messages)) throw new Error('Mailpit returned no messages list');
+  const listed: unknown[] = messages;
   const ids: string[] = [];
-  for (const message of messages as unknown[]) {
+  for (const message of listed) {
     if (!isRecord(message) || typeof message['ID'] !== 'string') continue;
     const recipients: unknown = message['To'];
     const addressed = Array.isArray(recipients) && recipients.some((to) => isRecord(to) && String(to['Address']).toLowerCase() === email.toLowerCase());
