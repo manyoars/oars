@@ -6,11 +6,11 @@ import { join, relative, sep } from 'node:path';
 
 /** @typedef {import('./json-types.js').JsonObject} JsonObject */
 
-const DROPPED_PATHS = new Set(['test/monorepo', 'Dockerfile.dockerignore', 'vitest.monorepo.config.ts', 'vitest.smoke.config.ts']);
+const DROPPED_PATHS = new Set(['test/monorepo', 'Dockerfile.dockerignore', 'vitest.monorepo.config.ts', 'vitest.smoke.config.ts', 'vitest.e2e.config.ts']);
 // parse5 (per-task-agent) stays: src/audit.ts imports it. Only the monorepo tests import these three.
 const DROPPED_DEV_DEPENDENCIES = ['@stoplight/prism-cli', 'ajv', 'yaml'];
 // Their vitest configs are dropped, so a script that runs them would only fail.
-const DROPPED_SCRIPTS = ['test:monorepo', 'test:smoke'];
+const DROPPED_SCRIPTS = ['test:monorepo', 'test:smoke', 'test:e2e'];
 const CLIENT = '@manyoars/oars-client';
 
 /** @param {unknown} value @returns {value is JsonObject} */
