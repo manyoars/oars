@@ -12,9 +12,11 @@ const asRecord = (value: unknown): { [key: string]: unknown } => (isRecord(value
 const text = readFileSync(new URL('../../../../.github/workflows/template-per-task-agent.yml', import.meta.url), 'utf8');
 const workflow = asRecord(parse(text));
 const jobs = asRecord(workflow['jobs']);
+const image = asRecord(jobs['image']);
 const check = asRecord(jobs['check']);
 const release = asRecord(jobs['release']);
 const stepsOf = (job: { [key: string]: unknown }): { [key: string]: unknown }[] => (Array.isArray(job['steps']) ? job['steps'] : []).map(asRecord);
+const imageSteps = stepsOf(image);
 const checkSteps = stepsOf(check);
 const releaseSteps = stepsOf(release);
 const tagOnly = "startsWith(github.ref, 'refs/tags/')";
@@ -22,6 +24,7 @@ const tagOnly = "startsWith(github.ref, 'refs/tags/')";
 const indexIn = (steps: { [key: string]: unknown }[], needle: string): number =>
   steps.findIndex((step) => [step['uses'], step['run'], step['name']].some((field) => typeof field === 'string' && field.includes(needle)));
 
+const imageIndex = (needle: string): number => indexIn(imageSteps, needle);
 const stepIndex = (needle: string): number => indexIn(checkSteps, needle);
 const releaseIndex = (needle: string): number => indexIn(releaseSteps, needle);
 
@@ -41,15 +44,19 @@ describe('.github/workflows/template-per-task-agent.yml', () => {
         ],
       },
     });
-    expect(Object.keys(jobs)).toEqual(['check', 'release']);
+    expect(Object.keys(jobs)).toEqual(['image', 'check', 'release']);
+    expect(image['runs-on']).toBe('ubuntu-latest');
     expect(check['runs-on']).toBe('ubuntu-latest');
     expect(release['runs-on']).toBe('ubuntu-latest');
   });
 
-  it('holds only a read token at the top and on the check job, and grants the write token to a release job that runs only for a tag after the check', () => {
+  it('holds only a read token at the top and on the image and check jobs, and grants the write token to a release job that runs only for a tag after both', () => {
     expect(workflow['permissions']).toEqual({ contents: 'read' });
+    expect(image['permissions']).toBeUndefined();
     expect(check['permissions']).toBeUndefined();
-    expect(release['needs']).toBe('check');
+    expect(image['needs']).toBeUndefined();
+    expect(check['needs']).toBe('image');
+    expect(release['needs']).toEqual(['image', 'check']);
     expect(release['if']).toBe(tagOnly);
     expect(release['permissions']).toEqual({ contents: 'write', packages: 'write', 'id-token': 'write', attestations: 'write' });
   });
@@ -61,12 +68,19 @@ describe('.github/workflows/template-per-task-agent.yml', () => {
     for (const action of uses) expect(action).toMatch(/^[\w-]+\/[\w./-]+@[0-9a-f]{40}$/);
   });
 
-  it('tests and smoke-tests the built image in the check job, then logs in, pushes, attests, and writes the digest in the release job, in that order', () => {
-    const pushed = releaseSteps.findIndex((step) => asRecord(step['with'])['push'] === true);
-    const checked = [stepIndex('npm test'), stepIndex('test:monorepo'), stepIndex('npm run test:smoke')];
-    const released = [releaseIndex('docker/login-action'), pushed, releaseIndex('attest-build-provenance'), releaseIndex('gh release')];
+  it('builds and saves the image in the image job, tests and smoke-tests the loaded image in the check job, then loads it, logs in, pushes, attests, and writes the digest in the release job, in that order', () => {
+    const built = [imageIndex('docker/build-push-action'), imageIndex('upload-artifact')];
+    const checked = [stepIndex('download-artifact'), stepIndex('docker load'), stepIndex('npm test'), stepIndex('test:monorepo'), stepIndex('npm run test:smoke')];
+    const released = [
+      releaseIndex('download-artifact'),
+      releaseIndex('docker load'),
+      releaseIndex('docker/login-action'),
+      releaseIndex('docker push'),
+      releaseIndex('attest-build-provenance'),
+      releaseIndex('gh release'),
+    ];
 
-    for (const order of [checked, released]) {
+    for (const order of [built, checked, released]) {
       expect(order.every((index) => index >= 0)).toBe(true);
       expect(order).toEqual([...order].sort((first, second) => first - second));
     }
@@ -77,34 +91,55 @@ describe('.github/workflows/template-per-task-agent.yml', () => {
 
     expect(client).toBe(stepIndex('npm ci') + 1);
     expect(client).toBeLessThan(stepIndex('npm run typecheck'));
-    expect(client).toBeLessThan(stepIndex('docker/build-push-action'));
   });
 
-  it('publishes only in the release job: the check job never logs in, pushes, attests, or releases, and the release job never installs', () => {
-    for (const needle of ['docker/login-action', 'attest-build-provenance', 'gh release']) {
+  it('publishes only in the release job: the image and check jobs never log in, push, attest, or release, and the release job never installs', () => {
+    for (const needle of ['docker/login-action', 'docker push', 'attest-build-provenance', 'gh release']) {
+      expect(imageIndex(needle)).toBe(-1);
       expect(stepIndex(needle)).toBe(-1);
       expect(releaseIndex(needle)).toBeGreaterThanOrEqual(0);
     }
-    expect(checkSteps.some((step) => asRecord(step['with'])['push'] === true)).toBe(false);
-    expect(releaseSteps.some((step) => asRecord(step['with'])['push'] === true)).toBe(true);
+    for (const step of [...imageSteps, ...checkSteps]) expect(asRecord(step['with'])['push']).toBeUndefined();
     for (const needle of ['npm ci', 'npm run typecheck', 'npm test', 'test:monorepo', 'npm run test:smoke']) expect(releaseIndex(needle)).toBe(-1);
-    for (const step of [...checkSteps, ...releaseSteps]) expect(step['if']).toBeUndefined();
+    for (const step of [...imageSteps, ...checkSteps, ...releaseSteps]) expect(step['if']).toBeUndefined();
   });
 
-  it('builds for linux/amd64 from the repository root and pushes ghcr.io/manyoars/per-task-agent:<semver>', () => {
-    const builds = [...checkSteps, ...releaseSteps]
-      .filter((step) => typeof step['uses'] === 'string' && step['uses'].startsWith('docker/build-push-action@'))
-      .map((step) => asRecord(step['with']));
+  it('never installs npm packages on the runner that builds the image, so install scripts cannot touch the image the release job pushes', () => {
+    for (const needle of ['npm ci', 'npm install', 'setup-node']) expect(imageIndex(needle)).toBe(-1);
+  });
 
-    expect(builds).toHaveLength(2);
-    for (const build of builds) {
-      expect(build['platforms']).toBe('linux/amd64');
-      expect(build['context']).toBe('.');
-      expect(build['file']).toBe('templates/per-task-agent/Dockerfile');
-    }
-    expect(builds[1]?.['push']).toBe(true);
-    expect(builds[1]?.['tags']).toBe('${{ env.IMAGE }}:${{ steps.version.outputs.semver }}');
+  it('builds the image once, in the image job for linux/amd64 from the repository root, and the release job pushes that image, not a rebuild', () => {
+    const builds = [...imageSteps, ...checkSteps, ...releaseSteps].filter((step) => String(step['uses']).startsWith('docker/build-push-action@'));
+
+    expect(builds).toHaveLength(1);
+    expect(imageSteps).toContain(builds[0]);
+    const build = asRecord(builds[0]?.['with']);
+    expect(build['platforms']).toBe('linux/amd64');
+    expect(build['context']).toBe('.');
+    expect(build['file']).toBe('templates/per-task-agent/Dockerfile');
+    expect(build['outputs']).toBe('type=docker,dest=${{ runner.temp }}/per-task-agent-image.tar');
+    expect(build['tags']).toBe('per-task-agent:smoke');
     expect(text).toContain('IMAGE: ghcr.io/manyoars/per-task-agent');
+  });
+
+  it('hands the saved image to the check and release jobs through one artifact, and the release job tags it ghcr.io/manyoars/per-task-agent:<semver> before it pushes', () => {
+    const upload = asRecord(imageSteps[imageIndex('upload-artifact')]?.['with']);
+
+    expect(upload['path']).toBe('${{ runner.temp }}/per-task-agent-image.tar');
+    for (const steps of [checkSteps, releaseSteps]) {
+      const download = asRecord(steps[indexIn(steps, 'download-artifact')]?.['with']);
+      expect(download['name']).toBe(upload['name']);
+      expect(download['path']).toBe('${{ runner.temp }}');
+      expect(String(steps[indexIn(steps, 'docker load')]?.['run'])).toContain('per-task-agent-image.tar');
+    }
+    expect(String(releaseSteps[releaseIndex('docker push')]?.['run'])).toContain('docker tag per-task-agent:smoke "$IMAGE:$SEMVER"');
+  });
+
+  it('leaves no credential in the release job checkout, which holds the write token and never pushes to git', () => {
+    const checkouts = releaseSteps.filter((step) => String(step['uses']).startsWith('actions/checkout@'));
+
+    expect(checkouts.length).toBeGreaterThan(0);
+    for (const checkout of checkouts) expect(asRecord(checkout['with'])['persist-credentials']).toBe(false);
   });
 
   it('attests the pushed digest and puts it in the release notes', () => {
