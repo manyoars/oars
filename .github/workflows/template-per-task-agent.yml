@@ -1,15 +1,15 @@
 name: template-per-task-agent
 
-# Releases the per-task-agent image on a tag per-task-agent-v<semver>: the image is built once, the template's tests and the
-# container smoke test run against that image, then the same image is pushed to ghcr.io/manyoars/per-task-agent:<semver> with
-# build provenance and the digest in the release notes. A main push touching the template, the client, a root dependency file,
-# or this workflow runs the same check without publishing.
+# Releases the per-task-agent image on a tag per-task-agent-v<semver>: the image is built once, the template's tests
+# run, and the container smoke test runs against that image, then the same image is pushed to
+# ghcr.io/manyoars/per-task-agent:<semver> with build provenance and the digest in the release notes. A main push touching the
+# template, the client, a root dependency file, or this workflow runs the same check without publishing.
 on:
   push:
     tags: ['per-task-agent-v*']
-    # A push to main that touches this template, the client, a root dependency file, or this file runs the check job, so a
-    # broken template build shows on main instead of at release time. Nothing is published from main. GitHub does not
-    # evaluate path filters for a tag push, so a tag always runs both jobs.
+    # A push to main that touches this template, the client, a root dependency file, or this file runs the image and check
+    # jobs, so a broken template build shows on main instead of at release time. Nothing is published from main. GitHub does
+    # not evaluate path filters for a tag push, so a tag always runs every job.
     branches: [main]
     paths:
       - 'templates/per-task-agent/**'

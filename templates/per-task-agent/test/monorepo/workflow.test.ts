@@ -1,7 +1,8 @@
-// The release workflow (design 1T minimum §2.5): a main push touching the template runs the `check` job (tests and the container
-// smoke test, read-only token, nothing published); a tag per-task-agent-v<semver> also runs the tag-only `release` job, which
-// pushes ghcr.io/manyoars/per-task-agent:<semver> for linux/amd64, attests its provenance, and writes the digest into the release
-// notes. The repository is public, so only GitHub-hosted runners, and every action is pinned to a commit like ci.yml's.
+// The release workflow (design 1T minimum §2.5): a main push touching the template runs the `image` job (one build, saved as an
+// artifact) and the `check` job (tests, and the container smoke test of that image, read-only token, nothing published); a tag
+// per-task-agent-v<semver> also runs the tag-only `release` job, which pushes ghcr.io/manyoars/per-task-agent:<semver> for
+// linux/amd64, attests its provenance, and writes the digest into the release notes. The repository is public, so only
+// GitHub-hosted runners, and every action is pinned to a commit like ci.yml's.
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
