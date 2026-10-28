@@ -64,7 +64,9 @@ const BUYER_RULES = new Map<string, { status: number; message: string }>([
 /**
  * Spec 1 §13 problem type to buyer response. An unlisted 4xx (a suspended workload, a bad SDK key, a rejected request, ...)
  * is a fault on our side the buyer cannot fix: it is logged, with no keys or tokens, and answered 502 UPSTREAM_REJECTED.
- * Anything else unlisted (billing 5xx, no answer) gets a bare 503 UNAVAILABLE.
+ * Anything else unlisted (billing 5xx, no answer) gets a bare 503 UNAVAILABLE; its code and status are logged, nothing more,
+ * so an operator can tell a billing outage from a problem this template does not know. The recovery routes' `refused` and
+ * withCredits both answer through here, so this is the one place that logs it.
  */
 export const buyerResponse = (problem: BillingProblem): BuyerResponse => {
   const rule = BUYER_RULES.get(problem.code);
@@ -72,7 +74,10 @@ export const buyerResponse = (problem: BillingProblem): BuyerResponse => {
     console.warn(JSON.stringify({ event: 'billing-rejected', status: problem.status, code: problem.code, detail: problem.detail }));
     return { status: 502, body: { code: 'UPSTREAM_REJECTED', message: 'This service could not complete the request. Try again later.' } };
   }
-  if (rule === undefined) return { status: 503, body: { code: 'UNAVAILABLE', message: 'This service is not available right now. Try again.' } };
+  if (rule === undefined) {
+    console.warn(JSON.stringify({ event: 'billing-unavailable', status: problem.status, code: problem.code }));
+    return { status: 503, body: { code: 'UNAVAILABLE', message: 'This service is not available right now. Try again.' } };
+  }
   const response: BuyerResponse = { status: rule.status, body: { code: problem.code, message: rule.message } };
   if (problem.code === 'INSUFFICIENT_CREDITS' && problem.actionUrl !== undefined) response.body.checkoutUrl = problem.actionUrl;
   if (problem.code === 'CUSTOMER_REVOKED') response.body.recover = '/recover';
