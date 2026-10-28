@@ -27,7 +27,7 @@ OARS_DEV_FAKE_BILLING=1 npm run dev      # in-memory fake billing, nothing is ch
 npm test                                 # the unit tests
 ```
 
-Without `AOR_SDK_KEY` the server refuses to start; the platform injects the key.
+Without `AOR_SDK_KEY` the server refuses to start; the platform injects the key. Without `OARS_PUBLIC_URL` (the agent's own public https origin, injected by the platform beside the key) it refuses to start too.
 
 ## Deploy
 
