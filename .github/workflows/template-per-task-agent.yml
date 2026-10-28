@@ -1,8 +1,9 @@
 name: template-per-task-agent
 
-# Releases the per-task-agent image on a tag per-task-agent-v<semver>: the template's tests, the container smoke test, then
-# a push to ghcr.io/manyoars/per-task-agent:<semver> with build provenance and the digest in the release notes. A main push
-# touching the template, the client, a root dependency file, or this workflow runs the same check without publishing.
+# Releases the per-task-agent image on a tag per-task-agent-v<semver>: the image is built once, the template's tests and the
+# container smoke test run against that image, then the same image is pushed to ghcr.io/manyoars/per-task-agent:<semver> with
+# build provenance and the digest in the release notes. A main push touching the template, the client, a root dependency file,
+# or this workflow runs the same check without publishing.
 on:
   push:
     tags: ['per-task-agent-v*']
@@ -31,8 +32,41 @@ env:
   IMAGE: ghcr.io/manyoars/per-task-agent
 
 jobs:
-  check:
+  # Builds the image once. node:24-slim is unpinned (launch policy is latest stable, and a digest pin needs a bump bot), so the
+  # check and release jobs must not each build it: a tag could then publish a base image the smoke test never ran. This job
+  # runs no npm on the runner, so install scripts in the check job cannot touch the image before the release job pushes it.
+  image:
     # GitHub-hosted runners only: this repository is public.
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - name: Read the version for the image label
+        id: version
+        run: |
+          if [ "$GITHUB_REF_TYPE" = tag ]; then version="${GITHUB_REF_NAME#per-task-agent-v}"; else version="$GITHUB_SHA"; fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+      - name: Build the image
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          file: templates/per-task-agent/Dockerfile
+          platforms: linux/amd64
+          outputs: type=docker,dest=${{ runner.temp }}/per-task-agent-image.tar
+          tags: per-task-agent:smoke
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.version=${{ steps.version.outputs.version }}
+            org.opencontainers.image.licenses=Apache-2.0
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: per-task-agent-image
+          path: ${{ runner.temp }}/per-task-agent-image.tar
+          retention-days: 1
+
+  check:
+    needs: image
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -47,22 +81,19 @@ jobs:
       - run: npm run typecheck -w templates/per-task-agent
       - run: npm test -w templates/per-task-agent
       - run: npm run test:monorepo -w templates/per-task-agent
-      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
-      - name: Build the image for the smoke test
-        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          context: .
-          file: templates/per-task-agent/Dockerfile
-          platforms: linux/amd64
-          load: true
-          tags: per-task-agent:smoke
+          name: per-task-agent-image
+          path: ${{ runner.temp }}
+      - name: Load the image the image job built
+        run: docker load --input "$RUNNER_TEMP/per-task-agent-image.tar"
       - name: Container smoke test
         env:
           OARS_SMOKE_IMAGE: per-task-agent:smoke
         run: npm run test:smoke -w templates/per-task-agent
 
   release:
-    needs: check
+    needs: [image, check]
     if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -72,7 +103,10 @@ jobs:
       id-token: write # signs the provenance attestation
       attestations: write
     steps:
+      # Nothing here runs git, so the write token must not be left in .git/config.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: Read the version from the tag
         id: version
         run: |
@@ -82,26 +116,32 @@ jobs:
             exit 1
           fi
           echo "semver=$semver" >> "$GITHUB_OUTPUT"
-      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: per-task-agent-image
+          path: ${{ runner.temp }}
+      - name: Load the image the check job smoke-tested
+        run: docker load --input "$RUNNER_TEMP/per-task-agent-image.tar"
       - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      # Rebuilt from the same commit and Dockerfile the check job smoke-tested, since the jobs do not share a daemon.
+      # Pushes the image the smoke test ran, not a rebuild; the digest comes from what the registry reports for this push.
       - name: Push the image
         id: push
-        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
-        with:
-          context: .
-          file: templates/per-task-agent/Dockerfile
-          platforms: linux/amd64
-          push: true
-          tags: ${{ env.IMAGE }}:${{ steps.version.outputs.semver }}
-          labels: |
-            org.opencontainers.image.source=https://github.com/${{ github.repository }}
-            org.opencontainers.image.version=${{ steps.version.outputs.semver }}
-            org.opencontainers.image.licenses=Apache-2.0
+        env:
+          SEMVER: ${{ steps.version.outputs.semver }}
+        run: |
+          docker tag per-task-agent:smoke "$IMAGE:$SEMVER"
+          output="$(docker push "$IMAGE:$SEMVER")"
+          echo "$output"
+          digest="$(echo "$output" | grep -Eo 'digest: sha256:[0-9a-f]{64}' | tail -n 1 | cut -d' ' -f2)"
+          if [ -z "$digest" ]; then
+            echo "::error::docker push reported no digest"
+            exit 1
+          fi
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
       - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-name: ${{ env.IMAGE }}
