@@ -112,6 +112,7 @@ describe('.github/workflows/template-per-task-agent.yml', () => {
     const builds = [...imageSteps, ...checkSteps, ...releaseSteps].filter((step) => String(step['uses']).startsWith('docker/build-push-action@'));
 
     expect(builds).toHaveLength(1);
+    for (const step of [...checkSteps, ...releaseSteps]) expect(String(step['run'])).not.toMatch(/docker (buildx )?build\b/);
     expect(imageSteps).toContain(builds[0]);
     const build = asRecord(builds[0]?.['with']);
     expect(build['platforms']).toBe('linux/amd64');
