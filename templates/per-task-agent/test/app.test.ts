@@ -138,11 +138,12 @@ describe('POST /v1/customers', () => {
 
   it('leaves the region of another country to billing, which refuses it with 403', async () => {
     const { app, fake } = setup();
-    const upsert = vi.spyOn(fake, 'upsertCustomer');
+    const upsert = vi.spyOn(fake, 'upsertCustomer').mockRejectedValue(new BillingProblem({ status: 422, code: 'CUSTOMER_REGION_NOT_SUPPORTED' }));
 
-    await app.request('/v1/customers', post({ countryCode: 'DE' }));
+    const response = await app.request('/v1/customers', post({ countryCode: 'DE' }));
 
     expect(upsert).toHaveBeenCalledOnce();
+    expect(response.status).toBe(403);
   });
 
   it('says on GET / that regionCode is required for US', async () => {
@@ -151,15 +152,6 @@ describe('POST /v1/customers', () => {
     const body = await bodyOf(await app.request('/'));
 
     expect(JSON.stringify(body)).toContain('regionCode (required for US');
-  });
-
-  it('passes a billing refusal through the buyer mapping', async () => {
-    const { app, fake } = setup();
-    vi.spyOn(fake, 'upsertCustomer').mockRejectedValue(new BillingProblem({ status: 422, code: 'CUSTOMER_REGION_NOT_SUPPORTED' }));
-
-    const response = await app.request('/v1/customers', post({ countryCode: 'DE' }));
-
-    expect(response.status).toBe(403);
   });
 });
 

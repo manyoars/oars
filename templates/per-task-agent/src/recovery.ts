@@ -117,7 +117,7 @@ const send = (result: { status: number; body: unknown; retryAfter?: number }): R
 
 const invalid = (message: string): Response => send({ status: 400, body: { code: 'INVALID_REQUEST', message } });
 
-/** A billing failure answers through the buyer mapping (a bare 503 for anything that is not the buyer's business). */
+/** A billing failure answers through the buyer mapping (502 for an unlisted 4xx, 503 for billing trouble). */
 const refused = (error: unknown): Response => {
   if (!(error instanceof BillingProblem)) throw error;
   return send(buyerResponse(error));

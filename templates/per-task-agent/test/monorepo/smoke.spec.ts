@@ -79,6 +79,7 @@ const startStack = async (edit?: (text: string) => string): Promise<Stack> => {
   try {
     const container = await startContainer(image, {
       AOR_SDK_KEY: 'sdk_smoke',
+      OARS_PUBLIC_URL: 'https://agent.smoke.test',
       OARS_API_URL: `http://host.docker.internal:${new URL(prism.url).port}`,
     });
     return { prism, container };
@@ -101,7 +102,7 @@ const json = async (response: Response): Promise<{ [key: string]: unknown }> => 
 };
 
 const mintToken = async (url: string): Promise<string> => {
-  const response = await fetch(`${url}/v1/customers`, { method: 'POST', body: JSON.stringify({ countryCode: 'US' }) });
+  const response = await fetch(`${url}/v1/customers`, { method: 'POST', body: JSON.stringify({ countryCode: 'US', regionCode: 'NY' }) });
   expect(response.status).toBe(201);
   const { token } = await json(response);
   if (typeof token !== 'string') throw new Error('POST /v1/customers returned no token');
