@@ -311,10 +311,17 @@ export interface components {
          *     | `RESERVATION_COMMITTED` | 409 | The credit reservation was already committed; it can no longer be released. |
          *     | `IDEMPOTENCY_KEY_INVALID` | 400 | The Idempotency-Key is not a UUID or 64 hexadecimal characters. |
          *     | `CUSTOMER_REVOKED` | 410 | The customerRef was replaced by a token recovery; every agent billing call on it, the customer upsert included, is refused. |
+         *     | `PURCHASING_METHOD_NOT_FOUND` | 404 | The developer has no purchasing card or setup session in this mode. |
          *     | `RECOVERY_LINK_INVALID` | 410 | The recovery link is unknown, already used, expired, voided by a newer link, or for another agent. |
+         *     | `APPROVAL_LINK_INVALID` | 410 | The purchasing approval link is unknown, already used, expired, replaced by a newer proposal, or for another developer's agent. |
+         *     | `APPROVAL_NOT_PERMITTED` | 403 | Only a person signed in to the web app can approve a purchasing cap; a command-line or other client's token cannot. |
+         *     | `FRESH_SIGN_IN_REQUIRED` | 403 | Approving a purchasing cap needs a sign-in within the last 5 minutes; sign in again from the approval link. |
+         *     | `OFFER_INVALID` | 410 | The purchase offer is unknown, expired, already used, or issued in the other mode; ask the seller for a new one. |
+         *     | `PURCHASING_NOT_ENABLED` | 409 | The buying agent has no approved purchasing cap in the offer's mode; its developer approves one first. |
+         *     | `PURCHASING_METHOD_REQUIRED` | 409 | The buying agent's developer has no saved purchasing card in the offer's mode; a person saves one at actionUrl. |
          * @enum {string}
          */
-        BillingErrorCode: "SDK_KEY_INVALID" | "WORKLOAD_NOT_ACTIVE" | "WORKLOAD_NOT_FOUND" | "WORKLOAD_NOT_OWNED" | "PRICE_NOT_FOUND" | "PRICE_INACTIVE" | "PRICE_AMOUNT_IMMUTABLE" | "CUSTOMER_REGION_NOT_SUPPORTED" | "ACCOUNT_NOT_READY" | "SELLER_IDENTITY_INCOMPLETE" | "STRIPE_TERMS_URL_NOT_SET" | "PAYMENT_METHOD_REQUIRED" | "IDEMPOTENCY_CONFLICT" | "INSUFFICIENT_CREDITS" | "REFUND_EXCEEDS_REMAINING" | "CHARGE_NOT_REFUNDABLE" | "TEST_MODE_ONLY" | "RATE_LIMITED" | "PAYOUT_COUNTRY_NOT_SUPPORTED" | "HUMAN_SESSION_REQUIRED" | "TOPUP_AMOUNT_INVALID" | "TOPUP_NOT_FOUND" | "FEE_POLICY_INVALID" | "RESERVATION_NOT_FOUND" | "RESERVATION_EXPIRED" | "RESERVATION_RELEASED" | "RESERVATION_COMMITTED" | "IDEMPOTENCY_KEY_INVALID" | "CUSTOMER_REVOKED" | "RECOVERY_LINK_INVALID";
+        BillingErrorCode: "SDK_KEY_INVALID" | "WORKLOAD_NOT_ACTIVE" | "WORKLOAD_NOT_FOUND" | "WORKLOAD_NOT_OWNED" | "PRICE_NOT_FOUND" | "PRICE_INACTIVE" | "PRICE_AMOUNT_IMMUTABLE" | "CUSTOMER_REGION_NOT_SUPPORTED" | "ACCOUNT_NOT_READY" | "SELLER_IDENTITY_INCOMPLETE" | "STRIPE_TERMS_URL_NOT_SET" | "PAYMENT_METHOD_REQUIRED" | "IDEMPOTENCY_CONFLICT" | "INSUFFICIENT_CREDITS" | "REFUND_EXCEEDS_REMAINING" | "CHARGE_NOT_REFUNDABLE" | "TEST_MODE_ONLY" | "RATE_LIMITED" | "PAYOUT_COUNTRY_NOT_SUPPORTED" | "HUMAN_SESSION_REQUIRED" | "TOPUP_AMOUNT_INVALID" | "TOPUP_NOT_FOUND" | "FEE_POLICY_INVALID" | "RESERVATION_NOT_FOUND" | "RESERVATION_EXPIRED" | "RESERVATION_RELEASED" | "RESERVATION_COMMITTED" | "IDEMPOTENCY_KEY_INVALID" | "CUSTOMER_REVOKED" | "PURCHASING_METHOD_NOT_FOUND" | "RECOVERY_LINK_INVALID" | "APPROVAL_LINK_INVALID" | "APPROVAL_NOT_PERMITTED" | "FRESH_SIGN_IN_REQUIRED" | "OFFER_INVALID" | "PURCHASING_NOT_ENABLED" | "PURCHASING_METHOD_REQUIRED";
         /** @enum {string} */
         BillingMode: "TEST" | "LIVE";
         BillingModeView: {
@@ -336,6 +343,7 @@ export interface components {
             code?: components["schemas"]["BillingErrorCode"];
             detail?: string;
             instance?: string;
+            offer?: components["schemas"]["PurchaseOfferView"];
             requestId?: string;
             /** Format: int32 */
             status: number;
@@ -365,6 +373,7 @@ export interface components {
             /** @description true for LIVE billing mode */
             livemode: boolean;
             mode: components["schemas"]["ChargeMode"];
+            offer?: components["schemas"]["PurchaseOfferView"];
             /** Format: decimal */
             platformFeeUsd: string;
             /** Format: decimal */
@@ -603,6 +612,13 @@ export interface components {
             title?: string;
             type?: string;
             violations?: components["schemas"]["Violation"][];
+        };
+        /** @description On INSUFFICIENT_CREDITS, the seller's single-use purchase offer for the customer and mode, beside the pack checkout's actionUrl. A buyer agent buys with it. Absent when billing does not know the customer. */
+        PurchaseOfferView: {
+            /** Format: date-time */
+            expiresAt: string;
+            /** @example po_Zm9vYmFy */
+            offerId: string;
         };
         RecoveryRedemptionView: {
             /**
@@ -2506,7 +2522,7 @@ export interface operations {
                     "*/*": components["schemas"]["ProblemDetail"];
                 };
             };
-            /** @description INSUFFICIENT_CREDITS (actionUrl: a credit-pack checkout), IDEMPOTENCY_CONFLICT, WORKLOAD_NOT_ACTIVE */
+            /** @description INSUFFICIENT_CREDITS (actionUrl: a credit-pack checkout, offer: the seller's single-use purchase offer), IDEMPOTENCY_CONFLICT, WORKLOAD_NOT_ACTIVE */
             409: {
                 headers: {
                     [name: string]: unknown;

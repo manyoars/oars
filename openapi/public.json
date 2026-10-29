@@ -21,7 +21,7 @@
         "type": "string"
       },
       "BillingErrorCode": {
-        "description": "The billing error catalog (spec §9.2, §13). Branch on the code, never on the detail text.\n\n| Code | Status | Meaning |\n|---|---|---|\n| `SDK_KEY_INVALID` | 401 | The X-Agent-SDK-Key header is missing, malformed, revoked or unknown. |\n| `WORKLOAD_NOT_ACTIVE` | 409 | The agent's workload is no longer active. |\n| `WORKLOAD_NOT_FOUND` | 404 | No agent with this id. |\n| `WORKLOAD_NOT_OWNED` | 403 | The agent belongs to another developer. |\n| `PRICE_NOT_FOUND` | 404 | The agent has no price with this priceRef. |\n| `PRICE_INACTIVE` | 400 | The price is deactivated; activate it or use another price. |\n| `PRICE_AMOUNT_IMMUTABLE` | 409 | A charge or subscription already references the price; create a new one. |\n| `CUSTOMER_REGION_NOT_SUPPORTED` | 400 | Only US customers (the 50 states and DC) can be charged; the customer is elsewhere. |\n| `ACCOUNT_NOT_READY` | 409 | The developer's payout account cannot take live charges yet; a human finishes onboarding at actionUrl. |\n| `SELLER_IDENTITY_INCOMPLETE` | 409 | The agent's seller identity lacks a display name, support email or refund-policy URL; set them before going live. |\n| `STRIPE_TERMS_URL_NOT_SET` | 409 | The agent has a terms URL but the developer's Stripe account has none in its public business details; actionUrl is where to set it. |\n| `PAYMENT_METHOD_REQUIRED` | 409 | An off-session charge needs a saved card; use a CHECKOUT charge first. |\n| `IDEMPOTENCY_CONFLICT` | 409 | This Idempotency-Key was already used with a different request body. |\n| `INSUFFICIENT_CREDITS` | 409 | The customer has too few credits; actionUrl is a credit-pack checkout. |\n| `REFUND_EXCEEDS_REMAINING` | 409 | The refund is larger than what remains refundable on the charge. |\n| `CHARGE_NOT_REFUNDABLE` | 409 | The charge cannot be refunded through the API: not posted yet, flagged, disputed, failed or fully refunded. |\n| `TEST_MODE_ONLY` | 409 | The operation runs only in TEST mode (test charges). |\n| `RATE_LIMITED` | 429 | Too many requests for this agent or key; retry after the Retry-After seconds. |\n| `PAYOUT_COUNTRY_NOT_SUPPORTED` | 400 | Payout accounts are US-only at launch; the developer's country is elsewhere. |\n| `HUMAN_SESSION_REQUIRED` | 403 | A signed-in person must make this change; an API key or a connected agent tool cannot (payout account). |\n| `TOPUP_AMOUNT_INVALID` | 400 | A compute top-up is a whole-cent USD amount within the minimum and maximum. |\n| `TOPUP_NOT_FOUND` | 404 | No compute top-up with this id for the caller. |\n| `FEE_POLICY_INVALID` | 400 | The fee-policy version breaks a policy rule (admin API). |\n| `RESERVATION_NOT_FOUND` | 404 | No credit reservation with this id for the agent. |\n| `RESERVATION_EXPIRED` | 409 | The credit reservation lapsed before it was committed; reserve again. |\n| `RESERVATION_RELEASED` | 409 | The credit reservation was released; it can no longer be committed. |\n| `RESERVATION_COMMITTED` | 409 | The credit reservation was already committed; it can no longer be released. |\n| `IDEMPOTENCY_KEY_INVALID` | 400 | The Idempotency-Key is not a UUID or 64 hexadecimal characters. |\n| `CUSTOMER_REVOKED` | 410 | The customerRef was replaced by a token recovery; every agent billing call on it, the customer upsert included, is refused. |\n| `RECOVERY_LINK_INVALID` | 410 | The recovery link is unknown, already used, expired, voided by a newer link, or for another agent. |\n",
+        "description": "The billing error catalog (spec §9.2, §13). Branch on the code, never on the detail text.\n\n| Code | Status | Meaning |\n|---|---|---|\n| `SDK_KEY_INVALID` | 401 | The X-Agent-SDK-Key header is missing, malformed, revoked or unknown. |\n| `WORKLOAD_NOT_ACTIVE` | 409 | The agent's workload is no longer active. |\n| `WORKLOAD_NOT_FOUND` | 404 | No agent with this id. |\n| `WORKLOAD_NOT_OWNED` | 403 | The agent belongs to another developer. |\n| `PRICE_NOT_FOUND` | 404 | The agent has no price with this priceRef. |\n| `PRICE_INACTIVE` | 400 | The price is deactivated; activate it or use another price. |\n| `PRICE_AMOUNT_IMMUTABLE` | 409 | A charge or subscription already references the price; create a new one. |\n| `CUSTOMER_REGION_NOT_SUPPORTED` | 400 | Only US customers (the 50 states and DC) can be charged; the customer is elsewhere. |\n| `ACCOUNT_NOT_READY` | 409 | The developer's payout account cannot take live charges yet; a human finishes onboarding at actionUrl. |\n| `SELLER_IDENTITY_INCOMPLETE` | 409 | The agent's seller identity lacks a display name, support email or refund-policy URL; set them before going live. |\n| `STRIPE_TERMS_URL_NOT_SET` | 409 | The agent has a terms URL but the developer's Stripe account has none in its public business details; actionUrl is where to set it. |\n| `PAYMENT_METHOD_REQUIRED` | 409 | An off-session charge needs a saved card; use a CHECKOUT charge first. |\n| `IDEMPOTENCY_CONFLICT` | 409 | This Idempotency-Key was already used with a different request body. |\n| `INSUFFICIENT_CREDITS` | 409 | The customer has too few credits; actionUrl is a credit-pack checkout. |\n| `REFUND_EXCEEDS_REMAINING` | 409 | The refund is larger than what remains refundable on the charge. |\n| `CHARGE_NOT_REFUNDABLE` | 409 | The charge cannot be refunded through the API: not posted yet, flagged, disputed, failed or fully refunded. |\n| `TEST_MODE_ONLY` | 409 | The operation runs only in TEST mode (test charges). |\n| `RATE_LIMITED` | 429 | Too many requests for this agent or key; retry after the Retry-After seconds. |\n| `PAYOUT_COUNTRY_NOT_SUPPORTED` | 400 | Payout accounts are US-only at launch; the developer's country is elsewhere. |\n| `HUMAN_SESSION_REQUIRED` | 403 | A signed-in person must make this change; an API key or a connected agent tool cannot (payout account). |\n| `TOPUP_AMOUNT_INVALID` | 400 | A compute top-up is a whole-cent USD amount within the minimum and maximum. |\n| `TOPUP_NOT_FOUND` | 404 | No compute top-up with this id for the caller. |\n| `FEE_POLICY_INVALID` | 400 | The fee-policy version breaks a policy rule (admin API). |\n| `RESERVATION_NOT_FOUND` | 404 | No credit reservation with this id for the agent. |\n| `RESERVATION_EXPIRED` | 409 | The credit reservation lapsed before it was committed; reserve again. |\n| `RESERVATION_RELEASED` | 409 | The credit reservation was released; it can no longer be committed. |\n| `RESERVATION_COMMITTED` | 409 | The credit reservation was already committed; it can no longer be released. |\n| `IDEMPOTENCY_KEY_INVALID` | 400 | The Idempotency-Key is not a UUID or 64 hexadecimal characters. |\n| `CUSTOMER_REVOKED` | 410 | The customerRef was replaced by a token recovery; every agent billing call on it, the customer upsert included, is refused. |\n| `PURCHASING_METHOD_NOT_FOUND` | 404 | The developer has no purchasing card or setup session in this mode. |\n| `RECOVERY_LINK_INVALID` | 410 | The recovery link is unknown, already used, expired, voided by a newer link, or for another agent. |\n| `APPROVAL_LINK_INVALID` | 410 | The purchasing approval link is unknown, already used, expired, replaced by a newer proposal, or for another developer's agent. |\n| `APPROVAL_NOT_PERMITTED` | 403 | Only a person signed in to the web app can approve a purchasing cap; a command-line or other client's token cannot. |\n| `FRESH_SIGN_IN_REQUIRED` | 403 | Approving a purchasing cap needs a sign-in within the last 5 minutes; sign in again from the approval link. |\n| `OFFER_INVALID` | 410 | The purchase offer is unknown, expired, already used, or issued in the other mode; ask the seller for a new one. |\n| `PURCHASING_NOT_ENABLED` | 409 | The buying agent has no approved purchasing cap in the offer's mode; its developer approves one first. |\n| `PURCHASING_METHOD_REQUIRED` | 409 | The buying agent's developer has no saved purchasing card in the offer's mode; a person saves one at actionUrl. |\n",
         "enum": [
           "SDK_KEY_INVALID",
           "WORKLOAD_NOT_ACTIVE",
@@ -52,7 +52,14 @@
           "RESERVATION_COMMITTED",
           "IDEMPOTENCY_KEY_INVALID",
           "CUSTOMER_REVOKED",
-          "RECOVERY_LINK_INVALID"
+          "PURCHASING_METHOD_NOT_FOUND",
+          "RECOVERY_LINK_INVALID",
+          "APPROVAL_LINK_INVALID",
+          "APPROVAL_NOT_PERMITTED",
+          "FRESH_SIGN_IN_REQUIRED",
+          "OFFER_INVALID",
+          "PURCHASING_NOT_ENABLED",
+          "PURCHASING_METHOD_REQUIRED"
         ],
         "type": "string"
       },
@@ -102,6 +109,9 @@
           },
           "instance": {
             "type": "string"
+          },
+          "offer": {
+            "$ref": "#/components/schemas/PurchaseOfferView"
           },
           "requestId": {
             "type": "string"
@@ -184,6 +194,9 @@
           },
           "mode": {
             "$ref": "#/components/schemas/ChargeMode"
+          },
+          "offer": {
+            "$ref": "#/components/schemas/PurchaseOfferView"
           },
           "platformFeeUsd": {
             "format": "decimal",
@@ -757,6 +770,23 @@
             "type": "array"
           }
         }
+      },
+      "PurchaseOfferView": {
+        "description": "On INSUFFICIENT_CREDITS, the seller's single-use purchase offer for the customer and mode, beside the pack checkout's actionUrl. A buyer agent buys with it. Absent when billing does not know the customer.",
+        "properties": {
+          "expiresAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "offerId": {
+            "example": "po_Zm9vYmFy",
+            "type": "string"
+          }
+        },
+        "required": [
+          "expiresAt",
+          "offerId"
+        ]
       },
       "RecoveryRedemptionView": {
         "properties": {
@@ -3467,7 +3497,7 @@
                 }
               }
             },
-            "description": "INSUFFICIENT_CREDITS (actionUrl: a credit-pack checkout), IDEMPOTENCY_CONFLICT, WORKLOAD_NOT_ACTIVE"
+            "description": "INSUFFICIENT_CREDITS (actionUrl: a credit-pack checkout, offer: the seller's single-use purchase offer), IDEMPOTENCY_CONFLICT, WORKLOAD_NOT_ACTIVE"
           },
           "410": {
             "content": {
