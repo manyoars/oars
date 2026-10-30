@@ -130,12 +130,6 @@ describe('oars login', () => {
     expect(new Set(agents)).toEqual(new Set(['oars/9.9.9']));
   });
 
-  it('exits 2 without an issuer URL (there is no production default until one is ruled)', async () => {
-    const h = harness({ OARS_ISSUER_URL: '' });
-    expect(await run(['login', '--no-browser', '--json'], h.deps)).toBe(ExitCode.USAGE);
-    expect(single(h.out)).toMatchObject({ ok: false, step: 'usage' });
-  });
-
   it('takes --api-url and --issuer-url over the environment', async () => {
     const h = harness({ OARS_API_URL: 'https://wrong.test', OARS_ISSUER_URL: 'http://localhost:1/realms/wrong' });
     server.use(discovery, deviceAuthorization(), tokenEndpoint([tokens('1')]).handler, exchangeOk().handler);

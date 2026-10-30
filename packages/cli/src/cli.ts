@@ -93,7 +93,7 @@ const buildProgram = (deps: RunDeps, argv: string[]): Command => {
     .command('login')
     .description('sign in with your browser (RFC 8628 device flow)')
     .option('--no-browser', 'print the link and code without opening a browser')
-    .option('--issuer-url <url>', 'the Keycloak realm URL (default: OARS_ISSUER_URL)')
+    .option('--issuer-url <url>', 'the Keycloak realm URL (default: OARS_ISSUER_URL, else Many Oars once it has launched)')
     .action(async (_options: OptionValues, command: Command) => {
       const options: OptionValues = command.optsWithGlobals();
       const outcome = await login(deps, {
