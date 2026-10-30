@@ -45,7 +45,7 @@ const readTemplate = (directory: string): AgentTemplate | undefined => {
   if (!existsSync(file)) return undefined;
   const entries: unknown = parse(readFileSync(file, 'utf8'));
   const entry = toWire(Array.isArray(entries) ? entries[0] : undefined);
-  if (!isAgentTemplate(entry)) throw new Error(`${file} is not a catalog entry with a templateId, name, manifest and starterPrices`);
+  if (!isAgentTemplate(entry)) throw new Error(`${file} is not a catalog entry with a templateId, name, manifest, and starterPrices`);
   return entry;
 };
 
