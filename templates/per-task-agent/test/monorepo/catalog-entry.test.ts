@@ -1,11 +1,11 @@
 // Manifest: the catalog entry the platform's template catalog takes (kebab-case keys, bound by Spring) validates against
-// AgentTemplateResponse. The wire form is what the API serves, so the keys are converted to camelCase first.
+// AgentTemplateResponse, the schema `GET /agents/templates` serves (openapi/public.json). The wire form is what the API serves,
+// so the keys are converted to camelCase first and the amounts become decimal strings.
 import { readFileSync } from 'node:fs';
 import { Ajv } from 'ajv';
 import { describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
 import { loadConfig } from '../../src/config.js';
-import { agentTemplateSchema } from './agent-template-schema.js';
 
 const read = (relative: string): string => readFileSync(new URL(relative, import.meta.url), 'utf8');
 
@@ -24,7 +24,9 @@ const toWire = (value: unknown): unknown => {
   return Object.fromEntries(
     Object.entries(value).map(([key, inner]) => {
       const camel = key.replace(/-([a-z0-9])/g, (_match, letter: string) => letter.toUpperCase());
-      return [WIRE_NAMES.get(camel) ?? camel, toWire(inner)];
+      // The YAML amount is a number (5.00 parses as 5); the wire carries a decimal string with two places.
+      const wire = camel === 'amountUsd' && typeof inner === 'number' ? inner.toFixed(2) : toWire(inner);
+      return [WIRE_NAMES.get(camel) ?? camel, wire];
     }),
   );
 };
@@ -42,7 +44,7 @@ const entry: unknown = Array.isArray(entries) ? entries[0] : undefined;
 
 // OpenAPI's int32/int64/decimal formats are not JSON Schema formats, and the spec carries `example`; neither is under test.
 const ajv = new Ajv({ allErrors: true, strict: false, validateFormats: false });
-const validate = ajv.compile({ ...agentTemplateSchema, components: { schemas: strict(schemas) } });
+const validate = ajv.compile({ $ref: '#/components/schemas/AgentTemplateResponse', components: { schemas: strict(schemas) } });
 
 describe('catalog-entry.yaml', () => {
   it('holds exactly one template, the one the catalog calls per-task-agent', () => {
@@ -60,7 +62,7 @@ describe('catalog-entry.yaml', () => {
   it('is rejected when a field is wrong, so the check above can fail', () => {
     const wrong = toWire(entry);
     if (!isRecord(wrong) || !Array.isArray(wrong['starterPrices'])) throw new Error('the entry has no starter prices');
-    const prices = wrong['starterPrices'].map((price: unknown) => (isRecord(price) ? { ...price, amountUsd: 0.1, surprise: true } : price));
+    const prices = wrong['starterPrices'].map((price: unknown) => (isRecord(price) ? { ...price, credits: 0, surprise: true } : price));
 
     expect(validate({ ...wrong, starterPrices: prices })).toBe(false);
     expect(validate.errors?.map((error) => error.keyword).sort()).toEqual(['additionalProperties', 'additionalProperties', 'minimum', 'minimum']);
@@ -82,19 +84,15 @@ describe('catalog-entry.yaml', () => {
     const prices = isRecord(wire) && Array.isArray(wire['starterPrices']) ? wire['starterPrices'] : [];
 
     expect(prices).toMatchObject([
-      { priceRef: 'task-1', amountUsd: 9, kind: 'CREDIT_PACK', credits: 1 },
-      { priceRef: 'tasks-5', amountUsd: 40, kind: 'CREDIT_PACK', credits: 5 },
+      { priceRef: 'task-1', amountUsd: '9.00', kind: 'CREDIT_PACK', credits: 1 },
+      { priceRef: 'tasks-5', amountUsd: '40.00', kind: 'CREDIT_PACK', credits: 5 },
     ]);
     expect(prices.map((price: unknown) => (isRecord(price) ? price['priceRef'] : undefined))).toEqual(loadConfig({ OARS_DEV_FAKE_BILLING: '1' }).priceRefs);
   });
 });
 
 describe('the AgentTemplateResponse schema', () => {
-  // Tripwire: the hand-written copy exists only because openapi/public.json lacks the real one (spec 1's T87).
-  it('is swapped for the generated one as soon as openapi/public.json carries it', () => {
-    expect(
-      Object.keys(schemas),
-      'openapi/public.json now has AgentTemplateResponse: validate the catalog entry against it and delete test/monorepo/agent-template-schema.ts',
-    ).not.toContain('AgentTemplateResponse');
+  it('is the one openapi/public.json generates from the platform, not a hand-written copy', () => {
+    expect(Object.keys(schemas)).toContain('AgentTemplateResponse');
   });
 });
