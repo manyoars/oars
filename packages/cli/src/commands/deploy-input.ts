@@ -1,6 +1,7 @@
 import { readFile } from 'node:fs/promises';
 import type { components } from '@manyoars/oars-client';
 import { CliError, ExitCode } from '../errors.js';
+import type { AgentTemplate } from './templates.js';
 
 type RegisterWorkloadRequest = components['schemas']['RegisterWorkloadRequest'];
 type WorkloadServiceSpec = components['schemas']['WorkloadServiceSpec'];
@@ -19,7 +20,7 @@ export interface DeployFlags {
   cpuMillicores?: number;
   memoryMib?: number;
   alwaysOn?: boolean;
-  /** `--price`: starter prices to pick from a template. */
+  /** `--price`: starter prices to pick from a template (all of them by default). */
   prices: string[];
   /** `--no-prices`. */
   noPrices: boolean;
@@ -106,9 +107,21 @@ const requestFromFlags = (flags: DeployFlags, image: string): RegisterWorkloadRe
   };
 };
 
-const requestFromFile = async (flags: DeployFlags, path: string): Promise<RegisterWorkloadRequest> => {
+/** The register body of an --image or --manifest deploy. */
+const imageOrFileRequest = async (flags: DeployFlags): Promise<RegisterWorkloadRequest> => {
+  if (flags.image !== undefined) return requestFromFlags(flags, flags.image);
+  if (flags.manifestFile !== undefined) return requestFromFile(flags, flags.manifestFile);
+  throw usage('Pass exactly one of --template, --image or --manifest.');
+};
+
+/** The flags that describe an --image deploy; a template or a manifest file holds its own. */
+const refuseImageFlags = (flags: DeployFlags, source: string): void => {
   const given = (['name', 'port', 'public', 'cpuMillicores', 'memoryMib'] as const).filter((key) => flags[key] !== undefined);
-  if (given.length > 0) throw usage('--name, --port, --public, --cpu-millicores and --memory-mib describe an --image deploy; a --manifest file holds its own.');
+  if (given.length > 0) throw usage(`--name, --port, --public, --cpu-millicores and --memory-mib describe an --image deploy; ${source} holds its own.`);
+};
+
+const requestFromFile = async (flags: DeployFlags, path: string): Promise<RegisterWorkloadRequest> => {
+  refuseImageFlags(flags, 'a --manifest file');
   const parsed = await readJson(path);
   if (!isRegisterRequest(parsed)) {
     throw usage(`${path} is not a workload manifest: it needs a name and services, each with name, image, cpuMillicores and memoryMib.`);
@@ -125,25 +138,63 @@ const pricesFromFile = async (path: string): Promise<CreatePriceInput[]> => {
   return parsed;
 };
 
-const baseRequest = async (flags: DeployFlags): Promise<RegisterWorkloadRequest> => {
-  if (flags.image !== undefined) return requestFromFlags(flags, flags.image);
-  if (flags.manifestFile !== undefined) return requestFromFile(flags, flags.manifestFile);
-  throw usage('--template is not available yet: the public API does not publish the template catalog. Deploy with --image <name@sha256:...> --name <name>, or with --manifest <file>.');
+/** A starter price as the create call takes it. `credits` is left out of a price that has none (the wire may carry null). */
+const priceFromTemplate = (price: AgentTemplate['starterPrices'][number]): CreatePriceInput => ({
+  priceRef: price.priceRef,
+  displayName: price.displayName,
+  amountUsd: price.amountUsd,
+  kind: price.kind,
+  ...(typeof price.credits === 'number' ? { credits: price.credits } : {}),
+});
+
+/** `--template`: the entry's manifest, and the starter prices `--price` picked (every one without it, none for `--no-prices`). */
+const fromTemplate = (flags: DeployFlags, template: AgentTemplate): DeployInput => {
+  const wanted = flags.noPrices ? [] : flags.prices;
+  const unknown = wanted.filter((ref) => !template.starterPrices.some((price) => price.priceRef === ref));
+  if (unknown.length > 0) {
+    throw usage(`Template ${template.templateId} has no starter price ${unknown.join(', ')}; its prices are ${template.starterPrices.map((price) => price.priceRef).join(', ')}.`);
+  }
+  const chosen = flags.noPrices || flags.prices.length > 0 ? template.starterPrices.filter((price) => wanted.includes(price.priceRef)) : template.starterPrices;
+  return { request: flags.alwaysOn === true ? { ...template.manifest, alwaysOn: true } : template.manifest, prices: chosen.map(priceFromTemplate) };
 };
 
+/** A catalog entry's id is what the platform serves, so an id it does not list is exit 2 naming the ids it does. */
+const findTemplate = async (id: string, resolve: TemplateLookup): Promise<AgentTemplate> => {
+  const catalog = await resolve();
+  const found = catalog.find((template) => template.templateId === id);
+  if (found === undefined) {
+    throw usage(`No template ${id}. ${catalog.length === 0 ? 'The catalog is empty.' : `Available: ${catalog.map((template) => template.templateId).join(', ')}.`} List them with: oars templates`);
+  }
+  return found;
+};
+
+/** The checks on a `--template` deploy's flags, then its catalog entry; the flags are all read before the one GET. */
+const templateInput = async (flags: DeployFlags, id: string, catalog: TemplateLookup): Promise<DeployInput> => {
+  refuseImageFlags(flags, 'the template');
+  if (flags.priceFile !== undefined) throw usage('--price-file adds prices to an --image or --manifest deploy; a template brings its own: choose among them with --price, or skip them with --no-prices.');
+  if (flags.noPrices && flags.prices.length > 0) throw usage('--price and --no-prices contradict each other.');
+  return fromTemplate(flags, await findTemplate(id, catalog));
+};
+
+/** Reads the catalog once, when a `--template` deploy has passed every check that needs no network. */
+export type TemplateLookup = () => Promise<AgentTemplate[]>;
+
 /**
- * Turns the flags into the calls' bodies without touching the network, so a mistake costs nothing. Exactly one of
- * `--template`, `--image`, `--manifest`; `--template` waits for the public template catalog (the `oars templates` brief).
+ * Turns the flags into the calls' bodies. Exactly one of `--template`, `--image`, `--manifest`. Every mistake the flags alone can
+ * show is found before any request; only `--template` then reads the catalog (`catalog`), so a typo there costs one GET.
  */
-export const loadDeployInput = async (flags: DeployFlags, env: NodeJS.ProcessEnv): Promise<DeployInput> => {
+export const loadDeployInput = async (flags: DeployFlags, env: NodeJS.ProcessEnv, catalog: TemplateLookup): Promise<DeployInput> => {
   if ([flags.template, flags.image, flags.manifestFile].filter((source) => source !== undefined).length !== 1) {
     throw usage('Pass exactly one of --template, --image or --manifest.');
   }
-  const base = await baseRequest(flags);
-  if (flags.prices.length > 0 || flags.noPrices) throw usage("--price and --no-prices choose among a template's starter prices; use --price-file with --image or --manifest.");
+  const picked = flags.template === undefined ? undefined : await templateInput(flags, flags.template, catalog);
+  if (picked === undefined && (flags.prices.length > 0 || flags.noPrices)) {
+    throw usage("--price and --no-prices choose among a template's starter prices; use --price-file with --image or --manifest.");
+  }
+  const base = picked?.request ?? (await imageOrFileRequest(flags));
   const secrets = [...(base.secrets ?? []), ...secretsFrom(flags, env)];
   return {
     request: secrets.length === 0 ? base : { ...base, secrets },
-    prices: flags.priceFile === undefined ? [] : await pricesFromFile(flags.priceFile),
+    prices: picked?.prices ?? (flags.priceFile === undefined ? [] : await pricesFromFile(flags.priceFile)),
   };
 };

@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { http, HttpResponse } from 'msw';
 import { describe, expect, it } from 'vitest';
 import { run } from './cli.js';
+import type { AgentTemplate } from './commands/templates.js';
 import { ExitCode } from './errors.js';
 import { fakePlatform, SDK_KEY, WORKLOAD_ID } from './fake-platform.js';
 import { API, harness, server, useServer, type Harness } from './test-support.js';
@@ -19,6 +20,16 @@ const PRICES = [
 const REGISTER = { method: 'POST', path: '/agents/workloads', body: MANIFEST };
 const PRICE_PATH = '/billing/agents/{workloadId}/prices';
 const DEPLOY = { method: 'POST', path: '/agents/workloads/{workloadId}/deploy', body: null };
+const TEMPLATE: AgentTemplate = {
+  templateId: 'paid-api',
+  name: 'Paid API',
+  description: 'An HTTP API that charges per call through credit packs',
+  manifest: MANIFEST,
+  starterPrices: [
+    { priceRef: 'calls-100', displayName: '100 calls', amountUsd: '5.00', kind: 'CREDIT_PACK', credits: 100 },
+    { priceRef: 'calls-1000', displayName: '1,000 calls', amountUsd: '40.00', kind: 'CREDIT_PACK', credits: 1000 },
+  ],
+};
 /** The calls of a template-less deploy with its defaults: the order the web deploy page makes them in. */
 const PLAN = [REGISTER, { method: 'POST', path: PRICE_PATH, body: PRICES[0] }, { method: 'POST', path: PRICE_PATH, body: PRICES[1] }, DEPLOY];
 
@@ -317,11 +328,77 @@ describe('oars deploy: usage', () => {
     expect(platform.calls).toEqual([]);
   });
 
-  it('--template is exit 2 until the public API publishes the template catalog', async () => {
+  it('--template with an id the catalog does not list is exit 2 naming the ids it does, and registers nothing', async () => {
     const { h } = setup();
-    const platform = fakePlatform();
+    const platform = fakePlatform({ templates: [TEMPLATE] });
+    expect(await run(['deploy', '--template', 'no-such-template'], h.deps)).toBe(ExitCode.USAGE);
+    expect(stderr(h)).toContain('No template no-such-template. Available: paid-api.');
+    expect(platform.plan()).toEqual([]);
+  });
+
+  it('--template against an empty catalog says the catalog is empty', async () => {
+    const { h } = setup();
+    fakePlatform();
     expect(await run(['deploy', '--template', 'paid-api'], h.deps)).toBe(ExitCode.USAGE);
-    expect(stderr(h)).toContain('--image');
+    expect(stderr(h)).toContain('The catalog is empty.');
+  });
+
+  it.each([
+    ['--price-file', (path: string) => ['--price-file', path]],
+    ['--name', () => ['--name', 'x']],
+    ['--price with --no-prices', () => ['--price', 'calls-100', '--no-prices']],
+    ['a --price the template lacks', () => ['--price', 'calls-5']],
+  ])('--template with %s is exit 2 and registers nothing', async (_label, extra) => {
+    const { h, prices } = setup();
+    const platform = fakePlatform({ templates: [TEMPLATE] });
+    expect(await run(['deploy', '--template', 'paid-api', ...extra(prices)], h.deps)).toBe(ExitCode.USAGE);
+    expect(platform.plan()).toEqual([]);
+  });
+
+  it('--template names the starter prices it has when --price names one it lacks', async () => {
+    const { h } = setup();
+    fakePlatform({ templates: [TEMPLATE] });
+    expect(await run(['deploy', '--template', 'paid-api', '--price', 'calls-5'], h.deps)).toBe(ExitCode.USAGE);
+    expect(stderr(h)).toContain('has no starter price calls-5; its prices are calls-100, calls-1000.');
+  });
+
+  it('--template registers the entry, creates every starter price, then deploys', async () => {
+    const { h } = setup();
+    const platform = fakePlatform({ templates: [TEMPLATE] });
+    expect(await run(['deploy', '--template', 'paid-api', '--idempotency-key', 'K'], h.deps)).toBe(ExitCode.OK);
+    expect(platform.plan()).toEqual(PLAN);
+    expect(platform.calls.map((call) => call.key)).toEqual([null, KEYS.register, KEYS.first, KEYS.second, KEYS.deploy]);
+  });
+
+  it('--template --price creates only the starter prices named, in the template order', async () => {
+    const { h } = setup();
+    const platform = fakePlatform({ templates: [TEMPLATE] });
+    expect(await run(['deploy', '--template', 'paid-api', '--price', 'calls-1000', '--price', 'calls-100'], h.deps)).toBe(ExitCode.OK);
+    expect(platform.plan()).toEqual([REGISTER, { method: 'POST', path: PRICE_PATH, body: PRICES[0] }, { method: 'POST', path: PRICE_PATH, body: PRICES[1] }, DEPLOY]);
+    expect(await run(['deploy', '--template', 'paid-api', '--price', 'calls-1000'], setup().h.deps)).toBe(ExitCode.OK);
+    expect(platform.plan().slice(4)).toEqual([REGISTER, { method: 'POST', path: PRICE_PATH, body: PRICES[1] }, DEPLOY]);
+  });
+
+  it('--template --no-prices --always-on --secret-from-env registers and deploys with no prices, the flag and the secret', async () => {
+    const { h } = setup({ TOKEN: 'abc' });
+    const platform = fakePlatform({ templates: [TEMPLATE] });
+    expect(await run(['deploy', '--template', 'paid-api', '--no-prices', '--always-on', '--secret-from-env', 'TOKEN'], h.deps)).toBe(ExitCode.OK);
+    expect(platform.plan()).toEqual([{ ...REGISTER, body: { ...MANIFEST, alwaysOn: true, secrets: [{ name: 'TOKEN', value: 'abc' }] } }, DEPLOY]);
+  });
+
+  it('--template sends a starter price without credits as the entry gives it, and drops a null', async () => {
+    const { h } = setup();
+    const monthly = { priceRef: 'pro', displayName: 'Pro', amountUsd: '20.00', kind: 'RECURRING_MONTHLY' as const };
+    const platform = fakePlatform();
+    server.use(http.get(`${API}/agents/templates`, () => HttpResponse.json({ content: [{ ...TEMPLATE, starterPrices: [{ ...monthly, credits: null }] }], last: true })));
+    expect(await run(['deploy', '--template', 'paid-api'], h.deps)).toBe(ExitCode.OK);
+    expect(platform.plan()[1]?.body).toEqual(monthly);
+  });
+
+  it('--template needs a login before it reads the catalog', async () => {
+    const { h } = setup({ OARS_API_KEY: '' });
+    const platform = fakePlatform({ templates: [TEMPLATE] });
+    expect(await run(['deploy', '--template', 'paid-api'], h.deps)).toBe(ExitCode.AUTH);
     expect(platform.calls).toEqual([]);
   });
 
