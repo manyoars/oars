@@ -11,7 +11,7 @@ installs or imports to do that:
 | `openapi/public.json` | The slice of the platform API that the CLI and the templates call, generated from the platform's OpenAPI by `scripts/openapi-public.mjs` and the operation list in `openapi/public-operations.json` | here |
 | `templates/paid-api` | Starter template: an HTTP API that charges per call | here |
 | `templates/per-task-agent` | Starter template: a job that charges per finished task | here |
-| `packages/cli` | `@manyoars/oars`, the `oars` command: `login`, `templates`, `deploy`, `status`, `test-charge` | to come |
+| `packages/cli` | `@manyoars/oars`, the `oars` command: `login`, `templates`, `deploy`, `status`, `test-charge` | published on npm as [`@manyoars/oars`](https://www.npmjs.com/package/@manyoars/oars) at 0.1.x |
 
 ## Develop
 

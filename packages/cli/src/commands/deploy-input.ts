@@ -111,13 +111,13 @@ const requestFromFlags = (flags: DeployFlags, image: string): RegisterWorkloadRe
 const imageOrFileRequest = async (flags: DeployFlags): Promise<RegisterWorkloadRequest> => {
   if (flags.image !== undefined) return requestFromFlags(flags, flags.image);
   if (flags.manifestFile !== undefined) return requestFromFile(flags, flags.manifestFile);
-  throw usage('Pass exactly one of --template, --image or --manifest.');
+  throw usage('Pass exactly one of --template, --image, or --manifest.');
 };
 
 /** The flags that describe an --image deploy; a template or a manifest file holds its own. */
 const refuseImageFlags = (flags: DeployFlags, source: string): void => {
   const given = (['name', 'port', 'public', 'cpuMillicores', 'memoryMib'] as const).filter((key) => flags[key] !== undefined);
-  if (given.length > 0) throw usage(`--name, --port, --public, --cpu-millicores and --memory-mib describe an --image deploy; ${source} holds its own.`);
+  if (given.length > 0) throw usage(`--name, --port, --public, --cpu-millicores, and --memory-mib describe an --image deploy; ${source} holds its own.`);
 };
 
 const requestFromFile = async (flags: DeployFlags, path: string): Promise<RegisterWorkloadRequest> => {
@@ -185,7 +185,7 @@ export type TemplateLookup = () => Promise<AgentTemplate[]>;
  */
 export const loadDeployInput = async (flags: DeployFlags, env: NodeJS.ProcessEnv, catalog: TemplateLookup): Promise<DeployInput> => {
   if ([flags.template, flags.image, flags.manifestFile].filter((source) => source !== undefined).length !== 1) {
-    throw usage('Pass exactly one of --template, --image or --manifest.');
+    throw usage('Pass exactly one of --template, --image, or --manifest.');
   }
   const picked = flags.template === undefined ? undefined : await templateInput(flags, flags.template, catalog);
   if (picked === undefined && (flags.prices.length > 0 || flags.noPrices)) {

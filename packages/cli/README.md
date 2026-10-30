@@ -32,7 +32,7 @@ These flags work on every command:
 Signs in with your browser (RFC 8628 device flow) and stores the login.
 
 - `--no-browser` prints the link and code without opening a browser.
-- `--issuer-url <url>` is the Keycloak realm URL. The default is `OARS_ISSUER_URL`; with neither, the command exits 2.
+- `--issuer-url <url>` is the Keycloak realm URL. The default is `OARS_ISSUER_URL`. With neither, `login` uses the built-in Many Oars issuer once Many Oars has launched, which it learns from `https://manyoars.com/.well-known/oars.json` (`{"launched": true}`). The flag only switches the built-in issuer on; it never supplies a URL. Before launch, with no `--issuer-url` or `OARS_ISSUER_URL`, the command prints "Many Oars has not launched yet: pass --issuer-url or set OARS_ISSUER_URL." and exits 2.
 
 ### logout
 
@@ -44,7 +44,7 @@ Revokes the stored login and deletes it.
 
 ### deploy
 
-Registers a workload, creates its prices and deploys it. Pass exactly one of `--template`, `--image` or `--manifest`. It stops at the first failed step and exits 9 (see below).
+Registers a workload, creates its prices and deploys it. Pass exactly one of `--template`, `--image`, or `--manifest`. It stops at the first failed step and exits 9 (see below). A `--template` id the catalog lacks exits 2, and an unreachable catalog exits 8, before anything is registered.
 
 - `--image <ref>` deploys an image pinned by digest (`name@sha256:...`). Companions: `--name <name>`, `--port <n>` (default 8080), `--public`, `--cpu-millicores <n>` (default 250), `--memory-mib <n>` (default 256).
 - `--manifest <file>` deploys a JSON workload manifest.
@@ -85,7 +85,7 @@ Exit codes:
 | 3 | authentication failed (login expired or denied, SDK key invalid, HTTP 401 or 403) |
 | 4 | the platform rejected the input |
 | 5 | conflict (an idempotency key or workload already used) |
-| 6 | a person must act first (account, payment method, credits or compute cap) |
+| 6 | a person must act first (account, payment method, credits or compute cap); the last stderr line starts "Needs you:" and names the link |
 | 7 | rate limited |
 | 8 | the platform could not be reached |
 | 9 | `deploy` stopped part way; rerun the printed command to resume |

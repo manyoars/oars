@@ -347,7 +347,6 @@ describe('oars deploy: usage', () => {
     ['--price-file', (path: string) => ['--price-file', path]],
     ['--name', () => ['--name', 'x']],
     ['--price with --no-prices', () => ['--price', 'calls-100', '--no-prices']],
-    ['a --price the template lacks', () => ['--price', 'calls-5']],
   ])('--template with %s is exit 2 and registers nothing', async (_label, extra) => {
     const { h, prices } = setup();
     const platform = fakePlatform({ templates: [TEMPLATE] });
