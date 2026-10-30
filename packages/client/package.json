@@ -1,6 +1,6 @@
 {
   "name": "@manyoars/oars-client",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Typed client for the Many Oars public API: types generated from openapi/public.json and a thin openapi-fetch wrapper",
   "license": "Apache-2.0",
   "repository": {
