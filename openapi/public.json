@@ -20,6 +20,44 @@
         ],
         "type": "string"
       },
+      "AgentTemplateResponse": {
+        "description": "Page content",
+        "properties": {
+          "description": {
+            "maxLength": 4000,
+            "minLength": 1,
+            "type": "string"
+          },
+          "manifest": {
+            "$ref": "#/components/schemas/RegisterWorkloadRequest"
+          },
+          "name": {
+            "maxLength": 120,
+            "minLength": 1,
+            "type": "string"
+          },
+          "starterPrices": {
+            "items": {
+              "$ref": "#/components/schemas/TemplateStarterPrice"
+            },
+            "maxItems": 10,
+            "minItems": 0,
+            "type": "array"
+          },
+          "templateId": {
+            "minLength": 1,
+            "pattern": "^[a-z0-9]([a-z0-9-]{0,62}[a-z0-9])?$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "description",
+          "manifest",
+          "name",
+          "starterPrices",
+          "templateId"
+        ]
+      },
       "BillingErrorCode": {
         "description": "The billing error catalog (spec §9.2, §13). Branch on the code, never on the detail text.\n\n| Code | Status | Meaning |\n|---|---|---|\n| `SDK_KEY_INVALID` | 401 | The X-Agent-SDK-Key header is missing, malformed, revoked or unknown. |\n| `WORKLOAD_NOT_ACTIVE` | 409 | The agent's workload is no longer active. |\n| `WORKLOAD_NOT_FOUND` | 404 | No agent with this id. |\n| `WORKLOAD_NOT_OWNED` | 403 | The agent belongs to another developer. |\n| `PRICE_NOT_FOUND` | 404 | The agent has no price with this priceRef. |\n| `PRICE_INACTIVE` | 400 | The price is deactivated; activate it or use another price. |\n| `PRICE_AMOUNT_IMMUTABLE` | 409 | A charge or subscription already references the price; create a new one. |\n| `CUSTOMER_REGION_NOT_SUPPORTED` | 400 | Only US customers (the 50 states and DC) can be charged; the customer is elsewhere. |\n| `ACCOUNT_NOT_READY` | 409 | The developer's payout account cannot take live charges yet; a human finishes onboarding at actionUrl. |\n| `SELLER_IDENTITY_INCOMPLETE` | 409 | The agent's seller identity lacks a display name, support email or refund-policy URL; set them before going live. |\n| `STRIPE_TERMS_URL_NOT_SET` | 409 | The agent has a terms URL but the developer's Stripe account has none in its public business details; actionUrl is where to set it. |\n| `PAYMENT_METHOD_REQUIRED` | 409 | An off-session charge needs a saved card; use a CHECKOUT charge first. |\n| `IDEMPOTENCY_CONFLICT` | 409 | This Idempotency-Key was already used with a different request body. |\n| `INSUFFICIENT_CREDITS` | 409 | The customer has too few credits; actionUrl is a credit-pack checkout. |\n| `REFUND_EXCEEDS_REMAINING` | 409 | The refund is larger than what remains refundable on the charge. |\n| `CHARGE_NOT_REFUNDABLE` | 409 | The charge cannot be refunded through the API: not posted yet, flagged, disputed, failed or fully refunded. |\n| `TEST_MODE_ONLY` | 409 | The operation runs only in TEST mode (test charges). |\n| `RATE_LIMITED` | 429 | Too many requests for this agent or key; retry after the Retry-After seconds. |\n| `PAYOUT_COUNTRY_NOT_SUPPORTED` | 400 | Payout accounts are US-only at launch; the developer's country is elsewhere. |\n| `HUMAN_SESSION_REQUIRED` | 403 | A signed-in person must make this change; an API key or a connected agent tool cannot (payout account). |\n| `TOPUP_AMOUNT_INVALID` | 400 | A compute top-up is a whole-cent USD amount within the minimum and maximum. |\n| `TOPUP_NOT_FOUND` | 404 | No compute top-up with this id for the caller. |\n| `FEE_POLICY_INVALID` | 400 | The fee-policy version breaks a policy rule (admin API). |\n| `RESERVATION_NOT_FOUND` | 404 | No credit reservation with this id for the agent. |\n| `RESERVATION_EXPIRED` | 409 | The credit reservation lapsed before it was committed; reserve again. |\n| `RESERVATION_RELEASED` | 409 | The credit reservation was released; it can no longer be committed. |\n| `RESERVATION_COMMITTED` | 409 | The credit reservation was already committed; it can no longer be released. |\n| `IDEMPOTENCY_KEY_INVALID` | 400 | The Idempotency-Key is not a UUID or 64 hexadecimal characters. |\n| `CUSTOMER_REVOKED` | 410 | The customerRef was replaced by a token recovery; every agent billing call on it, the customer upsert included, is refused. |\n| `PURCHASING_METHOD_NOT_FOUND` | 404 | The developer has no purchasing card or setup session in this mode. |\n| `RECOVERY_LINK_INVALID` | 410 | The recovery link is unknown, already used, expired, voided by a newer link, or for another agent. |\n| `APPROVAL_LINK_INVALID` | 410 | The purchasing approval link is unknown, already used, expired, replaced by a newer proposal, or for another developer's agent. |\n| `APPROVAL_NOT_PERMITTED` | 403 | Only a person signed in to the web app can approve a purchasing cap; a command-line or other client's token cannot. |\n| `FRESH_SIGN_IN_REQUIRED` | 403 | Approving a purchasing cap needs a sign-in within the last 5 minutes; sign in again from the approval link. |\n| `OFFER_INVALID` | 410 | The purchase offer is unknown, expired, already used, or issued in the other mode; ask the seller for a new one. |\n| `PURCHASING_NOT_ENABLED` | 409 | The buying agent has no approved purchasing cap in the offer's mode; its developer approves one first. |\n| `PURCHASING_METHOD_REQUIRED` | 409 | The buying agent's developer has no saved purchasing card in the offer's mode; a person saves one at actionUrl. |\n",
         "enum": [
@@ -229,7 +267,7 @@
       "CreateChargeInput": {
         "properties": {
           "cancelUrl": {
-            "description": "CHECKOUT only: where the customer lands after cancelling",
+            "description": "CHECKOUT only: where the customer lands after cancelling. Omit it to return them to the agent's public page (manyoars.com/agents/<slug>) when that page is visible; with no visible page, a missing cancelUrl is rejected",
             "maxLength": 2048,
             "minLength": 0,
             "pattern": "^https?://.+",
@@ -562,6 +600,73 @@
         },
         "required": [
           "accessToken"
+        ]
+      },
+      "PageAgentTemplateResponse": {
+        "properties": {
+          "content": {
+            "description": "Page content",
+            "items": {
+              "$ref": "#/components/schemas/AgentTemplateResponse"
+            },
+            "type": "array"
+          },
+          "empty": {
+            "description": "True if this page has no content",
+            "type": "boolean"
+          },
+          "first": {
+            "description": "True if this is the first page",
+            "type": "boolean"
+          },
+          "last": {
+            "description": "True if this is the last page",
+            "type": "boolean"
+          },
+          "number": {
+            "description": "Zero-indexed page number",
+            "format": "int32",
+            "type": "integer"
+          },
+          "numberOfElements": {
+            "description": "Number of elements on this page",
+            "format": "int32",
+            "type": "integer"
+          },
+          "pageable": {
+            "$ref": "#/components/schemas/PageableObject"
+          },
+          "size": {
+            "description": "Requested page size",
+            "format": "int32",
+            "type": "integer"
+          },
+          "sort": {
+            "$ref": "#/components/schemas/SortObject"
+          },
+          "totalElements": {
+            "description": "Total element count across all pages",
+            "format": "int64",
+            "type": "integer"
+          },
+          "totalPages": {
+            "description": "Total page count",
+            "format": "int32",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "content",
+          "empty",
+          "first",
+          "last",
+          "number",
+          "numberOfElements",
+          "pageable",
+          "size",
+          "sort",
+          "totalElements",
+          "totalPages"
         ]
       },
       "PagePriceView": {
@@ -1155,6 +1260,39 @@
         ],
         "type": "string"
       },
+      "TemplateStarterPrice": {
+        "properties": {
+          "amountUsd": {
+            "format": "decimal",
+            "type": "string"
+          },
+          "credits": {
+            "description": "Credits in the pack; CREDIT_PACK only",
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "displayName": {
+            "maxLength": 120,
+            "minLength": 1,
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/PriceKind"
+          },
+          "priceRef": {
+            "minLength": 1,
+            "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "amountUsd",
+          "displayName",
+          "kind",
+          "priceRef"
+        ]
+      },
       "UpsertCustomerInput": {
         "properties": {
           "countryCode": {
@@ -1612,6 +1750,215 @@
   },
   "openapi": "3.1.0",
   "paths": {
+    "/agents/templates": {
+      "get": {
+        "description": "Each template is a ready-to-POST POST /agents/workloads body (digest-pinned images and manifest defaults) plus suggested starter prices to create through billing.",
+        "operationId": "listTemplates",
+        "parameters": [
+          {
+            "description": "Zero-based page index (0..N)",
+            "in": "query",
+            "name": "page",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "The size of the page to be returned",
+            "in": "query",
+            "name": "size",
+            "required": false,
+            "schema": {
+              "default": 20,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Sorting criteria in the format: property,(asc|desc). Default sort order is ascending. Multiple sort criteria are supported.",
+            "in": "query",
+            "name": "sort",
+            "required": false,
+            "schema": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/PageAgentTemplateResponse"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "400": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Bad Request"
+          },
+          "401": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "402": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Payment Required"
+          },
+          "403": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "413": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Content Too Large"
+          },
+          "422": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Unprocessable Content"
+          },
+          "423": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Locked"
+          },
+          "429": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Too Many Requests"
+          },
+          "451": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Unavailable For Legal Reasons"
+          },
+          "500": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          },
+          "502": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Bad Gateway"
+          },
+          "503": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          },
+          "504": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Gateway Timeout"
+          }
+        },
+        "summary": "List starter templates",
+        "tags": [
+          "public",
+          "Agent Templates"
+        ]
+      }
+    },
     "/agents/workloads": {
       "post": {
         "description": "Resolves each image to its linux/amd64 platform manifest digest, verifies it against its registry, derives the workload fingerprint and returns the SDK key exactly once. A retry under the same Idempotency-Key and body replays the registration (200, the workload as it is now, without the SDK key: rotate it with POST /agents/workloads/{workloadId}/sdk-key/rotate if the first response was lost).",
@@ -4798,6 +5145,10 @@
     {
       "description": "Hosted workload registration and lifecycle",
       "name": "Workloads"
+    },
+    {
+      "description": "First-party starter templates",
+      "name": "Agent Templates"
     },
     {
       "description": "Agent API: create and update end customers",

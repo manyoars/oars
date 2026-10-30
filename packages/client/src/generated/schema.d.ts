@@ -4,6 +4,26 @@
  */
 
 export interface paths {
+    "/agents/templates": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List starter templates
+         * @description Each template is a ready-to-POST POST /agents/workloads body (digest-pinned images and manifest defaults) plus suggested starter prices to create through billing.
+         */
+        get: operations["listTemplates"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/agents/workloads": {
         parameters: {
             query?: never;
@@ -277,6 +297,14 @@ export interface components {
         AgentHealthStatus: "HEALTHY" | "DEGRADED" | "UNHEALTHY" | "UNKNOWN";
         /** @enum {string} */
         AgentStatus: "PENDING" | "RUNNING" | "STOPPED" | "FAILED" | "TERMINATED";
+        /** @description Page content */
+        AgentTemplateResponse: {
+            description: string;
+            manifest: components["schemas"]["RegisterWorkloadRequest"];
+            name: string;
+            starterPrices: components["schemas"]["TemplateStarterPrice"][];
+            templateId: string;
+        };
         /**
          * @description The billing error catalog (spec §9.2, §13). Branch on the code, never on the detail text.
          *
@@ -383,7 +411,7 @@ export interface components {
             status: components["schemas"]["ChargeStatus"];
         };
         CreateChargeInput: {
-            /** @description CHECKOUT only: where the customer lands after cancelling */
+            /** @description CHECKOUT only: where the customer lands after cancelling. Omit it to return them to the agent's public page (manyoars.com/agents/<slug>) when that page is visible; with no visible page, a missing cancelUrl is rejected */
             cancelUrl?: string;
             customerRef: string;
             mode: components["schemas"]["ChargeMode"];
@@ -513,6 +541,43 @@ export interface components {
         };
         OidcExchangeRequest: {
             accessToken: string;
+        };
+        PageAgentTemplateResponse: {
+            /** @description Page content */
+            content: components["schemas"]["AgentTemplateResponse"][];
+            /** @description True if this page has no content */
+            empty: boolean;
+            /** @description True if this is the first page */
+            first: boolean;
+            /** @description True if this is the last page */
+            last: boolean;
+            /**
+             * Format: int32
+             * @description Zero-indexed page number
+             */
+            number: number;
+            /**
+             * Format: int32
+             * @description Number of elements on this page
+             */
+            numberOfElements: number;
+            pageable: components["schemas"]["PageableObject"];
+            /**
+             * Format: int32
+             * @description Requested page size
+             */
+            size: number;
+            sort: components["schemas"]["SortObject"];
+            /**
+             * Format: int64
+             * @description Total element count across all pages
+             */
+            totalElements: number;
+            /**
+             * Format: int32
+             * @description Total page count
+             */
+            totalPages: number;
         };
         PagePriceView: {
             /** @description Page content */
@@ -766,6 +831,18 @@ export interface components {
         };
         /** @enum {string} */
         StopReason: "CREATOR" | "COMPUTE_DEBT" | "COMPUTE_CAP" | "PLATFORM";
+        TemplateStarterPrice: {
+            /** Format: decimal */
+            amountUsd: string;
+            /**
+             * Format: int64
+             * @description Credits in the pack; CREDIT_PACK only
+             */
+            credits?: number;
+            displayName: string;
+            kind: components["schemas"]["PriceKind"];
+            priceRef: string;
+        };
         UpsertCustomerInput: {
             /**
              * @description ISO 3166-1 alpha-2 country; only US customers are supported
@@ -960,6 +1037,168 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
+    listTemplates: {
+        parameters: {
+            query?: {
+                /** @description Zero-based page index (0..N) */
+                page?: number;
+                /** @description The size of the page to be returned */
+                size?: number;
+                /** @description Sorting criteria in the format: property,(asc|desc). Default sort order is ascending. Multiple sort criteria are supported. */
+                sort?: string[];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "*/*": components["schemas"]["PageAgentTemplateResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "*/*": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "*/*": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Payment Required */
+            402: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "*/*": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "*/*": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "*/*": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "*/*": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Content Too Large */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "*/*": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Unprocessable Content */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "*/*": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Locked */
+            423: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "*/*": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Too Many Requests */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "*/*": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Unavailable For Legal Reasons */
+            451: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "*/*": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "*/*": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Bad Gateway */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "*/*": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "*/*": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Gateway Timeout */
+            504: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "*/*": components["schemas"]["ProblemDetail"];
+                };
+            };
+        };
+    };
     registerWorkload: {
         parameters: {
             query?: never;
