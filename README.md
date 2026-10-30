@@ -13,6 +13,10 @@ installs or imports to do that:
 | `templates/per-task-agent` | Starter template: a job that charges per finished task | here |
 | `packages/cli` | `@manyoars/oars`, the `oars` command: `login`, `templates`, `deploy`, `status`, `test-charge` | published on npm as [`@manyoars/oars`](https://www.npmjs.com/package/@manyoars/oars) |
 
+## Let your coding agent do it
+
+Install the skill with `npx skills add manyoars/oars --skill make-me-money -g -y`; it teaches Claude Code to ship a paid agent on Many Oars and to hand you the steps only a person can do, such as Stripe onboarding.
+
 ## Develop
 
 Node 24 (LTS) and [`just`](https://github.com/casey/just).
