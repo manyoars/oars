@@ -1,7 +1,7 @@
 {
   "name": "@manyoars/oars",
   "version": "0.2.0",
-  "description": "The oars CLI: log in to Many Oars, list the starter templates and deploy an agent",
+  "description": "The oars CLI: log in to Many Oars, list the starter templates, and deploy an agent",
   "license": "Apache-2.0",
   "repository": {
     "type": "git",

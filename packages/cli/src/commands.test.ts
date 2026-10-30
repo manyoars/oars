@@ -85,7 +85,7 @@ describe('oars login', () => {
 
     it('points ACCOUNT_NOT_READY at the Stripe onboarding link, then says to rerun', async () => {
       const h = await needsYou({ title: 'Finish payout setup', code: 'ACCOUNT_NOT_READY', actionUrl: 'https://app.test/onboard' });
-      expect(h.err.slice(1).join('')).toBe('Finish payout setup\nhttps://app.test/onboard\nNeeds you: finish Stripe onboarding at https://app.test/onboard, then rerun this command.\n');
+      expect(h.err.slice(1).join('')).toBe('Finish payout setup\nNeeds you: finish Stripe onboarding at https://app.test/onboard, then rerun this command.\n');
     });
 
     it('says where to find Stripe onboarding when ACCOUNT_NOT_READY carries no link', async () => {
@@ -95,7 +95,7 @@ describe('oars login', () => {
 
     it('points any other exit 6 at its link', async () => {
       const h = await needsYou({ title: 'Add a payment method', code: 'PAYMENT_METHOD_REQUIRED', actionUrl: 'https://app.test/pay' });
-      expect(h.err.join('')).toContain('Needs you: open https://app.test/pay, then rerun this command.');
+      expect(h.err.slice(1).join('')).toBe('Add a payment method\nNeeds you: open https://app.test/pay, then rerun this command.\n');
     });
 
     it('says a person must act when an exit 6 carries no link and is not about Stripe', async () => {

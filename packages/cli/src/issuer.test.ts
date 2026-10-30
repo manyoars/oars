@@ -1,5 +1,5 @@
-import { http, HttpResponse } from 'msw';
-import { describe, expect, it } from 'vitest';
+import { delay, http, HttpResponse } from 'msw';
+import { describe, expect, it, vi } from 'vitest';
 import { run } from './cli.js';
 import { ExitCode } from './errors.js';
 import { LAUNCH_FLAG_URL, PRODUCTION_ISSUER_URL } from './issuer.js';
@@ -9,6 +9,18 @@ useServer();
 
 const NOT_LAUNCHED = 'Many Oars has not launched yet: pass --issuer-url or set OARS_ISSUER_URL.';
 const single = (text: string[]): unknown => JSON.parse(text.join(''));
+
+/** Answers the launch flag as launched and counts the requests, so a test can prove a login never asked. */
+const countFlagCalls = () => {
+  const calls = { count: 0 };
+  server.use(
+    http.get(LAUNCH_FLAG_URL, () => {
+      calls.count += 1;
+      return HttpResponse.json({ launched: true });
+    }),
+  );
+  return calls;
+};
 
 /** The production realm's Keycloak endpoints, so a login that resolves the built-in issuer can finish. */
 const production = () => {
@@ -38,15 +50,18 @@ describe('the issuer oars login uses', () => {
 
   it('is --issuer-url before OARS_ISSUER_URL, with no call to the launch flag', async () => {
     const h = harness({ OARS_ISSUER_URL: 'http://localhost:1/realms/wrong' });
+    const flag = countFlagCalls();
     server.use(discovery, deviceAuthorization(), tokenEndpoint([tokens('1')]).handler, exchangeOk().handler);
     expect(await run(['login', '--no-browser', '--api-url', API, '--issuer-url', ISSUER], h.deps)).toBe(ExitCode.OK);
-    expect(h.opened).toEqual([]);
+    expect(flag.count).toBe(0);
   });
 
   it('is OARS_ISSUER_URL when there is no flag, with no call to the launch flag', async () => {
     const h = harness();
+    const flag = countFlagCalls();
     server.use(discovery, deviceAuthorization(), tokenEndpoint([tokens('1')]).handler, exchangeOk().handler);
     expect(await run(['login', '--no-browser'], h.deps)).toBe(ExitCode.OK);
+    expect(flag.count).toBe(0);
   });
 
   it('is the production issuer when neither is set and the launch flag says launched', async () => {
@@ -91,6 +106,20 @@ describe('the issuer oars login uses', () => {
     expect(await run(['login', '--no-browser', '--json'], h.deps)).toBe(ExitCode.USAGE);
     expect(single(h.out)).toMatchObject({ ok: false, step: 'usage', problem: { title: NOT_LAUNCHED } });
     expect(await h.deps.store.read()).toBeUndefined();
+  });
+
+  it('gives up on a launch flag that never answers after 5 seconds, and says Many Oars has not launched yet', async () => {
+    const h = harness({ OARS_ISSUER_URL: '' });
+    // AbortSignal.timeout runs on a native timer that fake timers cannot advance: record the budget, and abort at once.
+    const timeout = vi.spyOn(AbortSignal, 'timeout').mockImplementation(() => AbortSignal.abort());
+    try {
+      server.use(http.get(LAUNCH_FLAG_URL, () => delay('infinite')));
+      expect(await run(['login', '--no-browser', '--json'], h.deps)).toBe(ExitCode.USAGE);
+      expect(timeout).toHaveBeenCalledExactlyOnceWith(5000);
+      expect(single(h.out)).toMatchObject({ ok: false, step: 'usage', problem: { title: NOT_LAUNCHED } });
+    } finally {
+      timeout.mockRestore();
+    }
   });
 
   it('prints the not-launched sentence to stderr without --json', async () => {

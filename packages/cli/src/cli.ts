@@ -87,7 +87,7 @@ const printFailure = (deps: RunDeps, json: boolean, error: CliError): void => {
   const { title, detail, actionUrl } = error.problem;
   const resume = partial === undefined ? [] : [`Workload ${partial.workloadId} is registered; the deploy stopped at ${error.step}.`, `Rerun to resume: ${partial.rerun}`];
   const needsYou = error.exitCode === ExitCode.HUMAN ? [needsYouLine(error.problem.code, actionUrl)] : [];
-  deps.io.stderr(`${[title ?? error.message, detail, actionUrl, ...resume, ...needsYou].filter((line) => line !== undefined && line !== '').join('\n')}\n`);
+  deps.io.stderr(`${[title ?? error.message, detail, ...(needsYou.length === 0 ? [actionUrl] : []), ...resume, ...needsYou].filter((line) => line !== undefined && line !== '').join('\n')}\n`);
   if (partial?.sdkKey !== undefined) deps.io.stdout(`SDK key (shown once; save it now): ${partial.sdkKey}\n`);
 };
 
