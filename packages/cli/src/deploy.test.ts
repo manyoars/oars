@@ -402,6 +402,14 @@ describe('oars deploy: usage', () => {
     expect(platform.calls).toEqual([]);
   });
 
+  it('--template with an unreachable catalog is exit 8 with the templates step, as `oars templates` reports it', async () => {
+    const { h } = setup();
+    fakePlatform({ templates: [TEMPLATE] });
+    server.use(http.get(`${API}/agents/templates`, () => HttpResponse.error()));
+    expect(await run(['deploy', '--template', 'paid-api', '--json'], h.deps)).toBe(ExitCode.UNREACHABLE);
+    expect(JSON.parse(stdout(h))).toMatchObject({ ok: false, step: 'templates' });
+  });
+
   it('refuses an --api-url other than the stored login before any call', async () => {
     const { h, args } = setup();
     const platform = fakePlatform();
