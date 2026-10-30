@@ -63,6 +63,17 @@ const emit = (deps: RunDeps, json: boolean, outcome: Outcome): void => {
   deps.io.stdout(`${json ? JSON.stringify(outcome.document) : outcome.text}\n`);
 };
 
+/** The last line of an exit 6: the one thing a person must do, by link when the platform sent one, then to rerun. Stripe onboarding is the step most runs wait on. */
+const needsYouLine = (code: string | undefined, actionUrl: string | undefined): string => {
+  const stripe = code === 'ACCOUNT_NOT_READY';
+  if (actionUrl !== undefined && actionUrl !== '') {
+    return `Needs you: ${stripe ? 'finish Stripe onboarding at' : 'open'} ${actionUrl}, then rerun this command.`;
+  }
+  return stripe
+    ? 'Needs you: finish Stripe onboarding (Account, then Payout account, in the Many Oars web app), then rerun this command.'
+    : 'Needs you: a step only a person can do. Do it in the Many Oars web app, then rerun this command.';
+};
+
 /**
  * `--json` prints `{ok: false, step, problem}` on stdout, plus `workloadId`, `sdkKey` and `rerun` after a deploy that stopped;
  * otherwise the problem's title, detail and URL go to stderr, then the rerun line, and the one-time SDK key goes to stdout.
@@ -75,7 +86,8 @@ const printFailure = (deps: RunDeps, json: boolean, error: CliError): void => {
   }
   const { title, detail, actionUrl } = error.problem;
   const resume = partial === undefined ? [] : [`Workload ${partial.workloadId} is registered; the deploy stopped at ${error.step}.`, `Rerun to resume: ${partial.rerun}`];
-  deps.io.stderr(`${[title ?? error.message, detail, actionUrl, ...resume].filter((line) => line !== undefined && line !== '').join('\n')}\n`);
+  const needsYou = error.exitCode === ExitCode.HUMAN ? [needsYouLine(error.problem.code, actionUrl)] : [];
+  deps.io.stderr(`${[title ?? error.message, detail, actionUrl, ...resume, ...needsYou].filter((line) => line !== undefined && line !== '').join('\n')}\n`);
   if (partial?.sdkKey !== undefined) deps.io.stdout(`SDK key (shown once; save it now): ${partial.sdkKey}\n`);
 };
 
