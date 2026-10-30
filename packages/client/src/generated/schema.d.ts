@@ -321,6 +321,7 @@ export interface components {
          *     | `ACCOUNT_NOT_READY` | 409 | The developer's payout account cannot take live charges yet; a human finishes onboarding at actionUrl. |
          *     | `SELLER_IDENTITY_INCOMPLETE` | 409 | The agent's seller identity lacks a display name, support email or refund-policy URL; set them before going live. |
          *     | `STRIPE_TERMS_URL_NOT_SET` | 409 | The agent has a terms URL but the developer's Stripe account has none in its public business details; actionUrl is where to set it. |
+         *     | `SELLER_IDENTITY_CONFLICT` | 409 | The agent went live, or its terms URL changed, while this seller-identity write was in flight, so its new terms URL needs the Stripe terms check first; send the same request again. |
          *     | `PAYMENT_METHOD_REQUIRED` | 409 | An off-session charge needs a saved card; use a CHECKOUT charge first. |
          *     | `IDEMPOTENCY_CONFLICT` | 409 | This Idempotency-Key was already used with a different request body. |
          *     | `INSUFFICIENT_CREDITS` | 409 | The customer has too few credits; actionUrl is a credit-pack checkout. |
@@ -347,9 +348,14 @@ export interface components {
          *     | `OFFER_INVALID` | 410 | The purchase offer is unknown, expired, already used, or issued in the other mode; ask the seller for a new one. |
          *     | `PURCHASING_NOT_ENABLED` | 409 | The buying agent has no approved purchasing cap in the offer's mode; its developer approves one first. |
          *     | `PURCHASING_METHOD_REQUIRED` | 409 | The buying agent's developer has no saved purchasing card in the offer's mode; a person saves one at actionUrl. |
+         *     | `SELLER_UNAVAILABLE` | 409 | The offer's seller is not active, or its payout account cannot take charges in the offer's mode; ask the seller for a new offer later. |
+         *     | `PURCHASE_SELF_DEALING` | 409 | The buyer and the seller belong to the same developer or the same payout account; an agent cannot buy from itself or its own developer. |
+         *     | `PURCHASE_CAP_REACHED` | 409 | The purchase would take the buying agent past its monthly purchasing cap in the offer's mode; remainingUsd is what is left this month (UTC). |
+         *     | `PURCHASE_DECLINED` | 402 | The developer's purchasing card was declined; nothing was bought and the cap is released. A person fixes the card, and the offer stays usable until it expires. |
+         *     | `PURCHASE_AUTHENTICATION_REQUIRED` | 402 | The card's issuer asked for authentication, which an off-session purchase cannot give; nothing was bought and the cap is released. A person fixes the card. |
          * @enum {string}
          */
-        BillingErrorCode: "SDK_KEY_INVALID" | "WORKLOAD_NOT_ACTIVE" | "WORKLOAD_NOT_FOUND" | "WORKLOAD_NOT_OWNED" | "PRICE_NOT_FOUND" | "PRICE_INACTIVE" | "PRICE_AMOUNT_IMMUTABLE" | "CUSTOMER_REGION_NOT_SUPPORTED" | "ACCOUNT_NOT_READY" | "SELLER_IDENTITY_INCOMPLETE" | "STRIPE_TERMS_URL_NOT_SET" | "PAYMENT_METHOD_REQUIRED" | "IDEMPOTENCY_CONFLICT" | "INSUFFICIENT_CREDITS" | "REFUND_EXCEEDS_REMAINING" | "CHARGE_NOT_REFUNDABLE" | "TEST_MODE_ONLY" | "RATE_LIMITED" | "PAYOUT_COUNTRY_NOT_SUPPORTED" | "HUMAN_SESSION_REQUIRED" | "TOPUP_AMOUNT_INVALID" | "TOPUP_NOT_FOUND" | "FEE_POLICY_INVALID" | "RESERVATION_NOT_FOUND" | "RESERVATION_EXPIRED" | "RESERVATION_RELEASED" | "RESERVATION_COMMITTED" | "IDEMPOTENCY_KEY_INVALID" | "CUSTOMER_REVOKED" | "PURCHASING_METHOD_NOT_FOUND" | "RECOVERY_LINK_INVALID" | "APPROVAL_LINK_INVALID" | "APPROVAL_NOT_PERMITTED" | "FRESH_SIGN_IN_REQUIRED" | "OFFER_INVALID" | "PURCHASING_NOT_ENABLED" | "PURCHASING_METHOD_REQUIRED";
+        BillingErrorCode: "SDK_KEY_INVALID" | "WORKLOAD_NOT_ACTIVE" | "WORKLOAD_NOT_FOUND" | "WORKLOAD_NOT_OWNED" | "PRICE_NOT_FOUND" | "PRICE_INACTIVE" | "PRICE_AMOUNT_IMMUTABLE" | "CUSTOMER_REGION_NOT_SUPPORTED" | "ACCOUNT_NOT_READY" | "SELLER_IDENTITY_INCOMPLETE" | "STRIPE_TERMS_URL_NOT_SET" | "SELLER_IDENTITY_CONFLICT" | "PAYMENT_METHOD_REQUIRED" | "IDEMPOTENCY_CONFLICT" | "INSUFFICIENT_CREDITS" | "REFUND_EXCEEDS_REMAINING" | "CHARGE_NOT_REFUNDABLE" | "TEST_MODE_ONLY" | "RATE_LIMITED" | "PAYOUT_COUNTRY_NOT_SUPPORTED" | "HUMAN_SESSION_REQUIRED" | "TOPUP_AMOUNT_INVALID" | "TOPUP_NOT_FOUND" | "FEE_POLICY_INVALID" | "RESERVATION_NOT_FOUND" | "RESERVATION_EXPIRED" | "RESERVATION_RELEASED" | "RESERVATION_COMMITTED" | "IDEMPOTENCY_KEY_INVALID" | "CUSTOMER_REVOKED" | "PURCHASING_METHOD_NOT_FOUND" | "RECOVERY_LINK_INVALID" | "APPROVAL_LINK_INVALID" | "APPROVAL_NOT_PERMITTED" | "FRESH_SIGN_IN_REQUIRED" | "OFFER_INVALID" | "PURCHASING_NOT_ENABLED" | "PURCHASING_METHOD_REQUIRED" | "SELLER_UNAVAILABLE" | "PURCHASE_SELF_DEALING" | "PURCHASE_CAP_REACHED" | "PURCHASE_DECLINED" | "PURCHASE_AUTHENTICATION_REQUIRED";
         /** @enum {string} */
         BillingMode: "TEST" | "LIVE";
         BillingModeView: {
@@ -371,7 +377,17 @@ export interface components {
             code?: components["schemas"]["BillingErrorCode"];
             detail?: string;
             instance?: string;
+            /**
+             * @description On PURCHASING_NOT_ENABLED, PURCHASING_METHOD_REQUIRED and PURCHASE_CAP_REACHED, the offer's mode (TEST or LIVE) the missing cap, card or room is in.
+             * @enum {string}
+             */
+            mode?: "TEST" | "LIVE";
             offer?: components["schemas"]["PurchaseOfferView"];
+            /**
+             * Format: decimal
+             * @description On PURCHASE_CAP_REACHED, what the buying agent's cap leaves this calendar month (UTC), in USD; zero when nothing does.
+             */
+            remainingUsd?: string;
             requestId?: string;
             /** Format: int32 */
             status: number;
@@ -410,15 +426,17 @@ export interface components {
             settledAt?: string;
             status: components["schemas"]["ChargeStatus"];
         };
-        CreateChargeInput: {
-            /** @description CHECKOUT only: where the customer lands after cancelling. Omit it to return them to the agent's public page (manyoars.com/agents/<slug>) when that page is visible; with no visible page, a missing cancelUrl is rejected */
+        CheckoutChargeInput: {
+            /** @description Where the customer lands after cancelling. Omit it to return them to the agent's public page (manyoars.com/agents/<slug>) when that page is visible; with no visible page, a missing cancelUrl is rejected */
             cancelUrl?: string;
             customerRef: string;
-            mode: components["schemas"]["ChargeMode"];
+            /** @enum {string} */
+            mode: "CHECKOUT";
             priceRef: string;
-            /** @description CHECKOUT only: where the customer lands after paying */
-            successUrl?: string;
+            /** @description Where the customer lands after paying */
+            successUrl: string;
         };
+        CreateChargeInput: components["schemas"]["CheckoutChargeInput"] | components["schemas"]["OffSessionChargeInput"];
         CreatePriceInput: {
             /**
              * Format: decimal
@@ -538,6 +556,12 @@ export interface components {
              */
             type: "SUCCESS";
             user: components["schemas"]["UserResponse"];
+        };
+        OffSessionChargeInput: {
+            customerRef: string;
+            /** @enum {string} */
+            mode: "OFF_SESSION";
+            priceRef: string;
         };
         OidcExchangeRequest: {
             accessToken: string;
@@ -3612,7 +3636,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["BillingProblem"];
                 };
             };
-            /** @description RECOVERY_LINK_INVALID (unknown, used, expired or voided), CUSTOMER_REVOKED */
+            /** @description RECOVERY_LINK_INVALID (unknown, used, expired, or voided), CUSTOMER_REVOKED */
             410: {
                 headers: {
                     [name: string]: unknown;
