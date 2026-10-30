@@ -26,11 +26,11 @@ what a person must (signing in, and Stripe's identity and bank steps). Run every
    starter prices. Choose by what the human wants to sell: `paid-api` charges per call, `per-task-agent` charges per
    finished task. If the choice is not obvious from the request, ask the human which one.
 3. **Deploy.** Run `npx @manyoars/oars deploy --template <id>`. Success prints `Deployed <name> (workload <id>)`, the
-   one-time `SDK key (shown once; save it now): ...`, the `Prices:` it created, and a `Next:` list. Note the workload id.
+   one-time `SDK key (shown once; save it now): ...`, the `Prices:` it created, and a `Next:` list. Note the workload id. With `--json` the key is the `sdkKey` field.
    To register and price it without starting it, add `--no-start`. Pass a secret the agent needs with
    `--secret-from-env <NAME>`, never `--secret`, so the value stays out of shell history.
 4. **Check it runs.** Run `npx @manyoars/oars status <workloadId>`. Success prints four lines: the name and id,
-   `Workload: <status>`, `Deployment: <status> (<health>)`, and `Billing mode: TEST`. If the deployment is not healthy
+   `Workload: <status>`, `Deployment: <status> (<health>), desired <state>`, and `Billing mode: TEST`. If the deployment is not healthy
    yet, wait a little and run it again.
 5. **Prove the money path.** Run `npx @manyoars/oars test-charge <workloadId>` (add `--price <ref>` when the workload has
    more than one active price). Success prints `Test charge <chargeId> for <ref>: <status>`. It is a Stripe test charge on
@@ -52,11 +52,11 @@ Read the exit code of every command. With `--json` a failure is `{"ok": false, "
 | 2 | usage error | read the message and fix the command; see "Not launched yet" below for the one that matters most |
 | 3 | login expired or denied | run `login` again (step 1) |
 | 4 | the platform rejected the input | read `problem.detail`, fix the input, rerun |
-| 5 | conflict (key or workload already used) | rerun with the same `--idempotency-key` if resuming, else use a new one |
+| 5 | conflict (key or workload already used) | same `--idempotency-key` if resuming; if the workload already exists, run `status` on it instead of deploying again |
 | 6 | a person must act first | stop, see "Needs you" below |
 | 7 | rate limited | wait a minute, rerun the same command |
 | 8 | the platform could not be reached | retry once; if it persists, tell the human |
-| 9 | `deploy` stopped part way | rerun the `Rerun to resume:` command it printed, exactly as printed |
+| 9 | `deploy` stopped part way | rerun the `Rerun to resume:` command it printed (with `--json`, the `rerun` field), exactly as printed |
 | 1 | unexpected error | show the human the message and stop |
 
 ### Not launched yet
@@ -71,3 +71,5 @@ The last line of stderr starts with `Needs you:` and names the one thing, usuall
 adding a payment method, buying credits, or raising the compute cap. Give the human that line word for word, say you are
 waiting, and make no further calls until they confirm. Then rerun the same command (with the same `--idempotency-key`
 if you set one); a `deploy` resumes where it stopped.
+
+With `--json` there is no `Needs you:` line: give the human `problem.actionUrl` (else `problem.title` and `problem.detail`).
