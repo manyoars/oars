@@ -38,14 +38,18 @@ Signs in with your browser (RFC 8628 device flow) and stores the login.
 
 Revokes the stored login and deletes it.
 
+### templates
+
+`oars templates` lists the starter templates `oars deploy --template` takes: each id, name, description, and starter prices. Needs a login.
+
 ### deploy
 
 Registers a workload, creates its prices and deploys it. Pass exactly one of `--template`, `--image` or `--manifest`. It stops at the first failed step and exits 9 (see below).
 
 - `--image <ref>` deploys an image pinned by digest (`name@sha256:...`). Companions: `--name <name>`, `--port <n>` (default 8080), `--public`, `--cpu-millicores <n>` (default 250), `--memory-mib <n>` (default 256).
 - `--manifest <file>` deploys a JSON workload manifest.
-- `--always-on` keeps the public service running instead of idling. It works with `--image` and `--manifest`.
-- `--template <id>` names a starter template. It exits 2 for now, because the public API does not list templates yet; companions `--price <ref>` (repeatable) and `--no-prices` wait with it.
+- `--always-on` keeps the public service running instead of idling. It works with every source.
+- `--template <id>` deploys a starter template from the catalog (`oars templates`): it registers the entry's manifest, creates every starter price, then deploys. `--price <ref>` (repeatable) creates only the named ones; `--no-prices` creates none. `--name`, `--port`, `--public`, `--cpu-millicores`, `--memory-mib`, and `--price-file` do not combine with it.
 - `--price-file <file>` is a JSON array of prices to create (with `--image` or `--manifest`).
 - `--secret <NAME=value>` and `--secret-from-env <NAME>` add a workload secret; both repeat. Prefer `--secret-from-env`, which keeps the value out of your shell history.
 - `--no-start` registers and prices the workload without deploying it.
@@ -66,7 +70,7 @@ The SDK key is shown once, so save it when `deploy` prints it.
 
 With `--json`, stdout carries exactly one JSON document and a success exits 0.
 
-- Success: `{"ok": true, ...}`. The rest depends on the command: `login` adds `email`; `deploy` adds `workloadId`, `prices`, `started`, `nextSteps` and, when this run minted it, `sdkKey`; `status` adds `workload` and `billingMode`; `test-charge` adds `chargeId` and `status`.
+- Success: `{"ok": true, ...}`. The rest depends on the command: `login` adds `email`; `deploy` adds `workloadId`, `prices`, `started`, `nextSteps` and, when this run minted it, `sdkKey`; `templates` adds `templates`; `status` adds `workload` and `billingMode`; `test-charge` adds `chargeId` and `status`.
 - Failure: `{"ok": false, "step": "...", "problem": {...}}`, where `problem` is the platform's problem document (`title`, `detail`, `code`, `actionUrl` when it sent them). A `deploy` that stopped after registering also carries `workloadId`, `rerun` and, if that run minted it, `sdkKey`.
 
 Without `--json`, a failure prints the problem to stderr instead.
