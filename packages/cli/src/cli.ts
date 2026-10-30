@@ -5,6 +5,7 @@ import { deploy } from './commands/deploy.js';
 import { login } from './commands/login.js';
 import { logout } from './commands/logout.js';
 import { status } from './commands/status.js';
+import { templates } from './commands/templates.js';
 import { testCharge } from './commands/test-charge.js';
 import type { CredentialStore } from './credentials.js';
 import { CliError, ExitCode } from './errors.js';
@@ -112,9 +113,17 @@ const buildProgram = (deps: RunDeps, argv: string[]): Command => {
     });
 
   program
+    .command('templates')
+    .description('list the starter templates `oars deploy --template` takes')
+    .action(async (_options: OptionValues, command: Command) => {
+      const options: OptionValues = command.optsWithGlobals();
+      emit(deps, flag(options, 'json'), await templates(deps, { apiUrl: resolveApiUrl(deps, text(options, 'apiUrl')) }));
+    });
+
+  program
     .command('deploy')
     .description('register a workload, create its prices and deploy it; stops at the first failed step (exit 9)')
-    .option('--template <id>', 'a starter template (not available until the public API lists them)')
+    .option('--template <id>', 'a starter template from the catalog (see: oars templates)')
     .option('--image <ref>', 'an image pinned by digest (name@sha256:...)')
     .option('--manifest <file>', 'a JSON workload manifest')
     .option('--name <name>', 'the workload name (--image)')
@@ -123,8 +132,8 @@ const buildProgram = (deps: RunDeps, argv: string[]): Command => {
     .option('--cpu-millicores <n>', 'CPU in millicores (--image; default 250)', positiveInteger)
     .option('--memory-mib <n>', 'memory in MiB (--image; default 256)', positiveInteger)
     .option('--always-on', 'keep the public service running instead of idling')
-    .option('--price <ref>', 'a starter price to create (--template; repeatable)', collect)
-    .option('--no-prices', 'create none of the starter prices (--template)')
+    .option('--price <ref>', 'a starter price to create instead of all of them (--template; repeatable)', collect)
+    .option('--no-prices', "create none of the template's starter prices (--template)")
     .option('--price-file <file>', 'a JSON array of prices to create (--image, --manifest)')
     .option('--secret <NAME=value>', 'a secret for the workload (repeatable); prefer --secret-from-env', collect)
     .option('--secret-from-env <NAME>', 'a secret read from the environment variable NAME (repeatable)', collect)

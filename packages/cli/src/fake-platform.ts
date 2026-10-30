@@ -1,4 +1,5 @@
 import { http, HttpResponse } from 'msw';
+import type { AgentTemplate } from './commands/templates.js';
 import { API, server } from './test-support.js';
 
 export const WORKLOAD_ID = '11111111-2222-4333-8444-555555555555';
@@ -37,6 +38,10 @@ export interface PlatformOptions {
   /** Whether that listing says there are more pages. */
   morePrices?: boolean;
   billingMode?: 'TEST' | 'LIVE';
+  /** What `GET /agents/templates` lists (a GET, so no deploy plan holds it). */
+  templates?: AgentTemplate[];
+  /** The page size the catalog answers with, whatever `size` asks for. */
+  templatesPerPage?: number;
 }
 
 export const workloadView = (extra: object = {}): object => ({
@@ -140,6 +145,14 @@ export const fakePlatform = (options: PlatformOptions = {}) => {
       record(request, 200);
       const content = (options.prices ?? []).map((price) => priceView({ priceRef: price.priceRef }, price.active));
       return HttpResponse.json({ content, last: options.morePrices !== true });
+    }),
+    http.get(`${API}/agents/templates`, ({ request }) => {
+      record(request, 200);
+      const catalog = options.templates ?? [];
+      const query = new URL(request.url).searchParams;
+      const size = options.templatesPerPage ?? Number(query.get('size') ?? 20);
+      const page = Number(query.get('page') ?? 0);
+      return HttpResponse.json({ content: catalog.slice(page * size, (page + 1) * size), last: (page + 1) * size >= catalog.length, number: page });
     }),
     http.post(`${API}/billing/agents/${WORKLOAD_ID}/test-charges`, ({ request }) =>
       answer(request, () => ({

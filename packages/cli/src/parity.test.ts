@@ -1,12 +1,13 @@
 // Parity: `parity/deploy-plans/<templateId>.json` is the golden plan of each catalog template with its defaults (every starter
 // price chosen, start on): the calls the web deploy page makes, in order. The CLI deploys each catalog entry against the fake
-// platform and its recorded calls must equal the golden plan. aor-web syncs the same files (design §6, Parity).
-import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+// platform, which lists the entry in its catalog (`--template <id>`), and its recorded calls must equal the golden plan. aor-web syncs the same files (design §6, Parity).
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
 import { run } from './cli.js';
+import type { AgentTemplate } from './commands/templates.js';
 import { ExitCode } from './errors.js';
 import { fakePlatform } from './fake-platform.js';
 import { harness, useServer } from './test-support.js';
@@ -29,30 +30,23 @@ const toWire = (value: unknown): unknown => {
   return Object.fromEntries(
     Object.entries(value).map(([key, inner]) => {
       const camel = key.replace(/-([a-z0-9])/g, (_match, letter: string) => letter.toUpperCase());
-      return [WIRE_NAMES.get(camel) ?? camel, toWire(inner)];
+      // The YAML amount is a number (5.00 parses as 5); the wire carries a decimal string with two places.
+      const wire = camel === 'amountUsd' && typeof inner === 'number' ? inner.toFixed(2) : toWire(inner);
+      return [WIRE_NAMES.get(camel) ?? camel, wire];
     }),
   );
 };
 
-interface Template {
-  templateId: string;
-  manifest: unknown;
-  prices: unknown[];
-}
+const isAgentTemplate = (value: unknown): value is AgentTemplate =>
+  isRecord(value) && typeof value['templateId'] === 'string' && typeof value['name'] === 'string' && isRecord(value['manifest']) && Array.isArray(value['starterPrices']);
 
-const readTemplate = (directory: string): Template | undefined => {
+const readTemplate = (directory: string): AgentTemplate | undefined => {
   const file = join(TEMPLATES, directory, 'catalog-entry.yaml');
   if (!existsSync(file)) return undefined;
   const entries: unknown = parse(readFileSync(file, 'utf8'));
   const entry = toWire(Array.isArray(entries) ? entries[0] : undefined);
-  if (!isRecord(entry) || typeof entry['templateId'] !== 'string' || !Array.isArray(entry['starterPrices'])) {
-    throw new Error(`${file} is not a catalog entry with a templateId and starterPrices`);
-  }
-  // The YAML amount is a number (5.00 parses as 5); the wire carries a decimal string with two places.
-  const prices = entry['starterPrices'].map((price: unknown) =>
-    isRecord(price) && typeof price['amountUsd'] === 'number' ? { ...price, amountUsd: price['amountUsd'].toFixed(2) } : price,
-  );
-  return { templateId: entry['templateId'], manifest: entry['manifest'], prices };
+  if (!isAgentTemplate(entry)) throw new Error(`${file} is not a catalog entry with a templateId, name, manifest and starterPrices`);
+  return entry;
 };
 
 const templates = readdirSync(TEMPLATES).flatMap((directory) => readTemplate(directory) ?? []);
@@ -66,13 +60,9 @@ describe('parity/deploy-plans', () => {
 
   it.each(templates)('the CLI deploys $templateId in the golden plan order: register, each starter price, deploy', async (template) => {
     const h = harness({ OARS_API_KEY: 'key-123' });
-    const manifest = join(h.configDir, 'manifest.json');
-    const prices = join(h.configDir, 'prices.json');
-    writeFileSync(manifest, JSON.stringify(template.manifest));
-    writeFileSync(prices, JSON.stringify(template.prices));
-    const platform = fakePlatform();
+    const platform = fakePlatform({ templates });
 
-    const code = await run(['deploy', '--manifest', manifest, '--price-file', prices, '--idempotency-key', 'parity'], h.deps);
+    const code = await run(['deploy', '--template', template.templateId, '--idempotency-key', 'parity'], h.deps);
 
     expect(code).toBe(ExitCode.OK);
     const golden: unknown = JSON.parse(readFileSync(join(PLANS, `${template.templateId}.json`), 'utf8'));

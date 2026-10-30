@@ -4,6 +4,7 @@ import { CliError, ExitCode, type PartialDeploy } from '../errors.js';
 import { stepKey, type JournalRecord } from '../journal.js';
 import { resolveAuthToken } from '../session.js';
 import { loadDeployInput, type DeployFlags } from './deploy-input.js';
+import { listTemplates } from './templates.js';
 import type { Outcome, RunDeps } from '../cli.js';
 
 export interface DeployOptions extends DeployFlags {
@@ -60,8 +61,11 @@ interface Stage {
  * the sequence (exit 9) with the workload id, the rerun line, and the SDK key when this run minted it.
  */
 export const deploy = async (deps: RunDeps, options: DeployOptions): Promise<Outcome> => {
-  const input = await loadDeployInput(options, deps.env);
-  const token = await resolveAuthToken(deps, options.apiUrl);
+  // Resolved once, and only when a step needs it: a deploy with a mistake in its flags fails before it asks for a login.
+  let pending: Promise<string> | undefined;
+  const authToken = (): Promise<string> => (pending ??= resolveAuthToken(deps, options.apiUrl));
+  const input = await loadDeployInput(options, deps.env, async () => listTemplates(apiClient(deps, { apiUrl: options.apiUrl, step: 'template', token: await authToken() })));
+  const token = await authToken();
   const base = options.idempotencyKey ?? randomUUID();
   const clientFor = (step: string) => apiClient(deps, { apiUrl: options.apiUrl, step, token });
 
