@@ -1,5 +1,5 @@
 // The Claude Code skill at skills/make-me-money/SKILL.md (found by `npx skills add manyoars/oars --skill make-me-money -g -y`,
-// https://github.com/vercel-labs/skills/blob/main/docs/creating-skills.md, checked 2026-10-30) names CLI commands, flags, messages and
+// https://github.com/vercel-labs/skills/blob/main/docs/creating-skills.md, checked 2026-10-30) names CLI commands, flags, messages, and
 // exit codes. This reads the skill as the installer does and fails when it names one the CLI does not have.
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -13,7 +13,7 @@ const cli = source('./cli.ts');
 const wired = `${cli}\n${source('./issuer.ts')}`;
 
 /** The installer reads `name` and `description` from the YAML block at the top of the file. */
-export const frontmatter = (text: string): Map<string, string> => {
+const frontmatter = (text: string): Map<string, string> => {
   const block = /^---\r?\n([\s\S]*?)\r?\n---\r?\n/.exec(text);
   if (block?.[1] === undefined) throw new Error('SKILL.md has no frontmatter block');
   const fields = new Map<string, string>();
@@ -25,13 +25,20 @@ export const frontmatter = (text: string): Map<string, string> => {
 };
 
 /** Each `npx @manyoars/oars <command>` the text runs, as the command word. */
-export const namedCommands = (text: string): string[] =>
+const namedCommands = (text: string): string[] =>
   [...text.matchAll(/npx @manyoars\/oars ([a-z][a-z-]*)/g)].flatMap((match) => (match[1] === undefined ? [] : [match[1]]));
 
-export const registeredCommands = (cliSource: string): Set<string> =>
+const registeredCommands = (cliSource: string): Set<string> =>
   new Set([...cliSource.matchAll(/\.command\('([a-z][a-z-]*)'\)/g)].flatMap((match) => (match[1] === undefined ? [] : [match[1]])));
 
-const namedFlags = (text: string): string[] => [...new Set([...text.matchAll(/`[^`\n]*?(--[a-z][a-z-]*)/g)].flatMap((match) => (match[1] === undefined ? [] : [match[1]])))];
+/** Every flag inside an inline code span; prose between spans is not read. */
+const namedFlags = (text: string): string[] => {
+  const spans = [...text.matchAll(/`([^`\n]+)`/g)].flatMap((match) => (match[1] === undefined ? [] : [match[1]]));
+  return [...new Set(spans.flatMap((span) => span.match(/--[a-z][a-z-]*/g) ?? []))];
+};
+
+/** A flag counts as declared only as a whole quoted token, so `--pri` does not pass for `'--price'`. */
+const declares = (cliSource: string, flag: string): boolean => new RegExp(`'${flag}[ ']`).test(cliSource);
 
 describe('skills/make-me-money/SKILL.md', () => {
   it('has the frontmatter the installer needs: a lowercase-hyphen name equal to its folder, and a description that triggers on the money phrases', () => {
@@ -63,8 +70,15 @@ describe('skills/make-me-money/SKILL.md', () => {
     expect(flags).toEqual(expect.arrayContaining(['--no-browser', '--template', '--no-start', '--secret-from-env', '--price', '--json', '--idempotency-key']));
     for (const flag of flags) {
       if (flag === '--issuer-url') expect(wired, flag).toContain(flag);
-      else expect(cli, `cli.ts declares no ${flag}`).toContain(`'${flag}`);
+      else expect(declares(cli, flag), `cli.ts declares no ${flag}`).toBe(true);
     }
+  });
+
+  it('catches a flag that is only a prefix of a declared one, and reads a second flag in one span', () => {
+    expect(declares(cli, '--price')).toBe(true);
+    expect(declares(cli, '--pri')).toBe(false);
+    expect(declares(cli, '--secret-from')).toBe(false);
+    expect(namedFlags('Run `deploy --template x --no-start` and --prose between `login --no-browser`.')).toEqual(['--template', '--no-start', '--no-browser']);
   });
 
   it('quotes the CLI messages it tells the agent to watch for, and the exit codes it handles', () => {
