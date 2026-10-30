@@ -75,6 +75,45 @@ describe('oars login', () => {
     expect(h.err.join('')).toContain('https://app.test/pay');
   });
 
+  describe('the "Needs you" line of an exit 6', () => {
+    const needsYou = async (problem: object, argv: string[] = ['login', '--no-browser']) => {
+      const h = harness();
+      server.use(discovery, deviceAuthorization(), tokenEndpoint([tokens('1')]).handler, http.post(`${API}/auth/oidc/exchange`, () => HttpResponse.json(problem, { status: 409 })));
+      expect(await run(argv, h.deps)).toBe(ExitCode.HUMAN);
+      return h;
+    };
+
+    it('points ACCOUNT_NOT_READY at the Stripe onboarding link, then says to rerun', async () => {
+      const h = await needsYou({ title: 'Finish payout setup', code: 'ACCOUNT_NOT_READY', actionUrl: 'https://app.test/onboard' });
+      expect(h.err.slice(1).join('')).toBe('Finish payout setup\nhttps://app.test/onboard\nNeeds you: finish Stripe onboarding at https://app.test/onboard, then rerun this command.\n');
+    });
+
+    it('says where to find Stripe onboarding when ACCOUNT_NOT_READY carries no link', async () => {
+      const h = await needsYou({ title: 'Finish payout setup', code: 'ACCOUNT_NOT_READY' });
+      expect(h.err.slice(1).join('')).toBe('Finish payout setup\nNeeds you: finish Stripe onboarding (Account, then Payout account, in the Many Oars web app), then rerun this command.\n');
+    });
+
+    it('points any other exit 6 at its link', async () => {
+      const h = await needsYou({ title: 'Add a payment method', code: 'PAYMENT_METHOD_REQUIRED', actionUrl: 'https://app.test/pay' });
+      expect(h.err.join('')).toContain('Needs you: open https://app.test/pay, then rerun this command.');
+    });
+
+    it('says a person must act when an exit 6 carries no link and is not about Stripe', async () => {
+      const h = await needsYou({ title: 'The compute cap is reached', code: 'COMPUTE_CAP_REACHED' });
+      expect(h.err.join('')).toContain('Needs you: a step only a person can do. Do it in the Many Oars web app, then rerun this command.');
+    });
+
+    it('leaves --json to the problem document and adds the line to no other exit code', async () => {
+      const json = await needsYou({ title: 'Finish payout setup', code: 'ACCOUNT_NOT_READY', actionUrl: 'https://app.test/onboard' }, ['login', '--no-browser', '--json']);
+      expect(json.err.join('')).not.toContain('Needs you');
+      expect(single(json.out)).toMatchObject({ ok: false, problem: { actionUrl: 'https://app.test/onboard' } });
+      const h = harness();
+      server.use(discovery, deviceAuthorization(), tokenEndpoint([tokens('1')]).handler, http.post(`${API}/auth/oidc/exchange`, () => HttpResponse.json({ title: 'Email not verified' }, { status: 401 })));
+      expect(await run(['login', '--no-browser'], h.deps)).toBe(ExitCode.AUTH);
+      expect(h.err.join('')).not.toContain('Needs you');
+    });
+  });
+
   it('retries the exchange on a 429 with Retry-After, then succeeds', async () => {
     const h = harness();
     let calls = 0;
