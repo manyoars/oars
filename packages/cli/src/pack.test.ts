@@ -89,10 +89,10 @@ describe('the tarball npm pack would make', () => {
 });
 
 describe('the publish fields', () => {
-  it('name the public scoped package at 0.1.1, Apache-2.0, built from this folder of the public repository', () => {
+  it('name the public scoped package at 0.2.0, Apache-2.0, built from this folder of the public repository', () => {
     expect(manifest()).toMatchObject({
       name: '@manyoars/oars',
-      version: '0.1.1',
+      version: '0.2.0',
       license: 'Apache-2.0',
       repository: { type: 'git', url: 'git+https://github.com/manyoars/oars.git', directory: 'packages/cli' },
       publishConfig: { access: 'public' },
