@@ -32,6 +32,21 @@ jobs:
       - run: npm ci
       - run: just check
 
+  # Known advisories in what ships (high or critical). A separate job, not part of `just check`: it asks the registry, so a newly
+  # published advisory turns this job red on its own and never an unrelated pull request's `check`.
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: npm
+      - uses: extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3 # v4.0.0
+      - run: npm ci
+      - run: just audit
+
   # What a developer gets: each template copied out of the monorepo, the packed client installed in place of the registry
   # version, then the copy's typecheck and unit tests. A separate job because it runs two fresh installs from the registry.
   template-copy:
