@@ -378,7 +378,7 @@ export interface components {
             detail?: string;
             instance?: string;
             /**
-             * @description On PURCHASING_NOT_ENABLED, PURCHASING_METHOD_REQUIRED and PURCHASE_CAP_REACHED, the offer's mode (TEST or LIVE) the missing cap, card or room is in.
+             * @description On PURCHASING_NOT_ENABLED, PURCHASING_METHOD_REQUIRED, and PURCHASE_CAP_REACHED, the offer's mode (TEST or LIVE) the missing cap, card, or room is in.
              * @enum {string}
              */
             mode?: "TEST" | "LIVE";
