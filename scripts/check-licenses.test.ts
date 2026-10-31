@@ -20,12 +20,11 @@ afterEach(() => {
   rmSync(root, { recursive: true, force: true });
 });
 
-// A lockfile with the repo's own root entry (Apache-2.0, skipped) and the given packages.
-const lockfile = (packages: Readonly<Record<string, LockEntry>>) => {
-  writeFileSync(
-    join(root, 'package-lock.json'),
-    JSON.stringify({ name: 'fixture', lockfileVersion: 3, packages: { '': { name: 'fixture', license: 'Apache-2.0' }, ...packages } }),
-  );
+type LockPackages = { readonly [path: string]: LockEntry };
+
+// A lockfile with the repo's own root entry (Apache-2.0 unless overridden; skipped) and the given packages.
+const lockfile = (packages: LockPackages, rootEntry: LockEntry & { name?: string } = { name: 'fixture', license: 'Apache-2.0' }) => {
+  writeFileSync(join(root, 'package-lock.json'), JSON.stringify({ name: 'fixture', lockfileVersion: 3, packages: { '': rootEntry, ...packages } }));
 };
 
 const run = (target = root) => {
@@ -131,6 +130,11 @@ describe('check-licenses', () => {
 
   it('skips a workspace link and the root entry', () => {
     lockfile({ 'node_modules/@manyoars/oars': { resolved: 'packages/cli', link: true }, 'packages/cli': { version: '0.1.0', license: 'Apache-2.0' } });
+    expect(run().status).toBe(0);
+  });
+
+  it('skips a root entry that has no license field', () => {
+    lockfile({ 'node_modules/a': { version: '1.0.0', license: 'MIT' } }, { name: 'fixture' });
     expect(run().status).toBe(0);
   });
 

@@ -8,7 +8,7 @@
 // Exit 0: every shipped lockfile entry is under an allowed license. Exit 1: stderr names each offender's path and license.
 //
 // Skipped on purpose: the root entry (the repo itself), workspace links (`link: true`; the target is its own entry), and every
-// `dev: true` entry. Development tools (the 12 MPL-2.0 `lightningcss*` packages, `argparse`, a few unlicensed `validate.io-*`) run
+// `dev: true` entry. Development tools (the 12 MPL-2.0 `lightningcss*` packages, `argparse`, and a few unlicensed `validate.io-*`) run
 // on a contributor's machine and in CI but are not in the published packages, so their licenses do not bind what developers receive.
 // Every other entry must be allowed, which makes a shipped MPL-2.0 or other copyleft dependency fail until a person adds it to
 // ALLOWED_LICENSES below: a new license is a decision, not a default. An entry with no `license` field fails for the same reason.
