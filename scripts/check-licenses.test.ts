@@ -8,7 +8,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 const script = fileURLToPath(new URL('./check-licenses.mjs', import.meta.url));
 const repositoryRoot = fileURLToPath(new URL('..', import.meta.url));
 
-type LockEntry = { version?: string; license?: string; dev?: boolean; link?: boolean; resolved?: string };
+type LockEntry = { version?: string; license?: string | { type: string }; dev?: boolean; link?: boolean; resolved?: string };
 
 let root = '';
 
@@ -83,6 +83,32 @@ describe('check-licenses', () => {
   it('passes an AND expression when every part is allowed', () => {
     lockfile({ 'node_modules/both': { version: '1.0.0', license: '(MIT AND ISC)' } });
     expect(run().status).toBe(0);
+  });
+
+  it('groups with parentheses and binds AND tighter than OR', () => {
+    lockfile({
+      'node_modules/grouped': { version: '1.0.0', license: '(MIT OR GPL-3.0-only) AND ISC' },
+      'node_modules/nested': { version: '1.0.0', license: 'MIT AND (GPL-3.0-only OR ISC)' },
+      'node_modules/loose': { version: '1.0.0', license: 'GPL-3.0-only AND MIT OR ISC' },
+    });
+    expect(run().status).toBe(0);
+  });
+
+  it.each(['(MIT', 'MIT)', 'MIT OR', 'AND MIT', 'MIT ISC', 'Apache-2.0 WITH LLVM-exception', 'SEE LICENSE IN LICENSE.md', 'UNLICENSED', ''])(
+    'fails an expression it cannot parse or approve: %j',
+    (license) => {
+      lockfile({ 'node_modules/odd': { version: '1.0.0', license } });
+      const { status, err } = run();
+      expect(status).toBe(1);
+      expect(err).toContain('node_modules/odd');
+    },
+  );
+
+  it('fails a shipped package whose license is not a string', () => {
+    lockfile({ 'node_modules/legacy': { version: '1.0.0', license: { type: 'MIT' } } });
+    const { status, err } = run();
+    expect(status).toBe(1);
+    expect(err).toContain('node_modules/legacy');
   });
 
   it('fails a shipped package with no license field', () => {
