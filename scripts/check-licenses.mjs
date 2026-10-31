@@ -30,6 +30,7 @@ const isAllowed = (expression) => {
   const tokens = expression.match(/\(|\)|[^\s()]+/g) ?? [];
   let position = 0;
 
+  /** @returns {boolean} */
   const parseTerm = () => {
     const token = tokens[position++];
     if (token === '(') {
@@ -41,6 +42,7 @@ const isAllowed = (expression) => {
     return ALLOWED_LICENSES.has(token);
   };
   // Both operands are always parsed (no short circuit), so a malformed tail still throws.
+  /** @returns {boolean} */
   const parseAnd = () => {
     let allowed = parseTerm();
     while (tokens[position] === 'AND') {
@@ -50,6 +52,7 @@ const isAllowed = (expression) => {
     }
     return allowed;
   };
+  /** @returns {boolean} */
   const parseOr = () => {
     let allowed = parseAnd();
     while (tokens[position] === 'OR') {
