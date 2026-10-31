@@ -7,10 +7,10 @@ default:
 check:
     npm run check
 
+# Fail on a high or critical advisory in what ships (needs the network); CI runs it as the `audit` job.
 # Not in `check`: it asks the npm registry, so its answer moves with the advisory feed, and a new advisory must not turn an unrelated
 # pull request red. `--omit=dev` because every high finding today is in @stoplight/prism-cli, a template devDependency that is not in
 # the published packages.
-# Fail on a high or critical advisory in what ships (needs the network); CI runs it as the `audit` job.
 audit:
     npm audit --audit-level=high --omit=dev
 
