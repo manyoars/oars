@@ -5,7 +5,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { getConnInfo } from '@hono/node-server/conninfo';
 import { createOarsClient } from '@manyoars/oars-client';
-import { Hono } from 'hono';
+import { type Context, Hono } from 'hono';
 import { BillingProblem, buyerResponse, customerRefFor, mintToken, settle } from './billing.js';
 
 export interface Redemption {
@@ -88,6 +88,26 @@ export const createIpLimiter = (options: { requests: number; windowMs: number; t
       return undefined;
     },
   };
+};
+
+// getConnInfo reads the node server's bindings and throws without them: a request made straight on the app, as a test does.
+const socketAddress = (c: Context): string | undefined => {
+  try {
+    return getConnInfo(c).remote.address;
+  } catch {
+    return undefined;
+  }
+};
+
+/**
+ * The address a per-IP limit counts a request against. A forwarded header is only the client's claim until something we run
+ * sets it, so it counts only with `trustProxy`: behind the oars router every socket is Fly's proxy, and Cloudflare sets
+ * CF-Connecting-IP, overwriting a client's own, which the router passes on. Without it the socket's address counts, and a
+ * client that sends the header buys nothing.
+ */
+export const clientAddress = (c: Context, trustProxy: boolean): string => {
+  const forwarded = trustProxy ? c.req.header('CF-Connecting-IP')?.trim() : undefined;
+  return forwarded !== undefined && forwarded !== '' ? forwarded : (socketAddress(c) ?? 'unknown');
 };
 
 // --- the routes -------------------------------------------------------------------------------------------------------

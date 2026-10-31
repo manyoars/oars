@@ -13,7 +13,13 @@ export interface Config {
   publicUrl: string;
   /** Set by the developer as an agent secret; with it a model writes a short summary on top of the findings. */
   anthropicApiKey?: string;
+  /** Anonymous `POST /v1/customers` requests allowed per client address per minute. */
+  customersPerMinute: number;
+  /** True when the server runs behind the oars router, so the client address is the one in CF-Connecting-IP, not the socket's. */
+  trustProxy: boolean;
 }
+
+export const DEFAULT_CUSTOMERS_PER_MINUTE = 5;
 
 // Until the agent API can list an agent's own prices (request R1), the refs the starter template ships.
 const STARTER_PRICE_REFS = ['task-1', 'tasks-5'];
@@ -39,6 +45,10 @@ export const loadConfig = (env: NodeJS.ProcessEnv): Config => {
   if (publicUrl !== '' && !/^https?:\/\/[^\s?#]+$/.test(publicUrl)) {
     throw new ConfigError(`OARS_PUBLIC_URL must be an http(s) URL with no query or fragment, got "${publicUrl}"`);
   }
+  const limit = env['OARS_CUSTOMERS_PER_MINUTE']?.trim() ?? '';
+  if (limit !== '' && !/^[1-9][0-9]*$/.test(limit)) {
+    throw new ConfigError(`OARS_CUSTOMERS_PER_MINUTE must be a whole number of 1 or more, got "${limit}"`);
+  }
   return {
     port,
     apiUrl: env['OARS_API_URL'] ?? DEFAULT_API_URL,
@@ -47,5 +57,7 @@ export const loadConfig = (env: NodeJS.ProcessEnv): Config => {
     fakeBilling,
     publicUrl: publicUrl === '' ? `http://localhost:${String(port)}` : publicUrl,
     anthropicApiKey: anthropicApiKey === '' ? undefined : anthropicApiKey,
+    customersPerMinute: limit === '' ? DEFAULT_CUSTOMERS_PER_MINUTE : Number(limit),
+    trustProxy: env['OARS_TRUST_PROXY'] === '1',
   };
 };

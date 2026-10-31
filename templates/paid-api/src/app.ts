@@ -10,7 +10,8 @@ import {
   reservationKey,
   withCredits,
 } from './billing.js';
-import { RECOVERY_ENDPOINTS, RECOVERY_SENTENCE, type Recovery, recoveryRoutes } from './recovery.js';
+import { DEFAULT_CUSTOMERS_PER_MINUTE } from './config.js';
+import { clientAddress, createIpLimiter, RECOVERY_ENDPOINTS, RECOVERY_SENTENCE, type Recovery, recoveryRoutes } from './recovery.js';
 import { transform } from './transform.js';
 
 export const CHARGING_SENTENCE =
@@ -22,6 +23,10 @@ export interface AppOptions {
   priceRefs: string[];
   checkoutUrls: CheckoutUrls;
   now?: () => number;
+  /** Anonymous `POST /v1/customers` requests allowed per client address per minute; the default is 5. */
+  customersPerMinute?: number;
+  /** Count a request against CF-Connecting-IP, not the socket: true only when the oars router is in front, so the header is not a client's own. */
+  trustProxy?: boolean;
   /** Handler timeout for the paid call; the default is withCredits' 30 seconds. */
   timeoutMs?: number;
 }
@@ -64,6 +69,7 @@ const customerRefOf = (authorization: string | undefined): string | undefined =>
 export const createApp = (options: AppOptions): Hono => {
   const { billing } = options;
   const app = new Hono();
+  const customersLimiter = createIpLimiter({ requests: options.customersPerMinute ?? DEFAULT_CUSTOMERS_PER_MINUTE, windowMs: 60_000, now: options.now ?? Date.now });
 
   app.get('/healthz', (c) => c.json({ status: 'ok' }));
 
@@ -85,6 +91,9 @@ export const createApp = (options: AppOptions): Hono => {
   );
 
   app.post('/v1/customers', async (c) => {
+    // First, before the body is read: every mint is a billing call that can lead to a Checkout session, which is where card testing starts.
+    const wait = customersLimiter.check(clientAddress(c, options.trustProxy === true));
+    if (wait !== undefined) return reply(buyerResponse(new BillingProblem({ status: 429, code: 'RATE_LIMITED', retryAfterSeconds: wait })));
     const body = parseJson(await c.req.text());
     const countryCode = isRecord(body) ? body['countryCode'] : undefined;
     const regionCode = isRecord(body) ? body['regionCode'] : undefined;
