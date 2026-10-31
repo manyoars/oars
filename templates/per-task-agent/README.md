@@ -27,6 +27,8 @@ the manifest. Outside the platform, set `OARS_PUBLIC_URL` to an http(s) URL with
 | `OARS_API_URL` | `https://api.manyoars.com` | Where billing lives |
 | `OARS_PRICE_REFS` | `task-1,tasks-5` | The price refs `GET /` advertises, comma separated |
 | `OARS_DEV_FAKE_BILLING` | unset | `1` selects the in-memory fake, for local development only |
+| `OARS_CUSTOMERS_PER_MINUTE` | `5` | Anonymous `POST /v1/customers` requests one client address may make in a minute; the next gets `429` with `Retry-After`. A whole number of 1 or more |
+| `OARS_TRUST_PROXY` | unset | `1` counts a request against the address in `CF-Connecting-IP` instead of the socket's; set it behind the oars router only (see "Minting is rate limited") |
 | `ANTHROPIC_API_KEY` | unset | An agent secret you add; with it each audit carries a model-written `summary` |
 | `PORT` | `8080` | Listen port |
 
@@ -36,7 +38,7 @@ the manifest. Outside the platform, set `OARS_PUBLIC_URL` to an http(s) URL with
 |------|------|--------------|
 | `GET /healthz` | none | Liveness |
 | `GET /` | none | The endpoints, the price refs and the charging sentence, as JSON |
-| `POST /v1/customers` | none | Mints a bearer token `oc_...` (shown once) for `{countryCode, regionCode}`; `regionCode`, the two-letter state, is required for `US` |
+| `POST /v1/customers` | none | Mints a bearer token `oc_...` (shown once) for `{countryCode, regionCode}`; `regionCode`, the two-letter state, is required for `US`. 5 requests a minute per client address, then `429` |
 | `POST /v1/credits/checkout` | bearer | `{priceRef}` returns `{checkoutUrl}` to buy a pack |
 | `GET /v1/credits` | bearer | The buyer's balance |
 | `POST /v1/tasks` | bearer | `{url}`: costs one credit when the audit is returned; send an `Idempotency-Key` to retry safely |
@@ -48,6 +50,22 @@ The token is the buyer's only secret: the server stores nothing and bills under 
 leaked `customerRef` cannot spend credits. Keep the token secret. A lost token keeps its credits; recover it at `/recover`:
 `POST /v1/recover` with the email you used at checkout (or open `/recover`), and the emailed link gives you a new token with
 the same credits and stops the old one. A buyer who never bought holds no credits and just mints a new token.
+
+## Minting is rate limited
+
+`POST /v1/customers` takes no token, and each customer it mints can lead to a Checkout session, so left open it is where card
+testing starts. It is limited per client address: a sliding window in this process's memory, 5 requests a minute unless
+`OARS_CUSTOMERS_PER_MINUTE` says otherwise. Over the limit the answer is `429` with the code `RATE_LIMITED` and a
+`Retry-After` in seconds, and billing is not called. A request that fails validation counts too. `POST /v1/recover` keeps its
+own count.
+
+Which address counts is the one setting to get right. By default it is the socket's, because a header is only what the client
+says it is: a caller who sends a new `CF-Connecting-IP` with every request gets a new allowance if the server believes it.
+Behind a proxy every socket is the proxy's, so all your buyers would share one allowance. Behind the oars router, the edge in
+front of every `<slug>.oars.run` agent, set `OARS_TRUST_PROXY=1`: Cloudflare sets `CF-Connecting-IP` and overwrites any value
+a client sent, the router passes it on (the router sets no client-address header of its own), and the limit counts that
+address. A request without the header still counts against its socket. Do not set it where clients can reach the server
+directly, since they could then name any address they like.
 
 ## The task
 

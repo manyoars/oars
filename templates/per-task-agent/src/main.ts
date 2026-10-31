@@ -27,6 +27,8 @@ try {
     recovery,
     priceRefs: config.priceRefs,
     checkoutUrls: checkoutUrlsFor(config.publicUrl),
+    customersPerMinute: config.customersPerMinute,
+    trustProxy: config.trustProxy,
     fetchPage: createPageFetcher({ resolve: dnsResolve, transport: nodeTransport }),
     summarize: config.anthropicApiKey === undefined ? undefined : createSummarizer({ apiKey: config.anthropicApiKey, fetch: (request) => fetch(request) }),
     log: (entry) => {

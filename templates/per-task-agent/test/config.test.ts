@@ -69,4 +69,27 @@ describe('loadConfig', () => {
   it.each(['agent.example', 'ftp://agent.example', 'https://agent.example/?a=b', 'https://agent.example/#x'])('rejects OARS_PUBLIC_URL=%s', (url) => {
     expect(() => loadConfig({ AOR_SDK_KEY: 'k', OARS_PUBLIC_URL: url })).toThrow(/OARS_PUBLIC_URL must be/);
   });
+
+  it('limits anonymous customer minting to 5 a minute per address by default and trusts no proxy', () => {
+    const config = loadConfig({ OARS_DEV_FAKE_BILLING: '1' });
+
+    expect(config.customersPerMinute).toBe(5);
+    expect(config.trustProxy).toBe(false);
+  });
+
+  it('reads OARS_CUSTOMERS_PER_MINUTE, and takes a blank one for the default', () => {
+    expect(loadConfig({ OARS_DEV_FAKE_BILLING: '1', OARS_CUSTOMERS_PER_MINUTE: '12' }).customersPerMinute).toBe(12);
+    expect(loadConfig({ OARS_DEV_FAKE_BILLING: '1', OARS_CUSTOMERS_PER_MINUTE: ' 3 ' }).customersPerMinute).toBe(3);
+    expect(loadConfig({ OARS_DEV_FAKE_BILLING: '1', OARS_CUSTOMERS_PER_MINUTE: '  ' }).customersPerMinute).toBe(5);
+  });
+
+  it.each(['0', '-1', '1.5', 'many', '1e3'])('rejects OARS_CUSTOMERS_PER_MINUTE=%s', (limit) => {
+    expect(() => loadConfig({ OARS_DEV_FAKE_BILLING: '1', OARS_CUSTOMERS_PER_MINUTE: limit })).toThrow(ConfigError);
+    expect(() => loadConfig({ OARS_DEV_FAKE_BILLING: '1', OARS_CUSTOMERS_PER_MINUTE: limit })).toThrow(/OARS_CUSTOMERS_PER_MINUTE/);
+  });
+
+  it('trusts the proxy header only when OARS_TRUST_PROXY is exactly 1', () => {
+    expect(loadConfig({ OARS_DEV_FAKE_BILLING: '1', OARS_TRUST_PROXY: '1' }).trustProxy).toBe(true);
+    for (const flag of ['0', 'true', 'yes', '']) expect(loadConfig({ OARS_DEV_FAKE_BILLING: '1', OARS_TRUST_PROXY: flag }).trustProxy).toBe(false);
+  });
 });
