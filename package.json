@@ -19,7 +19,7 @@
     "build": "npm run build -w packages/client && npm run build -w packages/cli",
     "check:template-copy": "node scripts/check-template-copy.mjs",
     "check:licenses": "node scripts/check-licenses.mjs",
-    "check": "node scripts/check-licenses.mjs && node scripts/check-billing-sync.mjs && npm run build && npm run lint && npm run typecheck && npm run test"
+    "check": "node scripts/check-billing-sync.mjs && node scripts/check-licenses.mjs && npm run build && npm run lint && npm run typecheck && npm run test"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
