@@ -7,9 +7,10 @@ import { defaultConfigDir } from './credentials.js';
 import { HOOK_EVENTS, runHook, type HookEvent } from './sessions/hooks.js';
 
 const readStdin = async (): Promise<string> => {
-  const chunks: Buffer[] = [];
-  for await (const chunk of process.stdin) chunks.push(Buffer.from(chunk));
-  return Buffer.concat(chunks).toString('utf8');
+  process.stdin.setEncoding('utf8');
+  let text = '';
+  for await (const chunk of process.stdin) text += String(chunk);
+  return text;
 };
 
 const eventOf = (name: string | undefined): HookEvent | undefined => HOOK_EVENTS.find((event) => event === name);

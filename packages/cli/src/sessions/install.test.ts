@@ -5,9 +5,11 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { run } from '../cli.js';
 import { ExitCode } from '../errors.js';
 import { harness, removeTestDirs } from '../test-support.js';
-import { effectiveRetention, hookStatus, installHooks, scheduleArgs, setSchedule, settingsPath, uninstallHooks, type InstallRuntime } from './install.js';
+import { effectiveRetention, hookStatus, installHooks, readSettings, scheduleArgs, setSchedule, settingsPath, uninstallHooks, type InstallRuntime } from './install.js';
 
-afterEach(() => removeTestDirs());
+afterEach(() => {
+  removeTestDirs();
+});
 
 const calls: string[][] = [];
 
@@ -23,21 +25,16 @@ const runtimeIn = (dir: string, schtasksCode = 0): InstallRuntime => ({
 });
 
 const scratch = (): string => mkdtempSync(join(tmpdir(), 'oars-install-test-'));
-interface SettingsFile {
-  hooks?: { [event: string]: unknown[] };
-  cleanupPeriodDays?: number;
-  model?: string;
-}
-const readJson = (path: string): SettingsFile => JSON.parse(readFileSync(path, 'utf8'));
+const readJson = readSettings;
 
 describe('hook install', () => {
   it('creates the settings file with the three entries and the retention floor', async () => {
     const dir = scratch();
     const file = join(dir, 'new', 'settings.json');
     const result = await installHooks(runtimeIn(dir), file, false);
-    const written = readJson(file);
+    const written = await readJson(file);
     expect(result.installed).toEqual(['SessionStart', 'PostToolUseFailure', 'Stop']);
-    expect(Object.keys(written.hooks ?? {})).toEqual(['SessionStart', 'PostToolUseFailure', 'Stop']);
+    for (const event of ['SessionStart', 'PostToolUseFailure', 'Stop']) expect(written).toHaveProperty(['hooks', event]);
     expect(JSON.stringify(written.hooks)).toContain('hook-bin.js\\" post-tool');
     expect(written.cleanupPeriodDays).toBe(365);
     expect(result.retention).toBe(`Raised cleanupPeriodDays from 30 (unset, the default) to 365 in ${file}.`);
@@ -50,12 +47,9 @@ describe('hook install', () => {
     writeFileSync(file, JSON.stringify({ model: 'opus', hooks: { Stop: [rotation], PreToolUse: [{ matcher: 'Bash', hooks: [] }] } }));
     await installHooks(runtimeIn(dir), file, false);
     await installHooks(runtimeIn(dir), file, false);
-    const written = readJson(file);
+    const written = await readJson(file);
     expect(written.model).toBe('opus');
-    expect(written.hooks?.Stop).toHaveLength(2);
-    expect(written.hooks?.Stop?.[0]).toEqual(rotation);
-    expect(written.hooks?.SessionStart).toHaveLength(1);
-    expect(written.hooks?.PreToolUse).toHaveLength(1);
+    expect(written.hooks).toMatchObject({ Stop: [rotation, expect.anything()], SessionStart: [expect.anything()], PreToolUse: [expect.anything()] });
   });
 
   it('uninstall removes only its own entries and prunes what it emptied', async () => {
@@ -65,7 +59,7 @@ describe('hook install', () => {
     writeFileSync(file, JSON.stringify({ hooks: { Stop: [rotation] } }));
     await installHooks(runtimeIn(dir), file, false);
     expect(await uninstallHooks(file)).toEqual({ file, removed: ['SessionStart', 'PostToolUseFailure', 'Stop'] });
-    const after = readJson(file);
+    const after = await readJson(file);
     expect(after.hooks).toEqual({ Stop: [rotation] });
     expect(after.cleanupPeriodDays).toBe(365);
     expect(await uninstallHooks(file)).toEqual({ file, removed: [] });
@@ -76,7 +70,7 @@ describe('hook install', () => {
     const file = join(dir, 'settings.json');
     await installHooks(runtimeIn(dir), file, true);
     await uninstallHooks(file);
-    expect(readJson(file).hooks).toBeUndefined();
+    expect((await readJson(file)).hooks).toBeUndefined();
     expect(await uninstallHooks(join(dir, 'absent.json'))).toMatchObject({ removed: [] });
   });
 
@@ -90,7 +84,7 @@ describe('hook install', () => {
     await expect(installHooks(runtimeIn(dir), bad, false)).rejects.toThrow('not a JSON object');
     writeFileSync(bad, '  ');
     await installHooks(runtimeIn(dir), bad, true);
-    expect(readJson(bad).hooks?.Stop).toHaveLength(1);
+    expect((await readJson(bad)).hooks).toMatchObject({ Stop: [expect.anything()] });
   });
 
   it('status lists what is installed in the user, project, and named files', async () => {
@@ -124,7 +118,7 @@ describe('retention floor', () => {
     const file = join(dir, 'settings.json');
     if (initial !== undefined) writeFileSync(file, JSON.stringify(initial));
     const result = await installHooks(runtimeIn(dir), file, keep);
-    return { days: readJson(file).cleanupPeriodDays, line: result.retention, file };
+    return { days: (await readJson(file)).cleanupPeriodDays, line: result.retention, file };
   };
 
   it('raises an unset value to 365 and says so', async () => {

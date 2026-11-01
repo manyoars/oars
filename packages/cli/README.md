@@ -97,6 +97,45 @@ their errors and tokens are missing from recall, books, and measure. For each se
 field, and a Merkle root over the raw lines) that `verify` checks; the skeleton holds hashes only, never content.
 `verify` exits 0 even when an invariant has exceptions; add `--strict` to exit 4 instead. `measure` prints the recurring-error count
 per hundred sessions and, on a second line, the distinct recurring signatures in the window.
+#### Many folders: `--allow` prefixes, globs, and `--allow-file`
+
+An `--allow` entry is a folder (or its slug), a folder prefix with a trailing slash (`~/work/` reads that folder and every project under it), or a glob (`*` any run of characters, `?` one character, matched against the project-folder name Claude Code derives from the path). `--allow-file <list>` reads entries from a file, one per line (blank lines and `#` comments skipped), so hundreds of folders need no batching and no long command line. Both repeat and combine. Entries a deposit saves are what the Stop hook and the nightly task reuse; a folder you have never named is never read.
+
+#### Recall in a running session: hooks
+
+`oars sessions hook install` writes three entries into one Claude Code settings file. Each is a deterministic, local, fail-open call into the store (no model, no network); an error inside a hook exits 0 with no output, so a hook never blocks or fails a session.
+
+| Event | Does | Budget |
+|---|---|---|
+| `SessionStart` | injects `oars sessions recall --context` for the session's cwd as additional context: the top recurring errors and what usually followed | under 500 ms |
+| `PostToolUseFailure` | for a failed tool call (`Exit code N`, or an `is_error` result) normalizes the first informative line as `deposit` does and, on a hit, adds "seen in N sessions; what followed: X" | under 100 ms |
+| `Stop` | deposits that one transcript incrementally (idempotent by size and mtime), only from a folder an earlier `--allow` named | under 5 s |
+
+Claude Code fires `PostToolUse` on success only; a failed Bash call arrives as `PostToolUseFailure`, so that is the event registered.
+
+```bash
+# Nothing is written unless you name the file (default --scope file), or say --scope user|project.
+oars sessions hook install --scope file --file ./.claude/settings.local.json
+oars sessions hook install --scope user                 # ~/.claude/settings.json (or $CLAUDE_CONFIG_DIR)
+oars sessions hook install --scope project              # ./.claude/settings.json
+oars sessions hook install --file my-settings.json --keep-retention
+oars sessions hook status                               # user, project, and the nightly task
+oars sessions hook uninstall --scope user               # removes only the entries install wrote
+```
+
+Install merges: existing hooks (a Stop hook that rotates sessions, say) stay, and re-running replaces only its own entries. The harness deletes raw transcripts after `cleanupPeriodDays` (30 when unset), which would erase what `deposit` reads, so install raises it to at least 365 in the file it writes, prints the old and new value, and never lowers a higher one. `--keep-retention` leaves it alone and says so. Uninstall does not touch `cleanupPeriodDays`. For a `claude --settings <file>` launch, install into that file with `--scope file`.
+
+#### Nightly schedule (Windows)
+
+`oars sessions hook install --schedule nightly` registers the Task Scheduler task `OarsSessionsNightly` (daily, 03:00) that runs the full deposit over the saved `--allow` and `--redact-domain` entries and refreshes the recurrence index the hooks read. `--schedule off` removes it; `hook status` shows whether it is registered. Alone, `--schedule` writes no settings file.
+
+#### Reading `measure` before and after
+
+`measure` has no cutoff, so its windows move with every deposit. To pin an "after" reading, run `oars sessions measure --last 300 --since <iso time of the install>`: the current window is the first 300 sessions started at or after that time and the prior window is the 300 before it. Without `--since` the window is the last N. `measure` also prints hook recall calls per session and hook hits per session, counted from `hook-calls.jsonl` in the store.
+
+#### Remove everything
+
+`oars sessions hook uninstall` for each scope you installed; `oars sessions hook install --schedule off`; delete the store folder `<config>/oars/sessions/` (observations, skeletons, state, the hook index, and `hook-calls.jsonl`). Nothing else is created. `cleanupPeriodDays` stays at the value install set unless you change it.
 
 ## The `--json` contract
 

@@ -67,9 +67,11 @@ describe('hook index and context block', () => {
     if (version !== undefined) expect(contextBlock(index, { cwd: REPO, harness: version, top: 5, maxChars: 1200 })).toContain(`Claude Code ${version}`);
   });
 
+  const followed = (tool: string, count: number): [string, number][] => [[tool, count]];
+
   it('merges the sessions of the root and its worktree project folders', () => {
-    const row = { sig: 'Bash | boom', sessions: 2, followed: [['Edit', 3] as [string, number]], harness: [] };
-    const other = { sig: 'Bash | boom', sessions: 3, followed: [['Bash', 1] as [string, number]], harness: [] };
+    const row = { sig: 'Bash | boom', sessions: 2, followed: followed('Edit', 3), harness: [] };
+    const other = { sig: 'Bash | boom', sessions: 3, followed: followed('Bash', 1), harness: [] };
     const index = { at: '', redactDomains: [], signatures: {}, projects: { [slugOf(REPO)]: [row], [`${slugOf(REPO)}--claude-worktrees-t1`]: [other], 'unrelated-app': [row] } };
     const block = contextBlock(index, { cwd: REPO, top: 5, maxChars: 1200 });
     expect(block).toContain('(5 sessions; next: Edit, Bash)');
