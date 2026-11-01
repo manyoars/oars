@@ -299,6 +299,11 @@ export interface SkeletonLine {
 }
 
 export interface CostState {
+  /**
+   * The line's `startTime` as an ISO timestamp: the harness process the totals cover began then, so a resumed session's earlier
+   * lines are not in them. Null when the line has none.
+   */
+  since: string | null;
   input: number | null;
   cacheWrite: number | null;
   cacheRead: number | null;

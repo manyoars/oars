@@ -191,10 +191,16 @@ const toSeconds = (timestamp: string | undefined): number | undefined => {
   return Number.isNaN(millis) ? undefined : millis / 1000;
 };
 
-const sumModelUsage = (value: unknown): CostState | null => {
+/** A `cost-state` line's `startTime` (epoch milliseconds) as an ISO timestamp. */
+const isoOfMillis = (value: unknown): string | null => {
+  const millis = num(value);
+  return millis === undefined || !Number.isFinite(new Date(millis).getTime()) ? null : new Date(millis).toISOString();
+};
+
+const sumModelUsage = (value: unknown, startTime: unknown): CostState | null => {
   if (!isObj(value)) return null;
-  const totals: CostState = { input: null, cacheWrite: null, cacheRead: null, output: null };
-  const add = (key: keyof CostState, ...names: string[]): void => {
+  const totals: CostState = { since: isoOfMillis(startTime), input: null, cacheWrite: null, cacheRead: null, output: null };
+  const add = (key: Exclude<keyof CostState, 'since'>, ...names: string[]): void => {
     for (const model of Object.values(value)) {
       if (!isObj(model)) continue;
       for (const name of names) {
@@ -207,7 +213,7 @@ const sumModelUsage = (value: unknown): CostState | null => {
   add('cacheWrite', 'cacheCreationInputTokens', 'cache_creation_input_tokens');
   add('cacheRead', 'cacheReadInputTokens', 'cache_read_input_tokens');
   add('output', 'outputTokens', 'output_tokens');
-  return Object.values(totals).some((total) => total !== null) ? totals : null;
+  return [totals.input, totals.cacheWrite, totals.cacheRead, totals.output].some((total) => total !== null) ? totals : null;
 };
 
 const merkleRoot = (leaves: readonly string[]): string => {
@@ -495,7 +501,7 @@ export const captureSession = (input: ExtractInput): Capture => {
       requestId: str(o.requestId) || null,
       apiBlockIndex: num(o.apiBlockIndex) ?? null,
       hashes: contentHashes(content),
-      costState: type === 'cost-state' ? sumModelUsage(o.modelUsage) : null,
+      costState: type === 'cost-state' ? sumModelUsage(o.modelUsage, o.startTime) : null,
     });
 
     if (type === 'attachment') {

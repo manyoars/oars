@@ -73,19 +73,40 @@ describe('verify', () => {
     expect(violationsOf([line(0), unindexed])[3]).toBe(0);
   });
 
-  it('compares cost-state totals with summed usage', () => {
+  it('checks that cost-state totals cover summed usage', () => {
     const usage = { input_tokens: 5, cache_creation_input_tokens: 6, cache_read_input_tokens: 7, output_tokens: 8 };
     const assistant = JSON.stringify({ type: 'assistant', requestId: 'r', message: { role: 'assistant', content: [], usage } });
     const state = (output: number): string =>
       JSON.stringify({ type: 'cost-state', totalCostUSD: 1.5, modelUsage: { m: { inputTokens: 5, cacheCreationInputTokens: 6, cacheReadInputTokens: 7, outputTokens: output } } });
     expect(verifySkeleton(skeletonOf([assistant, state(8)]))[5]).toMatchObject({ checked: 4, violations: 0 });
-    expect(verifySkeleton(skeletonOf([assistant, state(9)]))[5]).toMatchObject({ checked: 4, violations: 1 });
+    // Totals above the recorded sum hold: the harness counts side calls no transcript records.
+    expect(verifySkeleton(skeletonOf([assistant, state(9)]))[5]).toMatchObject({ checked: 4, violations: 0 });
+    expect(verifySkeleton(skeletonOf([assistant, state(7)]))[5]).toMatchObject({ checked: 4, violations: 1 });
     // Two content-block lines of one request repeat its usage; they count once. A line with no request id counts on its own.
     expect(verifySkeleton(skeletonOf([assistant, assistant, state(8)]))[5]).toMatchObject({ checked: 4, violations: 0 });
     const anonymous = JSON.stringify({ type: 'assistant', message: { role: 'assistant', content: [], usage } });
     expect(verifySkeleton(skeletonOf([anonymous, anonymous, state(16)]))[5]).toMatchObject({ checked: 4, violations: 3 });
     expect(verifySkeleton(skeletonOf([assistant]))[5]).toMatchObject({ checked: 0, violations: 0 });
     expect(verifySkeleton(skeletonOf([assistant, JSON.stringify({ type: 'cost-state', modelUsage: 5 })]))[5]?.checked).toBe(0);
-    expect(formatVerify(verifyAll([skeletonOf([assistant, state(9)])]), 1)).toContain('FAIL  cost-state totals match summed usage: 3 of 4 hold, 1 exceptions');
+    expect(formatVerify(verifyAll([skeletonOf([assistant, state(7)])]), 1)).toContain(`FAIL  ${INVARIANTS[5]}: 3 of 4 hold, 1 exceptions`);
+  });
+
+  it('counts only usage since the process start, and the subagent transcripts the totals include (A2)', () => {
+    const usage = { input_tokens: 5, cache_creation_input_tokens: 6, cache_read_input_tokens: 7, output_tokens: 8 };
+    const at = (requestId: string, timestamp: string): string =>
+      JSON.stringify({ type: 'assistant', requestId, timestamp, message: { role: 'assistant', content: [], usage } });
+    const state = (startTime: unknown, factor: number): string =>
+      JSON.stringify({ type: 'cost-state', startTime, modelUsage: { m: { inputTokens: 5 * factor, cacheCreationInputTokens: 6 * factor, cacheReadInputTokens: 7 * factor, outputTokens: 8 * factor } } });
+    const start = Date.parse('2026-10-13T15:00:00.000Z');
+    // A resumed session: the first request ran in an earlier process, before startTime, so the totals hold only the second.
+    const resumed = [at('r1', '2026-10-12T23:00:00.000Z'), at('r2', '2026-10-13T16:00:00.000Z'), state(start, 1)];
+    expect(verifySkeleton(skeletonOf(resumed))[5]).toMatchObject({ checked: 4, violations: 0 });
+    expect(verifySkeleton(skeletonOf([...resumed.slice(0, 2), state('soon', 1)]))[5]).toMatchObject({ checked: 4, violations: 4 });
+    expect(verifySkeleton(skeletonOf([...resumed.slice(0, 2), state(1e20, 1)]))[5]).toMatchObject({ checked: 4, violations: 4 });
+    // The subagent's request is in the parent's totals; verifyAll joins it by the `<parent>~agent-<id>` name.
+    const parent = skeletonOf([at('r2', '2026-10-13T16:00:00.000Z'), state(start, 3)], 'p1');
+    const agent = skeletonOf([at('s1', '2026-10-13T16:01:00.000Z'), at('s2', '2026-10-13T16:02:00.000Z')], 'p1~agent-a');
+    expect(verifyAll([parent, agent])[5]).toMatchObject({ checked: 4, violations: 0 });
+    expect(verifyAll([parent, agent, skeletonOf([at('s3', '2026-10-13T16:03:00.000Z')], 'p1~agent-b')])[5]).toMatchObject({ checked: 4, violations: 4 });
   });
 });
