@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { slugOf } from './allow.js';
 import { readHookCalls } from './hook-calls.js';
 import { runHook } from './hooks.js';
-import { deposit, loadStore } from './store.js';
+import { deposit, depositSession, loadStore } from './store.js';
 import { cleanup, FIXTURES, NOW, stage, type Staged } from './test-support.js';
 
 afterEach(cleanup);
@@ -103,7 +103,7 @@ describe('PostToolUseFailure hook', () => {
   });
 });
 
-describe('Stop hook', () => {
+describe('SessionEnd deposit hook', () => {
   it('deposits the finished session incrementally, once, and only from a folder an --allow named', async () => {
     const staged = await deposited();
     const transcript = join(staged.projectsRoot, slugOf(REPO), 'fresh.jsonl');
@@ -119,6 +119,17 @@ describe('Stop hook', () => {
     expect(calls.map((call) => call.hit)).toEqual([true, false]);
     expect(calls[0]?.session).toBe('fresh');
   });
+
+  it('gives up on a held store lock inside the 5 s budget and still returns nothing', async () => {
+    const staged = await deposited();
+    const transcript = join(staged.projectsRoot, slugOf(REPO), 'blocked.jsonl');
+    copyFileSync(join(FIXTURES, 'proj', 'tldr.jsonl'), transcript);
+    writeFileSync(join(staged.storeDir, 'store.lock'), 'a holder that never frees');
+    const started = Date.now();
+    await expect(depositSession(staged.runtime, transcript, () => NOW)).rejects.toThrow('store is locked');
+    expect(Date.now() - started).toBeLessThan(4500);
+    expect(await runHook('stop', JSON.stringify({ session_id: 'blocked', transcript_path: transcript }), staged.runtime, () => NOW)).toBeUndefined();
+  }, 15_000);
 
   it('does not read a folder no --allow named, a missing transcript, or an event without a transcript', async () => {
     const staged = await deposited();

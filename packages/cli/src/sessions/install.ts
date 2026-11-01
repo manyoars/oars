@@ -120,9 +120,23 @@ export interface InstallResult {
   retention: string;
 }
 
+/** Events an earlier build registered our entries under; install and uninstall clear them so a stale entry cannot keep running. */
+const LEGACY_EVENTS = ['Stop'];
+
+/** Takes our entries out of `event`, dropping the key when that empties it. */
+const clearLegacy = (hooks: Json, event: string): boolean => {
+  const groups = groupsOf(hooks, event);
+  if (!hasOwn(groups)) return false;
+  const kept = withoutOwn(groups);
+  if (kept.length === 0) Reflect.deleteProperty(hooks, event);
+  else hooks[event] = kept;
+  return true;
+};
+
 export const installHooks = async (runtime: InstallRuntime, path: string, keepRetention: boolean): Promise<InstallResult> => {
   const settings = await readSettings(path);
   const hooks = hooksOf(settings);
+  for (const event of LEGACY_EVENTS) clearLegacy(hooks, event);
   for (const spec of SPECS) {
     const others = withoutOwn(groupsOf(hooks, spec.event));
     const entry = { type: 'command', command: commandOf(runtime, spec.arg), timeout: spec.timeout };
@@ -148,6 +162,7 @@ export const uninstallHooks = async (path: string): Promise<{ file: string; remo
   const settings = await readSettings(path);
   const hooks = hooksOf(settings);
   const removed: string[] = [];
+  const cleared = LEGACY_EVENTS.map((event) => clearLegacy(hooks, event)).includes(true);
   for (const spec of SPECS) {
     const groups = groupsOf(hooks, spec.event);
     if (!hasOwn(groups)) continue;
@@ -155,7 +170,7 @@ export const uninstallHooks = async (path: string): Promise<{ file: string; remo
     removed.push(spec.event);
     hooks[spec.event] = kept;
   }
-  if (removed.length > 0) {
+  if (removed.length > 0 || cleared) {
     // An event this call emptied goes; an event that was already an empty list in the file is the operator's and stays.
     const remaining = Object.entries(hooks).filter(([event, groups]) => !(removed.includes(event) && Array.isArray(groups) && groups.length === 0));
     // `undefined` is left out of the JSON, so an emptied `hooks` key goes.

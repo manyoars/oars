@@ -1,4 +1,4 @@
-import { appendFileSync, readFileSync, readdirSync, statSync, utimesSync, writeFileSync } from 'node:fs';
+import { appendFileSync, mkdirSync, readFileSync, readdirSync, statSync, utimesSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { CliError, ExitCode } from '../errors.js';
@@ -197,7 +197,7 @@ describe('concurrent hook deposits (fix round 1)', () => {
     const order: string[] = [];
     const first = withLock(staged.storeDir, async () => {
       order.push('first in');
-      await new Promise((done) => setTimeout(done, 60));
+      await new Promise((done) => setTimeout(done, 300));
       order.push('first out');
     });
     while (!order.includes('first in')) await new Promise((done) => setTimeout(done, 5));
@@ -212,6 +212,24 @@ describe('concurrent hook deposits (fix round 1)', () => {
     utimesSync(lock, new Date(0), new Date(0));
     await withLock(staged.storeDir, () => Promise.resolve());
     writeFileSync(lock, 'busy');
-    await expect(withLock(staged.storeDir, () => Promise.resolve(), { waitMs: 80, staleMs: 600000 })).rejects.toThrow('store is locked');
+    await expect(withLock(staged.storeDir, () => Promise.resolve(), { waitMs: 400, staleMs: 600000 })).rejects.toThrow('store is locked');
+  });
+
+  it('two waiters that both see a stale lock leave exactly one writer inside', async () => {
+    const staged = stage();
+    const lock = join(staged.storeDir, 'store.lock');
+    mkdirSync(staged.storeDir, { recursive: true });
+    writeFileSync(lock, 'dead');
+    utimesSync(lock, new Date(0), new Date(0));
+    let inside = 0;
+    let most = 0;
+    const work = async (): Promise<void> => {
+      inside += 1;
+      most = Math.max(most, inside);
+      await new Promise((done) => setTimeout(done, 150));
+      inside -= 1;
+    };
+    await Promise.all([withLock(staged.storeDir, work), withLock(staged.storeDir, work), withLock(staged.storeDir, work)]);
+    expect(most).toBe(1);
   });
 });

@@ -200,6 +200,38 @@ interface LockOptions {
 
 const sleep = (ms: number): Promise<void> => new Promise((done) => setTimeout(done, ms));
 
+const isCode = (error: unknown, ...codes: string[]): boolean => error instanceof Error && 'code' in error && typeof error.code === 'string' && codes.includes(error.code);
+
+/** Creates `file` only if absent; false when it exists (EPERM is Windows saying the previous holder's delete has not finished). */
+const claim = async (file: string): Promise<boolean> => {
+  try {
+    await writeFile(file, String(process.pid), { flag: 'wx', mode: 0o600 });
+    return true;
+  } catch (error) {
+    if (isCode(error, 'EEXIST', 'EPERM', 'EACCES')) return false;
+    throw error;
+  }
+};
+
+/**
+ * Breaks `lock` when it is older than `staleMs`. Only one waiter at a time may judge and remove it (a second `store.lock.break` claim),
+ * and the age is read again inside that claim, so a waiter that lost the race finds the winner's fresh lock and leaves it.
+ */
+const breakStale = async (lock: string, staleMs: number): Promise<void> => {
+  const guard = `${lock}.break`;
+  if (!(await claim(guard))) {
+    const guardAge = await stat(guard).then((info) => Date.now() - info.mtimeMs, () => 0);
+    if (guardAge > staleMs) await rm(guard, { force: true });
+    return;
+  }
+  try {
+    const age = await stat(lock).then((info) => Date.now() - info.mtimeMs, () => 0);
+    if (age > staleMs) await rm(lock, { force: true });
+  } finally {
+    await rm(guard, { force: true });
+  }
+};
+
 /**
  * Runs `work` as the only writer of `state.json` and the observations file. The SessionEnd hooks of parallel sessions and the nightly
  * run each read, extract, and rewrite `state.json`; without this one's `files` and `allow` entries are lost to another's write.
@@ -208,17 +240,10 @@ export const withLock = async <T>(storeDir: string, work: () => Promise<T>, opti
   const lock = join(storeDir, 'store.lock');
   await mkdir(storeDir, { recursive: true });
   const started = Date.now();
-  for (;;) {
-    try {
-      await writeFile(lock, String(process.pid), { flag: 'wx', mode: 0o600 });
-      break;
-    } catch (error) {
-      if (!(error instanceof Error && 'code' in error && error.code === 'EEXIST')) throw error;
-    }
-    const age = await stat(lock).then((info) => Date.now() - info.mtimeMs, () => 0);
-    if (age > options.staleMs) await rm(lock, { force: true });
-    else if (Date.now() - started >= options.waitMs) throw new CliError('The store is locked by another deposit; try again shortly.', ExitCode.UNEXPECTED, 'unexpected');
-    else await sleep(25);
+  while (!(await claim(lock))) {
+    await breakStale(lock, options.staleMs);
+    if (Date.now() - started >= options.waitMs) throw new CliError('The store is locked by another deposit; try again shortly.', ExitCode.UNEXPECTED, 'unexpected');
+    await sleep(25);
   }
   try {
     return await work();
@@ -269,6 +294,8 @@ const depositLocked = async (runtime: SessionsRuntime, options: DepositOptions):
   return result;
 };
 
+const HOOK_LOCK: LockOptions = { waitMs: 3_000, staleMs: 600_000 };
+
 export type SessionDeposit = 'deposited' | 'unchanged' | 'not-allowed' | 'missing';
 
 /**
@@ -276,7 +303,8 @@ export type SessionDeposit = 'deposited' | 'unchanged' | 'not-allowed' | 'missin
  * mtime. It does not rebuild `derived.json` or the hook index (that is a whole-store pass; the nightly run does it), so it stays fast.
  */
 export const depositSession = (runtime: SessionsRuntime, transcript: string, now: () => number): Promise<SessionDeposit> =>
-  withLock(runtime.storeDir, () => depositSessionLocked(runtime, transcript, now));
+  // The hook path gives up after 3 s so a SessionEnd behind the nightly deposit cannot hold session exit past its 5 s budget.
+  withLock(runtime.storeDir, () => depositSessionLocked(runtime, transcript, now), HOOK_LOCK);
 
 const depositSessionLocked = async (runtime: SessionsRuntime, transcript: string, now: () => number): Promise<SessionDeposit> => {
   const project = basename(dirname(transcript));

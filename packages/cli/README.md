@@ -99,7 +99,7 @@ field, and a Merkle root over the raw lines) that `verify` checks; the skeleton 
 per hundred sessions and, on a second line, the distinct recurring signatures in the window.
 #### Many folders: `--allow` prefixes, globs, and `--allow-file`
 
-An `--allow` entry is a folder (or its slug), a folder prefix with a trailing slash (`~/work/` reads that folder (a leading `~` is expanded to your home folder inside a list file or quotes too) and every project under it), or a glob (`*` any run of characters, `?` one character, matched against the project-folder name Claude Code derives from the path). `--allow-file <list>` reads entries from a file, one per line (blank lines and `#` comments skipped), so hundreds of folders need no batching and no long command line. Both repeat and combine. Entries a deposit saves are what the Stop hook and the nightly task reuse; a folder you have never named is never read.
+An `--allow` entry is a folder (or its slug), a folder prefix with a trailing slash (`~/work/` reads that folder and every project under it), or a glob (`*` any run of characters, `?` one character, matched against the project-folder name Claude Code derives from the path). `--allow-file <list>` reads entries from a file, one per line (blank lines and `#` comments skipped), so hundreds of folders need no batching and no long command line. A leading `~` is expanded to your home folder, in a list file or quoted entry too. Both repeat and combine. Entries a deposit saves are what the SessionEnd hook and the nightly task reuse; a folder you have never named is never read.
 
 #### Recall in a running session: hooks
 
@@ -107,8 +107,8 @@ An `--allow` entry is a folder (or its slug), a folder prefix with a trailing sl
 
 | Event | Does | Budget |
 |---|---|---|
-| `SessionStart` | injects `oars sessions recall --context` for the session's cwd as additional context: the top recurring errors and what usually followed | under 500 ms |
-| `PostToolUseFailure` (matcher `Bash|PowerShell`) | for a failed tool call whose error starts with `Exit code N` normalizes the first informative line as `deposit` does and, on a hit, adds "seen in N sessions; what followed: X". A shell pre-filter in the registered command reads the event first and starts node only when it carries `Exit code` | pre-filter under 100 ms; whole path under 1 s |
+| `SessionStart` | injects `oars sessions recall --context` for the session's cwd as additional context: the top 5 errors by sessions within the latest 300 sessions (the `measure --last 300` window) and what usually followed | under 500 ms |
+| `PostToolUseFailure` (matcher `Bash\|PowerShell`) | for a failed tool call whose error starts with `Exit code N` normalizes the first informative line as `deposit` does and, on a hit, adds "seen in N sessions; what followed: X". A shell pre-filter in the registered command reads the event first and starts node only when it carries `Exit code` | pre-filter under 100 ms; whole path under 1 s |
 | `SessionEnd` | deposits that one transcript (idempotent by size and mtime), only from a folder an earlier `--allow` named. Once per session: `Stop` fires after every turn and would append a new revision of the growing transcript each time. A session the harness ends without `SessionEnd` is picked up by the nightly deposit | under 5 s |
 
 Claude Code fires `PostToolUse` on success only; a failed Bash call arrives as `PostToolUseFailure`, so that is the event registered. The pre-filter is a `read`, a `case`, and a `printf | node` in the shell the harness runs hooks in (Git Bash on Windows, where a fresh `node` alone costs 250 ms or more), so it needs no `findstr` and no extra dependency. Writers of the store (`SessionEnd`, the nightly run, `deposit`) take `store.lock`, so parallel sessions cannot lose each other's `state.json` entries; a lock older than ten minutes is broken.
@@ -123,7 +123,7 @@ oars sessions hook status                               # user, project, and the
 oars sessions hook uninstall --scope user               # removes only the entries install wrote
 ```
 
-Install merges: existing hooks (a Stop hook that rotates sessions, say) stay, even inside a group that also holds ours or under a name that contains `hook-bin`, and re-running replaces only its own entries (the commands ending `hook-bin.js" <session-start|post-tool|stop>`). A settings file that exists but cannot be read is an error that changes nothing. The harness deletes raw transcripts after `cleanupPeriodDays` (30 when unset), which would erase what `deposit` reads, so install raises it to at least 365 in the file it writes, prints the old and new value, and never lowers a higher one. `--keep-retention` leaves it alone and says so. Uninstall does not touch `cleanupPeriodDays`. For a `claude --settings <file>` launch, install into that file with `--scope file`.
+Install merges: existing hooks (a Stop hook that rotates sessions, say) stay, and a per-turn `Stop` entry of ours from the first build is removed, even inside a group that also holds ours or under a name that contains `hook-bin`, and re-running replaces only its own entries (the commands ending `hook-bin.js" <session-start|post-tool|stop>`). A settings file that exists but cannot be read is an error that changes nothing. The harness deletes raw transcripts after `cleanupPeriodDays` (30 when unset), which would erase what `deposit` reads, so install raises it to at least 365 in the file it writes, prints the old and new value, and never lowers a higher one. `--keep-retention` leaves it alone and says so. Uninstall does not touch `cleanupPeriodDays`. For a `claude --settings <file>` launch, install into that file with `--scope file`.
 
 #### Nightly schedule (Windows)
 
