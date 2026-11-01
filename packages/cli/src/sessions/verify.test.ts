@@ -3,12 +3,15 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { extractSession } from './derive.js';
 import { makeRedactor } from './redact.js';
-import { formatVerify, INVARIANTS, verifyAll, verifySkeleton } from './verify.js';
+import { formatVerify, INVARIANTS, verifyAll, verifySkeleton, type InvariantResult } from './verify.js';
 import { FIXTURES } from './test-support.js';
 
 const skeletonOf = (lines: readonly string[], name = 's') =>
   extractSession({ text: lines.join('\n'), session: name, project: 'p', rev: 1, at: 'x', bytes: 0, redact: makeRedactor() }).skeleton;
 const fixture = (name: string): string[] => readFileSync(join(FIXTURES, 'proj', `${name}.jsonl`), 'utf8').split('\n').filter((line) => line !== '' && line.startsWith('{"'));
+
+const countsOf = (result: InvariantResult | undefined) =>
+  Object.fromEntries((result?.observed ?? []).filter((entry) => entry.checks > 0).map((entry) => [entry.cls, entry.checks]));
 
 const violationsOf = (lines: readonly string[]): number[] => verifySkeleton(skeletonOf(lines)).map((result) => result.violations);
 
@@ -73,22 +76,54 @@ describe('verify', () => {
     expect(violationsOf([line(0), unindexed])[3]).toBe(0);
   });
 
-  it('checks that cost-state totals cover summed usage', () => {
+  it('checks that cost-state totals equal summed usage', () => {
     const usage = { input_tokens: 5, cache_creation_input_tokens: 6, cache_read_input_tokens: 7, output_tokens: 8 };
-    const assistant = JSON.stringify({ type: 'assistant', requestId: 'r', message: { role: 'assistant', content: [], usage } });
+    const assistant = JSON.stringify({ type: 'assistant', requestId: 'r', message: { role: 'assistant', model: 'm', content: [], usage } });
     const state = (output: number): string =>
       JSON.stringify({ type: 'cost-state', totalCostUSD: 1.5, modelUsage: { m: { inputTokens: 5, cacheCreationInputTokens: 6, cacheReadInputTokens: 7, outputTokens: output } } });
     expect(verifySkeleton(skeletonOf([assistant, state(8)]))[5]).toMatchObject({ checked: 4, violations: 0 });
-    // Totals above the recorded sum hold: the harness counts side calls no transcript records.
+    // A total above the recorded sum is not a failure: it is observed, here with no side model to trace it to.
     expect(verifySkeleton(skeletonOf([assistant, state(9)]))[5]).toMatchObject({ checked: 4, violations: 0 });
+    expect(countsOf(verifySkeleton(skeletonOf([assistant, state(9)]))[5])).toEqual({ other: 1 });
     expect(verifySkeleton(skeletonOf([assistant, state(7)]))[5]).toMatchObject({ checked: 4, violations: 1 });
     // Two content-block lines of one request repeat its usage; they count once. A line with no request id counts on its own.
     expect(verifySkeleton(skeletonOf([assistant, assistant, state(8)]))[5]).toMatchObject({ checked: 4, violations: 0 });
-    const anonymous = JSON.stringify({ type: 'assistant', message: { role: 'assistant', content: [], usage } });
+    const anonymous = JSON.stringify({ type: 'assistant', message: { role: 'assistant', model: 'm', content: [], usage } });
     expect(verifySkeleton(skeletonOf([anonymous, anonymous, state(16)]))[5]).toMatchObject({ checked: 4, violations: 3 });
     expect(verifySkeleton(skeletonOf([assistant]))[5]).toMatchObject({ checked: 0, violations: 0 });
     expect(verifySkeleton(skeletonOf([assistant, JSON.stringify({ type: 'cost-state', modelUsage: 5 })]))[5]?.checked).toBe(0);
     expect(formatVerify(verifyAll([skeletonOf([assistant, state(7)])]), 1)).toContain(`FAIL  ${INVARIANTS[5]}: 3 of 4 hold, 1 exceptions`);
+  });
+
+  it('classes each check that holds only within its scope, and each total above the recorded sum (A2)', () => {
+    const usage = { input_tokens: 5, cache_creation_input_tokens: 6, cache_read_input_tokens: 7, output_tokens: 8 };
+    const at = (requestId: string, timestamp: string): string =>
+      JSON.stringify({ type: 'assistant', requestId, timestamp, message: { role: 'assistant', model: 'm', content: [], usage } });
+    const tokens = (factor: number, extra = 0) => ({ inputTokens: 5 * factor + extra, cacheCreationInputTokens: 6 * factor, cacheReadInputTokens: 7 * factor, outputTokens: 8 * factor });
+    const start = Date.parse('2026-10-13T15:00:00.000Z');
+    const state = (modelUsage: object): string => JSON.stringify({ type: 'cost-state', startTime: start, modelUsage });
+    const before = at('r1', '2026-10-12T23:00:00.000Z');
+    const after = at('r2', '2026-10-13T16:00:00.000Z');
+    // Resume scope: the earlier process's request is outside the totals; with it the sum would be twice the total.
+    const resumed = skeletonOf([before, after, state({ m: tokens(1) })], 'resumed');
+    expect(countsOf(verifySkeleton(resumed)[5])).toEqual({ 'resume scope': 4 });
+    // Subagent transcripts: the agent's two requests make the main line's one equal the total of three.
+    const parent = skeletonOf([after, state({ m: tokens(3) })], 'p1');
+    const agent = skeletonOf([at('s1', '2026-10-13T16:01:00.000Z'), at('s2', '2026-10-13T16:02:00.000Z')], 'p1~agent-a');
+    expect(countsOf(verifyAll([parent, agent])[5])).toEqual({ 'subagent transcripts': 4 });
+    // Harness side calls: a small model in modelUsage that no line names, as in 001cf645.
+    const side = skeletonOf([after, state({ m: tokens(1), 'claude-haiku-4-5': { inputTokens: 300, outputTokens: 20 } })], '001cf645');
+    expect(countsOf(verifySkeleton(side)[5])).toEqual({ 'harness side calls': 2 });
+    // Other: the total is above the sum and every modelUsage model has a line.
+    const other = skeletonOf([after, state({ m: tokens(1, 174) })], 'other');
+    expect(countsOf(verifySkeleton(other)[5])).toEqual({ other: 1 });
+    const results = verifyAll([resumed, parent, agent, side, other]);
+    expect(results[5]).toMatchObject({ checked: 16, violations: 0 });
+    const text = formatVerify(results, 5);
+    expect(text).toContain(`PASS  ${INVARIANTS[5]}: 13 of 16 hold, 3 observed`);
+    expect(text).toContain('      equal only within scope: 4 resume scope (e.g. resumed), 4 subagent transcripts (e.g. p1)');
+    expect(text).toContain('      total above the recorded sum, as observed: 2 harness side calls (e.g. 001cf645), 1 other (e.g. other)');
+    expect(formatVerify(verifyAll([skeletonOf([after, state({ m: tokens(1) })])]), 1).endsWith(`PASS  ${INVARIANTS[5]}: 4 of 4 hold`)).toBe(true);
   });
 
   it('counts only usage since the process start, and the subagent transcripts the totals include (A2)', () => {

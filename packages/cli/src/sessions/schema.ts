@@ -314,6 +314,8 @@ export interface CostState {
   cacheWrite: number | null;
   cacheRead: number | null;
   output: number | null;
+  /** The model names in `modelUsage`, sorted: a model no assistant line names is a harness side call. */
+  models: string[];
 }
 
 export interface Skeleton {

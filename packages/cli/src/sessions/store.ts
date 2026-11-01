@@ -590,6 +590,18 @@ export const readCalls = async (storeDir: string): Promise<RecallCall[]> => {
 
 const isSkeleton = (value: unknown): value is { [key: string]: unknown } & Skeleton => isRecord(value) && Array.isArray(value.lines) && typeof value.merkleRoot === 'string';
 
+/** A skeleton written before `since` (version 2) or `models` (early version 3) existed reads with them empty, as the check expects. */
+const withCostFields = (skeleton: Skeleton): Skeleton => ({
+  ...skeleton,
+  lines: skeleton.lines.map((line) => {
+    const state: unknown = line.costState;
+    if (line.costState === null || !isRecord(state)) return line;
+    const since = typeof state.since === 'string' ? state.since : null;
+    const models = Array.isArray(state.models) ? state.models.filter((model): model is string => typeof model === 'string') : [];
+    return { ...line, costState: { ...line.costState, since, models } };
+  }),
+});
+
 /** `unreadable` counts skeleton files that are torn, corrupted, or not a skeleton, so verify reports them instead of aborting. */
 export const readSkeletons = async (storeDir: string, only?: string): Promise<{ skeletons: Skeleton[]; unreadable: number }> => {
   const folder = paths(storeDir).skeletons;
@@ -610,7 +622,7 @@ export const readSkeletons = async (storeDir: string, only?: string): Promise<{ 
     } catch (error) {
       if (!(error instanceof SyntaxError)) throw error;
     }
-    if (isSkeleton(parsed)) skeletons.push(parsed);
+    if (isSkeleton(parsed)) skeletons.push(withCostFields(parsed));
     else unreadable += 1;
   }
   return { skeletons, unreadable };
