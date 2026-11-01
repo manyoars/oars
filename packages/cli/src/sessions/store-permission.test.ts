@@ -4,9 +4,11 @@ import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 
 vi.mock('node:fs/promises', () => {
-  const { appendFile, mkdir, readdir, readFile, rename, rm, stat } = promises;
+  const { appendFile, copyFile, link, mkdir, readdir, readFile, rename, rm, stat } = promises;
   return {
     appendFile,
+    copyFile,
+    link,
     mkdir,
     readdir,
     readFile,
