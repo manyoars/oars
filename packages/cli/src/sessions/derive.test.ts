@@ -1,9 +1,11 @@
 import { copyFileSync, mkdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { extractSession } from './derive.js';
+import { episodesOf, extractSession, rankRecovery, RECOVERY_WINDOW, type Episode, type EpisodeOutcome, type SessionCapture } from './derive.js';
+import { captureSession } from './extract.js';
 import { books, formatBooks, formatMeasure, measure } from './query.js';
 import { makeRedactor } from './redact.js';
+import { CAPTURE_VERSION, type ErrorLineObservation, type ToolObservation, type ToolStatus } from './schema.js';
 import { deposit, depositSession, loadStore, paths } from './store.js';
 import { cleanup, FIXTURES, NOW, stage } from './test-support.js';
 
@@ -118,5 +120,82 @@ describe('subagent transcripts (A24)', () => {
     utimesSync(join(parent, 'agent-x.jsonl'), new Date(NOW), new Date(NOW + 1000));
     expect(await depositSession(staged.runtime, transcript, () => NOW)).toBe('deposited');
     expect((await loadStore(staged.storeDir)).subagents).toHaveLength(2);
+  });
+});
+
+describe('recovery episodes (recovery_episodes.py, t693)', () => {
+  const redact = makeRedactor();
+  const fromFixture = (name: string): SessionCapture => {
+    const text = readFileSync(join(FIXTURES, 'proj', `${name}.jsonl`), 'utf8');
+    return captureSession({ text, session: name, project: 'proj', rev: 1, at: '', bytes: 0, redact });
+  };
+  /** A capture from call specs: `[tool, target, status]`, an optional toolUseId, and an error line for each failed call. */
+  const synthetic = (session: string, specs: readonly (readonly [string, string, ToolStatus, string?])[], orphans: readonly { after: number; line: string }[] = []): SessionCapture => {
+    const tools = specs.map(([tool, target, status, id], n): ToolObservation => ({
+      kind: 'tool', cv: CAPTURE_VERSION, session, rev: 1, parent: session, agentType: null, n, ts: null, tool, status, target,
+      keys: [], durationMs: null, toolUseId: id ?? `c${n}`, harnessVersion: null, side: false, prompt: 0,
+    }));
+    const errorLine = (toolUseId: string | null, tool: string, line: string, after: number): ErrorLineObservation => ({
+      kind: 'error-line', cv: CAPTURE_VERSION, session, rev: 1, toolUseId, tool, line, ts: null, harnessVersion: null, side: false, prompt: 0, after,
+    });
+    const errorLines = [
+      ...tools.filter((tool) => tool.status === 'error').map((tool) => errorLine(tool.toolUseId, tool.tool, `${tool.tool} failed`, tool.n + 1)),
+      ...orphans.map((orphan) => errorLine('gone', '?', orphan.line, orphan.after)),
+    ].sort((a, b) => a.after - b.after);
+    const head = fromFixture('errors-a').session;
+    return { session: { ...head, session }, prompts: [], tools, errorLines };
+  };
+
+  it('reads fixed, worked around, and abandoned on the fixtures', () => {
+    // errors-a: the quoting Bash failure is replaced by an Edit (shell to edit), the unread Write by an Edit (same family).
+    expect(episodesOf(fromFixture('errors-a'), redact)).toEqual([
+      { session: 'errors-a', sig: 'Bash | bash: -c: line <n>: unexpected EOF while looking for matching quote', outcome: 'worked around', calls: 3 },
+      { session: 'errors-a', sig: 'Write | File has not been read yet. Read it first before writing to it.', outcome: 'worked around', calls: 2 },
+    ]);
+    expect(episodesOf(synthetic('s', [['Bash', 'npm test', 'error'], ['Read', 'a', 'ok'], ['Bash', 'npm test', 'ok']]), redact)).toEqual([
+      { session: 's', sig: 'Bash | Bash failed', outcome: 'fixed', calls: 2 },
+    ]);
+    expect(episodesOf(synthetic('s', [['Bash', 'npm test', 'error'], ['Read', 'a', 'ok'], ['TodoWrite', 'TodoWrite', 'ok']]), redact)).toEqual([
+      { session: 's', sig: 'Bash | Bash failed', outcome: 'abandoned', calls: 2 },
+    ]);
+  });
+
+  it('looks 20 calls ahead and no further', () => {
+    expect(RECOVERY_WINDOW).toBe(20);
+    const filler = Array.from({ length: 19 }, (): readonly [string, string, ToolStatus] => ['TodoWrite', 'TodoWrite', 'ok']);
+    const at20 = synthetic('s', [['Bash', 'npm test', 'error'], ...filler, ['Bash', 'npm test', 'ok']]);
+    const at21 = synthetic('s', [['Bash', 'npm test', 'error'], ...filler, ['TodoWrite', 'TodoWrite', 'ok'], ['Bash', 'npm test', 'ok']]);
+    expect(episodesOf(at20, redact)[0]).toMatchObject({ outcome: 'fixed', calls: 20 });
+    expect(episodesOf(at21, redact)[0]).toMatchObject({ outcome: 'abandoned', calls: 20 });
+  });
+
+  it('counts a repeated toolUseId once and makes an orphan error a call of its own, named ?', () => {
+    const resumed = synthetic('s', [['Bash', 'npm test', 'error', 'x'], ['Bash', 'npm test', 'error', 'x'], ['Bash', 'npm test', 'ok']]);
+    expect(episodesOf(resumed, redact)).toEqual([{ session: 's', sig: 'Bash | Bash failed', outcome: 'fixed', calls: 1 }]);
+    const orphan = synthetic('s', [['Read', 'a', 'ok'], ['Read', 'b', 'ok']], [{ after: 1, line: 'tool 42 is gone' }]);
+    expect(episodesOf(orphan, redact)).toEqual([{ session: 's', sig: '? | tool <n> is gone', outcome: 'abandoned', calls: 1 }]);
+  });
+
+  it('ranks signatures seen in two or more sessions by sessions times median calls, then sessions, errors, and signature', () => {
+    const episode = (session: string, sig: string, outcome: EpisodeOutcome, calls: number): Episode => ({ session, sig, outcome, calls });
+    const ranked = rankRecovery(
+      [
+        episode('a', 'one-session', 'fixed', 9),
+        episode('a', 'one-session', 'fixed', 9),
+        episode('a', 'B', 'fixed', 1),
+        episode('b', 'B', 'abandoned', 3),
+        episode('a', 'A', 'worked around', 2),
+        episode('b', 'A', 'fixed', 2),
+        episode('a', 'C', 'fixed', 4),
+        episode('b', 'C', 'fixed', 4),
+        episode('c', 'C', 'abandoned', 4),
+      ],
+      10,
+    );
+    expect(ranked.map((rank) => rank.sig)).toEqual(['C', 'A', 'B']);
+    expect(ranked[0]).toEqual({ sig: 'C', sessions: 3, errors: 3, medianCalls: 4, score: 12, fixed: 2, workedAround: 0, abandoned: 1 });
+    expect(ranked[1]).toMatchObject({ sig: 'A', score: 4, fixed: 1, workedAround: 1 });
+    expect(ranked[2]).toMatchObject({ sig: 'B', medianCalls: 2, score: 4, abandoned: 1 });
+    expect(rankRecovery([episode('a', 'C', 'fixed', 1), episode('b', 'C', 'fixed', 1), episode('a', 'A', 'fixed', 1), episode('b', 'A', 'fixed', 1)], 1)).toMatchObject([{ sig: 'A' }]);
   });
 });
