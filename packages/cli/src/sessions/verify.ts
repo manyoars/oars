@@ -82,8 +82,14 @@ const verifyCost = (lines: readonly SkeletonLine[]): InvariantResult => {
   const last = [...lines].reverse().find((line) => line.costState !== null)?.costState;
   if (last === undefined || last === null) return { name: INVARIANTS[5], checked: 0, violations: 0 };
   const sums = { input: 0, cacheWrite: 0, cacheRead: 0, output: 0 };
+  // Every content block of one API response is its own line and repeats that response's usage, so cost-state matches the sum over distinct request ids (checked on the operator's store, 2026-11-01).
+  const counted = new Set<string>();
   for (const line of lines) {
     if (line.type !== 'assistant' || line.usage === null) continue;
+    if (line.requestId !== null) {
+      if (counted.has(line.requestId)) continue;
+      counted.add(line.requestId);
+    }
     sums.input += line.usage.input;
     sums.cacheWrite += line.usage.cacheWrite;
     sums.cacheRead += line.usage.cacheRead;
