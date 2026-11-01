@@ -52,7 +52,9 @@ switched on; a `shareable` field is a name, version, count, duration, status, ke
 `<project>/<session>/subagents/agent-*.jsonl` and `.../subagents/workflows/wf_*/agent-*.jsonl` are deposited as
 `<parent>~agent-<id>` and `<parent>~wf_<id>~agent-<id>`, with the parent session id and the subagent type from the sibling
 `.meta.json`. They are kept apart from the sessions, so per-session denominators (`measure`, G1) still count main sessions;
-`books --by class` adds their tokens to the spawning prompt's class as the `delegated` column.
+`books --by class` adds their tokens to the spawning prompt's class as the `delegated` column. Their errors are derived into the
+same `error` records as a main session's, under the parent's `session`, with the agent's transcript in `agent` (local-only) and the
+spawning prompt's `prompt` and `cls`: signatures, `measure`, and recall include them, and each signature counts the parent once.
 
 ## The raw archive
 

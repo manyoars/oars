@@ -144,6 +144,11 @@ export interface ErrorObservation {
   /** The prompt this error happened in (null before the first prompt) and its class. */
   prompt: number | null;
   cls: PromptClass | null;
+  /**
+   * Set when a subagent made the call: its transcript (`<parent>~agent-x`), local-only. `session` is then the main session that spawned
+   * it, and `prompt` and `cls` are the spawning prompt's.
+   */
+  agent?: string;
 }
 
 export type ToolStatus = 'ok' | 'error' | 'none';

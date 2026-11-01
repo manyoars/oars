@@ -20,9 +20,9 @@ import { CliError, ExitCode } from '../errors.js';
 import { compileAllow, requireEntries, slugOf } from './allow.js';
 import { buildIndex, indexPath } from './hook-index.js';
 import { archiveRaw } from './archive.js';
-import { deriveSession } from './derive.js';
+import { deriveSession, type SessionCapture } from './derive.js';
 import { captureSession, type Capture, type SubagentOrigin } from './extract.js';
-import { makeRedactor } from './redact.js';
+import { makeRedactor, type Redactor } from './redact.js';
 import {
   CAPTURE_VERSION,
   EXTRACTOR_VERSION,
@@ -498,11 +498,13 @@ export const loadStore = async (storeDir: string): Promise<Store> => {
     else store.errors.push(observation);
   }
   const redact = makeRedactor((await readState(storeDir)).redactDomains);
+  const agents: (SessionCapture & { parent: string })[] = [];
   for (const { session, prompts, tools, errorLines } of captured.values()) {
     if (session === undefined) continue;
     store.tools.push(...tools);
     if (session.parent !== null) {
       store.subagents.push(session);
+      if (session.cv === CAPTURE_VERSION) agents.push({ session, prompts, tools, errorLines, parent: session.parent });
       continue;
     }
     store.sessions.push(session);
@@ -511,7 +513,28 @@ export const loadStore = async (storeDir: string): Promise<Store> => {
     store.prompts.push(...derived.prompts);
     store.errors.push(...derived.errors);
   }
+  store.errors.push(...agentErrors(store, agents, redact));
   return store;
+};
+
+/**
+ * A subagent's errors are the fleet's work too (A24), so they join `store.errors` under the main session that spawned the agent,
+ * with the agent's transcript in `agent`: every count by session (signature sessions, measure's recurrence, the hook index) then
+ * counts the parent once, and G1's denominators stay main sessions. `prompt` and `cls` are the spawning prompt's (null when the
+ * spawning call is not in the parent), as books attributes the agent's tokens.
+ */
+const agentErrors = (store: Store, agents: readonly (SessionCapture & { parent: string })[], redact: Redactor): ErrorObservation[] => {
+  const classOf = new Map(store.prompts.map((prompt) => [`${prompt.session}#${String(prompt.index)}`, prompt.cls]));
+  const promptOf = new Map<string, number>();
+  for (const tool of store.tools) if (tool.toolUseId !== null && tool.prompt !== null) promptOf.set(`${tool.session} ${tool.toolUseId}`, tool.prompt);
+  const errors: ErrorObservation[] = [];
+  for (const capture of agents) {
+    const { parent } = capture;
+    const prompt = promptOf.get(`${parent} ${String(capture.session.spawnedBy)}`) ?? null;
+    const cls = prompt === null ? null : (classOf.get(`${parent}#${String(prompt)}`) ?? null);
+    for (const error of deriveSession(capture, redact).errors) errors.push({ ...error, session: parent, agent: capture.session.session, prompt, cls });
+  }
+  return errors;
 };
 
 // The store is ours, so a line with a known `kind`, a session, and a rev is trusted as the type it says.
