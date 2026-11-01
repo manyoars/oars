@@ -103,6 +103,10 @@ describe('subagent transcripts (A24)', () => {
     expect(rows.reduce((total, row) => total + row.delegated, 0)).toBe((spent?.input ?? 0) + (spent?.cacheWrite ?? 0) + (spent?.cacheRead ?? 0) + (spent?.output ?? 0));
     expect(rows.reduce((total, row) => total + row.delegated, 0)).toBeGreaterThan(0);
     expect(formatBooks(rows, 'class')).toContain('delegated');
+    // Every deposited transcript, main and subagent, is in oars' own raw archive (retention point 4c).
+    const raw = join(paths(staged.storeDir).raw, 'proj');
+    expect(readFileSync(join(raw, 'errors-a', 'subagents', 'workflows', 'wf_1', 'agent-y.jsonl'), 'utf8')).toBe(readFileSync(join(FIXTURES, 'proj', 'tldr.jsonl'), 'utf8'));
+    expect(readFileSync(join(raw, 'errors-a.jsonl'), 'utf8')).toBe(readFileSync(join(FIXTURES, 'proj', 'errors-a.jsonl'), 'utf8'));
   });
 
   it('takes the subagents of a session at its Stop deposit', async () => {

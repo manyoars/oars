@@ -6,6 +6,8 @@
 //   state.json              per file: size, mtime, the `rev`, capture version and redact-domain set last deposited
 //                           (a file is skipped only when size, mtime, version and domain set all match)
 //   salt                    the per-account salt path targets are hashed with (local-only, never shared)
+//   raw/<project>/<path>    every deposited transcript, hard-linked (copied across volumes) so the raw outlives the
+//                           harness's cleanup; local-only (archive.ts)
 //   derived.json            the derived records, rewritten at the end of every deposit
 //   skeletons/<session>.json  one skeleton per session (hashes and ids, no content)
 //   mcp-calls.jsonl         one line per recall call the MCP server answered
@@ -17,6 +19,7 @@ import { basename, dirname, join } from 'node:path';
 import { CliError, ExitCode } from '../errors.js';
 import { compileAllow, requireEntries, slugOf } from './allow.js';
 import { buildIndex, indexPath } from './hook-index.js';
+import { archiveRaw } from './archive.js';
 import { deriveSession } from './derive.js';
 import { captureSession, type Capture, type SubagentOrigin } from './extract.js';
 import { makeRedactor } from './redact.js';
@@ -75,6 +78,7 @@ export const paths = (storeDir: string) => ({
   calls: join(storeDir, 'mcp-calls.jsonl'),
   hookCalls: join(storeDir, 'hook-calls.jsonl'),
   salt: join(storeDir, 'salt'),
+  raw: join(storeDir, 'raw'),
 });
 
 /** The store's per-account salt, created on first use: path targets are hashed with it so they join inside one account only. */
@@ -258,6 +262,8 @@ const depositFile = async (context: DepositContext, project: string, transcript:
   const { runtime, state } = context;
   const { file, session, subagent } = transcript;
   const info = await stat(file);
+  // Archived before the unchanged check, so a store deposited before the archive existed fills it on its next run.
+  await archiveRaw(file, join(paths(runtime.storeDir).raw, project, ...transcript.relative.split('/')));
   const key = `${project}/${transcript.relative}`;
   const previous = state.files[key];
   if (previous !== undefined && previous.size === info.size && previous.mtimeMs === info.mtimeMs && previous.v === CAPTURE_VERSION && sameSet(previous.d, context.domains)) {
