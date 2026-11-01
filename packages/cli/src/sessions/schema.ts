@@ -169,7 +169,8 @@ export interface ToolObservation {
   status: ToolStatus;
   /**
    * For a call with a path input (`file_path`, `notebook_path`, `path`): a per-account salted SHA-256 (16 hex characters) of the path
-   * relative to the line's `cwd`. For a shell call: the command's first token (its basename when it is a path), redacted. Else null.
+   * relative to the line's `cwd`. For a shell call: its program and subcommand (`shellTarget` in extract.ts, as
+   * recovery_episodes.py computes it), redacted. Else null.
    */
   target: string | null;
   /** The input's key names, sorted. */
