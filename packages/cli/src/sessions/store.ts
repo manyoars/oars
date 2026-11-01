@@ -6,8 +6,9 @@
 //   skeletons/<session>.json  one skeleton per session (hashes and ids, no content)
 //   mcp-calls.jsonl         one line per recall call the MCP server answered
 import { appendFile, mkdir, readdir, readFile, rename, stat, writeFile } from 'node:fs/promises';
-import { join, resolve } from 'node:path';
-import { CliError, ExitCode } from '../errors.js';
+import { basename, dirname, join } from 'node:path';
+import { compileAllow, requireEntries, slugOf } from './allow.js';
+import { buildIndex, indexPath } from './hook-index.js';
 import { extractSession } from './extract.js';
 import { makeRedactor } from './redact.js';
 import {
@@ -47,6 +48,8 @@ interface State {
   files: { [key: string]: FileState };
   /** Every `--redact-domain` any deposit used, so recall masks a query the same way the log was masked. */
   redactDomains: string[];
+  /** Every `--allow` entry any deposit used (folders, prefixes, globs): the Stop hook deposits a session only from a folder these name. */
+  allow: string[];
 }
 
 const isMissing = (error: unknown): boolean => error instanceof Error && 'code' in error && error.code === 'ENOENT';
@@ -57,6 +60,7 @@ export const paths = (storeDir: string) => ({
   derived: join(storeDir, 'derived.json'),
   skeletons: join(storeDir, 'skeletons'),
   calls: join(storeDir, 'mcp-calls.jsonl'),
+  hookCalls: join(storeDir, 'hook-calls.jsonl'),
 });
 
 const sameSet = (a: readonly string[], b: readonly string[]): boolean => a.length === b.length && a.every((entry, index) => entry === b[index]);
@@ -80,15 +84,22 @@ const readState = async (storeDir: string): Promise<State> => {
         }
       }
       const domains = Array.isArray(parsed.redactDomains) ? parsed.redactDomains.filter((entry): entry is string => typeof entry === 'string') : [];
-      return { files, redactDomains: domains };
+      const allow = Array.isArray(parsed.allow) ? parsed.allow.filter((entry): entry is string => typeof entry === 'string') : [];
+      return { files, redactDomains: domains, allow };
     }
   } catch (error) {
     if (!isMissing(error) && !(error instanceof SyntaxError)) throw error;
   }
-  return { files: {}, redactDomains: [] };
+  return { files: {}, redactDomains: [], allow: [] };
 };
 
 export const readRedactDomains = async (storeDir: string): Promise<string[]> => (await readState(storeDir)).redactDomains;
+
+/** The `--allow` entries and `--redact-domain` set earlier deposits used; the nightly run repeats them. */
+export const readSaved = async (storeDir: string): Promise<{ allow: string[]; redactDomains: string[] }> => {
+  const { allow, redactDomains } = await readState(storeDir);
+  return { allow, redactDomains };
+};
 
 const writeAtomic = async (file: string, text: string): Promise<void> => {
   await mkdir(join(file, '..'), { recursive: true });
@@ -97,8 +108,7 @@ const writeAtomic = async (file: string, text: string): Promise<void> => {
   await rename(temp, file);
 };
 
-/** Claude Code names a project folder after its working directory with every non-alphanumeric character as `-`. */
-export const slugOf = (folder: string): string => resolve(folder).replace(/[^A-Za-z0-9]/g, '-');
+export { slugOf };
 
 export interface DepositOptions {
   allow: readonly string[];
@@ -131,26 +141,64 @@ const projectFolders = async (projectsRoot: string): Promise<string[]> => {
   }
 };
 
-export const deposit = async (runtime: SessionsRuntime, options: DepositOptions): Promise<DepositResult> => {
-  if (options.allow.length === 0) {
-    throw new CliError('Nothing to read: pass at least one --allow <folder>. Nothing is read from a folder you have not named.', ExitCode.USAGE, 'usage');
-  }
-  // A bare folder name (the slug Claude Code gave the project) matches itself; a path matches its slug.
-  const names = new Set(options.allow.flatMap((entry) => [entry, slugOf(entry)]));
-  const folders = await projectFolders(runtime.projectsRoot);
-  const allowed = folders.filter((name) => names.has(name));
-  const matched = new Set(allowed);
-  const missing = options.allow.filter((entry) => !matched.has(entry) && !matched.has(slugOf(entry)));
-  const state = await readState(runtime.storeDir);
-  state.redactDomains = [...new Set([...state.redactDomains, ...options.redactDomains])];
+interface DepositContext {
+  runtime: SessionsRuntime;
+  state: State;
+  /** The sorted redact-domain set in force. */
+  domains: string[];
+  redact: ReturnType<typeof makeRedactor>;
+  at: string;
+  now: () => number;
+}
+
+const contextFor = async (runtime: SessionsRuntime, state: State, now: () => number): Promise<DepositContext> => {
   // Each file records the set it was deposited under. A file whose set differs from the current one is read again, so a domain
   // added while other folders were allowed still masks those folders later. Lines already written stay in the append-only
   // observations file until it is compacted; readers use only the highest rev of each session.
-  const domains = [...state.redactDomains].sort();
-  const redact = makeRedactor(state.redactDomains);
+  await mkdir(paths(runtime.storeDir).skeletons, { recursive: true });
+  return { runtime, state, domains: [...state.redactDomains].sort(), redact: makeRedactor(state.redactDomains), at: new Date(now()).toISOString(), now };
+};
+
+/** Deposits one session file unless its size, mtime, extractor version, and domain set are unchanged; returns what it wrote, or undefined when skipped. */
+const depositFile = async (context: DepositContext, project: string, file: string): Promise<ReturnType<typeof extractSession> | undefined> => {
+  const { runtime, state } = context;
+  const info = await stat(file);
+  const name = basename(file);
+  const key = `${project}/${name}`;
+  const previous = state.files[key];
+  if (previous !== undefined && previous.size === info.size && previous.mtimeMs === info.mtimeMs && previous.v === EXTRACTOR_VERSION && sameSet(previous.d, context.domains)) {
+    return undefined;
+  }
   const files = paths(runtime.storeDir);
-  await mkdir(files.skeletons, { recursive: true });
-  const at = new Date(options.now()).toISOString();
+  const session = name.slice(0, -'.jsonl'.length);
+  const rev = Math.max((previous?.rev ?? 0) + 1, context.now());
+  const extract = extractSession({ text: await readFile(file, 'utf8'), session, project, rev, at: context.at, bytes: info.size, redact: context.redact });
+  const batch: Observation[] = [extract.session, ...extract.prompts, ...extract.errors];
+  await mkdir(runtime.storeDir, { recursive: true });
+  await appendFile(files.observations, batch.map((observation) => `${JSON.stringify(observation)}
+`).join(''), { mode: 0o600 });
+  await writeAtomic(join(files.skeletons, `${session}.json`), JSON.stringify(extract.skeleton));
+  state.files[key] = { size: info.size, mtimeMs: info.mtimeMs, rev, v: EXTRACTOR_VERSION, d: context.domains };
+  return extract;
+};
+
+/** Rewrites `derived.json` and the hook index from the whole store. */
+export const refresh = async (runtime: SessionsRuntime, redactDomains: readonly string[], at: string): Promise<void> => {
+  const store = await loadStore(runtime.storeDir);
+  await writeAtomic(paths(runtime.storeDir).derived, JSON.stringify(derive(store, at)));
+  await writeAtomic(indexPath(runtime.storeDir), JSON.stringify(buildIndex(store, redactDomains, at)));
+};
+
+export const deposit = async (runtime: SessionsRuntime, options: DepositOptions): Promise<DepositResult> => {
+  requireEntries(options.allow);
+  const allow = compileAllow(options.allow);
+  const folders = await projectFolders(runtime.projectsRoot);
+  const allowed = folders.filter((name) => allow.allows(name));
+  const missing = allow.unmatched(folders);
+  const state = await readState(runtime.storeDir);
+  state.redactDomains = [...new Set([...state.redactDomains, ...options.redactDomains])];
+  state.allow = [...new Set([...state.allow, ...options.allow])];
+  const context = await contextFor(runtime, state, options.now);
   const result: DepositResult = {
     sessions: 0,
     unchanged: 0,
@@ -165,31 +213,41 @@ export const deposit = async (runtime: SessionsRuntime, options: DepositOptions)
     const folder = join(runtime.projectsRoot, project);
     const entries = (await readdir(folder, { withFileTypes: true })).filter((entry) => entry.isFile() && entry.name.endsWith('.jsonl')).map((entry) => entry.name).sort();
     for (const name of entries) {
-      const file = join(folder, name);
-      const info = await stat(file);
-      const key = `${project}/${name}`;
-      const previous = state.files[key];
-      if (previous !== undefined && previous.size === info.size && previous.mtimeMs === info.mtimeMs && previous.v === EXTRACTOR_VERSION && sameSet(previous.d, domains)) {
+      const extract = await depositFile(context, project, join(folder, name));
+      if (extract === undefined) {
         result.unchanged += 1;
         continue;
       }
-      const session = name.slice(0, -'.jsonl'.length);
-      const rev = Math.max((previous?.rev ?? 0) + 1, options.now());
-      const extract = extractSession({ text: await readFile(file, 'utf8'), session, project, rev, at, bytes: info.size, redact });
-      const batch: Observation[] = [extract.session, ...extract.prompts, ...extract.errors];
-      await mkdir(runtime.storeDir, { recursive: true });
-      await appendFile(files.observations, batch.map((observation) => `${JSON.stringify(observation)}\n`).join(''), { mode: 0o600 });
-      await writeAtomic(join(files.skeletons, `${session}.json`), JSON.stringify(extract.skeleton));
-      state.files[key] = { size: info.size, mtimeMs: info.mtimeMs, rev, v: EXTRACTOR_VERSION, d: domains };
       result.sessions += 1;
       result.lines += extract.session.lines;
       result.badLines += extract.session.badLines;
-      result.observations += batch.length;
+      result.observations += 1 + extract.prompts.length + extract.errors.length;
     }
   }
-  await writeAtomic(files.state, JSON.stringify(state));
-  await writeAtomic(files.derived, JSON.stringify(derive(await loadStore(runtime.storeDir), at)));
+  await writeAtomic(paths(runtime.storeDir).state, JSON.stringify(state));
+  await refresh(runtime, state.redactDomains, context.at);
   return result;
+};
+
+export type SessionDeposit = 'deposited' | 'unchanged' | 'not-allowed' | 'missing';
+
+/**
+ * Deposits one transcript, as the Stop hook does: only from a folder that earlier `--allow` entries name, and idempotent by size and
+ * mtime. It does not rebuild `derived.json` or the hook index (that is a whole-store pass; the nightly run does it), so it stays fast.
+ */
+export const depositSession = async (runtime: SessionsRuntime, transcript: string, now: () => number): Promise<SessionDeposit> => {
+  const project = basename(dirname(transcript));
+  const state = await readState(runtime.storeDir);
+  if (!compileAllow(state.allow).allows(project)) return 'not-allowed';
+  const context = await contextFor(runtime, state, now);
+  try {
+    if ((await depositFile(context, project, transcript)) === undefined) return 'unchanged';
+  } catch (error) {
+    if (isMissing(error)) return 'missing';
+    throw error;
+  }
+  await writeAtomic(paths(runtime.storeDir).state, JSON.stringify(state));
+  return 'deposited';
 };
 
 export interface Store {
