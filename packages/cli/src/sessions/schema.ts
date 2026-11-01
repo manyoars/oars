@@ -1,20 +1,32 @@
-// The session store's schema, in one file (t689, T0 of docs/research/2026-11-01-session-commons-direction.md).
+// The session store's schema, in one file (t689 and t700, T0 of docs/research/2026-11-01-session-commons-direction.md).
 //
 // Everything here is deterministic and local: no model call, no network. `oars sessions deposit` reads the operator's own Claude Code
-// logs (`~/.claude/projects/<path-slug>/*.jsonl`, one JSON event per line) and appends observations to
-// `<config>/oars/sessions/observations.jsonl`. The log is append-only: a session whose file changed is deposited again under a higher
-// `rev`, and a reader keeps only the highest `rev` of each session. `derived.json` and `skeletons/<session>.json` sit beside it.
+// logs (`~/.claude/projects/<path-slug>/*.jsonl` and each session's `subagents/` transcripts, one JSON event per line) and appends
+// captured records to `<config>/oars/sessions/observations.jsonl`. The log is append-only: a session whose file changed is deposited
+// again under a higher `rev`, and a reader keeps only the highest `rev` of each session.
 //
-// The log is the local derived-records tier: redacted text, never raw content, and nothing uploads. The text it keeps, each redacted
-// first and then cut: the first 300 characters of a prompt, the first informative line of a tool error (160), TLDR lines (400),
-// Confidence lines (120), and, with no length limit, WebSearch queries, fetched URLs, file paths, and git branch names. Also kept as
-// written, not redacted: the project folder slug (it holds the username and directory names; the log stays local), skill names, effort
-// values, model names, harness versions, and tool names (including MCP server names). `redact` masks secrets by pattern and
-// entropy, emails, and the organization domains the operator names. The skeleton holds hashes only. Subagent transcripts
-// (`<project>/<session>/subagents/`) are not deposited yet.
+// Store version 3 (register A28) splits capture from derivation. Capture writes four record kinds, each stamped `cv` with
+// CAPTURE_VERSION: `session` (one per transcript), `user-prompt` (one per prompt), `tool` (one per tool call), and `error-line` (one per
+// failed tool result, keyed by `toolUseId`). Derivation (`derive.ts`: signatures, prompt classes, tool-name sequences, recovery pairs,
+// and recovery episodes) runs over those records alone, never over raw, and stamps its output `v` with EXTRACTOR_VERSION, so a change to
+// a derivation rule re-derives the store without reading a transcript. Version-2 `prompt` and `error` lines (already derived) are still
+// read for a session that has no version-3 rev.
+//
+// The log is the local derived-records tier: redacted text, never raw content, and nothing uploads. Field classes (register D1):
+// `local-only` fields stay on this machine whatever later tier is switched on; `shareable` fields are names, versions, counts,
+// durations, status, key names, and hashes (the pooled-index list). Each record type below names its local-only fields. The text kept,
+// each redacted first and then cut: the first 300 characters of a prompt, the first informative line of a tool error (uncut in the
+// `error-line` record, 160 characters in a derived example), TLDR lines (400), Confidence lines (120), and, with no length limit,
+// WebSearch queries, fetched URLs, file paths, and git branch names. Also kept as written, not redacted: the project folder slug (it
+// holds the username and directory names; the log stays local), skill names, effort values, model names, harness versions, and tool
+// names (including MCP server names). `redact` masks secrets by pattern and entropy, emails, and the organization domains the operator
+// names. The skeleton holds hashes only.
 
-/** Stamped on every observation, derived record, and skeleton, so a later extractor can tell what produced it. */
-export const EXTRACTOR_VERSION = '2';
+/** Stamped `cv` on every captured record. Bump it only when the captured field list changes: a bump re-reads every transcript. */
+export const CAPTURE_VERSION = '3';
+
+/** Stamped `v` on every derived record and skeleton. A bump re-derives from the log; no transcript is read. */
+export const EXTRACTOR_VERSION = '3';
 
 export const PROMPT_HEAD_CHARS = 300;
 export const ERROR_EXAMPLE_CHARS = 160;
@@ -31,12 +43,23 @@ export interface Usage {
   thinking: number;
 }
 
-/** One per session file: the `parse_sessions.py` record, minus anything that is raw content. */
+/**
+ * One per transcript, captured: the `parse_sessions.py` record, minus anything that is raw content. Local-only: `project`, `files`,
+ * `urls`, `searches`, `branches`, `tldrs`, and `confidences`; the rest are shareable.
+ */
 export interface SessionObservation {
   kind: 'session';
-  v: string;
+  /** CAPTURE_VERSION (a version-2 line has `v` instead). */
+  cv: string;
+  /** The session id, or `<parent>~<path>` for a subagent transcript (`<parent>~agent-x`, `<parent>~wf_y~agent-x`). */
   session: string;
   project: string;
+  /** The main session a subagent transcript belongs to; null for a main transcript. */
+  parent: string | null;
+  /** The subagent type from the transcript's `.meta.json` (`general-purpose`, `Explore`); null for a main transcript. */
+  agentType: string | null;
+  /** The parent's `Agent` tool call that spawned this subagent (the meta file's `toolUseId`); null for a main transcript. */
+  spawnedBy: string | null;
   rev: number;
   /** When this deposit ran (ISO 8601). */
   at: string;
@@ -62,7 +85,7 @@ export interface SessionObservation {
   contextFingerprint: string | null;
   /** The harness's own `cost-state` totals when the file has one. */
   costUsd: number | null;
-  /** Summed assistant usage of the main line (sidechain lines are separate files' business). */
+  /** Summed assistant usage of the file's own line (a main transcript's sidechain lines are not counted; a subagent transcript is its own line). */
   usage: Usage;
 }
 
@@ -123,7 +146,89 @@ export interface ErrorObservation {
   cls: PromptClass | null;
 }
 
-export type Observation = SessionObservation | PromptObservation | ErrorObservation;
+export type ToolStatus = 'ok' | 'error' | 'none';
+
+/**
+ * One per tool call (register A28), captured. Every field is shareable except `toolUseId` and `parent`, which are local-only (they
+ * join records inside this store and mean nothing outside it).
+ */
+export interface ToolObservation {
+  kind: 'tool';
+  cv: string;
+  session: string;
+  rev: number;
+  /** The main session id: the session itself, or the parent of a subagent transcript. */
+  parent: string;
+  /** The subagent type when the call ran inside one; null on a main transcript. */
+  agentType: string | null;
+  /** The call's position among the file's tool calls, from 0. */
+  n: number;
+  ts: string | null;
+  tool: string;
+  /** The first result's status: `error` when it failed, `ok` when it came back clean, `none` when no result is in the file. */
+  status: ToolStatus;
+  /**
+   * For a call with a path input (`file_path`, `notebook_path`, `path`): a per-account salted SHA-256 (16 hex characters) of the path
+   * relative to the line's `cwd`. For a shell call: the command's first token (its basename when it is a path), redacted. Else null.
+   */
+  target: string | null;
+  /** The input's key names, sorted. */
+  keys: string[];
+  /** From the call's line to its first result's line; null when either timestamp is missing or no result is in the file. */
+  durationMs: number | null;
+  toolUseId: string | null;
+  harnessVersion: string | null;
+  /** A sidechain line inside a main transcript. */
+  side: boolean;
+  /** The prompt index the call ran under; null before the first prompt. */
+  prompt: number | null;
+}
+
+/** One per failed tool result, captured and keyed by `toolUseId`. `line` is local-only; the rest are shareable. */
+export interface ErrorLineObservation {
+  kind: 'error-line';
+  cv: string;
+  session: string;
+  rev: number;
+  toolUseId: string | null;
+  /** The name of the call the result answers, `?` when the call is not in the file. */
+  tool: string;
+  /** The first informative line, redacted, not normalized, not cut. */
+  line: string;
+  ts: string | null;
+  harnessVersion: string | null;
+  side: boolean;
+  prompt: number | null;
+  /** How many tool calls came before this result in the file, so derive can read what followed it. */
+  after: number;
+}
+
+/**
+ * One per user prompt, captured: what the transcript says about a prompt besides its tool calls. `head` is local-only; the rest are
+ * shareable. Derive joins it with the prompt's tool calls and errors into a {@link PromptObservation}.
+ */
+export interface UserPromptObservation {
+  kind: 'user-prompt';
+  cv: string;
+  session: string;
+  rev: number;
+  index: number;
+  ts: string | null;
+  wallSec: number | null;
+  head: string;
+  thinking: number;
+  turns: number;
+  model: string;
+  efforts: string[];
+  skills: string[];
+  usage: Usage;
+  contextFingerprint: string | null;
+}
+
+export type CaptureRecord = SessionObservation | UserPromptObservation | ToolObservation | ErrorLineObservation;
+
+/** What a reader finds in the log: version-3 capture records, or the version-2 derived lines of a session not deposited since. */
+export type Observation = CaptureRecord | PromptObservation | ErrorObservation;
 
 /** One recurring-signature record of `derived.json`. */
 export interface SignatureRecord {
@@ -225,4 +330,6 @@ export interface HookCall {
   /** Whether the hook had something to say (an injected block, a recall hit, or a session deposited). */
   hit: boolean;
   ms: number;
+  /** The failure's first line when the hook failed (it still exits 0); null when it ran clean. */
+  error: string | null;
 }

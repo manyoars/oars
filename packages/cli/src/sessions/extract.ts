@@ -1,22 +1,23 @@
-// Turns one session file's text into observations and a skeleton in a single pass. The parsing rules are ported from the
-// reference scripts in docs/research/2026-11-01-session-commons/ (parse_sessions.py, error_signatures.py, prompt_graphs.py,
+// Capture: turns one transcript's text into its capture records and a skeleton in a single pass (derivation is `derive.ts`). The
+// parsing rules are ported from the reference scripts in docs/research/2026-11-01-session-commons/ (parse_sessions.py, error_signatures.py, prompt_graphs.py,
 // cost_per_class.py) so the counts agree: same normalization, same prompt boundaries, same class rule. Where two scripts
 // read a thing differently the comment says which rule is used.
 import { createHash } from 'node:crypto';
 import type { Redactor } from './redact.js';
 import {
-  ERROR_EXAMPLE_CHARS,
+  CAPTURE_VERSION,
   EXTRACTOR_VERSION,
   PROMPT_HEAD_CHARS,
   SIGNATURE_CHARS,
   type CostState,
-  type ErrorObservation,
+  type ErrorLineObservation,
   type PromptClass,
-  type PromptObservation,
   type SessionObservation,
   type Skeleton,
   type SkeletonLine,
+  type ToolObservation,
   type Usage,
+  type UserPromptObservation,
 } from './schema.js';
 
 interface Obj {
@@ -28,17 +29,17 @@ const str = (value: unknown): string | undefined => (typeof value === 'string' ?
 const num = (value: unknown): number | undefined => (typeof value === 'number' && Number.isFinite(value) ? value : undefined);
 
 /** Python slices by code point; JavaScript by UTF-16 unit. */
-const cut = (text: string, length: number): string => Array.from(text).slice(0, length).join('');
+export const cut = (text: string, length: number): string => Array.from(text).slice(0, length).join('');
 
 /** Python truthiness of a JSON value. */
 const truthy = (value: unknown): boolean => value !== undefined && value !== null && value !== false && value !== 0 && value !== '';
 
 const sha256 = (text: string): string => createHash('sha256').update(text).digest('hex');
 
-const EXPLORE = new Set(['Read', 'Grep', 'Glob', 'WebFetch', 'WebSearch', 'ToolSearch', 'LSP']);
-const ACT = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit', 'Bash', 'PowerShell']);
+export const EXPLORE = new Set(['Read', 'Grep', 'Glob', 'WebFetch', 'WebSearch', 'ToolSearch', 'LSP']);
+export const ACT = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit', 'Bash', 'PowerShell']);
 const COORD = new Set(['Agent', 'SendMessage', 'Monitor', 'TaskStop', 'Skill', 'ScheduleWakeup', 'ListAgents', 'Workflow']);
-const EDITS = new Set(['Edit', 'Write', 'MultiEdit']);
+export const EDITS = new Set(['Edit', 'Write', 'MultiEdit']);
 const SHELL = new Set(['Bash', 'PowerShell']);
 const PATH_TOOLS = new Set(['Read', 'Edit', 'Write', 'MultiEdit', 'NotebookEdit']);
 
@@ -111,13 +112,13 @@ const isErrorResult = (block: Obj, text: string): boolean => {
   return exit !== null && exit[1] !== '0';
 };
 
-const shortName = (name: string): string => {
+export const shortName = (name: string): string => {
   if (name.startsWith('mcp__claude-in-chrome__')) return 'chrome';
   if (name.startsWith('mcp__')) return `mcp:${(name.split('__')[1] ?? '').slice(0, 10)}`;
   return name;
 };
 
-const compress = (sequence: readonly string[]): string => {
+export const compress = (sequence: readonly string[]): string => {
   const runs: Array<[string, number]> = [];
   for (const tool of sequence) {
     const last = runs[runs.length - 1];
@@ -148,7 +149,7 @@ export const classify = (sequence: readonly string[]): PromptClass => {
   return 'mixed';
 };
 
-const emptyUsage = (): Usage => ({ input: 0, cacheWrite: 0, cacheRead: 0, output: 0, thinking: 0 });
+export const emptyUsage = (): Usage => ({ input: 0, cacheWrite: 0, cacheRead: 0, output: 0, thinking: 0 });
 
 /** Register A22: one API response spans several assistant lines that repeat its usage, so each response counts once, keyed by request id then message id. */
 const responseKey = (line: Obj, message: Obj): string | undefined => (str(line.requestId) || undefined) ?? (str(message.id) || undefined);
@@ -232,6 +233,13 @@ const contentHashes = (content: unknown): string[] => {
   });
 };
 
+/** Where a subagent transcript came from: its `.meta.json` and the folder it sits in. */
+export interface SubagentOrigin {
+  parent: string;
+  agentType: string | null;
+  spawnedBy: string | null;
+}
+
 export interface ExtractInput {
   text: string;
   session: string;
@@ -240,12 +248,18 @@ export interface ExtractInput {
   at: string;
   bytes: number;
   redact: Redactor;
+  /** The per-account salt for path targets; the store keeps it beside the log. */
+  salt?: string;
+  /** Set for a subagent transcript: every line is the agent's own line, so none is read as a sidechain. */
+  subagent?: SubagentOrigin;
 }
 
-export interface Extract {
+/** What capture writes for one transcript, before any derivation. */
+export interface Capture {
   session: SessionObservation;
-  prompts: PromptObservation[];
-  errors: ErrorObservation[];
+  prompts: UserPromptObservation[];
+  tools: ToolObservation[];
+  errorLines: ErrorLineObservation[];
   skeleton: Skeleton;
 }
 
@@ -255,12 +269,7 @@ interface Current {
   t0: number | undefined;
   t1: number | undefined;
   head: string;
-  seq: string[];
-  sideTools: number;
   thinking: number;
-  errors: number;
-  recovery: string[];
-  pending: number;
   models: Map<string, number>;
   efforts: Set<string>;
   skills: Set<string>;
@@ -295,17 +304,43 @@ const majority = (counts: ReadonlyMap<string, number>): string => {
   return best;
 };
 
-/** One pass over a session file. Never throws on a malformed line: it counts it and goes on. */
-export const extractSession = (input: ExtractInput): Extract => {
+const PATH_KEYS = ['file_path', 'notebook_path', 'path'] as const;
+
+/** A path relative to the line's working directory when it lies under it (compared without case, as Windows paths are), else as written. */
+const relativeTo = (path: string, cwd: string | undefined): string => {
+  const forward = path.replace(/\\/g, '/');
+  if (cwd === undefined) return forward;
+  const base = cwd.replace(/\\/g, '/').replace(/\/+$/, '');
+  return forward.toLowerCase().startsWith(`${base.toLowerCase()}/`) ? forward.slice(base.length + 1) : forward;
+};
+
+/** The `target` of a tool call (see {@link ToolObservation.target}). */
+export const targetOf = (tool: string, input: Obj, cwd: string | undefined, salt: string, redact: Redactor): string | null => {
+  for (const key of PATH_KEYS) {
+    const value = str(input[key]);
+    if (value !== undefined && value !== '') return sha256(`${salt}\n${relativeTo(value, cwd)}`).slice(0, 16);
+  }
+  if (!SHELL.has(tool)) return null;
+  const first = (str(input.command) ?? '').trim().split(/\s+/)[0] ?? '';
+  return first === '' ? null : redact(first.split(/[\\/]/).pop() ?? first);
+};
+
+/** One pass over a transcript into its capture records and skeleton. Never throws on a malformed line: it counts it and goes on. */
+export const captureSession = (input: ExtractInput): Capture => {
   const { redact } = input;
+  const salt = input.salt ?? '';
+  const origin = input.subagent;
   const rawLines = input.text.split(/\r\n|\n|\r/);
   if (rawLines.length > 0 && rawLines[rawLines.length - 1] === '') rawLines.pop();
 
   const session: SessionObservation = {
     kind: 'session',
-    v: EXTRACTOR_VERSION,
+    cv: CAPTURE_VERSION,
     session: input.session,
     project: input.project,
+    parent: origin?.parent ?? null,
+    agentType: origin?.agentType ?? null,
+    spawnedBy: origin?.spawnedBy ?? null,
     rev: input.rev,
     at: input.at,
     bytes: input.bytes,
@@ -336,14 +371,13 @@ export const extractSession = (input: ExtractInput): Extract => {
   const urls = new Set<string>();
   const searches = new Set<string>();
 
-  const prompts: PromptObservation[] = [];
-  const errors: ErrorObservation[] = [];
+  const prompts: UserPromptObservation[] = [];
+  const tools: ToolObservation[] = [];
+  const errorLines: ErrorLineObservation[] = [];
   const skeletonLines: SkeletonLine[] = [];
   const toolById = new Map<string | undefined, string>();
+  const callById = new Map<string, { call: ToolObservation; at: number | undefined }>();
   const seenResponses = new Set<string>();
-  const pendingEdit: Array<{ error: ErrorObservation; left: number }> = [];
-  const pendingNext: Array<{ error: ErrorObservation; left: number }> = [];
-  const errorPrompt = new Map<ErrorObservation, number | null>();
   let envFingerprint: string | undefined;
   let promptFingerprint: string | undefined;
   let fingerprint: string | null = null;
@@ -351,37 +385,22 @@ export const extractSession = (input: ExtractInput): Extract => {
 
   const finish = (): void => {
     if (cur === undefined) return;
-    const sequence = cur.seq;
-    const bigrams: { [bigram: string]: number } = {};
-    for (let index = 0; index + 1 < sequence.length; index += 1) {
-      const pair = `${sequence[index] ?? ''}>${sequence[index + 1] ?? ''}`;
-      bigrams[pair] = (bigrams[pair] ?? 0) + 1;
-    }
     const wall = cur.t0 !== undefined && cur.t1 !== undefined && cur.t1 >= cur.t0 ? cur.t1 - cur.t0 : null;
     prompts.push({
-      kind: 'prompt',
-      v: EXTRACTOR_VERSION,
+      kind: 'user-prompt',
+      cv: CAPTURE_VERSION,
       session: input.session,
       rev: input.rev,
       index: cur.index,
       ts: cur.ts ?? null,
       wallSec: wall,
       head: cur.head,
-      cls: classify(sequence),
-      tools: sequence,
-      shape: compress(sequence),
-      errors: cur.errors,
       thinking: cur.thinking,
-      sideTools: cur.sideTools,
       turns: cur.turns,
       model: majority(cur.models),
       efforts: [...cur.efforts].sort(),
       skills: [...cur.skills].sort(),
       usage: cur.usage,
-      recovery: cur.recovery.slice(0, 2),
-      explore: sequence.filter((tool) => EXPLORE.has(tool)).length,
-      act: sequence.filter((tool) => ACT.has(tool)).length,
-      bigrams,
       contextFingerprint: fingerprint,
     });
   };
@@ -401,7 +420,8 @@ export const extractSession = (input: ExtractInput): Extract => {
     const o = parsed;
     const type = str(o.type);
     const ts = str(o.timestamp);
-    const side = truthy(o.isSidechain);
+    // A subagent transcript marks every line a sidechain; there they are the agent's own line.
+    const side = origin === undefined && truthy(o.isSidechain);
     const message = isObj(o.message) ? o.message : undefined;
     const role = message === undefined ? undefined : str(message.role);
     const content = message?.content;
@@ -481,12 +501,7 @@ export const extractSession = (input: ExtractInput): Extract => {
           t0: toSeconds(ts),
           t1: undefined,
           head: cut(redact(text), PROMPT_HEAD_CHARS), // redact first: a key straddling the limit would otherwise lose its tail and slip past the patterns
-          seq: [],
-          sideTools: 0,
           thinking: 0,
-          errors: 0,
-          recovery: [],
-          pending: 0,
           models: new Map(),
           efforts: new Set(),
           skills: new Set(),
@@ -514,7 +529,7 @@ export const extractSession = (input: ExtractInput): Extract => {
     }
 
     if (!Array.isArray(content)) continue;
-    let pendingRecovery = cur?.pending ?? 0;
+    const lineSeconds = toSeconds(ts);
     for (const block of content) {
       if (!isObj(block)) continue;
       const blockType = block.type;
@@ -528,74 +543,61 @@ export const extractSession = (input: ExtractInput): Extract => {
         session.tools[name] = (session.tools[name] ?? 0) + 1;
         const id = str(block.id);
         toolById.set(id, name);
-        for (const watch of pendingNext) {
-          if (watch.left > 0) {
-            watch.error.next.push(name);
-            watch.left -= 1;
-          }
-        }
-        if (pendingEdit.length > 0) {
-          const keep: typeof pendingEdit = [];
-          for (const watch of pendingEdit) {
-            if (EDITS.has(name)) watch.error.editFollowed = true;
-            else if (watch.left > 1) keep.push({ error: watch.error, left: watch.left - 1 });
-          }
-          pendingEdit.splice(0, pendingEdit.length, ...keep);
-        }
         const toolInput = isObj(block.input) ? block.input : {};
         if (PATH_TOOLS.has(name) && str(toolInput.file_path) !== undefined && str(toolInput.file_path) !== '') files.add(redact(str(toolInput.file_path) ?? ''));
         else if (name === 'WebFetch' && str(toolInput.url) !== undefined && str(toolInput.url) !== '') urls.add(redact(str(toolInput.url) ?? ''));
         else if (name === 'WebSearch' && str(toolInput.query) !== undefined && str(toolInput.query) !== '') searches.add(redact(str(toolInput.query) ?? ''));
         else if (SHELL.has(name)) session.bashCmds += 1;
-        if (cur !== undefined) {
-          const short = shortName(name);
-          if (side) cur.sideTools += 1;
-          else {
-            cur.seq.push(short);
-            if (pendingRecovery > 0) {
-              cur.recovery.push(short);
-              pendingRecovery -= 1;
-            }
-          }
-        }
-      } else if (blockType === 'tool_result') {
-        const text = resultText(block);
-        if (!isErrorResult(block, text)) continue;
-        if (cur !== undefined && !side) {
-          cur.errors += 1;
-          pendingRecovery = 2;
-        }
-        const tool = toolById.get(str(block.tool_use_id)) ?? '?';
-        const informative = redact(firstInformative(text));
-        const error: ErrorObservation = {
-          kind: 'error',
-          v: EXTRACTOR_VERSION,
+        const call: ToolObservation = {
+          kind: 'tool',
+          cv: CAPTURE_VERSION,
           session: input.session,
           rev: input.rev,
+          parent: origin?.parent ?? input.session,
+          agentType: origin?.agentType ?? null,
+          n: tools.length,
+          ts: ts ?? null,
+          tool: name,
+          status: 'none',
+          target: targetOf(name, toolInput, str(o.cwd), salt, redact),
+          keys: Object.keys(toolInput).sort(),
+          durationMs: null,
+          toolUseId: id ?? null,
+          harnessVersion: version ?? null,
+          side,
+          prompt: cur?.index ?? null,
+        };
+        tools.push(call);
+        // A resumed session repeats earlier lines: the first copy of a call carries its result, a repeat keeps status none.
+        if (id !== undefined && !callById.has(id)) callById.set(id, { call, at: lineSeconds });
+      } else if (blockType === 'tool_result') {
+        const text = resultText(block);
+        const failed = isErrorResult(block, text);
+        const answered = callById.get(str(block.tool_use_id) ?? '');
+        if (answered !== undefined && answered.call.status === 'none') {
+          const { call, at } = answered;
+          if (at !== undefined && lineSeconds !== undefined) call.durationMs = Math.round((lineSeconds - at) * 1000);
+          call.status = failed ? 'error' : 'ok';
+        }
+        if (!failed) continue;
+        errorLines.push({
+          kind: 'error-line',
+          cv: CAPTURE_VERSION,
+          session: input.session,
+          rev: input.rev,
+          toolUseId: str(block.tool_use_id) ?? null,
+          tool: toolById.get(str(block.tool_use_id)) ?? '?',
+          line: redact(firstInformative(text)),
           ts: ts ?? null,
           harnessVersion: version ?? null,
-          tool,
-          sig: signatureOf(tool, text, redact),
-          example: cut(informative, ERROR_EXAMPLE_CHARS),
-          next: [],
-          editFollowed: false,
+          side,
           prompt: cur?.index ?? null,
-          cls: null,
-        };
-        errors.push(error);
-        errorPrompt.set(error, cur?.index ?? null);
-        pendingEdit.push({ error, left: 6 });
-        pendingNext.push({ error, left: 2 });
+          after: tools.length,
+        });
       }
     }
-    if (cur !== undefined) cur.pending = pendingRecovery;
   }
   finish();
-
-  for (const error of errors) {
-    const index = errorPrompt.get(error);
-    error.cls = index === null || index === undefined ? null : (prompts[index]?.cls ?? null);
-  }
 
   session.versions = [...versions].sort();
   session.branches = [...branches].sort();
@@ -606,7 +608,8 @@ export const extractSession = (input: ExtractInput): Extract => {
   return {
     session,
     prompts,
-    errors,
+    tools,
+    errorLines,
     skeleton: {
       v: EXTRACTOR_VERSION,
       session: input.session,
