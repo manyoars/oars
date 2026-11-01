@@ -219,11 +219,12 @@ const buildProgram = (deps: RunDeps, argv: string[]): Command => {
   sessions
     .command('deposit')
     .description('read session logs from the folders you name into the local observation log; idempotent. Subagent transcripts (<project>/<session>/subagents/) are not deposited yet')
-    .option('--allow <folder>', 'a project folder to read: its path, or its name under ~/.claude/projects (repeatable; at least one is required)', collect)
+    .option('--allow <folder>', 'a project folder to read: its path, or its name under ~/.claude/projects (repeatable). A trailing slash names everything under a folder; * and ? are wildcards', collect)
+    .option('--allow-file <list>', 'a file of --allow entries, one per line (# starts a comment); repeatable, combines with --allow', collect)
     .option('--redact-domain <domain>', 'an organization domain to mask in everything written (repeatable)', collect)
     .action(async (_options: OptionValues, command: Command) => {
       const options: OptionValues = command.optsWithGlobals();
-      emit(deps, flag(options, 'json'), await sessionsDeposit(sessionDeps(deps), { allow: list(options, 'allow'), redactDomains: list(options, 'redactDomain') }));
+      emit(deps, flag(options, 'json'), await sessionsDeposit(sessionDeps(deps), { allow: list(options, 'allow'), allowFiles: list(options, 'allowFile'), redactDomains: list(options, 'redactDomain') }));
     });
 
   sessions
