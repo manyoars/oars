@@ -314,6 +314,36 @@ const relativeTo = (path: string, cwd: string | undefined): string => {
   return forward.toLowerCase().startsWith(`${base.toLowerCase()}/`) ? forward.slice(base.length + 1) : forward;
 };
 
+/** A leading `cd <dir> &&` or `cd <dir>;` hop: the target is the command that ran after it. */
+const CD_HOP = /^\s*(?:cd|Set-Location|pushd)\s+\S+\s*(?:&&|;)\s*/;
+/** Leading tokens that only set up the command: an environment assignment, `sudo`, `env`, PowerShell's `&`, and `.`. */
+const PRELUDE = /^(?:[A-Za-z_][A-Za-z0-9_]*=.*|sudo|env|&|\.)$/;
+const SEPARATORS = new Set(['&&', '|', ';']);
+
+/**
+ * A shell call's program and subcommand from its first line (`git push`, `just build`, `npm`), as recovery_episodes.py's
+ * `shell_target` computes it, so a retry of `git push` after a failed `git push` is the same target and `git status` is not.
+ * The program is a basename, lowercased, without `.exe`; the subcommand is the first later token that is not a flag, a path, or
+ * a variable, cut to 30 characters, and there is none when a separator comes first. Empty when the line holds no command.
+ */
+export const shellTarget = (command: string): string => {
+  let line = command.trim() === '' ? '' : (command.split(/\r?\n/)[0] ?? '');
+  for (let hop = CD_HOP.exec(line); hop !== null; hop = CD_HOP.exec(line)) line = line.slice(hop[0].length);
+  const tokens = line
+    .split(/\s+/)
+    .filter((token) => token !== '')
+    .map((token) => token.replace(/^['"]+|['"]+$/g, ''));
+  while (tokens.length > 0 && PRELUDE.test(tokens[0] ?? '')) tokens.shift();
+  const [head, ...rest] = tokens;
+  if (head === undefined) return '';
+  const program = (head.replace(/\\/g, '/').split('/').pop() ?? head).toLowerCase().replace(/\.exe$/, '');
+  for (const token of rest) {
+    if (SEPARATORS.has(token)) break;
+    if (!/^[-$]/.test(token) && !/[\\/]/.test(token)) return `${program} ${token.slice(0, 30)}`;
+  }
+  return program;
+};
+
 /** The `target` of a tool call (see {@link ToolObservation.target}). */
 export const targetOf = (tool: string, input: Obj, cwd: string | undefined, salt: string, redact: Redactor): string | null => {
   for (const key of PATH_KEYS) {
@@ -321,8 +351,8 @@ export const targetOf = (tool: string, input: Obj, cwd: string | undefined, salt
     if (value !== undefined && value !== '') return sha256(`${salt}\n${relativeTo(value, cwd)}`).slice(0, 16);
   }
   if (!SHELL.has(tool)) return null;
-  const first = (str(input.command) ?? '').trim().split(/\s+/)[0] ?? '';
-  return first === '' ? null : redact(first.split(/[\\/]/).pop() ?? first);
+  const target = shellTarget(str(input.command) ?? '');
+  return target === '' ? null : redact(target);
 };
 
 /** One pass over a transcript into its capture records and skeleton. Never throws on a malformed line: it counts it and goes on. */

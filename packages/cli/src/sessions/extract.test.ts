@@ -1,7 +1,7 @@
 import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { classify, errorKey, firstInformative, normalize, signatureOf } from './extract.js';
+import { classify, errorKey, firstInformative, normalize, shellTarget, signatureOf, targetOf } from './extract.js';
 import { extractSession, type Extract } from './derive.js';
 import { entropy, makeRedactor } from './redact.js';
 import { CAPTURE_VERSION, EXTRACTOR_VERSION } from './schema.js';
@@ -314,5 +314,28 @@ describe('redact', () => {
     expect(mask('internationalization_and_localization_support')).toBe('internationalization_and_localization_support');
     expect(entropy('aaaa')).toBe(0);
     expect(entropy('ab')).toBe(1);
+  });
+});
+
+describe('the tool target (recovery_episodes.py shell_target parity)', () => {
+  it('keeps a shell call to its program and subcommand', () => {
+    expect(shellTarget('git push -u origin main')).toBe('git push');
+    expect(shellTarget(String.raw`cd C:/repo && FOO=1 sudo "C:\Program\npm.exe" --silent ./x $Y run build`)).toBe('npm run');
+    expect(shellTarget('cd a; pushd b && ls -la /tmp | wc -l')).toBe('ls');
+    expect(shellTarget('& just -f x.just build oars\nsecond line')).toBe('just x.just');
+    expect(shellTarget(`git ${'c'.repeat(40)}`)).toBe(`git ${'c'.repeat(30)}`);
+    expect(shellTarget('env')).toBe('');
+    expect(shellTarget('   ')).toBe('');
+  });
+
+  it('hashes a path relative to the working directory, keeps a shell target, and is null otherwise', () => {
+    const cwd = String.raw`C:\repo`;
+    const hashed = targetOf('Read', { file_path: String.raw`C:\repo\src\a.ts` }, cwd, 'salt', redact);
+    expect(hashed).toMatch(/^[0-9a-f]{16}$/);
+    expect(targetOf('Edit', { file_path: 'src/a.ts' }, cwd, 'salt', redact)).toBe(hashed);
+    expect(targetOf('Read', { file_path: 'src/a.ts' }, undefined, 'other', redact)).not.toBe(hashed);
+    expect(targetOf('Bash', { command: 'git status --short' }, undefined, 'salt', redact)).toBe('git status');
+    expect(targetOf('PowerShell', { command: '' }, undefined, 'salt', redact)).toBeNull();
+    expect(targetOf('WebFetch', { url: 'https://example.com' }, undefined, 'salt', redact)).toBeNull();
   });
 });
