@@ -42,10 +42,18 @@ process.exitCode = await run(process.argv.slice(2), {
       new Promise((resolve) => {
         let output = '';
         const child = spawn('schtasks', args, { windowsHide: true });
-        child.stdout.on('data', (chunk: Buffer) => (output += chunk.toString()));
-        child.stderr.on('data', (chunk: Buffer) => (output += chunk.toString()));
-        child.on('error', (error) => resolve({ code: 1, output: error.message }));
-        child.on('close', (code) => resolve({ code: code ?? 1, output }));
+        child.stdout.on('data', (chunk: Buffer) => {
+          output += chunk.toString();
+        });
+        child.stderr.on('data', (chunk: Buffer) => {
+          output += chunk.toString();
+        });
+        child.on('error', (error) => {
+          resolve({ code: 1, output: error.message });
+        });
+        child.on('close', (code) => {
+          resolve({ code: code ?? 1, output });
+        });
       }),
   },
   sessions: {

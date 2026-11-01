@@ -59,7 +59,7 @@ export const settingsPath = (runtime: InstallRuntime, scope: Scope, file: string
   return resolve(runtime.cwd, file);
 };
 
-const readSettings = async (path: string): Promise<Json> => {
+export const readSettings = async (path: string): Promise<Json> => {
   let raw: string;
   try {
     raw = await readFile(path, 'utf8');
@@ -130,12 +130,13 @@ export const uninstallHooks = async (path: string): Promise<{ file: string; remo
     const kept = groups.filter((group) => !isOwnGroup(group));
     if (kept.length === groups.length) continue;
     removed.push(spec.event);
-    if (kept.length === 0) delete hooks[spec.event];
-    else hooks[spec.event] = kept;
+    hooks[spec.event] = kept;
   }
   if (removed.length > 0) {
-    if (Object.keys(hooks).length === 0) delete settings.hooks;
-    else settings.hooks = hooks;
+    // An event this call emptied goes; an event that was already an empty list in the file is the operator's and stays.
+    const remaining = Object.entries(hooks).filter(([event, groups]) => !(removed.includes(event) && Array.isArray(groups) && groups.length === 0));
+    // `undefined` is left out of the JSON, so an emptied `hooks` key goes.
+    settings.hooks = remaining.length === 0 ? undefined : Object.fromEntries(remaining);
     await writeSettings(path, settings);
   }
   return { file: path, removed };

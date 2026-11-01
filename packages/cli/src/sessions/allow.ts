@@ -14,13 +14,8 @@ const GLOB = /[*?]/;
 
 /** A glob over a path or slug, as an anchored expression over slugs: separators become `-`, wildcards stay wildcards. */
 const globPattern = (entry: string): RegExp => {
-  const body = [...entry]
-    .map((char) => {
-      if (char === '*') return '.*';
-      if (char === '?') return '.';
-      return /[A-Za-z0-9]/.test(char) ? char : '-';
-    })
-    .join('');
+  // Every character that is neither alphanumeric nor a wildcard becomes the slug's `-`; then the wildcards become expressions.
+  const body = entry.replace(/[^A-Za-z0-9*?]/g, '-').replace(/\*/g, '.*').replace(/\?/g, '.');
   return new RegExp(`^${body}$`);
 };
 
