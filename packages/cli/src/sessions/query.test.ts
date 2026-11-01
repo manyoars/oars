@@ -1,3 +1,4 @@
+import type { HookCall } from './schema.js';
 import { afterEach, describe, expect, it } from 'vitest';
 import { books, formatBooks, formatMeasure, formatRecall, measure, recall } from './query.js';
 import { deposit, loadStore, type Store } from './store.js';
@@ -65,7 +66,7 @@ describe('books', () => {
 describe('measure', () => {
   it('reads the last N sessions and the N before', async () => {
     const store = await loaded();
-    const result = measure(store, [], 2);
+    const result = measure(store, [], [], 2);
     expect(result.last.sessions).toBe(2);
     expect(result.before.sessions).toBe(2);
     // Order by first timestamp: every fixture starts at the same instant, so the session id breaks ties:
@@ -82,11 +83,57 @@ describe('measure', () => {
   it('counts MCP recall calls inside each window and handles an empty store', async () => {
     const store = await loaded();
     const calls = [{ at: store.sessions[0]?.tsFirst ?? '', query: '{}', matches: 1 }];
-    const result = measure(store, calls, 4);
+    const result = measure(store, calls, [], 4);
     expect(result.last.recallPerSession).toBe(0.25);
-    expect(result.before).toEqual({ sessions: 0, recurringPer100: null, recurringSignatures: null, cacheWritePerSession: null, recallPerSession: null });
+    expect(result.before).toEqual({ sessions: 0, recurringPer100: null, recurringSignatures: null, cacheWritePerSession: null, recallPerSession: null, hookRecallPerSession: null, hookHitsPerSession: null });
     expect(formatMeasure(result)).toContain('-');
-    expect(measure({ sessions: [], prompts: [], errors: [] }, [], 5).last.sessions).toBe(0);
+    expect(measure({ sessions: [], prompts: [], errors: [] }, [], [], 5).last.sessions).toBe(0);
+  });
+
+  it('counts hook lookups and hits per session from the hook counters, by the session they ran in', async () => {
+    const store = await loaded();
+    const names = store.sessions.map((session) => session.session).sort();
+    const at = '2026-06-10T00:00:00Z';
+    const hookCalls: HookCall[] = [
+      { at, event: 'session-start', session: names[2] ?? null, hit: true, ms: 40 },
+      { at, event: 'post-tool', session: names[2] ?? null, hit: false, ms: 20 },
+      { at, event: 'post-tool', session: names[3] ?? null, hit: true, ms: 20 },
+      { at, event: 'stop', session: names[3] ?? null, hit: true, ms: 200 },
+      { at, event: 'nightly', session: null, hit: true, ms: 900 },
+      { at, event: 'post-tool', session: 'not-in-the-window', hit: true, ms: 20 },
+    ];
+    const result = measure(store, [], hookCalls, 2);
+    expect(result.last.hookRecallPerSession).toBe(1.5);
+    expect(result.last.hookHitsPerSession).toBe(1);
+    expect(result.before.hookRecallPerSession).toBe(0);
+    expect(formatMeasure(result)).toContain('hook recall calls per session');
+  });
+
+  it('with a cutoff, the current window is the first N sessions at or after it and the prior window the N before, however many come later', async () => {
+    const loadedStore = await loaded();
+    const stamp = (position: number): string => `2026-06-0${String(position + 1)}T00:00:00Z`;
+    const sessions = loadedStore.sessions.map((session, position) => ({ ...session, session: `s${String(position)}`, tsFirst: stamp(position) }));
+    const store = { ...loadedStore, sessions, errors: [] };
+    const pinned = measure(store, [], [], 1, '2026-06-02T00:00:00Z');
+    expect(pinned.since).toBe('2026-06-02T00:00:00Z');
+    expect(pinned.last.cacheWritePerSession).toBe(sessions[1]?.usage.cacheWrite);
+    expect(pinned.before.cacheWritePerSession).toBe(sessions[0]?.usage.cacheWrite);
+    const wide = measure(store, [], [], 2, '2026-06-02T00:00:00Z');
+    expect(wide.last.sessions).toBe(2);
+    expect(wide.before.sessions).toBe(1);
+    // A later session does not move the pinned window; the moving window shifts.
+    const late = loadedStore.sessions.slice(0, 1).map((session) => ({ ...session, session: 'late', tsFirst: '2026-07-01T00:00:00Z' }));
+    const later = { ...store, sessions: [...sessions, ...late] };
+    expect(measure(later, [], [], 1, '2026-06-02T00:00:00Z').last.cacheWritePerSession).toBe(sessions[1]?.usage.cacheWrite);
+    expect(measure(later, [], [], 1).last.cacheWritePerSession).toBe(sessions[0]?.usage.cacheWrite);
+    expect(formatMeasure(pinned)).toContain('from 2026-06-02T00:00:00Z');
+  });
+
+  it('a cutoff after every session leaves the current window empty and the prior window the latest sessions', async () => {
+    const store = await loaded();
+    const result = measure(store, [], [], 2, '2999-01-01T00:00:00Z');
+    expect(result.last.sessions).toBe(0);
+    expect(result.before.sessions).toBe(2);
   });
 });
 

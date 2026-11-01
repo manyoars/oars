@@ -64,6 +64,13 @@ const positiveInteger = (value: string): number => {
   return Number(value);
 };
 
+/** An ISO time, normalized to the form session timestamps are stored in so the two compare as text. */
+const isoTime = (value: string): string => {
+  const parsed = Date.parse(value);
+  if (Number.isNaN(parsed)) throw new InvalidArgumentError('it must be an ISO time such as 2026-11-01T16:00:00Z.');
+  return new Date(parsed).toISOString();
+};
+
 const emit = (deps: RunDeps, json: boolean, outcome: Outcome): void => {
   deps.io.stdout(`${json ? JSON.stringify(outcome.document) : outcome.text}\n`);
 };
@@ -278,9 +285,10 @@ const buildProgram = (deps: RunDeps, argv: string[]): Command => {
     .command('measure')
     .description('the three G1 signals for the last N sessions and the N before')
     .option('--last <n>', 'sessions per window (default 50)', positiveInteger)
+    .option('--since <iso>', 'pin the current window to the first N sessions started at or after this ISO time (the prior window is the N before it); without it the window is the last N and moves with every deposit', isoTime)
     .action(async (_options: OptionValues, command: Command) => {
       const options: OptionValues = command.optsWithGlobals();
-      emit(deps, flag(options, 'json'), await sessionsMeasure(sessionDeps(deps), { last: count(options, 'last') ?? 50 }));
+      emit(deps, flag(options, 'json'), await sessionsMeasure(sessionDeps(deps), { last: count(options, 'last') ?? 50, since: text(options, 'since') }));
     });
 
   sessions
