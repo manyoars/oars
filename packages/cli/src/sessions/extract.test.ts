@@ -1,7 +1,7 @@
 import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { classify, errorKey, firstInformative, normalize, shellTarget, signatureOf, targetOf } from './extract.js';
+import { captureSession, classify, errorKey, firstInformative, normalize, shellTarget, signatureOf, targetOf } from './extract.js';
 import { extractSession, type Extract } from './derive.js';
 import { entropy, makeRedactor } from './redact.js';
 import { CAPTURE_VERSION, EXTRACTOR_VERSION } from './schema.js';
@@ -337,5 +337,47 @@ describe('the tool target (recovery_episodes.py shell_target parity)', () => {
     expect(targetOf('Bash', { command: 'git status --short' }, undefined, 'salt', redact)).toBe('git status');
     expect(targetOf('PowerShell', { command: '' }, undefined, 'salt', redact)).toBeNull();
     expect(targetOf('WebFetch', { url: 'https://example.com' }, undefined, 'salt', redact)).toBeNull();
+  });
+});
+
+describe('the version-3 capture records (Item 1, on errors-a.jsonl)', () => {
+  // errors-a has no call without a result, so one is appended: a Grep under a third prompt whose result never arrives.
+  const unanswered = {
+    type: 'assistant',
+    uuid: 'errors-a-0022',
+    parentUuid: 'errors-a-0021',
+    isSidechain: false,
+    timestamp: '2026-05-28T20:27:45.000Z',
+    version: '2.1.300',
+    requestId: 'req_errors-a_10',
+    message: { role: 'assistant', model: 'claude-opus-5-5', content: [{ type: 'tool_use', id: 't9', name: 'Grep', input: { pattern: 'x', path: 'src' } }], usage: { input_tokens: 1, output_tokens: 1 } },
+  };
+  const text = `${readFileSync(join(FIXTURES, 'proj', 'errors-a.jsonl'), 'utf8')}${JSON.stringify(unanswered)}\n`;
+  const capture = captureSession({ text, session: 'errors-a', project: 'proj', rev: 1, at: '2026-06-10T00:00:00.000Z', bytes: text.length, redact, salt: 'salt' });
+  const base = { kind: 'tool', cv: CAPTURE_VERSION, session: 'errors-a', rev: 1, parent: 'errors-a', agentType: null, harnessVersion: '2.1.300', side: false };
+
+  it('writes one tool record per call with every field, one call per status', () => {
+    expect(capture.tools.map((tool) => [tool.n, tool.tool, tool.status])).toEqual([
+      [0, 'Read', 'ok'], [1, 'Bash', 'error'], [2, 'Write', 'error'], [3, 'Read', 'ok'],
+      [4, 'Edit', 'ok'], [5, 'Bash', 'ok'], [6, 'Edit', 'ok'], [7, 'Grep', 'none'],
+    ]);
+    const [ok, shellError, error] = capture.tools;
+    // The fixture's assistant lines carry no cwd, so the target hashes the path as written (relative to the line's cwd when it has one).
+    expect(ok).toEqual({ ...base, n: 0, ts: '2026-05-28T20:26:49.000Z', tool: 'Read', status: 'ok', target: targetOf('Read', { file_path: '/work/app/src/main.ts' }, undefined, 'salt', redact), keys: ['file_path'], durationMs: 5000, toolUseId: 't1', prompt: 0 });
+    // A Bash result is an error by its exit code even when is_error is false.
+    expect(shellError).toMatchObject({ tool: 'Bash', status: 'error', keys: ['command'], durationMs: 2000, toolUseId: 't2', prompt: 0 });
+    expect(error).toMatchObject({ tool: 'Write', status: 'error', keys: ['content', 'file_path'], toolUseId: 't3', prompt: 0 });
+    expect(capture.tools[4]?.keys).toEqual(['file_path', 'new_string', 'old_string']);
+    expect(capture.tools[6]).toMatchObject({ toolUseId: 't7', prompt: 1 });
+    expect(capture.tools[7]).toEqual({ ...base, n: 7, ts: '2026-05-28T20:27:45.000Z', tool: 'Grep', status: 'none', target: targetOf('Grep', { path: 'src' }, undefined, 'salt', redact), keys: ['path', 'pattern'], durationMs: null, toolUseId: 't9', prompt: 2 });
+  });
+
+  it('keeps each error line unnormalized and uncut, keyed by toolUseId, with the calls before it', () => {
+    const [shell, write] = capture.errorLines;
+    const raw = 'bash: -c: line 1: unexpected EOF while looking for matching quote';
+    expect(normalize(raw)).not.toBe(raw);
+    expect(shell).toEqual({ kind: 'error-line', cv: CAPTURE_VERSION, session: 'errors-a', rev: 1, toolUseId: 't2', tool: 'Bash', line: raw, ts: '2026-05-28T20:26:59.000Z', harnessVersion: '2.1.300', side: false, prompt: 0, after: 2 });
+    expect(write).toMatchObject({ toolUseId: 't3', tool: 'Write', line: 'File has not been read yet. Read it first before writing to it.', after: 3 });
+    expect(capture.errorLines).toHaveLength(2);
   });
 });
