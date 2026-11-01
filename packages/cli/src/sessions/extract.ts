@@ -46,7 +46,9 @@ const TLDR_RE = /^\s*\**\s*(?:TL;?DR|TLDR)\s*:?\**\s*:?\s*(.+?)\s*$/gim;
 const CONF_RE = /^\s*\**\s*Confidence\s*:?\**\s*:?\s*(.+?)\s*$/gim;
 const EXIT_RE = /^Exit code (\d+)/;
 
-// error_signatures.py NORM, in order.
+// error_signatures.py NORM, in order. Divergence: JS `\d`, `\s`, `\b`, and `trim()` are ASCII/ECMAScript-defined while Python's `re` and
+// `str.strip()` are Unicode-aware, so a signature with non-ASCII digits or separators normalizes differently from the script.
+// The reference corpus has none; the divergence is accepted, not matched.
 const NORM: ReadonlyArray<readonly [RegExp, string]> = [
   [/[A-Za-z]:\\[^\s'"]+|\/[^\s'"]+/g, '<path>'],
   [/\b[0-9a-f]{7,}\b/g, '<hex>'],
@@ -141,6 +143,9 @@ export const classify = (sequence: readonly string[]): PromptClass => {
 };
 
 const emptyUsage = (): Usage => ({ input: 0, cacheWrite: 0, cacheRead: 0, output: 0, thinking: 0 });
+
+/** Register A22: one API response spans several assistant lines that repeat its usage, so each response counts once, keyed by request id then message id. */
+const responseKey = (line: Obj, message: Obj): string | undefined => str(line.requestId) ?? str(message.id);
 
 const addUsage = (total: Usage, line: Usage): void => {
   total.input += line.input;
@@ -329,6 +334,7 @@ export const extractSession = (input: ExtractInput): Extract => {
   const errors: ErrorObservation[] = [];
   const skeletonLines: SkeletonLine[] = [];
   const toolById = new Map<string | undefined, string>();
+  const seenResponses = new Set<string>();
   const pendingEdit: Array<{ error: ErrorObservation; left: number }> = [];
   const pendingNext: Array<{ error: ErrorObservation; left: number }> = [];
   const errorPrompt = new Map<ErrorObservation, number | null>();
@@ -354,7 +360,7 @@ export const extractSession = (input: ExtractInput): Extract => {
       index: cur.index,
       ts: cur.ts ?? null,
       wallSec: wall,
-      head: redact(cur.head),
+      head: cur.head,
       cls: classify(sequence),
       tools: sequence,
       shape: compress(sequence),
@@ -413,6 +419,9 @@ export const extractSession = (input: ExtractInput): Extract => {
 
     // Skeleton line: ids and structure, hashes in place of content.
     const lineUsage = message === undefined ? undefined : readUsage(message);
+    const key = message === undefined ? undefined : responseKey(o, message);
+    const firstOfResponse = key === undefined || !seenResponses.has(key);
+    if (key !== undefined) seenResponses.add(key);
     const blocks = Array.isArray(content) ? content.filter(isObj) : [];
     skeletonLines.push({
       n: position + 1,
@@ -451,7 +460,7 @@ export const extractSession = (input: ExtractInput): Extract => {
     }
     if (type === 'assistant' && role === 'assistant') {
       session.assistantTurns += 1;
-      if (!side && lineUsage !== undefined) addUsage(session.usage, lineUsage.usage);
+      if (!side && lineUsage !== undefined && firstOfResponse) addUsage(session.usage, lineUsage.usage);
     }
 
     // prompt_graphs.py and cost_per_class.py: a prompt is a main-line user line with text, no tool result, and no leading "<".
@@ -465,7 +474,7 @@ export const extractSession = (input: ExtractInput): Extract => {
           ts,
           t0: toSeconds(ts),
           t1: undefined,
-          head: cut(text, PROMPT_HEAD_CHARS),
+          head: cut(redact(text), PROMPT_HEAD_CHARS), // redact first: a key straddling the limit would otherwise lose its tail and slip past the patterns
           seq: [],
           sideTools: 0,
           thinking: 0,
@@ -490,7 +499,7 @@ export const extractSession = (input: ExtractInput): Extract => {
         if (type === 'assistant') {
           cur.turns += 1;
           if (requested !== undefined && requested !== '') cur.models.set(requested, (cur.models.get(requested) ?? 0) + 1);
-          if (lineUsage !== undefined) addUsage(cur.usage, lineUsage.usage);
+          if (lineUsage !== undefined && firstOfResponse) addUsage(cur.usage, lineUsage.usage);
         }
       }
       // prompt_graphs.py reads efforts and skills from every line.
@@ -506,8 +515,8 @@ export const extractSession = (input: ExtractInput): Extract => {
       if (blockType === 'thinking' && cur !== undefined) cur.thinking += 1;
       if (blockType === 'text' && role === 'assistant') {
         const text = str(block.text) ?? '';
-        for (const match of text.matchAll(TLDR_RE)) session.tldrs.push(redact(cut(match[1] ?? '', 400)));
-        for (const match of text.matchAll(CONF_RE)) session.confidences.push(redact(cut(match[1] ?? '', 120)));
+        for (const match of text.matchAll(TLDR_RE)) session.tldrs.push(cut(redact(match[1] ?? ''), 400));
+        for (const match of text.matchAll(CONF_RE)) session.confidences.push(cut(redact(match[1] ?? ''), 120));
       } else if (blockType === 'tool_use') {
         const name = str(block.name) ?? '?';
         session.tools[name] = (session.tools[name] ?? 0) + 1;
@@ -551,7 +560,7 @@ export const extractSession = (input: ExtractInput): Extract => {
           pendingRecovery = 2;
         }
         const tool = toolById.get(str(block.tool_use_id)) ?? '?';
-        const informative = firstInformative(text);
+        const informative = redact(firstInformative(text));
         const error: ErrorObservation = {
           kind: 'error',
           v: EXTRACTOR_VERSION,
@@ -561,7 +570,7 @@ export const extractSession = (input: ExtractInput): Extract => {
           harnessVersion: version ?? null,
           tool,
           sig: redact(`${tool} | ${normalize(informative)}`),
-          example: redact(cut(informative, ERROR_EXAMPLE_CHARS)),
+          example: cut(informative, ERROR_EXAMPLE_CHARS),
           next: [],
           editFollowed: false,
           prompt: cur?.index ?? null,

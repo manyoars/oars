@@ -72,8 +72,11 @@ describe('measure', () => {
     // errors-a, errors-b, sidechain, tldr. errors-b repeats a signature errors-a saw first.
     expect(result.before.recurringPer100).toBe(50);
     expect(result.last.recurringPer100).toBe(0);
+    expect(result.before.recurringSignatures).toBe(1);
+    expect(result.last.recurringSignatures).toBe(0);
     expect(result.before.cacheWritePerSession).toBeGreaterThan(0);
     expect(formatMeasure(result)).toContain('recurring errors per 100 sessions');
+    expect(formatMeasure(result)).toContain('distinct recurring signatures');
   });
 
   it('counts MCP recall calls inside each window and handles an empty store', async () => {
@@ -81,7 +84,7 @@ describe('measure', () => {
     const calls = [{ at: store.sessions[0]?.tsFirst ?? '', query: '{}', matches: 1 }];
     const result = measure(store, calls, 4);
     expect(result.last.recallPerSession).toBe(0.25);
-    expect(result.before).toEqual({ sessions: 0, recurringPer100: null, cacheWritePerSession: null, recallPerSession: null });
+    expect(result.before).toEqual({ sessions: 0, recurringPer100: null, recurringSignatures: null, cacheWritePerSession: null, recallPerSession: null });
     expect(formatMeasure(result)).toContain('-');
     expect(measure({ sessions: [], prompts: [], errors: [] }, [], 5).last.sessions).toBe(0);
   });

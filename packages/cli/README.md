@@ -75,7 +75,7 @@ The SDK key is shown once, so save it when `deploy` prints it.
 oars sessions deposit --allow ~/work/app --allow ~/work/tools --redact-domain corp.example
 
 # Ask before you re-solve: the error as printed, a file, or a prompt class.
-oars sessions recall --error "bash: -c: line 7: unexpected EOF while looking for matching quote"
+oars sessions recall --error "unexpected EOF while looking for matching \`''"
 oars sessions recall --path src/main.ts --since 30
 
 # Serve the same query to a running agent as one MCP tool, oars_recall (stdio):
@@ -89,15 +89,20 @@ oars sessions verify                        # consistency invariants on the stor
 
 `deposit` is idempotent (an unchanged file is skipped by size and mtime) and appends to `<config>/oars/sessions/observations.jsonl`;
 the schema is documented in `src/sessions/schema.ts`. Secrets (by pattern and entropy), emails, and the domains you name are masked
-before anything is written, and nothing beyond the first 300 characters of a prompt and the first informative line of a tool error is
-kept. For each session it also writes a skeleton (ids, timestamps, tool linkage, token counts, a SHA-256 in place of every content
-field, and a Merkle root over the raw lines) that `verify` checks.
+before anything is written (redaction runs on the full text, then the text is cut). The log is the local derived-records tier: redacted
+text, never raw content. It keeps these fields and no others: the first 300 characters of each prompt, the first informative line of a
+tool error (160 characters), TLDR lines (400) and Confidence lines (120) from assistant text, WebSearch queries, fetched URLs, file
+paths, and git branch names. Nothing is uploaded. Subagent transcripts (`<project>/<session>/subagents/`) are not deposited yet, so
+their errors and tokens are missing from recall, books, and measure. For each session it also writes a skeleton (ids, timestamps, tool linkage, token counts, a SHA-256 in place of every content
+field, and a Merkle root over the raw lines) that `verify` checks; the skeleton holds hashes only, never content.
+`verify` exits 0 even when an invariant has exceptions; add `--strict` to exit 4 instead. `measure` prints the recurring-error count
+per hundred sessions and, on a second line, the distinct recurring signatures in the window.
 
 ## The `--json` contract
 
 With `--json`, stdout carries exactly one JSON document and a success exits 0.
 
-- Success: `{"ok": true, ...}`. The rest depends on the command: `login` adds `email`; `deploy` adds `workloadId`, `prices`, `started`, `nextSteps` and, when this run minted it, `sdkKey`; `templates` adds `templates`; `status` adds `workload` and `billingMode`; `test-charge` adds `chargeId` and `status`.
+- Success: `{"ok": true, ...}`. The rest depends on the command: `login` adds `email`; `deploy` adds `workloadId`, `prices`, `started`, `nextSteps` and, when this run minted it, `sdkKey`; `templates` adds `templates`; `status` adds `workload` and `billingMode`; `test-charge` adds `chargeId` and `status`; `sessions` commands add their own fields (`deposit` the counts, `recall` `matches`, `books` `rows`, `measure` `last` and `before`, `verify` `sessions`, `unreadable`, and `invariants`).
 - Failure: `{"ok": false, "step": "...", "problem": {...}}`, where `problem` is the platform's problem document (`title`, `detail`, `code`, `actionUrl` when it sent them). A `deploy` that stopped after registering also carries `workloadId`, `rerun` and, if that run minted it, `sdkKey`.
 
 Without `--json`, a failure prints the problem to stderr instead.
@@ -110,7 +115,7 @@ Exit codes:
 | 1 | unexpected error |
 | 2 | usage error |
 | 3 | authentication failed (login expired or denied, SDK key invalid, HTTP 401 or 403) |
-| 4 | the platform rejected the input |
+| 4 | the platform rejected the input, or `sessions verify --strict` found exceptions |
 | 5 | conflict (an idempotency key or workload already used) |
 | 6 | a person must act first (account, payment method, credits, or compute cap); the last stderr line starts "Needs you:" and names the link |
 | 7 | rate limited |

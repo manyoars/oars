@@ -6,7 +6,7 @@ import { appendFile, mkdir } from 'node:fs/promises';
 import { createInterface } from 'node:readline';
 import { formatRecall, recall, type RecallQuery } from './query.js';
 import type { RecallCall } from './schema.js';
-import { loadStore, paths, type SessionsRuntime } from './store.js';
+import { loadStore, paths, readRedactDomains, type SessionsRuntime } from './store.js';
 
 const PROTOCOL = '2025-06-18';
 
@@ -60,11 +60,16 @@ export const handleMessage = async (runtime: SessionsRuntime, now: () => number,
     const params = isObj(message.params) ? message.params : {};
     if (params.name !== TOOL_NAME) return failure(id, -32602, `Unknown tool: ${typeof params.name === 'string' ? params.name : ''}`);
     const query = toQuery(params.arguments);
-    const result = recall(await loadStore(runtime.storeDir), query, now());
-    const call: RecallCall = { at: new Date(now()).toISOString(), query: JSON.stringify(query), matches: result.matches.length };
-    await mkdir(runtime.storeDir, { recursive: true });
-    await appendFile(paths(runtime.storeDir).calls, `${JSON.stringify(call)}\n`, { mode: 0o600 });
-    return reply(id, { content: [{ type: 'text', text: formatRecall(result) }], structuredContent: result });
+    try {
+      const result = recall(await loadStore(runtime.storeDir), query, now(), undefined, await readRedactDomains(runtime.storeDir));
+      const call: RecallCall = { at: new Date(now()).toISOString(), query: JSON.stringify(query), matches: result.matches.length };
+      await mkdir(runtime.storeDir, { recursive: true });
+      await appendFile(paths(runtime.storeDir).calls, `${JSON.stringify(call)}\n`, { mode: 0o600 });
+      return reply(id, { content: [{ type: 'text', text: formatRecall(result) }], structuredContent: result });
+    } catch (error) {
+      // A store or log failure must not end the server mid-session: the agent gets an error for this call and can carry on.
+      return failure(id, -32603, `Internal error: ${error instanceof Error ? error.message : String(error)}`);
+    }
   }
   return failure(id, -32601, `Method not found: ${method}`);
 };

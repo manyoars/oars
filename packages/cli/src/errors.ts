@@ -65,6 +65,8 @@ export class CliError extends Error {
     readonly step: string,
     readonly problem: ProblemDetail = { title: message },
     readonly partial?: PartialDeploy,
+    /** Extra fields for the `--json` failure document, such as the invariants a strict verify failed. */
+    readonly details?: object,
   ) {
     super(message);
     this.name = 'CliError';
