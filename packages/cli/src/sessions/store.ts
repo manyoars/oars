@@ -1,6 +1,7 @@
 // The on-disk session store and `deposit`. Layout under `<config>/oars/sessions/`:
 //   observations.jsonl      append-only; a re-deposited session is appended again under a higher `rev`
-//   state.json              per file: size, mtime, and the `rev` last deposited (the idempotency check)
+//   state.json              per file: size, mtime, the `rev`, extractor version and redact-domain set last deposited
+//                           (a file is skipped only when size, mtime, version and domain set all match)
 //   derived.json            the derived records, rewritten at the end of every deposit
 //   skeletons/<session>.json  one skeleton per session (hashes and ids, no content)
 //   mcp-calls.jsonl         one line per recall call the MCP server answered
@@ -38,6 +39,8 @@ interface FileState {
   rev: number;
   /** The extractor version that wrote this file's records; a file recorded under another version is deposited again. */
   v: string;
+  /** The sorted `--redact-domain` set in force when this file was deposited; a file recorded under another set is deposited again. */
+  d: string[];
 }
 
 interface State {
@@ -56,6 +59,8 @@ export const paths = (storeDir: string) => ({
   calls: join(storeDir, 'mcp-calls.jsonl'),
 });
 
+const sameSet = (a: readonly string[], b: readonly string[]): boolean => a.length === b.length && a.every((entry, index) => entry === b[index]);
+
 const isRecord = (value: unknown): value is { [key: string]: unknown } => typeof value === 'object' && value !== null && !Array.isArray(value);
 
 const readState = async (storeDir: string): Promise<State> => {
@@ -65,7 +70,13 @@ const readState = async (storeDir: string): Promise<State> => {
       const files: State['files'] = {};
       for (const [key, value] of Object.entries(parsed.files)) {
         if (isRecord(value) && typeof value.size === 'number' && typeof value.mtimeMs === 'number' && typeof value.rev === 'number') {
-          files[key] = { size: value.size, mtimeMs: value.mtimeMs, rev: value.rev, v: typeof value.v === 'string' ? value.v : '' };
+          files[key] = {
+            size: value.size,
+            mtimeMs: value.mtimeMs,
+            rev: value.rev,
+            v: typeof value.v === 'string' ? value.v : '',
+            d: Array.isArray(value.d) ? value.d.filter((entry): entry is string => typeof entry === 'string') : [],
+          };
         }
       }
       const domains = Array.isArray(parsed.redactDomains) ? parsed.redactDomains.filter((entry): entry is string => typeof entry === 'string') : [];
@@ -98,7 +109,7 @@ export interface DepositOptions {
 export interface DepositResult {
   /** Session files parsed this run. */
   sessions: number;
-  /** Session files skipped because size and mtime were unchanged. */
+  /** Session files skipped because size, mtime, extractor version, and redact-domain set were all unchanged. */
   unchanged: number;
   lines: number;
   badLines: number;
@@ -131,10 +142,11 @@ export const deposit = async (runtime: SessionsRuntime, options: DepositOptions)
   const matched = new Set(allowed);
   const missing = options.allow.filter((entry) => !matched.has(entry) && !matched.has(slugOf(entry)));
   const state = await readState(runtime.storeDir);
-  // A wider redaction set means the records already written may hold a domain now to be masked, so every allowed file is read again.
-  const known = new Set(state.redactDomains);
-  const widened = options.redactDomains.some((domain) => !known.has(domain));
   state.redactDomains = [...new Set([...state.redactDomains, ...options.redactDomains])];
+  // Each file records the set it was deposited under. A file whose set differs from the current one is read again, so a domain
+  // added while other folders were allowed still masks those folders later. Lines already written stay in the append-only
+  // observations file until it is compacted; readers use only the highest rev of each session.
+  const domains = [...state.redactDomains].sort();
   const redact = makeRedactor(state.redactDomains);
   const files = paths(runtime.storeDir);
   await mkdir(files.skeletons, { recursive: true });
@@ -157,7 +169,7 @@ export const deposit = async (runtime: SessionsRuntime, options: DepositOptions)
       const info = await stat(file);
       const key = `${project}/${name}`;
       const previous = state.files[key];
-      if (previous !== undefined && previous.size === info.size && previous.mtimeMs === info.mtimeMs && previous.v === EXTRACTOR_VERSION && !widened) {
+      if (previous !== undefined && previous.size === info.size && previous.mtimeMs === info.mtimeMs && previous.v === EXTRACTOR_VERSION && sameSet(previous.d, domains)) {
         result.unchanged += 1;
         continue;
       }
@@ -168,7 +180,7 @@ export const deposit = async (runtime: SessionsRuntime, options: DepositOptions)
       await mkdir(runtime.storeDir, { recursive: true });
       await appendFile(files.observations, batch.map((observation) => `${JSON.stringify(observation)}\n`).join(''), { mode: 0o600 });
       await writeAtomic(join(files.skeletons, `${session}.json`), JSON.stringify(extract.skeleton));
-      state.files[key] = { size: info.size, mtimeMs: info.mtimeMs, rev, v: EXTRACTOR_VERSION };
+      state.files[key] = { size: info.size, mtimeMs: info.mtimeMs, rev, v: EXTRACTOR_VERSION, d: domains };
       result.sessions += 1;
       result.lines += extract.session.lines;
       result.badLines += extract.session.badLines;

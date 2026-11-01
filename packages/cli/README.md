@@ -79,7 +79,6 @@ oars sessions recall --error "unexpected EOF while looking for matching \`''"
 oars sessions recall --path src/main.ts --since 30
 
 # Serve the same query to a running agent as one MCP tool, oars_recall (stdio):
-#   claude mcp add oars-recall -- oars sessions recall --mcp
 oars sessions recall --mcp
 
 oars sessions books --by class --since 30   # tokens, wall time, turns, errors, verify-after-edit rate
@@ -87,13 +86,13 @@ oars sessions measure --last 50             # recurring errors per 100 sessions,
 oars sessions verify                        # consistency invariants on the stored skeletons
 ```
 
-`deposit` is idempotent (an unchanged file is skipped by size and mtime) and appends to `<config>/oars/sessions/observations.jsonl`;
+`deposit` is idempotent (a file is skipped only when its size, mtime, extractor version, and `--redact-domain` set are all unchanged) and appends to `<config>/oars/sessions/observations.jsonl`;
 the schema is documented in `src/sessions/schema.ts`. Secrets (by pattern and entropy), emails, and the domains you name are masked
-before anything is written (redaction runs on the full text, then the text is cut). The log is the local derived-records tier: redacted
+before a line is written (redaction runs on the full text, then the text is cut); lines written before a domain was added stay in the append-only file until it is compacted, and readers use only the latest version of each session. The log is the local derived-records tier: redacted
 text, never raw content. It keeps these text fields and no others: the first 300 characters of each prompt, the first informative line of a
 tool error (160 characters), TLDR lines (400) and Confidence lines (120) from assistant text, WebSearch queries, fetched URLs, file
 paths, and git branch names (the last four have no length limit), all redacted first; plus the project folder slug (not redacted, so it
-carries your username and directory names; the log stays local), skill names, effort values, model names, and harness versions. Nothing is uploaded. Subagent transcripts (`<project>/<session>/subagents/`) are not deposited yet, so
+carries your username and directory names; the log stays local), skill names, effort values, model names, and harness versions, and tool names (including MCP server names). Nothing is uploaded. Subagent transcripts (`<project>/<session>/subagents/`) are not deposited yet, so
 their errors and tokens are missing from recall, books, and measure. For each session it also writes a skeleton (ids, timestamps, tool linkage, token counts, a SHA-256 in place of every content
 field, and a Merkle root over the raw lines) that `verify` checks; the skeleton holds hashes only, never content.
 `verify` exits 0 even when an invariant has exceptions; add `--strict` to exit 4 instead. `measure` prints the recurring-error count
