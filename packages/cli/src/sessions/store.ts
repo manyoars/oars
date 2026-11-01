@@ -7,8 +7,9 @@
 //   mcp-calls.jsonl         one line per recall call the MCP server answered
 //   hook-calls.jsonl        one line per hook invocation (event, session, hit, milliseconds)
 //   hook-index.json         the recurring signatures per project and overall, for the hooks
-import { appendFile, mkdir, readdir, readFile, rename, stat, writeFile } from 'node:fs/promises';
+import { appendFile, mkdir, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { basename, dirname, join } from 'node:path';
+import { CliError, ExitCode } from '../errors.js';
 import { compileAllow, requireEntries, slugOf } from './allow.js';
 import { buildIndex, indexPath } from './hook-index.js';
 import { extractSession } from './extract.js';
@@ -50,7 +51,7 @@ interface State {
   files: { [key: string]: FileState };
   /** Every `--redact-domain` any deposit used, so recall masks a query the same way the log was masked. */
   redactDomains: string[];
-  /** Every `--allow` entry any deposit used (folders, prefixes, globs): the Stop hook deposits a session only from a folder these name. */
+  /** Every `--allow` entry any deposit used (folders, prefixes, globs): the SessionEnd hook deposits a session only from a folder these name. */
   allow: string[];
 }
 
@@ -177,8 +178,7 @@ const depositFile = async (context: DepositContext, project: string, file: strin
   const extract = extractSession({ text: await readFile(file, 'utf8'), session, project, rev, at: context.at, bytes: info.size, redact: context.redact });
   const batch: Observation[] = [extract.session, ...extract.prompts, ...extract.errors];
   await mkdir(runtime.storeDir, { recursive: true });
-  await appendFile(files.observations, batch.map((observation) => `${JSON.stringify(observation)}
-`).join(''), { mode: 0o600 });
+  await appendFile(files.observations, batch.map((observation) => `${JSON.stringify(observation)}\n`).join(''), { mode: 0o600 });
   await writeAtomic(join(files.skeletons, `${session}.json`), JSON.stringify(extract.skeleton));
   state.files[key] = { size: info.size, mtimeMs: info.mtimeMs, rev, v: EXTRACTOR_VERSION, d: context.domains };
   return extract;
@@ -191,7 +191,45 @@ export const refresh = async (runtime: SessionsRuntime, redactDomains: readonly 
   await writeAtomic(indexPath(runtime.storeDir), JSON.stringify(buildIndex(store, redactDomains, at)));
 };
 
-export const deposit = async (runtime: SessionsRuntime, options: DepositOptions): Promise<DepositResult> => {
+interface LockOptions {
+  /** How long to wait for a holder before giving up. */
+  waitMs: number;
+  /** A lock file older than this belongs to a process that died; it is broken. */
+  staleMs: number;
+}
+
+const sleep = (ms: number): Promise<void> => new Promise((done) => setTimeout(done, ms));
+
+/**
+ * Runs `work` as the only writer of `state.json` and the observations file. The SessionEnd hooks of parallel sessions and the nightly
+ * run each read, extract, and rewrite `state.json`; without this one's `files` and `allow` entries are lost to another's write.
+ */
+export const withLock = async <T>(storeDir: string, work: () => Promise<T>, options: LockOptions = { waitMs: 10_000, staleMs: 600_000 }): Promise<T> => {
+  const lock = join(storeDir, 'store.lock');
+  await mkdir(storeDir, { recursive: true });
+  const started = Date.now();
+  for (;;) {
+    try {
+      await writeFile(lock, String(process.pid), { flag: 'wx', mode: 0o600 });
+      break;
+    } catch (error) {
+      if (!(error instanceof Error && 'code' in error && error.code === 'EEXIST')) throw error;
+    }
+    const age = await stat(lock).then((info) => Date.now() - info.mtimeMs, () => 0);
+    if (age > options.staleMs) await rm(lock, { force: true });
+    else if (Date.now() - started >= options.waitMs) throw new CliError('The store is locked by another deposit; try again shortly.', ExitCode.UNEXPECTED, 'unexpected');
+    else await sleep(25);
+  }
+  try {
+    return await work();
+  } finally {
+    await rm(lock, { force: true });
+  }
+};
+
+export const deposit = (runtime: SessionsRuntime, options: DepositOptions): Promise<DepositResult> => withLock(runtime.storeDir, () => depositLocked(runtime, options));
+
+const depositLocked = async (runtime: SessionsRuntime, options: DepositOptions): Promise<DepositResult> => {
   requireEntries(options.allow);
   const allow = compileAllow(options.allow);
   const folders = await projectFolders(runtime.projectsRoot);
@@ -234,10 +272,13 @@ export const deposit = async (runtime: SessionsRuntime, options: DepositOptions)
 export type SessionDeposit = 'deposited' | 'unchanged' | 'not-allowed' | 'missing';
 
 /**
- * Deposits one transcript, as the Stop hook does: only from a folder that earlier `--allow` entries name, and idempotent by size and
+ * Deposits one transcript, as the SessionEnd hook does: only from a folder that earlier `--allow` entries name, and idempotent by size and
  * mtime. It does not rebuild `derived.json` or the hook index (that is a whole-store pass; the nightly run does it), so it stays fast.
  */
-export const depositSession = async (runtime: SessionsRuntime, transcript: string, now: () => number): Promise<SessionDeposit> => {
+export const depositSession = (runtime: SessionsRuntime, transcript: string, now: () => number): Promise<SessionDeposit> =>
+  withLock(runtime.storeDir, () => depositSessionLocked(runtime, transcript, now));
+
+const depositSessionLocked = async (runtime: SessionsRuntime, transcript: string, now: () => number): Promise<SessionDeposit> => {
   const project = basename(dirname(transcript));
   const state = await readState(runtime.storeDir);
   if (!compileAllow(state.allow).allows(project)) return 'not-allowed';

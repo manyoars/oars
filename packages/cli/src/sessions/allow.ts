@@ -4,11 +4,15 @@
 //   a glob                 `*-work-*`, `C:\work\app-*`: `*` any run of characters, `?` one character
 // A path is matched through its slug, because Claude Code names a project folder after its working directory with every
 // non-alphanumeric character as `-`.
+import { homedir } from 'node:os';
 import { resolve } from 'node:path';
 import { CliError, ExitCode } from '../errors.js';
 
+/** A leading `~` is the home folder, expanded here because a quoted entry or one read from a list file reaches us unexpanded by any shell. */
+const expandHome = (entry: string): string => (/^~(?:[\\/]|$)/.test(entry) ? homedir() + entry.slice(1) : entry);
+
 /** Claude Code names a project folder after its working directory with every non-alphanumeric character as `-`. */
-export const slugOf = (folder: string): string => resolve(folder).replace(/[^A-Za-z0-9]/g, '-');
+export const slugOf = (folder: string): string => resolve(expandHome(folder)).replace(/[^A-Za-z0-9]/g, '-');
 
 const GLOB = /[*?]/;
 
@@ -42,7 +46,7 @@ export interface Allow {
 }
 
 export const compileAllow = (entries: readonly string[]): Allow => {
-  const compiled = entries.map((entry) => ({ entry, matches: matcherOf(entry) }));
+  const compiled = entries.map((entry) => ({ entry, matches: matcherOf(expandHome(entry)) }));
   return {
     allows: (name) => compiled.some((item) => item.matches(name)),
     unmatched: (names) => compiled.filter((item) => !names.some((name) => item.matches(name))).map((item) => item.entry),

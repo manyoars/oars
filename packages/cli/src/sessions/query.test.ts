@@ -85,7 +85,7 @@ describe('measure', () => {
     const calls = [{ at: store.sessions[0]?.tsFirst ?? '', query: '{}', matches: 1 }];
     const result = measure(store, calls, [], 4);
     expect(result.last.recallPerSession).toBe(0.25);
-    expect(result.before).toEqual({ sessions: 0, recurringPer100: null, recurringSignatures: null, cacheWritePerSession: null, recallPerSession: null, hookRecallPerSession: null, hookHitsPerSession: null });
+    expect(result.before).toEqual({ sessions: 0, recurringPer100: null, recurringSignatures: null, cacheWritePerSession: null, recallPerSession: null, hookRecallPerSession: null, hookHitsPerSession: null, hookDepositsPerSession: null });
     expect(formatMeasure(result)).toContain('-');
     expect(measure({ sessions: [], prompts: [], errors: [] }, [], [], 5).last.sessions).toBe(0);
   });
@@ -105,6 +105,9 @@ describe('measure', () => {
     const result = measure(store, [], hookCalls, 2);
     expect(result.last.hookRecallPerSession).toBe(1.5);
     expect(result.last.hookHitsPerSession).toBe(1);
+    expect(result.last.hookDepositsPerSession).toBe(0.5);
+    expect(result.before.hookDepositsPerSession).toBe(0);
+    expect(formatMeasure(result)).toContain('hook deposits per session');
     expect(result.before.hookRecallPerSession).toBe(0);
     expect(formatMeasure(result)).toContain('hook recall calls per session');
   });
