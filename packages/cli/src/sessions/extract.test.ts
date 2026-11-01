@@ -196,6 +196,7 @@ describe('request-id dedupe (register A22)', () => {
   it('treats an empty request id as absent, so two such lines do not collapse into one response', () => {
     expect(run([line('', 'm1'), line('', 'm2')]).prompts[0]?.usage.output).toBe(10);
     expect(run([line('', ''), line('', '')]).prompts[0]?.usage.output).toBe(10);
+    expect(run([line('', 'm1'), line('', 'm1')]).prompts[0]?.usage.output).toBe(5);
   });
 });
 

@@ -442,7 +442,7 @@ export const extractSession = (input: ExtractInput): Extract => {
       hasThinking: lineUsage?.hasThinking ?? false,
       model: (message === undefined ? undefined : str(message.model)) ?? requested ?? null,
       version: version ?? null,
-      requestId: str(o.requestId) ?? null,
+      requestId: str(o.requestId) || null,
       apiBlockIndex: num(o.apiBlockIndex) ?? null,
       hashes: contentHashes(content),
       costState: type === 'cost-state' ? sumModelUsage(o.modelUsage) : null,

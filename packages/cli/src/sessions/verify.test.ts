@@ -13,6 +13,15 @@ const fixture = (name: string): string[] => readFileSync(join(FIXTURES, 'proj', 
 const violationsOf = (lines: readonly string[]): number[] => verifySkeleton(skeletonOf(lines)).map((result) => result.violations);
 
 describe('verify', () => {
+  it('treats an empty request id as absent: each such line counts in the cost-state sum and fails the request-id invariant', () => {
+    const assistant = (uuid: string, id: string): string =>
+      JSON.stringify({ type: 'assistant', uuid, requestId: '', message: { role: 'assistant', id, content: [], usage: { input_tokens: 1, cache_creation_input_tokens: 3, cache_read_input_tokens: 7, output_tokens: 5 } } });
+    const cost = JSON.stringify({ type: 'cost-state', modelUsage: { m: { inputTokens: 2, cacheCreationInputTokens: 6, cacheReadInputTokens: 14, outputTokens: 10 } } });
+    const results = verifySkeleton(skeletonOf([assistant('a1', 'm1'), assistant('a2', 'm2'), cost]));
+    expect(results[3]).toMatchObject({ checked: 2, violations: 2 });
+    expect(results[5]).toMatchObject({ checked: 4, violations: 0 });
+  });
+
   it('passes every invariant on the clean fixtures', () => {
     const results = verifyAll(['errors-a', 'errors-b', 'tldr', 'sidechain'].map((name) => skeletonOf(fixture(name), name)));
     expect(results.map((result) => result.name)).toEqual([...INVARIANTS]);

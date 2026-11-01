@@ -60,6 +60,7 @@ describe('the domain set is recorded per file (fix round 3)', () => {
     await deposit(staged.runtime, { ...options(['proj-a']), redactDomains: ['x.com'] });
     const third = await deposit(staged.runtime, { ...options(['proj-b']), redactDomains: [] });
     expect(third).toMatchObject({ sessions: 1, unchanged: 0 });
+    expect((await loadStore(staged.storeDir)).prompts.find((prompt) => prompt.session === 'b1')?.head).toContain('<org-domain>');
     expect(await deposit(staged.runtime, options(['proj-b']))).toMatchObject({ sessions: 0, unchanged: 1 });
   });
 });
