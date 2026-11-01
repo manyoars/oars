@@ -380,4 +380,8 @@ describe('the version-3 capture records (Item 1, on errors-a.jsonl)', () => {
     expect(write).toMatchObject({ toolUseId: 't3', tool: 'Write', line: 'File has not been read yet. Read it first before writing to it.', after: 3 });
     expect(capture.errorLines).toHaveLength(2);
   });
+
+  it('stamps the skeleton, written at capture, with CAPTURE_VERSION', () => {
+    expect(capture.skeleton.v).toBe(CAPTURE_VERSION);
+  });
 });

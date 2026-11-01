@@ -6,7 +6,6 @@ import { createHash } from 'node:crypto';
 import type { Redactor } from './redact.js';
 import {
   CAPTURE_VERSION,
-  EXTRACTOR_VERSION,
   PROMPT_HEAD_CHARS,
   SIGNATURE_CHARS,
   type CostState,
@@ -647,7 +646,8 @@ export const captureSession = (input: ExtractInput): Capture => {
     tools,
     errorLines,
     skeleton: {
-      v: EXTRACTOR_VERSION,
+      // Written at capture from raw, never rewritten by derive, so it carries the capture stamp.
+      v: CAPTURE_VERSION,
       session: input.session,
       project: input.project,
       merkleRoot: merkleRoot(rawLines.map(sha256)),

@@ -25,7 +25,7 @@
 /** Stamped `cv` on every captured record. Bump it only when the captured field list changes: a bump re-reads every transcript. */
 export const CAPTURE_VERSION = '3';
 
-/** Stamped `v` on every derived record and skeleton. A bump re-derives from the log; no transcript is read. */
+/** Stamped `v` on every derived record. A bump re-derives from the log; no transcript is read. */
 export const EXTRACTOR_VERSION = '3';
 
 export const PROMPT_HEAD_CHARS = 300;
@@ -44,8 +44,9 @@ export interface Usage {
 }
 
 /**
- * One per transcript, captured: the `parse_sessions.py` record, minus anything that is raw content. Local-only: `project`, `files`,
- * `urls`, `searches`, `branches`, `tldrs`, and `confidences`; the rest are shareable.
+ * One per transcript, captured: the `parse_sessions.py` record, minus anything that is raw content. Local-only: `parent`, `spawnedBy`,
+ * `project`, `files`, `urls`, `searches`, `branches`, `tldrs`, and `confidences` (`parent` and `spawnedBy` join records inside this
+ * store only, as on the tool record); the rest are shareable.
  */
 export interface SessionObservation {
   kind: 'session';
@@ -316,6 +317,7 @@ export interface CostState {
 }
 
 export interface Skeleton {
+  /** CAPTURE_VERSION: the skeleton is written at capture. */
   v: string;
   session: string;
   project: string;
