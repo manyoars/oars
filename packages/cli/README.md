@@ -92,7 +92,7 @@ before a line is written (redaction runs on the full text, then the text is cut)
 text, never raw content. It keeps these text fields and no others: the first 300 characters of each prompt, the first informative line of a
 tool error (160 characters), TLDR lines (400) and Confidence lines (120) from assistant text, WebSearch queries, fetched URLs, file
 paths, and git branch names (the last four have no length limit), all redacted first; plus the project folder slug (not redacted, so it
-carries your username and directory names; the log stays local), skill names, effort values, model names, and harness versions, and tool names (including MCP server names). Nothing is uploaded. Subagent transcripts (`<project>/<session>/subagents/`) are not deposited yet, so
+carries your username and directory names; the log stays local), skill names, effort values, model names, harness versions, and tool names (including MCP server names). Nothing is uploaded. Subagent transcripts (`<project>/<session>/subagents/`) are not deposited yet, so
 their errors and tokens are missing from recall, books, and measure. For each session it also writes a skeleton (ids, timestamps, tool linkage, token counts, a SHA-256 in place of every content
 field, and a Merkle root over the raw lines) that `verify` checks; the skeleton holds hashes only, never content.
 `verify` exits 0 even when an invariant has exceptions; add `--strict` to exit 4 instead. `measure` prints the recurring-error count
