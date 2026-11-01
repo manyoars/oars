@@ -3,11 +3,52 @@ import { join, resolve } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { CliError, ExitCode } from '../errors.js';
 import { deposit, derive, loadStore, paths, readCalls, readRedactDomains, readSkeletons, slugOf } from './store.js';
+import { EXTRACTOR_VERSION } from './schema.js';
 import { addProject, cleanup, NOW, stage } from './test-support.js';
 
 afterEach(cleanup);
 
 const options = (allow: string[]) => ({ allow, redactDomains: [], now: () => NOW });
+
+interface StateFile {
+  files: { [key: string]: { v?: string } };
+}
+
+const isStateFile = (value: unknown): value is StateFile => typeof value === 'object' && value !== null && typeof Reflect.get(value, 'files') === 'object';
+
+const readStateFile = (storeDir: string): StateFile => {
+  const parsed: unknown = JSON.parse(readFileSync(paths(storeDir).state, 'utf8'));
+  if (!isStateFile(parsed)) throw new Error('state.json has no files');
+  return parsed;
+};
+
+const rewriteState = (storeDir: string, change: (state: StateFile) => void): void => {
+  const state = readStateFile(storeDir);
+  change(state);
+  writeFileSync(paths(storeDir).state, JSON.stringify(state));
+};
+
+describe('re-deposit on a new extractor version or a wider redaction set (fix round 2)', () => {
+  it('re-deposits an unchanged file whose recorded version differs, and records the current one', async () => {
+    const staged = stage();
+    await deposit(staged.runtime, options(['proj']));
+    rewriteState(staged.storeDir, (state) => {
+      for (const entry of Object.values(state.files)) entry.v = '0';
+    });
+    const again = await deposit(staged.runtime, options(['proj']));
+    expect(again).toMatchObject({ sessions: 4, unchanged: 0 });
+    expect(await deposit(staged.runtime, options(['proj']))).toMatchObject({ sessions: 0, unchanged: 4 });
+    const state = readStateFile(staged.storeDir);
+    expect(Object.values(state.files).every((entry) => entry.v === EXTRACTOR_VERSION)).toBe(true);
+  });
+
+  it('re-deposits every allowed file when the --redact-domain set grows, and not when it repeats', async () => {
+    const staged = stage();
+    await deposit(staged.runtime, { ...options(['proj']), redactDomains: ['a.example'] });
+    expect(await deposit(staged.runtime, { ...options(['proj']), redactDomains: ['a.example'] })).toMatchObject({ sessions: 0, unchanged: 4 });
+    expect(await deposit(staged.runtime, { ...options(['proj']), redactDomains: ['b.example'] })).toMatchObject({ sessions: 4, unchanged: 0 });
+  });
+});
 
 describe('deposit', () => {
   it('refuses to run without an --allow', async () => {
@@ -85,14 +126,14 @@ describe('deposit', () => {
     const written: unknown = JSON.parse(readFileSync(paths(staged.storeDir).derived, 'utf8'));
     expect(typeof written === 'object' && written !== null && Reflect.get(written, 'sessions')).toBe(4);
     const top = derived.signatures[0];
-    expect(top).toMatchObject({ v: '1', tool: 'Bash', sessions: 2, count: 2, harnessVersions: ['2.1.300', '2.1.310'] });
+    expect(top).toMatchObject({ v: EXTRACTOR_VERSION, tool: 'Bash', sessions: 2, count: 2, harnessVersions: ['2.1.300', '2.1.310'] });
     expect(top?.sig).toContain('unexpected EOF while looking for matching quote');
     expect(top?.following).toEqual({ Write: 1, Read: 1, Bash: 1 });
     expect(derived.classes['edit-verify']?.prompts).toBe(2);
     expect(derived.recovery['Write>Read']).toBe(1);
     expect(derived.bigrams['Read>Bash']).toBe(2);
     expect(derived.summaries.find((summary) => summary.session === 'tldr')).toMatchObject({ prompts: 2, errors: 0, tldrs: 1 });
-    expect([...store.sessions, ...store.prompts, ...store.errors].every((observation) => observation.v === '1')).toBe(true);
+    expect([...store.sessions, ...store.prompts, ...store.errors].every((observation) => observation.v === EXTRACTOR_VERSION)).toBe(true);
     expect((await readSkeletons(staged.storeDir, 'tldr')).skeletons.map((skeleton) => skeleton.session)).toEqual(['tldr']);
   });
 

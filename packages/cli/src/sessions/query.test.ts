@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { books, formatBooks, formatMeasure, formatRecall, measure, recall } from './query.js';
 import { deposit, loadStore, type Store } from './store.js';
-import { cleanup, NOW, stage } from './test-support.js';
+import { addProject, cleanup, NOW, stage } from './test-support.js';
 
 afterEach(cleanup);
 
@@ -87,5 +87,22 @@ describe('measure', () => {
     expect(result.before).toEqual({ sessions: 0, recurringPer100: null, recurringSignatures: null, cacheWritePerSession: null, recallPerSession: null });
     expect(formatMeasure(result)).toContain('-');
     expect(measure({ sessions: [], prompts: [], errors: [] }, [], 5).last.sessions).toBe(0);
+  });
+});
+
+describe('recall keys an error the way deposit does (fix round 2)', () => {
+  it('recalls a deposited error that carries an email with digits', async () => {
+    const staged = stage();
+    const lines = [
+      JSON.stringify({ type: 'user', timestamp: '2026-06-01T00:00:00Z', message: { role: 'user', content: 'go' } }),
+      JSON.stringify({ type: 'assistant', timestamp: '2026-06-01T00:00:01Z', message: { role: 'assistant', content: [{ type: 'tool_use', id: 'a', name: 'Bash', input: {} }] } }),
+      JSON.stringify({ type: 'user', timestamp: '2026-06-01T00:00:02Z', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'a', is_error: true, content: 'Exit code 1\nmail user123@corp.example refused' }] } }),
+    ];
+    addProject(staged, 'mail', 'm1', lines);
+    await deposit(staged.runtime, { allow: ['mail'], redactDomains: [], now: () => NOW });
+    const store = await loadStore(staged.storeDir);
+    const result = recall(store, { error: 'mail user123@corp.example refused' }, NOW);
+    expect(result.normalized).toBe('mail <email> refused');
+    expect(result.matches).toHaveLength(1);
   });
 });

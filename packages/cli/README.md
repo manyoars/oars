@@ -90,9 +90,10 @@ oars sessions verify                        # consistency invariants on the stor
 `deposit` is idempotent (an unchanged file is skipped by size and mtime) and appends to `<config>/oars/sessions/observations.jsonl`;
 the schema is documented in `src/sessions/schema.ts`. Secrets (by pattern and entropy), emails, and the domains you name are masked
 before anything is written (redaction runs on the full text, then the text is cut). The log is the local derived-records tier: redacted
-text, never raw content. It keeps these fields and no others: the first 300 characters of each prompt, the first informative line of a
+text, never raw content. It keeps these text fields and no others: the first 300 characters of each prompt, the first informative line of a
 tool error (160 characters), TLDR lines (400) and Confidence lines (120) from assistant text, WebSearch queries, fetched URLs, file
-paths, and git branch names. Nothing is uploaded. Subagent transcripts (`<project>/<session>/subagents/`) are not deposited yet, so
+paths, and git branch names (the last four have no length limit), all redacted first; plus the project folder slug (not redacted, so it
+carries your username and directory names; the log stays local), skill names, effort values, model names, and harness versions. Nothing is uploaded. Subagent transcripts (`<project>/<session>/subagents/`) are not deposited yet, so
 their errors and tokens are missing from recall, books, and measure. For each session it also writes a skeleton (ids, timestamps, tool linkage, token counts, a SHA-256 in place of every content
 field, and a Merkle root over the raw lines) that `verify` checks; the skeleton holds hashes only, never content.
 `verify` exits 0 even when an invariant has exceptions; add `--strict` to exit 4 instead. `measure` prints the recurring-error count

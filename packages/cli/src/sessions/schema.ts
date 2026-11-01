@@ -7,12 +7,14 @@
 //
 // The log is the local derived-records tier: redacted text, never raw content, and nothing uploads. The text it keeps, each redacted
 // first and then cut: the first 300 characters of a prompt, the first informative line of a tool error (160), TLDR lines (400),
-// Confidence lines (120), WebSearch queries, fetched URLs, file paths, and git branch names. `redact` masks secrets by pattern and
+// Confidence lines (120), and, with no length limit, WebSearch queries, fetched URLs, file paths, and git branch names. Also kept as
+// written, not redacted: the project folder slug (it holds the username and directory names; the log stays local), skill names, effort
+// values, model names, and harness versions. `redact` masks secrets by pattern and
 // entropy, emails, and the organization domains the operator names. The skeleton holds hashes only. Subagent transcripts
 // (`<project>/<session>/subagents/`) are not deposited yet.
 
 /** Stamped on every observation, derived record, and skeleton, so a later extractor can tell what produced it. */
-export const EXTRACTOR_VERSION = '1';
+export const EXTRACTOR_VERSION = '2';
 
 export const PROMPT_HEAD_CHARS = 300;
 export const ERROR_EXAMPLE_CHARS = 160;

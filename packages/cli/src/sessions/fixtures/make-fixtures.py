@@ -35,12 +35,14 @@ class S:
                     "message": {"role": "user", "content": text}})
         self.parent = u
 
-    def assistant(self, blocks, usage=None, side=False, effort=None, skill=None, think=None):
+    def assistant(self, blocks, usage=None, side=False, effort=None, skill=None, think=None, same_request=False):
         self.t += 3
         u = self._uuid()
-        self.req += 1
+        # Claude Code writes one line per content block, all carrying the one response's request id and usage.
+        if not same_request:
+            self.req += 1
         o = {"type": "assistant", "uuid": u, "parentUuid": self.parent, "isSidechain": side, "timestamp": iso(self.t), "version": self.version, "requestedModel": self.model,
-             "requestId": f"req_{self.name}_{self.req}", "apiBlockIndex": 0,
+             "requestId": f"req_{self.name}_{self.req}", "apiBlockIndex": 1 if same_request else 0,
              "message": {"role": "assistant", "model": self.model, "content": blocks}}
         if usage:
             o["message"]["usage"] = {"input_tokens": usage[0], "cache_creation_input_tokens": usage[1], "cache_read_input_tokens": usage[2], "output_tokens": usage[3]}
@@ -73,6 +75,7 @@ a = S("errors-a")
 a.attach({"type": "environment", "snapshot": {"workingDirectory": "/work/app", "platform": "linux"}})
 a.prompt("fix the failing build in /work/app/src/main.ts, token=abc123 is set")
 a.tool("Read", {"file_path": "/work/app/src/main.ts"}, "t1", usage=(10, 500, 9000, 120), effort="high", think=40)
+a.assistant([{"type": "text", "text": "Reading it."}], usage=(10, 500, 9000, 120), same_request=True)
 a.result("t1", "file contents")
 a.tool("Bash", {"command": "echo 'it's broken"}, "t2", usage=(10, 100, 9500, 80), think=10)
 a.result("t2", "Exit code 2\nbash: -c: line 1: unexpected EOF while looking for matching quote\n", error=False)
