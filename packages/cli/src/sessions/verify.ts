@@ -7,7 +7,29 @@ export interface InvariantResult {
   /** What was compared: lines, pairs, or tool results, as each invariant defines it. */
   checked: number;
   violations: number;
+  /** Checks that neither hold nor fail, each counted under the cause it was traced to (the cost-state check only). */
+  observed?: ObservedClass[];
 }
+
+export type CostClass = 'resume scope' | 'subagent transcripts' | 'harness side calls' | 'other';
+
+export interface ObservedClass {
+  cls: CostClass;
+  /** True for a check that holds only once its scope is applied; false for a total above the recorded sum. */
+  holds: boolean;
+  checks: number;
+  /** The first session seen in the class. */
+  example: string | null;
+}
+
+/** The order the classes print in: the two scopings a check needs to hold, then the two causes of a total above the sum. */
+const CLASSES: readonly { cls: CostClass; holds: boolean }[] = [
+  { cls: 'resume scope', holds: true },
+  { cls: 'subagent transcripts', holds: true },
+  { cls: 'harness side calls', holds: false },
+  { cls: 'other', holds: false },
+];
+const emptyClasses = (): ObservedClass[] => CLASSES.map((entry) => ({ ...entry, checks: 0, example: null }));
 
 export const INVARIANTS = [
   'tool_result names an earlier tool_use',
@@ -15,7 +37,7 @@ export const INVARIANTS = [
   'message timestamps never step back more than 1 s',
   'assistant lines carry a request id; shared ids have consecutive apiBlockIndex',
   'thinking tokens never exceed output tokens',
-  'cost-state totals cover summed usage since the process start, subagents included',
+  'cost-state totals equal summed usage since the process start, subagents included',
 ] as const;
 
 const STEP_BACK_MS = 1000;
@@ -78,41 +100,63 @@ const verifyThinking = (lines: readonly SkeletonLine[]): InvariantResult => {
   return { name: INVARIANTS[4], checked: reporting.length, violations: reporting.filter((line) => (line.usage?.thinking ?? 0) > (line.usage?.output ?? 0)).length };
 };
 
-/**
- * The harness's `cost-state` totals are a bound, not a sum (A2, diagnosed on the operator's store 2026-11-01): they cover only the
- * process that wrote them (from `startTime`, so a resumed session's earlier lines are outside), they include the session's
- * subagent transcripts, and they include side calls no transcript records (a `claude-haiku` entry in `modelUsage` with no
- * assistant line of that model; a few hundred input tokens of the main model). So the check is that the recorded usage since
- * the process start, main and subagent lines together, never exceeds the totals.
- */
-const verifyCost = (lines: readonly SkeletonLine[], delegated: readonly SkeletonLine[]): InvariantResult => {
-  const last = [...lines].reverse().find((line) => line.costState !== null)?.costState;
-  if (last === undefined || last === null) return { name: INVARIANTS[5], checked: 0, violations: 0 };
-  const since = last.since === null ? Number.NEGATIVE_INFINITY : Date.parse(last.since);
-  const sums = { input: 0, cacheWrite: 0, cacheRead: 0, output: 0 };
-  // Every content block of one API response is its own line and repeats that response's usage, so it counts once per request id.
+type Sums = { input: number; cacheWrite: number; cacheRead: number; output: number };
+const KEYS = ['input', 'cacheWrite', 'cacheRead', 'output'] as const;
+
+/** Assistant usage from `since` on. Every content block of one API response is its own line and repeats its usage: once per request id. */
+const sumUsage = (lines: readonly SkeletonLine[], since: number): Sums => {
+  const sums: Sums = { input: 0, cacheWrite: 0, cacheRead: 0, output: 0 };
   const counted = new Set<string>();
-  for (const line of [...lines, ...delegated]) {
+  for (const line of lines) {
     if (line.type !== 'assistant' || line.usage === null) continue;
     if (line.ts !== null && Date.parse(line.ts) < since) continue;
     if (line.requestId !== null) {
       if (counted.has(line.requestId)) continue;
       counted.add(line.requestId);
     }
-    sums.input += line.usage.input;
-    sums.cacheWrite += line.usage.cacheWrite;
-    sums.cacheRead += line.usage.cacheRead;
-    sums.output += line.usage.output;
+    for (const key of KEYS) sums[key] += line.usage[key];
   }
+  return sums;
+};
+
+/**
+ * The harness's `cost-state` totals (A2, diagnosed on the operator's store 2026-11-01) cover only the process that wrote them
+ * (from `startTime`, so a resumed session's earlier lines are outside) and include the session's subagent transcripts. Within
+ * that scope the recorded usage must equal the totals, and a sum above them fails. A total above the sum is not a failure: the
+ * harness also counts side calls no transcript records (001cf645's `modelUsage` has a `claude-haiku` entry and no assistant line
+ * of that model), so it is reported as observed, under that class when a `modelUsage` model names no line, else under `other`.
+ * A check that holds only once a scope is applied is counted under that scope.
+ */
+const verifyCost = (lines: readonly SkeletonLine[], delegated: readonly SkeletonLine[], session: string): InvariantResult => {
+  const last = [...lines].reverse().find((line) => line.costState !== null)?.costState;
+  const observed = emptyClasses();
+  if (last === undefined || last === null) return { name: INVARIANTS[5], checked: 0, violations: 0, observed };
+  const since = last.since === null ? Number.NEGATIVE_INFINITY : Date.parse(last.since);
+  const scoped = sumUsage([...lines, ...delegated], since);
+  const resumed = sumUsage(lines, since);
+  const unscoped = sumUsage(lines, Number.NEGATIVE_INFINITY);
+  const named = new Set([...lines, ...delegated].map((line) => line.model));
+  const sideModel = last.models.some((model) => !named.has(model));
+  const note = (cls: CostClass): void => {
+    const entry = observed.find((candidate) => candidate.cls === cls);
+    if (entry === undefined) return;
+    entry.checks += 1;
+    entry.example ??= session;
+  };
   let checked = 0;
   let violations = 0;
-  for (const key of ['input', 'cacheWrite', 'cacheRead', 'output'] as const) {
+  for (const key of KEYS) {
     const total = last[key];
     if (total === null) continue;
     checked += 1;
-    if (sums[key] > total) violations += 1;
+    if (scoped[key] > total) violations += 1;
+    else if (scoped[key] < total) note(sideModel ? 'harness side calls' : 'other');
+    else if (unscoped[key] !== total) {
+      if (resumed[key] !== unscoped[key]) note('resume scope');
+      if (scoped[key] !== resumed[key]) note('subagent transcripts');
+    }
   }
-  return { name: INVARIANTS[5], checked, violations };
+  return { name: INVARIANTS[5], checked, violations, observed };
 };
 
 /** `delegated` holds the lines of the session's subagent transcripts, which its cost-state totals include. */
@@ -122,7 +166,7 @@ export const verifySkeleton = (skeleton: Skeleton, delegated: readonly SkeletonL
   verifyTimestamps(skeleton.lines),
   verifyRequests(skeleton.lines),
   verifyThinking(skeleton.lines),
-  verifyCost(skeleton.lines, delegated),
+  verifyCost(skeleton.lines, delegated, skeleton.session),
 ];
 
 /** A subagent transcript is stored as `<parent>~...~agent-<id>`; a main session's id holds no `~`. */
@@ -142,14 +186,37 @@ export const verifyAll = (skeletons: readonly Skeleton[]): InvariantResult[] => 
       if (total !== undefined) {
         total.checked += result.checked;
         total.violations += result.violations;
+        if (result.observed !== undefined) total.observed = mergeClasses(total.observed ?? emptyClasses(), result.observed);
       }
     }
   }
   return totals;
 };
 
+const mergeClasses = (into: readonly ObservedClass[], from: readonly ObservedClass[]): ObservedClass[] =>
+  into.map((entry, index) => {
+    const other = from[index];
+    return other === undefined ? entry : { ...entry, checks: entry.checks + other.checks, example: entry.example ?? other.example };
+  });
+
+const classLine = (label: string, classes: readonly ObservedClass[]): string[] => {
+  const shown = classes.filter((entry) => entry.checks > 0);
+  if (shown.length === 0) return [];
+  const parts = shown.map((entry) => `${String(entry.checks)} ${entry.cls}${entry.example === null ? '' : ` (e.g. ${entry.example})`}`);
+  return [`      ${label}: ${parts.join(', ')}`];
+};
+
+const formatResult = (result: InvariantResult): string[] => {
+  const classes = result.observed ?? [];
+  const above = classes.filter((entry) => !entry.holds);
+  const observed = above.reduce((sum, entry) => sum + entry.checks, 0);
+  const holding = result.checked - result.violations - observed;
+  return [
+    `${result.violations === 0 ? 'PASS' : 'FAIL'}  ${result.name}: ${String(holding)} of ${String(result.checked)} hold${result.violations === 0 ? '' : `, ${String(result.violations)} exceptions`}${observed === 0 ? '' : `, ${String(observed)} observed`}`,
+    ...classLine('equal only within scope', classes.filter((entry) => entry.holds)),
+    ...classLine('total above the recorded sum, as observed', above),
+  ];
+};
+
 export const formatVerify = (results: readonly InvariantResult[], sessions: number): string =>
-  [
-    `${String(sessions)} skeletons checked`,
-    ...results.map((result) => `${result.violations === 0 ? 'PASS' : 'FAIL'}  ${result.name}: ${String(result.checked - result.violations)} of ${String(result.checked)} hold${result.violations === 0 ? '' : `, ${String(result.violations)} exceptions`}`),
-  ].join('\n');
+  [`${String(sessions)} skeletons checked`, ...results.flatMap(formatResult)].join('\n');

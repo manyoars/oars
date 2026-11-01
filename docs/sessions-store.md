@@ -71,7 +71,9 @@ local only and is never read by `derive`.
 
 ## The cost-state check
 
-`verify` checks that the harness's `cost-state` totals cover the recorded usage, not that they equal it. The totals cover only
-the process that wrote them (from its `startTime`, so a resumed session's earlier lines are outside them), and they include the
-session's subagent transcripts and side calls that no transcript records (such as a small-model call with no assistant line). The
-invariant is that usage since `startTime`, main and subagent lines together, counted once per request id, never exceeds the totals.
+`verify` checks that the harness's `cost-state` totals equal the recorded usage within their scope: the process that wrote them
+(from its `startTime`, so a resumed session's earlier lines are outside them) and the session's subagent transcripts, counted
+once per request id. A recorded sum above a total fails. A total above the sum is not a failure; it is printed as observed,
+under `harness side calls` when a `modelUsage` model has no assistant line (001cf645 has a `claude-haiku` entry and no haiku
+line), else under `other`. Checks that hold only once a scope is applied are counted under `resume scope` and `subagent
+transcripts`, each with one example session.

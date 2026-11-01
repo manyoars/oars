@@ -198,8 +198,8 @@ const isoOfMillis = (value: unknown): string | null => {
 
 const sumModelUsage = (value: unknown, startTime: unknown): CostState | null => {
   if (!isObj(value)) return null;
-  const totals: CostState = { since: isoOfMillis(startTime), input: null, cacheWrite: null, cacheRead: null, output: null };
-  const add = (key: Exclude<keyof CostState, 'since'>, ...names: string[]): void => {
+  const totals: CostState = { since: isoOfMillis(startTime), input: null, cacheWrite: null, cacheRead: null, output: null, models: Object.keys(value).sort() };
+  const add = (key: Exclude<keyof CostState, 'since' | 'models'>, ...names: string[]): void => {
     for (const model of Object.values(value)) {
       if (!isObj(model)) continue;
       for (const name of names) {
