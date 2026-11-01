@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -51,6 +51,19 @@ describe('hook install', () => {
     const written = await readJson(file);
     expect(written.model).toBe('opus');
     expect(written.hooks).toMatchObject({ Stop: [rotation], SessionEnd: [expect.anything()], SessionStart: [expect.anything()], PreToolUse: [expect.anything()] });
+  });
+
+  it('removes a per-turn Stop entry the first build wrote and keeps the rotation hook, on install and on uninstall', async () => {
+    const rotation = { hooks: [{ type: 'command', command: 'node rotate-session.js' }] };
+    const old = { hooks: [{ type: 'command', command: '"C:/node/node.exe" "C:/oars/dist/hook-bin.js" stop' }] };
+    for (const run of ['install', 'uninstall'] as const) {
+      const dir = scratch();
+      const file = join(dir, 'settings.json');
+      writeFileSync(file, JSON.stringify({ hooks: { Stop: [rotation, old] } }));
+      if (run === 'install') await installHooks(runtimeIn(dir), file, false);
+      else await uninstallHooks(file);
+      expect((await readJson(file)).hooks).toMatchObject({ Stop: [rotation] });
+    }
   });
 
   it('uninstall removes only its own entries and prunes what it emptied', async () => {
@@ -139,10 +152,13 @@ describe('hook install', () => {
 describe('post-tool pre-filter', () => {
   // The registered command runs under the shell the harness uses for hooks (Git Bash on Windows); `cat` stands in for node so the
   // test sees whether the hook process would have been launched and what it would have read.
-  const available = spawnSync('bash', ['-c', 'echo ok']).status === 0;
+  // Resolve Git Bash explicitly: on Windows a bare `bash` on PATH can be the WSL launcher in System32, which is not the hook shell.
+  const gitBash = join(process.env.ProgramFiles ?? 'C:/Program Files', 'Git', 'bin', 'bash.exe');
+  const shell = process.platform === 'win32' ? gitBash : 'bash';
+  const available = (process.platform !== 'win32' || existsSync(gitBash)) && spawnSync(shell, ['-c', 'echo ok'], { timeout: 30_000 }).status === 0;
   const runCommand = (stdin: string): string => {
     const runtime = { ...runtimeIn('D:\\scratch'), nodePath: 'cat', hookBin: '-' };
-    return spawnSync('bash', ['-c', commandOf(runtime, 'post-tool')], { input: stdin, encoding: 'utf8' }).stdout;
+    return spawnSync(shell, ['-c', commandOf(runtime, 'post-tool')], { input: stdin, encoding: 'utf8', timeout: 30_000 }).stdout;
   };
 
   it.skipIf(!available)('launches the hook with the whole event when the error starts with Exit code', () => {

@@ -10,10 +10,14 @@ const INDEX_FILE = 'hook-index.json';
 export const RECURRING_SESSIONS = 2;
 const PER_PROJECT = 12;
 const FOLLOWED = 3;
+/** SessionStart ranks by sessions within this many latest sessions: the `measure --last 300` window the G1 reading uses. */
+export const RECENT_SESSIONS = 300;
 
 export interface IndexedSignature {
   sig: string;
   sessions: number;
+  /** Sessions with the signature among the latest `RECENT_SESSIONS` of the store. */
+  recent: number;
   /** Tools that most often followed, most common first. */
   followed: Array<[string, number]>;
   harness: string[];
@@ -23,7 +27,7 @@ export interface HookIndex {
   at: string;
   /** Every `--redact-domain` in force, so a hook masks an error the way the log was masked. */
   redactDomains: string[];
-  /** Recurring signatures by project folder name, most sessions first. */
+  /** Recurring signatures by project folder name, most recent sessions first. */
   projects: { [project: string]: IndexedSignature[] };
   /** Every signature seen in at least two sessions. */
   signatures: { [sig: string]: { sessions: number; followed: Array<[string, number]> } };
@@ -42,8 +46,13 @@ interface Tally {
 
 const tally = (): Tally => ({ sessions: new Set(), following: {}, harness: new Set() });
 
+// The same order `measure` uses, so the window here is the window the G1 reading counts.
+const byStart = (a: { tsFirst: string | null; session: string }, b: { tsFirst: string | null; session: string }): number =>
+  (a.tsFirst ?? '').localeCompare(b.tsFirst ?? '') || a.session.localeCompare(b.session);
+
 export const buildIndex = (store: Store, redactDomains: readonly string[], at: string): HookIndex => {
   const projectOf = new Map(store.sessions.map((session) => [session.session, session.project]));
+  const recentNames = new Set([...store.sessions].sort(byStart).slice(-RECENT_SESSIONS).map((session) => session.session));
   const overall = new Map<string, Tally>();
   const byProject = new Map<string, Map<string, Tally>>();
   for (const error of store.errors) {
@@ -70,8 +79,17 @@ export const buildIndex = (store: Store, redactDomains: readonly string[], at: s
   for (const [project, sigs] of byProject) {
     const rows = [...sigs.entries()]
       .filter(([, entry]) => entry.sessions.size >= RECURRING_SESSIONS)
-      .map(([sig, entry]): IndexedSignature => ({ sig, sessions: entry.sessions.size, followed: topFollowed(entry.following), harness: [...entry.harness].sort() }))
-      .sort((a, b) => b.sessions - a.sessions || a.sig.localeCompare(b.sig))
+      .map(
+        ([sig, entry]): IndexedSignature => ({
+          sig,
+          sessions: entry.sessions.size,
+          recent: [...entry.sessions].filter((name) => recentNames.has(name)).length,
+          followed: topFollowed(entry.following),
+          harness: [...entry.harness].sort(),
+        }),
+      )
+      .filter((row) => row.recent > 0)
+      .sort((a, b) => b.recent - a.recent || b.sessions - a.sessions || a.sig.localeCompare(b.sig))
       .slice(0, PER_PROJECT);
     if (rows.length > 0) projects[project] = rows;
   }
@@ -130,17 +148,18 @@ export const contextBlock = (index: HookIndex, options: ContextOptions): string 
         continue;
       }
       have.sessions += row.sessions;
+      have.recent += row.recent;
       const following: { [tool: string]: number } = {};
       for (const [tool, count] of [...have.followed, ...row.followed]) following[tool] = (following[tool] ?? 0) + count;
       have.followed = topFollowed(following);
     }
   }
-  const rows = [...merged.values()].sort((a, b) => b.sessions - a.sessions || a.sig.localeCompare(b.sig)).slice(0, options.top);
+  const rows = [...merged.values()].sort((a, b) => b.recent - a.recent || b.sessions - a.sessions || a.sig.localeCompare(b.sig)).slice(0, options.top);
   if (rows.length === 0) return undefined;
   const header = `oars recall: errors that recur in this repository's earlier sessions${options.harness === undefined ? '' : ` (Claude Code ${options.harness})`}. Check these before retrying:`;
   const lines = rows.map((row) => {
     const followed = row.followed.map(([tool]) => tool).join(', ');
-    return `- ${clip(row.sig, 120)} (${String(row.sessions)} sessions${followed === '' ? '' : `; next: ${followed}`})`;
+    return `- ${clip(row.sig, 120)} (${String(row.recent)} sessions in the last ${String(RECENT_SESSIONS)}${followed === '' ? '' : `; next: ${followed}`})`;
   });
   const kept: string[] = [];
   let used = header.length;

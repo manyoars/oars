@@ -3,6 +3,7 @@ import { run } from '../cli.js';
 import { ExitCode } from '../errors.js';
 import { harness, removeTestDirs } from '../test-support.js';
 import { slugOf } from './allow.js';
+import type { ErrorObservation, SessionObservation } from './schema.js';
 import { buildIndex, contextBlock, readIndex, repositoryRoot } from './hook-index.js';
 import { loadStore } from './store.js';
 import { cleanup, stage } from './test-support.js';
@@ -70,11 +71,11 @@ describe('hook index and context block', () => {
   const followed = (tool: string, count: number): [string, number][] => [[tool, count]];
 
   it('merges the sessions of the root and its worktree project folders', () => {
-    const row = { sig: 'Bash | boom', sessions: 2, followed: followed('Edit', 3), harness: [] };
-    const other = { sig: 'Bash | boom', sessions: 3, followed: followed('Bash', 1), harness: [] };
+    const row = { sig: 'Bash | boom', sessions: 2, recent: 2, followed: followed('Edit', 3), harness: [] };
+    const other = { sig: 'Bash | boom', sessions: 3, recent: 3, followed: followed('Bash', 1), harness: [] };
     const index = { at: '', redactDomains: [], signatures: {}, projects: { [slugOf(REPO)]: [row], [`${slugOf(REPO)}--claude-worktrees-t1`]: [other], 'unrelated-app': [row] } };
     const block = contextBlock(index, { cwd: REPO, top: 5, maxChars: 1200 });
-    expect(block).toContain('(5 sessions; next: Edit, Bash)');
+    expect(block).toContain('(5 sessions in the last 300; next: Edit, Bash)');
   });
 
   it('recall --context prints the block and --json carries it', async () => {
@@ -100,5 +101,33 @@ describe('hook index and context block', () => {
     expect(await run(['sessions', 'recall', '--context', '--cwd', REPO], deps)).toBe(ExitCode.OK);
     expect(out.join('')).toContain('unexpected EOF');
     expect((await loadStore(staged.storeDir)).errors.length).toBeGreaterThan(0);
+  });
+});
+
+describe('recency ranking', () => {
+  const session = (name: string, day: number): SessionObservation => ({
+    kind: 'session', v: '1', session: name, project: slugOf(REPO), rev: 1, at: '', bytes: 0, lines: 0, badLines: 0, userTurns: 0, assistantTurns: 0,
+    tsFirst: new Date(Date.UTC(2026, 0, 1) + day * 86_400_000).toISOString(), tsLast: null, versions: [], models: {}, branches: [], tools: {}, files: [], urls: [], searches: [],
+    bashCmds: 0, tldrs: [], confidences: [], compactSummaries: 0, contextFingerprint: null, costUsd: null, usage: { input: 0, cacheWrite: 0, cacheRead: 0, output: 0, thinking: 0 },
+  });
+  const failure = (name: string, sig: string): ErrorObservation => ({
+    kind: 'error', v: '1', session: name, rev: 1, ts: null, harnessVersion: null, tool: 'Bash', sig, example: sig, next: ['Read'], editFollowed: false, prompt: null, cls: null,
+  });
+
+  it('ranks by sessions within the last 300, so an old high-count signature falls below a recent one', () => {
+    const sessions: SessionObservation[] = [];
+    const errors: ErrorObservation[] = [];
+    // 40 old sessions all hit "stale error"; 300 later sessions, 3 of them hit "fresh error". 40 > 3 over the whole store, 0 < 3 in the window.
+    for (let day = 0; day < 40; day += 1) {
+      sessions.push(session(`old-${String(day)}`, day));
+      errors.push(failure(`old-${String(day)}`, 'Bash | stale error'));
+    }
+    for (let day = 0; day < 300; day += 1) {
+      sessions.push(session(`new-${String(day)}`, 100 + day));
+      if (day % 100 === 0) errors.push(failure(`new-${String(day)}`, 'Bash | fresh error'));
+    }
+    const block = contextBlock(buildIndex({ sessions, prompts: [], errors }, [], ''), { cwd: REPO, top: 5, maxChars: 1200 }) ?? '';
+    expect(block).toContain('fresh error (3 sessions in the last 300');
+    expect(block).not.toContain('stale error');
   });
 });
