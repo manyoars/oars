@@ -99,7 +99,9 @@ export const deriveSession = (capture: SessionCapture, redact: Redactor): Derive
 };
 
 /** Capture and derive in one call: the version-2 shape of one transcript, plus its capture records. */
-export const extractSession = (input: ExtractInput): Capture & Derived => {
+export type Extract = Omit<Capture, 'prompts'> & Derived;
+
+export const extractSession = (input: ExtractInput): Extract => {
   const capture = captureSession(input);
   return { ...capture, ...deriveSession(capture, input.redact) };
 };

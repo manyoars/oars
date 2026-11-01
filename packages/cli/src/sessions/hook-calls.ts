@@ -29,7 +29,14 @@ export const readHookCalls = async (storeDir: string): Promise<HookCall[]> => {
       const parsed: unknown = JSON.parse(line);
       const event = isRecord(parsed) ? eventOf(parsed.event) : undefined;
       if (isRecord(parsed) && event !== undefined && typeof parsed.at === 'string' && typeof parsed.hit === 'boolean' && typeof parsed.ms === 'number') {
-        calls.push({ at: parsed.at, event, session: typeof parsed.session === 'string' ? parsed.session : null, hit: parsed.hit, ms: parsed.ms });
+        calls.push({
+          at: parsed.at,
+          event,
+          session: typeof parsed.session === 'string' ? parsed.session : null,
+          hit: parsed.hit,
+          ms: parsed.ms,
+          error: typeof parsed.error === 'string' ? parsed.error : null,
+        });
       }
     } catch {
       // A torn last line is skipped.

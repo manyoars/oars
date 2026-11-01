@@ -81,29 +81,31 @@ const nightly = async (runtime: SessionsRuntime, now: () => number): Promise<Out
   return { hit: true };
 };
 
+const firstLine = (error: unknown): string => (error instanceof Error ? error.message : String(error)).split('\n')[0] ?? '';
+
+/**
+ * Runs one hook. It never fails or blocks the session it runs in: whatever happens, it resolves (the process exits 0), and the
+ * hook-call line records the outcome, with the failure's first line when there was one, so the record is evidence, not a claim.
+ */
 export const runHook = async (event: HookEvent, stdin: string, runtime: SessionsRuntime, now: () => number): Promise<string | undefined> => {
   const started = performance.now();
+  let session: string | null = null;
+  let outcome: Outcome = { hit: false };
+  let error: string | null = null;
   try {
     const input = parse(stdin);
-    let outcome: Outcome;
+    session = str(input.session_id) ?? null;
     if (event === 'session-start') outcome = await sessionStart(runtime, input);
     else if (event === 'post-tool') outcome = await postTool(runtime, input);
     else if (event === 'stop') outcome = await stop(runtime, input, now);
     else outcome = await nightly(runtime, now);
-    try {
-      await appendHookCall(runtime.storeDir, {
-        at: new Date(now()).toISOString(),
-        event,
-        session: str(input.session_id) ?? null,
-        hit: outcome.hit,
-        ms: Math.round(performance.now() - started),
-      });
-    } catch {
-      // A counter that cannot be written must not cost the session its context.
-    }
-    return outcome.output;
-  } catch {
-    // Fail-open: a hook never fails or blocks the session it runs in.
-    return undefined;
+  } catch (failure) {
+    error = firstLine(failure);
   }
+  try {
+    await appendHookCall(runtime.storeDir, { at: new Date(now()).toISOString(), event, session, hit: outcome.hit, ms: Math.round(performance.now() - started), error });
+  } catch {
+    // A counter that cannot be written must not cost the session its context.
+  }
+  return outcome.output;
 };
