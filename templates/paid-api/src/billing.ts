@@ -87,7 +87,7 @@ export const buyerResponse = (problem: BillingProblem): BuyerResponse => {
 
 // --- billing calls ----------------------------------------------------------------------------------------------------
 /** Where Checkout sends the buyer after paying and after cancelling; billing refuses a CHECKOUT charge without both. */
-export interface CheckoutUrls { successUrl: string; cancelUrl: string }
+export type CheckoutUrls = Required<Pick<Schemas['CheckoutChargeInput'], 'successUrl' | 'cancelUrl'>>;
 
 /** Built from the configured public URL only, never from a request's Host or Origin, which the buyer controls. */
 export const checkoutUrlsFor = (publicUrl: string): CheckoutUrls => ({
