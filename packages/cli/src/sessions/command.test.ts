@@ -67,7 +67,7 @@ describe('oars sessions', () => {
     out.length = 0;
     expect(await run(['sessions', 'verify', '--strict'], deps)).toBe(ExitCode.INVALID);
     expect(out.join('')).toContain('FAIL');
-    expect(err.join('')).toContain('1 checks failed');
+    expect(err.join('')).toContain('1 check failed');
     out.length = 0;
     expect(await run(['--json', 'sessions', 'verify', '--strict'], deps)).toBe(ExitCode.INVALID);
     const document: unknown = JSON.parse(out.join(''));

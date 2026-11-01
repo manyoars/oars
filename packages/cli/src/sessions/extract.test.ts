@@ -192,6 +192,11 @@ describe('request-id dedupe (register A22)', () => {
     expect(run([line(undefined, 'm1'), line(undefined, 'm1')]).prompts[0]?.usage.output).toBe(5);
     expect(run([line(undefined, undefined), line(undefined, undefined)]).prompts[0]?.usage.output).toBe(10);
   });
+
+  it('treats an empty request id as absent, so two such lines do not collapse into one response', () => {
+    expect(run([line('', 'm1'), line('', 'm2')]).prompts[0]?.usage.output).toBe(10);
+    expect(run([line('', ''), line('', '')]).prompts[0]?.usage.output).toBe(10);
+  });
 });
 
 describe('redact before truncating (review L7)', () => {

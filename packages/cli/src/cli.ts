@@ -277,7 +277,7 @@ const buildProgram = (deps: RunDeps, argv: string[]): Command => {
       if (flag(options, 'strict') && failed.length > 0) {
         // One document under --json: the failure carries the invariants, so the success document is not printed first.
         if (!json) emit(deps, json, outcome);
-        throw new CliError(`${String(failed.length)} checks failed: ${failed.join('; ')}`, ExitCode.INVALID, 'verify', undefined, undefined, json ? report : undefined);
+        throw new CliError(`${String(failed.length)} ${failed.length === 1 ? 'check' : 'checks'} failed: ${failed.join('; ')}`, ExitCode.INVALID, 'verify', undefined, undefined, json ? report : undefined);
       }
       emit(deps, json, outcome);
     });

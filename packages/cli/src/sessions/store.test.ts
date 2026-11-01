@@ -50,6 +50,20 @@ describe('re-deposit on a new extractor version or a wider redaction set (fix ro
   });
 });
 
+describe('the domain set is recorded per file (fix round 3)', () => {
+  it('deposits B again when a later run widened the set while only A was allowed', async () => {
+    const staged = stage();
+    const line = JSON.stringify({ type: 'user', timestamp: '2026-06-01T00:00:00Z', message: { role: 'user', content: 'deploy to build.x.com now' } });
+    addProject(staged, 'proj-a', 'a1', [line]);
+    addProject(staged, 'proj-b', 'b1', [line]);
+    await deposit(staged.runtime, options(['proj-a', 'proj-b']));
+    await deposit(staged.runtime, { ...options(['proj-a']), redactDomains: ['x.com'] });
+    const third = await deposit(staged.runtime, { ...options(['proj-b']), redactDomains: [] });
+    expect(third).toMatchObject({ sessions: 1, unchanged: 0 });
+    expect(await deposit(staged.runtime, options(['proj-b']))).toMatchObject({ sessions: 0, unchanged: 1 });
+  });
+});
+
 describe('deposit', () => {
   it('refuses to run without an --allow', async () => {
     const staged = stage();

@@ -50,7 +50,6 @@ export const sessionsMeasure = async (deps: SessionsDeps, options: { last: numbe
   return { document: { ok: true, ...result }, text: formatMeasure(result) };
 };
 
-/** With `strict`, any violated invariant also fails the command (exit 4) after the full report is printed; the report is built first so callers can emit it. */
 export interface VerifyReport {
   sessions: number;
   /** Skeleton files that could not be parsed: not an invariant, so counted apart from them. */
@@ -58,6 +57,7 @@ export interface VerifyReport {
   invariants: Array<InvariantResult & { pass: boolean }>;
 }
 
+/** With `strict`, any violated invariant also fails the command (exit 4) after the full report is printed; the report is built first so callers can emit it. */
 export const sessionsVerify = async (deps: SessionsDeps, options: { session: string | undefined }): Promise<Outcome & { failed: string[]; report: VerifyReport }> => {
   const { skeletons, unreadable } = await readSkeletons(runtimeOf(deps).storeDir, options.session);
   const results = verifyAll(skeletons);

@@ -151,7 +151,7 @@ export const classify = (sequence: readonly string[]): PromptClass => {
 const emptyUsage = (): Usage => ({ input: 0, cacheWrite: 0, cacheRead: 0, output: 0, thinking: 0 });
 
 /** Register A22: one API response spans several assistant lines that repeat its usage, so each response counts once, keyed by request id then message id. */
-const responseKey = (line: Obj, message: Obj): string | undefined => str(line.requestId) ?? str(message.id);
+const responseKey = (line: Obj, message: Obj): string | undefined => (str(line.requestId) || undefined) ?? (str(message.id) || undefined);
 
 const addUsage = (total: Usage, line: Usage): void => {
   total.input += line.input;
