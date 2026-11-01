@@ -1,7 +1,7 @@
 import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { run } from '../cli.js';
 import { ExitCode } from '../errors.js';
@@ -14,9 +14,14 @@ afterEach(() => {
 
 const calls: string[][] = [];
 
+// Built per platform: a drive-letter literal is not absolute on Linux, so the resolver would prepend the cwd.
+const SCRATCH = resolve(tmpdir(), 'oars-scratch');
+const NODE = resolve(SCRATCH, 'node', 'node.exe');
+const HOOK_BIN = resolve(SCRATCH, 'dist', 'hook-bin.js');
+
 const runtimeIn = (dir: string, schtasksCode = 0): InstallRuntime => ({
-  nodePath: 'C:\\node\\node.exe',
-  hookBin: 'C:\\oars\\dist\\hook-bin.js',
+  nodePath: NODE,
+  hookBin: HOOK_BIN,
   userSettings: join(dir, 'user', 'settings.json'),
   cwd: join(dir, 'repo'),
   schtasks: (args) => {
@@ -118,7 +123,7 @@ describe('hook install', () => {
   it('removes only its own entries from a mixed group and leaves an unrelated command that contains hook-bin', async () => {
     const dir = scratch();
     const file = join(dir, 'settings.json');
-    const mine = (arg: string) => ({ type: 'command', command: `"C:\\node\\node.exe" "C:\\oars\\dist\\hook-bin.js" ${arg}` });
+    const mine = (arg: string) => ({ type: 'command', command: `"${NODE}" "${HOOK_BIN}" ${arg}` });
     const theirs = { type: 'command', command: 'bash my-hook-bin.sh' };
     const rotation = { type: 'command', command: 'node rotate-session.js' };
     writeFileSync(file, JSON.stringify({ hooks: { SessionStart: [{ hooks: [theirs, mine('session-start')] }], SessionEnd: [{ hooks: [rotation, theirs] }] } }));
@@ -157,7 +162,7 @@ describe('post-tool pre-filter', () => {
   const shell = process.platform === 'win32' ? gitBash : 'bash';
   const available = (process.platform !== 'win32' || existsSync(gitBash)) && spawnSync(shell, ['-c', 'echo ok'], { timeout: 30_000 }).status === 0;
   const runCommand = (stdin: string): string => {
-    const runtime = { ...runtimeIn('D:\\scratch'), nodePath: 'cat', hookBin: '-' };
+    const runtime = { ...runtimeIn(SCRATCH), nodePath: 'cat', hookBin: '-' };
     return spawnSync(shell, ['-c', commandOf(runtime, 'post-tool')], { input: stdin, encoding: 'utf8', timeout: 30_000 }).stdout;
   };
 
@@ -174,10 +179,12 @@ describe('post-tool pre-filter', () => {
 
 describe('settings paths', () => {
   it('resolves user, project, and file scopes, and requires a file for scope file', () => {
-    const runtime = runtimeIn('D:\\scratch');
+    const runtime = runtimeIn(SCRATCH);
     expect(settingsPath(runtime, 'user', undefined)).toBe(runtime.userSettings);
     expect(settingsPath(runtime, 'project', undefined)).toBe(join(runtime.cwd, '.claude', 'settings.json'));
     expect(settingsPath(runtime, 'file', 'x.json')).toBe(join(runtime.cwd, 'x.json'));
+    const absolute = resolve(SCRATCH, 'elsewhere', 'x.json');
+    expect(settingsPath(runtime, 'file', absolute)).toBe(absolute);
     expect(() => settingsPath(runtime, 'file', undefined)).toThrow('--scope file needs --file');
   });
 });
@@ -232,18 +239,18 @@ describe('retention floor', () => {
 
 describe('nightly schedule', () => {
   it('builds a daily task definition that runs hook-bin nightly with the same node', () => {
-    const args = scheduleArgs(runtimeIn('D:\\scratch'), 3);
-    expect(args).toEqual(['/Create', '/TN', 'OarsSessionsNightly', '/TR', '"C:\\node\\node.exe" "C:\\oars\\dist\\hook-bin.js" nightly', '/SC', 'DAILY', '/ST', '03:00', '/F']);
+    const args = scheduleArgs(runtimeIn(SCRATCH), 3);
+    expect(args).toEqual(['/Create', '/TN', 'OarsSessionsNightly', '/TR', `"${NODE}" "${HOOK_BIN}" nightly`, '/SC', 'DAILY', '/ST', '03:00', '/F']);
   });
 
   it('registers and removes the task, and reports a failed registration', async () => {
     calls.length = 0;
-    const runtime = runtimeIn('D:\\scratch');
+    const runtime = runtimeIn(SCRATCH);
     expect(await setSchedule(runtime, 'nightly')).toContain('daily at 03:00');
     expect(await setSchedule(runtime, 'off')).toContain('Removed');
     expect(calls.map((args) => args[0])).toEqual(['/Create', '/Delete']);
-    await expect(setSchedule(runtimeIn('D:\\scratch', 1), 'nightly')).rejects.toThrow('Access is denied');
-    expect(await setSchedule(runtimeIn('D:\\scratch', 1), 'off')).toContain('No scheduled task');
+    await expect(setSchedule(runtimeIn(SCRATCH, 1), 'nightly')).rejects.toThrow('Access is denied');
+    expect(await setSchedule(runtimeIn(SCRATCH, 1), 'off')).toContain('No scheduled task');
   });
 });
 
