@@ -81,7 +81,7 @@ const needsYouLine = (code: string | undefined, actionUrl: string | undefined): 
 
 /**
  * `--json` prints `{ok: false, step, problem}` on stdout, plus `workloadId`, `sdkKey` and `rerun` after a deploy that stopped;
- * otherwise the problem's title, detail and URL go to stderr, then the rerun line, and the one-time SDK key goes to stdout.
+ * otherwise the problem's title, detail, and URL go to stderr (on an exit 6 the URL moves into a last "Needs you:" line), then the rerun line, and the one-time SDK key goes to stdout.
  */
 const printFailure = (deps: RunDeps, json: boolean, error: CliError): void => {
   const { partial } = error;
