@@ -1,0 +1,137 @@
+{
+ "cost": {
+  "cache_read": 127300,
+  "cache_write": 1310,
+  "input": 119,
+  "output": 778,
+  "prompts": 7,
+  "thinking": 85
+ },
+ "errors": {
+  "distinct_signatures": 5,
+  "edit_followed": 3,
+  "error_results": 6,
+  "recurring": {
+   "Bash | bash: -c: line <n>: unexpected EOF while looking for matching quote": 2
+  },
+  "sessions_with_error": 3,
+  "tool_results": 18
+ },
+ "graph": {
+  "bigrams": {
+   "Agent>SendMessage": 1,
+   "Bash>Bash": 1,
+   "Bash>Edit": 1,
+   "Bash>Write": 1,
+   "Edit>Bash": 2,
+   "Read>Bash": 2,
+   "Read>Edit": 1,
+   "WebSearch>WebFetch": 1,
+   "Write>Read": 1
+  },
+  "classes": {
+   "edit-only": 1,
+   "edit-verify": 2,
+   "mixed": 1,
+   "no-tools": 1,
+   "orchestration": 1,
+   "research": 1
+  },
+  "errors": 5,
+  "prompts": 7,
+  "recovery": {
+   "Edit>Bash": 1,
+   "Write>Read": 1
+  },
+  "side_tools": 1,
+  "thinking": 1,
+  "tools": 17
+ },
+ "sessions": {
+  "errors-a": {
+   "assistant_turns": 9,
+   "bad_lines": 0,
+   "bash_cmds": 2,
+   "confidences": [],
+   "files_touched": [
+    "/work/app/fix.sh",
+    "/work/app/src/main.ts",
+    "/work/app/src/util.ts"
+   ],
+   "lines": 21,
+   "searches": [],
+   "tldrs": [],
+   "tools": {
+    "Bash": 2,
+    "Edit": 2,
+    "Read": 2,
+    "Write": 1
+   },
+   "urls_fetched": [],
+   "user_turns": 3
+  },
+  "errors-b": {
+   "assistant_turns": 4,
+   "bad_lines": 0,
+   "bash_cmds": 3,
+   "confidences": [],
+   "files_touched": [
+    "/work/other/import.py"
+   ],
+   "lines": 9,
+   "searches": [],
+   "tldrs": [],
+   "tools": {
+    "Bash": 3,
+    "Edit": 1
+   },
+   "urls_fetched": [],
+   "user_turns": 1
+  },
+  "sidechain": {
+   "assistant_turns": 4,
+   "bad_lines": 1,
+   "bash_cmds": 1,
+   "confidences": [],
+   "files_touched": [
+    "/work/app/a.ts"
+   ],
+   "lines": 9,
+   "searches": [],
+   "tldrs": [],
+   "tools": {
+    "Bash": 1,
+    "Grep": 1,
+    "Read": 1
+   },
+   "urls_fetched": [],
+   "user_turns": 1
+  },
+  "tldr": {
+   "assistant_turns": 5,
+   "bad_lines": 0,
+   "bash_cmds": 0,
+   "confidences": [
+    "high, two sources agree"
+   ],
+   "files_touched": [],
+   "lines": 11,
+   "searches": [
+    "retry-after header semantics"
+   ],
+   "tldrs": [
+    "Retry-After is seconds or a date."
+   ],
+   "tools": {
+    "Agent": 1,
+    "SendMessage": 1,
+    "WebFetch": 1,
+    "WebSearch": 1
+   },
+   "urls_fetched": [
+    "https://example.com/docs/retry?token=sk-test-FAKEFAKEFAKEFAKEFAKE0000"
+   ],
+   "user_turns": 2
+  }
+ }
+}

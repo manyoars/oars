@@ -10,6 +10,9 @@ import { testCharge } from './commands/test-charge.js';
 import type { CredentialStore } from './credentials.js';
 import { CliError, ExitCode } from './errors.js';
 import type { JournalStore } from './journal.js';
+import type { BooksBy, RecallQuery } from './sessions/query.js';
+import { sessionsBooks, sessionsDeposit, sessionsMcp, sessionsMeasure, sessionsRecall, sessionsVerify, type SessionsDeps } from './sessions/command.js';
+import type { SessionsRuntime } from './sessions/store.js';
 
 /** Everything the CLI takes from its process, so the tests can stand in for each. */
 export interface RunDeps {
@@ -26,6 +29,8 @@ export interface RunDeps {
   /** Epoch milliseconds. */
   now: () => number;
   openBrowser: (url: string) => Promise<void>;
+  /** Where `oars sessions` keeps its store and finds the operator's Claude Code logs; absent in a run that has none. */
+  sessions?: SessionsRuntime;
 }
 
 /** What a command produced: the `--json` document, and the line a human sees instead. */
@@ -90,6 +95,8 @@ const printFailure = (deps: RunDeps, json: boolean, error: CliError): void => {
   deps.io.stderr(`${[title ?? error.message, detail, ...(needsYou.length === 0 ? [actionUrl] : []), ...resume, ...needsYou].filter((line) => line !== undefined && line !== '').join('\n')}\n`);
   if (partial?.sdkKey !== undefined) deps.io.stdout(`SDK key (shown once; save it now): ${partial.sdkKey}\n`);
 };
+
+const sessionDeps = (deps: RunDeps): SessionsDeps => ({ sessions: deps.sessions, now: deps.now });
 
 const buildProgram = (deps: RunDeps, argv: string[]): Command => {
   const program = new Command('oars')
@@ -198,6 +205,73 @@ const buildProgram = (deps: RunDeps, argv: string[]): Command => {
         idempotencyKey: text(options, 'idempotencyKey') ?? randomUUID(),
       });
       emit(deps, flag(options, 'json'), outcome);
+    });
+
+  const sessions = program.command('sessions').description("deposit and recall your own Claude Code session logs, locally (no model calls, no network)");
+
+  sessions
+    .command('deposit')
+    .description('read session logs from the folders you name into the local observation log; idempotent')
+    .option('--allow <folder>', 'a project folder to read: its path, or its name under ~/.claude/projects (repeatable; at least one is required)', collect)
+    .option('--redact-domain <domain>', 'an organization domain to mask in everything written (repeatable)', collect)
+    .action(async (_options: OptionValues, command: Command) => {
+      const options: OptionValues = command.optsWithGlobals();
+      emit(deps, flag(options, 'json'), await sessionsDeposit(sessionDeps(deps), { allow: list(options, 'allow'), redactDomains: list(options, 'redactDomain') }));
+    });
+
+  sessions
+    .command('recall')
+    .description('look a tool error, a file, or a prompt class up in the store (--mcp serves the same query to a running agent)')
+    .option('--error <text>', 'an error as printed; matched by its normalized signature')
+    .option('--path <file>', 'a file path or name that earlier sessions touched')
+    .option('--class <name>', 'a prompt class (edit-verify, edit-only, shell-only, research, orchestration, explore-only, mixed, no-tools)')
+    .option('--since <days>', 'only the last N days', positiveInteger)
+    .option('--mcp', 'serve one recall tool over MCP on stdio instead of answering once')
+    .action(async (_options: OptionValues, command: Command) => {
+      const options: OptionValues = command.optsWithGlobals();
+      if (flag(options, 'mcp')) {
+        await sessionsMcp(sessionDeps(deps));
+        return;
+      }
+      const query: RecallQuery = {
+        ...(text(options, 'error') === undefined ? {} : { error: text(options, 'error') }),
+        ...(text(options, 'path') === undefined ? {} : { path: text(options, 'path') }),
+        ...(text(options, 'class') === undefined ? {} : { cls: text(options, 'class') }),
+        ...(count(options, 'since') === undefined ? {} : { sinceDays: count(options, 'since') }),
+      };
+      emit(deps, flag(options, 'json'), await sessionsRecall(sessionDeps(deps), query));
+    });
+
+  sessions
+    .command('books')
+    .description('tokens, wall time, turns, errors, and verify-after-edit rate per prompt class or model')
+    .option('--by <key>', 'class or model (default class)', (value: string): BooksBy => {
+      if (value !== 'class' && value !== 'model') throw new InvalidArgumentError('it must be class or model.');
+      return value;
+    })
+    .option('--since <days>', 'only the last N days', positiveInteger)
+    .action(async (_options: OptionValues, command: Command) => {
+      const options: OptionValues = command.optsWithGlobals();
+      const by = text(options, 'by') === 'model' ? 'model' : 'class';
+      emit(deps, flag(options, 'json'), await sessionsBooks(sessionDeps(deps), { by, sinceDays: count(options, 'since') }));
+    });
+
+  sessions
+    .command('measure')
+    .description('the three G1 signals for the last N sessions and the N before')
+    .option('--last <n>', 'sessions per window (default 50)', positiveInteger)
+    .action(async (_options: OptionValues, command: Command) => {
+      const options: OptionValues = command.optsWithGlobals();
+      emit(deps, flag(options, 'json'), await sessionsMeasure(sessionDeps(deps), { last: count(options, 'last') ?? 50 }));
+    });
+
+  sessions
+    .command('verify')
+    .description('run the consistency invariants on the stored skeletons')
+    .option('--session <id>', 'one session instead of all')
+    .action(async (_options: OptionValues, command: Command) => {
+      const options: OptionValues = command.optsWithGlobals();
+      emit(deps, flag(options, 'json'), await sessionsVerify(sessionDeps(deps), { session: text(options, 'session') }));
     });
 
   return program;

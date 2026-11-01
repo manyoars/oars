@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
+import { join } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { openBrowser } from './browser.js';
 import { run } from './cli.js';
@@ -30,4 +31,10 @@ process.exitCode = await run(process.argv.slice(2), {
   random: Math.random,
   now: Date.now,
   openBrowser,
+  sessions: {
+    storeDir: join(configDir, 'oars', 'sessions'),
+    projectsRoot: join(process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), '.claude'), 'projects'),
+    stdin: process.stdin,
+    stdout: process.stdout,
+  },
 });
