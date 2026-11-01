@@ -68,10 +68,7 @@ describe('skills/make-me-money/SKILL.md', () => {
   it('names only flags the CLI declares', () => {
     const flags = namedFlags(skill);
     expect(flags).toEqual(expect.arrayContaining(['--no-browser', '--template', '--no-start', '--secret-from-env', '--price', '--json', '--idempotency-key']));
-    for (const flag of flags) {
-      if (flag === '--issuer-url') expect(wired, flag).toContain(flag);
-      else expect(declares(cli, flag), `cli.ts declares no ${flag}`).toBe(true);
-    }
+    for (const flag of flags) expect(declares(cli, flag), `cli.ts declares no ${flag}`).toBe(true);
   });
 
   it('catches a flag that is only a prefix of a declared one, and reads a second flag in one span', () => {
