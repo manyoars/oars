@@ -71,6 +71,10 @@ describe('verify', () => {
       JSON.stringify({ type: 'cost-state', totalCostUSD: 1.5, modelUsage: { m: { inputTokens: 5, cacheCreationInputTokens: 6, cacheReadInputTokens: 7, outputTokens: output } } });
     expect(verifySkeleton(skeletonOf([assistant, state(8)]))[5]).toMatchObject({ checked: 4, violations: 0 });
     expect(verifySkeleton(skeletonOf([assistant, state(9)]))[5]).toMatchObject({ checked: 4, violations: 1 });
+    // Two content-block lines of one request repeat its usage; they count once. A line with no request id counts on its own.
+    expect(verifySkeleton(skeletonOf([assistant, assistant, state(8)]))[5]).toMatchObject({ checked: 4, violations: 0 });
+    const anonymous = JSON.stringify({ type: 'assistant', message: { role: 'assistant', content: [], usage } });
+    expect(verifySkeleton(skeletonOf([anonymous, anonymous, state(16)]))[5]).toMatchObject({ checked: 4, violations: 3 });
     expect(verifySkeleton(skeletonOf([assistant]))[5]).toMatchObject({ checked: 0, violations: 0 });
     expect(verifySkeleton(skeletonOf([assistant, JSON.stringify({ type: 'cost-state', modelUsage: 5 })]))[5]?.checked).toBe(0);
     expect(formatVerify(verifyAll([skeletonOf([assistant, state(9)])]), 1)).toContain('FAIL  cost-state totals match summed usage: 3 of 4 hold, 1 exceptions');
