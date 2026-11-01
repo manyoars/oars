@@ -272,13 +272,12 @@ const buildProgram = (deps: RunDeps, argv: string[]): Command => {
     .option('--strict', 'exit non-zero (4) when any invariant has exceptions; by default FAIL lines still exit 0')
     .action(async (_options: OptionValues, command: Command) => {
       const options: OptionValues = command.optsWithGlobals();
-      const { failed, ...outcome } = await sessionsVerify(sessionDeps(deps), { session: text(options, 'session') });
+      const { failed, report, ...outcome } = await sessionsVerify(sessionDeps(deps), { session: text(options, 'session') });
       const json = flag(options, 'json');
       if (flag(options, 'strict') && failed.length > 0) {
         // One document under --json: the failure carries the invariants, so the success document is not printed first.
         if (!json) emit(deps, json, outcome);
-        const invariants: unknown = Reflect.get(outcome.document, 'invariants');
-        throw new CliError(`${String(failed.length)} invariants have exceptions: ${failed.join('; ')}`, ExitCode.INVALID, 'verify', undefined, undefined, json ? { invariants } : undefined);
+        throw new CliError(`${String(failed.length)} checks failed: ${failed.join('; ')}`, ExitCode.INVALID, 'verify', undefined, undefined, json ? report : undefined);
       }
       emit(deps, json, outcome);
     });

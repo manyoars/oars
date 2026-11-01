@@ -67,13 +67,15 @@ describe('oars sessions', () => {
     out.length = 0;
     expect(await run(['sessions', 'verify', '--strict'], deps)).toBe(ExitCode.INVALID);
     expect(out.join('')).toContain('FAIL');
-    expect(err.join('')).toContain('invariants have exceptions');
+    expect(err.join('')).toContain('1 checks failed');
     out.length = 0;
     expect(await run(['--json', 'sessions', 'verify', '--strict'], deps)).toBe(ExitCode.INVALID);
     const document: unknown = JSON.parse(out.join(''));
     expect(field(document, 'ok')).toBe(false);
     expect(field(document, 'step')).toBe('verify');
     expect(Array.isArray(field(document, 'invariants'))).toBe(true);
+    expect(field(document, 'sessions')).toBe(1);
+    expect(field(document, 'unreadable')).toBe(0);
   });
 
   it('verify reports a torn skeleton file and strict fails on it', async () => {
@@ -86,6 +88,11 @@ describe('oars sessions', () => {
     out.length = 0;
     expect(await run(['sessions', 'verify', '--strict'], deps)).toBe(ExitCode.INVALID);
     expect(out.join('')).toContain('1 unreadable skeleton files');
+    out.length = 0;
+    expect(await run(['--json', 'sessions', 'verify', '--strict'], deps)).toBe(ExitCode.INVALID);
+    const strict: unknown = JSON.parse(out.join(''));
+    expect(field(strict, 'unreadable')).toBe(1);
+    expect(field(strict, 'sessions')).toBe(4);
   });
 
   it('recall masks a query with the domains the deposit masked', async () => {

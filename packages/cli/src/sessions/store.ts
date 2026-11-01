@@ -36,6 +36,8 @@ interface FileState {
   size: number;
   mtimeMs: number;
   rev: number;
+  /** The extractor version that wrote this file's records; a file recorded under another version is deposited again. */
+  v: string;
 }
 
 interface State {
@@ -63,7 +65,7 @@ const readState = async (storeDir: string): Promise<State> => {
       const files: State['files'] = {};
       for (const [key, value] of Object.entries(parsed.files)) {
         if (isRecord(value) && typeof value.size === 'number' && typeof value.mtimeMs === 'number' && typeof value.rev === 'number') {
-          files[key] = { size: value.size, mtimeMs: value.mtimeMs, rev: value.rev };
+          files[key] = { size: value.size, mtimeMs: value.mtimeMs, rev: value.rev, v: typeof value.v === 'string' ? value.v : '' };
         }
       }
       const domains = Array.isArray(parsed.redactDomains) ? parsed.redactDomains.filter((entry): entry is string => typeof entry === 'string') : [];
@@ -129,6 +131,9 @@ export const deposit = async (runtime: SessionsRuntime, options: DepositOptions)
   const matched = new Set(allowed);
   const missing = options.allow.filter((entry) => !matched.has(entry) && !matched.has(slugOf(entry)));
   const state = await readState(runtime.storeDir);
+  // A wider redaction set means the records already written may hold a domain now to be masked, so every allowed file is read again.
+  const known = new Set(state.redactDomains);
+  const widened = options.redactDomains.some((domain) => !known.has(domain));
   state.redactDomains = [...new Set([...state.redactDomains, ...options.redactDomains])];
   const redact = makeRedactor(state.redactDomains);
   const files = paths(runtime.storeDir);
@@ -152,7 +157,7 @@ export const deposit = async (runtime: SessionsRuntime, options: DepositOptions)
       const info = await stat(file);
       const key = `${project}/${name}`;
       const previous = state.files[key];
-      if (previous !== undefined && previous.size === info.size && previous.mtimeMs === info.mtimeMs) {
+      if (previous !== undefined && previous.size === info.size && previous.mtimeMs === info.mtimeMs && previous.v === EXTRACTOR_VERSION && !widened) {
         result.unchanged += 1;
         continue;
       }
@@ -163,7 +168,7 @@ export const deposit = async (runtime: SessionsRuntime, options: DepositOptions)
       await mkdir(runtime.storeDir, { recursive: true });
       await appendFile(files.observations, batch.map((observation) => `${JSON.stringify(observation)}\n`).join(''), { mode: 0o600 });
       await writeAtomic(join(files.skeletons, `${session}.json`), JSON.stringify(extract.skeleton));
-      state.files[key] = { size: info.size, mtimeMs: info.mtimeMs, rev };
+      state.files[key] = { size: info.size, mtimeMs: info.mtimeMs, rev, v: EXTRACTOR_VERSION };
       result.sessions += 1;
       result.lines += extract.session.lines;
       result.badLines += extract.session.badLines;

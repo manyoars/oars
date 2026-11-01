@@ -1,5 +1,5 @@
 // The read side: recall, books, and measure. All three are pure functions of a loaded store (and, for measure, the MCP log).
-import { firstInformative, normalize } from './extract.js';
+import { errorKey } from './extract.js';
 import { makeRedactor } from './redact.js';
 import type { ErrorObservation, PromptObservation, RecallCall, SessionObservation, SignatureRecord } from './schema.js';
 import { signatureRecord, type Store } from './store.js';
@@ -44,7 +44,7 @@ export const recall = (store: Store, query: RecallQuery, now: number, limit = 10
   if (query.error !== undefined) {
     const split = splitTool(query.error);
     tool = split.tool;
-    normalized = redact(normalize(firstInformative(split.text)));
+    normalized = errorKey(split.text, redact);
   }
   const path = query.path === undefined ? undefined : redact(query.path);
   const sessions = path === undefined ? undefined : new Set(store.sessions.filter((session) => touched(session, path)).map((session) => session.session));

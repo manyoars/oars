@@ -1,7 +1,7 @@
 import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { classify, extractSession, firstInformative, normalize, signatureOf, type Extract } from './extract.js';
+import { classify, errorKey, extractSession, firstInformative, normalize, signatureOf, type Extract } from './extract.js';
 import { entropy, makeRedactor } from './redact.js';
 import { EXTRACTOR_VERSION } from './schema.js';
 import { FIXTURES } from './test-support.js';
@@ -220,6 +220,30 @@ Confidence: ${'c'.repeat(110)} ${key}` }] } }),
   });
 });
 
+describe('redact at the signature cut and on branch names (fix round 2)', () => {
+  const key = 'AKIAIOSFODNN7EXAMPLE';
+  it('masks a key that straddles the 110-character signature cut', () => {
+    const lines = [
+      JSON.stringify({ type: 'user', timestamp: '2026-06-10T00:00:00Z', message: { role: 'user', content: 'go' } }),
+      JSON.stringify({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'tool_use', id: 'a', name: 'Bash', input: {} }] } }),
+      JSON.stringify({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'a', is_error: true, content: `${'e '.repeat(50)}${key} tail` }] } }),
+    ];
+    const sig = extractSession({ text: lines.join('\n'), session: 's', project: 'p', rev: 1, at: 'x', bytes: 0, redact }).errors[0]?.sig ?? '';
+    expect(sig).not.toContain('AKIA');
+    expect(sig).toContain('<secret>');
+  });
+
+  it('masks an organization domain inside a git branch name', () => {
+    const line = JSON.stringify({ type: 'user', timestamp: '2026-06-10T00:00:00Z', gitBranch: 'acme.example-sso', message: { role: 'user', content: 'go' } });
+    const masked = extractSession({ text: line, session: 's', project: 'p', rev: 1, at: 'x', bytes: 0, redact: makeRedactor(['acme.example']) });
+    expect(masked.session.branches).toEqual(['<org-domain>-sso']);
+  });
+
+  it('keys an error the same way for deposit and recall: redact, first line, normalize, redact', () => {
+    expect(errorKey('Exit code 1\nmail user123@corp.example failed', redact)).toBe('mail <email> failed');
+  });
+});
+
 describe('normalization (error_signatures.py rules)', () => {
   it('replaces paths, hex, numbers, and quotes, and cuts at 110', () => {
     expect(normalize('  /usr/bin/x failed at 0xdeadbeef: line 42 "name" \'q\'  ')).toBe('<path> failed at <n>xdeadbeef: line <n> <q> <q>');
@@ -234,7 +258,7 @@ describe('normalization (error_signatures.py rules)', () => {
     expect(firstInformative('Only you see this\nExit code 2\nboom')).toBe('boom');
     expect(firstInformative('<only markup>')).toBe('<only markup>');
     expect(firstInformative('   ')).toBe('');
-    expect(signatureOf('Bash', 'Exit code 1\nfailed 3 times')).toBe('Bash | failed <n> times');
+    expect(signatureOf('Bash', 'Exit code 1\nfailed 3 times', redact)).toBe('Bash | failed <n> times');
   });
 
   it('classifies prompts by the shared rule', () => {

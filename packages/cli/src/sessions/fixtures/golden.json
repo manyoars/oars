@@ -49,7 +49,7 @@
  },
  "sessions": {
   "errors-a": {
-   "assistant_turns": 9,
+   "assistant_turns": 10,
    "bad_lines": 0,
    "bash_cmds": 2,
    "confidences": [],
@@ -58,7 +58,7 @@
     "/work/app/src/main.ts",
     "/work/app/src/util.ts"
    ],
-   "lines": 21,
+   "lines": 22,
    "searches": [],
    "tldrs": [],
    "tools": {

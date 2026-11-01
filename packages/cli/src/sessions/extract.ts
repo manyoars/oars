@@ -84,8 +84,14 @@ export const firstInformative = (text: string): string => {
   return whole === '' ? '' : (splitLines(whole)[0] ?? '');
 };
 
-/** The signature of an error: `<tool> | <normalized first informative line>`. */
-export const signatureOf = (tool: string, text: string): string => `${tool} | ${normalize(firstInformative(text))}`;
+/**
+ * The key an error is matched on, by deposit and by recall alike: redact, take the first informative line, normalize, redact again. Redacting
+ * first keeps a secret or an email whole before normalize turns its digits into `<n>`; the second pass catches what only the cut form shows.
+ */
+export const errorKey = (text: string, redact: Redactor): string => redact(normalize(redact(firstInformative(text))));
+
+/** The signature of an error: `<tool> | <errorKey>`. */
+export const signatureOf = (tool: string, text: string, redact: Redactor): string => `${tool} | ${errorKey(text, redact)}`;
 
 const resultText = (block: Obj): string => {
   const content = block.content;
@@ -408,7 +414,7 @@ export const extractSession = (input: ExtractInput): Extract => {
     const version = str(o.version);
     if (version !== undefined && version !== '') versions.add(version);
     const branch = str(o.gitBranch);
-    if (branch !== undefined && branch !== '') branches.add(branch);
+    if (branch !== undefined && branch !== '') branches.add(redact(branch));
     const requested = str(o.requestedModel);
     if (requested !== undefined && requested !== '') session.models[requested] = (session.models[requested] ?? 0) + 1;
     if (type === 'cost-state') {
@@ -569,7 +575,7 @@ export const extractSession = (input: ExtractInput): Extract => {
           ts: ts ?? null,
           harnessVersion: version ?? null,
           tool,
-          sig: redact(`${tool} | ${normalize(informative)}`),
+          sig: signatureOf(tool, text, redact),
           example: cut(informative, ERROR_EXAMPLE_CHARS),
           next: [],
           editFollowed: false,
