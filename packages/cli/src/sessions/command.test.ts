@@ -2,7 +2,9 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { run } from '../cli.js';
 import { ExitCode } from '../errors.js';
 import { harness, removeTestDirs } from '../test-support.js';
-import { cleanup, stage } from './test-support.js';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { addProject, cleanup, FIXTURES, stage } from './test-support.js';
 
 afterEach(() => {
   cleanup();
@@ -51,6 +53,21 @@ describe('oars sessions', () => {
     out.length = 0;
     expect(await run(['sessions', 'verify', '--session', 'tldr'], deps)).toBe(ExitCode.OK);
     expect(out.join('')).toContain('1 skeletons checked');
+    expect(await run(['sessions', 'verify', '--strict'], deps)).toBe(ExitCode.OK);
+  });
+
+  it('verify --strict exits 4 after printing when a skeleton has an exception, and plain verify still exits 0', async () => {
+    const { deps, out, err, staged } = setup();
+    const corrupted = readFileSync(join(FIXTURES, 'proj', 'errors-a.jsonl'), 'utf8').split('\n').filter((line) => line !== '').map((line) => line.replace('"tool_use_id": "t1"', '"tool_use_id": "nope"').replace('"tool_use_id":"t1"', '"tool_use_id":"nope"'));
+    addProject(staged, 'bad', 'bad', corrupted);
+    expect(await run(['sessions', 'deposit', '--allow', 'bad'], deps)).toBe(ExitCode.OK);
+    out.length = 0;
+    expect(await run(['sessions', 'verify'], deps)).toBe(ExitCode.OK);
+    expect(out.join('')).toContain('FAIL');
+    out.length = 0;
+    expect(await run(['sessions', 'verify', '--strict'], deps)).toBe(ExitCode.INVALID);
+    expect(out.join('')).toContain('FAIL');
+    expect(err.join('')).toContain('invariants have exceptions');
   });
 
   it('recall needs a query, and --by takes only class or model', async () => {

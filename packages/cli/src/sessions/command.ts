@@ -49,8 +49,10 @@ export const sessionsMeasure = async (deps: SessionsDeps, options: { last: numbe
   return { document: { ok: true, ...result }, text: formatMeasure(result) };
 };
 
-export const sessionsVerify = async (deps: SessionsDeps, options: { session: string | undefined }): Promise<Outcome> => {
+/** With `strict`, any violated invariant also fails the command (exit 4) after the full report is printed; the report is built first so callers can emit it. */
+export const sessionsVerify = async (deps: SessionsDeps, options: { session: string | undefined }): Promise<Outcome & { failed: string[] }> => {
   const skeletons = await readSkeletons(runtimeOf(deps).storeDir, options.session);
   const results = verifyAll(skeletons);
-  return { document: { ok: true, sessions: skeletons.length, invariants: results.map((result) => ({ ...result, pass: result.violations === 0 })) }, text: formatVerify(results, skeletons.length) };
+  return {
+    failed: results.filter((result) => result.violations > 0).map((result) => result.name), document: { ok: true, sessions: skeletons.length, invariants: results.map((result) => ({ ...result, pass: result.violations === 0 })) }, text: formatVerify(results, skeletons.length) };
 };

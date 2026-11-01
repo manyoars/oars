@@ -221,7 +221,7 @@ const buildProgram = (deps: RunDeps, argv: string[]): Command => {
 
   sessions
     .command('recall')
-    .description('look a tool error, a file, or a prompt class up in the store (--mcp serves the same query to a running agent)')
+    .description('look a tool error, a file, or a prompt class up in the store (--mcp serves the same query to a running agent). Note: an error pasted with a leading <tool_use_error> line does not match a stored signature, because the extractor keeps that markup line as the signature (reference-script behavior); paste the line below it')
     .option('--error <text>', 'an error as printed; matched by its normalized signature')
     .option('--path <file>', 'a file path or name that earlier sessions touched')
     .option('--class <name>', 'a prompt class (edit-verify, edit-only, shell-only, research, orchestration, explore-only, mixed, no-tools)')
@@ -269,9 +269,12 @@ const buildProgram = (deps: RunDeps, argv: string[]): Command => {
     .command('verify')
     .description('run the consistency invariants on the stored skeletons')
     .option('--session <id>', 'one session instead of all')
+    .option('--strict', 'exit non-zero (4) when any invariant has exceptions; by default FAIL lines still exit 0')
     .action(async (_options: OptionValues, command: Command) => {
       const options: OptionValues = command.optsWithGlobals();
-      emit(deps, flag(options, 'json'), await sessionsVerify(sessionDeps(deps), { session: text(options, 'session') }));
+      const { failed, ...outcome } = await sessionsVerify(sessionDeps(deps), { session: text(options, 'session') });
+      emit(deps, flag(options, 'json'), outcome);
+      if (flag(options, 'strict') && failed.length > 0) throw new CliError(`${String(failed.length)} invariants have exceptions: ${failed.join('; ')}`, ExitCode.INVALID, 'verify');
     });
 
   return program;

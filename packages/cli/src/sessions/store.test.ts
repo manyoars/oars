@@ -1,5 +1,5 @@
 import { appendFileSync, readFileSync, readdirSync, statSync, utimesSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { CliError, ExitCode } from '../errors.js';
 import { deposit, derive, loadStore, paths, readCalls, readSkeletons, slugOf } from './store.js';
@@ -23,10 +23,11 @@ describe('deposit', () => {
     addProject(staged, '-work-other', 'x', ['{"type":"user"}']);
     const byName = await deposit(staged.runtime, options(['-work-app']));
     expect(byName).toMatchObject({ sessions: 4, skippedFolders: 1, folders: ['-work-app'], missing: [], badLines: 1 });
-    expect(slugOf('/work/app')).toBe('-work-app');
-    const staged2 = stage('-work-app');
-    const byPath = await deposit(staged2.runtime, options(['/work/app', '/nowhere']));
-    expect(byPath).toMatchObject({ sessions: 4, folders: ['-work-app'], missing: ['/nowhere'] });
+    const workSlug = slugOf(resolve('/work/app'));
+    expect(workSlug).toMatch(/work-app$/);
+    const staged2 = stage(workSlug);
+    const byPath = await deposit(staged2.runtime, options([resolve('/work/app'), resolve('/nowhere')]));
+    expect(byPath).toMatchObject({ sessions: 4, folders: [workSlug], missing: [resolve('/nowhere')] });
   });
 
   it('is idempotent: a second run skips unchanged files and appends nothing', async () => {
