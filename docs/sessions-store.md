@@ -20,8 +20,8 @@ Under `<config>/oars/sessions/` (`%APPDATA%` on Windows, `$XDG_CONFIG_HOME` or `
 ## Two versions
 
 - `CAPTURE_VERSION` (`cv` on every captured record) names the captured field list. Bump it only when that list changes: a bump
-  re-reads every transcript.
-- `EXTRACTOR_VERSION` (`v` on every derived record and skeleton) names the derivation rules (error normalization, prompt classes,
+  re-reads every transcript. The skeleton is written at capture and carries `CAPTURE_VERSION` in its `v`.
+- `EXTRACTOR_VERSION` (`v` on every derived record) names the derivation rules (error normalization, prompt classes,
   tool-name sequences, recovery episodes). A bump re-derives from the log; no raw transcript is read.
 
 A version-2 session (no `cv`) is still read: its already-derived `prompt` and `error` lines pass through until it is deposited again.
@@ -34,8 +34,8 @@ switched on; a `shareable` field is a name, version, count, duration, status, ke
 
 | Record | Fields | Class |
 |--------|--------|-------|
-| `session` (one per transcript) | `parent`, `agentType`, `spawnedBy` (set on a subagent transcript), `at`, `bytes`, `lines`, `badLines`, `userTurns`, `assistantTurns`, `tsFirst`, `tsLast`, `versions`, `models`, `tools`, `bashCmds`, `compactSummaries`, `contextFingerprint`, `costUsd`, `usage` | shareable |
-| | `project` (the folder slug, with the username and directory names), `files`, `urls`, `searches`, `branches`, `tldrs` (400 chars), `confidences` (120 chars) | local-only |
+| `session` (one per transcript) | `agentType` (set on a subagent transcript), `at`, `bytes`, `lines`, `badLines`, `userTurns`, `assistantTurns`, `tsFirst`, `tsLast`, `versions`, `models`, `tools`, `bashCmds`, `compactSummaries`, `contextFingerprint`, `costUsd`, `usage` | shareable |
+| | `parent`, `spawnedBy` (set on a subagent transcript; they join records inside this store only), `project` (the folder slug, with the username and directory names), `files`, `urls`, `searches`, `branches`, `tldrs` (400 chars), `confidences` (120 chars) | local-only |
 | `user-prompt` (one per prompt) | `index`, `ts`, `wallSec`, `thinking`, `turns`, `model`, `efforts`, `skills`, `usage`, `contextFingerprint` | shareable |
 | | `head` (the first 300 characters) | local-only |
 | `tool` (one per tool call) | `n`, `ts`, `tool`, `status` (`ok`, `error`, or `none` when no result is in the file), `target`, `keys` (the input's key names), `durationMs`, `harnessVersion`, `agentType`, `side`, `prompt` | shareable |
@@ -46,6 +46,12 @@ switched on; a `shareable` field is a name, version, count, duration, status, ke
 `target` is a 16-hex SHA-256 of the file path relative to the line's working directory, salted per account, for a call with a
 `file_path`, `notebook_path`, or `path` input; the program and subcommand (`git push`, `npm run`) for a shell call, after any leading
 `cd <dir> &&` hop, environment assignment, or `sudo`; else null.
+
+Two known departures from the D1 spec, both CAPTURE 4's (t714), not this version's: the path is relative to the line's `cwd`, not
+the repository root, so the same file read from a subdirectory hashes differently (in the t693 reconciliation this splits R13's
+`Read | File does not exist` episodes by target and reads 20 as fixed where gold, keyed by the last three path segments, reads 5);
+and the classes of `contextFingerprint` and the full-precision timestamps stay as above, where the spec puts them in the account
+store or pools them at day resolution.
 
 ## Subagent transcripts
 
