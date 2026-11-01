@@ -130,4 +130,27 @@ describe('oars sessions', () => {
     deps.sessions = undefined;
     expect(await run(['sessions', 'books'], deps)).toBe(ExitCode.UNEXPECTED);
   });
+
+  it('deposit reads the folders an --allow-file names, with a glob, in one command', async () => {
+    const { deps, out, staged } = setup();
+    addProject(staged, 'other', 'x', ['{"type":"user"}']);
+    const list = join(staged.root, 'allow.txt');
+    writeFileSync(list, '# my folders\nproj\n');
+    expect(await run(['sessions', 'deposit', '--allow-file', list], deps)).toBe(ExitCode.OK);
+    expect(out.join('')).toContain('Deposited 4 sessions');
+    expect(out.join('')).toContain('Read 1 folders; skipped 1');
+    out.length = 0;
+    writeFileSync(list, 'pro*\noth?r\n');
+    expect(await run(['sessions', 'deposit', '--allow-file', list], deps)).toBe(ExitCode.OK);
+    expect(out.join('')).toContain('Read 2 folders');
+  });
+
+  it('deposit refuses an unreadable --allow-file (exit 2) and an empty one', async () => {
+    const { deps, err, staged } = setup();
+    expect(await run(['sessions', 'deposit', '--allow-file', join(staged.root, 'nope.txt')], deps)).toBe(ExitCode.USAGE);
+    expect(err.join('')).toContain('--allow-file');
+    const empty = join(staged.root, 'empty.txt');
+    writeFileSync(empty, '# nothing\n');
+    expect(await run(['sessions', 'deposit', '--allow-file', empty], deps)).toBe(ExitCode.USAGE);
+  });
 });

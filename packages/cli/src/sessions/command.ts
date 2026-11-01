@@ -1,5 +1,7 @@
 // The `oars sessions` command group's bodies: each returns the `--json` document and the text a human sees.
+import { readFile } from 'node:fs/promises';
 import type { Outcome } from '../cli.js';
+import { parseAllowList } from './allow.js';
 import { CliError, ExitCode } from '../errors.js';
 import { books, formatBooks, formatMeasure, formatRecall, measure, recall, type BooksBy, type RecallQuery } from './query.js';
 import { readHookCalls } from './hook-calls.js';
@@ -18,8 +20,17 @@ const runtimeOf = (deps: SessionsDeps): SessionsRuntime => {
   return deps.sessions;
 };
 
-export const sessionsDeposit = async (deps: SessionsDeps, options: { allow: string[]; redactDomains: string[] }): Promise<Outcome> => {
-  const result = await deposit(runtimeOf(deps), { allow: options.allow, redactDomains: options.redactDomains, now: deps.now });
+const readAllowFile = async (file: string): Promise<string[]> => {
+  try {
+    return parseAllowList(await readFile(file, 'utf8'));
+  } catch {
+    throw new CliError(`Cannot read the --allow-file ${file}.`, ExitCode.USAGE, 'usage');
+  }
+};
+
+export const sessionsDeposit = async (deps: SessionsDeps, options: { allow: string[]; allowFiles: string[]; redactDomains: string[] }): Promise<Outcome> => {
+  const fromFiles = await Promise.all(options.allowFiles.map((file) => readAllowFile(file)));
+  const result = await deposit(runtimeOf(deps), { allow: [...options.allow, ...fromFiles.flat()], redactDomains: options.redactDomains, now: deps.now });
   const lines = [
     `Deposited ${String(result.sessions)} sessions (${String(result.lines)} lines, ${String(result.badLines)} unparseable) as ${String(result.observations)} observations; ${String(result.unchanged)} files unchanged.`,
     `Read ${String(result.folders.length)} folders; skipped ${String(result.skippedFolders)} not on the allowlist.`,
