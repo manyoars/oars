@@ -34,7 +34,7 @@ export const sessionsDeposit = async (deps: SessionsDeps, options: { allow: stri
   const fromFiles = await Promise.all(options.allowFiles.map((file) => readAllowFile(file)));
   const result = await deposit(runtimeOf(deps), { allow: [...options.allow, ...fromFiles.flat()], redactDomains: options.redactDomains, now: deps.now });
   const lines = [
-    `Deposited ${String(result.sessions)} sessions (${String(result.lines)} lines, ${String(result.badLines)} unparseable) as ${String(result.observations)} observations; ${String(result.unchanged)} files unchanged.`,
+    `Deposited ${String(result.sessions)} sessions and ${String(result.subagents)} subagent transcripts (${String(result.lines)} lines, ${String(result.badLines)} unparseable) as ${String(result.observations)} observations; ${String(result.unchanged)} files unchanged.`,
     `Read ${String(result.folders.length)} folders; skipped ${String(result.skippedFolders)} not on the allowlist.`,
     ...(result.missing.length === 0 ? [] : [`No project folder matched: ${result.missing.join(', ')}.`]),
   ];

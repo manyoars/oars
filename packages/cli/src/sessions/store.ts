@@ -18,7 +18,7 @@ import { CliError, ExitCode } from '../errors.js';
 import { compileAllow, requireEntries, slugOf } from './allow.js';
 import { buildIndex, indexPath } from './hook-index.js';
 import { deriveSession } from './derive.js';
-import { captureSession, type Capture } from './extract.js';
+import { captureSession, type Capture, type SubagentOrigin } from './extract.js';
 import { makeRedactor } from './redact.js';
 import {
   CAPTURE_VERSION,
@@ -151,6 +151,8 @@ export interface DepositResult {
   lines: number;
   badLines: number;
   observations: number;
+  /** Subagent transcripts parsed this run (A24); not counted in `sessions`, so per-session denominators stay main sessions. */
+  subagents: number;
   /** Project folders under the projects root that are not on the allowlist, so were not opened. */
   skippedFolders: number;
   /** The allowed folders that exist under the projects root. */
@@ -188,20 +190,82 @@ const contextFor = async (runtime: SessionsRuntime, state: State, now: () => num
   return { runtime, state, domains: [...state.redactDomains].sort(), redact: makeRedactor(state.redactDomains), salt, at: new Date(now()).toISOString(), now };
 };
 
-/** Deposits one session file unless its size, mtime, capture version, and domain set are unchanged; returns what it wrote, or undefined when skipped. */
-const depositFile = async (context: DepositContext, project: string, file: string): Promise<Capture | undefined> => {
+/** A transcript to deposit: a main session file, or a subagent's under `<session>/subagents/` (register A24). */
+interface Transcript {
+  file: string;
+  /** `<session>`, or `<parent>~agent-x` / `<parent>~wf_y~agent-x` for a subagent. */
+  session: string;
+  /** The path under the project folder, the key in `state.json`. */
+  relative: string;
+  subagent?: SubagentOrigin;
+}
+
+const mainTranscript = (folder: string, name: string): Transcript => ({ file: join(folder, name), session: name.slice(0, -'.jsonl'.length), relative: name });
+
+const listDir = async (dir: string) => {
+  try {
+    return (await readdir(dir, { withFileTypes: true })).sort((a, b) => a.name.localeCompare(b.name));
+  } catch (error) {
+    if (isMissing(error)) return [];
+    throw error;
+  }
+};
+
+/** The subagent's type and the parent's spawning tool call, from its `.meta.json`; null when the file is missing or says nothing. */
+const readMeta = async (file: string): Promise<{ agentType: string | null; toolUseId: string | null }> => {
+  try {
+    const parsed: unknown = JSON.parse(await readFile(file, 'utf8'));
+    if (isRecord(parsed)) {
+      return { agentType: typeof parsed.agentType === 'string' ? parsed.agentType : null, toolUseId: typeof parsed.toolUseId === 'string' ? parsed.toolUseId : null };
+    }
+  } catch (error) {
+    if (!isMissing(error) && !(error instanceof SyntaxError)) throw error;
+  }
+  return { agentType: null, toolUseId: null };
+};
+
+// The subagent transcripts of the given sessions: <session>/subagents/agent-*.jsonl and <session>/subagents/workflows/wf_*/agent-*.jsonl.
+const subagentTranscripts = async (folder: string, sessions: readonly string[]): Promise<Transcript[]> => {
+  const found: Transcript[] = [];
+  for (const parent of sessions) {
+    const root = join(folder, parent, 'subagents');
+    const dirs: { dir: string; path: string[] }[] = [{ dir: root, path: [] }];
+    for (const entry of await listDir(join(root, 'workflows'))) {
+      if (entry.isDirectory() && entry.name.startsWith('wf_')) dirs.push({ dir: join(root, 'workflows', entry.name), path: ['workflows', entry.name] });
+    }
+    for (const { dir, path } of dirs) {
+      for (const entry of await listDir(dir)) {
+        if (!entry.isFile() || !entry.name.startsWith('agent-') || !entry.name.endsWith('.jsonl')) continue;
+        const agent = entry.name.slice(0, -'.jsonl'.length);
+        const meta = await readMeta(join(dir, `${agent}.meta.json`));
+        found.push({
+          file: join(dir, entry.name),
+          session: [parent, ...path.filter((part) => part !== 'workflows'), agent].join('~'),
+          relative: [parent, 'subagents', ...path, entry.name].join('/'),
+          subagent: { parent, agentType: meta.agentType, spawnedBy: meta.toolUseId },
+        });
+      }
+    }
+  }
+  return found;
+};
+
+/** The session folders under a project folder: each may hold subagent transcripts, even when its main transcript is gone. */
+const sessionFolders = async (folder: string): Promise<string[]> => (await listDir(folder)).filter((entry) => entry.isDirectory()).map((entry) => entry.name);
+
+/** Deposits one transcript unless its size, mtime, capture version, and domain set are unchanged; returns what it wrote, or undefined when skipped. */
+const depositFile = async (context: DepositContext, project: string, transcript: Transcript): Promise<Capture | undefined> => {
   const { runtime, state } = context;
+  const { file, session, subagent } = transcript;
   const info = await stat(file);
-  const name = basename(file);
-  const key = `${project}/${name}`;
+  const key = `${project}/${transcript.relative}`;
   const previous = state.files[key];
   if (previous !== undefined && previous.size === info.size && previous.mtimeMs === info.mtimeMs && previous.v === CAPTURE_VERSION && sameSet(previous.d, context.domains)) {
     return undefined;
   }
   const files = paths(runtime.storeDir);
-  const session = name.slice(0, -'.jsonl'.length);
   const rev = Math.max((previous?.rev ?? 0) + 1, context.now());
-  const extract = captureSession({ text: await readFile(file, 'utf8'), session, project, rev, at: context.at, bytes: info.size, redact: context.redact, salt: context.salt });
+  const extract = captureSession({ text: await readFile(file, 'utf8'), session, project, rev, at: context.at, bytes: info.size, redact: context.redact, salt: context.salt, subagent });
   const batch: Observation[] = [extract.session, ...extract.prompts, ...extract.tools, ...extract.errorLines];
   await mkdir(runtime.storeDir, { recursive: true });
   await appendFile(files.observations, batch.map((observation) => `${JSON.stringify(observation)}\n`).join(''), { mode: 0o600 });
@@ -305,6 +369,7 @@ const depositLocked = async (runtime: SessionsRuntime, options: DepositOptions):
     lines: 0,
     badLines: 0,
     observations: 0,
+    subagents: 0,
     skippedFolders: folders.length - allowed.length,
     folders: allowed,
     missing,
@@ -312,13 +377,15 @@ const depositLocked = async (runtime: SessionsRuntime, options: DepositOptions):
   for (const project of allowed) {
     const folder = join(runtime.projectsRoot, project);
     const entries = (await readdir(folder, { withFileTypes: true })).filter((entry) => entry.isFile() && entry.name.endsWith('.jsonl')).map((entry) => entry.name).sort();
-    for (const name of entries) {
-      const extract = await depositFile(context, project, join(folder, name));
+    const transcripts = [...entries.map((name) => mainTranscript(folder, name)), ...(await subagentTranscripts(folder, await sessionFolders(folder)))];
+    for (const transcript of transcripts) {
+      const extract = await depositFile(context, project, transcript);
       if (extract === undefined) {
         result.unchanged += 1;
         continue;
       }
-      result.sessions += 1;
+      if (transcript.subagent === undefined) result.sessions += 1;
+      else result.subagents += 1;
       result.lines += extract.session.lines;
       result.badLines += extract.session.badLines;
       result.observations += 1 + extract.prompts.length + extract.tools.length + extract.errorLines.length;
@@ -346,12 +413,20 @@ const depositSessionLocked = async (runtime: SessionsRuntime, transcript: string
   const state = await readState(runtime.storeDir);
   if (!compileAllow(state.allow).allows(project)) return 'not-allowed';
   const context = await contextFor(runtime, state, now);
+  const folder = dirname(transcript);
+  const main = mainTranscript(folder, basename(transcript));
+  let wrote: boolean;
   try {
-    if ((await depositFile(context, project, transcript)) === undefined) return 'unchanged';
+    wrote = (await depositFile(context, project, main)) !== undefined;
   } catch (error) {
     if (isMissing(error)) return 'missing';
     throw error;
   }
+  // The session's subagents finished before it did, so the Stop deposit takes them too (A24).
+  for (const subagent of await subagentTranscripts(folder, [main.session])) {
+    wrote = (await depositFile(context, project, subagent)) !== undefined || wrote;
+  }
+  if (!wrote) return 'unchanged';
   await writeAtomic(paths(runtime.storeDir).state, JSON.stringify(state));
   return 'deposited';
 };
