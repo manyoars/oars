@@ -38,7 +38,7 @@ the manifest. Outside the platform, set `OARS_PUBLIC_URL` to an http(s) URL with
 |------|------|--------------|
 | `GET /healthz` | none | Liveness |
 | `GET /` | none | The endpoints, the price refs and the charging sentence, as JSON |
-| `POST /v1/customers` | none | Mints a bearer token `oc_...` (shown once) for `{countryCode, regionCode}`; `regionCode`, the two-letter state, is required for `US`. 5 requests a minute per client address, then `429` |
+| `POST /v1/customers` | none | Mints a bearer token `oc_...` (shown once) for `{countryCode, regionCode}`; `regionCode`, the two-letter state, is required for `US`. 5 requests a minute per client address (`OARS_CUSTOMERS_PER_MINUTE`), then `429` |
 | `POST /v1/credits/checkout` | bearer | `{priceRef}` returns `{checkoutUrl}` to buy a pack |
 | `GET /v1/credits` | bearer | The buyer's balance |
 | `POST /v1/tasks` | bearer | `{url}`: costs one credit when the audit is returned; send an `Idempotency-Key` to retry safely |
