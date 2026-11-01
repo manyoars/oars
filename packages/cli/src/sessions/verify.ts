@@ -15,7 +15,7 @@ export const INVARIANTS = [
   'message timestamps never step back more than 1 s',
   'assistant lines carry a request id; shared ids have consecutive apiBlockIndex',
   'thinking tokens never exceed output tokens',
-  'cost-state totals match summed usage',
+  'cost-state totals cover summed usage since the process start, subagents included',
 ] as const;
 
 const STEP_BACK_MS = 1000;
@@ -78,14 +78,23 @@ const verifyThinking = (lines: readonly SkeletonLine[]): InvariantResult => {
   return { name: INVARIANTS[4], checked: reporting.length, violations: reporting.filter((line) => (line.usage?.thinking ?? 0) > (line.usage?.output ?? 0)).length };
 };
 
-const verifyCost = (lines: readonly SkeletonLine[]): InvariantResult => {
+/**
+ * The harness's `cost-state` totals are a bound, not a sum (A2, diagnosed on the operator's store 2026-11-01): they cover only the
+ * process that wrote them (from `startTime`, so a resumed session's earlier lines are outside), they include the session's
+ * subagent transcripts, and they include side calls no transcript records (a `claude-haiku` entry in `modelUsage` with no
+ * assistant line of that model; a few hundred input tokens of the main model). So the check is that the recorded usage since
+ * the process start, main and subagent lines together, never exceeds the totals.
+ */
+const verifyCost = (lines: readonly SkeletonLine[], delegated: readonly SkeletonLine[]): InvariantResult => {
   const last = [...lines].reverse().find((line) => line.costState !== null)?.costState;
   if (last === undefined || last === null) return { name: INVARIANTS[5], checked: 0, violations: 0 };
+  const since = last.since === null ? Number.NEGATIVE_INFINITY : Date.parse(last.since);
   const sums = { input: 0, cacheWrite: 0, cacheRead: 0, output: 0 };
-  // Every content block of one API response is its own line and repeats that response's usage, so cost-state matches the sum over distinct request ids (checked on the operator's store, 2026-11-01).
+  // Every content block of one API response is its own line and repeats that response's usage, so it counts once per request id.
   const counted = new Set<string>();
-  for (const line of lines) {
+  for (const line of [...lines, ...delegated]) {
     if (line.type !== 'assistant' || line.usage === null) continue;
+    if (line.ts !== null && Date.parse(line.ts) < since) continue;
     if (line.requestId !== null) {
       if (counted.has(line.requestId)) continue;
       counted.add(line.requestId);
@@ -101,25 +110,34 @@ const verifyCost = (lines: readonly SkeletonLine[]): InvariantResult => {
     const total = last[key];
     if (total === null) continue;
     checked += 1;
-    if (total !== sums[key]) violations += 1;
+    if (sums[key] > total) violations += 1;
   }
   return { name: INVARIANTS[5], checked, violations };
 };
 
-export const verifySkeleton = (skeleton: Skeleton): InvariantResult[] => [
+/** `delegated` holds the lines of the session's subagent transcripts, which its cost-state totals include. */
+export const verifySkeleton = (skeleton: Skeleton, delegated: readonly SkeletonLine[] = []): InvariantResult[] => [
   verifyToolLinkage(skeleton.lines),
   verifyParents(skeleton.lines),
   verifyTimestamps(skeleton.lines),
   verifyRequests(skeleton.lines),
   verifyThinking(skeleton.lines),
-  verifyCost(skeleton.lines),
+  verifyCost(skeleton.lines, delegated),
 ];
 
-/** Sums each invariant over many skeletons. */
+/** A subagent transcript is stored as `<parent>~...~agent-<id>`; a main session's id holds no `~`. */
+const mainSessionOf = (session: string): string => session.split('~')[0] ?? session;
+
+/** Sums each invariant over many skeletons, each main session's cost-state checked with its subagent transcripts' lines. */
 export const verifyAll = (skeletons: readonly Skeleton[]): InvariantResult[] => {
   const totals: InvariantResult[] = INVARIANTS.map((name) => ({ name, checked: 0, violations: 0 }));
+  const delegated = new Map<string, SkeletonLine[]>();
   for (const skeleton of skeletons) {
-    for (const [index, result] of verifySkeleton(skeleton).entries()) {
+    const parent = mainSessionOf(skeleton.session);
+    if (parent !== skeleton.session) delegated.set(parent, (delegated.get(parent) ?? []).concat(skeleton.lines));
+  }
+  for (const skeleton of skeletons) {
+    for (const [index, result] of verifySkeleton(skeleton, delegated.get(skeleton.session)).entries()) {
       const total = totals[index];
       if (total !== undefined) {
         total.checked += result.checked;
