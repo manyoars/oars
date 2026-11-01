@@ -215,6 +215,17 @@ describe('concurrent hook deposits (fix round 1)', () => {
     await expect(withLock(staged.storeDir, () => Promise.resolve(), { waitMs: 400, staleMs: 600000 })).rejects.toThrow('store is locked');
   });
 
+  it('a stale lock is left in place while another waiter holds the break claim', async () => {
+    const staged = stage();
+    const lock = join(staged.storeDir, 'store.lock');
+    mkdirSync(staged.storeDir, { recursive: true });
+    writeFileSync(lock, 'dead');
+    utimesSync(lock, new Date(0), new Date(0));
+    writeFileSync(`${lock}.break`, 'other waiter');
+    await expect(withLock(staged.storeDir, () => Promise.resolve(), { waitMs: 400, staleMs: 600000 })).rejects.toThrow('store is locked');
+    expect(readFileSync(lock, 'utf8')).toBe('dead');
+  });
+
   it('two waiters that both see a stale lock leave exactly one writer inside', async () => {
     const staged = stage();
     const lock = join(staged.storeDir, 'store.lock');

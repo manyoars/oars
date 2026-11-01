@@ -202,13 +202,17 @@ const sleep = (ms: number): Promise<void> => new Promise((done) => setTimeout(do
 
 const isCode = (error: unknown, ...codes: string[]): boolean => error instanceof Error && 'code' in error && typeof error.code === 'string' && codes.includes(error.code);
 
-/** Creates `file` only if absent; false when it exists (EPERM is Windows saying the previous holder's delete has not finished). */
-const claim = async (file: string): Promise<boolean> => {
+/**
+ * Creates `file` only if absent. False when it exists; EPERM or EACCES is Windows saying the previous holder's delete has not
+ * finished, so it is returned (not thrown) and `withLock` rethrows it when the wait runs out with no lock file standing.
+ */
+const claim = async (file: string): Promise<boolean | Error> => {
   try {
     await writeFile(file, String(process.pid), { flag: 'wx', mode: 0o600 });
     return true;
   } catch (error) {
-    if (isCode(error, 'EEXIST', 'EPERM', 'EACCES')) return false;
+    if (isCode(error, 'EEXIST')) return false;
+    if (isCode(error, 'EPERM', 'EACCES') && error instanceof Error) return error;
     throw error;
   }
 };
@@ -219,7 +223,7 @@ const claim = async (file: string): Promise<boolean> => {
  */
 const breakStale = async (lock: string, staleMs: number): Promise<void> => {
   const guard = `${lock}.break`;
-  if (!(await claim(guard))) {
+  if ((await claim(guard)) !== true) {
     const guardAge = await stat(guard).then((info) => Date.now() - info.mtimeMs, () => 0);
     if (guardAge > staleMs) await rm(guard, { force: true });
     return;
@@ -240,10 +244,15 @@ export const withLock = async <T>(storeDir: string, work: () => Promise<T>, opti
   const lock = join(storeDir, 'store.lock');
   await mkdir(storeDir, { recursive: true });
   const started = Date.now();
-  while (!(await claim(lock))) {
+  let claimed = await claim(lock);
+  while (claimed !== true) {
     await breakStale(lock, options.staleMs);
-    if (Date.now() - started >= options.waitMs) throw new CliError('The store is locked by another deposit; try again shortly.', ExitCode.UNEXPECTED, 'unexpected');
+    if (Date.now() - started >= options.waitMs) {
+      if (claimed instanceof Error && !(await stat(lock).then(() => true, () => false))) throw claimed;
+      throw new CliError('The store is locked by another deposit; try again shortly.', ExitCode.UNEXPECTED, 'unexpected');
+    }
     await sleep(25);
+    claimed = await claim(lock);
   }
   try {
     return await work();

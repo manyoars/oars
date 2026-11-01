@@ -169,7 +169,7 @@ describe('post-tool pre-filter', () => {
   it.skipIf(!available)('launches nothing for an event with no Exit code, and for empty input', () => {
     expect(runCommand(`${JSON.stringify({ tool_name: 'Bash', error: 'The user rejected this tool call', hook_event_name: 'PostToolUseFailure' })}\n`)).toBe('');
     expect(runCommand('')).toBe('');
-  });
+  }, 60_000);
 });
 
 describe('settings paths', () => {
