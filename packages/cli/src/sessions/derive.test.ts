@@ -1,10 +1,10 @@
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { copyFileSync, mkdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { extractSession } from './derive.js';
-import { formatMeasure, measure } from './query.js';
+import { books, formatBooks, formatMeasure, measure } from './query.js';
 import { makeRedactor } from './redact.js';
-import { deposit, loadStore, paths } from './store.js';
+import { deposit, depositSession, loadStore, paths } from './store.js';
 import { cleanup, FIXTURES, NOW, stage } from './test-support.js';
 
 afterEach(cleanup);
@@ -67,5 +67,52 @@ describe('the derive stage (register A28)', () => {
     expect(store.errors).toEqual(v2.errors);
     expect(store.subagents).toEqual([expect.objectContaining({ session: 'old~agent-a', parent: 'old', agentType: 'Explore', spawnedBy: 'toolu_1' })]);
     expect(store.tools).toEqual(child.tools);
+  });
+});
+
+describe('subagent transcripts (A24)', () => {
+  const withSubagents = () => {
+    const staged = stage();
+    const parent = join(staged.projectsRoot, 'proj', 'errors-a', 'subagents');
+    mkdirSync(join(parent, 'workflows', 'wf_1'), { recursive: true });
+    copyFileSync(join(FIXTURES, 'proj', 'sidechain.jsonl'), join(parent, 'agent-x.jsonl'));
+    writeFileSync(join(parent, 'agent-x.meta.json'), JSON.stringify({ agentType: 'Explore', toolUseId: 't1' }));
+    copyFileSync(join(FIXTURES, 'proj', 'tldr.jsonl'), join(parent, 'workflows', 'wf_1', 'agent-y.jsonl'));
+    writeFileSync(join(parent, 'agent-x.notes.txt'), 'not a transcript');
+    writeFileSync(join(parent, 'workflows', 'wf_1', 'agent-z.meta.json'), '{ torn');
+    mkdirSync(join(parent, 'workflows', 'other'));
+    return { staged, parent };
+  };
+
+  it('deposits subagent transcripts apart from sessions, with their parent and type, and books their tokens to the spawning prompt', async () => {
+    const { staged } = withSubagents();
+    const first = await deposit(staged.runtime, options);
+    expect(first).toMatchObject({ sessions: 4, subagents: 2 });
+    expect(await deposit(staged.runtime, options)).toMatchObject({ sessions: 0, subagents: 0, unchanged: 6 });
+    const store = await loadStore(staged.storeDir);
+    expect(store.sessions).toHaveLength(4);
+    expect(store.subagents.map((agent) => [agent.session, agent.parent, agent.agentType, agent.spawnedBy])).toEqual([
+      ['errors-a~agent-x', 'errors-a', 'Explore', 't1'],
+      ['errors-a~wf_1~agent-y', 'errors-a', null, null],
+    ]);
+    const agentTools = store.tools.filter((tool) => tool.session === 'errors-a~agent-x');
+    expect(agentTools.length).toBeGreaterThan(0);
+    expect(agentTools.every((tool) => tool.parent === 'errors-a' && tool.agentType === 'Explore' && !tool.side)).toBe(true);
+    const spent = store.subagents[0]?.usage;
+    const rows = books(store, 'class', NOW);
+    expect(rows.reduce((total, row) => total + row.delegated, 0)).toBe((spent?.input ?? 0) + (spent?.cacheWrite ?? 0) + (spent?.cacheRead ?? 0) + (spent?.output ?? 0));
+    expect(rows.reduce((total, row) => total + row.delegated, 0)).toBeGreaterThan(0);
+    expect(formatBooks(rows, 'class')).toContain('delegated');
+  });
+
+  it('takes the subagents of a session at its Stop deposit', async () => {
+    const { staged, parent } = withSubagents();
+    const transcript = join(staged.projectsRoot, 'proj', 'errors-a.jsonl');
+    expect(await depositSession(staged.runtime, transcript, () => NOW)).toBe('not-allowed');
+    await deposit(staged.runtime, { ...options, allow: ['proj'] });
+    expect(await depositSession(staged.runtime, transcript, () => NOW)).toBe('unchanged');
+    utimesSync(join(parent, 'agent-x.jsonl'), new Date(NOW), new Date(NOW + 1000));
+    expect(await depositSession(staged.runtime, transcript, () => NOW)).toBe('deposited');
+    expect((await loadStore(staged.storeDir)).subagents).toHaveLength(2);
   });
 });

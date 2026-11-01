@@ -94,7 +94,28 @@ export interface BooksRow {
   errors: number;
   /** Prompts that edited and then ran a command, over prompts that edited; null when none edited. */
   verifyAfterEdit: number | null;
+  /**
+   * Tokens (input, cache write, cache read, output) spent by the subagents these prompts spawned (A24): a subagent transcript joins its
+   * parent's `Agent` call by tool-use id, and that call's prompt gives the row.
+   */
+  delegated: number;
 }
+
+/** Each subagent's tokens, keyed by the parent prompt that spawned it (`<session>#<index>`). */
+const delegatedByPrompt = (store: Store): Map<string, number> => {
+  const promptOf = new Map<string, string>();
+  for (const tool of store.tools) {
+    if (tool.toolUseId !== null && tool.prompt !== null) promptOf.set(`${tool.session} ${tool.toolUseId}`, `${tool.session}#${String(tool.prompt)}`);
+  }
+  const totals = new Map<string, number>();
+  for (const agent of store.subagents) {
+    const prompt = promptOf.get(`${String(agent.parent)} ${String(agent.spawnedBy)}`);
+    if (prompt === undefined) continue;
+    const { input, cacheWrite, cacheRead, output } = agent.usage;
+    totals.set(prompt, (totals.get(prompt) ?? 0) + input + cacheWrite + cacheRead + output);
+  }
+  return totals;
+};
 
 export type BooksBy = 'class' | 'model';
 
@@ -107,6 +128,7 @@ export const books = (store: Store, by: BooksBy, now: number, sinceDays?: number
     groups.set(key, [...(groups.get(key) ?? []), prompt]);
   }
   const sum = (list: readonly PromptObservation[], pick: (prompt: PromptObservation) => number): number => list.reduce((total, prompt) => total + pick(prompt), 0);
+  const delegated = delegatedByPrompt(store);
   return [...groups.entries()]
     .map(([key, list]) => {
       const verified = list.filter((prompt) => prompt.cls === 'edit-verify').length;
@@ -122,6 +144,7 @@ export const books = (store: Store, by: BooksBy, now: number, sinceDays?: number
         turns: sum(list, (prompt) => prompt.turns),
         errors: sum(list, (prompt) => prompt.errors),
         verifyAfterEdit: edited === 0 ? null : Math.round((verified / edited) * 1000) / 1000,
+        delegated: sum(list, (prompt) => delegated.get(`${prompt.session}#${String(prompt.index)}`) ?? 0),
       };
     })
     .sort((a, b) => b.prompts - a.prompts || a.key.localeCompare(b.key));
@@ -129,10 +152,10 @@ export const books = (store: Store, by: BooksBy, now: number, sinceDays?: number
 
 export const formatBooks = (rows: readonly BooksRow[], by: BooksBy): string => {
   if (rows.length === 0) return 'No prompts in the store.';
-  const header = `${by.padEnd(14)} ${'prompts'.padStart(8)} ${'cache read'.padStart(14)} ${'cache write'.padStart(13)} ${'output'.padStart(11)} ${'thinking'.padStart(10)} ${'wall s'.padStart(9)} ${'turns'.padStart(7)} ${'errors'.padStart(7)} ${'verify'.padStart(7)}`;
+  const header = `${by.padEnd(14)} ${'prompts'.padStart(8)} ${'cache read'.padStart(14)} ${'cache write'.padStart(13)} ${'output'.padStart(11)} ${'thinking'.padStart(10)} ${'wall s'.padStart(9)} ${'turns'.padStart(7)} ${'errors'.padStart(7)} ${'verify'.padStart(7)} ${'delegated'.padStart(13)}`;
   const lines = rows.map(
     (row) =>
-      `${row.key.padEnd(14)} ${String(row.prompts).padStart(8)} ${String(row.cacheRead).padStart(14)} ${String(row.cacheWrite).padStart(13)} ${String(row.output).padStart(11)} ${String(row.thinking).padStart(10)} ${String(row.wallSec).padStart(9)} ${String(row.turns).padStart(7)} ${String(row.errors).padStart(7)} ${(row.verifyAfterEdit === null ? '-' : `${String(Math.round(row.verifyAfterEdit * 100))}%`).padStart(7)}`,
+      `${row.key.padEnd(14)} ${String(row.prompts).padStart(8)} ${String(row.cacheRead).padStart(14)} ${String(row.cacheWrite).padStart(13)} ${String(row.output).padStart(11)} ${String(row.thinking).padStart(10)} ${String(row.wallSec).padStart(9)} ${String(row.turns).padStart(7)} ${String(row.errors).padStart(7)} ${(row.verifyAfterEdit === null ? '-' : `${String(Math.round(row.verifyAfterEdit * 100))}%`).padStart(7)} ${String(row.delegated).padStart(13)}`,
   );
   return [header, ...lines].join('\n');
 };
