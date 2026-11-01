@@ -151,6 +151,8 @@ export interface Signal {
   hookRecallPerSession: number | null;
   /** Hook lookups that had something to say (an injected block or a recall hit), per session. */
   hookHitsPerSession: number | null;
+  /** Sessions the SessionEnd hook deposited, per session (a deposit is a stop call that wrote something). */
+  hookDepositsPerSession: number | null;
 }
 
 export interface Measure {
@@ -177,7 +179,7 @@ export const measure = (store: Store, calls: readonly RecallCall[], hookCalls: r
     if (position !== undefined) firstSeen.set(error.sig, Math.min(firstSeen.get(error.sig) ?? position, position));
   }
   const signal = (slice: readonly SessionObservation[]): Signal => {
-    if (slice.length === 0) return { sessions: 0, recurringPer100: null, recurringSignatures: null, cacheWritePerSession: null, recallPerSession: null, hookRecallPerSession: null, hookHitsPerSession: null };
+    if (slice.length === 0) return { sessions: 0, recurringPer100: null, recurringSignatures: null, cacheWritePerSession: null, recallPerSession: null, hookRecallPerSession: null, hookHitsPerSession: null, hookDepositsPerSession: null };
     const names = new Set(slice.map((session) => session.session));
     const recurringErrors = store.errors.filter((error) => names.has(error.session) && (index.get(error.session) ?? 0) > (firstSeen.get(error.sig) ?? 0));
     const recurring = recurringErrors.length;
@@ -194,6 +196,7 @@ export const measure = (store: Store, calls: readonly RecallCall[], hookCalls: r
       recallPerSession: round(inWindow / slice.length),
       hookRecallPerSession: round(lookups.length / slice.length),
       hookHitsPerSession: round(lookups.filter((call) => call.hit).length / slice.length),
+      hookDepositsPerSession: round(hookCalls.filter((call) => call.session !== null && names.has(call.session) && call.event === 'stop' && call.hit).length / slice.length),
     };
   };
   const start = since === undefined ? Math.max(sessions.length - window, 0) : sessions.findIndex((session) => (session.tsFirst ?? '') >= since);
@@ -213,5 +216,6 @@ export const formatMeasure = (result: Measure): string => {
     row('recall calls per session', (signal) => signal.recallPerSession),
     row('hook recall calls per session', (signal) => signal.hookRecallPerSession),
     row('hook hits per session', (signal) => signal.hookHitsPerSession),
+    row('hook deposits per session', (signal) => signal.hookDepositsPerSession),
   ].join('\n');
 };

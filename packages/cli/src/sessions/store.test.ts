@@ -2,7 +2,7 @@ import { appendFileSync, readFileSync, readdirSync, statSync, utimesSync, writeF
 import { join, resolve } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { CliError, ExitCode } from '../errors.js';
-import { deposit, derive, loadStore, paths, readCalls, readRedactDomains, readSkeletons, slugOf } from './store.js';
+import { deposit, depositSession, derive, loadStore, paths, readCalls, readRedactDomains, readSkeletons, slugOf, withLock } from './store.js';
 import { EXTRACTOR_VERSION } from './schema.js';
 import { addProject, cleanup, NOW, stage } from './test-support.js';
 
@@ -175,5 +175,43 @@ describe('deposit', () => {
     expect(await readSkeletons(staged.storeDir)).toEqual({ skeletons: [], unreadable: 0 });
     const missingRoot = { ...staged.runtime, projectsRoot: join(staged.root, 'absent') };
     expect(await deposit(missingRoot, options(['proj']))).toMatchObject({ sessions: 0, skippedFolders: 0, missing: ['proj'] });
+  });
+});
+
+describe('concurrent hook deposits (fix round 1)', () => {
+  it('two interleaved session deposits both keep their entry in state.json', async () => {
+    const staged = stage();
+    const line = JSON.stringify({ type: 'user', timestamp: '2026-06-01T00:00:00Z', message: { role: 'user', content: 'hello' } });
+    const a = addProject(staged, 'proj-a', 'a1', [line]);
+    const b = addProject(staged, 'proj-b', 'b1', [line]);
+    await deposit(staged.runtime, options(['proj-a', 'proj-b']));
+    rewriteState(staged.storeDir, (state) => {
+      state.files = {};
+    });
+    await Promise.all([depositSession(staged.runtime, a, () => NOW), depositSession(staged.runtime, b, () => NOW)]);
+    expect(Object.keys(readStateFile(staged.storeDir).files).sort()).toEqual(['proj-a/a1.jsonl', 'proj-b/b1.jsonl']);
+  });
+
+  it('a lock waits for its holder, breaks a stale one, and gives up on a fresh one that never frees', async () => {
+    const staged = stage();
+    const order: string[] = [];
+    const first = withLock(staged.storeDir, async () => {
+      order.push('first in');
+      await new Promise((done) => setTimeout(done, 60));
+      order.push('first out');
+    });
+    while (!order.includes('first in')) await new Promise((done) => setTimeout(done, 5));
+    const second = withLock(staged.storeDir, () => {
+      order.push('second');
+      return Promise.resolve();
+    });
+    await Promise.all([first, second]);
+    expect(order).toEqual(['first in', 'first out', 'second']);
+    const lock = join(staged.storeDir, 'store.lock');
+    writeFileSync(lock, 'old');
+    utimesSync(lock, new Date(0), new Date(0));
+    await withLock(staged.storeDir, () => Promise.resolve());
+    writeFileSync(lock, 'busy');
+    await expect(withLock(staged.storeDir, () => Promise.resolve(), { waitMs: 80, staleMs: 600000 })).rejects.toThrow('store is locked');
   });
 });

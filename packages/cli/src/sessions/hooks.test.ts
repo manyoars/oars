@@ -1,4 +1,4 @@
-import { copyFileSync, mkdirSync, writeFileSync } from 'node:fs';
+import { appendFileSync, copyFileSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { slugOf } from './allow.js';
@@ -142,5 +142,21 @@ describe('nightly run', () => {
     const fresh = stage();
     expect(await runHook('nightly', '', fresh.runtime, () => NOW)).toBeUndefined();
     expect((await readHookCalls(fresh.storeDir)).map((call) => call.hit)).toEqual([false]);
+  });
+});
+
+describe('SessionEnd deposit of a growing transcript', () => {
+  it('two deposits of a growing transcript leave one session row (the later revision replaces the earlier)', async () => {
+    const staged = await deposited();
+    const transcript = join(staged.projectsRoot, slugOf(REPO), 'grow.jsonl');
+    const line = (text: string) => `${JSON.stringify({ type: 'user', timestamp: '2026-06-02T00:00:00Z', message: { role: 'user', content: text } })}\n`;
+    writeFileSync(transcript, line('first'));
+    const input = JSON.stringify({ session_id: 'grow', transcript_path: transcript, hook_event_name: 'SessionEnd' });
+    await runHook('stop', input, staged.runtime, () => NOW);
+    appendFileSync(transcript, line('second'));
+    await runHook('stop', input, staged.runtime, () => NOW);
+    const rows = (await loadStore(staged.storeDir)).sessions.filter((session) => session.session === 'grow');
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.lines).toBe(2);
   });
 });

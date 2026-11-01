@@ -324,7 +324,7 @@ const buildProgram = (deps: RunDeps, argv: string[]): Command => {
 
   hook
     .command('install')
-    .description('merge the SessionStart, PostToolUseFailure, and Stop hooks into a settings file (existing hooks are kept) and raise cleanupPeriodDays to at least 365')
+    .description('merge the SessionStart, PostToolUseFailure, and SessionEnd hooks into a settings file (existing hooks are kept) and raise cleanupPeriodDays to at least 365')
     .option('--scope <scope>', 'user (~/.claude/settings.json), project (./.claude/settings.json), or file (needs --file; the default)', scopeOption)
     .option('--file <path>', 'the settings file for --scope file')
     .option('--keep-retention', 'leave cleanupPeriodDays as it is (the harness deletes raw transcripts older than it)')
