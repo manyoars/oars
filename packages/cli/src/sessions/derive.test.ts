@@ -5,13 +5,14 @@ import { episodesOf, extractSession, rankRecovery, RECOVERY_WINDOW, type Episode
 import { captureSession } from './extract.js';
 import { books, formatBooks, formatMeasure, measure } from './query.js';
 import { makeRedactor } from './redact.js';
-import { CAPTURE_VERSION, type ErrorLineObservation, type ToolObservation, type ToolStatus } from './schema.js';
-import { deposit, depositSession, loadStore, paths } from './store.js';
+import { CAPTURE_VERSION, type ErrorLineObservation, type ErrorObservation, type ToolObservation, type ToolStatus } from './schema.js';
+import { deposit, depositSession, derive, loadStore, paths } from './store.js';
 import { cleanup, FIXTURES, NOW, stage } from './test-support.js';
 
 afterEach(cleanup);
 
 const options = { allow: ['proj'], redactDomains: [], now: () => NOW };
+const NOW_ISO = new Date(NOW).toISOString();
 
 describe('the derive stage (register A28)', () => {
   it('re-derives the version-2 records from the log alone: deleting every raw transcript changes nothing a reader sees', async () => {
@@ -109,6 +110,42 @@ describe('subagent transcripts (A24)', () => {
     const raw = join(paths(staged.storeDir).raw, 'proj');
     expect(readFileSync(join(raw, 'errors-a', 'subagents', 'workflows', 'wf_1', 'agent-y.jsonl'), 'utf8')).toBe(readFileSync(join(FIXTURES, 'proj', 'tldr.jsonl'), 'utf8'));
     expect(readFileSync(join(raw, 'errors-a.jsonl'), 'utf8')).toBe(readFileSync(join(FIXTURES, 'proj', 'errors-a.jsonl'), 'utf8'));
+  });
+
+  it("derives a subagent's errors into the store under its parent, so each signature counts the parent once", async () => {
+    const staged = stage();
+    await deposit(staged.runtime, options);
+    const without = await loadStore(staged.storeDir);
+    // The agent repeats its parent's own transcript: every error doubles, no signature gains a session.
+    const parent = join(staged.projectsRoot, 'proj', 'errors-a', 'subagents');
+    mkdirSync(parent, { recursive: true });
+    copyFileSync(join(FIXTURES, 'proj', 'errors-a.jsonl'), join(parent, 'agent-x.jsonl'));
+    writeFileSync(join(parent, 'agent-x.meta.json'), JSON.stringify({ agentType: 'Explore', toolUseId: 't6' }));
+    await deposit(staged.runtime, options);
+    const store = await loadStore(staged.storeDir);
+    const mine = without.errors.filter((error) => error.session === 'errors-a');
+    const agents = store.errors.filter((error) => error.agent === 'errors-a~agent-x');
+    expect(mine.length).toBeGreaterThan(0);
+    expect(agents.map((error) => error.sig)).toEqual(mine.map((error) => error.sig));
+    // Attributed to the parent prompt whose call (t6) spawned the agent, with that prompt's class.
+    const spawning = store.prompts.find((prompt) => prompt.session === 'errors-a' && prompt.index === 0);
+    expect(agents.every((error) => error.session === 'errors-a' && error.prompt === 0 && error.cls === spawning?.cls)).toBe(true);
+    expect(store.errors).toHaveLength(without.errors.length + mine.length);
+    expect(store.sessions).toHaveLength(without.sessions.length);
+    const sessionsOf = (errors: readonly ErrorObservation[]) => new Map(derive({ ...store, errors }, NOW_ISO).signatures.map((sig) => [sig.sig, [sig.sessions, sig.count]]));
+    const before = sessionsOf(without.errors);
+    for (const [sig, [sessions, count]] of sessionsOf(store.errors)) {
+      const was = before.get(sig) ?? [0, 0];
+      expect(sessions).toBe(was[0]);
+      expect(count).toBe((was[1] ?? 0) + agents.filter((error) => error.sig === sig).length);
+    }
+    // An agent whose spawning call is not in the parent keeps its errors with no prompt.
+    writeFileSync(join(parent, 'agent-x.meta.json'), JSON.stringify({ agentType: 'Explore', toolUseId: 'missing' }));
+    copyFileSync(join(FIXTURES, 'proj', 'errors-b.jsonl'), join(parent, 'agent-x.jsonl'));
+    await deposit(staged.runtime, options);
+    const orphaned = (await loadStore(staged.storeDir)).errors.filter((error) => error.agent === 'errors-a~agent-x');
+    expect(orphaned.length).toBeGreaterThan(0);
+    expect(orphaned.every((error) => error.session === 'errors-a' && error.prompt === null && error.cls === null)).toBe(true);
   });
 
   it('takes the subagents of a session at its Stop deposit', async () => {
