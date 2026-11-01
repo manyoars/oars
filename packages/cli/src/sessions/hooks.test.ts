@@ -129,6 +129,11 @@ describe('SessionEnd deposit hook', () => {
     await expect(depositSession(staged.runtime, transcript, () => NOW)).rejects.toThrow('store is locked');
     expect(Date.now() - started).toBeLessThan(4500);
     expect(await runHook('stop', JSON.stringify({ session_id: 'blocked', transcript_path: transcript }), staged.runtime, () => NOW)).toBeUndefined();
+    // The failed deposit is evidence, not silence: its hook-call line carries the failure's first line.
+    const failed = (await readHookCalls(staged.storeDir)).filter((call) => call.session === 'blocked');
+    expect(failed.map((call) => [call.event, call.hit])).toEqual([['stop', false]]);
+    expect(failed[0]?.error).toContain('store is locked');
+    expect(failed[0]?.error).not.toContain('\n');
   }, 15_000);
 
   it('does not read a folder no --allow named, a missing transcript, or an event without a transcript', async () => {

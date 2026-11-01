@@ -3,7 +3,7 @@ import { join, resolve } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { CliError, ExitCode } from '../errors.js';
 import { deposit, depositSession, derive, loadStore, paths, readCalls, readRedactDomains, readSkeletons, slugOf, withLock } from './store.js';
-import { EXTRACTOR_VERSION } from './schema.js';
+import { CAPTURE_VERSION, EXTRACTOR_VERSION } from './schema.js';
 import { addProject, cleanup, NOW, stage } from './test-support.js';
 
 afterEach(cleanup);
@@ -39,7 +39,7 @@ describe('re-deposit on a new extractor version or a wider redaction set (fix ro
     expect(again).toMatchObject({ sessions: 4, unchanged: 0 });
     expect(await deposit(staged.runtime, options(['proj']))).toMatchObject({ sessions: 0, unchanged: 4 });
     const state = readStateFile(staged.storeDir);
-    expect(Object.values(state.files).every((entry) => entry.v === EXTRACTOR_VERSION)).toBe(true);
+    expect(Object.values(state.files).every((entry) => entry.v === CAPTURE_VERSION)).toBe(true);
   });
 
   it('re-deposits every allowed file when the --redact-domain set grows, and not when it repeats', async () => {
@@ -92,7 +92,7 @@ describe('deposit', () => {
     const size = statSync(paths(staged.storeDir).observations).size;
     const second = await deposit(staged.runtime, options(['proj']));
     expect(first.sessions).toBe(4);
-    expect(first.observations).toBe(4 + 7 + 6);
+    expect(first.observations).toBe(4 + 7 + 18 + 6);
     expect(second).toMatchObject({ sessions: 0, unchanged: 4, observations: 0 });
     expect(statSync(paths(staged.storeDir).observations).size).toBe(size);
   });
@@ -148,7 +148,8 @@ describe('deposit', () => {
     expect(derived.recovery['Write>Read']).toBe(1);
     expect(derived.bigrams['Read>Bash']).toBe(2);
     expect(derived.summaries.find((summary) => summary.session === 'tldr')).toMatchObject({ prompts: 2, errors: 0, tldrs: 1 });
-    expect([...store.sessions, ...store.prompts, ...store.errors].every((observation) => observation.v === EXTRACTOR_VERSION)).toBe(true);
+    expect(store.sessions.every((observation) => observation.cv === CAPTURE_VERSION)).toBe(true);
+    expect([...store.prompts, ...store.errors].every((observation) => observation.v === EXTRACTOR_VERSION)).toBe(true);
     expect((await readSkeletons(staged.storeDir, 'tldr')).skeletons.map((skeleton) => skeleton.session)).toEqual(['tldr']);
   });
 
@@ -171,7 +172,7 @@ describe('deposit', () => {
 
   it('reads an empty or missing store as empty', async () => {
     const staged = stage();
-    expect(await loadStore(staged.storeDir)).toEqual({ sessions: [], prompts: [], errors: [] });
+    expect(await loadStore(staged.storeDir)).toEqual({ sessions: [], prompts: [], errors: [], subagents: [], tools: [] });
     expect(await readCalls(staged.storeDir)).toEqual([]);
     expect(await readSkeletons(staged.storeDir)).toEqual({ skeletons: [], unreadable: 0 });
     const missingRoot = { ...staged.runtime, projectsRoot: join(staged.root, 'absent') };

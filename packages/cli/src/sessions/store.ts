@@ -1,22 +1,30 @@
 // The on-disk session store and `deposit`. Layout under `<config>/oars/sessions/`:
 //   observations.jsonl      append-only; a re-deposited session is appended again under a higher `rev`
-//   state.json              per file: size, mtime, the `rev`, extractor version and redact-domain set last deposited
+//                           version 3 writes capture records only (session, user-prompt, tool, error-line; CAPTURE_VERSION);
+//                           signatures, prompt classes, and episodes are derived from them at read time (derive.ts,
+//                           EXTRACTOR_VERSION), so a rule change re-derives without reading any raw transcript
+//   state.json              per file: size, mtime, the `rev`, capture version and redact-domain set last deposited
 //                           (a file is skipped only when size, mtime, version and domain set all match)
+//   salt                    the per-account salt path targets are hashed with (local-only, never shared)
 //   derived.json            the derived records, rewritten at the end of every deposit
 //   skeletons/<session>.json  one skeleton per session (hashes and ids, no content)
 //   mcp-calls.jsonl         one line per recall call the MCP server answered
 //   hook-calls.jsonl        one line per hook invocation (event, session, hit, milliseconds)
 //   hook-index.json         the recurring signatures per project and overall, for the hooks
+import { randomBytes } from 'node:crypto';
 import { appendFile, mkdir, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { basename, dirname, join } from 'node:path';
 import { CliError, ExitCode } from '../errors.js';
 import { compileAllow, requireEntries, slugOf } from './allow.js';
 import { buildIndex, indexPath } from './hook-index.js';
-import { extractSession } from './extract.js';
+import { deriveSession } from './derive.js';
+import { captureSession, type Capture } from './extract.js';
 import { makeRedactor } from './redact.js';
 import {
+  CAPTURE_VERSION,
   EXTRACTOR_VERSION,
   type DerivedRecords,
+  type ErrorLineObservation,
   type ErrorObservation,
   type Observation,
   type PromptObservation,
@@ -25,6 +33,8 @@ import {
   type SessionSummary,
   type SignatureRecord,
   type Skeleton,
+  type ToolObservation,
+  type UserPromptObservation,
 } from './schema.js';
 
 /** Where the store and the operator's Claude Code logs are; `bin.ts` fills it from the environment. */
@@ -41,7 +51,7 @@ interface FileState {
   size: number;
   mtimeMs: number;
   rev: number;
-  /** The extractor version that wrote this file's records; a file recorded under another version is deposited again. */
+  /** The capture version that wrote this file's records; a file recorded under another version is deposited again. */
   v: string;
   /** The sorted `--redact-domain` set in force when this file was deposited; a file recorded under another set is deposited again. */
   d: string[];
@@ -64,7 +74,21 @@ export const paths = (storeDir: string) => ({
   skeletons: join(storeDir, 'skeletons'),
   calls: join(storeDir, 'mcp-calls.jsonl'),
   hookCalls: join(storeDir, 'hook-calls.jsonl'),
+  salt: join(storeDir, 'salt'),
 });
+
+/** The store's per-account salt, created on first use: path targets are hashed with it so they join inside one account only. */
+const saltOf = async (storeDir: string): Promise<string> => {
+  const file = paths(storeDir).salt;
+  try {
+    return (await readFile(file, 'utf8')).trim();
+  } catch (error) {
+    if (!isMissing(error)) throw error;
+  }
+  const salt = randomBytes(16).toString('hex');
+  await writeFile(file, salt, { mode: 0o600 });
+  return salt;
+};
 
 const sameSet = (a: readonly string[], b: readonly string[]): boolean => a.length === b.length && a.every((entry, index) => entry === b[index]);
 
@@ -150,6 +174,7 @@ interface DepositContext {
   /** The sorted redact-domain set in force. */
   domains: string[];
   redact: ReturnType<typeof makeRedactor>;
+  salt: string;
   at: string;
   now: () => number;
 }
@@ -159,28 +184,29 @@ const contextFor = async (runtime: SessionsRuntime, state: State, now: () => num
   // added while other folders were allowed still masks those folders later. Lines already written stay in the append-only
   // observations file until it is compacted; readers use only the highest rev of each session.
   await mkdir(paths(runtime.storeDir).skeletons, { recursive: true });
-  return { runtime, state, domains: [...state.redactDomains].sort(), redact: makeRedactor(state.redactDomains), at: new Date(now()).toISOString(), now };
+  const salt = await saltOf(runtime.storeDir);
+  return { runtime, state, domains: [...state.redactDomains].sort(), redact: makeRedactor(state.redactDomains), salt, at: new Date(now()).toISOString(), now };
 };
 
-/** Deposits one session file unless its size, mtime, extractor version, and domain set are unchanged; returns what it wrote, or undefined when skipped. */
-const depositFile = async (context: DepositContext, project: string, file: string): Promise<ReturnType<typeof extractSession> | undefined> => {
+/** Deposits one session file unless its size, mtime, capture version, and domain set are unchanged; returns what it wrote, or undefined when skipped. */
+const depositFile = async (context: DepositContext, project: string, file: string): Promise<Capture | undefined> => {
   const { runtime, state } = context;
   const info = await stat(file);
   const name = basename(file);
   const key = `${project}/${name}`;
   const previous = state.files[key];
-  if (previous !== undefined && previous.size === info.size && previous.mtimeMs === info.mtimeMs && previous.v === EXTRACTOR_VERSION && sameSet(previous.d, context.domains)) {
+  if (previous !== undefined && previous.size === info.size && previous.mtimeMs === info.mtimeMs && previous.v === CAPTURE_VERSION && sameSet(previous.d, context.domains)) {
     return undefined;
   }
   const files = paths(runtime.storeDir);
   const session = name.slice(0, -'.jsonl'.length);
   const rev = Math.max((previous?.rev ?? 0) + 1, context.now());
-  const extract = extractSession({ text: await readFile(file, 'utf8'), session, project, rev, at: context.at, bytes: info.size, redact: context.redact });
-  const batch: Observation[] = [extract.session, ...extract.prompts, ...extract.errors];
+  const extract = captureSession({ text: await readFile(file, 'utf8'), session, project, rev, at: context.at, bytes: info.size, redact: context.redact, salt: context.salt });
+  const batch: Observation[] = [extract.session, ...extract.prompts, ...extract.tools, ...extract.errorLines];
   await mkdir(runtime.storeDir, { recursive: true });
   await appendFile(files.observations, batch.map((observation) => `${JSON.stringify(observation)}\n`).join(''), { mode: 0o600 });
   await writeAtomic(join(files.skeletons, `${session}.json`), JSON.stringify(extract.skeleton));
-  state.files[key] = { size: info.size, mtimeMs: info.mtimeMs, rev, v: EXTRACTOR_VERSION, d: context.domains };
+  state.files[key] = { size: info.size, mtimeMs: info.mtimeMs, rev, v: CAPTURE_VERSION, d: context.domains };
   return extract;
 };
 
@@ -295,7 +321,7 @@ const depositLocked = async (runtime: SessionsRuntime, options: DepositOptions):
       result.sessions += 1;
       result.lines += extract.session.lines;
       result.badLines += extract.session.badLines;
-      result.observations += 1 + extract.prompts.length + extract.errors.length;
+      result.observations += 1 + extract.prompts.length + extract.tools.length + extract.errorLines.length;
     }
   }
   await writeAtomic(paths(runtime.storeDir).state, JSON.stringify(state));
@@ -331,12 +357,27 @@ const depositSessionLocked = async (runtime: SessionsRuntime, transcript: string
 };
 
 export interface Store {
+  /** Main transcripts only, so session counts and per-session denominators are unchanged by subagent deposits. */
   sessions: SessionObservation[];
   prompts: PromptObservation[];
   errors: ErrorObservation[];
+  /** Subagent transcripts (A24), kept apart from `sessions` so G1 denominators stay main sessions. */
+  subagents: SessionObservation[];
+  /** The tool calls of every version-3 transcript, main and subagent. */
+  tools: ToolObservation[];
 }
 
-/** The store as a reader sees it: for each session only the highest `rev`. */
+interface Captured {
+  session?: SessionObservation;
+  prompts: UserPromptObservation[];
+  tools: ToolObservation[];
+  errorLines: ErrorLineObservation[];
+}
+
+/**
+ * The store as a reader sees it: for each session only the highest `rev`. A version-3 session is derived here from its capture records
+ * (EXTRACTOR_VERSION rules); a session whose last deposit was version 2 keeps the prompt and error lines that deposit wrote.
+ */
 export const loadStore = async (storeDir: string): Promise<Store> => {
   let text = '';
   try {
@@ -359,26 +400,67 @@ export const loadStore = async (storeDir: string): Promise<Store> => {
     all.push(observation);
     latest.set(observation.session, Math.max(latest.get(observation.session) ?? 0, observation.rev));
   }
-  const current = all.filter((observation) => observation.rev === latest.get(observation.session));
-  return {
-    sessions: current.filter((observation): observation is SessionObservation => observation.kind === 'session'),
-    prompts: current.filter((observation): observation is PromptObservation => observation.kind === 'prompt'),
-    errors: current.filter((observation): observation is ErrorObservation => observation.kind === 'error'),
+  const store: Store = { sessions: [], prompts: [], errors: [], subagents: [], tools: [] };
+  const captured = new Map<string, Captured>();
+  const of = (session: string): Captured => {
+    const found = captured.get(session) ?? { prompts: [], tools: [], errorLines: [] };
+    captured.set(session, found);
+    return found;
   };
+  for (const observation of all) {
+    if (observation.rev !== latest.get(observation.session)) continue;
+    if (observation.kind === 'session') of(observation.session).session = observation;
+    else if (observation.kind === 'user-prompt') of(observation.session).prompts.push(observation);
+    else if (observation.kind === 'tool') of(observation.session).tools.push(observation);
+    else if (observation.kind === 'error-line') of(observation.session).errorLines.push(observation);
+    else if (observation.kind === 'prompt') store.prompts.push(observation);
+    else store.errors.push(observation);
+  }
+  const redact = makeRedactor((await readState(storeDir)).redactDomains);
+  for (const { session, prompts, tools, errorLines } of captured.values()) {
+    if (session === undefined) continue;
+    store.tools.push(...tools);
+    if (session.parent !== null) {
+      store.subagents.push(session);
+      continue;
+    }
+    store.sessions.push(session);
+    if (session.cv !== CAPTURE_VERSION) continue;
+    const derived = deriveSession({ session, prompts, tools, errorLines }, redact);
+    store.prompts.push(...derived.prompts);
+    store.errors.push(...derived.errors);
+  }
+  return store;
 };
 
 // The store is ours, so a line with a known `kind`, a session, and a rev is trusted as the type it says.
 const asObservation = (value: unknown): Observation | undefined => {
   if (!isRecord(value) || typeof value.session !== 'string' || typeof value.rev !== 'number') return undefined;
-  if (value.kind === 'session') return isSession(value) ? value : undefined;
+  if (value.kind === 'session') return isSession(value) ? asSession(value) : undefined;
   if (value.kind === 'prompt') return isPrompt(value) ? value : undefined;
   if (value.kind === 'error') return isError(value) ? value : undefined;
+  if (value.kind === 'user-prompt') return isUserPrompt(value) ? value : undefined;
+  if (value.kind === 'tool') return isTool(value) ? value : undefined;
+  if (value.kind === 'error-line') return isErrorLine(value) ? value : undefined;
   return undefined;
 };
 
-const isSession = (value: { [key: string]: unknown }): value is { [key: string]: unknown } & SessionObservation => Array.isArray(value.files) && isRecord(value.usage);
-const isPrompt = (value: { [key: string]: unknown }): value is { [key: string]: unknown } & PromptObservation => Array.isArray(value.tools) && isRecord(value.usage);
-const isError = (value: { [key: string]: unknown }): value is { [key: string]: unknown } & ErrorObservation => typeof value.sig === 'string' && Array.isArray(value.next);
+/** A version-2 session line has `v` and no `cv`, `parent`, or agent fields: it reads as a main transcript of that version. */
+const asSession = (value: { [key: string]: unknown } & SessionObservation): SessionObservation => ({
+  ...value,
+  cv: typeof value.cv === 'string' ? value.cv : String(value.v),
+  parent: typeof value.parent === 'string' ? value.parent : null,
+  agentType: typeof value.agentType === 'string' ? value.agentType : null,
+  spawnedBy: typeof value.spawnedBy === 'string' ? value.spawnedBy : null,
+});
+
+type Line = { [key: string]: unknown };
+const isSession = (value: Line): value is Line & SessionObservation => Array.isArray(value.files) && isRecord(value.usage);
+const isPrompt = (value: Line): value is Line & PromptObservation => Array.isArray(value.tools) && isRecord(value.usage);
+const isError = (value: Line): value is Line & ErrorObservation => typeof value.sig === 'string' && Array.isArray(value.next);
+const isUserPrompt = (value: Line): value is Line & UserPromptObservation => typeof value.index === 'number' && isRecord(value.usage);
+const isTool = (value: Line): value is Line & ToolObservation => typeof value.tool === 'string' && typeof value.n === 'number';
+const isErrorLine = (value: Line): value is Line & ErrorLineObservation => typeof value.line === 'string' && typeof value.after === 'number';
 
 export const readCalls = async (storeDir: string): Promise<RecallCall[]> => {
   let text = '';

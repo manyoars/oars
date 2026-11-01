@@ -87,7 +87,7 @@ describe('measure', () => {
     expect(result.last.recallPerSession).toBe(0.25);
     expect(result.before).toEqual({ sessions: 0, recurringPer100: null, recurringSignatures: null, cacheWritePerSession: null, recallPerSession: null, hookRecallPerSession: null, hookHitsPerSession: null, hookDepositsPerSession: null });
     expect(formatMeasure(result)).toContain('-');
-    expect(measure({ sessions: [], prompts: [], errors: [] }, [], [], 5).last.sessions).toBe(0);
+    expect(measure({ sessions: [], prompts: [], errors: [], subagents: [], tools: [] }, [], [], 5).last.sessions).toBe(0);
   });
 
   it('counts hook lookups and hits per session from the hook counters, by the session they ran in', async () => {
@@ -95,12 +95,12 @@ describe('measure', () => {
     const names = store.sessions.map((session) => session.session).sort();
     const at = '2026-06-10T00:00:00Z';
     const hookCalls: HookCall[] = [
-      { at, event: 'session-start', session: names[2] ?? null, hit: true, ms: 40 },
-      { at, event: 'post-tool', session: names[2] ?? null, hit: false, ms: 20 },
-      { at, event: 'post-tool', session: names[3] ?? null, hit: true, ms: 20 },
-      { at, event: 'stop', session: names[3] ?? null, hit: true, ms: 200 },
-      { at, event: 'nightly', session: null, hit: true, ms: 900 },
-      { at, event: 'post-tool', session: 'not-in-the-window', hit: true, ms: 20 },
+      { at, event: 'session-start', session: names[2] ?? null, hit: true, ms: 40, error: null },
+      { at, event: 'post-tool', session: names[2] ?? null, hit: false, ms: 20, error: null },
+      { at, event: 'post-tool', session: names[3] ?? null, hit: true, ms: 20, error: null },
+      { at, event: 'stop', session: names[3] ?? null, hit: true, ms: 200, error: null },
+      { at, event: 'nightly', session: null, hit: true, ms: 900, error: null },
+      { at, event: 'post-tool', session: 'not-in-the-window', hit: true, ms: 20, error: null },
     ];
     const result = measure(store, [], hookCalls, 2);
     expect(result.last.hookRecallPerSession).toBe(1.5);

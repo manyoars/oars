@@ -1,9 +1,10 @@
 import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { classify, errorKey, extractSession, firstInformative, normalize, signatureOf, type Extract } from './extract.js';
+import { classify, errorKey, firstInformative, normalize, signatureOf } from './extract.js';
+import { extractSession, type Extract } from './derive.js';
 import { entropy, makeRedactor } from './redact.js';
-import { EXTRACTOR_VERSION } from './schema.js';
+import { CAPTURE_VERSION, EXTRACTOR_VERSION } from './schema.js';
 import { FIXTURES } from './test-support.js';
 
 const redact = makeRedactor();
@@ -99,7 +100,7 @@ describe('parity with the reference scripts (golden.json from parse_sessions, er
 describe('extractSession', () => {
   it('records the errors fixture: signatures, the following tools, and the edit-follow flag', () => {
     const { errors, prompts, session } = extractFixture('errors-a');
-    expect(session.v).toBe(EXTRACTOR_VERSION);
+    expect(session.cv).toBe(CAPTURE_VERSION);
     expect(errors.map((error) => error.sig)).toEqual(['Bash | bash: -c: line <n>: unexpected EOF while looking for matching quote', 'Write | File has not been read yet. Read it first before writing to it.']);
     expect(errors[0]).toMatchObject({ tool: 'Bash', next: ['Write', 'Read'], editFollowed: true, harnessVersion: '2.1.300', prompt: 0, cls: 'edit-verify', v: EXTRACTOR_VERSION });
     expect(errors[1]?.next).toEqual(['Read', 'Edit']);

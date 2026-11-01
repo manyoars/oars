@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { extractSession } from './extract.js';
+import { extractSession } from './derive.js';
 import { makeRedactor } from './redact.js';
 import { formatVerify, INVARIANTS, verifyAll, verifySkeleton } from './verify.js';
 import { FIXTURES } from './test-support.js';
