@@ -40,6 +40,8 @@ interface FileState {
 
 interface State {
   files: { [key: string]: FileState };
+  /** Every `--redact-domain` any deposit used, so recall masks a query the same way the log was masked. */
+  redactDomains: string[];
 }
 
 const isMissing = (error: unknown): boolean => error instanceof Error && 'code' in error && error.code === 'ENOENT';
@@ -64,13 +66,16 @@ const readState = async (storeDir: string): Promise<State> => {
           files[key] = { size: value.size, mtimeMs: value.mtimeMs, rev: value.rev };
         }
       }
-      return { files };
+      const domains = Array.isArray(parsed.redactDomains) ? parsed.redactDomains.filter((entry): entry is string => typeof entry === 'string') : [];
+      return { files, redactDomains: domains };
     }
   } catch (error) {
     if (!isMissing(error) && !(error instanceof SyntaxError)) throw error;
   }
-  return { files: {} };
+  return { files: {}, redactDomains: [] };
 };
+
+export const readRedactDomains = async (storeDir: string): Promise<string[]> => (await readState(storeDir)).redactDomains;
 
 const writeAtomic = async (file: string, text: string): Promise<void> => {
   await mkdir(join(file, '..'), { recursive: true });
@@ -123,8 +128,9 @@ export const deposit = async (runtime: SessionsRuntime, options: DepositOptions)
   const allowed = folders.filter((name) => names.has(name));
   const matched = new Set(allowed);
   const missing = options.allow.filter((entry) => !matched.has(entry) && !matched.has(slugOf(entry)));
-  const redact = makeRedactor(options.redactDomains);
   const state = await readState(runtime.storeDir);
+  state.redactDomains = [...new Set([...state.redactDomains, ...options.redactDomains])];
+  const redact = makeRedactor(state.redactDomains);
   const files = paths(runtime.storeDir);
   await mkdir(files.skeletons, { recursive: true });
   const at = new Date(options.now()).toISOString();
@@ -243,22 +249,30 @@ export const readCalls = async (storeDir: string): Promise<RecallCall[]> => {
 
 const isSkeleton = (value: unknown): value is { [key: string]: unknown } & Skeleton => isRecord(value) && Array.isArray(value.lines) && typeof value.merkleRoot === 'string';
 
-export const readSkeletons = async (storeDir: string, only?: string): Promise<Skeleton[]> => {
+/** `unreadable` counts skeleton files that are torn, corrupted, or not a skeleton, so verify reports them instead of aborting. */
+export const readSkeletons = async (storeDir: string, only?: string): Promise<{ skeletons: Skeleton[]; unreadable: number }> => {
   const folder = paths(storeDir).skeletons;
   let names: string[];
   try {
     names = (await readdir(folder)).filter((name) => name.endsWith('.json')).sort();
   } catch (error) {
-    if (isMissing(error)) return [];
+    if (isMissing(error)) return { skeletons: [], unreadable: 0 };
     throw error;
   }
   const skeletons: Skeleton[] = [];
+  let unreadable = 0;
   for (const name of names) {
     if (only !== undefined && name !== `${only}.json`) continue;
-    const parsed: unknown = JSON.parse(await readFile(join(folder, name), 'utf8'));
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(await readFile(join(folder, name), 'utf8'));
+    } catch (error) {
+      if (!(error instanceof SyntaxError)) throw error;
+    }
     if (isSkeleton(parsed)) skeletons.push(parsed);
+    else unreadable += 1;
   }
-  return skeletons;
+  return { skeletons, unreadable };
 };
 
 /** The derived records, a pure function of the store. */

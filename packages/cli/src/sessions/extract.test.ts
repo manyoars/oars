@@ -172,6 +172,54 @@ describe('extractSession', () => {
   });
 });
 
+describe('request-id dedupe (register A22)', () => {
+  const usage = { input_tokens: 1, cache_creation_input_tokens: 10, cache_read_input_tokens: 100, output_tokens: 5, output_tokens_details: { thinking_tokens: 2 } };
+  const run = (assistants: object[]): Extract => {
+    const prompt = JSON.stringify({ type: 'user', timestamp: '2026-06-10T00:00:00Z', message: { role: 'user', content: 'go' } });
+    const lines = assistants.map((extra) => JSON.stringify({ type: 'assistant', timestamp: '2026-06-10T00:00:01Z', ...extra }));
+    return extractSession({ text: [prompt, ...lines].join('\n'), session: 's', project: 'p', rev: 1, at: 'x', bytes: 0, redact });
+  };
+  const line = (requestId: string | undefined, id: string | undefined): object => ({ requestId, message: { id, role: 'assistant', usage, content: [{ type: 'text', text: 'x' }] } });
+
+  it('counts one API response once when its lines share a request id', () => {
+    const { prompts, session } = run([line('r1', 'm1'), line('r1', 'm1'), line('r2', 'm2')]);
+    expect(prompts[0]?.usage).toEqual({ input: 2, cacheWrite: 20, cacheRead: 200, output: 10, thinking: 4 });
+    expect(session.usage.cacheWrite).toBe(20);
+    expect(prompts[0]?.turns).toBe(3);
+  });
+
+  it('falls back to the message id, and counts lines with neither id every time', () => {
+    expect(run([line(undefined, 'm1'), line(undefined, 'm1')]).prompts[0]?.usage.output).toBe(5);
+    expect(run([line(undefined, undefined), line(undefined, undefined)]).prompts[0]?.usage.output).toBe(10);
+  });
+});
+
+describe('redact before truncating (review L7)', () => {
+  const key = 'AKIAIOSFODNN7EXAMPLE';
+  const pad = 'a '.repeat(145); // 290 characters, so the key straddles character 300
+  it('masks a key that straddles the prompt head limit', () => {
+    const text = JSON.stringify({ type: 'user', timestamp: '2026-06-10T00:00:00Z', message: { role: 'user', content: `${pad}${key} tail` } });
+    const head = extractSession({ text, session: 's', project: 'p', rev: 1, at: 'x', bytes: 0, redact }).prompts[0]?.head ?? '';
+    expect(head).not.toContain('AKIA');
+    expect(head).toContain('<secret>');
+    expect(head.length).toBeLessThanOrEqual(300);
+  });
+
+  it('masks a key that straddles the error example, TLDR, and Confidence limits', () => {
+    const lines = [
+      JSON.stringify({ type: 'user', timestamp: '2026-06-10T00:00:00Z', message: { role: 'user', content: 'go' } }),
+      JSON.stringify({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'tool_use', id: 'a', name: 'Bash', input: {} }, { type: 'text', text: `TLDR: ${'t'.repeat(385)} ${key}
+Confidence: ${'c'.repeat(110)} ${key}` }] } }),
+      JSON.stringify({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'a', is_error: true, content: `${'e'.repeat(145)} ${key}` }] } }),
+    ];
+    const extract = extractSession({ text: lines.join('\n'), session: 's', project: 'p', rev: 1, at: 'x', bytes: 0, redact });
+    expect(extract.session.tldrs.join('')).not.toContain('AKIA');
+    expect(extract.session.confidences.join('')).not.toContain('AKIA');
+    expect(extract.errors[0]?.example).not.toContain('AKIA');
+    expect(extract.errors[0]?.example).toContain('<secret>');
+  });
+});
+
 describe('normalization (error_signatures.py rules)', () => {
   it('replaces paths, hex, numbers, and quotes, and cuts at 110', () => {
     expect(normalize('  /usr/bin/x failed at 0xdeadbeef: line 42 "name" \'q\'  ')).toBe('<path> failed at <n>xdeadbeef: line <n> <q> <q>');

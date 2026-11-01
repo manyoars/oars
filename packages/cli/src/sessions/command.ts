@@ -3,7 +3,7 @@ import type { Outcome } from '../cli.js';
 import { CliError, ExitCode } from '../errors.js';
 import { books, formatBooks, formatMeasure, formatRecall, measure, recall, type BooksBy, type RecallQuery } from './query.js';
 import { serve } from './mcp.js';
-import { deposit, loadStore, readCalls, readSkeletons, type SessionsRuntime } from './store.js';
+import { deposit, loadStore, readCalls, readRedactDomains, readSkeletons, type SessionsRuntime } from './store.js';
 import { formatVerify, verifyAll } from './verify.js';
 
 export interface SessionsDeps {
@@ -30,7 +30,8 @@ export const sessionsRecall = async (deps: SessionsDeps, query: RecallQuery): Pr
   if (query.error === undefined && query.path === undefined && query.cls === undefined) {
     throw new CliError('Pass --error "<text>", --path <file>, or --class <name>.', ExitCode.USAGE, 'usage');
   }
-  const result = recall(await loadStore(runtimeOf(deps).storeDir), query, deps.now());
+  const { storeDir } = runtimeOf(deps);
+  const result = recall(await loadStore(storeDir), query, deps.now(), undefined, await readRedactDomains(storeDir));
   return { document: { ok: true, ...result }, text: formatRecall(result) };
 };
 
@@ -51,8 +52,12 @@ export const sessionsMeasure = async (deps: SessionsDeps, options: { last: numbe
 
 /** With `strict`, any violated invariant also fails the command (exit 4) after the full report is printed; the report is built first so callers can emit it. */
 export const sessionsVerify = async (deps: SessionsDeps, options: { session: string | undefined }): Promise<Outcome & { failed: string[] }> => {
-  const skeletons = await readSkeletons(runtimeOf(deps).storeDir, options.session);
+  const { skeletons, unreadable } = await readSkeletons(runtimeOf(deps).storeDir, options.session);
   const results = verifyAll(skeletons);
+  const failed = [...results.filter((result) => result.violations > 0).map((result) => result.name), ...(unreadable > 0 ? ['unreadable skeletons'] : [])];
   return {
-    failed: results.filter((result) => result.violations > 0).map((result) => result.name), document: { ok: true, sessions: skeletons.length, invariants: results.map((result) => ({ ...result, pass: result.violations === 0 })) }, text: formatVerify(results, skeletons.length) };
+    failed,
+    document: { ok: true, sessions: skeletons.length, unreadable, invariants: results.map((result) => ({ ...result, pass: result.violations === 0 })) },
+    text: [formatVerify(results, skeletons.length), ...(unreadable > 0 ? [`FAIL  ${String(unreadable)} unreadable skeleton files (torn or corrupted); redeposit to rebuild them`] : [])].join('\n'),
+  };
 };

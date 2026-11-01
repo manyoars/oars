@@ -1,7 +1,7 @@
 """Writes golden.json: what the reference scripts (docs/research/2026-11-01-session-commons/, tradeaor a537d9d) count on proj/.
 
 Run: python3 -I make-golden.py <path to the session-commons reference scripts>
-parity.test.ts asserts the TypeScript extractor's counts equal these.
+extract.test.ts asserts the TypeScript extractor's counts equal these.
 """
 import json
 import os
@@ -57,10 +57,42 @@ for p in prompts:
 graph = {"prompts": len(prompts), "tools": sum(len(p["seq"]) for p in prompts), "errors": sum(p["errors"] for p in prompts), "thinking": sum(p["thinking"] for p in prompts),
          "side_tools": sum(p["side_tools"] for p in prompts), "classes": classes, "bigrams": bigrams, "recovery": recovery}
 
-# cost_per_class.py
-out = run("cost_per_class.py", HERE, "proj")
-m = re.search(r"prompts (\d+) \| total tokens: input ([\d,]+) \| cache write ([\d,]+) \| cache read ([\d,]+) \| output ([\d,]+) \| thinking ([\d,]+)", out)
-cost = {"prompts": int(m.group(1)), "input": ints(m.group(2)), "cache_write": ints(m.group(3)), "cache_read": ints(m.group(4)), "output": ints(m.group(5)), "thinking": ints(m.group(6))}
+# cost_per_class.py's prompt rule, with register A22's dedupe: an API response spans several assistant lines that repeat its usage,
+# so each response (requestId, else message.id) counts once. The reference script itself sums per line, so it is not used for tokens.
+FIELDS = (("input", "input_tokens"), ("cache_write", "cache_creation_input_tokens"), ("cache_read", "cache_read_input_tokens"), ("output", "output_tokens"))
+cost = {"prompts": 0, "input": 0, "cache_write": 0, "cache_read": 0, "output": 0, "thinking": 0}
+for name in sorted(os.listdir(os.path.join(HERE, "proj"))):
+    in_prompt, seen = False, set()
+    for raw in open(os.path.join(HERE, "proj", name), encoding="utf-8", errors="replace"):
+        try:
+            o = json.loads(raw)
+        except Exception:
+            continue
+        m = o.get("message")
+        if not isinstance(m, dict) or o.get("isSidechain"):
+            continue
+        c = m.get("content")
+        if o.get("type") == "user" and m.get("role") == "user" and not o.get("isMeta"):
+            txt = c if isinstance(c, str) else next((b.get("text", "") for b in c if isinstance(b, dict) and b.get("type") == "text"), "") if isinstance(c, list) else ""
+            has_result = isinstance(c, list) and any(isinstance(b, dict) and b.get("type") == "tool_result" for b in c)
+            if txt and not has_result and not txt.startswith("<"):
+                in_prompt = True
+                cost["prompts"] += 1
+                continue
+        if not in_prompt or o.get("type") != "assistant":
+            continue
+        key = o.get("requestId") or m.get("id")
+        if key and key in seen:
+            continue
+        if key:
+            seen.add(key)
+        u = m.get("usage") or {}
+        for ours, theirs in FIELDS:
+            if isinstance(u.get(theirs), (int, float)):
+                cost[ours] += u[theirs]
+        v = (u.get("output_tokens_details") or {}).get("thinking_tokens")
+        if isinstance(v, (int, float)):
+            cost["thinking"] += v
 
 json.dump({"sessions": sessions, "errors": errors, "graph": graph, "cost": cost}, open(os.path.join(HERE, "golden.json"), "w"), indent=1, sort_keys=True)
 print(json.dumps({"errors": errors, "graph": graph, "cost": cost}, indent=1)[:1800])

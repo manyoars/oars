@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { run } from '../cli.js';
 import { ExitCode } from '../errors.js';
 import { harness, removeTestDirs } from '../test-support.js';
-import { readFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { addProject, cleanup, FIXTURES, stage } from './test-support.js';
 
@@ -68,6 +68,38 @@ describe('oars sessions', () => {
     expect(await run(['sessions', 'verify', '--strict'], deps)).toBe(ExitCode.INVALID);
     expect(out.join('')).toContain('FAIL');
     expect(err.join('')).toContain('invariants have exceptions');
+    out.length = 0;
+    expect(await run(['--json', 'sessions', 'verify', '--strict'], deps)).toBe(ExitCode.INVALID);
+    const document: unknown = JSON.parse(out.join(''));
+    expect(field(document, 'ok')).toBe(false);
+    expect(field(document, 'step')).toBe('verify');
+    expect(Array.isArray(field(document, 'invariants'))).toBe(true);
+  });
+
+  it('verify reports a torn skeleton file and strict fails on it', async () => {
+    const { deps, out, staged } = setup();
+    await run(['sessions', 'deposit', '--allow', 'proj'], deps);
+    writeFileSync(join(staged.storeDir, 'skeletons', 'torn.json'), '{"lines": [');
+    out.length = 0;
+    expect(await run(['--json', 'sessions', 'verify'], deps)).toBe(ExitCode.OK);
+    expect(field(json(out), 'unreadable')).toBe(1);
+    out.length = 0;
+    expect(await run(['sessions', 'verify', '--strict'], deps)).toBe(ExitCode.INVALID);
+    expect(out.join('')).toContain('1 unreadable skeleton files');
+  });
+
+  it('recall masks a query with the domains the deposit masked', async () => {
+    const { deps, out, staged } = setup();
+    const lines = [
+      JSON.stringify({ type: 'user', timestamp: '2026-06-10T00:00:00Z', message: { role: 'user', content: 'go' } }),
+      JSON.stringify({ type: 'assistant', uuid: 'a', message: { role: 'assistant', content: [{ type: 'tool_use', id: 'x', name: 'Bash', input: {} }] } }),
+      JSON.stringify({ type: 'user', uuid: 'b', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'x', is_error: true, content: 'Exit code 1\ncannot reach build.corp.example' }] } }),
+    ];
+    addProject(staged, 'dom', 'dom', lines);
+    await run(['sessions', 'deposit', '--allow', 'dom', '--redact-domain', 'corp.example'], deps);
+    out.length = 0;
+    expect(await run(['--json', 'sessions', 'recall', '--error', 'Bash | cannot reach build.corp.example'], deps)).toBe(ExitCode.OK);
+    expect(field(json(out), 'matches')).toHaveLength(1);
   });
 
   it('recall needs a query, and --by takes only class or model', async () => {

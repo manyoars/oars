@@ -1,8 +1,8 @@
-import { appendFileSync, readFileSync, readdirSync, statSync, utimesSync } from 'node:fs';
+import { appendFileSync, readFileSync, readdirSync, statSync, utimesSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { CliError, ExitCode } from '../errors.js';
-import { deposit, derive, loadStore, paths, readCalls, readSkeletons, slugOf } from './store.js';
+import { deposit, derive, loadStore, paths, readCalls, readRedactDomains, readSkeletons, slugOf } from './store.js';
 import { addProject, cleanup, NOW, stage } from './test-support.js';
 
 afterEach(cleanup);
@@ -93,14 +93,31 @@ describe('deposit', () => {
     expect(derived.bigrams['Read>Bash']).toBe(2);
     expect(derived.summaries.find((summary) => summary.session === 'tldr')).toMatchObject({ prompts: 2, errors: 0, tldrs: 1 });
     expect([...store.sessions, ...store.prompts, ...store.errors].every((observation) => observation.v === '1')).toBe(true);
-    expect((await readSkeletons(staged.storeDir, 'tldr')).map((skeleton) => skeleton.session)).toEqual(['tldr']);
+    expect((await readSkeletons(staged.storeDir, 'tldr')).skeletons.map((skeleton) => skeleton.session)).toEqual(['tldr']);
+  });
+
+  it('counts a torn skeleton file as unreadable instead of aborting', async () => {
+    const staged = stage();
+    await deposit(staged.runtime, options(['proj']));
+    writeFileSync(join(paths(staged.storeDir).skeletons, 'torn.json'), '{"lines": [');
+    const { skeletons, unreadable } = await readSkeletons(staged.storeDir);
+    expect(skeletons).toHaveLength(4);
+    expect(unreadable).toBe(1);
+  });
+
+  it('keeps every --redact-domain in state.json across deposits', async () => {
+    const staged = stage();
+    await deposit(staged.runtime, { ...options(['proj']), redactDomains: ['a.example'] });
+    await deposit(staged.runtime, { ...options(['proj']), redactDomains: ['b.example'] });
+    expect(await readRedactDomains(staged.storeDir)).toEqual(['a.example', 'b.example']);
+    expect(await readRedactDomains(join(staged.root, 'none'))).toEqual([]);
   });
 
   it('reads an empty or missing store as empty', async () => {
     const staged = stage();
     expect(await loadStore(staged.storeDir)).toEqual({ sessions: [], prompts: [], errors: [] });
     expect(await readCalls(staged.storeDir)).toEqual([]);
-    expect(await readSkeletons(staged.storeDir)).toEqual([]);
+    expect(await readSkeletons(staged.storeDir)).toEqual({ skeletons: [], unreadable: 0 });
     const missingRoot = { ...staged.runtime, projectsRoot: join(staged.root, 'absent') };
     expect(await deposit(missingRoot, options(['proj']))).toMatchObject({ sessions: 0, skippedFolders: 0, missing: ['proj'] });
   });

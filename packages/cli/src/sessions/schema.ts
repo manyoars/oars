@@ -5,9 +5,11 @@
 // `<config>/oars/sessions/observations.jsonl`. The log is append-only: a session whose file changed is deposited again under a higher
 // `rev`, and a reader keeps only the highest `rev` of each session. `derived.json` and `skeletons/<session>.json` sit beside it.
 //
-// Raw content never lands in the store beyond two truncations: the first informative line of a tool error (160 characters) and the
-// first 300 characters of a prompt. Every string written passes `redact` first (secrets by pattern and entropy, emails, and the
-// organization domains the operator names).
+// The log is the local derived-records tier: redacted text, never raw content, and nothing uploads. The text it keeps, each redacted
+// first and then cut: the first 300 characters of a prompt, the first informative line of a tool error (160), TLDR lines (400),
+// Confidence lines (120), WebSearch queries, fetched URLs, file paths, and git branch names. `redact` masks secrets by pattern and
+// entropy, emails, and the organization domains the operator names. The skeleton holds hashes only. Subagent transcripts
+// (`<project>/<session>/subagents/`) are not deposited yet.
 
 /** Stamped on every observation, derived record, and skeleton, so a later extractor can tell what produced it. */
 export const EXTRACTOR_VERSION = '1';

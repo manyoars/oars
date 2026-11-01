@@ -86,7 +86,7 @@ const needsYouLine = (code: string | undefined, actionUrl: string | undefined): 
 const printFailure = (deps: RunDeps, json: boolean, error: CliError): void => {
   const { partial } = error;
   if (json) {
-    deps.io.stdout(`${JSON.stringify({ ok: false, step: error.step, problem: error.problem, ...partial })}\n`);
+    deps.io.stdout(`${JSON.stringify({ ok: false, step: error.step, problem: error.problem, ...partial, ...error.details })}\n`);
     return;
   }
   const { title, detail, actionUrl } = error.problem;
@@ -211,7 +211,7 @@ const buildProgram = (deps: RunDeps, argv: string[]): Command => {
 
   sessions
     .command('deposit')
-    .description('read session logs from the folders you name into the local observation log; idempotent')
+    .description('read session logs from the folders you name into the local observation log; idempotent. Subagent transcripts (<project>/<session>/subagents/) are not deposited yet')
     .option('--allow <folder>', 'a project folder to read: its path, or its name under ~/.claude/projects (repeatable; at least one is required)', collect)
     .option('--redact-domain <domain>', 'an organization domain to mask in everything written (repeatable)', collect)
     .action(async (_options: OptionValues, command: Command) => {
@@ -273,8 +273,14 @@ const buildProgram = (deps: RunDeps, argv: string[]): Command => {
     .action(async (_options: OptionValues, command: Command) => {
       const options: OptionValues = command.optsWithGlobals();
       const { failed, ...outcome } = await sessionsVerify(sessionDeps(deps), { session: text(options, 'session') });
-      emit(deps, flag(options, 'json'), outcome);
-      if (flag(options, 'strict') && failed.length > 0) throw new CliError(`${String(failed.length)} invariants have exceptions: ${failed.join('; ')}`, ExitCode.INVALID, 'verify');
+      const json = flag(options, 'json');
+      if (flag(options, 'strict') && failed.length > 0) {
+        // One document under --json: the failure carries the invariants, so the success document is not printed first.
+        if (!json) emit(deps, json, outcome);
+        const invariants: unknown = Reflect.get(outcome.document, 'invariants');
+        throw new CliError(`${String(failed.length)} invariants have exceptions: ${failed.join('; ')}`, ExitCode.INVALID, 'verify', undefined, undefined, json ? { invariants } : undefined);
+      }
+      emit(deps, json, outcome);
     });
 
   return program;

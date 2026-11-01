@@ -36,8 +36,8 @@ const splitTool = (query: string): { tool: string | undefined; text: string } =>
 
 const touched = (session: SessionObservation, path: string): boolean => session.files.some((file) => file === path || file.endsWith(`/${path}`) || file.endsWith(`\\${path}`));
 
-export const recall = (store: Store, query: RecallQuery, now: number, limit = 10): RecallResult => {
-  const redact = makeRedactor();
+export const recall = (store: Store, query: RecallQuery, now: number, limit = 10, redactDomains: readonly string[] = []): RecallResult => {
+  const redact = makeRedactor(redactDomains);
   const cutoff = sinceCutoff(now, query.sinceDays);
   let tool: string | undefined;
   let normalized: string | null = null;
@@ -141,6 +141,8 @@ export interface Signal {
   sessions: number;
   /** Errors whose signature had already occurred in an earlier session, per hundred sessions. */
   recurringPer100: number | null;
+  /** Distinct signatures among those recurring errors in the window. */
+  recurringSignatures: number | null;
   /** Mean cache-write tokens of a session in the window. */
   cacheWritePerSession: number | null;
   /** MCP recall calls made during the window, per session. */
@@ -164,9 +166,10 @@ export const measure = (store: Store, calls: readonly RecallCall[], window: numb
     if (position !== undefined) firstSeen.set(error.sig, Math.min(firstSeen.get(error.sig) ?? position, position));
   }
   const signal = (slice: readonly SessionObservation[]): Signal => {
-    if (slice.length === 0) return { sessions: 0, recurringPer100: null, cacheWritePerSession: null, recallPerSession: null };
+    if (slice.length === 0) return { sessions: 0, recurringPer100: null, recurringSignatures: null, cacheWritePerSession: null, recallPerSession: null };
     const names = new Set(slice.map((session) => session.session));
-    const recurring = store.errors.filter((error) => names.has(error.session) && (index.get(error.session) ?? 0) > (firstSeen.get(error.sig) ?? 0)).length;
+    const recurringErrors = store.errors.filter((error) => names.has(error.session) && (index.get(error.session) ?? 0) > (firstSeen.get(error.sig) ?? 0));
+    const recurring = recurringErrors.length;
     const from = slice.map((session) => session.tsFirst).filter((ts): ts is string => ts !== null).sort()[0];
     const to = slice.map((session) => session.tsLast).filter((ts): ts is string => ts !== null).sort().reverse()[0];
     const inWindow = from === undefined || to === undefined ? 0 : calls.filter((call) => call.at >= from && call.at <= to).length;
@@ -174,6 +177,7 @@ export const measure = (store: Store, calls: readonly RecallCall[], window: numb
     return {
       sessions: slice.length,
       recurringPer100: round((recurring * 100) / slice.length),
+      recurringSignatures: new Set(recurringErrors.map((error) => error.sig)).size,
       cacheWritePerSession: Math.round(slice.reduce((total, session) => total + session.usage.cacheWrite, 0) / slice.length),
       recallPerSession: round(inWindow / slice.length),
     };
@@ -189,6 +193,7 @@ export const formatMeasure = (result: Measure): string => {
     `${`G1 signals, last ${String(result.window)} sessions and the ${String(result.window)} before`.padEnd(36)} ${'last'.padStart(12)} ${'before'.padStart(12)}`,
     row('sessions in the window', (signal) => signal.sessions),
     row('recurring errors per 100 sessions', (signal) => signal.recurringPer100),
+    row('distinct recurring signatures', (signal) => signal.recurringSignatures),
     row('cache-write tokens per session', (signal) => signal.cacheWritePerSession),
     row('recall calls per session', (signal) => signal.recallPerSession),
   ].join('\n');
