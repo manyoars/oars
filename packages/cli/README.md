@@ -66,6 +66,33 @@ The SDK key is shown once, so save it when `deploy` prints it.
 
 - `--price <ref>` picks the price. The default is the workload's only active price.
 
+### sessions
+
+`oars sessions` keeps a local, deterministic memory of your own Claude Code sessions. No model call, no network, nothing leaves the machine.
+
+```bash
+# Read the folders you name (a path, or its name under ~/.claude/projects). At least one --allow is required; there is no "all".
+oars sessions deposit --allow ~/work/app --allow ~/work/tools --redact-domain corp.example
+
+# Ask before you re-solve: the error as printed, a file, or a prompt class.
+oars sessions recall --error "bash: -c: line 7: unexpected EOF while looking for matching quote"
+oars sessions recall --path src/main.ts --since 30
+
+# Serve the same query to a running agent as one MCP tool, oars_recall (stdio):
+#   claude mcp add oars-recall -- oars sessions recall --mcp
+oars sessions recall --mcp
+
+oars sessions books --by class --since 30   # tokens, wall time, turns, errors, verify-after-edit rate
+oars sessions measure --last 50             # recurring errors per 100 sessions, cache-write per session, recall calls per session
+oars sessions verify                        # consistency invariants on the stored skeletons
+```
+
+`deposit` is idempotent (an unchanged file is skipped by size and mtime) and appends to `<config>/oars/sessions/observations.jsonl`;
+the schema is documented in `src/sessions/schema.ts`. Secrets (by pattern and entropy), emails, and the domains you name are masked
+before anything is written, and nothing beyond the first 300 characters of a prompt and the first informative line of a tool error is
+kept. For each session it also writes a skeleton (ids, timestamps, tool linkage, token counts, a SHA-256 in place of every content
+field, and a Merkle root over the raw lines) that `verify` checks.
+
 ## The `--json` contract
 
 With `--json`, stdout carries exactly one JSON document and a success exits 0.
