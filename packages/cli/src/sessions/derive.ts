@@ -33,15 +33,29 @@ const byPosition = (a: ToolObservation, b: ToolObservation): number => a.n - b.n
 /** The `<tool> | <normalized line>` key; the line was redacted at capture, and normalize can expose a shape the first pass missed. */
 const signature = (tool: string, line: string, redact: Redactor): string => `${tool} | ${redact(normalize(line))}`;
 
+const groupBy = <T>(items: readonly T[], keyOf: (item: T) => number | null): Map<number | null, T[]> => {
+  const groups = new Map<number | null, T[]>();
+  for (const item of items) {
+    const key = keyOf(item);
+    const group = groups.get(key);
+    if (group === undefined) groups.set(key, [item]);
+    else group.push(item);
+  }
+  return groups;
+};
+
 /** The version-2 prompt and error records of one transcript. */
 export const deriveSession = (capture: SessionCapture, redact: Redactor): Derived => {
   const tools = [...capture.tools].sort(byPosition);
   const { session, rev } = capture.session;
+  // One pass groups the calls and the main-line errors by prompt, so a session costs O(prompts + tools), not their product.
+  const toolsOf = groupBy(tools, (tool) => tool.prompt);
+  const errorsOf = groupBy(capture.errorLines.filter((error) => !error.side), (error) => error.prompt);
   const prompts = capture.prompts.map((prompt): PromptObservation => {
-    const mine = tools.filter((tool) => tool.prompt === prompt.index);
+    const mine = toolsOf.get(prompt.index) ?? [];
     const main = mine.filter((tool) => !tool.side);
     const sequence = main.map((tool) => shortName(tool.tool));
-    const errors = capture.errorLines.filter((error) => error.prompt === prompt.index && !error.side);
+    const errors = errorsOf.get(prompt.index) ?? [];
     // The two main-line calls after the prompt's first main-line error (version 2 re-armed on each error and kept the first two).
     const first = errors[0];
     const recovery = first === undefined ? [] : main.filter((tool) => tool.n >= first.after).slice(0, 2).map((tool) => shortName(tool.tool));
