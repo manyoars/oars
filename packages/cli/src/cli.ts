@@ -11,7 +11,8 @@ import type { CredentialStore } from './credentials.js';
 import { CliError, ExitCode } from './errors.js';
 import type { JournalStore } from './journal.js';
 import type { BooksBy, RecallQuery } from './sessions/query.js';
-import { sessionsBooks, sessionsContext, sessionsDeposit, sessionsMcp, sessionsMeasure, sessionsRecall, sessionsVerify, type SessionsDeps } from './sessions/command.js';
+import { sessionsBooks, sessionsContext, sessionsDeposit, sessionsHookInstall, sessionsHookStatus, sessionsHookUninstall, sessionsMcp, sessionsMeasure, sessionsRecall, sessionsVerify, type SessionsDeps } from './sessions/command.js';
+import type { InstallRuntime, Scope } from './sessions/install.js';
 import type { SessionsRuntime } from './sessions/store.js';
 
 /** Everything the CLI takes from its process, so the tests can stand in for each. */
@@ -31,6 +32,8 @@ export interface RunDeps {
   openBrowser: (url: string) => Promise<void>;
   /** Where `oars sessions` keeps its store and finds the operator's Claude Code logs; absent in a run that has none. */
   sessions?: SessionsRuntime;
+  /** Where `oars sessions hook` finds the hook script, the settings files, and schtasks; absent in a run that has none. */
+  install?: InstallRuntime;
 }
 
 /** What a command produced: the `--json` document, and the line a human sees instead. */
@@ -103,7 +106,7 @@ const printFailure = (deps: RunDeps, json: boolean, error: CliError): void => {
   if (partial?.sdkKey !== undefined) deps.io.stdout(`SDK key (shown once; save it now): ${partial.sdkKey}\n`);
 };
 
-const sessionDeps = (deps: RunDeps): SessionsDeps => ({ sessions: deps.sessions, now: deps.now });
+const sessionDeps = (deps: RunDeps): SessionsDeps => ({ sessions: deps.sessions, install: deps.install, now: deps.now });
 
 const buildProgram = (deps: RunDeps, argv: string[]): Command => {
   const program = new Command('oars')
@@ -307,6 +310,60 @@ const buildProgram = (deps: RunDeps, argv: string[]): Command => {
         throw new CliError(`${String(failed.length)} ${failed.length === 1 ? 'check' : 'checks'} failed: ${failed.join('; ')}`, ExitCode.INVALID, 'verify', undefined, undefined, json ? report : undefined);
       }
       emit(deps, json, outcome);
+    });
+
+  const hook = sessions.command('hook').description('install the recall hooks into a Claude Code settings file, and the nightly deposit task');
+  const scopeOption = (value: string): Scope => {
+    if (value !== 'user' && value !== 'project' && value !== 'file') throw new InvalidArgumentError('it must be user, project, or file.');
+    return value;
+  };
+  const scopeOf = (options: OptionValues): Scope | undefined => {
+    const value = text(options, 'scope');
+    return value === 'user' || value === 'project' || value === 'file' ? value : undefined;
+  };
+
+  hook
+    .command('install')
+    .description('merge the SessionStart, PostToolUseFailure, and Stop hooks into a settings file (existing hooks are kept) and raise cleanupPeriodDays to at least 365')
+    .option('--scope <scope>', 'user (~/.claude/settings.json), project (./.claude/settings.json), or file (needs --file; the default)', scopeOption)
+    .option('--file <path>', 'the settings file for --scope file')
+    .option('--keep-retention', 'leave cleanupPeriodDays as it is (the harness deletes raw transcripts older than it)')
+    .option('--schedule <mode>', 'nightly: register a Windows task that runs the full deposit and the recurrence refresh daily; off: remove it', (value: string) => {
+      if (value !== 'nightly' && value !== 'off') throw new InvalidArgumentError('it must be nightly or off.');
+      return value;
+    })
+    .action(async (_options: OptionValues, command: Command) => {
+      const options: OptionValues = command.optsWithGlobals();
+      const schedule = text(options, 'schedule');
+      emit(
+        deps,
+        flag(options, 'json'),
+        await sessionsHookInstall(sessionDeps(deps), {
+          scope: scopeOf(options),
+          file: text(options, 'file'),
+          keepRetention: flag(options, 'keepRetention'),
+          schedule: schedule === 'nightly' || schedule === 'off' ? schedule : undefined,
+        }),
+      );
+    });
+
+  hook
+    .command('uninstall')
+    .description('remove only the hooks `install` wrote from a settings file (cleanupPeriodDays stays; `install --schedule off` removes the task)')
+    .option('--scope <scope>', 'user, project, or file (needs --file; the default)', scopeOption)
+    .option('--file <path>', 'the settings file for --scope file')
+    .action(async (_options: OptionValues, command: Command) => {
+      const options: OptionValues = command.optsWithGlobals();
+      emit(deps, flag(options, 'json'), await sessionsHookUninstall(sessionDeps(deps), { scope: scopeOf(options), file: text(options, 'file') }));
+    });
+
+  hook
+    .command('status')
+    .description('what is installed in the user and project settings (and --file), and whether the nightly task is registered')
+    .option('--file <path>', 'one more settings file to report')
+    .action(async (_options: OptionValues, command: Command) => {
+      const options: OptionValues = command.optsWithGlobals();
+      emit(deps, flag(options, 'json'), await sessionsHookStatus(sessionDeps(deps), { file: text(options, 'file') }));
     });
 
   return program;

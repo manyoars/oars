@@ -1,7 +1,9 @@
 #!/usr/bin/env node
 import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
+import { spawn } from 'node:child_process';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { openBrowser } from './browser.js';
 import { run } from './cli.js';
@@ -31,6 +33,21 @@ process.exitCode = await run(process.argv.slice(2), {
   random: Math.random,
   now: Date.now,
   openBrowser,
+  install: {
+    nodePath: process.execPath,
+    hookBin: fileURLToPath(new URL('./hook-bin.js', import.meta.url)),
+    userSettings: join(process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), '.claude'), 'settings.json'),
+    cwd: process.cwd(),
+    schtasks: (args) =>
+      new Promise((resolve) => {
+        let output = '';
+        const child = spawn('schtasks', args, { windowsHide: true });
+        child.stdout.on('data', (chunk: Buffer) => (output += chunk.toString()));
+        child.stderr.on('data', (chunk: Buffer) => (output += chunk.toString()));
+        child.on('error', (error) => resolve({ code: 1, output: error.message }));
+        child.on('close', (code) => resolve({ code: code ?? 1, output }));
+      }),
+  },
   sessions: {
     storeDir: join(configDir, 'oars', 'sessions'),
     projectsRoot: join(process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), '.claude'), 'projects'),

@@ -6,12 +6,14 @@ import { CliError, ExitCode } from '../errors.js';
 import { books, formatBooks, formatMeasure, formatRecall, measure, recall, type BooksBy, type RecallQuery } from './query.js';
 import { readHookCalls } from './hook-calls.js';
 import { buildIndex, contextBlock, readIndex, type ContextOptions } from './hook-index.js';
+import { hookStatus, installHooks, scheduleStatus, setSchedule, settingsPath, uninstallHooks, type InstallRuntime, type Scope } from './install.js';
 import { serve } from './mcp.js';
 import { deposit, loadStore, readCalls, readRedactDomains, readSkeletons, type SessionsRuntime } from './store.js';
 import { formatVerify, verifyAll, type InvariantResult } from './verify.js';
 
 export interface SessionsDeps {
   sessions: SessionsRuntime | undefined;
+  install: InstallRuntime | undefined;
   now: () => number;
 }
 
@@ -90,4 +92,49 @@ export const sessionsVerify = async (deps: SessionsDeps, options: { session: str
     document: { ok: true, ...report },
     text: [formatVerify(results, skeletons.length), ...(unreadable > 0 ? [`FAIL  ${String(unreadable)} unreadable skeleton files (torn or corrupted); redeposit to rebuild them`] : [])].join('\n'),
   };
+};
+
+const installOf = (deps: SessionsDeps): InstallRuntime => {
+  if (deps.install === undefined) throw new CliError('Hook install is not configured in this run.', ExitCode.UNEXPECTED, 'unexpected');
+  return deps.install;
+};
+
+export interface HookTarget {
+  scope: Scope | undefined;
+  file: string | undefined;
+}
+
+export const sessionsHookInstall = async (deps: SessionsDeps, options: HookTarget & { keepRetention: boolean; schedule: 'nightly' | 'off' | undefined }): Promise<Outcome> => {
+  const runtime = installOf(deps);
+  const lines: string[] = [];
+  const document: { ok: true; install?: object; schedule?: string } = { ok: true };
+  // `--schedule` alone touches no settings file: nothing is written to one the operator has not named.
+  if (options.schedule === undefined || options.scope !== undefined || options.file !== undefined) {
+    const file = settingsPath(runtime, options.scope ?? 'file', options.file);
+    const result = await installHooks(runtime, file, options.keepRetention);
+    document.install = result;
+    lines.push(`Installed ${result.installed.join(', ')} hooks in ${file}.`, result.retention);
+  }
+  if (options.schedule !== undefined) {
+    const line = await setSchedule(runtime, options.schedule);
+    document.schedule = line;
+    lines.push(line);
+  }
+  return { document, text: lines.join('\n') };
+};
+
+export const sessionsHookUninstall = async (deps: SessionsDeps, options: HookTarget): Promise<Outcome> => {
+  const runtime = installOf(deps);
+  const file = settingsPath(runtime, options.scope ?? 'file', options.file);
+  const result = await uninstallHooks(file);
+  const text = result.removed.length === 0 ? `No Many Oars hooks in ${file}.` : `Removed ${result.removed.join(', ')} hooks from ${file}; other settings and hooks are untouched (cleanupPeriodDays is left as it is).`;
+  return { document: { ok: true, ...result }, text };
+};
+
+export const sessionsHookStatus = async (deps: SessionsDeps, options: { file: string | undefined }): Promise<Outcome> => {
+  const runtime = installOf(deps);
+  const files = await hookStatus(runtime, options.file);
+  const schedule = await scheduleStatus(runtime);
+  const lines = files.map((item) => `${item.scope}: ${item.file}: ${item.installed.length === 0 ? 'no hooks' : item.installed.join(', ')} (cleanupPeriodDays ${String(item.retentionDays)})`);
+  return { document: { ok: true, files, schedule }, text: [...lines, schedule].join('\n') };
 };
