@@ -132,7 +132,7 @@ describe('subagent transcripts (A24)', () => {
     expect(agents.every((error) => error.session === 'errors-a' && error.prompt === 0 && error.cls === spawning?.cls)).toBe(true);
     expect(store.errors).toHaveLength(without.errors.length + mine.length);
     expect(store.sessions).toHaveLength(without.sessions.length);
-    const sessionsOf = (errors: readonly ErrorObservation[]) => new Map(derive({ ...store, errors }, NOW_ISO).signatures.map((sig) => [sig.sig, [sig.sessions, sig.count]]));
+    const sessionsOf = (errors: ErrorObservation[]) => new Map(derive({ ...store, errors }, NOW_ISO).signatures.map((sig) => [sig.sig, [sig.sessions, sig.count]]));
     const before = sessionsOf(without.errors);
     for (const [sig, [sessions, count]] of sessionsOf(store.errors)) {
       const was = before.get(sig) ?? [0, 0];
@@ -170,7 +170,7 @@ describe('recovery episodes (recovery_episodes.py, t693)', () => {
   const synthetic = (session: string, specs: readonly (readonly [string, string, ToolStatus, string?])[], orphans: readonly { after: number; line: string }[] = []): SessionCapture => {
     const tools = specs.map(([tool, target, status, id], n): ToolObservation => ({
       kind: 'tool', cv: CAPTURE_VERSION, session, rev: 1, parent: session, agentType: null, n, ts: null, tool, status, target,
-      keys: [], durationMs: null, toolUseId: id ?? `c${n}`, harnessVersion: null, side: false, prompt: 0,
+      keys: [], durationMs: null, toolUseId: id ?? `c${String(n)}`, harnessVersion: null, side: false, prompt: 0,
     }));
     const errorLine = (toolUseId: string | null, tool: string, line: string, after: number): ErrorLineObservation => ({
       kind: 'error-line', cv: CAPTURE_VERSION, session, rev: 1, toolUseId, tool, line, ts: null, harnessVersion: null, side: false, prompt: 0, after,
