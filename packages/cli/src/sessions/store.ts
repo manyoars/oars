@@ -248,7 +248,7 @@ export const withLock = async <T>(storeDir: string, work: () => Promise<T>, opti
   while (claimed !== true) {
     await breakStale(lock, options.staleMs);
     if (Date.now() - started >= options.waitMs) {
-      if (claimed instanceof Error && !(await stat(lock).then(() => true, () => false))) throw claimed;
+      if (claimed instanceof Error && !(await stat(lock).then(() => true, (error: unknown) => !isCode(error, 'ENOENT')))) throw claimed;
       throw new CliError('The store is locked by another deposit; try again shortly.', ExitCode.UNEXPECTED, 'unexpected');
     }
     await sleep(25);

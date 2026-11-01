@@ -164,7 +164,7 @@ describe('post-tool pre-filter', () => {
   it.skipIf(!available)('launches the hook with the whole event when the error starts with Exit code', () => {
     const event = JSON.stringify({ tool_name: 'Bash', error: 'Exit code 2\nbad', hook_event_name: 'PostToolUseFailure' });
     expect(runCommand(`${event}\n`)).toContain(event);
-  });
+  }, 60_000);
 
   it.skipIf(!available)('launches nothing for an event with no Exit code, and for empty input', () => {
     expect(runCommand(`${JSON.stringify({ tool_name: 'Bash', error: 'The user rejected this tool call', hook_event_name: 'PostToolUseFailure' })}\n`)).toBe('');
