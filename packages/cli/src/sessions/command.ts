@@ -2,6 +2,7 @@
 import type { Outcome } from '../cli.js';
 import { CliError, ExitCode } from '../errors.js';
 import { books, formatBooks, formatMeasure, formatRecall, measure, recall, type BooksBy, type RecallQuery } from './query.js';
+import { readHookCalls } from './hook-calls.js';
 import { buildIndex, contextBlock, readIndex, type ContextOptions } from './hook-index.js';
 import { serve } from './mcp.js';
 import { deposit, loadStore, readCalls, readRedactDomains, readSkeletons, type SessionsRuntime } from './store.js';
@@ -53,9 +54,9 @@ export const sessionsBooks = async (deps: SessionsDeps, options: { by: BooksBy; 
   return { document: { ok: true, by: options.by, rows }, text: formatBooks(rows, options.by) };
 };
 
-export const sessionsMeasure = async (deps: SessionsDeps, options: { last: number }): Promise<Outcome> => {
+export const sessionsMeasure = async (deps: SessionsDeps, options: { last: number; since: string | undefined }): Promise<Outcome> => {
   const runtime = runtimeOf(deps);
-  const result = measure(await loadStore(runtime.storeDir), await readCalls(runtime.storeDir), options.last);
+  const result = measure(await loadStore(runtime.storeDir), await readCalls(runtime.storeDir), await readHookCalls(runtime.storeDir), options.last, options.since);
   return { document: { ok: true, ...result }, text: formatMeasure(result) };
 };
 

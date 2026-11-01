@@ -1,7 +1,7 @@
 // The read side: recall, books, and measure. All three are pure functions of a loaded store (and, for measure, the MCP log).
 import { errorKey } from './extract.js';
 import { makeRedactor } from './redact.js';
-import type { ErrorObservation, PromptObservation, RecallCall, SessionObservation, SignatureRecord } from './schema.js';
+import type { ErrorObservation, HookCall, PromptObservation, RecallCall, SessionObservation, SignatureRecord } from './schema.js';
 import { signatureRecord, type Store } from './store.js';
 
 const DAY_MS = 86_400_000;
@@ -147,17 +147,28 @@ export interface Signal {
   cacheWritePerSession: number | null;
   /** MCP recall calls made during the window, per session. */
   recallPerSession: number | null;
+  /** Hook lookups (SessionStart injection and PostToolUse recall) made in the window's sessions, per session. */
+  hookRecallPerSession: number | null;
+  /** Hook lookups that had something to say (an injected block or a recall hit), per session. */
+  hookHitsPerSession: number | null;
 }
 
 export interface Measure {
   window: number;
+  /** The cutoff the current window starts at, when `--since` pinned it. */
+  since: string | null;
   last: Signal;
   before: Signal;
 }
 
 const order = (a: SessionObservation, b: SessionObservation): number => (a.tsFirst ?? '').localeCompare(b.tsFirst ?? '') || a.session.localeCompare(b.session);
 
-export const measure = (store: Store, calls: readonly RecallCall[], window: number): Measure => {
+/**
+ * Without `since` the current window is the last `window` sessions, so it moves with every deposit. With it, the current window is the
+ * first `window` sessions that started at or after the cutoff and the prior window is the `window` before it, so a reading pinned to an
+ * install time keeps its start however many sessions come later.
+ */
+export const measure = (store: Store, calls: readonly RecallCall[], hookCalls: readonly HookCall[], window: number, since?: string): Measure => {
   const sessions = [...store.sessions].sort(order);
   const index = new Map(sessions.map((session, position) => [session.session, position]));
   const firstSeen = new Map<string, number>();
@@ -166,7 +177,7 @@ export const measure = (store: Store, calls: readonly RecallCall[], window: numb
     if (position !== undefined) firstSeen.set(error.sig, Math.min(firstSeen.get(error.sig) ?? position, position));
   }
   const signal = (slice: readonly SessionObservation[]): Signal => {
-    if (slice.length === 0) return { sessions: 0, recurringPer100: null, recurringSignatures: null, cacheWritePerSession: null, recallPerSession: null };
+    if (slice.length === 0) return { sessions: 0, recurringPer100: null, recurringSignatures: null, cacheWritePerSession: null, recallPerSession: null, hookRecallPerSession: null, hookHitsPerSession: null };
     const names = new Set(slice.map((session) => session.session));
     const recurringErrors = store.errors.filter((error) => names.has(error.session) && (index.get(error.session) ?? 0) > (firstSeen.get(error.sig) ?? 0));
     const recurring = recurringErrors.length;
@@ -174,27 +185,33 @@ export const measure = (store: Store, calls: readonly RecallCall[], window: numb
     const to = slice.map((session) => session.tsLast).filter((ts): ts is string => ts !== null).sort().reverse()[0];
     const inWindow = from === undefined || to === undefined ? 0 : calls.filter((call) => call.at >= from && call.at <= to).length;
     const round = (value: number): number => Math.round(value * 100) / 100;
+    const lookups = hookCalls.filter((call) => call.session !== null && names.has(call.session) && (call.event === 'session-start' || call.event === 'post-tool'));
     return {
       sessions: slice.length,
       recurringPer100: round((recurring * 100) / slice.length),
       recurringSignatures: new Set(recurringErrors.map((error) => error.sig)).size,
       cacheWritePerSession: Math.round(slice.reduce((total, session) => total + session.usage.cacheWrite, 0) / slice.length),
       recallPerSession: round(inWindow / slice.length),
+      hookRecallPerSession: round(lookups.length / slice.length),
+      hookHitsPerSession: round(lookups.filter((call) => call.hit).length / slice.length),
     };
   };
-  const end = sessions.length;
-  return { window, last: signal(sessions.slice(Math.max(end - window, 0))), before: signal(sessions.slice(Math.max(end - 2 * window, 0), Math.max(end - window, 0))) };
+  const start = since === undefined ? Math.max(sessions.length - window, 0) : sessions.findIndex((session) => (session.tsFirst ?? '') >= since);
+  if (start < 0) return { window, since: since ?? null, last: signal([]), before: signal(sessions.slice(Math.max(sessions.length - window, 0))) };
+  return { window, since: since ?? null, last: signal(sessions.slice(start, start + window)), before: signal(sessions.slice(Math.max(start - window, 0), start)) };
 };
 
 export const formatMeasure = (result: Measure): string => {
   const cell = (value: number | null): string => (value === null ? '-' : String(value));
   const row = (label: string, pick: (signal: Signal) => number | null): string => `${label.padEnd(36)} ${cell(pick(result.last)).padStart(12)} ${cell(pick(result.before)).padStart(12)}`;
   return [
-    `${`G1 signals, last ${String(result.window)} sessions and the ${String(result.window)} before`.padEnd(36)} ${'last'.padStart(12)} ${'before'.padStart(12)}`,
+    `${(result.since === null ? `G1 signals, last ${String(result.window)} sessions and the ${String(result.window)} before` : `G1 signals, ${String(result.window)} sessions from ${result.since} and the ${String(result.window)} before`).padEnd(36)} ${(result.since === null ? 'last' : 'from').padStart(12)} ${'before'.padStart(12)}`,
     row('sessions in the window', (signal) => signal.sessions),
     row('recurring errors per 100 sessions', (signal) => signal.recurringPer100),
     row('distinct recurring signatures', (signal) => signal.recurringSignatures),
     row('cache-write tokens per session', (signal) => signal.cacheWritePerSession),
     row('recall calls per session', (signal) => signal.recallPerSession),
+    row('hook recall calls per session', (signal) => signal.hookRecallPerSession),
+    row('hook hits per session', (signal) => signal.hookHitsPerSession),
   ].join('\n');
 };

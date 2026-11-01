@@ -5,6 +5,8 @@
 //   derived.json            the derived records, rewritten at the end of every deposit
 //   skeletons/<session>.json  one skeleton per session (hashes and ids, no content)
 //   mcp-calls.jsonl         one line per recall call the MCP server answered
+//   hook-calls.jsonl        one line per hook invocation (event, session, hit, milliseconds)
+//   hook-index.json         the recurring signatures per project and overall, for the hooks
 import { appendFile, mkdir, readdir, readFile, rename, stat, writeFile } from 'node:fs/promises';
 import { basename, dirname, join } from 'node:path';
 import { compileAllow, requireEntries, slugOf } from './allow.js';

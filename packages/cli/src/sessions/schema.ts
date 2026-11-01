@@ -215,3 +215,14 @@ export interface RecallCall {
   query: string;
   matches: number;
 }
+
+/** One hook invocation, appended to `hook-calls.jsonl` by the hook itself; `measure` counts these per session. */
+export interface HookCall {
+  at: string;
+  event: 'session-start' | 'post-tool' | 'stop' | 'nightly';
+  /** The Claude Code session the hook ran in; null for the nightly run. */
+  session: string | null;
+  /** Whether the hook had something to say (an injected block, a recall hit, or a session deposited). */
+  hit: boolean;
+  ms: number;
+}
