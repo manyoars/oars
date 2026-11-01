@@ -11,7 +11,7 @@ import type { CredentialStore } from './credentials.js';
 import { CliError, ExitCode } from './errors.js';
 import type { JournalStore } from './journal.js';
 import type { BooksBy, RecallQuery } from './sessions/query.js';
-import { sessionsBooks, sessionsDeposit, sessionsMcp, sessionsMeasure, sessionsRecall, sessionsVerify, type SessionsDeps } from './sessions/command.js';
+import { sessionsBooks, sessionsContext, sessionsDeposit, sessionsMcp, sessionsMeasure, sessionsRecall, sessionsVerify, type SessionsDeps } from './sessions/command.js';
 import type { SessionsRuntime } from './sessions/store.js';
 
 /** Everything the CLI takes from its process, so the tests can stand in for each. */
@@ -227,8 +227,26 @@ const buildProgram = (deps: RunDeps, argv: string[]): Command => {
     .option('--class <name>', 'a prompt class (edit-verify, edit-only, shell-only, research, orchestration, explore-only, mixed, no-tools)')
     .option('--since <days>', 'only the last N days', positiveInteger)
     .option('--mcp', 'serve one recall tool over MCP on stdio instead of answering once')
+    .option('--context', "print the repository's top recurring errors as a short block for injection into a session (see --cwd, --harness, --top, --max-chars)")
+    .option('--cwd <dir>', "with --context: the session's working directory (default: this one)")
+    .option('--harness <version>', 'with --context: only errors seen under this Claude Code version')
+    .option('--top <n>', 'with --context: how many signatures (default 5)', positiveInteger)
+    .option('--max-chars <n>', "with --context: the block's length limit (default 1200)", positiveInteger)
     .action(async (_options: OptionValues, command: Command) => {
       const options: OptionValues = command.optsWithGlobals();
+      if (flag(options, 'context')) {
+        emit(
+          deps,
+          flag(options, 'json'),
+          await sessionsContext(sessionDeps(deps), {
+            cwd: text(options, 'cwd') ?? process.cwd(),
+            ...(text(options, 'harness') === undefined ? {} : { harness: text(options, 'harness') }),
+            top: count(options, 'top') ?? 5,
+            maxChars: count(options, 'maxChars') ?? 1200,
+          }),
+        );
+        return;
+      }
       if (flag(options, 'mcp')) {
         await sessionsMcp(sessionDeps(deps));
         return;

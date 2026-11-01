@@ -2,6 +2,7 @@
 import type { Outcome } from '../cli.js';
 import { CliError, ExitCode } from '../errors.js';
 import { books, formatBooks, formatMeasure, formatRecall, measure, recall, type BooksBy, type RecallQuery } from './query.js';
+import { buildIndex, contextBlock, readIndex, type ContextOptions } from './hook-index.js';
 import { serve } from './mcp.js';
 import { deposit, loadStore, readCalls, readRedactDomains, readSkeletons, type SessionsRuntime } from './store.js';
 import { formatVerify, verifyAll, type InvariantResult } from './verify.js';
@@ -33,6 +34,14 @@ export const sessionsRecall = async (deps: SessionsDeps, query: RecallQuery): Pr
   const { storeDir } = runtimeOf(deps);
   const result = recall(await loadStore(storeDir), query, deps.now(), undefined, await readRedactDomains(storeDir));
   return { document: { ok: true, ...result }, text: formatRecall(result) };
+};
+
+/** `recall --context`: the injection block for a repository, from the hook index (built from the store when no deposit has written one). */
+export const sessionsContext = async (deps: SessionsDeps, options: ContextOptions): Promise<Outcome> => {
+  const { storeDir } = runtimeOf(deps);
+  const index = (await readIndex(storeDir)) ?? buildIndex(await loadStore(storeDir), await readRedactDomains(storeDir), new Date(deps.now()).toISOString());
+  const block = contextBlock(index, options);
+  return { document: { ok: true, context: block ?? null }, text: block ?? 'Nothing recurs in this repository yet.' };
 };
 
 export const sessionsMcp = async (deps: SessionsDeps): Promise<void> => {

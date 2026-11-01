@@ -1,0 +1,153 @@
+// The hook index: a small file written at the end of every deposit so a hook never parses the whole observation log.
+// SessionStart reads `projects` (the recurring signatures per project folder); PostToolUse reads `signatures` (sessions and
+// what followed, by exact signature). Both are pure functions of the store.
+import { readFile } from 'node:fs/promises';
+import { join } from 'node:path';
+import { slugOf, type Store } from './store.js';
+
+const INDEX_FILE = 'hook-index.json';
+/** A signature is "recurring" once it has been seen in this many sessions. */
+export const RECURRING_SESSIONS = 2;
+const PER_PROJECT = 12;
+const FOLLOWED = 3;
+
+export interface IndexedSignature {
+  sig: string;
+  sessions: number;
+  /** Tools that most often followed, most common first. */
+  followed: Array<[string, number]>;
+  harness: string[];
+}
+
+export interface HookIndex {
+  at: string;
+  /** Every `--redact-domain` in force, so a hook masks an error the way the log was masked. */
+  redactDomains: string[];
+  /** Recurring signatures by project folder name, most sessions first. */
+  projects: { [project: string]: IndexedSignature[] };
+  /** Every signature seen in at least two sessions. */
+  signatures: { [sig: string]: { sessions: number; followed: Array<[string, number]> } };
+}
+
+const topFollowed = (following: { [tool: string]: number }): Array<[string, number]> =>
+  Object.entries(following)
+    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+    .slice(0, FOLLOWED);
+
+interface Tally {
+  sessions: Set<string>;
+  following: { [tool: string]: number };
+  harness: Set<string>;
+}
+
+const tally = (): Tally => ({ sessions: new Set(), following: {}, harness: new Set() });
+
+export const buildIndex = (store: Store, redactDomains: readonly string[], at: string): HookIndex => {
+  const projectOf = new Map(store.sessions.map((session) => [session.session, session.project]));
+  const overall = new Map<string, Tally>();
+  const byProject = new Map<string, Map<string, Tally>>();
+  for (const error of store.errors) {
+    const project = projectOf.get(error.session);
+    const targets = [overall];
+    if (project !== undefined) {
+      const own = byProject.get(project) ?? new Map<string, Tally>();
+      byProject.set(project, own);
+      targets.push(own);
+    }
+    for (const target of targets) {
+      const entry = target.get(error.sig) ?? tally();
+      target.set(error.sig, entry);
+      entry.sessions.add(error.session);
+      if (error.harnessVersion !== null) entry.harness.add(error.harnessVersion);
+      for (const tool of error.next) entry.following[tool] = (entry.following[tool] ?? 0) + 1;
+    }
+  }
+  const signatures: HookIndex['signatures'] = {};
+  for (const [sig, entry] of overall) {
+    if (entry.sessions.size >= RECURRING_SESSIONS) signatures[sig] = { sessions: entry.sessions.size, followed: topFollowed(entry.following) };
+  }
+  const projects: HookIndex['projects'] = {};
+  for (const [project, sigs] of byProject) {
+    const rows = [...sigs.entries()]
+      .filter(([, entry]) => entry.sessions.size >= RECURRING_SESSIONS)
+      .map(([sig, entry]): IndexedSignature => ({ sig, sessions: entry.sessions.size, followed: topFollowed(entry.following), harness: [...entry.harness].sort() }))
+      .sort((a, b) => b.sessions - a.sessions || a.sig.localeCompare(b.sig))
+      .slice(0, PER_PROJECT);
+    if (rows.length > 0) projects[project] = rows;
+  }
+  return { at, redactDomains: [...redactDomains], projects, signatures };
+};
+
+export const indexPath = (storeDir: string): string => join(storeDir, INDEX_FILE);
+
+const isRecord = (value: unknown): value is { [key: string]: unknown } => typeof value === 'object' && value !== null && !Array.isArray(value);
+
+// The file is ours; these checks guard a torn or foreign file, and the inner rows are trusted as written (as the store's are).
+const isIndex = (value: unknown): value is { [key: string]: unknown } & HookIndex =>
+  isRecord(value) && isRecord(value.projects) && isRecord(value.signatures) && Array.isArray(value.redactDomains) && typeof value.at === 'string';
+
+/** The index as written, or undefined when there is none (or it is torn): a hook then says nothing. */
+export const readIndex = async (storeDir: string): Promise<HookIndex | undefined> => {
+  try {
+    const parsed: unknown = JSON.parse(await readFile(indexPath(storeDir), 'utf8'));
+    return isIndex(parsed) ? parsed : undefined;
+  } catch {
+    // A missing or torn index is "no index".
+    return undefined;
+  }
+};
+
+export interface ContextOptions {
+  /** The session's working directory; its repository root selects the project folders. */
+  cwd: string;
+  harness?: string;
+  top: number;
+  maxChars: number;
+}
+
+/** `<root>/.claude/worktrees/<name>` belongs to `<root>`, so a worktree session sees its repository's history. */
+export const repositoryRoot = (cwd: string): string => {
+  const marker = /[\\/]\.claude[\\/]worktrees[\\/]/.exec(cwd);
+  return marker === null ? cwd : cwd.slice(0, marker.index);
+};
+
+/** A project folder belongs to the repository when its slug is the root's slug or extends it (a subfolder or a worktree). */
+const belongs = (project: string, rootSlug: string): boolean => project === rootSlug || project.startsWith(`${rootSlug}-`);
+
+const clip = (text: string, length: number): string => (text.length <= length ? text : `${text.slice(0, length - 1)}…`);
+
+/** The top recurring signatures for the repository, as a short block for injection; undefined when there is nothing to say. */
+export const contextBlock = (index: HookIndex, options: ContextOptions): string | undefined => {
+  const rootSlug = slugOf(repositoryRoot(options.cwd));
+  const merged = new Map<string, IndexedSignature>();
+  for (const [project, rows] of Object.entries(index.projects)) {
+    if (!belongs(project, rootSlug)) continue;
+    for (const row of rows) {
+      if (options.harness !== undefined && !row.harness.includes(options.harness)) continue;
+      const have = merged.get(row.sig);
+      if (have === undefined) {
+        merged.set(row.sig, { ...row });
+        continue;
+      }
+      have.sessions += row.sessions;
+      const following: { [tool: string]: number } = {};
+      for (const [tool, count] of [...have.followed, ...row.followed]) following[tool] = (following[tool] ?? 0) + count;
+      have.followed = topFollowed(following);
+    }
+  }
+  const rows = [...merged.values()].sort((a, b) => b.sessions - a.sessions || a.sig.localeCompare(b.sig)).slice(0, options.top);
+  if (rows.length === 0) return undefined;
+  const header = `oars recall: errors that recur in this repository's earlier sessions${options.harness === undefined ? '' : ` (Claude Code ${options.harness})`}. Check these before retrying:`;
+  const lines = rows.map((row) => {
+    const followed = row.followed.map(([tool]) => tool).join(', ');
+    return `- ${clip(row.sig, 120)} (${String(row.sessions)} sessions${followed === '' ? '' : `; next: ${followed}`})`;
+  });
+  const kept: string[] = [];
+  let used = header.length;
+  for (const line of lines) {
+    if (used + 1 + line.length > options.maxChars) break;
+    kept.push(line);
+    used += 1 + line.length;
+  }
+  return kept.length === 0 ? undefined : [header, ...kept].join('\n');
+};
