@@ -74,7 +74,7 @@ describe('the step-log row schema (spec 3.1)', () => {
     expect(parseStepRow({ ...row(), ...patch })).toBeUndefined();
   });
 
-  it.each(SPEC_TRIGGERS)('accepts the spec 4.1 trigger %s (the hosted ones are schema only: nothing local runs them)', (trigger) => {
+  it.each(SPEC_TRIGGERS)('accepts the spec 4.1 trigger %s (the ones nothing local starts are schema only)', (trigger) => {
     expect(parseStepRow(row({ trigger }))?.trigger).toBe(trigger);
   });
 
@@ -89,7 +89,7 @@ describe('the step-log row schema (spec 3.1)', () => {
 });
 
 describe('the steps each command logs', () => {
-  it('a manual deposit appends a deposit row and a derive row, trigger manual, sharing one run', async () => {
+  it('a manual deposit appends a deposit, a derive, and an index row, trigger manual, sharing one run', async () => {
     const staged = stage();
     await sessionsDeposit(depsOf(staged), { allow: ['proj'], allowFiles: [], redactDomains: [] });
     const rows = await readSteps(staged.storeDir);
@@ -97,7 +97,7 @@ describe('the steps each command logs', () => {
     expect(rows[0]?.run).toBe(rows[1]?.run);
     expect(rows[2]?.run).toBe(rows[1]?.run);
     expect(rows[2]?.key).toBe(rows[1]?.key);
-    expect(rows[2]?.out.signature).toBeGreaterThanOrEqual(0);
+    expect(rows[2]?.out).toEqual({ signature: 1, project: 1 });
     expect(rows[0]?.cv).toBe(CAPTURE_VERSION);
     expect(rows[0]?.ev).toBe(EXTRACTOR_VERSION);
     expect(rows[0]?.at).toBe('2026-06-10T00:00:00.000Z');
@@ -262,7 +262,7 @@ describe('the steps each hook logs', () => {
     expect(rows[0]?.key).not.toBe(rows[1]?.key);
   });
 
-  it('the nightly run appends a deposit row and a derive row, trigger nightly; with nothing saved it logs nothing', async () => {
+  it('the nightly run appends a deposit, a derive, and an index row, trigger nightly; with nothing saved it logs nothing', async () => {
     const staged = await deposited();
     await runHook('nightly', '{}', staged.runtime, () => NOW);
     const rows = await readSteps(staged.storeDir);
@@ -280,6 +280,14 @@ describe('the steps each hook logs', () => {
     const rows = await readSteps(staged.storeDir);
     expect(rows.map((entry) => [entry.step, entry.trigger, entry.status])).toEqual([['recall', 'session-start', 'ok'], ['recall', 'post-tool', 'ok']]);
     expect(rows[1]?.out).toEqual({ matches: 0 });
+  });
+
+  it('a lookup hook that finds a recurring signature or a repository history logs matches: 1', async () => {
+    const staged = await deposited();
+    await runHook('session-start', JSON.stringify({ session_id: 's1', cwd: REPO }), staged.runtime, () => NOW);
+    await runHook('post-tool', JSON.stringify({ session_id: 's1', tool_name: 'Bash', error: 'Exit code 2\nbash: -c: line 7: unexpected EOF while looking for matching quote\n' }), staged.runtime, () => NOW);
+    const rows = await readSteps(staged.storeDir);
+    expect(rows.map((entry) => [entry.trigger, entry.out.matches])).toEqual([['session-start', 1], ['post-tool', 1]]);
   });
 
   it('a lookup row is keyed by what was looked up: the cwd for session-start, the signature for post-tool', async () => {
@@ -309,7 +317,7 @@ describe('the steps each hook logs', () => {
     expect(rows[0]?.key).toBe(inputKey('nightly', [], []));
   });
 
-  it('a lookup hook that read no index (nothing deposited yet) logs no recall row (a read that failed logs an error row: hooks-failure.test.ts)', async () => {
+  it('a lookup hook that read no index (nothing deposited yet) logs no recall row (a lookup that throws logs an error row: hooks-failure.test.ts)', async () => {
     const staged = stage();
     await runHook('session-start', JSON.stringify({ session_id: 's1', cwd: REPO }), staged.runtime, () => NOW);
     await runHook('post-tool', JSON.stringify({ session_id: 's1', tool_name: 'Bash', error: 'Exit code 1\nboom' }), staged.runtime, () => NOW);
@@ -451,19 +459,21 @@ describe('a failed step and its key', () => {
   });
 });
 
-describe('fix round 3', () => {
+describe('recall --context, the deposit key, and the index step', () => {
   const good = { allow: ['proj'], allowFiles: [], redactDomains: [] };
   const contextOptions = { cwd: REPO, top: 5, maxChars: 1200 };
 
   it('recall --context logs a manual recall row keyed by the cwd and harness, with one query and the block count', async () => {
     const staged = stage(slugOf(REPO));
     await deposit(staged.runtime, { allow: [REPO], redactDomains: [], now: () => NOW });
-    await sessionsContext(depsOf(staged), { ...contextOptions, harness: 'claude-code' });
+    await sessionsContext(depsOf(staged), contextOptions);
     await sessionsContext(depsOf(staged), { ...contextOptions, cwd: join('work', 'nothing-here') });
+    // A harness version that never ran here finds nothing, and the harness is part of the key.
+    await sessionsContext(depsOf(staged), { ...contextOptions, harness: 'claude-code' });
     const rows = (await readSteps(staged.storeDir)).filter((entry) => entry.step === 'recall');
-    expect(rows).toHaveLength(2);
-    expect(rows[0]).toMatchObject({ trigger: 'manual', status: 'ok', in: { query: 1 }, key: stampKey('context', REPO, 'claude-code') });
-    expect(rows[0]?.out.matches).toBeGreaterThanOrEqual(0);
+    expect(rows).toHaveLength(3);
+    expect(rows[0]).toMatchObject({ trigger: 'manual', status: 'ok', in: { query: 1 }, out: { matches: 1 }, key: stampKey('context', REPO, '') });
+    expect(rows[2]).toMatchObject({ out: { matches: 0 }, key: stampKey('context', REPO, 'claude-code') });
     expect(rows[1]).toMatchObject({ out: { matches: 0 }, key: stampKey('context', join('work', 'nothing-here'), '') });
   });
 
@@ -542,6 +552,8 @@ describe('the counters (spec 3.2)', () => {
       row({ step: 'derive', out: { signature: 3, summary: 3 } }),
       row({ step: 'derive', out: { signature: 4, summary: 4 } }),
       row({ step: 'derive', status: 'skipped', key: null, ms: 0, out: {} }),
+      row({ step: 'index', out: { signature: 7, project: 1 } }),
+      row({ step: 'index', out: { signature: 9, project: 2 } }),
       row({ step: 'verify', out: { checked: 6, passed: 5, cvBehind: 2, stuck: 0 } }),
       row({ step: 'recall', trigger: 'session-start', out: { matches: 1 } }),
       row({ step: 'recall', out: { matches: 0 } }),
@@ -550,6 +562,7 @@ describe('the counters (spec 3.2)', () => {
     const counters = stepCounters(rows);
     expect(counters.deposited).toEqual({ session: 3, subagent: 1, tool: 15 });
     expect(counters.derived).toEqual({ signature: 4, summary: 4 });
+    expect(counters.indexed).toEqual({ signature: 9, project: 2 });
     expect(counters.verify).toEqual({ checked: 6, passed: 5, cvBehind: 2, stuck: 0 });
     expect(counters.recall).toEqual({ queries: 2, matches: 1 });
     expect(counters.failures).toEqual({ [`deposit@${EXTRACTOR_VERSION}`]: 1 });
@@ -557,6 +570,8 @@ describe('the counters (spec 3.2)', () => {
     expect(counters.steps.find((line) => line.step === 'derive')).toMatchObject({ runs: 3, ok: 2, skipped: 1, meanMs: 5 });
     const text = formatStepCounters(counters);
     expect(text).toContain('records deposited, session');
+    expect(text).toMatch(/index holds, signature\s+9/);
+    expect(text).toMatch(/index holds, project\s+2/);
     expect(text).toContain('invariants passed of checked');
     expect(text).toMatch(/recall queries\s+2/);
     expect(text).toMatch(/stuck steps\s+0/);
@@ -589,6 +604,10 @@ describe('the counters (spec 3.2)', () => {
     // A good run ends the open streaks of its step and trigger, whatever key it carries.
     expect(stuckSteps([failed('k1', 'a'), failed('k1', 'b'), failed('k1', 'c'), row({ key: 'other' })])).toEqual([]);
     expect(stuckSteps([failed('k1', 'a'), failed('k1', 'b'), failed('k1', 'c'), row({ step: 'verify', key: 'other' })])).toHaveLength(1);
+    // The same key made good by another trigger ends the streak too (spec 4.2: the key now has output).
+    const nightlyOn = (key: string): StepRow => ({ ...failed(key, 'locked', 'derive'), trigger: 'nightly' });
+    expect(stuckSteps([nightlyOn('K'), nightlyOn('K'), nightlyOn('K'), row({ step: 'derive', trigger: 'manual', key: 'K' })])).toEqual([]);
+    expect(stuckSteps([nightlyOn('K'), nightlyOn('K'), nightlyOn('K'), row({ step: 'derive', trigger: 'manual', key: 'other' })])).toHaveLength(1);
     expect(stuckSteps([failed('k1', 'a'), failed('k2', 'b'), failed('k1', 'c'), failed('k2', 'd'), failed('k1', 'e')])).toEqual([{ step: 'deposit', key: 'k1', runs: 3, error: 'e' }]);
   });
 

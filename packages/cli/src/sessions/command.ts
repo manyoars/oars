@@ -142,7 +142,7 @@ export const sessionsVerify = async (deps: SessionsDeps, options: { session: str
     // The key is the sessions checked, each at its rev and cv, and the code's ev (spec 4.2).
     const key = stampKey(...highWater);
     const counts = { checked: results.length, passed: results.filter((result) => result.violations === 0).length, cvBehind, stuck: stuck.length };
-    return { value: outcome, report: { in: { session: highWater.length }, out: counts, key } };
+    return { value: outcome, report: { in: { session: mine(store.sessions).length, subagent: mine(store.subagents).length }, out: counts, key } };
   }, stampKey('verify', options.session ?? ''));
 };
 
