@@ -4,7 +4,7 @@ import { ExitCode } from '../errors.js';
 import { harness, removeTestDirs } from '../test-support.js';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { addProject, cleanup, composers, FIXTURES, folders, stage, stageCursor } from './test-support.js';
+import { addProject, cleanup, composers, FIXTURES, folders, stage, stageCursor, stageRawCursor } from './test-support.js';
 
 afterEach(() => {
   cleanup();
@@ -52,6 +52,17 @@ describe('oars sessions with a Cursor store', () => {
     const text = h.out.join('');
     expect(text.match(/Cursor store not read: .*state\.vscdb/g)).toHaveLength(1);
     expect(text).not.toContain('Cursor sessions.');
+  });
+
+  it('says how many Cursor sessions were skipped for an id that is not a safe file name', async () => {
+    const h = setup();
+    const doc = (composerId: string) => ({ composerId, createdAt: 1, conversation: [{ type: 1, text: 'hi' }] });
+    const user = await stageRawCursor(h.staged.root, [{ id: 'good', document: doc('good') }, { id: 'bad', document: doc('../../escaped') }], []);
+    h.deps.sessions = { ...h.staged.runtime, cursorRoot: user };
+    expect(await run(['sessions', 'deposit', '--allow', 'cursor'], h.deps)).toBe(ExitCode.OK);
+    const text = h.out.join('');
+    expect(text.match(/Skipped 1 Cursor sessions whose id is not a safe file name\./g)).toHaveLength(1);
+    expect(text).toContain('Read 1 Cursor sessions.');
   });
 
   it('books --by harness keys the rows by harness', async () => {
