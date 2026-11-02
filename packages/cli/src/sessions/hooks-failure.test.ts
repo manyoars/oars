@@ -21,6 +21,7 @@ describe('a lookup hook that fails', () => {
     expect(rows).toHaveLength(1);
     expect(rows[0]).toMatchObject({ step: 'recall', trigger: 'post-tool', status: 'error' });
     expect(rows[0]?.out).toEqual({});
+    expect(rows[0]?.in).toEqual({ query: 1 });
     expect(rows[0]?.error).toContain('cannot read the index');
     expect(rows[0]?.error).not.toContain('dev@corp.example');
     expect(rows[0]?.key).toMatch(/^[0-9a-f]{16}$/);
