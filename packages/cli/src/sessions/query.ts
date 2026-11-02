@@ -177,6 +177,8 @@ export interface Signal {
   hookHitsPerSession: number | null;
   /** Sessions the SessionEnd hook deposited, per session (a deposit is a stop call that wrote something). */
   hookDepositsPerSession: number | null;
+  /** Of `sessions`, those the Cursor source deposited (harness `cursor`). */
+  cursorSessions: number;
 }
 
 export interface Measure {
@@ -203,7 +205,7 @@ export const measure = (store: Store, calls: readonly RecallCall[], hookCalls: r
     if (position !== undefined) firstSeen.set(error.sig, Math.min(firstSeen.get(error.sig) ?? position, position));
   }
   const signal = (slice: readonly SessionObservation[]): Signal => {
-    if (slice.length === 0) return { sessions: 0, recurringPer100: null, recurringSignatures: null, cacheWritePerSession: null, recallPerSession: null, hookRecallPerSession: null, hookHitsPerSession: null, hookDepositsPerSession: null };
+    if (slice.length === 0) return { sessions: 0, cursorSessions: 0, recurringPer100: null, recurringSignatures: null, cacheWritePerSession: null, recallPerSession: null, hookRecallPerSession: null, hookHitsPerSession: null, hookDepositsPerSession: null };
     const names = new Set(slice.map((session) => session.session));
     const recurringErrors = store.errors.filter((error) => names.has(error.session) && (index.get(error.session) ?? 0) > (firstSeen.get(error.sig) ?? 0));
     const recurring = recurringErrors.length;
@@ -214,6 +216,7 @@ export const measure = (store: Store, calls: readonly RecallCall[], hookCalls: r
     const lookups = hookCalls.filter((call) => call.session !== null && names.has(call.session) && (call.event === 'session-start' || call.event === 'post-tool'));
     return {
       sessions: slice.length,
+      cursorSessions: slice.filter((session) => harnessOf(session) === 'cursor').length,
       recurringPer100: round((recurring * 100) / slice.length),
       recurringSignatures: new Set(recurringErrors.map((error) => error.sig)).size,
       cacheWritePerSession: Math.round(slice.reduce((total, session) => total + session.usage.cacheWrite, 0) / slice.length),
@@ -234,6 +237,7 @@ export const formatMeasure = (result: Measure): string => {
   return [
     `${(result.since === null ? `G1 signals, last ${String(result.window)} sessions and the ${String(result.window)} before` : `G1 signals, ${String(result.window)} sessions from ${result.since} and the ${String(result.window)} before`).padEnd(36)} ${(result.since === null ? 'last' : 'from').padStart(12)} ${'before'.padStart(12)}`,
     row('sessions in the window', (signal) => signal.sessions),
+    row('  of which Cursor', (signal) => signal.cursorSessions),
     row('recurring errors per 100 sessions', (signal) => signal.recurringPer100),
     row('distinct recurring signatures', (signal) => signal.recurringSignatures),
     row('cache-write tokens per session', (signal) => signal.cacheWritePerSession),

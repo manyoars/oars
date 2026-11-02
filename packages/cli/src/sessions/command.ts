@@ -37,6 +37,8 @@ export const sessionsDeposit = async (deps: SessionsDeps, options: { allow: stri
   const lines = [
     `Deposited ${String(result.sessions)} sessions and ${String(result.subagents)} subagent transcripts (${String(result.lines)} lines, ${String(result.badLines)} unparseable) as ${String(result.observations)} observations; ${String(result.unchanged)} files unchanged.`,
     `Read ${String(result.folders.length)} folders; skipped ${String(result.skippedFolders)} not on the allowlist.`,
+    ...(result.cursor === 0 ? [] : [`Read ${String(result.cursor)} Cursor sessions.`]),
+    ...result.cursorUnreadable.map((reason) => `Cursor store not read: ${reason}`),
     ...(result.missing.length === 0 ? [] : [`No project folder matched: ${result.missing.join(', ')}.`]),
   ];
   return { document: { ok: true, ...result }, text: lines.join('\n') };

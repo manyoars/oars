@@ -52,7 +52,7 @@ pattern and entropy, emails, and the domains named with `--redact-domain`) befor
 | Record | Fields | Class |
 |--------|--------|-------|
 | every capture record | `kind`, `cv`, `rev`, `sid` | P |
-| `session` (one per transcript) | `agentType` (set on a subagent transcript), `bytes`, `lines`, `badLines`, `userTurns`, `assistantTurns`, `versions`, `models`, `tools`, `bashCmds`, `compactSummaries`, `costUsd`, `usage`, `env` (below) | P |
+| `session` (one per transcript) | `agentType` (set on a subagent transcript), `harness` (set on a Cursor session; absent reads as Claude Code), `bytes`, `lines`, `badLines`, `userTurns`, `assistantTurns`, `versions`, `models`, `tools`, `bashCmds`, `compactSummaries`, `costUsd`, `usage`, `env` (below) | P |
 | | `session`, `parent`, `spawnedBy` (join ids), `at`, `tsFirst`, `tsLast` (a pool would keep the UTC day), `promptFingerprint`, `repo`, `fileHashes`, `urls`, `searches`, `branches`, `tldrs` (400 chars), `confidences` (120 chars) | A |
 | | `project` (the folder slug, with the username and directory names; also the `projects` keys of `hook-index.json`), `files` (the paths as written, redacted) | L |
 | `user-prompt` (one per prompt) | `index`, `wallSec`, `thinking`, `turns`, `model`, `efforts`, `skills`, `usage` | P |
@@ -163,7 +163,7 @@ carry `harness: "cursor"`; a record with no `harness` is Claude Code's (`harness
   it is absent. It opens the two SQLite files read-only through the built-in `node:sqlite` (Node 24 or later, no dependency), loaded only
   when a Cursor store exists.
 - **Opt-in.** Reading it needs consent like any other source: pass `--allow cursor` (or a glob that matches it, such as `*`). The nightly
-  schedule's allow list is where to add it. Without it the store is counted as skipped and not opened.
+  schedule's allow list is where to add it. Without it the store is not opened.
 - **What maps to what.** One session per composer: `workspaceStorage/<hash>/state.vscdb` (`composer.composerData`) names the composers of a
   workspace, and `workspace.json` names its folder; `globalStorage/state.vscdb` (`cursorDiskKV`) holds the messages (`bubbleId:<composer>:<bubble>`)
   and `composerData:<composer>`. A user bubble is a prompt, an assistant bubble a response; `modelInfo.modelName` is the model; `tokenCount`

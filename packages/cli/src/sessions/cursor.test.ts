@@ -1,11 +1,12 @@
 
 import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
 import { captureSession } from './extract.js';
 import { cursorRoot, openCursorStore, type CursorSession } from './cursor.js';
 import { makeRedactor } from './redact.js';
 import { makeRepoIdentity, makeRepoRoot } from './repo-root.js';
-import { cleanup, composers, folders, stage, stageCursor } from './test-support.js';
+import { cleanup, composers, folders, stage, stageCursor, stageRawCursor } from './test-support.js';
 
 afterEach(cleanup);
 
@@ -105,6 +106,110 @@ describe('the Cursor reader', () => {
     const { session: captured } = capture(store.transcript(session('loose')), 'loose');
     expect(captured.repo).toBeNull();
     expect(captured.userTurns).toBe(1);
+    store.close();
+  });
+
+  it('gives a bubble with token counts and no text or tool call its usage, with a request id the verifier groups on', async () => {
+    const staged = stage();
+    const user = await stageCursor(staged.root, [{ id: 'u', createdAt: 1, lastUpdatedAt: 2, bubbles: [{ type: 1, text: 'hello' }, { type: 2, tokens: [10, 5] }] }]);
+    const store = await openCursorStore(user);
+    const session = store?.sessions[0];
+    if (store === undefined || session === undefined) throw new Error('no store');
+    const lines = store.transcript(session).trim().split('\n').map((line): unknown => JSON.parse(line));
+    expect(lines).toHaveLength(2);
+    expect(capture(store.transcript(session), 'u').session.usage).toMatchObject({ input: 10, output: 5 });
+    store.close();
+  });
+});
+
+describe('the Cursor reader: the Claude Code redaction and caps', () => {
+  it('redacts a secret and an email in a prompt and a tool error, cuts a long error at 1,000 characters, and bases a plain folder paths on cwd', async () => {
+    const staged = stage();
+    const { plain } = folders(staged.root);
+    const user = await stageCursor(staged.root, [
+      {
+        id: 'r',
+        createdAt: Date.parse('2025-04-01T00:00:00Z'),
+        lastUpdatedAt: Date.parse('2025-04-01T00:05:00Z'),
+        folder: plain,
+        bubbles: [
+          { type: 1, text: 'use key sk-ant-abcdefghijklmnop1234 and mail dev@example.com', createdAt: '2025-04-01T00:00:00.000Z' },
+          { type: 2, tool: { name: 'read_file', params: { relativeWorkspacePath: 'notes.md' }, status: 'completed' }, createdAt: '2025-04-01T00:00:01.000Z' },
+          { type: 2, tool: { name: 'run_terminal_cmd', params: { command: 'make' }, status: 'error', error: `failed for dev@example.com with AKIAABCDEFGHIJKLMNOP ${'x'.repeat(1500)}` }, createdAt: '2025-04-01T00:00:02.000Z' },
+        ],
+      },
+    ]);
+    const store = await openCursorStore(user);
+    const session = store?.sessions[0];
+    if (store === undefined || session === undefined) throw new Error('no store');
+    const { prompts, errorLines, tools } = capture(store.transcript(session), 'r');
+    expect(prompts[0]?.head).toBe('use key <secret> and mail <email>');
+    expect(errorLines[0]?.line).not.toMatch(/dev@example|AKIA/);
+    expect(errorLines[0]?.line).toContain('<email>');
+    expect(Array.from(errorLines[0]?.line ?? '')).toHaveLength(1000);
+    expect(tools[0]?.targetBase).toBe('cwd');
+    store.close();
+  });
+});
+
+describe('the Cursor reader: workspace shapes', () => {
+  it('reads a .code-workspace as its folder, a remote workspace as no folder, and an inline conversation as messages; a torn workspace store is skipped', async () => {
+    const staged = stage();
+    const { repo, plain } = folders(staged.root);
+    const inline = { composerId: 'inline', createdAt: 5, conversation: [{ type: 1, text: 'old style', bubbleId: 'i0' }, { type: 2, text: 'reply' }] };
+    const headed = (id: string) => ({ composerId: id, createdAt: 6, fullConversationHeadersOnly: [{ bubbleId: 'b0', type: 1 }] });
+    const user = await stageRawCursor(
+      staged.root,
+      [
+        { id: 'inline', document: inline },
+        { id: 'code', document: headed('code') },
+        { id: 'remote', document: headed('remote') },
+        { id: 'torn', document: headed('torn') },
+      ],
+      [
+        { json: { workspace: pathToFileURL(join(repo, 'app.code-workspace')).href }, listed: ['code', 'inline'] },
+        { json: { folder: 'vscode-remote://ssh-remote+box/home/a/app' }, listed: ['remote'] },
+        { json: { folder: pathToFileURL(plain).href } },
+      ],
+    );
+    const store = await openCursorStore(user);
+    if (store === undefined) throw new Error('no store');
+    const found = Object.fromEntries(store.sessions.map((s) => [s.composerId, [s.folder, s.messages]]));
+    expect(found.code).toEqual([repo, 1]);
+    expect(found.remote).toEqual([null, 1]);
+    expect(found.torn).toEqual([null, 1]);
+    expect(found.inline).toEqual([repo, 2]);
+    const session = store.sessions.find((s) => s.composerId === 'inline');
+    if (session === undefined) throw new Error('no session');
+    const { session: captured, prompts } = capture(store.transcript(session), 'inline');
+    expect(captured.userTurns).toBe(1);
+    expect(prompts[0]?.head).toBe('old style');
+    store.close();
+  });
+});
+
+describe('the Cursor reader: times', () => {
+  it('never steps a bubble time back, and starts a session at its first stamped bubble', async () => {
+    const staged = stage();
+    const user = await stageCursor(staged.root, [
+      {
+        id: 't',
+        createdAt: Date.parse('2025-05-01T00:00:00Z'),
+        lastUpdatedAt: Date.parse('2025-05-01T00:10:00Z'),
+        bubbles: [
+          { type: 1, text: 'no time yet' },
+          { type: 2, text: 'stamped', createdAt: '2025-04-30T23:00:00.000Z' },
+          { type: 1, text: 'out of order', createdAt: '2025-04-30T22:00:00.000Z' },
+          { type: 2, text: 'later', createdAt: '2025-04-30T23:30:00.000Z' },
+        ],
+      },
+    ]);
+    const store = await openCursorStore(user);
+    const session = store?.sessions[0];
+    if (store === undefined || session === undefined) throw new Error('no store');
+    const stamps = store.transcript(session).trim().split(String.fromCharCode(10)).map((line): unknown => JSON.parse(line));
+    const times = stamps.map((line) => (typeof line === 'object' && line !== null && 'timestamp' in line ? String(line.timestamp) : ''));
+    expect(times).toEqual(['2025-04-30T23:00:00.000Z', '2025-04-30T23:00:00.000Z', '2025-04-30T23:00:00.000Z', '2025-04-30T23:30:00.000Z']);
     store.close();
   });
 });

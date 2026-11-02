@@ -1,14 +1,21 @@
-import { readFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { books, measure } from './query.js';
+import { books, measure, formatMeasure, recall } from './query.js';
 import { harnessOf, type SessionObservation } from './schema.js';
-import { deposit, loadStore, paths } from './store.js';
-import { cleanup, composers, folders, NOW, stage, stageCursor } from './test-support.js';
+import { deposit, loadStore, paths, readSkeletons } from './store.js';
+import { verifyAll, verifyCaptured } from './verify.js';
+import { cleanup, composers, folders, NOW, stage, stageCursor, stageRawCursor } from './test-support.js';
 
 afterEach(cleanup);
 
 const isRecord = (value: unknown): value is { [key: string]: unknown } => typeof value === 'object' && value !== null;
+
+const trackedKeys = (storeDir: string): string[] => {
+  const state: unknown = JSON.parse(readFileSync(paths(storeDir).state, 'utf8'));
+  return isRecord(state) && isRecord(state.files) ? Object.keys(state.files) : [];
+};
 
 const options = (allow: string[]) => ({ allow, redactDomains: [], now: () => NOW });
 
@@ -97,10 +104,83 @@ describe('recall, books, and measure over Cursor skeletons', () => {
     const store = await loadStore(s.storeDir);
     const signal = measure(store, [], [], 5);
     expect(signal.last.sessions).toBe(3);
+    expect(signal.last.cursorSessions).toBe(3);
+    expect(formatMeasure(signal)).toMatch(/of which Cursor\s+3\s/);
+  });
+
+  it('recall finds the Cursor session by its error and by its file', async () => {
+    const s = await staged();
+    await deposit(s.runtime, options(['cursor']));
+    const store = await loadStore(s.storeDir);
+    const byError = recall(store, { error: '2 tests failed' }, NOW);
+    expect(byError.matches.map((match) => [match.tool, match.sessions])).toEqual([['Bash', 1]]);
+    const byPath = recall(store, { path: 'src/parser.ts' }, NOW);
+    expect(byPath.matches.length).toBeGreaterThan(0);
+    expect(byPath.matches.every((match) => match.sessions >= 1)).toBe(true);
+  });
+
+  it('verify holds for Cursor sessions: no invariant is violated by a deposit', async () => {
+    const s = await staged();
+    await deposit(s.runtime, options(['cursor']));
+    const { skeletons } = await readSkeletons(s.storeDir);
+    expect(skeletons).toHaveLength(3);
+    const store = await loadStore(s.storeDir);
+    const results = [...verifyAll(skeletons), ...verifyCaptured(store.sessions, store.tools)];
+    expect(results.filter((result) => result.violations > 0)).toEqual([]);
+  });
+
+  it('allow.unmatched sees the Cursor source, so --allow cursor reports nothing missing', async () => {
+    const s = await staged();
+    expect((await deposit(s.runtime, options(['cursor']))).missing).toEqual([]);
+    expect((await deposit(s.runtime, options(['cursr']))).missing).toEqual(['cursr']);
   });
 
   it('a session without a harness reads as Claude Code', () => {
     const bare: Pick<SessionObservation, 'harness'> = {};
     expect(harnessOf(bare)).toBe('claude-code');
+  });
+});
+
+describe('an unreadable Cursor store fails open', () => {
+  const withClaude = () => {
+    const s = stage();
+    const project = join(s.projectsRoot, 'mine');
+    mkdirSync(project, { recursive: true });
+    writeFileSync(join(project, 'one.jsonl'), `${JSON.stringify({ type: 'user', timestamp: '2026-06-02T00:00:00Z', message: { role: 'user', content: 'hello' } })}\n`);
+    return s;
+  };
+
+  it('reports a file that is not a database and still deposits the Claude Code folder and writes state.json', async () => {
+    const s = withClaude();
+    const user = join(s.root, 'Cursor', 'User');
+    mkdirSync(join(user, 'globalStorage'), { recursive: true });
+    writeFileSync(join(user, 'globalStorage', 'state.vscdb'), 'this is not a database');
+    const result = await deposit({ ...s.runtime, cursorRoot: user }, options(['mine', 'cursor']));
+    expect(result).toMatchObject({ sessions: 1, cursor: 0, missing: [] });
+    expect(result.cursorUnreadable).toHaveLength(1);
+    expect(result.cursorUnreadable[0]).toContain('state.vscdb');
+    expect(trackedKeys(s.storeDir)).toEqual(['mine/one.jsonl']);
+  });
+
+  it('reports a database with no cursorDiskKV table (an older Cursor) the same way', async () => {
+    const s = withClaude();
+    const user = join(s.root, 'Cursor', 'User');
+    mkdirSync(join(user, 'globalStorage'), { recursive: true });
+    const { DatabaseSync } = await import('node:sqlite');
+    const db = new DatabaseSync(join(user, 'globalStorage', 'state.vscdb'));
+    db.exec('create table ItemTable (key text, value blob)');
+    db.close();
+    const result = await deposit({ ...s.runtime, cursorRoot: user }, options(['mine', 'cursor']));
+    expect(result.sessions).toBe(1);
+    expect(result.cursorUnreadable).toHaveLength(1);
+    expect(result.cursorUnreadable[0]).toMatch(/cursorDiskKV/);
+    expect(trackedKeys(s.storeDir)).toEqual(['mine/one.jsonl']);
+  });
+
+  it('a store with no readable workspace still deposits its sessions', async () => {
+    const s = stage();
+    const user = await stageRawCursor(s.root, [{ id: 'x', document: { composerId: 'x', createdAt: 1, conversation: [{ type: 1, text: 'hi' }] } }], [{ json: { folder: 'file:///nowhere' } }]);
+    const result = await deposit({ ...s.runtime, cursorRoot: user }, options(['cursor']));
+    expect(result).toMatchObject({ cursor: 1, cursorUnreadable: [] });
   });
 });
