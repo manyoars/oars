@@ -1,4 +1,4 @@
-# The `oars sessions` store (version 4)
+# The `oars sessions` store (version 5)
 
 `oars sessions` keeps a local, deterministic memory of the operator's own Claude Code sessions: no model call, no network, nothing
 uploads. This page is the store's format. The types are in `packages/cli/src/sessions/schema.ts`; the commands are in the CLI README.
@@ -55,7 +55,7 @@ pattern and entropy, emails, and the domains named with `--redact-domain`) befor
 | every capture record | `kind`, `cv`, `rev`, `sid` | P |
 | `session` (one per transcript) | `agentType` (set on a subagent transcript), `harness` (set on a Cursor session; absent reads as Claude Code), `bytes`, `lines`, `badLines`, `userTurns`, `assistantTurns`, `versions`, `models`, `tools`, `bashCmds`, `compactSummaries`, `costUsd`, `usage`, `env` (below) | P |
 | | `session`, `parent`, `spawnedBy` (join ids), `at`, `tsFirst`, `tsLast` (a pool would keep the UTC day), `promptFingerprint`, `repo`, `fileHashes`, `urls`, `searches`, `branches`, `tldrs` (400 chars), `confidences` (120 chars) | A |
-| | `project` (the folder slug, with the username and directory names; also the `projects` keys of `hook-index.json`, which are folder slugs), `files` (the paths as written, redacted) | L |
+| | `project` (the folder slug, with the username and directory names), `files` (the paths as written, redacted) | L |
 | `user-prompt` (one per prompt) | `index`, `wallSec`, `thinking`, `turns`, `model`, `efforts`, `skills`, `usage` | P |
 | | `session`, `ts` (a pool would keep the UTC day), `head` (the first 300 characters), `promptFingerprint` | A |
 | `tool` (one per tool call) | `n`, `tool`, `status` (`ok`, `error`, or `none` when no result is in the file), `keys` (the input's key names), `durationMs`, `harnessVersion`, `agentType`, `side`, `prompt`, `targetBase`, and `target` for a shell call | P |
@@ -118,16 +118,23 @@ written when the step ends. It carries no `cv` of its own, so it needs no captur
 | `in`, `out` | P | Counts by kind. `deposit`: `in` is `transcript` (the count asked for), `out` is `session`, `subagent`, `user-prompt`, `tool`, and `error-line`. `derive`: `in` is `session`, `subagent`, `user-prompt`, and `tool`; `out` is `signature` and `summary`. `index`: `in` is `session`, `subagent`, and `error`; `out` is `signature` and `project`. `verify`: `in` is `session` and `subagent`; `out` is `checked`, `passed`, `cvBehind`, and `stuck`. `recall`: `in` is `query`; `out` is `matches`. |
 | `cv`, `ev` | P | The capture and extractor versions the step ran at. `lv` (the labeler) appears on `label` rows only. |
 | `key` | A | A 16-hex hash, so a repeat is visible, built from the step's inputs and never from the state it leaves, so a failed row and the ok row of the same work carry one key. `deposit`: `cv`, `ev`, the trigger, the allow entries (the SessionEnd hook: that one transcript's path), and the redact domains (the SessionEnd hook reads none, so its key has none); this replaces the spec's file, size, and mtime with the inputs the run was asked for, which are known before the work. A `stop` for a folder off the allowlist or a transcript that is gone is an `ok` row with nothing written and its own key (an attempted deposit that wrote nothing; no row is logged when the hook got no transcript path). `derive` and `index`: each session's and subagent's highest `rev`, and `ev`; a derive that could not read the store has `ev` alone. `verify`: each session's and subagent's `rev` and `cv`, and `ev`; a failed run, whose store could not be read, has the session asked for and `ev`. `recall`: the query and `ev` (the lookup hooks: the cwd for `session-start`, the failure's signature for `post-tool`; the spec names none, since a lookup writes nothing). Null only on a `skipped` row. |
-| `error` | A | The first informative line of the failure, redacted like every other text in the store; null when `ok`. |
+| `error` | A | The first informative line of the failure, at most 300 characters, with the home folder reduced to `<home>` (in either slash form and any letter case) and redacted like every other text in the store; null when `ok`. |
 
-A failed step logs `error`, and the run's later steps are logged `skipped`; the next trigger retries the same key. A failed deposit leaves
-`state.json` as it was; a derive that fails after its deposit wrote the records logs `deposit` `ok`, `derive` `error`, and `index` `skipped`; an index write that fails logs `deposit` and `derive` `ok`, then `index` `error` (the records and
-`state.json` stand; the next deposit rebuilds the derived files and the index). A key that fails on three runs in a row is `stuck`, counted per step and trigger: an `ok` run of the same step and trigger ends its open
-streaks, and an `ok` run on the same key under another trigger ends that key's streak too, so a nightly deposit that fails every night is stuck although the `stop` deposits between nights succeed. A usage error (`deposit` with nothing
-to read) is no failed run and leaves no row. `verify` counts a stuck key (a `verify` streak is not listed: a verify that got here succeeded), prints `FAIL  <step> is stuck: key <key> failed <runs> runs in a row: <error>`, fails
-`--strict` with it, and writes the count in its own row. The stuck check is store-wide; `--session` narrows the invariants and the key only. A row that cannot be appended never changes the step's outcome: the step's value or
-its own error reaches the caller. A lookup hook logs an `ok` `recall` row only when it read the index and searched it; a missing, torn, or unreadable index counts as no index and logs no row, and an `error` row means the search itself failed. An MCP recall is counted in `mcp-calls.jsonl`, not here. `recall --context` is the manual recall verb and logs a `manual` row keyed by the cwd and harness. A
-state.json that cannot be read fails the step like any other failure: its row is still written, with the line masked by no domains.
+A failed step logs `error`, and the run's later steps are logged `skipped`; the next trigger retries the same key. A failed
+deposit leaves `state.json` as it was; a derive that fails after its deposit wrote the records logs `deposit` `ok`, `derive`
+`error`, and `index` `skipped`; an index write that fails logs `deposit` and `derive` `ok`, then `index` `error` (the records
+and `state.json` stand; the next deposit rebuilds the derived files and the index). A key that fails on three runs in a row
+is `stuck`, counted per step and trigger: an `ok` run of the same step and trigger ends its open streaks, and an `ok` run on
+the same key under another trigger ends that key's streak too, so a nightly deposit that fails every night is stuck although
+the `stop` deposits between nights succeed. A usage error (`deposit` with nothing to read) is no failed run and leaves no
+row. `verify` counts a stuck key (a `verify` streak is not listed: a verify that got here succeeded), prints `FAIL  <step> is
+stuck: key <key> failed <runs> runs in a row: <error>`, fails `--strict` with it, and writes the count in its own row. The
+stuck check is store-wide; `--session` narrows the invariants and the key only. A row that cannot be appended never changes
+the step's outcome: the step's value or its own error reaches the caller. A lookup hook logs an `ok` `recall` row only when
+it read the index and searched it; a missing, torn, or unreadable index counts as no index and logs no row, and an `error`
+row means the search itself failed. An MCP recall is counted in `mcp-calls.jsonl`, not here. `recall --context` is the manual
+recall verb and logs a `manual` row keyed by the cwd and harness. A state.json that cannot be read fails the step like any
+other failure: its row is still written, with the line masked by no domains.
 
 `oars sessions measure` prints the counters of spec 3.2 that this log can answer, under the G1 signals, over the whole log (`--last`, `--since`, and `--repo` filter the G1 table only; the step counters are all-time and not repository-scoped): runs of each step (ok, error,
 skipped) and mean ms, per step and `ev`; capture records deposited by kind; records derived by type (the newest derive); what the index holds (the newest index); invariants passed of checked and
@@ -155,16 +162,17 @@ local only and is never read by `derive`.
 `verify` checks that the harness's `cost-state` totals equal the recorded usage within their scope: the process that wrote them
 (from its `startTime`, so a resumed session's earlier lines are outside them) and the session's subagent transcripts, counted
 once per request id. A recorded sum above a total fails. A total above the sum is not a failure; it is printed as observed,
-under `harness side calls` only on a usage key that a `modelUsage` model with no assistant line reported (001cf645 has a
+under `harness side calls` only on a usage key that a `modelUsage` model with no assistant line reported a nonzero amount on (001cf645 has a
 `claude-haiku` entry and no haiku line), else under `other`. Checks that hold only once a scope is applied are counted under `resume scope` and `subagent
 transcripts`, each with one example session.
 
 The skeleton's cost state records, per `modelUsage` model (sorted by name), the usage keys its entry reported a nonzero amount on: `input`,
 `cacheWrite`, `cacheRead`, `output`. A side model whose cache keys are absent or zero (the haiku case) therefore explains an
-excess only on `input` and `output`, and an excess on `cacheRead` stays `other`. The field is additive inside `CAPTURE_VERSION` 4, with no bump:
-it changes no captured record, only the skeleton's cost state, and no transcript is re-read for it. The compatibility reader fills a
-skeleton written without it (a bare model name, or no `models`) with no keys, so that skeleton's excess keys fall under `other` until
-the session is captured again. Class A, with the rest of the skeleton lines (a pool would not hold them).
+excess only on `input` and `output`, and an excess on `cacheRead` stays `other`. The field changes the stored `models` value of an existing skeleton, so it bears on `CAPTURE_VERSION`, not `EXTRACTOR_VERSION`: the rule is that a
+captured field changing bumps `CAPTURE_VERSION`, and derived values alone bump `EXTRACTOR_VERSION`. It is `CAPTURE_VERSION` 5 (t733). t700 added
+`models` with no bump because no version-3 store had shipped; a version-4 store is on operators' machines now, so the next deposit captures
+every transcript again and writes the keys. The compatibility reader still fills a skeleton written without them (a bare model name, or no
+`models`) with no keys, so a transcript that is gone from disk keeps its excess keys under `other`. Class A, with the rest of the skeleton lines (a pool would not hold them).
 
 ## More than one repository in a store
 
