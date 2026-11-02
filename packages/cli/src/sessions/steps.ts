@@ -122,7 +122,7 @@ export interface StuckStep {
 
 /**
  * Keys that failed on three runs in a row, per step and trigger (a nightly that fails every night is not cleared by the `stop` deposits
- * between nights). A `skipped` row is no run of its step; an `ok` row ends the open streaks of its own step and trigger, because a step's
+ * between nights). A `skipped` row is no run of its step; an `ok` row ends the open streaks of its own step and trigger, and of its step on the same key under another trigger, because a step's
  * good run can carry a key (verify's high-water mark) that its failed run could not know before the work.
  */
 export const stuckSteps = (rows: readonly StepRow[]): StuckStep[] => {
@@ -131,7 +131,8 @@ export const stuckSteps = (rows: readonly StepRow[]): StuckStep[] => {
     if (row.key === null || row.status === 'skipped') continue;
     const id = `${row.step}:${row.trigger}:${row.key}`;
     if (row.status === 'ok') {
-      for (const open of [...streaks.keys()]) if (open.startsWith(`${row.step}:${row.trigger}:`)) streaks.delete(open);
+      // Its own trigger's streaks end whatever key the good run carries; another trigger's streak ends only on the same key, which now has output (spec 4.2).
+      for (const open of [...streaks.keys()]) if (open.startsWith(`${row.step}:${row.trigger}:`) || (open.startsWith(`${row.step}:`) && open.endsWith(`:${row.key}`))) streaks.delete(open);
       continue;
     }
     streaks.set(id, { step: row.step, key: row.key, runs: (streaks.get(id)?.runs ?? 0) + 1, error: row.error ?? '' });
