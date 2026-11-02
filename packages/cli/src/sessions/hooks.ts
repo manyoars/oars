@@ -7,7 +7,7 @@ import { appendHookCall } from './hook-calls.js';
 import { contextBlock, readIndex } from './hook-index.js';
 import { makeRedactor } from './redact.js';
 import type { HookCall } from './schema.js';
-import { logStep, newContext, runDeposit, stampKey } from './steps.js';
+import { errorLine, inputKey, logStep, newContext, runDeposit, stampKey, tryLog } from './steps.js';
 import { deposit, depositSession, readSaved, type SessionsRuntime } from './store.js';
 
 export type HookEvent = HookCall['event'];
@@ -74,18 +74,29 @@ const stop = async (runtime: SessionsRuntime, input: Input, now: () => number): 
   const transcript = str(input.transcript_path);
   if (transcript === undefined) return { hit: false };
   // The SessionEnd hook is the `stop` trigger (spec 4.1); derive and index follow at the nightly run, so only a deposit row is logged.
-  const deposited = await runDeposit(newContext(runtime.storeDir, now, 'stop'), false, async (trace) => ({ value: await depositSession(runtime, transcript, now, trace), in: { transcript: 1 } }));
+  const deposited = await runDeposit(newContext(runtime.storeDir, now, 'stop'), false, inputKey('stop', [transcript], []), async (trace) => ({ value: await depositSession(runtime, transcript, now, trace), in: { transcript: 1 } }));
   return { hit: deposited === 'deposited' };
 };
 
 const nightly = async (runtime: SessionsRuntime, now: () => number): Promise<Outcome> => {
   const saved = await readSaved(runtime.storeDir);
   if (saved.allow.length === 0) return { hit: false };
-  await runDeposit(newContext(runtime.storeDir, now, 'nightly'), true, async (trace) => {
+  await runDeposit(newContext(runtime.storeDir, now, 'nightly'), true, inputKey('nightly', saved.allow, saved.redactDomains), async (trace) => {
     const done = await deposit(runtime, { allow: saved.allow, redactDomains: saved.redactDomains, now }, trace);
     return { value: done, in: { transcript: done.sessions + done.subagents + done.unchanged } };
   });
   return { hit: true };
+};
+
+/** What a lookup hook looks up, as its recall key (spec 4.2 names none for a lookup): the cwd for session-start, the failure's signature for post-tool; null when it had nothing to look up. */
+const lookupKey = (event: HookEvent, input: Input): string | null => {
+  if (event === 'session-start') {
+    const cwd = str(input.cwd);
+    return cwd === undefined ? null : stampKey(event, cwd);
+  }
+  const tool = str(input.tool_name);
+  const text = failureText(input);
+  return event === 'post-tool' && tool !== undefined && text !== undefined ? stampKey(event, signatureOf(tool, text, makeRedactor([]))) : null;
 };
 
 const firstLine = (error: unknown): string => (error instanceof Error ? error.message : String(error)).split('\n')[0] ?? '';
@@ -99,23 +110,27 @@ export const runHook = async (event: HookEvent, stdin: string, runtime: Sessions
   let session: string | null = null;
   let outcome: Outcome = { hit: false };
   let error: string | null = null;
+  let failure: unknown;
+  let key: string | null = null;
   try {
     const input = parse(stdin);
+    key = lookupKey(event, input);
     session = str(input.session_id) ?? null;
     if (event === 'session-start') outcome = await sessionStart(runtime, input);
     else if (event === 'post-tool') outcome = await postTool(runtime, input);
     else if (event === 'stop') outcome = await stop(runtime, input, now);
     else outcome = await nightly(runtime, now);
-  } catch (failure) {
-    error = firstLine(failure);
+  } catch (thrown) {
+    failure = thrown;
+    error = firstLine(thrown);
   }
   try {
     const ms = Math.round(performance.now() - started);
     await appendHookCall(runtime.storeDir, { at: new Date(now()).toISOString(), event, session, hit: outcome.hit, ms, error });
-    // A lookup hook is a `recall` step started by its own trigger; the deposit hooks logged their rows as they ran.
-    if (event === 'session-start' || event === 'post-tool') {
-      const report = { in: { query: 1 }, out: { matches: outcome.hit ? 1 : 0 }, key: stampKey(event, session ?? '') };
-      await logStep(newContext(runtime.storeDir, now, event), 'recall', error === null ? 'ok' : 'error', ms, report, error);
+    // A lookup hook that looked something up is a `recall` step started by its own trigger; the deposit hooks logged their rows as they ran.
+    if (key !== null) {
+      const report = { in: { query: 1 }, out: { matches: outcome.hit ? 1 : 0 }, key };
+      await tryLog(async () => logStep(newContext(runtime.storeDir, now, event), 'recall', error === null ? 'ok' : 'error', ms, report, error === null ? null : await errorLine(runtime.storeDir, failure)));
     }
   } catch {
     // A counter that cannot be written must not cost the session its context.

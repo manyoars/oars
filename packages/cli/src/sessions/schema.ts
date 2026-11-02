@@ -405,7 +405,7 @@ export interface HookCall {
 export const STEPS = ['deposit', 'verify', 'derive', 'label', 'index', 'recall'] as const;
 export type Step = (typeof STEPS)[number];
 
-/** The trigger names of spec 4.1 that start a local step. The SessionEnd hook is `stop`, never `session-end`. */
+/** The trigger names of spec 4.1 (the hosted ones included: nothing local starts `sync`, `cron`, `release`, `run-end`, or `run-start` yet). The SessionEnd hook is `stop`, never `session-end`. */
 export const TRIGGERS = ['session-start', 'post-tool', 'stop', 'nightly', 'manual', 'weekly', 'sync', 'cron', 'release', 'run-end', 'run-start'] as const;
 export type Trigger = (typeof TRIGGERS)[number];
 
@@ -465,6 +465,7 @@ export const parseStepRow = (value: unknown): StepRow | undefined => {
   const { at, run, ms, cv, ev, lv, key, error } = value;
   if (typeof at !== 'string' || typeof run !== 'string' || typeof ms !== 'number' || typeof cv !== 'string' || typeof ev !== 'string') return undefined;
   if (!(key === null || typeof key === 'string') || !(error === null || typeof error === 'string')) return undefined;
-  if (lv !== undefined && typeof lv !== 'string') return undefined;
+  // `lv` is the labeler stamp: spec 3.1 puts it on `label` rows only.
+  if (lv !== undefined && (typeof lv !== 'string' || step !== 'label')) return undefined;
   return { at, run, trigger, step, status, ms, in: input, out: output, cv, ev, ...(lv === undefined ? {} : { lv }), key, error };
 };

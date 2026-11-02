@@ -5,7 +5,7 @@ import { appendFile, mkdir, readFile } from 'node:fs/promises';
 import { performance } from 'node:perf_hooks';
 import { makeRedactor } from './redact.js';
 import { CAPTURE_VERSION, EXTRACTOR_VERSION, parseStepRow, type Step, type StepCounts, type StepRow, type StepStatus, type Trigger } from './schema.js';
-import { depositKey, digest, newTrace, paths, readRedactDomains, type DepositTrace } from './store.js';
+import { digest, newTrace, paths, readRedactDomains, type DepositTrace } from './store.js';
 
 /** Where one run's rows get their identity: the steps of one nightly or manual run share `run`. */
 export interface StepContext {
@@ -75,25 +75,33 @@ export const logStep = (context: StepContext, step: Step, status: StepStatus, ms
 /** A step an earlier step of the run left undone (spec 4.4): logged `skipped`, with no counts and no key. */
 export const logSkipped = (context: StepContext, step: Step): Promise<void> => logStep(context, step, 'skipped', 0, { in: {}, out: {}, key: null }, null);
 
+/** Writes a row without ever failing: a log that cannot be appended (or a failure line that cannot be redacted) must not change a step's outcome or hide its real error. */
+export const tryLog = async (write: () => Promise<void>): Promise<void> => {
+  try {
+    await write();
+  } catch {
+    // The step's value, or its own error, is what the caller gets.
+  }
+};
+
+/** Logs a failed step: `error`, the failure's first line, and the key the step had from its inputs (null when it had none yet). */
+const logFailure = (context: StepContext, step: Step, ms: number, key: string | null, failure: unknown): Promise<void> =>
+  tryLog(async () => logStep(context, step, 'error', ms, { in: {}, out: {}, key }, await errorLine(context.storeDir, failure)));
+
 /**
- * Runs `work` and logs its row: `ok` with what it reports, or `error` with the failure's first line and `failedKey` (the key the work
- * had, read afterwards because a failed step leaves its inputs as they were), after which the failure goes on to the caller.
+ * Runs `work` and logs its row: `ok` with what it reports, or `error` with the failure's first line and `failedKey` (a key built from
+ * the step's inputs before the work, so a retry of the same work has the same key), after which the failure goes on to the caller.
  */
-export const runStep = async <T>(
-  context: StepContext,
-  step: Step,
-  work: () => Promise<{ value: T; report: StepReport }>,
-  failedKey: () => Promise<string | null> = () => Promise.resolve(null),
-): Promise<T> => {
+export const runStep = async <T>(context: StepContext, step: Step, work: () => Promise<{ value: T; report: StepReport }>, failedKey: string | null = null): Promise<T> => {
   const started = performance.now();
   let done: { value: T; report: StepReport };
   try {
     done = await work();
   } catch (error) {
-    await logStep(context, step, 'error', performance.now() - started, { in: {}, out: {}, key: await failedKey() }, await errorLine(context.storeDir, error));
+    await logFailure(context, step, performance.now() - started, failedKey, error);
     throw error;
   }
-  await logStep(context, step, 'ok', performance.now() - started, done.report, null);
+  await tryLog(() => logStep(context, step, 'ok', performance.now() - started, done.report, null));
   return done.value;
 };
 
@@ -109,14 +117,17 @@ export interface StuckStep {
   error: string;
 }
 
-/** Keys that failed on three runs in a row (a `skipped` row is no run of its step, an `ok` row ends the streak). */
+/**
+ * Keys that failed on three runs in a row. A `skipped` row is no run of its step; an `ok` row ends every open streak of its step, because
+ * a step's good run can carry a key (the state it leaves) that its failed run could not know before the work.
+ */
 export const stuckSteps = (rows: readonly StepRow[]): StuckStep[] => {
   const streaks = new Map<string, StuckStep>();
   for (const row of rows) {
     if (row.key === null || row.status === 'skipped') continue;
     const id = `${row.step}:${row.key}`;
     if (row.status === 'ok') {
-      streaks.delete(id);
+      for (const open of [...streaks.keys()]) if (open.startsWith(`${row.step}:`)) streaks.delete(open);
       continue;
     }
     streaks.set(id, { step: row.step, key: row.key, runs: (streaks.get(id)?.runs ?? 0) + 1, error: row.error ?? '' });
@@ -126,6 +137,8 @@ export const stuckSteps = (rows: readonly StepRow[]): StuckStep[] => {
 
 export interface StepLine {
   step: Step;
+  /** The extractor version the runs ran at: spec 3.2 counts step time per `ev`. */
+  ev: string;
   runs: number;
   ok: number;
   error: number;
@@ -155,18 +168,18 @@ const add = (counts: StepCounts, kind: string, count: number): void => {
 };
 
 export const stepCounters = (rows: readonly StepRow[]): StepCounters => {
-  const lines = new Map<Step, { runs: number; ok: number; error: number; skipped: number; ms: number }>();
+  const lines = new Map<string, { step: Step; ev: string; runs: number; ok: number; error: number; skipped: number; ms: number }>();
   const deposited: StepCounts = {};
   const failures: StepCounts = {};
   let derived: StepCounts = {};
   let verify: StepCounts | null = null;
   const recall = { queries: 0, matches: 0 };
   for (const row of rows) {
-    const line = lines.get(row.step) ?? { runs: 0, ok: 0, error: 0, skipped: 0, ms: 0 };
+    const line = lines.get(`${row.step}@${row.ev}`) ?? { step: row.step, ev: row.ev, runs: 0, ok: 0, error: 0, skipped: 0, ms: 0 };
     line.runs += 1;
     line[row.status] += 1;
     if (row.status !== 'skipped') line.ms += row.ms;
-    lines.set(row.step, line);
+    lines.set(`${row.step}@${row.ev}`, line);
     if (row.status === 'error') add(failures, `${row.step}@${row.ev}`, 1);
     if (row.status !== 'ok') continue;
     if (row.step === 'deposit') for (const [kind, count] of Object.entries(row.out)) add(deposited, kind, count);
@@ -177,18 +190,18 @@ export const stepCounters = (rows: readonly StepRow[]): StepCounters => {
       recall.matches += row.out.matches ?? 0;
     }
   }
-  const steps = [...lines.entries()].map(([step, line]): StepLine => ({ step, runs: line.runs, ok: line.ok, error: line.error, skipped: line.skipped, meanMs: line.runs === line.skipped ? 0 : Math.round(line.ms / (line.runs - line.skipped)) }));
+  const steps = [...lines.values()].map((line): StepLine => ({ step: line.step, ev: line.ev, runs: line.runs, ok: line.ok, error: line.error, skipped: line.skipped, meanMs: line.runs === line.skipped ? 0 : Math.round(line.ms / (line.runs - line.skipped)) }));
   return { runs: rows.length, steps, deposited, derived, verify, recall, failures, stuck: stuckSteps(rows) };
 };
 
 export const formatStepCounters = (counters: StepCounters): string => {
   if (counters.runs === 0) return 'pipeline step log: no step has run yet';
-  const row = (label: string, value: string): string => `${label.padEnd(36)} ${value.padStart(12)}`;
+  const row = (label: string, value: string): string => `${label.padEnd(40)} ${value.padStart(12)}`;
   const by = (label: string, counts: StepCounts): string[] => Object.entries(counts).sort(([a], [b]) => a.localeCompare(b)).map(([kind, count]) => row(`${label} ${kind}`, String(count)));
   const verify = counters.verify;
   return [
-    row('pipeline step log', 'value'),
-    ...counters.steps.flatMap((line) => [row(`${line.step} runs (ok/error/skipped)`, `${String(line.ok)}/${String(line.error)}/${String(line.skipped)}`), row(`${line.step} mean ms`, String(line.meanMs))]),
+    row('pipeline step log (all time)', 'value'),
+    ...counters.steps.flatMap((line) => [row(`${line.step}@${line.ev} runs (ok/error/skipped)`, `${String(line.ok)}/${String(line.error)}/${String(line.skipped)}`), row(`${line.step}@${line.ev} mean ms`, String(line.meanMs))]),
     ...by('records deposited,', counters.deposited),
     ...by('records derived,', counters.derived),
     ...(verify === null ? [] : [row('invariants passed of checked', `${String(verify.passed ?? 0)}/${String(verify.checked ?? 0)}`), row('cv-behind sessions', String(verify.cvBehind ?? 0))]),
@@ -202,24 +215,35 @@ export const formatStepCounters = (counters: StepCounters): string => {
 /** A key built from its inputs and `ev` (spec 4.2), hashed; a recall has none in the spec (a lookup writes nothing), so its query is the input. */
 export const stampKey = (...parts: readonly string[]): string => digest([EXTRACTOR_VERSION, ...parts]);
 
+/** A deposit's key from its inputs (spec 4.2 reads the files' state, which is not known before the work): the trigger, the allow entries or transcript asked for, and the redact domains. */
+export const inputKey = (trigger: Trigger, requested: readonly string[], domains: readonly string[]): string => stampKey(trigger, ...[...requested].sort(), '--', ...[...domains].sort());
+
 /**
  * Runs a deposit and logs its rows: `deposit` with the records it wrote by kind, then, when it ended with the whole-store pass,
- * `derive` (spec 4.1: one derive row per nightly or manual run). A deposit that fails logs `error` and, when a derive was to follow,
- * `skipped` for it (spec 4.4). The SessionEnd hook runs `withDerive` false: derive follows at the nightly run.
+ * `derive` (spec 4.1: one derive row per nightly or manual run). `key` is built from the deposit's inputs (the trigger and the transcripts
+ * it was asked to deposit), so the failed row and the ok row of one deposit carry the same key and a failure that recovers is not stuck.
+ * A deposit that fails logs `error` and, when a derive was to follow, `skipped` for it (spec 4.4). A derive that fails after the deposit
+ * wrote its records logs `deposit` ok and then `derive` error, and the failure goes on to the caller. The SessionEnd hook runs
+ * `withDerive` false: derive follows at the nightly run.
  */
-export const runDeposit = async <T>(context: StepContext, withDerive: boolean, work: (trace: DepositTrace) => Promise<{ value: T; in: StepCounts }>): Promise<T> => {
+export const runDeposit = async <T>(context: StepContext, withDerive: boolean, key: string, work: (trace: DepositTrace) => Promise<{ value: T; in: StepCounts }>): Promise<T> => {
   const trace = newTrace();
   const started = performance.now();
   let done: { value: T; in: StepCounts };
   try {
     done = await work(trace);
   } catch (error) {
-    await logStep(context, 'deposit', 'error', performance.now() - started, { in: {}, out: {}, key: trace.key ?? (await depositKey(context.storeDir)) }, await errorLine(context.storeDir, error));
-    if (withDerive) await logSkipped(context, 'derive');
+    await logFailure(context, 'deposit', performance.now() - started, key, error);
+    if (withDerive) await tryLog(() => logSkipped(context, 'derive'));
     throw error;
   }
   const derive = trace.derive;
-  await logStep(context, 'deposit', 'ok', performance.now() - started - (derive?.ms ?? 0), { in: done.in, out: trace.kinds, key: trace.key }, null);
-  if (derive !== undefined) await logStep(context, 'derive', 'ok', derive.ms, { in: derive.in, out: derive.out, key: derive.key }, null);
+  await tryLog(() => logStep(context, 'deposit', 'ok', performance.now() - started - (derive?.ms ?? 0), { in: done.in, out: trace.kinds, key }, null));
+  if (derive !== undefined) await tryLog(() => logStep(context, 'derive', 'ok', derive.ms, { in: derive.in, out: derive.out, key: derive.key }, null));
+  const failure = trace.deriveFailure;
+  if (failure !== undefined) {
+    await logFailure(context, 'derive', 0, failure.key, failure.error);
+    throw failure.error;
+  }
   return done.value;
 };

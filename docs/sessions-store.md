@@ -117,16 +117,18 @@ written when the step ends. It carries no `cv` of its own, so it needs no captur
 | `ms` | P | Wall time of the step; a `deposit` row excludes the derive pass it ends with, which has its own row. |
 | `in`, `out` | P | Counts by kind: `deposit` writes `out` as `session`, `subagent`, `user-prompt`, `tool`, `error-line`; `derive` as `signature` and `summary`; `verify` as `checked`, `passed`, `cvBehind`, `stuck`; `recall` as `matches`. |
 | `cv`, `ev` | P | The capture and extractor versions the step ran at. `lv` (the labeler) appears on `label` rows only. |
-| `key` | A | The idempotency key (spec 4.2), a 16-hex hash, so a repeat is visible. `deposit`: every deposited file's size, mtime, and `cv`, and the redact-domain set (the SessionEnd hook: that one transcript's). `derive`: each session's highest `rev` and `ev`. `verify`: each session's `rev` and `cv`, and `ev`. `recall`: the query and `ev` (the spec names none, since a lookup writes nothing). Null on a `skipped` row. |
+| `key` | A | A 16-hex hash, so a repeat is visible, built from the step's inputs and never from the state it leaves, so a failed row and the ok row of the same work carry one key. `deposit`: the trigger, the allow entries (the SessionEnd hook: that one transcript's path), and the redact domains; a `stop` for a folder off the allowlist or a transcript that is gone is an `ok` row with nothing written and its own key. `derive`: each session's highest `rev` and `ev`. `verify`: each session's `rev` and `cv`, and `ev`; a failed run, whose store could not be read, has the session asked for and `ev`. `recall`: the query and `ev` (the lookup hooks: the cwd for `session-start`, the failure's signature for `post-tool`; the spec names none, since a lookup writes nothing). Null only on a `skipped` row. |
 | `error` | A | The first informative line of the failure, redacted like every other text in the store; null when `ok`. |
 
-A failed step logs `error`, leaves its output as it was, and the run's later steps are logged `skipped`; the next trigger retries the
-same key. A failed deposit's key is read from `state.json`, which a failed deposit leaves as it was, so a retry has the same key. A key
-that fails on three runs in a row is `stuck`: `verify` counts it, prints `FAIL  <step> is stuck: key <key> failed 3 runs in a row: <error>`,
-and writes the count in its own row.
+A failed step logs `error`, and the run's later steps are logged `skipped`; the next trigger retries the same key. A failed deposit leaves
+`state.json` as it was; a derive that fails after its deposit wrote the records logs `deposit` `ok`, then `derive` `error` (the records and
+`state.json` stand; the next deposit rebuilds the derived files). A key that fails on three runs in a row is `stuck`: an `ok` run of the step ends
+every open streak of it. `verify` counts a stuck key, prints `FAIL  <step> is stuck: key <key> failed 3 runs in a row: <error>`, fails
+`--strict` with it, and writes the count in its own row. A row that cannot be appended never changes the step's outcome: the step's value or
+its own error reaches the caller. A lookup hook logs a `recall` row only when it looked something up.
 
-`oars sessions measure` prints the counters of spec 3.2 that this log can answer, under the G1 signals: runs of each step (ok, error,
-skipped) and mean ms; capture records deposited by kind; records derived by type (the newest derive); invariants passed of checked and
+`oars sessions measure` prints the counters of spec 3.2 that this log can answer, under the G1 signals, over the whole log (`--last` and `--since` filter the G1 table only): runs of each step (ok, error,
+skipped) and mean ms, per step and `ev`; capture records deposited by kind; records derived by type (the newest derive); invariants passed of checked and
 `cv-behind` sessions (the newest verify); recall queries and matches; failed runs by step and `ev`; and the stuck steps. `--json`
 carries the same numbers under `steps`. A malformed or torn line is skipped when the log is read.
 
