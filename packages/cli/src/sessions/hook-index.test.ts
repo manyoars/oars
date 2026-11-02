@@ -164,7 +164,7 @@ describe('per-repository scope', () => {
     const cli = harness();
     cli.deps.sessions = staged.runtime;
     expect(await run(['--json', 'sessions', 'measure', '--last', '300', '--repo', HOME], cli.deps)).toBe(ExitCode.OK);
-    expect(JSON.parse(cli.out.join('')).last.sessions).toBe(own);
+    expect(JSON.parse(cli.out.join(''))).toMatchObject({ last: { sessions: own } });
     // No flag: the same output as the store's own `measure`.
     expect(all.text).toBe(formatMeasure(measure(store, await readCalls(staged.storeDir), await readHookCalls(staged.storeDir), 300)));
   });
