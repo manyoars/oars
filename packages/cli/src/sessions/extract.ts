@@ -7,6 +7,7 @@ import type { Redactor } from './redact.js';
 import {
   CAPTURE_VERSION,
   ERROR_LINE_CHARS,
+  FILES_PER_SESSION_MAX,
   PROMPT_HEAD_CHARS,
   SIGNATURE_CHARS,
   type CostState,
@@ -700,8 +701,8 @@ export const captureSession = (input: ExtractInput): Capture => {
 
   session.versions = [...versions].sort();
   session.branches = [...branches].sort();
-  session.files = [...files].sort();
-  session.fileHashes = [...fileHashes].sort();
+  session.files = [...files].sort().slice(0, FILES_PER_SESSION_MAX);
+  session.fileHashes = [...fileHashes].sort().slice(0, FILES_PER_SESSION_MAX);
   session.repo = sessionRoot === null ? null : sha256(`${salt}\nrepo:${toForward(sessionRoot).toLowerCase()}`).slice(0, 16);
   session.urls = [...urls].sort();
   session.searches = [...searches].sort();

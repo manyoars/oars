@@ -45,6 +45,8 @@ export const ERROR_EXAMPLE_CHARS = 160;
 export const SIGNATURE_CHARS = 110;
 /** An error-line's `line` is redacted, then cut to this many characters (t711 Section 1.2; version 3 stored it uncut). */
 export const ERROR_LINE_CHARS = 1000;
+/** Per-session cap on `files` and `fileHashes` (L3): the hand run on the copy store had p99 61 and max 209 files per session; 100 is the round number above p99. */
+export const FILES_PER_SESSION_MAX = 100;
 
 export type PromptClass = 'no-tools' | 'orchestration' | 'research' | 'edit-verify' | 'edit-only' | 'explore-only' | 'shell-only' | 'mixed';
 
