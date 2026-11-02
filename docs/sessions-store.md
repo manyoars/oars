@@ -175,6 +175,9 @@ carry `harness: "cursor"`; a record with no `harness` is Claude Code's (`harness
 - **Idempotent.** `state.json` keeps one entry per composer (`cursor/<composerId>`) whose cursor is the message count and `lastUpdatedAt`;
   a second deposit adds nothing, and a composer that gained messages is captured again.
 - **Absent fields.** The store has no cache read or write tokens, thinking tokens, subagents, hooks, cost-state, git branch, or Cursor
-  version, so they take the empty value (0, `[]`, or null; `env.harness` is null). Most bubbles carry no timestamp and take the previous
-  one's, so wall time per prompt is coarse. Nothing goes to `raw/` (there is no transcript file), and the Stop hook does not read Cursor.
+  version, so they take the empty value (0, `[]`, or null; `env.harness` is null). A bubble's time is its `createdAt`, else
+  `timingInfo.clientStartTime` when that is an epoch time at or after the composer's start (a smaller value is a relative clock and is
+  ignored); a user bubble with neither takes the next assistant bubble's, and any other takes the previous one's, so wall time per prompt is coarse.
+  A shell command Cursor records as `completed` with a nonzero `exitCodeV2` is a failed `Bash` call, and a tool `error` is read from its JSON
+  wrapper (the model-visible message, else the client-visible one). Nothing goes to `raw/` (there is no transcript file), and the Stop hook does not read Cursor.
 - **Reading it back.** `recall` and `measure` read the records as they are. `books --by harness` groups the prompts by harness.

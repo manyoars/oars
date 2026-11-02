@@ -2,9 +2,9 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { run } from '../cli.js';
 import { ExitCode } from '../errors.js';
 import { harness, removeTestDirs } from '../test-support.js';
-import { readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { addProject, cleanup, FIXTURES, stage } from './test-support.js';
+import { addProject, cleanup, composers, FIXTURES, folders, stage, stageCursor } from './test-support.js';
 
 afterEach(() => {
   cleanup();
@@ -20,6 +20,53 @@ const setup = () => {
 
 const json = (out: string[]): unknown => JSON.parse(out.join(''));
 const field = (value: unknown, key: string): unknown => (typeof value === 'object' && value !== null ? Reflect.get(value, key) : undefined);
+
+describe('oars sessions with a Cursor store', () => {
+  const withCursor = async () => {
+    const h = setup();
+    const { repo, plain } = folders(h.staged.root);
+    const user = await stageCursor(h.staged.root, composers(repo, plain));
+    h.deps.sessions = { ...h.staged.runtime, cursorRoot: user };
+    return { ...h, user };
+  };
+
+  it('prints the Cursor line once when the store was read, and nothing about Cursor when it was not allowed', async () => {
+    const { deps, out } = await withCursor();
+    expect(await run(['sessions', 'deposit', '--allow', 'cursor'], deps)).toBe(ExitCode.OK);
+    const text = out.join('');
+    expect(text.match(/Read 3 Cursor sessions\./g)).toHaveLength(1);
+    expect(text).not.toContain('Cursor store not read');
+    expect(text).not.toContain('No project folder matched');
+    out.length = 0;
+    expect(await run(['sessions', 'deposit', '--allow', 'proj'], deps)).toBe(ExitCode.OK);
+    expect(out.join('')).not.toContain('Cursor');
+  });
+
+  it('warns once, naming the file, when the Cursor store cannot be read', async () => {
+    const h = setup();
+    const user = join(h.staged.root, 'Cursor', 'User');
+    mkdirSync(join(user, 'globalStorage'), { recursive: true });
+    writeFileSync(join(user, 'globalStorage', 'state.vscdb'), 'not a database');
+    h.deps.sessions = { ...h.staged.runtime, cursorRoot: user };
+    expect(await run(['sessions', 'deposit', '--allow', 'cursor'], h.deps)).toBe(ExitCode.OK);
+    const text = h.out.join('');
+    expect(text.match(/Cursor store not read: .*state\.vscdb/g)).toHaveLength(1);
+    expect(text).not.toContain('Cursor sessions.');
+  });
+
+  it('books --by harness keys the rows by harness', async () => {
+    const { deps, out } = await withCursor();
+    await run(['sessions', 'deposit', '--allow', 'cursor', '--allow', 'proj'], deps);
+    out.length = 0;
+    expect(await run(['sessions', 'books', '--by', 'harness', '--json'], deps)).toBe(ExitCode.OK);
+    const document = json(out);
+    expect(field(document, 'by')).toBe('harness');
+    const rows = field(document, 'rows');
+    const keys = Array.isArray(rows) ? rows.map((row): unknown => field(row, 'key')) : [];
+    expect(keys).toContain('cursor');
+    expect(keys).not.toContain('edit-verify');
+  });
+});
 
 describe('oars sessions', () => {
   it('deposit refuses without --allow (exit 2) and reads nothing', async () => {

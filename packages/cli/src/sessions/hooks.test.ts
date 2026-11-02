@@ -1,10 +1,11 @@
 import { appendFileSync, copyFileSync, mkdirSync, writeFileSync } from 'node:fs';
 import { rm } from 'node:fs/promises';
 import { join } from 'node:path';
+import { Readable } from 'node:stream';
 import { afterEach, describe, expect, it } from 'vitest';
 import { slugOf } from './allow.js';
 import { readHookCalls } from './hook-calls.js';
-import { runHook } from './hooks.js';
+import { hookRuntime, runHook } from './hooks.js';
 import { deposit, depositSession, loadStore } from './store.js';
 import { cleanup, composers, FIXTURES, folders, NOW, stage, stageCursor, type Staged } from './test-support.js';
 
@@ -150,7 +151,36 @@ describe('SessionEnd deposit hook', () => {
   });
 });
 
+describe('hookRuntime', () => {
+  const io = { stdin: Readable.from([]), stdout: { write: () => true } };
+  const env = { APPDATA: join('C:', 'Users', 'op', 'AppData', 'Roaming') };
+
+  it('gives only the nightly task the Cursor root, so the Stop path never opens the store', () => {
+    expect(hookRuntime('nightly', env, 'win32', 'home', io).cursorRoot).toBe(join(env.APPDATA, 'Cursor', 'User'));
+    for (const event of ['session-start', 'post-tool', 'stop'] as const) expect(hookRuntime(event, env, 'win32', 'home', io)).not.toHaveProperty('cursorRoot');
+  });
+
+  it('places the store under the config dir and projects under the Claude config dir', () => {
+    const runtime = hookRuntime('stop', { ...env, CLAUDE_CONFIG_DIR: join('x', 'claude') }, 'win32', 'home', io);
+    expect(runtime.storeDir).toBe(join(env.APPDATA, 'oars', 'sessions'));
+    expect(runtime.projectsRoot).toBe(join('x', 'claude', 'projects'));
+    expect(hookRuntime('stop', {}, 'linux', 'home', io).projectsRoot).toBe(join('home', '.claude', 'projects'));
+  });
+});
+
 describe('nightly run', () => {
+  it('records an unreadable Cursor store as the hook-call error, and still counts the run', async () => {
+    const staged = stage();
+    const user = join(staged.root, 'User');
+    mkdirSync(join(user, 'globalStorage'), { recursive: true });
+    writeFileSync(join(user, 'globalStorage', 'state.vscdb'), 'not a database');
+    await deposit(staged.runtime, { allow: ['cursor'], redactDomains: [], now: () => NOW });
+    await runHook('nightly', '', { ...staged.runtime, cursorRoot: user }, () => NOW);
+    const [call] = await readHookCalls(staged.storeDir);
+    expect(call?.hit).toBe(true);
+    expect(call?.error).toContain('state.vscdb');
+  });
+
   it('deposits a saved cursor entry when the runtime names the Cursor store, and leaves it alone otherwise', async () => {
     const staged = stage();
     const { repo, plain } = folders(staged.root);

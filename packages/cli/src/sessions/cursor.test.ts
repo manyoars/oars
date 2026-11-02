@@ -6,7 +6,7 @@ import { captureSession } from './extract.js';
 import { cursorRoot, openCursorStore, type CursorSession } from './cursor.js';
 import { makeRedactor } from './redact.js';
 import { makeRepoIdentity, makeRepoRoot } from './repo-root.js';
-import { cleanup, composers, folders, stage, stageCursor, stageRawCursor } from './test-support.js';
+import { cleanup, composers, folders, stage, stageCursor, stageRawCursor, type FixtureBubble } from './test-support.js';
 
 afterEach(cleanup);
 
@@ -95,7 +95,7 @@ describe('the Cursor reader', () => {
     expect(captured.fileHashes).toHaveLength(1);
     expect(captured.repo).toMatch(/^[0-9a-f]{16}$/);
     expect(captured.bashCmds).toBe(1);
-    expect(errorLines.map((e) => [e.tool, e.line])).toEqual([['Bash', 'exit code 1: 2 tests failed']]);
+    expect(errorLines.map((e) => [e.tool, e.line])).toEqual([['Bash', '2 tests failed']]);
     expect(captured.usage.input).toBe(900);
     store.close();
   });
@@ -184,6 +184,85 @@ describe('the Cursor reader: workspace shapes', () => {
     const { session: captured, prompts } = capture(store.transcript(session), 'inline');
     expect(captured.userTurns).toBe(1);
     expect(prompts[0]?.head).toBe('old style');
+    store.close();
+  });
+});
+
+const only = async (bubbles: FixtureBubble[], createdAt = '2025-06-01T00:00:00Z') => {
+  const staged = stage();
+  const user = await stageCursor(staged.root, [{ id: 'x', createdAt: Date.parse(createdAt), lastUpdatedAt: Date.parse(createdAt) + 60_000, bubbles }]);
+  const store = await openCursorStore(user);
+  const session = store?.sessions[0];
+  if (store === undefined || session === undefined) throw new Error('no store');
+  return { store, session };
+};
+
+const timesOf = (transcript: string): string[] =>
+  transcript
+    .trim()
+    .split(String.fromCharCode(10))
+    .map((line): unknown => JSON.parse(line))
+    .map((line) => (typeof line === 'object' && line !== null && 'timestamp' in line ? String(line.timestamp) : ''));
+
+describe('the Cursor reader: shell results and error wrappers', () => {
+  const shell = (status: 'completed' | 'error', extra: Partial<NonNullable<FixtureBubble['tool']>>): FixtureBubble => ({
+    type: 2,
+    createdAt: '2025-06-01T00:00:02.000Z',
+    tool: { name: 'run_terminal_cmd', params: { command: 'make' }, status, ...extra },
+  });
+
+  it('reads a completed shell command with a nonzero exitCodeV2 as an error, and one with exit 0 as ok', async () => {
+    const { store, session } = await only([
+      { type: 1, text: 'build it', createdAt: '2025-06-01T00:00:00.000Z' },
+      shell('completed', { result: { exitCodeV2: 2, output: 'make: *** no rule' } }),
+      shell('completed', { result: { exitCodeV2: 0, output: 'fine' } }),
+      shell('completed', {}),
+    ]);
+    const { tools, errorLines } = capture(store.transcript(session), 'x');
+    expect(tools.map((t) => [t.tool, t.status])).toEqual([
+      ['Bash', 'error'],
+      ['Bash', 'ok'],
+      ['Bash', 'ok'],
+    ]);
+    expect(errorLines.map((e) => e.line)).toEqual(['make: *** no rule']);
+    expect(store.transcript(session)).toContain('Exit code 2');
+    store.close();
+  });
+
+  it('logs the message of a JSON error wrapper, the model-visible one first, then the client-visible, then the string as written', async () => {
+    const wrapper = (fields: unknown): string => JSON.stringify(fields);
+    const { store, session } = await only([
+      { type: 1, text: 'go', createdAt: '2025-06-01T00:00:00.000Z' },
+      shell('error', { error: wrapper({ clientVisibleErrorMessage: 'client text', modelVisibleErrorMessage: 'model text' }) }),
+      shell('error', { error: wrapper({ clientVisibleErrorMessage: 'client only' }) }),
+      shell('error', { error: wrapper({ other: 1 }) }),
+      shell('error', { error: 'plain text' }),
+    ]);
+    const { errorLines } = capture(store.transcript(session), 'x');
+    expect(errorLines.map((e) => e.line)).toEqual(['model text', 'client only', '{"other":1}', 'plain text']);
+    store.close();
+  });
+});
+
+describe('the Cursor reader: client start times', () => {
+  it('falls back to timingInfo.clientStartTime when it is at or after the composer start, and ignores a relative clock', async () => {
+    const { store, session } = await only([
+      { type: 1, text: 'asked', createdAt: '2025-06-01T00:00:01.000Z' },
+      { type: 2, text: 'epoch', clientStart: Date.parse('2025-06-01T00:00:30Z') },
+      { type: 2, text: 'relative', clientStart: 1234 },
+    ]);
+    expect(timesOf(store.transcript(session))).toEqual(['2025-06-01T00:00:01.000Z', '2025-06-01T00:00:30.000Z', '2025-06-01T00:00:30.000Z']);
+    store.close();
+  });
+
+  it('gives a user bubble with no time the time of the next assistant bubble', async () => {
+    const { store, session } = await only([
+      { type: 1, text: 'asked' },
+      { type: 2, text: 'answer', createdAt: '2025-06-01T00:00:20.000Z' },
+      { type: 1, text: 'asked again' },
+      { type: 2, text: 'again', createdAt: '2025-06-01T00:01:00.000Z' },
+    ]);
+    expect(timesOf(store.transcript(session))).toEqual(['2025-06-01T00:00:20.000Z', '2025-06-01T00:00:20.000Z', '2025-06-01T00:01:00.000Z', '2025-06-01T00:01:00.000Z']);
     store.close();
   });
 });
