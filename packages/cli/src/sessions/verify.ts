@@ -124,7 +124,7 @@ const sumUsage = (lines: readonly SkeletonLine[], since: number): Sums => {
  * (from `startTime`, so a resumed session's earlier lines are outside) and include the session's subagent transcripts. Within
  * that scope the recorded usage must equal the totals, and a sum above them fails. A total above the sum is not a failure: the
  * harness also counts side calls no transcript records (001cf645's `modelUsage` has a `claude-haiku` entry and no assistant line
- * of that model), so it is reported as observed, under that class when a `modelUsage` model names no line, else under `other`.
+ * of that model), so it is reported as observed, under that class on a key such a model reported, else under `other`.
  * A check that holds only once a scope is applied is counted under that scope.
  */
 const verifyCost = (lines: readonly SkeletonLine[], delegated: readonly SkeletonLine[], session: string): InvariantResult => {
@@ -136,7 +136,8 @@ const verifyCost = (lines: readonly SkeletonLine[], delegated: readonly Skeleton
   const resumed = sumUsage(lines, since);
   const unscoped = sumUsage(lines, Number.NEGATIVE_INFINITY);
   const named = new Set([...lines, ...delegated].map((line) => line.model));
-  const sideModel = last.models.some((model) => !named.has(model));
+  // A key is a side call only when a model no line names reported it; the entries of an older skeleton carry none.
+  const sideKeys = new Set(last.models.filter((entry) => !named.has(entry.model)).flatMap((entry) => entry.keys));
   const note = (cls: CostClass): void => {
     const entry = observed.find((candidate) => candidate.cls === cls);
     if (entry === undefined) return;
@@ -150,7 +151,7 @@ const verifyCost = (lines: readonly SkeletonLine[], delegated: readonly Skeleton
     if (total === null) continue;
     checked += 1;
     if (scoped[key] > total) violations += 1;
-    else if (scoped[key] < total) note(sideModel ? 'harness side calls' : 'other');
+    else if (scoped[key] < total) note(sideKeys.has(key) ? 'harness side calls' : 'other');
     else if (unscoped[key] !== total) {
       if (resumed[key] !== unscoped[key]) note('resume scope');
       if (scoped[key] !== resumed[key]) note('subagent transcripts');

@@ -127,6 +127,23 @@ describe('verify', () => {
     expect(formatVerify(verifyAll([skeletonOf([after, state({ m: tokens(1) })])]), 1).endsWith(`PASS  ${INVARIANTS[5]}: 4 of 4 hold`)).toBe(true);
   });
 
+  it('classes a total above the sum as a side call only on a key a side model reported', () => {
+    const usage = { input_tokens: 5, cache_creation_input_tokens: 6, cache_read_input_tokens: 7, output_tokens: 8 };
+    const line = JSON.stringify({ type: 'assistant', requestId: 'r1', timestamp: '2026-10-13T16:00:00.000Z', message: { role: 'assistant', model: 'm', content: [], usage } });
+    const state = (modelUsage: object): string => JSON.stringify({ type: 'cost-state', startTime: Date.parse('2026-10-13T15:00:00.000Z'), modelUsage });
+    const main = { inputTokens: 5, cacheCreationInputTokens: 6, cacheReadInputTokens: 7, outputTokens: 8 };
+    // The haiku entry reports input and output only; the cacheRead excess is not its, so that key is `other`.
+    const partial = skeletonOf([line, state({ m: { ...main, cacheReadInputTokens: 107 }, 'claude-haiku-4-5': { inputTokens: 300, outputTokens: 20 } })], 'partial');
+    expect(countsOf(verifySkeleton(partial)[5])).toEqual({ 'harness side calls': 2, other: 1 });
+    // Once the side model reports cacheRead, the same excess is a side call.
+    const full = skeletonOf([line, state({ m: { ...main, cacheReadInputTokens: 107 }, 'claude-haiku-4-5': { inputTokens: 300, cacheReadInputTokens: 100, outputTokens: 20 } })], 'full');
+    expect(countsOf(verifySkeleton(full)[5])).toEqual({ 'harness side calls': 3 });
+    // A skeleton written before the keys were recorded reads its side model with none, so every excess key is `other`.
+    const older = skeletonOf([line, state({ m: main, 'claude-haiku-4-5': { inputTokens: 300, outputTokens: 20 } })], 'older');
+    older.lines = older.lines.map((entry) => (entry.costState === null ? entry : { ...entry, costState: { ...entry.costState, models: entry.costState.models.map((model) => ({ ...model, keys: [] })) } }));
+    expect(countsOf(verifySkeleton(older)[5])).toEqual({ other: 2 });
+  });
+
   it('counts only usage since the process start, and the subagent transcripts the totals include (A2)', () => {
     const usage = { input_tokens: 5, cache_creation_input_tokens: 6, cache_read_input_tokens: 7, output_tokens: 8 };
     const at = (requestId: string, timestamp: string): string =>

@@ -35,6 +35,7 @@ import {
   OLDEST_READABLE_CAPTURE,
   type DerivedRecords,
   type ErrorLineObservation,
+  type CostModel,
   type ErrorObservation,
   type Observation,
   type PromptObservation,
@@ -45,6 +46,7 @@ import {
   type StepCounts,
   type Skeleton,
   type ToolObservation,
+  type UsageKey,
   type UserPromptObservation,
 } from './schema.js';
 
@@ -948,14 +950,25 @@ export const readCalls = async (storeDir: string): Promise<RecallCall[]> => {
 
 const isSkeleton = (value: unknown): value is { [key: string]: unknown } & Skeleton => isRecord(value) && Array.isArray(value.lines) && typeof value.merkleRoot === 'string';
 
-/** A skeleton written before `since` (version 2) or `models` (early version 3) existed reads with them empty, as the check expects. */
+const USAGE_KEYS: readonly UsageKey[] = ['input', 'cacheWrite', 'cacheRead', 'output'];
+
+/** A `models` entry written as a bare name (before the keys were recorded) reads with no keys, so its excess falls under `other`. */
+const costModelOf = (entry: unknown): CostModel[] => {
+  if (typeof entry === 'string') return [{ model: entry, keys: [] }];
+  if (!isRecord(entry) || typeof entry.model !== 'string') return [];
+  const reported: unknown = entry.keys;
+  const keys = Array.isArray(reported) ? USAGE_KEYS.filter((key) => reported.includes(key)) : [];
+  return [{ model: entry.model, keys }];
+};
+
+/** A skeleton written before `since` (version 2), `models` (early version 3), or the model keys existed reads with them empty, as the check expects. */
 const withCostFields = (skeleton: Skeleton): Skeleton => ({
   ...skeleton,
   lines: skeleton.lines.map((line) => {
     const state: unknown = line.costState;
     if (line.costState === null || !isRecord(state)) return line;
     const since = typeof state.since === 'string' ? state.since : null;
-    const models = Array.isArray(state.models) ? state.models.filter((model): model is string => typeof model === 'string') : [];
+    const models = Array.isArray(state.models) ? state.models.flatMap(costModelOf) : [];
     return { ...line, costState: { ...line.costState, since, models } };
   }),
 });

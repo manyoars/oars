@@ -35,7 +35,7 @@ copy store); `recall --path` sees the first 100 sorted paths of a session. What 
 | `cv` 3 (or a version-2 session) and the transcript is on disk or in `raw/` | read through the compatibility reader (a field version 4 added reads as null, empty, or `unknown`; the prompt half of `contextFingerprint`, before its `.`, reads as `promptFingerprint`, and `-` reads as null; the environment half is dropped) | capture again at `rev + 1`; derived records regenerate under the current `EXTRACTOR_VERSION` on every open |
 | `cv` 3, neither the harness nor `raw/` has the transcript | read through the compatibility reader; `verify` counts it `cv-behind` | none |
 | `derived.json` `v` older than `EXTRACTOR_VERSION` | read | rewritten at the next deposit (no reader depends on it today); derived records are regenerated from the log on every read |
-| `cv` newer than this code | read the fields this code knows, and warn ("captured by a newer oars; upgrade oars" on `verify`, `measure`, and `books`) | refuse with "upgrade oars" (`oars sessions deposit` reads the log and refuses when a session's latest capture has a newer `cv`; the Stop-hook path reads only `state.json`) |
+| `cv` newer than this code | read the fields this code knows, and warn ("captured by a newer oars; upgrade oars" on `verify`, `measure`, and `books`) | refuse with "upgrade oars" (`oars sessions deposit` and the nightly run read the log and refuse when a session's latest capture has a newer `cv`; the Stop-hook path reads only `state.json`) |
 | a file's recorded `sid` differs from the salt in force | read | capture that file again from the harness or `raw/` |
 
 A version-2 session (no `cv`) is still read: its already-derived `prompt` and `error` lines pass through until it is deposited again.
@@ -55,7 +55,7 @@ pattern and entropy, emails, and the domains named with `--redact-domain`) befor
 | every capture record | `kind`, `cv`, `rev`, `sid` | P |
 | `session` (one per transcript) | `agentType` (set on a subagent transcript), `harness` (set on a Cursor session; absent reads as Claude Code), `bytes`, `lines`, `badLines`, `userTurns`, `assistantTurns`, `versions`, `models`, `tools`, `bashCmds`, `compactSummaries`, `costUsd`, `usage`, `env` (below) | P |
 | | `session`, `parent`, `spawnedBy` (join ids), `at`, `tsFirst`, `tsLast` (a pool would keep the UTC day), `promptFingerprint`, `repo`, `fileHashes`, `urls`, `searches`, `branches`, `tldrs` (400 chars), `confidences` (120 chars) | A |
-| | `project` (the folder slug, with the username and directory names; also the `projects` keys of `hook-index.json`), `files` (the paths as written, redacted) | L |
+| | `project` (the folder slug, with the username and directory names; also the `projects` keys of `hook-index.json`, which are folder slugs), `files` (the paths as written, redacted) | L |
 | `user-prompt` (one per prompt) | `index`, `wallSec`, `thinking`, `turns`, `model`, `efforts`, `skills`, `usage` | P |
 | | `session`, `ts` (a pool would keep the UTC day), `head` (the first 300 characters), `promptFingerprint` | A |
 | `tool` (one per tool call) | `n`, `tool`, `status` (`ok`, `error`, or `none` when no result is in the file), `keys` (the input's key names), `durationMs`, `harnessVersion`, `agentType`, `side`, `prompt`, `targetBase`, and `target` for a shell call | P |
@@ -66,7 +66,7 @@ pattern and entropy, emails, and the domains named with `--redact-domain`) befor
 | | `session`, `head` (the first 300 characters, redacted), `ts`, `promptFingerprint` (`contextFingerprint` on this derived record) | A |
 | `error` (derived, one per error) | `kind`, `v`, `rev`, `tool`, `harnessVersion`, `editFollowed`, `cls`, `prompt`, `next` (tool names), episode `outcome` and `calls` | P |
 | | `session`, `agent` (the subagent transcript id, a join id), `ts`, `sig` (redacted at capture, normalized at derive), `example` (160 characters) | A |
-| store files | `salt`, `state.json`, `raw/`, `mcp-calls.jsonl` `cwd` (the server's working directory, unhashed) | L |
+| store files | `salt`, `state.json`, `raw/`, `hook-index.json` `projects` keys (folder slugs), `mcp-calls.jsonl` `cwd` (the server's working directory, unhashed) | L |
 | | skeleton lines (`skeletons/<session>.json`: ids, usage, block hashes; a pool would hold only `merkleRoot` and `leaves`), `hook-calls.jsonl` `session`, `at`, and `error` (first line, redacted), `mcp-calls.jsonl` `query` and `at` (each `at` is finer than a UTC day; a pool would keep the UTC day) | A |
 | | `hook-calls.jsonl` `event`, `hit`, `ms`; `mcp-calls.jsonl` `matches` | P |
 
@@ -155,9 +155,16 @@ local only and is never read by `derive`.
 `verify` checks that the harness's `cost-state` totals equal the recorded usage within their scope: the process that wrote them
 (from its `startTime`, so a resumed session's earlier lines are outside them) and the session's subagent transcripts, counted
 once per request id. A recorded sum above a total fails. A total above the sum is not a failure; it is printed as observed,
-under `harness side calls` when a `modelUsage` model has no assistant line (001cf645 has a `claude-haiku` entry and no haiku
-line), else under `other`. Checks that hold only once a scope is applied are counted under `resume scope` and `subagent
+under `harness side calls` only on a usage key that a `modelUsage` model with no assistant line reported (001cf645 has a
+`claude-haiku` entry and no haiku line), else under `other`. Checks that hold only once a scope is applied are counted under `resume scope` and `subagent
 transcripts`, each with one example session.
+
+The skeleton's cost state records, per `modelUsage` model (sorted by name), the usage keys its entry carried: `input`,
+`cacheWrite`, `cacheRead`, `output`. A side model that reported only `input` and `output` (the haiku case) therefore explains an
+excess on those two keys, and an excess on `cacheRead` stays `other`. The field is additive inside `CAPTURE_VERSION` 4, with no bump:
+it changes no captured record, only the skeleton's cost state, and no transcript is re-read for it. The compatibility reader fills a
+skeleton written without it (a bare model name, or no `models`) with no keys, so that skeleton's excess keys fall under `other` until
+the session is captured again. Class A, with the rest of the skeleton lines (a pool would not hold them).
 
 ## More than one repository in a store
 
@@ -168,8 +175,8 @@ One store can hold several repositories, and neither the G1 reading nor the Sess
   subfolders count. Without the flag the output is the whole store, as before.
   The MCP recall calls it counts are scoped too: each call now records the folder the server ran in, and `--repo` drops a call whose
   folder is another repository. A call written before that field existed has no folder and counts for every repository.
-- `oars sessions books --repo <root>` takes the same flag and the same test: it books only the prompts of that repository's sessions, and
-  the subagent tokens and tool calls that hang off them, so `books --by class` stays one repository's number when others deposit.
+- `oars sessions books --repo <root>` takes the same flag and the same test: it books only the prompts of that repository's sessions, with
+  the subagent tokens they spawned, so `books --by class` stays one repository's number when others deposit.
 - SessionStart recall ranks by the latest 300 sessions of the repository, not of the whole store. The index groups project folders
   into repositories by slug: a worktree folds into its repository, and a folder that extends another stored folder joins the shortest.
   Three consequences:

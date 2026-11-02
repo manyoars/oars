@@ -162,16 +162,16 @@ describe('deposit', () => {
     expect(unreadable).toBe(1);
   });
 
-  it('reads a skeleton written before the cost-state since and models fields with them empty', async () => {
+  it('reads a skeleton written before the cost-state since, models, or model keys fields with them empty', async () => {
     const staged = stage();
     await deposit(staged.runtime, options(['proj']));
     const line = { n: 0, type: 'cost-state', costState: { input: 1, cacheWrite: null, cacheRead: null, output: null } };
-    const kept = { n: 1, type: 'cost-state', costState: { since: '2026-01-01T00:00:00.000Z', input: 1, cacheWrite: null, cacheRead: null, output: null, models: ['m', 7] } };
+    const kept = { n: 1, type: 'cost-state', costState: { since: '2026-01-01T00:00:00.000Z', input: 1, cacheWrite: null, cacheRead: null, output: null, models: ['m', 7, { model: 'n', keys: ['output', 'bogus', 'input'] }, { model: 'o', keys: 'x' }, { keys: [] }, 3] } };
     writeFileSync(join(paths(staged.storeDir).skeletons, 'old.json'), JSON.stringify({ v: '2', session: 'old', project: 'proj', merkleRoot: 'x', leaves: 2, lines: [line, kept, { n: 2, costState: null }] }));
     const old = (await readSkeletons(staged.storeDir, 'old')).skeletons[0];
     expect(old?.lines.map((entry) => entry.costState)).toEqual([
       { ...line.costState, since: null, models: [] },
-      { ...kept.costState, models: ['m'] },
+      { ...kept.costState, models: [{ model: 'm', keys: [] }, { model: 'n', keys: ['input', 'output'] }, { model: 'o', keys: [] }] },
       null,
     ]);
   });
