@@ -4,13 +4,13 @@ import { ExitCode } from '../errors.js';
 import { harness, removeTestDirs } from '../test-support.js';
 import { slugOf } from './allow.js';
 import type { ErrorObservation, SessionObservation } from './schema.js';
-import { buildIndex, contextBlock, readIndex, repositoryRoot } from './hook-index.js';
-import { sessionsMeasure } from './command.js';
+import { buildIndex, contextBlock, inRepository, readIndex, repositoryRoot } from './hook-index.js';
+import { sessionsBooks, sessionsMeasure } from './command.js';
 import { readHookCalls } from './hook-calls.js';
 import { books, formatBooks, formatMeasure, measure } from './query.js';
 import { deposit, loadStore, paths, readCalls } from './store.js';
-import { addProject, cleanup, NOW, stage } from './test-support.js';
-import { readFileSync, writeFileSync } from 'node:fs';
+import { addProject, cleanup, FIXTURES, NOW, stage } from './test-support.js';
+import { copyFileSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 
 afterEach(() => {
@@ -26,6 +26,15 @@ const setup = () => {
   h.deps.sessions = staged.runtime;
   return { ...h, staged };
 };
+
+const base = (project: string, name: string, day: number): SessionObservation => ({
+  kind: 'session', cv: '1', sid: null, session: name, project, parent: null, agentType: null, spawnedBy: null, rev: 1, at: '', bytes: 0, lines: 0, badLines: 0, userTurns: 0, assistantTurns: 0,
+  tsFirst: new Date(Date.UTC(2026, 0, 1) + day * 86_400_000).toISOString(), tsLast: null, versions: [], models: {}, branches: [], tools: {}, files: [], fileHashes: [], repo: null, urls: [], searches: [],
+  bashCmds: 0, tldrs: [], confidences: [], compactSummaries: 0, promptFingerprint: null, env: { harness: null, oars: '0.0.0', node: 'v0', os: 'test' }, costUsd: null, usage: { input: 0, cacheWrite: 0, cacheRead: 0, output: 0, thinking: 0 },
+});
+const failure = (name: string, sig: string): ErrorObservation => ({
+  kind: 'error', v: '1', session: name, rev: 1, ts: null, harnessVersion: null, tool: 'Bash', sig, example: sig, next: ['Read'], editFollowed: false, prompt: null, cls: null,
+});
 
 describe('repositoryRoot', () => {
   it('maps a worktree path to its repository and leaves other paths alone', () => {
@@ -108,25 +117,16 @@ describe('hook index and context block', () => {
 });
 
 describe('recency ranking', () => {
-  const session = (name: string, day: number): SessionObservation => ({
-    kind: 'session', cv: '1', sid: null, session: name, project: slugOf(REPO), parent: null, agentType: null, spawnedBy: null, rev: 1, at: '', bytes: 0, lines: 0, badLines: 0, userTurns: 0, assistantTurns: 0,
-    tsFirst: new Date(Date.UTC(2026, 0, 1) + day * 86_400_000).toISOString(), tsLast: null, versions: [], models: {}, branches: [], tools: {}, files: [], fileHashes: [], repo: null, urls: [], searches: [],
-    bashCmds: 0, tldrs: [], confidences: [], compactSummaries: 0, promptFingerprint: null, env: { harness: null, oars: '0.0.0', node: 'v0', os: 'test' }, costUsd: null, usage: { input: 0, cacheWrite: 0, cacheRead: 0, output: 0, thinking: 0 },
-  });
-  const failure = (name: string, sig: string): ErrorObservation => ({
-    kind: 'error', v: '1', session: name, rev: 1, ts: null, harnessVersion: null, tool: 'Bash', sig, example: sig, next: ['Read'], editFollowed: false, prompt: null, cls: null,
-  });
-
   it('ranks by sessions within the last 300, so an old high-count signature falls below a recent one', () => {
     const sessions: SessionObservation[] = [];
     const errors: ErrorObservation[] = [];
     // 40 old sessions all hit "stale error"; 300 later sessions, 3 of them hit "fresh error". 40 > 3 over the whole store, 0 < 3 in the window.
     for (let day = 0; day < 40; day += 1) {
-      sessions.push(session(`old-${String(day)}`, day));
+      sessions.push(base(slugOf(REPO), `old-${String(day)}`, day));
       errors.push(failure(`old-${String(day)}`, 'Bash | stale error'));
     }
     for (let day = 0; day < 300; day += 1) {
-      sessions.push(session(`new-${String(day)}`, 100 + day));
+      sessions.push(base(slugOf(REPO), `new-${String(day)}`, 100 + day));
       if (day % 100 === 0) errors.push(failure(`new-${String(day)}`, 'Bash | fresh error'));
     }
     const block = contextBlock(buildIndex({ sessions, prompts: [], errors, subagents: [], tools: [], newerCaptures: 0 }, [], ''), { cwd: REPO, top: 5, maxChars: 1200 }) ?? '';
@@ -169,36 +169,68 @@ describe('per-repository scope', () => {
     expect(all.text).toBe(formatMeasure(measure(store, await readCalls(staged.storeDir), await readHookCalls(staged.storeDir), 300)));
   });
 
-  it('books --repo counts only that repository, and its absence leaves the whole-store output unchanged', async () => {
+  it('books --repo books only that repository, whole rows and its worktrees included, and its absence leaves the whole-store output unchanged', async () => {
     const staged = stage(slugOf(HOME));
     const lines = readFileSync(join(staged.projectsRoot, slugOf(HOME), 'errors-a.jsonl'), 'utf8').split('\n').filter((line) => line !== '');
+    const worktree = `${slugOf(HOME)}--claude-worktrees-t1`;
     addProject(staged, slugOf(OTHER), 'other-session', lines);
-    await deposit(staged.runtime, { allow: [slugOf(HOME), slugOf(OTHER)], redactDomains: [], now: () => NOW });
+    addProject(staged, worktree, 'wt-session', lines);
+    // A subagent under each session spawned by its `t1` call, so tokens delegated, turns, and cache read all differ by repository.
+    for (const [project, session] of [[slugOf(HOME), 'errors-a'], [slugOf(OTHER), 'other-session'], [worktree, 'wt-session']] as const) {
+      const folder = join(staged.projectsRoot, project, session, 'subagents');
+      mkdirSync(folder, { recursive: true });
+      copyFileSync(join(FIXTURES, 'proj', 'sidechain.jsonl'), join(folder, 'agent-x.jsonl'));
+      writeFileSync(join(folder, 'agent-x.meta.json'), JSON.stringify({ agentType: 'Explore', toolUseId: 't1' }));
+    }
+    await deposit(staged.runtime, { allow: [slugOf(HOME), slugOf(OTHER), worktree], redactDomains: [], now: () => NOW });
     const store = await loadStore(staged.storeDir);
-    const ownSessions = new Set(store.sessions.filter((session) => session.project === slugOf(HOME)).map((session) => session.session));
-    const ownPrompts = store.prompts.filter((prompt) => ownSessions.has(prompt.session)).length;
-    expect(ownPrompts).toBeGreaterThan(0);
-    expect(ownPrompts).toBeLessThan(store.prompts.length);
-    const prompts = (out: string[]): number => {
-      const rows: unknown = Reflect.get(JSON.parse(out.join('')), 'rows');
-      return Array.isArray(rows) ? rows.reduce((total: number, row: unknown) => total + Number(Reflect.get(Object(row), 'prompts')), 0) : -1;
-    };
-    const call = async (...extra: string[]): Promise<string[]> => {
+    const call = async (...extra: string[]): Promise<unknown> => {
       const cli = harness();
       cli.deps.sessions = staged.runtime;
       expect(await run(['--json', 'sessions', 'books', '--by', 'class', ...extra], cli.deps)).toBe(ExitCode.OK);
-      return cli.out;
+      return Reflect.get(JSON.parse(cli.out.join('')), 'rows');
     };
-    expect(prompts(await call('--repo', HOME))).toBe(ownPrompts);
+    // The books over the sessions a repository test keeps: its prompts, with every other record left whole.
+    const ownBooks = (keep: (project: string) => boolean): ReturnType<typeof books> => {
+      const mains = new Set(store.sessions.filter((session) => keep(session.project)).map((session) => session.session));
+      return books({ ...store, prompts: store.prompts.filter((prompt) => mains.has(prompt.session)) }, 'class', NOW);
+    };
+    const delegated = (rows: ReturnType<typeof books>): number => rows.reduce((total, row) => total + row.delegated, 0);
+    const mine = ownBooks((project) => inRepository(project, HOME));
+    expect(delegated(mine)).toBeGreaterThan(0);
+    // The worktree's session counts for the root, so the root books more than its root folder alone.
+    expect(mine).not.toEqual(ownBooks((project) => project === slugOf(HOME)));
+    expect(await call('--repo', HOME)).toEqual(mine);
     // A worktree path names its repository.
-    expect(prompts(await call('--repo', join(HOME, '.claude', 'worktrees', 't1')))).toBe(ownPrompts);
-    expect(prompts(await call('--repo', OTHER))).toBe(store.prompts.length - ownPrompts);
-    // No flag: the store's own books, unchanged.
-    expect(prompts(await call())).toBe(store.prompts.length);
+    expect(await call('--repo', join(HOME, '.claude', 'worktrees', 't1'))).toEqual(mine);
+    expect(await call('--repo', OTHER)).toEqual(ownBooks((project) => project === slugOf(OTHER)));
+    expect(await call()).toEqual(books(store, 'class', NOW));
     const plain = harness();
     plain.deps.sessions = staged.runtime;
     expect(await run(['sessions', 'books', '--by', 'class'], plain.deps)).toBe(ExitCode.OK);
-    expect(plain.out.join('')).toContain(formatBooks(books(store, 'class', NOW), 'class'));
+    expect(plain.out.join('')).toBe(`${formatBooks(books(store, 'class', NOW), 'class')}\n`);
+  });
+
+  it("books --repo counts only its own repository's newer captures, sessions and subagents alike", async () => {
+    const staged = stage(slugOf(HOME));
+    const lines = readFileSync(join(staged.projectsRoot, slugOf(HOME), 'errors-a.jsonl'), 'utf8').split('\n').filter((line) => line !== '');
+    addProject(staged, slugOf(OTHER), 'other-session', lines);
+    const folder = join(staged.projectsRoot, slugOf(OTHER), 'other-session', 'subagents');
+    mkdirSync(folder, { recursive: true });
+    copyFileSync(join(FIXTURES, 'proj', 'sidechain.jsonl'), join(folder, 'agent-x.jsonl'));
+    writeFileSync(join(folder, 'agent-x.meta.json'), JSON.stringify({ agentType: 'Explore', toolUseId: 't1' }));
+    await deposit(staged.runtime, { allow: [slugOf(HOME), slugOf(OTHER)], redactDomains: [], now: () => NOW });
+    // A newer oars wrote the other repository's session and its subagent.
+    const file = paths(staged.storeDir).observations;
+    const marked = readFileSync(file, 'utf8').split('\n').filter((entry) => entry !== '').map((entry) => (entry.includes('"session":"other-session') ? entry.replace('"cv":"4"', '"cv":"5"') : entry));
+    writeFileSync(file, `${marked.join('\n')}\n`);
+    const deps = { sessions: staged.runtime, install: undefined, now: () => NOW };
+    const newer = async (repo?: string): Promise<unknown> => (await sessionsBooks(deps, { by: 'class', sinceDays: undefined, repo })).document;
+    expect(await newer()).toMatchObject({ newerCaptures: 2 });
+    expect(await newer(OTHER)).toMatchObject({ newerCaptures: 2 });
+    const mine = await sessionsBooks(deps, { by: 'class', sinceDays: undefined, repo: HOME });
+    expect(mine.document).toMatchObject({ newerCaptures: 0 });
+    expect(mine.text).not.toContain('captured by a newer oars');
   });
 
   it("measure --repo drops another repository's MCP recall calls and keeps calls with no folder", async () => {
@@ -219,15 +251,6 @@ describe('per-repository scope', () => {
     expect(all.document).toMatchObject({ last: { recallPerSession: Math.round((3 / store.sessions.length) * 100) / 100 } });
   });
 
-  const base = (project: string, name: string, day: number): SessionObservation => ({
-    kind: 'session', cv: '1', sid: null, session: name, project, parent: null, agentType: null, spawnedBy: null, rev: 1, at: '', bytes: 0, lines: 0, badLines: 0, userTurns: 0, assistantTurns: 0,
-    tsFirst: new Date(Date.UTC(2026, 0, 1) + day * 86_400_000).toISOString(), tsLast: null, versions: [], models: {}, branches: [], tools: {}, files: [], fileHashes: [], repo: null, urls: [], searches: [],
-    bashCmds: 0, tldrs: [], confidences: [], compactSummaries: 0, promptFingerprint: null, env: { harness: null, oars: '0.0.0', node: 'v0', os: 'test' }, costUsd: null, usage: { input: 0, cacheWrite: 0, cacheRead: 0, output: 0, thinking: 0 },
-  });
-  const failure = (name: string, sig: string): ErrorObservation => ({
-    kind: 'error', v: '1', session: name, rev: 1, ts: null, harnessVersion: null, tool: 'Bash', sig, example: 'x', next: ['Read'], editFollowed: false, prompt: null, cls: null,
-  });
-
   it("a subfolder's newer sessions share the repository's window, so an old root-only signature drops out", () => {
     const sub = `${slugOf(HOME)}-packages`;
     // Two old sessions in the root folder, then 300 newer ones in a subfolder: all one repository, so the old signature is outside its latest 300.
@@ -243,7 +266,7 @@ describe('per-repository scope', () => {
     const errors = sessions.map((session) => failure(session.session, 'Bash | mine'));
     const block = (extra: SessionObservation[]): string | undefined =>
       contextBlock(buildIndex({ sessions: [...sessions, ...extra], prompts: [], errors, subagents: [], tools: [], newerCaptures: 0 }, [], ''), { cwd: HOME, top: 5, maxChars: 1200 });
-    const rival = Array.from({ length: 300 }, (_unused, day) => base(slugOf(resolve('/zz/other')), `b-${String(day)}`, 100 + day));
+    const rival = Array.from({ length: 300 }, (_unused, day) => base(slugOf(OTHER), `b-${String(day)}`, 100 + day));
     const alone = block([]);
     expect(alone).toContain('Bash | mine (4 sessions in the last 300');
     expect(block(rival)).toBe(alone);

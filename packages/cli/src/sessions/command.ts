@@ -8,6 +8,7 @@ import { readHookCalls } from './hook-calls.js';
 import { buildIndex, contextBlock, inRepository, readIndex, type ContextOptions } from './hook-index.js';
 import { hookStatus, installHooks, scheduleStatus, setSchedule, settingsPath, uninstallHooks, type InstallRuntime, type Scope } from './install.js';
 import { serve } from './mcp.js';
+import { CAPTURE_VERSION } from './schema.js';
 import { deposit, loadStore, readCalls, readRedactDomains, readSkeletons, slugOf, type SessionsRuntime, type Store } from './store.js';
 import { formatVerify, verifyAll, verifyCaptured, type InvariantResult } from './verify.js';
 
@@ -65,19 +66,22 @@ export const sessionsMcp = async (deps: SessionsDeps): Promise<void> => {
 /** One line for a store a newer oars wrote into (spec state-on-open row for a newer `cv`: read known fields, warn). */
 const newerNotice = (store: Store): string[] => (store.newerCaptures > 0 ? [`captured by a newer oars; upgrade oars (${String(store.newerCaptures)} sessions)`] : []);
 
-/** The store restricted to one repository (the test `measure --repo` uses): its sessions, and the prompts, tools, and subagents that hang off them. */
+/**
+ * The store restricted to one repository (the test `measure --repo` uses). `books` reads its rows from `prompts` alone, and looks a
+ * subagent up by the kept prompt that spawned it, so the kept sessions and prompts are enough; the kept subagents only keep the
+ * newer-capture count to this repository.
+ */
 const inRepositoryStore = (store: Store, repo: string): Store => {
   const sessions = store.sessions.filter((session) => inRepository(session.project, repo));
   const mains = new Set(sessions.map((session) => session.session));
   const subagents = store.subagents.filter((agent) => agent.parent !== null && mains.has(agent.parent));
-  const owners = new Set([...mains, ...subagents.map((agent) => agent.session)]);
+  const newer = (cv: string): boolean => Number(cv) > Number(CAPTURE_VERSION);
   return {
     ...store,
     sessions,
     subagents,
     prompts: store.prompts.filter((prompt) => mains.has(prompt.session)),
-    errors: store.errors.filter((error) => mains.has(error.session)),
-    tools: store.tools.filter((tool) => owners.has(tool.session)),
+    newerCaptures: [...sessions, ...subagents].filter((record) => newer(record.cv)).length,
   };
 };
 
