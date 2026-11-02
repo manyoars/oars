@@ -373,7 +373,7 @@ export interface DepositTrace {
   /** The derive pass a whole-store deposit ends with. */
   derive?: DeriveTrace;
   /** A derive pass that failed after the deposit's records and `state.json` were written: the caller logs `deposit` ok and `derive` error, then rethrows. */
-  deriveFailure?: { error: unknown; key: string | null };
+  deriveFailure?: { error: unknown; key: string; ms: number };
 }
 
 export const newTrace = (): DepositTrace => ({ kinds: {} });
@@ -399,7 +399,8 @@ export const digest = (parts: readonly string[]): string => createHash('sha256')
  */
 export const refresh = async (runtime: SessionsRuntime, redactDomains: readonly string[], at: string, trace?: DepositTrace): Promise<void> => {
   const started = performance.now();
-  let key: string | null = null;
+  // The extractor version alone until the store is read: a derive that fails before the high-water mark is known still has a key (spec 4.4).
+  let key = digest([EXTRACTOR_VERSION]);
   try {
     const store = await loadStore(runtime.storeDir);
     // The key is the account's capture high-water mark (the highest rev of each session) and `ev` (spec 4.2).
@@ -418,7 +419,7 @@ export const refresh = async (runtime: SessionsRuntime, redactDomains: readonly 
     }
   } catch (error) {
     if (trace === undefined) throw error;
-    trace.deriveFailure = { error, key };
+    trace.deriveFailure = { error, key, ms: Math.round(performance.now() - started) };
   }
 };
 

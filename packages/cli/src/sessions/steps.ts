@@ -3,6 +3,7 @@
 import { randomUUID } from 'node:crypto';
 import { appendFile, mkdir, readFile } from 'node:fs/promises';
 import { performance } from 'node:perf_hooks';
+import { CliError, ExitCode } from '../errors.js';
 import { makeRedactor } from './redact.js';
 import { CAPTURE_VERSION, EXTRACTOR_VERSION, parseStepRow, type Step, type StepCounts, type StepRow, type StepStatus, type Trigger } from './schema.js';
 import { digest, newTrace, paths, readRedactDomains, type DepositTrace } from './store.js';
@@ -52,7 +53,9 @@ export const readSteps = async (storeDir: string): Promise<StepRow[]> => {
 /** The first informative line of a failure, masked like every other text the store keeps (D1's text rule) and cut to 300 characters. */
 export const errorLine = async (storeDir: string, error: unknown): Promise<string> => {
   const first = (error instanceof Error ? error.message : String(error)).split('\n').find((line) => line.trim() !== '') ?? 'unknown error';
-  return makeRedactor(await readRedactDomains(storeDir))(first).slice(0, 300);
+  // A store whose state.json cannot be read still gets its failure row (spec 4.4): the line is masked with no domains then.
+  const domains = await readRedactDomains(storeDir).catch((): string[] => []);
+  return makeRedactor(domains)(first).slice(0, 300);
 };
 
 /** Appends the row for a step that ended (or was skipped) now, having taken `ms`. */
@@ -118,16 +121,17 @@ export interface StuckStep {
 }
 
 /**
- * Keys that failed on three runs in a row. A `skipped` row is no run of its step; an `ok` row ends every open streak of its step, because
- * a step's good run can carry a key (the state it leaves) that its failed run could not know before the work.
+ * Keys that failed on three runs in a row, per step and trigger (a nightly that fails every night is not cleared by the `stop` deposits
+ * between nights). A `skipped` row is no run of its step; an `ok` row ends the open streaks of its own step and trigger, because a step's
+ * good run can carry a key (verify's high-water mark) that its failed run could not know before the work.
  */
 export const stuckSteps = (rows: readonly StepRow[]): StuckStep[] => {
   const streaks = new Map<string, StuckStep>();
   for (const row of rows) {
     if (row.key === null || row.status === 'skipped') continue;
-    const id = `${row.step}:${row.key}`;
+    const id = `${row.step}:${row.trigger}:${row.key}`;
     if (row.status === 'ok') {
-      for (const open of [...streaks.keys()]) if (open.startsWith(`${row.step}:`)) streaks.delete(open);
+      for (const open of [...streaks.keys()]) if (open.startsWith(`${row.step}:${row.trigger}:`)) streaks.delete(open);
       continue;
     }
     streaks.set(id, { step: row.step, key: row.key, runs: (streaks.get(id)?.runs ?? 0) + 1, error: row.error ?? '' });
@@ -233,16 +237,18 @@ export const runDeposit = async <T>(context: StepContext, withDerive: boolean, k
   try {
     done = await work(trace);
   } catch (error) {
+    // A usage error is the operator's mistake, not a failed run of the step: no row, so repeating it is never "stuck".
+    if (error instanceof CliError && error.exitCode === ExitCode.USAGE) throw error;
     await logFailure(context, 'deposit', performance.now() - started, key, error);
     if (withDerive) await tryLog(() => logSkipped(context, 'derive'));
     throw error;
   }
   const derive = trace.derive;
-  await tryLog(() => logStep(context, 'deposit', 'ok', performance.now() - started - (derive?.ms ?? 0), { in: done.in, out: trace.kinds, key }, null));
-  if (derive !== undefined) await tryLog(() => logStep(context, 'derive', 'ok', derive.ms, { in: derive.in, out: derive.out, key: derive.key }, null));
   const failure = trace.deriveFailure;
+  await tryLog(() => logStep(context, 'deposit', 'ok', performance.now() - started - (derive?.ms ?? failure?.ms ?? 0), { in: done.in, out: trace.kinds, key }, null));
+  if (derive !== undefined) await tryLog(() => logStep(context, 'derive', 'ok', derive.ms, { in: derive.in, out: derive.out, key: derive.key }, null));
   if (failure !== undefined) {
-    await logFailure(context, 'derive', 0, failure.key, failure.error);
+    await logFailure(context, 'derive', failure.ms, failure.key, failure.error);
     throw failure.error;
   }
   return done.value;
