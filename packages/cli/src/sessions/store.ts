@@ -331,7 +331,14 @@ const depositFile = async (context: DepositContext, project: string, transcript:
   }
   const files = paths(runtime.storeDir);
   const rev = Math.max((previous?.rev ?? 0) + 1, context.now());
-  const extract = captureSession({ text: await readFile(file, 'utf8'), session, project, rev, at: context.at, bytes: info.size, redact: context.redact,
+  const extract = captureSession({
+    text: await readFile(file, 'utf8'),
+    session,
+    project,
+    rev,
+    at: context.at,
+    bytes: info.size,
+    redact: context.redact,
     salt: context.salt.salt,
     sid: context.salt.sid,
     repoRoot: context.repoRoot,
@@ -502,7 +509,7 @@ const loggedOrigins = async (storeDir: string): Promise<Map<string, SubagentOrig
 
 /**
  * Transcripts the harness no longer has but the raw archive does, whose last capture is behind this code or used another salt: they are
- * captured again from `<store>/raw/` (t711 Section 4, re-capture source). One with neither stays as logged, read through `upgradeCapture`.
+ * captured again from `<store>/raw/` (t711 Section 4, re-capture source). One with neither stays as logged, read through the compatibility reader.
  */
 const rawOnlyTranscripts = async (context: DepositContext, project: string, onDisk: ReadonlySet<string>): Promise<Transcript[]> => {
   const { storeDir } = context.runtime;
@@ -571,7 +578,7 @@ export interface Store {
   errors: ErrorObservation[];
   /** Subagent transcripts (A24), kept apart from `sessions` so G1 denominators stay main sessions. */
   subagents: SessionObservation[];
-  /** The tool calls of every version-3 transcript, main and subagent. */
+  /** The tool calls of every version-3 or later transcript, main and subagent. */
   tools: ToolObservation[];
   /** Sessions whose capture records a newer oars wrote: read for the fields known here, and reported by the commands that print the store. Set by `loadStore` only. */
   newerCaptures: number;
@@ -585,7 +592,7 @@ interface Captured {
 }
 
 /**
- * The store as a reader sees it: for each session only the highest `rev`. A version-3 session is derived here from its capture records
+ * The store as a reader sees it: for each session only the highest `rev`. A version-3 or later session is derived here from its capture records
  * (EXTRACTOR_VERSION rules); a session whose last deposit was version 2 keeps the prompt and error lines that deposit wrote.
  */
 export const loadStore = async (storeDir: string): Promise<Store> => {

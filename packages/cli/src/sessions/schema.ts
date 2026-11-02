@@ -7,7 +7,7 @@
 //
 // Store version 4 (CAPTURE 4, t714) keeps version 3's shape and adds to it: `sid` on every capture record, `repo`, `fileHashes`, and `env` on
 // the session, `targetBase` on the tool record, `promptFingerprint` in place of `contextFingerprint`, and a 1,000-character cap on an
-// error-line's `line`. A version-3 store is read through `upgradeCapture` (store.ts) until each transcript is captured again.
+// error-line's `line`. A version-3 store is read through the compatibility reader (`upgradeSession` and its siblings in store.ts) until each transcript is captured again.
 //
 // Store version 3 (register A28) splits capture from derivation. Capture writes four record kinds, each stamped `cv` with
 // CAPTURE_VERSION: `session` (one per transcript), `user-prompt` (one per prompt), `tool` (one per tool call), and `error-line` (one per
@@ -286,7 +286,7 @@ export interface UserPromptObservation {
 
 export type CaptureRecord = SessionObservation | UserPromptObservation | ToolObservation | ErrorLineObservation;
 
-/** What a reader finds in the log: version-3 capture records, or the version-2 derived lines of a session not deposited since. */
+/** What a reader finds in the log: version-3 or later capture records, or the version-2 derived lines of a session not deposited since. */
 export type Observation = CaptureRecord | PromptObservation | ErrorObservation;
 
 /** One recurring-signature record of `derived.json`. */

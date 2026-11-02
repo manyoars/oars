@@ -8,7 +8,7 @@ import { captureSession } from './extract.js';
 import { makeRedactor } from './redact.js';
 import { makeRepoIdentity, makeRepoRoot, normalizeRemote } from './repo-root.js';
 import { CAPTURE_VERSION, ERROR_LINE_CHARS, EXTRACTOR_VERSION, FILES_PER_SESSION_MAX } from './schema.js';
-import { deposit, loadStore, localSalt, paths, promptHalf, sidOf, type AccountSalt } from './store.js';
+import { deposit, depositSession, loadStore, localSalt, paths, promptHalf, sidOf, type AccountSalt } from './store.js';
 import { cleanup, FIXTURES, NOW, stage } from './test-support.js';
 
 afterEach(cleanup);
@@ -19,12 +19,15 @@ const parseObject = (text: string): { [key: string]: unknown } => {
   return typeof value === 'object' && value !== null ? { ...value } : {};
 };
 
-/** Applies `change` to each file entry of the store's `state.json`. */
-const editState = (storeDir: string, change: (entry: object) => void): void => {
+/** Applies `change` to each file entry of the store's `state.json`, with the entry's key (the transcript's path under the projects root). */
+const editState = (storeDir: string, change: (entry: object, key: string) => void): void => {
   const state = parseObject(readFileSync(paths(storeDir).state, 'utf8'));
   const files: unknown = state.files;
-  for (const entry of typeof files === 'object' && files !== null ? Object.keys(files).map((key): unknown => Reflect.get(files, key)) : []) {
-    if (typeof entry === 'object' && entry !== null) change(entry);
+  if (typeof files === 'object' && files !== null) {
+    for (const key of Object.keys(files)) {
+      const entry: unknown = Reflect.get(files, key);
+      if (typeof entry === 'object' && entry !== null) change(entry, key);
+    }
   }
   writeFileSync(paths(storeDir).state, JSON.stringify(state));
 };
@@ -80,6 +83,27 @@ describe('the CAPTURE 4 fields', () => {
     // Both lists name the same files: the hashes are those of the first 100 paths, not of the first 100 hashes.
     const targetOf = new Map(capped.tools.map((tool, i) => [`/w/f${String(i)}.ts`, tool.target]));
     expect(capped.session.fileHashes).toEqual(capped.session.files.map((path) => targetOf.get(path)).sort());
+  });
+
+  const readAt = (cwd: string, filePath: string, id: string): string =>
+    `{"type":"assistant","uuid":"r${id}","timestamp":"2026-06-01T00:00:02.000Z","cwd":"${cwd}","message":{"role":"assistant","model":"m","content":[{"type":"tool_use","id":"t${id}","name":"Read","input":{"file_path":"${filePath}"}}],"usage":{"input_tokens":1,"output_tokens":1}}}`;
+  const captureWith = (text: string, repoRoot: (cwd: string) => string | null) =>
+    captureSession({ text, session: 's', project: 'p', rev: 1, at: 'x', bytes: text.length, redact, salt: 'salt', sid: null, repoRoot });
+
+  it('lists a file once in fileHashes when its root path and its linked-worktree path hash alike, and never emits an empty hash', () => {
+    const text = [readAt('/w/app', '/w/app/src/a.ts', '1'), readAt('/w/app/.claude/worktrees/t1', '/w/app/.claude/worktrees/t1/src/a.ts', '2')].join('\n');
+    const result = captureWith(text, () => '/w/app');
+    expect(result.session.files).toHaveLength(2);
+    expect(result.session.fileHashes).toHaveLength(1);
+    expect(result.session.fileHashes.every((hash) => /^[0-9a-f]{16}$/.test(hash))).toBe(true);
+  });
+
+  it('keeps every hash of one relative path that names two files (read from a subdirectory and from a root), as the spec lists the hash of each file', () => {
+    const text = [readAt('/r1/pkg', 'a.ts', '1'), readAt('/r2', 'a.ts', '2')].join('\n');
+    const result = captureWith(text, (cwd) => (cwd === '/r1/pkg' ? '/r1' : cwd));
+    expect(result.session.files).toEqual(['a.ts']);
+    expect(result.session.fileHashes).toHaveLength(2);
+    expect(result.session.fileHashes).toEqual(result.tools.map((tool) => tool.target).sort());
   });
 
   it('masks a secret that straddles character 1,000 before the cut, leaving no fragment', () => {
@@ -344,6 +368,31 @@ describe('a version-3 store opened under version 4', () => {
     await expect(deposit(staged.runtime, options)).rejects.toThrow(/upgrade oars/);
   });
 
+  it('refuses on the Stop-hook path too, and leaves the log and state as they were', async () => {
+    const staged = stage();
+    await deposit(staged.runtime, options);
+    editState(staged.storeDir, (entry, key) => {
+      if (key.endsWith('tldr.jsonl')) Reflect.set(entry, 'v', '5');
+    });
+    const before = readFileSync(paths(staged.storeDir).observations);
+    const stateBefore = readFileSync(paths(staged.storeDir).state);
+    await expect(depositSession(staged.runtime, join(staged.projectsRoot, 'proj', 'errors-a.jsonl'), () => NOW)).rejects.toThrow(/upgrade oars/);
+    expect(readFileSync(paths(staged.storeDir).observations).equals(before)).toBe(true);
+    expect(readFileSync(paths(staged.storeDir).state).equals(stateBefore)).toBe(true);
+  });
+
+  it('refuses before any append: an older entry sorted first is not captured again when a later one is newer', async () => {
+    const staged = stage();
+    await deposit(staged.runtime, options);
+    editState(staged.storeDir, (entry, key) => {
+      if (key.endsWith('errors-a.jsonl')) Reflect.set(entry, 'v', '3');
+      if (key.endsWith('tldr.jsonl')) Reflect.set(entry, 'v', '5');
+    });
+    const before = readFileSync(paths(staged.storeDir).observations);
+    await expect(deposit(staged.runtime, options)).rejects.toThrow(/upgrade oars/);
+    expect(readFileSync(paths(staged.storeDir).observations).equals(before)).toBe(true);
+  });
+
   it('reads a line written by a newer capture version for the fields it knows', async () => {
     const staged = stage();
     await deposit(staged.runtime, options);
@@ -355,9 +404,13 @@ describe('a version-3 store opened under version 4', () => {
     expect(store.newerCaptures).toBe(store.sessions.length);
     const deps = { sessions: staged.runtime, install: undefined, now: () => NOW };
     const notice = /captured by a newer oars; upgrade oars/;
-    expect((await sessionsVerify(deps, { session: undefined })).text).toMatch(notice);
-    expect((await sessionsMeasure(deps, { last: 50, since: undefined })).text).toMatch(notice);
-    expect((await sessionsBooks(deps, { by: 'class', sinceDays: undefined })).text).toMatch(notice);
+    const verified = await sessionsVerify(deps, { session: undefined });
+    const measured = await sessionsMeasure(deps, { last: 50, since: undefined });
+    const booked = await sessionsBooks(deps, { by: 'class', sinceDays: undefined });
+    for (const outcome of [verified, measured, booked]) {
+      expect(outcome.text).toMatch(notice);
+      expect(outcome.document).toMatchObject({ newerCaptures: store.newerCaptures });
+    }
   });
 
   it('prints no newer-oars notice for a store of this version', async () => {

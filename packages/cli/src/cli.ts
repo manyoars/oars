@@ -297,7 +297,7 @@ const buildProgram = (deps: RunDeps, argv: string[]): Command => {
 
   sessions
     .command('verify')
-    .description('run the consistency invariants on the stored skeletons')
+    .description('run the consistency invariants on the stored skeletons and capture records')
     .option('--session <id>', 'one session instead of all')
     .option('--strict', 'exit non-zero (4) when any invariant has exceptions; by default FAIL lines still exit 0')
     .action(async (_options: OptionValues, command: Command) => {

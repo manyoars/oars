@@ -324,16 +324,20 @@ const majority = (counts: ReadonlyMap<string, number>): string => {
 const PATH_KEYS = ['file_path', 'notebook_path', 'path'] as const;
 
 const toForward = (path: string): string => path.replace(/\\/g, '/');
-const isAbsolute = (path: string): boolean => path.startsWith('/') || /^[A-Za-z]:\//.test(path);
+// `~/x` is the home directory, never the cwd: joined to a cwd it would hash per cwd and could read as inside the repository.
+const isAbsolute = (path: string): boolean => path.startsWith('/') || path.startsWith('~/') || /^[A-Za-z]:\//.test(path);
+
+/** A base directory as `pathKey` compares it: normalized like the path (`posix.normalize` turns a UNC `//` into `/`), no trailing slash. */
+const baseOf = (base: string): string => posix.normalize(toForward(base)).replace(/\/+$/, '');
 
 /** `path` below `base` (compared without case, as Windows paths are), or undefined when it lies elsewhere. */
 const below = (path: string, base: string): string | undefined => {
-  const trimmed = toForward(base).replace(/\/+$/, '');
+  const trimmed = baseOf(base);
   return path.toLowerCase().startsWith(`${trimmed.toLowerCase()}/`) ? path.slice(trimmed.length + 1) : undefined;
 };
 
-/** A linked worktree of the repository (`.claude/worktrees/<name>/`) is the same tree as the root: A9 counted one file from many of them. */
-const WORKTREE_PREFIX = /^\.claude\/worktrees\/[^/]+(?:\/|$)/;
+/** A linked worktree of the repository (`.claude/worktrees/<name>/`) is the same tree as the root: A9 counted one file from many of them. At any depth, for a cwd above the repository. */
+const WORKTREE_SEGMENT = /(^|\/)\.claude\/worktrees\/[^/]+(?:\/|$)/;
 
 /**
  * What a path is hashed as, and from where. Under the repository root of the line's `cwd` it is relative to that root, with a linked
@@ -346,8 +350,8 @@ export const pathKey = (path: string, cwd: string | undefined, root: string | nu
   // `../`, `./`, and a trailing slash must not split one file into several hashes, nor hide that it lies outside the repository.
   const absolute = posix.normalize(joined).replace(/(.)\/+$/, '$1');
   // The root itself (a Grep or Glob `path` at the repository root) is key `.`, as is a bare worktree root.
-  const fromRoot = root === null ? undefined : below(absolute, root) ?? (toForward(absolute).replace(/\/+$/, '').toLowerCase() === toForward(root).replace(/\/+$/, '').toLowerCase() ? '' : undefined);
-  if (fromRoot !== undefined) return { key: fromRoot.replace(WORKTREE_PREFIX, '') || '.', base: 'repo' };
+  const fromRoot = root === null ? undefined : below(absolute, root) ?? (absolute.toLowerCase() === baseOf(root).toLowerCase() ? '' : undefined);
+  if (fromRoot !== undefined) return { key: fromRoot.replace(WORKTREE_SEGMENT, '$1').replace(/\/+$/, '') || '.', base: 'repo' };
   const fromCwd = cwd === undefined ? undefined : below(absolute, cwd);
   return { key: fromCwd ?? absolute, base: 'cwd' };
 };
@@ -461,7 +465,7 @@ export const captureSession = (input: ExtractInput): Capture => {
   const branches = new Set<string>();
   const files = new Set<string>();
   /** Redacted path to its salted hash, so `files` and `fileHashes` are cut from one set of paths. */
-  const fileHashes = new Map<string, string>();
+  const fileHashes = new Map<string, Set<string>>();
   let sessionRoot: string | null = null;
   const urls = new Set<string>();
   const searches = new Set<string>();
@@ -644,8 +648,10 @@ export const captureSession = (input: ExtractInput): Capture => {
         const filePath = str(toolInput.file_path);
         const lineRoot = lineCwd === undefined || lineCwd === '' ? null : rootOf(lineCwd);
         if (PATH_TOOLS.has(name) && filePath !== undefined && filePath !== '') {
-          files.add(redact(filePath));
-          fileHashes.set(redact(filePath), hashPath(filePath, lineCwd, lineRoot, salt).hash);
+          const redacted = redact(filePath);
+          files.add(redacted);
+          // One redacted path can name several files (a relative path read from two repositories), so it keeps every hash.
+          fileHashes.set(redacted, (fileHashes.get(redacted) ?? new Set<string>()).add(hashPath(filePath, lineCwd, lineRoot, salt).hash));
         } else if (name === 'WebFetch' && str(toolInput.url) !== undefined && str(toolInput.url) !== '') urls.add(redact(str(toolInput.url) ?? ''));
         else if (name === 'WebSearch' && str(toolInput.query) !== undefined && str(toolInput.query) !== '') searches.add(redact(str(toolInput.query) ?? ''));
         else if (SHELL.has(name)) session.bashCmds += 1;
@@ -709,7 +715,7 @@ export const captureSession = (input: ExtractInput): Capture => {
   session.branches = [...branches].sort();
   const kept = [...files].sort().slice(0, FILES_PER_SESSION_MAX);
   session.files = kept;
-  session.fileHashes = [...new Set(kept.map((path) => fileHashes.get(path) ?? ''))].sort();
+  session.fileHashes = [...new Set(kept.flatMap((path) => [...(fileHashes.get(path) ?? [])]))].sort();
   session.repo = sessionRoot === null ? null : sha256(`${salt}\nrepo:${identityOf(sessionRoot)}`).slice(0, 16);
   session.urls = [...urls].sort();
   session.searches = [...searches].sort();
