@@ -125,7 +125,7 @@ A failed step logs `error`, and the run's later steps are logged `skipped`; the 
 `state.json` stand; the next deposit rebuilds the derived files and the index). A key that fails on three runs in a row is `stuck`, counted per step and trigger: an `ok` run of the same step and trigger ends its open
 streaks, and an `ok` run on the same key under another trigger ends that key's streak too, so a nightly deposit that fails every night is stuck although the `stop` deposits between nights succeed. A usage error (`deposit` with nothing
 to read) is no failed run and leaves no row. `verify` counts a stuck key (a `verify` streak is not listed: a verify that got here succeeded), prints `FAIL  <step> is stuck: key <key> failed <runs> runs in a row: <error>`, fails
-`--strict` with it, and writes the count in its own row. A row that cannot be appended never changes the step's outcome: the step's value or
+`--strict` with it, and writes the count in its own row. The stuck check is store-wide; `--session` narrows the invariants and the key only. A row that cannot be appended never changes the step's outcome: the step's value or
 its own error reaches the caller. A lookup hook logs an `ok` `recall` row only when it read the index and searched it; a missing, torn, or unreadable index counts as no index and logs no row, and an `error` row means the search itself failed. An MCP recall is counted in `mcp-calls.jsonl`, not here. `recall --context` is the manual recall verb and logs a `manual` row keyed by the cwd and harness. A
 state.json that cannot be read fails the step like any other failure: its row is still written, with the line masked by no domains.
 
