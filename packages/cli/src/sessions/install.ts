@@ -55,8 +55,10 @@ const isObject = (value: unknown): value is Json => typeof value === 'object' &&
  */
 export const commandOf = (runtime: InstallRuntime, arg: string): string => {
   const launch = `"${runtime.nodePath}" "${runtime.hookBin}" ${arg}`;
-  if (arg !== 'post-tool') return launch;
-  return `IFS= read -r event; case "$event" in *'Exit code'*) ;; *) exit 0;; esac; { printf '%s\\n' "$event"; cat; } | ${launch}`;
+  // Fails open: a settings file outlives the build it points at (a cloud worker, a clone with no build), and a hook that cannot start must not fail the session.
+  const present = `[ -f "${runtime.hookBin}" ] || exit 0; `;
+  if (arg !== 'post-tool') return `${present}${launch}`;
+  return `${present}IFS= read -r event; case "$event" in *'Exit code'*) ;; *) exit 0;; esac; { printf '%s\\n' "$event"; cat; } | ${launch}`;
 };
 
 const isOwnHook = (hook: unknown): boolean => isObject(hook) && typeof hook.command === 'string' && OWN_COMMAND.test(hook.command);
@@ -143,14 +145,23 @@ export const installHooks = async (runtime: InstallRuntime, path: string, keepRe
     hooks[spec.event] = [...others, spec.matcher === undefined ? { hooks: [entry] } : { matcher: spec.matcher, hooks: [entry] }];
   }
   settings.hooks = hooks;
-  const before = effectiveRetention(settings);
-  const shown = typeof settings.cleanupPeriodDays === 'number' ? String(before) : `${String(before)} (unset, the default)`;
+  // A project or file scope overrides the user's `cleanupPeriodDays`, so a file with no number of its own must not lower a larger user value: report the larger.
+  const own = effectiveRetention(settings);
+  // Only a value the user file sets counts: its unset default must not outrank a lower value written on purpose here.
+  const userDays = path === runtime.userSettings ? undefined : (await readSettings(runtime.userSettings)).cleanupPeriodDays;
+  const userValue = typeof userDays === 'number' ? userDays : 0;
+  // A number this file sets overrides the user's, so the user's counts only when the file sets none.
+  const inherited = typeof settings.cleanupPeriodDays === 'number' ? 0 : userValue;
+  const before = Math.max(own, inherited);
+  const shown = inherited > own ? `${String(before)} (from ${runtime.userSettings})` : typeof settings.cleanupPeriodDays === 'number' ? String(before) : `${String(before)} (unset, the default)`;
   let retention: string;
   if (keepRetention) {
     retention = `Left cleanupPeriodDays alone at ${shown} in ${path} (--keep-retention); the harness deletes raw transcripts older than that.`;
   } else if (before >= RETENTION_FLOOR) {
     retention = `cleanupPeriodDays is ${shown} in ${path}, at or above the ${String(RETENTION_FLOOR)} floor; left as is.`;
   } else {
+    // The floor is per target file: a user-scope value never lands in a project file, which can be committed. Without a number of its own the
+    // file reaches this branch only when the user value is below the floor too, so the floor is right there as well.
     settings.cleanupPeriodDays = RETENTION_FLOOR;
     retention = `Raised cleanupPeriodDays from ${shown} to ${String(RETENTION_FLOOR)} in ${path}.`;
   }

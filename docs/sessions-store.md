@@ -34,7 +34,7 @@ copy store); `recall --path` sees the first 100 sorted paths of a session. What 
 | `cv` 3 (or a version-2 session) and the transcript is on disk or in `raw/` | read through the compatibility reader (a field version 4 added reads as null, empty, or `unknown`; the prompt half of `contextFingerprint`, before its `.`, reads as `promptFingerprint`, and `-` reads as null; the environment half is dropped) | capture again at `rev + 1`; derived records regenerate under the current `EXTRACTOR_VERSION` on every open |
 | `cv` 3, neither the harness nor `raw/` has the transcript | read through the compatibility reader; `verify` counts it `cv-behind` | none |
 | `derived.json` `v` older than `EXTRACTOR_VERSION` | read | rewritten at the next deposit (no reader depends on it today); derived records are regenerated from the log on every read |
-| `cv` newer than this code | read the fields this code knows, and warn ("captured by a newer oars; upgrade oars" on `verify`, `measure`, and `books`) | refuse with "upgrade oars" |
+| `cv` newer than this code | read the fields this code knows, and warn ("captured by a newer oars; upgrade oars" on `verify`, `measure`, and `books`) | refuse with "upgrade oars" (`oars sessions deposit` reads the log and refuses on any newer `cv`; the Stop-hook path reads only `state.json`) |
 | a file's recorded `sid` differs from the salt in force | read | capture that file again from the harness or `raw/` |
 
 A version-2 session (no `cv`) is still read: its already-derived `prompt` and `error` lines pass through until it is deposited again.
@@ -54,7 +54,7 @@ pattern and entropy, emails, and the domains named with `--redact-domain`) befor
 | every capture record | `kind`, `cv`, `rev`, `sid` | P |
 | `session` (one per transcript) | `agentType` (set on a subagent transcript), `bytes`, `lines`, `badLines`, `userTurns`, `assistantTurns`, `versions`, `models`, `tools`, `bashCmds`, `compactSummaries`, `costUsd`, `usage`, `env` (below) | P |
 | | `session`, `parent`, `spawnedBy` (join ids), `at`, `tsFirst`, `tsLast` (a pool would keep the UTC day), `promptFingerprint`, `repo`, `fileHashes`, `urls`, `searches`, `branches`, `tldrs` (400 chars), `confidences` (120 chars) | A |
-| | `project` (the folder slug, with the username and directory names), `files` (the paths as written, redacted) | L |
+| | `project` (the folder slug, with the username and directory names; also the `projects` keys of `hook-index.json`), `files` (the paths as written, redacted) | L |
 | `user-prompt` (one per prompt) | `index`, `wallSec`, `thinking`, `turns`, `model`, `efforts`, `skills`, `usage` | P |
 | | `session`, `ts` (a pool would keep the UTC day), `head` (the first 300 characters), `promptFingerprint` | A |
 | `tool` (one per tool call) | `n`, `tool`, `status` (`ok`, `error`, or `none` when no result is in the file), `keys` (the input's key names), `durationMs`, `harnessVersion`, `agentType`, `side`, `prompt`, `targetBase`, and `target` for a shell call | P |
@@ -65,7 +65,7 @@ pattern and entropy, emails, and the domains named with `--redact-domain`) befor
 | | `session`, `head` (the first 300 characters, redacted), `ts`, `promptFingerprint` (`contextFingerprint` on this derived record) | A |
 | `error` (derived, one per error) | `kind`, `v`, `rev`, `tool`, `harnessVersion`, `editFollowed`, `cls`, `prompt`, `next` (tool names), episode `outcome` and `calls` | P |
 | | `session`, `agent` (the subagent transcript id, a join id), `ts`, `sig` (redacted at capture, normalized at derive), `example` (160 characters) | A |
-| store files | `salt`, `state.json`, `raw/` | L |
+| store files | `salt`, `state.json`, `raw/`, `mcp-calls.jsonl` `cwd` (the server's working directory, unhashed) | L |
 | | skeleton lines (`skeletons/<session>.json`: ids, usage, block hashes; a pool would hold only `merkleRoot` and `leaves`), `hook-calls.jsonl` `session`, `at`, and `error` (first line, redacted), `mcp-calls.jsonl` `query` and `at` (each `at` is finer than a UTC day; a pool would keep the UTC day) | A |
 | | `hook-calls.jsonl` `event`, `hit`, `ms`; `mcp-calls.jsonl` `matches` | P |
 
@@ -97,8 +97,8 @@ captured again from the harness or `raw/` at the next deposit, and nothing else 
 an open question (M4); until it is settled two machines of one account hash the same file differently, and `sid` makes that visible
 (`verify` reports a store holding more than one).
 
-`verify` also checks the version-4 fields: no version-3 or later session is `cv-behind`, one `sid` across the store, every `fileHash` is a path target of a
-tool call, and `targetBase` is set on a path target and on nothing else.
+`verify` also checks the version-4 fields: no version-3 or later session is `cv-behind`, one `sid` across the store, every `fileHash` is a path target
+of a tool call, and `targetBase` is set on a path target and on nothing else.
 
 ## Subagent transcripts
 
@@ -124,3 +124,31 @@ once per request id. A recorded sum above a total fails. A total above the sum i
 under `harness side calls` when a `modelUsage` model has no assistant line (001cf645 has a `claude-haiku` entry and no haiku
 line), else under `other`. Checks that hold only once a scope is applied are counted under `resume scope` and `subagent
 transcripts`, each with one example session.
+
+## More than one repository in a store
+
+One store can hold several repositories, and neither the G1 reading nor the SessionStart block should move because another one deposits.
+
+- `oars sessions measure --repo <root>` counts only the sessions of the repository `<root>` sits in. It uses the test recall uses: a
+  project folder belongs when its slug is the root's slug or extends it, so worktrees (`<root>/.claude/worktrees/<name>`) and
+  subfolders count. Without the flag the output is the whole store, as before.
+  The MCP recall calls it counts are scoped too: each call now records the folder the server ran in, and `--repo` drops a call whose
+  folder is another repository. A call written before that field existed has no folder and counts for every repository.
+- `oars sessions books --repo <root>` takes the same flag and the same test: it books only the prompts of that repository's sessions, and
+  the subagent tokens and tool calls that hang off them, so `books --by class` stays one repository's number when others deposit.
+- SessionStart recall ranks by the latest 300 sessions of the repository, not of the whole store. The index groups project folders
+  into repositories by slug: a worktree folds into its repository, and a folder that extends another stored folder joins the shortest.
+  Three consequences:
+  - Sibling folders whose slugs share a prefix (`app` and `app-two`) share one window.
+  - A nested repository (`tradeaor/oars`) ranks by its parent's window while `measure --repo tradeaor/oars` counts only itself, so the
+    two readings differ.
+  - A stored parent folder is a prefix of its children, so one allow-listed session from the parent (the home folder, or the folder
+    holding several checkouts) folds those repositories into one window and the isolation reverts to the whole store. Keep such a
+    folder off the allow list.
+- An installed hook command starts with `[ -f "<hook-bin>" ] || exit 0;`, so a settings file that outlives its build (a cloud worker, a
+  clone with no build) exits 0 and prints nothing instead of failing the session. The command still ends in `hook-bin.js" <event>`,
+  which is how uninstall finds it.
+- `hook install` at `--scope project` or `--scope file` reads the user file's `cleanupPeriodDays` too. When the target file sets no number, a user
+  value at or above the 365 floor means nothing is written. A number the target file sets itself overrides the user's, so the user's value only
+  counts when the file sets none. The floor is per target file: a lower number in the file is raised to 365, and the user's value is
+  never copied into a project file, which can be committed.

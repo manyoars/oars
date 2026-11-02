@@ -2,7 +2,8 @@
 // SessionStart reads `projects` (the recurring signatures per project folder); PostToolUse reads `signatures` (sessions and
 // what followed, by exact signature). Both are pure functions of the store.
 import { readFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
+import type { SessionObservation } from './schema.js';
 import { slugOf, type Store } from './store.js';
 
 const INDEX_FILE = 'hook-index.json';
@@ -10,13 +11,13 @@ const INDEX_FILE = 'hook-index.json';
 export const RECURRING_SESSIONS = 2;
 const PER_PROJECT = 12;
 const FOLLOWED = 3;
-/** SessionStart ranks by sessions within this many latest sessions: the `measure --last 300` window the G1 reading uses. */
+/** SessionStart ranks by sessions within this many latest sessions of its repository: the `measure --last 300 --repo` window the G1 reading uses. */
 export const RECENT_SESSIONS = 300;
 
 export interface IndexedSignature {
   sig: string;
   sessions: number;
-  /** Sessions with the signature among the latest `RECENT_SESSIONS` of the store. */
+  /** Sessions with the signature among the latest `RECENT_SESSIONS` of the session's repository. */
   recent: number;
   /** Tools that most often followed, most common first. */
   followed: Array<[string, number]>;
@@ -46,13 +47,37 @@ interface Tally {
 
 const tally = (): Tally => ({ sessions: new Set(), following: {}, harness: new Set() });
 
-// The same order `measure` uses, so the window here is the window the G1 reading counts.
+// The same order `measure` uses, so the window here is the window `measure --last 300 --repo` counts.
 const byStart = (a: { tsFirst: string | null; session: string }, b: { tsFirst: string | null; session: string }): number =>
   (a.tsFirst ?? '').localeCompare(b.tsFirst ?? '') || a.session.localeCompare(b.session);
 
+const WORKTREE_SLUG = '--claude-worktrees-';
+
+/**
+ * Groups project folder slugs into repositories without knowing any root: a worktree slug folds into its repository's, and a slug that
+ * extends another stored slug (a subfolder) joins the shortest one, the same extension rule `belongs` applies at recall time.
+ */
+const repositoryOf = (projects: readonly string[]): ((project: string) => string) => {
+  const baseOf = (project: string): string => project.split(WORKTREE_SLUG)[0] ?? project;
+  const bases = [...new Set(projects.map(baseOf))].sort((a, b) => a.length - b.length);
+  return (project) => {
+    const base = baseOf(project);
+    return bases.find((candidate) => base === candidate || base.startsWith(`${candidate}-`)) ?? base;
+  };
+};
+
 export const buildIndex = (store: Store, redactDomains: readonly string[], at: string): HookIndex => {
   const projectOf = new Map(store.sessions.map((session) => [session.session, session.project]));
-  const recentNames = new Set([...store.sessions].sort(byStart).slice(-RECENT_SESSIONS).map((session) => session.session));
+  // The latest 300 of each repository, not of the whole store: another repository's deposits must not move this one's ranking.
+  const family = repositoryOf([...new Set(store.sessions.map((session) => session.project))]);
+  const byRepository = new Map<string, SessionObservation[]>();
+  for (const session of store.sessions) {
+    const key = family(session.project);
+    const group = byRepository.get(key) ?? [];
+    byRepository.set(key, group);
+    group.push(session);
+  }
+  const recentNames = new Set([...byRepository.values()].flatMap((group) => group.sort(byStart).slice(-RECENT_SESSIONS).map((session) => session.session)));
   const overall = new Map<string, Tally>();
   const byProject = new Map<string, Map<string, Tally>>();
   for (const error of store.errors) {
@@ -131,6 +156,9 @@ export const repositoryRoot = (cwd: string): string => {
 
 /** A project folder belongs to the repository when its slug is the root's slug or extends it (a subfolder or a worktree). */
 const belongs = (project: string, rootSlug: string): boolean => project === rootSlug || project.startsWith(`${rootSlug}-`);
+
+/** True when a project folder slug belongs to the repository `root` sits in (a worktree path counts as its repository). */
+export const inRepository = (project: string, root: string): boolean => belongs(project, slugOf(repositoryRoot(resolve(root))));
 
 const clip = (text: string, length: number): string => (text.length <= length ? text : `${text.slice(0, length - 1)}…`);
 
