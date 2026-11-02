@@ -194,6 +194,12 @@ const errorText = (raw: unknown): string => {
   return message ?? str(raw) ?? 'error';
 };
 
+/** An aborted terminal call (the user stopped it) has no outcome: it reads `none`, as a cancelled edit does, so it never counts as a fix. */
+const aborted = (call: Obj, name: string): boolean => {
+  const result = name === 'run_terminal_cmd' ? parse(call.result) : undefined;
+  return isObj(result) && (str(result.endedReason) ?? '').endsWith('_ABORTED');
+};
+
 /**
  * Why a call failed, undefined when it did not. Cursor writes a failed shell command as `completed` with a nonzero `exitCodeV2` in the JSON
  * `result` (the shape Claude Code's `Exit code N` text takes), so the exit code is read, not only `status`.
@@ -227,13 +233,15 @@ const linesOf = (bubble: Bubble, base: Obj, at: string, model: string | undefine
   // A zero count means Cursor did not record one, so no usage is written rather than a measured zero.
   if (input > 0 || output > 0) message.usage = { input_tokens: input, output_tokens: output };
   const lines: Obj[] = [{ ...base, type: 'assistant', uuid: bubble.id, requestId: bubble.id, timestamp: at, ...(model === undefined ? {} : { requestedModel: model }), message }];
-  if (call !== undefined && name !== undefined && (call.status === 'error' || call.status === 'completed')) {
+  if (call !== undefined && name !== undefined && (call.status === 'error' || call.status === 'completed') && !aborted(call, name)) {
     const failure = failureOf(call, name);
     lines.push({
       ...base,
       type: 'user',
       uuid: `${bubble.id}-result`,
       timestamp: at,
+      // Cursor stamps a result with the call's own time, so the gap is not a measured duration: the extractor leaves durationMs null.
+      noDuration: true,
       message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: callId, is_error: failure !== undefined, content: failure ?? '' }] },
     });
   }
@@ -270,7 +278,7 @@ export const openCursorStore = async (root: string): Promise<CursorStore | undef
         const created = str(bubble.document.createdAt);
         if (created !== undefined && !Number.isNaN(Date.parse(created))) return created;
         const timing = isObj(bubble.document.timingInfo) ? num(bubble.document.timingInfo.clientStartTime) : undefined;
-        return timing !== undefined && timing >= session.createdAt ? iso(timing) : undefined;
+        return timing !== undefined && session.createdAt > 0 && timing >= session.createdAt ? iso(timing) : undefined;
       };
       const stamps = bubbles.map(own);
       const stamped = (index: number): string | undefined => {
