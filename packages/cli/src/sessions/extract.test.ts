@@ -193,6 +193,17 @@ describe('cost-state model keys', () => {
     ]);
     expect(skeleton.lines[0]?.costState).toMatchObject({ input: 305, cacheWrite: 6, cacheRead: 7, output: 28 });
   });
+
+  it('keeps the totals numeric when the only model reports zero cache amounts', () => {
+    const state = JSON.stringify({
+      type: 'cost-state',
+      startTime: Date.parse('2026-10-13T15:00:00.000Z'),
+      modelUsage: { 'claude-haiku-4-5': { inputTokens: 300, outputTokens: 20, cacheReadInputTokens: 0, cacheCreationInputTokens: 0 } },
+    });
+    const { skeleton } = extractSession({ text: state, session: 's', project: 'p', rev: 1, at: 'x', bytes: 0, redact });
+    expect(skeleton.lines[0]?.costState).toMatchObject({ cacheWrite: 0, cacheRead: 0 });
+    expect(skeleton.lines[0]?.costState?.models).toEqual([{ model: 'claude-haiku-4-5', keys: ['input', 'output'] }]);
+  });
 });
 
 describe('request-id dedupe (register A22)', () => {
