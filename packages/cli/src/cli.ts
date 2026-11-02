@@ -287,7 +287,7 @@ const buildProgram = (deps: RunDeps, argv: string[]): Command => {
 
   sessions
     .command('measure')
-    .description('the three G1 signals for the last N sessions and the N before')
+    .description('the G1 signals and the pipeline step counters, for the last N sessions and the N before')
     .option('--last <n>', 'sessions per window (default 50)', positiveInteger)
     .option('--since <iso>', 'pin the current window to the first N sessions started at or after this ISO time (the prior window is the N before it); without it the window is the last N and moves with every deposit', isoTime)
     .action(async (_options: OptionValues, command: Command) => {
@@ -299,7 +299,7 @@ const buildProgram = (deps: RunDeps, argv: string[]): Command => {
     .command('verify')
     .description('run the consistency invariants on the stored skeletons and capture records')
     .option('--session <id>', 'one session instead of all')
-    .option('--strict', 'exit non-zero (4) when any invariant has exceptions; by default FAIL lines still exit 0')
+    .option('--strict', 'exit non-zero (4) when any invariant has exceptions or a step is stuck; by default FAIL lines still exit 0')
     .action(async (_options: OptionValues, command: Command) => {
       const options: OptionValues = command.optsWithGlobals();
       const { failed, report, ...outcome } = await sessionsVerify(sessionDeps(deps), { session: text(options, 'session') });

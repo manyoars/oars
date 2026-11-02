@@ -15,7 +15,7 @@ Under `<config>/oars/sessions/` (`%APPDATA%` on Windows, `$XDG_CONFIG_HOME` or `
 | `skeletons/<session>.json` | One per transcript: ids, timestamps, tool linkage, token counts, a SHA-256 for every content field, and a Merkle root over the raw lines. Hashes only, never content. `verify` checks these. |
 | `state.json` | Per file: size, mtime, the `rev`, capture version (`v`), `sid`, and the `--redact-domain` set, so an unchanged file is skipped. |
 | `salt` | This machine's salt, which file targets are hashed with. Local-only (class `L`), never shared. Its `sid` (the first 8 hex characters of its SHA-256) is stamped on every capture record. |
-| `pipeline-runs.jsonl` | The step log: one row per run of a pipeline step (deposit, derive, verify, recall), appended when the step ends. See "The step log". |
+| `pipeline-runs.jsonl` | The step log: one row per run of a pipeline step (deposit, derive, index, verify, recall), appended when the step ends. See "The step log". |
 | `raw/<project>/<path>` | oars' own archive of every deposited transcript (below). |
 
 ## Two versions
@@ -109,28 +109,28 @@ written when the step ends. It carries no `cv` of its own, so it needs no captur
 
 | Key | Class | Meaning |
 |-----|-------|---------|
-| `at` | A | When the step ended (ISO time). |
-| `run` | A | A local run id; the `deposit` and `derive` rows of one nightly or manual run share it. |
+| `at` | A (P at UTC day) | When the step ended (ISO time). |
+| `run` | A | A local run id; the `deposit`, `derive`, and `index` rows of one nightly or manual run share it. |
 | `trigger` | P | `stop` (the SessionEnd hook, argument `stop`; never `session-end`), `nightly` (the scheduled task), `manual` (the verbs), `session-start` and `post-tool` (the lookup hooks). |
-| `step` | P | `deposit`, `derive`, `verify`, or `recall`. `label`, `index`, and the hosted triggers are in the schema but nothing local runs them yet. |
+| `step` | P | `deposit`, `derive`, `index`, `verify`, or `recall`; the nightly and manual runs log a `derive` row and then an `index` row (the hook index write). `label` and the hosted triggers are in the schema but nothing local runs them yet. |
 | `status` | P | `ok`, `error`, or `skipped` (an earlier step of the run failed). |
-| `ms` | P | Wall time of the step; a `deposit` row excludes the derive pass it ends with, which has its own row. |
-| `in`, `out` | P | Counts by kind: `deposit` writes `out` as `session`, `subagent`, `user-prompt`, `tool`, `error-line`; `derive` as `signature` and `summary`; `verify` as `checked`, `passed`, `cvBehind`, `stuck`; `recall` as `matches`. |
+| `ms` | P | Wall time of the step; a `deposit` row excludes the derive and index passes it ends with, which have their own rows. |
+| `in`, `out` | P | Counts by kind: `deposit` writes `out` as `session`, `subagent`, `user-prompt`, `tool`, `error-line`; `derive` as `signature` and `summary`; `index` as `signature` and `project`; `verify` as `checked`, `passed`, `cvBehind`, `stuck`; `recall` as `matches`. |
 | `cv`, `ev` | P | The capture and extractor versions the step ran at. `lv` (the labeler) appears on `label` rows only. |
-| `key` | A | A 16-hex hash, so a repeat is visible, built from the step's inputs and never from the state it leaves, so a failed row and the ok row of the same work carry one key. `deposit`: the trigger, the allow entries (the SessionEnd hook: that one transcript's path), and the redact domains; a `stop` for a folder off the allowlist or a transcript that is gone is an `ok` row with nothing written and its own key. `derive`: each session's highest `rev` and `ev`. `verify`: each session's `rev` and `cv`, and `ev`; a failed run, whose store could not be read, has the session asked for and `ev`. `recall`: the query and `ev` (the lookup hooks: the cwd for `session-start`, the failure's signature for `post-tool`; the spec names none, since a lookup writes nothing). Null only on a `skipped` row. |
+| `key` | A | A 16-hex hash, so a repeat is visible, built from the step's inputs and never from the state it leaves, so a failed row and the ok row of the same work carry one key. `deposit`: `cv`, `ev`, the trigger, the allow entries (the SessionEnd hook: that one transcript's path), and the redact domains (the SessionEnd hook reads none, so its key has none); this replaces the spec's file, size, and mtime with the inputs the run was asked for, which are known before the work. A `stop` for a folder off the allowlist or a transcript that is gone is an `ok` row with nothing written and its own key (an attempted deposit that wrote nothing; no row is logged when the hook got no transcript path). `derive` and `index`: each session's and subagent's highest `rev`, and `ev`. `verify`: each session's and subagent's `rev` and `cv`, and `ev`; a failed run, whose store could not be read, has the session asked for and `ev`. `recall`: the query and `ev` (the lookup hooks: the cwd for `session-start`, the failure's signature for `post-tool`; the spec names none, since a lookup writes nothing). Null only on a `skipped` row. |
 | `error` | A | The first informative line of the failure, redacted like every other text in the store; null when `ok`. |
 
 A failed step logs `error`, and the run's later steps are logged `skipped`; the next trigger retries the same key. A failed deposit leaves
-`state.json` as it was; a derive that fails after its deposit wrote the records logs `deposit` `ok`, then `derive` `error` (the records and
-`state.json` stand; the next deposit rebuilds the derived files). A key that fails on three runs in a row is `stuck`, counted per step and trigger: an `ok` run of the same step and trigger ends its open
+`state.json` as it was; a derive that fails after its deposit wrote the records logs `deposit` `ok`, `derive` `error`, and `index` `skipped`; an index write that fails logs `deposit` and `derive` `ok`, then `index` `error` (the records and
+`state.json` stand; the next deposit rebuilds the derived files and the index). A key that fails on three runs in a row is `stuck`, counted per step and trigger: an `ok` run of the same step and trigger ends its open
 streaks, so a nightly deposit that fails every night is stuck although the `stop` deposits between nights succeed. A usage error (`deposit` with nothing
-to read) is no failed run and leaves no row. `verify` counts a stuck key, prints `FAIL  <step> is stuck: key <key> failed 3 runs in a row: <error>`, fails
+to read) is no failed run and leaves no row. `verify` counts a stuck key (a `verify` streak is not listed: a verify that got here succeeded), prints `FAIL  <step> is stuck: key <key> failed 3 runs in a row: <error>`, fails
 `--strict` with it, and writes the count in its own row. A row that cannot be appended never changes the step's outcome: the step's value or
-its own error reaches the caller. A lookup hook logs an `ok` `recall` row only when it read the index and searched it (none with no index yet), and an `error` row when that read fails. A
+its own error reaches the caller. A lookup hook logs an `ok` `recall` row only when it read the index and searched it; a missing, torn, or unreadable index counts as no index and logs no row, and an `error` row means the search itself failed. `recall --context` is the manual recall verb and logs a `manual` row keyed by the cwd and harness. A
 state.json that cannot be read fails the step like any other failure: its row is still written, with the line masked by no domains.
 
-`oars sessions measure` prints the counters of spec 3.2 that this log can answer, under the G1 signals, over the whole log (`--last` and `--since` filter the G1 table only): runs of each step (ok, error,
-skipped) and mean ms, per step and `ev`; capture records deposited by kind; records derived by type (the newest derive); invariants passed of checked and
+`oars sessions measure` prints the counters of spec 3.2 that this log can answer, under the G1 signals, over the whole log (`--last` and `--since` filter the G1 table only; the step counters are all-time): runs of each step (ok, error,
+skipped) and mean ms, per step and `ev`; capture records deposited by kind; records derived by type (the newest derive); what the index holds (the newest index); invariants passed of checked and
 `cv-behind` sessions (the newest verify); recall queries and matches; failed runs by step and `ev`; and the stuck steps. `--json`
 carries the same numbers under `steps`. A malformed or torn line is skipped when the log is read.
 
