@@ -776,7 +776,7 @@ describe('the counters (spec 3.2)', () => {
     expect(counters.steps.find((line) => line.step === 'deposit')).toMatchObject({ runs: 3, ok: 2, error: 1, skipped: 0, meanMs: 8 });
     expect(counters.steps.find((line) => line.step === 'derive')).toMatchObject({ runs: 3, ok: 2, skipped: 1, meanMs: 5 });
     const text = formatStepCounters(counters);
-    expect(text).toContain('records deposited, session');
+    expect(text).toMatch(/records deposited, session\s+3/);
     expect(text).toMatch(/index holds, signature\s+9/);
     expect(text).toMatch(/index holds, project\s+2/);
     expect(text).toContain('invariants passed of checked');
@@ -801,7 +801,7 @@ describe('the counters (spec 3.2)', () => {
     expect(counters.steps.map((line) => [line.step, line.ev, line.runs, line.meanMs])).toEqual([['deposit', EXTRACTOR_VERSION, 1, 10], ['deposit', 'old', 2, 40]]);
     const text = formatStepCounters(counters);
     expect(text).toContain(`deposit@${EXTRACTOR_VERSION} mean ms`);
-    expect(text).toContain('deposit@old mean ms');
+    expect(text).toMatch(/deposit@old mean ms\s+40/);
     expect(text).toContain('pipeline step log (all time)');
   });
 
