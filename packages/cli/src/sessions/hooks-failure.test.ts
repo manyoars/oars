@@ -1,10 +1,11 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import type * as HookIndex from './hook-index.js';
 import { runHook } from './hooks.js';
 import { readSteps } from './steps.js';
 import { cleanup, NOW, stage } from './test-support.js';
 
 vi.mock('./hook-index.js', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('./hook-index.js')>()),
+  ...(await importOriginal<typeof HookIndex>()),
   readIndex: () => Promise.reject(new Error('cannot read the index for dev@corp.example\nsecond line')),
 }));
 

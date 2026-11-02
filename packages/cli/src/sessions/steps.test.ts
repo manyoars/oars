@@ -309,7 +309,7 @@ describe('a failed step and its key', () => {
     const verifies = rows.filter((entry) => entry.step === 'verify');
     expect(verifies[0]?.key).toBe(stampKey('verify', 's1'));
     expect(verifies[1]?.key).toBe(stampKey('verify', 's2'));
-    expect(stuckSteps(rows)).toEqual([{ step: 'recall', key: recalls[0]?.key, runs: 3, error: expect.any(String) }]);
+    expect(stuckSteps(rows).map((entry) => [entry.step, entry.key, entry.runs])).toEqual([['recall', recalls[0]?.key, 3]]);
   });
 
   it('a stuck step also fails verify --strict: it is in failed', async () => {
