@@ -365,6 +365,23 @@ describe('the tool target (recovery_episodes.py shell_target parity)', () => {
     expect(pathKey('../../x/n.md', '/w/app/pkg', '/w/app')).toEqual({ key: '/w/x/n.md', base: 'cwd' });
   });
 
+  it('strips a linked-worktree segment at any depth, so an umbrella-root cwd hashes alike with the child repository', () => {
+    expect(pathKey('oars/.claude/worktrees/t1/src/a.ts', '/u', '/u')).toEqual(pathKey('oars/src/a.ts', '/u', '/u'));
+    expect(pathKey('oars/.claude/worktrees/t1/src/a.ts', '/u', '/u')).toEqual({ key: 'oars/src/a.ts', base: 'repo' });
+    expect(pathKey('oars/.claude/worktrees/t1', '/u', '/u')).toEqual({ key: 'oars', base: 'repo' });
+  });
+
+  it('matches a UNC root and cwd, whose leading double slash normalize would otherwise collapse', () => {
+    expect(pathKey('//wsl$/u/r/src/a.ts', '//wsl$/u/r/pkg', '//wsl$/u/r')).toEqual({ key: 'src/a.ts', base: 'repo' });
+    expect(pathKey('//wsl$/u/r', '//wsl$/u/r', '//wsl$/u/r')).toEqual({ key: '.', base: 'repo' });
+    expect(pathKey('//wsl$/u/x/a.ts', '//wsl$/u/r', null)).toEqual({ key: '/wsl$/u/x/a.ts', base: 'cwd' });
+  });
+
+  it('treats a leading `~/` as absolute, so it is neither joined to the cwd nor read as inside the repository', () => {
+    expect(pathKey('~/notes/a.md', '/w/app', '/w/app')).toEqual({ key: '~/notes/a.md', base: 'cwd' });
+    expect(pathKey('~/notes/a.md', '/w/app/pkg', '/w/app')).toEqual(pathKey('~/notes/a.md', '/w/other', null));
+  });
+
   it('keeps the working-directory base for a path outside any repository, and says so', () => {
     expect(pathKey('/tmp/x/notes.md', '/tmp/x', null)).toEqual({ key: 'notes.md', base: 'cwd' });
     // A repository is known but the file lies outside it: still the cwd base, the path as written.

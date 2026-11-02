@@ -25,7 +25,8 @@ Under `<config>/oars/sessions/` (`%APPDATA%` on Windows, `$XDG_CONFIG_HOME` or `
   tool-name sequences, recovery episodes). A bump re-derives from the log; no raw transcript is read.
 
 Version 4 (CAPTURE 4, t714) adds `sid`, `repo`, `fileHashes`, `env`, `promptFingerprint`, `targetBase`, the repository-root path base, and
-a 1,000-character cap on an error line, and a cap of 100 on `files` and `fileHashes` per session (p99 was 61, max 209, on the 8,253-session copy store). What an open does with an older store:
+a 1,000-character cap on an error line, and a cap of 100 on `files` and `fileHashes` per session (p99 was 61, max 209, on the 8,253-session
+copy store). What an open does with an older store:
 
 | Log holds | Action on open | Action at the next deposit |
 |-----------|----------------|----------------------------|
@@ -78,14 +79,17 @@ snapshot, whose platform and shell now belong to `env`).
 
 ### Hashing
 
-`target` is a 16-hex SHA-256 of `<salt>\n<path>` (a newline between the two) for a call with a `file_path`, `notebook_path`, or `path` input; the program and
-subcommand (`git push`, `npm run`) for a shell call, after any leading `cd <dir> &&` hop, environment assignment, or `sudo`; else null.
+`target` is a 16-hex SHA-256 of `<salt>\n<path>` (a newline between the two) for a call with a `file_path`, `notebook_path`, or `path`
+input; the program and subcommand (`git push`, `npm run`) for a shell call, after any leading `cd <dir> &&` hop, environment assignment,
+or `sudo`; else null.
 The path is taken **relative to the repository root** of the line's `cwd` (the nearest ancestor holding `.git`; a linked worktree
 under `<root>/.claude/worktrees/<name>/` resolves to `<root>` and its segment is dropped), so one file hashes alike from every
 subdirectory and worktree. `targetBase` is `repo` then. A path no repository holds keeps the version-3 base: relative to the `cwd`
-when it lies under it, else as written, and `targetBase` is `cwd`. `repo` on the session is the salted hash of the repository's identity: the normalized `origin` remote URL read from the repository's
-`config` (scheme, credentials, a trailing `.git` and slash stripped, host lower-cased; a linked worktree's `.git` file is followed to the
-common `config`), so two clones share it; with no `config` or no `origin` it is the lower-cased absolute root path of the session's first `cwd`. It is salted; `fileHashes` is the salted hash of each file path a tool touched, sorted.
+when it lies under it, else as written, and `targetBase` is `cwd`. `repo` on the session is the salted hash of the repository's identity:
+the normalized `origin` remote URL read from the repository's `config` (scheme, credentials, a trailing `.git` and slash stripped, host
+lower-cased; a linked worktree's `.git` file is followed to the common `config`), so two clones share it; with no `config` or no `origin`
+it is the lower-cased absolute root path of the first `cwd` a repository holds. It is salted; `fileHashes` is the salted hash of each file
+path a tool touched, sorted.
 
 The **salt** is this machine's, created on first use (`localSalt` in `store.ts`). The one seam for the account's salt is
 `SessionsRuntime.accountSalt`: a provider returning `{ salt, sid }`. When it returns another `sid`, each file recorded under the old one is

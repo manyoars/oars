@@ -68,14 +68,14 @@ const newerNotice = (store: Store): string[] => (store.newerCaptures > 0 ? [`cap
 export const sessionsBooks = async (deps: SessionsDeps, options: { by: BooksBy; sinceDays: number | undefined }): Promise<Outcome> => {
   const store = await loadStore(runtimeOf(deps).storeDir);
   const rows = books(store, options.by, deps.now(), options.sinceDays);
-  return { document: { ok: true, by: options.by, rows }, text: [formatBooks(rows, options.by), ...newerNotice(store)].join('\n') };
+  return { document: { ok: true, by: options.by, rows, newerCaptures: store.newerCaptures }, text: [formatBooks(rows, options.by), ...newerNotice(store)].join('\n') };
 };
 
 export const sessionsMeasure = async (deps: SessionsDeps, options: { last: number; since: string | undefined }): Promise<Outcome> => {
   const runtime = runtimeOf(deps);
   const store = await loadStore(runtime.storeDir);
   const result = measure(store, await readCalls(runtime.storeDir), await readHookCalls(runtime.storeDir), options.last, options.since);
-  return { document: { ok: true, ...result }, text: [formatMeasure(result), ...newerNotice(store)].join('\n') };
+  return { document: { ok: true, ...result, newerCaptures: store.newerCaptures }, text: [formatMeasure(result), ...newerNotice(store)].join('\n') };
 };
 
 export interface VerifyReport {
@@ -97,7 +97,7 @@ export const sessionsVerify = async (deps: SessionsDeps, options: { session: str
   return {
     failed,
     report,
-    document: { ok: true, ...report },
+    document: { ok: true, ...report, newerCaptures: store.newerCaptures },
     text: [formatVerify(results, skeletons.length), ...newerNotice(store), ...(unreadable > 0 ? [`FAIL  ${String(unreadable)} unreadable skeleton files (torn or corrupted); redeposit to rebuild them`] : [])].join('\n'),
   };
 };
