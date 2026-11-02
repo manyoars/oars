@@ -104,8 +104,7 @@ describe('the steps each command logs', () => {
     expect(rows[0]?.cv).toBe(CAPTURE_VERSION);
     expect(rows[0]?.ev).toBe(EXTRACTOR_VERSION);
     expect(rows[0]?.at).toBe('2026-06-10T00:00:00.000Z');
-    expect(rows[0]?.out.session).toBeGreaterThan(0);
-    expect(rows[0]?.out['user-prompt']).toBeGreaterThan(0);
+    expect(rows[0]?.out).toEqual({ session: 4, 'user-prompt': 7, tool: 18, 'error-line': 6 });
     expect(rows[0]?.in.transcript).toBeGreaterThan(0);
     expect(rows[1]?.out.summary).toBe(rows[0]?.out.session);
     expect(rows[1]?.in.session).toBe(rows[0]?.out.session);
@@ -226,6 +225,20 @@ describe('the steps each hook logs', () => {
     expect(rows[1]?.out).toEqual({});
     expect(rows[1]?.key).toBe(rows[0]?.key);
     expect(rows.map((entry) => entry.trigger)).not.toContain('session-end');
+  });
+
+  it('the stop deposit takes the session subagents too and counts them as subagent, not session', async () => {
+    const staged = await deposited();
+    const transcript = join(staged.projectsRoot, slugOf(REPO), 'fresh.jsonl');
+    copyFileSync(join(FIXTURES, 'proj', 'tldr.jsonl'), transcript);
+    const subagents = join(staged.projectsRoot, slugOf(REPO), 'fresh', 'subagents');
+    mkdirSync(subagents, { recursive: true });
+    copyFileSync(join(FIXTURES, 'proj', 'sidechain.jsonl'), join(subagents, 'agent-x.jsonl'));
+    await runHook('stop', JSON.stringify({ session_id: 'fresh', transcript_path: transcript, hook_event_name: 'SessionEnd' }), staged.runtime, () => NOW);
+    const rows = await readSteps(staged.storeDir);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.out.session).toBe(1);
+    expect(rows[0]?.out.subagent).toBe(1);
   });
 
   it('a stop for a transcript with no path logs nothing, and a held lock logs an error row', async () => {
@@ -542,7 +555,11 @@ describe('recall --context, the deposit key, and the index step', () => {
     appendFileSync(agent, readFileSync(join(FIXTURES, 'proj', 'sidechain.jsonl')));
     await sessionsDeposit(depsOf(staged), good);
     await sessionsVerify(depsOf(staged), { session: undefined });
-    const verifies = (await readSteps(staged.storeDir)).filter((entry) => entry.step === 'verify');
+    const all = await readSteps(staged.storeDir);
+    const first = all.find((entry) => entry.step === 'deposit');
+    expect(first?.out.subagent).toBe(1);
+    expect(first?.out.session).toBe(4);
+    const verifies = all.filter((entry) => entry.step === 'verify');
     expect(verifies).toHaveLength(2);
     expect(verifies[1]?.key).not.toBe(verifies[0]?.key);
     expect(verifies[1]?.in).toEqual({ session: 4, subagent: 1 });
