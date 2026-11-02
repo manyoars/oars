@@ -14,6 +14,7 @@
 //   mcp-calls.jsonl         one line per recall call the MCP server answered
 //   hook-calls.jsonl        one line per hook invocation (event, session, hit, milliseconds)
 //   hook-index.json         the recurring signatures per project and overall, for the hooks
+//   pipeline-runs.jsonl     the step log: one line per run of a pipeline step, appended when the step ends (steps.ts)
 import { createHash, randomBytes } from 'node:crypto';
 import { performance } from 'node:perf_hooks';
 import { appendFile, mkdir, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
@@ -369,14 +370,16 @@ export interface DeriveTrace {
 export interface DepositTrace {
   /** Records written, by kind: `session` (main), `subagent`, `user-prompt`, `tool`, `error-line`. */
   kinds: StepCounts;
-  /** The deposit's idempotency key (spec 4.2): the files' sizes and mtimes, `cv`, and the redact-domain set; null until the deposit has one. */
-  key: string | null;
   /** The derive pass a whole-store deposit ends with. */
   derive?: DeriveTrace;
+  /** A derive pass that failed after the deposit's records and `state.json` were written: the caller logs `deposit` ok and `derive` error, then rethrows. */
+  deriveFailure?: { error: unknown; key: string | null };
 }
 
-export const newTrace = (): DepositTrace => ({ kinds: {}, key: null });
+export const newTrace = (): DepositTrace => ({ kinds: {} });
 
+// A subagent transcript's prompts, tools, and error lines are counted under the same kinds as a main session's; only the transcript itself
+// is counted apart (`subagent`). Spec 3.2's "by kind, main and subagent" is read as that split of the transcripts.
 const tally = (trace: DepositTrace | undefined, extract: Capture, subagent: boolean): void => {
   if (trace === undefined) return;
   const add = (kind: string, count: number): void => {
@@ -390,29 +393,32 @@ const tally = (trace: DepositTrace | undefined, extract: Capture, subagent: bool
 
 export const digest = (parts: readonly string[]): string => createHash('sha256').update(parts.join('\n')).digest('hex').slice(0, 16);
 
-/** The key of a whole-store deposit: every deposited file's size, mtime, and `cv`, and the redact-domain set. A repeat with nothing changed has the same key. */
-const stateKey = (state: State): string =>
-  digest([...Object.entries(state.files).map(([key, entry]) => `${key}:${String(entry.size)}:${String(entry.mtimeMs)}:${entry.v}`).sort(), ...[...state.redactDomains].sort()]);
-
-/** The deposit key for a store as it stands; a failed deposit leaves `state.json` as it was, so a retry of the same work has the same key. */
-export const depositKey = async (storeDir: string): Promise<string> => stateKey(await readState(storeDir));
-
-/** Rewrites `derived.json` and the hook index from the whole store. */
+/**
+ * Rewrites `derived.json` and the hook index from the whole store. With a trace, a failure here is recorded on it instead of thrown, so the
+ * caller can log the deposit that already wrote its records and then the failed derive (spec 3.1: one row per step), and rethrow.
+ */
 export const refresh = async (runtime: SessionsRuntime, redactDomains: readonly string[], at: string, trace?: DepositTrace): Promise<void> => {
   const started = performance.now();
-  const store = await loadStore(runtime.storeDir);
-  const derived = derive(store, at);
-  await writeAtomic(paths(runtime.storeDir).derived, JSON.stringify(derived));
-  await writeAtomic(indexPath(runtime.storeDir), JSON.stringify(buildIndex(store, redactDomains, at)));
-  if (trace !== undefined) {
+  let key: string | null = null;
+  try {
+    const store = await loadStore(runtime.storeDir);
     // The key is the account's capture high-water mark (the highest rev of each session) and `ev` (spec 4.2).
     const highWater = [...store.sessions, ...store.subagents].map((session) => `${session.session}:${String(session.rev)}`).sort();
-    trace.derive = {
-      ms: Math.round(performance.now() - started),
-      in: { session: store.sessions.length, subagent: store.subagents.length, 'user-prompt': store.prompts.length, tool: store.tools.length },
-      out: { signature: derived.signatures.length, summary: derived.summaries.length },
-      key: digest([EXTRACTOR_VERSION, ...highWater]),
-    };
+    key = digest([EXTRACTOR_VERSION, ...highWater]);
+    const derived = derive(store, at);
+    await writeAtomic(paths(runtime.storeDir).derived, JSON.stringify(derived));
+    await writeAtomic(indexPath(runtime.storeDir), JSON.stringify(buildIndex(store, redactDomains, at)));
+    if (trace !== undefined) {
+      trace.derive = {
+        ms: Math.round(performance.now() - started),
+        in: { session: store.sessions.length, subagent: store.subagents.length, 'user-prompt': store.prompts.length, tool: store.tools.length },
+        out: { signature: derived.signatures.length, summary: derived.summaries.length },
+        key,
+      };
+    }
+  } catch (error) {
+    if (trace === undefined) throw error;
+    trace.deriveFailure = { error, key };
   }
 };
 
@@ -532,7 +538,6 @@ const depositLocked = async (runtime: SessionsRuntime, options: DepositOptions, 
     }
   }
   await writeAtomic(paths(runtime.storeDir).state, JSON.stringify(state));
-  if (trace !== undefined) trace.key = stateKey(state);
   await refresh(runtime, state.redactDomains, context.at, trace);
   return result;
 };
@@ -627,9 +632,6 @@ const depositSessionLocked = async (runtime: SessionsRuntime, transcript: string
     if (extract !== undefined) tally(trace, extract, true);
     wrote = extract !== undefined || wrote;
   }
-  // The key is this transcript's own size, mtime, and `cv` plus the redact-domain set (spec 4.2), so a repeat shows as the same key.
-  const entry = state.files[`${project}/${main.relative}`];
-  if (trace !== undefined && entry !== undefined) trace.key = digest([`${project}/${main.relative}:${String(entry.size)}:${String(entry.mtimeMs)}:${entry.v}`, ...context.domains]);
   if (!wrote) return 'unchanged';
   await writeAtomic(paths(runtime.storeDir).state, JSON.stringify(state));
   return 'deposited';
