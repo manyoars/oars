@@ -443,7 +443,7 @@ const depositLocked = async (runtime: SessionsRuntime, options: DepositOptions):
   refuseNewer(state);
   // A log written by a newer oars is refused even when state.json is older or lost; the Stop-hook path reads only state.json.
   const held = (await loadStore(runtime.storeDir)).newerCaptures;
-  if (held > 0) throw new CliError(`${String(held)} sessions in the log were captured by a newer oars; upgrade oars.`, ExitCode.UNEXPECTED, 'unexpected');
+  if (held > 0) throw new CliError(`The log holds captures by a newer oars (sessions: ${String(held)}); upgrade oars.`, ExitCode.UNEXPECTED, 'unexpected');
   state.redactDomains = [...new Set([...state.redactDomains, ...options.redactDomains])];
   state.allow = [...new Set([...state.allow, ...options.allow])];
   const context = await contextFor(runtime, state, options.now);

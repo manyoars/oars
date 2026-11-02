@@ -34,7 +34,7 @@ copy store); `recall --path` sees the first 100 sorted paths of a session. What 
 | `cv` 3 (or a version-2 session) and the transcript is on disk or in `raw/` | read through the compatibility reader (a field version 4 added reads as null, empty, or `unknown`; the prompt half of `contextFingerprint`, before its `.`, reads as `promptFingerprint`, and `-` reads as null; the environment half is dropped) | capture again at `rev + 1`; derived records regenerate under the current `EXTRACTOR_VERSION` on every open |
 | `cv` 3, neither the harness nor `raw/` has the transcript | read through the compatibility reader; `verify` counts it `cv-behind` | none |
 | `derived.json` `v` older than `EXTRACTOR_VERSION` | read | rewritten at the next deposit (no reader depends on it today); derived records are regenerated from the log on every read |
-| `cv` newer than this code | read the fields this code knows, and warn ("captured by a newer oars; upgrade oars" on `verify`, `measure`, and `books`) | refuse with "upgrade oars" (`oars sessions deposit` reads the log and refuses on any newer `cv`; the Stop-hook path reads only `state.json`) |
+| `cv` newer than this code | read the fields this code knows, and warn ("captured by a newer oars; upgrade oars" on `verify`, `measure`, and `books`) | refuse with "upgrade oars" (`oars sessions deposit` reads the log and refuses when a session's latest capture has a newer `cv`; the Stop-hook path reads only `state.json`) |
 | a file's recorded `sid` differs from the salt in force | read | capture that file again from the harness or `raw/` |
 
 A version-2 session (no `cv`) is still read: its already-derived `prompt` and `error` lines pass through until it is deposited again.
@@ -97,8 +97,8 @@ captured again from the harness or `raw/` at the next deposit, and nothing else 
 an open question (M4); until it is settled two machines of one account hash the same file differently, and `sid` makes that visible
 (`verify` reports a store holding more than one).
 
-`verify` also checks the version-4 fields: no version-3 or later session is `cv-behind`, one `sid` across the store, every `fileHash` is a path target
-of a tool call, and `targetBase` is set on a path target and on nothing else.
+`verify` also checks the version-4 fields: no version-3 or later session is `cv-behind`, one `sid` across the store, every `fileHash` is
+a path target of a tool call, and `targetBase` is set on a path target and on nothing else.
 
 ## Subagent transcripts
 
