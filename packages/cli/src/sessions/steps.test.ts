@@ -5,7 +5,7 @@ import { CliError, ExitCode } from '../errors.js';
 import { sessionsDeposit, sessionsMeasure, sessionsRecall, sessionsVerify, type SessionsDeps } from './command.js';
 import { runHook } from './hooks.js';
 import { slugOf } from './allow.js';
-import { CAPTURE_VERSION, EXTRACTOR_VERSION, parseStepRow, type StepRow } from './schema.js';
+import { CAPTURE_VERSION, EXTRACTOR_VERSION, parseStepRow, STEPS, TRIGGERS, type StepRow } from './schema.js';
 import { formatStepCounters, inputKey, newContext, readSteps, runDeposit, runStep, stampKey, stepCounters, stuckSteps } from './steps.js';
 import { deposit, digest, newTrace, refresh } from './store.js';
 import { cleanup, FIXTURES, NOW, stage, type Staged } from './test-support.js';
@@ -67,6 +67,14 @@ describe('the step-log row schema (spec 3.1)', () => {
     ['a string ms', { ms: '5' }],
   ])('rejects %s', (_label, patch) => {
     expect(parseStepRow({ ...row(), ...patch })).toBeUndefined();
+  });
+
+  it.each(TRIGGERS)('accepts the spec 4.1 trigger %s (the hosted ones are schema only: nothing local runs them)', (trigger) => {
+    expect(parseStepRow(row({ trigger }))?.trigger).toBe(trigger);
+  });
+
+  it.each(STEPS)('accepts the spec 3.1 step %s (label and index are schema only)', (step) => {
+    expect(parseStepRow(row({ step }))?.step).toBe(step);
   });
 
   it('rejects a value that is not an object', () => {
