@@ -26,7 +26,7 @@ describe('recall', () => {
     expect(formatRecall(result)).toContain('2 sessions, 2 errors');
   });
 
-  it('matches --path against the stored files only, so a path the 100-file cap dropped does not match', async () => {
+  it('matches --path against the stored files only', async () => {
     const store = await loaded();
     const session = store.sessions.find((candidate) => candidate.files.includes('/work/app/src/main.ts'));
     if (session === undefined) throw new Error('fixture session with main.ts not found');
