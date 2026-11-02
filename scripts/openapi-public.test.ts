@@ -3,7 +3,10 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'no
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+// These cases spawn a node process; under load that takes 8 s or more, past vitest's 5 s default.
+vi.setConfig({ testTimeout: 30_000 });
 
 const script = fileURLToPath(new URL('./openapi-public.mjs', import.meta.url));
 
@@ -138,7 +141,7 @@ describe('openapi-public.mjs', () => {
     expect(keysAt(out, 'components', 'parameters')).toEqual(['OrderId']);
     expect(keysAt(out, 'components')).not.toContain('securitySchemes');
     expect(at(out, 'tags')).toEqual([{ name: 'Orders', description: 'Order lifecycle' }]);
-  }, 30_000);
+  });
 
   it('replaces the source title and description with the public ones and keeps its version', () => {
     const result = run(['getOrder'], { ...source, info: { ...source.info, version: '7.8.9' } });

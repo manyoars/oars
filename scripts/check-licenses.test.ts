@@ -3,7 +3,10 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+// These cases spawn a node process; under load that takes 8 s or more, past vitest's 5 s default.
+vi.setConfig({ testTimeout: 30_000 });
 
 const script = fileURLToPath(new URL('./check-licenses.mjs', import.meta.url));
 const repositoryRoot = fileURLToPath(new URL('..', import.meta.url));
@@ -48,7 +51,7 @@ describe('check-licenses', () => {
       'node_modules/zero': { version: '1.0.0', license: '0BSD' },
     });
     expect(run().status).toBe(0);
-  }, 30_000);
+  });
 
   it('fails an unlisted license and names the package path and the license', () => {
     lockfile({ 'node_modules/ok': { version: '1.0.0', license: 'MIT' }, 'node_modules/copyleft': { version: '2.3.4', license: 'GPL-3.0-only' } });
