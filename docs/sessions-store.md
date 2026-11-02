@@ -67,7 +67,7 @@ pattern and entropy, emails, and the domains named with `--redact-domain`) befor
 | `error` (derived, one per error) | `kind`, `v`, `rev`, `tool`, `harnessVersion`, `editFollowed`, `cls`, `prompt`, `next` (tool names), episode `outcome` and `calls` | P |
 | | `session`, `agent` (the subagent transcript id, a join id), `ts`, `sig` (redacted at capture, normalized at derive), `example` (160 characters) | A |
 | store files | `salt`, `state.json`, `raw/`, `hook-index.json` `projects` keys (folder slugs), `mcp-calls.jsonl` `cwd` (the server's working directory, unhashed) | L |
-| | skeleton lines (`skeletons/<session>.json`: ids, usage, block hashes; a pool would hold only `merkleRoot` and `leaves`), `hook-calls.jsonl` `session`, `at`, and `error` (first line, redacted), `mcp-calls.jsonl` `query` and `at` (each `at` is finer than a UTC day; a pool would keep the UTC day) | A |
+| | skeleton lines (`skeletons/<session>.json`: ids, usage, block hashes, each cost-state model's usage keys; a pool would hold only `merkleRoot` and `leaves`), `hook-calls.jsonl` `session`, `at`, and `error` (first line, redacted), `mcp-calls.jsonl` `query` and `at` (each `at` is finer than a UTC day; a pool would keep the UTC day) | A |
 | | `hook-calls.jsonl` `event`, `hit`, `ms`; `mcp-calls.jsonl` `matches` | P |
 
 A pool may hold a day-resolution date only: none of the A fields above reaches it. `sw` (the per-field local-only switch for text
@@ -159,8 +159,8 @@ under `harness side calls` only on a usage key that a `modelUsage` model with no
 `claude-haiku` entry and no haiku line), else under `other`. Checks that hold only once a scope is applied are counted under `resume scope` and `subagent
 transcripts`, each with one example session.
 
-The skeleton's cost state records, per `modelUsage` model (sorted by name), the usage keys its entry carried: `input`,
-`cacheWrite`, `cacheRead`, `output`. A side model that reported only `input` and `output` (the haiku case) therefore explains an
+The skeleton's cost state records, per `modelUsage` model (sorted by name), the usage keys its entry reported a nonzero amount on: `input`,
+`cacheWrite`, `cacheRead`, `output`. A side model whose cache keys are absent or zero (the haiku case) therefore explains an
 excess on those two keys, and an excess on `cacheRead` stays `other`. The field is additive inside `CAPTURE_VERSION` 4, with no bump:
 it changes no captured record, only the skeleton's cost state, and no transcript is re-read for it. The compatibility reader fills a
 skeleton written without it (a bare model name, or no `models`) with no keys, so that skeleton's excess keys fall under `other` until
