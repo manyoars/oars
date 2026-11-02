@@ -152,6 +152,10 @@ describe('the steps each command logs', () => {
     expect(rows[0]?.error).not.toContain('\n');
     expect(rows[1]?.key).toBeNull();
     expect(rows[0]?.key).toBe(rows[3]?.key);
+    expect(rows[0]?.in).toEqual({});
+    expect(rows[0]?.out).toEqual({});
+    expect(rows[1]?.in).toEqual({});
+    expect(rows[1]?.out).toEqual({});
   });
 
   it('recall appends a recall row, trigger manual, with the match count', async () => {
@@ -162,8 +166,7 @@ describe('the steps each command logs', () => {
     expect(recalled).toHaveLength(1);
     expect(recalled[0]).toMatchObject({ trigger: 'manual', status: 'ok', in: { query: 1 } });
     expect(recalled[0]?.in).toEqual({ query: 1 });
-    expect(recalled[0]?.out).toEqual({ matches: recalled[0]?.out.matches });
-    expect(Object.keys(recalled[0]?.out ?? {})).toEqual(['matches']);
+    expect(recalled[0]?.out).toEqual({ matches: 0 });
     expect(outcome.document).toHaveProperty('matches.length', recalled[0]?.out.matches);
     expect(recalled[0]?.key).toMatch(/^[0-9a-f]{16}$/);
   });
@@ -175,10 +178,8 @@ describe('the steps each command logs', () => {
     const verified = (await readSteps(staged.storeDir)).filter((entry) => entry.step === 'verify');
     expect(verified).toHaveLength(1);
     expect(verified[0]).toMatchObject({ trigger: 'manual', status: 'ok' });
-    expect(verified[0]?.out.checked).toBe(outcome.report.invariants.length);
-    expect(verified[0]?.out.passed).toBe(outcome.report.invariants.filter((entry) => entry.pass).length);
-    expect(verified[0]?.out.cvBehind).toBe(0);
-    expect(verified[0]?.out.stuck).toBe(0);
+    const counts = { checked: outcome.report.invariants.length, passed: outcome.report.invariants.filter((entry) => entry.pass).length, cvBehind: 0, stuck: 0 };
+    expect(verified[0]?.out).toEqual(counts);
     expect(verified[0]?.in).toEqual({ session: 4, subagent: 0 });
     expect(outcome.document).toMatchObject({ stuck: [] });
     // The key is the sessions checked, each at its rev and cv, and `ev` (spec 4.2); `--session` narrows it to that session's entries.
@@ -199,6 +200,7 @@ describe('the steps each command logs', () => {
     expect(narrowed?.key).toBe(entriesKey([only]));
     expect(narrowed?.key).not.toBe(verified[0]?.key);
     expect(narrowed?.in).toEqual({ session: 1, subagent: 0 });
+    expect(narrowed?.out).toEqual(counts);
   });
 
   it('verify counts a session captured at an older capture version as cv-behind', async () => {
@@ -284,7 +286,7 @@ describe('the steps each hook logs', () => {
     expect(rows.map((entry) => [entry.step, entry.trigger, entry.status])).toEqual([['deposit', 'stop', 'ok'], ['deposit', 'stop', 'ok']]);
     expect(rows[0]?.in).toEqual({ transcript: 1 });
     expect(rows[0]?.key).toBe(digest([CAPTURE_VERSION, EXTRACTOR_VERSION, 'stop', transcript, '--']));
-    expect(rows[0]?.out.session).toBe(1);
+    expect(rows[0]?.out).toEqual({ session: 1, 'user-prompt': 2, tool: 4, 'error-line': 0 });
     expect(rows[1]?.out).toEqual({});
     expect(rows[1]?.key).toBe(rows[0]?.key);
     expect(rows.map((entry) => entry.trigger)).not.toContain('session-end');
@@ -300,8 +302,7 @@ describe('the steps each hook logs', () => {
     await runHook('stop', JSON.stringify({ session_id: 'fresh', transcript_path: transcript, hook_event_name: 'SessionEnd' }), staged.runtime, () => NOW);
     const rows = await readSteps(staged.storeDir);
     expect(rows).toHaveLength(1);
-    expect(rows[0]?.out.session).toBe(1);
-    expect(rows[0]?.out.subagent).toBe(1);
+    expect(rows[0]?.out).toEqual({ session: 1, subagent: 1, 'user-prompt': 3, tool: 7, 'error-line': 2 });
   });
 
   it('a stop for a transcript with no path logs nothing, and a held lock logs an error row', async () => {
@@ -362,6 +363,7 @@ describe('the steps each hook logs', () => {
     expect(rows[0]?.run).toBe(rows[1]?.run);
     expect(rows[0]?.key).toBe(digest([CAPTURE_VERSION, EXTRACTOR_VERSION, 'nightly', REPO, '--']));
     expect(rows[0]?.in).toEqual({ transcript: 4 });
+    expect(rows[0]?.out).toEqual({});
     const empty = stage();
     await runHook('nightly', '{}', empty.runtime, () => NOW);
     expect(await readSteps(empty.storeDir)).toEqual([]);
@@ -384,7 +386,7 @@ describe('the steps each hook logs', () => {
     copyFileSync(join(FIXTURES, 'proj', 'tldr.jsonl'), join(staged.projectsRoot, 'proj', 'tldr-new.jsonl'));
     await runHook('nightly', '{}', staged.runtime, () => NOW);
     const nightly = (await readSteps(staged.storeDir)).filter((entry) => entry.trigger === 'nightly' && entry.step === 'deposit');
-    expect(nightly[0]?.out.session).toBe(1);
+    expect(nightly[0]?.out).toEqual({ session: 1, 'user-prompt': 2, tool: 4, 'error-line': 0 });
     expect(nightly[0]?.in).toEqual({ transcript: 5 });
   });
 
@@ -398,7 +400,7 @@ describe('the steps each hook logs', () => {
     appendFileSync(agent, readFileSync(join(FIXTURES, 'proj', 'sidechain.jsonl')));
     await runHook('nightly', '{}', staged.runtime, () => NOW);
     const nightly = (await readSteps(staged.storeDir)).filter((entry) => entry.trigger === 'nightly' && entry.step === 'deposit');
-    expect(nightly[0]?.out.subagent).toBe(1);
+    expect(nightly[0]?.out).toEqual({ subagent: 1, 'user-prompt': 2, tool: 6, 'error-line': 4 });
     expect(nightly[0]?.in).toEqual({ transcript: 5 });
   });
 
@@ -408,7 +410,7 @@ describe('the steps each hook logs', () => {
     await runHook('post-tool', JSON.stringify({ session_id: 's1', tool_name: 'Bash', error: 'Exit code 1\nnothing seen before' }), staged.runtime, () => NOW);
     const rows = await readSteps(staged.storeDir);
     expect(rows.map((entry) => [entry.step, entry.trigger, entry.status])).toEqual([['recall', 'session-start', 'ok'], ['recall', 'post-tool', 'ok']]);
-    expect(rows[1]?.out).toEqual({ matches: 0 });
+    expect(rows.map((entry) => entry.out)).toEqual([{ matches: 1 }, { matches: 0 }]);
     expect(rows.map((entry) => entry.in)).toEqual([{ query: 1 }, { query: 1 }]);
   });
 
@@ -718,8 +720,7 @@ describe('recall --context, the deposit key, and the index step', () => {
     await sessionsVerify(depsOf(staged), { session: undefined });
     const all = await readSteps(staged.storeDir);
     const first = all.find((entry) => entry.step === 'deposit');
-    expect(first?.out.subagent).toBe(1);
-    expect(first?.out.session).toBe(4);
+    expect(first?.out).toEqual({ session: 4, subagent: 1, 'user-prompt': 8, tool: 21, 'error-line': 8 });
     expect(first?.in).toEqual({ transcript: 5 });
     const verifies = all.filter((entry) => entry.step === 'verify');
     expect(verifies).toHaveLength(2);
