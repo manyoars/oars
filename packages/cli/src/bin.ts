@@ -9,6 +9,7 @@ import { openBrowser } from './browser.js';
 import { run } from './cli.js';
 import { defaultConfigDir, fileCredentialStore } from './credentials.js';
 import { fileJournalStore } from './journal.js';
+import { cursorRoot } from './sessions/cursor.js';
 
 /** The version in this package's package.json (one folder up from dist/). */
 const readVersion = (): string => {
@@ -59,6 +60,7 @@ process.exitCode = await run(process.argv.slice(2), {
   sessions: {
     storeDir: join(configDir, 'oars', 'sessions'),
     projectsRoot: join(process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), '.claude'), 'projects'),
+    cursorRoot: cursorRoot(process.platform, process.env),
     stdin: process.stdin,
     stdout: process.stdout,
   },

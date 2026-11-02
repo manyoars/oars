@@ -274,16 +274,17 @@ const buildProgram = (deps: RunDeps, argv: string[]): Command => {
 
   sessions
     .command('books')
-    .description('tokens, wall time, turns, errors, and verify-after-edit rate per prompt class or model')
-    .option('--by <key>', 'class or model (default class)', (value: string): BooksBy => {
-      if (value !== 'class' && value !== 'model') throw new InvalidArgumentError('it must be class or model.');
+    .description('tokens, wall time, turns, errors, and verify-after-edit rate per prompt class, model, or harness')
+    .option('--by <key>', 'class, model, or harness (default class)', (value: string): BooksBy => {
+      if (value !== 'class' && value !== 'model' && value !== 'harness') throw new InvalidArgumentError('it must be class, model, or harness.');
       return value;
     })
     .option('--since <days>', 'only the last N days', positiveInteger)
     .option('--repo <root>', "count only this repository's sessions (worktrees and subfolders included); without it, the whole store")
     .action(async (_options: OptionValues, command: Command) => {
       const options: OptionValues = command.optsWithGlobals();
-      const by = text(options, 'by') === 'model' ? 'model' : 'class';
+      const picked = text(options, 'by');
+      const by: BooksBy = picked === 'model' || picked === 'harness' ? picked : 'class';
       emit(deps, flag(options, 'json'), await sessionsBooks(sessionDeps(deps), { by, sinceDays: count(options, 'since'), repo: text(options, 'repo') }));
     });
 

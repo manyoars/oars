@@ -56,6 +56,11 @@ export interface Usage {
   thinking: number;
 }
 
+export type Harness = 'claude-code' | 'cursor';
+
+/** The harness a session record came from; a record that does not name one is Claude Code's. */
+export const harnessOf = (session: { harness?: Harness }): Harness => session.harness ?? 'claude-code';
+
 /** Where a path target is hashed from (class P): the repository root, or the line's working directory when no repository holds the path. */
 export type TargetBase = 'repo' | 'cwd';
 
@@ -79,6 +84,11 @@ export interface CaptureEnv {
  */
 export interface SessionObservation {
   kind: 'session';
+  /**
+   * The tool the transcript came from (t728, class P). Only a non-default source writes it: absent reads as `claude-code` (`harnessOf`), so
+   * the Claude Code path's records and CAPTURE_VERSION are unchanged and an older oars reads a Cursor session as a session with no harness version.
+   */
+  harness?: Harness;
   /** CAPTURE_VERSION (a version-2 line has `v` instead). Class P. */
   cv: string;
   /** The first 8 hex characters of SHA-256 of the salt this record's hashes used; null on a record captured before version 4. Class P. */
