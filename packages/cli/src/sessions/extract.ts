@@ -262,6 +262,8 @@ export interface ExtractInput {
   sid?: string | null;
   /** The repository root holding a working directory (worktree segments already stripped), or null; absent means no repository is known. */
   repoRoot?: (cwd: string) => string | null;
+  /** The identity string of a repository root (`makeRepoIdentity`); absent means the lower-cased root path. */
+  repoIdentity?: (root: string) => string;
   /** The oars package, Node.js, and OS this capture ran under; absent reads as `0.0.0` and this process. */
   runtime?: { oars: string; node: string; os: string };
   /** Set for a subagent transcript: every line is the agent's own line, so none is read as a sidechain. */
@@ -330,7 +332,7 @@ const below = (path: string, base: string): string | undefined => {
 };
 
 /** A linked worktree of the repository (`.claude/worktrees/<name>/`) is the same tree as the root: A9 counted one file from many of them. */
-const WORKTREE_PREFIX = /^\.claude\/worktrees\/[^/]+\//;
+const WORKTREE_PREFIX = /^\.claude\/worktrees\/[^/]+(?:\/|$)/;
 
 /**
  * What a path is hashed as, and from where. Under the repository root of the line's `cwd` it is relative to that root, with a linked
@@ -340,8 +342,9 @@ const WORKTREE_PREFIX = /^\.claude\/worktrees\/[^/]+\//;
 export const pathKey = (path: string, cwd: string | undefined, root: string | null): { key: string; base: TargetBase } => {
   const given = toForward(path);
   const absolute = isAbsolute(given) || cwd === undefined ? given : `${toForward(cwd).replace(/\/+$/, '')}/${given}`;
-  const fromRoot = root === null ? undefined : below(absolute, root);
-  if (fromRoot !== undefined) return { key: fromRoot.replace(WORKTREE_PREFIX, ''), base: 'repo' };
+  // The root itself (a Grep or Glob `path` at the repository root) is key `.`, as is a bare worktree root.
+  const fromRoot = root === null ? undefined : below(absolute, root) ?? (toForward(absolute).replace(/\/+$/, '').toLowerCase() === toForward(root).replace(/\/+$/, '').toLowerCase() ? '' : undefined);
+  if (fromRoot !== undefined) return { key: fromRoot.replace(WORKTREE_PREFIX, '') || '.', base: 'repo' };
   const fromCwd = cwd === undefined ? undefined : below(absolute, cwd);
   return { key: fromCwd ?? absolute, base: 'cwd' };
 };
@@ -409,6 +412,7 @@ export const captureSession = (input: ExtractInput): Capture => {
   const salt = input.salt ?? '';
   const sid = input.sid ?? null;
   const rootOf = input.repoRoot ?? ((): null => null);
+  const identityOf = input.repoIdentity ?? ((root: string): string => `path:${toForward(root).toLowerCase()}`);
   const runtime = input.runtime ?? { oars: '0.0.0', node: process.version, os: process.platform };
   const origin = input.subagent;
   const rawLines = input.text.split(/\r\n|\n|\r/);
@@ -703,7 +707,7 @@ export const captureSession = (input: ExtractInput): Capture => {
   session.branches = [...branches].sort();
   session.files = [...files].sort().slice(0, FILES_PER_SESSION_MAX);
   session.fileHashes = [...fileHashes].sort().slice(0, FILES_PER_SESSION_MAX);
-  session.repo = sessionRoot === null ? null : sha256(`${salt}\nrepo:${toForward(sessionRoot).toLowerCase()}`).slice(0, 16);
+  session.repo = sessionRoot === null ? null : sha256(`${salt}\nrepo:${identityOf(sessionRoot)}`).slice(0, 16);
   session.urls = [...urls].sort();
   session.searches = [...searches].sort();
 

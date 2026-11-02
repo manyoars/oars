@@ -351,6 +351,13 @@ describe('the tool target (recovery_episodes.py shell_target parity)', () => {
     expect(pathKey('/work/app/src/a.ts', '/work/app/packages/cli', root)).toEqual({ key: 'src/a.ts', base: 'repo' });
   });
 
+  it('keys the repository root itself, and a bare linked-worktree root, as `.` under the repo base', () => {
+    expect(pathKey('/work/app', '/work/app/packages/cli', '/work/app')).toEqual({ key: '.', base: 'repo' });
+    expect(pathKey('/work/app/', '/work/app', '/work/app')).toEqual({ key: '.', base: 'repo' });
+    expect(pathKey('/work/app/.claude/worktrees/t1', '/work/app/.claude/worktrees/t1', '/work/app')).toEqual({ key: '.', base: 'repo' });
+    expect(pathKey('/work/app/.claude/worktrees/t1/src/a.ts', '/work/app', '/work/app')).toEqual({ key: 'src/a.ts', base: 'repo' });
+  });
+
   it('keeps the working-directory base for a path outside any repository, and says so', () => {
     expect(pathKey('/tmp/x/notes.md', '/tmp/x', null)).toEqual({ key: 'notes.md', base: 'cwd' });
     // A repository is known but the file lies outside it: still the cwd base, the path as written.
@@ -397,7 +404,7 @@ describe('the version-3 capture records (Item 1, on errors-a.jsonl)', () => {
     expect(capture.tools[7]).toEqual({ ...base, n: 7, ts: '2026-05-28T20:27:45.000Z', tool: 'Grep', status: 'none', target: targetOf('Grep', { path: 'src' }, undefined, 'salt', redact).target, targetBase: 'cwd', keys: ['path', 'pattern'], durationMs: null, toolUseId: 't9', prompt: 2 });
   });
 
-  it('keeps each error line unnormalized and uncut, keyed by toolUseId, with the calls before it', () => {
+  it('keeps each error line unnormalized, keyed by toolUseId, with the calls before it', () => {
     const [shell, write] = capture.errorLines;
     const raw = 'bash: -c: line 1: unexpected EOF while looking for matching quote';
     expect(normalize(raw)).not.toBe(raw);

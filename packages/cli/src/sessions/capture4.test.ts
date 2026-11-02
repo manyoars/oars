@@ -1,14 +1,14 @@
 // CAPTURE 4 (t714): sid, repo, fileHashes, env, promptFingerprint, the line cap, the salt seam, and a version-3 store opened under version 4.
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { captureRuntime, oarsVersion, versionIn } from './capture-runtime.js';
 import { captureSession } from './extract.js';
 import { makeRedactor } from './redact.js';
-import { makeRepoRoot } from './repo-root.js';
+import { makeRepoIdentity, makeRepoRoot, normalizeRemote } from './repo-root.js';
 import { CAPTURE_VERSION, ERROR_LINE_CHARS, EXTRACTOR_VERSION, FILES_PER_SESSION_MAX } from './schema.js';
-import { deposit, loadStore, localSalt, paths, sidOf, type AccountSalt } from './store.js';
-import { cleanup, NOW, stage } from './test-support.js';
+import { deposit, loadStore, localSalt, paths, promptHalf, sidOf, type AccountSalt } from './store.js';
+import { cleanup, FIXTURES, NOW, stage } from './test-support.js';
 
 afterEach(cleanup);
 const redact = makeRedactor();
@@ -78,6 +78,14 @@ describe('the CAPTURE 4 fields', () => {
     expect(capped.session.fileHashes).toHaveLength(FILES_PER_SESSION_MAX);
   });
 
+  it('masks a secret that straddles character 1,000 before the cut, leaving no fragment', () => {
+    const text = `${'e'.repeat(990)} sk-A1b2C3d4E5f6G7h8I9j0K1`;
+    const result = capture(transcript('/w', '/w/a', text), null, null);
+    const kept = result.errorLines[0]?.line ?? '';
+    expect(kept).toBe(`${'e'.repeat(990)} <secret>`);
+    expect(kept).not.toContain('sk-');
+  });
+
   it('cuts an error line to 1,000 characters after redacting, and runs without sid, runtime, or repo resolver', () => {
     const long = capture(transcript('/w', '/w/a', 'e'.repeat(1500)), null, null);
     expect(Array.from(long.errorLines[0]?.line ?? '')).toHaveLength(ERROR_LINE_CHARS);
@@ -100,8 +108,79 @@ describe('repoRoot', () => {
     expect(root(String.raw`C:\w\app\.claude\worktrees\t1\src`)).toBe('C:/w/app');
     expect(makeRepoRoot(exists([]))('/nowhere/deep')).toBeNull();
   });
+  it('stops at a drive or filesystem root instead of probing the deposit process directory', () => {
+    const probed: string[] = [];
+    const root = makeRepoRoot((path) => {
+      probed.push(path);
+      return path === './.git';
+    });
+    expect(root('C:/tmp/x')).toBeNull();
+    expect(probed).toEqual(['C:/tmp/x/.git', 'C:/tmp/.git', 'C:/.git']);
+  });
   it('uses the real file system by default', () => {
     expect(makeRepoRoot()(process.cwd())).not.toBeNull();
+  });
+});
+
+describe('repo identity', () => {
+  const files = (known: { [path: string]: string }) => (path: string): string | null => known[path] ?? null;
+  const config = (url: string): string => `[core]\n\tbare = false\n[remote "origin"]\n\turl = ${url}\n[branch "main"]\n\tremote = origin\n`;
+
+  it('normalizes scheme, credentials, a trailing .git and slash, and the host case', () => {
+    for (const url of ['https://User:pw@GitHub.com/Org/repo.git', 'git@github.com:Org/repo.git', 'ssh://git@GITHUB.com/Org/repo/', 'github.com/Org/repo']) {
+      expect(normalizeRemote(url)).toBe('github.com/Org/repo');
+    }
+    expect(normalizeRemote('https://host:8443/a/b.git')).toBe('host:8443/a/b');
+    expect(normalizeRemote('LOCALHOST')).toBe('localhost');
+  });
+
+  it('reads the origin url from a repository with a .git directory', () => {
+    const identity = makeRepoIdentity(files({ '/w/app/.git/config': config('git@github.com:org/app.git') }));
+    expect(identity('/w/app')).toBe('origin:github.com/org/app');
+    expect(identity('/w/app')).toBe('origin:github.com/org/app');
+  });
+
+  it('follows a linked worktree .git file through gitdir and commondir to the common config', () => {
+    const identity = makeRepoIdentity(
+      files({
+        '/w/wt/.git': 'gitdir: /w/app/.git/worktrees/wt\n',
+        '/w/app/.git/worktrees/wt/commondir': '../..\n',
+        '/w/app/.git/config': config('https://github.com/org/app'),
+      }),
+    );
+    expect(identity('/w/wt')).toBe('origin:github.com/org/app');
+    const relative = makeRepoIdentity(
+      files({ '/w/wt/.git': 'gitdir: ../app/.git/worktrees/wt', '/w/app/.git/worktrees/wt/commondir': '../..', '/w/app/.git/config': config('https://github.com/org/app') }),
+    );
+    expect(relative('/w/wt')).toBe('origin:github.com/org/app');
+    const noCommon = makeRepoIdentity(files({ '/w/wt/.git': 'gitdir: /g/wt', '/g/wt/config': config('https://github.com/org/solo') }));
+    expect(noCommon('/w/wt')).toBe('origin:github.com/org/solo');
+  });
+
+  it('falls back to the lower-cased root path with no config, no origin, or a broken pointer', () => {
+    expect(makeRepoIdentity(files({}))('/W/App')).toBe('path:/w/app');
+    expect(makeRepoIdentity(files({ '/w/app/.git/config': '[core]\n\tbare = false\n[remote "upstream"]\n\turl = x\n' }))('/w/app')).toBe('path:/w/app');
+    expect(makeRepoIdentity(files({ '/w/app/.git': 'not a pointer' }))('/w/app')).toBe('path:/w/app');
+    expect(makeRepoIdentity(files({ '/w/wt/.git': 'gitdir: /nowhere' }))('/w/wt')).toBe('path:/w/wt');
+    expect(makeRepoIdentity()('/definitely/not/a/repo')).toBe('path:/definitely/not/a/repo');
+  });
+
+  it('gives two clones of one remote the same session repo, and another salt another', () => {
+    const repoOf = (root: string, identity: string, salt = 'salt') =>
+      captureSession({ text: transcript(root, `${root}/a.ts`), session: 's', project: 'p', rev: 1, at: 'x', bytes: 1, redact, salt, repoRoot: () => root, repoIdentity: () => identity }).session.repo;
+    expect(repoOf('/a/one', 'origin:github.com/org/app')).toBe(repoOf('/c/elsewhere', 'origin:github.com/org/app'));
+    expect(repoOf('/a/one', 'origin:github.com/org/app')).not.toBe(repoOf('/a/one', 'origin:github.com/org/other'));
+    expect(repoOf('/a/one', 'origin:github.com/org/app')).not.toBe(repoOf('/a/one', 'origin:github.com/org/app', 'pepper'));
+  });
+});
+
+describe('a version-3 contextFingerprint', () => {
+  it('keeps the prompt half and reads a dash as none', () => {
+    expect(promptHalf('-.abc')).toBeNull();
+    expect(promptHalf('abc.def')).toBe('abc');
+    expect(promptHalf('abc.-')).toBe('abc');
+    expect(promptHalf(undefined)).toBeNull();
+    expect(promptHalf('')).toBeNull();
   });
 });
 
@@ -182,6 +261,33 @@ describe('a version-3 store opened under version 4', () => {
     expect((await deposit(staged.runtime, options)).unchanged).toBe(4);
   });
 
+  it('opens a store captured by 3e658f0 (version 3): only target, targetBase, sid, cv, and rev change on a tool; prompts and errors read equal', async () => {
+    const staged = stage();
+    cpSync(join(FIXTURES, 'v3-store'), staged.storeDir, { recursive: true });
+    const before = await loadStore(staged.storeDir);
+    expect(before.sessions.every((session) => session.cv === '3' && session.sid === null && session.promptFingerprint === null)).toBe(true);
+    expect(before.tools.every((tool) => tool.sid === null && tool.targetBase === null)).toBe(true);
+    await deposit(staged.runtime, options);
+    const after = await loadStore(staged.storeDir);
+    const key = (record: { session: string; n: number }): string => `${record.session}#${String(record.n)}`;
+    const expectedToChange = new Set(['target', 'targetBase', 'sid', 'cv', 'rev']);
+    const changed = new Set<string>();
+    expect(after.tools.length).toBe(before.tools.length);
+    for (const tool of after.tools) {
+      const old = before.tools.find((candidate) => key(candidate) === key(tool));
+      expect(old).toBeDefined();
+      for (const field of new Set([...Object.keys(tool), ...Object.keys(old ?? {})])) {
+        if (JSON.stringify(Reflect.get(tool, field)) !== JSON.stringify(Reflect.get(old ?? {}, field))) changed.add(field);
+      }
+    }
+    expect([...changed].filter((field) => !expectedToChange.has(field))).toEqual([]);
+    expect(changed.has('sid') && changed.has('targetBase')).toBe(true);
+    const unrev = <T extends { rev: number }>(records: T[]): T[] => records.map((record) => ({ ...record, rev: 0 }));
+    expect(unrev(after.prompts)).toEqual(unrev(before.prompts));
+    expect(unrev(after.errors)).toEqual(unrev(before.errors));
+    expect(after.sessions.map((session) => session.promptFingerprint)).toEqual(before.sessions.map((session) => session.promptFingerprint));
+  });
+
   it('captures a transcript the harness no longer has from the raw archive, keeping a subagent origin', async () => {
     const staged = stage();
     const first = await deposit(staged.runtime, options);
@@ -200,6 +306,17 @@ describe('a version-3 store opened under version 4', () => {
     const store = await loadStore(staged.storeDir);
     expect(store.sessions.find((session) => session.session === 'tldr')).toMatchObject({ cv: '4' });
     expect(store.subagents[0]).toMatchObject({ session: 'tldr~agent-x', parent: 'tldr', agentType: 'Explore', spawnedBy: 'tu9', cv: '4' });
+  });
+
+  it('captures from raw when the harness removed the whole project folder', async () => {
+    const staged = stage();
+    await deposit(staged.runtime, options);
+    downgrade(staged.storeDir);
+    rmSync(join(staged.projectsRoot, 'proj'), { recursive: true });
+    const again = await deposit(staged.runtime, options);
+    expect(again.sessions).toBe(4);
+    expect((await loadStore(staged.storeDir)).sessions.every((session) => session.cv === '4')).toBe(true);
+    expect((await deposit(staged.runtime, options)).sessions).toBe(0);
   });
 
   it('leaves older records as logged when neither the harness nor the archive has the transcript', async () => {

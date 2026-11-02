@@ -93,7 +93,7 @@ from that log alone, so a change to a derivation rule never re-reads a transcrip
 the types are in `src/sessions/schema.ts`. Secrets (by pattern and entropy), emails, and the domains you name are masked
 before a line is written (redaction runs on the full text, then the text is cut); lines written before a domain was added stay in the append-only file until it is compacted, and readers use only the latest version of each session. The log is the local derived-records tier: redacted
 text, never raw content. It keeps these text fields and no others: the first 300 characters of each prompt, the first informative line of a
-tool error (uncut in the error-line record, 160 characters in a derived example), TLDR lines (400) and Confidence lines (120) from assistant text, WebSearch queries, fetched URLs, file
+tool error (cut to 1,000 characters in the error-line record, 160 characters in a derived example), TLDR lines (400) and Confidence lines (120) from assistant text, WebSearch queries, fetched URLs, file
 paths, and git branch names (the last four have no length limit), all redacted first; plus the project folder slug (not redacted, so it
 carries your username and directory names; the log stays local), skill names, effort values, model names, harness versions, tool names (including MCP server names), a shell call's program and subcommand, and tool-input key names. A tool call's file target is a salted hash, never the path. Nothing is uploaded.
 Subagent transcripts (`<project>/<session>/subagents/`) are deposited with their parent session and subagent type; `books --by class`

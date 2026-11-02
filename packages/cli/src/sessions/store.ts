@@ -3,8 +3,8 @@
 //                           versions 3 and 4 write capture records only (session, user-prompt, tool, error-line; CAPTURE_VERSION);
 //                           signatures, prompt classes, and episodes are derived from them at read time (derive.ts,
 //                           EXTRACTOR_VERSION), so a rule change re-derives without reading any raw transcript
-//   state.json              per file: size, mtime, the `rev`, capture version and redact-domain set last deposited
-//                           (a file is skipped only when size, mtime, version and domain set all match)
+//   state.json              per file: size, mtime, the `rev`, capture version, `sid` and redact-domain set last deposited
+//                           (a file is skipped only when size, mtime, version, sid and domain set all match)
 //   salt                    the per-account salt path targets are hashed with (local-only, never shared); its `sid` (first 8 hex
 //                           of SHA-256) is stamped on every capture record
 //   raw/<project>/<path>    every deposited transcript, hard-linked (copied across volumes) so the raw outlives the
@@ -22,9 +22,9 @@ import { compileAllow, requireEntries, slugOf } from './allow.js';
 import { buildIndex, indexPath } from './hook-index.js';
 import { archiveRaw } from './archive.js';
 import { deriveSession, type SessionCapture } from './derive.js';
-import { captureRuntime } from './capture-runtime.js';
+import { captureRuntime, type CaptureRuntime } from './capture-runtime.js';
 import { captureSession, type Capture, type SubagentOrigin } from './extract.js';
-import { makeRepoRoot } from './repo-root.js';
+import { makeRepoIdentity, makeRepoRoot } from './repo-root.js';
 import { makeRedactor, type Redactor } from './redact.js';
 import {
   CAPTURE_VERSION,
@@ -206,6 +206,11 @@ interface DepositContext {
   redact: ReturnType<typeof makeRedactor>;
   salt: AccountSalt;
   repoRoot: (cwd: string) => string | null;
+  repoIdentity: (root: string) => string;
+  /** This process's versions, read once per deposit (it parses package.json). */
+  captureRuntime: CaptureRuntime;
+  /** What the log says about each subagent transcript, read at most once per deposit and only when a raw-only subagent needs it. */
+  origins: () => Promise<Map<string, SubagentOrigin>>;
   at: string;
   now: () => number;
 }
@@ -216,7 +221,20 @@ const contextFor = async (runtime: SessionsRuntime, state: State, now: () => num
   // observations file until it is compacted; readers use only the highest rev of each session.
   await mkdir(paths(runtime.storeDir).skeletons, { recursive: true });
   const salt = await (runtime.accountSalt ?? localSalt)(runtime.storeDir);
-  return { runtime, state, domains: [...state.redactDomains].sort(), redact: makeRedactor(state.redactDomains), salt, repoRoot: makeRepoRoot(), at: new Date(now()).toISOString(), now };
+  let origins: Promise<Map<string, SubagentOrigin>> | undefined;
+  return {
+    runtime,
+    state,
+    domains: [...state.redactDomains].sort(),
+    redact: makeRedactor(state.redactDomains),
+    salt,
+    repoRoot: makeRepoRoot(),
+    repoIdentity: makeRepoIdentity(),
+    captureRuntime: captureRuntime(),
+    origins: () => (origins ??= loggedOrigins(runtime.storeDir)),
+    at: new Date(now()).toISOString(),
+    now,
+  };
 };
 
 /** A transcript to deposit: a main session file, or a subagent's under `<session>/subagents/` (register A24). */
@@ -312,7 +330,8 @@ const depositFile = async (context: DepositContext, project: string, transcript:
     salt: context.salt.salt,
     sid: context.salt.sid,
     repoRoot: context.repoRoot,
-    runtime: captureRuntime(),
+    repoIdentity: context.repoIdentity,
+    runtime: context.captureRuntime,
     subagent,
   });
   const batch: Observation[] = [extract.session, ...extract.prompts, ...extract.tools, ...extract.errorLines];
@@ -423,9 +442,11 @@ const depositLocked = async (runtime: SessionsRuntime, options: DepositOptions):
     folders: allowed,
     missing,
   };
-  for (const project of allowed) {
+  // A project the harness cleaned up entirely is still visited when the state names it, so its archived transcripts are captured again.
+  const stateProjects = Object.keys(state.files).map((key) => key.slice(0, key.indexOf('/'))).filter((name) => allow.allows(name));
+  for (const project of [...new Set([...allowed, ...stateProjects])].sort()) {
     const folder = join(runtime.projectsRoot, project);
-    const entries = (await readdir(folder, { withFileTypes: true })).filter((entry) => entry.isFile() && entry.name.endsWith('.jsonl')).map((entry) => entry.name).sort();
+    const entries = (await listDir(folder)).filter((entry) => entry.isFile() && entry.name.endsWith('.jsonl')).map((entry) => entry.name).sort();
     const onDisk = [...entries.map((name) => mainTranscript(folder, name)), ...(await subagentTranscripts(folder, await sessionFolders(folder)))];
     const transcripts = [...onDisk, ...(await rawOnlyTranscripts(context, project, new Set(onDisk.map((transcript) => `${project}/${transcript.relative}`))))];
     for (const transcript of transcripts) {
@@ -482,7 +503,6 @@ const rawOnlyTranscripts = async (context: DepositContext, project: string, onDi
   const prefix = `${project}/`;
   const behind = Object.entries(context.state.files).filter(([key, entry]) => key.startsWith(prefix) && !onDisk.has(key) && (entry.v !== CAPTURE_VERSION || entry.s !== context.salt.sid));
   if (behind.length === 0) return [];
-  const origins = await loggedOrigins(storeDir);
   const found: Transcript[] = [];
   for (const [key] of behind) {
     const relative = key.slice(prefix.length);
@@ -493,6 +513,7 @@ const rawOnlyTranscripts = async (context: DepositContext, project: string, onDi
       found.push({ ...mainTranscript(dirname(file), relative), fromRaw: true });
       continue;
     }
+    const origins = await context.origins();
     const agent = (parts[parts.length - 1] ?? '').slice(0, -'.jsonl'.length);
     const session = [parts[0] ?? '', ...parts.slice(2, -1).filter((part) => part !== 'workflows'), agent].join('~');
     const origin = origins.get(session) ?? { parent: parts[0] ?? '', agentType: null, spawnedBy: null };
@@ -654,6 +675,11 @@ const asObservation = (value: unknown): Observation | undefined => {
 // The compatibility reader for version-3 (and version-2 session) lines: a field CAPTURE 4 added reads as unknown, and
 // `contextFingerprint` reads as `promptFingerprint`. Nothing is rewritten; the next deposit captures the transcript again at version 4.
 const orNull = (value: unknown): string | null => (typeof value === 'string' ? value : null);
+/** A version-3 `contextFingerprint` is `<prompt|->.<environment|->`: only the prompt half survives, and `-` reads as none. */
+export const promptHalf = (contextFingerprint: unknown): string | null => {
+  const first = orNull(contextFingerprint)?.split('.')[0];
+  return first === undefined || first === '-' || first === '' ? null : first;
+};
 const upgradeSession = (value: SessionObservation & { contextFingerprint?: unknown }): SessionObservation => {
   const { contextFingerprint, ...rest } = value;
   return {
@@ -661,13 +687,13 @@ const upgradeSession = (value: SessionObservation & { contextFingerprint?: unkno
     sid: orNull(value.sid),
     repo: orNull(value.repo),
     fileHashes: Array.isArray(value.fileHashes) ? value.fileHashes : [],
-    promptFingerprint: value.promptFingerprint ?? orNull(contextFingerprint),
+    promptFingerprint: value.promptFingerprint ?? promptHalf(contextFingerprint),
     env: isRecord(value.env) ? value.env : { harness: value.versions[value.versions.length - 1] ?? null, oars: 'unknown', node: 'unknown', os: 'unknown' },
   };
 };
 const upgradeUserPrompt = (value: UserPromptObservation & { contextFingerprint?: unknown }): UserPromptObservation => {
   const { contextFingerprint, ...rest } = value;
-  return { ...rest, sid: orNull(value.sid), promptFingerprint: value.promptFingerprint ?? orNull(contextFingerprint) };
+  return { ...rest, sid: orNull(value.sid), promptFingerprint: value.promptFingerprint ?? promptHalf(contextFingerprint) };
 };
 const upgradeTool = (value: ToolObservation): ToolObservation => ({ ...value, sid: orNull(value.sid), targetBase: value.targetBase ?? null });
 const upgradeErrorLine = (value: ErrorLineObservation): ErrorLineObservation => ({ ...value, sid: orNull(value.sid) });
