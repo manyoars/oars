@@ -5,10 +5,13 @@ import { harness, removeTestDirs } from '../test-support.js';
 import { slugOf } from './allow.js';
 import type { ErrorObservation, SessionObservation } from './schema.js';
 import { buildIndex, contextBlock, readIndex, repositoryRoot } from './hook-index.js';
-import { loadStore } from './store.js';
-import { cleanup, stage } from './test-support.js';
-import { writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { sessionsMeasure } from './command.js';
+import { readHookCalls } from './hook-calls.js';
+import { formatMeasure, measure } from './query.js';
+import { deposit, loadStore, readCalls } from './store.js';
+import { addProject, cleanup, NOW, stage } from './test-support.js';
+import { readFileSync, writeFileSync } from 'node:fs';
+import { join, resolve } from 'node:path';
 
 afterEach(() => {
   cleanup();
@@ -129,5 +132,51 @@ describe('recency ranking', () => {
     const block = contextBlock(buildIndex({ sessions, prompts: [], errors, subagents: [], tools: [], newerCaptures: 0 }, [], ''), { cwd: REPO, top: 5, maxChars: 1200 }) ?? '';
     expect(block).toContain('fresh error (3 sessions in the last 300');
     expect(block).not.toContain('stale error');
+  });
+});
+
+describe('per-repository scope', () => {
+  const OTHER = join('work', 'other');
+
+  it('measure --repo counts only that repository, and its absence leaves the whole-store output unchanged', async () => {
+    const staged = stage(slugOf(REPO));
+    // A second repository, deposited from the same transcript lines under another session name.
+    const lines = readFileSync(join(staged.projectsRoot, slugOf(REPO), 'errors-a.jsonl'), 'utf8').split('\n').filter((line) => line !== '');
+    addProject(staged, slugOf(OTHER), 'other-session', lines);
+    await deposit(staged.runtime, { allow: [slugOf(REPO), slugOf(OTHER)], redactDomains: [], now: () => NOW });
+    const store = await loadStore(staged.storeDir);
+    const own = store.sessions.filter((session) => session.project === slugOf(REPO)).length;
+    expect(own).toBeGreaterThan(0);
+    expect(store.sessions.length).toBe(own + 1);
+    const deps = { sessions: staged.runtime, install: undefined, now: () => NOW };
+    const all = await sessionsMeasure(deps, { last: 300, since: undefined });
+    const scoped = await sessionsMeasure(deps, { last: 300, since: undefined, repo: REPO });
+    const worktree = await sessionsMeasure(deps, { last: 300, since: undefined, repo: join(REPO, '.claude', 'worktrees', 't1') });
+    expect(all.document).toMatchObject({ last: { sessions: own + 1 } });
+    expect(scoped.document).toMatchObject({ last: { sessions: own } });
+    expect(worktree.document).toEqual(scoped.document);
+    // No flag: the same output as the store's own `measure`.
+    expect(all.text).toBe(formatMeasure(measure(store, await readCalls(staged.storeDir), await readHookCalls(staged.storeDir), 300)));
+  });
+
+  it("another repository's 300 newer deposits leave this repository's block unchanged", () => {
+    // A root outside any worktree: the test checkout itself sits in one, and its slug would carry the worktree marker.
+    const ROOT = resolve('/zz/app');
+    const base = (project: string, name: string, day: number): SessionObservation => ({
+      kind: 'session', cv: '1', sid: null, session: name, project, parent: null, agentType: null, spawnedBy: null, rev: 1, at: '', bytes: 0, lines: 0, badLines: 0, userTurns: 0, assistantTurns: 0,
+      tsFirst: new Date(Date.UTC(2026, 0, 1) + day * 86_400_000).toISOString(), tsLast: null, versions: [], models: {}, branches: [], tools: {}, files: [], fileHashes: [], repo: null, urls: [], searches: [],
+      bashCmds: 0, tldrs: [], confidences: [], compactSummaries: 0, promptFingerprint: null, env: { harness: null, oars: '0.0.0', node: 'v0', os: 'test' }, costUsd: null, usage: { input: 0, cacheWrite: 0, cacheRead: 0, output: 0, thinking: 0 },
+    });
+    const failure = (name: string): ErrorObservation => ({
+      kind: 'error', v: '1', session: name, rev: 1, ts: null, harnessVersion: null, tool: 'Bash', sig: 'Bash | mine', example: 'mine', next: ['Read'], editFollowed: false, prompt: null, cls: null,
+    });
+    const sessions = [base(slugOf(ROOT), 'a-1', 1), base(slugOf(ROOT), 'a-2', 2), base(`${slugOf(ROOT)}--claude-worktrees-t1`, 'a-3', 3), base(`${slugOf(ROOT)}--claude-worktrees-t1`, 'a-4', 4)];
+    const errors = sessions.map((session) => failure(session.session));
+    const block = (extra: SessionObservation[]): string | undefined =>
+      contextBlock(buildIndex({ sessions: [...sessions, ...extra], prompts: [], errors, subagents: [], tools: [], newerCaptures: 0 }, [], ''), { cwd: ROOT, top: 5, maxChars: 1200 });
+    const rival = Array.from({ length: 300 }, (_unused, day) => base(slugOf(resolve('/zz/other')), `b-${String(day)}`, 100 + day));
+    const alone = block([]);
+    expect(alone).toContain('Bash | mine (4 sessions in the last 300');
+    expect(block(rival)).toBe(alone);
   });
 });
