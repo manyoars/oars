@@ -754,7 +754,9 @@ describe('every ms term reads the clock (spec 3.2 mean ms)', () => {
   const clock = <T>(values: readonly number[], run: () => Promise<T>): Promise<T> => {
     let calls = 0;
     const spy = vi.spyOn(performance, 'now').mockImplementation(() => values[Math.min(calls++, values.length - 1)] ?? 0);
-    return run().finally(() => spy.mockRestore());
+    return run().finally(() => {
+      spy.mockRestore();
+    });
   };
 
   it('runStep logs the wall time of an ok run and of a failed one', async () => {
