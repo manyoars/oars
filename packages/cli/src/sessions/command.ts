@@ -5,12 +5,12 @@ import { parseAllowList } from './allow.js';
 import { CliError, ExitCode } from '../errors.js';
 import { books, formatBooks, formatMeasure, formatRecall, measure, recall, type BooksBy, type RecallQuery } from './query.js';
 import { readHookCalls } from './hook-calls.js';
-import { buildIndex, contextBlock, readIndex, type ContextOptions } from './hook-index.js';
+import { buildIndex, contextBlock, inRepository, readIndex, type ContextOptions } from './hook-index.js';
 import { hookStatus, installHooks, scheduleStatus, setSchedule, settingsPath, uninstallHooks, type InstallRuntime, type Scope } from './install.js';
 import { serve } from './mcp.js';
-import { deposit, loadStore, readCalls, readRedactDomains, readSkeletons, type SessionsRuntime, type Store } from './store.js';
+import { CAPTURE_VERSION, type StepRow } from './schema.js';
+import { deposit, loadStore, readCalls, readRedactDomains, readSkeletons, slugOf, type SessionsRuntime, type Store } from './store.js';
 import { formatStepCounters, inputKey, newContext, readSteps, stampKey, runDeposit, runStep, stepCounters, stuckSteps, type StuckStep } from './steps.js';
-import type { StepRow } from './schema.js';
 import { CAPTURE_INVARIANTS, formatVerify, verifyAll, verifyCaptured, type InvariantResult } from './verify.js';
 
 export interface SessionsDeps {
@@ -92,16 +92,42 @@ export const sessionsMcp = async (deps: SessionsDeps): Promise<void> => {
 /** One line for a store a newer oars wrote into (spec state-on-open row for a newer `cv`: read known fields, warn). */
 const newerNotice = (store: Store): string[] => (store.newerCaptures > 0 ? [`captured by a newer oars; upgrade oars (${String(store.newerCaptures)} sessions)`] : []);
 
-export const sessionsBooks = async (deps: SessionsDeps, options: { by: BooksBy; sinceDays: number | undefined }): Promise<Outcome> => {
-  const store = await loadStore(runtimeOf(deps).storeDir);
+/**
+ * The store restricted to one repository (the test `measure --repo` uses). `books` reads its rows from `prompts` alone, and looks a
+ * subagent up by the kept prompt that spawned it, so the kept sessions and prompts are enough; the kept subagents only keep the
+ * newer-capture count to this repository.
+ */
+const inRepositoryStore = (store: Store, repo: string): Store => {
+  const sessions = store.sessions.filter((session) => inRepository(session.project, repo));
+  const mains = new Set(sessions.map((session) => session.session));
+  const subagents = store.subagents.filter((agent) => agent.parent !== null && mains.has(agent.parent));
+  const newer = (cv: string): boolean => Number(cv) > Number(CAPTURE_VERSION);
+  return {
+    ...store,
+    sessions,
+    subagents,
+    prompts: store.prompts.filter((prompt) => mains.has(prompt.session)),
+    newerCaptures: [...sessions, ...subagents].filter((record) => newer(record.cv)).length,
+  };
+};
+
+export const sessionsBooks = async (deps: SessionsDeps, options: { by: BooksBy; sinceDays: number | undefined; repo?: string }): Promise<Outcome> => {
+  const loaded = await loadStore(runtimeOf(deps).storeDir);
+  const store = options.repo === undefined ? loaded : inRepositoryStore(loaded, options.repo);
   const rows = books(store, options.by, deps.now(), options.sinceDays);
   return { document: { ok: true, by: options.by, rows, newerCaptures: store.newerCaptures }, text: [formatBooks(rows, options.by), ...newerNotice(store)].join('\n') };
 };
 
-export const sessionsMeasure = async (deps: SessionsDeps, options: { last: number; since: string | undefined }): Promise<Outcome> => {
+export const sessionsMeasure = async (deps: SessionsDeps, options: { last: number; since: string | undefined; repo?: string }): Promise<Outcome> => {
   const runtime = runtimeOf(deps);
-  const store = await loadStore(runtime.storeDir);
-  const result = measure(store, await readCalls(runtime.storeDir), await readHookCalls(runtime.storeDir), options.last, options.since);
+  const loaded = await loadStore(runtime.storeDir);
+  const { repo } = options;
+  // The same repository test recall uses, so worktrees and subfolders count; other repositories' errors drop out with their sessions.
+  const store = repo === undefined ? loaded : { ...loaded, sessions: loaded.sessions.filter((session) => inRepository(session.project, repo)) };
+  // A call with a folder counts only for its own repository; an older call has none and counts for every repository.
+  const calls = (await readCalls(runtime.storeDir)).filter((call) => repo === undefined || call.cwd === undefined || inRepository(slugOf(call.cwd), repo));
+  const result = measure(store, calls, await readHookCalls(runtime.storeDir), options.last, options.since);
+  // The step counters are all-time over the whole log: `--repo`, `--last`, and `--since` filter the G1 table only.
   const steps = stepCounters(await readSteps(runtime.storeDir));
   return { document: { ok: true, ...result, steps, newerCaptures: store.newerCaptures }, text: [formatMeasure(result), formatStepCounters(steps), ...newerNotice(store)].join('\n') };
 };

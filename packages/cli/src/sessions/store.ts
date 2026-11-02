@@ -178,7 +178,7 @@ export interface DepositOptions {
 export interface DepositResult {
   /** Session files parsed this run. */
   sessions: number;
-  /** Session files skipped because size, mtime, extractor version, and redact-domain set were all unchanged. */
+  /** Session files skipped because size, mtime, capture version, salt, and redact-domain set were all unchanged. */
   unchanged: number;
   lines: number;
   badLines: number;
@@ -525,6 +525,9 @@ const depositLocked = async (runtime: SessionsRuntime, options: DepositOptions, 
   const missing = allow.unmatched(folders);
   const state = await readState(runtime.storeDir);
   refuseNewer(state);
+  // A log written by a newer oars is refused even when state.json is older or lost; the Stop-hook path reads only state.json.
+  const held = (await loadStore(runtime.storeDir)).newerCaptures;
+  if (held > 0) throw new CliError(`The log holds captures by a newer oars (sessions: ${String(held)}); upgrade oars.`, ExitCode.UNEXPECTED, 'unexpected');
   state.redactDomains = [...new Set([...state.redactDomains, ...options.redactDomains])];
   state.allow = [...new Set([...state.allow, ...options.allow])];
   const context = await contextFor(runtime, state, options.now);
@@ -794,7 +797,7 @@ const upgradeSession = (value: SessionObservation & { contextFingerprint?: unkno
     repo: orNull(value.repo),
     fileHashes: Array.isArray(value.fileHashes) ? value.fileHashes : [],
     promptFingerprint: value.promptFingerprint ?? promptHalf(contextFingerprint),
-    env: isRecord(value.env) ? value.env : { harness: value.versions[value.versions.length - 1] ?? null, oars: 'unknown', node: 'unknown', os: 'unknown' },
+    env: isRecord(value.env) ? value.env : { harness: null, oars: 'unknown', node: 'unknown', os: 'unknown' },
   };
 };
 const upgradeUserPrompt = (value: UserPromptObservation & { contextFingerprint?: unknown }): UserPromptObservation => {
@@ -834,7 +837,7 @@ export const readCalls = async (storeDir: string): Promise<RecallCall[]> => {
     try {
       const parsed: unknown = JSON.parse(line);
       if (isRecord(parsed) && typeof parsed.at === 'string' && typeof parsed.query === 'string' && typeof parsed.matches === 'number') {
-        calls.push({ at: parsed.at, query: parsed.query, matches: parsed.matches });
+        calls.push({ at: parsed.at, query: parsed.query, matches: parsed.matches, ...(typeof parsed.cwd === 'string' ? { cwd: parsed.cwd } : {}) });
       }
     } catch {
       // A torn last line is skipped.

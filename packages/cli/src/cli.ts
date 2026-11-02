@@ -91,7 +91,8 @@ const needsYouLine = (code: string | undefined, actionUrl: string | undefined): 
 
 /**
  * `--json` prints `{ok: false, step, problem}` on stdout, plus `workloadId`, `sdkKey` and `rerun` after a deploy that stopped;
- * otherwise the problem's title, detail, and URL go to stderr (on an exit 6 the URL moves into a last "Needs you:" line), then the rerun line, and the one-time SDK key goes to stdout.
+ * otherwise the problem's title, detail, and URL go to stderr (on an exit 6 the URL moves into a last "Needs you:" line),
+ * then the rerun line, and the one-time SDK key goes to stdout.
  */
 const printFailure = (deps: RunDeps, json: boolean, error: CliError): void => {
   const { partial } = error;
@@ -279,20 +280,22 @@ const buildProgram = (deps: RunDeps, argv: string[]): Command => {
       return value;
     })
     .option('--since <days>', 'only the last N days', positiveInteger)
+    .option('--repo <root>', "count only this repository's sessions (worktrees and subfolders included); without it, the whole store")
     .action(async (_options: OptionValues, command: Command) => {
       const options: OptionValues = command.optsWithGlobals();
       const by = text(options, 'by') === 'model' ? 'model' : 'class';
-      emit(deps, flag(options, 'json'), await sessionsBooks(sessionDeps(deps), { by, sinceDays: count(options, 'since') }));
+      emit(deps, flag(options, 'json'), await sessionsBooks(sessionDeps(deps), { by, sinceDays: count(options, 'since'), repo: text(options, 'repo') }));
     });
 
   sessions
     .command('measure')
-    .description('the G1 signals and the pipeline step counters, for the last N sessions and the N before')
+    .description('the G1 signals for the last N sessions and the N before, and the pipeline step counters over the whole log')
     .option('--last <n>', 'sessions per window (default 50)', positiveInteger)
     .option('--since <iso>', 'pin the current window to the first N sessions started at or after this ISO time (the prior window is the N before it); without it the window is the last N and moves with every deposit', isoTime)
+    .option('--repo <root>', "count only this repository's sessions (worktrees and subfolders included); without it, the whole store")
     .action(async (_options: OptionValues, command: Command) => {
       const options: OptionValues = command.optsWithGlobals();
-      emit(deps, flag(options, 'json'), await sessionsMeasure(sessionDeps(deps), { last: count(options, 'last') ?? 50, since: text(options, 'since') }));
+      emit(deps, flag(options, 'json'), await sessionsMeasure(sessionDeps(deps), { last: count(options, 'last') ?? 50, since: text(options, 'since'), repo: text(options, 'repo') }));
     });
 
   sessions

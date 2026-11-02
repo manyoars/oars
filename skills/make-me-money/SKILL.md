@@ -31,8 +31,8 @@ what a person must (signing in, and Stripe's identity and bank steps). Run every
    To register and price it without starting it, add `--no-start`. Pass a secret the agent needs with
    `--secret-from-env <NAME>`, never `--secret`, so the value stays out of shell history.
 4. **Check it runs.** Run `npx @manyoars/oars status <workloadId>`. Success prints four lines: the name and id,
-   `Workload: <status>`, `Deployment: <status> (<health>), desired <state>`, and `Billing mode: TEST`. If the deployment is not
-   healthy yet, wait a little and run it again.
+   `Workload: <status>`, `Deployment: <status> (<health>), desired <state>`, and `Billing mode: TEST`. If the deployment
+   is not healthy yet, wait a little and run it again.
 5. **Prove the money path.** Run `npx @manyoars/oars test-charge <workloadId>` (add `--price <ref>` when the workload has
    more than one active price). Success prints `Test charge <chargeId> for <ref>: <status>`. It is a Stripe test charge on
    Many Oars' own sandbox, so the human needs no Stripe account yet.
