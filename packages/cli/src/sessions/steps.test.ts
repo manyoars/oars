@@ -202,6 +202,20 @@ describe('the steps each command logs', () => {
     expect(rows[0]?.error).toContain('disk gone');
     expect(rows[0]?.error).not.toContain('second line');
   });
+
+  it('a failure line is masked with the store redact domains and cut to 300 characters', async () => {
+    const staged = stage();
+    await sessionsDeposit(depsOf(staged), { allow: ['proj'], allowFiles: [], redactDomains: ['corp.example'] });
+    const context = newContext(staged.storeDir, () => NOW, 'manual');
+    await expect(
+      runStep(context, 'recall', () => Promise.reject(new Error(`cannot reach build.corp.example ${'pad '.repeat(100)}`)), 'k'),
+    ).rejects.toThrow('cannot reach');
+    const rows = await readSteps(staged.storeDir);
+    const error = rows[rows.length - 1]?.error ?? '';
+    expect(error).toContain('<org-domain>');
+    expect(error).not.toContain('corp.example');
+    expect(error).toHaveLength(300);
+  });
 });
 
 describe('the steps each hook logs', () => {
