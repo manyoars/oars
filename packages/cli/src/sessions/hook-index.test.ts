@@ -7,7 +7,7 @@ import type { ErrorObservation, SessionObservation } from './schema.js';
 import { buildIndex, contextBlock, readIndex, repositoryRoot } from './hook-index.js';
 import { sessionsMeasure } from './command.js';
 import { readHookCalls } from './hook-calls.js';
-import { formatMeasure, measure } from './query.js';
+import { books, formatBooks, formatMeasure, measure } from './query.js';
 import { deposit, loadStore, paths, readCalls } from './store.js';
 import { addProject, cleanup, NOW, stage } from './test-support.js';
 import { readFileSync, writeFileSync } from 'node:fs';
@@ -167,6 +167,38 @@ describe('per-repository scope', () => {
     expect(JSON.parse(cli.out.join(''))).toMatchObject({ last: { sessions: own } });
     // No flag: the same output as the store's own `measure`.
     expect(all.text).toBe(formatMeasure(measure(store, await readCalls(staged.storeDir), await readHookCalls(staged.storeDir), 300)));
+  });
+
+  it('books --repo counts only that repository, and its absence leaves the whole-store output unchanged', async () => {
+    const staged = stage(slugOf(HOME));
+    const lines = readFileSync(join(staged.projectsRoot, slugOf(HOME), 'errors-a.jsonl'), 'utf8').split('\n').filter((line) => line !== '');
+    addProject(staged, slugOf(OTHER), 'other-session', lines);
+    await deposit(staged.runtime, { allow: [slugOf(HOME), slugOf(OTHER)], redactDomains: [], now: () => NOW });
+    const store = await loadStore(staged.storeDir);
+    const ownSessions = new Set(store.sessions.filter((session) => session.project === slugOf(HOME)).map((session) => session.session));
+    const ownPrompts = store.prompts.filter((prompt) => ownSessions.has(prompt.session)).length;
+    expect(ownPrompts).toBeGreaterThan(0);
+    expect(ownPrompts).toBeLessThan(store.prompts.length);
+    const prompts = (out: string[]): number => {
+      const rows: unknown = Reflect.get(JSON.parse(out.join('')), 'rows');
+      return Array.isArray(rows) ? rows.reduce((total: number, row: unknown) => total + Number(Reflect.get(Object(row), 'prompts')), 0) : -1;
+    };
+    const call = async (...extra: string[]): Promise<string[]> => {
+      const cli = harness();
+      cli.deps.sessions = staged.runtime;
+      expect(await run(['--json', 'sessions', 'books', '--by', 'class', ...extra], cli.deps)).toBe(ExitCode.OK);
+      return cli.out;
+    };
+    expect(prompts(await call('--repo', HOME))).toBe(ownPrompts);
+    // A worktree path names its repository.
+    expect(prompts(await call('--repo', join(HOME, '.claude', 'worktrees', 't1')))).toBe(ownPrompts);
+    expect(prompts(await call('--repo', OTHER))).toBe(store.prompts.length - ownPrompts);
+    // No flag: the store's own books, unchanged.
+    expect(prompts(await call())).toBe(store.prompts.length);
+    const plain = harness();
+    plain.deps.sessions = staged.runtime;
+    expect(await run(['sessions', 'books', '--by', 'class'], plain.deps)).toBe(ExitCode.OK);
+    expect(plain.out.join('')).toContain(formatBooks(books(store, 'class', NOW), 'class'));
   });
 
   it("measure --repo drops another repository's MCP recall calls and keeps calls with no folder", async () => {

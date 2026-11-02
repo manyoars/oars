@@ -65,8 +65,25 @@ export const sessionsMcp = async (deps: SessionsDeps): Promise<void> => {
 /** One line for a store a newer oars wrote into (spec state-on-open row for a newer `cv`: read known fields, warn). */
 const newerNotice = (store: Store): string[] => (store.newerCaptures > 0 ? [`captured by a newer oars; upgrade oars (${String(store.newerCaptures)} sessions)`] : []);
 
-export const sessionsBooks = async (deps: SessionsDeps, options: { by: BooksBy; sinceDays: number | undefined }): Promise<Outcome> => {
-  const store = await loadStore(runtimeOf(deps).storeDir);
+/** The store restricted to one repository (the test `measure --repo` uses): its sessions, and the prompts, tools, and subagents that hang off them. */
+const inRepositoryStore = (store: Store, repo: string): Store => {
+  const sessions = store.sessions.filter((session) => inRepository(session.project, repo));
+  const mains = new Set(sessions.map((session) => session.session));
+  const subagents = store.subagents.filter((agent) => agent.parent !== null && mains.has(agent.parent));
+  const owners = new Set([...mains, ...subagents.map((agent) => agent.session)]);
+  return {
+    ...store,
+    sessions,
+    subagents,
+    prompts: store.prompts.filter((prompt) => mains.has(prompt.session)),
+    errors: store.errors.filter((error) => mains.has(error.session)),
+    tools: store.tools.filter((tool) => owners.has(tool.session)),
+  };
+};
+
+export const sessionsBooks = async (deps: SessionsDeps, options: { by: BooksBy; sinceDays: number | undefined; repo?: string }): Promise<Outcome> => {
+  const loaded = await loadStore(runtimeOf(deps).storeDir);
+  const store = options.repo === undefined ? loaded : inRepositoryStore(loaded, options.repo);
   const rows = books(store, options.by, deps.now(), options.sinceDays);
   return { document: { ok: true, by: options.by, rows, newerCaptures: store.newerCaptures }, text: [formatBooks(rows, options.by), ...newerNotice(store)].join('\n') };
 };

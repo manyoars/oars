@@ -54,7 +54,7 @@ pattern and entropy, emails, and the domains named with `--redact-domain`) befor
 | every capture record | `kind`, `cv`, `rev`, `sid` | P |
 | `session` (one per transcript) | `agentType` (set on a subagent transcript), `bytes`, `lines`, `badLines`, `userTurns`, `assistantTurns`, `versions`, `models`, `tools`, `bashCmds`, `compactSummaries`, `costUsd`, `usage`, `env` (below) | P |
 | | `session`, `parent`, `spawnedBy` (join ids), `at`, `tsFirst`, `tsLast` (a pool would keep the UTC day), `promptFingerprint`, `repo`, `fileHashes`, `urls`, `searches`, `branches`, `tldrs` (400 chars), `confidences` (120 chars) | A |
-| | `project` (the folder slug, with the username and directory names), `files` (the paths as written, redacted) | L |
+| | `project` (the folder slug, with the username and directory names; also the `projects` keys of `hook-index.json`), `files` (the paths as written, redacted) | L |
 | `user-prompt` (one per prompt) | `index`, `wallSec`, `thinking`, `turns`, `model`, `efforts`, `skills`, `usage` | P |
 | | `session`, `ts` (a pool would keep the UTC day), `head` (the first 300 characters), `promptFingerprint` | A |
 | `tool` (one per tool call) | `n`, `tool`, `status` (`ok`, `error`, or `none` when no result is in the file), `keys` (the input's key names), `durationMs`, `harnessVersion`, `agentType`, `side`, `prompt`, `targetBase`, and `target` for a shell call | P |
@@ -132,6 +132,8 @@ One store can hold several repositories, and neither the G1 reading nor the Sess
 - `oars sessions measure --repo <root>` counts only the sessions of the repository `<root>` sits in. It uses the test recall uses: a
   project folder belongs when its slug is the root's slug or extends it, so worktrees (`<root>/.claude/worktrees/<name>`) and
   subfolders count. Without the flag the output is the whole store, as before.
+- `oars sessions books --repo <root>` takes the same flag and the same test: it books only the prompts of that repository's sessions, and
+  the subagent tokens and tool calls that hang off them, so `books --by class` stays one repository's number when others deposit.
   The MCP recall calls it counts are scoped too: each call now records the folder the server ran in, and `--repo` drops a call whose
   folder is another repository. A call written before that field existed has no folder and counts for every repository.
 - SessionStart recall ranks by the latest 300 sessions of the repository, not of the whole store. The index groups project folders
@@ -146,7 +148,7 @@ One store can hold several repositories, and neither the G1 reading nor the Sess
 - An installed hook command starts with `[ -f "<hook-bin>" ] || exit 0;`, so a settings file that outlives its build (a cloud worker, a
   clone with no build) exits 0 and prints nothing instead of failing the session. The command still ends in `hook-bin.js" <event>`,
   which is how uninstall finds it.
-- `hook install` at `--scope project` or `--scope file` reads the user file's `cleanupPeriodDays` too and keeps the larger, so it never
-  writes the 365 floor over a larger user value. A number the target file sets itself overrides the user's, so the user's value only
+- `hook install` at `--scope project` or `--scope file` reads the user file's `cleanupPeriodDays` too and and, when the target file sets no number, a user
+  value at or above the 365 floor means nothing is written. A number the target file sets itself overrides the user's, so the user's value only
   counts when the file sets none. The floor is per target file: a lower number in the file is raised to 365, and the user's value is
   never copied into a project file, which can be committed.

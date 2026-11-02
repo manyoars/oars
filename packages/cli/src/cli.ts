@@ -279,10 +279,11 @@ const buildProgram = (deps: RunDeps, argv: string[]): Command => {
       return value;
     })
     .option('--since <days>', 'only the last N days', positiveInteger)
+    .option('--repo <root>', "count only this repository's sessions (worktrees and subfolders included); without it, the whole store")
     .action(async (_options: OptionValues, command: Command) => {
       const options: OptionValues = command.optsWithGlobals();
       const by = text(options, 'by') === 'model' ? 'model' : 'class';
-      emit(deps, flag(options, 'json'), await sessionsBooks(sessionDeps(deps), { by, sinceDays: count(options, 'since') }));
+      emit(deps, flag(options, 'json'), await sessionsBooks(sessionDeps(deps), { by, sinceDays: count(options, 'since'), repo: text(options, 'repo') }));
     });
 
   sessions
