@@ -7,7 +7,7 @@ import { slugOf } from './allow.js';
 import { readHookCalls } from './hook-calls.js';
 import { hookRuntime, runHook } from './hooks.js';
 import { deposit, depositSession, loadStore } from './store.js';
-import { cleanup, composers, FIXTURES, folders, NOW, stage, stageCursor, type Staged } from './test-support.js';
+import { cleanup, composers, FIXTURES, folders, NOW, stage, stageCursor, stageRawCursor, type Staged } from './test-support.js';
 
 afterEach(cleanup);
 
@@ -181,6 +181,17 @@ describe('nightly run', () => {
     // Class A: the base name only, never the folder path with the user name.
     expect(call?.error).toMatch(/^state\.vscdb: /);
     expect(call?.error).not.toContain(user);
+  });
+
+  it('records the Cursor sessions skipped for an unsafe id as the hook-call error, so a nightly skip is never silent', async () => {
+    const staged = stage();
+    const doc = (composerId: string) => ({ composerId, createdAt: 1, conversation: [{ type: 1, text: 'hi' }] });
+    const user = await stageRawCursor(staged.root, [{ id: 'good', document: doc('good') }, { id: 'bad', document: doc('../../escaped') }], []);
+    await deposit(staged.runtime, { allow: ['cursor'], redactDomains: [], now: () => NOW });
+    await runHook('nightly', '', { ...staged.runtime, cursorRoot: user }, () => NOW);
+    const [call] = await readHookCalls(staged.storeDir);
+    expect(call?.hit).toBe(true);
+    expect(call?.error).toBe('Skipped 1 Cursor sessions whose id is not a safe file name');
   });
 
   it('deposits a saved cursor entry when the runtime names the Cursor store, and leaves it alone otherwise', async () => {
