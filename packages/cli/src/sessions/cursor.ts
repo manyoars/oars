@@ -258,7 +258,7 @@ export const openCursorStore = async (root: string): Promise<CursorStore | undef
   const db = await open(globalFile);
   const composers = new Map<string, Obj>();
   const sessions: CursorSession[] = [];
-  let rejected = 0;
+  let rejected: number;
   try {
     rejected = await collect(db, root, composers, sessions);
   } catch (error) {
