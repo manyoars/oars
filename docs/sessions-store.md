@@ -132,10 +132,13 @@ One store can hold several repositories, and neither the G1 reading nor the Sess
 - `oars sessions measure --repo <root>` counts only the sessions of the repository `<root>` sits in. It uses the test recall uses: a
   project folder belongs when its slug is the root's slug or extends it, so worktrees (`<root>/.claude/worktrees/<name>`) and
   subfolders count. Without the flag the output is the whole store, as before.
+  The MCP recall calls it counts are scoped too: each call now records the folder the server ran in, and `--repo` drops a call whose
+  folder is another repository. A call written before that field existed has no folder and counts for every repository until the
+  store is re-deposited.
 - SessionStart recall ranks by the latest 300 sessions of the repository, not of the whole store. The index groups project folders
-  into repositories by slug: a worktree folds into its repository, and a folder that extends another stored folder joins the shortest.
+  into repositories by slug: a worktree folds into its repository, and a folder that extends another stored folder joins the shortest. Two consequences: sibling folders whose slugs share a prefix (`app` and `app-two`) share one window, and a nested repository (`tradeaor/oars`) ranks by its parent's window while `measure --repo tradeaor/oars` counts only itself, so the two readings differ.
 - An installed hook command starts with `[ -f "<hook-bin>" ] || exit 0;`, so a settings file that outlives its build (a cloud worker, a
   clone with no build) exits 0 and prints nothing instead of failing the session. The command still ends in `hook-bin.js" <event>`,
   which is how uninstall finds it.
 - `hook install` at `--scope project` or `--scope file` reads the user file's `cleanupPeriodDays` too and keeps the larger, so it never
-  writes the 365 floor over a larger user value.
+  writes the 365 floor over a larger user value. A number the target file sets itself overrides the user's, so the user's value only counts when the file sets none; a lower number in the file is raised to the larger of the floor and the user's value.
