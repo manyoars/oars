@@ -1,4 +1,4 @@
-# The `oars sessions` store (version 3)
+# The `oars sessions` store (version 4)
 
 `oars sessions` keeps a local, deterministic memory of the operator's own Claude Code sessions: no model call, no network, nothing
 uploads. This page is the store's format. The types are in `packages/cli/src/sessions/schema.ts`; the commands are in the CLI README.
@@ -14,7 +14,7 @@ Under `<config>/oars/sessions/` (`%APPDATA%` on Windows, `$XDG_CONFIG_HOME` or `
 | `hook-index.json` | The recurring error signatures per project and overall, read by the hooks. |
 | `skeletons/<session>.json` | One per transcript: ids, timestamps, tool linkage, token counts, a SHA-256 for every content field, and a Merkle root over the raw lines. Hashes only, never content. `verify` checks these. |
 | `state.json` | Per file: size, mtime, capture version, and the `--redact-domain` set, so an unchanged file is skipped. |
-| `salt` | The per-account salt that file targets are hashed with. Local-only, never shared. |
+| `salt` | This machine's salt, which file targets are hashed with. Local-only (class `L`), never shared. Its `sid` (the first 8 hex characters of its SHA-256) is stamped on every capture record. |
 | `raw/<project>/<path>` | oars' own archive of every deposited transcript (below). |
 
 ## Two versions
@@ -24,34 +24,69 @@ Under `<config>/oars/sessions/` (`%APPDATA%` on Windows, `$XDG_CONFIG_HOME` or `
 - `EXTRACTOR_VERSION` (`v` on every derived record) names the derivation rules (error normalization, prompt classes,
   tool-name sequences, recovery episodes). A bump re-derives from the log; no raw transcript is read.
 
+Version 4 (CAPTURE 4, t714) adds `sid`, `repo`, `fileHashes`, `env`, `promptFingerprint`, `targetBase`, the repository-root path base, and
+a 1,000-character cap on an error line. What an open does with an older store:
+
+| Log holds | Action on open | Action at the next deposit |
+|-----------|----------------|----------------------------|
+| `cv` 4, `v` current | read | skip unchanged files |
+| `cv` 3 (or a version-2 session) and the transcript is on disk or in `raw/` | read through the compatibility reader (a field version 4 added reads as null, empty, or `unknown`; `contextFingerprint` reads as `promptFingerprint`) | capture again at `rev + 1`; derived records regenerate under the current `EXTRACTOR_VERSION` on every open |
+| `cv` 3, neither the harness nor `raw/` has the transcript | read through the compatibility reader; `verify` counts it `cv-behind` | none |
+| `cv` newer than this code | read the fields this code knows | refuse with "upgrade oars" |
+| a file's recorded `sid` differs from the salt in force | read | capture that file again from the harness or `raw/` |
+
 A version-2 session (no `cv`) is still read: its already-derived `prompt` and `error` lines pass through until it is deposited again.
 
 ## Captured records
 
-Every record carries `kind`, `cv`, `session`, and `rev`. Text is redacted (secrets by pattern and entropy, emails, and the domains
-named with `--redact-domain`) before it is cut or written. A `local-only` field never leaves this machine, whatever later tier is
-switched on; a `shareable` field is a name, version, count, duration, status, key name, or hash.
+Every record carries `kind`, `cv`, `sid`, `session`, and `rev` (a version-3 record reads with `sid` null). Text is redacted (secrets by
+pattern and entropy, emails, and the domains named with `--redact-domain`) before it is cut or written. Each field has one class
+(the D1 spec, `docs/superpowers/specs/2026-11-01-observation-log-schema-and-validity-model.md` Section 1.1):
+
+- `L` local-only: stays on this machine at every tier. Raw transcripts, the unhashed paths, the project folder slug, the salt, `state.json`.
+- `A` account store: this machine today; the account's own store from the hosted tier. Redacted text (cut to its limit), join ids, and every salted hash.
+- `P` pooled: names, versions, counts, durations, status, key names, and day-resolution dates. The only class that may ever reach a pooled index; it holds no free text, URL, path, path hash, session id, or branch.
 
 | Record | Fields | Class |
 |--------|--------|-------|
-| `session` (one per transcript) | `agentType` (set on a subagent transcript), `at`, `bytes`, `lines`, `badLines`, `userTurns`, `assistantTurns`, `tsFirst`, `tsLast`, `versions`, `models`, `tools`, `bashCmds`, `compactSummaries`, `contextFingerprint`, `costUsd`, `usage` | shareable |
-| | `parent`, `spawnedBy` (set on a subagent transcript; they join records inside this store only), `project` (the folder slug, with the username and directory names), `files`, `urls`, `searches`, `branches`, `tldrs` (400 chars), `confidences` (120 chars) | local-only |
-| `user-prompt` (one per prompt) | `index`, `ts`, `wallSec`, `thinking`, `turns`, `model`, `efforts`, `skills`, `usage`, `contextFingerprint` | shareable |
-| | `head` (the first 300 characters) | local-only |
-| `tool` (one per tool call) | `n`, `ts`, `tool`, `status` (`ok`, `error`, or `none` when no result is in the file), `target`, `keys` (the input's key names), `durationMs`, `harnessVersion`, `agentType`, `side`, `prompt` | shareable |
-| | `toolUseId`, `parent` (they join records inside this store only) | local-only |
-| `error-line` (one per failed result) | `tool`, `ts`, `harnessVersion`, `side`, `prompt`, `after` | shareable |
-| | `toolUseId`, `line` (the first informative line, redacted, not normalized, not cut) | local-only |
+| every capture record | `kind`, `cv`, `rev`, `sid` | P |
+| `session` (one per transcript) | `agentType` (set on a subagent transcript), `bytes`, `lines`, `badLines`, `userTurns`, `assistantTurns`, `versions`, `models`, `tools`, `bashCmds`, `compactSummaries`, `costUsd`, `usage`, `env` (below) | P |
+| | `session`, `parent`, `spawnedBy` (join ids), `at`, `tsFirst`, `tsLast` (a pool would keep the UTC day), `promptFingerprint`, `repo`, `fileHashes`, `urls`, `searches`, `branches`, `tldrs` (400 chars), `confidences` (120 chars) | A |
+| | `project` (the folder slug, with the username and directory names), `files` (the paths as written, redacted) | L |
+| `user-prompt` (one per prompt) | `index`, `wallSec`, `thinking`, `turns`, `model`, `efforts`, `skills`, `usage` | P |
+| | `session`, `ts` (a pool would keep the UTC day), `head` (the first 300 characters), `promptFingerprint` | A |
+| `tool` (one per tool call) | `n`, `tool`, `status` (`ok`, `error`, or `none` when no result is in the file), `keys` (the input's key names), `durationMs`, `harnessVersion`, `agentType`, `side`, `prompt`, `targetBase`, and `target` for a shell call | P |
+| | `session`, `parent`, `toolUseId`, `ts` (a pool would keep the UTC day), and `target` for a path call | A |
+| `error-line` (one per failed result) | `tool`, `harnessVersion`, `side`, `prompt`, `after` | P |
+| | `session`, `toolUseId`, `ts` (a pool would keep the UTC day), `line` (the first informative line, redacted, not normalized, cut to 1,000 characters) | A |
 
-`target` is a 16-hex SHA-256 of the file path relative to the line's working directory, salted per account, for a call with a
-`file_path`, `notebook_path`, or `path` input; the program and subcommand (`git push`, `npm run`) for a shell call, after any leading
-`cd <dir> &&` hop, environment assignment, or `sudo`; else null.
+A pool may hold a day-resolution date only: none of the A fields above reaches it. `sw` (the per-field local-only switch for text
+fields on a hosted store) applies to `urls`, `searches`, `branches`, `tldrs`, `confidences`, `head`, and `line`.
 
-Two known departures from the D1 spec, both CAPTURE 4's (t714), not this version's: the path is relative to the line's `cwd`, not
-the repository root, so the same file read from a subdirectory hashes differently (in the t693 reconciliation this splits R13's
-`Read | File does not exist` episodes by target and reads 20 as fixed where gold, keyed by the last three path segments, reads 5);
-and the classes of `contextFingerprint` and the full-precision timestamps stay as above, where the spec puts them in the account
-store or pools them at day resolution.
+`env` (class P) is `{ harness, oars, node, os }`: the last harness version the transcript names, the oars package that captured it, the
+Node.js version, and `process.platform`. A library version is recorded only when a transcript states it, and none is read today.
+`promptFingerprint` is the hash of the `prompt_snapshot` attachment (version 3's `contextFingerprint` also mixed in the `environment`
+snapshot, whose platform and shell now belong to `env`).
+
+### Hashing
+
+`target` is a 16-hex SHA-256 of `<salt>
+<path>` for a call with a `file_path`, `notebook_path`, or `path` input; the program and
+subcommand (`git push`, `npm run`) for a shell call, after any leading `cd <dir> &&` hop, environment assignment, or `sudo`; else null.
+The path is taken **relative to the repository root** of the line's `cwd` (the nearest ancestor holding `.git`; a linked worktree
+under `<root>/.claude/worktrees/<name>/` resolves to `<root>` and its segment is dropped), so one file hashes alike from every
+subdirectory and worktree. `targetBase` is `repo` then. A path no repository holds keeps the version-3 base: relative to the `cwd`
+when it lies under it, else as written, and `targetBase` is `cwd`. `repo` on the session is the salted hash of the repository root of
+its first `cwd`; `fileHashes` is the salted hash of each file path a tool touched, sorted.
+
+The **salt** is this machine's, created on first use (`localSalt` in `store.ts`). The one seam for the account's salt is
+`SessionsRuntime.accountSalt`: a provider returning `{ salt, sid }`. When it returns another `sid`, each file recorded under the old one is
+captured again from the harness or `raw/` at the next deposit, and nothing else changes. How a second machine adopts the account's salt is
+an open question (M4); until it is settled two machines of one account hash the same file differently, and `sid` makes that visible
+(`verify` reports a store holding more than one).
+
+`verify` also checks the version-4 fields: no session is `cv-behind`, one `sid` across the store, every `fileHash` is a path target of a
+tool call, and `targetBase` is set on a path target and on nothing else.
 
 ## Subagent transcripts
 

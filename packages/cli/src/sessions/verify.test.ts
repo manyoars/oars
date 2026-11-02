@@ -2,8 +2,9 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { extractSession } from './derive.js';
+import { captureSession } from './extract.js';
 import { makeRedactor } from './redact.js';
-import { formatVerify, INVARIANTS, verifyAll, verifySkeleton, type InvariantResult } from './verify.js';
+import { formatVerify, INVARIANTS, verifyAll, verifyCaptured, verifySkeleton, type InvariantResult } from './verify.js';
 import { FIXTURES } from './test-support.js';
 
 const skeletonOf = (lines: readonly string[], name = 's') =>
@@ -143,5 +144,46 @@ describe('verify', () => {
     const agent = skeletonOf([at('s1', '2026-10-13T16:01:00.000Z'), at('s2', '2026-10-13T16:02:00.000Z')], 'p1~agent-a');
     expect(verifyAll([parent, agent])[5]).toMatchObject({ checked: 4, violations: 0 });
     expect(verifyAll([parent, agent, skeletonOf([at('s3', '2026-10-13T16:03:00.000Z')], 'p1~agent-b')])[5]).toMatchObject({ checked: 4, violations: 4 });
+  });
+});
+
+describe('verifyCaptured (the CAPTURE 4 fields)', () => {
+  const capture = (cwd: string, filePath: string, sid: string | null) =>
+    captureSession({
+      text: [
+        JSON.stringify({ type: 'user', uuid: 'u1', timestamp: '2026-06-01T00:00:01.000Z', cwd, message: { role: 'user', content: 'go' } }),
+        JSON.stringify({ type: 'assistant', uuid: 'u2', cwd, message: { role: 'assistant', content: [{ type: 'tool_use', id: 't', name: 'Read', input: { file_path: filePath } }, { type: 'tool_use', id: 'b', name: 'Bash', input: { command: 'git status' } }] } }),
+      ].join('\n'),
+      session: filePath,
+      project: 'p',
+      rev: 1,
+      at: 'x',
+      bytes: 0,
+      redact: makeRedactor(),
+      salt: 's',
+      sid,
+    });
+  const violations = (sessions: ReturnType<typeof capture>[]) => verifyCaptured(sessions.map((one) => one.session), sessions.flatMap((one) => one.tools)).map((result) => result.violations);
+
+  it('passes a clean version-4 capture', () => {
+    expect(violations([capture('/w', '/w/a', 'aaaaaaaa'), capture('/w', '/w/b', 'aaaaaaaa')])).toEqual([0, 0, 0, 0]);
+  });
+
+  it('counts a cv-behind session, a minority sid, an unexplained fileHash, and a mislabeled target base', () => {
+    const behind = capture('/w', '/w/a', 'aaaaaaaa');
+    behind.session.cv = '3';
+    expect(violations([behind, capture('/w', '/w/b', 'aaaaaaaa')])[0]).toBe(1);
+    expect(violations([capture('/w', '/w/a', 'aaaaaaaa'), capture('/w', '/w/b', 'aaaaaaaa'), capture('/w', '/w/c', 'bbbbbbbb')])[1]).toBe(1);
+    const stray = capture('/w', '/w/a', 'aaaaaaaa');
+    stray.session.fileHashes.push('0123456789abcdef');
+    expect(violations([stray])[2]).toBe(1);
+    const mislabeled = capture('/w', '/w/a', 'aaaaaaaa');
+    const [read, shell] = mislabeled.tools;
+    if (read !== undefined) read.targetBase = null;
+    if (shell !== undefined) shell.targetBase = 'cwd';
+    expect(violations([mislabeled])[3]).toBe(2);
+    const newer = capture('/w', '/w/a', 'aaaaaaaa');
+    newer.session.cv = '5';
+    expect(violations([newer])[0]).toBe(0);
   });
 });

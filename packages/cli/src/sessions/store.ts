@@ -1,11 +1,12 @@
 // The on-disk session store and `deposit`. Layout under `<config>/oars/sessions/`:
 //   observations.jsonl      append-only; a re-deposited session is appended again under a higher `rev`
-//                           version 3 writes capture records only (session, user-prompt, tool, error-line; CAPTURE_VERSION);
+//                           versions 3 and 4 write capture records only (session, user-prompt, tool, error-line; CAPTURE_VERSION);
 //                           signatures, prompt classes, and episodes are derived from them at read time (derive.ts,
 //                           EXTRACTOR_VERSION), so a rule change re-derives without reading any raw transcript
 //   state.json              per file: size, mtime, the `rev`, capture version and redact-domain set last deposited
 //                           (a file is skipped only when size, mtime, version and domain set all match)
-//   salt                    the per-account salt path targets are hashed with (local-only, never shared)
+//   salt                    the per-account salt path targets are hashed with (local-only, never shared); its `sid` (first 8 hex
+//                           of SHA-256) is stamped on every capture record
 //   raw/<project>/<path>    every deposited transcript, hard-linked (copied across volumes) so the raw outlives the
 //                           harness's cleanup; local-only (archive.ts)
 //   derived.json            the derived records, rewritten at the end of every deposit
@@ -13,7 +14,7 @@
 //   mcp-calls.jsonl         one line per recall call the MCP server answered
 //   hook-calls.jsonl        one line per hook invocation (event, session, hit, milliseconds)
 //   hook-index.json         the recurring signatures per project and overall, for the hooks
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { appendFile, mkdir, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { basename, dirname, join } from 'node:path';
 import { CliError, ExitCode } from '../errors.js';
@@ -21,11 +22,14 @@ import { compileAllow, requireEntries, slugOf } from './allow.js';
 import { buildIndex, indexPath } from './hook-index.js';
 import { archiveRaw } from './archive.js';
 import { deriveSession, type SessionCapture } from './derive.js';
+import { captureRuntime } from './capture-runtime.js';
 import { captureSession, type Capture, type SubagentOrigin } from './extract.js';
+import { makeRepoRoot } from './repo-root.js';
 import { makeRedactor, type Redactor } from './redact.js';
 import {
   CAPTURE_VERSION,
   EXTRACTOR_VERSION,
+  OLDEST_READABLE_CAPTURE,
   type DerivedRecords,
   type ErrorLineObservation,
   type ErrorObservation,
@@ -46,6 +50,8 @@ export interface SessionsRuntime {
   storeDir: string;
   /** `~/.claude/projects` (or `$CLAUDE_CONFIG_DIR/projects`). */
   projectsRoot: string;
+  /** Where the account's salt comes from; absent means this machine's own (`localSalt`). The seam an account identity replaces (M4). */
+  accountSalt?: (storeDir: string) => Promise<AccountSalt>;
   stdin: NodeJS.ReadableStream;
   stdout: { write: (text: string) => unknown };
 }
@@ -56,6 +62,8 @@ interface FileState {
   rev: number;
   /** The capture version that wrote this file's records; a file recorded under another version is deposited again. */
   v: string;
+  /** The `sid` of the salt the file's records were hashed with; a file recorded under another salt is captured again from raw (t711 Section 4). */
+  s?: string;
   /** The sorted `--redact-domain` set in force when this file was deposited; a file recorded under another set is deposited again. */
   d: string[];
 }
@@ -81,17 +89,32 @@ export const paths = (storeDir: string) => ({
   raw: join(storeDir, 'raw'),
 });
 
-/** The store's per-account salt, created on first use: path targets are hashed with it so they join inside one account only. */
-const saltOf = async (storeDir: string): Promise<string> => {
+/** The salt every path hash in a store uses, and its `sid`: the first 8 hex characters of SHA-256(salt), stamped on each capture record. */
+export interface AccountSalt {
+  salt: string;
+  sid: string;
+}
+
+export const sidOf = (salt: string): string => createHash('sha256').update(salt).digest('hex').slice(0, 8);
+
+/**
+ * This machine's salt, created on first use: path targets hashed with it join inside this store only. This is the one seam where the
+ * account's salt replaces the machine's (`SessionsRuntime.accountSalt`, Open question M4): a store whose `sid` then changes captures its
+ * files again from raw at the next deposit, and nothing else moves.
+ */
+export const localSalt = async (storeDir: string): Promise<AccountSalt> => {
   const file = paths(storeDir).salt;
+  let salt: string | undefined;
   try {
-    return (await readFile(file, 'utf8')).trim();
+    salt = (await readFile(file, 'utf8')).trim();
   } catch (error) {
     if (!isMissing(error)) throw error;
   }
-  const salt = randomBytes(16).toString('hex');
-  await writeFile(file, salt, { mode: 0o600 });
-  return salt;
+  if (salt === undefined) {
+    salt = randomBytes(16).toString('hex');
+    await writeFile(file, salt, { mode: 0o600 });
+  }
+  return { salt, sid: sidOf(salt) };
 };
 
 const sameSet = (a: readonly string[], b: readonly string[]): boolean => a.length === b.length && a.every((entry, index) => entry === b[index]);
@@ -110,6 +133,7 @@ const readState = async (storeDir: string): Promise<State> => {
             mtimeMs: value.mtimeMs,
             rev: value.rev,
             v: typeof value.v === 'string' ? value.v : '',
+            ...(typeof value.s === 'string' ? { s: value.s } : {}),
             d: Array.isArray(value.d) ? value.d.filter((entry): entry is string => typeof entry === 'string') : [],
           };
         }
@@ -180,7 +204,8 @@ interface DepositContext {
   /** The sorted redact-domain set in force. */
   domains: string[];
   redact: ReturnType<typeof makeRedactor>;
-  salt: string;
+  salt: AccountSalt;
+  repoRoot: (cwd: string) => string | null;
   at: string;
   now: () => number;
 }
@@ -190,8 +215,8 @@ const contextFor = async (runtime: SessionsRuntime, state: State, now: () => num
   // added while other folders were allowed still masks those folders later. Lines already written stay in the append-only
   // observations file until it is compacted; readers use only the highest rev of each session.
   await mkdir(paths(runtime.storeDir).skeletons, { recursive: true });
-  const salt = await saltOf(runtime.storeDir);
-  return { runtime, state, domains: [...state.redactDomains].sort(), redact: makeRedactor(state.redactDomains), salt, at: new Date(now()).toISOString(), now };
+  const salt = await (runtime.accountSalt ?? localSalt)(runtime.storeDir);
+  return { runtime, state, domains: [...state.redactDomains].sort(), redact: makeRedactor(state.redactDomains), salt, repoRoot: makeRepoRoot(), at: new Date(now()).toISOString(), now };
 };
 
 /** A transcript to deposit: a main session file, or a subagent's under `<session>/subagents/` (register A24). */
@@ -202,6 +227,8 @@ interface Transcript {
   /** The path under the project folder, the key in `state.json`. */
   relative: string;
   subagent?: SubagentOrigin;
+  /** Read from the store's own archive because the harness no longer has the transcript; it is not archived again. */
+  fromRaw?: boolean;
 }
 
 const mainTranscript = (folder: string, name: string): Transcript => ({ file: join(folder, name), session: name.slice(0, -'.jsonl'.length), relative: name });
@@ -263,20 +290,36 @@ const depositFile = async (context: DepositContext, project: string, transcript:
   const { file, session, subagent } = transcript;
   const info = await stat(file);
   // Archived before the unchanged check, so a store deposited before the archive existed fills it on its next run.
-  await archiveRaw(file, join(paths(runtime.storeDir).raw, project, ...transcript.relative.split('/')));
+  if (transcript.fromRaw !== true) await archiveRaw(file, join(paths(runtime.storeDir).raw, project, ...transcript.relative.split('/')));
   const key = `${project}/${transcript.relative}`;
   const previous = state.files[key];
-  if (previous !== undefined && previous.size === info.size && previous.mtimeMs === info.mtimeMs && previous.v === CAPTURE_VERSION && sameSet(previous.d, context.domains)) {
+  if (previous !== undefined && Number(previous.v) > Number(CAPTURE_VERSION)) {
+    throw new CliError(`${key} was captured by a newer oars (capture version ${previous.v}, this is ${CAPTURE_VERSION}); upgrade oars.`, ExitCode.UNEXPECTED, 'unexpected');
+  }
+  if (
+    previous !== undefined &&
+    previous.size === info.size &&
+    previous.mtimeMs === info.mtimeMs &&
+    previous.v === CAPTURE_VERSION &&
+    previous.s === context.salt.sid &&
+    sameSet(previous.d, context.domains)
+  ) {
     return undefined;
   }
   const files = paths(runtime.storeDir);
   const rev = Math.max((previous?.rev ?? 0) + 1, context.now());
-  const extract = captureSession({ text: await readFile(file, 'utf8'), session, project, rev, at: context.at, bytes: info.size, redact: context.redact, salt: context.salt, subagent });
+  const extract = captureSession({ text: await readFile(file, 'utf8'), session, project, rev, at: context.at, bytes: info.size, redact: context.redact,
+    salt: context.salt.salt,
+    sid: context.salt.sid,
+    repoRoot: context.repoRoot,
+    runtime: captureRuntime(),
+    subagent,
+  });
   const batch: Observation[] = [extract.session, ...extract.prompts, ...extract.tools, ...extract.errorLines];
   await mkdir(runtime.storeDir, { recursive: true });
   await appendFile(files.observations, batch.map((observation) => `${JSON.stringify(observation)}\n`).join(''), { mode: 0o600 });
   await writeAtomic(join(files.skeletons, `${session}.json`), JSON.stringify(extract.skeleton));
-  state.files[key] = { size: info.size, mtimeMs: info.mtimeMs, rev, v: CAPTURE_VERSION, d: context.domains };
+  state.files[key] = { size: info.size, mtimeMs: info.mtimeMs, rev, v: CAPTURE_VERSION, s: context.salt.sid, d: context.domains };
   return extract;
 };
 
@@ -383,7 +426,8 @@ const depositLocked = async (runtime: SessionsRuntime, options: DepositOptions):
   for (const project of allowed) {
     const folder = join(runtime.projectsRoot, project);
     const entries = (await readdir(folder, { withFileTypes: true })).filter((entry) => entry.isFile() && entry.name.endsWith('.jsonl')).map((entry) => entry.name).sort();
-    const transcripts = [...entries.map((name) => mainTranscript(folder, name)), ...(await subagentTranscripts(folder, await sessionFolders(folder)))];
+    const onDisk = [...entries.map((name) => mainTranscript(folder, name)), ...(await subagentTranscripts(folder, await sessionFolders(folder)))];
+    const transcripts = [...onDisk, ...(await rawOnlyTranscripts(context, project, new Set(onDisk.map((transcript) => `${project}/${transcript.relative}`))))];
     for (const transcript of transcripts) {
       const extract = await depositFile(context, project, transcript);
       if (extract === undefined) {
@@ -400,6 +444,61 @@ const depositLocked = async (runtime: SessionsRuntime, options: DepositOptions):
   await writeAtomic(paths(runtime.storeDir).state, JSON.stringify(state));
   await refresh(runtime, state.redactDomains, context.at);
   return result;
+};
+
+/** What an earlier deposit logged about each subagent transcript, since its `.meta.json` is not archived: session id to origin. */
+const loggedOrigins = async (storeDir: string): Promise<Map<string, SubagentOrigin>> => {
+  const origins = new Map<string, SubagentOrigin>();
+  let text = '';
+  try {
+    text = await readFile(paths(storeDir).observations, 'utf8');
+  } catch (error) {
+    if (!isMissing(error)) throw error;
+  }
+  for (const line of text.split('\n')) {
+    if (!line.includes('"parent":"')) continue;
+    try {
+      const parsed: unknown = JSON.parse(line);
+      if (isRecord(parsed) && parsed.kind === 'session' && typeof parsed.session === 'string' && typeof parsed.parent === 'string') {
+        origins.set(parsed.session, {
+          parent: parsed.parent,
+          agentType: typeof parsed.agentType === 'string' ? parsed.agentType : null,
+          spawnedBy: typeof parsed.spawnedBy === 'string' ? parsed.spawnedBy : null,
+        });
+      }
+    } catch {
+      // A torn line is skipped.
+    }
+  }
+  return origins;
+};
+
+/**
+ * Transcripts the harness no longer has but the raw archive does, whose last capture is behind this code or used another salt: they are
+ * captured again from `<store>/raw/` (t711 Section 4, re-capture source). One with neither stays as logged, read through `upgradeCapture`.
+ */
+const rawOnlyTranscripts = async (context: DepositContext, project: string, onDisk: ReadonlySet<string>): Promise<Transcript[]> => {
+  const { storeDir } = context.runtime;
+  const prefix = `${project}/`;
+  const behind = Object.entries(context.state.files).filter(([key, entry]) => key.startsWith(prefix) && !onDisk.has(key) && (entry.v !== CAPTURE_VERSION || entry.s !== context.salt.sid));
+  if (behind.length === 0) return [];
+  const origins = await loggedOrigins(storeDir);
+  const found: Transcript[] = [];
+  for (const [key] of behind) {
+    const relative = key.slice(prefix.length);
+    const file = join(paths(storeDir).raw, project, ...relative.split('/'));
+    if (!(await stat(file).then(() => true, () => false))) continue;
+    const parts = relative.split('/');
+    if (parts.length === 1) {
+      found.push({ ...mainTranscript(dirname(file), relative), fromRaw: true });
+      continue;
+    }
+    const agent = (parts[parts.length - 1] ?? '').slice(0, -'.jsonl'.length);
+    const session = [parts[0] ?? '', ...parts.slice(2, -1).filter((part) => part !== 'workflows'), agent].join('~');
+    const origin = origins.get(session) ?? { parent: parts[0] ?? '', agentType: null, spawnedBy: null };
+    found.push({ file, session, relative, subagent: origin, fromRaw: true });
+  }
+  return found;
 };
 
 const HOOK_LOCK: LockOptions = { waitMs: 3_000, staleMs: 600_000 };
@@ -504,11 +603,11 @@ export const loadStore = async (storeDir: string): Promise<Store> => {
     store.tools.push(...tools);
     if (session.parent !== null) {
       store.subagents.push(session);
-      if (session.cv === CAPTURE_VERSION) agents.push({ session, prompts, tools, errorLines, parent: session.parent });
+      if (isReadable(session.cv)) agents.push({ session, prompts, tools, errorLines, parent: session.parent });
       continue;
     }
     store.sessions.push(session);
-    if (session.cv !== CAPTURE_VERSION) continue;
+    if (!isReadable(session.cv)) continue;
     const derived = deriveSession({ session, prompts, tools, errorLines }, redact);
     store.prompts.push(...derived.prompts);
     store.errors.push(...derived.errors);
@@ -537,17 +636,41 @@ const agentErrors = (store: Store, agents: readonly (SessionCapture & { parent: 
   return errors;
 };
 
+/** A capture record this code derives from: version 3 (upgraded on read) through the current one, and newer ones for the fields known here. */
+const isReadable = (cv: string): boolean => Number(cv) >= OLDEST_READABLE_CAPTURE;
+
 // The store is ours, so a line with a known `kind`, a session, and a rev is trusted as the type it says.
 const asObservation = (value: unknown): Observation | undefined => {
   if (!isRecord(value) || typeof value.session !== 'string' || typeof value.rev !== 'number') return undefined;
-  if (value.kind === 'session') return isSession(value) ? asSession(value) : undefined;
+  if (value.kind === 'session') return isSession(value) ? upgradeSession(asSession(value)) : undefined;
   if (value.kind === 'prompt') return isPrompt(value) ? value : undefined;
   if (value.kind === 'error') return isError(value) ? value : undefined;
-  if (value.kind === 'user-prompt') return isUserPrompt(value) ? value : undefined;
-  if (value.kind === 'tool') return isTool(value) ? value : undefined;
-  if (value.kind === 'error-line') return isErrorLine(value) ? value : undefined;
+  if (value.kind === 'user-prompt') return isUserPrompt(value) ? upgradeUserPrompt(value) : undefined;
+  if (value.kind === 'tool') return isTool(value) ? upgradeTool(value) : undefined;
+  if (value.kind === 'error-line') return isErrorLine(value) ? upgradeErrorLine(value) : undefined;
   return undefined;
 };
+
+// The compatibility reader for version-3 (and version-2 session) lines: a field CAPTURE 4 added reads as unknown, and
+// `contextFingerprint` reads as `promptFingerprint`. Nothing is rewritten; the next deposit captures the transcript again at version 4.
+const orNull = (value: unknown): string | null => (typeof value === 'string' ? value : null);
+const upgradeSession = (value: SessionObservation & { contextFingerprint?: unknown }): SessionObservation => {
+  const { contextFingerprint, ...rest } = value;
+  return {
+    ...rest,
+    sid: orNull(value.sid),
+    repo: orNull(value.repo),
+    fileHashes: Array.isArray(value.fileHashes) ? value.fileHashes : [],
+    promptFingerprint: value.promptFingerprint ?? orNull(contextFingerprint),
+    env: isRecord(value.env) ? value.env : { harness: value.versions[value.versions.length - 1] ?? null, oars: 'unknown', node: 'unknown', os: 'unknown' },
+  };
+};
+const upgradeUserPrompt = (value: UserPromptObservation & { contextFingerprint?: unknown }): UserPromptObservation => {
+  const { contextFingerprint, ...rest } = value;
+  return { ...rest, sid: orNull(value.sid), promptFingerprint: value.promptFingerprint ?? orNull(contextFingerprint) };
+};
+const upgradeTool = (value: ToolObservation): ToolObservation => ({ ...value, sid: orNull(value.sid), targetBase: value.targetBase ?? null });
+const upgradeErrorLine = (value: ErrorLineObservation): ErrorLineObservation => ({ ...value, sid: orNull(value.sid) });
 
 /** A version-2 session line has `v` and no `cv`, `parent`, or agent fields: it reads as a main transcript of that version. */
 const asSession = (value: { [key: string]: unknown } & SessionObservation): SessionObservation => ({
