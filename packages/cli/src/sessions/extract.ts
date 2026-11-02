@@ -3,6 +3,7 @@
 // cost_per_class.py) so the counts agree: same normalization, same prompt boundaries, same class rule. Where two scripts
 // read a thing differently the comment says which rule is used.
 import { createHash } from 'node:crypto';
+import { posix } from 'node:path';
 import type { Redactor } from './redact.js';
 import {
   CAPTURE_VERSION,
@@ -341,7 +342,9 @@ const WORKTREE_PREFIX = /^\.claude\/worktrees\/[^/]+(?:\/|$)/;
  */
 export const pathKey = (path: string, cwd: string | undefined, root: string | null): { key: string; base: TargetBase } => {
   const given = toForward(path);
-  const absolute = isAbsolute(given) || cwd === undefined ? given : `${toForward(cwd).replace(/\/+$/, '')}/${given}`;
+  const joined = isAbsolute(given) || cwd === undefined ? given : `${toForward(cwd).replace(/\/+$/, '')}/${given}`;
+  // `../`, `./`, and a trailing slash must not split one file into several hashes, nor hide that it lies outside the repository.
+  const absolute = posix.normalize(joined).replace(/(.)\/+$/, '$1');
   // The root itself (a Grep or Glob `path` at the repository root) is key `.`, as is a bare worktree root.
   const fromRoot = root === null ? undefined : below(absolute, root) ?? (toForward(absolute).replace(/\/+$/, '').toLowerCase() === toForward(root).replace(/\/+$/, '').toLowerCase() ? '' : undefined);
   if (fromRoot !== undefined) return { key: fromRoot.replace(WORKTREE_PREFIX, '') || '.', base: 'repo' };
@@ -457,7 +460,8 @@ export const captureSession = (input: ExtractInput): Capture => {
   const versions = new Set<string>();
   const branches = new Set<string>();
   const files = new Set<string>();
-  const fileHashes = new Set<string>();
+  /** Redacted path to its salted hash, so `files` and `fileHashes` are cut from one set of paths. */
+  const fileHashes = new Map<string, string>();
   let sessionRoot: string | null = null;
   const urls = new Set<string>();
   const searches = new Set<string>();
@@ -638,16 +642,14 @@ export const captureSession = (input: ExtractInput): Capture => {
         toolById.set(id, name);
         const toolInput = isObj(block.input) ? block.input : {};
         const filePath = str(toolInput.file_path);
-        const lineCwdNow = str(o.cwd);
-        const lineRoot = lineCwdNow === undefined || lineCwdNow === '' ? null : rootOf(lineCwdNow);
+        const lineRoot = lineCwd === undefined || lineCwd === '' ? null : rootOf(lineCwd);
         if (PATH_TOOLS.has(name) && filePath !== undefined && filePath !== '') {
           files.add(redact(filePath));
-          fileHashes.add(hashPath(filePath, lineCwdNow, lineRoot, salt).hash);
-        }
-        else if (name === 'WebFetch' && str(toolInput.url) !== undefined && str(toolInput.url) !== '') urls.add(redact(str(toolInput.url) ?? ''));
+          fileHashes.set(redact(filePath), hashPath(filePath, lineCwd, lineRoot, salt).hash);
+        } else if (name === 'WebFetch' && str(toolInput.url) !== undefined && str(toolInput.url) !== '') urls.add(redact(str(toolInput.url) ?? ''));
         else if (name === 'WebSearch' && str(toolInput.query) !== undefined && str(toolInput.query) !== '') searches.add(redact(str(toolInput.query) ?? ''));
         else if (SHELL.has(name)) session.bashCmds += 1;
-        const aimed = targetOf(name, toolInput, lineCwdNow, salt, redact, lineRoot);
+        const aimed = targetOf(name, toolInput, lineCwd, salt, redact, lineRoot);
         const call: ToolObservation = {
           kind: 'tool',
           cv: CAPTURE_VERSION,
@@ -705,8 +707,9 @@ export const captureSession = (input: ExtractInput): Capture => {
 
   session.versions = [...versions].sort();
   session.branches = [...branches].sort();
-  session.files = [...files].sort().slice(0, FILES_PER_SESSION_MAX);
-  session.fileHashes = [...fileHashes].sort().slice(0, FILES_PER_SESSION_MAX);
+  const kept = [...files].sort().slice(0, FILES_PER_SESSION_MAX);
+  session.files = kept;
+  session.fileHashes = [...new Set(kept.map((path) => fileHashes.get(path) ?? ''))].sort();
   session.repo = sessionRoot === null ? null : sha256(`${salt}\nrepo:${identityOf(sessionRoot)}`).slice(0, 16);
   session.urls = [...urls].sort();
   session.searches = [...searches].sort();

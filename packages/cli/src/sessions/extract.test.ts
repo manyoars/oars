@@ -358,6 +358,13 @@ describe('the tool target (recovery_episodes.py shell_target parity)', () => {
     expect(pathKey('/work/app/.claude/worktrees/t1/src/a.ts', '/work/app', '/work/app')).toEqual({ key: 'src/a.ts', base: 'repo' });
   });
 
+  it('normalizes `../`, `./`, and a trailing slash before keying, and reads an escape from the repository as the cwd base', () => {
+    expect(pathKey('../other/a.ts', '/w/app/pkg', '/w/app')).toEqual({ key: 'other/a.ts', base: 'repo' });
+    expect(pathKey('./src/a.ts', '/w/app', '/w/app')).toEqual(pathKey('src/a.ts', '/w/app', '/w/app'));
+    expect(pathKey('src/', '/w/app', '/w/app')).toEqual({ key: 'src', base: 'repo' });
+    expect(pathKey('../../x/n.md', '/w/app/pkg', '/w/app')).toEqual({ key: '/w/x/n.md', base: 'cwd' });
+  });
+
   it('keeps the working-directory base for a path outside any repository, and says so', () => {
     expect(pathKey('/tmp/x/notes.md', '/tmp/x', null)).toEqual({ key: 'notes.md', base: 'cwd' });
     // A repository is known but the file lies outside it: still the cwd base, the path as written.

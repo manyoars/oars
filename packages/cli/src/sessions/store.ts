@@ -3,8 +3,8 @@
 //                           versions 3 and 4 write capture records only (session, user-prompt, tool, error-line; CAPTURE_VERSION);
 //                           signatures, prompt classes, and episodes are derived from them at read time (derive.ts,
 //                           EXTRACTOR_VERSION), so a rule change re-derives without reading any raw transcript
-//   state.json              per file: size, mtime, the `rev`, capture version, `sid` and redact-domain set last deposited
-//                           (a file is skipped only when size, mtime, version, sid and domain set all match)
+//   state.json              per file: size, mtime, the `rev`, capture version, `sid`, and redact-domain set last deposited
+//                           (a file is skipped only when size, mtime, version, sid, and domain set all match)
 //   salt                    the per-account salt path targets are hashed with (local-only, never shared); its `sid` (first 8 hex
 //                           of SHA-256) is stamped on every capture record
 //   raw/<project>/<path>    every deposited transcript, hard-linked (copied across volumes) so the raw outlives the
@@ -302,7 +302,15 @@ const subagentTranscripts = async (folder: string, sessions: readonly string[]):
 /** The session folders under a project folder: each may hold subagent transcripts, even when its main transcript is gone. */
 const sessionFolders = async (folder: string): Promise<string[]> => (await listDir(folder)).filter((entry) => entry.isDirectory()).map((entry) => entry.name);
 
-/** Deposits one transcript unless its size, mtime, capture version, and domain set are unchanged; returns what it wrote, or undefined when skipped. */
+/** Refuses a state file recorded at a newer capture version before anything is appended, so a refused run leaves the log as it was. */
+const refuseNewer = (state: State): void => {
+  const newer = Object.entries(state.files).find(([, entry]) => Number(entry.v) > Number(CAPTURE_VERSION));
+  if (newer !== undefined) {
+    throw new CliError(`${newer[0]} was captured by a newer oars (capture version ${newer[1].v}, this is ${CAPTURE_VERSION}); upgrade oars.`, ExitCode.UNEXPECTED, 'unexpected');
+  }
+};
+
+/** Deposits one transcript unless its size, mtime, capture version, salt, and domain set are unchanged; returns what it wrote, or undefined when skipped. */
 const depositFile = async (context: DepositContext, project: string, transcript: Transcript): Promise<Capture | undefined> => {
   const { runtime, state } = context;
   const { file, session, subagent } = transcript;
@@ -311,9 +319,6 @@ const depositFile = async (context: DepositContext, project: string, transcript:
   if (transcript.fromRaw !== true) await archiveRaw(file, join(paths(runtime.storeDir).raw, project, ...transcript.relative.split('/')));
   const key = `${project}/${transcript.relative}`;
   const previous = state.files[key];
-  if (previous !== undefined && Number(previous.v) > Number(CAPTURE_VERSION)) {
-    throw new CliError(`${key} was captured by a newer oars (capture version ${previous.v}, this is ${CAPTURE_VERSION}); upgrade oars.`, ExitCode.UNEXPECTED, 'unexpected');
-  }
   if (
     previous !== undefined &&
     previous.size === info.size &&
@@ -428,6 +433,7 @@ const depositLocked = async (runtime: SessionsRuntime, options: DepositOptions):
   const allowed = folders.filter((name) => allow.allows(name));
   const missing = allow.unmatched(folders);
   const state = await readState(runtime.storeDir);
+  refuseNewer(state);
   state.redactDomains = [...new Set([...state.redactDomains, ...options.redactDomains])];
   state.allow = [...new Set([...state.allow, ...options.allow])];
   const context = await contextFor(runtime, state, options.now);
@@ -537,6 +543,7 @@ export const depositSession = (runtime: SessionsRuntime, transcript: string, now
 const depositSessionLocked = async (runtime: SessionsRuntime, transcript: string, now: () => number): Promise<SessionDeposit> => {
   const project = basename(dirname(transcript));
   const state = await readState(runtime.storeDir);
+  refuseNewer(state);
   if (!compileAllow(state.allow).allows(project)) return 'not-allowed';
   const context = await contextFor(runtime, state, now);
   const folder = dirname(transcript);
@@ -566,6 +573,8 @@ export interface Store {
   subagents: SessionObservation[];
   /** The tool calls of every version-3 transcript, main and subagent. */
   tools: ToolObservation[];
+  /** Sessions whose capture records a newer oars wrote: read for the fields known here, and reported by the commands that print the store. Set by `loadStore` only. */
+  newerCaptures: number;
 }
 
 interface Captured {
@@ -601,7 +610,7 @@ export const loadStore = async (storeDir: string): Promise<Store> => {
     all.push(observation);
     latest.set(observation.session, Math.max(latest.get(observation.session) ?? 0, observation.rev));
   }
-  const store: Store = { sessions: [], prompts: [], errors: [], subagents: [], tools: [] };
+  const store: Store = { sessions: [], prompts: [], errors: [], subagents: [], tools: [], newerCaptures: 0 };
   const captured = new Map<string, Captured>();
   const of = (session: string): Captured => {
     const found = captured.get(session) ?? { prompts: [], tools: [], errorLines: [] };
@@ -621,6 +630,7 @@ export const loadStore = async (storeDir: string): Promise<Store> => {
   const agents: (SessionCapture & { parent: string })[] = [];
   for (const { session, prompts, tools, errorLines } of captured.values()) {
     if (session === undefined) continue;
+    if (Number(session.cv) > Number(CAPTURE_VERSION)) store.newerCaptures += 1;
     store.tools.push(...tools);
     if (session.parent !== null) {
       store.subagents.push(session);

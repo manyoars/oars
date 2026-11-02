@@ -33,7 +33,7 @@ a 1,000-character cap on an error line, and a cap of 100 on `files` and `fileHas
 | `cv` 3 (or a version-2 session) and the transcript is on disk or in `raw/` | read through the compatibility reader (a field version 4 added reads as null, empty, or `unknown`; the prompt half of `contextFingerprint`, before its `.`, reads as `promptFingerprint`, and `-` reads as null; the environment half is dropped) | capture again at `rev + 1`; derived records regenerate under the current `EXTRACTOR_VERSION` on every open |
 | `cv` 3, neither the harness nor `raw/` has the transcript | read through the compatibility reader; `verify` counts it `cv-behind` | none |
 | `derived.json` `v` older than `EXTRACTOR_VERSION` | read | rewritten at the next deposit (no reader depends on it today); derived records are regenerated from the log on every read |
-| `cv` newer than this code | read the fields this code knows | refuse with "upgrade oars" |
+| `cv` newer than this code | read the fields this code knows, and warn ("captured by a newer oars; upgrade oars" on `verify`, `measure`, and `books`) | refuse with "upgrade oars" |
 | a file's recorded `sid` differs from the salt in force | read | capture that file again from the harness or `raw/` |
 
 A version-2 session (no `cv`) is still read: its already-derived `prompt` and `error` lines pass through until it is deposited again.
@@ -60,8 +60,8 @@ pattern and entropy, emails, and the domains named with `--redact-domain`) befor
 | | `session`, `parent`, `toolUseId`, `ts` (a pool would keep the UTC day), and `target` for a path call | A |
 | `error-line` (one per failed result) | `tool`, `harnessVersion`, `side`, `prompt`, `after` | P |
 | | `session`, `toolUseId`, `ts` (a pool would keep the UTC day), `line` (the first informative line, redacted, not normalized, cut to 1,000 characters) | A |
-| `prompt` (derived, one per prompt) | `kind`, `v`, `rev`, class (`cls`), `shape`, `bigrams`, `recovery`, `explore`, `act` (the motif vector) | P |
-| | `session`, `promptFingerprint` (`contextFingerprint` on this derived record) | A |
+| `prompt` (derived, one per prompt) | `kind`, `v`, `rev`, `index`, `wallSec`, class (`cls`), `tools`, `shape`, `errors`, `thinking`, `sideTools`, `turns`, `model`, `efforts`, `skills`, `usage`, `recovery`, `explore`, `act`, `bigrams` (the motif vector) | P |
+| | `session`, `head` (the first 300 characters, redacted), `ts`, `promptFingerprint` (`contextFingerprint` on this derived record) | A |
 | `error` (derived, one per error) | `kind`, `v`, `rev`, `tool`, `harnessVersion`, `editFollowed`, `cls`, `prompt`, `next` (tool names), episode `outcome` and `calls` | P |
 | | `session`, `agent` (the subagent transcript id, a join id), `ts`, `sig` (redacted at capture, normalized at derive), `example` (160 characters) | A |
 | store files | `salt`, `state.json`, `raw/` | L |
@@ -69,7 +69,7 @@ pattern and entropy, emails, and the domains named with `--redact-domain`) befor
 | | `hook-calls.jsonl` `event`, `hit`, `ms`; `mcp-calls.jsonl` `matches` | P |
 
 A pool may hold a day-resolution date only: none of the A fields above reaches it. `sw` (the per-field local-only switch for text
-fields on a hosted store) applies to `urls`, `searches`, `branches`, `tldrs`, `confidences`, `head`, and `line`.
+fields on a hosted store) applies to `urls`, `searches`, `branches`, `tldrs`, `confidences`, `head`, `line`, `sig`, `example`, and `mcp-calls.jsonl` `query`.
 
 `env` (class P) is `{ harness, oars, node, os }`: the last harness version the transcript names, the oars package that captured it, the
 Node.js version, and `process.platform`. A library version is recorded only when a transcript states it, and none is read today.

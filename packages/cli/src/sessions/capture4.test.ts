@@ -2,6 +2,7 @@
 import { cpSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
+import { sessionsBooks, sessionsMeasure, sessionsVerify } from './command.js';
 import { captureRuntime, oarsVersion, versionIn } from './capture-runtime.js';
 import { captureSession } from './extract.js';
 import { makeRedactor } from './redact.js';
@@ -76,6 +77,9 @@ describe('the CAPTURE 4 fields', () => {
     const capped = capture(many, null, null);
     expect(capped.session.files).toHaveLength(FILES_PER_SESSION_MAX);
     expect(capped.session.fileHashes).toHaveLength(FILES_PER_SESSION_MAX);
+    // Both lists name the same files: the hashes are those of the first 100 paths, not of the first 100 hashes.
+    const targetOf = new Map(capped.tools.map((tool, i) => [`/w/f${String(i)}.ts`, tool.target]));
+    expect(capped.session.fileHashes).toEqual(capped.session.files.map((path) => targetOf.get(path)).sort());
   });
 
   it('masks a secret that straddles character 1,000 before the cut, leaving no fragment', () => {
@@ -346,6 +350,20 @@ describe('a version-3 store opened under version 4', () => {
     const file = paths(staged.storeDir).observations;
     const lines = readFileSync(file, 'utf8').split('\n').filter((entry) => entry !== '').map((entry) => entry.replace('"cv":"4"', '"cv":"5","future":1'));
     writeFileSync(file, `${lines.join('\n')}\n`);
-    expect((await loadStore(staged.storeDir)).prompts.length).toBeGreaterThan(0);
+    const store = await loadStore(staged.storeDir);
+    expect(store.prompts.length).toBeGreaterThan(0);
+    expect(store.newerCaptures).toBe(store.sessions.length);
+    const deps = { sessions: staged.runtime, install: undefined, now: () => NOW };
+    const notice = /captured by a newer oars; upgrade oars/;
+    expect((await sessionsVerify(deps, { session: undefined })).text).toMatch(notice);
+    expect((await sessionsMeasure(deps, { last: 50, since: undefined })).text).toMatch(notice);
+    expect((await sessionsBooks(deps, { by: 'class', sinceDays: undefined })).text).toMatch(notice);
+  });
+
+  it('prints no newer-oars notice for a store of this version', async () => {
+    const staged = stage();
+    await deposit(staged.runtime, options);
+    expect((await loadStore(staged.storeDir)).newerCaptures).toBe(0);
+    expect((await sessionsVerify({ sessions: staged.runtime, install: undefined, now: () => NOW }, { session: undefined })).text).not.toMatch(/newer oars/);
   });
 });

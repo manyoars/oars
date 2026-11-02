@@ -8,7 +8,7 @@ import { readHookCalls } from './hook-calls.js';
 import { buildIndex, contextBlock, readIndex, type ContextOptions } from './hook-index.js';
 import { hookStatus, installHooks, scheduleStatus, setSchedule, settingsPath, uninstallHooks, type InstallRuntime, type Scope } from './install.js';
 import { serve } from './mcp.js';
-import { deposit, loadStore, readCalls, readRedactDomains, readSkeletons, type SessionsRuntime } from './store.js';
+import { deposit, loadStore, readCalls, readRedactDomains, readSkeletons, type SessionsRuntime, type Store } from './store.js';
 import { formatVerify, verifyAll, verifyCaptured, type InvariantResult } from './verify.js';
 
 export interface SessionsDeps {
@@ -62,15 +62,20 @@ export const sessionsMcp = async (deps: SessionsDeps): Promise<void> => {
   await serve(runtimeOf(deps), deps.now);
 };
 
+/** One line for a store a newer oars wrote into (spec state-on-open row for a newer `cv`: read known fields, warn). */
+const newerNotice = (store: Store): string[] => (store.newerCaptures > 0 ? [`captured by a newer oars; upgrade oars (${String(store.newerCaptures)} sessions)`] : []);
+
 export const sessionsBooks = async (deps: SessionsDeps, options: { by: BooksBy; sinceDays: number | undefined }): Promise<Outcome> => {
-  const rows = books(await loadStore(runtimeOf(deps).storeDir), options.by, deps.now(), options.sinceDays);
-  return { document: { ok: true, by: options.by, rows }, text: formatBooks(rows, options.by) };
+  const store = await loadStore(runtimeOf(deps).storeDir);
+  const rows = books(store, options.by, deps.now(), options.sinceDays);
+  return { document: { ok: true, by: options.by, rows }, text: [formatBooks(rows, options.by), ...newerNotice(store)].join('\n') };
 };
 
 export const sessionsMeasure = async (deps: SessionsDeps, options: { last: number; since: string | undefined }): Promise<Outcome> => {
   const runtime = runtimeOf(deps);
-  const result = measure(await loadStore(runtime.storeDir), await readCalls(runtime.storeDir), await readHookCalls(runtime.storeDir), options.last, options.since);
-  return { document: { ok: true, ...result }, text: formatMeasure(result) };
+  const store = await loadStore(runtime.storeDir);
+  const result = measure(store, await readCalls(runtime.storeDir), await readHookCalls(runtime.storeDir), options.last, options.since);
+  return { document: { ok: true, ...result }, text: [formatMeasure(result), ...newerNotice(store)].join('\n') };
 };
 
 export interface VerifyReport {
@@ -93,7 +98,7 @@ export const sessionsVerify = async (deps: SessionsDeps, options: { session: str
     failed,
     report,
     document: { ok: true, ...report },
-    text: [formatVerify(results, skeletons.length), ...(unreadable > 0 ? [`FAIL  ${String(unreadable)} unreadable skeleton files (torn or corrupted); redeposit to rebuild them`] : [])].join('\n'),
+    text: [formatVerify(results, skeletons.length), ...newerNotice(store), ...(unreadable > 0 ? [`FAIL  ${String(unreadable)} unreadable skeleton files (torn or corrupted); redeposit to rebuild them`] : [])].join('\n'),
   };
 };
 
