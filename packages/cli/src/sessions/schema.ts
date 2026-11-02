@@ -18,17 +18,14 @@
 //
 // Field classes (t711 Section 1.1): `L` local-only, never leaves the machine at any tier; `A` account store, the account's own store only;
 // `P` pooled index, names, versions, counts, and day-resolution dates. Each field below names its class in its doc comment, and
-// docs/sessions-store.md lists them all. The paragraph after this one is the version-3 wording, kept for the fields it still describes.
+// docs/sessions-store.md lists them all. The log is the local derived-records tier: redacted text, never raw content, and nothing uploads.
 //
-// The log is the local derived-records tier: redacted text, never raw content, and nothing uploads. Field classes (register D1):
-// `local-only` fields stay on this machine whatever later tier is switched on; `shareable` fields are names, versions, counts,
-// durations, status, key names, and hashes (the pooled-index list). Each record type below names its local-only fields. The text kept,
-// each redacted first and then cut: the first 300 characters of a prompt, the first informative line of a tool error (uncut in the
-// `error-line` record, 160 characters in a derived example), TLDR lines (400), Confidence lines (120), and, with no length limit,
-// WebSearch queries, fetched URLs, file paths, and git branch names. Also kept as written, not redacted: the project folder slug (it
-// holds the username and directory names; the log stays local), skill names, effort values, model names, harness versions, and tool
-// names (including MCP server names). `redact` masks secrets by pattern and entropy, emails, and the organization domains the operator
-// names. The skeleton holds hashes only.
+// The text kept, each redacted first and then cut: the first 300 characters of a prompt, the first informative line of a tool error (cut
+// to 1,000 characters in the `error-line` record, 160 characters in a derived example), TLDR lines (400), Confidence lines (120), and,
+// with no length limit, WebSearch queries, fetched URLs, file paths, and git branch names. Also kept as written, not redacted: the
+// project folder slug (it holds the username and directory names; the log stays local), skill names, effort values, model names,
+// harness versions, and tool names (including MCP server names). `redact` masks secrets by pattern and entropy, emails, and the
+// organization domains the operator names. The skeleton holds hashes only.
 
 /** Stamped `cv` on every captured record. Bump it only when the captured field list changes: a bump re-reads every transcript. */
 export const CAPTURE_VERSION = '4';
@@ -130,7 +127,10 @@ export interface SessionObservation {
   usage: Usage;
 }
 
-/** One per user prompt: the `prompt_graphs.py` and `cost_per_class.py` records joined. */
+/**
+ * One per user prompt: the `prompt_graphs.py` and `cost_per_class.py` records joined. Derived. Classes: `session` and
+ * `contextFingerprint` (A); `kind`, `v`, `rev`, `cls`, `shape`, `bigrams`, `recovery`, `explore`, `act`, and the counts (P).
+ */
 export interface PromptObservation {
   kind: 'prompt';
   v: string;
@@ -165,7 +165,10 @@ export interface PromptObservation {
   contextFingerprint: string | null;
 }
 
-/** One per tool error: the `error_signatures.py` record. */
+/**
+ * One per tool error: the `error_signatures.py` record. Derived. Classes: `session`, `agent`, `ts`, `sig`, `example` (A); `kind`, `v`,
+ * `rev`, `tool`, `harnessVersion`, `editFollowed`, `next`, `prompt`, `cls` (P).
+ */
 export interface ErrorObservation {
   kind: 'error';
   v: string;
@@ -186,7 +189,7 @@ export interface ErrorObservation {
   prompt: number | null;
   cls: PromptClass | null;
   /**
-   * Set when a subagent made the call: its transcript (`<parent>~agent-x`), local-only. `session` is then the main session that spawned
+   * Set when a subagent made the call: its transcript (`<parent>~agent-x`), class A (a join id). `session` is then the main session that spawned
    * it, and `prompt` and `cls` are the spawning prompt's.
    */
   agent?: string;

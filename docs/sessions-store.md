@@ -13,7 +13,7 @@ Under `<config>/oars/sessions/` (`%APPDATA%` on Windows, `$XDG_CONFIG_HOME` or `
 | `derived.json` | The derived records, rewritten from the log alone at the end of every deposit. |
 | `hook-index.json` | The recurring error signatures per project and overall, read by the hooks. |
 | `skeletons/<session>.json` | One per transcript: ids, timestamps, tool linkage, token counts, a SHA-256 for every content field, and a Merkle root over the raw lines. Hashes only, never content. `verify` checks these. |
-| `state.json` | Per file: size, mtime, capture version, and the `--redact-domain` set, so an unchanged file is skipped. |
+| `state.json` | Per file: size, mtime, the `rev`, capture version (`v`), `sid`, and the `--redact-domain` set, so an unchanged file is skipped. |
 | `salt` | This machine's salt, which file targets are hashed with. Local-only (class `L`), never shared. Its `sid` (the first 8 hex characters of its SHA-256) is stamped on every capture record. |
 | `raw/<project>/<path>` | oars' own archive of every deposited transcript (below). |
 
@@ -30,8 +30,9 @@ a 1,000-character cap on an error line, and a cap of 100 on `files` and `fileHas
 | Log holds | Action on open | Action at the next deposit |
 |-----------|----------------|----------------------------|
 | `cv` 4, `v` current | read | skip unchanged files |
-| `cv` 3 (or a version-2 session) and the transcript is on disk or in `raw/` | read through the compatibility reader (a field version 4 added reads as null, empty, or `unknown`; `contextFingerprint` reads as `promptFingerprint`) | capture again at `rev + 1`; derived records regenerate under the current `EXTRACTOR_VERSION` on every open |
+| `cv` 3 (or a version-2 session) and the transcript is on disk or in `raw/` | read through the compatibility reader (a field version 4 added reads as null, empty, or `unknown`; the prompt half of `contextFingerprint`, before its `.`, reads as `promptFingerprint`, and `-` reads as null; the environment half is dropped) | capture again at `rev + 1`; derived records regenerate under the current `EXTRACTOR_VERSION` on every open |
 | `cv` 3, neither the harness nor `raw/` has the transcript | read through the compatibility reader; `verify` counts it `cv-behind` | none |
+| `derived.json` `v` older than `EXTRACTOR_VERSION` | read | rewritten at the next deposit (no reader depends on it today); derived records are regenerated from the log on every read |
 | `cv` newer than this code | read the fields this code knows | refuse with "upgrade oars" |
 | a file's recorded `sid` differs from the salt in force | read | capture that file again from the harness or `raw/` |
 
@@ -41,7 +42,7 @@ A version-2 session (no `cv`) is still read: its already-derived `prompt` and `e
 
 Every record carries `kind`, `cv`, `sid`, `session`, and `rev` (a version-3 record reads with `sid` null). Text is redacted (secrets by
 pattern and entropy, emails, and the domains named with `--redact-domain`) before it is cut or written. Each field has one class
-(the D1 spec, `docs/superpowers/specs/2026-11-01-observation-log-schema-and-validity-model.md` Section 1.1):
+(the umbrella repository's D1 spec, Section 1.1):
 
 - `L` local-only: stays on this machine at every tier. Raw transcripts, the unhashed paths, the project folder slug, the salt, `state.json`.
 - `A` account store: this machine today; the account's own store from the hosted tier. Redacted text (cut to its limit), join ids, and every salted hash.
@@ -59,6 +60,13 @@ pattern and entropy, emails, and the domains named with `--redact-domain`) befor
 | | `session`, `parent`, `toolUseId`, `ts` (a pool would keep the UTC day), and `target` for a path call | A |
 | `error-line` (one per failed result) | `tool`, `harnessVersion`, `side`, `prompt`, `after` | P |
 | | `session`, `toolUseId`, `ts` (a pool would keep the UTC day), `line` (the first informative line, redacted, not normalized, cut to 1,000 characters) | A |
+| `prompt` (derived, one per prompt) | `kind`, `v`, `rev`, class (`cls`), `shape`, `bigrams`, `recovery`, `explore`, `act` (the motif vector) | P |
+| | `session`, `promptFingerprint` (`contextFingerprint` on this derived record) | A |
+| `error` (derived, one per error) | `kind`, `v`, `rev`, `tool`, `harnessVersion`, `editFollowed`, `cls`, `prompt`, `next` (tool names), episode `outcome` and `calls` | P |
+| | `session`, `agent` (the subagent transcript id, a join id), `ts`, `sig` (redacted at capture, normalized at derive), `example` (160 characters) | A |
+| store files | `salt`, `state.json`, `raw/` | L |
+| | skeleton lines (`skeletons/<session>.json`: ids, usage, block hashes; a pool would hold only `merkleRoot` and `leaves`), `hook-calls.jsonl` `session` and `error` (first line, redacted), `mcp-calls.jsonl` `query` | A |
+| | `hook-calls.jsonl` `event`, `hit`, `ms`; `mcp-calls.jsonl` `matches` | P |
 
 A pool may hold a day-resolution date only: none of the A fields above reaches it. `sw` (the per-field local-only switch for text
 fields on a hosted store) applies to `urls`, `searches`, `branches`, `tldrs`, `confidences`, `head`, and `line`.
@@ -70,14 +78,14 @@ snapshot, whose platform and shell now belong to `env`).
 
 ### Hashing
 
-`target` is a 16-hex SHA-256 of `<salt>
-<path>` for a call with a `file_path`, `notebook_path`, or `path` input; the program and
+`target` is a 16-hex SHA-256 of `<salt>\n<path>` (a newline between the two) for a call with a `file_path`, `notebook_path`, or `path` input; the program and
 subcommand (`git push`, `npm run`) for a shell call, after any leading `cd <dir> &&` hop, environment assignment, or `sudo`; else null.
 The path is taken **relative to the repository root** of the line's `cwd` (the nearest ancestor holding `.git`; a linked worktree
 under `<root>/.claude/worktrees/<name>/` resolves to `<root>` and its segment is dropped), so one file hashes alike from every
 subdirectory and worktree. `targetBase` is `repo` then. A path no repository holds keeps the version-3 base: relative to the `cwd`
-when it lies under it, else as written, and `targetBase` is `cwd`. `repo` on the session is the salted hash of the repository root of
-its first `cwd`; `fileHashes` is the salted hash of each file path a tool touched, sorted.
+when it lies under it, else as written, and `targetBase` is `cwd`. `repo` on the session is the salted hash of the repository's identity: the normalized `origin` remote URL read from the repository's
+`config` (scheme, credentials, a trailing `.git` and slash stripped, host lower-cased; a linked worktree's `.git` file is followed to the
+common `config`), so two clones share it; with no `config` or no `origin` it is the lower-cased absolute root path of the session's first `cwd`. It is salted; `fileHashes` is the salted hash of each file path a tool touched, sorted.
 
 The **salt** is this machine's, created on first use (`localSalt` in `store.ts`). The one seam for the account's salt is
 `SessionsRuntime.accountSalt`: a provider returning `{ salt, sid }`. When it returns another `sid`, each file recorded under the old one is
@@ -94,7 +102,7 @@ tool call, and `targetBase` is set on a path target and on nothing else.
 `<parent>~agent-<id>` and `<parent>~wf_<id>~agent-<id>`, with the parent session id and the subagent type from the sibling
 `.meta.json`. They are kept apart from the sessions, so per-session denominators (`measure`, G1) still count main sessions;
 `books --by class` adds their tokens to the spawning prompt's class as the `delegated` column. Their errors are derived into the
-same `error` records as a main session's, under the parent's `session`, with the agent's transcript in `agent` (local-only) and the
+same `error` records as a main session's, under the parent's `session`, with the agent's transcript in `agent` (class A, a join id) and the
 spawning prompt's `prompt` and `cls`: signatures, `measure`, and recall include them, and each signature counts the parent once.
 
 ## The raw archive
