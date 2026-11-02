@@ -17,8 +17,9 @@
 // read for a session that has no version-3 rev.
 //
 // Field classes (t711 Section 1.1): `L` local-only, never leaves the machine at any tier; `A` account store, the account's own store only;
-// `P` pooled index, names, versions, counts, and day-resolution dates. The session, prompt, tool, error, and error-line records name each field's class in
-// a doc comment; the skeleton and the two call logs carry theirs on the type, and docs/sessions-store.md lists them all. The log is the local derived-records tier: redacted text, never raw content, and nothing uploads.
+// `P` pooled index, names, versions, counts, and day-resolution dates. The session, prompt, tool, error, and error-line records name
+// each field's class in a doc comment; the skeleton and the two call logs carry theirs on the type, and docs/sessions-store.md lists
+// them all. The log is the local derived-records tier: redacted text, never raw content, and nothing uploads.
 //
 // The text kept, each redacted first and then cut: the first 300 characters of a prompt, the first informative line of a tool error (cut
 // to 1,000 characters in the `error-line` record, 160 characters in a derived example), TLDR lines (400), Confidence lines (120), and,
@@ -382,11 +383,13 @@ export interface Skeleton {
   lines: SkeletonLine[];
 }
 
-/** One MCP recall call, appended to `mcp-calls.jsonl` by the server itself. Class A: `query` and `at`; P: `matches`. */
+/** One MCP recall call, appended to `mcp-calls.jsonl` by the server itself. Class A: `query` and `at`; L: `cwd`; P: `matches`. */
 export interface RecallCall {
   at: string;
   query: string;
   matches: number;
+  /** Class L: the server's working directory, unhashed; `measure --repo` scopes calls by it. Calls written before it existed have none and count for every repository. */
+  cwd?: string;
 }
 
 /** One hook invocation, appended to `hook-calls.jsonl` by the hook itself; `measure` counts these per session. Class A: `session`, `at`, `error`; P: `event`, `hit`, `ms`. */

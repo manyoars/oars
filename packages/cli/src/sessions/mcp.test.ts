@@ -41,7 +41,7 @@ describe('MCP server', () => {
     const result = field(reply, 'result');
     const content = field(result, 'content');
     expect(Array.isArray(content) && String(field(content[0], 'text'))).toContain('2 sessions');
-    expect(await readCalls(staged.storeDir)).toEqual([{ at: new Date(NOW).toISOString(), query: '{"error":"unexpected EOF while looking for matching quote","cls":"edit-verify","sinceDays":30}', matches: 1 }]);
+    expect(await readCalls(staged.storeDir)).toEqual([{ at: new Date(NOW).toISOString(), query: '{"error":"unexpected EOF while looking for matching quote","cls":"edit-verify","sinceDays":30}', matches: 1, cwd: process.cwd() }]);
     await handleMessage(staged.runtime, now, { jsonrpc: '2.0', id: 5, method: 'tools/call', params: { name: TOOL_NAME, arguments: 'bad' } });
     expect(readFileSync(paths(staged.storeDir).calls, 'utf8').trim().split('\n')).toHaveLength(2);
   });
