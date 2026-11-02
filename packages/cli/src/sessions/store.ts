@@ -745,7 +745,7 @@ export const readCalls = async (storeDir: string): Promise<RecallCall[]> => {
     try {
       const parsed: unknown = JSON.parse(line);
       if (isRecord(parsed) && typeof parsed.at === 'string' && typeof parsed.query === 'string' && typeof parsed.matches === 'number') {
-        calls.push({ at: parsed.at, query: parsed.query, matches: parsed.matches });
+        calls.push({ at: parsed.at, query: parsed.query, matches: parsed.matches, ...(typeof parsed.cwd === 'string' ? { cwd: parsed.cwd } : {}) });
       }
     } catch {
       // A torn last line is skipped.

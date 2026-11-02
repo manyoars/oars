@@ -386,6 +386,8 @@ export interface RecallCall {
   at: string;
   query: string;
   matches: number;
+  /** The server's working directory; `measure --repo` scopes calls by it. Calls written before it existed have none and count for every repository. */
+  cwd?: string;
 }
 
 /** One hook invocation, appended to `hook-calls.jsonl` by the hook itself; `measure` counts these per session. */

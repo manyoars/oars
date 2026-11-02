@@ -8,7 +8,7 @@ import { readHookCalls } from './hook-calls.js';
 import { buildIndex, contextBlock, inRepository, readIndex, type ContextOptions } from './hook-index.js';
 import { hookStatus, installHooks, scheduleStatus, setSchedule, settingsPath, uninstallHooks, type InstallRuntime, type Scope } from './install.js';
 import { serve } from './mcp.js';
-import { deposit, loadStore, readCalls, readRedactDomains, readSkeletons, type SessionsRuntime, type Store } from './store.js';
+import { deposit, loadStore, readCalls, readRedactDomains, readSkeletons, slugOf, type SessionsRuntime, type Store } from './store.js';
 import { formatVerify, verifyAll, verifyCaptured, type InvariantResult } from './verify.js';
 
 export interface SessionsDeps {
@@ -77,7 +77,9 @@ export const sessionsMeasure = async (deps: SessionsDeps, options: { last: numbe
   const { repo } = options;
   // The same repository test recall uses, so worktrees and subfolders count; other repositories' errors drop out with their sessions.
   const store = repo === undefined ? loaded : { ...loaded, sessions: loaded.sessions.filter((session) => inRepository(session.project, repo)) };
-  const result = measure(store, await readCalls(runtime.storeDir), await readHookCalls(runtime.storeDir), options.last, options.since);
+  // A call with a folder counts only for its own repository; an older call has none and counts for every repository.
+  const calls = (await readCalls(runtime.storeDir)).filter((call) => repo === undefined || call.cwd === undefined || inRepository(slugOf(call.cwd), repo));
+  const result = measure(store, calls, await readHookCalls(runtime.storeDir), options.last, options.since);
   return { document: { ok: true, ...result, newerCaptures: store.newerCaptures }, text: [formatMeasure(result), ...newerNotice(store)].join('\n') };
 };
 
