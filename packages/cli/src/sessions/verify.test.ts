@@ -182,6 +182,10 @@ describe('verifyCaptured (the CAPTURE 4 fields)', () => {
     if (read !== undefined) read.targetBase = null;
     if (shell !== undefined) shell.targetBase = 'cwd';
     expect(violations([mislabeled])[3]).toBe(2);
+    // A version-2 session passes through, permanently: it is neither checked nor a violation.
+    const old = capture('/w', '/w/a', 'aaaaaaaa');
+    old.session.cv = '2';
+    expect(verifyCaptured([old.session], old.tools)[0]).toMatchObject({ checked: 0, violations: 0 });
     const newer = capture('/w', '/w/a', 'aaaaaaaa');
     newer.session.cv = '5';
     expect(violations([newer])[0]).toBe(0);

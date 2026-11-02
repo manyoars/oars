@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 
 // CAPTURE_VERSION and EXTRACTOR_VERSION hold the same value today, so a plain assertion cannot tell which one stamps the skeleton.
-vi.mock('./schema.js', async (importOriginal) => ({ ...(await importOriginal<typeof import('./schema.js')>()), EXTRACTOR_VERSION: 'derived-only' }));
+vi.mock('./schema.js', async (importOriginal) => ({ ...(await importOriginal<object>()), EXTRACTOR_VERSION: 'derived-only' }));
 
 const { captureSession } = await import('./extract.js');
 const { makeRedactor } = await import('./redact.js');

@@ -17,8 +17,8 @@
 // read for a session that has no version-3 rev.
 //
 // Field classes (t711 Section 1.1): `L` local-only, never leaves the machine at any tier; `A` account store, the account's own store only;
-// `P` pooled index, names, versions, counts, and day-resolution dates. Each field below names its class in its doc comment, and
-// docs/sessions-store.md lists them all. The log is the local derived-records tier: redacted text, never raw content, and nothing uploads.
+// `P` pooled index, names, versions, counts, and day-resolution dates. The session, prompt, tool, error, and error-line records name each field's class in
+// a doc comment; the skeleton and the two call logs carry theirs on the type, and docs/sessions-store.md lists them all. The log is the local derived-records tier: redacted text, never raw content, and nothing uploads.
 //
 // The text kept, each redacted first and then cut: the first 300 characters of a prompt, the first informative line of a tool error (cut
 // to 1,000 characters in the `error-line` record, 160 characters in a derived example), TLDR lines (400), Confidence lines (120), and,
@@ -162,7 +162,7 @@ export interface PromptObservation {
   act: number;
   /** Transition bigrams `a>b` of `tools`, with counts. */
   bigrams: { [bigram: string]: number };
-  /** Session-level context fingerprint at the time of the prompt, when one had been seen. */
+  /** The session's prompt fingerprint at the time of the prompt (kept under this name on the derived record), when one had been seen. */
   contextFingerprint: string | null;
 }
 
@@ -331,7 +331,7 @@ export interface SessionSummary {
   tldrs: number;
 }
 
-/** One per line of a session file: ids and structure, with a SHA-256 in place of every content field. */
+/** One per line of a session file: ids and structure, with a SHA-256 in place of every content field. Class A (a pool would hold only the skeleton's `merkleRoot` and `leaves`). */
 export interface SkeletonLine {
   n: number;
   type: string | null;
@@ -370,6 +370,7 @@ export interface CostState {
   models: string[];
 }
 
+/** The per-session skeleton in `skeletons/<session>.json`. `lines` is class A; a pool would hold only `merkleRoot` and `leaves`. */
 export interface Skeleton {
   /** CAPTURE_VERSION: the skeleton is written at capture. */
   v: string;
@@ -381,14 +382,14 @@ export interface Skeleton {
   lines: SkeletonLine[];
 }
 
-/** One MCP recall call, appended to `mcp-calls.jsonl` by the server itself. */
+/** One MCP recall call, appended to `mcp-calls.jsonl` by the server itself. Class A: `query` and `at`; P: `matches`. */
 export interface RecallCall {
   at: string;
   query: string;
   matches: number;
 }
 
-/** One hook invocation, appended to `hook-calls.jsonl` by the hook itself; `measure` counts these per session. */
+/** One hook invocation, appended to `hook-calls.jsonl` by the hook itself; `measure` counts these per session. Class A: `session`, `at`, `error`; P: `event`, `hit`, `ms`. */
 export interface HookCall {
   at: string;
   event: 'session-start' | 'post-tool' | 'stop' | 'nightly';

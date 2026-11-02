@@ -174,7 +174,7 @@ export interface DepositOptions {
 export interface DepositResult {
   /** Session files parsed this run. */
   sessions: number;
-  /** Session files skipped because size, mtime, extractor version, and redact-domain set were all unchanged. */
+  /** Session files skipped because size, mtime, capture version, salt, and redact-domain set were all unchanged. */
   unchanged: number;
   lines: number;
   badLines: number;
@@ -705,7 +705,7 @@ const upgradeSession = (value: SessionObservation & { contextFingerprint?: unkno
     repo: orNull(value.repo),
     fileHashes: Array.isArray(value.fileHashes) ? value.fileHashes : [],
     promptFingerprint: value.promptFingerprint ?? promptHalf(contextFingerprint),
-    env: isRecord(value.env) ? value.env : { harness: value.versions[value.versions.length - 1] ?? null, oars: 'unknown', node: 'unknown', os: 'unknown' },
+    env: isRecord(value.env) ? value.env : { harness: null, oars: 'unknown', node: 'unknown', os: 'unknown' },
   };
 };
 const upgradeUserPrompt = (value: UserPromptObservation & { contextFingerprint?: unknown }): UserPromptObservation => {

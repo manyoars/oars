@@ -365,7 +365,7 @@ describe('the tool target (recovery_episodes.py shell_target parity)', () => {
     expect(pathKey('../../x/n.md', '/w/app/pkg', '/w/app')).toEqual({ key: '/w/x/n.md', base: 'cwd' });
   });
 
-  it('strips a linked-worktree segment at any depth, so an umbrella-root cwd hashes alike with the child repository', () => {
+  it('strips a linked-worktree segment at any depth, so a path through a child worktree keys alike with the child checkout from one cwd', () => {
     expect(pathKey('oars/.claude/worktrees/t1/src/a.ts', '/u', '/u')).toEqual(pathKey('oars/src/a.ts', '/u', '/u'));
     expect(pathKey('oars/.claude/worktrees/t1/src/a.ts', '/u', '/u')).toEqual({ key: 'oars/src/a.ts', base: 'repo' });
     expect(pathKey('oars/.claude/worktrees/t1', '/u', '/u')).toEqual({ key: 'oars', base: 'repo' });
