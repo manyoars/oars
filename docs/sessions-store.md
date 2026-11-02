@@ -27,13 +27,13 @@ Under `<config>/oars/sessions/` (`%APPDATA%` on Windows, `$XDG_CONFIG_HOME` or `
 
 Version 4 (CAPTURE 4, t714) adds `sid`, `repo`, `fileHashes`, `env`, `promptFingerprint`, `targetBase`, the repository-root path base, and
 a 1,000-character cap on an error line, and a cap of 100 on `files` and `fileHashes` per session (p99 was 61, max 209, on the 8,253-session
-copy store); `recall --path` sees the first 100 sorted paths of a session. What an open does with an older store:
+copy store); `recall --path` sees the first 100 sorted paths of a session. Version 5 (CAPTURE 5, t733) changes no field name: it changes the stored `models` value of an existing skeleton to carry the cost-state keys (see the cost-state paragraph below), so a version-4 store is behind and its next deposit captures every transcript again. What an open does with an older store:
 
 | Log holds | Action on open | Action at the next deposit |
 |-----------|----------------|----------------------------|
-| `cv` 4, `v` current | read | skip unchanged files |
-| `cv` 3 (or a version-2 session) and the transcript is on disk or in `raw/` | read through the compatibility reader (a field version 4 added reads as null, empty, or `unknown`; the prompt half of `contextFingerprint`, before its `.`, reads as `promptFingerprint`, and `-` reads as null; the environment half is dropped) | capture again at `rev + 1`; derived records regenerate under the current `EXTRACTOR_VERSION` on every open |
-| `cv` 3, neither the harness nor `raw/` has the transcript | read through the compatibility reader; `verify` counts it `cv-behind` | none |
+| `cv` 5, `v` current | read | skip unchanged files |
+| `cv` 3 or 4 (or a version-2 session) and the transcript is on disk or in `raw/` | read through the compatibility reader (for `cv` 3, a field version 4 added reads as null, empty, or `unknown`; the prompt half of `contextFingerprint`, before its `.`, reads as `promptFingerprint`, and `-` reads as null; the environment half is dropped) | capture again at `rev + 1`; derived records regenerate under the current `EXTRACTOR_VERSION` on every open |
+| `cv` 3 or 4, neither the harness nor `raw/` has the transcript | read through the compatibility reader; `verify` counts it `cv-behind`, and `verify --strict` exits 4 on it | none |
 | `derived.json` `v` older than `EXTRACTOR_VERSION` | read | rewritten at the next deposit (no reader depends on it today); derived records are regenerated from the log on every read |
 | `cv` newer than this code | read the fields this code knows, and warn ("captured by a newer oars; upgrade oars" on `verify`, `measure`, and `books`) | refuse with "upgrade oars" (`oars sessions deposit` and the nightly run read the log and refuse when a session's latest capture has a newer `cv`; the Stop-hook path reads only `state.json`) |
 | a file's recorded `sid` differs from the salt in force | read | capture that file again from the harness or `raw/` |
@@ -205,7 +205,7 @@ One store can hold several repositories, and neither the G1 reading nor the Sess
 ## The Cursor source
 
 `oars sessions deposit` also reads a Cursor store, so a Cursor history and a Claude Code history land in one local store. The records
-carry `harness: "cursor"`; a record with no `harness` is Claude Code's (`harnessOf`), so `cv` stays 4 and no Claude Code record changes.
+carry `harness: "cursor"`; a record with no `harness` is Claude Code's (`harnessOf`), so the Cursor source itself needs no capture bump and no Claude Code record changes.
 
 - **Where it is read from.** Cursor's `User` folder: `%APPDATA%\Cursor\User` on Windows, `~/Library/Application Support/Cursor/User` on
   macOS, `$XDG_CONFIG_HOME/Cursor/User` (else `~/.config/Cursor/User`) on Linux. `deposit` finds it on its own and skips it silently when
