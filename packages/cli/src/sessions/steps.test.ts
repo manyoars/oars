@@ -236,6 +236,16 @@ describe('the steps each command logs', () => {
     expect(last?.out.stuck).toBe(1);
   });
 
+  it('a stuck deposit fails a --session verify too: the stuck check is store-wide', async () => {
+    const staged = stage();
+    breakState(staged);
+    for (let attempt = 0; attempt < 3; attempt += 1) await expect(sessionsDeposit(depsOf(staged), { allow: ['proj'], allowFiles: [], redactDomains: [] })).rejects.toThrow();
+    fixState(staged);
+    const outcome = await sessionsVerify(depsOf(staged), { session: 'some-other-session' });
+    expect(outcome.failed).toEqual(['stuck: deposit']);
+    expect(outcome.document).toMatchObject({ stuck: [{ step: 'deposit', runs: 3 }] });
+  });
+
   it('a step that throws logs an error row with the first line, masks it, and rethrows', async () => {
     const staged = stage();
     mkdirSync(staged.storeDir, { recursive: true });
