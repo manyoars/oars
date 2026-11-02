@@ -87,7 +87,7 @@ describe('measure', () => {
     expect(result.last.recallPerSession).toBe(0.25);
     expect(result.before).toEqual({ sessions: 0, recurringPer100: null, recurringSignatures: null, cacheWritePerSession: null, recallPerSession: null, hookRecallPerSession: null, hookHitsPerSession: null, hookDepositsPerSession: null });
     expect(formatMeasure(result)).toContain('-');
-    expect(measure({ sessions: [], prompts: [], errors: [], subagents: [], tools: [] }, [], [], 5).last.sessions).toBe(0);
+    expect(measure({ sessions: [], prompts: [], errors: [], subagents: [], tools: [], newerCaptures: 0 }, [], [], 5).last.sessions).toBe(0);
   });
 
   it('counts hook lookups and hits per session from the hook counters, by the session they ran in', async () => {

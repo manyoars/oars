@@ -243,7 +243,7 @@ export const verifyCaptured = (sessions: readonly SessionObservation[], tools: r
   const majority = [...counts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0];
   const targets = new Map<string, Set<string>>();
   for (const tool of tools) if (tool.targetBase !== null && tool.target !== null) targets.set(tool.session, (targets.get(tool.session) ?? new Set<string>()).add(tool.target));
-  const pathTools = tools.filter((tool) => tool.cv === CAPTURE_VERSION);
+  const currentTools = tools.filter((tool) => tool.cv === CAPTURE_VERSION);
   return [
     { name: CAPTURE_INVARIANTS[0], checked: readable.length, violations: readable.filter((session) => Number(session.cv) < Number(CAPTURE_VERSION)).length },
     { name: CAPTURE_INVARIANTS[1], checked: current.length, violations: current.filter((session) => session.sid !== majority).length },
@@ -254,8 +254,8 @@ export const verifyCaptured = (sessions: readonly SessionObservation[], tools: r
     },
     {
       name: CAPTURE_INVARIANTS[3],
-      checked: pathTools.length,
-      violations: pathTools.filter((tool) => (tool.targetBase !== null) !== (tool.target !== null && HASH.test(tool.target))).length,
+      checked: currentTools.length,
+      violations: currentTools.filter((tool) => (tool.targetBase !== null) !== (tool.target !== null && HASH.test(tool.target))).length,
     },
   ];
 };

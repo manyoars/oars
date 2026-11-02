@@ -109,7 +109,7 @@ export interface SessionObservation {
   files: string[];
   /** Class A: the per-account salted hash (16 hex characters) of each touched file, relative to the repository root, sorted. */
   fileHashes: string[];
-  /** Class A: the salted hash of the repository root the transcript's working directory sits in; null when none holds it. */
+  /** Class A: the salted hash of the repository identity (normalized `origin` remote, else the root path) the transcript's working directory sits in; null when none holds it. */
   repo: string | null;
   urls: string[];
   searches: string[];
@@ -129,7 +129,8 @@ export interface SessionObservation {
 
 /**
  * One per user prompt: the `prompt_graphs.py` and `cost_per_class.py` records joined. Derived. Classes: `session` and
- * `contextFingerprint` (A); `kind`, `v`, `rev`, `cls`, `shape`, `bigrams`, `recovery`, `explore`, `act`, and the counts (P).
+ * `contextFingerprint`, `head`, and `ts` (A); `kind`, `v`, `rev`, `index`, `wallSec`, `cls`, `tools`, `shape`, `errors`, `thinking`, `sideTools`,
+ * `turns`, `model`, `efforts`, `skills`, `usage`, `recovery`, `explore`, `act`, and `bigrams` (P).
  */
 export interface PromptObservation {
   kind: 'prompt';

@@ -186,7 +186,7 @@ describe('deposit', () => {
 
   it('reads an empty or missing store as empty', async () => {
     const staged = stage();
-    expect(await loadStore(staged.storeDir)).toEqual({ sessions: [], prompts: [], errors: [], subagents: [], tools: [] });
+    expect(await loadStore(staged.storeDir)).toEqual({ sessions: [], prompts: [], errors: [], subagents: [], tools: [], newerCaptures: 0 });
     expect(await readCalls(staged.storeDir)).toEqual([]);
     expect(await readSkeletons(staged.storeDir)).toEqual({ skeletons: [], unreadable: 0 });
     const missingRoot = { ...staged.runtime, projectsRoot: join(staged.root, 'absent') };

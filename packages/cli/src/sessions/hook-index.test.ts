@@ -38,7 +38,7 @@ describe('hook index and context block', () => {
     await run(['sessions', 'deposit', '--allow', REPO], deps);
     const index = await readIndex(staged.storeDir);
     expect(index?.projects[slugOf(REPO)]?.length).toBeGreaterThan(0);
-    const block = contextBlock(index ?? buildIndex({ sessions: [], prompts: [], errors: [], subagents: [], tools: [] }, [], ''), { cwd: REPO, top: 5, maxChars: 1200 });
+    const block = contextBlock(index ?? buildIndex({ sessions: [], prompts: [], errors: [], subagents: [], tools: [], newerCaptures: 0 }, [], ''), { cwd: REPO, top: 5, maxChars: 1200 });
     expect(block).toContain('unexpected EOF while looking for matching');
     expect(block).toContain('2 sessions');
     expect(block?.length).toBeLessThan(1200);
@@ -126,7 +126,7 @@ describe('recency ranking', () => {
       sessions.push(session(`new-${String(day)}`, 100 + day));
       if (day % 100 === 0) errors.push(failure(`new-${String(day)}`, 'Bash | fresh error'));
     }
-    const block = contextBlock(buildIndex({ sessions, prompts: [], errors, subagents: [], tools: [] }, [], ''), { cwd: REPO, top: 5, maxChars: 1200 }) ?? '';
+    const block = contextBlock(buildIndex({ sessions, prompts: [], errors, subagents: [], tools: [], newerCaptures: 0 }, [], ''), { cwd: REPO, top: 5, maxChars: 1200 }) ?? '';
     expect(block).toContain('fresh error (3 sessions in the last 300');
     expect(block).not.toContain('stale error');
   });
