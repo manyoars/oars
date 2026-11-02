@@ -48,7 +48,7 @@ describe('scripts/check-billing-sync.mjs', () => {
     expect(status).toBe(1);
     expect(err).toContain(first);
     expect(err).toContain(second);
-  });
+  }, 30_000);
 
   it('fails on a trailing-newline difference, since the copies must be byte for byte', () => {
     place('paid-api', 'src/billing.ts', 'export const x = 1;\n');

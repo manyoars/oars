@@ -4,6 +4,7 @@
 import { readFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import type { SessionObservation } from './schema.js';
+import { expandHome } from './allow.js';
 import { slugOf, type Store } from './store.js';
 
 const INDEX_FILE = 'hook-index.json';
@@ -158,7 +159,7 @@ export const repositoryRoot = (cwd: string): string => {
 const belongs = (project: string, rootSlug: string): boolean => project === rootSlug || project.startsWith(`${rootSlug}-`);
 
 /** True when a project folder slug belongs to the repository `root` sits in (a worktree path counts as its repository). */
-export const inRepository = (project: string, root: string): boolean => belongs(project, slugOf(repositoryRoot(resolve(root))));
+export const inRepository = (project: string, root: string): boolean => belongs(project, slugOf(repositoryRoot(resolve(expandHome(root)))));
 
 const clip = (text: string, length: number): string => (text.length <= length ? text : `${text.slice(0, length - 1)}…`);
 
