@@ -15,6 +15,7 @@
 //   hook-calls.jsonl        one line per hook invocation (event, session, hit, milliseconds)
 //   hook-index.json         the recurring signatures per project and overall, for the hooks
 import { createHash, randomBytes } from 'node:crypto';
+import { performance } from 'node:perf_hooks';
 import { appendFile, mkdir, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { basename, dirname, join } from 'node:path';
 import { CliError, ExitCode } from '../errors.js';
@@ -39,6 +40,7 @@ import {
   type SessionObservation,
   type SessionSummary,
   type SignatureRecord,
+  type StepCounts,
   type Skeleton,
   type ToolObservation,
   type UserPromptObservation,
@@ -85,6 +87,7 @@ export const paths = (storeDir: string) => ({
   skeletons: join(storeDir, 'skeletons'),
   calls: join(storeDir, 'mcp-calls.jsonl'),
   hookCalls: join(storeDir, 'hook-calls.jsonl'),
+  pipelineRuns: join(storeDir, 'pipeline-runs.jsonl'),
   salt: join(storeDir, 'salt'),
   raw: join(storeDir, 'raw'),
 });
@@ -354,11 +357,63 @@ const depositFile = async (context: DepositContext, project: string, transcript:
   return extract;
 };
 
+/** What a derive pass read and wrote, for the step log (spec 3.1 `in` and `out`, 4.2 `key`). */
+export interface DeriveTrace {
+  ms: number;
+  in: StepCounts;
+  out: StepCounts;
+  key: string;
+}
+
+/** What a deposit wrote, filled in by the caller's trace so `DepositResult` and the `--json` document keep their shape. */
+export interface DepositTrace {
+  /** Records written, by kind: `session` (main), `subagent`, `user-prompt`, `tool`, `error-line`. */
+  kinds: StepCounts;
+  /** The deposit's idempotency key (spec 4.2): the files' sizes and mtimes, `cv`, and the redact-domain set; null until the deposit has one. */
+  key: string | null;
+  /** The derive pass a whole-store deposit ends with. */
+  derive?: DeriveTrace;
+}
+
+export const newTrace = (): DepositTrace => ({ kinds: {}, key: null });
+
+const tally = (trace: DepositTrace | undefined, extract: Capture, subagent: boolean): void => {
+  if (trace === undefined) return;
+  const add = (kind: string, count: number): void => {
+    trace.kinds[kind] = (trace.kinds[kind] ?? 0) + count;
+  };
+  add(subagent ? 'subagent' : 'session', 1);
+  add('user-prompt', extract.prompts.length);
+  add('tool', extract.tools.length);
+  add('error-line', extract.errorLines.length);
+};
+
+export const digest = (parts: readonly string[]): string => createHash('sha256').update(parts.join('\n')).digest('hex').slice(0, 16);
+
+/** The key of a whole-store deposit: every deposited file's size, mtime, and `cv`, and the redact-domain set. A repeat with nothing changed has the same key. */
+const stateKey = (state: State): string =>
+  digest([...Object.entries(state.files).map(([key, entry]) => `${key}:${String(entry.size)}:${String(entry.mtimeMs)}:${entry.v}`).sort(), ...[...state.redactDomains].sort()]);
+
+/** The deposit key for a store as it stands; a failed deposit leaves `state.json` as it was, so a retry of the same work has the same key. */
+export const depositKey = async (storeDir: string): Promise<string> => stateKey(await readState(storeDir));
+
 /** Rewrites `derived.json` and the hook index from the whole store. */
-export const refresh = async (runtime: SessionsRuntime, redactDomains: readonly string[], at: string): Promise<void> => {
+export const refresh = async (runtime: SessionsRuntime, redactDomains: readonly string[], at: string, trace?: DepositTrace): Promise<void> => {
+  const started = performance.now();
   const store = await loadStore(runtime.storeDir);
-  await writeAtomic(paths(runtime.storeDir).derived, JSON.stringify(derive(store, at)));
+  const derived = derive(store, at);
+  await writeAtomic(paths(runtime.storeDir).derived, JSON.stringify(derived));
   await writeAtomic(indexPath(runtime.storeDir), JSON.stringify(buildIndex(store, redactDomains, at)));
+  if (trace !== undefined) {
+    // The key is the account's capture high-water mark (the highest rev of each session) and `ev` (spec 4.2).
+    const highWater = [...store.sessions, ...store.subagents].map((session) => `${session.session}:${String(session.rev)}`).sort();
+    trace.derive = {
+      ms: Math.round(performance.now() - started),
+      in: { session: store.sessions.length, subagent: store.subagents.length, 'user-prompt': store.prompts.length, tool: store.tools.length },
+      out: { signature: derived.signatures.length, summary: derived.summaries.length },
+      key: digest([EXTRACTOR_VERSION, ...highWater]),
+    };
+  }
 };
 
 interface LockOptions {
@@ -431,9 +486,9 @@ export const withLock = async <T>(storeDir: string, work: () => Promise<T>, opti
   }
 };
 
-export const deposit = (runtime: SessionsRuntime, options: DepositOptions): Promise<DepositResult> => withLock(runtime.storeDir, () => depositLocked(runtime, options));
+export const deposit = (runtime: SessionsRuntime, options: DepositOptions, trace?: DepositTrace): Promise<DepositResult> => withLock(runtime.storeDir, () => depositLocked(runtime, options, trace));
 
-const depositLocked = async (runtime: SessionsRuntime, options: DepositOptions): Promise<DepositResult> => {
+const depositLocked = async (runtime: SessionsRuntime, options: DepositOptions, trace?: DepositTrace): Promise<DepositResult> => {
   requireEntries(options.allow);
   const allow = compileAllow(options.allow);
   const folders = await projectFolders(runtime.projectsRoot);
@@ -473,10 +528,12 @@ const depositLocked = async (runtime: SessionsRuntime, options: DepositOptions):
       result.lines += extract.session.lines;
       result.badLines += extract.session.badLines;
       result.observations += 1 + extract.prompts.length + extract.tools.length + extract.errorLines.length;
+      tally(trace, extract, transcript.subagent !== undefined);
     }
   }
   await writeAtomic(paths(runtime.storeDir).state, JSON.stringify(state));
-  await refresh(runtime, state.redactDomains, context.at);
+  if (trace !== undefined) trace.key = stateKey(state);
+  await refresh(runtime, state.redactDomains, context.at, trace);
   return result;
 };
 
@@ -543,11 +600,11 @@ export type SessionDeposit = 'deposited' | 'unchanged' | 'not-allowed' | 'missin
  * Deposits one transcript, as the SessionEnd hook does: only from a folder that earlier `--allow` entries name, and idempotent by size and
  * mtime. It does not rebuild `derived.json` or the hook index (that is a whole-store pass; the nightly run does it), so it stays fast.
  */
-export const depositSession = (runtime: SessionsRuntime, transcript: string, now: () => number): Promise<SessionDeposit> =>
+export const depositSession = (runtime: SessionsRuntime, transcript: string, now: () => number, trace?: DepositTrace): Promise<SessionDeposit> =>
   // The hook path gives up after 3 s so a SessionEnd behind the nightly deposit cannot hold session exit past its 5 s budget.
-  withLock(runtime.storeDir, () => depositSessionLocked(runtime, transcript, now), HOOK_LOCK);
+  withLock(runtime.storeDir, () => depositSessionLocked(runtime, transcript, now, trace), HOOK_LOCK);
 
-const depositSessionLocked = async (runtime: SessionsRuntime, transcript: string, now: () => number): Promise<SessionDeposit> => {
+const depositSessionLocked = async (runtime: SessionsRuntime, transcript: string, now: () => number, trace?: DepositTrace): Promise<SessionDeposit> => {
   const project = basename(dirname(transcript));
   const state = await readState(runtime.storeDir);
   refuseNewer(state);
@@ -557,15 +614,22 @@ const depositSessionLocked = async (runtime: SessionsRuntime, transcript: string
   const main = mainTranscript(folder, basename(transcript));
   let wrote: boolean;
   try {
-    wrote = (await depositFile(context, project, main)) !== undefined;
+    const extract = await depositFile(context, project, main);
+    wrote = extract !== undefined;
+    if (extract !== undefined) tally(trace, extract, false);
   } catch (error) {
     if (isMissing(error)) return 'missing';
     throw error;
   }
   // The session's subagents finished before it did, so the Stop deposit takes them too (A24).
   for (const subagent of await subagentTranscripts(folder, [main.session])) {
-    wrote = (await depositFile(context, project, subagent)) !== undefined || wrote;
+    const extract = await depositFile(context, project, subagent);
+    if (extract !== undefined) tally(trace, extract, true);
+    wrote = extract !== undefined || wrote;
   }
+  // The key is this transcript's own size, mtime, and `cv` plus the redact-domain set (spec 4.2), so a repeat shows as the same key.
+  const entry = state.files[`${project}/${main.relative}`];
+  if (trace !== undefined && entry !== undefined) trace.key = digest([`${project}/${main.relative}:${String(entry.size)}:${String(entry.mtimeMs)}:${entry.v}`, ...context.domains]);
   if (!wrote) return 'unchanged';
   await writeAtomic(paths(runtime.storeDir).state, JSON.stringify(state));
   return 'deposited';

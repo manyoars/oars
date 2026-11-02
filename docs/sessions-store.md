@@ -15,6 +15,7 @@ Under `<config>/oars/sessions/` (`%APPDATA%` on Windows, `$XDG_CONFIG_HOME` or `
 | `skeletons/<session>.json` | One per transcript: ids, timestamps, tool linkage, token counts, a SHA-256 for every content field, and a Merkle root over the raw lines. Hashes only, never content. `verify` checks these. |
 | `state.json` | Per file: size, mtime, the `rev`, capture version (`v`), `sid`, and the `--redact-domain` set, so an unchanged file is skipped. |
 | `salt` | This machine's salt, which file targets are hashed with. Local-only (class `L`), never shared. Its `sid` (the first 8 hex characters of its SHA-256) is stamped on every capture record. |
+| `pipeline-runs.jsonl` | The step log: one row per run of a pipeline step (deposit, derive, verify, recall), appended when the step ends. See "The step log". |
 | `raw/<project>/<path>` | oars' own archive of every deposited transcript (below). |
 
 ## Two versions
@@ -99,6 +100,35 @@ an open question (M4); until it is settled two machines of one account hash the 
 
 `verify` also checks the version-4 fields: no session is `cv-behind`, one `sid` across the store, every `fileHash` is a path target of a
 tool call, and `targetBase` is set on a path target and on nothing else.
+
+## The step log
+
+`pipeline-runs.jsonl` is the pipeline's own books of work (runtime-commons pipeline spec, Sections 3.1 and 4): a store-level file beside
+`hook-calls.jsonl` (that file counts hook behavior, this one counts pipeline work), append-only, one JSON line per run of a step,
+written when the step ends. It carries no `cv` of its own, so it needs no capture bump. It is local: nothing uploads it.
+
+| Key | Class | Meaning |
+|-----|-------|---------|
+| `at` | A | When the step ended (ISO time). |
+| `run` | A | A local run id; the `deposit` and `derive` rows of one nightly or manual run share it. |
+| `trigger` | P | `stop` (the SessionEnd hook, argument `stop`; never `session-end`), `nightly` (the scheduled task), `manual` (the verbs), `session-start` and `post-tool` (the lookup hooks). |
+| `step` | P | `deposit`, `derive`, `verify`, or `recall`. `label`, `index`, and the hosted triggers are in the schema but nothing local runs them yet. |
+| `status` | P | `ok`, `error`, or `skipped` (an earlier step of the run failed). |
+| `ms` | P | Wall time of the step; a `deposit` row excludes the derive pass it ends with, which has its own row. |
+| `in`, `out` | P | Counts by kind: `deposit` writes `out` as `session`, `subagent`, `user-prompt`, `tool`, `error-line`; `derive` as `signature` and `summary`; `verify` as `checked`, `passed`, `cvBehind`, `stuck`; `recall` as `matches`. |
+| `cv`, `ev` | P | The capture and extractor versions the step ran at. `lv` (the labeler) appears on `label` rows only. |
+| `key` | A | The idempotency key (spec 4.2), a 16-hex hash, so a repeat is visible. `deposit`: every deposited file's size, mtime, and `cv`, and the redact-domain set (the SessionEnd hook: that one transcript's). `derive`: each session's highest `rev` and `ev`. `verify`: each session's `rev` and `cv`, and `ev`. `recall`: the query and `ev` (the spec names none, since a lookup writes nothing). Null on a `skipped` row. |
+| `error` | A | The first informative line of the failure, redacted like every other text in the store; null when `ok`. |
+
+A failed step logs `error`, leaves its output as it was, and the run's later steps are logged `skipped`; the next trigger retries the
+same key. A failed deposit's key is read from `state.json`, which a failed deposit leaves as it was, so a retry has the same key. A key
+that fails on three runs in a row is `stuck`: `verify` counts it, prints `FAIL  <step> is stuck: key <key> failed 3 runs in a row: <error>`,
+and writes the count in its own row.
+
+`oars sessions measure` prints the counters of spec 3.2 that this log can answer, under the G1 signals: runs of each step (ok, error,
+skipped) and mean ms; capture records deposited by kind; records derived by type (the newest derive); invariants passed of checked and
+`cv-behind` sessions (the newest verify); recall queries and matches; failed runs by step and `ev`; and the stuck steps. `--json`
+carries the same numbers under `steps`. A malformed or torn line is skipped when the log is read.
 
 ## Subagent transcripts
 
