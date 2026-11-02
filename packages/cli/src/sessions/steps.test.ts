@@ -135,11 +135,11 @@ describe('the steps each command logs', () => {
   it('recall appends a recall row, trigger manual, with the match count', async () => {
     const staged = stage();
     await sessionsDeposit(depsOf(staged), { allow: ['proj'], allowFiles: [], redactDomains: [] });
-    await sessionsRecall(depsOf(staged), { cls: 'no-tools' });
+    const outcome = await sessionsRecall(depsOf(staged), { cls: 'no-tools' });
     const recalled = (await readSteps(staged.storeDir)).filter((entry) => entry.step === 'recall');
     expect(recalled).toHaveLength(1);
     expect(recalled[0]).toMatchObject({ trigger: 'manual', status: 'ok', in: { query: 1 } });
-    expect(typeof recalled[0]?.out.matches).toBe('number');
+    expect(outcome.document).toHaveProperty('matches.length', recalled[0]?.out.matches);
     expect(recalled[0]?.key).toMatch(/^[0-9a-f]{16}$/);
   });
 
@@ -191,14 +191,14 @@ describe('the steps each command logs', () => {
     const staged = stage();
     mkdirSync(staged.storeDir, { recursive: true });
     const context = newContext(staged.storeDir, () => NOW, 'manual');
-    await expect(runStep(context, 'verify', () => Promise.reject(new Error('\n  disk gone for dev@corp.example\nsecond line')))).rejects.toThrow('disk gone');
+    await expect(runStep(context, 'verify', () => Promise.reject(new Error('\n  disk gone for dev@corp.example\nsecond line')), 'vk')).rejects.toThrow('disk gone');
     await expect(runStep(context, 'recall', () => Promise.reject(new Error('plain')), 'kk')).rejects.toThrow('plain');
-    await expect(runStep(context, 'recall', () => Promise.reject(new Error('\n')))).rejects.toThrow();
+    await expect(runStep(context, 'recall', () => Promise.reject(new Error('\n')), 'ek')).rejects.toThrow();
     const rows = await readSteps(staged.storeDir);
     expect(rows.map((entry) => [entry.step, entry.status, entry.key, entry.error])).toEqual([
-      ['verify', 'error', null, expect.not.stringContaining('dev@corp.example')],
+      ['verify', 'error', 'vk', expect.not.stringContaining('dev@corp.example')],
       ['recall', 'error', 'kk', 'plain'],
-      ['recall', 'error', null, 'unknown error'],
+      ['recall', 'error', 'ek', 'unknown error'],
     ]);
     expect(rows[0]?.error).toContain('disk gone');
     expect(rows[0]?.error).not.toContain('second line');
@@ -580,6 +580,18 @@ describe('the counters (spec 3.2)', () => {
     expect(text).toContain('invariants passed of checked');
     expect(text).toMatch(/recall queries\s+2/);
     expect(text).toMatch(/stuck steps\s+0/);
+    expect(text).toMatch(/records derived, signature\s+4/);
+    expect(text).toMatch(/records derived, summary\s+4/);
+    expect(text).toMatch(/cv-behind sessions\s+2/);
+    expect(text).toMatch(/recall matches\s+1/);
+    expect(text).toMatch(/failed runs, deposit@\S+\s+1/);
+    expect(text).toMatch(/invariants passed of checked\s+5\/6/);
+  });
+
+  it('prints each stuck step with its key, run count, and last error', () => {
+    const text = formatStepCounters(stepCounters([failed('k', 'a'), failed('k', 'b'), failed('k', 'e')]));
+    expect(text).toContain('  stuck: deposit key k, 3 runs in a row: e');
+    expect(text).toMatch(/stuck steps\s+1/);
   });
 
   it('keeps a line per step and ev, so the mean ms of two extractor versions is not mixed', () => {

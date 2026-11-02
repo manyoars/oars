@@ -401,7 +401,7 @@ export interface HookCall {
   /** Whether the hook had something to say (an injected block, a recall hit, or a session deposited). */
   hit: boolean;
   ms: number;
-  /** The failure's first line when the hook failed (it still exits 0); null when it ran clean. */
+  /** The failure's first informative line, redacted and cut to 300 characters, when the hook failed (it still exits 0); null when it ran clean. */
   error: string | null;
 }
 
