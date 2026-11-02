@@ -218,7 +218,7 @@ const sumModelUsage = (value: unknown, startTime: unknown): CostState | null => 
         const amount = isObj(entry) ? num(entry[alias]) : undefined;
         if (amount === undefined) continue;
         totals[key] = (totals[key] ?? 0) + amount;
-        if (!keys.includes(key)) keys.push(key);
+        if (amount > 0 && !keys.includes(key)) keys.push(key);
       }
     }
     totals.models.push({ model, keys });

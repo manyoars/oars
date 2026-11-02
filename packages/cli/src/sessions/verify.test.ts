@@ -132,8 +132,8 @@ describe('verify', () => {
     const line = JSON.stringify({ type: 'assistant', requestId: 'r1', timestamp: '2026-10-13T16:00:00.000Z', message: { role: 'assistant', model: 'm', content: [], usage } });
     const state = (modelUsage: object): string => JSON.stringify({ type: 'cost-state', startTime: Date.parse('2026-10-13T15:00:00.000Z'), modelUsage });
     const main = { inputTokens: 5, cacheCreationInputTokens: 6, cacheReadInputTokens: 7, outputTokens: 8 };
-    // The haiku entry reports input and output only; the cacheRead excess is not its, so that key is `other`.
-    const partial = skeletonOf([line, state({ m: { ...main, cacheReadInputTokens: 107 }, 'claude-haiku-4-5': { inputTokens: 300, outputTokens: 20 } })], 'partial');
+    // The haiku entry carries zeros on the cache keys, as the transcript writes it; the cacheRead excess is not its, so that key is `other`.
+    const partial = skeletonOf([line, state({ m: { ...main, cacheReadInputTokens: 107 }, 'claude-haiku-4-5': { inputTokens: 300, outputTokens: 20, cacheReadInputTokens: 0, cacheCreationInputTokens: 0 } })], 'partial');
     expect(countsOf(verifySkeleton(partial)[5])).toEqual({ 'harness side calls': 2, other: 1 });
     // Once the side model reports cacheRead, the same excess is a side call.
     const full = skeletonOf([line, state({ m: { ...main, cacheReadInputTokens: 107 }, 'claude-haiku-4-5': { inputTokens: 300, cacheReadInputTokens: 100, outputTokens: 20 } })], 'full');

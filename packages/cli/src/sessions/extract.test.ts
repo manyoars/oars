@@ -175,13 +175,13 @@ describe('extractSession', () => {
 });
 
 describe('cost-state model keys', () => {
-  it('records, per model sorted by name, the usage keys its entry reported', () => {
+  it('records, per model sorted by name, the usage keys its entry reported a nonzero amount on', () => {
     const state = JSON.stringify({
       type: 'cost-state',
       startTime: Date.parse('2026-10-13T15:00:00.000Z'),
       modelUsage: {
         'claude-opus': { inputTokens: 5, cacheCreationInputTokens: 6, cacheReadInputTokens: 7, outputTokens: 8 },
-        'claude-haiku-4-5': { input_tokens: 300, output_tokens: 20 },
+        'claude-haiku-4-5': { inputTokens: 300, outputTokens: 20, cacheReadInputTokens: 0, cacheCreationInputTokens: 0 },
         broken: 'x',
       },
     });
@@ -191,7 +191,7 @@ describe('cost-state model keys', () => {
       { model: 'claude-haiku-4-5', keys: ['input', 'output'] },
       { model: 'claude-opus', keys: ['input', 'cacheWrite', 'cacheRead', 'output'] },
     ]);
-    expect(skeleton.lines[0]?.costState).toMatchObject({ input: 305, cacheRead: 7, output: 28 });
+    expect(skeleton.lines[0]?.costState).toMatchObject({ input: 305, cacheWrite: 6, cacheRead: 7, output: 28 });
   });
 });
 

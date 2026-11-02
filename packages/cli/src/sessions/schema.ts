@@ -378,13 +378,13 @@ export interface CostState {
   cacheRead: number | null;
   output: number | null;
   /**
-   * The models in `modelUsage`, sorted by name, each with the usage keys its entry reported: a model no assistant line names
+   * The models in `modelUsage`, sorted by name, each with the usage keys its entry reported a nonzero amount on: a model no assistant line names
    * is a harness side call, and only on a key it reported. A skeleton written before the keys were recorded reads with `[]`.
    */
   models: CostModel[];
 }
 
-/** One `modelUsage` entry: the model's name and which of the four usage keys it reported. */
+/** One `modelUsage` entry: the model's name and which of the four usage keys it reported a nonzero amount on (the transcript writes zeros for the rest). */
 export interface CostModel {
   model: string;
   keys: UsageKey[];

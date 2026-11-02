@@ -136,7 +136,7 @@ const verifyCost = (lines: readonly SkeletonLine[], delegated: readonly Skeleton
   const resumed = sumUsage(lines, since);
   const unscoped = sumUsage(lines, Number.NEGATIVE_INFINITY);
   const named = new Set([...lines, ...delegated].map((line) => line.model));
-  // A key is a side call only when a model no line names reported it; the entries of an older skeleton carry none.
+  // A key is a side call only when a model no line names reported a nonzero amount on it; the entries of an older skeleton carry none.
   const sideKeys = new Set(last.models.filter((entry) => !named.has(entry.model)).flatMap((entry) => entry.keys));
   const note = (cls: CostClass): void => {
     const entry = observed.find((candidate) => candidate.cls === cls);
