@@ -1,6 +1,6 @@
 // `oars sessions verify`: consistency invariants over a skeleton, run locally before any future upload. A skeleton holds ids,
 // timestamps, tool linkage and token counts, never content, so the check needs nothing the store does not already hold.
-import type { Skeleton, SkeletonLine } from './schema.js';
+import { CAPTURE_VERSION, OLDEST_READABLE_CAPTURE, type SessionObservation, type Skeleton, type SkeletonLine, type ToolObservation } from './schema.js';
 
 export interface InvariantResult {
   name: string;
@@ -220,3 +220,42 @@ const formatResult = (result: InvariantResult): string[] => {
 
 export const formatVerify = (results: readonly InvariantResult[], sessions: number): string =>
   [`${String(sessions)} skeletons checked`, ...results.flatMap(formatResult)].join('\n');
+
+export const CAPTURE_INVARIANTS = [
+  'every session is captured at the current capture version (none is cv-behind)',
+  'sessions captured at the current version share one sid',
+  'every fileHash on a session is a path target of one of its tool calls',
+  'a path target names its base; no other target does',
+] as const;
+
+const HASH = /^[0-9a-f]{16}$/;
+
+/**
+ * The CAPTURE 4 fields, checked over the store's capture records (t714): cv-behind sessions (a version-3 session not yet captured
+ * again), a mixed `sid` (two salts in one store, so path joins hold only within each), `fileHashes` that no tool call explains, and
+ * `targetBase` set on, or missing from, the wrong kind of target. Skeleton invariants stay in {@link verifyAll}.
+ */
+export const verifyCaptured = (sessions: readonly SessionObservation[], tools: readonly ToolObservation[]): InvariantResult[] => {
+  const current = sessions.filter((session) => session.cv === CAPTURE_VERSION);
+  const readable = sessions.filter((session) => Number(session.cv) >= OLDEST_READABLE_CAPTURE);
+  const counts = new Map<string, number>();
+  for (const session of current) if (session.sid !== null) counts.set(session.sid, (counts.get(session.sid) ?? 0) + 1);
+  const majority = [...counts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0];
+  const targets = new Map<string, Set<string>>();
+  for (const tool of tools) if (tool.targetBase !== null && tool.target !== null) targets.set(tool.session, (targets.get(tool.session) ?? new Set<string>()).add(tool.target));
+  const pathTools = tools.filter((tool) => tool.cv === CAPTURE_VERSION);
+  return [
+    { name: CAPTURE_INVARIANTS[0], checked: readable.length, violations: readable.filter((session) => Number(session.cv) < Number(CAPTURE_VERSION)).length },
+    { name: CAPTURE_INVARIANTS[1], checked: current.length, violations: current.filter((session) => session.sid !== majority).length },
+    {
+      name: CAPTURE_INVARIANTS[2],
+      checked: current.length,
+      violations: current.filter((session) => session.fileHashes.some((hash) => targets.get(session.session)?.has(hash) !== true)).length,
+    },
+    {
+      name: CAPTURE_INVARIANTS[3],
+      checked: pathTools.length,
+      violations: pathTools.filter((tool) => (tool.targetBase !== null) !== (tool.target !== null && HASH.test(tool.target))).length,
+    },
+  ];
+};

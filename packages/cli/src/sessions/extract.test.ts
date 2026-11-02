@@ -1,7 +1,7 @@
 import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { captureSession, classify, errorKey, firstInformative, normalize, shellTarget, signatureOf, targetOf } from './extract.js';
+import { captureSession, classify, errorKey, firstInformative, hashPath, normalize, pathKey, shellTarget, signatureOf, targetOf } from './extract.js';
 import { extractSession, type Extract } from './derive.js';
 import { entropy, makeRedactor } from './redact.js';
 import { CAPTURE_VERSION, EXTRACTOR_VERSION } from './schema.js';
@@ -107,7 +107,8 @@ describe('extractSession', () => {
     expect(prompts.map((prompt) => prompt.cls)).toEqual(['edit-verify', 'edit-only', 'no-tools']);
     expect(prompts[0]).toMatchObject({ model: 'claude-opus-5-5', efforts: ['high'], errors: 2, thinking: 1, shape: 'Read>Bash>Write>Read>Edit>Bash', v: EXTRACTOR_VERSION });
     expect(prompts[0]?.wallSec).toBeGreaterThan(0);
-    expect(prompts[0]?.contextFingerprint).toMatch(/^-\.[0-9a-f]{12}$/);
+    // The fixture holds an environment attachment only: version 4 keeps no environment fingerprint (the session's `env` replaces it).
+    expect(prompts[0]?.contextFingerprint).toBeNull();
     expect(prompts[0]?.explore).toBe(2);
     expect(prompts[0]?.act).toBe(4);
   });
@@ -331,12 +332,36 @@ describe('the tool target (recovery_episodes.py shell_target parity)', () => {
   it('hashes a path relative to the working directory, keeps a shell target, and is null otherwise', () => {
     const cwd = String.raw`C:\repo`;
     const hashed = targetOf('Read', { file_path: String.raw`C:\repo\src\a.ts` }, cwd, 'salt', redact);
-    expect(hashed).toMatch(/^[0-9a-f]{16}$/);
-    expect(targetOf('Edit', { file_path: 'src/a.ts' }, cwd, 'salt', redact)).toBe(hashed);
-    expect(targetOf('Read', { file_path: 'src/a.ts' }, undefined, 'other', redact)).not.toBe(hashed);
-    expect(targetOf('Bash', { command: 'git status --short' }, undefined, 'salt', redact)).toBe('git status');
-    expect(targetOf('PowerShell', { command: '' }, undefined, 'salt', redact)).toBeNull();
-    expect(targetOf('WebFetch', { url: 'https://example.com' }, undefined, 'salt', redact)).toBeNull();
+    expect(hashed.target).toMatch(/^[0-9a-f]{16}$/);
+    expect(hashed.base).toBe('cwd');
+    expect(targetOf('Edit', { file_path: 'src/a.ts' }, cwd, 'salt', redact)).toEqual(hashed);
+    expect(targetOf('Read', { file_path: 'src/a.ts' }, undefined, 'other', redact).target).not.toBe(hashed.target);
+    expect(targetOf('Bash', { command: 'git status --short' }, undefined, 'salt', redact)).toEqual({ target: 'git status', base: null });
+    expect(targetOf('PowerShell', { command: '' }, undefined, 'salt', redact)).toEqual({ target: null, base: null });
+    expect(targetOf('WebFetch', { url: 'https://example.com' }, undefined, 'salt', redact)).toEqual({ target: null, base: null });
+  });
+
+  it('hashes from the repository root: one file alike from a nested cwd and a linked worktree (CAPTURE 4)', () => {
+    const root = '/work/app';
+    const fromRoot = targetOf('Read', { file_path: '/work/app/src/a.ts' }, '/work/app', 'salt', redact, root);
+    expect(fromRoot.base).toBe('repo');
+    expect(targetOf('Read', { file_path: '/work/app/src/a.ts' }, '/work/app/packages/cli', 'salt', redact, root)).toEqual(fromRoot);
+    expect(targetOf('Read', { file_path: 'src/a.ts' }, '/work/app', 'salt', redact, root)).toEqual(fromRoot);
+    expect(targetOf('Read', { file_path: '/work/app/.claude/worktrees/t1/src/a.ts' }, '/work/app/.claude/worktrees/t1', 'salt', redact, root)).toEqual(fromRoot);
+    expect(pathKey('/work/app/src/a.ts', '/work/app/packages/cli', root)).toEqual({ key: 'src/a.ts', base: 'repo' });
+  });
+
+  it('keeps the working-directory base for a path outside any repository, and says so', () => {
+    expect(pathKey('/tmp/x/notes.md', '/tmp/x', null)).toEqual({ key: 'notes.md', base: 'cwd' });
+    // A repository is known but the file lies outside it: still the cwd base, the path as written.
+    expect(pathKey('/elsewhere/n.md', '/work/app', '/work/app')).toEqual({ key: '/elsewhere/n.md', base: 'cwd' });
+    expect(targetOf('Read', { file_path: '/tmp/x/notes.md' }, '/tmp/x', 'salt', redact, null).base).toBe('cwd');
+  });
+
+  it('hashes alike under one salt and differently under two (the sid names the salt)', () => {
+    const one = hashPath('/work/app/a.ts', '/work/app', '/work/app', 'salt-1');
+    expect(hashPath('/work/app/a.ts', '/work/app/x', '/work/app', 'salt-1').hash).toBe(one.hash);
+    expect(hashPath('/work/app/a.ts', '/work/app', '/work/app', 'salt-2').hash).not.toBe(one.hash);
   });
 });
 
@@ -354,7 +379,7 @@ describe('the version-3 capture records (Item 1, on errors-a.jsonl)', () => {
   };
   const text = `${readFileSync(join(FIXTURES, 'proj', 'errors-a.jsonl'), 'utf8')}${JSON.stringify(unanswered)}\n`;
   const capture = captureSession({ text, session: 'errors-a', project: 'proj', rev: 1, at: '2026-06-10T00:00:00.000Z', bytes: text.length, redact, salt: 'salt' });
-  const base = { kind: 'tool', cv: CAPTURE_VERSION, session: 'errors-a', rev: 1, parent: 'errors-a', agentType: null, harnessVersion: '2.1.300', side: false };
+  const base = { kind: 'tool', cv: CAPTURE_VERSION, sid: null, session: 'errors-a', rev: 1, parent: 'errors-a', agentType: null, harnessVersion: '2.1.300', side: false };
 
   it('writes one tool record per call with every field, one call per status', () => {
     expect(capture.tools.map((tool) => [tool.n, tool.tool, tool.status])).toEqual([
@@ -363,20 +388,20 @@ describe('the version-3 capture records (Item 1, on errors-a.jsonl)', () => {
     ]);
     const [ok, shellError, error] = capture.tools;
     // The fixture's assistant lines carry no cwd, so the target hashes the path as written (relative to the line's cwd when it has one).
-    expect(ok).toEqual({ ...base, n: 0, ts: '2026-05-28T20:26:49.000Z', tool: 'Read', status: 'ok', target: targetOf('Read', { file_path: '/work/app/src/main.ts' }, undefined, 'salt', redact), keys: ['file_path'], durationMs: 5000, toolUseId: 't1', prompt: 0 });
+    expect(ok).toEqual({ ...base, n: 0, ts: '2026-05-28T20:26:49.000Z', tool: 'Read', status: 'ok', target: targetOf('Read', { file_path: '/work/app/src/main.ts' }, undefined, 'salt', redact).target, targetBase: 'cwd', keys: ['file_path'], durationMs: 5000, toolUseId: 't1', prompt: 0 });
     // A Bash result is an error by its exit code even when is_error is false.
     expect(shellError).toMatchObject({ tool: 'Bash', status: 'error', keys: ['command'], durationMs: 2000, toolUseId: 't2', prompt: 0 });
     expect(error).toMatchObject({ tool: 'Write', status: 'error', keys: ['content', 'file_path'], toolUseId: 't3', prompt: 0 });
     expect(capture.tools[4]?.keys).toEqual(['file_path', 'new_string', 'old_string']);
     expect(capture.tools[6]).toMatchObject({ toolUseId: 't7', prompt: 1 });
-    expect(capture.tools[7]).toEqual({ ...base, n: 7, ts: '2026-05-28T20:27:45.000Z', tool: 'Grep', status: 'none', target: targetOf('Grep', { path: 'src' }, undefined, 'salt', redact), keys: ['path', 'pattern'], durationMs: null, toolUseId: 't9', prompt: 2 });
+    expect(capture.tools[7]).toEqual({ ...base, n: 7, ts: '2026-05-28T20:27:45.000Z', tool: 'Grep', status: 'none', target: targetOf('Grep', { path: 'src' }, undefined, 'salt', redact).target, targetBase: 'cwd', keys: ['path', 'pattern'], durationMs: null, toolUseId: 't9', prompt: 2 });
   });
 
   it('keeps each error line unnormalized and uncut, keyed by toolUseId, with the calls before it', () => {
     const [shell, write] = capture.errorLines;
     const raw = 'bash: -c: line 1: unexpected EOF while looking for matching quote';
     expect(normalize(raw)).not.toBe(raw);
-    expect(shell).toEqual({ kind: 'error-line', cv: CAPTURE_VERSION, session: 'errors-a', rev: 1, toolUseId: 't2', tool: 'Bash', line: raw, ts: '2026-05-28T20:26:59.000Z', harnessVersion: '2.1.300', side: false, prompt: 0, after: 2 });
+    expect(shell).toEqual({ kind: 'error-line', cv: CAPTURE_VERSION, sid: null, session: 'errors-a', rev: 1, toolUseId: 't2', tool: 'Bash', line: raw, ts: '2026-05-28T20:26:59.000Z', harnessVersion: '2.1.300', side: false, prompt: 0, after: 2 });
     expect(write).toMatchObject({ toolUseId: 't3', tool: 'Write', line: 'File has not been read yet. Read it first before writing to it.', after: 3 });
     expect(capture.errorLines).toHaveLength(2);
   });

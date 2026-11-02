@@ -169,11 +169,11 @@ describe('recovery episodes (recovery_episodes.py, t693)', () => {
   /** A capture from call specs: `[tool, target, status]`, an optional toolUseId, and an error line for each failed call. */
   const synthetic = (session: string, specs: readonly (readonly [string, string, ToolStatus, string?])[], orphans: readonly { after: number; line: string }[] = []): SessionCapture => {
     const tools = specs.map(([tool, target, status, id], n): ToolObservation => ({
-      kind: 'tool', cv: CAPTURE_VERSION, session, rev: 1, parent: session, agentType: null, n, ts: null, tool, status, target,
+      kind: 'tool', cv: CAPTURE_VERSION, sid: null, session, rev: 1, parent: session, agentType: null, n, ts: null, tool, status, target, targetBase: null,
       keys: [], durationMs: null, toolUseId: id ?? `c${String(n)}`, harnessVersion: null, side: false, prompt: 0,
     }));
     const errorLine = (toolUseId: string | null, tool: string, line: string, after: number): ErrorLineObservation => ({
-      kind: 'error-line', cv: CAPTURE_VERSION, session, rev: 1, toolUseId, tool, line, ts: null, harnessVersion: null, side: false, prompt: 0, after,
+      kind: 'error-line', cv: CAPTURE_VERSION, sid: null, session, rev: 1, toolUseId, tool, line, ts: null, harnessVersion: null, side: false, prompt: 0, after,
     });
     const errorLines = [
       ...tools.filter((tool) => tool.status === 'error').map((tool) => errorLine(tool.toolUseId, tool.tool, `${tool.tool} failed`, tool.n + 1)),

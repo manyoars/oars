@@ -6,6 +6,7 @@ import { createHash } from 'node:crypto';
 import type { Redactor } from './redact.js';
 import {
   CAPTURE_VERSION,
+  ERROR_LINE_CHARS,
   PROMPT_HEAD_CHARS,
   SIGNATURE_CHARS,
   type CostState,
@@ -14,6 +15,7 @@ import {
   type SessionObservation,
   type Skeleton,
   type SkeletonLine,
+  type TargetBase,
   type ToolObservation,
   type Usage,
   type UserPromptObservation,
@@ -255,6 +257,12 @@ export interface ExtractInput {
   redact: Redactor;
   /** The per-account salt for path targets; the store keeps it beside the log. */
   salt?: string;
+  /** The salt's `sid` (first 8 hex of its SHA-256), stamped on every capture record; null when no salt is in play. */
+  sid?: string | null;
+  /** The repository root holding a working directory (worktree segments already stripped), or null; absent means no repository is known. */
+  repoRoot?: (cwd: string) => string | null;
+  /** The oars package, Node.js, and OS this capture ran under; absent reads as `0.0.0` and this process. */
+  runtime?: { oars: string; node: string; os: string };
   /** Set for a subagent transcript: every line is the agent's own line, so none is read as a sidechain. */
   subagent?: SubagentOrigin;
 }
@@ -311,12 +319,36 @@ const majority = (counts: ReadonlyMap<string, number>): string => {
 
 const PATH_KEYS = ['file_path', 'notebook_path', 'path'] as const;
 
-/** A path relative to the line's working directory when it lies under it (compared without case, as Windows paths are), else as written. */
-const relativeTo = (path: string, cwd: string | undefined): string => {
-  const forward = path.replace(/\\/g, '/');
-  if (cwd === undefined) return forward;
-  const base = cwd.replace(/\\/g, '/').replace(/\/+$/, '');
-  return forward.toLowerCase().startsWith(`${base.toLowerCase()}/`) ? forward.slice(base.length + 1) : forward;
+const toForward = (path: string): string => path.replace(/\\/g, '/');
+const isAbsolute = (path: string): boolean => path.startsWith('/') || /^[A-Za-z]:\//.test(path);
+
+/** `path` below `base` (compared without case, as Windows paths are), or undefined when it lies elsewhere. */
+const below = (path: string, base: string): string | undefined => {
+  const trimmed = toForward(base).replace(/\/+$/, '');
+  return path.toLowerCase().startsWith(`${trimmed.toLowerCase()}/`) ? path.slice(trimmed.length + 1) : undefined;
+};
+
+/** A linked worktree of the repository (`.claude/worktrees/<name>/`) is the same tree as the root: A9 counted one file from many of them. */
+const WORKTREE_PREFIX = /^\.claude\/worktrees\/[^/]+\//;
+
+/**
+ * What a path is hashed as, and from where. Under the repository root of the line's `cwd` it is relative to that root, with a linked
+ * worktree's segment stripped, so one file reads alike from every subdirectory and worktree (base `repo`). A path no repository holds
+ * keeps the version-3 rule: relative to `cwd` when it lies under it, else as written (base `cwd`). A relative path is read from `cwd` first.
+ */
+export const pathKey = (path: string, cwd: string | undefined, root: string | null): { key: string; base: TargetBase } => {
+  const given = toForward(path);
+  const absolute = isAbsolute(given) || cwd === undefined ? given : `${toForward(cwd).replace(/\/+$/, '')}/${given}`;
+  const fromRoot = root === null ? undefined : below(absolute, root);
+  if (fromRoot !== undefined) return { key: fromRoot.replace(WORKTREE_PREFIX, ''), base: 'repo' };
+  const fromCwd = cwd === undefined ? undefined : below(absolute, cwd);
+  return { key: fromCwd ?? absolute, base: 'cwd' };
+};
+
+/** The per-account salted hash of a file path (16 hex characters, class A). */
+export const hashPath = (path: string, cwd: string | undefined, root: string | null, salt: string): { hash: string; base: TargetBase } => {
+  const { key, base } = pathKey(path, cwd, root);
+  return { hash: sha256(`${salt}\n${key}`).slice(0, 16), base };
 };
 
 /** A leading `cd <dir> &&` or `cd <dir>;` hop: the target is the command that ran after it. */
@@ -350,20 +382,33 @@ export const shellTarget = (command: string): string => {
 };
 
 /** The `target` of a tool call (see {@link ToolObservation.target}). */
-export const targetOf = (tool: string, input: Obj, cwd: string | undefined, salt: string, redact: Redactor): string | null => {
+export const targetOf = (
+  tool: string,
+  input: Obj,
+  cwd: string | undefined,
+  salt: string,
+  redact: Redactor,
+  root: string | null = null,
+): { target: string | null; base: TargetBase | null } => {
   for (const key of PATH_KEYS) {
     const value = str(input[key]);
-    if (value !== undefined && value !== '') return sha256(`${salt}\n${relativeTo(value, cwd)}`).slice(0, 16);
+    if (value !== undefined && value !== '') {
+      const { hash, base } = hashPath(value, cwd, root, salt);
+      return { target: hash, base };
+    }
   }
-  if (!SHELL.has(tool)) return null;
+  if (!SHELL.has(tool)) return { target: null, base: null };
   const target = shellTarget(str(input.command) ?? '');
-  return target === '' ? null : redact(target);
+  return { target: target === '' ? null : redact(target), base: null };
 };
 
 /** One pass over a transcript into its capture records and skeleton. Never throws on a malformed line: it counts it and goes on. */
 export const captureSession = (input: ExtractInput): Capture => {
   const { redact } = input;
   const salt = input.salt ?? '';
+  const sid = input.sid ?? null;
+  const rootOf = input.repoRoot ?? ((): null => null);
+  const runtime = input.runtime ?? { oars: '0.0.0', node: process.version, os: process.platform };
   const origin = input.subagent;
   const rawLines = input.text.split(/\r\n|\n|\r/);
   if (rawLines.length > 0 && rawLines[rawLines.length - 1] === '') rawLines.pop();
@@ -371,6 +416,7 @@ export const captureSession = (input: ExtractInput): Capture => {
   const session: SessionObservation = {
     kind: 'session',
     cv: CAPTURE_VERSION,
+    sid,
     session: input.session,
     project: input.project,
     parent: origin?.parent ?? null,
@@ -390,19 +436,24 @@ export const captureSession = (input: ExtractInput): Capture => {
     branches: [],
     tools: {},
     files: [],
+    fileHashes: [],
+    repo: null,
     urls: [],
     searches: [],
     bashCmds: 0,
     tldrs: [],
     confidences: [],
     compactSummaries: 0,
-    contextFingerprint: null,
+    promptFingerprint: null,
+    env: { harness: null, oars: runtime.oars, node: runtime.node, os: runtime.os },
     costUsd: null,
     usage: emptyUsage(),
   };
   const versions = new Set<string>();
   const branches = new Set<string>();
   const files = new Set<string>();
+  const fileHashes = new Set<string>();
+  let sessionRoot: string | null = null;
   const urls = new Set<string>();
   const searches = new Set<string>();
 
@@ -413,9 +464,7 @@ export const captureSession = (input: ExtractInput): Capture => {
   const toolById = new Map<string | undefined, string>();
   const callById = new Map<string, { call: ToolObservation; at: number | undefined }>();
   const seenResponses = new Set<string>();
-  let envFingerprint: string | undefined;
-  let promptFingerprint: string | undefined;
-  let fingerprint: string | null = null;
+  let promptFingerprint: string | null = null;
   let cur: Current | undefined;
 
   const finish = (): void => {
@@ -424,6 +473,7 @@ export const captureSession = (input: ExtractInput): Capture => {
     prompts.push({
       kind: 'user-prompt',
       cv: CAPTURE_VERSION,
+      sid,
       session: input.session,
       rev: input.rev,
       index: cur.index,
@@ -436,7 +486,7 @@ export const captureSession = (input: ExtractInput): Capture => {
       efforts: [...cur.efforts].sort(),
       skills: [...cur.skills].sort(),
       usage: cur.usage,
-      contextFingerprint: fingerprint,
+      promptFingerprint,
     });
   };
 
@@ -467,7 +517,12 @@ export const captureSession = (input: ExtractInput): Capture => {
       if (session.tsLast === null || ts > session.tsLast) session.tsLast = ts;
     }
     const version = str(o.version);
-    if (version !== undefined && version !== '') versions.add(version);
+    if (version !== undefined && version !== '') {
+      versions.add(version);
+      session.env.harness = version;
+    }
+    const lineCwd = str(o.cwd);
+    if (sessionRoot === null && lineCwd !== undefined && lineCwd !== '') sessionRoot = rootOf(lineCwd);
     const branch = str(o.gitBranch);
     if (branch !== undefined && branch !== '') branches.add(redact(branch));
     const requested = str(o.requestedModel);
@@ -505,10 +560,8 @@ export const captureSession = (input: ExtractInput): Capture => {
 
     if (type === 'attachment') {
       const attachment = isObj(o.attachment) ? o.attachment : undefined;
-      if (attachment?.type === 'environment' && attachment.snapshot !== undefined) envFingerprint = sha256(JSON.stringify(attachment.snapshot)).slice(0, 12);
       if (attachment?.type === 'prompt_snapshot' && attachment.systemPrompt !== undefined) promptFingerprint = sha256(JSON.stringify(attachment.systemPrompt)).slice(0, 12);
-      fingerprint = envFingerprint === undefined && promptFingerprint === undefined ? fingerprint : `${promptFingerprint ?? '-'}.${envFingerprint ?? '-'}`;
-      session.contextFingerprint = fingerprint;
+      session.promptFingerprint = promptFingerprint;
       continue;
     }
     if (message === undefined) continue;
@@ -579,13 +632,21 @@ export const captureSession = (input: ExtractInput): Capture => {
         const id = str(block.id);
         toolById.set(id, name);
         const toolInput = isObj(block.input) ? block.input : {};
-        if (PATH_TOOLS.has(name) && str(toolInput.file_path) !== undefined && str(toolInput.file_path) !== '') files.add(redact(str(toolInput.file_path) ?? ''));
+        const filePath = str(toolInput.file_path);
+        const lineCwdNow = str(o.cwd);
+        const lineRoot = lineCwdNow === undefined || lineCwdNow === '' ? null : rootOf(lineCwdNow);
+        if (PATH_TOOLS.has(name) && filePath !== undefined && filePath !== '') {
+          files.add(redact(filePath));
+          fileHashes.add(hashPath(filePath, lineCwdNow, lineRoot, salt).hash);
+        }
         else if (name === 'WebFetch' && str(toolInput.url) !== undefined && str(toolInput.url) !== '') urls.add(redact(str(toolInput.url) ?? ''));
         else if (name === 'WebSearch' && str(toolInput.query) !== undefined && str(toolInput.query) !== '') searches.add(redact(str(toolInput.query) ?? ''));
         else if (SHELL.has(name)) session.bashCmds += 1;
+        const aimed = targetOf(name, toolInput, lineCwdNow, salt, redact, lineRoot);
         const call: ToolObservation = {
           kind: 'tool',
           cv: CAPTURE_VERSION,
+          sid,
           session: input.session,
           rev: input.rev,
           parent: origin?.parent ?? input.session,
@@ -594,7 +655,8 @@ export const captureSession = (input: ExtractInput): Capture => {
           ts: ts ?? null,
           tool: name,
           status: 'none',
-          target: targetOf(name, toolInput, str(o.cwd), salt, redact),
+          target: aimed.target,
+          targetBase: aimed.base,
           keys: Object.keys(toolInput).sort(),
           durationMs: null,
           toolUseId: id ?? null,
@@ -618,11 +680,13 @@ export const captureSession = (input: ExtractInput): Capture => {
         errorLines.push({
           kind: 'error-line',
           cv: CAPTURE_VERSION,
+          sid,
           session: input.session,
           rev: input.rev,
           toolUseId: str(block.tool_use_id) ?? null,
           tool: toolById.get(str(block.tool_use_id)) ?? '?',
-          line: redact(firstInformative(text)),
+          // Redact first, then cut: a secret straddling the cut is masked.
+          line: cut(redact(firstInformative(text)), ERROR_LINE_CHARS),
           ts: ts ?? null,
           harnessVersion: version ?? null,
           side,
@@ -637,6 +701,8 @@ export const captureSession = (input: ExtractInput): Capture => {
   session.versions = [...versions].sort();
   session.branches = [...branches].sort();
   session.files = [...files].sort();
+  session.fileHashes = [...fileHashes].sort();
+  session.repo = sessionRoot === null ? null : sha256(`${salt}\nrepo:${toForward(sessionRoot).toLowerCase()}`).slice(0, 16);
   session.urls = [...urls].sort();
   session.searches = [...searches].sort();
 

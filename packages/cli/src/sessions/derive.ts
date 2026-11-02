@@ -88,7 +88,7 @@ export const deriveSession = (capture: SessionCapture, redact: Redactor): Derive
       explore: sequence.filter((tool) => EXPLORE.has(tool)).length,
       act: sequence.filter((tool) => ACT.has(tool)).length,
       bigrams,
-      contextFingerprint: prompt.contextFingerprint,
+      contextFingerprint: prompt.promptFingerprint,
     };
   });
   const classOf = new Map(prompts.map((prompt) => [prompt.index, prompt.cls]));

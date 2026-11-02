@@ -9,7 +9,7 @@ import { buildIndex, contextBlock, readIndex, type ContextOptions } from './hook
 import { hookStatus, installHooks, scheduleStatus, setSchedule, settingsPath, uninstallHooks, type InstallRuntime, type Scope } from './install.js';
 import { serve } from './mcp.js';
 import { deposit, loadStore, readCalls, readRedactDomains, readSkeletons, type SessionsRuntime } from './store.js';
-import { formatVerify, verifyAll, type InvariantResult } from './verify.js';
+import { formatVerify, verifyAll, verifyCaptured, type InvariantResult } from './verify.js';
 
 export interface SessionsDeps {
   sessions: SessionsRuntime | undefined;
@@ -82,8 +82,11 @@ export interface VerifyReport {
 
 /** With `strict`, any violated invariant also fails the command (exit 4) after the full report is printed; the report is built first so callers can emit it. */
 export const sessionsVerify = async (deps: SessionsDeps, options: { session: string | undefined }): Promise<Outcome & { failed: string[]; report: VerifyReport }> => {
-  const { skeletons, unreadable } = await readSkeletons(runtimeOf(deps).storeDir, options.session);
-  const results = verifyAll(skeletons);
+  const { storeDir } = runtimeOf(deps);
+  const { skeletons, unreadable } = await readSkeletons(storeDir, options.session);
+  const store = await loadStore(storeDir);
+  const mine = <T extends { session: string }>(records: readonly T[]): T[] => records.filter((record) => options.session === undefined || record.session === options.session);
+  const results = [...verifyAll(skeletons), ...verifyCaptured(mine([...store.sessions, ...store.subagents]), mine(store.tools))];
   const report: VerifyReport = { sessions: skeletons.length, unreadable, invariants: results.map((result) => ({ ...result, pass: result.violations === 0 })) };
   const failed = [...results.filter((result) => result.violations > 0).map((result) => result.name), ...(unreadable > 0 ? ['unreadable skeletons'] : [])];
   return {
