@@ -1,14 +1,15 @@
 import { appendFileSync, copyFileSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { performance } from 'node:perf_hooks';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { CliError, ExitCode } from '../errors.js';
 import { sessionsContext, sessionsDeposit, sessionsMeasure, sessionsRecall, sessionsVerify, type SessionsDeps } from './command.js';
 import { runHook } from './hooks.js';
 import { slugOf } from './allow.js';
 import { CAPTURE_VERSION, EXTRACTOR_VERSION, parseStepRow, type StepRow } from './schema.js';
 import { formatStepCounters, inputKey, newContext, readSteps, runDeposit, runStep, stampKey, stepCounters, stuckSteps } from './steps.js';
-import { deposit, digest, newTrace, refresh } from './store.js';
+import type { RecallQuery } from './query.js';
+import { deposit, digest, loadStore, newTrace, refresh } from './store.js';
 import { cleanup, FIXTURES, NOW, stage, type Staged } from './test-support.js';
 
 afterEach(cleanup);
@@ -160,10 +161,14 @@ describe('the steps each command logs', () => {
   it('verify counts a session captured at an older capture version as cv-behind', async () => {
     const staged = stage();
     await sessionsDeposit(depsOf(staged), { allow: ['proj'], allowFiles: [], redactDomains: [] });
+    await sessionsVerify(depsOf(staged), { session: undefined });
     const file = join(staged.storeDir, 'observations.jsonl');
     writeFileSync(file, readFileSync(file, 'utf8').replaceAll(`"cv":"${CAPTURE_VERSION}"`, `"cv":"${String(Number(CAPTURE_VERSION) - 1)}"`));
     await sessionsVerify(depsOf(staged), { session: undefined });
-    expect((await readSteps(staged.storeDir)).filter((entry) => entry.step === 'verify').at(-1)?.out.cvBehind).toBeGreaterThan(0);
+    const verifies = (await readSteps(staged.storeDir)).filter((entry) => entry.step === 'verify');
+    expect(verifies.at(-1)?.out.cvBehind).toBeGreaterThan(0);
+    // `cv` is part of the verify key (spec 4.2): the rewrite alone, with the same revs, moves it.
+    expect(verifies[1]?.key).not.toBe(verifies[0]?.key);
   });
 
   it('verify counts a step whose key failed on three runs in a row as stuck, and names the step and the error', async () => {
@@ -299,6 +304,7 @@ describe('the steps each hook logs', () => {
     const rows = await readSteps(staged.storeDir);
     expect(rows.map((entry) => [entry.step, entry.trigger, entry.status])).toEqual([['deposit', 'nightly', 'ok'], ['derive', 'nightly', 'ok'], ['index', 'nightly', 'ok']]);
     expect(rows[0]?.run).toBe(rows[1]?.run);
+    expect(rows[0]?.key).toBe(inputKey('nightly', [REPO], []));
     const empty = stage();
     await runHook('nightly', '{}', empty.runtime, () => NOW);
     expect(await readSteps(empty.storeDir)).toEqual([]);
@@ -434,6 +440,40 @@ describe('a failed step and its key', () => {
     expect(rows[0]?.ms).toBeLessThanOrEqual(performance.now() - before - 40 + 1);
   });
 
+  it('an ok deposit row leaves out the derive and index passes, which carry their own ms', async () => {
+    const staged = stage();
+    mkdirSync(staged.storeDir, { recursive: true });
+    const context = newContext(staged.storeDir, () => NOW, 'manual');
+    const before = performance.now();
+    await runDeposit(context, true, 'k', async (trace) => {
+      await new Promise((done) => setTimeout(done, 100));
+      trace.derive = { ms: 40, in: {}, out: {}, key: 'dk' };
+      trace.index = { ms: 30, in: {}, out: {}, key: 'dk' };
+      return { value: 1, in: {} };
+    });
+    const rows = await readSteps(staged.storeDir);
+    expect(rows.map((entry) => entry.ms)).toEqual([expect.any(Number), 40, 30]);
+    expect(rows[0]?.ms).toBeLessThanOrEqual(performance.now() - before - 70 + 1);
+  });
+
+  it('a failed index pass logs its own ms and comes out of the deposit row', async () => {
+    const staged = stage();
+    mkdirSync(staged.storeDir, { recursive: true });
+    const context = newContext(staged.storeDir, () => NOW, 'manual');
+    const before = performance.now();
+    await expect(
+      runDeposit(context, true, 'k', async (trace) => {
+        await new Promise((done) => setTimeout(done, 100));
+        trace.derive = { ms: 40, in: {}, out: {}, key: 'dk' };
+        trace.indexFailure = { error: new Error('index broke'), key: 'dk', ms: 30 };
+        return { value: 1, in: {} };
+      }),
+    ).rejects.toThrow('index broke');
+    const rows = await readSteps(staged.storeDir);
+    expect(rows.map((entry) => [entry.step, entry.status, entry.ms])).toEqual([['deposit', 'ok', expect.any(Number)], ['derive', 'ok', 40], ['index', 'error', 30]]);
+    expect(rows[0]?.ms).toBeLessThanOrEqual(performance.now() - before - 70 + 1);
+  });
+
   it('a derive that cannot be written logs deposit ok, then derive error with its key, and rethrows', async () => {
     const staged = stage();
     mkdirSync(join(staged.storeDir, 'derived.json'), { recursive: true });
@@ -459,6 +499,15 @@ describe('a failed step and its key', () => {
     expect(recalls[1]?.key).toBe(recalls[0]?.key);
     expect(recalls[2]?.key).toBe(recalls[0]?.key);
     expect(recalls[3]?.key).not.toBe(recalls[0]?.key);
+    // Each query field alone moves the key (spec 4.2: the query is the key).
+    const keyOf = async (query: RecallQuery): Promise<string | null | undefined> => {
+      await expect(sessionsRecall(depsOf(staged), query)).rejects.toThrow();
+      return (await readSteps(staged.storeDir)).filter((entry) => entry.step === 'recall').at(-1)?.key;
+    };
+    const base = await keyOf({ cls: 'no-tools', error: 'boom', path: 'a.ts', sinceDays: 7 });
+    expect(await keyOf({ cls: 'no-tools', error: 'bang', path: 'a.ts', sinceDays: 7 })).not.toBe(base);
+    expect(await keyOf({ cls: 'no-tools', error: 'boom', path: 'b.ts', sinceDays: 7 })).not.toBe(base);
+    expect(await keyOf({ cls: 'no-tools', error: 'boom', path: 'a.ts', sinceDays: 8 })).not.toBe(base);
     const verifies = rows.filter((entry) => entry.step === 'verify');
     expect(verifies[0]?.key).toBe(stampKey('verify', 's1'));
     expect(verifies[1]?.key).toBe(stampKey('verify', 's2'));
@@ -577,6 +626,12 @@ describe('recall --context, the deposit key, and the index step', () => {
     expect(verifies).toHaveLength(2);
     expect(verifies[1]?.key).not.toBe(verifies[0]?.key);
     expect(verifies[1]?.in).toEqual({ session: 4, subagent: 1 });
+    // The derive key is the high-water mark (highest rev per session, subagents too) and `ev` (spec 4.2); a deposit that raises a rev moves it.
+    const derives = all.filter((entry) => entry.step === 'derive');
+    const store = await loadStore(staged.storeDir);
+    expect(derives).toHaveLength(2);
+    expect(derives[1]?.key).not.toBe(derives[0]?.key);
+    expect(derives[1]?.key).toBe(digest([EXTRACTOR_VERSION, ...[...store.sessions, ...store.subagents].map((session) => `${session.session}:${String(session.rev)}`).sort()]));
   });
 });
 
@@ -689,5 +744,63 @@ describe('the counters (spec 3.2)', () => {
     mkdirSync(staged.storeDir, { recursive: true });
     appendFileSync(join(staged.storeDir, 'pipeline-runs.jsonl'), `${JSON.stringify(row())}\n{"step":"deposit"}\n{"torn":`);
     expect(await readSteps(staged.storeDir)).toEqual([row()]);
+  });
+});
+
+describe('every ms term reads the clock (spec 3.2 mean ms)', () => {
+  const good = { allow: ['proj'], allowFiles: [], redactDomains: [] };
+  // The clock answers each performance.now() call from the list, then repeats the last value, so a term that is dropped or no longer
+  // subtracts its start changes the row's ms exactly.
+  const clock = <T>(values: readonly number[], run: () => Promise<T>): Promise<T> => {
+    let calls = 0;
+    const spy = vi.spyOn(performance, 'now').mockImplementation(() => values[Math.min(calls++, values.length - 1)] ?? 0);
+    return run().finally(() => spy.mockRestore());
+  };
+
+  it('runStep logs the wall time of an ok run and of a failed one', async () => {
+    const staged = stage();
+    const context = newContext(staged.storeDir, () => NOW, 'manual');
+    await clock([5, 15], () => runStep(context, 'recall', () => Promise.resolve({ value: 1, report: { in: {}, out: {}, key: 'k' } }), 'k'));
+    await clock([5, 17], () => runStep(context, 'recall', () => Promise.reject(new Error('x')), 'k')).catch(() => undefined);
+    expect((await readSteps(staged.storeDir)).map((entry) => [entry.status, entry.ms])).toEqual([['ok', 10], ['error', 12]]);
+  });
+
+  it('runDeposit logs the wall time of a failed deposit', async () => {
+    const staged = stage();
+    const context = newContext(staged.storeDir, () => NOW, 'manual');
+    await clock([5, 25], () => runDeposit(context, false, 'k', () => Promise.reject(new Error('x')))).catch(() => undefined);
+    expect((await readSteps(staged.storeDir))[0]?.ms).toBe(20);
+  });
+
+  it('refresh times the derive pass and the index pass on their own starts', async () => {
+    const staged = stage();
+    await deposit(staged.runtime, { allow: ['proj'], redactDomains: [], now: () => NOW });
+    const trace = newTrace();
+    await clock([5, 15, 20, 45], () => refresh(staged.runtime, [], '2026-06-10T00:00:00.000Z', trace));
+    expect([trace.derive?.ms, trace.index?.ms]).toEqual([10, 25]);
+  });
+
+  it('refresh times a failed derive pass and a failed index pass', async () => {
+    const broken = stage();
+    mkdirSync(join(broken.storeDir, 'observations.jsonl'), { recursive: true });
+    const first = newTrace();
+    await clock([5, 15], () => refresh(broken.runtime, [], '2026-06-10T00:00:00.000Z', first));
+    expect(first.deriveFailure?.ms).toBe(10);
+    const staged = stage();
+    await deposit(staged.runtime, { allow: ['proj'], redactDomains: [], now: () => NOW });
+    rmSync(join(staged.storeDir, 'hook-index.json'));
+    mkdirSync(join(staged.storeDir, 'hook-index.json'), { recursive: true });
+    const second = newTrace();
+    await clock([5, 15, 20, 45], () => refresh(staged.runtime, [], '2026-06-10T00:00:00.000Z', second));
+    expect(second.indexFailure?.ms).toBe(25);
+  });
+
+  it('a lookup hook logs its wall time on the recall row and the hook-calls line', async () => {
+    const staged = stage();
+    await sessionsDeposit(depsOf(staged), good);
+    await clock([5, 19], () => runHook('session-start', JSON.stringify({ session_id: 's1', cwd: REPO }), staged.runtime, () => NOW));
+    const row = (await readSteps(staged.storeDir)).find((entry) => entry.step === 'recall');
+    expect(row?.ms).toBe(14);
+    expect(readFileSync(join(staged.storeDir, 'hook-calls.jsonl'), 'utf8')).toContain('"ms":14');
   });
 });
