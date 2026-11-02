@@ -1,6 +1,7 @@
 // The hook entry points. Each takes the hook's stdin and returns the text for stdout (or undefined for none). They are fail-open:
 // any error inside one is swallowed, so a hook can never fail or block a Claude Code session. Each call is counted in
 // `hook-calls.jsonl` with its own duration, so `measure` can count recall calls per session and the timings can be checked.
+import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { performance } from 'node:perf_hooks';
 import { defaultConfigDir } from '../credentials.js';
@@ -88,7 +89,8 @@ const nightly = async (runtime: SessionsRuntime, now: () => number): Promise<Out
   return unreadable === undefined ? { hit: true } : { hit: true, error: firstLine(unreadable) };
 };
 
-const firstLine = (error: unknown): string => (error instanceof Error ? error.message : String(error)).split('\n')[0] ?? '';
+// A path under the home folder is reduced to `<home>`, so the shared record never holds the user name (the class A rule in docs/sessions-store.md).
+const firstLine = (error: unknown): string => ((error instanceof Error ? error.message : String(error)).split('\n')[0] ?? '').split(homedir()).join('<home>');
 
 /** The runtime a hook process runs with. Only `nightly` reads the Cursor store (a saved `--allow cursor`); the Stop path stays free of it. */
 export const hookRuntime = (
