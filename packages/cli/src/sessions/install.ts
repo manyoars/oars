@@ -145,16 +145,16 @@ export const installHooks = async (runtime: InstallRuntime, path: string, keepRe
     hooks[spec.event] = [...others, spec.matcher === undefined ? { hooks: [entry] } : { matcher: spec.matcher, hooks: [entry] }];
   }
   settings.hooks = hooks;
-  // A project or file scope overrides the user's `cleanupPeriodDays`, so a file with no number of its own must not lower a larger user value: report the larger.
+  // A project or file scope overrides the user's `cleanupPeriodDays`, so a file with no number of its own takes the user's, lower or higher; that is the value reported.
   const own = effectiveRetention(settings);
   // Only a value the user file sets counts: its unset default must not outrank a lower value written on purpose here.
   const userDays = path === runtime.userSettings ? undefined : (await readSettings(runtime.userSettings)).cleanupPeriodDays;
-  const userValue = typeof userDays === 'number' ? userDays : 0;
+  const userValue = typeof userDays === 'number' ? userDays : undefined;
   // A number this file sets overrides the user's, so the user's counts only when the file sets none.
-  const inherited = typeof settings.cleanupPeriodDays === 'number' ? 0 : userValue;
+  const inherited = typeof settings.cleanupPeriodDays === 'number' ? undefined : userValue;
   // With no number of its own the file takes the user's, lower or higher: that is what the harness deletes by.
-  const before = inherited > 0 ? inherited : own;
-  const shown = inherited > 0 ? `${String(before)} (from ${runtime.userSettings})` : typeof settings.cleanupPeriodDays === 'number' ? String(before) : `${String(before)} (unset, the default)`;
+  const before = inherited ?? own;
+  const shown = inherited !== undefined ? `${String(before)} (from ${runtime.userSettings})` : typeof settings.cleanupPeriodDays === 'number' ? String(before) : `${String(before)} (unset, the default)`;
   let retention: string;
   if (keepRetention) {
     retention = `Left cleanupPeriodDays alone at ${shown} in ${path} (--keep-retention); the harness deletes raw transcripts older than that.`;
