@@ -863,6 +863,17 @@ describe('the counters (spec 3.2)', () => {
   });
 });
 
+describe('measure with a step log that cannot be read', () => {
+  it('still prints the G1 signals: the step counters are an extra, never a reason measure fails', async () => {
+    const staged = stage();
+    // A folder where the log belongs makes only the step-log read fail (EISDIR), as `verify` already tolerates.
+    mkdirSync(join(staged.storeDir, 'pipeline-runs.jsonl'), { recursive: true });
+    const outcome = await sessionsMeasure(depsOf(staged), { last: 50, since: undefined });
+    expect(outcome.text).toContain('no step has run yet');
+    expect(outcome.document).toMatchObject({ ok: true });
+  });
+});
+
 describe('every ms term reads the clock (spec 3.2 mean ms)', () => {
   const good = { allow: ['proj'], allowFiles: [], redactDomains: [] };
   // The clock answers each performance.now() call from the list, then repeats the last value, so a term that is dropped or no longer
