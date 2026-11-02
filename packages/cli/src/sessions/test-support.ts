@@ -51,7 +51,10 @@ export interface FixtureBubble {
   text?: string;
   createdAt?: string;
   tokens?: [number, number];
-  tool?: { name: string; params: unknown; status: 'completed' | 'error'; error?: string };
+  /** `result` is written as Cursor does, a JSON string; a failed shell command is `completed` with a nonzero `exitCodeV2` in it. */
+  tool?: { name: string; params: unknown; status: 'completed' | 'error'; error?: string; result?: unknown };
+  /** `timingInfo.clientStartTime`, epoch milliseconds (or a small relative clock). */
+  clientStart?: number;
 }
 
 export interface FixtureComposer {
@@ -91,10 +94,11 @@ export const stageCursor = async (root: string, composers: readonly FixtureCompo
           bubbleId: `b${String(index)}`,
           text: bubble.text ?? '',
           ...(bubble.createdAt === undefined ? {} : { createdAt: bubble.createdAt }),
+          ...(bubble.clientStart === undefined ? {} : { timingInfo: { clientStartTime: bubble.clientStart } }),
           tokenCount: { inputTokens: bubble.tokens?.[0] ?? 0, outputTokens: bubble.tokens?.[1] ?? 0 },
           ...(bubble.tool === undefined
             ? {}
-            : { toolFormerData: { name: bubble.tool.name, toolCallId: `tc${String(index)}`, status: bubble.tool.status, params: JSON.stringify(bubble.tool.params), ...(bubble.tool.error === undefined ? {} : { error: bubble.tool.error }) } }),
+            : { toolFormerData: { name: bubble.tool.name, toolCallId: `tc${String(index)}`, status: bubble.tool.status, params: JSON.stringify(bubble.tool.params), ...(bubble.tool.error === undefined ? {} : { error: bubble.tool.error }), ...(bubble.tool.result === undefined ? {} : { result: JSON.stringify(bubble.tool.result) }) } }),
         }),
       );
     });
@@ -147,7 +151,7 @@ export const composers = (repo: string, plain: string): FixtureComposer[] => [
       { type: 1, text: 'fix the parser and run the tests', createdAt: '2025-03-02T09:00:00.000Z' },
       { type: 2, tool: { name: 'read_file', params: { relativeWorkspacePath: 'src/parser.ts' }, status: 'completed' }, createdAt: '2025-03-02T09:00:05.000Z' },
       { type: 2, tool: { name: 'edit_file', params: { relativeWorkspacePath: 'src/parser.ts', contents: 'x' }, status: 'completed' }, createdAt: '2025-03-02T09:00:10.000Z' },
-      { type: 2, tool: { name: 'run_terminal_cmd', params: { command: 'npm test' }, status: 'error', error: 'exit code 1: 2 tests failed' }, createdAt: '2025-03-02T09:00:20.000Z' },
+      { type: 2, tool: { name: 'run_terminal_cmd', params: { command: 'npm test' }, status: 'completed', result: { exitCodeV2: 1, output: '2 tests failed' } }, createdAt: '2025-03-02T09:00:20.000Z' },
       { type: 2, text: 'done', createdAt: '2025-03-02T09:00:30.000Z', tokens: [900, 60] },
     ],
   },

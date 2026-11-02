@@ -187,6 +187,25 @@ const bubblesOf = (db: Database, composerId: string, composer: Obj): Bubble[] =>
 
 const iso = (millis: number | undefined): string | undefined => (millis === undefined ? undefined : new Date(millis).toISOString());
 
+/** The message of a failed call's `error`: Cursor wraps it as JSON with a model-visible and a client-visible text. */
+const errorText = (raw: unknown): string => {
+  const wrapper = parse(raw);
+  const message = isObj(wrapper) ? (str(wrapper.modelVisibleErrorMessage) ?? str(wrapper.clientVisibleErrorMessage)) : undefined;
+  return message ?? str(raw) ?? 'error';
+};
+
+/**
+ * Why a call failed, undefined when it did not. Cursor writes a failed shell command as `completed` with a nonzero `exitCodeV2` in the JSON
+ * `result` (the shape Claude Code's `Exit code N` text takes), so the exit code is read, not only `status`.
+ */
+const failureOf = (call: Obj, name: string): string | undefined => {
+  if (call.status === 'error') return errorText(call.error ?? call.result);
+  const result = name === 'run_terminal_cmd' ? parse(call.result) : undefined;
+  const exit = isObj(result) ? num(result.exitCodeV2) : undefined;
+  return exit === undefined || exit === 0 ? undefined : `Exit code ${String(exit)}
+${isObj(result) ? (str(result.output) ?? '') : ''}`;
+};
+
 /** One message, as the lines `captureSession` reads. `at` is the best time known: the message's own, else the one before it. */
 const linesOf = (bubble: Bubble, base: Obj, at: string, model: string | undefined): Obj[] => {
   const { document } = bubble;
@@ -209,13 +228,13 @@ const linesOf = (bubble: Bubble, base: Obj, at: string, model: string | undefine
   if (input > 0 || output > 0) message.usage = { input_tokens: input, output_tokens: output };
   const lines: Obj[] = [{ ...base, type: 'assistant', uuid: bubble.id, requestId: bubble.id, timestamp: at, ...(model === undefined ? {} : { requestedModel: model }), message }];
   if (call !== undefined && name !== undefined && (call.status === 'error' || call.status === 'completed')) {
-    const failed = call.status === 'error';
+    const failure = failureOf(call, name);
     lines.push({
       ...base,
       type: 'user',
       uuid: `${bubble.id}-result`,
       timestamp: at,
-      message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: callId, is_error: failed, content: failed ? (str(call.error) ?? str(call.result) ?? 'error') : '' }] },
+      message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: callId, is_error: failure !== undefined, content: failure ?? '' }] },
     });
   }
   // A bubble with token counts but no text or tool call still carries usage, so it is kept.
@@ -245,18 +264,28 @@ export const openCursorStore = async (root: string): Promise<CursorStore | undef
       const modelConfig = isObj(composer.modelConfig) ? composer.modelConfig : {};
       const base: Obj = { sessionId: session.composerId, ...(session.folder === null ? {} : { cwd: session.folder }) };
       const bubbles = bubblesOf(db, session.composerId, composer);
-      const stamped = (bubble: Bubble): string | undefined => {
-        const own = str(bubble.document.createdAt);
-        return own !== undefined && !Number.isNaN(Date.parse(own)) ? own : undefined;
+      // A bubble's own `createdAt`, else `timingInfo.clientStartTime` when it is an epoch time at or after the composer's start (a smaller
+      // value is a relative clock and says nothing about when); a user bubble with neither takes the next assistant bubble's time.
+      const own = (bubble: Bubble): string | undefined => {
+        const created = str(bubble.document.createdAt);
+        if (created !== undefined && !Number.isNaN(Date.parse(created))) return created;
+        const timing = isObj(bubble.document.timingInfo) ? num(bubble.document.timingInfo.clientStartTime) : undefined;
+        return timing !== undefined && timing >= session.createdAt ? iso(timing) : undefined;
+      };
+      const stamps = bubbles.map(own);
+      const stamped = (index: number): string | undefined => {
+        const known = stamps[index];
+        if (known !== undefined || bubbles[index]?.document.type !== 1) return known;
+        return stamps.find((next, after) => after > index && bubbles[after]?.document.type !== 1 && next !== undefined);
       };
       // Cursor does not keep bubble times in order (14 of 9,712 lines in the 2026-11-02 copy ran backward), and the store's own timestamp
       // invariant holds that time never steps back: a bubble earlier than the one before it takes the one before it. The session starts at
       // its first stamped bubble (the composer's `createdAt` only when none is stamped), so a bubble with no time never precedes a stamped one.
-      let at = bubbles.map(stamped).find((own) => own !== undefined) ?? iso(session.createdAt) ?? new Date(0).toISOString();
+      let at = stamps.find((first) => first !== undefined) ?? iso(session.createdAt) ?? new Date(0).toISOString();
       const lines: Obj[] = [];
-      for (const bubble of bubbles) {
-        const own = stamped(bubble);
-        if (own !== undefined && Date.parse(own) >= Date.parse(at)) at = own;
+      for (const [index, bubble] of bubbles.entries()) {
+        const time = stamped(index);
+        if (time !== undefined && Date.parse(time) >= Date.parse(at)) at = time;
         const info = isObj(bubble.document.modelInfo) ? bubble.document.modelInfo : {};
         lines.push(...linesOf(bubble, base, at, str(info.modelName) ?? str(modelConfig.modelName)));
       }
