@@ -20,6 +20,7 @@ import {
   type TargetBase,
   type ToolObservation,
   type Usage,
+  type UsageKey,
   type UserPromptObservation,
 } from './schema.js';
 
@@ -202,20 +203,26 @@ const isoOfMillis = (value: unknown): string | null => {
 
 const sumModelUsage = (value: unknown, startTime: unknown): CostState | null => {
   if (!isObj(value)) return null;
-  const totals: CostState = { since: isoOfMillis(startTime), input: null, cacheWrite: null, cacheRead: null, output: null, models: Object.keys(value).sort() };
-  const add = (key: Exclude<keyof CostState, 'since' | 'models'>, ...names: string[]): void => {
-    for (const model of Object.values(value)) {
-      if (!isObj(model)) continue;
-      for (const name of names) {
-        const amount = num(model[name]);
-        if (amount !== undefined) totals[key] = (totals[key] ?? 0) + amount;
+  const names: ReadonlyArray<readonly [UsageKey, ...string[]]> = [
+    ['input', 'inputTokens', 'input_tokens'],
+    ['cacheWrite', 'cacheCreationInputTokens', 'cache_creation_input_tokens'],
+    ['cacheRead', 'cacheReadInputTokens', 'cache_read_input_tokens'],
+    ['output', 'outputTokens', 'output_tokens'],
+  ];
+  const totals: CostState = { since: isoOfMillis(startTime), input: null, cacheWrite: null, cacheRead: null, output: null, models: [] };
+  for (const model of Object.keys(value).sort()) {
+    const entry = value[model];
+    const keys: UsageKey[] = [];
+    for (const [key, ...aliases] of names) {
+      for (const alias of aliases) {
+        const amount = isObj(entry) ? num(entry[alias]) : undefined;
+        if (amount === undefined) continue;
+        totals[key] = (totals[key] ?? 0) + amount;
+        if (!keys.includes(key)) keys.push(key);
       }
     }
-  };
-  add('input', 'inputTokens', 'input_tokens');
-  add('cacheWrite', 'cacheCreationInputTokens', 'cache_creation_input_tokens');
-  add('cacheRead', 'cacheReadInputTokens', 'cache_read_input_tokens');
-  add('output', 'outputTokens', 'output_tokens');
+    totals.models.push({ model, keys });
+  }
   return [totals.input, totals.cacheWrite, totals.cacheRead, totals.output].some((total) => total !== null) ? totals : null;
 };
 

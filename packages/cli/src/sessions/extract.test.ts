@@ -174,6 +174,27 @@ describe('extractSession', () => {
   });
 });
 
+describe('cost-state model keys', () => {
+  it('records, per model sorted by name, the usage keys its entry reported', () => {
+    const state = JSON.stringify({
+      type: 'cost-state',
+      startTime: Date.parse('2026-10-13T15:00:00.000Z'),
+      modelUsage: {
+        'claude-opus': { inputTokens: 5, cacheCreationInputTokens: 6, cacheReadInputTokens: 7, outputTokens: 8 },
+        'claude-haiku-4-5': { input_tokens: 300, output_tokens: 20 },
+        broken: 'x',
+      },
+    });
+    const { skeleton } = extractSession({ text: state, session: 's', project: 'p', rev: 1, at: 'x', bytes: 0, redact });
+    expect(skeleton.lines[0]?.costState?.models).toEqual([
+      { model: 'broken', keys: [] },
+      { model: 'claude-haiku-4-5', keys: ['input', 'output'] },
+      { model: 'claude-opus', keys: ['input', 'cacheWrite', 'cacheRead', 'output'] },
+    ]);
+    expect(skeleton.lines[0]?.costState).toMatchObject({ input: 305, cacheRead: 7, output: 28 });
+  });
+});
+
 describe('request-id dedupe (register A22)', () => {
   const usage = { input_tokens: 1, cache_creation_input_tokens: 10, cache_read_input_tokens: 100, output_tokens: 5, output_tokens_details: { thinking_tokens: 2 } };
   const run = (assistants: object[]): Extract => {

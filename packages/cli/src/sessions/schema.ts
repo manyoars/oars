@@ -377,9 +377,20 @@ export interface CostState {
   cacheWrite: number | null;
   cacheRead: number | null;
   output: number | null;
-  /** The model names in `modelUsage`, sorted: a model no assistant line names is a harness side call. */
-  models: string[];
+  /**
+   * The models in `modelUsage`, sorted by name, each with the usage keys its entry reported: a model no assistant line names
+   * is a harness side call, and only on a key it reported. A skeleton written before the keys were recorded reads with `[]`.
+   */
+  models: CostModel[];
 }
+
+/** One `modelUsage` entry: the model's name and which of the four usage keys it reported. */
+export interface CostModel {
+  model: string;
+  keys: UsageKey[];
+}
+
+export type UsageKey = 'input' | 'cacheWrite' | 'cacheRead' | 'output';
 
 /** The per-session skeleton in `skeletons/<session>.json`. `lines` is class A; a pool would hold only `merkleRoot` and `leaves`. */
 export interface Skeleton {
