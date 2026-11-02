@@ -152,3 +152,29 @@ One store can hold several repositories, and neither the G1 reading nor the Sess
   value at or above the 365 floor means nothing is written. A number the target file sets itself overrides the user's, so the user's value only
   counts when the file sets none. The floor is per target file: a lower number in the file is raised to 365, and the user's value is
   never copied into a project file, which can be committed.
+
+## The Cursor source
+
+`oars sessions deposit` also reads a Cursor store, so a Cursor history and a Claude Code history land in one local store. The records
+carry `harness: "cursor"`; a record with no `harness` is Claude Code's (`harnessOf`), so `cv` stays 4 and no Claude Code record changes.
+
+- **Where it is read from.** Cursor's `User` folder: `%APPDATA%\Cursor\User` on Windows, `~/Library/Application Support/Cursor/User` on
+  macOS, `$XDG_CONFIG_HOME/Cursor/User` (else `~/.config/Cursor/User`) on Linux. `deposit` finds it on its own and skips it silently when
+  it is absent. It opens the two SQLite files read-only through the built-in `node:sqlite` (Node 24 or later, no dependency), loaded only
+  when a Cursor store exists.
+- **Opt-in.** Reading it needs consent like any other source: pass `--allow cursor` (or a glob that matches it, such as `*`). The nightly
+  schedule's allow list is where to add it. Without it the store is counted as skipped and not opened.
+- **What maps to what.** One session per composer: `workspaceStorage/<hash>/state.vscdb` (`composer.composerData`) names the composers of a
+  workspace, and `workspace.json` names its folder; `globalStorage/state.vscdb` (`cursorDiskKV`) holds the messages (`bubbleId:<composer>:<bubble>`)
+  and `composerData:<composer>`. A user bubble is a prompt, an assistant bubble a response; `modelInfo.modelName` is the model; `tokenCount`
+  feeds `usage`; `toolFormerData` (name, params, status, error) is a tool call, and its path parameters are the files touched. The workspace
+  folder is the cwd: a Git repository takes the same `repo` identity and root base as a Claude Code cwd, any other folder its own class-L path,
+  and a composer with no workspace gets none.
+- **Same field classes.** The transcript is rebuilt as the lines `captureSession` already reads, so redaction, the 1,000-character `line` cap,
+  `fileHashes`, and the per-account `sid` salt are the Claude Code code path, not a copy.
+- **Idempotent.** `state.json` keeps one entry per composer (`cursor/<composerId>`) whose cursor is the message count and `lastUpdatedAt`;
+  a second deposit adds nothing, and a composer that gained messages is captured again.
+- **Absent fields.** The store has no cache read or write tokens, thinking tokens, subagents, hooks, cost-state, git branch, or Cursor
+  version, so they take the empty value (0, `[]`, or null; `env.harness` is null). Most bubbles carry no timestamp and take the previous
+  one's, so wall time per prompt is coarse. Nothing goes to `raw/` (there is no transcript file), and the Stop hook does not read Cursor.
+- **Reading it back.** `recall` and `measure` read the records as they are. `books --by harness` groups the prompts by harness.
