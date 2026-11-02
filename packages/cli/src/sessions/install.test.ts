@@ -179,30 +179,20 @@ describe('post-tool pre-filter', () => {
     expect(runCommand('')).toBe('');
   }, 60_000);
 
-  it.skipIf(!available)('runs the pre-filter for an event with no Exit code in under 100 ms', () => {
-    const folder = scratch();
-    writeFileSync(join(folder, '-'), '');
-    const runtime = { ...runtimeIn(SCRATCH), nodePath: 'cat', hookBin: '-' };
-    const event = JSON.stringify({ tool_name: 'Bash', error: 'The user rejected this tool call', hook_event_name: 'PostToolUseFailure' });
-    // Timed from the test process around the spawn: Git's bash on Windows is 4.4 and has no `$EPOCHREALTIME`, so a clock read inside the shell measures nothing there.
-    // The best of five keeps a busy machine from failing it; the spawn of the shell itself counts, which is the hook's real cost.
-    const timeOf = (command: string): number => {
-      const times = [0, 1, 2, 3, 4].map(() => {
-        const start = process.hrtime.bigint();
-        const result = spawnSync(shell, ['-c', command], { input: `${event}
-`, encoding: 'utf8', timeout: 30_000, cwd: folder });
-        const ms = Number(process.hrtime.bigint() - start) / 1e6;
-        expect(result.status).toBe(0);
-        return ms;
-      });
-      return Math.min(...times);
+  it.skipIf(!available)('starts no process for an event with no Exit code, and does for one with it', () => {
+    // The 100 ms budget exists to spare the hook a node start, so assert that directly instead of a wall-clock bound that a loaded machine fails:
+    // `touch` stands in for node and creates a file named after the hook argument, which exists only if the launch was reached.
+    const launched = (error: string): boolean => {
+      const folder = scratch();
+      writeFileSync(join(folder, 'hook-bin.js'), '');
+      const runtime = { ...runtimeIn(SCRATCH), nodePath: 'touch', hookBin: 'hook-bin.js' };
+      const event = JSON.stringify({ tool_name: 'Bash', error, hook_event_name: 'PostToolUseFailure' });
+      const result = spawnSync(shell, ['-c', commandOf(runtime, 'post-tool')], { input: `${event}\n`, encoding: 'utf8', timeout: 30_000, cwd: folder });
+      expect(result.status).toBe(0);
+      return existsSync(join(folder, 'post-tool'));
     };
-    const filter = commandOf(runtime, 'post-tool');
-    const measured = timeOf(filter);
-    expect(measured).toBeGreaterThan(0);
-    expect(measured).toBeLessThan(100);
-    // The measurement can fail: the same command behind a 200 ms sleep reads over 200 ms.
-    expect(timeOf(`sleep 0.2; ${filter}`)).toBeGreaterThanOrEqual(200);
+    expect(launched('The user rejected this tool call')).toBe(false);
+    expect(launched('Exit code 2\nbad')).toBe(true);
   }, 60_000);
 
   it.skipIf(!available)('launches the hook when the hook-bin is an existing absolute path', () => {
