@@ -1,7 +1,10 @@
 // The hook entry points. Each takes the hook's stdin and returns the text for stdout (or undefined for none). They are fail-open:
 // any error inside one is swallowed, so a hook can never fail or block a Claude Code session. Each call is counted in
 // `hook-calls.jsonl` with its own duration, so `measure` can count recall calls per session and the timings can be checked.
+import { join } from 'node:path';
 import { performance } from 'node:perf_hooks';
+import { defaultConfigDir } from '../credentials.js';
+import { cursorRoot } from './cursor.js';
 import { signatureOf } from './extract.js';
 import { appendHookCall } from './hook-calls.js';
 import { contextBlock, readIndex } from './hook-index.js';
@@ -42,6 +45,8 @@ interface Outcome {
   hit: boolean;
   /** A lookup hook that read the index and searched it: only then did a recall query run, so only then is an ok `recall` row logged. */
   queried: boolean;
+  /** A failure the hook survived (fail-open), recorded as the hook-call `error`. */
+  error?: string;
 }
 
 const sessionStart = async (runtime: SessionsRuntime, input: Input): Promise<Outcome> => {
@@ -84,11 +89,13 @@ const nightly = async (runtime: SessionsRuntime, now: () => number): Promise<Out
   // A state.json that cannot be read is a failed deposit run like any other: its error row and the skipped derive row (spec 4.4) are logged.
   const saved = await readSaved(runtime.storeDir).catch((failure: unknown) => runDeposit<Awaited<ReturnType<typeof readSaved>>>(newContext(runtime.storeDir, now, 'nightly'), true, inputKey('nightly', [], []), () => Promise.reject(failure instanceof Error ? failure : new Error(String(failure)))));
   if (saved.allow.length === 0) return { hit: false, queried: false };
-  await runDeposit(newContext(runtime.storeDir, now, 'nightly'), true, inputKey('nightly', saved.allow, saved.redactDomains), async (trace) => {
+  const result = await runDeposit(newContext(runtime.storeDir, now, 'nightly'), true, inputKey('nightly', saved.allow, saved.redactDomains), async (trace) => {
     const done = await deposit(runtime, { allow: saved.allow, redactDomains: saved.redactDomains, now }, trace);
     return { value: done, in: { transcript: done.sessions + done.subagents + done.unchanged } };
   });
-  return { hit: true, queried: false };
+  // A Cursor store that could not be read does not fail the run, so the record carries it or nobody sees it.
+  const unreadable = result.cursorUnreadableLogged[0];
+  return unreadable === undefined ? { hit: true, queried: false } : { hit: true, queried: false, error: await errorLine(runtime.storeDir, unreadable) };
 };
 
 /** What a lookup hook looks up, as its recall key (spec 4.2 names none for a lookup): the cwd for session-start, the failure's signature for post-tool; null when it had nothing to look up. */
@@ -101,6 +108,20 @@ const lookupKey = (event: HookEvent, input: Input): string | null => {
   const text = failureText(input);
   return event === 'post-tool' && tool !== undefined && text !== undefined ? stampKey(event, signatureOf(tool, text, makeRedactor([]))) : null;
 };
+
+/** The runtime a hook process runs with. Only `nightly` reads the Cursor store (a saved `--allow cursor`); the Stop path stays free of it. */
+export const hookRuntime = (
+  event: HookEvent,
+  env: { [name: string]: string | undefined },
+  platform: NodeJS.Platform,
+  home: string,
+  io: Pick<SessionsRuntime, 'stdin' | 'stdout'>,
+): SessionsRuntime => ({
+  storeDir: join(defaultConfigDir(env, platform, home), 'oars', 'sessions'),
+  projectsRoot: join(env.CLAUDE_CONFIG_DIR ?? join(home, '.claude'), 'projects'),
+  ...(event === 'nightly' ? { cursorRoot: cursorRoot(platform, env, home) } : {}),
+  ...io,
+});
 
 /**
  * Runs one hook. It never fails or blocks the session it runs in: whatever happens, it resolves (the process exits 0), and the
@@ -128,7 +149,7 @@ export const runHook = async (event: HookEvent, stdin: string, runtime: Sessions
   const ms = Math.round(performance.now() - started);
   // The failure line is masked once, the same for the hook-calls line and the step row beside it; both writes are guarded, so a counter
   // that cannot be written never costs the session its context.
-  const line = failed ? await errorLine(runtime.storeDir, failure) : null;
+  const line = failed ? await errorLine(runtime.storeDir, failure) : outcome.error ?? null;
   await tryLog(() => appendHookCall(runtime.storeDir, { at: new Date(now()).toISOString(), event, session, hit: outcome.hit, ms, error: line }));
   // A lookup hook that ran a query (or failed trying) is a `recall` step started by its own trigger; the deposit hooks logged their rows as they ran.
   if (key !== null && (failed || outcome.queried)) {

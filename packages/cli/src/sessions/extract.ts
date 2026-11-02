@@ -686,7 +686,7 @@ export const captureSession = (input: ExtractInput): Capture => {
         const answered = callById.get(str(block.tool_use_id) ?? '');
         if (answered !== undefined && answered.call.status === 'none') {
           const { call, at } = answered;
-          if (at !== undefined && lineSeconds !== undefined) call.durationMs = Math.round((lineSeconds - at) * 1000);
+          if (at !== undefined && lineSeconds !== undefined && o.noDuration !== true) call.durationMs = Math.round((lineSeconds - at) * 1000);
           call.status = failed ? 'error' : 'ok';
         }
         if (!failed) continue;

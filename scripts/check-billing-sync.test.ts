@@ -3,7 +3,10 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+// These cases spawn a node process; under load that takes 8 s or more, past vitest's 5 s default.
+vi.setConfig({ testTimeout: 30_000 });
 
 const script = fileURLToPath(new URL('./check-billing-sync.mjs', import.meta.url));
 

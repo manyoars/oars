@@ -2,6 +2,7 @@
 // Local only: it sits in the store directory beside `hook-calls.jsonl`, and `measure` prints the spec 3.2 counters from it.
 import { randomUUID } from 'node:crypto';
 import { appendFile, mkdir, readFile } from 'node:fs/promises';
+import { homedir } from 'node:os';
 import { performance } from 'node:perf_hooks';
 import { CliError, ExitCode } from '../errors.js';
 import { makeRedactor } from './redact.js';
@@ -53,9 +54,11 @@ export const readSteps = async (storeDir: string): Promise<StepRow[]> => {
 /** The first informative line of a failure, masked like every other text the store keeps (D1's text rule) and cut to 300 characters. */
 export const errorLine = async (storeDir: string, error: unknown): Promise<string> => {
   const first = (error instanceof Error ? error.message : String(error)).split('\n').find((line) => line.trim() !== '') ?? 'unknown error';
+  // A path under the home folder is reduced to `<home>`, so the shared record never holds the user name (the class A rule in docs/sessions-store.md).
+  const scrubbed = first.split(homedir()).join('<home>');
   // A store whose state.json cannot be read still gets its failure row (spec 4.4): the line is masked with no domains then.
   const domains = await readRedactDomains(storeDir).catch((): string[] => []);
-  return makeRedactor(domains)(first).slice(0, 300);
+  return makeRedactor(domains)(scrubbed).slice(0, 300);
 };
 
 /** Appends the row for a step that ended (or was skipped) now, having taken `ms`. */
