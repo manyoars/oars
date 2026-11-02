@@ -1,7 +1,7 @@
 // The read side: recall, books, and measure. All three are pure functions of a loaded store (and, for measure, the MCP log).
 import { errorKey } from './extract.js';
 import { makeRedactor } from './redact.js';
-import type { ErrorObservation, HookCall, PromptObservation, RecallCall, SessionObservation, SignatureRecord } from './schema.js';
+import { harnessOf, type ErrorObservation, type HookCall, type PromptObservation, type RecallCall, type SessionObservation, type SignatureRecord } from './schema.js';
 import { signatureRecord, type Store } from './store.js';
 
 const DAY_MS = 86_400_000;
@@ -117,14 +117,15 @@ const delegatedByPrompt = (store: Store): Map<string, number> => {
   return totals;
 };
 
-export type BooksBy = 'class' | 'model';
+export type BooksBy = 'class' | 'model' | 'harness';
 
 export const books = (store: Store, by: BooksBy, now: number, sinceDays?: number): BooksRow[] => {
   const cutoff = sinceCutoff(now, sinceDays);
   const groups = new Map<string, PromptObservation[]>();
+  const harnesses = new Map(store.sessions.map((session) => [session.session, harnessOf(session)]));
   for (const prompt of store.prompts) {
     if (cutoff !== undefined && (prompt.ts === null || prompt.ts < cutoff)) continue;
-    const key = by === 'class' ? prompt.cls : prompt.model;
+    const key = by === 'class' ? prompt.cls : by === 'model' ? prompt.model : (harnesses.get(prompt.session) ?? 'claude-code');
     groups.set(key, [...(groups.get(key) ?? []), prompt]);
   }
   const sum = (list: readonly PromptObservation[], pick: (prompt: PromptObservation) => number): number => list.reduce((total, prompt) => total + pick(prompt), 0);

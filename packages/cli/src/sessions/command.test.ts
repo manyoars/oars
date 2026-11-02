@@ -109,11 +109,11 @@ describe('oars sessions', () => {
     expect(field(json(out), 'matches')).toHaveLength(1);
   });
 
-  it('recall needs a query, and --by takes only class or model', async () => {
+  it('recall needs a query, and --by takes only class, model, or harness', async () => {
     const { deps, err } = setup();
     expect(await run(['sessions', 'recall'], deps)).toBe(ExitCode.USAGE);
     expect(await run(['sessions', 'books', '--by', 'colour'], deps)).toBe(ExitCode.USAGE);
-    expect(err.join('')).toContain('class or model');
+    expect(err.join('')).toContain('class, model, or harness');
   });
 
   it('serves MCP over the runtime stdio with recall --mcp', async () => {
