@@ -194,18 +194,21 @@ describe('the Cursor source: t731 safety', () => {
       s.root,
       [
         { id: 'good', document: doc('good') },
-        { id: 'trav', document: doc('../../../escaped') },
+        { id: 'trav1', document: doc('../../escaped') },
+        { id: 'trav2', document: doc('../../../escaped') },
+        { id: 'trav3', document: doc('../../../../escaped') },
         { id: 'dots', document: doc('..') },
       ],
       [],
     );
     const result = await deposit({ ...s.runtime, cursorRoot: user }, options(['cursor']));
-    expect(result).toMatchObject({ cursor: 1, cursorRejected: 2 });
-    expect(trackedKeys(s.storeDir)).toEqual(['cursor/good']);
-    // `skeletons/cursor-../../../escaped.json` normalizes to `<store>/escaped.json`; the shorter form lands in `skeletons/`.
-    expect(existsSync(join(s.storeDir, 'escaped.json'))).toBe(false);
+    // `skeletons/cursor-<id>.json` with these ids normalizes to `skeletons/`, `<store>/`, and `<root>/` (`cursor-..` is a
+    // folder name, so each `..` after it cancels one level). Check the places before the counts: a mutated guard must fail here.
     expect(existsSync(join(s.storeDir, 'skeletons', 'escaped.json'))).toBe(false);
+    expect(existsSync(join(s.storeDir, 'escaped.json'))).toBe(false);
     expect(existsSync(join(s.root, 'escaped.json'))).toBe(false);
+    expect(result).toMatchObject({ cursor: 1, cursorRejected: 4 });
+    expect(trackedKeys(s.storeDir)).toEqual(['cursor/good']);
   });
 
   it('lets a store write failure propagate instead of blaming the Cursor file', async () => {
