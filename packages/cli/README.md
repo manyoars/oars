@@ -76,7 +76,7 @@ oars sessions deposit --allow ~/work/app --allow ~/work/tools --redact-domain co
 
 # Ask before you re-solve: the error as printed, a file, or a prompt class.
 oars sessions recall --error "unexpected EOF while looking for matching \`''"
-oars sessions recall --path src/main.ts --since 30
+oars sessions recall --path src/main.ts --since 30   # sees the first 100 sorted paths of a session
 
 # Serve the same query to a running agent as one MCP tool, oars_recall (stdio):
 oars sessions recall --mcp

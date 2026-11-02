@@ -49,7 +49,7 @@ const breakState = (staged: Staged): void => {
 const failed = (key: string, error: string, step: StepRow['step'] = 'deposit'): StepRow => row({ step, status: 'error', key, error, out: {} });
 
 describe('the step-log row schema (spec 3.1)', () => {
-  it('reads a valid row, with and without the label stamp', () => {
+  it('reads a valid row, and a label row with its stamp', () => {
     expect(parseStepRow(row())).toEqual(row());
     expect(parseStepRow(row({ step: 'label', lv: 'l1' }))).toEqual(row({ step: 'label', lv: 'l1' }));
     expect(parseStepRow(row({ key: null, status: 'skipped' }))?.key).toBeNull();
@@ -69,6 +69,8 @@ describe('the step-log row schema (spec 3.1)', () => {
     ['a numeric error', { error: 4 }],
     ['a numeric lv', { lv: 4 }],
     ['an lv on a step other than label', { lv: 'l1' }],
+    ['a label row without its lv stamp', { step: 'label' }],
+    ['an ok row with an error line', { error: 'boom' }],
     ['a string ms', { ms: '5' }],
   ])('rejects %s', (_label, patch) => {
     expect(parseStepRow({ ...row(), ...patch })).toBeUndefined();
@@ -79,7 +81,7 @@ describe('the step-log row schema (spec 3.1)', () => {
   });
 
   it.each(SPEC_STEPS)('accepts the spec 3.1 step %s (label is schema only)', (step) => {
-    expect(parseStepRow(row({ step }))?.step).toBe(step);
+    expect(parseStepRow(row({ step, ...(step === 'label' ? { lv: 'l1' } : {}) }))?.step).toBe(step);
   });
 
   it('rejects a value that is not an object', () => {
@@ -98,6 +100,7 @@ describe('the steps each command logs', () => {
     expect(rows[2]?.run).toBe(rows[1]?.run);
     expect(rows[2]?.key).toBe(rows[1]?.key);
     expect(rows[2]?.out).toEqual({ signature: 1, project: 1 });
+    expect(rows[2]?.in).toEqual({ session: 4, subagent: 0, error: 6 });
     expect(rows[0]?.cv).toBe(CAPTURE_VERSION);
     expect(rows[0]?.ev).toBe(EXTRACTOR_VERSION);
     expect(rows[0]?.at).toBe('2026-06-10T00:00:00.000Z');
@@ -151,6 +154,7 @@ describe('the steps each command logs', () => {
     expect(verified[0]?.out.passed).toBe(outcome.report.invariants.filter((entry) => entry.pass).length);
     expect(verified[0]?.out.cvBehind).toBe(0);
     expect(verified[0]?.out.stuck).toBe(0);
+    expect(verified[0]?.in).toEqual({ session: 4, subagent: 0 });
     expect(outcome.document).toMatchObject({ stuck: [] });
   });
 
@@ -541,6 +545,7 @@ describe('recall --context, the deposit key, and the index step', () => {
     const verifies = (await readSteps(staged.storeDir)).filter((entry) => entry.step === 'verify');
     expect(verifies).toHaveLength(2);
     expect(verifies[1]?.key).not.toBe(verifies[0]?.key);
+    expect(verifies[1]?.in).toEqual({ session: 4, subagent: 1 });
   });
 });
 
@@ -622,6 +627,17 @@ describe('the counters (spec 3.2)', () => {
     expect(outcome.text).toMatch(/index@\d+ runs \(ok\/error\/skipped\)\s+1\/0\/0/);
     expect(outcome.text).toMatch(/invariants passed of checked\s+\d+\/\d+/);
     expect(outcome.document).toMatchObject({ steps: { runs: 4 } });
+  });
+
+  it('measure --repo filters the G1 table only: the step counters stay all-time', async () => {
+    const staged = stage();
+    await sessionsDeposit(depsOf(staged), { allow: ['proj'], allowFiles: [], redactDomains: [] });
+    const whole = await sessionsMeasure(depsOf(staged), { last: 50, since: undefined });
+    const elsewhere = await sessionsMeasure(depsOf(staged), { last: 50, since: undefined, repo: join(staged.storeDir, 'no-such-repo') });
+    expect(elsewhere.document).toMatchObject({ steps: stepCounters(await readSteps(staged.storeDir)) });
+    expect(whole.text).toContain('pipeline step log (all time)');
+    expect(elsewhere.text).toContain('pipeline step log (all time)');
+    expect(elsewhere.text).toMatch(/deposit@\d+ runs \(ok\/error\/skipped\)\s+1\/0\/0/);
   });
 
   it('measure on a store with no log says no step has run, and a torn or foreign line is not counted', async () => {

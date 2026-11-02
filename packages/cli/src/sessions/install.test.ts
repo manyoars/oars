@@ -162,8 +162,11 @@ describe('post-tool pre-filter', () => {
   const shell = process.platform === 'win32' ? gitBash : 'bash';
   const available = (process.platform !== 'win32' || existsSync(gitBash)) && spawnSync(shell, ['-c', 'echo ok'], { timeout: 30_000 }).status === 0;
   const runCommand = (stdin: string): string => {
+    // The command guards on the hook-bin existing, so run it in a folder holding a file named `-`, which `cat` reads as stdin.
+    const folder = scratch();
+    writeFileSync(join(folder, '-'), '');
     const runtime = { ...runtimeIn(SCRATCH), nodePath: 'cat', hookBin: '-' };
-    return spawnSync(shell, ['-c', commandOf(runtime, 'post-tool')], { input: stdin, encoding: 'utf8', timeout: 30_000 }).stdout;
+    return spawnSync(shell, ['-c', commandOf(runtime, 'post-tool')], { input: stdin, encoding: 'utf8', timeout: 30_000, cwd: folder }).stdout;
   };
 
   it.skipIf(!available)('launches the hook with the whole event when the error starts with Exit code', () => {
@@ -175,6 +178,54 @@ describe('post-tool pre-filter', () => {
     expect(runCommand(`${JSON.stringify({ tool_name: 'Bash', error: 'The user rejected this tool call', hook_event_name: 'PostToolUseFailure' })}\n`)).toBe('');
     expect(runCommand('')).toBe('');
   }, 60_000);
+
+  it.skipIf(!available)('starts no process for an event with no Exit code, and does for one with it', () => {
+    // The 100 ms budget exists to spare the hook a node start, so assert that directly instead of a wall-clock bound that a loaded machine fails:
+    // `touch` stands in for node and creates a file named after the hook argument, which exists only if the launch was reached.
+    const launched = (error: string): boolean => {
+      const folder = scratch();
+      writeFileSync(join(folder, 'hook-bin.js'), '');
+      const runtime = { ...runtimeIn(SCRATCH), nodePath: 'touch', hookBin: 'hook-bin.js' };
+      const event = JSON.stringify({ tool_name: 'Bash', error, hook_event_name: 'PostToolUseFailure' });
+      const result = spawnSync(shell, ['-c', commandOf(runtime, 'post-tool')], { input: `${event}\n`, encoding: 'utf8', timeout: 30_000, cwd: folder });
+      expect(result.status).toBe(0);
+      return existsSync(join(folder, 'post-tool'));
+    };
+    expect(launched('The user rejected this tool call')).toBe(false);
+    expect(launched('Exit code 2\nbad')).toBe(true);
+  }, 60_000);
+
+  it.skipIf(!available)('launches the hook when the hook-bin is an existing absolute path', () => {
+    const existing = join(scratch(), 'hook-bin.js');
+    writeFileSync(existing, '');
+    const runtime = { ...runtimeIn(SCRATCH), nodePath: 'echo', hookBin: existing };
+    const result = spawnSync(shell, ['-c', commandOf(runtime, 'session-start')], { input: '{}\n', encoding: 'utf8', timeout: 30_000 });
+    expect(result.stdout).toContain('session-start');
+  }, 60_000);
+});
+
+describe('absent hook-bin', () => {
+  const gitBash = join(process.env.ProgramFiles ?? 'C:/Program Files', 'Git', 'bin', 'bash.exe');
+  const shell = process.platform === 'win32' ? gitBash : 'bash';
+  const available = (process.platform !== 'win32' || existsSync(gitBash)) && spawnSync(shell, ['-c', 'echo ok'], { timeout: 30_000 }).status === 0;
+
+  it.skipIf(!available)('exits 0 and prints nothing for every hook when the hook-bin is absent', () => {
+    const missing = join(scratch(), 'dist', 'hook-bin.js');
+    const runtime = { ...runtimeIn(SCRATCH), nodePath: 'definitely-not-a-program', hookBin: missing };
+    for (const arg of ['session-start', 'post-tool', 'stop']) {
+      const result = spawnSync(shell, ['-c', commandOf(runtime, arg)], { input: '{}\n', encoding: 'utf8', timeout: 30_000 });
+      expect({ arg, status: result.status, out: result.stdout, err: result.stderr }).toEqual({ arg, status: 0, out: '', err: '' });
+    }
+  }, 60_000);
+
+  it('keeps the ending uninstall matches, so the guarded commands are still taken out', async () => {
+    const dir = scratch();
+    const file = join(dir, 'settings.json');
+    await installHooks(runtimeIn(dir), file, true);
+    expect(JSON.stringify((await readJson(file)).hooks)).toContain('[ -f ');
+    await uninstallHooks(file);
+    expect((await readJson(file)).hooks).toBeUndefined();
+  });
 });
 
 describe('settings paths', () => {
@@ -229,6 +280,34 @@ describe('retention floor', () => {
     const low = await settle({ cleanupPeriodDays: 7 }, true);
     expect(low.days).toBe(7);
     expect(low.line).toContain('alone at 7 in');
+  });
+
+  it('keeps the larger of the user and project values, so a project install never lowers the user retention', async () => {
+    const dir = scratch();
+    const runtime = runtimeIn(dir);
+    mkdirSync(join(dir, 'user'), { recursive: true });
+    writeFileSync(runtime.userSettings, JSON.stringify({ cleanupPeriodDays: 3650 }));
+    const file = join(dir, 'repo', '.claude', 'settings.json');
+    const result = await installHooks(runtime, file, false);
+    expect((await readJson(file)).cleanupPeriodDays).toBeUndefined();
+    expect(result.retention).toContain(`3650 (from ${runtime.userSettings})`);
+    expect(result.retention).toContain('left as is');
+    writeFileSync(runtime.userSettings, JSON.stringify({ cleanupPeriodDays: 90 }));
+    await installHooks(runtime, file, false);
+    expect((await readJson(file)).cleanupPeriodDays).toBe(365);
+  });
+
+  it('raises a lower value the target file sets itself to the floor, never copying the user value into the file', async () => {
+    const dir = scratch();
+    const runtime = runtimeIn(dir);
+    mkdirSync(join(dir, 'user'), { recursive: true });
+    writeFileSync(runtime.userSettings, JSON.stringify({ cleanupPeriodDays: 3650 }));
+    const file = join(dir, 'repo', '.claude', 'settings.json');
+    mkdirSync(join(dir, 'repo', '.claude'), { recursive: true });
+    writeFileSync(file, JSON.stringify({ cleanupPeriodDays: 30 }));
+    const result = await installHooks(runtime, file, false);
+    expect((await readJson(file)).cleanupPeriodDays).toBe(365);
+    expect(result.retention).toContain('Raised cleanupPeriodDays from 30 to 365');
   });
 
   it('reads the harness default when the file sets none', () => {
