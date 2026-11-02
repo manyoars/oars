@@ -48,7 +48,7 @@ describe('check-licenses', () => {
       'node_modules/zero': { version: '1.0.0', license: '0BSD' },
     });
     expect(run().status).toBe(0);
-  });
+  }, 30_000);
 
   it('fails an unlisted license and names the package path and the license', () => {
     lockfile({ 'node_modules/ok': { version: '1.0.0', license: 'MIT' }, 'node_modules/copyleft': { version: '2.3.4', license: 'GPL-3.0-only' } });

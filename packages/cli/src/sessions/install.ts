@@ -152,8 +152,9 @@ export const installHooks = async (runtime: InstallRuntime, path: string, keepRe
   const userValue = typeof userDays === 'number' ? userDays : 0;
   // A number this file sets overrides the user's, so the user's counts only when the file sets none.
   const inherited = typeof settings.cleanupPeriodDays === 'number' ? 0 : userValue;
-  const before = Math.max(own, inherited);
-  const shown = inherited > own ? `${String(before)} (from ${runtime.userSettings})` : typeof settings.cleanupPeriodDays === 'number' ? String(before) : `${String(before)} (unset, the default)`;
+  // With no number of its own the file takes the user's, lower or higher: that is what the harness deletes by.
+  const before = inherited > 0 ? inherited : own;
+  const shown = inherited > 0 ? `${String(before)} (from ${runtime.userSettings})` : typeof settings.cleanupPeriodDays === 'number' ? String(before) : `${String(before)} (unset, the default)`;
   let retention: string;
   if (keepRetention) {
     retention = `Left cleanupPeriodDays alone at ${shown} in ${path} (--keep-retention); the harness deletes raw transcripts older than that.`;

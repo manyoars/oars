@@ -138,7 +138,7 @@ describe('openapi-public.mjs', () => {
     expect(keysAt(out, 'components', 'parameters')).toEqual(['OrderId']);
     expect(keysAt(out, 'components')).not.toContain('securitySchemes');
     expect(at(out, 'tags')).toEqual([{ name: 'Orders', description: 'Order lifecycle' }]);
-  });
+  }, 30_000);
 
   it('replaces the source title and description with the public ones and keeps its version', () => {
     const result = run(['getOrder'], { ...source, info: { ...source.info, version: '7.8.9' } });

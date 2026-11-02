@@ -128,6 +128,31 @@ describe('the CAPTURE 4 fields', () => {
   });
 });
 
+describe('a capped session', () => {
+  const options = { allow: ['proj'], redactDomains: [], now: () => NOW };
+
+  it('finds a kept file of a really capped session by recall --path, and no dropped one', async () => {
+    const staged = stage();
+    const reads = Array.from({ length: FILES_PER_SESSION_MAX + 5 }, (_, i) =>
+      line({
+        type: 'assistant', uuid: `m${String(i)}`, timestamp: '2026-06-01T00:00:02.000Z', cwd: '/w',
+        message: { role: 'assistant', model: 'm', content: [{ type: 'tool_use', id: `t${String(i)}`, name: 'Read', input: { file_path: `/w/f${String(i)}.ts` } }], usage: { input_tokens: 1, output_tokens: 1 } },
+      }),
+    );
+    const failure = line({ type: 'user', uuid: 'e1', timestamp: '2026-06-01T00:00:03.000Z', cwd: '/w', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 't0', is_error: true, content: 'boom' }] } });
+    addProject(staged, 'proj', 'capped', [...reads, failure]);
+    await deposit(staged.runtime, options);
+    const store = await loadStore(staged.storeDir);
+    const session = store.sessions.find((candidate) => candidate.session === 'capped');
+    expect(session?.files).toHaveLength(FILES_PER_SESSION_MAX);
+    const kept = session?.files[0] ?? '';
+    const dropped = Array.from({ length: FILES_PER_SESSION_MAX + 5 }, (_, i) => `/w/f${String(i)}.ts`).find((path) => !session?.files.includes(path)) ?? '';
+    expect(recall(store, { path: kept }, NOW).matches.length).toBeGreaterThan(0);
+    expect(dropped).not.toBe('');
+    expect(recall(store, { path: dropped }, NOW).matches).toHaveLength(0);
+  });
+});
+
 describe('repoRoot', () => {
   const exists = (known: string[]) => (path: string) => known.includes(path);
   it('finds the nearest ancestor with .git, strips a worktree segment, caches, and answers null with none', () => {
@@ -407,27 +432,6 @@ describe('a version-3 store opened under version 4', () => {
     const before = readFileSync(file);
     await expect(deposit(staged.runtime, options)).rejects.toThrow(/upgrade oars/);
     expect(readFileSync(file).equals(before)).toBe(true);
-  });
-
-  it('finds a kept file of a really capped session by recall --path, and no dropped one', async () => {
-    const staged = stage();
-    const reads = Array.from({ length: FILES_PER_SESSION_MAX + 5 }, (_, i) =>
-      line({
-        type: 'assistant', uuid: `m${String(i)}`, timestamp: '2026-06-01T00:00:02.000Z', cwd: '/w',
-        message: { role: 'assistant', model: 'm', content: [{ type: 'tool_use', id: `t${String(i)}`, name: 'Read', input: { file_path: `/w/f${String(i)}.ts` } }], usage: { input_tokens: 1, output_tokens: 1 } },
-      }),
-    );
-    const failure = line({ type: 'user', uuid: 'e1', timestamp: '2026-06-01T00:00:03.000Z', cwd: '/w', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 't0', is_error: true, content: 'boom' }] } });
-    addProject(staged, 'proj', 'capped', [...reads, failure]);
-    await deposit(staged.runtime, options);
-    const store = await loadStore(staged.storeDir);
-    const session = store.sessions.find((candidate) => candidate.session === 'capped');
-    expect(session?.files).toHaveLength(FILES_PER_SESSION_MAX);
-    const kept = session?.files[0] ?? '';
-    const dropped = Array.from({ length: FILES_PER_SESSION_MAX + 5 }, (_, i) => `/w/f${String(i)}.ts`).find((path) => !session?.files.includes(path)) ?? '';
-    expect(recall(store, { path: kept }, NOW).matches.length).toBeGreaterThan(0);
-    expect(dropped).not.toBe('');
-    expect(recall(store, { path: dropped }, NOW).matches).toHaveLength(0);
   });
 
   it('reads a line written by a newer capture version for the fields it knows', async () => {

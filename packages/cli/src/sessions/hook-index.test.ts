@@ -11,6 +11,7 @@ import { books, formatBooks, formatMeasure, measure } from './query.js';
 import { deposit, loadStore, paths, readCalls } from './store.js';
 import { addProject, cleanup, FIXTURES, NOW, stage } from './test-support.js';
 import { copyFileSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 
 afterEach(() => {
@@ -233,6 +234,40 @@ describe('per-repository scope', () => {
     expect(mine.text).not.toContain('captured by a newer oars');
   });
 
+  it("books --repo keeps a subagent by its own project even when its parent's session record is absent", async () => {
+    const staged = stage(slugOf(HOME));
+    const lines = readFileSync(join(staged.projectsRoot, slugOf(HOME), 'errors-a.jsonl'), 'utf8').split('\n').filter((line) => line !== '');
+    addProject(staged, slugOf(OTHER), 'other-session', lines);
+    const folder = join(staged.projectsRoot, slugOf(OTHER), 'other-session', 'subagents');
+    mkdirSync(folder, { recursive: true });
+    copyFileSync(join(FIXTURES, 'proj', 'sidechain.jsonl'), join(folder, 'agent-x.jsonl'));
+    writeFileSync(join(folder, 'agent-x.meta.json'), JSON.stringify({ agentType: 'Explore', toolUseId: 't1' }));
+    await deposit(staged.runtime, { allow: [slugOf(HOME), slugOf(OTHER)], redactDomains: [], now: () => NOW });
+    const file = paths(staged.storeDir).observations;
+    const rewritten = readFileSync(file, 'utf8')
+      .split('\n')
+      .filter((entry) => entry !== '')
+      // The parent's main session record is gone; the subagent's remains, one version newer.
+      .filter((entry) => !(entry.includes('"kind":"session"') && entry.includes('"session":"other-session"') && entry.includes('"parent":null')))
+      .map((entry) => entry.replace('"cv":"4"', '"cv":"5"'));
+    writeFileSync(file, `${rewritten.join('\n')}\n`);
+    const deps = { sessions: staged.runtime, install: undefined, now: () => NOW };
+    const other = await sessionsBooks(deps, { by: 'class', sinceDays: undefined, repo: OTHER });
+    expect(other.document).toMatchObject({ newerCaptures: 1 });
+  });
+
+  it('books --repo over a mistyped root names the root and the store prompt count, not an empty store', async () => {
+    const staged = stage(slugOf(HOME));
+    await deposit(staged.runtime, { allow: [slugOf(HOME)], redactDomains: [], now: () => NOW });
+    const store = await loadStore(staged.storeDir);
+    expect(store.prompts.length).toBeGreaterThan(0);
+    const deps = { sessions: staged.runtime, install: undefined, now: () => NOW };
+    const none = resolve('/zz/none');
+    const { text } = await sessionsBooks(deps, { by: 'class', sinceDays: undefined, repo: none });
+    expect(text).toContain(`No prompts for ${none} in the store (${String(store.prompts.length)} prompts across all repositories).`);
+    expect(text).not.toBe('No prompts in the store.');
+  });
+
   it("measure --repo drops another repository's MCP recall calls and keeps calls with no folder", async () => {
     const staged = stage(slugOf(HOME));
     const lines = readFileSync(join(staged.projectsRoot, slugOf(HOME), 'errors-a.jsonl'), 'utf8').split('\n').filter((line) => line !== '');
@@ -270,6 +305,11 @@ describe('per-repository scope', () => {
     const alone = block([]);
     expect(alone).toContain('Bash | mine (4 sessions in the last 300');
     expect(block(rival)).toBe(alone);
+  });
+
+  it('expands a leading ~ in the repository root before resolving it, as an allow-list entry does', () => {
+    const project = slugOf(join(homedir(), 'oars-t731-repo'));
+    expect(inRepository(project, '~/oars-t731-repo')).toBe(true);
   });
 
   it('a stored parent folder joins two repositories into one window, so the isolation reverts to the whole store', () => {
