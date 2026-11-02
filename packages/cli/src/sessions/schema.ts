@@ -400,3 +400,71 @@ export interface HookCall {
   /** The failure's first line when the hook failed (it still exits 0); null when it ran clean. */
   error: string | null;
 }
+
+/** The pipeline steps the log names (runtime-commons pipeline spec 3.1); `label` and `index` are the hosted and later steps no local command runs yet. */
+export const STEPS = ['deposit', 'verify', 'derive', 'label', 'index', 'recall'] as const;
+export type Step = (typeof STEPS)[number];
+
+/** The trigger names of spec 4.1 that start a local step. The SessionEnd hook is `stop`, never `session-end`. */
+export const TRIGGERS = ['session-start', 'post-tool', 'stop', 'nightly', 'manual', 'weekly', 'sync', 'cron', 'release', 'run-end', 'run-start'] as const;
+export type Trigger = (typeof TRIGGERS)[number];
+
+export const STEP_STATUSES = ['ok', 'error', 'skipped'] as const;
+export type StepStatus = (typeof STEP_STATUSES)[number];
+
+/** Counts by record kind or type (`{"session": 1, "tool": 212}`). */
+export interface StepCounts {
+  [kind: string]: number;
+}
+
+/**
+ * One run of one pipeline step, appended to `pipeline-runs.jsonl` when the step ends (spec 3.1). A store-level file beside
+ * `hook-calls.jsonl`, so it carries no capture `cv` of its own. Classes: `A` account store: `run`, `key`, `error`, `at` (a pool would
+ * keep the UTC day); `P` pooled: `trigger`, `step`, `status`, `ms`, `in`, `out`, `cv`, `ev`, `lv`.
+ */
+export interface StepRow {
+  at: string;
+  /** A local run id; the steps of one nightly run share it. */
+  run: string;
+  trigger: Trigger;
+  step: Step;
+  status: StepStatus;
+  ms: number;
+  in: StepCounts;
+  out: StepCounts;
+  /** The CAPTURE_VERSION and EXTRACTOR_VERSION the step ran at. */
+  cv: string;
+  ev: string;
+  /** The labeler stamp, on `label` rows only. */
+  lv?: string;
+  /** The step's idempotency key (spec 4.2), a hash, so a repeat is visible; null when the step was skipped before it had one. */
+  key: string | null;
+  /** The first informative line of the failure, redacted; null when `ok`. */
+  error: string | null;
+}
+
+const isObject = (value: unknown): value is { [key: string]: unknown } => typeof value === 'object' && value !== null && !Array.isArray(value);
+
+const countsOf = (value: unknown): StepCounts | undefined => {
+  if (!isObject(value)) return undefined;
+  const entries = Object.entries(value);
+  return entries.every(([, count]) => typeof count === 'number' && Number.isFinite(count)) ? Object.fromEntries(entries.map(([kind, count]) => [kind, Number(count)])) : undefined;
+};
+
+const oneOf = <T extends string>(list: readonly T[], value: unknown): T | undefined => list.find((entry) => entry === value);
+
+/** Reads one line of `pipeline-runs.jsonl`; undefined when any key is missing or mistyped, so a torn or foreign line is never counted. */
+export const parseStepRow = (value: unknown): StepRow | undefined => {
+  if (!isObject(value)) return undefined;
+  const trigger = oneOf(TRIGGERS, value.trigger);
+  const step = oneOf(STEPS, value.step);
+  const status = oneOf(STEP_STATUSES, value.status);
+  const input = countsOf(value.in);
+  const output = countsOf(value.out);
+  if (trigger === undefined || step === undefined || status === undefined || input === undefined || output === undefined) return undefined;
+  const { at, run, ms, cv, ev, lv, key, error } = value;
+  if (typeof at !== 'string' || typeof run !== 'string' || typeof ms !== 'number' || typeof cv !== 'string' || typeof ev !== 'string') return undefined;
+  if (!(key === null || typeof key === 'string') || !(error === null || typeof error === 'string')) return undefined;
+  if (lv !== undefined && typeof lv !== 'string') return undefined;
+  return { at, run, trigger, step, status, ms, in: input, out: output, cv, ev, ...(lv === undefined ? {} : { lv }), key, error };
+};
