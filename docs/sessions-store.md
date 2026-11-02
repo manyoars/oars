@@ -65,7 +65,7 @@ pattern and entropy, emails, and the domains named with `--redact-domain`) befor
 | | `session`, `head` (the first 300 characters, redacted), `ts`, `promptFingerprint` (`contextFingerprint` on this derived record) | A |
 | `error` (derived, one per error) | `kind`, `v`, `rev`, `tool`, `harnessVersion`, `editFollowed`, `cls`, `prompt`, `next` (tool names), episode `outcome` and `calls` | P |
 | | `session`, `agent` (the subagent transcript id, a join id), `ts`, `sig` (redacted at capture, normalized at derive), `example` (160 characters) | A |
-| store files | `salt`, `state.json`, `raw/` | L |
+| store files | `salt`, `state.json`, `raw/`, `mcp-calls.jsonl` `cwd` (the server's working directory, unhashed) | L |
 | | skeleton lines (`skeletons/<session>.json`: ids, usage, block hashes; a pool would hold only `merkleRoot` and `leaves`), `hook-calls.jsonl` `session` and `error` (first line, redacted), `mcp-calls.jsonl` `query` | A |
 | | `hook-calls.jsonl` `event`, `hit`, `ms`; `mcp-calls.jsonl` `matches` | P |
 
@@ -133,12 +133,20 @@ One store can hold several repositories, and neither the G1 reading nor the Sess
   project folder belongs when its slug is the root's slug or extends it, so worktrees (`<root>/.claude/worktrees/<name>`) and
   subfolders count. Without the flag the output is the whole store, as before.
   The MCP recall calls it counts are scoped too: each call now records the folder the server ran in, and `--repo` drops a call whose
-  folder is another repository. A call written before that field existed has no folder and counts for every repository until the
-  store is re-deposited.
+  folder is another repository. A call written before that field existed has no folder and counts for every repository.
 - SessionStart recall ranks by the latest 300 sessions of the repository, not of the whole store. The index groups project folders
-  into repositories by slug: a worktree folds into its repository, and a folder that extends another stored folder joins the shortest. Two consequences: sibling folders whose slugs share a prefix (`app` and `app-two`) share one window, and a nested repository (`tradeaor/oars`) ranks by its parent's window while `measure --repo tradeaor/oars` counts only itself, so the two readings differ.
+  into repositories by slug: a worktree folds into its repository, and a folder that extends another stored folder joins the shortest.
+  Three consequences:
+  - Sibling folders whose slugs share a prefix (`app` and `app-two`) share one window.
+  - A nested repository (`tradeaor/oars`) ranks by its parent's window while `measure --repo tradeaor/oars` counts only itself, so the
+    two readings differ.
+  - A stored parent folder is a prefix of its children, so one allow-listed session from the parent (the home folder, or the folder
+    holding several checkouts) folds those repositories into one window and the isolation reverts to the whole store. Keep such a
+    folder off the allow list.
 - An installed hook command starts with `[ -f "<hook-bin>" ] || exit 0;`, so a settings file that outlives its build (a cloud worker, a
   clone with no build) exits 0 and prints nothing instead of failing the session. The command still ends in `hook-bin.js" <event>`,
   which is how uninstall finds it.
 - `hook install` at `--scope project` or `--scope file` reads the user file's `cleanupPeriodDays` too and keeps the larger, so it never
-  writes the 365 floor over a larger user value. A number the target file sets itself overrides the user's, so the user's value only counts when the file sets none; a lower number in the file is raised to the larger of the floor and the user's value.
+  writes the 365 floor over a larger user value. A number the target file sets itself overrides the user's, so the user's value only
+  counts when the file sets none. The floor is per target file: a lower number in the file is raised to 365, and the user's value is
+  never copied into a project file, which can be committed.

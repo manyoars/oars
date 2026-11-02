@@ -187,43 +187,46 @@ describe('per-repository scope', () => {
     expect(all.document).toMatchObject({ last: { recallPerSession: Math.round((3 / store.sessions.length) * 100) / 100 } });
   });
 
+  const base = (project: string, name: string, day: number): SessionObservation => ({
+    kind: 'session', cv: '1', sid: null, session: name, project, parent: null, agentType: null, spawnedBy: null, rev: 1, at: '', bytes: 0, lines: 0, badLines: 0, userTurns: 0, assistantTurns: 0,
+    tsFirst: new Date(Date.UTC(2026, 0, 1) + day * 86_400_000).toISOString(), tsLast: null, versions: [], models: {}, branches: [], tools: {}, files: [], fileHashes: [], repo: null, urls: [], searches: [],
+    bashCmds: 0, tldrs: [], confidences: [], compactSummaries: 0, promptFingerprint: null, env: { harness: null, oars: '0.0.0', node: 'v0', os: 'test' }, costUsd: null, usage: { input: 0, cacheWrite: 0, cacheRead: 0, output: 0, thinking: 0 },
+  });
+  const failure = (name: string, sig: string): ErrorObservation => ({
+    kind: 'error', v: '1', session: name, rev: 1, ts: null, harnessVersion: null, tool: 'Bash', sig, example: 'x', next: ['Read'], editFollowed: false, prompt: null, cls: null,
+  });
+
   it("a subfolder's newer sessions share the repository's window, so an old root-only signature drops out", () => {
-    const ROOT = resolve('/zz/app');
-    const sub = `${slugOf(ROOT)}-packages`;
-    const base = (project: string, name: string, day: number): SessionObservation => ({
-      kind: 'session', cv: '1', sid: null, session: name, project, parent: null, agentType: null, spawnedBy: null, rev: 1, at: '', bytes: 0, lines: 0, badLines: 0, userTurns: 0, assistantTurns: 0,
-      tsFirst: new Date(Date.UTC(2026, 0, 1) + day * 86_400_000).toISOString(), tsLast: null, versions: [], models: {}, branches: [], tools: {}, files: [], fileHashes: [], repo: null, urls: [], searches: [],
-      bashCmds: 0, tldrs: [], confidences: [], compactSummaries: 0, promptFingerprint: null, env: { harness: null, oars: '0.0.0', node: 'v0', os: 'test' }, costUsd: null, usage: { input: 0, cacheWrite: 0, cacheRead: 0, output: 0, thinking: 0 },
-    });
-    const failure = (name: string, sig: string): ErrorObservation => ({
-      kind: 'error', v: '1', session: name, rev: 1, ts: null, harnessVersion: null, tool: 'Bash', sig, example: 'x', next: ['Read'], editFollowed: false, prompt: null, cls: null,
-    });
+    const sub = `${slugOf(HOME)}-packages`;
     // Two old sessions in the root folder, then 300 newer ones in a subfolder: all one repository, so the old signature is outside its latest 300.
-    const sessions = [base(slugOf(ROOT), 'r-1', 1), base(slugOf(ROOT), 'r-2', 2), ...Array.from({ length: 300 }, (_unused, day) => base(sub, `s-${String(day)}`, 10 + day))];
+    const sessions = [base(slugOf(HOME), 'r-1', 1), base(slugOf(HOME), 'r-2', 2), ...Array.from({ length: 300 }, (_unused, day) => base(sub, `s-${String(day)}`, 10 + day))];
     const errors = [failure('r-1', 'Bash | old'), failure('r-2', 'Bash | old'), failure('s-0', 'Bash | new'), failure('s-1', 'Bash | new')];
-    const block = contextBlock(buildIndex({ sessions, prompts: [], errors, subagents: [], tools: [], newerCaptures: 0 }, [], ''), { cwd: ROOT, top: 5, maxChars: 1200 }) ?? '';
+    const block = contextBlock(buildIndex({ sessions, prompts: [], errors, subagents: [], tools: [], newerCaptures: 0 }, [], ''), { cwd: HOME, top: 5, maxChars: 1200 }) ?? '';
     expect(block).toContain('Bash | new (2 sessions in the last 300');
     expect(block).not.toContain('Bash | old');
   });
 
   it("another repository's 300 newer deposits leave this repository's block unchanged", () => {
-    // A root outside any worktree: the test checkout itself sits in one, and its slug would carry the worktree marker.
-    const ROOT = resolve('/zz/app');
-    const base = (project: string, name: string, day: number): SessionObservation => ({
-      kind: 'session', cv: '1', sid: null, session: name, project, parent: null, agentType: null, spawnedBy: null, rev: 1, at: '', bytes: 0, lines: 0, badLines: 0, userTurns: 0, assistantTurns: 0,
-      tsFirst: new Date(Date.UTC(2026, 0, 1) + day * 86_400_000).toISOString(), tsLast: null, versions: [], models: {}, branches: [], tools: {}, files: [], fileHashes: [], repo: null, urls: [], searches: [],
-      bashCmds: 0, tldrs: [], confidences: [], compactSummaries: 0, promptFingerprint: null, env: { harness: null, oars: '0.0.0', node: 'v0', os: 'test' }, costUsd: null, usage: { input: 0, cacheWrite: 0, cacheRead: 0, output: 0, thinking: 0 },
-    });
-    const failure = (name: string): ErrorObservation => ({
-      kind: 'error', v: '1', session: name, rev: 1, ts: null, harnessVersion: null, tool: 'Bash', sig: 'Bash | mine', example: 'mine', next: ['Read'], editFollowed: false, prompt: null, cls: null,
-    });
-    const sessions = [base(slugOf(ROOT), 'a-1', 1), base(slugOf(ROOT), 'a-2', 2), base(`${slugOf(ROOT)}--claude-worktrees-t1`, 'a-3', 3), base(`${slugOf(ROOT)}--claude-worktrees-t1`, 'a-4', 4)];
-    const errors = sessions.map((session) => failure(session.session));
+    const sessions = [base(slugOf(HOME), 'a-1', 1), base(slugOf(HOME), 'a-2', 2), base(`${slugOf(HOME)}--claude-worktrees-t1`, 'a-3', 3), base(`${slugOf(HOME)}--claude-worktrees-t1`, 'a-4', 4)];
+    const errors = sessions.map((session) => failure(session.session, 'Bash | mine'));
     const block = (extra: SessionObservation[]): string | undefined =>
-      contextBlock(buildIndex({ sessions: [...sessions, ...extra], prompts: [], errors, subagents: [], tools: [], newerCaptures: 0 }, [], ''), { cwd: ROOT, top: 5, maxChars: 1200 });
+      contextBlock(buildIndex({ sessions: [...sessions, ...extra], prompts: [], errors, subagents: [], tools: [], newerCaptures: 0 }, [], ''), { cwd: HOME, top: 5, maxChars: 1200 });
     const rival = Array.from({ length: 300 }, (_unused, day) => base(slugOf(resolve('/zz/other')), `b-${String(day)}`, 100 + day));
     const alone = block([]);
     expect(alone).toContain('Bash | mine (4 sessions in the last 300');
     expect(block(rival)).toBe(alone);
+  });
+
+  it('a stored parent folder joins two repositories into one window, so the isolation reverts to the whole store', () => {
+    const parent = slugOf(resolve('/zz'));
+    const mine = [base(slugOf(HOME), 'a-1', 1), base(slugOf(HOME), 'a-2', 2)];
+    const errors = mine.map((session) => failure(session.session, 'Bash | mine'));
+    const rival = Array.from({ length: 300 }, (_unused, day) => base(slugOf(OTHER), `b-${String(day)}`, 100 + day));
+    // The project's own rows, which are the ranking the SessionStart block shows for a folder with history.
+    const rows = (extra: SessionObservation[]): unknown =>
+      buildIndex({ sessions: [...mine, ...extra, ...rival], prompts: [], errors, subagents: [], tools: [], newerCaptures: 0 }, [], '').projects[slugOf(HOME)];
+    expect(rows([])).toBeDefined();
+    // One allow-listed session from the parent folder: `/zz` is a prefix of both slugs, so the 300 newer sessions now crowd this repository out.
+    expect(rows([base(parent, 'p-1', 0)])).toBeUndefined();
   });
 });

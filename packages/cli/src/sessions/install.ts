@@ -145,7 +145,7 @@ export const installHooks = async (runtime: InstallRuntime, path: string, keepRe
     hooks[spec.event] = [...others, spec.matcher === undefined ? { hooks: [entry] } : { matcher: spec.matcher, hooks: [entry] }];
   }
   settings.hooks = hooks;
-  // A project or file scope overrides the user's `cleanupPeriodDays`, so writing the floor there could lower a larger user value: keep the larger.
+  // A project or file scope overrides the user's `cleanupPeriodDays`, so a file with no number of its own must not lower a larger user value: report the larger.
   const own = effectiveRetention(settings);
   // Only a value the user file sets counts: its unset default must not outrank a lower value written on purpose here.
   const userDays = path === runtime.userSettings ? undefined : (await readSettings(runtime.userSettings)).cleanupPeriodDays;
@@ -160,10 +160,10 @@ export const installHooks = async (runtime: InstallRuntime, path: string, keepRe
   } else if (before >= RETENTION_FLOOR) {
     retention = `cleanupPeriodDays is ${shown} in ${path}, at or above the ${String(RETENTION_FLOOR)} floor; left as is.`;
   } else {
-    // The file's own lower number overrides the user's, so write at least the user's value: never below what the user kept.
-    const written = Math.max(RETENTION_FLOOR, userValue);
-    settings.cleanupPeriodDays = written;
-    retention = `Raised cleanupPeriodDays from ${shown} to ${String(written)} in ${path}.`;
+    // The floor is per target file: a user-scope value never lands in a project file, which can be committed. Without a number of its own the
+    // file reaches this branch only when the user value is below the floor too, so the floor is right there as well.
+    settings.cleanupPeriodDays = RETENTION_FLOOR;
+    retention = `Raised cleanupPeriodDays from ${shown} to ${String(RETENTION_FLOOR)} in ${path}.`;
   }
   await writeSettings(path, settings);
   return { file: path, installed: SPECS.map((spec) => spec.event), retention };
