@@ -161,6 +161,9 @@ describe('the steps each command logs', () => {
     const recalled = (await readSteps(staged.storeDir)).filter((entry) => entry.step === 'recall');
     expect(recalled).toHaveLength(1);
     expect(recalled[0]).toMatchObject({ trigger: 'manual', status: 'ok', in: { query: 1 } });
+    expect(recalled[0]?.in).toEqual({ query: 1 });
+    expect(recalled[0]?.out).toEqual({ matches: recalled[0]?.out.matches });
+    expect(Object.keys(recalled[0]?.out ?? {})).toEqual(['matches']);
     expect(outcome.document).toHaveProperty('matches.length', recalled[0]?.out.matches);
     expect(recalled[0]?.key).toMatch(/^[0-9a-f]{16}$/);
   });
@@ -195,7 +198,6 @@ describe('the steps each command logs', () => {
     const narrowed = (await readSteps(staged.storeDir)).filter((entry) => entry.step === 'verify').at(-1);
     expect(narrowed?.key).toBe(entriesKey([only]));
     expect(narrowed?.key).not.toBe(verified[0]?.key);
-    expect(narrowed?.in).toEqual({ session: 1, subagent: 0 });
     expect(narrowed?.in).toEqual({ session: 1, subagent: 0 });
   });
 
@@ -407,7 +409,6 @@ describe('the steps each hook logs', () => {
     const rows = await readSteps(staged.storeDir);
     expect(rows.map((entry) => [entry.step, entry.trigger, entry.status])).toEqual([['recall', 'session-start', 'ok'], ['recall', 'post-tool', 'ok']]);
     expect(rows[1]?.out).toEqual({ matches: 0 });
-    expect(rows.map((entry) => entry.in)).toEqual([{ query: 1 }, { query: 1 }]);
     expect(rows.map((entry) => entry.in)).toEqual([{ query: 1 }, { query: 1 }]);
   });
 
@@ -648,6 +649,8 @@ describe('recall --context, the deposit key, and the index step', () => {
     const rows = (await readSteps(staged.storeDir)).filter((entry) => entry.step === 'recall');
     expect(rows).toHaveLength(3);
     expect(rows[0]).toMatchObject({ trigger: 'manual', status: 'ok', in: { query: 1 }, out: { matches: 1 }, key: digest([EXTRACTOR_VERSION, 'context', REPO, '']) });
+    expect(rows.map((entry) => entry.in)).toEqual([{ query: 1 }, { query: 1 }, { query: 1 }]);
+    expect(rows.map((entry) => entry.out)).toEqual([{ matches: 1 }, { matches: 0 }, { matches: 0 }]);
     expect(rows[2]).toMatchObject({ out: { matches: 0 }, key: digest([EXTRACTOR_VERSION, 'context', REPO, 'claude-code']) });
     expect(rows[1]).toMatchObject({ out: { matches: 0 }, key: digest([EXTRACTOR_VERSION, 'context', join('work', 'nothing-here'), '']) });
   });
