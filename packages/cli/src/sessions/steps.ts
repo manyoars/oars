@@ -87,7 +87,7 @@ export const tryLog = async (write: () => Promise<void>): Promise<void> => {
   }
 };
 
-/** Logs a failed step: `error`, the failure's first line, and the key the step had from its inputs (null when it had none yet). */
+/** Logs a failed step: `error`, the failure's first line, and the key the step had from its inputs. */
 const logFailure = (context: StepContext, step: Step, ms: number, key: string | null, failure: unknown): Promise<void> =>
   tryLog(async () => logStep(context, step, 'error', ms, { in: {}, out: {}, key }, await errorLine(context.storeDir, failure)));
 
@@ -95,7 +95,7 @@ const logFailure = (context: StepContext, step: Step, ms: number, key: string | 
  * Runs `work` and logs its row: `ok` with what it reports, or `error` with the failure's first line and `failedKey` (a key built from
  * the step's inputs before the work, so a retry of the same work has the same key), after which the failure goes on to the caller.
  */
-export const runStep = async <T>(context: StepContext, step: Step, work: () => Promise<{ value: T; report: StepReport }>, failedKey: string | null = null): Promise<T> => {
+export const runStep = async <T>(context: StepContext, step: Step, work: () => Promise<{ value: T; report: StepReport }>, failedKey: string): Promise<T> => {
   const started = performance.now();
   let done: { value: T; report: StepReport };
   try {

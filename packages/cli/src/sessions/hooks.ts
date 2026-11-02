@@ -7,7 +7,7 @@ import { appendHookCall } from './hook-calls.js';
 import { contextBlock, readIndex } from './hook-index.js';
 import { makeRedactor } from './redact.js';
 import type { HookCall } from './schema.js';
-import { errorLine, inputKey, logStep, newContext, runDeposit, stampKey, tryLog } from './steps.js';
+import { errorLine, inputKey, logStep, newContext, runDeposit, stampKey, tryLog, type StepReport } from './steps.js';
 import { deposit, depositSession, readSaved, type SessionsRuntime } from './store.js';
 
 export type HookEvent = HookCall['event'];
@@ -132,7 +132,7 @@ export const runHook = async (event: HookEvent, stdin: string, runtime: Sessions
   await tryLog(() => appendHookCall(runtime.storeDir, { at: new Date(now()).toISOString(), event, session, hit: outcome.hit, ms, error: line }));
   // A lookup hook that ran a query (or failed trying) is a `recall` step started by its own trigger; the deposit hooks logged their rows as they ran.
   if (key !== null && (failed || outcome.queried)) {
-    const report = { in: { query: 1 }, out: { matches: outcome.hit ? 1 : 0 }, key };
+    const report: StepReport = { in: { query: 1 }, out: failed ? {} : { matches: outcome.hit ? 1 : 0 }, key };
     await tryLog(() => logStep(newContext(runtime.storeDir, now, event), 'recall', failed ? 'error' : 'ok', ms, report, line));
   }
   return outcome.output;
