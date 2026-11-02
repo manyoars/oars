@@ -39,6 +39,7 @@ export const sessionsDeposit = async (deps: SessionsDeps, options: { allow: stri
     `Read ${String(result.folders.length)} folders; skipped ${String(result.skippedFolders)} not on the allowlist.`,
     ...(result.cursor === 0 ? [] : [`Read ${String(result.cursor)} Cursor sessions.`]),
     ...result.cursorUnreadable.map((reason) => `Cursor store not read: ${reason}`),
+    ...(result.cursorRejected === 0 ? [] : [`Skipped ${String(result.cursorRejected)} Cursor sessions whose id is not a safe file name.`]),
     ...(result.missing.length === 0 ? [] : [`No project folder matched: ${result.missing.join(', ')}.`]),
   ];
   return { document: { ok: true, ...result }, text: lines.join('\n') };

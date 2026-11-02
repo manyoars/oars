@@ -89,6 +89,8 @@ export interface CursorStore {
   sessions: CursorSession[];
   /** The session as transcript text for `captureSession`. */
   transcript: (session: CursorSession) => string;
+  /** Composers skipped because their id is not a safe file name (it names a skeleton), counted so the skip is never silent. */
+  rejected: number;
   close: () => void;
 }
 
@@ -256,14 +258,16 @@ export const openCursorStore = async (root: string): Promise<CursorStore | undef
   const db = await open(globalFile);
   const composers = new Map<string, Obj>();
   const sessions: CursorSession[] = [];
+  let rejected = 0;
   try {
-    await collect(db, root, composers, sessions);
+    rejected = await collect(db, root, composers, sessions);
   } catch (error) {
     db.close();
     throw error;
   }
   return {
     sessions,
+    rejected,
     close: () => {
       db.close();
     },
@@ -302,8 +306,12 @@ export const openCursorStore = async (root: string): Promise<CursorStore | undef
   };
 };
 
-/** Reads every composer session's header out of the global store; a throw leaves the caller to close `db`. */
-const collect = async (db: Database, root: string, composers: Map<string, Obj>, sessions: CursorSession[]): Promise<void> => {
+/** Reads every composer session's header out of the global store and returns how many it rejected; a throw leaves the caller to close `db`. */
+/** A composer id becomes `skeletons/cursor-<id>.json`, so only the id shape the store writes is accepted: no separator, not all dots. */
+const SAFE_ID = /^(?!\.+$)[A-Za-z0-9._-]+$/;
+
+const collect = async (db: Database, root: string, composers: Map<string, Obj>, sessions: CursorSession[]): Promise<number> => {
+  let rejected = 0;
   const folders = await workspaceFolders(root);
   for (const row of db.prepare("select cast(key as text) as k, cast(value as text) as v from cursorDiskKV where key like 'composerData:%'").all()) {
     const composer = parse(row.v);
@@ -311,6 +319,10 @@ const collect = async (db: Database, root: string, composers: Map<string, Obj>, 
     const composerId = str(composer.composerId) ?? row.k.slice('composerData:'.length);
     const headers = Array.isArray(composer.fullConversationHeadersOnly) ? composer.fullConversationHeadersOnly.length : 0;
     const inline = Array.isArray(composer.conversation) ? composer.conversation.length : 0;
+    if (!SAFE_ID.test(composerId)) {
+      rejected += 1;
+      continue;
+    }
     // A composer with no message was opened and left; it has nothing to capture.
     if (headers + inline === 0) continue;
     const createdAt = num(composer.createdAt) ?? 0;
@@ -318,4 +330,5 @@ const collect = async (db: Database, root: string, composers: Map<string, Obj>, 
     sessions.push({ composerId, folder: folders.get(composerId) ?? null, createdAt, lastUpdatedAt: num(composer.lastUpdatedAt) ?? createdAt, messages: headers > 0 ? headers : inline });
   }
   sessions.sort((a, b) => a.createdAt - b.createdAt || a.composerId.localeCompare(b.composerId));
+  return rejected;
 };
