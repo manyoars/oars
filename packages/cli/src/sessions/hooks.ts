@@ -149,7 +149,7 @@ export const runHook = async (event: HookEvent, stdin: string, runtime: Sessions
   const ms = Math.round(performance.now() - started);
   // The failure line is masked once, the same for the hook-calls line and the step row beside it; both writes are guarded, so a counter
   // that cannot be written never costs the session its context.
-  const line = failed ? await errorLine(runtime.storeDir, failure) : outcome.error ?? null;
+  const line = failed ? await errorLine(runtime.storeDir, failure).catch(() => 'unknown error') : outcome.error ?? null;
   await tryLog(() => appendHookCall(runtime.storeDir, { at: new Date(now()).toISOString(), event, session, hit: outcome.hit, ms, error: line }));
   // A lookup hook that ran a query (or failed trying) is a `recall` step started by its own trigger; the deposit hooks logged their rows as they ran.
   if (key !== null && (failed || outcome.queried)) {
