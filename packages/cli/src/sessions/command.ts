@@ -137,7 +137,8 @@ export const sessionsMeasure = async (deps: SessionsDeps, options: { last: numbe
   const calls = (await readCalls(runtime.storeDir)).filter((call) => repo === undefined || call.cwd === undefined || inRepository(slugOf(call.cwd), repo));
   const result = measure(store, calls, await readHookCalls(runtime.storeDir), options.last, options.since);
   // The step counters are all-time over the whole log: `--repo`, `--last`, and `--since` filter the G1 table only.
-  const steps = stepCounters(await readSteps(runtime.storeDir));
+  // A step log that cannot be read leaves the G1 table as it is (the same rule as `verify`'s stuck check).
+  const steps = stepCounters(await readSteps(runtime.storeDir).catch((): StepRow[] => []));
   return { document: { ok: true, ...result, steps, newerCaptures: store.newerCaptures }, text: [formatMeasure(result), formatStepCounters(steps), ...newerNotice(store)].join('\n') };
 };
 
