@@ -80,6 +80,11 @@ describe('the CAPTURE 4 fields', () => {
     const capped = capture(many, null, null);
     expect(capped.session.files).toHaveLength(FILES_PER_SESSION_MAX);
     expect(capped.session.fileHashes).toHaveLength(FILES_PER_SESSION_MAX);
+    // The cap keeps the alphabetically first paths, so the last-sorting one is gone (and `recall --path` no longer sees it).
+    const kept = new Set(capped.session.files);
+    const dropped = Array.from({ length: FILES_PER_SESSION_MAX + 5 }, (_, i) => `/w/f${String(i)}.ts`).filter((path) => !kept.has(path));
+    expect(dropped).toHaveLength(5);
+    expect(dropped.every((path) => path > (capped.session.files.at(-1) ?? ''))).toBe(true);
     // Both lists name the same files: the hashes are those of the first 100 paths, not of the first 100 hashes.
     const targetOf = new Map(capped.tools.map((tool, i) => [`/w/f${String(i)}.ts`, tool.target]));
     expect(capped.session.fileHashes).toEqual(capped.session.files.map((path) => targetOf.get(path)).sort());
@@ -273,7 +278,7 @@ describe('a version-3 store opened under version 4', () => {
     downgrade(staged.storeDir);
     const before = await loadStore(staged.storeDir);
     expect(before.sessions).toHaveLength(4);
-    expect(before.sessions[0]).toMatchObject({ cv: '3', sid: null, repo: null, fileHashes: [], env: { oars: 'unknown' } });
+    expect(before.sessions[0]).toMatchObject({ cv: '3', sid: null, repo: null, fileHashes: [], env: { harness: null, oars: 'unknown' } });
     expect(before.tools[0]).toMatchObject({ sid: null, targetBase: null });
     const again = await deposit(staged.runtime, options);
     expect(again).toMatchObject({ sessions: 4, unchanged: 0 });

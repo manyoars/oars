@@ -26,6 +26,15 @@ describe('recall', () => {
     expect(formatRecall(result)).toContain('2 sessions, 2 errors');
   });
 
+  it('matches --path against the stored files only, so a path the 100-file cap dropped does not match', async () => {
+    const store = await loaded();
+    const session = store.sessions.find((candidate) => candidate.files.includes('/work/app/src/main.ts'));
+    if (session === undefined) throw new Error('fixture session with main.ts not found');
+    expect(recall(store, { path: 'main.ts' }, NOW).matches.length).toBeGreaterThan(0);
+    session.files = session.files.filter((file) => !file.endsWith('main.ts'));
+    expect(recall(store, { path: 'main.ts' }, NOW).matches).toHaveLength(0);
+  });
+
   it('takes a pasted signature, filters by tool, and matches by class, path, and age', async () => {
     const store = await loaded();
     expect(recall(store, { error: `Bash | ${SIGNATURE.slice(7)}` }, NOW).matches).toHaveLength(1);
