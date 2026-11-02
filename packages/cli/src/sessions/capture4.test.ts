@@ -6,7 +6,7 @@ import { captureRuntime, oarsVersion, versionIn } from './capture-runtime.js';
 import { captureSession } from './extract.js';
 import { makeRedactor } from './redact.js';
 import { makeRepoRoot } from './repo-root.js';
-import { CAPTURE_VERSION, ERROR_LINE_CHARS, EXTRACTOR_VERSION } from './schema.js';
+import { CAPTURE_VERSION, ERROR_LINE_CHARS, EXTRACTOR_VERSION, FILES_PER_SESSION_MAX } from './schema.js';
 import { deposit, loadStore, localSalt, paths, sidOf, type AccountSalt } from './store.js';
 import { cleanup, NOW, stage } from './test-support.js';
 
@@ -65,6 +65,17 @@ describe('the CAPTURE 4 fields', () => {
     const loose = capture(transcript('/tmp/x', '/tmp/x/n.md'), null, null);
     expect(loose.tools[0]).toMatchObject({ targetBase: 'cwd' });
     expect(loose.session.repo).toBeNull();
+  });
+
+  it('caps files and fileHashes per session at the L3 limit', () => {
+    const many = Array.from(
+      { length: FILES_PER_SESSION_MAX + 5 },
+      (_, i) =>
+        `{"type":"assistant","uuid":"m${String(i)}","timestamp":"2026-06-01T00:00:02.000Z","cwd":"/w","message":{"role":"assistant","model":"m","content":[{"type":"tool_use","id":"t${String(i)}","name":"Read","input":{"file_path":"/w/f${String(i)}.ts"}}],"usage":{"input_tokens":1,"output_tokens":1}}}`,
+    ).join('\n');
+    const capped = capture(many, null, null);
+    expect(capped.session.files).toHaveLength(FILES_PER_SESSION_MAX);
+    expect(capped.session.fileHashes).toHaveLength(FILES_PER_SESSION_MAX);
   });
 
   it('cuts an error line to 1,000 characters after redacting, and runs without sid, runtime, or repo resolver', () => {
