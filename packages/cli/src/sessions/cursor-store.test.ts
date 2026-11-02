@@ -194,7 +194,7 @@ describe('the Cursor source: t731 safety', () => {
       s.root,
       [
         { id: 'good', document: doc('good') },
-        { id: 'trav', document: doc('../../escaped') },
+        { id: 'trav', document: doc('../../../escaped') },
         { id: 'dots', document: doc('..') },
       ],
       [],
@@ -202,7 +202,9 @@ describe('the Cursor source: t731 safety', () => {
     const result = await deposit({ ...s.runtime, cursorRoot: user }, options(['cursor']));
     expect(result).toMatchObject({ cursor: 1, cursorRejected: 2 });
     expect(trackedKeys(s.storeDir)).toEqual(['cursor/good']);
+    // `skeletons/cursor-../../../escaped.json` normalizes to `<store>/escaped.json`; the shorter form lands in `skeletons/`.
     expect(existsSync(join(s.storeDir, 'escaped.json'))).toBe(false);
+    expect(existsSync(join(s.storeDir, 'skeletons', 'escaped.json'))).toBe(false);
     expect(existsSync(join(s.root, 'escaped.json'))).toBe(false);
   });
 

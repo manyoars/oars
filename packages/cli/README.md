@@ -84,6 +84,7 @@ oars sessions recall --mcp
 oars sessions books --by class --since 30   # tokens, wall time, turns, errors, verify-after-edit rate
 oars sessions books --by harness            # the same, grouped by Claude Code and Cursor (deposit Cursor with --allow cursor)
 oars sessions measure --last 50             # recurring errors per 100 sessions, cache-write per session, recall calls per session
+oars sessions measure --last 50 --repo <root>  # the same, for one repository's sessions
 oars sessions verify                        # consistency invariants on the stored skeletons and capture records
 ```
 
