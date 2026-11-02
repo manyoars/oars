@@ -58,7 +58,7 @@ export const readSteps = async (storeDir: string): Promise<StepRow[]> => {
 const scrubHome = (text: string): string => {
   const home = homedir();
   if (home === '') return text;
-  const pattern = [...home].map((char) => (char === '/' || char === '\\' ? '[\\\\/]' : char.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))).join('');
+  const pattern = home.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/(?:\\\\|\/)/g, '[\\\\/]');
   return text.replace(new RegExp(pattern, 'gi'), '<home>');
 };
 

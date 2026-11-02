@@ -5,6 +5,9 @@
 // captured records to `<config>/oars/sessions/observations.jsonl`. The log is append-only: a session whose file changed is deposited
 // again under a higher `rev`, and a reader keeps only the highest `rev` of each session.
 //
+// Store version 5 (CAPTURE 5, t733) keeps version 4's shape and changes one stored value: each `models` entry of the skeleton's cost state names
+// the usage keys it reported, which `verify` uses to class a side call. A version-4 skeleton reads with no keys until it is captured again.
+//
 // Store version 4 (CAPTURE 4, t714) keeps version 3's shape and adds to it: `sid` on every capture record, `repo`, `fileHashes`, and `env` on
 // the session, `targetBase` on the tool record, `promptFingerprint` in place of `contextFingerprint`, and a 1,000-character cap on an
 // error-line's `line`. A version-3 store is read through the compatibility reader (`upgradeSession` and its siblings in store.ts) until each transcript is captured again.
@@ -29,7 +32,7 @@
 // organization domains the operator names. The skeleton holds hashes only.
 
 /** Stamped `cv` on every captured record. Bump it only when the captured field list changes: a bump re-reads every transcript. */
-export const CAPTURE_VERSION = '4';
+export const CAPTURE_VERSION = '5';
 
 /** Capture versions the reader derives from. A version-3 record is upgraded on read; a newer one is read for the fields this code knows. */
 export const OLDEST_READABLE_CAPTURE = 3;
@@ -379,7 +382,7 @@ export interface CostState {
   output: number | null;
   /**
    * The models in `modelUsage`, sorted by name, each with the usage keys its entry reported a nonzero amount on: a model no assistant line names
-   * is a harness side call, and only on a key it reported. A skeleton written before the keys were recorded reads with `[]`.
+   * is a harness side call, and only on a key it reported a nonzero amount on. A skeleton written before the keys were recorded reads with `[]`.
    */
   models: CostModel[];
 }

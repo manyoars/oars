@@ -226,7 +226,7 @@ ${formatStepCounters(stepCounters(await readSteps(staged.storeDir)))}`);
     await deposit(staged.runtime, { allow: [slugOf(HOME), slugOf(OTHER)], redactDomains: [], now: () => NOW });
     // A newer oars wrote the other repository's session and its subagent.
     const file = paths(staged.storeDir).observations;
-    const marked = readFileSync(file, 'utf8').split('\n').filter((entry) => entry !== '').map((entry) => (entry.includes('"session":"other-session') ? entry.replace('"cv":"4"', '"cv":"5"') : entry));
+    const marked = readFileSync(file, 'utf8').split('\n').filter((entry) => entry !== '').map((entry) => (entry.includes('"session":"other-session') ? entry.replace('"cv":"5"', '"cv":"6"') : entry));
     writeFileSync(file, `${marked.join('\n')}\n`);
     const deps = { sessions: staged.runtime, install: undefined, now: () => NOW };
     const newer = async (repo?: string): Promise<unknown> => (await sessionsBooks(deps, { by: 'class', sinceDays: undefined, repo })).document;
@@ -252,7 +252,7 @@ ${formatStepCounters(stepCounters(await readSteps(staged.storeDir)))}`);
       .filter((entry) => entry !== '')
       // The parent's main session record is gone; the subagent's remains, one version newer.
       .filter((entry) => !(entry.includes('"kind":"session"') && entry.includes('"session":"other-session"') && entry.includes('"parent":null')))
-      .map((entry) => entry.replace('"cv":"4"', '"cv":"5"'));
+      .map((entry) => entry.replace('"cv":"5"', '"cv":"6"'));
     writeFileSync(file, `${rewritten.join('\n')}\n`);
     const deps = { sessions: staged.runtime, install: undefined, now: () => NOW };
     const other = await sessionsBooks(deps, { by: 'class', sinceDays: undefined, repo: OTHER });
