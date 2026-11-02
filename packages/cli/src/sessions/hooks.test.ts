@@ -178,7 +178,9 @@ describe('nightly run', () => {
     await runHook('nightly', '', { ...staged.runtime, cursorRoot: user }, () => NOW);
     const [call] = await readHookCalls(staged.storeDir);
     expect(call?.hit).toBe(true);
-    expect(call?.error).toContain('state.vscdb');
+    // Class A: the base name only, never the folder path with the user name.
+    expect(call?.error).toMatch(/^state\.vscdb: /);
+    expect(call?.error).not.toContain(user);
   });
 
   it('deposits a saved cursor entry when the runtime names the Cursor store, and leaves it alone otherwise', async () => {

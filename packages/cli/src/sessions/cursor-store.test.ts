@@ -1,4 +1,4 @@
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 
@@ -182,5 +182,40 @@ describe('an unreadable Cursor store fails open', () => {
     const user = await stageRawCursor(s.root, [{ id: 'x', document: { composerId: 'x', createdAt: 1, conversation: [{ type: 1, text: 'hi' }] } }], [{ json: { folder: 'file:///nowhere' } }]);
     const result = await deposit({ ...s.runtime, cursorRoot: user }, options(['cursor']));
     expect(result).toMatchObject({ cursor: 1, cursorUnreadable: [] });
+  });
+});
+
+describe('the Cursor source: t731 safety', () => {
+  const doc = (composerId: string) => ({ composerId, createdAt: 1, conversation: [{ type: 1, text: 'hi' }] });
+
+  it('skips and counts a composer whose id is not a safe file name, and writes nothing outside skeletons', async () => {
+    const s = stage();
+    const user = await stageRawCursor(
+      s.root,
+      [
+        { id: 'good', document: doc('good') },
+        { id: 'trav', document: doc('../../escaped') },
+        { id: 'dots', document: doc('..') },
+      ],
+      [],
+    );
+    const result = await deposit({ ...s.runtime, cursorRoot: user }, options(['cursor']));
+    expect(result).toMatchObject({ cursor: 1, cursorRejected: 2 });
+    expect(trackedKeys(s.storeDir)).toEqual(['cursor/good']);
+    expect(existsSync(join(s.storeDir, 'escaped.json'))).toBe(false);
+    expect(existsSync(join(s.root, 'escaped.json'))).toBe(false);
+  });
+
+  it('lets a store write failure propagate instead of blaming the Cursor file', async () => {
+    const s = stage();
+    const user = await stageRawCursor(s.root, [{ id: 'good', document: doc('good') }], []);
+    // A folder where the skeleton file belongs makes only that write fail.
+    mkdirSync(join(s.storeDir, 'skeletons', 'cursor-good.json'), { recursive: true });
+    const failure = await deposit({ ...s.runtime, cursorRoot: user }, options(['cursor'])).then(
+      () => undefined,
+      (error: unknown) => (error instanceof Error ? error.message : String(error)),
+    );
+    expect(failure).toBeDefined();
+    expect(failure).not.toContain('state.vscdb');
   });
 });

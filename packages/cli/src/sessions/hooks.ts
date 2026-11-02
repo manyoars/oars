@@ -84,7 +84,7 @@ const nightly = async (runtime: SessionsRuntime, now: () => number): Promise<Out
   if (saved.allow.length === 0) return { hit: false };
   const result = await deposit(runtime, { allow: saved.allow, redactDomains: saved.redactDomains, now });
   // A Cursor store that could not be read does not fail the run, so the record carries it or nobody sees it.
-  const unreadable = result.cursorUnreadable[0];
+  const unreadable = result.cursorUnreadableLogged[0];
   return unreadable === undefined ? { hit: true } : { hit: true, error: firstLine(unreadable) };
 };
 
