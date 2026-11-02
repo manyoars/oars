@@ -386,7 +386,7 @@ export interface RecallCall {
   at: string;
   query: string;
   matches: number;
-  /** The server's working directory; `measure --repo` scopes calls by it. Calls written before it existed have none and count for every repository. */
+  /** Class L: the server's working directory, unhashed; `measure --repo` scopes calls by it. Calls written before it existed have none and count for every repository. */
   cwd?: string;
 }
 

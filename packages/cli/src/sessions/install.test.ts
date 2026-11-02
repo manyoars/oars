@@ -184,10 +184,25 @@ describe('post-tool pre-filter', () => {
     writeFileSync(join(folder, '-'), '');
     const runtime = { ...runtimeIn(SCRATCH), nodePath: 'cat', hookBin: '-' };
     const event = JSON.stringify({ tool_name: 'Bash', error: 'The user rejected this tool call', hook_event_name: 'PostToolUseFailure' });
-    // Timed inside the shell, so the spawn of the shell itself is not counted; the best of a few runs keeps a busy machine from failing it.
-    const script = `s=$EPOCHREALTIME; ( ${commandOf(runtime, 'post-tool')} ) >/dev/null; e=$EPOCHREALTIME; echo $(( (\${e/./} - \${s/./}) / 1000 ))`;
-    const times = [0, 1, 2].map(() => Number(spawnSync(shell, ['-c', script], { input: `${event}\n`, encoding: 'utf8', timeout: 30_000, cwd: folder }).stdout.trim()));
-    expect(Math.min(...times)).toBeLessThan(100);
+    // Timed from the test process around the spawn: Git's bash on Windows is 4.4 and has no `$EPOCHREALTIME`, so a clock read inside the shell measures nothing there.
+    // The best of five keeps a busy machine from failing it; the spawn of the shell itself counts, which is the hook's real cost.
+    const timeOf = (command: string): number => {
+      const times = [0, 1, 2, 3, 4].map(() => {
+        const start = process.hrtime.bigint();
+        const result = spawnSync(shell, ['-c', command], { input: `${event}
+`, encoding: 'utf8', timeout: 30_000, cwd: folder });
+        const ms = Number(process.hrtime.bigint() - start) / 1e6;
+        expect(result.status).toBe(0);
+        return ms;
+      });
+      return Math.min(...times);
+    };
+    const filter = commandOf(runtime, 'post-tool');
+    const measured = timeOf(filter);
+    expect(measured).toBeGreaterThan(0);
+    expect(measured).toBeLessThan(100);
+    // The measurement can fail: the same command behind a 200 ms sleep reads over 200 ms.
+    expect(timeOf(`sleep 0.2; ${filter}`)).toBeGreaterThanOrEqual(200);
   }, 60_000);
 
   it.skipIf(!available)('launches the hook when the hook-bin is an existing absolute path', () => {
@@ -292,7 +307,7 @@ describe('retention floor', () => {
     expect((await readJson(file)).cleanupPeriodDays).toBe(365);
   });
 
-  it('raises a lower value the target file sets itself, to the user value when that is larger', async () => {
+  it('raises a lower value the target file sets itself to the floor, never copying the user value into the file', async () => {
     const dir = scratch();
     const runtime = runtimeIn(dir);
     mkdirSync(join(dir, 'user'), { recursive: true });
@@ -301,8 +316,8 @@ describe('retention floor', () => {
     mkdirSync(join(dir, 'repo', '.claude'), { recursive: true });
     writeFileSync(file, JSON.stringify({ cleanupPeriodDays: 30 }));
     const result = await installHooks(runtime, file, false);
-    expect((await readJson(file)).cleanupPeriodDays).toBe(3650);
-    expect(result.retention).toContain('Raised cleanupPeriodDays from 30 to 3650');
+    expect((await readJson(file)).cleanupPeriodDays).toBe(365);
+    expect(result.retention).toContain('Raised cleanupPeriodDays from 30 to 365');
   });
 
   it('reads the harness default when the file sets none', () => {
