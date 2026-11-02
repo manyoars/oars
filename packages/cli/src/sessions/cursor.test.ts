@@ -292,3 +292,40 @@ describe('the Cursor reader: times', () => {
     store.close();
   });
 });
+
+describe('the Cursor reader: t731 outcomes', () => {
+  const shell = (extra: Partial<NonNullable<FixtureBubble['tool']>>): FixtureBubble => ({
+    type: 2,
+    createdAt: '2025-06-01T00:00:02.000Z',
+    tool: { name: 'run_terminal_cmd', params: { command: 'make' }, status: 'completed', ...extra },
+  });
+  const user: FixtureBubble = { type: 1, text: 'go', createdAt: '2025-06-01T00:00:00.000Z' };
+
+  it('records an aborted terminal call as no outcome, not ok', async () => {
+    const { store, session } = await only([user, shell({ result: { exitCodeV2: 0, output: '', endedReason: 'RUN_TERMINAL_COMMAND_ENDED_REASON_EXECUTION_ABORTED' } })]);
+    const { tools, errorLines } = capture(store.transcript(session), 'x');
+    expect(tools.map((t) => t.status)).toEqual(['none']);
+    expect(errorLines).toEqual([]);
+    store.close();
+  });
+
+  it('leaves durationMs null on a Cursor tool call, not a measured zero', async () => {
+    const { store, session } = await only([user, shell({ result: { exitCodeV2: 0, output: 'fine' } })]);
+    const { tools } = capture(store.transcript(session), 'x');
+    expect(tools.map((t) => [t.status, t.durationMs])).toEqual([['ok', null]]);
+    store.close();
+  });
+
+  it('refuses a relative clientStartTime when the composer has no createdAt', async () => {
+    const { store, session } = await only([{ type: 2, text: 'relative', clientStart: 1234 }], '1970-01-01T00:00:00Z');
+    expect(timesOf(store.transcript(session)).every((time) => !time.startsWith('1970-01-01T00:00:01'))).toBe(true);
+    store.close();
+  });
+
+  it('logs a nonzero exit with no output as Exit code <n> alone', async () => {
+    const { store, session } = await only([user, shell({ result: { exitCodeV2: 2 } })]);
+    const { errorLines } = capture(store.transcript(session), 'x');
+    expect(errorLines.map((e) => e.line)).toEqual(['Exit code 2']);
+    store.close();
+  });
+});
