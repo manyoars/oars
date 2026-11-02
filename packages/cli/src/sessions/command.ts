@@ -43,6 +43,9 @@ export const sessionsDeposit = async (deps: SessionsDeps, options: { allow: stri
   const lines = [
     `Deposited ${String(result.sessions)} sessions and ${String(result.subagents)} subagent transcripts (${String(result.lines)} lines, ${String(result.badLines)} unparseable) as ${String(result.observations)} observations; ${String(result.unchanged)} files unchanged.`,
     `Read ${String(result.folders.length)} folders; skipped ${String(result.skippedFolders)} not on the allowlist.`,
+    ...(result.cursor === 0 ? [] : [`Read ${String(result.cursor)} Cursor sessions.`]),
+    ...result.cursorUnreadable.map((reason) => `Cursor store not read: ${reason}`),
+    ...(result.cursorRejected === 0 ? [] : [`Skipped ${String(result.cursorRejected)} Cursor sessions whose id is not a safe file name.`]),
     ...(result.missing.length === 0 ? [] : [`No project folder matched: ${result.missing.join(', ')}.`]),
   ];
   return { document: { ok: true, ...result }, text: lines.join('\n') };
@@ -100,7 +103,8 @@ const newerNotice = (store: Store): string[] => (store.newerCaptures > 0 ? [`cap
 const inRepositoryStore = (store: Store, repo: string): Store => {
   const sessions = store.sessions.filter((session) => inRepository(session.project, repo));
   const mains = new Set(sessions.map((session) => session.session));
-  const subagents = store.subagents.filter((agent) => agent.parent !== null && mains.has(agent.parent));
+  // A subagent is kept by its own project, like a session: its parent's session record may be absent from the store.
+  const subagents = store.subagents.filter((agent) => inRepository(agent.project, repo));
   const newer = (cv: string): boolean => Number(cv) > Number(CAPTURE_VERSION);
   return {
     ...store,
@@ -115,7 +119,12 @@ export const sessionsBooks = async (deps: SessionsDeps, options: { by: BooksBy; 
   const loaded = await loadStore(runtimeOf(deps).storeDir);
   const store = options.repo === undefined ? loaded : inRepositoryStore(loaded, options.repo);
   const rows = books(store, options.by, deps.now(), options.sinceDays);
-  return { document: { ok: true, by: options.by, rows, newerCaptures: store.newerCaptures }, text: [formatBooks(rows, options.by), ...newerNotice(store)].join('\n') };
+  // A mistyped root over a populated store must not read as an empty store.
+  const table =
+    rows.length === 0 && options.repo !== undefined
+      ? `No prompts for ${options.repo} in the store (${String(loaded.prompts.length)} prompts across all repositories).`
+      : formatBooks(rows, options.by);
+  return { document: { ok: true, by: options.by, rows, newerCaptures: store.newerCaptures }, text: [table, ...newerNotice(store)].join('\n') };
 };
 
 export const sessionsMeasure = async (deps: SessionsDeps, options: { last: number; since: string | undefined; repo?: string }): Promise<Outcome> => {

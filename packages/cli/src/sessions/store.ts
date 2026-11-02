@@ -21,6 +21,7 @@ import { appendFile, mkdir, readdir, readFile, rename, rm, stat, writeFile } fro
 import { basename, dirname, join } from 'node:path';
 import { CliError, ExitCode } from '../errors.js';
 import { compileAllow, requireEntries, slugOf } from './allow.js';
+import { openCursorStore, type CursorStore } from './cursor.js';
 import { buildIndex, indexPath } from './hook-index.js';
 import { archiveRaw } from './archive.js';
 import { deriveSession, type SessionCapture } from './derive.js';
@@ -53,6 +54,8 @@ export interface SessionsRuntime {
   storeDir: string;
   /** `~/.claude/projects` (or `$CLAUDE_CONFIG_DIR/projects`). */
   projectsRoot: string;
+  /** Cursor's `User` folder (`cursorRoot` in cursor.ts); absent means no Cursor source. `deposit` reads it only when `--allow` names `cursor`. */
+  cursorRoot?: string;
   /** Where the account's salt comes from; absent means this machine's own (`localSalt`). The seam an account identity replaces (M4). */
   accountSalt?: (storeDir: string) => Promise<AccountSalt>;
   stdin: NodeJS.ReadableStream;
@@ -185,6 +188,14 @@ export interface DepositResult {
   observations: number;
   /** Subagent transcripts parsed this run (A24); not counted in `sessions`, so per-session denominators stay main sessions. */
   subagents: number;
+  /** Of `sessions`, the Cursor composer sessions parsed this run; 0 when the Cursor source is not allowed or absent. */
+  cursor: number;
+  /** Why the Cursor store could not be read this run (locked, corrupt, or from a Cursor version this reader does not know); empty when it was read or absent. */
+  cursorUnreadable: string[];
+  /** The same reasons with the store file reduced to its base name: the hook-call record (class A) must not carry the user name in a path. */
+  cursorUnreadableLogged: string[];
+  /** Cursor composers skipped this run because their id is not a safe file name. */
+  cursorRejected: number;
   /** Project folders under the projects root that are not on the allowlist, so were not opened. */
   skippedFolders: number;
   /** The allowed folders that exist under the projects root. */
@@ -333,7 +344,6 @@ const depositFile = async (context: DepositContext, project: string, transcript:
   ) {
     return undefined;
   }
-  const files = paths(runtime.storeDir);
   const rev = Math.max((previous?.rev ?? 0) + 1, context.now());
   const extract = captureSession({
     text: await readFile(file, 'utf8'),
@@ -350,11 +360,7 @@ const depositFile = async (context: DepositContext, project: string, transcript:
     runtime: context.captureRuntime,
     subagent,
   });
-  const batch: Observation[] = [extract.session, ...extract.prompts, ...extract.tools, ...extract.errorLines];
-  await mkdir(runtime.storeDir, { recursive: true });
-  await appendFile(files.observations, batch.map((observation) => `${JSON.stringify(observation)}\n`).join(''), { mode: 0o600 });
-  await writeAtomic(join(files.skeletons, `${session}.json`), JSON.stringify(extract.skeleton));
-  state.files[key] = { size: info.size, mtimeMs: info.mtimeMs, rev, v: CAPTURE_VERSION, s: context.salt.sid, d: context.domains };
+  await commitCapture(context, key, extract, { size: info.size, mtimeMs: info.mtimeMs, rev });
   return extract;
 };
 
@@ -445,6 +451,16 @@ export const refresh = async (runtime: SessionsRuntime, redactDomains: readonly 
   }
 };
 
+/** Appends a capture's records, writes its skeleton, and records the cursor in the state map (the caller writes `state.json`). */
+const commitCapture = async (context: DepositContext, key: string, extract: Capture, cursor: { size: number; mtimeMs: number; rev: number }): Promise<void> => {
+  const files = paths(context.runtime.storeDir);
+  const batch: Observation[] = [extract.session, ...extract.prompts, ...extract.tools, ...extract.errorLines];
+  await mkdir(context.runtime.storeDir, { recursive: true });
+  await appendFile(files.observations, batch.map((observation) => `${JSON.stringify(observation)}\n`).join(''), { mode: 0o600 });
+  await writeAtomic(join(files.skeletons, `${extract.session.session}.json`), JSON.stringify(extract.skeleton));
+  context.state.files[key] = { ...cursor, v: CAPTURE_VERSION, s: context.salt.sid, d: context.domains };
+};
+
 interface LockOptions {
   /** How long to wait for a holder before giving up. */
   waitMs: number;
@@ -522,7 +538,7 @@ const depositLocked = async (runtime: SessionsRuntime, options: DepositOptions, 
   const allow = compileAllow(options.allow);
   const folders = await projectFolders(runtime.projectsRoot);
   const allowed = folders.filter((name) => allow.allows(name));
-  const missing = allow.unmatched(folders);
+  const missing = allow.unmatched(runtime.cursorRoot === undefined ? folders : [...folders, CURSOR_SOURCE]);
   const state = await readState(runtime.storeDir);
   refuseNewer(state);
   // A log written by a newer oars is refused even when state.json is older or lost; the Stop-hook path reads only state.json.
@@ -538,12 +554,16 @@ const depositLocked = async (runtime: SessionsRuntime, options: DepositOptions, 
     badLines: 0,
     observations: 0,
     subagents: 0,
+    cursor: 0,
+    cursorUnreadable: [],
+    cursorUnreadableLogged: [],
+    cursorRejected: 0,
     skippedFolders: folders.length - allowed.length,
     folders: allowed,
     missing,
   };
   // A project the harness cleaned up entirely is still visited when the state names it, so its archived transcripts are captured again.
-  const stateProjects = Object.keys(state.files).map((key) => key.slice(0, key.indexOf('/'))).filter((name) => allow.allows(name));
+  const stateProjects = Object.keys(state.files).map((key) => key.slice(0, key.indexOf('/'))).filter((name) => name !== CURSOR_SOURCE && allow.allows(name));
   for (const project of [...new Set([...allowed, ...stateProjects])].sort()) {
     const folder = join(runtime.projectsRoot, project);
     const entries = (await listDir(folder)).filter((entry) => entry.isFile() && entry.name.endsWith('.jsonl')).map((entry) => entry.name).sort();
@@ -563,9 +583,88 @@ const depositLocked = async (runtime: SessionsRuntime, options: DepositOptions, 
       tally(trace, extract, transcript.subagent !== undefined);
     }
   }
+  if (runtime.cursorRoot !== undefined && allow.allows(CURSOR_SOURCE)) await readCursor(context, runtime.cursorRoot, result);
   await writeAtomic(paths(runtime.storeDir).state, JSON.stringify(state));
   await refresh(runtime, state.redactDomains, context.at, trace);
   return result;
+};
+
+/** The source name `--allow` uses for Cursor, and the first segment of its `state.json` keys (`cursor/<composerId>`). */
+const CURSOR_SOURCE = 'cursor';
+
+/** Reports an unreadable Cursor store: the full path for the terminal, the base name for the hook-call record. */
+const noteUnreadable = (root: string, error: unknown, result: DepositResult): void => {
+  const reason = error instanceof Error ? error.message : String(error);
+  const file = join(root, 'globalStorage', 'state.vscdb');
+  result.cursorUnreadable.push(`${file}: ${reason}`);
+  result.cursorUnreadableLogged.push(`${basename(file)}: ${reason}`);
+};
+
+/**
+ * Deposits the Cursor composer sessions under `root` (t728). A session's cursor is its message count and `lastUpdatedAt`, kept in
+ * `state.json` like a file's size and mtime, so a second deposit adds nothing until Cursor writes the session again. The store is opened
+ * read-only and a missing one is skipped silently. Nothing is archived: there is no transcript file to link, only the database.
+ */
+const readCursor = async (context: DepositContext, root: string, result: DepositResult): Promise<void> => {
+  // The Cursor source fails open per source, and only its own read is guarded: the store's write failures (a full disk) propagate as they
+  // do on the Claude Code path instead of blaming the Cursor file.
+  let source: CursorStore | undefined;
+  try {
+    source = await openCursorStore(root);
+  } catch (error) {
+    noteUnreadable(root, error, result);
+    return;
+  }
+  if (source === undefined) return;
+  result.cursorRejected += source.rejected;
+  try {
+    for (const session of source.sessions) {
+      const key = `${CURSOR_SOURCE}/${session.composerId}`;
+      const previous = context.state.files[key];
+      if (
+        previous !== undefined &&
+        previous.size === session.messages &&
+        previous.mtimeMs === session.lastUpdatedAt &&
+        previous.v === CAPTURE_VERSION &&
+        previous.s === context.salt.sid &&
+        sameSet(previous.d, context.domains)
+      ) {
+        result.unchanged += 1;
+        continue;
+      }
+      let text: string;
+      try {
+        text = source.transcript(session);
+      } catch (error) {
+        noteUnreadable(root, error, result);
+        break;
+      }
+      const rev = Math.max((previous?.rev ?? 0) + 1, context.now());
+      const extract = captureSession({
+        text,
+        session: `${CURSOR_SOURCE}-${session.composerId}`,
+        project: session.folder === null ? CURSOR_SOURCE : slugOf(session.folder),
+        rev,
+        at: context.at,
+        bytes: Buffer.byteLength(text),
+        redact: context.redact,
+        salt: context.salt.salt,
+        sid: context.salt.sid,
+        repoRoot: context.repoRoot,
+        repoIdentity: context.repoIdentity,
+        runtime: context.captureRuntime,
+      });
+      extract.session.harness = 'cursor';
+      await commitCapture(context, key, extract, { size: session.messages, mtimeMs: session.lastUpdatedAt, rev });
+      result.sessions += 1;
+      result.cursor += 1;
+      result.lines += extract.session.lines;
+      result.badLines += extract.session.badLines;
+      result.observations += 1 + extract.prompts.length + extract.tools.length + extract.errorLines.length;
+    }
+  } finally {
+    source.close();
+  }
 };
 
 /** What an earlier deposit logged about each subagent transcript, since its `.meta.json` is not archived: session id to origin. */

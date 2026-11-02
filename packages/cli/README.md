@@ -82,6 +82,7 @@ oars sessions recall --path src/main.ts --since 30   # sees the first 100 sorted
 oars sessions recall --mcp
 
 oars sessions books --by class --since 30   # tokens, wall time, turns, errors, verify-after-edit rate
+oars sessions books --by harness            # the same, grouped by Claude Code and Cursor (deposit Cursor with --allow cursor)
 oars sessions measure --last 50             # recurring errors per 100 sessions, cache-write per session, recall calls per session
 oars sessions verify                        # consistency invariants on the stored skeletons and capture records
 ```
@@ -113,8 +114,8 @@ An `--allow` entry is a folder (or its slug), a folder prefix with a trailing sl
 
 | Event | Does | Budget |
 |---|---|---|
-| `SessionStart` | injects `oars sessions recall --context` for the session's cwd as additional context: the top 5 errors by sessions within the latest 300 sessions (the `measure --last 300` window) and what usually followed | under 500 ms |
-| `PostToolUseFailure` (matcher `Bash\|PowerShell`) | for a failed tool call whose error starts with `Exit code N` normalizes the first informative line as `deposit` does and, on a hit, adds "seen in N sessions; what followed: X". A shell pre-filter in the registered command reads the event first and starts node only when it carries `Exit code` | pre-filter under 100 ms; whole path under 1 s |
+| `SessionStart` | injects `oars sessions recall --context` for the session's cwd as additional context: the top 5 errors by sessions within the latest 300 sessions of the repository (the `measure --last 300 --repo` window) and what usually followed | under 500 ms |
+| `PostToolUseFailure` (matcher `Bash\|PowerShell`) | for a failed tool call whose error starts with `Exit code N` normalizes the first informative line as `deposit` does and, on a hit, adds "seen in N sessions; what followed: X". A shell pre-filter in the registered command reads the event first and starts node only when it carries `Exit code` | pre-filter: shell builtins only, no node start; whole path under 1 s |
 | `SessionEnd` | deposits that one transcript (idempotent by size and mtime), only from a folder an earlier `--allow` named. Once per session: `Stop` fires after every turn and would append a new revision of the growing transcript each time. A session the harness ends without `SessionEnd` is picked up by the nightly deposit | under 5 s |
 
 Claude Code fires `PostToolUse` on success only; a failed Bash call arrives as `PostToolUseFailure`, so that is the event registered. The pre-filter is a `read`, a `case`, and a `printf | node` in the shell the harness runs hooks in (Git Bash on Windows, where a fresh `node` alone costs 250 ms or more), so it needs no `findstr` and no extra dependency. Writers of the store (`SessionEnd`, the nightly run, `deposit`) take `store.lock`, so parallel sessions cannot lose each other's `state.json` entries; a lock older than ten minutes is broken.
@@ -137,7 +138,7 @@ Install merges: existing hooks (a Stop hook that rotates sessions, say) stay, ev
 
 #### Reading `measure` before and after
 
-`measure` has no cutoff, so its windows move with every deposit. To pin an "after" reading, run `oars sessions measure --last 300 --since <iso time of the install>`: the current window is the first 300 sessions started at or after that time and the prior window is the 300 before it. Without `--since` the window is the last N. `measure` also prints hook recall calls per session and hook hits per session, and hook deposits per session, counted from `hook-calls.jsonl` in the store.
+`measure` has no cutoff, so its windows move with every deposit. To pin an "after" reading, run `oars sessions measure --last 300 --since <iso time of the install>` (add `--repo <root>` to window one repository's sessions): the current window is the first 300 sessions started at or after that time and the prior window is the 300 before it. Without `--since` the window is the last N. `measure` also prints hook recall calls per session and hook hits per session, and hook deposits per session, counted from `hook-calls.jsonl` in the store.
 
 #### Remove everything
 

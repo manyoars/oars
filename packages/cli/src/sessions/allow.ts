@@ -9,7 +9,7 @@ import { resolve } from 'node:path';
 import { CliError, ExitCode } from '../errors.js';
 
 /** A leading `~` is the home folder, expanded here because a quoted entry or one read from a list file reaches us unexpanded by any shell. */
-const expandHome = (entry: string): string => (/^~(?:[\\/]|$)/.test(entry) ? homedir() + entry.slice(1) : entry);
+export const expandHome = (entry: string): string => (/^~(?:[\\/]|$)/.test(entry) ? homedir() + entry.slice(1) : entry);
 
 /** Claude Code names a project folder after its working directory with every non-alphanumeric character as `-`. */
 export const slugOf = (folder: string): string => resolve(expandHome(folder)).replace(/[^A-Za-z0-9]/g, '-');

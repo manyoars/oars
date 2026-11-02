@@ -1,4 +1,5 @@
 import { appendFileSync, copyFileSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { performance } from 'node:perf_hooks';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -120,6 +121,15 @@ describe('the steps each command logs', () => {
     expect(again[3]?.out).toEqual({});
     expect(again[4]?.key).toBe(rows[1]?.key);
     expect(again[5]?.key).toBe(rows[2]?.key);
+  });
+
+  it('a step row carries no home folder: a path under it is reduced to <home>', async () => {
+    const staged = stage();
+    await sessionsDeposit(depsOf(staged), { allow: ['proj'], allowFiles: [], redactDomains: [] });
+    await expect(runStep(newContext(staged.storeDir, () => NOW, 'manual'), 'recall', () => Promise.reject(new Error(`EPERM: cannot open ${join(homedir(), 'AppData', 'x.json')}`)), 'k')).rejects.toThrow('EPERM');
+    const newest = (await readSteps(staged.storeDir)).at(-1);
+    expect(newest?.error).toContain('<home>');
+    expect(newest?.error).not.toContain(homedir());
   });
 
   it('the --allow-file entries are part of the deposit key', async () => {
