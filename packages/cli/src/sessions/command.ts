@@ -70,8 +70,18 @@ export const sessionsRecall = async (deps: SessionsDeps, query: RecallQuery): Pr
 /** `recall --context`: the injection block for a repository, from the hook index (built from the store when no deposit has written one). */
 export const sessionsContext = async (deps: SessionsDeps, options: ContextOptions): Promise<Outcome> => {
   const { storeDir } = runtimeOf(deps);
-  const index = (await readIndex(storeDir)) ?? buildIndex(await loadStore(storeDir), await readRedactDomains(storeDir), new Date(deps.now()).toISOString());
-  const block = contextBlock(index, options);
+  // The manual recall verb (spec 4.1): its key is what it looks up, the repository's cwd and the harness, known before the work.
+  const key = stampKey('context', options.cwd, options.harness ?? '');
+  const block = await runStep(
+    newContext(storeDir, deps.now, 'manual'),
+    'recall',
+    async () => {
+      const index = (await readIndex(storeDir)) ?? buildIndex(await loadStore(storeDir), await readRedactDomains(storeDir), new Date(deps.now()).toISOString());
+      const found = contextBlock(index, options);
+      return { value: found, report: { in: { query: 1 }, out: { matches: found === undefined ? 0 : 1 }, key } };
+    },
+    key,
+  );
   return { document: { ok: true, context: block ?? null }, text: block ?? 'Nothing recurs in this repository yet.' };
 };
 
@@ -105,7 +115,7 @@ export interface VerifyReport {
   stuck: StuckStep[];
 }
 
-/** With `strict`, any violated invariant also fails the command (exit 4) after the full report is printed; the report is built first so callers can emit it. */
+/** With `strict`, any violated invariant or stuck step also fails the command (exit 4) after the full report is printed; the report is built first so callers can emit it. */
 export const sessionsVerify = async (deps: SessionsDeps, options: { session: string | undefined }): Promise<Outcome & { failed: string[]; report: VerifyReport }> => {
   const { storeDir } = runtimeOf(deps);
   // When the store cannot be read there is no high-water mark yet, so a failed run's key is the session asked for and `ev`.
@@ -116,11 +126,12 @@ export const sessionsVerify = async (deps: SessionsDeps, options: { session: str
     const results = [...verifyAll(skeletons), ...verifyCaptured(mine([...store.sessions, ...store.subagents]), mine(store.tools))];
     // Steps whose key failed on three runs in a row (spec 4.4), read before this run's own row is appended; each fails `--strict` like a violated invariant.
     // A step log that cannot be read leaves the invariant check as it is: the stuck check is an extra, never a reason `verify` fails.
-    const stuck = stuckSteps(await readSteps(storeDir).catch((): StepRow[] => []));
+    // A verify that got here has succeeded, so a verify streak is the one this run ends and is not listed.
+    const stuck = stuckSteps(await readSteps(storeDir).catch((): StepRow[] => [])).filter((entry) => entry.step !== 'verify');
     const report: VerifyReport = { sessions: skeletons.length, unreadable, invariants: results.map((result) => ({ ...result, pass: result.violations === 0 })), stuck };
     const failed = [...results.filter((result) => result.violations > 0).map((result) => result.name), ...(unreadable > 0 ? ['unreadable skeletons'] : []), ...stuck.map((entry) => `stuck: ${entry.step}`)];
     const stuckLines = stuck.map((entry) => `FAIL  ${entry.step} is stuck: key ${entry.key} failed ${String(entry.runs)} runs in a row: ${entry.error}`);
-    const highWater = [...mine(store.sessions)].map((session) => `${session.session}:${String(session.rev)}:${session.cv}`).sort();
+    const highWater = mine([...store.sessions, ...store.subagents]).map((session) => `${session.session}:${String(session.rev)}:${session.cv}`).sort();
     const outcome = {
       failed,
       report,

@@ -401,7 +401,7 @@ export interface HookCall {
   error: string | null;
 }
 
-/** The pipeline steps the log names (runtime-commons pipeline spec 3.1); `label` and `index` are the hosted and later steps no local command runs yet. */
+/** The pipeline steps the log names (runtime-commons pipeline spec 3.1); `label` is the hosted step no local command runs yet; `index` is the hook-index write the nightly and manual runs log. */
 export const STEPS = ['deposit', 'verify', 'derive', 'label', 'index', 'recall'] as const;
 export type Step = (typeof STEPS)[number];
 

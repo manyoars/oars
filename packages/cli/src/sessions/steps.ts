@@ -159,6 +159,8 @@ export interface StepCounters {
   deposited: StepCounts;
   /** The newest ok derive's output, by type. */
   derived: StepCounts;
+  /** The newest ok index's output: the recurring signatures and projects it holds. */
+  indexed: StepCounts;
   /** The newest ok verify's `out`: invariants checked and passed, `cv-behind` sessions, and stuck steps. */
   verify: StepCounts | null;
   recall: { queries: number; matches: number };
@@ -176,6 +178,7 @@ export const stepCounters = (rows: readonly StepRow[]): StepCounters => {
   const deposited: StepCounts = {};
   const failures: StepCounts = {};
   let derived: StepCounts = {};
+  let indexed: StepCounts = {};
   let verify: StepCounts | null = null;
   const recall = { queries: 0, matches: 0 };
   for (const row of rows) {
@@ -188,6 +191,7 @@ export const stepCounters = (rows: readonly StepRow[]): StepCounters => {
     if (row.status !== 'ok') continue;
     if (row.step === 'deposit') for (const [kind, count] of Object.entries(row.out)) add(deposited, kind, count);
     if (row.step === 'derive') derived = row.out;
+    if (row.step === 'index') indexed = row.out;
     if (row.step === 'verify') verify = row.out;
     if (row.step === 'recall') {
       recall.queries += 1;
@@ -195,7 +199,7 @@ export const stepCounters = (rows: readonly StepRow[]): StepCounters => {
     }
   }
   const steps = [...lines.values()].map((line): StepLine => ({ step: line.step, ev: line.ev, runs: line.runs, ok: line.ok, error: line.error, skipped: line.skipped, meanMs: line.runs === line.skipped ? 0 : Math.round(line.ms / (line.runs - line.skipped)) }));
-  return { runs: rows.length, steps, deposited, derived, verify, recall, failures, stuck: stuckSteps(rows) };
+  return { runs: rows.length, steps, deposited, derived, indexed, verify, recall, failures, stuck: stuckSteps(rows) };
 };
 
 export const formatStepCounters = (counters: StepCounters): string => {
@@ -208,6 +212,7 @@ export const formatStepCounters = (counters: StepCounters): string => {
     ...counters.steps.flatMap((line) => [row(`${line.step}@${line.ev} runs (ok/error/skipped)`, `${String(line.ok)}/${String(line.error)}/${String(line.skipped)}`), row(`${line.step}@${line.ev} mean ms`, String(line.meanMs))]),
     ...by('records deposited,', counters.deposited),
     ...by('records derived,', counters.derived),
+    ...by('index holds,', counters.indexed),
     ...(verify === null ? [] : [row('invariants passed of checked', `${String(verify.passed ?? 0)}/${String(verify.checked ?? 0)}`), row('cv-behind sessions', String(verify.cvBehind ?? 0))]),
     ...(counters.recall.queries === 0 ? [] : [row('recall queries', String(counters.recall.queries)), row('recall matches', String(counters.recall.matches))]),
     ...by('failed runs,', counters.failures),
@@ -219,15 +224,20 @@ export const formatStepCounters = (counters: StepCounters): string => {
 /** A key built from its inputs and `ev` (spec 4.2), hashed; a recall has none in the spec (a lookup writes nothing), so its query is the input. */
 export const stampKey = (...parts: readonly string[]): string => digest([EXTRACTOR_VERSION, ...parts]);
 
-/** A deposit's key from its inputs (spec 4.2 reads the files' state, which is not known before the work): the trigger, the allow entries or transcript asked for, and the redact domains. */
-export const inputKey = (trigger: Trigger, requested: readonly string[], domains: readonly string[]): string => stampKey(trigger, ...[...requested].sort(), '--', ...[...domains].sort());
+/**
+ * A deposit's key from its inputs (spec 4.2 names the files' state, which is not known before the work): `cv`, `ev`, the trigger, the allow
+ * entries or transcript asked for, and the redact domains. The `stop` hook passes no domains (it reads none), so its key has none.
+ */
+export const inputKey = (trigger: Trigger, requested: readonly string[], domains: readonly string[]): string =>
+  digest([CAPTURE_VERSION, EXTRACTOR_VERSION, trigger, ...[...requested].sort(), '--', ...[...domains].sort()]);
 
 /**
  * Runs a deposit and logs its rows: `deposit` with the records it wrote by kind, then, when it ended with the whole-store pass,
- * `derive` (spec 4.1: one derive row per nightly or manual run). `key` is built from the deposit's inputs (the trigger and the transcripts
+ * `derive` and `index` (spec 4.1: one row per step at a nightly or manual run). `key` is built from the deposit's inputs (the trigger and the transcripts
  * it was asked to deposit), so the failed row and the ok row of one deposit carry the same key and a failure that recovers is not stuck.
- * A deposit that fails logs `error` and, when a derive was to follow, `skipped` for it (spec 4.4). A derive that fails after the deposit
- * wrote its records logs `deposit` ok and then `derive` error, and the failure goes on to the caller. The SessionEnd hook runs
+ * A deposit that fails logs `error` and, when a derive was to follow, `skipped` for it and for the index (spec 4.4). A derive that fails
+ * after the deposit wrote its records logs `deposit` ok, `derive` error, and `index` skipped; an index that fails logs `derive` ok and then
+ * `index` error; the failure goes on to the caller. The SessionEnd hook runs
  * `withDerive` false: derive follows at the nightly run.
  */
 export const runDeposit = async <T>(context: StepContext, withDerive: boolean, key: string, work: (trace: DepositTrace) => Promise<{ value: T; in: StepCounts }>): Promise<T> => {
@@ -240,16 +250,29 @@ export const runDeposit = async <T>(context: StepContext, withDerive: boolean, k
     // A usage error is the operator's mistake, not a failed run of the step: no row, so repeating it is never "stuck".
     if (error instanceof CliError && error.exitCode === ExitCode.USAGE) throw error;
     await logFailure(context, 'deposit', performance.now() - started, key, error);
-    if (withDerive) await tryLog(() => logSkipped(context, 'derive'));
+    if (withDerive) {
+      await tryLog(() => logSkipped(context, 'derive'));
+      await tryLog(() => logSkipped(context, 'index'));
+    }
     throw error;
   }
   const derive = trace.derive;
   const failure = trace.deriveFailure;
-  await tryLog(() => logStep(context, 'deposit', 'ok', performance.now() - started - (derive?.ms ?? failure?.ms ?? 0), { in: done.in, out: trace.kinds, key }, null));
+  const index = trace.index;
+  const indexFailure = trace.indexFailure;
+  // The deposit row keeps its own time: the derive and index passes ran inside its work and have rows of their own.
+  const passes = (derive?.ms ?? failure?.ms ?? 0) + (index?.ms ?? indexFailure?.ms ?? 0);
+  await tryLog(() => logStep(context, 'deposit', 'ok', performance.now() - started - passes, { in: done.in, out: trace.kinds, key }, null));
   if (derive !== undefined) await tryLog(() => logStep(context, 'derive', 'ok', derive.ms, { in: derive.in, out: derive.out, key: derive.key }, null));
   if (failure !== undefined) {
     await logFailure(context, 'derive', failure.ms, failure.key, failure.error);
+    await tryLog(() => logSkipped(context, 'index'));
     throw failure.error;
+  }
+  if (index !== undefined) await tryLog(() => logStep(context, 'index', 'ok', index.ms, { in: index.in, out: index.out, key: index.key }, null));
+  if (indexFailure !== undefined) {
+    await logFailure(context, 'index', indexFailure.ms, indexFailure.key, indexFailure.error);
+    throw indexFailure.error;
   }
   return done.value;
 };

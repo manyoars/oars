@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type * as HookIndex from './hook-index.js';
 import { runHook } from './hooks.js';
@@ -21,5 +23,9 @@ describe('a lookup hook that fails', () => {
     expect(rows[0]?.error).toContain('cannot read the index');
     expect(rows[0]?.error).not.toContain('dev@corp.example');
     expect(rows[0]?.key).toMatch(/^[0-9a-f]{16}$/);
+    // The hook-calls line beside it is masked the same way (it used to keep the raw first line).
+    const calls = readFileSync(join(staged.storeDir, 'hook-calls.jsonl'), 'utf8');
+    expect(calls).toContain('cannot read the index');
+    expect(calls).not.toContain('dev@corp.example');
   });
 });

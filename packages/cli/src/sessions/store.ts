@@ -370,10 +370,14 @@ export interface DeriveTrace {
 export interface DepositTrace {
   /** Records written, by kind: `session` (main), `subagent`, `user-prompt`, `tool`, `error-line`. */
   kinds: StepCounts;
-  /** The derive pass a whole-store deposit ends with. */
+  /** The derive pass a whole-store deposit ends with (the index pass follows it: `index`). */
   derive?: DeriveTrace;
   /** A derive pass that failed after the deposit's records and `state.json` were written: the caller logs `deposit` ok and `derive` error, then rethrows. */
   deriveFailure?: { error: unknown; key: string; ms: number };
+  /** The index pass after a derive that succeeded: its own step (spec 3.1), run at the nightly and manual runs. */
+  index?: DeriveTrace;
+  /** An index pass that failed after the derive was written: the caller logs `derive` ok and `index` error, then rethrows. */
+  indexFailure?: { error: unknown; key: string; ms: number };
 }
 
 export const newTrace = (): DepositTrace => ({ kinds: {} });
@@ -394,21 +398,22 @@ const tally = (trace: DepositTrace | undefined, extract: Capture, subagent: bool
 export const digest = (parts: readonly string[]): string => createHash('sha256').update(parts.join('\n')).digest('hex').slice(0, 16);
 
 /**
- * Rewrites `derived.json` and the hook index from the whole store. With a trace, a failure here is recorded on it instead of thrown, so the
- * caller can log the deposit that already wrote its records and then the failed derive (spec 3.1: one row per step), and rethrow.
+ * Rewrites `derived.json` (the derive step), then the hook index (the index step), from the whole store. With a trace, a failure of
+ * either is recorded on it instead of thrown, so the caller can log the deposit that already wrote its records, then the failed step
+ * (spec 3.1: one row per step, a failed derive leaving the index skipped), and rethrow.
  */
 export const refresh = async (runtime: SessionsRuntime, redactDomains: readonly string[], at: string, trace?: DepositTrace): Promise<void> => {
   const started = performance.now();
   // The extractor version alone until the store is read: a derive that fails before the high-water mark is known still has a key (spec 4.4).
   let key = digest([EXTRACTOR_VERSION]);
+  let store: Store;
   try {
-    const store = await loadStore(runtime.storeDir);
-    // The key is the account's capture high-water mark (the highest rev of each session) and `ev` (spec 4.2).
+    store = await loadStore(runtime.storeDir);
+    // The key is the account's capture high-water mark (the highest rev of each session) and `ev` (spec 4.2); the index shares it.
     const highWater = [...store.sessions, ...store.subagents].map((session) => `${session.session}:${String(session.rev)}`).sort();
     key = digest([EXTRACTOR_VERSION, ...highWater]);
     const derived = derive(store, at);
     await writeAtomic(paths(runtime.storeDir).derived, JSON.stringify(derived));
-    await writeAtomic(indexPath(runtime.storeDir), JSON.stringify(buildIndex(store, redactDomains, at)));
     if (trace !== undefined) {
       trace.derive = {
         ms: Math.round(performance.now() - started),
@@ -420,6 +425,23 @@ export const refresh = async (runtime: SessionsRuntime, redactDomains: readonly 
   } catch (error) {
     if (trace === undefined) throw error;
     trace.deriveFailure = { error, key, ms: Math.round(performance.now() - started) };
+    return;
+  }
+  const indexStarted = performance.now();
+  try {
+    const index = buildIndex(store, redactDomains, at);
+    await writeAtomic(indexPath(runtime.storeDir), JSON.stringify(index));
+    if (trace !== undefined) {
+      trace.index = {
+        ms: Math.round(performance.now() - indexStarted),
+        in: { session: store.sessions.length, subagent: store.subagents.length, error: store.errors.length },
+        out: { signature: Object.keys(index.signatures).length, project: Object.keys(index.projects).length },
+        key,
+      };
+    }
+  } catch (error) {
+    if (trace === undefined) throw error;
+    trace.indexFailure = { error, key, ms: Math.round(performance.now() - indexStarted) };
   }
 };
 
