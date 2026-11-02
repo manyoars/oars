@@ -161,7 +161,7 @@ transcripts`, each with one example session.
 
 The skeleton's cost state records, per `modelUsage` model (sorted by name), the usage keys its entry reported a nonzero amount on: `input`,
 `cacheWrite`, `cacheRead`, `output`. A side model whose cache keys are absent or zero (the haiku case) therefore explains an
-excess on those two keys, and an excess on `cacheRead` stays `other`. The field is additive inside `CAPTURE_VERSION` 4, with no bump:
+excess only on `input` and `output`, and an excess on `cacheRead` stays `other`. The field is additive inside `CAPTURE_VERSION` 4, with no bump:
 it changes no captured record, only the skeleton's cost state, and no transcript is re-read for it. The compatibility reader fills a
 skeleton written without it (a bare model name, or no `models`) with no keys, so that skeleton's excess keys fall under `other` until
 the session is captured again. Class A, with the rest of the skeleton lines (a pool would not hold them).

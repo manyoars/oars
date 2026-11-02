@@ -124,7 +124,7 @@ const sumUsage = (lines: readonly SkeletonLine[], since: number): Sums => {
  * (from `startTime`, so a resumed session's earlier lines are outside) and include the session's subagent transcripts. Within
  * that scope the recorded usage must equal the totals, and a sum above them fails. A total above the sum is not a failure: the
  * harness also counts side calls no transcript records (001cf645's `modelUsage` has a `claude-haiku` entry and no assistant line
- * of that model), so it is reported as observed, under that class on a key such a model reported, else under `other`.
+ * of that model), so it is reported as observed, under that class on a key such a model reported a nonzero amount on, else under `other`.
  * A check that holds only once a scope is applied is counted under that scope.
  */
 const verifyCost = (lines: readonly SkeletonLine[], delegated: readonly SkeletonLine[], session: string): InvariantResult => {
