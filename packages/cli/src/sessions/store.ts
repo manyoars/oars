@@ -605,7 +605,7 @@ const noteUnreadable = (root: string, error: unknown, result: DepositResult): vo
  * `state.json` like a file's size and mtime, so a second deposit adds nothing until Cursor writes the session again. The store is opened
  * read-only and a missing one is skipped silently. Nothing is archived: there is no transcript file to link, only the database.
  */
-const readCursor = async (context: DepositContext, root: string, result: DepositResult, trace: DepositTrace): Promise<void> => {
+const readCursor = async (context: DepositContext, root: string, result: DepositResult, trace: DepositTrace | undefined): Promise<void> => {
   // The Cursor source fails open per source, and only its own read is guarded: the store's write failures (a full disk) propagate as they
   // do on the Claude Code path instead of blaming the Cursor file.
   let source: CursorStore | undefined;
