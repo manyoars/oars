@@ -6,8 +6,10 @@ import { CliError, ExitCode } from '../errors.js';
 import { sessionsContext, sessionsDeposit, sessionsMeasure, sessionsRecall, sessionsVerify, type SessionsDeps } from './command.js';
 import { runHook } from './hooks.js';
 import { slugOf } from './allow.js';
+import { signatureOf } from './extract.js';
+import { makeRedactor } from './redact.js';
 import { CAPTURE_VERSION, EXTRACTOR_VERSION, parseStepRow, type StepRow } from './schema.js';
-import { formatStepCounters, inputKey, newContext, readSteps, runDeposit, runStep, stampKey, stepCounters, stuckSteps } from './steps.js';
+import { formatStepCounters, inputKey, newContext, readSteps, runDeposit, runStep, stepCounters, stuckSteps } from './steps.js';
 import type { RecallQuery } from './query.js';
 import { deposit, digest, loadStore, newTrace, refresh } from './store.js';
 import { cleanup, FIXTURES, NOW, stage, type Staged } from './test-support.js';
@@ -156,6 +158,23 @@ describe('the steps each command logs', () => {
     expect(verified[0]?.out.stuck).toBe(0);
     expect(verified[0]?.in).toEqual({ session: 4, subagent: 0 });
     expect(outcome.document).toMatchObject({ stuck: [] });
+    // The key is the sessions checked, each at its rev and cv, and `ev` (spec 4.2); `--session` narrows it to that session's entries.
+    // Written in reverse, so the key's sort is what orders it, not the file.
+    const file = join(staged.storeDir, 'observations.jsonl');
+    writeFileSync(file, `${readFileSync(file, 'utf8').trimEnd().split('\n').reverse().join('\n')}\n`);
+    await sessionsVerify(depsOf(staged), { session: undefined });
+    const store = await loadStore(staged.storeDir);
+    const entriesKey = (entries: readonly { session: string; rev: number; cv: string }[]): string =>
+      digest([EXTRACTOR_VERSION, ...entries.map((entry) => `${entry.session}:${String(entry.rev)}:${entry.cv}`).sort()]);
+    const reversed = (await readSteps(staged.storeDir)).filter((entry) => entry.step === 'verify').at(-1);
+    expect(reversed?.key).toBe(entriesKey([...store.sessions, ...store.subagents]));
+    expect(reversed?.key).toBe(verified[0]?.key);
+    const only = store.sessions[0];
+    if (only === undefined) throw new Error('fixture has no session');
+    await sessionsVerify(depsOf(staged), { session: only.session });
+    const narrowed = (await readSteps(staged.storeDir)).filter((entry) => entry.step === 'verify').at(-1);
+    expect(narrowed?.key).toBe(entriesKey([only]));
+    expect(narrowed?.key).not.toBe(verified[0]?.key);
   });
 
   it('verify counts a session captured at an older capture version as cv-behind', async () => {
@@ -298,13 +317,25 @@ describe('the steps each hook logs', () => {
     expect(rows[0]?.key).not.toBe(rows[1]?.key);
   });
 
+  it('the deposit key sorts the requested inputs and the domains', () => {
+    expect(inputKey('manual', ['b', 'a'], ['y.example', 'x.example'])).toBe(digest([CAPTURE_VERSION, EXTRACTOR_VERSION, 'manual', 'a', 'b', '--', 'x.example', 'y.example']));
+  });
+
+  it('the nightly key carries the saved redact domains', async () => {
+    const staged = stage(slugOf(REPO));
+    await deposit(staged.runtime, { allow: [REPO], redactDomains: ['corp.example'], now: () => NOW });
+    await runHook('nightly', '{}', staged.runtime, () => NOW);
+    const rows = await readSteps(staged.storeDir);
+    expect(rows[0]?.key).toBe(digest([CAPTURE_VERSION, EXTRACTOR_VERSION, 'nightly', REPO, '--', 'corp.example']));
+  });
+
   it('the nightly run appends a deposit, a derive, and an index row, trigger nightly; with nothing saved it logs nothing', async () => {
     const staged = await deposited();
     await runHook('nightly', '{}', staged.runtime, () => NOW);
     const rows = await readSteps(staged.storeDir);
     expect(rows.map((entry) => [entry.step, entry.trigger, entry.status])).toEqual([['deposit', 'nightly', 'ok'], ['derive', 'nightly', 'ok'], ['index', 'nightly', 'ok']]);
     expect(rows[0]?.run).toBe(rows[1]?.run);
-    expect(rows[0]?.key).toBe(inputKey('nightly', [REPO], []));
+    expect(rows[0]?.key).toBe(digest([CAPTURE_VERSION, EXTRACTOR_VERSION, 'nightly', REPO, '--']));
     const empty = stage();
     await runHook('nightly', '{}', empty.runtime, () => NOW);
     expect(await readSteps(empty.storeDir)).toEqual([]);
@@ -343,6 +374,9 @@ describe('the steps each hook logs', () => {
     expect(keys[3]).toBe(keys[4]);
     expect(keys[3]).not.toBe(keys[5]);
     expect(keys[0]).not.toBe(keys[3]);
+    // Literal inputs: the event and what was looked up (spec 4.2), so dropping either term goes red.
+    expect(keys[0]).toBe(digest([EXTRACTOR_VERSION, 'session-start', REPO]));
+    expect(keys[3]).toBe(digest([EXTRACTOR_VERSION, 'post-tool', signatureOf('Bash', 'Exit code 1\nboom one', makeRedactor([]))]));
   });
 
   it('a nightly that cannot read state.json logs a deposit error row and a skipped derive row, trigger nightly', async () => {
@@ -351,7 +385,7 @@ describe('the steps each hook logs', () => {
     await runHook('nightly', '{}', staged.runtime, () => NOW);
     const rows = (await readSteps(staged.storeDir)).slice(-3);
     expect(rows.map((entry) => [entry.step, entry.trigger, entry.status])).toEqual([['deposit', 'nightly', 'error'], ['derive', 'nightly', 'skipped'], ['index', 'nightly', 'skipped']]);
-    expect(rows[0]?.key).toBe(inputKey('nightly', [], []));
+    expect(rows[0]?.key).toBe(digest([CAPTURE_VERSION, EXTRACTOR_VERSION, 'nightly', '--']));
   });
 
   it('a lookup hook that read no index (nothing deposited yet) logs no recall row (a lookup that throws logs an error row: hooks-failure.test.ts)', async () => {
@@ -509,8 +543,8 @@ describe('a failed step and its key', () => {
     expect(await keyOf({ cls: 'no-tools', error: 'boom', path: 'b.ts', sinceDays: 7 })).not.toBe(base);
     expect(await keyOf({ cls: 'no-tools', error: 'boom', path: 'a.ts', sinceDays: 8 })).not.toBe(base);
     const verifies = rows.filter((entry) => entry.step === 'verify');
-    expect(verifies[0]?.key).toBe(stampKey('verify', 's1'));
-    expect(verifies[1]?.key).toBe(stampKey('verify', 's2'));
+    expect(verifies[0]?.key).toBe(digest([EXTRACTOR_VERSION, 'verify', 's1']));
+    expect(verifies[1]?.key).toBe(digest([EXTRACTOR_VERSION, 'verify', 's2']));
     expect(stuckSteps(rows).map((entry) => [entry.step, entry.key, entry.runs])).toEqual([['recall', recalls[0]?.key, 3]]);
   });
 
@@ -552,9 +586,9 @@ describe('recall --context, the deposit key, and the index step', () => {
     await sessionsContext(depsOf(staged), { ...contextOptions, harness: 'claude-code' });
     const rows = (await readSteps(staged.storeDir)).filter((entry) => entry.step === 'recall');
     expect(rows).toHaveLength(3);
-    expect(rows[0]).toMatchObject({ trigger: 'manual', status: 'ok', in: { query: 1 }, out: { matches: 1 }, key: stampKey('context', REPO, '') });
-    expect(rows[2]).toMatchObject({ out: { matches: 0 }, key: stampKey('context', REPO, 'claude-code') });
-    expect(rows[1]).toMatchObject({ out: { matches: 0 }, key: stampKey('context', join('work', 'nothing-here'), '') });
+    expect(rows[0]).toMatchObject({ trigger: 'manual', status: 'ok', in: { query: 1 }, out: { matches: 1 }, key: digest([EXTRACTOR_VERSION, 'context', REPO, '']) });
+    expect(rows[2]).toMatchObject({ out: { matches: 0 }, key: digest([EXTRACTOR_VERSION, 'context', REPO, 'claude-code']) });
+    expect(rows[1]).toMatchObject({ out: { matches: 0 }, key: digest([EXTRACTOR_VERSION, 'context', join('work', 'nothing-here'), '']) });
   });
 
   it('recall --context that cannot load the store logs an error row with that key, and three of them are stuck', async () => {
@@ -562,7 +596,7 @@ describe('recall --context, the deposit key, and the index step', () => {
     mkdirSync(join(staged.storeDir, 'observations.jsonl'), { recursive: true });
     for (let attempt = 0; attempt < 3; attempt += 1) await expect(sessionsContext(depsOf(staged), contextOptions)).rejects.toThrow();
     const rows = await readSteps(staged.storeDir);
-    expect(rows.map((entry) => [entry.step, entry.trigger, entry.status, entry.key])).toEqual(Array(3).fill(['recall', 'manual', 'error', stampKey('context', REPO, '')]));
+    expect(rows.map((entry) => [entry.step, entry.trigger, entry.status, entry.key])).toEqual(Array(3).fill(['recall', 'manual', 'error', digest([EXTRACTOR_VERSION, 'context', REPO, ''])]));
     expect(stuckSteps(rows).map((entry) => [entry.step, entry.runs])).toEqual([['recall', 3]]);
   });
 
