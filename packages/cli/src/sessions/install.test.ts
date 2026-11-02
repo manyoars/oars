@@ -178,6 +178,25 @@ describe('post-tool pre-filter', () => {
     expect(runCommand(`${JSON.stringify({ tool_name: 'Bash', error: 'The user rejected this tool call', hook_event_name: 'PostToolUseFailure' })}\n`)).toBe('');
     expect(runCommand('')).toBe('');
   }, 60_000);
+
+  it.skipIf(!available)('runs the pre-filter for an event with no Exit code in under 100 ms', () => {
+    const folder = scratch();
+    writeFileSync(join(folder, '-'), '');
+    const runtime = { ...runtimeIn(SCRATCH), nodePath: 'cat', hookBin: '-' };
+    const event = JSON.stringify({ tool_name: 'Bash', error: 'The user rejected this tool call', hook_event_name: 'PostToolUseFailure' });
+    // Timed inside the shell, so the spawn of the shell itself is not counted; the best of a few runs keeps a busy machine from failing it.
+    const script = `s=$EPOCHREALTIME; ( ${commandOf(runtime, 'post-tool')} ) >/dev/null; e=$EPOCHREALTIME; echo $(( (\${e/./} - \${s/./}) / 1000 ))`;
+    const times = [0, 1, 2].map(() => Number(spawnSync(shell, ['-c', script], { input: `${event}\n`, encoding: 'utf8', timeout: 30_000, cwd: folder }).stdout.trim()));
+    expect(Math.min(...times)).toBeLessThan(100);
+  }, 60_000);
+
+  it.skipIf(!available)('launches the hook when the hook-bin is an existing absolute path', () => {
+    const existing = join(scratch(), 'hook-bin.js');
+    writeFileSync(existing, '');
+    const runtime = { ...runtimeIn(SCRATCH), nodePath: 'echo', hookBin: existing };
+    const result = spawnSync(shell, ['-c', commandOf(runtime, 'session-start')], { input: '{}\n', encoding: 'utf8', timeout: 30_000 });
+    expect(result.stdout).toContain('session-start');
+  }, 60_000);
 });
 
 describe('absent hook-bin', () => {
@@ -271,6 +290,19 @@ describe('retention floor', () => {
     writeFileSync(runtime.userSettings, JSON.stringify({ cleanupPeriodDays: 90 }));
     await installHooks(runtime, file, false);
     expect((await readJson(file)).cleanupPeriodDays).toBe(365);
+  });
+
+  it('raises a lower value the target file sets itself, to the user value when that is larger', async () => {
+    const dir = scratch();
+    const runtime = runtimeIn(dir);
+    mkdirSync(join(dir, 'user'), { recursive: true });
+    writeFileSync(runtime.userSettings, JSON.stringify({ cleanupPeriodDays: 3650 }));
+    const file = join(dir, 'repo', '.claude', 'settings.json');
+    mkdirSync(join(dir, 'repo', '.claude'), { recursive: true });
+    writeFileSync(file, JSON.stringify({ cleanupPeriodDays: 30 }));
+    const result = await installHooks(runtime, file, false);
+    expect((await readJson(file)).cleanupPeriodDays).toBe(3650);
+    expect(result.retention).toContain('Raised cleanupPeriodDays from 30 to 3650');
   });
 
   it('reads the harness default when the file sets none', () => {

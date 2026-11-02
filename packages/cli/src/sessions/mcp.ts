@@ -62,7 +62,7 @@ export const handleMessage = async (runtime: SessionsRuntime, now: () => number,
     const query = toQuery(params.arguments);
     try {
       const result = recall(await loadStore(runtime.storeDir), query, now(), undefined, await readRedactDomains(runtime.storeDir));
-      const call: RecallCall = { at: new Date(now()).toISOString(), query: JSON.stringify(query), matches: result.matches.length };
+      const call: RecallCall = { at: new Date(now()).toISOString(), query: JSON.stringify(query), matches: result.matches.length, cwd: process.cwd() };
       await mkdir(runtime.storeDir, { recursive: true });
       await appendFile(paths(runtime.storeDir).calls, `${JSON.stringify(call)}\n`, { mode: 0o600 });
       return reply(id, { content: [{ type: 'text', text: formatRecall(result) }], structuredContent: result });

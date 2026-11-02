@@ -149,7 +149,9 @@ export const installHooks = async (runtime: InstallRuntime, path: string, keepRe
   const own = effectiveRetention(settings);
   // Only a value the user file sets counts: its unset default must not outrank a lower value written on purpose here.
   const userDays = path === runtime.userSettings ? undefined : (await readSettings(runtime.userSettings)).cleanupPeriodDays;
-  const inherited = typeof userDays === 'number' ? userDays : 0;
+  const userValue = typeof userDays === 'number' ? userDays : 0;
+  // A number this file sets overrides the user's, so the user's counts only when the file sets none.
+  const inherited = typeof settings.cleanupPeriodDays === 'number' ? 0 : userValue;
   const before = Math.max(own, inherited);
   const shown = inherited > own ? `${String(before)} (from ${runtime.userSettings})` : typeof settings.cleanupPeriodDays === 'number' ? String(before) : `${String(before)} (unset, the default)`;
   let retention: string;
@@ -158,8 +160,10 @@ export const installHooks = async (runtime: InstallRuntime, path: string, keepRe
   } else if (before >= RETENTION_FLOOR) {
     retention = `cleanupPeriodDays is ${shown} in ${path}, at or above the ${String(RETENTION_FLOOR)} floor; left as is.`;
   } else {
-    settings.cleanupPeriodDays = RETENTION_FLOOR;
-    retention = `Raised cleanupPeriodDays from ${shown} to ${String(RETENTION_FLOOR)} in ${path}.`;
+    // The file's own lower number overrides the user's, so write at least the user's value: never below what the user kept.
+    const written = Math.max(RETENTION_FLOOR, userValue);
+    settings.cleanupPeriodDays = written;
+    retention = `Raised cleanupPeriodDays from ${shown} to ${String(written)} in ${path}.`;
   }
   await writeSettings(path, settings);
   return { file: path, installed: SPECS.map((spec) => spec.event), retention };
