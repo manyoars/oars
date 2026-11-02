@@ -108,17 +108,27 @@ describe('the steps each command logs', () => {
     expect(rows[0]?.ev).toBe(EXTRACTOR_VERSION);
     expect(rows[0]?.at).toBe('2026-06-10T00:00:00.000Z');
     expect(rows[0]?.out).toEqual({ session: 4, 'user-prompt': 7, tool: 18, 'error-line': 6 });
-    expect(rows[0]?.in.transcript).toBeGreaterThan(0);
-    expect(rows[1]?.out.summary).toBe(rows[0]?.out.session);
-    expect(rows[1]?.in.session).toBe(rows[0]?.out.session);
+    expect(rows[0]?.in).toEqual({ transcript: 4 });
+    expect(rows[1]?.in).toEqual({ session: 4, subagent: 0, 'user-prompt': 7, tool: 18 });
+    expect(rows[1]?.out).toEqual({ signature: 5, summary: 4 });
     // A second deposit with nothing changed has the same deposit key, so the repeat is visible, and writes nothing.
     await sessionsDeposit(depsOf(staged), { allow: ['proj'], allowFiles: [], redactDomains: [] });
     const again = await readSteps(staged.storeDir);
     expect(again).toHaveLength(6);
     expect(again[3]?.key).toBe(rows[0]?.key);
+    expect(again[3]?.in).toEqual({ transcript: 4 });
     expect(again[3]?.out).toEqual({});
     expect(again[4]?.key).toBe(rows[1]?.key);
     expect(again[5]?.key).toBe(rows[2]?.key);
+  });
+
+  it('the --allow-file entries are part of the deposit key', async () => {
+    const staged = stage();
+    const file = join(staged.projectsRoot, 'allow.txt');
+    writeFileSync(file, 'proj');
+    await sessionsDeposit(depsOf(staged), { allow: [], allowFiles: [file], redactDomains: [] });
+    const rows = await readSteps(staged.storeDir);
+    expect(rows[0]?.key).toBe(digest([CAPTURE_VERSION, EXTRACTOR_VERSION, 'manual', 'proj', '--']));
   });
 
   it('a failed manual deposit logs error with the first line and skips derive; the next run retries the same key', async () => {
@@ -259,6 +269,7 @@ describe('the steps each hook logs', () => {
     const rows = await readSteps(staged.storeDir);
     expect(rows.map((entry) => [entry.step, entry.trigger, entry.status])).toEqual([['deposit', 'stop', 'ok'], ['deposit', 'stop', 'ok']]);
     expect(rows[0]?.in).toEqual({ transcript: 1 });
+    expect(rows[0]?.key).toBe(digest([CAPTURE_VERSION, EXTRACTOR_VERSION, 'stop', transcript, '--']));
     expect(rows[0]?.out.session).toBe(1);
     expect(rows[1]?.out).toEqual({});
     expect(rows[1]?.key).toBe(rows[0]?.key);
@@ -336,9 +347,24 @@ describe('the steps each hook logs', () => {
     expect(rows.map((entry) => [entry.step, entry.trigger, entry.status])).toEqual([['deposit', 'nightly', 'ok'], ['derive', 'nightly', 'ok'], ['index', 'nightly', 'ok']]);
     expect(rows[0]?.run).toBe(rows[1]?.run);
     expect(rows[0]?.key).toBe(digest([CAPTURE_VERSION, EXTRACTOR_VERSION, 'nightly', REPO, '--']));
+    expect(rows[0]?.in).toEqual({ transcript: 4 });
     const empty = stage();
     await runHook('nightly', '{}', empty.runtime, () => NOW);
     expect(await readSteps(empty.storeDir)).toEqual([]);
+  });
+
+  it('the nightly deposit counts a changed subagent transcript in its transcript input', async () => {
+    const staged = stage();
+    const parent = join(staged.projectsRoot, 'proj', 'errors-a', 'subagents');
+    mkdirSync(parent, { recursive: true });
+    const agent = join(parent, 'agent-x.jsonl');
+    copyFileSync(join(FIXTURES, 'proj', 'sidechain.jsonl'), agent);
+    await sessionsDeposit(depsOf(staged), { allow: ['proj'], allowFiles: [], redactDomains: [] });
+    appendFileSync(agent, readFileSync(join(FIXTURES, 'proj', 'sidechain.jsonl')));
+    await runHook('nightly', '{}', staged.runtime, () => NOW);
+    const nightly = (await readSteps(staged.storeDir)).filter((entry) => entry.trigger === 'nightly' && entry.step === 'deposit');
+    expect(nightly[0]?.out.subagent).toBe(1);
+    expect(nightly[0]?.in).toEqual({ transcript: 5 });
   });
 
   it('the lookup hooks append a recall row with their own trigger', async () => {
@@ -656,6 +682,7 @@ describe('recall --context, the deposit key, and the index step', () => {
     const first = all.find((entry) => entry.step === 'deposit');
     expect(first?.out.subagent).toBe(1);
     expect(first?.out.session).toBe(4);
+    expect(first?.in).toEqual({ transcript: 5 });
     const verifies = all.filter((entry) => entry.step === 'verify');
     expect(verifies).toHaveLength(2);
     expect(verifies[1]?.key).not.toBe(verifies[0]?.key);
