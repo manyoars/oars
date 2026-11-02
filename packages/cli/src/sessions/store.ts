@@ -186,6 +186,8 @@ export interface DepositResult {
   subagents: number;
   /** Of `sessions`, the Cursor composer sessions parsed this run; 0 when the Cursor source is not allowed or absent. */
   cursor: number;
+  /** Why the Cursor store could not be read this run (locked, corrupt, or from a Cursor version this reader does not know); empty when it was read or absent. */
+  cursorUnreadable: string[];
   /** Project folders under the projects root that are not on the allowlist, so were not opened. */
   skippedFolders: number;
   /** The allowed folders that exist under the projects root. */
@@ -448,7 +450,7 @@ const depositLocked = async (runtime: SessionsRuntime, options: DepositOptions):
   const allow = compileAllow(options.allow);
   const folders = await projectFolders(runtime.projectsRoot);
   const allowed = folders.filter((name) => allow.allows(name));
-  const missing = allow.unmatched(folders);
+  const missing = allow.unmatched(runtime.cursorRoot === undefined ? folders : [...folders, CURSOR_SOURCE]);
   const state = await readState(runtime.storeDir);
   refuseNewer(state);
   // A log written by a newer oars is refused even when state.json is older or lost; the Stop-hook path reads only state.json.
@@ -465,6 +467,7 @@ const depositLocked = async (runtime: SessionsRuntime, options: DepositOptions):
     observations: 0,
     subagents: 0,
     cursor: 0,
+    cursorUnreadable: [],
     skippedFolders: folders.length - allowed.length,
     folders: allowed,
     missing,
@@ -504,6 +507,15 @@ const CURSOR_SOURCE = 'cursor';
  * read-only and a missing one is skipped silently. Nothing is archived: there is no transcript file to link, only the database.
  */
 const depositCursor = async (context: DepositContext, root: string, result: DepositResult): Promise<void> => {
+  // The Cursor source fails open per source: an unreadable store is reported and the Claude Code path still finishes and writes state.json.
+  try {
+    await readCursor(context, root, result);
+  } catch (error) {
+    result.cursorUnreadable.push(`${join(root, 'globalStorage', 'state.vscdb')}: ${error instanceof Error ? error.message : String(error)}`);
+  }
+};
+
+const readCursor = async (context: DepositContext, root: string, result: DepositResult): Promise<void> => {
   const source = await openCursorStore(root);
   if (source === undefined) return;
   try {

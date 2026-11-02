@@ -4,6 +4,7 @@
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { defaultConfigDir } from './credentials.js';
+import { cursorRoot } from './sessions/cursor.js';
 import { HOOK_EVENTS, runHook, type HookEvent } from './sessions/hooks.js';
 
 const readStdin = async (): Promise<string> => {
@@ -24,6 +25,8 @@ try {
       {
         storeDir: join(defaultConfigDir(process.env, process.platform, homedir()), 'oars', 'sessions'),
         projectsRoot: join(process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), '.claude'), 'projects'),
+        // Only the nightly task reads the Cursor store (a saved `--allow cursor`); the Stop hook stays free of it.
+        ...(event === 'nightly' ? { cursorRoot: cursorRoot(process.platform, process.env) } : {}),
         stdin: process.stdin,
         stdout: process.stdout,
       },

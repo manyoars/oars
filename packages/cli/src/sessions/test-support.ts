@@ -162,3 +162,36 @@ export const composers = (repo: string, plain: string): FixtureComposer[] => [
   },
 ];
 
+
+/** A hand-built Cursor store for shapes `stageCursor` does not write: a `.code-workspace`, a remote folder, an inline `conversation`, a torn workspace store. */
+export interface RawWorkspace {
+  /** The `workspace.json` document. */
+  json: unknown;
+  /** Composer ids the workspace store lists; absent writes a file that is not a database. */
+  listed?: string[];
+}
+
+export const stageRawCursor = async (root: string, composerDocs: readonly { id: string; document: unknown }[], workspaces: readonly RawWorkspace[]): Promise<string> => {
+  const { DatabaseSync } = await import('node:sqlite');
+  const user = join(root, 'Cursor', 'User');
+  mkdirSync(join(user, 'globalStorage'), { recursive: true });
+  const global = new DatabaseSync(join(user, 'globalStorage', 'state.vscdb'));
+  global.exec('create table cursorDiskKV (key text unique on conflict replace, value blob)');
+  const put = global.prepare('insert into cursorDiskKV (key, value) values (?, ?)');
+  for (const composer of composerDocs) put.run(`composerData:${composer.id}`, JSON.stringify(composer.document));
+  global.close();
+  workspaces.forEach((workspace, index) => {
+    const dir = join(user, 'workspaceStorage', `raw${String(index)}`);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, 'workspace.json'), JSON.stringify(workspace.json));
+    if (workspace.listed === undefined) {
+      writeFileSync(join(dir, 'state.vscdb'), 'this is not a database');
+      return;
+    }
+    const db = new DatabaseSync(join(dir, 'state.vscdb'));
+    db.exec('create table ItemTable (key text unique on conflict replace, value blob)');
+    db.prepare('insert into ItemTable (key, value) values (?, ?)').run('composer.composerData', JSON.stringify({ allComposers: workspace.listed.map((composerId) => ({ composerId })) }));
+    db.close();
+  });
+  return user;
+};

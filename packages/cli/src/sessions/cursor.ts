@@ -107,7 +107,13 @@ const folderOf = (workspace: unknown): string | null => {
   if (!isObj(workspace)) return null;
   const uri = str(workspace.folder) ?? str(workspace.workspace);
   if (uri === undefined || !uri.startsWith('file:')) return null;
-  const path = fileURLToPath(uri);
+  let path: string;
+  try {
+    path = fileURLToPath(uri);
+  } catch {
+    // A `file:` URI that names no path on this platform (a POSIX path on Windows, a host that is not local) has no folder here.
+    return null;
+  }
   // A `.code-workspace` file stands for its folder.
   return str(workspace.folder) === undefined ? join(path, '..') : path;
 };
@@ -126,7 +132,13 @@ const workspaceFolders = async (root: string): Promise<Map<string, string>> => {
     if (!existsSync(join(dir, 'workspace.json')) || !existsSync(join(dir, 'state.vscdb'))) continue;
     const folder = folderOf(parse(await readFile(join(dir, 'workspace.json'), 'utf8')));
     if (folder === null) continue;
-    const db = await open(join(dir, 'state.vscdb'));
+    // A workspace store that cannot be read (locked, corrupt) only leaves its sessions without a folder.
+    let db: Database;
+    try {
+      db = await open(join(dir, 'state.vscdb'));
+    } catch {
+      continue;
+    }
     try {
       const row = db.prepare("select cast(value as text) as v from ItemTable where key = 'composer.composerData'").get();
       const listed = parse(row?.v);
@@ -135,6 +147,8 @@ const workspaceFolders = async (root: string): Promise<Map<string, string>> => {
         const id = isObj(entry) ? str(entry.composerId) : undefined;
         if (id !== undefined && !folders.has(id)) folders.set(id, folder);
       }
+    } catch {
+      continue;
     } finally {
       db.close();
     }
@@ -193,7 +207,7 @@ const linesOf = (bubble: Bubble, base: Obj, at: string, model: string | undefine
   const message: Obj = { role: 'assistant', id: bubble.id, content };
   // A zero count means Cursor did not record one, so no usage is written rather than a measured zero.
   if (input > 0 || output > 0) message.usage = { input_tokens: input, output_tokens: output };
-  const lines: Obj[] = [{ ...base, type: 'assistant', uuid: bubble.id, timestamp: at, ...(model === undefined ? {} : { requestedModel: model }), message }];
+  const lines: Obj[] = [{ ...base, type: 'assistant', uuid: bubble.id, requestId: bubble.id, timestamp: at, ...(model === undefined ? {} : { requestedModel: model }), message }];
   if (call !== undefined && name !== undefined && (call.status === 'error' || call.status === 'completed')) {
     const failed = call.status === 'error';
     lines.push({
@@ -204,7 +218,8 @@ const linesOf = (bubble: Bubble, base: Obj, at: string, model: string | undefine
       message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: callId, is_error: failed, content: failed ? (str(call.error) ?? str(call.result) ?? 'error') : '' }] },
     });
   }
-  return content.length === 0 ? [] : lines;
+  // A bubble with token counts but no text or tool call still carries usage, so it is kept.
+  return content.length === 0 && message.usage === undefined ? [] : lines;
 };
 
 /** Opens the Cursor store under `root`; undefined when it holds no global store, so a machine without Cursor is skipped silently. */
@@ -212,9 +227,47 @@ export const openCursorStore = async (root: string): Promise<CursorStore | undef
   const globalFile = join(root, 'globalStorage', 'state.vscdb');
   if (!existsSync(globalFile)) return undefined;
   const db = await open(globalFile);
-  const folders = await workspaceFolders(root);
   const composers = new Map<string, Obj>();
   const sessions: CursorSession[] = [];
+  try {
+    await collect(db, root, composers, sessions);
+  } catch (error) {
+    db.close();
+    throw error;
+  }
+  return {
+    sessions,
+    close: () => {
+      db.close();
+    },
+    transcript: (session) => {
+      const composer = composers.get(session.composerId) ?? {};
+      const modelConfig = isObj(composer.modelConfig) ? composer.modelConfig : {};
+      const base: Obj = { sessionId: session.composerId, ...(session.folder === null ? {} : { cwd: session.folder }) };
+      const bubbles = bubblesOf(db, session.composerId, composer);
+      const stamped = (bubble: Bubble): string | undefined => {
+        const own = str(bubble.document.createdAt);
+        return own !== undefined && !Number.isNaN(Date.parse(own)) ? own : undefined;
+      };
+      // Cursor does not keep bubble times in order (14 of 9,712 lines in the 2026-11-02 copy ran backward), and the store's own timestamp
+      // invariant holds that time never steps back: a bubble earlier than the one before it takes the one before it. The session starts at
+      // its first stamped bubble (the composer's `createdAt` only when none is stamped), so a bubble with no time never precedes a stamped one.
+      let at = bubbles.map(stamped).find((own) => own !== undefined) ?? iso(session.createdAt) ?? new Date(0).toISOString();
+      const lines: Obj[] = [];
+      for (const bubble of bubbles) {
+        const own = stamped(bubble);
+        if (own !== undefined && Date.parse(own) >= Date.parse(at)) at = own;
+        const info = isObj(bubble.document.modelInfo) ? bubble.document.modelInfo : {};
+        lines.push(...linesOf(bubble, base, at, str(info.modelName) ?? str(modelConfig.modelName)));
+      }
+      return lines.map((line) => JSON.stringify(line)).join('\n') + (lines.length === 0 ? '' : '\n');
+    },
+  };
+};
+
+/** Reads every composer session's header out of the global store; a throw leaves the caller to close `db`. */
+const collect = async (db: Database, root: string, composers: Map<string, Obj>, sessions: CursorSession[]): Promise<void> => {
+  const folders = await workspaceFolders(root);
   for (const row of db.prepare("select cast(key as text) as k, cast(value as text) as v from cursorDiskKV where key like 'composerData:%'").all()) {
     const composer = parse(row.v);
     if (!isObj(composer) || typeof row.k !== 'string') continue;
@@ -228,24 +281,4 @@ export const openCursorStore = async (root: string): Promise<CursorStore | undef
     sessions.push({ composerId, folder: folders.get(composerId) ?? null, createdAt, lastUpdatedAt: num(composer.lastUpdatedAt) ?? createdAt, messages: headers > 0 ? headers : inline });
   }
   sessions.sort((a, b) => a.createdAt - b.createdAt || a.composerId.localeCompare(b.composerId));
-  return {
-    sessions,
-    close: () => {
-      db.close();
-    },
-    transcript: (session) => {
-      const composer = composers.get(session.composerId) ?? {};
-      const modelConfig = isObj(composer.modelConfig) ? composer.modelConfig : {};
-      const base: Obj = { sessionId: session.composerId, ...(session.folder === null ? {} : { cwd: session.folder }) };
-      let at = iso(session.createdAt) ?? new Date(0).toISOString();
-      const lines: Obj[] = [];
-      for (const bubble of bubblesOf(db, session.composerId, composer)) {
-        const own = str(bubble.document.createdAt);
-        if (own !== undefined && !Number.isNaN(Date.parse(own))) at = own;
-        const info = isObj(bubble.document.modelInfo) ? bubble.document.modelInfo : {};
-        lines.push(...linesOf(bubble, base, at, str(info.modelName) ?? str(modelConfig.modelName)));
-      }
-      return lines.map((line) => JSON.stringify(line)).join('\n') + (lines.length === 0 ? '' : '\n');
-    },
-  };
 };

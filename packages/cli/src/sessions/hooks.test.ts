@@ -1,11 +1,12 @@
 import { appendFileSync, copyFileSync, mkdirSync, writeFileSync } from 'node:fs';
+import { rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { slugOf } from './allow.js';
 import { readHookCalls } from './hook-calls.js';
 import { runHook } from './hooks.js';
 import { deposit, depositSession, loadStore } from './store.js';
-import { cleanup, FIXTURES, NOW, stage, type Staged } from './test-support.js';
+import { cleanup, composers, FIXTURES, folders, NOW, stage, stageCursor, type Staged } from './test-support.js';
 
 afterEach(cleanup);
 
@@ -150,6 +151,21 @@ describe('SessionEnd deposit hook', () => {
 });
 
 describe('nightly run', () => {
+  it('deposits a saved cursor entry when the runtime names the Cursor store, and leaves it alone otherwise', async () => {
+    const staged = stage();
+    const { repo, plain } = folders(staged.root);
+    const user = await stageCursor(staged.root, composers(repo, plain));
+    await deposit({ ...staged.runtime, cursorRoot: user }, { allow: ['cursor'], redactDomains: [], now: () => NOW });
+    const before = (await loadStore(staged.storeDir)).sessions.length;
+    expect(before).toBe(3);
+    await rm(staged.storeDir, { recursive: true, force: true });
+    await deposit(staged.runtime, { allow: ['cursor'], redactDomains: [], now: () => NOW });
+    await runHook('nightly', '', staged.runtime, () => NOW);
+    expect((await loadStore(staged.storeDir)).sessions).toHaveLength(0);
+    await runHook('nightly', '', { ...staged.runtime, cursorRoot: user }, () => NOW);
+    expect((await loadStore(staged.storeDir)).sessions).toHaveLength(3);
+  });
+
   it('repeats the saved --allow and --redact-domain set, refreshes the index, and does nothing before a first deposit', async () => {
     const staged = await deposited();
     copyFileSync(join(FIXTURES, 'proj', 'tldr.jsonl'), join(staged.projectsRoot, slugOf(REPO), 'late.jsonl'));

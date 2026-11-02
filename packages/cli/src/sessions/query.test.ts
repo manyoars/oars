@@ -94,7 +94,7 @@ describe('measure', () => {
     const calls = [{ at: store.sessions[0]?.tsFirst ?? '', query: '{}', matches: 1 }];
     const result = measure(store, calls, [], 4);
     expect(result.last.recallPerSession).toBe(0.25);
-    expect(result.before).toEqual({ sessions: 0, recurringPer100: null, recurringSignatures: null, cacheWritePerSession: null, recallPerSession: null, hookRecallPerSession: null, hookHitsPerSession: null, hookDepositsPerSession: null });
+    expect(result.before).toEqual({ sessions: 0, cursorSessions: 0, recurringPer100: null, recurringSignatures: null, cacheWritePerSession: null, recallPerSession: null, hookRecallPerSession: null, hookHitsPerSession: null, hookDepositsPerSession: null });
     expect(formatMeasure(result)).toContain('-');
     expect(measure({ sessions: [], prompts: [], errors: [], subagents: [], tools: [], newerCaptures: 0 }, [], [], 5).last.sessions).toBe(0);
   });
