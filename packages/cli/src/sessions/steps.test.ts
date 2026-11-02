@@ -1,12 +1,13 @@
-import { appendFileSync, copyFileSync, mkdirSync, rmSync } from 'node:fs';
+import { appendFileSync, copyFileSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
+import { CliError, ExitCode } from '../errors.js';
 import { sessionsDeposit, sessionsMeasure, sessionsRecall, sessionsVerify, type SessionsDeps } from './command.js';
 import { runHook } from './hooks.js';
 import { slugOf } from './allow.js';
 import { CAPTURE_VERSION, EXTRACTOR_VERSION, parseStepRow, type StepRow } from './schema.js';
-import { formatStepCounters, newContext, readSteps, runStep, stampKey, stepCounters, stuckSteps } from './steps.js';
-import { deposit } from './store.js';
+import { formatStepCounters, inputKey, newContext, readSteps, runDeposit, runStep, stampKey, stepCounters, stuckSteps } from './steps.js';
+import { deposit, digest, newTrace, refresh } from './store.js';
 import { cleanup, FIXTURES, NOW, stage, type Staged } from './test-support.js';
 
 afterEach(cleanup);
@@ -30,6 +31,15 @@ const row = (patch: Partial<StepRow> = {}): StepRow => ({
   error: null,
   ...patch,
 });
+
+/** A real failure for every step that reads `state.json`: a directory where the file belongs. */
+const fixState = (staged: Staged): void => {
+  rmSync(join(staged.storeDir, 'state.json'), { recursive: true, force: true });
+};
+const breakState = (staged: Staged): void => {
+  fixState(staged);
+  mkdirSync(join(staged.storeDir, 'state.json'), { recursive: true });
+};
 
 const failed = (key: string, error: string, step: StepRow['step'] = 'deposit'): StepRow => row({ step, status: 'error', key, error, out: {} });
 
@@ -91,11 +101,12 @@ describe('the steps each command logs', () => {
 
   it('a failed manual deposit logs error with the first line and skips derive; the next run retries the same key', async () => {
     const staged = stage();
-    await expect(sessionsDeposit(depsOf(staged), { allow: [], allowFiles: [], redactDomains: [] })).rejects.toThrow('Nothing to read');
-    await expect(sessionsDeposit(depsOf(staged), { allow: [], allowFiles: [], redactDomains: [] })).rejects.toThrow('Nothing to read');
+    breakState(staged);
+    await expect(sessionsDeposit(depsOf(staged), { allow: ['proj'], allowFiles: [], redactDomains: [] })).rejects.toThrow('EISDIR');
+    await expect(sessionsDeposit(depsOf(staged), { allow: ['proj'], allowFiles: [], redactDomains: [] })).rejects.toThrow('EISDIR');
     const rows = await readSteps(staged.storeDir);
     expect(rows.map((entry) => [entry.step, entry.status])).toEqual([['deposit', 'error'], ['derive', 'skipped'], ['deposit', 'error'], ['derive', 'skipped']]);
-    expect(rows[0]?.error).toMatch(/^Nothing to read/);
+    expect(rows[0]?.error).toMatch(/^EISDIR/);
     expect(rows[0]?.error).not.toContain('\n');
     expect(rows[1]?.key).toBeNull();
     expect(rows[0]?.key).toBe(rows[2]?.key);
@@ -126,16 +137,31 @@ describe('the steps each command logs', () => {
     expect(outcome.document).toMatchObject({ stuck: [] });
   });
 
+  it('verify counts a session captured at an older capture version as cv-behind', async () => {
+    const staged = stage();
+    await sessionsDeposit(depsOf(staged), { allow: ['proj'], allowFiles: [], redactDomains: [] });
+    const file = join(staged.storeDir, 'observations.jsonl');
+    writeFileSync(file, readFileSync(file, 'utf8').replaceAll(`"cv":"${CAPTURE_VERSION}"`, `"cv":"${String(Number(CAPTURE_VERSION) - 1)}"`));
+    await sessionsVerify(depsOf(staged), { session: undefined });
+    expect((await readSteps(staged.storeDir)).filter((entry) => entry.step === 'verify').at(-1)?.out.cvBehind).toBeGreaterThan(0);
+  });
+
   it('verify counts a step whose key failed on three runs in a row as stuck, and names the step and the error', async () => {
     const staged = stage();
+    breakState(staged);
     for (let attempt = 0; attempt < 3; attempt += 1) {
-      await expect(sessionsDeposit(depsOf(staged), { allow: [], allowFiles: [], redactDomains: [] })).rejects.toThrow();
-      // Two failed runs are not yet stuck.
-      if (attempt === 1) expect((await sessionsVerify(depsOf(staged), { session: undefined })).document).toMatchObject({ stuck: [] });
+      await expect(sessionsDeposit(depsOf(staged), { allow: ['proj'], allowFiles: [], redactDomains: [] })).rejects.toThrow();
+      // Two failed runs are not yet stuck (verify reads state.json too, so it runs with the file repaired).
+      if (attempt === 1) {
+        fixState(staged);
+        expect((await sessionsVerify(depsOf(staged), { session: undefined })).document).toMatchObject({ stuck: [] });
+        breakState(staged);
+      }
     }
+    fixState(staged);
     const outcome = await sessionsVerify(depsOf(staged), { session: undefined });
     expect(outcome.document).toMatchObject({ stuck: [{ step: 'deposit', runs: 3 }] });
-    expect(outcome.text).toMatch(/FAIL {2}deposit is stuck: key [0-9a-f]{16} failed 3 runs in a row: Nothing to read/);
+    expect(outcome.text).toMatch(/FAIL {2}deposit is stuck: key [0-9a-f]{16} failed 3 runs in a row: EISDIR/);
     const last = (await readSteps(staged.storeDir)).filter((entry) => entry.step === 'verify').at(-1);
     expect(last?.out.stuck).toBe(1);
   });
@@ -257,6 +283,29 @@ describe('the steps each hook logs', () => {
     expect(keys[0]).not.toBe(keys[3]);
   });
 
+  it('a nightly that cannot read state.json logs a deposit error row and a skipped derive row, trigger nightly', async () => {
+    const staged = await deposited();
+    breakState(staged);
+    await runHook('nightly', '{}', staged.runtime, () => NOW);
+    const rows = (await readSteps(staged.storeDir)).slice(-2);
+    expect(rows.map((entry) => [entry.step, entry.trigger, entry.status])).toEqual([['deposit', 'nightly', 'error'], ['derive', 'nightly', 'skipped']]);
+    expect(rows[0]?.key).toBe(inputKey('nightly', [], []));
+  });
+
+  it('a lookup hook that read no index (nothing deposited yet) logs no recall row (a read that failed logs an error row: hooks-failure.test.ts)', async () => {
+    const staged = stage();
+    await runHook('session-start', JSON.stringify({ session_id: 's1', cwd: REPO }), staged.runtime, () => NOW);
+    await runHook('post-tool', JSON.stringify({ session_id: 's1', tool_name: 'Bash', error: 'Exit code 1' + String.fromCharCode(10) + 'boom' }), staged.runtime, () => NOW);
+    expect(await readSteps(staged.storeDir)).toEqual([]);
+  });
+
+  it('a broken hook-calls.jsonl does not cost the recall row', async () => {
+    const staged = await deposited();
+    mkdirSync(join(staged.storeDir, 'hook-calls.jsonl'), { recursive: true });
+    await runHook('session-start', JSON.stringify({ session_id: 's1', cwd: REPO }), staged.runtime, () => NOW);
+    expect((await readSteps(staged.storeDir)).map((entry) => [entry.step, entry.status])).toEqual([['recall', 'ok']]);
+  });
+
   it('a lookup hook that had nothing to look up (no cwd, no tool or failure text) logs no recall row', async () => {
     const staged = await deposited();
     await runHook('session-start', JSON.stringify({ session_id: 's1' }), staged.runtime, () => NOW);
@@ -272,13 +321,59 @@ describe('a failed step and its key', () => {
 
   it('three failed deposits and then a good one leave nothing stuck, in the verify document and in its row', async () => {
     const staged = stage();
-    for (let attempt = 0; attempt < 3; attempt += 1) await expect(sessionsDeposit(depsOf(staged), nothing)).rejects.toThrow('Nothing to read');
+    breakState(staged);
+    for (let attempt = 0; attempt < 3; attempt += 1) await expect(sessionsDeposit(depsOf(staged), good)).rejects.toThrow('EISDIR');
+    fixState(staged);
     expect((await sessionsVerify(depsOf(staged), { session: undefined })).document).toMatchObject({ stuck: [{ step: 'deposit', runs: 3 }] });
     await sessionsDeposit(depsOf(staged), good);
     const outcome = await sessionsVerify(depsOf(staged), { session: undefined });
     expect(outcome.document).toMatchObject({ stuck: [] });
     expect(outcome.failed).toEqual([]);
     expect((await readSteps(staged.storeDir)).filter((entry) => entry.step === 'verify').at(-1)?.out.stuck).toBe(0);
+  });
+
+  it('a usage error is no failed step: it leaves no row, so three of them are never stuck', async () => {
+    const staged = stage();
+    for (let attempt = 0; attempt < 3; attempt += 1) await expect(sessionsDeposit(depsOf(staged), nothing)).rejects.toThrow('Nothing to read');
+    expect(await readSteps(staged.storeDir)).toEqual([]);
+    const context = newContext(staged.storeDir, () => NOW, 'manual');
+    await expect(runDeposit(context, true, 'k', () => Promise.reject(new CliError('bad flag', ExitCode.USAGE, 'usage')))).rejects.toThrow('bad flag');
+    await expect(runDeposit(context, false, 'k', () => Promise.reject(new CliError('other', ExitCode.UNEXPECTED, 'unexpected')))).rejects.toThrow('other');
+    expect((await readSteps(staged.storeDir)).map((entry) => [entry.status, entry.error])).toEqual([['error', 'other']]);
+  });
+
+  it('a state.json that cannot be read still leaves one error row: the failure line is masked with no domains', async () => {
+    const staged = stage();
+    breakState(staged);
+    await expect(sessionsDeposit(depsOf(staged), good)).rejects.toThrow('EISDIR');
+    const rows = await readSteps(staged.storeDir);
+    expect(rows.filter((entry) => entry.step === 'deposit' && entry.status === 'error')).toHaveLength(1);
+    expect(rows.map((entry) => entry.step)).toEqual(['deposit', 'derive']);
+  });
+
+  it('the derive key is set when the store cannot be loaded during the derive pass, and the failure carries its time', async () => {
+    const staged = stage();
+    mkdirSync(join(staged.storeDir, 'observations.jsonl'), { recursive: true });
+    const trace = newTrace();
+    await refresh(staged.runtime, [], '2026-06-10T00:00:00.000Z', trace);
+    expect(trace.deriveFailure?.key).toBe(digest([EXTRACTOR_VERSION]));
+    expect(trace.deriveFailure?.ms).toBeGreaterThanOrEqual(0);
+  });
+
+  it('a failed derive logs its own wall time and takes it out of the deposit row', async () => {
+    const staged = stage();
+    mkdirSync(staged.storeDir, { recursive: true });
+    const context = newContext(staged.storeDir, () => NOW, 'manual');
+    await expect(
+      runDeposit(context, true, 'k', async (trace) => {
+        await new Promise((done) => setTimeout(done, 60));
+        trace.deriveFailure = { error: new Error('derive broke'), key: 'dk', ms: 40 };
+        return { value: 1, in: {} };
+      }),
+    ).rejects.toThrow('derive broke');
+    const rows = await readSteps(staged.storeDir);
+    expect(rows.map((entry) => [entry.step, entry.status, entry.ms])).toEqual([['deposit', 'ok', expect.any(Number)], ['derive', 'error', 40]]);
+    expect(rows[0]?.ms).toBeGreaterThanOrEqual(0);
   });
 
   it('a derive that cannot be written logs deposit ok, then derive error with its key, and rethrows', async () => {
@@ -314,14 +409,22 @@ describe('a failed step and its key', () => {
 
   it('a stuck step also fails verify --strict: it is in failed', async () => {
     const staged = stage();
-    for (let attempt = 0; attempt < 3; attempt += 1) await expect(sessionsDeposit(depsOf(staged), nothing)).rejects.toThrow();
-    expect((await sessionsVerify(depsOf(staged), { session: undefined })).failed).toContain('stuck: deposit');
+    breakState(staged);
+    for (let attempt = 0; attempt < 3; attempt += 1) await expect(sessionsDeposit(depsOf(staged), good)).rejects.toThrow();
+    fixState(staged);
+    const outcome = await sessionsVerify(depsOf(staged), { session: undefined });
+    expect(outcome.failed).toContain('stuck: deposit');
+    // The --strict --json failure document is the report, so it carries the stuck key and its error line (spec 4.4).
+    expect(outcome.report.stuck).toMatchObject([{ step: 'deposit', runs: 3 }]);
+    expect(outcome.report.stuck[0]?.error).toMatch(/^EISDIR/);
   });
 
   it('a row that cannot be appended changes no step outcome: read-only steps and a good deposit succeed, a failing one throws its own error', async () => {
     const staged = stage();
     mkdirSync(join(staged.storeDir, 'pipeline-runs.jsonl'), { recursive: true });
-    await expect(sessionsDeposit(depsOf(staged), nothing)).rejects.toThrow('Nothing to read');
+    breakState(staged);
+    await expect(sessionsDeposit(depsOf(staged), good)).rejects.toThrow('EISDIR');
+    fixState(staged);
     await expect(sessionsDeposit(depsOf(staged), good)).resolves.toMatchObject({ document: { ok: true } });
     await expect(sessionsRecall(depsOf(staged), { cls: 'no-tools' })).resolves.toMatchObject({ document: { ok: true } });
     await expect(sessionsVerify(depsOf(staged), { session: undefined })).resolves.toMatchObject({ document: { ok: true } });
@@ -364,6 +467,15 @@ describe('the counters (spec 3.2)', () => {
     expect(text).toContain(`deposit@${EXTRACTOR_VERSION} mean ms`);
     expect(text).toContain('deposit@old mean ms');
     expect(text).toContain('pipeline step log (all time)');
+  });
+
+  it('a nightly deposit that fails every night is stuck although stop deposits succeed in between', () => {
+    const nightly = (key: string): StepRow => failed(key, 'locked');
+    const stop = row({ trigger: 'stop', key: 'transcript-key' });
+    const rows = [{ ...nightly('n') , trigger: 'nightly' as const }, stop, { ...nightly('n'), trigger: 'nightly' as const }, stop, { ...nightly('n'), trigger: 'nightly' as const }];
+    expect(stuckSteps(rows)).toEqual([{ step: 'deposit', key: 'n', runs: 3, error: 'locked' }]);
+    // A good nightly ends the nightly streak.
+    expect(stuckSteps([...rows, row({ trigger: 'nightly', key: 'n2' })])).toEqual([]);
   });
 
   it('a step with only skipped runs has a mean of zero; a streak ended by an ok row is not stuck', () => {

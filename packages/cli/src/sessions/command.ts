@@ -9,7 +9,7 @@ import { buildIndex, contextBlock, readIndex, type ContextOptions } from './hook
 import { hookStatus, installHooks, scheduleStatus, setSchedule, settingsPath, uninstallHooks, type InstallRuntime, type Scope } from './install.js';
 import { serve } from './mcp.js';
 import { deposit, loadStore, readCalls, readRedactDomains, readSkeletons, type SessionsRuntime, type Store } from './store.js';
-import { formatStepCounters, inputKey, newContext, readSteps, stampKey, runDeposit, runStep, stepCounters, stuckSteps } from './steps.js';
+import { formatStepCounters, inputKey, newContext, readSteps, stampKey, runDeposit, runStep, stepCounters, stuckSteps, type StuckStep } from './steps.js';
 import type { StepRow } from './schema.js';
 import { CAPTURE_INVARIANTS, formatVerify, verifyAll, verifyCaptured, type InvariantResult } from './verify.js';
 
@@ -101,6 +101,8 @@ export interface VerifyReport {
   /** Skeleton files that could not be parsed: not an invariant, so counted apart from them. */
   unreadable: number;
   invariants: Array<InvariantResult & { pass: boolean }>;
+  /** Steps whose key failed on three runs in a row (spec 4.4), with the first error line of the newest failure. */
+  stuck: StuckStep[];
 }
 
 /** With `strict`, any violated invariant also fails the command (exit 4) after the full report is printed; the report is built first so callers can emit it. */
@@ -112,17 +114,17 @@ export const sessionsVerify = async (deps: SessionsDeps, options: { session: str
     const store = await loadStore(storeDir);
     const mine = <T extends { session: string }>(records: readonly T[]): T[] => records.filter((record) => options.session === undefined || record.session === options.session);
     const results = [...verifyAll(skeletons), ...verifyCaptured(mine([...store.sessions, ...store.subagents]), mine(store.tools))];
-    const report: VerifyReport = { sessions: skeletons.length, unreadable, invariants: results.map((result) => ({ ...result, pass: result.violations === 0 })) };
     // Steps whose key failed on three runs in a row (spec 4.4), read before this run's own row is appended; each fails `--strict` like a violated invariant.
     // A step log that cannot be read leaves the invariant check as it is: the stuck check is an extra, never a reason `verify` fails.
     const stuck = stuckSteps(await readSteps(storeDir).catch((): StepRow[] => []));
+    const report: VerifyReport = { sessions: skeletons.length, unreadable, invariants: results.map((result) => ({ ...result, pass: result.violations === 0 })), stuck };
     const failed = [...results.filter((result) => result.violations > 0).map((result) => result.name), ...(unreadable > 0 ? ['unreadable skeletons'] : []), ...stuck.map((entry) => `stuck: ${entry.step}`)];
     const stuckLines = stuck.map((entry) => `FAIL  ${entry.step} is stuck: key ${entry.key} failed ${String(entry.runs)} runs in a row: ${entry.error}`);
     const highWater = [...mine(store.sessions)].map((session) => `${session.session}:${String(session.rev)}:${session.cv}`).sort();
     const outcome = {
       failed,
       report,
-      document: { ok: true, ...report, stuck, newerCaptures: store.newerCaptures },
+      document: { ok: true, ...report, newerCaptures: store.newerCaptures },
       text: [formatVerify(results, skeletons.length), ...newerNotice(store), ...(unreadable > 0 ? [`FAIL  ${String(unreadable)} unreadable skeleton files (torn or corrupted); redeposit to rebuild them`] : []), ...stuckLines].join('\n'),
     };
     const cvBehind = results.find((result) => result.name === CAPTURE_INVARIANTS[0])?.violations ?? 0;

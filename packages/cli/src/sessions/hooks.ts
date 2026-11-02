@@ -40,13 +40,15 @@ interface Outcome {
   /** What goes to stdout. */
   output?: string;
   hit: boolean;
+  /** A lookup hook that read the index and searched it: only then did a recall query run, so only then is an ok `recall` row logged. */
+  queried: boolean;
 }
 
 const sessionStart = async (runtime: SessionsRuntime, input: Input): Promise<Outcome> => {
   const cwd = str(input.cwd);
   const index = cwd === undefined ? undefined : await readIndex(runtime.storeDir);
   const block = index === undefined || cwd === undefined ? undefined : contextBlock(index, { cwd, top: TOP, maxChars: MAX_CHARS });
-  return block === undefined ? { hit: false } : { output: additional('SessionStart', block), hit: true };
+  return block === undefined ? { hit: false, queried: index !== undefined } : { output: additional('SessionStart', block), hit: true, queried: true };
 };
 
 /** A failed tool arrives as PostToolUseFailure with the text in `error` (Bash and PowerShell start it with `Exit code N`); a PostToolUse response that starts that way is read too. */
@@ -60,32 +62,33 @@ const failureText = (input: Input): string | undefined => {
 const postTool = async (runtime: SessionsRuntime, input: Input): Promise<Outcome> => {
   const tool = str(input.tool_name);
   const text = failureText(input);
-  if (tool === undefined || text === undefined) return { hit: false };
+  if (tool === undefined || text === undefined) return { hit: false, queried: false };
   const index = await readIndex(runtime.storeDir);
-  if (index === undefined) return { hit: false };
+  if (index === undefined) return { hit: false, queried: false };
   const found = index.signatures[signatureOf(tool, text, makeRedactor(index.redactDomains))];
-  if (found === undefined) return { hit: false };
+  if (found === undefined) return { hit: false, queried: true };
   const followed = found.followed.map(([next]) => next).join(', ');
   const context = `oars recall: seen in ${String(found.sessions)} sessions; what followed: ${followed === '' ? 'nothing recorded' : followed}`;
-  return { output: additional(str(input.hook_event_name) ?? 'PostToolUseFailure', context), hit: true };
+  return { output: additional(str(input.hook_event_name) ?? 'PostToolUseFailure', context), hit: true, queried: true };
 };
 
 const stop = async (runtime: SessionsRuntime, input: Input, now: () => number): Promise<Outcome> => {
   const transcript = str(input.transcript_path);
-  if (transcript === undefined) return { hit: false };
+  if (transcript === undefined) return { hit: false, queried: false };
   // The SessionEnd hook is the `stop` trigger (spec 4.1); derive and index follow at the nightly run, so only a deposit row is logged.
   const deposited = await runDeposit(newContext(runtime.storeDir, now, 'stop'), false, inputKey('stop', [transcript], []), async (trace) => ({ value: await depositSession(runtime, transcript, now, trace), in: { transcript: 1 } }));
-  return { hit: deposited === 'deposited' };
+  return { hit: deposited === 'deposited', queried: false };
 };
 
 const nightly = async (runtime: SessionsRuntime, now: () => number): Promise<Outcome> => {
-  const saved = await readSaved(runtime.storeDir);
-  if (saved.allow.length === 0) return { hit: false };
+  // A state.json that cannot be read is a failed deposit run like any other: its error row and the skipped derive row (spec 4.4) are logged.
+  const saved = await readSaved(runtime.storeDir).catch((failure: unknown) => runDeposit<Awaited<ReturnType<typeof readSaved>>>(newContext(runtime.storeDir, now, 'nightly'), true, inputKey('nightly', [], []), () => Promise.reject(failure instanceof Error ? failure : new Error(String(failure)))));
+  if (saved.allow.length === 0) return { hit: false, queried: false };
   await runDeposit(newContext(runtime.storeDir, now, 'nightly'), true, inputKey('nightly', saved.allow, saved.redactDomains), async (trace) => {
     const done = await deposit(runtime, { allow: saved.allow, redactDomains: saved.redactDomains, now }, trace);
     return { value: done, in: { transcript: done.sessions + done.subagents + done.unchanged } };
   });
-  return { hit: true };
+  return { hit: true, queried: false };
 };
 
 /** What a lookup hook looks up, as its recall key (spec 4.2 names none for a lookup): the cwd for session-start, the failure's signature for post-tool; null when it had nothing to look up. */
@@ -108,7 +111,7 @@ const firstLine = (error: unknown): string => (error instanceof Error ? error.me
 export const runHook = async (event: HookEvent, stdin: string, runtime: SessionsRuntime, now: () => number): Promise<string | undefined> => {
   const started = performance.now();
   let session: string | null = null;
-  let outcome: Outcome = { hit: false };
+  let outcome: Outcome = { hit: false, queried: false };
   let error: string | null = null;
   let failure: unknown;
   let key: string | null = null;
@@ -126,9 +129,9 @@ export const runHook = async (event: HookEvent, stdin: string, runtime: Sessions
   }
   try {
     const ms = Math.round(performance.now() - started);
-    await appendHookCall(runtime.storeDir, { at: new Date(now()).toISOString(), event, session, hit: outcome.hit, ms, error });
-    // A lookup hook that looked something up is a `recall` step started by its own trigger; the deposit hooks logged their rows as they ran.
-    if (key !== null) {
+    await tryLog(() => appendHookCall(runtime.storeDir, { at: new Date(now()).toISOString(), event, session, hit: outcome.hit, ms, error }));
+    // A lookup hook that ran a query (or failed trying) is a `recall` step started by its own trigger; the deposit hooks logged their rows as they ran.
+    if (key !== null && (error !== null || outcome.queried)) {
       const report = { in: { query: 1 }, out: { matches: outcome.hit ? 1 : 0 }, key };
       await tryLog(async () => logStep(newContext(runtime.storeDir, now, event), 'recall', error === null ? 'ok' : 'error', ms, report, error === null ? null : await errorLine(runtime.storeDir, failure)));
     }

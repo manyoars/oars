@@ -122,10 +122,12 @@ written when the step ends. It carries no `cv` of its own, so it needs no captur
 
 A failed step logs `error`, and the run's later steps are logged `skipped`; the next trigger retries the same key. A failed deposit leaves
 `state.json` as it was; a derive that fails after its deposit wrote the records logs `deposit` `ok`, then `derive` `error` (the records and
-`state.json` stand; the next deposit rebuilds the derived files). A key that fails on three runs in a row is `stuck`: an `ok` run of the step ends
-every open streak of it. `verify` counts a stuck key, prints `FAIL  <step> is stuck: key <key> failed 3 runs in a row: <error>`, fails
+`state.json` stand; the next deposit rebuilds the derived files). A key that fails on three runs in a row is `stuck`, counted per step and trigger: an `ok` run of the same step and trigger ends its open
+streaks, so a nightly deposit that fails every night is stuck although the `stop` deposits between nights succeed. A usage error (`deposit` with nothing
+to read) is no failed run and leaves no row. `verify` counts a stuck key, prints `FAIL  <step> is stuck: key <key> failed 3 runs in a row: <error>`, fails
 `--strict` with it, and writes the count in its own row. A row that cannot be appended never changes the step's outcome: the step's value or
-its own error reaches the caller. A lookup hook logs a `recall` row only when it looked something up.
+its own error reaches the caller. A lookup hook logs an `ok` `recall` row only when it read the index and searched it (none with no index yet), and an `error` row when that read fails. A
+state.json that cannot be read fails the step like any other failure: its row is still written, with the line masked by no domains.
 
 `oars sessions measure` prints the counters of spec 3.2 that this log can answer, under the G1 signals, over the whole log (`--last` and `--since` filter the G1 table only): runs of each step (ok, error,
 skipped) and mean ms, per step and `ev`; capture records deposited by kind; records derived by type (the newest derive); invariants passed of checked and
