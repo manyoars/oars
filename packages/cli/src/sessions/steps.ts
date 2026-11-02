@@ -51,11 +51,22 @@ export const readSteps = async (storeDir: string): Promise<StepRow[]> => {
   return rows;
 };
 
+/**
+ * Reduces the home folder to `<home>` in whatever form a path takes: either separator, any letter case (a Windows drive letter, a
+ * `transcript_path` from hook stdin). An empty home matches nothing, since splitting on '' would garble the whole message.
+ */
+const scrubHome = (text: string): string => {
+  const home = homedir();
+  if (home === '') return text;
+  const pattern = [...home].map((char) => (char === '/' || char === '\\' ? '[\\\\/]' : char.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))).join('');
+  return text.replace(new RegExp(pattern, 'gi'), '<home>');
+};
+
 /** The first informative line of a failure, masked like every other text the store keeps (D1's text rule) and cut to 300 characters. */
 export const errorLine = async (storeDir: string, error: unknown): Promise<string> => {
   const first = (error instanceof Error ? error.message : String(error)).split('\n').find((line) => line.trim() !== '') ?? 'unknown error';
   // A path under the home folder is reduced to `<home>`, so the shared record never holds the user name (the class A rule in docs/sessions-store.md).
-  const scrubbed = first.split(homedir()).join('<home>');
+  const scrubbed = scrubHome(first);
   // A store whose state.json cannot be read still gets its failure row (spec 4.4): the line is masked with no domains then.
   const domains = await readRedactDomains(storeDir).catch((): string[] => []);
   return makeRedactor(domains)(scrubbed).slice(0, 300);
