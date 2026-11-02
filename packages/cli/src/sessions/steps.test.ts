@@ -13,7 +13,7 @@ import { CAPTURE_VERSION, EXTRACTOR_VERSION, parseStepRow, type StepRow } from '
 import { formatStepCounters, inputKey, newContext, readSteps, runDeposit, runStep, stepCounters, stuckSteps } from './steps.js';
 import type { RecallQuery } from './query.js';
 import { deposit, digest, loadStore, newTrace, refresh } from './store.js';
-import { cleanup, FIXTURES, NOW, stage, type Staged } from './test-support.js';
+import { cleanup, composers, FIXTURES, folders, NOW, stage, stageCursor, type Staged } from './test-support.js';
 
 afterEach(cleanup);
 
@@ -195,6 +195,8 @@ describe('the steps each command logs', () => {
     const narrowed = (await readSteps(staged.storeDir)).filter((entry) => entry.step === 'verify').at(-1);
     expect(narrowed?.key).toBe(entriesKey([only]));
     expect(narrowed?.key).not.toBe(verified[0]?.key);
+    expect(narrowed?.in).toEqual({ session: 1, subagent: 0 });
+    expect(narrowed?.in).toEqual({ session: 1, subagent: 0 });
   });
 
   it('verify counts a session captured at an older capture version as cv-behind', async () => {
@@ -363,6 +365,27 @@ describe('the steps each hook logs', () => {
     expect(await readSteps(empty.storeDir)).toEqual([]);
   });
 
+  it('a deposit that reads Cursor sessions tallies their records by kind in the step row', async () => {
+    const staged = stage();
+    const { repo, plain } = folders(staged.root);
+    const user = await stageCursor(staged.root, composers(repo, plain));
+    const deps: SessionsDeps = { sessions: { ...staged.runtime, cursorRoot: user }, install: undefined, now: () => NOW };
+    await sessionsDeposit(deps, { allow: ['cursor'], allowFiles: [], redactDomains: [] });
+    const rows = await readSteps(staged.storeDir);
+    expect(rows[0]?.in).toEqual({ transcript: 3 });
+    expect(rows[0]?.out).toEqual({ session: 3, 'user-prompt': 3, tool: 3, 'error-line': 1 });
+  });
+
+  it('the nightly deposit counts a new session in its transcript input', async () => {
+    const staged = stage();
+    await sessionsDeposit(depsOf(staged), { allow: ['proj'], allowFiles: [], redactDomains: [] });
+    copyFileSync(join(FIXTURES, 'proj', 'tldr.jsonl'), join(staged.projectsRoot, 'proj', 'tldr-new.jsonl'));
+    await runHook('nightly', '{}', staged.runtime, () => NOW);
+    const nightly = (await readSteps(staged.storeDir)).filter((entry) => entry.trigger === 'nightly' && entry.step === 'deposit');
+    expect(nightly[0]?.out.session).toBe(1);
+    expect(nightly[0]?.in).toEqual({ transcript: 5 });
+  });
+
   it('the nightly deposit counts a changed subagent transcript in its transcript input', async () => {
     const staged = stage();
     const parent = join(staged.projectsRoot, 'proj', 'errors-a', 'subagents');
@@ -384,6 +407,8 @@ describe('the steps each hook logs', () => {
     const rows = await readSteps(staged.storeDir);
     expect(rows.map((entry) => [entry.step, entry.trigger, entry.status])).toEqual([['recall', 'session-start', 'ok'], ['recall', 'post-tool', 'ok']]);
     expect(rows[1]?.out).toEqual({ matches: 0 });
+    expect(rows.map((entry) => entry.in)).toEqual([{ query: 1 }, { query: 1 }]);
+    expect(rows.map((entry) => entry.in)).toEqual([{ query: 1 }, { query: 1 }]);
   });
 
   it('a lookup hook that finds a recurring signature or a repository history logs matches: 1', async () => {
@@ -703,6 +728,12 @@ describe('recall --context, the deposit key, and the index step', () => {
     expect(derives).toHaveLength(2);
     expect(derives[1]?.key).not.toBe(derives[0]?.key);
     expect(derives[1]?.key).toBe(digest([EXTRACTOR_VERSION, ...[...store.sessions, ...store.subagents].map((session) => `${session.session}:${String(session.rev)}`).sort()]));
+    // A verify narrowed to one main session counts that session alone: the subagent is filtered out of `in` (the `mine(...)` filters).
+    const main = store.sessions[0];
+    if (main === undefined) throw new Error('fixture has no session');
+    await sessionsVerify(depsOf(staged), { session: main.session });
+    const narrowed = (await readSteps(staged.storeDir)).filter((entry) => entry.step === 'verify').at(-1);
+    expect(narrowed?.in).toEqual({ session: 1, subagent: 0 });
   });
 });
 
