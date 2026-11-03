@@ -132,7 +132,7 @@ export const sessionsBooks = async (deps: SessionsDeps, options: { by: BooksBy; 
   const rows = books(store, options.by, deps.now(), options.sinceDays, await readSurvival(storeDir));
   // A mistyped root over a populated store must not read as an empty store.
   const table =
-    rows.length === 0 && options.repo !== undefined
+    store.prompts.length === 0 && options.repo !== undefined
       ? `No prompts for ${options.repo} in the store (${String(loaded.prompts.length)} prompts across all repositories).`
       : formatBooks(rows, options.by);
   return { document: { ok: true, by: options.by, rows, newerCaptures: store.newerCaptures }, text: [table, ...newerNotice(store), ...(rows.length === 0 ? [] : [BOOKS_CAVEAT])].join('\n') };
