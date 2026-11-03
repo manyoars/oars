@@ -16,7 +16,7 @@ vi.mock('node:fs/promises', async (importOriginal) => {
   const actual = await importOriginal<typeof fsp>();
   const readdir = vi.fn(actual.readdir);
   readdir.mockImplementation((dir, options) =>
-    typeof dir === 'string' && (dir.endsWith(join('locked', 'subagents')) || dir.endsWith('lockedproj'))
+    typeof dir === 'string' && (dir.endsWith(join('locked', 'subagents')) || dir.endsWith('lockedproj') || dir.endsWith('lockedroot') || dir.endsWith(join('lockedstore', 'raw')))
       ? Promise.reject(Object.assign(new Error(`EACCES: permission denied, scandir '${dir}'`), { code: 'EACCES' }))
       : actual.readdir(dir, options),
   );
@@ -97,15 +97,13 @@ describe('an unreadable part of a session', () => {
     t.put('nostat.jsonl', CLEAN);
     const raw = join(t.staged.storeDir, 'raw', 'p', 'nostat.jsonl');
     mkdirSync(join(raw, '..'), { recursive: true });
-    writeFileSync(raw, `${CLEAN}
-`);
+    writeFileSync(raw, `${CLEAN}\n`);
     expect(await checkSession(t.staged.runtime, t.termsFile, 'p', 'nostat')).toEqual({ excluded: true, reason: 'unreadable', hits: [] });
   });
 
   it('closes the file it stopped reading at a hit', async () => {
     const t = setup();
-    t.put('early.jsonl', `${DIRTY}
-${CLEAN}`);
+    t.put('early.jsonl', `${DIRTY}\n${CLEAN}`);
     expect((await checkSession(t.staged.runtime, t.termsFile, 'p', 'early')).reason).toBe('term');
     expect(opened.length).toBeGreaterThan(0);
     for (const stream of opened) expect(stream.destroyed).toBe(true);
@@ -133,5 +131,39 @@ describe('a project folder that cannot be listed', () => {
     expect(h.err.join('')).not.toContain('lockedproj');
     expect(h.err.join('')).toContain('no list was written');
     expect(existsSync(list)).toBe(false);
+  });
+});
+
+describe('a root that cannot be listed', () => {
+  const abort = async (runtime: Parameters<typeof scanStore>[0], termsFile: string): Promise<string> => {
+    const failure = await scanStore(runtime, termsFile).then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+    expect(failure).toBeInstanceOf(CliError);
+    return failure instanceof CliError ? failure.message : '';
+  };
+
+  it('aborts with no list when the projects root is refused, naming no folder', async () => {
+    const t = setup();
+    const message = await abort({ ...t.staged.runtime, projectsRoot: join(t.staged.root, 'lockedroot') }, t.termsFile);
+    expect(message).toContain('no list was written');
+    expect(message).not.toContain('lockedroot');
+  });
+
+  it('aborts with no list when the raw archive root is refused', async () => {
+    const t = setup();
+    mkdirSync(join(t.staged.root, 'lockedstore', 'raw'), { recursive: true });
+    const message = await abort({ ...t.staged.runtime, storeDir: join(t.staged.root, 'lockedstore') }, t.termsFile);
+    expect(message).toContain('no list was written');
+    expect(message).not.toContain('lockedstore');
+  });
+});
+
+describe('a session with no readable main', () => {
+  it('reads unreadable, not no-raw, when the harness main cannot be examined and there is no raw copy', async () => {
+    const t = setup();
+    t.put('nostat.jsonl', CLEAN);
+    expect(await checkSession(t.staged.runtime, t.termsFile, 'p', 'nostat')).toEqual({ excluded: true, reason: 'unreadable', hits: [] });
   });
 });
