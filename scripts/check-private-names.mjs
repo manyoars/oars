@@ -47,7 +47,7 @@ const addedLines = (/** @type {string} */ sha) => {
   let line = 0;
   let parents = 1;
   for (const raw of git(['-c', 'core.quotePath=false', 'show', '--src-prefix=a/', '--dst-prefix=b/', '--format=', '-U0', '--no-color', '--no-ext-diff', sha]).split('\n')) {
-    const head = /^(@@+) .*\+(\d+)(?:,\d+)? @@/.exec(raw);
+    const head = /^(@@+) [^+]*\+(\d+)(?:,\d+)? @@/.exec(raw);
     if (head) {
       parents = (head[1] ?? '').length - 1;
       line = Number(head[2]);
@@ -55,7 +55,9 @@ const addedLines = (/** @type {string} */ sha) => {
     }
     if (/^diff --(git|cc|combined) /.test(raw)) {
       const cc = /^diff --(?:cc|combined) (.*)$/.exec(raw);
-      file = cc ? (cc[1] ?? '') : file;
+      // A path git C-quotes (tab, quote, backslash) is not parsed: '' prints as <path withheld>, never the previous file's name.
+      const named = cc?.[1] ?? '';
+      file = named.startsWith('"') ? '' : named;
       line = 0; // headers follow until the first hunk, so an added line cannot be mistaken for one
       continue;
     }
@@ -63,6 +65,7 @@ const addedLines = (/** @type {string} */ sha) => {
       // git appends a tab to a path that holds a space
       const name = /^\+\+\+ b\/(.*?)\t?$/.exec(raw);
       if (name) file = name[1] ?? '';
+      else if (raw.startsWith('+++ "')) file = '';
       continue;
     }
     if (raw === '' || raw.startsWith(NO_NEWLINE_MARK)) continue;
@@ -94,7 +97,7 @@ export const main = (sha, env) => {
   for (const commit of git(['rev-list', sha, '--not', '--remotes=origin']).split('\n').filter(Boolean)) {
     const short = commit.slice(0, 10);
     if (hits(git(['log', '-1', '--format=%B', commit]))) found.push(`${short} message`);
-    for (const [file, number, text] of addedLines(commit)) if (hits(text)) found.push(`${short} ${hits(file) ? '<path withheld>' : file}:${number}`);
+    for (const [file, number, text] of addedLines(commit)) if (hits(text)) found.push(`${short} ${file === '' || hits(file) ? '<path withheld>' : file}:${number}`);
   }
   if (found.length === 0) return 0;
   process.stderr.write(`check-private-names: ${found.length} listed term(s) in what this push would publish (term and text withheld):\n`);
