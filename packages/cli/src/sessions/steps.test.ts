@@ -410,7 +410,8 @@ describe('the steps each hook logs', () => {
     appendFileSync(agent, readFileSync(join(FIXTURES, 'proj', 'sidechain.jsonl')));
     await runHook('nightly', '{}', staged.runtime, () => NOW);
     const nightly = (await readSteps(staged.storeDir)).filter((entry) => entry.trigger === 'nightly' && entry.step === 'deposit');
-    expect(nightly[0]?.out).toEqual({ subagent: 1, 'user-prompt': 2, tool: 6, 'error-line': 4 });
+    // The appended copy replays the same tool_use ids, so the three calls count once (t762); its failures stay error lines.
+    expect(nightly[0]?.out).toEqual({ subagent: 1, 'user-prompt': 2, tool: 3, 'error-line': 4 });
     expect(nightly[0]?.in).toEqual({ transcript: 5 });
   });
 

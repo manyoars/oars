@@ -4,6 +4,10 @@
 // read a thing differently the comment says which rule is used.
 import { createHash } from 'node:crypto';
 import { posix } from 'node:path';
+import { ACTION_TABLES, actionOf, shellOf, type ActionTable, type CanonicalAction } from './actions.js';
+import { closedFrame, frameIdOf, repoFilesFromIndex, stackOf, utcDay } from './frame.js';
+import { linkSteps } from './graph.js';
+import { callIdentity, shellIdentity, UNREAD_SHELL, type WordOfCommand } from './identity.js';
 import type { Redactor } from './redact.js';
 import {
   CAPTURE_VERSION,
@@ -13,12 +17,16 @@ import {
   SIGNATURE_CHARS,
   type CostState,
   type ErrorLineObservation,
+  type Frame,
+  type Harness,
   type PromptClass,
   type PullEcosystem,
   type SessionObservation,
+  type ShellIdentity,
   type ShellSegment,
   type Skeleton,
   type SkeletonLine,
+  type StepIdentity,
   type TargetBase,
   type ToolObservation,
   type ToolPull,
@@ -257,6 +265,8 @@ export interface SubagentOrigin {
   parent: string;
   agentType: string | null;
   spawnedBy: string | null;
+  /** The `n` of the `spawnedBy` call in the parent transcript, when the deposit could read it. */
+  spawnedAt?: number | null;
 }
 
 export interface ExtractInput {
@@ -277,6 +287,10 @@ export interface ExtractInput {
   repoIdentity?: (root: string) => string;
   /** The oars package, Node.js, and OS this capture ran under; absent reads as `0.0.0` and this process. */
   runtime?: { oars: string; node: string; os: string };
+  /** The harness this transcript came from; absent means Claude Code. It names the frame and picks the action table. */
+  harness?: Harness;
+  /** How many files a repository root holds; absent reads the root's git index. */
+  repoFiles?: (root: string) => number | null;
   /** Set for a subagent transcript: every line is the agent's own line, so none is read as a sidechain. */
   subagent?: SubagentOrigin;
 }
@@ -302,6 +316,19 @@ interface Current {
   skills: Set<string>;
   usage: Usage;
   turns: number;
+  /** The last harness version the prompt's lines name. */
+  version: string | undefined;
+  effortCounts: Map<string, number>;
+  /** `message.model` per line, for a transcript whose lines name no requested model. */
+  messageModels: Map<string, number>;
+}
+
+/** What one prompt adds to the frame; the file-wide fields join it once the whole file has been read. */
+interface PromptFrameParts {
+  version: string | undefined;
+  model: string | null;
+  effort: string | null;
+  ts: string | undefined;
 }
 
 const firstTextBlock = (content: unknown): string => {
@@ -329,6 +356,13 @@ const majority = (counts: ReadonlyMap<string, number>): string => {
     }
   }
   return best;
+};
+
+/** The majority of `counts`, or null when it is empty. */
+const majorityOrNull = (counts: ReadonlyMap<string, number>): string | null => (counts.size === 0 ? null : majority(counts));
+
+const bump = (counts: Map<string, number>, key: string): void => {
+  counts.set(key, (counts.get(key) ?? 0) + 1);
 };
 
 const PATH_KEYS = ['file_path', 'notebook_path', 'path'] as const;
@@ -411,10 +445,7 @@ const SEGMENTS_PER_CALL_MAX = 50;
 const RUN_WORDS_MAX = 12;
 const RUN_WORD_CHARS = 30;
 
-interface ShellWord {
-  text: string;
-  quoted: boolean;
-}
+type ShellWord = WordOfCommand;
 type ShellOp = '&&' | '||' | '|' | ';' | '&' | '\n' | 'group';
 type ShellToken = ShellWord | ShellOp;
 type ShellLink = 'and' | 'pipe' | 'break' | 'end';
@@ -428,6 +459,13 @@ interface ShellCommand {
   link: ShellLink;
 }
 
+/** One command of a shell call, as its step reads. `run` compares a retry and is not kept. */
+export interface ShellStepRead {
+  identity: ShellIdentity;
+  read: boolean;
+  run: string;
+}
+
 /** One `git commit` a command holds. */
 export interface PlannedCommit {
   quiet: boolean;
@@ -437,6 +475,8 @@ export interface PlannedCommit {
 
 export interface ShellRead {
   segments: ShellSegment[];
+  /** The same commands as `segments`, in public names only, with the redacted text they compare by. */
+  steps: ShellStepRead[];
   pulls: ToolPull[];
   commitPlan: PlannedCommit[];
 }
@@ -917,12 +957,14 @@ const commitPlanOf = (commands: readonly ShellCommand[]): PlannedCommit[] =>
 /** A shell call's segments, pulls, and the commits it holds, from the command alone. The command is redacted before anything is kept. */
 export const readShell = (command: string, redact: Redactor): ShellRead => {
   const commands = readCommands(tokenize(redactCommand(dropBodies(command.replace(/\r\n/g, '\n')), redact)));
+  const kept = commands.slice(-SEGMENTS_PER_CALL_MAX);
   const pulls = new Map<string, ToolPull>();
   for (const { program, args } of commands) {
     for (const pull of pullsOfCommand(program, args).filter(present)) pulls.set(JSON.stringify(pull), pull);
   }
   return {
-    segments: commands.slice(-SEGMENTS_PER_CALL_MAX).map((held) => ({ run: runOf(held), read: held.read })),
+    segments: kept.map((held) => ({ run: runOf(held), read: held.read })),
+    steps: kept.map((held) => ({ identity: shellIdentity(held.program, held.args, pullsOfCommand(held.program, held.args).filter(present)), read: held.read, run: runOf(held) })),
     pulls: [...pulls.values()],
     commitPlan: commitPlanOf(commands),
   };
@@ -956,6 +998,28 @@ export const pullsOfTool = (name: string, redact: Redactor): ToolPull[] => {
   return pull === null ? [] : [pull];
 };
 
+/** One step before its call's result is known. `rawKey` tells two calls with one masked identity apart, for a retry; it is never stored. */
+interface StepDraft {
+  action: CanonicalAction;
+  native: string;
+  identity: StepIdentity;
+  read: boolean;
+  rawKey: string;
+}
+
+/** A call's steps: one per command of a shell call, else one. */
+const draftsOf = (table: ActionTable, named: { action: CanonicalAction; native: string }, native: string, shell: ShellRead | undefined, target: string | null, input: Obj): StepDraft[] => {
+  const { action } = named;
+  if (action === 'shell.exec') {
+    const read = shell?.steps ?? [];
+    if (read.length === 0) return [{ action, native: named.native, identity: UNREAD_SHELL, read: true, rawKey: `${native}\n${str(input.command) ?? ''}` }];
+    return read.map((held) => ({ action, native: named.native, identity: held.identity, read: held.read, rawKey: `${native}\n${held.run}` }));
+  }
+  const url = str(input.url);
+  const skill = str(input.skill);
+  return [{ action, ...callIdentity(table, action, native, named.native, { skill, url }), read: true, rawKey: `${native}\n${target ?? url ?? skill ?? ''}` }];
+};
+
 /** The `target` of a tool call (see {@link ToolObservation.target}). */
 export const targetOf = (
   tool: string,
@@ -977,6 +1041,29 @@ export const targetOf = (
   return { target: target === '' ? null : redact(target), base: null };
 };
 
+/** The `n` capture gives each call of a transcript, by tool-use id, the first copy of a repeated id winning; a subagent's steps name their parent by it without capturing the parent again. */
+export const callPositions = (text: string): Map<string, number> => {
+  const positions = new Map<string, number>();
+  let n = 0;
+  for (const raw of splitLines(text)) {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      continue;
+    }
+    const content = isObj(parsed) && isObj(parsed.message) ? parsed.message.content : undefined;
+    if (!Array.isArray(content)) continue;
+    for (const block of content) {
+      if (!isObj(block) || block.type !== 'tool_use') continue;
+      const id = str(block.id);
+      if (id !== undefined && !positions.has(id)) positions.set(id, n);
+      n += 1;
+    }
+  }
+  return positions;
+};
+
 /** One pass over a transcript into its capture records and skeleton. Never throws on a malformed line: it counts it and goes on. */
 export const captureSession = (input: ExtractInput): Capture => {
   const { redact } = input;
@@ -986,6 +1073,8 @@ export const captureSession = (input: ExtractInput): Capture => {
   const identityOf = input.repoIdentity ?? ((root: string): string => `path:${toForward(root).toLowerCase()}`);
   const runtime = input.runtime ?? { oars: '0.0.0', node: process.version, os: process.platform };
   const origin = input.subagent;
+  const harness: Harness = input.harness ?? 'claude-code';
+  const actions = ACTION_TABLES[harness];
   const rawLines = input.text.split(/\r\n|\n|\r/);
   if (rawLines.length > 0 && rawLines[rawLines.length - 1] === '') rawLines.pop();
 
@@ -1040,6 +1129,19 @@ export const captureSession = (input: ExtractInput): Capture => {
   const skeletonLines: SkeletonLine[] = [];
   const toolById = new Map<string | undefined, string>();
   const callById = new Map<string, { call: ToolObservation; at: number | undefined; plan: readonly PlannedCommit[] }>();
+  // The evidence for the frame: read across the whole file, so one session's prompts share a stack and a shell, and held only until the frame is built.
+  const framePaths: string[] = [];
+  const framePrograms = new Set<string>();
+  const frameShells = new Map<string, number>();
+  const fileEfforts = new Map<string, number>();
+  const fileModels = new Map<string, number>();
+  const fileMessageModels = new Map<string, number>();
+  const promptFrames: PromptFrameParts[] = [];
+  /** The steps of each call, by `n`, until its result is in. */
+  const drafts: StepDraft[][] = [];
+  const responseOfCall: Array<string | undefined> = [];
+  const callsPerResponse = new Map<string, number>();
+  const outputPerResponse = new Map<string, number>();
   const seenResponses = new Set<string>();
   let promptFingerprint: string | null = null;
   let cur: Current | undefined;
@@ -1065,6 +1167,7 @@ export const captureSession = (input: ExtractInput): Capture => {
       usage: cur.usage,
       promptFingerprint,
     });
+    promptFrames.push({ version: cur.version, model: majorityOrNull(cur.models) ?? majorityOrNull(cur.messageModels), effort: majorityOrNull(cur.effortCounts), ts: cur.ts });
   };
 
   for (const [position, raw] of rawLines.entries()) {
@@ -1103,7 +1206,15 @@ export const captureSession = (input: ExtractInput): Capture => {
     const branch = str(o.gitBranch);
     if (branch !== undefined && branch !== '') branches.add(redact(branch));
     const requested = str(o.requestedModel);
-    if (requested !== undefined && requested !== '') session.models[requested] = (session.models[requested] ?? 0) + 1;
+    if (requested !== undefined && requested !== '') {
+      session.models[requested] = (session.models[requested] ?? 0) + 1;
+      bump(fileModels, requested);
+    }
+    // A synthetic line is the harness speaking, not a model.
+    const messageModel = message === undefined || type !== 'assistant' ? undefined : str(message.model);
+    const realMessageModel = messageModel === undefined || messageModel === '' || messageModel === '<synthetic>' ? undefined : messageModel;
+    if (realMessageModel !== undefined) bump(fileMessageModels, realMessageModel);
+    if (truthy(o.effort)) bump(fileEfforts, String(o.effort));
     if (type === 'cost-state') {
       const cost = num(o.totalCostUSD);
       session.costUsd = cost ?? session.costUsd;
@@ -1115,6 +1226,8 @@ export const captureSession = (input: ExtractInput): Capture => {
     const key = message === undefined ? undefined : responseKey(o, message);
     const firstOfResponse = key === undefined || !seenResponses.has(key);
     if (key !== undefined) seenResponses.add(key);
+    const response = key ?? `line ${String(position)}`;
+    if (lineUsage !== undefined && firstOfResponse) outputPerResponse.set(response, lineUsage.usage.output);
     const blocks = Array.isArray(content) ? content.filter(isObj) : [];
     skeletonLines.push({
       n: position + 1,
@@ -1141,7 +1254,10 @@ export const captureSession = (input: ExtractInput): Capture => {
       session.promptFingerprint = promptFingerprint;
       continue;
     }
-    if (message === undefined) continue;
+    // The harness's own copy of the request body (t762): assistant and user messages with no cwd, uuid, or timestamp, repeating blocks the real lines
+    // above already hold. Reading its tool_use, tool_result, thinking, and text blocks wrote a second row for 99.8% of calls, and a second error line,
+    // thinking count, and TLDR for the same ones. The skeleton above still lists the line, so the counts and the root bind.
+    if (message === undefined || type === 'api-request-blob') continue;
 
     if (type === 'user' && role === 'user' && o.isMeta !== true) {
       const text = firstNonEmptyText(content);
@@ -1172,6 +1288,9 @@ export const captureSession = (input: ExtractInput): Capture => {
           skills: new Set(),
           usage: emptyUsage(),
           turns: 0,
+          version: version !== undefined && version !== '' ? version : undefined,
+          effortCounts: new Map(),
+          messageModels: new Map(),
         };
         continue;
       }
@@ -1182,14 +1301,19 @@ export const captureSession = (input: ExtractInput): Capture => {
       if (!side) {
         const seconds = toSeconds(ts);
         if (ts !== undefined && ts !== '' && seconds !== undefined) cur.t1 = seconds;
+        if (version !== undefined && version !== '') cur.version = version;
         if (type === 'assistant') {
           cur.turns += 1;
           if (requested !== undefined && requested !== '') cur.models.set(requested, (cur.models.get(requested) ?? 0) + 1);
+          if (realMessageModel !== undefined) bump(cur.messageModels, realMessageModel);
           if (lineUsage !== undefined && firstOfResponse) addUsage(cur.usage, lineUsage.usage);
         }
       }
       // prompt_graphs.py reads efforts and skills from every line.
-      if (truthy(o.effort)) cur.efforts.add(String(o.effort));
+      if (truthy(o.effort)) {
+        cur.efforts.add(String(o.effort));
+        if (!side) bump(cur.effortCounts, String(o.effort));
+      }
       if (truthy(o.attributionSkill)) cur.skills.add(String(o.attributionSkill));
     }
 
@@ -1205,14 +1329,24 @@ export const captureSession = (input: ExtractInput): Capture => {
         for (const match of text.matchAll(CONF_RE)) session.confidences.push(cut(redact(match[1] ?? ''), 120));
       } else if (blockType === 'tool_use') {
         const name = str(block.name) ?? '?';
-        session.tools[name] = (session.tools[name] ?? 0) + 1;
         const id = str(block.id);
+        // A resumed session replays earlier lines, so the same tool_use id comes again, often from another cwd (so a different path hash).
+        // The first copy is the call and already holds the result; a replay would be a second row with status none (t762). The skeleton
+        // still lists every line, and a replayed failure stays an error line, as derive.ts counts it.
+        if (id !== undefined && callById.has(id)) continue;
+        session.tools[name] = (session.tools[name] ?? 0) + 1;
         toolById.set(id, name);
         const toolInput = isObj(block.input) ? block.input : {};
+        // An adapter that renames its tools for the extractor keeps the harness's own name in `native`.
+        const native = str(block.native) ?? name;
+        const named = actionOf(actions, native);
+        const shellName = shellOf(actions, native);
+        if (shellName !== null) bump(frameShells, shellName);
         const filePath = str(toolInput.file_path);
         const lineRoot = lineCwd === undefined || lineCwd === '' ? null : rootOf(lineCwd);
         if (PATH_TOOLS.has(name) && filePath !== undefined && filePath !== '') {
           const redacted = redact(filePath);
+          framePaths.push(filePath);
           files.add(redacted);
           // One redacted path can name several files (a relative path read from two repositories), so it keeps every hash.
           fileHashes.set(redacted, (fileHashes.get(redacted) ?? new Set<string>()).add(hashPath(filePath, lineCwd, lineRoot, salt).hash));
@@ -1220,7 +1354,11 @@ export const captureSession = (input: ExtractInput): Capture => {
         else if (name === 'WebSearch' && str(toolInput.query) !== undefined && str(toolInput.query) !== '') searches.add(redact(str(toolInput.query) ?? ''));
         else if (SHELL.has(name)) session.bashCmds += 1;
         const aimed = targetOf(name, toolInput, lineCwd, salt, redact, lineRoot);
-        const shell = SHELL.has(name) ? readShell(str(toolInput.command) ?? '', redact) : undefined;
+        const shell = SHELL.has(name) || named.action === 'shell.exec' ? readShell(str(toolInput.command) ?? '', redact) : undefined;
+        for (const held of shell?.steps ?? []) framePrograms.add(held.identity.program);
+        drafts.push(draftsOf(actions, named, native, shell, aimed.target, toolInput));
+        responseOfCall.push(response);
+        callsPerResponse.set(response, (callsPerResponse.get(response) ?? 0) + 1);
         const pulls = shell?.pulls ?? pullsOfTool(name, redact);
         const call: ToolObservation = {
           kind: 'tool',
@@ -1246,8 +1384,7 @@ export const captureSession = (input: ExtractInput): Capture => {
           ...(pulls.length === 0 ? {} : { pulls }),
         };
         tools.push(call);
-        // A resumed session repeats earlier lines: the first copy of a call carries its result, a repeat keeps status none.
-        if (id !== undefined && !callById.has(id)) callById.set(id, { call, at: lineSeconds, plan: shell?.commitPlan ?? [] });
+        if (id !== undefined) callById.set(id, { call, at: lineSeconds, plan: shell?.commitPlan ?? [] });
       } else if (blockType === 'tool_result') {
         const text = resultText(block);
         const failed = isErrorResult(block, text);
@@ -1289,6 +1426,57 @@ export const captureSession = (input: ExtractInput): Capture => {
   session.repo = sessionRoot === null ? null : sha256(`${salt}\nrepo:${identityOf(sessionRoot)}`).slice(0, 16);
   session.urls = [...urls].sort();
   session.searches = [...searches].sort();
+
+  const repoFiles = input.repoFiles ?? repoFilesFromIndex;
+  const stack = stackOf({ paths: framePaths, programs: [...framePrograms], repoFiles: sessionRoot === null ? null : repoFiles(sessionRoot) });
+  const frameOf = (parts: PromptFrameParts): Frame =>
+    closedFrame({
+      harness,
+      harnessVersion: parts.version ?? session.env.harness,
+      model: parts.model,
+      effort: parts.effort,
+      day: utcDay(parts.ts),
+      platform: runtime.os,
+      shell: majorityOrNull(frameShells),
+      stack,
+    });
+  const sessionFrame = frameOf({ version: undefined, model: majorityOrNull(fileModels) ?? majorityOrNull(fileMessageModels), effort: majorityOrNull(fileEfforts), ts: session.tsFirst ?? undefined });
+  const sessionFrameId = frameIdOf(sessionFrame);
+  session.frame = sessionFrame;
+  session.frameId = sessionFrameId;
+  for (const [index, parts] of promptFrames.entries()) {
+    const prompt = prompts[index];
+    if (prompt === undefined) continue;
+    prompt.frame = frameOf(parts);
+    prompt.frameId = frameIdOf(prompt.frame);
+  }
+  for (const [position, call] of tools.entries()) {
+    const frameId = (call.prompt === null ? undefined : prompts[call.prompt]?.frameId) ?? sessionFrameId;
+    const response = responseOfCall[position];
+    const output = response === undefined ? undefined : outputPerResponse.get(response);
+    const tokens = response === undefined || output === undefined || output === 0 ? null : Math.round(output / (callsPerResponse.get(response) ?? 1));
+    call.steps = (drafts[position] ?? []).map((draft, seg) => ({
+      n: call.n,
+      seg,
+      action: draft.action,
+      native: draft.native,
+      identity: draft.identity,
+      status: draft.read ? call.status : 'none',
+      cost: seg === 0 ? { tokens, durationMs: call.durationMs } : { tokens: null, durationMs: null },
+      parent: origin?.spawnedAt ?? null,
+      edges: [],
+      frameId,
+    }));
+  }
+  linkSteps(
+    tools.map((call, position) => ({
+      steps: call.steps ?? [],
+      rawKeys: (drafts[position] ?? []).map((draft) => draft.rawKey),
+      line: `${String(call.prompt)} ${String(call.side)}`,
+      status: call.status,
+    })),
+    origin?.spawnedAt ?? null,
+  );
 
   return {
     session,
