@@ -15,7 +15,9 @@ Under `<config>/oars/sessions/` (`%APPDATA%` on Windows, `$XDG_CONFIG_HOME` or `
 | `skeletons/<session>.json` | One per transcript: ids, timestamps, tool linkage, token counts, a SHA-256 for every content field, and a Merkle root over the raw lines. Hashes only, never content. `verify` checks these. |
 | `state.json` | Per file: size, mtime, the `rev`, capture version (`v`), `sid`, and the `--redact-domain` set, so an unchanged file is skipped. |
 | `salt` | This machine's salt, which file targets are hashed with. Local-only (class `L`), never shared. Its `sid` (the first 8 hex characters of its SHA-256) is stamped on every capture record. |
-| `pipeline-runs.jsonl` | The step log: one row per run of a pipeline step (deposit, derive, index, verify, recall), appended when the step ends. See "The step log". |
+| `pipeline-runs.jsonl` | The step log: one row per run of a pipeline step (deposit, derive, index, verify, recall, read), appended when the step ends. See "The step log". |
+| `cells.jsonl`, `motifs.jsonl` | Counts per motif, frame bucket, and day, and the motifs they name. Computed from the log, rewritten by `oars sessions read`, and safe to delete. See "Motifs, cells, and reads". |
+| `reads/<pool>.jsonl` | One pool version's reads, written once and never rewritten, so a read cited by its ID stays what it was. |
 | `raw/<project>/<path>` | oars' own archive of every deposited transcript (below). |
 | `commit-survival.jsonl` | What became of each commit older than `SURVIVAL_DAYS`, appended on a change of state. See "Commit survival". |
 
@@ -114,7 +116,7 @@ pattern and entropy, emails, and the domains named with `--redact-domain`) befor
 | `prompt` (derived, one per prompt) | `kind`, `v`, `rev`, `index`, `wallSec`, class (`cls`), `tools`, `shape`, `errors`, `thinking`, `sideTools`, `turns`, `model`, `efforts`, `skills`, `usage`, `recovery`, `explore`, `act`, and `bigrams` (the motif vector) | P |
 | | `session`, `head` (the first 300 characters, redacted), `ts`, `promptFingerprint` (`contextFingerprint` on this derived record), and the outcome signals `verify`, `stopped`, `commits`, and `redo` (below) | A |
 | `error` (derived, one per error) | `kind`, `v`, `rev`, `tool`, `harnessVersion`, `editFollowed`, `cls`, `prompt`, `next` (tool names), episode `outcome` and `calls` | P |
-| | `session`, `agent` (the subagent transcript id, a join id), `ts`, `sig` (redacted at capture, normalized at derive), `example` (160 characters) | A |
+| | `session`, `agent` (the subagent transcript id, a join id), `toolUseId` (a join id), `ts`, `sig` (redacted at capture, normalized at derive), `example` (160 characters) | A |
 | store files | `salt`, `state.json`, `raw/`, `hook-index.json` `projects` keys (folder slugs), `mcp-calls.jsonl` `cwd` (the server's working directory, unhashed) | L |
 | | skeleton lines (`skeletons/<session>.json`: ids, usage, block hashes, each cost-state model's usage keys), `hook-calls.jsonl` `session`, `at`, and `error` (first line, redacted), `mcp-calls.jsonl` `query` and `at` (each `at` is finer than a UTC day) | A |
 | | `hook-calls.jsonl` `event`, `hit`, `ms`; `mcp-calls.jsonl` `matches` | P |
@@ -250,6 +252,48 @@ Below `BOOKS_MIN_PROMPTS` (30) in its denominator a share prints as `too few`, a
 `of`. A settled commit counts toward that minimum the way a prompt does. `--by pull` has one row per `ecosystem:name` from the calls' `pulls`, a
 prompt counts once in each row it pulled, so the rows overlap, and a prompt that pulled nothing is in none. Every column reads the main line
 only: subagent work is left out.
+
+## Motifs, cells, and reads
+
+Derivation over the capture records, computed locally under `EXTRACTOR_VERSION` (9 adds them). The capture records stay the primary record: cells and reads can be dropped and computed again, and no rollup replaces what they came from.
+
+- A **motif** is a window of one to four steps within one line of work, hashed with no salt and no frame, so one shape joins across accounts and frames. `shape` hashes actions only and `named` hashes actions and public identities. A `class` motif holds no steps and names a prompt class, which is how cost per class comes from cells. A one-step window is there because fit, adoption, and live count one action, and a prompt of one call has no longer window.
+- A **cell** is order 0: `{motifId, frameBucket, day, sessions, clusters, ok, failed, tokens, durationMs, exposed}`. A frame bucket is harness, harness version by tens of patch, model, and effort; versions are bucketed because most prompts run a version not yet seen, so an exact version goes stale in days. `exposed` is false until consequence windows are written.
+- A **read** is any derived value citing its inputs: `{readId, family, method, methodVersion, inputs, order, slice, value, n, clusters, interval, asOf, basis}`. `readId` is the hash of the rest, `order` is 1 + the highest order among `inputs` with a cell at 0, a read that cites nothing is refused, and `asOf.pool` pins the pool, whose version hashes the extractor version, each family's method version, every cell, and the error rows recovery reads, so new data or a new rule gives a new read even when the value comes out the same.
+
+The families at order 1, in the order they are listed. None adjusts for its confounders, so a row is a count and not a finding.
+
+| Family | Slice | Value | Not removed |
+|--------|-------|-------|-------------|
+| `recovery` | signature hash, failed action | sessions, errors, days, what followed | `editFollowed` is not success; refusals and hook denials are local policy |
+| `fit` | motif, frame bucket | failure rate | a failure is not a misfit; prompt class |
+| `cost` | prompt class, model, ISO week | tokens and seconds per prompt, error share | class drift, subagent work, task size; a prompt with no wall time adds no seconds but still counts, so seconds per prompt understates |
+| `change` | motif, harness, version bucket | share and failure rate in that bucket; a move between buckets is order 2 | effort, rule commits, class drift, date |
+| `live` | motif, day | share of the day beside its share of the seven days before | the day's mix; no multiple-test control, so it flags nothing |
+| `adoption` | motif | share of all steps, first and last day, days seen | the operator's own rules |
+| `method` | shape of two or more steps, model | share among windows of its length | task assignment by tier, effort; no outcome label |
+| `next-step` | prefix of one to three actions | counts of the next action | no outcome label, so the most common step is not the right one |
+| `tool-day` | motif, day | failure rate, and share of the day's steps | the day's mix of work, effort, rule commits |
+
+A read's slice and value hold closed vocabulary and numbers only: never a path, a prompt, or an error's text. A signature appears as its hash, computed the same way on any account. `clusters` is 1 on every row of one operator's store, and `oars sessions read` applies no floor at order 1, because every cell is the operator's own.
+
+### Reads over reads
+
+A read above order 1 takes its inputs from the orders below and its interval from theirs: a difference takes each side from the inputs that could push it there (MOVER), so a skewed rate stays skewed. A read with an input under 30 trials does not exist, and `n` and `clusters` state its weakest input. A share rests on its day's or bucket's steps and a failure rate on the tool's calls, so a tool that falls away keeps its share move: zero of a day's steps is a measurement. Inputs count a step as independent and steps cluster in sessions, so these intervals run narrow.
+
+| Family | Order | Slice | Value | Not removed |
+|--------|-------|-------|-------|-------------|
+| `version-boundary` | 2 | motif, harness, two neighboring version buckets, metric | before, after, and the move in share or failure rate | date, effort, rule commits, class drift |
+| `substitution` | 2 | rising tool, falling tool, the boundary | each share move, and the falling tool's move among the steps that are not the rising tool's | date, class drift, rule commits |
+| `interaction` | 2 | motif, frame, two tiers | each tier's failure rate, and the gap beyond how those tiers differ on every other tool | task assignment by tier, prompt class |
+| `day-move` | 2 | motif, metric, two adjacent days | before, after, and the move; a share move exists for a tool on either day, a failure move only for one with 30 calls on both | not screened, so a row is an input and not a finding |
+| `lead-lag` | 3 | lead, lag, level | slope, its check, and the score | see below |
+
+The first three state only moves past a screen, each with `tested`, the comparisons it was screened among. A move also has to reach 0.01 to be stated, so a read of nothing means nothing moved that far among the comparisons above the floor.
+
+`lead-lag` asks whether a tool's failure rate moving comes before its share moving. It is labeled `experimental` in every output, its heading and its value both, and no agent path serves it. It is fit on the earlier 70 percent of days and scored on the rest, with a pair dated by the day its outcome is known and at least 30 pairs on each side. `check` is `passed` only if the slope's interval excludes zero, it beats predicting no move on the later days (`skill` above 0), and its sign agrees with the later days better than chance (the agreement's Wilson low above 0.5). A pair shares no day: a failure move ending on one day is paired with the share move starting on the next, because a burst of failing calls lifts that day's failure rate and share at once and would otherwise read as a lead. It runs on days because each model has one version here with no release date, and two version boundaries are too few to cut in time. Not removed: shares sum to one, a change of habit moves many tools at once, and every row states `clusters: 1`.
+
+`oars sessions read` also states what the store cannot read, which tells a question it cannot ask from one that found nothing: a model version boundary (a cell holds no version of a model), a harness boundary with one version bucket or none above the floor, an interaction with one tier, and lead-lag with too few pairs. Each pool's reads file is pinned to `METHODS` as well as the extractor, so a family added later is not hidden by a file written before it. Transfer (how far an answer carries) is not read yet: it needs recalls held back from an arm.
 
 ## The step log
 

@@ -5,8 +5,11 @@
 // captured records to `<config>/oars/sessions/observations.jsonl`. The log is append-only: a session whose file changed is deposited
 // again under a higher `rev`, and a reader keeps only the highest `rev` of each session.
 //
+// EXTRACTOR 9 adds motifs, cells, and reads, computed from the capture records and written beside them (`docs/sessions-store.md`), and carries a prompt's
+// frame onto its derived record. No capture record changes.
+//
 // Version 9 (CAPTURE 9, t755) adds `frame` and `frameId` to the session and prompt records and `steps` to the tool record, and moves `tool`, `tools`, and a
-// shell-form `target` from class P to class A. Derivation is unchanged, so EXTRACTOR stays 8.
+// shell-form `target` from class P to class A. It changed no derivation, so it left EXTRACTOR at 8.
 //
 // Version 8 (CAPTURE 8 and EXTRACTOR 8) writes one `tool` record per tool call. The harness writes
 // `api-request-blob` lines, copies of the request body with no cwd, uuid, or timestamp, and capture used to read their blocks as conversation: a second
@@ -50,7 +53,7 @@ export const CAPTURE_VERSION = '9';
 export const OLDEST_READABLE_CAPTURE = 3;
 
 /** Stamped `v` on every derived record. A bump re-derives from the log; no transcript is read. */
-export const EXTRACTOR_VERSION = '8';
+export const EXTRACTOR_VERSION = '9';
 
 export const PROMPT_HEAD_CHARS = 300;
 export const ERROR_EXAMPLE_CHARS = 160;
@@ -204,6 +207,8 @@ export type PromptStop = 'interrupt' | 'rejected';
  */
 export interface PromptObservation {
   kind: 'prompt';
+  /** Where and when the prompt ran, from its capture record; absent on a record captured before frames existed. Class P. */
+  frame?: Frame;
   v: string;
   session: string;
   rev: number;
@@ -260,6 +265,8 @@ export interface ErrorObservation {
   sig: string;
   /** The first informative line, 160 characters, redacted. */
   example: string;
+  /** The call this result answers, class A (a join id): an uncaptured store keeps a replayed result's line beside the first, so one call is one id. Absent on a version-2 deposit. */
+  toolUseId?: string | null;
   /** The next two tool calls after the error (any line, in file order). */
   next: string[];
   /** Whether an Edit, Write, or MultiEdit came within six tool calls. */
@@ -585,7 +592,7 @@ export interface HookCall {
 }
 
 /** The pipeline steps the log names (runtime-commons pipeline spec 3.1); `label` is the local labeler step (A5) that no command runs yet; `index` is the hook-index write the nightly and manual runs log. */
-export const STEPS = ['deposit', 'verify', 'derive', 'label', 'index', 'recall'] as const;
+export const STEPS = ['deposit', 'verify', 'derive', 'label', 'index', 'recall', 'read'] as const;
 export type Step = (typeof STEPS)[number];
 
 /** The trigger names of spec 4.1 (the ones nothing local starts are in the schema only: `weekly` (A21) and the hosted `sync`, `cron`, `release`, `run-end`, and `run-start`). The SessionEnd hook is `stop`, never `session-end`. */
