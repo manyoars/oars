@@ -17,7 +17,7 @@ Every command takes the server from `--server <url>` or `OARS_POOL_URL`. There i
 - **Deposits are closed by default.** With no `COVENANT_VERSION` binding, every deposit gets 403 `deposits_closed`. Once one is set, an account must have accepted exactly that version, or it gets 403 `covenant_not_accepted`, and a new version asks again. Reads and `pull` are not affected.
 - **Closed vocabulary.** A skeleton holding an unknown field or a value outside the vocabulary gets 422 `closed_vocabulary` with the field named, and nothing is stored. What is stored is the parsed skeleton, not the text that came in.
 - **Pseudonymous accounts.** The provider's user id is hashed under `PSEUDONYM_KEY`, which the database never holds. No email, login, or provider id is stored.
-- **Three accounts to a read.** A read is served only at 3 or more clusters, and a cluster is an account, so one account's many sessions count once.
+- **Three accounts to a read.** A read is served only at 3 or more clusters, and a cluster is an account, so one account's many sessions count once. The floor applies to the read's aggregate: its `clusters` is the distinct accounts across all the cells it cites, so three accounts on three different days serve a read even though each day's cell holds one. A cell served on its own needs 3 accounts in that cell.
 - **Deposit or capped access.** An account with a deposit pulls on an ongoing basis. One without is served up to `READ_CAP` reads (default 50).
 
 ## Routes

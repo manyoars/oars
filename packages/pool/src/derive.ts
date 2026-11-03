@@ -1,6 +1,6 @@
 // Cells and reads over deposits (recall spec Sections 2.5 and 2.6), with the same code a local store runs. Each account's skeletons become that account's store and its cells, and
 // the cells merge by key, so `clusters` counts accounts and nothing here can count one account twice. Recovery is left out: its signature is class A text, which a skeleton does not hold.
-import { deriveCells, poolOf, type Cell, type CellSet, type Pool } from '../../cli/src/sessions/cells.js';
+import { cellIdOf, deriveCells, poolOf, type Cell, type CellSet, type Pool } from '../../cli/src/sessions/cells.js';
 import type { Motif } from '../../cli/src/sessions/motif.js';
 import { type Slice, type SessionSkeleton, type SkeletonTranscript, SLICE_FORMAT } from '../../cli/src/sessions/pool-wire.js';
 import { makeRead, orderResolver, type Read } from '../../cli/src/sessions/read.js';
@@ -15,7 +15,7 @@ import type { DeriveFamily } from '../../cli/src/sessions/read-support.js';
 import type { PromptObservation, SessionObservation, ToolObservation } from '../../cli/src/sessions/schema.js';
 import type { Store } from '../../cli/src/sessions/store.js';
 
-/** A served read or cell needs this many accounts (spec Section 8; D4's k rule). */
+/** A served cell needs this many accounts, and a served read this many across its cells together (spec Section 8; D4's k rule). */
 export const SERVED_FLOOR = 3;
 
 const DERIVERS: readonly DeriveFamily[] = [deriveFit, deriveCost, deriveChange, deriveLive, deriveAdoption, deriveMethod, deriveNextStep];
@@ -133,35 +133,47 @@ export const storeOf = (skeletons: readonly SessionSkeleton[]): Store => {
 
 const compare = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
 
+/** The merged cells, and which accounts hold each by its ID. Accounts are positions in the merged list: nothing past this file's caller needs to know who they are. */
+export interface MergedCells extends CellSet {
+  accountsOf: ReadonlyMap<string, ReadonlySet<number>>;
+}
+
 /** Every account's cells as one set: counts add, and `clusters` is how many accounts hold the key. */
-export const mergeCells = (sets: readonly CellSet[]): CellSet => {
-  const cells = new Map<string, Cell>();
+export const mergeCells = (sets: readonly CellSet[]): MergedCells => {
+  const merged = new Map<string, { cell: Cell; accounts: Set<number> }>();
   const motifs = new Map<string, Motif>();
-  for (const set of sets) {
+  sets.forEach((set, account) => {
     for (const motif of set.motifs) motifs.set(motif.motifId, motif);
     for (const cell of set.cells) {
       const key = `${cell.motifId}/${cell.frameBucket}/${cell.day}`;
-      const held = cells.get(key);
-      cells.set(
-        key,
-        held === undefined
-          ? { ...cell, clusters: 1 }
-          : { ...held, sessions: held.sessions + cell.sessions, clusters: held.clusters + 1, ok: held.ok + cell.ok, failed: held.failed + cell.failed, tokens: held.tokens + cell.tokens, durationMs: held.durationMs + cell.durationMs },
-      );
+      const held = merged.get(key);
+      if (held === undefined) {
+        merged.set(key, { cell: { ...cell, clusters: 1 }, accounts: new Set([account]) });
+      } else {
+        held.accounts.add(account);
+        held.cell = { ...held.cell, sessions: held.cell.sessions + cell.sessions, clusters: held.accounts.size, ok: held.cell.ok + cell.ok, failed: held.cell.failed + cell.failed, tokens: held.cell.tokens + cell.tokens, durationMs: held.cell.durationMs + cell.durationMs };
+      }
     }
-  }
+  });
+  const entries = [...merged.values()];
   return {
-    cells: [...cells.values()].sort((a, b) => compare(a.motifId, b.motifId) || compare(a.frameBucket, b.frameBucket) || compare(a.day, b.day)),
+    cells: entries.map(({ cell }) => cell).sort((a, b) => compare(a.motifId, b.motifId) || compare(a.frameBucket, b.frameBucket) || compare(a.day, b.day)),
     motifs: [...motifs.values()].sort((a, b) => compare(a.motifId, b.motifId)),
+    accountsOf: new Map(entries.map(({ cell, accounts }) => [cellIdOf(cell), accounts])),
   };
 };
 
 const NO_STORE: Store = { sessions: [], prompts: [], errors: [], subagents: [], tools: [], newerCaptures: 0 };
 
-const readsOf = (pool: Pool): Read[] => {
+/**
+ * Each family states the highest of a read's cells, the most one store can prove. The pool knows who holds each cell, so a read here counts the accounts across all of them: cells
+ * split by day and frame bucket, and three accounts on three days are three accounts behind one read.
+ */
+const readsOf = (pool: Pool, accountsOf: MergedCells['accountsOf']): Read[] => {
   const orderOf = orderResolver([]);
   const asOf = { pool: pool.version, day: pool.lastDay };
-  return DERIVERS.flatMap((derive) => derive({ pool, store: NO_STORE }).map((read) => makeRead({ ...read, asOf }, orderOf)));
+  const clustersOf = (inputs: readonly string[]): number => new Set(inputs.flatMap((input) => [...(accountsOf.get(input) ?? [])])).size;
+  return DERIVERS.flatMap((derive) => derive({ pool, store: NO_STORE }).map((read) => makeRead({ ...read, asOf, clusters: clustersOf(read.inputs) }, orderOf)));
 };
 
 /** What one stack's slice holds. Every family reads the whole pool, so a share keeps its true denominator; only what clears the floor leaves. */
@@ -178,6 +190,6 @@ export const sliceOf = (stack: string, byAccount: readonly (readonly SessionSkel
     asOf: { pool: pool.version, day: pool.lastDay },
     cells,
     motifs: set.motifs.filter((motif) => held.has(motif.motifId)),
-    reads: readsOf(pool).filter((read) => read.clusters >= SERVED_FLOOR),
+    reads: readsOf(pool, set.accountsOf).filter((read) => read.clusters >= SERVED_FLOOR),
   };
 };
