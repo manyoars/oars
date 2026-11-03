@@ -667,10 +667,7 @@ const readSource = async (context: DepositContext, source: Source, root: string,
   if (store === undefined) return;
   result.sources[source.name] = counts;
   counts.rejected += store.rejected;
-  for (const entry of store.unreadable) {
-    const at = entry.lastIndexOf(': ');
-    noteReason(counts, at < 0 ? entry : entry.slice(0, at), at < 0 ? 'unreadable' : entry.slice(at + 2));
-  }
+  for (const entry of store.unreadable) noteReason(counts, entry.file, entry.reason);
   try {
     for (const session of store.sessions) {
       const key = `${source.name}/${session.id}`;
@@ -800,7 +797,7 @@ export const frozenSessions = async (runtime: SessionsRuntime, behind: readonly 
     let listed: ReadonlySet<string> | undefined;
     try {
       const store = await source.open(root);
-      listed = new Set((store?.sessions ?? []).map((session) => `${prefix}${session.id}`));
+      listed = store !== undefined && store.unreadable.length > 0 ? undefined : new Set((store?.sessions ?? []).map((session) => `${prefix}${session.id}`));
       store?.close();
     } catch {
       listed = undefined;
