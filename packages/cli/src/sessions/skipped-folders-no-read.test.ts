@@ -9,7 +9,7 @@ vi.mock('node:fs/promises', async (importOriginal) => {
   const actual = await importOriginal<typeof fsp>();
   const readFile = vi.fn(actual.readFile);
   readFile.mockImplementation((...args: Parameters<typeof actual.readFile>) => {
-    opened.push(String(args[0]));
+    if (typeof args[0] === 'string') opened.push(args[0]);
     return actual.readFile(...args);
   });
   return { ...actual, readFile };
