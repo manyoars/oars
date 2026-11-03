@@ -42,17 +42,18 @@ const isObj = (value: unknown): value is Obj => typeof value === 'object' && val
 
 const toQuery = (args: unknown): PullInput => {
   const source = isObj(args) ? args : {};
+  const narrowing: { cls?: string; sinceDays?: number } = {};
+  if (typeof source.class === 'string') narrowing.cls = source.class;
+  if (typeof source.sinceDays === 'number' && Number.isInteger(source.sinceDays) && source.sinceDays > 0) narrowing.sinceDays = source.sinceDays;
   const prefix = Array.isArray(source.prefix) ? source.prefix.filter((id): id is string => typeof id === 'string') : [];
   if (prefix.length > 0) return { form: 'pattern', prefix };
   if (typeof source.entity === 'string') return { form: 'entity', entity: source.entity };
-  if (typeof source.family === 'string') return { form: 'question', family: source.family };
+  if (typeof source.family === 'string') return { form: 'question', family: source.family, slice: narrowing };
   if (typeof source.text === 'string') return { form: 'text', text: source.text };
-  const query: { error?: string; path?: string; cls?: string; sinceDays?: number } = {};
+  const query: { error?: string; path?: string } = {};
   if (typeof source.error === 'string') query.error = source.error;
   if (typeof source.path === 'string') query.path = source.path;
-  if (typeof source.class === 'string') query.cls = source.class;
-  if (typeof source.sinceDays === 'number' && Number.isInteger(source.sinceDays) && source.sinceDays > 0) query.sinceDays = source.sinceDays;
-  return query;
+  return { ...query, ...narrowing };
 };
 
 const reply = (id: unknown, result: object): object => ({ jsonrpc: '2.0', id, result });
