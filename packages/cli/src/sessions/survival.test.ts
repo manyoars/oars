@@ -301,7 +301,7 @@ describe('recordSurvival', () => {
     publish(repo);
     const s = stage('unused');
     const project = slugOf(repo);
-    const onSidechain = transcript(repo, [{ sha }]).map((line, index) => (index === 0 ? line : JSON.stringify({ ...(JSON.parse(line) as object), isSidechain: true })));
+    const onSidechain = transcript(repo, [{ sha }]).map((line, index) => (index === 0 ? line : `{"isSidechain":true,${line.slice(1)}`));
     addProject(s, project, 'one', onSidechain);
     await deposit(s.runtime, { allow: [project], redactDomains: [], now: () => NOW });
     expect((await loadStore(s.storeDir)).tools.flatMap((tool) => tool.commits ?? [])).toEqual([sha]);
