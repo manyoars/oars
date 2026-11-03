@@ -49,11 +49,11 @@ A version-2 session (no `cv`) is still read: its already-derived `prompt` and `e
 
 Every record carries `kind`, `cv`, `sid`, `session`, and `rev` (a version-3 record reads with `sid` null). Text is redacted (secrets by
 pattern and entropy, emails, and the domains named with `--redact-domain`) before it is cut or written. Each field has one class
-(the umbrella repository's D1 spec, Section 1.1):
+(the umbrella repository's D1 spec, Section 1.1). The store uploads nothing, so a class says what a field may hold, not where it goes:
 
-- `L` local-only: stays on this machine at every tier. Raw transcripts, the unhashed paths, the project folder slug, the salt, `state.json`.
-- `A` account store: this machine today; the account's own store from the hosted tier. Redacted text (cut to its limit), join ids, and every salted hash.
-- `P` pooled: names, versions, counts, durations, status, key names, and day-resolution dates. The only class that may ever reach a pooled index; it holds no free text, URL, path, path hash, session id, or branch.
+- `L` the most sensitive: raw transcripts, the unhashed paths, the project folder slug, the salt, `state.json`.
+- `A` redacted text (cut to its limit), join ids, and every salted hash.
+- `P` the least sensitive: names, versions, counts, durations, status, key names, and day-resolution dates. It holds no free text, URL, path, path hash, session id, or branch.
 
 | Record | Fields | Class |
 |--------|--------|-------|
@@ -75,8 +75,8 @@ pattern and entropy, emails, and the domains named with `--redact-domain`) befor
 | | skeleton lines (`skeletons/<session>.json`: ids, usage, block hashes, each cost-state model's usage keys; a pool would hold only `merkleRoot` and `leaves`), `hook-calls.jsonl` `session`, `at`, and `error` (first line, redacted), `mcp-calls.jsonl` `query` and `at` (each `at` is finer than a UTC day; a pool would keep the UTC day) | A |
 | | `hook-calls.jsonl` `event`, `hit`, `ms`; `mcp-calls.jsonl` `matches` | P |
 
-A pool may hold a day-resolution date only: none of the A fields above reaches it. `sw` (the per-field local-only switch for text
-fields on a hosted store) applies to `urls`, `searches`, `branches`, `tldrs`, `confidences`, `head`, `line`, `sig`, `example`, and `mcp-calls.jsonl` `query`.
+A `P` date is at day resolution only: the finer timestamps above are all class `A`. `sw` (the per-field local-only switch for text
+fields) applies to `urls`, `searches`, `branches`, `tldrs`, `confidences`, `head`, `line`, `sig`, `example`, and `mcp-calls.jsonl` `query`.
 
 `env` (class P) is `{ harness, oars, node, os }`: the last harness version the transcript names, the oars package that captured it, the
 Node.js version, and `process.platform`. A library version is recorded only when a transcript states it, and none is read today.
@@ -141,7 +141,9 @@ target and on nothing else.
 `oars sessions deposit` and the nightly run, never a hook, read the repository of each allowlisted folder and append one line per changed
 sha to `commit-survival.jsonl`: `{ sha, state, day }`, with `sha` as captured (class A), `state` (class P), and a day-resolution `day`
 (class A). Only a call in a main transcript whose `ts` is more than `SURVIVAL_DAYS` (7) old counts, so a sha `commits` could not read and a
-subagent's commit are not observed. The latest line of a sha wins. It is a separate file, so what `verify` checks is untouched.
+subagent's commit are not observed. `git commit -q` prints no `[branch sha]` line, so a quiet commit's sha is read only when a read-back is
+the call's final command; a store that commits quietly observes few of its commits. The latest line of a sha wins. It is a separate file, so
+what `verify` checks is untouched.
 
 | `state` | Rule | What it does not say |
 |---------|------|---------------------|
