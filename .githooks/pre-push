@@ -1,0 +1,11 @@
+#!/bin/sh
+# Refuses a push that would publish a listed private term (scripts/check-private-names.mjs). Enable with `just hooks`.
+# git feeds one "<local ref> <local sha> <remote ref> <remote sha>" line per ref on stdin; an all-zero local sha is a delete.
+zero=0000000000000000000000000000000000000000
+root=$(dirname "$0")/..
+status=0
+while read -r local_ref local_sha remote_ref remote_sha; do
+  [ "$local_sha" = "$zero" ] && continue
+  node "$root/scripts/check-private-names.mjs" "$local_sha" || status=1
+done
+exit $status

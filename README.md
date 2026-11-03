@@ -52,7 +52,7 @@ differ. The file holds all the money handling and is one file in every template:
 `openapi/public-operations.json` and run:
 
 ```sh
-just openapi-refresh <path to aor-platform/api-specs/openapi.json>
+just openapi-refresh <path to the platform checkout's api-specs/openapi.json>
 ```
 
 That rewrites `openapi/public.json` (the listed operations and the components they reference, keys sorted, so a diff shows only
