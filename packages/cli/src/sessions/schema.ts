@@ -259,6 +259,8 @@ export interface ErrorObservation {
   sig: string;
   /** The first informative line, 160 characters, redacted. */
   example: string;
+  /** The call this result answers, class A (a join id): an uncaptured store keeps a replayed result's line beside the first, so one call is one id. Absent on a version-2 deposit. */
+  toolUseId?: string | null;
   /** The next two tool calls after the error (any line, in file order). */
   next: string[];
   /** Whether an Edit, Write, or MultiEdit came within six tool calls. */
