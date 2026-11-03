@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest';
 import { extractSession } from './derive.js';
 import { captureSession } from './extract.js';
 import { makeRedactor } from './redact.js';
+import { CAPTURE_VERSION } from './schema.js';
 import { CAPTURE_INVARIANTS, formatVerify, formatSessionResults, INVARIANTS, verifyAll, verifyCaptured, verifySessions, verifySkeleton, type InvariantResult } from './verify.js';
 import { FIXTURES } from './test-support.js';
 
@@ -204,7 +205,7 @@ describe('verifyCaptured (the CAPTURE 4 fields)', () => {
     old.session.cv = '2';
     expect(verifyCaptured([old.session], old.tools)[0]).toMatchObject({ checked: 0, violations: 0 });
     const newer = capture('/w', '/w/a', 'aaaaaaaa');
-    newer.session.cv = '6';
+    newer.session.cv = String(Number(CAPTURE_VERSION) + 1);
     expect(violations([newer])[0]).toBe(0);
   });
 });
