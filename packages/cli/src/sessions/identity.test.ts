@@ -213,4 +213,12 @@ describe('identity holds public names only', () => {
     const [tool] = capture([{ name: 'mcp_acme_read', input: {} }], 'cursor');
     expect(tool?.steps?.[0]).toMatchObject({ action: 'mcp.call', native: '<literal>', identity: { server: '<literal>', tool: '<literal>' } });
   });
+
+  it('holds back the tool when a harness spelling cannot say where the server name ends', () => {
+    // `mcp_postgres_acme_query` may be tool `acme_query` on `postgres` or tool `query` on a private `postgres_acme`, so what follows the first word is unknown.
+    const call = { name: 'mcp_postgres_acme_query', input: {} };
+    const [tool] = capture([call], 'cursor');
+    expect(tool?.steps?.[0]).toMatchObject({ action: 'mcp.call', native: '<literal>', identity: { server: 'postgres', tool: '<literal>' } });
+    expect(pooled(captured([call], 'cursor'))).not.toContain('acme');
+  });
 });
