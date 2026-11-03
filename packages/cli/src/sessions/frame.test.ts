@@ -1,11 +1,13 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { captureSession } from './extract.js';
-import { closedFrame, closedStack, frameIdOf, repoFilesFromIndex, stackOf, utcDay } from './frame.js';
+import { closedFrame, closedStack, frameIdOf, repoFilesFromIndex, repoSizeOf, stackOf, utcDay } from './frame.js';
 import { LITERAL } from './public-vocabulary.js';
 import type { Frame } from './schema.js';
+import { deposit, loadStore } from './store.js';
+import { addProject, cleanup, folders, NOW, stage } from './test-support.js';
 
 const base: Frame = {
   harness: 'claude-code',
@@ -70,24 +72,24 @@ describe('closedStack', () => {
 describe('stackOf', () => {
   it('reads the language mix from touched files, the top three by count, and never a path', () => {
     const paths = ['/home/alice/secret-project/a.ts', 'b.ts', 'c.ts', 'd.tsx', 'e.java', 'f.java', 'g.py', 'i.unknownext', 'Makefile'];
-    const stack = stackOf({ paths, programs: [], repoFiles: null });
+    const stack = stackOf({ paths, programs: [], size: null });
     expect(stack.languages).toEqual(['java', 'python', 'typescript']);
     expect(JSON.stringify(stack)).not.toContain('alice');
   });
 
   it('breaks a tie for the third language by name, so the mix does not depend on file order', () => {
-    const one = stackOf({ paths: ['a.ts', 'b.java', 'c.py', 'd.go'], programs: [], repoFiles: null });
-    const two = stackOf({ paths: ['d.go', 'c.py', 'b.java', 'a.ts'], programs: [], repoFiles: null });
+    const one = stackOf({ paths: ['a.ts', 'b.java', 'c.py', 'd.go'], programs: [], size: null });
+    const two = stackOf({ paths: ['d.go', 'c.py', 'b.java', 'a.ts'], programs: [], size: null });
     expect(one.languages).toEqual(two.languages);
   });
 
   it('names frameworks from a touched manifest and from a program, only from the closed list', () => {
-    const stack = stackOf({ paths: ['/x/pom.xml', 'web/vite.config.ts', '/x/acme.config.ts'], programs: ['kubectl', 'acme-deploy'], repoFiles: null });
+    const stack = stackOf({ paths: ['/x/pom.xml', 'web/vite.config.ts', '/x/acme.config.ts'], programs: ['kubectl', 'acme-deploy'], size: null });
     expect(stack.frameworks).toEqual(['kubernetes', 'maven', 'vite']);
   });
 
   it('buckets the repository size by file count', () => {
-    const size = (repoFiles: number | null): string | null => stackOf({ paths: [], programs: [], repoFiles }).size;
+    const size = repoSizeOf;
     expect([null, 0, 99, 100, 999, 1000, 9999, 10000, 99999, 100000].map(size)).toEqual([null, 'xs', 'xs', 's', 's', 'm', 'm', 'l', 'l', 'xl']);
   });
 });
@@ -104,6 +106,14 @@ describe('closedFrame', () => {
 
   it('keeps null as null', () => {
     expect(closedFrame({ ...base, model: null, harnessVersion: null, effort: null })).toMatchObject({ model: null, harnessVersion: null, effort: null });
+  });
+
+  it.each(['claude-opus-5-5', 'claude-fable-5-1', 'claude-haiku-4-5-20251001', 'claude-3-5-sonnet-20241022', 'claude-3-opus-20240229', 'gpt-5.1-codex-max', 'gpt-4o-mini', 'o3-mini', 'gemini-2.5-pro', 'grok-code-fast-1', 'deepseek-r1', 'composer-1', 'cursor-small', 'default', 'auto'])('keeps %s, a published model shape', (model) => {
+    expect(closedFrame({ ...base, model }).model).toBe(model);
+  });
+
+  it.each(['claude-acme-proxy', 'claude-opus-acme', 'claude-opus-5-acme-tuned', 'claude-3-acme', 'claude', 'gpt-4o-acme', 'ft:gpt-4o:acme::abc', 'gemini-corp-tuned', 'o3-acme', 'composer-acme'])('masks %s, a known family holding a private name', (model) => {
+    expect(closedFrame({ ...base, model }).model).toBe(LITERAL);
   });
 });
 
@@ -131,6 +141,25 @@ describe('repoFilesFromIndex', () => {
 
   it('reads the entry count from the index header without running git', () => {
     expect(repoFilesFromIndex(repo(header('DIRC', 4321)))).toBe(4321);
+  });
+
+  it('follows a linked worktree or submodule from its .git file to its index, absolute or relative', () => {
+    const gitDir = repo(header('DIRC', 77));
+    const absolute = repo(undefined);
+    writeFileSync(join(absolute, '.git'), `gitdir: ${join(gitDir, '.git')}\n`);
+    expect(repoFilesFromIndex(absolute)).toBe(77);
+    mkdirSync(join(gitDir, 'nested'));
+    writeFileSync(join(gitDir, 'nested', '.git'), 'gitdir: ../.git\n');
+    expect(repoFilesFromIndex(join(gitDir, 'nested'))).toBe(77);
+  });
+
+  it('is null when a .git file points nowhere or says nothing', () => {
+    const pointsNowhere = repo(undefined);
+    writeFileSync(join(pointsNowhere, '.git'), 'gitdir: ./missing\n');
+    expect(repoFilesFromIndex(pointsNowhere)).toBeNull();
+    const saysNothing = repo(undefined);
+    writeFileSync(join(saysNothing, '.git'), 'not a pointer\n');
+    expect(repoFilesFromIndex(saysNothing)).toBeNull();
   });
 
   it('is null with no index, a short one, or the wrong signature', () => {
@@ -200,5 +229,91 @@ describe('the frame on captured records', () => {
     seen.length = 0;
     expect(captureSession({ text, session: 's', project: 'p', rev: 1, at: 'x', bytes: 1, redact, repoFiles: probe }).prompts[0]?.frame?.stack.size).toBeNull();
     expect(seen).toEqual([]);
+  });
+});
+
+describe('the frame when a transcript is captured again', () => {
+  afterEach(cleanup);
+  const options = { allow: ['proj'], redactDomains: [], now: () => NOW };
+  const indexHolding = (entries: number): Buffer => {
+    const buffer = Buffer.alloc(12);
+    buffer.write('DIRC', 0, 'latin1');
+    buffer.writeUInt32BE(2, 4);
+    buffer.writeUInt32BE(entries, 8);
+    return buffer;
+  };
+  const lines = (cwd: string): string[] => [
+    line({ type: 'user', timestamp: '2026-05-29T04:30:00Z', cwd, message: { role: 'user', content: 'p' } }),
+    line({ type: 'assistant', timestamp: '2026-05-29T04:30:01Z', cwd, message: { role: 'assistant', content: [{ type: 'tool_use', id: 't1', name: 'Bash', input: { command: 'ls' } }] } }),
+  ];
+  const stageRepo = (): { staged: ReturnType<typeof stage>; repo: string; touch: () => void } => {
+    const staged = stage();
+    const { repo } = folders(staged.root);
+    writeFileSync(join(repo, '.git', 'index'), indexHolding(50));
+    const file = addProject(staged, 'proj', 'framed', lines(repo));
+    return { staged, repo, touch: () => { utimesSync(file, new Date(NOW), new Date(NOW + 1000)); } };
+  };
+  const framesOf = async (storeDir: string, session = 'framed'): Promise<{ size: string | null | undefined; ids: Array<string | undefined>; rev: number | undefined }> => {
+    const store = await loadStore(storeDir);
+    const record = store.sessions.find((one) => one.session === session);
+    const steps = store.tools.filter((tool) => tool.session === session).flatMap((tool) => tool.steps ?? []);
+    return { size: record?.frame?.stack.size, ids: [record?.frameId, ...steps.map((step) => step.frameId)], rev: record?.rev };
+  };
+
+  it('keeps every frame id after the repository crosses a size bucket', async () => {
+    const { staged, repo, touch } = stageRepo();
+    await deposit(staged.runtime, options);
+    const first = await framesOf(staged.storeDir);
+    expect(first.size).toBe('xs');
+    writeFileSync(join(repo, '.git', 'index'), indexHolding(50000));
+    touch();
+    await deposit(staged.runtime, options);
+    const again = await framesOf(staged.storeDir);
+    expect(again.rev).toBeGreaterThan(first.rev ?? 0);
+    expect(again.ids).toEqual(first.ids);
+    expect(again.size).toBe('xs');
+  });
+
+  it('keeps every frame id after the repository is gone', async () => {
+    const { staged, repo, touch } = stageRepo();
+    await deposit(staged.runtime, options);
+    const first = await framesOf(staged.storeDir);
+    rmSync(repo, { recursive: true, force: true });
+    touch();
+    await deposit(staged.runtime, options);
+    expect((await framesOf(staged.storeDir)).ids).toEqual(first.ids);
+  });
+
+  it('holds a null size once logged, rather than reading the repository later', async () => {
+    const { staged, repo, touch } = stageRepo();
+    rmSync(join(repo, '.git', 'index'));
+    await deposit(staged.runtime, options);
+    const first = await framesOf(staged.storeDir);
+    expect(first.size).toBeNull();
+    writeFileSync(join(repo, '.git', 'index'), indexHolding(50));
+    touch();
+    await deposit(staged.runtime, options);
+    expect((await framesOf(staged.storeDir)).ids).toEqual(first.ids);
+  });
+
+  it('reads the earlier frame from the log when the state file was lost', async () => {
+    const { staged, repo } = stageRepo();
+    await deposit(staged.runtime, options);
+    const first = await framesOf(staged.storeDir);
+    writeFileSync(join(repo, '.git', 'index'), indexHolding(50000));
+    rmSync(join(staged.storeDir, 'state.json'));
+    await deposit(staged.runtime, { ...options, now: () => NOW + 1 });
+    const again = await framesOf(staged.storeDir);
+    expect(again.rev).toBeGreaterThan(first.rev ?? 0);
+    expect(again.ids).toEqual(first.ids);
+  });
+
+  it('reads the repository for a transcript with no earlier capture', async () => {
+    const { staged, repo } = stageRepo();
+    await deposit(staged.runtime, options);
+    writeFileSync(join(repo, '.git', 'index'), indexHolding(50000));
+    addProject(staged, 'proj', 'later', lines(repo));
+    await deposit(staged.runtime, options);
+    expect((await framesOf(staged.storeDir, 'later')).size).toBe('l');
   });
 });

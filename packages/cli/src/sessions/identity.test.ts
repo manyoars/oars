@@ -1,24 +1,52 @@
 import { describe, expect, it } from 'vitest';
-import { captureSession } from './extract.js';
+import { captureSession, type Capture } from './extract.js';
+import { BUNDLING_PROGRAMS, PUBLIC_PROGRAMS } from './public-vocabulary.js';
 import { makeRedactor } from './redact.js';
 import type { StepObservation, ToolObservation } from './schema.js';
 
 const line = (value: object): string => JSON.stringify(value);
 
+interface Call {
+  name: string;
+  input: object;
+  /** The output of a failed result, so the call also leaves an error-line record. */
+  failure?: string;
+}
+
 /** One prompt holding the given calls. */
-const capture = (calls: ReadonlyArray<{ name: string; input: object }>, harness?: 'claude-code' | 'cursor'): ToolObservation[] => {
+const captured = (calls: readonly Call[], harness?: 'claude-code' | 'cursor'): Capture => {
   const text = [
     line({ type: 'user', timestamp: '2026-05-29T04:30:00Z', message: { role: 'user', content: 'p' } }),
-    ...calls.map((call, index) => line({ type: 'assistant', timestamp: '2026-05-29T04:30:01Z', message: { role: 'assistant', content: [{ type: 'tool_use', id: `t${String(index)}`, name: call.name, input: call.input }] } })),
+    ...calls.flatMap((call, index) => [
+      line({ type: 'assistant', timestamp: '2026-05-29T04:30:01Z', message: { role: 'assistant', content: [{ type: 'tool_use', id: `t${String(index)}`, name: call.name, input: call.input }] } }),
+      ...(call.failure === undefined ? [] : [line({ type: 'user', timestamp: '2026-05-29T04:30:02Z', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: `t${String(index)}`, is_error: true, content: call.failure }] } })]),
+    ]),
   ].join('\n');
-  return captureSession({ text, session: 's', project: 'p', rev: 1, at: 'x', bytes: 1, redact: makeRedactor([]), ...(harness === undefined ? {} : { harness }) }).tools;
+  return captureSession({ text, session: 's', project: 'p', rev: 1, at: 'x', bytes: 1, redact: makeRedactor([]), ...(harness === undefined ? {} : { harness }) });
 };
 
-const stepsOf = (calls: ReadonlyArray<{ name: string; input: object }>): StepObservation[] => capture(calls).flatMap((tool) => tool.steps ?? []);
+const capture = (calls: readonly Call[], harness?: 'claude-code' | 'cursor'): ToolObservation[] => captured(calls, harness).tools;
+const stepsOf = (calls: readonly Call[]): StepObservation[] => capture(calls).flatMap((tool) => tool.steps ?? []);
 const shell = (command: string): StepObservation[] => stepsOf([{ name: 'Bash', input: { command } }]);
 
-/** Everything on a step is class P, by the schema. */
-const pooled = (steps: readonly StepObservation[]): string => JSON.stringify(steps);
+// The class A and L fields of each record, from the class table in `docs/sessions-store.md`. Named as the fields to drop, so a field added later counts as class P and is checked until someone classes it.
+const NOT_POOLED = {
+  session: ['session', 'parent', 'spawnedBy', 'spawnedIn', 'at', 'tsFirst', 'tsLast', 'promptFingerprint', 'repo', 'tools', 'fileHashes', 'urls', 'searches', 'branches', 'tldrs', 'confidences', 'project', 'files'],
+  prompt: ['session', 'ts', 'head', 'promptFingerprint'],
+  tool: ['session', 'parent', 'toolUseId', 'ts', 'tool', 'target', 'segments', 'pulls', 'commits'],
+  errorLine: ['session', 'toolUseId', 'tool', 'ts', 'line'],
+} as const;
+
+const withoutFields = (record: object, fields: readonly string[]): object => Object.fromEntries(Object.entries(record).filter(([field]) => !fields.includes(field)));
+
+/** Every class P field of the four capture records. */
+const pooled = (capture: Capture): string =>
+  JSON.stringify([
+    withoutFields(capture.session, NOT_POOLED.session),
+    capture.prompts.map((prompt) => withoutFields(prompt, NOT_POOLED.prompt)),
+    capture.tools.map((tool) => withoutFields(tool, NOT_POOLED.tool)),
+    capture.errorLines.map((errorLine) => withoutFields(errorLine, NOT_POOLED.errorLine)),
+  ]);
 
 describe('identity holds public names only', () => {
   it('reads a shell step as its program, subcommand, and flag names', () => {
@@ -35,6 +63,7 @@ describe('identity holds public names only', () => {
     ['a flag with its value joined', 'git push --token=abcvalue', 'abcvalue'],
     ['a flag with its value apart', 'git push --token abcvalue', 'abcvalue'],
     ['a value in a program flag', 'mysql -pmypassword', 'mypassword'],
+    ['a short value in a program flag', 'mysql -pabc', 'abc'],
     ['a define', 'mvn -Dapi.key=defvalue test', 'defvalue'],
     ['a path holding a username', 'cat /home/alicesmith/notes.txt', 'alicesmith'],
     ['a Windows path holding a username', 'type C:\\Users\\alicesmith\\notes.txt', 'alicesmith'],
@@ -50,7 +79,10 @@ describe('identity holds public names only', () => {
     const steps = shell(command);
     expect(steps.length).toBeGreaterThan(0);
     expect(steps[0]?.identity).toBeDefined();
-    expect(pooled(steps)).not.toContain(value);
+    // Failed, with the command in its output, so an error-line record is in the check too.
+    const failed = captured([{ name: 'Bash', input: { command }, failure: `boom: ${command}` }]);
+    expect(failed.errorLines).toHaveLength(1);
+    expect(pooled(failed)).not.toContain(value);
   });
 
   it('masks a private program and takes no flags from it', () => {
@@ -97,6 +129,15 @@ describe('identity holds public names only', () => {
     expect(shell('git log -abcdefgh')[0]?.identity).toMatchObject({ flags: ['<literal>'] });
   });
 
+  it('reads a short value joined to a flag as the literal, not as flag letters, on a program that does not bundle', () => {
+    expect(shell('mysql -pabc')[0]?.identity).toMatchObject({ flags: ['<literal>'] });
+    expect(shell('git commit -am x')[0]?.identity).toMatchObject({ flags: ['-a', '-m'] });
+  });
+
+  it('holds only public programs in the list of those that bundle short flags', () => {
+    expect([...BUNDLING_PROGRAMS].filter((program) => !PUBLIC_PROGRAMS.has(program))).toEqual([]);
+  });
+
   it('stops reading flags at the end-of-options marker', () => {
     expect(shell('git checkout -- --force')[0]?.identity).toMatchObject({ flags: [] });
   });
@@ -128,10 +169,10 @@ describe('identity holds public names only', () => {
   });
 
   it('masks a private MCP server and its tool, and the name that holds them', () => {
-    const steps = stepsOf([{ name: 'mcp__acme-internal__read_ledger', input: {} }]);
-    expect(steps[0]).toMatchObject({ action: 'mcp.call', native: '<literal>', identity: { server: '<literal>', tool: '<literal>' } });
-    expect(pooled(steps)).not.toContain('acme');
-    expect(pooled(steps)).not.toContain('ledger');
+    const call = { name: 'mcp__acme-internal__read_ledger', input: {} };
+    expect(stepsOf([call])[0]).toMatchObject({ action: 'mcp.call', native: '<literal>', identity: { server: '<literal>', tool: '<literal>' } });
+    expect(pooled(captured([call]))).not.toContain('acme');
+    expect(pooled(captured([call]))).not.toContain('ledger');
   });
 
   it('masks a tool name on a public server that is not shaped like one', () => {
@@ -146,10 +187,10 @@ describe('identity holds public names only', () => {
 
   it('reads a public host, and masks any other', () => {
     expect(stepsOf([{ name: 'WebFetch', input: { url: 'https://github.com/acme/private?token=abc' } }])[0]?.identity).toEqual({ host: 'github.com' });
-    const hostile = stepsOf([{ name: 'WebFetch', input: { url: 'https://alice:s3cretpw@corp.example/acme?token=abc' } }]);
-    expect(hostile[0]?.identity).toEqual({ host: '<literal>' });
-    expect(pooled(hostile)).not.toContain('s3cretpw');
-    expect(pooled(hostile)).not.toContain('corp.example');
+    const call = { name: 'WebFetch', input: { url: 'https://alice:s3cretpw@corp.example/acme?token=abc' } };
+    expect(stepsOf([call])[0]?.identity).toEqual({ host: '<literal>' });
+    expect(pooled(captured([call]))).not.toContain('s3cretpw');
+    expect(pooled(captured([call]))).not.toContain('corp.example');
   });
 
   it('does not take a public name as a part of a host', () => {

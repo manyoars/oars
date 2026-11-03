@@ -9,6 +9,8 @@ export const LITERAL = '<literal>';
 
 export const REPO_SIZES = ['xs', 's', 'm', 'l', 'xl'] as const;
 export type RepoSize = (typeof REPO_SIZES)[number];
+/** A stored size bucket: null is a size that could not be read, and undefined is a value that is not one. */
+export const asRepoSize = (value: unknown): RepoSize | null | undefined => (value === null ? null : REPO_SIZES.find((size) => size === value));
 
 /** File extension to language: the stack's language mix. */
 export const LANGUAGE_OF_EXTENSION: ReadonlyMap<string, string> = new Map([
@@ -92,7 +94,18 @@ export const FRAMEWORK_OF_PROGRAM: ReadonlyMap<string, string> = new Map([
 export const FRAMEWORKS: ReadonlySet<string> = new Set([...FRAMEWORK_OF_FILE.map(([, name]) => name), ...FRAMEWORK_OF_PROGRAM.values()]);
 
 const EFFORTS: ReadonlySet<string> = new Set(['low', 'medium', 'high', 'xhigh', 'max', 'auto']);
-const MODEL = /^(?:(?:claude|gpt|o[134]|gemini|codex|composer|cursor|grok|deepseek|llama|mistral|qwen|kimi|glm)(?:[-.:_][a-z0-9.:_-]*)?|auto|default)$/;
+// Published shapes only, each part a version or a word from the closed list, so a gateway or fine-tune name under a known family fails closed.
+const MODEL_VERSION = '[a-z]?\\d[\\d.]*[a-z]?';
+const MODEL_WORD = 'mini|nano|pro|max|lite|turbo|flash|ultra|large|medium|small|tiny|high|low|fast|code|codex|coder|chat|reasoner|thinking|exp|preview|latest|instant';
+const CLAUDE_TIER = 'opus|sonnet|haiku|fable';
+const MODEL = new RegExp(
+  [
+    `^claude-(?:${CLAUDE_TIER})(?:-\\d[\\d.]*)*$`,
+    `^claude-\\d[\\d.]*(?:-\\d+)*(?:-(?:${CLAUDE_TIER}|instant)(?:-\\d+)*)?$`,
+    `^(?:gpt|o[134]|gemini|codex|composer|cursor|grok|deepseek|llama|mistral|qwen|kimi|glm)(?:-?${MODEL_VERSION})?(?:-(?:${MODEL_VERSION}|${MODEL_WORD}))*$`,
+    '^(?:auto|default)$',
+  ].join('|'),
+);
 const VERSION = /^\d+(?:\.\d+){0,3}(?:[-+.][0-9A-Za-z]+)*$/;
 /** A name this long is not one of these: it is text someone pasted. */
 const NAME_MAX = 64;
@@ -104,6 +117,14 @@ export const publicModel = (value: string | null): string | null => orLiteral(va
 export const publicVersion = (value: string | null): string | null => orLiteral(value, (version) => VERSION.test(version));
 
 const words = (text: string): ReadonlySet<string> => new Set(text.split(/\s+/).filter((word) => word !== ''));
+
+/** Programs whose short flags are commonly bundled, as in `rm -rf`. Elsewhere a short lowercase run is more likely a value joined to its flag, as in `mysql -pabc`. */
+export const BUNDLING_PROGRAMS: ReadonlySet<string> = new Set(
+  words(`
+    rm cp mv ls mkdir chmod chown ln touch tar zip unzip gzip gunzip grep rg sed awk sort uniq wc cut head tail du df ps kill
+    xargs git curl wget rsync diff tr bash sh zsh docker
+  `),
+);
 
 /** Programs anyone can install or a system ships. A private script or binary is not here, so it reads as the literal. */
 export const PUBLIC_PROGRAMS: ReadonlySet<string> = new Set([
