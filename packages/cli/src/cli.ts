@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { Command, CommanderError, InvalidArgumentError, type OptionValues } from 'commander';
 import { resolveApiUrl } from './api.js';
 import { deploy } from './commands/deploy.js';
+import { keysCreate, keysList, keysRevoke, SCOPED_AUTHORITIES } from './commands/keys.js';
 import { login } from './commands/login.js';
 import { logout } from './commands/logout.js';
 import { purchasingCap, purchasingCard, purchasingList, type BillingMode } from './commands/purchasing.js';
@@ -231,6 +232,46 @@ const buildProgram = (deps: RunDeps, argv: string[]): Command => {
         idempotencyKey: text(options, 'idempotencyKey') ?? randomUUID(),
       });
       emit(deps, flag(options, 'json'), outcome);
+    });
+
+  const keys = program.command('keys').description('create, list, and revoke your API keys; a key made with --workload works on that one workload only');
+
+  keys
+    .command('create')
+    .description('create an API key and print its secret once; --workload limits it to one workload you created')
+    .requiredOption('--name <name>', 'a name to recognize the key by')
+    .option('--workload <id>', 'limit the key to this workload (it may then carry only AGENT_OPERATE and AGENT_READ)')
+    .option('--authority <name>', 'an authority for the key (repeatable; default AGENT_OPERATE and AGENT_READ)', collect)
+    .option('--expires-in-days <n>', 'days until the key expires', positiveInteger)
+    .action(async (_options: OptionValues, command: Command) => {
+      const options: OptionValues = command.optsWithGlobals();
+      const authorities = list(options, 'authority');
+      const outcome = await keysCreate(deps, {
+        apiUrl: resolveApiUrl(deps, text(options, 'apiUrl')),
+        name: text(options, 'name') ?? '',
+        authorities: authorities.length === 0 ? SCOPED_AUTHORITIES : authorities,
+        idempotencyKey: text(options, 'idempotencyKey') ?? randomUUID(),
+        ...(text(options, 'workload') === undefined ? {} : { workloadId: text(options, 'workload') }),
+        ...(count(options, 'expiresInDays') === undefined ? {} : { expiresInDays: count(options, 'expiresInDays') }),
+      });
+      emit(deps, flag(options, 'json'), outcome);
+    });
+
+  keys
+    .command('list')
+    .description('list your API keys (the secrets are never shown again)')
+    .action(async (_options: OptionValues, command: Command) => {
+      const options: OptionValues = command.optsWithGlobals();
+      emit(deps, flag(options, 'json'), await keysList(deps, { apiUrl: resolveApiUrl(deps, text(options, 'apiUrl')) }));
+    });
+
+  keys
+    .command('revoke')
+    .description('revoke an API key at once')
+    .argument('<keyId>', 'the key id that `keys list` prints')
+    .action(async (keyId: string, _options: OptionValues, command: Command) => {
+      const options: OptionValues = command.optsWithGlobals();
+      emit(deps, flag(options, 'json'), await keysRevoke(deps, { apiUrl: resolveApiUrl(deps, text(options, 'apiUrl')), keyId }));
     });
 
   // Hidden and refused until t465 opens paid agents (issuer.ts requirePurchasingOpen); the code stays for it.
