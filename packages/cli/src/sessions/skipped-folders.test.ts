@@ -1,7 +1,8 @@
 // t776: a project folder that holds transcripts but is not on the allowlist is never read; `verify` says so instead of leaving it silent.
 import { mkdirSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
+import { slugOf } from './allow.js';
 import { sessionsVerify } from './command.js';
 import { deposit, skippedFolders } from './store.js';
 import { addProject, cleanup, NOW, stage } from './test-support.js';
@@ -27,7 +28,15 @@ describe('skippedFolders', () => {
     expect(await skippedFolders(staged.runtime)).toMatchObject({ folders: 1, names: ['-work-app--claude-worktrees-t1-fix'] });
   });
 
-  it('does not count that worktree folder when the allow entry is a folder prefix', async () => {
+  it('does not count that worktree folder when the allow entry is a trailing-slash folder prefix', async () => {
+    const staged = stage();
+    const repository = resolve('/work/app');
+    addProject(staged, `${slugOf(repository)}--claude-worktrees-t1-fix`, 'one', [LINE]);
+    await deposit(staged.runtime, { allow: [`${repository}/`, 'proj'], redactDomains: [], now: () => NOW });
+    expect(await skippedFolders(staged.runtime)).toEqual({ folders: 0, transcripts: 0, names: [] });
+  });
+
+  it('does not count that worktree folder when the allow entry is a glob', async () => {
     const staged = stage('-work-app');
     addProject(staged, '-work-app--claude-worktrees-t1-fix', 'one', [LINE]);
     await deposit(staged.runtime, { allow: ['-work-app*'], redactDomains: [], now: () => NOW });
