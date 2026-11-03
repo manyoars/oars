@@ -13,7 +13,8 @@ import { CliError, ExitCode } from './errors.js';
 import type { JournalStore } from './journal.js';
 import type { BooksBy, RecallQuery } from './sessions/query.js';
 import { closedQueryOf } from './sessions/recall-reads.js';
-import { sessionsBooks, sessionsContext, sessionsDeposit, sessionsHookInstall, sessionsHookStatus, sessionsHookUninstall, sessionsMcp, sessionsMeasure, sessionsRecall, sessionsVerify, type SessionsDeps } from './sessions/command.js';
+import { FAMILIES } from './sessions/read.js';
+import { sessionsBooks, sessionsContext, sessionsDeposit, sessionsHookInstall, sessionsHookStatus, sessionsHookUninstall, sessionsMcp, sessionsMeasure, sessionsRead, sessionsRecall, sessionsVerify, type SessionsDeps } from './sessions/command.js';
 import type { InstallRuntime, Scope } from './sessions/install.js';
 import type { SessionsRuntime } from './sessions/store.js';
 
@@ -337,6 +338,16 @@ const buildProgram = (deps: RunDeps, argv: string[]): Command => {
         ...(count(options, 'since') === undefined ? {} : { sinceDays: count(options, 'since') }),
       };
       emit(deps, flag(options, 'json'), await sessionsRecall(sessionDeps(deps), query, session));
+    });
+
+  sessions
+    .command('read')
+    .description('derived reads of your own sessions: recovery, fit, cost, change, live, adoption, method, and next-step, each row stating its clusters')
+    .option('--family <name>', `only this family: ${FAMILIES.join(', ')}`)
+    .option('--slice <axis=value>', 'only reads holding this value on this axis, such as model=claude-opus-5-5 (repeatable; all must match)', collect)
+    .action(async (_options: OptionValues, command: Command) => {
+      const options: OptionValues = command.optsWithGlobals();
+      emit(deps, flag(options, 'json'), await sessionsRead(sessionDeps(deps), { family: text(options, 'family'), slices: list(options, 'slice') }));
     });
 
   sessions

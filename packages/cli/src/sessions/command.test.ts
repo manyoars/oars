@@ -116,6 +116,57 @@ describe('oars sessions', () => {
     expect(await run(['sessions', 'verify', '--strict'], deps)).toBe(ExitCode.OK);
   });
 
+  it('read serves every family from the deposited store, each row stating clusters: 1, with no floor on one session', async () => {
+    const { deps, out, staged } = setup();
+    expect(await run(['sessions', 'deposit', '--allow', 'proj'], deps)).toBe(ExitCode.OK);
+    out.length = 0;
+    expect(await run(['sessions', 'read'], deps)).toBe(ExitCode.OK);
+    const text = out.join('');
+    const rows = text.split('\n').filter((line) => line.startsWith('  n='));
+    expect(rows.length).toBeGreaterThan(0);
+    expect(rows.every((row) => row.includes('clusters: 1'))).toBe(true);
+    expect(text).toContain('fit (');
+    expect(text).toContain('cost (');
+    expect(text).not.toContain(staged.storeDir);
+    out.length = 0;
+    expect(await run(['--json', 'sessions', 'read', '--family', 'cost'], deps)).toBe(ExitCode.OK);
+    const document = json(out);
+    const reads = field(document, 'reads');
+    expect(Array.isArray(reads) && reads.length > 0 && reads.every((read: { family: string; clusters: number; order: number }) => read.family === 'cost' && read.clusters === 1 && read.order === 1)).toBe(true);
+    expect(typeof field(document, 'pool')).toBe('string');
+    expect(field(document, 'newerCaptures')).toBe(0);
+    out.length = 0;
+    expect(await run(['sessions', 'read', '--family', 'cost', '--slice', 'class=no-such-class'], deps)).toBe(ExitCode.OK);
+    expect(out.join('')).toContain('No reads match.');
+  });
+
+  it('read leaves the capture log as it was, and a second read cites the same reads', async () => {
+    const { deps, out, staged } = setup();
+    expect(await run(['sessions', 'deposit', '--allow', 'proj'], deps)).toBe(ExitCode.OK);
+    const log = readFileSync(join(staged.storeDir, 'observations.jsonl'));
+    out.length = 0;
+    expect(await run(['--json', 'sessions', 'read'], deps)).toBe(ExitCode.OK);
+    const first = field(json(out), 'reads');
+    out.length = 0;
+    expect(await run(['--json', 'sessions', 'read'], deps)).toBe(ExitCode.OK);
+    expect(field(json(out), 'reads')).toEqual(first);
+    expect(readFileSync(join(staged.storeDir, 'observations.jsonl')).equals(log)).toBe(true);
+  });
+
+  it('read refuses an unknown family and a malformed slice (exit 2), and logs its own step, not a recall', async () => {
+    const { deps, out, err } = setup();
+    expect(await run(['sessions', 'read', '--family', 'nope'], deps)).toBe(ExitCode.USAGE);
+    expect(err.join('')).toContain('next-step');
+    err.length = 0;
+    expect(await run(['sessions', 'read', '--slice', 'model'], deps)).toBe(ExitCode.USAGE);
+    expect(err.join('')).toContain('<axis>=<value>');
+    expect(await run(['sessions', 'deposit', '--allow', 'proj'], deps)).toBe(ExitCode.OK);
+    expect(await run(['sessions', 'read'], deps)).toBe(ExitCode.OK);
+    out.length = 0;
+    expect(await run(['--json', 'sessions', 'measure', '--last', '2'], deps)).toBe(ExitCode.OK);
+    expect(field(field(json(out), 'steps'), 'recall')).toMatchObject({ queries: 0 });
+  });
+
   it('verify --strict exits 4 after printing when a skeleton has an exception, and plain verify still exits 0', async () => {
     const { deps, out, err, staged } = setup();
     const corrupted = readFileSync(join(FIXTURES, 'proj', 'errors-a.jsonl'), 'utf8').split('\n').filter((line) => line !== '').map((line) => line.replace('"tool_use_id": "t1"', '"tool_use_id": "nope"').replace('"tool_use_id":"t1"', '"tool_use_id":"nope"'));

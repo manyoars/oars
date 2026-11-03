@@ -127,6 +127,13 @@ describe('pulls: every line and every segment', () => {
     expect(pullsOf('bash -c "npm i a && pip install b"')).toEqual(['npm:a', 'pypi:b']);
     expect(pullsOf('pwsh -Command "npm i a"')).toEqual(['npm:a']);
   });
+  it('reads an unquoted command after cmd, pwsh, and powershell', () => {
+    expect(pullsOf('cmd /c npm install foo')).toEqual(['npm:foo']);
+    expect(pullsOf('powershell -Command npm install foo')).toEqual(['npm:foo']);
+  });
+  it('does not read a quoted argument of that command as a command', () => {
+    expect(pullsOf('cmd /c git commit -m "a && npm i b"')).toEqual([]);
+  });
   it('skips a prelude', () => {
     expect(pullsOf('CI=1 sudo env FOO=2 npm i a')).toEqual(['npm:a']);
     expect(pullsOf('$env:CI = "1"; npm i a')).toEqual(['npm:a']);
@@ -165,12 +172,17 @@ describe('pulls: redaction', () => {
 
 describe('MCP pulls', () => {
   it('names the full server from the tool name, which shortName cuts to 10 characters', () => {
-    expect(pullsOfTool('mcp__claude-in-chrome__navigate')).toEqual([{ ecosystem: 'mcp', name: 'claude-in-chrome', version: null }]);
-    expect(pullsOfTool('mcp__a-very-long-server-name__do')).toEqual([{ ecosystem: 'mcp', name: 'a-very-long-server-name', version: null }]);
+    expect(pullsOfTool('mcp__claude-in-chrome__navigate', redact)).toEqual([{ ecosystem: 'mcp', name: 'claude-in-chrome', version: null }]);
+    expect(pullsOfTool('mcp__a-very-long-server-name__do', redact)).toEqual([{ ecosystem: 'mcp', name: 'a-very-long-server-name', version: null }]);
   });
   it('names nothing for any other tool', () => {
-    expect(pullsOfTool('Read')).toEqual([]);
-    expect(pullsOfTool('mcp__')).toEqual([]);
+    expect(pullsOfTool('Read', redact)).toEqual([]);
+    expect(pullsOfTool('mcp__', redact)).toEqual([]);
+  });
+  it('redacts the server name, and drops one that is all mask, which says nothing', () => {
+    const token = 'ghp_abcdefghijklmnopqrstuvwxyz012345';
+    expect(pullsOfTool(`mcp__${token}__x`, redact)).toEqual([]);
+    expect(pullsOfTool(`mcp__me-${token}__x`, redact)).toEqual([{ ecosystem: 'mcp', name: 'me-<secret>', version: null }]);
   });
 });
 
@@ -198,6 +210,12 @@ describe('segments: what the status of the call says about each', () => {
   it('takes a pipe into a shell -c argument through its outer read', () => {
     expect(read('bash -c "a && b" | c')).toEqual([['a', false], ['b', false], ['c', true]]);
     expect(read('bash -c "a; b"')).toEqual([['a', false], ['b', true]]);
+  });
+  it('joins the unquoted words after the flag of cmd, pwsh, and powershell; bash takes one word', () => {
+    expect(read('pwsh -c npm test')).toEqual([['npm test', true]]);
+    expect(read('cmd /c npm test | tail')).toEqual([['npm test', false], ['tail', true]]);
+    expect(read('bash -c npm test')).toEqual([['npm', true]]);
+    expect(read('cmd /c "npm test" foo')).toEqual([['npm test', true]]);
   });
   it('keeps the closing words of a block out', () => {
     expect(read('for x in a; do b; done')).toEqual([['for x in a', false], ['b', true]]);
@@ -257,6 +275,10 @@ describe('commits: a successful `git commit` and the sha its result names', () =
     ['a heredoc body', "cat > f <<'EOF'\ngit commit -m x\nEOF", '', []],
     ['a bash -c', 'bash -c "git commit -m x"', '[main abc1234] x', ['abc1234']],
     ['a Windows path', '"C:\\Program Files\\Git\\cmd\\git.exe" commit -m x', '[main abc1234] x', ['abc1234']],
+    ['an unquoted cmd /c', 'cmd /c git commit -m x', '[main abc1234] x', ['abc1234']],
+    ['a read-back another log follows is not the last hash', 'git commit -qm x && git rev-parse --short HEAD && git log --oneline -3', 'abc1234\nabc1234 x\nbcd2222 y\nfed3333 z', [null]],
+    ['a read-back a count follows is not the last hash', 'git commit -qm x && git log --oneline -1 && wc -l big.txt', 'abc1234 x\n1234567 big.txt', [null]],
+    ['only the final read-back names a commit', 'git commit -qm a && git rev-parse --short HEAD && git commit -qm b && git rev-parse --short HEAD', 'aaa1111\nbbb2222', [null, 'bbb2222']],
   ];
   it.each(rows)('%s', (_name, command, result, expected) => {
     expect(shas(command, result)).toEqual(expected);
@@ -271,7 +293,7 @@ describe('capture of a shell call (CAPTURE 6)', () => {
   const capture = (lines: readonly string[]) => captureSession({ text: lines.join('\n'), session: 's', project: 'p', rev: 1, at: '', bytes: 0, redact }).tools;
 
   it('is a CAPTURE_VERSION bump', () => {
-    expect(CAPTURE_VERSION).toBe('6');
+    expect(CAPTURE_VERSION).toBe('7');
   });
   it('writes commits only on a clean result, behind another command', () => {
     const [ok, failed, open] = capture([
