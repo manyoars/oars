@@ -7,9 +7,17 @@ import type { RecallRead } from './recall-reads.js';
 import { PROMPT_CLASSES, type Frame, type Harness } from './schema.js';
 
 const DAY_MS = 86_400_000;
-const KEY_NAME = /^[A-Za-z_][A-Za-z0-9_]{0,39}$/;
+const KEY_NAME = /^[A-Za-z_][A-Za-z0-9_]{0,25}$/;
+const KEY_WORD_BREAK = /_+|(?<=[a-z0-9])(?=[A-Z])/;
+const MAX_KEY_WORDS = 3;
 const DAY = /^\d{4}-\d{2}-\d{2}$/;
 const READ_ID = /^(read:)?[0-9a-f]{16}$/;
+
+/**
+ * An input key is an identifier of at most three words: in a scan of real tool rows, 390 of 406 distinct keys were, `run_in_background` and `dangerouslyDisableSandbox` among them.
+ * Any longer and an identifier can say a whole instruction. A rare longer key is only left off the line; the shape's ID still holds it.
+ */
+const isKeyName = (key: string): boolean => KEY_NAME.test(key) && key.split(KEY_WORD_BREAK).filter((word) => word !== '').length <= MAX_KEY_WORDS;
 
 /** A public name as it stands: a model, a canonical action, a tool a harness's table lists, or a published MCP server. Anything else is what the asker or a record wrote. */
 export const closedName = (name: string): string => {
@@ -133,7 +141,7 @@ const nameOf = (read: RecallRead): string => {
   if (motif !== undefined) return motif;
   const { action, native } = toolOf(read, read.tool);
   const name = native === LITERAL ? action : native;
-  const keys = read.keys.filter((key) => KEY_NAME.test(key));
+  const keys = read.keys.filter(isKeyName);
   return keys.length === 0 ? name : `${name} [${keys.join(', ')}]`;
 };
 
