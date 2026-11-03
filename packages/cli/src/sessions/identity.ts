@@ -15,12 +15,20 @@ const orLiteral = (name: string, allowed: ReadonlySet<string>): string => (allow
 
 const SHORT_CLUSTER = /^-[a-z]{1,4}$/;
 const SHORT_LETTER = /^-[A-Za-z]$/;
+// A short flag with a value joined after a non-letter, as in `-c1-200`: the first capture is the name and the rest is the value, which is dropped.
+const JOINED_VALUE = /^(-[A-Za-z])[^A-Za-z]/;
+// `head -20`: the digits are the value and the flag has no name of its own, so every such flag reads alike.
+const BARE_NUMBER = /^-\d+$/;
+export const NUMBER_FLAG = '-N';
 
 /** The names one flag word holds, without its value. A short cluster reads as its letters, so `-rf` and `-fr` agree and a value joined to a letter stays out. */
 const flagNames = (text: string): string[] => {
   const name = text.split('=')[0] ?? text;
   if (name.startsWith('--') || PUBLIC_FLAGS.has(name)) return [orLiteral(name, PUBLIC_FLAGS)];
   if (SHORT_LETTER.test(name)) return [name];
+  if (BARE_NUMBER.test(name)) return [NUMBER_FLAG];
+  const joined = JOINED_VALUE.exec(name)?.[1];
+  if (joined !== undefined) return [joined];
   return SHORT_CLUSTER.test(name) ? Array.from(name.slice(1), (letter) => `-${letter}`) : [LITERAL];
 };
 

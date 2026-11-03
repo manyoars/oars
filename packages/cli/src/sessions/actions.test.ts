@@ -45,6 +45,12 @@ describe('the Claude Code table', () => {
   });
 });
 
+describe('a public Claude Code tool with no canonical action', () => {
+  it('keeps its name', () => {
+    expect(actionOf(claude, 'StructuredOutput')).toEqual({ action: 'other', native: 'StructuredOutput' });
+  });
+});
+
 describe('the Cursor table', () => {
   it.each([
     ['read_file', 'file.read'],
