@@ -4,8 +4,9 @@
 // read a thing differently the comment says which rule is used.
 import { createHash } from 'node:crypto';
 import { posix } from 'node:path';
-import { ACTION_TABLES, actionOf, shellOf } from './actions.js';
+import { ACTION_TABLES, actionOf, shellOf, type ActionTable, type CanonicalAction } from './actions.js';
 import { closedFrame, frameIdOf, repoFilesFromIndex, stackOf, utcDay } from './frame.js';
+import { callIdentity, shellIdentity, UNREAD_SHELL, type WordOfCommand } from './identity.js';
 import type { Redactor } from './redact.js';
 import {
   CAPTURE_VERSION,
@@ -20,9 +21,11 @@ import {
   type PromptClass,
   type PullEcosystem,
   type SessionObservation,
+  type ShellIdentity,
   type ShellSegment,
   type Skeleton,
   type SkeletonLine,
+  type StepIdentity,
   type TargetBase,
   type ToolObservation,
   type ToolPull,
@@ -439,10 +442,7 @@ const SEGMENTS_PER_CALL_MAX = 50;
 const RUN_WORDS_MAX = 12;
 const RUN_WORD_CHARS = 30;
 
-interface ShellWord {
-  text: string;
-  quoted: boolean;
-}
+type ShellWord = WordOfCommand;
 type ShellOp = '&&' | '||' | '|' | ';' | '&' | '\n' | 'group';
 type ShellToken = ShellWord | ShellOp;
 type ShellLink = 'and' | 'pipe' | 'break' | 'end';
@@ -456,6 +456,13 @@ interface ShellCommand {
   link: ShellLink;
 }
 
+/** One command of a shell call, as its step reads. `run` compares a retry and is not kept. */
+export interface ShellStepRead {
+  identity: ShellIdentity;
+  read: boolean;
+  run: string;
+}
+
 /** One `git commit` a command holds. */
 export interface PlannedCommit {
   quiet: boolean;
@@ -465,6 +472,8 @@ export interface PlannedCommit {
 
 export interface ShellRead {
   segments: ShellSegment[];
+  /** The same commands as `segments`, in public names only, with the redacted text they compare by. */
+  steps: ShellStepRead[];
   pulls: ToolPull[];
   commitPlan: PlannedCommit[];
 }
@@ -936,12 +945,14 @@ const commitPlanOf = (commands: readonly ShellCommand[]): PlannedCommit[] =>
 /** A shell call's segments, pulls, and the commits it holds, from the command alone. The command is redacted before anything is kept. */
 export const readShell = (command: string, redact: Redactor): ShellRead => {
   const commands = readCommands(redactCommand(dropBodies(command.replace(/\r\n/g, '\n')), redact));
+  const kept = commands.slice(-SEGMENTS_PER_CALL_MAX);
   const pulls = new Map<string, ToolPull>();
   for (const { program, args } of commands) {
     for (const pull of pullsOfCommand(program, args).filter(present)) pulls.set(JSON.stringify(pull), pull);
   }
   return {
-    segments: commands.slice(-SEGMENTS_PER_CALL_MAX).map((held) => ({ run: runOf(held), read: held.read })),
+    segments: kept.map((held) => ({ run: runOf(held), read: held.read })),
+    steps: kept.map((held) => ({ identity: shellIdentity(held.program, held.args, pullsOfCommand(held.program, held.args).filter(present)), read: held.read, run: runOf(held) })),
     pulls: [...pulls.values()],
     commitPlan: commitPlanOf(commands),
   };
@@ -973,6 +984,28 @@ export const commitsRead = (plan: readonly PlannedCommit[], result: string): Arr
 export const pullsOfTool = (name: string): ToolPull[] => {
   const server = name.startsWith('mcp__') ? name.split('__')[1] : undefined;
   return server === undefined || server === '' ? [] : [{ ecosystem: 'mcp', name: server, version: null }];
+};
+
+/** One step before its call's result is known. `rawKey` tells two calls with one masked identity apart, for a retry; it is never stored. */
+interface StepDraft {
+  action: CanonicalAction;
+  native: string;
+  identity: StepIdentity;
+  read: boolean;
+  rawKey: string;
+}
+
+/** A call's steps: one per command of a shell call, else one. */
+const draftsOf = (table: ActionTable, named: { action: CanonicalAction; native: string }, native: string, shell: ShellRead | undefined, target: string | null, input: Obj): StepDraft[] => {
+  const { action } = named;
+  if (action === 'shell.exec') {
+    const read = shell?.steps ?? [];
+    if (read.length === 0) return [{ action, native: named.native, identity: UNREAD_SHELL, read: true, rawKey: `${native}\n${str(input.command) ?? ''}` }];
+    return read.map((held) => ({ action, native: named.native, identity: held.identity, read: held.read, rawKey: `${native}\n${held.run}` }));
+  }
+  const url = str(input.url);
+  const skill = str(input.skill);
+  return [{ action, ...callIdentity(table, action, native, named.native, { skill, url }), read: true, rawKey: `${native}\n${target ?? url ?? skill ?? ''}` }];
 };
 
 /** The `target` of a tool call (see {@link ToolObservation.target}). */
@@ -1069,8 +1102,8 @@ export const captureSession = (input: ExtractInput): Capture => {
   const fileModels = new Map<string, number>();
   const fileMessageModels = new Map<string, number>();
   const promptFrames: PromptFrameParts[] = [];
-  /** The native name of each call, by `n`. */
-  const natives: string[] = [];
+  /** The steps of each call, by `n`, until its result is in. */
+  const drafts: StepDraft[][] = [];
   const seenResponses = new Set<string>();
   let promptFingerprint: string | null = null;
   let cur: Current | undefined;
@@ -1259,13 +1292,9 @@ export const captureSession = (input: ExtractInput): Capture => {
         const toolInput = isObj(block.input) ? block.input : {};
         // An adapter that renames its tools for the extractor keeps the harness's own name in `native`.
         const native = str(block.native) ?? name;
-        natives.push(native);
+        const named = actionOf(actions, native);
         const shellName = shellOf(actions, native);
         if (shellName !== null) bump(frameShells, shellName);
-        if (SHELL.has(name)) {
-          const program = shellTarget(str(toolInput.command) ?? '').split(' ')[0];
-          if (program !== undefined && program !== '') framePrograms.add(program);
-        }
         const filePath = str(toolInput.file_path);
         const lineRoot = lineCwd === undefined || lineCwd === '' ? null : rootOf(lineCwd);
         if (PATH_TOOLS.has(name) && filePath !== undefined && filePath !== '') {
@@ -1278,7 +1307,9 @@ export const captureSession = (input: ExtractInput): Capture => {
         else if (name === 'WebSearch' && str(toolInput.query) !== undefined && str(toolInput.query) !== '') searches.add(redact(str(toolInput.query) ?? ''));
         else if (SHELL.has(name)) session.bashCmds += 1;
         const aimed = targetOf(name, toolInput, lineCwd, salt, redact, lineRoot);
-        const shell = SHELL.has(name) ? readShell(str(toolInput.command) ?? '', redact) : undefined;
+        const shell = SHELL.has(name) || named.action === 'shell.exec' ? readShell(str(toolInput.command) ?? '', redact) : undefined;
+        for (const held of shell?.steps ?? []) framePrograms.add(held.identity.program);
+        drafts.push(draftsOf(actions, named, native, shell, aimed.target, toolInput));
         const pulls = shell?.pulls ?? pullsOfTool(name);
         const call: ToolObservation = {
           kind: 'tool',
@@ -1373,7 +1404,7 @@ export const captureSession = (input: ExtractInput): Capture => {
   }
   for (const [position, call] of tools.entries()) {
     const frameId = (call.prompt === null ? undefined : prompts[call.prompt]?.frameId) ?? sessionFrameId;
-    call.steps = [{ n: call.n, seg: 0, ...actionOf(actions, natives[position] ?? call.tool), frameId }];
+    call.steps = (drafts[position] ?? []).map((draft, seg) => ({ n: call.n, seg, action: draft.action, native: draft.native, identity: draft.identity, frameId }));
   }
 
   return {

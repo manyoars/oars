@@ -264,6 +264,25 @@ export interface ErrorObservation {
 
 export type ToolStatus = 'ok' | 'error' | 'none';
 
+/** A package a shell step pulled, in public names (`<literal>` outside the allowlist). */
+export interface PullIdentity {
+  registry: string;
+  name: string;
+  /** Null when the command stated none. */
+  version: string | null;
+}
+
+/** A shell step: its program, subcommand, and flag names, sorted and single. Never a flag's value. */
+export interface ShellIdentity {
+  program: string;
+  sub: string | null;
+  flags: string[];
+  /** Absent when the command pulled nothing. */
+  pulls?: PullIdentity[];
+}
+
+export type StepIdentity = ShellIdentity | { server: string; tool: string } | { skill: string } | { host: string | null } | null;
+
 /** One observed event in the canonical vocabulary of any harness (recall spec Section 2.2). Class P: it holds only positions, public names, and a frame hash. */
 export interface StepObservation {
   /** The `n` of the tool call this step came from. */
@@ -271,8 +290,10 @@ export interface StepObservation {
   /** Its position among that call's steps, from 0. */
   seg: number;
   action: CanonicalAction;
-  /** The harness's own name for the tool when the action table lists it, else `<literal>` (the tool record keeps it, class A). */
+  /** The harness's own name for the tool when the action table lists it or every name it holds is public, else `<literal>` (the tool record keeps it, class A). */
   native: string;
+  /** What the step acted on, in public names only; null for an action that has none (a file's path never appears here). */
+  identity: StepIdentity;
   /** The frame of the call's prompt, or the session's own frame before the first prompt. */
   frameId: string;
 }
