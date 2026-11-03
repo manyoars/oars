@@ -319,7 +319,7 @@ describe('oars purchasing list', () => {
   });
 });
 
-describe('oars purchasing before Many Oars has launched (0.3.0 does not ship it)', () => {
+describe('oars purchasing is closed until t465 opens it (V13: nothing is sold before business verification)', () => {
   it('is not listed in oars --help', async () => {
     const h = harness();
     await expect(run(['--help'], h.deps)).resolves.toBe(ExitCode.OK);
@@ -327,19 +327,20 @@ describe('oars purchasing before Many Oars has launched (0.3.0 does not ship it)
     expect(h.out.join('')).not.toContain('purchasing');
   });
 
-  it.each([['card', '--mode', 'TEST'], ['cap', AGENT, '--mode', 'TEST', '--usd', '5'], ['list', AGENT]])('refuses `purchasing %s` the way login does, and makes no API call', async (...args) => {
+  it.each([['card', '--mode', 'TEST'], ['cap', AGENT, '--mode', 'TEST', '--usd', '5'], ['list', AGENT]])('refuses `purchasing %s` even when the launch flag says launched, with no flag call and no API call', async (...args) => {
     const h = harness({ OARS_ISSUER_URL: '' });
-    server.use(http.get(LAUNCH_FLAG_URL, () => HttpResponse.json({ launched: false })));
+    let flagCalls = 0;
+    server.use(http.get(LAUNCH_FLAG_URL, () => { flagCalls += 1; return HttpResponse.json({ launched: true }); }));
     const seen = route('get', PAYMENT_METHOD, () => HttpResponse.json({}));
     expect(await run(['purchasing', ...args, '--json'], h.deps)).toBe(ExitCode.USAGE);
     expect(JSON.parse(h.out[0] ?? '')).toMatchObject({ ok: false, step: 'usage' });
-    expect(h.out.join('')).toContain('has not launched yet');
+    expect(h.out.join('')).toContain('Paid agents are not open yet');
+    expect(flagCalls).toBe(0);
     expect(seen).toEqual([]);
   });
 
-  it('runs once the launch flag says launched', async () => {
-    const h = harness({ OARS_ISSUER_URL: '', OARS_API_KEY: 'key-123' });
-    server.use(http.get(LAUNCH_FLAG_URL, () => HttpResponse.json({ launched: true })));
+  it('runs when OARS_ISSUER_URL names a platform of your own', async () => {
+    const h = harness({ OARS_API_KEY: 'key-123' });
     cardRead(() => HttpResponse.json(view({ mode: 'TEST', status: 'ACTIVE', brand: 'visa', last4: '4242' })));
     expect(await run(['purchasing', 'card', '--mode', 'TEST'], h.deps)).toBe(ExitCode.OK);
   });

@@ -39,12 +39,15 @@ export const resolveIssuerUrl = async (deps: RunDeps, flag?: string): Promise<st
   throw new CliError(NOT_LAUNCHED, ExitCode.USAGE, 'usage');
 };
 
-const PURCHASING_NOT_LAUNCHED = 'Many Oars has not launched yet: accounts and paid agents are not open, so `oars purchasing` is off. Set OARS_ISSUER_URL to use a platform of your own.';
+const PURCHASING_CLOSED = 'Paid agents are not open yet, so `oars purchasing` is off. Set OARS_ISSUER_URL to use a platform of your own.';
 
-/** The purchasing commands stay out of the help and refuse like `login` until the launch flag is on (or `OARS_ISSUER_URL` names a platform of your own). */
-export const requireLaunched = async (deps: RunDeps): Promise<void> => {
+/**
+ * `oars purchasing` is closed to the public: V13 holds that nothing is sold before business verification, and the launch flag
+ * is already true, so it cannot be the gate. Only `OARS_ISSUER_URL` (dev, staging, tests) opens it, with no network call.
+ * t465's release removes this gate.
+ */
+export const requirePurchasingOpen = async (deps: RunDeps): Promise<void> => {
   const fromEnv = deps.env.OARS_ISSUER_URL;
   if (fromEnv !== undefined && fromEnv !== '') return;
-  if (await hasLaunched(deps)) return;
-  throw new CliError(PURCHASING_NOT_LAUNCHED, ExitCode.USAGE, 'usage');
+  throw new CliError(PURCHASING_CLOSED, ExitCode.USAGE, 'usage');
 };

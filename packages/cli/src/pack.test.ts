@@ -186,9 +186,9 @@ describe('the public text states facts only', () => {
 });
 
 describe('oars purchasing is not in the 0.3.0 surface', () => {
-  it('is hidden from oars --help in the source and refused until launch', () => {
+  it('is hidden from oars --help in the source and refused until paid agents open', () => {
     const source = readFileSync(new URL('./cli.ts', import.meta.url), 'utf8');
     expect(source).toMatch(/command\('purchasing', \{ hidden: true \}\)/);
-    expect(source).toContain('requireLaunched(deps)');
+    expect(source).toContain('requirePurchasingOpen(deps)');
   });
 });
