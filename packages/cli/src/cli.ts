@@ -13,6 +13,7 @@ import { CliError, ExitCode } from './errors.js';
 import type { JournalStore } from './journal.js';
 import type { BooksBy, RecallQuery } from './sessions/query.js';
 import { sessionsBooks, sessionsContext, sessionsDeposit, sessionsHookInstall, sessionsHookStatus, sessionsHookUninstall, sessionsMcp, sessionsMeasure, sessionsRecall, sessionsVerify, type SessionsDeps } from './sessions/command.js';
+import { exclusionPaths, sessionsExclusions } from './sessions/exclusion.js';
 import type { InstallRuntime, Scope } from './sessions/install.js';
 import type { SessionsRuntime } from './sessions/store.js';
 
@@ -369,6 +370,16 @@ const buildProgram = (deps: RunDeps, argv: string[]): Command => {
         throw new CliError(`${String(failed.length)} ${failed.length === 1 ? 'check' : 'checks'} failed: ${failed.join('; ')}`, ExitCode.INVALID, 'verify', undefined, undefined, json ? report : undefined);
       }
       emit(deps, json, outcome);
+    });
+
+  sessions
+    .command('exclusions')
+    .description('scan the local store and transcripts under the V15 rule, write the excluded sessions to a local file, and print counts only (the term file is named by OARS_EXCLUSION_TERMS)')
+    .option('--out <file>', 'where to write the excluded sessions (default: session-commons/exclusion-list.jsonl beside the claude projects folder)')
+    .action(async (_options: OptionValues, command: Command) => {
+      const options: OptionValues = command.optsWithGlobals();
+      if (deps.sessions === undefined) throw new CliError('The session store is not configured in this run.', ExitCode.UNEXPECTED, 'unexpected');
+      emit(deps, flag(options, 'json'), await sessionsExclusions(deps.sessions, exclusionPaths(deps.sessions.projectsRoot, deps.env, text(options, 'out'))));
     });
 
   const hook = sessions.command('hook').description('install the recall hooks into a Claude Code settings file, and the nightly deposit task');

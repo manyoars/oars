@@ -178,6 +178,20 @@ the raw outlives the harness's own cleanup (`cleanupPeriodDays`) at no extra dis
 file system without hard links, it copies instead. A rerun leaves a present link alone and replaces a stale copy. The archive is
 local only and is never read by `derive`.
 
+## The V15 exclusion list
+
+One rule keeps a session out of the pool and every shared read (A38): a session is excluded if any line of its main or
+subagent transcript holds a listed term, scanned locally before anything is deposited. A session with no main transcript to scan
+is excluded, and so is every session when the term file is missing or empty. The scan reads both the harness's `projects/`
+folder and `raw/`, because either can be the only copy left.
+
+The term list is a local file, one term per line, matched without regard to case, never in this repository. The
+`OARS_EXCLUSION_TERMS` environment variable names it; the default is `session-commons/exclusion-terms.txt` beside the claude
+`projects/` folder. `oars sessions exclusions [--out <file>]` writes the excluded sessions (project and session id, one JSON
+object per line) to `session-commons/exclusion-list.jsonl` by default and prints counts only: sessions, excluded by reason,
+and the files that held a term, by main or subagent and by source. The pool's deposit calls `assertDepositable`
+(`packages/cli/src/sessions/exclusion.ts`) first, which refuses an excluded session.
+
 ## The cost-state check
 
 `verify` checks that the harness's `cost-state` totals equal the recorded usage within their scope: the process that wrote them
