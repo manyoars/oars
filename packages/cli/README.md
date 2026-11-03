@@ -72,7 +72,7 @@ The SDK key is shown once, so save it when `deploy` prints it.
 
 `oars sessions` keeps a local, deterministic memory of your own Claude Code sessions. oars makes no model call and no network call, except `gold arms`, which sends redacted text through your own Claude subscription.
 
-What it captures: the Claude Code sessions in the folders you name with `--allow`, and Cursor sessions if you pass `--allow cursor`. Where it stores them: `<config>/oars/sessions/` on your machine (`<config>` is `%APPDATA%` on Windows, `$XDG_CONFIG_HOME` or `~/.config` elsewhere). The `raw/` folder in it is on by default and holds raw transcripts (a hard link or copy of each deposited one). Secret masking applies to the log, not to `raw/`: those files are unredacted and keep whatever the transcript held, secrets included. They stay on your machine and nothing is uploaded. To remove them, see [Remove everything](#remove-everything).
+What it captures: the Claude Code sessions in the folders you name with `--allow`, and Cursor sessions if you pass `--allow cursor`. Where it stores them: `<config>/oars/sessions/` on your machine (`<config>` is `%APPDATA%` on Windows, `$XDG_CONFIG_HOME` or `~/.config` elsewhere). The `raw/` folder in it is on by default and holds raw transcripts (a hard link or copy of each deposited one). Secret masking applies to the log, not to `raw/`: those files are unredacted and keep whatever the transcript held, secrets included. They stay on your machine and, apart from `gold arms`, nothing is uploaded. To remove them, see [Remove everything](#remove-everything).
 
 Apart from that, oars itself sends nothing; the hooks and the MCP tool add recall text to the running session, and your harness sends that to its model like any other context.
 
@@ -103,7 +103,7 @@ before a line is written (redaction runs on the full text, then the text is cut)
 text, never raw content. It keeps these text fields and no others: the first 300 characters of each prompt, the first informative line of a
 tool error (cut to 1,000 characters in the error-line record, 160 characters in a derived example), TLDR lines (400) and Confidence lines (120) from assistant text, WebSearch queries, fetched URLs, file
 paths, and git branch names (the last four have no length limit), all redacted first; plus the project folder slug (not redacted, so it
-carries your username and directory names; the log stays local), skill names, effort values, model names, harness versions, tool names (including MCP server names), a shell call's program and subcommand, and tool-input key names. A tool call's file target is a salted hash, never the path. Nothing is uploaded.
+carries your username and directory names; the log stays local), skill names, effort values, model names, harness versions, tool names (including MCP server names), a shell call's program and subcommand, and tool-input key names. A tool call's file target is a salted hash, never the path. Apart from `gold arms`, nothing is uploaded.
 Subagent transcripts (`<project>/<session>/subagents/`) are deposited with their parent session and subagent type; `books --by class`
 shows their tokens as the `delegated` column, and their errors are in the signatures, `measure`, and recall under the session that
 spawned them, so per-session counts still count main sessions. Every deposited transcript is also
@@ -149,7 +149,7 @@ Install merges: existing hooks (a Stop hook that rotates sessions, say) stay, ev
 
 #### Remove everything
 
-`oars sessions hook uninstall --scope user` (or the scope you installed); `oars sessions hook install --schedule off`; delete the store folder `<config>/oars/sessions/` (observations, skeletons, state, the hook index, `hook-calls.jsonl`, and `raw/`, which holds the unredacted transcripts). Nothing else is created. `cleanupPeriodDays` stays at the value install set unless you change it.
+`oars sessions hook uninstall --scope user` (or the scope you installed); `oars sessions hook install --schedule off`; delete the store folder `<config>/oars/sessions/` (observations, skeletons, state, the hook index, `hook-calls.jsonl`, and `raw/`, which holds the unredacted transcripts). `gold sample` also writes its prompt file and sidecar to `~/.claude/session-commons/review/` (or `$CLAUDE_CONFIG_DIR`, or your `--out-dir`); delete those too. Nothing else is created. `cleanupPeriodDays` stays at the value install set unless you change it.
 
 ## The `--json` contract
 

@@ -1,5 +1,5 @@
 // The release proofs (t754): the one-command hook install is idempotent and reversible, the raw archive needs no configuration.
-// (The public-text proofs live in ../pack.test.ts.) Both are characterization of behavior that already shipped.
+// (The public-text proofs live in ../pack.test.ts.) Both characterize behavior already on main; neither was red first.
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
