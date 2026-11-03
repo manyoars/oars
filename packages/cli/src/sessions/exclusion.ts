@@ -2,8 +2,8 @@
 // scanned locally before anything is deposited to the pool. A session with no raw to scan is excluded, and so is every session when
 // the term file is missing or empty (fail closed). The term list is a local file and never lives in this repository; nothing here
 // prints, logs, or returns a term or a line of a transcript, only counts and session ids.
-import { createReadStream } from 'node:fs';
-import { chmod, mkdir, readdir, readFile, stat, writeFile } from 'node:fs/promises';
+import { createReadStream, type Dirent } from 'node:fs';
+import { chmod, mkdir, readdir, readFile, rename, stat, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { createInterface } from 'node:readline';
 import type { Outcome } from '../cli.js';
@@ -72,8 +72,10 @@ const jsonlUnder = async (dir: string): Promise<string[]> => {
   const found: string[] = [];
   for (const entry of await entriesOf(dir)) {
     const path = join(dir, entry.name);
-    if (entry.isDirectory()) found.push(...(await jsonlUnder(path)));
-    else if (entry.name.endsWith('.jsonl') && (entry.isFile() || (entry.isSymbolicLink() && (await stat(path)).isFile()))) found.push(path);
+    // `stat` follows a link and throws on a broken one, which the caller counts as unreadable.
+    const target = entry.isSymbolicLink() ? await stat(path) : entry;
+    if (target.isDirectory()) found.push(...(await jsonlUnder(path)));
+    else if (entry.name.endsWith('.jsonl') && target.isFile()) found.push(path);
   }
   return found;
 };
@@ -152,7 +154,7 @@ const judge = async (terms: readonly string[], session: SessionFiles): Promise<V
   }
   if (hits.length > 0) return { excluded: true, reason: 'term', hits };
   // Without the main transcript the session cannot be scanned in full, so it is excluded; its subagent files were scanned above, so a hit there counts.
-  if (!files.some((file) => file.main)) return { excluded: true, reason: 'no-raw', hits };
+  if (!files.some((file) => file.main)) return { excluded: true, reason: unreadable ? 'unreadable' : 'no-raw', hits };
   return unreadable ? { excluded: true, reason: 'unreadable', hits } : { excluded: false, reason: 'clean', hits };
 };
 
@@ -196,14 +198,17 @@ export interface ExclusionCounts {
 /** The harness names a session folder with a UUID. */
 const SESSION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
+/** A directory, or a link to one; a link that leads nowhere throws, so a folder that was not scanned never reads as clean. */
+const leadsToDirectory = async (path: string, entry: Dirent): Promise<boolean> => (entry.isSymbolicLink() ? (await stat(path)).isDirectory() : entry.isDirectory());
+
 /** The sessions of one project folder: every main file, and every directory named like a session. Other directories are returned apart. */
 const sessionIds = async (root: string, project: string): Promise<{ ids: string[]; others: string[] }> => {
   const ids: string[] = [];
   const dirs: string[] = [];
   for (const entry of await entriesOf(join(root, project))) {
-    // A link is a session too; `filesIn` follows it, and one that leads nowhere has no main to scan, so it is listed as no raw.
+    // A link is a session too; `filesIn` follows it, and a `.jsonl` link that leads nowhere has no main to scan, so it is listed as no raw.
     if ((entry.isFile() || entry.isSymbolicLink()) && entry.name.endsWith('.jsonl')) ids.push(entry.name.slice(0, -'.jsonl'.length));
-    else if (entry.isDirectory()) dirs.push(entry.name);
+    else if (await leadsToDirectory(join(root, project, entry.name), entry)) dirs.push(entry.name);
   }
   return { ids: [...ids, ...dirs.filter((name) => SESSION_ID.test(name))], others: dirs.filter((name) => !SESSION_ID.test(name)) };
 };
@@ -220,7 +225,7 @@ export const scanStore = async (runtime: SessionsRuntime, termsFile: string): Pr
   const projects = new Set<string>(logged.keys());
   for (const root of [runtime.projectsRoot, raw]) {
     try {
-      for (const entry of await entriesOf(root)) if (entry.isDirectory()) projects.add(entry.name);
+      for (const entry of await entriesOf(root)) if (await leadsToDirectory(join(root, entry.name), entry)) projects.add(entry.name);
     } catch {
       throw new CliError('A folder that holds the projects could not be listed, so no list was written.', ExitCode.INVALID, 'unreadable');
     }
@@ -288,7 +293,10 @@ export const sessionsExclusions = async (runtime: SessionsRuntime, where: Exclus
   const { counts, excluded } = await scanStore(runtime, where.terms);
   await mkdir(dirname(where.list), { recursive: true });
   // The list holds real folder names, which can carry a term, so it is readable by its owner only (as the store's other local-only files are).
-  await writeFile(where.list, excluded.map((entry) => JSON.stringify(entry)).join('\n') + (excluded.length === 0 ? '' : '\n'), { mode: 0o600 });
+  // Written through a temp file and renamed, as the store does, so a crash mid-write never leaves a short list that reads as complete.
+  const temp = `${where.list}.tmp`;
+  await writeFile(temp, excluded.map((entry) => JSON.stringify(entry)).join('\n') + (excluded.length === 0 ? '' : '\n'), { mode: 0o600 });
+  await rename(temp, where.list);
   // `mode` applies only when the file is created, so a list from an earlier run keeps its old one.
   await chmod(where.list, 0o600);
   const { projects, raw } = counts.bySource;

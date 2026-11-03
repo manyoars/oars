@@ -168,7 +168,7 @@ describe('links to folders (a transcript that was not scanned never reads as cle
       (error: unknown) => error,
     );
     expect(failure).toBeInstanceOf(CliError);
-    expect(failure instanceof CliError ? failure.message : '').toMatch(/folder \d+ .*no list was written/);
+    expect(failure instanceof CliError ? failure.message : '').toContain('no list was written');
     expect(failure instanceof CliError ? failure.message : '').not.toContain('brokenproj');
   });
 });
