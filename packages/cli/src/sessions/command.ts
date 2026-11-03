@@ -4,7 +4,9 @@ import type { Outcome } from '../cli.js';
 import { parseAllowList } from './allow.js';
 import { CliError, ExitCode } from '../errors.js';
 import { books, formatBooks, formatMeasure, formatRecall, measure, type BooksBy } from './query.js';
-import { appendRecall } from './recall-object.js';
+import { formatLineage, loadLineage, walkLineage } from './lineage.js';
+import { appendRecall, readRecalls } from './recall-object.js';
+import { deriveConsequences, formatRecallCounts, recallCounts } from './recall-consequence.js';
 import { pull, type PullInput } from './recall-reads.js';
 import { MISS_TEXT } from './recall-render.js';
 import { readHookCalls } from './hook-calls.js';
@@ -83,6 +85,19 @@ export const sessionsRecall = async (deps: SessionsDeps, query: PullInput, sid: 
   await tryLog(() => appendRecall(storeDir, result.recall));
   if (result.legacy !== undefined) return { document: { ok: true, ...result.legacy, recall: result.recall }, text: formatRecall(result.legacy) };
   return { document: { ok: true, recall: result.recall, reads: result.reads }, text: result.recall.answer.rendered === '' ? MISS_TEXT : result.recall.answer.rendered };
+};
+
+/** `recall --counts`: push and pull, shown and held, as counts only. */
+export const sessionsRecallCounts = async (deps: SessionsDeps, day: string | undefined): Promise<Outcome> => {
+  const { storeDir } = runtimeOf(deps);
+  const rows = recallCounts(deriveConsequences(await loadStore(storeDir), await readRecalls(storeDir)), day);
+  return { document: { ok: true, day: day ?? null, rows }, text: formatRecallCounts(rows) };
+};
+
+/** `lineage`: a walk over files the derive already wrote. It computes nothing, so it logs no step. */
+export const sessionsLineage = async (deps: SessionsDeps, ref: string): Promise<Outcome> => {
+  const hops = walkLineage(await loadLineage(runtimeOf(deps).storeDir), ref);
+  return { document: { ok: true, hops }, text: formatLineage(hops) };
 };
 
 /**

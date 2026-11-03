@@ -6,6 +6,8 @@ import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { deriveCells, poolOf, serializeCells, type Pool } from './cells.js';
 import { contentHash, FAMILIES, makeRead, orderResolver, type Family, type Read } from './read.js';
+import { deriveConsequences, recallGraphOf } from './recall-consequence.js';
+import { readRecalls } from './recall-object.js';
 import { deriveAdoption } from './read-adoption.js';
 import { deriveChange } from './read-change.js';
 import { deriveCost } from './read-cost.js';
@@ -28,8 +30,9 @@ const DERIVERS: { readonly [family in Family]: DeriveFamily } = {
   'next-step': deriveNextStep,
 };
 
-export const poolFiles = (storeDir: string): { cells: string; motifs: string; reads: (version: string) => string } => ({
+export const poolFiles = (storeDir: string): { cells: string; motifs: string; consequences: string; reads: (version: string) => string } => ({
   cells: join(storeDir, 'cells.jsonl'),
+  consequences: join(storeDir, 'consequences.jsonl'),
   motifs: join(storeDir, 'motifs.jsonl'),
   reads: (version) => join(storeDir, 'reads', `${version}.jsonl`),
 });
@@ -65,9 +68,12 @@ const readStored = async (file: string): Promise<Read[] | undefined> => {
 
 /** The current pool's reads: already written when this pool has been read before, else derived and written once. */
 export const refreshPool = async (storeDir: string, store: Store): Promise<{ pool: Pool; reads: Read[] }> => {
-  const set = deriveCells(store);
+  const recalls = deriveConsequences(store, await readRecalls(storeDir));
+  const set = deriveCells(store, recallGraphOf(store, recalls));
   const pool = poolOf(set);
   const files = poolFiles(storeDir);
+  await writeAtomic(files.consequences, recalls.flatMap(({ id, n, consequence }) => (consequence === undefined ? [] : [`${JSON.stringify({ id, n, consequence })}
+`])).join(''));
   await writeAtomic(files.cells, serializeCells(set.cells));
   await writeAtomic(files.motifs, set.motifs.map((motif) => `${JSON.stringify(motif)}\n`).join(''));
   const file = files.reads(pool.version);

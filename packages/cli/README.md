@@ -81,6 +81,8 @@ oars sessions recall --path src/main.ts --since 30   # sees the first 100 sorted
 # Serve the same query to a running agent as one MCP tool, oars_recall (stdio):
 oars sessions recall --mcp
 
+oars sessions recall --counts --day 2026-11-03   # push and pull, shown and held, as counts
+oars sessions lineage <recallId or readId>       # walk back through the evidence, one line per hop
 oars sessions read                          # derived reads of your own sessions, largest sample first in each family
 oars sessions read --family fit --slice model=claude-opus-5-5 --json
 oars sessions books --by class --since 30   # tokens, wall time, turns, errors, verify-after-edit rate
