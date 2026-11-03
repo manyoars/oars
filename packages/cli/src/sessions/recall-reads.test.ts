@@ -107,6 +107,16 @@ describe('the four query forms', () => {
     expect(ask(store, { form: 'entity' })).toEqual([]);
   });
 
+  it('entity: keeps a name\'s calls and its model turns in separate reads, since their sum is neither', () => {
+    const both = storeOf({ sessions: [sessionRow('a', { tools: { 'shared-name': 2 }, models: { 'shared-name': 3 } })] });
+    const reads = ask(both, { form: 'entity', entity: 'shared-name' });
+    expect(reads.map(({ count, models }) => ({ count, models }))).toEqual([
+      { count: 2, models: [] },
+      { count: 3, models: ['shared-name'] },
+    ]);
+    expect(new Set(reads.map(({ readId }) => readId)).size).toBe(2);
+  });
+
   it('question: answers a family over a slice, and misses on a slice or family with nothing', () => {
     const store = synthetic();
     expect(ask(store, { form: 'question', family: 'recovery' })).toHaveLength(1);
