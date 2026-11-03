@@ -136,6 +136,8 @@ an open question (M4); until it is settled two machines of one account hash the 
 cannot be captured again), one `sid` across the store, every `fileHash` is a path target of a tool call, and `targetBase` is set on a path
 target and on nothing else.
 
+`verify` also reports every session on its own (`--json`: `sessionResults`, each session's ten rows with a status of `pass`, `fail`, or `not run`), audits each session against its raw file (`audit`, layer 4 at T0: the raw-file match, the Merkle root recomputed over the first `leaves` lines, and the count bindings), and scores each session against the operator's own other weeks (`selfBaseline`, layer 2: `not run` below 1,000 tool calls in the week or 4 baseline weeks); `root mismatch` and `counts do not bind` fail `--strict`.
+
 ### Commit survival
 
 `oars sessions deposit` and the nightly run, never a hook, read the repository of each allowlisted folder and append one line per changed
