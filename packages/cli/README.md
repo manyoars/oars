@@ -70,6 +70,8 @@ The SDK key is shown once, so save it when `deploy` prints it.
 
 `oars sessions` keeps a local, deterministic memory of your own Claude Code sessions. No model call, no network, nothing leaves the machine.
 
+What it captures: the Claude Code sessions in the folders you name with `--allow`. Where it stores them: `<config>/oars/sessions/` on your machine. The `raw/` folder in it is on by default and holds raw transcripts (a hard link or copy of each deposited one); these stay on your machine and nothing is uploaded. To remove it, see [Remove everything](#remove-everything).
+
 ```bash
 # Read the folders you name (a path, or its name under ~/.claude/projects). At least one --allow is required; there is no "all".
 oars sessions deposit --allow ~/work/app --allow ~/work/tools --redact-domain corp.example
@@ -91,7 +93,7 @@ oars sessions verify                        # consistency invariants on the stor
 `deposit` is idempotent (a file is skipped only when its size, mtime, capture version, salt, and `--redact-domain` set are all unchanged; a store written by an older capture version is captured again from the harness's transcript or from `raw/`, and one written by a newer oars is refused) and appends to `<config>/oars/sessions/observations.jsonl`:
 one record per session, user prompt, tool call, and failed tool result; signatures, prompt classes, and recovery episodes are derived
 from that log alone, so a change to a derivation rule never re-reads a transcript. The store format, every field with its class
-(`L` local-only, `A` account store, or `P` pooled), the two version stamps, and the raw archive are in [`docs/sessions-store.md`](../../docs/sessions-store.md);
+(`L` local-only, `A` account store, or `P` pooled), the two version stamps, and the raw archive are in [`docs/sessions-store.md`](https://github.com/manyoars/oars/blob/main/docs/sessions-store.md);
 the types are in `src/sessions/schema.ts`. Secrets (by pattern and entropy), emails, and the domains you name are masked
 before a line is written (redaction runs on the full text, then the text is cut); lines written before a domain was added stay in the append-only file until it is compacted, and readers use only the latest version of each session. The log is the local derived-records tier: redacted
 text, never raw content. It keeps these text fields and no others: the first 300 characters of each prompt, the first informative line of a
