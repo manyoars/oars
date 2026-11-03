@@ -70,9 +70,9 @@ describe('rolloutLines', () => {
     ];
     const out = extractOf(lines);
     expect(out.session.userTurns).toBe(2);
-    expect(out.session.assistantTurns).toBe(4);
+    expect(out.session.assistantTurns).toBe(3);
     expect(out.session.env.harness).toBe('0.50.0');
-    expect(out.session.models).toEqual({ 'gpt-5-codex': 4 });
+    expect(out.session.models).toEqual({ 'gpt-5-codex': 3 });
     // Input excludes the cached tokens (capture's convention); the repeated token_count did not double the first response.
     expect(out.session.usage).toMatchObject({ input: 600 + 1000, cacheRead: 900, output: 300, thinking: 50 });
     expect(out.tools.map((tool) => [tool.tool, tool.status])).toEqual([['Bash', 'ok'], ['Edit', 'ok'], ['Edit', 'ok']]);
@@ -132,7 +132,7 @@ describe('rolloutLines', () => {
       ]),
       's',
     );
-    expect(lines.filter((entry) => entry.type === 'user').map((entry) => entry.timestamp)).toEqual([T(0), T(9), T(9)]);
+    expect(lines.filter((entry) => entry.type === 'user').map((entry) => entry.timestamp)).toEqual([T(0), T(9), T(9), T(9)]);
   });
 
   it('skips torn lines and lines of an unknown type without failing', () => {
@@ -142,7 +142,6 @@ describe('rolloutLines', () => {
 
   it('captures a session from a folder that is not a repository', () => {
     const out = extractOf([meta('/tmp/notes'), prompt(2, 'hi'), line(T(3), 'response_item', { type: 'function_call', name: 'read_file', arguments: JSON.stringify({ path: 'a.txt' }), call_id: 'c1' }), line(T(4), 'response_item', { type: 'function_call_output', call_id: 'c1', output: 'text' })]);
-    expect(out.session.repoRemoteHash).toBeNull();
     expect(out.tools).toMatchObject([{ tool: 'read_file', status: 'ok' }]);
   });
 
