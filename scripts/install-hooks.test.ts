@@ -2,12 +2,27 @@ import { spawnSync } from 'node:child_process';
 import { mkdtempSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { installHooks } from './install-hooks.mjs';
 
 vi.setConfig({ testTimeout: 60_000, hookTimeout: 60_000 });
 
 let root: string;
+const saved: NodeJS.ProcessEnv = {};
+const GIT_VARS = ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE'];
+
+// A run under a hook or `git rebase --exec` inherits these, and they would send every git call to the real repository.
+beforeAll(() => {
+  for (const k of GIT_VARS) {
+    saved[k] = process.env[k];
+    delete process.env[k];
+  }
+});
+afterAll(() => {
+  for (const k of GIT_VARS) {
+    if (saved[k] !== undefined) process.env[k] = saved[k];
+  }
+});
 const git = (cwd: string, ...args: string[]) => {
   const r = spawnSync('git', args, { cwd, encoding: 'utf8' });
   if (r.status !== 0) throw new Error(`git ${args.join(' ')}: ${r.stderr}`);
