@@ -283,6 +283,23 @@ export interface ShellIdentity {
 
 export type StepIdentity = ShellIdentity | { server: string; tool: string } | { skill: string } | { host: string | null } | null;
 
+export interface StepCost {
+  /** The output tokens of the call's response, shared evenly among that response's calls; null when it reported none. */
+  tokens: number | null;
+  durationMs: number | null;
+}
+
+/**
+ * How a step came about (recall spec Section 2.3), naming the step it came from by position. `next`: order within a prompt's line of work.
+ * `spawned`: the call in the main transcript that started this subagent. `retried`: the same action and identity, after that one failed.
+ * `after-error`: the call before this one failed.
+ */
+export interface StepEdge {
+  kind: 'next' | 'spawned' | 'retried' | 'after-error';
+  n: number;
+  seg: number;
+}
+
 /** One observed event in the canonical vocabulary of any harness (recall spec Section 2.2). Class P: it holds only positions, public names, and a frame hash. */
 export interface StepObservation {
   /** The `n` of the tool call this step came from. */
@@ -294,6 +311,14 @@ export interface StepObservation {
   native: string;
   /** What the step acted on, in public names only; null for an action that has none (a file's path never appears here). */
   identity: StepIdentity;
+  /** The call's status when it reports this segment; `none` for a segment it does not, such as one a pipe hides. */
+  status: ToolStatus;
+  /** Held on the first segment of a call; a later segment has nulls. */
+  cost: StepCost;
+  /** On a subagent's step, the `n` of the call that spawned it in the main transcript; null otherwise or when that call is not known. */
+  parent: number | null;
+  /** The edges that arrive at this step. */
+  edges: StepEdge[];
   /** The frame of the call's prompt, or the session's own frame before the first prompt. */
   frameId: string;
 }

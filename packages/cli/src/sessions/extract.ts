@@ -6,6 +6,7 @@ import { createHash } from 'node:crypto';
 import { posix } from 'node:path';
 import { ACTION_TABLES, actionOf, shellOf, type ActionTable, type CanonicalAction } from './actions.js';
 import { closedFrame, frameIdOf, repoFilesFromIndex, stackOf, utcDay } from './frame.js';
+import { linkSteps } from './graph.js';
 import { callIdentity, shellIdentity, UNREAD_SHELL, type WordOfCommand } from './identity.js';
 import type { Redactor } from './redact.js';
 import {
@@ -264,6 +265,8 @@ export interface SubagentOrigin {
   parent: string;
   agentType: string | null;
   spawnedBy: string | null;
+  /** The `n` of the `spawnedBy` call in the parent transcript, when the deposit could read it. */
+  spawnedAt?: number | null;
 }
 
 export interface ExtractInput {
@@ -1029,6 +1032,29 @@ export const targetOf = (
   return { target: target === '' ? null : redact(target), base: null };
 };
 
+/** The `n` capture gives each call of a transcript, by tool-use id, the first copy of a repeated id winning; a subagent's steps name their parent by it without capturing the parent again. */
+export const callPositions = (text: string): Map<string, number> => {
+  const positions = new Map<string, number>();
+  let n = 0;
+  for (const raw of splitLines(text)) {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      continue;
+    }
+    const content = isObj(parsed) && isObj(parsed.message) ? parsed.message.content : undefined;
+    if (!Array.isArray(content)) continue;
+    for (const block of content) {
+      if (!isObj(block) || block.type !== 'tool_use') continue;
+      const id = str(block.id);
+      if (id !== undefined && !positions.has(id)) positions.set(id, n);
+      n += 1;
+    }
+  }
+  return positions;
+};
+
 /** One pass over a transcript into its capture records and skeleton. Never throws on a malformed line: it counts it and goes on. */
 export const captureSession = (input: ExtractInput): Capture => {
   const { redact } = input;
@@ -1104,6 +1130,9 @@ export const captureSession = (input: ExtractInput): Capture => {
   const promptFrames: PromptFrameParts[] = [];
   /** The steps of each call, by `n`, until its result is in. */
   const drafts: StepDraft[][] = [];
+  const responseOfCall: Array<string | undefined> = [];
+  const callsPerResponse = new Map<string, number>();
+  const outputPerResponse = new Map<string, number>();
   const seenResponses = new Set<string>();
   let promptFingerprint: string | null = null;
   let cur: Current | undefined;
@@ -1188,6 +1217,8 @@ export const captureSession = (input: ExtractInput): Capture => {
     const key = message === undefined ? undefined : responseKey(o, message);
     const firstOfResponse = key === undefined || !seenResponses.has(key);
     if (key !== undefined) seenResponses.add(key);
+    const response = key ?? `line ${String(position)}`;
+    if (lineUsage !== undefined && firstOfResponse) outputPerResponse.set(response, lineUsage.usage.output);
     const blocks = Array.isArray(content) ? content.filter(isObj) : [];
     skeletonLines.push({
       n: position + 1,
@@ -1310,6 +1341,10 @@ export const captureSession = (input: ExtractInput): Capture => {
         const shell = SHELL.has(name) || named.action === 'shell.exec' ? readShell(str(toolInput.command) ?? '', redact) : undefined;
         for (const held of shell?.steps ?? []) framePrograms.add(held.identity.program);
         drafts.push(draftsOf(actions, named, native, shell, aimed.target, toolInput));
+        // A repeat of a call a resumed session copied holds no share: the first copy already has it.
+        const repeat = id !== undefined && callById.has(id);
+        responseOfCall.push(repeat ? undefined : response);
+        if (!repeat) callsPerResponse.set(response, (callsPerResponse.get(response) ?? 0) + 1);
         const pulls = shell?.pulls ?? pullsOfTool(name);
         const call: ToolObservation = {
           kind: 'tool',
@@ -1404,8 +1439,31 @@ export const captureSession = (input: ExtractInput): Capture => {
   }
   for (const [position, call] of tools.entries()) {
     const frameId = (call.prompt === null ? undefined : prompts[call.prompt]?.frameId) ?? sessionFrameId;
-    call.steps = (drafts[position] ?? []).map((draft, seg) => ({ n: call.n, seg, action: draft.action, native: draft.native, identity: draft.identity, frameId }));
+    const response = responseOfCall[position];
+    const output = response === undefined ? undefined : outputPerResponse.get(response);
+    const tokens = response === undefined || output === undefined || output === 0 ? null : Math.round(output / (callsPerResponse.get(response) ?? 1));
+    call.steps = (drafts[position] ?? []).map((draft, seg) => ({
+      n: call.n,
+      seg,
+      action: draft.action,
+      native: draft.native,
+      identity: draft.identity,
+      status: draft.read ? call.status : 'none',
+      cost: seg === 0 ? { tokens, durationMs: call.durationMs } : { tokens: null, durationMs: null },
+      parent: origin?.spawnedAt ?? null,
+      edges: [],
+      frameId,
+    }));
   }
+  linkSteps(
+    tools.map((call, position) => ({
+      steps: call.steps ?? [],
+      rawKeys: (drafts[position] ?? []).map((draft) => draft.rawKey),
+      line: `${String(call.prompt)} ${String(call.side)}`,
+      status: call.status,
+    })),
+    origin?.spawnedAt ?? null,
+  );
 
   return {
     session,
