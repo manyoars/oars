@@ -137,8 +137,8 @@ describe('an entity read names itself', () => {
     expect(renderAnswer([entity(name)], frame()).rendered).toContain(`\n${name} | 4 calls,`);
   });
 
-  it('a model by its name and in turns, because a model is not called', () => {
-    expect(renderAnswer([entity('claude-opus-5-5')], frame()).rendered).toContain('\nclaude-opus-5-5 | 4 turns,');
+  it('a model by its name and in requests, because a model is not called', () => {
+    expect(renderAnswer([entity('claude-opus-5-5')], frame()).rendered).toContain('\nclaude-opus-5-5 | 4 requests,');
   });
 
   it.each([

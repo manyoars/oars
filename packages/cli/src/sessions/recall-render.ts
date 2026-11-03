@@ -155,9 +155,16 @@ const followedActions = (read: RecallRead): Array<[string, number]> => {
   return [...sums].sort((a, b) => b[1] - a[1]);
 };
 
+/** What a read with no denominator counts. A model is not called: its entity read counts the transcript lines that requested it. */
+const nounOf = (read: RecallRead): string => {
+  if (read.family === 'entity') return read.models.includes(read.tool) ? 'request' : 'call';
+  if (read.family === 'next-step') return 'call';
+  return read.family === 'recovery' || read.family === 'fit' ? 'error' : 'observation';
+};
+
 const line = (read: RecallRead, asker: RecallAsker | null): { text: string; names: string[] } => {
   const followed = followedActions(read);
-  const failures = read.calls === null ? count(read.count, read.family === 'entity' ? 'call' : 'error') : `failed ${String(read.count)} of ${count(read.calls, 'call')}`;
+  const failures = read.calls === null ? count(read.count, nounOf(read)) : `failed ${String(read.count)} of ${count(read.calls, 'call')}`;
   const harnesses = read.harnesses.flatMap((name) => harnessName(name) ?? []);
   const lastDay = publicDay(read.lastDay) ?? 'unknown';
   const id = READ_ID.test(read.readId) ? read.readId : LITERAL;
