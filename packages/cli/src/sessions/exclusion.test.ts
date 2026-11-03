@@ -120,6 +120,59 @@ describe('checkSession (A38)', () => {
   });
 });
 
+describe('links to folders (a transcript that was not scanned never reads as clean)', () => {
+  // Creating a link can need a privilege some Windows accounts lack: the test skips there.
+  const link = (target: string, path: string): boolean => {
+    try {
+      mkdirSync(join(path, '..'), { recursive: true });
+      symlinkSync(target, path, 'dir');
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+  it('follows a link to a directory under subagents', async (ctx) => {
+    const t = setup();
+    write(t.main('p', 's11'), [CLEAN]);
+    const elsewhere = join(t.staged.root, 'elsewhere');
+    write(join(elsewhere, 'agent-x.jsonl'), [DIRTY]);
+    if (!link(elsewhere, join(t.staged.projectsRoot, 'p', 's11', 'subagents', 'linked'))) return ctx.skip();
+    const verdict = await checkSession(t.staged.runtime, t.termsFile, 'p', 's11');
+    expect(verdict).toEqual({ excluded: true, reason: 'term', hits: [{ key: 's11/subagents/linked/agent-x.jsonl', main: false, source: 'projects' }] });
+  });
+
+  it('excludes a session whose subagents link leads nowhere as unreadable', async (ctx) => {
+    const t = setup();
+    write(t.main('p', 's12'), [CLEAN]);
+    if (!link(join(t.staged.root, 'gone'), join(t.staged.projectsRoot, 'p', 's12', 'subagents', 'linked'))) return ctx.skip();
+    expect((await checkSession(t.staged.runtime, t.termsFile, 'p', 's12')).reason).toBe('unreadable');
+  });
+
+  it('counts a linked project folder and a linked session folder, and aborts on a broken project link', async (ctx) => {
+    const t = setup();
+    const outside = join(t.staged.root, 'outside-proj');
+    write(join(outside, 's13.jsonl'), [DIRTY]);
+    if (!link(outside, join(t.staged.projectsRoot, 'linkedproj'))) return ctx.skip();
+    const sessionOutside = join(t.staged.root, 'outside-session');
+    write(join(sessionOutside, 'subagents', 'agent-y.jsonl'), [DIRTY]);
+    write(t.main('q', 'ignored'), [CLEAN]);
+    if (!link(sessionOutside, join(t.staged.projectsRoot, 'q', S_D))) return ctx.skip();
+    const { counts } = await scanStore(t.staged.runtime, t.termsFile);
+    expect(counts).toMatchObject({ sessions: 3, excluded: 2, notSessions: 0 });
+    expect(counts.folders).toHaveLength(2);
+    expect(counts.reasons).toMatchObject({ term: 2 });
+    link(join(t.staged.root, 'gone'), join(t.staged.projectsRoot, 'brokenproj'));
+    const failure = await scanStore(t.staged.runtime, t.termsFile).then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+    expect(failure).toBeInstanceOf(CliError);
+    expect(failure instanceof CliError ? failure.message : '').toMatch(/folder \d+ .*no list was written/);
+    expect(failure instanceof CliError ? failure.message : '').not.toContain('brokenproj');
+  });
+});
+
 describe('loadTerms and exclusionPaths', () => {
   it('counts a file that decodes to garbage (UTF-16, or bytes that are not UTF-8) as holding no terms', async () => {
     const t = setup(null);
