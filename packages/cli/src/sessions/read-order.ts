@@ -1,7 +1,7 @@
 // Reads over reads (spec Section 6): noise compounds, so an interval comes from the inputs and a read below its floor does not exist. Every family above order 1 builds its
 // read here, which is how the floor stays a property of the read and not a filter on a listing. Order 1 has no floor, because a cell is the operator's own; a relation
 // between rates has one, because two thin rates differ by chance and read as news.
-import type { Family, Read, ReadInterval, ReadSlice, ReadValue } from './read.js';
+import { METHODS, type Family, type Read, type ReadInterval, type ReadSlice, type ReadValue } from './read.js';
 import { round, type ReadBody } from './read-support.js';
 
 /** A family over reads: it reads every read of the stages before it. */
@@ -74,11 +74,11 @@ export interface Relation {
  * A read over reads, or nothing when any measured input sits below the floor or has no interval. `n` and `clusters` state the weakest side: a relation knows no more than its
  * thinnest input, and summing trials up a chain would count one step many times.
  */
-export const relate = (family: Family, method: string, methodVersion: string, inputs: readonly Read[], relation: Relation): ReadBody | undefined => {
+export const relate = (family: Family, inputs: readonly Read[], relation: Relation): ReadBody | undefined => {
   const { cites = [], trials = trialsOf, n = Math.min(...inputs.map(trials)), ...fields } = relation;
   if (inputs.some((read) => read.interval === null || trials(read) < TRIALS_FLOOR)) return undefined;
   const all = [...inputs, ...cites];
-  return { family, method, methodVersion, inputs: all.map((read) => read.readId), clusters: Math.min(...all.map((read) => read.clusters)), basis: 'all', n, ...fields };
+  return { family, method: METHODS[family].name, methodVersion: METHODS[family].version, inputs: all.map((read) => read.readId), clusters: Math.min(...all.map((read) => read.clusters)), basis: 'all', n, ...fields };
 };
 
 /** A comparison made, before the screen: the read it would be, and every estimate that has to move for it to exist. */
@@ -88,8 +88,8 @@ export interface Candidate {
 }
 
 /** A comparison above the floor, which therefore counts toward what the screen allows for. */
-export const candidateOf = (family: Family, method: string, methodVersion: string, inputs: readonly Read[], gates: readonly Estimate[], relation: Relation): Candidate | undefined => {
-  const body = relate(family, method, methodVersion, inputs, relation);
+export const candidateOf = (family: Family, inputs: readonly Read[], gates: readonly Estimate[], relation: Relation): Candidate | undefined => {
+  const body = relate(family, inputs, relation);
   return body === undefined ? undefined : { gates, body };
 };
 

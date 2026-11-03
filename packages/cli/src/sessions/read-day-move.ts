@@ -41,7 +41,7 @@ const failureMove = (earlier: Read, later: Read, from: string, to: string): Read
   const before = estimateOf(earlier, 'failureRate');
   const after = estimateOf(later, 'failureRate');
   if (before === undefined || after === undefined) return [];
-  const read = relate('day-move', 'move-to-next-day', '2', [earlier, later], { slice: sliceOf(earlier, 'failureRate', from, to), ...moveOver(before, after) });
+  const read = relate('day-move', [earlier, later], { slice: sliceOf(earlier, 'failureRate', from, to), ...moveOver(before, after) });
   return read === undefined ? [] : [read];
 };
 
@@ -51,7 +51,7 @@ const shareMove = (tool: Read, sides: readonly [DaySide, DaySide], from: string,
   const before = shareOn(earlier.tool, earlier.witness);
   const after = shareOn(later.tool, later.witness);
   if (before === undefined || after === undefined) return [];
-  const read = relate('day-move', 'move-to-next-day', '2', [earlier.tool ?? earlier.witness, later.tool ?? later.witness], {
+  const read = relate('day-move', [earlier.tool ?? earlier.witness, later.tool ?? later.witness], {
     slice: sliceOf(tool, 'share', from, to),
     ...moveOver(before, after),
     trials: stepsOf,

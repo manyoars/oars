@@ -2,8 +2,8 @@
 // and reading one motif across frames is how the record compares models, harnesses, versions, and dates.
 
 import { createHash } from 'node:crypto';
-import { closeSync, openSync, readSync } from 'node:fs';
-import { join } from 'node:path';
+import { closeSync, openSync, readFileSync, readSync, statSync } from 'node:fs';
+import { join, resolve } from 'node:path';
 import { FRAMEWORK_OF_FILE, FRAMEWORK_OF_PROGRAM, FRAMEWORKS, LANGUAGE_OF_EXTENSION, LANGUAGES, publicEffort, publicModel, publicVersion, REPO_SIZES, type RepoSize } from './public-vocabulary.js';
 import type { Frame, FrameStack } from './schema.js';
 
@@ -24,7 +24,8 @@ export const closedStack = (raw: { languages: readonly string[]; frameworks: rea
   size: REPO_SIZES.find((size) => size === raw.size) ?? null,
 });
 
-const sizeOf = (files: number | null): RepoSize | null => {
+/** The bucket of a repository's tracked-file count; null when the count is not known. */
+export const repoSizeOf = (files: number | null): RepoSize | null => {
   if (files === null) return null;
   if (files < 100) return 'xs';
   if (files < 1000) return 's';
@@ -35,7 +36,7 @@ const sizeOf = (files: number | null): RepoSize | null => {
 const baseName = (path: string): string => path.replace(/\\/g, '/').split('/').pop() ?? path;
 
 /** The stack a file's evidence shows. Only names from the vocabulary come out, so a path or a program name can never pass through. */
-export const stackOf = (evidence: { paths: readonly string[]; programs: readonly string[]; repoFiles: number | null }): FrameStack => {
+export const stackOf = (evidence: { paths: readonly string[]; programs: readonly string[]; size: RepoSize | null }): FrameStack => {
   const counts = new Map<string, number>();
   const frameworks: string[] = [];
   for (const path of evidence.paths) {
@@ -50,7 +51,7 @@ export const stackOf = (evidence: { paths: readonly string[]; programs: readonly
   }
   // Most touched first, a tie by name, so the mix does not depend on the order the files were touched in.
   const languages = [...counts].sort(([a, one], [b, two]) => two - one || a.localeCompare(b)).slice(0, LANGUAGES_PER_STACK).map(([language]) => language);
-  return closedStack({ languages, frameworks, size: sizeOf(evidence.repoFiles) });
+  return closedStack({ languages, frameworks, size: evidence.size });
 };
 
 /** The frame with every free-standing name held to the public vocabulary. */
@@ -70,11 +71,19 @@ export const frameIdOf = (frame: Frame): string => {
 
 const INDEX_HEADER_BYTES = 12;
 
+/** Where a checkout's git index is. In a linked worktree or a submodule `.git` is a file whose `gitdir:` line names the real git folder, absolute or relative to the checkout. */
+const indexPathOf = (root: string): string => {
+  const dotGit = join(root, '.git');
+  if (statSync(dotGit).isDirectory()) return join(dotGit, 'index');
+  const pointer = /^gitdir:\s*(.+?)\s*$/m.exec(readFileSync(dotGit, 'utf8'))?.[1];
+  return pointer === undefined ? join(dotGit, 'index') : join(resolve(root, pointer), 'index');
+};
+
 /** How many files a repository tracks, from its git index's header: no git process, and null when there is no readable index. */
 export const repoFilesFromIndex = (root: string): number | null => {
   let descriptor: number | undefined;
   try {
-    descriptor = openSync(join(root, '.git', 'index'), 'r');
+    descriptor = openSync(indexPathOf(root), 'r');
     const header = Buffer.alloc(INDEX_HEADER_BYTES);
     const read = readSync(descriptor, header, 0, INDEX_HEADER_BYTES, 0);
     return read === INDEX_HEADER_BYTES && header.toString('latin1', 0, 4) === 'DIRC' ? header.readUInt32BE(8) : null;

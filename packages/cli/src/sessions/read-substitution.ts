@@ -36,7 +36,7 @@ const pairCandidate = (boundary: Boundary, rising: string, falling: string): Can
   // How much of the move the two share: the smaller of them, whose interval is bounded by the smaller of each side.
   const offset = Math.min(rise.value, fall.value);
   const interval = { low: Math.min(rise.interval.low, fall.interval.low), high: Math.min(rise.interval.high, fall.interval.high), level: rise.interval.level };
-  return candidateOf('substitution', 'rise-against-fall', '1', [risingBefore.read, risingAfter.read, fallingBefore.read, fallingAfter.read], [rise, fall, restFall], {
+  return candidateOf('substitution', [risingBefore.read, risingAfter.read, fallingBefore.read, fallingAfter.read], [rise, fall, restFall], {
     slice: { rising: motifOf(rising), falling: motifOf(falling), level: levelOf(rising), harness: boundary.harness, from: from.name, to: to.name },
     value: { rise: rise.value, fall: fall.value, restFall: restFall.value, offset },
     interval,

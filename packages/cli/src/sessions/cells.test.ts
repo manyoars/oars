@@ -1,7 +1,8 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { bucketFields, cellIdOf, deriveCells, frameBucketOf, harnessBucket, poolOf, serializeCells, UNKNOWN, type Cell } from './cells.js';
 import { classMotif, shapeId } from './motif.js';
-import { frame, prompt, session, store, tool } from './pool-fixture.js';
+import { error, frame, prompt, session, store, tool } from './pool-fixture.js';
+import type * as ReadModule from './read.js';
 import type { Store } from './store.js';
 
 const READ = { action: 'file.read', identity: null } as const;
@@ -167,21 +168,52 @@ describe('poolOf', () => {
   const one = store({ sessions: [session('s1')], prompts: [prompt('s1', 0)], tools: [tool('s1', 0, 'Read')] });
 
   it('versions the pool by its cells, and states its newest day', () => {
-    const pool = poolOf(deriveCells(one));
-    expect(pool.version).toBe(poolOf(deriveCells(one)).version);
+    const pool = poolOf(deriveCells(one), []);
+    expect(pool.version).toBe(poolOf(deriveCells(one), []).version);
     expect(pool.lastDay).toBe('2026-11-01');
     const later = store({ ...one, tools: [...one.tools, tool('s1', 1, 'Read')] });
-    expect(poolOf(deriveCells(later)).version).not.toBe(pool.version);
+    expect(poolOf(deriveCells(later), []).version).not.toBe(pool.version);
+  });
+
+  it('versions the pool by the error rows recovery reads, whatever their order', () => {
+    const rows = [error('s1', 'sig-a', { toolUseId: 'c0' }), error('s1', 'sig-b', { toolUseId: 'c1' })];
+    const set = deriveCells(one);
+    const version = poolOf(set, rows).version;
+    expect(poolOf(set, [...rows].reverse()).version).toBe(version);
+    expect(poolOf(set, rows.slice(0, 1)).version).not.toBe(version);
+    expect(poolOf(set, [error('s1', 'sig-a', { toolUseId: 'c0' }), error('s1', 'sig-c', { toolUseId: 'c1' })]).version).not.toBe(version);
+    expect(poolOf(set, [error('s1', 'sig-a', { toolUseId: 'c0', editFollowed: true }), rows[1] ?? error('s1', 'unused')]).version).not.toBe(version);
+  });
+
+  it('leaves the pool as it was when only an error field no read looks at changes', () => {
+    const set = deriveCells(one);
+    expect(poolOf(set, [error('s1', 'sig-a', { example: 'one' })]).version).toBe(poolOf(set, [error('s1', 'sig-a', { example: 'two' })]).version);
+  });
+
+  it('gives a new method version a new pool, so a stored file of the old method is not served', async () => {
+    const before = poolOf(deriveCells(one), []).version;
+    vi.resetModules();
+    vi.doMock('./read.js', async (importActual) => {
+      const actual = await importActual<typeof ReadModule>();
+      return { ...actual, METHODS: { ...actual.METHODS, fit: { ...actual.METHODS.fit, version: '2' } } };
+    });
+    try {
+      const fresh = await import('./cells.js');
+      expect(fresh.poolOf(fresh.deriveCells(one), []).version).not.toBe(before);
+    } finally {
+      vi.doUnmock('./read.js');
+      vi.resetModules();
+    }
   });
 
   it('finds every cell its motif', () => {
-    const pool = poolOf(deriveCells(one));
+    const pool = poolOf(deriveCells(one), []);
     expect(pool.cells.every((cell) => pool.motifs.has(cell.motifId))).toBe(true);
   });
 
   it('states no day when no cell has one', () => {
     const none = store({ subagents: [session('a')], tools: [tool('a', 0, 'Read', { prompt: null })] });
-    expect(poolOf(deriveCells(none)).lastDay).toBeNull();
-    expect(poolOf({ cells: [], motifs: [] }).lastDay).toBeNull();
+    expect(poolOf(deriveCells(none), []).lastDay).toBeNull();
+    expect(poolOf({ cells: [], motifs: [] }, []).lastDay).toBeNull();
   });
 });

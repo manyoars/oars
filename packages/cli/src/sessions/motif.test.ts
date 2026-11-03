@@ -125,8 +125,13 @@ describe('motifsOf', () => {
     expect(named !== undefined && motifName(named.motif)).toBe('shell.exec[program=git]');
   });
 
-  it('names a pull by its registry and name, and leaves its version to the identity', () => {
+  it('names a pull by its registry, name, and version, so two pinned versions read apart', () => {
     const named = motifsOf([step('shell.exec', { program: 'npm', sub: 'install', flags: [], pulls: [{ registry: 'npm', name: 'zod', version: '4.0.0' }] })]).find((window) => window.motif.level === 'named');
+    expect(named !== undefined && motifName(named.motif)).toBe('shell.exec[program=npm pulls=npm:zod@4.0.0 sub=install]');
+  });
+
+  it('leaves the version out of a pull that stated none', () => {
+    const named = motifsOf([step('shell.exec', { program: 'npm', sub: 'install', flags: [], pulls: [{ registry: 'npm', name: 'zod', version: null }] })]).find((window) => window.motif.level === 'named');
     expect(named !== undefined && motifName(named.motif)).toBe('shell.exec[program=npm pulls=npm:zod sub=install]');
   });
 });

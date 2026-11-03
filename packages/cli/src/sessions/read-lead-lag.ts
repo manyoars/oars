@@ -87,7 +87,7 @@ export const deriveLeadLag: DeriveRelation = (reads) => {
   const skill = skillOf(scored, slope);
   const signs = signsOf(scored, slope);
   const passed = Math.abs(slope) > margin && skill > 0 && signs.low > CHANCE;
-  const read = relate('lead-lag', 'failure-move-leads-share-move', '1', pairs.flatMap((pair) => pair.reads), {
+  const read = relate('lead-lag', pairs.flatMap((pair) => pair.reads), {
     slice: { lead: 'failureRate', lag: 'share', level: 'shape' },
     value: { label: 'experimental', check: passed ? 'passed' : 'failed', slope: round(slope), skill: round(skill), signAgreement: signs.agreement, fitPairs: fit.length, scorePairs: scored.length, fitThrough, scoredFrom },
     interval: { low: round(slope - margin), high: round(slope + margin), level: 0.95 },

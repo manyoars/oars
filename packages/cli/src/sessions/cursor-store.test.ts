@@ -47,6 +47,15 @@ describe('depositing the Cursor source', () => {
     expect(tracked['cursor/agent']).toMatchObject({ size: 5, mtimeMs: Date.parse('2025-03-02T09:30:00Z') });
   });
 
+  it('reads a Cursor call by its own table and frames its session as Cursor, from the deposit down', async () => {
+    const s = await staged();
+    await deposit(s.runtime, options(['cursor']));
+    const store = await loadStore(s.storeDir);
+    const steps = store.tools.filter((tool) => tool.session === 'cursor-agent').flatMap((tool) => tool.steps ?? []);
+    expect(steps[0]).toMatchObject({ action: 'file.read', native: 'read_file' });
+    expect(store.sessions.find((session) => session.session === 'cursor-agent')?.frame).toMatchObject({ harness: 'cursor' });
+  });
+
   it('puts a session in the project slug of its workspace folder and a loose one under cursor', async () => {
     const s = await staged();
     await deposit(s.runtime, options(['cursor']));

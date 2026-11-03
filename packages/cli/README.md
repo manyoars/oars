@@ -1,6 +1,8 @@
 # @manyoars/oars
 
-The `oars` command line for Many Oars: sign in, deploy an agent, set its prices and make a test charge against it.
+The `oars` command line for Many Oars: sign in, deploy an agent, set its prices, make a test charge against it, and keep a local memory of your own Claude Code sessions (`oars sessions`).
+
+Accounts and paid agents are not open yet; `oars login` says so until launch.
 
 Node 24 or later. ESM only.
 
@@ -32,7 +34,7 @@ These flags work on every command:
 Signs in with your browser (RFC 8628 device flow) and stores the login.
 
 - `--no-browser` prints the link and code without opening a browser.
-- `--issuer-url <url>` is the Keycloak realm URL. The default is `OARS_ISSUER_URL`. With neither, `login` uses the built-in Many Oars issuer once Many Oars has launched, which it learns from `https://manyoars.com/.well-known/oars.json` (`{"launched": true}`). The flag only switches the built-in issuer on; it never supplies a URL. Before launch, with no `--issuer-url` or `OARS_ISSUER_URL`, the command prints "Many Oars has not launched yet: pass --issuer-url or set OARS_ISSUER_URL." and exits 2.
+- `--issuer-url <url>` is the Keycloak realm URL. The default is `OARS_ISSUER_URL`. With neither, `login` uses the built-in Many Oars issuer once Many Oars has launched, which it learns from `https://manyoars.com/.well-known/oars.json` (`{"launched": true}`). The flag only switches the built-in issuer on; it never supplies a URL. Before launch, or when the built-in issuer does not answer discovery, with no `--issuer-url` or `OARS_ISSUER_URL`, the command prints "Many Oars has not launched yet: pass --issuer-url or set OARS_ISSUER_URL." and exits 2.
 
 ### logout
 
@@ -68,13 +70,17 @@ The SDK key is shown once, so save it when `deploy` prints it.
 
 ### sessions
 
-`oars sessions` keeps a local, deterministic memory of your own Claude Code sessions. No model call, no network, nothing leaves the machine. `gold arms` is the one exception: it sends redacted text through your own Claude subscription.
+`oars sessions` keeps a local, deterministic memory of your own Claude Code sessions. oars makes no model call and no network call, except `gold arms`, which sends redacted text through your own Claude subscription.
+
+What it captures: the Claude Code sessions in the folders you name with `--allow`, and Cursor sessions if you pass `--allow cursor`. Where it stores them: `<config>/oars/sessions/` on your machine (`<config>` is `%APPDATA%` on Windows, `$XDG_CONFIG_HOME` or `~/.config` elsewhere). The `raw/` folder in it is on by default and holds raw transcripts (a hard link or copy of each deposited one). Secret masking applies to the log, not to `raw/`: those files are unredacted and keep whatever the transcript held, secrets included. They stay on your machine and, apart from `gold arms`, nothing is uploaded. To remove them, see [Remove everything](#remove-everything).
+
+Apart from that, oars itself sends nothing; the hooks and the MCP tool add recall text to the running session, and your harness sends that to its model like any other context.
 
 ```bash
 # Read the folders you name (a path, or its name under ~/.claude/projects). At least one --allow is required; there is no "all".
 oars sessions deposit --allow ~/work/app --allow ~/work/tools --redact-domain corp.example
 
-# Ask before you re-solve: the error as printed, a file, or a prompt class.
+# Look up an error as printed, a file, or a prompt class.
 oars sessions recall --error "unexpected EOF while looking for matching \`''"
 oars sessions recall --path src/main.ts --since 30   # sees the first 100 sorted paths of a session
 
@@ -95,20 +101,19 @@ oars sessions gold sample --exclude-term <text>   # about 200 prompts to judge b
 
 `deposit` is idempotent (a file is skipped only when its size, mtime, capture version, salt, and `--redact-domain` set are all unchanged; a store written by an older capture version is captured again from the harness's transcript or from `raw/`, and one written by a newer oars is refused) and appends to `<config>/oars/sessions/observations.jsonl`:
 one record per session, user prompt, tool call, and failed tool result, where each tool call also holds its steps in a canonical action vocabulary and each prompt a frame (harness, model, day, and public stack names); signatures, prompt classes, and recovery episodes are derived
-from that log alone, so a change to a derivation rule never re-reads a transcript. The store format, every field with its class
-(`L` local-only, `A` account store, or `P` pooled), the two version stamps, and the raw archive are in [`docs/sessions-store.md`](../../docs/sessions-store.md);
+from that log alone, so a change to a derivation rule never re-reads a transcript. The store format, every field with its class, the two version stamps, and the raw archive are in [`docs/sessions-store.md`](https://github.com/manyoars/oars/blob/main/docs/sessions-store.md);
 the types are in `src/sessions/schema.ts`. Secrets (by pattern and entropy), emails, and the domains you name are masked
 before a line is written (redaction runs on the full text, then the text is cut); lines written before a domain was added stay in the append-only file until it is compacted, and readers use only the latest version of each session. The log is the local derived-records tier: redacted
 text, never raw content. It keeps these text fields and no others: the first 300 characters of each prompt, the first informative line of a
 tool error (cut to 1,000 characters in the error-line record, 160 characters in a derived example), TLDR lines (400) and Confidence lines (120) from assistant text, WebSearch queries, fetched URLs, file
 paths, and git branch names (the last four have no length limit), all redacted first; plus the project folder slug (not redacted, so it
-carries your username and directory names; the log stays local), skill names, effort values, model names, harness versions, tool names (including MCP server names), a shell call's program and subcommand, and tool-input key names. A tool call's file target is a salted hash, never the path. Nothing is uploaded.
+carries your username and directory names; the log stays local), skill names, effort values, model names, harness versions, tool names (including MCP server names), a shell call's program and subcommand, and tool-input key names. A tool call's file target is a salted hash, never the path. Apart from `gold arms`, nothing is uploaded.
 Subagent transcripts (`<project>/<session>/subagents/`) are deposited with their parent session and subagent type; `books --by class`
 shows their tokens as the `delegated` column, and their errors are in the signatures, `measure`, and recall under the session that
 spawned them, so per-session counts still count main sessions. Every deposited transcript is also
 hard-linked (copied across volumes) into `<config>/oars/sessions/raw/`, so it outlives the harness's own cleanup. For each session it also writes a skeleton (ids, timestamps, tool linkage, token counts, a SHA-256 in place of every content
 field, and a Merkle root over the raw lines) that `verify` checks; the skeleton holds hashes only, never content.
-`verify` exits 0 even when an invariant has exceptions; add `--strict` to exit 4 instead. `verify` also reports every session on its own (`--json`: `sessionResults`, each session's ten rows with a status of `pass`, `fail`, or `not run`) and audits each session against its raw file (`audit`): the raw-file match for a hard link and for a copy (a copy of a different size counts as possible tampering), the Merkle root recomputed over the first `leaves` lines, and the count bindings (`leaves`, `session.lines`, and the skeleton's lines plus `badLines` must agree). Each session lands on one of five results: `root matches and the counts bind`, `changed since deposit`, `root mismatch`, `counts do not bind`, or `not run` (no raw file, no skeleton, no capture record, or a raw file that cannot be read). `root mismatch` and `counts do not bind` fail `--strict`; a local match commits nobody, so none of them raises a tier. Sessions under 10 `leaves` are flagged, since their root joins no cluster. `measure` prints the recurring-error count
+`verify` exits 0 even when an invariant has exceptions; add `--strict` to exit 4 instead. `verify` also reports every session on its own (`--json`: `sessionResults`, each session's ten rows with a status of `pass`, `fail`, or `not run`) and audits each session against its raw file (`audit`): the raw-file match for a hard link and for a copy (a copy of a different size counts as possible tampering), the Merkle root recomputed over the first `leaves` lines, and the count bindings (`leaves`, `session.lines`, and the skeleton's lines plus `badLines` must agree). Each session lands on one of five results: `root matches and the counts bind`, `changed since deposit`, `root mismatch`, `counts do not bind`, or `not run` (no raw file, no skeleton, no capture record, or a raw file that cannot be read). `root mismatch` and `counts do not bind` fail `--strict`; sessions under 10 `leaves` are flagged. `verify` also scores each session against the operator's own other weeks on its harness (`--json`: `selfBaseline`, layer 2 at T0, local): the session's UTC week is the week of its `tsFirst`; a baseline is that harness's other weeks with at least 1,000 tool calls that ended by now, combined by calls; the result is `F` from the median distance over seven histograms (a dimension with no counts on a side is dropped). It is `not run`, scoring nothing, for a null `tsFirst`, a week under 1,000 calls, or fewer than 4 baseline weeks. A low `F` lowers a weight and rejects nothing. `measure` prints the recurring-error count
 per hundred sessions and, on a second line, the distinct recurring signatures in the window.
 #### Many folders: `--allow` prefixes, globs, and `--allow-file`
 
@@ -148,7 +153,7 @@ Install merges: existing hooks (a Stop hook that rotates sessions, say) stay, ev
 
 #### Remove everything
 
-`oars sessions hook uninstall` for each scope you installed; `oars sessions hook install --schedule off`; delete the store folder `<config>/oars/sessions/` (observations, skeletons, state, the hook index, and `hook-calls.jsonl`). Nothing else is created. `cleanupPeriodDays` stays at the value install set unless you change it.
+`oars sessions hook uninstall --scope user` (or the scope you installed); `oars sessions hook install --schedule off`; delete the store folder `<config>/oars/sessions/` (observations, skeletons, state, the hook index, `hook-calls.jsonl`, and `raw/`, which holds the unredacted transcripts). `gold sample` also writes its prompt file and sidecar to `~/.claude/session-commons/review/` (or `$CLAUDE_CONFIG_DIR`, or your `--out-dir`); delete those too. Nothing else is created. `cleanupPeriodDays` stays at the value install set unless you change it.
 
 ## The `--json` contract
 

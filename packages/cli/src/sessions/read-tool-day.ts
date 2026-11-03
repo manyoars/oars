@@ -15,7 +15,7 @@ export const deriveToolDay: DeriveFamily = ({ pool }) => {
     const failed = total(cells, (cell) => cell.failed);
     const of = steps.get(first.cell.day) ?? 0;
     return [
-      body('tool-day', 'rates-on-day', '1', cells, {
+      body('tool-day', cells, {
         slice: { motif: motifName(first.motif), level: first.motif.level, day: first.cell.day },
         // `steps` and not `of`: this read's interval rests on the tool's own calls, and `of` would hold it to the floor by the day's.
         value: { failureRate: rate(failed, n), failed, share: rate(n, of), steps: of },
