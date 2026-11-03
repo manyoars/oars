@@ -30,7 +30,7 @@ const setup = () => {
 };
 
 const base = (project: string, name: string, day: number): SessionObservation => ({
-  kind: 'session', cv: '1', sid: null, session: name, project, parent: null, agentType: null, spawnedBy: null, rev: 1, at: '', bytes: 0, lines: 0, badLines: 0, userTurns: 0, assistantTurns: 0,
+  kind: 'session', cv: '1', sid: null, session: name, project, parent: null, agentType: null, spawnedBy: null, spawnedIn: null, rev: 1, at: '', bytes: 0, lines: 0, badLines: 0, userTurns: 0, assistantTurns: 0,
   tsFirst: new Date(Date.UTC(2026, 0, 1) + day * 86_400_000).toISOString(), tsLast: null, versions: [], models: {}, branches: [], tools: {}, files: [], fileHashes: [], repo: null, urls: [], searches: [],
   bashCmds: 0, tldrs: [], confidences: [], compactSummaries: 0, promptFingerprint: null, env: { harness: null, oars: '0.0.0', node: 'v0', os: 'test' }, costUsd: null, usage: { input: 0, cacheWrite: 0, cacheRead: 0, output: 0, thinking: 0 },
 });

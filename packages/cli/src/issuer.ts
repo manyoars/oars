@@ -2,7 +2,7 @@ import { CliError, ExitCode } from './errors.js';
 import type { RunDeps } from './cli.js';
 
 /**
- * The production Keycloak realm (aor-platform/k8s/configmap.yaml: KEYCLOAK_ISSUER_URI). It ships in the CLI, reviewed with it:
+ * The production Keycloak realm (the platform's k8s/configmap.yaml: KEYCLOAK_ISSUER_URI). It ships in the CLI, reviewed with it:
  * the launch flag below only switches it on, so a compromised site cannot send logins anywhere else.
  */
 export const PRODUCTION_ISSUER_URL = 'https://login.manyoars.com/realms/aor';

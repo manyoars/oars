@@ -72,13 +72,15 @@ a second time with status `none` (99.8% of the 55,801 `tool_use` blocks on those
 resumed transcript replays under the same tool-use id is written once. The skeleton still lists every line, so the counts and the root bind. A reader
 folds an older store the same way (`fold.ts`): one `tool` record per session and tool-use id, the first, with the first status found and, when the first has no `ts`, the
 `target`, `targetBase`, `ts`, and `harnessVersion` of the first copy that has one; the kept records are numbered from zero and each `error-line`'s `after`
-moves to match, so `next` and `editFollowed` read the same calls as a current capture; and the session's `tools` and `bashCmds` are less the dropped calls. A call with no result is still a record, status `none`. What an open does with an older store:
+moves to match, so `next` and `editFollowed` read the same calls as a current capture; and the session's `tools` and `bashCmds` are less the dropped calls. A call with no result is still a record, status `none`. Version 9 (CAPTURE 9, t755)
+adds `frame` and `frameId` to the session and prompt records and `steps` to the tool record (see "Frames and steps"), and moves `tool`, `tools`, and a shell-form
+`target` from class P to class A; a version-8 store's next deposit captures every transcript again from the harness or `raw/`. What an open does with an older store:
 
 | Log holds | Action on open | Action at the next deposit |
 |-----------|----------------|----------------------------|
-| `cv` 8, `v` current | read | skip unchanged files |
-| `cv` 5 to 7 and the transcript is on disk or in `raw/` | read; a replayed `tool` record is folded (see above); `verify` counts it `cv-behind`, and `verify --strict` exits 4 on it | capture again at `rev + 1` |
-| `cv` 5 to 7, neither the harness nor `raw/` has the transcript | read; a replayed `tool` record is folded (see above); `verify` counts it `cv-frozen` (not `cv-behind`), and `verify --strict` does not fail on it | none |
+| `cv` 9, `v` current | read | skip unchanged files |
+| `cv` 5 to 8 and the transcript is on disk or in `raw/` | read; a replayed `tool` record is folded (see above); `verify` counts it `cv-behind`, and `verify --strict` exits 4 on it | capture again at `rev + 1` |
+| `cv` 5 to 8, neither the harness nor `raw/` has the transcript | read; a replayed `tool` record is folded (see above); `verify` counts it `cv-frozen` (not `cv-behind`), and `verify --strict` does not fail on it | none |
 | `cv` 3 or 4 (or a version-2 session) and the transcript is on disk or in `raw/` | read through the compatibility reader (for `cv` 3, a field version 4 added reads as null, empty, or `unknown`; the prompt half of `contextFingerprint`, before its `.`, reads as `promptFingerprint`, and `-` reads as null; the environment half is dropped); `verify` counts it `cv-behind`, and `verify --strict` exits 4 on it | capture again at `rev + 1`; derived records regenerate under the current `EXTRACTOR_VERSION` on every open |
 | `cv` 3 or 4, neither the harness nor `raw/` has the transcript (for a Cursor session, Cursor no longer lists the composer) | read through the compatibility reader; `verify` counts it `cv-frozen` (not `cv-behind`), and `verify --strict` does not fail on it | none |
 | `derived.json` `v` older than `EXTRACTOR_VERSION` | read | rewritten at the next deposit (no reader depends on it today); derived records are regenerated from the log on every read |
@@ -100,15 +102,15 @@ pattern and entropy, emails, and the domains named with `--redact-domain`) befor
 | Record | Fields | Class |
 |--------|--------|-------|
 | every capture record | `kind`, `cv`, `rev`, `sid` | P |
-| `session` (one per transcript) | `agentType` (set on a subagent transcript), `harness` (set on a Cursor session; absent reads as Claude Code), `bytes`, `lines`, `badLines`, `userTurns`, `assistantTurns`, `versions`, `models`, `tools`, `bashCmds`, `compactSummaries`, `costUsd`, `usage`, `env` (below) | P |
-| | `session`, `parent`, `spawnedBy` (join ids), `at`, `tsFirst`, `tsLast`, `promptFingerprint`, `repo`, `fileHashes`, `urls`, `searches`, `branches`, `tldrs` (400 chars), `confidences` (120 chars) | A |
+| `session` (one per transcript) | `agentType` (set on a subagent transcript), `harness` (set on a Cursor session; absent reads as Claude Code), `bytes`, `lines`, `badLines`, `userTurns`, `assistantTurns`, `versions`, `models`, `bashCmds`, `compactSummaries`, `costUsd`, `usage`, `env` (below), `frame`, `frameId` | P |
+| | `session`, `parent`, `spawnedBy`, `spawnedIn` (join ids), `at`, `tsFirst`, `tsLast`, `promptFingerprint`, `repo`, `tools` (native names, which can hold a private MCP server's), `fileHashes`, `urls`, `searches`, `branches`, `tldrs` (400 chars), `confidences` (120 chars) | A |
 | | `project` (the folder slug, with the username and directory names), `files` (the paths as written, redacted) | L |
-| `user-prompt` (one per prompt) | `index`, `wallSec`, `thinking`, `turns`, `model`, `efforts`, `skills`, `usage` | P |
+| `user-prompt` (one per prompt) | `index`, `wallSec`, `thinking`, `turns`, `model`, `efforts`, `skills`, `usage`, `frame`, `frameId` | P |
 | | `session`, `ts`, `head` (the first 300 characters), `promptFingerprint` | A |
-| `tool` (one per tool call) | `n`, `tool`, `status` (`ok`, `error`, or `none` when no result is in the file; one record per tool-use id), `keys` (the input's key names), `durationMs`, `harnessVersion`, `agentType`, `side`, `prompt`, `targetBase`, and `target` for a shell call | P |
-| | `session`, `parent`, `toolUseId`, `ts`, `target` for a path call, and `segments`, `pulls`, and `commits` (a plain word, a private package name, and a sha can each identify private work) | A |
-| `error-line` (one per failed result) | `tool`, `harnessVersion`, `side`, `prompt`, `after` | P |
-| | `session`, `toolUseId`, `ts`, `line` (the first informative line, redacted, not normalized, cut to 1,000 characters) | A |
+| `tool` (one per tool call) | `n`, `status` (`ok`, `error`, or `none` when no result is in the file; one record per tool-use id), `keys` (the input's key names), `durationMs`, `harnessVersion`, `agentType`, `side`, `prompt`, `targetBase`, `steps` | P |
+| | `session`, `parent`, `toolUseId`, `ts`, `tool` (the native name, which can hold a private MCP server's), `target` in either form (a salted hash, or the first line's program and subcommand, where a word can be anything), and `segments`, `pulls`, and `commits` (a plain word, a private package name, and a sha can each identify private work) | A |
+| `error-line` (one per failed result) | `harnessVersion`, `side`, `prompt`, `after` | P |
+| | `session`, `toolUseId`, `tool` (the native name), `ts`, `line` (the first informative line, redacted, not normalized, cut to 1,000 characters) | A |
 | `prompt` (derived, one per prompt) | `kind`, `v`, `rev`, `index`, `wallSec`, class (`cls`), `tools`, `shape`, `errors`, `thinking`, `sideTools`, `turns`, `model`, `efforts`, `skills`, `usage`, `recovery`, `explore`, `act`, and `bigrams` (the motif vector) | P |
 | | `session`, `head` (the first 300 characters, redacted), `ts`, `promptFingerprint` (`contextFingerprint` on this derived record), and the outcome signals `verify`, `stopped`, `commits`, and `redo` (below) | A |
 | `error` (derived, one per error) | `kind`, `v`, `rev`, `tool`, `harnessVersion`, `editFollowed`, `cls`, `prompt`, `next` (tool names), episode `outcome` and `calls` | P |
@@ -136,6 +138,35 @@ line and at every shell separator, after heredoc and here-string bodies are drop
 | `segments` | every shell call | One `{ run, read }` per command, the last 50. `run` is the program's basename and its plain words, at most 12, each cut to 30 characters: no flag, path, variable, or quoted text. `read` is whether the call's status reports that command: false when a pipe follows it, when a later `;`, `&`, newline, or `\|\|` overrides it, or when it runs in the background. | An unquoted word is kept, so `echo hello there` is kept as written, redacted. |
 | `pulls` | a call that names one | `{ ecosystem, name, version }` with ecosystem `npm` (npm, pnpm, yarn, bun, `npx`, `bunx`, `dlx`), `pypi` (pip, `python -m pip`, uv, `uvx`, pipx), `cargo`, `go`, `gem`, `brew`, `skill` (`npx skills add`), `plugin` (`claude plugin install`, `codex plugin add`), or `mcp` (the full server name from `mcp__<server>__`, on every MCP call). `version` is as stated, or null. A scoped name stays whole. A lockfile install, a local path, and a variable name nothing. | A name is not a verified package, a run of `npx` may hit a local bin, and a failed install still names its pull. A command behind `xargs` or in a script is not read. |
 | `commits` | a clean shell call that ran `git commit` | One entry per commit, in order: the sha, or null. The sha comes from the `[branch sha]` line, or from a `git rev-parse HEAD` or one-commit `git log` that is the call's final command, joined by `&&` or `\|` in the same repository with nothing between that moves `HEAD`. A count stands without a sha, and a `-q` commit with no such read-back has none. A dry run or help call is no commit, and neither is one refused with `nothing to commit`, `fatal:`, or `error:`. | A commit behind `;` whose hook failed with other text still counts, since the call came back clean. A failed call records no commit even when its own result proves one: `git commit -m x && git push` with a rejected push holds a `[branch sha]` line, yet `commits` undercounts it and the `redo` window stays open. |
+
+### Frames and steps
+
+CAPTURE 9 gives every call a shared coordinate, so calls compare across harnesses, models, versions, and dates. Nothing here is asked of a
+network or a model: a value outside a closed list reads `<literal>` or is dropped, so these fields stay class P. The lists live in one file,
+`src/sessions/public-vocabulary.ts`, and default to `<literal>` when unsure.
+
+A `frame` sits on each prompt, and on the session for the calls before the first prompt: `{ harness, harnessVersion, model, effort, day, platform,
+shell, stack }`. `day` is the UTC date. `stack` is a language mix, framework names, and a repository size bucket, each from a closed
+list. `frameId`, beside it on the record, is a 16-hex hash of the frame, and a step names it. `shell` and `stack` are read across the whole
+transcript, so they belong to the file at this `rev`: capturing a transcript that has grown can change them, and with them the `frameId` of its
+earlier prompts.
+
+`steps` sits on the tool record, one per call, or one per command of a shell call, the last 50 as with `segments` (`&&`, `||`, `;`, pipes, and
+subshells, with quoted separators left alone, tied by `seg`). It is nested so `n`, the count bindings, and the Merkle checks do not move.
+
+| Field | Holds |
+|-------|-------|
+| `n`, `seg` | The call's position in the transcript, and the step's position in the call. |
+| `action` | One of the closed list in `src/sessions/actions.ts`, from one table per adapter. An unmapped name is `other`. |
+| `native` | The harness's name for the tool when its table lists the name, or when every name it holds is public, else `<literal>`. |
+| `identity` | By action: shell `{ program, sub, flags, pulls? }` (flag names, never their values, so `-c1-200` reads `-c` and `head -20` reads `-N`; a pull is `{ registry, name, version }`), MCP `{ server, tool }` (a server name is a label the user picks, so `tool` is `<literal>` unless the allowlist lists that tool under that server, and on a harness whose spelling cannot say where the server name ends, as Cursor's `mcp_<server>_<tool>`), skill `{ skill }`, web `{ host }`, else null. Any value outside the allowlist is `<literal>`. |
+| `status` | The call's status where it reports this segment; `none` where it does not, such as a segment a pipe hides. Every segment of an `&&` chain holds the call's status, because the result does not say which failed, so `error` there does not mean that segment failed, and a later clean run of it still gets a `retried` edge. |
+| `cost` | `{ tokens, durationMs }` on the first segment; later segments hold nulls. `tokens` are the response's output tokens shared evenly among its calls. |
+| `parent` | On a subagent's step, the `n` of the call that spawned it, in the transcript its session record names as `spawnedIn` (the main session, or a sibling subagent, since a subagent can spawn another); null when that call is not known. |
+| `edges` | The edges arriving at this step, `{ kind, n, seg }` naming the source: `next` (order within a prompt's line of work), `spawned`, `retried` (same native name and same redacted command or target, after that one failed), and `after-error`. `spawned` needs the subagent's `.meta.json`; `raw/` does not hold that file, so a re-capture takes `spawnedBy` from the log, and a subagent first seen in `raw/` has no such edge. |
+| `frameId` | The frame of the call's prompt. |
+
+Comparing counts across capture versions misleads: a new version can re-read the same transcript into different rows. Compare within one `cv`.
 
 ### Prompt outcome signals
 
@@ -309,7 +340,7 @@ One store can hold several repositories, and neither the G1 reading nor the Sess
   into repositories by slug: a worktree folds into its repository, and a folder that extends another stored folder joins the shortest.
   Three consequences:
   - Sibling folders whose slugs share a prefix (`app` and `app-two`) share one window.
-  - A nested repository (`tradeaor/oars`) ranks by its parent's window while `measure --repo tradeaor/oars` counts only itself, so the
+  - A nested repository (`parent/oars`) ranks by its parent's window while `measure --repo parent/oars` counts only itself, so the
     two readings differ.
   - A stored parent folder is a prefix of its children, so one allow-listed session from the parent (the home folder, or the folder
     holding several checkouts) folds those repositories into one window and the isolation reverts to the whole store. Keep such a
