@@ -24,7 +24,7 @@ Under `<config>/oars/sessions/` (`%APPDATA%` on Windows, `$XDG_CONFIG_HOME` or `
   stored value of an existing captured record or skeleton changes: a bump re-reads every transcript. The skeleton is written at capture and
   carries `CAPTURE_VERSION` in its `v`.
 - `EXTRACTOR_VERSION` (`v` on every derived record) names the derivation rules (error normalization, prompt classes, tool-name sequences,
-  recovery episodes). A bump re-derives from the log; no raw transcript is read.
+  recovery episodes, prompt outcome signals). A bump re-derives from the log; no raw transcript is read.
 
 Version 4 (CAPTURE 4, t714) adds `sid`, `repo`, `fileHashes`, `env`, `promptFingerprint`, `targetBase`, the repository-root path base, and a
 1,000-character cap on an error line, and a cap of 100 on `files` and `fileHashes` per session (p99 was 61, max 209, on the 8,253-session
@@ -65,7 +65,7 @@ pattern and entropy, emails, and the domains named with `--redact-domain`) befor
 | | `session`, `parent`, `toolUseId`, `ts` (a pool would keep the UTC day), and `target` for a path call | A |
 | `error-line` (one per failed result) | `tool`, `harnessVersion`, `side`, `prompt`, `after` | P |
 | | `session`, `toolUseId`, `ts` (a pool would keep the UTC day), `line` (the first informative line, redacted, not normalized, cut to 1,000 characters) | A |
-| `prompt` (derived, one per prompt) | `kind`, `v`, `rev`, `index`, `wallSec`, class (`cls`), `tools`, `shape`, `errors`, `thinking`, `sideTools`, `turns`, `model`, `efforts`, `skills`, `usage`, `recovery`, `explore`, `act`, `bigrams` (the motif vector) | P |
+| `prompt` (derived, one per prompt) | `kind`, `v`, `rev`, `index`, `wallSec`, class (`cls`), `tools`, `shape`, `errors`, `thinking`, `sideTools`, `turns`, `model`, `efforts`, `skills`, `usage`, `recovery`, `explore`, `act`, `bigrams` (the motif vector), and the outcome signals `verify`, `stopped`, `commits`, and `redo` (below) | P |
 | | `session`, `head` (the first 300 characters, redacted), `ts`, `promptFingerprint` (`contextFingerprint` on this derived record) | A |
 | `error` (derived, one per error) | `kind`, `v`, `rev`, `tool`, `harnessVersion`, `editFollowed`, `cls`, `prompt`, `next` (tool names), episode `outcome` and `calls` | P |
 | | `session`, `agent` (the subagent transcript id, a join id), `ts`, `sig` (redacted at capture, normalized at derive), `example` (160 characters) | A |
@@ -80,6 +80,22 @@ fields on a hosted store) applies to `urls`, `searches`, `branches`, `tldrs`, `c
 Node.js version, and `process.platform`. A library version is recorded only when a transcript states it, and none is read today.
 `promptFingerprint` is the hash of the `prompt_snapshot` attachment (version 3's `contextFingerprint` also mixed in the `environment`
 snapshot, whose platform and shell now belong to `env`).
+
+### Prompt outcome signals
+
+Each derived `prompt` record (`EXTRACTOR_VERSION` 5) carries four deterministic signals, kept separate: no composite, no score. A version-2
+line, read as written, has none of them. They read the main line only, with a resumed session's repeated calls dropped; a subagent
+transcript's calls are not read.
+
+| Field | Values | Rule | What it does not say |
+|-------|--------|------|---------------------|
+| `verify` | `passed`, `failed`, `none`, `na` | The status of the last shell call after the prompt's last edit: the rule behind the `edit-verify` class, less a backgrounded call, whose result says only that it started. `none`: no such call reports a result. `na`: the prompt edited nothing. A failed edit is not an edit. | Any shell call qualifies, so `passed` means a clean exit, often of a read or a `git` call, not that a test ran. |
+| `stopped` | `interrupt`, `rejected`, null | `rejected`: a main-line error line starts `The user doesn't want to proceed with this tool use` or `The user doesn't want to take this action`. `interrupt`: the next prompt record starts `[Request interrupted by user`. A rejection wins, since the harness writes the marker right after it. | A classifier or hook denial is not a stop: it is policy, and the model carries on. |
+| `commits` | a count | Successful shell calls whose `target` is `git commit`. | It is a floor. `target` holds the first line's first program and subcommand, so `git add . && git commit` is not seen. |
+| `redo` | true, false | A later prompt in the session edits a path hash this prompt edited, within `REDO_WINDOW` (3) prompts, with no `git commit` that `commits` can see between them. | A hidden commit does not end the window, and a planned second edit of one file reads the same as rework. |
+
+The interrupt marker is a user line, so capture keeps it as a prompt record of its own, with no tools. It counts toward `REDO_WINDOW`'s
+distance and in a share of prompts; its own `stopped` is null and its `verify` is `na`.
 
 ### Hashing
 

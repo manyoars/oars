@@ -2,7 +2,7 @@
 // reads raw, so a change to a rule below bumps EXTRACTOR_VERSION and re-derives the store from the log alone. The rules match the
 // version-2 extractor line for line (error_signatures.py, prompt_graphs.py, cost_per_class.py), and the recovery episodes match
 // recovery_episodes.py (t693), so the numbers measured before the split reproduce after it.
-import { captureSession, classify, compress, cut, EDITS, EXPLORE, ACT, normalize, shortName, type Capture, type ExtractInput } from './extract.js';
+import { captureSession, classify, compress, cut, EDITS, EXPLORE, ACT, normalize, SHELL, shortName, type Capture, type ExtractInput } from './extract.js';
 import type { Redactor } from './redact.js';
 import {
   ERROR_EXAMPLE_CHARS,
@@ -10,6 +10,8 @@ import {
   type ErrorLineObservation,
   type ErrorObservation,
   type PromptObservation,
+  type PromptStop,
+  type PromptVerify,
   type SessionObservation,
   type ToolObservation,
   type UserPromptObservation,
@@ -44,16 +46,82 @@ const groupBy = <T>(items: readonly T[], keyOf: (item: T) => number | null): Map
   return groups;
 };
 
-/** The version-2 prompt and error records of one transcript. */
+// The prompt outcome signals (t747). All of them read the main line with a resumed session's repeats dropped: a repeated call has status
+// `none` under a later prompt, so it would read as a fresh edit of the same path. A subagent transcript's calls are not read here.
+
+/**
+ * A later edit of a path within this many prompts is a redo. On the operator's store 58% of re-edits with no commit between them are one prompt
+ * apart and 82% within three; past that the tail is long and flat (88% at five, 99% at twenty), so a larger window adds unrelated later work.
+ */
+export const REDO_WINDOW = 3;
+
+/** The harness's tool-rejection results, both worded for the operator declining: a classifier or hook denial is policy, and the model carries on. */
+const REJECTED_RE = /^The user doesn't want to (?:proceed with this tool use|take this action)/;
+/** The harness writes this as a user line, so capture keeps it as a prompt of its own; it says the prompt before it was cut short. */
+const INTERRUPT_MARKER = '[Request interrupted by user';
+
+const firstCopies = (tools: readonly ToolObservation[]): ToolObservation[] => {
+  const seen = new Set<string>();
+  return tools.filter((tool) => {
+    if (tool.side) return false;
+    if (tool.toolUseId === null) return true;
+    if (seen.has(tool.toolUseId)) return false;
+    seen.add(tool.toolUseId);
+    return true;
+  });
+};
+
+/** A failed edit wrote nothing. An edit with no result in the file may have written, so it counts. */
+const isEdit = (tool: ToolObservation): boolean => EDITS.has(tool.tool) && tool.status !== 'error';
+
+/** `target` is the first line's program and subcommand, so this sees a commit only when it leads the line. */
+const isCommit = (tool: ToolObservation): boolean => SHELL.has(tool.tool) && tool.target === 'git commit' && tool.status === 'ok';
+
+/** The `edit-verify` rule's shell call, less a backgrounded one, whose `ok` says only that it started. */
+const isVerifyCall = (tool: ToolObservation): boolean => SHELL.has(tool.tool) && !tool.keys.includes('run_in_background');
+
+const verifyOf = (calls: readonly ToolObservation[]): PromptVerify => {
+  const lastEdit = calls.findLastIndex(isEdit);
+  if (lastEdit < 0) return 'na';
+  const status = calls.slice(lastEdit + 1).findLast(isVerifyCall)?.status;
+  return status === 'ok' ? 'passed' : status === 'error' ? 'failed' : 'none';
+};
+
+/** A rejection names the call the operator declined, and the harness follows it with the interrupt marker, so it is read first. */
+const stoppedOf = (errors: readonly ErrorLineObservation[], nextHead: string | undefined): PromptStop | null => {
+  if (errors.some((error) => REJECTED_RE.test(error.line))) return 'rejected';
+  return nextHead?.startsWith(INTERRUPT_MARKER) === true ? 'interrupt' : null;
+};
+
+/** The prompts whose edit a later prompt repeated. One walk in call order: a commit settles every path edited so far, so it empties the map. */
+const redonePrompts = (calls: readonly ToolObservation[]): Set<number> => {
+  const redone = new Set<number>();
+  const lastEditor = new Map<string, number>();
+  for (const call of calls) {
+    if (isCommit(call)) lastEditor.clear();
+    else if (call.prompt !== null && call.target !== null && isEdit(call)) {
+      const earlier = lastEditor.get(call.target);
+      if (earlier !== undefined && earlier !== call.prompt && call.prompt - earlier <= REDO_WINDOW) redone.add(earlier);
+      lastEditor.set(call.target, call.prompt);
+    }
+  }
+  return redone;
+};
+
+/** The version-2 prompt and error records of one transcript, with the outcome signals. */
 export const deriveSession = (capture: SessionCapture, redact: Redactor): Derived => {
   const tools = [...capture.tools].sort(byPosition);
   const { session, rev } = capture.session;
   // One pass groups the calls and the main-line errors by prompt, so a session costs O(prompts + tools), not their product.
   const toolsOf = groupBy(tools, (tool) => tool.prompt);
   const errorsOf = groupBy(capture.errorLines.filter((error) => !error.side), (error) => error.prompt);
-  const prompts = capture.prompts.map((prompt): PromptObservation => {
+  const calls = firstCopies(tools);
+  const settledOf = groupBy(calls, (tool) => tool.prompt);
+  const redone = redonePrompts(calls);
+  const prompts = capture.prompts.map((prompt, position): PromptObservation => {
     const mine = toolsOf.get(prompt.index) ?? [];
     const main = mine.filter((tool) => !tool.side);
+    const settled = settledOf.get(prompt.index) ?? [];
     const sequence = main.map((tool) => shortName(tool.tool));
     const errors = errorsOf.get(prompt.index) ?? [];
     // The two main-line calls after the prompt's first main-line error (version 2 re-armed on each error and kept the first two).
@@ -89,6 +157,10 @@ export const deriveSession = (capture: SessionCapture, redact: Redactor): Derive
       act: sequence.filter((tool) => ACT.has(tool)).length,
       bigrams,
       contextFingerprint: prompt.promptFingerprint,
+      verify: verifyOf(settled),
+      stopped: stoppedOf(errors, capture.prompts[position + 1]?.head),
+      commits: settled.filter(isCommit).length,
+      redo: redone.has(prompt.index),
     };
   });
   const classOf = new Map(prompts.map((prompt) => [prompt.index, prompt.cls]));
