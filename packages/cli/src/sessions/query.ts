@@ -111,7 +111,7 @@ export interface BooksRow {
    * parent's `Agent` call by tool-use id, and that call's prompt gives the row.
    */
   delegated: number;
-  /** `verify` passed, of the prompts that edited and whose `verify` can be read (not `na`, not absent). */
+  /** `verify` passed, of the prompts that edited and whose `verify` can be read (not `na`, not `masked`, not absent; `none` counts, since no runner read as passing). */
   verifyPassed: BooksShare;
   /** A stop, of the prompts carrying `stopped`. */
   stopped: BooksShare;
@@ -197,7 +197,7 @@ export const books = (store: Store, by: BooksBy, now: number, sinceDays?: number
     .map(([key, list]) => {
       const verified = list.filter((prompt) => prompt.cls === 'edit-verify').length;
       const edited = verified + list.filter((prompt) => prompt.cls === 'edit-only').length;
-      const readable = list.filter((prompt) => prompt.verify !== undefined && prompt.verify !== 'na');
+      const readable = list.filter((prompt) => prompt.verify !== undefined && prompt.verify !== 'na' && prompt.verify !== 'masked');
       const carryingStop = list.filter((prompt) => prompt.stopped !== undefined);
       const carryingRedo = list.filter((prompt) => prompt.redo !== undefined);
       const states = [...new Set(list.flatMap((prompt) => [...(calls.get(promptKey(prompt.session, prompt.index))?.shas ?? [])]))].map((sha) => survival.get(sha));
