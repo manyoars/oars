@@ -225,6 +225,19 @@ describe('the frame on captured records', () => {
     expect(result.prompts[0]?.frame?.model).toBe('claude-opus-4-5');
   });
 
+  it('gives a grown transcript the shell and stack of the whole file, so an earlier prompt can change frame at the new rev', () => {
+    const prompt = (second: number): string => line({ type: 'user', timestamp: `2026-05-29T04:30:0${String(second)}Z`, message: { role: 'user', content: 'p' } });
+    const call = (id: string, name: string, input: object): string => line({ type: 'assistant', timestamp: '2026-05-29T04:30:05Z', message: { role: 'assistant', content: [{ type: 'tool_use', id, name, input }] } });
+    const start = [prompt(0), call('a', 'Bash', { command: 'ls' })];
+    const grown = [...start, prompt(6), call('b', 'PowerShell', { command: 'ls' }), call('c', 'PowerShell', { command: 'ls' }), call('d', 'Read', { file_path: '/w/a.py' })];
+    const first = captureSession({ text: start.join('\n'), session: 's', project: 'p', rev: 1, at: 'x', bytes: 1, redact });
+    const again = captureSession({ text: grown.join('\n'), session: 's', project: 'p', rev: 2, at: 'x', bytes: 1, redact });
+    expect(first.prompts[0]?.frame).toMatchObject({ shell: 'bash', stack: { languages: [] } });
+    expect(again.prompts[0]?.frame).toMatchObject({ shell: 'powershell', stack: { languages: ['python'] } });
+    expect(again.prompts[0]?.frameId).not.toBe(first.prompts[0]?.frameId);
+    expect(again.tools[0]?.steps?.[0]?.frameId).toBe(again.prompts[0]?.frameId);
+  });
+
   it('reads the repository size only through the probe, and only for a known repository', () => {
     const seen: string[] = [];
     const probe = (root: string): number => {

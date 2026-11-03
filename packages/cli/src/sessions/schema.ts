@@ -88,7 +88,8 @@ export interface FrameStack {
 
 /**
  * Where and when something ran (recall spec Section 2.1): the coordinate every comparison uses. Class P: every field is a public name, a
- * UTC day, or null, and it is never served below the cell floor, because a set of tools can fingerprint an account.
+ * UTC day, or null, and it is never served below the cell floor, because a set of tools can fingerprint an account. Its `shell` and `stack`
+ * belong to the file at this `rev`, so capturing a transcript that has grown can change the `frameId` of its earlier prompts.
  */
 export interface Frame {
   harness: Harness;

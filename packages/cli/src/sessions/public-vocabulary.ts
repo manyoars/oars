@@ -107,7 +107,8 @@ const MODEL = new RegExp(
   ].join('|'),
 );
 // A suffix is digits or a release word, so a private build tag fails closed, as a private name does in `MODEL`.
-const VERSION = /^\d+(?:\.\d+){0,3}(?:[-+.](?:\d+|(?:alpha|beta|rc|dev|canary|nightly|next)\d*))*$/;
+const VERSION_SUFFIX = '(?:[-+.](?:\\d+|(?:alpha|beta|rc|dev|canary|nightly|next)\\d*))*';
+const VERSION = new RegExp(`^\\d+(?:\\.\\d+){0,3}${VERSION_SUFFIX}$`);
 /** A name this long is not one of these: it is text someone pasted. */
 const NAME_MAX = 64;
 
@@ -262,7 +263,7 @@ export const PUBLIC_PACKAGES: ReadonlySet<string> = words(`
   serde tokio clap anyhow thiserror reqwest rails rake bundler
 `);
 
-const REGISTRY_VERSION = /^[~^<>=!]*v?\d+(?:\.(?:\d+|x|\*))*(?:[-+][0-9A-Za-z.+-]*)?$/;
+const REGISTRY_VERSION = new RegExp(`^[~^<>=!]*v?\\d+(?:\\.(?:\\d+|x|\\*))*${VERSION_SUFFIX}$`);
 
 export const isRegistryVersion = (version: string): boolean => version.length <= NAME_MAX && REGISTRY_VERSION.test(version);
 export const isPublicMcpTool = (server: string, tool: string): boolean => PUBLIC_MCP_TOOLS.get(server)?.has(tool) === true;
