@@ -22,6 +22,24 @@ export const contentHash = (value: unknown): string => createHash('sha256').upda
 export const FAMILIES = ['recovery', 'fit', 'cost', 'change', 'live', 'adoption', 'method', 'next-step'] as const;
 export type Family = (typeof FAMILIES)[number];
 
+/**
+ * Each family's method and its version. A rule change bumps its version here, and the pool's version hashes this table, so a stored file of the old rule is not served.
+ * It lives here and not beside each family because the pool hash needs it, and a family module imports the cells the hash is in.
+ */
+export const METHODS: { readonly [family in Family]: { readonly name: string; readonly version: string } } = {
+  recovery: { name: 'signature-record', version: '1' },
+  fit: { name: 'failure-rate', version: '1' },
+  cost: { name: 'per-prompt-by-class', version: '1' },
+  change: { name: 'share-in-version-bucket', version: '1' },
+  live: { name: 'day-against-trailing-week', version: '1' },
+  adoption: { name: 'share-and-span', version: '1' },
+  method: { name: 'shape-share-by-model', version: '1' },
+  'next-step': { name: 'next-action-counts', version: '1' },
+};
+
+/** The fit family's other method (`read-call-shape.ts`). The pool's version hashes it beside the table, for the same reason. */
+export const CALL_SHAPE_METHOD = { name: 'call-shape', version: '1' } as const;
+
 /** `all`, or `unexposed`: only steps outside any recall's consequence window, so a read cannot mistake the pool's influence for the world. */
 export type ReadBasis = 'all' | 'unexposed';
 
@@ -93,6 +111,20 @@ export const readIdOf = (read: Omit<Read, 'readId'>): string => {
   return `${READ_PREFIX}${contentHash({ family, method, methodVersion, inputs, order, slice, value, n, clusters, interval, asOf, basis })}`;
 };
 
+const deepFreeze = (value: unknown): void => {
+  if (typeof value !== 'object' || value === null) return;
+  Object.values(value).forEach((entry: unknown) => {
+    deepFreeze(entry);
+  });
+  Object.freeze(value);
+};
+
+/** A read's ID pins every field down to the last count, so none of them may change below the top either. */
+export const frozenRead = (read: Read): Read => {
+  deepFreeze(read);
+  return read;
+};
+
 /** The one way a read comes to exist. It refuses a read that cites nothing or cites what it cannot place, since either would have no lineage. */
 export const makeRead = (draft: ReadDraft, orderOf: OrderResolver): Read => {
   const inputs = [...new Set(draft.inputs)].sort();
@@ -104,5 +136,5 @@ export const makeRead = (draft: ReadDraft, orderOf: OrderResolver): Read => {
     highest = Math.max(highest, order);
   }
   const body = { ...draft, inputs, order: 1 + highest };
-  return Object.freeze({ readId: readIdOf(body), ...body });
+  return frozenRead({ readId: readIdOf(body), ...body });
 };

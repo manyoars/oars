@@ -279,11 +279,11 @@ describe('oars sessions', () => {
     expect(recall?.query).toEqual({ form: 'text', text: 'unexpected EOF while looking for matching quote' });
   });
 
-  it('recall needs a query, and --by takes only class, model, or harness', async () => {
+  it('recall needs a query, and --by takes only class, model, harness, or pull', async () => {
     const { deps, err } = setup();
     expect(await run(['sessions', 'recall'], deps)).toBe(ExitCode.USAGE);
     expect(await run(['sessions', 'books', '--by', 'colour'], deps)).toBe(ExitCode.USAGE);
-    expect(err.join('')).toContain('class, model, or harness');
+    expect(err.join('')).toContain('class, model, harness, or pull');
   });
 
   it('serves MCP over the runtime stdio with recall --mcp', async () => {

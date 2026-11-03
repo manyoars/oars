@@ -1057,12 +1057,12 @@ export const callPositions = (text: string): Map<string, number> => {
     } catch {
       continue;
     }
-    // Capture writes no row for a blob line's copy or a replayed id, so neither takes a number here.
-    const content = isObj(parsed) && parsed.type !== 'api-request-blob' && isObj(parsed.message) ? parsed.message.content : undefined;
+    const content = isObj(parsed) && isObj(parsed.message) && parsed.type !== 'api-request-blob' ? parsed.message.content : undefined;
     if (!Array.isArray(content)) continue;
     for (const block of content) {
       if (!isObj(block) || block.type !== 'tool_use') continue;
       const id = str(block.id);
+      // Capture writes a replayed call once, so a replay takes no number here either.
       if (id !== undefined && positions.has(id)) continue;
       if (id !== undefined) positions.set(id, n);
       n += 1;
@@ -1436,7 +1436,8 @@ export const captureSession = (input: ExtractInput): Capture => {
   session.searches = [...searches].sort();
 
   const repoFiles = input.repoFiles ?? repoFilesFromIndex;
-  // Only the first capture may look at the repository: it is the one input here that is not the transcript, and a frame must not follow it.
+  // Only the first capture may look at the repository, so a frame does not follow it. The repository and `platform` are the two inputs here that are not
+  // the transcript; the platform is read every time, so re-capturing the same transcript on another OS changes its `frameId`s.
   const size = input.repoSize !== undefined ? input.repoSize : sessionRoot === null ? null : repoSizeOf(repoFiles(sessionRoot));
   const stack = stackOf({ paths: framePaths, programs: [...framePrograms], size });
   const frameOf = (parts: PromptFrameParts): Frame =>

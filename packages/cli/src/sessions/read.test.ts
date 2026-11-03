@@ -68,6 +68,10 @@ describe('makeRead', () => {
   it('freezes what it returns, so a read cannot change after its ID is taken', () => {
     const read = makeRead(draft(), orderResolver([]));
     expect(Object.isFrozen(read)).toBe(true);
+    for (const part of [read.slice, read.value, read.inputs, read.asOf]) expect(Object.isFrozen(part)).toBe(true);
+    const nested = makeRead(draft({ value: { following: { 'file.read': 1 } }, interval: { low: 0, high: 1, level: 0.95 } }), orderResolver([]));
+    expect(Object.isFrozen(nested.value['following'])).toBe(true);
+    expect(Object.isFrozen(nested.interval)).toBe(true);
     expect(() => {
       Reflect.set(read, 'n', 5);
       if (read.n !== 4) throw new Error('changed');

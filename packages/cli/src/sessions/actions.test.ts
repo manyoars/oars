@@ -6,26 +6,92 @@ import { LITERAL } from './public-vocabulary.js';
 const claude = ACTION_TABLES['claude-code'];
 const cursor = ACTION_TABLES.cursor;
 
+// Each table in full, so a row added, dropped, or moved has to be said here too.
+const CLAUDE_ROWS = {
+  Read: 'file.read',
+  Edit: 'file.edit',
+  MultiEdit: 'file.edit',
+  NotebookEdit: 'file.edit',
+  Write: 'file.write',
+  Grep: 'file.search',
+  Glob: 'file.search',
+  LSP: 'file.search',
+  Bash: 'shell.exec',
+  PowerShell: 'shell.exec',
+  WebSearch: 'web.search',
+  WebFetch: 'web.fetch',
+  Skill: 'skill.run',
+  Agent: 'agent.spawn',
+  Task: 'agent.spawn',
+  TodoWrite: 'plan.update',
+  TaskCreate: 'plan.update',
+  TaskUpdate: 'plan.update',
+  TaskList: 'plan.update',
+  TaskGet: 'plan.update',
+  EnterPlanMode: 'plan.update',
+  ExitPlanMode: 'plan.update',
+  AskUserQuestion: 'ask.user',
+  mcp__oars__oars_recall: 'recall.pull',
+  'mcp__oars-sessions__oars_recall': 'recall.pull',
+  StructuredOutput: 'other',
+  ToolSearch: 'other',
+  SendMessage: 'other',
+  ListAgents: 'other',
+  Monitor: 'other',
+  TaskStop: 'other',
+  TaskOutput: 'other',
+  BashOutput: 'other',
+  KillShell: 'other',
+  ScheduleWakeup: 'other',
+  Workflow: 'other',
+  EnterWorktree: 'other',
+  ExitWorktree: 'other',
+};
+const CURSOR_ROWS = {
+  read_file: 'file.read',
+  read_file_v2: 'file.read',
+  edit_file: 'file.edit',
+  edit_file_v2: 'file.edit',
+  search_replace: 'file.edit',
+  reapply: 'file.edit',
+  write: 'file.write',
+  grep_search: 'file.search',
+  grep: 'file.search',
+  codebase_search: 'file.search',
+  file_search: 'file.search',
+  glob_file_search: 'file.search',
+  list_dir: 'file.search',
+  list_dir_v2: 'file.search',
+  run_terminal_cmd: 'shell.exec',
+  web_search: 'web.search',
+  web_fetch: 'web.fetch',
+  mcp_oars_oars_recall: 'recall.pull',
+  todo_write: 'plan.update',
+  create_plan: 'plan.update',
+  ask_question: 'ask.user',
+  task_v2: 'agent.spawn',
+  delete_file: 'other',
+  read_lints: 'other',
+};
+const CODEX_ROWS = {
+  shell: 'shell.exec',
+  shell_command: 'shell.exec',
+  exec_command: 'shell.exec',
+  local_shell: 'shell.exec',
+  'container.exec': 'shell.exec',
+  Bash: 'shell.exec',
+  apply_patch: 'file.edit',
+  Edit: 'file.edit',
+  read_file: 'file.read',
+  update_plan: 'plan.update',
+};
+
 describe('the Claude Code table', () => {
-  it.each([
-    ['Read', 'file.read'],
-    ['Edit', 'file.edit'],
-    ['MultiEdit', 'file.edit'],
-    ['NotebookEdit', 'file.edit'],
-    ['Write', 'file.write'],
-    ['Grep', 'file.search'],
-    ['Glob', 'file.search'],
-    ['Bash', 'shell.exec'],
-    ['PowerShell', 'shell.exec'],
-    ['WebSearch', 'web.search'],
-    ['WebFetch', 'web.fetch'],
-    ['Skill', 'skill.run'],
-    ['Agent', 'agent.spawn'],
-    ['TodoWrite', 'plan.update'],
-    ['AskUserQuestion', 'ask.user'],
-    ['mcp__oars__oars_recall', 'recall.pull'],
-    ['ToolSearch', 'other'],
-  ])('maps %s to %s and keeps the name', (native, action) => {
+  it('holds exactly these rows', () => {
+    expect(claude.rows).toEqual(CLAUDE_ROWS);
+  });
+
+  it.each(Object.entries(CLAUDE_ROWS))('maps %s to %s and keeps the name', (native, action) => {
     expect(actionOf(claude, native)).toEqual({ action, native });
   });
 
@@ -52,22 +118,11 @@ describe('a public Claude Code tool with no canonical action', () => {
 });
 
 describe('the Cursor table', () => {
-  it.each([
-    ['read_file', 'file.read'],
-    ['edit_file', 'file.edit'],
-    ['search_replace', 'file.edit'],
-    ['reapply', 'file.edit'],
-    ['write', 'file.write'],
-    ['run_terminal_cmd', 'shell.exec'],
-    ['grep_search', 'file.search'],
-    ['grep', 'file.search'],
-    ['codebase_search', 'file.search'],
-    ['file_search', 'file.search'],
-    ['glob_file_search', 'file.search'],
-    ['list_dir', 'file.search'],
-    ['web_search', 'web.search'],
-    ['todo_write', 'plan.update'],
-  ])('maps %s to %s and keeps the name', (native, action) => {
+  it('holds exactly these rows', () => {
+    expect(cursor.rows).toEqual(CURSOR_ROWS);
+  });
+
+  it.each(Object.entries(CURSOR_ROWS))('maps %s to %s and keeps the name', (native, action) => {
     expect(actionOf(cursor, native)).toEqual({ action, native });
   });
 
@@ -82,18 +137,11 @@ describe('the Cursor table', () => {
 });
 
 describe('the Codex table', () => {
-  it.each([
-    ['shell', 'shell.exec'],
-    ['shell_command', 'shell.exec'],
-    ['exec_command', 'shell.exec'],
-    ['local_shell', 'shell.exec'],
-    ['container.exec', 'shell.exec'],
-    ['Bash', 'shell.exec'],
-    ['apply_patch', 'file.edit'],
-    ['Edit', 'file.edit'],
-    ['read_file', 'file.read'],
-    ['update_plan', 'plan.update'],
-  ])('maps %s to %s', (native, action) => {
+  it('holds exactly these rows', () => {
+    expect(ACTION_TABLES.codex.rows).toEqual(CODEX_ROWS);
+  });
+
+  it.each(Object.entries(CODEX_ROWS))('maps %s to %s and keeps the name', (native, action) => {
     expect(actionOf(ACTION_TABLES.codex, native)).toEqual({ action, native });
   });
 
@@ -124,7 +172,7 @@ describe('every table', () => {
 
 describe('an adapter is rows', () => {
   it('needs nothing but a table to map a name no other harness has', () => {
-    const table: ActionTable = { rows: { apply_patch: 'file.edit' }, mcp: null, shells: {} };
+    const table: ActionTable = { rows: { apply_patch: 'file.edit' }, mcp: null, toolDelimited: true, shells: {} };
     expect(actionOf(table, 'apply_patch')).toEqual({ action: 'file.edit', native: 'apply_patch' });
     expect(actionOf(table, 'mcp__x__y')).toEqual({ action: 'other', native: LITERAL });
   });

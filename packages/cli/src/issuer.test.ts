@@ -108,6 +108,27 @@ describe('the issuer oars login uses', () => {
     expect(await h.deps.store.read()).toBeUndefined();
   });
 
+  const PRODUCTION_DISCOVERY = `${PRODUCTION_ISSUER_URL}/.well-known/openid-configuration`;
+
+  it.each([['the request fails', () => HttpResponse.error()], ['the answer is 503', () => new HttpResponse(null, { status: 503 })]])(
+    'says Many Oars has not launched yet and exits 2 when the flag is true but the built-in issuer does not answer discovery (%s)',
+    async (_name, answer) => {
+      const h = harness({ OARS_ISSUER_URL: '' });
+      server.use(http.get(LAUNCH_FLAG_URL, () => HttpResponse.json({ launched: true })), http.get(PRODUCTION_DISCOVERY, answer));
+      expect(await run(['login', '--no-browser', '--json'], h.deps)).toBe(ExitCode.USAGE);
+      expect(single(h.out)).toMatchObject({ ok: false, step: 'usage', problem: { title: NOT_LAUNCHED } });
+      expect(await h.deps.store.read()).toBeUndefined();
+    },
+  );
+
+  it('keeps the unreachable error when the issuer came from OARS_ISSUER_URL or --issuer-url', async () => {
+    server.use(http.get(`${ISSUER}/.well-known/openid-configuration`, () => HttpResponse.error()));
+    const fromEnv = harness({ OARS_ISSUER_URL: ISSUER });
+    expect(await run(['login', '--no-browser'], fromEnv.deps)).toBe(ExitCode.UNREACHABLE);
+    const fromFlag = harness({ OARS_ISSUER_URL: '' });
+    expect(await run(['login', '--no-browser', '--issuer-url', ISSUER], fromFlag.deps)).toBe(ExitCode.UNREACHABLE);
+  });
+
   it('gives up on a launch flag that never answers after 5 seconds, and says Many Oars has not launched yet', async () => {
     const h = harness({ OARS_ISSUER_URL: '' });
     // AbortSignal.timeout runs on a native timer that fake timers cannot advance: record the budget, and abort at once.

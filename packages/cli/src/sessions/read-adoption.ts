@@ -18,7 +18,7 @@ export const deriveAdoption: DeriveFamily = ({ pool }) => {
     const days = cells.map((cell) => cell.day).filter((day) => day !== UNKNOWN);
     const lastDay = lastDayOf(days);
     return [
-      body('adoption', 'share-and-span', '1', cells, {
+      body('adoption', cells, {
         slice: { motif: motifName(first.motif), level: first.motif.level },
         value: { share: rate(n, of), of, firstDay: firstDayOf(days), lastDay, days: new Set(days).size, daysSinceLast: daysBetween(lastDay, pool.lastDay) },
         n,

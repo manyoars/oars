@@ -4,8 +4,9 @@
 
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { CliError, ExitCode } from '../errors.js';
 import { deriveCells, poolOf, serializeCells, type Pool } from './cells.js';
-import { contentHash, FAMILIES, makeRead, orderResolver, type Family, type Read } from './read.js';
+import { contentHash, FAMILIES, frozenRead, makeRead, orderResolver, type Family, type Read } from './read.js';
 import { deriveConsequences, recallGraphOf } from './recall-consequence.js';
 import { readRecalls } from './recall-object.js';
 import { deriveAdoption } from './read-adoption.js';
@@ -57,12 +58,20 @@ export const serializeReads = (reads: readonly Read[]): string => reads.map((rea
 
 const isRead = (value: unknown): value is Read => typeof value === 'object' && value !== null && 'readId' in value && 'family' in value;
 
-/** A file that is missing, or holds a line that is not a read, is no record of this pool: it is derived and written again. */
+const parsedLine = (file: string, line: string): unknown => {
+  try {
+    return JSON.parse(line);
+  } catch {
+    throw new CliError(`${file} holds a line that is not JSON. Delete that file and run this again: its reads are derived from the store.`, ExitCode.UNEXPECTED, 'read');
+  }
+};
+
+/** A file that is missing, or whose lines are JSON but not reads, is no record of this pool: it is derived and written again. A line that is not JSON is damage, so it stops here and asks the operator to delete the file. */
 const readStored = async (file: string): Promise<Read[] | undefined> => {
   try {
     const text = await readFile(file, 'utf8');
-    const parsed = text.split('\n').flatMap((line): unknown[] => (line === '' ? [] : [JSON.parse(line)]));
-    return parsed.every(isRead) ? parsed : undefined;
+    const parsed = text.split('\n').flatMap((line): unknown[] => (line === '' ? [] : [parsedLine(file, line)]));
+    return parsed.every(isRead) ? parsed.map(frozenRead) : undefined;
   } catch (error) {
     if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return undefined;
     throw error;
@@ -73,7 +82,7 @@ const readStored = async (file: string): Promise<Read[] | undefined> => {
 export const refreshPool = async (storeDir: string, store: Store): Promise<{ pool: Pool; reads: Read[] }> => {
   const recalls = deriveConsequences(store, await readRecalls(storeDir));
   const set = deriveCells(store, recallGraphOf(store, recalls));
-  const pool = poolOf(set);
+  const pool = poolOf(set, store.errors);
   const files = poolFiles(storeDir);
   await writeAtomic(files.consequences, recalls.flatMap(({ id, n, consequence }) => (consequence === undefined ? [] : [`${JSON.stringify({ id, n, consequence })}
 `])).join(''));

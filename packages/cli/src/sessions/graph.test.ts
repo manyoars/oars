@@ -85,6 +85,18 @@ describe('one step per shell segment', () => {
     expect(steps.map((step) => step.status)).toEqual(['none', 'error', 'none', 'ok']);
   });
 
+  it('gives every segment of an && chain the call status, since the result does not say which failed', () => {
+    const steps = stepsOfPrompts([[{ command: 'git add . && npm test', failed: true }, { command: 'git add .' }]]);
+    expect(steps.map((step) => step.status)).toEqual(['error', 'error', 'ok']);
+    expect(steps[2]?.edges).toContainEqual({ kind: 'retried', n: 0, seg: 0 });
+  });
+
+  it('keeps the last 50 commands of a call', () => {
+    const steps = stepsOfPrompts([[{ command: ['git status', ...Array.from({ length: 50 }, () => 'ls')].join(' && ') }]]);
+    expect(steps.map((step) => step.seg)).toEqual(Array.from({ length: 50 }, (_, seg) => seg));
+    expect(steps.every((step) => step.identity !== null && 'program' in step.identity && step.identity.program === 'ls')).toBe(true);
+  });
+
   it('holds status none on a call with no result in the file', () => {
     const text = line({ type: 'assistant', timestamp: at(1), message: { role: 'assistant', content: [{ type: 'tool_use', id: 't', name: 'Read', input: {} }] } });
     expect(capture(text)[0]?.steps?.[0]?.status).toBe('none');
@@ -212,14 +224,20 @@ describe('a subagent joins the graph of the call that spawned it', () => {
     const use = (id?: string): object => ({ type: 'tool_use', ...(id === undefined ? {} : { id }), name: 'Bash', input: {} });
     const text = ['not json', '[1]', line({ type: 'user' }), line({ message: { content: 'x' } }), line({ message: { content: ['x', use('a'), use(), use('a'), use('b')] } })].join('\n');
     expect([...callPositions(text)]).toEqual([['a', 0], ['b', 2]]);
-    expect(capture(text).map((tool) => [tool.toolUseId, tool.n])).toEqual([['a', 0], [null, 1], ['b', 2]]);
+    expect(capture(text).map((tool) => tool.toolUseId)).toEqual(['a', null, 'b']);
   });
 
-  it('counts no call on an api-request-blob line, as capture writes none', () => {
+  it('numbers calls as capture does, past a request-body copy and a replayed call', () => {
     const use = (id: string): object => ({ type: 'tool_use', id, name: 'Bash', input: {} });
-    const text = [line({ type: 'api-request-blob', message: { content: [use('x'), use('a')] } }), line({ type: 'assistant', message: { role: 'assistant', content: [use('a'), use('b')] } })].join('\n');
-    expect([...callPositions(text)]).toEqual([['a', 0], ['b', 1]]);
-    expect(capture(text).map((tool) => [tool.toolUseId, tool.n])).toEqual([['a', 0], ['b', 1]]);
+    const text = [
+      line({ type: 'assistant', message: { role: 'assistant', content: [use('a')] } }),
+      line({ type: 'api-request-blob', message: { role: 'assistant', content: [use('copied'), use('a')] } }),
+      line({ type: 'assistant', message: { role: 'assistant', content: [use('a')] } }),
+      line({ type: 'assistant', message: { role: 'assistant', content: [use('b')] } }),
+    ].join('\n');
+    const positions = callPositions(text);
+    expect(positions.has('copied')).toBe(false);
+    for (const tool of capture(text)) expect(positions.get(tool.toolUseId ?? '')).toBe(tool.n);
   });
 
   it('reads the parent from the archive when the harness no longer has it', async () => {

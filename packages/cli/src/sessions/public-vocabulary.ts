@@ -94,8 +94,21 @@ export const FRAMEWORK_OF_PROGRAM: ReadonlyMap<string, string> = new Map([
 export const FRAMEWORKS: ReadonlySet<string> = new Set([...FRAMEWORK_OF_FILE.map(([, name]) => name), ...FRAMEWORK_OF_PROGRAM.values()]);
 
 const EFFORTS: ReadonlySet<string> = new Set(['low', 'medium', 'high', 'xhigh', 'max', 'auto']);
-const MODEL = /^(?:(?:claude|gpt|o[134]|gemini|codex|composer|cursor|grok|deepseek|llama|mistral|qwen|kimi|glm)(?:[-.:_][a-z0-9.:_-]*)?|auto|default)$/;
-const VERSION = /^\d+(?:\.\d+){0,3}(?:[-+.][0-9A-Za-z]+)*$/;
+// Published shapes only, each part a version or a word from the closed list, so a gateway or fine-tune name under a known family fails closed.
+const MODEL_VERSION = '[a-z]?\\d[\\d.]*[a-z]?';
+const MODEL_WORD = 'mini|nano|pro|max|lite|turbo|flash|ultra|large|medium|small|tiny|high|low|fast|code|codex|coder|chat|reasoner|thinking|exp|preview|latest|instant';
+const CLAUDE_TIER = 'opus|sonnet|haiku|fable';
+const MODEL = new RegExp(
+  [
+    `^claude-(?:${CLAUDE_TIER})(?:-\\d[\\d.]*)*$`,
+    `^claude-\\d[\\d.]*(?:-\\d+)*(?:-(?:${CLAUDE_TIER}|instant)(?:-\\d+)*)?$`,
+    `^(?:gpt|o[134]|gemini|codex|composer|cursor|grok|deepseek|llama|mistral|qwen|kimi|glm)(?:-?${MODEL_VERSION})?(?:-(?:${MODEL_VERSION}|${MODEL_WORD}))*$`,
+    '^(?:auto|default)$',
+  ].join('|'),
+);
+// A suffix is digits or a release word, so a private build tag fails closed, as a private name does in `MODEL`.
+const VERSION_SUFFIX = '(?:[-+.](?:\\d+|(?:alpha|beta|rc|dev|canary|nightly|next)\\d*))*';
+const VERSION = new RegExp(`^\\d+(?:\\.\\d+){0,3}${VERSION_SUFFIX}$`);
 /** A name this long is not one of these: it is text someone pasted. */
 const NAME_MAX = 64;
 
@@ -106,6 +119,14 @@ export const publicModel = (value: string | null): string | null => orLiteral(va
 export const publicVersion = (value: string | null): string | null => orLiteral(value, (version) => VERSION.test(version));
 
 const words = (text: string): ReadonlySet<string> => new Set(text.split(/\s+/).filter((word) => word !== ''));
+
+/** Programs whose short flags are commonly bundled, as in `rm -rf`. Elsewhere a short lowercase run is more likely a value joined to its flag, as in `mysql -pabc`. */
+export const BUNDLING_PROGRAMS: ReadonlySet<string> = new Set(
+  words(`
+    rm cp mv ls mkdir chmod chown ln touch tar zip unzip gzip gunzip grep rg sed awk sort uniq wc cut head tail du df ps kill
+    xargs git curl wget rsync diff tr bash sh zsh docker
+  `),
+);
 
 /** Programs anyone can install or a system ships. A private script or binary is not here, so it reads as the literal. */
 export const PUBLIC_PROGRAMS: ReadonlySet<string> = new Set([
@@ -202,6 +223,32 @@ export const PUBLIC_MCP_SERVERS: ReadonlySet<string> = words(`
   linear notion slack postgres sqlite stripe cloudflare supabase vercel figma atlassian exa tavily brave-search oars oars-sessions
 `);
 
+/**
+ * Tools the published server of that name serves, by server. A server name is a label the user picks, so an allowlisted server does not make
+ * its tools public: anything not listed under the server reads as the literal, and a server with no entry here has every tool read that way.
+ */
+export const PUBLIC_MCP_TOOLS: ReadonlyMap<string, ReadonlySet<string>> = new Map(
+  Object.entries({
+    'claude-in-chrome':
+      'browser_batch computer file_upload find form_input get_page_text gif_creator javascript_tool list_connected_browsers navigate read_console_messages read_network_requests read_page resize_window select_browser shortcuts_execute shortcuts_list switch_browser tabs_close_mcp tabs_context_mcp tabs_create_mcp upload_image',
+    playwright:
+      'browser_click browser_close browser_console_messages browser_drag browser_evaluate browser_file_upload browser_fill_form browser_handle_dialog browser_hover browser_install browser_navigate browser_navigate_back browser_network_requests browser_press_key browser_resize browser_select_option browser_snapshot browser_tabs browser_take_screenshot browser_type browser_wait_for',
+    puppeteer: 'puppeteer_click puppeteer_evaluate puppeteer_fill puppeteer_hover puppeteer_navigate puppeteer_screenshot puppeteer_select',
+    github:
+      'add_issue_comment create_branch create_issue create_or_update_file create_pull_request create_repository delete_file fork_repository get_commit get_file_contents get_issue get_me get_pull_request issue_read issue_write list_branches list_commits list_issues list_pull_requests merge_pull_request pull_request_read push_files search_code search_issues search_pull_requests search_repositories search_users update_issue update_pull_request',
+    filesystem:
+      'create_directory directory_tree edit_file get_file_info list_allowed_directories list_directory list_directory_with_sizes move_file read_file read_media_file read_multiple_files read_text_file search_files write_file',
+    memory: 'add_observations create_entities create_relations delete_entities delete_observations delete_relations open_nodes read_graph search_nodes',
+    'sequential-thinking': 'sequentialthinking',
+    fetch: 'fetch',
+    postgres: 'query',
+    sqlite: 'append_insight create_table describe_table list_tables read_query write_query',
+    context7: 'get-library-docs query-docs resolve-library-id',
+    oars: 'oars_recall',
+    'oars-sessions': 'oars_recall',
+  }).map(([server, tools]) => [server, words(tools)]),
+);
+
 /** Skills published for anyone to install. */
 export const PUBLIC_SKILLS: ReadonlySet<string> = words(`
   pdf docx xlsx pptx skill-creator frontend-design webapp-testing mcp-builder canvas-design algorithmic-art theme-factory brand-guidelines internal-comms slack-gif-creator web-artifacts-builder
@@ -216,8 +263,7 @@ export const PUBLIC_PACKAGES: ReadonlySet<string> = words(`
   serde tokio clap anyhow thiserror reqwest rails rake bundler
 `);
 
-const REGISTRY_VERSION = /^[~^<>=!]*v?\d+(?:\.(?:\d+|x|\*))*(?:[-+][0-9A-Za-z.+-]*)?$/;
-const MCP_TOOL_NAME = /^[A-Za-z][A-Za-z0-9_.-]{0,63}$/;
+const REGISTRY_VERSION = new RegExp(`^[~^<>=!]*v?\\d+(?:\\.(?:\\d+|x|\\*))*${VERSION_SUFFIX}$`);
 
 export const isRegistryVersion = (version: string): boolean => version.length <= NAME_MAX && REGISTRY_VERSION.test(version);
-export const isMcpToolName = (tool: string): boolean => MCP_TOOL_NAME.test(tool);
+export const isPublicMcpTool = (server: string, tool: string): boolean => PUBLIC_MCP_TOOLS.get(server)?.has(tool) === true;
