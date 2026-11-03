@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { answerQuery, fitReads, poolVersionOf, pull, readIdOf, recoveryReads, toolShapeId, type ClosedQuery } from './recall-reads.js';
-import { error as errorRow, prompt as promptRow, session as sessionRow, store as storeOf, tool as toolRow } from './pool-fixture.js';
+import { error as errorRow, frame as frameRow, prompt as promptRow, session as sessionRow, store as storeOf, tool as toolRow } from './pool-fixture.js';
 import { LITERAL } from './public-vocabulary.js';
 import type { RecallSlice } from './recall-object.js';
 import type { ToolObservation } from './schema.js';
@@ -244,5 +244,34 @@ describe('a fit question narrowed by a slice', () => {
     const store = storeOf({ sessions: [sessionRow('a')], prompts: [], errors: [], tools: [tool('a', 0, 'Monitor', ['query'], 'error'), { ...tool('a', 1, 'Read', ['file_path'], 'ok'), prompt: 1 }] });
     const [read] = fitReads(store, { minFailedSessions: 1, minFailedShare: 0, minCalls: 1 }, (call) => call.prompt === 0);
     expect(read).toMatchObject({ calls: 1, count: 1, followed: [['Read', 1]] });
+  });
+});
+
+describe('how far a pull sits from its evidence', () => {
+  const LATER = Date.parse('2026-11-05T00:00:00Z');
+  const stored = frameRow({ harnessVersion: '2.1.301', model: 'claude-opus-5-5', day: '2026-01-01' });
+  const held = (): Store => ({ ...synthetic(), sessions: [...synthetic().sessions, sessionRow('live', { frame: stored })] });
+  const ask = (store: Store, sid: string | null) => pull(store, { form: 'question', family: 'recovery' }, { sid, now: LATER, frame: null, harness: 'claude-code' }).recall;
+
+  it('states the age from the clock when nothing is known of the asker, and guesses nothing else', () => {
+    for (const sid of [null, 'not-in-the-store']) {
+      const recall = ask(held(), sid);
+      expect(recall.frame).toBeNull();
+      expect(recall.evidence[0]?.delta).toMatchObject({ ageDays: 3, harness: 'unknown', model: 'unknown', harnessVersions: null });
+      expect(recall.answer.rendered).toContain('from you: harness unknown, model unknown, age 3 days');
+    }
+  });
+
+  it('reads the asker from the stored session it names, dated today', () => {
+    const recall = ask(held(), 'live');
+    expect(recall.frame).toEqual({ ...stored, day: '2026-11-05' });
+    expect(recall.evidence[0]?.delta).toMatchObject({ ageDays: 3, harness: 'same', model: 'same', harnessVersions: -1 });
+  });
+
+  it('prefers the frame it is handed', () => {
+    const handed = frameRow({ model: 'claude-sonnet-5-5', day: '2026-11-04' });
+    const { recall } = pull(held(), { form: 'question', family: 'recovery' }, { sid: 'live', now: LATER, frame: handed, harness: 'claude-code' });
+    expect(recall.frame).toEqual(handed);
+    expect(recall.evidence[0]?.delta).toMatchObject({ ageDays: 2, model: 'differs' });
   });
 });
