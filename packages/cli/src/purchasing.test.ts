@@ -1,0 +1,269 @@
+import { http, HttpResponse } from 'msw';
+import { describe, expect, it } from 'vitest';
+import { run } from './cli.js';
+import { ExitCode } from './errors.js';
+import { stepKey } from './journal.js';
+import { API, harness, server, useServer } from './test-support.js';
+
+useServer();
+
+const AGENT = '8a2f6a0e-3c1d-4b57-9d7e-0c5b2f4e6a11';
+const SETUP_URL = 'https://app.test/purchasing/setup/abc';
+const APPROVAL_URL = 'https://app.test/purchasing/approve/xyz';
+const problemJson = { 'Content-Type': 'application/problem+json' };
+
+interface Seen {
+  method: string;
+  path: string;
+  body: unknown;
+  key: string | null;
+  authorization: string | null;
+}
+
+// Answers one route and records what the CLI sent to it.
+const route = (method: 'get' | 'post' | 'put', path: string, answer: () => Response) => {
+  const seen: Seen[] = [];
+  server.use(
+    http[method](`${API}${path}`, async ({ request }) => {
+      const text = await request.text();
+      seen.push({
+        method: request.method,
+        path: new URL(request.url).pathname,
+        body: text === '' ? null : (JSON.parse(text) as unknown),
+        key: request.headers.get('Idempotency-Key'),
+        authorization: request.headers.get('Authorization'),
+      });
+      return answer();
+    }),
+  );
+  return seen;
+};
+
+const card = (view: object) => route('post', '/billing/purchasing/payment-method', () => HttpResponse.json({ createdAt: '2026-10-23T00:00:00Z', ...view }));
+const cap = (view: object) => route('put', `/billing/agents/${AGENT}/purchasing`, () => HttpResponse.json({ workloadId: AGENT, ...view }));
+
+describe('oars purchasing card', () => {
+  it('--mode TEST starts a setup and prints the setup URL, exit 6 (a person saves the card)', async () => {
+    const h = harness({ OARS_API_KEY: 'key-123' });
+    const seen = card({ mode: 'TEST', status: 'PENDING', setupUrl: SETUP_URL, setupExpiresAt: '2026-10-23T01:00:00Z' });
+
+    expect(await run(['purchasing', 'card', '--mode', 'TEST'], h.deps)).toBe(ExitCode.HUMAN);
+
+    expect(seen).toEqual([{ method: 'POST', path: '/billing/purchasing/payment-method', body: { mode: 'TEST' }, key: expect.any(String), authorization: 'Bearer key-123' }]);
+    expect(h.err.join('')).toContain('Needs you: open https://app.test/purchasing/setup/abc');
+    expect(h.out).toEqual([]);
+  });
+
+  it('--json prints the failure document with the URL as problem.actionUrl on stdout', async () => {
+    const h = harness({ OARS_API_KEY: 'key-123' });
+    card({ mode: 'LIVE', status: 'PENDING', setupUrl: SETUP_URL });
+
+    expect(await run(['purchasing', 'card', '--mode', 'live', '--json'], h.deps)).toBe(ExitCode.HUMAN);
+
+    expect(h.out).toHaveLength(1);
+    expect(JSON.parse(h.out[0] ?? '')).toMatchObject({ ok: false, step: 'purchasing-card', problem: { actionUrl: SETUP_URL } });
+    expect(h.err).toEqual([]);
+  });
+
+  it('an active card is nothing to do: exit 0 and its brand and last four', async () => {
+    const h = harness({ OARS_API_KEY: 'key-123' });
+    card({ mode: 'TEST', status: 'ACTIVE', brand: 'visa', last4: '4242' });
+
+    expect(await run(['purchasing', 'card', '--mode', 'TEST', '--json'], h.deps)).toBe(ExitCode.OK);
+
+    expect(JSON.parse(h.out[0] ?? '')).toEqual({ ok: true, mode: 'TEST', status: 'ACTIVE', brand: 'visa', last4: '4242' });
+  });
+
+  it('an active card prints a sentence for a person', async () => {
+    const h = harness({ OARS_API_KEY: 'key-123' });
+    card({ mode: 'TEST', status: 'ACTIVE', brand: 'visa', last4: '4242' });
+
+    expect(await run(['purchasing', 'card', '--mode', 'TEST'], h.deps)).toBe(ExitCode.OK);
+
+    expect(h.out.join('')).toBe('TEST purchasing card: visa ending 4242 is saved.\n');
+  });
+
+  it('a card the platform refused (no setup URL) exits 4 and names why', async () => {
+    const h = harness({ OARS_API_KEY: 'key-123' });
+    card({ mode: 'TEST', status: 'DETACHED', failureCode: 'CUSTOMER_REGION_NOT_SUPPORTED' });
+
+    expect(await run(['purchasing', 'card', '--mode', 'TEST'], h.deps)).toBe(ExitCode.INVALID);
+
+    expect(h.err.join('')).toContain('CUSTOMER_REGION_NOT_SUPPORTED');
+  });
+
+  it('a card with no setup URL and no failure code names its status', async () => {
+    const h = harness({ OARS_API_KEY: 'key-123' });
+    card({ mode: 'TEST', status: 'REPLACED' });
+
+    expect(await run(['purchasing', 'card', '--mode', 'TEST'], h.deps)).toBe(ExitCode.INVALID);
+
+    expect(h.err.join('')).toContain('REPLACED');
+  });
+
+  it('a retry with the same --idempotency-key sends the same derived key', async () => {
+    const h = harness({ OARS_API_KEY: 'key-123' });
+    const seen = card({ mode: 'TEST', status: 'ACTIVE', brand: 'visa', last4: '4242' });
+
+    await run(['purchasing', 'card', '--mode', 'TEST', '--idempotency-key', 'K'], h.deps);
+
+    expect(seen[0]?.key).toBe(stepKey('K', 'purchasing-card'));
+  });
+
+  it('without --mode is a usage error, exit 2', async () => {
+    const h = harness({ OARS_API_KEY: 'key-123' });
+
+    expect(await run(['purchasing', 'card'], h.deps)).toBe(ExitCode.USAGE);
+  });
+
+  it('a mode that is neither TEST nor LIVE is a usage error, exit 2', async () => {
+    const h = harness({ OARS_API_KEY: 'key-123' });
+
+    expect(await run(['purchasing', 'card', '--mode', 'staging'], h.deps)).toBe(ExitCode.USAGE);
+    expect(h.err.join('')).toContain('TEST or LIVE');
+  });
+});
+
+describe('oars purchasing cap', () => {
+  it('a new or higher cap is PROPOSED: it prints the approval URL and exits 6', async () => {
+    const h = harness({ OARS_API_KEY: 'key-123' });
+    const seen = cap({ mode: 'TEST', status: 'PROPOSED', monthlyCapUsd: '0.00', proposedCapUsd: '100.00', approvalUrl: APPROVAL_URL, proposalExpiresAt: '2026-10-30T00:00:00Z' });
+
+    expect(await run(['purchasing', 'cap', AGENT, '--mode', 'TEST', '--usd', '100', '--idempotency-key', 'K'], h.deps)).toBe(ExitCode.HUMAN);
+
+    expect(seen).toEqual([
+      { method: 'PUT', path: `/billing/agents/${AGENT}/purchasing`, body: { mode: 'TEST', monthlyCapUsd: '100' }, key: stepKey('K', 'purchasing-cap'), authorization: 'Bearer key-123' },
+    ]);
+    expect(h.err.join('')).toContain('Needs you: open https://app.test/purchasing/approve/xyz');
+  });
+
+  it('--json on a proposal carries the approval URL in problem.actionUrl', async () => {
+    const h = harness({ OARS_API_KEY: 'key-123' });
+    cap({ mode: 'TEST', status: 'PROPOSED', monthlyCapUsd: '0.00', proposedCapUsd: '100.00', approvalUrl: APPROVAL_URL });
+
+    expect(await run(['purchasing', 'cap', AGENT, '--mode', 'TEST', '--usd', '100.00', '--json'], h.deps)).toBe(ExitCode.HUMAN);
+
+    expect(JSON.parse(h.out[0] ?? '')).toMatchObject({ ok: false, step: 'purchasing-cap', problem: { actionUrl: APPROVAL_URL } });
+  });
+
+  it('a lower cap applies at once: exit 0 and the new cap', async () => {
+    const h = harness({ OARS_API_KEY: 'key-123' });
+    cap({ mode: 'TEST', status: 'ACTIVE', monthlyCapUsd: '20.00' });
+
+    expect(await run(['purchasing', 'cap', AGENT, '--mode', 'TEST', '--usd', '20', '--json'], h.deps)).toBe(ExitCode.OK);
+
+    expect(JSON.parse(h.out[0] ?? '')).toEqual({ ok: true, workloadId: AGENT, mode: 'TEST', status: 'ACTIVE', monthlyCapUsd: '20.00' });
+  });
+
+  it('an applied cap prints a sentence for a person', async () => {
+    const h = harness({ OARS_API_KEY: 'key-123' });
+    cap({ mode: 'TEST', status: 'ACTIVE', monthlyCapUsd: '20.00' });
+
+    await run(['purchasing', 'cap', AGENT, '--mode', 'TEST', '--usd', '20'], h.deps);
+
+    expect(h.out.join('')).toBe('TEST purchasing cap for 8a2f6a0e-3c1d-4b57-9d7e-0c5b2f4e6a11: $20.00 a month, in force now.\n');
+  });
+
+  it('a cap of 0 turns purchasing off at once and says so', async () => {
+    const h = harness({ OARS_API_KEY: 'key-123' });
+    const seen = cap({ mode: 'LIVE', status: 'OFF', monthlyCapUsd: '0.00' });
+
+    expect(await run(['purchasing', 'cap', AGENT, '--mode', 'LIVE', '--usd', '0'], h.deps)).toBe(ExitCode.OK);
+
+    expect(seen[0]?.body).toEqual({ mode: 'LIVE', monthlyCapUsd: '0' });
+    expect(h.out.join('')).toBe('LIVE purchasing for 8a2f6a0e-3c1d-4b57-9d7e-0c5b2f4e6a11 is off.\n');
+  });
+
+  it('a replayed proposal has no URL: exit 6 and the way to a fresh link', async () => {
+    const h = harness({ OARS_API_KEY: 'key-123' });
+    cap({ mode: 'TEST', status: 'PROPOSED', monthlyCapUsd: '0.00', proposedCapUsd: '100.00' });
+
+    expect(await run(['purchasing', 'cap', AGENT, '--mode', 'TEST', '--usd', '100', '--idempotency-key', 'K'], h.deps)).toBe(ExitCode.HUMAN);
+
+    expect(h.err.join('')).toContain('--idempotency-key');
+  });
+
+  it.each(['abc', '-5', '1.234', '', '1e3'])('--usd %j is a usage error, exit 2', async (usd) => {
+    const h = harness({ OARS_API_KEY: 'key-123' });
+
+    expect(await run(['purchasing', 'cap', AGENT, '--mode', 'TEST', '--usd', usd], h.deps)).toBe(ExitCode.USAGE);
+  });
+
+  it('without --usd is a usage error, exit 2', async () => {
+    const h = harness({ OARS_API_KEY: 'key-123' });
+
+    expect(await run(['purchasing', 'cap', AGENT, '--mode', 'TEST'], h.deps)).toBe(ExitCode.USAGE);
+  });
+
+  it("another developer's agent: the platform's 403 is exit 3, as for every command", async () => {
+    const h = harness({ OARS_API_KEY: 'key-123' });
+    route('put', `/billing/agents/${AGENT}/purchasing`, () => HttpResponse.json({ code: 'WORKLOAD_NOT_OWNED', title: 'Not your agent' }, { status: 403, headers: problemJson }));
+
+    expect(await run(['purchasing', 'cap', AGENT, '--mode', 'TEST', '--usd', '5'], h.deps)).toBe(ExitCode.AUTH);
+  });
+});
+
+describe('oars purchasing list', () => {
+  const FIRST = 'aaaaaaaa-0000-4000-8000-000000000001';
+  const SECOND = 'aaaaaaaa-0000-4000-8000-000000000002';
+  const item = (purchaseId: string, status: string) => ({
+    purchaseId,
+    status,
+    priceRef: 'pack-500',
+    packName: '500 credits',
+    credits: 500,
+    amountUsd: '5.00',
+    livemode: false,
+    sellerSlug: 'acme',
+    sellerWorkloadId: '11111111-2222-4333-8444-555555555555',
+    createdAt: '2026-10-22T12:00:00Z',
+  });
+  const listing = (content: object[]) => server.use(http.get(`${API}/billing/agents/${AGENT}/purchases`, () => HttpResponse.json({ content, last: true })));
+
+  it('lists the agent purchases through GET /billing/agents/{id}/purchases, following the pages', async () => {
+    const h = harness({ OARS_API_KEY: 'key-123' });
+    const seen: string[] = [];
+    server.use(
+      http.get(`${API}/billing/agents/${AGENT}/purchases`, ({ request }) => {
+        const url = new URL(request.url);
+        seen.push(url.search);
+        return HttpResponse.json(url.searchParams.get('page') === '0' ? { content: [item(FIRST, 'SUCCEEDED')], last: false } : { content: [item(SECOND, 'FAILED')], last: true });
+      }),
+    );
+
+    expect(await run(['purchasing', 'list', AGENT, '--json'], h.deps)).toBe(ExitCode.OK);
+
+    expect(seen).toEqual(['?page=0&size=100', '?page=1&size=100']);
+    const document = JSON.parse(h.out[0] ?? '') as { ok: boolean; purchases: Array<{ purchaseId: string }> };
+    expect(document.ok).toBe(true);
+    expect(document.purchases.map((purchase) => purchase.purchaseId)).toEqual([FIRST, SECOND]);
+  });
+
+  it('prints one line per purchase for a person', async () => {
+    const h = harness({ OARS_API_KEY: 'key-123' });
+    listing([item(FIRST, 'SUCCEEDED')]);
+
+    expect(await run(['purchasing', 'list', AGENT], h.deps)).toBe(ExitCode.OK);
+
+    expect(h.out.join('')).toBe(`${FIRST}  SUCCEEDED  $5.00  500 credits  acme  pack-500  TEST  2026-10-22T12:00:00Z\n`);
+  });
+
+  it('says so when the agent has bought nothing', async () => {
+    const h = harness({ OARS_API_KEY: 'key-123' });
+    listing([]);
+
+    expect(await run(['purchasing', 'list', AGENT], h.deps)).toBe(ExitCode.OK);
+
+    expect(h.out.join('')).toBe('This agent has made no purchases.\n');
+  });
+
+  it('shows the failure code of a failed purchase and the LIVE mode', async () => {
+    const h = harness({ OARS_API_KEY: 'key-123' });
+    listing([{ ...item(FIRST, 'FAILED'), failureCode: 'PURCHASE_DECLINED', livemode: true }]);
+
+    await run(['purchasing', 'list', AGENT], h.deps);
+
+    expect(h.out.join('')).toContain('FAILED (PURCHASE_DECLINED)');
+    expect(h.out.join('')).toContain('  LIVE  ');
+  });
+});

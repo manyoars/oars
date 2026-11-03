@@ -4,6 +4,7 @@ import { resolveApiUrl } from './api.js';
 import { deploy } from './commands/deploy.js';
 import { login } from './commands/login.js';
 import { logout } from './commands/logout.js';
+import { purchasingCap, purchasingCard, purchasingList, type BillingMode } from './commands/purchasing.js';
 import { status } from './commands/status.js';
 import { templates } from './commands/templates.js';
 import { testCharge } from './commands/test-charge.js';
@@ -65,6 +66,18 @@ const collect = (value: string, previous: string[] | undefined): string[] => [..
 const positiveInteger = (value: string): number => {
   if (!/^[1-9]\d*$/.test(value)) throw new InvalidArgumentError('it must be a positive whole number.');
   return Number(value);
+};
+
+const billingMode = (value: string): BillingMode => {
+  const mode = value.toUpperCase();
+  if (mode !== 'TEST' && mode !== 'LIVE') throw new InvalidArgumentError('it must be TEST or LIVE.');
+  return mode;
+};
+
+/** Whole cents, as the platform parses them; the string goes on the wire as typed. */
+const usdAmount = (value: string): string => {
+  if (!/^\d+(\.\d{1,2})?$/.test(value)) throw new InvalidArgumentError('it must be a dollar amount in whole cents, such as 100 or 12.50 (0 turns purchasing off).');
+  return value;
 };
 
 /** An ISO time, normalized to the form session timestamps are stored in so the two compare as text. */
@@ -216,6 +229,49 @@ const buildProgram = (deps: RunDeps, argv: string[]): Command => {
         idempotencyKey: text(options, 'idempotencyKey') ?? randomUUID(),
       });
       emit(deps, flag(options, 'json'), outcome);
+    });
+
+  const purchasing = program.command('purchasing').description("set up an agent's purchasing: the card, the monthly cap, and what it bought");
+
+  purchasing
+    .command('card')
+    .description('start saving the purchasing card; prints the page a person saves it on (exit 6)')
+    .requiredOption('--mode <mode>', 'TEST or LIVE', billingMode)
+    .action(async (_options: OptionValues, command: Command) => {
+      const options: OptionValues = command.optsWithGlobals();
+      const outcome = await purchasingCard(deps, {
+        apiUrl: resolveApiUrl(deps, text(options, 'apiUrl')),
+        mode: billingMode(text(options, 'mode') ?? ''),
+        idempotencyKey: text(options, 'idempotencyKey') ?? randomUUID(),
+      });
+      emit(deps, flag(options, 'json'), outcome);
+    });
+
+  purchasing
+    .command('cap')
+    .description("set an agent's monthly purchasing cap: a lower one applies at once; a higher one prints the page a person approves it on (exit 6)")
+    .argument('<workloadId>', "the buying agent's workload id")
+    .requiredOption('--mode <mode>', 'TEST or LIVE', billingMode)
+    .requiredOption('--usd <amount>', 'dollars a month, whole cents; 0 turns purchasing off', usdAmount)
+    .action(async (workloadId: string, _options: OptionValues, command: Command) => {
+      const options: OptionValues = command.optsWithGlobals();
+      const outcome = await purchasingCap(deps, {
+        apiUrl: resolveApiUrl(deps, text(options, 'apiUrl')),
+        workloadId,
+        mode: billingMode(text(options, 'mode') ?? ''),
+        monthlyCapUsd: text(options, 'usd') ?? '',
+        idempotencyKey: text(options, 'idempotencyKey') ?? randomUUID(),
+      });
+      emit(deps, flag(options, 'json'), outcome);
+    });
+
+  purchasing
+    .command('list')
+    .description('list what an agent has bought')
+    .argument('<workloadId>', "the buying agent's workload id")
+    .action(async (workloadId: string, _options: OptionValues, command: Command) => {
+      const options: OptionValues = command.optsWithGlobals();
+      emit(deps, flag(options, 'json'), await purchasingList(deps, { apiUrl: resolveApiUrl(deps, text(options, 'apiUrl')), workloadId }));
     });
 
   const sessions = program.command('sessions').description("deposit and recall your own Claude Code session logs, locally (no model calls, no network)");
