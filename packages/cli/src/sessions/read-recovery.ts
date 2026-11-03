@@ -12,11 +12,32 @@ import { signatureRecord } from './store.js';
 
 const shapeOf = (actions: readonly CanonicalAction[]): string => shapeMotif(actions.map((action) => ({ action, identity: null }))).motifId;
 
+const isEarlier = (a: string | null, b: string | null): boolean => a !== null && (b === null || a < b);
+
+/**
+ * One row per session and tool-use id (t752, t762). The tool fold leaves every error line in place, so a store not yet captured again keeps a replayed result's line beside the
+ * first, and fit's folded `failed` would disagree with these counts. The earliest copy stands for the call, whatever order they came in; a row with no id is its own call.
+ */
+const oneRowPerCall = (errors: readonly ErrorObservation[]): ErrorObservation[] => {
+  const calls = new Map<string, ErrorObservation>();
+  const rows: ErrorObservation[] = [];
+  for (const error of errors) {
+    if (error.toolUseId === undefined || error.toolUseId === null) {
+      rows.push(error);
+      continue;
+    }
+    const key = `${error.agent ?? error.session}\n${error.toolUseId}`;
+    const held = calls.get(key);
+    if (held === undefined || isEarlier(error.ts, held.ts)) calls.set(key, error);
+  }
+  return [...rows, ...calls.values()];
+};
+
 export const deriveRecovery: DeriveFamily = ({ pool, store }) => {
   const harnesses = new Map<string, Harness>([...store.sessions, ...store.subagents].map((session) => [session.session, harnessOf(session)]));
   const actionIn = (session: string, tool: string): CanonicalAction => actionOf(ACTION_TABLES[harnesses.get(session) ?? 'claude-code'], tool).action;
   const cellsAt = groupBy(pool.cells, (cell) => `${cell.motifId}/${cell.day}`);
-  return [...groupBy(store.errors, (error) => error.sig)].flatMap(([sig, list]) => {
+  return [...groupBy(oneRowPerCall(store.errors), (error) => error.sig)].flatMap(([sig, list]) => {
     const inputs = new Set<Cell>();
     const following: { [action: string]: number } = {};
     let failedAction: CanonicalAction = 'other';
