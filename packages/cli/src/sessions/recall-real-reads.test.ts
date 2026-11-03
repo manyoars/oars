@@ -40,7 +40,7 @@ describe('a recall cites the stored read of the current pool', () => {
   it('answers recovery and fit with stored read IDs, and walks a pull through read to cell', () => {
     const store = stocked();
     const current = currentOf(store);
-    const asked = { sid: null, now: NOW, frame: null, harness: 'claude-code', current } as const;
+    const asked = { sid: null, now: NOW, frame: null, current } as const;
     const fit = pull(store, { form: 'question', family: 'fit' }, asked).recall;
     const recovery = pull(store, { form: 'question', family: 'recovery' }, asked).recall;
     for (const recall of [fit, recovery]) {
@@ -54,7 +54,7 @@ describe('a recall cites the stored read of the current pool', () => {
   it('lets a prefix name a motif ID, a stored read ID, or a shape', () => {
     const store = stocked();
     const current = currentOf(store);
-    const asked = { sid: null, now: NOW, frame: null, harness: 'claude-code', current } as const;
+    const asked = { sid: null, now: NOW, frame: null, current } as const;
     const motifId = shapeMotif([{ action: 'other', identity: null }]).motifId;
     const byMotif = pull(store, { form: 'pattern', prefix: [motifId] }, asked).recall;
     expect(byMotif.answer.kind).toBe('hit');
@@ -74,7 +74,7 @@ describe('a recall cites the stored read of the current pool', () => {
 
   it('keeps the stand-in when the pool holds no read for it', () => {
     const store = stocked();
-    const recall = pull(store, { form: 'question', family: 'fit' }, { sid: null, now: NOW, frame: null, harness: 'claude-code' }).recall;
+    const recall = pull(store, { form: 'question', family: 'fit' }, { sid: null, now: NOW, frame: null }).recall;
     expect(recall.answer.reads).toEqual([toolShapeId('Monitor', ['query'])]);
   });
 });

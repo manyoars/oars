@@ -26,6 +26,7 @@ export const session = (id: string, over: Partial<SessionObservation> = {}): Ses
   parent: null,
   agentType: null,
   spawnedBy: null,
+  spawnedIn: null,
   rev: 1,
   at: '2026-11-01T00:00:00.000Z',
   bytes: 0,

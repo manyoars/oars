@@ -8,7 +8,7 @@ import { currentPool } from './pool.js';
 import { appendRecall } from './recall-object.js';
 import { pull, type PullInput } from './recall-reads.js';
 import { MISS_TEXT } from './recall-render.js';
-import { harnessOf, type RecallCall } from './schema.js';
+import type { RecallCall } from './schema.js';
 import { loadStore, paths, readRedactDomains, type SessionsRuntime } from './store.js';
 
 const PROTOCOL = '2025-06-18';
@@ -76,7 +76,7 @@ export const handleMessage = async (runtime: SessionsRuntime, now: () => number,
     try {
       // The server is not told which session it serves, so `sid` is null: naming it is what a consequence for an MCP pull still needs.
       const store = await loadStore(runtime.storeDir);
-      const result = pull(store, query, { sid: null, now: now(), frame: null, harness: harnessOf({}), redactDomains: await readRedactDomains(runtime.storeDir), current: await currentPool(runtime.storeDir, store) });
+      const result = pull(store, query, { sid: null, now: now(), frame: null, redactDomains: await readRedactDomains(runtime.storeDir), current: await currentPool(runtime.storeDir, store) });
       const call: RecallCall = { at: new Date(now()).toISOString(), query: JSON.stringify(query), matches: result.legacy?.matches.length ?? result.reads.length, cwd: process.cwd() };
       await mkdir(runtime.storeDir, { recursive: true });
       await appendFile(paths(runtime.storeDir).calls, `${JSON.stringify(call)}\n`, { mode: 0o600 });
