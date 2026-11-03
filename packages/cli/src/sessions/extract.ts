@@ -4,6 +4,8 @@
 // read a thing differently the comment says which rule is used.
 import { createHash } from 'node:crypto';
 import { posix } from 'node:path';
+import { ACTION_TABLES, actionOf, shellOf } from './actions.js';
+import { closedFrame, frameIdOf, repoFilesFromIndex, stackOf, utcDay } from './frame.js';
 import type { Redactor } from './redact.js';
 import {
   CAPTURE_VERSION,
@@ -13,6 +15,8 @@ import {
   SIGNATURE_CHARS,
   type CostState,
   type ErrorLineObservation,
+  type Frame,
+  type Harness,
   type PromptClass,
   type SessionObservation,
   type Skeleton,
@@ -274,6 +278,10 @@ export interface ExtractInput {
   repoIdentity?: (root: string) => string;
   /** The oars package, Node.js, and OS this capture ran under; absent reads as `0.0.0` and this process. */
   runtime?: { oars: string; node: string; os: string };
+  /** The harness this transcript came from; absent means Claude Code. It names the frame and picks the action table. */
+  harness?: Harness;
+  /** How many files a repository root holds; absent reads the root's git index. */
+  repoFiles?: (root: string) => number | null;
   /** Set for a subagent transcript: every line is the agent's own line, so none is read as a sidechain. */
   subagent?: SubagentOrigin;
 }
@@ -299,6 +307,19 @@ interface Current {
   skills: Set<string>;
   usage: Usage;
   turns: number;
+  /** The last harness version the prompt's lines name. */
+  version: string | undefined;
+  effortCounts: Map<string, number>;
+  /** `message.model` per line, for a transcript whose lines name no requested model. */
+  messageModels: Map<string, number>;
+}
+
+/** What one prompt adds to the frame; the file-wide fields join it once the whole file has been read. */
+interface PromptFrameParts {
+  version: string | undefined;
+  model: string | null;
+  effort: string | null;
+  ts: string | undefined;
 }
 
 const firstTextBlock = (content: unknown): string => {
@@ -326,6 +347,13 @@ const majority = (counts: ReadonlyMap<string, number>): string => {
     }
   }
   return best;
+};
+
+/** The majority of `counts`, or null when it is empty. */
+const majorityOrNull = (counts: ReadonlyMap<string, number>): string | null => (counts.size === 0 ? null : majority(counts));
+
+const bump = (counts: Map<string, number>, key: string): void => {
+  counts.set(key, (counts.get(key) ?? 0) + 1);
 };
 
 const PATH_KEYS = ['file_path', 'notebook_path', 'path'] as const;
@@ -429,6 +457,8 @@ export const captureSession = (input: ExtractInput): Capture => {
   const identityOf = input.repoIdentity ?? ((root: string): string => `path:${toForward(root).toLowerCase()}`);
   const runtime = input.runtime ?? { oars: '0.0.0', node: process.version, os: process.platform };
   const origin = input.subagent;
+  const harness: Harness = input.harness ?? 'claude-code';
+  const actions = ACTION_TABLES[harness];
   const rawLines = input.text.split(/\r\n|\n|\r/);
   if (rawLines.length > 0 && rawLines[rawLines.length - 1] === '') rawLines.pop();
 
@@ -483,6 +513,16 @@ export const captureSession = (input: ExtractInput): Capture => {
   const skeletonLines: SkeletonLine[] = [];
   const toolById = new Map<string | undefined, string>();
   const callById = new Map<string, { call: ToolObservation; at: number | undefined }>();
+  // The evidence for the frame: read across the whole file, so one session's prompts share a stack and a shell, and held only until the frame is built.
+  const framePaths: string[] = [];
+  const framePrograms = new Set<string>();
+  const frameShells = new Map<string, number>();
+  const fileEfforts = new Map<string, number>();
+  const fileModels = new Map<string, number>();
+  const fileMessageModels = new Map<string, number>();
+  const promptFrames: PromptFrameParts[] = [];
+  /** The native name of each call, by `n`. */
+  const natives: string[] = [];
   const seenResponses = new Set<string>();
   let promptFingerprint: string | null = null;
   let cur: Current | undefined;
@@ -508,6 +548,7 @@ export const captureSession = (input: ExtractInput): Capture => {
       usage: cur.usage,
       promptFingerprint,
     });
+    promptFrames.push({ version: cur.version, model: majorityOrNull(cur.models) ?? majorityOrNull(cur.messageModels), effort: majorityOrNull(cur.effortCounts), ts: cur.ts });
   };
 
   for (const [position, raw] of rawLines.entries()) {
@@ -546,7 +587,15 @@ export const captureSession = (input: ExtractInput): Capture => {
     const branch = str(o.gitBranch);
     if (branch !== undefined && branch !== '') branches.add(redact(branch));
     const requested = str(o.requestedModel);
-    if (requested !== undefined && requested !== '') session.models[requested] = (session.models[requested] ?? 0) + 1;
+    if (requested !== undefined && requested !== '') {
+      session.models[requested] = (session.models[requested] ?? 0) + 1;
+      bump(fileModels, requested);
+    }
+    // A synthetic line is the harness speaking, not a model.
+    const messageModel = message === undefined || type !== 'assistant' ? undefined : str(message.model);
+    const realMessageModel = messageModel === undefined || messageModel === '' || messageModel === '<synthetic>' ? undefined : messageModel;
+    if (realMessageModel !== undefined) bump(fileMessageModels, realMessageModel);
+    if (truthy(o.effort)) bump(fileEfforts, String(o.effort));
     if (type === 'cost-state') {
       const cost = num(o.totalCostUSD);
       session.costUsd = cost ?? session.costUsd;
@@ -615,6 +664,9 @@ export const captureSession = (input: ExtractInput): Capture => {
           skills: new Set(),
           usage: emptyUsage(),
           turns: 0,
+          version: version !== undefined && version !== '' ? version : undefined,
+          effortCounts: new Map(),
+          messageModels: new Map(),
         };
         continue;
       }
@@ -625,14 +677,19 @@ export const captureSession = (input: ExtractInput): Capture => {
       if (!side) {
         const seconds = toSeconds(ts);
         if (ts !== undefined && ts !== '' && seconds !== undefined) cur.t1 = seconds;
+        if (version !== undefined && version !== '') cur.version = version;
         if (type === 'assistant') {
           cur.turns += 1;
           if (requested !== undefined && requested !== '') cur.models.set(requested, (cur.models.get(requested) ?? 0) + 1);
+          if (realMessageModel !== undefined) bump(cur.messageModels, realMessageModel);
           if (lineUsage !== undefined && firstOfResponse) addUsage(cur.usage, lineUsage.usage);
         }
       }
       // prompt_graphs.py reads efforts and skills from every line.
-      if (truthy(o.effort)) cur.efforts.add(String(o.effort));
+      if (truthy(o.effort)) {
+        cur.efforts.add(String(o.effort));
+        if (!side) bump(cur.effortCounts, String(o.effort));
+      }
       if (truthy(o.attributionSkill)) cur.skills.add(String(o.attributionSkill));
     }
 
@@ -652,10 +709,20 @@ export const captureSession = (input: ExtractInput): Capture => {
         const id = str(block.id);
         toolById.set(id, name);
         const toolInput = isObj(block.input) ? block.input : {};
+        // An adapter that renames its tools for the extractor keeps the harness's own name in `native`.
+        const native = str(block.native) ?? name;
+        natives.push(native);
+        const shell = shellOf(actions, native);
+        if (shell !== null) bump(frameShells, shell);
+        if (SHELL.has(name)) {
+          const program = shellTarget(str(toolInput.command) ?? '').split(' ')[0];
+          if (program !== undefined && program !== '') framePrograms.add(program);
+        }
         const filePath = str(toolInput.file_path);
         const lineRoot = lineCwd === undefined || lineCwd === '' ? null : rootOf(lineCwd);
         if (PATH_TOOLS.has(name) && filePath !== undefined && filePath !== '') {
           const redacted = redact(filePath);
+          framePaths.push(filePath);
           files.add(redacted);
           // One redacted path can name several files (a relative path read from two repositories), so it keeps every hash.
           fileHashes.set(redacted, (fileHashes.get(redacted) ?? new Set<string>()).add(hashPath(filePath, lineCwd, lineRoot, salt).hash));
@@ -726,6 +793,30 @@ export const captureSession = (input: ExtractInput): Capture => {
   session.repo = sessionRoot === null ? null : sha256(`${salt}\nrepo:${identityOf(sessionRoot)}`).slice(0, 16);
   session.urls = [...urls].sort();
   session.searches = [...searches].sort();
+
+  const repoFiles = input.repoFiles ?? repoFilesFromIndex;
+  const stack = stackOf({ paths: framePaths, programs: [...framePrograms], repoFiles: sessionRoot === null ? null : repoFiles(sessionRoot) });
+  const frameOf = (parts: PromptFrameParts): Frame =>
+    closedFrame({
+      harness,
+      harnessVersion: parts.version ?? session.env.harness,
+      model: parts.model,
+      effort: parts.effort,
+      day: utcDay(parts.ts),
+      platform: runtime.os,
+      shell: majorityOrNull(frameShells),
+      stack,
+    });
+  session.frame = frameOf({ version: undefined, model: majorityOrNull(fileModels) ?? majorityOrNull(fileMessageModels), effort: majorityOrNull(fileEfforts), ts: session.tsFirst ?? undefined });
+  session.frameId = frameIdOf(session.frame);
+  for (const [index, prompt] of prompts.entries()) {
+    prompt.frame = frameOf(promptFrames[index] as PromptFrameParts);
+    prompt.frameId = frameIdOf(prompt.frame);
+  }
+  for (const [position, call] of tools.entries()) {
+    const frameId = (call.prompt === null ? undefined : prompts[call.prompt]?.frameId) ?? session.frameId;
+    call.steps = [{ n: call.n, seg: 0, ...actionOf(actions, natives[position] as string), frameId }];
+  }
 
   return {
     session,

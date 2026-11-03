@@ -657,6 +657,7 @@ const readCursor = async (context: DepositContext, root: string, result: Deposit
         repoRoot: context.repoRoot,
         repoIdentity: context.repoIdentity,
         runtime: context.captureRuntime,
+        harness: 'cursor',
       });
       extract.session.harness = 'cursor';
       await commitCapture(context, key, extract, { size: session.messages, mtimeMs: session.lastUpdatedAt, rev });
