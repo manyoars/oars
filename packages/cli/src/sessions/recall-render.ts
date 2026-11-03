@@ -59,11 +59,18 @@ export const deltaOf = (asker: Frame | null, read: RecallRead): RecallDelta => {
   };
 };
 
+const closedNames = (values: readonly string[], isPublic: (value: string) => string | null): string[] =>
+  values.flatMap((value) => {
+    const name = isPublic(value);
+    return known(name) ? [name] : [];
+  });
+
+/** A class P row an agent also reads over MCP, so its names pass the same closed tests a rendered answer does, and a value they refuse is dropped. */
 export const evidenceOf = (read: RecallRead, asker: Frame | null): RecallEvidence => ({
-  ref: read.readId,
-  frameRange: { harnesses: read.harnesses, harnessVersions: read.harnessVersions, models: read.models },
-  firstDay: read.firstDay,
-  lastDay: read.lastDay,
+  ref: READ_ID.test(read.readId) ? read.readId : LITERAL,
+  frameRange: { harnesses: closedNames(read.harnesses, harnessName), harnessVersions: closedNames(read.harnessVersions, publicVersion), models: closedNames(read.models, publicModel) },
+  firstDay: publicDay(read.firstDay),
+  lastDay: publicDay(read.lastDay),
   n: read.n,
   clusters: read.clusters,
   delta: deltaOf(asker, read),
@@ -73,10 +80,7 @@ export const count = (value: number, noun: string): string => `${String(value)} 
 
 /** A range of public versions, newest last; a version the vocabulary refuses is dropped, never shown. */
 const versionRange = (versions: readonly string[]): string => {
-  const shown = versions.flatMap((version) => {
-    const name = publicVersion(version);
-    return known(name) ? [name] : [];
-  });
+  const shown = closedNames(versions, publicVersion);
   if (shown.length === 0) return 'version unknown';
   const sorted = [...shown].sort((a, b) => a.localeCompare(b, 'en', { numeric: true }));
   const [first] = sorted;
@@ -85,10 +89,7 @@ const versionRange = (versions: readonly string[]): string => {
 };
 
 const modelsOf = (models: readonly string[]): string => {
-  const shown = models.flatMap((model) => {
-    const name = publicModel(model);
-    return known(name) ? [name] : [];
-  });
+  const shown = closedNames(models, publicModel);
   return shown.length === 0 ? 'model unknown' : shown.join(', ');
 };
 

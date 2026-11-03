@@ -81,6 +81,28 @@ describe('MCP server', () => {
       expect(JSON.stringify(result)).not.toContain('Ignore');
       expect(JSON.stringify(stored)).not.toContain('Ignore');
     });
+
+    it.each([
+      ['pattern', { prefix: [readIdOf(SIG)] }, { prefix: ['0000000000000000'] }],
+      ['entity', { entity: 'Monitor' }, { entity: 'never-seen' }],
+      ['question', { family: 'recovery' }, { family: 'fit' }],
+      ['text', { text: 'wrong input' }, { text: 'never-seen' }],
+    ])('routes the %s form, recording a hit and a miss, with no signature text in the reply', async (form, hit, miss) => {
+      const staged = seeded();
+      const found = await ask(staged, hit);
+      expect(field(field(found, 'structuredContent'), 'kind')).toBe('hit');
+      expect(JSON.stringify(found)).not.toContain(EXAMPLE);
+      expect(JSON.stringify(found)).not.toContain('wrong input');
+      const missed = await ask(staged, miss);
+      expect(field(field(missed, 'structuredContent'), 'kind')).toBe('miss');
+      expect(textOf(missed)).toBe(MISS_TEXT);
+      const stored = await readRecalls(staged.storeDir);
+      expect(stored.map((recall) => [recall.mode, recall.query.form, recall.answer.kind])).toEqual([
+        ['pull', form, 'hit'],
+        ['pull', form, 'miss'],
+      ]);
+      expect(stored[0]?.answer.rendered).not.toContain(EXAMPLE);
+    });
   });
 
   it('answers a store failure inside tools/call with -32603 instead of rejecting', async () => {
