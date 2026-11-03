@@ -3,7 +3,7 @@
 // holds the old token's credits, while the old token answers 401 CUSTOMER_REVOKED.
 //
 // Not a `.test.ts` on purpose: the monorepo's root run and `npm run test:monorepo` skip it, as they skip the container smoke
-// test. It needs the aor-platform e2e stack (billing, the notification service and Mailpit) and this template running against it
+// test. It needs the platform e2e stack (billing, the notification service and Mailpit) and this template running against it
 // with the workload's SDK key, in non-dev mode, with its public URL registered as the template's address. The buyer is set up
 // by hand: one `calls-100` test-mode purchase made with a token and an email. Then
 //   OARS_E2E_BUYER_TOKEN=<that token> OARS_E2E_BUYER_EMAIL=<that email> npm run test:e2e -w templates/paid-api

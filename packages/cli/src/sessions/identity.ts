@@ -2,7 +2,7 @@
 // `public-vocabulary.ts`, so what may leave the machine is decided in that one file; anything it does not list becomes `<literal>`.
 
 import { mcpOf, type ActionTable, type CanonicalAction } from './actions.js';
-import { isMcpToolName, isRegistryVersion, LITERAL, PUBLIC_FLAGS, PUBLIC_HOSTS, PUBLIC_MCP_SERVERS, PUBLIC_PACKAGES, PUBLIC_PROGRAMS, PUBLIC_SKILLS, PUBLIC_SUBCOMMANDS } from './public-vocabulary.js';
+import { BUNDLING_PROGRAMS, isPublicMcpTool, isRegistryVersion, LITERAL, PUBLIC_FLAGS, PUBLIC_HOSTS, PUBLIC_MCP_SERVERS, PUBLIC_PACKAGES, PUBLIC_PROGRAMS, PUBLIC_SKILLS, PUBLIC_SUBCOMMANDS } from './public-vocabulary.js';
 import type { PullEcosystem, PullIdentity, ShellIdentity, StepIdentity, ToolPull } from './schema.js';
 
 /** A word of a shell command, as the tokenizer read it. */
@@ -21,23 +21,27 @@ const JOINED_VALUE = /^(-[A-Za-z])[^A-Za-z]/;
 const BARE_NUMBER = /^-\d+$/;
 export const NUMBER_FLAG = '-N';
 
-/** The names one flag word holds, without its value. A short cluster reads as its letters, so `-rf` and `-fr` agree and a value joined to a letter stays out. */
-const flagNames = (text: string): string[] => {
+/**
+ * The names one flag word holds, without its value. On a program that bundles, a short cluster reads as its letters, so `-rf` and `-fr` agree;
+ * a value joined to a flag there can still read as letters, one each and never the word. On any other program the cluster is the literal.
+ */
+const flagNames = (text: string, bundles: boolean): string[] => {
   const name = text.split('=')[0] ?? text;
   if (name.startsWith('--') || PUBLIC_FLAGS.has(name)) return [orLiteral(name, PUBLIC_FLAGS)];
   if (SHORT_LETTER.test(name)) return [name];
   if (BARE_NUMBER.test(name)) return [NUMBER_FLAG];
   const joined = JOINED_VALUE.exec(name)?.[1];
   if (joined !== undefined) return [joined];
-  return SHORT_CLUSTER.test(name) ? Array.from(name.slice(1), (letter) => `-${letter}`) : [LITERAL];
+  return bundles && SHORT_CLUSTER.test(name) ? Array.from(name.slice(1), (letter) => `-${letter}`) : [LITERAL];
 };
 
-const flagsOf = (args: readonly WordOfCommand[]): string[] => {
+const flagsOf = (program: string, args: readonly WordOfCommand[]): string[] => {
+  const bundles = BUNDLING_PROGRAMS.has(program);
   const flags = new Set<string>();
   for (const { text, quoted } of args) {
     if (text === '--') break;
     if (quoted || !text.startsWith('-') || text.includes('$')) continue;
-    for (const name of flagNames(text)) flags.add(name);
+    for (const name of flagNames(text, bundles)) flags.add(name);
   }
   return [...flags].sort();
 };
@@ -78,7 +82,7 @@ export const UNREAD_SHELL: ShellIdentity = { program: LITERAL, sub: null, flags:
 
 export const shellIdentity = (program: string, args: readonly WordOfCommand[], pulls: readonly ToolPull[]): ShellIdentity => {
   if (!PUBLIC_PROGRAMS.has(program)) return UNREAD_SHELL;
-  const identity: ShellIdentity = { program, sub: subOf(program, args), flags: flagsOf(args) };
+  const identity: ShellIdentity = { program, sub: subOf(program, args), flags: flagsOf(program, args) };
   return pulls.length === 0 ? identity : { ...identity, pulls: pulls.map(pullIdentity) };
 };
 
@@ -96,6 +100,6 @@ export const callIdentity = (table: ActionTable, action: CanonicalAction, native
   const mcp = action === 'mcp.call' ? mcpOf(table, native) : undefined;
   if (mcp === undefined) return { native: shown, identity: null };
   if (!PUBLIC_MCP_SERVERS.has(mcp.server)) return { native: LITERAL, identity: { server: LITERAL, tool: LITERAL } };
-  const tool = isMcpToolName(mcp.tool) ? mcp.tool : LITERAL;
-  return { native: tool === LITERAL ? LITERAL : native, identity: { server: mcp.server, tool } };
+  if (!table.toolDelimited || !isPublicMcpTool(mcp.server, mcp.tool)) return { native: LITERAL, identity: { server: mcp.server, tool: LITERAL } };
+  return { native, identity: { server: mcp.server, tool: mcp.tool } };
 };

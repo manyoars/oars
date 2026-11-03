@@ -10,6 +10,7 @@ import { templates } from './commands/templates.js';
 import { testCharge } from './commands/test-charge.js';
 import type { CredentialStore } from './credentials.js';
 import { CliError, ExitCode } from './errors.js';
+import { requirePurchasingOpen } from './issuer.js';
 import type { JournalStore } from './journal.js';
 import type { BooksBy, RecallQuery } from './sessions/query.js';
 import { closedQueryOf } from './sessions/recall-reads.js';
@@ -233,7 +234,17 @@ const buildProgram = (deps: RunDeps, argv: string[]): Command => {
       emit(deps, flag(options, 'json'), outcome);
     });
 
-  const purchasing = program.command('purchasing').description("set up an agent's purchasing: the card, the monthly cap, and what it bought");
+  // Hidden and refused until t465 opens paid agents (issuer.ts requirePurchasingOpen); the code stays for it.
+  const purchasing = program
+    .command('purchasing', { hidden: true })
+    .description("set up an agent's purchasing: the card, the monthly cap, and what it bought")
+    .hook('preAction', () => {
+      requirePurchasingOpen(deps);
+    })
+    // A command with subcommands and no action prints help before preAction runs; this makes bare `purchasing` hit the gate first.
+    .action(() => {
+      purchasing.help({ error: true });
+    });
 
   purchasing
     .command('card')
@@ -365,9 +376,9 @@ const buildProgram = (deps: RunDeps, argv: string[]): Command => {
 
   sessions
     .command('books')
-    .description('tokens, wall time, turns, errors, and verify-after-edit rate per prompt class, model, or harness')
-    .option('--by <key>', 'class, model, or harness (default class)', (value: string): BooksBy => {
-      if (value !== 'class' && value !== 'model' && value !== 'harness') throw new InvalidArgumentError('it must be class, model, or harness.');
+    .description('tokens, wall time, turns, errors, verify-after-edit rate, and the outcome signals (verify passed, stops, redos, commits, and commit survival) per prompt class, model, harness, or pull')
+    .option('--by <key>', 'class, model, harness, or pull (default class)', (value: string): BooksBy => {
+      if (value !== 'class' && value !== 'model' && value !== 'harness' && value !== 'pull') throw new InvalidArgumentError('it must be class, model, harness, or pull.');
       return value;
     })
     .option('--since <days>', 'only the last N days', positiveInteger)
@@ -375,7 +386,7 @@ const buildProgram = (deps: RunDeps, argv: string[]): Command => {
     .action(async (_options: OptionValues, command: Command) => {
       const options: OptionValues = command.optsWithGlobals();
       const picked = text(options, 'by');
-      const by: BooksBy = picked === 'model' || picked === 'harness' ? picked : 'class';
+      const by: BooksBy = picked === 'model' || picked === 'harness' || picked === 'pull' ? picked : 'class';
       emit(deps, flag(options, 'json'), await sessionsBooks(sessionDeps(deps), { by, sinceDays: count(options, 'since'), repo: text(options, 'repo') }));
     });
 

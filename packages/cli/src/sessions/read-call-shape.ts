@@ -4,6 +4,7 @@
 import { ACTION_TABLES, actionOf, type CanonicalAction } from './actions.js';
 import { UNKNOWN } from './cells.js';
 import { shapeMotif } from './motif.js';
+import { CALL_SHAPE_METHOD } from './read.js';
 import { fitReads, toolShapeId } from './recall-reads.js';
 import { body, rate, wilson, type DeriveFamily } from './read-support.js';
 
@@ -23,11 +24,16 @@ export const deriveCallShape: DeriveFamily = ({ pool, store }) =>
     if (cells.length === 0) return [];
     const calls = read.calls ?? read.count;
     return [
-      body('fit', 'call-shape', '1', cells, {
-        slice: { shape: toolShapeId(read.tool, read.keys), action },
-        value: { failureRate: rate(read.count, calls), failed: read.count, calls },
-        n: read.count,
-        interval: wilson(read.count, calls),
-      }),
+      body(
+        'fit',
+        cells,
+        {
+          slice: { shape: toolShapeId(read.tool, read.keys), action },
+          value: { failureRate: rate(read.count, calls), failed: read.count, calls },
+          n: read.count,
+          interval: wilson(read.count, calls),
+        },
+        CALL_SHAPE_METHOD,
+      ),
     ];
   });

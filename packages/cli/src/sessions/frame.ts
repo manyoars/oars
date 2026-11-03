@@ -2,8 +2,8 @@
 // and reading one motif across frames is how the record compares models, harnesses, versions, and dates.
 
 import { createHash } from 'node:crypto';
-import { closeSync, openSync, readSync } from 'node:fs';
-import { join } from 'node:path';
+import { closeSync, openSync, readFileSync, readSync, statSync } from 'node:fs';
+import { join, resolve } from 'node:path';
 import { FRAMEWORK_OF_FILE, FRAMEWORK_OF_PROGRAM, FRAMEWORKS, LANGUAGE_OF_EXTENSION, LANGUAGES, publicEffort, publicModel, publicVersion, REPO_SIZES, type RepoSize } from './public-vocabulary.js';
 import type { Frame, FrameStack } from './schema.js';
 
@@ -71,11 +71,19 @@ export const frameIdOf = (frame: Frame): string => {
 
 const INDEX_HEADER_BYTES = 12;
 
+/** Where a checkout's git index is. In a linked worktree or a submodule `.git` is a file whose `gitdir:` line names the real git folder, absolute or relative to the checkout. */
+const indexPathOf = (root: string): string => {
+  const dotGit = join(root, '.git');
+  if (statSync(dotGit).isDirectory()) return join(dotGit, 'index');
+  const pointer = /^gitdir:\s*(.+?)\s*$/m.exec(readFileSync(dotGit, 'utf8'))?.[1];
+  return pointer === undefined ? join(dotGit, 'index') : join(resolve(root, pointer), 'index');
+};
+
 /** How many files a repository tracks, from its git index's header: no git process, and null when there is no readable index. */
 export const repoFilesFromIndex = (root: string): number | null => {
   let descriptor: number | undefined;
   try {
-    descriptor = openSync(join(root, '.git', 'index'), 'r');
+    descriptor = openSync(indexPathOf(root), 'r');
     const header = Buffer.alloc(INDEX_HEADER_BYTES);
     const read = readSync(descriptor, header, 0, INDEX_HEADER_BYTES, 0);
     return read === INDEX_HEADER_BYTES && header.toString('latin1', 0, 4) === 'DIRC' ? header.readUInt32BE(8) : null;
