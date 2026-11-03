@@ -1,7 +1,7 @@
 # The `oars sessions` store (version 5)
 
 `oars sessions` keeps a local, deterministic memory of the operator's own Claude Code sessions: no model call, no network, nothing
-uploads. This page is the store's format. The types are in `packages/cli/src/sessions/schema.ts`; the commands are in the CLI README.
+uploads. `gold arms` is the one exception: it sends redacted text through your own Claude subscription. This page is the store's format. The types are in `packages/cli/src/sessions/schema.ts`; the commands are in the CLI README.
 
 ## Layout
 
