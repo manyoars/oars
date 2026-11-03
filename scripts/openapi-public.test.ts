@@ -15,7 +15,7 @@ const ok = (description: string, ref: string) => ({
   content: { 'application/json': { schema: { $ref: ref } } },
 });
 
-// A small stand-in for aor-platform's combined spec: three paths, one of them with an unlisted method, a
+// A small stand-in for the platform's combined spec: three paths, one of them with an unlisted method, a
 // schema chain (Order -> Line -> Money), a shared response component and schemas nothing listed uses.
 const source = {
   openapi: '3.1.0',
