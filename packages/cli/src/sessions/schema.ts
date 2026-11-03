@@ -35,13 +35,13 @@ import type { CanonicalAction } from './actions.js';
 import type { RepoSize } from './public-vocabulary.js';
 
 /** Stamped `cv` on every captured record. Bump it when the captured field list changes or a stored value of an existing captured record or skeleton changes: a bump re-reads every transcript. */
-export const CAPTURE_VERSION = '5';
+export const CAPTURE_VERSION = '6';
 
 /** Capture versions the reader derives from. A version-3 record is upgraded on read; a newer one is read for the fields this code knows. */
 export const OLDEST_READABLE_CAPTURE = 3;
 
 /** Stamped `v` on every derived record. A bump re-derives from the log; no transcript is read. */
-export const EXTRACTOR_VERSION = '5';
+export const EXTRACTOR_VERSION = '6';
 
 export const PROMPT_HEAD_CHARS = 300;
 export const ERROR_EXAMPLE_CHARS = 160;
@@ -176,8 +176,11 @@ export interface SessionObservation {
   usage: Usage;
 }
 
-/** What the last shell call after a prompt's last edit returned: `none` when there is no such call or the last one has no result, `na` when the prompt edited nothing. */
-export type PromptVerify = 'passed' | 'failed' | 'none' | 'na';
+/**
+ * What the last build or test runner after a prompt's last edit returned: `passed` and `failed` when the call's status reads that runner,
+ * `masked` when a pipe or a later command hides its exit, `none` when no runner ran or its call has no result, `na` when the prompt edited nothing.
+ */
+export type PromptVerify = 'passed' | 'failed' | 'masked' | 'none' | 'na';
 
 /** How the operator cut a prompt short: Esc or a new message (`interrupt`), or declining a tool call (`rejected`). */
 export type PromptStop = 'interrupt' | 'rejected';
@@ -220,10 +223,10 @@ export interface PromptObservation {
   /** The session's prompt fingerprint at the time of the prompt (kept under this name on the derived record), when one had been seen. */
   contextFingerprint: string | null;
   // The outcome signals (t747), kept separate on purpose: no composite. Optional because a version-2 line, read as written, predates them.
-  /** Exit status only: `passed` says the last shell call was clean, not that a test ran. */
+  /** Exit status of a build or test runner, not its coverage. Undefined when a shell call after the edit was captured before `segments` (CAPTURE 6), which cannot say what ran. */
   verify?: PromptVerify;
   stopped?: PromptStop | null;
-  /** A floor, not a count: `target` shows only a first-line `git commit`, so `git add . && git commit` is not seen until commits are captured. */
+  /** Commits the prompt's shell calls made, from the captured `commits`. A record captured before CAPTURE 6 counts only a first-line `git commit`. */
   commits?: number;
   /** A later prompt edited a path this one edited, within `REDO_WINDOW` prompts, with no commit `commits` can see between them. */
   redo?: boolean;
@@ -261,6 +264,42 @@ export interface ErrorObservation {
 
 export type ToolStatus = 'ok' | 'error' | 'none';
 
+/** A package a shell step pulled, in public names (`<literal>` outside the allowlist). */
+export interface PullIdentity {
+  registry: string;
+  name: string;
+  /** Null when the command stated none. */
+  version: string | null;
+}
+
+/** A shell step: its program, subcommand, and flag names, sorted and single. Never a flag's value. */
+export interface ShellIdentity {
+  program: string;
+  sub: string | null;
+  flags: string[];
+  /** Absent when the command pulled nothing. */
+  pulls?: PullIdentity[];
+}
+
+export type StepIdentity = ShellIdentity | { server: string; tool: string } | { skill: string } | { host: string | null } | null;
+
+export interface StepCost {
+  /** The output tokens of the call's response, shared evenly among that response's calls; null when it reported none. */
+  tokens: number | null;
+  durationMs: number | null;
+}
+
+/**
+ * How a step came about (recall spec Section 2.3), naming the step it came from by position. `next`: order within a prompt's line of work.
+ * `spawned`: the call in the main transcript that started this subagent. `retried`: the same action and identity, after that one failed.
+ * `after-error`: the call before this one failed.
+ */
+export interface StepEdge {
+  kind: 'next' | 'spawned' | 'retried' | 'after-error';
+  n: number;
+  seg: number;
+}
+
 /** One observed event in the canonical vocabulary of any harness (recall spec Section 2.2). Class P: it holds only positions, public names, and a frame hash. */
 export interface StepObservation {
   /** The `n` of the tool call this step came from. */
@@ -268,8 +307,18 @@ export interface StepObservation {
   /** Its position among that call's steps, from 0. */
   seg: number;
   action: CanonicalAction;
-  /** The harness's own name for the tool when the action table lists it, else `<literal>` (the tool record keeps it, class A). */
+  /** The harness's own name for the tool when the action table lists it or every name it holds is public, else `<literal>` (the tool record keeps it, class A). */
   native: string;
+  /** What the step acted on, in public names only; null for an action that has none (a file's path never appears here). */
+  identity: StepIdentity;
+  /** The call's status when it reports this segment; `none` for a segment it does not, such as one a pipe hides. */
+  status: ToolStatus;
+  /** Held on the first segment of a call; a later segment has nulls. */
+  cost: StepCost;
+  /** On a subagent's step, the `n` of the call that spawned it in the main transcript; null otherwise or when that call is not known. */
+  parent: number | null;
+  /** The edges that arrive at this step. */
+  edges: StepEdge[];
   /** The frame of the call's prompt, or the session's own frame before the first prompt. */
   frameId: string;
 }
@@ -277,7 +326,8 @@ export interface StepObservation {
 /**
  * One per tool call (register A28), captured. Classes: `A` account store: `session`, `parent`, `toolUseId`, `ts`, and a path-form
  * `target` (a salted hash); `P` pooled: `kind`, `cv`, `sid`, `rev`, `agentType`, `n`, `tool`, `status`, `keys`, `durationMs`,
- * `harnessVersion`, `side`, `prompt`, `targetBase`, and a shell-form `target` (program and subcommand).
+ * `harnessVersion`, `side`, `prompt`, `targetBase`, and a shell-form `target` (program and subcommand). `segments`, `pulls`, and `commits` are `A`:
+ * a plain word, a private package name, and a sha can each identify private work.
  */
 export interface ToolObservation {
   kind: 'tool';
@@ -315,6 +365,30 @@ export interface ToolObservation {
   prompt: number | null;
   /** What the call was in the canonical vocabulary; absent on a record captured before this field existed. Class P. */
   steps?: StepObservation[];
+  /** Each command of a shell call, in order (CAPTURE 6); on every shell call and no other. Absent on a record captured earlier. */
+  segments?: ShellSegment[];
+  /** What the call pulled (CAPTURE 6). Absent when it pulled nothing. */
+  pulls?: ToolPull[];
+  /** One entry per commit a clean shell call made, in order: the sha its result names, or null when it names none (CAPTURE 6). Absent when it made none. */
+  commits?: Array<string | null>;
+}
+
+/** One command of a shell call. */
+export interface ShellSegment {
+  /** The program's basename and its plain words: no flags, paths, variables, or quoted text; redacted. */
+  run: string;
+  /** Whether the call's status reports this command: false when a pipe follows it, a later `;`, `&`, newline, or `||` overrides it, or it runs in the background. */
+  read: boolean;
+}
+
+export type PullEcosystem = 'npm' | 'pypi' | 'cargo' | 'go' | 'gem' | 'brew' | 'skill' | 'plugin' | 'mcp';
+
+/** One package, MCP server, plugin, or skill a call names as pulled. No registry is asked, so the name is what the command says, redacted. */
+export interface ToolPull {
+  ecosystem: PullEcosystem;
+  name: string;
+  /** The version as stated, with its comparator unless that is `==`; null when none is stated. */
+  version: string | null;
 }
 
 /** One per failed tool result, captured and keyed by `toolUseId`. Classes: `A` account store: `session`, `toolUseId`, `line`
