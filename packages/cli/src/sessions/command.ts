@@ -11,7 +11,8 @@ import { serve } from './mcp.js';
 import { CAPTURE_VERSION, OLDEST_READABLE_CAPTURE, type StepRow } from './schema.js';
 import { deposit, frozenSessions, loadStore, readCalls, readRedactDomains, readSkeletons, slugOf, type SessionsRuntime, type Store } from './store.js';
 import { formatStepCounters, inputKey, newContext, readSteps, stampKey, runDeposit, runStep, stepCounters, stuckSteps, type StuckStep } from './steps.js';
-import { CAPTURE_INVARIANTS, formatVerify, verifyAll, verifyCaptured, type InvariantResult } from './verify.js';
+import { auditCounts, auditStore, formatAudit, type SessionAudit, type T0Counts } from './audit.js';
+import { CAPTURE_INVARIANTS, formatSessionResults, formatVerify, verifyAll, verifyCaptured, verifySessions, type InvariantResult, type SessionVerification } from './verify.js';
 
 export interface SessionsDeps {
   sessions: SessionsRuntime | undefined;
@@ -151,6 +152,10 @@ export interface VerifyReport {
   stuck: StuckStep[];
   /** Sessions behind the current capture version whose transcript is gone from the harness and `raw/` (or, for a Cursor session, whose composer is gone from Cursor): counted apart from `cv-behind`, never a strict failure. */
   cvFrozen: number;
+  /** Every session's rows 1 to 10 with a status each (t743; spec 5.4 item 5): `pass`, `fail`, or `not run` when the row had nothing to check. */
+  sessionResults: SessionVerification[];
+  /** Layer 4 at T0, local (spec 2.4): each session's raw-file match, recomputed root, and count bindings, with the count of each row of the result table. */
+  audit: { counts: T0Counts; sessions: SessionAudit[] };
 }
 
 /** With `strict`, any violated invariant or stuck step also fails the command (exit 4) after the full report is printed; the report is built first so callers can emit it. */
@@ -166,19 +171,24 @@ export const sessionsVerify = async (deps: SessionsDeps, options: { session: str
     // A session behind the current version whose transcript is in neither the harness nor raw/ (or, for a Cursor session, whose composer is gone from Cursor) can never be captured again: counted apart, never a strict failure.
     const frozen = await frozenSessions(runtime, captured.filter((session) => Number(session.cv) >= OLDEST_READABLE_CAPTURE && Number(session.cv) < Number(CAPTURE_VERSION)));
     const results = [...verifyAll(skeletons), ...verifyCaptured(captured, mine(store.tools), frozen)];
+    const sessionResults = verifySessions(skeletons, captured, mine(store.tools), frozen);
+    const audits = await auditStore(runtime, captured, skeletons);
+    const audit = { counts: auditCounts(audits), sessions: audits };
+    // A root that misses a file which matches, or records that disagree with each other, leave `W` at 0 (spec 2.4): they fail `--strict` like a violated invariant.
+    const merkleFailed = (['root mismatch', 'counts do not bind'] as const).filter((result) => audit.counts[result] > 0).map((result) => `merkle: ${result}`);
     // Steps whose key failed on three runs in a row (spec 4.4), read before this run's own row is appended; each fails `--strict` like a violated invariant.
     // A step log that cannot be read leaves the invariant check as it is: the stuck check is an extra, never a reason `verify` fails.
     // A verify that got here has succeeded, so a verify streak is the one this run ends and is not listed.
     const stuck = stuckSteps(await readSteps(storeDir).catch((): StepRow[] => [])).filter((entry) => entry.step !== 'verify');
-    const report: VerifyReport = { sessions: skeletons.length, unreadable, cvFrozen: frozen.size, invariants: results.map((result) => ({ ...result, pass: result.violations === 0 })), stuck };
-    const failed = [...results.filter((result) => result.violations > 0).map((result) => result.name), ...(unreadable > 0 ? ['unreadable skeletons'] : []), ...stuck.map((entry) => `stuck: ${entry.step}`)];
+    const report: VerifyReport = { sessions: skeletons.length, unreadable, cvFrozen: frozen.size, invariants: results.map((result) => ({ ...result, pass: result.violations === 0 })), stuck, sessionResults, audit };
+    const failed = [...results.filter((result) => result.violations > 0).map((result) => result.name), ...(unreadable > 0 ? ['unreadable skeletons'] : []), ...merkleFailed, ...stuck.map((entry) => `stuck: ${entry.step}`)];
     const stuckLines = stuck.map((entry) => `FAIL  ${entry.step} is stuck: key ${entry.key} failed ${String(entry.runs)} runs in a row: ${entry.error}`);
     const highWater = mine([...store.sessions, ...store.subagents]).map((session) => `${session.session}:${String(session.rev)}:${session.cv}`).sort();
     const outcome = {
       failed,
       report,
       document: { ok: true, ...report, newerCaptures: store.newerCaptures },
-      text: [formatVerify(results, skeletons.length), ...(frozen.size > 0 ? [`${String(frozen.size)} cv-frozen sessions: behind the current capture version, but the transcript is gone from the harness and raw/ (or, for a Cursor session, the composer is gone from Cursor), so they cannot be captured again`] : []), ...newerNotice(store), ...(unreadable > 0 ? [`FAIL  ${String(unreadable)} unreadable skeleton files (torn or corrupted); redeposit to rebuild them`] : []), ...stuckLines].join('\n'),
+      text: [formatVerify(results, skeletons.length), ...(formatSessionResults(sessionResults) === '' ? [] : [formatSessionResults(sessionResults)]), formatAudit(audits), ...(frozen.size > 0 ? [`${String(frozen.size)} cv-frozen sessions: behind the current capture version, but the transcript is gone from the harness and raw/ (or, for a Cursor session, the composer is gone from Cursor), so they cannot be captured again`] : []), ...newerNotice(store), ...(unreadable > 0 ? [`FAIL  ${String(unreadable)} unreadable skeleton files (torn or corrupted); redeposit to rebuild them`] : []), ...stuckLines].join('\n'),
     };
     const cvBehind = results.find((result) => result.name === CAPTURE_INVARIANTS[0])?.violations ?? 0;
     // The key is the sessions checked, each at its rev and cv, and the code's ev (spec 4.2).

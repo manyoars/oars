@@ -173,14 +173,20 @@ export const verifySkeleton = (skeleton: Skeleton, delegated: readonly SkeletonL
 /** A subagent transcript is stored as `<parent>~...~agent-<id>`; a main session's id holds no `~`. */
 const mainSessionOf = (session: string): string => session.split('~')[0] ?? session;
 
-/** Sums each invariant over many skeletons, each main session's cost-state checked with its subagent transcripts' lines. */
-export const verifyAll = (skeletons: readonly Skeleton[]): InvariantResult[] => {
-  const totals: InvariantResult[] = INVARIANTS.map((name) => ({ name, checked: 0, violations: 0 }));
+/** The subagent transcripts' lines, keyed by the main session they belong to. */
+const delegatedLines = (skeletons: readonly Skeleton[]): Map<string, SkeletonLine[]> => {
   const delegated = new Map<string, SkeletonLine[]>();
   for (const skeleton of skeletons) {
     const parent = mainSessionOf(skeleton.session);
     if (parent !== skeleton.session) delegated.set(parent, (delegated.get(parent) ?? []).concat(skeleton.lines));
   }
+  return delegated;
+};
+
+/** Sums each invariant over many skeletons, each main session's cost-state checked with its subagent transcripts' lines. */
+export const verifyAll = (skeletons: readonly Skeleton[]): InvariantResult[] => {
+  const totals: InvariantResult[] = INVARIANTS.map((name) => ({ name, checked: 0, violations: 0 }));
+  const delegated = delegatedLines(skeletons);
   for (const skeleton of skeletons) {
     for (const [index, result] of verifySkeleton(skeleton, delegated.get(skeleton.session)).entries()) {
       const total = totals[index];
@@ -262,3 +268,35 @@ export const verifyCaptured = (sessions: readonly SessionObservation[], tools: r
     },
   ];
 };
+
+/** `not run` when a row had nothing to check (a session behind the current capture version for rows 8 to 10, a transcript with no stamped lines for row 3, and so on). */
+export type RowStatus = 'pass' | 'fail' | 'not run';
+
+/** One session's result: the ten rows of {@link INVARIANTS} then {@link CAPTURE_INVARIANTS}, each with its status (t743; spec 5.4 item 5). */
+export interface SessionVerification {
+  session: string;
+  invariants: Array<InvariantResult & { status: RowStatus }>;
+}
+
+const statusOf = (result: InvariantResult): RowStatus => (result.violations > 0 ? 'fail' : result.checked === 0 ? 'not run' : 'pass');
+
+/**
+ * A result for every skeleton: {@link verifySkeleton} with the session's subagent transcripts' lines as `delegated`, then {@link verifyCaptured} over
+ * the session's own capture records. Row 8 (one `sid`) is read within the one session, so it cannot fail here; the store-wide row stays in `verifyCaptured`
+ * over all sessions.
+ */
+export const verifySessions = (skeletons: readonly Skeleton[], sessions: readonly SessionObservation[], tools: readonly ToolObservation[], frozen: ReadonlySet<string> = new Set<string>()): SessionVerification[] => {
+  const delegated = delegatedLines(skeletons);
+  return skeletons.map((skeleton) => {
+    const own = sessions.filter((session) => session.session === skeleton.session);
+    const results = [...verifySkeleton(skeleton, delegated.get(skeleton.session)), ...verifyCaptured(own, tools.filter((tool) => tool.session === skeleton.session), frozen)];
+    return { session: skeleton.session, invariants: results.map((result) => ({ ...result, status: statusOf(result) })) };
+  });
+};
+
+/** One line per session with a failing row, naming the rows; empty when none fails. Ids and row names only. */
+export const formatSessionResults = (results: readonly SessionVerification[]): string =>
+  results
+    .filter((entry) => entry.invariants.some((row) => row.status === 'fail'))
+    .map((entry) => `      ${entry.session}: FAIL ${entry.invariants.filter((row) => row.status === 'fail').map((row) => row.name).join('; ')}`)
+    .join('\n');
