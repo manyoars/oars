@@ -301,6 +301,18 @@ describe('a link at any level that leads nowhere or to the wrong kind of entry i
     expect((await checkSession(staged.runtime, t.termsFile, 'p', S_D)).reason).toBe('unreadable');
   });
 
+  it('aborts with no list when the store log is a link that leads nowhere', async (ctx) => {
+    const t = setup();
+    write(t.main('p', 's20'), [CLEAN]);
+    if (!makeLink(join(t.staged.root, 'nowhere'), join(t.staged.storeDir, 'observations.jsonl'), 'file')) return ctx.skip();
+    const failure = await scanStore(t.staged.runtime, t.termsFile).then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+    expect(failure).toBeInstanceOf(CliError);
+    expect(failure instanceof CliError ? failure.message : '').toContain('no list was written');
+  });
+
   it('lists a session-named link to a file, as the gate reads it', async (ctx) => {
     const t = setup();
     write(t.main('p', 's19'), [CLEAN]);

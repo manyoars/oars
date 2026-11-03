@@ -32,7 +32,14 @@ vi.mock('node:fs/promises', async (importOriginal) => {
   rename.mockImplementation((from, to) =>
     typeof to === 'string' && to.endsWith('norename.jsonl') ? Promise.reject(Object.assign(new Error(`EPERM: operation not permitted, rename '${String(from)}' -> '${to}'`), { code: 'EPERM' })) : actual.rename(from, to),
   );
-  return { ...actual, readdir, stat, rename };
+  // A path that cannot be examined without following it (EACCES), named `nolstat`.
+  const lstat = vi.fn(actual.lstat);
+  lstat.mockImplementation((path, options) =>
+    typeof path === 'string' && path.endsWith('nolstat.jsonl') && !path.includes(`${sep}raw${sep}`)
+      ? Promise.reject(Object.assign(new Error(`EACCES: permission denied, lstat '${path}'`), { code: 'EACCES' }))
+      : actual.lstat(path, options),
+  );
+  return { ...actual, readdir, stat, rename, lstat };
 });
 vi.mock('node:fs', async (importOriginal) => {
   const actual = await importOriginal<typeof fs>();
@@ -105,6 +112,16 @@ describe('an unreadable part of a session', () => {
     mkdirSync(join(raw, '..'), { recursive: true });
     writeFileSync(raw, `${CLEAN}\n`);
     expect(await checkSession(t.staged.runtime, t.termsFile, 'p', 'nostat')).toEqual({ excluded: true, reason: 'unreadable', hits: [] });
+  });
+
+  it('excludes a session whose main cannot be examined by lstat, though the raw copy is clean', async () => {
+    const t = setup();
+    t.put('nolstat.jsonl', CLEAN);
+    const raw = join(t.staged.storeDir, 'raw', 'p', 'nolstat.jsonl');
+    mkdirSync(join(raw, '..'), { recursive: true });
+    writeFileSync(raw, `${CLEAN}
+`);
+    expect(await checkSession(t.staged.runtime, t.termsFile, 'p', 'nolstat')).toEqual({ excluded: true, reason: 'unreadable', hits: [] });
   });
 
   it('closes the file it stopped reading at a hit', async () => {
