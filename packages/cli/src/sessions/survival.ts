@@ -43,13 +43,13 @@ const runGit: Git = (root, args, stdin) =>
   new Promise((resolve, reject) => {
     const child = execFile(
       'git',
-      ['-C', root, ...args],
+      ['-c', 'protocol.allow=never', '-C', root, ...args],
       {
         encoding: 'utf8',
         timeout: GIT_TIMEOUT_MS,
         maxBuffer: GIT_MAX_BUFFER,
         windowsHide: true,
-        // A partial clone would fetch a missing object from its remote, and this reads no network. A `GIT_DIR` inherited from a caller's hook would read some other repository than the one named.
+        // A partial clone would fetch a missing object from its remote, and this reads no network: `protocol.allow` refuses it on any git, while `GIT_NO_LAZY_FETCH` needs about 2.45 or later. A `GIT_DIR` inherited from a caller's hook would read some other repository than the one named.
         env: { ...process.env, GIT_NO_LAZY_FETCH: '1', GIT_OPTIONAL_LOCKS: '0', GIT_DIR: undefined, GIT_WORK_TREE: undefined },
       },
       (error, stdout) => {
