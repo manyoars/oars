@@ -925,12 +925,12 @@ export const loadStore = async (storeDir: string): Promise<Store> => {
   }
   const redact = makeRedactor((await readState(storeDir)).redactDomains);
   const agents: (SessionCapture & { parent: string })[] = [];
-  for (const { session: written, prompts, tools: writtenTools, errorLines } of captured.values()) {
+  for (const { session: written, prompts, tools: writtenTools, errorLines: writtenErrorLines } of captured.values()) {
     if (written === undefined) continue;
     // One tool call is one record: a replay an older capture wrote beside the call is folded here (t762).
-    const folded = foldToolRows(writtenTools);
+    const folded = foldToolRows(writtenTools, writtenErrorLines);
     const session = withoutReplays(written, folded.dropped);
-    const { tools } = folded;
+    const { tools, errorLines } = folded;
     if (Number(session.cv) > Number(CAPTURE_VERSION)) store.newerCaptures += 1;
     store.tools.push(...tools);
     if (session.parent !== null) {
