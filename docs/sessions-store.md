@@ -140,7 +140,7 @@ target and on nothing else.
 
 `oars sessions deposit` and the nightly run, never a hook, read the repository of each allowlisted folder and append one line per changed
 sha to `commit-survival.jsonl`: `{ sha, state, day }`, with `sha` as captured (class A), `state` (class P), and a day-resolution `day`
-(class A). Only a call in a main transcript whose `ts` is more than `SURVIVAL_DAYS` (7) old counts, so a sha `commits` could not read and a
+(class P). Only a call in a main transcript whose `ts` is more than `SURVIVAL_DAYS` (7) old counts, so a sha `commits` could not read and a
 subagent's commit are not observed. `git commit -q` prints no `[branch sha]` line, so a quiet commit's sha is read only when a read-back is
 the call's final command; a store that commits quietly observes few of its commits. The latest line of a sha wins. It is a separate file, so
 what `verify` checks is untouched.
