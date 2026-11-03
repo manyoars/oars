@@ -129,13 +129,26 @@ describe('an entity read names itself', () => {
   const entity = (tool: string): RecallRead => read({ family: 'entity', tool, keys: [], calls: null, count: 4, followed: [] });
 
   it.each([
-    ['a model', 'claude-opus-5-5'],
     ['a canonical action', 'file.read'],
     ['a tool of the asking harness', 'Monitor'],
     ['a tool of another harness', 'run_terminal_cmd'],
     ['a published MCP server', 'github'],
   ])('%s by its name', (_kind, name) => {
     expect(renderAnswer([entity(name)], frame()).rendered).toContain(`\n${name} | 4 calls,`);
+  });
+
+  it('a model by its name and in turns, because a model is not called', () => {
+    expect(renderAnswer([entity('claude-opus-5-5')], frame()).rendered).toContain('\nclaude-opus-5-5 | 4 turns,');
+  });
+
+  it.each([
+    ['next-step', 'calls'],
+    ['recovery', 'errors'],
+    ['fit', 'errors'],
+    ['cost', 'observations'],
+    ['live', 'observations'],
+  ] as const)('a %s read with no denominator counts %s', (family, noun) => {
+    expect(renderAnswer([read({ family, tool: 'Monitor', keys: [], calls: null, count: 4, followed: [] })], frame()).rendered).toContain(`| 4 ${noun},`);
   });
 
   it('a name no closed list holds as the literal', () => {
