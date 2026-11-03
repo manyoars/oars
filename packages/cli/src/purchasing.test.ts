@@ -2,6 +2,7 @@ import { http, HttpResponse } from 'msw';
 import { describe, expect, it } from 'vitest';
 import { run } from './cli.js';
 import { ExitCode } from './errors.js';
+import { LAUNCH_FLAG_URL } from './issuer.js';
 import { stepKey } from './journal.js';
 import { API, harness, server, useServer } from './test-support.js';
 
@@ -315,5 +316,39 @@ describe('oars purchasing list', () => {
 
     expect(h.out.join('')).toContain('FAILED (PURCHASE_DECLINED)');
     expect(h.out.join('')).toContain('  LIVE  ');
+  });
+});
+
+describe('oars purchasing is closed until t465 opens it (V13: nothing is sold before business verification)', () => {
+  it('is not listed in oars --help', async () => {
+    const h = harness();
+    await expect(run(['--help'], h.deps)).resolves.toBe(ExitCode.OK);
+    expect(h.out.join('')).toContain('templates');
+    expect(h.out.join('')).not.toContain('purchasing');
+  });
+
+  it.each([[], ['card', '--mode', 'TEST'], ['cap', AGENT, '--mode', 'TEST', '--usd', '5'], ['list', AGENT]])('refuses `purchasing %s` (bare included) even when the launch flag says launched, with no flag call and no API call', async (...args) => {
+    const h = harness({ OARS_ISSUER_URL: '' });
+    let flagCalls = 0;
+    server.use(http.get(LAUNCH_FLAG_URL, () => { flagCalls += 1; return HttpResponse.json({ launched: true }); }));
+    const seen = route('get', PAYMENT_METHOD, () => HttpResponse.json({}));
+    expect(await run(['purchasing', ...args, '--json'], h.deps)).toBe(ExitCode.USAGE);
+    expect(JSON.parse(h.out[0] ?? '')).toMatchObject({ ok: false, step: 'usage' });
+    expect(h.out.join('')).toContain('Paid agents are not open yet');
+    expect(flagCalls).toBe(0);
+    expect(seen).toEqual([]);
+  });
+
+  it('bare `purchasing` with the gate open prints its subcommands to stderr and exits 2 (usage)', async () => {
+    const h = harness({ OARS_API_KEY: 'key-123' });
+    expect(await run(['purchasing'], h.deps)).toBe(ExitCode.USAGE);
+    expect(h.err.join('')).toMatch(/card/);
+    expect(h.err.join('')).toMatch(/list/);
+  });
+
+  it('runs when OARS_ISSUER_URL names a platform of your own', async () => {
+    const h = harness({ OARS_API_KEY: 'key-123' });
+    cardRead(() => HttpResponse.json(view({ mode: 'TEST', status: 'ACTIVE', brand: 'visa', last4: '4242' })));
+    expect(await run(['purchasing', 'card', '--mode', 'TEST'], h.deps)).toBe(ExitCode.OK);
   });
 });
