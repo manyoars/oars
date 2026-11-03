@@ -4,7 +4,7 @@ import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSyn
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { deposit } from './store.js';
+import { deposit, loadStore } from './store.js';
 import { addProject, cleanup, stage, type Staged } from './test-support.js';
 import { readSurvival, recordSurvival, survivalFile, SURVIVAL_DAYS, type Git } from './survival.js';
 import { slugOf } from './allow.js';
@@ -46,8 +46,8 @@ const publish = (dir: string): void => {
   gitIn(dir, 'update-ref', 'refs/remotes/origin/main', 'HEAD');
 };
 
-const pointOriginHead = (dir: string): void => {
-  gitIn(dir, 'symbolic-ref', 'refs/remotes/origin/HEAD', 'refs/remotes/origin/main');
+const pointOriginHead = (dir: string, branch = 'main'): void => {
+  gitIn(dir, 'symbolic-ref', 'refs/remotes/origin/HEAD', `refs/remotes/origin/${branch}`);
 };
 
 const transcript = (cwd: string, commits: ReadonlyArray<{ sha: string; ts?: string }>, firstCwd = cwd): string[] => [
@@ -283,6 +283,93 @@ describe('recordSurvival', () => {
     };
     const git: Git = (_root, args) => Promise.resolve(answers(args));
     expect(await recordSurvival(s.runtime, [project], () => NOW, git)).toEqual({ survived: 0, reverted: 1, unreachable: 0, unknown: 0 });
+  });
+
+  it('takes the default branch from origin/HEAD, so a repository whose default is neither main nor master reads against its own', async () => {
+    const repo = makeRepo();
+    gitIn(repo, 'update-ref', 'refs/remotes/origin/develop', 'HEAD');
+    const sha = commitIn(repo, 'main-only');
+    publish(repo);
+    pointOriginHead(repo, 'develop');
+    const { s, project } = await staged(repo, [{ sha }]);
+    expect(await recordSurvival(s.runtime, [project], () => NOW)).toEqual({ survived: 0, reverted: 0, unreachable: 1, unknown: 0 });
+  });
+
+  it('reads no commit from a sidechain call in the main transcript', async () => {
+    const repo = makeRepo();
+    const sha = commitIn(repo, 'side');
+    publish(repo);
+    const s = stage('unused');
+    const project = slugOf(repo);
+    const onSidechain = transcript(repo, [{ sha }]).map((line, index) => (index === 0 ? line : JSON.stringify({ ...(JSON.parse(line) as object), isSidechain: true })));
+    addProject(s, project, 'one', onSidechain);
+    await deposit(s.runtime, { allow: [project], redactDomains: [], now: () => NOW });
+    expect((await loadStore(s.storeDir)).tools.flatMap((tool) => tool.commits ?? [])).toEqual([sha]);
+    expect(await recordSurvival(s.runtime, [project], () => NOW)).toEqual({ survived: 0, reverted: 0, unreachable: 0, unknown: 0 });
+    expect(lines(s)).toEqual([]);
+  });
+
+  it('reads no commit a subagent transcript names', async () => {
+    const repo = makeRepo();
+    const sha = commitIn(repo, 'agent');
+    publish(repo);
+    const s = stage('unused');
+    const project = slugOf(repo);
+    addProject(s, project, 'one', transcript(repo, []));
+    const subagents = join(s.projectsRoot, project, 'one', 'subagents');
+    mkdirSync(subagents, { recursive: true });
+    writeFileSync(join(subagents, 'agent-x.jsonl'), `${transcript(repo, [{ sha }]).join('\n')}\n`);
+    await deposit(s.runtime, { allow: [project], redactDomains: [], now: () => NOW });
+    expect((await loadStore(s.storeDir)).tools.flatMap((tool) => tool.commits ?? [])).toEqual([sha]);
+    expect(await recordSurvival(s.runtime, [project], () => NOW)).toEqual({ survived: 0, reverted: 0, unreachable: 0, unknown: 0 });
+    expect(lines(s)).toEqual([]);
+  });
+
+  describe('a transcript that names no usable cwd', () => {
+    /** One old commit under a `cwd` of another project, then `after`: git must never run and the sha must read unknown. */
+    const expectUnread = async (after: (repo: string, elsewhere: string) => string[]): Promise<void> => {
+      const repo = makeRepo();
+      const sha = commitIn(repo, 'kept');
+      publish(repo);
+      // A real repository, so that reading a cwd of another project would run git and fail this.
+      const elsewhere = makeRepo();
+      const s = stage('unused');
+      const project = slugOf(repo);
+      addProject(s, project, 'one', [...transcript(elsewhere, [{ sha }]), ...after(repo, elsewhere)]);
+      await deposit(s.runtime, { allow: [project], redactDomains: [], now: () => NOW });
+      let calls = 0;
+      const git: Git = () => {
+        calls += 1;
+        return Promise.reject(new Error('git must not run'));
+      };
+      expect(await recordSurvival(s.runtime, [project], () => NOW, git)).toEqual({ survived: 0, reverted: 0, unreachable: 0, unknown: 1 });
+      expect(calls).toBe(0);
+    };
+    const filler = (cwd: string): string => JSON.stringify({ type: 'system', timestamp: OLD, cwd });
+
+    it('stops looking after line 200, so a matching cwd on line 201 is never read', async () => {
+      // `transcript` writes 3 lines for one commit, so 197 fillers end at line 200.
+      await expectUnread((repo, elsewhere) => [...Array.from({ length: 197 }, () => filler(elsewhere)), filler(repo)]);
+    });
+
+    it('reads no repository when no line carries a cwd of the project', async () => {
+      await expectUnread((_repo, elsewhere) => [filler(elsewhere)]);
+    });
+  });
+
+  it('reads both shas when two allowlisted projects share one repository root', async () => {
+    const repo = makeRepo();
+    const inRepo = commitIn(repo, 'in-repo');
+    const inWorktree = commitIn(repo, 'in-worktree');
+    publish(repo);
+    const worktree = join(repo, '.claude', 'worktrees', 'x');
+    const s = stage('unused');
+    addProject(s, slugOf(repo), 'one', transcript(repo, [{ sha: inRepo }]));
+    addProject(s, slugOf(worktree), 'two', transcript(worktree, [{ sha: inWorktree }]));
+    const allow = [slugOf(repo), slugOf(worktree)];
+    await deposit(s.runtime, { allow, redactDomains: [], now: () => NOW });
+    expect(await recordSurvival(s.runtime, allow, () => NOW)).toEqual({ survived: 2, reverted: 0, unreachable: 0, unknown: 0 });
+    expect(Object.fromEntries(await readSurvival(s.storeDir))).toEqual({ [inRepo]: 'survived', [inWorktree]: 'survived' });
   });
 
   it('fails open: a store it cannot read returns null and never throws', async () => {
