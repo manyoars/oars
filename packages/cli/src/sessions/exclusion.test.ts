@@ -269,7 +269,7 @@ describe('a link at any level that leads nowhere or to the wrong kind of entry i
   );
 
   it.for(cases)('$level as a $target link in $source reads unreadable (stops the scan: $stops)', async ({ level, target, stops, source }, ctx) => {
-      const t = setup();
+    const t = setup();
     const { staged } = t;
     const root = source === 'projects' ? staged.projectsRoot : join(staged.storeDir, 'raw');
     const other = source === 'projects' ? join(staged.storeDir, 'raw') : staged.projectsRoot;
@@ -295,9 +295,7 @@ describe('a link at any level that leads nowhere or to the wrong kind of entry i
     if (level === 'projects root' || level === 'store dir' || level === 'raw root') {
       // Roots: a clean harness main stays in place unless the root is the projects root itself.
       write(join(staged.projectsRoot, 'p', `${S_D}.jsonl`), [CLEAN]);
-      if (level === 'projects root') rmSync(at, { recursive: true, force: true });
-      if (level === 'store dir') rmSync(at, { recursive: true, force: true });
-      if (level === 'raw root') rmSync(at, { recursive: true, force: true });
+      rmSync(at, { recursive: true, force: true });
     }
     if (level === 'main' || level === 'project folder') rmSync(at, { recursive: true, force: true });
     if (!makeLink(aim, at, type)) return ctx.skip();
