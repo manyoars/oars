@@ -321,7 +321,7 @@ One store can hold several repositories, and neither the G1 reading nor the Sess
   into repositories by slug: a worktree folds into its repository, and a folder that extends another stored folder joins the shortest.
   Three consequences:
   - Sibling folders whose slugs share a prefix (`app` and `app-two`) share one window.
-  - A nested repository (`tradeaor/oars`) ranks by its parent's window while `measure --repo tradeaor/oars` counts only itself, so the
+  - A nested repository (`parent/oars`) ranks by its parent's window while `measure --repo parent/oars` counts only itself, so the
     two readings differ.
   - A stored parent folder is a prefix of its children, so one allow-listed session from the parent (the home folder, or the folder
     holding several checkouts) folds those repositories into one window and the isolation reverts to the whole store. Keep such a

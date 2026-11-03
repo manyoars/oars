@@ -21,7 +21,7 @@ const ISSUER_URL = process.env.OARS_LIVE_ISSUER_URL ?? 'http://localhost:8180/re
 const required = (name: string): string => {
   const value = process.env[name];
   if (value === undefined || value === '') {
-    throw new Error(`${name} is not set. The live login signs in as a user of the realm at ${ISSUER_URL}: set OARS_LIVE_USERNAME and OARS_LIVE_PASSWORD.`);
+    throw new Error(`${name} is not set. The live login signs in as a user of the realm at ${ISSUER_URL}: set OARS_LIVE_USERNAME, OARS_LIVE_PASSWORD, and OARS_LIVE_AUDIENCE.`);
   }
   return value;
 };
@@ -107,9 +107,10 @@ interface Session {
   configDir: string;
   username: string;
   password: string;
+  audience: string;
 }
 
-const loginThenLogout = async ({ api, configDir, username, password }: Session): Promise<void> => {
+const loginThenLogout = async ({ api, configDir, username, password, audience }: Session): Promise<void> => {
   const out: string[] = [];
   const err: string[] = [];
   let announce: (url: string) => void = () => undefined;
@@ -147,13 +148,13 @@ const loginThenLogout = async ({ api, configDir, username, password }: Session):
   expect(await login, err.join('')).toBe(ExitCode.OK);
   expect(JSON.parse(out.join(''))).toEqual({ ok: true, email: username });
 
-  // The exchange got a real Keycloak access token for this client, issued for the platform.
+  // The exchange got a real Keycloak access token for this client, issued for the audience the realm names.
   const [exchanged = ''] = api.exchanged;
   expect(api.exchanged).toHaveLength(1);
   expect(claim(exchanged, 'azp')).toBe('oars-cli');
   expect(claim(exchanged, 'iss')).toBe(ISSUER_URL);
   expect(claim(exchanged, 'email')).toBe(username);
-  expect(JSON.stringify(claim(exchanged, 'aud'))).toContain('aor-platform');
+  expect(JSON.stringify(claim(exchanged, 'aud'))).toContain(audience);
 
   const stored = await deps.store.read();
   expect(stored).toMatchObject({ issuerUrl: ISSUER_URL, apiUrl: api.url, email: username, accessToken: 'stub-api-access-token' });
@@ -174,10 +175,11 @@ describe('oars login against a live Keycloak', () => {
   it('receives tokens once the device code is approved, then logout revokes the refresh token', async () => {
     const username = required('OARS_LIVE_USERNAME');
     const password = required('OARS_LIVE_PASSWORD');
+    const audience = required('OARS_LIVE_AUDIENCE');
     const api = await startStubApi();
     const configDir = await mkdtemp(join(tmpdir(), 'oars-live-'));
     try {
-      await loginThenLogout({ api, configDir, username, password });
+      await loginThenLogout({ api, configDir, username, password, audience });
     } finally {
       await api.close();
       await rm(configDir, { recursive: true, force: true });
