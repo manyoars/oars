@@ -28,6 +28,19 @@ describe('recovery', () => {
     expect(JSON.stringify(read)).not.toContain('no such file');
   });
 
+  it('counts one row per session and tool-use id, and a row with no id as its own call', () => {
+    const first = error('s1', SIG, { toolUseId: 'call-1', next: ['Edit'] });
+    const replay = error('s1', SIG, { toolUseId: 'call-1', next: ['Edit'], ts: '2026-11-02T10:00:00.000Z' });
+    const [read] = recovery({ ...failed, errors: [first, replay] });
+    expect(read?.value).toMatchObject({ errors: 1, sessions: 1, firstSeen: '2026-11-01', lastSeen: '2026-11-01', following: { 'file.edit': 1 } });
+    expect(read?.n).toBe(1);
+    expect(recovery({ ...failed, errors: [replay, first] })).toEqual(recovery({ ...failed, errors: [first, replay] }));
+    expect(recovery({ ...failed, errors: [error('s1', SIG, { toolUseId: null }), error('s1', SIG, { toolUseId: null })] })[0]?.n).toBe(2);
+    expect(recovery({ ...failed, errors: [first, { ...first, session: 's2' }] })[0]?.n).toBe(2);
+    expect(recovery({ ...failed, errors: [first, { ...first, agent: 's1~agent-a' }] })[0]?.n).toBe(2);
+    expect(recovery({ ...failed, errors: [{ ...first, ts: null }, first] })[0]?.value.firstSeen).toBe('2026-11-01');
+  });
+
   it('cites the failed call and the window to the step after it, on the days it occurred', () => {
     const pool = poolFrom(failed);
     const [one] = deriveRecovery({ pool, store: { ...failed, errors: [error('s1', SIG, { next: ['Edit'] })] } });
