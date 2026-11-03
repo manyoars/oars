@@ -2,6 +2,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { CliError } from '../errors.js';
 import { poolFiles, refreshPool } from './pool.js';
 import { error, prompt, session, step, store, tool } from './pool-fixture.js';
 
@@ -56,7 +57,7 @@ describe('refreshPool', () => {
     for (const held of steps) expect(Object.keys(held).sort()).toEqual(['action', 'identity']);
   });
 
-  it('derives again over a file that holds no reads, and does not swallow an unreadable one', async () => {
+  it('derives again over a file that holds no reads, and tells the operator to delete one that is not JSON', async () => {
     const dir = storeDir();
     const first = await refreshPool(dir, one);
     const file = poolFiles(dir).reads(first.pool.version);
@@ -65,7 +66,11 @@ describe('refreshPool', () => {
     expect((await refreshPool(dir, one)).reads).toEqual(first.reads);
     expect(readFileSync(file, 'utf8')).toBe(text);
     writeFileSync(file, 'not json\n');
-    await expect(refreshPool(dir, one)).rejects.toThrow();
+    const refused = refreshPool(dir, one);
+    await expect(refused).rejects.toBeInstanceOf(CliError);
+    await expect(refused).rejects.toThrow(file);
+    await expect(refused).rejects.toThrow(/[Dd]elete/);
+    expect(readFileSync(file, 'utf8')).toBe('not json\n');
   });
 
   it('derives again when only the error rows recovery reads have changed', async () => {
@@ -77,6 +82,14 @@ describe('refreshPool', () => {
     const errorsOf = (reads: typeof first.reads) => reads.find((read) => read.family === 'recovery')?.value['errors'];
     expect(errorsOf(first.reads)).toBe(1);
     expect(errorsOf(later.reads)).toBe(2);
+  });
+
+  it('serves a stored read as frozen as a derived one', async () => {
+    const dir = storeDir();
+    await refreshPool(dir, one);
+    const [read] = (await refreshPool(dir, one)).reads;
+    expect(read !== undefined && Object.isFrozen(read)).toBe(true);
+    expect(read !== undefined && Object.isFrozen(read.value)).toBe(true);
   });
 
   it('keeps a pool version file as first written, and gives new data a new file', async () => {
