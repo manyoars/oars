@@ -305,14 +305,41 @@ describe('Paginated and forked rollouts through the store', () => {
     expect([...verifyAll(skeletons), ...verifyCaptured(store.sessions, store.tools)].filter((entry) => entry.violations > 0)).toEqual([]);
   });
 
-  it('deposits a thread and its reverted rollout as one session and one subagent (rollout/src/rollout_file_name.rs:12-14)', async () => {
+  // thread-store/src/local/revert_thread.rs:15-18, :198-200: revert exists for a Paginated thread only and writes a new immutable rollout that references the retained
+  // prefix through history_base (protocol/src/protocol.rs:3508-3510; HistoryPosition :3419-3433); the old rollout stays intact. The new file is named
+  // <thread>_<rollout> (rollout/src/rollout_file_name.rs:12-14) and its first record, the session_meta, takes history_base.end_ordinal_exclusive (rollout/src/ordinal.rs:29-31),
+  // so it holds the records written after the revert and none of the prefix.
+  const reverted = (thread: string, base: number, bytes: number): unknown[] => {
+    const records = [
+      meta(thread, '/work/app', { session_id: thread, history_mode: 'paginated', history_base: { thread_id: thread, end_ordinal_exclusive: base, end_byte_offset: bytes } }),
+      line(T(12), 'event_msg', { type: 'item_completed', thread_id: thread, turn_id: 't3', item: { type: 'UserMessage', id: 'u3', content: [{ type: 'text', text: 'try the other rule', text_elements: [] }] } }),
+      line(T(13), 'event_msg', { type: 'item_completed', thread_id: thread, turn_id: 't3', item: { type: 'AgentMessage', id: 'a3', content: [{ type: 'Text', text: 'switched the rule' }] } }),
+    ];
+    return records.map((record, index) => ({ ...record, ordinal: base + index }));
+  };
+
+  it('deposits a thread and its reverted rollout (post-revert records, ordinals from history_base) as one session and one subagent, with no prefix prompt counted twice', async () => {
     const s = stage();
+    const original = paginated(A);
+    // Reverting before the second turn keeps the records before its UserMessage (index 7): seven records, so the next ordinal is 7.
+    const base = 7;
+    const bytes = Buffer.byteLength(`${original.slice(0, base).map((record) => JSON.stringify(record)).join(NL)}${NL}`);
     const home = stageCodex(s.root, [
-      { id: A, lines: rollout(A, '/work/app') },
-      { id: `${A}_${B}`, lines: rollout(A, '/work/app') },
+      { id: A, lines: original },
+      { id: `${A}_${B}`, lines: reverted(A, base, bytes) },
     ]);
     const result = await deposit({ ...s.runtime, sourceRoots: { codex: home } }, options(['codex']));
     expect(result).toMatchObject({ sessions: 1, subagents: 1 });
+    const { skeletons } = await readSkeletons(s.storeDir);
+    const store = await loadStore(s.storeDir);
+    // The continuing turns of a reverted thread land under subagents, parent the thread, so the thread is still one session in the counts. A subagent's prompts are
+    // not prompt records (store.ts:1085-1092: only a main session derives them), so the one post-revert prompt shows in the session's userTurns and nowhere in
+    // store.prompts. That is the documented limit; the prefix is not copied into the new file, so no prompt is counted twice.
+    expect(store.subagents.map((session) => [session.session, session.parent])).toEqual([[`codex-${A}_${B}`, `codex-${A}`]]);
+    expect(store.subagents[0]).toMatchObject({ userTurns: 1 });
+    expect(store.prompts.filter((entry) => entry.session === `codex-${A}_${B}`)).toHaveLength(0);
+    expect(store.prompts.filter((entry) => entry.session === `codex-${A}`)).toHaveLength(2);
+    expect([...verifyAll(skeletons), ...verifyCaptured([...store.sessions, ...store.subagents], store.tools)].filter((entry) => entry.violations > 0)).toEqual([]);
   });
 
   it('drops a Legacy fork copy of its parent, found through forked_from_id in the same store', async () => {

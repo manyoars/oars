@@ -392,14 +392,18 @@ describe('fix round 2 behaviors', () => {
     expect(store?.sessions[0]).toMatchObject({ parent: 'sess-1', agentRole: 'explorer' });
   });
 
-  // rollout/src/rollout_file_name.rs:12-14, :41-47, :66-73: `rollout-<time>-<thread>.jsonl`, and for a reverted thread `rollout-<time>-<thread>_<rollout>.jsonl`.
+  // rollout/src/rollout_file_name.rs:12-14, :41-47, :66-73: `rollout-<time>-<thread>.jsonl`, and for a reverted thread `rollout-<time>-<thread>_<rollout>.jsonl`. Revert
+  // is for a Paginated thread only and writes a new file whose session_meta carries history_base (thread-store/src/local/revert_thread.rs:15-18, :66-70, :198-200;
+  // protocol/src/protocol.rs:3508-3510) and takes history_base.end_ordinal_exclusive as its first ordinal (rollout/src/ordinal.rs:29-31).
   it('keys the rollout of a reverted thread <thread>_<rollout> and files it under its thread, so one thread is one session', async () => {
     const s = stage();
     const thread = '66666666-6666-4666-8666-666666666666';
     const reverted = '77777777-7777-4777-8777-777777777777';
+    const base = { thread_id: thread, end_ordinal_exclusive: 3, end_byte_offset: 512 };
+    const paginated = { id: thread, session_id: thread, timestamp: T(0), cwd: '/work/app', history_mode: 'paginated' };
     const home = stageCodex(s.root, [
-      { id: thread, lines: [line(T(0), 'session_meta', { id: thread, timestamp: T(0), cwd: '/work/app' })] },
-      { id: `${thread}_${reverted}`, lines: [line(T(0), 'session_meta', { id: thread, timestamp: T(0), cwd: '/work/app' })] },
+      { id: thread, lines: [{ ...line(T(0), 'session_meta', paginated), ordinal: 0 }] },
+      { id: `${thread}_${reverted}`, lines: [{ ...line(T(0), 'session_meta', { ...paginated, history_base: base }), ordinal: 3 }] },
     ]);
     const store = await openCodexStore(home);
     expect(store?.sessions.map((session) => [session.id, session.parent])).toEqual(
@@ -409,6 +413,17 @@ describe('fix round 2 behaviors', () => {
       ]),
     );
     expect(store?.sessions).toHaveLength(2);
+  });
+
+  it('keeps every record of a reverted rollout though its ordinals start at history_base.end_ordinal_exclusive, since the prefix is not copied into the file (ordinal.rs:29-31)', () => {
+    const lines = rolloutLines(
+      asText([
+        { ...line(T(0), 'session_meta', { id: 'sess-1', session_id: 'sess-1', timestamp: T(0), cwd: '/work/app', history_mode: 'paginated', history_base: { thread_id: 'sess-1', end_ordinal_exclusive: 7, end_byte_offset: 900 } }), ordinal: 7 },
+        { ...line(T(2), 'event_msg', { type: 'item_completed', thread_id: 'sess-1', turn_id: 't3', item: { type: 'UserMessage', id: 'u3', content: [{ type: 'text', text: 'after the revert', text_elements: [] }] } }), ordinal: 8 },
+      ]),
+      's',
+    );
+    expect(lines.filter((entry) => entry.type === 'user')).toMatchObject([{ message: { content: [{ text: 'after the revert' }] } }]);
   });
 
   it('reports a rollout that vanishes after it is listed by file name only, even when the root is outside the home folder', async () => {
