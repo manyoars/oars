@@ -213,3 +213,18 @@ describe('the source table', () => {
     expect(stop.sources.fake?.unreadable.join(NL)).toContain('bad one');
   });
 });
+
+describe('Codex subagent rollouts', () => {
+  it('counts a spawned agent under subagents, not sessions, and records its parent', async () => {
+    const s = stage();
+    const home = stageCodex(s.root, [
+      { id: A, lines: rollout(A, '/work/app') },
+      { id: B, lines: [meta(B, '/work/app', { parent_thread_id: A, agent_role: 'explorer' }), line(T(2), 'event_msg', { type: 'user_message', message: 'look around' }), usage] },
+    ]);
+    const result = await deposit({ ...s.runtime, sourceRoots: { codex: home } }, options(['codex']));
+    expect(result).toMatchObject({ sessions: 1, subagents: 1 });
+    const store = await loadStore(s.storeDir);
+    expect(store.sessions.map((session) => session.session)).toEqual([`codex-${A}`]);
+    expect(store.subagents.map((session) => [session.session, session.parent])).toEqual([[`codex-${B}`, `codex-${A}`]]);
+  });
+});

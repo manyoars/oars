@@ -283,3 +283,129 @@ describe('openCodexStore', () => {
     expect(codexRoot({ CODEX_HOME: '' }, '/home/u')).toBe(join('/home/u', '.codex'));
   });
 });
+
+describe('fix round 2 behaviors', () => {
+  const unified = (second: number, id: string, name: string, args: unknown) => line(T(second), 'response_item', { type: 'function_call', name, arguments: JSON.stringify(args), call_id: id });
+  const head = (rest: string): string => `Chunk ID: ab12\nWall time: 0.0100 seconds\n${rest}\nOriginal token count: 3\nOutput:\n`;
+
+  it('reads write_stdin as a shell call: its exit header fails it and the exec_command it polls (shell_spec.rs:113, context.rs:556)', () => {
+    const out = extractOf([
+      meta('/work/app'),
+      unified(2, 'u1', 'exec_command', { cmd: 'npm test' }),
+      shellOut(3, 'u1', head('Process running with session ID 42')),
+      unified(4, 'u2', 'write_stdin', { session_id: 42, chars: '' }),
+      shellOut(5, 'u2', `${head('Process exited with code 1')}2 tests failed`),
+    ]);
+    expect(out.tools.map((tool) => [tool.tool, tool.status])).toEqual([['Bash', 'error'], ['Bash', 'error']]);
+    expect(out.errorLines.map((entry) => entry.line)).toContain('2 tests failed');
+  });
+
+  it('leaves write_stdin and its exec_command unsettled while the process is still running', () => {
+    const out = extractOf([
+      meta('/work/app'),
+      unified(2, 'u1', 'exec_command', { cmd: 'sleep 9' }),
+      shellOut(3, 'u1', head('Process running with session ID 7')),
+      unified(4, 'u2', 'write_stdin', { session_id: 7, chars: '' }),
+      shellOut(5, 'u2', head('Process running with session ID 7')),
+    ]);
+    expect(out.tools.map((tool) => tool.status)).toEqual(['none', 'none']);
+  });
+
+  it('records a shell call that failed to spawn (execution error: ..., events.rs:438) as an error', () => {
+    const out = extractOf([meta('/work/app'), shellCall(2, 'c1', ['nope']), shellOut(3, 'c1', 'execution error: Os { code: 2, kind: NotFound }')]);
+    expect(out.tools).toMatchObject([{ tool: 'Bash', status: 'error' }]);
+    expect(out.errorLines.map((entry) => entry.line)).toEqual(['execution error: Os { code: 2, kind: NotFound }']);
+  });
+
+  it('leaves a declined shell call in the plain-text form (events.rs:456) with no outcome', () => {
+    const out = extractOf([meta('/work/app'), shellCall(2, 'c1', ['rm', 'x']), shellOut(3, 'c1', 'exec command rejected by user')]);
+    expect(out.tools).toMatchObject([{ tool: 'Bash', status: 'none' }]);
+    expect(out.errorLines).toEqual([]);
+  });
+
+  const mcpCall = (second: number, id: string) => line(T(second), 'response_item', { type: 'function_call', name: 'mcp__notes__find', arguments: '{}', call_id: id });
+  const mcpEnd = (second: number, id: string, result: unknown) =>
+    line(T(second), 'event_msg', { type: 'mcp_tool_call_end', call_id: id, invocation: { server: 'notes', tool: 'find' }, duration: { secs: 0, nanos: 1 }, result });
+
+  it('settles an MCP call from mcp_tool_call_end: a result.Err and an Ok with isError are failures, an Ok is not (protocol.rs:3047, :3076)', () => {
+    const out = extractOf([
+      meta('/work/app'),
+      mcpCall(2, 'm1'),
+      mcpEnd(3, 'm1', { Err: 'server unavailable' }),
+      shellOut(4, 'm1', 'ignored'),
+      mcpCall(5, 'm2'),
+      mcpEnd(6, 'm2', { Ok: { content: [{ type: 'text', text: 'no such note' }], isError: true } }),
+      mcpCall(7, 'm3'),
+      mcpEnd(8, 'm3', { Ok: { content: [{ type: 'text', text: 'found' }], isError: false } }),
+    ]);
+    expect(out.tools.map((tool) => tool.status)).toEqual(['error', 'error', 'ok']);
+    expect(out.errorLines.map((entry) => entry.line)).toEqual(['server unavailable', 'no such note']);
+  });
+
+  it('leaves a patch with no patch_apply_end unsettled, so a rejected patch is not a good Edit (apply_patch.rs:351)', () => {
+    const out = extractOf([
+      meta('/work/app'),
+      line(T(2), 'response_item', { type: 'custom_tool_call', name: 'apply_patch', call_id: 'p1', input: '*** Begin Patch\n*** Update File: src/a.ts\n*** End Patch' }),
+      line(T(3), 'response_item', { type: 'custom_tool_call_output', call_id: 'p1', output: 'apply_patch verification failed: Failed to find expected lines' }),
+    ]);
+    expect(out.tools).toMatchObject([{ tool: 'Edit', status: 'none' }]);
+  });
+
+  it('leaves a declined patch (status declined, protocol.rs:4072) unsettled, as a declined shell call is', () => {
+    const out = extractOf([
+      meta('/work/app'),
+      line(T(2), 'response_item', { type: 'custom_tool_call', name: 'apply_patch', call_id: 'p1', input: '*** Update File: src/a.ts' }),
+      line(T(3), 'event_msg', { type: 'patch_apply_end', call_id: 'p1', success: false, stderr: 'patch rejected by user', status: 'declined' }),
+    ]);
+    expect(out.tools).toMatchObject([{ tool: 'Edit', status: 'none' }]);
+    expect(out.errorLines).toEqual([]);
+  });
+
+  it('reads cache_write_input_tokens as cache creation (protocol.rs:2512)', () => {
+    const withWrite = line(T(4), 'event_msg', { type: 'token_count', info: { last_token_usage: { input_tokens: 100, cached_input_tokens: 20, cache_write_input_tokens: 30, output_tokens: 10, total_tokens: 110 } } });
+    const out = extractOf([meta('/work/app'), say(3, 'hello'), withWrite]);
+    expect(out.session.usage).toMatchObject({ input: 80, cacheRead: 20, cacheWrite: 30, output: 10 });
+  });
+
+  it('cuts at 1,000 characters and redacts on the live text path (a function_call_output, not an exec_command_end)', () => {
+    const long = `fail: sk-abcdefghijklmnopqrstuvwxyz0123 for alice@example.com ${'x'.repeat(1500)}`;
+    const out = extractOf([meta('/work/app'), shellCall(3, 'c1', ['make']), shellOut(4, 'c1', execText(1, long))]);
+    const [error] = out.errorLines;
+    expect(error?.line).not.toContain('sk-abcdefghijklmnopqrstuvwxyz0123');
+    expect(error?.line).not.toContain('alice@example.com');
+    expect(error?.line.length).toBe(1000);
+  });
+
+  const withOrdinal = (ordinal: number, entry: unknown): unknown => ({ ...(entry as object), ordinal });
+
+  it('drops the records a subagent inherited (ordinal below subagent_history_start_ordinal, protocol.rs:3511)', () => {
+    const child = line(T(0), 'session_meta', { id: 'sess-2', timestamp: T(0), cwd: '/work/app', parent_thread_id: 'sess-1', subagent_history_start_ordinal: 2 });
+    const lines = rolloutLines(asText([child, withOrdinal(0, prompt(1, 'inherited prompt')), withOrdinal(1, prompt(2, 'also inherited')), withOrdinal(2, prompt(4, 'own prompt'))]), 's');
+    expect(lines.filter((entry) => entry.type === 'user').length).toBe(1);
+  });
+
+  it('drops the records a fork inherited (ordinal below forked_from_ordinal_exclusive, protocol.rs:3462)', () => {
+    const forked = line(T(0), 'session_meta', { id: 'sess-2', timestamp: T(0), cwd: '/work/app', forked_from_id: 'sess-1', forked_from_ordinal_exclusive: 2 });
+    const lines = rolloutLines(asText([forked, withOrdinal(0, prompt(1, 'a')), withOrdinal(1, prompt(2, 'b')), withOrdinal(2, prompt(3, 'c')), prompt(4, 'no ordinal')]), 's');
+    expect(lines.filter((entry) => entry.type === 'user').length).toBe(2);
+  });
+
+  it('names a sessions folder it cannot read instead of reporting no store', async () => {
+    const s = stage();
+    const home = join(s.root, 'h');
+    mkdirSync(home, { recursive: true });
+    writeFileSync(join(home, 'sessions'), 'a plain file, not a folder');
+    const store = await openCodexStore(home);
+    expect(store?.sessions).toEqual([]);
+    expect(store?.unreadable).toHaveLength(1);
+    expect(store?.unreadable[0]).toContain('sessions');
+  });
+
+  it('carries parent_thread_id and agent_role from session_meta on the listed session', async () => {
+    const s = stage();
+    const id = '55555555-5555-4555-8555-555555555555';
+    const home = stageCodex(s.root, [{ id, lines: [line(T(0), 'session_meta', { id, timestamp: T(0), cwd: '/work/app', parent_thread_id: 'sess-1', agent_role: 'explorer' })] }]);
+    const store = await openCodexStore(home);
+    expect(store?.sessions[0]).toMatchObject({ parent: 'sess-1', agentRole: 'explorer' });
+  });
+});
