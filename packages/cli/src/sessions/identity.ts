@@ -2,7 +2,7 @@
 // `public-vocabulary.ts`, so what may leave the machine is decided in that one file; anything it does not list becomes `<literal>`.
 
 import { mcpOf, type ActionTable, type CanonicalAction } from './actions.js';
-import { BUNDLING_PROGRAMS, isMcpToolName, isRegistryVersion, LITERAL, PUBLIC_FLAGS, PUBLIC_HOSTS, PUBLIC_MCP_SERVERS, PUBLIC_PACKAGES, PUBLIC_PROGRAMS, PUBLIC_SKILLS, PUBLIC_SUBCOMMANDS } from './public-vocabulary.js';
+import { BUNDLING_PROGRAMS, isPublicMcpTool, isRegistryVersion, LITERAL, PUBLIC_FLAGS, PUBLIC_HOSTS, PUBLIC_MCP_SERVERS, PUBLIC_PACKAGES, PUBLIC_PROGRAMS, PUBLIC_SKILLS, PUBLIC_SUBCOMMANDS } from './public-vocabulary.js';
 import type { PullEcosystem, PullIdentity, ShellIdentity, StepIdentity, ToolPull } from './schema.js';
 
 /** A word of a shell command, as the tokenizer read it. */
@@ -100,7 +100,6 @@ export const callIdentity = (table: ActionTable, action: CanonicalAction, native
   const mcp = action === 'mcp.call' ? mcpOf(table, native) : undefined;
   if (mcp === undefined) return { native: shown, identity: null };
   if (!PUBLIC_MCP_SERVERS.has(mcp.server)) return { native: LITERAL, identity: { server: LITERAL, tool: LITERAL } };
-  if (!table.toolDelimited) return { native: LITERAL, identity: { server: mcp.server, tool: LITERAL } };
-  const tool = isMcpToolName(mcp.tool) ? mcp.tool : LITERAL;
-  return { native: tool === LITERAL ? LITERAL : native, identity: { server: mcp.server, tool } };
+  if (!table.toolDelimited || !isPublicMcpTool(mcp.server, mcp.tool)) return { native: LITERAL, identity: { server: mcp.server, tool: LITERAL } };
+  return { native, identity: { server: mcp.server, tool: mcp.tool } };
 };

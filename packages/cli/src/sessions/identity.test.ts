@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { ACTION_TABLES } from './actions.js';
 import { captureSession, type Capture } from './extract.js';
 import { callIdentity } from './identity.js';
-import { BUNDLING_PROGRAMS, PUBLIC_PROGRAMS } from './public-vocabulary.js';
+import { BUNDLING_PROGRAMS, PUBLIC_MCP_SERVERS, PUBLIC_MCP_TOOLS, PUBLIC_PROGRAMS } from './public-vocabulary.js';
 import { makeRedactor } from './redact.js';
 import type { StepObservation, ToolObservation } from './schema.js';
 
@@ -194,6 +194,17 @@ describe('identity holds public names only', () => {
 
   it('masks a published tool of one server when another server calls it', () => {
     expect(stepsOf([{ name: 'mcp__postgres__navigate', input: {} }])[0]).toMatchObject({ native: '<literal>', identity: { server: 'postgres', tool: '<literal>' } });
+  });
+
+  it('reads a published tool of its own server in full', () => {
+    expect(stepsOf([{ name: 'mcp__postgres__query', input: {} }])[0]).toMatchObject({ native: 'mcp__postgres__query', identity: { server: 'postgres', tool: 'query' } });
+    expect(stepsOf([{ name: 'mcp__sequential-thinking__sequentialthinking', input: {} }])[0]).toMatchObject({ identity: { server: 'sequential-thinking', tool: 'sequentialthinking' } });
+    // Codex has no recall row, so its recall call reads as an MCP call through the same list.
+    expect(callIdentity(ACTION_TABLES.codex, 'mcp.call', 'mcp__oars__oars_recall', '<literal>', { skill: undefined, url: undefined })).toEqual({ native: 'mcp__oars__oars_recall', identity: { server: 'oars', tool: 'oars_recall' } });
+  });
+
+  it('seeds tools only under a server the list itself makes public', () => {
+    expect([...PUBLIC_MCP_TOOLS.keys()].filter((server) => !PUBLIC_MCP_SERVERS.has(server))).toEqual([]);
   });
 
   it('masks every tool of a public server with none seeded', () => {
