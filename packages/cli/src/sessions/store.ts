@@ -18,7 +18,7 @@
 import { createHash, randomBytes } from 'node:crypto';
 import { performance } from 'node:perf_hooks';
 import { appendFile, mkdir, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
-import { basename, dirname, join } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 import { CliError, ExitCode } from '../errors.js';
 import { compileAllow, requireEntries, slugOf } from './allow.js';
 import { openCursorStore, type CursorStore } from './cursor.js';
@@ -26,7 +26,7 @@ import { buildIndex, indexPath } from './hook-index.js';
 import { archiveRaw } from './archive.js';
 import { deriveSession, type SessionCapture } from './derive.js';
 import { captureRuntime, type CaptureRuntime } from './capture-runtime.js';
-import { captureSession, type Capture, type SubagentOrigin } from './extract.js';
+import { callPositions, captureSession, type Capture, type SubagentOrigin } from './extract.js';
 import { makeRepoIdentity, makeRepoRoot } from './repo-root.js';
 import { makeRedactor, type Redactor } from './redact.js';
 import {
@@ -228,6 +228,8 @@ interface DepositContext {
   captureRuntime: CaptureRuntime;
   /** What the log says about each subagent transcript, read at most once per deposit and only when a raw-only subagent needs it. */
   origins: () => Promise<Map<string, SubagentOrigin>>;
+  /** The call positions of each parent transcript a subagent of this deposit named, read at most once. */
+  parentCalls: Map<string, Promise<Map<string, number>>>;
   at: string;
   now: () => number;
 }
@@ -249,6 +251,7 @@ const contextFor = async (runtime: SessionsRuntime, state: State, now: () => num
     repoIdentity: makeRepoIdentity(),
     captureRuntime: captureRuntime(),
     origins: () => (origins ??= loggedOrigins(runtime.storeDir)),
+    parentCalls: new Map(),
     at: new Date(now()).toISOString(),
     now,
   };
@@ -327,6 +330,30 @@ const refuseNewer = (state: State): void => {
   }
 };
 
+/** The parent transcript's call positions, from the harness's copy or else the archive; empty when neither holds it. */
+const readParentCalls = async (candidates: readonly string[]): Promise<Map<string, number>> => {
+  for (const candidate of candidates) {
+    try {
+      return callPositions(await readFile(candidate, 'utf8'));
+    } catch (error) {
+      if (!isMissing(error)) throw error;
+    }
+  }
+  return new Map();
+};
+
+/** Where in its parent transcript a subagent was spawned; null when its origin names no call or the parent no longer holds that call. */
+const spawnedAtOf = async (context: DepositContext, project: string, transcript: Transcript, origin: SubagentOrigin): Promise<number | null> => {
+  if (origin.spawnedBy === null) return null;
+  const name = `${origin.parent}.jsonl`;
+  const key = `${project}/${origin.parent}`;
+  // The project folder holds the transcript at `relative`, whether that folder is the harness's or the archive's.
+  const folder = resolve(transcript.file, ...transcript.relative.split('/').map(() => '..'));
+  const calls = context.parentCalls.get(key) ?? readParentCalls([join(folder, name), join(paths(context.runtime.storeDir).raw, project, name)]);
+  context.parentCalls.set(key, calls);
+  return (await calls).get(origin.spawnedBy) ?? null;
+};
+
 /** Deposits one transcript unless its size, mtime, capture version, salt, and domain set are unchanged; returns what it wrote, or undefined when skipped. */
 const depositFile = async (context: DepositContext, project: string, transcript: Transcript): Promise<Capture | undefined> => {
   const { runtime, state } = context;
@@ -360,7 +387,7 @@ const depositFile = async (context: DepositContext, project: string, transcript:
     repoRoot: context.repoRoot,
     repoIdentity: context.repoIdentity,
     runtime: context.captureRuntime,
-    subagent,
+    subagent: subagent === undefined ? undefined : { ...subagent, spawnedAt: await spawnedAtOf(context, project, transcript, subagent) },
   });
   await commitCapture(context, key, extract, { size: info.size, mtimeMs: info.mtimeMs, rev });
   return extract;
