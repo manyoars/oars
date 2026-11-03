@@ -196,6 +196,7 @@ export const deriveSession = (capture: SessionCapture, redact: Redactor): Derive
       stopped: stoppedOf(stopsOf.get(prompt.index) ?? [], capture.prompts[position + 1]?.head),
       commits: settled.reduce((sum, tool) => sum + commitsIn(tool), 0),
       redo: redone.has(prompt.index),
+      ...(prompt.frame === undefined ? {} : { frame: prompt.frame }),
     };
   });
   const classOf = new Map(prompts.map((prompt) => [prompt.index, prompt.cls]));

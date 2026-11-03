@@ -227,7 +227,7 @@ const linesOf = (bubble: Bubble, base: Obj, at: string, model: string | undefine
   const call = isObj(document.toolFormerData) ? document.toolFormerData : undefined;
   const name = call === undefined ? undefined : str(call.name);
   const callId = call === undefined ? undefined : (str(call.toolCallId) ?? bubble.id);
-  if (call !== undefined && name !== undefined) content.push({ type: 'tool_use', id: callId, name: TOOL_NAMES[name] ?? name, input: inputOf(parse(call.params)) });
+  if (call !== undefined && name !== undefined) content.push({ type: 'tool_use', id: callId, name: TOOL_NAMES[name] ?? name, native: name, input: inputOf(parse(call.params)) });
   const tokens = isObj(document.tokenCount) ? document.tokenCount : {};
   const input = num(tokens.inputTokens) ?? 0;
   const output = num(tokens.outputTokens) ?? 0;
