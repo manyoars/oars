@@ -66,6 +66,8 @@ export interface Relation {
   n?: number;
   /** Reads this one cites but does not measure on: a witness for a total. They are not held to the floor. */
   cites?: readonly Read[];
+  /** What the floor holds an input to, when the value rests on something other than `trialsOf`: a share read from a read whose interval is on another rate. */
+  trials?: (read: Read) => number;
 }
 
 /**
@@ -73,8 +75,8 @@ export interface Relation {
  * thinnest input, and summing trials up a chain would count one step many times.
  */
 export const relate = (family: Family, method: string, methodVersion: string, inputs: readonly Read[], relation: Relation): ReadBody | undefined => {
-  if (inputs.some((read) => read.interval === null || trialsOf(read) < TRIALS_FLOOR)) return undefined;
-  const { cites = [], n = Math.min(...inputs.map(trialsOf)), ...fields } = relation;
+  const { cites = [], trials = trialsOf, n = Math.min(...inputs.map(trials)), ...fields } = relation;
+  if (inputs.some((read) => read.interval === null || trials(read) < TRIALS_FLOOR)) return undefined;
   const all = [...inputs, ...cites];
   return { family, method, methodVersion, inputs: all.map((read) => read.readId), clusters: Math.min(...all.map((read) => read.clusters)), basis: 'all', n, ...fields };
 };

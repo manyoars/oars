@@ -201,14 +201,14 @@ A read's slice and value hold closed vocabulary and numbers only: never a path, 
 
 ### Reads over reads
 
-A read above order 1 takes its inputs from the orders below and its interval from theirs: a difference takes each side from the inputs that could push it there (MOVER), so a skewed rate stays skewed. A read with an input under 30 trials does not exist, and `n` and `clusters` state its weakest input. Inputs count a step as independent and steps cluster in sessions, so these intervals run narrow.
+A read above order 1 takes its inputs from the orders below and its interval from theirs: a difference takes each side from the inputs that could push it there (MOVER), so a skewed rate stays skewed. A read with an input under 30 trials does not exist, and `n` and `clusters` state its weakest input. A share rests on its day's or bucket's steps and a failure rate on the tool's calls, so a tool that falls away keeps its share move: zero of a day's steps is a measurement. Inputs count a step as independent and steps cluster in sessions, so these intervals run narrow.
 
 | Family | Order | Slice | Value | Not removed |
 |--------|-------|-------|-------|-------------|
 | `version-boundary` | 2 | motif, harness, two neighboring version buckets, metric | before, after, and the move in share or failure rate | date, effort, rule commits, class drift |
 | `substitution` | 2 | rising tool, falling tool, the boundary | each share move, and the falling tool's move among the steps that are not the rising tool's | date, class drift, rule commits |
 | `interaction` | 2 | motif, frame, two tiers | each tier's failure rate, and the gap beyond how those tiers differ on every other tool | task assignment by tier, prompt class |
-| `day-move` | 2 | motif, metric, two adjacent days | before, after, and the move | not screened, so a row is an input and not a finding |
+| `day-move` | 2 | motif, metric, two adjacent days | before, after, and the move; a share move exists for a tool on either day, a failure move only for one with 30 calls on both | not screened, so a row is an input and not a finding |
 | `lead-lag` | 3 | lead, lag, level | slope, its check, and the score | see below |
 
 The first three state only moves past a screen, each with `tested`, the comparisons it was screened among. A move also has to reach 0.01 to be stated, so a read of nothing means nothing moved that far.
