@@ -259,3 +259,24 @@ carry `harness: "cursor"`; a record with no `harness` is Claude Code's (`harness
   store stamps a result with the call's own time), a composer id that is not `[A-Za-z0-9._-]+` is skipped and counted, and a composer with no
   `createdAt` accepts no relative `clientStartTime`.
 - **Reading it back.** `recall` and `measure` read the records as they are. `books --by harness` groups the prompts by harness.
+
+## The Codex source
+
+`oars sessions deposit --allow codex` reads OpenAI Codex CLI rollouts into the same store. The records carry `harness: "codex"`, take the same
+field classes, redaction, and 1,000-character `line` cap as every other source (the rollout is rebuilt as the lines `captureSession` reads), and
+`recall`, `measure`, `books`, and `verify` read them with no special case. Sources are a table (`sources.ts`): a new harness is one entry plus its reader.
+
+**Fixture-derived, never run live.** This reader was written from the public Codex source (openai/codex @ ac558e2, Apache-2.0: `codex-rs/history`,
+`codex-rs/rollout`, `codex-rs/protocol`) and tested only on synthetic fixtures; no Codex store has ever been read by it. Codex documents no stable
+on-disk format, so a Codex release can change it; an unreadable rollout is warned about by name and skipped, never fatal. The one hand run that would
+settle it: on a machine with a Codex account, run `codex exec "<any small task>"` once, then `oars sessions deposit --allow codex` and
+`oars sessions verify --strict`; a nonzero session count and zero violations confirm the format.
+
+- **Where.** `$CODEX_HOME`, else `~/.codex` (`%USERPROFILE%\.codex` on Windows): `sessions/YYYY/MM/DD/rollout-<time>-<uuid>.jsonl` and
+  `archived_sessions/`. A `.jsonl.zst` rollout is decompressed read-only. Opt-in like Cursor: discovered by default, opened only when `--allow codex` (or a matching glob) names it; the nightly run repeats a saved allow.
+- **Mapping.** `session_meta` gives the id, cwd, and `cli_version`; `turn_context.model` the model; `event_msg` `user_message` a prompt and `agent_message` a
+  response; `token_count.last_token_usage` the usage (cached input is a subset of input, so it is split out as cache read); `exec_command_end` a shell call
+  with its real `exit_code` (a nonzero code is an error even when `status` reads `completed`; `declined` has no outcome); `patch_apply_end` and `apply_patch` calls
+  an edit and the files touched. A JSON error wrapper is unwrapped before the error line is cut. Timestamps are each line's own; a missing or earlier one never steps back.
+- **Absent.** Subagents, cache creation, cost, per-call duration, and message ids (synthesized so `verify --strict` holds). Turn-level `error` events are API
+  failures, not tool outcomes, and are not recorded. Idempotent per rollout (`codex/<file stem>` in `state.json`, size and mtime).
