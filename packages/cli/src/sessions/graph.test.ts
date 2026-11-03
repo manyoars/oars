@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { callPositions, captureSession } from './extract.js';
 import { makeRedactor } from './redact.js';
-import type { ShellIdentity, StepObservation, ToolObservation } from './schema.js';
+import type { StepObservation, ToolObservation } from './schema.js';
 import { deposit, loadStore } from './store.js';
 import { cleanup, NOW, stage } from './test-support.js';
 
@@ -41,7 +41,8 @@ const capture = (text: string): ToolObservation[] => captureSession({ text, sess
 const stepsOfPrompts = (prompts: ReadonlyArray<readonly Call[]>): StepObservation[] => capture(transcript(prompts)).flatMap((tool) => tool.steps ?? []);
 const programs = (command: string): string[] =>
   stepsOfPrompts([[{ command }]]).map((step) => {
-    const identity = step.identity as ShellIdentity;
+    const { identity } = step;
+    if (identity === null || !('program' in identity)) return '';
     return identity.sub === null ? identity.program : `${identity.program} ${identity.sub}`;
   });
 
