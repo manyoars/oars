@@ -61,7 +61,8 @@ export const ERROR_LINE_CHARS = 1000;
 /** Per-session cap on `files` and `fileHashes` (L3): the hand run on the copy store had p99 61 and max 209 files per session; 100 is the round number above p99. */
 export const FILES_PER_SESSION_MAX = 100;
 
-export type PromptClass = 'no-tools' | 'orchestration' | 'research' | 'edit-verify' | 'edit-only' | 'explore-only' | 'shell-only' | 'mixed';
+export const PROMPT_CLASSES = ['no-tools', 'orchestration', 'research', 'edit-verify', 'edit-only', 'explore-only', 'shell-only', 'mixed'] as const;
+export type PromptClass = (typeof PROMPT_CLASSES)[number];
 
 export interface Usage {
   input: number;

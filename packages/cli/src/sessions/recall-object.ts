@@ -28,8 +28,6 @@ export interface RecallSlice {
   tool?: string;
   cls?: string;
   sinceDays?: number;
-  /** The read family's own scope, a closed name such as `repository`. */
-  scope?: string;
 }
 
 export interface RecallQueryObject {
