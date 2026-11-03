@@ -119,7 +119,7 @@ export const mcpOf = (table: ActionTable, native: string): { server: string; too
 
 /**
  * What a native name becomes on a step. Rows win over the MCP pattern, so a harness can name a recall that travels over MCP. `native` is the
- * name itself only when a row lists it. An MCP name holds a server name, so Item 3's identity rules decide it; until then it reads as the literal.
+ * name itself only when a row lists it; an MCP name holds a server name, so `callIdentity` decides whether it is shown.
  */
 export const actionOf = (table: ActionTable, native: string): { action: CanonicalAction; native: string } => {
   // `hasOwn`: a tool named `constructor` must not read the object's prototype.
