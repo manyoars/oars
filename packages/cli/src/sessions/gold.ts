@@ -14,7 +14,7 @@ interface Obj {
   [key: string]: unknown;
 }
 
-const isObj = (value: unknown): value is Obj => typeof value === 'object' && value !== null && !Array.isArray(value);
+export const isObj = (value: unknown): value is Obj => typeof value === 'object' && value !== null && !Array.isArray(value);
 const str = (value: unknown): string | undefined => (typeof value === 'string' ? value : undefined);
 const texts = (value: unknown): string => str(value) ?? '';
 
@@ -225,7 +225,7 @@ export const viewOf = (turns: readonly Turn[], index: number, redact: Redactor):
   };
 };
 
-const INTERRUPT_MARKER = '[Request interrupted by user';
+export const INTERRUPT_MARKER = '[Request interrupted by user';
 const CURSOR_PREFIX = 'cursor-';
 
 /**
@@ -355,6 +355,27 @@ export interface GoldSignals {
   redo: boolean;
 }
 
+/** What the acting session wrote, read from its transcript. Null where the turn has none. */
+export interface GoldReads {
+  /** Its closing reply. */
+  claim: string | null;
+  /** Its last line opening with `Confidence:`. */
+  confidence: string | null;
+  /** The next prompt that is not a harness marker. */
+  later: string | null;
+}
+
+/** The arms a fresh single-turn reader answers. */
+export type GoldAskedArm = 'evaluator' | 'claim' | 'later';
+/** `other` is a reader that said neither yes nor no: asked once, with no reading. */
+export type GoldAnswer = 'yes' | 'no' | 'other';
+
+/** The model and the fixed words behind every answer in a sidecar, hashed so a later reading can be matched to them. */
+export interface GoldEvaluators {
+  model: string;
+  wordings: Array<{ arm: GoldAskedArm; wording: string; sha256: string }>;
+}
+
 /** One sampled prompt in the sidecar: everything hidden from the gold file, and what an evaluator needs. */
 export interface GoldEntry {
   id: string;
@@ -367,6 +388,9 @@ export interface GoldEntry {
   signals: GoldSignals;
   /** {@link renderShown}, kept so an evaluator reads exactly what the judge read. */
   shown: string;
+  /** Written by `gold arms`; absent until then, or while the transcript no longer matches `shown`. */
+  reads?: GoldReads;
+  answers?: { [arm in GoldAskedArm]?: GoldAnswer };
 }
 
 export interface GoldDocument {
@@ -376,6 +400,7 @@ export interface GoldDocument {
   frame: number;
   excludedSessions: number;
   entries: GoldEntry[];
+  evaluators?: GoldEvaluators;
 }
 
 interface GoldArm {
@@ -383,6 +408,21 @@ interface GoldArm {
   /** Higher should mean more likely judged a success; null when the arm has no reading for this prompt. */
   read: (entry: GoldEntry) => number | null;
 }
+
+const CONFIDENCE_LEVELS = new Map([['low', 0], ['medium', 1], ['moderate', 1], ['high', 2]]);
+const CONFIDENCE_VALUE = /^(low|medium|moderate|high)\b(?:[\s/-]+(?:to\s+)?(low|medium|moderate|high)\b)?/i;
+
+/** The words these lines use, in order, with a range read as its middle. Anything else, such as a percentage, has no reading. */
+export const confidenceLevel = (line: string | null | undefined): number | null => {
+  const value = line?.slice(line.indexOf(':') + 1).replace(/^[\s*_]+/, '') ?? '';
+  const match = CONFIDENCE_VALUE.exec(value);
+  if (match === null) return null;
+  const level = (word: string | undefined): number | undefined => CONFIDENCE_LEVELS.get(word?.toLowerCase() ?? '');
+  const low = level(match[1]) ?? 0;
+  return ((low + (level(match[2]) ?? low)) / 2);
+};
+
+const answerRead = (answer: GoldAnswer | undefined): number | null => (answer === 'yes' ? 1 : answer === 'no' ? 0 : null);
 
 const VERIFY_ORDER = new Map<PromptVerify, number>([['passed', 2], ['none', 1], ['failed', 0]]);
 
@@ -392,6 +432,10 @@ export const ARMS: readonly GoldArm[] = [
   { arm: 'stopped', read: (entry) => (entry.signals.stopped === null ? 1 : 0) },
   { arm: 'commits', read: (entry) => entry.signals.commits },
   { arm: 'redo', read: (entry) => (entry.signals.redo ? 0 : 1) },
+  { arm: 'confidence', read: (entry) => confidenceLevel(entry.reads?.confidence) },
+  { arm: 'claim', read: (entry) => answerRead(entry.answers?.claim) },
+  { arm: 'evaluator', read: (entry) => answerRead(entry.answers?.evaluator) },
+  { arm: 'later', read: (entry) => answerRead(entry.answers?.later) },
 ];
 
 export interface AurocRead {
@@ -481,14 +525,18 @@ export const scoreGold = (entries: readonly GoldEntry[], judged: ReadonlyMap<str
 const percent = (value: number | null): string => (value === null ? '-' : `${String(Math.round(value * 100))}%`);
 const decimal = (value: number | null): string => (value === null ? '-' : value.toFixed(2));
 
+export const coverageLines = (score: GoldScore): string[] => {
+  const width = Math.max(...score.coverage.map((row) => row.arm.length));
+  return ['Prompts each arm covers:', ...score.coverage.map((row) => `  ${row.arm.padEnd(width)}  ${String(row.covered)} of ${String(score.total)}`)];
+};
+
 export const formatScore = (score: GoldScore, unreadable: readonly string[]): string => {
   const width = Math.max(...score.coverage.map((row) => row.arm.length));
   const lines = [
     `Judged ${String(score.judged)} of ${String(score.total)}. Each arm is an observation, not a label, and no arm is combined with another.`,
     ...unreadable.map((id) => `Could not read the judgment of ${id}: write yes or no.`),
     '',
-    'Prompts each arm covers:',
-    ...score.coverage.map((row) => `  ${row.arm.padEnd(width)}  ${String(row.covered)} of ${String(score.total)}`),
+    ...coverageLines(score),
   ];
   for (const row of score.models) {
     lines.push('', `${row.model}: ${String(row.judged)} judged, base rate ${percent(row.baseRate)}`, `  ${'arm'.padEnd(width)}  covered  yes  base  AUROC  95% interval`);
@@ -503,7 +551,7 @@ export const formatScore = (score: GoldScore, unreadable: readonly string[]): st
 /** The sidecar beside a gold file. */
 export const armsPath = (goldFile: string): string => `${goldFile.replace(/\.md$/, '')}.arms.json`;
 
-const readIfThere = (file: string): Promise<string | undefined> => readFile(file, 'utf8').catch(() => undefined);
+export const readIfThere = (file: string): Promise<string | undefined> => readFile(file, 'utf8').catch(() => undefined);
 
 const subagentFiles = async (dir: string): Promise<string[]> => {
   const entries = await readdir(dir, { withFileTypes: true }).catch(() => []);

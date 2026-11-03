@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { readFileSync } from 'node:fs';
-import { homedir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { spawn } from 'node:child_process';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -10,6 +10,27 @@ import { run } from './cli.js';
 import { defaultConfigDir, fileCredentialStore } from './credentials.js';
 import { fileJournalStore } from './journal.js';
 import { cursorRoot } from './sessions/cursor.js';
+import { claudeEvaluator, type ClaudeExec } from './sessions/gold-arms.js';
+
+const CLAUDE_CALL_MS = 180_000;
+
+/** Runs from the temp folder, so no project's instructions reach a reader. A hung call is killed and fails the run, which resumes. */
+const runClaude: ClaudeExec = (args, { stdin, env }) =>
+  new Promise((resolve, reject) => {
+    const child = spawn('claude', args, { cwd: tmpdir(), env, stdio: ['pipe', 'pipe', 'ignore'], windowsHide: true, timeout: CLAUDE_CALL_MS });
+    let stdout = '';
+    child.stdout.setEncoding('utf8').on('data', (chunk: string) => {
+      stdout += chunk;
+    });
+    child.stdin.on('error', () => undefined);
+    child.on('error', () => {
+      reject(new Error('Cannot run `claude`: install Claude Code and put claude on your PATH.'));
+    });
+    child.on('close', (code) => {
+      resolve({ code: code ?? 1, stdout });
+    });
+    child.stdin.end(stdin);
+  });
 
 /** The version in this package's package.json (one folder up from dist/). */
 const readVersion = (): string => {
@@ -61,6 +82,7 @@ process.exitCode = await run(process.argv.slice(2), {
     storeDir: join(configDir, 'oars', 'sessions'),
     projectsRoot: join(process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), '.claude'), 'projects'),
     cursorRoot: cursorRoot(process.platform, process.env),
+    evaluator: claudeEvaluator(runClaude, process.env),
     stdin: process.stdin,
     stdout: process.stdout,
   },
