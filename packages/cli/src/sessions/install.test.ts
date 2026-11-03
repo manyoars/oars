@@ -34,13 +34,13 @@ const scratch = (): string => mkdtempSync(join(tmpdir(), 'oars-install-test-'));
 const readJson = readSettings;
 
 describe('hook install', () => {
-  it('creates the settings file with the three entries and the retention floor', async () => {
+  it('creates the settings file with the four entries and the retention floor', async () => {
     const dir = scratch();
     const file = join(dir, 'new', 'settings.json');
     const result = await installHooks(runtimeIn(dir), file, false);
     const written = await readJson(file);
-    expect(result.installed).toEqual(['SessionStart', 'PostToolUseFailure', 'SessionEnd']);
-    for (const event of ['SessionStart', 'PostToolUseFailure', 'SessionEnd']) expect(written).toHaveProperty(['hooks', event]);
+    expect(result.installed).toEqual(['SessionStart', 'PreToolUse', 'PostToolUseFailure', 'SessionEnd']);
+    for (const event of ['SessionStart', 'PreToolUse', 'PostToolUseFailure', 'SessionEnd']) expect(written).toHaveProperty(['hooks', event]);
     expect(JSON.stringify(written.hooks)).toContain('hook-bin.js\\" post-tool');
     expect(written.cleanupPeriodDays).toBe(365);
     expect(result.retention).toBe(`Raised cleanupPeriodDays from 30 (unset, the default) to 365 in ${file}.`);
@@ -55,7 +55,7 @@ describe('hook install', () => {
     await installHooks(runtimeIn(dir), file, false);
     const written = await readJson(file);
     expect(written.model).toBe('opus');
-    expect(written.hooks).toMatchObject({ Stop: [rotation], SessionEnd: [expect.anything()], SessionStart: [expect.anything()], PreToolUse: [expect.anything()] });
+    expect(written.hooks).toMatchObject({ Stop: [rotation], SessionEnd: [expect.anything()], SessionStart: [expect.anything()], PreToolUse: [{ matcher: 'Bash', hooks: [] }, { matcher: expect.any(String) }] });
   });
 
   it('removes a per-turn Stop entry the first build wrote and keeps the rotation hook, on install and on uninstall', async () => {
@@ -77,7 +77,7 @@ describe('hook install', () => {
     const rotation = { hooks: [{ type: 'command', command: 'node rotate-session.js' }] };
     writeFileSync(file, JSON.stringify({ hooks: { Stop: [rotation] } }));
     await installHooks(runtimeIn(dir), file, false);
-    expect(await uninstallHooks(file)).toEqual({ file, removed: ['SessionStart', 'PostToolUseFailure', 'SessionEnd'] });
+    expect(await uninstallHooks(file)).toEqual({ file, removed: ['SessionStart', 'PreToolUse', 'PostToolUseFailure', 'SessionEnd'] });
     const after = await readJson(file);
     expect(after.hooks).toEqual({ Stop: [rotation] });
     expect(after.cleanupPeriodDays).toBe(365);
@@ -113,7 +113,7 @@ describe('hook install', () => {
     const other = join(dir, 'other.json');
     const statuses = await hookStatus(runtime, other);
     expect(statuses.map((item) => [item.scope, item.installed.length, item.retentionDays])).toEqual([
-      ['user', 3, 365],
+      ['user', 4, 365],
       ['project', 0, 30],
       ['file', 0, 30],
     ]);
@@ -374,7 +374,7 @@ describe('oars sessions hook (CLI)', () => {
     deps.install = runtimeIn(dir);
     const file = join(dir, 's.json');
     expect(await run(['sessions', 'hook', 'install', '--scope', 'file', '--file', file, '--schedule', 'nightly'], deps)).toBe(ExitCode.OK);
-    expect(out.join('')).toContain('Installed SessionStart, PostToolUseFailure, SessionEnd hooks');
+    expect(out.join('')).toContain('Installed SessionStart, PreToolUse, PostToolUseFailure, SessionEnd hooks');
     expect(out.join('')).toContain('Scheduled task OarsSessionsNightly');
     out.length = 0;
     expect(await run(['sessions', 'hook', 'status', '--file', file], deps)).toBe(ExitCode.OK);
@@ -382,7 +382,7 @@ describe('oars sessions hook (CLI)', () => {
     expect(out.join('')).toContain('Scheduled task OarsSessionsNightly: registered.');
     out.length = 0;
     expect(await run(['sessions', 'hook', 'uninstall', '--file', file, '--json'], deps)).toBe(ExitCode.OK);
-    expect(JSON.parse(out.join(''))).toMatchObject({ ok: true, removed: ['SessionStart', 'PostToolUseFailure', 'SessionEnd'] });
+    expect(JSON.parse(out.join(''))).toMatchObject({ ok: true, removed: ['SessionStart', 'PreToolUse', 'PostToolUseFailure', 'SessionEnd'] });
     out.length = 0;
     expect(await run(['sessions', 'hook', 'uninstall', '--file', file], deps)).toBe(ExitCode.OK);
     expect(out.join('')).toContain('No Many Oars hooks');

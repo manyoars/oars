@@ -3,6 +3,7 @@
 // what followed, by exact signature). Both are pure functions of the store.
 import { readFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
+import { fitReads, type RecallRead } from './recall-reads.js';
 import type { SessionObservation } from './schema.js';
 import { expandHome } from './allow.js';
 import { slugOf, type Store } from './store.js';
@@ -33,6 +34,8 @@ export interface HookIndex {
   projects: { [project: string]: IndexedSignature[] };
   /** Every signature seen in at least two sessions. */
   signatures: { [sig: string]: { sessions: number; followed: Array<[string, number]> } };
+  /** The call shapes over the fit floors, by read ID. An index a version before this wrote has none, and a pre-tool hook then pushes nothing. */
+  fit?: { [readId: string]: RecallRead };
 }
 
 const topFollowed = (following: { [tool: string]: number }): Array<[string, number]> =>
@@ -119,7 +122,7 @@ export const buildIndex = (store: Store, redactDomains: readonly string[], at: s
       .slice(0, PER_PROJECT);
     if (rows.length > 0) projects[project] = rows;
   }
-  return { at, redactDomains: [...redactDomains], projects, signatures };
+  return { at, redactDomains: [...redactDomains], projects, signatures, fit: Object.fromEntries(fitReads(store).map((read) => [read.readId, read])) };
 };
 
 export const indexPath = (storeDir: string): string => join(storeDir, INDEX_FILE);
