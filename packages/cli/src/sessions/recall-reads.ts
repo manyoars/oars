@@ -154,12 +154,14 @@ interface ShapeTally {
   models: Set<string>;
 }
 
-export const fitReads = (store: Store, floors: FitFloors = FIT_FLOORS): RecallRead[] => {
+/** `keep` narrows which calls are tallied, not what can come next: the call after a kept one is what followed it, wherever the slice ends. */
+export const fitReads = (store: Store, floors: FitFloors = FIT_FLOORS, keep: (call: ToolObservation) => boolean = () => true): RecallRead[] => {
   const models = modelsByPrompt(store);
   const harnesses = harnessesOf(store);
   const shapes = new Map<string, ShapeTally>();
   for (const calls of callsBySession(store).values()) {
     for (const [position, call] of calls.entries()) {
+      if (!keep(call)) continue;
       const id = toolShapeId(call.tool, call.keys);
       const shape: ShapeTally = shapes.get(id) ?? { tool: call.tool, keys: [...call.keys].sort(), calls: 0, failed: 0, sessions: new Set(), following: new Map(), days: [], versions: new Set(), models: new Set() };
       shapes.set(id, shape);
@@ -246,21 +248,25 @@ const entityReads = (store: Store, name: string): RecallRead[] => {
   return [usage, ...errors];
 };
 
-const sliceKeeps = (store: Store, slice: RecallSlice, now: number): ((error: ErrorObservation) => boolean) => {
+const promptKey = (row: { session: string; prompt: number | null }): string => `${row.session}#${String(row.prompt)}`;
+
+/** The calls and errors a slice holds. A class comes through `clsOf`, because an error row states its own and a call only through its prompt. */
+const sliceKeeps = <Row extends { session: string; prompt: number | null; harnessVersion: string | null; tool: string; ts: string | null }>(store: Store, slice: RecallSlice, now: number, clsOf: (row: Row) => string | null | undefined): ((row: Row) => boolean) => {
   const models = modelsByPrompt(store);
   const cutoff = slice.sinceDays === undefined ? undefined : new Date(now - slice.sinceDays * DAY_MS).toISOString();
-  return (error) =>
-    (slice.harnessVersion === undefined || error.harnessVersion === slice.harnessVersion) &&
-    (slice.model === undefined || models.get(`${error.session}#${String(error.prompt)}`) === slice.model) &&
-    (slice.tool === undefined || error.tool === slice.tool) &&
-    (slice.cls === undefined || error.cls === slice.cls) &&
-    (cutoff === undefined || (error.ts !== null && error.ts >= cutoff));
+  return (row) =>
+    (slice.harnessVersion === undefined || row.harnessVersion === slice.harnessVersion) &&
+    (slice.model === undefined || models.get(promptKey(row)) === slice.model) &&
+    (slice.tool === undefined || row.tool === slice.tool) &&
+    (slice.cls === undefined || clsOf(row) === slice.cls) &&
+    (cutoff === undefined || (row.ts !== null && row.ts >= cutoff));
 };
 
 const questionReads = (store: Store, family: string | undefined, slice: RecallSlice, now: number): RecallRead[] => {
-  if (family === 'recovery') return recoveryReads(store, sliceKeeps(store, slice, now));
+  if (family === 'recovery') return recoveryReads(store, sliceKeeps<ErrorObservation>(store, slice, now, (error) => error.cls));
   if (family !== 'fit') return [];
-  return fitReads(store).filter((read) => (slice.tool === undefined || read.tool === slice.tool) && (slice.harnessVersion === undefined || read.harnessVersions.includes(slice.harnessVersion)) && (slice.model === undefined || read.models.includes(slice.model)));
+  const classes = new Map(store.prompts.map((prompt) => [`${prompt.session}#${String(prompt.index)}`, prompt.cls]));
+  return fitReads(store, FIT_FLOORS, sliceKeeps<ToolObservation>(store, slice, now, (call) => classes.get(promptKey(call))));
 };
 
 const patternReads = (store: Store, prefix: readonly string[], current: CurrentPool | undefined): RecallRead[] => {
