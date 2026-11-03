@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
+import { ACTION_TABLES } from './actions.js';
 import { captureSession, type Capture } from './extract.js';
+import { callIdentity } from './identity.js';
 import { BUNDLING_PROGRAMS, PUBLIC_PROGRAMS } from './public-vocabulary.js';
 import { makeRedactor } from './redact.js';
 import type { StepObservation, ToolObservation } from './schema.js';
@@ -177,6 +179,25 @@ describe('identity holds public names only', () => {
 
   it('masks a tool name on a public server that is not shaped like one', () => {
     expect(stepsOf([{ name: 'mcp__github__has space', input: {} }])[0]).toMatchObject({ native: '<literal>', identity: { server: 'github', tool: '<literal>' } });
+  });
+
+  it('masks a tool a public server does not publish, since a server name is a label the user picks', () => {
+    for (const [name, server] of [['mcp__postgres__acme_ledger', 'postgres'], ['mcp__github__acme__query', 'github']] as const) {
+      const call = { name, input: {} };
+      const masked = { native: '<literal>', identity: { server, tool: '<literal>' } };
+      expect(stepsOf([call])[0]).toMatchObject({ action: 'mcp.call', ...masked });
+      expect(pooled(captured([call]))).not.toContain('acme');
+      // Codex spells a call the same way, and the capture path reaches it through this function once its adapter lands.
+      expect(callIdentity(ACTION_TABLES.codex, 'mcp.call', name, '<literal>', { skill: undefined, url: undefined })).toEqual(masked);
+    }
+  });
+
+  it('masks a published tool of one server when another server calls it', () => {
+    expect(stepsOf([{ name: 'mcp__postgres__navigate', input: {} }])[0]).toMatchObject({ native: '<literal>', identity: { server: 'postgres', tool: '<literal>' } });
+  });
+
+  it('masks every tool of a public server with none seeded', () => {
+    expect(stepsOf([{ name: 'mcp__notion__search', input: {} }])[0]).toMatchObject({ native: '<literal>', identity: { server: 'notion', tool: '<literal>' } });
   });
 
   it('reads a public skill, and masks a private one', () => {
