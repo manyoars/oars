@@ -77,7 +77,7 @@ describe('sessions verify and the folders it never reads', () => {
     const verified = await sessionsVerify(deps(staged), { session: undefined });
     expect(verified.report.scope).toEqual({ folders: 1, transcripts: 1, names: ['beta-app'] });
     expect(verified.document).toMatchObject({ scope: { folders: 1, transcripts: 1, names: ['beta-app'] } });
-    expect(verified.text).toMatch(/1 project folder holds 1 transcript that is never read: it is not on the allowlist\. Not captured: beta-app\./);
+    expect(verified.text).toMatch(/1 project folder holds 1 main transcript; it is never read: not on the allowlist\. Not captured: beta-app\./);
     expect(verified.failed).toEqual([]);
   });
 
@@ -87,7 +87,7 @@ describe('sessions verify and the folders it never reads', () => {
     await deposit(staged.runtime, { allow: ['proj'], redactDomains: [], now: () => NOW });
     const verified = await sessionsVerify(deps(staged), { session: undefined });
     expect(verified.report.scope.names).toHaveLength(12);
-    expect(verified.text).toMatch(/12 project folders hold 12 transcripts that are never read/);
+    expect(verified.text).toMatch(/12 project folders hold 12 main transcripts; they are never read/);
     expect(verified.text).toMatch(/extra-09, and 2 more\./);
   });
 
