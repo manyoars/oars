@@ -173,7 +173,7 @@ export const sessionsVerify = async (deps: SessionsDeps, options: { session: str
     const captured = mine([...store.sessions, ...store.subagents]);
     // A session behind the current version whose transcript is in neither the harness nor raw/ (or, for a Cursor session, whose composer is gone from Cursor) can never be captured again: counted apart, never a strict failure.
     const frozen = await frozenSessions(runtime, captured.filter((session) => Number(session.cv) >= OLDEST_READABLE_CAPTURE && Number(session.cv) < Number(CAPTURE_VERSION)));
-    const results = [...verifyAll(skeletons), ...verifyCaptured(captured, mine(store.tools), frozen)];
+    const results = [...verifyAll(skeletons, everySkeleton.skeletons), ...verifyCaptured(captured, mine(store.tools), frozen)];
     const sessionResults = verifySessions(everySkeleton.skeletons, captured, mine(store.tools), frozen).filter((entry) => options.session === undefined || entry.session === options.session);
     const audits = await auditStore(runtime, captured, skeletons);
     const audit = { counts: auditCounts(audits), sessions: audits };
@@ -187,11 +187,12 @@ export const sessionsVerify = async (deps: SessionsDeps, options: { session: str
     const failed = [...results.filter((result) => result.violations > 0).map((result) => result.name), ...(unreadable > 0 ? ['unreadable skeletons'] : []), ...merkleFailed, ...stuck.map((entry) => `stuck: ${entry.step}`)];
     const stuckLines = stuck.map((entry) => `FAIL  ${entry.step} is stuck: key ${entry.key} failed ${String(entry.runs)} runs in a row: ${entry.error}`);
     const highWater = mine([...store.sessions, ...store.subagents]).map((session) => `${session.session}:${String(session.rev)}:${session.cv}`).sort();
+    const resultLines = formatSessionResults(sessionResults);
     const outcome = {
       failed,
       report,
       document: { ok: true, ...report, newerCaptures: store.newerCaptures },
-      text: [formatVerify(results, skeletons.length), ...(formatSessionResults(sessionResults) === '' ? [] : [formatSessionResults(sessionResults)]), formatAudit(audits), ...(frozen.size > 0 ? [`${String(frozen.size)} cv-frozen sessions: behind the current capture version, but the transcript is gone from the harness and raw/ (or, for a Cursor session, the composer is gone from Cursor), so they cannot be captured again`] : []), ...newerNotice(store), ...(unreadable > 0 ? [`FAIL  ${String(unreadable)} unreadable skeleton files (torn or corrupted); redeposit to rebuild them`] : []), ...stuckLines].join('\n'),
+      text: [formatVerify(results, skeletons.length), ...(resultLines === '' ? [] : [resultLines]), formatAudit(audits), ...(frozen.size > 0 ? [`${String(frozen.size)} cv-frozen sessions: behind the current capture version, but the transcript is gone from the harness and raw/ (or, for a Cursor session, the composer is gone from Cursor), so they cannot be captured again`] : []), ...newerNotice(store), ...(unreadable > 0 ? [`FAIL  ${String(unreadable)} unreadable skeleton files (torn or corrupted); redeposit to rebuild them`] : []), ...stuckLines].join('\n'),
     };
     const cvBehind = results.find((result) => result.name === CAPTURE_INVARIANTS[0])?.violations ?? 0;
     // The key is the sessions checked, each at its rev and cv, and the code's ev (spec 4.2).
