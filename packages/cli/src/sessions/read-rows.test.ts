@@ -58,9 +58,14 @@ describe('formatReads', () => {
       'recovery (1 reads)',
       '  n=3 clusters: 1 order=1 action=file.read | errors=3 following=file.edit:2,file.read:1 lastSeen=null',
       'fit (2 reads)',
-      '  n=4 clusters: 1 order=1 motif=file.read | share=0.5 ci=0.1-0.9',
+      '  n=4 clusters: 1 order=1 motif=file.read | share=0.5 ci=0.1..0.9',
       '  n=2 clusters: 1 order=1 motif=file.edit | share=0.5',
     ]);
+  });
+
+  it('keeps an interval that runs below zero readable: a move above order 1 can', () => {
+    const text = formatReads([read('day-move', 4, { motif: 'file.read' }, { interval: { low: -0.03, high: -0.01, level: 0.95 } })]);
+    expect(text).toContain(' ci=-0.03..-0.01');
   });
 
   it('marks a labeled experiment in its heading, so a reader meets the label before the row', () => {

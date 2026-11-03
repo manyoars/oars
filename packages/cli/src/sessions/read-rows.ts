@@ -39,7 +39,7 @@ const pairsOf = (fields: ReadSlice | ReadValue): string =>
     .join(' ');
 
 const formatRead = (read: Read): string => {
-  const interval = read.interval === null ? '' : ` ci=${String(read.interval.low)}-${String(read.interval.high)}`;
+  const interval = read.interval === null ? '' : ` ci=${String(read.interval.low)}..${String(read.interval.high)}`;
   return `  n=${String(read.n)} clusters: ${String(read.clusters)} order=${String(read.order)} ${pairsOf(read.slice)} | ${pairsOf(read.value)}${interval}`;
 };
 
