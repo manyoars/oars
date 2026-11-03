@@ -38,7 +38,7 @@ export const CAPTURE_VERSION = '5';
 export const OLDEST_READABLE_CAPTURE = 3;
 
 /** Stamped `v` on every derived record. A bump re-derives from the log; no transcript is read. */
-export const EXTRACTOR_VERSION = '4';
+export const EXTRACTOR_VERSION = '5';
 
 export const PROMPT_HEAD_CHARS = 300;
 export const ERROR_EXAMPLE_CHARS = 160;
@@ -141,10 +141,16 @@ export interface SessionObservation {
   usage: Usage;
 }
 
+/** What the last shell call after a prompt's last edit returned: `none` when no such call reports a result, `na` when the prompt edited nothing. */
+export type PromptVerify = 'passed' | 'failed' | 'none' | 'na';
+
+/** How the operator cut a prompt short: Esc or a new message (`interrupt`), or declining a tool call (`rejected`). */
+export type PromptStop = 'interrupt' | 'rejected';
+
 /**
  * One per user prompt: the `prompt_graphs.py` and `cost_per_class.py` records joined. Derived. Classes: `session` and
  * `contextFingerprint`, `head`, and `ts` (A); `kind`, `v`, `rev`, `index`, `wallSec`, `cls`, `tools`, `shape`, `errors`, `thinking`, `sideTools`,
- * `turns`, `model`, `efforts`, `skills`, `usage`, `recovery`, `explore`, `act`, and `bigrams` (P).
+ * `turns`, `model`, `efforts`, `skills`, `usage`, `recovery`, `explore`, `act`, `bigrams`, `verify`, `stopped`, `commits`, and `redo` (P).
  */
 export interface PromptObservation {
   kind: 'prompt';
@@ -178,6 +184,14 @@ export interface PromptObservation {
   bigrams: { [bigram: string]: number };
   /** The session's prompt fingerprint at the time of the prompt (kept under this name on the derived record), when one had been seen. */
   contextFingerprint: string | null;
+  // The outcome signals (t747), kept separate on purpose: no composite. Optional because a version-2 line, read as written, predates them.
+  /** Exit status only: `passed` says the last shell call was clean, not that a test ran. */
+  verify?: PromptVerify;
+  stopped?: PromptStop | null;
+  /** A floor, not a count: `target` shows only a first-line `git commit`, so `git add . && git commit` is not seen until commits are captured. */
+  commits?: number;
+  /** A later prompt edited a path this one edited, within `REDO_WINDOW` prompts, with no commit `commits` can see between them. */
+  redo?: boolean;
 }
 
 /**

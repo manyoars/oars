@@ -44,7 +44,7 @@ export const EXPLORE = new Set(['Read', 'Grep', 'Glob', 'WebFetch', 'WebSearch',
 export const ACT = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit', 'Bash', 'PowerShell']);
 const COORD = new Set(['Agent', 'SendMessage', 'Monitor', 'TaskStop', 'Skill', 'ScheduleWakeup', 'ListAgents', 'Workflow']);
 export const EDITS = new Set(['Edit', 'Write', 'MultiEdit']);
-const SHELL = new Set(['Bash', 'PowerShell']);
+export const SHELL = new Set(['Bash', 'PowerShell']);
 const PATH_TOOLS = new Set(['Read', 'Edit', 'Write', 'MultiEdit', 'NotebookEdit']);
 
 const TLDR_RE = /^\s*\**\s*(?:TL;?DR|TLDR)\s*:?\**\s*:?\s*(.+?)\s*$/gim;

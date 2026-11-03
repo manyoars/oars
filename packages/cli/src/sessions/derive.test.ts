@@ -1,11 +1,11 @@
 import { copyFileSync, mkdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { episodesOf, extractSession, rankRecovery, RECOVERY_WINDOW, type Episode, type EpisodeOutcome, type SessionCapture } from './derive.js';
-import { captureSession } from './extract.js';
+import { deriveSession, episodesOf, extractSession, rankRecovery, RECOVERY_WINDOW, REDO_WINDOW, type Episode, type EpisodeOutcome, type SessionCapture } from './derive.js';
+import { captureSession, emptyUsage } from './extract.js';
 import { books, formatBooks, formatMeasure, measure } from './query.js';
 import { makeRedactor } from './redact.js';
-import { CAPTURE_VERSION, type ErrorLineObservation, type ErrorObservation, type ToolObservation, type ToolStatus } from './schema.js';
+import { CAPTURE_VERSION, type ErrorLineObservation, type ErrorObservation, type PromptVerify, type ToolObservation, type ToolStatus, type UserPromptObservation } from './schema.js';
 import { deposit, depositSession, derive, loadStore, paths } from './store.js';
 import { cleanup, FIXTURES, NOW, stage } from './test-support.js';
 
@@ -234,5 +234,191 @@ describe('recovery episodes (recovery_episodes.py, t693)', () => {
     expect(ranked[1]).toMatchObject({ sig: 'A', score: 4, fixed: 1, workedAround: 1 });
     expect(ranked[2]).toMatchObject({ sig: 'B', medianCalls: 2, score: 4, abandoned: 1 });
     expect(rankRecovery([episode('a', 'C', 'fixed', 1), episode('b', 'C', 'fixed', 1), episode('a', 'A', 'fixed', 1), episode('b', 'A', 'fixed', 1)], 1)).toMatchObject([{ sig: 'A' }]);
+  });
+});
+
+describe('prompt outcome signals (t747)', () => {
+  const redact = makeRedactor();
+  const head = captureSession({ text: readFileSync(join(FIXTURES, 'proj', 'errors-a.jsonl'), 'utf8'), session: 's', project: 'proj', rev: 1, at: '', bytes: 0, redact }).session;
+  interface Call {
+    prompt: number | null;
+    tool: string;
+    status?: ToolStatus;
+    target?: string | null;
+    id?: string;
+    keys?: string[];
+    side?: boolean;
+  }
+  interface Failure {
+    prompt: number;
+    line: string;
+    side?: boolean;
+  }
+  const edit = (prompt: number, target = 'hash-a', status: ToolStatus = 'ok'): Call => ({ prompt, tool: 'Edit', target, status });
+  const shell = (prompt: number, status: ToolStatus = 'ok', target = 'npm test'): Call => ({ prompt, tool: 'Bash', target, status });
+  const commit = (prompt: number, status: ToolStatus = 'ok'): Call => shell(prompt, status, 'git commit');
+  const derived = (heads: readonly string[], calls: readonly Call[], failures: readonly Failure[] = []) => {
+    const tools = calls.map((call, n): ToolObservation => ({
+      kind: 'tool', cv: CAPTURE_VERSION, sid: null, session: 's', rev: 1, parent: 's', agentType: null, n, ts: null, tool: call.tool, status: call.status ?? 'ok', target: call.target ?? null, targetBase: null,
+      keys: call.keys ?? [], durationMs: null, toolUseId: call.id ?? `c${String(n)}`, harnessVersion: null, side: call.side ?? false, prompt: call.prompt,
+    }));
+    const errorLines = failures.map((failure): ErrorLineObservation => ({
+      kind: 'error-line', cv: CAPTURE_VERSION, sid: null, session: 's', rev: 1, toolUseId: null, tool: 'Edit', line: failure.line, ts: null, harnessVersion: null, side: failure.side ?? false, prompt: failure.prompt, after: 0,
+    }));
+    const prompts = heads.map((text, index): UserPromptObservation => ({
+      kind: 'user-prompt', cv: CAPTURE_VERSION, sid: null, session: 's', rev: 1, index, ts: null, wallSec: null, head: text, thinking: 0, turns: 0, model: 'm', efforts: [], skills: [], usage: emptyUsage(), promptFingerprint: null,
+    }));
+    return deriveSession({ session: head, prompts, tools, errorLines }, redact).prompts;
+  };
+  const one = (calls: readonly Call[], failures: readonly Failure[] = []) => derived(['work'], calls, failures)[0];
+  const asPrompts = (count: number): string[] => Array.from({ length: count }, (_, index) => `prompt ${String(index)}`);
+
+  describe('verify', () => {
+    it.each<[string, Call[], PromptVerify]>([
+      ['no call', [], 'na'],
+      ['only reads and shell', [{ prompt: 0, tool: 'Read', target: 'hash-a' }, shell(0)], 'na'],
+      ['only a failed edit', [edit(0, 'hash-a', 'error'), shell(0)], 'na'],
+      ['an edit and no shell call', [edit(0)], 'none'],
+      ['a shell call before the edit only', [shell(0), edit(0)], 'none'],
+      ['a last shell call with no result', [edit(0), shell(0), shell(0, 'none')], 'none'],
+      ['an edit with no result of its own', [edit(0, 'hash-a', 'none'), shell(0)], 'passed'],
+      ['a clean shell call after the edit', [edit(0), shell(0)], 'passed'],
+      ['PowerShell', [edit(0), { prompt: 0, tool: 'PowerShell', target: 'npm test', status: 'error' }], 'failed'],
+      ['a Write and a MultiEdit', [{ prompt: 0, tool: 'Write', target: 'hash-a' }, shell(0, 'error'), { prompt: 0, tool: 'MultiEdit', target: 'hash-b' }, shell(0)], 'passed'],
+      ['the last of several: a fix after a failure', [edit(0), shell(0, 'error'), shell(0)], 'passed'],
+      ['the last of several: a failure after a pass', [edit(0), shell(0), shell(0, 'error')], 'failed'],
+      ['an edit after the failure takes the failure out of the running', [edit(0), shell(0, 'error'), edit(0)], 'none'],
+      ['a failed edit is not the last edit', [edit(0), shell(0), edit(0, 'hash-a', 'error')], 'passed'],
+      ['a backgrounded call only says it started', [edit(0), { ...shell(0), keys: ['command', 'run_in_background'] }], 'none'],
+      ['the call before a backgrounded one decides', [edit(0), shell(0, 'error'), { ...shell(0), keys: ['command', 'run_in_background'] }], 'failed'],
+      ['a sidechain edit is not the prompt editing', [{ ...edit(0), side: true }, shell(0)], 'na'],
+      ['a sidechain shell call does not decide', [edit(0), shell(0), { ...shell(0, 'error'), side: true }], 'passed'],
+    ])('%s', (_name, calls, expected) => {
+      expect(one(calls)?.verify).toBe(expected);
+    });
+  });
+
+  describe('stopped', () => {
+    const REJECTED = "The user doesn't want to proceed with this tool use. The tool use was rejected (eg. if it was a file edit, the new_string was NOT written to the file).";
+    it('is null with no marker', () => {
+      expect(one([edit(0)])?.stopped).toBeNull();
+    });
+
+    it.each([REJECTED, "The user doesn't want to take this action right now. STOP what you are doing and wait for the user to tell you how to proceed."])('reads a tool rejection from its error line: %s', (line) => {
+      expect(one([edit(0, 'hash-a', 'error')], [{ prompt: 0, line }])?.stopped).toBe('rejected');
+    });
+
+    it.each(['Permission for this action was denied by the Claude Code auto mode classifier. Reason: x', 'PreToolUse:Bash hook error: y', 'Search failed: ripgrep rejected the pattern'])('does not read a policy or tool failure as the user rejecting: %s', (line) => {
+      expect(one([edit(0, 'hash-a', 'error')], [{ prompt: 0, line }])?.stopped).toBeNull();
+    });
+
+    it('does not read a sidechain rejection as the prompt being stopped', () => {
+      expect(one([edit(0)], [{ prompt: 0, line: REJECTED, side: true }])?.stopped).toBeNull();
+    });
+
+    it.each(['[Request interrupted by user]', '[Request interrupted by user for tool use]'])('books the marker %s to the prompt it cut short, not to itself', (marker) => {
+      expect(derived(['work', marker, 'next'], []).map((prompt) => prompt.stopped)).toEqual(['interrupt', null, null]);
+    });
+
+    it('does not read the marker quoted inside a prompt', () => {
+      expect(derived(['work', 'why did [Request interrupted by user] appear?'], []).map((prompt) => prompt.stopped)).toEqual([null, null]);
+    });
+
+    it('names a rejection over the interrupt marker the harness writes right after it', () => {
+      expect(derived(['work', '[Request interrupted by user for tool use]'], [edit(0, 'hash-a', 'error')], [{ prompt: 0, line: REJECTED }])[0]?.stopped).toBe('rejected');
+    });
+
+    it('finds both markers in a real transcript shape, through capture', () => {
+      const user = (text: string): string => JSON.stringify({ type: 'user', isSidechain: false, cwd: '/work/app', message: { role: 'user', content: text } });
+      const lines = [
+        user('first'),
+        JSON.stringify({ type: 'assistant', isSidechain: false, requestId: 'r1', message: { role: 'assistant', model: 'm', content: [{ type: 'tool_use', id: 'e1', name: 'Edit', input: { file_path: '/work/app/a.ts', old_string: 'a', new_string: 'b' } }] } }),
+        JSON.stringify({ type: 'user', isSidechain: false, message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'e1', is_error: true, content: `${REJECTED} STOP what you are doing and wait for the user to tell you how to proceed.` }] } }),
+        JSON.stringify({ type: 'user', isSidechain: false, message: { role: 'user', content: [{ type: 'text', text: '[Request interrupted by user for tool use]' }] } }),
+        user('second'),
+        user('[Request interrupted by user]'),
+        user('third'),
+      ].join('\n');
+      const { prompts } = extractSession({ text: lines, session: 's', project: 'proj', rev: 1, at: '', bytes: 0, redact });
+      expect(prompts.map((prompt) => [prompt.head.slice(0, 8), prompt.stopped, prompt.verify])).toEqual([
+        ['first', 'rejected', 'na'],
+        ['[Request', null, 'na'],
+        ['second', 'interrupt', 'na'],
+        ['[Request', null, 'na'],
+        ['third', null, 'na'],
+      ]);
+    });
+  });
+
+  describe('commits', () => {
+    it('counts the successful calls the captured target names as git commit', () => {
+      expect(one([commit(0), edit(0), commit(0), { prompt: 0, tool: 'PowerShell', target: 'git commit' }])?.commits).toBe(3);
+    });
+
+    it('counts no failed, unanswered, or sidechain commit, and no other git call', () => {
+      expect(one([commit(0, 'error'), commit(0, 'none'), { ...commit(0), side: true }, shell(0, 'ok', 'git push'), { prompt: 0, tool: 'Read', target: 'git commit' }])?.commits).toBe(0);
+    });
+
+    // The target is the first line's program and subcommand, so this form is out of reach until the captured commits field lands (t746).
+    it('is a floor: a commit behind another command on the line is not seen', () => {
+      expect(one([shell(0, 'ok', 'git add')])?.commits).toBe(0);
+    });
+
+    it('counts a call a resumed session repeats once, under the prompt that made it', () => {
+      expect(derived(['work', 'work'], [{ ...commit(0), id: 'x' }, { ...commit(1, 'none'), id: 'x' }]).map((prompt) => prompt.commits)).toEqual([1, 0]);
+    });
+  });
+
+  describe('redo', () => {
+    const redone = (count: number, calls: readonly Call[]): (boolean | undefined)[] => derived(asPrompts(count), calls).map((prompt) => prompt.redo);
+
+    it('marks the earlier prompt when the next one edits the same path', () => {
+      expect(redone(2, [edit(0), edit(1)])).toEqual([true, false]);
+    });
+
+    it('looks REDO_WINDOW prompts ahead and no further', () => {
+      expect(REDO_WINDOW).toBe(3);
+      expect(redone(REDO_WINDOW + 1, [edit(0), edit(REDO_WINDOW)])[0]).toBe(true);
+      expect(redone(REDO_WINDOW + 2, [edit(0), edit(REDO_WINDOW + 1)])[0]).toBe(false);
+    });
+
+    it('marks each prompt of a chain but the last', () => {
+      expect(redone(3, [edit(0), edit(1), edit(2)])).toEqual([true, true, false]);
+    });
+
+    it('ignores another path, a read of the path, a failed re-edit, and two edits in one prompt', () => {
+      expect(redone(2, [edit(0), edit(1, 'hash-b')])).toEqual([false, false]);
+      expect(redone(2, [edit(0), { prompt: 1, tool: 'Read', target: 'hash-a' }])).toEqual([false, false]);
+      expect(redone(2, [edit(0), edit(1, 'hash-a', 'error')])).toEqual([false, false]);
+      expect(redone(1, [edit(0), edit(0)])).toEqual([false]);
+    });
+
+    it('does not count a failed first edit as the prompt having edited the path', () => {
+      expect(redone(2, [edit(0, 'hash-a', 'error'), edit(1)])).toEqual([false, false]);
+    });
+
+    it('stops at a commit between the two edits, wherever it falls', () => {
+      expect(redone(2, [edit(0), commit(0), edit(1)])).toEqual([false, false]);
+      expect(redone(3, [edit(0), commit(1), edit(2)])).toEqual([false, false, false]);
+      expect(redone(2, [edit(0), commit(1), edit(1)])).toEqual([false, false]);
+    });
+
+    it('does not stop at a failed commit, or a commit before the first edit or after the second', () => {
+      expect(redone(2, [edit(0), commit(1, 'error'), edit(1)])[0]).toBe(true);
+      expect(redone(2, [commit(0), edit(0), edit(1), commit(1)])[0]).toBe(true);
+    });
+
+    it('does not read a call a resumed session repeats as a second edit', () => {
+      expect(redone(2, [{ ...edit(0), id: 'x' }, { ...edit(1, 'hash-a', 'none'), id: 'x' }])).toEqual([false, false]);
+    });
+
+    it('skips a call with no target and a sidechain edit', () => {
+      expect(redone(2, [{ prompt: 0, tool: 'Edit', target: null }, { prompt: 1, tool: 'Edit', target: null }])).toEqual([false, false]);
+      expect(redone(2, [edit(0), { ...edit(1), side: true }])).toEqual([false, false]);
+    });
+
+    it('takes a call before the first prompt as no edit of any prompt', () => {
+      expect(redone(1, [{ ...edit(0), prompt: null }, edit(0)])).toEqual([false]);
+    });
   });
 });
