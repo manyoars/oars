@@ -51,6 +51,14 @@ describe('renderAnswer', () => {
     expect(names).toEqual(['shell.exec', 'file.edit']);
   });
 
+  it('shows no version gap for a harness that differs, since a gap of the same size would read as the same harness', () => {
+    const { rendered } = renderAnswer([read({ harnesses: ['cursor'] })], frame());
+    expect(rendered).toContain('from you: harness differs, model same');
+    expect(rendered).not.toContain('harness +2');
+    const level = renderAnswer([read({ harnesses: ['cursor'], harnessVersions: ['2.1.316'] })], frame()).rendered;
+    expect(level).toContain('from you: harness differs, model same');
+  });
+
   it('says nothing for no reads', () => {
     expect(renderAnswer([], frame())).toEqual({ rendered: '', names: [] });
   });
