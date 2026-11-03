@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { captureSession, type Capture } from './extract.js';
+import { BUNDLING_PROGRAMS, PUBLIC_PROGRAMS } from './public-vocabulary.js';
 import { makeRedactor } from './redact.js';
 import type { StepObservation, ToolObservation } from './schema.js';
 
@@ -62,6 +63,7 @@ describe('identity holds public names only', () => {
     ['a flag with its value joined', 'git push --token=abcvalue', 'abcvalue'],
     ['a flag with its value apart', 'git push --token abcvalue', 'abcvalue'],
     ['a value in a program flag', 'mysql -pmypassword', 'mypassword'],
+    ['a short value in a program flag', 'mysql -pabc', 'abc'],
     ['a define', 'mvn -Dapi.key=defvalue test', 'defvalue'],
     ['a path holding a username', 'cat /home/alicesmith/notes.txt', 'alicesmith'],
     ['a Windows path holding a username', 'type C:\\Users\\alicesmith\\notes.txt', 'alicesmith'],
@@ -125,6 +127,15 @@ describe('identity holds public names only', () => {
     expect(shell('git log -9x')[0]?.identity).toMatchObject({ flags: ['<literal>'] });
     expect(shell('git log -ABCDEF')[0]?.identity).toMatchObject({ flags: ['<literal>'] });
     expect(shell('git log -abcdefgh')[0]?.identity).toMatchObject({ flags: ['<literal>'] });
+  });
+
+  it('reads a short value joined to a flag as the literal, not as flag letters, on a program that does not bundle', () => {
+    expect(shell('mysql -pabc')[0]?.identity).toMatchObject({ flags: ['<literal>'] });
+    expect(shell('git commit -am x')[0]?.identity).toMatchObject({ flags: ['-a', '-m'] });
+  });
+
+  it('holds only public programs in the list of those that bundle short flags', () => {
+    expect([...BUNDLING_PROGRAMS].filter((program) => !PUBLIC_PROGRAMS.has(program))).toEqual([]);
   });
 
   it('stops reading flags at the end-of-options marker', () => {
