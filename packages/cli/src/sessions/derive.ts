@@ -196,6 +196,7 @@ export const deriveSession = (capture: SessionCapture, redact: Redactor): Derive
       stopped: stoppedOf(stopsOf.get(prompt.index) ?? [], capture.prompts[position + 1]?.head),
       commits: settled.reduce((sum, tool) => sum + commitsIn(tool), 0),
       redo: redone.has(prompt.index),
+      ...(prompt.frame === undefined ? {} : { frame: prompt.frame }),
     };
   });
   const classOf = new Map(prompts.map((prompt) => [prompt.index, prompt.cls]));
@@ -210,6 +211,7 @@ export const deriveSession = (capture: SessionCapture, redact: Redactor): Derive
       tool: error.tool,
       sig: signature(error.tool, error.line, redact),
       example: cut(error.line, ERROR_EXAMPLE_CHARS),
+      toolUseId: error.toolUseId,
       next: tools.slice(error.after, error.after + 2).map((tool) => tool.tool),
       editFollowed: tools.slice(error.after, error.after + 6).some((tool) => EDITS.has(tool.tool)),
       prompt: error.prompt,

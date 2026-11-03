@@ -1,0 +1,137 @@
+import { describe, expect, it } from 'vitest';
+import { motifsOf, namedId, shapeId, stepsOfCall, MOTIF_LENGTHS, motifName, type WindowStep } from './motif.js';
+import { step as captured } from './pool-fixture.js';
+import type { ToolObservation } from './schema.js';
+
+const call = (over: Partial<ToolObservation>): ToolObservation => ({
+  kind: 'tool',
+  cv: '7',
+  sid: 'aaaaaaaa',
+  session: 's',
+  rev: 1,
+  parent: 's',
+  agentType: null,
+  n: 0,
+  ts: null,
+  tool: 'Read',
+  status: 'ok',
+  target: 'hash-under-salt-a',
+  targetBase: 'repo',
+  keys: [],
+  durationMs: 5,
+  toolUseId: null,
+  harnessVersion: null,
+  side: false,
+  prompt: 0,
+  ...over,
+});
+
+const step = (action: WindowStep['action'], identity: WindowStep['identity'] = null): WindowStep => ({ action, identity });
+
+describe('motif IDs', () => {
+  it('joins the same shape from two differently salted accounts, in two frames', () => {
+    const steps = (sid: string, target: string, frameId: string) =>
+      [call({ sid, target, steps: [captured(0, 0, 'file.read', { frameId })] }), call({ sid, target, n: 1, tool: 'Edit', steps: [captured(1, 0, 'file.edit', { frameId })] })].flatMap((tool) =>
+        stepsOfCall(tool, 'claude-code'),
+      );
+    const one = steps('aaaaaaaa', 'hash-under-salt-a', 'frame-one');
+    const two = steps('bbbbbbbb', 'hash-under-salt-b', 'frame-two');
+    expect(shapeId(one)).toBe(shapeId(two));
+    expect(namedId(one)).toBe(namedId(two));
+  });
+
+  it('tells two identities apart at named only', () => {
+    const one = [step('shell.exec', { program: 'git', sub: 'status', flags: [] }), step('file.edit')];
+    const two = [step('shell.exec', { program: 'npm', sub: 'test', flags: [] }), step('file.edit')];
+    expect(shapeId(one)).toBe(shapeId(two));
+    expect(namedId(one)).not.toBe(namedId(two));
+  });
+
+  it('reads an identity by content, whatever order its fields were written in', () => {
+    expect(namedId([step('mcp.call', { server: 'a', tool: 'b' })])).toBe(namedId([step('mcp.call', { tool: 'b', server: 'a' })]));
+  });
+
+  it('does not mistake a level for the other, or a longer shape for a shorter one', () => {
+    const steps = [step('file.read'), step('file.edit')];
+    expect(shapeId(steps)).not.toBe(namedId(steps));
+    expect(shapeId(steps)).not.toBe(shapeId([...steps, step('file.edit')]));
+    expect(shapeId(steps)).not.toBe(shapeId([step('file.edit'), step('file.read')]));
+  });
+});
+
+describe('stepsOfCall', () => {
+  it('takes the action a record captured', () => {
+    expect(stepsOfCall(call({ steps: [captured(0, 0, 'file.write')] }), 'claude-code')).toEqual([{ action: 'file.write', identity: null, status: 'ok', tokens: 0, durationMs: 0 }]);
+  });
+
+  it('reads a record captured before steps existed through the same action table, under its own harness', () => {
+    expect(stepsOfCall(call({ tool: 'Bash' }), 'claude-code')[0]?.action).toBe('shell.exec');
+    expect(stepsOfCall(call({ tool: 'not-a-tool' }), 'claude-code')[0]?.action).toBe('other');
+  });
+
+  it('reads identity, status, and cost per segment, and counts a call once because capture holds its cost on the first segment', () => {
+    const git = { program: 'git', sub: null, flags: [] };
+    const npm = { program: 'npm', sub: null, flags: [] };
+    const steps = [captured(0, 0, 'shell.exec', { identity: git, cost: { tokens: 7, durationMs: 5 } }), captured(0, 1, 'shell.exec', { identity: npm, status: 'error' })];
+    expect(stepsOfCall(call({ tool: 'Bash', status: 'error', steps }), 'claude-code')).toEqual([
+      { action: 'shell.exec', identity: git, status: 'ok', tokens: 7, durationMs: 5 },
+      { action: 'shell.exec', identity: npm, status: 'error', tokens: 0, durationMs: 0 },
+    ]);
+  });
+
+  it('counts no duration for a call with none', () => {
+    expect(stepsOfCall(call({ durationMs: null }), 'claude-code')[0]?.durationMs).toBe(0);
+  });
+});
+
+describe('motifsOf', () => {
+  const line = [step('file.read'), step('file.search'), step('file.edit'), step('shell.exec'), step('file.read')];
+
+  it('reads a window of each length at both levels', () => {
+    const windows = motifsOf(line);
+    // Lengths 1, 2, 3, and 4 over five steps: 5 + 4 + 3 + 2 windows, each at two levels.
+    expect(MOTIF_LENGTHS).toEqual([1, 2, 3, 4]);
+    expect(windows).toHaveLength(28);
+    expect(windows.filter((window) => window.motif.level === 'shape')).toHaveLength(14);
+    expect(windows.filter((window) => window.motif.steps.length === 4)).toHaveLength(4);
+    expect(windows.some((window) => window.motif.steps.length > 4)).toBe(false);
+  });
+
+  it('places each window by its first step, so a caller can add up what it covers', () => {
+    const windows = motifsOf(line).filter((window) => window.motif.level === 'shape' && window.motif.steps.length === 2);
+    expect(windows.map((window) => window.start)).toEqual([0, 1, 2, 3]);
+  });
+
+  it('returns one motif object per ID, so a line repeats a shape cheaply', () => {
+    const windows = motifsOf([step('file.read'), step('file.read')]).filter((window) => window.motif.level === 'shape' && window.motif.steps.length === 1);
+    expect(windows[0]?.motif).toBe(windows[1]?.motif);
+  });
+
+  it('holds only actions on a shape motif, and names each in public vocabulary', () => {
+    const [shape, named] = motifsOf([step('shell.exec', { program: 'git', sub: 'status', flags: ['short'] })]);
+    expect(shape?.motif.steps).toEqual([{ action: 'shell.exec', identity: null }]);
+    expect(named?.motif.steps).toEqual([{ action: 'shell.exec', identity: { program: 'git', sub: 'status', flags: ['short'] } }]);
+    expect(shape !== undefined && motifName(shape.motif)).toBe('shell.exec');
+    expect(named !== undefined && motifName(named.motif)).toBe('shell.exec[flags=short program=git sub=status]');
+  });
+
+  it('names a step with no identity by its action alone, even at named', () => {
+    const named = motifsOf([step('file.read'), step('file.edit')]).find((window) => window.motif.level === 'named' && window.motif.steps.length === 2);
+    expect(named !== undefined && motifName(named.motif)).toBe('file.read>file.edit');
+  });
+
+  it('names a missing identity field by leaving it out, and an empty list too', () => {
+    const named = motifsOf([step('shell.exec', { program: 'git', sub: null, flags: [] })]).find((window) => window.motif.level === 'named');
+    expect(named !== undefined && motifName(named.motif)).toBe('shell.exec[program=git]');
+  });
+
+  it('names a pull by its registry, name, and version, so two pinned versions read apart', () => {
+    const named = motifsOf([step('shell.exec', { program: 'npm', sub: 'install', flags: [], pulls: [{ registry: 'npm', name: 'zod', version: '4.0.0' }] })]).find((window) => window.motif.level === 'named');
+    expect(named !== undefined && motifName(named.motif)).toBe('shell.exec[program=npm pulls=npm:zod@4.0.0 sub=install]');
+  });
+
+  it('leaves the version out of a pull that stated none', () => {
+    const named = motifsOf([step('shell.exec', { program: 'npm', sub: 'install', flags: [], pulls: [{ registry: 'npm', name: 'zod', version: null }] })]).find((window) => window.motif.level === 'named');
+    expect(named !== undefined && motifName(named.motif)).toBe('shell.exec[program=npm pulls=npm:zod sub=install]');
+  });
+});
