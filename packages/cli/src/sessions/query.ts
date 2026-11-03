@@ -1,8 +1,10 @@
 // The read side: recall, books, and measure. All three are pure functions of a loaded store (and, for measure, the MCP log).
+import { firstCopies } from './derive.js';
 import { errorKey } from './extract.js';
 import { makeRedactor } from './redact.js';
 import { harnessOf, type ErrorObservation, type HookCall, type PromptObservation, type RecallCall, type SessionObservation, type SignatureRecord } from './schema.js';
 import { signatureRecord, type Store } from './store.js';
+import type { SurvivalState } from './survival.js';
 
 const DAY_MS = 86_400_000;
 const sinceCutoff = (now: number, days: number | undefined): string | undefined => (days === undefined ? undefined : new Date(now - days * DAY_MS).toISOString());
@@ -82,6 +84,16 @@ export const formatRecall = (result: RecallResult): string => {
     .join('\n');
 };
 
+/** Below this many in its denominator a share is noise, so a cell has none and prints as too few. The counts stay in `--json`. */
+export const BOOKS_MIN_PROMPTS = 30;
+
+/** A signal in a row: how many of the prompts or commits that can carry it did, and the share when `of` reaches `BOOKS_MIN_PROMPTS`. */
+export interface BooksShare {
+  count: number;
+  of: number;
+  share: number | null;
+}
+
 export interface BooksRow {
   key: string;
   prompts: number;
@@ -99,6 +111,18 @@ export interface BooksRow {
    * parent's `Agent` call by tool-use id, and that call's prompt gives the row.
    */
   delegated: number;
+  /** `verify` passed, of the prompts that edited and whose `verify` can be read (not `na`, not `masked`, not absent; `none` counts, since no runner read as passing). */
+  verifyPassed: BooksShare;
+  /** A stop, of the prompts carrying `stopped`. */
+  stopped: BooksShare;
+  /** A redo, of the prompts carrying `redo`. */
+  redone: BooksShare;
+  /** The prompts' `commits`, with or without a readable sha. */
+  commits: number;
+  /** Distinct shas of these prompts that survival has a known state for: survived, reverted, or unreachable, not unknown. */
+  settled: number;
+  /** Survived, of `settled`. */
+  survived: BooksShare;
 }
 
 /** Each subagent's tokens, keyed by the parent prompt that spawned it (`<session>#<index>`). */
@@ -117,16 +141,55 @@ const delegatedByPrompt = (store: Store): Map<string, number> => {
   return totals;
 };
 
-export type BooksBy = 'class' | 'model' | 'harness';
+export type BooksBy = 'class' | 'model' | 'harness' | 'pull';
 
-export const books = (store: Store, by: BooksBy, now: number, sinceDays?: number): BooksRow[] => {
+const promptKey = (session: string, index: number): string => `${session}#${String(index)}`;
+
+const shareOf = (count: number, of: number): BooksShare => ({ count, of, share: of < BOOKS_MIN_PROMPTS ? null : Math.round((count / of) * 1000) / 1000 });
+
+interface PromptCalls {
+  shas: Set<string>;
+  pulls: Set<string>;
+}
+
+/** Each prompt's shas and pulls, by the rule `commits` is derived under: a session's first copy of a call, off the sidechain. */
+const callsByPrompt = (store: Store): Map<string, PromptCalls> => {
+  const bySession = new Map<string, Store['tools']>();
+  for (const tool of store.tools) {
+    const list = bySession.get(tool.session);
+    if (list === undefined) bySession.set(tool.session, [tool]);
+    else list.push(tool);
+  }
+  const calls = new Map<string, PromptCalls>();
+  for (const tools of bySession.values()) {
+    for (const tool of firstCopies(tools)) {
+      if (tool.prompt === null || (tool.commits === undefined && tool.pulls === undefined)) continue;
+      const key = promptKey(tool.session, tool.prompt);
+      const entry = calls.get(key) ?? { shas: new Set(), pulls: new Set() };
+      for (const sha of tool.commits ?? []) if (sha !== null) entry.shas.add(sha);
+      for (const pull of tool.pulls ?? []) entry.pulls.add(`${pull.ecosystem}:${pull.name}`);
+      calls.set(key, entry);
+    }
+  }
+  return calls;
+};
+
+export const books = (store: Store, by: BooksBy, now: number, sinceDays?: number, survival: ReadonlyMap<string, SurvivalState> = new Map()): BooksRow[] => {
   const cutoff = sinceCutoff(now, sinceDays);
   const groups = new Map<string, PromptObservation[]>();
   const harnesses = new Map(store.sessions.map((session) => [session.session, harnessOf(session)]));
+  const calls = callsByPrompt(store);
+  const keysOf = (prompt: PromptObservation): Iterable<string> => {
+    if (by === 'pull') return calls.get(promptKey(prompt.session, prompt.index))?.pulls ?? [];
+    return [by === 'class' ? prompt.cls : by === 'model' ? prompt.model : (harnesses.get(prompt.session) ?? 'claude-code')];
+  };
   for (const prompt of store.prompts) {
     if (cutoff !== undefined && (prompt.ts === null || prompt.ts < cutoff)) continue;
-    const key = by === 'class' ? prompt.cls : by === 'model' ? prompt.model : (harnesses.get(prompt.session) ?? 'claude-code');
-    groups.set(key, [...(groups.get(key) ?? []), prompt]);
+    for (const key of keysOf(prompt)) {
+      const group = groups.get(key);
+      if (group === undefined) groups.set(key, [prompt]);
+      else group.push(prompt);
+    }
   }
   const sum = (list: readonly PromptObservation[], pick: (prompt: PromptObservation) => number): number => list.reduce((total, prompt) => total + pick(prompt), 0);
   const delegated = delegatedByPrompt(store);
@@ -134,6 +197,11 @@ export const books = (store: Store, by: BooksBy, now: number, sinceDays?: number
     .map(([key, list]) => {
       const verified = list.filter((prompt) => prompt.cls === 'edit-verify').length;
       const edited = verified + list.filter((prompt) => prompt.cls === 'edit-only').length;
+      const readable = list.filter((prompt) => prompt.verify !== undefined && prompt.verify !== 'na' && prompt.verify !== 'masked');
+      const carryingStop = list.filter((prompt) => prompt.stopped !== undefined);
+      const carryingRedo = list.filter((prompt) => prompt.redo !== undefined);
+      const states = [...new Set(list.flatMap((prompt) => [...(calls.get(promptKey(prompt.session, prompt.index))?.shas ?? [])]))].map((sha) => survival.get(sha));
+      const settled = states.filter((state) => state !== undefined && state !== 'unknown').length;
       return {
         key,
         prompts: list.length,
@@ -145,18 +213,31 @@ export const books = (store: Store, by: BooksBy, now: number, sinceDays?: number
         turns: sum(list, (prompt) => prompt.turns),
         errors: sum(list, (prompt) => prompt.errors),
         verifyAfterEdit: edited === 0 ? null : Math.round((verified / edited) * 1000) / 1000,
-        delegated: sum(list, (prompt) => delegated.get(`${prompt.session}#${String(prompt.index)}`) ?? 0),
+        delegated: sum(list, (prompt) => delegated.get(promptKey(prompt.session, prompt.index)) ?? 0),
+        verifyPassed: shareOf(readable.filter((prompt) => prompt.verify === 'passed').length, readable.length),
+        stopped: shareOf(carryingStop.filter((prompt) => prompt.stopped !== null).length, carryingStop.length),
+        redone: shareOf(carryingRedo.filter((prompt) => prompt.redo === true).length, carryingRedo.length),
+        commits: sum(list, (prompt) => prompt.commits ?? 0),
+        settled,
+        survived: shareOf(states.filter((state) => state === 'survived').length, settled),
       };
     })
     .sort((a, b) => b.prompts - a.prompts || a.key.localeCompare(b.key));
 };
 
+/** The closing line of `books` text: what the columns can and cannot be read as (V7). */
+export const BOOKS_CAVEAT = "These are associations in one operator's logs, not measured lift.";
+
+const shareCell = (cell: BooksShare): string => (cell.share === null ? 'too few' : `${String(Math.round(cell.share * 100))}%`);
+
 export const formatBooks = (rows: readonly BooksRow[], by: BooksBy): string => {
-  if (rows.length === 0) return 'No prompts in the store.';
-  const header = `${by.padEnd(14)} ${'prompts'.padStart(8)} ${'cache read'.padStart(14)} ${'cache write'.padStart(13)} ${'output'.padStart(11)} ${'thinking'.padStart(10)} ${'wall s'.padStart(9)} ${'turns'.padStart(7)} ${'errors'.padStart(7)} ${'verify'.padStart(7)} ${'delegated'.padStart(13)}`;
+  if (rows.length === 0) return by === 'pull' ? 'No pulls in the store.' : 'No prompts in the store.';
+  // A pull name, unlike a class, has no length it stays under.
+  const width = Math.max(14, ...rows.map((row) => row.key.length));
+  const header = `${by.padEnd(width)} ${'prompts'.padStart(8)} ${'cache read'.padStart(14)} ${'cache write'.padStart(13)} ${'output'.padStart(11)} ${'thinking'.padStart(10)} ${'wall s'.padStart(9)} ${'turns'.padStart(7)} ${'errors'.padStart(7)} ${'verify'.padStart(7)} ${'delegated'.padStart(13)} ${'passed'.padStart(8)} ${'stop'.padStart(8)} ${'redo'.padStart(8)} ${'commits'.padStart(8)} ${'settled'.padStart(8)} ${'survived'.padStart(8)}`;
   const lines = rows.map(
     (row) =>
-      `${row.key.padEnd(14)} ${String(row.prompts).padStart(8)} ${String(row.cacheRead).padStart(14)} ${String(row.cacheWrite).padStart(13)} ${String(row.output).padStart(11)} ${String(row.thinking).padStart(10)} ${String(row.wallSec).padStart(9)} ${String(row.turns).padStart(7)} ${String(row.errors).padStart(7)} ${(row.verifyAfterEdit === null ? '-' : `${String(Math.round(row.verifyAfterEdit * 100))}%`).padStart(7)} ${String(row.delegated).padStart(13)}`,
+      `${row.key.padEnd(width)} ${String(row.prompts).padStart(8)} ${String(row.cacheRead).padStart(14)} ${String(row.cacheWrite).padStart(13)} ${String(row.output).padStart(11)} ${String(row.thinking).padStart(10)} ${String(row.wallSec).padStart(9)} ${String(row.turns).padStart(7)} ${String(row.errors).padStart(7)} ${(row.verifyAfterEdit === null ? '-' : `${String(Math.round(row.verifyAfterEdit * 100))}%`).padStart(7)} ${String(row.delegated).padStart(13)} ${shareCell(row.verifyPassed).padStart(8)} ${shareCell(row.stopped).padStart(8)} ${shareCell(row.redone).padStart(8)} ${String(row.commits).padStart(8)} ${String(row.settled).padStart(8)} ${shareCell(row.survived).padStart(8)}`,
   );
   return [header, ...lines].join('\n');
 };
