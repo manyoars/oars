@@ -105,8 +105,7 @@ const modelsOf = (models: readonly string[]): string => {
 const signed = (value: number): string => (value > 0 ? `+${String(value)}` : String(value));
 
 const distance = (delta: RecallDelta): string => {
-  const named = delta.harness === 'same' ? 'same, version gap unknown' : delta.harness;
-  const harness = delta.harnessVersions === null ? named : delta.harnessVersions === 0 ? 'same' : signed(delta.harnessVersions);
+  const harness = delta.harness !== 'same' ? delta.harness : delta.harnessVersions === null ? 'same, version gap unknown' : delta.harnessVersions === 0 ? 'same' : signed(delta.harnessVersions);
   const age = delta.ageDays === null ? 'unknown' : count(delta.ageDays, 'day');
   return `from you: harness ${harness}, model ${delta.model}, age ${age}`;
 };
