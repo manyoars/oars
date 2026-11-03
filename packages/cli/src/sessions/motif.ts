@@ -40,11 +40,12 @@ const memo = new Map<string, Motif>();
 
 /** One object per motif: a store repeats a shape hundreds of thousands of times, and each would otherwise hash again. */
 const motifOf = (level: MotifLevel, steps: readonly WindowStep[], cls: string | null): Motif => {
-  const held = level === 'named' ? steps : steps.map((step) => ({ action: step.action, identity: null }));
+  // Only what the hash reads: a caller's window also holds the counts of whichever occurrence came first, which would pin them here and make the file depend on record order.
+  const held = steps.map((step): WindowStep => ({ action: step.action, identity: level === 'named' ? step.identity : null }));
   const key = JSON.stringify([level, cls, held.map((step) => [step.action, step.identity])]);
   const found = memo.get(key);
   if (found !== undefined) return found;
-  const motif: Motif = { motifId: contentHash({ level, cls, steps: held.map((step) => [step.action, step.identity]) }), level, steps: [...held], cls };
+  const motif: Motif = { motifId: contentHash({ level, cls, steps: held.map((step) => [step.action, step.identity]) }), level, steps: held, cls };
   memo.set(key, motif);
   return motif;
 };
