@@ -35,8 +35,8 @@ A transcript in an allowed folder that is not yet in the store is a different th
 whole-store run, and the next `deposit` or nightly run takes it. The SessionEnd hook deposits only its own transcript.
 
 The scope is not silent. `oars sessions deposit` prints the number of folders it skipped. `oars sessions verify` lists, from folder listings alone (it
-opens no transcript), the folders that hold transcripts and are not on the saved allowlist, with their transcript counts: a text line (names capped at ten) and `scope`
-(`folders`, `transcripts`, and every name) in the `--json` document. It is scope, not a failure, so it never fails `--strict`, and a folder that cannot be listed is named with no count rather than failing `verify`. A folder that holds only subagent transcripts (`<session>/subagents/agent-*.jsonl`, no main transcript) is named too, since a deposit would capture them; the count is of main transcripts, so it can read 0 for such a folder.
+opens no file in those folders, not even a subagent's `.meta.json`), the folders that hold transcripts and are not on the saved allowlist, with their main-transcript counts: a text line (names capped at ten) and `scope`
+(`folders`, `transcripts`, and every name) in the `--json` document. It is scope, not a failure, so it never fails `--strict`, a folder that cannot be listed is named with no count, and a projects root that cannot be listed reports an empty scope, rather than failing `verify`; the text line says "no main transcript" at a count of 0. A folder that holds only subagent transcripts (`<session>/subagents/agent-*.jsonl`, no main transcript) is named too, since a deposit would capture them; the count is of main transcripts, so it can read 0 for such a folder.
 
 ## The log's growth and compaction
 
