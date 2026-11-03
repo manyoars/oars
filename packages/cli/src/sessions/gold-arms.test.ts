@@ -151,7 +151,8 @@ describe('claudeEvaluator', () => {
   });
 
   it('is ready only on a claude.ai login with first-party routing', async () => {
-    const status = (value: object): ClaudeExec => scripted(line(value)).exec;
+    // Pretty-printed, as the real command prints it.
+    const status = (value: object): ClaudeExec => scripted(JSON.stringify(value, null, 2)).exec;
     await expect(claudeEvaluator(status({ loggedIn: true, authMethod: 'claude.ai', apiProvider: 'firstParty' }), env).ready()).resolves.toBeUndefined();
     await expect(claudeEvaluator(status({ loggedIn: true, authMethod: 'apiKey', apiProvider: 'firstParty' }), env).ready()).rejects.toThrow('subscription login');
     await expect(claudeEvaluator(status({ loggedIn: true, authMethod: 'claude.ai', apiProvider: 'bedrock' }), env).ready()).rejects.toThrow('subscription login');
