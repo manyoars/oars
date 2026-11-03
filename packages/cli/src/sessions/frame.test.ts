@@ -107,6 +107,14 @@ describe('closedFrame', () => {
   it('keeps null as null', () => {
     expect(closedFrame({ ...base, model: null, harnessVersion: null, effort: null })).toMatchObject({ model: null, harnessVersion: null, effort: null });
   });
+
+  it.each(['claude-opus-5-5', 'claude-fable-5-1', 'claude-haiku-4-5-20251001', 'claude-3-5-sonnet-20241022', 'claude-3-opus-20240229', 'gpt-5.1-codex-max', 'gpt-4o-mini', 'o3-mini', 'gemini-2.5-pro', 'grok-code-fast-1', 'deepseek-r1', 'composer-1', 'cursor-small', 'default', 'auto'])('keeps %s, a published model shape', (model) => {
+    expect(closedFrame({ ...base, model }).model).toBe(model);
+  });
+
+  it.each(['claude-acme-proxy', 'claude-opus-acme', 'claude-opus-5-acme-tuned', 'claude-3-acme', 'claude', 'gpt-4o-acme', 'ft:gpt-4o:acme::abc', 'gemini-corp-tuned', 'o3-acme', 'composer-acme'])('masks %s, a known family holding a private name', (model) => {
+    expect(closedFrame({ ...base, model }).model).toBe(LITERAL);
+  });
 });
 
 describe('repoFilesFromIndex', () => {
@@ -133,6 +141,25 @@ describe('repoFilesFromIndex', () => {
 
   it('reads the entry count from the index header without running git', () => {
     expect(repoFilesFromIndex(repo(header('DIRC', 4321)))).toBe(4321);
+  });
+
+  it('follows a linked worktree or submodule from its .git file to its index, absolute or relative', () => {
+    const gitDir = repo(header('DIRC', 77));
+    const absolute = repo(undefined);
+    writeFileSync(join(absolute, '.git'), `gitdir: ${join(gitDir, '.git')}\n`);
+    expect(repoFilesFromIndex(absolute)).toBe(77);
+    mkdirSync(join(gitDir, 'nested'));
+    writeFileSync(join(gitDir, 'nested', '.git'), 'gitdir: ../.git\n');
+    expect(repoFilesFromIndex(join(gitDir, 'nested'))).toBe(77);
+  });
+
+  it('is null when a .git file points nowhere or says nothing', () => {
+    const pointsNowhere = repo(undefined);
+    writeFileSync(join(pointsNowhere, '.git'), 'gitdir: ./missing\n');
+    expect(repoFilesFromIndex(pointsNowhere)).toBeNull();
+    const saysNothing = repo(undefined);
+    writeFileSync(join(saysNothing, '.git'), 'not a pointer\n');
+    expect(repoFilesFromIndex(saysNothing)).toBeNull();
   });
 
   it('is null with no index, a short one, or the wrong signature', () => {
