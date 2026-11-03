@@ -108,6 +108,20 @@ export const readIdOf = (read: Omit<Read, 'readId'>): string => {
   return `${READ_PREFIX}${contentHash({ family, method, methodVersion, inputs, order, slice, value, n, clusters, interval, asOf, basis })}`;
 };
 
+const deepFreeze = (value: unknown): void => {
+  if (typeof value !== 'object' || value === null) return;
+  Object.values(value).forEach((entry: unknown) => {
+    deepFreeze(entry);
+  });
+  Object.freeze(value);
+};
+
+/** A read's ID pins every field down to the last count, so none of them may change below the top either. */
+export const frozenRead = (read: Read): Read => {
+  deepFreeze(read);
+  return read;
+};
+
 /** The one way a read comes to exist. It refuses a read that cites nothing or cites what it cannot place, since either would have no lineage. */
 export const makeRead = (draft: ReadDraft, orderOf: OrderResolver): Read => {
   const inputs = [...new Set(draft.inputs)].sort();
@@ -119,5 +133,5 @@ export const makeRead = (draft: ReadDraft, orderOf: OrderResolver): Read => {
     highest = Math.max(highest, order);
   }
   const body = { ...draft, inputs, order: 1 + highest };
-  return Object.freeze({ readId: readIdOf(body), ...body });
+  return frozenRead({ readId: readIdOf(body), ...body });
 };
