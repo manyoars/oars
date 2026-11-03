@@ -3,7 +3,7 @@ import { appendFileSync, readFileSync, rmSync, statSync, utimesSync, writeFileSy
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { auditSession, auditStore, formatAudit, type SessionAudit } from './audit.js';
-import { deposit, loadStore, paths, readSkeletons } from './store.js';
+import { deposit, loadStore, paths, readSkeletons, readState } from './store.js';
 import { cleanup, NOW, stage, type Staged } from './test-support.js';
 
 afterEach(cleanup);
@@ -37,8 +37,8 @@ const asCopy = (staged: Staged, name: string): void => {
   writeFileSync(raw, bytes);
 };
 /** Sets the mtime `state.json` holds for a transcript of `proj`. */
-const holdState = (staged: Staged, name: string, mtimeMs: number): void => {
-  const state: { files: { [key: string]: { mtimeMs: number } } } = JSON.parse(readFileSync(paths(staged.storeDir).state, 'utf8'));
+const holdState = async (staged: Staged, name: string, mtimeMs: number): Promise<void> => {
+  const state = await readState(staged.storeDir);
   const entry = state.files[`proj/${name}.jsonl`];
   if (entry === undefined) throw new Error('no state entry');
   entry.mtimeMs = mtimeMs;
@@ -73,7 +73,7 @@ describe('auditSession, hard link', () => {
     const before = statSync(raw);
     writeFileSync(raw, edited(readFileSync(raw, 'utf8')));
     // The attacker also makes state.json agree, so only the root can tell.
-    holdState(staged, 'errors-a', statSync(raw).mtimeMs);
+    await holdState(staged, 'errors-a', statSync(raw).mtimeMs);
     expect(statSync(raw).size).toBe(before.size);
     expect(await one(staged, 'errors-a')).toMatchObject({ result: 'root mismatch', tier: 'none', mode: 'link' });
   });
