@@ -20,7 +20,7 @@ interface Week {
 
 const ratio = (n: number, d: number): Fraction => ({ n: BigInt(n), d: BigInt(d) });
 
-/** One session per week with `calls` tool calls; every other dimension holds one value, so a distance is 0 or 1. */
+/** One session per week with `calls` tool calls; a week holds one value per dimension unless it overrides one, so a distance is 0 or 1 only between weeks that each hold a single value and pool alone. */
 const fixture = (weeks: readonly Week[]): { sessions: BaselineSession[]; tools: BaselineTool[]; prompts: BaselinePrompt[] } => {
   const sessions: BaselineSession[] = [];
   const tools: BaselineTool[] = [];
@@ -65,6 +65,10 @@ describe('selfBaseline', () => {
     // Exact rational arithmetic: 1/4 is 0.5 with no float residue, and 1/3 rounds to 4 places.
     expect(fitOf(ratio(1, 4))).toBe(0.5);
     expect(fitOf(ratio(1, 3))).toBe(0.2222);
+    // Half-even at the 5th place: a rest above half rounds up (truncation gives 0.6666), a tie on an even digit stays (half-up gives 0.0313), a tie on an odd digit rounds up (truncation gives 0.0937).
+    expect(fitOf(ratio(1, 5))).toBe(0.6667);
+    expect(fitOf(ratio(25, 64))).toBe(0.0312);
+    expect(fitOf(ratio(119, 320))).toBe(0.0938);
   });
 
   it('scores a week identical to its baseline at distance 0 and F 1', () => {
@@ -171,6 +175,12 @@ describe('selfBaseline', () => {
       expect(across('durationMs', { durationMs: 99 }, { durationMs: 100 }, { durationMs: 5000 })).toBe(1);
       expect(across('durationMs', { durationMs: 100 }, { durationMs: 100 }, { durationMs: 100 })).toBe(0);
       expect(across('durationMs', { durationMs: 100 }, { durationMs: 100 }, { durationMs: 99 })).toBe(1);
+    });
+
+    it('splits wallSec at 5 s: 4 is the lower bin, 5 the upper', () => {
+      expect(across('wallSec', { wallSec: 4 }, { wallSec: 5 }, { wallSec: 4 })).toBe(0.5);
+      expect(across('wallSec', { wallSec: 5 }, { wallSec: 5 }, { wallSec: 5 })).toBe(0);
+      expect(across('wallSec', { wallSec: 5 }, { wallSec: 5 }, { wallSec: 4 })).toBe(1);
     });
 
     it('splits the cache-read share at 7/10: 699 of 1000 is under it, 700 is the upper bin', () => {
