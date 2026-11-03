@@ -119,8 +119,7 @@ describe('an unreadable part of a session', () => {
     t.put('nolstat.jsonl', CLEAN);
     const raw = join(t.staged.storeDir, 'raw', 'p', 'nolstat.jsonl');
     mkdirSync(join(raw, '..'), { recursive: true });
-    writeFileSync(raw, `${CLEAN}
-`);
+    writeFileSync(raw, `${CLEAN}\n`);
     expect(await checkSession(t.staged.runtime, t.termsFile, 'p', 'nolstat')).toEqual({ excluded: true, reason: 'unreadable', hits: [] });
   });
 

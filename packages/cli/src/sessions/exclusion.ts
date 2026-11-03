@@ -57,30 +57,52 @@ export interface Verdict {
 
 const isAbsent = (error: unknown): boolean => error instanceof Error && 'code' in error && (error.code === 'ENOENT' || error.code === 'ENOTDIR');
 
-/** A missing folder is empty; any other failure (EACCES, EPERM, EBUSY) is thrown, so a folder that was not read never reads as clean. */
+/** A missing folder is empty; any other failure (ENOTDIR for a plain file, EACCES, EPERM, EBUSY) is thrown, so a folder that was not read never reads as clean. */
 const entriesOf = async (dir: string) => {
   try {
     return await readdir(dir, { withFileTypes: true });
   } catch (error) {
-    if (isAbsent(error)) return [];
+    if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return [];
     throw error;
   }
 };
 
-/** A link is followed, as the main file's `stat` follows one; a link that leads nowhere throws, so it is unreadable. */
-const jsonlUnder = async (dir: string): Promise<string[]> => {
-  const found: string[] = [];
+/** What a path must lead to: a directory at a root, a project folder, a session folder, or `subagents`; a file at a main transcript. */
+type Kind = 'directory' | 'file';
+
+/**
+ * The one rule for a path at any level (V15): a link that leads nowhere, or an entry of the wrong kind (a plain file where a folder belongs, a folder where
+ * a transcript belongs), means what is under it was not scanned. Windows reports a listing of a plain file as ENOENT, so the kind is checked here and not left to the listing.
+ * An absent path is not one.
+ */
+const badLink = async (path: string, kind: Kind): Promise<boolean> => {
+  let entry;
+  try {
+    entry = await lstat(path);
+  } catch (error) {
+    return !isAbsent(error);
+  }
+  try {
+    const target = entry.isSymbolicLink() ? await stat(path) : entry;
+    return kind === 'directory' ? !target.isDirectory() : !target.isFile();
+  } catch {
+    return true;
+  }
+};
+
+/**
+ * A link is followed, as the main file's `stat` follows one; a link that leads nowhere or to the wrong kind throws, so it is unreadable.
+ * `found` is filled as it goes, so files scanned before a bad entry survive the throw.
+ */
+const jsonlUnder = async (dir: string, found: string[]): Promise<void> => {
   for (const entry of await entriesOf(dir)) {
     const path = join(dir, entry.name);
-    // `stat` follows a link and throws on a broken one, which the caller counts as unreadable.
-    const target = entry.isSymbolicLink() ? await stat(path) : entry;
     const named = entry.name.endsWith('.jsonl');
-    // A link to the wrong kind of entry was not scanned: a file not named .jsonl, a directory named .jsonl, or anything that is neither.
-    if (entry.isSymbolicLink() && (target.isFile() ? !named : target.isDirectory() ? named : true)) throw new Error('unreadable');
-    if (target.isDirectory()) found.push(...(await jsonlUnder(path)));
+    if (entry.isSymbolicLink() && (await badLink(path, named ? 'file' : 'directory'))) throw new Error('unreadable');
+    const target = entry.isSymbolicLink() ? await stat(path) : entry;
+    if (target.isDirectory()) await jsonlUnder(path, found);
     else if (named && target.isFile()) found.push(path);
   }
-  return found;
 };
 
 /** A main that is not there is false; any other failure (EACCES, EPERM, ELOOP) is thrown, so a main that was not examined never reads as absent. */
@@ -93,34 +115,11 @@ const isFile = async (path: string): Promise<boolean> => {
   }
 };
 
-/** What a path must lead to: a directory at a root, a project folder, a session folder, or `subagents`; a file at a main transcript. */
-type Kind = 'directory' | 'file';
-
-/**
- * The one rule for a link at any level (V15): a link that leads nowhere, or to the wrong kind of entry, means what is under it was not scanned.
- * An absent path is not one, and a path that is not a link is read as it is.
- */
-const badLink = async (path: string, kind: Kind): Promise<boolean> => {
-  let link: boolean;
-  try {
-    link = (await lstat(path)).isSymbolicLink();
-  } catch (error) {
-    return !isAbsent(error);
-  }
-  if (!link) return false;
-  try {
-    const target = await stat(path);
-    return kind === 'directory' ? !target.isDirectory() : !target.isFile();
-  } catch {
-    return true;
-  }
-};
-
 /** Adds the transcripts of the session in one source (the main file and everything under `<session>/subagents/`) to `found`; true when a level could not be read. */
 const filesIn = async (root: string, source: Source, project: string, session: string, found: TranscriptFile[]): Promise<boolean> => {
   const folder = join(root, project);
   const main = join(folder, `${session}.jsonl`);
-  // A link that leads nowhere reads as an absent entry below, so every level is checked first.
+  // A link that leads nowhere or a wrong kind of entry reads as an absent one below, so every level is checked first (a directory at the main makes the session unreadable here).
   let unreadable = await badLink(main, 'file');
   for (const path of [folder, join(folder, session), join(folder, session, 'subagents')]) if (await badLink(path, 'directory')) unreadable = true;
   try {
@@ -129,11 +128,14 @@ const filesIn = async (root: string, source: Source, project: string, session: s
     unreadable = true;
   }
   const subagents = join(folder, session, 'subagents');
+  const agents: string[] = [];
   try {
-    for (const path of await jsonlUnder(subagents)) found.push({ path, key: `${session}/subagents/${path.slice(subagents.length + 1).split('\\').join('/')}`, main: false, source });
+    await jsonlUnder(subagents, agents);
   } catch {
-    return true;
+    unreadable = true;
   }
+  // The files listed before a bad entry are still scanned, so a hit among them is counted.
+  for (const path of agents) found.push({ path, key: `${session}/subagents/${path.slice(subagents.length + 1).split('\\').join('/')}`, main: false, source });
   return unreadable;
 };
 
