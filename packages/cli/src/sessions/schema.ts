@@ -334,10 +334,11 @@ export interface StepObservation {
 }
 
 /**
- * One per tool call (register A28), captured. Classes: `A` account store: `session`, `parent`, `toolUseId`, `ts`, and a path-form
- * `target` (a salted hash); `P` pooled: `kind`, `cv`, `sid`, `rev`, `agentType`, `n`, `tool`, `status`, `keys`, `durationMs`,
- * `harnessVersion`, `side`, `prompt`, `targetBase`, and a shell-form `target` (program and subcommand). `segments`, `pulls`, and `commits` are `A`:
- * a plain word, a private package name, and a sha can each identify private work.
+ * One per tool call (register A28), captured. Classes: `A` account store: `session`, `parent`, `toolUseId`, `ts`, `tool`, and `target`
+ * in either form (a salted hash, or a program and subcommand); `P` pooled: `kind`, `cv`, `sid`, `rev`, `agentType`, `n`, `status`, `keys`,
+ * `durationMs`, `harnessVersion`, `side`, `prompt`, `targetBase`, and `steps`. `tool` and a shell-form `target` moved to `A` at CAPTURE 7: an MCP
+ * tool name holds a private server's name and a shell word can be anything, and `steps` carries the public reading of both. `segments`, `pulls`,
+ * and `commits` are `A`: a plain word, a private package name, and a sha can each identify private work.
  */
 export interface ToolObservation {
   kind: 'tool';
