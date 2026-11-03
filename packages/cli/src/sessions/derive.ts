@@ -59,7 +59,7 @@ export const REDO_WINDOW = 3;
 /** The harness's tool-rejection results, both worded for the operator declining: a classifier or hook denial is policy, and the model carries on. */
 const REJECTED_RE = /^The user doesn't want to (?:proceed with this tool use|take this action)/;
 /** The harness writes this as a user line, so capture keeps it as a prompt of its own; it says the prompt before it was cut short. */
-const INTERRUPT_MARKER = '[Request interrupted by user';
+export const INTERRUPT_MARKER = '[Request interrupted by user';
 
 const firstCopies = <T extends { side: boolean; toolUseId: string | null }>(records: readonly T[]): T[] => {
   const seen = new Set<string>();
