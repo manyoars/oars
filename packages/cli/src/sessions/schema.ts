@@ -31,6 +31,9 @@
 // harness versions, and tool names (including MCP server names). `redact` masks secrets by pattern and entropy, emails, and the
 // organization domains the operator names. The skeleton holds hashes only.
 
+import type { CanonicalAction } from './actions.js';
+import type { RepoSize } from './public-vocabulary.js';
+
 /** Stamped `cv` on every captured record. Bump it when the captured field list changes or a stored value of an existing captured record or skeleton changes: a bump re-reads every transcript. */
 export const CAPTURE_VERSION = '5';
 
@@ -66,6 +69,34 @@ export const harnessOf = (session: { harness?: Harness }): Harness => session.ha
 
 /** Where a path target is hashed from (class P): the repository root, or the line's working directory when no repository holds the path. */
 export type TargetBase = 'repo' | 'cwd';
+
+/** The closed vocabulary of a repository: languages, framework names, and a size bucket (D13). Class P. */
+export interface FrameStack {
+  languages: string[];
+  frameworks: string[];
+  size: RepoSize | null;
+}
+
+/**
+ * Where and when something ran (recall spec Section 2.1): the coordinate every comparison uses. Class P: every field is a public name, a
+ * UTC day, or null, and it is never served below the cell floor, because a set of tools can fingerprint an account.
+ */
+export interface Frame {
+  harness: Harness;
+  /** The version the prompt's own lines name, else the transcript's last. */
+  harnessVersion: string | null;
+  /** The prompt's majority model. */
+  model: string | null;
+  /** The prompt's majority effort. */
+  effort: string | null;
+  /** The UTC day of the prompt (D1 pools `ts` at a UTC day); the first timestamp of the file on a session's own frame. */
+  day: string | null;
+  /** `process.platform` of the capturing machine. */
+  platform: string;
+  /** The file's majority shell tool; null when it ran none, or when the harness does not name its shell. */
+  shell: string | null;
+  stack: FrameStack;
+}
 
 /** The environment a transcript was captured in (class P, names and versions only; library versions only when a transcript states them, L6). */
 export interface CaptureEnv {
@@ -135,6 +166,10 @@ export interface SessionObservation {
   promptFingerprint: string | null;
   /** Class P: where and with what this transcript was captured. */
   env: CaptureEnv;
+  /** The frame of a call before the file's first prompt; absent on a record captured before this field existed. Class P. */
+  frame?: Frame;
+  /** The hash of `frame`. Class P. */
+  frameId?: string;
   /** The harness's own `cost-state` totals when the file has one. */
   costUsd: number | null;
   /** Summed assistant usage of the file's own line (a main transcript's sidechain lines are not counted; a subagent transcript is its own line). */
@@ -226,6 +261,19 @@ export interface ErrorObservation {
 
 export type ToolStatus = 'ok' | 'error' | 'none';
 
+/** One observed event in the canonical vocabulary of any harness (recall spec Section 2.2). Class P: it holds only positions, public names, and a frame hash. */
+export interface StepObservation {
+  /** The `n` of the tool call this step came from. */
+  n: number;
+  /** Its position among that call's steps, from 0. */
+  seg: number;
+  action: CanonicalAction;
+  /** The harness's own name for the tool when the action table lists it, else `<literal>` (the tool record keeps it, class A). */
+  native: string;
+  /** The frame of the call's prompt, or the session's own frame before the first prompt. */
+  frameId: string;
+}
+
 /**
  * One per tool call (register A28), captured. Classes: `A` account store: `session`, `parent`, `toolUseId`, `ts`, and a path-form
  * `target` (a salted hash); `P` pooled: `kind`, `cv`, `sid`, `rev`, `agentType`, `n`, `tool`, `status`, `keys`, `durationMs`,
@@ -265,6 +313,8 @@ export interface ToolObservation {
   side: boolean;
   /** The prompt index the call ran under; null before the first prompt. */
   prompt: number | null;
+  /** What the call was in the canonical vocabulary; absent on a record captured before this field existed. Class P. */
+  steps?: StepObservation[];
 }
 
 /** One per failed tool result, captured and keyed by `toolUseId`. Classes: `A` account store: `session`, `toolUseId`, `line`
@@ -310,6 +360,10 @@ export interface UserPromptObservation {
   usage: Usage;
   /** Class A: the session's prompt fingerprint at the time of the prompt, when one had been seen. */
   promptFingerprint: string | null;
+  /** Where and when this prompt ran; absent on a record captured before this field existed. Class P. */
+  frame?: Frame;
+  /** The hash of `frame` (`frameIdOf`). Class P. */
+  frameId?: string;
 }
 
 export type CaptureRecord = SessionObservation | UserPromptObservation | ToolObservation | ErrorLineObservation;
