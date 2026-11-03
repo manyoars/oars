@@ -267,8 +267,10 @@ field classes, redaction, and 1,000-character `line` cap as every other source (
 `recall`, `measure`, `books`, and `verify` read them with no special case. Sources are a table (`sources.ts`): a new harness is one entry plus its reader.
 
 **Fixture-derived, never run live.** This reader was written from the public Codex source (openai/codex @ ac558e2, Apache-2.0: `codex-rs/history`,
-`codex-rs/rollout`, `codex-rs/protocol`) and tested only on synthetic fixtures; no Codex store has ever been read by it. Codex documents no stable
-on-disk format, so a Codex release can change it; an unreadable rollout is warned about by name and skipped, never fatal. The one hand run that would
+`codex-rs/rollout`, `codex-rs/protocol`) and tested only on synthetic fixtures; no Codex store has ever been read by it. OpenAI's documentation names the location but no format
+(https://developers.openai.com/codex/config-advanced, read 2026-11-03: "By default, Codex saves local session transcripts under CODEX_HOME (for example,
+`~/.codex/history.jsonl`)"; nothing in it describes the rollout files or promises them), and ccusage's Codex guide says "Codex log support is experimental while
+the Codex CLI log format continues to evolve" (https://github.com/ryoppippi/ccusage, `docs/guide/codex/index.md` @ b4e6193, MIT). So a Codex release can change it; an unreadable rollout is warned about by name and skipped, never fatal. The one hand run that would
 settle it: on a machine with a Codex account, run one `codex exec` task that makes one prompt, runs one command that exits nonzero (for example
 `ls /nonexistent`), and applies one patch, then `oars sessions deposit --allow codex` and `oars sessions verify --strict`. It is settled only if the
 session count is nonzero, there are zero violations, the session has a prompt and usage, and it holds an `error` tool record for that command with a
@@ -276,17 +278,21 @@ matching error line. A rollout whose shell outcomes were all lost would still sh
 
 - **Where.** `$CODEX_HOME`, else `~/.codex` (`%USERPROFILE%\.codex` on Windows): `sessions/YYYY/MM/DD/rollout-<time>-<uuid>.jsonl` and
   `archived_sessions/`. A `.jsonl.zst` rollout is decompressed read-only. Opt-in like Cursor: discovered by default, opened only when `--allow codex` (or a matching glob) names it; the nightly run repeats a saved allow.
-- **What a rollout holds** (`codex-rs/rollout/src/policy.rs`, by `session_meta.history_mode`). In `legacy` mode (the default) it persists `user_message`,
-  `agent_message`, `token_count`, and `patch_apply_end`; `exec_command_end` and `error` are never persisted. A `paginated` rollout persists
-  `item_completed` events instead, which this reader does not read, so it is reported unreadable by name and its cursor does not advance.
+- **What a rollout holds** (`codex-rs/rollout/src/policy.rs`, by `session_meta.history_mode`). `paginated` is the mode the CLI writes by default
+  (`thread-store/src/local/mod.rs:512-515`; absent `history_mode` means `legacy`, `protocol.rs:949-951`): it persists `item_completed` events holding a `TurnItem`
+  (`items.rs:50`) in place of `user_message`, `agent_message`, `patch_apply_end`, and `mcp_tool_call_end` (`policy.rs:164-176`), and stamps every record with an `ordinal`
+  (`ordinal.rs:28`). `legacy` persists those four events and no ordinals (`ordinal.rs:37`). Both modes persist `session_meta`, `turn_context`, `token_count`, and
+  `response_item` (`policy.rs:20-24`, `:43-46`); `exec_command_end` and `error` are never persisted. This reader reads both: an `item_completed` `UserMessage` and
+  `AgentMessage` (`items.rs:85`, `:160`) are the prompt and the reply, a `FileChange` (`core/src/tools/events.rs:610-617`) settles its patch by `status`, and an
+  `McpToolCall` (`core/src/mcp_tool_call.rs:1189-1207`) its MCP call by `status`, `error`, and `result.isError`.
 - **Mapping.** `session_meta` gives the id, cwd, and `cli_version`; `turn_context.model` the model; `user_message` a prompt and `agent_message` a
-  response; `token_count.last_token_usage` the usage (cached input is a subset of input, so it is split out as cache read; `cache_write_input_tokens`, `protocol.rs:2512`, is cache creation). A shell call
+  response; `token_count.last_token_usage` the usage (cached input is a subset of input, so it is split out as cache read; `cache_write_input_tokens` is cache creation and is also inside `input_tokens`, so it is taken out of input too: input 100 = cached 40 + write 60, `codex-api/src/sse/responses.rs:889-911`). A shell call
   (`shell`, `shell_command`, `exec_command`, `local_shell`, `container.exec`, `write_stdin`, and a `local_shell_call`) is settled by its `function_call_output` text: the
   real exit code from `Exit code: N` (`core/src/tools/mod.rs:107`) or `Process exited with code N` (`core/src/tools/context.rs:556`), and the text after the
   `Output:` line is the error line's source; a process still running has no code and no outcome until a `write_stdin` poll (`session_id`, `handlers/shell_spec.rs:113`) sees it exit, which settles both calls; `execution error: ...` (`core/src/tools/events.rs:438`) is a call that failed to spawn and is an error, while a declined one (`exec command rejected by user`, `:456`) has no outcome. An older Codex wrote a JSON `{output, metadata.exit_code}`
   wrapper (`rust-v0.46.0`, `core/src/tools/mod.rs:186`), which is unwrapped. `apply_patch` is an edit, with the files its input names and its
-  `patch_apply_end` outcome (Legacy mode); a patch with no end event, or a declined one, has no outcome, because a rejected patch comes back as plain output text (`tools/handlers/apply_patch.rs`). An MCP call is settled by its `mcp_tool_call_end` (`protocol.rs:3047`): `result.Err`, or `result.Ok.isError`, is a failure carrying its text.
-  A spawned agent's rollout (`session_meta.parent_thread_id`, `protocol.rs:3464`) is deposited as a subagent of that thread, counted under `subagents` and not `sessions`; records below `subagent_history_start_ordinal` (`:3511`) or a fork's `forked_from_ordinal_exclusive` (`:3462`) are inherited from the parent and dropped. Timestamps are each line's own; a missing or earlier one never steps back.
+  `patch_apply_end` outcome (Legacy) or `FileChange` item (Paginated); a patch with no end event, or a declined one, has no outcome, because a rejected patch comes back as plain output text (`tools/handlers/apply_patch.rs`). An MCP call is settled by its `mcp_tool_call_end` (Legacy, `protocol.rs:3047`) or `McpToolCall` item (Paginated): `result.Err`, `error`, or `isError`, is a failure carrying its text.
+  A `function_call` with a `namespace` (`models.rs:1154`) is recorded as `<namespace>__<name>` unless the name already starts with it, and is never read as Codex's own shell or patch tool. A spawned agent's rollout (`session_meta.parent_thread_id`, `protocol.rs:3464`) is deposited as a subagent of that thread, counted under `subagents` and not `sessions`; records below `subagent_history_start_ordinal` (`:3511`) or a fork's `forked_from_ordinal_exclusive` (`:3462`) are inherited from the parent and dropped. Only the first `session_meta` is the rollout's own; later ones are copied from fork history (`recorder.rs:1157-1158`, `:1173`). A Legacy fork has no ordinals, so its leading records that equal the parent's rollout, payload for payload with timestamps excluded, are dropped; when the parent rollout is not in the store, the fork's records are all kept. Timestamps are each line's own; a missing or earlier one never steps back.
 - **Absent.** Cost, per-call duration, and message ids (a request id is synthesized per response so `verify --strict` holds).
   Another non-shell call (`update_plan`, `read_file`) has no structured failure signal in this format and is recorded as `ok`. A `token_count`
   with no assistant line before it (a reasoning-only response) has nothing to attach to, so its usage is not counted. Torn lines are counted as
