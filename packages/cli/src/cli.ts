@@ -12,12 +12,8 @@ import type { CredentialStore } from './credentials.js';
 import { CliError, ExitCode } from './errors.js';
 import type { JournalStore } from './journal.js';
 import type { BooksBy, RecallQuery } from './sessions/query.js';
-<<<<<<< HEAD
-import { sessionsBooks, sessionsContext, sessionsDeposit, sessionsHookInstall, sessionsHookStatus, sessionsHookUninstall, sessionsMcp, sessionsMeasure, sessionsRecall, sessionsVerify, type SessionsDeps } from './sessions/command.js';
-import { exclusionPaths, sessionsExclusions } from './sessions/exclusion.js';
-=======
 import { sessionsBooks, sessionsContext, sessionsDeposit, sessionsGoldArms, sessionsGoldSample, sessionsGoldScore, sessionsHookInstall, sessionsHookStatus, sessionsHookUninstall, sessionsMcp, sessionsMeasure, sessionsRecall, sessionsVerify, type SessionsDeps } from './sessions/command.js';
->>>>>>> origin/main
+import { exclusionPaths, sessionsExclusions } from './sessions/exclusion.js';
 import type { InstallRuntime, Scope } from './sessions/install.js';
 import type { SessionsRuntime } from './sessions/store.js';
 
@@ -376,7 +372,6 @@ const buildProgram = (deps: RunDeps, argv: string[]): Command => {
       emit(deps, json, outcome);
     });
 
-<<<<<<< HEAD
   sessions
     .command('exclusions')
     .description('scan the local store and transcripts under the V15 rule, write the excluded sessions to a local file, and print counts only (the term file is named by OARS_EXCLUSION_TERMS)')
@@ -385,7 +380,8 @@ const buildProgram = (deps: RunDeps, argv: string[]): Command => {
       const options: OptionValues = command.optsWithGlobals();
       if (deps.sessions === undefined) throw new CliError('The session store is not configured in this run.', ExitCode.UNEXPECTED, 'unexpected');
       emit(deps, flag(options, 'json'), await sessionsExclusions(deps.sessions, exclusionPaths(deps.sessions.projectsRoot, deps.env, text(options, 'out'))));
-=======
+    });
+
   const gold = sessions.command('gold').description('a blind, human-judged sample of prompts, and every signal scored against those judgments');
 
   gold
@@ -427,7 +423,6 @@ const buildProgram = (deps: RunDeps, argv: string[]): Command => {
     .action(async (file: string, _options: OptionValues, command: Command) => {
       const options: OptionValues = command.optsWithGlobals();
       emit(deps, flag(options, 'json'), await sessionsGoldArms(sessionDeps(deps), { file }));
->>>>>>> origin/main
     });
 
   const hook = sessions.command('hook').description('install the recall hooks into a Claude Code settings file, and the nightly deposit task');
