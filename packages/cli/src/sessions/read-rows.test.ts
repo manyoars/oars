@@ -6,8 +6,9 @@ const read = (family: Family, n: number, slice: Read['slice'], over: Partial<Rea
   makeRead({ family, method: 'm', methodVersion: '1', inputs: ['cell:a'], slice, value: { share: 0.5 }, n, clusters: 1, interval: null, asOf: { pool: 'p', day: null }, basis: 'all', ...over }, orderResolver([]));
 
 describe('isFamily', () => {
-  it('knows the eight families and nothing else', () => {
+  it('knows the families and nothing else', () => {
     expect(isFamily('next-step')).toBe(true);
+    expect(isFamily('lead-lag')).toBe(true);
     expect(isFamily('nextstep')).toBe(false);
   });
 });
@@ -57,8 +58,21 @@ describe('formatReads', () => {
       'recovery (1 reads)',
       '  n=3 clusters: 1 order=1 action=file.read | errors=3 following=file.edit:2,file.read:1 lastSeen=null',
       'fit (2 reads)',
-      '  n=4 clusters: 1 order=1 motif=file.read | share=0.5 ci=0.1-0.9',
+      '  n=4 clusters: 1 order=1 motif=file.read | share=0.5 ci=0.1..0.9',
       '  n=2 clusters: 1 order=1 motif=file.edit | share=0.5',
+    ]);
+  });
+
+  it('keeps an interval that runs below zero readable: a move above order 1 can', () => {
+    const text = formatReads([read('day-move', 4, { motif: 'file.read' }, { interval: { low: -0.03, high: -0.01, level: 0.95 } })]);
+    expect(text).toContain(' ci=-0.03..-0.01');
+  });
+
+  it('marks a labeled experiment in its heading, so a reader meets the label before the row', () => {
+    const text = formatReads([read('lead-lag', 60, { lead: 'failureRate' }, { value: { label: 'experimental', check: 'failed' } })]);
+    expect(text.split('\n')).toEqual([
+      'lead-lag (1 reads, experimental: fit on earlier days and scored on later ones; not served to an agent)',
+      '  n=60 clusters: 1 order=1 lead=failureRate | label=experimental check=failed',
     ]);
   });
 

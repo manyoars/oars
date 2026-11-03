@@ -39,9 +39,11 @@ const pairsOf = (fields: ReadSlice | ReadValue): string =>
     .join(' ');
 
 const formatRead = (read: Read): string => {
-  const interval = read.interval === null ? '' : ` ci=${String(read.interval.low)}-${String(read.interval.high)}`;
+  const interval = read.interval === null ? '' : ` ci=${String(read.interval.low)}..${String(read.interval.high)}`;
   return `  n=${String(read.n)} clusters: ${String(read.clusters)} order=${String(read.order)} ${pairsOf(read.slice)} | ${pairsOf(read.value)}${interval}`;
 };
+
+const EXPERIMENT = ', experimental: fit on earlier days and scored on later ones; not served to an agent';
 
 /** Rows under a heading per family, in the order `selectReads` put them. */
 export const formatReads = (reads: readonly Read[]): string => {
@@ -51,7 +53,7 @@ export const formatReads = (reads: readonly Read[]): string => {
   for (const read of reads) {
     if (read.family !== family) {
       family = read.family;
-      lines.push(`${family} (${String(reads.filter((one) => one.family === family).length)} reads)`);
+      lines.push(`${family} (${String(reads.filter((one) => one.family === family).length)} reads${read.value.label === 'experimental' ? EXPERIMENT : ''})`);
     }
     lines.push(formatRead(read));
   }

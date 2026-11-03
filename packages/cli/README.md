@@ -89,7 +89,9 @@ oars sessions recall --mcp
 
 oars sessions recall --counts --day 2026-11-03   # push and pull, shown and held, as counts
 oars sessions lineage <recallId or readId>       # walk back through the evidence, one line per hop
-oars sessions read                          # derived reads of your own sessions, largest sample first in each family
+oars sessions read                          # derived reads of your own sessions, largest sample first in each family, with what the store cannot read
+oars sessions read --family version-boundary # order 2: what moved between two harness version buckets; also substitution, interaction, and day-move
+oars sessions read --family lead-lag         # order 3: a labeled experiment behind an out-of-time check
 oars sessions read --family fit --slice model=claude-opus-5-5 --json
 oars sessions books --by class --since 30   # tokens, wall time, turns, errors, verify-after-edit rate, and the outcome signals
 oars sessions books --by pull               # the same per package, MCP server, plugin, or skill a prompt pulled
