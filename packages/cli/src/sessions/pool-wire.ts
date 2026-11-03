@@ -217,13 +217,20 @@ const DAY = /^\d{4}-\d{2}-\d{2}$/;
 const ID = /^[0-9a-f]{16}$/;
 const SHORT_FLAG = /^-[A-Za-z]$/;
 
+/** A real date, not just its shape. `Date.parse` rolls 2026-02-31 over to March instead of failing, so the day must also survive the trip back to text. */
+const isCalendarDay = (text: string): boolean => {
+  if (!DAY.test(text)) return false;
+  const parsed = Date.parse(text);
+  return !Number.isNaN(parsed) && new Date(parsed).toISOString().slice(0, 10) === text;
+};
+
 const parseFrame = (value: unknown, at: string): Frame => {
   const raw = fieldsOf(value, at, ['harness', 'harnessVersion', 'model', 'effort', 'day', 'platform', 'shell', 'stack']);
   const stackAt = under(at, 'stack');
   const stack = fieldsOf(raw.stack, stackAt, ['languages', 'frameworks', 'size']);
   const day = orNull(raw.day, under(at, 'day'), (entry, entryAt) => {
     const text = textOf(entry, entryAt);
-    if (!DAY.test(text)) throw new Refused(entryAt, 'not a UTC day');
+    if (!isCalendarDay(text)) throw new Refused(entryAt, 'not a UTC day');
     return text;
   });
   return {
