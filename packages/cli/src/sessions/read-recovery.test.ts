@@ -28,6 +28,14 @@ describe('recovery', () => {
     expect(JSON.stringify(read)).not.toContain('no such file');
   });
 
+  it('keeps the same copy of a call whatever the record order when its copies tie on time', () => {
+    for (const ts of ['2026-11-01T10:00:00.000Z', null]) {
+      const one = error('s1', 'Read | one', { toolUseId: 'call-1', ts });
+      const other = error('s1', 'Read | other', { toolUseId: 'call-1', ts });
+      expect(recovery({ ...failed, errors: [other, one] })[0]?.slice).toEqual(recovery({ ...failed, errors: [one, other] })[0]?.slice);
+    }
+  });
+
   it('counts one row per session and tool-use id, and a row with no id as its own call', () => {
     const first = error('s1', SIG, { toolUseId: 'call-1', next: ['Edit'] });
     const replay = error('s1', SIG, { toolUseId: 'call-1', next: ['Edit'], ts: '2026-11-02T10:00:00.000Z' });
