@@ -1,11 +1,11 @@
 import { copyFileSync, mkdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { deriveSession, episodesOf, extractSession, rankRecovery, RECOVERY_WINDOW, REDO_WINDOW, type Episode, type EpisodeOutcome, type SessionCapture } from './derive.js';
+import { deriveSession, episodesOf, extractSession, isRunner, rankRecovery, RECOVERY_WINDOW, REDO_WINDOW, type Episode, type EpisodeOutcome, type SessionCapture } from './derive.js';
 import { captureSession, emptyUsage } from './extract.js';
 import { books, formatBooks, formatMeasure, measure } from './query.js';
 import { makeRedactor } from './redact.js';
-import { CAPTURE_VERSION, type ErrorLineObservation, type ErrorObservation, type PromptVerify, type ToolObservation, type ToolStatus, type UserPromptObservation } from './schema.js';
+import { CAPTURE_VERSION, type ErrorLineObservation, type ErrorObservation, type PromptVerify, type ShellSegment, type ToolObservation, type ToolStatus, type UserPromptObservation } from './schema.js';
 import { deposit, depositSession, derive, loadStore, paths } from './store.js';
 import { cleanup, FIXTURES, NOW, stage } from './test-support.js';
 
@@ -248,6 +248,8 @@ describe('prompt outcome signals (t747)', () => {
     id?: string | null;
     keys?: string[];
     side?: boolean;
+    segments?: ShellSegment[];
+    commits?: Array<string | null>;
   }
   interface Failure {
     prompt: number;
@@ -256,12 +258,15 @@ describe('prompt outcome signals (t747)', () => {
     id?: string;
   }
   const edit = (prompt: number, target = 'hash-a', status: ToolStatus = 'ok'): Call => ({ prompt, tool: 'Edit', target, status });
-  const shell = (prompt: number, status: ToolStatus = 'ok', target = 'npm test'): Call => ({ prompt, tool: 'Bash', target, status });
-  const commit = (prompt: number, status: ToolStatus = 'ok'): Call => shell(prompt, status, 'git commit');
+  const shell = (prompt: number, status: ToolStatus = 'ok', target = 'npm test'): Call => ({ prompt, tool: 'Bash', target, status, segments: [{ run: target, read: true }] });
+  const commit = (prompt: number, status: ToolStatus = 'ok'): Call => ({ ...shell(prompt, status, 'git commit'), ...(status === 'ok' ? { commits: ['abc1234'] } : {}) });
+  /** A record captured before CAPTURE 6: `target` is all it has. */
+  const older = (call: Call): Call => ({ prompt: call.prompt, tool: call.tool, ...(call.target === undefined ? {} : { target: call.target }), ...(call.status === undefined ? {} : { status: call.status }) });
   const derived = (heads: readonly string[], calls: readonly Call[], failures: readonly Failure[] = []) => {
     const tools = calls.map((call, n): ToolObservation => ({
       kind: 'tool', cv: CAPTURE_VERSION, sid: null, session: 's', rev: 1, parent: 's', agentType: null, n, ts: null, tool: call.tool, status: call.status ?? 'ok', target: call.target ?? null, targetBase: null,
       keys: call.keys ?? [], durationMs: null, toolUseId: call.id === undefined ? `c${String(n)}` : call.id, harnessVersion: null, side: call.side ?? false, prompt: call.prompt,
+      ...(call.segments === undefined ? {} : { segments: call.segments }), ...(call.commits === undefined ? {} : { commits: call.commits }),
     }));
     const errorLines = failures.map((failure): ErrorLineObservation => ({
       kind: 'error-line', cv: CAPTURE_VERSION, sid: null, session: 's', rev: 1, toolUseId: failure.id ?? null, tool: 'Edit', line: failure.line, ts: null, harnessVersion: null, side: failure.side ?? false, prompt: failure.prompt, after: 0,
@@ -284,7 +289,7 @@ describe('prompt outcome signals (t747)', () => {
       ['a last shell call with no result', [edit(0), shell(0), shell(0, 'none')], 'none'],
       ['an edit with no result of its own', [edit(0, 'hash-a', 'none'), shell(0)], 'passed'],
       ['a clean shell call after the edit', [edit(0), shell(0)], 'passed'],
-      ['PowerShell', [edit(0), { prompt: 0, tool: 'PowerShell', target: 'npm test', status: 'error' }], 'failed'],
+      ['PowerShell', [edit(0), { ...shell(0, 'error'), tool: 'PowerShell' }], 'failed'],
       ['a Write and a MultiEdit', [{ prompt: 0, tool: 'Write', target: 'hash-a' }, shell(0, 'error'), { prompt: 0, tool: 'MultiEdit', target: 'hash-b' }, shell(0)], 'passed'],
       ['the last of several: a fix after a failure', [edit(0), shell(0, 'error'), shell(0)], 'passed'],
       ['the last of several: a failure after a pass', [edit(0), shell(0), shell(0, 'error')], 'failed'],
@@ -294,8 +299,55 @@ describe('prompt outcome signals (t747)', () => {
       ['the call before a backgrounded one decides', [edit(0), shell(0, 'error'), { ...shell(0), keys: ['command', 'run_in_background'] }], 'failed'],
       ['a sidechain edit is not the prompt editing', [{ ...edit(0), side: true }, shell(0)], 'na'],
       ['a sidechain shell call does not decide', [edit(0), shell(0), { ...shell(0, 'error'), side: true }], 'passed'],
+      ['a read after the edit is no verification', [edit(0), shell(0, 'ok', 'ls')], 'none'],
+      ['a read after a runner does not decide', [edit(0), shell(0), shell(0, 'error', 'ls')], 'passed'],
+      ['a runner behind a pipe is masked', [edit(0), { ...shell(0), segments: [{ run: 'npm test', read: false }, { run: 'tail', read: true }] }], 'masked'],
+      ['a failed call with a masked runner is still masked', [edit(0), { ...shell(0, 'error'), segments: [{ run: 'npm test', read: false }, { run: 'false', read: true }] }], 'masked'],
+      ['the last runner of a call decides', [edit(0), { ...shell(0), segments: [{ run: 'npm test', read: false }, { run: 'npm run build', read: true }] }], 'passed'],
+      ['a runner chained to a later command reads the call', [edit(0), { ...shell(0, 'error'), segments: [{ run: 'cd web', read: true }, { run: 'npm test', read: true }, { run: 'git push', read: true }] }], 'failed'],
+      ['a runner with no result', [edit(0), shell(0, 'none')], 'none'],
+      ['a masked runner with no result', [edit(0), { ...shell(0, 'none'), segments: [{ run: 'npm test', read: false }, { run: 'tail', read: true }] }], 'none'],
     ])('%s', (_name, calls, expected) => {
       expect(one(calls)?.verify).toBe(expected);
+    });
+    it('says nothing about a shell call captured before segments, which could have been a runner', () => {
+      expect(one([edit(0), older(shell(0))])?.verify).toBeUndefined();
+      expect(one([edit(0), shell(0), older(shell(0))])?.verify).toBeUndefined();
+    });
+    it('still reads a runner that came after an older call', () => {
+      expect(one([edit(0), older(shell(0)), shell(0)])?.verify).toBe('passed');
+    });
+    it.each<[string, boolean]>([
+      ['npm test', true], ['npm t', true], ['bun t', true], ['npm run test:unit', true], ['npm run typecheck', true], ['pnpm build', true], ['yarn lint', true],
+      ['npx vitest run', true], ['npx tsc', true], ['pnpm exec jest', true], ['uv run pytest', true], ['python pytest', true], ['vitest', true],
+      ['mvn aor-x verify', true], ['mvn package', true], ['mvnw install', true], ['gradlew test', true], ['just build oars run check', true], ['make', true], ['make test', true],
+      ['cargo test', true], ['cargo clippy', true], ['go vet', true], ['go test', true], ['dotnet build', true],
+      ['ls', false], ['git status', false], ['git commit', false], ['cat test', false], ['npm install', false], ['npm run dev', false], ['just status', false], ['just checkout', false],
+      ['cargo add', false], ['go get', false], ['make clean', false], ['mvn', false], ['python script', false], ['npx foo', false],
+      ['npm install lint-staged', false], ['pnpm add test-utils', false], ['npm uninstall jest-check', false], ['cargo add check', false], ['go get test', false], ['npm view test', false], ['go run check', false],
+    ])('%s is a runner: %s', (run, expected) => {
+      expect(isRunner({ run, read: true })).toBe(expected);
+    });
+  });
+
+  describe('captured commits', () => {
+    it('counts a commit behind another command, and each of several', () => {
+      expect(one([{ ...shell(0, 'ok', 'git add'), commits: ['abc1234', null] }])?.commits).toBe(2);
+    });
+    it('counts a commit whose sha could not be read', () => {
+      expect(one([{ ...shell(0, 'ok', 'git add'), commits: [null] }])?.commits).toBe(1);
+    });
+    it('a captured call with no commits is not a commit, whatever its target says', () => {
+      expect(one([shell(0, 'ok', 'git commit')])?.commits).toBe(0);
+    });
+    it('keeps the first-line floor for a record captured before CAPTURE 6', () => {
+      expect(one([older(commit(0))])?.commits).toBe(1);
+      expect(one([older(commit(0, 'error'))])?.commits).toBe(0);
+      expect(one([older(shell(0))])?.commits).toBe(0);
+    });
+    it('a commit behind another command ends the redo window', () => {
+      const prompts = derived(asPrompts(2), [edit(0), { ...shell(0, 'ok', 'git add'), commits: ['abc1234'] }, edit(1)]);
+      expect(prompts[0]?.redo).toBe(false);
     });
   });
 
