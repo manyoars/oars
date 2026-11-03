@@ -91,7 +91,7 @@ export const pushRecall = async (input: PushInput): Promise<Recall | undefined> 
   const earlier = parseRecalls(await tailOf(recallsPath(input.storeDir)));
   if (earlier.some((recall) => recall.mode === 'push' && recall.sid === input.sid && recall.query.prefix?.[0] === shape)) return undefined;
   const frame = frameOfTail(input.transcript === undefined ? '' : await tailOf(input.transcript), input.platform, input.at);
-  const { rendered, names } = renderAnswer([read], frame, frame.harness);
+  const { rendered, names } = renderAnswer([read], frame);
   const recall = makeRecall({
     sid: input.sid,
     at: input.at,

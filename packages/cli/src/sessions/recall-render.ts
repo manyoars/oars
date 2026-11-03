@@ -4,7 +4,7 @@ import { ACTION_TABLES, actionOf, CANONICAL_ACTIONS } from './actions.js';
 import { LITERAL, PUBLIC_MCP_SERVERS, publicModel, publicVersion } from './public-vocabulary.js';
 import type { RecallDelta, RecallEvidence } from './recall-object.js';
 import type { RecallRead } from './recall-reads.js';
-import type { Frame, Harness } from './schema.js';
+import { PROMPT_CLASSES, type Frame, type Harness } from './schema.js';
 
 const DAY_MS = 86_400_000;
 const KEY_NAME = /^[A-Za-z_][A-Za-z0-9_]{0,39}$/;
@@ -111,34 +111,51 @@ const distance = (delta: RecallDelta): string => {
   return `from you: harness ${harness}, model ${delta.model}, age ${age}`;
 };
 
-const nameOf = (read: RecallRead, harness: Harness): string => {
+const isCanonical = (name: string): boolean => CANONICAL_ACTIONS.some((action) => action === name);
+
+/** What a native tool is to the harnesses a read ran under: the first table that lists it, else what any of them can say of it. A read naming no harness asks every table. */
+const toolOf = (read: RecallRead, tool: string): { action: string; native: string } => {
+  const tables = Object.entries(ACTION_TABLES).filter(([name]) => read.harnesses.includes(name));
+  const said = (tables.length === 0 ? Object.values(ACTION_TABLES) : tables.map(([, table]) => table)).map((table) => actionOf(table, tool));
+  return said.find((entry) => entry.native !== LITERAL) ?? said.find((entry) => entry.action !== 'other') ?? { action: 'other', native: LITERAL };
+};
+
+/** A stored motif read's name: its class, or its canonical steps without their identities. Undefined for a name that is neither, such as a native tool. */
+const motifOf = (tool: string): string | undefined => {
+  if (PROMPT_CLASSES.some((cls) => cls === tool)) return tool;
+  const steps = tool.split('>').map((step) => step.replace(/\[.*$/, ''));
+  return steps.every(isCanonical) ? steps.join('>') : undefined;
+};
+
+const nameOf = (read: RecallRead): string => {
   // An entity read is about the name itself, which need not be a tool: `actionOf` would read a model or a server as `other`, naming nothing.
   if (read.family === 'entity') return closedName(read.tool);
-  const { action, native } = actionOf(ACTION_TABLES[harness], read.tool);
+  const motif = motifOf(read.tool);
+  if (motif !== undefined) return motif;
+  const { action, native } = toolOf(read, read.tool);
   const name = native === LITERAL ? action : native;
   const keys = read.keys.filter((key) => KEY_NAME.test(key));
   return keys.length === 0 ? name : `${name} [${keys.join(', ')}]`;
 };
 
-/** Several tools can sit behind one action, and the same word twice would read as two things, so each action is stated once with the sum. */
-const followedActions = (read: RecallRead, table: (typeof ACTION_TABLES)[Harness]): Array<[string, number]> => {
+/** Several tools can sit behind one action, and the same word twice would read as two things, so each action is stated once with the sum. A next-step read already states actions. */
+const followedActions = (read: RecallRead): Array<[string, number]> => {
   const sums = new Map<string, number>();
   for (const [tool, times] of read.followed) {
-    const { action } = actionOf(table, tool);
+    const action = isCanonical(tool) ? tool : toolOf(read, tool).action;
     sums.set(action, (sums.get(action) ?? 0) + times);
   }
   return [...sums].sort((a, b) => b[1] - a[1]);
 };
 
-const line = (read: RecallRead, asker: RecallAsker | null, harness: Harness): { text: string; names: string[] } => {
-  const table = ACTION_TABLES[harness];
-  const followed = followedActions(read, table);
+const line = (read: RecallRead, asker: RecallAsker | null): { text: string; names: string[] } => {
+  const followed = followedActions(read);
   const failures = read.calls === null ? count(read.count, read.family === 'entity' ? 'call' : 'error') : `failed ${String(read.count)} of ${count(read.calls, 'call')}`;
   const harnesses = read.harnesses.flatMap((name) => harnessName(name) ?? []);
   const lastDay = publicDay(read.lastDay) ?? 'unknown';
   const id = READ_ID.test(read.readId) ? read.readId : LITERAL;
   const parts = [
-    `${nameOf(read, harness)} | ${failures}, ${count(read.n, 'session')}, ${count(read.clusters, 'cluster')} | ${harnesses.join(', ') || 'harness unknown'} ${versionRange(read.harnessVersions)}, ${modelsOf(read.models)}, last ${lastDay}`,
+    `${nameOf(read)} | ${failures}, ${count(read.n, 'session')}, ${count(read.clusters, 'cluster')} | ${harnesses.join(', ') || 'harness unknown'} ${versionRange(read.harnessVersions)}, ${modelsOf(read.models)}, last ${lastDay}`,
     `  ${distance(deltaOf(asker, read))}`,
     ...(followed.length === 0 ? [] : [`  then: ${followed.map(([action, times]) => `${action} x${String(times)}`).join(', ')}`]),
     `  read ${id} (${read.family})`,
@@ -148,9 +165,9 @@ const line = (read: RecallRead, asker: RecallAsker | null, harness: Harness): { 
 
 const PREAMBLE = 'oars recall, counts from earlier sessions:';
 
-export const renderAnswer = (reads: readonly RecallRead[], asker: RecallAsker | null, harness: Harness): { rendered: string; names: string[] } => {
+export const renderAnswer = (reads: readonly RecallRead[], asker: RecallAsker | null): { rendered: string; names: string[] } => {
   if (reads.length === 0) return { rendered: '', names: [] };
-  const lines = reads.map((read) => line(read, asker, harness));
+  const lines = reads.map((read) => line(read, asker));
   return { rendered: [PREAMBLE, ...lines.map((entry) => entry.text)].join('\n'), names: [...new Set(lines.flatMap((entry) => entry.names))] };
 };
 

@@ -375,7 +375,6 @@ export interface PullContext {
   now: number;
   /** The asker's frame, when the caller knows it; otherwise `sid` may name a stored session, whose frame stands in. */
   frame: Frame | null;
-  harness: Harness;
   redactDomains?: readonly string[];
   /** The pool an answer's stored read comes from; without one, an answer keeps its stand-in hash. */
   current?: CurrentPool | undefined;
@@ -408,7 +407,7 @@ export const pull = (store: Store, input: PullInput, context: PullContext): Pull
     return current === undefined ? found : resolveReads(found, current.reads);
   };
   const reads = isClosed(input) ? answerQuery(store, input, context.now, current) : legacyReads();
-  const { rendered, names } = renderAnswer(reads, asker, context.harness);
+  const { rendered, names } = renderAnswer(reads, asker);
   const made = makeRecall({
     sid: context.sid,
     at,

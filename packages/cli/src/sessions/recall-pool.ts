@@ -29,7 +29,7 @@ export const resolveReads = (reads: readonly RecallRead[], stored: readonly Read
   return reads.map((read) => ({ ...read, readId: ids.get(keyOf(read.family, read.readId)) ?? read.readId }));
 };
 
-const countIn = (value: Read['value'][string]): number => (typeof value === 'number' ? value : 0);
+const countIn = (value: unknown): number => (typeof value === 'number' ? value : 0);
 
 const nextOf = (read: Read): Array<[string, number]> => {
   const { next } = read.value;

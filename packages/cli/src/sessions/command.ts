@@ -20,7 +20,7 @@ import { serve } from './mcp.js';
 import { currentPool, refreshPool } from './pool.js';
 import { FAMILIES } from './read.js';
 import { formatReads, isFamily, parseSlice, selectReads } from './read-rows.js';
-import { CAPTURE_VERSION, harnessOf, OLDEST_READABLE_CAPTURE, type StepRow } from './schema.js';
+import { CAPTURE_VERSION, OLDEST_READABLE_CAPTURE, type StepRow } from './schema.js';
 import { deposit, frozenSessions, loadStore, readCalls, readRedactDomains, readSkeletons, slugOf, type SessionsRuntime, type Store } from './store.js';
 import { formatStepCounters, inputKey, newContext, readSteps, stampKey, runDeposit, runStep, stepCounters, stuckSteps, tryLog, type StuckStep } from './steps.js';
 import { auditCounts, auditStore, formatAudit, type SessionAudit, type T0Counts } from './audit.js';
@@ -82,7 +82,7 @@ export const sessionsRecall = async (deps: SessionsDeps, query: PullInput, sid: 
     'recall',
     async () => {
       const store = await loadStore(storeDir);
-      const found = pull(store, query, { sid, now: deps.now(), frame: null, harness: harnessOf({}), redactDomains: await readRedactDomains(storeDir), current: await currentPool(storeDir, store) });
+      const found = pull(store, query, { sid, now: deps.now(), frame: null, redactDomains: await readRedactDomains(storeDir), current: await currentPool(storeDir, store) });
       return { value: found, report: { in: { query: 1 }, out: { matches: found.legacy?.matches.length ?? found.reads.length }, key } };
     },
     key,
