@@ -1,0 +1,9 @@
+// The pool's Cloudflare target. It holds no account id, resource id, secret, route, or custom domain: those belong to the deploy (docs/pool.md).
+{
+  "$schema": "../../node_modules/wrangler/config-schema.json",
+  "name": "oars-pool",
+  "main": "src/worker.ts",
+  "compatibility_date": "2026-07-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "d1_databases": [{ "binding": "DB", "database_name": "oars-pool", "migrations_dir": "migrations" }]
+}
