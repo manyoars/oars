@@ -163,15 +163,25 @@ export interface RecallCountRow {
   windowCalls: number;
   /** Null when no window in the row measured any tokens. */
   windowTokens: number | null;
+  /** Held windows that share a call with a shown recall's window. The arm is drawn per session and shape, so one session can hold both, and such a window is a contaminated baseline. */
+  overlapped: number;
 }
 
-/** Takes recalls that have been through `deriveConsequences`; `day` is a UTC day, so one day of hooks reads as one set of rows. */
+type RecallWindow = RecallConsequence['window'];
+
+const sharesACall = (one: RecallWindow, other: RecallWindow): boolean => Math.max(one.from, other.from) < Math.min(one.to, other.to);
+
+/** Takes recalls that have been through `deriveConsequences`; `day` is a UTC day, so one day of hooks reads as one set of rows. A shown window from any day can overlap a held one. */
 export const recallCounts = (recalls: readonly Recall[], day?: string): RecallCountRow[] => {
   const rows = new Map<string, { row: RecallCountRow; sessions: Set<string> }>();
+  const shown = new Map<string | null, RecallWindow[]>();
+  for (const recall of recalls) {
+    if (recall.arm === 'shown' && recall.consequence !== undefined) shown.set(recall.sid, [...(shown.get(recall.sid) ?? []), recall.consequence.window]);
+  }
   for (const recall of recalls) {
     if (day !== undefined && !recall.at.startsWith(day)) continue;
     const key = [recall.mode, recall.arm, recall.answer.kind].join(' ');
-    const held = rows.get(key) ?? { row: { mode: recall.mode, arm: recall.arm, kind: recall.answer.kind, recalls: 0, sessions: 0, tokens: 0, windows: 0, followed: 0, windowCalls: 0, windowTokens: null }, sessions: new Set<string>() };
+    const held = rows.get(key) ?? { row: { mode: recall.mode, arm: recall.arm, kind: recall.answer.kind, recalls: 0, sessions: 0, tokens: 0, windows: 0, followed: 0, windowCalls: 0, windowTokens: null, overlapped: 0 }, sessions: new Set<string>() };
     rows.set(key, held);
     const { row, sessions } = held;
     row.recalls += 1;
@@ -184,6 +194,7 @@ export const recallCounts = (recalls: readonly Recall[], day?: string): RecallCo
     if (consequence.followed) row.followed += 1;
     row.windowCalls += consequence.window.calls;
     if (consequence.cost.tokens !== null) row.windowTokens = (row.windowTokens ?? 0) + consequence.cost.tokens;
+    if (recall.arm === 'held' && (shown.get(recall.sid) ?? []).some((window) => sharesACall(consequence.window, window))) row.overlapped += 1;
   }
   return [...rows.entries()].sort(([a], [b]) => (a < b ? -1 : 1)).map(([, { row }]) => row);
 };
@@ -192,5 +203,5 @@ export const formatRecallCounts = (rows: readonly RecallCountRow[]): string =>
   rows.length === 0
     ? 'No recalls in that span.'
     : rows
-        .map((row) => `${row.mode} ${row.arm} ${row.kind} | ${String(row.recalls)} recalls, ${String(row.sessions)} sessions, ${String(row.tokens)} tokens | ${String(row.windows)} windows, ${String(row.followed)} followed, ${String(row.windowCalls)} calls, ${row.windowTokens === null ? 'window tokens unmeasured' : `${String(row.windowTokens)} window tokens`}`)
+        .map((row) => `${row.mode} ${row.arm} ${row.kind} | ${String(row.recalls)} recalls, ${String(row.sessions)} sessions, ${String(row.tokens)} tokens | ${String(row.windows)} windows, ${String(row.followed)} followed, ${String(row.windowCalls)} calls, ${row.windowTokens === null ? 'window tokens unmeasured' : `${String(row.windowTokens)} window tokens`}, ${String(row.overlapped)} overlapped`)
         .join('\n');
