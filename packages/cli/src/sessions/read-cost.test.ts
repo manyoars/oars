@@ -28,7 +28,7 @@ describe('cost', () => {
           prompt('s1', 1, { usage: usage(300, 150), wallSec: 30, errors: 1 }),
           prompt('s1', 2, { usage: usage(1, 1), frame: frame({ day: '2026-11-02' }) }),
           prompt('s1', 3, { usage: usage(1, 1), frame: frame({ model: 'claude-sonnet-5-5' }) }),
-          prompt('s1', 4, { usage: usage(1, 1), cls: 'explore' }),
+          prompt('s1', 4, { usage: usage(1, 1), cls: 'explore-only' }),
         ],
       }),
     );
