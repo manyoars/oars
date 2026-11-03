@@ -115,7 +115,7 @@ describe('cost', () => {
     expect(capture(response('r1', null, [use('a')]))[0]?.steps?.[0]?.cost.tokens).toBeNull();
     expect(capture(response('r1', 0, [use('a')]))[0]?.steps?.[0]?.cost.tokens).toBeNull();
     const resumed = capture([response('r1', 80, [use('a')]), response('r2', 10, [use('a'), use('b')])].join('\n'));
-    expect(resumed.map((tool) => tool.steps?.[0]?.cost.tokens)).toEqual([80, null, 10]);
+    expect(resumed.map((tool) => tool.steps?.[0]?.cost.tokens)).toEqual([80, 10]);
   });
 
   it('reads a usage line with no response id as its own response', () => {
@@ -211,8 +211,15 @@ describe('a subagent joins the graph of the call that spawned it', () => {
   it('skips a broken line or a line without a call, and takes the first copy of a repeated id', () => {
     const use = (id?: string): object => ({ type: 'tool_use', ...(id === undefined ? {} : { id }), name: 'Bash', input: {} });
     const text = ['not json', '[1]', line({ type: 'user' }), line({ message: { content: 'x' } }), line({ message: { content: ['x', use('a'), use(), use('a'), use('b')] } })].join('\n');
-    expect([...callPositions(text)]).toEqual([['a', 0], ['b', 3]]);
-    expect(capture(text).map((tool) => tool.toolUseId)).toEqual(['a', null, 'a', 'b']);
+    expect([...callPositions(text)]).toEqual([['a', 0], ['b', 2]]);
+    expect(capture(text).map((tool) => [tool.toolUseId, tool.n])).toEqual([['a', 0], [null, 1], ['b', 2]]);
+  });
+
+  it('counts no call on an api-request-blob line, as capture writes none', () => {
+    const use = (id: string): object => ({ type: 'tool_use', id, name: 'Bash', input: {} });
+    const text = [line({ type: 'api-request-blob', message: { content: [use('x'), use('a')] } }), line({ type: 'assistant', message: { role: 'assistant', content: [use('a'), use('b')] } })].join('\n');
+    expect([...callPositions(text)]).toEqual([['a', 0], ['b', 1]]);
+    expect(capture(text).map((tool) => [tool.toolUseId, tool.n])).toEqual([['a', 0], ['b', 1]]);
   });
 
   it('reads the parent from the archive when the harness no longer has it', async () => {

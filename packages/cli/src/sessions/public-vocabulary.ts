@@ -110,6 +110,10 @@ export const PUBLIC_PROGRAMS: ReadonlySet<string> = new Set([
   ...FRAMEWORK_OF_PROGRAM.keys(),
   ...words(`
     git gh glab svn hg
+    for foreach while until case select break continue exit return read shift throw param trap wait
+    od basename dirname cygpath cmp fold paste seq rev sum
+    get-date out-string out-null out-file start-sleep get-ciminstance import-module format-table format-list convertfrom-json convertto-json resolve-path
+    tee-object get-member join-path split-path start-threadjob start-job receive-job wait-job push-location pop-location set-location
     npm npx pnpm yarn bun deno node nvm tsc eslint prettier biome turbo nx webpack rollup esbuild tsx
     python python3 py pip pip3 pipx uv uvx poetry pytest ruff mypy black tox conda
     java javac jar kotlin scala sbt go gofmt rustc rustup ruby gem bundle rake php composer perl lua swift nuget make cmake just gcc clang brew
@@ -174,6 +178,10 @@ export const PUBLIC_FLAGS: ReadonlySet<string> = words(`
   --no-ff --no-install --no-pager --no-verify --no-save --noEmit --numstat --oneline --only --output --package --parents --path --porcelain --port --prefix
   --production --project --prune --pretty --quiet --recursive --reporter --repo --reverse --rm --run --save --save-dev --set-upstream --short --show-current
   --silent --since --skip-tests --soft --stat --state --tags --target --template --title --token --until --update --user --verbose --version --watch --web --workspace --yes
+  --abbrev-ref --abort --contains --continue --ff-only --first-parent --ignored --is-ancestor --is-inside-work-tree --max-count --merged --no-commit
+  --no-merges --no-rebase --no-stat --others --remotes --show-toplevel --staged --stdin
+  -AllMatches -Append -Compress -Confirm -Context -Descending -Directory -Encoding -Exclude -ExpandProperty -File -First -ItemType -Last -Milliseconds -Name
+  -NoNewline -Property -Seconds -SimpleMatch -Skip -TotalCount -Unique -Value -Wait
   -Command -Depth -ErrorAction -ExecutionPolicy -Filter -Force -Include -LiteralPath -NoLogo -NoProfile -NonInteractive -Path -Pattern -Raw -Recurse -Tail
 `);
 
