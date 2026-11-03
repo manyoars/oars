@@ -13,6 +13,7 @@ import {
   type PromptStop,
   type PromptVerify,
   type SessionObservation,
+  type ShellSegment,
   type ToolObservation,
   type UserPromptObservation,
 } from './schema.js';
@@ -74,17 +75,45 @@ const firstCopies = <T extends { side: boolean; toolUseId: string | null }>(reco
 /** A failed edit wrote nothing. An edit with no result in the file may have written, so it counts. */
 const isEdit = (tool: ToolObservation): boolean => EDITS.has(tool.tool) && tool.status !== 'error';
 
-/** `target` is the first line's program and subcommand, so this sees a commit only when it leads the line. */
-const isCommit = (tool: ToolObservation): boolean => SHELL.has(tool.tool) && tool.target === 'git commit' && tool.status === 'ok';
+/** The commits a call made. A record captured before `segments` has only its first line's `target`, so it stays the floor it was. */
+const commitsIn = (tool: ToolObservation): number => {
+  if (!SHELL.has(tool.tool) || tool.status !== 'ok') return 0;
+  if (tool.segments === undefined) return tool.target === 'git commit' ? 1 : 0;
+  return tool.commits?.length ?? 0;
+};
 
 /** The `edit-verify` rule's shell call, less a backgrounded one, whose `ok` says only that it started. */
 const isVerifyCall = (tool: ToolObservation): boolean => SHELL.has(tool.tool) && !tool.keys.includes('run_in_background');
 
-const verifyOf = (calls: readonly ToolObservation[]): PromptVerify => {
+const ANY_ARGS_RUNNER = /^(?:vitest|jest|mocha|ava|pytest|tox|nox|rspec|phpunit|ctest|tsc|eslint|ruff|mypy|pyright|playwright|cypress|bazel|ninja|pre-commit)(?: |$)/;
+const VERB_RUNNER = /^(?:npm|pnpm|yarn|bun|mvn|mvnw|gradle|gradlew|just|make|cargo|go|dotnet|deno|swift|astro|nx|turbo) /;
+const WORK_WORD = /^(?:[\w:-]*[-:])?(?:test|tests|check|checks|typecheck|verify|build|lint|compile|e2e|clippy|nextest|vet)(?:[-:][\w:-]*)?$/;
+const OTHER_RUNNER = /^(?:make$|(?:npm|bun) t(?: |$)|(?:mvn|mvnw) (?:.* )?(?:package|install)(?: |$))/;
+const RUN_WRAPPER = /^(?:npx|bunx|uvx|pipx run|uv run|poetry run|pnpm exec|pnpm dlx|yarn dlx|bundle exec|python[\d.]*|py) /;
+
+/** Whether a segment runs a build, a test suite, a type check, or a linter. A rule over the captured `run`, so a change here re-derives without a transcript. */
+export const isRunner = (segment: ShellSegment): boolean => {
+  const run = segment.run.replace(RUN_WRAPPER, '');
+  if (ANY_ARGS_RUNNER.test(run) || OTHER_RUNNER.test(run)) return true;
+  return VERB_RUNNER.test(run) && run.split(' ').slice(1).some((word) => WORK_WORD.test(word));
+};
+
+/**
+ * The last runner after the prompt's last edit decides, so a later `ls` or `git status` does not. Undefined when a shell call is reached
+ * that was captured before `segments`: it could be a runner, and saying `none` would claim it was not.
+ */
+const verifyOf = (calls: readonly ToolObservation[]): PromptVerify | undefined => {
   const lastEdit = calls.findLastIndex(isEdit);
   if (lastEdit < 0) return 'na';
-  const status = calls.slice(lastEdit + 1).findLast(isVerifyCall)?.status;
-  return status === 'ok' ? 'passed' : status === 'error' ? 'failed' : 'none';
+  for (const call of calls.slice(lastEdit + 1).filter(isVerifyCall).reverse()) {
+    if (call.segments === undefined) return undefined;
+    const runner = call.segments.findLast(isRunner);
+    if (runner !== undefined) {
+      if (!runner.read) return 'masked';
+      return call.status === 'ok' ? 'passed' : call.status === 'error' ? 'failed' : 'none';
+    }
+  }
+  return 'none';
 };
 
 /** A rejection names the call the operator declined, and the harness follows it with the interrupt marker, so it is read first. */
@@ -98,7 +127,7 @@ const redonePrompts = (calls: readonly ToolObservation[]): Set<number> => {
   const redone = new Set<number>();
   const lastEditor = new Map<string, number>();
   for (const call of calls) {
-    if (isCommit(call)) lastEditor.clear();
+    if (commitsIn(call) > 0) lastEditor.clear();
     else if (call.prompt !== null && call.target !== null && isEdit(call)) {
       const earlier = lastEditor.get(call.target);
       if (earlier !== undefined && earlier !== call.prompt && call.prompt - earlier <= REDO_WINDOW) redone.add(earlier);
@@ -161,7 +190,7 @@ export const deriveSession = (capture: SessionCapture, redact: Redactor): Derive
       contextFingerprint: prompt.promptFingerprint,
       verify: verifyOf(settled),
       stopped: stoppedOf(stopsOf.get(prompt.index) ?? [], capture.prompts[position + 1]?.head),
-      commits: settled.filter(isCommit).length,
+      commits: settled.reduce((sum, tool) => sum + commitsIn(tool), 0),
       redo: redone.has(prompt.index),
     };
   });
