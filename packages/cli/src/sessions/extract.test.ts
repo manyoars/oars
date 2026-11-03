@@ -561,8 +561,8 @@ describe('an api-request-blob line is a copy of the request, not a conversation 
     expect(withRoot([user, real, copy]).tools[0]?.target).toBe(withRoot([user, real]).tools[0]?.target);
   });
 
-  it('writes no row for a tool_use id only a blob line holds: that call belongs to the transcript the resumed session copied it from', () => {
-    const earlier = blob({ role: 'assistant', content: [{ type: 'tool_use', id: 'from-an-ancestor', name: 'Bash', input: { command: 'git status' } }] });
+  it('writes no row for a tool_use id only a blob line holds: that call is in another transcript (a subagent), which is captured on its own', () => {
+    const earlier = blob({ role: 'assistant', content: [{ type: 'tool_use', id: 'from-a-subagent', name: 'Bash', input: { command: 'git status' } }] });
     const captured = captureOf([user, earlier, call, result]);
     expect(captured.tools.map((tool) => tool.toolUseId)).toEqual(['t1']);
     expect(captured.session.tools).toEqual({ Read: 1 });
