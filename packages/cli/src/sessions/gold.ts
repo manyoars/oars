@@ -5,6 +5,7 @@
 import { createHash } from 'node:crypto';
 import { readdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { INTERRUPT_MARKER } from './derive.js';
 import { cut, EDITS, SHELL, shellTarget, shortName } from './extract.js';
 import type { Redactor } from './redact.js';
 import { PROMPT_HEAD_CHARS, type PromptObservation, type PromptStop, type PromptVerify } from './schema.js';
@@ -225,7 +226,6 @@ export const viewOf = (turns: readonly Turn[], index: number, redact: Redactor):
   };
 };
 
-export const INTERRUPT_MARKER = '[Request interrupted by user';
 const CURSOR_PREFIX = 'cursor-';
 
 /**

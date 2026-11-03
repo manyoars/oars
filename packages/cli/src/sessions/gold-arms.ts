@@ -8,8 +8,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Readable, Writable } from 'node:stream';
 import { CliError, ExitCode } from '../errors.js';
+import { INTERRUPT_MARKER } from './derive.js';
 import { cut } from './extract.js';
-import { INTERRUPT_MARKER, isObj, readIfThere, readTurns, renderShown, viewOf, type GoldAnswer, type GoldAskedArm, type GoldDocument, type GoldEntry, type GoldEvaluators, type GoldReads, type Turn } from './gold.js';
+import { isObj, readIfThere, readTurns, renderShown, viewOf, type GoldAnswer, type GoldAskedArm, type GoldDocument, type GoldEntry, type GoldEvaluators, type GoldReads, type Turn } from './gold.js';
 import type { Redactor } from './redact.js';
 import { paths, type SessionsRuntime } from './store.js';
 
