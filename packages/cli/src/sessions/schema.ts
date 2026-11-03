@@ -141,16 +141,16 @@ export interface SessionObservation {
   usage: Usage;
 }
 
-/** What the last shell call after a prompt's last edit returned: `none` when no such call reports a result, `na` when the prompt edited nothing. */
+/** What the last shell call after a prompt's last edit returned: `none` when there is no such call or the last one has no result, `na` when the prompt edited nothing. */
 export type PromptVerify = 'passed' | 'failed' | 'none' | 'na';
 
 /** How the operator cut a prompt short: Esc or a new message (`interrupt`), or declining a tool call (`rejected`). */
 export type PromptStop = 'interrupt' | 'rejected';
 
 /**
- * One per user prompt: the `prompt_graphs.py` and `cost_per_class.py` records joined. Derived. Classes: `session` and
- * `contextFingerprint`, `head`, and `ts` (A); `kind`, `v`, `rev`, `index`, `wallSec`, `cls`, `tools`, `shape`, `errors`, `thinking`, `sideTools`,
- * `turns`, `model`, `efforts`, `skills`, `usage`, `recovery`, `explore`, `act`, `bigrams`, `verify`, `stopped`, `commits`, and `redo` (P).
+ * One per user prompt: the `prompt_graphs.py` and `cost_per_class.py` records joined. Derived. Classes: `session`,
+ * `contextFingerprint`, `head`, `ts`, `verify`, `stopped`, `commits`, and `redo` (A); `kind`, `v`, `rev`, `index`, `wallSec`, `cls`, `tools`,
+ * `shape`, `errors`, `thinking`, `sideTools`, `turns`, `model`, `efforts`, `skills`, `usage`, `recovery`, `explore`, `act`, and `bigrams` (P).
  */
 export interface PromptObservation {
   kind: 'prompt';

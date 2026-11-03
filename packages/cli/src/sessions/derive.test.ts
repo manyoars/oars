@@ -245,7 +245,7 @@ describe('prompt outcome signals (t747)', () => {
     tool: string;
     status?: ToolStatus;
     target?: string | null;
-    id?: string;
+    id?: string | null;
     keys?: string[];
     side?: boolean;
   }
@@ -253,6 +253,7 @@ describe('prompt outcome signals (t747)', () => {
     prompt: number;
     line: string;
     side?: boolean;
+    id?: string;
   }
   const edit = (prompt: number, target = 'hash-a', status: ToolStatus = 'ok'): Call => ({ prompt, tool: 'Edit', target, status });
   const shell = (prompt: number, status: ToolStatus = 'ok', target = 'npm test'): Call => ({ prompt, tool: 'Bash', target, status });
@@ -260,10 +261,10 @@ describe('prompt outcome signals (t747)', () => {
   const derived = (heads: readonly string[], calls: readonly Call[], failures: readonly Failure[] = []) => {
     const tools = calls.map((call, n): ToolObservation => ({
       kind: 'tool', cv: CAPTURE_VERSION, sid: null, session: 's', rev: 1, parent: 's', agentType: null, n, ts: null, tool: call.tool, status: call.status ?? 'ok', target: call.target ?? null, targetBase: null,
-      keys: call.keys ?? [], durationMs: null, toolUseId: call.id ?? `c${String(n)}`, harnessVersion: null, side: call.side ?? false, prompt: call.prompt,
+      keys: call.keys ?? [], durationMs: null, toolUseId: call.id === undefined ? `c${String(n)}` : call.id, harnessVersion: null, side: call.side ?? false, prompt: call.prompt,
     }));
     const errorLines = failures.map((failure): ErrorLineObservation => ({
-      kind: 'error-line', cv: CAPTURE_VERSION, sid: null, session: 's', rev: 1, toolUseId: null, tool: 'Edit', line: failure.line, ts: null, harnessVersion: null, side: failure.side ?? false, prompt: failure.prompt, after: 0,
+      kind: 'error-line', cv: CAPTURE_VERSION, sid: null, session: 's', rev: 1, toolUseId: failure.id ?? null, tool: 'Edit', line: failure.line, ts: null, harnessVersion: null, side: failure.side ?? false, prompt: failure.prompt, after: 0,
     }));
     const prompts = heads.map((text, index): UserPromptObservation => ({
       kind: 'user-prompt', cv: CAPTURE_VERSION, sid: null, session: 's', rev: 1, index, ts: null, wallSec: null, head: text, thinking: 0, turns: 0, model: 'm', efforts: [], skills: [], usage: emptyUsage(), promptFingerprint: null,
@@ -326,6 +327,29 @@ describe('prompt outcome signals (t747)', () => {
 
     it('names a rejection over the interrupt marker the harness writes right after it', () => {
       expect(derived(['work', '[Request interrupted by user for tool use]'], [edit(0, 'hash-a', 'error')], [{ prompt: 0, line: REJECTED }])[0]?.stopped).toBe('rejected');
+    });
+
+    it('does not read a rejection a resumed session repeats as the later prompt being stopped', () => {
+      const failures = [{ prompt: 0, line: REJECTED, id: 'x' }, { prompt: 2, line: REJECTED, id: 'x' }];
+      expect(derived(asPrompts(3), [], failures).map((prompt) => prompt.stopped)).toEqual(['rejected', null, null]);
+    });
+
+    it('finds a repeat through capture, and still counts it in errors', () => {
+      const user = (text: string): string => JSON.stringify({ type: 'user', isSidechain: false, cwd: '/work/app', message: { role: 'user', content: text } });
+      const call = JSON.stringify({ type: 'assistant', isSidechain: false, requestId: 'r1', message: { role: 'assistant', model: 'm', content: [{ type: 'tool_use', id: 'e1', name: 'Edit', input: { file_path: '/work/app/a.ts', old_string: 'a', new_string: 'b' } }] } });
+      const result = JSON.stringify({ type: 'user', isSidechain: false, message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'e1', is_error: true, content: REJECTED }] } });
+      const lines = [user('first'), call, result, user('second'), user('resumed'), call, result].join('\n');
+      const { prompts } = extractSession({ text: lines, session: 's', project: 'proj', rev: 1, at: '', bytes: 0, redact });
+      expect(prompts.map((prompt) => [prompt.stopped, prompt.errors])).toEqual([['rejected', 1], [null, 0], [null, 1]]);
+    });
+
+    it('keeps a second rejection of another call, and two with no id, each on its own prompt', () => {
+      expect(derived(asPrompts(2), [], [{ prompt: 0, line: REJECTED, id: 'x' }, { prompt: 1, line: REJECTED, id: 'y' }]).map((prompt) => prompt.stopped)).toEqual(['rejected', 'rejected']);
+      expect(derived(asPrompts(2), [], [{ prompt: 0, line: REJECTED }, { prompt: 1, line: REJECTED }]).map((prompt) => prompt.stopped)).toEqual(['rejected', 'rejected']);
+    });
+
+    it('does not let a sidechain copy of an id hide the main-line rejection', () => {
+      expect(derived(asPrompts(1), [], [{ prompt: 0, line: REJECTED, id: 'x', side: true }, { prompt: 0, line: REJECTED, id: 'x' }])[0]?.stopped).toBe('rejected');
     });
 
     it('finds both markers in a real transcript shape, through capture', () => {
@@ -410,6 +434,10 @@ describe('prompt outcome signals (t747)', () => {
 
     it('does not read a call a resumed session repeats as a second edit', () => {
       expect(redone(2, [{ ...edit(0), id: 'x' }, { ...edit(1, 'hash-a', 'none'), id: 'x' }])).toEqual([false, false]);
+    });
+
+    it('keeps every call with no id: nothing says one repeats another', () => {
+      expect(redone(2, [{ ...edit(0), id: null }, { ...edit(1), id: null }])).toEqual([true, false]);
     });
 
     it('skips a call with no target and a sidechain edit', () => {
