@@ -236,6 +236,42 @@ describe('Codex subagent rollouts', () => {
     expect(store.sessions.map((session) => session.session)).toEqual([`codex-${A}`]);
     expect(store.subagents.map((session) => [session.session, session.parent])).toEqual([[`codex-${B}`, `codex-${A}`]]);
   });
+
+  // `SessionMeta.source` (protocol/src/protocol.rs:3477) is a `SessionSource`; serde writes it lowercase and externally tagged (:3141-3144), so a subagent is
+  // `{subagent: review}` (`SubAgentSource`, snake_case, :3223-3241) and an internal thread `{internal: guardian}` (:3151, :3215-3221). Upstream's own
+  // `is_non_root_agent` is `Internal(_) | SubAgent(_)` (:3280-3285), and `parent_thread_id` is set only for ThreadSpawn by `SubAgentSource::parent_thread_id`
+  // (:3376-3386), so a rollout can be a subagent's without one. The root thread is `session_id` (:3451-3452).
+  it('counts a rollout whose source is a subagent as one with no parent_thread_id, under its session_id (Review, protocol.rs:3226-3227)', async () => {
+    const s = stage();
+    const home = stageCodex(s.root, [{ id: B, lines: [meta(B, '/work/app', { session_id: A, source: { subagent: 'review' } }), line(T(2), 'event_msg', { type: 'user_message', message: 'review the diff' }), usage] }]);
+    const result = await deposit({ ...s.runtime, sourceRoots: { codex: home } }, options(['codex']));
+    expect(result).toMatchObject({ sessions: 0, subagents: 1 });
+    const store = await loadStore(s.storeDir);
+    expect(store.sessions).toEqual([]);
+    expect(store.subagents.map((session) => [session.session, session.parent])).toEqual([[`codex-${B}`, `codex-${A}`]]);
+  });
+
+  it('counts an internal source (guardian, memory_consolidation) as a subagent too, and names itself when it has neither parent_thread_id nor session_id', async () => {
+    const s = stage();
+    const prompt = line(T(2), 'event_msg', { type: 'user_message', message: 'summarize' });
+    const home = stageCodex(s.root, [
+      { id: B, lines: [meta(B, '/work/app', { session_id: A, source: { internal: 'guardian' } }), prompt, usage] },
+      { id: C, lines: [meta(C, '/work/app', { source: { internal: 'memory_consolidation' } }), prompt, usage] },
+    ]);
+    const result = await deposit({ ...s.runtime, sourceRoots: { codex: home } }, options(['codex']));
+    expect(result).toMatchObject({ sessions: 0, subagents: 2 });
+    const store = await loadStore(s.storeDir);
+    expect(store.subagents.map((session) => [session.session, session.parent]).sort()).toEqual([[`codex-${B}`, `codex-${A}`], [`codex-${C}`, `codex-${C}`]]);
+  });
+
+  it('keeps every other source a main session: cli, vscode, exec, mcp, and a custom client', async () => {
+    const s = stage();
+    const ids = [A, B, C, D, E];
+    const sources: unknown[] = ['cli', 'vscode', 'exec', 'mcp', { custom: 'sdk' }];
+    const home = stageCodex(s.root, ids.map((id, index) => ({ id, lines: [meta(id, '/work/app', { source: sources[index] }), line(T(2), 'event_msg', { type: 'user_message', message: 'go' }), usage] })));
+    const result = await deposit({ ...s.runtime, sourceRoots: { codex: home } }, options(['codex']));
+    expect(result).toMatchObject({ sessions: 5, subagents: 0 });
+  });
 });
 
 describe('Paginated and forked rollouts through the store', () => {
