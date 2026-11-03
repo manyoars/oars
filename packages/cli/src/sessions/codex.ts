@@ -4,14 +4,14 @@
 // store. Each field read below cites the file it comes from; `docs/sessions-store.md` says what a live run would still have to prove.
 //
 // Where it reads from (`codexRoot`): `$CODEX_HOME`, else `~/.codex` (`%USERPROFILE%\.codex` on Windows); the same on every OS
-// (codex-rs/rollout/src/list.rs). Inside it, `sessions/YYYY/MM/DD/rollout-YYYY-MM-DDThh-mm-ss-<uuid>.jsonl` and `archived_sessions/` hold one
+// (codex-rs/utils/home-dir/src/lib.rs:5-18). Inside it, `sessions/YYYY/MM/DD/rollout-YYYY-MM-DDThh-mm-ss-<uuid>.jsonl` and `archived_sessions/` hold one
 // file per session; Codex compresses an old one to `.jsonl.zst` and reads either (rollout/src/compression.rs), so this reader does too.
 // A line is `{timestamp, type, payload}` (history/src/lib.rs `RolloutLine`, rollout_payload.rs). Like cursor.ts, the reader writes each session
 // out as the transcript lines `captureSession` already reads, so redaction, the 1,000-character line cap, the salted file hashes, and the
 // skeleton are the Claude Code path's own code:
 //   session_meta        {id, cwd, cli_version, timestamp, history_mode, parent_thread_id, forked_from_id, subagent_history_start_ordinal}: the
 //                       working directory and the harness version; only the first one in the file (recorder.rs:1157-1158). A spawned agent has `parent_thread_id` (protocol.rs:3464); records whose
-//                       `ordinal` is below its `subagent_history_start_ordinal` (:3511) are the parent's prefix (ordinal.rs:86-89), and are dropped. A Paginated fork copies none: its `history_base` points at the parent (:3499-3501). Ordinals exist
+//                       `ordinal` is below its `subagent_history_start_ordinal` (:3511-3516) are the parent's prefix (ordinal.rs:86-89), and are dropped. A Paginated fork copies none: its `history_base` points at the parent (:3508-3510). Ordinals exist
 //                       only in a Paginated rollout (ordinal.rs:37), the CLI's default (thread-store/src/local/mod.rs:512-515), which holds item_completed TurnItems
 //                       (UserMessage, AgentMessage, FileChange, McpToolCall) in place of the legacy events below (rollout/src/policy.rs:142-156, `persisted_item_completed_event` :232, its Paginated arm :253); both are read.
 //                       A Legacy fork's copied history is dropped by matching the parent rollout record for record
