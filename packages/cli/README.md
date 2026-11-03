@@ -70,11 +70,11 @@ The SDK key is shown once, so save it when `deploy` prints it.
 
 ### sessions
 
-`oars sessions` keeps a local, deterministic memory of your own Claude Code sessions. oars makes no model call and no network call.
+`oars sessions` keeps a local, deterministic memory of your own Claude Code sessions. oars makes no model call and no network call, except `gold arms`, which sends redacted text through your own Claude subscription.
 
-What it captures: the Claude Code sessions in the folders you name with `--allow`. Where it stores them: `<config>/oars/sessions/` on your machine (`<config>` is `%APPDATA%` on Windows, `$XDG_CONFIG_HOME` or `~/.config` elsewhere). The `raw/` folder in it is on by default and holds raw transcripts (a hard link or copy of each deposited one). Secret masking applies to the log, not to `raw/`: those files are unredacted and keep whatever the transcript held, secrets included. They stay on your machine and nothing is uploaded. To remove them, see [Remove everything](#remove-everything).
+What it captures: the Claude Code sessions in the folders you name with `--allow`, and Cursor sessions if you pass `--allow cursor`. Where it stores them: `<config>/oars/sessions/` on your machine (`<config>` is `%APPDATA%` on Windows, `$XDG_CONFIG_HOME` or `~/.config` elsewhere). The `raw/` folder in it is on by default and holds raw transcripts (a hard link or copy of each deposited one). Secret masking applies to the log, not to `raw/`: those files are unredacted and keep whatever the transcript held, secrets included. They stay on your machine and nothing is uploaded. To remove them, see [Remove everything](#remove-everything).
 
-oars itself sends nothing; the hooks and the MCP tool add recall text to the running session, and your harness sends that to its model like any other context.
+Apart from that, oars itself sends nothing; the hooks and the MCP tool add recall text to the running session, and your harness sends that to its model like any other context.
 
 ```bash
 # Read the folders you name (a path, or its name under ~/.claude/projects). At least one --allow is required; there is no "all".
@@ -92,6 +92,7 @@ oars sessions books --by harness            # the same, grouped by Claude Code a
 oars sessions measure --last 50             # recurring errors per 100 sessions, cache-write per session, recall calls per session
 oars sessions measure --last 50 --repo <root>  # the same, for one repository's sessions
 oars sessions verify                        # consistency invariants on the stored skeletons and capture records
+oars sessions gold sample --exclude-term <text>   # about 200 prompts to judge blind; `gold arms <file>` adds the claim and fresh readers on your Claude subscription; `gold score <file>` reads each arm against the judgments
 ```
 
 `deposit` is idempotent (a file is skipped only when its size, mtime, capture version, salt, and `--redact-domain` set are all unchanged; a store written by an older capture version is captured again from the harness's transcript or from `raw/`, and one written by a newer oars is refused) and appends to `<config>/oars/sessions/observations.jsonl`:

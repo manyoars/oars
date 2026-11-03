@@ -339,6 +339,13 @@ describe('oars purchasing is closed until t465 opens it (V13: nothing is sold be
     expect(seen).toEqual([]);
   });
 
+  it('bare `purchasing` with the gate open prints its subcommands to stderr and exits 2 (usage)', async () => {
+    const h = harness({ OARS_API_KEY: 'key-123' });
+    expect(await run(['purchasing'], h.deps)).toBe(ExitCode.USAGE);
+    expect(h.err.join('')).toMatch(/card/);
+    expect(h.err.join('')).toMatch(/list/);
+  });
+
   it('runs when OARS_ISSUER_URL names a platform of your own', async () => {
     const h = harness({ OARS_API_KEY: 'key-123' });
     cardRead(() => HttpResponse.json(view({ mode: 'TEST', status: 'ACTIVE', brand: 'visa', last4: '4242' })));
