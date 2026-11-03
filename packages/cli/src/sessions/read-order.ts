@@ -4,6 +4,9 @@
 import type { Family, Read, ReadInterval, ReadSlice, ReadValue } from './read.js';
 import { round, type ReadBody } from './read-support.js';
 
+/** A family over reads: it reads every read of the stages before it. */
+export type DeriveRelation = (reads: readonly Read[]) => ReadBody[];
+
 /** The fewest trials a rate may rest on and still be compared: t752's k. */
 export const TRIALS_FLOOR = 30;
 
@@ -74,4 +77,22 @@ export const relate = (family: Family, method: string, methodVersion: string, in
   const { cites = [], n = Math.min(...inputs.map(trialsOf)), ...fields } = relation;
   const all = [...inputs, ...cites];
   return { family, method, methodVersion, inputs: all.map((read) => read.readId), clusters: Math.min(...all.map((read) => read.clusters)), basis: 'all', n, ...fields };
+};
+
+/** A comparison made, before the screen: the read it would be, and every estimate that has to move for it to exist. */
+export interface Candidate {
+  gates: readonly Estimate[];
+  body: ReadBody;
+}
+
+/** A comparison above the floor, which therefore counts toward what the screen allows for. */
+export const candidateOf = (family: Family, method: string, methodVersion: string, inputs: readonly Read[], gates: readonly Estimate[], relation: Relation): Candidate | undefined => {
+  const body = relate(family, method, methodVersion, inputs, relation);
+  return body === undefined ? undefined : { gates, body };
+};
+
+/** The reads that survive the screen over everything compared, each stating how many comparisons that was: `tested * 0.05` is what chance alone would offer an unscreened reader. */
+export const screen = (candidates: readonly Candidate[]): ReadBody[] => {
+  const tested = candidates.length;
+  return candidates.filter(({ gates }) => gates.every((gate) => moved(gate, tested))).map(({ body }) => ({ ...body, value: { ...body.value, tested } }));
 };

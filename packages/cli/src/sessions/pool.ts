@@ -5,7 +5,7 @@
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { deriveCells, poolOf, serializeCells, type Pool } from './cells.js';
-import { contentHash, FIRST_ORDER_FAMILIES, makeRead, orderResolver, type FirstOrderFamily, type Read } from './read.js';
+import { contentHash, FIRST_ORDER_FAMILIES, makeRead, orderResolver, type FirstOrderFamily, type OrderResolver, type Read, type ReadAsOf } from './read.js';
 import { deriveAdoption } from './read-adoption.js';
 import { deriveChange } from './read-change.js';
 import { deriveCost } from './read-cost.js';
@@ -14,7 +14,9 @@ import { deriveLive } from './read-live.js';
 import { deriveMethod } from './read-method.js';
 import { deriveNextStep } from './read-next-step.js';
 import { deriveRecovery } from './read-recovery.js';
-import type { DeriveFamily } from './read-support.js';
+import type { DeriveRelation } from './read-order.js';
+import type { DeriveFamily, ReadBody } from './read-support.js';
+import { deriveVersionBoundary } from './read-version-boundary.js';
 import { writeAtomic, type Store } from './store.js';
 
 const DERIVERS: { readonly [family in FirstOrderFamily]: DeriveFamily } = {
@@ -28,23 +30,36 @@ const DERIVERS: { readonly [family in FirstOrderFamily]: DeriveFamily } = {
   'next-step': deriveNextStep,
 };
 
+/** Families over reads, one stage per order: a stage reads what the stages before it wrote. */
+const RELATIONS: readonly (readonly DeriveRelation[])[] = [[deriveVersionBoundary]];
+
 export const poolFiles = (storeDir: string): { cells: string; motifs: string; reads: (version: string) => string } => ({
   cells: join(storeDir, 'cells.jsonl'),
   motifs: join(storeDir, 'motifs.jsonl'),
   reads: (version) => join(storeDir, 'reads', `${version}.jsonl`),
 });
 
-/** Every family's order-1 reads of one pool, in family order and then by slice, so a rerun writes the same bytes. */
-export const deriveReads = (pool: Pool, store: Store): Read[] => {
+const made = (bodies: readonly ReadBody[], asOf: ReadAsOf, orderOf: OrderResolver): Read[] =>
+  bodies
+    .map((body) => makeRead({ ...body, asOf }, orderOf))
+    .map((read) => ({ read, key: contentHash(read.slice) }))
+    .sort((a, b) => (a.key < b.key ? -1 : 1))
+    .map(({ read }) => read);
+
+/** Every family's order 1 reads of one pool, in family order and then by slice, so a rerun writes the same bytes. */
+export const deriveFirstOrder = (pool: Pool, store: Store): Read[] => {
   const asOf = { pool: pool.version, day: pool.lastDay };
   const orderOf = orderResolver([]);
-  return FIRST_ORDER_FAMILIES.flatMap((family) =>
-    DERIVERS[family]({ pool, store })
-      .map((read) => makeRead({ ...read, asOf }, orderOf))
-      .map((read) => ({ read, key: contentHash(read.slice) }))
-      .sort((a, b) => (a.key < b.key ? -1 : 1))
-      .map(({ read }) => read),
-  );
+  return FIRST_ORDER_FAMILIES.flatMap((family) => made(DERIVERS[family]({ pool, store }), asOf, orderOf));
+};
+
+/** Order 1, then each stage of `RELATIONS` over everything before it. */
+export const deriveReads = (pool: Pool, store: Store): Read[] => {
+  const asOf = { pool: pool.version, day: pool.lastDay };
+  return RELATIONS.reduce<Read[]>((known, stage) => {
+    const orderOf = orderResolver(known);
+    return [...known, ...stage.flatMap((derive) => made(derive(known), asOf, orderOf))];
+  }, deriveFirstOrder(pool, store));
 };
 
 export const serializeReads = (reads: readonly Read[]): string => reads.map((read) => `${JSON.stringify(read)}\n`).join('');
