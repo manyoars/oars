@@ -582,11 +582,18 @@ describe('a namespaced function_call (models.rs:1154)', () => {
   const named = (name: string, namespace: string | undefined) =>
     extractOf([meta('/work/app'), line(T(2), 'response_item', { type: 'function_call', name, ...(namespace === undefined ? {} : { namespace }), arguments: '{}', call_id: 'c1' }), line(T(3), 'response_item', { type: 'function_call_output', call_id: 'c1', output: 'ok' })]).tools[0]?.tool;
 
-  it('records <namespace>__<name> for a bare name under a namespace (models.rs:3461: slack + notifications)', () => {
-    expect(named('notifications', 'slack')).toBe('slack__notifications');
+  // A function_call carries the namespace (`ResponseItem::FunctionCall`, models.rs:3406-3412 and :3484-3489). Upstream flattens a namespaced tool to
+  // `namespace` + `name` with no delimiter (core/src/tools/mod.rs:55-60, codex-mcp/src/tools.rs:296), and an MCP namespace ends in its own `__`
+  // (codex-mcp/src/tools.rs:253 strips that suffix). The reader keeps that form; the `__` it adds to any other namespace is its own labeled choice.
+  it('joins an MCP namespace that ends in __ to the name with nothing between, as upstream does (tools.rs:296)', () => {
+    expect(named('find', 'mcp__notes__')).toBe('mcp__notes__find');
   });
 
-  it('keeps a name that already starts with its namespace (models.rs:3406: mcp__codex_apps__gmail)', () => {
+  it('labels its own choice: __ between a namespace without a trailing __ and a bare name (models.rs:3485-3486: collaboration + spawn_agent)', () => {
+    expect(named('spawn_agent', 'collaboration')).toBe('collaboration__spawn_agent');
+  });
+
+  it('keeps a name that already starts with its namespace (models.rs:3409-3410: mcp__codex_apps__gmail)', () => {
     expect(named('mcp__codex_apps__gmail_get_recent_emails', 'mcp__codex_apps__gmail')).toBe('mcp__codex_apps__gmail_get_recent_emails');
   });
 
@@ -594,5 +601,21 @@ describe('a namespaced function_call (models.rs:1154)', () => {
     expect(named('shell', 'collaboration')).toBe('collaboration__shell');
     expect(named('exec_command', 'collaboration')).toBe('collaboration__exec_command');
     expect(named('shell', undefined)).toBe('Bash');
+  });
+
+  // The default namespace is `functions` (protocol/src/tool_name.rs:6-7); `None`, an empty string, and `functions` are all the plain tool
+  // (:46-50, core/src/tools/mod.rs:51-53), and the router makes every function_call that way (core/src/tools/router.rs:285).
+  it('reads a shell call under the default namespace functions as Codex\'s own shell, so its exit code is the outcome', () => {
+    const call = line(T(3), 'response_item', { type: 'function_call', name: 'shell', namespace: 'functions', arguments: JSON.stringify({ command: ['bash', '-lc', 'make'] }), call_id: 'c1' });
+    const out = extractOf([meta('/work/app'), turn(), prompt(2, 'run it'), call, shellOut(4, 'c1', execText(2, 'make: *** No rule to make target'))]);
+    expect(out.tools).toMatchObject([{ tool: 'Bash', status: 'error' }]);
+    expect(out.errorLines).toMatchObject([{ tool: 'Bash', line: 'make: *** No rule to make target' }]);
+  });
+
+  it('reads an empty namespace and functions as no namespace for any name, and an apply_patch under functions as the patch tool', () => {
+    expect(named('read_file', 'functions')).toBe('read_file');
+    expect(named('read_file', '')).toBe('read_file');
+    const patch = line(T(2), 'response_item', { type: 'function_call', name: 'apply_patch', namespace: 'functions', arguments: JSON.stringify({ input: '*** Begin Patch\n*** Update File: src/a.ts\n*** End Patch' }), call_id: 'c1' });
+    expect(extractOf([meta('/work/app'), patch, line(T(3), 'response_item', { type: 'function_call_output', call_id: 'c1', output: 'ok' })]).tools[0]?.tool).toBe('Edit');
   });
 });
