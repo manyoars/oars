@@ -19,7 +19,7 @@ export interface JournalStore {
   delete: (base: string) => Promise<void>;
 }
 
-/** One step's `Idempotency-Key`: the lowercase SHA-256 hex of `<base>:<step>`, the 64-hex form every aor-common interceptor accepts. */
+/** One step's `Idempotency-Key`: the lowercase SHA-256 hex of `<base>:<step>`, the 64-hex form every platform interceptor accepts. */
 export const stepKey = (base: string, step: string): string => createHash('sha256').update(`${base}:${step}`).digest('hex');
 
 const isRecord = (value: unknown): value is JournalRecord => {

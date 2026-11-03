@@ -1,5 +1,5 @@
 // Writes openapi/public.json: the operations listed in openapi/public-operations.json, taken from a source OpenAPI document
-// (aor-platform's committed api-specs/openapi.json), with the components they reference and nothing else.
+// (the platform's committed api-specs/openapi.json), with the components they reference and nothing else.
 //
 //   node scripts/openapi-public.mjs <source openapi.json> [--operations <file>] [--out <file>]
 //

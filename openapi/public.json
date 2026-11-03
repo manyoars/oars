@@ -179,7 +179,7 @@
             "type": "string"
           },
           "type": {
-            "example": "https://api.tradeaor.com/problems/price-not-found",
+            "example": "https://api.example.test/problems/price-not-found",
             "type": "string"
           }
         },

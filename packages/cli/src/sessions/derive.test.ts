@@ -320,7 +320,7 @@ describe('prompt outcome signals (t747)', () => {
     it.each<[string, boolean]>([
       ['npm test', true], ['npm t', true], ['bun t', true], ['npm run test:unit', true], ['npm run typecheck', true], ['pnpm build', true], ['yarn lint', true],
       ['npx vitest run', true], ['npx tsc', true], ['pnpm exec jest', true], ['uv run pytest', true], ['python pytest', true], ['vitest', true],
-      ['mvn aor-x verify', true], ['mvn package', true], ['mvnw install', true], ['gradlew test', true], ['just build oars run check', true], ['make', true], ['make test', true],
+      ['mvn mod-x verify', true], ['mvn package', true], ['mvnw install', true], ['gradlew test', true], ['just build oars run check', true], ['make', true], ['make test', true],
       ['cargo test', true], ['cargo clippy', true], ['go vet', true], ['go test', true], ['dotnet build', true],
       ['ls', false], ['git status', false], ['git commit', false], ['cat test', false], ['npm install', false], ['npm run dev', false], ['just status', false], ['just checkout', false],
       ['cargo add', false], ['go get', false], ['make clean', false], ['mvn', false], ['python script', false], ['npx foo', false],
