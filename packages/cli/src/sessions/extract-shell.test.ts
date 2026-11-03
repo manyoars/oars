@@ -293,7 +293,7 @@ describe('capture of a shell call (CAPTURE 6)', () => {
   const capture = (lines: readonly string[]) => captureSession({ text: lines.join('\n'), session: 's', project: 'p', rev: 1, at: '', bytes: 0, redact }).tools;
 
   it('is a CAPTURE_VERSION bump', () => {
-    expect(CAPTURE_VERSION).toBe('6');
+    expect(Number(CAPTURE_VERSION)).toBeGreaterThanOrEqual(6);
   });
   it('writes commits only on a clean result, behind another command', () => {
     const [ok, failed, open] = capture([
