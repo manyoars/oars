@@ -24,7 +24,8 @@ export const closedStack = (raw: { languages: readonly string[]; frameworks: rea
   size: REPO_SIZES.find((size) => size === raw.size) ?? null,
 });
 
-const sizeOf = (files: number | null): RepoSize | null => {
+/** The bucket of a repository's tracked-file count; null when the count is not known. */
+export const repoSizeOf = (files: number | null): RepoSize | null => {
   if (files === null) return null;
   if (files < 100) return 'xs';
   if (files < 1000) return 's';
@@ -35,7 +36,7 @@ const sizeOf = (files: number | null): RepoSize | null => {
 const baseName = (path: string): string => path.replace(/\\/g, '/').split('/').pop() ?? path;
 
 /** The stack a file's evidence shows. Only names from the vocabulary come out, so a path or a program name can never pass through. */
-export const stackOf = (evidence: { paths: readonly string[]; programs: readonly string[]; repoFiles: number | null }): FrameStack => {
+export const stackOf = (evidence: { paths: readonly string[]; programs: readonly string[]; size: RepoSize | null }): FrameStack => {
   const counts = new Map<string, number>();
   const frameworks: string[] = [];
   for (const path of evidence.paths) {
@@ -50,7 +51,7 @@ export const stackOf = (evidence: { paths: readonly string[]; programs: readonly
   }
   // Most touched first, a tie by name, so the mix does not depend on the order the files were touched in.
   const languages = [...counts].sort(([a, one], [b, two]) => two - one || a.localeCompare(b)).slice(0, LANGUAGES_PER_STACK).map(([language]) => language);
-  return closedStack({ languages, frameworks, size: sizeOf(evidence.repoFiles) });
+  return closedStack({ languages, frameworks, size: evidence.size });
 };
 
 /** The frame with every free-standing name held to the public vocabulary. */

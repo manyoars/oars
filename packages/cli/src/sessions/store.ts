@@ -28,6 +28,7 @@ import { archiveRaw } from './archive.js';
 import { deriveSession, type SessionCapture } from './derive.js';
 import { captureRuntime, type CaptureRuntime } from './capture-runtime.js';
 import { callPositions, captureSession, type Capture, type SubagentOrigin } from './extract.js';
+import { asRepoSize, type RepoSize } from './public-vocabulary.js';
 import { makeRepoIdentity, makeRepoRoot } from './repo-root.js';
 import { makeRedactor, type Redactor } from './redact.js';
 import {
@@ -77,6 +78,11 @@ interface FileState {
   s?: string;
   /** The sorted `--redact-domain` set in force when this file was deposited; a file recorded under another set is deposited again. */
   d: string[];
+  /**
+   * The repository size bucket this file's first frame read, so a later capture's frame does not follow the repository. Held here as well as
+   * in the log because the SessionEnd hook has seconds to run and the log can run to hundreds of MB; absent on a file captured before frames.
+   */
+  repoSize?: RepoSize | null;
 }
 
 export interface State {
@@ -140,6 +146,7 @@ export const readState = async (storeDir: string): Promise<State> => {
       const files: State['files'] = {};
       for (const [key, value] of Object.entries(parsed.files)) {
         if (isRecord(value) && typeof value.size === 'number' && typeof value.mtimeMs === 'number' && typeof value.rev === 'number') {
+          const repoSize = asRepoSize(value.repoSize);
           files[key] = {
             size: value.size,
             mtimeMs: value.mtimeMs,
@@ -147,6 +154,7 @@ export const readState = async (storeDir: string): Promise<State> => {
             v: typeof value.v === 'string' ? value.v : '',
             ...(typeof value.s === 'string' ? { s: value.s } : {}),
             d: Array.isArray(value.d) ? value.d.filter((entry): entry is string => typeof entry === 'string') : [],
+            ...(repoSize === undefined ? {} : { repoSize }),
           };
         }
       }
@@ -229,8 +237,10 @@ interface DepositContext {
   repoIdentity: (root: string) => string;
   /** This process's versions, read once per deposit (it parses package.json). */
   captureRuntime: CaptureRuntime;
-  /** What the log says about each subagent transcript, read at most once per deposit and only when a raw-only subagent needs it. */
-  origins: () => Promise<Map<string, SubagentOrigin>>;
+  /** What the log says about each transcript, read at most once per deposit and only when a raw-only subagent or a lost state file needs it. */
+  logged: () => Promise<LoggedSessions>;
+  /** The state file held no entries when this deposit began, so a transcript with no entry may still have been captured before. */
+  stateLost: boolean;
   /** The call positions of each parent transcript a subagent of this deposit named, read at most once. */
   parentCalls: Map<string, Promise<Map<string, number>>>;
   at: string;
@@ -243,7 +253,7 @@ const contextFor = async (runtime: SessionsRuntime, state: State, now: () => num
   // observations file until it is compacted; readers use only the highest rev of each session.
   await mkdir(paths(runtime.storeDir).skeletons, { recursive: true });
   const salt = await (runtime.accountSalt ?? localSalt)(runtime.storeDir);
-  let origins: Promise<Map<string, SubagentOrigin>> | undefined;
+  let logged: Promise<LoggedSessions> | undefined;
   return {
     runtime,
     state,
@@ -253,7 +263,8 @@ const contextFor = async (runtime: SessionsRuntime, state: State, now: () => num
     repoRoot: makeRepoRoot(),
     repoIdentity: makeRepoIdentity(),
     captureRuntime: captureRuntime(),
-    origins: () => (origins ??= loggedOrigins(runtime.storeDir)),
+    logged: () => (logged ??= loggedSessions(runtime.storeDir)),
+    stateLost: Object.keys(state.files).length === 0,
     parentCalls: new Map(),
     at: new Date(now()).toISOString(),
     now,
@@ -357,6 +368,12 @@ const spawnedAtOf = async (context: DepositContext, project: string, transcript:
   return (await calls).get(origin.spawnedBy) ?? null;
 };
 
+/** The size bucket an earlier capture of this transcript read; undefined when there was none, so this capture reads the repository. */
+const earlierRepoSize = async (context: DepositContext, previous: FileState | undefined, session: string): Promise<RepoSize | null | undefined> => {
+  if (previous !== undefined) return previous.repoSize;
+  return context.stateLost ? (await context.logged()).repoSizes.get(session) : undefined;
+};
+
 /** Deposits one transcript unless its size, mtime, capture version, salt, and domain set are unchanged; returns what it wrote, or undefined when skipped. */
 const depositFile = async (context: DepositContext, project: string, transcript: Transcript): Promise<Capture | undefined> => {
   const { runtime, state } = context;
@@ -390,6 +407,7 @@ const depositFile = async (context: DepositContext, project: string, transcript:
     repoRoot: context.repoRoot,
     repoIdentity: context.repoIdentity,
     runtime: context.captureRuntime,
+    repoSize: await earlierRepoSize(context, previous, session),
     subagent: subagent === undefined ? undefined : { ...subagent, spawnedAt: await spawnedAtOf(context, project, transcript, subagent) },
   });
   await commitCapture(context, key, extract, { size: info.size, mtimeMs: info.mtimeMs, rev });
@@ -490,7 +508,7 @@ const commitCapture = async (context: DepositContext, key: string, extract: Capt
   await mkdir(context.runtime.storeDir, { recursive: true });
   await appendFile(files.observations, batch.map((observation) => `${JSON.stringify(observation)}\n`).join(''), { mode: 0o600 });
   await writeAtomic(join(files.skeletons, `${extract.session.session}.json`), JSON.stringify(extract.skeleton));
-  context.state.files[key] = { ...cursor, v: CAPTURE_VERSION, s: context.salt.sid, d: context.domains };
+  context.state.files[key] = { ...cursor, v: CAPTURE_VERSION, s: context.salt.sid, d: context.domains, repoSize: extract.session.frame?.stack.size ?? null };
 };
 
 interface LockOptions {
@@ -674,9 +692,10 @@ const readCursor = async (context: DepositContext, root: string, result: Deposit
         break;
       }
       const rev = Math.max((previous?.rev ?? 0) + 1, context.now());
+      const id = `${CURSOR_SOURCE}-${session.composerId}`;
       const extract = captureSession({
         text,
-        session: `${CURSOR_SOURCE}-${session.composerId}`,
+        session: id,
         project: session.folder === null ? CURSOR_SOURCE : slugOf(session.folder),
         rev,
         at: context.at,
@@ -687,6 +706,7 @@ const readCursor = async (context: DepositContext, root: string, result: Deposit
         repoRoot: context.repoRoot,
         repoIdentity: context.repoIdentity,
         runtime: context.captureRuntime,
+        repoSize: await earlierRepoSize(context, previous, id),
         harness: 'cursor',
       });
       extract.session.harness = 'cursor';
@@ -703,9 +723,17 @@ const readCursor = async (context: DepositContext, root: string, result: Deposit
   }
 };
 
-/** What an earlier deposit logged about each subagent transcript, since its `.meta.json` is not archived: session id to origin. */
-const loggedOrigins = async (storeDir: string): Promise<Map<string, SubagentOrigin>> => {
+/** What an earlier deposit logged about each transcript. */
+interface LoggedSessions {
+  /** Each subagent transcript's origin, since its `.meta.json` is not archived. */
+  origins: Map<string, SubagentOrigin>;
+  /** The size bucket of each transcript's earliest logged frame. */
+  repoSizes: Map<string, RepoSize | null>;
+}
+
+const loggedSessions = async (storeDir: string): Promise<LoggedSessions> => {
   const origins = new Map<string, SubagentOrigin>();
+  const repoSizes = new Map<string, RepoSize | null>();
   let text = '';
   try {
     text = await readFile(paths(storeDir).observations, 'utf8');
@@ -713,21 +741,24 @@ const loggedOrigins = async (storeDir: string): Promise<Map<string, SubagentOrig
     if (!isMissing(error)) throw error;
   }
   for (const line of text.split('\n')) {
-    if (!line.includes('"parent":"')) continue;
+    if (!line.includes('"kind":"session"')) continue;
     try {
       const parsed: unknown = JSON.parse(line);
-      if (isRecord(parsed) && parsed.kind === 'session' && typeof parsed.session === 'string' && typeof parsed.parent === 'string') {
+      if (!isRecord(parsed) || parsed.kind !== 'session' || typeof parsed.session !== 'string') continue;
+      if (typeof parsed.parent === 'string') {
         origins.set(parsed.session, {
           parent: parsed.parent,
           agentType: typeof parsed.agentType === 'string' ? parsed.agentType : null,
           spawnedBy: typeof parsed.spawnedBy === 'string' ? parsed.spawnedBy : null,
         });
       }
+      const size = isRecord(parsed.frame) && isRecord(parsed.frame.stack) ? asRepoSize(parsed.frame.stack.size) : undefined;
+      if (size !== undefined && !repoSizes.has(parsed.session)) repoSizes.set(parsed.session, size);
     } catch {
       // A torn line is skipped.
     }
   }
-  return origins;
+  return { origins, repoSizes };
 };
 
 /** The session id of a transcript's path under its project folder: `<id>.jsonl`, or `<parent>~<path>~agent-x` for a subagent transcript. */
@@ -805,7 +836,7 @@ const rawOnlyTranscripts = async (context: DepositContext, project: string, onDi
       found.push({ ...mainTranscript(dirname(file), relative), fromRaw: true });
       continue;
     }
-    const origins = await context.origins();
+    const { origins } = await context.logged();
     const session = sessionOfRelative(relative);
     const origin = origins.get(session) ?? { parent: parts[0] ?? '', agentType: null, spawnedBy: null };
     found.push({ file, session, relative, subagent: origin, fromRaw: true });
