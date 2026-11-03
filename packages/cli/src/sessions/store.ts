@@ -243,6 +243,8 @@ interface DepositContext {
   stateLost: boolean;
   /** The call positions of each parent transcript a subagent of this deposit named, read at most once. */
   parentCalls: Map<string, Promise<Map<string, number>>>;
+  /** The same for the subagent transcripts under each parent, read at most once and only when a spawning call is not in the parent. */
+  siblingCalls: Map<string, Promise<Sibling[]>>;
   at: string;
   now: () => number;
 }
@@ -266,10 +268,23 @@ const contextFor = async (runtime: SessionsRuntime, state: State, now: () => num
     logged: () => (logged ??= loggedSessions(runtime.storeDir)),
     stateLost: Object.keys(state.files).length === 0,
     parentCalls: new Map(),
+    siblingCalls: new Map(),
     at: new Date(now()).toISOString(),
     now,
   };
 };
+
+/** A subagent transcript's call positions, for finding the call that spawned another subagent. */
+interface Sibling {
+  session: string;
+  calls: Map<string, number>;
+}
+
+/** Where a subagent was spawned: the call's `n`, in which transcript. */
+interface SpawnPoint {
+  n: number;
+  session: string;
+}
 
 /** A transcript to deposit: a main session file, or a subagent's under `<session>/subagents/` (register A24). */
 interface Transcript {
@@ -356,16 +371,49 @@ const readParentCalls = async (candidates: readonly string[]): Promise<Map<strin
   return new Map();
 };
 
-/** Where in its parent transcript a subagent was spawned; null when its origin names no call or the parent no longer holds that call. */
-const spawnedAtOf = async (context: DepositContext, project: string, transcript: Transcript, origin: SubagentOrigin): Promise<number | null> => {
-  if (origin.spawnedBy === null) return null;
+/** The transcripts under one main session, each with its call positions: from the harness's folder, then whatever only the archive still holds. */
+const readSiblings = async (folders: readonly string[], parent: string): Promise<Sibling[]> => {
+  const siblings = new Map<string, Sibling>();
+  for (const folder of folders) {
+    for (const { session, file } of await subagentTranscripts(folder, [parent])) {
+      if (!siblings.has(session)) siblings.set(session, { session, calls: await readParentCalls([file]) });
+    }
+  }
+  // Sorted, so which copy of a repeated call wins does not depend on the order a directory lists in.
+  return [...siblings.values()].sort((one, two) => one.session.localeCompare(two.session));
+};
+
+/**
+ * The call that spawned a subagent, in its main transcript or else in a sibling subagent's (a subagent can spawn another); null when its
+ * origin names no call or no transcript holds that call. A sibling is read only on a miss, so the common case costs one parent read.
+ */
+const spawnPointOf = async (context: DepositContext, project: string, transcript: Transcript, origin: SubagentOrigin): Promise<SpawnPoint | null> => {
+  const id = origin.spawnedBy;
+  if (id === null) return null;
   const name = `${origin.parent}.jsonl`;
   const key = `${project}/${origin.parent}`;
   // The project folder holds the transcript at `relative`, whether that folder is the harness's or the archive's.
   const folder = resolve(transcript.file, ...transcript.relative.split('/').map(() => '..'));
-  const calls = context.parentCalls.get(key) ?? readParentCalls([join(folder, name), join(paths(context.runtime.storeDir).raw, project, name)]);
+  const archive = join(paths(context.runtime.storeDir).raw, project);
+  const calls = context.parentCalls.get(key) ?? readParentCalls([join(folder, name), join(archive, name)]);
   context.parentCalls.set(key, calls);
-  return (await calls).get(origin.spawnedBy) ?? null;
+  const inParent = (await calls).get(id);
+  if (inParent !== undefined) return { n: inParent, session: origin.parent };
+  const siblings = context.siblingCalls.get(key) ?? readSiblings([folder, archive], origin.parent);
+  context.siblingCalls.set(key, siblings);
+  for (const { session, calls: held } of await siblings) {
+    const n = session === transcript.session ? undefined : held.get(id);
+    if (n !== undefined) return { n, session };
+  }
+  return null;
+};
+
+/** A subagent transcript's origin with where it was spawned, as far as the transcripts in reach say. */
+const originOf = async (context: DepositContext, project: string, transcript: Transcript): Promise<SubagentOrigin | undefined> => {
+  const { subagent } = transcript;
+  if (subagent === undefined) return undefined;
+  const point = await spawnPointOf(context, project, transcript, subagent);
+  return { ...subagent, spawnedAt: point?.n ?? null, spawnedIn: point?.session ?? null };
 };
 
 /** The size bucket an earlier capture of this transcript read; undefined when there was none, so this capture reads the repository. */
@@ -408,7 +456,7 @@ const depositFile = async (context: DepositContext, project: string, transcript:
     repoIdentity: context.repoIdentity,
     runtime: context.captureRuntime,
     repoSize: await earlierRepoSize(context, previous, session),
-    subagent: subagent === undefined ? undefined : { ...subagent, spawnedAt: await spawnedAtOf(context, project, transcript, subagent) },
+    subagent: await originOf(context, project, transcript),
   });
   await commitCapture(context, key, extract, { size: info.size, mtimeMs: info.mtimeMs, rev });
   return extract;
@@ -1045,6 +1093,7 @@ const asSession = (value: { [key: string]: unknown } & SessionObservation): Sess
   parent: typeof value.parent === 'string' ? value.parent : null,
   agentType: typeof value.agentType === 'string' ? value.agentType : null,
   spawnedBy: typeof value.spawnedBy === 'string' ? value.spawnedBy : null,
+  spawnedIn: typeof value.spawnedIn === 'string' ? value.spawnedIn : null,
 });
 
 type Line = { [key: string]: unknown };

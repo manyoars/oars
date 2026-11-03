@@ -112,7 +112,7 @@ export interface CaptureEnv {
 
 /**
  * One per transcript, captured: the `parse_sessions.py` record, minus anything that is raw content. Classes (t711 Section 1.2):
- * `L` local-only: `project`, `files`. `A` account store: `session`, `parent`, `spawnedBy`, `branches`, `urls`, `searches`, `tldrs`,
+ * `L` local-only: `project`, `files`. `A` account store: `session`, `parent`, `spawnedBy`, `spawnedIn`, `branches`, `urls`, `searches`, `tldrs`,
  * `confidences`, `promptFingerprint`, `repo`, `fileHashes`, `at`, `tsFirst`, `tsLast`. `P` pooled: `kind`, `cv`, `rev`, `sid`,
  * `agentType`, the counts, `versions`, `models`, `tools`, `env`, `costUsd`, `usage` (`at`, `tsFirst`, and `tsLast` at UTC day).
  */
@@ -136,6 +136,8 @@ export interface SessionObservation {
   agentType: string | null;
   /** The parent's `Agent` tool call that spawned this subagent (the meta file's `toolUseId`); null for a main transcript. */
   spawnedBy: string | null;
+  /** The transcript holding that call, so `parent` and `spawned` on this transcript's steps have an address: the main session or a sibling subagent's id; null when not known. */
+  spawnedIn: string | null;
   rev: number;
   /** When this deposit ran (ISO 8601). */
   at: string;
@@ -291,7 +293,7 @@ export interface StepCost {
 
 /**
  * How a step came about (recall spec Section 2.3), naming the step it came from by position. `next`: order within a prompt's line of work.
- * `spawned`: the call in the main transcript that started this subagent. `retried`: the same action and identity, after that one failed.
+ * `spawned`: the call that started this subagent, in the transcript its session record names as `spawnedIn`. `retried`: the same action and identity, after that one failed.
  * `after-error`: the call before this one failed.
  */
 export interface StepEdge {
@@ -315,7 +317,7 @@ export interface StepObservation {
   status: ToolStatus;
   /** Held on the first segment of a call; a later segment has nulls. */
   cost: StepCost;
-  /** On a subagent's step, the `n` of the call that spawned it in the main transcript; null otherwise or when that call is not known. */
+  /** On a subagent's step, the `n` of the call that spawned it, in the transcript its session record names as `spawnedIn`; null otherwise or when that call is not known. */
   parent: number | null;
   /** The edges that arrive at this step. */
   edges: StepEdge[];
