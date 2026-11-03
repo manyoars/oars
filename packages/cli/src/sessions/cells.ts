@@ -24,7 +24,7 @@ export interface Cell {
   /** Summed over each window's steps; a `class` cell: the prompts' whole usage. */
   tokens: number;
   durationMs: number;
-  /** Whether these counts sit inside a recall's consequence window. It is part of the cell's key, and false until consequence windows are written (t757). */
+  /** Whether these counts sit inside a recall's consequence window. False everywhere and not in the key here: t757 writes consequence windows and adds it to the key, so one motif, bucket, and day then splits in two. */
   exposed: boolean;
 }
 
@@ -157,7 +157,7 @@ export const deriveCells = (store: Store): CellSet => {
 
   for (const prompt of store.prompts) {
     const session = sessions.get(prompt.session);
-    const frame = framedPrompt(prompt, session === undefined ? 'claude-code' : harnessOf(session), session?.env.harness ?? null, null, session?.env.os ?? UNKNOWN);
+    const frame = framedPrompt(prompt, harnessOf(session ?? {}), session?.env.harness ?? null, null, session?.env.os ?? UNKNOWN);
     const tally = tallyOf(classMotif(prompt.cls), frame);
     tally.sessions.add(prompt.session);
     if (prompt.errors > 0) tally.failed += 1;
