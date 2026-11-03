@@ -1,6 +1,7 @@
 // The read side: recall, books, and measure. All three are pure functions of a loaded store (and, for measure, the MCP log).
 import { errorKey } from './extract.js';
 import { makeRedactor } from './redact.js';
+import { SOURCES } from './sources.js';
 import { harnessOf, type ErrorObservation, type HookCall, type PromptObservation, type RecallCall, type SessionObservation, type SignatureRecord } from './schema.js';
 import { signatureRecord, type Store } from './store.js';
 
@@ -179,6 +180,8 @@ export interface Signal {
   hookDepositsPerSession: number | null;
   /** Of `sessions`, those the Cursor source deposited (harness `cursor`). */
   cursorSessions: number;
+  /** Of `sessions`, those each later source deposited, by harness (Cursor keeps `cursorSessions`); absent in an empty window. */
+  otherSessions?: { [harness: string]: number };
 }
 
 export interface Measure {
@@ -217,6 +220,7 @@ export const measure = (store: Store, calls: readonly RecallCall[], hookCalls: r
     return {
       sessions: slice.length,
       cursorSessions: slice.filter((session) => harnessOf(session) === 'cursor').length,
+      otherSessions: Object.fromEntries(SOURCES.filter((source) => source.harness !== 'cursor').map((source) => [source.harness, slice.filter((session) => harnessOf(session) === source.harness).length])),
       recurringPer100: round((recurring * 100) / slice.length),
       recurringSignatures: new Set(recurringErrors.map((error) => error.sig)).size,
       cacheWritePerSession: Math.round(slice.reduce((total, session) => total + session.usage.cacheWrite, 0) / slice.length),
@@ -238,6 +242,7 @@ export const formatMeasure = (result: Measure): string => {
     `${(result.since === null ? `G1 signals, last ${String(result.window)} sessions and the ${String(result.window)} before` : `G1 signals, ${String(result.window)} sessions from ${result.since} and the ${String(result.window)} before`).padEnd(36)} ${(result.since === null ? 'last' : 'from').padStart(12)} ${'before'.padStart(12)}`,
     row('sessions in the window', (signal) => signal.sessions),
     row('  of which Cursor', (signal) => signal.cursorSessions),
+    ...SOURCES.filter((source) => source.harness !== 'cursor' && ((result.last.otherSessions?.[source.harness] ?? 0) > 0 || (result.before.otherSessions?.[source.harness] ?? 0) > 0)).map((source) => row(`  of which ${source.label}`, (signal) => signal.otherSessions?.[source.harness] ?? 0)),
     row('recurring errors per 100 sessions', (signal) => signal.recurringPer100),
     row('distinct recurring signatures', (signal) => signal.recurringSignatures),
     row('cache-write tokens per session', (signal) => signal.cacheWritePerSession),

@@ -1,6 +1,7 @@
 import { cpSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { zstdCompressSync } from 'node:zlib';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { PassThrough } from 'node:stream';
 import type { SessionsRuntime } from './store.js';
@@ -198,4 +199,34 @@ export const stageRawCursor = async (root: string, composerDocs: readonly { id: 
     db.close();
   });
   return user;
+};
+
+/** One Codex rollout line: `{timestamp, type, payload}` (codex-rs/history/src/lib.rs `RolloutLine`, openai/codex ac558e2). */
+export const rolloutLine = (timestamp: string, type: string, payload: unknown): unknown => ({ timestamp, type, payload });
+
+export interface CodexFixture {
+  /** The thread uuid in the file name. */
+  id: string;
+  /** Lines as objects, or raw text for a torn file. */
+  lines: readonly unknown[] | string;
+  /** `archived_sessions/` instead of `sessions/YYYY/MM/DD/`. */
+  archived?: boolean;
+  /** Written as `.jsonl.zst`, which Codex reads transparently (rollout/src/compression.rs). */
+  compressed?: boolean;
+}
+
+/** A Codex home holding the given rollouts under `sessions/2026/06/01/rollout-2026-06-01T10-00-00-<id>.jsonl`; returns the home. */
+export const stageCodex = (root: string, files: readonly CodexFixture[]): string => {
+  const home = join(root, 'codex-home');
+  for (const file of files) {
+    const dir = file.archived === true ? join(home, 'archived_sessions') : join(home, 'sessions', '2026', '06', '01');
+    mkdirSync(dir, { recursive: true });
+    const text = typeof file.lines === 'string' ? file.lines : `${file.lines.map((line) => JSON.stringify(line)).join('
+')}
+`;
+    const name = `rollout-2026-06-01T10-00-00-${file.id}.jsonl`;
+    if (file.compressed === true) writeFileSync(join(dir, `${name}.zst`), zstdCompressSync(Buffer.from(text)));
+    else writeFileSync(join(dir, name), text);
+  }
+  return home;
 };

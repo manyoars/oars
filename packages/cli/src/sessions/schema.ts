@@ -59,7 +59,7 @@ export interface Usage {
   thinking: number;
 }
 
-export type Harness = 'claude-code' | 'cursor';
+export type Harness = 'claude-code' | 'cursor' | 'codex';
 
 /** The harness a session record came from; a record that does not name one is Claude Code's. */
 export const harnessOf = (session: { harness?: Harness }): Harness => session.harness ?? 'claude-code';
