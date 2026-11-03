@@ -4,6 +4,8 @@ import { ExitCode } from '../errors.js';
 import { harness, removeTestDirs } from '../test-support.js';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { readRecalls } from './recall-object.js';
+import { MISS_TEXT } from './recall-render.js';
 import { addProject, cleanup, composers, FIXTURES, folders, stage, stageCursor, stageRawCursor } from './test-support.js';
 
 afterEach(() => {
@@ -190,6 +192,40 @@ describe('oars sessions', () => {
     out.length = 0;
     expect(await run(['--json', 'sessions', 'recall', '--error', 'Bash | cannot reach build.corp.example'], deps)).toBe(ExitCode.OK);
     expect(field(json(out), 'matches')).toHaveLength(1);
+  });
+
+  it('records every recall form, a miss included, in recalls.jsonl with the session that asked', async () => {
+    const { deps, out, staged } = setup();
+    expect(await run(['sessions', 'deposit', '--allow', 'proj'], deps)).toBe(ExitCode.OK);
+    const forms: Array<[string, string[]]> = [
+      ['pattern', ['--pattern', 'no-such-read']],
+      ['entity', ['--entity', 'Bash']],
+      ['question', ['--family', 'recovery', '--since', '3650']],
+      ['text', ['--text', 'unexpected EOF']],
+    ];
+    for (const [, args] of forms) {
+      out.length = 0;
+      expect(await run(['--json', 'sessions', 'recall', ...args, '--session', 'asker'], deps)).toBe(ExitCode.OK);
+      expect(field(json(out), 'ok')).toBe(true);
+    }
+    out.length = 0;
+    expect(await run(['sessions', 'recall', '--text', 'nothing has ever said this'], deps)).toBe(ExitCode.OK);
+    expect(out.join('')).toContain(MISS_TEXT);
+    const recalls = await readRecalls(staged.storeDir);
+    expect(recalls.map((recall) => recall.query.form)).toEqual(['pattern', 'entity', 'question', 'text', 'text']);
+    expect(recalls.map((recall) => recall.answer.kind)).toEqual(['miss', 'hit', 'hit', 'hit', 'miss']);
+    expect(recalls.map((recall) => recall.sid)).toEqual(['asker', 'asker', 'asker', 'asker', null]);
+    expect(recalls.every((recall) => recall.mode === 'pull' && recall.arm === 'shown')).toBe(true);
+  });
+
+  it('records a recall through the --error form under its signature text, and the answer is still the signature result', async () => {
+    const { deps, out, staged } = setup();
+    expect(await run(['sessions', 'deposit', '--allow', 'proj'], deps)).toBe(ExitCode.OK);
+    out.length = 0;
+    expect(await run(['--json', 'sessions', 'recall', '--error', 'unexpected EOF while looking for matching quote'], deps)).toBe(ExitCode.OK);
+    expect(field(json(out), 'matches')).toEqual(expect.any(Array));
+    const [recall] = await readRecalls(staged.storeDir);
+    expect(recall?.query).toEqual({ form: 'text', text: 'unexpected EOF while looking for matching quote' });
   });
 
   it('recall needs a query, and --by takes only class, model, or harness', async () => {

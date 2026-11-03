@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { answerQuery, fitReads, poolVersionOf, pull, readIdOf, recoveryReads, toolShapeId, type PullInput } from './recall-reads.js';
+import { answerQuery, fitReads, poolVersionOf, pull, readIdOf, recoveryReads, toolShapeId, type ClosedQuery } from './recall-reads.js';
 import { deposit, loadStore, type Store } from './store.js';
 import { cleanup, NOW, stage } from './test-support.js';
 
@@ -39,7 +39,7 @@ const synthetic = (): Store =>
     newerCaptures: 0,
   }) as unknown as Store;
 
-const ask = (store: Store, input: PullInput) => answerQuery(store, input, NOW);
+const ask = (store: Store, input: ClosedQuery) => answerQuery(store, input, NOW);
 
 describe('the stand-in reads', () => {
   it('turns each signature into a recovery read with sessions, days, frames, and what followed', () => {
