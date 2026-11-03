@@ -718,6 +718,12 @@ export const frozenSessions = async (runtime: SessionsRuntime, behind: readonly 
     const id = `${project}/${sessionOfRelative(rest.join('/'))}`;
     if (wanted.has(id) && !alive.has(id) && ((await exists(join(runtime.projectsRoot, key))) || (await exists(join(paths(runtime.storeDir).raw, key))))) alive.add(id);
   }
+  // A lost or unreadable state.json lists no files, so a main transcript is also looked up by its own path.
+  for (const entry of behind) {
+    const id = `${entry.project}/${entry.session}`;
+    const relative = join(entry.project, `${entry.session}.jsonl`);
+    if (!alive.has(id) && ((await exists(join(runtime.projectsRoot, relative))) || (await exists(join(paths(runtime.storeDir).raw, relative))))) alive.add(id);
+  }
   const prefix = `${CURSOR_SOURCE}-`;
   const cursorBehind = behind.filter((entry) => entry.session.startsWith(prefix) && !alive.has(`${entry.project}/${entry.session}`));
   if (cursorBehind.length > 0 && runtime.cursorRoot !== undefined) {
