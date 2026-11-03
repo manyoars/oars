@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { startPool, stubUser, textOf, type TestPool } from './test-pool.js';
+import { anyNumber, anyText, containing, matching, startPool, stubUser, type TestPool, textOf } from './test-pool.js';
 
 let pool: TestPool;
 
@@ -25,7 +25,7 @@ describe.each([
   it('asks the provider with the client id from the environment, is pending until approved, then signs in', async () => {
     const started = await pool.post('/v1/login/start', { provider });
     expect(started.status).toBe(200);
-    expect(started.json).toMatchObject({ userCode: expect.stringMatching(/^USER-/), verificationUri: expect.stringMatching(/^https:/), interval: 1, expiresIn: 900 });
+    expect(started.json).toMatchObject({ userCode: matching(/^USER-/), verificationUri: matching(/^https:/), interval: 1, expiresIn: 900 });
     expect(pool.stub.calls.at(-1)?.body).toContain(`client_id=${clientId}`);
     const deviceCode = textOf(started.json, 'deviceCode');
 
@@ -35,7 +35,7 @@ describe.each([
     pool.stub.approve(deviceCode, stubUser('101'));
     const polled = await pool.post('/v1/login/poll', { provider, deviceCode });
     expect(polled.status).toBe(200);
-    expect(polled.json).toMatchObject({ status: 'ok', token: expect.any(String), account: expect.stringMatching(/^acct_[0-9a-f]{32}$/), expiresAt: expect.any(Number), signingKey: pool.signingKey() });
+    expect(polled.json).toMatchObject({ status: 'ok', token: anyText(), account: matching(/^acct_[0-9a-f]{32}$/), expiresAt: anyNumber(), signingKey: pool.signingKey() });
   });
 
   it('keeps one pseudonym across sign-ins, and a new token each time', async () => {
@@ -50,8 +50,8 @@ describe.each([
     const started = await pool.post('/v1/login/start', { provider });
     const deviceCode = textOf(started.json, 'deviceCode');
     pool.stub.deny(deviceCode);
-    expect(await pool.post('/v1/login/poll', { provider, deviceCode })).toMatchObject({ status: 401, json: { error: 'login_refused', message: expect.stringContaining('access_denied') } });
-    expect(await pool.post('/v1/login/poll', { provider, deviceCode: 'gone' })).toMatchObject({ status: 401, json: { error: 'login_refused', message: expect.stringContaining('expired_token') } });
+    expect(await pool.post('/v1/login/poll', { provider, deviceCode })).toMatchObject({ status: 401, json: { error: 'login_refused', message: containing('access_denied') } });
+    expect(await pool.post('/v1/login/poll', { provider, deviceCode: 'gone' })).toMatchObject({ status: 401, json: { error: 'login_refused', message: containing('expired_token') } });
   });
 });
 
@@ -85,7 +85,7 @@ describe('a login request that cannot go on', () => {
   it('says so when the provider is not configured', async () => {
     const bare = await startPool({ GITHUB_CLIENT_ID: '' });
     try {
-      expect(await bare.post('/v1/login/start', { provider: 'github' })).toMatchObject({ status: 503, json: { error: 'not_configured', message: expect.stringContaining('GITHUB_CLIENT_ID') } });
+      expect(await bare.post('/v1/login/start', { provider: 'github' })).toMatchObject({ status: 503, json: { error: 'not_configured', message: containing('GITHUB_CLIENT_ID') } });
     } finally {
       await bare.dispose();
     }

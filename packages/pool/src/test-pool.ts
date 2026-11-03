@@ -4,8 +4,18 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { build } from 'esbuild';
 import { Miniflare, Response as StubResponse, type Request as StubRequest } from 'miniflare';
+import { expect } from 'vitest';
 
-type D1Database = Awaited<ReturnType<Miniflare['getD1Database']>>;
+interface Statement {
+  first: (column?: string) => Promise<unknown>;
+  all: () => Promise<{ results: readonly unknown[] }>;
+  run: () => Promise<unknown>;
+}
+
+/** The D1 calls these tests make. Miniflare's own return type names a package whose ambient types clash with Node's, so it is named here. */
+export interface TestDb {
+  prepare: (sql: string) => Statement & { bind: (...values: (string | number | null)[]) => Statement };
+}
 
 export interface StubUser {
   id: string;
@@ -85,7 +95,7 @@ export interface Answer {
 export interface TestPool {
   miniflare: Miniflare;
   url: () => Promise<string>;
-  db: () => Promise<D1Database>;
+  db: () => Promise<TestDb>;
   post: (path: string, body: unknown, token?: string) => Promise<Answer>;
   get: (path: string, token?: string) => Promise<Answer>;
   /** The whole device flow through the routes, approved at the stub. */
@@ -127,7 +137,7 @@ export const startPool = async (bindings: { [name: string]: string } = {}): Prom
     outboundService: stub.outbound,
   });
   await miniflare.ready;
-  const db = (): Promise<D1Database> => miniflare.getD1Database('DB');
+  const db = async (): Promise<TestDb> => (await miniflare.getBindings<{ DB: TestDb }>()).DB;
   const database = await db();
   const migration = readFileSync(fileIn('../migrations/0001_init.sql'), 'utf8');
   for (const line of migration.split('\n')) if (line.startsWith('CREATE')) await database.prepare(line).run();
@@ -156,5 +166,11 @@ export const startPool = async (bindings: { [name: string]: string } = {}): Prom
     dispose: () => miniflare.dispose(),
   };
 };
+
+// Vitest types its matchers as `any`; these name what they stand for, so a test's expected shape stays checked.
+export const matching = (pattern: RegExp): unknown => expect.stringMatching(pattern);
+export const containing = (text: string): unknown => expect.stringContaining(text);
+export const anyText = (): unknown => expect.any(String);
+export const anyNumber = (): unknown => expect.any(Number);
 
 export const stubUser = (id: string): StubUser => ({ id, login: `login-of-${id}`, email: `person-${id}@example.test` });

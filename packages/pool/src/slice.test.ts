@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { verifySlice, type Slice } from '../../cli/src/sessions/pool-wire.js';
 import { sampleSkeleton } from './sample.js';
-import { fieldOf, startPool, stubUser, textOf, type TestPool } from './test-pool.js';
+import { containing, fieldOf, startPool, stubUser, type TestPool, textOf } from './test-pool.js';
 
 let pool: TestPool;
 
@@ -72,7 +72,7 @@ describe('a slice over three accounts', () => {
     try {
       await (await bare.db()).prepare("INSERT INTO accounts (id) VALUES ('acct')").run();
       await (await bare.db()).prepare("INSERT INTO tokens (hash, account, expires_at) VALUES (?, 'acct', ?)").bind(createHash('sha256').update('a-token').digest('hex'), Date.now() + 60_000).run();
-      expect(await bare.get('/v1/slices/all', 'a-token')).toMatchObject({ status: 503, json: { error: 'not_configured', message: expect.stringContaining('SLICE_SIGNING_KEY') } });
+      expect(await bare.get('/v1/slices/all', 'a-token')).toMatchObject({ status: 503, json: { error: 'not_configured', message: containing('SLICE_SIGNING_KEY') } });
     } finally {
       await bare.dispose();
     }
@@ -91,16 +91,16 @@ describe('the client refuses', () => {
     expect(fieldOf(await verifySlice(good, pool.signingKey(), 'all'), 'ok')).toBe(true);
     const tampered = good.payload.replace(/"clusters":\d+/, '"clusters":99');
     expect(tampered).not.toBe(good.payload);
-    expect(await verifySlice({ ...good, payload: tampered }, pool.signingKey(), 'all')).toMatchObject({ ok: false, reason: expect.stringContaining('signature') });
+    expect(await verifySlice({ ...good, payload: tampered }, pool.signingKey(), 'all')).toMatchObject({ ok: false, reason: containing('signature') });
     const flipped = good.signature.startsWith('A') ? `B${good.signature.slice(1)}` : `A${good.signature.slice(1)}`;
-    expect(await verifySlice({ ...good, signature: flipped }, pool.signingKey(), 'all')).toMatchObject({ ok: false, reason: expect.stringContaining('signature') });
-    expect(await verifySlice(good, { ...pool.signingKey(), x: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA' }, 'all')).toMatchObject({ ok: false, reason: expect.stringContaining('signature') });
-    expect(await verifySlice(good, pool.signingKey(), 'python')).toMatchObject({ ok: false, reason: expect.stringContaining('stack') });
+    expect(await verifySlice({ ...good, signature: flipped }, pool.signingKey(), 'all')).toMatchObject({ ok: false, reason: containing('signature') });
+    expect(await verifySlice(good, { ...pool.signingKey(), x: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA' }, 'all')).toMatchObject({ ok: false, reason: containing('signature') });
+    expect(await verifySlice(good, pool.signingKey(), 'python')).toMatchObject({ ok: false, reason: containing('stack') });
   });
 
   it('anything that is not a signed slice', async () => {
-    expect(await verifySlice('nope', pool.signingKey(), 'all')).toMatchObject({ ok: false, reason: expect.stringContaining('not a signed slice') });
-    expect(await verifySlice({ payload: 'x', signature: '%%%' }, pool.signingKey(), 'all')).toMatchObject({ ok: false, reason: expect.stringContaining('signature') });
-    expect(await verifySlice({ payload: 'x', signature: 'AAAA' }, { kty: 'nope', crv: 'nope', x: 'nope' }, 'all')).toMatchObject({ ok: false, reason: expect.stringContaining('signature') });
+    expect(await verifySlice('nope', pool.signingKey(), 'all')).toMatchObject({ ok: false, reason: containing('not a signed slice') });
+    expect(await verifySlice({ payload: 'x', signature: '%%%' }, pool.signingKey(), 'all')).toMatchObject({ ok: false, reason: containing('signature') });
+    expect(await verifySlice({ payload: 'x', signature: 'AAAA' }, { kty: 'nope', crv: 'nope', x: 'nope' }, 'all')).toMatchObject({ ok: false, reason: containing('signature') });
   });
 });

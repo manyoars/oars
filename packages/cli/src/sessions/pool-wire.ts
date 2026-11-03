@@ -54,14 +54,25 @@ export interface SessionRecords {
   transcripts: { session: SessionObservation; prompts: PromptObservation[]; tools: ToolObservation[] }[];
 }
 
+const groupBy = <T, K>(items: readonly T[], keyOf: (item: T) => K): Map<K, T[]> => {
+  const groups = new Map<K, T[]>();
+  for (const item of items) {
+    const key = keyOf(item);
+    const group = groups.get(key);
+    if (group === undefined) groups.set(key, [item]);
+    else group.push(item);
+  }
+  return groups;
+};
+
 /** Every main session of a store, with its records. */
 export const sessionsOf = (store: { sessions: readonly SessionObservation[]; subagents: readonly SessionObservation[]; prompts: readonly PromptObservation[]; tools: readonly ToolObservation[] }): SessionRecords[] => {
-  const recordsOf = (session: SessionObservation): SessionRecords['transcripts'][number] => ({
-    session,
-    prompts: store.prompts.filter((prompt) => prompt.session === session.session),
-    tools: store.tools.filter((tool) => tool.session === session.session),
-  });
-  return store.sessions.map((main) => ({ main, transcripts: [main, ...store.subagents.filter((subagent) => subagent.parent === main.session)].map(recordsOf) }));
+  // Grouped once: a fleet's store holds thousands of sessions over hundreds of thousands of rows, and a scan per session would be quadratic.
+  const prompts = groupBy(store.prompts, (prompt) => prompt.session);
+  const tools = groupBy(store.tools, (tool) => tool.session);
+  const subagents = groupBy(store.subagents, (subagent) => subagent.parent);
+  const recordsOf = (session: SessionObservation): SessionRecords['transcripts'][number] => ({ session, prompts: prompts.get(session.session) ?? [], tools: tools.get(session.session) ?? [] });
+  return store.sessions.map((main) => ({ main, transcripts: [main, ...(subagents.get(main.session) ?? [])].map(recordsOf) }));
 };
 
 const transcriptOf = ({ session, prompts, tools }: SessionRecords['transcripts'][number]): SkeletonTranscript | null => {

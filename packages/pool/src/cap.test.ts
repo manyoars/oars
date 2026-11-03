@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { verifySlice, type Slice } from '../../cli/src/sessions/pool-wire.js';
 import { sampleSkeleton } from './sample.js';
-import { startPool, stubUser, type TestPool } from './test-pool.js';
+import { containing, startPool, stubUser, type TestPool } from './test-pool.js';
 
 // The sample's three depositors clear the floor with more reads than this, so the cap is what a reader runs into.
 const CAP = 3;
@@ -55,7 +55,7 @@ describe('deposit or capped access (V12)', () => {
     expect(first.cells).toEqual([]);
     expect(first.motifs).toEqual([]);
     expect(first.capped).toEqual({ limit: CAP, served: CAP });
-    expect(await pool.get('/v1/slices/all', token)).toMatchObject({ status: 403, json: { error: 'read_cap', message: expect.stringContaining('oars pool deposit') } });
+    expect(await pool.get('/v1/slices/all', token)).toMatchObject({ status: 403, json: { error: 'read_cap', message: containing('oars pool deposit') } });
   });
 
   it('counts across pulls below the cap: a stack with fewer reads than the cap leaves the rest', async () => {
