@@ -1,11 +1,15 @@
 import { afterEach, describe, expect, it } from 'vitest';
+import { EventEmitter, once } from 'node:events';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { PassThrough } from 'node:stream';
+import { text as streamText } from 'node:stream/consumers';
 import { run } from '../cli.js';
 import { ExitCode } from '../errors.js';
 import { harness, removeTestDirs } from '../test-support.js';
-import { answerOf, claudeEvaluator, readsOf, EVALUATOR_MODEL, WORDINGS, type ClaudeExec, type GoldEvaluator } from './gold-arms.js';
+import { answerOf, claudeEvaluator, readsOf, runClaude, EVALUATOR_MODEL, WORDINGS, type ClaudeExec, type ClaudeSpawnOptions, type GoldEvaluator, type SpawnClaude } from './gold-arms.js';
 import { ARMS, confidenceLevel, isGoldDocument, readTurns, renderShown, viewOf, type GoldDocument, type GoldEntry, type TurnCall } from './gold.js';
 import { makeRedactor } from './redact.js';
 import { addProject, cleanup, stage } from './test-support.js';
@@ -21,6 +25,70 @@ const user = (text: string): string => line({ type: 'user', timestamp: '2026-06-
 const said = (text: string): string => line({ type: 'assistant', requestedModel: 'm-a', message: { role: 'assistant', content: [{ type: 'text', text }] } });
 const edit = (id: string): string => line({ type: 'assistant', cwd: '/w', requestedModel: 'm-a', message: { role: 'assistant', content: [{ type: 'tool_use', id, name: 'Edit', input: { file_path: '/w/a.ts', old_string: 'a', new_string: 'b' } }] } });
 const result = (id: string): string => line({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: id, content: 'ok' }] } });
+
+describe('runClaude', () => {
+  // A folder that does not exist, so a seam that is not taken cannot reach a real claude.
+  const env = { PATH: join(tmpdir(), 'oars-no-such-folder') };
+  const spawned = (): { spawn: SpawnClaude; child: EventEmitter; stdin: PassThrough; stdout: PassThrough; calls: Array<{ command: string; args: readonly string[]; options: ClaudeSpawnOptions }> } => {
+    const stdin = new PassThrough();
+    const stdout = new PassThrough();
+    const child = Object.assign(new EventEmitter(), { stdin, stdout });
+    const calls: Array<{ command: string; args: readonly string[]; options: ClaudeSpawnOptions }> = [];
+    return {
+      child,
+      stdin,
+      stdout,
+      calls,
+      spawn: (command, args, options) => {
+        calls.push({ command, args, options });
+        return child;
+      },
+    };
+  };
+
+  it('runs from the temp folder under the 180 s kill, sends the text on stdin, and resolves with what stdout said', async () => {
+    const fake = spawned();
+    const pending = runClaude(['-p'], { stdin: 'the request', env }, fake.spawn);
+    expect(fake.calls).toEqual([{ command: 'claude', args: ['-p'], options: { cwd: tmpdir(), env, stdio: ['pipe', 'pipe', 'ignore'], windowsHide: true, timeout: 180_000 } }]);
+    expect(await streamText(fake.stdin)).toBe('the request');
+    fake.stdout.write('{"a":');
+    fake.stdout.end('1}');
+    await once(fake.stdout, 'end');
+    fake.child.emit('close', 0);
+    expect(await pending).toEqual({ code: 0, stdout: '{"a":1}' });
+  });
+
+  it('reads a killed call, whose exit code is null, as exit 1, which fails the run', async () => {
+    const fake = spawned();
+    const pending = runClaude(['-p'], { stdin: '', env }, fake.spawn);
+    fake.child.emit('close', null, 'SIGTERM');
+    expect(await pending).toEqual({ code: 1, stdout: '' });
+
+    const killed = spawned();
+    const ask = claudeEvaluator((args, options) => runClaude(args, options, killed.spawn), env).ask({ system: 's', user: 'u' });
+    killed.child.emit('close', null, 'SIGTERM');
+    await expect(ask).rejects.toThrow('claude -p failed: exit 1');
+  });
+
+  it('rejects with the install hint when the child cannot start', async () => {
+    const fake = spawned();
+    const pending = runClaude(['-p'], { stdin: '', env }, fake.spawn);
+    fake.child.emit('error', new Error('spawn claude ENOENT'));
+    await expect(pending).rejects.toThrow('Cannot run `claude`');
+  });
+
+  it('takes a broken stdin pipe quietly, since the exit code is what counts', async () => {
+    const fake = spawned();
+    const pending = runClaude(['-p'], { stdin: '', env }, fake.spawn);
+    expect(() => fake.stdin.emit('error', new Error('EPIPE'))).not.toThrow();
+    fake.child.emit('close', 1);
+    expect(await pending).toEqual({ code: 1, stdout: '' });
+  });
+
+  it('spawns for real by default: a binary not on PATH rejects with the install hint', async () => {
+    await expect(runClaude(['--version'], { stdin: '', env })).rejects.toThrow('Cannot run `claude`');
+  });
+});
 
 describe('confidenceLevel', () => {
   it('orders the words, reads a range as its middle, and leaves anything else unread', () => {
