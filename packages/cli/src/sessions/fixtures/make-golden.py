@@ -1,4 +1,4 @@
-"""Writes golden.json: what the reference scripts (docs/research/2026-11-01-session-commons/, an earlier commit of the umbrella repository) count on proj/.
+"""Writes golden.json: what the reference scripts (docs/research/2026-11-01-session-commons/, the umbrella repository's commit a537d9d) count on proj/.
 
 Run: python3 -I make-golden.py <path to the session-commons reference scripts>
 extract.test.ts asserts the TypeScript extractor's counts equal these.

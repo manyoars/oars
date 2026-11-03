@@ -21,7 +21,7 @@ const ISSUER_URL = process.env.OARS_LIVE_ISSUER_URL ?? 'http://localhost:8180/re
 const required = (name: string): string => {
   const value = process.env[name];
   if (value === undefined || value === '') {
-    throw new Error(`${name} is not set. The live login signs in as a user of the realm at ${ISSUER_URL}: set OARS_LIVE_USERNAME and OARS_LIVE_PASSWORD.`);
+    throw new Error(`${name} is not set. The live login signs in as a user of the realm at ${ISSUER_URL}: set OARS_LIVE_USERNAME, OARS_LIVE_PASSWORD, and OARS_LIVE_AUDIENCE.`);
   }
   return value;
 };
@@ -147,13 +147,13 @@ const loginThenLogout = async ({ api, configDir, username, password }: Session):
   expect(await login, err.join('')).toBe(ExitCode.OK);
   expect(JSON.parse(out.join(''))).toEqual({ ok: true, email: username });
 
-  // The exchange got a real Keycloak access token for this client, issued for the platform.
+  // The exchange got a real Keycloak access token for this client, issued for the audience the realm names.
   const [exchanged = ''] = api.exchanged;
   expect(api.exchanged).toHaveLength(1);
   expect(claim(exchanged, 'azp')).toBe('oars-cli');
   expect(claim(exchanged, 'iss')).toBe(ISSUER_URL);
   expect(claim(exchanged, 'email')).toBe(username);
-  expect(JSON.stringify(claim(exchanged, 'aud'))).toContain('aor-platform');
+  expect(JSON.stringify(claim(exchanged, 'aud'))).toContain(required('OARS_LIVE_AUDIENCE'));
 
   const stored = await deps.store.read();
   expect(stored).toMatchObject({ issuerUrl: ISSUER_URL, apiUrl: api.url, email: username, accessToken: 'stub-api-access-token' });
