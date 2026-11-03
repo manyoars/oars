@@ -485,6 +485,20 @@ describe('oars sessions gold', () => {
     expect(document).toMatchObject({ ok: true, judged: 1, total: 2 });
   });
 
+  it('passes over a prompt whose transcript changed after the deposit, so its signals cannot describe another turn', async () => {
+    const h = setup();
+    await populate(h);
+    addProject(h.staged, 'gold', 'keep-1', work('rewritten'));
+    const dir = join(h.staged.root, 'stale');
+    expect(await run(['sessions', 'gold', 'sample', '--out-dir', dir, '--seed', 's'], h.deps)).toBe(ExitCode.OK);
+    expect(h.out.join('')).toContain('Passed over 1 prompts');
+    const date = new Date(h.deps.now()).toISOString().slice(0, 10);
+    const text = readFileSync(join(dir, `outcome-gold-${date}.md`), 'utf8');
+    expect(text).not.toContain('first ask');
+    expect(text).not.toContain('rewritten');
+    expect(text).toContain('second ask');
+  });
+
   it('lets one of two racing samples write, since the refusal is checked long before the write', async () => {
     const h = setup();
     await populate(h);
