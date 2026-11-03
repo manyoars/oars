@@ -15,16 +15,18 @@ installs or imports to do that:
 
 ## Let your coding agent do it
 
+Accounts and paid agents are not open yet; `oars login` says so until launch.
+
 Install the skill with `npx skills add manyoars/oars --skill make-me-money -g -y`; it teaches Claude Code to ship a paid agent on Many Oars and to hand you the steps only a person can do, such as Stripe onboarding.
 
 ## Session memory
 
-`oars sessions` keeps a local record of your own Claude Code sessions so a repeated error can be looked up. It makes no model call and no network call, and nothing leaves your machine.
+`oars sessions` keeps a local record of your own Claude Code sessions so a repeated error can be looked up. It makes no model call and no network call. oars itself sends nothing; the hooks and the MCP tool add recall text to the running session, and your harness sends that to its model like any other context.
 
 - **Captured:** the sessions of the folders you name with `--allow` (a folder you never named is never read), with secrets, emails, and the domains you name masked in the log.
-- **Stored:** under `<config>/oars/sessions/` on your machine, including `raw/`, a hard link or copy of each deposited transcript. `raw/` is on by default and holds raw transcripts: they stay on your machine.
-- **Commands:** `oars sessions deposit --allow <folder>`, `oars sessions recall --error "<text>"`, `oars sessions hook install`.
-- **Uninstall:** `oars sessions hook uninstall`, then delete the `<config>/oars/sessions/` folder.
+- **Stored:** under `<config>/oars/sessions/` on your machine, including `raw/`, a hard link or copy of each deposited transcript. `raw/` is on by default and holds raw transcripts, unredacted: they keep whatever the transcript held, secrets included, and stay on your machine.
+- **Commands:** `oars sessions deposit --allow <folder>`, `oars sessions recall --error "<text>"`, `oars sessions hook install --scope user`.
+- **Uninstall:** `oars sessions hook uninstall --scope user`, `oars sessions hook install --schedule off` if you registered the nightly task, then delete the `<config>/oars/sessions/` folder. Install raises `cleanupPeriodDays` in your settings to at least 365, and uninstall leaves it raised.
 
 The full reference is in [`packages/cli/README.md`](packages/cli/README.md).
 

@@ -2,6 +2,7 @@ import { http, HttpResponse } from 'msw';
 import { describe, expect, it } from 'vitest';
 import { run } from './cli.js';
 import { ExitCode } from './errors.js';
+import { LAUNCH_FLAG_URL } from './issuer.js';
 import { stepKey } from './journal.js';
 import { API, harness, server, useServer } from './test-support.js';
 
@@ -315,5 +316,30 @@ describe('oars purchasing list', () => {
 
     expect(h.out.join('')).toContain('FAILED (PURCHASE_DECLINED)');
     expect(h.out.join('')).toContain('  LIVE  ');
+  });
+});
+
+describe('oars purchasing before Many Oars has launched (0.3.0 does not ship it)', () => {
+  it('is not listed in oars --help', async () => {
+    const h = harness();
+    await expect(run(['--help'], h.deps)).resolves.toBe(ExitCode.OK);
+    expect(h.out.join('')).toContain('templates');
+    expect(h.out.join('')).not.toContain('purchasing');
+  });
+
+  it.each([['card', '--mode', 'TEST'], ['cap', AGENT, '--mode', 'TEST', '--usd', '5'], ['list', AGENT]])('refuses `purchasing %s` the way login does, and makes no API call', async (...args) => {
+    const h = harness({ OARS_ISSUER_URL: '' });
+    server.use(http.get(LAUNCH_FLAG_URL, () => HttpResponse.json({ launched: false })));
+    const seen = route('get', PAYMENT_METHOD, () => HttpResponse.json({}));
+    expect(await run(['purchasing', ...args, '--json'], h.deps)).toBe(ExitCode.USAGE);
+    expect(JSON.parse(h.out[0] ?? '')).toMatchObject({ ok: false, step: 'usage', problem: { title: expect.stringContaining('has not launched yet') } });
+    expect(seen).toEqual([]);
+  });
+
+  it('runs once the launch flag says launched', async () => {
+    const h = harness({ OARS_ISSUER_URL: '', OARS_API_KEY: 'key-123' });
+    server.use(http.get(LAUNCH_FLAG_URL, () => HttpResponse.json({ launched: true })));
+    cardRead(() => HttpResponse.json(view({ mode: 'TEST', status: 'ACTIVE', brand: 'visa', last4: '4242' })));
+    expect(await run(['purchasing', 'card', '--mode', 'TEST'], h.deps)).toBe(ExitCode.OK);
   });
 });
