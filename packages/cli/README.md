@@ -116,11 +116,12 @@ An `--allow` entry is a folder (or its slug), a folder prefix with a trailing sl
 
 #### Recall in a running session: hooks
 
-`oars sessions hook install` writes three entries into one Claude Code settings file. Each is a deterministic, local, fail-open call into the store (no model, no network); an error inside a hook exits 0 with no output, so a hook never blocks or fails a session.
+`oars sessions hook install` writes four entries into one Claude Code settings file. Each is a deterministic, local, fail-open call into the store (no model, no network); an error inside a hook exits 0 with no output, so a hook never blocks or fails a session.
 
 | Event | Does | Budget |
 |---|---|---|
 | `SessionStart` | injects `oars sessions recall --context` for the session's cwd as additional context: the top 5 errors by sessions within the latest 300 sessions of the repository (the `measure --last 300 --repo` window) and what usually followed | under 500 ms |
+| `PreToolUse` (matcher `PowerShell\|Monitor\|Edit\|Agent`) | for a call whose tool and input key names match a shape the store has seen fail often enough, injects its counts as additional context, once per session and shape, and records the recall. 10 percent of those sessions and shapes are held back: a held arm records what it would have shown and injects nothing. Starts node per matched call | under 500 ms |
 | `PostToolUseFailure` (matcher `Bash\|PowerShell`) | for a failed tool call whose error starts with `Exit code N` normalizes the first informative line as `deposit` does and, on a hit, adds "seen in N sessions; what followed: X". A shell pre-filter in the registered command reads the event first and starts node only when it carries `Exit code` | pre-filter: shell builtins only, no node start; whole path under 1 s |
 | `SessionEnd` | deposits that one transcript (idempotent by size and mtime), only from a folder an earlier `--allow` named. Once per session: `Stop` fires after every turn and would append a new revision of the growing transcript each time. A session the harness ends without `SessionEnd` is picked up by the nightly deposit | under 5 s |
 
