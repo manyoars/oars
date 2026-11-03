@@ -11,6 +11,7 @@ import { slugOf } from './allow.js';
 import { run } from '../cli.js';
 import { ExitCode } from '../errors.js';
 import { harness, removeTestDirs } from '../test-support.js';
+import { readHookCalls } from './hook-calls.js';
 import { runHook } from './hooks.js';
 
 const NOW = Date.parse('2026-06-30T00:00:00Z');
@@ -247,6 +248,43 @@ describe('recordSurvival', () => {
     expect(lines(s)).toHaveLength(1);
   });
 
+  it('reads the repository it names, not one an inherited GIT_DIR points at', async () => {
+    const repo = makeRepo();
+    const sha = commitIn(repo, 'named');
+    publish(repo);
+    const other = makeRepo();
+    publish(other);
+    const { s, project } = await staged(repo, [{ sha }]);
+    const inherited = process.env.GIT_DIR;
+    process.env.GIT_DIR = join(other, '.git');
+    try {
+      expect(await recordSurvival(s.runtime, [project], () => NOW)).toEqual({ survived: 1, reverted: 0, unreachable: 0, unknown: 0 });
+    } finally {
+      if (inherited === undefined) delete process.env.GIT_DIR;
+      else process.env.GIT_DIR = inherited;
+    }
+  });
+
+  it('reads a signed revert under log.showSignature, whose signature line git prints ahead of the format', async () => {
+    const repo = makeRepo();
+    const sha = commitIn(repo, 'undone');
+    publish(repo);
+    const { s, project } = await staged(repo, [{ sha }]);
+    const full = gitIn(repo, 'rev-parse', 'HEAD');
+    const revert = 'a'.repeat(40);
+    // A signing setup is not something every test machine has, so this is the output git 2.37 gave a signed revert with the setting on.
+    const answers = (args: readonly string[]): string => {
+      if (args[0] === 'rev-parse') return 'false\n';
+      if (args[0] === 'symbolic-ref') return 'refs/remotes/origin/main\n';
+      if (args[0] === 'rev-list') return `${full}\n`;
+      if (args[0] === 'cat-file') return `${full} commit\n`;
+      const record = `${revert}\nRevert "x"\n\nThis reverts commit ${full}.\n\0\n`;
+      return args.includes('--no-show-signature') ? record : `No signature\n${record}`;
+    };
+    const git: Git = (_root, args) => Promise.resolve(answers(args));
+    expect(await recordSurvival(s.runtime, [project], () => NOW, git)).toEqual({ survived: 0, reverted: 1, unreachable: 0, unknown: 0 });
+  });
+
   it('fails open: a store it cannot read returns null and never throws', async () => {
     const s = stage('unused');
     // A directory where the log should be: reading it fails with EISDIR, which `loadStore` does not swallow as a missing file.
@@ -296,6 +334,18 @@ describe('who reads it', () => {
     const { s } = await staged(repo, [{ sha }]);
     await runHook('nightly', '', s.runtime, () => NOW);
     expect(lines(s)).toEqual([{ sha, state: 'survived', day: '2026-06-30' }]);
+    expect((await readHookCalls(s.storeDir)).map((call) => call.error)).toEqual([null]);
+  });
+
+  it('the nightly run records one line when it could not read survival, since no one is watching it', async () => {
+    const repo = makeRepo();
+    const sha = commitIn(repo, 'kept');
+    publish(repo);
+    const { s } = await staged(repo, [{ sha }]);
+    // Reads back fine, and the append fails: the file's name is taken by a directory.
+    mkdirSync(survivalFile(s.storeDir));
+    await runHook('nightly', '', s.runtime, () => NOW);
+    expect((await readHookCalls(s.storeDir)).map((call) => call.error)).toEqual(['Commit survival not read this run.']);
   });
 
   it('the Stop hook never does: a session waits on it', async () => {
