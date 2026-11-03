@@ -3,7 +3,7 @@
 // the term file is missing or empty (fail closed). The term list is a local file and never lives in this repository; nothing here
 // prints, logs, or returns a term or a line of a transcript, only counts and session ids.
 import { createReadStream, type Dirent } from 'node:fs';
-import { chmod, mkdir, readdir, readFile, rename, stat, writeFile } from 'node:fs/promises';
+import { chmod, lstat, mkdir, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { createInterface } from 'node:readline';
 import type { Outcome } from '../cli.js';
@@ -90,11 +90,29 @@ const isFile = async (path: string): Promise<boolean> => {
   }
 };
 
+/** A link at this path that leads nowhere, or to something that is not a directory, so what is under it was not scanned; an absent path is not one. */
+const brokenLink = async (path: string): Promise<boolean> => {
+  let link: boolean;
+  try {
+    link = (await lstat(path)).isSymbolicLink();
+  } catch (error) {
+    return !isAbsent(error);
+  }
+  if (!link) return false;
+  try {
+    return !(await stat(path)).isDirectory();
+  } catch {
+    return true;
+  }
+};
+
 /** Adds the transcripts of the session in one source (the main file and everything under `<session>/subagents/`) to `found`; true when a folder could not be read. */
 const filesIn = async (root: string, source: Source, project: string, session: string, found: TranscriptFile[]): Promise<boolean> => {
   const folder = join(root, project);
   const main = join(folder, `${session}.jsonl`);
+  // A project folder, session folder, or subagents folder that is a link leading nowhere reads as an empty one below, so it is checked first.
   let unreadable = false;
+  for (const path of [folder, join(folder, session), join(folder, session, 'subagents')]) if (await brokenLink(path)) unreadable = true;
   try {
     if (await isFile(main)) found.push({ path: main, key: `${session}.jsonl`, main: true, source });
   } catch {
@@ -295,8 +313,14 @@ export const sessionsExclusions = async (runtime: SessionsRuntime, where: Exclus
   // The list holds real folder names, which can carry a term, so it is readable by its owner only (as the store's other local-only files are).
   // Written through a temp file and renamed, as the store does, so a crash mid-write never leaves a short list that reads as complete.
   const temp = `${where.list}.tmp`;
-  await writeFile(temp, excluded.map((entry) => JSON.stringify(entry)).join('\n') + (excluded.length === 0 ? '' : '\n'), { mode: 0o600 });
-  await rename(temp, where.list);
+  try {
+    await writeFile(temp, excluded.map((entry) => JSON.stringify(entry)).join('\n') + (excluded.length === 0 ? '' : '\n'), { mode: 0o600 });
+    await rename(temp, where.list);
+  } catch (error) {
+    // The temp file holds real folder names, so a failed write or rename never leaves it behind.
+    await rm(temp, { force: true });
+    throw error;
+  }
   // `mode` applies only when the file is created, so a list from an earlier run keeps its old one.
   await chmod(where.list, 0o600);
   const { projects, raw } = counts.bySource;
