@@ -26,10 +26,11 @@ const route = (method: 'get' | 'post' | 'put', path: string, answer: () => Respo
   server.use(
     http[method](`${API}${path}`, async ({ request }) => {
       const text = await request.text();
+      const body: unknown = text === '' ? null : JSON.parse(text);
       seen.push({
         method: request.method,
         path: new URL(request.url).pathname,
-        body: text === '' ? null : (JSON.parse(text) as unknown),
+        body,
         key: request.headers.get('Idempotency-Key'),
         authorization: request.headers.get('Authorization'),
       });
@@ -49,7 +50,9 @@ describe('oars purchasing card', () => {
 
     expect(await run(['purchasing', 'card', '--mode', 'TEST'], h.deps)).toBe(ExitCode.HUMAN);
 
-    expect(seen).toEqual([{ method: 'POST', path: '/billing/purchasing/payment-method', body: { mode: 'TEST' }, key: expect.any(String), authorization: 'Bearer key-123' }]);
+    expect(seen).toHaveLength(1);
+    expect(seen[0]).toMatchObject({ method: 'POST', path: '/billing/purchasing/payment-method', body: { mode: 'TEST' }, authorization: 'Bearer key-123' });
+    expect(seen[0]?.key).toMatch(/^[0-9a-f]{64}$/);
     expect(h.err.join('')).toContain('Needs you: open https://app.test/purchasing/setup/abc');
     expect(h.out).toEqual([]);
   });
@@ -218,7 +221,9 @@ describe('oars purchasing list', () => {
     sellerWorkloadId: '11111111-2222-4333-8444-555555555555',
     createdAt: '2026-10-22T12:00:00Z',
   });
-  const listing = (content: object[]) => server.use(http.get(`${API}/billing/agents/${AGENT}/purchases`, () => HttpResponse.json({ content, last: true })));
+  const listing = (content: object[]): void => {
+    server.use(http.get(`${API}/billing/agents/${AGENT}/purchases`, () => HttpResponse.json({ content, last: true })));
+  };
 
   it('lists the agent purchases through GET /billing/agents/{id}/purchases, following the pages', async () => {
     const h = harness({ OARS_API_KEY: 'key-123' });
@@ -234,9 +239,8 @@ describe('oars purchasing list', () => {
     expect(await run(['purchasing', 'list', AGENT, '--json'], h.deps)).toBe(ExitCode.OK);
 
     expect(seen).toEqual(['?page=0&size=100', '?page=1&size=100']);
-    const document = JSON.parse(h.out[0] ?? '') as { ok: boolean; purchases: Array<{ purchaseId: string }> };
-    expect(document.ok).toBe(true);
-    expect(document.purchases.map((purchase) => purchase.purchaseId)).toEqual([FIRST, SECOND]);
+    const document: unknown = JSON.parse(h.out[0] ?? '');
+    expect(document).toMatchObject({ ok: true, purchases: [{ purchaseId: FIRST }, { purchaseId: SECOND }] });
   });
 
   it('prints one line per purchase for a person', async () => {
