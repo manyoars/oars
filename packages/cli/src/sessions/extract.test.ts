@@ -549,6 +549,26 @@ describe('an api-request-blob line is a copy of the request, not a conversation 
     expect(plain.session.tldrs).toEqual(['done']);
   });
 
+  it('keeps the repository-based path hash of the real line when the blob copy comes first (the pairs t752 saw differ by base)', () => {
+    const absolute = '/work/app/src/a.ts';
+    const real = JSON.stringify({ type: 'assistant', isSidechain: false, cwd: '/work/app', timestamp: '2026-06-01T00:00:01.000Z', message: { role: 'assistant', model: 'm', content: [{ type: 'tool_use', id: 't9', name: 'Read', input: { file_path: absolute } }] } });
+    const copy = blob({ role: 'assistant', content: [{ type: 'tool_use', id: 't9', name: 'Read', input: { file_path: absolute } }] });
+    const withRoot = (lines: string[]) => captureSession({ text: lines.join('\n'), session: 's', project: 'proj', rev: 1, at: '', bytes: 0, redact, salt: 'salt', repoRoot: () => '/work/app' });
+    for (const lines of [[user, real, copy], [user, copy, real]]) {
+      const captured = withRoot(lines);
+      expect(captured.tools.map((tool) => [tool.toolUseId, tool.targetBase])).toEqual([['t9', 'repo']]);
+    }
+    expect(withRoot([user, real, copy]).tools[0]?.target).toBe(withRoot([user, real]).tools[0]?.target);
+  });
+
+  it('writes no row for a tool_use id only a blob line holds: that call is in another transcript (a subagent), which is captured on its own', () => {
+    const earlier = blob({ role: 'assistant', content: [{ type: 'tool_use', id: 'from-a-subagent', name: 'Bash', input: { command: 'git status' } }] });
+    const captured = captureOf([user, earlier, call, result]);
+    expect(captured.tools.map((tool) => tool.toolUseId)).toEqual(['t1']);
+    expect(captured.session.tools).toEqual({ Read: 1 });
+    expect(captured.session.bashCmds).toBe(0);
+  });
+
   it('is still a line of the skeleton, so the counts and the merkle root bind', () => {
     const withBlob = captureOf([user, call, result, ...copies]);
     expect(withBlob.skeleton.lines).toHaveLength(5);

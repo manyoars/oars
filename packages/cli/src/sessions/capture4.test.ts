@@ -325,7 +325,7 @@ describe('a version-3 store opened under version 4', () => {
     expect((await deposit(staged.runtime, options)).unchanged).toBe(4);
   });
 
-  it('opens a store captured by 3e658f0 (version 3): only target, targetBase, sid, cv, rev, and the CAPTURE 6 fields change on a tool; prompts and errors read equal', async () => {
+  it('opens a store captured by 3e658f0 (version 3): only target, targetBase, sid, cv, rev, and the CAPTURE 6 fields change on a tool; prompts read equal but for verify and frame, and errors read equal', async () => {
     const staged = stage();
     cpSync(join(FIXTURES, 'v3-store'), staged.storeDir, { recursive: true });
     const before = await loadStore(staged.storeDir);
@@ -356,7 +356,10 @@ describe('a version-3 store opened under version 4', () => {
     expect(verifyAt(after.prompts, 'errors-b', 0)).toBe('none');
     expect(verifyAt(before.prompts, 'tldr', 0)).toBe('na');
     expect(verifyAt(after.prompts, 'tldr', 0)).toBe('na');
-    const unverified = <T extends { rev: number }>(records: T[]): T[] => unrev(records).map((record) => ({ ...record, verify: null }));
+    // A version-3 record has no frame either, and a prompt's derived record carries the one capture now writes.
+    expect(before.prompts.every((prompt) => prompt.frame === undefined)).toBe(true);
+    expect(after.prompts.every((prompt) => prompt.frame !== undefined)).toBe(true);
+    const unverified = <T extends { rev: number }>(records: T[]): T[] => unrev(records).map((record) => ({ ...record, verify: null, frame: null }));
     expect(unverified(after.prompts)).toEqual(unverified(before.prompts));
     expect(unrev(after.errors)).toEqual(unrev(before.errors));
     expect(after.sessions.map((session) => session.promptFingerprint)).toEqual(before.sessions.map((session) => session.promptFingerprint));

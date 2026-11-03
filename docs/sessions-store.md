@@ -34,21 +34,23 @@ Version 4 (CAPTURE 4, t714) adds `sid`, `repo`, `fileHashes`, `env`, `promptFing
 1,000-character cap on an error line, and a cap of 100 on `files` and `fileHashes` per session (p99 was 61, max 209, on the 8,253-session
 copy store); `recall --path` sees the first 100 sorted paths of a session. Version 5 (CAPTURE 5, t733) changes no field name: it changes the
 stored `models` value of an existing skeleton to carry the cost-state keys (see the cost-state paragraph below), so a version-4 store is
-behind and its next deposit captures every transcript again. Version 6 (CAPTURE 6, t746) adds `segments`, `pulls`, and `commits` to the tool
-record (see "What a shell call captures"), and a version-5 store's next deposit captures every transcript again. Version 7 (CAPTURE 7, t755)
+behind and its next deposit captures every transcript again. Version 6 (CAPTURE 6) adds `segments`, `pulls`, and `commits` to the tool
+record (see "What a shell call captures"), and a version-5 store's next deposit captures every transcript again. Version 7 (CAPTURE 7)
 adds `frame` to the session and prompt records and `steps` to the tool record (see "Frames and steps"), and moves `tool`, `tools`, and a shell-form
-`target` from class P to class A; a version-6 store's next deposit captures every transcript again from the harness or `raw/`. Version 8 (CAPTURE 8 and EXTRACTOR 8, t762; 6 and 7 are held by in-flight work) changes no
+`target` from class P to class A; a version-6 store's next deposit captures every transcript again from the harness or `raw/`. Version 8 (CAPTURE 8 and EXTRACTOR 8) changes no
 field name either: it changes what `tool`, `error-line`, and the session's `tools`, `bashCmds`, `tldrs`, and `confidences` hold. The harness writes
 `api-request-blob` lines, copies of the request body with no `cwd`, `uuid`, or `timestamp`; capture read their blocks as conversation and wrote every call
 a second time with status `none` (99.8% of the 55,801 `tool_use` blocks on those lines repeat a real call). It no longer reads them, and a call a
 resumed transcript replays under the same tool-use id is written once. The skeleton still lists every line, so the counts and the root bind. A reader
-folds an older store the same way (`fold.ts`): one `tool` record per session and tool-use id, the first, with the first status found, and the session's
-`tools` and `bashCmds` less the dropped calls. A call with no result is still a record, status `none`. What an open does with an older store:
+folds an older store the same way (`fold.ts`): one `tool` record per session and tool-use id, the first, with the first status found and, when the first has no `ts`, the
+`target`, `targetBase`, `ts`, and `harnessVersion` of the first copy that has one; the kept records are numbered from zero and each `error-line`'s `after`
+moves to match, so `next` and `editFollowed` read the same calls as a current capture; and the session's `tools` and `bashCmds` are less the dropped calls. A call with no result is still a record, status `none`. What an open does with an older store:
 
 | Log holds | Action on open | Action at the next deposit |
 |-----------|----------------|----------------------------|
 | `cv` 8, `v` current | read | skip unchanged files |
-| `cv` 5 to 7 | read; a replayed `tool` record is folded (see above) | capture again |
+| `cv` 5 and the transcript is on disk or in `raw/` | read; a replayed `tool` record is folded (see above); `verify` counts it `cv-behind`, and `verify --strict` exits 4 on it | capture again at `rev + 1` |
+| `cv` 5, neither the harness nor `raw/` has the transcript | read; a replayed `tool` record is folded (see above); `verify` counts it `cv-frozen` (not `cv-behind`), and `verify --strict` does not fail on it | none |
 | `cv` 3 or 4 (or a version-2 session) and the transcript is on disk or in `raw/` | read through the compatibility reader (for `cv` 3, a field version 4 added reads as null, empty, or `unknown`; the prompt half of `contextFingerprint`, before its `.`, reads as `promptFingerprint`, and `-` reads as null; the environment half is dropped); `verify` counts it `cv-behind`, and `verify --strict` exits 4 on it | capture again at `rev + 1`; derived records regenerate under the current `EXTRACTOR_VERSION` on every open |
 | `cv` 3 or 4, neither the harness nor `raw/` has the transcript (for a Cursor session, Cursor no longer lists the composer) | read through the compatibility reader; `verify` counts it `cv-frozen` (not `cv-behind`), and `verify --strict` does not fail on it | none |
 | `derived.json` `v` older than `EXTRACTOR_VERSION` | read | rewritten at the next deposit (no reader depends on it today); derived records are regenerated from the log on every read |
@@ -114,8 +116,8 @@ network or a model: a value outside a closed list reads `<literal>` or is droppe
 `src/sessions/public-vocabulary.ts`, and default to `<literal>` when unsure.
 
 A `frame` sits on each prompt, and on the session for the calls before the first prompt: `{ harness, harnessVersion, model, effort, day, platform,
-shell, stack, frameId }`. `day` is the UTC date. `stack` is a language mix, framework names, and a repository size bucket, each from a closed
-list. `frameId` is a 16-hex hash of the other fields, and a step names it.
+shell, stack }`. `day` is the UTC date. `stack` is a language mix, framework names, and a repository size bucket, each from a closed
+list. `frameId`, beside it on the record, is a 16-hex hash of the frame, and a step names it.
 
 `steps` sits on the tool record, one per call, or one per command of a shell call (`&&`, `||`, `;`, pipes, and subshells, with quoted separators
 left alone, tied by `seg`). It is nested so `n`, the count bindings, and the Merkle checks do not move.
@@ -125,11 +127,11 @@ left alone, tied by `seg`). It is nested so `n`, the count bindings, and the Mer
 | `n`, `seg` | The call's position in the transcript, and the step's position in the call. |
 | `action` | One of the closed list in `src/sessions/actions.ts`, from one table per adapter. An unmapped name is `other`. |
 | `native` | The harness's name for the tool when its table lists the name, or when every name it holds is public, else `<literal>`. |
-| `identity` | By action: shell `{ program, sub, flags, pulls? }` (flag names, never their values; a pull is `{ registry, name, version }`), MCP `{ server, tool }`, skill `{ skill }`, web `{ host }`, else null. Any value outside the allowlist is `<literal>`. |
+| `identity` | By action: shell `{ program, sub, flags, pulls? }` (flag names, never their values, so `-c1-200` reads `-c` and `head -20` reads `-N`; a pull is `{ registry, name, version }`), MCP `{ server, tool }`, skill `{ skill }`, web `{ host }`, else null. Any value outside the allowlist is `<literal>`. |
 | `status` | The call's status where it reports this segment; `none` where it does not, such as a segment a pipe hides. |
 | `cost` | `{ tokens, durationMs }` on the first segment; later segments hold nulls. `tokens` are the response's output tokens shared evenly among its calls. |
 | `parent` | On a subagent's step, the `n` of the call that spawned it in the main transcript; null when that call is not known. |
-| `edges` | The edges arriving at this step, `{ kind, n, seg }` naming the source: `next` (order within a prompt's line of work), `spawned`, `retried` (same action and identity after that one failed), and `after-error`. |
+| `edges` | The edges arriving at this step, `{ kind, n, seg }` naming the source: `next` (order within a prompt's line of work), `spawned`, `retried` (same action and identity after that one failed), and `after-error`. `spawned` needs the subagent's `.meta.json`; `raw/` does not hold that file, so a re-capture takes `spawnedBy` from the log, and a subagent first seen in `raw/` has no such edge. |
 | `frameId` | The frame of the call's prompt. |
 
 Comparing counts across capture versions misleads: a new version can re-read the same transcript into different rows. Compare within one `cv`.
