@@ -340,9 +340,9 @@ const buildProgram = (deps: RunDeps, argv: string[]): Command => {
 
   sessions
     .command('books')
-    .description('tokens, wall time, turns, errors, and verify-after-edit rate per prompt class, model, or harness')
-    .option('--by <key>', 'class, model, or harness (default class)', (value: string): BooksBy => {
-      if (value !== 'class' && value !== 'model' && value !== 'harness') throw new InvalidArgumentError('it must be class, model, or harness.');
+    .description('tokens, wall time, turns, errors, verify-after-edit rate, and the outcome signals (verify passed, stops, redos, commits, and commit survival) per prompt class, model, harness, or pull')
+    .option('--by <key>', 'class, model, harness, or pull (default class)', (value: string): BooksBy => {
+      if (value !== 'class' && value !== 'model' && value !== 'harness' && value !== 'pull') throw new InvalidArgumentError('it must be class, model, harness, or pull.');
       return value;
     })
     .option('--since <days>', 'only the last N days', positiveInteger)
@@ -350,7 +350,7 @@ const buildProgram = (deps: RunDeps, argv: string[]): Command => {
     .action(async (_options: OptionValues, command: Command) => {
       const options: OptionValues = command.optsWithGlobals();
       const picked = text(options, 'by');
-      const by: BooksBy = picked === 'model' || picked === 'harness' ? picked : 'class';
+      const by: BooksBy = picked === 'model' || picked === 'harness' || picked === 'pull' ? picked : 'class';
       emit(deps, flag(options, 'json'), await sessionsBooks(sessionDeps(deps), { by, sinceDays: count(options, 'since'), repo: text(options, 'repo') }));
     });
 

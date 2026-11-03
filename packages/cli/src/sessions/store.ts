@@ -1,5 +1,6 @@
 // The on-disk session store and `deposit`. Layout under `<config>/oars/sessions/`:
-//   observations.jsonl      append-only; a re-deposited session is appended again under a higher `rev`
+//   observations.jsonl      appended to; a re-deposited session is appended again under a higher `rev`, and a whole-store deposit
+//                           then drops the superseded revs (compactLog)
 //                           versions 3 and later write capture records only (session, user-prompt, tool, error-line; CAPTURE_VERSION);
 //                           signatures, prompt classes, and episodes are derived from them at read time (derive.ts,
 //                           EXTRACTOR_VERSION), so a rule change re-derives without reading any raw transcript
@@ -17,8 +18,9 @@
 //   pipeline-runs.jsonl     the step log: one line per run of a pipeline step, appended when the step ends (steps.ts)
 import type { GoldEvaluator } from './gold-arms.js';
 import { createHash, randomBytes } from 'node:crypto';
+import { createReadStream } from 'node:fs';
 import { performance } from 'node:perf_hooks';
-import { appendFile, mkdir, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { appendFile, mkdir, open, readdir, readFile, rename, rm, stat, utimes, writeFile } from 'node:fs/promises';
 import { basename, dirname, join, resolve } from 'node:path';
 import { CliError, ExitCode } from '../errors.js';
 import { compileAllow, requireEntries, slugOf } from './allow.js';
@@ -252,8 +254,8 @@ interface DepositContext {
 
 const contextFor = async (runtime: SessionsRuntime, state: State, now: () => number): Promise<DepositContext> => {
   // Each file records the set it was deposited under. A file whose set differs from the current one is read again, so a domain
-  // added while other folders were allowed still masks those folders later. Lines already written stay in the append-only
-  // observations file until it is compacted; readers use only the highest rev of each session.
+  // added while other folders were allowed still masks those folders later. Lines already written stay in the observations file
+  // until it is compacted; readers use only the highest rev of each session.
   await mkdir(paths(runtime.storeDir).skeletons, { recursive: true });
   const salt = await (runtime.accountSalt ?? localSalt)(runtime.storeDir);
   let logged: Promise<LoggedSessions> | undefined;
@@ -623,9 +625,17 @@ export const withLock = async <T>(storeDir: string, work: () => Promise<T>, opti
     await sleep(25);
     claimed = await claim(lock);
   }
+  // A waiter breaks a lock older than `staleMs`, and a full re-capture runs longer than that: the holder keeps its lock young, or a hook
+  // would break it and append during the compaction that ends the run.
+  const heartbeat = setInterval(() => {
+    const now = new Date();
+    void utimes(lock, now, now).catch(() => undefined);
+  }, options.staleMs / 4);
+  heartbeat.unref();
   try {
     return await work();
   } finally {
+    clearInterval(heartbeat);
     await rm(lock, { force: true });
   }
 };
@@ -686,6 +696,11 @@ const depositLocked = async (runtime: SessionsRuntime, options: DepositOptions, 
   }
   if (runtime.cursorRoot !== undefined && allow.allows(CURSOR_SOURCE)) await readCursor(context, runtime.cursorRoot, result, trace);
   await writeAtomic(paths(runtime.storeDir).state, JSON.stringify(state));
+  // Decided by what the log holds, not by what this run captured: a run that died after its re-capture left the copies for this one. The hook
+  // path never compacts, since it has seconds. The records are safe by now and an uncompacted log still loads, so a failure here does not fail the deposit.
+  await compactLog(runtime.storeDir).catch((error: unknown) => {
+    process.stderr.write(`oars: the session log was not compacted, and the next deposit tries again: ${error instanceof Error ? error.message : String(error)}\n`);
+  });
   await refresh(runtime, state.redactDomains, context.at, trace);
   return result;
 };
@@ -772,6 +787,25 @@ const readCursor = async (context: DepositContext, root: string, result: Deposit
   }
 };
 
+/**
+ * The log's lines, a chunk at a time: the log can pass the longest string Node can hold (536,870,888 characters), so it is never one string.
+ * It splits on the newline alone, not through `readline`, which also ends a line at U+2028 and U+2029: `JSON.stringify` leaves those raw inside a
+ * value. A missing log has no lines, and a last line with no newline is yielded as it stands, for the reader to parse or skip.
+ */
+const logLines = async function* (file: string): AsyncGenerator<string> {
+  let rest = '';
+  try {
+    for await (const chunk of createReadStream(file, { encoding: 'utf8', highWaterMark: 1 << 20 })) {
+      const lines = (rest + String(chunk)).split('\n');
+      rest = lines.pop() ?? '';
+      yield* lines;
+    }
+  } catch (error) {
+    if (!isMissing(error)) throw error;
+  }
+  yield rest;
+};
+
 /** What an earlier deposit logged about each transcript. */
 interface LoggedSessions {
   /** Each subagent transcript's origin, since its `.meta.json` is not archived. */
@@ -783,13 +817,7 @@ interface LoggedSessions {
 const loggedSessions = async (storeDir: string): Promise<LoggedSessions> => {
   const origins = new Map<string, SubagentOrigin>();
   const repoSizes = new Map<string, RepoSize | null>();
-  let text = '';
-  try {
-    text = await readFile(paths(storeDir).observations, 'utf8');
-  } catch (error) {
-    if (!isMissing(error)) throw error;
-  }
-  for (const line of text.split('\n')) {
+  for await (const line of logLines(paths(storeDir).observations)) {
     if (!line.includes('"kind":"session"')) continue;
     try {
       const parsed: unknown = JSON.parse(line);
@@ -968,23 +996,10 @@ interface Captured {
  * (EXTRACTOR_VERSION rules); a session whose last deposit was version 2 keeps the prompt and error lines that deposit wrote.
  */
 export const loadStore = async (storeDir: string): Promise<Store> => {
-  let text = '';
-  try {
-    text = await readFile(paths(storeDir).observations, 'utf8');
-  } catch (error) {
-    if (!isMissing(error)) throw error;
-  }
   const all: Observation[] = [];
   const latest = new Map<string, number>();
-  for (const line of text.split('\n')) {
-    if (line === '') continue;
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(line);
-    } catch {
-      continue;
-    }
-    const observation = asObservation(parsed);
+  for await (const line of logLines(paths(storeDir).observations)) {
+    const observation = observationOf(line);
     if (observation === undefined) continue;
     all.push(observation);
     latest.set(observation.session, Math.max(latest.get(observation.session) ?? 0, observation.rev));
@@ -1050,8 +1065,88 @@ const agentErrors = (store: Store, agents: readonly (SessionCapture & { parent: 
   return errors;
 };
 
+/** How long a compaction waits for a reader to let go of the log; Windows refuses to rename over a file another process has open. */
+const LOG_RENAME_WAIT_MS = 30_000;
+
+const renameWhenFree = async (from: string, to: string, waitMs: number): Promise<void> => {
+  const started = Date.now();
+  for (;;) {
+    try {
+      await rename(from, to);
+      return;
+    } catch (error) {
+      if (!isCode(error, 'EPERM', 'EACCES', 'EBUSY') || Date.now() - started >= waitMs) throw error;
+      await sleep(100);
+    }
+  }
+};
+
+/** Writes to `temp` every line of the log but the superseded ones and blanks, flushed to disk so a rename can never expose an unwritten file. */
+const writeLive = async (file: string, temp: string, latest: ReadonlyMap<string, number>): Promise<void> => {
+  const out = await open(temp, 'w', 0o600);
+  try {
+    let batch = '';
+    for await (const line of logLines(file)) {
+      if (line === '') continue;
+      const observation = observationOf(line);
+      if (observation !== undefined && observation.rev !== latest.get(observation.session)) continue;
+      batch += `${line}\n`;
+      if (batch.length < 1 << 20) continue;
+      await out.appendFile(batch);
+      batch = '';
+    }
+    await out.appendFile(batch);
+    await out.sync();
+  } finally {
+    await out.close();
+  }
+};
+
+/**
+ * Drops the superseded revs from the log, so a re-capture does not leave a full copy of every session behind. The caller holds the store lock,
+ * the same one every append takes. Only a line a higher rev of its session replaces goes: a line this version cannot read stays, since a later
+ * oars may read it, and a kept line is written back byte for byte. A crash before the rename leaves the old log whole and a temp file that no
+ * reader opens and the next compaction removes. Throws, with the log as it was, when the rewrite cannot finish.
+ */
+export const compactLog = async (storeDir: string, renameWaitMs = LOG_RENAME_WAIT_MS): Promise<void> => {
+  const file = paths(storeDir).observations;
+  // Under the lock no other compaction is running, so any temp file here is one a crash left.
+  for (const entry of await listDir(storeDir)) {
+    if (entry.name.startsWith(`${basename(file)}.`) && entry.name.endsWith('.tmp')) await rm(join(storeDir, entry.name), { force: true });
+  }
+  const size = await stat(file).then((info) => info.size, () => 0);
+  const latest = new Map<string, number>();
+  let superseded = false;
+  for await (const line of logLines(file)) {
+    const observation = observationOf(line);
+    if (observation === undefined) continue;
+    const seen = latest.get(observation.session);
+    superseded ||= seen !== undefined && seen !== observation.rev;
+    latest.set(observation.session, Math.max(seen ?? 0, observation.rev));
+  }
+  if (!superseded) return;
+  const temp = `${file}.${String(process.pid)}.tmp`;
+  try {
+    await writeLive(file, temp, latest);
+    // The lock holds appends off, so this fires only when a waiter broke the lock (say across a sleeping laptop): the temp file lacks what it wrote.
+    if ((await stat(file)).size !== size) throw new Error('the log changed while it was being rewritten');
+    await renameWhenFree(temp, file, renameWaitMs);
+  } finally {
+    await rm(temp, { force: true });
+  }
+};
+
 /** A capture record this code derives from: version 3 (upgraded on read) through the current one, and newer ones for the fields known here. */
 const isReadable = (cv: string): boolean => Number(cv) >= OLDEST_READABLE_CAPTURE;
+
+/** A log line as a record, or undefined when a reader skips it: a blank, torn, or unparsable line, or one of no known shape. */
+const observationOf = (line: string): Observation | undefined => {
+  try {
+    return asObservation(JSON.parse(line));
+  } catch {
+    return undefined;
+  }
+};
 
 // The store is ours, so a line with a known `kind`, a session, and a rev is trusted as the type it says.
 const asObservation = (value: unknown): Observation | undefined => {
