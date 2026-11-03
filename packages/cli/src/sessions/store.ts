@@ -183,7 +183,7 @@ export const readSaved = async (storeDir: string): Promise<{ allow: string[]; re
   return { allow, redactDomains };
 };
 
-const writeAtomic = async (file: string, text: string): Promise<void> => {
+export const writeAtomic = async (file: string, text: string): Promise<void> => {
   await mkdir(join(file, '..'), { recursive: true });
   const temp = `${file}.${String(process.pid)}.tmp`;
   await writeFile(temp, text, { mode: 0o600 });

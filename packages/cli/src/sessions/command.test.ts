@@ -4,6 +4,9 @@ import { ExitCode } from '../errors.js';
 import { harness, removeTestDirs } from '../test-support.js';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { tools } from './order-fixture.js';
+import { frame, prompt, session } from './pool-fixture.js';
+import { nextDay } from './read-day-move.js';
 import type { Source } from './sources.js';
 import { addProject, cleanup, composers, FIXTURES, folders, rolloutLine, stage, stageCodex, stageCursor, stageRawCursor } from './test-support.js';
 
@@ -113,6 +116,92 @@ describe('oars sessions', () => {
     expect(await run(['sessions', 'verify', '--session', 'tldr'], deps)).toBe(ExitCode.OK);
     expect(out.join('')).toContain('1 skeletons checked');
     expect(await run(['sessions', 'verify', '--strict'], deps)).toBe(ExitCode.OK);
+  });
+
+  it('read serves every family from the deposited store, each row stating clusters: 1, with no floor on one session', async () => {
+    const { deps, out, staged } = setup();
+    expect(await run(['sessions', 'deposit', '--allow', 'proj'], deps)).toBe(ExitCode.OK);
+    out.length = 0;
+    expect(await run(['sessions', 'read'], deps)).toBe(ExitCode.OK);
+    const text = out.join('');
+    const rows = text.split('\n').filter((line) => line.startsWith('  n='));
+    expect(rows.length).toBeGreaterThan(0);
+    expect(rows.every((row) => row.includes('clusters: 1'))).toBe(true);
+    expect(text).toContain('fit (');
+    expect(text).toContain('cost (');
+    expect(text).not.toContain(staged.storeDir);
+    out.length = 0;
+    expect(await run(['--json', 'sessions', 'read', '--family', 'cost'], deps)).toBe(ExitCode.OK);
+    const document = json(out);
+    const reads = field(document, 'reads');
+    expect(Array.isArray(reads) && reads.length > 0 && reads.every((read: { family: string; clusters: number; order: number }) => read.family === 'cost' && read.clusters === 1 && read.order === 1)).toBe(true);
+    expect(typeof field(document, 'pool')).toBe('string');
+    expect(field(document, 'newerCaptures')).toBe(0);
+    out.length = 0;
+    expect(await run(['sessions', 'read', '--family', 'cost', '--slice', 'class=no-such-class'], deps)).toBe(ExitCode.OK);
+    expect(out.join('')).toContain('No reads match.');
+  });
+
+  it('read serves orders 2 and 3 with their order shown, labels the experiment, and says what this store cannot read', async () => {
+    const { deps, out, staged } = setup();
+    // 45 days on four tools, with Read taking over at a version boundary halfway and failures varying by day.
+    let day = '2026-08-01';
+    const rows: unknown[] = [session('s1')];
+    for (let index = 0; index < 45; index += 1) {
+      const later = index >= 22;
+      rows.push(prompt('s1', index, { frame: frame({ harnessVersion: later ? '2.1.312' : '2.1.305', day }) }));
+      rows.push(...tools('s1', index, [{ name: 'Read', count: later ? 400 : 100 }], (index * 7) % 30), ...tools('s1', index, [{ name: 'Edit', count: 100 }], (index * 11) % 30));
+      rows.push(...tools('s1', index, [{ name: 'Bash', count: 100 }], (index * 13) % 30), ...tools('s1', index, [{ name: 'Write', count: 100 }], (index * 17) % 30));
+      day = nextDay(day);
+    }
+    mkdirSync(staged.storeDir, { recursive: true });
+    writeFileSync(join(staged.storeDir, 'observations.jsonl'), rows.map((row) => `${JSON.stringify(row)}\n`).join(''));
+
+    expect(await run(['sessions', 'read', '--family', 'version-boundary'], deps)).toBe(ExitCode.OK);
+    expect(out.join('')).toContain('version-boundary (');
+    expect(out.join('')).toContain('order=2');
+    expect(out.join('')).toContain('clusters: 1');
+    expect(out.join('')).toContain('Not readable on this store:');
+    expect(out.join('')).toContain('a model version boundary');
+
+    out.length = 0;
+    expect(await run(['sessions', 'read', '--family', 'lead-lag'], deps)).toBe(ExitCode.OK);
+    expect(out.join('')).toContain('experimental: fit on earlier days');
+    expect(out.join('')).toContain('order=3');
+    expect(out.join('')).not.toContain('Not readable on this store:');
+
+    out.length = 0;
+    expect(await run(['--json', 'sessions', 'read', '--family', 'interaction'], deps)).toBe(ExitCode.OK);
+    const document = json(out);
+    expect(field(document, 'reads')).toEqual([]);
+    expect(field(document, 'notReadable')).toEqual([expect.objectContaining({ family: 'interaction' })]);
+  });
+
+  it('read leaves the capture log as it was, and a second read cites the same reads', async () => {
+    const { deps, out, staged } = setup();
+    expect(await run(['sessions', 'deposit', '--allow', 'proj'], deps)).toBe(ExitCode.OK);
+    const log = readFileSync(join(staged.storeDir, 'observations.jsonl'));
+    out.length = 0;
+    expect(await run(['--json', 'sessions', 'read'], deps)).toBe(ExitCode.OK);
+    const first = field(json(out), 'reads');
+    out.length = 0;
+    expect(await run(['--json', 'sessions', 'read'], deps)).toBe(ExitCode.OK);
+    expect(field(json(out), 'reads')).toEqual(first);
+    expect(readFileSync(join(staged.storeDir, 'observations.jsonl')).equals(log)).toBe(true);
+  });
+
+  it('read refuses an unknown family and a malformed slice (exit 2), and logs its own step, not a recall', async () => {
+    const { deps, out, err } = setup();
+    expect(await run(['sessions', 'read', '--family', 'nope'], deps)).toBe(ExitCode.USAGE);
+    expect(err.join('')).toContain('next-step');
+    err.length = 0;
+    expect(await run(['sessions', 'read', '--slice', 'model'], deps)).toBe(ExitCode.USAGE);
+    expect(err.join('')).toContain('<axis>=<value>');
+    expect(await run(['sessions', 'deposit', '--allow', 'proj'], deps)).toBe(ExitCode.OK);
+    expect(await run(['sessions', 'read'], deps)).toBe(ExitCode.OK);
+    out.length = 0;
+    expect(await run(['--json', 'sessions', 'measure', '--last', '2'], deps)).toBe(ExitCode.OK);
+    expect(field(field(json(out), 'steps'), 'recall')).toMatchObject({ queries: 0 });
   });
 
   it('verify --strict exits 4 after printing when a skeleton has an exception, and plain verify still exits 0', async () => {
