@@ -43,6 +43,15 @@ describe('skippedFolders', () => {
     expect(await skippedFolders(staged.runtime)).toEqual({ folders: 0, transcripts: 0, names: [] });
   });
 
+  it('names a folder that holds only subagent transcripts, and counts no main transcript for it', async () => {
+    const staged = stage();
+    const subagents = join(staged.projectsRoot, 'delta-app', 'sess-one', 'subagents');
+    mkdirSync(subagents, { recursive: true });
+    writeFileSync(join(subagents, 'agent-a.jsonl'), `${LINE}\n`);
+    await deposit(staged.runtime, { allow: ['proj'], redactDomains: [], now: () => NOW });
+    expect(await skippedFolders(staged.runtime)).toEqual({ folders: 1, transcripts: 0, names: ['delta-app'] });
+  });
+
   it('is empty when the projects root is missing', async () => {
     const staged = stage();
     expect(await skippedFolders({ ...staged.runtime, projectsRoot: join(staged.root, 'absent') })).toEqual({ folders: 0, transcripts: 0, names: [] });
