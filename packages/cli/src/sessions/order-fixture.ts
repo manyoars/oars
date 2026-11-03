@@ -1,7 +1,6 @@
 // What the tests above order 1 share: tool calls in bulk, and the order 1 reads of a fixture store, so a test plants counts and reads relations.
-import { deriveCells, poolOf } from './cells.js';
 import { deriveFirstOrder } from './pool.js';
-import { tool } from './pool-fixture.js';
+import { poolFrom, tool } from './pool-fixture.js';
 import { makeRead, orderResolver, type Read } from './read.js';
 import type { ReadBody } from './read-support.js';
 import type { ToolObservation } from './schema.js';
@@ -18,7 +17,7 @@ export const tools = (session: string, promptIndex: number, calls: readonly { na
     }),
   );
 
-export const firstOrderOf = (from: Store): Read[] => deriveFirstOrder(poolOf(deriveCells(from)), from);
+export const firstOrderOf = (from: Store): Read[] => deriveFirstOrder(poolFrom(from), from);
 
 /** Family bodies as reads over `known`, for a test that goes one order up by hand. */
 export const readsOver = (bodies: readonly ReadBody[], known: readonly Read[]): Read[] => {

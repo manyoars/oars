@@ -22,12 +22,30 @@ export const contentHash = (value: unknown): string => createHash('sha256').upda
 export const FIRST_ORDER_FAMILIES = ['recovery', 'fit', 'cost', 'change', 'live', 'adoption', 'method', 'next-step', 'tool-day'] as const;
 export type FirstOrderFamily = (typeof FIRST_ORDER_FAMILIES)[number];
 
-/** What `poolOf` hashes for these families: bump it when a family or a method changes, or a stored file for this pool hides the change. */
-export const READS_VERSION = '3';
-
 /** Families that read other reads, lowest order first. `lead-lag` is the labeled experiment (spec Section 6). */
 export const FAMILIES = [...FIRST_ORDER_FAMILIES, 'version-boundary', 'substitution', 'interaction', 'day-move', 'lead-lag'] as const;
 export type Family = (typeof FAMILIES)[number];
+
+/**
+ * Each family's method and its version. A rule change bumps its version here, and the pool's version hashes this table, so a stored file of the old rule is not served.
+ * It lives here and not beside each family because the pool hash needs it, and a family module imports the cells the hash is in.
+ */
+export const METHODS: { readonly [family in Family]: { readonly name: string; readonly version: string } } = {
+  recovery: { name: 'signature-record', version: '1' },
+  fit: { name: 'failure-rate', version: '1' },
+  cost: { name: 'per-prompt-by-class', version: '1' },
+  change: { name: 'share-in-version-bucket', version: '1' },
+  live: { name: 'day-against-trailing-week', version: '1' },
+  adoption: { name: 'share-and-span', version: '1' },
+  method: { name: 'shape-share-by-model', version: '1' },
+  'next-step': { name: 'next-action-counts', version: '1' },
+  'tool-day': { name: 'rates-on-day', version: '1' },
+  'version-boundary': { name: 'move-between-buckets', version: '1' },
+  substitution: { name: 'rise-against-fall', version: '1' },
+  interaction: { name: 'failure-gap-across-tier-assigned', version: '1' },
+  'day-move': { name: 'move-to-next-day', version: '2' },
+  'lead-lag': { name: 'failure-move-leads-share-move', version: '1' },
+};
 
 /** `all`, or `unexposed`: only steps outside any recall's consequence window, so a read cannot mistake the pool's influence for the world. */
 export type ReadBasis = 'all' | 'unexposed';
@@ -100,6 +118,20 @@ export const readIdOf = (read: Omit<Read, 'readId'>): string => {
   return `${READ_PREFIX}${contentHash({ family, method, methodVersion, inputs, order, slice, value, n, clusters, interval, asOf, basis })}`;
 };
 
+const deepFreeze = (value: unknown): void => {
+  if (typeof value !== 'object' || value === null) return;
+  Object.values(value).forEach((entry: unknown) => {
+    deepFreeze(entry);
+  });
+  Object.freeze(value);
+};
+
+/** A read's ID pins every field down to the last count, so none of them may change below the top either. */
+export const frozenRead = (read: Read): Read => {
+  deepFreeze(read);
+  return read;
+};
+
 /** The one way a read comes to exist. It refuses a read that cites nothing or cites what it cannot place, since either would have no lineage. */
 export const makeRead = (draft: ReadDraft, orderOf: OrderResolver): Read => {
   const inputs = [...new Set(draft.inputs)].sort();
@@ -111,5 +143,5 @@ export const makeRead = (draft: ReadDraft, orderOf: OrderResolver): Read => {
     highest = Math.max(highest, order);
   }
   const body = { ...draft, inputs, order: 1 + highest };
-  return Object.freeze({ readId: readIdOf(body), ...body });
+  return frozenRead({ readId: readIdOf(body), ...body });
 };

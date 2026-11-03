@@ -89,7 +89,7 @@ const shareCandidate = (boundary: Boundary, key: string): Candidate | undefined 
   const later = shareIn(boundary.to, key);
   if (earlier === undefined || later === undefined) return undefined;
   const move = differenceOf(later.share, earlier.share);
-  return candidateOf('version-boundary', 'share-move', '1', [earlier.read, later.read], [move], {
+  return candidateOf('version-boundary', [earlier.read, later.read], [move], {
     slice: slicesOf(boundary, key, 'share'),
     value: movement(boundary, move, earlier.share.value, later.share.value),
     interval: move.interval,
@@ -111,7 +111,7 @@ const failureCandidate = (boundary: Boundary, key: string): Candidate | undefine
   const later = failureOf(laterRead);
   if (earlierRead === undefined || laterRead === undefined || earlier === undefined || later === undefined) return undefined;
   const move = differenceOf(later, earlier);
-  return candidateOf('version-boundary', 'failure-move', '1', [earlierRead, laterRead], [move], {
+  return candidateOf('version-boundary', [earlierRead, laterRead], [move], {
     slice: slicesOf(boundary, key, 'failureRate'),
     value: movement(boundary, move, earlier.value, later.value),
     interval: move.interval,

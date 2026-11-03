@@ -46,7 +46,7 @@ const candidateFor = (a: Tier, b: Tier, key: string, scope: { harness: string; h
   const restGap = differenceOf(restA, restB);
   const interaction = differenceOf(gap, restGap);
   const [level = UNKNOWN, motif = UNKNOWN] = key.split('\n');
-  return candidateOf('interaction', 'failure-gap-across-tier-assigned', '1', [readA, readB], [gap, interaction], {
+  return candidateOf('interaction', [readA, readB], [gap, interaction], {
     slice: { motif, level, ...scope, tierA: a.model, tierB: b.model },
     value: { failureA: failureA.value, failureB: failureB.value, gap: gap.value, restGap: restGap.value, interaction: interaction.value },
     interval: interaction.interval,

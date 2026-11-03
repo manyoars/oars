@@ -26,6 +26,7 @@ export const session = (id: string, over: Partial<SessionObservation> = {}): Ses
   parent: null,
   agentType: null,
   spawnedBy: null,
+  spawnedIn: null,
   rev: 1,
   at: '2026-11-01T00:00:00.000Z',
   bytes: 0,
@@ -141,4 +142,4 @@ export const error = (id: string, sig: string, over: Partial<ErrorObservation> =
 });
 
 /** The pool of a fixture store, for a family test to hand its deriver. */
-export const poolFrom = (from: Store): Pool => poolOf(deriveCells(from));
+export const poolFrom = (from: Store): Pool => poolOf(deriveCells(from), from.errors);

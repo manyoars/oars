@@ -1,8 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { deriveCells, poolOf } from './cells.js';
 import { tools } from './order-fixture.js';
 import { deriveReads } from './pool.js';
-import { frame, prompt, session, store } from './pool-fixture.js';
+import { frame, poolFrom, prompt, session, store } from './pool-fixture.js';
 import { nextDay } from './read-day-move.js';
 import { deriveLeadLag, leadLagPairs, PAIRS_FLOOR } from './read-lead-lag.js';
 import { makeRead, type Read } from './read.js';
@@ -146,7 +145,7 @@ const daily = (days: number, countOf: (tool: number, day: number) => number, fai
 const DAYS = 45;
 
 /** The check as the pool states it: the real families all the way up, so a store with no read has no check to pass. */
-const checkOf = (from: Store): unknown => deriveReads(poolOf(deriveCells(from)), from).find((read) => read.family === 'lead-lag')?.value.check;
+const checkOf = (from: Store): unknown => deriveReads(poolFrom(from), from).find((read) => read.family === 'lead-lag')?.value.check;
 
 const drawn = (seed: number): number[][] => {
   const draw = noise(seed);
@@ -159,11 +158,11 @@ describe('lead-lag over the real families', () => {
   it('keeps a pair whose tool then fell away, because a lag selected on the tool still being called would hide the drop it asks about', () => {
     const counts = [[100, 100, 100, 5], [100, 100, 100, 100], [0, 0, 0, 0], [0, 0, 0, 0]];
     const from = daily(4, (tool, day) => counts[tool]?.[day] ?? 0, () => 0);
-    const reads = deriveReads(poolOf(deriveCells(from)), from);
+    const reads = deriveReads(poolFrom(from), from);
     const pairs = leadLagPairs(reads).filter(({ reads: [lead] }) => lead.slice.motif === 'file.read');
     expect(pairs.map(({ y, day }) => [y.value, day])).toEqual([[-0.4524, dayAt(3)]]);
     const gone = daily(4, (tool, day) => (tool === 0 && day === 3 ? 0 : counts[tool]?.[day] ?? 0), () => 0);
-    const after = leadLagPairs(deriveReads(poolOf(deriveCells(gone)), gone)).filter(({ reads: [lead] }) => lead.slice.motif === 'file.read');
+    const after = leadLagPairs(deriveReads(poolFrom(gone), gone)).filter(({ reads: [lead] }) => lead.slice.motif === 'file.read');
     expect(after.map(({ y }) => y.value)).toEqual([-0.5]);
   });
 
@@ -171,7 +170,7 @@ describe('lead-lag over the real families', () => {
     const rolls = drawn(3);
     const failed = (tool: number, day: number) => Math.floor(at(rolls, tool, day) * 90);
     const from = daily(DAYS, (tool, day) => 400 - 3 * failed(tool, Math.max(day - 2, 0)), failed);
-    const reads = deriveReads(poolOf(deriveCells(from)), from);
+    const reads = deriveReads(poolFrom(from), from);
     const [read] = reads.filter((one) => one.family === 'lead-lag');
     expect(read?.order).toBe(3);
     expect(read?.value.check).toBe('passed');

@@ -1,12 +1,10 @@
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
-import { cellIdOf, deriveCells, poolOf } from './cells.js';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { CliError } from '../errors.js';
 import { poolFiles, refreshPool } from './pool.js';
-import { prompt, session, store, tool } from './pool-fixture.js';
-import { contentHash, READS_VERSION } from './read.js';
-import { EXTRACTOR_VERSION } from './schema.js';
+import { error, prompt, session, step, store, tool } from './pool-fixture.js';
 
 const dirs: string[] = [];
 const storeDir = (): string => {
@@ -38,7 +36,28 @@ describe('refreshPool', () => {
     expect(readFileSync(files.motifs, 'utf8')).toBe(motifs);
   });
 
-  it('derives again over a file that holds no reads, and does not swallow an unreadable one', async () => {
+  it('writes byte-identical motifs from a reversed store, holding only action and identity per step', async () => {
+    const git = { program: 'git', sub: 'status', flags: [] };
+    const call = (id: string, status: 'ok' | 'error', tokens: number, durationMs: number) =>
+      tool(id, 0, 'Bash', { status, steps: [step(0, 0, 'shell.exec', { identity: git, status, cost: { tokens, durationMs } })] });
+    const forward = store({ sessions: [session('s1'), session('s2')], prompts: [prompt('s1', 0), prompt('s2', 0)], tools: [call('s1', 'ok', 7, 111), call('s2', 'error', 9, 222)] });
+    const reversed = store({ ...forward, sessions: [...forward.sessions].reverse(), prompts: [...forward.prompts].reverse(), tools: [...forward.tools].reverse() });
+    // A fresh module per run: the motif memo lives as long as the module, so one process would otherwise show one run's first window twice.
+    const motifsFrom = async (from: typeof forward): Promise<string> => {
+      vi.resetModules();
+      const fresh = await import('./pool.js');
+      const dir = storeDir();
+      await fresh.refreshPool(dir, from);
+      return readFileSync(poolFiles(dir).motifs, 'utf8');
+    };
+    const one = await motifsFrom(forward);
+    expect(await motifsFrom(reversed)).toBe(one);
+    const steps = one.trim().split('\n').flatMap((line) => (JSON.parse(line) as { steps: object[] }).steps);
+    expect(steps.length).toBeGreaterThan(0);
+    for (const held of steps) expect(Object.keys(held).sort()).toEqual(['action', 'identity']);
+  });
+
+  it('derives again over a file that holds no reads, and tells the operator to delete one that is not JSON', async () => {
     const dir = storeDir();
     const first = await refreshPool(dir, one);
     const file = poolFiles(dir).reads(first.pool.version);
@@ -47,13 +66,30 @@ describe('refreshPool', () => {
     expect((await refreshPool(dir, one)).reads).toEqual(first.reads);
     expect(readFileSync(file, 'utf8')).toBe(text);
     writeFileSync(file, 'not json\n');
-    await expect(refreshPool(dir, one)).rejects.toThrow();
+    const refused = refreshPool(dir, one);
+    await expect(refused).rejects.toBeInstanceOf(CliError);
+    await expect(refused).rejects.toThrow(file);
+    await expect(refused).rejects.toThrow(/[Dd]elete/);
+    expect(readFileSync(file, 'utf8')).toBe('not json\n');
   });
 
-  it('pins the pool to the families that read it, so a family added later is not hidden by a file written before it', () => {
-    const from = store({ sessions: [session('s1')], prompts: [prompt('s1', 0)], tools: [tool('s1', 1, 'Read')] });
-    const set = deriveCells(from);
-    expect(poolOf(set).version).toBe(contentHash([EXTRACTOR_VERSION, READS_VERSION, set.cells.map(cellIdOf)]));
+  it('derives again when only the error rows recovery reads have changed', async () => {
+    const dir = storeDir();
+    const failing = { ...one, tools: [tool('s1', 0, 'Read', { status: 'error' }), tool('s1', 1, 'Edit')] };
+    const first = await refreshPool(dir, { ...failing, errors: [error('s1', 'sig-a', { toolUseId: 'c0' })] });
+    const later = await refreshPool(dir, { ...failing, errors: [error('s1', 'sig-a', { toolUseId: 'c0' }), error('s1', 'sig-a', { toolUseId: 'c1' })] });
+    expect(later.pool.version).not.toBe(first.pool.version);
+    const errorsOf = (reads: typeof first.reads) => reads.find((read) => read.family === 'recovery')?.value['errors'];
+    expect(errorsOf(first.reads)).toBe(1);
+    expect(errorsOf(later.reads)).toBe(2);
+  });
+
+  it('serves a stored read as frozen as a derived one', async () => {
+    const dir = storeDir();
+    await refreshPool(dir, one);
+    const [read] = (await refreshPool(dir, one)).reads;
+    expect(read !== undefined && Object.isFrozen(read)).toBe(true);
+    expect(read !== undefined && Object.isFrozen(read.value)).toBe(true);
   });
 
   it('keeps a pool version file as first written, and gives new data a new file', async () => {

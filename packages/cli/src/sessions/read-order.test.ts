@@ -77,7 +77,7 @@ describe('relate', () => {
   const fields = { slice: { motif: 'a' }, value: { move: 0.1 }, interval: span(0.05, 0.15) };
 
   it('states the weakest side: the fewest trials and the fewest clusters', () => {
-    const body = relate('version-boundary', 'share-move', '1', [firstOrder('a', { value: { share: 0.5, of: 200 } }), firstOrder('b', { clusters: 3, value: { share: 0.5, of: 90 } })], fields);
+    const body = relate('version-boundary', [firstOrder('a', { value: { share: 0.5, of: 200 } }), firstOrder('b', { clusters: 3, value: { share: 0.5, of: 90 } })], fields);
     expect(body?.n).toBe(90);
     expect(body?.clusters).toBe(1);
     expect(body?.basis).toBe('all');
@@ -85,23 +85,23 @@ describe('relate', () => {
   });
 
   it('takes n from the caller when its observations are not its inputs, as a slope over pairs is', () => {
-    expect(relate('lead-lag', 'slope', '1', [firstOrder('a')], { ...fields, n: 44 })?.n).toBe(44);
+    expect(relate('lead-lag', [firstOrder('a')], { ...fields, n: 44 })?.n).toBe(44);
   });
 
   it('does not exist below the floor', () => {
     const under = firstOrder('b', { value: { share: 0.5, of: TRIALS_FLOOR - 1 } });
-    expect(relate('version-boundary', 'share-move', '1', [firstOrder('a'), under], fields)).toBeUndefined();
+    expect(relate('version-boundary', [firstOrder('a'), under], fields)).toBeUndefined();
     const at = firstOrder('b', { value: { share: 0.5, of: TRIALS_FLOOR } });
-    expect(relate('version-boundary', 'share-move', '1', [firstOrder('a'), at], fields)).toBeDefined();
+    expect(relate('version-boundary', [firstOrder('a'), at], fields)).toBeDefined();
   });
 
   it('does not exist when an input has no interval to propagate', () => {
-    expect(relate('version-boundary', 'share-move', '1', [firstOrder('a'), firstOrder('b', { interval: null })], fields)).toBeUndefined();
+    expect(relate('version-boundary', [firstOrder('a'), firstOrder('b', { interval: null })], fields)).toBeUndefined();
   });
 
   it('cites what it reads besides its measured inputs without holding those to the floor', () => {
     const cited = firstOrder('b', { interval: null, value: { failureRate: 0 }, n: 1 });
-    const body = relate('interaction', 'gap', '1', [firstOrder('a')], { ...fields, cites: [cited] });
+    const body = relate('interaction', [firstOrder('a')], { ...fields, cites: [cited] });
     expect(body?.inputs).toContain(cited.readId);
     expect(body?.n).toBe(100);
   });
@@ -121,7 +121,7 @@ describe('a chain of orders 1 to 3', () => {
     const b = estimateOf(earlier, 'share') ?? estimateOf(earlier, 'move');
     if (a === undefined || b === undefined) return undefined;
     const { value, interval } = differenceOf(a, b);
-    const body = relate('version-boundary', 'move', '1', [later, earlier], { slice: {}, value: { move: value }, interval });
+    const body = relate('version-boundary', [later, earlier], { slice: {}, value: { move: value }, interval });
     return body === undefined ? undefined : makeRead({ ...body, asOf: ASOF }, orderResolver(known));
   };
 
