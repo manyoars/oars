@@ -1,16 +1,15 @@
 // The label arms beside the gold set (t748): what the acting session said, and what fresh single-turn readers say, each kept apart in the sidecar and
 // never shown in the gold file. An arm is an observation to score against human judgments, never a label by itself (A31). The readers run through the
-// operator's own `claude` login, so a run is local and bills the subscription; the guards below refuse anything else rather than spend.
+// operator's own `claude` login, so a run bills the subscription and sends only redacted text; the guards below refuse anything else rather than spend.
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { rename, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
 import type { Readable, Writable } from 'node:stream';
 import { CliError, ExitCode } from '../errors.js';
 import { INTERRUPT_MARKER } from './derive.js';
 import { cut } from './extract.js';
-import { isObj, readIfThere, readTurns, renderShown, viewOf, type GoldAnswer, type GoldAskedArm, type GoldDocument, type GoldEntry, type GoldEvaluators, type GoldReads, type Turn } from './gold.js';
+import { isObj, readTranscript, readTurns, renderShown, viewOf, type GoldAnswer, type GoldAskedArm, type GoldDocument, type GoldEntry, type GoldEvaluators, type GoldReads, type Obj, type Turn } from './gold.js';
 import type { Redactor } from './redact.js';
 import { paths, type SessionsRuntime } from './store.js';
 
@@ -88,7 +87,7 @@ export const runClaude = (args: readonly string[], { stdin, env }: Parameters<Cl
 /** Any of these would route a call away from the subscription login. */
 const PAID_ROUTES = ['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_BASE_URL', 'CLAUDE_CODE_USE_BEDROCK', 'CLAUDE_CODE_USE_VERTEX', 'CLAUDE_CODE_USE_FOUNDRY'];
 
-const jsonLines = (stdout: string): Array<{ [key: string]: unknown }> =>
+const jsonLines = (stdout: string): Obj[] =>
   stdout.split('\n').flatMap((raw) => {
     try {
       const value: unknown = JSON.parse(raw);
@@ -189,7 +188,7 @@ export const fillArms = async (runtime: SessionsRuntime, document: GoldDocument,
   let changed = 0;
   for (const entry of document.entries) {
     if (entry.reads !== undefined) continue;
-    const text = (await readIfThere(join(roots[0] ?? '', entry.project, `${entry.session}.jsonl`))) ?? (await readIfThere(join(roots[1] ?? '', entry.project, `${entry.session}.jsonl`)));
+    const text = await readTranscript(roots, entry.project, entry.session);
     const turns = text === undefined ? [] : readTurns(text);
     // The same check the draw makes: if this view is no longer what the judge saw, the replies would describe another turn.
     if (renderShown(viewOf(turns, entry.index, redact)) === entry.shown) entry.reads = readsOf(turns, entry.index, redact);

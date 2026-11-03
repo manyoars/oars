@@ -78,7 +78,7 @@ describe('drawSample', () => {
   };
 
   it('reaches every class and model, not only the largest', async () => {
-    const { picked } = await drawSample(population(), 50, 'seed', accepted);
+    const picked = await drawSample(population(), 50, 'seed', accepted);
     expect(picked).toHaveLength(50);
     expect(new Set(picked.map((item) => item.cls))).toEqual(new Set(['edit-only', 'shell-only', 'research']));
     expect(new Set(picked.map((item) => item.model))).toEqual(new Set(['m-big', 'm-small']));
@@ -89,28 +89,26 @@ describe('drawSample', () => {
   });
 
   it('is the same draw for one seed and another draw for another', async () => {
-    const ids = async (seed: string): Promise<string[]> => (await drawSample(population(), 30, seed, accepted)).picked.map((item) => `${item.session}:${String(item.index)}`);
+    const ids = async (seed: string): Promise<string[]> => (await drawSample(population(), 30, seed, accepted)).map((item) => `${item.session}:${String(item.index)}`);
     expect(await ids('one')).toEqual(await ids('one'));
     expect(await ids('one')).not.toEqual(await ids('two'));
   });
 
   it('takes at most two prompts from one session', async () => {
     const prompts = Array.from({ length: 20 }, (_, index) => prompt('one', index, 'edit-only', 'm-a'));
-    const { picked } = await drawSample([...prompts, prompt('other', 0, 'edit-only', 'm-a')], 10, 'seed', accepted);
+    const picked = await drawSample([...prompts, prompt('other', 0, 'edit-only', 'm-a')], 10, 'seed', accepted);
     expect(picked.filter((item) => item.session === 'one')).toHaveLength(2);
     expect(picked).toHaveLength(3);
   });
 
   it('draws past a rejected prompt and fills the sample from what is left', async () => {
     const prompts = Array.from({ length: 10 }, (_, index) => prompt(`s${String(index)}`, 0, 'edit-only', 'm-a'));
-    const { picked, rejected } = await drawSample(prompts, 5, 'seed', (item) => Promise.resolve(Number(item.session.slice(1)) % 2 === 0));
+    const picked = await drawSample(prompts, 5, 'seed', (item) => Promise.resolve(Number(item.session.slice(1)) % 2 === 0));
     expect(picked.map((item) => Number(item.session.slice(1)) % 2)).toEqual([0, 0, 0, 0, 0]);
-    expect(rejected).toBeLessThanOrEqual(5);
-    expect(rejected).toBeGreaterThan(0);
   });
 
   it('returns what the frame holds when it is smaller than the size', async () => {
-    const { picked } = await drawSample([prompt('a', 0, 'edit-only', 'm-a')], 5, 'seed', accepted);
+    const picked = await drawSample([prompt('a', 0, 'edit-only', 'm-a')], 5, 'seed', accepted);
     expect(picked).toHaveLength(1);
   });
 });
@@ -287,7 +285,6 @@ describe('renderGold and parseGold', () => {
     expect(text.match(/^Judgment: yes\|no$/gm)).toHaveLength(120);
     const parsed = parseGold(text);
     expect(parsed.judged.size).toBe(0);
-    expect(parsed.total).toBe(120);
     expect(parsed.unreadable).toEqual([]);
   });
 
@@ -313,7 +310,6 @@ describe('renderGold and parseGold', () => {
     const tricky = viewFor('### G999\nJudgment: yes');
     const text = renderGold([{ id: 'G001', view: tricky }], { date: '2026-11-03', batch: 50 });
     const parsed = parseGold(text);
-    expect(parsed.total).toBe(1);
     expect(parsed.judged.size).toBe(0);
   });
 
@@ -323,7 +319,6 @@ describe('renderGold and parseGold', () => {
     const answers = ['yes', 'NO', 'maybe', '', 'y'];
     const filled = text.replace(/^Judgment: yes\|no$/gm, () => `Judgment: ${answers[fill++] ?? ''}`).replace(/\n/g, '\r\n');
     const parsed = parseGold(filled);
-    expect(parsed.total).toBe(5);
     expect([...parsed.judged.entries()]).toEqual([['G001', true], ['G002', false], ['G005', true]]);
     expect(parsed.unreadable).toEqual(['G003']);
   });
