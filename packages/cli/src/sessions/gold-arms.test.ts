@@ -310,6 +310,43 @@ describe('oars sessions gold arms', () => {
     expect(h.out.join('')).toMatch(/later\s+1 of 2/);
   });
 
+  it('reads the evaluator per model once judgments exist, and its AUROC follows the judgments', async () => {
+    const h = setup();
+    const { file, sidecar } = await sampled(h);
+    // The evaluator says yes to one prompt and no to the other.
+    h.staged.runtime.evaluator = answering((system, text) => (system === WORDINGS.evaluator && text.includes('two ask') ? 'no' : 'yes'));
+    expect(await run(['sessions', 'gold', 'arms', file], h.deps)).toBe(ExitCode.OK);
+    const entries = sidecarOf(sidecar).entries;
+    const idOf = (ask: string): string | undefined => entries.find((entry) => entry.shown.includes(ask))?.id;
+    const blank = readFileSync(file, 'utf8');
+    const filled = (one: string, two: string): string => {
+      let current: string | undefined;
+      return blank
+        .split('\n')
+        .map((text) => {
+          current = /^### (G[0-9]+)$/.exec(text)?.[1] ?? current;
+          if (text !== 'Judgment: yes|no') return text;
+          return `Judgment: ${current === idOf('one ask') ? one : two}`;
+        })
+        .join('\n');
+    };
+    const evaluatorRow = async (): Promise<RegExpMatchArray | null> => {
+      h.out.length = 0;
+      expect(await run(['sessions', 'gold', 'score', file], h.deps)).toBe(ExitCode.OK);
+      return h.out.join('').match(/^ +evaluator +([0-9]+) +([0-9]+) +[0-9]+% +([0-9.]+)/m);
+    };
+
+    // The judge agrees with the evaluator on both, so it ranks them perfectly.
+    writeFileSync(file, filled('yes', 'no'));
+    expect((await evaluatorRow())?.slice(1)).toEqual(['2', '1', '1.00']);
+    expect(h.out.join('')).toContain('Judged 2 of 2');
+    expect(h.out.join('')).toContain('m-a: 2 judged, base rate 50%');
+
+    // The judge disagrees on both, so it ranks them backward.
+    writeFileSync(file, filled('no', 'yes'));
+    expect((await evaluatorRow())?.slice(1)).toEqual(['2', '1', '0.00']);
+  });
+
   it('resumes: a rerun asks only what is left, and a failed call keeps what was saved and exits nonzero', async () => {
     const h = setup();
     const { file, sidecar } = await sampled(h);
