@@ -236,8 +236,8 @@ const buildProgram = (deps: RunDeps, argv: string[]): Command => {
   const purchasing = program
     .command('purchasing', { hidden: true })
     .description("set up an agent's purchasing: the card, the monthly cap, and what it bought")
-    .hook('preAction', async () => {
-      await requirePurchasingOpen(deps);
+    .hook('preAction', () => {
+      requirePurchasingOpen(deps);
     });
 
   purchasing

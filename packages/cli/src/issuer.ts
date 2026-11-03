@@ -61,7 +61,7 @@ const PURCHASING_CLOSED = 'Paid agents are not open yet, so `oars purchasing` is
  * is already true, so it cannot be the gate. Only `OARS_ISSUER_URL` (dev, staging, tests) opens it, with no network call.
  * t465's release removes this gate.
  */
-export const requirePurchasingOpen = async (deps: RunDeps): Promise<void> => {
+export const requirePurchasingOpen = (deps: RunDeps): void => {
   const fromEnv = deps.env.OARS_ISSUER_URL;
   if (fromEnv !== undefined && fromEnv !== '') return;
   throw new CliError(PURCHASING_CLOSED, ExitCode.USAGE, 'usage');
