@@ -461,3 +461,45 @@ describe('a version-3 store opened under version 4', () => {
     expect((await sessionsVerify({ sessions: staged.runtime, install: undefined, now: () => NOW }, { session: undefined })).text).not.toMatch(/newer oars/);
   });
 });
+
+describe('a cv-behind session whose transcript is gone (cv-frozen)', () => {
+  const options = { allow: ['proj'], redactDomains: [], now: () => NOW };
+  const behind = 'every session is captured at the current capture version (none is cv-behind)';
+
+  /** Rewrites the store as a version-4 oars left it: every captured record and state entry at 4. */
+  const atVersion4 = (storeDir: string): void => {
+    const file = paths(storeDir).observations;
+    const old = readFileSync(file, 'utf8').split('\n').filter((entry) => entry !== '').map((entry) => ({ ...parseObject(entry), cv: '4' }));
+    writeFileSync(file, old.map((record) => `${JSON.stringify(record)}\n`).join(''));
+    editState(storeDir, (entry) => {
+      Reflect.set(entry, 'v', '4');
+    });
+  };
+
+  it('passes --strict and is counted cv-frozen when neither the harness nor raw/ has the transcript', async () => {
+    const staged = stage();
+    await deposit(staged.runtime, options);
+    atVersion4(staged.storeDir);
+    rmSync(join(staged.projectsRoot, 'proj'), { recursive: true });
+    rmSync(join(paths(staged.storeDir).raw, 'proj'), { recursive: true });
+    const verified = await sessionsVerify({ sessions: staged.runtime, install: undefined, now: () => NOW }, { session: undefined });
+    expect(verified.failed).not.toContain(behind);
+    expect(verified.report.cvFrozen).toBe(4);
+    expect(verified.text).toMatch(/4 cv-frozen sessions/);
+    expect(verified.document).toMatchObject({ cvFrozen: 4 });
+  });
+
+  it('still fails --strict when the source exists: a harness transcript, or a raw/ copy', async () => {
+    const staged = stage();
+    await deposit(staged.runtime, options);
+    atVersion4(staged.storeDir);
+    const deps = { sessions: staged.runtime, install: undefined, now: () => NOW };
+    const fromHarness = await sessionsVerify(deps, { session: undefined });
+    expect(fromHarness.failed).toContain(behind);
+    expect(fromHarness.report.cvFrozen).toBe(0);
+    rmSync(join(staged.projectsRoot, 'proj'), { recursive: true });
+    const fromRaw = await sessionsVerify(deps, { session: undefined });
+    expect(fromRaw.failed).toContain(behind);
+    expect(fromRaw.report.cvFrozen).toBe(0);
+  });
+});

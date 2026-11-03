@@ -697,6 +697,30 @@ const loggedOrigins = async (storeDir: string): Promise<Map<string, SubagentOrig
   return origins;
 };
 
+/** The session id of a transcript's path under its project folder: `<id>.jsonl`, or `<parent>~<path>~agent-x` for a subagent transcript. */
+const sessionOfRelative = (relative: string): string => {
+  const parts = relative.split('/');
+  const agent = (parts[parts.length - 1] ?? '').slice(0, -'.jsonl'.length);
+  return parts.length === 1 ? agent : [parts[0] ?? '', ...parts.slice(2, -1).filter((part) => part !== 'workflows'), agent].join('~');
+};
+
+/**
+ * The sessions of `behind` (captured before the current version) whose transcript is gone from both the harness and `raw/`: they can never be
+ * captured again, so `verify` counts them `cv-frozen` instead of failing `--strict` over them.
+ */
+export const frozenSessions = async (runtime: SessionsRuntime, behind: readonly { project: string; session: string }[]): Promise<Set<string>> => {
+  const wanted = new Set(behind.map((entry) => `${entry.project}/${entry.session}`));
+  if (wanted.size === 0) return new Set<string>();
+  const exists = (file: string): Promise<boolean> => stat(file).then(() => true, () => false);
+  const alive = new Set<string>();
+  for (const key of Object.keys((await readState(runtime.storeDir)).files)) {
+    const [project = '', ...rest] = key.split('/');
+    const id = `${project}/${sessionOfRelative(rest.join('/'))}`;
+    if (wanted.has(id) && !alive.has(id) && ((await exists(join(runtime.projectsRoot, key))) || (await exists(join(paths(runtime.storeDir).raw, key))))) alive.add(id);
+  }
+  return new Set(behind.filter((entry) => !alive.has(`${entry.project}/${entry.session}`)).map((entry) => entry.session));
+};
+
 /**
  * Transcripts the harness no longer has but the raw archive does, whose last capture is behind this code or used another salt: they are
  * captured again from `<store>/raw/` (t711 Section 4, re-capture source). One with neither stays as logged, read through the compatibility reader.
@@ -717,8 +741,7 @@ const rawOnlyTranscripts = async (context: DepositContext, project: string, onDi
       continue;
     }
     const origins = await context.origins();
-    const agent = (parts[parts.length - 1] ?? '').slice(0, -'.jsonl'.length);
-    const session = [parts[0] ?? '', ...parts.slice(2, -1).filter((part) => part !== 'workflows'), agent].join('~');
+    const session = sessionOfRelative(relative);
     const origin = origins.get(session) ?? { parent: parts[0] ?? '', agentType: null, spawnedBy: null };
     found.push({ file, session, relative, subagent: origin, fromRaw: true });
   }

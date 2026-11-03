@@ -204,7 +204,7 @@ describe('verifyCaptured (the CAPTURE 4 fields)', () => {
     old.session.cv = '2';
     expect(verifyCaptured([old.session], old.tools)[0]).toMatchObject({ checked: 0, violations: 0 });
     const newer = capture('/w', '/w/a', 'aaaaaaaa');
-    newer.session.cv = '5';
+    newer.session.cv = '6';
     expect(violations([newer])[0]).toBe(0);
   });
 });

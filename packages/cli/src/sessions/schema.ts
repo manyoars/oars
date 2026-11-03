@@ -31,7 +31,7 @@
 // harness versions, and tool names (including MCP server names). `redact` masks secrets by pattern and entropy, emails, and the
 // organization domains the operator names. The skeleton holds hashes only.
 
-/** Stamped `cv` on every captured record. Bump it only when the captured field list changes: a bump re-reads every transcript. */
+/** Stamped `cv` on every captured record. Bump it when the captured field list changes or a stored value of an existing captured record or skeleton changes: a bump re-reads every transcript. */
 export const CAPTURE_VERSION = '5';
 
 /** Capture versions the reader derives from. A version-3 record is upgraded on read; a newer one is read for the fields this code knows. */
