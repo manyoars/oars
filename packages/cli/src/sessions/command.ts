@@ -113,8 +113,9 @@ const skippedNotice = (scope: SkippedScope): string[] => {
   const more = scope.names.length > SKIPPED_NAMES_SHOWN ? `, and ${String(scope.names.length - SKIPPED_NAMES_SHOWN)} more` : '';
   const one = scope.folders === 1;
   const folders = one ? '1 project folder holds' : `${String(scope.folders)} project folders hold`;
-  const transcripts = scope.transcripts === 1 ? '1 transcript that is' : `${String(scope.transcripts)} transcripts that are`;
-  return [`${folders} ${transcripts} never read: ${one ? 'it is' : 'they are'} not on the allowlist. Not captured: ${shown}${more}.`];
+  // Main transcripts only: a folder with none holds subagent transcripts only, or could not be listed.
+  const transcripts = scope.transcripts === 0 ? 'no main transcript' : scope.transcripts === 1 ? '1 main transcript' : `${String(scope.transcripts)} main transcripts`;
+  return [`${folders} ${transcripts}; ${one ? 'it is' : 'they are'} never read: not on the allowlist. Not captured: ${shown}${more}.`];
 };
 
 /** One line for a store a newer oars wrote into (spec state-on-open row for a newer `cv`: read known fields, warn). */
@@ -217,7 +218,8 @@ export const sessionsVerify = async (deps: SessionsDeps, options: { session: str
     // A step log that cannot be read leaves the invariant check as it is: the stuck check is an extra, never a reason `verify` fails.
     // A verify that got here has succeeded, so a verify streak is the one this run ends and is not listed.
     const stuck = stuckSteps(await readSteps(storeDir).catch((): StepRow[] => [])).filter((entry) => entry.step !== 'verify');
-    const scope = await skippedFolders(runtime);
+    // Scope is an extra, like the step log: a projects root this process cannot list reports an empty scope and does not fail `verify`.
+    const scope = await skippedFolders(runtime).catch((): SkippedScope => ({ folders: 0, transcripts: 0, names: [] }));
     const report: VerifyReport = { sessions: skeletons.length, unreadable, cvFrozen: frozen.size, scope, invariants: results.map((result) => ({ ...result, pass: result.violations === 0 })), stuck, sessionResults, audit, selfBaseline };
     const failed = [...results.filter((result) => result.violations > 0).map((result) => result.name), ...(unreadable > 0 ? ['unreadable skeletons'] : []), ...merkleFailed, ...stuck.map((entry) => `stuck: ${entry.step}`)];
     const stuckLines = stuck.map((entry) => `FAIL  ${entry.step} is stuck: key ${entry.key} failed ${String(entry.runs)} runs in a row: ${entry.error}`);
