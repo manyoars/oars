@@ -9,11 +9,11 @@
 // A line is `{timestamp, type, payload}` (history/src/lib.rs `RolloutLine`, rollout_payload.rs). Like cursor.ts, the reader writes each session
 // out as the transcript lines `captureSession` already reads, so redaction, the 1,000-character line cap, the salted file hashes, and the
 // skeleton are the Claude Code path's own code:
-//   session_meta        {id, cwd, cli_version, timestamp, history_mode, parent_thread_id, forked_from_ordinal_exclusive, subagent_history_start_ordinal}: the
+//   session_meta        {id, cwd, cli_version, timestamp, history_mode, parent_thread_id, forked_from_id, subagent_history_start_ordinal}: the
 //                       working directory and the harness version; only the first one in the file (recorder.rs:1157-1158). A spawned agent has `parent_thread_id` (protocol.rs:3464); records whose
-//                       `ordinal` is below its `subagent_history_start_ordinal` (:3511) or a fork's `forked_from_ordinal_exclusive` (:3462) are the parent's, and are dropped. Ordinals exist
+//                       `ordinal` is below its `subagent_history_start_ordinal` (:3511) are the parent's prefix (ordinal.rs:86-89), and are dropped. A Paginated fork copies none: its `history_base` points at the parent (:3499-3501). Ordinals exist
 //                       only in a Paginated rollout (ordinal.rs:37), the CLI's default (thread-store/src/local/mod.rs:512-515), which holds item_completed TurnItems
-//                       (UserMessage, AgentMessage, FileChange, McpToolCall) in place of the legacy events below (rollout/src/policy.rs:164-176); both are read.
+//                       (UserMessage, AgentMessage, FileChange, McpToolCall) in place of the legacy events below (rollout/src/policy.rs:142-156, `persisted_item_completed_event` :232, its Paginated arm :253); both are read.
 //                       A Legacy fork's copied history is dropped by matching the parent rollout record for record
 //   turn_context        {model, cwd}: the model, and the directory when it changes
 //   event_msg user_message {message}            a prompt (the `response_item` user messages also hold injected context, so they are not read)
@@ -58,7 +58,7 @@ const parse = (text: unknown): unknown => {
 
 /** A rollout file found in the store, before its lines are read. */
 export interface CodexSession {
-  /** The thread uuid in the file name (Codex's own session id), else the file's stem. */
+  /** The rollout's key: the thread uuid in the file name (Codex's own session id), `<thread>_<rollout>` for a reverted thread's file, else the file's stem. */
   id: string;
   /** `session_meta.cwd`; null when the first line names none. */
   folder: string | null;
@@ -83,12 +83,23 @@ export interface CodexStore {
   unreadable: { file: string; reason: string }[];
 }
 
-/** A rollout file name is `rollout-<timestamp>-<uuid>.jsonl`, optionally `.zst`; the uuid is the thread id. */
+/**
+ * A rollout file name is `rollout-<timestamp>-<thread>.jsonl`, optionally `.zst`; a reverted thread's is `rollout-<timestamp>-<thread>_<rollout>.jsonl`
+ * (rollout/src/rollout_file_name.rs:12-14, parsed at :41-47, rendered at :66-73).
+ */
 const ROLLOUT = /^rollout-.+\.jsonl(\.zst)?$/;
-const UUID_TAIL = /([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.jsonl(\.zst)?$/i;
+const UUID = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}';
+const ROLLOUT_NAME = new RegExp(String.raw`^rollout-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-(${UUID})(?:_(${UUID}))?\.jsonl(?:\.zst)?$`, 'i');
 const SAFE_ID = /^(?!\.+$)[A-Za-z0-9._-]+$/;
 
-const idOf = (name: string): string => UUID_TAIL.exec(name)?.[1]?.toLowerCase() ?? name.replace(/^rollout-/, '').replace(/\.jsonl(\.zst)?$/, '');
+/** The key a rollout is deposited under, and the thread it belongs to when it is a reverted copy of one (so one thread counts once). */
+const idOf = (name: string): { id: string; thread: string | null } => {
+  const match = ROLLOUT_NAME.exec(name);
+  const thread = match?.[1]?.toLowerCase();
+  const reverted = match?.[2]?.toLowerCase();
+  if (thread === undefined) return { id: name.replace(/^rollout-/, '').replace(/\.jsonl(\.zst)?$/, ''), thread: null };
+  return reverted === undefined || reverted === thread ? { id: thread, thread: null } : { id: `${thread}_${reverted}`, thread };
+};
 
 const textOf = async (file: string): Promise<string> => {
   const bytes = await readFile(file);
@@ -109,9 +120,10 @@ const firstLine = async (file: string): Promise<string> => {
   }
 };
 
-/** Lists rollout files under `dir`; only a missing folder is silent, any other failure (EACCES, ENOTDIR) is reported against `dir`. */
+/** An error's message with `file` cut to its base name, so a reason that is logged names no folder. */
 const reasonOf = (error: unknown, file: string): string => (error instanceof Error ? error.message : String(error)).split(file).join(basename(file));
 
+/** Lists rollout files under `dir`; only a missing folder is silent, any other failure (EACCES, ENOTDIR) is reported against `dir`. */
 const walk = async (dir: string, found: string[], unreadable: { file: string; reason: string }[]): Promise<void> => {
   let entries;
   try {
@@ -215,7 +227,7 @@ export const rolloutLines = (text: string, fallbackId: string, parentText?: stri
   const calls = new Map<string, { kind: 'shell' | 'patch' | 'other'; ids: string[]; session?: string }>();
   // A unified-exec process still running, by its session id, to the exec_command that started it: the `write_stdin` that sees it exit settles both.
   const running = new Map<string, string>();
-  // Records below this ordinal are inherited from a parent thread (a subagent's or a fork's), not the session's own. Only a Paginated rollout
+  // Records below this ordinal are the parent prefix a subagent's rollout copied (ordinal.rs:86-89), not the session's own. Only a Paginated rollout
   // holds ordinals (rollout/src/ordinal.rs:28, :37).
   let inherited: number | undefined;
   // Only the first session_meta is the rollout's own; later ones are copied from fork history (rollout/src/recorder.rs:1157-1158, :1173).
@@ -264,17 +276,18 @@ export const rolloutLines = (text: string, fallbackId: string, parentText?: stri
     resolved.add(id);
     result(id, failure, when);
   };
-  // The text of a TurnItem's content array: {type: text, text} items (items.rs:134 AgentMessageContent, user_input.rs:17 UserInput).
-  const contentText = (content: unknown): string => (Array.isArray(content) ? content.map((part) => (isObj(part) && part.type === 'text' ? (str(part.text) ?? '') : '')).filter((part) => part !== '').join('\n') : '');
-  // A completed TurnItem, the Paginated mode's replacement for the legacy events (policy.rs:164-176).
+  // The text of a TurnItem's content array. Each variant tags its own parts: a UserMessage's `UserInput` is snake_case, `text` (user_input.rs:16), but an
+  // AgentMessage's `AgentMessageContent` has no rename_all, so it is `Text` (items.rs:131-135).
+  const contentText = (content: unknown, tag: string): string => (Array.isArray(content) ? content.map((part) => (isObj(part) && part.type === tag ? (str(part.text) ?? '') : '')).filter((part) => part !== '').join('\n') : '');
+  // A completed TurnItem, the Paginated mode's replacement for the legacy events (policy.rs:142-156).
   const completed = (item: Obj, when: string): void => {
     const kind = str(item.type);
     const id = str(item.id);
     if (kind === 'UserMessage') {
-      const message = contentText(item.content);
+      const message = contentText(item.content, 'text');
       if (message !== '') prompted(message, when);
     } else if (kind === 'AgentMessage') {
-      const message = contentText(item.content);
+      const message = contentText(item.content, 'Text');
       if (message !== '') assistant([{ type: 'text', text: message }], when);
     } else if (kind === 'FileChange' && id !== undefined && (item.status === 'completed' || item.status === 'failed')) {
       settlePatch(id, item.status === 'failed' ? (str(item.stderr) ?? 'patch failed') : undefined, when);
@@ -316,7 +329,7 @@ export const rolloutLines = (text: string, fallbackId: string, parentText?: stri
       const version = str(payload.cli_version);
       if (version !== undefined) base.version = version;
       stamp(payload.timestamp);
-      inherited = Math.max(num(payload.subagent_history_start_ordinal) ?? 0, num(payload.forked_from_ordinal_exclusive) ?? 0) || undefined;
+      inherited = num(payload.subagent_history_start_ordinal);
       if (inherited === undefined && parentText !== undefined && str(payload.forked_from_id) !== undefined) copied = { keys: parentKeys(parentText), at: 0 };
     } else if (type === 'turn_context') {
       model = str(payload.model) ?? model;
@@ -437,7 +450,7 @@ export const openCodexStore = async (root: string): Promise<CodexStore | undefin
   const sessions = new Map<string, CodexSession>();
   let rejected = 0;
   for (const file of files) {
-    const id = idOf(basename(file));
+    const { id, thread } = idOf(basename(file));
     if (!SAFE_ID.test(id)) {
       rejected += 1;
       continue;
@@ -448,7 +461,7 @@ export const openCodexStore = async (root: string): Promise<CodexStore | undefin
       const info = await stat(file);
       const meta = parse(await firstLine(file));
       const head = isObj(meta) && isObj(meta.payload) ? meta.payload : {};
-      sessions.set(id, { id, folder: str(head.cwd) ?? null, parent: str(head.parent_thread_id)?.toLowerCase() ?? null, agentRole: str(head.agent_role) ?? null, forkedFrom: str(head.forked_from_id)?.toLowerCase() ?? null, file, size: info.size, mtimeMs: Math.floor(info.mtimeMs) });
+      sessions.set(id, { id, folder: str(head.cwd) ?? null, parent: str(head.parent_thread_id)?.toLowerCase() ?? thread, agentRole: str(head.agent_role) ?? null, forkedFrom: str(head.forked_from_id)?.toLowerCase() ?? null, file, size: info.size, mtimeMs: Math.floor(info.mtimeMs) });
     } catch (error) {
       unreadable.push({ file, reason: reasonOf(error, file) });
     }
@@ -459,7 +472,10 @@ export const openCodexStore = async (root: string): Promise<CodexStore | undefin
     rejected,
     unreadable,
     transcript: async (session) => {
-      const text = await textOf(session.file);
+      // A rollout that vanished after it was listed (Codex compresses an old one) fails with its reason, which names no path.
+      const text = await textOf(session.file).catch((error: unknown) => {
+        throw new Error(reasonOf(error, session.file));
+      });
       // A Legacy fork's copied history is found by matching it against the parent's rollout; a parent outside the store (or unreadable) leaves it whole.
       const parent = session.forkedFrom === null ? undefined : sessions.get(session.forkedFrom);
       const parentText = parent === undefined ? undefined : await textOf(parent.file).catch(() => undefined);
