@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises';
 import type { Outcome } from '../cli.js';
 import { parseAllowList } from './allow.js';
 import { CliError, ExitCode } from '../errors.js';
-import { books, formatBooks, formatMeasure, formatRecall, measure, recall, type BooksBy, type RecallQuery } from './query.js';
+import { books, BOOKS_CAVEAT, formatBooks, formatMeasure, formatRecall, measure, recall, type BooksBy, type RecallQuery } from './query.js';
 import { readHookCalls } from './hook-calls.js';
 import { buildIndex, contextBlock, inRepository, readIndex, type ContextOptions } from './hook-index.js';
 import { hookStatus, installHooks, scheduleStatus, setSchedule, settingsPath, uninstallHooks, type InstallRuntime, type Scope } from './install.js';
@@ -102,9 +102,9 @@ export const sessionsMcp = async (deps: SessionsDeps): Promise<void> => {
 const newerNotice = (store: Store): string[] => (store.newerCaptures > 0 ? [`captured by a newer oars; upgrade oars (${String(store.newerCaptures)} sessions)`] : []);
 
 /**
- * The store restricted to one repository (the test `measure --repo` uses). `books` reads its rows from `prompts` alone, and looks a
- * subagent up by the kept prompt that spawned it, so the kept sessions and prompts are enough; the kept subagents only keep the
- * newer-capture count to this repository.
+ * The store restricted to one repository (the test `measure --repo` uses). `books` reads its rows from `prompts`, and looks up a
+ * subagent, a sha, or a pull by the kept prompt it belongs to, so the kept sessions and prompts are enough; the kept subagents only keep
+ * the newer-capture count to this repository.
  */
 const inRepositoryStore = (store: Store, repo: string): Store => {
   const sessions = store.sessions.filter((session) => inRepository(session.project, repo));
@@ -122,15 +122,16 @@ const inRepositoryStore = (store: Store, repo: string): Store => {
 };
 
 export const sessionsBooks = async (deps: SessionsDeps, options: { by: BooksBy; sinceDays: number | undefined; repo?: string }): Promise<Outcome> => {
-  const loaded = await loadStore(runtimeOf(deps).storeDir);
+  const { storeDir } = runtimeOf(deps);
+  const loaded = await loadStore(storeDir);
   const store = options.repo === undefined ? loaded : inRepositoryStore(loaded, options.repo);
-  const rows = books(store, options.by, deps.now(), options.sinceDays);
+  const rows = books(store, options.by, deps.now(), options.sinceDays, await readSurvival(storeDir));
   // A mistyped root over a populated store must not read as an empty store.
   const table =
     rows.length === 0 && options.repo !== undefined
       ? `No prompts for ${options.repo} in the store (${String(loaded.prompts.length)} prompts across all repositories).`
       : formatBooks(rows, options.by);
-  return { document: { ok: true, by: options.by, rows, newerCaptures: store.newerCaptures }, text: [table, ...newerNotice(store)].join('\n') };
+  return { document: { ok: true, by: options.by, rows, newerCaptures: store.newerCaptures }, text: [table, ...newerNotice(store), ...(rows.length === 0 ? [] : [BOOKS_CAVEAT])].join('\n') };
 };
 
 export const sessionsMeasure = async (deps: SessionsDeps, options: { last: number; since: string | undefined; repo?: string }): Promise<Outcome> => {

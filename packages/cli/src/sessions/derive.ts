@@ -61,7 +61,7 @@ const REJECTED_RE = /^The user doesn't want to (?:proceed with this tool use|tak
 /** The harness writes this as a user line, so capture keeps it as a prompt of its own; it says the prompt before it was cut short. */
 const INTERRUPT_MARKER = '[Request interrupted by user';
 
-const firstCopies = <T extends { side: boolean; toolUseId: string | null }>(records: readonly T[]): T[] => {
+export const firstCopies = <T extends { side: boolean; toolUseId: string | null }>(records: readonly T[]): T[] => {
   const seen = new Set<string>();
   return records.filter((record) => {
     if (record.side) return false;

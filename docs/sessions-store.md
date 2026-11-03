@@ -17,6 +17,7 @@ Under `<config>/oars/sessions/` (`%APPDATA%` on Windows, `$XDG_CONFIG_HOME` or `
 | `salt` | This machine's salt, which file targets are hashed with. Local-only (class `L`), never shared. Its `sid` (the first 8 hex characters of its SHA-256) is stamped on every capture record. |
 | `pipeline-runs.jsonl` | The step log: one row per run of a pipeline step (deposit, derive, index, verify, recall), appended when the step ends. See "The step log". |
 | `raw/<project>/<path>` | oars' own archive of every deposited transcript (below). |
+| `commit-survival.jsonl` | What became of each commit older than `SURVIVAL_DAYS`, appended on a change of state. See "Commit survival". |
 
 ## Two versions
 
@@ -134,6 +135,44 @@ an open question (M4); until it is settled two machines of one account hash the 
 `raw/`, or, for a Cursor session, whose composer is gone from Cursor, is counted `cv-frozen` instead and never fails `--strict`, since it
 cannot be captured again), one `sid` across the store, every `fileHash` is a path target of a tool call, and `targetBase` is set on a path
 target and on nothing else.
+
+### Commit survival
+
+`oars sessions deposit` and the nightly run, never a hook, read the repository of each allowlisted folder and append one line per changed
+sha to `commit-survival.jsonl`: `{ sha, state, day }`, with `sha` as captured (class A), `state` (class P), and a day-resolution `day`
+(class A). Only a call in a main transcript whose `ts` is more than `SURVIVAL_DAYS` (7) old counts, so a sha `commits` could not read and a
+subagent's commit are not observed. The latest line of a sha wins. It is a separate file, so what `verify` checks is untouched.
+
+| `state` | Rule | What it does not say |
+|---------|------|---------------------|
+| `reverted` | A commit on the default branch says `This reverts commit <full sha>`, and that revert was not itself reverted. Checked first. | A hand-written or partial undo, and a revert that names a squash's sha rather than this one, are not seen. |
+| `survived` | An ancestor of the default branch. | The lines may since have been rewritten by ordinary later work. |
+| `unreachable` | The repository holds the commit, but the default branch does not reach it. | Not a failure: a squash merge, a rebase on landing, and an open branch all read this way. |
+| `unknown` | The repository is absent or shallow, it has no default branch this code can name, git failed, or it does not hold the sha. | A session that committed in another repository reads this way, since only its own project's repository is read. |
+
+The repository is the first `cwd` in the session's transcript whose slug is the allowlisted project, then its root (`makeRepoRoot`). A later
+`cd` is never followed, and a folder outside this run's allowlist is never read. Git is read-only and asks no network, so the default
+branch (`origin/HEAD`, else `origin/main`, `origin/master`, `main`, `master`) is as of the last fetch. A failed read never fails the deposit,
+and an `unknown` never replaces a known state, so a passing failure does not undo an observation.
+
+### What `books` adds
+
+`oars sessions books --by class|model|harness|pull` adds these columns, in text and `--json`. The signals stay separate, and the text ends
+with a line saying they are associations in one operator's logs, not measured lift.
+
+| Column | `--json` | Count, of what |
+|--------|----------|----------------|
+| `passed` | `verifyPassed` | `verify` passed, of prompts that edited and whose `verify` is readable (not `na`, not absent) |
+| `stop` | `stopped` | A stop, of prompts carrying `stopped` |
+| `redo` | `redone` | A redo, of prompts carrying `redo` |
+| `commits` | `commits` | The prompts' `commits`, with or without a sha |
+| `settled` | `settled` | Distinct shas whose state is `survived`, `reverted`, or `unreachable` |
+| `survived` | `survived` | `survived`, of `settled` |
+
+Below `BOOKS_MIN_PROMPTS` (30) in its denominator a share prints as `too few`, and `--json` gives its `share` as null beside its `count` and
+`of`. A settled commit counts toward that minimum the way a prompt does. `--by pull` has one row per `ecosystem:name` from the calls' `pulls`, a
+prompt counts once in each row it pulled, so the rows overlap, and a prompt that pulled nothing is in none. Every column reads the main line
+only: subagent work is left out.
 
 ## The step log
 
