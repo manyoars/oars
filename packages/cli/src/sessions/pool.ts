@@ -5,7 +5,7 @@
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { deriveCells, poolOf, serializeCells, type Pool } from './cells.js';
-import { contentHash, FAMILIES, makeRead, orderResolver, type Family, type Read } from './read.js';
+import { contentHash, FIRST_ORDER_FAMILIES, makeRead, orderResolver, type FirstOrderFamily, type Read } from './read.js';
 import { deriveAdoption } from './read-adoption.js';
 import { deriveChange } from './read-change.js';
 import { deriveCost } from './read-cost.js';
@@ -17,7 +17,7 @@ import { deriveRecovery } from './read-recovery.js';
 import type { DeriveFamily } from './read-support.js';
 import { writeAtomic, type Store } from './store.js';
 
-const DERIVERS: { readonly [family in Family]: DeriveFamily } = {
+const DERIVERS: { readonly [family in FirstOrderFamily]: DeriveFamily } = {
   recovery: deriveRecovery,
   fit: deriveFit,
   cost: deriveCost,
@@ -38,7 +38,7 @@ export const poolFiles = (storeDir: string): { cells: string; motifs: string; re
 export const deriveReads = (pool: Pool, store: Store): Read[] => {
   const asOf = { pool: pool.version, day: pool.lastDay };
   const orderOf = orderResolver([]);
-  return FAMILIES.flatMap((family) =>
+  return FIRST_ORDER_FAMILIES.flatMap((family) =>
     DERIVERS[family]({ pool, store })
       .map((read) => makeRead({ ...read, asOf }, orderOf))
       .map((read) => ({ read, key: contentHash(read.slice) }))

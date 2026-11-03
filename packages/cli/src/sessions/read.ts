@@ -19,7 +19,11 @@ const canonical = (value: unknown): unknown => {
 export const contentHash = (value: unknown): string => createHash('sha256').update(JSON.stringify(canonical(value))).digest('hex').slice(0, 16);
 
 /** The eight families (t752), in the order that report ranks them, recovery first: the only one that changes a next call today. */
-export const FAMILIES = ['recovery', 'fit', 'cost', 'change', 'live', 'adoption', 'method', 'next-step'] as const;
+export const FIRST_ORDER_FAMILIES = ['recovery', 'fit', 'cost', 'change', 'live', 'adoption', 'method', 'next-step'] as const;
+export type FirstOrderFamily = (typeof FIRST_ORDER_FAMILIES)[number];
+
+/** Families that read other reads, lowest order first. `lead-lag` is the labeled experiment (spec Section 6). */
+export const FAMILIES = [...FIRST_ORDER_FAMILIES, 'failure-day', 'version-boundary', 'substitution', 'interaction', 'day-move', 'lead-lag'] as const;
 export type Family = (typeof FAMILIES)[number];
 
 /** `all`, or `unexposed`: only steps outside any recall's consequence window, so a read cannot mistake the pool's influence for the world. */
@@ -35,7 +39,7 @@ export interface ReadValue {
   [metric: string]: number | string | null | { [name: string]: number };
 }
 
-/** A 95 percent interval on a read's headline rate; null when the value is not a rate. */
+/** A 95 percent interval on a read's headline number: a rate at order 1, propagated from the inputs above it (`read-order.ts`), so it can run below zero. Null when the value is not a rate. */
 export interface ReadInterval {
   low: number;
   high: number;
