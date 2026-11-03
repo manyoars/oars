@@ -3,7 +3,7 @@
 // sending, and the server parses it again, field by field, because a live URL takes anything from anyone. This file imports nothing from the file system: the Worker bundles it.
 
 import { ACTION_TABLES, CANONICAL_ACTIONS, mcpOf, type CanonicalAction } from './actions.js';
-import { FRAMEWORKS, isMcpToolName, isRegistryVersion, LANGUAGES, LITERAL, publicEffort, publicModel, publicVersion, PUBLIC_FLAGS, PUBLIC_HOSTS, PUBLIC_MCP_SERVERS, PUBLIC_PACKAGES, PUBLIC_PROGRAMS, PUBLIC_SKILLS, PUBLIC_SUBCOMMANDS, REPO_SIZES } from './public-vocabulary.js';
+import { FRAMEWORKS, isRegistryVersion, LANGUAGES, LITERAL, publicEffort, publicModel, publicVersion, PUBLIC_FLAGS, PUBLIC_HOSTS, PUBLIC_MCP_SERVERS, PUBLIC_PACKAGES, PUBLIC_PROGRAMS, PUBLIC_SKILLS, PUBLIC_SUBCOMMANDS, REPO_SIZES } from './public-vocabulary.js';
 import type { Cell } from './cells.js';
 import type { Motif } from './motif.js';
 import type { Read, ReadAsOf } from './read.js';
@@ -262,6 +262,8 @@ const parsePull = (value: unknown, at: string): PullIdentity => {
   });
   return { registry: oneOf(REGISTRIES, raw.registry, under(at, 'registry')), name: inSet(PUBLIC_PACKAGES, raw.name, under(at, 'name')), version };
 };
+
+const isMcpToolName = (tool: string): boolean => /^[A-Za-z][A-Za-z0-9_.-]{0,63}$/.test(tool);
 
 const parseFlag = (value: unknown, at: string): string => {
   const flag = textOf(value, at);
