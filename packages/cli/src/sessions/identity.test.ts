@@ -66,6 +66,29 @@ describe('identity holds public names only', () => {
     expect(shell('git log --all --acme-private')[0]?.identity).toMatchObject({ flags: ['--all', '<literal>'] });
   });
 
+  // Names the 120-session re-derive found masked. Each value below must stay out while its flag name comes through.
+  it.each([
+    ['cut -c1-200 file', ['-c']],
+    ['grep -A3 needle', ['-A']],
+    ['mysql -p12345', ['-p']],
+    ['head -20 file', ['-N']],
+    ['tail -5 file', ['-N']],
+    ['Get-Content x | Select-Object -First 5', ['-First']],
+    ['git log --no-merges --max-count=3', ['--max-count', '--no-merges']],
+  ])('reads the flag name of %s with no value', (command, flags) => {
+    const steps = shell(command);
+    expect(steps.at(-1)?.identity).toMatchObject({ flags });
+    for (const value of ['200', '12345', '20']) expect(JSON.stringify(steps.map((step) => step.identity))).not.toContain(value);
+  });
+
+  it.each(['for', 'foreach', 'break', 'continue', 'exit', 'get-date', 'out-null', 'convertfrom-json', 'join-path', 'basename', 'dirname', 'seq', 'cmp'])('knows %s as a public program', (program) => {
+    expect(shell(`${program} x`)[0]?.identity).toMatchObject({ program });
+  });
+
+  it.each(['p', 'acme-deploy', 'acme-billing-service', 'run8.sh', 'tool.ps1'])('keeps %s, a name only this machine knows, off the list', (program) => {
+    expect(shell(`${program} x`)[0]?.identity).toEqual({ program: '<literal>', sub: null, flags: [] });
+  });
+
   it('splits a short flag cluster into letters, and masks a short flag holding anything else', () => {
     expect(shell('rm -rf build')[0]?.identity).toMatchObject({ flags: ['-f', '-r'] });
     expect(shell('ls -l')[0]?.identity).toMatchObject({ flags: ['-l'] });
