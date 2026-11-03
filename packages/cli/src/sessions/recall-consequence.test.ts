@@ -17,7 +17,7 @@ const call = (n: number, name: string, promptIndex: number, over: Partial<ToolOb
 const recallAt = (n: number, arm: RecallArm = 'shown', sid: string | null = 's'): Recall =>
   makeRecall({ sid, at: stamp(n), frame: null, mode: 'push', query: { form: 'pattern', prefix: ['shape'] }, poolVersion: '2026-10-01T00:00:00.000Z', arm, reads: ['r'], rendered: 'x'.repeat(40), names: ['file.edit'], evidence: [] });
 
-const line = (tools: ToolObservation[]) => store({ sessions: [session('s')], prompts: [prompt('s', 0, { errors: 2, verify: 'pass', commits: 1 }), prompt('s', 1)], tools });
+const line = (tools: ToolObservation[]) => store({ sessions: [session('s')], prompts: [prompt('s', 0, { errors: 2, verify: 'passed', commits: 1 }), prompt('s', 1)], tools });
 
 const consequence = (tools: ToolObservation[], recall: Recall) => deriveConsequences(line(tools), [recall])[0]?.consequence;
 
@@ -50,7 +50,7 @@ describe('the consequence window', () => {
     expect(found?.motifs).toContain(shapeId([{ action: 'file.edit', identity: null }]));
     expect(found?.followed).toBe(true);
     expect(found?.cost).toEqual({ tokens: 0, durationMs: 42 });
-    expect(found?.outcome).toEqual({ errors: 2, verify: 'pass', stopped: null, commits: 1, redo: null });
+    expect(found?.outcome).toEqual({ errors: 2, verify: 'passed', stopped: null, commits: 1, redo: null });
     expect(Object.keys(found ?? {}).sort()).toEqual(['cost', 'followed', 'motifs', 'outcome', 'window']);
   });
 
