@@ -238,6 +238,10 @@ const buildProgram = (deps: RunDeps, argv: string[]): Command => {
     .description("set up an agent's purchasing: the card, the monthly cap, and what it bought")
     .hook('preAction', () => {
       requirePurchasingOpen(deps);
+    })
+    // A command with subcommands and no action prints help before preAction runs; this makes bare `purchasing` hit the gate first.
+    .action(() => {
+      purchasing.help({ error: true });
     });
 
   purchasing

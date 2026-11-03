@@ -327,7 +327,7 @@ describe('oars purchasing is closed until t465 opens it (V13: nothing is sold be
     expect(h.out.join('')).not.toContain('purchasing');
   });
 
-  it.each([['card', '--mode', 'TEST'], ['cap', AGENT, '--mode', 'TEST', '--usd', '5'], ['list', AGENT]])('refuses `purchasing %s` even when the launch flag says launched, with no flag call and no API call', async (...args) => {
+  it.each([[], ['card', '--mode', 'TEST'], ['cap', AGENT, '--mode', 'TEST', '--usd', '5'], ['list', AGENT]])('refuses `purchasing %s` (bare included) even when the launch flag says launched, with no flag call and no API call', async (...args) => {
     const h = harness({ OARS_ISSUER_URL: '' });
     let flagCalls = 0;
     server.use(http.get(LAUNCH_FLAG_URL, () => { flagCalls += 1; return HttpResponse.json({ launched: true }); }));

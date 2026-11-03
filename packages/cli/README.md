@@ -1,6 +1,6 @@
 # @manyoars/oars
 
-The `oars` command line for Many Oars: sign in, deploy an agent, set its prices, and make a test charge against it, and keep a local memory of your own Claude Code sessions (`oars sessions`).
+The `oars` command line for Many Oars: sign in, deploy an agent, set its prices, make a test charge against it, and keep a local memory of your own Claude Code sessions (`oars sessions`).
 
 Accounts and paid agents are not open yet; `oars login` says so until launch.
 
@@ -70,9 +70,9 @@ The SDK key is shown once, so save it when `deploy` prints it.
 
 ### sessions
 
-`oars sessions` keeps a local, deterministic memory of your own Claude Code sessions. No model call, no network, nothing leaves the machine.
+`oars sessions` keeps a local, deterministic memory of your own Claude Code sessions. oars makes no model call and no network call.
 
-What it captures: the Claude Code sessions in the folders you name with `--allow`. Where it stores them: `<config>/oars/sessions/` on your machine. The `raw/` folder in it is on by default and holds raw transcripts (a hard link or copy of each deposited one). Secret masking applies to the log, not to `raw/`: those files are unredacted and keep whatever the transcript held, secrets included. They stay on your machine and nothing is uploaded. To remove them, see [Remove everything](#remove-everything).
+What it captures: the Claude Code sessions in the folders you name with `--allow`. Where it stores them: `<config>/oars/sessions/` on your machine (`<config>` is `%APPDATA%` on Windows, `$XDG_CONFIG_HOME` or `~/.config` elsewhere). The `raw/` folder in it is on by default and holds raw transcripts (a hard link or copy of each deposited one). Secret masking applies to the log, not to `raw/`: those files are unredacted and keep whatever the transcript held, secrets included. They stay on your machine and nothing is uploaded. To remove them, see [Remove everything](#remove-everything).
 
 oars itself sends nothing; the hooks and the MCP tool add recall text to the running session, and your harness sends that to its model like any other context.
 
