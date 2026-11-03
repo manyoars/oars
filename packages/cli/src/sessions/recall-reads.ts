@@ -95,7 +95,7 @@ export const recoveryReads = (store: Store, keep: (error: ErrorObservation) => b
 
 /**
  * One row per call on the main line: a sidechain's repeats are not a new call, and a resumed transcript's replay is a second row for one tool-use id, so the
- * row with a status wins. The reader's fold (t762) does the same once it lands, and this stays a no-op over a folded store.
+ * row with a status wins. `loadStore` folds these already (`foldToolRows`), so over a loaded store only the sidechain filter does anything; the rest guards a store built by hand.
  */
 const oneRowPerCall = (tools: readonly ToolObservation[]): ToolObservation[] => {
   const kept = new Map<string, ToolObservation>();
