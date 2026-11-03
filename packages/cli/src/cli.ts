@@ -14,7 +14,7 @@ import type { JournalStore } from './journal.js';
 import type { BooksBy, RecallQuery } from './sessions/query.js';
 import { closedQueryOf } from './sessions/recall-reads.js';
 import { FAMILIES } from './sessions/read.js';
-import { sessionsBooks, sessionsContext, sessionsDeposit, sessionsHookInstall, sessionsHookStatus, sessionsHookUninstall, sessionsMcp, sessionsMeasure, sessionsRead, sessionsRecall, sessionsVerify, type SessionsDeps } from './sessions/command.js';
+import { sessionsBooks, sessionsContext, sessionsDeposit, sessionsHookInstall, sessionsHookStatus, sessionsHookUninstall, sessionsMcp, sessionsLineage, sessionsMeasure, sessionsRead, sessionsRecall, sessionsRecallCounts, sessionsVerify, type SessionsDeps } from './sessions/command.js';
 import type { InstallRuntime, Scope } from './sessions/install.js';
 import type { SessionsRuntime } from './sessions/store.js';
 
@@ -300,6 +300,8 @@ const buildProgram = (deps: RunDeps, argv: string[]): Command => {
     .option('--family <name>', 'one read family (recovery or fit), narrowed by --class and --since')
     .option('--text <text>', 'look for text in the local record')
     .option('--session <id>', 'the session asking, so what it did next can be read for this recall')
+    .option('--counts', 'print counts of recalls by mode, arm, and answer, with what followed, instead of answering (see --day)')
+    .option('--day <yyyy-mm-dd>', 'with --counts: only this UTC day')
     .option('--mcp', 'serve one recall tool over MCP on stdio instead of answering once')
     .option('--context', "print the repository's top recurring errors as a short block for injection into a session (see --cwd, --harness, --top, --max-chars)")
     .option('--cwd <dir>', "with --context: the session's working directory (default: this one)")
@@ -308,6 +310,10 @@ const buildProgram = (deps: RunDeps, argv: string[]): Command => {
     .option('--max-chars <n>', "with --context: the block's length limit (default 1200)", positiveInteger)
     .action(async (_options: OptionValues, command: Command) => {
       const options: OptionValues = command.optsWithGlobals();
+      if (flag(options, 'counts')) {
+        emit(deps, flag(options, 'json'), await sessionsRecallCounts(sessionDeps(deps), text(options, 'day')));
+        return;
+      }
       if (flag(options, 'context')) {
         emit(
           deps,
@@ -338,6 +344,13 @@ const buildProgram = (deps: RunDeps, argv: string[]): Command => {
         ...(count(options, 'since') === undefined ? {} : { sinceDays: count(options, 'since') }),
       };
       emit(deps, flag(options, 'json'), await sessionsRecall(sessionDeps(deps), query, session));
+    });
+
+  sessions
+    .command('lineage <id>')
+    .description('walk a recall or read back through its evidence, one line per hop with its frame range and day; refuses evidence newer than the recall')
+    .action(async (id: string, _options: OptionValues, command: Command) => {
+      emit(deps, flag(command.optsWithGlobals(), 'json'), await sessionsLineage(sessionDeps(deps), id));
     });
 
   sessions

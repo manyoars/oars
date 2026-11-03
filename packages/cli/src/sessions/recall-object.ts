@@ -93,7 +93,7 @@ export interface RecallEvidence {
 
 /** The outcome signals of the window's prompt, held separately: no composite (spec Section 2.7). */
 export interface RecallOutcome {
-  errors: number;
+  errors: number | null;
   verify: string | null;
   stopped: string | null;
   commits: number | null;

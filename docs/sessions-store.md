@@ -17,6 +17,8 @@ Under `<config>/oars/sessions/` (`%APPDATA%` on Windows, `$XDG_CONFIG_HOME` or `
 | `salt` | This machine's salt, which file targets are hashed with. Local-only (class `L`), never shared. Its `sid` (the first 8 hex characters of its SHA-256) is stamped on every capture record. |
 | `pipeline-runs.jsonl` | The step log: one row per run of a pipeline step (deposit, derive, index, verify, recall, read), appended when the step ends. See "The step log". |
 | `cells.jsonl`, `motifs.jsonl` | Counts per motif, frame bucket, and day, and the motifs they name. Computed from the log, rewritten by `oars sessions read`, and safe to delete. See "Motifs, cells, and reads". |
+| `recalls.jsonl` | One row per recall, pull or push, shown or held, hit or miss. Append-only, written when the recall happens. `sid`, `at`, and `query.text` are class A; the rest is class P. See "Recalls". |
+| `consequences.jsonl` | What each recall led to, by recall ID. Computed from `recalls.jsonl` and the log, rewritten by `oars sessions read`, and safe to delete. |
 | `reads/<pool>.jsonl` | One pool version's reads, written once and never rewritten, so a read cited by its ID stays what it was. |
 | `raw/<project>/<path>` | oars' own archive of every deposited transcript (below). |
 
@@ -178,7 +180,7 @@ target and on nothing else.
 Derivation over the capture records, computed locally under `EXTRACTOR_VERSION` (9 adds them). The capture records stay the primary record: cells and reads can be dropped and computed again, and no rollup replaces what they came from.
 
 - A **motif** is a window of one to four steps within one line of work, hashed with no salt and no frame, so one shape joins across accounts and frames. `shape` hashes actions only and `named` hashes actions and public identities. A `class` motif holds no steps and names a prompt class, which is how cost per class comes from cells. A one-step window is there because fit, adoption, and live count one action, and a prompt of one call has no longer window.
-- A **cell** is order 0: `{motifId, frameBucket, day, sessions, clusters, ok, failed, tokens, durationMs, exposed}`. A frame bucket is harness, harness version by tens of patch, model, and effort; versions are bucketed because most prompts run a version not yet seen, so an exact version goes stale in days. `exposed` is false until consequence windows are written.
+- A **cell** is order 0: `{motifId, frameBucket, day, sessions, clusters, ok, failed, tokens, durationMs, exposed}`. A frame bucket is harness, harness version by tens of patch, model, and effort; versions are bucketed because most prompts run a version not yet seen, so an exact version goes stale in days. `exposed` is true when the counts sit, wholly or in part, inside a shown recall's consequence window, and it is part of the cell's key, so a motif's exposed and unexposed counts stay apart.
 - A **read** is any derived value citing its inputs: `{readId, family, method, methodVersion, inputs, order, slice, value, n, clusters, interval, asOf, basis}`. `readId` is the hash of the rest, `order` is 1 + the highest order among `inputs` with a cell at 0, a read that cites nothing is refused, and `asOf.pool` pins the pool, so new data gives a new read even when the value comes out the same.
 
 The eight families at order 1, in the order they are listed. None adjusts for its confounders, so a row is a count and not a finding.
@@ -195,6 +197,14 @@ The eight families at order 1, in the order they are listed. None adjusts for it
 | `next-step` | prefix of one to three actions | counts of the next action | no outcome label, so the most common step is not the right one |
 
 A read's slice and value hold closed vocabulary and numbers only: never a path, a prompt, or an error's text. A signature appears as its hash, computed the same way on any account. `clusters` is 1 on every row of one operator's store, and `oars sessions read` applies no floor, because every cell is the operator's own.
+
+## Recalls
+
+A recall is one event in the asker's graph, and a pull and a push are the same object in `recalls.jsonl`. A pull always answers. A push fires at the pre-tool hook and takes its `arm` from a hash of the session, the prefix, and the pool version against a 10 percent holdback: a `held` row stores what it would have shown and injects nothing. Answers render from structured fields only, so no authored text reaches an agent. A miss is kept when somebody asked; a push with no read keeps no row.
+
+The consequence is computed at derive and never captured, so `recalls.jsonl` stays append-only. Its window opens on the first main-line call stamped after the recall, because the call a push fired on was already decided, and it ends at the prompt's end or after 20 calls. `motifs` (shape level), `followed`, `cost`, and `outcome` are held apart, with no composite. A held recall gets a consequence too, because it is the baseline. Only a shown recall enters the graph: it adds a `recall.push` or `recall.pull` step and marks its window's cells `exposed`. Weak spots: a hook inside a subagent reports the parent's session, so its push is placed on the parent's line by time; an MCP pull has no session, so no consequence is read for it.
+
+`oars sessions recall --counts [--day <yyyy-mm-dd>]` prints counts per mode, arm, and answer. `oars sessions lineage <recallId or readId>` walks back through the evidence, one line per hop with its frame range and day. It refuses evidence newer than the recall citing it, and a visited set keeps the walk acyclic. A recall's fit and recovery evidence is a stand-in hash until the hook reads stored reads, so the walk ends at the evidence the recall holds; a read kept from an older pool can cite a cell since rewritten, shown as `missing`.
 
 ## The step log
 
