@@ -64,7 +64,7 @@ export interface SessionsRuntime {
   stdout: { write: (text: string) => unknown };
 }
 
-interface FileState {
+export interface FileState {
   size: number;
   mtimeMs: number;
   rev: number;
@@ -76,7 +76,7 @@ interface FileState {
   d: string[];
 }
 
-interface State {
+export interface State {
   files: { [key: string]: FileState };
   /** Every `--redact-domain` any deposit used, so recall masks a query the same way the log was masked. */
   redactDomains: string[];
@@ -130,7 +130,7 @@ const sameSet = (a: readonly string[], b: readonly string[]): boolean => a.lengt
 
 const isRecord = (value: unknown): value is { [key: string]: unknown } => typeof value === 'object' && value !== null && !Array.isArray(value);
 
-const readState = async (storeDir: string): Promise<State> => {
+export const readState = async (storeDir: string): Promise<State> => {
   try {
     const parsed: unknown = JSON.parse(await readFile(paths(storeDir).state, 'utf8'));
     if (isRecord(parsed) && isRecord(parsed.files)) {
@@ -707,7 +707,7 @@ const sessionOfRelative = (relative: string): string => {
 };
 
 /** The inverse of `sessionOfRelative`: `<id>.jsonl`, or `<parent>/subagents/[workflows/<wf>/]<agent>.jsonl` for a `<parent>~[<wf>~]agent-x` id. */
-const relativeOfSession = (session: string): string[] => {
+export const relativeOfSession = (session: string): string[] => {
   const [parent = '', ...rest] = session.split('~');
   if (rest.length === 0) return [`${session}.jsonl`];
   const agent = rest[rest.length - 1] ?? '';
