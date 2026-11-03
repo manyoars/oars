@@ -91,18 +91,28 @@ const badLink = async (path: string, kind: Kind): Promise<boolean> => {
 };
 
 /**
- * A link is followed, as the main file's `stat` follows one; a link that leads nowhere or to the wrong kind throws, so it is unreadable.
- * `found` is filled as it goes, so files scanned before a bad entry survive the throw.
+ * A link is followed, as the main file's `stat` follows one; a link that leads nowhere or to the wrong kind is a bad entry, and so is a folder that cannot be listed.
+ * The walk always finishes and `found` holds every transcript it reached, so the verdict does not depend on the listing order (V5); true when any entry was bad.
  */
-const jsonlUnder = async (dir: string, found: string[]): Promise<void> => {
+const jsonlUnder = async (dir: string, found: string[]): Promise<boolean> => {
+  let bad = false;
   for (const entry of await entriesOf(dir)) {
     const path = join(dir, entry.name);
     const named = entry.name.endsWith('.jsonl');
-    if (entry.isSymbolicLink() && (await badLink(path, named ? 'file' : 'directory'))) throw new Error('unreadable');
+    if (entry.isSymbolicLink() && (await badLink(path, named ? 'file' : 'directory'))) {
+      bad = true;
+      continue;
+    }
     const target = entry.isSymbolicLink() ? await stat(path) : entry;
-    if (target.isDirectory()) await jsonlUnder(path, found);
-    else if (named && target.isFile()) found.push(path);
+    if (target.isDirectory()) {
+      try {
+        if (await jsonlUnder(path, found)) bad = true;
+      } catch {
+        bad = true;
+      }
+    } else if (named && target.isFile()) found.push(path);
   }
+  return bad;
 };
 
 /** A main that is not there is false; any other failure (EACCES, EPERM, ELOOP) is thrown, so a main that was not examined never reads as absent. */
@@ -130,11 +140,11 @@ const filesIn = async (root: string, source: Source, project: string, session: s
   const subagents = join(folder, session, 'subagents');
   const agents: string[] = [];
   try {
-    await jsonlUnder(subagents, agents);
+    if (await jsonlUnder(subagents, agents)) unreadable = true;
   } catch {
     unreadable = true;
   }
-  // The files listed before a bad entry are still scanned, so a hit among them is counted.
+  // Every file the walk reached is scanned, so a hit is counted whatever the listing order.
   for (const path of agents) found.push({ path, key: `${session}/subagents/${path.slice(subagents.length + 1).split('\\').join('/')}`, main: false, source });
   return unreadable;
 };
