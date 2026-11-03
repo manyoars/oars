@@ -6,7 +6,7 @@ import { poolFiles, refreshPool } from './pool.js';
 import { prompt, session, store, tool } from './pool-fixture.js';
 import { deriveConsequences, formatRecallCounts, recallCounts, recallGraphOf, WINDOW_CALLS } from './recall-consequence.js';
 import { appendRecall, makeRecall, type Recall, type RecallArm } from './recall-object.js';
-import type { ToolObservation } from './schema.js';
+import type { StepObservation, ToolObservation } from './schema.js';
 import { cleanup, stage } from './test-support.js';
 
 afterEach(cleanup);
@@ -45,11 +45,18 @@ describe('the consequence window', () => {
     expect(consequence(tools, recallAt(1))?.window).toMatchObject({ from: 1, calls: 1 });
   });
 
+  it('sums the tokens the window measured and states none when it measured none, since an older capture holds no step costs and zero would read as free', () => {
+    const step = (tokens: number | null): StepObservation => ({ n: 0, seg: 0, action: 'file.read', native: 'Read', identity: null, status: 'ok', cost: { tokens, durationMs: 1 }, parent: null });
+    const measured = consequence([call(0, 'Read', 0), call(2, 'Read', 0, { steps: [step(30), step(null)] }), call(3, 'Read', 0, { steps: [step(12)] })], recallAt(1));
+    expect(measured?.cost.tokens).toBe(42);
+    expect(consequence([call(0, 'Read', 0), call(2, 'Read', 0, { steps: [step(null)] })], recallAt(1))?.cost.tokens).toBeNull();
+  });
+
   it('holds motifs, followed, cost, and outcome apart, with no composite', () => {
     const found = consequence([call(0, 'Read', 0), call(2, 'Edit', 0, { durationMs: 40 }), call(3, 'Read', 0, { durationMs: 2 })], recallAt(1));
     expect(found?.motifs).toContain(shapeId([{ action: 'file.edit', identity: null }]));
     expect(found?.followed).toBe(true);
-    expect(found?.cost).toEqual({ tokens: 0, durationMs: 42 });
+    expect(found?.cost).toEqual({ tokens: null, durationMs: 42 });
     expect(found?.outcome).toEqual({ errors: 2, verify: 'passed', stopped: null, commits: 1, redo: null });
     expect(Object.keys(found ?? {}).sort()).toEqual(['cost', 'followed', 'motifs', 'outcome', 'window']);
   });
@@ -138,7 +145,8 @@ describe('recall counts', () => {
       { arm: 'held', recalls: 1, sessions: 1, windows: 1, followed: 1, windowCalls: 1 },
       { arm: 'shown', recalls: 2, sessions: 1, windows: 1, followed: 1, windowCalls: 1 },
     ]);
-    expect(formatRecallCounts(rows)).toContain('push held hit | 1 recalls, 1 sessions, 10 tokens | 1 windows, 1 followed, 1 calls, 0 window tokens');
+    expect(formatRecallCounts(rows)).toContain('push held hit | 1 recalls, 1 sessions, 10 tokens | 1 windows, 1 followed, 1 calls, window tokens unmeasured');
+    expect(formatRecallCounts(rows.map((row) => ({ ...row, windowTokens: 7 })))).toContain('1 calls, 7 window tokens');
     expect(recallCounts(deriveConsequences(base, [later]))).toHaveLength(1);
     expect(recallCounts(deriveConsequences(line([call(2, 'Read', 0)]), [recallAt(1)]))[0]?.followed).toBe(0);
     expect(formatRecallCounts([])).toBe('No recalls in that span.');

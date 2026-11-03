@@ -60,7 +60,7 @@ describe('walkLineage', () => {
   it('ends at the evidence a recall holds when the ref is a stand-in, once per ref', () => {
     const hops = walkLineage(sources({ recalls: [recall([evidence('abc123'), evidence('abc123')])] }), 'recall-one');
     expect(hops.map(({ kind, ref }) => [kind, ref])).toEqual([['recall', 'recall-one'], ['evidence', 'abc123']]);
-    expect(formatLineage(hops)).toContain('claude-code, 2.1.300, claude-opus-5-5 | 2026-11-01 | 4 sessions, 1 clusters, from 2026-10-01');
+    expect(formatLineage(hops)).toContain('claude-code, 2.1.300, claude-opus-5-5 | 2026-11-01 | 4 sessions, 1 cluster, from 2026-10-01');
   });
 
   it('starts from a read or a cell, and caps a read of many frames', () => {

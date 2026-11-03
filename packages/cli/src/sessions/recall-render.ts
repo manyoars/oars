@@ -69,7 +69,7 @@ export const evidenceOf = (read: RecallRead, asker: Frame | null): RecallEvidenc
   delta: deltaOf(asker, read),
 });
 
-const count = (value: number, noun: string): string => `${String(value)} ${noun}${value === 1 ? '' : 's'}`;
+export const count = (value: number, noun: string): string => `${String(value)} ${noun}${value === 1 ? '' : 's'}`;
 
 /** A range of public versions, newest last; a version the vocabulary refuses is dropped, never shown. */
 const versionRange = (versions: readonly string[]): string => {
@@ -108,9 +108,19 @@ const nameOf = (read: RecallRead, harness: Harness): string => {
   return keys.length === 0 ? name : `${name} [${keys.join(', ')}]`;
 };
 
+/** Several tools can sit behind one action, and the same word twice would read as two things, so each action is stated once with the sum. */
+const followedActions = (read: RecallRead, table: (typeof ACTION_TABLES)[Harness]): Array<[string, number]> => {
+  const sums = new Map<string, number>();
+  for (const [tool, times] of read.followed) {
+    const { action } = actionOf(table, tool);
+    sums.set(action, (sums.get(action) ?? 0) + times);
+  }
+  return [...sums].sort((a, b) => b[1] - a[1]);
+};
+
 const line = (read: RecallRead, asker: Frame | null, harness: Harness): { text: string; names: string[] } => {
   const table = ACTION_TABLES[harness];
-  const followed = read.followed.map(([tool, times]): [string, number] => [actionOf(table, tool).action, times]);
+  const followed = followedActions(read, table);
   const failures = read.calls === null ? count(read.count, read.family === 'entity' ? 'call' : 'error') : `failed ${String(read.count)} of ${count(read.calls, 'call')}`;
   const harnesses = read.harnesses.flatMap((name) => harnessName(name) ?? []);
   const lastDay = publicDay(read.lastDay) ?? 'unknown';

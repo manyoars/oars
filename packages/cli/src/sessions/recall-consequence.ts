@@ -62,12 +62,13 @@ const consequenceOf = (recall: Recall, session: string, line: readonly ToolObser
   }
   const steps = calls.flatMap((tool) => stepsOfCall(tool, harness));
   const names = new Set<string>(recall.answer.names);
+  const measured = calls.flatMap((tool) => tool.steps ?? []).flatMap((step) => step.cost.tokens ?? []);
   return {
     window: { from: position, to: position + calls.length, calls: calls.length, end },
     // Shape level only: it is the ID that joins across accounts, and named windows would multiply a row that exists per recall.
     motifs: [...new Set(motifsOf(steps).flatMap(({ motif }) => (motif.level === 'shape' ? [motif.motifId] : [])))],
     followed: steps.some((step) => names.has(step.action)),
-    cost: { tokens: steps.reduce((sum, step) => sum + step.tokens, 0), durationMs: steps.reduce((sum, step) => sum + step.durationMs, 0) },
+    cost: { tokens: measured.length === 0 ? null : measured.reduce((sum, tokens) => sum + tokens, 0), durationMs: steps.reduce((sum, step) => sum + step.durationMs, 0) },
     outcome: outcomeOf(prompts.get(promptKey(session, prompt))),
   };
 };
@@ -160,7 +161,8 @@ export interface RecallCountRow {
   windows: number;
   followed: number;
   windowCalls: number;
-  windowTokens: number;
+  /** Null when no window in the row measured any tokens. */
+  windowTokens: number | null;
 }
 
 /** Takes recalls that have been through `deriveConsequences`; `day` is a UTC day, so one day of hooks reads as one set of rows. */
@@ -169,7 +171,7 @@ export const recallCounts = (recalls: readonly Recall[], day?: string): RecallCo
   for (const recall of recalls) {
     if (day !== undefined && !recall.at.startsWith(day)) continue;
     const key = [recall.mode, recall.arm, recall.answer.kind].join(' ');
-    const held = rows.get(key) ?? { row: { mode: recall.mode, arm: recall.arm, kind: recall.answer.kind, recalls: 0, sessions: 0, tokens: 0, windows: 0, followed: 0, windowCalls: 0, windowTokens: 0 }, sessions: new Set<string>() };
+    const held = rows.get(key) ?? { row: { mode: recall.mode, arm: recall.arm, kind: recall.answer.kind, recalls: 0, sessions: 0, tokens: 0, windows: 0, followed: 0, windowCalls: 0, windowTokens: null }, sessions: new Set<string>() };
     rows.set(key, held);
     const { row, sessions } = held;
     row.recalls += 1;
@@ -181,7 +183,7 @@ export const recallCounts = (recalls: readonly Recall[], day?: string): RecallCo
     row.windows += 1;
     if (consequence.followed) row.followed += 1;
     row.windowCalls += consequence.window.calls;
-    row.windowTokens += consequence.cost.tokens;
+    if (consequence.cost.tokens !== null) row.windowTokens = (row.windowTokens ?? 0) + consequence.cost.tokens;
   }
   return [...rows.entries()].sort(([a], [b]) => (a < b ? -1 : 1)).map(([, { row }]) => row);
 };
@@ -190,5 +192,5 @@ export const formatRecallCounts = (rows: readonly RecallCountRow[]): string =>
   rows.length === 0
     ? 'No recalls in that span.'
     : rows
-        .map((row) => `${row.mode} ${row.arm} ${row.kind} | ${String(row.recalls)} recalls, ${String(row.sessions)} sessions, ${String(row.tokens)} tokens | ${String(row.windows)} windows, ${String(row.followed)} followed, ${String(row.windowCalls)} calls, ${String(row.windowTokens)} window tokens`)
+        .map((row) => `${row.mode} ${row.arm} ${row.kind} | ${String(row.recalls)} recalls, ${String(row.sessions)} sessions, ${String(row.tokens)} tokens | ${String(row.windows)} windows, ${String(row.followed)} followed, ${String(row.windowCalls)} calls, ${row.windowTokens === null ? 'window tokens unmeasured' : `${String(row.windowTokens)} window tokens`}`)
         .join('\n');

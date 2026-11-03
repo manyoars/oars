@@ -45,6 +45,12 @@ describe('renderAnswer', () => {
     expect(names).toEqual(['file.read', 'file.edit']);
   });
 
+  it('states an action once when two tools behind it both followed, because the same word twice reads as two things', () => {
+    const { rendered, names } = renderAnswer([read({ followed: [['Bash', 584], ['PowerShell', 560], ['Edit', 600]] })], frame(), 'claude-code');
+    expect(rendered).toContain('then: shell.exec x1144, file.edit x600');
+    expect(names).toEqual(['shell.exec', 'file.edit']);
+  });
+
   it('says nothing for no reads', () => {
     expect(renderAnswer([], frame(), 'claude-code')).toEqual({ rendered: '', names: [] });
   });
