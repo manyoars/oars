@@ -32,6 +32,7 @@ const sessionRecord = (id: string, parent: string | null, { harness, frame }: Sk
   parent,
   agentType: null,
   spawnedBy: null,
+  spawnedIn: null,
   rev: 1,
   at: '',
   bytes: 0,

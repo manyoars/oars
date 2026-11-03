@@ -3,8 +3,8 @@ import { frame, prompt, session, step, store, tool } from '../../cli/src/session
 import { sessionsOf, skeletonOf, type SessionSkeleton } from '../../cli/src/sessions/pool-wire.js';
 
 /** Two shell steps in one prompt. Real capture writes the shell as `shellOf` names it, which the shared fixture's frame predates. */
-export const sampleSkeleton = (id: string, stack: { languages: string[] } = { languages: ['typescript'] }): SessionSkeleton => {
-  const framed = frame({ shell: 'bash', stack: { languages: stack.languages, frameworks: [], size: null } });
+export const sampleSkeleton = (id: string, stack: { languages: string[] } = { languages: ['typescript'] }, day = '2026-11-01'): SessionSkeleton => {
+  const framed = frame({ shell: 'bash', day, stack: { languages: stack.languages, frameworks: [], size: null } });
   const shell = (n: number) => step(n, 0, 'shell.exec', { native: 'Bash', identity: { program: 'git', sub: 'push', flags: [] } });
   const [only] = sessionsOf(
     store({
