@@ -1,9 +1,8 @@
 // Change (t752, rank 4), at order 1: each tool's share and failure rate inside one harness version bucket. What moved between two buckets is a relation between
 // these reads, so it is order 2 (spec Section 6) and composes on them. Confounders: effort, role by brief, rule commits, class drift, and date.
-import { bucketFields, type Cell } from './cells.js';
+import { bucketFields, UNKNOWN, type Cell } from './cells.js';
 import { motifName } from './motif.js';
 import { body, firstDayOf, groupBy, lastDayOf, rate, settled, shapeUnits, total, unitCells, wilson, type DeriveFamily } from './read-support.js';
-import { UNKNOWN } from './cells.js';
 
 const scopeOf = (cell: Cell): string => {
   const { harness, harnessBucket } = bucketFields(cell.frameBucket);

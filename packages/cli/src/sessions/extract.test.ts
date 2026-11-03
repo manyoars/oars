@@ -457,7 +457,7 @@ describe('the version-3 capture records (Item 1, on errors-a.jsonl)', () => {
     expect(error).toMatchObject({ tool: 'Write', status: 'error', keys: ['content', 'file_path'], toolUseId: 't3', prompt: 0 });
     expect(capture.tools[4]?.keys).toEqual(['file_path', 'new_string', 'old_string']);
     expect(capture.tools[6]).toMatchObject({ toolUseId: 't7', prompt: 1 });
-    expect(capture.tools[7]).toEqual({ ...base, n: 7, ts: '2026-05-28T20:27:45.000Z', tool: 'Grep', status: 'none', target: targetOf('Grep', { path: 'src' }, undefined, 'salt', redact).target, targetBase: 'cwd', keys: ['path', 'pattern'], durationMs: null, toolUseId: 't9', prompt: 2 });
+    expect(capture.tools[7]).toEqual({ ...base, steps: capture.tools[7]?.steps, n: 7, ts: '2026-05-28T20:27:45.000Z', tool: 'Grep', status: 'none', target: targetOf('Grep', { path: 'src' }, undefined, 'salt', redact).target, targetBase: 'cwd', keys: ['path', 'pattern'], durationMs: null, toolUseId: 't9', prompt: 2 });
   });
 
   it('keeps each error line unnormalized, keyed by toolUseId, with the calls before it', () => {

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { motifsOf, namedId, shapeId, stepsOfCall, MOTIF_LENGTHS, motifName, type WindowStep } from './motif.js';
-import type { ToolObservation } from './schema.js';
+import type { StepObservation, ToolObservation } from './schema.js';
 
 const call = (over: Partial<ToolObservation>): ToolObservation => ({
   kind: 'tool',
@@ -27,10 +27,24 @@ const call = (over: Partial<ToolObservation>): ToolObservation => ({
 
 const step = (action: WindowStep['action'], identity: WindowStep['identity'] = null): WindowStep => ({ action, identity });
 
+const captured = (n: number, seg: number, action: StepObservation['action'], over: Partial<StepObservation> = {}): StepObservation => ({
+  n,
+  seg,
+  action,
+  native: 'tool',
+  identity: null,
+  status: 'ok',
+  cost: { tokens: null, durationMs: null },
+  parent: null,
+  edges: [],
+  frameId: 'f',
+  ...over,
+});
+
 describe('motif IDs', () => {
   it('joins the same shape from two differently salted accounts, in two frames', () => {
     const steps = (sid: string, target: string, frameId: string) =>
-      [call({ sid, target, steps: [{ n: 0, seg: 0, action: 'file.read', native: 'Read', frameId }] }), call({ sid, target, n: 1, tool: 'Edit', steps: [{ n: 1, seg: 0, action: 'file.edit', native: 'Edit', frameId }] })].flatMap((tool) =>
+      [call({ sid, target, steps: [captured(0, 0, 'file.read', { frameId })] }), call({ sid, target, n: 1, tool: 'Edit', steps: [captured(1, 0, 'file.edit', { frameId })] })].flatMap((tool) =>
         stepsOfCall(tool, 'claude-code'),
       );
     const one = steps('aaaaaaaa', 'hash-under-salt-a', 'frame-one');
@@ -60,7 +74,7 @@ describe('motif IDs', () => {
 
 describe('stepsOfCall', () => {
   it('takes the action a record captured', () => {
-    expect(stepsOfCall(call({ steps: [{ n: 0, seg: 0, action: 'file.write', native: 'Read', frameId: 'f' }] }), 'claude-code')).toEqual([{ action: 'file.write', identity: null, status: 'ok', tokens: 0, durationMs: 5 }]);
+    expect(stepsOfCall(call({ steps: [captured(0, 0, 'file.write')] }), 'claude-code')).toEqual([{ action: 'file.write', identity: null, status: 'ok', tokens: 0, durationMs: 0 }]);
   });
 
   it('reads a record captured before steps existed through the same action table, under its own harness', () => {
@@ -68,20 +82,14 @@ describe('stepsOfCall', () => {
     expect(stepsOfCall(call({ tool: 'not-a-tool' }), 'claude-code')[0]?.action).toBe('other');
   });
 
-  it('reads identity, status, and cost per segment when capture states them, and counts a call duration once', () => {
-    const captured = [
-      { n: 0, seg: 0, action: 'shell.exec' as const, native: 'Bash', frameId: 'f', identity: { program: 'git' }, status: 'ok' as const, cost: { tokens: 7, durationMs: null } },
-      { n: 0, seg: 1, action: 'shell.exec' as const, native: 'Bash', frameId: 'f', identity: { program: 'npm' }, status: 'error' as const },
-    ];
-    expect(stepsOfCall(call({ tool: 'Bash', status: 'error', steps: captured }), 'claude-code')).toEqual([
-      { action: 'shell.exec', identity: { program: 'git' }, status: 'ok', tokens: 7, durationMs: 5 },
-      { action: 'shell.exec', identity: { program: 'npm' }, status: 'error', tokens: 0, durationMs: 0 },
+  it('reads identity, status, and cost per segment, and counts a call once because capture holds its cost on the first segment', () => {
+    const git = { program: 'git', sub: null, flags: [] };
+    const npm = { program: 'npm', sub: null, flags: [] };
+    const steps = [captured(0, 0, 'shell.exec', { identity: git, cost: { tokens: 7, durationMs: 5 } }), captured(0, 1, 'shell.exec', { identity: npm, status: 'error' })];
+    expect(stepsOfCall(call({ tool: 'Bash', status: 'error', steps }), 'claude-code')).toEqual([
+      { action: 'shell.exec', identity: git, status: 'ok', tokens: 7, durationMs: 5 },
+      { action: 'shell.exec', identity: npm, status: 'error', tokens: 0, durationMs: 0 },
     ]);
-  });
-
-  it('prefers a duration capture stated on the step', () => {
-    const captured = [{ n: 0, seg: 0, action: 'shell.exec' as const, native: 'Bash', frameId: 'f', cost: { tokens: 1, durationMs: 9 } }];
-    expect(stepsOfCall(call({ steps: captured }), 'claude-code')[0]?.durationMs).toBe(9);
   });
 
   it('counts no duration for a call with none', () => {
@@ -125,8 +133,13 @@ describe('motifsOf', () => {
     expect(named !== undefined && motifName(named.motif)).toBe('file.read>file.edit');
   });
 
-  it('names a missing identity field by leaving it out', () => {
-    const named = motifsOf([step('shell.exec', { program: 'git', sub: null })]).find((window) => window.motif.level === 'named');
+  it('names a missing identity field by leaving it out, and an empty list too', () => {
+    const named = motifsOf([step('shell.exec', { program: 'git', sub: null, flags: [] })]).find((window) => window.motif.level === 'named');
     expect(named !== undefined && motifName(named.motif)).toBe('shell.exec[program=git]');
+  });
+
+  it('names a pull by its registry and name, and leaves its version to the identity', () => {
+    const named = motifsOf([step('shell.exec', { program: 'npm', sub: 'install', flags: [], pulls: [{ registry: 'npm', name: 'zod', version: '4.0.0' }] })]).find((window) => window.motif.level === 'named');
+    expect(named !== undefined && motifName(named.motif)).toBe('shell.exec[program=npm pulls=npm:zod sub=install]');
   });
 });
