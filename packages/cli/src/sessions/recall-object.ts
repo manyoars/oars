@@ -106,7 +106,8 @@ export interface RecallConsequence {
   window: { from: number; to: number; calls: number; end: 'prompt' | 'calls' | 'session' };
   motifs: string[];
   followed: boolean;
-  cost: { tokens: number; durationMs: number };
+  /** `tokens` is null when no call in the window measured any: an older capture has no step costs, and zero would read as a free window. */
+  cost: { tokens: number | null; durationMs: number };
   outcome: RecallOutcome;
 }
 

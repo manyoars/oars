@@ -8,6 +8,7 @@ import { cellIdOf, UNKNOWN, type Cell } from './cells.js';
 import { poolFiles } from './pool.js';
 import type { Read } from './read.js';
 import { evidencePredates, readRecalls, type Recall, type RecallEvidence } from './recall-object.js';
+import { count } from './recall-render.js';
 
 export interface LineageSources {
   recalls: readonly Recall[];
@@ -62,7 +63,7 @@ export const walkLineage = (sources: LineageSources, start: string): LineageHop[
       } else if (!seen.has(evidence.ref)) {
         // A stand-in: the shape or signature hash a recall cites where no read was stored. The recall holds all there is to say of it.
         seen.add(evidence.ref);
-        hops.push({ depth: depth + 1, kind: 'evidence', ref: evidence.ref, frames: framesOfEvidence(evidence), day: evidence.lastDay, detail: `${String(evidence.n)} sessions, ${String(evidence.clusters)} clusters, from ${String(evidence.firstDay)}` });
+        hops.push({ depth: depth + 1, kind: 'evidence', ref: evidence.ref, frames: framesOfEvidence(evidence), day: evidence.lastDay, detail: `${count(evidence.n, 'session')}, ${count(evidence.clusters, 'cluster')}, from ${String(evidence.firstDay)}` });
       }
     }
   };
@@ -78,7 +79,7 @@ export const walkLineage = (sources: LineageSources, start: string): LineageHop[
     const read = reads.get(ref);
     if (read !== undefined) {
       if (limit !== null && read.asOf.day !== null && read.asOf.day > limit) throw refuse(ref, read.asOf.day, limit);
-      hops.push({ depth, kind: 'read', ref, frames: framesOfRead(read, cells), day: read.asOf.day, detail: `${read.family}, order ${String(read.order)}, n ${String(read.n)}, ${String(read.clusters)} clusters, basis ${read.basis}` });
+      hops.push({ depth, kind: 'read', ref, frames: framesOfRead(read, cells), day: read.asOf.day, detail: `${read.family}, order ${String(read.order)}, n ${String(read.n)}, ${count(read.clusters, 'cluster')}, basis ${read.basis}` });
       for (const input of read.inputs) walk(input, depth + 1, limit);
       return;
     }
