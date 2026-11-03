@@ -86,6 +86,7 @@ oars sessions books --by harness            # the same, grouped by Claude Code a
 oars sessions measure --last 50             # recurring errors per 100 sessions, cache-write per session, recall calls per session
 oars sessions measure --last 50 --repo <root>  # the same, for one repository's sessions
 oars sessions verify                        # consistency invariants on the stored skeletons and capture records
+oars sessions gold sample --exclude-term <text>   # about 200 prompts to judge blind; `gold score <file>` reads each signal against the judgments
 ```
 
 `deposit` is idempotent (a file is skipped only when its size, mtime, capture version, salt, and `--redact-domain` set are all unchanged; a store written by an older capture version is captured again from the harness's transcript or from `raw/`, and one written by a newer oars is refused) and appends to `<config>/oars/sessions/observations.jsonl`:
