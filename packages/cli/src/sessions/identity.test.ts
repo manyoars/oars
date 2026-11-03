@@ -160,6 +160,15 @@ describe('identity holds public names only', () => {
     expect(shell('npm install typescript@beta')[0]?.identity).toMatchObject({ pulls: [{ registry: 'npm', name: 'typescript', version: '<literal>' }] });
   });
 
+  it('masks a version whose suffix is a private build tag, and keeps digits and release words', () => {
+    for (const version of ['5.4.2-acmecorp', '5.4.2+acmecorp.1', '5.4.2-beta.acmecorp', '5.4.2-rcacme']) {
+      expect(shell(`npm install typescript@${version}`)[0]?.identity).toMatchObject({ pulls: [{ name: 'typescript', version: '<literal>' }] });
+    }
+    for (const version of ['5.4.2-beta.1', '5.4.2-rc1', '5.4.2+7', '5.x', '^5.4.2', '~5.4']) {
+      expect(shell(`npm install typescript@${version}`)[0]?.identity).toMatchObject({ pulls: [{ name: 'typescript', version }] });
+    }
+  });
+
   it('holds a shell step with no readable command as a masked program', () => {
     expect(shell('$TOOL --force')[0]?.identity).toEqual({ program: '<literal>', sub: null, flags: [] });
     expect(shell('')[0]?.identity).toEqual({ program: '<literal>', sub: null, flags: [] });

@@ -85,6 +85,18 @@ describe('one step per shell segment', () => {
     expect(steps.map((step) => step.status)).toEqual(['none', 'error', 'none', 'ok']);
   });
 
+  it('gives every segment of an && chain the call status, since the result does not say which failed', () => {
+    const steps = stepsOfPrompts([[{ command: 'git add . && npm test', failed: true }, { command: 'git add .' }]]);
+    expect(steps.map((step) => step.status)).toEqual(['error', 'error', 'ok']);
+    expect(steps[2]?.edges).toContainEqual({ kind: 'retried', n: 0, seg: 0 });
+  });
+
+  it('keeps the last 50 commands of a call', () => {
+    const steps = stepsOfPrompts([[{ command: ['git status', ...Array.from({ length: 50 }, () => 'ls')].join(' && ') }]]);
+    expect(steps.map((step) => step.seg)).toEqual(Array.from({ length: 50 }, (_, seg) => seg));
+    expect(steps.every((step) => step.identity !== null && 'program' in step.identity && step.identity.program === 'ls')).toBe(true);
+  });
+
   it('holds status none on a call with no result in the file', () => {
     const text = line({ type: 'assistant', timestamp: at(1), message: { role: 'assistant', content: [{ type: 'tool_use', id: 't', name: 'Read', input: {} }] } });
     expect(capture(text)[0]?.steps?.[0]?.status).toBe('none');
