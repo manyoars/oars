@@ -64,7 +64,7 @@ export interface SessionsRuntime {
   stdout: { write: (text: string) => unknown };
 }
 
-export interface FileState {
+interface FileState {
   size: number;
   mtimeMs: number;
   rev: number;

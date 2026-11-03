@@ -1,5 +1,5 @@
 // `oars sessions verify` with the per-session results and the T0 audit (t743).
-import { appendFileSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { appendFileSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { sessionsVerify } from './command.js';
@@ -31,6 +31,24 @@ describe('sessionsVerify, per session', () => {
     const verified = await sessionsVerify({ sessions: staged.runtime, install: undefined, now: () => NOW }, { session: 'tldr' });
     expect(verified.report.sessionResults.map((entry) => entry.session)).toEqual(['tldr']);
     expect(verified.report.audit.sessions.map((entry) => entry.session)).toEqual(['tldr']);
+  });
+
+  it('gives --session <main id> the same row 6 as the whole-store run, its subagent transcripts included', async () => {
+    const staged = stage();
+    const usage = { input_tokens: 5, cache_creation_input_tokens: 6, cache_read_input_tokens: 7, output_tokens: 8 };
+    const assistant = (requestId: string, timestamp: string): string => JSON.stringify({ type: 'assistant', requestId, timestamp, message: { role: 'assistant', model: 'm', content: [], usage } });
+    const tokens = (factor: number) => ({ inputTokens: 5 * factor, cacheCreationInputTokens: 6 * factor, cacheReadInputTokens: 7 * factor, outputTokens: 8 * factor });
+    const costState = JSON.stringify({ type: 'cost-state', startTime: Date.parse('2026-10-13T15:00:00.000Z'), modelUsage: { m: tokens(3) } });
+    writeFileSync(join(staged.projectsRoot, 'proj', 'p1.jsonl'), `${[assistant('r1', '2026-10-13T16:00:00.000Z'), costState].join('\n')}\n`);
+    mkdirSync(join(staged.projectsRoot, 'proj', 'p1', 'subagents'), { recursive: true });
+    writeFileSync(join(staged.projectsRoot, 'proj', 'p1', 'subagents', 'agent-a.jsonl'), `${[assistant('s1', '2026-10-13T16:01:00.000Z'), assistant('s2', '2026-10-13T16:02:00.000Z')].join('\n')}\n`);
+    await deposit(staged.runtime, options);
+    const deps = { sessions: staged.runtime, install: undefined, now: () => NOW };
+    const whole = (await sessionsVerify(deps, { session: undefined })).report.sessionResults.find((entry) => entry.session === 'p1');
+    const scoped = (await sessionsVerify(deps, { session: 'p1' })).report.sessionResults;
+    expect(whole?.invariants[5]).toMatchObject({ checked: 4, violations: 0, status: 'pass' });
+    expect(scoped.map((entry) => entry.session)).toEqual(['p1']);
+    expect(scoped[0]?.invariants[5]).toEqual(whole?.invariants[5]);
   });
 
   it('fails a session whose raw file edit kept the size and mtime, by name, so --strict exits 4', async () => {
