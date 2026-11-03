@@ -13,7 +13,7 @@ import { CliError, ExitCode } from './errors.js';
 import type { JournalStore } from './journal.js';
 import type { BooksBy, RecallQuery } from './sessions/query.js';
 import { FAMILIES } from './sessions/read.js';
-import { sessionsBooks, sessionsContext, sessionsDeposit, sessionsHookInstall, sessionsHookStatus, sessionsHookUninstall, sessionsMcp, sessionsMeasure, sessionsRead, sessionsRecall, sessionsVerify, type SessionsDeps } from './sessions/command.js';
+import { sessionsBooks, sessionsContext, sessionsDeposit, sessionsGoldArms, sessionsGoldSample, sessionsGoldScore, sessionsHookInstall, sessionsHookStatus, sessionsHookUninstall, sessionsMcp, sessionsMeasure, sessionsRead, sessionsRecall, sessionsVerify, type SessionsDeps } from './sessions/command.js';
 import { exclusionPaths, sessionsExclusions } from './sessions/exclusion.js';
 import type { InstallRuntime, Scope } from './sessions/install.js';
 import type { SessionsRuntime } from './sessions/store.js';
@@ -275,7 +275,7 @@ const buildProgram = (deps: RunDeps, argv: string[]): Command => {
       emit(deps, flag(options, 'json'), await purchasingList(deps, { apiUrl: resolveApiUrl(deps, text(options, 'apiUrl')), workloadId }));
     });
 
-  const sessions = program.command('sessions').description("deposit and recall your own Claude Code session logs, locally (no model calls, no network)");
+  const sessions = program.command('sessions').description("deposit and recall your own Claude Code session logs, locally (no model calls, no network, except `gold arms`, which asks your own Claude subscription)");
 
   sessions
     .command('deposit')
@@ -391,6 +391,49 @@ const buildProgram = (deps: RunDeps, argv: string[]): Command => {
       const options: OptionValues = command.optsWithGlobals();
       if (deps.sessions === undefined) throw new CliError('The session store is not configured in this run.', ExitCode.UNEXPECTED, 'unexpected');
       emit(deps, flag(options, 'json'), await sessionsExclusions(deps.sessions, exclusionPaths(deps.sessions.projectsRoot, deps.env, text(options, 'out'))));
+    });
+
+  const gold = sessions.command('gold').description('a blind, human-judged sample of prompts, and every signal scored against those judgments');
+
+  gold
+    .command('sample')
+    .description('write about 200 prompts in batches to judge blind, across prompt classes and models, with the signals in a hidden sidecar; it never overwrites a file')
+    .option('--size <n>', 'prompts to draw (default 200)', positiveInteger)
+    .option('--batch <n>', 'prompts per batch (default 50)', positiveInteger)
+    .option('--seed <text>', "the draw's seed (default today's date)")
+    .option('--exclude-term <text>', 'leave out any session that mentions this, in any case, in its transcript or a subagent transcript (repeatable)', collect)
+    .option('--out-dir <folder>', 'where to write (default <claude config>/session-commons/review)')
+    .action(async (_options: OptionValues, command: Command) => {
+      const options: OptionValues = command.optsWithGlobals();
+      emit(
+        deps,
+        flag(options, 'json'),
+        await sessionsGoldSample(sessionDeps(deps), {
+          size: count(options, 'size') ?? 200,
+          batch: count(options, 'batch') ?? 50,
+          seed: text(options, 'seed'),
+          excludeTerms: list(options, 'excludeTerm'),
+          outDir: text(options, 'outDir'),
+        }),
+      );
+    });
+
+  gold
+    .command('score')
+    .description('per signal and per model, the AUROC with its 95% interval and the base rate, from whatever is judged so far')
+    .argument('<file>', 'the gold file')
+    .action(async (file: string, _options: OptionValues, command: Command) => {
+      const options: OptionValues = command.optsWithGlobals();
+      emit(deps, flag(options, 'json'), await sessionsGoldScore({ file }));
+    });
+
+  gold
+    .command('arms')
+    .description('fill the hidden sidecar: the closing claim, its Confidence line, and fresh single-turn readers on your Claude subscription, with fixed, hashed wording. It resumes, and never touches the gold file')
+    .argument('<file>', 'the gold file')
+    .action(async (file: string, _options: OptionValues, command: Command) => {
+      const options: OptionValues = command.optsWithGlobals();
+      emit(deps, flag(options, 'json'), await sessionsGoldArms(sessionDeps(deps), { file }));
     });
 
   const hook = sessions.command('hook').description('install the recall hooks into a Claude Code settings file, and the nightly deposit task');

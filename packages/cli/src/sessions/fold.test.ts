@@ -23,7 +23,7 @@ describe('foldToolRows', () => {
 
   it('gives the kept record the status and duration of a later record when its own is none', () => {
     const { tools } = foldToolRows([tool('a', 'none', { n: 0, prompt: 0 }), tool('a', 'error', { n: 5, prompt: 2, durationMs: 40 })], []);
-    expect(tools).toEqual([tool('a', 'error', { n: 0, prompt: 0, durationMs: 40 })], []);
+    expect(tools).toEqual([tool('a', 'error', { n: 0, prompt: 0, durationMs: 40 })]);
   });
 
   it('keeps the status of the kept record when a later one also has one, and every record with no id', () => {
@@ -108,7 +108,7 @@ describe('loadStore over an old session with replays interleaved', () => {
     await deposit(staged.runtime, { allow: ['proj'], redactDomains: [], now: () => NOW });
     const file = paths(staged.storeDir).observations;
     const before = await loadStore(staged.storeDir);
-    const records = readFileSync(file, 'utf8').split('\n').filter((entry) => entry !== '').map((entry): Record<string, unknown> => JSON.parse(entry));
+    const records = readFileSync(file, 'utf8').split('\n').filter((entry) => entry !== '').map((entry): unknown => JSON.parse(entry)).filter((entry): entry is Record<string, unknown> => typeof entry === 'object' && entry !== null);
     const mine = (entry: Record<string, unknown>): boolean => entry.session === 'errors-a';
     // An older capture put the replay of each call right after it: row i is at n 2i, its replay at 2i + 1, and an error line seen after a calls says `after` 2a.
     const old = records.flatMap((entry): Record<string, unknown>[] => {

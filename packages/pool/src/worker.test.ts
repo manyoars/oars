@@ -34,7 +34,7 @@ beforeAll(async () => {
   const bundled = await build({ entryPoints: [fileURLToPath(new URL('./worker.ts', import.meta.url))], bundle: true, write: false, format: 'esm', platform: 'node', conditions: ['workerd', 'worker'], external: ['node:*'] });
   const contents = bundled.outputFiles[0]?.text;
   if (contents === undefined) throw new Error('the bundle is empty');
-  pool = new Miniflare({ workers: [{ name: 'pool', modules: [{ type: 'ESModule', path: 'worker.js', contents }], compatibilityDate: '2026-11-01', compatibilityFlags: ['nodejs_compat'], d1Databases: { DB: 'pool-test' } }] });
+  pool = new Miniflare({ workers: [{ name: 'pool', modules: [{ type: 'ESModule', path: 'worker.js', contents }], compatibilityDate: '2026-07-01', compatibilityFlags: ['nodejs_compat'], d1Databases: { DB: 'pool-test' } }] });
   await pool.ready;
   const db = await pool.getD1Database('DB');
   const migration = readFileSync(fileURLToPath(new URL('../migrations/0001_init.sql', import.meta.url)), 'utf8');
