@@ -22,6 +22,9 @@ export const contentHash = (value: unknown): string => createHash('sha256').upda
 export const FIRST_ORDER_FAMILIES = ['recovery', 'fit', 'cost', 'change', 'live', 'adoption', 'method', 'next-step', 'tool-day'] as const;
 export type FirstOrderFamily = (typeof FIRST_ORDER_FAMILIES)[number];
 
+/** What `poolOf` hashes for these families: bump it when a family or a method changes, or a stored file for this pool hides the change. */
+export const READS_VERSION = '2';
+
 /** Families that read other reads, lowest order first. `lead-lag` is the labeled experiment (spec Section 6). */
 export const FAMILIES = [...FIRST_ORDER_FAMILIES, 'version-boundary', 'substitution', 'interaction', 'day-move', 'lead-lag'] as const;
 export type Family = (typeof FAMILIES)[number];
