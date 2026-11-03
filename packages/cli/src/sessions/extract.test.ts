@@ -473,3 +473,51 @@ describe('the version-3 capture records (Item 1, on errors-a.jsonl)', () => {
     expect(capture.skeleton.v).toBe(CAPTURE_VERSION);
   });
 });
+
+describe('one tool call is one tool record (t762)', () => {
+  const user = (text: string, cwd: string): string => JSON.stringify({ type: 'user', isSidechain: false, cwd, timestamp: '2026-06-01T00:00:00.000Z', message: { role: 'user', content: text } });
+  const call = (id: string, name: string, input: object, cwd: string): string =>
+    JSON.stringify({ type: 'assistant', isSidechain: false, cwd, requestId: `r-${id}`, timestamp: '2026-06-01T00:00:01.000Z', message: { role: 'assistant', model: 'm', content: [{ type: 'tool_use', id, name, input }] } });
+  const result = (id: string, error = false): string =>
+    JSON.stringify({ type: 'user', isSidechain: false, timestamp: '2026-06-01T00:00:02.000Z', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: id, is_error: error, content: error ? 'boom' : 'fine' }] } });
+  const captureOf = (lines: string[]) => captureSession({ text: lines.join('\n'), session: 's', project: 'proj', rev: 1, at: '', bytes: 0, redact, salt: 'salt' });
+
+  // A resumed session replays the earlier transcript: the same assistant and result lines come again, here from another directory.
+  const resumed = captureOf([
+    user('first', '/work/app'),
+    call('t1', 'Read', { file_path: 'src/a.ts' }, '/work/app'),
+    result('t1'),
+    call('t2', 'Bash', { command: 'npm test' }, '/work/app'),
+    result('t2', true),
+    user('resumed', '/work/app/sub'),
+    call('t1', 'Read', { file_path: 'src/a.ts' }, '/work/app/sub'),
+    result('t1'),
+    call('t2', 'Bash', { command: 'npm test' }, '/work/app/sub'),
+    result('t2', true),
+  ]);
+
+  it('writes the replayed call once, with its status, and not again with status none', () => {
+    expect(resumed.tools.map((tool) => [tool.n, tool.toolUseId, tool.tool, tool.status])).toEqual([[0, 't1', 'Read', 'ok'], [1, 't2', 'Bash', 'error']]);
+    expect(resumed.tools.map((tool) => tool.prompt)).toEqual([0, 0]);
+  });
+
+  it('counts the replayed call once in the session record, and every file hash is the target of a tool record', () => {
+    expect(resumed.session.tools).toEqual({ Bash: 1, Read: 1 });
+    expect(resumed.session.bashCmds).toBe(1);
+    const targets = new Set(resumed.tools.map((tool) => tool.target));
+    expect(resumed.session.fileHashes.length).toBeGreaterThan(0);
+    for (const hash of resumed.session.fileHashes) expect(targets.has(hash)).toBe(true);
+  });
+
+  it('keeps the replayed failure as an error line, and the skeleton of every line', () => {
+    expect(resumed.errorLines.map((line) => line.toolUseId)).toEqual(['t2', 't2']);
+    expect(resumed.skeleton.lines.flatMap((line) => line.tools.map((tool) => tool.id))).toEqual(['t1', 't2', 't1', 't2']);
+  });
+
+  it('still writes a call that has no result yet, and a call with no id once per occurrence', () => {
+    const pending = captureOf([user('go', '/work/app'), call('t1', 'Grep', { pattern: 'x' }, '/work/app')]);
+    expect(pending.tools.map((tool) => [tool.toolUseId, tool.status])).toEqual([['t1', 'none']]);
+    const anonymous = JSON.stringify({ type: 'assistant', isSidechain: false, message: { role: 'assistant', model: 'm', content: [{ type: 'tool_use', name: 'Grep', input: {} }] } });
+    expect(captureOf([user('go', '/work/app'), anonymous, anonymous]).tools.map((tool) => [tool.toolUseId, tool.status])).toEqual([[null, 'none'], [null, 'none']]);
+  });
+});

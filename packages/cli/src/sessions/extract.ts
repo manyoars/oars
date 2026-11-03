@@ -1317,8 +1317,12 @@ export const captureSession = (input: ExtractInput): Capture => {
         for (const match of text.matchAll(CONF_RE)) session.confidences.push(cut(redact(match[1] ?? ''), 120));
       } else if (blockType === 'tool_use') {
         const name = str(block.name) ?? '?';
-        session.tools[name] = (session.tools[name] ?? 0) + 1;
         const id = str(block.id);
+        // A resumed session replays earlier lines, so the same tool_use id comes again, often from another cwd (so a different path hash).
+        // The first copy is the call and already holds the result; a replay would be a second row with status none (t762). The skeleton
+        // still lists every line, and a replayed failure stays an error line, as derive.ts counts it.
+        if (id !== undefined && callById.has(id)) continue;
+        session.tools[name] = (session.tools[name] ?? 0) + 1;
         toolById.set(id, name);
         const toolInput = isObj(block.input) ? block.input : {};
         // An adapter that renames its tools for the extractor keeps the harness's own name in `native`.
@@ -1370,8 +1374,7 @@ export const captureSession = (input: ExtractInput): Capture => {
           ...(pulls.length === 0 ? {} : { pulls }),
         };
         tools.push(call);
-        // A resumed session repeats earlier lines: the first copy of a call carries its result, a repeat keeps status none.
-        if (id !== undefined && !callById.has(id)) callById.set(id, { call, at: lineSeconds, plan: shell?.commitPlan ?? [] });
+        if (id !== undefined) callById.set(id, { call, at: lineSeconds, plan: shell?.commitPlan ?? [] });
       } else if (blockType === 'tool_result') {
         const text = resultText(block);
         const failed = isErrorResult(block, text);

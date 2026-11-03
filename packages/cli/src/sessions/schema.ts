@@ -5,6 +5,14 @@
 // captured records to `<config>/oars/sessions/observations.jsonl`. The log is append-only: a session whose file changed is deposited
 // again under a higher `rev`, and a reader keeps only the highest `rev` of each session.
 //
+// EXTRACTOR 9 (t756) adds motifs, cells, and reads, computed from the capture records and written beside them (`docs/sessions-store.md`), and carries a prompt's
+// frame onto its derived record. No capture record changes.
+//
+// Version 8 (CAPTURE 8 and EXTRACTOR 8, t762; 6 and 7 are held by t746 and t755) writes one `tool` record per tool call. A resumed transcript replays
+// earlier lines, and capture used to write the replay as a second record with status `none` (and, from another cwd, another path hash). The replay is
+// now skipped, so `session.tools` and `bashCmds` count the call once too; the skeleton still lists every line. The reader folds records already on
+// disk the same way until each transcript is captured again (`foldToolRows` in store.ts).
+//
 // Store version 5 (CAPTURE 5, t733) keeps version 4's shape and changes one stored value: each `models` entry of the skeleton's cost state names
 // the usage keys it reported, which `verify` uses to class a side call. A version-4 skeleton reads with no keys until it is captured again.
 //
@@ -35,13 +43,13 @@ import type { CanonicalAction } from './actions.js';
 import type { RepoSize } from './public-vocabulary.js';
 
 /** Stamped `cv` on every captured record. Bump it when the captured field list changes or a stored value of an existing captured record or skeleton changes: a bump re-reads every transcript. */
-export const CAPTURE_VERSION = '6';
+export const CAPTURE_VERSION = '8';
 
 /** Capture versions the reader derives from. A version-3 record is upgraded on read; a newer one is read for the fields this code knows. */
 export const OLDEST_READABLE_CAPTURE = 3;
 
 /** Stamped `v` on every derived record. A bump re-derives from the log; no transcript is read. */
-export const EXTRACTOR_VERSION = '6';
+export const EXTRACTOR_VERSION = '9';
 
 export const PROMPT_HEAD_CHARS = 300;
 export const ERROR_EXAMPLE_CHARS = 160;
@@ -192,6 +200,8 @@ export type PromptStop = 'interrupt' | 'rejected';
  */
 export interface PromptObservation {
   kind: 'prompt';
+  /** Where and when the prompt ran, from its capture record; absent on a record captured before frames existed. Class P. */
+  frame?: Frame;
   v: string;
   session: string;
   rev: number;
