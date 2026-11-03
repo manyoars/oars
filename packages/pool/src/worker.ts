@@ -1,6 +1,7 @@
 // The pool server (t758): a Workers fetch handler over one D1 database. Deposits take closed-vocabulary skeletons only, and a refusal names the field.
 import { parseSkeleton, stacksOf } from '../../cli/src/sessions/pool-wire.js';
-import { answer, refuse, type Env } from './http.js';
+import { covenantAccept, covenantNotAccepted, covenantStatus, depositsClosed, hasAccepted } from './covenant.js';
+import { answer, bound, refuse, type Env } from './http.js';
 import { accountOf, loginPoll, loginStart } from './identity.js';
 import { pullSlice } from './slice.js';
 
@@ -10,8 +11,12 @@ const MAX_DEPOSIT_BYTES = 1024 * 1024;
 const SLICES = '/v1/slices/';
 
 const deposit = async (request: Request, env: Env): Promise<Response> => {
+  // The gate comes before the sign-in and the body, so a closed pool reads neither.
+  const version = bound(env.COVENANT_VERSION);
+  if (version === undefined) return depositsClosed();
   const account = await accountOf(request, env);
   if (account === undefined) return refuse(401, 'unauthorized', 'Sign in with oars pool login first.');
+  if (!(await hasAccepted(env, account, version))) return covenantNotAccepted(version);
   const text = await request.text();
   if (new TextEncoder().encode(text).length > MAX_DEPOSIT_BYTES) return refuse(413, 'too_large', `A skeleton holds at most ${String(MAX_DEPOSIT_BYTES)} bytes.`);
   let body: unknown;
@@ -37,8 +42,12 @@ export default {
       if (pathname === '/v1/deposits') return deposit(request, env);
       if (pathname === '/v1/login/start') return loginStart(request, env);
       if (pathname === '/v1/login/poll') return loginPoll(request, env);
+      if (pathname === '/v1/covenant/accept') return covenantAccept(request, env);
     }
-    if (request.method === 'GET' && pathname.startsWith(SLICES)) return pullSlice(request, env, decodeURIComponent(pathname.slice(SLICES.length)));
+    if (request.method === 'GET') {
+      if (pathname === '/v1/covenant') return covenantStatus(request, env);
+      if (pathname.startsWith(SLICES)) return pullSlice(request, env, decodeURIComponent(pathname.slice(SLICES.length)));
+    }
     return refuse(404, 'not_found', 'No such route.');
   },
 };
