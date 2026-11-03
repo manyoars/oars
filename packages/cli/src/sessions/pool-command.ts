@@ -155,7 +155,8 @@ const deviceOf = (reply: Reply): Device => {
   if (reply.status !== 200) throw refusal(LOGIN, reply);
   const { body } = reply;
   const [deviceCode, userCode, verificationUri] = isObject(body) ? [textIn(body, 'deviceCode'), textIn(body, 'userCode'), textIn(body, 'verificationUri')] : [];
-  if (!isObject(body) || deviceCode === undefined || userCode === undefined || verificationUri === undefined) throw new CliError('The pool did not start a sign-in.', ExitCode.UNEXPECTED, LOGIN);
+  // `openBrowser` parses the link before it returns its promise, so one that cannot parse has to stop here or it throws past the login's catch.
+  if (!isObject(body) || deviceCode === undefined || userCode === undefined || verificationUri === undefined || !URL.canParse(verificationUri)) throw new CliError('The pool did not start a sign-in.', ExitCode.UNEXPECTED, LOGIN);
   return { deviceCode, userCode, verificationUri, intervalMs: (numberIn(body, 'interval') ?? DEFAULT_INTERVAL_SEC) * 1000, expiresMs: (numberIn(body, 'expiresIn') ?? DEFAULT_EXPIRY_SEC) * 1000 };
 };
 

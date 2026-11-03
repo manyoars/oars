@@ -22,7 +22,9 @@ const depositsOf = async (env: Env, stack: string): Promise<SessionSkeleton[][]>
     const account = textField(row, 'account');
     const parsed = parseSkeleton(JSON.parse(textField(row, 'skeleton') ?? 'null'));
     if (account === undefined || !parsed.ok) continue;
-    accounts.set(account, [...(accounts.get(account) ?? []), parsed.skeleton]);
+    const held = accounts.get(account);
+    if (held === undefined) accounts.set(account, [parsed.skeleton]);
+    else held.push(parsed.skeleton);
   }
   return [...accounts.values()];
 };
