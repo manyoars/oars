@@ -5,7 +5,8 @@ All notable changes to `@manyoars/oars-client`. Versions follow semver.
 ## Unreleased
 
 - Types only: the public spec gains the API key operations `UserManagement_create` (`POST /me/api-keys`), `UserManagement_list` (`GET /me/api-keys`), and `revoke_1` (`DELETE /me/api-keys/{keyId}`). `CreateDeveloperApiKeyRequest` takes an optional `workloadId` that scopes the key to that one workload, and `DeveloperApiKeyResponse` returns it (absent on an ordinary key).
-- A key scoped to a workload is refused as not found on any other workload, and on register, deploy, start, delete, SDK-key rotate, and secrets; it can patch its own `scheduleCron` and stop its own workload.
+- A key scoped to a workload gets 404 `WORKLOAD_NOT_FOUND` on any other workload. On its own workload it gets 403 `WORKLOAD_NOT_OWNED` on deploy, start, delete, SDK-key rotate, and any config change other than `scheduleCron` (secrets included), and register is refused the same way. It can patch its own `scheduleCron` and stop its own workload.
+- `POST /me/api-keys` answers 400 `API_KEY_WORKLOAD_SCOPE_EXCEEDS_CAP` when a key with a `workloadId` asks for more than `AGENT_OPERATE` and `AGENT_READ`.
 
 ## 0.1.2
 
