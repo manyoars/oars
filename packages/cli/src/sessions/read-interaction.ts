@@ -56,7 +56,7 @@ const candidateFor = (a: Tier, b: Tier, key: string, scope: { harness: string; h
 
 /** The comparisons a store's fit reads allow, above the floor, whether or not any of them moved. */
 export const interactionCandidates = (reads: readonly Read[]): Candidate[] => {
-  const known = reads.filter((read) => read.family === 'fit' && read.slice.model !== UNKNOWN);
+  const known = reads.filter((read) => read.family === 'fit' && read.slice.model !== UNKNOWN && read.slice.harnessBucket !== UNKNOWN && read.slice.effort !== UNKNOWN);
   const frames = groupBy(known, (read) => `${read.slice.harness ?? UNKNOWN}\n${read.slice.harnessBucket ?? UNKNOWN}\n${read.slice.effort ?? UNKNOWN}`);
   return [...frames].flatMap(([frame, group]) => {
     const [harness = UNKNOWN, harnessBucket = UNKNOWN, effort = UNKNOWN] = frame.split('\n');

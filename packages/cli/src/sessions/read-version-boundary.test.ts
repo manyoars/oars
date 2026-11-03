@@ -8,10 +8,10 @@ import type { Store } from './store.js';
 const OLDER = frame({ harnessVersion: '2.1.305', day: '2026-10-20' });
 const NEWER = frame({ harnessVersion: '2.1.312', day: '2026-10-25' });
 
-/** Counts per tool in two adjacent version buckets, as `{ tool: [older, newer] }`. */
-const twoBuckets = (counts: { [tool: string]: readonly [number, number] }, failedInNewer = 0): Store => {
-  const older = Object.entries(counts).map(([name, [count]]) => ({ name, count }));
-  const newer = Object.entries(counts).map(([name, [, count]]) => ({ name, count }));
+/** Counts per tool in two adjacent version buckets, as `[tool, older, newer]`. */
+const twoBuckets = (counts: readonly (readonly [string, number, number])[], failedInNewer = 0): Store => {
+  const older = counts.map(([name, count]) => ({ name, count }));
+  const newer = counts.map(([name, , count]) => ({ name, count }));
   return store({
     sessions: [session('s1')],
     prompts: [prompt('s1', 0, { frame: OLDER }), prompt('s1', 1, { frame: NEWER })],
@@ -23,7 +23,7 @@ const reads = (from: Store) => deriveVersionBoundary(firstOrderOf(from));
 
 describe('version boundary', () => {
   it('finds a planted share shift between adjacent buckets, naming both buckets, the move, and an interval that excludes zero', () => {
-    const found = reads(twoBuckets({ Read: [800, 200], Edit: [200, 800] }));
+    const found = reads(twoBuckets([['Read', 800, 200], ['Edit', 200, 800]]));
     const read = found.find((one) => one.slice.motif === 'file.read' && one.slice.metric === 'share');
     expect(read?.slice).toEqual({ motif: 'file.read', level: 'shape', harness: 'claude-code', from: '2.1.30x', to: '2.1.31x', metric: 'share' });
     expect(read?.value.before).toBe(0.8);
@@ -38,16 +38,16 @@ describe('version boundary', () => {
   });
 
   it('finds nothing when no share or failure rate moved', () => {
-    expect(reads(twoBuckets({ Read: [500, 500], Edit: [500, 500] }))).toEqual([]);
+    expect(reads(twoBuckets([['Read', 500, 500], ['Edit', 500, 500]]))).toEqual([]);
   });
 
   it('finds nothing in a small wobble, however large the sample: a move has to matter', () => {
     // A move of 0.008 on 100,000 steps a side: it clears the screen, and it is still under the smallest move worth stating.
-    expect(reads(twoBuckets({ Read: [50_000, 50_800], Edit: [50_000, 49_200] }))).toEqual([]);
+    expect(reads(twoBuckets([['Read', 50_000, 50_800], ['Edit', 50_000, 49_200]]))).toEqual([]);
   });
 
   it('finds a planted failure-rate shift with shares unchanged', () => {
-    const found = reads(twoBuckets({ Read: [500, 500], Edit: [500, 500] }, 100));
+    const found = reads(twoBuckets([['Read', 500, 500], ['Edit', 500, 500]], 100));
     // The failed calls are the first of each tool in the newer bucket.
     expect(found.map((read) => [read.slice.motif, read.slice.metric, read.value.after])).toEqual(
       expect.arrayContaining([
@@ -59,7 +59,7 @@ describe('version boundary', () => {
   });
 
   it('finds a tool that vanished at the boundary: its share went to zero in a bucket with no read of it', () => {
-    const found = reads(twoBuckets({ Read: [500, 1000], Edit: [500, 0] }));
+    const found = reads(twoBuckets([['Read', 500, 1000], ['Edit', 500, 0]]));
     const read = found.find((one) => one.slice.motif === 'file.edit' && one.slice.metric === 'share');
     expect(read?.value.after).toBe(0);
     expect(read?.value.move).toBe(-0.5);
@@ -67,23 +67,23 @@ describe('version boundary', () => {
   });
 
   it('finds a tool that appeared at the boundary', () => {
-    const found = reads(twoBuckets({ Read: [1000, 500], Edit: [0, 500] }));
+    const found = reads(twoBuckets([['Read', 1000, 500], ['Edit', 0, 500]]));
     expect(found.find((one) => one.slice.motif === 'file.edit' && one.slice.metric === 'share')?.value.before).toBe(0);
   });
 
   it('does not exist below the floor: a thin bucket reads as nothing, however far it moved', () => {
     const under = TRIALS_FLOOR - 1;
-    expect(reads(twoBuckets({ Read: [under, 0], Edit: [0, under] }))).toEqual([]);
+    expect(reads(twoBuckets([['Read', under, 0], ['Edit', 0, under]]))).toEqual([]);
   });
 
   it('does not read a failure rate below the floor, though the share above it does read', () => {
-    const found = reads(twoBuckets({ Read: [990, 500], Edit: [10, 500] }, 5));
+    const found = reads(twoBuckets([['Read', 990, 500], ['Edit', 10, 500]], 5));
     expect(found.some((read) => read.slice.motif === 'file.edit' && read.slice.metric === 'failureRate')).toBe(false);
     expect(found.some((read) => read.slice.motif === 'file.edit' && read.slice.metric === 'share')).toBe(true);
   });
 
   it('states how many comparisons were screened, so a reader can size what chance would find', () => {
-    const [first] = reads(twoBuckets({ Read: [800, 200], Edit: [200, 800] }));
+    const [first] = reads(twoBuckets([['Read', 800, 200], ['Edit', 200, 800]]));
     // Two tools, two metrics, one boundary.
     expect(first?.value.tested).toBe(4);
   });

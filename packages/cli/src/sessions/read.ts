@@ -86,7 +86,7 @@ export interface Read {
   order: number;
   slice: ReadSlice;
   value: ReadValue;
-  /** The observations behind the value: its own count, not its denominator. */
+  /** The observations behind the value. At order 1 its own count; above order 1 the trials of its weakest input, or the observations a relation names, such as pairs. */
   n: number;
   /** The accounts behind the value, as its inputs state it. One operator's store says 1. */
   clusters: number;
