@@ -112,7 +112,7 @@ describe('the source table', () => {
       label: 'Fake',
       root: () => s.root,
       storeFile: (root) => join(root, 'fake.db'),
-      open: async () => ({
+      open: () => Promise.resolve({
         sessions: [{ id: 'one', folder: null, size: 1, mtimeMs: 1 }],
         transcript: () => `${JSON.stringify({ type: 'user', timestamp: T(1), message: { role: 'user', content: 'hi' } })}${NL}`,
         rejected: 0,
