@@ -62,6 +62,7 @@ export const ACTION_TABLES: { readonly [harness in Harness | 'codex']: ActionTab
       AskUserQuestion: 'ask.user',
       mcp__oars__oars_recall: 'recall.pull',
       'mcp__oars-sessions__oars_recall': 'recall.pull',
+      StructuredOutput: 'other',
       ToolSearch: 'other',
       SendMessage: 'other',
       ListAgents: 'other',
