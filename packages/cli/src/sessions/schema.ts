@@ -5,10 +5,11 @@
 // captured records to `<config>/oars/sessions/observations.jsonl`. The log is append-only: a session whose file changed is deposited
 // again under a higher `rev`, and a reader keeps only the highest `rev` of each session.
 //
-// Version 8 (CAPTURE 8 and EXTRACTOR 8, t762; 6 and 7 are held by t746 and t755) writes one `tool` record per tool call. A resumed transcript replays
-// earlier lines, and capture used to write the replay as a second record with status `none` (and, from another cwd, another path hash). The replay is
-// now skipped, so `session.tools` and `bashCmds` count the call once too; the skeleton still lists every line. The reader folds records already on
-// disk the same way until each transcript is captured again (`foldToolRows` in store.ts).
+// Version 8 (CAPTURE 8 and EXTRACTOR 8, t762; 6 and 7 are held by t746 and t755) writes one `tool` record per tool call. The harness writes
+// `api-request-blob` lines, copies of the request body with no cwd, uuid, or timestamp, and capture used to read their blocks as conversation: a second
+// record with status `none` (and, with no cwd, another path hash) for 99.8% of calls, plus a second error line, thinking count, and TLDR. Those lines are
+// no longer read, and a call a resumed transcript replays under one tool-use id is written once. The skeleton still lists every line. The reader folds
+// records already on disk the same way until each transcript is captured again (`fold.ts`).
 //
 // Store version 5 (CAPTURE 5, t733) keeps version 4's shape and changes one stored value: each `models` entry of the skeleton's cost state names
 // the usage keys it reported, which `verify` uses to class a side call. A version-4 skeleton reads with no keys until it is captured again.
