@@ -1,0 +1,21 @@
+{
+  "name": "@manyoars/pool",
+  "version": "0.0.0",
+  "private": true,
+  "description": "The Many Oars pool: a Cloudflare Worker that takes closed-vocabulary session skeletons and serves signed reads",
+  "license": "Apache-2.0",
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "esbuild": "0.28.2",
+    "miniflare": "5.20261103.0-beta",
+    "typescript": "~5.9.3",
+    "wrangler": "4.157.0"
+  }
+}
