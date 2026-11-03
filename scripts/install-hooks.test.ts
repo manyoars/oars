@@ -8,20 +8,18 @@ import { installHooks } from './install-hooks.mjs';
 vi.setConfig({ testTimeout: 60_000, hookTimeout: 60_000 });
 
 let root: string;
-const saved: NodeJS.ProcessEnv = {};
-const GIT_VARS = ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE'];
+const saved = { dir: process.env.GIT_DIR, tree: process.env.GIT_WORK_TREE, index: process.env.GIT_INDEX_FILE };
 
 // A run under a hook or `git rebase --exec` inherits these, and they would send every git call to the real repository.
 beforeAll(() => {
-  for (const k of GIT_VARS) {
-    saved[k] = process.env[k];
-    delete process.env[k];
-  }
+  delete process.env.GIT_DIR;
+  delete process.env.GIT_WORK_TREE;
+  delete process.env.GIT_INDEX_FILE;
 });
 afterAll(() => {
-  for (const k of GIT_VARS) {
-    if (saved[k] !== undefined) process.env[k] = saved[k];
-  }
+  if (saved.dir !== undefined) process.env.GIT_DIR = saved.dir;
+  if (saved.tree !== undefined) process.env.GIT_WORK_TREE = saved.tree;
+  if (saved.index !== undefined) process.env.GIT_INDEX_FILE = saved.index;
 });
 const git = (cwd: string, ...args: string[]) => {
   const r = spawnSync('git', args, { cwd, encoding: 'utf8' });
