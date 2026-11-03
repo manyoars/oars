@@ -24,6 +24,7 @@ export interface Env {
   COVENANT_VERSION?: string;
   /** How many reads an account with no deposit may be served. */
   READ_CAP?: string;
+  MAX_DEPOSITS_PER_ACCOUNT?: string;
 }
 
 export const answer = (status: number, body: object): Response => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
@@ -42,10 +43,16 @@ export const textField = (value: unknown, key: string): string | undefined => {
   return typeof found === 'string' && found !== '' ? found : undefined;
 };
 
-/** A body as JSON, or undefined: the route then refuses by the field it needed. */
-export const bodyOf = async (request: Request): Promise<unknown> => {
+/** A positive whole number from an optional binding; anything else there is the default, so a bad value cannot open a limit. */
+export const wholeBinding = (value: string | undefined, fallback: number): number => {
+  const whole = Number(bound(value) ?? fallback);
+  return Number.isSafeInteger(whole) && whole > 0 ? whole : fallback;
+};
+
+/** A body as JSON, or undefined: the route then refuses by the field it needed. A provider's response comes here too, since an outage can answer HTML. */
+export const bodyOf = async (message: Request | Response): Promise<unknown> => {
   try {
-    return await request.json();
+    return await message.json();
   } catch {
     return undefined;
   }

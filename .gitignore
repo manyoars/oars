@@ -10,6 +10,9 @@ coverage/
 packages/cli/parity/
 *.tsbuildinfo
 
+# Wrangler's local state, from the deploy steps in docs/pool.md
+.wrangler/
+
 # Logs
 npm-debug.log*
 yarn-debug.log*

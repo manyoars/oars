@@ -2,7 +2,7 @@
 // kept and checked again anywhere.
 import { ALL_STACKS, isStack, parseSkeleton, type SessionSkeleton, type SignedSlice, type Slice } from '../../cli/src/sessions/pool-wire.js';
 import { sliceOf } from './derive.js';
-import { answer, bound, fieldOf, notConfigured, refuse, textField, type Env } from './http.js';
+import { answer, bound, fieldOf, notConfigured, refuse, textField, wholeBinding, type Env } from './http.js';
 import { accountOf } from './identity.js';
 
 const signed = async (slice: Slice, privateJwk: string): Promise<SignedSlice> => {
@@ -30,12 +30,12 @@ const depositsOf = async (env: Env, stack: string): Promise<SessionSkeleton[][]>
 const DEFAULT_READ_CAP = 50;
 const RESERVE_ATTEMPTS = 8;
 
-const capOf = (env: Env): number => {
-  const cap = Number(bound(env.READ_CAP) ?? DEFAULT_READ_CAP);
-  return Number.isSafeInteger(cap) && cap > 0 ? cap : DEFAULT_READ_CAP;
-};
-
 const hasDeposited = async (env: Env, account: string): Promise<boolean> => (await env.DB.prepare('SELECT 1 AS held FROM deposits WHERE account = ? LIMIT 1').bind(account).first()) !== null;
+
+const servedSoFar = async (env: Env, account: string, limit: number): Promise<number> => {
+  const held = fieldOf(await env.DB.prepare('SELECT reads_served AS served FROM accounts WHERE id = ?').bind(account).first(), 'served');
+  return typeof held === 'number' ? held : limit;
+};
 
 /**
  * Takes up to `wanted` reads out of what is left of the cap; undefined when nothing is left. A compare-and-swap, because two pulls at once would otherwise both spend the same
@@ -43,9 +43,7 @@ const hasDeposited = async (env: Env, account: string): Promise<boolean> => (awa
  */
 const reserve = async (env: Env, account: string, limit: number, wanted: number): Promise<{ taken: number; total: number } | undefined> => {
   for (let attempt = 0; attempt < RESERVE_ATTEMPTS; attempt += 1) {
-    const row = await env.DB.prepare('SELECT reads_served AS served FROM accounts WHERE id = ?').bind(account).first();
-    const held = fieldOf(row, 'served');
-    const served = typeof held === 'number' ? held : limit;
+    const served = await servedSoFar(env, account, limit);
     if (served >= limit) return undefined;
     const taken = Math.min(limit - served, wanted);
     const { meta } = await env.DB.prepare('UPDATE accounts SET reads_served = ? WHERE id = ? AND reads_served = ?').bind(served + taken, account, served).run();
@@ -60,11 +58,15 @@ export const pullSlice = async (request: Request, env: Env, stack: string): Prom
   if (!isStack(stack)) return refuse(400, 'unknown_stack', `No stack is named ${stack}.`, 'stack');
   const key = bound(env.SLICE_SIGNING_KEY);
   if (key === undefined) return notConfigured('SLICE_SIGNING_KEY');
+  const deposited = await hasDeposited(env, account);
+  const limit = wholeBinding(env.READ_CAP, DEFAULT_READ_CAP);
+  const capReached = (): Response => refuse(403, 'read_cap', `An account with no deposit is served ${String(limit)} reads. Run oars pool deposit for the whole pool.`);
+  // Answered before the pool is read: a spent account must not be able to force a parse of every deposit on each request.
+  if (!deposited && (await servedSoFar(env, account, limit)) >= limit) return capReached();
   const whole = sliceOf(stack, await depositsOf(env, stack));
-  if (await hasDeposited(env, account)) return answer(200, await signed(whole, key));
-  const limit = capOf(env);
+  if (deposited) return answer(200, await signed(whole, key));
   const served = await reserve(env, account, limit, whole.reads.length);
-  if (served === undefined) return refuse(403, 'read_cap', `An account with no deposit is served ${String(limit)} reads. Run oars pool deposit for the whole pool.`);
+  if (served === undefined) return capReached();
   // Cells are what a depositor gets on top: they would let a capped account compute every read it was not served.
   return answer(200, await signed({ ...whole, cells: [], motifs: [], reads: whole.reads.slice(0, served.taken), capped: { limit, served: served.total } }, key));
 };

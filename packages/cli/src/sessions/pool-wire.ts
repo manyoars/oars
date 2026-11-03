@@ -34,6 +34,8 @@ export interface SkeletonPrompt {
 }
 
 export interface SkeletonTranscript {
+  /** Which entry of `transcripts` spawned this one, the address a subagent's `parent` and `spawned` edge resolve against. A position, because a skeleton holds no session id. */
+  spawnedIn: number | null;
   harness: Harness;
   frame: Frame;
   prompts: SkeletonPrompt[];
@@ -75,7 +77,7 @@ export const sessionsOf = (store: { sessions: readonly SessionObservation[]; sub
   return store.sessions.map((main) => ({ main, transcripts: [main, ...(subagents.get(main.session) ?? [])].map(recordsOf) }));
 };
 
-const transcriptOf = ({ session, prompts, tools }: SessionRecords['transcripts'][number]): SkeletonTranscript | null => {
+const transcriptOf = ({ session, prompts, tools }: SessionRecords['transcripts'][number], spawnedIn: number | null): SkeletonTranscript | null => {
   if (session.frame === undefined) return null;
   const framedPrompts: SkeletonPrompt[] = [];
   for (const { index, cls, errors, wallSec, usage, frame } of prompts) {
@@ -87,14 +89,15 @@ const transcriptOf = ({ session, prompts, tools }: SessionRecords['transcripts']
     if (steps === undefined) return null;
     steppedTools.push({ n, side, prompt, status, durationMs, steps: steps.map(({ seg, action, native, identity, status: reported, cost, parent, edges }) => ({ seg, action, native, identity, status: reported, cost, parent, edges })) });
   }
-  return { harness: session.harness ?? 'claude-code', frame: session.frame, prompts: framedPrompts, tools: steppedTools };
+  return { spawnedIn, harness: session.harness ?? 'claude-code', frame: session.frame, prompts: framedPrompts, tools: steppedTools };
 };
 
 /** The skeleton of a session; null when any record of it was captured before steps and frames, which holds no closed reading to send. */
 export const skeletonOf = (records: SessionRecords, id: string): SessionSkeleton | null => {
+  const positions = new Map<string | null, number>(records.transcripts.map(({ session }, index) => [session.session, index]));
   const transcripts: SkeletonTranscript[] = [];
   for (const entry of records.transcripts) {
-    const transcript = transcriptOf(entry);
+    const transcript = transcriptOf(entry, positions.get(entry.session.spawnedIn) ?? null);
     if (transcript === null) return null;
     transcripts.push(transcript);
   }
@@ -156,8 +159,17 @@ const textOf = (value: unknown, at: string): string => {
   return value;
 };
 
+/** Whole and safe: a depositor's value is added into cells every account is served, and one huge number would turn a sum into Infinity, which JSON writes as null. */
 const countOf = (value: unknown, at: string): number => {
-  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) throw new Refused(at, 'not a count');
+  if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0) throw new Refused(at, 'not a count');
+  return value;
+};
+
+/** Ten years. Wall time is the one measure that is not whole: it is a difference of timestamps in seconds. */
+const WALL_SEC_MAX = 315_360_000;
+
+const wallSecOf = (value: unknown, at: string): number => {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0 || value > WALL_SEC_MAX) throw new Refused(at, 'not a wall time');
   return value;
 };
 
@@ -331,16 +343,17 @@ const parsePrompt = (value: unknown, at: string): SkeletonPrompt => {
     index: countOf(raw.index, under(at, 'index')),
     cls: oneOf(PROMPT_CLASSES, raw.cls, under(at, 'cls')),
     errors: countOf(raw.errors, under(at, 'errors')),
-    wallSec: orNull(raw.wallSec, under(at, 'wallSec'), countOf),
+    wallSec: orNull(raw.wallSec, under(at, 'wallSec'), wallSecOf),
     usage: parseUsage(raw.usage, under(at, 'usage')),
     frame: parseFrame(raw.frame, under(at, 'frame')),
   };
 };
 
 const parseTranscript = (value: unknown, at: string): SkeletonTranscript => {
-  const raw = fieldsOf(value, at, ['harness', 'frame', 'prompts', 'tools']);
+  const raw = fieldsOf(value, at, ['spawnedIn', 'harness', 'frame', 'prompts', 'tools']);
   const harness = oneOf(HARNESSES, raw.harness, under(at, 'harness'));
   return {
+    spawnedIn: orNull(raw.spawnedIn, under(at, 'spawnedIn'), countOf),
     harness,
     frame: parseFrame(raw.frame, under(at, 'frame')),
     prompts: listOf(raw.prompts, under(at, 'prompts'), parsePrompt),
@@ -357,6 +370,11 @@ export const parseSkeleton = (value: unknown): { ok: true; skeleton: SessionSkel
     if (!ID.test(id)) throw new Refused('id', 'not a hash');
     const transcripts = listOf(raw.transcripts, 'transcripts', parseTranscript);
     if (transcripts.length === 0) throw new Refused('transcripts', 'empty');
+    // A deposit is what lifts the read cap, so one has to hold something to derive from.
+    if (transcripts.every(({ prompts, tools }) => prompts.length === 0 && tools.length === 0)) throw new Refused('transcripts', 'holds no prompt and no tool');
+    transcripts.forEach(({ spawnedIn }, index) => {
+      if (spawnedIn !== null && spawnedIn >= transcripts.length) throw new Refused(`transcripts[${String(index)}].spawnedIn`, 'no such transcript');
+    });
     return { ok: true, skeleton: { format: SKELETON_FORMAT, id, transcripts } };
   } catch (error) {
     if (error instanceof Refused) return { ok: false, field: error.field, reason: error.reason };

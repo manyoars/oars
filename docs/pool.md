@@ -18,7 +18,9 @@ Every command takes the server from `--server <url>` or `OARS_POOL_URL`. There i
 - **Closed vocabulary.** A skeleton holding an unknown field or a value outside the vocabulary gets 422 `closed_vocabulary` with the field named, and nothing is stored. What is stored is the parsed skeleton, not the text that came in.
 - **Pseudonymous accounts.** The provider's user id is hashed under `PSEUDONYM_KEY`, which the database never holds. No email, login, or provider id is stored.
 - **Three accounts to a read.** A read is served only at 3 or more clusters, and a cluster is an account, so one account's many sessions count once. The floor applies to the read's aggregate: its `clusters` is the distinct accounts across all the cells it cites, so three accounts on three different days serve a read even though each day's cell holds one. A cell served on its own needs 3 accounts in that cell.
-- **Deposit or capped access.** An account with a deposit pulls on an ongoing basis. One without is served up to `READ_CAP` reads (default 50).
+- **Deposit or capped access.** An account with a deposit pulls on an ongoing basis. One without is served up to `READ_CAP` reads (default 50), and past that gets 403 `read_cap` before the pool is read.
+- **A deposit holds something.** A skeleton with no prompt and no tool gets 422 `closed_vocabulary` naming `transcripts`, since a deposit is what lifts the read cap. A forged skeleton that holds invented prompts still counts.
+- **Deposits per account.** Past `MAX_DEPOSITS_PER_ACCOUNT` rows (default 20,000) a new session gets 403 `deposit_limit`; a redeposit of a held session still replaces it. Every pull parses every row, so this keeps one account from growing the cost of everyone's pull.
 
 ## Routes
 
@@ -27,7 +29,7 @@ Every command takes the server from `--server <url>` or `OARS_POOL_URL`. There i
 | `POST /v1/login/start`, `POST /v1/login/poll` | The device flow. |
 | `GET /v1/covenant` | `{version, accepted}`. `version` is null when deposits are closed. Sign-in is optional. |
 | `POST /v1/covenant/accept` | Takes `{version}`. 409 `covenant_version` for any version but the one in force. |
-| `POST /v1/deposits` | Takes one skeleton, 1 MB at most. |
+| `POST /v1/deposits` | Takes one skeleton, 1 MB at most. A larger one gets 413 `too_large`, unread when it declares its length. |
 | `GET /v1/slices/:stack` | A signed slice: `{payload, signature}`, Ed25519 over the payload's exact bytes. |
 
 ## Bindings
@@ -42,6 +44,7 @@ All of these are set at the deploy, never in `wrangler.jsonc`, which holds no ac
 | `GITHUB_CLIENT_ID`, `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | The OAuth values. |
 | `COVENANT_VERSION` | The covenant in force. Leave it unset until the covenant is published. |
 | `READ_CAP` | Optional. Reads served to an account with no deposit. |
+| `MAX_DEPOSITS_PER_ACCOUNT` | Optional. Rows one account may hold. |
 
 ## Tests
 

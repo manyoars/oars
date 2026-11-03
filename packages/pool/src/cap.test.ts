@@ -92,6 +92,48 @@ describe('deposit or capped access (V12)', () => {
     expect((served[0] ?? 0) + (served[1] ?? 0)).toBeLessThanOrEqual(CAP);
   });
 
+  it('spends what is left of the cap across pulls: every read first, then exactly the one left', async () => {
+    const limit = everyRead + 1;
+    const bare = await startPool({ READ_CAP: String(limit) });
+    const sliceIn = async (token: string): Promise<Slice> => {
+      const verified = await verifySlice((await bare.get('/v1/slices/all', token)).json, bare.signingKey(), 'all');
+      if (!verified.ok) throw new Error(verified.reason);
+      return verified.slice;
+    };
+    try {
+      for (const id of ['2101', '2102', '2103']) {
+        const { token } = await bare.signIn('github', stubUser(id));
+        await bare.post('/v1/covenant/accept', { version: 'v1' }, token);
+        expect((await bare.post('/v1/deposits', sampleSkeleton(id.padStart(16, '0')), token)).status).toBe(201);
+      }
+      const { token } = await bare.signIn('github', stubUser('2104'));
+      const first = await sliceIn(token);
+      expect(first.reads).toHaveLength(everyRead);
+      expect(first.capped).toEqual({ limit, served: everyRead });
+      const second = await sliceIn(token);
+      expect(second.reads).toHaveLength(1);
+      expect(second.capped).toEqual({ limit, served: limit });
+      expect(await bare.get('/v1/slices/all', token)).toMatchObject({ status: 403, json: { error: 'read_cap' } });
+    } finally {
+      await bare.dispose();
+    }
+  }, 60_000);
+
+  // A row that cannot be parsed stands in for reading the pool: an account past its cap must get its answer without reaching it.
+  it('answers an account past its cap before reading the pool', async () => {
+    const bare = await startPool({ READ_CAP: '1' });
+    try {
+      const { token, account } = await bare.signIn('github', stubUser('2201'));
+      const other = await bare.signIn('github', stubUser('2202'));
+      const db = await bare.db();
+      await db.prepare('UPDATE accounts SET reads_served = 1 WHERE id = ?').bind(account).run();
+      await db.prepare("INSERT INTO deposits (account, id, stacks, skeleton) VALUES (?, 'damaged', '[]', 'not json')").bind(other.account).run();
+      expect(await bare.get('/v1/slices/all', token)).toMatchObject({ status: 403, json: { error: 'read_cap' } });
+    } finally {
+      await bare.dispose();
+    }
+  }, 60_000);
+
   it('falls back to its default cap when READ_CAP is not a positive whole number', async () => {
     const bare = await startPool({ READ_CAP: 'many' });
     try {

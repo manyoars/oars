@@ -106,7 +106,9 @@ const MODEL = new RegExp(
     '^(?:auto|default)$',
   ].join('|'),
 );
-const VERSION = /^\d+(?:\.\d+){0,3}(?:[-+.][0-9A-Za-z]+)*$/;
+// A version's tail is numbers and known prerelease words, so a free-text suffix (1.0.0-acme-secret) reads as the literal instead of carrying a private name.
+const VERSION_TAIL = '(?:[-+.](?:\\d+|(?:alpha|beta|rc|pre|preview|next|canary|nightly|dev|snapshot|post)\\d*))*';
+const VERSION = new RegExp(`^\\d+(?:\\.\\d+){0,3}${VERSION_TAIL}$`, 'i');
 /** A name this long is not one of these: it is text someone pasted. */
 const NAME_MAX = 64;
 
@@ -235,7 +237,7 @@ export const PUBLIC_PACKAGES: ReadonlySet<string> = words(`
   serde tokio clap anyhow thiserror reqwest rails rake bundler
 `);
 
-const REGISTRY_VERSION = /^[~^<>=!]*v?\d+(?:\.(?:\d+|x|\*))*(?:[-+][0-9A-Za-z.+-]*)?$/;
+const REGISTRY_VERSION = new RegExp(`^[~^<>=!]*v?\\d+(?:\\.(?:\\d+|x|\\*))*${VERSION_TAIL}$`, 'i');
 const MCP_TOOL_NAME = /^[A-Za-z][A-Za-z0-9_.-]{0,63}$/;
 
 export const isRegistryVersion = (version: string): boolean => version.length <= NAME_MAX && REGISTRY_VERSION.test(version);

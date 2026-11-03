@@ -3,7 +3,9 @@ import { createHash } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { frame, prompt, session, step, store, tool } from '../../cli/src/sessions/pool-fixture.js';
 import { sessionsOf, skeletonOf, type SessionSkeleton } from '../../cli/src/sessions/pool-wire.js';
-import { startPool, type Answer, type TestPool } from './test-pool.js';
+import { sampleSkeleton } from './sample.js';
+import { startPool, stubUser, type Answer, type TestPool } from './test-pool.js';
+import worker from './worker.js';
 
 const TOKEN = 'a-test-token';
 const framed = frame({ shell: 'bash' });
@@ -59,9 +61,87 @@ describe('POST /v1/deposits, under the Workers runtime', () => {
     expect(await storedCount()).toBe(0);
   });
 
+  it('refuses a skeleton holding no prompt and no tool, naming transcripts, storing nothing', async () => {
+    const sent = skeleton();
+    const { status, json } = await post(JSON.stringify({ ...sent, transcripts: sent.transcripts.map((transcript) => ({ ...transcript, prompts: [], tools: [] })) }));
+    expect(status).toBe(422);
+    expect(json).toMatchObject({ error: 'closed_vocabulary', field: 'transcripts' });
+    expect(await storedCount()).toBe(0);
+  });
+
+  it('refuses an oversized body sent with no declared length, on the bytes it read', async () => {
+    const oversized = new TextEncoder().encode('x'.repeat(1024 * 1024 + 1));
+    const body = new ReadableStream<Uint8Array>({
+      start: (controller) => {
+        controller.enqueue(oversized);
+        controller.close();
+      },
+    });
+    const response = await pool.miniflare.dispatchFetch('http://pool.test/v1/deposits', { method: 'POST', body, duplex: 'half', headers: { authorization: `Bearer ${TOKEN}` } });
+    expect(response.status).toBe(413);
+    expect(await response.json()).toMatchObject({ error: 'too_large' });
+  });
+
   it('stores a closed skeleton once, and a redeposit replaces it', async () => {
     expect(await post(JSON.stringify(skeleton()))).toEqual({ status: 201, json: { ok: true, id: '0123456789abcdef' } });
     expect((await post(JSON.stringify(skeleton()))).status).toBe(201);
     expect(await storedCount()).toBe(1);
   });
+});
+
+describe('an oversized deposit with a declared length', () => {
+  // Outside the runtime, because only a stand-in request can show its body was not read; everything past the sign-in is the same code.
+  it('is refused on the header, with its body unread', async () => {
+    const row = { account: 'acct-1', covenant: 'v1' };
+    const db = { prepare: () => ({ bind: () => ({ first: () => Promise.resolve(row), all: () => Promise.resolve({ results: [] }), run: () => Promise.resolve({ meta: { changes: 0 } }) }) }) };
+    const request = new Request('http://pool.test/v1/deposits', { method: 'POST', body: 'x', headers: { authorization: `Bearer ${TOKEN}`, 'content-length': String(1024 * 1024 + 1) } });
+    const read = (): Promise<string> => Promise.reject(new Error('the body was read'));
+    Object.defineProperty(request, 'text', { value: read });
+    const response = await worker.fetch(request, { DB: db, COVENANT_VERSION: 'v1' });
+    expect(response.status).toBe(413);
+    expect(await response.json()).toMatchObject({ error: 'too_large' });
+  });
+});
+
+describe('a stack name that does not decode', () => {
+  it('is a named refusal, not an uncaught error', async () => {
+    expect(await pool.get('/v1/slices/%E0%A4%A', TOKEN)).toMatchObject({ status: 400, json: { error: 'unknown_stack', field: 'stack' } });
+  });
+});
+
+describe('deposits per account', () => {
+  const signedIn = async (limited: TestPool, id: string): Promise<string> => {
+    const { token } = await limited.signIn('github', stubUser(id));
+    await limited.post('/v1/covenant/accept', { version: 'v1' }, token);
+    return token;
+  };
+
+  it('takes deposits up to the limit, refuses the next by name, and still takes a redeposit', async () => {
+    const limited = await startPool({ MAX_DEPOSITS_PER_ACCOUNT: '2' });
+    try {
+      const token = await signedIn(limited, '4001');
+      const sent = (id: string): Promise<Answer> => limited.post('/v1/deposits', sampleSkeleton(id), token);
+      expect((await sent('0000000000000001')).status).toBe(201);
+      expect((await sent('0000000000000002')).status).toBe(201);
+      expect(await sent('0000000000000003')).toMatchObject({ status: 403, json: { error: 'deposit_limit' } });
+      expect((await sent('0000000000000002')).status).toBe(201);
+      const stored = await (await limited.db()).prepare('SELECT COUNT(*) AS count FROM deposits').first('count');
+      expect(stored).toBe(2);
+      // One account's limit is its own.
+      expect((await limited.post('/v1/deposits', sampleSkeleton('0000000000000003'), await signedIn(limited, '4002'))).status).toBe(201);
+    } finally {
+      await limited.dispose();
+    }
+  }, 60_000);
+
+  it('falls back to its default when the binding is not a positive whole number', async () => {
+    const limited = await startPool({ MAX_DEPOSITS_PER_ACCOUNT: 'many' });
+    try {
+      const token = await signedIn(limited, '4003');
+      expect((await limited.post('/v1/deposits', sampleSkeleton('0000000000000001'), token)).status).toBe(201);
+      expect((await limited.post('/v1/deposits', sampleSkeleton('0000000000000002'), token)).status).toBe(201);
+    } finally {
+      await limited.dispose();
+    }
+  }, 60_000);
 });

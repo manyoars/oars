@@ -49,10 +49,10 @@ const PROVIDERS = new Map<string, Provider>([
 
 const unknownProvider = (): Response => refuse(400, 'unknown_provider', 'The provider is github or google.', 'provider');
 
-/** Both providers answer JSON on the status they choose (Google's pending poll is a 428), so the body decides and the status does not. */
+/** Both providers answer JSON on the status they choose (Google's pending poll is a 428), so the body decides and the status does not. Undefined when the body is not JSON. */
 const askProvider = async (url: string, form: URLSearchParams): Promise<unknown> => {
   const response = await fetch(url, { method: 'POST', headers: { accept: 'application/json', 'content-type': 'application/x-www-form-urlencoded' }, body: form.toString() });
-  return response.json();
+  return bodyOf(response);
 };
 
 export const loginStart = async (request: Request, env: Env): Promise<Response> => {
@@ -110,13 +110,14 @@ export const loginPoll = async (request: Request, env: Env): Promise<Response> =
 
   const form = new URLSearchParams({ client_id: clientId, device_code: deviceCode, grant_type: DEVICE_GRANT, ...(secret === undefined ? {} : { client_secret: secret }) });
   const granted = await askProvider(provider.tokenUrl, form);
+  if (granted === undefined) return refuse(502, 'provider_error', 'The provider did not answer in JSON.');
   const accessToken = textField(granted, 'access_token');
   if (accessToken === undefined) {
     const error = textField(granted, 'error') ?? 'no_token';
     return PENDING.has(error) ? answer(200, { status: 'pending', ...(error === 'slow_down' ? { slowDown: true } : {}) }) : refuse(401, 'login_refused', `The provider refused the sign-in: ${error}.`);
   }
   const profile = await fetch(provider.userUrl, { headers: { accept: 'application/json', authorization: `Bearer ${accessToken}`, 'user-agent': 'oars-pool' } });
-  const userId = provider.userIdOf(await profile.json());
+  const userId = provider.userIdOf(await bodyOf(profile));
   if (userId === undefined) return refuse(502, 'provider_error', 'The provider did not name the user.');
 
   const account = pseudonymOf(pseudonymKey, name, userId);
