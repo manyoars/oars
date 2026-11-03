@@ -306,6 +306,7 @@ describe('prompt outcome signals (t747)', () => {
       ['the last runner of a call decides', [edit(0), { ...shell(0), segments: [{ run: 'npm test', read: false }, { run: 'npm run build', read: true }] }], 'passed'],
       ['a runner chained to a later command reads the call', [edit(0), { ...shell(0, 'error'), segments: [{ run: 'cd web', read: true }, { run: 'npm test', read: true }, { run: 'git push', read: true }] }], 'failed'],
       ['a runner with no result', [edit(0), shell(0, 'none')], 'none'],
+      ['a masked runner with no result', [edit(0), { ...shell(0, 'none'), segments: [{ run: 'npm test', read: false }, { run: 'tail', read: true }] }], 'none'],
     ])('%s', (_name, calls, expected) => {
       expect(one(calls)?.verify).toBe(expected);
     });

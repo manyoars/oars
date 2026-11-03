@@ -950,10 +950,10 @@ export const commitsRead = (plan: readonly PlannedCommit[], result: string): Arr
   return commits;
 };
 
-/** An MCP call's full server name, which `shortName` cuts for the tool sequence. */
-export const pullsOfTool = (name: string): ToolPull[] => {
-  const server = name.startsWith('mcp__') ? name.split('__')[1] : undefined;
-  return server === undefined || server === '' ? [] : [{ ecosystem: 'mcp', name: server, version: null }];
+/** An MCP call's full server name, which `shortName` cuts for the tool sequence, redacted because a harness takes it from the operator's config. */
+export const pullsOfTool = (name: string, redact: Redactor): ToolPull[] => {
+  const pull = name.startsWith('mcp__') ? wholeName('mcp', redact(name.split('__')[1] ?? '')) : null;
+  return pull === null ? [] : [pull];
 };
 
 /** The `target` of a tool call (see {@link ToolObservation.target}). */
@@ -1221,7 +1221,7 @@ export const captureSession = (input: ExtractInput): Capture => {
         else if (SHELL.has(name)) session.bashCmds += 1;
         const aimed = targetOf(name, toolInput, lineCwd, salt, redact, lineRoot);
         const shell = SHELL.has(name) ? readShell(str(toolInput.command) ?? '', redact) : undefined;
-        const pulls = shell?.pulls ?? pullsOfTool(name);
+        const pulls = shell?.pulls ?? pullsOfTool(name, redact);
         const call: ToolObservation = {
           kind: 'tool',
           cv: CAPTURE_VERSION,
