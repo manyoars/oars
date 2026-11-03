@@ -10,11 +10,14 @@ const singleVersion = store({
   tools: tools('s1', 0, [{ name: 'Read', count: 50 }]),
 });
 
-const twoVersions = store({
-  sessions: [session('s1')],
-  prompts: [prompt('s1', 0, { frame: frame({ harnessVersion: '2.1.305', day: '2026-10-20' }) }), prompt('s1', 1, { frame: frame({ harnessVersion: '2.1.312', day: '2026-10-25' }) })],
-  tools: [...tools('s1', 0, [{ name: 'Read', count: 50 }]), ...tools('s1', 1, [{ name: 'Read', count: 50 }])],
-});
+const twoVersionsOf = (count: number) =>
+  store({
+    sessions: [session('s1')],
+    prompts: [prompt('s1', 0, { frame: frame({ harnessVersion: '2.1.305', day: '2026-10-20' }) }), prompt('s1', 1, { frame: frame({ harnessVersion: '2.1.312', day: '2026-10-25' }) })],
+    tools: [...tools('s1', 0, [{ name: 'Read', count }, { name: 'Edit', count }]), ...tools('s1', 1, [{ name: 'Read', count }, { name: 'Edit', count }])],
+  });
+
+const twoVersions = twoVersionsOf(50);
 
 const twoTiers = store({
   sessions: [session('s1')],
@@ -40,6 +43,19 @@ describe('what a store cannot read', () => {
     const two = notReadable(firstOrderOf(twoVersions));
     expect(whatOf(two, 'version-boundary')).not.toContain('a harness version boundary');
     expect(whatOf(two, 'substitution')).toEqual([]);
+  });
+
+  it('says why when two version buckets are both below the floor, so an empty family does not read as nothing moved', () => {
+    const rows = notReadable(firstOrderOf(twoVersionsOf(3)));
+    const why = (family: string) => rows.find((row) => row.family === family && row.what !== 'a model version boundary')?.why;
+    expect(why('version-boundary')).toBe('no comparison clears the floor');
+    expect(why('substitution')).toBe('no comparison clears the floor');
+  });
+
+  it('keeps the reason with no boundary at all apart from the reason with one below the floor', () => {
+    const rows = notReadable(firstOrderOf(singleVersion));
+    expect(rows.find((row) => row.what === 'a harness version boundary')?.why).toBe('no harness has two version buckets');
+    expect(rows.find((row) => row.family === 'substitution')?.why).toBe('no harness has two version buckets');
   });
 
   it('says no interaction until one tool clears the floor on two tiers in one frame', () => {
