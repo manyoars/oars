@@ -9,7 +9,7 @@ export interface ReadFilter {
   slice: ReadSlice;
 }
 
-export const isFamily = (value: string): value is Family => (FAMILIES as readonly string[]).includes(value);
+export const isFamily = (value: string): value is Family => FAMILIES.some((family) => family === value);
 
 /** `axis=value`, repeated; undefined when one has no axis or no value, for the caller to refuse. A value may hold `=`, as a named motif does. */
 export const parseSlice = (pairs: readonly string[]): ReadSlice | undefined => {
