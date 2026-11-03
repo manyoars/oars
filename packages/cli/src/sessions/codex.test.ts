@@ -509,29 +509,26 @@ describe('Paginated rollouts', () => {
 });
 
 describe('a Legacy fork (no ordinals)', () => {
-  const parent = [meta('/work/app'), prompt(1, 'first'), say(2, 'reply'), prompt(3, 'second')];
+  const [m0, p1, r2, p3] = [meta('/work/app'), prompt(1, 'first'), say(2, 'reply'), prompt(3, 'second')] as const;
+  const parent = [m0, p1, r2, p3];
   const forkMeta = (id: string) => line(T(10), 'session_meta', { id, timestamp: T(10), cwd: '/work/app', forked_from_id: 'sess-1' });
-  const at = (offset: number, entry: unknown): unknown => {
-    const copy = JSON.parse(JSON.stringify(entry)) as { timestamp: string };
-    copy.timestamp = T(offset);
-    return copy;
-  };
+  const at = (offset: number, entry: { timestamp: string }) => ({ ...entry, timestamp: T(offset) });
   const prompts = (lines: ReturnType<typeof rolloutLines>) => lines.filter((entry) => entry.type === 'user');
 
   it('drops the leading records that match the parent rollout, payload for payload with timestamps excluded', () => {
-    const child = [forkMeta('sess-2'), at(11, parent[0]), at(12, parent[1]), at(13, parent[2]), at(14, parent[3]), prompt(20, 'own prompt')];
+    const child = [forkMeta('sess-2'), at(11, m0), at(12, p1), at(13, r2), at(14, p3), prompt(20, 'own prompt')];
     const lines = rolloutLines(asText(child), 'sess-2', asText(parent));
     expect(prompts(lines)).toMatchObject([{ message: { content: [{ text: 'own prompt' }] } }]);
     expect(lines.filter((entry) => entry.type === 'assistant')).toHaveLength(0);
   });
 
   it('stops matching at the first record that differs, so a later repeat of a parent prompt belongs to the fork', () => {
-    const child = [forkMeta('sess-2'), at(11, parent[1]), prompt(20, 'own prompt'), at(21, parent[3])];
+    const child = [forkMeta('sess-2'), at(11, p1), prompt(20, 'own prompt'), at(21, p3)];
     expect(prompts(rolloutLines(asText(child), 'sess-2', asText(parent)))).toHaveLength(2);
   });
 
   it('keeps every record when the parent rollout is absent, since nothing can be matched', () => {
-    const child = [forkMeta('sess-2'), at(11, parent[1]), prompt(20, 'own prompt')];
+    const child = [forkMeta('sess-2'), at(11, p1), prompt(20, 'own prompt')];
     expect(prompts(rolloutLines(asText(child), 'sess-2'))).toHaveLength(2);
   });
 });
