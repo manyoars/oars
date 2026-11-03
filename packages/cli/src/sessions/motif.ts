@@ -16,7 +16,7 @@ export type MotifLevel = 'shape' | 'named' | 'class';
 
 /** A step's public names (spec Section 2.2), whichever fields its action has. */
 export interface StepIdentity {
-  [field: string]: string | readonly string[] | null;
+  [field: string]: unknown;
 }
 
 /** What a motif's hash reads of a step: never a position, a frame, a salted hash, or a status. */
@@ -42,7 +42,7 @@ export interface Motif {
 }
 
 /** The fields capture writes on a step as it reaches them (spec Section 2.2); a record captured earlier has none of them. */
-type CapturedStep = StepObservation & { identity?: StepIdentity | null; status?: ToolStatus; cost?: { tokens: number; durationMs: number | null } };
+type CapturedStep = Pick<StepObservation, 'action'> & Partial<Pick<StepObservation, 'identity' | 'status' | 'cost'>>;
 
 const memo = new Map<string, Motif>();
 
@@ -64,10 +64,10 @@ export const shapeMotif = (steps: readonly WindowStep[]): Motif => motifOf('shap
 
 /** The steps of one call. A record captured before steps existed reads through the same action table capture uses, so old data joins new. */
 export const stepsOfCall = (tool: ToolObservation, harness: Harness): CountedStep[] => {
-  const captured: readonly CapturedStep[] = tool.steps ?? [{ n: tool.n, seg: 0, frameId: '', ...actionOf(ACTION_TABLES[harness], tool.tool) }];
+  const captured: readonly CapturedStep[] = tool.steps ?? [{ action: actionOf(ACTION_TABLES[harness], tool.tool).action }];
   return captured.map((step, position) => ({
     action: step.action,
-    identity: step.identity ?? null,
+    identity: step.identity === null || step.identity === undefined ? null : { ...step.identity },
     status: step.status ?? tool.status,
     tokens: step.cost?.tokens ?? 0,
     // A call has one duration however many segments it ran; a step that states its own wins.
@@ -98,7 +98,7 @@ const nameOfStep = (step: WindowStep): string => {
   const fields = Object.entries(step.identity)
     .filter(([, value]) => value !== null)
     .sort(([a], [b]) => (a < b ? -1 : 1))
-    .map(([field, value]) => `${field}=${String(value)}`);
+    .map(([field, value]) => `${field}=${typeof value === 'string' ? value : JSON.stringify(value).replace(/[[\]"]/g, '')}`);
   return `${step.action}[${fields.join(' ')}]`;
 };
 

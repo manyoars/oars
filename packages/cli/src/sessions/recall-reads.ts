@@ -156,7 +156,7 @@ export const fitReads = (store: Store, floors: FitFloors = FIT_FLOORS): RecallRe
   for (const calls of callsBySession(store).values()) {
     for (const [position, call] of calls.entries()) {
       const id = toolShapeId(call.tool, call.keys);
-      const shape = shapes.get(id) ?? { tool: call.tool, keys: [...call.keys].sort(), calls: 0, failed: 0, sessions: new Set(), following: new Map(), days: [], versions: new Set(), models: new Set() };
+      const shape: ShapeTally = shapes.get(id) ?? { tool: call.tool, keys: [...call.keys].sort(), calls: 0, failed: 0, sessions: new Set(), following: new Map(), days: [], versions: new Set(), models: new Set() };
       shapes.set(id, shape);
       shape.calls += 1;
       if (call.status !== 'error') continue;
