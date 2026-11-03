@@ -1,32 +1,10 @@
 // The pool server (t758): a Workers fetch handler over one D1 database. Deposits take closed-vocabulary skeletons only, and a refusal names the field.
-import { createHash } from 'node:crypto';
 import { parseSkeleton, stacksOf } from '../../cli/src/sessions/pool-wire.js';
-
-/** The part of a D1 binding this server uses, so the code does not take the ambient Workers types, which clash with Node's. */
-export interface PoolDb {
-  prepare: (sql: string) => { bind: (...values: (string | number | null)[]) => { first: () => Promise<unknown>; run: () => Promise<unknown> } };
-}
-
-export interface Env {
-  DB: PoolDb;
-}
+import { answer, refuse, type Env } from './http.js';
+import { accountOf, loginPoll, loginStart } from './identity.js';
 
 /** D1 holds at most 2 MB in one value; a skeleton past this limit is refused before it is read. */
 const MAX_DEPOSIT_BYTES = 1024 * 1024;
-
-const answer = (status: number, body: object): Response => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
-const refuse = (status: number, error: string, message: string, field?: string): Response => answer(status, { error, message, ...(field === undefined ? {} : { field }) });
-
-const hasAccount = (row: unknown): row is { account: string } => typeof row === 'object' && row !== null && 'account' in row && typeof row.account === 'string';
-
-/** The account a bearer token belongs to. Only the token's hash is stored, so a read of the database signs nobody in. */
-const accountOf = async (request: Request, env: Env): Promise<string | undefined> => {
-  const token = /^Bearer (.+)$/.exec(request.headers.get('authorization') ?? '')?.[1];
-  if (token === undefined) return undefined;
-  const hash = createHash('sha256').update(token).digest('hex');
-  const row = await env.DB.prepare('SELECT account FROM tokens WHERE hash = ? AND expires_at > ?').bind(hash, Date.now()).first();
-  return hasAccount(row) ? row.account : undefined;
-};
 
 const deposit = async (request: Request, env: Env): Promise<Response> => {
   const account = await accountOf(request, env);
@@ -52,7 +30,11 @@ const deposit = async (request: Request, env: Env): Promise<Response> => {
 export default {
   fetch: async (request: Request, env: Env): Promise<Response> => {
     const { pathname } = new URL(request.url);
-    if (pathname === '/v1/deposits' && request.method === 'POST') return deposit(request, env);
+    if (request.method === 'POST') {
+      if (pathname === '/v1/deposits') return deposit(request, env);
+      if (pathname === '/v1/login/start') return loginStart(request, env);
+      if (pathname === '/v1/login/poll') return loginPoll(request, env);
+    }
     return refuse(404, 'not_found', 'No such route.');
   },
 };
