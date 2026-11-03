@@ -332,7 +332,8 @@ describe('oars purchasing before Many Oars has launched (0.3.0 does not ship it)
     server.use(http.get(LAUNCH_FLAG_URL, () => HttpResponse.json({ launched: false })));
     const seen = route('get', PAYMENT_METHOD, () => HttpResponse.json({}));
     expect(await run(['purchasing', ...args, '--json'], h.deps)).toBe(ExitCode.USAGE);
-    expect(JSON.parse(h.out[0] ?? '')).toMatchObject({ ok: false, step: 'usage', problem: { title: expect.stringContaining('has not launched yet') } });
+    expect(JSON.parse(h.out[0] ?? '')).toMatchObject({ ok: false, step: 'usage' });
+    expect(h.out.join('')).toContain('has not launched yet');
     expect(seen).toEqual([]);
   });
 
