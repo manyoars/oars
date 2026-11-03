@@ -65,7 +65,8 @@ export const claudeEvaluator = (exec: ClaudeExec, env: NodeJS.ProcessEnv): GoldE
   return {
     ready: async () => {
       const { stdout } = await exec(['auth', 'status', '--json'], { stdin: '', env: clean });
-      const [status] = jsonLines(stdout);
+      // One pretty-printed document, unlike the line stream a call prints.
+      const status = jsonLines(stdout.replace(/\r?\n/g, ' ')).at(0);
       if (status?.authMethod !== 'claude.ai' || status.apiProvider !== 'firstParty') throw new CliError('The evaluators run only on a Claude subscription login: run `claude auth login`, or leave the arms that need them unread.', ExitCode.UNEXPECTED, 'unexpected');
     },
     ask: async ({ system, user }) => {
