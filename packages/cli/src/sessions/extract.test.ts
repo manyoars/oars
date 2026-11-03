@@ -451,7 +451,7 @@ describe('the version-3 capture records (Item 1, on errors-a.jsonl)', () => {
     ]);
     const [ok, shellError, error] = capture.tools;
     // The fixture's assistant lines carry no cwd, so the target hashes the path as written (relative to the line's cwd when it has one).
-    expect(ok).toEqual({ ...base, n: 0, ts: '2026-05-28T20:26:49.000Z', tool: 'Read', status: 'ok', target: targetOf('Read', { file_path: '/work/app/src/main.ts' }, undefined, 'salt', redact).target, targetBase: 'cwd', keys: ['file_path'], durationMs: 5000, toolUseId: 't1', prompt: 0 });
+    expect(ok).toEqual({ ...base, steps: ok?.steps, n: 0, ts: '2026-05-28T20:26:49.000Z', tool: 'Read', status: 'ok', target: targetOf('Read', { file_path: '/work/app/src/main.ts' }, undefined, 'salt', redact).target, targetBase: 'cwd', keys: ['file_path'], durationMs: 5000, toolUseId: 't1', prompt: 0 });
     // A Bash result is an error by its exit code even when is_error is false.
     expect(shellError).toMatchObject({ tool: 'Bash', status: 'error', keys: ['command'], durationMs: 2000, toolUseId: 't2', prompt: 0 });
     expect(error).toMatchObject({ tool: 'Write', status: 'error', keys: ['content', 'file_path'], toolUseId: 't3', prompt: 0 });

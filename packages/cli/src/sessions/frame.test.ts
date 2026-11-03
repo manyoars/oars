@@ -141,6 +141,10 @@ describe('repoFilesFromIndex', () => {
 });
 
 const line = (value: object): string => JSON.stringify(value);
+const present = (frame: Frame | undefined): Frame => {
+  if (frame === undefined) throw new Error('expected a frame');
+  return frame;
+};
 const redact = (text: string): string => text;
 
 describe('the frame on captured records', () => {
@@ -157,7 +161,7 @@ describe('the frame on captured records', () => {
       { harness: 'claude-code', harnessVersion: '2.1.300', model: 'claude-opus-5-5', effort: 'high', day: '2026-05-29', platform: 'linux', shell: 'powershell', stack: { languages: ['typescript'], frameworks: [], size: null } },
       { harness: 'claude-code', harnessVersion: '2.1.301', model: 'claude-sonnet-5-5', effort: 'low', day: '2026-05-30', platform: 'linux', shell: 'powershell', stack: { languages: ['typescript'], frameworks: [], size: null } },
     ]);
-    expect(capture.prompts[0]?.frameId).toBe(frameIdOf(capture.prompts[0]?.frame as Frame));
+    expect(capture.prompts[0]?.frameId).toBe(frameIdOf(present(capture.prompts[0]?.frame)));
     expect(capture.prompts[0]?.frameId).not.toBe(capture.prompts[1]?.frameId);
   });
 
@@ -171,7 +175,7 @@ describe('the frame on captured records', () => {
     const result = captureSession({ text: headless, session: 's', project: 'p', rev: 1, at: 'x', bytes: 1, redact, runtime: { oars: '1', node: 'v', os: 'linux' } });
     expect(result.prompts).toEqual([]);
     expect(result.session.frame).toMatchObject({ model: 'claude-opus-5-5', day: '2026-05-29', stack: { languages: ['python'] } });
-    expect(result.session.frameId).toBe(frameIdOf(result.session.frame as Frame));
+    expect(result.session.frameId).toBe(frameIdOf(present(result.session.frame)));
   });
 
   it('falls back to the message model when a line names no requested model', () => {

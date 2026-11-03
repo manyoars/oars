@@ -807,15 +807,19 @@ export const captureSession = (input: ExtractInput): Capture => {
       shell: majorityOrNull(frameShells),
       stack,
     });
-  session.frame = frameOf({ version: undefined, model: majorityOrNull(fileModels) ?? majorityOrNull(fileMessageModels), effort: majorityOrNull(fileEfforts), ts: session.tsFirst ?? undefined });
-  session.frameId = frameIdOf(session.frame);
-  for (const [index, prompt] of prompts.entries()) {
-    prompt.frame = frameOf(promptFrames[index] as PromptFrameParts);
+  const sessionFrame = frameOf({ version: undefined, model: majorityOrNull(fileModels) ?? majorityOrNull(fileMessageModels), effort: majorityOrNull(fileEfforts), ts: session.tsFirst ?? undefined });
+  const sessionFrameId = frameIdOf(sessionFrame);
+  session.frame = sessionFrame;
+  session.frameId = sessionFrameId;
+  for (const [index, parts] of promptFrames.entries()) {
+    const prompt = prompts[index];
+    if (prompt === undefined) continue;
+    prompt.frame = frameOf(parts);
     prompt.frameId = frameIdOf(prompt.frame);
   }
   for (const [position, call] of tools.entries()) {
-    const frameId = (call.prompt === null ? undefined : prompts[call.prompt]?.frameId) ?? session.frameId;
-    call.steps = [{ n: call.n, seg: 0, ...actionOf(actions, natives[position] as string), frameId }];
+    const frameId = (call.prompt === null ? undefined : prompts[call.prompt]?.frameId) ?? sessionFrameId;
+    call.steps = [{ n: call.n, seg: 0, ...actionOf(actions, natives[position] ?? call.tool), frameId }];
   }
 
   return {

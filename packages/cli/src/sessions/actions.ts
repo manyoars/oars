@@ -123,9 +123,10 @@ export const mcpOf = (table: ActionTable, native: string): { server: string; too
  */
 export const actionOf = (table: ActionTable, native: string): { action: CanonicalAction; native: string } => {
   // `hasOwn`: a tool named `constructor` must not read the object's prototype.
-  if (Object.hasOwn(table.rows, native)) return { action: table.rows[native] as CanonicalAction, native };
+  const listed = Object.hasOwn(table.rows, native) ? table.rows[native] : undefined;
+  if (listed !== undefined) return { action: listed, native };
   return { action: mcpOf(table, native) === undefined ? 'other' : 'mcp.call', native: LITERAL };
 };
 
 /** The shell a native tool runs, or null when the table does not say. */
-export const shellOf = (table: ActionTable, native: string): string | null => (Object.hasOwn(table.shells, native) ? (table.shells[native] as string) : null);
+export const shellOf = (table: ActionTable, native: string): string | null => (Object.hasOwn(table.shells, native) ? (table.shells[native] ?? null) : null);
