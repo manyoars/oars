@@ -41,7 +41,12 @@ beforeEach(() => {
   writeFileSync(join(root, 'terms.txt'), `\n${TERM}\n`);
   writeFileSync(join(root, 'deny.txt'), `${OTHER}\n`);
   writeFileSync(join(root, 'gitconfig'), '[user]\n\tname = T\n\temail = t@example.test\n[init]\n\tdefaultBranch = main\n[core]\n\tautocrlf = false\n');
-  env = { ...process.env, OARS_EXCLUSION_TERMS: join(root, 'terms.txt'), OARS_PUBLIC_DENYLIST: join(root, 'deny.txt'), GIT_CONFIG_GLOBAL: join(root, 'gitconfig') };
+  // A run under a hook or `git rebase --exec` inherits these, and they would point every git call here at the real repository.
+  const inherited: NodeJS.ProcessEnv = { ...process.env };
+  delete inherited.GIT_DIR;
+  delete inherited.GIT_WORK_TREE;
+  delete inherited.GIT_INDEX_FILE;
+  env = { ...inherited, OARS_EXCLUSION_TERMS: join(root, 'terms.txt'), OARS_PUBLIC_DENYLIST: join(root, 'deny.txt'), GIT_CONFIG_GLOBAL: join(root, 'gitconfig') };
   git(root, 'init', '-q', '--bare', remote);
   git(work, 'init', '-q');
   git(work, 'remote', 'add', 'origin', remote);
@@ -172,6 +177,26 @@ describe('check-private-names', () => {
     const r = spawnSync('node', [script, sha], { cwd: work, encoding: 'utf8', env: own });
     expect(r.status).toBe(1);
     expect(r.stderr).not.toContain('OARS_EXCLUSION_TERMS not found');
+  });
+
+  it('finds both default lists under the home folder when no override is set', () => {
+    const home = join(root, 'home');
+    mkdirSync(join(home, '.claude', 'session-commons'), { recursive: true });
+    writeFileSync(join(home, '.claude', 'session-commons', 'exclusion-terms.txt'), `${TERM}
+`);
+    writeFileSync(join(home, '.claude', 'session-commons', 'public-denylist.txt'), `${OTHER}
+`);
+    const own: NodeJS.ProcessEnv = { ...env, HOME: home, USERPROFILE: home };
+    delete own.CLAUDE_CONFIG_DIR;
+    delete own.OARS_EXCLUSION_TERMS;
+    delete own.OARS_PUBLIC_DENYLIST;
+    for (const term of [TERM, OTHER]) {
+      const sha = commit(`${term}.txt`, `${term}
+`);
+      const r = spawnSync('node', [script, sha], { cwd: work, encoding: 'utf8', env: own });
+      expect(r.status).toBe(1);
+      expect(r.stderr).not.toContain('not found');
+    }
   });
 
   it('blocks a conflict resolution that adds the term, and names its line', () => {

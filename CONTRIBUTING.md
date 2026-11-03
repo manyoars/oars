@@ -18,17 +18,20 @@ worktree shares one config.
 
 It reads two local files, one term per line, matched without regard to case. They never live in this repository:
 
-- `OARS_EXCLUSION_TERMS`, default `~/.claude/session-commons/exclusion-terms.txt` (under `$CLAUDE_CONFIG_DIR` instead of `~/.claude` when that is set): the session store's exclusion list.
+- `OARS_EXCLUSION_TERMS`, default `~/.claude/session-commons/exclusion-terms.txt` (under `$CLAUDE_CONFIG_DIR` instead of
+  `~/.claude` when that is set): the session store's exclusion list.
 - `OARS_PUBLIC_DENYLIST`, default `~/.claude/session-commons/public-denylist.txt` (same `CLAUDE_CONFIG_DIR` rule).
 
-A missing file prints a warning and the check passes, so a contributor who has neither list is not blocked. A list that exists but is not UTF-8 (a UTF-16 file from PowerShell 5.1 `>`, for example) blocks the push, because
-it would otherwise match nothing in silence; an empty list only warns.
+A missing file prints a warning and the check passes, so a contributor who has neither list is not blocked. A list that
+exists but is not UTF-8 (a UTF-16 file from PowerShell 5.1 `>`, for example) blocks the push, because it would otherwise match
+nothing in silence; an empty list only warns.
 
 ### What it catches, and what it misses
 
 - It catches **listed terms only**, in **added lines** and **commit messages**. A new private name is invisible to it until
   someone adds that name to a list.
-- It does not look at removed lines, file contents outside the diff, file names, branch names, annotated tag messages, or binary files.
+- It does not look at removed lines, file contents outside the diff, file names, branch names, annotated tag messages, binary
+  files, or commit author and committer names and emails (both are published with each commit).
 - It cannot see anything **already on origin**. Cleaning up what was published is a separate, manual job.
 - A stale `origin/*` tracking ref counts as already on origin. After a history rewrite, commits reachable only from an unpruned
   ref are not scanned; run `git fetch --prune origin` first.
