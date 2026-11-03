@@ -8,8 +8,9 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 vi.mock('node:fs/promises', async (importOriginal) => {
   const actual = await importOriginal<typeof fsp>();
   const readdir = vi.fn(actual.readdir);
-  readdir.mockImplementation(((dir: string, options: object) =>
-    typeof dir === 'string' && dir.endsWith('locked-app') ? Promise.reject(Object.assign(new Error('EACCES: permission denied'), { code: 'EACCES' })) : actual.readdir(dir, options)) as typeof actual.readdir);
+  readdir.mockImplementation((dir, options) =>
+    typeof dir === 'string' && dir.endsWith('locked-app') ? Promise.reject(Object.assign(new Error('EACCES: permission denied'), { code: 'EACCES' })) : actual.readdir(dir, options),
+  );
   return { ...actual, readdir };
 });
 
