@@ -184,9 +184,10 @@ const delegatedLines = (skeletons: readonly Skeleton[]): Map<string, SkeletonLin
 };
 
 /** Sums each invariant over many skeletons, each main session's cost-state checked with its subagent transcripts' lines. */
-export const verifyAll = (skeletons: readonly Skeleton[]): InvariantResult[] => {
+export const verifyAll = (skeletons: readonly Skeleton[], delegatedFrom: readonly Skeleton[] = skeletons): InvariantResult[] => {
   const totals: InvariantResult[] = INVARIANTS.map((name) => ({ name, checked: 0, violations: 0 }));
-  const delegated = delegatedLines(skeletons);
+  // `--session` filters `skeletons` but row 6 still needs the subagent transcripts' lines, so they come from `delegatedFrom`.
+  const delegated = delegatedLines(delegatedFrom);
   for (const skeleton of skeletons) {
     for (const [index, result] of verifySkeleton(skeleton, delegated.get(skeleton.session)).entries()) {
       const total = totals[index];
