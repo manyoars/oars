@@ -154,13 +154,6 @@ describe('rolloutLines', () => {
     expect(out.tools).toMatchObject([{ tool: 'Bash', status: 'error' }]);
   });
 
-  it('reports a Paginated rollout as unreadable by name instead of depositing it empty (policy.rs:143)', () => {
-    const paginated = line(T(0), 'session_meta', { id: 'sess-1', timestamp: T(0), cwd: '/work/app', cli_version: '0.60.0', history_mode: 'paginated' });
-    expect(() => rolloutLines(asText([paginated, line(T(2), 'event_msg', { type: 'item_completed' })]), 's')).toThrow(/paginated/);
-    const legacy = line(T(0), 'session_meta', { id: 'sess-1', timestamp: T(0), cwd: '/work/app', history_mode: 'legacy' });
-    expect(rolloutLines(asText([legacy, prompt(2, 'hi')]), 's').some((entry) => entry.type === 'user')).toBe(true);
-  });
-
   it('counts torn lines, and treats a nonblank file with no parseable line as unreadable', () => {
     const text = `${rolloutText(meta('/work/app'))}\n{torn\n\n{also torn\n`;
     expect(rolloutBadLines(text)).toEqual(['{torn', '{also torn']);
@@ -184,7 +177,7 @@ describe('rolloutLines', () => {
     expect(assistants([meta('/work/app'), say(2, 'a'), say(3, 'b')]).every((entry) => typeof entry.requestId === 'string')).toBe(true);
   });
 
-  it('keeps each prompt at its own time, and never steps back for a missing, relative, or earlier stamp', () => {
+  it('gives a prompt with a missing, relative, or earlier stamp the latest time so far, never an earlier one', () => {
     const lines = rolloutLines(
       asText([
         meta('/work/app'),
@@ -206,6 +199,8 @@ describe('rolloutLines', () => {
   it('captures a session from a folder that is not a repository', () => {
     const out = extractOf([meta('/tmp/notes'), prompt(2, 'hi'), line(T(3), 'response_item', { type: 'function_call', name: 'read_file', arguments: JSON.stringify({ path: 'a.txt' }), call_id: 'c1' }), line(T(4), 'response_item', { type: 'function_call_output', call_id: 'c1', output: 'text' })]);
     expect(out.tools).toMatchObject([{ tool: 'read_file', status: 'ok' }]);
+    // /tmp/notes is under no git root, so the skeleton names no repository.
+    expect(out.session.repo).toBeNull();
   });
 
   it('redacts a secret and an email, and cuts a 1,500-character error at 1,000 characters', () => {
@@ -267,7 +262,7 @@ describe('openCodexStore', () => {
     const store = await openCodexStore(home);
     expect(store?.sessions).toEqual([]);
     expect(store?.unreadable).toHaveLength(1);
-    expect(store?.unreadable[0]).toContain('rollout-x.jsonl.zst');
+    expect(store?.unreadable[0]?.file).toContain('rollout-x.jsonl.zst');
   });
 
   it('rejects a file whose id is not a safe file name', async () => {
@@ -361,10 +356,10 @@ describe('fix round 2 behaviors', () => {
     expect(out.errorLines).toEqual([]);
   });
 
-  it('reads cache_write_input_tokens as cache creation (protocol.rs:2512)', () => {
+  it('reads cache_write_input_tokens as cache creation, outside input: input 100 = cached 40 + write 60 (responses.rs:889-911)', () => {
     const withWrite = line(T(4), 'event_msg', { type: 'token_count', info: { last_token_usage: { input_tokens: 100, cached_input_tokens: 20, cache_write_input_tokens: 30, output_tokens: 10, total_tokens: 110 } } });
     const out = extractOf([meta('/work/app'), say(3, 'hello'), withWrite]);
-    expect(out.session.usage).toMatchObject({ input: 80, cacheRead: 20, cacheWrite: 30, output: 10 });
+    expect(out.session.usage).toMatchObject({ input: 50, cacheRead: 20, cacheWrite: 30, output: 10 });
   });
 
   it('cuts at 1,000 characters and redacts on the live text path (a function_call_output, not an exec_command_end)', () => {
@@ -378,14 +373,14 @@ describe('fix round 2 behaviors', () => {
 
   const withOrdinal = (ordinal: number, entry: object): object => ({ ...entry, ordinal });
 
-  it('drops the records a subagent inherited (ordinal below subagent_history_start_ordinal, protocol.rs:3511)', () => {
-    const child = line(T(0), 'session_meta', { id: 'sess-2', timestamp: T(0), cwd: '/work/app', parent_thread_id: 'sess-1', subagent_history_start_ordinal: 2 });
+  it('drops the records a subagent inherited (ordinal below subagent_history_start_ordinal, protocol.rs:3511) on a Paginated rollout, the only mode that writes ordinals (ordinal.rs:37)', () => {
+    const child = line(T(0), 'session_meta', { id: 'sess-2', timestamp: T(0), cwd: '/work/app', parent_thread_id: 'sess-1', subagent_history_start_ordinal: 2, history_mode: 'paginated' });
     const lines = rolloutLines(asText([child, withOrdinal(0, prompt(1, 'inherited prompt')), withOrdinal(1, prompt(2, 'also inherited')), withOrdinal(2, prompt(4, 'own prompt'))]), 's');
     expect(lines.filter((entry) => entry.type === 'user').length).toBe(1);
   });
 
-  it('drops the records a fork inherited (ordinal below forked_from_ordinal_exclusive, protocol.rs:3462)', () => {
-    const forked = line(T(0), 'session_meta', { id: 'sess-2', timestamp: T(0), cwd: '/work/app', forked_from_id: 'sess-1', forked_from_ordinal_exclusive: 2 });
+  it('drops the records a fork inherited (ordinal below forked_from_ordinal_exclusive, protocol.rs:3462) on a Paginated rollout (ordinal.rs:37)', () => {
+    const forked = line(T(0), 'session_meta', { id: 'sess-2', timestamp: T(0), cwd: '/work/app', forked_from_id: 'sess-1', forked_from_ordinal_exclusive: 2, history_mode: 'paginated' });
     const lines = rolloutLines(asText([forked, withOrdinal(0, prompt(1, 'a')), withOrdinal(1, prompt(2, 'b')), withOrdinal(2, prompt(3, 'c')), prompt(4, 'no ordinal')]), 's');
     expect(lines.filter((entry) => entry.type === 'user').length).toBe(2);
   });
@@ -398,7 +393,9 @@ describe('fix round 2 behaviors', () => {
     const store = await openCodexStore(home);
     expect(store?.sessions).toEqual([]);
     expect(store?.unreadable).toHaveLength(1);
-    expect(store?.unreadable[0]).toContain('sessions');
+    expect(store?.unreadable[0]?.file).toContain('sessions');
+    // The reason carries no path, so a log line built from it cannot leak the home folder.
+    expect(store?.unreadable[0]?.reason).not.toContain(home);
   });
 
   it('carries parent_thread_id and agent_role from session_meta on the listed session', async () => {
@@ -407,5 +404,153 @@ describe('fix round 2 behaviors', () => {
     const home = stageCodex(s.root, [{ id, lines: [line(T(0), 'session_meta', { id, timestamp: T(0), cwd: '/work/app', parent_thread_id: 'sess-1', agent_role: 'explorer' })] }]);
     const store = await openCodexStore(home);
     expect(store?.sessions[0]).toMatchObject({ parent: 'sess-1', agentRole: 'explorer' });
+  });
+});
+
+// Fix round 3. Paginated rollouts are what the cited commit writes by default (thread-store/src/local/mod.rs:512-515): the legacy user_message,
+// agent_message, patch_apply_end, and mcp_tool_call_end events are not persisted there (rollout/src/policy.rs:164-176), and an `item_completed`
+// event holding a `TurnItem` (protocol/src/items.rs:50, tag `type`, variant names as written) takes their place; response_item, turn_context, and
+// token_count are persisted in both modes (policy.rs:20-24, :43-46, :131-133). Every record carries an `ordinal` in this mode (rollout/src/ordinal.rs:28).
+describe('Paginated rollouts', () => {
+  let next = 0;
+  const ord = (entry: object): object => ({ ...entry, ordinal: next++ });
+  const pmeta = (extra: object = {}) => ord(line(T(0), 'session_meta', { id: 'sess-1', timestamp: T(0), cwd: '/work/app', cli_version: '0.60.0', history_mode: 'paginated', ...extra }));
+  const done = (second: number, item: object) => ord(line(T(second), 'event_msg', { type: 'item_completed', thread_id: 'sess-1', turn_id: 't1', item }));
+  const call = (second: number, id: string, name: string, extra: object = {}) => ord(line(T(second), 'response_item', { type: 'function_call', name, arguments: '{}', call_id: id, ...extra }));
+  const patchCall = (second: number, id: string) => ord(line(T(second), 'response_item', { type: 'custom_tool_call', name: 'apply_patch', call_id: id, input: '*** Begin Patch\n*** Update File: src/a.ts\n*** End Patch' }));
+  const begin = (): void => {
+    next = 0;
+  };
+
+  it('reads a UserMessage and an AgentMessage item_completed as the prompt and the reply (items.rs:85, :160)', () => {
+    begin();
+    const lines = rolloutLines(
+      asText([
+        pmeta(),
+        done(2, { type: 'UserMessage', id: 'u1', content: [{ type: 'text', text: 'fix the build', text_elements: [] }, { type: 'text', text: 'and the docs', text_elements: [] }] }),
+        done(3, { type: 'AgentMessage', id: 'a1', content: [{ type: 'text', text: 'done' }] }),
+      ]),
+      's',
+    );
+    expect(lines.filter((entry) => entry.type === 'user')).toMatchObject([{ message: { content: [{ type: 'text', text: 'fix the build\nand the docs' }] } }]);
+    expect(lines.filter((entry) => entry.type === 'assistant')).toMatchObject([{ message: { content: [{ type: 'text', text: 'done' }] } }]);
+  });
+
+  it('keeps reading turn_context, token_count, and the shell response_items, which Paginated mode still persists', () => {
+    begin();
+    const out = extractOf([
+      pmeta(),
+      ord(turn()),
+      done(2, { type: 'UserMessage', id: 'u1', content: [{ type: 'text', text: 'run it', text_elements: [] }] }),
+      call(3, 'c1', 'shell', { arguments: JSON.stringify({ command: ['make'] }) }),
+      ord(shellOut(4, 'c1', execText(2, 'make: *** No rule'))),
+      done(5, { type: 'AgentMessage', id: 'a1', content: [{ type: 'text', text: 'it failed' }] }),
+      ord(usage(6, 100, 40, 10, 0, 110)),
+    ]);
+    expect(out.tools).toMatchObject([{ tool: 'Bash', status: 'error' }]);
+    expect(out.errorLines.map((entry) => entry.line)).toEqual(['make: *** No rule']);
+    expect(out.session.usage).toMatchObject({ input: 60, cacheRead: 40, output: 10 });
+  });
+
+  it('settles a patch from its FileChange item (events.rs:610-617, id is the call id): failed is an error, completed is ok, declined settles nothing', () => {
+    begin();
+    const change = (second: number, id: string, status: string, stderr = '') => done(second, { type: 'FileChange', id, changes: {}, status, stdout: '', stderr });
+    const out = extractOf([
+      pmeta(),
+      patchCall(2, 'p1'),
+      change(3, 'p1', 'failed', 'could not apply'),
+      patchCall(4, 'p2'),
+      change(5, 'p2', 'completed'),
+      patchCall(6, 'p3'),
+      change(7, 'p3', 'declined', 'rejected by user'),
+    ]);
+    expect(out.tools.map((tool) => tool.status)).toEqual(['error', 'ok', 'none']);
+    expect(out.errorLines.map((entry) => entry.line)).toEqual(['could not apply']);
+  });
+
+  it('settles an MCP call from its McpToolCall item (mcp_tool_call.rs:1189-1207, items.rs:459): an error or an isError result fails it', () => {
+    begin();
+    const mcp = (second: number, id: string, rest: object) => done(second, { type: 'McpToolCall', id, server: 'notes', tool: 'find', arguments: {}, ...rest });
+    const out = extractOf([
+      pmeta(),
+      call(2, 'm1', 'mcp__notes__find'),
+      mcp(3, 'm1', { status: 'failed', error: { message: 'server unavailable' } }),
+      call(4, 'm2', 'mcp__notes__find'),
+      mcp(5, 'm2', { status: 'completed', result: { content: [{ type: 'text', text: 'no such note' }], isError: true } }),
+      call(6, 'm3', 'mcp__notes__find'),
+      mcp(7, 'm3', { status: 'completed', result: { content: [{ type: 'text', text: 'found' }] } }),
+    ]);
+    expect(out.tools.map((tool) => tool.status)).toEqual(['error', 'error', 'ok']);
+    expect(out.errorLines.map((entry) => entry.line)).toEqual(['server unavailable', 'no such note']);
+  });
+
+  it('ignores item_completed items it has no use for (a Plan, a CommandExecution) without failing', () => {
+    begin();
+    const lines = rolloutLines(asText([pmeta(), done(2, { type: 'Plan', id: 'x', text: 'steps' }), done(3, { type: 'CommandExecution', id: 'y', status: 'completed' })]), 's');
+    expect(lines).toEqual([]);
+  });
+
+  it('applies only the first session_meta: a copy from fork history keeps the fork id, cwd, and cutoff (recorder.rs:1157-1158, :1173)', () => {
+    const fork = line(T(0), 'session_meta', { id: 'sess-2', timestamp: T(0), cwd: '/work/app', cli_version: '0.60.0', history_mode: 'paginated', forked_from_id: 'sess-1', forked_from_ordinal_exclusive: 3 });
+    const copied = line(T(0), 'session_meta', { id: 'sess-1', timestamp: T(0), cwd: '/work/parent', cli_version: '0.60.0', history_mode: 'paginated' });
+    const lines = rolloutLines(
+      asText([
+        { ...fork, ordinal: 3 },
+        { ...copied, ordinal: 0 },
+        { ...prompt(1, 'inherited'), ordinal: 1 },
+        { ...prompt(2, 'also inherited'), ordinal: 2 },
+        { ...prompt(4, 'own'), ordinal: 4 },
+      ]),
+      's',
+    );
+    expect(lines.filter((entry) => entry.type === 'user')).toHaveLength(1);
+    expect(lines.every((entry) => entry.sessionId === 'sess-2' && entry.cwd === '/work/app')).toBe(true);
+  });
+});
+
+describe('a Legacy fork (no ordinals)', () => {
+  const parent = [meta('/work/app'), prompt(1, 'first'), say(2, 'reply'), prompt(3, 'second')];
+  const forkMeta = (id: string) => line(T(10), 'session_meta', { id, timestamp: T(10), cwd: '/work/app', forked_from_id: 'sess-1' });
+  const at = (offset: number, entry: unknown): unknown => {
+    const copy = JSON.parse(JSON.stringify(entry)) as { timestamp: string };
+    copy.timestamp = T(offset);
+    return copy;
+  };
+  const prompts = (lines: ReturnType<typeof rolloutLines>) => lines.filter((entry) => entry.type === 'user');
+
+  it('drops the leading records that match the parent rollout, payload for payload with timestamps excluded', () => {
+    const child = [forkMeta('sess-2'), at(11, parent[0]), at(12, parent[1]), at(13, parent[2]), at(14, parent[3]), prompt(20, 'own prompt')];
+    const lines = rolloutLines(asText(child), 'sess-2', asText(parent));
+    expect(prompts(lines)).toMatchObject([{ message: { content: [{ text: 'own prompt' }] } }]);
+    expect(lines.filter((entry) => entry.type === 'assistant')).toHaveLength(0);
+  });
+
+  it('stops matching at the first record that differs, so a later repeat of a parent prompt belongs to the fork', () => {
+    const child = [forkMeta('sess-2'), at(11, parent[1]), prompt(20, 'own prompt'), at(21, parent[3])];
+    expect(prompts(rolloutLines(asText(child), 'sess-2', asText(parent)))).toHaveLength(2);
+  });
+
+  it('keeps every record when the parent rollout is absent, since nothing can be matched', () => {
+    const child = [forkMeta('sess-2'), at(11, parent[1]), prompt(20, 'own prompt')];
+    expect(prompts(rolloutLines(asText(child), 'sess-2'))).toHaveLength(2);
+  });
+});
+
+describe('a namespaced function_call (models.rs:1154)', () => {
+  const named = (name: string, namespace: string | undefined) =>
+    extractOf([meta('/work/app'), line(T(2), 'response_item', { type: 'function_call', name, ...(namespace === undefined ? {} : { namespace }), arguments: '{}', call_id: 'c1' }), line(T(3), 'response_item', { type: 'function_call_output', call_id: 'c1', output: 'ok' })]).tools[0]?.tool;
+
+  it('records <namespace>__<name> for a bare name under a namespace (models.rs:3461: slack + notifications)', () => {
+    expect(named('notifications', 'slack')).toBe('slack__notifications');
+  });
+
+  it('keeps a name that already starts with its namespace (models.rs:3406: mcp__codex_apps__gmail)', () => {
+    expect(named('mcp__codex_apps__gmail_get_recent_emails', 'mcp__codex_apps__gmail')).toBe('mcp__codex_apps__gmail_get_recent_emails');
+  });
+
+  it('does not class a namespaced shell or exec_command as Bash, but still does without a namespace', () => {
+    expect(named('shell', 'collaboration')).toBe('collaboration__shell');
+    expect(named('exec_command', 'collaboration')).toBe('collaboration__exec_command');
+    expect(named('shell', undefined)).toBe('Bash');
   });
 });
