@@ -62,8 +62,10 @@ export interface CodexSession {
   folder: string | null;
   /** `session_meta.parent_thread_id`: set for a spawned agent's rollout, which is deposited as a subagent of that thread. */
   parent: string | null;
-  /** `session_meta.agent_role` (protocol.rs:3489), when the spawned agent has one. */
+  /** `session_meta.agent_role` (protocol.rs:3486), when the spawned agent has one. */
   agentRole: string | null;
+  /** `session_meta.forked_from_id`: the thread whose history a fork copied, to match its copied records against. */
+  forkedFrom: string | null;
   file: string;
   size: number;
   mtimeMs: number;
@@ -75,8 +77,8 @@ export interface CodexStore {
   transcript: (session: CodexSession) => Promise<string>;
   /** Files skipped because their id is not a safe file name (it names a skeleton), counted so the skip is never silent. */
   rejected: number;
-  /** Files that could not be inspected (`<path>: <reason>`), reported once each and never fatal. */
-  unreadable: string[];
+  /** Files that could not be inspected, reported once each and never fatal; the reason names no path, so a log line built from it leaks none. */
+  unreadable: { file: string; reason: string }[];
 }
 
 /** A rollout file name is `rollout-<timestamp>-<uuid>.jsonl`, optionally `.zst`; the uuid is the thread id. */
@@ -105,13 +107,15 @@ const firstLine = async (file: string): Promise<string> => {
   }
 };
 
-/** Lists rollout files under `dir`; only a missing folder is silent, any other failure (EACCES, ENOTDIR) is reported as `<dir>: <reason>`. */
-const walk = async (dir: string, found: string[], unreadable: string[]): Promise<void> => {
+/** Lists rollout files under `dir`; only a missing folder is silent, any other failure (EACCES, ENOTDIR) is reported against `dir`. */
+const reasonOf = (error: unknown, file: string): string => (error instanceof Error ? error.message : String(error)).split(file).join(basename(file));
+
+const walk = async (dir: string, found: string[], unreadable: { file: string; reason: string }[]): Promise<void> => {
   let entries;
   try {
     entries = await readdir(dir, { withFileTypes: true });
   } catch (error) {
-    if (!(error instanceof Error && 'code' in error && error.code === 'ENOENT')) unreadable.push(`${dir}: ${error instanceof Error ? error.message : String(error)}`);
+    if (!(error instanceof Error && 'code' in error && error.code === 'ENOENT')) unreadable.push({ file: dir, reason: reasonOf(error, dir) });
     return;
   }
   for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name))) {
@@ -178,11 +182,13 @@ const usageOf = (info: unknown): Obj | undefined => {
   // A zero total means Codex recorded none, so no usage is written rather than a measured zero.
   if (input === 0 && output === 0) return undefined;
   const reasoning = num(last.reasoning_output_tokens);
-  // Codex counts cached tokens inside `input_tokens`; capture's `input` excludes cache reads, as the Claude Code path's does.
+  const written = num(last.cache_write_input_tokens) ?? 0;
+  // Codex counts cached and written tokens both inside `input_tokens` (input 100 = cached 40 + write 60, codex-api/src/sse/responses.rs:889-911); capture's
+  // `input` excludes cache reads and creation, as the Claude Code path's does, so each token is counted once.
   return {
-    input_tokens: input - cached,
+    input_tokens: Math.max(input - cached - written, 0),
     cache_read_input_tokens: cached,
-    cache_creation_input_tokens: num(last.cache_write_input_tokens) ?? 0,
+    cache_creation_input_tokens: written,
     output_tokens: output,
     ...(reasoning === undefined ? {} : { output_tokens_details: { thinking_tokens: reasoning } }),
   };
@@ -192,7 +198,7 @@ const usageOf = (info: unknown): Obj | undefined => {
 export const rolloutBadLines = (text: string): string[] => text.split('\n').filter((raw) => raw.trim() !== '' && parse(raw) === undefined);
 
 /** One rollout as the lines `captureSession` reads. */
-export const rolloutLines = (text: string, fallbackId: string): Obj[] => {
+export const rolloutLines = (text: string, fallbackId: string, parentText?: string): Obj[] => {
   const nonblank = text.split('\n').filter((raw) => raw.trim() !== '');
   if (nonblank.length > 0 && !nonblank.some((raw) => isObj(parse(raw)))) throw new Error('no parseable line');
   const lines: Obj[] = [];
@@ -207,8 +213,13 @@ export const rolloutLines = (text: string, fallbackId: string): Obj[] => {
   const calls = new Map<string, { kind: 'shell' | 'patch' | 'other'; ids: string[]; session?: string }>();
   // A unified-exec process still running, by its session id, to the exec_command that started it: the `write_stdin` that sees it exit settles both.
   const running = new Map<string, string>();
-  // Records below this ordinal are inherited from a parent thread (a subagent's or a fork's), not the session's own.
+  // Records below this ordinal are inherited from a parent thread (a subagent's or a fork's), not the session's own. Only a Paginated rollout
+  // holds ordinals (rollout/src/ordinal.rs:28, :37).
   let inherited: number | undefined;
+  // Only the first session_meta is the rollout's own; later ones are copied from fork history (rollout/src/recorder.rs:1157-1158, :1173).
+  let seenMeta = false;
+  // A Legacy fork has no ordinals: the leading records equal to the parent's, in order, are its copied history. Null once it stops matching.
+  let copied: { keys: string[]; at: number } | null = null;
   const resolved = new Set<string>();
   const stamp = (value: unknown): string => {
     const candidate = iso(value);
@@ -236,15 +247,66 @@ export const rolloutLines = (text: string, fallbackId: string): Obj[] => {
       message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: id, is_error: failure !== undefined, content: failure ?? '' }] },
     });
   };
+  const prompted = (message: string, when: string): void => {
+    sequence += 1;
+    lines.push({ ...base, type: 'user', uuid: `${fallbackId}-u${String(sequence)}`, timestamp: when, message: { role: 'user', content: [{ type: 'text', text: message }] } });
+  };
+  const settlePatch = (id: string, failure: string | undefined, when: string): void => {
+    const known = calls.get(id);
+    if (known?.kind !== 'patch' || resolved.has(id)) return;
+    resolved.add(id);
+    for (const part of known.ids) result(part, failure, when);
+  };
+  const settleMcp = (id: string, failure: string | undefined, when: string): void => {
+    if (calls.get(id)?.kind !== 'other' || resolved.has(id)) return;
+    resolved.add(id);
+    result(id, failure, when);
+  };
+  // The text of a TurnItem's content array: {type: text, text} items (items.rs:134 AgentMessageContent, user_input.rs:17 UserInput).
+  const contentText = (content: unknown): string => (Array.isArray(content) ? content.map((part) => (isObj(part) && part.type === 'text' ? (str(part.text) ?? '') : '')).filter((part) => part !== '').join('\n') : '');
+  // A completed TurnItem, the Paginated mode's replacement for the legacy events (policy.rs:164-176).
+  const completed = (item: Obj, when: string): void => {
+    const kind = str(item.type);
+    const id = str(item.id);
+    if (kind === 'UserMessage') {
+      const message = contentText(item.content);
+      if (message !== '') prompted(message, when);
+    } else if (kind === 'AgentMessage') {
+      const message = contentText(item.content);
+      if (message !== '') assistant([{ type: 'text', text: message }], when);
+    } else if (kind === 'FileChange' && id !== undefined && (item.status === 'completed' || item.status === 'failed')) {
+      settlePatch(id, item.status === 'failed' ? (str(item.stderr) ?? 'patch failed') : undefined, when);
+    } else if (kind === 'McpToolCall' && id !== undefined && (item.status === 'completed' || item.status === 'failed')) {
+      const refused = isObj(item.result) && item.result.isError === true;
+      const failed = item.status === 'failed' || refused;
+      const text = isObj(item.error) ? (str(item.error.message) ?? '') : isObj(item.result) ? bodyText(item.result.content) : '';
+      settleMcp(id, failed ? (text === '' ? 'mcp tool call failed' : text) : undefined, when);
+    }
+  };
+  const parentKeys = (parent: string): string[] =>
+    parent
+      .split('\n')
+      .map((raw) => parse(raw))
+      .filter((parsed): parsed is Obj => isObj(parsed) && isObj(parsed.payload) && parsed.type !== 'session_meta')
+      .map((parsed) => JSON.stringify([parsed.type, parsed.payload]));
   for (const raw of text.split('\n')) {
     const entry = parse(raw);
     if (!isObj(entry) || !isObj(entry.payload)) continue;
     const payload = entry.payload;
     const ordinal = num(entry.ordinal);
-    if (inherited !== undefined && ordinal !== undefined && ordinal < inherited && entry.type !== 'session_meta') continue;
-    const when = stamp(entry.timestamp);
+    if (inherited !== undefined && ordinal !== undefined && ordinal < inherited) continue;
     const type = str(entry.type);
+    if (type !== 'session_meta' && copied !== null) {
+      if (copied.keys[copied.at] === JSON.stringify([entry.type, payload])) {
+        copied.at += 1;
+        continue;
+      }
+      copied = null;
+    }
+    if (type === 'session_meta' && seenMeta) continue;
+    const when = stamp(entry.timestamp);
     if (type === 'session_meta') {
+      seenMeta = true;
       const id = str(payload.id);
       if (id !== undefined) base.sessionId = id;
       const cwd = str(payload.cwd);
@@ -253,7 +315,7 @@ export const rolloutLines = (text: string, fallbackId: string): Obj[] => {
       if (version !== undefined) base.version = version;
       stamp(payload.timestamp);
       inherited = Math.max(num(payload.subagent_history_start_ordinal) ?? 0, num(payload.forked_from_ordinal_exclusive) ?? 0) || undefined;
-      if (str(payload.history_mode) === 'paginated') throw new Error('paginated history mode (item_completed events) is not read');
+      if (inherited === undefined && parentText !== undefined && str(payload.forked_from_id) !== undefined) copied = { keys: parentKeys(parentText), at: 0 };
     } else if (type === 'turn_context') {
       model = str(payload.model) ?? model;
       const cwd = str(payload.cwd);
@@ -262,10 +324,9 @@ export const rolloutLines = (text: string, fallbackId: string): Obj[] => {
       const kind = str(payload.type);
       if (kind === 'user_message') {
         const message = str(payload.message);
-        if (message !== undefined) {
-          sequence += 1;
-          lines.push({ ...base, type: 'user', uuid: `${fallbackId}-u${String(sequence)}`, timestamp: when, message: { role: 'user', content: [{ type: 'text', text: message }] } });
-        }
+        if (message !== undefined) prompted(message, when);
+      } else if (kind === 'item_completed') {
+        if (isObj(payload.item)) completed(payload.item, when);
       } else if (kind === 'agent_message') {
         const message = str(payload.message);
         if (message !== undefined) assistant([{ type: 'text', text: message }], when);
@@ -294,38 +355,32 @@ export const rolloutLines = (text: string, fallbackId: string): Obj[] => {
         }
       } else if (kind === 'mcp_tool_call_end') {
         const id = str(payload.call_id);
-        const known = id === undefined ? undefined : calls.get(id);
-        if (id !== undefined && known?.kind === 'other' && !resolved.has(id)) {
-          resolved.add(id);
-          const outcome = isObj(payload.result) ? payload.result : {};
-          const refused = isObj(outcome.Ok) && outcome.Ok.isError === true;
-          const text = typeof outcome.Err === 'string' ? outcome.Err : isObj(outcome.Ok) ? bodyText(outcome.Ok.content) : '';
-          result(id, typeof outcome.Err === 'string' || refused ? (text === '' ? 'mcp tool call failed' : text) : undefined, when);
-        }
+        const outcome = isObj(payload.result) ? payload.result : {};
+        const refused = isObj(outcome.Ok) && outcome.Ok.isError === true;
+        const text = typeof outcome.Err === 'string' ? outcome.Err : isObj(outcome.Ok) ? bodyText(outcome.Ok.content) : '';
+        if (id !== undefined) settleMcp(id, typeof outcome.Err === 'string' || refused ? (text === '' ? 'mcp tool call failed' : text) : undefined, when);
       } else if (kind === 'patch_apply_end') {
         const id = str(payload.call_id);
-        const known = id === undefined ? undefined : calls.get(id);
-        if (id !== undefined && known?.kind === 'patch' && !resolved.has(id) && payload.status !== 'declined') {
-          resolved.add(id);
-          const failure = payload.success === false ? (str(payload.stderr) ?? 'patch failed') : undefined;
-          for (const part of known.ids) result(part, failure, when);
-        }
+        if (id !== undefined && payload.status !== 'declined') settlePatch(id, payload.success === false ? (str(payload.stderr) ?? 'patch failed') : undefined, when);
       }
     } else if (type === 'response_item') {
       const kind = str(payload.type);
       if (kind === 'function_call' || kind === 'local_shell_call' || kind === 'custom_tool_call') {
         const id = str(payload.call_id) ?? str(payload.id);
-        const name = str(payload.name) ?? 'shell';
+        const bare = str(payload.name) ?? 'shell';
+        // A namespaced function (models.rs:1154) is not its bare name: only an un-namespaced one is Codex's own shell or patch tool.
+        const namespace = str(payload.namespace);
+        const name = namespace === undefined || bare.startsWith(namespace) ? bare : `${namespace}__${bare}`;
         const args = kind === 'custom_tool_call' ? { input: str(payload.input) } : parse(payload.arguments);
         const input: Obj = isObj(args) ? args : {};
         const action = isObj(payload.action) ? payload.action : {};
         if (id === undefined) continue;
-        if (kind === 'local_shell_call' || SHELL_CALLS.has(name)) {
+        if (kind === 'local_shell_call' || (namespace === undefined && SHELL_CALLS.has(name))) {
           const command = commandOf(kind === 'local_shell_call' ? action : input);
           const polled = name === 'write_stdin' ? (str(input.session_id) ?? (num(input.session_id) === undefined ? undefined : String(num(input.session_id)))) : undefined;
           calls.set(id, { kind: 'shell', ids: [id], ...(polled === undefined ? {} : { session: polled }) });
           assistant([{ type: 'tool_use', id, name: 'Bash', input: command === undefined ? {} : { command } }], when);
-        } else if (PATCH_CALLS.has(name)) {
+        } else if (namespace === undefined && PATCH_CALLS.has(name)) {
           const files = patchFiles(str(input.input) ?? str(input.patch) ?? '');
           const ids = (files.length === 0 ? [''] : files).map((_, index) => `${id}#${String(index)}`);
           calls.set(id, { kind: 'patch', ids });
@@ -373,7 +428,7 @@ export const rolloutLines = (text: string, fallbackId: string): Obj[] => {
 /** Opens the Codex store under `root`; undefined when it holds no `sessions` folder, so a machine without Codex is skipped silently. */
 export const openCodexStore = async (root: string): Promise<CodexStore | undefined> => {
   const files: string[] = [];
-  const unreadable: string[] = [];
+  const unreadable: { file: string; reason: string }[] = [];
   await walk(join(root, 'sessions'), files, unreadable);
   await walk(join(root, 'archived_sessions'), files, unreadable);
   if (files.length === 0 && unreadable.length === 0) return undefined;
@@ -391,9 +446,9 @@ export const openCodexStore = async (root: string): Promise<CodexStore | undefin
       const info = await stat(file);
       const meta = parse(await firstLine(file));
       const head = isObj(meta) && isObj(meta.payload) ? meta.payload : {};
-      sessions.set(id, { id, folder: str(head.cwd) ?? null, parent: str(head.parent_thread_id)?.toLowerCase() ?? null, agentRole: str(head.agent_role) ?? null, file, size: info.size, mtimeMs: Math.floor(info.mtimeMs) });
+      sessions.set(id, { id, folder: str(head.cwd) ?? null, parent: str(head.parent_thread_id)?.toLowerCase() ?? null, agentRole: str(head.agent_role) ?? null, forkedFrom: str(head.forked_from_id)?.toLowerCase() ?? null, file, size: info.size, mtimeMs: Math.floor(info.mtimeMs) });
     } catch (error) {
-      unreadable.push(`${file}: ${error instanceof Error ? error.message : String(error)}`);
+      unreadable.push({ file, reason: reasonOf(error, file) });
     }
   }
   const ordered = [...sessions.values()].sort((a, b) => a.mtimeMs - b.mtimeMs || a.id.localeCompare(b.id));
@@ -403,7 +458,10 @@ export const openCodexStore = async (root: string): Promise<CodexStore | undefin
     unreadable,
     transcript: async (session) => {
       const text = await textOf(session.file);
-      const lines = [...rolloutLines(text, session.id).map((line) => JSON.stringify(line)), ...rolloutBadLines(text)];
+      // A Legacy fork's copied history is found by matching it against the parent's rollout; a parent outside the store (or unreadable) leaves it whole.
+      const parent = session.forkedFrom === null ? undefined : sessions.get(session.forkedFrom);
+      const parentText = parent === undefined ? undefined : await textOf(parent.file).catch(() => undefined);
+      const lines = [...rolloutLines(text, session.id, parentText).map((line) => JSON.stringify(line)), ...rolloutBadLines(text)];
       return lines.join('\n') + (lines.length === 0 ? '' : '\n');
     },
   };

@@ -27,8 +27,8 @@ export interface SourceStore {
   transcript: (session: SourceSession) => string | Promise<string>;
   /** Sessions skipped because their id is not a safe file name, counted so the skip is never silent. */
   rejected: number;
-  /** Items that could not be inspected (`<path>: <reason>`), warned about once each and never fatal. */
-  unreadable: readonly string[];
+  /** Items that could not be inspected, warned about once each and never fatal; `reason` names no path. */
+  unreadable: readonly { file: string; reason: string }[];
   /** The file to blame when `transcript` throws for a session; the store's own file when a source keeps one. */
   where: (session: SourceSession) => string;
   close: () => void;
