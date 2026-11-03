@@ -1,7 +1,7 @@
 # The `oars sessions` store (version 5)
 
 `oars sessions` keeps a local, deterministic memory of the operator's own Claude Code sessions: no model call, no network, nothing
-uploads. This page is the store's format. The types are in `packages/cli/src/sessions/schema.ts`; the commands are in the CLI README.
+uploads. `gold arms` is the one exception: it sends redacted text through your own Claude subscription. This page is the store's format. The types are in `packages/cli/src/sessions/schema.ts`; the commands are in the CLI README.
 
 ## Layout
 
@@ -30,7 +30,8 @@ Version 4 (CAPTURE 4, t714) adds `sid`, `repo`, `fileHashes`, `env`, `promptFing
 1,000-character cap on an error line, and a cap of 100 on `files` and `fileHashes` per session (p99 was 61, max 209, on the 8,253-session
 copy store); `recall --path` sees the first 100 sorted paths of a session. Version 5 (CAPTURE 5, t733) changes no field name: it changes the
 stored `models` value of an existing skeleton to carry the cost-state keys (see the cost-state paragraph below), so a version-4 store is
-behind and its next deposit captures every transcript again. What an open does with an older store:
+behind and its next deposit captures every transcript again. Version 6 (CAPTURE 6, t746) adds `segments`, `pulls`, and `commits` to the tool
+record (see "What a shell call captures"), and a version-5 store's next deposit captures every transcript again. What an open does with an older store:
 
 | Log holds | Action on open | Action at the next deposit |
 |-----------|----------------|----------------------------|
@@ -62,7 +63,7 @@ pattern and entropy, emails, and the domains named with `--redact-domain`) befor
 | `user-prompt` (one per prompt) | `index`, `wallSec`, `thinking`, `turns`, `model`, `efforts`, `skills`, `usage` | P |
 | | `session`, `ts` (a pool would keep the UTC day), `head` (the first 300 characters), `promptFingerprint` | A |
 | `tool` (one per tool call) | `n`, `tool`, `status` (`ok`, `error`, or `none` when no result is in the file), `keys` (the input's key names), `durationMs`, `harnessVersion`, `agentType`, `side`, `prompt`, `targetBase`, and `target` for a shell call | P |
-| | `session`, `parent`, `toolUseId`, `ts` (a pool would keep the UTC day), and `target` for a path call | A |
+| | `session`, `parent`, `toolUseId`, `ts` (a pool would keep the UTC day), `target` for a path call, and `segments`, `pulls`, and `commits` (a plain word, a private package name, and a sha can each identify private work) | A |
 | `error-line` (one per failed result) | `tool`, `harnessVersion`, `side`, `prompt`, `after` | P |
 | | `session`, `toolUseId`, `ts` (a pool would keep the UTC day), `line` (the first informative line, redacted, not normalized, cut to 1,000 characters) | A |
 | `prompt` (derived, one per prompt) | `kind`, `v`, `rev`, `index`, `wallSec`, class (`cls`), `tools`, `shape`, `errors`, `thinking`, `sideTools`, `turns`, `model`, `efforts`, `skills`, `usage`, `recovery`, `explore`, `act`, and `bigrams` (the motif vector) | P |
@@ -81,18 +82,30 @@ Node.js version, and `process.platform`. A library version is recorded only when
 `promptFingerprint` is the hash of the `prompt_snapshot` attachment (version 3's `contextFingerprint` also mixed in the `environment`
 snapshot, whose platform and shell now belong to `env`).
 
+### What a shell call captures
+
+`target` stays what it was: the first line's program and subcommand, the retry identity. Three optional fields read the whole command, on every
+line and at every shell separator, after heredoc and here-string bodies are dropped and the command is redacted. A shell's own argument
+(`bash -c "..."`) is read too. No registry is asked and nothing runs, so each field is what the command and its result say.
+
+| Field | On | Holds | What it does not say |
+|-------|----|-------|---------------------|
+| `segments` | every shell call | One `{ run, read }` per command, the last 50. `run` is the program's basename and its plain words, at most 12, each cut to 30 characters: no flag, path, variable, or quoted text. `read` is whether the call's status reports that command: false when a pipe follows it, when a later `;`, `&`, newline, or `\|\|` overrides it, or when it runs in the background. | An unquoted word is kept, so `echo hello there` is kept as written, redacted. |
+| `pulls` | a call that names one | `{ ecosystem, name, version }` with ecosystem `npm` (npm, pnpm, yarn, bun, `npx`, `bunx`, `dlx`), `pypi` (pip, `python -m pip`, uv, `uvx`, pipx), `cargo`, `go`, `gem`, `brew`, `skill` (`npx skills add`), `plugin` (`claude plugin install`, `codex plugin add`), or `mcp` (the full server name from `mcp__<server>__`, on every MCP call). `version` is as stated, or null. A scoped name stays whole. A lockfile install, a local path, and a variable name nothing. | A name is not a verified package, a run of `npx` may hit a local bin, and a failed install still names its pull. A command behind `xargs` or in a script is not read. |
+| `commits` | a clean shell call that ran `git commit` | One entry per commit, in order: the sha, or null. The sha comes from the `[branch sha]` line, or from a `git rev-parse HEAD` or one-commit `git log` that is the call's final command, joined by `&&` or `\|` in the same repository with nothing between that moves `HEAD`. A count stands without a sha, and a `-q` commit with no such read-back has none. A dry run or help call is no commit, and neither is one refused with `nothing to commit`, `fatal:`, or `error:`. | A commit behind `;` whose hook failed with other text still counts, since the call came back clean. A failed call records no commit even when its own result proves one: `git commit -m x && git push` with a rejected push holds a `[branch sha]` line, yet `commits` undercounts it and the `redo` window stays open. |
+
 ### Prompt outcome signals
 
-Each derived `prompt` record (`EXTRACTOR_VERSION` 5) carries four deterministic signals, kept separate: no composite, no score. A version-2
+Each derived `prompt` record (`EXTRACTOR_VERSION` 6) carries four deterministic signals, kept separate: no composite, no score. A version-2
 line, read as written, has none of them. They read the main line only, with a resumed session's repeated calls dropped; a subagent
 transcript's calls are not read.
 
 | Field | Values | Rule | What it does not say |
 |-------|--------|------|---------------------|
-| `verify` | `passed`, `failed`, `none`, `na` | The status of the last shell call after the prompt's last edit: the rule behind the `edit-verify` class, less a backgrounded call, whose result says only that it started. `none`: there is no such call, or the last one has no result. `na`: the prompt edited nothing. A failed edit is not an edit. | Any shell call qualifies, so `passed` means a clean exit, often of a read or a `git` call, not that a test ran. `failed` includes a shell call that was rejected or denied and never ran. |
+| `verify` | `passed`, `failed`, `masked`, `none`, `na`, or absent | The last build, test, type-check, or lint runner in `segments` after the prompt's last edit (`isRunner` in `derive.ts`), less a backgrounded call, whose result says only that it started. `passed` and `failed`: the call's status reports that runner. `masked`: a pipe or a later command hides its exit, so the exit is unknown. `none`: no runner ran, or its call has no result. `na`: the prompt edited nothing. Absent: the walk reached a shell call captured before `segments`, which could have been a runner. A failed edit is not an edit. | `passed` means a clean exit, not that the suite covers the change. `failed` includes a call that was rejected or denied and never ran, and a chained command after the runner failing: `npm test && git push`. The runner list is a rule over program names, so a repository's own script name is not seen. |
 | `stopped` | `interrupt`, `rejected`, null | `rejected`: a main-line error line starts `The user doesn't want to proceed with this tool use` or `The user doesn't want to take this action`. `interrupt`: the next prompt record starts `[Request interrupted by user`. A rejection wins, since the harness writes the marker right after it. | A classifier or hook denial is not a stop: it is policy, and the model carries on. |
-| `commits` | a count | Successful shell calls whose `target` is `git commit`. | It is a floor. `target` holds the first line's first program and subcommand, so `git add . && git commit` is not seen. |
-| `redo` | true, false | A later prompt in the session edits a path hash this prompt edited, within `REDO_WINDOW` (3) prompts, with no `git commit` that `commits` can see between them. | A hidden commit does not end the window, and a planned second edit of one file reads the same as rework. |
+| `commits` | a count | The entries in the prompt's captured `commits`. A record captured before CAPTURE 6 counts a clean call whose `target` is `git commit`. | That older count is a floor: `target` holds only the first line's first program and subcommand. A commit made by a script or an alias is not seen. |
+| `redo` | true, false | A later prompt in the session edits a path hash this prompt edited, within `REDO_WINDOW` (3) prompts, with no commit that `commits` can see between them. | A commit a script made does not end the window, and a planned second edit of one file reads the same as rework. |
 
 The interrupt marker is a user line, so capture keeps it as a prompt record of its own, with no tools. It counts toward `REDO_WINDOW`'s
 distance and in a share of prompts; its own `stopped` is null and its `verify` is `na`.
@@ -276,3 +289,9 @@ carry `harness: "cursor"`; a record with no `harness` is Claude Code's (`harness
   store stamps a result with the call's own time), a composer id that is not `[A-Za-z0-9._-]+` is skipped and counted, and a composer with no
   `createdAt` accepts no relative `clientStartTime`.
 - **Reading it back.** `recall` and `measure` read the records as they are. `books --by harness` groups the prompts by harness.
+
+## The outcome gold set
+
+`oars sessions gold sample` writes `outcome-gold-<date>.md` to `<claude config>/session-commons/review/`: about 200 prompts in batches of 50, each with the redacted request, the result (commit message and diff stat where found, the transcript's own edit calls, or the actions of a prompt that edited nothing), and a `Judgment: yes|no` line. The draw is seeded and weighted by the square root of each class and model cell, with at most two prompts a session, so its base rate is the sample's, not the store's. `--exclude-term` leaves out any session that mentions a term in its transcript or a subagent's. A marker prompt, a `no-tools` prompt (its reply is the closing claim), and a Cursor session are not drawn. The signals go to the `.arms.json` file beside it. `oars sessions gold score <file>` prints, per model and pooled, each signal's AUROC with a DeLong 95% interval and the base rate, from whatever is judged so far. Both are local, and neither is ever committed. A signal is an observation, not a label, and no signal is combined with another.
+
+`oars sessions gold arms <file>` fills the same sidecar and leaves the gold file alone, so judgments carry over. From the transcript it reads the closing reply, the turn's last `Confidence:` line, and the next prompt that is not a marker. Fresh single-turn readers then give three separate answers: `evaluator` reads what the judge reads and says whether the work did what was asked, `claim` reads the closing reply and says whether it claims success, and `later` reads the next prompt and says whether the person accepted the work, or that it cannot tell. Each runs through `claude -p` on your own subscription login, on one named model, with no tools, hooks, settings, or session file. Its fixed wording is hashed into the sidecar, and a rerun refuses a sidecar written under other words. The command checks the login first and refuses an API key or another provider. It saves after each answer and resumes, and it prints only how many prompts each arm covers; `gold score` reads each arm against the judgments. This is the one `sessions` command that calls a model. The text it sends is redacted and has no tools to act on.
