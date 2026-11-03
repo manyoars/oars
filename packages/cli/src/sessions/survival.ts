@@ -75,8 +75,8 @@ const REVERT_RECORD = /^([0-9a-f]{40})\n([\s\S]*)$/;
 const REVERTS = /This reverts commit ([0-9a-f]{40})/g;
 
 /**
- * The commits the default branch has undone, from `git revert`'s own message. `git log` runs newest first, so by the time a revert is
- * reached anything that undid it has been seen, and a reverted revert undoes nothing.
+ * The commits the default branch has undone, from `git revert`'s own message. `git log --topo-order` runs children before parents, so by the
+ * time a revert is reached anything that undid it has been seen, and a reverted revert undoes nothing.
  */
 const revertedIn = (log: string): Set<string> => {
   const reverted = new Set<string>();
@@ -95,7 +95,7 @@ const classify = async (git: Git, root: string, shas: readonly string[]): Promis
   const ref = await defaultRef(git, root);
   if (ref === null) return states;
   const reachable = new Set(outputLines(await git(root, ['rev-list', ref])));
-  const reverted = revertedIn(await git(root, ['log', ref, '--no-show-signature', '--grep=This reverts commit', '--format=%H%n%B%x00']));
+  const reverted = revertedIn(await git(root, ['log', ref, '--topo-order', '--no-show-signature', '--grep=This reverts commit', '--format=%H%n%B%x00']));
   const resolved = outputLines(await git(root, ['cat-file', '--batch-check=%(objectname) %(objecttype)'], `${shas.join('\n')}\n`));
   shas.forEach((sha, index) => {
     const [full = '', type] = (resolved[index] ?? '').split(' ');

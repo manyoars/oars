@@ -109,6 +109,26 @@ describe('recordSurvival', () => {
     expect(Object.fromEntries(await readSurvival(s.storeDir))).toEqual({ [undone]: 'reverted', [redone]: 'survived' });
   });
 
+  it('reads a revert of a revert as undoing it even when clock skew dates the undoing commit older, across a merge', async () => {
+    const repo = makeRepo();
+    const dated = (date: string, ...args: string[]): void => {
+      execFileSync('git', ['-C', repo, ...IDENTITY, ...args], { stdio: 'ignore', env: { ...process.env, GIT_COMMITTER_DATE: date } });
+    };
+    const undone = commitIn(repo, 'undone');
+    dated('2026-01-03T00:00:00Z', 'revert', '--no-edit', 'HEAD');
+    gitIn(repo, 'checkout', '-q', '-b', 'redo');
+    dated('2026-01-01T00:00:00Z', 'revert', '--no-edit', 'HEAD');
+    gitIn(repo, 'checkout', '-q', 'main');
+    writeFileSync(join(repo, 'other'), 'other');
+    gitIn(repo, 'add', 'other');
+    dated('2026-01-04T00:00:00Z', 'commit', '-q', '-m', 'add other');
+    dated('2026-01-05T00:00:00Z', 'merge', '-q', '--no-ff', '--no-edit', 'redo');
+    publish(repo);
+    const { s, project } = await staged(repo, [{ sha: undone }]);
+    await recordSurvival(s.runtime, [project], () => NOW);
+    expect(Object.fromEntries(await readSurvival(s.storeDir))).toEqual({ [undone]: 'survived' });
+  });
+
   it('reads a commit left on a branch the default branch never took as unreachable', async () => {
     const repo = makeRepo();
     gitIn(repo, 'checkout', '-q', '-b', 'side');
