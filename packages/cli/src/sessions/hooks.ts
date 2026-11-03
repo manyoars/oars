@@ -12,6 +12,7 @@ import { makeRedactor } from './redact.js';
 import type { HookCall } from './schema.js';
 import { errorLine, inputKey, logStep, newContext, runDeposit, stampKey, tryLog, type StepReport } from './steps.js';
 import { deposit, depositSession, readSaved, type SessionsRuntime } from './store.js';
+import { recordSurvival } from './survival.js';
 
 export type HookEvent = HookCall['event'];
 
@@ -93,6 +94,7 @@ const nightly = async (runtime: SessionsRuntime, now: () => number): Promise<Out
     const done = await deposit(runtime, { allow: saved.allow, redactDomains: saved.redactDomains, now }, trace);
     return { value: done, in: { transcript: done.sessions + done.subagents + done.unchanged } };
   });
+  await recordSurvival(runtime, saved.allow, now);
   // A Cursor store that could not be read does not fail the run, so the record carries it or nobody sees it.
   const unreadable = result.cursorUnreadableLogged[0];
   if (unreadable !== undefined) return { hit: true, queried: false, error: await errorLine(runtime.storeDir, unreadable) };
