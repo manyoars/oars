@@ -1052,12 +1052,14 @@ export const callPositions = (text: string): Map<string, number> => {
     } catch {
       continue;
     }
-    const content = isObj(parsed) && isObj(parsed.message) ? parsed.message.content : undefined;
+    // Capture writes no row for a blob line's copy or a replayed id, so neither takes a number here.
+    const content = isObj(parsed) && parsed.type !== 'api-request-blob' && isObj(parsed.message) ? parsed.message.content : undefined;
     if (!Array.isArray(content)) continue;
     for (const block of content) {
       if (!isObj(block) || block.type !== 'tool_use') continue;
       const id = str(block.id);
-      if (id !== undefined && !positions.has(id)) positions.set(id, n);
+      if (id !== undefined && positions.has(id)) continue;
+      if (id !== undefined) positions.set(id, n);
       n += 1;
     }
   }
