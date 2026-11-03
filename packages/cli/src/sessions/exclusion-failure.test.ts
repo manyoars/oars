@@ -1,12 +1,12 @@
 // A transcript or folder that cannot be read is never read as clean (t763 fix round): the session is excluded as `unreadable`.
 import type * as fs from 'node:fs';
 import type * as fsp from 'node:fs/promises';
-import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join, sep } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { run } from '../cli.js';
 import { CliError, ExitCode } from '../errors.js';
-import { harness } from '../test-support.js';
+import { harness, removeTestDirs } from '../test-support.js';
 
 // The streams the scan opens, so a test can see that a file which returned early on a hit was closed.
 const opened = vi.hoisted((): { destroyed: boolean }[] => []);
@@ -27,7 +27,12 @@ vi.mock('node:fs/promises', async (importOriginal) => {
       ? Promise.reject(Object.assign(new Error(`EACCES: permission denied, stat '${path}'`), { code: 'EACCES' }))
       : actual.stat(path, options),
   );
-  return { ...actual, readdir, stat };
+  // The final rename of a list named `norename` is refused (EPERM, as a virus scanner or an open handle can on Windows).
+  const rename = vi.fn(actual.rename);
+  rename.mockImplementation((from, to) =>
+    typeof to === 'string' && to.endsWith('norename.jsonl') ? Promise.reject(Object.assign(new Error(`EPERM: operation not permitted, rename '${String(from)}' -> '${to}'`), { code: 'EPERM' })) : actual.rename(from, to),
+  );
+  return { ...actual, readdir, stat, rename };
 });
 vi.mock('node:fs', async (importOriginal) => {
   const actual = await importOriginal<typeof fs>();
@@ -40,11 +45,12 @@ vi.mock('node:fs', async (importOriginal) => {
   return { ...actual, createReadStream };
 });
 
-const { checkSession, scanStore } = await import('./exclusion.js');
+const { checkSession, scanStore, sessionsExclusions } = await import('./exclusion.js');
 const { cleanup, stage } = await import('./test-support.js');
 
 afterEach(() => {
   cleanup();
+  removeTestDirs();
   opened.length = 0;
 });
 
@@ -165,5 +171,18 @@ describe('a session with no readable main', () => {
     const t = setup();
     t.put('nostat.jsonl', CLEAN);
     expect(await checkSession(t.staged.runtime, t.termsFile, 'p', 'nostat')).toEqual({ excluded: true, reason: 'unreadable', hits: [] });
+  });
+});
+
+describe('a list that cannot be moved into place', () => {
+  it('leaves an earlier list unchanged and no temp file holding folder names behind, and rethrows', async () => {
+    const t = setup();
+    t.put('a.jsonl', DIRTY);
+    const list = join(t.staged.root, 'out', 'norename.jsonl');
+    mkdirSync(join(list, '..'), { recursive: true });
+    writeFileSync(list, 'earlier-list');
+    await expect(sessionsExclusions(t.staged.runtime, { terms: t.termsFile, list })).rejects.toThrow(/EPERM/);
+    expect(readFileSync(list, 'utf8')).toBe('earlier-list');
+    expect(existsSync(`${list}.tmp`)).toBe(false);
   });
 });
