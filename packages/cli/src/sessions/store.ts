@@ -691,6 +691,7 @@ const readSource = async (context: DepositContext, source: Source, root: string,
         text = await store.transcript(session);
       } catch (error) {
         noteUnreadable(counts, store.where(session), error);
+        if (source.stopOnTranscriptError === true) break;
         continue;
       }
       const rev = Math.max((previous?.rev ?? 0) + 1, context.now());
