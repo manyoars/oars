@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest';
 import { extractSession } from './derive.js';
 import { captureSession } from './extract.js';
 import { makeRedactor } from './redact.js';
-import { formatVerify, INVARIANTS, verifyAll, verifyCaptured, verifySkeleton, type InvariantResult } from './verify.js';
+import { CAPTURE_INVARIANTS, formatVerify, formatSessionResults, INVARIANTS, verifyAll, verifyCaptured, verifySessions, verifySkeleton, type InvariantResult } from './verify.js';
 import { FIXTURES } from './test-support.js';
 
 const skeletonOf = (lines: readonly string[], name = 's') =>
@@ -206,5 +206,75 @@ describe('verifyCaptured (the CAPTURE 4 fields)', () => {
     const newer = capture('/w', '/w/a', 'aaaaaaaa');
     newer.session.cv = '6';
     expect(violations([newer])[0]).toBe(0);
+  });
+});
+
+describe('verifySessions (one result per session)', () => {
+  const usage = { input_tokens: 5, cache_creation_input_tokens: 6, cache_read_input_tokens: 7, output_tokens: 8 };
+  const at = (requestId: string, timestamp: string): string => JSON.stringify({ type: 'assistant', requestId, timestamp, message: { role: 'assistant', model: 'm', content: [], usage } });
+  const tokens = (factor: number) => ({ inputTokens: 5 * factor, cacheCreationInputTokens: 6 * factor, cacheReadInputTokens: 7 * factor, outputTokens: 8 * factor });
+  const state = (factor: number): string => JSON.stringify({ type: 'cost-state', startTime: Date.parse('2026-10-13T15:00:00.000Z'), modelUsage: { m: tokens(factor) } });
+  const captured = (lines: readonly string[], session: string, sid: string | null = 'aaaaaaaa') =>
+    captureSession({ text: lines.join('\n'), session, project: 'p', rev: 1, at: 'x', bytes: 0, redact: makeRedactor(), salt: 's', sid });
+
+  it('gives each session the six skeleton rows and the four capture rows, its subagents lines passed as delegated', () => {
+    // The parent's total of three requests holds only with the agent's two lines: store-wide verifyAll calls that 'subagent transcripts'.
+    const parent = captured([at('r1', '2026-10-13T16:00:00.000Z'), state(3)], 'p1');
+    const agent = captured([at('s1', '2026-10-13T16:01:00.000Z'), at('s2', '2026-10-13T16:02:00.000Z')], 'p1~agent-a');
+    const all = [parent, agent];
+    const results = verifySessions(all.map((one) => one.skeleton), all.map((one) => one.session), all.flatMap((one) => one.tools));
+    expect(results.map((entry) => entry.session)).toEqual(['p1', 'p1~agent-a']);
+    expect(results[0]?.invariants.map((entry) => entry.name)).toEqual([...INVARIANTS, ...CAPTURE_INVARIANTS]);
+    expect(results[0]?.invariants[5]).toMatchObject({ checked: 4, violations: 0, status: 'pass' });
+    expect(countsOf(results[0]?.invariants[5])).toEqual({ 'subagent transcripts': 4 });
+    expect(results[1]?.invariants[5]).toMatchObject({ checked: 0, status: 'not run' });
+  });
+
+  it('marks a failing row fail, and a row with nothing to check not run', () => {
+    const bad = captured([at('r1', '2026-10-13T16:00:00.000Z'), state(1)].map((line) => line.replace('"r1"', '""')), 'bad');
+    const old = captured([at('r1', '2026-10-13T16:00:00.000Z')], 'old');
+    old.session.cv = '3';
+    const results = verifySessions([bad.skeleton, old.skeleton], [bad.session, old.session], [...bad.tools, ...old.tools]);
+    expect(results[0]?.invariants[3]).toMatchObject({ status: 'fail' });
+    expect(results[0]?.invariants[7]).toMatchObject({ status: 'pass' });
+    // A session behind the current capture version is counted by row 7 only; rows 8 to 10 read current-version sessions alone.
+    expect(results[1]?.invariants.slice(6).map((entry) => entry.status)).toEqual(['fail', 'not run', 'not run', 'not run']);
+    expect(results[1]?.invariants[2]).toMatchObject({ status: 'not run' });
+  });
+
+  it('keeps a frozen session out of the cv-behind failures, and prints one line per failing session', () => {
+    const old = captured([at('r1', '2026-10-13T16:00:00.000Z')], 'old');
+    old.session.cv = '3';
+    const frozen = verifySessions([old.skeleton], [old.session], [], new Set(['old']));
+    expect(frozen[0]?.invariants[6]).toMatchObject({ status: 'pass', checked: 1 });
+    const failing = verifySessions([old.skeleton], [old.session], []);
+    expect(formatSessionResults(failing)).toContain('old: FAIL');
+    expect(formatSessionResults(frozen)).toBe('');
+  });
+
+  it('runs a session that has a skeleton but no capture record through the skeleton rows alone', () => {
+    const lone = captured([at('r1', '2026-10-13T16:00:00.000Z')], 'lone');
+    const results = verifySessions([lone.skeleton], [], []);
+    expect(results[0]?.invariants.slice(6).map((entry) => entry.status)).toEqual(['not run', 'not run', 'not run', 'not run']);
+  });
+
+  it('gives a session with a capture record and no skeleton rows 1 to 6 at not run, and its real rows 7 to 10', () => {
+    const lone = captured([at('r1', '2026-10-13T16:00:00.000Z')], 'lone');
+    const whole = captured([at('r1', '2026-10-13T16:00:00.000Z')], 'whole');
+    const results = verifySessions([whole.skeleton], [whole.session, lone.session], [...whole.tools, ...lone.tools]);
+    expect(results.map((entry) => entry.session)).toEqual(['whole', 'lone']);
+    const missing = results[1]?.invariants;
+    expect(missing?.map((entry) => entry.name)).toEqual([...INVARIANTS, ...CAPTURE_INVARIANTS]);
+    expect(missing?.slice(0, 6).every((entry) => entry.checked === 0 && entry.violations === 0 && entry.status === 'not run')).toBe(true);
+    expect(missing?.slice(6).map((entry) => entry.checked)).toEqual(verifyCaptured([lone.session], lone.tools).map((entry) => entry.checked));
+    expect(missing?.[7]).toMatchObject({ checked: 1, status: 'pass' });
+  });
+
+  it('fails row 8 for a current-version session with a null sid, so row 8 cannot fail only for a non-null one', () => {
+    const unsalted = captured([at('r1', '2026-10-13T16:00:00.000Z')], 'unsalted', null);
+    const results = verifySessions([unsalted.skeleton], [unsalted.session], unsalted.tools);
+    expect(results[0]?.invariants[7]).toMatchObject({ checked: 1, violations: 1, status: 'fail' });
+    const salted = captured([at('r1', '2026-10-13T16:00:00.000Z')], 'salted');
+    expect(verifySessions([salted.skeleton], [salted.session], salted.tools)[0]?.invariants[7]).toMatchObject({ violations: 0, status: 'pass' });
   });
 });

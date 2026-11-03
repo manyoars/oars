@@ -153,6 +153,15 @@ describe('oars sessions', () => {
     expect(field(strict, 'sessions')).toBe(4);
   });
 
+  it('verify --session leaves a torn skeleton of another session out of unreadable and failed', async () => {
+    const { deps, out, staged } = setup();
+    await run(['sessions', 'deposit', '--allow', 'proj'], deps);
+    writeFileSync(join(staged.storeDir, 'skeletons', 'torn.json'), '{"lines": [');
+    out.length = 0;
+    expect(await run(['--json', 'sessions', 'verify', '--session', 'tldr', '--strict'], deps)).toBe(ExitCode.OK);
+    expect(field(json(out), 'unreadable')).toBe(0);
+  });
+
   it('recall masks a query with the domains the deposit masked', async () => {
     const { deps, out, staged } = setup();
     const lines = [
