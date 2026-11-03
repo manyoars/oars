@@ -1436,7 +1436,8 @@ export const captureSession = (input: ExtractInput): Capture => {
   session.searches = [...searches].sort();
 
   const repoFiles = input.repoFiles ?? repoFilesFromIndex;
-  // Only the first capture may look at the repository: it is the one input here that is not the transcript, and a frame must not follow it.
+  // Only the first capture may look at the repository, so a frame does not follow it. The repository and `platform` are the two inputs here that are not
+  // the transcript; the platform is read every time, so re-capturing the same transcript on another OS changes its `frameId`s.
   const size = input.repoSize !== undefined ? input.repoSize : sessionRoot === null ? null : repoSizeOf(repoFiles(sessionRoot));
   const stack = stackOf({ paths: framePaths, programs: [...framePrograms], size });
   const frameOf = (parts: PromptFrameParts): Frame =>

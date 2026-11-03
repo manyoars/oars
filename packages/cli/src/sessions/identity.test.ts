@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
+import { ACTION_TABLES } from './actions.js';
 import { captureSession, type Capture } from './extract.js';
-import { BUNDLING_PROGRAMS, PUBLIC_PROGRAMS } from './public-vocabulary.js';
+import { callIdentity } from './identity.js';
+import { BUNDLING_PROGRAMS, PUBLIC_MCP_SERVERS, PUBLIC_MCP_TOOLS, PUBLIC_PROGRAMS } from './public-vocabulary.js';
 import { makeRedactor } from './redact.js';
 import type { StepObservation, ToolObservation } from './schema.js';
 
@@ -158,6 +160,15 @@ describe('identity holds public names only', () => {
     expect(shell('npm install typescript@beta')[0]?.identity).toMatchObject({ pulls: [{ registry: 'npm', name: 'typescript', version: '<literal>' }] });
   });
 
+  it('masks a version whose suffix is a private build tag, and keeps digits and release words', () => {
+    for (const version of ['5.4.2-acmecorp', '5.4.2+acmecorp.1', '5.4.2-beta.acmecorp', '5.4.2-rcacme']) {
+      expect(shell(`npm install typescript@${version}`)[0]?.identity).toMatchObject({ pulls: [{ name: 'typescript', version: '<literal>' }] });
+    }
+    for (const version of ['5.4.2-beta.1', '5.4.2-rc1', '5.4.2+7', '5.x', '^5.4.2', '~5.4']) {
+      expect(shell(`npm install typescript@${version}`)[0]?.identity).toMatchObject({ pulls: [{ name: 'typescript', version }] });
+    }
+  });
+
   it('holds a shell step with no readable command as a masked program', () => {
     expect(shell('$TOOL --force')[0]?.identity).toEqual({ program: '<literal>', sub: null, flags: [] });
     expect(shell('')[0]?.identity).toEqual({ program: '<literal>', sub: null, flags: [] });
@@ -177,6 +188,36 @@ describe('identity holds public names only', () => {
 
   it('masks a tool name on a public server that is not shaped like one', () => {
     expect(stepsOf([{ name: 'mcp__github__has space', input: {} }])[0]).toMatchObject({ native: '<literal>', identity: { server: 'github', tool: '<literal>' } });
+  });
+
+  it('masks a tool a public server does not publish, since a server name is a label the user picks', () => {
+    for (const [name, server] of [['mcp__postgres__acme_ledger', 'postgres'], ['mcp__github__acme__query', 'github']] as const) {
+      const call = { name, input: {} };
+      const masked = { native: '<literal>', identity: { server, tool: '<literal>' } };
+      expect(stepsOf([call])[0]).toMatchObject({ action: 'mcp.call', ...masked });
+      expect(pooled(captured([call]))).not.toContain('acme');
+      // Codex spells a call the same way, and the capture path reaches it through this function once its adapter lands.
+      expect(callIdentity(ACTION_TABLES.codex, 'mcp.call', name, '<literal>', { skill: undefined, url: undefined })).toEqual(masked);
+    }
+  });
+
+  it('masks a published tool of one server when another server calls it', () => {
+    expect(stepsOf([{ name: 'mcp__postgres__navigate', input: {} }])[0]).toMatchObject({ native: '<literal>', identity: { server: 'postgres', tool: '<literal>' } });
+  });
+
+  it('reads a published tool of its own server in full', () => {
+    expect(stepsOf([{ name: 'mcp__postgres__query', input: {} }])[0]).toMatchObject({ native: 'mcp__postgres__query', identity: { server: 'postgres', tool: 'query' } });
+    expect(stepsOf([{ name: 'mcp__sequential-thinking__sequentialthinking', input: {} }])[0]).toMatchObject({ identity: { server: 'sequential-thinking', tool: 'sequentialthinking' } });
+    // Codex has no recall row, so its recall call reads as an MCP call through the same list.
+    expect(callIdentity(ACTION_TABLES.codex, 'mcp.call', 'mcp__oars__oars_recall', '<literal>', { skill: undefined, url: undefined })).toEqual({ native: 'mcp__oars__oars_recall', identity: { server: 'oars', tool: 'oars_recall' } });
+  });
+
+  it('seeds tools only under a server the list itself makes public', () => {
+    expect([...PUBLIC_MCP_TOOLS.keys()].filter((server) => !PUBLIC_MCP_SERVERS.has(server))).toEqual([]);
+  });
+
+  it('masks every tool of a public server with none seeded', () => {
+    expect(stepsOf([{ name: 'mcp__notion__search', input: {} }])[0]).toMatchObject({ native: '<literal>', identity: { server: 'notion', tool: '<literal>' } });
   });
 
   it('reads a public skill, and masks a private one', () => {
@@ -212,5 +253,13 @@ describe('identity holds public names only', () => {
   it('reads a harness with its own MCP spelling through the same rules', () => {
     const [tool] = capture([{ name: 'mcp_acme_read', input: {} }], 'cursor');
     expect(tool?.steps?.[0]).toMatchObject({ action: 'mcp.call', native: '<literal>', identity: { server: '<literal>', tool: '<literal>' } });
+  });
+
+  it('holds back the tool when a harness spelling cannot say where the server name ends', () => {
+    // `mcp_postgres_acme_query` may be tool `acme_query` on `postgres` or tool `query` on a private `postgres_acme`, so what follows the first word is unknown.
+    const call = { name: 'mcp_postgres_acme_query', input: {} };
+    const [tool] = capture([call], 'cursor');
+    expect(tool?.steps?.[0]).toMatchObject({ action: 'mcp.call', native: '<literal>', identity: { server: 'postgres', tool: '<literal>' } });
+    expect(pooled(captured([call], 'cursor'))).not.toContain('acme');
   });
 });
