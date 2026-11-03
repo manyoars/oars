@@ -6,6 +6,7 @@ import { createHash } from 'node:crypto';
 import { rename, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import type { Readable, Writable } from 'node:stream';
 import { CliError, ExitCode } from '../errors.js';
 import { cut } from './extract.js';
 import { INTERRUPT_MARKER, isObj, readIfThere, readTurns, renderShown, viewOf, type GoldAnswer, type GoldAskedArm, type GoldDocument, type GoldEntry, type GoldEvaluators, type GoldReads, type Turn } from './gold.js';
@@ -47,10 +48,28 @@ export type ClaudeExec = (args: readonly string[], options: { stdin: string; env
 
 const CLAUDE_CALL_MS = 180_000;
 
+export interface ClaudeSpawnOptions {
+  cwd: string;
+  env: NodeJS.ProcessEnv;
+  stdio: ['pipe', 'pipe', 'ignore'];
+  windowsHide: boolean;
+  timeout: number;
+}
+
+/** The part of a spawned child `runClaude` touches. */
+export interface ClaudeChild {
+  readonly stdin: Writable;
+  readonly stdout: Readable;
+  on: (event: string, listener: (code: number | null) => void) => unknown;
+}
+
+/** The seam a test starts its child through; `spawn` is the real one. */
+export type SpawnClaude = (command: string, args: readonly string[], options: ClaudeSpawnOptions) => ClaudeChild;
+
 /** Runs from the temp folder, so no project's instructions reach a reader. A hung call is killed and fails the run, which resumes. */
-export const runClaude: ClaudeExec = (args, { stdin, env }) =>
+export const runClaude = (args: readonly string[], { stdin, env }: Parameters<ClaudeExec>[1], start: SpawnClaude = spawn): ReturnType<ClaudeExec> =>
   new Promise((resolve, reject) => {
-    const child = spawn('claude', args, { cwd: tmpdir(), env, stdio: ['pipe', 'pipe', 'ignore'], windowsHide: true, timeout: CLAUDE_CALL_MS });
+    const child = start('claude', args, { cwd: tmpdir(), env, stdio: ['pipe', 'pipe', 'ignore'], windowsHide: true, timeout: CLAUDE_CALL_MS });
     let stdout = '';
     child.stdout.setEncoding('utf8').on('data', (chunk: string) => {
       stdout += chunk;
