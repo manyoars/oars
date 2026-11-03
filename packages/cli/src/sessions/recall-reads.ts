@@ -10,7 +10,7 @@ import { contentHash, FAMILIES, type Family } from './read.js';
 import { namedByPrefix, resolveReads, type CurrentPool } from './recall-pool.js';
 import { makeRecall, type Recall, type RecallForm, type RecallQueryObject, type RecallSlice } from './recall-object.js';
 import { closedName, evidenceOf, renderAnswer, type RecallAsker } from './recall-render.js';
-import { harnessOf, PROMPT_CLASSES, type ErrorObservation, type Frame, type Harness, type ToolObservation } from './schema.js';
+import { harnessOf, PROMPT_CLASSES, type ErrorObservation, type Frame, type Harness, type SessionObservation, type ToolObservation } from './schema.js';
 import type { Store } from './store.js';
 
 export type ReadFamily = Family | 'entity';
@@ -213,39 +213,34 @@ const namedInTable = (name: string, tool: string): boolean => {
 const entityReads = (store: Store, name: string): RecallRead[] => {
   const models = modelsByPrompt(store);
   const harnesses = harnessesOf(store);
-  const sessions = new Set<string>();
-  let count = 0;
-  const seenModels = new Set<string>();
-  for (const session of store.sessions) {
-    let here = 0;
-    for (const [tool, calls] of Object.entries(session.tools)) if (namedInTable(name, tool)) here += calls;
-    const asModel = session.models[name];
-    if (asModel !== undefined) {
-      here += asModel;
-      seenModels.add(name);
-    }
-    if (here > 0) sessions.add(session.session);
-    count += here;
-  }
-  const errors = recoveryReads(store, (error) => namedInTable(name, error.tool) || models.get(`${error.session}#${String(error.prompt)}`) === name);
-  if (sessions.size === 0) return errors;
-  const day = dayRange(store.sessions.filter((session) => sessions.has(session.session)).flatMap((session) => [utcDay(session.tsFirst), utcDay(session.tsLast)]));
-  const usage: RecallRead = {
-    readId: digest(['entity', name, sessions.size, count]),
-    family: 'entity',
-    tool: name,
-    keys: [],
-    n: sessions.size,
-    count,
-    calls: null,
-    clusters: 1,
-    ...day,
-    harnesses: harnessNames(sessions, harnesses),
-    harnessVersions: [],
-    models: [...seenModels],
-    followed: [],
+  // Calls and a model's requests are two counts, so each is its own read: their sum is neither. Only the model's read lists a model, which is how the answer names its noun.
+  const usage = (idParts: readonly string[], listed: string[], countOf: (session: SessionObservation) => number): RecallRead[] => {
+    const counted = store.sessions.filter((session) => countOf(session) > 0);
+    if (counted.length === 0) return [];
+    const sessions = new Set(counted.map((session) => session.session));
+    const count = counted.reduce((sum, session) => sum + countOf(session), 0);
+    return [
+      {
+        readId: digest([...idParts, sessions.size, count]),
+        family: 'entity',
+        tool: name,
+        keys: [],
+        n: sessions.size,
+        count,
+        calls: null,
+        clusters: 1,
+        ...dayRange(counted.flatMap((session) => [utcDay(session.tsFirst), utcDay(session.tsLast)])),
+        harnesses: harnessNames(sessions, harnesses),
+        harnessVersions: [],
+        models: listed,
+        followed: [],
+      },
+    ];
   };
-  return [usage, ...errors];
+  const calls = usage(['entity', name], [], (session) => Object.entries(session.tools).reduce((sum, [tool, times]) => (namedInTable(name, tool) ? sum + times : sum), 0));
+  const requests = usage(['entity', 'model', name], [name], (session) => session.models[name] ?? 0);
+  const errors = recoveryReads(store, (error) => namedInTable(name, error.tool) || models.get(`${error.session}#${String(error.prompt)}`) === name);
+  return [...calls, ...requests, ...errors];
 };
 
 const promptKey = (row: { session: string; prompt: number | null }): string => `${row.session}#${String(row.prompt)}`;
