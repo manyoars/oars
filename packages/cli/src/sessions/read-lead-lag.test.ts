@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { deriveCells, poolOf } from './cells.js';
-import { firstOrderOf, tools } from './order-fixture.js';
+import { tools } from './order-fixture.js';
 import { deriveReads } from './pool.js';
 import { frame, prompt, session, store } from './pool-fixture.js';
-import { deriveDayMove, nextDay } from './read-day-move.js';
+import { nextDay } from './read-day-move.js';
 import { deriveLeadLag, leadLagPairs, PAIRS_FLOOR } from './read-lead-lag.js';
 import { makeRead, type Read } from './read.js';
 import type { Store } from './store.js';
@@ -145,6 +145,9 @@ const daily = (days: number, countOf: (tool: number, day: number) => number, fai
 
 const DAYS = 45;
 
+/** The check as the pool states it: the real families all the way up, so a store with no read has no check to pass. */
+const checkOf = (from: Store): unknown => deriveReads(poolOf(deriveCells(from)), from).find((read) => read.family === 'lead-lag')?.value.check;
+
 const drawn = (seed: number): number[][] => {
   const draw = noise(seed);
   return [0, 1, 2, 3].map(() => Array.from({ length: DAYS }, () => draw()));
@@ -175,13 +178,13 @@ describe('lead-lag over the real families', () => {
     const counts = drawn(11);
     const failures = drawn(23);
     const from = daily(DAYS, (tool, day) => 150 + Math.floor(at(counts, tool, day) * 250), (tool, day) => Math.floor(at(failures, tool, day) * 90));
-    expect(only(deriveDayMove(firstOrderOf(from))).value.check).toBe('failed');
+    expect(checkOf(from)).toBe('failed');
   });
 
   it('fails a store where a burst day raises a tool share and failures together: one shared day must not read as a lead', () => {
     // A seed where reading the day twice passes the check: pairing adjacent moves passes 4 of 6 such stores, and this pairing none.
     const bursts = drawn(6);
     const from = daily(DAYS, (tool, day) => 150 + Math.floor(at(bursts, tool, day) * 250), (tool, day) => Math.floor(at(bursts, tool, day) * 90));
-    expect(only(deriveDayMove(firstOrderOf(from))).value.check).toBe('failed');
+    expect(checkOf(from)).toBe('failed');
   });
 });
