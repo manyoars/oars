@@ -3,7 +3,9 @@ import { webcrypto } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { build } from 'esbuild';
-import { Miniflare, Response as StubResponse, type D1Database, type Request as StubRequest } from 'miniflare';
+import { Miniflare, Response as StubResponse, type Request as StubRequest } from 'miniflare';
+
+type D1Database = Awaited<ReturnType<Miniflare['getD1Database']>>;
 
 export interface StubUser {
   id: string;
@@ -103,6 +105,7 @@ export const textOf = (value: unknown, key: string): string => {
 
 const generatedKey = async (): Promise<{ jwk: string; x: string }> => {
   const pair = await webcrypto.subtle.generateKey('Ed25519', true, ['sign', 'verify']);
+  if (!('privateKey' in pair)) throw new Error('no key pair');
   const jwk = await webcrypto.subtle.exportKey('jwk', pair.privateKey);
   return { jwk: JSON.stringify(jwk), x: jwk.x ?? '' };
 };
