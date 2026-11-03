@@ -16,6 +16,8 @@ import { deriveNextStep } from './read-next-step.js';
 import { deriveRecovery } from './read-recovery.js';
 import type { DeriveRelation } from './read-order.js';
 import type { DeriveFamily, ReadBody } from './read-support.js';
+import { deriveInteraction } from './read-interaction.js';
+import { deriveSubstitution } from './read-substitution.js';
 import { deriveVersionBoundary } from './read-version-boundary.js';
 import { writeAtomic, type Store } from './store.js';
 
@@ -31,7 +33,7 @@ const DERIVERS: { readonly [family in FirstOrderFamily]: DeriveFamily } = {
 };
 
 /** Families over reads, one stage per order: a stage reads what the stages before it wrote. */
-const RELATIONS: readonly (readonly DeriveRelation[])[] = [[deriveVersionBoundary]];
+const RELATIONS: readonly (readonly DeriveRelation[])[] = [[deriveVersionBoundary, deriveSubstitution, deriveInteraction]];
 
 export const poolFiles = (storeDir: string): { cells: string; motifs: string; reads: (version: string) => string } => ({
   cells: join(storeDir, 'cells.jsonl'),

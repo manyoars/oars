@@ -92,7 +92,7 @@ export const candidateOf = (family: Family, method: string, methodVersion: strin
 };
 
 /** The reads that survive the screen over everything compared, each stating how many comparisons that was: `tested * 0.05` is what chance alone would offer an unscreened reader. */
-export const screen = (candidates: readonly Candidate[]): ReadBody[] => {
+export const screen = (candidates: readonly Candidate[], claims: (candidate: Candidate) => boolean = () => true): ReadBody[] => {
   const tested = candidates.length;
-  return candidates.filter(({ gates }) => gates.every((gate) => moved(gate, tested))).map(({ body }) => ({ ...body, value: { ...body.value, tested } }));
+  return candidates.filter((candidate) => claims(candidate) && candidate.gates.every((gate) => moved(gate, tested))).map(({ body }) => ({ ...body, value: { ...body.value, tested } }));
 };
