@@ -32,12 +32,11 @@ const fakePlatform = () => {
     }
     if (request.method === 'GET' && pathname === '/me/api-keys') return Response.json({ content: keys });
     if (request.method === 'DELETE' && pathname === `/me/api-keys/${keyId}`) {
-      keys.splice(0, keys.length);
       return new Response(null, { status: 204 });
     }
     return new Response(null, { status: 404 });
   };
-  return { keys, requests, fetch };
+  return { requests, fetch };
 };
 
 describe('workload-scoped API keys', () => {
