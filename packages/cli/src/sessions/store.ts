@@ -240,8 +240,18 @@ export const skippedFolders = async (runtime: SessionsRuntime): Promise<SkippedS
   const names: string[] = [];
   let transcripts = 0;
   for (const name of (await projectFolders(runtime.projectsRoot)).filter((folder) => !allow.allows(folder))) {
-    const held = (await listDir(join(runtime.projectsRoot, name))).filter((entry) => entry.isFile() && entry.name.endsWith('.jsonl')).length;
-    if (held === 0) continue;
+    const folder = join(runtime.projectsRoot, name);
+    let held = 0;
+    let anyTranscript: boolean;
+    try {
+      held = (await listDir(folder)).filter((entry) => entry.isFile() && entry.name.endsWith('.jsonl')).length;
+      // A deposit would also take the subagent transcripts of a session folder whose main transcript is gone (`depositLocked`).
+      anyTranscript = held > 0 || (await subagentTranscripts(folder, await sessionFolders(folder))).length > 0;
+    } catch {
+      // Scope is not a failure: a folder this process cannot list is named with no count rather than failing `verify`.
+      anyTranscript = true;
+    }
+    if (!anyTranscript) continue;
     names.push(name);
     transcripts += held;
   }
