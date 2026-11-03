@@ -118,6 +118,91 @@ describe('check-private-names', () => {
     expect(r.stderr).toContain('OARS_PUBLIC_DENYLIST not found');
   });
 
+  it('does not read an added line that starts with the file-header marker as a header', () => {
+    const r = check(commit('b.txt', `++ b/${TERM}\n`));
+    expect(r.status).toBe(1);
+    expect(r.stderr).toContain('b.txt:1');
+    expect(r.stderr).not.toContain(TERM);
+  });
+
+  it('names the file for a non-ASCII name, a later file, a name with a space, and diff.noprefix', () => {
+    git(work, 'config', 'diff.noprefix', 'true');
+    writeFileSync(join(work, 'a.txt'), 'clean\nmore\n');
+    writeFileSync(join(work, 'é.txt'), 'clean\n');
+    writeFileSync(join(work, 'my file.txt'), `${TERM}\n`);
+    git(work, 'add', '-A');
+    git(work, 'commit', '-q', '-m', 'several files');
+    const r = check(git(work, 'rev-parse', 'HEAD'));
+    expect(r.status).toBe(1);
+    expect(r.stderr).toMatch(/ my file\.txt:1\n/);
+    expect(r.stderr).not.toContain('a.txt');
+    const second = commit('é2.txt', `${TERM}\n`, 'non-ascii');
+    expect(check(second).stderr).toContain(' é2.txt:1\n');
+  });
+
+  it('withholds a file path that holds a listed term', () => {
+    const r = check(commit(`${TERM}2.txt`, `${TERM}\n`));
+    expect(r.status).toBe(1);
+    expect(r.stderr).toContain('<path withheld>:1');
+    expect(r.stderr.toLowerCase()).not.toContain(TERM);
+  });
+
+  it('fails closed on a list that is not UTF-8', () => {
+    writeFileSync(join(root, 'terms.txt'), Buffer.from(`\ufeff${TERM}\n`, 'utf16le'));
+    const r = check(commit('b.txt', `${TERM}\n`));
+    expect(r.status).toBe(1);
+    expect(r.stderr).toContain('OARS_EXCLUSION_TERMS is not UTF-8');
+  });
+
+  it('warns when a list exists but holds no terms', () => {
+    writeFileSync(join(root, 'terms.txt'), '\n  \n');
+    const r = check(commit('b.txt', 'clean\n'));
+    expect(r.status).toBe(0);
+    expect(r.stderr).toContain('OARS_EXCLUSION_TERMS is empty');
+  });
+
+  it('finds the default lists under CLAUDE_CONFIG_DIR', () => {
+    const dir = join(root, 'cfg');
+    mkdirSync(join(dir, 'session-commons'), { recursive: true });
+    writeFileSync(join(dir, 'session-commons', 'exclusion-terms.txt'), `${TERM}\n`);
+    const own = { ...env, CLAUDE_CONFIG_DIR: dir };
+    delete own.OARS_EXCLUSION_TERMS;
+    delete own.OARS_PUBLIC_DENYLIST;
+    const sha = commit('b.txt', `${TERM}\n`);
+    const r = spawnSync('node', [script, sha], { cwd: work, encoding: 'utf8', env: own });
+    expect(r.status).toBe(1);
+    expect(r.stderr).not.toContain('OARS_EXCLUSION_TERMS not found');
+  });
+
+  it('blocks a conflict resolution that adds the term, and names its line', () => {
+    git(work, 'checkout', '-q', '-b', 'topic');
+    commit('a.txt', 'topic\n', 'topic edit');
+    git(work, 'checkout', '-q', 'main');
+    commit('a.txt', 'main\n', 'main edit');
+    spawnSync('git', ['merge', 'topic'], { cwd: work, encoding: 'utf8', env });
+    writeFileSync(join(work, 'a.txt'), `main\n${TERM}\n`);
+    git(work, 'add', '-A');
+    git(work, 'commit', '-q', '-m', 'resolve');
+    const r = check(git(work, 'rev-parse', 'HEAD'));
+    expect(r.status).toBe(1);
+    expect(r.stderr).toContain('a.txt:2');
+    expect(r.stderr).not.toContain(TERM);
+  });
+
+  it('blocks a file added inside a merge commit', () => {
+    git(work, 'checkout', '-q', '-b', 'topic');
+    commit('t.txt', 'clean\n', 'topic work');
+    git(work, 'checkout', '-q', 'main');
+    commit('m.txt', 'clean\n', 'main work');
+    git(work, 'merge', '-q', '--no-commit', '--no-ff', 'topic');
+    writeFileSync(join(work, 'new.txt'), `${TERM}\n`);
+    git(work, 'add', '-A');
+    git(work, 'commit', '-q', '-m', 'merge with an extra file');
+    const r = check(git(work, 'rev-parse', 'HEAD'));
+    expect(r.status).toBe(1);
+    expect(r.stderr).toContain('new.txt:1');
+  });
+
   it('exits 2 with usage when no sha is given', () => {
     const r = spawnSync('node', [script], { cwd: work, encoding: 'utf8', env });
     expect(r.status).toBe(2);
@@ -145,6 +230,17 @@ describe('pre-push hook, end to end', () => {
     const allowed = push('origin', 'main');
     expect(allowed.status, allowed.stderr).toBe(0);
     expect(git(remote, 'rev-parse', 'main')).toBe(git(work, 'rev-parse', 'HEAD'));
+  });
+
+  it('checks every pushed ref, not only the first', () => {
+    git(work, 'checkout', '-q', '-b', 'c1');
+    commit('c1.txt', 'clean\n', 'clean ref');
+    git(work, 'checkout', '-q', '-b', 'c2', 'main');
+    commit('c2.txt', `${TERM}\n`, 'ref with the term');
+    const r = push('origin', 'c1', 'c2');
+    expect(r.status).not.toBe(0);
+    const heads = spawnSync('git', ['show-ref', '--verify', '--quiet', 'refs/heads/c2'], { cwd: remote });
+    expect(heads.status).not.toBe(0);
   });
 
   it('lets a branch delete through', () => {
