@@ -221,6 +221,33 @@ const projectFolders = async (projectsRoot: string): Promise<string[]> => {
   }
 };
 
+/** What a deposit never reads: project folders that hold transcripts but that no `--allow` entry names (t776). */
+export interface SkippedScope {
+  folders: number;
+  /** Main transcripts in those folders; subagent transcripts are not counted, as everywhere else. */
+  transcripts: number;
+  /** The folder names, sorted. */
+  names: string[];
+}
+
+/**
+ * The scan rule is the allowlist (`depositLocked`, `depositSessionLocked`): a folder no entry names is not opened, by design, so
+ * a worktree folder of an allowed repository is skipped when only the repository's own folder is named. This reads folder listings
+ * only, never a transcript, so `verify` can say what the store does not hold.
+ */
+export const skippedFolders = async (runtime: SessionsRuntime): Promise<SkippedScope> => {
+  const allow = compileAllow((await readState(runtime.storeDir)).allow);
+  const names: string[] = [];
+  let transcripts = 0;
+  for (const name of (await projectFolders(runtime.projectsRoot)).filter((folder) => !allow.allows(folder))) {
+    const held = (await listDir(join(runtime.projectsRoot, name))).filter((entry) => entry.isFile() && entry.name.endsWith('.jsonl')).length;
+    if (held === 0) continue;
+    names.push(name);
+    transcripts += held;
+  }
+  return { folders: names.length, transcripts, names };
+};
+
 interface DepositContext {
   runtime: SessionsRuntime;
   state: State;
