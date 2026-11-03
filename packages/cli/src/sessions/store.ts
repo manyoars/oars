@@ -15,6 +15,7 @@
 //   hook-calls.jsonl        one line per hook invocation (event, session, hit, milliseconds)
 //   hook-index.json         the recurring signatures per project and overall, for the hooks
 //   pipeline-runs.jsonl     the step log: one line per run of a pipeline step, appended when the step ends (steps.ts)
+import type { GoldEvaluator } from './gold-arms.js';
 import { createHash, randomBytes } from 'node:crypto';
 import { performance } from 'node:perf_hooks';
 import { appendFile, mkdir, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
@@ -27,6 +28,7 @@ import { archiveRaw } from './archive.js';
 import { deriveSession, type SessionCapture } from './derive.js';
 import { captureRuntime, type CaptureRuntime } from './capture-runtime.js';
 import { captureSession, type Capture, type SubagentOrigin } from './extract.js';
+import { foldToolRows, withoutReplays } from './fold.js';
 import { makeRepoIdentity, makeRepoRoot } from './repo-root.js';
 import { makeRedactor, type Redactor } from './redact.js';
 import {
@@ -64,6 +66,8 @@ export interface SessionsRuntime {
   sources?: readonly Source[];
   /** Where the account's salt comes from; absent means this machine's own (`localSalt`). The seam an account identity replaces (M4). */
   accountSalt?: (storeDir: string) => Promise<AccountSalt>;
+  /** The fresh single-turn reader behind `gold arms`; absent in a run that has none. */
+  evaluator?: GoldEvaluator | undefined;
   stdin: NodeJS.ReadableStream;
   stdout: { write: (text: string) => unknown };
 }
@@ -80,7 +84,7 @@ interface FileState {
   d: string[];
 }
 
-interface State {
+export interface State {
   files: { [key: string]: FileState };
   /** Every `--redact-domain` any deposit used, so recall masks a query the same way the log was masked. */
   redactDomains: string[];
@@ -134,7 +138,7 @@ const sameSet = (a: readonly string[], b: readonly string[]): boolean => a.lengt
 
 const isRecord = (value: unknown): value is { [key: string]: unknown } => typeof value === 'object' && value !== null && !Array.isArray(value);
 
-const readState = async (storeDir: string): Promise<State> => {
+export const readState = async (storeDir: string): Promise<State> => {
   try {
     const parsed: unknown = JSON.parse(await readFile(paths(storeDir).state, 'utf8'));
     if (isRecord(parsed) && isRecord(parsed.files)) {
@@ -758,7 +762,7 @@ const sessionOfRelative = (relative: string): string => {
 };
 
 /** The inverse of `sessionOfRelative`: `<id>.jsonl`, or `<parent>/subagents/[workflows/<wf>/]<agent>.jsonl` for a `<parent>~[<wf>~]agent-x` id. */
-const relativeOfSession = (session: string): string[] => {
+export const relativeOfSession = (session: string): string[] => {
   const [parent = '', ...rest] = session.split('~');
   if (rest.length === 0) return [`${session}.jsonl`];
   const agent = rest[rest.length - 1] ?? '';
@@ -950,8 +954,12 @@ export const loadStore = async (storeDir: string): Promise<Store> => {
   }
   const redact = makeRedactor((await readState(storeDir)).redactDomains);
   const agents: (SessionCapture & { parent: string })[] = [];
-  for (const { session, prompts, tools, errorLines } of captured.values()) {
-    if (session === undefined) continue;
+  for (const { session: written, prompts, tools: writtenTools, errorLines: writtenErrorLines } of captured.values()) {
+    if (written === undefined) continue;
+    // One tool call is one record: a replay an older capture wrote beside the call is folded here (t762).
+    const folded = foldToolRows(writtenTools, writtenErrorLines);
+    const session = withoutReplays(written, folded.dropped);
+    const { tools, errorLines } = folded;
     if (Number(session.cv) > Number(CAPTURE_VERSION)) store.newerCaptures += 1;
     store.tools.push(...tools);
     if (session.parent !== null) {

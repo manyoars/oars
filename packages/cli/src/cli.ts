@@ -10,9 +10,10 @@ import { templates } from './commands/templates.js';
 import { testCharge } from './commands/test-charge.js';
 import type { CredentialStore } from './credentials.js';
 import { CliError, ExitCode } from './errors.js';
+import { requirePurchasingOpen } from './issuer.js';
 import type { JournalStore } from './journal.js';
 import type { BooksBy, RecallQuery } from './sessions/query.js';
-import { sessionsBooks, sessionsContext, sessionsDeposit, sessionsHookInstall, sessionsHookStatus, sessionsHookUninstall, sessionsMcp, sessionsMeasure, sessionsRecall, sessionsVerify, type SessionsDeps } from './sessions/command.js';
+import { sessionsBooks, sessionsContext, sessionsDeposit, sessionsGoldArms, sessionsGoldSample, sessionsGoldScore, sessionsHookInstall, sessionsHookStatus, sessionsHookUninstall, sessionsMcp, sessionsMeasure, sessionsRecall, sessionsVerify, type SessionsDeps } from './sessions/command.js';
 import type { InstallRuntime, Scope } from './sessions/install.js';
 import type { SessionsRuntime } from './sessions/store.js';
 
@@ -231,7 +232,17 @@ const buildProgram = (deps: RunDeps, argv: string[]): Command => {
       emit(deps, flag(options, 'json'), outcome);
     });
 
-  const purchasing = program.command('purchasing').description("set up an agent's purchasing: the card, the monthly cap, and what it bought");
+  // Hidden and refused until t465 opens paid agents (issuer.ts requirePurchasingOpen); the code stays for it.
+  const purchasing = program
+    .command('purchasing', { hidden: true })
+    .description("set up an agent's purchasing: the card, the monthly cap, and what it bought")
+    .hook('preAction', () => {
+      requirePurchasingOpen(deps);
+    })
+    // A command with subcommands and no action prints help before preAction runs; this makes bare `purchasing` hit the gate first.
+    .action(() => {
+      purchasing.help({ error: true });
+    });
 
   purchasing
     .command('card')
@@ -273,7 +284,7 @@ const buildProgram = (deps: RunDeps, argv: string[]): Command => {
       emit(deps, flag(options, 'json'), await purchasingList(deps, { apiUrl: resolveApiUrl(deps, text(options, 'apiUrl')), workloadId }));
     });
 
-  const sessions = program.command('sessions').description("deposit and recall your own Claude Code session logs, locally (no model calls, no network)");
+  const sessions = program.command('sessions').description("deposit and recall your own Claude Code session logs, locally (no model calls, no network, except `gold arms`, which asks your own Claude subscription)");
 
   sessions
     .command('deposit')
@@ -329,9 +340,9 @@ const buildProgram = (deps: RunDeps, argv: string[]): Command => {
 
   sessions
     .command('books')
-    .description('tokens, wall time, turns, errors, and verify-after-edit rate per prompt class, model, or harness')
-    .option('--by <key>', 'class, model, or harness (default class)', (value: string): BooksBy => {
-      if (value !== 'class' && value !== 'model' && value !== 'harness') throw new InvalidArgumentError('it must be class, model, or harness.');
+    .description('tokens, wall time, turns, errors, verify-after-edit rate, and the outcome signals (verify passed, stops, redos, commits, and commit survival) per prompt class, model, harness, or pull')
+    .option('--by <key>', 'class, model, harness, or pull (default class)', (value: string): BooksBy => {
+      if (value !== 'class' && value !== 'model' && value !== 'harness' && value !== 'pull') throw new InvalidArgumentError('it must be class, model, harness, or pull.');
       return value;
     })
     .option('--since <days>', 'only the last N days', positiveInteger)
@@ -339,7 +350,7 @@ const buildProgram = (deps: RunDeps, argv: string[]): Command => {
     .action(async (_options: OptionValues, command: Command) => {
       const options: OptionValues = command.optsWithGlobals();
       const picked = text(options, 'by');
-      const by: BooksBy = picked === 'model' || picked === 'harness' ? picked : 'class';
+      const by: BooksBy = picked === 'model' || picked === 'harness' || picked === 'pull' ? picked : 'class';
       emit(deps, flag(options, 'json'), await sessionsBooks(sessionDeps(deps), { by, sinceDays: count(options, 'since'), repo: text(options, 'repo') }));
     });
 
@@ -356,9 +367,9 @@ const buildProgram = (deps: RunDeps, argv: string[]): Command => {
 
   sessions
     .command('verify')
-    .description('run the consistency invariants on the stored skeletons and capture records')
+    .description('run the consistency invariants on the stored skeletons and capture records, report every session on its own, and audit each against its raw file (Merkle root, counts)')
     .option('--session <id>', 'one session instead of all')
-    .option('--strict', 'exit non-zero (4) when any invariant has exceptions or a step is stuck; by default FAIL lines still exit 0')
+    .option('--strict', 'exit non-zero (4) when any invariant has exceptions, a step is stuck, or the raw audit finds a root mismatch or counts that do not bind; by default FAIL lines still exit 0')
     .action(async (_options: OptionValues, command: Command) => {
       const options: OptionValues = command.optsWithGlobals();
       const { failed, report, ...outcome } = await sessionsVerify(sessionDeps(deps), { session: text(options, 'session') });
@@ -369,6 +380,49 @@ const buildProgram = (deps: RunDeps, argv: string[]): Command => {
         throw new CliError(`${String(failed.length)} ${failed.length === 1 ? 'check' : 'checks'} failed: ${failed.join('; ')}`, ExitCode.INVALID, 'verify', undefined, undefined, json ? report : undefined);
       }
       emit(deps, json, outcome);
+    });
+
+  const gold = sessions.command('gold').description('a blind, human-judged sample of prompts, and every signal scored against those judgments');
+
+  gold
+    .command('sample')
+    .description('write about 200 prompts in batches to judge blind, across prompt classes and models, with the signals in a hidden sidecar; it never overwrites a file')
+    .option('--size <n>', 'prompts to draw (default 200)', positiveInteger)
+    .option('--batch <n>', 'prompts per batch (default 50)', positiveInteger)
+    .option('--seed <text>', "the draw's seed (default today's date)")
+    .option('--exclude-term <text>', 'leave out any session that mentions this, in any case, in its transcript or a subagent transcript (repeatable)', collect)
+    .option('--out-dir <folder>', 'where to write (default <claude config>/session-commons/review)')
+    .action(async (_options: OptionValues, command: Command) => {
+      const options: OptionValues = command.optsWithGlobals();
+      emit(
+        deps,
+        flag(options, 'json'),
+        await sessionsGoldSample(sessionDeps(deps), {
+          size: count(options, 'size') ?? 200,
+          batch: count(options, 'batch') ?? 50,
+          seed: text(options, 'seed'),
+          excludeTerms: list(options, 'excludeTerm'),
+          outDir: text(options, 'outDir'),
+        }),
+      );
+    });
+
+  gold
+    .command('score')
+    .description('per signal and per model, the AUROC with its 95% interval and the base rate, from whatever is judged so far')
+    .argument('<file>', 'the gold file')
+    .action(async (file: string, _options: OptionValues, command: Command) => {
+      const options: OptionValues = command.optsWithGlobals();
+      emit(deps, flag(options, 'json'), await sessionsGoldScore({ file }));
+    });
+
+  gold
+    .command('arms')
+    .description('fill the hidden sidecar: the closing claim, its Confidence line, and fresh single-turn readers on your Claude subscription, with fixed, hashed wording. It resumes, and never touches the gold file')
+    .argument('<file>', 'the gold file')
+    .action(async (file: string, _options: OptionValues, command: Command) => {
+      const options: OptionValues = command.optsWithGlobals();
+      emit(deps, flag(options, 'json'), await sessionsGoldArms(sessionDeps(deps), { file }));
     });
 
   const hook = sessions.command('hook').description('install the recall hooks into a Claude Code settings file, and the nightly deposit task');

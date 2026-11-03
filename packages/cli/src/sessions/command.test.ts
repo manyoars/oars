@@ -154,6 +154,31 @@ describe('oars sessions', () => {
     expect(field(strict, 'sessions')).toBe(4);
   });
 
+  it('verify --strict exits 4 and names merkle: counts do not bind when a skeleton leaf count disagrees with its session', async () => {
+    const { deps, out, err, staged } = setup();
+    await run(['sessions', 'deposit', '--allow', 'proj'], deps);
+    const file = join(staged.storeDir, 'skeletons', 'tldr.json');
+    const skeleton: unknown = JSON.parse(readFileSync(file, 'utf8'));
+    const leaves = field(skeleton, 'leaves');
+    if (typeof leaves !== 'number') throw new Error('no leaves');
+    writeFileSync(file, readFileSync(file, 'utf8').replace(`"leaves":${String(leaves)}`, `"leaves":${String(leaves + 1)}`));
+    out.length = 0;
+    expect(await run(['--json', 'sessions', 'verify', '--strict'], deps)).toBe(ExitCode.INVALID);
+    out.length = 0;
+    expect(await run(['sessions', 'verify', '--strict'], deps)).toBe(ExitCode.INVALID);
+    expect(out.join('')).toContain('FAIL  tldr: counts do not bind');
+    expect(err.join('')).toContain('1 check failed');
+  });
+
+  it('verify --session leaves a torn skeleton of another session out of unreadable and failed', async () => {
+    const { deps, out, staged } = setup();
+    await run(['sessions', 'deposit', '--allow', 'proj'], deps);
+    writeFileSync(join(staged.storeDir, 'skeletons', 'torn.json'), '{"lines": [');
+    out.length = 0;
+    expect(await run(['--json', 'sessions', 'verify', '--session', 'tldr', '--strict'], deps)).toBe(ExitCode.OK);
+    expect(field(json(out), 'unreadable')).toBe(0);
+  });
+
   it('recall masks a query with the domains the deposit masked', async () => {
     const { deps, out, staged } = setup();
     const lines = [
@@ -168,11 +193,11 @@ describe('oars sessions', () => {
     expect(field(json(out), 'matches')).toHaveLength(1);
   });
 
-  it('recall needs a query, and --by takes only class, model, or harness', async () => {
+  it('recall needs a query, and --by takes only class, model, harness, or pull', async () => {
     const { deps, err } = setup();
     expect(await run(['sessions', 'recall'], deps)).toBe(ExitCode.USAGE);
     expect(await run(['sessions', 'books', '--by', 'colour'], deps)).toBe(ExitCode.USAGE);
-    expect(err.join('')).toContain('class, model, or harness');
+    expect(err.join('')).toContain('class, model, harness, or pull');
   });
 
   it('serves MCP over the runtime stdio with recall --mcp', async () => {
