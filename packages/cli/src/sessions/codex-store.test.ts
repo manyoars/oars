@@ -19,7 +19,6 @@ const B = 'bbbb2222-2222-4222-8222-222222222222';
 const C = 'cccc3333-3333-4333-8333-333333333333';
 const D = 'dddd4444-4444-4444-8444-444444444444';
 const E = 'eeee5555-5555-4555-8555-555555555555';
-const F = 'ffff6666-6666-4666-8666-666666666666';
 const STEM = (id: string): string => `2026-06-01T10-00-00-${id}`;
 
 const T = (second: number): string => `2026-06-01T10:00:${String(second).padStart(2, '0')}.000Z`;
