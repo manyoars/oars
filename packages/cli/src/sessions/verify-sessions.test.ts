@@ -3,7 +3,7 @@ import { appendFileSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { sessionsVerify } from './command.js';
-import { deposit, paths } from './store.js';
+import { deposit, paths, readState } from './store.js';
 import { cleanup, NOW, stage } from './test-support.js';
 
 afterEach(cleanup);
@@ -40,8 +40,10 @@ describe('sessionsVerify, per session', () => {
     const text = readFileSync(raw, 'utf8');
     const at = text.search(/[a-y]/);
     writeFileSync(raw, `${text.slice(0, at)}z${text.slice(at + 1)}`);
-    const state: { files: { [key: string]: { mtimeMs: number } } } = JSON.parse(readFileSync(paths(staged.storeDir).state, 'utf8'));
-    state.files['proj/tldr.jsonl'].mtimeMs = statSync(raw).mtimeMs;
+    const state = await readState(staged.storeDir);
+    const entry = state.files['proj/tldr.jsonl'];
+    if (entry === undefined) throw new Error('no state entry');
+    entry.mtimeMs = statSync(raw).mtimeMs;
     writeFileSync(paths(staged.storeDir).state, JSON.stringify(state));
     const verified = await sessionsVerify({ sessions: staged.runtime, install: undefined, now: () => NOW }, { session: undefined });
     expect(verified.failed).toEqual(['merkle: root mismatch']);
