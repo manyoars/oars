@@ -5,6 +5,12 @@
 // captured records to `<config>/oars/sessions/observations.jsonl`. The log is append-only: a session whose file changed is deposited
 // again under a higher `rev`, and a reader keeps only the highest `rev` of each session.
 //
+// Version 8 (CAPTURE 8 and EXTRACTOR 8) writes one `tool` record per tool call. The harness writes
+// `api-request-blob` lines, copies of the request body with no cwd, uuid, or timestamp, and capture used to read their blocks as conversation: a second
+// record with status `none` (and, with no cwd, another path hash) for 99.8% of calls, plus a second error line, thinking count, and TLDR. Those lines are
+// no longer read, and a call a resumed transcript replays under one tool-use id is written once. The skeleton still lists every line. The reader folds
+// records already on disk the same way until each transcript is captured again (`fold.ts`).
+//
 // Store version 5 (CAPTURE 5, t733) keeps version 4's shape and changes one stored value: each `models` entry of the skeleton's cost state names
 // the usage keys it reported, which `verify` uses to class a side call. A version-4 skeleton reads with no keys until it is captured again.
 //
@@ -35,13 +41,13 @@ import type { CanonicalAction } from './actions.js';
 import type { RepoSize } from './public-vocabulary.js';
 
 /** Stamped `cv` on every captured record. Bump it when the captured field list changes or a stored value of an existing captured record or skeleton changes: a bump re-reads every transcript. */
-export const CAPTURE_VERSION = '7';
+export const CAPTURE_VERSION = '9';
 
 /** Capture versions the reader derives from. A version-3 record is upgraded on read; a newer one is read for the fields this code knows. */
 export const OLDEST_READABLE_CAPTURE = 3;
 
 /** Stamped `v` on every derived record. A bump re-derives from the log; no transcript is read. */
-export const EXTRACTOR_VERSION = '6';
+export const EXTRACTOR_VERSION = '8';
 
 export const PROMPT_HEAD_CHARS = 300;
 export const ERROR_EXAMPLE_CHARS = 160;
@@ -328,7 +334,7 @@ export interface StepObservation {
 /**
  * One per tool call (register A28), captured. Classes: `A` account store: `session`, `parent`, `toolUseId`, `ts`, `tool`, and `target`
  * in either form (a salted hash, or a program and subcommand); `P` pooled: `kind`, `cv`, `sid`, `rev`, `agentType`, `n`, `status`, `keys`,
- * `durationMs`, `harnessVersion`, `side`, `prompt`, `targetBase`, and `steps`. `tool` and a shell-form `target` moved to `A` at CAPTURE 7: an MCP
+ * `durationMs`, `harnessVersion`, `side`, `prompt`, `targetBase`, and `steps`. `tool` and a shell-form `target` moved to `A` at CAPTURE 9: an MCP
  * tool name holds a private server's name and a shell word can be anything, and `steps` carries the public reading of both. `segments`, `pulls`,
  * and `commits` are `A`: a plain word, a private package name, and a sha can each identify private work.
  */

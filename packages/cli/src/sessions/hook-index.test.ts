@@ -3,7 +3,7 @@ import { run } from '../cli.js';
 import { ExitCode } from '../errors.js';
 import { harness, removeTestDirs } from '../test-support.js';
 import { slugOf } from './allow.js';
-import type { ErrorObservation, SessionObservation } from './schema.js';
+import { CAPTURE_VERSION, type ErrorObservation, type SessionObservation } from './schema.js';
 import { buildIndex, contextBlock, inRepository, readIndex, repositoryRoot } from './hook-index.js';
 import { sessionsBooks, sessionsMeasure } from './command.js';
 import { readHookCalls } from './hook-calls.js';
@@ -226,7 +226,7 @@ ${formatStepCounters(stepCounters(await readSteps(staged.storeDir)))}`);
     await deposit(staged.runtime, { allow: [slugOf(HOME), slugOf(OTHER)], redactDomains: [], now: () => NOW });
     // A newer oars wrote the other repository's session and its subagent.
     const file = paths(staged.storeDir).observations;
-    const marked = readFileSync(file, 'utf8').split('\n').filter((entry) => entry !== '').map((entry) => (entry.includes('"session":"other-session') ? entry.replace('"cv":"7"', '"cv":"8"') : entry));
+    const marked = readFileSync(file, 'utf8').split('\n').filter((entry) => entry !== '').map((entry) => (entry.includes('"session":"other-session') ? entry.replace(`"cv":"${CAPTURE_VERSION}"`, `"cv":"${String(Number(CAPTURE_VERSION) + 1)}"`) : entry));
     writeFileSync(file, `${marked.join('\n')}\n`);
     const deps = { sessions: staged.runtime, install: undefined, now: () => NOW };
     const newer = async (repo?: string): Promise<unknown> => (await sessionsBooks(deps, { by: 'class', sinceDays: undefined, repo })).document;
@@ -252,7 +252,7 @@ ${formatStepCounters(stepCounters(await readSteps(staged.storeDir)))}`);
       .filter((entry) => entry !== '')
       // The parent's main session record is gone; the subagent's remains, one version newer.
       .filter((entry) => !(entry.includes('"kind":"session"') && entry.includes('"session":"other-session"') && entry.includes('"parent":null')))
-      .map((entry) => entry.replace('"cv":"7"', '"cv":"8"'));
+      .map((entry) => entry.replace(`"cv":"${CAPTURE_VERSION}"`, `"cv":"${String(Number(CAPTURE_VERSION) + 1)}"`));
     writeFileSync(file, `${rewritten.join('\n')}\n`);
     const deps = { sessions: staged.runtime, install: undefined, now: () => NOW };
     const other = await sessionsBooks(deps, { by: 'class', sinceDays: undefined, repo: OTHER });

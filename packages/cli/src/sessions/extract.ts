@@ -1057,12 +1057,14 @@ export const callPositions = (text: string): Map<string, number> => {
     } catch {
       continue;
     }
-    const content = isObj(parsed) && isObj(parsed.message) ? parsed.message.content : undefined;
+    const content = isObj(parsed) && isObj(parsed.message) && parsed.type !== 'api-request-blob' ? parsed.message.content : undefined;
     if (!Array.isArray(content)) continue;
     for (const block of content) {
       if (!isObj(block) || block.type !== 'tool_use') continue;
       const id = str(block.id);
-      if (id !== undefined && !positions.has(id)) positions.set(id, n);
+      // Capture writes a replayed call once, so a replay takes no number here either.
+      if (id !== undefined && positions.has(id)) continue;
+      if (id !== undefined) positions.set(id, n);
       n += 1;
     }
   }
@@ -1260,7 +1262,10 @@ export const captureSession = (input: ExtractInput): Capture => {
       session.promptFingerprint = promptFingerprint;
       continue;
     }
-    if (message === undefined) continue;
+    // The harness's own copy of the request body (t762): assistant and user messages with no cwd, uuid, or timestamp, repeating blocks the real lines
+    // above already hold. Reading its tool_use, tool_result, thinking, and text blocks wrote a second row for 99.8% of calls, and a second error line,
+    // thinking count, and TLDR for the same ones. The skeleton above still lists the line, so the counts and the root bind.
+    if (message === undefined || type === 'api-request-blob') continue;
 
     if (type === 'user' && role === 'user' && o.isMeta !== true) {
       const text = firstNonEmptyText(content);
@@ -1332,8 +1337,12 @@ export const captureSession = (input: ExtractInput): Capture => {
         for (const match of text.matchAll(CONF_RE)) session.confidences.push(cut(redact(match[1] ?? ''), 120));
       } else if (blockType === 'tool_use') {
         const name = str(block.name) ?? '?';
-        session.tools[name] = (session.tools[name] ?? 0) + 1;
         const id = str(block.id);
+        // A resumed session replays earlier lines, so the same tool_use id comes again, often from another cwd (so a different path hash).
+        // The first copy is the call and already holds the result; a replay would be a second row with status none (t762). The skeleton
+        // still lists every line, and a replayed failure stays an error line, as derive.ts counts it.
+        if (id !== undefined && callById.has(id)) continue;
+        session.tools[name] = (session.tools[name] ?? 0) + 1;
         toolById.set(id, name);
         const toolInput = isObj(block.input) ? block.input : {};
         // An adapter that renames its tools for the extractor keeps the harness's own name in `native`.
@@ -1356,10 +1365,8 @@ export const captureSession = (input: ExtractInput): Capture => {
         const shell = SHELL.has(name) || named.action === 'shell.exec' ? readShell(str(toolInput.command) ?? '', redact) : undefined;
         for (const held of shell?.steps ?? []) framePrograms.add(held.identity.program);
         drafts.push(draftsOf(actions, named, native, shell, aimed.target, toolInput));
-        // A repeat of a call a resumed session copied holds no share: the first copy already has it.
-        const repeat = id !== undefined && callById.has(id);
-        responseOfCall.push(repeat ? undefined : response);
-        if (!repeat) callsPerResponse.set(response, (callsPerResponse.get(response) ?? 0) + 1);
+        responseOfCall.push(response);
+        callsPerResponse.set(response, (callsPerResponse.get(response) ?? 0) + 1);
         const pulls = shell?.pulls ?? pullsOfTool(name, redact);
         const call: ToolObservation = {
           kind: 'tool',
@@ -1385,8 +1392,7 @@ export const captureSession = (input: ExtractInput): Capture => {
           ...(pulls.length === 0 ? {} : { pulls }),
         };
         tools.push(call);
-        // A resumed session repeats earlier lines: the first copy of a call carries its result, a repeat keeps status none.
-        if (id !== undefined && !callById.has(id)) callById.set(id, { call, at: lineSeconds, plan: shell?.commitPlan ?? [] });
+        if (id !== undefined) callById.set(id, { call, at: lineSeconds, plan: shell?.commitPlan ?? [] });
       } else if (blockType === 'tool_result') {
         const text = resultText(block);
         const failed = isErrorResult(block, text);
