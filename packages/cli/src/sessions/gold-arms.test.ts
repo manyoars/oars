@@ -136,6 +136,7 @@ describe('readsOf', () => {
     expect(reads.claim).toContain('Done, and the test passes.');
     expect(reads.claim).not.toContain('b.example');
     expect(reads.confidence).toBe('**Confidence:** high on the wiring');
+    expect(readsOf(readTurns([user('a'), said('Working. Confidence: low')].join('\n')), 0, redact).confidence).toBeNull();
     expect(reads.later).toBe('that broke the build');
   });
 
