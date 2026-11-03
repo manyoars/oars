@@ -126,6 +126,45 @@ describe('clusters over the cells of a read', () => {
   }, 60_000);
 });
 
+describe('a stored row whose day no calendar holds', () => {
+  // Inserted past the deposit route, the way a row written before the check, or under a wider vocabulary, would sit there.
+  const stored = async (bad: TestPool, account: string, id: string, stacks: readonly string[], day: string): Promise<void> => {
+    await (await bad.db()).prepare('INSERT INTO accounts (id) VALUES (?)').bind(account).run();
+    await (await bad.db()).prepare('INSERT INTO deposits (account, id, stacks, skeleton) VALUES (?, ?, ?, ?)').bind(account, id, JSON.stringify(stacks), JSON.stringify(sampleSkeleton(id, undefined, day))).run();
+  };
+
+  it.each(['2026-99-99', '0000-00-00', '2026-13-01', '2026-02-31'])('%s stops counting and every pull still answers', async (day) => {
+    const bad = await startPool();
+    try {
+      const deposited = async (id: string): Promise<string> => {
+        const { token } = await bad.signIn('github', stubUser(id));
+        await bad.post('/v1/covenant/accept', { version: 'v1' }, token);
+        expect((await bad.post('/v1/deposits', sampleSkeleton(id.padStart(16, '0')), token)).status).toBe(201);
+        return token;
+      };
+      await deposited('5001');
+      await deposited('5002');
+      const token = await deposited('5003');
+
+      await stored(bad, 'acct_bad_typescript', '00000000000b0001', ['typescript'], day);
+      // A row naming no stack reaches only `all`, which reads every row.
+      await stored(bad, 'acct_bad_no_stack', '00000000000b0002', [], day);
+
+      for (const stack of ['all', 'typescript']) {
+        const { status, json } = await bad.get(`/v1/slices/${stack}`, token);
+        expect(status).toBe(200);
+        const verified = await verifySlice(json, bad.signingKey(), stack);
+        if (!verified.ok) throw new Error(verified.reason);
+        // The three good accounts still reach the floor, and the two bad rows add nothing to it.
+        expect(verified.slice.reads.length).toBeGreaterThan(0);
+        for (const read of verified.slice.reads) expect(read.clusters).toBe(3);
+      }
+    } finally {
+      await bad.dispose();
+    }
+  }, 60_000);
+});
+
 describe('the client refuses', () => {
   const signed = async (): Promise<{ payload: string; signature: string }> => {
     const { token } = await pool.signIn('github', stubUser('1006'));
