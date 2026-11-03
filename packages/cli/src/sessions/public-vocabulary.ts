@@ -106,7 +106,8 @@ const MODEL = new RegExp(
     '^(?:auto|default)$',
   ].join('|'),
 );
-const VERSION = /^\d+(?:\.\d+){0,3}(?:[-+.][0-9A-Za-z]+)*$/;
+// A suffix is digits or a release word, so a private build tag fails closed, as a private name does in `MODEL`.
+const VERSION = /^\d+(?:\.\d+){0,3}(?:[-+.](?:\d+|(?:alpha|beta|rc|dev|canary|nightly|next)\d*))*$/;
 /** A name this long is not one of these: it is text someone pasted. */
 const NAME_MAX = 64;
 

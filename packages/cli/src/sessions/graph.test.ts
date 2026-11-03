@@ -222,7 +222,7 @@ describe('a subagent joins the graph of the call that spawned it', () => {
       line({ type: 'api-request-blob', message: { role: 'assistant', content: [use('copied'), use('a')] } }),
       line({ type: 'assistant', message: { role: 'assistant', content: [use('a')] } }),
       line({ type: 'assistant', message: { role: 'assistant', content: [use('b')] } }),
-    ].join(String.fromCharCode(10));
+    ].join('\n');
     const positions = callPositions(text);
     expect(positions.has('copied')).toBe(false);
     for (const tool of capture(text)) expect(positions.get(tool.toolUseId ?? '')).toBe(tool.n);
