@@ -1,6 +1,7 @@
 // CAPTURE 4 (t714): sid, repo, fileHashes, env, promptFingerprint, the line cap, the salt seam, and a version-3 store opened under version 4.
-import { cpSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { appendFileSync, cpSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
 import { sessionsBooks, sessionsMeasure, sessionsVerify } from './command.js';
 import { captureRuntime, oarsVersion, versionIn } from './capture-runtime.js';
@@ -462,6 +463,37 @@ describe('a version-3 store opened under version 4', () => {
   });
 });
 
+describe('a deposit over a version-4 store', () => {
+  const options = { allow: ['proj'], redactDomains: [], now: () => NOW };
+
+  it('captures every transcript again at version 5 and writes the model keys a version-4 skeleton lacks', async () => {
+    const staged = stage();
+    const main = readdirSync(join(staged.projectsRoot, 'proj')).find((name) => name.endsWith('.jsonl')) ?? '';
+    const cost = line({ type: 'cost-state', startTime: Date.parse('2026-06-01T00:00:00.000Z'), modelUsage: { 'claude-haiku-4-5': { inputTokens: 3, outputTokens: 2 } } });
+    appendFileSync(join(staged.projectsRoot, 'proj', main), `${cost}\n`);
+    await deposit(staged.runtime, options);
+    // A version-4 store: records and state at 4, and each skeleton's models as the bare names version 4 wrote.
+    const file = paths(staged.storeDir).observations;
+    const old = readFileSync(file, 'utf8').split('\n').filter((entry) => entry !== '').map((entry) => ({ ...parseObject(entry), cv: '4' }));
+    writeFileSync(file, old.map((record) => `${JSON.stringify(record)}\n`).join(''));
+    editState(staged.storeDir, (entry) => {
+      Reflect.set(entry, 'v', '4');
+    });
+    const folder = paths(staged.storeDir).skeletons;
+    const costed = (): string[] => readdirSync(folder).filter((name) => readFileSync(join(folder, name), 'utf8').includes('claude-haiku-4-5'));
+    expect(costed()).toHaveLength(1);
+    const name = costed()[0] ?? '';
+    const skeleton = parseObject(readFileSync(join(folder, name), 'utf8'));
+    const lines: unknown = skeleton.lines;
+    if (Array.isArray(lines)) for (const entry of lines) if (typeof entry === 'object' && entry !== null && Reflect.get(entry, 'costState') !== null && Reflect.get(entry, 'costState') !== undefined) Reflect.set(Reflect.get(entry, 'costState'), 'models', ['claude-haiku-4-5']);
+    writeFileSync(join(folder, name), JSON.stringify(skeleton));
+    expect(readFileSync(join(folder, name), 'utf8')).not.toContain('"keys"');
+    expect(await deposit(staged.runtime, options)).toMatchObject({ sessions: 4 });
+    expect((await loadStore(staged.storeDir)).sessions.map((session) => session.cv)).toEqual(Array(4).fill(CAPTURE_VERSION));
+    expect(readFileSync(join(folder, name), 'utf8')).toContain('"models":[{"model":"claude-haiku-4-5","keys":["input","output"]}]');
+  });
+});
+
 describe('a cv-behind session whose transcript is gone (cv-frozen)', () => {
   const options = { allow: ['proj'], redactDomains: [], now: () => NOW };
   const behind = 'every session is captured at the current capture version (none is cv-behind)';
@@ -535,6 +567,42 @@ describe('a cv-behind session whose transcript is gone (cv-frozen)', () => {
       atVersion4(staged.storeDir);
       const other = await stageRawCursor(join(staged.root, 'other'), [{ id: 'different', document: doc('different') }], []);
       const verified = await sessionsVerify({ sessions: { ...staged.runtime, cursorRoot: other }, install: undefined, now: () => NOW }, { session: undefined });
+      expect(verified.failed).not.toContain(behind);
+      expect(verified.report.cvFrozen).toBe(1);
+    });
+
+    it('fails --strict with behind for a composer under a workspace folder while Cursor still lists it', async () => {
+      const staged = stage();
+      const app = join(staged.root, 'work', 'app');
+      mkdirSync(app, { recursive: true });
+      const user = await stageRawCursor(staged.root, [{ id: 'live', document: doc('live') }], [{ json: { folder: pathToFileURL(app).href }, listed: ['live'] }]);
+      const runtime = { ...staged.runtime, cursorRoot: user };
+      await deposit(runtime, cursorOptions);
+      expect((await loadStore(staged.storeDir)).sessions.map((session) => session.project)).toEqual([expect.stringMatching(/work-app$/)]);
+      atVersion4(staged.storeDir);
+      const verified = await sessionsVerify({ sessions: runtime, install: undefined, now: () => NOW }, { session: undefined });
+      expect(verified.failed).toContain(behind);
+      expect(verified.report.cvFrozen).toBe(0);
+    });
+
+    it('counts cv-frozen when the Cursor store file is gone', async () => {
+      const staged = stage();
+      const user = await stageRawCursor(staged.root, [{ id: 'live', document: doc('live') }], []);
+      const runtime = { ...staged.runtime, cursorRoot: user };
+      await deposit(runtime, cursorOptions);
+      atVersion4(staged.storeDir);
+      rmSync(join(user, 'globalStorage', 'state.vscdb'));
+      const verified = await sessionsVerify({ sessions: runtime, install: undefined, now: () => NOW }, { session: undefined });
+      expect(verified.failed).not.toContain(behind);
+      expect(verified.report.cvFrozen).toBe(1);
+    });
+
+    it('counts cv-frozen when the runtime names no Cursor store', async () => {
+      const staged = stage();
+      const user = await stageRawCursor(staged.root, [{ id: 'live', document: doc('live') }], []);
+      await deposit({ ...staged.runtime, cursorRoot: user }, cursorOptions);
+      atVersion4(staged.storeDir);
+      const verified = await sessionsVerify({ sessions: staged.runtime, install: undefined, now: () => NOW }, { session: undefined });
       expect(verified.failed).not.toContain(behind);
       expect(verified.report.cvFrozen).toBe(1);
     });

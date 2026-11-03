@@ -589,7 +589,9 @@ describe('a failed step and its key', () => {
     const rows = await readSteps(staged.storeDir);
     expect(rows.map((entry) => [entry.step, entry.status])).toEqual([['deposit', 'ok'], ['derive', 'error'], ['index', 'skipped']]);
     expect(rows[0]?.out.session).toBeGreaterThan(0);
-    expect(rows[1]?.key).toMatch(/^[0-9a-f]{16}$/);
+    // The key is the loaded store's high-water mark (each session at its rev) and the extractor version, not the error text (store.ts refresh).
+    const store = await loadStore(staged.storeDir);
+    expect(rows[1]?.key).toBe(digest([EXTRACTOR_VERSION, ...[...store.sessions, ...store.subagents].map((session) => `${session.session}:${String(session.rev)}`).sort()]));
     expect(rows[1]?.error).toMatch(/^\S/);
     expect(rows[1]?.error).not.toContain('\n');
   });
