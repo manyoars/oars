@@ -314,14 +314,16 @@ describe('a version-3 store opened under version 4', () => {
     expect(after.sessions.every((session) => session.cv === CAPTURE_VERSION && session.sid !== null)).toBe(true);
     // The pinned window: the same observations, each one revision later (rev + 1).
     const unrev = <T extends { rev: number }>(records: T[]): T[] => records.map((record) => ({ ...record, rev: 0 }));
-    expect(unrev(after.prompts)).toEqual(unrev(before.prompts));
+    // `verify` reads the new `segments`, so a version-3 record has none until it is captured again.
+    const unverified = <T extends { rev: number }>(records: T[]): T[] => unrev(records).map((record) => ({ ...record, verify: null }));
+    expect(unverified(after.prompts)).toEqual(unverified(before.prompts));
     expect(unrev(after.errors)).toEqual(unrev(before.errors));
     expect(after.tools.length).toBe(before.tools.length);
     expect(after.prompts.every((prompt) => prompt.v === EXTRACTOR_VERSION)).toBe(true);
     expect((await deposit(staged.runtime, options)).unchanged).toBe(4);
   });
 
-  it('opens a store captured by 3e658f0 (version 3): only target, targetBase, sid, cv, and rev change on a tool; prompts and errors read equal', async () => {
+  it('opens a store captured by 3e658f0 (version 3): only target, targetBase, sid, cv, rev, and the CAPTURE 6 fields change on a tool; prompts and errors read equal', async () => {
     const staged = stage();
     cpSync(join(FIXTURES, 'v3-store'), staged.storeDir, { recursive: true });
     const before = await loadStore(staged.storeDir);
@@ -330,7 +332,7 @@ describe('a version-3 store opened under version 4', () => {
     await deposit(staged.runtime, options);
     const after = await loadStore(staged.storeDir);
     const key = (record: { session: string; n: number }): string => `${record.session}#${String(record.n)}`;
-    const expectedToChange = new Set(['steps', 'target', 'targetBase', 'sid', 'cv', 'rev']);
+    const expectedToChange = new Set(['steps', 'target', 'targetBase', 'sid', 'cv', 'rev', 'segments', 'pulls', 'commits']);
     const changed = new Set<string>();
     expect(after.tools.length).toBe(before.tools.length);
     for (const tool of after.tools) {
@@ -343,7 +345,9 @@ describe('a version-3 store opened under version 4', () => {
     expect([...changed].filter((field) => !expectedToChange.has(field))).toEqual([]);
     expect(changed.has('sid') && changed.has('targetBase')).toBe(true);
     const unrev = <T extends { rev: number }>(records: T[]): T[] => records.map((record) => ({ ...record, rev: 0 }));
-    expect(unrev(after.prompts)).toEqual(unrev(before.prompts));
+    // `verify` reads the new `segments`, so a version-3 record has none until it is captured again.
+    const unverified = <T extends { rev: number }>(records: T[]): T[] => unrev(records).map((record) => ({ ...record, verify: null }));
+    expect(unverified(after.prompts)).toEqual(unverified(before.prompts));
     expect(unrev(after.errors)).toEqual(unrev(before.errors));
     expect(after.sessions.map((session) => session.promptFingerprint)).toEqual(before.sessions.map((session) => session.promptFingerprint));
   });

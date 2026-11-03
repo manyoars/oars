@@ -3,7 +3,7 @@
 
 import { ACTION_TABLES, actionOf, type CanonicalAction } from './actions.js';
 import { contentHash } from './read.js';
-import type { Harness, StepObservation, ToolObservation, ToolStatus } from './schema.js';
+import type { Harness, PullIdentity, StepIdentity, ToolObservation, ToolStatus } from './schema.js';
 
 /**
  * Window lengths (spec Section 8, an open parameter). The spec's 2 to 4, plus 1: a rate of one action (fit, adoption, live) needs a count of that action, and a
@@ -14,15 +14,10 @@ export const MOTIF_LENGTHS = [1, 2, 3, 4] as const;
 /** `shape` is actions only and `named` is actions and identities. `class` is a prompt's class, which carries no steps: cost is read per class. */
 export type MotifLevel = 'shape' | 'named' | 'class';
 
-/** A step's public names (spec Section 2.2), whichever fields its action has. */
-export interface StepIdentity {
-  [field: string]: string | readonly string[] | null;
-}
-
 /** What a motif's hash reads of a step: never a position, a frame, a salted hash, or a status. */
 export interface WindowStep {
   action: CanonicalAction;
-  identity: StepIdentity | null;
+  identity: StepIdentity;
 }
 
 /** A step as a cell counts it. */
@@ -40,9 +35,6 @@ export interface Motif {
   /** The prompt class of a `class` motif; null on a window. */
   cls: string | null;
 }
-
-/** The fields capture writes on a step as it reaches them (spec Section 2.2); a record captured earlier has none of them. */
-type CapturedStep = StepObservation & { identity?: StepIdentity | null; status?: ToolStatus; cost?: { tokens: number; durationMs: number | null } };
 
 const memo = new Map<string, Motif>();
 
@@ -64,15 +56,8 @@ export const shapeMotif = (steps: readonly WindowStep[]): Motif => motifOf('shap
 
 /** The steps of one call. A record captured before steps existed reads through the same action table capture uses, so old data joins new. */
 export const stepsOfCall = (tool: ToolObservation, harness: Harness): CountedStep[] => {
-  const captured: readonly CapturedStep[] = tool.steps ?? [{ n: tool.n, seg: 0, frameId: '', ...actionOf(ACTION_TABLES[harness], tool.tool) }];
-  return captured.map((step, position) => ({
-    action: step.action,
-    identity: step.identity ?? null,
-    status: step.status ?? tool.status,
-    tokens: step.cost?.tokens ?? 0,
-    // A call has one duration however many segments it ran; a step that states its own wins.
-    durationMs: step.cost?.durationMs ?? (position === 0 ? (tool.durationMs ?? 0) : 0),
-  }));
+  if (tool.steps === undefined) return [{ action: actionOf(ACTION_TABLES[harness], tool.tool).action, identity: null, status: tool.status, tokens: 0, durationMs: tool.durationMs ?? 0 }];
+  return tool.steps.map((step) => ({ action: step.action, identity: step.identity, status: step.status, tokens: step.cost.tokens ?? 0, durationMs: step.cost.durationMs ?? 0 }));
 };
 
 export interface MotifWindow {
@@ -93,12 +78,17 @@ export const motifsOf = (line: readonly WindowStep[]): MotifWindow[] => {
   return windows;
 };
 
+const nameOfField = (value: unknown): string => {
+  if (!Array.isArray(value)) return String(value);
+  return value.map((item: string | PullIdentity) => (typeof item === 'string' ? item : `${item.registry}:${item.name}`)).join(',');
+};
+
 const nameOfStep = (step: WindowStep): string => {
   if (step.identity === null) return step.action;
   const fields = Object.entries(step.identity)
-    .filter(([, value]) => value !== null)
+    .filter(([, value]: [string, unknown]) => value !== null && !(Array.isArray(value) && value.length === 0))
     .sort(([a], [b]) => (a < b ? -1 : 1))
-    .map(([field, value]) => `${field}=${String(value)}`);
+    .map(([field, value]: [string, unknown]) => `${field}=${nameOfField(value)}`);
   return `${step.action}[${fields.join(' ')}]`;
 };
 
