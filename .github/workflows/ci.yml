@@ -96,3 +96,4 @@ jobs:
         env:
           OARS_LIVE_USERNAME: ${{ secrets.OARS_LIVE_USERNAME }}
           OARS_LIVE_PASSWORD: ${{ secrets.OARS_LIVE_PASSWORD }}
+          OARS_LIVE_AUDIENCE: ${{ vars.OARS_LIVE_AUDIENCE }}

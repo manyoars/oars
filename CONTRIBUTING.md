@@ -27,7 +27,7 @@ A missing file prints a warning and the check passes, so a contributor who has n
 
 - It catches **listed terms only**, in **added lines** and **commit messages**. A new private name is invisible to it until
   someone adds that name to a list.
-- It does not look at removed lines, file contents outside the diff, or branch names.
+- It does not look at removed lines, file contents outside the diff, file names, branch names, annotated tag messages, or binary files.
 - It cannot see anything **already on origin**. Cleaning up what was published is a separate, manual job.
 - `git push --no-verify` skips it.
 
