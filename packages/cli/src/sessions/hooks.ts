@@ -100,7 +100,7 @@ const nightly = async (runtime: SessionsRuntime, now: () => number): Promise<Out
   if (unreadable !== undefined) return { hit: true, queried: false, error: await errorLine(runtime.storeDir, unreadable) };
   // A skip for an unsafe session id is likewise reported, never silent (the `rejected` doc in sources.ts); an unreadable store, which names its own reason, takes precedence.
   const skipped = counts.find(([, tally]) => tally.rejected > 0);
-  return skipped === undefined ? { hit: true, queried: false } : { hit: true, queried: false, error: `Skipped ${String(skipped[1].rejected)} ${sourceLabel(skipped[0])} sessions whose id is not a safe file name` };
+  return skipped === undefined ? { hit: true, queried: false } : { hit: true, queried: false, error: `Skipped ${String(skipped[1].rejected)} ${sourceLabel(skipped[0], runtime.sources ?? SOURCES)} sessions whose id is not a safe file name` };
 };
 
 /** What a lookup hook looks up, as its recall key (spec 4.2 names none for a lookup): the cwd for session-start, the failure's signature for post-tool; null when it had nothing to look up. */

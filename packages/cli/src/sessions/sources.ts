@@ -41,6 +41,8 @@ export interface Source {
   root: (platform: NodeJS.Platform, env: { [name: string]: string | undefined }, home: string) => string;
   /** The file reported when the store as a whole cannot be opened. */
   storeFile: (root: string) => string;
+  /** A session whose transcript cannot be read ends this source's deposit (Cursor's, as it was before the table) instead of skipping to the next. */
+  stopOnTranscriptError?: boolean;
   /** Opens the store read-only; undefined when the machine has none, so a missing store is skipped silently. */
   open: (root: string) => Promise<SourceStore | undefined>;
 }
@@ -55,6 +57,7 @@ const cursor: Source = {
   name: 'cursor',
   harness: 'cursor',
   label: 'Cursor',
+  stopOnTranscriptError: true,
   root: (platform, env, home) => cursorRoot(platform, env, home),
   storeFile: (root) => join(root, 'globalStorage', 'state.vscdb'),
   open: async (root) => {
@@ -97,4 +100,4 @@ const codex: Source = {
 export const SOURCES: readonly Source[] = [cursor, codex];
 
 /** How a source is named in a deposit line; a name the table does not know (a test's) is its own label. */
-export const sourceLabel = (name: string): string => SOURCES.find((source) => source.name === name)?.label ?? name;
+export const sourceLabel = (name: string, table: readonly Source[] = SOURCES): string => table.find((source) => source.name === name)?.label ?? name;

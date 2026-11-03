@@ -2,7 +2,7 @@
 import { readFile } from 'node:fs/promises';
 import type { Outcome } from '../cli.js';
 import { parseAllowList } from './allow.js';
-import { sourceLabel } from './sources.js';
+import { SOURCES, sourceLabel } from './sources.js';
 import { CliError, ExitCode } from '../errors.js';
 import { books, formatBooks, formatMeasure, formatRecall, measure, recall, type BooksBy, type RecallQuery } from './query.js';
 import { readHookCalls } from './hook-calls.js';
@@ -36,6 +36,7 @@ const readAllowFile = async (file: string): Promise<string[]> => {
 export const sessionsDeposit = async (deps: SessionsDeps, options: { allow: string[]; allowFiles: string[]; redactDomains: string[] }): Promise<Outcome> => {
   const fromFiles = await Promise.all(options.allowFiles.map((file) => readAllowFile(file)));
   const runtime = runtimeOf(deps);
+  const table = runtime.sources ?? SOURCES;
   const allow = [...options.allow, ...fromFiles.flat()];
   const result = await runDeposit(newContext(runtime.storeDir, deps.now, 'manual'), true, inputKey('manual', allow, options.redactDomains), async (trace) => {
     const done = await deposit(runtime, { allow, redactDomains: options.redactDomains, now: deps.now }, trace);
@@ -45,9 +46,9 @@ export const sessionsDeposit = async (deps: SessionsDeps, options: { allow: stri
     `Deposited ${String(result.sessions)} sessions and ${String(result.subagents)} subagent transcripts (${String(result.lines)} lines, ${String(result.badLines)} unparseable) as ${String(result.observations)} observations; ${String(result.unchanged)} files unchanged.`,
     `Read ${String(result.folders.length)} folders; skipped ${String(result.skippedFolders)} not on the allowlist.`,
     ...Object.entries(result.sources).flatMap(([name, counts]) => [
-      ...(counts.read === 0 ? [] : [`Read ${String(counts.read)} ${sourceLabel(name)} sessions.`]),
-      ...counts.unreadable.map((reason) => `${sourceLabel(name)} store not read: ${reason}`),
-      ...(counts.rejected === 0 ? [] : [`Skipped ${String(counts.rejected)} ${sourceLabel(name)} sessions whose id is not a safe file name.`]),
+      ...(counts.read === 0 ? [] : [`Read ${String(counts.read)} ${sourceLabel(name, table)} sessions.`]),
+      ...counts.unreadable.map((reason) => `${sourceLabel(name, table)} store not read: ${reason}`),
+      ...(counts.rejected === 0 ? [] : [`Skipped ${String(counts.rejected)} ${sourceLabel(name, table)} sessions whose id is not a safe file name.`]),
     ]),
     ...(result.missing.length === 0 ? [] : [`No project folder matched: ${result.missing.join(', ')}.`]),
   ];

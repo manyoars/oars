@@ -9,15 +9,18 @@
 // A line is `{timestamp, type, payload}` (history/src/lib.rs `RolloutLine`, rollout_payload.rs). Like cursor.ts, the reader writes each session
 // out as the transcript lines `captureSession` already reads, so redaction, the 1,000-character line cap, the salted file hashes, and the
 // skeleton are the Claude Code path's own code:
-//   session_meta        {id, cwd, cli_version, timestamp}: the working directory and the harness version
+//   session_meta        {id, cwd, cli_version, timestamp, history_mode}: the working directory and the harness version. A `paginated` rollout holds
+//                       item_completed events instead of the legacy ones below (rollout/src/policy.rs:143), so it is reported unreadable by name
 //   turn_context        {model, cwd}: the model, and the directory when it changes
 //   event_msg user_message {message}            a prompt (the `response_item` user messages also hold injected context, so they are not read)
 //   event_msg agent_message {message}           the assistant's text
 //   event_msg token_count {info.last_token_usage}  one model response's usage, closing the lines since the last one
 //   response_item function_call / local_shell_call / custom_tool_call   a tool call
-//   event_msg exec_command_end {call_id, exit_code, aggregated_output, status}   a shell call's REAL exit code (protocol/src/protocol.rs)
-//   event_msg patch_apply_end {call_id, success, stderr, changes}   an apply_patch call's outcome
-//   response_item function_call_output {call_id, output}   the outcome of any other call
+//   response_item function_call_output {call_id, output}   a shell call's outcome: the text `Exit code: N` / `Process exited with code N` then `Output:`
+//                       (core/src/tools/mod.rs:107-113, context.rs:556), the real exit code. A non-shell call has no failure signal in this format.
+//   event_msg patch_apply_end {call_id, success, stderr}   an apply_patch call's outcome (persisted in Legacy history mode only)
+//   event_msg exec_command_end                  never persisted at ac558e2 (policy.rs:165) nor at rust-v0.46.0; read only if a rollout carries one
+// Older shapes: the JSON `{output, metadata.exit_code}` wrapper of a shell output (rust-v0.46.0 core/src/tools/mod.rs:186-210).
 // What Codex has no equivalent of (subagents, cost, hooks, a message id) stays at the value capture gives an absent field.
 
 import { createReadStream } from 'node:fs';
@@ -125,16 +128,31 @@ const commandOf = (args: Obj): string | undefined => {
 /** The paths an `apply_patch` input touches (`*** Add|Update|Delete File: <path>`, the grammar of codex-rs/apply-patch). */
 const patchFiles = (input: string): string[] => [...input.matchAll(/^\*\*\* (?:Add|Update|Delete) File: (.+)$/gm)].map((match) => (match[1] ?? '').trim());
 
-/** The text of a `function_call_output`: Codex wraps shell output as JSON `{output, metadata}`; the inner text is what a signature joins on. */
-const outputText = (raw: unknown): { text: string; exit: number | undefined; success: boolean | undefined } => {
-  const value = isObj(raw) ? raw : parse(raw);
-  if (isObj(value)) {
-    const metadata = isObj(value.metadata) ? value.metadata : {};
-    const inner = str(value.output) ?? str(value.content) ?? '';
-    return { text: inner, exit: num(metadata.exit_code), success: typeof value.success === 'boolean' ? value.success : undefined };
-  }
-  return { text: str(raw) ?? '', exit: undefined, success: undefined };
+const EXIT_LINE = /^(?:Exit code: |Process exited with code )(-?\d+)\s*$/m;
+const OUTPUT_MARK = /(?:^|\n)Output:\n?/;
+
+/** The text of a `function_call_output` body: a bare string, or an array of `{type: input_text, text}` items (protocol/src/models.rs:2376). */
+const bodyText = (raw: unknown): string => {
+  if (!Array.isArray(raw)) return str(raw) ?? '';
+  return raw.map((item) => (isObj(item) ? (str(item.text) ?? '') : '')).filter((text) => text !== '').join('\n');
 };
+
+/**
+ * What a shell output says: the real exit code and the text after the `Output:` line, which is what an error line is cut from. The two header
+ * forms are core/src/tools/mod.rs:107-113 (`Exit code: N`) and core/src/tools/context.rs:556 (`Process exited with code N`); no code means the
+ * process was still running. An older Codex wrote JSON `{output, metadata.exit_code}` (rust-v0.46.0 core/src/tools/mod.rs:186-210).
+ */
+const outcomeOf = (raw: unknown): { text: string; exit: number | undefined } => {
+  const body = bodyText(raw);
+  const wrapped = parse(body);
+  if (isObj(wrapped) && typeof wrapped.output === 'string') return { text: wrapped.output, exit: isObj(wrapped.metadata) ? num(wrapped.metadata.exit_code) : undefined };
+  const mark = OUTPUT_MARK.exec(body);
+  if (mark === null) return { text: body, exit: undefined };
+  const code = EXIT_LINE.exec(body.slice(0, mark.index))?.[1];
+  return { text: body.slice(mark.index + mark[0].length), exit: code === undefined ? undefined : Number(code) };
+};
+
+const failureOf = (exit: number | undefined, text: string): string | undefined => (exit === undefined || exit === 0 ? undefined : `Exit code ${String(exit)}\n${text}`);
 
 const usageOf = (info: unknown): Obj | undefined => {
   const last = isObj(info) && isObj(info.last_token_usage) ? info.last_token_usage : undefined;
@@ -156,15 +174,20 @@ const usageOf = (info: unknown): Obj | undefined => {
 };
 
 /** One rollout as the lines `captureSession` reads. */
+/** The non-blank lines of a rollout that are not JSON (a torn write), kept so `captureSession` counts them and the deposit line reports them. */
+export const rolloutBadLines = (text: string): string[] => text.split('\n').filter((raw) => raw.trim() !== '' && parse(raw) === undefined);
+
 export const rolloutLines = (text: string, fallbackId: string): Obj[] => {
+  const nonblank = text.split('\n').filter((raw) => raw.trim() !== '');
+  if (nonblank.length > 0 && !nonblank.some((raw) => isObj(parse(raw)))) throw new Error('no parseable line');
   const lines: Obj[] = [];
   const base: Obj = { sessionId: fallbackId };
   let at: string | undefined;
   let model: string | undefined;
   let sequence = 0;
   let response = 0;
-  // The assistant lines since the last token_count share one response id; the first of them carries its usage.
-  let open: Obj[] = [];
+  // The assistant lines since the last counted token_count share one response id; the first of them carries its usage.
+  let open: Obj | undefined;
   let lastTotal: number | undefined;
   const calls = new Map<string, { kind: 'shell' | 'patch' | 'other'; ids: string[] }>();
   const resolved = new Set<string>();
@@ -176,9 +199,11 @@ export const rolloutLines = (text: string, fallbackId: string): Obj[] => {
   const assistant = (content: Obj[], when: string): void => {
     sequence += 1;
     const message: Obj = { role: 'assistant', content };
-    const line: Obj = { ...base, type: 'assistant', uuid: `${fallbackId}-a${String(sequence)}`, timestamp: when, ...(model === undefined ? {} : { requestedModel: model }), message };
+    // The id is set here, not when a token_count closes the response: a line no token_count follows (an aborted turn, a local model) still has one.
+    const requestId = `${String(base.sessionId)}-resp${String(response + 1)}`;
+    const line: Obj = { ...base, type: 'assistant', uuid: `${fallbackId}-a${String(sequence)}`, requestId, timestamp: when, ...(model === undefined ? {} : { requestedModel: model }), message };
     lines.push(line);
-    open.push(line);
+    open ??= line;
   };
   const result = (id: string, failure: string | undefined, when: string): void => {
     sequence += 1;
@@ -206,6 +231,7 @@ export const rolloutLines = (text: string, fallbackId: string): Obj[] => {
       const version = str(payload.cli_version);
       if (version !== undefined) base.version = version;
       stamp(payload.timestamp);
+      if (str(payload.history_mode) === 'paginated') throw new Error('paginated history mode (item_completed events) is not read');
     } else if (type === 'turn_context') {
       model = str(payload.model) ?? model;
       const cwd = str(payload.cwd);
@@ -226,13 +252,13 @@ export const rolloutLines = (text: string, fallbackId: string): Obj[] => {
         const total = info !== undefined && isObj(info.total_token_usage) ? num(info.total_token_usage.total_tokens) : undefined;
         const usage = usageOf(info);
         // Codex repeats a token_count whose totals did not move; counting it twice would double the response.
-        if (usage !== undefined && (total === undefined || total !== lastTotal) && open[0] !== undefined) {
-          const first = open[0].message;
+        // A token_count with no assistant line before it (a reasoning-only response) has nothing to attach to, so its usage is not counted.
+        if (usage !== undefined && (total === undefined || total !== lastTotal) && open !== undefined) {
+          const first = open.message;
           if (isObj(first)) first.usage = usage;
           lastTotal = total;
           response += 1;
-          for (const line of open) line.requestId = `${String(base.sessionId)}-resp${String(response)}`;
-          open = [];
+          open = undefined;
         }
       } else if (kind === 'exec_command_end') {
         const id = str(payload.call_id);
@@ -240,8 +266,9 @@ export const rolloutLines = (text: string, fallbackId: string): Obj[] => {
         if (id !== undefined && known?.kind === 'shell' && !resolved.has(id) && payload.status !== 'declined') {
           resolved.add(id);
           const exit = num(payload.exit_code);
-          // The real exit code decides: `status` alone reads `completed` for a command that returned nonzero in some versions.
-          result(id, exit === undefined || exit === 0 ? undefined : `Exit code ${String(exit)}\n${str(payload.aggregated_output) ?? ''}`, when);
+          const output = str(payload.aggregated_output) ?? '';
+          // The struct requires exit_code; a missing one with status failed is still a failure.
+          result(id, exit === undefined && payload.status === 'failed' ? `Exit code unknown\n${output}` : failureOf(exit, output), when);
         }
       } else if (kind === 'patch_apply_end') {
         const id = str(payload.call_id);
@@ -283,12 +310,13 @@ export const rolloutLines = (text: string, fallbackId: string): Obj[] => {
         const id = str(payload.call_id);
         const known = id === undefined ? undefined : calls.get(id);
         if (id !== undefined && known !== undefined && !resolved.has(id)) {
-          const out = outputText(payload.output);
-          // A shell call is settled by its exec_command_end (the real exit code); the wrapper's metadata only stands in when that line is absent.
-          const failed = out.success === false || (out.exit !== undefined && out.exit !== 0);
+          const out = outcomeOf(payload.output);
+          // Only a shell call has a failure signal (its exit code); another call's output text is not read for one. A shell output with no
+          // exit code (a process still running) stays unsettled.
           if (known.kind !== 'shell' || out.exit !== undefined) {
             resolved.add(id);
-            for (const part of known.ids) result(part, failed ? (out.exit === undefined ? out.text : `Exit code ${String(out.exit)}\n${out.text}`) || 'error' : undefined, when);
+            const failure = known.kind === 'shell' ? failureOf(out.exit, out.text) : undefined;
+            for (const part of known.ids) result(part, failure, when);
           }
         }
       }
@@ -329,8 +357,9 @@ export const openCodexStore = async (root: string): Promise<CodexStore | undefin
     rejected,
     unreadable,
     transcript: async (session) => {
-      const lines = rolloutLines(await textOf(session.file), session.id);
-      return lines.map((line) => JSON.stringify(line)).join('\n') + (lines.length === 0 ? '' : '\n');
+      const text = await textOf(session.file);
+      const lines = [...rolloutLines(text, session.id).map((line) => JSON.stringify(line)), ...rolloutBadLines(text)];
+      return lines.join('\n') + (lines.length === 0 ? '' : '\n');
     },
   };
 };
