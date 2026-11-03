@@ -107,9 +107,10 @@ interface Session {
   configDir: string;
   username: string;
   password: string;
+  audience: string;
 }
 
-const loginThenLogout = async ({ api, configDir, username, password }: Session): Promise<void> => {
+const loginThenLogout = async ({ api, configDir, username, password, audience }: Session): Promise<void> => {
   const out: string[] = [];
   const err: string[] = [];
   let announce: (url: string) => void = () => undefined;
@@ -153,7 +154,7 @@ const loginThenLogout = async ({ api, configDir, username, password }: Session):
   expect(claim(exchanged, 'azp')).toBe('oars-cli');
   expect(claim(exchanged, 'iss')).toBe(ISSUER_URL);
   expect(claim(exchanged, 'email')).toBe(username);
-  expect(JSON.stringify(claim(exchanged, 'aud'))).toContain(required('OARS_LIVE_AUDIENCE'));
+  expect(JSON.stringify(claim(exchanged, 'aud'))).toContain(audience);
 
   const stored = await deps.store.read();
   expect(stored).toMatchObject({ issuerUrl: ISSUER_URL, apiUrl: api.url, email: username, accessToken: 'stub-api-access-token' });
@@ -174,10 +175,11 @@ describe('oars login against a live Keycloak', () => {
   it('receives tokens once the device code is approved, then logout revokes the refresh token', async () => {
     const username = required('OARS_LIVE_USERNAME');
     const password = required('OARS_LIVE_PASSWORD');
+    const audience = required('OARS_LIVE_AUDIENCE');
     const api = await startStubApi();
     const configDir = await mkdtemp(join(tmpdir(), 'oars-live-'));
     try {
-      await loginThenLogout({ api, configDir, username, password });
+      await loginThenLogout({ api, configDir, username, password, audience });
     } finally {
       await api.close();
       await rm(configDir, { recursive: true, force: true });
