@@ -197,6 +197,13 @@ describe('recovery episodes (recovery_episodes.py, t693)', () => {
     ]);
   });
 
+  it('carries the call a derived error answers, so a reader can count one row per call', () => {
+    const capture = synthetic('s', [['Bash', 'npm test', 'error']]);
+    const id = capture.tools[0]?.toolUseId;
+    expect(id).toEqual(expect.any(String));
+    expect(deriveSession(capture, redact).errors[0]?.toolUseId).toBe(id);
+  });
+
   it('looks 20 calls ahead and no further', () => {
     expect(RECOVERY_WINDOW).toBe(20);
     const filler = Array.from({ length: 19 }, (): readonly [string, string, ToolStatus] => ['TodoWrite', 'TodoWrite', 'ok']);

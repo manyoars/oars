@@ -325,7 +325,7 @@ describe('a version-3 store opened under version 4', () => {
     expect((await deposit(staged.runtime, options)).unchanged).toBe(4);
   });
 
-  it('opens a store captured by 3e658f0 (version 3): only target, targetBase, sid, cv, rev, and the CAPTURE 6 fields change on a tool; prompts and errors read equal', async () => {
+  it('opens a store captured by 3e658f0 (version 3): only target, targetBase, sid, cv, rev, and the CAPTURE 6 fields change on a tool; prompts read equal but for verify and frame, and errors read equal', async () => {
     const staged = stage();
     cpSync(join(FIXTURES, 'v3-store'), staged.storeDir, { recursive: true });
     const before = await loadStore(staged.storeDir);
@@ -356,7 +356,10 @@ describe('a version-3 store opened under version 4', () => {
     expect(verifyAt(after.prompts, 'errors-b', 0)).toBe('none');
     expect(verifyAt(before.prompts, 'tldr', 0)).toBe('na');
     expect(verifyAt(after.prompts, 'tldr', 0)).toBe('na');
-    const unverified = <T extends { rev: number }>(records: T[]): T[] => unrev(records).map((record) => ({ ...record, verify: null }));
+    // A version-3 record has no frame either, and a prompt's derived record carries the one capture now writes.
+    expect(before.prompts.every((prompt) => prompt.frame === undefined)).toBe(true);
+    expect(after.prompts.every((prompt) => prompt.frame !== undefined)).toBe(true);
+    const unverified = <T extends { rev: number }>(records: T[]): T[] => unrev(records).map((record) => ({ ...record, verify: null, frame: null }));
     expect(unverified(after.prompts)).toEqual(unverified(before.prompts));
     expect(unrev(after.errors)).toEqual(unrev(before.errors));
     expect(after.sessions.map((session) => session.promptFingerprint)).toEqual(before.sessions.map((session) => session.promptFingerprint));
@@ -409,7 +412,7 @@ describe('a version-3 store opened under version 4', () => {
     const second = await deposit({ ...staged.runtime, accountSalt: () => Promise.resolve({ salt: 'b', sid: sidOf('b') }) }, options);
     expect(second.sessions).toBe(4);
     editState(staged.storeDir, (entry) => {
-      Reflect.set(entry, 'v', String(Number(CAPTURE_VERSION) + 1));
+      Reflect.set(entry, 'v', String(Number(EXTRACTOR_VERSION) + 1));
     });
     await expect(deposit(staged.runtime, options)).rejects.toThrow(/upgrade oars/);
   });
@@ -418,7 +421,7 @@ describe('a version-3 store opened under version 4', () => {
     const staged = stage();
     await deposit(staged.runtime, options);
     editState(staged.storeDir, (entry, key) => {
-      if (key.endsWith('tldr.jsonl')) Reflect.set(entry, 'v', String(Number(CAPTURE_VERSION) + 1));
+      if (key.endsWith('tldr.jsonl')) Reflect.set(entry, 'v', String(Number(EXTRACTOR_VERSION) + 1));
     });
     const before = readFileSync(paths(staged.storeDir).observations);
     const stateBefore = readFileSync(paths(staged.storeDir).state);
@@ -432,7 +435,7 @@ describe('a version-3 store opened under version 4', () => {
     await deposit(staged.runtime, options);
     editState(staged.storeDir, (entry, key) => {
       if (key.endsWith('errors-a.jsonl')) Reflect.set(entry, 'v', '3');
-      if (key.endsWith('tldr.jsonl')) Reflect.set(entry, 'v', String(Number(CAPTURE_VERSION) + 1));
+      if (key.endsWith('tldr.jsonl')) Reflect.set(entry, 'v', String(Number(EXTRACTOR_VERSION) + 1));
     });
     const before = readFileSync(paths(staged.storeDir).observations);
     await expect(deposit(staged.runtime, options)).rejects.toThrow(/upgrade oars/);
