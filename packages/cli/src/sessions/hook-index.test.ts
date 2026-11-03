@@ -284,6 +284,19 @@ ${formatStepCounters(stepCounters(await readSteps(staged.storeDir)))}`);
     expect(absent.text).toBe(`No prompts for ${none} in the store (${String(store.prompts.length)} prompts across all repositories).`);
   });
 
+  it('books over a --since window nothing falls in says so, with or without --repo, and an empty store still reads as empty', async () => {
+    const staged = stage(slugOf(HOME));
+    await deposit(staged.runtime, { allow: [slugOf(HOME)], redactDomains: [], now: () => NOW });
+    expect((await loadStore(staged.storeDir)).prompts.length).toBeGreaterThan(0);
+    const deps = { sessions: staged.runtime, install: undefined, now: () => NOW + 3650 * 86_400_000 };
+    expect((await sessionsBooks(deps, { by: 'class', sinceDays: 1, repo: HOME })).text).toBe('No prompts in the --since window.');
+    expect((await sessionsBooks(deps, { by: 'pull', sinceDays: 1, repo: HOME })).text).toBe('No pulls in the --since window.');
+    expect((await sessionsBooks(deps, { by: 'class', sinceDays: 1 })).text).toBe('No prompts in the --since window.');
+    const empty = stage(slugOf(HOME));
+    const emptyDeps = { sessions: empty.runtime, install: undefined, now: () => NOW };
+    expect((await sessionsBooks(emptyDeps, { by: 'class', sinceDays: 1 })).text).toBe('No prompts in the store.');
+  });
+
   it("measure --repo drops another repository's MCP recall calls and keeps calls with no folder", async () => {
     const staged = stage(slugOf(HOME));
     const lines = readFileSync(join(staged.projectsRoot, slugOf(HOME), 'errors-a.jsonl'), 'utf8').split('\n').filter((line) => line !== '');

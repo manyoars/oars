@@ -131,11 +131,14 @@ export const sessionsBooks = async (deps: SessionsDeps, options: { by: BooksBy; 
   const loaded = await loadStore(storeDir);
   const store = options.repo === undefined ? loaded : inRepositoryStore(loaded, options.repo);
   const rows = books(store, options.by, deps.now(), options.sinceDays, await readSurvival(storeDir));
-  // A mistyped root over a populated store must not read as an empty store.
+  // A mistyped root, or a --since window nothing falls in, over a populated store must not read as an empty store.
+  const emptyWindow = rows.length === 0 && options.sinceDays !== undefined && store.prompts.length > 0;
   const table =
     store.prompts.length === 0 && options.repo !== undefined
       ? `No prompts for ${options.repo} in the store (${String(loaded.prompts.length)} prompts across all repositories).`
-      : formatBooks(rows, options.by);
+      : emptyWindow
+        ? `No ${options.by === 'pull' ? 'pulls' : 'prompts'} in the --since window.`
+        : formatBooks(rows, options.by);
   return { document: { ok: true, by: options.by, rows, newerCaptures: store.newerCaptures }, text: [table, ...newerNotice(store), ...(rows.length === 0 ? [] : [BOOKS_CAVEAT])].join('\n') };
 };
 
