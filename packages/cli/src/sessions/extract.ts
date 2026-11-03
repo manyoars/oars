@@ -5,7 +5,8 @@
 import { createHash } from 'node:crypto';
 import { posix } from 'node:path';
 import { ACTION_TABLES, actionOf, shellOf, type ActionTable, type CanonicalAction } from './actions.js';
-import { closedFrame, frameIdOf, repoFilesFromIndex, stackOf, utcDay } from './frame.js';
+import { closedFrame, frameIdOf, repoFilesFromIndex, repoSizeOf, stackOf, utcDay } from './frame.js';
+import type { RepoSize } from './public-vocabulary.js';
 import { linkSteps } from './graph.js';
 import { callIdentity, shellIdentity, UNREAD_SHELL, type WordOfCommand } from './identity.js';
 import type { Redactor } from './redact.js';
@@ -265,8 +266,10 @@ export interface SubagentOrigin {
   parent: string;
   agentType: string | null;
   spawnedBy: string | null;
-  /** The `n` of the `spawnedBy` call in the parent transcript, when the deposit could read it. */
+  /** The `n` of the `spawnedBy` call in the transcript that holds it, when the deposit could read it. */
   spawnedAt?: number | null;
+  /** The session id of that transcript: the main session, or a sibling subagent's. */
+  spawnedIn?: string | null;
 }
 
 export interface ExtractInput {
@@ -291,6 +294,8 @@ export interface ExtractInput {
   harness?: Harness;
   /** How many files a repository root holds; absent reads the root's git index. */
   repoFiles?: (root: string) => number | null;
+  /** The size bucket an earlier capture of this transcript read, null included; absent on the first capture, which reads it through `repoFiles`. */
+  repoSize?: RepoSize | null;
   /** Set for a subagent transcript: every line is the agent's own line, so none is read as a sidechain. */
   subagent?: SubagentOrigin;
 }
@@ -1089,6 +1094,7 @@ export const captureSession = (input: ExtractInput): Capture => {
     parent: origin?.parent ?? null,
     agentType: origin?.agentType ?? null,
     spawnedBy: origin?.spawnedBy ?? null,
+    spawnedIn: origin?.spawnedIn ?? null,
     rev: input.rev,
     at: input.at,
     bytes: input.bytes,
@@ -1430,7 +1436,9 @@ export const captureSession = (input: ExtractInput): Capture => {
   session.searches = [...searches].sort();
 
   const repoFiles = input.repoFiles ?? repoFilesFromIndex;
-  const stack = stackOf({ paths: framePaths, programs: [...framePrograms], repoFiles: sessionRoot === null ? null : repoFiles(sessionRoot) });
+  // Only the first capture may look at the repository: it is the one input here that is not the transcript, and a frame must not follow it.
+  const size = input.repoSize !== undefined ? input.repoSize : sessionRoot === null ? null : repoSizeOf(repoFiles(sessionRoot));
+  const stack = stackOf({ paths: framePaths, programs: [...framePrograms], size });
   const frameOf = (parts: PromptFrameParts): Frame =>
     closedFrame({
       harness,
