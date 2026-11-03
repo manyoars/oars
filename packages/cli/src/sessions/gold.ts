@@ -11,7 +11,7 @@ import type { Redactor } from './redact.js';
 import { PROMPT_HEAD_CHARS, type PromptObservation, type PromptStop, type PromptVerify } from './schema.js';
 import { paths, type SessionsRuntime, type Store } from './store.js';
 
-interface Obj {
+export interface Obj {
   [key: string]: unknown;
 }
 
@@ -248,7 +248,7 @@ const hashOrder = (prompts: readonly PromptObservation[], seed: string): PromptO
  * get more than their share, so each one can be read, and a common cell still gets the most. A cell that runs dry drops out, and the others fill the
  * sample. The base rate it yields is the sample's, not the store's.
  */
-export const drawSample = async (frame: readonly PromptObservation[], size: number, seed: string, accept: (prompt: PromptObservation) => Promise<boolean>): Promise<{ picked: PromptObservation[]; rejected: number }> => {
+export const drawSample = async (frame: readonly PromptObservation[], size: number, seed: string, accept: (prompt: PromptObservation) => Promise<boolean>): Promise<PromptObservation[]> => {
   const cells = new Map<string, PromptObservation[]>();
   for (const prompt of hashOrder(frame, seed)) {
     const key = `${prompt.cls}\n${prompt.model}`;
@@ -259,7 +259,6 @@ export const drawSample = async (frame: readonly PromptObservation[], size: numb
   const open = [...cells.entries()].sort(([a], [b]) => (a < b ? -1 : 1)).map(([, queue]) => ({ queue, weight: Math.sqrt(queue.length), taken: 0 }));
   const perSession = new Map<string, number>();
   const picked: PromptObservation[] = [];
-  let rejected = 0;
   while (picked.length < size && open.length > 0) {
     const cell = open.reduce((best, item) => (item.weight / (item.taken + 1) > best.weight / (best.taken + 1) ? item : best));
     const next = cell.queue.shift();
@@ -269,15 +268,12 @@ export const drawSample = async (frame: readonly PromptObservation[], size: numb
     }
     // One long session must not fill a cell: its prompts are not independent reads.
     if ((perSession.get(next.session) ?? 0) >= SESSION_CAP) continue;
-    if (!(await accept(next))) {
-      rejected += 1;
-      continue;
-    }
+    if (!(await accept(next))) continue;
     perSession.set(next.session, (perSession.get(next.session) ?? 0) + 1);
     picked.push(next);
     cell.taken += 1;
   }
-  return { picked: hashOrder(picked, `${seed}\norder`), rejected };
+  return hashOrder(picked, `${seed}\norder`);
 };
 
 const quoted = (text: string): string[] => text.split(/\r?\n/).map((line) => `> ${line}`.trimEnd());
@@ -326,16 +322,14 @@ export const renderGold = (items: ReadonlyArray<{ id: string; view: GoldView }>,
 
 const ANSWERS = new Map([['yes', true], ['y', true], ['no', false], ['n', false]]);
 
-export const parseGold = (text: string): { judged: Map<string, boolean>; total: number; unreadable: string[] } => {
+export const parseGold = (text: string): { judged: Map<string, boolean>; unreadable: string[] } => {
   const judged = new Map<string, boolean>();
   const unreadable: string[] = [];
-  let total = 0;
   let current: string | undefined;
   for (const line of text.split(/\r?\n/)) {
     const heading = /^### (G\d+)$/.exec(line);
     if (heading !== null) {
       current = heading[1];
-      total += 1;
       continue;
     }
     const judgment = /^Judgment:(.*)$/.exec(line);
@@ -345,7 +339,7 @@ export const parseGold = (text: string): { judged: Map<string, boolean>; total: 
     if (value !== undefined) judged.set(current, value);
     else if (answer !== '' && answer !== BLANK_JUDGMENT) unreadable.push(current);
   }
-  return { judged, total, unreadable };
+  return { judged, unreadable };
 };
 
 export interface GoldSignals {
@@ -551,7 +545,16 @@ export const formatScore = (score: GoldScore, unreadable: readonly string[]): st
 /** The sidecar beside a gold file. */
 export const armsPath = (goldFile: string): string => `${goldFile.replace(/\.md$/, '')}.arms.json`;
 
-export const readIfThere = (file: string): Promise<string | undefined> => readFile(file, 'utf8').catch(() => undefined);
+const readIfThere = (file: string): Promise<string | undefined> => readFile(file, 'utf8').catch(() => undefined);
+
+/** The first root that holds the session, so the draw and the text arms cannot come to read different files. Undefined when none does. */
+export const readTranscript = async (roots: readonly string[], project: string, session: string): Promise<string | undefined> => {
+  for (const root of roots) {
+    const text = await readIfThere(join(root, project, `${session}.jsonl`));
+    if (text !== undefined) return text;
+  }
+  return undefined;
+};
 
 const subagentFiles = async (dir: string): Promise<string[]> => {
   const entries = await readdir(dir, { withFileTypes: true }).catch(() => []);
@@ -596,7 +599,7 @@ export const sampleGold = async (runtime: SessionsRuntime, store: Store, redact:
         return false;
       }
     }
-    const text = (await readIfThere(join(roots[0] ?? '', project, `${prompt.session}.jsonl`))) ?? (await readIfThere(join(roots[1] ?? '', project, `${prompt.session}.jsonl`)));
+    const text = await readTranscript(roots, project, prompt.session);
     const turns = text === undefined ? [] : readTurns(text);
     const turn = turns[prompt.index];
     // The transcript grew or changed after the deposit if the head no longer matches, and the signals would then describe another turn.
@@ -609,7 +612,7 @@ export const sampleGold = async (runtime: SessionsRuntime, store: Store, redact:
   };
 
   const frame = frameOf(store.prompts);
-  const { picked } = await drawSample(frame, options.size, options.seed, accept);
+  const picked = await drawSample(frame, options.size, options.seed, accept);
   const width = Math.max(3, String(picked.length).length);
   const views: GoldSample['views'] = [];
   const entries = picked.map((prompt, position): GoldEntry => {

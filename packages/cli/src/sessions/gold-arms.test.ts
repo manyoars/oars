@@ -148,6 +148,10 @@ describe('readsOf', () => {
     const long = readTurns([user('ask'), said('x'.repeat(9000)), said('   ')].join('\n'));
     const { claim } = readsOf(long, 0, redact);
     expect(claim).toHaveLength(4000);
+    const lengthy = readTurns([user('ask'), said(`Confidence: ${'x'.repeat(500)}`), user('y'.repeat(9000))].join('\n'));
+    const reads = readsOf(lengthy, 0, redact);
+    expect(reads.confidence).toHaveLength(200);
+    expect(reads.later).toHaveLength(2000);
   });
 });
 
