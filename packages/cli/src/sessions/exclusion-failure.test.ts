@@ -122,8 +122,9 @@ describe('a project folder that cannot be listed', () => {
       (error: unknown) => error,
     );
     expect(failure).toBeInstanceOf(CliError);
-    expect((failure as CliError).message).toMatch(/folder 1 .*no list was written/);
-    expect((failure as CliError).message).not.toContain('lockedproj');
+    const message = failure instanceof CliError ? failure.message : '';
+    expect(message).toMatch(/folder 1 .*no list was written/);
+    expect(message).not.toContain('lockedproj');
     const h = harness();
     h.deps.sessions = t.staged.runtime;
     h.deps.env = { ...h.deps.env, OARS_EXCLUSION_TERMS: t.termsFile };
