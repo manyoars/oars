@@ -156,6 +156,17 @@ const drawn = (seed: number): number[][] => {
 const at = (table: readonly (readonly number[])[], tool: number, day: number): number => table[tool]?.[day] ?? 0;
 
 describe('lead-lag over the real families', () => {
+  it('keeps a pair whose tool then fell away, because a lag selected on the tool still being called would hide the drop it asks about', () => {
+    const counts = [[100, 100, 100, 5], [100, 100, 100, 100], [0, 0, 0, 0], [0, 0, 0, 0]];
+    const from = daily(4, (tool, day) => counts[tool]?.[day] ?? 0, () => 0);
+    const reads = deriveReads(poolOf(deriveCells(from)), from);
+    const pairs = leadLagPairs(reads).filter(({ reads: [lead] }) => lead.slice.motif === 'file.read');
+    expect(pairs.map(({ y, day }) => [y.value, day])).toEqual([[-0.4524, dayAt(3)]]);
+    const gone = daily(4, (tool, day) => (tool === 0 && day === 3 ? 0 : counts[tool]?.[day] ?? 0), () => 0);
+    const after = leadLagPairs(deriveReads(poolOf(deriveCells(gone)), gone)).filter(({ reads: [lead] }) => lead.slice.motif === 'file.read');
+    expect(after.map(({ y }) => y.value)).toEqual([-0.5]);
+  });
+
   it('runs the chain from cells to order 3 and finds a planted lead: a tool that failed two days ago is called less', () => {
     const rolls = drawn(3);
     const failed = (tool: number, day: number) => Math.floor(at(rolls, tool, day) * 90);
