@@ -25,6 +25,7 @@ export interface Env {
   /** How many reads an account with no deposit may be served. */
   READ_CAP?: string;
   MAX_DEPOSITS_PER_ACCOUNT?: string;
+  MAX_DEPOSIT_BYTES_PER_ACCOUNT?: string;
 }
 
 export const answer = (status: number, body: object): Response => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });

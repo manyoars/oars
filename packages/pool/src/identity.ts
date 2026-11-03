@@ -49,11 +49,16 @@ const PROVIDERS = new Map<string, Provider>([
 
 const unknownProvider = (): Response => refuse(400, 'unknown_provider', 'The provider is github or google.', 'provider');
 
-/** Both providers answer JSON on the status they choose (Google's pending poll is a 428), so the body decides and the status does not. Undefined when the body is not JSON. */
-const askProvider = async (url: string, form: URLSearchParams): Promise<unknown> => {
-  const response = await fetch(url, { method: 'POST', headers: { accept: 'application/json', 'content-type': 'application/x-www-form-urlencoded' }, body: form.toString() });
-  return bodyOf(response);
+/** Both providers answer JSON on the status they choose (Google's pending poll is a 428), so the body decides and the status does not. Undefined when the body is not JSON or the provider cannot be reached, and the route refuses by the field it needed. */
+const providerBody = async (url: string, init: RequestInit): Promise<unknown> => {
+  try {
+    return await bodyOf(await fetch(url, init));
+  } catch {
+    return undefined;
+  }
 };
+
+const askProvider = (url: string, form: URLSearchParams): Promise<unknown> => providerBody(url, { method: 'POST', headers: { accept: 'application/json', 'content-type': 'application/x-www-form-urlencoded' }, body: form.toString() });
 
 export const loginStart = async (request: Request, env: Env): Promise<Response> => {
   const provider = PROVIDERS.get(textField(await bodyOf(request), 'provider') ?? '');
@@ -116,8 +121,8 @@ export const loginPoll = async (request: Request, env: Env): Promise<Response> =
     const error = textField(granted, 'error') ?? 'no_token';
     return PENDING.has(error) ? answer(200, { status: 'pending', ...(error === 'slow_down' ? { slowDown: true } : {}) }) : refuse(401, 'login_refused', `The provider refused the sign-in: ${error}.`);
   }
-  const profile = await fetch(provider.userUrl, { headers: { accept: 'application/json', authorization: `Bearer ${accessToken}`, 'user-agent': 'oars-pool' } });
-  const userId = provider.userIdOf(await bodyOf(profile));
+  const profile = await providerBody(provider.userUrl, { headers: { accept: 'application/json', authorization: `Bearer ${accessToken}`, 'user-agent': 'oars-pool' } });
+  const userId = provider.userIdOf(profile);
   if (userId === undefined) return refuse(502, 'provider_error', 'The provider did not name the user.');
 
   const account = pseudonymOf(pseudonymKey, name, userId);

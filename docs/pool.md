@@ -20,7 +20,8 @@ Every command takes the server from `--server <url>` or `OARS_POOL_URL`. There i
 - **Three accounts to a read.** A read is served only at 3 or more clusters, and a cluster is an account, so one account's many sessions count once. The floor applies to the read's aggregate: its `clusters` is the distinct accounts across all the cells it cites, so three accounts on three different days serve a read even though each day's cell holds one. A cell served on its own needs 3 accounts in that cell.
 - **Deposit or capped access.** An account with a deposit pulls on an ongoing basis. One without is served up to `READ_CAP` reads (default 50), and past that gets 403 `read_cap` before the pool is read.
 - **A deposit holds something.** A skeleton with no prompt and no tool gets 422 `closed_vocabulary` naming `transcripts`, since a deposit is what lifts the read cap. A forged skeleton that holds invented prompts still counts.
-- **Deposits per account.** Past `MAX_DEPOSITS_PER_ACCOUNT` rows (default 20,000) a new session gets 403 `deposit_limit`; a redeposit of a held session still replaces it. Every pull parses every row, so this keeps one account from growing the cost of everyone's pull.
+- **Deposits per account.** Past `MAX_DEPOSITS_PER_ACCOUNT` rows (default 20,000) a new session gets 403 `deposit_limit`, and so does any deposit that would take the account past `MAX_DEPOSIT_BYTES_PER_ACCOUNT` stored bytes (default 64 MB). A redeposit of a held session replaces it if the account still fits. Every pull parses every row, so these bound one account's share of a pull's cost. They do not bound the pool: a pull still loads every matching row across all accounts at once.
+- **A frame's day is real and not ahead of the server.** A day that is not a calendar date, or is later than tomorrow UTC, gets 422 `closed_vocabulary` naming the field, since the latest day sets a slice's `asOf`.
 
 ## Routes
 
@@ -45,6 +46,7 @@ All of these are set at the deploy, never in `wrangler.jsonc`, which holds no ac
 | `COVENANT_VERSION` | The covenant in force. Leave it unset until the covenant is published. |
 | `READ_CAP` | Optional. Reads served to an account with no deposit. |
 | `MAX_DEPOSITS_PER_ACCOUNT` | Optional. Rows one account may hold. |
+| `MAX_DEPOSIT_BYTES_PER_ACCOUNT` | Optional. Stored bytes one account may hold. |
 
 ## Tests
 
