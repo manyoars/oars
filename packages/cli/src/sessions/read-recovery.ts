@@ -87,7 +87,7 @@ export const recoveryOf = ({ pool, store }: FamilyInput): RecoveryOutcome => {
     }
     const record = signatureRecord(sig, list);
     return [
-      body('recovery', 'signature-record', '1', [...inputs], {
+      body('recovery', [...inputs], {
         slice: { sig: contentHash(sig), action: failedAction },
         value: { sessions: record.sessions, errors: record.count, firstSeen: utcDay(record.firstSeen), lastSeen: utcDay(record.lastSeen), following, editFollowed: record.editFollowed },
         n: record.count,

@@ -30,7 +30,7 @@ export const deriveNextStep: DeriveFamily = ({ pool }) => {
     const next = countsOf(group);
     const [top, topCount] = Object.entries(next).sort(([a, one], [b, two]) => two - one || (a < b ? -1 : 1))[0] ?? ['', 0];
     return [
-      body('next-step', 'next-action-counts', '1', cells, {
+      body('next-step', cells, {
         slice: { prefix: motifName(shapeMotif(first.prefix)), length: String(first.prefix.length) },
         value: { next, top, topShare: rate(topCount, n) },
         n,

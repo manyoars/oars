@@ -3,8 +3,8 @@
 
 import { closedFrame, utcDay } from './frame.js';
 import { classMotif, motifsOf, stepsOfCall, type CountedStep, type Motif } from './motif.js';
-import { cellRef, contentHash } from './read.js';
-import { EXTRACTOR_VERSION, harnessOf, type Frame, type Harness, type PromptObservation, type SessionObservation, type ToolObservation } from './schema.js';
+import { cellRef, contentHash, METHODS } from './read.js';
+import { EXTRACTOR_VERSION, harnessOf, type ErrorObservation, type Frame, type Harness, type PromptObservation, type SessionObservation, type ToolObservation } from './schema.js';
 import type { Store } from './store.js';
 
 export interface Cell {
@@ -179,14 +179,18 @@ export const serializeCells = (cells: readonly Cell[]): string => cells.map((cel
 export interface Pool {
   cells: readonly Cell[];
   motifs: ReadonlyMap<string, Motif>;
-  /** The hash of the extractor version and every cell: new data or a new rule is a new pool, and every read of it a new read. */
+  /** The hash of the extractor version, the family methods, every cell, and the error rows recovery reads: new data or a new rule is a new pool, and every read of it a new read. */
   version: string;
   lastDay: string | null;
 }
 
-export const poolOf = (set: CellSet): Pool => ({
+/** The fields of an error row a recovery read depends on, as text: only those, so a change elsewhere is not a new pool, and sorted, so record order is not one either. */
+const errorRowsRead = (errors: readonly ErrorObservation[]): string[] =>
+  errors.map(({ session, agent, toolUseId, prompt, tool, sig, ts, next, editFollowed }) => JSON.stringify([session, agent ?? null, toolUseId ?? null, prompt, tool, sig, ts, next, editFollowed])).sort();
+
+export const poolOf = (set: CellSet, errors: readonly ErrorObservation[]): Pool => ({
   cells: set.cells,
   motifs: new Map(set.motifs.map((motif) => [motif.motifId, motif])),
-  version: contentHash([EXTRACTOR_VERSION, set.cells.map(cellIdOf)]),
+  version: contentHash([EXTRACTOR_VERSION, METHODS, set.cells.map(cellIdOf), errorRowsRead(errors)]),
   lastDay: set.cells.reduce<string | null>((last, cell) => (cell.day !== UNKNOWN && (last === null || cell.day > last) ? cell.day : last), null),
 });

@@ -12,7 +12,7 @@ export const deriveFit: DeriveFamily = ({ pool }) =>
     if (first === undefined || n === 0) return [];
     const failed = total(cells, (cell) => cell.failed);
     return [
-      body('fit', 'failure-rate', '1', cells, {
+      body('fit', cells, {
         slice: { motif: motifName(first.motif), level: first.motif.level, ...bucketFields(first.cell.frameBucket) },
         value: { failureRate: rate(failed, n), failed, ok: n - failed },
         n,

@@ -20,7 +20,7 @@ export const deriveChange: DeriveFamily = ({ pool }) => {
     const { harness, harnessBucket } = bucketFields(first.cell.frameBucket);
     const days = cells.map((cell) => cell.day).filter((day) => day !== UNKNOWN);
     return [
-      body('change', 'share-in-version-bucket', '1', cells, {
+      body('change', cells, {
         slice: { motif: motifName(first.motif), level: first.motif.level, harness, harnessBucket },
         value: { share: rate(n, of), of, failureRate: rate(total(cells, (cell) => cell.failed), n), firstDay: firstDayOf(days), lastDay: lastDayOf(days) },
         n,
