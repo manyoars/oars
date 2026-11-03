@@ -204,7 +204,7 @@ describe('check-private-names', () => {
   });
 
   it('reports the real line when a hunk header carries function context holding a plus-number', () => {
-    git(work, 'config', 'diff.default.xfuncname', '^int');
+    git(work, 'config', 'diff.default.xfuncname', '^(int.*)$');
     writeFileSync(join(work, '.gitattributes'), '*.c diff=default\n');
     // The line chosen as the hunk header's function context holds " +99 @@", which a greedy match would take as the new line.
     commit('f.c', 'int a; /* +99 @@ */\nx\nx\nx\n', 'base c');
