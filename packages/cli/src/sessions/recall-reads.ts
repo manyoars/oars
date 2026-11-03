@@ -9,7 +9,7 @@ import { recall, type RecallQuery, type RecallResult } from './query.js';
 import { contentHash, FAMILIES, type Family } from './read.js';
 import { namedByPrefix, resolveReads, type CurrentPool } from './recall-pool.js';
 import { makeRecall, type Recall, type RecallForm, type RecallQueryObject, type RecallSlice } from './recall-object.js';
-import { closedName, evidenceOf, renderAnswer } from './recall-render.js';
+import { closedName, evidenceOf, renderAnswer, type RecallAsker } from './recall-render.js';
 import { harnessOf, PROMPT_CLASSES, type ErrorObservation, type Frame, type Harness, type ToolObservation } from './schema.js';
 import type { Store } from './store.js';
 
@@ -373,6 +373,7 @@ export interface PullContext {
   /** The session asking; null when the pull came from outside one, which is every pull until the MCP path can name it. */
   sid: string | null;
   now: number;
+  /** The asker's frame, when the caller knows it; otherwise `sid` may name a stored session, whose frame stands in. */
   frame: Frame | null;
   harness: Harness;
   redactDomains?: readonly string[];
@@ -387,22 +388,31 @@ export interface PullResult {
   legacy?: RecallResult;
 }
 
+/** The stored frame of the session asking, as of today: its harness and model are what the session ran under, and its day is when it started. */
+const frameOfSession = (store: Store, sid: string | null, day: string | null): Frame | null => {
+  const frame = sid === null ? undefined : store.sessions.find((session) => session.session === sid)?.frame;
+  return frame === undefined ? null : { ...frame, day };
+};
+
 /** A pull always answers (spec 2.7): the holdback runs on pushes alone. */
 export const pull = (store: Store, input: PullInput, context: PullContext): PullResult => {
   const at = new Date(context.now).toISOString();
   const legacy = isClosed(input) ? undefined : recall(store, input, context.now, undefined, context.redactDomains);
   const sigs = new Set(legacy?.matches.map((match) => match.sig));
   const { current } = context;
+  const day = utcDay(at);
+  const frame = context.frame ?? frameOfSession(store, context.sid, day);
+  const asker: RecallAsker = frame ?? { harness: null, harnessVersion: null, model: null, day };
   const legacyReads = (): RecallRead[] => {
     const found = recoveryReads(store, (error) => sigs.has(error.sig)).slice(0, ANSWER_LIMIT);
     return current === undefined ? found : resolveReads(found, current.reads);
   };
   const reads = isClosed(input) ? answerQuery(store, input, context.now, current) : legacyReads();
-  const { rendered, names } = renderAnswer(reads, context.frame, context.harness);
+  const { rendered, names } = renderAnswer(reads, asker, context.harness);
   const made = makeRecall({
     sid: context.sid,
     at,
-    frame: context.frame,
+    frame,
     mode: 'pull',
     query: isClosed(input) ? recordedQuery(input) : closedOf(input),
     poolVersion: poolVersionOf(store),
@@ -410,7 +420,7 @@ export const pull = (store: Store, input: PullInput, context: PullContext): Pull
     reads: reads.map((read) => read.readId),
     rendered,
     names,
-    evidence: reads.map((read) => evidenceOf(read, context.frame)),
+    evidence: reads.map((read) => evidenceOf(read, asker)),
   });
   return { recall: made, reads, ...(legacy === undefined ? {} : { legacy }) };
 };

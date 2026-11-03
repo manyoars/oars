@@ -45,7 +45,10 @@ const axis = (asker: string | null | undefined, evidence: readonly string[]): Re
   return evidence.includes(asker) ? 'same' : 'differs';
 };
 
-export const deltaOf = (asker: Frame | null, read: RecallRead): RecallDelta => {
+/** What a delta reads of the asker. A pull from outside any known session knows only the day: naming a harness for it would read as `same`, a guess. */
+export type RecallAsker = Pick<Frame, 'harnessVersion' | 'model' | 'day'> & { harness: Harness | null };
+
+export const deltaOf = (asker: RecallAsker | null, read: RecallRead): RecallDelta => {
   const version = asker?.harnessVersion;
   const latest = newest(read.harnessVersions);
   const model = axis(asker?.model, read.models);
@@ -72,7 +75,7 @@ const closedNames = (values: readonly string[], isPublic: (value: string) => str
   });
 
 /** A class P row an agent also reads over MCP, so its names pass the same closed tests a rendered answer does, and a value they refuse is dropped. */
-export const evidenceOf = (read: RecallRead, asker: Frame | null): RecallEvidence => ({
+export const evidenceOf = (read: RecallRead, asker: RecallAsker | null): RecallEvidence => ({
   ref: READ_ID.test(read.readId) ? read.readId : LITERAL,
   frameRange: { harnesses: closedNames(read.harnesses, harnessName), harnessVersions: closedNames(read.harnessVersions, publicVersion), models: closedNames(read.models, publicModel) },
   firstDay: publicDay(read.firstDay),
@@ -127,7 +130,7 @@ const followedActions = (read: RecallRead, table: (typeof ACTION_TABLES)[Harness
   return [...sums].sort((a, b) => b[1] - a[1]);
 };
 
-const line = (read: RecallRead, asker: Frame | null, harness: Harness): { text: string; names: string[] } => {
+const line = (read: RecallRead, asker: RecallAsker | null, harness: Harness): { text: string; names: string[] } => {
   const table = ACTION_TABLES[harness];
   const followed = followedActions(read, table);
   const failures = read.calls === null ? count(read.count, read.family === 'entity' ? 'call' : 'error') : `failed ${String(read.count)} of ${count(read.calls, 'call')}`;
@@ -145,7 +148,7 @@ const line = (read: RecallRead, asker: Frame | null, harness: Harness): { text: 
 
 const PREAMBLE = 'oars recall, counts from earlier sessions:';
 
-export const renderAnswer = (reads: readonly RecallRead[], asker: Frame | null, harness: Harness): { rendered: string; names: string[] } => {
+export const renderAnswer = (reads: readonly RecallRead[], asker: RecallAsker | null, harness: Harness): { rendered: string; names: string[] } => {
   if (reads.length === 0) return { rendered: '', names: [] };
   const lines = reads.map((read) => line(read, asker, harness));
   return { rendered: [PREAMBLE, ...lines.map((entry) => entry.text)].join('\n'), names: [...new Set(lines.flatMap((entry) => entry.names))] };
