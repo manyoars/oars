@@ -3,14 +3,17 @@ import { readFile } from 'node:fs/promises';
 import type { Outcome } from '../cli.js';
 import { parseAllowList } from './allow.js';
 import { CliError, ExitCode } from '../errors.js';
-import { books, formatBooks, formatMeasure, formatRecall, measure, recall, type BooksBy, type RecallQuery } from './query.js';
+import { books, formatBooks, formatMeasure, formatRecall, measure, type BooksBy } from './query.js';
+import { appendRecall } from './recall-object.js';
+import { pull, type PullInput } from './recall-reads.js';
+import { MISS_TEXT } from './recall-render.js';
 import { readHookCalls } from './hook-calls.js';
 import { buildIndex, contextBlock, inRepository, readIndex, type ContextOptions } from './hook-index.js';
 import { hookStatus, installHooks, scheduleStatus, setSchedule, settingsPath, uninstallHooks, type InstallRuntime, type Scope } from './install.js';
 import { serve } from './mcp.js';
-import { CAPTURE_VERSION, OLDEST_READABLE_CAPTURE, type StepRow } from './schema.js';
+import { CAPTURE_VERSION, harnessOf, OLDEST_READABLE_CAPTURE, type StepRow } from './schema.js';
 import { deposit, frozenSessions, loadStore, readCalls, readRedactDomains, readSkeletons, slugOf, type SessionsRuntime, type Store } from './store.js';
-import { formatStepCounters, inputKey, newContext, readSteps, stampKey, runDeposit, runStep, stepCounters, stuckSteps, type StuckStep } from './steps.js';
+import { formatStepCounters, inputKey, newContext, readSteps, stampKey, runDeposit, runStep, stepCounters, stuckSteps, tryLog, type StuckStep } from './steps.js';
 import { auditCounts, auditStore, formatAudit, type SessionAudit, type T0Counts } from './audit.js';
 import { CAPTURE_INVARIANTS, formatSessionResults, formatVerify, verifyAll, verifyCaptured, verifySessions, type InvariantResult, type SessionVerification } from './verify.js';
 
@@ -52,23 +55,31 @@ export const sessionsDeposit = async (deps: SessionsDeps, options: { allow: stri
   return { document: { ok: true, ...result }, text: lines.join('\n') };
 };
 
-export const sessionsRecall = async (deps: SessionsDeps, query: RecallQuery): Promise<Outcome> => {
-  if (query.error === undefined && query.path === undefined && query.cls === undefined) {
-    throw new CliError('Pass --error "<text>", --path <file>, or --class <name>.', ExitCode.USAGE, 'usage');
+const isAnswerable = (query: PullInput): boolean => ('form' in query ? true : query.error !== undefined || query.path !== undefined || query.cls !== undefined);
+
+/**
+ * One pull: it writes its own recall record, a hit or a miss, because no harness writes one for it. A record that cannot be written costs the asker nothing, and
+ * this command answers an operator, so the `--error`, `--path`, and `--class` forms keep the signature text they have always printed; the MCP tool, which answers an agent, does not.
+ */
+export const sessionsRecall = async (deps: SessionsDeps, query: PullInput, sid: string | null = null): Promise<Outcome> => {
+  if (!isAnswerable(query)) {
+    throw new CliError('Pass --error "<text>", --path <file>, --class <name>, --pattern <id>, --entity <name>, --family <name>, or --text "<text>".', ExitCode.USAGE, 'usage');
   }
   const { storeDir } = runtimeOf(deps);
   // The key is the query and `ev`, known before the work, so a recall that keeps failing is the same key each time.
-  const key = stampKey(query.error ?? '', query.path ?? '', query.cls ?? '', String(query.sinceDays ?? ''));
+  const key = stampKey(JSON.stringify(query));
   const result = await runStep(
     newContext(storeDir, deps.now, 'manual'),
     'recall',
     async () => {
-      const found = recall(await loadStore(storeDir), query, deps.now(), undefined, await readRedactDomains(storeDir));
-      return { value: found, report: { in: { query: 1 }, out: { matches: found.matches.length }, key } };
+      const found = pull(await loadStore(storeDir), query, { sid, now: deps.now(), frame: null, harness: harnessOf({}), redactDomains: await readRedactDomains(storeDir) });
+      return { value: found, report: { in: { query: 1 }, out: { matches: found.legacy?.matches.length ?? found.reads.length }, key } };
     },
     key,
   );
-  return { document: { ok: true, ...result }, text: formatRecall(result) };
+  await tryLog(() => appendRecall(storeDir, result.recall));
+  if (result.legacy !== undefined) return { document: { ok: true, ...result.legacy, recall: result.recall }, text: formatRecall(result.legacy) };
+  return { document: { ok: true, recall: result.recall, reads: result.reads }, text: result.recall.answer.rendered === '' ? MISS_TEXT : result.recall.answer.rendered };
 };
 
 /** `recall --context`: the injection block for a repository, from the hook index (built from the store when no deposit has written one). */
