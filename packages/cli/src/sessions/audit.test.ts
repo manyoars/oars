@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { auditSession, auditStore, formatAudit, type SessionAudit } from './audit.js';
 import { deposit, loadStore, paths, readSkeletons, readState } from './store.js';
-import { cleanup, NOW, stage, type Staged } from './test-support.js';
+import { cleanup, composers, folders, NOW, stage, stageCursor, type Staged } from './test-support.js';
 
 afterEach(cleanup);
 const options = { allow: ['proj'], redactDomains: [], now: () => NOW };
@@ -63,6 +63,19 @@ describe('auditSession, hard link', () => {
     const staged = stage();
     await deposit(staged.runtime, options);
     appendFileSync(sourceOf(staged, 'errors-a'), '{"type":"summary"}\n');
+    expect(await one(staged, 'errors-a')).toMatchObject({ result: 'changed since deposit', tier: 'skeleton', mode: 'link', changedSinceDeposit: true, possibleTampering: false });
+  });
+
+  it('calls a link edited in place at the same size with a newer mtime changed since deposit, never tampering', async () => {
+    const staged = stage();
+    await deposit(staged.runtime, options);
+    const raw = rawOf(staged, 'errors-a');
+    const before = statSync(raw);
+    writeFileSync(raw, edited(readFileSync(raw, 'utf8')));
+    // state.json is untouched; only the mtime moves, a minute on, and a link's rule is equality (a copy's is no older).
+    const later = new Date(before.mtimeMs + 60_000);
+    utimesSync(raw, later, later);
+    expect(statSync(raw).size).toBe(before.size);
     expect(await one(staged, 'errors-a')).toMatchObject({ result: 'changed since deposit', tier: 'skeleton', mode: 'link', changedSinceDeposit: true, possibleTampering: false });
   });
 
@@ -138,6 +151,18 @@ describe('auditSession, the other rows', () => {
     const result = await auditStore(staged.runtime, store.sessions, []);
     expect(result.length).toBeGreaterThan(0);
     expect(result.every((audit) => audit.result === 'not run' && audit.tier === 'skeleton' && audit.leaves === 0)).toBe(true);
+  });
+
+  it('is not run, at tier skeleton, for a Cursor session, whose composer is no raw file; its counts still bind', async () => {
+    const staged = stage();
+    const { repo, plain } = folders(staged.root);
+    const runtime = { ...staged.runtime, cursorRoot: await stageCursor(staged.root, composers(repo, plain)) };
+    await deposit(runtime, { ...options, allow: ['cursor'] });
+    const store = await loadStore(staged.storeDir);
+    const { skeletons } = await readSkeletons(staged.storeDir);
+    const audit = await auditStore(runtime, store.sessions, skeletons);
+    expect(audit).toHaveLength(3);
+    for (const entry of audit) expect(entry).toMatchObject({ result: 'not run', tier: 'skeleton', mode: null, bindings: { bind: true } });
   });
 
   it('drops to none when leaves, session.lines, and lines + badLines disagree, even with no raw file', async () => {

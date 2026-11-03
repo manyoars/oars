@@ -257,4 +257,24 @@ describe('verifySessions (one result per session)', () => {
     const results = verifySessions([lone.skeleton], [], []);
     expect(results[0]?.invariants.slice(6).map((entry) => entry.status)).toEqual(['not run', 'not run', 'not run', 'not run']);
   });
+
+  it('gives a session with a capture record and no skeleton rows 1 to 6 at not run, and its real rows 7 to 10', () => {
+    const lone = captured([at('r1', '2026-10-13T16:00:00.000Z')], 'lone');
+    const whole = captured([at('r1', '2026-10-13T16:00:00.000Z')], 'whole');
+    const results = verifySessions([whole.skeleton], [whole.session, lone.session], [...whole.tools, ...lone.tools]);
+    expect(results.map((entry) => entry.session)).toEqual(['whole', 'lone']);
+    const missing = results[1]?.invariants;
+    expect(missing?.map((entry) => entry.name)).toEqual([...INVARIANTS, ...CAPTURE_INVARIANTS]);
+    expect(missing?.slice(0, 6).every((entry) => entry.checked === 0 && entry.violations === 0 && entry.status === 'not run')).toBe(true);
+    expect(missing?.slice(6).map((entry) => entry.checked)).toEqual(verifyCaptured([lone.session], lone.tools).map((entry) => entry.checked));
+    expect(missing?.[7]).toMatchObject({ checked: 1, status: 'pass' });
+  });
+
+  it('fails row 8 for a current-version session with a null sid, so row 8 cannot fail only for a non-null one', () => {
+    const unsalted = captured([at('r1', '2026-10-13T16:00:00.000Z')], 'unsalted', null);
+    const results = verifySessions([unsalted.skeleton], [unsalted.session], unsalted.tools);
+    expect(results[0]?.invariants[7]).toMatchObject({ checked: 1, violations: 1, status: 'fail' });
+    const salted = captured([at('r1', '2026-10-13T16:00:00.000Z')], 'salted');
+    expect(verifySessions([salted.skeleton], [salted.session], salted.tools)[0]?.invariants[7]).toMatchObject({ violations: 0, status: 'pass' });
+  });
 });
