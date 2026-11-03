@@ -149,7 +149,7 @@ export interface VerifyReport {
   invariants: Array<InvariantResult & { pass: boolean }>;
   /** Steps whose key failed on three runs in a row (spec 4.4), with the first error line of the newest failure. */
   stuck: StuckStep[];
-  /** Sessions behind the current capture version whose transcript is gone from the harness and `raw/`: counted apart from `cv-behind`, never a strict failure. */
+  /** Sessions behind the current capture version whose transcript is gone from the harness and `raw/` (or, for a Cursor session, whose composer is gone from Cursor): counted apart from `cv-behind`, never a strict failure. */
   cvFrozen: number;
 }
 
@@ -163,7 +163,7 @@ export const sessionsVerify = async (deps: SessionsDeps, options: { session: str
     const store = await loadStore(storeDir);
     const mine = <T extends { session: string }>(records: readonly T[]): T[] => records.filter((record) => options.session === undefined || record.session === options.session);
     const captured = mine([...store.sessions, ...store.subagents]);
-    // A session behind the current version whose transcript is in neither the harness nor raw/ can never be captured again: counted apart, never a strict failure.
+    // A session behind the current version whose transcript is in neither the harness nor raw/ (or, for a Cursor session, whose composer is gone from Cursor) can never be captured again: counted apart, never a strict failure.
     const frozen = await frozenSessions(runtime, captured.filter((session) => Number(session.cv) >= OLDEST_READABLE_CAPTURE && Number(session.cv) < Number(CAPTURE_VERSION)));
     const results = [...verifyAll(skeletons), ...verifyCaptured(captured, mine(store.tools), frozen)];
     // Steps whose key failed on three runs in a row (spec 4.4), read before this run's own row is appended; each fails `--strict` like a violated invariant.
@@ -178,7 +178,7 @@ export const sessionsVerify = async (deps: SessionsDeps, options: { session: str
       failed,
       report,
       document: { ok: true, ...report, newerCaptures: store.newerCaptures },
-      text: [formatVerify(results, skeletons.length), ...(frozen.size > 0 ? [`${String(frozen.size)} cv-frozen sessions: behind the current capture version, but the transcript is gone from the harness and raw/, so they cannot be captured again`] : []), ...newerNotice(store), ...(unreadable > 0 ? [`FAIL  ${String(unreadable)} unreadable skeleton files (torn or corrupted); redeposit to rebuild them`] : []), ...stuckLines].join('\n'),
+      text: [formatVerify(results, skeletons.length), ...(frozen.size > 0 ? [`${String(frozen.size)} cv-frozen sessions: behind the current capture version, but the transcript is gone from the harness and raw/ (or, for a Cursor session, the composer is gone from Cursor), so they cannot be captured again`] : []), ...newerNotice(store), ...(unreadable > 0 ? [`FAIL  ${String(unreadable)} unreadable skeleton files (torn or corrupted); redeposit to rebuild them`] : []), ...stuckLines].join('\n'),
     };
     const cvBehind = results.find((result) => result.name === CAPTURE_INVARIANTS[0])?.violations ?? 0;
     // The key is the sessions checked, each at its rev and cv, and the code's ev (spec 4.2).
