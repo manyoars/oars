@@ -233,10 +233,10 @@ const HASH = /^[0-9a-f]{16}$/;
 
 /**
  * The CAPTURE 4 fields, checked over the store's capture records (t714): cv-behind sessions (a version-3 session not yet captured
- * again), a mixed `sid` (two salts in one store, so path joins hold only within each), `fileHashes` that no tool call explains, and
+ * again, unless `frozen` names it: its transcript is gone, so it is counted apart, never a violation), a mixed `sid` (two salts in one store, so path joins hold only within each), `fileHashes` that no tool call explains, and
  * `targetBase` set on, or missing from, the wrong kind of target. Skeleton invariants stay in {@link verifyAll}.
  */
-export const verifyCaptured = (sessions: readonly SessionObservation[], tools: readonly ToolObservation[]): InvariantResult[] => {
+export const verifyCaptured = (sessions: readonly SessionObservation[], tools: readonly ToolObservation[], frozen: ReadonlySet<string> = new Set<string>()): InvariantResult[] => {
   const current = sessions.filter((session) => session.cv === CAPTURE_VERSION);
   const readable = sessions.filter((session) => Number(session.cv) >= OLDEST_READABLE_CAPTURE);
   const counts = new Map<string, number>();
@@ -246,7 +246,7 @@ export const verifyCaptured = (sessions: readonly SessionObservation[], tools: r
   for (const tool of tools) if (tool.targetBase !== null && tool.target !== null) targets.set(tool.session, (targets.get(tool.session) ?? new Set<string>()).add(tool.target));
   const currentTools = tools.filter((tool) => tool.cv === CAPTURE_VERSION);
   return [
-    { name: CAPTURE_INVARIANTS[0], checked: readable.length, violations: readable.filter((session) => Number(session.cv) < Number(CAPTURE_VERSION)).length },
+    { name: CAPTURE_INVARIANTS[0], checked: readable.length, violations: readable.filter((session) => Number(session.cv) < Number(CAPTURE_VERSION) && !frozen.has(session.session)).length },
     { name: CAPTURE_INVARIANTS[1], checked: current.length, violations: current.filter((session) => session.sid !== majority).length },
     {
       name: CAPTURE_INVARIANTS[2],

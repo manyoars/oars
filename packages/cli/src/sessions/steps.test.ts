@@ -178,7 +178,7 @@ describe('the steps each command logs', () => {
     const verified = (await readSteps(staged.storeDir)).filter((entry) => entry.step === 'verify');
     expect(verified).toHaveLength(1);
     expect(verified[0]).toMatchObject({ trigger: 'manual', status: 'ok' });
-    const counts = { checked: outcome.report.invariants.length, passed: outcome.report.invariants.filter((entry) => entry.pass).length, cvBehind: 0, stuck: 0 };
+    const counts = { checked: outcome.report.invariants.length, passed: outcome.report.invariants.filter((entry) => entry.pass).length, cvBehind: 0, cvFrozen: 0, stuck: 0 };
     expect(verified[0]?.out).toEqual(counts);
     expect(verified[0]?.in).toEqual({ session: 4, subagent: 0 });
     expect(outcome.document).toMatchObject({ stuck: [] });
