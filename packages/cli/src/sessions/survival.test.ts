@@ -66,9 +66,9 @@ const staged = async (cwd: string, commits: ReadonlyArray<{ sha: string; ts?: st
   return { s, project };
 };
 
-const lines = (s: Staged): Array<{ sha: string; state: string; day: string }> =>
+const lines = (s: Staged): unknown[] =>
   existsSync(survivalFile(s.storeDir))
-    ? readFileSync(survivalFile(s.storeDir), 'utf8').trim().split('\n').map((line) => JSON.parse(line) as { sha: string; state: string; day: string })
+    ? readFileSync(survivalFile(s.storeDir), 'utf8').trim().split('\n').map((line): unknown => JSON.parse(line))
     : [];
 
 describe('recordSurvival', () => {
@@ -105,7 +105,7 @@ describe('recordSurvival', () => {
     publish(repo);
     const { s, project } = await staged(repo, [{ sha: undone }, { sha: redone }]);
     await recordSurvival(s.runtime, [project], () => NOW);
-    expect(Object.fromEntries(lines(s).map((line) => [line.sha, line.state]))).toEqual({ [undone]: 'reverted', [redone]: 'survived' });
+    expect(Object.fromEntries(await readSurvival(s.storeDir))).toEqual({ [undone]: 'reverted', [redone]: 'survived' });
   });
 
   it('reads a commit left on a branch the default branch never took as unreachable', async () => {
@@ -306,6 +306,31 @@ describe('who reads it', () => {
     const file = join(s.projectsRoot, project, 'one.jsonl');
     await runHook('stop', JSON.stringify({ transcript_path: file }), s.runtime, () => NOW);
     expect(lines(s)).toEqual([]);
+  });
+});
+
+describe('books reads it', () => {
+  afterEach(removeTestDirs);
+
+  it('over a real deposit, with the closing line last, and no closing line when there is no row', async () => {
+    const repo = makeRepo();
+    const sha = commitIn(repo, 'kept');
+    publish(repo);
+    const { s, project } = await staged(repo, [{ sha }]);
+    const h = harness();
+    h.deps.sessions = s.runtime;
+    h.deps.now = () => NOW;
+    await run(['sessions', 'deposit', '--allow', project], h.deps);
+    h.out.length = 0;
+    expect(await run(['sessions', 'books', '--by', 'pull'], h.deps)).toBe(ExitCode.OK);
+    expect(h.out.join('')).toContain('No pulls in the store.');
+    expect(h.out.join('')).not.toContain('associations');
+    h.out.length = 0;
+    expect(await run(['sessions', 'books', '--by', 'class'], h.deps)).toBe(ExitCode.OK);
+    expect(h.out.join('').trim().split('\n').at(-1)).toBe("These are associations in one operator's logs, not measured lift.");
+    h.out.length = 0;
+    expect(await run(['--json', 'sessions', 'books', '--by', 'model'], h.deps)).toBe(ExitCode.OK);
+    expect(JSON.parse(h.out.join(''))).toMatchObject({ rows: [{ commits: 1, settled: 1, survived: { count: 1, of: 1, share: null } }] });
   });
 });
 

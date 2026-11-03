@@ -54,7 +54,7 @@ const runGit: Git = (root, args, stdin) =>
       },
       (error, stdout) => {
         if (error === null) resolve(stdout);
-        else reject(error);
+        else reject(new Error(error.message));
       },
     );
     // A git that exits before reading its stdin raises EPIPE here; its exit status already reports the failure.
@@ -128,6 +128,16 @@ const dueByProject = (store: Store, allows: (project: string) => boolean, cutoff
   return due;
 };
 
+const topLevelCwd = (line: string): string | undefined => {
+  try {
+    const parsed: unknown = JSON.parse(line);
+    const cwd: unknown = typeof parsed === 'object' && parsed !== null ? Reflect.get(parsed, 'cwd') : undefined;
+    return typeof cwd === 'string' ? cwd : undefined;
+  } catch {
+    return undefined;
+  }
+};
+
 /** The transcript's first `cwd` whose slug is the project. A later `cd` moves `cwd`, and a path a transcript merely names must not choose what gets read (V8). */
 const cwdIn = async (file: string, project: string): Promise<string | undefined> => {
   const stream = createReadStream(file, { encoding: 'utf8' });
@@ -147,10 +157,8 @@ const cwdIn = async (file: string, project: string): Promise<string | undefined>
     for await (const line of reader) {
       read += 1;
       if (read > CWD_SCAN_LINES) return undefined;
-      const cwd = /"cwd":"((?:[^"\\]|\\.)*)"/.exec(line)?.[1];
-      if (cwd === undefined) continue;
-      const path = JSON.parse(`"${cwd}"`) as string;
-      if (slugOf(path) === project) return path;
+      const cwd = topLevelCwd(line);
+      if (cwd !== undefined && slugOf(cwd) === project) return cwd;
     }
     return undefined;
   } finally {
@@ -171,8 +179,8 @@ const cwdOfProject = async (runtime: SessionsRuntime, project: string, sessions:
 
 const isObservation = (value: unknown): value is SurvivalObservation => {
   if (typeof value !== 'object' || value === null) return false;
-  const { sha, state } = value as { sha?: unknown; state?: unknown };
-  return typeof sha === 'string' && STATES.some((known) => known === state);
+  const state: unknown = Reflect.get(value, 'state');
+  return typeof Reflect.get(value, 'sha') === 'string' && STATES.some((known) => known === state);
 };
 
 /** The latest state of each sha. The file only adds to what `books` shows, so a missing or unreadable one reads as nothing observed yet. */

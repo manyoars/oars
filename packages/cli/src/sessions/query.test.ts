@@ -1,6 +1,7 @@
-import type { HookCall } from './schema.js';
+import type { HookCall, PromptObservation, ToolObservation } from './schema.js';
 import { afterEach, describe, expect, it } from 'vitest';
-import { books, formatBooks, formatMeasure, formatRecall, measure, recall } from './query.js';
+import { BOOKS_MIN_PROMPTS, books, formatBooks, formatMeasure, formatRecall, measure, recall } from './query.js';
+import type { SurvivalState } from './survival.js';
 import { deposit, loadStore, type Store } from './store.js';
 import { addProject, cleanup, NOW, stage } from './test-support.js';
 
@@ -163,5 +164,94 @@ describe('recall keys an error the way deposit does (fix round 2)', () => {
     const result = recall(store, { error: 'mail user123@corp.example refused' }, NOW);
     expect(result.normalized).toBe('mail <email> refused');
     expect(result.matches).toHaveLength(1);
+  });
+});
+
+describe('books outcome columns', () => {
+  const prompt = (over: Partial<PromptObservation> & { session: string; index: number }): PromptObservation => ({
+    kind: 'prompt', v: '6', rev: 1, ts: '2026-06-01T00:00:00.000Z', wallSec: 1, head: '', cls: 'edit-verify', tools: [], shape: '', errors: 0, thinking: 0, sideTools: 0, turns: 1, model: 'm', efforts: [], skills: [],
+    usage: { input: 0, cacheWrite: 0, cacheRead: 0, output: 0, thinking: 0 },
+    recovery: [], explore: 0, act: 0, bigrams: {}, contextFingerprint: null, verify: 'passed', stopped: null, commits: 0, redo: false, ...over,
+  });
+  const tool = (over: Partial<ToolObservation> & { session: string; prompt: number }): ToolObservation => ({ kind: 'tool', cv: '6', sid: null, rev: 1, parent: over.session, agentType: null, n: 0, ts: '2026-06-01T00:00:00.000Z', tool: 'Bash', status: 'ok', target: null, targetBase: null, keys: [], durationMs: null, toolUseId: null, harnessVersion: null, side: false, ...over });
+  const storeOf = (prompts: PromptObservation[], tools: ToolObservation[] = []): Store => ({ sessions: [], prompts, errors: [], subagents: [], tools, newerCaptures: 0 });
+  const many = (count: number, over: Partial<PromptObservation>): PromptObservation[] => Array.from({ length: count }, (_, index) => prompt({ session: 's', index, ...over }));
+
+  it('gives each signal its count, its denominator, and its share', () => {
+    const list = [...many(30, { verify: 'passed' }).slice(0, 15), ...many(30, { verify: 'failed' }).slice(15), prompt({ session: 'n', index: 0, verify: 'na', stopped: 'interrupt', redo: true }), prompt({ session: 'a', index: 0, verify: undefined })];
+    const [row] = books(storeOf(list), 'model', NOW);
+    expect(row?.verifyPassed).toEqual({ count: 15, of: 30, share: 0.5 });
+    expect(row?.stopped).toEqual({ count: 1, of: 32, share: 0.031 });
+    expect(row?.redone).toEqual({ count: 1, of: 32, share: 0.031 });
+  });
+
+  it('leaves out a line that predates a signal, and a cell below the minimum has no share', () => {
+    expect(BOOKS_MIN_PROMPTS).toBe(30);
+    const [row] = books(storeOf(many(BOOKS_MIN_PROMPTS - 1, { stopped: undefined, redo: undefined })), 'model', NOW);
+    expect(row?.stopped).toEqual({ count: 0, of: 0, share: null });
+    expect(row?.redone).toEqual({ count: 0, of: 0, share: null });
+    expect(row?.verifyPassed).toEqual({ count: 29, of: 29, share: null });
+    const text = formatBooks(row === undefined ? [] : [row], 'model');
+    expect(text).toContain('too few');
+  });
+
+  it('sums commits, and settles only the shas with a known state, once each', () => {
+    const list = many(40, { commits: 1 });
+    const tools = [
+      tool({ session: 's', prompt: 0, commits: ['aaa', null] }),
+      tool({ session: 's', prompt: 1, commits: ['bbb'] }),
+      tool({ session: 's', prompt: 2, commits: ['ccc'] }),
+      tool({ session: 's', prompt: 3, commits: ['ddd'] }),
+      tool({ session: 's', prompt: 4, commits: ['aaa'] }),
+    ];
+    const survival = new Map<string, SurvivalState>([['aaa', 'survived'], ['bbb', 'reverted'], ['ccc', 'unreachable'], ['ddd', 'unknown']]);
+    const [row] = books(storeOf(list, tools), 'model', NOW, undefined, survival);
+    expect(row?.commits).toBe(40);
+    expect(row?.settled).toBe(3);
+    expect(row?.survived).toEqual({ count: 1, of: 3, share: null });
+  });
+
+  it('reads a resumed session repeated call once, and a side call not at all, as commits does', () => {
+    const list = many(2, {});
+    const tools = [
+      tool({ session: 's', prompt: 0, toolUseId: 't', commits: ['aaa'] }),
+      tool({ session: 's', prompt: 1, toolUseId: 't', commits: ['bbb'] }),
+      tool({ session: 's', prompt: 1, side: true, commits: ['ccc'] }),
+      tool({ session: 'gone', prompt: 0, commits: ['ddd'] }),
+    ];
+    const survival = new Map<string, SurvivalState>([['aaa', 'survived'], ['bbb', 'survived'], ['ccc', 'survived'], ['ddd', 'survived']]);
+    expect(books(storeOf(list, tools), 'model', NOW, undefined, survival)[0]?.settled).toBe(1);
+  });
+
+  it('--by pull gives one row per ecosystem and name, and a prompt once in each row it pulled', () => {
+    const list = [prompt({ session: 's', index: 0 }), prompt({ session: 's', index: 1 }), prompt({ session: 's', index: 2 })];
+    const foo = { ecosystem: 'npm', name: 'foo', version: null } as const;
+    const server = { ecosystem: 'mcp', name: 'github', version: null } as const;
+    const tools = [
+      tool({ session: 's', prompt: 0, pulls: [foo, foo] }),
+      tool({ session: 's', prompt: 0, pulls: [server] }),
+      tool({ session: 's', prompt: 1, pulls: [foo], commits: ['aaa'] }),
+      tool({ session: 'other', prompt: 0, pulls: [{ ecosystem: 'npm', name: 'subagent-only', version: null }] }),
+    ];
+    const rows = books(storeOf(list, tools), 'pull', NOW);
+    expect(rows.map((row) => [row.key, row.prompts])).toEqual([['npm:foo', 2], ['mcp:github', 1]]);
+    expect(formatBooks(rows, 'pull').split('\n')[0]).toMatch(/^pull/);
+    expect(formatBooks([], 'pull')).toBe('No pulls in the store.');
+  });
+
+  it('keeps a long key from shifting the columns', () => {
+    const name = 'a-rather-long-package-name-indeed';
+    const rows = books(storeOf([prompt({ session: 's', index: 0, model: name }), prompt({ session: 's', index: 1, model: 'm' })]), 'model', NOW);
+    const [header, first, second] = formatBooks(rows, 'model').split('\n');
+    expect(first?.length).toBe(header?.length);
+    expect(second?.length).toBe(header?.length);
+  });
+
+  it('prints the columns, with a share where the cell has enough prompts', () => {
+    const [row] = books(storeOf(many(40, { verify: 'passed', stopped: 'rejected', redo: true, commits: 2 })), 'model', NOW);
+    const text = formatBooks(row === undefined ? [] : [row], 'model');
+    for (const column of ['passed', 'stop', 'redo', 'commits', 'settled', 'survived']) expect(text.split('\n')[0]).toContain(column);
+    expect(text.split('\n')[1]).toContain('100%');
+    expect(text.split('\n')[1]).toContain('80');
   });
 });
