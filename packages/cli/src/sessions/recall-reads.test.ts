@@ -265,7 +265,7 @@ describe('how far a pull sits from its evidence', () => {
   it('reads the asker from the stored session it names, dated today', () => {
     const recall = ask(held(), 'live');
     expect(recall.frame).toEqual({ ...stored, day: '2026-11-05' });
-    expect(recall.evidence[0]?.delta).toMatchObject({ ageDays: 3, harness: 'same', model: 'same', harnessVersions: -1 });
+    expect(recall.evidence[0]?.delta).toMatchObject({ ageDays: 3, harness: 'same', model: 'same', harnessVersions: 0 });
   });
 
   it('prefers the frame it is handed', () => {
