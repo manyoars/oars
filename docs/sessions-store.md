@@ -195,8 +195,8 @@ local only and is never read by `derive`.
 
 One rule decides which sessions may enter the pool (A38): a session is excluded if any line of its main or
 subagent transcript holds a listed term, scanned locally before anything is deposited. A session with no main transcript to scan
-is excluded, and so is every session when the term file is missing or empty. A folder that cannot be read leaves its session
-excluded as unreadable, never clean. The scan reads both the harness's `projects/`
+is excluded, and so is every session when the term file is missing or empty. A main transcript or subagents folder that cannot be read leaves its session
+excluded as unreadable, never clean; a project folder that cannot be listed stops the command, names the folder by ordinal only, and writes no list. The scan reads both the harness's `projects/`
 folder and `raw/`, because either can be the only copy left.
 
 The term list is a local file, one term per line, matched without regard to case, never in this repository. The

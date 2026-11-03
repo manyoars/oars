@@ -1,32 +1,52 @@
 // A transcript or folder that cannot be read is never read as clean (t763 fix round): the session is excluded as `unreadable`.
 import type * as fs from 'node:fs';
 import type * as fsp from 'node:fs/promises';
-import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { join, sep } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { run } from '../cli.js';
+import { CliError, ExitCode } from '../errors.js';
+import { harness } from '../test-support.js';
 
-// A real unreadable file or folder (EACCES, EBUSY) cannot be made portably, so the reads fail for named paths (the stream opens a path that is not there).
+// The streams the scan opens, so a test can see that a file which returned early on a hit was closed.
+const opened = vi.hoisted((): { destroyed: boolean }[] => []);
+
+// A real unreadable file or folder (EACCES, EBUSY) cannot be made portably, so the reads fail for named paths (the stream opens a path that is not there, and a stat or listing is refused).
 vi.mock('node:fs/promises', async (importOriginal) => {
   const actual = await importOriginal<typeof fsp>();
   const readdir = vi.fn(actual.readdir);
   readdir.mockImplementation((dir, options) =>
-    typeof dir === 'string' && dir.endsWith(join('locked', 'subagents')) ? Promise.reject(Object.assign(new Error('EACCES: permission denied'), { code: 'EACCES' })) : actual.readdir(dir, options),
+    typeof dir === 'string' && (dir.endsWith(join('locked', 'subagents')) || dir.endsWith('lockedproj'))
+      ? Promise.reject(Object.assign(new Error(`EACCES: permission denied, scandir '${dir}'`), { code: 'EACCES' }))
+      : actual.readdir(dir, options),
   );
-  return { ...actual, readdir };
+  // A main file that cannot be examined (EACCES), in the harness's folder only; the raw copy of it is fine.
+  const stat = vi.fn(actual.stat);
+  stat.mockImplementation((path, options) =>
+    typeof path === 'string' && path.endsWith('nostat.jsonl') && !path.includes(`${sep}raw${sep}`)
+      ? Promise.reject(Object.assign(new Error(`EACCES: permission denied, stat '${path}'`), { code: 'EACCES' }))
+      : actual.stat(path, options),
+  );
+  return { ...actual, readdir, stat };
 });
 vi.mock('node:fs', async (importOriginal) => {
   const actual = await importOriginal<typeof fs>();
   const createReadStream = vi.fn(actual.createReadStream);
-  createReadStream.mockImplementation((path, options) =>
-    typeof path === 'string' && path.endsWith('busy.jsonl') ? actual.createReadStream(join(path, 'gone'), options) : actual.createReadStream(path, options),
-  );
+  createReadStream.mockImplementation((path, options) => {
+    const stream = typeof path === 'string' && path.endsWith('busy.jsonl') ? actual.createReadStream(join(path, 'gone'), options) : actual.createReadStream(path, options);
+    opened.push(stream);
+    return stream;
+  });
   return { ...actual, createReadStream };
 });
 
 const { checkSession, scanStore } = await import('./exclusion.js');
 const { cleanup, stage } = await import('./test-support.js');
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  opened.length = 0;
+});
 
 const TERM = 'zorblax';
 const CLEAN = JSON.stringify({ type: 'user', message: { content: 'fix the build' } });
@@ -53,7 +73,7 @@ describe('an unreadable part of a session', () => {
     expect(await checkSession(t.staged.runtime, t.termsFile, 'p', 'locked')).toEqual({ excluded: true, reason: 'unreadable', hits: [] });
   });
 
-  it('excludes a session with a transcript that fails mid-read, and a hit in another file still gives term', async () => {
+  it('excludes a session with a transcript that fails to open, and a hit in another file still gives term', async () => {
     const t = setup();
     t.put('busy.jsonl', CLEAN);
     expect((await checkSession(t.staged.runtime, t.termsFile, 'p', 'busy')).reason).toBe('unreadable');
@@ -70,5 +90,47 @@ describe('an unreadable part of a session', () => {
     mkdirSync(join(t.staged.projectsRoot, 'p', 'locked', 'subagents'), { recursive: true });
     const { counts } = await scanStore(t.staged.runtime, t.termsFile);
     expect(counts.reasons).toMatchObject({ unreadable: 2, term: 0 });
+  });
+
+  it('excludes a session whose harness main cannot be examined, though the raw copy is clean', async () => {
+    const t = setup();
+    t.put('nostat.jsonl', CLEAN);
+    const raw = join(t.staged.storeDir, 'raw', 'p', 'nostat.jsonl');
+    mkdirSync(join(raw, '..'), { recursive: true });
+    writeFileSync(raw, `${CLEAN}
+`);
+    expect(await checkSession(t.staged.runtime, t.termsFile, 'p', 'nostat')).toEqual({ excluded: true, reason: 'unreadable', hits: [] });
+  });
+
+  it('closes the file it stopped reading at a hit', async () => {
+    const t = setup();
+    t.put('early.jsonl', `${DIRTY}
+${CLEAN}`);
+    expect((await checkSession(t.staged.runtime, t.termsFile, 'p', 'early')).reason).toBe('term');
+    expect(opened.length).toBeGreaterThan(0);
+    for (const stream of opened) expect(stream.destroyed).toBe(true);
+  });
+});
+
+describe('a project folder that cannot be listed', () => {
+  it('aborts the scan with the folder ordinal only, writes no list, and prints no folder name', async () => {
+    const t = setup();
+    t.put('a.jsonl', CLEAN);
+    mkdirSync(join(t.staged.projectsRoot, 'lockedproj'), { recursive: true });
+    const failure = await scanStore(t.staged.runtime, t.termsFile).then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+    expect(failure).toBeInstanceOf(CliError);
+    expect((failure as CliError).message).toMatch(/folder 1 .*no list was written/);
+    expect((failure as CliError).message).not.toContain('lockedproj');
+    const h = harness();
+    h.deps.sessions = t.staged.runtime;
+    h.deps.env = { ...h.deps.env, OARS_EXCLUSION_TERMS: t.termsFile };
+    const list = join(t.staged.root, 'out', 'never.jsonl');
+    expect(await run(['sessions', 'exclusions', '--out', list], h.deps)).toBe(ExitCode.INVALID);
+    expect(h.err.join('')).not.toContain('lockedproj');
+    expect(h.err.join('')).toContain('no list was written');
+    expect(existsSync(list)).toBe(false);
   });
 });
