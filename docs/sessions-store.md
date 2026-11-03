@@ -9,7 +9,7 @@ Under `<config>/oars/sessions/` (`%APPDATA%` on Windows, `$XDG_CONFIG_HOME` or `
 
 | Path | What it holds |
 |------|---------------|
-| `observations.jsonl` | The append-only log of captured records. A changed transcript is deposited again under a higher `rev`; readers keep only the highest `rev` of each session. |
+| `observations.jsonl` | The log of captured records, appended to and compacted (below). A changed transcript is deposited again under a higher `rev`; readers keep only the highest `rev` of each session. |
 | `derived.json` | The derived records, rewritten from the log alone at the end of every deposit. |
 | `hook-index.json` | The recurring error signatures per project and overall, read by the hooks. |
 | `skeletons/<session>.json` | One per transcript: ids, timestamps, tool linkage, token counts, a SHA-256 for every content field, and a Merkle root over the raw lines. Hashes only, never content. `verify` checks these. |
@@ -18,6 +18,20 @@ Under `<config>/oars/sessions/` (`%APPDATA%` on Windows, `$XDG_CONFIG_HOME` or `
 | `pipeline-runs.jsonl` | The step log: one row per run of a pipeline step (deposit, derive, index, verify, recall), appended when the step ends. See "The step log". |
 | `raw/<project>/<path>` | oars' own archive of every deposited transcript (below). |
 | `commit-survival.jsonl` | What became of each commit older than `SURVIVAL_DAYS`, appended on a change of state. See "Commit survival". |
+
+## The log's growth and compaction
+
+Every append to `observations.jsonl`, from a hook or a deposit, runs under `store.lock`. A changed transcript adds a full new `rev` of that session, and a
+`CAPTURE_VERSION` bump re-captures every transcript, so during that deposit the log holds about two copies of the store. The size is not limited by a string: every reader
+streams the log line by line, so a log past Node's 536,870,888-character string limit still loads.
+
+At the end of a whole-store deposit, after `state.json` is written and before the derived records are rebuilt, `compactLog` (`store.ts`) drops every line a higher `rev` of its session
+replaces, so the log settles back to the size of the live records. A hook deposit never compacts.
+
+- **What stays.** Only a superseded line goes. A line this version cannot read stays, since a later oars may read it, and a kept line is written back byte for byte. What `loadStore` returns does not change.
+- **What triggers it.** What the log holds, not what the run captured, so a run that died after its re-capture is compacted by the next deposit, even one with nothing left to capture. A log with nothing superseded is read once and not rewritten.
+- **How it stays safe.** The rewrite goes to `observations.jsonl.<pid>.tmp`, is synced, and replaces the log by `rename`, all under the store lock, which its holder keeps refreshed so a long deposit is not judged stale. A crash before the rename leaves the old log whole and a temp file no reader opens, which the next compaction removes.
+- **When it gives up.** Compaction leaves the log as it was and writes one line to stderr, and the next deposit tries again, if the log's size changed during the rewrite (a waiter broke the lock) or if Windows keeps refusing the rename for 30 seconds because a reader holds the log open. A failed compaction does not fail the deposit: the records are safe and an uncompacted log still loads.
 
 ## Two versions
 
@@ -276,7 +290,7 @@ One store can hold several repositories, and neither the G1 reading nor the Sess
   into repositories by slug: a worktree folds into its repository, and a folder that extends another stored folder joins the shortest.
   Three consequences:
   - Sibling folders whose slugs share a prefix (`app` and `app-two`) share one window.
-  - A nested repository (`tradeaor/oars`) ranks by its parent's window while `measure --repo tradeaor/oars` counts only itself, so the
+  - A nested repository (`parent/oars`) ranks by its parent's window while `measure --repo parent/oars` counts only itself, so the
     two readings differ.
   - A stored parent folder is a prefix of its children, so one allow-listed session from the parent (the home folder, or the folder
     holding several checkouts) folds those repositories into one window and the isolation reverts to the whole store. Keep such a

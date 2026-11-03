@@ -18,7 +18,7 @@ const walk = (value: unknown, visit: (key: string, child: unknown) => void): voi
   }
 };
 
-// The committed spec is generated from an aor-platform checkout that CI does not have, so these check it against itself:
+// The committed spec is generated from a platform checkout that CI does not have, so these check it against itself:
 // a hand edit, or a list change without `just openapi-refresh`, shows here.
 describe('openapi/public.json', () => {
   const spec = read('public.json');
