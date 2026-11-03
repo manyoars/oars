@@ -173,14 +173,21 @@ export const verifySkeleton = (skeleton: Skeleton, delegated: readonly SkeletonL
 /** A subagent transcript is stored as `<parent>~...~agent-<id>`; a main session's id holds no `~`. */
 const mainSessionOf = (session: string): string => session.split('~')[0] ?? session;
 
-/** Sums each invariant over many skeletons, each main session's cost-state checked with its subagent transcripts' lines. */
-export const verifyAll = (skeletons: readonly Skeleton[]): InvariantResult[] => {
-  const totals: InvariantResult[] = INVARIANTS.map((name) => ({ name, checked: 0, violations: 0 }));
+/** The subagent transcripts' lines, keyed by the main session they belong to. */
+const delegatedLines = (skeletons: readonly Skeleton[]): Map<string, SkeletonLine[]> => {
   const delegated = new Map<string, SkeletonLine[]>();
   for (const skeleton of skeletons) {
     const parent = mainSessionOf(skeleton.session);
     if (parent !== skeleton.session) delegated.set(parent, (delegated.get(parent) ?? []).concat(skeleton.lines));
   }
+  return delegated;
+};
+
+/** Sums each invariant over many skeletons, each main session's cost-state checked with its subagent transcripts' lines. */
+export const verifyAll = (skeletons: readonly Skeleton[], delegatedFrom: readonly Skeleton[] = skeletons): InvariantResult[] => {
+  const totals: InvariantResult[] = INVARIANTS.map((name) => ({ name, checked: 0, violations: 0 }));
+  // `--session` filters `skeletons` but row 6 still needs the subagent transcripts' lines, so they come from `delegatedFrom`.
+  const delegated = delegatedLines(delegatedFrom);
   for (const skeleton of skeletons) {
     for (const [index, result] of verifySkeleton(skeleton, delegated.get(skeleton.session)).entries()) {
       const total = totals[index];
@@ -261,4 +268,51 @@ export const verifyCaptured = (sessions: readonly SessionObservation[], tools: r
       violations: currentTools.filter((tool) => (tool.targetBase !== null) !== (tool.target !== null && HASH.test(tool.target))).length,
     },
   ];
+};
+
+/** `not run` when a row had nothing to check (a session behind the current capture version for rows 8 to 10, a transcript with no stamped lines for row 3, and so on). */
+export type RowStatus = 'pass' | 'fail' | 'not run';
+
+/** One session's result: the ten rows of {@link INVARIANTS} then {@link CAPTURE_INVARIANTS}, each with its status (t743; spec 5.4 item 5). */
+export interface SessionVerification {
+  session: string;
+  invariants: Array<InvariantResult & { status: RowStatus }>;
+}
+
+const statusOf = (result: InvariantResult): RowStatus => (result.violations > 0 ? 'fail' : result.checked === 0 ? 'not run' : 'pass');
+
+/**
+ * A result for every session with a skeleton or a capture record: {@link verifySkeleton} with the session's subagent transcripts' lines as `delegated`,
+ * then {@link verifyCaptured} over the session's own capture records. A session with no skeleton gets rows 1 to 6 at `checked: 0` (`not run`) and its real
+ * rows 7 to 10. Row 8 (one `sid`) is read within the one session, so it cannot fail for a session with a non-null `sid`; a current-version session with a
+ * null `sid` fails it. The store-wide row stays in `verifyCaptured` over all sessions.
+ */
+export const verifySessions = (skeletons: readonly Skeleton[], sessions: readonly SessionObservation[], tools: readonly ToolObservation[], frozen: ReadonlySet<string> = new Set<string>()): SessionVerification[] => {
+  const delegated = delegatedLines(skeletons);
+  const byId = <T extends { session: string }>(records: readonly T[]): Map<string, T[]> => {
+    const grouped = new Map<string, T[]>();
+    for (const record of records) grouped.set(record.session, (grouped.get(record.session) ?? []).concat(record));
+    return grouped;
+  };
+  const skeletonOf = new Map(skeletons.map((skeleton) => [skeleton.session, skeleton]));
+  const ownSessions = byId(sessions);
+  const ownTools = byId(tools);
+  const ids = [...new Set([...skeletons.map((skeleton) => skeleton.session), ...sessions.map((session) => session.session)])];
+  return ids.map((id) => {
+    const skeleton = skeletonOf.get(id);
+    const skeletonRows = skeleton === undefined ? INVARIANTS.map((name): InvariantResult => ({ name, checked: 0, violations: 0 })) : verifySkeleton(skeleton, delegated.get(id));
+    const results = [...skeletonRows, ...verifyCaptured(ownSessions.get(id) ?? [], ownTools.get(id) ?? [], frozen)];
+    return { session: id, invariants: results.map((result) => ({ ...result, status: statusOf(result) })) };
+  });
+};
+
+/** Per-session lines the default text prints; the JSON lists them all. */
+export const SESSION_LINE_CAP = 20;
+
+/** One line per session with a failing row, naming the rows, capped at {@link SESSION_LINE_CAP} with a count of the rest; empty when none fails. Ids and row names only. */
+export const formatSessionResults = (results: readonly SessionVerification[]): string => {
+  const lines = results
+    .filter((entry) => entry.invariants.some((row) => row.status === 'fail'))
+    .map((entry) => `      ${entry.session}: FAIL ${entry.invariants.filter((row) => row.status === 'fail').map((row) => row.name).join('; ')}`);
+  return [...lines.slice(0, SESSION_LINE_CAP), ...(lines.length > SESSION_LINE_CAP ? [`      and ${String(lines.length - SESSION_LINE_CAP)} more; --json lists all`] : [])].join('\n');
 };

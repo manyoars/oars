@@ -473,3 +473,105 @@ describe('the version-3 capture records (Item 1, on errors-a.jsonl)', () => {
     expect(capture.skeleton.v).toBe(CAPTURE_VERSION);
   });
 });
+
+describe('one tool call is one tool record (t762)', () => {
+  const user = (text: string, cwd: string): string => JSON.stringify({ type: 'user', isSidechain: false, cwd, timestamp: '2026-06-01T00:00:00.000Z', message: { role: 'user', content: text } });
+  const call = (id: string, name: string, input: object, cwd: string): string =>
+    JSON.stringify({ type: 'assistant', isSidechain: false, cwd, requestId: `r-${id}`, timestamp: '2026-06-01T00:00:01.000Z', message: { role: 'assistant', model: 'm', content: [{ type: 'tool_use', id, name, input }] } });
+  const result = (id: string, error = false): string =>
+    JSON.stringify({ type: 'user', isSidechain: false, timestamp: '2026-06-01T00:00:02.000Z', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: id, is_error: error, content: error ? 'boom' : 'fine' }] } });
+  const captureOf = (lines: string[]) => captureSession({ text: lines.join('\n'), session: 's', project: 'proj', rev: 1, at: '', bytes: 0, redact, salt: 'salt' });
+
+  // A resumed session replays the earlier transcript: the same assistant and result lines come again, here from another directory.
+  const resumed = captureOf([
+    user('first', '/work/app'),
+    call('t1', 'Read', { file_path: 'src/a.ts' }, '/work/app'),
+    result('t1'),
+    call('t2', 'Bash', { command: 'npm test' }, '/work/app'),
+    result('t2', true),
+    user('resumed', '/work/app/sub'),
+    call('t1', 'Read', { file_path: 'src/a.ts' }, '/work/app/sub'),
+    result('t1'),
+    call('t2', 'Bash', { command: 'npm test' }, '/work/app/sub'),
+    result('t2', true),
+  ]);
+
+  it('writes the replayed call once, with its status, and not again with status none', () => {
+    expect(resumed.tools.map((tool) => [tool.n, tool.toolUseId, tool.tool, tool.status])).toEqual([[0, 't1', 'Read', 'ok'], [1, 't2', 'Bash', 'error']]);
+    expect(resumed.tools.map((tool) => tool.prompt)).toEqual([0, 0]);
+  });
+
+  it('counts the replayed call once in the session record, and every file hash is the target of a tool record', () => {
+    expect(resumed.session.tools).toEqual({ Bash: 1, Read: 1 });
+    expect(resumed.session.bashCmds).toBe(1);
+    const targets = new Set(resumed.tools.map((tool) => tool.target));
+    expect(resumed.session.fileHashes.length).toBeGreaterThan(0);
+    for (const hash of resumed.session.fileHashes) expect(targets.has(hash)).toBe(true);
+  });
+
+  it('keeps the replayed failure as an error line, and the skeleton of every line', () => {
+    expect(resumed.errorLines.map((line) => line.toolUseId)).toEqual(['t2', 't2']);
+    expect(resumed.skeleton.lines.flatMap((line) => line.tools.map((tool) => tool.id))).toEqual(['t1', 't2', 't1', 't2']);
+  });
+
+  it('still writes a call that has no result yet, and a call with no id once per occurrence', () => {
+    const pending = captureOf([user('go', '/work/app'), call('t1', 'Grep', { pattern: 'x' }, '/work/app')]);
+    expect(pending.tools.map((tool) => [tool.toolUseId, tool.status])).toEqual([['t1', 'none']]);
+    const anonymous = JSON.stringify({ type: 'assistant', isSidechain: false, message: { role: 'assistant', model: 'm', content: [{ type: 'tool_use', name: 'Grep', input: {} }] } });
+    expect(captureOf([user('go', '/work/app'), anonymous, anonymous]).tools.map((tool) => [tool.toolUseId, tool.status])).toEqual([[null, 'none'], [null, 'none']]);
+  });
+});
+
+describe('an api-request-blob line is a copy of the request, not a conversation line (t762)', () => {
+  // Claude Code writes the request body it sent: an assistant message with tool_use, thinking, and text blocks and a user message with tool_result blocks,
+  // no cwd, uuid, or timestamp. 55,710 of 55,801 tool_use blocks on those lines repeat a call a real assistant line already holds.
+  const user = JSON.stringify({ type: 'user', isSidechain: false, cwd: '/work/app', timestamp: '2026-06-01T00:00:00.000Z', message: { role: 'user', content: 'go' } });
+  const call = JSON.stringify({ type: 'assistant', isSidechain: false, cwd: '/work/app', requestId: 'r1', timestamp: '2026-06-01T00:00:01.000Z', message: { role: 'assistant', model: 'm', content: [{ type: 'thinking', thinking: 'x' }, { type: 'tool_use', id: 't1', name: 'Read', input: { file_path: 'src/a.ts' } }, { type: 'text', text: 'TLDR: done' }] } });
+  const result = JSON.stringify({ type: 'user', isSidechain: false, timestamp: '2026-06-01T00:00:02.000Z', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 't1', is_error: true, content: 'boom' }] } });
+  const blob = (message: object): string => JSON.stringify({ type: 'api-request-blob', sessionId: 's', hash: 'h', message });
+  const copies = [
+    blob({ role: 'assistant', content: [{ type: 'thinking', thinking: 'x' }, { type: 'tool_use', id: 't1', name: 'Read', input: { file_path: 'src/a.ts' } }, { type: 'text', text: 'TLDR: done' }] }),
+    blob({ role: 'user', content: [{ type: 'tool_result', tool_use_id: 't1', is_error: true, content: 'boom' }] }),
+  ];
+  const captureOf = (lines: string[]) => captureSession({ text: lines.join('\n'), session: 's', project: 'proj', rev: 1, at: '', bytes: 0, redact, salt: 'salt' });
+  const plain = captureOf([user, call, result]);
+
+  it('adds nothing to the capture records, wherever it sits among the real lines', () => {
+    for (const lines of [[user, call, result, ...copies], [user, ...copies, call, result], [user, call, ...copies, result]]) {
+      const withBlob = captureOf(lines);
+      expect(withBlob.tools).toEqual(plain.tools);
+      expect(withBlob.errorLines).toEqual(plain.errorLines);
+      expect(withBlob.prompts).toEqual(plain.prompts);
+      expect({ ...withBlob.session, lines: 0 }).toEqual({ ...plain.session, lines: 0 });
+    }
+    expect(plain.tools.map((tool) => [tool.toolUseId, tool.status, tool.targetBase])).toEqual([['t1', 'error', 'cwd']]);
+    expect(plain.prompts[0]?.thinking).toBe(1);
+    expect(plain.session.tldrs).toEqual(['done']);
+  });
+
+  it('keeps the repository-based path hash of the real line when the blob copy comes first (the pairs t752 saw differ by base)', () => {
+    const absolute = '/work/app/src/a.ts';
+    const real = JSON.stringify({ type: 'assistant', isSidechain: false, cwd: '/work/app', timestamp: '2026-06-01T00:00:01.000Z', message: { role: 'assistant', model: 'm', content: [{ type: 'tool_use', id: 't9', name: 'Read', input: { file_path: absolute } }] } });
+    const copy = blob({ role: 'assistant', content: [{ type: 'tool_use', id: 't9', name: 'Read', input: { file_path: absolute } }] });
+    const withRoot = (lines: string[]) => captureSession({ text: lines.join('\n'), session: 's', project: 'proj', rev: 1, at: '', bytes: 0, redact, salt: 'salt', repoRoot: () => '/work/app' });
+    for (const lines of [[user, real, copy], [user, copy, real]]) {
+      const captured = withRoot(lines);
+      expect(captured.tools.map((tool) => [tool.toolUseId, tool.targetBase])).toEqual([['t9', 'repo']]);
+    }
+    expect(withRoot([user, real, copy]).tools[0]?.target).toBe(withRoot([user, real]).tools[0]?.target);
+  });
+
+  it('writes no row for a tool_use id only a blob line holds: that call is in another transcript (a subagent), which is captured on its own', () => {
+    const earlier = blob({ role: 'assistant', content: [{ type: 'tool_use', id: 'from-a-subagent', name: 'Bash', input: { command: 'git status' } }] });
+    const captured = captureOf([user, earlier, call, result]);
+    expect(captured.tools.map((tool) => tool.toolUseId)).toEqual(['t1']);
+    expect(captured.session.tools).toEqual({ Read: 1 });
+    expect(captured.session.bashCmds).toBe(0);
+  });
+
+  it('is still a line of the skeleton, so the counts and the merkle root bind', () => {
+    const withBlob = captureOf([user, call, result, ...copies]);
+    expect(withBlob.skeleton.lines).toHaveLength(5);
+    expect(withBlob.skeleton.leaves).toBe(5);
+  });
+});

@@ -1,10 +1,14 @@
 // The `oars sessions` command group's bodies: each returns the `--json` document and the text a human sees.
-import { readFile } from 'node:fs/promises';
+import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
+import { dirname, join } from 'node:path';
 import type { Outcome } from '../cli.js';
 import { parseAllowList } from './allow.js';
 import { SOURCES, sourceLabel } from './sources.js';
 import { CliError, ExitCode } from '../errors.js';
-import { books, formatBooks, formatMeasure, formatRecall, measure, recall, type BooksBy, type RecallQuery } from './query.js';
+import { EVALUATOR_MODEL, fillArms, sidecarSaver } from './gold-arms.js';
+import { armsPath, coverageLines, formatScore, isGoldDocument, parseGold, renderGold, sampleGold, scoreGold, type GoldDocument } from './gold.js';
+import { makeRedactor } from './redact.js';
+import { books, BOOKS_CAVEAT, formatBooks, formatMeasure, formatRecall, measure, recall, type BooksBy, type RecallQuery } from './query.js';
 import { readHookCalls } from './hook-calls.js';
 import { buildIndex, contextBlock, inRepository, readIndex, type ContextOptions } from './hook-index.js';
 import { hookStatus, installHooks, scheduleStatus, setSchedule, settingsPath, uninstallHooks, type InstallRuntime, type Scope } from './install.js';
@@ -12,7 +16,10 @@ import { serve } from './mcp.js';
 import { CAPTURE_VERSION, OLDEST_READABLE_CAPTURE, type StepRow } from './schema.js';
 import { deposit, frozenSessions, loadStore, readCalls, readRedactDomains, readSkeletons, slugOf, type SessionsRuntime, type Store } from './store.js';
 import { formatStepCounters, inputKey, newContext, readSteps, stampKey, runDeposit, runStep, stepCounters, stuckSteps, type StuckStep } from './steps.js';
-import { CAPTURE_INVARIANTS, formatVerify, verifyAll, verifyCaptured, type InvariantResult } from './verify.js';
+import { formatSelfBaseline, selfBaseline as selfBaselineOf, type SelfBaselineResult } from './baseline.js';
+import { auditCounts, auditStore, formatAudit, type SessionAudit, type T0Counts } from './audit.js';
+import { readSurvival, recordSurvival, SURVIVAL_DAYS } from './survival.js';
+import { CAPTURE_INVARIANTS, formatSessionResults, formatVerify, verifyAll, verifyCaptured, verifySessions, type InvariantResult, type SessionVerification } from './verify.js';
 
 export interface SessionsDeps {
   sessions: SessionsRuntime | undefined;
@@ -42,6 +49,7 @@ export const sessionsDeposit = async (deps: SessionsDeps, options: { allow: stri
     const done = await deposit(runtime, { allow, redactDomains: options.redactDomains, now: deps.now }, trace);
     return { value: done, in: { transcript: done.sessions + done.subagents + done.unchanged } };
   });
+  const survival = await recordSurvival(runtime, allow, deps.now);
   const lines = [
     `Deposited ${String(result.sessions)} sessions and ${String(result.subagents)} subagent transcripts (${String(result.lines)} lines, ${String(result.badLines)} unparseable) as ${String(result.observations)} observations; ${String(result.unchanged)} files unchanged.`,
     `Read ${String(result.folders.length)} folders; skipped ${String(result.skippedFolders)} not on the allowlist.`,
@@ -51,8 +59,11 @@ export const sessionsDeposit = async (deps: SessionsDeps, options: { allow: stri
       ...(counts.rejected === 0 ? [] : [`Skipped ${String(counts.rejected)} ${sourceLabel(name, table)} sessions whose id is not a safe file name.`]),
     ]),
     ...(result.missing.length === 0 ? [] : [`No project folder matched: ${result.missing.join(', ')}.`]),
+    survival === null
+      ? 'Commit survival not read this run.'
+      : `Commits older than ${String(SURVIVAL_DAYS)} days: ${String(survival.survived)} survived, ${String(survival.reverted)} reverted, ${String(survival.unreachable)} unreachable, ${String(survival.unknown)} unknown.`,
   ];
-  return { document: { ok: true, ...result }, text: lines.join('\n') };
+  return { document: { ok: true, ...result, survival }, text: lines.join('\n') };
 };
 
 export const sessionsRecall = async (deps: SessionsDeps, query: RecallQuery): Promise<Outcome> => {
@@ -100,9 +111,9 @@ export const sessionsMcp = async (deps: SessionsDeps): Promise<void> => {
 const newerNotice = (store: Store): string[] => (store.newerCaptures > 0 ? [`captured by a newer oars; upgrade oars (${String(store.newerCaptures)} sessions)`] : []);
 
 /**
- * The store restricted to one repository (the test `measure --repo` uses). `books` reads its rows from `prompts` alone, and looks a
- * subagent up by the kept prompt that spawned it, so the kept sessions and prompts are enough; the kept subagents only keep the
- * newer-capture count to this repository.
+ * The store restricted to one repository (the test `measure --repo` uses). `books` reads its rows from `prompts`, and looks up a
+ * subagent, a sha, or a pull by the kept prompt it belongs to, so the kept sessions and prompts are enough; the kept subagents only keep
+ * the newer-capture count to this repository.
  */
 const inRepositoryStore = (store: Store, repo: string): Store => {
   const sessions = store.sessions.filter((session) => inRepository(session.project, repo));
@@ -120,15 +131,19 @@ const inRepositoryStore = (store: Store, repo: string): Store => {
 };
 
 export const sessionsBooks = async (deps: SessionsDeps, options: { by: BooksBy; sinceDays: number | undefined; repo?: string }): Promise<Outcome> => {
-  const loaded = await loadStore(runtimeOf(deps).storeDir);
+  const { storeDir } = runtimeOf(deps);
+  const loaded = await loadStore(storeDir);
   const store = options.repo === undefined ? loaded : inRepositoryStore(loaded, options.repo);
-  const rows = books(store, options.by, deps.now(), options.sinceDays);
-  // A mistyped root over a populated store must not read as an empty store.
+  const rows = books(store, options.by, deps.now(), options.sinceDays, await readSurvival(storeDir));
+  // A mistyped root, or a --since window nothing falls in, over a populated store must not read as an empty store.
+  const emptyWindow = rows.length === 0 && options.sinceDays !== undefined && store.prompts.length > 0;
   const table =
-    rows.length === 0 && options.repo !== undefined
+    store.prompts.length === 0 && options.repo !== undefined
       ? `No prompts for ${options.repo} in the store (${String(loaded.prompts.length)} prompts across all repositories).`
-      : formatBooks(rows, options.by);
-  return { document: { ok: true, by: options.by, rows, newerCaptures: store.newerCaptures }, text: [table, ...newerNotice(store)].join('\n') };
+      : emptyWindow
+        ? `No ${options.by === 'pull' ? 'pulls' : 'prompts'} in the --since window.`
+        : formatBooks(rows, options.by);
+  return { document: { ok: true, by: options.by, rows, newerCaptures: store.newerCaptures }, text: [table, ...newerNotice(store), ...(rows.length === 0 ? [] : [BOOKS_CAVEAT])].join('\n') };
 };
 
 export const sessionsMeasure = async (deps: SessionsDeps, options: { last: number; since: string | undefined; repo?: string }): Promise<Outcome> => {
@@ -155,34 +170,51 @@ export interface VerifyReport {
   stuck: StuckStep[];
   /** Sessions behind the current capture version whose transcript is gone from the harness and `raw/` (or, for a Cursor session, whose composer is gone from Cursor): counted apart from `cv-behind`, never a strict failure. */
   cvFrozen: number;
+  /** Every session's rows 1 to 10 with a status each (t743; spec 5.4 item 5): `pass`, `fail`, or `not run` when the row had nothing to check. */
+  sessionResults: SessionVerification[];
+  /** Layer 4 at T0, local (spec 2.4): each session's raw-file match, recomputed root, and count bindings, with the count of each row of the result table. */
+  audit: { counts: T0Counts; sessions: SessionAudit[] };
+  /** Layer 2 at T0, local (spec 2.2): each session's week against the operator's own other weeks on its harness; `not run` below 1,000 calls or 4 baseline weeks. */
+  selfBaseline: SelfBaselineResult[];
 }
 
-/** With `strict`, any violated invariant or stuck step also fails the command (exit 4) after the full report is printed; the report is built first so callers can emit it. */
+/** With `strict`, any violated invariant, stuck step, `merkle: root mismatch`, or `merkle: counts do not bind` also fails the command (exit 4) after the full report is printed; the report is built first so callers can emit it. */
 export const sessionsVerify = async (deps: SessionsDeps, options: { session: string | undefined }): Promise<Outcome & { failed: string[]; report: VerifyReport }> => {
   const runtime = runtimeOf(deps);
   const { storeDir } = runtime;
   // When the store cannot be read there is no high-water mark yet, so a failed run's key is the session asked for and `ev`.
   return runStep(newContext(storeDir, deps.now, 'manual'), 'verify', async () => {
-    const { skeletons, unreadable } = await readSkeletons(storeDir, options.session);
+    // Every skeleton is read even for one session: row 6 takes its subagent transcripts' lines, which `<id>.json` alone would miss.
+    const everySkeleton = await readSkeletons(storeDir);
+    const { unreadable } = options.session === undefined ? everySkeleton : await readSkeletons(storeDir, options.session);
+    const skeletons = everySkeleton.skeletons.filter((skeleton) => options.session === undefined || skeleton.session === options.session);
     const store = await loadStore(storeDir);
     const mine = <T extends { session: string }>(records: readonly T[]): T[] => records.filter((record) => options.session === undefined || record.session === options.session);
     const captured = mine([...store.sessions, ...store.subagents]);
     // A session behind the current version whose transcript is in neither the harness nor raw/ (or, for a Cursor session, whose composer is gone from Cursor) can never be captured again: counted apart, never a strict failure.
     const frozen = await frozenSessions(runtime, captured.filter((session) => Number(session.cv) >= OLDEST_READABLE_CAPTURE && Number(session.cv) < Number(CAPTURE_VERSION)));
-    const results = [...verifyAll(skeletons), ...verifyCaptured(captured, mine(store.tools), frozen)];
+    const results = [...verifyAll(skeletons, everySkeleton.skeletons), ...verifyCaptured(captured, mine(store.tools), frozen)];
+    const sessionResults = verifySessions(everySkeleton.skeletons, captured, mine(store.tools), frozen).filter((entry) => options.session === undefined || entry.session === options.session);
+    // The baseline reads every week of the store, so --session only picks which results are reported.
+    const selfBaseline = selfBaselineOf([...store.sessions, ...store.subagents], store.tools, store.prompts, deps.now()).filter((entry) => options.session === undefined || entry.session === options.session);
+    const audits = await auditStore(runtime, captured, skeletons);
+    const audit = { counts: auditCounts(audits), sessions: audits };
+    // A root that misses a file which matches, or records that disagree with each other, leave `W` at 0 (spec 2.4): they fail `--strict` like a violated invariant.
+    const merkleFailed = (['root mismatch', 'counts do not bind'] as const).filter((result) => audit.counts[result] > 0).map((result) => `merkle: ${result}`);
     // Steps whose key failed on three runs in a row (spec 4.4), read before this run's own row is appended; each fails `--strict` like a violated invariant.
     // A step log that cannot be read leaves the invariant check as it is: the stuck check is an extra, never a reason `verify` fails.
     // A verify that got here has succeeded, so a verify streak is the one this run ends and is not listed.
     const stuck = stuckSteps(await readSteps(storeDir).catch((): StepRow[] => [])).filter((entry) => entry.step !== 'verify');
-    const report: VerifyReport = { sessions: skeletons.length, unreadable, cvFrozen: frozen.size, invariants: results.map((result) => ({ ...result, pass: result.violations === 0 })), stuck };
-    const failed = [...results.filter((result) => result.violations > 0).map((result) => result.name), ...(unreadable > 0 ? ['unreadable skeletons'] : []), ...stuck.map((entry) => `stuck: ${entry.step}`)];
+    const report: VerifyReport = { sessions: skeletons.length, unreadable, cvFrozen: frozen.size, invariants: results.map((result) => ({ ...result, pass: result.violations === 0 })), stuck, sessionResults, audit, selfBaseline };
+    const failed = [...results.filter((result) => result.violations > 0).map((result) => result.name), ...(unreadable > 0 ? ['unreadable skeletons'] : []), ...merkleFailed, ...stuck.map((entry) => `stuck: ${entry.step}`)];
     const stuckLines = stuck.map((entry) => `FAIL  ${entry.step} is stuck: key ${entry.key} failed ${String(entry.runs)} runs in a row: ${entry.error}`);
     const highWater = mine([...store.sessions, ...store.subagents]).map((session) => `${session.session}:${String(session.rev)}:${session.cv}`).sort();
+    const resultLines = formatSessionResults(sessionResults);
     const outcome = {
       failed,
       report,
       document: { ok: true, ...report, newerCaptures: store.newerCaptures },
-      text: [formatVerify(results, skeletons.length), ...(frozen.size > 0 ? [`${String(frozen.size)} cv-frozen sessions: behind the current capture version, but the transcript is gone from the harness and raw/ (or, for a Cursor session, the composer is gone from Cursor), so they cannot be captured again`] : []), ...newerNotice(store), ...(unreadable > 0 ? [`FAIL  ${String(unreadable)} unreadable skeleton files (torn or corrupted); redeposit to rebuild them`] : []), ...stuckLines].join('\n'),
+      text: [formatVerify(results, skeletons.length), formatAudit(audits), formatSelfBaseline(selfBaseline), ...(resultLines === '' ? [] : [resultLines]), ...(frozen.size > 0 ? [`${String(frozen.size)} cv-frozen sessions: behind the current capture version, but the transcript is gone from the harness and raw/ (or, for a Cursor session, the composer is gone from Cursor), so they cannot be captured again`] : []), ...newerNotice(store), ...(unreadable > 0 ? [`FAIL  ${String(unreadable)} unreadable skeleton files (torn or corrupted); redeposit to rebuild them`] : []), ...stuckLines].join('\n'),
     };
     const cvBehind = results.find((result) => result.name === CAPTURE_INVARIANTS[0])?.violations ?? 0;
     // The key is the sessions checked, each at its rev and cv, and the code's ev (spec 4.2).
@@ -190,6 +222,71 @@ export const sessionsVerify = async (deps: SessionsDeps, options: { session: str
     const counts = { checked: results.length, passed: results.filter((result) => result.violations === 0).length, cvBehind, cvFrozen: frozen.size, stuck: stuck.length };
     return { value: outcome, report: { in: { session: mine(store.sessions).length, subagent: mine(store.subagents).length }, out: counts, key } };
   }, stampKey('verify', options.session ?? ''));
+};
+
+const GOLD_MODE = 0o600;
+
+/** `gold sample`: writes the blind gold file and its hidden sidecar. It never overwrites one: the file may hold judgments. */
+export const sessionsGoldSample = async (deps: SessionsDeps, options: { size: number; batch: number; seed: string | undefined; excludeTerms: string[]; outDir: string | undefined }): Promise<Outcome> => {
+  const runtime = runtimeOf(deps);
+  const date = new Date(deps.now()).toISOString().slice(0, 10);
+  const dir = options.outDir ?? join(dirname(runtime.projectsRoot), 'session-commons', 'review');
+  const file = join(dir, `outcome-gold-${date}.md`);
+  const arms = armsPath(file);
+  const taken = async (path: string): Promise<boolean> => stat(path).then(() => true, () => false);
+  if (await taken(file)) throw new CliError(`${file} already exists, and it may hold judgments. Move it, or pass another --out-dir.`, ExitCode.USAGE, 'usage');
+  if (await taken(arms)) throw new CliError(`${arms} already exists, and it may hold readings. Move it, or pass another --out-dir.`, ExitCode.USAGE, 'usage');
+  const store = await loadStore(runtime.storeDir);
+  const redact = makeRedactor(await readRedactDomains(runtime.storeDir));
+  const { document, views, unreadable } = await sampleGold(runtime, store, redact, { size: options.size, batch: options.batch, seed: options.seed ?? date, date, excludeTerms: options.excludeTerms });
+  await mkdir(dir, { recursive: true });
+  // The check above came before a long draw; `wx` holds the promise if another run wrote in between.
+  await writeFile(arms, JSON.stringify(document), { mode: GOLD_MODE, flag: 'wx' });
+  await writeFile(file, renderGold(views, { date, batch: options.batch }), { mode: GOLD_MODE, flag: 'wx' });
+  const subagents = document.entries.filter((entry) => entry.subagents > 0).length;
+  const lines = [
+    `Wrote ${String(document.entries.length)} prompts, drawn from ${String(document.frame)}, to ${file}.`,
+    options.excludeTerms.length === 0 ? 'No --exclude-term given: no session was excluded.' : `Excluded ${String(document.excludedSessions)} sessions the draw reached that mention an excluded term.`,
+    `Passed over ${String(unreadable)} prompts whose transcript is gone or no longer matches the store.`,
+    `${String(subagents)} sampled prompts ran subagents, whose work is not read.`,
+    `Score it after any batch: oars sessions gold score ${file}`,
+  ];
+  return { document: { ok: true, file, prompts: document.entries.length, frame: document.frame, excludedSessions: document.excludedSessions, unreadable, subagentPrompts: subagents }, text: lines.join('\n') };
+};
+
+const readGold = async (file: string): Promise<{ text: string; document: GoldDocument }> => {
+  const text = await readFile(file, 'utf8').catch(() => {
+    throw new CliError(`Cannot read the gold file ${file}.`, ExitCode.USAGE, 'usage');
+  });
+  const arms = armsPath(file);
+  const document = await readFile(arms, 'utf8').then((raw): unknown => JSON.parse(raw)).catch(() => undefined);
+  if (!isGoldDocument(document)) throw new CliError(`Cannot read the arms file ${arms}, which holds the signals for this gold file.`, ExitCode.USAGE, 'usage');
+  return { text, document };
+};
+
+/** `gold score`: reads whatever is judged so far, so it runs after any batch. */
+export const sessionsGoldScore = async (options: { file: string }): Promise<Outcome> => {
+  const { text, document } = await readGold(options.file);
+  const { judged, unreadable } = parseGold(text);
+  const score = scoreGold(document.entries, judged);
+  return { document: { ok: true, ...score, unreadable }, text: formatScore(score, unreadable) };
+};
+
+/** `gold arms`: the text arms and the fresh readers, into the sidecar only. It prints coverage and no reading: a read waits for judgments. */
+export const sessionsGoldArms = async (deps: SessionsDeps, options: { file: string }): Promise<Outcome> => {
+  const runtime = runtimeOf(deps);
+  if (runtime.evaluator === undefined) throw new CliError('No evaluator is configured in this run.', ExitCode.UNEXPECTED, 'unexpected');
+  const { document } = await readGold(options.file);
+  const redact = makeRedactor(await readRedactDomains(runtime.storeDir));
+  const outcome = await fillArms(runtime, document, redact, runtime.evaluator, sidecarSaver(armsPath(options.file), document, GOLD_MODE));
+  if (outcome.failure !== undefined) throw new CliError(`${outcome.failure.message} ${String(outcome.left)} readings are left, and every answer so far is saved. Rerun this command to go on.`, ExitCode.UNEXPECTED, 'unexpected');
+  const score = scoreGold(document.entries, new Map());
+  const lines = [
+    `Asked ${String(outcome.asked)} readings on ${EVALUATOR_MODEL}, with ${String(outcome.left)} left. The gold file is unchanged.`,
+    `${String(outcome.changed)} prompts have a transcript that is gone or no longer matches what the judge sees, so their text arms are unread.`,
+    ...coverageLines(score),
+  ];
+  return { document: { ok: true, asked: outcome.asked, left: outcome.left, changed: outcome.changed, model: EVALUATOR_MODEL, coverage: score.coverage }, text: lines.join('\n') };
 };
 
 const installOf = (deps: SessionsDeps): InstallRuntime => {

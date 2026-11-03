@@ -3,11 +3,11 @@ import { run } from '../cli.js';
 import { ExitCode } from '../errors.js';
 import { harness, removeTestDirs } from '../test-support.js';
 import { slugOf } from './allow.js';
-import type { ErrorObservation, SessionObservation } from './schema.js';
+import { CAPTURE_VERSION, type ErrorObservation, type SessionObservation } from './schema.js';
 import { buildIndex, contextBlock, inRepository, readIndex, repositoryRoot } from './hook-index.js';
 import { sessionsBooks, sessionsMeasure } from './command.js';
 import { readHookCalls } from './hook-calls.js';
-import { books, formatBooks, formatMeasure, measure } from './query.js';
+import { books, BOOKS_CAVEAT, formatBooks, formatMeasure, measure } from './query.js';
 import { formatStepCounters, readSteps, stepCounters } from './steps.js';
 import { deposit, loadStore, paths, readCalls } from './store.js';
 import { addProject, cleanup, FIXTURES, NOW, stage } from './test-support.js';
@@ -212,7 +212,7 @@ ${formatStepCounters(stepCounters(await readSteps(staged.storeDir)))}`);
     const plain = harness();
     plain.deps.sessions = staged.runtime;
     expect(await run(['sessions', 'books', '--by', 'class'], plain.deps)).toBe(ExitCode.OK);
-    expect(plain.out.join('')).toBe(`${formatBooks(books(store, 'class', NOW), 'class')}\n`);
+    expect(plain.out.join('')).toBe(`${formatBooks(books(store, 'class', NOW), 'class')}\n${BOOKS_CAVEAT}\n`);
   });
 
   it("books --repo counts only its own repository's newer captures, sessions and subagents alike", async () => {
@@ -226,7 +226,7 @@ ${formatStepCounters(stepCounters(await readSteps(staged.storeDir)))}`);
     await deposit(staged.runtime, { allow: [slugOf(HOME), slugOf(OTHER)], redactDomains: [], now: () => NOW });
     // A newer oars wrote the other repository's session and its subagent.
     const file = paths(staged.storeDir).observations;
-    const marked = readFileSync(file, 'utf8').split('\n').filter((entry) => entry !== '').map((entry) => (entry.includes('"session":"other-session') ? entry.replace('"cv":"5"', '"cv":"6"') : entry));
+    const marked = readFileSync(file, 'utf8').split('\n').filter((entry) => entry !== '').map((entry) => (entry.includes('"session":"other-session') ? entry.replace(`"cv":"${CAPTURE_VERSION}"`, `"cv":"${String(Number(CAPTURE_VERSION) + 1)}"`) : entry));
     writeFileSync(file, `${marked.join('\n')}\n`);
     const deps = { sessions: staged.runtime, install: undefined, now: () => NOW };
     const newer = async (repo?: string): Promise<unknown> => (await sessionsBooks(deps, { by: 'class', sinceDays: undefined, repo })).document;
@@ -252,7 +252,7 @@ ${formatStepCounters(stepCounters(await readSteps(staged.storeDir)))}`);
       .filter((entry) => entry !== '')
       // The parent's main session record is gone; the subagent's remains, one version newer.
       .filter((entry) => !(entry.includes('"kind":"session"') && entry.includes('"session":"other-session"') && entry.includes('"parent":null')))
-      .map((entry) => entry.replace('"cv":"5"', '"cv":"6"'));
+      .map((entry) => entry.replace(`"cv":"${CAPTURE_VERSION}"`, `"cv":"${String(Number(CAPTURE_VERSION) + 1)}"`));
     writeFileSync(file, `${rewritten.join('\n')}\n`);
     const deps = { sessions: staged.runtime, install: undefined, now: () => NOW };
     const other = await sessionsBooks(deps, { by: 'class', sinceDays: undefined, repo: OTHER });
@@ -269,6 +269,32 @@ ${formatStepCounters(stepCounters(await readSteps(staged.storeDir)))}`);
     const { text } = await sessionsBooks(deps, { by: 'class', sinceDays: undefined, repo: none });
     expect(text).toContain(`No prompts for ${none} in the store (${String(store.prompts.length)} prompts across all repositories).`);
     expect(text).not.toBe('No prompts in the store.');
+  });
+
+  it('books --by pull --repo tells a kept repository with no pulls from a root the store does not hold', async () => {
+    const staged = stage(slugOf(HOME));
+    await deposit(staged.runtime, { allow: [slugOf(HOME)], redactDomains: [], now: () => NOW });
+    const store = await loadStore(staged.storeDir);
+    expect(store.prompts.length).toBeGreaterThan(0);
+    const deps = { sessions: staged.runtime, install: undefined, now: () => NOW };
+    const kept = await sessionsBooks(deps, { by: 'pull', sinceDays: undefined, repo: HOME });
+    expect(kept.text).toBe('No pulls in the store.');
+    const none = resolve('/zz/none');
+    const absent = await sessionsBooks(deps, { by: 'pull', sinceDays: undefined, repo: none });
+    expect(absent.text).toBe(`No prompts for ${none} in the store (${String(store.prompts.length)} prompts across all repositories).`);
+  });
+
+  it('books over a --since window nothing falls in says so, with or without --repo, and an empty store still reads as empty', async () => {
+    const staged = stage(slugOf(HOME));
+    await deposit(staged.runtime, { allow: [slugOf(HOME)], redactDomains: [], now: () => NOW });
+    expect((await loadStore(staged.storeDir)).prompts.length).toBeGreaterThan(0);
+    const deps = { sessions: staged.runtime, install: undefined, now: () => NOW + 3650 * 86_400_000 };
+    expect((await sessionsBooks(deps, { by: 'class', sinceDays: 1, repo: HOME })).text).toBe('No prompts in the --since window.');
+    expect((await sessionsBooks(deps, { by: 'pull', sinceDays: 1, repo: HOME })).text).toBe('No pulls in the --since window.');
+    expect((await sessionsBooks(deps, { by: 'class', sinceDays: 1 })).text).toBe('No prompts in the --since window.');
+    const empty = stage(slugOf(HOME));
+    const emptyDeps = { sessions: empty.runtime, install: undefined, now: () => NOW };
+    expect((await sessionsBooks(emptyDeps, { by: 'class', sinceDays: 1 })).text).toBe('No prompts in the store.');
   });
 
   it("measure --repo drops another repository's MCP recall calls and keeps calls with no folder", async () => {

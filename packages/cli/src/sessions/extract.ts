@@ -14,11 +14,14 @@ import {
   type CostState,
   type ErrorLineObservation,
   type PromptClass,
+  type PullEcosystem,
   type SessionObservation,
+  type ShellSegment,
   type Skeleton,
   type SkeletonLine,
   type TargetBase,
   type ToolObservation,
+  type ToolPull,
   type Usage,
   type UsageKey,
   type UserPromptObservation,
@@ -399,6 +402,560 @@ export const shellTarget = (command: string): string => {
   return program;
 };
 
+// The captured reading of a shell command (CAPTURE 6). `shellTarget` above stays the retry identity; this reads every line and every
+// segment, because most commits and pulls sit behind another command. It is a reading, not a parser: a torn or exotic command yields
+// fewer facts, never a throw.
+
+/** Keeps a record bounded on a generated script; the last commands are the ones the call's status can report. */
+const SEGMENTS_PER_CALL_MAX = 50;
+const RUN_WORDS_MAX = 12;
+const RUN_WORD_CHARS = 30;
+
+interface ShellWord {
+  text: string;
+  quoted: boolean;
+}
+type ShellOp = '&&' | '||' | '|' | ';' | '&' | '\n' | 'group';
+type ShellToken = ShellWord | ShellOp;
+type ShellLink = 'and' | 'pipe' | 'break' | 'end';
+
+/** One simple command, after its prelude. */
+interface ShellCommand {
+  program: string;
+  args: ShellWord[];
+  read: boolean;
+  /** How the next command joins this one. */
+  link: ShellLink;
+}
+
+/** One `git commit` a command holds. */
+export interface PlannedCommit {
+  quiet: boolean;
+  /** A later command of the same list reads this commit back, so the result can name its sha. */
+  readBack: boolean;
+}
+
+export interface ShellRead {
+  segments: ShellSegment[];
+  pulls: ToolPull[];
+  commitPlan: PlannedCommit[];
+}
+
+const HEREDOC = /(?<!<)<<-?\s*(?:'([^']+)'|"([^"]+)"|\\?([A-Za-z_][\w.-]*))/g;
+const HERE_STRING = /@(['"])\s*$/;
+
+/** A heredoc or here-string body is data, and it may hold a whole script, so it goes before anything reads the command. */
+const dropBodies = (command: string): string => {
+  const kept: string[] = [];
+  let tag: string | null = null;
+  let closer: string | null = null;
+  for (const line of command.split(/\r?\n/)) {
+    if (tag !== null) {
+      if (line.trim() === tag) tag = null;
+      continue;
+    }
+    if (closer !== null) {
+      if (!line.startsWith(closer)) continue;
+      // What follows the closer belongs to the opening line: `@'...'@ | git commit -F -`.
+      kept[kept.length - 1] = `${kept[kept.length - 1] ?? ''}${line.slice(closer.length)}`;
+      closer = null;
+      continue;
+    }
+    const hereString = HERE_STRING.exec(line);
+    if (hereString !== null) {
+      kept.push(line.slice(0, hereString.index));
+      closer = `${hereString[1] ?? ''}@`;
+      continue;
+    }
+    kept.push(line);
+    // Two heredocs on a line close in order, so reading to the last tag drops both bodies.
+    const last = [...line.matchAll(HEREDOC)].at(-1);
+    if (last !== undefined) tag = last[1] ?? last[2] ?? last[3] ?? null;
+  }
+  return kept.join('\n');
+};
+
+/** Stands in for the `@` of a version while the redactor runs. A private-use character, so no command holds it. */
+const VERSION_AT = String.fromCharCode(0xe000);
+const VERSIONED = /^(@?[^@:\s]+)@(?!\d+\.\d+\.\d+\.\d+$)(v?\d+(?:\.(?:\d+|x|\*))+(?:[-+][0-9A-Za-z.+-]*)?)$/;
+
+/** `foo@1.2.3` reads as an email to the redactor. No mail domain is all numbers, while an IP address is a real host, so only a version is shielded. */
+const redactCommand = (command: string, redact: Redactor): string =>
+  redact(command.replace(/[^\s"'`]+/g, (word) => word.replace(VERSIONED, `$1${VERSION_AT}$2`))).replaceAll(VERSION_AT, '@');
+
+const MASK = /^<(?:secret|email|org-domain)>/;
+const ONLY_MASKS = /^(?:<(?:secret|email|org-domain)>)+$/;
+
+const tokenize = (text: string): ShellToken[] => {
+  const tokens: ShellToken[] = [];
+  let word = '';
+  let quoted = false;
+  let started = false;
+  let redirected = false;
+  const flush = (): void => {
+    if (started && redirected) redirected = false;
+    else if (started && !quoted && (word === '{' || word === '}')) tokens.push('group');
+    else if (started) tokens.push({ text: word, quoted });
+    word = '';
+    quoted = false;
+    started = false;
+  };
+  const op = (token: ShellOp): void => {
+    flush();
+    redirected = false;
+    const last = tokens.at(-1);
+    // A line that ends in an operator continues on the next one.
+    if (token === '\n' && (last === undefined || last === '&&' || last === '||' || last === '|' || last === '\n')) return;
+    tokens.push(token);
+  };
+  let at = 0;
+  while (at < text.length) {
+    const char = text.charAt(at);
+    const next = text.charAt(at + 1);
+    if (char === "'") {
+      const end = text.indexOf("'", at + 1);
+      const stop = end < 0 ? text.length : end;
+      word += text.slice(at + 1, stop);
+      quoted = true;
+      started = true;
+      at = stop + 1;
+    } else if (char === '"') {
+      quoted = true;
+      started = true;
+      at += 1;
+      while (at < text.length && text.charAt(at) !== '"') {
+        if (text.charAt(at) === '\\' && text.charAt(at + 1) === '\n') at += 2;
+        else if (text.charAt(at) === '\\' && text.charAt(at + 1) === '"') {
+          word += '"';
+          at += 2;
+        } else {
+          word += text.charAt(at);
+          at += 1;
+        }
+      }
+      at += 1;
+    } else if ((char === '\\' || char === '`') && next === '\n') {
+      at += 2;
+    } else if (char === '\\' && next !== '' && /[\s&|;()<>'"]/.test(next)) {
+      word += next;
+      started = true;
+      at += 2;
+    } else if (char === '#' && !started) {
+      const end = text.indexOf('\n', at);
+      at = end < 0 ? text.length : end;
+    } else if (char === '\n') {
+      op('\n');
+      at += 1;
+    } else if (/\s/.test(char)) {
+      flush();
+      at += 1;
+    } else if (char === '<' && MASK.test(text.slice(at, at + 12))) {
+      const mask = MASK.exec(text.slice(at, at + 12))?.[0] ?? '';
+      word += mask;
+      started = true;
+      at += mask.length;
+    } else if (char === '>' || char === '<' || (char === '&' && next === '>')) {
+      // A file descriptor number belongs to the redirect, and so does the word after it.
+      if (started && !quoted && /^\d+$/.test(word)) {
+        word = '';
+        started = false;
+      }
+      flush();
+      at += 1;
+      while (at < text.length && /[<>&]/.test(text.charAt(at))) at += 1;
+      redirected = true;
+    } else if (char === '&' && next === '&') {
+      op('&&');
+      at += 2;
+    } else if (char === '|' && next === '|') {
+      op('||');
+      at += 2;
+    } else if (char === '|') {
+      op('|');
+      at += next === '&' ? 2 : 1;
+    } else if (char === ';') {
+      op(';');
+      at += next === ';' ? 2 : 1;
+    } else if (char === '&') {
+      op('&');
+      at += 1;
+    } else if (char === '(' || char === ')') {
+      op('group');
+      at += 1;
+    } else {
+      word += char;
+      started = true;
+      at += 1;
+    }
+  }
+  flush();
+  return tokens;
+};
+
+/** A block keyword names no program, and its condition or body is the command. `for` stays: its words say what it walks. */
+const BLOCK_WORDS = new Set(['if', 'then', 'elif', 'else', 'elseif', 'do', 'while', 'until', 'fi', 'done', 'esac', 'try', 'finally', '!']);
+const WRAPPERS = new Set(['sudo', 'env', '.', 'command', 'exec', 'nohup', 'nice', 'time', 'call']);
+const ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*=/;
+
+/** The words from the command's real program on. */
+const afterPrelude = (words: readonly ShellWord[]): readonly ShellWord[] => {
+  let at = 0;
+  for (;;) {
+    const word = words[at];
+    if (word === undefined) return [];
+    if (word.quoted) return words.slice(at);
+    if (BLOCK_WORDS.has(word.text) || ASSIGNMENT.test(word.text)) at += 1;
+    else if (WRAPPERS.has(word.text) || word.text === 'timeout') {
+      const isTimeout = word.text === 'timeout';
+      at += 1;
+      while (words[at]?.text.startsWith('-') === true) at += 1;
+      if (isTimeout && /^\d+(?:\.\d+)?[smhd]?$/.test(words[at]?.text ?? '')) at += 1;
+    } else return words.slice(at);
+  }
+};
+
+/** The program's basename, or null when the word names none: a variable, a flag, or a quoted sentence. */
+const programOf = (word: ShellWord): string | null => {
+  const { text } = word;
+  if (text === '' || text.includes('$') || text.startsWith('-')) return null;
+  if (word.quoted && /\s/.test(text) && !/[\\/]/.test(text)) return null;
+  const base = text.replace(/\\/g, '/').split('/').pop() ?? '';
+  const program = base.toLowerCase().replace(/\.(?:exe|cmd|bat)$/, '');
+  return program === '' ? null : cut(program, RUN_WORD_CHARS);
+};
+
+const SHELLS = new Set(['bash', 'sh', 'zsh', 'dash', 'pwsh', 'powershell', 'cmd']);
+const COMMAND_FLAG = /^(?:-[a-z]*c|-command|\/c)$/i;
+
+/** The shells that run every word after the flag as the command. `bash -c npm test` runs `npm` with `test` as `$0`, so bash and its kin take one word. */
+const JOINING_SHELLS = new Set(['pwsh', 'powershell', 'cmd']);
+
+/**
+ * The command a shell is told to run: `bash -lc "..."`, `pwsh -NoProfile -Command "..."`, `cmd /c ...`. A joining shell's unquoted words pass as
+ * they are, not joined into text and read again, so a quoted `-m "a && b"` stays an argument.
+ */
+const shellArgument = (program: string, args: readonly ShellWord[]): readonly ShellToken[] | null => {
+  if (!SHELLS.has(program)) return null;
+  const flag = args.findIndex((word) => !word.quoted && COMMAND_FLAG.test(word.text));
+  const first = flag < 0 ? undefined : args[flag + 1];
+  if (first === undefined) return null;
+  return JOINING_SHELLS.has(program) && !first.quoted ? args.slice(flag + 1) : tokenize(first.text);
+};
+
+const linkOf = (ops: readonly ShellOp[]): ShellLink => {
+  if (ops.some((op) => op === ';' || op === '&' || op === '||' || op === '\n')) return 'break';
+  return ops.includes('|') ? 'pipe' : 'and';
+};
+
+/** Every simple command in order, with whether the call's status reports it. A shell's argument takes the place of the shell, under the shell's own read. */
+const readCommands = (tokens: readonly ShellToken[]): ShellCommand[] => {
+  const commands: ShellCommand[] = [];
+  let pending: ShellOp[] = [];
+  let words: ShellWord[] = [];
+  const close = (): void => {
+    const real = afterPrelude(words);
+    words = [];
+    const [head, ...args] = real;
+    const program = head === undefined ? null : programOf(head);
+    if (program === null) return;
+    const previous = commands.at(-1);
+    if (previous !== undefined) previous.link = linkOf(pending);
+    pending = [];
+    commands.push({ program, args, read: true, link: 'end' });
+  };
+  for (const token of tokens) {
+    if (typeof token === 'string') {
+      close();
+      pending.push(token);
+    } else words.push(token);
+  }
+  close();
+  // Walking back, a later `;`, `&`, newline, or `||` means the status is no longer this command's; a pipe hides only the command it follows.
+  let overridden = pending.includes('&');
+  for (const command of commands.toReversed()) {
+    if (command.link === 'break') overridden = true;
+    command.read = !overridden && command.link !== 'pipe';
+  }
+  return commands.flatMap((command) => {
+    const argument = shellArgument(command.program, command.args);
+    if (argument === null) return [command];
+    const inner = readCommands(argument);
+    if (inner.length === 0) return [command];
+    for (const held of inner) held.read &&= command.read;
+    const last = inner.at(-1);
+    if (last !== undefined) last.link = command.link;
+    return inner;
+  });
+};
+
+const isPlainWord = (word: ShellWord): boolean => !word.quoted && word.text !== '' && !/^-|\$|[\\/]/.test(word.text);
+
+const runOf = (command: ShellCommand): string =>
+  [command.program, ...command.args.filter(isPlainWord).map((word) => cut(word.text, RUN_WORD_CHARS))].slice(0, RUN_WORDS_MAX).join(' ');
+
+/** Positional words and flag values. A flag in `takesValue` owns the next word, which is therefore not a name. */
+const parseArgs = (args: readonly ShellWord[], takesValue: ReadonlySet<string>): { names: string[]; flags: Map<string, string> } => {
+  const names: string[] = [];
+  const flags = new Map<string, string>();
+  for (let at = 0; at < args.length; at += 1) {
+    const text = args[at]?.text ?? '';
+    if (!text.startsWith('-')) names.push(text);
+    else if (text.includes('=')) flags.set(text.slice(0, text.indexOf('=')), text.slice(text.indexOf('=') + 1));
+    else if (takesValue.has(text)) {
+      flags.set(text, args[at + 1]?.text ?? '');
+      at += 1;
+    }
+  }
+  return { names, flags };
+};
+
+const NODE_VALUE_FLAGS = new Set(['-w', '--workspace', '--registry', '--prefix', '--filter', '-F', '-C', '--dir', '--cache', '--tag', '--cwd', '--loglevel', '--userconfig', '-p', '--package', '-c', '--call', '--omit', '--include', '--save-prefix', '--skill', '-s']);
+const PYTHON_VALUE_FLAGS = new Set(['-r', '--requirement', '-e', '--editable', '-c', '--constraint', '-i', '--index-url', '--extra-index-url', '--index', '--default-index', '-t', '--target', '-f', '--find-links', '--python', '-p', '--from', '--with', '--prefix', '--root', '--group', '--extra', '--only-binary', '--no-binary', '--trusted-host', '--proxy', '--cache-dir', '--timeout', '--suffix', '--pip-args', '--spec']);
+const CARGO_VALUE_FLAGS = new Set(['--path', '--git', '--branch', '--tag', '--rev', '--root', '--features', '-F', '--target', '--registry', '--index', '-j', '--jobs', '--profile', '--bin', '--example', '--package', '-p', '--rename', '--manifest-path', '--version', '--vers', '--target-dir', '--config']);
+const GO_VALUE_FLAGS = new Set(['-o', '-tags', '-modfile', '-C', '-ldflags', '-gcflags', '-mod', '-p']);
+const GEM_VALUE_FLAGS = new Set(['-v', '--version', '-i', '--install-dir', '-n', '--bindir', '-s', '--source', '--platform']);
+const PLUGIN_VALUE_FLAGS = new Set(['--scope', '-s']);
+const NO_VALUE_FLAGS: ReadonlySet<string> = new Set<string>();
+
+const LOCAL_SPEC = /^(?:\.{1,2}$|\.{0,2}[\\/]|~|[A-Za-z]:[\\/]|file:|link:|workspace:|portal:)/;
+const ARCHIVE = /\.(?:whl|tgz|zip|tar\.gz)$/;
+const isUrl = (text: string): boolean => text.includes('://');
+const namesNothing = (text: string): boolean => text === '' || text.includes('$') || /^%.*%$/.test(text) || ONLY_MASKS.test(text);
+
+/** `name@version`, keeping a leading `@` with the name. */
+const atVersion = (ecosystem: PullEcosystem, text: string): ToolPull | null => {
+  const at = text.lastIndexOf('@');
+  const name = at > 0 ? text.slice(0, at) : text;
+  const version = at > 0 ? text.slice(at + 1) : '';
+  if (namesNothing(name)) return null;
+  return { ecosystem, name, version: version === '' || version.includes('$') ? null : version };
+};
+
+const wholeName = (ecosystem: PullEcosystem, text: string): ToolPull | null => (namesNothing(text) ? null : { ecosystem, name: text, version: null });
+
+const nodeSpec = (text: string): ToolPull | null => {
+  if (isUrl(text)) return wholeName('npm', text);
+  if (LOCAL_SPEC.test(text) || ARCHIVE.test(text)) return null;
+  // One slash is a scoped name or a GitHub shorthand; more is a folder.
+  if (text.split('/').length > 2 || text.includes('\\')) return null;
+  return atVersion('npm', text);
+};
+
+const PYTHON_SPEC = /^([A-Za-z0-9._-]+)(?:\[[^\]]*\])?(===?|~=|!=|>=|<=|<|>|@)?(.*)$/;
+
+const pythonSpec = (text: string): ToolPull | null => {
+  if (isUrl(text)) return wholeName('pypi', text);
+  if (LOCAL_SPEC.test(text) || ARCHIVE.test(text) || /[\\/]/.test(text)) return null;
+  const match = PYTHON_SPEC.exec(text);
+  if (match === null) return null;
+  const operator = match[2] ?? '';
+  const stated = match[3] ?? '';
+  const version = stated === '' || stated.includes('$') ? null : operator === '==' || operator === '===' || operator === '@' ? stated : `${operator}${stated}`;
+  return { ecosystem: 'pypi', name: match[1] ?? '', version };
+};
+
+/** A module path's first element has a dot; `fmt`, `cmd/x`, and `all` are not downloads. */
+const goSpec = (text: string): ToolPull | null => (/^(?:<org-domain>|[A-Za-z0-9-]+\.[^/\\]+)\//.test(text) ? atVersion('go', text) : null);
+
+const localOr = (ecosystem: PullEcosystem, text: string): ToolPull | null => (LOCAL_SPEC.test(text) ? null : atVersion(ecosystem, text));
+
+const present = (pull: ToolPull | null): pull is ToolPull => pull !== null;
+
+/** `npx`, `bunx`, and `dlx` run one package: a `--package` flag names it, else the first word. `skills add` installs a skill rather than running a tool. */
+const runnerPulls = (names: readonly string[], flags: ReadonlyMap<string, string>): Array<ToolPull | null> => {
+  const [first, sub, source] = names;
+  if (first !== undefined && atVersion('npm', first)?.name === 'skills' && sub === 'add' && source !== undefined) return [LOCAL_SPEC.test(source) ? null : wholeName('skill', source)];
+  const packaged = flags.get('-p') ?? flags.get('--package');
+  if (packaged !== undefined) return [nodeSpec(packaged)];
+  return first === undefined ? [] : [nodeSpec(first)];
+};
+
+const nodePulls = (args: readonly ShellWord[]): Array<ToolPull | null> => {
+  const { names, flags } = parseArgs(args, NODE_VALUE_FLAGS);
+  const [sub, ...specs] = names[0] === 'global' ? names.slice(1) : names;
+  if (sub === 'dlx') return runnerPulls(specs, flags);
+  return sub === 'add' || sub === 'install' || sub === 'i' ? specs.map(nodeSpec) : [];
+};
+
+const pipPulls = (args: readonly ShellWord[]): Array<ToolPull | null> => {
+  const { names } = parseArgs(args, PYTHON_VALUE_FLAGS);
+  return names[0] === 'install' ? names.slice(1).map(pythonSpec) : [];
+};
+
+const uvxPulls = (args: readonly ShellWord[]): Array<ToolPull | null> => {
+  const { names, flags } = parseArgs(args, PYTHON_VALUE_FLAGS);
+  const named = flags.get('--from') ?? names[0];
+  return named === undefined ? [] : [pythonSpec(named)];
+};
+
+const uvPulls = (args: readonly ShellWord[]): Array<ToolPull | null> => {
+  const { names } = parseArgs(args, PYTHON_VALUE_FLAGS);
+  if (names[0] === 'add') return names.slice(1).map(pythonSpec);
+  if ((names[0] === 'pip' || names[0] === 'tool') && names[1] === 'install') return names.slice(2).map(pythonSpec);
+  return [];
+};
+
+const pipxPulls = (args: readonly ShellWord[]): Array<ToolPull | null> => {
+  const { names, flags } = parseArgs(args, PYTHON_VALUE_FLAGS);
+  if (names[0] === 'install') return names.slice(1).map(pythonSpec);
+  const named = flags.get('--spec') ?? names[1];
+  return names[0] === 'run' && named !== undefined ? [pythonSpec(named)] : [];
+};
+
+/** A name's version from its own `@`, else from a version flag. */
+const versionedPulls = (ecosystem: PullEcosystem, names: readonly string[], stated: string | undefined): Array<ToolPull | null> =>
+  names
+    .map((name) => localOr(ecosystem, name))
+    .map((pull) => (pull !== null && pull.version === null && stated !== undefined && stated !== '' ? { ...pull, version: stated } : pull));
+
+const pullsOfCommand = (program: string, args: readonly ShellWord[]): Array<ToolPull | null> => {
+  if (program === 'npm' || program === 'pnpm' || program === 'yarn' || program === 'bun') return nodePulls(args);
+  if (program === 'npx' || program === 'bunx') {
+    const { names, flags } = parseArgs(args, NODE_VALUE_FLAGS);
+    return runnerPulls(names, flags);
+  }
+  if (/^pip[\d.]*$/.test(program)) return pipPulls(args);
+  if (/^(?:python[\d.]*|py)$/.test(program)) {
+    const module = args.findIndex((word) => word.text === '-m');
+    return module >= 0 && /^pip[\d.]*$/.test(args[module + 1]?.text ?? '') ? pipPulls(args.slice(module + 2)) : [];
+  }
+  if (program === 'uv') return uvPulls(args);
+  if (program === 'uvx') return uvxPulls(args);
+  if (program === 'pipx') return pipxPulls(args);
+  if (program === 'cargo') {
+    const { names, flags } = parseArgs(args, CARGO_VALUE_FLAGS);
+    return names[0] === 'add' || names[0] === 'install' ? versionedPulls('cargo', names.slice(1), flags.get('--version') ?? flags.get('--vers')) : [];
+  }
+  if (program === 'go') {
+    const { names } = parseArgs(args, GO_VALUE_FLAGS);
+    return names[0] === 'get' || names[0] === 'install' ? names.slice(1).map(goSpec) : [];
+  }
+  if (program === 'gem') {
+    const { names, flags } = parseArgs(args, GEM_VALUE_FLAGS);
+    return names[0] === 'install' ? versionedPulls('gem', names.slice(1), flags.get('-v') ?? flags.get('--version')) : [];
+  }
+  if (program === 'brew') {
+    const { names } = parseArgs(args, NO_VALUE_FLAGS);
+    return names[0] === 'install' ? versionedPulls('brew', names.slice(1), undefined) : [];
+  }
+  if (program === 'claude' || program === 'codex') {
+    // `foo@market` names a marketplace, not a version, so the name stays whole.
+    const { names } = parseArgs(args, PLUGIN_VALUE_FLAGS);
+    const verb = program === 'claude' ? 'install' : 'add';
+    return names[0] === 'plugin' && names[1] === verb ? names.slice(2).map((name) => wholeName('plugin', name)) : [];
+  }
+  return [];
+};
+
+interface GitCall {
+  sub: string;
+  args: readonly ShellWord[];
+  /** The repository flag, so a read of another repository is not a read of this commit. */
+  scope: string;
+}
+
+const GIT_VALUE_FLAGS = new Set(['-C', '-c', '--git-dir', '--work-tree', '--namespace', '--exec-path']);
+
+const gitCall = (command: ShellCommand): GitCall | null => {
+  if (command.program !== 'git') return null;
+  let scope = '';
+  for (let at = 0; at < command.args.length; at += 1) {
+    const text = command.args[at]?.text ?? '';
+    if (GIT_VALUE_FLAGS.has(text)) {
+      if (text !== '-c') scope += `${text} ${command.args[at + 1]?.text ?? ''};`;
+      at += 1;
+    } else if (!text.startsWith('-')) return { sub: text, args: command.args.slice(at + 1), scope };
+  }
+  return null;
+};
+
+const NOT_A_COMMIT = /^(?:--dry-run|-h|--help|--porcelain|--short|--long)$/;
+const QUIET = /^(?:--quiet|-[a-zA-Z]*q[a-zA-Z]*)$/;
+const MOVES_HEAD = new Set(['checkout', 'switch', 'pull', 'merge', 'rebase', 'reset', 'cherry-pick', 'revert', 'am', 'commit']);
+const CHANGES_FOLDER = new Set(['cd', 'pushd', 'popd', 'set-location', 'sl', 'chdir']);
+const LOG_ONE = /^(?:-1|-n1|--max-count=1)$/;
+const LOG_FILTER = /^--(?:grep|author|committer|since|until|after|before|all|branches|remotes|tags|skip|reverse)(?:=|$)/;
+const LOG_FORMAT = /^--(?:format|pretty)=/;
+
+/** A read of the commit just made: `rev-parse [--short] HEAD`, or a one-commit `log` of HEAD whose format prints a hash. */
+const readsHead = (git: GitCall): boolean => {
+  const words = git.args.map((word) => word.text);
+  if (git.sub === 'rev-parse') {
+    const refs = words.filter((word) => !word.startsWith('-'));
+    return refs.length === 1 && refs[0] === 'HEAD';
+  }
+  if (git.sub !== 'log') return false;
+  const count = words.indexOf('-n');
+  const one = words.some((word) => LOG_ONE.test(word)) || (count >= 0 && words[count + 1] === '1');
+  if (!one || words.includes('--') || words.some((word) => LOG_FILTER.test(word))) return false;
+  const format = words.find((word) => LOG_FORMAT.test(word));
+  if (format?.includes('%') === true && !/%[hH]/.test(format)) return false;
+  return words.every((word, at) => word.startsWith('-') || word === 'HEAD' || (at === count + 1 && count >= 0));
+};
+
+/** Whether the call's final command reads this commit back. `commitsRead` takes the result's last hash-shaped line, and only the final command is sure to have printed it. */
+const isReadBack = (commands: readonly ShellCommand[], from: number, scope: string): boolean => {
+  for (let at = from; at + 1 < commands.length; at += 1) {
+    // Behind `;` the commit may have failed, and the read names an older commit.
+    if (commands[at]?.link === 'break') return false;
+    const next = commands[at + 1];
+    if (next === undefined || CHANGES_FOLDER.has(next.program)) return false;
+    const git = gitCall(next);
+    if (git !== null && MOVES_HEAD.has(git.sub)) return false;
+    if (git?.scope === scope && readsHead(git)) return at + 2 === commands.length;
+  }
+  return false;
+};
+
+const commitPlanOf = (commands: readonly ShellCommand[]): PlannedCommit[] =>
+  commands.flatMap((command, at) => {
+    const git = gitCall(command);
+    if (git === null || git.sub !== 'commit' || git.args.some((word) => NOT_A_COMMIT.test(word.text))) return [];
+    return [{ quiet: git.args.some((word) => !word.quoted && QUIET.test(word.text)), readBack: isReadBack(commands, at, git.scope) }];
+  });
+
+/** A shell call's segments, pulls, and the commits it holds, from the command alone. The command is redacted before anything is kept. */
+export const readShell = (command: string, redact: Redactor): ShellRead => {
+  const commands = readCommands(tokenize(redactCommand(dropBodies(command.replace(/\r\n/g, '\n')), redact)));
+  const pulls = new Map<string, ToolPull>();
+  for (const { program, args } of commands) {
+    for (const pull of pullsOfCommand(program, args).filter(present)) pulls.set(JSON.stringify(pull), pull);
+  }
+  return {
+    segments: commands.slice(-SEGMENTS_PER_CALL_MAX).map((held) => ({ run: runOf(held), read: held.read })),
+    pulls: [...pulls.values()],
+    commitPlan: commitPlanOf(commands),
+  };
+};
+
+const COMMIT_LINE = /^\[[^\]\n]* ([0-9a-f]{7,40})\]/gm;
+const COMMIT_REFUSED = /^(?:nothing to commit|nothing added to commit|no changes added to commit|fatal: |error: )/gm;
+const HASH_LINE = /^(?:commit )?([0-9a-f]{7,40})(?=\s|$)/gm;
+
+/**
+ * What a clean result says about the planned commits: one entry per commit made, the sha when its `[branch sha]` line or a read-back
+ * names it, else null, since a count may stand without a sha. A refused commit makes no entry: the call can be clean behind `; echo done`.
+ */
+export const commitsRead = (plan: readonly PlannedCommit[], result: string): Array<string | null> => {
+  const lines = [...result.matchAll(COMMIT_LINE)].map((match) => match[1] ?? '');
+  let refused = result.match(COMMIT_REFUSED)?.length ?? 0;
+  const hash = [...result.matchAll(HASH_LINE)].at(-1)?.[1] ?? null;
+  const commits: Array<string | null> = [];
+  for (const planned of plan) {
+    const line = planned.quiet ? undefined : lines.shift();
+    if (line !== undefined) commits.push(line);
+    else if (refused > 0) refused -= 1;
+    else commits.push(planned.readBack ? hash : null);
+  }
+  return commits;
+};
+
+/** An MCP call's full server name, which `shortName` cuts for the tool sequence, redacted because a harness takes it from the operator's config. */
+export const pullsOfTool = (name: string, redact: Redactor): ToolPull[] => {
+  const pull = name.startsWith('mcp__') ? wholeName('mcp', redact(name.split('__')[1] ?? '')) : null;
+  return pull === null ? [] : [pull];
+};
+
 /** The `target` of a tool call (see {@link ToolObservation.target}). */
 export const targetOf = (
   tool: string,
@@ -482,7 +1039,7 @@ export const captureSession = (input: ExtractInput): Capture => {
   const errorLines: ErrorLineObservation[] = [];
   const skeletonLines: SkeletonLine[] = [];
   const toolById = new Map<string | undefined, string>();
-  const callById = new Map<string, { call: ToolObservation; at: number | undefined }>();
+  const callById = new Map<string, { call: ToolObservation; at: number | undefined; plan: readonly PlannedCommit[] }>();
   const seenResponses = new Set<string>();
   let promptFingerprint: string | null = null;
   let cur: Current | undefined;
@@ -584,7 +1141,10 @@ export const captureSession = (input: ExtractInput): Capture => {
       session.promptFingerprint = promptFingerprint;
       continue;
     }
-    if (message === undefined) continue;
+    // The harness's own copy of the request body (t762): assistant and user messages with no cwd, uuid, or timestamp, repeating blocks the real lines
+    // above already hold. Reading its tool_use, tool_result, thinking, and text blocks wrote a second row for 99.8% of calls, and a second error line,
+    // thinking count, and TLDR for the same ones. The skeleton above still lists the line, so the counts and the root bind.
+    if (message === undefined || type === 'api-request-blob') continue;
 
     if (type === 'user' && role === 'user' && o.isMeta !== true) {
       const text = firstNonEmptyText(content);
@@ -648,8 +1208,12 @@ export const captureSession = (input: ExtractInput): Capture => {
         for (const match of text.matchAll(CONF_RE)) session.confidences.push(cut(redact(match[1] ?? ''), 120));
       } else if (blockType === 'tool_use') {
         const name = str(block.name) ?? '?';
-        session.tools[name] = (session.tools[name] ?? 0) + 1;
         const id = str(block.id);
+        // A resumed session replays earlier lines, so the same tool_use id comes again, often from another cwd (so a different path hash).
+        // The first copy is the call and already holds the result; a replay would be a second row with status none (t762). The skeleton
+        // still lists every line, and a replayed failure stays an error line, as derive.ts counts it.
+        if (id !== undefined && callById.has(id)) continue;
+        session.tools[name] = (session.tools[name] ?? 0) + 1;
         toolById.set(id, name);
         const toolInput = isObj(block.input) ? block.input : {};
         const filePath = str(toolInput.file_path);
@@ -663,6 +1227,8 @@ export const captureSession = (input: ExtractInput): Capture => {
         else if (name === 'WebSearch' && str(toolInput.query) !== undefined && str(toolInput.query) !== '') searches.add(redact(str(toolInput.query) ?? ''));
         else if (SHELL.has(name)) session.bashCmds += 1;
         const aimed = targetOf(name, toolInput, lineCwd, salt, redact, lineRoot);
+        const shell = SHELL.has(name) ? readShell(str(toolInput.command) ?? '', redact) : undefined;
+        const pulls = shell?.pulls ?? pullsOfTool(name, redact);
         const call: ToolObservation = {
           kind: 'tool',
           cv: CAPTURE_VERSION,
@@ -683,18 +1249,21 @@ export const captureSession = (input: ExtractInput): Capture => {
           harnessVersion: version ?? null,
           side,
           prompt: cur?.index ?? null,
+          ...(shell === undefined ? {} : { segments: shell.segments }),
+          ...(pulls.length === 0 ? {} : { pulls }),
         };
         tools.push(call);
-        // A resumed session repeats earlier lines: the first copy of a call carries its result, a repeat keeps status none.
-        if (id !== undefined && !callById.has(id)) callById.set(id, { call, at: lineSeconds });
+        if (id !== undefined) callById.set(id, { call, at: lineSeconds, plan: shell?.commitPlan ?? [] });
       } else if (blockType === 'tool_result') {
         const text = resultText(block);
         const failed = isErrorResult(block, text);
         const answered = callById.get(str(block.tool_use_id) ?? '');
         if (answered !== undefined && answered.call.status === 'none') {
-          const { call, at } = answered;
+          const { call, at, plan } = answered;
           if (at !== undefined && lineSeconds !== undefined && o.noDuration !== true) call.durationMs = Math.round((lineSeconds - at) * 1000);
           call.status = failed ? 'error' : 'ok';
+          const commits = failed ? [] : commitsRead(plan, text);
+          if (commits.length > 0) call.commits = commits;
         }
         if (!failed) continue;
         errorLines.push({
