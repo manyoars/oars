@@ -503,6 +503,16 @@ describe('a cv-behind session whose transcript is gone (cv-frozen)', () => {
     expect(fromRaw.report.cvFrozen).toBe(0);
   });
 
+  it('still fails --strict when state.json is lost but the transcripts are still in the harness', async () => {
+    const staged = stage();
+    await deposit(staged.runtime, options);
+    atVersion4(staged.storeDir);
+    rmSync(paths(staged.storeDir).state);
+    const verified = await sessionsVerify({ sessions: staged.runtime, install: undefined, now: () => NOW }, { session: undefined });
+    expect(verified.failed).toContain(behind);
+    expect(verified.report.cvFrozen).toBe(0);
+  });
+
   describe('a Cursor session (its source is the composer, not a transcript file)', () => {
     const doc = (composerId: string) => ({ composerId, createdAt: 1, conversation: [{ type: 1, text: 'hi' }] });
     const cursorOptions = { allow: ['cursor'], redactDomains: [], now: () => NOW };
