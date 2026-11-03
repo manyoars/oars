@@ -1,4 +1,4 @@
-import { appendFileSync, mkdirSync, promises, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, promises, readFileSync, readdirSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { FIXTURES, NOW, addProject, cleanup, stage, type Staged } from './test-support.js';
@@ -8,6 +8,7 @@ import { FIXTURES, NOW, addProject, cleanup, stage, type Staged } from './test-s
 const seams = vi.hoisted(() => ({
   logChars: Number.POSITIVE_INFINITY,
   rename: undefined as undefined | ((to: string) => Promise<void>),
+  open: undefined as undefined | ((file: string) => void),
 }));
 
 vi.mock('node:fs/promises', () => ({
@@ -18,18 +19,23 @@ vi.mock('node:fs/promises', () => ({
     return text;
   },
   rename: async (from: string, to: string) => {
-    await seams.rename?.(to);
+    if (to.endsWith('observations.jsonl')) await seams.rename?.(to);
     await promises.rename(from, to);
+  },
+  open: (file: string, ...rest: [string, number]) => {
+    seams.open?.(file);
+    return promises.open(file, ...rest);
   },
 }));
 
-const { deposit, depositSession, loadStore, paths } = await import('./store.js');
+const { compactLog, deposit, depositSession, loadStore, paths, withLock } = await import('./store.js');
 const { extractSession } = await import('./derive.js');
 const { makeRedactor } = await import('./redact.js');
 
 beforeEach(() => {
   seams.logChars = Number.POSITIVE_INFINITY;
   seams.rename = undefined;
+  seams.open = undefined;
 });
 afterEach(cleanup);
 
@@ -145,5 +151,238 @@ describe('reading the log line by line', () => {
   });
 });
 
-// The compaction describe block follows in the next item; these keep the imports the rest of the file needs.
-export const unused = { appendFileSync, statSync, utimesSync, addProject, depositSession };
+const logOf = (staged: Staged): string => readFileSync(paths(staged.storeDir).observations, 'utf8');
+const compact = (staged: Staged, renameWaitMs?: number): Promise<void> => withLock(staged.storeDir, () => compactLog(staged.storeDir, renameWaitMs));
+const leftovers = (staged: Staged): string[] => readdirSync(staged.storeDir).filter((name) => name.endsWith('.tmp'));
+
+/** Changes a transcript so the next deposit captures it again under a higher rev. */
+const touchTranscript = (staged: Staged, name: string, seconds: number): void => {
+  const file = join(staged.projectsRoot, 'proj', name);
+  appendFileSync(file, `${JSON.stringify({ type: 'user', timestamp: '2026-06-01T00:00:00Z', message: { role: 'user', content: 'one more prompt' } })}\n`);
+  const later = new Date(Date.now() + seconds * 1000);
+  utimesSync(file, later, later);
+};
+
+const revsBySession = (staged: Staged): Map<unknown, Set<unknown>> => {
+  const revs = new Map<unknown, Set<unknown>>();
+  for (const line of toLines(logOf(staged))) revs.set(line.session, (revs.get(line.session) ?? new Set()).add(line.rev));
+  return revs;
+};
+
+describe('compacting the log', () => {
+  it('keeps what a reader sees and drops only superseded lines', async () => {
+    const staged = stage();
+    writeLog(staged, syntheticLog().replace('{"kind":"session","session":"alpha","rev":', ''));
+    appendFileSync(paths(staged.storeDir).observations, '\n{"torn":');
+    const before = await loadStore(staged.storeDir);
+    const size = statSync(paths(staged.storeDir).observations).size;
+    await compact(staged);
+    expect(await loadStore(staged.storeDir)).toEqual(before);
+    expect(statSync(paths(staged.storeDir).observations).size).toBeLessThan(size);
+    const lines = logOf(staged).split('\n');
+    // Every line of alpha's first rev is gone; an unreadable line, a record of no known kind, and a torn line (now ended) stay, byte for byte.
+    expect(lines.filter((line) => line.includes('"session":"alpha"') && line.includes('"rev":1,'))).toEqual([]);
+    expect(lines).toContain('not json at all');
+    expect(lines).toContain('{"kind":"from-a-later-oars","session":"alpha","rev":99}');
+    expect(lines.slice(-2)).toEqual(['{"torn":', '']);
+    expect(lines.filter((line) => line === '')).toHaveLength(1);
+    expect(leftovers(staged)).toEqual([]);
+  });
+
+  it('leaves a log with nothing superseded alone, and a missing log missing', async () => {
+    const staged = stage();
+    seams.rename = () => Promise.reject(new Error('nothing to rewrite'));
+    mkdirSync(staged.storeDir, { recursive: true });
+    await compact(staged);
+    expect(existsSync(paths(staged.storeDir).observations)).toBe(false);
+    writeLog(staged, jsonl(recordsOf('tldr.jsonl', 'bravo', 1)));
+    const text = logOf(staged);
+    await compact(staged);
+    expect(logOf(staged)).toBe(text);
+  });
+
+  it('runs at the end of a deposit that re-captures, and readers see what they saw', async () => {
+    const staged = stage();
+    await deposit(staged.runtime, options);
+    touchTranscript(staged, 'tldr.jsonl', 5);
+    let before: Awaited<ReturnType<typeof loadStore>> | undefined;
+    let revsBefore: number | undefined;
+    seams.rename = async () => {
+      before = await loadStore(staged.storeDir);
+      revsBefore = revsBySession(staged).get('tldr')?.size;
+    };
+    const again = await deposit(staged.runtime, options);
+    expect(again).toMatchObject({ sessions: 1, unchanged: 3 });
+    expect(revsBefore).toBe(2);
+    expect(before?.sessions).toHaveLength(4);
+    expect(await loadStore(staged.storeDir)).toEqual(before);
+    for (const revs of revsBySession(staged).values()) expect(revs.size).toBe(1);
+    // The file keeps the store's private mode through the rename.
+    if (process.platform !== 'win32') expect(statSync(paths(staged.storeDir).observations).mode & 0o777).toBe(0o600);
+  });
+
+  it('does not run on the hook path, which has seconds', async () => {
+    const staged = stage();
+    await deposit(staged.runtime, options);
+    touchTranscript(staged, 'tldr.jsonl', 5);
+    seams.rename = () => Promise.reject(new Error('the hook path compacted'));
+    expect(await depositSession(staged.runtime, join(staged.projectsRoot, 'proj', 'tldr.jsonl'), () => NOW)).toBe('deposited');
+    expect(revsBySession(staged).get('tldr')?.size).toBe(2);
+  });
+
+  it('loses no line of a hook that appends while it runs: the hook waits for the lock', async () => {
+    const staged = stage();
+    await deposit(staged.runtime, options);
+    touchTranscript(staged, 'tldr.jsonl', 5);
+    let hook: Promise<unknown> | undefined;
+    let appendedEarly: boolean | undefined;
+    seams.rename = async () => {
+      // The temp file is complete and the rename is next, the worst moment: a line appended now would be overwritten without the lock.
+      const late = addProject(staged, 'proj', 'late-session', [JSON.stringify({ type: 'user', timestamp: '2026-06-01T00:00:00Z', message: { role: 'user', content: 'a late prompt' } })]);
+      hook = depositSession(staged.runtime, late, () => NOW);
+      await new Promise((done) => setTimeout(done, 200));
+      appendedEarly = logOf(staged).includes('late-session');
+    };
+    await deposit(staged.runtime, options);
+    // Read here, not asserted in the seam: a throw there is a failed compaction, which the deposit outlives.
+    expect(appendedEarly).toBe(false);
+    expect(await hook).toBe('deposited');
+    expect(logOf(staged)).toContain('late-session');
+    const sessions = (await loadStore(staged.storeDir)).sessions.map((session) => session.session);
+    expect(sessions).toContain('late-session');
+    expect(sessions).toContain('tldr');
+  });
+
+  it('gives up with the log intact when a writer that broke the lock appended during the rewrite', async () => {
+    const staged = stage();
+    writeLog(staged, syntheticLog());
+    const rogue = jsonl(recordsOf('tldr.jsonl', 'charlie', 1));
+    seams.open = (file) => {
+      if (file.endsWith('.tmp')) appendFileSync(paths(staged.storeDir).observations, `\n${rogue}`);
+    };
+    const expected = `${syntheticLog()}\n${rogue}`;
+    await expect(compact(staged)).rejects.toThrow('the log changed');
+    expect(logOf(staged)).toBe(expected);
+    expect(leftovers(staged)).toEqual([]);
+  });
+
+  it('leaves a log that loads when it dies before the rename, and the next run clears what the crash left', async () => {
+    const staged = stage();
+    writeLog(staged, syntheticLog());
+    const text = logOf(staged);
+    const before = await loadStore(staged.storeDir);
+    seams.rename = () => Promise.reject(new Error('died before the rename'));
+    await expect(compact(staged)).rejects.toThrow('died before the rename');
+    expect(logOf(staged)).toBe(text);
+    expect(await loadStore(staged.storeDir)).toEqual(before);
+    // A real crash runs no cleanup, so its half-written temp file stays until the next compaction, whatever that finds to do.
+    const orphan = `${paths(staged.storeDir).observations}.999.tmp`;
+    writeFileSync(orphan, '{"half":');
+    expect(await loadStore(staged.storeDir)).toEqual(before);
+    seams.rename = undefined;
+    await compact(staged);
+    expect(leftovers(staged)).toEqual([]);
+    expect(await loadStore(staged.storeDir)).toEqual(before);
+    writeFileSync(orphan, '{"half":');
+    await compact(staged);
+    expect(leftovers(staged)).toEqual([]);
+  });
+
+  it('waits for a reader to let go of the log, as Windows requires, and gives up with the log intact', async () => {
+    const staged = stage();
+    const eperm = (): Promise<void> => Promise.reject(Object.assign(new Error('EPERM: operation not permitted'), { code: 'EPERM' }));
+    writeLog(staged, syntheticLog());
+    const text = logOf(staged);
+    seams.rename = eperm;
+    await expect(compact(staged, 0)).rejects.toThrow('EPERM');
+    expect(logOf(staged)).toBe(text);
+    expect(leftovers(staged)).toEqual([]);
+    let refused = 0;
+    seams.rename = () => (refused++ < 2 ? eperm() : Promise.resolve());
+    await compact(staged);
+    expect(refused).toBe(3);
+    expect(logOf(staged)).not.toBe(text);
+  });
+
+  it('does not fail the deposit when it cannot finish: the records are safe, and the derive still runs', async () => {
+    const staged = stage();
+    await deposit(staged.runtime, options);
+    touchTranscript(staged, 'tldr.jsonl', 5);
+    const derivedBefore = statSync(paths(staged.storeDir).derived).mtimeMs;
+    seams.rename = () => Promise.reject(new Error('disk trouble'));
+    const notes = vi.spyOn(process.stderr, 'write').mockReturnValue(true);
+    expect(await deposit(staged.runtime, options)).toMatchObject({ sessions: 1 });
+    expect(notes).toHaveBeenCalledWith(expect.stringContaining('disk trouble'));
+    notes.mockRestore();
+    expect(statSync(paths(staged.storeDir).derived).mtimeMs).toBeGreaterThan(derivedBefore);
+    expect(revsBySession(staged).get('tldr')?.size).toBe(2);
+    // The next deposit, with nothing new to capture, finishes the job.
+    seams.rename = undefined;
+    expect(await deposit(staged.runtime, options)).toMatchObject({ sessions: 0 });
+    expect(revsBySession(staged).get('tldr')?.size).toBe(1);
+  });
+
+  it('keeps a subagent origin that only the log holds', async () => {
+    const staged = stage();
+    const agents = join(staged.projectsRoot, 'proj', 'tldr', 'subagents');
+    mkdirSync(agents, { recursive: true });
+    const transcript = `${JSON.stringify({ type: 'user', timestamp: '2026-06-01T00:00:00Z', cwd: '/w', message: { role: 'user', content: 'go' } })}\n`;
+    writeFileSync(join(agents, 'agent-x.jsonl'), transcript);
+    writeFileSync(join(agents, 'agent-x.meta.json'), JSON.stringify({ agentType: 'Explore', toolUseId: 'tu9' }));
+    await deposit(staged.runtime, options);
+    appendFileSync(join(agents, 'agent-x.jsonl'), transcript);
+    const later = new Date(Date.now() + 5000);
+    utimesSync(join(agents, 'agent-x.jsonl'), later, later);
+    await deposit(staged.runtime, options);
+    expect(revsBySession(staged).get('tldr~agent-x')?.size).toBe(1);
+    const state = asLine(JSON.parse(readFileSync(paths(staged.storeDir).state, 'utf8')));
+    writeFileSync(paths(staged.storeDir).state, JSON.stringify({ ...state, files: {} }));
+    rmSync(join(staged.projectsRoot, 'proj', 'tldr'), { recursive: true });
+    await deposit(staged.runtime, options);
+    expect((await loadStore(staged.storeDir)).subagents).toEqual([expect.objectContaining({ session: 'tldr~agent-x', parent: 'tldr', agentType: 'Explore', spawnedBy: 'tu9' })]);
+  });
+});
+
+describe('a store already past the limit', () => {
+  it('loads and compacts at the next deposit, even with nothing left to capture', async () => {
+    // The state a run that died at the end of its re-capture left: state.json current, and every session in the log twice.
+    const staged = stage();
+    await deposit(staged.runtime, options);
+    const before = await loadStore(staged.storeDir);
+    const live = logOf(staged);
+    const older = toLines(live).map((line) => ({ ...line, rev: Number(line.rev) - 1 }));
+    writeFileSync(paths(staged.storeDir).observations, jsonl(older) + live);
+    seams.logChars = 1;
+    expect(await deposit(staged.runtime, options)).toMatchObject({ sessions: 0, unchanged: 4 });
+    expect(logOf(staged)).toBe(live);
+    expect(await loadStore(staged.storeDir)).toEqual(before);
+  });
+});
+
+describe('the store lock', () => {
+  it('stays with a holder that outlives the stale age: a waiter does not break a lock in use', async () => {
+    const staged = stage();
+    const lockOptions = { waitMs: 5000, staleMs: 200 };
+    const events: string[] = [];
+    const holder = withLock(
+      staged.storeDir,
+      async () => {
+        events.push('holder in');
+        await new Promise((done) => setTimeout(done, 700));
+        events.push('holder out');
+      },
+      lockOptions,
+    );
+    await new Promise((done) => setTimeout(done, 50));
+    const waiter = withLock(
+      staged.storeDir,
+      () => {
+        events.push('waiter in');
+        return Promise.resolve();
+      },
+      lockOptions,
+    );
+    await Promise.all([holder, waiter]);
+    expect(events).toEqual(['holder in', 'holder out', 'waiter in']);
+  });
+});
