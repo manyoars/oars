@@ -77,7 +77,7 @@ export const runClaude = (args: readonly string[], { stdin, env }: Parameters<Cl
     });
     child.stdin.on('error', () => undefined);
     child.on('error', () => {
-      reject(new Error('Cannot run `claude`: install Claude Code and put claude on your PATH.'));
+      reject(new Error('Cannot run `claude`: install Claude Code and put claude on your PATH. A Windows npm shim cannot be spawned: the native `claude` binary must be on your PATH.'));
     });
     child.on('close', (code) => {
       resolve({ code: code ?? 1, stdout });

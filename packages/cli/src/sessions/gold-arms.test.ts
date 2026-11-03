@@ -74,7 +74,7 @@ describe('runClaude', () => {
     const fake = spawned();
     const pending = runClaude(['-p'], { stdin: '', env }, fake.spawn);
     fake.child.emit('error', new Error('spawn claude ENOENT'));
-    await expect(pending).rejects.toThrow('Cannot run `claude`');
+    await expect(pending).rejects.toThrow(/^Cannot run `claude`: .*Windows npm shim cannot be spawned.*native `claude` binary must be on your PATH/);
   });
 
   it('takes a broken stdin pipe quietly, since the exit code is what counts', async () => {
