@@ -52,7 +52,7 @@ const capture = (text: string, sid: string | null, root: string | null) =>
 describe('the CAPTURE 4 fields', () => {
   it('stamps sid on every capture record and records env, repo, fileHashes, and promptFingerprint on the session', () => {
     const result = capture(transcript('/w/app/pkg', '/w/app/src/a.ts'), 'abcd1234', '/w/app');
-    expect(CAPTURE_VERSION).toBe('6');
+    expect(CAPTURE_VERSION).toBe('7');
     for (const record of [result.session, ...result.prompts, ...result.tools, ...result.errorLines]) expect(record).toMatchObject({ cv: CAPTURE_VERSION, sid: 'abcd1234' });
     expect(result.session.env).toEqual({ harness: '2.1.301', oars: '1.2.3', node: 'v99', os: 'plan9' });
     expect(result.session.repo).toMatch(/^[0-9a-f]{16}$/);
@@ -409,7 +409,7 @@ describe('a version-3 store opened under version 4', () => {
     const second = await deposit({ ...staged.runtime, accountSalt: () => Promise.resolve({ salt: 'b', sid: sidOf('b') }) }, options);
     expect(second.sessions).toBe(4);
     editState(staged.storeDir, (entry) => {
-      Reflect.set(entry, 'v', '7');
+      Reflect.set(entry, 'v', '8');
     });
     await expect(deposit(staged.runtime, options)).rejects.toThrow(/upgrade oars/);
   });
@@ -418,7 +418,7 @@ describe('a version-3 store opened under version 4', () => {
     const staged = stage();
     await deposit(staged.runtime, options);
     editState(staged.storeDir, (entry, key) => {
-      if (key.endsWith('tldr.jsonl')) Reflect.set(entry, 'v', '7');
+      if (key.endsWith('tldr.jsonl')) Reflect.set(entry, 'v', '8');
     });
     const before = readFileSync(paths(staged.storeDir).observations);
     const stateBefore = readFileSync(paths(staged.storeDir).state);
@@ -432,7 +432,7 @@ describe('a version-3 store opened under version 4', () => {
     await deposit(staged.runtime, options);
     editState(staged.storeDir, (entry, key) => {
       if (key.endsWith('errors-a.jsonl')) Reflect.set(entry, 'v', '3');
-      if (key.endsWith('tldr.jsonl')) Reflect.set(entry, 'v', '7');
+      if (key.endsWith('tldr.jsonl')) Reflect.set(entry, 'v', '8');
     });
     const before = readFileSync(paths(staged.storeDir).observations);
     await expect(deposit(staged.runtime, options)).rejects.toThrow(/upgrade oars/);
@@ -443,7 +443,7 @@ describe('a version-3 store opened under version 4', () => {
     const staged = stage();
     await deposit(staged.runtime, options);
     const file = paths(staged.storeDir).observations;
-    writeFileSync(file, readFileSync(file, 'utf8').replace('"cv":"6"', '"cv":"7"'));
+    writeFileSync(file, readFileSync(file, 'utf8').replace('"cv":"7"', '"cv":"8"'));
     const before = readFileSync(file);
     await expect(deposit(staged.runtime, options)).rejects.toThrow(/upgrade oars/);
     expect(readFileSync(file).equals(before)).toBe(true);
@@ -453,7 +453,7 @@ describe('a version-3 store opened under version 4', () => {
     const staged = stage();
     await deposit(staged.runtime, options);
     const file = paths(staged.storeDir).observations;
-    const lines = readFileSync(file, 'utf8').split('\n').filter((entry) => entry !== '').map((entry) => entry.replace('"cv":"6"', '"cv":"7","future":1'));
+    const lines = readFileSync(file, 'utf8').split('\n').filter((entry) => entry !== '').map((entry) => entry.replace('"cv":"7"', '"cv":"8","future":1'));
     writeFileSync(file, `${lines.join('\n')}\n`);
     const store = await loadStore(staged.storeDir);
     expect(store.prompts.length).toBeGreaterThan(0);
