@@ -173,6 +173,20 @@ describe('pull', () => {
     const byClass = pull(store, { cls: 'edit-verify', sinceDays: 30 }, context);
     expect(byClass.recall.query).toEqual({ form: 'question', family: 'recovery', slice: { cls: 'edit-verify', sinceDays: 30 } });
   });
+
+  it('states counts over what a recall() input narrowed to, in the answer and in its evidence', () => {
+    const LATER = Date.parse('2026-11-05T00:00:00Z');
+    const store: Store = { ...synthetic(), sessions: [sessionRow('a', { files: ['target.ts'] }), sessionRow('b')] };
+    const asked = (query: { error?: string; path?: string; cls?: string; sinceDays?: number }) => {
+      const { reads, recall } = pull(store, query, { sid: null, now: LATER, frame: null });
+      return { n: reads[0]?.n, count: reads[0]?.count, stated: recall.evidence[0]?.n };
+    };
+    expect(asked({ error: 'wrong input' })).toEqual({ n: 2, count: 2, stated: 2 });
+    expect(asked({ error: 'wrong input', sinceDays: 3 })).toEqual({ n: 1, count: 1, stated: 1 });
+    expect(asked({ error: 'wrong input', cls: 'edit-only' })).toEqual({ n: 1, count: 1, stated: 1 });
+    expect(asked({ cls: 'edit-only' })).toEqual({ n: 1, count: 1, stated: 1 });
+    expect(asked({ path: 'target.ts' })).toEqual({ n: 1, count: 1, stated: 1 });
+  });
 });
 
 describe('a query closes at record time', () => {
