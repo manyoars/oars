@@ -8,6 +8,9 @@ import { readHookCalls } from './hook-calls.js';
 import { buildIndex, contextBlock, inRepository, readIndex, type ContextOptions } from './hook-index.js';
 import { hookStatus, installHooks, scheduleStatus, setSchedule, settingsPath, uninstallHooks, type InstallRuntime, type Scope } from './install.js';
 import { serve } from './mcp.js';
+import { refreshPool } from './pool.js';
+import { FAMILIES } from './read.js';
+import { formatReads, isFamily, parseSlice, selectReads } from './read-rows.js';
 import { CAPTURE_VERSION, OLDEST_READABLE_CAPTURE, type StepRow } from './schema.js';
 import { deposit, frozenSessions, loadStore, readCalls, readRedactDomains, readSkeletons, slugOf, type SessionsRuntime, type Store } from './store.js';
 import { formatStepCounters, inputKey, newContext, readSteps, stampKey, runDeposit, runStep, stepCounters, stuckSteps, type StuckStep } from './steps.js';
@@ -69,6 +72,31 @@ export const sessionsRecall = async (deps: SessionsDeps, query: RecallQuery): Pr
     key,
   );
   return { document: { ok: true, ...result }, text: formatRecall(result) };
+};
+
+/**
+ * `read`: rows from the current pool's reads. The step log holds it under its own step, because the `recall` counters answer how often a recall was asked for. Every row states
+ * its clusters; no floor applies, because every cell here is the operator's own.
+ */
+export const sessionsRead = async (deps: SessionsDeps, options: { family: string | undefined; slices: readonly string[] }): Promise<Outcome> => {
+  const { family } = options;
+  if (family !== undefined && !isFamily(family)) throw new CliError(`Pass --family as one of ${FAMILIES.join(', ')}.`, ExitCode.USAGE, 'usage');
+  const slice = parseSlice(options.slices);
+  if (slice === undefined) throw new CliError('Pass --slice as <axis>=<value>.', ExitCode.USAGE, 'usage');
+  const { storeDir } = runtimeOf(deps);
+  const key = stampKey(family ?? '', ...options.slices);
+  const { pool, reads, newer } = await runStep(
+    newContext(storeDir, deps.now, 'manual'),
+    'read',
+    async () => {
+      const store = await loadStore(storeDir);
+      const refreshed = await refreshPool(storeDir, store);
+      const selected = selectReads(refreshed.reads, { family, slice });
+      return { value: { pool: refreshed.pool.version, reads: selected, newer: store }, report: { in: { reads: refreshed.reads.length }, out: { rows: selected.length }, key } };
+    },
+    key,
+  );
+  return { document: { ok: true, pool, reads, newerCaptures: newer.newerCaptures }, text: [formatReads(reads), ...newerNotice(newer)].join('\n') };
 };
 
 /** `recall --context`: the injection block for a repository, from the hook index (built from the store when no deposit has written one). */
