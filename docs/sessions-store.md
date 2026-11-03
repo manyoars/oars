@@ -65,8 +65,8 @@ pattern and entropy, emails, and the domains named with `--redact-domain`) befor
 | | `session`, `parent`, `toolUseId`, `ts` (a pool would keep the UTC day), and `target` for a path call | A |
 | `error-line` (one per failed result) | `tool`, `harnessVersion`, `side`, `prompt`, `after` | P |
 | | `session`, `toolUseId`, `ts` (a pool would keep the UTC day), `line` (the first informative line, redacted, not normalized, cut to 1,000 characters) | A |
-| `prompt` (derived, one per prompt) | `kind`, `v`, `rev`, `index`, `wallSec`, class (`cls`), `tools`, `shape`, `errors`, `thinking`, `sideTools`, `turns`, `model`, `efforts`, `skills`, `usage`, `recovery`, `explore`, `act`, `bigrams` (the motif vector), and the outcome signals `verify`, `stopped`, `commits`, and `redo` (below) | P |
-| | `session`, `head` (the first 300 characters, redacted), `ts`, `promptFingerprint` (`contextFingerprint` on this derived record) | A |
+| `prompt` (derived, one per prompt) | `kind`, `v`, `rev`, `index`, `wallSec`, class (`cls`), `tools`, `shape`, `errors`, `thinking`, `sideTools`, `turns`, `model`, `efforts`, `skills`, `usage`, `recovery`, `explore`, `act`, and `bigrams` (the motif vector) | P |
+| | `session`, `head` (the first 300 characters, redacted), `ts`, `promptFingerprint` (`contextFingerprint` on this derived record), and the outcome signals `verify`, `stopped`, `commits`, and `redo` (below) | A |
 | `error` (derived, one per error) | `kind`, `v`, `rev`, `tool`, `harnessVersion`, `editFollowed`, `cls`, `prompt`, `next` (tool names), episode `outcome` and `calls` | P |
 | | `session`, `agent` (the subagent transcript id, a join id), `ts`, `sig` (redacted at capture, normalized at derive), `example` (160 characters) | A |
 | store files | `salt`, `state.json`, `raw/`, `hook-index.json` `projects` keys (folder slugs), `mcp-calls.jsonl` `cwd` (the server's working directory, unhashed) | L |
@@ -89,7 +89,7 @@ transcript's calls are not read.
 
 | Field | Values | Rule | What it does not say |
 |-------|--------|------|---------------------|
-| `verify` | `passed`, `failed`, `none`, `na` | The status of the last shell call after the prompt's last edit: the rule behind the `edit-verify` class, less a backgrounded call, whose result says only that it started. `none`: no such call reports a result. `na`: the prompt edited nothing. A failed edit is not an edit. | Any shell call qualifies, so `passed` means a clean exit, often of a read or a `git` call, not that a test ran. |
+| `verify` | `passed`, `failed`, `none`, `na` | The status of the last shell call after the prompt's last edit: the rule behind the `edit-verify` class, less a backgrounded call, whose result says only that it started. `none`: there is no such call, or the last one has no result. `na`: the prompt edited nothing. A failed edit is not an edit. | Any shell call qualifies, so `passed` means a clean exit, often of a read or a `git` call, not that a test ran. `failed` includes a shell call that was rejected or denied and never ran. |
 | `stopped` | `interrupt`, `rejected`, null | `rejected`: a main-line error line starts `The user doesn't want to proceed with this tool use` or `The user doesn't want to take this action`. `interrupt`: the next prompt record starts `[Request interrupted by user`. A rejection wins, since the harness writes the marker right after it. | A classifier or hook denial is not a stop: it is policy, and the model carries on. |
 | `commits` | a count | Successful shell calls whose `target` is `git commit`. | It is a floor. `target` holds the first line's first program and subcommand, so `git add . && git commit` is not seen. |
 | `redo` | true, false | A later prompt in the session edits a path hash this prompt edited, within `REDO_WINDOW` (3) prompts, with no `git commit` that `commits` can see between them. | A hidden commit does not end the window, and a planned second edit of one file reads the same as rework. |

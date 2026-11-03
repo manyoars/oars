@@ -60,13 +60,13 @@ const REJECTED_RE = /^The user doesn't want to (?:proceed with this tool use|tak
 /** The harness writes this as a user line, so capture keeps it as a prompt of its own; it says the prompt before it was cut short. */
 const INTERRUPT_MARKER = '[Request interrupted by user';
 
-const firstCopies = (tools: readonly ToolObservation[]): ToolObservation[] => {
+const firstCopies = <T extends { side: boolean; toolUseId: string | null }>(records: readonly T[]): T[] => {
   const seen = new Set<string>();
-  return tools.filter((tool) => {
-    if (tool.side) return false;
-    if (tool.toolUseId === null) return true;
-    if (seen.has(tool.toolUseId)) return false;
-    seen.add(tool.toolUseId);
+  return records.filter((record) => {
+    if (record.side) return false;
+    if (record.toolUseId === null) return true;
+    if (seen.has(record.toolUseId)) return false;
+    seen.add(record.toolUseId);
     return true;
   });
 };
@@ -115,6 +115,8 @@ export const deriveSession = (capture: SessionCapture, redact: Redactor): Derive
   // One pass groups the calls and the main-line errors by prompt, so a session costs O(prompts + tools), not their product.
   const toolsOf = groupBy(tools, (tool) => tool.prompt);
   const errorsOf = groupBy(capture.errorLines.filter((error) => !error.side), (error) => error.prompt);
+  // Capture pushes an error line for every failed result it reads, repeats included; `errors` and `recovery` keep them, as version 2 did.
+  const stopsOf = groupBy(firstCopies(capture.errorLines), (error) => error.prompt);
   const calls = firstCopies(tools);
   const settledOf = groupBy(calls, (tool) => tool.prompt);
   const redone = redonePrompts(calls);
@@ -158,7 +160,7 @@ export const deriveSession = (capture: SessionCapture, redact: Redactor): Derive
       bigrams,
       contextFingerprint: prompt.promptFingerprint,
       verify: verifyOf(settled),
-      stopped: stoppedOf(errors, capture.prompts[position + 1]?.head),
+      stopped: stoppedOf(stopsOf.get(prompt.index) ?? [], capture.prompts[position + 1]?.head),
       commits: settled.filter(isCommit).length,
       redo: redone.has(prompt.index),
     };
