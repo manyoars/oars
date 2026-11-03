@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { poolFiles, refreshPool } from './pool.js';
-import { prompt, session, step, store, tool } from './pool-fixture.js';
+import { error, prompt, session, step, store, tool } from './pool-fixture.js';
 
 const dirs: string[] = [];
 const storeDir = (): string => {
@@ -66,6 +66,17 @@ describe('refreshPool', () => {
     expect(readFileSync(file, 'utf8')).toBe(text);
     writeFileSync(file, 'not json\n');
     await expect(refreshPool(dir, one)).rejects.toThrow();
+  });
+
+  it('derives again when only the error rows recovery reads have changed', async () => {
+    const dir = storeDir();
+    const failing = { ...one, tools: [tool('s1', 0, 'Read', { status: 'error' }), tool('s1', 1, 'Edit')] };
+    const first = await refreshPool(dir, { ...failing, errors: [error('s1', 'sig-a', { toolUseId: 'c0' })] });
+    const later = await refreshPool(dir, { ...failing, errors: [error('s1', 'sig-a', { toolUseId: 'c0' }), error('s1', 'sig-a', { toolUseId: 'c1' })] });
+    expect(later.pool.version).not.toBe(first.pool.version);
+    const errorsOf = (reads: typeof first.reads) => reads.find((read) => read.family === 'recovery')?.value['errors'];
+    expect(errorsOf(first.reads)).toBe(1);
+    expect(errorsOf(later.reads)).toBe(2);
   });
 
   it('keeps a pool version file as first written, and gives new data a new file', async () => {
