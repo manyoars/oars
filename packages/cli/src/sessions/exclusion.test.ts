@@ -26,6 +26,20 @@ const write = (path: string, lines: readonly string[]): void => {
   writeFileSync(path, `${lines.join('\n')}\n`);
 };
 
+type LinkType = 'dir' | 'file';
+
+/** Makes a link; false only where the account lacks the privilege (EPERM), so a broken path fails the test instead of skipping it. */
+const makeLink = (target: string, path: string, type: LinkType): boolean => {
+  mkdirSync(join(path, '..'), { recursive: true });
+  try {
+    symlinkSync(target, path, type);
+    return true;
+  } catch (error) {
+    if (error instanceof Error && 'code' in error && error.code === 'EPERM') return false;
+    throw error;
+  }
+};
+
 const setup = (terms: string | null = `${TERM}\n`): { staged: Staged; termsFile: string; main: (project: string, session: string) => string; agent: (project: string, session: string, name: string) => string } => {
   const staged = stage();
   rmSync(join(staged.projectsRoot, 'proj'), { recursive: true, force: true });
@@ -107,12 +121,7 @@ describe('checkSession (A38)', () => {
     const real = join(t.staged.root, 'outside.jsonl');
     write(real, [DIRTY]);
     mkdirSync(join(t.staged.projectsRoot, 'p', 's10', 'subagents'), { recursive: true });
-    try {
-      symlinkSync(real, t.agent('p', 's10', 'agent-link'));
-    } catch {
-      ctx.skip(); // creating a link needs a privilege some Windows accounts lack
-      return;
-    }
+    if (!makeLink(real, t.agent('p', 's10', 'agent-link'), 'file')) return ctx.skip();
     expect(statSync(t.agent('p', 's10', 'agent-link')).isFile()).toBe(true);
     expect((await checkSession(t.staged.runtime, t.termsFile, 'p', 's10')).hits).toEqual([{ key: 's10/subagents/agent-link.jsonl', main: false, source: 'projects' }]);
     rmSync(real);
@@ -121,16 +130,7 @@ describe('checkSession (A38)', () => {
 });
 
 describe('links to folders (a transcript that was not scanned never reads as clean)', () => {
-  // Creating a link can need a privilege some Windows accounts lack: the test skips there.
-  const link = (target: string, path: string): boolean => {
-    try {
-      mkdirSync(join(path, '..'), { recursive: true });
-      symlinkSync(target, path, 'dir');
-      return true;
-    } catch {
-      return false;
-    }
-  };
+  const link = (target: string, path: string): boolean => makeLink(target, path, 'dir');
 
   it('follows a link to a directory under subagents', async (ctx) => {
     const t = setup();
@@ -161,11 +161,7 @@ describe('links to folders (a transcript that was not scanned never reads as cle
     const file = join(t.staged.root, 'agent.jsonl');
     write(file, [DIRTY]);
     mkdirSync(join(t.staged.projectsRoot, 'p', 's15'), { recursive: true });
-    try {
-      symlinkSync(file, join(t.staged.projectsRoot, 'p', 's15', 'subagents'), 'file');
-    } catch {
-      return ctx.skip();
-    }
+    if (!makeLink(file, join(t.staged.projectsRoot, 'p', 's15', 'subagents'), 'file')) return ctx.skip();
     expect((await checkSession(t.staged.runtime, t.termsFile, 'p', 's15')).reason).toBe('unreadable');
     // the session folder as a broken link
     write(t.main('p', 's16'), [CLEAN]);
@@ -176,7 +172,7 @@ describe('links to folders (a transcript that was not scanned never reads as cle
     write(raw, [CLEAN]);
     if (!link(gone, join(t.staged.projectsRoot, 'q'))) return ctx.skip();
     expect((await checkSession(t.staged.runtime, t.termsFile, 'q', 's17')).reason).toBe('unreadable');
-    // the assert gate refuses each
+    // the assert gate refuses the first of them
     await expect(assertDepositable(t.staged.runtime, t.termsFile, 'p', 's14')).rejects.toBeInstanceOf(CliError);
   });
 
@@ -215,6 +211,82 @@ describe('links to folders (a transcript that was not scanned never reads as cle
     expect(failure).toBeInstanceOf(CliError);
     expect(failure instanceof CliError ? failure.message : '').toContain('no list was written');
     expect(failure instanceof CliError ? failure.message : '').not.toContain('brokenproj');
+  });
+});
+
+describe('a link at any level that leads nowhere or to the wrong kind of entry is never clean', () => {
+  type Level = 'projects root' | 'store dir' | 'raw root' | 'project folder' | 'session folder' | 'subagents' | 'main';
+  type Target = 'broken' | 'file' | 'directory';
+  // A root or project folder stops the scan; below that the session reads unreadable.
+  const levels: { level: Level; targets: Target[]; stops: boolean }[] = [
+    { level: 'projects root', targets: ['broken', 'file'], stops: true },
+    { level: 'store dir', targets: ['broken', 'file'], stops: true },
+    { level: 'raw root', targets: ['broken', 'file'], stops: true },
+    { level: 'project folder', targets: ['broken', 'file'], stops: true },
+    { level: 'session folder', targets: ['broken', 'file'], stops: false },
+    { level: 'subagents', targets: ['broken', 'file'], stops: false },
+    { level: 'main', targets: ['broken', 'directory'], stops: false },
+  ];
+  const cases = levels.flatMap(({ level, targets, stops }) => targets.flatMap((target) => (['projects', 'raw'] as const).map((source) => ({ level, target, stops, source }))));
+
+  it.each(cases)('$level as a $target link in $source reads unreadable (stops the scan: $stops)', async ({ level, target, stops, source }, ctx) => {
+    // The roots do not depend on the source: run them once.
+    if ((level === 'projects root' || level === 'store dir' || level === 'raw root') && source === 'raw') return;
+    const t = setup();
+    const { staged } = t;
+    const root = source === 'projects' ? staged.projectsRoot : join(staged.storeDir, 'raw');
+    const other = source === 'projects' ? join(staged.storeDir, 'raw') : staged.projectsRoot;
+    // A clean copy in the other source, and a term-holding file for a link to a file to point at, so a link that is not followed reads clean.
+    write(join(other, 'p', `${S_D}.jsonl`), [CLEAN]);
+    const decoy = join(staged.root, 'decoy', target === 'directory' ? 'dir' : 'file.jsonl');
+    if (target === 'directory') write(join(decoy, 'x.jsonl'), [DIRTY]);
+    else write(decoy, [DIRTY]);
+    const aim = target === 'broken' ? join(staged.root, 'nowhere') : decoy;
+    const type: LinkType = target === 'file' ? 'file' : 'dir';
+    const place: Record<Level, string> = {
+      'projects root': staged.projectsRoot,
+      'store dir': staged.storeDir,
+      'raw root': join(staged.storeDir, 'raw'),
+      'project folder': join(root, 'p'),
+      'session folder': join(root, 'p', S_D),
+      subagents: join(root, 'p', S_D, 'subagents'),
+      main: join(root, 'p', `${S_D}.jsonl`),
+    };
+    const at = place[level];
+    // Levels below the project folder need their parents, with a clean main so the session exists in this source.
+    if (level === 'session folder' || level === 'subagents') write(join(root, 'p', `${S_D}.jsonl`), [CLEAN]);
+    if (level === 'projects root' || level === 'store dir' || level === 'raw root') {
+      // Roots: a clean harness main stays in place unless the root is the projects root itself.
+      write(join(staged.projectsRoot, 'p', `${S_D}.jsonl`), [CLEAN]);
+      if (level === 'projects root') rmSync(at, { recursive: true, force: true });
+      if (level === 'store dir') rmSync(at, { recursive: true, force: true });
+      if (level === 'raw root') rmSync(at, { recursive: true, force: true });
+    }
+    if (level === 'main' || level === 'project folder') rmSync(at, { recursive: true, force: true });
+    if (!makeLink(aim, at, type)) return ctx.skip();
+    expect((await checkSession(staged.runtime, t.termsFile, 'p', S_D)).reason).toBe('unreadable');
+    const scan = await scanStore(staged.runtime, t.termsFile).then(
+      (done) => done,
+      (error: unknown) => error,
+    );
+    if (stops) {
+      expect(scan).toBeInstanceOf(CliError);
+      expect(scan instanceof CliError ? scan.message : '').toContain('no list was written');
+    } else {
+      expect(scan).not.toBeInstanceOf(Error);
+      expect(scan).toMatchObject({ counts: { reasons: { unreadable: 1, noRaw: 0 }, kept: 0 } });
+    }
+  });
+
+  it('lists a session-named link to a file, as the gate reads it', async (ctx) => {
+    const t = setup();
+    write(t.main('p', 's19'), [CLEAN]);
+    const file = join(t.staged.root, 'a-file');
+    write(file, [DIRTY]);
+    if (!makeLink(file, join(t.staged.projectsRoot, 'p', S_D), 'file')) return ctx.skip();
+    const { counts } = await scanStore(t.staged.runtime, t.termsFile);
+    expect(counts).toMatchObject({ sessions: 2, notSessions: 0, reasons: { unreadable: 1 } });
+    expect((await checkSession(t.staged.runtime, t.termsFile, 'p', S_D)).reason).toBe('unreadable');
   });
 });
 
@@ -260,17 +332,10 @@ describe('scanStore and oars sessions exclusions', () => {
     const t = setup();
     const real = join(t.staged.root, 'outside.jsonl');
     write(real, [DIRTY]);
-    mkdirSync(join(t.staged.projectsRoot, 'p'), { recursive: true });
-    try {
-      symlinkSync(real, t.main('p', 'linked'));
-      symlinkSync(join(t.staged.root, 'nowhere.jsonl'), t.main('p', 'broken'));
-    } catch {
-      ctx.skip(); // creating a link needs a privilege some Windows accounts lack
-      return;
-    }
+    if (!makeLink(real, t.main('p', 'linked'), 'file') || !makeLink(join(t.staged.root, 'nowhere.jsonl'), t.main('p', 'broken'), 'file')) return ctx.skip();
     const { counts, excluded } = await scanStore(t.staged.runtime, t.termsFile);
     expect(counts.sessions).toBe(2);
-    expect(counts.reasons).toMatchObject({ term: 1, noRaw: 1, unreadable: 0 });
+    expect(counts.reasons).toMatchObject({ term: 1, noRaw: 0, unreadable: 1 });
     expect(excluded.map((entry) => entry.session).sort()).toEqual(['broken', 'linked']);
   });
 
