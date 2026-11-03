@@ -281,16 +281,27 @@ export interface SessionVerification {
 const statusOf = (result: InvariantResult): RowStatus => (result.violations > 0 ? 'fail' : result.checked === 0 ? 'not run' : 'pass');
 
 /**
- * A result for every skeleton: {@link verifySkeleton} with the session's subagent transcripts' lines as `delegated`, then {@link verifyCaptured} over
- * the session's own capture records. Row 8 (one `sid`) is read within the one session, so it cannot fail here; the store-wide row stays in `verifyCaptured`
- * over all sessions.
+ * A result for every session with a skeleton or a capture record: {@link verifySkeleton} with the session's subagent transcripts' lines as `delegated`,
+ * then {@link verifyCaptured} over the session's own capture records. A session with no skeleton gets rows 1 to 6 at `checked: 0` (`not run`) and its real
+ * rows 7 to 10. Row 8 (one `sid`) is read within the one session, so it cannot fail for a session with a non-null `sid`; a current-version session with a
+ * null `sid` fails it. The store-wide row stays in `verifyCaptured` over all sessions.
  */
 export const verifySessions = (skeletons: readonly Skeleton[], sessions: readonly SessionObservation[], tools: readonly ToolObservation[], frozen: ReadonlySet<string> = new Set<string>()): SessionVerification[] => {
   const delegated = delegatedLines(skeletons);
-  return skeletons.map((skeleton) => {
-    const own = sessions.filter((session) => session.session === skeleton.session);
-    const results = [...verifySkeleton(skeleton, delegated.get(skeleton.session)), ...verifyCaptured(own, tools.filter((tool) => tool.session === skeleton.session), frozen)];
-    return { session: skeleton.session, invariants: results.map((result) => ({ ...result, status: statusOf(result) })) };
+  const byId = <T extends { session: string }>(records: readonly T[]): Map<string, T[]> => {
+    const grouped = new Map<string, T[]>();
+    for (const record of records) grouped.set(record.session, (grouped.get(record.session) ?? []).concat(record));
+    return grouped;
+  };
+  const skeletonOf = new Map(skeletons.map((skeleton) => [skeleton.session, skeleton]));
+  const ownSessions = byId(sessions);
+  const ownTools = byId(tools);
+  const ids = [...new Set([...skeletons.map((skeleton) => skeleton.session), ...sessions.map((session) => session.session)])];
+  return ids.map((id) => {
+    const skeleton = skeletonOf.get(id);
+    const skeletonRows = skeleton === undefined ? INVARIANTS.map((name): InvariantResult => ({ name, checked: 0, violations: 0 })) : verifySkeleton(skeleton, delegated.get(id));
+    const results = [...skeletonRows, ...verifyCaptured(ownSessions.get(id) ?? [], ownTools.get(id) ?? [], frozen)];
+    return { session: id, invariants: results.map((result) => ({ ...result, status: statusOf(result) })) };
   });
 };
 
