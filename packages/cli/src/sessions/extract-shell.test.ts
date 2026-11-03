@@ -172,12 +172,17 @@ describe('pulls: redaction', () => {
 
 describe('MCP pulls', () => {
   it('names the full server from the tool name, which shortName cuts to 10 characters', () => {
-    expect(pullsOfTool('mcp__claude-in-chrome__navigate')).toEqual([{ ecosystem: 'mcp', name: 'claude-in-chrome', version: null }]);
-    expect(pullsOfTool('mcp__a-very-long-server-name__do')).toEqual([{ ecosystem: 'mcp', name: 'a-very-long-server-name', version: null }]);
+    expect(pullsOfTool('mcp__claude-in-chrome__navigate', redact)).toEqual([{ ecosystem: 'mcp', name: 'claude-in-chrome', version: null }]);
+    expect(pullsOfTool('mcp__a-very-long-server-name__do', redact)).toEqual([{ ecosystem: 'mcp', name: 'a-very-long-server-name', version: null }]);
   });
   it('names nothing for any other tool', () => {
-    expect(pullsOfTool('Read')).toEqual([]);
-    expect(pullsOfTool('mcp__')).toEqual([]);
+    expect(pullsOfTool('Read', redact)).toEqual([]);
+    expect(pullsOfTool('mcp__', redact)).toEqual([]);
+  });
+  it('redacts the server name, and drops one that is all mask, which says nothing', () => {
+    const token = 'ghp_abcdefghijklmnopqrstuvwxyz012345';
+    expect(pullsOfTool(`mcp__${token}__x`, redact)).toEqual([]);
+    expect(pullsOfTool(`mcp__me-${token}__x`, redact)).toEqual([{ ecosystem: 'mcp', name: 'me-<secret>', version: null }]);
   });
 });
 

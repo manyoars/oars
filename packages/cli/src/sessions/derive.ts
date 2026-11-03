@@ -112,8 +112,9 @@ const verifyOf = (calls: readonly ToolObservation[]): PromptVerify | undefined =
     if (call.segments === undefined) return undefined;
     const runner = call.segments.findLast(isRunner);
     if (runner !== undefined) {
+      if (call.status === 'none') return 'none';
       if (!runner.read) return 'masked';
-      return call.status === 'ok' ? 'passed' : call.status === 'error' ? 'failed' : 'none';
+      return call.status === 'ok' ? 'passed' : 'failed';
     }
   }
   return 'none';
