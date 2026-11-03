@@ -119,9 +119,10 @@ const failureCandidate = (boundary: Boundary, key: string): Candidate | undefine
   });
 };
 
-export const deriveVersionBoundary: DeriveRelation = (reads) =>
-  screen(
-    boundariesOf(reads).flatMap((boundary) =>
-      toolsAt(boundary).flatMap((key) => [shareCandidate(boundary, key), failureCandidate(boundary, key)].filter((candidate) => candidate !== undefined)),
-    ),
+/** The comparisons a store's change reads allow, above the floor, whether or not any of them moved. */
+export const versionBoundaryCandidates = (reads: readonly Read[]): Candidate[] =>
+  boundariesOf(reads).flatMap((boundary) =>
+    toolsAt(boundary).flatMap((key) => [shareCandidate(boundary, key), failureCandidate(boundary, key)].filter((candidate) => candidate !== undefined)),
   );
+
+export const deriveVersionBoundary: DeriveRelation = (reads) => screen(versionBoundaryCandidates(reads));
