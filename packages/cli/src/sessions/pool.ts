@@ -66,7 +66,7 @@ const readStored = async (file: string): Promise<Read[] | undefined> => {
 /** The current pool's reads: already written when this pool has been read before, else derived and written once. */
 export const refreshPool = async (storeDir: string, store: Store): Promise<{ pool: Pool; reads: Read[] }> => {
   const set = deriveCells(store);
-  const pool = poolOf(set);
+  const pool = poolOf(set, store.errors);
   const files = poolFiles(storeDir);
   await writeAtomic(files.cells, serializeCells(set.cells));
   await writeAtomic(files.motifs, set.motifs.map((motif) => `${JSON.stringify(motif)}\n`).join(''));
