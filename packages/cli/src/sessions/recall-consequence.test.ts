@@ -46,7 +46,7 @@ describe('the consequence window', () => {
   });
 
   it('sums the tokens the window measured and states none when it measured none, since an older capture holds no step costs and zero would read as free', () => {
-    const step = (tokens: number | null): StepObservation => ({ n: 0, seg: 0, action: 'file.read', native: 'Read', identity: null, status: 'ok', cost: { tokens, durationMs: 1 }, parent: null });
+    const step = (tokens: number | null): StepObservation => ({ n: 0, seg: 0, action: 'file.read', native: 'Read', identity: null, status: 'ok', cost: { tokens, durationMs: 1 }, parent: null, edges: [], frameId: 'f' });
     const measured = consequence([call(0, 'Read', 0), call(2, 'Read', 0, { steps: [step(30), step(null)] }), call(3, 'Read', 0, { steps: [step(12)] })], recallAt(1));
     expect(measured?.cost.tokens).toBe(42);
     expect(consequence([call(0, 'Read', 0), call(2, 'Read', 0, { steps: [step(null)] })], recallAt(1))?.cost.tokens).toBeNull();
