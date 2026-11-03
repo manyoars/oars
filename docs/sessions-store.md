@@ -9,7 +9,7 @@ Under `<config>/oars/sessions/` (`%APPDATA%` on Windows, `$XDG_CONFIG_HOME` or `
 
 | Path | What it holds |
 |------|---------------|
-| `observations.jsonl` | The append-only log of captured records. A changed transcript is deposited again under a higher `rev`; readers keep only the highest `rev` of each session. |
+| `observations.jsonl` | The log of captured records, appended to and compacted (below). A changed transcript is deposited again under a higher `rev`; readers keep only the highest `rev` of each session. |
 | `derived.json` | The derived records, rewritten from the log alone at the end of every deposit. |
 | `hook-index.json` | The recurring error signatures per project and overall, read by the hooks. |
 | `skeletons/<session>.json` | One per transcript: ids, timestamps, tool linkage, token counts, a SHA-256 for every content field, and a Merkle root over the raw lines. Hashes only, never content. `verify` checks these. |
@@ -19,6 +19,21 @@ Under `<config>/oars/sessions/` (`%APPDATA%` on Windows, `$XDG_CONFIG_HOME` or `
 | `cells.jsonl`, `motifs.jsonl` | Counts per motif, frame bucket, and day, and the motifs they name. Computed from the log, rewritten by `oars sessions read`, and safe to delete. See "Motifs, cells, and reads". |
 | `reads/<pool>.jsonl` | One pool version's reads, written once and never rewritten, so a read cited by its ID stays what it was. |
 | `raw/<project>/<path>` | oars' own archive of every deposited transcript (below). |
+| `commit-survival.jsonl` | What became of each commit older than `SURVIVAL_DAYS`, appended on a change of state. See "Commit survival". |
+
+## The log's growth and compaction
+
+Every append to `observations.jsonl`, from a hook or a deposit, runs under `store.lock`. A changed transcript adds a full new `rev` of that session, and a
+`CAPTURE_VERSION` bump re-captures every transcript, so during that deposit the log holds about two copies of the store. The size is not limited by a string: every reader
+streams the log line by line, so a log past Node's 536,870,888-character string limit still loads.
+
+At the end of a whole-store deposit, after `state.json` is written and before the derived records are rebuilt, `compactLog` (`store.ts`) drops every line a higher `rev` of its session
+replaces, so the log settles back to the size of the live records. A hook deposit never compacts.
+
+- **What stays.** Only a superseded line goes. A line this version cannot read stays, since a later oars may read it, and a kept line is written back byte for byte. What `loadStore` returns does not change.
+- **What triggers it.** What the log holds, not what the run captured, so a run that died after its re-capture is compacted by the next deposit, even one with nothing left to capture. A log with nothing superseded is read once and not rewritten.
+- **How it stays safe.** The rewrite goes to `observations.jsonl.<pid>.tmp`, is synced, and replaces the log by `rename`, all under the store lock, which its holder keeps refreshed so a long deposit is not judged stale. A crash before the rename leaves the old log whole and a temp file no reader opens, which the next compaction removes.
+- **When it gives up.** Compaction leaves the log as it was and writes one line to stderr, and the next deposit tries again, if the log's size changed during the rewrite (a waiter broke the lock) or if Windows keeps refusing the rename for 30 seconds because a reader holds the log open. A failed compaction does not fail the deposit: the records are safe and an uncompacted log still loads.
 
 ## Two versions
 
@@ -61,34 +76,34 @@ A version-2 session (no `cv`) is still read: its already-derived `prompt` and `e
 
 Every record carries `kind`, `cv`, `sid`, `session`, and `rev` (a version-3 record reads with `sid` null). Text is redacted (secrets by
 pattern and entropy, emails, and the domains named with `--redact-domain`) before it is cut or written. Each field has one class
-(the umbrella repository's D1 spec, Section 1.1):
+(the umbrella repository's D1 spec, Section 1.1). The store uploads nothing, so a class says what a field may hold, not where it goes:
 
-- `L` local-only: stays on this machine at every tier. Raw transcripts, the unhashed paths, the project folder slug, the salt, `state.json`.
-- `A` account store: this machine today; the account's own store from the hosted tier. Redacted text (cut to its limit), join ids, and every salted hash.
-- `P` pooled: names, versions, counts, durations, status, key names, and day-resolution dates. The only class that may ever reach a pooled index; it holds no free text, URL, path, path hash, session id, or branch.
+- `L` the most sensitive: raw transcripts, the unhashed paths, the project folder slug, the salt, `state.json`.
+- `A` redacted text (cut to its limit), join ids, and every salted hash.
+- `P` the least sensitive: names, versions, counts, durations, status, key names, and day-resolution dates. It holds no free text, URL, path, path hash, session id, or branch.
 
 | Record | Fields | Class |
 |--------|--------|-------|
 | every capture record | `kind`, `cv`, `rev`, `sid` | P |
 | `session` (one per transcript) | `agentType` (set on a subagent transcript), `harness` (set on a Cursor session; absent reads as Claude Code), `bytes`, `lines`, `badLines`, `userTurns`, `assistantTurns`, `versions`, `models`, `bashCmds`, `compactSummaries`, `costUsd`, `usage`, `env` (below), `frame`, `frameId` | P |
-| | `session`, `parent`, `spawnedBy`, `spawnedIn` (join ids), `at`, `tsFirst`, `tsLast` (a pool would keep the UTC day), `promptFingerprint`, `repo`, `tools` (native names, which can hold a private MCP server's), `fileHashes`, `urls`, `searches`, `branches`, `tldrs` (400 chars), `confidences` (120 chars) | A |
+| | `session`, `parent`, `spawnedBy`, `spawnedIn` (join ids), `at`, `tsFirst`, `tsLast`, `promptFingerprint`, `repo`, `tools` (native names, which can hold a private MCP server's), `fileHashes`, `urls`, `searches`, `branches`, `tldrs` (400 chars), `confidences` (120 chars) | A |
 | | `project` (the folder slug, with the username and directory names), `files` (the paths as written, redacted) | L |
 | `user-prompt` (one per prompt) | `index`, `wallSec`, `thinking`, `turns`, `model`, `efforts`, `skills`, `usage`, `frame`, `frameId` | P |
-| | `session`, `ts` (a pool would keep the UTC day), `head` (the first 300 characters), `promptFingerprint` | A |
+| | `session`, `ts`, `head` (the first 300 characters), `promptFingerprint` | A |
 | `tool` (one per tool call) | `n`, `status` (`ok`, `error`, or `none` when no result is in the file; one record per tool-use id), `keys` (the input's key names), `durationMs`, `harnessVersion`, `agentType`, `side`, `prompt`, `targetBase`, `steps` | P |
-| | `session`, `parent`, `toolUseId`, `ts` (a pool would keep the UTC day), `tool` (the native name, which can hold a private MCP server's), `target` in either form (a salted hash, or the first line's program and subcommand, where a word can be anything), and `segments`, `pulls`, and `commits` (a plain word, a private package name, and a sha can each identify private work) | A |
+| | `session`, `parent`, `toolUseId`, `ts`, `tool` (the native name, which can hold a private MCP server's), `target` in either form (a salted hash, or the first line's program and subcommand, where a word can be anything), and `segments`, `pulls`, and `commits` (a plain word, a private package name, and a sha can each identify private work) | A |
 | `error-line` (one per failed result) | `harnessVersion`, `side`, `prompt`, `after` | P |
-| | `session`, `toolUseId`, `tool` (the native name), `ts` (a pool would keep the UTC day), `line` (the first informative line, redacted, not normalized, cut to 1,000 characters) | A |
+| | `session`, `toolUseId`, `tool` (the native name), `ts`, `line` (the first informative line, redacted, not normalized, cut to 1,000 characters) | A |
 | `prompt` (derived, one per prompt) | `kind`, `v`, `rev`, `index`, `wallSec`, class (`cls`), `tools`, `shape`, `errors`, `thinking`, `sideTools`, `turns`, `model`, `efforts`, `skills`, `usage`, `recovery`, `explore`, `act`, and `bigrams` (the motif vector) | P |
 | | `session`, `head` (the first 300 characters, redacted), `ts`, `promptFingerprint` (`contextFingerprint` on this derived record), and the outcome signals `verify`, `stopped`, `commits`, and `redo` (below) | A |
 | `error` (derived, one per error) | `kind`, `v`, `rev`, `tool`, `harnessVersion`, `editFollowed`, `cls`, `prompt`, `next` (tool names), episode `outcome` and `calls` | P |
 | | `session`, `agent` (the subagent transcript id, a join id), `toolUseId` (a join id), `ts`, `sig` (redacted at capture, normalized at derive), `example` (160 characters) | A |
 | store files | `salt`, `state.json`, `raw/`, `hook-index.json` `projects` keys (folder slugs), `mcp-calls.jsonl` `cwd` (the server's working directory, unhashed) | L |
-| | skeleton lines (`skeletons/<session>.json`: ids, usage, block hashes, each cost-state model's usage keys; a pool would hold only `merkleRoot` and `leaves`), `hook-calls.jsonl` `session`, `at`, and `error` (first line, redacted), `mcp-calls.jsonl` `query` and `at` (each `at` is finer than a UTC day; a pool would keep the UTC day) | A |
+| | skeleton lines (`skeletons/<session>.json`: ids, usage, block hashes, each cost-state model's usage keys), `hook-calls.jsonl` `session`, `at`, and `error` (first line, redacted), `mcp-calls.jsonl` `query` and `at` (each `at` is finer than a UTC day) | A |
 | | `hook-calls.jsonl` `event`, `hit`, `ms`; `mcp-calls.jsonl` `matches` | P |
 
-A pool may hold a day-resolution date only: none of the A fields above reaches it. `sw` (the per-field local-only switch for text
-fields on a hosted store) applies to `urls`, `searches`, `branches`, `tldrs`, `confidences`, `head`, `line`, `sig`, `example`, and `mcp-calls.jsonl` `query`.
+A `P` date is at day resolution only: the finer timestamps above are all class `A`. `sw` (the per-field local-only switch for text
+fields) applies to `urls`, `searches`, `branches`, `tldrs`, `confidences`, `head`, `line`, `sig`, `example`, and `mcp-calls.jsonl` `query`.
 
 `env` (class P) is `{ harness, oars, node, os }`: the last harness version the transcript names, the oars package that captured it, the
 Node.js version, and `process.platform`. A library version is recorded only when a transcript states it, and none is read today.
@@ -115,21 +130,23 @@ network or a model: a value outside a closed list reads `<literal>` or is droppe
 
 A `frame` sits on each prompt, and on the session for the calls before the first prompt: `{ harness, harnessVersion, model, effort, day, platform,
 shell, stack }`. `day` is the UTC date. `stack` is a language mix, framework names, and a repository size bucket, each from a closed
-list. `frameId`, beside it on the record, is a 16-hex hash of the frame, and a step names it.
+list. `frameId`, beside it on the record, is a 16-hex hash of the frame, and a step names it. `shell` and `stack` are read across the whole
+transcript, so they belong to the file at this `rev`: capturing a transcript that has grown can change them, and with them the `frameId` of its
+earlier prompts.
 
-`steps` sits on the tool record, one per call, or one per command of a shell call (`&&`, `||`, `;`, pipes, and subshells, with quoted separators
-left alone, tied by `seg`). It is nested so `n`, the count bindings, and the Merkle checks do not move.
+`steps` sits on the tool record, one per call, or one per command of a shell call, the last 50 as with `segments` (`&&`, `||`, `;`, pipes, and
+subshells, with quoted separators left alone, tied by `seg`). It is nested so `n`, the count bindings, and the Merkle checks do not move.
 
 | Field | Holds |
 |-------|-------|
 | `n`, `seg` | The call's position in the transcript, and the step's position in the call. |
 | `action` | One of the closed list in `src/sessions/actions.ts`, from one table per adapter. An unmapped name is `other`. |
 | `native` | The harness's name for the tool when its table lists the name, or when every name it holds is public, else `<literal>`. |
-| `identity` | By action: shell `{ program, sub, flags, pulls? }` (flag names, never their values, so `-c1-200` reads `-c` and `head -20` reads `-N`; a pull is `{ registry, name, version }`), MCP `{ server, tool }`, skill `{ skill }`, web `{ host }`, else null. Any value outside the allowlist is `<literal>`. |
-| `status` | The call's status where it reports this segment; `none` where it does not, such as a segment a pipe hides. |
+| `identity` | By action: shell `{ program, sub, flags, pulls? }` (flag names, never their values, so `-c1-200` reads `-c` and `head -20` reads `-N`; a pull is `{ registry, name, version }`), MCP `{ server, tool }` (a server name is a label the user picks, so `tool` is `<literal>` unless the allowlist lists that tool under that server, and on a harness whose spelling cannot say where the server name ends, as Cursor's `mcp_<server>_<tool>`), skill `{ skill }`, web `{ host }`, else null. Any value outside the allowlist is `<literal>`. |
+| `status` | The call's status where it reports this segment; `none` where it does not, such as a segment a pipe hides. Every segment of an `&&` chain holds the call's status, because the result does not say which failed, so `error` there does not mean that segment failed, and a later clean run of it still gets a `retried` edge. |
 | `cost` | `{ tokens, durationMs }` on the first segment; later segments hold nulls. `tokens` are the response's output tokens shared evenly among its calls. |
 | `parent` | On a subagent's step, the `n` of the call that spawned it, in the transcript its session record names as `spawnedIn` (the main session, or a sibling subagent, since a subagent can spawn another); null when that call is not known. |
-| `edges` | The edges arriving at this step, `{ kind, n, seg }` naming the source: `next` (order within a prompt's line of work), `spawned`, `retried` (same action and identity after that one failed), and `after-error`. `spawned` needs the subagent's `.meta.json`; `raw/` does not hold that file, so a re-capture takes `spawnedBy` from the log, and a subagent first seen in `raw/` has no such edge. |
+| `edges` | The edges arriving at this step, `{ kind, n, seg }` naming the source: `next` (order within a prompt's line of work), `spawned`, `retried` (same native name and same redacted command or target, after that one failed), and `after-error`. `spawned` needs the subagent's `.meta.json`; `raw/` does not hold that file, so a re-capture takes `spawnedBy` from the log, and a subagent first seen in `raw/` has no such edge. |
 | `frameId` | The frame of the call's prompt. |
 
 Comparing counts across capture versions misleads: a new version can re-read the same transcript into different rows. Compare within one `cv`.
@@ -174,6 +191,48 @@ an open question (M4); until it is settled two machines of one account hash the 
 `raw/`, or, for a Cursor session, whose composer is gone from Cursor, is counted `cv-frozen` instead and never fails `--strict`, since it
 cannot be captured again), one `sid` across the store, every `fileHash` is a path target of a tool call, and `targetBase` is set on a path
 target and on nothing else.
+
+`verify` also reports every session on its own (`--json`: `sessionResults`, each session's ten rows with a status of `pass`, `fail`, or `not run`), audits each session against its raw file (`audit`, layer 4 at T0: the raw-file match, the Merkle root recomputed over the first `leaves` lines, and the count bindings), and scores each session against the operator's own other weeks (`selfBaseline`, layer 2: `not run` below 1,000 tool calls in the week or 4 baseline weeks); `root mismatch` and `counts do not bind` fail `--strict`.
+
+### Commit survival
+
+`oars sessions deposit` and the nightly run, never a hook, read the repository of each allowlisted folder and append one line per changed
+sha to `commit-survival.jsonl`: `{ sha, state, day }`, with `sha` as captured (class A), `state` (class P), and a day-resolution `day`
+(class P). Only a call in a main transcript whose `ts` is more than `SURVIVAL_DAYS` (7) old counts, so a sha `commits` could not read and a
+subagent's commit are not observed. `git commit -q` prints no `[branch sha]` line, so a quiet commit's sha is read only when a read-back is
+the call's final command; a store that commits quietly observes few of its commits. The latest line of a sha wins. It is a separate file, so
+what `verify` checks is untouched.
+
+| `state` | Rule | What it does not say |
+|---------|------|---------------------|
+| `reverted` | A commit on the default branch says `This reverts commit <full sha>`, and that revert was not itself reverted. Checked first. | A hand-written or partial undo, and a revert that names a squash's sha rather than this one, are not seen. A revert of a merge marks the merge commit only, so the commits it brought in still read `survived`. |
+| `survived` | An ancestor of the default branch. | The lines may since have been rewritten by ordinary later work. |
+| `unreachable` | The repository holds the commit, but the default branch does not reach it. | Not a failure: a squash merge, a rebase on landing, and an open branch all read this way. |
+| `unknown` | The repository is absent or shallow, it has no default branch this code can name, git failed, or it does not hold the sha. | A session that committed in another repository reads this way, since only its own project's repository is read. |
+
+The repository is the first `cwd` in the session's transcript whose slug is the allowlisted project, then its root (`makeRepoRoot`). A later
+`cd` is never followed, and a folder outside this run's allowlist is never read. Git is read-only and asks no network, so the default
+branch (`origin/HEAD`, else `origin/main`, `origin/master`, `main`, `master`) is as of the last fetch. A failed read never fails the deposit,
+and an `unknown` never replaces a known state, so a passing failure does not undo an observation.
+
+### What `books` adds
+
+`oars sessions books --by class|model|harness|pull` adds these columns, in text and `--json`. The signals stay separate, and the text ends
+with a line saying they are associations in one operator's logs, not measured lift.
+
+| Column | `--json` | Count, of what |
+|--------|----------|----------------|
+| `passed` | `verifyPassed` | `verify` passed, of prompts that edited and whose `verify` is readable (not `na`, not `masked`, not absent; `none` counts, since no runner read as passing) |
+| `stop` | `stopped` | A stop, of prompts carrying `stopped` |
+| `redo` | `redone` | A redo, of prompts carrying `redo` |
+| `commits` | `commits` | The prompts' `commits`, with or without a sha |
+| `settled` | `settled` | Distinct shas whose state is `survived`, `reverted`, or `unreachable` |
+| `survived` | `survived` | `survived`, of `settled` |
+
+Below `BOOKS_MIN_PROMPTS` (30) in its denominator a share prints as `too few`, and `--json` gives its `share` as null beside its `count` and
+`of`. A settled commit counts toward that minimum the way a prompt does. `--by pull` has one row per `ecosystem:name` from the calls' `pulls`, a
+prompt counts once in each row it pulled, so the rows overlap, and a prompt that pulled nothing is in none. Every column reads the main line
+only: subagent work is left out.
 
 ## Motifs, cells, and reads
 
@@ -289,7 +348,7 @@ bears on `CAPTURE_VERSION`, not `EXTRACTOR_VERSION`: the rule is that a captured
 alone bump `EXTRACTOR_VERSION`. It is `CAPTURE_VERSION` 5 (t733). t700 added `models` with no bump because no version-3 store had shipped; a
 version-4 store is on operators' machines now, so the next deposit captures every transcript again and writes the keys. The compatibility
 reader still fills a skeleton written without them (a bare model name, or no `models`) with no keys, so a transcript that is gone from disk
-keeps its excess keys under `other`. Class A, with the rest of the skeleton lines (a pool would not hold them).
+keeps its excess keys under `other`. Class A, with the rest of the skeleton lines.
 
 ## More than one repository in a store
 
@@ -306,7 +365,7 @@ One store can hold several repositories, and neither the G1 reading nor the Sess
   into repositories by slug: a worktree folds into its repository, and a folder that extends another stored folder joins the shortest.
   Three consequences:
   - Sibling folders whose slugs share a prefix (`app` and `app-two`) share one window.
-  - A nested repository (`tradeaor/oars`) ranks by its parent's window while `measure --repo tradeaor/oars` counts only itself, so the
+  - A nested repository (`parent/oars`) ranks by its parent's window while `measure --repo parent/oars` counts only itself, so the
     two readings differ.
   - A stored parent folder is a prefix of its children, so one allow-listed session from the parent (the home folder, or the folder
     holding several checkouts) folds those repositories into one window and the isolation reverts to the whole store. Keep such a

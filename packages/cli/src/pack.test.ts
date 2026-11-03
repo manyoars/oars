@@ -1,5 +1,5 @@
 // What `npm publish -w packages/cli` would upload, read from `npm pack --dry-run --json`: the built CLI with the bin that
-// `oars` runs, the golden deploy plans aor-web's parity check reads, and LICENSE; never the TypeScript source, a test or the
+// `oars` runs, the golden deploy plans the web app's parity check reads, and LICENSE; never the TypeScript source, a test or the
 // fake platform. `--ignore-scripts` keeps this test from rebuilding dist/ while the other tests run beside it; the root check
 // script builds first (the build also copies the plans in), and `prepack` rebuilds at publish.
 import { spawnSync } from 'node:child_process';
