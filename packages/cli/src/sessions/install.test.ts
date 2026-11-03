@@ -332,6 +332,17 @@ describe('retention floor', () => {
     expect(kept.retention).not.toContain('unset, the default');
   });
 
+  it('raises a user value of 0 to the floor in the target file when --keep-retention is off', async () => {
+    const dir = scratch();
+    const runtime = runtimeIn(dir);
+    mkdirSync(join(dir, 'user'), { recursive: true });
+    writeFileSync(runtime.userSettings, JSON.stringify({ cleanupPeriodDays: 0 }));
+    const file = join(dir, 'repo', '.claude', 'settings.json');
+    const raised = await installHooks(runtime, file, false);
+    expect(raised.retention).toBe(`Raised cleanupPeriodDays from 0 (from ${runtime.userSettings}) to 365 in ${file}.`);
+    expect((await readJson(file)).cleanupPeriodDays).toBe(365);
+  });
+
   it('reads the harness default when the file sets none', () => {
     expect(effectiveRetention({})).toBe(30);
     expect(effectiveRetention({ cleanupPeriodDays: 12 })).toBe(12);
