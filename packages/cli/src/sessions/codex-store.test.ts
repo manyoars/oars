@@ -6,7 +6,7 @@ import { runHook } from './hooks.js';
 import { books, formatMeasure, measure, recall } from './query.js';
 import { harnessOf } from './schema.js';
 import type { Source, SourceStore } from './sources.js';
-import { deposit, loadStore, paths, readSkeletons } from './store.js';
+import { deposit, frozenSessions, loadStore, paths, readSkeletons } from './store.js';
 import { verifyAll, verifyCaptured } from './verify.js';
 import { cleanup, NOW, rolloutLine as line, stage, stageCodex } from './test-support.js';
 
@@ -112,17 +112,14 @@ describe('depositing the Codex source', () => {
     expect(result.sources.codex?.unreadable.join(NL)).toContain(C);
   });
 
-  it('names a wholly corrupt or Paginated rollout and leaves its cursor alone, so a fixed file is read next time', async () => {
+  it('names a wholly corrupt rollout and leaves its cursor alone, so a fixed file is read next time', async () => {
     const s = staged();
     stageCodex(s.root, [
       { id: E, lines: '{torn\nnot json\n' },
-      { id: F, lines: [meta(F, '/x', { history_mode: 'paginated' }), line(T(2), 'event_msg', { type: 'item_completed' })] },
     ]);
     const result = await deposit(s.runtime, options(['codex']));
     const unreadable = result.sources.codex?.unreadable.join(NL) ?? '';
     expect(unreadable).toContain(E);
-    expect(unreadable).toContain(F);
-    expect(unreadable).toMatch(/paginated/);
     expect(trackedKeys(s.storeDir)).toEqual([`codex/${A}`, `codex/${B}`]);
     expect(result.sessions).toBe(2);
   });
@@ -226,5 +223,53 @@ describe('Codex subagent rollouts', () => {
     const store = await loadStore(s.storeDir);
     expect(store.sessions.map((session) => session.session)).toEqual([`codex-${A}`]);
     expect(store.subagents.map((session) => [session.session, session.parent])).toEqual([[`codex-${B}`, `codex-${A}`]]);
+  });
+});
+
+describe('Paginated and forked rollouts through the store', () => {
+  const prompt = (id: string) => line(T(2), 'event_msg', { type: 'item_completed', thread_id: id, turn_id: 't1', item: { type: 'UserMessage', id: 'u1', content: [{ type: 'text', text: 'fix the build', text_elements: [] }] } });
+
+  it('deposits a Paginated rollout (the default upstream writes) and holds every verify invariant', async () => {
+    const s = stage();
+    const home = stageCodex(s.root, [{ id: A, lines: [meta(A, '/work/app', { history_mode: 'paginated' }), prompt(A), line(T(5), 'event_msg', { type: 'agent_message', message: 'legacy event, not persisted in this mode' }), usage] }]);
+    const result = await deposit({ ...s.runtime, sourceRoots: { codex: home } }, options(['codex']));
+    expect(result).toMatchObject({ sessions: 1 });
+    expect(result.sources.codex?.unreadable).toEqual([]);
+    const store = await loadStore(s.storeDir);
+    expect(store.prompts.filter((entry) => entry.session === `codex-${A}`)).toHaveLength(1);
+  });
+
+  it('drops a Legacy fork copy of its parent, found through forked_from_id in the same store', async () => {
+    const s = stage();
+    const fork = [meta(B, '/work/app', { forked_from_id: A }), ...rollout(A, '/work/app').slice(1, 3), line(T(20), 'event_msg', { type: 'user_message', message: 'own prompt' })];
+    const home = stageCodex(s.root, [
+      { id: A, lines: rollout(A, '/work/app') },
+      { id: B, lines: fork },
+    ]);
+    await deposit({ ...s.runtime, sourceRoots: { codex: home } }, options(['codex']));
+    const store = await loadStore(s.storeDir);
+    expect(store.prompts.filter((entry) => entry.session === `codex-${B}`)).toHaveLength(1);
+  });
+
+  it('keeps a session whose store cannot be listed out of the cv-frozen set, but freezes one a readable store no longer lists', async () => {
+    const s = stage();
+    const unreadable = join(s.root, 'unreadable-home');
+    mkdirSync(unreadable, { recursive: true });
+    writeFileSync(join(unreadable, 'sessions'), 'a plain file, not a folder');
+    const behind = [{ project: 'p', session: `codex-${A}` }];
+    expect([...(await frozenSessions({ ...s.runtime, sourceRoots: { codex: unreadable } }, behind))]).toEqual([]);
+    const home = stageCodex(s.root, [{ id: B, lines: rollout(B, '/work/app') }]);
+    expect([...(await frozenSessions({ ...s.runtime, sourceRoots: { codex: home } }, behind))]).toEqual([`codex-${A}`]);
+  });
+
+  it('logs an unreadable sessions folder by base name and reason only, even when the root is outside the home folder', async () => {
+    const s = stage();
+    const outside = join(s.root, 'elsewhere', 'codex-home-name');
+    mkdirSync(outside, { recursive: true });
+    writeFileSync(join(outside, 'sessions'), 'a plain file, not a folder');
+    const result = await deposit({ ...s.runtime, sourceRoots: { codex: outside } }, options(['codex']));
+    const logged = result.sources.codex?.unreadableLogged.join(NL) ?? '';
+    expect(logged).toContain('sessions');
+    expect(logged).not.toContain('codex-home-name');
   });
 });
