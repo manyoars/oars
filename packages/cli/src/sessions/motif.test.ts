@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { motifsOf, namedId, shapeId, stepsOfCall, MOTIF_LENGTHS, motifName, type WindowStep } from './motif.js';
-import type { StepObservation, ToolObservation } from './schema.js';
+import { step as captured } from './pool-fixture.js';
+import type { ToolObservation } from './schema.js';
 
 const call = (over: Partial<ToolObservation>): ToolObservation => ({
   kind: 'tool',
@@ -26,20 +27,6 @@ const call = (over: Partial<ToolObservation>): ToolObservation => ({
 });
 
 const step = (action: WindowStep['action'], identity: WindowStep['identity'] = null): WindowStep => ({ action, identity });
-
-const captured = (n: number, seg: number, action: StepObservation['action'], over: Partial<StepObservation> = {}): StepObservation => ({
-  n,
-  seg,
-  action,
-  native: 'tool',
-  identity: null,
-  status: 'ok',
-  cost: { tokens: null, durationMs: null },
-  parent: null,
-  edges: [],
-  frameId: 'f',
-  ...over,
-});
 
 describe('motif IDs', () => {
   it('joins the same shape from two differently salted accounts, in two frames', () => {
