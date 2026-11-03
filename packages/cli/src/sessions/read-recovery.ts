@@ -12,7 +12,11 @@ import { signatureRecord } from './store.js';
 
 const shapeOf = (actions: readonly CanonicalAction[]): string => shapeMotif(actions.map((action) => ({ action, identity: null }))).motifId;
 
-const isEarlier = (a: string | null, b: string | null): boolean => a !== null && (b === null || a < b);
+/** Earliest first; a tie falls to what the rows say, so the copy that stands never depends on record order. */
+const standsBefore = (a: ErrorObservation, b: ErrorObservation): boolean => {
+  if (a.ts !== b.ts) return a.ts !== null && (b.ts === null || a.ts < b.ts);
+  return JSON.stringify([a.sig, a.next, a.editFollowed]) < JSON.stringify([b.sig, b.next, b.editFollowed]);
+};
 
 /**
  * One row per session and tool-use id (t752, t762). The tool fold leaves every error line in place, so a store not yet captured again keeps a replayed result's line beside the
@@ -28,7 +32,7 @@ const oneRowPerCall = (errors: readonly ErrorObservation[]): ErrorObservation[] 
     }
     const key = `${error.agent ?? error.session}\n${error.toolUseId}`;
     const held = calls.get(key);
-    if (held === undefined || isEarlier(error.ts, held.ts)) calls.set(key, error);
+    if (held === undefined || standsBefore(error, held)) calls.set(key, error);
   }
   return [...rows, ...calls.values()];
 };
