@@ -189,7 +189,7 @@ The eight families at order 1, in the order they are listed. None adjusts for it
 |--------|-------|-------|-------------|
 | `recovery` | signature hash, failed action | sessions, errors, days, what followed | `editFollowed` is not success; refusals and hook denials are local policy |
 | `fit` | motif, frame bucket | failure rate | a failure is not a misfit; prompt class |
-| `cost` | prompt class, model, ISO week | tokens and seconds per prompt, error share | class drift, subagent work, task size |
+| `cost` | prompt class, model, ISO week | tokens and seconds per prompt, error share | class drift, subagent work, task size; a prompt with no wall time adds no seconds but still counts, so seconds per prompt understates |
 | `change` | motif, harness, version bucket | share and failure rate in that bucket; a move between buckets is order 2 | effort, rule commits, class drift, date |
 | `live` | motif, day | share of the day beside its share of the seven days before | the day's mix; no multiple-test control, so it flags nothing |
 | `adoption` | motif | share of all steps, first and last day, days seen | the operator's own rules |
