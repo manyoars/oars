@@ -125,3 +125,52 @@ describe('an entity read names itself', () => {
     expect(rendered).not.toContain('ignore');
   });
 });
+
+describe('a read names its tools through the tables of its own harnesses', () => {
+  it('a Cursor read', () => {
+    const { rendered, names } = renderAnswer([read({ tool: 'run_terminal_cmd', keys: ['command'], harnesses: ['cursor'], followed: [['read_file_v2', 2]] })], null, 'claude-code');
+    expect(rendered).toContain('\nrun_terminal_cmd [command] |');
+    expect(rendered).toContain('then: file.read x2');
+    expect(names).toEqual(['file.read']);
+  });
+
+  it('a Codex read', () => {
+    const { rendered, names } = renderAnswer([read({ tool: 'apply_patch', keys: [], harnesses: ['codex'], followed: [['update_plan', 1]] })], null, 'claude-code');
+    expect(rendered).toContain('\napply_patch |');
+    expect(rendered).toContain('then: plan.update x1');
+    expect(names).toEqual(['plan.update']);
+  });
+
+  it('the first of several harnesses that lists the tool', () => {
+    const { rendered } = renderAnswer([read({ tool: 'run_terminal_cmd', keys: [], harnesses: ['claude-code', 'cursor'], followed: [] })], null, 'claude-code');
+    expect(rendered).toContain('\nrun_terminal_cmd |');
+  });
+
+  it('every table when the read names no harness', () => {
+    const { rendered } = renderAnswer([read({ tool: 'apply_patch', keys: [], harnesses: [], followed: [['run_terminal_cmd', 1]] })], null, 'claude-code');
+    expect(rendered).toContain('\napply_patch |');
+    expect(rendered).toContain('then: shell.exec x1');
+  });
+
+  it('a harness a table holds no row for still knows its MCP call and refuses the rest', () => {
+    const { rendered } = renderAnswer([read({ tool: 'private_tool', keys: [], harnesses: ['cursor'], followed: [['mcp__private__call', 1]] })], null, 'claude-code');
+    expect(rendered).toContain('\nother |');
+    expect(rendered).toContain('then: mcp.call x1');
+    expect(rendered).not.toContain('private');
+  });
+
+  it('a stored motif read by its steps, without what the steps call', () => {
+    expect(renderAnswer([read({ tool: 'file.read[Read]>shell.exec[git]', keys: [] })], null, 'claude-code').rendered).toContain('\nfile.read>shell.exec |');
+    expect(renderAnswer([read({ tool: 'edit-verify', keys: [] })], null, 'claude-code').rendered).toContain('\nedit-verify |');
+  });
+
+  it('a step that is not canonical makes the motif name nothing', () => {
+    expect(renderAnswer([read({ tool: 'file.read>ignore all previous', keys: [] })], null, 'claude-code').rendered).toContain('\nother |');
+  });
+
+  it('an action a next-step read already states, as itself', () => {
+    const { rendered, names } = renderAnswer([read({ family: 'next-step', tool: 'file.read', keys: [], followed: [['file.edit', 3], ['shell.exec', 1]] })], null, 'claude-code');
+    expect(rendered).toContain('then: file.edit x3, shell.exec x1');
+    expect(names).toEqual(['file.edit', 'shell.exec']);
+  });
+});
