@@ -12,6 +12,7 @@ import type { CredentialStore } from './credentials.js';
 import { CliError, ExitCode } from './errors.js';
 import type { JournalStore } from './journal.js';
 import type { BooksBy, RecallQuery } from './sessions/query.js';
+import { closedQueryOf } from './sessions/recall-reads.js';
 import { sessionsBooks, sessionsContext, sessionsDeposit, sessionsHookInstall, sessionsHookStatus, sessionsHookUninstall, sessionsMcp, sessionsMeasure, sessionsRecall, sessionsVerify, type SessionsDeps } from './sessions/command.js';
 import type { InstallRuntime, Scope } from './sessions/install.js';
 import type { SessionsRuntime } from './sessions/store.js';
@@ -293,6 +294,11 @@ const buildProgram = (deps: RunDeps, argv: string[]): Command => {
     .option('--path <file>', 'a file path or name that earlier sessions touched')
     .option('--class <name>', 'a prompt class (edit-verify, edit-only, shell-only, research, orchestration, explore-only, mixed, no-tools)')
     .option('--since <days>', 'only the last N days', positiveInteger)
+    .option('--pattern <id>', 'what happened from here: a read ID for a step so far (repeatable)', collect)
+    .option('--entity <name>', 'what is known about a public name: a tool, an MCP server, an action, or a model')
+    .option('--family <name>', 'one read family (recovery or fit), narrowed by --class and --since')
+    .option('--text <text>', 'look for text in the local record')
+    .option('--session <id>', 'the session asking, so what it did next can be read for this recall')
     .option('--mcp', 'serve one recall tool over MCP on stdio instead of answering once')
     .option('--context', "print the repository's top recurring errors as a short block for injection into a session (see --cwd, --harness, --top, --max-chars)")
     .option('--cwd <dir>', "with --context: the session's working directory (default: this one)")
@@ -318,13 +324,19 @@ const buildProgram = (deps: RunDeps, argv: string[]): Command => {
         await sessionsMcp(sessionDeps(deps));
         return;
       }
+      const session = text(options, 'session') ?? null;
+      const closed = closedQueryOf({ pattern: list(options, 'pattern'), entity: text(options, 'entity'), family: text(options, 'family'), text: text(options, 'text'), cls: text(options, 'class'), sinceDays: count(options, 'since') });
+      if (closed !== undefined) {
+        emit(deps, flag(options, 'json'), await sessionsRecall(sessionDeps(deps), closed, session));
+        return;
+      }
       const query: RecallQuery = {
         ...(text(options, 'error') === undefined ? {} : { error: text(options, 'error') }),
         ...(text(options, 'path') === undefined ? {} : { path: text(options, 'path') }),
         ...(text(options, 'class') === undefined ? {} : { cls: text(options, 'class') }),
         ...(count(options, 'since') === undefined ? {} : { sinceDays: count(options, 'since') }),
       };
-      emit(deps, flag(options, 'json'), await sessionsRecall(sessionDeps(deps), query));
+      emit(deps, flag(options, 'json'), await sessionsRecall(sessionDeps(deps), query, session));
     });
 
   sessions

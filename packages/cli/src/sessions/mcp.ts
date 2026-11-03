@@ -4,8 +4,10 @@
 // `oars sessions measure` reads for recall calls per session.
 import { appendFile, mkdir } from 'node:fs/promises';
 import { createInterface } from 'node:readline';
-import { formatRecall, recall, type RecallQuery } from './query.js';
-import type { RecallCall } from './schema.js';
+import { appendRecall } from './recall-object.js';
+import { pull, type PullInput } from './recall-reads.js';
+import { MISS_TEXT } from './recall-render.js';
+import { harnessOf, type RecallCall } from './schema.js';
 import { loadStore, paths, readRedactDomains, type SessionsRuntime } from './store.js';
 
 const PROTOCOL = '2025-06-18';
@@ -15,7 +17,7 @@ export const TOOL_NAME = 'oars_recall';
 const TOOL = {
   name: TOOL_NAME,
   description:
-    "Look up a tool error, a file, or a prompt class in this operator's own past agent sessions before solving it again. Returns matching error signatures with session counts, first and last seen, harness versions, and the tools that followed. Local, read-only.",
+    "Look up a tool error, a file, or a prompt class in this operator's own past agent sessions before solving it again. Returns counts per read: sessions, days, harness versions, how far the evidence sits from you, and the actions that followed. Local; each call is recorded as a recall.",
   inputSchema: {
     type: 'object',
     properties: {
@@ -23,6 +25,10 @@ const TOOL = {
       path: { type: 'string', description: 'A file path or file name an earlier session touched.' },
       class: { type: 'string', description: 'A prompt class: edit-verify, edit-only, shell-only, research, orchestration, explore-only, mixed, no-tools.' },
       sinceDays: { type: 'integer', minimum: 1, description: 'Only errors from the last N days.' },
+      prefix: { type: 'array', items: { type: 'string' }, description: 'Read IDs for your steps so far: what happened from here?' },
+      entity: { type: 'string', description: 'A public name: a tool, an MCP server, an action, or a model.' },
+      family: { type: 'string', description: 'A read family to answer: recovery or fit.' },
+      text: { type: 'string', description: 'Text to look for in the local record.' },
     },
   },
 } as const;
@@ -33,9 +39,14 @@ interface Obj {
 
 const isObj = (value: unknown): value is Obj => typeof value === 'object' && value !== null && !Array.isArray(value);
 
-const toQuery = (args: unknown): RecallQuery => {
+const toQuery = (args: unknown): PullInput => {
   const source = isObj(args) ? args : {};
-  const query: RecallQuery = {};
+  const prefix = Array.isArray(source.prefix) ? source.prefix.filter((id): id is string => typeof id === 'string') : [];
+  if (prefix.length > 0) return { form: 'pattern', prefix };
+  if (typeof source.entity === 'string') return { form: 'entity', entity: source.entity };
+  if (typeof source.family === 'string') return { form: 'question', family: source.family };
+  if (typeof source.text === 'string') return { form: 'text', text: source.text };
+  const query: { error?: string; path?: string; cls?: string; sinceDays?: number } = {};
   if (typeof source.error === 'string') query.error = source.error;
   if (typeof source.path === 'string') query.path = source.path;
   if (typeof source.class === 'string') query.cls = source.class;
@@ -61,11 +72,15 @@ export const handleMessage = async (runtime: SessionsRuntime, now: () => number,
     if (params.name !== TOOL_NAME) return failure(id, -32602, `Unknown tool: ${typeof params.name === 'string' ? params.name : ''}`);
     const query = toQuery(params.arguments);
     try {
-      const result = recall(await loadStore(runtime.storeDir), query, now(), undefined, await readRedactDomains(runtime.storeDir));
-      const call: RecallCall = { at: new Date(now()).toISOString(), query: JSON.stringify(query), matches: result.matches.length, cwd: process.cwd() };
+      // The server is not told which session it serves, so `sid` is null: naming it is what a consequence for an MCP pull still needs.
+      const result = pull(await loadStore(runtime.storeDir), query, { sid: null, now: now(), frame: null, harness: harnessOf({}), redactDomains: await readRedactDomains(runtime.storeDir) });
+      const call: RecallCall = { at: new Date(now()).toISOString(), query: JSON.stringify(query), matches: result.legacy?.matches.length ?? result.reads.length, cwd: process.cwd() };
       await mkdir(runtime.storeDir, { recursive: true });
       await appendFile(paths(runtime.storeDir).calls, `${JSON.stringify(call)}\n`, { mode: 0o600 });
-      return reply(id, { content: [{ type: 'text', text: formatRecall(result) }], structuredContent: result });
+      await appendRecall(runtime.storeDir, result.recall);
+      // An agent reads this, so it gets the rendered counts and the structured recall, and no signature text.
+      const { answer, id: recallId, evidence } = result.recall;
+      return reply(id, { content: [{ type: 'text', text: answer.rendered === '' ? MISS_TEXT : answer.rendered }], structuredContent: { recallId, kind: answer.kind, reads: answer.reads, evidence } });
     } catch (error) {
       // A store or log failure must not end the server mid-session: the agent gets an error for this call and can carry on.
       return failure(id, -32603, `Internal error: ${error instanceof Error ? error.message : String(error)}`);
