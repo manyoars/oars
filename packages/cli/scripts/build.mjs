@@ -1,6 +1,6 @@
 // Builds what the published package ships besides package.json and LICENSE. dist/: tsc emits the JavaScript from src/
 // (tsconfig.build.json); the bin file gets its shebang from src/bin.ts. parity/deploy-plans/: a copy of the repo's golden deploy
-// plans, which aor-web's parity check reads from the installed package (design §6, Parity). Both folders are emptied first so a
+// plans, which the web app's parity check reads from the installed package (design §6, Parity). Both folders are emptied first so a
 // deleted source file or plan cannot linger in the tarball.
 import { spawnSync } from 'node:child_process';
 import { copyFileSync, mkdirSync, readdirSync, rmSync } from 'node:fs';
