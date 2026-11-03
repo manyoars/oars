@@ -51,7 +51,12 @@ describe('refreshPool', () => {
     };
     const one = await motifsFrom(forward);
     expect(await motifsFrom(reversed)).toBe(one);
-    const steps = one.trim().split('\n').flatMap((line) => (JSON.parse(line) as { steps: object[] }).steps);
+    const steps = one.trim().split('\n').flatMap((line) => {
+      const parsed: unknown = JSON.parse(line);
+      const held: unknown = typeof parsed === 'object' && parsed !== null ? Reflect.get(parsed, 'steps') : undefined;
+      const list: object[] = Array.isArray(held) ? held : [];
+      return list;
+    });
     expect(steps.length).toBeGreaterThan(0);
     for (const held of steps) expect(Object.keys(held).sort()).toEqual(['action', 'identity']);
   });

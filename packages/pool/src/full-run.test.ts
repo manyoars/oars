@@ -87,7 +87,6 @@ describe('login, deposit, and pull against a local server', () => {
     const db = await pool.db();
     expect(await db.prepare('SELECT COUNT(DISTINCT account) AS count FROM deposits').first('count')).toBe(3);
     expect(await db.prepare('SELECT COUNT(*) AS count FROM deposits').first('count')).toBe(12);
-`);
   }, 60_000);
 
   it('refuses a pull with no sign-in, and sends nothing for a deposit with none', async () => {
