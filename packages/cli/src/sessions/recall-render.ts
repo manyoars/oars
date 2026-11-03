@@ -9,7 +9,7 @@ import type { Frame, Harness } from './schema.js';
 const DAY_MS = 86_400_000;
 const KEY_NAME = /^[A-Za-z_][A-Za-z0-9_]{0,39}$/;
 const DAY = /^\d{4}-\d{2}-\d{2}$/;
-const READ_ID = /^[0-9a-f]{16}$/;
+const READ_ID = /^(read:)?[0-9a-f]{16}$/;
 
 const known = (value: string | null | undefined): value is string => value !== null && value !== undefined && value !== LITERAL;
 

@@ -34,7 +34,7 @@ export interface RecallSlice {
 
 export interface RecallQueryObject {
   form: RecallForm;
-  /** Motif IDs for the asker's steps so far. Read IDs stand in until the motif file lands. */
+  /** What the asker's steps so far name: motif IDs, stored read IDs, or the shape and signature hashes `recall-reads.ts` computes. */
   prefix?: string[];
   /** A public name: package, tool, MCP server, or model. */
   entity?: string;
