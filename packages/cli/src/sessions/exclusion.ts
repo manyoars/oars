@@ -74,8 +74,11 @@ const jsonlUnder = async (dir: string): Promise<string[]> => {
     const path = join(dir, entry.name);
     // `stat` follows a link and throws on a broken one, which the caller counts as unreadable.
     const target = entry.isSymbolicLink() ? await stat(path) : entry;
+    const named = entry.name.endsWith('.jsonl');
+    // A link to the wrong kind of entry was not scanned: a file not named .jsonl, a directory named .jsonl, or anything that is neither.
+    if (entry.isSymbolicLink() && (target.isFile() ? !named : target.isDirectory() ? named : true)) throw new Error('unreadable');
     if (target.isDirectory()) found.push(...(await jsonlUnder(path)));
-    else if (entry.name.endsWith('.jsonl') && target.isFile()) found.push(path);
+    else if (named && target.isFile()) found.push(path);
   }
   return found;
 };
@@ -253,6 +256,8 @@ export const scanStore = async (runtime: SessionsRuntime, termsFile: string): Pr
   for (const root of [runtime.projectsRoot, runtime.storeDir, raw]) {
     if (await badLink(root, 'directory')) throw new CliError('A folder that holds the projects is a link that could not be followed, so no list was written.', ExitCode.INVALID, 'unreadable');
   }
+  // A store log that is a link leading nowhere would load as an empty store, so a logged session would drop out of the list: stop instead.
+  if (await badLink(paths(runtime.storeDir).observations, 'file')) throw new CliError('The store log is a link that could not be followed, so no list was written.', ExitCode.INVALID, 'unreadable');
   // A session the store logged stays listed when its raw is gone everywhere: it has nothing to scan, so it is excluded as no raw.
   const logged = new Map<string, Set<string>>();
   for (const session of (await loadStore(runtime.storeDir)).sessions) logged.set(session.project, (logged.get(session.project) ?? new Set<string>()).add(session.session));
