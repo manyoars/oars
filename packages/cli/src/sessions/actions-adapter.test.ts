@@ -5,7 +5,7 @@ import { captureSession } from './extract.js';
 // The proof that an adapter is rows only: the real extractor runs and the only thing that differs is one harness's table, here holding names no adapter has today.
 vi.mock('./actions.js', async (original) => {
   const actual = await original<typeof Actions>();
-  return { ...actual, ACTION_TABLES: { ...actual.ACTION_TABLES, cursor: { rows: { apply_patch: 'file.edit', exec_command: 'shell.exec' }, mcp: null, shells: { exec_command: 'zsh' } } } };
+  return { ...actual, ACTION_TABLES: { ...actual.ACTION_TABLES, cursor: { rows: { apply_patch: 'file.edit', exec_command: 'shell.exec' }, mcp: null, toolDelimited: true, shells: { exec_command: 'zsh' } } } };
 });
 
 const line = (value: object): string => JSON.stringify(value);

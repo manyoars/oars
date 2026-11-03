@@ -108,6 +108,14 @@ describe('closedFrame', () => {
     expect(closedFrame({ ...base, model: null, harnessVersion: null, effort: null })).toMatchObject({ model: null, harnessVersion: null, effort: null });
   });
 
+  it.each(['2.1.0', '2.1.0-beta.1', '1.2.3-rc1', '3.0.0-canary.20261103', '1.2.3+4'])('keeps %s, a published version shape', (harnessVersion) => {
+    expect(closedFrame({ ...base, harnessVersion }).harnessVersion).toBe(harnessVersion);
+  });
+
+  it.each(['2.1.0-acmecorp', '2.1.0+acmecorp', '2.1.0.acmecorp', '2.1.0-beta.acmecorp', '2.1.0-rcacme'])('masks %s, a version holding a private word', (harnessVersion) => {
+    expect(closedFrame({ ...base, harnessVersion }).harnessVersion).toBe(LITERAL);
+  });
+
   it.each(['claude-opus-5-5', 'claude-fable-5-1', 'claude-haiku-4-5-20251001', 'claude-3-5-sonnet-20241022', 'claude-3-opus-20240229', 'gpt-5.1-codex-max', 'gpt-4o-mini', 'o3-mini', 'gemini-2.5-pro', 'grok-code-fast-1', 'deepseek-r1', 'composer-1', 'cursor-small', 'default', 'auto'])('keeps %s, a published model shape', (model) => {
     expect(closedFrame({ ...base, model }).model).toBe(model);
   });
@@ -215,6 +223,19 @@ describe('the frame on captured records', () => {
     ].join('\n');
     const result = captureSession({ text: old, session: 's', project: 'p', rev: 1, at: 'x', bytes: 1, redact });
     expect(result.prompts[0]?.frame?.model).toBe('claude-opus-4-5');
+  });
+
+  it('gives a grown transcript the shell and stack of the whole file, so an earlier prompt can change frame at the new rev', () => {
+    const prompt = (second: number): string => line({ type: 'user', timestamp: `2026-05-29T04:30:0${String(second)}Z`, message: { role: 'user', content: 'p' } });
+    const call = (id: string, name: string, input: object): string => line({ type: 'assistant', timestamp: '2026-05-29T04:30:05Z', message: { role: 'assistant', content: [{ type: 'tool_use', id, name, input }] } });
+    const start = [prompt(0), call('a', 'Bash', { command: 'ls' })];
+    const grown = [...start, prompt(6), call('b', 'PowerShell', { command: 'ls' }), call('c', 'PowerShell', { command: 'ls' }), call('d', 'Read', { file_path: '/w/a.py' })];
+    const first = captureSession({ text: start.join('\n'), session: 's', project: 'p', rev: 1, at: 'x', bytes: 1, redact });
+    const again = captureSession({ text: grown.join('\n'), session: 's', project: 'p', rev: 2, at: 'x', bytes: 1, redact });
+    expect(first.prompts[0]?.frame).toMatchObject({ shell: 'bash', stack: { languages: [] } });
+    expect(again.prompts[0]?.frame).toMatchObject({ shell: 'powershell', stack: { languages: ['python'] } });
+    expect(again.prompts[0]?.frameId).not.toBe(first.prompts[0]?.frameId);
+    expect(again.tools[0]?.steps?.[0]?.frameId).toBe(again.prompts[0]?.frameId);
   });
 
   it('reads the repository size only through the probe, and only for a known repository', () => {
