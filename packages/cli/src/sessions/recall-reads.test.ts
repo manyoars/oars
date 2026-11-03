@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { answerQuery, fitReads, poolVersionOf, pull, readIdOf, recoveryReads, toolShapeId, type ClosedQuery } from './recall-reads.js';
 import { error as errorRow, prompt as promptRow, session as sessionRow, store as storeOf, tool as toolRow } from './pool-fixture.js';
 import { LITERAL } from './public-vocabulary.js';
+import type { RecallSlice } from './recall-object.js';
 import type { ToolObservation } from './schema.js';
 import { deposit, loadStore, type Store } from './store.js';
 import { cleanup, NOW, stage } from './test-support.js';
@@ -205,5 +206,43 @@ describe('a query closes at record time', () => {
     const made = pull(synthetic(), { form: 'question', family: 'recovery', slice: { harnessVersion: 'not a version' } }, context);
     expect(made.recall.answer.kind).toBe('miss');
     expect(made.recall.query.text).toBe('not a version');
+  });
+});
+
+describe('a fit question narrowed by a slice', () => {
+  const RECENT = '2026-06-09T12:00:00.000Z';
+  const OLD = '2026-01-01T00:00:00.000Z';
+  /** Ten calls of one shape, two of them failing: a session alone clears no floor, and three of them do. */
+  const calls = (session: string, ts: string, harnessVersion: string): ToolObservation[] =>
+    Array.from({ length: 10 }, (_, n) => toolRow(session, n, 'Monitor', { sid: 's', ts, status: n < 2 ? 'error' : 'ok', keys: ['query'], durationMs: 5, toolUseId: `${session}-${String(n)}`, harnessVersion, prompt: 0 }));
+  const narrowed = storeOf({
+    sessions: ['a', 'b', 'c', 'd'].map((id) => sessionRow(id)),
+    prompts: [...['a', 'b', 'c'].map((id) => promptRow(id, 0, { cls: 'edit-only', model: 'claude-opus-5-5' })), promptRow('d', 0, { cls: 'mixed', model: 'claude-sonnet-5-5' })],
+    errors: [],
+    tools: [...calls('a', RECENT, '2.1.300'), ...calls('b', RECENT, '2.1.300'), ...calls('c', RECENT, '2.1.300'), ...calls('d', OLD, '2.1.100')],
+  });
+  const fit = (slice: RecallSlice) => answerQuery(narrowed, { form: 'question', family: 'fit', slice }, NOW);
+
+  it('counts every call with no slice', () => {
+    expect(fit({})[0]).toMatchObject({ n: 4, count: 8, calls: 40, harnessVersions: ['2.1.100', '2.1.300'] });
+  });
+
+  it.each<[string, RecallSlice]>([
+    ['sinceDays', { sinceDays: 1 }],
+    ['cls', { cls: 'edit-only' }],
+    ['model', { model: 'claude-opus-5-5' }],
+    ['harnessVersion', { harnessVersion: '2.1.300' }],
+  ])('narrows the counts by %s, not only which read is picked', (_field, slice) => {
+    expect(fit(slice)[0]).toMatchObject({ n: 3, count: 6, calls: 30, harnessVersions: ['2.1.300'] });
+  });
+
+  it('still applies the floors to what is left', () => {
+    expect(fit({ cls: 'mixed' })).toEqual([]);
+  });
+
+  it('reads what came next past the end of the slice', () => {
+    const store = storeOf({ sessions: [sessionRow('a')], prompts: [], errors: [], tools: [tool('a', 0, 'Monitor', ['query'], 'error'), { ...tool('a', 1, 'Read', ['file_path'], 'ok'), prompt: 1 }] });
+    const [read] = fitReads(store, { minFailedSessions: 1, minFailedShare: 0, minCalls: 1 }, (call) => call.prompt === 0);
+    expect(read).toMatchObject({ calls: 1, count: 1, followed: [['Read', 1]] });
   });
 });
