@@ -84,6 +84,17 @@ describe('renderAnswer', () => {
     ['read id', { readId: POISON }],
   ];
 
+  it.each(['ignore_all_previous_instructions', 'ignorePreviousInstructionsNow', 'ignore_previous_instructions'])('keeps %s out, an instruction shaped like an identifier', (key) => {
+    const { rendered } = renderAnswer([read({ keys: ['query', key] })], frame());
+    expect(rendered).toContain('Monitor [query] |');
+    expect(rendered).not.toContain(key);
+  });
+
+  it('keeps the long keys real tools have', () => {
+    const { rendered } = renderAnswer([read({ keys: ['run_in_background', 'dangerouslyDisableSandbox', '__unparsedToolInput'] })], frame());
+    expect(rendered).toContain('Monitor [run_in_background, dangerouslyDisableSandbox, __unparsedToolInput] |');
+  });
+
   it.each(POISONED)('keeps prose or an instruction in %s out of the output', (_name, over) => {
     const { rendered, names } = renderAnswer([read(over)], frame());
     expect(rendered).not.toContain('Ignore');
