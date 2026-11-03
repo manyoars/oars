@@ -333,7 +333,7 @@ describe('Paginated and forked rollouts through the store', () => {
     const { skeletons } = await readSkeletons(s.storeDir);
     const store = await loadStore(s.storeDir);
     // The continuing turns of a reverted thread land under subagents, parent the thread, so the thread is still one session in the counts. A subagent's prompts are
-    // not prompt records (store.ts:1085-1092: only a main session derives them), so the one post-revert prompt shows in the session's userTurns and nowhere in
+    // not prompt records (store.ts:1088-1095: only a main session derives them), so the one post-revert prompt shows in the session's userTurns and nowhere in
     // store.prompts. That is the documented limit; the prefix is not copied into the new file, so no prompt is counted twice.
     expect(store.subagents.map((session) => [session.session, session.parent])).toEqual([[`codex-${A}_${B}`, `codex-${A}`]]);
     expect(store.subagents[0]).toMatchObject({ userTurns: 1 });
