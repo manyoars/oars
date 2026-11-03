@@ -271,6 +271,19 @@ ${formatStepCounters(stepCounters(await readSteps(staged.storeDir)))}`);
     expect(text).not.toBe('No prompts in the store.');
   });
 
+  it('books --by pull --repo tells a kept repository with no pulls from a root the store does not hold', async () => {
+    const staged = stage(slugOf(HOME));
+    await deposit(staged.runtime, { allow: [slugOf(HOME)], redactDomains: [], now: () => NOW });
+    const store = await loadStore(staged.storeDir);
+    expect(store.prompts.length).toBeGreaterThan(0);
+    const deps = { sessions: staged.runtime, install: undefined, now: () => NOW };
+    const kept = await sessionsBooks(deps, { by: 'pull', sinceDays: undefined, repo: HOME });
+    expect(kept.text).toBe('No pulls in the store.');
+    const none = resolve('/zz/none');
+    const absent = await sessionsBooks(deps, { by: 'pull', sinceDays: undefined, repo: none });
+    expect(absent.text).toBe(`No prompts for ${none} in the store (${String(store.prompts.length)} prompts across all repositories).`);
+  });
+
   it("measure --repo drops another repository's MCP recall calls and keeps calls with no folder", async () => {
     const staged = stage(slugOf(HOME));
     const lines = readFileSync(join(staged.projectsRoot, slugOf(HOME), 'errors-a.jsonl'), 'utf8').split('\n').filter((line) => line !== '');
