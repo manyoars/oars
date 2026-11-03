@@ -105,6 +105,18 @@ describe('sessionsVerify, per session', () => {
     expect(verified.report.audit.counts['root mismatch']).toBe(1);
   });
 
+  it('fails a session whose skeleton leaf count disagrees with its session, by name', async () => {
+    const staged = stage();
+    await deposit(staged.runtime, options);
+    const file = join(paths(staged.storeDir).skeletons, 'tldr.json');
+    const leaves = readFileSync(file, 'utf8').match(/"leaves":(\d+)/)?.[1];
+    if (leaves === undefined) throw new Error('no leaves');
+    writeFileSync(file, readFileSync(file, 'utf8').replace(`"leaves":${leaves}`, `"leaves":${String(Number(leaves) + 1)}`));
+    const verified = await sessionsVerify({ sessions: staged.runtime, install: undefined, now: () => NOW }, { session: undefined });
+    expect(verified.failed).toEqual(['merkle: counts do not bind']);
+    expect(verified.text).toContain('FAIL  tldr: counts do not bind');
+  });
+
   it('lists a grown file as changed since deposit and does not fail it', async () => {
     const staged = stage();
     await deposit(staged.runtime, options);
