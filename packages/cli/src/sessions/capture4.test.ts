@@ -486,6 +486,7 @@ describe('a deposit over a version-4 store', () => {
     const skeleton = parseObject(readFileSync(join(folder, name), 'utf8'));
     const lines: unknown = skeleton.lines;
     if (Array.isArray(lines)) for (const entry of lines) if (typeof entry === 'object' && entry !== null && Reflect.get(entry, 'costState') !== null && Reflect.get(entry, 'costState') !== undefined) Reflect.set(Reflect.get(entry, 'costState'), 'models', ['claude-haiku-4-5']);
+    Reflect.set(skeleton, 'v', '4');
     writeFileSync(join(folder, name), JSON.stringify(skeleton));
     expect(readFileSync(join(folder, name), 'utf8')).not.toContain('"keys"');
     expect(await deposit(staged.runtime, options)).toMatchObject({ sessions: 4 });
@@ -543,6 +544,45 @@ describe('a cv-behind session whose transcript is gone (cv-frozen)', () => {
     const verified = await sessionsVerify({ sessions: staged.runtime, install: undefined, now: () => NOW }, { session: undefined });
     expect(verified.failed).toContain(behind);
     expect(verified.report.cvFrozen).toBe(0);
+    expect(verified.text).not.toMatch(/cv-frozen sessions/);
+  });
+
+  it('still fails --strict for a live subagent transcript when state.json is lost, and counts it frozen once the transcript is gone', async () => {
+    const staged = stage();
+    const subagentRoot = join(staged.projectsRoot, 'proj', 'tldr', 'subagents');
+    mkdirSync(join(subagentRoot, 'workflows', 'wf_y'), { recursive: true });
+    writeFileSync(join(subagentRoot, 'agent-x.jsonl'), `${transcript('/w', '/w/a')}
+`);
+    writeFileSync(join(subagentRoot, 'workflows', 'wf_y', 'agent-z.jsonl'), `${transcript('/w', '/w/a')}
+`);
+    await deposit(staged.runtime, options);
+    expect((await loadStore(staged.storeDir)).subagents.map((subagent) => subagent.session).sort()).toEqual(['tldr~agent-x', 'tldr~wf_y~agent-z']);
+    atVersion4(staged.storeDir);
+    rmSync(paths(staged.storeDir).state);
+    const deps = { sessions: staged.runtime, install: undefined, now: () => NOW };
+    const live = await sessionsVerify(deps, { session: undefined });
+    expect(live.failed).toContain(behind);
+    expect(live.report.cvFrozen).toBe(0);
+    rmSync(join(staged.projectsRoot, 'proj', 'tldr'), { recursive: true });
+    rmSync(join(paths(staged.storeDir).raw, 'proj', 'tldr'), { recursive: true });
+    expect((await sessionsVerify(deps, { session: undefined })).report.cvFrozen).toBe(2);
+  });
+
+  it('captures a raw-only session again after state.json and the harness project are lost, instead of failing --strict for good', async () => {
+    const staged = stage();
+    await deposit(staged.runtime, options);
+    atVersion4(staged.storeDir);
+    rmSync(paths(staged.storeDir).state);
+    rmSync(join(staged.projectsRoot, 'proj'), { recursive: true });
+    const deps = { sessions: staged.runtime, install: undefined, now: () => NOW };
+    const lost = await sessionsVerify(deps, { session: undefined });
+    expect(lost.failed).toContain(behind);
+    expect(lost.report.cvFrozen).toBe(0);
+    expect(await deposit(staged.runtime, options)).toMatchObject({ sessions: 4 });
+    expect((await loadStore(staged.storeDir)).sessions.map((session) => session.cv)).toEqual(Array(4).fill(CAPTURE_VERSION));
+    const healed = await sessionsVerify(deps, { session: undefined });
+    expect(healed.failed).not.toContain(behind);
+    expect(healed.report.cvFrozen).toBe(0);
   });
 
   describe('a Cursor session (its source is the composer, not a transcript file)', () => {
