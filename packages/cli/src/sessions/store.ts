@@ -705,8 +705,8 @@ const sessionOfRelative = (relative: string): string => {
 };
 
 /**
- * The sessions of `behind` (captured before the current version) whose transcript is gone from both the harness and `raw/`: they can never be
- * captured again, so `verify` counts them `cv-frozen` instead of failing `--strict` over them.
+ * The sessions of `behind` (captured before the current version) whose source is gone (the transcript from both the harness and `raw/`, or the
+ * Cursor composer from Cursor's store): they can never be captured again, so `verify` counts them `cv-frozen` instead of failing `--strict` over them.
  */
 export const frozenSessions = async (runtime: SessionsRuntime, behind: readonly { project: string; session: string }[]): Promise<Set<string>> => {
   const wanted = new Set(behind.map((entry) => `${entry.project}/${entry.session}`));
@@ -717,6 +717,21 @@ export const frozenSessions = async (runtime: SessionsRuntime, behind: readonly 
     const [project = '', ...rest] = key.split('/');
     const id = `${project}/${sessionOfRelative(rest.join('/'))}`;
     if (wanted.has(id) && !alive.has(id) && ((await exists(join(runtime.projectsRoot, key))) || (await exists(join(paths(runtime.storeDir).raw, key))))) alive.add(id);
+  }
+  const prefix = `${CURSOR_SOURCE}-`;
+  const cursorBehind = behind.filter((entry) => entry.session.startsWith(prefix) && !alive.has(`${entry.project}/${entry.session}`));
+  if (cursorBehind.length > 0 && runtime.cursorRoot !== undefined) {
+    // A Cursor session has no transcript file: its source is the composer, which the next deposit reads again while Cursor still lists it.
+    // An unreadable store counts as alive too, since it may read again once Cursor releases it.
+    let listed: ReadonlySet<string> | undefined;
+    try {
+      const source = await openCursorStore(runtime.cursorRoot);
+      listed = new Set((source?.sessions ?? []).map((session) => `${prefix}${session.composerId}`));
+      source?.close();
+    } catch {
+      listed = undefined;
+    }
+    for (const entry of cursorBehind) if (listed === undefined || listed.has(entry.session)) alive.add(`${entry.project}/${entry.session}`);
   }
   return new Set(behind.filter((entry) => !alive.has(`${entry.project}/${entry.session}`)).map((entry) => entry.session));
 };

@@ -10,7 +10,7 @@ import { makeRepoIdentity, makeRepoRoot, normalizeRemote } from './repo-root.js'
 import { CAPTURE_VERSION, ERROR_LINE_CHARS, EXTRACTOR_VERSION, FILES_PER_SESSION_MAX } from './schema.js';
 import { deposit, depositSession, loadStore, localSalt, paths, promptHalf, sidOf, type AccountSalt } from './store.js';
 import { recall } from './query.js';
-import { addProject, cleanup, FIXTURES, NOW, stage } from './test-support.js';
+import { addProject, cleanup, FIXTURES, NOW, stage, stageRawCursor } from './test-support.js';
 
 afterEach(cleanup);
 const redact = makeRedactor();
@@ -501,5 +501,43 @@ describe('a cv-behind session whose transcript is gone (cv-frozen)', () => {
     const fromRaw = await sessionsVerify(deps, { session: undefined });
     expect(fromRaw.failed).toContain(behind);
     expect(fromRaw.report.cvFrozen).toBe(0);
+  });
+
+  describe('a Cursor session (its source is the composer, not a transcript file)', () => {
+    const doc = (composerId: string) => ({ composerId, createdAt: 1, conversation: [{ type: 1, text: 'hi' }] });
+    const cursorOptions = { allow: ['cursor'], redactDomains: [], now: () => NOW };
+
+    it('fails --strict with behind while Cursor still lists the composer', async () => {
+      const staged = stage();
+      const user = await stageRawCursor(staged.root, [{ id: 'live', document: doc('live') }], []);
+      const runtime = { ...staged.runtime, cursorRoot: user };
+      await deposit(runtime, cursorOptions);
+      atVersion4(staged.storeDir);
+      const verified = await sessionsVerify({ sessions: runtime, install: undefined, now: () => NOW }, { session: undefined });
+      expect(verified.failed).toContain(behind);
+      expect(verified.report.cvFrozen).toBe(0);
+    });
+
+    it('counts cv-frozen once the composer is gone from Cursor', async () => {
+      const staged = stage();
+      const user = await stageRawCursor(staged.root, [{ id: 'live', document: doc('live') }], []);
+      await deposit({ ...staged.runtime, cursorRoot: user }, cursorOptions);
+      atVersion4(staged.storeDir);
+      const other = await stageRawCursor(join(staged.root, 'other'), [{ id: 'different', document: doc('different') }], []);
+      const verified = await sessionsVerify({ sessions: { ...staged.runtime, cursorRoot: other }, install: undefined, now: () => NOW }, { session: undefined });
+      expect(verified.failed).not.toContain(behind);
+      expect(verified.report.cvFrozen).toBe(1);
+    });
+
+    it('counts an unreadable Cursor store as alive', async () => {
+      const staged = stage();
+      const user = await stageRawCursor(staged.root, [{ id: 'live', document: doc('live') }], []);
+      await deposit({ ...staged.runtime, cursorRoot: user }, cursorOptions);
+      atVersion4(staged.storeDir);
+      writeFileSync(join(user, 'globalStorage', 'state.vscdb'), 'this is not a database');
+      const verified = await sessionsVerify({ sessions: { ...staged.runtime, cursorRoot: user }, install: undefined, now: () => NOW }, { session: undefined });
+      expect(verified.failed).toContain(behind);
+      expect(verified.report.cvFrozen).toBe(0);
+    });
   });
 });
