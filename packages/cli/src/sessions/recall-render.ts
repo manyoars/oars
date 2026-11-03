@@ -111,7 +111,7 @@ const nameOf = (read: RecallRead, harness: Harness): string => {
 const line = (read: RecallRead, asker: Frame | null, harness: Harness): { text: string; names: string[] } => {
   const table = ACTION_TABLES[harness];
   const followed = read.followed.map(([tool, times]): [string, number] => [actionOf(table, tool).action, times]);
-  const failures = read.calls === null ? `${count(read.count, read.family === 'entity' ? 'call' : 'error')}` : `failed ${String(read.count)} of ${count(read.calls, 'call')}`;
+  const failures = read.calls === null ? count(read.count, read.family === 'entity' ? 'call' : 'error') : `failed ${String(read.count)} of ${count(read.calls, 'call')}`;
   const harnesses = read.harnesses.flatMap((name) => harnessName(name) ?? []);
   const lastDay = publicDay(read.lastDay) ?? 'unknown';
   const id = READ_ID.test(read.readId) ? read.readId : LITERAL;

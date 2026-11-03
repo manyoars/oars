@@ -54,8 +54,9 @@ describe('hook install', () => {
     await installHooks(runtimeIn(dir), file, false);
     await installHooks(runtimeIn(dir), file, false);
     const written = await readJson(file);
+    const anyMatcher: unknown = expect.any(String);
     expect(written.model).toBe('opus');
-    expect(written.hooks).toMatchObject({ Stop: [rotation], SessionEnd: [expect.anything()], SessionStart: [expect.anything()], PreToolUse: [{ matcher: 'Bash', hooks: [] }, { matcher: expect.any(String) }] });
+    expect(written.hooks).toMatchObject({ Stop: [rotation], SessionEnd: [expect.anything()], SessionStart: [expect.anything()], PreToolUse: [{ matcher: 'Bash', hooks: [] }, { matcher: anyMatcher }] });
   });
 
   it('removes a per-turn Stop entry the first build wrote and keeps the rotation hook, on install and on uninstall', async () => {

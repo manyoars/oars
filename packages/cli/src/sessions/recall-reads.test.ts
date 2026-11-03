@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { answerQuery, fitReads, poolVersionOf, pull, readIdOf, recoveryReads, toolShapeId, type ClosedQuery } from './recall-reads.js';
+import { error as errorRow, prompt as promptRow, session as sessionRow, store as storeOf, tool as toolRow } from './pool-fixture.js';
+import type { ToolObservation } from './schema.js';
 import { deposit, loadStore, type Store } from './store.js';
 import { cleanup, NOW, stage } from './test-support.js';
 
@@ -12,17 +14,16 @@ const stocked = async (): Promise<Store> => {
 };
 
 /** A hand-built store: two sessions that fail `Monitor` from one wrong call shape, and one that calls it right. */
-const tool = (session: string, n: number, name: string, keys: string[], status: 'ok' | 'error' | 'none', toolUseId: string | null = `${session}-${String(n)}`, prompt: number | null = 0) =>
-  ({ kind: 'tool', cv: '5', sid: 's', session, rev: 1, parent: session, agentType: null, n, ts: `2026-11-0${String(n + 1)}T00:00:00.000Z`, tool: name, status, target: null, targetBase: null, keys, durationMs: 5, toolUseId, harnessVersion: '2.1.300', side: false, prompt }) as Store['tools'][number];
+const tool = (session: string, n: number, name: string, keys: string[], status: 'ok' | 'error' | 'none', toolUseId: string | null = `${session}-${String(n)}`, prompt: number | null = 0): ToolObservation =>
+  toolRow(session, n, name, { sid: 's', ts: `2026-11-0${String(n + 1)}T00:00:00.000Z`, status, keys, durationMs: 5, toolUseId, harnessVersion: '2.1.300', prompt });
 
 const synthetic = (): Store =>
-  ({
-    sessions: [{ session: 'a', tools: { Monitor: 2 }, models: { 'claude-opus-5-5': 1 } }, { session: 'b', tools: { Monitor: 1 }, models: {} }, { session: 'c', tools: { Monitor: 1, Read: 1 }, models: {} }],
-    subagents: [],
-    prompts: [{ session: 'a', index: 0, model: 'claude-opus-5-5' }],
+  storeOf({
+    sessions: [sessionRow('a', { tools: { Monitor: 2 }, models: { 'claude-opus-5-5': 1 } }), sessionRow('b', { tools: { Monitor: 1 } }), sessionRow('c', { tools: { Monitor: 1, Read: 1 } })],
+    prompts: [promptRow('a', 0)],
     errors: [
-      { session: 'a', sig: 'Monitor | wrong input', example: 'wrong input', tool: 'Monitor', ts: '2026-11-01T00:00:00.000Z', harnessVersion: '2.1.300', next: ['Read'], prompt: 0, cls: 'mixed' },
-      { session: 'b', sig: 'Monitor | wrong input', example: 'wrong input', tool: 'Monitor', ts: '2026-11-02T00:00:00.000Z', harnessVersion: '2.1.301', next: ['Read', 'Edit'], prompt: 0, cls: 'edit-only' },
+      errorRow('a', 'Monitor | wrong input', { example: 'wrong input', tool: 'Monitor', ts: '2026-11-01T00:00:00.000Z', harnessVersion: '2.1.300', next: ['Read'], cls: 'mixed' }),
+      errorRow('b', 'Monitor | wrong input', { example: 'wrong input', tool: 'Monitor', ts: '2026-11-02T00:00:00.000Z', harnessVersion: '2.1.301', next: ['Read', 'Edit'], cls: 'edit-only' }),
     ],
     tools: [
       tool('a', 0, 'Monitor', ['query'], 'none', 'a-0'),
@@ -36,8 +37,7 @@ const synthetic = (): Store =>
       ...Array.from({ length: 20 }, (_, index) => tool('c', 3 + index, 'Monitor', ['query'], 'ok')),
       tool('a', 2, 'Monitor', ['command'], 'ok'),
     ],
-    newerCaptures: 0,
-  }) as unknown as Store;
+  });
 
 const ask = (store: Store, input: ClosedQuery) => answerQuery(store, input, NOW);
 
@@ -80,7 +80,7 @@ describe('the stand-in reads', () => {
   });
 
   it('dates the pool by the latest deposit in the store', () => {
-    const store = { ...synthetic(), sessions: [{ at: '2026-11-01T00:00:00.000Z' }, { at: '2026-11-03T00:00:00.000Z' }] } as unknown as Store;
+    const store: Store = { ...synthetic(), sessions: [sessionRow('a', { at: '2026-11-01T00:00:00.000Z' }), sessionRow('b', { at: '2026-11-03T00:00:00.000Z' })] };
     expect(poolVersionOf(store)).toBe('2026-11-03T00:00:00.000Z');
     expect(poolVersionOf({ ...synthetic(), sessions: [] })).toBe('');
   });
