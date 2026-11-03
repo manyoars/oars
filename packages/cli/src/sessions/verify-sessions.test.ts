@@ -49,6 +49,42 @@ describe('sessionsVerify, per session', () => {
     expect(whole?.invariants[5]).toMatchObject({ checked: 4, violations: 0, status: 'pass' });
     expect(scoped.map((entry) => entry.session)).toEqual(['p1']);
     expect(scoped[0]?.invariants[5]).toEqual(whole?.invariants[5]);
+    const wholeRun = await sessionsVerify(deps, { session: undefined });
+    expect(wholeRun.report.audit.sessions.find((entry) => entry.session === 'p1~agent-a')?.result).toBe('root matches and the counts bind');
+    expect(wholeRun.report.audit.sessions.map((entry) => entry.session).sort()).toEqual(wholeRun.report.sessionResults.map((entry) => entry.session).sort());
+  });
+
+  it('reads the subagent lines in invariants, the text, and failed under --session, when the agent pushes the sum above the total', async () => {
+    const staged = stage();
+    const usage = { input_tokens: 5, cache_creation_input_tokens: 6, cache_read_input_tokens: 7, output_tokens: 8 };
+    const assistant = (requestId: string, timestamp: string): string => JSON.stringify({ type: 'assistant', requestId, timestamp, message: { role: 'assistant', model: 'm', content: [], usage } });
+    const tokens = (factor: number) => ({ inputTokens: 5 * factor, cacheCreationInputTokens: 6 * factor, cacheReadInputTokens: 7 * factor, outputTokens: 8 * factor });
+    const costState = JSON.stringify({ type: 'cost-state', startTime: Date.parse('2026-10-13T15:00:00.000Z'), modelUsage: { m: tokens(2) } });
+    writeFileSync(join(staged.projectsRoot, 'proj', 'p1.jsonl'), `${[assistant('r1', '2026-10-13T16:00:00.000Z'), costState].join('\n')}\n`);
+    mkdirSync(join(staged.projectsRoot, 'proj', 'p1', 'subagents'), { recursive: true });
+    writeFileSync(join(staged.projectsRoot, 'proj', 'p1', 'subagents', 'agent-a.jsonl'), `${[assistant('s1', '2026-10-13T16:01:00.000Z'), assistant('s2', '2026-10-13T16:02:00.000Z')].join('\n')}\n`);
+    await deposit(staged.runtime, options);
+    const deps = { sessions: staged.runtime, install: undefined, now: () => NOW };
+    const whole = await sessionsVerify(deps, { session: undefined });
+    const scoped = await sessionsVerify(deps, { session: 'p1' });
+    expect(whole.failed).toContain(whole.report.invariants[5]?.name);
+    expect(scoped.failed).toEqual(whole.failed);
+    expect(scoped.report.invariants[5]).toEqual(whole.report.invariants[5]);
+    expect(scoped.report.invariants[5]?.violations).toBeGreaterThan(0);
+    expect(scoped.text).toContain('FAIL');
+  });
+
+  it('reports a session whose capture record was removed as not run in the T0 audit, with the same ids as sessionResults', async () => {
+    const staged = stage();
+    await deposit(staged.runtime, options);
+    const file = paths(staged.storeDir).observations;
+    const kept = readFileSync(file, 'utf8').split('\n').filter((line) => line !== '' && !line.includes('"session":"errors-b"'));
+    writeFileSync(file, `${kept.join('\n')}\n`);
+    const verified = await sessionsVerify({ sessions: staged.runtime, install: undefined, now: () => NOW }, { session: undefined });
+    const { audit, sessionResults } = verified.report;
+    expect(audit.sessions.find((entry) => entry.session === 'errors-b')).toMatchObject({ result: 'not run', tier: 'skeleton', mode: null, bindings: { bind: false } });
+    expect(audit.counts['not run']).toBe(1);
+    expect(audit.sessions.map((entry) => entry.session).sort()).toEqual(sessionResults.map((entry) => entry.session).sort());
   });
 
   it('fails a session whose raw file edit kept the size and mtime, by name, so --strict exits 4', async () => {
