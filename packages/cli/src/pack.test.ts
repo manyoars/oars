@@ -181,6 +181,7 @@ describe('the public text states facts only', () => {
     expect(text).toContain(NOT_OPEN);
     expect(text).toContain('%APPDATA%');
     expect(text).toContain('~/.config');
+    expect(text).toContain('session-commons/review');
   });
 
   it('the root README gives the hook commands in the forms that run, with --scope user and --schedule off', () => {

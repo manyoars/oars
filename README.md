@@ -26,7 +26,7 @@ Install the skill with `npx skills add manyoars/oars --skill make-me-money -g -y
 - **Captured:** the sessions of the folders you name with `--allow` (a folder you never named is never read), with secrets, emails, and the domains you name masked in the log.
 - **Stored:** under `<config>/oars/sessions/` on your machine (`<config>` is `%APPDATA%` on Windows, `$XDG_CONFIG_HOME` or `~/.config` elsewhere), including `raw/`, a hard link or copy of each deposited transcript. `raw/` is on by default and holds raw transcripts, unredacted: they keep whatever the transcript held, secrets included, and stay on your machine.
 - **Commands:** `oars sessions deposit --allow <folder>`, `oars sessions recall --error "<text>"`, `oars sessions hook install --scope user`.
-- **Uninstall:** `oars sessions hook uninstall --scope user`, `oars sessions hook install --schedule off` if you registered the nightly task, then delete the `<config>/oars/sessions/` folder. Install raises `cleanupPeriodDays` in your settings to at least 365, and uninstall leaves it raised.
+- **Uninstall:** `oars sessions hook uninstall --scope user`, `oars sessions hook install --schedule off` if you registered the nightly task, then delete the `<config>/oars/sessions/` folder. If you ran `gold sample`, also delete `~/.claude/session-commons/review/` (or your `--out-dir`). Install raises `cleanupPeriodDays` in your settings to at least 365, and uninstall leaves it raised.
 
 The full reference is in [`packages/cli/README.md`](packages/cli/README.md).
 
