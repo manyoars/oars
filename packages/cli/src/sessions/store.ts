@@ -425,7 +425,7 @@ const earlierRepoSize = async (context: DepositContext, previous: FileState | un
 /** Deposits one transcript unless its size, mtime, capture version, salt, and domain set are unchanged; returns what it wrote, or undefined when skipped. */
 const depositFile = async (context: DepositContext, project: string, transcript: Transcript): Promise<Capture | undefined> => {
   const { runtime, state } = context;
-  const { file, session, subagent } = transcript;
+  const { file, session } = transcript;
   const info = await stat(file);
   // Archived before the unchanged check, so a store deposited before the archive existed fills it on its next run.
   if (transcript.fromRaw !== true) await archiveRaw(file, join(paths(runtime.storeDir).raw, project, ...transcript.relative.split('/')));
