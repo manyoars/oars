@@ -1,4 +1,4 @@
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { codexRoot, openCodexStore, rolloutBadLines, rolloutLines } from './codex.js';
@@ -371,20 +371,6 @@ describe('fix round 2 behaviors', () => {
     expect(error?.line.length).toBe(1000);
   });
 
-  const withOrdinal = (ordinal: number, entry: object): object => ({ ...entry, ordinal });
-
-  it('drops the records a subagent inherited (ordinal below subagent_history_start_ordinal, protocol.rs:3511) on a Paginated rollout, the only mode that writes ordinals (ordinal.rs:37)', () => {
-    const child = line(T(0), 'session_meta', { id: 'sess-2', timestamp: T(0), cwd: '/work/app', parent_thread_id: 'sess-1', subagent_history_start_ordinal: 2, history_mode: 'paginated' });
-    const lines = rolloutLines(asText([child, withOrdinal(0, prompt(1, 'inherited prompt')), withOrdinal(1, prompt(2, 'also inherited')), withOrdinal(2, prompt(4, 'own prompt'))]), 's');
-    expect(lines.filter((entry) => entry.type === 'user').length).toBe(1);
-  });
-
-  it('drops the records a fork inherited (ordinal below forked_from_ordinal_exclusive, protocol.rs:3462) on a Paginated rollout (ordinal.rs:37)', () => {
-    const forked = line(T(0), 'session_meta', { id: 'sess-2', timestamp: T(0), cwd: '/work/app', forked_from_id: 'sess-1', forked_from_ordinal_exclusive: 2, history_mode: 'paginated' });
-    const lines = rolloutLines(asText([forked, withOrdinal(0, prompt(1, 'a')), withOrdinal(1, prompt(2, 'b')), withOrdinal(2, prompt(3, 'c')), prompt(4, 'no ordinal')]), 's');
-    expect(lines.filter((entry) => entry.type === 'user').length).toBe(2);
-  });
-
   it('names a sessions folder it cannot read instead of reporting no store', async () => {
     const s = stage();
     const home = join(s.root, 'h');
@@ -405,11 +391,47 @@ describe('fix round 2 behaviors', () => {
     const store = await openCodexStore(home);
     expect(store?.sessions[0]).toMatchObject({ parent: 'sess-1', agentRole: 'explorer' });
   });
+
+  // rollout/src/rollout_file_name.rs:12-14, :41-47, :66-73: `rollout-<time>-<thread>.jsonl`, and for a reverted thread `rollout-<time>-<thread>_<rollout>.jsonl`.
+  it('keys the rollout of a reverted thread <thread>_<rollout> and files it under its thread, so one thread is one session', async () => {
+    const s = stage();
+    const thread = '66666666-6666-4666-8666-666666666666';
+    const reverted = '77777777-7777-4777-8777-777777777777';
+    const home = stageCodex(s.root, [
+      { id: thread, lines: [line(T(0), 'session_meta', { id: thread, timestamp: T(0), cwd: '/work/app' })] },
+      { id: `${thread}_${reverted}`, lines: [line(T(0), 'session_meta', { id: thread, timestamp: T(0), cwd: '/work/app' })] },
+    ]);
+    const store = await openCodexStore(home);
+    expect(store?.sessions.map((session) => [session.id, session.parent])).toEqual(
+      expect.arrayContaining([
+        [thread, null],
+        [`${thread}_${reverted}`, thread],
+      ]),
+    );
+    expect(store?.sessions).toHaveLength(2);
+  });
+
+  it('reports a rollout that vanishes after it is listed by file name only, even when the root is outside the home folder', async () => {
+    const s = stage();
+    const id = '88888888-8888-4888-8888-888888888888';
+    const home = stageCodex(join(s.root, 'elsewhere-root-name'), [{ id, lines: [line(T(0), 'session_meta', { id, timestamp: T(0), cwd: '/work/app' })] }]);
+    const store = await openCodexStore(home);
+    const session = store?.sessions[0];
+    expect(session).toBeDefined();
+    rmSync(session?.file ?? '');
+    const failure = await store?.transcript(session as NonNullable<typeof session>).then(
+      () => '',
+      (error: unknown) => (error instanceof Error ? error.message : String(error)),
+    );
+    expect(failure).toContain('ENOENT');
+    expect(failure).not.toContain('elsewhere-root-name');
+  });
 });
 
 // Fix round 3. Paginated rollouts are what the cited commit writes by default (thread-store/src/local/mod.rs:512-515): the legacy user_message,
-// agent_message, patch_apply_end, and mcp_tool_call_end events are not persisted there (rollout/src/policy.rs:164-176), and an `item_completed`
-// event holding a `TurnItem` (protocol/src/items.rs:50, tag `type`, variant names as written) takes their place; response_item, turn_context, and
+// agent_message, patch_apply_end, and mcp_tool_call_end events are not persisted there (rollout/src/policy.rs:142-156, `persisted_item_completed_event` at :232), and an `item_completed`
+// event holding a `TurnItem` (protocol/src/items.rs:50, tag `type`, variant names as written) takes their place. Its content parts carry their own tag: a UserMessage's
+// `UserInput` is snake_case (`text`, user_input.rs:16), an AgentMessage's `AgentMessageContent` has no rename_all (`Text`, items.rs:131-135); response_item, turn_context, and
 // token_count are persisted in both modes (policy.rs:20-24, :43-46, :131-133). Every record carries an `ordinal` in this mode (rollout/src/ordinal.rs:28).
 describe('Paginated rollouts', () => {
   let next = 0;
@@ -428,7 +450,7 @@ describe('Paginated rollouts', () => {
       asText([
         pmeta(),
         done(2, { type: 'UserMessage', id: 'u1', content: [{ type: 'text', text: 'fix the build', text_elements: [] }, { type: 'text', text: 'and the docs', text_elements: [] }] }),
-        done(3, { type: 'AgentMessage', id: 'a1', content: [{ type: 'text', text: 'done' }] }),
+        done(3, { type: 'AgentMessage', id: 'a1', content: [{ type: 'Text', text: 'done' }] }),
       ]),
       's',
     );
@@ -444,7 +466,7 @@ describe('Paginated rollouts', () => {
       done(2, { type: 'UserMessage', id: 'u1', content: [{ type: 'text', text: 'run it', text_elements: [] }] }),
       call(3, 'c1', 'shell', { arguments: JSON.stringify({ command: ['make'] }) }),
       ord(shellOut(4, 'c1', execText(2, 'make: *** No rule'))),
-      done(5, { type: 'AgentMessage', id: 'a1', content: [{ type: 'text', text: 'it failed' }] }),
+      done(5, { type: 'AgentMessage', id: 'a1', content: [{ type: 'Text', text: 'it failed' }] }),
       ord(usage(6, 100, 40, 10, 0, 110)),
     ]);
     expect(out.tools).toMatchObject([{ tool: 'Bash', status: 'error' }]);
@@ -490,21 +512,44 @@ describe('Paginated rollouts', () => {
     expect(lines).toEqual([]);
   });
 
-  it('applies only the first session_meta: a copy from fork history keeps the fork id, cwd, and cutoff (recorder.rs:1157-1158, :1173)', () => {
-    const fork = line(T(0), 'session_meta', { id: 'sess-2', timestamp: T(0), cwd: '/work/app', cli_version: '0.60.0', history_mode: 'paginated', forked_from_id: 'sess-1', forked_from_ordinal_exclusive: 3 });
-    const copied = line(T(0), 'session_meta', { id: 'sess-1', timestamp: T(0), cwd: '/work/parent', cli_version: '0.60.0', history_mode: 'paginated' });
+  it('applies only the first session_meta: a copy from fork history keeps the fork id and cwd (recorder.rs:1157-1158, :1173), in a Legacy rollout, which has no ordinals (ordinal.rs:36)', () => {
+    const fork = line(T(0), 'session_meta', { id: 'sess-2', timestamp: T(0), cwd: '/work/app', cli_version: '0.60.0', forked_from_id: 'sess-1' });
+    const copied = line(T(0), 'session_meta', { id: 'sess-1', timestamp: T(0), cwd: '/work/parent', cli_version: '0.60.0' });
+    const lines = rolloutLines(asText([fork, copied, prompt(4, 'own')]), 's');
+    expect(lines.filter((entry) => entry.type === 'user')).toHaveLength(1);
+    expect(lines.every((entry) => entry.sessionId === 'sess-2' && entry.cwd === '/work/app')).toBe(true);
+  });
+
+  // ordinal.rs:30, :47-53: a rollout's first record takes history_base.end_ordinal_exclusive (0 with none) and every record after it one more. A subagent's file
+  // starts with its own session_meta, then the parent's prefix through subagent_history_start_ordinal - 1, which is model context only (ordinal.rs:86-89,
+  // protocol.rs:3505-3511). A fork's file holds no inherited records: its history_base points at the parent's rollout instead (protocol.rs:3499-3501).
+  it('drops the parent prefix a subagent rollout copied (ordinals below subagent_history_start_ordinal), keeping its own records', () => {
+    begin();
     const lines = rolloutLines(
       asText([
-        { ...fork, ordinal: 3 },
-        { ...copied, ordinal: 0 },
-        { ...prompt(1, 'inherited'), ordinal: 1 },
-        { ...prompt(2, 'also inherited'), ordinal: 2 },
-        { ...prompt(4, 'own'), ordinal: 4 },
+        pmeta({ id: 'sess-2', parent_thread_id: 'sess-1', subagent_history_start_ordinal: 3 }),
+        done(1, { type: 'UserMessage', id: 'u1', content: [{ type: 'text', text: 'inherited prompt', text_elements: [] }] }),
+        done(2, { type: 'AgentMessage', id: 'a1', content: [{ type: 'Text', text: 'inherited reply' }] }),
+        done(4, { type: 'UserMessage', id: 'u2', content: [{ type: 'text', text: 'own prompt', text_elements: [] }] }),
+        done(5, { type: 'AgentMessage', id: 'a2', content: [{ type: 'Text', text: 'own reply' }] }),
       ]),
       's',
     );
-    expect(lines.filter((entry) => entry.type === 'user')).toHaveLength(1);
-    expect(lines.every((entry) => entry.sessionId === 'sess-2' && entry.cwd === '/work/app')).toBe(true);
+    expect(lines.filter((entry) => entry.type === 'user')).toMatchObject([{ message: { content: [{ text: 'own prompt' }] } }]);
+    expect(lines.filter((entry) => entry.type === 'assistant')).toMatchObject([{ message: { content: [{ text: 'own reply' }] } }]);
+  });
+
+  it('puts the token_count of a text-only response on its reply (an AgentMessage is {type: Text}, items.rs:131-135)', () => {
+    begin();
+    const out = extractOf([
+      pmeta(),
+      ord(turn()),
+      done(2, { type: 'UserMessage', id: 'u1', content: [{ type: 'text', text: 'explain it', text_elements: [] }] }),
+      done(3, { type: 'AgentMessage', id: 'a1', content: [{ type: 'Text', text: 'here is why' }] }),
+      ord(usage(4, 100, 40, 10, 0, 110)),
+    ]);
+    expect(out.session.assistantTurns).toBe(1);
+    expect(out.session.usage).toMatchObject({ input: 60, cacheRead: 40, output: 10 });
   });
 });
 

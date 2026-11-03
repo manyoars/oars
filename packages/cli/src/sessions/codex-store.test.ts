@@ -226,16 +226,44 @@ describe('Codex subagent rollouts', () => {
 });
 
 describe('Paginated and forked rollouts through the store', () => {
-  const prompt = (id: string) => line(T(2), 'event_msg', { type: 'item_completed', thread_id: id, turn_id: 't1', item: { type: 'UserMessage', id: 'u1', content: [{ type: 'text', text: 'fix the build', text_elements: [] }] } });
+  // The rollout upstream writes by default (thread-store/src/local/mod.rs:512-515): every record carries a rising `ordinal` from 0 (rollout/src/ordinal.rs:30,
+  // :47-53), the prompt and the reply are `item_completed` TurnItems (rollout/src/policy.rs:142-156, :253), and an AgentMessage's content part is `{type: Text}`
+  // (protocol/src/items.rs:131-135) while a UserMessage's is `{type: text}` (user_input.rs:16).
+  const paginated = (id: string): unknown[] => {
+    const records = [
+      meta(id, '/work/app', { history_mode: 'paginated' }),
+      line(T(1), 'turn_context', { model: 'gpt-5-codex', cwd: '/work/app' }),
+      line(T(2), 'event_msg', { type: 'item_completed', thread_id: id, turn_id: 't1', item: { type: 'UserMessage', id: 'u1', content: [{ type: 'text', text: 'fix the build', text_elements: [] }] } }),
+      ...failedShell,
+      line(T(5), 'event_msg', { type: 'item_completed', thread_id: id, turn_id: 't1', item: { type: 'AgentMessage', id: 'a1', content: [{ type: 'Text', text: 'it failed' }] } }),
+      usage,
+      line(T(7), 'event_msg', { type: 'item_completed', thread_id: id, turn_id: 't2', item: { type: 'UserMessage', id: 'u2', content: [{ type: 'text', text: 'explain why', text_elements: [] }] } }),
+      line(T(8), 'event_msg', { type: 'item_completed', thread_id: id, turn_id: 't2', item: { type: 'AgentMessage', id: 'a2', content: [{ type: 'Text', text: 'the rule is missing' }] } }),
+    ];
+    return records.map((record, ordinal) => ({ ...record, ordinal }));
+  };
 
-  it('deposits a Paginated rollout (the default upstream writes) and holds every verify invariant', async () => {
+  it('deposits a Paginated rollout (the default upstream writes), with a reply on every turn, and holds every verify invariant, including --strict', async () => {
     const s = stage();
-    const home = stageCodex(s.root, [{ id: A, lines: [meta(A, '/work/app', { history_mode: 'paginated' }), prompt(A), line(T(5), 'event_msg', { type: 'agent_message', message: 'legacy event, not persisted in this mode' }), usage] }]);
+    const home = stageCodex(s.root, [{ id: A, lines: paginated(A) }]);
     const result = await deposit({ ...s.runtime, sourceRoots: { codex: home } }, options(['codex']));
     expect(result).toMatchObject({ sessions: 1 });
     expect(result.sources.codex?.unreadable).toEqual([]);
+    const { skeletons } = await readSkeletons(s.storeDir);
     const store = await loadStore(s.storeDir);
-    expect(store.prompts.filter((entry) => entry.session === `codex-${A}`)).toHaveLength(1);
+    expect(store.prompts.filter((entry) => entry.session === `codex-${A}`)).toHaveLength(2);
+    expect(store.sessions[0]).toMatchObject({ userTurns: 2, assistantTurns: 2 });
+    expect([...verifyAll(skeletons), ...verifyCaptured(store.sessions, store.tools)].filter((entry) => entry.violations > 0)).toEqual([]);
+  });
+
+  it('deposits a thread and its reverted rollout as one session and one subagent (rollout/src/rollout_file_name.rs:12-14)', async () => {
+    const s = stage();
+    const home = stageCodex(s.root, [
+      { id: A, lines: rollout(A, '/work/app') },
+      { id: `${A}_${B}`, lines: rollout(A, '/work/app') },
+    ]);
+    const result = await deposit({ ...s.runtime, sourceRoots: { codex: home } }, options(['codex']));
+    expect(result).toMatchObject({ sessions: 1, subagents: 1 });
   });
 
   it('drops a Legacy fork copy of its parent, found through forked_from_id in the same store', async () => {
