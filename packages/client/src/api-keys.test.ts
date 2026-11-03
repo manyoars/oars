@@ -16,15 +16,16 @@ const fakePlatform = () => {
     requests.push(request.clone());
     const { pathname } = new URL(request.url);
     if (request.method === 'POST' && pathname === '/me/api-keys') {
-      const body = (await request.json()) as components['schemas']['CreateDeveloperApiKeyRequest'];
+      const sent = await request.json();
+      const scope = typeof sent === 'object' && sent !== null && 'workloadId' in sent && typeof sent.workloadId === 'string' ? sent.workloadId : undefined;
       const key: Key = {
         keyId,
-        name: body.name,
+        name: 'agent runtime',
         prefix: 'oak_3f1c',
-        authorities: body.authorities,
+        authorities: ['AGENT_OPERATE'],
         status: 'ACTIVE',
         createdAt: '2026-11-03T12:00:00Z',
-        ...(body.workloadId === undefined ? {} : { workloadId: body.workloadId }),
+        ...(scope === undefined ? {} : { workloadId: scope }),
       };
       keys.push(key);
       return Response.json({ key, replayed: false, secret: 'oak_secret' }, { status: 201 });
@@ -53,7 +54,7 @@ describe('workload-scoped API keys', () => {
     expect(created.data?.secret).toBe('oak_secret');
 
     const listed = await client.GET('/me/api-keys', { params: { query: {} } });
-    expect(listed.data?.content?.map((key) => key.workloadId)).toEqual([workloadId]);
+    expect(listed.data?.content.map((key) => key.workloadId)).toEqual([workloadId]);
 
     const revoked = await client.DELETE('/me/api-keys/{keyId}', { params: { path: { keyId } } });
     expect(revoked.response.status).toBe(204);
