@@ -212,14 +212,20 @@ describe('a subagent joins the graph of the call that spawned it', () => {
     const use = (id?: string): object => ({ type: 'tool_use', ...(id === undefined ? {} : { id }), name: 'Bash', input: {} });
     const text = ['not json', '[1]', line({ type: 'user' }), line({ message: { content: 'x' } }), line({ message: { content: ['x', use('a'), use(), use('a'), use('b')] } })].join('\n');
     expect([...callPositions(text)]).toEqual([['a', 0], ['b', 2]]);
-    expect(capture(text).map((tool) => [tool.toolUseId, tool.n])).toEqual([['a', 0], [null, 1], ['b', 2]]);
+    expect(capture(text).map((tool) => tool.toolUseId)).toEqual(['a', null, 'b']);
   });
 
-  it('counts no call on an api-request-blob line, as capture writes none', () => {
+  it('numbers calls as capture does, past a request-body copy and a replayed call', () => {
     const use = (id: string): object => ({ type: 'tool_use', id, name: 'Bash', input: {} });
-    const text = [line({ type: 'api-request-blob', message: { content: [use('x'), use('a')] } }), line({ type: 'assistant', message: { role: 'assistant', content: [use('a'), use('b')] } })].join('\n');
-    expect([...callPositions(text)]).toEqual([['a', 0], ['b', 1]]);
-    expect(capture(text).map((tool) => [tool.toolUseId, tool.n])).toEqual([['a', 0], ['b', 1]]);
+    const text = [
+      line({ type: 'assistant', message: { role: 'assistant', content: [use('a')] } }),
+      line({ type: 'api-request-blob', message: { role: 'assistant', content: [use('copied'), use('a')] } }),
+      line({ type: 'assistant', message: { role: 'assistant', content: [use('a')] } }),
+      line({ type: 'assistant', message: { role: 'assistant', content: [use('b')] } }),
+    ].join(String.fromCharCode(10));
+    const positions = callPositions(text);
+    expect(positions.has('copied')).toBe(false);
+    for (const tool of capture(text)) expect(positions.get(tool.toolUseId ?? '')).toBe(tool.n);
   });
 
   it('reads the parent from the archive when the harness no longer has it', async () => {
@@ -250,6 +256,98 @@ describe('a subagent joins the graph of the call that spawned it', () => {
     writeFileSync(join(dir, 'agent-y.meta.json'), JSON.stringify({ agentType: 'Explore', toolUseId: 't1' }));
     await deposit(staged.runtime, options);
     expect((await agentSteps(staged.storeDir)).map((step) => step.parent)).toEqual([null, null, null]);
+  });
+
+  describe('spawned by another subagent', () => {
+    // Call ids unique to each file, so finding a call says which transcript was read.
+    const calling = (...ids: readonly string[]): string =>
+      [
+        line({ type: 'user', timestamp: at(0), message: { role: 'user', content: 'p' } }),
+        ...ids.map((id) => line({ type: 'assistant', timestamp: at(1), message: { role: 'assistant', content: [{ type: 'tool_use', id, name: 'Bash', input: { command: 'ls' } }] } })),
+      ].join('\n');
+    const place = (dir: string, agent: string, text: string, toolUseId: string): void => {
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, `${agent}.jsonl`), `${text}\n`);
+      writeFileSync(join(dir, `${agent}.meta.json`), JSON.stringify({ agentType: 'Explore', toolUseId }));
+    };
+    const stageNested = (): { staged: ReturnType<typeof stage>; dir: string } => {
+      const { staged, folder } = stageSubagent('t2');
+      const dir = join(folder, 'mainone', 'subagents');
+      place(dir, 'agent-x', calling('x1', 'x2'), 't2');
+      return { staged, dir };
+    };
+    const ofAgent = async (storeDir: string, session: string): Promise<{ parents: Array<number | null>; spawned: Array<[number, number]>; spawnedIn: string | null | undefined }> => {
+      const store = await loadStore(storeDir);
+      const steps = store.tools.filter((tool) => tool.session === session).flatMap((tool) => tool.steps ?? []);
+      return { parents: steps.map((step) => step.parent), spawned: steps.flatMap((step) => edgesOf(step, 'spawned')), spawnedIn: store.subagents.find((agent) => agent.session === session)?.spawnedIn };
+    };
+
+    it('finds the call in a sibling transcript and names that transcript', async () => {
+      const { staged, dir } = stageNested();
+      place(dir, 'agent-y', calling('y1', 'y2'), 'x2');
+      await deposit(staged.runtime, options);
+      expect(await ofAgent(staged.storeDir, 'mainone~agent-y')).toEqual({ parents: [1, 1], spawned: [[1, 0]], spawnedIn: 'mainone~agent-x' });
+      expect(await ofAgent(staged.storeDir, 'mainone~agent-x')).toEqual({ parents: [1, 1], spawned: [[1, 0]], spawnedIn: 'mainone' });
+    });
+
+    it('finds the call across a workflow folder, both ways', async () => {
+      const { staged, dir } = stageNested();
+      place(join(dir, 'workflows', 'wf_1'), 'agent-w', calling('w1'), 'x2');
+      place(dir, 'agent-v', calling('v1'), 'w1');
+      await deposit(staged.runtime, options);
+      expect(await ofAgent(staged.storeDir, 'mainone~wf_1~agent-w')).toMatchObject({ parents: [1], spawnedIn: 'mainone~agent-x' });
+      expect(await ofAgent(staged.storeDir, 'mainone~agent-v')).toMatchObject({ parents: [0], spawnedIn: 'mainone~wf_1~agent-w' });
+    });
+
+    it('takes the main transcript first when a sibling repeats the call', async () => {
+      const { staged, dir } = stageNested();
+      place(dir, 'agent-a', calling('t3'), 't2');
+      place(dir, 'agent-y', calling('y1'), 't3');
+      await deposit(staged.runtime, options);
+      expect(await ofAgent(staged.storeDir, 'mainone~agent-y')).toMatchObject({ parents: [2], spawnedIn: 'mainone' });
+    });
+
+    it('does not read a transcript as its own spawner', async () => {
+      const { staged, dir } = stageNested();
+      place(dir, 'agent-y', calling('y1'), 'y1');
+      await deposit(staged.runtime, options);
+      expect(await ofAgent(staged.storeDir, 'mainone~agent-y')).toEqual({ parents: [null], spawned: [], spawnedIn: null });
+    });
+
+    it('holds no spawning transcript when no transcript has the call', async () => {
+      const { staged, dir } = stageNested();
+      place(dir, 'agent-y', calling('y1'), 'no-such-call');
+      await deposit(staged.runtime, options);
+      expect(await ofAgent(staged.storeDir, 'mainone~agent-y')).toEqual({ parents: [null], spawned: [], spawnedIn: null });
+    });
+
+    it('reads a sibling from the archive when the harness no longer has it, and when the parent is gone too', async () => {
+      const { staged, dir } = stageNested();
+      place(dir, 'agent-y', calling('y1'), 'x2');
+      await deposit(staged.runtime, options);
+      rmSync(join(dir, 'agent-x.jsonl'));
+      rmSync(join(dir, '..', '..', 'mainone.jsonl'));
+      writeFileSync(join(dir, 'agent-y.jsonl'), `${calling('y1', 'y2')}\n`);
+      await deposit(staged.runtime, options);
+      expect(await ofAgent(staged.storeDir, 'mainone~agent-y')).toEqual({ parents: [1, 1], spawned: [[1, 0]], spawnedIn: 'mainone~agent-x' });
+    });
+
+    it('agrees when the whole transcript is captured again from the archive', async () => {
+      const { staged, dir } = stageNested();
+      place(dir, 'agent-y', calling('y1'), 'x2');
+      await deposit(staged.runtime, options);
+      rmSync(join(staged.projectsRoot, 'proj', 'mainone'), { recursive: true });
+      rmSync(join(staged.projectsRoot, 'proj', 'mainone.jsonl'));
+      rmSync(join(staged.storeDir, 'state.json'));
+      await deposit(staged.runtime, { ...options, now: () => NOW + 1 });
+      expect(await ofAgent(staged.storeDir, 'mainone~agent-y')).toEqual({ parents: [1], spawned: [[1, 0]], spawnedIn: 'mainone~agent-x' });
+    });
+
+    it('holds no spawning transcript on a main transcript', async () => {
+      const { staged } = stageNested();
+      await deposit(staged.runtime, options);
+      expect((await loadStore(staged.storeDir)).sessions.find((one) => one.session === 'mainone')?.spawnedIn).toBeNull();
+    });
   });
 
   it('reads one parent once for its subagents', async () => {

@@ -44,7 +44,7 @@ import type { CanonicalAction } from './actions.js';
 import type { RepoSize } from './public-vocabulary.js';
 
 /** Stamped `cv` on every captured record. Bump it when the captured field list changes or a stored value of an existing captured record or skeleton changes: a bump re-reads every transcript. */
-export const CAPTURE_VERSION = '8';
+export const CAPTURE_VERSION = '9';
 
 /** Capture versions the reader derives from. A version-3 record is upgraded on read; a newer one is read for the fields this code knows. */
 export const OLDEST_READABLE_CAPTURE = 3;
@@ -121,7 +121,7 @@ export interface CaptureEnv {
 
 /**
  * One per transcript, captured: the `parse_sessions.py` record, minus anything that is raw content. Classes (t711 Section 1.2):
- * `L` local-only: `project`, `files`. `A` account store: `session`, `parent`, `spawnedBy`, `branches`, `urls`, `searches`, `tldrs`,
+ * `L` local-only: `project`, `files`. `A` account store: `session`, `parent`, `spawnedBy`, `spawnedIn`, `branches`, `urls`, `searches`, `tldrs`,
  * `confidences`, `promptFingerprint`, `repo`, `fileHashes`, `at`, `tsFirst`, `tsLast`. `P` pooled: `kind`, `cv`, `rev`, `sid`,
  * `agentType`, the counts, `versions`, `models`, `tools`, `env`, `costUsd`, `usage` (`at`, `tsFirst`, and `tsLast` at UTC day).
  */
@@ -145,6 +145,8 @@ export interface SessionObservation {
   agentType: string | null;
   /** The parent's `Agent` tool call that spawned this subagent (the meta file's `toolUseId`); null for a main transcript. */
   spawnedBy: string | null;
+  /** The transcript holding that call, so `parent` and `spawned` on this transcript's steps have an address: the main session or a sibling subagent's id; null when not known. */
+  spawnedIn: string | null;
   rev: number;
   /** When this deposit ran (ISO 8601). */
   at: string;
@@ -304,7 +306,7 @@ export interface StepCost {
 
 /**
  * How a step came about (recall spec Section 2.3), naming the step it came from by position. `next`: order within a prompt's line of work.
- * `spawned`: the call in the main transcript that started this subagent. `retried`: the same action and identity, after that one failed.
+ * `spawned`: the call that started this subagent, in the transcript its session record names as `spawnedIn`. `retried`: the same action and identity, after that one failed.
  * `after-error`: the call before this one failed.
  */
 export interface StepEdge {
@@ -328,7 +330,7 @@ export interface StepObservation {
   status: ToolStatus;
   /** Held on the first segment of a call; a later segment has nulls. */
   cost: StepCost;
-  /** On a subagent's step, the `n` of the call that spawned it in the main transcript; null otherwise or when that call is not known. */
+  /** On a subagent's step, the `n` of the call that spawned it, in the transcript its session record names as `spawnedIn`; null otherwise or when that call is not known. */
   parent: number | null;
   /** The edges that arrive at this step. */
   edges: StepEdge[];
@@ -339,7 +341,7 @@ export interface StepObservation {
 /**
  * One per tool call (register A28), captured. Classes: `A` account store: `session`, `parent`, `toolUseId`, `ts`, `tool`, and `target`
  * in either form (a salted hash, or a program and subcommand); `P` pooled: `kind`, `cv`, `sid`, `rev`, `agentType`, `n`, `status`, `keys`,
- * `durationMs`, `harnessVersion`, `side`, `prompt`, `targetBase`, and `steps`. `tool` and a shell-form `target` moved to `A` at CAPTURE 7: an MCP
+ * `durationMs`, `harnessVersion`, `side`, `prompt`, `targetBase`, and `steps`. `tool` and a shell-form `target` moved to `A` at CAPTURE 9: an MCP
  * tool name holds a private server's name and a shell word can be anything, and `steps` carries the public reading of both. `segments`, `pulls`,
  * and `commits` are `A`: a plain word, a private package name, and a sha can each identify private work.
  */

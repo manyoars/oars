@@ -32,23 +32,23 @@ Version 4 (CAPTURE 4, t714) adds `sid`, `repo`, `fileHashes`, `env`, `promptFing
 1,000-character cap on an error line, and a cap of 100 on `files` and `fileHashes` per session (p99 was 61, max 209, on the 8,253-session
 copy store); `recall --path` sees the first 100 sorted paths of a session. Version 5 (CAPTURE 5, t733) changes no field name: it changes the
 stored `models` value of an existing skeleton to carry the cost-state keys (see the cost-state paragraph below), so a version-4 store is
-behind and its next deposit captures every transcript again. Version 6 (CAPTURE 6) adds `segments`, `pulls`, and `commits` to the tool
-record (see "What a shell call captures"), and a version-5 store's next deposit captures every transcript again. Version 7 (CAPTURE 7)
-adds `frame` to the session and prompt records and `steps` to the tool record (see "Frames and steps"), and moves `tool`, `tools`, and a shell-form
-`target` from class P to class A; a version-6 store's next deposit captures every transcript again from the harness or `raw/`. Version 8 (CAPTURE 8 and EXTRACTOR 8) changes no
+behind and its next deposit captures every transcript again. Version 6 (CAPTURE 6, t746) adds `segments`, `pulls`, and `commits` to the tool
+record (see "What a shell call captures"), and a version-5 store's next deposit captures every transcript again. Version 8 (CAPTURE 8 and EXTRACTOR 8) changes no
 field name either: it changes what `tool`, `error-line`, and the session's `tools`, `bashCmds`, `tldrs`, and `confidences` hold. The harness writes
 `api-request-blob` lines, copies of the request body with no `cwd`, `uuid`, or `timestamp`; capture read their blocks as conversation and wrote every call
 a second time with status `none` (99.8% of the 55,801 `tool_use` blocks on those lines repeat a real call). It no longer reads them, and a call a
 resumed transcript replays under the same tool-use id is written once. The skeleton still lists every line, so the counts and the root bind. A reader
 folds an older store the same way (`fold.ts`): one `tool` record per session and tool-use id, the first, with the first status found and, when the first has no `ts`, the
 `target`, `targetBase`, `ts`, and `harnessVersion` of the first copy that has one; the kept records are numbered from zero and each `error-line`'s `after`
-moves to match, so `next` and `editFollowed` read the same calls as a current capture; and the session's `tools` and `bashCmds` are less the dropped calls. A call with no result is still a record, status `none`. What an open does with an older store:
+moves to match, so `next` and `editFollowed` read the same calls as a current capture; and the session's `tools` and `bashCmds` are less the dropped calls. A call with no result is still a record, status `none`. Version 9 (CAPTURE 9, t755)
+adds `frame` and `frameId` to the session and prompt records and `steps` to the tool record (see "Frames and steps"), and moves `tool`, `tools`, and a shell-form
+`target` from class P to class A; a version-8 store's next deposit captures every transcript again from the harness or `raw/`. What an open does with an older store:
 
 | Log holds | Action on open | Action at the next deposit |
 |-----------|----------------|----------------------------|
-| `cv` 8, `v` current | read | skip unchanged files |
-| `cv` 5 and the transcript is on disk or in `raw/` | read; a replayed `tool` record is folded (see above); `verify` counts it `cv-behind`, and `verify --strict` exits 4 on it | capture again at `rev + 1` |
-| `cv` 5, neither the harness nor `raw/` has the transcript | read; a replayed `tool` record is folded (see above); `verify` counts it `cv-frozen` (not `cv-behind`), and `verify --strict` does not fail on it | none |
+| `cv` 9, `v` current | read | skip unchanged files |
+| `cv` 5 to 8 and the transcript is on disk or in `raw/` | read; a replayed `tool` record is folded (see above); `verify` counts it `cv-behind`, and `verify --strict` exits 4 on it | capture again at `rev + 1` |
+| `cv` 5 to 8, neither the harness nor `raw/` has the transcript | read; a replayed `tool` record is folded (see above); `verify` counts it `cv-frozen` (not `cv-behind`), and `verify --strict` does not fail on it | none |
 | `cv` 3 or 4 (or a version-2 session) and the transcript is on disk or in `raw/` | read through the compatibility reader (for `cv` 3, a field version 4 added reads as null, empty, or `unknown`; the prompt half of `contextFingerprint`, before its `.`, reads as `promptFingerprint`, and `-` reads as null; the environment half is dropped); `verify` counts it `cv-behind`, and `verify --strict` exits 4 on it | capture again at `rev + 1`; derived records regenerate under the current `EXTRACTOR_VERSION` on every open |
 | `cv` 3 or 4, neither the harness nor `raw/` has the transcript (for a Cursor session, Cursor no longer lists the composer) | read through the compatibility reader; `verify` counts it `cv-frozen` (not `cv-behind`), and `verify --strict` does not fail on it | none |
 | `derived.json` `v` older than `EXTRACTOR_VERSION` | read | rewritten at the next deposit (no reader depends on it today); derived records are regenerated from the log on every read |
@@ -70,10 +70,10 @@ pattern and entropy, emails, and the domains named with `--redact-domain`) befor
 | Record | Fields | Class |
 |--------|--------|-------|
 | every capture record | `kind`, `cv`, `rev`, `sid` | P |
-| `session` (one per transcript) | `agentType` (set on a subagent transcript), `harness` (set on a Cursor session; absent reads as Claude Code), `bytes`, `lines`, `badLines`, `userTurns`, `assistantTurns`, `versions`, `models`, `bashCmds`, `compactSummaries`, `costUsd`, `usage`, `env` (below), `frame` | P |
-| | `session`, `parent`, `spawnedBy` (join ids), `at`, `tsFirst`, `tsLast` (a pool would keep the UTC day), `promptFingerprint`, `repo`, `tools` (native names, which can hold a private MCP server's), `fileHashes`, `urls`, `searches`, `branches`, `tldrs` (400 chars), `confidences` (120 chars) | A |
+| `session` (one per transcript) | `agentType` (set on a subagent transcript), `harness` (set on a Cursor session; absent reads as Claude Code), `bytes`, `lines`, `badLines`, `userTurns`, `assistantTurns`, `versions`, `models`, `bashCmds`, `compactSummaries`, `costUsd`, `usage`, `env` (below), `frame`, `frameId` | P |
+| | `session`, `parent`, `spawnedBy`, `spawnedIn` (join ids), `at`, `tsFirst`, `tsLast` (a pool would keep the UTC day), `promptFingerprint`, `repo`, `tools` (native names, which can hold a private MCP server's), `fileHashes`, `urls`, `searches`, `branches`, `tldrs` (400 chars), `confidences` (120 chars) | A |
 | | `project` (the folder slug, with the username and directory names), `files` (the paths as written, redacted) | L |
-| `user-prompt` (one per prompt) | `index`, `wallSec`, `thinking`, `turns`, `model`, `efforts`, `skills`, `usage` | P |
+| `user-prompt` (one per prompt) | `index`, `wallSec`, `thinking`, `turns`, `model`, `efforts`, `skills`, `usage`, `frame`, `frameId` | P |
 | | `session`, `ts` (a pool would keep the UTC day), `head` (the first 300 characters), `promptFingerprint` | A |
 | `tool` (one per tool call) | `n`, `status` (`ok`, `error`, or `none` when no result is in the file; one record per tool-use id), `keys` (the input's key names), `durationMs`, `harnessVersion`, `agentType`, `side`, `prompt`, `targetBase`, `steps` | P |
 | | `session`, `parent`, `toolUseId`, `ts` (a pool would keep the UTC day), `tool` (the native name, which can hold a private MCP server's), `target` in either form (a salted hash, or the first line's program and subcommand, where a word can be anything), and `segments`, `pulls`, and `commits` (a plain word, a private package name, and a sha can each identify private work) | A |
@@ -109,7 +109,7 @@ line and at every shell separator, after heredoc and here-string bodies are drop
 
 ### Frames and steps
 
-CAPTURE 7 gives every call a shared coordinate, so calls compare across harnesses, models, versions, and dates. Nothing here is asked of a
+CAPTURE 9 gives every call a shared coordinate, so calls compare across harnesses, models, versions, and dates. Nothing here is asked of a
 network or a model: a value outside a closed list reads `<literal>` or is dropped, so these fields stay class P. The lists live in one file,
 `src/sessions/public-vocabulary.ts`, and default to `<literal>` when unsure.
 
@@ -128,7 +128,7 @@ left alone, tied by `seg`). It is nested so `n`, the count bindings, and the Mer
 | `identity` | By action: shell `{ program, sub, flags, pulls? }` (flag names, never their values, so `-c1-200` reads `-c` and `head -20` reads `-N`; a pull is `{ registry, name, version }`), MCP `{ server, tool }`, skill `{ skill }`, web `{ host }`, else null. Any value outside the allowlist is `<literal>`. |
 | `status` | The call's status where it reports this segment; `none` where it does not, such as a segment a pipe hides. |
 | `cost` | `{ tokens, durationMs }` on the first segment; later segments hold nulls. `tokens` are the response's output tokens shared evenly among its calls. |
-| `parent` | On a subagent's step, the `n` of the call that spawned it in the main transcript; null when that call is not known. |
+| `parent` | On a subagent's step, the `n` of the call that spawned it, in the transcript its session record names as `spawnedIn` (the main session, or a sibling subagent, since a subagent can spawn another); null when that call is not known. |
 | `edges` | The edges arriving at this step, `{ kind, n, seg }` naming the source: `next` (order within a prompt's line of work), `spawned`, `retried` (same action and identity after that one failed), and `after-error`. `spawned` needs the subagent's `.meta.json`; `raw/` does not hold that file, so a re-capture takes `spawnedBy` from the log, and a subagent first seen in `raw/` has no such edge. |
 | `frameId` | The frame of the call's prompt. |
 
@@ -181,7 +181,7 @@ Derivation over the capture records, computed locally under `EXTRACTOR_VERSION` 
 
 - A **motif** is a window of one to four steps within one line of work, hashed with no salt and no frame, so one shape joins across accounts and frames. `shape` hashes actions only and `named` hashes actions and public identities. A `class` motif holds no steps and names a prompt class, which is how cost per class comes from cells. A one-step window is there because fit, adoption, and live count one action, and a prompt of one call has no longer window.
 - A **cell** is order 0: `{motifId, frameBucket, day, sessions, clusters, ok, failed, tokens, durationMs, exposed}`. A frame bucket is harness, harness version by tens of patch, model, and effort; versions are bucketed because most prompts run a version not yet seen, so an exact version goes stale in days. `exposed` is false until consequence windows are written.
-- A **read** is any derived value citing its inputs: `{readId, family, method, methodVersion, inputs, order, slice, value, n, clusters, interval, asOf, basis}`. `readId` is the hash of the rest, `order` is 1 + the highest order among `inputs` with a cell at 0, a read that cites nothing is refused, and `asOf.pool` pins the pool, so new data gives a new read even when the value comes out the same.
+- A **read** is any derived value citing its inputs: `{readId, family, method, methodVersion, inputs, order, slice, value, n, clusters, interval, asOf, basis}`. `readId` is the hash of the rest, `order` is 1 + the highest order among `inputs` with a cell at 0, a read that cites nothing is refused, and `asOf.pool` pins the pool, whose version hashes the extractor version, each family's method version, every cell, and the error rows recovery reads, so new data or a new rule gives a new read even when the value comes out the same.
 
 The eight families at order 1, in the order they are listed. None adjusts for its confounders, so a row is a count and not a finding.
 

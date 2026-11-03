@@ -17,6 +17,8 @@ afterEach(() => {
   for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
 
+const hasSteps = (value: unknown): value is { steps: object[] } => typeof value === 'object' && value !== null && 'steps' in value && Array.isArray(value.steps);
+
 const one = store({ sessions: [session('s1')], prompts: [prompt('s1', 0)], tools: [tool('s1', 0, 'Read'), tool('s1', 1, 'Edit')] });
 
 describe('refreshPool', () => {
@@ -54,9 +56,7 @@ describe('refreshPool', () => {
     expect(await motifsFrom(reversed)).toBe(one);
     const steps = one.trim().split('\n').flatMap((line) => {
       const parsed: unknown = JSON.parse(line);
-      const held: unknown = typeof parsed === 'object' && parsed !== null ? Reflect.get(parsed, 'steps') : undefined;
-      const list: readonly unknown[] = Array.isArray(held) ? held : [];
-      return list.filter((entry): entry is object => typeof entry === 'object' && entry !== null);
+      return hasSteps(parsed) ? parsed.steps : [];
     });
     expect(steps.length).toBeGreaterThan(0);
     for (const held of steps) expect(Object.keys(held).sort()).toEqual(['action', 'identity']);
