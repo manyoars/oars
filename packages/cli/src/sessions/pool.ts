@@ -84,8 +84,7 @@ export const refreshPool = async (storeDir: string, store: Store): Promise<{ poo
   const set = deriveCells(store, recallGraphOf(store, recalls));
   const pool = poolOf(set, store.errors);
   const files = poolFiles(storeDir);
-  await writeAtomic(files.consequences, recalls.flatMap(({ id, n, consequence }) => (consequence === undefined ? [] : [`${JSON.stringify({ id, n, consequence })}
-`])).join(''));
+  await writeAtomic(files.consequences, recalls.flatMap(({ id, n, consequence }) => (consequence === undefined ? [] : [`${JSON.stringify({ id, n, consequence })}\n`])).join(''));
   await writeAtomic(files.cells, serializeCells(set.cells));
   await writeAtomic(files.motifs, set.motifs.map((motif) => `${JSON.stringify(motif)}\n`).join(''));
   const file = files.reads(pool.version);
