@@ -88,6 +88,7 @@ describe('pulls: what names nothing', () => {
     ['cargo build', 'cargo build'],
     ['go relative', 'go install ./cmd/x'],
     ['go bare', 'go get'],
+    ['go with no module path', 'go install cmd/x'],
     ['go test', 'go test ./...'],
     ['npm local folder', 'npm install ../pkg'],
     ['npm file spec', 'npm install file:../pkg'],
@@ -113,7 +114,7 @@ describe('pulls: what names nothing', () => {
 
 describe('pulls: every line and every segment', () => {
   it('reads a compound command at every separator', () => {
-    expect(pullsOf('cd web && npm install a; pip install b || cargo add c | tee log & go get d')).toEqual(['npm:a', 'pypi:b', 'cargo:c', 'go:d']);
+    expect(pullsOf('cd web && npm install a; pip install b || cargo add c | tee log & go get x.io/d')).toEqual(['npm:a', 'pypi:b', 'cargo:c', 'go:x.io/d']);
   });
   it('reads every line', () => {
     expect(pullsOf('echo start\nnpm install a\n\npip install b')).toEqual(['npm:a', 'pypi:b']);

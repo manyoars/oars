@@ -289,7 +289,7 @@ describe('prompt outcome signals (t747)', () => {
       ['a last shell call with no result', [edit(0), shell(0), shell(0, 'none')], 'none'],
       ['an edit with no result of its own', [edit(0, 'hash-a', 'none'), shell(0)], 'passed'],
       ['a clean shell call after the edit', [edit(0), shell(0)], 'passed'],
-      ['PowerShell', [edit(0), { prompt: 0, tool: 'PowerShell', target: 'npm test', status: 'error' }], 'failed'],
+      ['PowerShell', [edit(0), { ...shell(0, 'error'), tool: 'PowerShell' }], 'failed'],
       ['a Write and a MultiEdit', [{ prompt: 0, tool: 'Write', target: 'hash-a' }, shell(0, 'error'), { prompt: 0, tool: 'MultiEdit', target: 'hash-b' }, shell(0)], 'passed'],
       ['the last of several: a fix after a failure', [edit(0), shell(0, 'error'), shell(0)], 'passed'],
       ['the last of several: a failure after a pass', [edit(0), shell(0), shell(0, 'error')], 'failed'],
