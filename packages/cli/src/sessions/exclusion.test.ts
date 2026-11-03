@@ -104,8 +104,44 @@ describe('checkSession (A38)', () => {
     const t = setup();
     mkdirSync(t.main('p', 's8'), { recursive: true });
     write(join(t.main('p', 's8'), '..', 's8', 'subagents', 'agent-x.jsonl'), [CLEAN]);
-    // A directory named like the main file is not a file, so there is no main to scan.
-    expect((await checkSession(t.staged.runtime, t.termsFile, 'p', 's8')).reason).toBe('no-raw');
+    // A directory named like the main file is not a file: the main was not examined, so the session is unreadable, not merely without raw.
+    expect((await checkSession(t.staged.runtime, t.termsFile, 'p', 's8')).reason).toBe('unreadable');
+  });
+
+  it('excludes a session whose harness main is a directory holding a term, though the raw main is clean', async () => {
+    const t = setup();
+    write(join(t.staged.storeDir, 'raw', 'p', 's8b.jsonl'), [CLEAN]);
+    write(join(t.main('p', 's8b'), 'inner.jsonl'), [DIRTY]);
+    expect((await checkSession(t.staged.runtime, t.termsFile, 'p', 's8b')).reason).toBe('unreadable');
+  });
+
+  it('reads a plain file where a folder belongs as unreadable: at subagents, at the session folder, and at the projects root', async () => {
+    const t = setup();
+    write(t.main('p', 's8c'), [CLEAN]);
+    write(join(t.staged.projectsRoot, 'p', 's8c', 'subagents'), [DIRTY]);
+    expect((await checkSession(t.staged.runtime, t.termsFile, 'p', 's8c')).reason).toBe('unreadable');
+    write(t.main('p', 's8d'), [CLEAN]);
+    write(join(t.staged.projectsRoot, 'p', 's8d'), [DIRTY]);
+    expect((await checkSession(t.staged.runtime, t.termsFile, 'p', 's8d')).reason).toBe('unreadable');
+    rmSync(t.staged.projectsRoot, { recursive: true, force: true });
+    writeFileSync(t.staged.projectsRoot, `${DIRTY}
+`);
+    const failure = await scanStore(t.staged.runtime, t.termsFile).then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+    expect(failure).toBeInstanceOf(CliError);
+    expect(failure instanceof CliError ? failure.message : '').toContain('no list was written');
+  });
+
+  it('keeps the term hits found before a bad entry under subagents', async (ctx) => {
+    const t = setup();
+    write(t.main('p', 's8e'), [CLEAN]);
+    write(t.agent('p', 's8e', 'a'), [DIRTY]);
+    if (!makeLink(join(t.staged.root, 'nowhere'), t.agent('p', 's8e', 'z'), 'file')) return ctx.skip();
+    const verdict = await checkSession(t.staged.runtime, t.termsFile, 'p', 's8e');
+    expect(verdict.reason).toBe('term');
+    expect(verdict.hits).toHaveLength(1);
   });
 
   it('counts a hit in a subagent file of a session with no main transcript as a term hit', async () => {
