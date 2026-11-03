@@ -172,7 +172,7 @@ describe('links to folders (a transcript that was not scanned never reads as cle
     write(raw, [CLEAN]);
     if (!link(gone, join(t.staged.projectsRoot, 'q'))) return ctx.skip();
     expect((await checkSession(t.staged.runtime, t.termsFile, 'q', 's17')).reason).toBe('unreadable');
-    // the assert gate refuses the first of them
+    // the assert gate refuses s14
     await expect(assertDepositable(t.staged.runtime, t.termsFile, 'p', 's14')).rejects.toBeInstanceOf(CliError);
   });
 
@@ -227,12 +227,13 @@ describe('a link at any level that leads nowhere or to the wrong kind of entry i
     { level: 'subagents', targets: ['broken', 'file'], stops: false },
     { level: 'main', targets: ['broken', 'directory'], stops: false },
   ];
-  const cases = levels.flatMap(({ level, targets, stops }) => targets.flatMap((target) => (['projects', 'raw'] as const).map((source) => ({ level, target, stops, source }))));
+  // The roots do not depend on the source: one row each, in `projects`.
+  const cases = levels.flatMap(({ level, targets, stops }) =>
+    targets.flatMap((target) => (['projects', 'raw'] as const).filter((source) => source === 'projects' || !level.endsWith('root') && level !== 'store dir').map((source) => ({ level, target, stops, source }))),
+  );
 
   it.for(cases)('$level as a $target link in $source reads unreadable (stops the scan: $stops)', async ({ level, target, stops, source }, ctx) => {
-    // The roots do not depend on the source: run them once.
-    if ((level === 'projects root' || level === 'store dir' || level === 'raw root') && source === 'raw') return;
-    const t = setup();
+      const t = setup();
     const { staged } = t;
     const root = source === 'projects' ? staged.projectsRoot : join(staged.storeDir, 'raw');
     const other = source === 'projects' ? join(staged.storeDir, 'raw') : staged.projectsRoot;
@@ -276,6 +277,28 @@ describe('a link at any level that leads nowhere or to the wrong kind of entry i
       expect(scan).not.toBeInstanceOf(Error);
       expect(scan).toMatchObject({ counts: { reasons: { unreadable: 1, noRaw: 0 }, kept: 0 } });
     }
+  });
+
+  type Entry = 'broken' | 'file without .jsonl' | 'directory named .jsonl' | 'directory named .jsonl holding a non-jsonl file';
+  const entries: Entry[] = ['broken', 'file without .jsonl', 'directory named .jsonl', 'directory named .jsonl holding a non-jsonl file'];
+
+  it.for(entries.flatMap((entry) => (['projects', 'raw'] as const).map((source) => ({ entry, source }))))('subagent entry as a $entry link in $source reads unreadable', async ({ entry, source }, ctx) => {
+    const t = setup();
+    const { staged } = t;
+    const root = source === 'projects' ? staged.projectsRoot : join(staged.storeDir, 'raw');
+    const other = source === 'projects' ? join(staged.storeDir, 'raw') : staged.projectsRoot;
+    write(join(other, 'p', `${S_D}.jsonl`), [CLEAN]);
+    write(join(root, 'p', `${S_D}.jsonl`), [CLEAN]);
+    const subagents = join(root, 'p', S_D, 'subagents');
+    mkdirSync(subagents, { recursive: true });
+    const decoy = join(staged.root, 'entry-decoy');
+    if (entry === 'file without .jsonl') write(decoy, [DIRTY]);
+    if (entry === 'directory named .jsonl') mkdirSync(decoy, { recursive: true });
+    if (entry === 'directory named .jsonl holding a non-jsonl file') write(join(decoy, 'notes.txt'), [DIRTY]);
+    const aim = entry === 'broken' ? join(staged.root, 'nowhere') : decoy;
+    const name = entry === 'file without .jsonl' ? 'agent-x' : 'agent-x.jsonl';
+    if (!makeLink(aim, join(subagents, name), entry === 'file without .jsonl' ? 'file' : 'dir')) return ctx.skip();
+    expect((await checkSession(staged.runtime, t.termsFile, 'p', S_D)).reason).toBe('unreadable');
   });
 
   it('lists a session-named link to a file, as the gate reads it', async (ctx) => {
