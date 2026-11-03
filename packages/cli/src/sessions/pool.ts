@@ -14,9 +14,12 @@ import { deriveLive } from './read-live.js';
 import { deriveMethod } from './read-method.js';
 import { deriveNextStep } from './read-next-step.js';
 import { deriveRecovery } from './read-recovery.js';
+import { deriveToolDay } from './read-tool-day.js';
 import type { DeriveRelation } from './read-order.js';
 import type { DeriveFamily, ReadBody } from './read-support.js';
+import { deriveDayMove } from './read-day-move.js';
 import { deriveInteraction } from './read-interaction.js';
+import { deriveLeadLag } from './read-lead-lag.js';
 import { deriveSubstitution } from './read-substitution.js';
 import { deriveVersionBoundary } from './read-version-boundary.js';
 import { writeAtomic, type Store } from './store.js';
@@ -30,10 +33,11 @@ const DERIVERS: { readonly [family in FirstOrderFamily]: DeriveFamily } = {
   adoption: deriveAdoption,
   method: deriveMethod,
   'next-step': deriveNextStep,
+  'tool-day': deriveToolDay,
 };
 
 /** Families over reads, one stage per order: a stage reads what the stages before it wrote. */
-const RELATIONS: readonly (readonly DeriveRelation[])[] = [[deriveVersionBoundary, deriveSubstitution, deriveInteraction]];
+const RELATIONS: readonly (readonly DeriveRelation[])[] = [[deriveVersionBoundary, deriveSubstitution, deriveInteraction, deriveDayMove], [deriveLeadLag]];
 
 export const poolFiles = (storeDir: string): { cells: string; motifs: string; reads: (version: string) => string } => ({
   cells: join(storeDir, 'cells.jsonl'),

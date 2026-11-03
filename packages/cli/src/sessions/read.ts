@@ -18,12 +18,12 @@ const canonical = (value: unknown): unknown => {
 /** SHA-256 of canonical JSON, 16 hex characters, unsalted: one content reads alike on any account (D1's `hP`). */
 export const contentHash = (value: unknown): string => createHash('sha256').update(JSON.stringify(canonical(value))).digest('hex').slice(0, 16);
 
-/** The eight families (t752), in the order that report ranks them, recovery first: the only one that changes a next call today. */
-export const FIRST_ORDER_FAMILIES = ['recovery', 'fit', 'cost', 'change', 'live', 'adoption', 'method', 'next-step'] as const;
+/** The eight families (t752), in the order that report ranks them, recovery first: the only one that changes a next call today. Then `tool-day`, which the reads above order 1 stand on. */
+export const FIRST_ORDER_FAMILIES = ['recovery', 'fit', 'cost', 'change', 'live', 'adoption', 'method', 'next-step', 'tool-day'] as const;
 export type FirstOrderFamily = (typeof FIRST_ORDER_FAMILIES)[number];
 
 /** Families that read other reads, lowest order first. `lead-lag` is the labeled experiment (spec Section 6). */
-export const FAMILIES = [...FIRST_ORDER_FAMILIES, 'failure-day', 'version-boundary', 'substitution', 'interaction', 'day-move', 'lead-lag'] as const;
+export const FAMILIES = [...FIRST_ORDER_FAMILIES, 'version-boundary', 'substitution', 'interaction', 'day-move', 'lead-lag'] as const;
 export type Family = (typeof FAMILIES)[number];
 
 /** `all`, or `unexposed`: only steps outside any recall's consequence window, so a read cannot mistake the pool's influence for the world. */
