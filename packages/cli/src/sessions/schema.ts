@@ -5,6 +5,18 @@
 // captured records to `<config>/oars/sessions/observations.jsonl`. The log is append-only: a session whose file changed is deposited
 // again under a higher `rev`, and a reader keeps only the highest `rev` of each session.
 //
+// EXTRACTOR 9 adds motifs, cells, and reads, computed from the capture records and written beside them (`docs/sessions-store.md`), and carries a prompt's
+// frame onto its derived record. No capture record changes.
+//
+// Version 9 (CAPTURE 9, t755) adds `frame` and `frameId` to the session and prompt records and `steps` to the tool record, and moves `tool`, `tools`, and a
+// shell-form `target` from class P to class A. It changed no derivation, so it left EXTRACTOR at 8.
+//
+// Version 8 (CAPTURE 8 and EXTRACTOR 8) writes one `tool` record per tool call. The harness writes
+// `api-request-blob` lines, copies of the request body with no cwd, uuid, or timestamp, and capture used to read their blocks as conversation: a second
+// record with status `none` (and, with no cwd, another path hash) for 99.8% of calls, plus a second error line, thinking count, and TLDR. Those lines are
+// no longer read, and a call a resumed transcript replays under one tool-use id is written once. The skeleton still lists every line. The reader folds
+// records already on disk the same way until each transcript is captured again (`fold.ts`).
+//
 // Store version 5 (CAPTURE 5, t733) keeps version 4's shape and changes one stored value: each `models` entry of the skeleton's cost state names
 // the usage keys it reported, which `verify` uses to class a side call. A version-4 skeleton reads with no keys until it is captured again.
 //
@@ -31,14 +43,17 @@
 // harness versions, and tool names (including MCP server names). `redact` masks secrets by pattern and entropy, emails, and the
 // organization domains the operator names. The skeleton holds hashes only.
 
+import type { CanonicalAction } from './actions.js';
+import type { RepoSize } from './public-vocabulary.js';
+
 /** Stamped `cv` on every captured record. Bump it when the captured field list changes or a stored value of an existing captured record or skeleton changes: a bump re-reads every transcript. */
-export const CAPTURE_VERSION = '6';
+export const CAPTURE_VERSION = '9';
 
 /** Capture versions the reader derives from. A version-3 record is upgraded on read; a newer one is read for the fields this code knows. */
 export const OLDEST_READABLE_CAPTURE = 3;
 
 /** Stamped `v` on every derived record. A bump re-derives from the log; no transcript is read. */
-export const EXTRACTOR_VERSION = '6';
+export const EXTRACTOR_VERSION = '9';
 
 export const PROMPT_HEAD_CHARS = 300;
 export const ERROR_EXAMPLE_CHARS = 160;
@@ -67,6 +82,35 @@ export const harnessOf = (session: { harness?: Harness }): Harness => session.ha
 /** Where a path target is hashed from (class P): the repository root, or the line's working directory when no repository holds the path. */
 export type TargetBase = 'repo' | 'cwd';
 
+/** The closed vocabulary of a repository: languages, framework names, and a size bucket (D13). Class P. */
+export interface FrameStack {
+  languages: string[];
+  frameworks: string[];
+  size: RepoSize | null;
+}
+
+/**
+ * Where and when something ran (recall spec Section 2.1): the coordinate every comparison uses. Class P: every field is a public name, a
+ * UTC day, or null, and it is never served below the cell floor, because a set of tools can fingerprint an account. Its `shell` and `stack`
+ * belong to the file at this `rev`, so capturing a transcript that has grown can change the `frameId` of its earlier prompts.
+ */
+export interface Frame {
+  harness: Harness;
+  /** The version the prompt's own lines name, else the transcript's last. */
+  harnessVersion: string | null;
+  /** The prompt's majority model. */
+  model: string | null;
+  /** The prompt's majority effort. */
+  effort: string | null;
+  /** The UTC day of the prompt (D1 pools `ts` at a UTC day); the first timestamp of the file on a session's own frame. */
+  day: string | null;
+  /** `process.platform` of the capturing machine. */
+  platform: string;
+  /** The file's majority shell tool; null when it ran none, or when the harness does not name its shell. */
+  shell: string | null;
+  stack: FrameStack;
+}
+
 /** The environment a transcript was captured in (class P, names and versions only; library versions only when a transcript states them, L6). */
 export interface CaptureEnv {
   /** The harness version the transcript's last versioned line names; null when none. */
@@ -81,9 +125,9 @@ export interface CaptureEnv {
 
 /**
  * One per transcript, captured: the `parse_sessions.py` record, minus anything that is raw content. Classes (t711 Section 1.2):
- * `L` local-only: `project`, `files`. `A` account store: `session`, `parent`, `spawnedBy`, `branches`, `urls`, `searches`, `tldrs`,
- * `confidences`, `promptFingerprint`, `repo`, `fileHashes`, `at`, `tsFirst`, `tsLast`. `P` pooled: `kind`, `cv`, `rev`, `sid`,
- * `agentType`, the counts, `versions`, `models`, `tools`, `env`, `costUsd`, `usage` (`at`, `tsFirst`, and `tsLast` at UTC day).
+ * `L` local-only: `project`, `files`. `A` account store: `session`, `parent`, `spawnedBy`, `spawnedIn`, `branches`, `urls`, `searches`, `tldrs`,
+ * `confidences`, `promptFingerprint`, `repo`, `fileHashes`, `tools`, `at`, `tsFirst`, `tsLast`. `P` pooled: `kind`, `cv`, `rev`, `sid`,
+ * `agentType`, the counts, `versions`, `models`, `env`, `costUsd`, `usage`, `frame`, `frameId` (`at`, `tsFirst`, and `tsLast` at UTC day).
  */
 export interface SessionObservation {
   kind: 'session';
@@ -105,6 +149,8 @@ export interface SessionObservation {
   agentType: string | null;
   /** The parent's `Agent` tool call that spawned this subagent (the meta file's `toolUseId`); null for a main transcript. */
   spawnedBy: string | null;
+  /** The transcript holding that call, so `parent` and `spawned` on this transcript's steps have an address: the main session or a sibling subagent's id; null when not known. */
+  spawnedIn: string | null;
   rev: number;
   /** When this deposit ran (ISO 8601). */
   at: string;
@@ -135,6 +181,10 @@ export interface SessionObservation {
   promptFingerprint: string | null;
   /** Class P: where and with what this transcript was captured. */
   env: CaptureEnv;
+  /** The frame of a call before the file's first prompt; absent on a record captured before this field existed. Class P. */
+  frame?: Frame;
+  /** The hash of `frame`. Class P. */
+  frameId?: string;
   /** The harness's own `cost-state` totals when the file has one. */
   costUsd: number | null;
   /** Summed assistant usage of the file's own line (a main transcript's sidechain lines are not counted; a subagent transcript is its own line). */
@@ -157,6 +207,8 @@ export type PromptStop = 'interrupt' | 'rejected';
  */
 export interface PromptObservation {
   kind: 'prompt';
+  /** Where and when the prompt ran, from its capture record; absent on a record captured before frames existed. Class P. */
+  frame?: Frame;
   v: string;
   session: string;
   rev: number;
@@ -213,6 +265,8 @@ export interface ErrorObservation {
   sig: string;
   /** The first informative line, 160 characters, redacted. */
   example: string;
+  /** The call this result answers, class A (a join id): an uncaptured store keeps a replayed result's line beside the first, so one call is one id. Absent on a version-2 deposit. */
+  toolUseId?: string | null;
   /** The next two tool calls after the error (any line, in file order). */
   next: string[];
   /** Whether an Edit, Write, or MultiEdit came within six tool calls. */
@@ -229,11 +283,71 @@ export interface ErrorObservation {
 
 export type ToolStatus = 'ok' | 'error' | 'none';
 
+/** A package a shell step pulled, in public names (`<literal>` outside the allowlist). */
+export interface PullIdentity {
+  registry: string;
+  name: string;
+  /** Null when the command stated none. */
+  version: string | null;
+}
+
+/** A shell step: its program, subcommand, and flag names, sorted and single. Never a flag's value. */
+export interface ShellIdentity {
+  program: string;
+  sub: string | null;
+  flags: string[];
+  /** Absent when the command pulled nothing. */
+  pulls?: PullIdentity[];
+}
+
+export type StepIdentity = ShellIdentity | { server: string; tool: string } | { skill: string } | { host: string | null } | null;
+
+export interface StepCost {
+  /** The output tokens of the call's response, shared evenly among that response's calls; null when it reported none. */
+  tokens: number | null;
+  durationMs: number | null;
+}
+
 /**
- * One per tool call (register A28), captured. Classes: `A` account store: `session`, `parent`, `toolUseId`, `ts`, and a path-form
- * `target` (a salted hash); `P` pooled: `kind`, `cv`, `sid`, `rev`, `agentType`, `n`, `tool`, `status`, `keys`, `durationMs`,
- * `harnessVersion`, `side`, `prompt`, `targetBase`, and a shell-form `target` (program and subcommand). `segments`, `pulls`, and `commits` are `A`:
- * a plain word, a private package name, and a sha can each identify private work.
+ * How a step came about (recall spec Section 2.3), naming the step it came from by position. `next`: order within a prompt's line of work.
+ * `spawned`: the call that started this subagent, in the transcript its session record names as `spawnedIn`. `retried`: the same native name and the same redacted command or target, after that one failed.
+ * `after-error`: the call before this one failed.
+ */
+export interface StepEdge {
+  kind: 'next' | 'spawned' | 'retried' | 'after-error';
+  n: number;
+  seg: number;
+}
+
+/** One observed event in the canonical vocabulary of any harness (recall spec Section 2.2). Class P: it holds only positions, public names, and a frame hash. */
+export interface StepObservation {
+  /** The `n` of the tool call this step came from. */
+  n: number;
+  /** Its position among that call's steps, from 0. */
+  seg: number;
+  action: CanonicalAction;
+  /** The harness's own name for the tool when the action table lists it or every name it holds is public, else `<literal>` (the tool record keeps it, class A). */
+  native: string;
+  /** What the step acted on, in public names only; null for an action that has none (a file's path never appears here). */
+  identity: StepIdentity;
+  /** The call's status when it reports this segment; `none` for a segment it does not, such as one a pipe hides. */
+  status: ToolStatus;
+  /** Held on the first segment of a call; a later segment has nulls. */
+  cost: StepCost;
+  /** On a subagent's step, the `n` of the call that spawned it, in the transcript its session record names as `spawnedIn`; null otherwise or when that call is not known. */
+  parent: number | null;
+  /** The edges that arrive at this step. */
+  edges: StepEdge[];
+  /** The frame of the call's prompt, or the session's own frame before the first prompt. */
+  frameId: string;
+}
+
+/**
+ * One per tool call (register A28), captured. Classes: `A` account store: `session`, `parent`, `toolUseId`, `ts`, `tool`, and `target`
+ * in either form (a salted hash, or a program and subcommand); `P` pooled: `kind`, `cv`, `sid`, `rev`, `agentType`, `n`, `status`, `keys`,
+ * `durationMs`, `harnessVersion`, `side`, `prompt`, `targetBase`, and `steps`. `tool` and a shell-form `target` moved to `A` at CAPTURE 9: an MCP
+ * tool name holds a private server's name and a shell word can be anything, and `steps` carries the public reading of both. `segments`, `pulls`,
+ * and `commits` are `A`: a plain word, a private package name, and a sha can each identify private work.
  */
 export interface ToolObservation {
   kind: 'tool';
@@ -269,6 +383,8 @@ export interface ToolObservation {
   side: boolean;
   /** The prompt index the call ran under; null before the first prompt. */
   prompt: number | null;
+  /** What the call was in the canonical vocabulary; absent on a record captured before this field existed. Class P. */
+  steps?: StepObservation[];
   /** Each command of a shell call, in order (CAPTURE 6); on every shell call and no other. Absent on a record captured earlier. */
   segments?: ShellSegment[];
   /** What the call pulled (CAPTURE 6). Absent when it pulled nothing. */
@@ -295,8 +411,8 @@ export interface ToolPull {
   version: string | null;
 }
 
-/** One per failed tool result, captured and keyed by `toolUseId`. Classes: `A` account store: `session`, `toolUseId`, `line`
- * (switchable text), `ts`; `P` pooled: `kind`, `cv`, `sid`, `rev`, `tool`, `harnessVersion`, `side`, `prompt`, `after`. */
+/** One per failed tool result, captured and keyed by `toolUseId`. Classes: `A` account store: `session`, `toolUseId`, `tool`, `line`
+ * (switchable text), `ts`; `P` pooled: `kind`, `cv`, `sid`, `rev`, `harnessVersion`, `side`, `prompt`, `after`. */
 export interface ErrorLineObservation {
   kind: 'error-line';
   cv: string;
@@ -338,6 +454,10 @@ export interface UserPromptObservation {
   usage: Usage;
   /** Class A: the session's prompt fingerprint at the time of the prompt, when one had been seen. */
   promptFingerprint: string | null;
+  /** Where and when this prompt ran; absent on a record captured before this field existed. Class P. */
+  frame?: Frame;
+  /** The hash of `frame` (`frameIdOf`). Class P. */
+  frameId?: string;
 }
 
 export type CaptureRecord = SessionObservation | UserPromptObservation | ToolObservation | ErrorLineObservation;
@@ -472,7 +592,7 @@ export interface HookCall {
 }
 
 /** The pipeline steps the log names (runtime-commons pipeline spec 3.1); `label` is the local labeler step (A5) that no command runs yet; `index` is the hook-index write the nightly and manual runs log. */
-export const STEPS = ['deposit', 'verify', 'derive', 'label', 'index', 'recall'] as const;
+export const STEPS = ['deposit', 'verify', 'derive', 'label', 'index', 'recall', 'read'] as const;
 export type Step = (typeof STEPS)[number];
 
 /** The trigger names of spec 4.1 (the ones nothing local starts are in the schema only: `weekly` (A21) and the hosted `sync`, `cron`, `release`, `run-end`, and `run-start`). The SessionEnd hook is `stop`, never `session-end`. */

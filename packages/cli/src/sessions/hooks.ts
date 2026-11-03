@@ -12,6 +12,7 @@ import { makeRedactor } from './redact.js';
 import type { HookCall } from './schema.js';
 import { errorLine, inputKey, logStep, newContext, runDeposit, stampKey, tryLog, type StepReport } from './steps.js';
 import { deposit, depositSession, readSaved, type SessionsRuntime } from './store.js';
+import { recordSurvival } from './survival.js';
 
 export type HookEvent = HookCall['event'];
 
@@ -93,11 +94,14 @@ const nightly = async (runtime: SessionsRuntime, now: () => number): Promise<Out
     const done = await deposit(runtime, { allow: saved.allow, redactDomains: saved.redactDomains, now }, trace);
     return { value: done, in: { transcript: done.sessions + done.subagents + done.unchanged } };
   });
+  const survival = await recordSurvival(runtime, saved.allow, now);
   // A Cursor store that could not be read does not fail the run, so the record carries it or nobody sees it.
   const unreadable = result.cursorUnreadableLogged[0];
   if (unreadable !== undefined) return { hit: true, queried: false, error: await errorLine(runtime.storeDir, unreadable) };
   // A skip for an unsafe composer id is likewise reported, never silent (the `rejected` doc in cursor.ts); an unreadable store, which names its own reason, takes precedence.
-  return result.cursorRejected === 0 ? { hit: true, queried: false } : { hit: true, queried: false, error: `Skipped ${String(result.cursorRejected)} Cursor sessions whose id is not a safe file name` };
+  if (result.cursorRejected !== 0) return { hit: true, queried: false, error: `Skipped ${String(result.cursorRejected)} Cursor sessions whose id is not a safe file name` };
+  // A survival read that fails every night is otherwise invisible, for the same reason; it comes last because the run itself did not lose a session.
+  return survival === null ? { hit: true, queried: false, error: await errorLine(runtime.storeDir, 'Commit survival not read this run.') } : { hit: true, queried: false };
 };
 
 /** What a lookup hook looks up, as its recall key (spec 4.2 names none for a lookup): the cwd for session-start, the failure's signature for post-tool; null when it had nothing to look up. */

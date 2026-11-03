@@ -1,5 +1,6 @@
 // The on-disk session store and `deposit`. Layout under `<config>/oars/sessions/`:
-//   observations.jsonl      append-only; a re-deposited session is appended again under a higher `rev`
+//   observations.jsonl      appended to; a re-deposited session is appended again under a higher `rev`, and a whole-store deposit
+//                           then drops the superseded revs (compactLog)
 //                           versions 3 and later write capture records only (session, user-prompt, tool, error-line; CAPTURE_VERSION);
 //                           signatures, prompt classes, and episodes are derived from them at read time (derive.ts,
 //                           EXTRACTOR_VERSION), so a rule change re-derives without reading any raw transcript
@@ -17,9 +18,10 @@
 //   pipeline-runs.jsonl     the step log: one line per run of a pipeline step, appended when the step ends (steps.ts)
 import type { GoldEvaluator } from './gold-arms.js';
 import { createHash, randomBytes } from 'node:crypto';
+import { createReadStream } from 'node:fs';
 import { performance } from 'node:perf_hooks';
-import { appendFile, mkdir, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
-import { basename, dirname, join } from 'node:path';
+import { appendFile, mkdir, open, readdir, readFile, rename, rm, stat, utimes, writeFile } from 'node:fs/promises';
+import { basename, dirname, join, resolve } from 'node:path';
 import { CliError, ExitCode } from '../errors.js';
 import { compileAllow, requireEntries, slugOf } from './allow.js';
 import { openCursorStore, type CursorStore } from './cursor.js';
@@ -27,7 +29,9 @@ import { buildIndex, indexPath } from './hook-index.js';
 import { archiveRaw } from './archive.js';
 import { deriveSession, type SessionCapture } from './derive.js';
 import { captureRuntime, type CaptureRuntime } from './capture-runtime.js';
-import { captureSession, type Capture, type SubagentOrigin } from './extract.js';
+import { callPositions, captureSession, type Capture, type SubagentOrigin } from './extract.js';
+import { foldToolRows, withoutReplays } from './fold.js';
+import { asRepoSize, type RepoSize } from './public-vocabulary.js';
 import { makeRepoIdentity, makeRepoRoot } from './repo-root.js';
 import { makeRedactor, type Redactor } from './redact.js';
 import {
@@ -77,6 +81,11 @@ interface FileState {
   s?: string;
   /** The sorted `--redact-domain` set in force when this file was deposited; a file recorded under another set is deposited again. */
   d: string[];
+  /**
+   * The repository size bucket this file's first frame read, so a later capture's frame does not follow the repository. Held here as well as
+   * in the log because the SessionEnd hook has seconds to run and the log can run to hundreds of MB; absent on a file captured before frames.
+   */
+  repoSize?: RepoSize | null;
 }
 
 export interface State {
@@ -140,6 +149,7 @@ export const readState = async (storeDir: string): Promise<State> => {
       const files: State['files'] = {};
       for (const [key, value] of Object.entries(parsed.files)) {
         if (isRecord(value) && typeof value.size === 'number' && typeof value.mtimeMs === 'number' && typeof value.rev === 'number') {
+          const repoSize = asRepoSize(value.repoSize);
           files[key] = {
             size: value.size,
             mtimeMs: value.mtimeMs,
@@ -147,6 +157,7 @@ export const readState = async (storeDir: string): Promise<State> => {
             v: typeof value.v === 'string' ? value.v : '',
             ...(typeof value.s === 'string' ? { s: value.s } : {}),
             d: Array.isArray(value.d) ? value.d.filter((entry): entry is string => typeof entry === 'string') : [],
+            ...(repoSize === undefined ? {} : { repoSize }),
           };
         }
       }
@@ -168,7 +179,7 @@ export const readSaved = async (storeDir: string): Promise<{ allow: string[]; re
   return { allow, redactDomains };
 };
 
-const writeAtomic = async (file: string, text: string): Promise<void> => {
+export const writeAtomic = async (file: string, text: string): Promise<void> => {
   await mkdir(join(file, '..'), { recursive: true });
   const temp = `${file}.${String(process.pid)}.tmp`;
   await writeFile(temp, text, { mode: 0o600 });
@@ -229,19 +240,25 @@ interface DepositContext {
   repoIdentity: (root: string) => string;
   /** This process's versions, read once per deposit (it parses package.json). */
   captureRuntime: CaptureRuntime;
-  /** What the log says about each subagent transcript, read at most once per deposit and only when a raw-only subagent needs it. */
-  origins: () => Promise<Map<string, SubagentOrigin>>;
+  /** What the log says about each transcript, read at most once per deposit and only when a raw-only subagent or a lost state file needs it. */
+  logged: () => Promise<LoggedSessions>;
+  /** The state file held no entries when this deposit began, so a transcript with no entry may still have been captured before. */
+  stateLost: boolean;
+  /** The call positions of each parent transcript a subagent of this deposit named, read at most once. */
+  parentCalls: Map<string, Promise<Map<string, number>>>;
+  /** The same for the subagent transcripts under each parent, read at most once and only when a spawning call is not in the parent. */
+  siblingCalls: Map<string, Promise<Sibling[]>>;
   at: string;
   now: () => number;
 }
 
 const contextFor = async (runtime: SessionsRuntime, state: State, now: () => number): Promise<DepositContext> => {
   // Each file records the set it was deposited under. A file whose set differs from the current one is read again, so a domain
-  // added while other folders were allowed still masks those folders later. Lines already written stay in the append-only
-  // observations file until it is compacted; readers use only the highest rev of each session.
+  // added while other folders were allowed still masks those folders later. Lines already written stay in the observations file
+  // until it is compacted; readers use only the highest rev of each session.
   await mkdir(paths(runtime.storeDir).skeletons, { recursive: true });
   const salt = await (runtime.accountSalt ?? localSalt)(runtime.storeDir);
-  let origins: Promise<Map<string, SubagentOrigin>> | undefined;
+  let logged: Promise<LoggedSessions> | undefined;
   return {
     runtime,
     state,
@@ -251,11 +268,26 @@ const contextFor = async (runtime: SessionsRuntime, state: State, now: () => num
     repoRoot: makeRepoRoot(),
     repoIdentity: makeRepoIdentity(),
     captureRuntime: captureRuntime(),
-    origins: () => (origins ??= loggedOrigins(runtime.storeDir)),
+    logged: () => (logged ??= loggedSessions(runtime.storeDir)),
+    stateLost: Object.keys(state.files).length === 0,
+    parentCalls: new Map(),
+    siblingCalls: new Map(),
     at: new Date(now()).toISOString(),
     now,
   };
 };
+
+/** A subagent transcript's call positions, for finding the call that spawned another subagent. */
+interface Sibling {
+  session: string;
+  calls: Map<string, number>;
+}
+
+/** Where a subagent was spawned: the call's `n`, in which transcript. */
+interface SpawnPoint {
+  n: number;
+  session: string;
+}
 
 /** A transcript to deposit: a main session file, or a subagent's under `<session>/subagents/` (register A24). */
 interface Transcript {
@@ -330,10 +362,73 @@ const refuseNewer = (state: State): void => {
   }
 };
 
+/** The parent transcript's call positions, from the harness's copy or else the archive; empty when neither holds it. */
+const readParentCalls = async (candidates: readonly string[]): Promise<Map<string, number>> => {
+  for (const candidate of candidates) {
+    try {
+      return callPositions(await readFile(candidate, 'utf8'));
+    } catch (error) {
+      if (!isMissing(error)) throw error;
+    }
+  }
+  return new Map();
+};
+
+/** The transcripts under one main session, each with its call positions: from the harness's folder, then whatever only the archive still holds. */
+const readSiblings = async (folders: readonly string[], parent: string): Promise<Sibling[]> => {
+  const siblings = new Map<string, Sibling>();
+  for (const folder of folders) {
+    for (const { session, file } of await subagentTranscripts(folder, [parent])) {
+      if (!siblings.has(session)) siblings.set(session, { session, calls: await readParentCalls([file]) });
+    }
+  }
+  // Sorted, so which copy of a repeated call wins does not depend on the order a directory lists in.
+  return [...siblings.values()].sort((one, two) => one.session.localeCompare(two.session));
+};
+
+/**
+ * The call that spawned a subagent, in its main transcript or else in a sibling subagent's (a subagent can spawn another); null when its
+ * origin names no call or no transcript holds that call. A sibling is read only on a miss, so the common case costs one parent read.
+ */
+const spawnPointOf = async (context: DepositContext, project: string, transcript: Transcript, origin: SubagentOrigin): Promise<SpawnPoint | null> => {
+  const id = origin.spawnedBy;
+  if (id === null) return null;
+  const name = `${origin.parent}.jsonl`;
+  const key = `${project}/${origin.parent}`;
+  // The project folder holds the transcript at `relative`, whether that folder is the harness's or the archive's.
+  const folder = resolve(transcript.file, ...transcript.relative.split('/').map(() => '..'));
+  const archive = join(paths(context.runtime.storeDir).raw, project);
+  const calls = context.parentCalls.get(key) ?? readParentCalls([join(folder, name), join(archive, name)]);
+  context.parentCalls.set(key, calls);
+  const inParent = (await calls).get(id);
+  if (inParent !== undefined) return { n: inParent, session: origin.parent };
+  const siblings = context.siblingCalls.get(key) ?? readSiblings([folder, archive], origin.parent);
+  context.siblingCalls.set(key, siblings);
+  for (const { session, calls: held } of await siblings) {
+    const n = session === transcript.session ? undefined : held.get(id);
+    if (n !== undefined) return { n, session };
+  }
+  return null;
+};
+
+/** A subagent transcript's origin with where it was spawned, as far as the transcripts in reach say. */
+const originOf = async (context: DepositContext, project: string, transcript: Transcript): Promise<SubagentOrigin | undefined> => {
+  const { subagent } = transcript;
+  if (subagent === undefined) return undefined;
+  const point = await spawnPointOf(context, project, transcript, subagent);
+  return { ...subagent, spawnedAt: point?.n ?? null, spawnedIn: point?.session ?? null };
+};
+
+/** The size bucket an earlier capture of this transcript read; undefined when there was none, so this capture reads the repository. */
+const earlierRepoSize = async (context: DepositContext, previous: FileState | undefined, session: string): Promise<RepoSize | null | undefined> => {
+  if (previous !== undefined) return previous.repoSize;
+  return context.stateLost ? (await context.logged()).repoSizes.get(session) : undefined;
+};
+
 /** Deposits one transcript unless its size, mtime, capture version, salt, and domain set are unchanged; returns what it wrote, or undefined when skipped. */
 const depositFile = async (context: DepositContext, project: string, transcript: Transcript): Promise<Capture | undefined> => {
   const { runtime, state } = context;
-  const { file, session, subagent } = transcript;
+  const { file, session } = transcript;
   const info = await stat(file);
   // Archived before the unchanged check, so a store deposited before the archive existed fills it on its next run.
   if (transcript.fromRaw !== true) await archiveRaw(file, join(paths(runtime.storeDir).raw, project, ...transcript.relative.split('/')));
@@ -363,7 +458,8 @@ const depositFile = async (context: DepositContext, project: string, transcript:
     repoRoot: context.repoRoot,
     repoIdentity: context.repoIdentity,
     runtime: context.captureRuntime,
-    subagent,
+    repoSize: await earlierRepoSize(context, previous, session),
+    subagent: await originOf(context, project, transcript),
   });
   await commitCapture(context, key, extract, { size: info.size, mtimeMs: info.mtimeMs, rev });
   return extract;
@@ -463,7 +559,7 @@ const commitCapture = async (context: DepositContext, key: string, extract: Capt
   await mkdir(context.runtime.storeDir, { recursive: true });
   await appendFile(files.observations, batch.map((observation) => `${JSON.stringify(observation)}\n`).join(''), { mode: 0o600 });
   await writeAtomic(join(files.skeletons, `${extract.session.session}.json`), JSON.stringify(extract.skeleton));
-  context.state.files[key] = { ...cursor, v: CAPTURE_VERSION, s: context.salt.sid, d: context.domains };
+  context.state.files[key] = { ...cursor, v: CAPTURE_VERSION, s: context.salt.sid, d: context.domains, repoSize: extract.session.frame?.stack.size ?? null };
 };
 
 interface LockOptions {
@@ -529,9 +625,17 @@ export const withLock = async <T>(storeDir: string, work: () => Promise<T>, opti
     await sleep(25);
     claimed = await claim(lock);
   }
+  // A waiter breaks a lock older than `staleMs`, and a full re-capture runs longer than that: the holder keeps its lock young, or a hook
+  // would break it and append during the compaction that ends the run.
+  const heartbeat = setInterval(() => {
+    const now = new Date();
+    void utimes(lock, now, now).catch(() => undefined);
+  }, options.staleMs / 4);
+  heartbeat.unref();
   try {
     return await work();
   } finally {
+    clearInterval(heartbeat);
     await rm(lock, { force: true });
   }
 };
@@ -592,6 +696,11 @@ const depositLocked = async (runtime: SessionsRuntime, options: DepositOptions, 
   }
   if (runtime.cursorRoot !== undefined && allow.allows(CURSOR_SOURCE)) await readCursor(context, runtime.cursorRoot, result, trace);
   await writeAtomic(paths(runtime.storeDir).state, JSON.stringify(state));
+  // Decided by what the log holds, not by what this run captured: a run that died after its re-capture left the copies for this one. The hook
+  // path never compacts, since it has seconds. The records are safe by now and an uncompacted log still loads, so a failure here does not fail the deposit.
+  await compactLog(runtime.storeDir).catch((error: unknown) => {
+    process.stderr.write(`oars: the session log was not compacted, and the next deposit tries again: ${error instanceof Error ? error.message : String(error)}\n`);
+  });
   await refresh(runtime, state.redactDomains, context.at, trace);
   return result;
 };
@@ -647,9 +756,10 @@ const readCursor = async (context: DepositContext, root: string, result: Deposit
         break;
       }
       const rev = Math.max((previous?.rev ?? 0) + 1, context.now());
+      const id = `${CURSOR_SOURCE}-${session.composerId}`;
       const extract = captureSession({
         text,
-        session: `${CURSOR_SOURCE}-${session.composerId}`,
+        session: id,
         project: session.folder === null ? CURSOR_SOURCE : slugOf(session.folder),
         rev,
         at: context.at,
@@ -660,6 +770,8 @@ const readCursor = async (context: DepositContext, root: string, result: Deposit
         repoRoot: context.repoRoot,
         repoIdentity: context.repoIdentity,
         runtime: context.captureRuntime,
+        repoSize: await earlierRepoSize(context, previous, id),
+        harness: 'cursor',
       });
       extract.session.harness = 'cursor';
       await commitCapture(context, key, extract, { size: session.messages, mtimeMs: session.lastUpdatedAt, rev });
@@ -675,31 +787,55 @@ const readCursor = async (context: DepositContext, root: string, result: Deposit
   }
 };
 
-/** What an earlier deposit logged about each subagent transcript, since its `.meta.json` is not archived: session id to origin. */
-const loggedOrigins = async (storeDir: string): Promise<Map<string, SubagentOrigin>> => {
-  const origins = new Map<string, SubagentOrigin>();
-  let text = '';
+/**
+ * The log's lines, a chunk at a time: the log can pass the longest string Node can hold (536,870,888 characters), so it is never one string.
+ * It splits on the newline alone, not through `readline`, which also ends a line at U+2028 and U+2029: `JSON.stringify` leaves those raw inside a
+ * value. A missing log has no lines, and a last line with no newline is yielded as it stands, for the reader to parse or skip.
+ */
+const logLines = async function* (file: string): AsyncGenerator<string> {
+  let rest = '';
   try {
-    text = await readFile(paths(storeDir).observations, 'utf8');
+    for await (const chunk of createReadStream(file, { encoding: 'utf8', highWaterMark: 1 << 20 })) {
+      const lines = (rest + String(chunk)).split('\n');
+      rest = lines.pop() ?? '';
+      yield* lines;
+    }
   } catch (error) {
     if (!isMissing(error)) throw error;
   }
-  for (const line of text.split('\n')) {
-    if (!line.includes('"parent":"')) continue;
+  yield rest;
+};
+
+/** What an earlier deposit logged about each transcript. */
+interface LoggedSessions {
+  /** Each subagent transcript's origin, since its `.meta.json` is not archived. */
+  origins: Map<string, SubagentOrigin>;
+  /** The size bucket of each transcript's earliest logged frame. */
+  repoSizes: Map<string, RepoSize | null>;
+}
+
+const loggedSessions = async (storeDir: string): Promise<LoggedSessions> => {
+  const origins = new Map<string, SubagentOrigin>();
+  const repoSizes = new Map<string, RepoSize | null>();
+  for await (const line of logLines(paths(storeDir).observations)) {
+    if (!line.includes('"kind":"session"')) continue;
     try {
       const parsed: unknown = JSON.parse(line);
-      if (isRecord(parsed) && parsed.kind === 'session' && typeof parsed.session === 'string' && typeof parsed.parent === 'string') {
+      if (!isRecord(parsed) || parsed.kind !== 'session' || typeof parsed.session !== 'string') continue;
+      if (typeof parsed.parent === 'string') {
         origins.set(parsed.session, {
           parent: parsed.parent,
           agentType: typeof parsed.agentType === 'string' ? parsed.agentType : null,
           spawnedBy: typeof parsed.spawnedBy === 'string' ? parsed.spawnedBy : null,
         });
       }
+      const size = isRecord(parsed.frame) && isRecord(parsed.frame.stack) ? asRepoSize(parsed.frame.stack.size) : undefined;
+      if (size !== undefined && !repoSizes.has(parsed.session)) repoSizes.set(parsed.session, size);
     } catch {
       // A torn line is skipped.
     }
   }
-  return origins;
+  return { origins, repoSizes };
 };
 
 /** The session id of a transcript's path under its project folder: `<id>.jsonl`, or `<parent>~<path>~agent-x` for a subagent transcript. */
@@ -777,7 +913,7 @@ const rawOnlyTranscripts = async (context: DepositContext, project: string, onDi
       found.push({ ...mainTranscript(dirname(file), relative), fromRaw: true });
       continue;
     }
-    const origins = await context.origins();
+    const { origins } = await context.logged();
     const session = sessionOfRelative(relative);
     const origin = origins.get(session) ?? { parent: parts[0] ?? '', agentType: null, spawnedBy: null };
     found.push({ file, session, relative, subagent: origin, fromRaw: true });
@@ -860,23 +996,10 @@ interface Captured {
  * (EXTRACTOR_VERSION rules); a session whose last deposit was version 2 keeps the prompt and error lines that deposit wrote.
  */
 export const loadStore = async (storeDir: string): Promise<Store> => {
-  let text = '';
-  try {
-    text = await readFile(paths(storeDir).observations, 'utf8');
-  } catch (error) {
-    if (!isMissing(error)) throw error;
-  }
   const all: Observation[] = [];
   const latest = new Map<string, number>();
-  for (const line of text.split('\n')) {
-    if (line === '') continue;
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(line);
-    } catch {
-      continue;
-    }
-    const observation = asObservation(parsed);
+  for await (const line of logLines(paths(storeDir).observations)) {
+    const observation = observationOf(line);
     if (observation === undefined) continue;
     all.push(observation);
     latest.set(observation.session, Math.max(latest.get(observation.session) ?? 0, observation.rev));
@@ -899,8 +1022,12 @@ export const loadStore = async (storeDir: string): Promise<Store> => {
   }
   const redact = makeRedactor((await readState(storeDir)).redactDomains);
   const agents: (SessionCapture & { parent: string })[] = [];
-  for (const { session, prompts, tools, errorLines } of captured.values()) {
-    if (session === undefined) continue;
+  for (const { session: written, prompts, tools: writtenTools, errorLines: writtenErrorLines } of captured.values()) {
+    if (written === undefined) continue;
+    // One tool call is one record: a replay an older capture wrote beside the call is folded here (t762).
+    const folded = foldToolRows(writtenTools, writtenErrorLines);
+    const session = withoutReplays(written, folded.dropped);
+    const { tools, errorLines } = folded;
     if (Number(session.cv) > Number(CAPTURE_VERSION)) store.newerCaptures += 1;
     store.tools.push(...tools);
     if (session.parent !== null) {
@@ -938,8 +1065,88 @@ const agentErrors = (store: Store, agents: readonly (SessionCapture & { parent: 
   return errors;
 };
 
+/** How long a compaction waits for a reader to let go of the log; Windows refuses to rename over a file another process has open. */
+const LOG_RENAME_WAIT_MS = 30_000;
+
+const renameWhenFree = async (from: string, to: string, waitMs: number): Promise<void> => {
+  const started = Date.now();
+  for (;;) {
+    try {
+      await rename(from, to);
+      return;
+    } catch (error) {
+      if (!isCode(error, 'EPERM', 'EACCES', 'EBUSY') || Date.now() - started >= waitMs) throw error;
+      await sleep(100);
+    }
+  }
+};
+
+/** Writes to `temp` every line of the log but the superseded ones and blanks, flushed to disk so a rename can never expose an unwritten file. */
+const writeLive = async (file: string, temp: string, latest: ReadonlyMap<string, number>): Promise<void> => {
+  const out = await open(temp, 'w', 0o600);
+  try {
+    let batch = '';
+    for await (const line of logLines(file)) {
+      if (line === '') continue;
+      const observation = observationOf(line);
+      if (observation !== undefined && observation.rev !== latest.get(observation.session)) continue;
+      batch += `${line}\n`;
+      if (batch.length < 1 << 20) continue;
+      await out.appendFile(batch);
+      batch = '';
+    }
+    await out.appendFile(batch);
+    await out.sync();
+  } finally {
+    await out.close();
+  }
+};
+
+/**
+ * Drops the superseded revs from the log, so a re-capture does not leave a full copy of every session behind. The caller holds the store lock,
+ * the same one every append takes. Only a line a higher rev of its session replaces goes: a line this version cannot read stays, since a later
+ * oars may read it, and a kept line is written back byte for byte. A crash before the rename leaves the old log whole and a temp file that no
+ * reader opens and the next compaction removes. Throws, with the log as it was, when the rewrite cannot finish.
+ */
+export const compactLog = async (storeDir: string, renameWaitMs = LOG_RENAME_WAIT_MS): Promise<void> => {
+  const file = paths(storeDir).observations;
+  // Under the lock no other compaction is running, so any temp file here is one a crash left.
+  for (const entry of await listDir(storeDir)) {
+    if (entry.name.startsWith(`${basename(file)}.`) && entry.name.endsWith('.tmp')) await rm(join(storeDir, entry.name), { force: true });
+  }
+  const size = await stat(file).then((info) => info.size, () => 0);
+  const latest = new Map<string, number>();
+  let superseded = false;
+  for await (const line of logLines(file)) {
+    const observation = observationOf(line);
+    if (observation === undefined) continue;
+    const seen = latest.get(observation.session);
+    superseded ||= seen !== undefined && seen !== observation.rev;
+    latest.set(observation.session, Math.max(seen ?? 0, observation.rev));
+  }
+  if (!superseded) return;
+  const temp = `${file}.${String(process.pid)}.tmp`;
+  try {
+    await writeLive(file, temp, latest);
+    // The lock holds appends off, so this fires only when a waiter broke the lock (say across a sleeping laptop): the temp file lacks what it wrote.
+    if ((await stat(file)).size !== size) throw new Error('the log changed while it was being rewritten');
+    await renameWhenFree(temp, file, renameWaitMs);
+  } finally {
+    await rm(temp, { force: true });
+  }
+};
+
 /** A capture record this code derives from: version 3 (upgraded on read) through the current one, and newer ones for the fields known here. */
 const isReadable = (cv: string): boolean => Number(cv) >= OLDEST_READABLE_CAPTURE;
+
+/** A log line as a record, or undefined when a reader skips it: a blank, torn, or unparsable line, or one of no known shape. */
+const observationOf = (line: string): Observation | undefined => {
+  try {
+    return asObservation(JSON.parse(line));
+  } catch {
+    return undefined;
+  }
+};
 
 // The store is ours, so a line with a known `kind`, a session, and a rev is trusted as the type it says.
 const asObservation = (value: unknown): Observation | undefined => {
@@ -986,6 +1193,7 @@ const asSession = (value: { [key: string]: unknown } & SessionObservation): Sess
   parent: typeof value.parent === 'string' ? value.parent : null,
   agentType: typeof value.agentType === 'string' ? value.agentType : null,
   spawnedBy: typeof value.spawnedBy === 'string' ? value.spawnedBy : null,
+  spawnedIn: typeof value.spawnedIn === 'string' ? value.spawnedIn : null,
 });
 
 type Line = { [key: string]: unknown };

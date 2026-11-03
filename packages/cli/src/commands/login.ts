@@ -1,5 +1,5 @@
 import { CliError, ExitCode } from '../errors.js';
-import { resolveIssuerUrl } from '../issuer.js';
+import { discoverIssuer, resolveIssuerUrl } from '../issuer.js';
 import { awaitDeviceTokens, discover, startDeviceAuthorization } from '../oidc.js';
 import { exchangeKeycloakToken } from '../session.js';
 import type { Outcome, RunDeps } from '../cli.js';
@@ -17,7 +17,7 @@ const STEP = 'login';
 /** RFC 8628 device flow on Keycloak, then the exchange; stores the credentials. */
 export const login = async (deps: RunDeps, options: LoginOptions): Promise<Outcome> => {
   const issuerUrl = await resolveIssuerUrl(deps, options.issuerUrl);
-  const config = await discover(issuerUrl, { ...deps, step: STEP });
+  const config = await discoverIssuer(deps, options.issuerUrl, () => discover(issuerUrl, { ...deps, step: STEP }));
   const device = await startDeviceAuthorization(config, STEP);
   const url = device.verification_uri_complete ?? device.verification_uri;
   deps.io.stderr(`To sign in, open ${url}\nand confirm the code ${device.user_code}\n`);

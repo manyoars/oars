@@ -10,10 +10,13 @@ import { templates } from './commands/templates.js';
 import { testCharge } from './commands/test-charge.js';
 import type { CredentialStore } from './credentials.js';
 import { CliError, ExitCode } from './errors.js';
+import { requirePurchasingOpen } from './issuer.js';
 import type { JournalStore } from './journal.js';
 import type { BooksBy, RecallQuery } from './sessions/query.js';
-import { sessionsBooks, sessionsContext, sessionsDeposit, sessionsGoldArms, sessionsGoldSample, sessionsGoldScore, sessionsHookInstall, sessionsHookStatus, sessionsHookUninstall, sessionsMcp, sessionsMeasure, sessionsRecall, sessionsVerify, type SessionsDeps } from './sessions/command.js';
+import { FAMILIES } from './sessions/read.js';
+import { sessionsBooks, sessionsContext, sessionsDeposit, sessionsGoldArms, sessionsGoldSample, sessionsGoldScore, sessionsHookInstall, sessionsHookStatus, sessionsHookUninstall, sessionsMcp, sessionsMeasure, sessionsRead, sessionsRecall, sessionsVerify, type SessionsDeps } from './sessions/command.js';
 import { exclusionPaths, sessionsExclusions } from './sessions/exclusion.js';
+import { poolDeposit, poolLogin, poolPull } from './sessions/pool-command.js';
 import type { InstallRuntime, Scope } from './sessions/install.js';
 import type { SessionsRuntime } from './sessions/store.js';
 
@@ -232,7 +235,17 @@ const buildProgram = (deps: RunDeps, argv: string[]): Command => {
       emit(deps, flag(options, 'json'), outcome);
     });
 
-  const purchasing = program.command('purchasing').description("set up an agent's purchasing: the card, the monthly cap, and what it bought");
+  // Hidden and refused until t465 opens paid agents (issuer.ts requirePurchasingOpen); the code stays for it.
+  const purchasing = program
+    .command('purchasing', { hidden: true })
+    .description("set up an agent's purchasing: the card, the monthly cap, and what it bought")
+    .hook('preAction', () => {
+      requirePurchasingOpen(deps);
+    })
+    // A command with subcommands and no action prints help before preAction runs; this makes bare `purchasing` hit the gate first.
+    .action(() => {
+      purchasing.help({ error: true });
+    });
 
   purchasing
     .command('card')
@@ -329,10 +342,20 @@ const buildProgram = (deps: RunDeps, argv: string[]): Command => {
     });
 
   sessions
+    .command('read')
+    .description('derived reads of your own sessions at every order, each row stating its order and clusters: rates at order 1, relations between them at order 2, one labeled experiment at order 3, and what this store cannot read')
+    .option('--family <name>', `only this family: ${FAMILIES.join(', ')}`)
+    .option('--slice <axis=value>', 'only reads holding this value on this axis, such as model=claude-opus-5-5 (repeatable; all must match)', collect)
+    .action(async (_options: OptionValues, command: Command) => {
+      const options: OptionValues = command.optsWithGlobals();
+      emit(deps, flag(options, 'json'), await sessionsRead(sessionDeps(deps), { family: text(options, 'family'), slices: list(options, 'slice') }));
+    });
+
+  sessions
     .command('books')
-    .description('tokens, wall time, turns, errors, and verify-after-edit rate per prompt class, model, or harness')
-    .option('--by <key>', 'class, model, or harness (default class)', (value: string): BooksBy => {
-      if (value !== 'class' && value !== 'model' && value !== 'harness') throw new InvalidArgumentError('it must be class, model, or harness.');
+    .description('tokens, wall time, turns, errors, verify-after-edit rate, and the outcome signals (verify passed, stops, redos, commits, and commit survival) per prompt class, model, harness, or pull')
+    .option('--by <key>', 'class, model, harness, or pull (default class)', (value: string): BooksBy => {
+      if (value !== 'class' && value !== 'model' && value !== 'harness' && value !== 'pull') throw new InvalidArgumentError('it must be class, model, harness, or pull.');
       return value;
     })
     .option('--since <days>', 'only the last N days', positiveInteger)
@@ -340,7 +363,7 @@ const buildProgram = (deps: RunDeps, argv: string[]): Command => {
     .action(async (_options: OptionValues, command: Command) => {
       const options: OptionValues = command.optsWithGlobals();
       const picked = text(options, 'by');
-      const by: BooksBy = picked === 'model' || picked === 'harness' ? picked : 'class';
+      const by: BooksBy = picked === 'model' || picked === 'harness' || picked === 'pull' ? picked : 'class';
       emit(deps, flag(options, 'json'), await sessionsBooks(sessionDeps(deps), { by, sinceDays: count(options, 'since'), repo: text(options, 'repo') }));
     });
 
@@ -477,6 +500,40 @@ const buildProgram = (deps: RunDeps, argv: string[]): Command => {
     .action(async (_options: OptionValues, command: Command) => {
       const options: OptionValues = command.optsWithGlobals();
       emit(deps, flag(options, 'json'), await sessionsHookStatus(sessionDeps(deps), { file: text(options, 'file') }));
+    });
+
+  const pool = program.command('pool').description('sign in to a pool server, deposit closed-vocabulary session skeletons, and pull signed reads; local capture, recall, and reads need none of it');
+  const serverOption = '--server <url>';
+  const serverHelp = 'the pool server, https or plain http to localhost (or OARS_POOL_URL; there is no default)';
+
+  pool
+    .command('login')
+    .description('sign in by GitHub or Google device flow; the pool keeps a pseudonym, and no harness token is read')
+    .requiredOption('--provider <name>', 'github or google')
+    .option(serverOption, serverHelp)
+    .action(async (_options: OptionValues, command: Command) => {
+      const options: OptionValues = command.optsWithGlobals();
+      emit(deps, flag(options, 'json'), await poolLogin(deps, { server: text(options, 'server'), provider: text(options, 'provider') }));
+    });
+
+  pool
+    .command('deposit')
+    .description('send every session that passes the V15 check as a closed-vocabulary skeleton, and print counts only')
+    .option('--accept-covenant <version>', 'accept this version of the pool covenant before depositing')
+    .option(serverOption, serverHelp)
+    .action(async (_options: OptionValues, command: Command) => {
+      const options: OptionValues = command.optsWithGlobals();
+      emit(deps, flag(options, 'json'), await poolDeposit(deps, { server: text(options, 'server'), acceptCovenant: text(options, 'acceptCovenant') }));
+    });
+
+  pool
+    .command('pull')
+    .description('fetch one signed slice of the pool, verify it against the key pinned at login, and keep it locally')
+    .option('--stack <name>', 'a language or framework, or all', 'all')
+    .option(serverOption, serverHelp)
+    .action(async (_options: OptionValues, command: Command) => {
+      const options: OptionValues = command.optsWithGlobals();
+      emit(deps, flag(options, 'json'), await poolPull(deps, { server: text(options, 'server'), stack: text(options, 'stack') ?? 'all' }));
     });
 
   return program;

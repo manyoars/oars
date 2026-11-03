@@ -7,16 +7,21 @@ import { CliError, ExitCode } from '../errors.js';
 import { EVALUATOR_MODEL, fillArms, sidecarSaver } from './gold-arms.js';
 import { armsPath, coverageLines, formatScore, isGoldDocument, parseGold, renderGold, sampleGold, scoreGold, type GoldDocument } from './gold.js';
 import { makeRedactor } from './redact.js';
-import { books, formatBooks, formatMeasure, formatRecall, measure, recall, type BooksBy, type RecallQuery } from './query.js';
+import { books, BOOKS_CAVEAT, formatBooks, formatMeasure, formatRecall, measure, recall, type BooksBy, type RecallQuery } from './query.js';
 import { readHookCalls } from './hook-calls.js';
 import { buildIndex, contextBlock, inRepository, readIndex, type ContextOptions } from './hook-index.js';
 import { hookStatus, installHooks, scheduleStatus, setSchedule, settingsPath, uninstallHooks, type InstallRuntime, type Scope } from './install.js';
 import { serve } from './mcp.js';
+import { refreshPool } from './pool.js';
+import { FAMILIES } from './read.js';
+import { formatNotReadable, notReadable } from './read-readable.js';
+import { formatReads, isFamily, parseSlice, selectReads } from './read-rows.js';
 import { CAPTURE_VERSION, OLDEST_READABLE_CAPTURE, type StepRow } from './schema.js';
 import { deposit, frozenSessions, loadStore, readCalls, readRedactDomains, readSkeletons, slugOf, type SessionsRuntime, type Store } from './store.js';
 import { formatStepCounters, inputKey, newContext, readSteps, stampKey, runDeposit, runStep, stepCounters, stuckSteps, type StuckStep } from './steps.js';
 import { formatSelfBaseline, selfBaseline as selfBaselineOf, type SelfBaselineResult } from './baseline.js';
 import { auditCounts, auditStore, formatAudit, type SessionAudit, type T0Counts } from './audit.js';
+import { readSurvival, recordSurvival, SURVIVAL_DAYS } from './survival.js';
 import { CAPTURE_INVARIANTS, formatSessionResults, formatVerify, verifyAll, verifyCaptured, verifySessions, type InvariantResult, type SessionVerification } from './verify.js';
 
 export interface SessionsDeps {
@@ -46,6 +51,7 @@ export const sessionsDeposit = async (deps: SessionsDeps, options: { allow: stri
     const done = await deposit(runtime, { allow, redactDomains: options.redactDomains, now: deps.now }, trace);
     return { value: done, in: { transcript: done.sessions + done.subagents + done.unchanged } };
   });
+  const survival = await recordSurvival(runtime, allow, deps.now);
   const lines = [
     `Deposited ${String(result.sessions)} sessions and ${String(result.subagents)} subagent transcripts (${String(result.lines)} lines, ${String(result.badLines)} unparseable) as ${String(result.observations)} observations; ${String(result.unchanged)} files unchanged.`,
     `Read ${String(result.folders.length)} folders; skipped ${String(result.skippedFolders)} not on the allowlist.`,
@@ -53,8 +59,11 @@ export const sessionsDeposit = async (deps: SessionsDeps, options: { allow: stri
     ...result.cursorUnreadable.map((reason) => `Cursor store not read: ${reason}`),
     ...(result.cursorRejected === 0 ? [] : [`Skipped ${String(result.cursorRejected)} Cursor sessions whose id is not a safe file name.`]),
     ...(result.missing.length === 0 ? [] : [`No project folder matched: ${result.missing.join(', ')}.`]),
+    survival === null
+      ? 'Commit survival not read this run.'
+      : `Commits older than ${String(SURVIVAL_DAYS)} days: ${String(survival.survived)} survived, ${String(survival.reverted)} reverted, ${String(survival.unreachable)} unreachable, ${String(survival.unknown)} unknown.`,
   ];
-  return { document: { ok: true, ...result }, text: lines.join('\n') };
+  return { document: { ok: true, ...result, survival }, text: lines.join('\n') };
 };
 
 export const sessionsRecall = async (deps: SessionsDeps, query: RecallQuery): Promise<Outcome> => {
@@ -74,6 +83,33 @@ export const sessionsRecall = async (deps: SessionsDeps, query: RecallQuery): Pr
     key,
   );
   return { document: { ok: true, ...result }, text: formatRecall(result) };
+};
+
+/**
+ * `read`: rows from the current pool's reads. The step log holds it under its own step, because the `recall` counters answer how often a recall was asked for. Every row states
+ * its clusters and order. No floor applies at order 1, because every cell here is the operator's own; above it a read below its floor does not exist, so this also says what the
+ * store cannot read, which tells that apart from a read that found nothing. This verb is the one way out for reads: no agent path serves them.
+ */
+export const sessionsRead = async (deps: SessionsDeps, options: { family: string | undefined; slices: readonly string[] }): Promise<Outcome> => {
+  const { family } = options;
+  if (family !== undefined && !isFamily(family)) throw new CliError(`Pass --family as one of ${FAMILIES.join(', ')}.`, ExitCode.USAGE, 'usage');
+  const slice = parseSlice(options.slices);
+  if (slice === undefined) throw new CliError('Pass --slice as <axis>=<value>.', ExitCode.USAGE, 'usage');
+  const { storeDir } = runtimeOf(deps);
+  const key = stampKey(family ?? '', ...options.slices);
+  const { pool, reads, unreadable, newer } = await runStep(
+    newContext(storeDir, deps.now, 'manual'),
+    'read',
+    async () => {
+      const store = await loadStore(storeDir);
+      const refreshed = await refreshPool(storeDir, store);
+      const selected = selectReads(refreshed.reads, { family, slice });
+      const missing = notReadable(refreshed.reads).filter((row) => family === undefined || row.family === family);
+      return { value: { pool: refreshed.pool.version, reads: selected, unreadable: missing, newer: store }, report: { in: { reads: refreshed.reads.length }, out: { rows: selected.length }, key } };
+    },
+    key,
+  );
+  return { document: { ok: true, pool, reads, notReadable: unreadable, newerCaptures: newer.newerCaptures }, text: [formatReads(reads), ...formatNotReadable(unreadable), ...newerNotice(newer)].join('\n') };
 };
 
 /** `recall --context`: the injection block for a repository, from the hook index (built from the store when no deposit has written one). */
@@ -102,9 +138,9 @@ export const sessionsMcp = async (deps: SessionsDeps): Promise<void> => {
 const newerNotice = (store: Store): string[] => (store.newerCaptures > 0 ? [`captured by a newer oars; upgrade oars (${String(store.newerCaptures)} sessions)`] : []);
 
 /**
- * The store restricted to one repository (the test `measure --repo` uses). `books` reads its rows from `prompts` alone, and looks a
- * subagent up by the kept prompt that spawned it, so the kept sessions and prompts are enough; the kept subagents only keep the
- * newer-capture count to this repository.
+ * The store restricted to one repository (the test `measure --repo` uses). `books` reads its rows from `prompts`, and looks up a
+ * subagent, a sha, or a pull by the kept prompt it belongs to, so the kept sessions and prompts are enough; the kept subagents only keep
+ * the newer-capture count to this repository.
  */
 const inRepositoryStore = (store: Store, repo: string): Store => {
   const sessions = store.sessions.filter((session) => inRepository(session.project, repo));
@@ -122,15 +158,19 @@ const inRepositoryStore = (store: Store, repo: string): Store => {
 };
 
 export const sessionsBooks = async (deps: SessionsDeps, options: { by: BooksBy; sinceDays: number | undefined; repo?: string }): Promise<Outcome> => {
-  const loaded = await loadStore(runtimeOf(deps).storeDir);
+  const { storeDir } = runtimeOf(deps);
+  const loaded = await loadStore(storeDir);
   const store = options.repo === undefined ? loaded : inRepositoryStore(loaded, options.repo);
-  const rows = books(store, options.by, deps.now(), options.sinceDays);
-  // A mistyped root over a populated store must not read as an empty store.
+  const rows = books(store, options.by, deps.now(), options.sinceDays, await readSurvival(storeDir));
+  // A mistyped root, or a --since window nothing falls in, over a populated store must not read as an empty store.
+  const emptyWindow = rows.length === 0 && options.sinceDays !== undefined && store.prompts.length > 0;
   const table =
-    rows.length === 0 && options.repo !== undefined
+    store.prompts.length === 0 && options.repo !== undefined
       ? `No prompts for ${options.repo} in the store (${String(loaded.prompts.length)} prompts across all repositories).`
-      : formatBooks(rows, options.by);
-  return { document: { ok: true, by: options.by, rows, newerCaptures: store.newerCaptures }, text: [table, ...newerNotice(store)].join('\n') };
+      : emptyWindow
+        ? `No ${options.by === 'pull' ? 'pulls' : 'prompts'} in the --since window.`
+        : formatBooks(rows, options.by);
+  return { document: { ok: true, by: options.by, rows, newerCaptures: store.newerCaptures }, text: [table, ...newerNotice(store), ...(rows.length === 0 ? [] : [BOOKS_CAVEAT])].join('\n') };
 };
 
 export const sessionsMeasure = async (deps: SessionsDeps, options: { last: number; since: string | undefined; repo?: string }): Promise<Outcome> => {

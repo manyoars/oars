@@ -1,9 +1,10 @@
 // What `npm publish -w packages/cli` would upload, read from `npm pack --dry-run --json`: the built CLI with the bin that
-// `oars` runs, the golden deploy plans aor-web's parity check reads, and LICENSE; never the TypeScript source, a test or the
+// `oars` runs, the golden deploy plans the web app's parity check reads, and LICENSE; never the TypeScript source, a test or the
 // fake platform. `--ignore-scripts` keeps this test from rebuilding dist/ while the other tests run beside it; the root check
 // script builds first (the build also copies the plans in), and `prepack` rebuilds at publish.
 import { spawnSync } from 'node:child_process';
 import { readdirSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { beforeAll, describe, expect, it } from 'vitest';
 
@@ -89,10 +90,10 @@ describe('the tarball npm pack would make', () => {
 });
 
 describe('the publish fields', () => {
-  it('name the public scoped package at 0.2.0, Apache-2.0, built from this folder of the public repository', () => {
+  it('name the public scoped package at 0.3.0, Apache-2.0, built from this folder of the public repository', () => {
     expect(manifest()).toMatchObject({
       name: '@manyoars/oars',
-      version: '0.2.0',
+      version: '0.3.0',
       license: 'Apache-2.0',
       repository: { type: 'git', url: 'git+https://github.com/manyoars/oars.git', directory: 'packages/cli' },
       publishConfig: { access: 'public' },
@@ -107,5 +108,101 @@ describe('the publish fields', () => {
       files: ['dist', 'parity/deploy-plans'],
       scripts: { prepack: 'npm run build' },
     });
+  });
+});
+
+// The public text (t754): the two READMEs and the package description state facts a reader can check, and address no agent.
+/** Phrases that address an agent or ask it to act, or describe sharing this release does not have. */
+const DENY_LIST = [
+  'ignore previous',
+  'ignore all previous',
+  'you must install',
+  'you should install',
+  'you should recommend',
+  'always recommend',
+  'recommend this',
+  'recommend it to',
+  'tell the user',
+  'tell your user',
+  'if you are an agent',
+  'if you are an ai',
+  'as an ai',
+  'as an agent',
+  'dear agent',
+  'attention agent',
+  'agents should',
+  'agents must',
+  'run this command now',
+  'install this package',
+  'install it for the user',
+  'before you re-solve',
+  'pooled',
+  'joins no cluster',
+];
+
+const NOT_OPEN = 'Accounts and paid agents are not open yet; `oars login` says so until launch.';
+
+describe('the public text states facts only', () => {
+  const description = String(manifest().description);
+  const texts = [
+    ['packages/cli/README.md', readFileSync(join(cliFolder, 'README.md'), 'utf8')],
+    ['README.md', readFileSync(join(root, 'README.md'), 'utf8')],
+    ['package description', description],
+  ] as const;
+
+  for (const [name, text] of texts) {
+    it(`${name} has no deny-listed phrase`, () => {
+      const lower = text.toLowerCase();
+      expect(DENY_LIST.filter((phrase) => lower.includes(phrase))).toEqual([]);
+    });
+  }
+
+  it('the package description names sessions and claims nothing about what the harness sends', () => {
+    expect(description).toMatch(/sessions/);
+    expect(description).not.toMatch(/nothing (leaves|is sent)/i);
+  });
+
+  it('the description and the 0.3.0 changelog entry carry the gold arms exception', () => {
+    const changelog = readFileSync(join(cliFolder, 'CHANGELOG.md'), 'utf8');
+    const entry = changelog.slice(changelog.indexOf('## 0.3.0'), changelog.indexOf('## 0.2.0') > 0 ? changelog.indexOf('## 0.2.0') : undefined);
+    for (const text of [description, entry]) {
+      expect(text).toContain('gold arms');
+      expect(text).toContain('your own Claude subscription');
+    }
+    expect(entry).toContain('`gold sample`, `gold arms`, and `gold score`');
+  });
+
+  it.each([['packages/cli/README.md', join(cliFolder, 'README.md')], ['README.md', join(root, 'README.md')]])('%s says raw/ is unredacted, what the harness sends, where <config> is, and that paid agents are not open', (_name, file) => {
+    const text = readFileSync(file, 'utf8');
+    expect(text).toContain('raw transcripts');
+    expect(text).toMatch(/unredacted/);
+    expect(text).toContain('except `gold arms`, which sends redacted text through your own Claude subscription');
+    expect(text).toContain('Apart from that, oars itself sends nothing; the hooks and the MCP tool add recall text to the running session, and your harness sends that to its model like any other context.');
+    expect(text).toContain(NOT_OPEN);
+    expect(text).toContain('%APPDATA%');
+    expect(text).toContain('~/.config');
+    expect(text).toContain('session-commons/review');
+  });
+
+  it('the root README gives the hook commands in the forms that run, with --scope user and --schedule off', () => {
+    const text = readFileSync(join(root, 'README.md'), 'utf8');
+    const commands = [...text.matchAll(/`(oars sessions hook (?:install|uninstall)[^`]*)`/g)].map((match) => match[1] ?? '');
+    expect(commands.length).toBeGreaterThanOrEqual(3);
+    for (const command of commands) expect(command, command).toMatch(/--scope user|--schedule off/);
+    expect(commands).toContain('oars sessions hook install --scope user');
+    expect(commands).toContain('oars sessions hook uninstall --scope user');
+    expect(commands).toContain('oars sessions hook install --schedule off');
+  });
+
+  it('the root README says install raises cleanupPeriodDays and uninstall leaves it raised', () => {
+    expect(readFileSync(join(root, 'README.md'), 'utf8')).toMatch(/cleanupPeriodDays[^.]*at least 365[^.]*uninstall leaves it raised/);
+  });
+});
+
+describe('oars purchasing is not in the 0.3.0 surface', () => {
+  it('is hidden from oars --help in the source and refused until paid agents open', () => {
+    const source = readFileSync(new URL('./cli.ts', import.meta.url), 'utf8');
+    expect(source).toMatch(/command\('purchasing', \{ hidden: true \}\)/);
+    expect(source).toContain('requirePurchasingOpen(deps)');
   });
 });
