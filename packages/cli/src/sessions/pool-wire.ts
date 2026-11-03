@@ -4,9 +4,13 @@
 
 import { ACTION_TABLES, CANONICAL_ACTIONS, mcpOf, type CanonicalAction } from './actions.js';
 import { FRAMEWORKS, isMcpToolName, isRegistryVersion, LANGUAGES, LITERAL, publicEffort, publicModel, publicVersion, PUBLIC_FLAGS, PUBLIC_HOSTS, PUBLIC_MCP_SERVERS, PUBLIC_PACKAGES, PUBLIC_PROGRAMS, PUBLIC_SKILLS, PUBLIC_SUBCOMMANDS, REPO_SIZES } from './public-vocabulary.js';
+import type { Cell } from './cells.js';
+import type { Motif } from './motif.js';
+import type { Read, ReadAsOf } from './read.js';
 import type { Frame, Harness, PromptClass, PromptObservation, PullIdentity, SessionObservation, StepEdge, StepIdentity, StepObservation, ToolObservation, ToolStatus, Usage } from './schema.js';
 
 export const SKELETON_FORMAT = 1;
+export const SLICE_FORMAT = 1;
 
 /** A step without what a server can compute: `n` is its call's, and `frameId` hashes a frame the skeleton holds. */
 export type SkeletonStep = Omit<StepObservation, 'n' | 'frameId'>;
@@ -347,4 +351,53 @@ export const parseSkeleton = (value: unknown): { ok: true; skeleton: SessionSkel
     if (error instanceof Refused) return { ok: false, field: error.field, reason: error.reason };
     throw error;
   }
+};
+
+/** One stack's replica, as the server signs it. `capped` says an account with no deposit got part of it. */
+export interface Slice {
+  format: typeof SLICE_FORMAT;
+  stack: string;
+  capped: { limit: number; served: number } | null;
+  asOf: ReadAsOf;
+  cells: Cell[];
+  motifs: Motif[];
+  reads: Read[];
+}
+
+/** The signature covers these exact bytes, so nothing has to be canonicalized on either side. */
+export interface SignedSlice {
+  payload: string;
+  /** Ed25519 over the payload's UTF-8 bytes, in base64. */
+  signature: string;
+}
+
+/** The public half of the pool's key, as a client pins it at login. */
+export interface PinnedKey {
+  kty: string;
+  crv: string;
+  x: string;
+}
+
+const isSignedSlice = (value: unknown): value is SignedSlice => isFields(value) && typeof value.payload === 'string' && typeof value.signature === 'string';
+
+const isSlice = (value: unknown): value is Slice =>
+  isFields(value) && value.format === SLICE_FORMAT && typeof value.stack === 'string' && isFields(value.asOf) && Array.isArray(value.cells) && Array.isArray(value.motifs) && Array.isArray(value.reads) && (value.capped === null || isFields(value.capped));
+
+const signatureHolds = async ({ payload, signature }: SignedSlice, key: PinnedKey): Promise<boolean> => {
+  try {
+    const verifier = await crypto.subtle.importKey('jwk', { kty: key.kty, crv: key.crv, x: key.x }, 'Ed25519', false, ['verify']);
+    return await crypto.subtle.verify('Ed25519', verifier, Uint8Array.from(atob(signature), (char) => char.charCodeAt(0)), new TextEncoder().encode(payload));
+  } catch {
+    return false;
+  }
+};
+
+/** The slice, only when the pinned key signed these bytes for the stack that was asked for: a replica of another stack, under a good signature, is still the wrong answer. */
+export const verifySlice = async (signed: unknown, key: PinnedKey, stack: string): Promise<{ ok: true; slice: Slice } | { ok: false; reason: string }> => {
+  if (!isSignedSlice(signed)) return { ok: false, reason: 'not a signed slice' };
+  if (!(await signatureHolds(signed, key))) return { ok: false, reason: 'the signature does not match the key pinned at login' };
+  const slice: unknown = JSON.parse(signed.payload);
+  if (!isSlice(slice)) return { ok: false, reason: 'not a signed slice this version reads' };
+  if (slice.stack !== stack) return { ok: false, reason: `this slice is for stack ${slice.stack}, not ${stack}` };
+  return { ok: true, slice };
 };

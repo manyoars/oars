@@ -2,9 +2,12 @@
 import { parseSkeleton, stacksOf } from '../../cli/src/sessions/pool-wire.js';
 import { answer, refuse, type Env } from './http.js';
 import { accountOf, loginPoll, loginStart } from './identity.js';
+import { pullSlice } from './slice.js';
 
 /** D1 holds at most 2 MB in one value; a skeleton past this limit is refused before it is read. */
 const MAX_DEPOSIT_BYTES = 1024 * 1024;
+
+const SLICES = '/v1/slices/';
 
 const deposit = async (request: Request, env: Env): Promise<Response> => {
   const account = await accountOf(request, env);
@@ -35,6 +38,7 @@ export default {
       if (pathname === '/v1/login/start') return loginStart(request, env);
       if (pathname === '/v1/login/poll') return loginPoll(request, env);
     }
+    if (request.method === 'GET' && pathname.startsWith(SLICES)) return pullSlice(request, env, decodeURIComponent(pathname.slice(SLICES.length)));
     return refuse(404, 'not_found', 'No such route.');
   },
 };
