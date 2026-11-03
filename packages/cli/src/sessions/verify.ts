@@ -306,9 +306,13 @@ export const verifySessions = (skeletons: readonly Skeleton[], sessions: readonl
   });
 };
 
-/** One line per session with a failing row, naming the rows; empty when none fails. Ids and row names only. */
-export const formatSessionResults = (results: readonly SessionVerification[]): string =>
-  results
+/** Per-session lines the default text prints; the JSON lists them all. */
+export const SESSION_LINE_CAP = 20;
+
+/** One line per session with a failing row, naming the rows, capped at {@link SESSION_LINE_CAP} with a count of the rest; empty when none fails. Ids and row names only. */
+export const formatSessionResults = (results: readonly SessionVerification[]): string => {
+  const lines = results
     .filter((entry) => entry.invariants.some((row) => row.status === 'fail'))
-    .map((entry) => `      ${entry.session}: FAIL ${entry.invariants.filter((row) => row.status === 'fail').map((row) => row.name).join('; ')}`)
-    .join('\n');
+    .map((entry) => `      ${entry.session}: FAIL ${entry.invariants.filter((row) => row.status === 'fail').map((row) => row.name).join('; ')}`);
+  return [...lines.slice(0, SESSION_LINE_CAP), ...(lines.length > SESSION_LINE_CAP ? [`      and ${String(lines.length - SESSION_LINE_CAP)} more; --json lists all`] : [])].join('\n');
+};

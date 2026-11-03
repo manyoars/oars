@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest';
 import { extractSession } from './derive.js';
 import { captureSession } from './extract.js';
 import { makeRedactor } from './redact.js';
-import { CAPTURE_INVARIANTS, formatVerify, formatSessionResults, INVARIANTS, verifyAll, verifyCaptured, verifySessions, verifySkeleton, type InvariantResult } from './verify.js';
+import { CAPTURE_INVARIANTS, formatVerify, formatSessionResults, INVARIANTS, verifyAll, verifyCaptured, verifySessions, verifySkeleton, type InvariantResult, type SessionVerification } from './verify.js';
 import { FIXTURES } from './test-support.js';
 
 const skeletonOf = (lines: readonly string[], name = 's') =>
@@ -250,6 +250,18 @@ describe('verifySessions (one result per session)', () => {
     const failing = verifySessions([old.skeleton], [old.session], []);
     expect(formatSessionResults(failing)).toContain('old: FAIL');
     expect(formatSessionResults(frozen)).toBe('');
+  });
+
+  it('caps the failing-session lines at 20 and says how many more, ids and counts only', () => {
+    const many = Array.from({ length: 25 }, (_, index) => {
+      const old = captured([at('r1', '2026-10-13T16:00:00.000Z')], `old${String(index)}`);
+      old.session.cv = '3';
+      return verifySessions([old.skeleton], [old.session], [])[0];
+    }).filter((entry): entry is SessionVerification => entry !== undefined);
+    const lines = formatSessionResults(many).split('\n');
+    expect(lines).toHaveLength(21);
+    expect(lines[20]).toBe('      and 5 more; --json lists all');
+    expect(formatSessionResults(many.slice(0, 20)).split('\n')).toHaveLength(20);
   });
 
   it('runs a session that has a skeleton but no capture record through the skeleton rows alone', () => {
