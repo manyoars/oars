@@ -59,7 +59,7 @@
         ]
       },
       "BillingErrorCode": {
-        "description": "The billing error catalog (spec §9.2, §13). Branch on the code, never on the detail text.\n\n| Code | Status | Meaning |\n|---|---|---|\n| `SDK_KEY_INVALID` | 401 | The X-Agent-SDK-Key header is missing, malformed, revoked or unknown. |\n| `WORKLOAD_NOT_ACTIVE` | 409 | The agent's workload is no longer active. |\n| `WORKLOAD_NOT_FOUND` | 404 | No agent with this id. |\n| `WORKLOAD_NOT_OWNED` | 403 | The agent belongs to another developer. |\n| `PRICE_NOT_FOUND` | 404 | The agent has no price with this priceRef. |\n| `PRICE_INACTIVE` | 400 | The price is deactivated; activate it or use another price. |\n| `PRICE_AMOUNT_IMMUTABLE` | 409 | A charge or subscription already references the price; create a new one. |\n| `CUSTOMER_REGION_NOT_SUPPORTED` | 400 | Only US customers (the 50 states and DC) can be charged; the customer is elsewhere. |\n| `ACCOUNT_NOT_READY` | 409 | The developer's payout account cannot take live charges yet; a human finishes onboarding at actionUrl. |\n| `SELLER_IDENTITY_INCOMPLETE` | 409 | The agent's seller identity lacks a display name, support email or refund-policy URL; set them before going live. |\n| `STRIPE_TERMS_URL_NOT_SET` | 409 | The agent has a terms URL but the developer's Stripe account has none in its public business details; actionUrl is where to set it. |\n| `SELLER_IDENTITY_CONFLICT` | 409 | The agent went live, or its terms URL changed, while this seller-identity write was in flight, so its new terms URL needs the Stripe terms check first; send the same request again. |\n| `PAYMENT_METHOD_REQUIRED` | 409 | An off-session charge needs a saved card; use a CHECKOUT charge first. |\n| `IDEMPOTENCY_CONFLICT` | 409 | This Idempotency-Key was already used with a different request body. |\n| `INSUFFICIENT_CREDITS` | 409 | The customer has too few credits; actionUrl is a credit-pack checkout. |\n| `REFUND_EXCEEDS_REMAINING` | 409 | The refund is larger than what remains refundable on the charge. |\n| `CHARGE_NOT_REFUNDABLE` | 409 | The charge cannot be refunded through the API: not posted yet, flagged, disputed, failed or fully refunded. |\n| `TEST_MODE_ONLY` | 409 | The operation runs only in TEST mode (test charges). |\n| `RATE_LIMITED` | 429 | Too many requests for this agent or key; retry after the Retry-After seconds. |\n| `PAYOUT_COUNTRY_NOT_SUPPORTED` | 400 | Payout accounts are US-only at launch; the developer's country is elsewhere. |\n| `HUMAN_SESSION_REQUIRED` | 403 | A signed-in person must make this change; an API key or a connected agent tool cannot (payout account). |\n| `TOPUP_AMOUNT_INVALID` | 400 | A compute top-up is a whole-cent USD amount within the minimum and maximum. |\n| `TOPUP_NOT_FOUND` | 404 | No compute top-up with this id for the caller. |\n| `FEE_POLICY_INVALID` | 400 | The fee-policy version breaks a policy rule (admin API). |\n| `RESERVATION_NOT_FOUND` | 404 | No credit reservation with this id for the agent. |\n| `RESERVATION_EXPIRED` | 409 | The credit reservation lapsed before it was committed; reserve again. |\n| `RESERVATION_RELEASED` | 409 | The credit reservation was released; it can no longer be committed. |\n| `RESERVATION_COMMITTED` | 409 | The credit reservation was already committed; it can no longer be released. |\n| `IDEMPOTENCY_KEY_INVALID` | 400 | The Idempotency-Key is not a UUID or 64 hexadecimal characters. |\n| `CUSTOMER_REVOKED` | 410 | The customerRef was replaced by a token recovery; every agent billing call on it, the customer upsert included, is refused. |\n| `PURCHASING_METHOD_NOT_FOUND` | 404 | The developer has no purchasing card or setup session in this mode. |\n| `RECOVERY_LINK_INVALID` | 410 | The recovery link is unknown, already used, expired, voided by a newer link, or for another agent. |\n| `APPROVAL_LINK_INVALID` | 410 | The purchasing approval link is unknown, already used, expired, replaced by a newer proposal, or for another developer's agent. |\n| `APPROVAL_NOT_PERMITTED` | 403 | Only a person signed in to the web app can approve a purchasing cap; a command-line or other client's token cannot. |\n| `FRESH_SIGN_IN_REQUIRED` | 403 | Approving a purchasing cap needs a sign-in within the last 5 minutes; sign in again from the approval link. |\n| `OFFER_INVALID` | 410 | The purchase offer is unknown, expired, already used, or issued in the other mode; ask the seller for a new one. |\n| `PURCHASING_NOT_ENABLED` | 409 | The buying agent has no approved purchasing cap in the offer's mode; its developer approves one first. |\n| `PURCHASING_METHOD_REQUIRED` | 409 | The buying agent's developer has no saved purchasing card in the offer's mode; a person saves one at actionUrl. |\n| `SELLER_UNAVAILABLE` | 409 | The offer's seller is not active, or its payout account cannot take charges in the offer's mode; ask the seller for a new offer later. |\n| `PURCHASE_SELF_DEALING` | 409 | The buyer and the seller belong to the same developer or the same payout account; an agent cannot buy from itself or its own developer. |\n| `PURCHASE_CAP_REACHED` | 409 | The purchase would take the buying agent past its monthly purchasing cap in the offer's mode; remainingUsd is what is left this month (UTC). |\n| `PURCHASE_DECLINED` | 402 | The developer's purchasing card was declined; nothing was bought and the cap is released. A person fixes the card, and the offer stays usable until it expires. |\n| `PURCHASE_AUTHENTICATION_REQUIRED` | 402 | The card's issuer asked for authentication, which an off-session purchase cannot give; nothing was bought and the cap is released. A person fixes the card. |\n",
+        "description": "The billing error catalog (spec §9.2, §13). Branch on the code, never on the detail text.\n\n| Code | Status | Meaning |\n|---|---|---|\n| `SDK_KEY_INVALID` | 401 | The X-Agent-SDK-Key header is missing, malformed, revoked or unknown. |\n| `WORKLOAD_NOT_ACTIVE` | 409 | The agent's workload is no longer active. |\n| `WORKLOAD_NOT_FOUND` | 404 | No agent with this id. |\n| `WORKLOAD_NOT_OWNED` | 403 | The agent belongs to another developer. |\n| `PRICE_NOT_FOUND` | 404 | The agent has no price with this priceRef. |\n| `PRICE_INACTIVE` | 400 | The price is deactivated; activate it or use another price. |\n| `PRICE_AMOUNT_IMMUTABLE` | 409 | A charge or subscription already references the price; create a new one. |\n| `CUSTOMER_REGION_NOT_SUPPORTED` | 400 | Only US customers (the 50 states and DC) can be charged; the customer is elsewhere. |\n| `ACCOUNT_NOT_READY` | 409 | The developer's payout account cannot take live charges yet; a human finishes onboarding at actionUrl. |\n| `SELLER_IDENTITY_INCOMPLETE` | 409 | The agent's seller identity lacks a display name, support email or refund-policy URL; set them before going live. |\n| `STRIPE_TERMS_URL_NOT_SET` | 409 | The agent has a terms URL but the developer's Stripe account has none in its public business details; actionUrl is where to set it. |\n| `SELLER_IDENTITY_CONFLICT` | 409 | The agent went live, or its terms URL changed, while this seller-identity write was in flight, so its new terms URL needs the Stripe terms check first; send the same request again. |\n| `PAYMENT_METHOD_REQUIRED` | 409 | An off-session charge needs a saved card; use a CHECKOUT charge first. |\n| `IDEMPOTENCY_CONFLICT` | 409 | This Idempotency-Key was already used with a different request body. |\n| `INSUFFICIENT_CREDITS` | 409 | The customer has too few credits; actionUrl is a credit-pack checkout. |\n| `REFUND_EXCEEDS_REMAINING` | 409 | The refund is larger than what remains refundable on the charge. |\n| `CHARGE_NOT_REFUNDABLE` | 409 | The charge cannot be refunded through the API: not posted yet, flagged, disputed, failed or fully refunded. |\n| `TEST_MODE_ONLY` | 409 | The operation runs only in TEST mode (test charges). |\n| `RATE_LIMITED` | 429 | Too many requests for this agent or key; retry after the Retry-After seconds. |\n| `PAYOUT_COUNTRY_NOT_SUPPORTED` | 400 | Payout accounts are US-only at launch; the developer's country is elsewhere. |\n| `HUMAN_SESSION_REQUIRED` | 403 | A signed-in person must make this change; an API key or a connected agent tool cannot (payout account). |\n| `TOPUP_AMOUNT_INVALID` | 400 | A compute top-up is a whole-cent USD amount within the minimum and maximum. |\n| `TOPUP_NOT_FOUND` | 404 | No compute top-up with this id for the caller. |\n| `FEE_POLICY_INVALID` | 400 | The fee-policy version breaks a policy rule (admin API). |\n| `RESERVATION_NOT_FOUND` | 404 | No credit reservation with this id for the agent. |\n| `RESERVATION_EXPIRED` | 409 | The credit reservation lapsed before it was committed; reserve again. |\n| `RESERVATION_RELEASED` | 409 | The credit reservation was released; it can no longer be committed. |\n| `RESERVATION_COMMITTED` | 409 | The credit reservation was already committed; it can no longer be released. |\n| `IDEMPOTENCY_KEY_INVALID` | 400 | The Idempotency-Key is not a UUID or 64 hexadecimal characters. |\n| `CUSTOMER_REVOKED` | 410 | The customerRef was replaced by a token recovery; every agent billing call on it, the customer upsert included, is refused. |\n| `PURCHASING_METHOD_NOT_FOUND` | 404 | The developer has no purchasing card or setup session in this mode. |\n| `RECOVERY_LINK_INVALID` | 410 | The recovery link is unknown, already used, expired, voided by a newer link, or for another agent. |\n| `APPROVAL_LINK_INVALID` | 410 | The purchasing approval link is unknown, already used, expired, replaced by a newer proposal, or for another developer's agent. |\n| `APPROVAL_NOT_PERMITTED` | 403 | Only a person signed in to the web app can approve a purchasing cap; a command-line or other client's token cannot. |\n| `FRESH_SIGN_IN_REQUIRED` | 403 | Approving a purchasing cap needs a sign-in within the last 5 minutes; sign in again from the approval link. |\n| `OFFER_INVALID` | 410 | The purchase offer is unknown, expired, already used, or issued in the other mode; ask the seller for a new one. |\n| `PURCHASING_NOT_ENABLED` | 409 | The buying agent has no approved purchasing cap in the offer's mode; its developer approves one first. |\n| `PURCHASING_METHOD_REQUIRED` | 409 | The buying agent's developer has no saved purchasing card in the offer's mode; a person saves one at actionUrl. |\n| `SELLER_UNAVAILABLE` | 409 | The offer's seller is not active, or its payout account cannot take charges in the offer's mode; ask the seller for a new offer later. |\n| `PURCHASE_SELF_DEALING` | 409 | The buyer and the seller belong to the same developer or the same payout account; an agent cannot buy from itself or its own developer. |\n| `PURCHASE_CAP_REACHED` | 409 | The purchase would take the buying agent past its monthly purchasing cap in the offer's mode; remainingUsd is what is left this month (UTC). |\n",
         "enum": [
           "SDK_KEY_INVALID",
           "WORKLOAD_NOT_ACTIVE",
@@ -101,9 +101,7 @@
           "PURCHASING_METHOD_REQUIRED",
           "SELLER_UNAVAILABLE",
           "PURCHASE_SELF_DEALING",
-          "PURCHASE_CAP_REACHED",
-          "PURCHASE_DECLINED",
-          "PURCHASE_AUTHENTICATION_REQUIRED"
+          "PURCHASE_CAP_REACHED"
         ],
         "type": "string"
       },
@@ -219,6 +217,10 @@
       },
       "ChargeView": {
         "properties": {
+          "agentBuyer": {
+            "description": "true when a buying agent paid for this sale (paid trade T section 9)",
+            "type": "boolean"
+          },
           "chargeId": {
             "format": "uuid",
             "type": "string"
@@ -272,6 +274,7 @@
           }
         },
         "required": [
+          "agentBuyer",
           "chargeId",
           "createdAt",
           "grossUsd",
@@ -801,6 +804,73 @@
           "totalPages"
         ]
       },
+      "PagePurchaseListItem": {
+        "properties": {
+          "content": {
+            "description": "Page content",
+            "items": {
+              "$ref": "#/components/schemas/PurchaseListItem"
+            },
+            "type": "array"
+          },
+          "empty": {
+            "description": "True if this page has no content",
+            "type": "boolean"
+          },
+          "first": {
+            "description": "True if this is the first page",
+            "type": "boolean"
+          },
+          "last": {
+            "description": "True if this is the last page",
+            "type": "boolean"
+          },
+          "number": {
+            "description": "Zero-indexed page number",
+            "format": "int32",
+            "type": "integer"
+          },
+          "numberOfElements": {
+            "description": "Number of elements on this page",
+            "format": "int32",
+            "type": "integer"
+          },
+          "pageable": {
+            "$ref": "#/components/schemas/PageableObject"
+          },
+          "size": {
+            "description": "Requested page size",
+            "format": "int32",
+            "type": "integer"
+          },
+          "sort": {
+            "$ref": "#/components/schemas/SortObject"
+          },
+          "totalElements": {
+            "description": "Total element count across all pages",
+            "format": "int64",
+            "type": "integer"
+          },
+          "totalPages": {
+            "description": "Total page count",
+            "format": "int32",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "content",
+          "empty",
+          "first",
+          "last",
+          "number",
+          "numberOfElements",
+          "pageable",
+          "size",
+          "sort",
+          "totalElements",
+          "totalPages"
+        ]
+      },
       "PageableObject": {
         "description": "Echo of the requested pageable",
         "properties": {
@@ -941,6 +1011,145 @@
           }
         }
       },
+      "PurchaseFailureCode": {
+        "enum": [
+          "PURCHASE_DECLINED",
+          "PURCHASE_AUTHENTICATION_REQUIRED"
+        ],
+        "type": "string"
+      },
+      "PurchaseInput": {
+        "properties": {
+          "offerId": {
+            "description": "The offer (po_...) the seller issued",
+            "maxLength": 64,
+            "minLength": 1,
+            "type": "string"
+          },
+          "priceRef": {
+            "description": "The seller's credit pack",
+            "maxLength": 64,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "offerId",
+          "priceRef"
+        ]
+      },
+      "PurchaseListItem": {
+        "description": "Page content",
+        "properties": {
+          "amountUsd": {
+            "format": "decimal",
+            "type": "string"
+          },
+          "createdAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "credits": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "failureCode": {
+            "$ref": "#/components/schemas/PurchaseFailureCode"
+          },
+          "livemode": {
+            "description": "true for LIVE billing mode",
+            "type": "boolean"
+          },
+          "packName": {
+            "type": "string"
+          },
+          "priceRef": {
+            "type": "string"
+          },
+          "purchaseId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "sellerSlug": {
+            "type": "string"
+          },
+          "sellerWorkloadId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/PurchaseStatus"
+          }
+        },
+        "required": [
+          "amountUsd",
+          "createdAt",
+          "credits",
+          "livemode",
+          "priceRef",
+          "purchaseId",
+          "sellerWorkloadId",
+          "status"
+        ]
+      },
+      "PurchaseOfferDetail": {
+        "properties": {
+          "expiresAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "mode": {
+            "$ref": "#/components/schemas/BillingMode"
+          },
+          "offerId": {
+            "type": "string"
+          },
+          "packs": {
+            "items": {
+              "$ref": "#/components/schemas/PurchaseOfferPack"
+            },
+            "type": "array"
+          },
+          "sellerName": {
+            "type": "string"
+          },
+          "sellerSlug": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "expiresAt",
+          "mode",
+          "offerId",
+          "packs",
+          "sellerName",
+          "sellerSlug"
+        ]
+      },
+      "PurchaseOfferPack": {
+        "properties": {
+          "amountUsd": {
+            "format": "decimal",
+            "type": "string"
+          },
+          "credits": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "displayName": {
+            "type": "string"
+          },
+          "priceRef": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "amountUsd",
+          "credits",
+          "displayName",
+          "priceRef"
+        ]
+      },
       "PurchaseOfferView": {
         "description": "On INSUFFICIENT_CREDITS, the seller's single-use purchase offer for the customer and mode, beside the pack checkout's actionUrl. A buyer agent buys with it. Absent when billing does not know the customer.",
         "properties": {
@@ -955,6 +1164,169 @@
         },
         "required": [
           "expiresAt",
+          "offerId"
+        ]
+      },
+      "PurchaseRecoveryView": {
+        "properties": {
+          "credits": {
+            "description": "The new customer's credit balance after the move",
+            "format": "int64",
+            "type": "integer"
+          },
+          "customerRef": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "credits",
+          "customerRef"
+        ]
+      },
+      "PurchaseStatus": {
+        "enum": [
+          "PENDING",
+          "SUCCEEDED",
+          "FAILED",
+          "REFUNDED",
+          "PARTIALLY_REFUNDED"
+        ],
+        "type": "string"
+      },
+      "PurchaseView": {
+        "properties": {
+          "credits": {
+            "description": "Credits the pack adds to the customer's balance",
+            "format": "int64",
+            "type": "integer"
+          },
+          "failureCode": {
+            "$ref": "#/components/schemas/PurchaseFailureCode"
+          },
+          "purchaseId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/PurchaseStatus"
+          }
+        },
+        "required": [
+          "credits",
+          "purchaseId",
+          "status"
+        ]
+      },
+      "PurchasingCapStatus": {
+        "enum": [
+          "OFF",
+          "ACTIVE",
+          "PROPOSED"
+        ],
+        "type": "string"
+      },
+      "PurchasingCapView": {
+        "properties": {
+          "approvalUrl": {
+            "type": "string"
+          },
+          "approvedAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "mode": {
+            "$ref": "#/components/schemas/BillingMode"
+          },
+          "monthlyCapUsd": {
+            "format": "decimal",
+            "type": "string"
+          },
+          "proposalExpiresAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "proposedCapUsd": {
+            "format": "decimal",
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/PurchasingCapStatus"
+          },
+          "workloadId": {
+            "format": "uuid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "mode",
+          "monthlyCapUsd",
+          "status",
+          "workloadId"
+        ]
+      },
+      "PurchasingMethodStatus": {
+        "enum": [
+          "PENDING",
+          "ACTIVE",
+          "REPLACED",
+          "DETACHED"
+        ],
+        "type": "string"
+      },
+      "PurchasingMethodView": {
+        "properties": {
+          "billingCountry": {
+            "example": "US",
+            "type": "string"
+          },
+          "brand": {
+            "example": "visa",
+            "type": "string"
+          },
+          "createdAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "failureCode": {
+            "description": "Why the card was refused or the page could not be opened: CUSTOMER_REGION_NOT_SUPPORTED (a non-US card or billing address, detached), else the processor's code",
+            "example": "CUSTOMER_REGION_NOT_SUPPORTED",
+            "type": "string"
+          },
+          "last4": {
+            "example": "4242",
+            "type": "string"
+          },
+          "mode": {
+            "$ref": "#/components/schemas/BillingMode"
+          },
+          "setupExpiresAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "setupUrl": {
+            "description": "The hosted page where a human saves the card; PENDING and before setupExpiresAt only",
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/PurchasingMethodStatus"
+          }
+        },
+        "required": [
+          "createdAt",
+          "mode",
+          "status"
+        ]
+      },
+      "RecoverPurchaseInput": {
+        "properties": {
+          "offerId": {
+            "description": "An offer (po_...) the seller issued for the new customer",
+            "maxLength": 64,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
           "offerId"
         ]
       },
@@ -1294,6 +1666,23 @@
           "restarts"
         ]
       },
+      "SetPurchasingCapInput": {
+        "properties": {
+          "mode": {
+            "$ref": "#/components/schemas/BillingMode"
+          },
+          "monthlyCapUsd": {
+            "description": "Most the agent may spend per calendar month (UTC), whole cents; 0 is off",
+            "example": "100.0",
+            "format": "decimal",
+            "type": "string"
+          }
+        },
+        "required": [
+          "mode",
+          "monthlyCapUsd"
+        ]
+      },
       "SortObject": {
         "description": "Sort descriptor applied to the query",
         "properties": {
@@ -1314,6 +1703,16 @@
           "empty",
           "sorted",
           "unsorted"
+        ]
+      },
+      "StartPurchasingMethodInput": {
+        "properties": {
+          "mode": {
+            "$ref": "#/components/schemas/BillingMode"
+          }
+        },
+        "required": [
+          "mode"
         ]
       },
       "StopReason": {
@@ -3379,6 +3778,430 @@
         ]
       }
     },
+    "/billing/agents/{workloadId}/purchases": {
+      "get": {
+        "description": "Each row names the seller, the pack, the amount, and the status, in both modes. Owner only.",
+        "operationId": "list_1",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workloadId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Zero-based page index (0..N)",
+            "in": "query",
+            "name": "page",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "The size of the page to be returned",
+            "in": "query",
+            "name": "size",
+            "required": false,
+            "schema": {
+              "default": 20,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Sorting criteria in the format: property,(asc|desc). Default sort order is ascending. Multiple sort criteria are supported.",
+            "in": "query",
+            "name": "sort",
+            "required": false,
+            "schema": {
+              "default": [
+                "createdAt,DESC"
+              ],
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/PagePurchaseListItem"
+                }
+              }
+            },
+            "description": "A page of purchases"
+          },
+          "400": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Bad Request"
+          },
+          "401": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "402": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Payment Required"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BillingProblem"
+                }
+              }
+            },
+            "description": "WORKLOAD_NOT_OWNED"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BillingProblem"
+                }
+              }
+            },
+            "description": "WORKLOAD_NOT_FOUND"
+          },
+          "409": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "413": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Content Too Large"
+          },
+          "422": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Unprocessable Content"
+          },
+          "423": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Locked"
+          },
+          "429": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Too Many Requests"
+          },
+          "451": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Unavailable For Legal Reasons"
+          },
+          "500": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          },
+          "502": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Bad Gateway"
+          },
+          "503": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          },
+          "504": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Gateway Timeout"
+          }
+        },
+        "summary": "List an agent's purchases of credit packs, newest first",
+        "tags": [
+          "Billing agent purchases",
+          "public"
+        ]
+      }
+    },
+    "/billing/agents/{workloadId}/purchasing": {
+      "put": {
+        "description": "A cap above the approved one is PROPOSED: the response carries an approvalUrl for a person to open and approve after a fresh sign-in (single use, 7 days), and the approved cap keeps applying until then. A lower cap, or 0 to revoke, applies at once and drops an open proposal.",
+        "operationId": "set",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workloadId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Required. A retry of any earlier key with the same cap changes nothing and returns that key's first status and cap without an approvalUrl: the first answer's link stays the open one. A caller that lost that answer gets a fresh link by sending a new key. Must be a UUID or 64 hexadecimal characters; any other value is a 400 IDEMPOTENCY_KEY_INVALID.",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetPurchasingCapInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/PurchasingCapView"
+                }
+              }
+            },
+            "description": "PROPOSED with an approvalUrl, ACTIVE, or OFF"
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BillingProblem"
+                }
+              }
+            },
+            "description": "A missing or unknown mode, a negative cap or one with fractions of a cent, or a missing Idempotency-Key"
+          },
+          "401": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "402": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Payment Required"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BillingProblem"
+                }
+              }
+            },
+            "description": "WORKLOAD_NOT_OWNED (the workload belongs to another developer)"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BillingProblem"
+                }
+              }
+            },
+            "description": "WORKLOAD_NOT_FOUND"
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BillingProblem"
+                }
+              }
+            },
+            "description": "IDEMPOTENCY_CONFLICT: the key was used with a different cap"
+          },
+          "413": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Content Too Large"
+          },
+          "422": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Unprocessable Content"
+          },
+          "423": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Locked"
+          },
+          "429": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Too Many Requests"
+          },
+          "451": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Unavailable For Legal Reasons"
+          },
+          "500": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          },
+          "502": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Bad Gateway"
+          },
+          "503": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          },
+          "504": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Gateway Timeout"
+          }
+        },
+        "summary": "Set an agent's monthly purchasing cap in one mode",
+        "tags": [
+          "public",
+          "Billing agent purchasing"
+        ]
+      }
+    },
     "/billing/agents/{workloadId}/test-charges": {
       "post": {
         "operationId": "createAgentTestCharge",
@@ -5204,6 +6027,1007 @@
           "public"
         ]
       }
+    },
+    "/billing/offers/{offerId}": {
+      "get": {
+        "description": "Returns the seller's name and slug, the mode, the seller's active credit packs and when the offer lapses. Reading never spends the offer.",
+        "operationId": "getOffer",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "offerId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The buying agent's SDK key (aorsk_…)",
+            "in": "header",
+            "name": "X-Agent-SDK-Key",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/PurchaseOfferDetail"
+                }
+              }
+            },
+            "description": "The offer"
+          },
+          "400": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Bad Request"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BillingProblem"
+                }
+              }
+            },
+            "description": "SDK_KEY_INVALID"
+          },
+          "402": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Payment Required"
+          },
+          "403": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "410": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BillingProblem"
+                }
+              }
+            },
+            "description": "OFFER_INVALID: unknown, expired, already used, or the seller is gone"
+          },
+          "413": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Content Too Large"
+          },
+          "422": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Unprocessable Content"
+          },
+          "423": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Locked"
+          },
+          "429": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Too Many Requests"
+          },
+          "451": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Unavailable For Legal Reasons"
+          },
+          "500": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          },
+          "502": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Bad Gateway"
+          },
+          "503": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          },
+          "504": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Gateway Timeout"
+          }
+        },
+        "summary": "Read a purchase offer before buying with it",
+        "tags": [
+          "public",
+          "Billing purchase offers"
+        ]
+      }
+    },
+    "/billing/purchases": {
+      "post": {
+        "description": "Spends the offer. The response is the purchase: SUCCEEDED once the seller's settlement lands, PENDING until then, or FAILED with PURCHASE_DECLINED or PURCHASE_AUTHENTICATION_REQUIRED, which releases the cap and leaves the offer usable until it expires. Poll GET /billing/purchases/{purchaseId}.",
+        "operationId": "createAgentPurchase",
+        "parameters": [
+          {
+            "description": "Unique per purchase; a retry with the same key returns the same purchase. Must be a UUID or 64 hexadecimal characters; any other value is a 400 IDEMPOTENCY_KEY_INVALID.",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The buying agent's SDK key (aorsk_…)",
+            "in": "header",
+            "name": "X-Agent-SDK-Key",
+            "required": true
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PurchaseInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/PurchaseView"
+                }
+              }
+            },
+            "description": "Replay of an earlier Idempotency-Key"
+          },
+          "201": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/PurchaseView"
+                }
+              }
+            },
+            "description": "Created (PENDING, or FAILED with failureCode)"
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BillingProblem"
+                }
+              }
+            },
+            "description": "CUSTOMER_REGION_NOT_SUPPORTED (the saved card), or a malformed body"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BillingProblem"
+                }
+              }
+            },
+            "description": "SDK_KEY_INVALID"
+          },
+          "402": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Payment Required"
+          },
+          "403": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BillingProblem"
+                }
+              }
+            },
+            "description": "PRICE_NOT_FOUND: not an active credit pack of the offer's seller"
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BillingProblem"
+                }
+              }
+            },
+            "description": "WORKLOAD_NOT_ACTIVE, SELLER_UNAVAILABLE, PURCHASE_SELF_DEALING, PURCHASING_NOT_ENABLED, PURCHASING_METHOD_REQUIRED, PURCHASE_CAP_REACHED, or IDEMPOTENCY_CONFLICT"
+          },
+          "410": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BillingProblem"
+                }
+              }
+            },
+            "description": "OFFER_INVALID: unknown, expired, already used, or the seller is gone"
+          },
+          "413": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Content Too Large"
+          },
+          "422": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Unprocessable Content"
+          },
+          "423": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Locked"
+          },
+          "429": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BillingProblem"
+                }
+              }
+            },
+            "description": "RATE_LIMITED (purchases per hour per agent)"
+          },
+          "451": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Unavailable For Legal Reasons"
+          },
+          "500": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          },
+          "502": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Bad Gateway"
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BillingProblem"
+                }
+              }
+            },
+            "description": "The processor is unreachable; retry with the same Idempotency-Key"
+          },
+          "504": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Gateway Timeout"
+          }
+        },
+        "summary": "Buy a seller's credit pack with the owner's saved card, inside the approved cap",
+        "tags": [
+          "Billing purchases",
+          "public"
+        ]
+      }
+    },
+    "/billing/purchases/recover": {
+      "post": {
+        "description": "After a lost token: mint a new customer with the seller, get an offer for it, then call this. Every customer of that seller, in this mode, that this agent's own purchases funded hands its remaining credits to the offer's customer and is revoked; the offer is spent. A replay under the same Idempotency-Key answers the first result.",
+        "operationId": "recoverAgentPurchaseCredits",
+        "parameters": [
+          {
+            "description": "Unique per recovery; a retry with the same key answers the first result. Must be a UUID or 64 hexadecimal characters; any other value is a 400 IDEMPOTENCY_KEY_INVALID.",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The buying agent's SDK key (aorsk_…)",
+            "in": "header",
+            "name": "X-Agent-SDK-Key",
+            "required": true
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RecoverPurchaseInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/PurchaseRecoveryView"
+                }
+              }
+            },
+            "description": "Recovered (or a replay of the first answer)"
+          },
+          "400": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Bad Request"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BillingProblem"
+                }
+              }
+            },
+            "description": "SDK_KEY_INVALID"
+          },
+          "402": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Payment Required"
+          },
+          "403": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BillingProblem"
+                }
+              }
+            },
+            "description": "No customer of this seller in this mode was funded by this agent's purchases"
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BillingProblem"
+                }
+              }
+            },
+            "description": "IDEMPOTENCY_CONFLICT"
+          },
+          "410": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BillingProblem"
+                }
+              }
+            },
+            "description": "OFFER_INVALID: unknown, expired, already used, or issued in the other mode; or CUSTOMER_REVOKED"
+          },
+          "413": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Content Too Large"
+          },
+          "422": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Unprocessable Content"
+          },
+          "423": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Locked"
+          },
+          "429": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Too Many Requests"
+          },
+          "451": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Unavailable For Legal Reasons"
+          },
+          "500": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          },
+          "502": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Bad Gateway"
+          },
+          "503": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          },
+          "504": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Gateway Timeout"
+          }
+        },
+        "summary": "Move credits this agent bought to a new customer, and revoke the old tokens",
+        "tags": [
+          "Billing purchases",
+          "public"
+        ]
+      }
+    },
+    "/billing/purchases/{purchaseId}": {
+      "get": {
+        "operationId": "getAgentPurchase",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "purchaseId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "description": "The buying agent's SDK key (aorsk_…)",
+            "in": "header",
+            "name": "X-Agent-SDK-Key",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/PurchaseView"
+                }
+              }
+            },
+            "description": "The purchase"
+          },
+          "400": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Bad Request"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BillingProblem"
+                }
+              }
+            },
+            "description": "SDK_KEY_INVALID"
+          },
+          "402": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Payment Required"
+          },
+          "403": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BillingProblem"
+                }
+              }
+            },
+            "description": "Not this agent's purchase"
+          },
+          "409": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "413": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Content Too Large"
+          },
+          "422": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Unprocessable Content"
+          },
+          "423": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Locked"
+          },
+          "429": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Too Many Requests"
+          },
+          "451": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Unavailable For Legal Reasons"
+          },
+          "500": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          },
+          "502": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Bad Gateway"
+          },
+          "503": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          },
+          "504": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Gateway Timeout"
+          }
+        },
+        "summary": "A purchase's status",
+        "tags": [
+          "Billing purchases",
+          "public"
+        ]
+      }
+    },
+    "/billing/purchasing/payment-method": {
+      "post": {
+        "description": "An open setup page is returned as it is. A newly saved card replaces the active one. A non-US card or billing address is refused (failureCode CUSTOMER_REGION_NOT_SUPPORTED) and detached.",
+        "operationId": "start",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StartPurchasingMethodInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/PurchasingMethodView"
+                }
+              }
+            },
+            "description": "PENDING with a setup URL"
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BillingProblem"
+                }
+              }
+            },
+            "description": "A missing or unknown mode"
+          },
+          "401": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "402": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Payment Required"
+          },
+          "403": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "413": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Content Too Large"
+          },
+          "422": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Unprocessable Content"
+          },
+          "423": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Locked"
+          },
+          "429": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Too Many Requests"
+          },
+          "451": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Unavailable For Legal Reasons"
+          },
+          "500": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          },
+          "502": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Bad Gateway"
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BillingProblem"
+                }
+              }
+            },
+            "description": "The processor is unreachable; retry"
+          },
+          "504": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Gateway Timeout"
+          }
+        },
+        "summary": "Start a card setup: returns the setup URL a human saves the card at",
+        "tags": [
+          "public",
+          "Billing purchasing card"
+        ]
+      }
     }
   },
   "tags": [
@@ -5216,6 +7040,10 @@
       "name": "Agent Templates"
     },
     {
+      "description": "Agent API: a buying agent pays for a seller's credit pack with its owner's card",
+      "name": "Billing purchases"
+    },
+    {
       "description": "Agent API: create and update end customers",
       "name": "Billing customers"
     },
@@ -5224,8 +7052,24 @@
       "name": "Billing mode"
     },
     {
+      "description": "Developer API: save the card a buying agent's purchases are charged to",
+      "name": "Billing purchasing card"
+    },
+    {
+      "description": "Developer API: the credit packs a buying agent bought",
+      "name": "Billing agent purchases"
+    },
+    {
       "description": "Agent API: charge a customer at a declared price",
       "name": "Billing charges"
+    },
+    {
+      "description": "Agent API: a seller offers a customer's credits to a buying agent",
+      "name": "Billing purchase offers"
+    },
+    {
+      "description": "Developer API: set the monthly cap a buying agent may spend",
+      "name": "Billing agent purchasing"
     },
     {
       "description": "Developer API: run a real test-mode charge",
