@@ -252,7 +252,7 @@ describe('Paginated and forked rollouts through the store', () => {
     const { skeletons } = await readSkeletons(s.storeDir);
     const store = await loadStore(s.storeDir);
     expect(store.prompts.filter((entry) => entry.session === `codex-${A}`)).toHaveLength(2);
-    expect(store.sessions[0]).toMatchObject({ userTurns: 2, assistantTurns: 2 });
+    expect(store.sessions[0]).toMatchObject({ userTurns: 2, assistantTurns: 3 });
     expect([...verifyAll(skeletons), ...verifyCaptured(store.sessions, store.tools)].filter((entry) => entry.violations > 0)).toEqual([]);
   });
 

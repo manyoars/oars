@@ -9,6 +9,7 @@ import { INTERRUPT_MARKER } from './derive.js';
 import { cut, EDITS, SHELL, shellTarget, shortName } from './extract.js';
 import type { Redactor } from './redact.js';
 import { PROMPT_HEAD_CHARS, type PromptObservation, type PromptStop, type PromptVerify } from './schema.js';
+import { SOURCES } from './sources.js';
 import { paths, type SessionsRuntime, type Store } from './store.js';
 
 export interface Obj {
@@ -226,14 +227,12 @@ export const viewOf = (turns: readonly Turn[], index: number, redact: Redactor):
   };
 };
 
-const CURSOR_PREFIX = 'cursor-';
-
 /**
  * The prompts that can be judged. A marker is not a request. A `no-tools` prompt has only its reply to show, and the reply is the closing claim the
- * file must hide. A Cursor session has no transcript to read. A prompt with no signals has nothing to score.
+ * file must hide. A session from any other harness (`SOURCES`: Cursor, Codex) has no Claude Code transcript to read. A prompt with no signals has nothing to score.
  */
 export const frameOf = (prompts: readonly PromptObservation[]): PromptObservation[] =>
-  prompts.filter((prompt) => !prompt.head.startsWith(INTERRUPT_MARKER) && prompt.cls !== 'no-tools' && !prompt.session.startsWith(CURSOR_PREFIX) && prompt.verify !== undefined && prompt.model !== '');
+  prompts.filter((prompt) => !prompt.head.startsWith(INTERRUPT_MARKER) && prompt.cls !== 'no-tools' && !SOURCES.some((source) => prompt.session.startsWith(`${source.name}-`)) && prompt.verify !== undefined && prompt.model !== '');
 
 const SESSION_CAP = 2;
 
