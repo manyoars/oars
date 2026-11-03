@@ -32,29 +32,32 @@ const statOrUndefined = (file: string) =>
     throw error;
   });
 
-const unrun = (session: SessionObservation, skeleton: Skeleton | undefined): SessionAudit => {
+/** The count bindings of spec 2.4: the skeleton's leaves, the session's lines, and the skeleton's lines plus the session's bad lines must all agree. No skeleton is zero leaves and zero lines. */
+const bindingsOf = (session: SessionObservation, skeleton: Skeleton | undefined): SessionAudit['bindings'] => {
   const leaves = skeleton?.leaves ?? 0;
   const skeletonLines = skeleton?.lines.length ?? 0;
-  const bindings = { leaves, sessionLines: session.lines, skeletonLines, badLines: session.badLines, bind: leaves === session.lines && session.lines === skeletonLines + session.badLines };
-  return { session: session.session, result: 'not run', tier: 'skeleton', mode: null, leaves, belowMinLeaves: leaves < MIN_ROOT_LEAVES, changedSinceDeposit: false, possibleTampering: false, bindings };
+  return { leaves, sessionLines: session.lines, skeletonLines, badLines: session.badLines, bind: leaves === session.lines && session.lines === skeletonLines + session.badLines };
 };
 
-const MISSING_SKELETON = { leaves: 0, skeletonLines: 0 };
+const unrun = (session: string, skeleton: Skeleton | undefined, bindings: SessionAudit['bindings']): SessionAudit => ({
+  session,
+  result: 'not run',
+  tier: 'skeleton',
+  mode: null,
+  leaves: skeleton?.leaves ?? 0,
+  belowMinLeaves: (skeleton?.leaves ?? 0) < MIN_ROOT_LEAVES,
+  changedSinceDeposit: false,
+  possibleTampering: false,
+  bindings,
+});
 
 /**
  * One session's T0 result. The count bindings come first and need no raw file: a record set that disagrees with itself is `none` whatever `raw/`
  * holds. `state` is `state.json`, read once by {@link auditStore}.
  */
 export const auditSession = async (runtime: SessionsRuntime, session: SessionObservation, skeleton: Skeleton | undefined, state?: State): Promise<SessionAudit> => {
-  const known = skeleton === undefined ? MISSING_SKELETON : { leaves: skeleton.leaves, skeletonLines: skeleton.lines.length };
-  const bindings = {
-    leaves: known.leaves,
-    sessionLines: session.lines,
-    skeletonLines: known.skeletonLines,
-    badLines: session.badLines,
-    bind: known.leaves === session.lines && session.lines === known.skeletonLines + session.badLines,
-  };
-  const base = { session: session.session, leaves: known.leaves, belowMinLeaves: known.leaves < MIN_ROOT_LEAVES, changedSinceDeposit: false, possibleTampering: false, bindings };
+  const bindings = bindingsOf(session, skeleton);
+  const base = { session: session.session, leaves: bindings.leaves, belowMinLeaves: bindings.leaves < MIN_ROOT_LEAVES, changedSinceDeposit: false, possibleTampering: false, bindings };
   if (skeleton === undefined) return { ...base, result: 'not run', tier: 'skeleton', mode: null };
   if (!bindings.bind) return { ...base, result: 'counts do not bind', tier: 'none', mode: null };
   const relative = join(session.project, ...relativeOfSession(session.session));
@@ -75,7 +78,10 @@ export const auditSession = async (runtime: SessionsRuntime, session: SessionObs
   return recomputed === skeleton.merkleRoot ? { ...base, result: 'root matches and the counts bind', tier: 'skeleton', mode } : { ...base, result: 'root mismatch', tier: 'none', mode };
 };
 
-/** Every session's T0 result, in the order given. A session with no skeleton in `skeletons`, or whose raw file cannot be read, is `not run`. */
+/**
+ * Every session's T0 result, in the order given, then one `not run` for each skeleton with no capture record (a torn or removed observations line), so
+ * the table never shrinks without a signal. A session with no skeleton, or whose raw file cannot be read, is also `not run`.
+ */
 export const auditStore = async (runtime: SessionsRuntime, sessions: readonly SessionObservation[], skeletons: readonly Skeleton[]): Promise<SessionAudit[]> => {
   const state = await readState(runtime.storeDir);
   const bySession = new Map(skeletons.map((skeleton) => [skeleton.session, skeleton]));
@@ -83,7 +89,11 @@ export const auditStore = async (runtime: SessionsRuntime, sessions: readonly Se
   for (const session of sessions) {
     const skeleton = bySession.get(session.session);
     // One unreadable raw file (EACCES, EBUSY, too large for a string) costs that session its result, never the others'.
-    audits.push(await auditSession(runtime, session, skeleton, state).catch((): SessionAudit => unrun(session, skeleton)));
+    audits.push(await auditSession(runtime, session, skeleton, state).catch((): SessionAudit => unrun(session.session, skeleton, bindingsOf(session, skeleton))));
+  }
+  const recorded = new Set(sessions.map((session) => session.session));
+  for (const skeleton of skeletons) {
+    if (!recorded.has(skeleton.session)) audits.push(unrun(skeleton.session, skeleton, { leaves: skeleton.leaves, sessionLines: 0, skeletonLines: skeleton.lines.length, badLines: 0, bind: false }));
   }
   return audits;
 };

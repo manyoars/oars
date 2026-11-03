@@ -153,6 +153,16 @@ describe('auditSession, the other rows', () => {
     expect(result.every((audit) => audit.result === 'not run' && audit.tier === 'skeleton' && audit.leaves === 0)).toBe(true);
   });
 
+  it('is not run, at tier skeleton, for a skeleton with no capture record, and counts it', async () => {
+    const staged = stage();
+    await deposit(staged.runtime, options);
+    const store = await loadStore(staged.storeDir);
+    const { skeletons } = await readSkeletons(staged.storeDir);
+    const result = await auditStore(staged.runtime, store.sessions.filter((entry) => entry.session !== 'errors-a'), skeletons);
+    expect(result).toHaveLength(skeletons.length);
+    expect(result.find((audit) => audit.session === 'errors-a')).toMatchObject({ result: 'not run', tier: 'skeleton', mode: null, bindings: { bind: false } });
+  });
+
   it('is not run, at tier skeleton, for a Cursor session, whose composer is no raw file; its counts still bind', async () => {
     const staged = stage();
     const { repo, plain } = folders(staged.root);
