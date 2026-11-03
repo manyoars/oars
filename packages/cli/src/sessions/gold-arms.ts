@@ -1,8 +1,10 @@
 // The label arms beside the gold set (t748): what the acting session said, and what fresh single-turn readers say, each kept apart in the sidecar and
 // never shown in the gold file. An arm is an observation to score against human judgments, never a label by itself (A31). The readers run through the
 // operator's own `claude` login, so a run is local and bills the subscription; the guards below refuse anything else rather than spend.
+import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { rename, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { CliError, ExitCode } from '../errors.js';
 import { cut } from './extract.js';
@@ -42,6 +44,26 @@ export interface GoldEvaluator {
 }
 
 export type ClaudeExec = (args: readonly string[], options: { stdin: string; env: NodeJS.ProcessEnv }) => Promise<{ code: number; stdout: string }>;
+
+const CLAUDE_CALL_MS = 180_000;
+
+/** Runs from the temp folder, so no project's instructions reach a reader. A hung call is killed and fails the run, which resumes. */
+export const runClaude: ClaudeExec = (args, { stdin, env }) =>
+  new Promise((resolve, reject) => {
+    const child = spawn('claude', args, { cwd: tmpdir(), env, stdio: ['pipe', 'pipe', 'ignore'], windowsHide: true, timeout: CLAUDE_CALL_MS });
+    let stdout = '';
+    child.stdout.setEncoding('utf8').on('data', (chunk: string) => {
+      stdout += chunk;
+    });
+    child.stdin.on('error', () => undefined);
+    child.on('error', () => {
+      reject(new Error('Cannot run `claude`: install Claude Code and put claude on your PATH.'));
+    });
+    child.on('close', (code) => {
+      resolve({ code: code ?? 1, stdout });
+    });
+    child.stdin.end(stdin);
+  });
 
 /** Any of these would route a call away from the subscription login. */
 const PAID_ROUTES = ['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_BASE_URL', 'CLAUDE_CODE_USE_BEDROCK', 'CLAUDE_CODE_USE_VERTEX', 'CLAUDE_CODE_USE_FOUNDRY'];
