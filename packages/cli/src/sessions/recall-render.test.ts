@@ -102,7 +102,7 @@ describe('renderAnswer', () => {
     expect(names.join(' ')).not.toContain('Ignore');
   });
 
-  it('gives a literal for an MCP name, whose server is not public until Item 3 of t755 decides it', () => {
+  it('names the action and no server for an MCP call on a server the public list does not hold', () => {
     const { rendered } = renderAnswer([read({ tool: 'mcp__private-server__do_thing', keys: [] })], frame());
     expect(rendered).toContain('mcp.call |');
     expect(rendered).not.toContain('private-server');

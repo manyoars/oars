@@ -67,7 +67,7 @@ export const deltaOf = (asker: RecallAsker | null, read: RecallRead): RecallDelt
     harnessVersions: known(version) && latest !== undefined ? (lastGap(version, latest) ?? null) : null,
     model,
     modelVersions: model === 'unknown' ? null : read.models.filter((name) => name !== asker?.model).length,
-    // A read does not state its evidence's platform, shell, or stack until cells carry frames (t756): unknown, never a guess of `same`.
+    // A cell's frame bucket holds no platform, shell, or stack, so a read cannot state them: unknown, never a guess of `same`.
     platform: 'unknown',
     shell: 'unknown',
     stack: 'unknown',
