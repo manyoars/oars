@@ -109,6 +109,8 @@ const distance = (delta: RecallDelta): string => {
 };
 
 const nameOf = (read: RecallRead, harness: Harness): string => {
+  // An entity read is about the name itself, which need not be a tool: `actionOf` would read a model or a server as `other`, naming nothing.
+  if (read.family === 'entity') return closedName(read.tool);
   const { action, native } = actionOf(ACTION_TABLES[harness], read.tool);
   const name = native === LITERAL ? action : native;
   const keys = read.keys.filter((key) => KEY_NAME.test(key));
