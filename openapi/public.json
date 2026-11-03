@@ -58,6 +58,16 @@
           "templateId"
         ]
       },
+      "ApiKeyStatus": {
+        "enum": [
+          "ACTIVE",
+          "INACTIVE",
+          "REVOKED",
+          "EXPIRED",
+          "SUSPENDED"
+        ],
+        "type": "string"
+      },
       "BillingErrorCode": {
         "description": "The billing error catalog (spec §9.2, §13). Branch on the code, never on the detail text.\n\n| Code | Status | Meaning |\n|---|---|---|\n| `SDK_KEY_INVALID` | 401 | The X-Agent-SDK-Key header is missing, malformed, revoked or unknown. |\n| `WORKLOAD_NOT_ACTIVE` | 409 | The agent's workload is no longer active. |\n| `WORKLOAD_NOT_FOUND` | 404 | No agent with this id. |\n| `WORKLOAD_NOT_OWNED` | 403 | The agent belongs to another developer. |\n| `PRICE_NOT_FOUND` | 404 | The agent has no price with this priceRef. |\n| `PRICE_INACTIVE` | 400 | The price is deactivated; activate it or use another price. |\n| `PRICE_AMOUNT_IMMUTABLE` | 409 | A charge or subscription already references the price; create a new one. |\n| `CUSTOMER_REGION_NOT_SUPPORTED` | 400 | Only US customers (the 50 states and DC) can be charged; the customer is elsewhere. |\n| `ACCOUNT_NOT_READY` | 409 | The developer's payout account cannot take live charges yet; a human finishes onboarding at actionUrl. |\n| `SELLER_IDENTITY_INCOMPLETE` | 409 | The agent's seller identity lacks a display name, support email or refund-policy URL; set them before going live. |\n| `STRIPE_TERMS_URL_NOT_SET` | 409 | The agent has a terms URL but the developer's Stripe account has none in its public business details; actionUrl is where to set it. |\n| `SELLER_IDENTITY_CONFLICT` | 409 | The agent went live, or its terms URL changed, while this seller-identity write was in flight, so its new terms URL needs the Stripe terms check first; send the same request again. |\n| `PAYMENT_METHOD_REQUIRED` | 409 | An off-session charge needs a saved card; use a CHECKOUT charge first. |\n| `IDEMPOTENCY_CONFLICT` | 409 | This Idempotency-Key was already used with a different request body. |\n| `INSUFFICIENT_CREDITS` | 409 | The customer has too few credits; actionUrl is a credit-pack checkout. |\n| `REFUND_EXCEEDS_REMAINING` | 409 | The refund is larger than what remains refundable on the charge. |\n| `CHARGE_NOT_REFUNDABLE` | 409 | The charge cannot be refunded through the API: not posted yet, flagged, disputed, failed or fully refunded. |\n| `TEST_MODE_ONLY` | 409 | The operation runs only in TEST mode (test charges). |\n| `RATE_LIMITED` | 429 | Too many requests for this agent or key; retry after the Retry-After seconds. |\n| `PAYOUT_COUNTRY_NOT_SUPPORTED` | 400 | Payout accounts are US-only at launch; the developer's country is elsewhere. |\n| `HUMAN_SESSION_REQUIRED` | 403 | A signed-in person must make this change; an API key or a connected agent tool cannot (payout account). |\n| `TOPUP_AMOUNT_INVALID` | 400 | A compute top-up is a whole-cent USD amount within the minimum and maximum. |\n| `TOPUP_NOT_FOUND` | 404 | No compute top-up with this id for the caller. |\n| `FEE_POLICY_INVALID` | 400 | The fee-policy version breaks a policy rule (admin API). |\n| `RESERVATION_NOT_FOUND` | 404 | No credit reservation with this id for the agent. |\n| `RESERVATION_EXPIRED` | 409 | The credit reservation lapsed before it was committed; reserve again. |\n| `RESERVATION_RELEASED` | 409 | The credit reservation was released; it can no longer be committed. |\n| `RESERVATION_COMMITTED` | 409 | The credit reservation was already committed; it can no longer be released. |\n| `IDEMPOTENCY_KEY_INVALID` | 400 | The Idempotency-Key is not a UUID or 64 hexadecimal characters. |\n| `CUSTOMER_REVOKED` | 410 | The customerRef was replaced by a token recovery; every agent billing call on it, the customer upsert included, is refused. |\n| `PURCHASING_METHOD_NOT_FOUND` | 404 | The developer has no purchasing card or setup session in this mode. |\n| `RECOVERY_LINK_INVALID` | 410 | The recovery link is unknown, already used, expired, voided by a newer link, or for another agent. |\n| `APPROVAL_LINK_INVALID` | 410 | The purchasing approval link is unknown, already used, expired, replaced by a newer proposal, or for another developer's agent. |\n| `APPROVAL_NOT_PERMITTED` | 403 | Only a person signed in to the web app can approve a purchasing cap; a command-line or other client's token cannot. |\n| `FRESH_SIGN_IN_REQUIRED` | 403 | Approving a purchasing cap needs a sign-in within the last 5 minutes; sign in again from the approval link. |\n| `OFFER_INVALID` | 410 | The purchase offer is unknown, expired, already used, or issued in the other mode; ask the seller for a new one. |\n| `PURCHASING_NOT_ENABLED` | 409 | The buying agent has no approved purchasing cap in the offer's mode; its developer approves one first. |\n| `PURCHASING_METHOD_REQUIRED` | 409 | The buying agent's developer has no saved purchasing card in the offer's mode; a person saves one at actionUrl. |\n| `SELLER_UNAVAILABLE` | 409 | The offer's seller is not active, or its payout account cannot take charges in the offer's mode; ask the seller for a new offer later. |\n| `PURCHASE_SELF_DEALING` | 409 | The buyer and the seller belong to the same developer or the same payout account; an agent cannot buy from itself or its own developer. |\n| `PURCHASE_CAP_REACHED` | 409 | The purchase would take the buying agent past its monthly purchasing cap in the offer's mode; remainingUsd is what is left this month (UTC). |\n",
         "enum": [
@@ -343,6 +353,46 @@
           }
         ]
       },
+      "CreateDeveloperApiKeyRequest": {
+        "properties": {
+          "authorities": {
+            "items": {
+              "maxLength": 100,
+              "minLength": 1,
+              "type": "string"
+            },
+            "maxItems": 64,
+            "minItems": 1,
+            "type": "array",
+            "uniqueItems": true
+          },
+          "description": {
+            "maxLength": 500,
+            "minLength": 0,
+            "type": "string"
+          },
+          "expiresInDays": {
+            "format": "int32",
+            "maximum": 365,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "name": {
+            "maxLength": 200,
+            "minLength": 1,
+            "type": "string"
+          },
+          "workloadId": {
+            "description": "Scopes the key to one workload you created. A scoped key may carry only AGENT_OPERATE and AGENT_READ. Omit for an ordinary key.",
+            "format": "uuid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "authorities",
+          "name"
+        ]
+      },
       "CreatePriceInput": {
         "properties": {
           "amountUsd": {
@@ -525,6 +575,69 @@
         ],
         "type": "string"
       },
+      "DeveloperApiKeyResponse": {
+        "properties": {
+          "authorities": {
+            "description": "Authorities granted at creation. Every request is further limited to what the owner holds at that moment.",
+            "items": {
+              "description": "Authorities granted at creation. Every request is further limited to what the owner holds at that moment.",
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "createdAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "description": {
+            "description": "Null when none was supplied.",
+            "type": "string"
+          },
+          "expiresAt": {
+            "description": "Null only for a legacy key that never expires.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "keyId": {
+            "description": "Public key id; the {keyId} path variable",
+            "format": "uuid",
+            "type": "string"
+          },
+          "lastUsedAt": {
+            "description": "Null until the key is first used.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "prefix": {
+            "description": "First characters of the secret, to recognise a key",
+            "type": "string"
+          },
+          "revokedAt": {
+            "description": "Null unless the key was revoked.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/ApiKeyStatus"
+          },
+          "workloadId": {
+            "description": "The one workload this key is scoped to. Null for an ordinary key.",
+            "format": "uuid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "authorities",
+          "createdAt",
+          "keyId",
+          "name",
+          "prefix",
+          "status"
+        ]
+      },
       "EnvVar": {
         "properties": {
           "name": {
@@ -573,6 +686,25 @@
           "password",
           "registry",
           "username"
+        ]
+      },
+      "IssuedDeveloperApiKeyResponse": {
+        "properties": {
+          "key": {
+            "$ref": "#/components/schemas/DeveloperApiKeyResponse"
+          },
+          "replayed": {
+            "description": "True when this response replays an earlier request with the same key",
+            "type": "boolean"
+          },
+          "secret": {
+            "description": "The secret, shown exactly once. Null on an idempotent replay: the platform never stores it, so a lost secret means rotating the key.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "key",
+          "replayed"
         ]
       },
       "LoginSuccess": {
@@ -676,6 +808,73 @@
             "description": "Page content",
             "items": {
               "$ref": "#/components/schemas/AgentTemplateResponse"
+            },
+            "type": "array"
+          },
+          "empty": {
+            "description": "True if this page has no content",
+            "type": "boolean"
+          },
+          "first": {
+            "description": "True if this is the first page",
+            "type": "boolean"
+          },
+          "last": {
+            "description": "True if this is the last page",
+            "type": "boolean"
+          },
+          "number": {
+            "description": "Zero-indexed page number",
+            "format": "int32",
+            "type": "integer"
+          },
+          "numberOfElements": {
+            "description": "Number of elements on this page",
+            "format": "int32",
+            "type": "integer"
+          },
+          "pageable": {
+            "$ref": "#/components/schemas/PageableObject"
+          },
+          "size": {
+            "description": "Requested page size",
+            "format": "int32",
+            "type": "integer"
+          },
+          "sort": {
+            "$ref": "#/components/schemas/SortObject"
+          },
+          "totalElements": {
+            "description": "Total element count across all pages",
+            "format": "int64",
+            "type": "integer"
+          },
+          "totalPages": {
+            "description": "Total page count",
+            "format": "int32",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "content",
+          "empty",
+          "first",
+          "last",
+          "number",
+          "numberOfElements",
+          "pageable",
+          "size",
+          "sort",
+          "totalElements",
+          "totalPages"
+        ]
+      },
+      "PageDeveloperApiKeyResponse": {
+        "properties": {
+          "content": {
+            "description": "Page content",
+            "items": {
+              "$ref": "#/components/schemas/DeveloperApiKeyResponse"
             },
             "type": "array"
           },
@@ -7208,6 +7407,595 @@
           "Billing purchasing card"
         ]
       }
+    },
+    "/me/api-keys": {
+      "get": {
+        "operationId": "UserManagement_list",
+        "parameters": [
+          {
+            "description": "Zero-based page index (0..N)",
+            "in": "query",
+            "name": "page",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "The size of the page to be returned",
+            "in": "query",
+            "name": "size",
+            "required": false,
+            "schema": {
+              "default": 20,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Sorting criteria in the format: property,(asc|desc). Default sort order is ascending. Multiple sort criteria are supported.",
+            "in": "query",
+            "name": "sort",
+            "required": false,
+            "schema": {
+              "default": [
+                "createdAt,DESC"
+              ],
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/PageDeveloperApiKeyResponse"
+                }
+              }
+            },
+            "description": "A page of keys"
+          },
+          "400": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Bad Request"
+          },
+          "401": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "402": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Payment Required"
+          },
+          "403": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "413": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Content Too Large"
+          },
+          "422": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Unprocessable Content"
+          },
+          "423": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Locked"
+          },
+          "429": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Too Many Requests"
+          },
+          "451": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Unavailable For Legal Reasons"
+          },
+          "500": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          },
+          "502": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Bad Gateway"
+          },
+          "503": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          },
+          "504": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Gateway Timeout"
+          }
+        },
+        "summary": "List your API keys, newest first",
+        "tags": [
+          "public",
+          "Developer API Keys"
+        ]
+      },
+      "post": {
+        "operationId": "UserManagement_create",
+        "parameters": [
+          {
+            "description": "Required. The same key with the same body replays (200, no secret), with a different body is IDEMPOTENCY_CONFLICT. Must be a UUID or 64 hexadecimal characters; any other value is a 400 IDEMPOTENCY_KEY_INVALID.",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateDeveloperApiKeyRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/IssuedDeveloperApiKeyResponse"
+                }
+              }
+            },
+            "description": "Idempotent replay; no secret"
+          },
+          "201": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/IssuedDeveloperApiKeyResponse"
+                }
+              }
+            },
+            "description": "Created; the secret is in the body once"
+          },
+          "400": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Invalid body, missing Idempotency-Key, or API_KEY_WORKLOAD_SCOPE_EXCEEDS_CAP (a workload-scoped key asked for more than AGENT_OPERATE and AGENT_READ)"
+          },
+          "401": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "402": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Payment Required"
+          },
+          "403": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "API_KEY_SCOPE_EXCEEDS_OWNER or HUMAN_SESSION_REQUIRED"
+          },
+          "404": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "WORKLOAD_NOT_FOUND (no such workload, or it is not yours)"
+          },
+          "409": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "IDEMPOTENCY_CONFLICT or API_KEY_LIMIT_REACHED"
+          },
+          "413": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Content Too Large"
+          },
+          "422": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Unprocessable Content"
+          },
+          "423": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Locked"
+          },
+          "429": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Too Many Requests"
+          },
+          "451": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Unavailable For Legal Reasons"
+          },
+          "500": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          },
+          "502": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Bad Gateway"
+          },
+          "503": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          },
+          "504": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Gateway Timeout"
+          }
+        },
+        "summary": "Create an API key carrying a subset of your authorities",
+        "tags": [
+          "public",
+          "Developer API Keys"
+        ]
+      }
+    },
+    "/me/api-keys/{keyId}": {
+      "delete": {
+        "description": "Immediate and idempotent.",
+        "operationId": "revoke_1",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "keyId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Revoked"
+          },
+          "400": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Bad Request"
+          },
+          "401": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "402": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Payment Required"
+          },
+          "403": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "HUMAN_SESSION_REQUIRED"
+          },
+          "404": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "API_KEY_NOT_FOUND"
+          },
+          "409": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "413": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Content Too Large"
+          },
+          "422": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Unprocessable Content"
+          },
+          "423": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Locked"
+          },
+          "429": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Too Many Requests"
+          },
+          "451": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Unavailable For Legal Reasons"
+          },
+          "500": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          },
+          "502": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Bad Gateway"
+          },
+          "503": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          },
+          "504": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Gateway Timeout"
+          }
+        },
+        "summary": "Revoke an API key",
+        "tags": [
+          "public",
+          "Developer API Keys"
+        ]
+      }
     }
   },
   "tags": [
@@ -7270,6 +8058,10 @@
     {
       "description": "Keycloak OIDC federation endpoints",
       "name": "OIDC"
+    },
+    {
+      "description": "Scoped, expiring API keys for coding agents and CI. The secret is returned once on create and rotate; an idempotent replay returns the key without it.",
+      "name": "Developer API Keys"
     }
   ]
 }
