@@ -1,4 +1,4 @@
-// `oars sessions hook install|uninstall|status`: writes the three Claude Code hook entries into one settings file, merging with what is
+// `oars sessions hook install|uninstall|status`: writes the four Claude Code hook entries into one settings file, merging with what is
 // there. An entry is ours when its command ends with `hook-bin.js" <session-start|pre-tool|post-tool|stop>`, so uninstall removes those entries and nothing else. Also the retention floor
 // (the harness deletes raw transcripts after `cleanupPeriodDays`, 30 when unset) and the Windows nightly task.
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
