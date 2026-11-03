@@ -1,8 +1,12 @@
 // The `oars sessions` command group's bodies: each returns the `--json` document and the text a human sees.
-import { readFile } from 'node:fs/promises';
+import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
+import { dirname, join } from 'node:path';
 import type { Outcome } from '../cli.js';
 import { parseAllowList } from './allow.js';
 import { CliError, ExitCode } from '../errors.js';
+import { EVALUATOR_MODEL, fillArms, sidecarSaver } from './gold-arms.js';
+import { armsPath, coverageLines, formatScore, isGoldDocument, parseGold, renderGold, sampleGold, scoreGold, type GoldDocument } from './gold.js';
+import { makeRedactor } from './redact.js';
 import { books, formatBooks, formatMeasure, formatRecall, measure, type BooksBy } from './query.js';
 import { formatLineage, loadLineage, walkLineage } from './lineage.js';
 import { appendRecall, readRecalls } from './recall-object.js';
@@ -254,6 +258,71 @@ export const sessionsVerify = async (deps: SessionsDeps, options: { session: str
     const counts = { checked: results.length, passed: results.filter((result) => result.violations === 0).length, cvBehind, cvFrozen: frozen.size, stuck: stuck.length };
     return { value: outcome, report: { in: { session: mine(store.sessions).length, subagent: mine(store.subagents).length }, out: counts, key } };
   }, stampKey('verify', options.session ?? ''));
+};
+
+const GOLD_MODE = 0o600;
+
+/** `gold sample`: writes the blind gold file and its hidden sidecar. It never overwrites one: the file may hold judgments. */
+export const sessionsGoldSample = async (deps: SessionsDeps, options: { size: number; batch: number; seed: string | undefined; excludeTerms: string[]; outDir: string | undefined }): Promise<Outcome> => {
+  const runtime = runtimeOf(deps);
+  const date = new Date(deps.now()).toISOString().slice(0, 10);
+  const dir = options.outDir ?? join(dirname(runtime.projectsRoot), 'session-commons', 'review');
+  const file = join(dir, `outcome-gold-${date}.md`);
+  const arms = armsPath(file);
+  const taken = async (path: string): Promise<boolean> => stat(path).then(() => true, () => false);
+  if (await taken(file)) throw new CliError(`${file} already exists, and it may hold judgments. Move it, or pass another --out-dir.`, ExitCode.USAGE, 'usage');
+  if (await taken(arms)) throw new CliError(`${arms} already exists, and it may hold readings. Move it, or pass another --out-dir.`, ExitCode.USAGE, 'usage');
+  const store = await loadStore(runtime.storeDir);
+  const redact = makeRedactor(await readRedactDomains(runtime.storeDir));
+  const { document, views, unreadable } = await sampleGold(runtime, store, redact, { size: options.size, batch: options.batch, seed: options.seed ?? date, date, excludeTerms: options.excludeTerms });
+  await mkdir(dir, { recursive: true });
+  // The check above came before a long draw; `wx` holds the promise if another run wrote in between.
+  await writeFile(arms, JSON.stringify(document), { mode: GOLD_MODE, flag: 'wx' });
+  await writeFile(file, renderGold(views, { date, batch: options.batch }), { mode: GOLD_MODE, flag: 'wx' });
+  const subagents = document.entries.filter((entry) => entry.subagents > 0).length;
+  const lines = [
+    `Wrote ${String(document.entries.length)} prompts, drawn from ${String(document.frame)}, to ${file}.`,
+    options.excludeTerms.length === 0 ? 'No --exclude-term given: no session was excluded.' : `Excluded ${String(document.excludedSessions)} sessions the draw reached that mention an excluded term.`,
+    `Passed over ${String(unreadable)} prompts whose transcript is gone or no longer matches the store.`,
+    `${String(subagents)} sampled prompts ran subagents, whose work is not read.`,
+    `Score it after any batch: oars sessions gold score ${file}`,
+  ];
+  return { document: { ok: true, file, prompts: document.entries.length, frame: document.frame, excludedSessions: document.excludedSessions, unreadable, subagentPrompts: subagents }, text: lines.join('\n') };
+};
+
+const readGold = async (file: string): Promise<{ text: string; document: GoldDocument }> => {
+  const text = await readFile(file, 'utf8').catch(() => {
+    throw new CliError(`Cannot read the gold file ${file}.`, ExitCode.USAGE, 'usage');
+  });
+  const arms = armsPath(file);
+  const document = await readFile(arms, 'utf8').then((raw): unknown => JSON.parse(raw)).catch(() => undefined);
+  if (!isGoldDocument(document)) throw new CliError(`Cannot read the arms file ${arms}, which holds the signals for this gold file.`, ExitCode.USAGE, 'usage');
+  return { text, document };
+};
+
+/** `gold score`: reads whatever is judged so far, so it runs after any batch. */
+export const sessionsGoldScore = async (options: { file: string }): Promise<Outcome> => {
+  const { text, document } = await readGold(options.file);
+  const { judged, unreadable } = parseGold(text);
+  const score = scoreGold(document.entries, judged);
+  return { document: { ok: true, ...score, unreadable }, text: formatScore(score, unreadable) };
+};
+
+/** `gold arms`: the text arms and the fresh readers, into the sidecar only. It prints coverage and no reading: a read waits for judgments. */
+export const sessionsGoldArms = async (deps: SessionsDeps, options: { file: string }): Promise<Outcome> => {
+  const runtime = runtimeOf(deps);
+  if (runtime.evaluator === undefined) throw new CliError('No evaluator is configured in this run.', ExitCode.UNEXPECTED, 'unexpected');
+  const { document } = await readGold(options.file);
+  const redact = makeRedactor(await readRedactDomains(runtime.storeDir));
+  const outcome = await fillArms(runtime, document, redact, runtime.evaluator, sidecarSaver(armsPath(options.file), document, GOLD_MODE));
+  if (outcome.failure !== undefined) throw new CliError(`${outcome.failure.message} ${String(outcome.left)} readings are left, and every answer so far is saved. Rerun this command to go on.`, ExitCode.UNEXPECTED, 'unexpected');
+  const score = scoreGold(document.entries, new Map());
+  const lines = [
+    `Asked ${String(outcome.asked)} readings on ${EVALUATOR_MODEL}, with ${String(outcome.left)} left. The gold file is unchanged.`,
+    `${String(outcome.changed)} prompts have a transcript that is gone or no longer matches what the judge sees, so their text arms are unread.`,
+    ...coverageLines(score),
+  ];
+  return { document: { ok: true, asked: outcome.asked, left: outcome.left, changed: outcome.changed, model: EVALUATOR_MODEL, coverage: score.coverage }, text: lines.join('\n') };
 };
 
 const installOf = (deps: SessionsDeps): InstallRuntime => {
