@@ -2,7 +2,7 @@ import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { handleMessage, serve, TOOL_NAME } from './mcp.js';
-import { error as errorRow, prompt as promptRow } from './pool-fixture.js';
+import { error as errorRow, prompt as promptRow, session as sessionRow } from './pool-fixture.js';
 import { readRecalls } from './recall-object.js';
 import { readIdOf } from './recall-reads.js';
 import { MISS_TEXT } from './recall-render.js';
@@ -80,6 +80,27 @@ describe('MCP server', () => {
       expect(textOf(await ask(staged, { family: 'recovery', sinceDays: 1 }))).toBe(MISS_TEXT);
       await ask(staged, { family: 'recovery', sinceDays: 1.5 });
       expect((await readRecalls(staged.storeDir)).map((recall) => recall.query.slice)).toEqual([{ cls: 'edit-verify', sinceDays: 30 }, { cls: 'mixed' }, { sinceDays: 1 }, {}]);
+    });
+
+    it('states narrowed counts when the error, path, and class inputs and the days narrow a pull', async () => {
+      const staged = stage();
+      const rows = [
+        sessionRow('a', { files: ['target.ts'] }),
+        sessionRow('b'),
+        errorRow('a', SIG, { tool: 'Monitor', ts: '2026-06-01T00:00:00.000Z', cls: 'edit-verify' }),
+        errorRow('b', SIG, { tool: 'Monitor', ts: '2026-01-01T00:00:00.000Z', cls: 'mixed' }),
+      ];
+      mkdirSync(staged.storeDir, { recursive: true });
+      writeFileSync(paths(staged.storeDir).observations, rows.map((row) => `${JSON.stringify(row)}\n`).join(''));
+      const evidenceN = async (args: object): Promise<unknown> => {
+        const evidence = field(field(await ask(staged, args), 'structuredContent'), 'evidence');
+        return Array.isArray(evidence) ? field(evidence[0], 'n') : undefined;
+      };
+      expect(await evidenceN({ error: 'wrong input' })).toBe(2);
+      expect(await evidenceN({ error: 'wrong input', sinceDays: 30 })).toBe(1);
+      expect(await evidenceN({ class: 'mixed' })).toBe(1);
+      expect(await evidenceN({ path: 'target.ts' })).toBe(1);
+      expect(textOf(await ask(staged, { path: 'target.ts' }))).toContain('1 error, 1 session');
     });
 
     it('keeps a poisoned model and version out of the reply and out of the stored evidence', async () => {
