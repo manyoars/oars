@@ -62,9 +62,10 @@ describe('frameOf', () => {
     const interrupted = prompt('a', 1, 'edit-only', 'm-a', { head: '[Request interrupted by user]' });
     const silent = prompt('b', 0, 'no-tools', 'm-a');
     const cursor = prompt('cursor-1', 0, 'edit-only', 'm-a');
+    const codex = prompt('codex-1', 0, 'edit-only', 'm-a');
     const noSignals = prompt('c', 0, 'edit-only', 'm-a', { verify: undefined });
     const noModel = prompt('d', 0, 'edit-only', '');
-    expect(frameOf([kept, interrupted, silent, cursor, noSignals, noModel])).toEqual([kept]);
+    expect(frameOf([kept, interrupted, silent, cursor, codex, noSignals, noModel])).toEqual([kept]);
   });
 });
 
