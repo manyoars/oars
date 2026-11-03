@@ -160,6 +160,13 @@ describe('hookRuntime', () => {
     for (const event of ['session-start', 'post-tool', 'stop'] as const) expect(hookRuntime(event, env, 'win32', 'home', io)).not.toHaveProperty('cursorRoot');
   });
 
+  it('gives the nightly task the Codex root (CODEX_HOME), and no other event any sourceRoots', () => {
+    const nightly = hookRuntime('nightly', { ...env, CODEX_HOME: join('x', 'codex') }, 'win32', 'home', io);
+    expect(nightly.sourceRoots?.codex).toBe(join('x', 'codex'));
+    expect(hookRuntime('nightly', env, 'win32', 'home', io).sourceRoots?.codex).toBe(join('home', '.codex'));
+    for (const event of ['session-start', 'post-tool', 'stop'] as const) expect(hookRuntime(event, env, 'win32', 'home', io)).not.toHaveProperty('sourceRoots');
+  });
+
   it('places the store under the config dir and projects under the Claude config dir', () => {
     const runtime = hookRuntime('stop', { ...env, CLAUDE_CONFIG_DIR: join('x', 'claude') }, 'win32', 'home', io);
     expect(runtime.storeDir).toBe(join(env.APPDATA, 'oars', 'sessions'));
