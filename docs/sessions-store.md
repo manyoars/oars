@@ -274,19 +274,20 @@ settle it: on a machine with a Codex account, run one `codex exec` task that mak
 session count is nonzero, there are zero violations, the session has a prompt and usage, and it holds an `error` tool record for that command with a
 matching error line. A rollout whose shell outcomes were all lost would still show a session count and zero violations, which is why those are required.
 
-- **Where.** `$CODEX_HOME`, else `~/.codex` (`%USERPROFILE%.codex` on Windows): `sessions/YYYY/MM/DD/rollout-<time>-<uuid>.jsonl` and
+- **Where.** `$CODEX_HOME`, else `~/.codex` (`%USERPROFILE%\.codex` on Windows): `sessions/YYYY/MM/DD/rollout-<time>-<uuid>.jsonl` and
   `archived_sessions/`. A `.jsonl.zst` rollout is decompressed read-only. Opt-in like Cursor: discovered by default, opened only when `--allow codex` (or a matching glob) names it; the nightly run repeats a saved allow.
 - **What a rollout holds** (`codex-rs/rollout/src/policy.rs`, by `session_meta.history_mode`). In `legacy` mode (the default) it persists `user_message`,
   `agent_message`, `token_count`, and `patch_apply_end`; `exec_command_end` and `error` are never persisted. A `paginated` rollout persists
   `item_completed` events instead, which this reader does not read, so it is reported unreadable by name and its cursor does not advance.
 - **Mapping.** `session_meta` gives the id, cwd, and `cli_version`; `turn_context.model` the model; `user_message` a prompt and `agent_message` a
-  response; `token_count.last_token_usage` the usage (cached input is a subset of input, so it is split out as cache read). A shell call
-  (`shell`, `shell_command`, `exec_command`, `local_shell`, `container.exec`, and a `local_shell_call`) is settled by its `function_call_output` text: the
+  response; `token_count.last_token_usage` the usage (cached input is a subset of input, so it is split out as cache read; `cache_write_input_tokens`, `protocol.rs:2512`, is cache creation). A shell call
+  (`shell`, `shell_command`, `exec_command`, `local_shell`, `container.exec`, `write_stdin`, and a `local_shell_call`) is settled by its `function_call_output` text: the
   real exit code from `Exit code: N` (`core/src/tools/mod.rs:107`) or `Process exited with code N` (`core/src/tools/context.rs:556`), and the text after the
-  `Output:` line is the error line's source; a process still running has no code and no outcome. An older Codex wrote a JSON `{output, metadata.exit_code}`
+  `Output:` line is the error line's source; a process still running has no code and no outcome until a `write_stdin` poll (`session_id`, `handlers/shell_spec.rs:113`) sees it exit, which settles both calls; `execution error: ...` (`core/src/tools/events.rs:438`) is a call that failed to spawn and is an error, while a declined one (`exec command rejected by user`, `:456`) has no outcome. An older Codex wrote a JSON `{output, metadata.exit_code}`
   wrapper (`rust-v0.46.0`, `core/src/tools/mod.rs:186`), which is unwrapped. `apply_patch` is an edit, with the files its input names and its
-  `patch_apply_end` outcome. Timestamps are each line's own; a missing or earlier one never steps back.
-- **Absent.** Subagents, cache creation, cost, per-call duration, and message ids (a request id is synthesized per response so `verify --strict` holds).
-  A non-shell call (`update_plan`, `read_file`, an MCP tool) has no structured failure signal in this format and is recorded as `ok`. A `token_count`
+  `patch_apply_end` outcome (Legacy mode); a patch with no end event, or a declined one, has no outcome, because a rejected patch comes back as plain output text (`tools/handlers/apply_patch.rs`). An MCP call is settled by its `mcp_tool_call_end` (`protocol.rs:3047`): `result.Err`, or `result.Ok.isError`, is a failure carrying its text.
+  A spawned agent's rollout (`session_meta.parent_thread_id`, `protocol.rs:3464`) is deposited as a subagent of that thread, counted under `subagents` and not `sessions`; records below `subagent_history_start_ordinal` (`:3511`) or a fork's `forked_from_ordinal_exclusive` (`:3462`) are inherited from the parent and dropped. Timestamps are each line's own; a missing or earlier one never steps back.
+- **Absent.** Cost, per-call duration, and message ids (a request id is synthesized per response so `verify --strict` holds).
+  Another non-shell call (`update_plan`, `read_file`) has no structured failure signal in this format and is recorded as `ok`. A `token_count`
   with no assistant line before it (a reasoning-only response) has nothing to attach to, so its usage is not counted. Torn lines are counted as
   unparseable; a file with no parseable line is unreadable. Idempotent per rollout (`codex/<uuid>` in `state.json`, size and mtime).

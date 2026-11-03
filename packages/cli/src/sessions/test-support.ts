@@ -202,7 +202,7 @@ export const stageRawCursor = async (root: string, composerDocs: readonly { id: 
 };
 
 /** One Codex rollout line: `{timestamp, type, payload}` (codex-rs/history/src/lib.rs `RolloutLine`, openai/codex ac558e2). */
-export const rolloutLine = (timestamp: string, type: string, payload: unknown): unknown => ({ timestamp, type, payload });
+export const rolloutLine = (timestamp: string, type: string, payload: unknown): { timestamp: string; type: string; payload: unknown } => ({ timestamp, type, payload });
 
 export interface CodexFixture {
   /** The thread uuid in the file name. */

@@ -708,12 +708,15 @@ const readSource = async (context: DepositContext, source: Source, root: string,
         repoRoot: context.repoRoot,
         repoIdentity: context.repoIdentity,
         runtime: context.captureRuntime,
+        subagent: session.subagent,
       });
       extract.session.harness = source.harness;
       await commitCapture(context, key, extract, { size: session.size, mtimeMs: session.mtimeMs, rev });
-      tally(trace, extract, false);
-      result.sessions += 1;
-      counts.read += 1;
+      tally(trace, extract, session.subagent !== undefined);
+      if (session.subagent === undefined) {
+        result.sessions += 1;
+        counts.read += 1;
+      } else result.subagents += 1;
       result.lines += extract.session.lines;
       result.badLines += extract.session.badLines;
       result.observations += 1 + extract.prompts.length + extract.tools.length + extract.errorLines.length;

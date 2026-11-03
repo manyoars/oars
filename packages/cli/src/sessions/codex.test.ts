@@ -376,7 +376,7 @@ describe('fix round 2 behaviors', () => {
     expect(error?.line.length).toBe(1000);
   });
 
-  const withOrdinal = (ordinal: number, entry: unknown): unknown => ({ ...(entry as object), ordinal });
+  const withOrdinal = (ordinal: number, entry: object): object => ({ ...entry, ordinal });
 
   it('drops the records a subagent inherited (ordinal below subagent_history_start_ordinal, protocol.rs:3511)', () => {
     const child = line(T(0), 'session_meta', { id: 'sess-2', timestamp: T(0), cwd: '/work/app', parent_thread_id: 'sess-1', subagent_history_start_ordinal: 2 });
