@@ -164,7 +164,7 @@ with a line saying they are associations in one operator's logs, not measured li
 
 | Column | `--json` | Count, of what |
 |--------|----------|----------------|
-| `passed` | `verifyPassed` | `verify` passed, of prompts that edited and whose `verify` is readable (not `na`, not absent) |
+| `passed` | `verifyPassed` | `verify` passed, of prompts that edited and whose `verify` is readable (not `na`, not `masked`, not absent; `none` counts, since no runner read as passing) |
 | `stop` | `stopped` | A stop, of prompts carrying `stopped` |
 | `redo` | `redone` | A redo, of prompts carrying `redo` |
 | `commits` | `commits` | The prompts' `commits`, with or without a sha |

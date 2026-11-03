@@ -178,11 +178,12 @@ describe('books outcome columns', () => {
   const many = (count: number, over: Partial<PromptObservation>): PromptObservation[] => Array.from({ length: count }, (_, index) => prompt({ session: 's', index, ...over }));
 
   it('gives each signal its count, its denominator, and its share', () => {
-    const list = [...many(30, { verify: 'passed' }).slice(0, 15), ...many(30, { verify: 'failed' }).slice(15), prompt({ session: 'n', index: 0, verify: 'na', stopped: 'interrupt', redo: true }), prompt({ session: 'a', index: 0, verify: undefined })];
+    const list = [...many(30, { verify: 'passed' }).slice(0, 15), ...many(30, { verify: 'failed' }).slice(15), prompt({ session: 'n', index: 0, verify: 'na', stopped: 'interrupt', redo: true }), prompt({ session: 'a', index: 0, verify: undefined }), prompt({ session: 'm', index: 0, verify: 'masked' }), prompt({ session: 'o', index: 0, verify: 'none' })];
     const [row] = books(storeOf(list), 'model', NOW);
-    expect(row?.verifyPassed).toEqual({ count: 15, of: 30, share: 0.5 });
-    expect(row?.stopped).toEqual({ count: 1, of: 32, share: 0.031 });
-    expect(row?.redone).toEqual({ count: 1, of: 32, share: 0.031 });
+    // `masked` leaves the denominator, since its exit is unknown; `none` stays in, since no runner reads as passing.
+    expect(row?.verifyPassed).toEqual({ count: 15, of: 31, share: 0.484 });
+    expect(row?.stopped).toEqual({ count: 1, of: 34, share: 0.029 });
+    expect(row?.redone).toEqual({ count: 1, of: 34, share: 0.029 });
   });
 
   it('leaves out a line that predates a signal, and a cell below the minimum has no share', () => {
