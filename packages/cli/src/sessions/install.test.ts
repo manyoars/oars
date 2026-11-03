@@ -54,9 +54,9 @@ describe('hook install', () => {
     await installHooks(runtimeIn(dir), file, false);
     await installHooks(runtimeIn(dir), file, false);
     const written = await readJson(file);
-    const anyMatcher: unknown = expect.any(String);
+    const preTool: unknown = expect.stringMatching(/hook-bin\.js" pre-tool$/);
     expect(written.model).toBe('opus');
-    expect(written.hooks).toMatchObject({ Stop: [rotation], SessionEnd: [expect.anything()], SessionStart: [expect.anything()], PreToolUse: [{ matcher: 'Bash', hooks: [] }, { matcher: anyMatcher }] });
+    expect(written.hooks).toMatchObject({ Stop: [rotation], SessionEnd: [expect.anything()], SessionStart: [expect.anything()], PreToolUse: [{ matcher: 'Bash', hooks: [] }, { matcher: 'PowerShell|Monitor|Edit|Agent', hooks: [{ command: preTool }] }] });
   });
 
   it('removes a per-turn Stop entry the first build wrote and keeps the rotation hook, on install and on uninstall', async () => {
