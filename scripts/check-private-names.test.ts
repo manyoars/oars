@@ -216,17 +216,15 @@ describe('check-private-names', () => {
   });
 
   it('withholds the path when git quotes it (a tab in the name) and never names the file listed before it', () => {
-    writeFileSync(join(work, 'plain.txt'), 'clean\n');
-    git(work, 'add', 'plain.txt');
-    // A tab cannot be a file name on Windows, so the entry goes straight into the index.
-    const blob = spawnSync('git', ['hash-object', '-w', '--stdin'], { cwd: work, encoding: 'utf8', env, input: `${TERM}\n` }).stdout.trim();
-    git(work, 'update-index', '--add', '--cacheinfo', `100644,${blob},tab\there.txt`);
-    git(work, 'commit', '-q', '-m', 'tabbed name');
-    const sha = git(work, 'rev-parse', 'HEAD');
+    // Git for Windows refuses a tab in a path, so the tree is built with plumbing (mktree -z takes any name).
+    const blobOf = (text: string) => spawnSync('git', ['hash-object', '-w', '--stdin'], { cwd: work, encoding: 'utf8', env, input: text }).stdout.trim();
+    const entries = [`100644 blob ${blobOf('clean\n')}\tother.txt`, `100644 blob ${blobOf(`${TERM}\n`)}\ttab\there.txt`];
+    const tree = spawnSync('git', ['mktree', '-z'], { cwd: work, encoding: 'utf8', env, input: entries.map((e) => `${e}\0`).join('') }).stdout.trim();
+    const sha = git(work, 'commit-tree', tree, '-p', 'HEAD', '-m', 'tabbed name');
     const r = check(sha);
     expect(r.status).toBe(1);
     expect(r.stderr).toContain('<path withheld>:1');
-    expect(r.stderr).not.toContain('plain.txt');
+    expect(r.stderr).not.toContain('other.txt');
   });
 
   it('exits 2 with usage when no sha is given', () => {
