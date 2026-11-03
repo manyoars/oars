@@ -18,10 +18,11 @@ worktree shares one config.
 
 It reads two local files, one term per line, matched without regard to case. They never live in this repository:
 
-- `OARS_EXCLUSION_TERMS`, default `~/.claude/session-commons/exclusion-terms.txt`: the session store's exclusion list.
-- `OARS_PUBLIC_DENYLIST`, default `~/.claude/session-commons/public-denylist.txt`.
+- `OARS_EXCLUSION_TERMS`, default `~/.claude/session-commons/exclusion-terms.txt` (under `$CLAUDE_CONFIG_DIR` instead of `~/.claude` when that is set): the session store's exclusion list.
+- `OARS_PUBLIC_DENYLIST`, default `~/.claude/session-commons/public-denylist.txt` (same `CLAUDE_CONFIG_DIR` rule).
 
-A missing file prints a warning and the check passes, so a contributor who has neither list is not blocked.
+A missing file prints a warning and the check passes, so a contributor who has neither list is not blocked. A list that exists but is not UTF-8 (a UTF-16 file from PowerShell 5.1 `>`, for example) blocks the push, because
+it would otherwise match nothing in silence; an empty list only warns.
 
 ### What it catches, and what it misses
 
@@ -29,6 +30,8 @@ A missing file prints a warning and the check passes, so a contributor who has n
   someone adds that name to a list.
 - It does not look at removed lines, file contents outside the diff, file names, branch names, annotated tag messages, or binary files.
 - It cannot see anything **already on origin**. Cleaning up what was published is a separate, manual job.
+- A stale `origin/*` tracking ref counts as already on origin. After a history rewrite, commits reachable only from an unpruned
+  ref are not scanned; run `git fetch --prune origin` first.
 - `git push --no-verify` skips it.
 
 So the check is a backstop. The rule is the protection: invented names only in tests and fixtures, never a name read from a

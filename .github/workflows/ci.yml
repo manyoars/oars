@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       live-login:
-        description: Also run the live login against a throwaway Keycloak (needs the AOR_PLATFORM_* settings and OARS_LIVE_* secrets)
+        description: Also run the live login against a throwaway Keycloak (needs the OARS_LIVE_* secrets)
         type: boolean
         default: false
 
@@ -78,8 +78,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-          repository: ${{ vars.AOR_PLATFORM_REPOSITORY }}
-          token: ${{ secrets.AOR_PLATFORM_READ_TOKEN }}
+          repository: ${{ secrets.OARS_LIVE_REALM_REPOSITORY }}
+          token: ${{ secrets.OARS_LIVE_REALM_READ_TOKEN }}
           path: .platform-checkout
           sparse-checkout: k8s/keycloak-realm.json
           sparse-checkout-cone-mode: false
@@ -96,4 +96,4 @@ jobs:
         env:
           OARS_LIVE_USERNAME: ${{ secrets.OARS_LIVE_USERNAME }}
           OARS_LIVE_PASSWORD: ${{ secrets.OARS_LIVE_PASSWORD }}
-          OARS_LIVE_AUDIENCE: ${{ vars.OARS_LIVE_AUDIENCE }}
+          OARS_LIVE_AUDIENCE: ${{ secrets.OARS_LIVE_AUDIENCE }}
