@@ -627,11 +627,19 @@ const programOf = (word: ShellWord): string | null => {
 const SHELLS = new Set(['bash', 'sh', 'zsh', 'dash', 'pwsh', 'powershell', 'cmd']);
 const COMMAND_FLAG = /^(?:-[a-z]*c|-command|\/c)$/i;
 
-/** The command a shell is told to run: `bash -lc "..."`, `pwsh -NoProfile -Command "..."`, `cmd /c ...`. */
-const shellArgument = (program: string, args: readonly ShellWord[]): string | null => {
+/** The shells that run every word after the flag as the command. `bash -c npm test` runs `npm` with `test` as `$0`, so bash and its kin take one word. */
+const JOINING_SHELLS = new Set(['pwsh', 'powershell', 'cmd']);
+
+/**
+ * The command a shell is told to run: `bash -lc "..."`, `pwsh -NoProfile -Command "..."`, `cmd /c ...`. A joining shell's unquoted words pass as
+ * they are, not joined into text and read again, so a quoted `-m "a && b"` stays an argument.
+ */
+const shellArgument = (program: string, args: readonly ShellWord[]): readonly ShellToken[] | null => {
   if (!SHELLS.has(program)) return null;
   const flag = args.findIndex((word) => !word.quoted && COMMAND_FLAG.test(word.text));
-  return flag < 0 ? null : (args[flag + 1]?.text ?? null);
+  const first = flag < 0 ? undefined : args[flag + 1];
+  if (first === undefined) return null;
+  return JOINING_SHELLS.has(program) && !first.quoted ? args.slice(flag + 1) : tokenize(first.text);
 };
 
 const linkOf = (ops: readonly ShellOp[]): ShellLink => {
@@ -640,7 +648,7 @@ const linkOf = (ops: readonly ShellOp[]): ShellLink => {
 };
 
 /** Every simple command in order, with whether the call's status reports it. A shell's argument takes the place of the shell, under the shell's own read. */
-const readCommands = (text: string): ShellCommand[] => {
+const readCommands = (tokens: readonly ShellToken[]): ShellCommand[] => {
   const commands: ShellCommand[] = [];
   let pending: ShellOp[] = [];
   let words: ShellWord[] = [];
@@ -655,7 +663,7 @@ const readCommands = (text: string): ShellCommand[] => {
     pending = [];
     commands.push({ program, args, read: true, link: 'end' });
   };
-  for (const token of tokenize(text)) {
+  for (const token of tokens) {
     if (typeof token === 'string') {
       close();
       pending.push(token);
@@ -885,6 +893,7 @@ const readsHead = (git: GitCall): boolean => {
   return words.every((word, at) => word.startsWith('-') || word === 'HEAD' || (at === count + 1 && count >= 0));
 };
 
+/** Whether the call's final command reads this commit back. `commitsRead` takes the result's last hash-shaped line, and only the final command is sure to have printed it. */
 const isReadBack = (commands: readonly ShellCommand[], from: number, scope: string): boolean => {
   for (let at = from; at + 1 < commands.length; at += 1) {
     // Behind `;` the commit may have failed, and the read names an older commit.
@@ -893,7 +902,7 @@ const isReadBack = (commands: readonly ShellCommand[], from: number, scope: stri
     if (next === undefined || CHANGES_FOLDER.has(next.program)) return false;
     const git = gitCall(next);
     if (git !== null && MOVES_HEAD.has(git.sub)) return false;
-    if (git?.scope === scope && readsHead(git)) return true;
+    if (git?.scope === scope && readsHead(git)) return at + 2 === commands.length;
   }
   return false;
 };
@@ -907,7 +916,7 @@ const commitPlanOf = (commands: readonly ShellCommand[]): PlannedCommit[] =>
 
 /** A shell call's segments, pulls, and the commits it holds, from the command alone. The command is redacted before anything is kept. */
 export const readShell = (command: string, redact: Redactor): ShellRead => {
-  const commands = readCommands(redactCommand(dropBodies(command.replace(/\r\n/g, '\n')), redact));
+  const commands = readCommands(tokenize(redactCommand(dropBodies(command.replace(/\r\n/g, '\n')), redact)));
   const pulls = new Map<string, ToolPull>();
   for (const { program, args } of commands) {
     for (const pull of pullsOfCommand(program, args).filter(present)) pulls.set(JSON.stringify(pull), pull);
@@ -941,10 +950,10 @@ export const commitsRead = (plan: readonly PlannedCommit[], result: string): Arr
   return commits;
 };
 
-/** An MCP call's full server name, which `shortName` cuts for the tool sequence. */
-export const pullsOfTool = (name: string): ToolPull[] => {
-  const server = name.startsWith('mcp__') ? name.split('__')[1] : undefined;
-  return server === undefined || server === '' ? [] : [{ ecosystem: 'mcp', name: server, version: null }];
+/** An MCP call's full server name, which `shortName` cuts for the tool sequence, redacted because a harness takes it from the operator's config. */
+export const pullsOfTool = (name: string, redact: Redactor): ToolPull[] => {
+  const pull = name.startsWith('mcp__') ? wholeName('mcp', redact(name.split('__')[1] ?? '')) : null;
+  return pull === null ? [] : [pull];
 };
 
 /** The `target` of a tool call (see {@link ToolObservation.target}). */
@@ -1212,7 +1221,7 @@ export const captureSession = (input: ExtractInput): Capture => {
         else if (SHELL.has(name)) session.bashCmds += 1;
         const aimed = targetOf(name, toolInput, lineCwd, salt, redact, lineRoot);
         const shell = SHELL.has(name) ? readShell(str(toolInput.command) ?? '', redact) : undefined;
-        const pulls = shell?.pulls ?? pullsOfTool(name);
+        const pulls = shell?.pulls ?? pullsOfTool(name, redact);
         const call: ToolObservation = {
           kind: 'tool',
           cv: CAPTURE_VERSION,
