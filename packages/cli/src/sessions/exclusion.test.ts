@@ -144,6 +144,16 @@ describe('checkSession (A38)', () => {
     expect(verdict.hits).toHaveLength(1);
   });
 
+  it('keeps a term hit listed after a bad entry, whatever the listing order', async (ctx) => {
+    const t = setup();
+    write(t.main('p', 's8f'), [CLEAN]);
+    write(t.agent('p', 's8f', 'z'), [DIRTY]);
+    if (!makeLink(join(t.staged.root, 'nowhere'), t.agent('p', 's8f', 'a'), 'file')) return ctx.skip();
+    const verdict = await checkSession(t.staged.runtime, t.termsFile, 'p', 's8f');
+    expect(verdict.reason).toBe('term');
+    expect(verdict.hits).toHaveLength(1);
+  });
+
   it('counts a hit in a subagent file of a session with no main transcript as a term hit', async () => {
     const t = setup();
     write(t.agent('p', 's9', 'agent-a1'), [DIRTY]);
