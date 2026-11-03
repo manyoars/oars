@@ -521,3 +521,37 @@ describe('one tool call is one tool record (t762)', () => {
     expect(captureOf([user('go', '/work/app'), anonymous, anonymous]).tools.map((tool) => [tool.toolUseId, tool.status])).toEqual([[null, 'none'], [null, 'none']]);
   });
 });
+
+describe('an api-request-blob line is a copy of the request, not a conversation line (t762)', () => {
+  // Claude Code writes the request body it sent: an assistant message with tool_use, thinking, and text blocks and a user message with tool_result blocks,
+  // no cwd, uuid, or timestamp. 55,710 of 55,801 tool_use blocks on those lines repeat a call a real assistant line already holds.
+  const user = JSON.stringify({ type: 'user', isSidechain: false, cwd: '/work/app', timestamp: '2026-06-01T00:00:00.000Z', message: { role: 'user', content: 'go' } });
+  const call = JSON.stringify({ type: 'assistant', isSidechain: false, cwd: '/work/app', requestId: 'r1', timestamp: '2026-06-01T00:00:01.000Z', message: { role: 'assistant', model: 'm', content: [{ type: 'thinking', thinking: 'x' }, { type: 'tool_use', id: 't1', name: 'Read', input: { file_path: 'src/a.ts' } }, { type: 'text', text: 'TLDR: done' }] } });
+  const result = JSON.stringify({ type: 'user', isSidechain: false, timestamp: '2026-06-01T00:00:02.000Z', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 't1', is_error: true, content: 'boom' }] } });
+  const blob = (message: object): string => JSON.stringify({ type: 'api-request-blob', sessionId: 's', hash: 'h', message });
+  const copies = [
+    blob({ role: 'assistant', content: [{ type: 'thinking', thinking: 'x' }, { type: 'tool_use', id: 't1', name: 'Read', input: { file_path: 'src/a.ts' } }, { type: 'text', text: 'TLDR: done' }] }),
+    blob({ role: 'user', content: [{ type: 'tool_result', tool_use_id: 't1', is_error: true, content: 'boom' }] }),
+  ];
+  const captureOf = (lines: string[]) => captureSession({ text: lines.join('\n'), session: 's', project: 'proj', rev: 1, at: '', bytes: 0, redact, salt: 'salt' });
+  const plain = captureOf([user, call, result]);
+
+  it('adds nothing to the capture records, wherever it sits among the real lines', () => {
+    for (const lines of [[user, call, result, ...copies], [user, ...copies, call, result], [user, call, ...copies, result]]) {
+      const withBlob = captureOf(lines);
+      expect(withBlob.tools).toEqual(plain.tools);
+      expect(withBlob.errorLines).toEqual(plain.errorLines);
+      expect(withBlob.prompts).toEqual(plain.prompts);
+      expect({ ...withBlob.session, lines: 0 }).toEqual({ ...plain.session, lines: 0 });
+    }
+    expect(plain.tools.map((tool) => [tool.toolUseId, tool.status, tool.targetBase])).toEqual([['t1', 'error', 'cwd']]);
+    expect(plain.prompts[0]?.thinking).toBe(1);
+    expect(plain.session.tldrs).toEqual(['done']);
+  });
+
+  it('is still a line of the skeleton, so the counts and the merkle root bind', () => {
+    const withBlob = captureOf([user, call, result, ...copies]);
+    expect(withBlob.skeleton.lines).toHaveLength(5);
+    expect(withBlob.skeleton.leaves).toBe(5);
+  });
+});

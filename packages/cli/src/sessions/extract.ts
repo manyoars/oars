@@ -584,7 +584,10 @@ export const captureSession = (input: ExtractInput): Capture => {
       session.promptFingerprint = promptFingerprint;
       continue;
     }
-    if (message === undefined) continue;
+    // The harness's own copy of the request body (t762): assistant and user messages with no cwd, uuid, or timestamp, repeating blocks the real lines
+    // above already hold. Reading its tool_use, tool_result, thinking, and text blocks wrote a second row for 99.8% of calls, and a second error line,
+    // thinking count, and TLDR for the same ones. The skeleton above still lists the line, so the counts and the root bind.
+    if (message === undefined || type === 'api-request-blob') continue;
 
     if (type === 'user' && role === 'user' && o.isMeta !== true) {
       const text = firstNonEmptyText(content);
