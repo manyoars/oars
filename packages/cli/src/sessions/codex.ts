@@ -147,6 +147,8 @@ const iso = (value: unknown): string | undefined => {
 /** The tool vocabulary prompt classes and `files` are computed in; a Codex name with no counterpart keeps its own. */
 const SHELL_CALLS = new Set(['shell', 'shell_command', 'exec_command', 'local_shell', 'container.exec', 'write_stdin']);
 const PATCH_CALLS = new Set(['apply_patch']);
+/** The namespace upstream fills in for a top-level function (codex-rs/protocol/src/tool_name.rs:6-7); with none and an empty one, it is the plain tool (:46-50). */
+const DEFAULT_FUNCTION_NAMESPACE = 'functions';
 
 const commandOf = (args: Obj): string | undefined => {
   const command = args.command ?? args.cmd;
@@ -383,9 +385,16 @@ export const rolloutLines = (text: string, fallbackId: string, parentText?: stri
       if (kind === 'function_call' || kind === 'local_shell_call' || kind === 'custom_tool_call') {
         const id = str(payload.call_id) ?? str(payload.id);
         const bare = str(payload.name) ?? 'shell';
-        // A namespaced function (models.rs:1154) is not its bare name: only an un-namespaced one is Codex's own shell or patch tool.
-        const namespace = str(payload.namespace);
-        const name = namespace === undefined || bare.startsWith(namespace) ? bare : `${namespace}__${bare}`;
+        // A namespaced function (models.rs:1154) is not its bare name: only a plain one is Codex's own shell or patch tool. The router makes every
+        // function_call's ToolName with the default namespace filled in (core/src/tools/router.rs:285), and none, an empty string, and `functions`
+        // all flatten to the bare name (protocol/src/tool_name.rs:46-50; core/src/tools/mod.rs:51-53), so `functions` is no namespace here.
+        const declared = str(payload.namespace);
+        const namespace = declared === DEFAULT_FUNCTION_NAMESPACE ? undefined : declared;
+        // Upstream flattens any other namespace to namespace + name with no delimiter (core/src/tools/mod.rs:55-60; codex-mcp/src/tools.rs:296), and
+        // an MCP namespace carries its own trailing `__` (tools.rs:253), so that form joins a Claude Code MCP name as written. The `__` added to a
+        // namespace without one is this reader's own choice (models.rs:3485-3486: `collaboration` + `spawn_agent`), not upstream's flat name.
+        const joiner = namespace?.endsWith('__') === true ? '' : '__';
+        const name = namespace === undefined || bare.startsWith(namespace) ? bare : `${namespace}${joiner}${bare}`;
         const args = kind === 'custom_tool_call' ? { input: str(payload.input) } : parse(payload.arguments);
         const input: Obj = isObj(args) ? args : {};
         const action = isObj(payload.action) ? payload.action : {};
