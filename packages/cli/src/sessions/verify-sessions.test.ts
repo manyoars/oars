@@ -22,6 +22,10 @@ describe('sessionsVerify, per session', () => {
     expect(audit.sessions).toHaveLength(4);
     expect(audit.counts).toEqual({ 'root matches and the counts bind': 4, 'changed since deposit': 0, 'root mismatch': 0, 'counts do not bind': 0, 'not run': 0 });
     expect(verified.document).toMatchObject({ sessionResults, audit });
+    // Four sessions in one week hold far under 1,000 calls: layer 2 says so and scores nothing. The audit prints ahead of it.
+    expect(verified.report.selfBaseline.map((entry) => [entry.status, entry.f])).toEqual([['not run', null], ['not run', null], ['not run', null], ['not run', null]]);
+    expect(verified.text).toContain('not run, week under 1000 tool calls: 4');
+    expect(verified.text.indexOf('sessions audited against raw')).toBeLessThan(verified.text.indexOf('sessions against their own earlier weeks'));
     for (const row of ['root matches and the counts bind', 'changed since deposit', 'root mismatch', 'counts do not bind', 'not run']) expect(verified.text).toContain(row);
   });
 
