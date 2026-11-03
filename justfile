@@ -14,6 +14,11 @@ check:
 audit:
     npm audit --audit-level=high --omit=dev
 
+# Turn on the pre-push check for private names (docs: CONTRIBUTING.md). Run once from the main checkout; it writes an absolute path because
+# worktrees share the config.
+hooks:
+    node scripts/install-hooks.mjs
+
 # Rebuild openapi/public.json from the platform's committed api-specs/openapi.json, then the client types from it.
 openapi-refresh source:
     node scripts/openapi-public.mjs "{{source}}"
