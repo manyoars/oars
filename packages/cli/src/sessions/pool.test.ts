@@ -54,8 +54,8 @@ describe('refreshPool', () => {
     const steps = one.trim().split('\n').flatMap((line) => {
       const parsed: unknown = JSON.parse(line);
       const held: unknown = typeof parsed === 'object' && parsed !== null ? Reflect.get(parsed, 'steps') : undefined;
-      const list: object[] = Array.isArray(held) ? held : [];
-      return list;
+      const list: readonly unknown[] = Array.isArray(held) ? held : [];
+      return list.filter((entry): entry is object => typeof entry === 'object' && entry !== null);
     });
     expect(steps.length).toBeGreaterThan(0);
     for (const held of steps) expect(Object.keys(held).sort()).toEqual(['action', 'identity']);

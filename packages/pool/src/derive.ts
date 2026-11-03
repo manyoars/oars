@@ -166,7 +166,8 @@ const readsOf = (pool: Pool): Read[] => {
 /** What one stack's slice holds. Every family reads the whole pool, so a share keeps its true denominator; only what clears the floor leaves. */
 export const sliceOf = (stack: string, byAccount: readonly (readonly SessionSkeleton[])[]): Slice => {
   const set = mergeCells(byAccount.map((skeletons) => deriveCells(storeOf(skeletons))));
-  const pool = poolOf(set);
+  // No error rows: a skeleton holds none, and recovery, the one family that reads them, is left out here.
+  const pool = poolOf(set, []);
   const cells = set.cells.filter((cell) => cell.clusters >= SERVED_FLOOR);
   const held = new Set(cells.map((cell) => cell.motifId));
   return {
