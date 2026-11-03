@@ -699,8 +699,8 @@ const readCursor = async (context: DepositContext, root: string, result: Deposit
 const logLines = async function* (file: string): AsyncGenerator<string> {
   let rest = '';
   try {
-    for await (const chunk of createReadStream(file, { encoding: 'utf8', highWaterMark: 1 << 20 }) as AsyncIterable<string>) {
-      const lines = (rest + chunk).split('\n');
+    for await (const chunk of createReadStream(file, { encoding: 'utf8', highWaterMark: 1 << 20 })) {
+      const lines = (rest + String(chunk)).split('\n');
       rest = lines.pop() ?? '';
       yield* lines;
     }

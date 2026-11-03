@@ -5,11 +5,12 @@ import { FIXTURES, NOW, addProject, cleanup, stage, type Staged } from './test-s
 
 // The log's real limit is 536,870,888 characters, and a file that size is too slow for the suite. So a text read of the log fails here past
 // an injected size, the way Node fails past the real one; the proof over a real 540 MB log is in the t767 report.
-const seams = vi.hoisted(() => ({
-  logChars: Number.POSITIVE_INFINITY,
-  rename: undefined as undefined | ((to: string) => Promise<void>),
-  open: undefined as undefined | ((file: string) => void),
-}));
+interface Seams {
+  logChars: number;
+  rename: ((to: string) => Promise<void>) | undefined;
+  open: ((file: string) => void) | undefined;
+}
+const seams = vi.hoisted((): Seams => ({ logChars: Number.POSITIVE_INFINITY, rename: undefined, open: undefined }));
 
 vi.mock('node:fs/promises', () => ({
   ...promises,
