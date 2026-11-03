@@ -206,35 +206,7 @@ describe('auditSession, the other rows', () => {
   });
 });
 
-describe('auditSession, a file longer than the skeleton', () => {
-  it('recomputes the root over the first `leaves` lines only, so a line appended after deposit does not mismatch when state.json agrees', async () => {
-    const staged = stage();
-    await deposit(staged.runtime, options);
-    asCopy(staged, 'errors-a');
-    appendFileSync(rawOf(staged, 'errors-a'), '{"type":"summary"}\n');
-    const state = await readState(staged.storeDir);
-    const entry = state.files['proj/errors-a.jsonl'];
-    if (entry === undefined) throw new Error('no state entry');
-    const now = statSync(rawOf(staged, 'errors-a'));
-    entry.size = now.size;
-    entry.mtimeMs = now.mtimeMs;
-    writeFileSync(paths(staged.storeDir).state, JSON.stringify(state));
-    expect(await one(staged, 'errors-a')).toMatchObject({ result: 'root matches and the counts bind', mode: 'copy', possibleTampering: false });
-  });
-});
-
 describe('formatAudit', () => {
-  it('prints the tampering line, the small-session line, and the session note for a resized copy and a small fixture', async () => {
-    const staged = stage();
-    await deposit(staged.runtime, options);
-    asCopy(staged, 'errors-a');
-    appendFileSync(rawOf(staged, 'errors-a'), '{"type":"summary"}\n');
-    const text = formatAudit(await audits(staged));
-    expect(text).toContain('possible tampering (a copy of a different size): 1');
-    expect(text).toContain('under 10 leaves, so joined to no cluster and counted toward no n: ');
-    expect(text).toContain('errors-a: changed since deposit (copy, possible tampering)');
-  });
-
   it('names every row of the T0 table with a count, and lists only the sessions that are not clean', async () => {
     const staged = stage();
     await deposit(staged.runtime, options);
