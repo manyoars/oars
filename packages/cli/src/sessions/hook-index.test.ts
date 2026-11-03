@@ -7,7 +7,7 @@ import type { ErrorObservation, SessionObservation } from './schema.js';
 import { buildIndex, contextBlock, inRepository, readIndex, repositoryRoot } from './hook-index.js';
 import { sessionsBooks, sessionsMeasure } from './command.js';
 import { readHookCalls } from './hook-calls.js';
-import { books, formatBooks, formatMeasure, measure } from './query.js';
+import { books, BOOKS_CAVEAT, formatBooks, formatMeasure, measure } from './query.js';
 import { formatStepCounters, readSteps, stepCounters } from './steps.js';
 import { deposit, loadStore, paths, readCalls } from './store.js';
 import { addProject, cleanup, FIXTURES, NOW, stage } from './test-support.js';
@@ -212,7 +212,7 @@ ${formatStepCounters(stepCounters(await readSteps(staged.storeDir)))}`);
     const plain = harness();
     plain.deps.sessions = staged.runtime;
     expect(await run(['sessions', 'books', '--by', 'class'], plain.deps)).toBe(ExitCode.OK);
-    expect(plain.out.join('')).toBe(`${formatBooks(books(store, 'class', NOW), 'class')}\n`);
+    expect(plain.out.join('')).toBe(`${formatBooks(books(store, 'class', NOW), 'class')}\n${BOOKS_CAVEAT}\n`);
   });
 
   it("books --repo counts only its own repository's newer captures, sessions and subagents alike", async () => {
