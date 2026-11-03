@@ -78,7 +78,7 @@ describe('rolloutLines', () => {
     expect(out.tools.map((tool) => [tool.tool, tool.status])).toEqual([['Bash', 'ok'], ['Edit', 'ok'], ['Edit', 'ok']]);
     expect(out.session.files).toEqual(expect.arrayContaining(['src/a.ts', 'docs/b.md']));
     expect(out.errorLines).toEqual([]);
-    expect(out.session.tsFirst).toBe(T(0));
+    expect(out.session.tsFirst).toBe(T(2));
     expect(out.prompts.map((p) => p.ts)).toEqual([T(2), T(8)]);
   });
 

@@ -3,8 +3,8 @@
 // Claude Code is not an entry: its transcripts are files the deposit walks itself (`depositLocked`), and its behavior does not change.
 
 import { join } from 'node:path';
-import { codexRoot, openCodexStore, type CodexSession } from './codex.js';
-import { cursorRoot, openCursorStore, type CursorSession } from './cursor.js';
+import { codexRoot, openCodexStore } from './codex.js';
+import { cursorRoot, openCursorStore } from './cursor.js';
 import type { Harness } from './schema.js';
 
 /** A session found in a source, before its transcript is read. */
