@@ -77,14 +77,27 @@ export const auditStore = async (runtime: SessionsRuntime, sessions: readonly Se
   return audits;
 };
 
+export type T0Counts = { [result in T0Result]: number };
+
+export const auditCounts = (audits: readonly SessionAudit[]): T0Counts => {
+  const count = (result: T0Result): number => audits.filter((audit) => audit.result === result).length;
+  return {
+    'root matches and the counts bind': count('root matches and the counts bind'),
+    'changed since deposit': count('changed since deposit'),
+    'root mismatch': count('root mismatch'),
+    'counts do not bind': count('counts do not bind'),
+    'not run': count('not run'),
+  };
+};
+
 /** A count line for every row of the T0 table, then one FAIL line per session at tier `none` and one note per session that changed. */
 export const formatAudit = (audits: readonly SessionAudit[]): string => {
-  const count = (result: T0Result): number => audits.filter((audit) => audit.result === result).length;
+  const counts = auditCounts(audits);
   const tampering = audits.filter((audit) => audit.possibleTampering).length;
   const small = audits.filter((audit) => audit.belowMinLeaves).length;
   return [
     `${String(audits.length)} sessions audited against raw (T0, local: a local match commits nobody)`,
-    ...T0_RESULTS.map((result) => `      ${result}: ${String(count(result))}`),
+    ...T0_RESULTS.map((result) => `      ${result}: ${String(counts[result])}`),
     ...(tampering > 0 ? [`      possible tampering (a copy of a different size): ${String(tampering)}`] : []),
     ...(small > 0 ? [`      under ${String(MIN_ROOT_LEAVES)} leaves, so joined to no cluster and counted toward no n: ${String(small)}`] : []),
     ...audits.filter((audit) => audit.tier === 'none').map((audit) => `FAIL  ${audit.session}: ${audit.result}; weight is 0 until a new capture writes a new root`),
