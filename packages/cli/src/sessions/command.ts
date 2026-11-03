@@ -4,7 +4,8 @@ import { dirname, join } from 'node:path';
 import type { Outcome } from '../cli.js';
 import { parseAllowList } from './allow.js';
 import { CliError, ExitCode } from '../errors.js';
-import { armsPath, formatScore, isGoldDocument, parseGold, renderGold, sampleGold, scoreGold, type GoldDocument } from './gold.js';
+import { EVALUATOR_MODEL, fillArms, sidecarSaver } from './gold-arms.js';
+import { armsPath, coverageLines, formatScore, isGoldDocument, parseGold, renderGold, sampleGold, scoreGold, type GoldDocument } from './gold.js';
 import { makeRedactor } from './redact.js';
 import { books, formatBooks, formatMeasure, formatRecall, measure, recall, type BooksBy, type RecallQuery } from './query.js';
 import { readHookCalls } from './hook-calls.js';
@@ -248,6 +249,23 @@ export const sessionsGoldScore = async (options: { file: string }): Promise<Outc
   const { judged, unreadable } = parseGold(text);
   const score = scoreGold(document.entries, judged);
   return { document: { ok: true, ...score, unreadable }, text: formatScore(score, unreadable) };
+};
+
+/** `gold arms`: the text arms and the fresh readers, into the sidecar only. It prints coverage and no reading: a read waits for judgments. */
+export const sessionsGoldArms = async (deps: SessionsDeps, options: { file: string }): Promise<Outcome> => {
+  const runtime = runtimeOf(deps);
+  if (runtime.evaluator === undefined) throw new CliError('No evaluator is configured in this run.', ExitCode.UNEXPECTED, 'unexpected');
+  const { document } = await readGold(options.file);
+  const redact = makeRedactor(await readRedactDomains(runtime.storeDir));
+  const outcome = await fillArms(runtime, document, redact, runtime.evaluator, sidecarSaver(armsPath(options.file), document, GOLD_MODE));
+  if (outcome.failure !== undefined) throw new CliError(`${outcome.failure.message} ${String(outcome.left)} readings are left, and every answer so far is saved. Rerun this command to go on.`, ExitCode.UNEXPECTED, 'unexpected');
+  const score = scoreGold(document.entries, new Map());
+  const lines = [
+    `Asked ${String(outcome.asked)} readings on ${EVALUATOR_MODEL}, with ${String(outcome.left)} left. The gold file is unchanged.`,
+    `${String(outcome.changed)} prompts have a transcript that is gone or no longer matches what the judge sees, so their text arms are unread.`,
+    ...coverageLines(score),
+  ];
+  return { document: { ok: true, asked: outcome.asked, left: outcome.left, changed: outcome.changed, model: EVALUATOR_MODEL, coverage: score.coverage }, text: lines.join('\n') };
 };
 
 const installOf = (deps: SessionsDeps): InstallRuntime => {

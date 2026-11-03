@@ -12,7 +12,7 @@ import type { CredentialStore } from './credentials.js';
 import { CliError, ExitCode } from './errors.js';
 import type { JournalStore } from './journal.js';
 import type { BooksBy, RecallQuery } from './sessions/query.js';
-import { sessionsBooks, sessionsContext, sessionsDeposit, sessionsGoldSample, sessionsGoldScore, sessionsHookInstall, sessionsHookStatus, sessionsHookUninstall, sessionsMcp, sessionsMeasure, sessionsRecall, sessionsVerify, type SessionsDeps } from './sessions/command.js';
+import { sessionsBooks, sessionsContext, sessionsDeposit, sessionsGoldArms, sessionsGoldSample, sessionsGoldScore, sessionsHookInstall, sessionsHookStatus, sessionsHookUninstall, sessionsMcp, sessionsMeasure, sessionsRecall, sessionsVerify, type SessionsDeps } from './sessions/command.js';
 import type { InstallRuntime, Scope } from './sessions/install.js';
 import type { SessionsRuntime } from './sessions/store.js';
 
@@ -273,7 +273,7 @@ const buildProgram = (deps: RunDeps, argv: string[]): Command => {
       emit(deps, flag(options, 'json'), await purchasingList(deps, { apiUrl: resolveApiUrl(deps, text(options, 'apiUrl')), workloadId }));
     });
 
-  const sessions = program.command('sessions').description("deposit and recall your own Claude Code session logs, locally (no model calls, no network)");
+  const sessions = program.command('sessions').description("deposit and recall your own Claude Code session logs, locally (no model calls, no network, except `gold arms`, which asks your own Claude subscription)");
 
   sessions
     .command('deposit')
@@ -403,6 +403,15 @@ const buildProgram = (deps: RunDeps, argv: string[]): Command => {
     .action(async (file: string, _options: OptionValues, command: Command) => {
       const options: OptionValues = command.optsWithGlobals();
       emit(deps, flag(options, 'json'), await sessionsGoldScore({ file }));
+    });
+
+  gold
+    .command('arms')
+    .description('fill the hidden sidecar: the closing claim, its Confidence line, and fresh single-turn readers on your Claude subscription, with fixed, hashed wording. It resumes, and never touches the gold file')
+    .argument('<file>', 'the gold file')
+    .action(async (file: string, _options: OptionValues, command: Command) => {
+      const options: OptionValues = command.optsWithGlobals();
+      emit(deps, flag(options, 'json'), await sessionsGoldArms(sessionDeps(deps), { file }));
     });
 
   const hook = sessions.command('hook').description('install the recall hooks into a Claude Code settings file, and the nightly deposit task');
