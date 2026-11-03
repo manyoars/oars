@@ -73,6 +73,15 @@ describe('MCP server', () => {
       return Array.isArray(content) ? String(field(content[0], 'text')) : '';
     };
 
+    it('narrows a family by the class and the days the tool takes, and records the slice', async () => {
+      const staged = seeded();
+      expect(textOf(await ask(staged, { family: 'recovery', class: 'edit-verify', sinceDays: 30 }))).toContain('1 error');
+      expect(textOf(await ask(staged, { family: 'recovery', class: 'mixed' }))).toBe(MISS_TEXT);
+      expect(textOf(await ask(staged, { family: 'recovery', sinceDays: 1 }))).toBe(MISS_TEXT);
+      await ask(staged, { family: 'recovery', sinceDays: 1.5 });
+      expect((await readRecalls(staged.storeDir)).map((recall) => recall.query.slice)).toEqual([{ cls: 'edit-verify', sinceDays: 30 }, { cls: 'mixed' }, { sinceDays: 1 }, {}]);
+    });
+
     it('keeps a poisoned model and version out of the reply and out of the stored evidence', async () => {
       const staged = seeded({ model: POISON, harnessVersion: POISON });
       const result = await ask(staged, { family: 'recovery' });
