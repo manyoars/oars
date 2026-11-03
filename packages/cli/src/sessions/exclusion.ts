@@ -4,12 +4,11 @@
 // prints, logs, or returns a term or a line of a transcript, only counts and session ids.
 import { createReadStream } from 'node:fs';
 import { mkdir, readdir, readFile, stat, writeFile } from 'node:fs/promises';
-import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { createInterface } from 'node:readline';
 import type { Outcome } from '../cli.js';
 import { CliError, ExitCode } from '../errors.js';
-import { paths, type SessionsRuntime } from './store.js';
+import { loadStore, paths, type SessionsRuntime } from './store.js';
 
 export interface ExclusionPaths {
   /** One term per line, matched without regard to case. */
@@ -20,7 +19,7 @@ export interface ExclusionPaths {
 
 /** `OARS_EXCLUSION_TERMS` names the term file; the default sits beside the claude config's other local-only session-commons files. */
 export const exclusionPaths = (projectsRoot: string, env: NodeJS.ProcessEnv, out?: string): ExclusionPaths => {
-  const commons = join(projectsRoot === '' ? join(homedir(), '.claude') : dirname(projectsRoot), 'session-commons');
+  const commons = join(dirname(projectsRoot), 'session-commons');
   const terms = env.OARS_EXCLUSION_TERMS;
   return { terms: terms === undefined || terms === '' ? join(commons, 'exclusion-terms.txt') : terms, list: out ?? join(commons, 'exclusion-list.jsonl') };
 };
@@ -53,19 +52,25 @@ export interface Verdict {
   hits: { key: string; main: boolean; source: Source }[];
 }
 
+const isAbsent = (error: unknown): boolean => error instanceof Error && 'code' in error && (error.code === 'ENOENT' || error.code === 'ENOTDIR');
+
+/** A missing folder is empty; any other failure (EACCES, EPERM, EBUSY) is thrown, so a folder that was not read never reads as clean. */
 const entriesOf = async (dir: string) => {
   try {
     return await readdir(dir, { withFileTypes: true });
-  } catch {
-    return [];
+  } catch (error) {
+    if (isAbsent(error)) return [];
+    throw error;
   }
 };
 
+/** A link is followed, as the main file's `stat` follows one; a link that leads nowhere throws, so it is unreadable. */
 const jsonlUnder = async (dir: string): Promise<string[]> => {
   const found: string[] = [];
   for (const entry of await entriesOf(dir)) {
-    if (entry.isDirectory()) found.push(...(await jsonlUnder(join(dir, entry.name))));
-    else if (entry.isFile() && entry.name.endsWith('.jsonl')) found.push(join(dir, entry.name));
+    const path = join(dir, entry.name);
+    if (entry.isDirectory()) found.push(...(await jsonlUnder(path)));
+    else if (entry.name.endsWith('.jsonl') && (entry.isFile() || (entry.isSymbolicLink() && (await stat(path)).isFile()))) found.push(path);
   }
   return found;
 };
@@ -78,22 +83,33 @@ const isFile = async (path: string): Promise<boolean> => {
   }
 };
 
-/** Every transcript of the session in one source: the main file and everything under `<session>/subagents/`. */
-const filesIn = async (root: string, source: Source, project: string, session: string): Promise<TranscriptFile[]> => {
+/** Adds the transcripts of the session in one source (the main file and everything under `<session>/subagents/`) to `found`; true when a folder could not be read. */
+const filesIn = async (root: string, source: Source, project: string, session: string, found: TranscriptFile[]): Promise<boolean> => {
   const folder = join(root, project);
-  const found: TranscriptFile[] = [];
   const main = join(folder, `${session}.jsonl`);
   if (await isFile(main)) found.push({ path: main, key: `${session}.jsonl`, main: true, source });
   const subagents = join(folder, session, 'subagents');
-  for (const path of await jsonlUnder(subagents)) found.push({ path, key: `${session}/subagents/${path.slice(subagents.length + 1).split('\\').join('/')}`, main: false, source });
-  return found;
+  try {
+    for (const path of await jsonlUnder(subagents)) found.push({ path, key: `${session}/subagents/${path.slice(subagents.length + 1).split('\\').join('/')}`, main: false, source });
+  } catch {
+    return true;
+  }
+  return false;
 };
 
+interface SessionFiles {
+  files: TranscriptFile[];
+  /** A folder of the session could not be listed, so it was not scanned in full. */
+  unreadable: boolean;
+}
+
 /** Both the harness's folder and oars' raw archive, because either can be the only copy left. */
-const filesOf = async (runtime: SessionsRuntime, project: string, session: string): Promise<TranscriptFile[]> => [
-  ...(await filesIn(runtime.projectsRoot, 'projects', project, session)),
-  ...(await filesIn(paths(runtime.storeDir).raw, 'raw', project, session)),
-];
+const filesOf = async (runtime: SessionsRuntime, project: string, session: string): Promise<SessionFiles> => {
+  const files: TranscriptFile[] = [];
+  const first = await filesIn(runtime.projectsRoot, 'projects', project, session, files);
+  const second = await filesIn(paths(runtime.storeDir).raw, 'raw', project, session, files);
+  return { files, unreadable: first || second };
+};
 
 /** Whether any line of the file holds a term. Streamed, so a large transcript is never held whole. */
 const holdsTerm = async (path: string, terms: readonly string[]): Promise<boolean> => {
@@ -109,12 +125,11 @@ const holdsTerm = async (path: string, terms: readonly string[]): Promise<boolea
   }
 };
 
-const judge = async (terms: readonly string[], files: readonly TranscriptFile[]): Promise<Verdict> => {
+const judge = async (terms: readonly string[], session: SessionFiles): Promise<Verdict> => {
   if (terms.length === 0) return { excluded: true, reason: 'no-terms', hits: [] };
-  // Without the main transcript the session cannot be scanned in full, so it is excluded.
-  if (!files.some((file) => file.main)) return { excluded: true, reason: 'no-raw', hits: [] };
+  const { files } = session;
   const hits: Verdict['hits'] = [];
-  let unreadable = false;
+  let unreadable = session.unreadable;
   for (const file of files) {
     try {
       if (await holdsTerm(file.path, terms)) hits.push({ key: file.key, main: file.main, source: file.source });
@@ -123,6 +138,8 @@ const judge = async (terms: readonly string[], files: readonly TranscriptFile[])
     }
   }
   if (hits.length > 0) return { excluded: true, reason: 'term', hits };
+  // Without the main transcript the session cannot be scanned in full, so it is excluded; its subagent files were scanned above, so a hit there counts.
+  if (!files.some((file) => file.main)) return { excluded: true, reason: 'no-raw', hits };
   return unreadable ? { excluded: true, reason: 'unreadable', hits } : { excluded: false, reason: 'clean', hits };
 };
 
@@ -136,10 +153,17 @@ export const assertDepositable = async (runtime: SessionsRuntime, termsFile: str
   if (verdict.excluded) throw new CliError(`Session ${session} is excluded from the pool by the V15 rule (${verdict.reason}).`, ExitCode.INVALID, 'excluded');
 };
 
+interface SourceHits {
+  main: number;
+  subagent: number;
+}
+
 export interface FolderCounts {
   folder: number;
   sessions: number;
   excluded: number;
+  /** Files in this folder that held a term, per source. */
+  hits: { projects: SourceHits; raw: SourceHits };
 }
 
 export interface ExclusionCounts {
@@ -147,27 +171,39 @@ export interface ExclusionCounts {
   excluded: number;
   kept: number;
   reasons: { term: number; noRaw: number; noTerms: number; unreadable: number };
+  /** Directories in a project folder that are not sessions (no main transcript, and a name that is not a session id); in neither the list nor the sessions. */
+  notSessions: number;
   /** Distinct transcript files that held a term, across both sources. */
-  hitFiles: { main: number; subagent: number };
-  /** The same count per source, because a file in both is counted in each. */
-  bySource: { projects: { main: number; subagent: number }; raw: { main: number; subagent: number } };
+  hitFiles: SourceHits;
+  /** The same count per source, because a file in both is counted in each, and the distinct sessions with a hit in that source. */
+  bySource: { projects: SourceHits & { sessions: number }; raw: SourceHits & { sessions: number } };
   folders: FolderCounts[];
 }
 
-const sessionIds = async (root: string, project: string): Promise<string[]> => {
+/** The harness names a session folder with a UUID. */
+const SESSION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** The sessions of one project folder: every main file, and every directory named like a session. Other directories are returned apart. */
+const sessionIds = async (root: string, project: string): Promise<{ ids: string[]; others: string[] }> => {
   const ids: string[] = [];
+  const dirs: string[] = [];
   for (const entry of await entriesOf(join(root, project))) {
     if (entry.isFile() && entry.name.endsWith('.jsonl')) ids.push(entry.name.slice(0, -'.jsonl'.length));
-    else if (entry.isDirectory()) ids.push(entry.name);
+    else if (entry.isDirectory()) dirs.push(entry.name);
   }
-  return ids;
+  return { ids: [...ids, ...dirs.filter((name) => SESSION_ID.test(name))], others: dirs.filter((name) => !SESSION_ID.test(name)) };
 };
 
-/** Scans every session in the harness's folders and the raw archive. Returns counts and, apart from them, the excluded sessions. */
+const emptyHits = (): SourceHits => ({ main: 0, subagent: 0 });
+
+/** Scans every session in the harness's folders, the raw archive, and the store's own log. Returns counts and, apart from them, the excluded sessions. */
 export const scanStore = async (runtime: SessionsRuntime, termsFile: string): Promise<{ counts: ExclusionCounts; excluded: { project: string; session: string }[] }> => {
   const terms = await loadTerms(termsFile);
   const raw = paths(runtime.storeDir).raw;
-  const projects = new Set<string>();
+  // A session the store logged stays listed when its raw is gone everywhere: it has nothing to scan, so it is excluded as no raw.
+  const logged = new Map<string, Set<string>>();
+  for (const session of (await loadStore(runtime.storeDir)).sessions) logged.set(session.project, (logged.get(session.project) ?? new Set<string>()).add(session.session));
+  const projects = new Set<string>(logged.keys());
   for (const root of [runtime.projectsRoot, raw]) {
     for (const entry of await entriesOf(root)) if (entry.isDirectory()) projects.add(entry.name);
   }
@@ -176,26 +212,35 @@ export const scanStore = async (runtime: SessionsRuntime, termsFile: string): Pr
     excluded: 0,
     kept: 0,
     reasons: { term: 0, noRaw: 0, noTerms: 0, unreadable: 0 },
-    hitFiles: { main: 0, subagent: 0 },
-    bySource: { projects: { main: 0, subagent: 0 }, raw: { main: 0, subagent: 0 } },
+    notSessions: 0,
+    hitFiles: emptyHits(),
+    bySource: { projects: { ...emptyHits(), sessions: 0 }, raw: { ...emptyHits(), sessions: 0 } },
     folders: [],
   };
   const excluded: { project: string; session: string }[] = [];
   const distinct = new Set<string>();
   for (const [index, project] of [...projects].sort().entries()) {
-    const sessions = [...new Set([...(await sessionIds(runtime.projectsRoot, project)), ...(await sessionIds(raw, project))])].sort();
-    const folder: FolderCounts = { folder: index + 1, sessions: 0, excluded: 0 };
-    for (const session of sessions) {
+    const inProjects = await sessionIds(runtime.projectsRoot, project);
+    const inRaw = await sessionIds(raw, project);
+    const ids = new Set([...inProjects.ids, ...inRaw.ids, ...(logged.get(project) ?? [])]);
+    counts.notSessions += new Set([...inProjects.others, ...inRaw.others].filter((name) => !ids.has(name))).size;
+    const folder: FolderCounts = { folder: index + 1, sessions: 0, excluded: 0, hits: { projects: emptyHits(), raw: emptyHits() } };
+    for (const session of [...ids].sort()) {
       const verdict = await judge(terms, await filesOf(runtime, project, session));
       folder.sessions += 1;
+      const sources = new Set<Source>();
       for (const hit of verdict.hits) {
-        counts.bySource[hit.source][hit.main ? 'main' : 'subagent'] += 1;
+        const kind = hit.main ? 'main' : 'subagent';
+        counts.bySource[hit.source][kind] += 1;
+        folder.hits[hit.source][kind] += 1;
+        sources.add(hit.source);
         const key = `${project}/${hit.key}`;
         if (!distinct.has(key)) {
           distinct.add(key);
-          counts.hitFiles[hit.main ? 'main' : 'subagent'] += 1;
+          counts.hitFiles[kind] += 1;
         }
       }
+      for (const source of sources) counts.bySource[source].sessions += 1;
       if (!verdict.excluded) continue;
       folder.excluded += 1;
       excluded.push({ project, session });
@@ -216,11 +261,13 @@ export const scanStore = async (runtime: SessionsRuntime, termsFile: string): Pr
 export const sessionsExclusions = async (runtime: SessionsRuntime, where: ExclusionPaths): Promise<Outcome> => {
   const { counts, excluded } = await scanStore(runtime, where.terms);
   await mkdir(dirname(where.list), { recursive: true });
-  await writeFile(where.list, excluded.map((entry) => JSON.stringify(entry)).join('\n') + (excluded.length === 0 ? '' : '\n'));
+  // The list holds real folder names, which can carry a term, so it is readable by its owner only (as the store's other local-only files are).
+  await writeFile(where.list, excluded.map((entry) => JSON.stringify(entry)).join('\n') + (excluded.length === 0 ? '' : '\n'), { mode: 0o600 });
+  const { projects, raw } = counts.bySource;
   const lines = [
-    `Scanned ${String(counts.sessions)} sessions in ${String(counts.folders.length)} folders: ${String(counts.excluded)} excluded, ${String(counts.kept)} kept.`,
+    `Scanned ${String(counts.sessions)} sessions in ${String(counts.folders.length)} folders: ${String(counts.excluded)} excluded, ${String(counts.kept)} kept; ${String(counts.notSessions)} directories are not sessions.`,
     `Excluded for a term: ${String(counts.reasons.term)}; no raw to scan: ${String(counts.reasons.noRaw)}; no term file: ${String(counts.reasons.noTerms)}; unreadable: ${String(counts.reasons.unreadable)}.`,
-    `Files holding a term: ${String(counts.hitFiles.main)} main, ${String(counts.hitFiles.subagent)} subagent (harness folders ${String(counts.bySource.projects.main + counts.bySource.projects.subagent)}, raw archive ${String(counts.bySource.raw.main + counts.bySource.raw.subagent)}).`,
+    `Files holding a term: ${String(counts.hitFiles.main)} main, ${String(counts.hitFiles.subagent)} subagent (harness folders ${String(projects.main + projects.subagent)} in ${String(projects.sessions)} sessions, raw archive ${String(raw.main + raw.subagent)} in ${String(raw.sessions)} sessions).`,
     'The excluded list is written to a local file outside the repository.',
   ];
   return { document: { ok: true, ...counts }, text: lines.join('\n') };
