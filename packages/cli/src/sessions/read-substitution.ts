@@ -3,6 +3,7 @@
 // drift (the work changed, not the choice of tool), and rule commits. It says two shares moved oppositely, not that one call replaced another.
 import { UNKNOWN } from './cells.js';
 import { candidateOf, differenceOf, screen, TRIALS_FLOOR, type Candidate, type DeriveRelation, type Estimate } from './read-order.js';
+import type { Read } from './read.js';
 import { rate, wilson } from './read-support.js';
 import { boundariesOf, shareIn, toolsAt, type Boundary, type Bucket } from './read-version-boundary.js';
 
@@ -45,16 +46,16 @@ const pairCandidate = (boundary: Boundary, rising: string, falling: string): Can
 /** Both moves point the way the read claims: `moved` asks only that each is large, not its sign. */
 const opposed = ({ gates }: Candidate): boolean => gates.every((gate) => gate.value > 0);
 
-export const deriveSubstitution: DeriveRelation = (reads) =>
-  screen(
-    boundariesOf(reads).flatMap((boundary) => {
-      const keys = toolsAt(boundary);
-      return keys.flatMap((rising) =>
-        keys.filter((falling) => falling !== rising && levelOf(falling) === levelOf(rising)).flatMap((falling) => {
-          const candidate = pairCandidate(boundary, rising, falling);
-          return candidate === undefined ? [] : [candidate];
-        }),
-      );
-    }),
-    opposed,
-  );
+/** The pairs a store's change reads allow, above the floor, whether or not any of them moved. */
+export const substitutionCandidates = (reads: readonly Read[]): Candidate[] =>
+  boundariesOf(reads).flatMap((boundary) => {
+    const keys = toolsAt(boundary);
+    return keys.flatMap((rising) =>
+      keys.filter((falling) => falling !== rising && levelOf(falling) === levelOf(rising)).flatMap((falling) => {
+        const candidate = pairCandidate(boundary, rising, falling);
+        return candidate === undefined ? [] : [candidate];
+      }),
+    );
+  });
+
+export const deriveSubstitution: DeriveRelation = (reads) => screen(substitutionCandidates(reads), opposed);
