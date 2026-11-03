@@ -162,12 +162,14 @@ describe('the public text states facts only', () => {
     expect(description).not.toMatch(/nothing (leaves|is sent)/i);
   });
 
-  it.each([['packages/cli/README.md', join(cliFolder, 'README.md')], ['README.md', join(root, 'README.md')]])('%s says raw/ is unredacted, what the harness sends, and that paid agents are not open', (_name, file) => {
+  it.each([['packages/cli/README.md', join(cliFolder, 'README.md')], ['README.md', join(root, 'README.md')]])('%s says raw/ is unredacted, what the harness sends, where <config> is, and that paid agents are not open', (_name, file) => {
     const text = readFileSync(file, 'utf8');
     expect(text).toContain('raw transcripts');
     expect(text).toMatch(/unredacted/);
     expect(text).toContain('oars itself sends nothing; the hooks and the MCP tool add recall text to the running session, and your harness sends that to its model like any other context.');
     expect(text).toContain(NOT_OPEN);
+    expect(text).toContain('%APPDATA%');
+    expect(text).toContain('~/.config');
   });
 
   it('the root README gives the hook commands in the forms that run, with --scope user and --schedule off', () => {
