@@ -1,5 +1,5 @@
 // Cost (t752, rank 3): tokens and wall time per prompt, by prompt class, model, and ISO week. Confounders: class drift, subagent work outside the prompt's own usage, and
-// task size, which nothing here can see. Tokens are plain counts, not priced.
+// task size, which nothing here can see. Tokens are plain counts, not priced. A prompt with no wall time adds no seconds and stays in the denominator, so seconds per prompt understates.
 import { bucketFields, UNKNOWN, type Cell } from './cells.js';
 import { motifName } from './motif.js';
 import { body, groupBy, rate, settled, total, type DeriveFamily } from './read-support.js';
@@ -29,7 +29,7 @@ export const deriveCost: DeriveFamily = ({ pool }) => {
     const cells = group.map(({ cell }) => cell);
     const prompts = total(cells, settled);
     return [
-      body('cost', 'per-prompt-by-class', '1', cells, {
+      body('cost', cells, {
         slice: { class: motifName(first.motif), model: first.model, week: weekOf(first.cell) },
         value: { tokensPerPrompt: Math.round(total(cells, (cell) => cell.tokens) / prompts), secondsPerPrompt: Math.round(total(cells, (cell) => cell.durationMs) / prompts / 1000), errorShare: rate(total(cells, (cell) => cell.failed), prompts) },
         n: prompts,

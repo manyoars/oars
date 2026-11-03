@@ -22,6 +22,21 @@ export const contentHash = (value: unknown): string => createHash('sha256').upda
 export const FAMILIES = ['recovery', 'fit', 'cost', 'change', 'live', 'adoption', 'method', 'next-step'] as const;
 export type Family = (typeof FAMILIES)[number];
 
+/**
+ * Each family's method and its version. A rule change bumps its version here, and the pool's version hashes this table, so a stored file of the old rule is not served.
+ * It lives here and not beside each family because the pool hash needs it, and a family module imports the cells the hash is in.
+ */
+export const METHODS: { readonly [family in Family]: { readonly name: string; readonly version: string } } = {
+  recovery: { name: 'signature-record', version: '1' },
+  fit: { name: 'failure-rate', version: '1' },
+  cost: { name: 'per-prompt-by-class', version: '1' },
+  change: { name: 'share-in-version-bucket', version: '1' },
+  live: { name: 'day-against-trailing-week', version: '1' },
+  adoption: { name: 'share-and-span', version: '1' },
+  method: { name: 'shape-share-by-model', version: '1' },
+  'next-step': { name: 'next-action-counts', version: '1' },
+};
+
 /** `all`, or `unexposed`: only steps outside any recall's consequence window, so a read cannot mistake the pool's influence for the world. */
 export type ReadBasis = 'all' | 'unexposed';
 
