@@ -221,9 +221,7 @@ export const stageCodex = (root: string, files: readonly CodexFixture[]): string
   for (const file of files) {
     const dir = file.archived === true ? join(home, 'archived_sessions') : join(home, 'sessions', '2026', '06', '01');
     mkdirSync(dir, { recursive: true });
-    const text = typeof file.lines === 'string' ? file.lines : `${file.lines.map((line) => JSON.stringify(line)).join('
-')}
-`;
+    const text = typeof file.lines === 'string' ? file.lines : `${file.lines.map((line) => JSON.stringify(line)).join(String.fromCharCode(10))}${String.fromCharCode(10)}`;
     const name = `rollout-2026-06-01T10-00-00-${file.id}.jsonl`;
     if (file.compressed === true) writeFileSync(join(dir, `${name}.zst`), zstdCompressSync(Buffer.from(text)));
     else writeFileSync(join(dir, name), text);
