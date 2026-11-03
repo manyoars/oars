@@ -81,7 +81,7 @@ export const motifsOf = (line: readonly WindowStep[]): MotifWindow[] => {
 
 const nameOfField = (value: unknown): string => {
   if (!Array.isArray(value)) return String(value);
-  return value.map((item: string | PullIdentity) => (typeof item === 'string' ? item : `${item.registry}:${item.name}`)).join(',');
+  return value.map((item: string | PullIdentity) => (typeof item === 'string' ? item : `${item.registry}:${item.name}${item.version === null ? '' : `@${item.version}`}`)).join(',');
 };
 
 const nameOfStep = (step: WindowStep): string => {
