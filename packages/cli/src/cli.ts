@@ -330,7 +330,7 @@ const buildProgram = (deps: RunDeps, argv: string[]): Command => {
 
   sessions
     .command('read')
-    .description('derived reads of your own sessions: recovery, fit, cost, change, live, adoption, method, and next-step, each row stating its clusters')
+    .description('derived reads of your own sessions at every order, each row stating its order and clusters: rates at order 1, relations between them at order 2, one labeled experiment at order 3, and what this store cannot read')
     .option('--family <name>', `only this family: ${FAMILIES.join(', ')}`)
     .option('--slice <axis=value>', 'only reads holding this value on this axis, such as model=claude-opus-5-5 (repeatable; all must match)', collect)
     .action(async (_options: OptionValues, command: Command) => {

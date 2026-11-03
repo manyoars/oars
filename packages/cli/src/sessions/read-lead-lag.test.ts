@@ -179,7 +179,8 @@ describe('lead-lag over the real families', () => {
   });
 
   it('fails a store where a burst day raises a tool share and failures together: one shared day must not read as a lead', () => {
-    const bursts = drawn(5);
+    // A seed where reading the day twice passes the check: pairing adjacent moves passes 4 of 6 such stores, and this pairing none.
+    const bursts = drawn(6);
     const from = daily(DAYS, (tool, day) => 150 + Math.floor(at(bursts, tool, day) * 250), (tool, day) => Math.floor(at(bursts, tool, day) * 90));
     expect(only(deriveDayMove(firstOrderOf(from))).value.check).toBe('failed');
   });

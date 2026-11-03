@@ -3,7 +3,7 @@
 
 import { closedFrame, utcDay } from './frame.js';
 import { classMotif, motifsOf, stepsOfCall, type CountedStep, type Motif } from './motif.js';
-import { cellRef, contentHash } from './read.js';
+import { cellRef, contentHash, READS_VERSION } from './read.js';
 import { EXTRACTOR_VERSION, harnessOf, type Frame, type Harness, type PromptObservation, type SessionObservation, type ToolObservation } from './schema.js';
 import type { Store } from './store.js';
 
@@ -187,6 +187,6 @@ export interface Pool {
 export const poolOf = (set: CellSet): Pool => ({
   cells: set.cells,
   motifs: new Map(set.motifs.map((motif) => [motif.motifId, motif])),
-  version: contentHash([EXTRACTOR_VERSION, set.cells.map(cellIdOf)]),
+  version: contentHash([EXTRACTOR_VERSION, READS_VERSION, set.cells.map(cellIdOf)]),
   lastDay: set.cells.reduce<string | null>((last, cell) => (cell.day !== UNKNOWN && (last === null || cell.day > last) ? cell.day : last), null),
 });

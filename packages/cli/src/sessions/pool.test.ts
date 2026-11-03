@@ -2,8 +2,11 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
+import { cellIdOf, deriveCells, poolOf } from './cells.js';
 import { poolFiles, refreshPool } from './pool.js';
 import { prompt, session, store, tool } from './pool-fixture.js';
+import { contentHash, READS_VERSION } from './read.js';
+import { EXTRACTOR_VERSION } from './schema.js';
 
 const dirs: string[] = [];
 const storeDir = (): string => {
@@ -45,6 +48,12 @@ describe('refreshPool', () => {
     expect(readFileSync(file, 'utf8')).toBe(text);
     writeFileSync(file, 'not json\n');
     await expect(refreshPool(dir, one)).rejects.toThrow();
+  });
+
+  it('pins the pool to the families that read it, so a family added later is not hidden by a file written before it', () => {
+    const from = store({ sessions: [session('s1')], prompts: [prompt('s1', 0)], tools: [tool('s1', 1, 'Read')] });
+    const set = deriveCells(from);
+    expect(poolOf(set).version).toBe(contentHash([EXTRACTOR_VERSION, READS_VERSION, set.cells.map(cellIdOf)]));
   });
 
   it('keeps a pool version file as first written, and gives new data a new file', async () => {
