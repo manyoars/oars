@@ -1,8 +1,8 @@
 // Runs the bundled handler and its D1 store under the Workers runtime (Miniflare's workerd), with no account, no Docker, and no network.
 import { createHash } from 'node:crypto';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { frame, prompt, session, step, store, tool } from '../../cli/src/sessions/pool-fixture.js';
-import { sessionsOf, skeletonOf, type SessionSkeleton } from '../../cli/src/sessions/pool-wire.js';
+import { parseSkeleton, sessionsOf, skeletonOf, type SessionSkeleton } from '../../cli/src/sessions/pool-wire.js';
 import { sampleSkeleton } from './sample.js';
 import { startPool, stubUser, type Answer, type TestPool } from './test-pool.js';
 import worker from './worker.js';
@@ -140,6 +140,110 @@ describe('deposits per account', () => {
       const token = await signedIn(limited, '4003');
       expect((await limited.post('/v1/deposits', sampleSkeleton('0000000000000001'), token)).status).toBe(201);
       expect((await limited.post('/v1/deposits', sampleSkeleton('0000000000000002'), token)).status).toBe(201);
+    } finally {
+      await limited.dispose();
+    }
+  }, 60_000);
+});
+
+describe('a frame day in the future', () => {
+  it('is refused under the runtime, naming the field, storing nothing', async () => {
+    const before = await storedCount();
+    const { status, json } = await post(JSON.stringify(sampleSkeleton('00000000000000f1', { languages: ['typescript'] }, '9999-12-31')));
+    expect(status).toBe(422);
+    expect(json).toMatchObject({ error: 'closed_vocabulary', field: 'transcripts[0].frame.day' });
+    expect(await storedCount()).toBe(before);
+  });
+
+  describe('against a fixed clock', () => {
+    // Outside the runtime, because workerd keeps its own clock and a test reading the real one could cross midnight between the two sides.
+    const send = async (sent: SessionSkeleton): Promise<Response> => {
+      const row = { account: 'acct-1', covenant: 'v1' };
+      const db = { prepare: () => ({ bind: () => ({ first: () => Promise.resolve(row), all: () => Promise.resolve({ results: [] }), run: () => Promise.resolve({ meta: { changes: 1 } }) }) }) };
+      const request = new Request('http://pool.test/v1/deposits', { method: 'POST', body: JSON.stringify(sent), headers: { authorization: `Bearer ${TOKEN}` } });
+      return worker.fetch(request, { DB: db, COVENANT_VERSION: 'v1' });
+    };
+    const onDay = (day: string): SessionSkeleton => sampleSkeleton('00000000000000f2', { languages: ['typescript'] }, day);
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it('takes tomorrow UTC, since a client clock can run a little ahead, and refuses the day after', async () => {
+      vi.useFakeTimers({ toFake: ['Date'], now: Date.parse('2026-11-03T23:59:00Z') });
+      expect((await send(onDay('2026-11-04'))).status).toBe(201);
+      const late = await send(onDay('2026-11-05'));
+      expect(late.status).toBe(422);
+      expect(await late.json()).toMatchObject({ error: 'closed_vocabulary', field: 'transcripts[0].frame.day' });
+    });
+
+    it("names a prompt's frame when only that one is late, and takes a frame with no day", async () => {
+      vi.useFakeTimers({ toFake: ['Date'], now: Date.parse('2026-11-03T12:00:00Z') });
+      const sent = onDay('2026-11-03');
+      const late = { ...sent, transcripts: sent.transcripts.map((transcript) => ({ ...transcript, prompts: transcript.prompts.map((entry) => ({ ...entry, frame: { ...entry.frame, day: '2027-01-01' } })) })) };
+      const response = await send(late);
+      expect(response.status).toBe(422);
+      expect(await response.json()).toMatchObject({ error: 'closed_vocabulary', field: 'transcripts[0].prompts[0].frame.day' });
+      const undated = { ...sent, transcripts: sent.transcripts.map((transcript) => ({ ...transcript, frame: { ...transcript.frame, day: null }, prompts: transcript.prompts.map((entry) => ({ ...entry, frame: { ...entry.frame, day: null } })) })) };
+      expect((await send(undated)).status).toBe(201);
+    });
+  });
+});
+
+describe('stored bytes per account', () => {
+  const sized = (id: string): number => {
+    const parsed = parseSkeleton(sampleSkeleton(id));
+    if (!parsed.ok) throw new Error('the sample does not parse');
+    return JSON.stringify(parsed.skeleton).length;
+  };
+  const signedIn = async (limited: TestPool, id: string): Promise<string> => {
+    const { token } = await limited.signIn('github', stubUser(id));
+    await limited.post('/v1/covenant/accept', { version: 'v1' }, token);
+    return token;
+  };
+
+  it('takes deposits up to the budget, refuses the next by name, and still takes a redeposit that fits', async () => {
+    const budget = sized('0000000000000001') + sized('0000000000000002');
+    const limited = await startPool({ MAX_DEPOSIT_BYTES_PER_ACCOUNT: String(budget) });
+    try {
+      const token = await signedIn(limited, '5001');
+      const sent = (id: string): Promise<Answer> => limited.post('/v1/deposits', sampleSkeleton(id), token);
+      expect((await sent('0000000000000001')).status).toBe(201);
+      expect((await sent('0000000000000002')).status).toBe(201);
+      expect(await sent('0000000000000003')).toMatchObject({ status: 403, json: { error: 'deposit_limit' } });
+      // At the budget exactly: only a sum that leaves out the row being replaced lets this through.
+      expect((await sent('0000000000000002')).status).toBe(201);
+      expect(await (await limited.db()).prepare('SELECT COUNT(*) AS count FROM deposits').first('count')).toBe(2);
+      // One account's budget is its own.
+      expect((await limited.post('/v1/deposits', sampleSkeleton('0000000000000003'), await signedIn(limited, '5002'))).status).toBe(201);
+    } finally {
+      await limited.dispose();
+    }
+  }, 60_000);
+
+  it('refuses a redeposit that would grow past the budget, and keeps the row it would have replaced', async () => {
+    const budget = sized('0000000000000001') + sized('0000000000000002');
+    const limited = await startPool({ MAX_DEPOSIT_BYTES_PER_ACCOUNT: String(budget) });
+    try {
+      const token = await signedIn(limited, '5003');
+      const sent = (id: string): Promise<Answer> => limited.post('/v1/deposits', sampleSkeleton(id), token);
+      expect((await sent('0000000000000001')).status).toBe(201);
+      expect((await sent('0000000000000002')).status).toBe(201);
+      const db = await limited.db();
+      // A held row grown by hand: the same deposit no longer fits beside it.
+      await db.prepare("UPDATE deposits SET skeleton = skeleton || ' ' WHERE id = '0000000000000001'").run();
+      expect(await sent('0000000000000002')).toMatchObject({ status: 403, json: { error: 'deposit_limit' } });
+      expect(await db.prepare('SELECT COUNT(*) AS count FROM deposits').first('count')).toBe(2);
+    } finally {
+      await limited.dispose();
+    }
+  }, 60_000);
+
+  it('falls back to its default when the binding is not a positive whole number', async () => {
+    const limited = await startPool({ MAX_DEPOSIT_BYTES_PER_ACCOUNT: 'many' });
+    try {
+      const token = await signedIn(limited, '5004');
+      expect((await limited.post('/v1/deposits', sampleSkeleton('0000000000000001'), token)).status).toBe(201);
     } finally {
       await limited.dispose();
     }

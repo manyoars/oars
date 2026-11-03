@@ -1,5 +1,6 @@
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { anyNumber, anyText, containing, fieldOf, matching, startPool, stubUser, type TestPool, textOf } from './test-pool.js';
+import worker from './worker.js';
 
 let pool: TestPool;
 
@@ -128,5 +129,33 @@ describe.each([
     await withHtmlAt(userUrl, async () => {
       expect(await pool.post('/v1/login/poll', { provider, deviceCode })).toMatchObject(providerError);
     });
+  });
+});
+
+describe.each([
+  { provider: 'github', deviceUrl: 'https://github.com/login/device/code', tokenUrl: 'https://github.com/login/oauth/access_token', userUrl: 'https://api.github.com/user' },
+  { provider: 'google', deviceUrl: 'https://oauth2.googleapis.com/device/code', tokenUrl: 'https://oauth2.googleapis.com/token', userUrl: 'https://openidconnect.googleapis.com/v1/userinfo' },
+])('$provider out of reach', ({ provider, deviceUrl, tokenUrl, userUrl }) => {
+  // Outside the runtime, where a stand-in fetch can reject the way a network failure does.
+  const db = { prepare: () => ({ bind: () => ({ first: () => Promise.resolve(null), all: () => Promise.resolve({ results: [] }), run: () => Promise.resolve({ meta: { changes: 1 } }) }) }) };
+  const env = { DB: db, PSEUDONYM_KEY: 'k', SLICE_SIGNING_KEY: '{}', GITHUB_CLIENT_ID: 'c', GOOGLE_CLIENT_ID: 'c', GOOGLE_CLIENT_SECRET: 's' };
+  const post = (path: string, body: object): Promise<Response> => worker.fetch(new Request(`http://pool.test${path}`, { method: 'POST', body: JSON.stringify(body) }), env);
+  const failingAt = (url: string): void => {
+    vi.stubGlobal('fetch', (input: string) => (input === url ? Promise.reject(new TypeError('network down')) : Promise.resolve(new Response(JSON.stringify({ access_token: 'an-access-token' })))));
+  };
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it.each([
+    ['starting a device flow', '/v1/login/start', deviceUrl],
+    ['polling for the token', '/v1/login/poll', tokenUrl],
+    ['reading the profile', '/v1/login/poll', userUrl],
+  ])('is a named provider_error when %s', async (_step, path, url) => {
+    failingAt(url);
+    const response = await post(path, { provider, deviceCode: 'a-device-code' });
+    expect(response.status).toBe(502);
+    expect(await response.json()).toMatchObject({ error: 'provider_error' });
   });
 });
