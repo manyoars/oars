@@ -23,7 +23,7 @@ const DERIVERS: readonly DeriveFamily[] = [deriveFit, deriveCost, deriveChange, 
 const NO_USAGE = { input: 0, cacheWrite: 0, cacheRead: 0, output: 0, thinking: 0 };
 
 /** A skeleton's transcript as the record `deriveCells` reads. Everything a skeleton leaves out stays empty, so no derivation here can come to depend on it unnoticed. */
-const sessionRecord = (id: string, parent: string | null, { harness, frame }: SkeletonTranscript): SessionObservation => ({
+const sessionRecord = (id: string, parent: string | null, spawnedIn: string | null, { harness, frame }: SkeletonTranscript): SessionObservation => ({
   kind: 'session',
   cv: '',
   sid: '',
@@ -32,7 +32,7 @@ const sessionRecord = (id: string, parent: string | null, { harness, frame }: Sk
   parent,
   agentType: null,
   spawnedBy: null,
-  spawnedIn: null,
+  spawnedIn,
   rev: 1,
   at: '',
   bytes: 0,
@@ -120,10 +120,11 @@ const toolRecords = (id: string, main: string, { tools }: SkeletonTranscript): T
 export const storeOf = (skeletons: readonly SessionSkeleton[]): Store => {
   const store: Store = { sessions: [], prompts: [], errors: [], subagents: [], tools: [], newerCaptures: 0 };
   for (const { id, transcripts } of skeletons) {
-    const main = `${id}#0`;
+    const nameOf = (index: number): string => `${id}#${String(index)}`;
+    const main = nameOf(0);
     transcripts.forEach((transcript, index) => {
-      const session = `${id}#${String(index)}`;
-      (index === 0 ? store.sessions : store.subagents).push(sessionRecord(session, index === 0 ? null : main, transcript));
+      const session = nameOf(index);
+      (index === 0 ? store.sessions : store.subagents).push(sessionRecord(session, index === 0 ? null : main, transcript.spawnedIn === null ? null : nameOf(transcript.spawnedIn), transcript));
       store.prompts.push(...promptRecords(session, transcript));
       store.tools.push(...toolRecords(session, main, transcript));
     });

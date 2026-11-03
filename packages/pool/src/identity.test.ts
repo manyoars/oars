@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { anyNumber, anyText, containing, matching, startPool, stubUser, type TestPool, textOf } from './test-pool.js';
+import { anyNumber, anyText, containing, fieldOf, matching, startPool, stubUser, type TestPool, textOf } from './test-pool.js';
 
 let pool: TestPool;
 
@@ -35,7 +35,9 @@ describe.each([
     pool.stub.approve(deviceCode, stubUser('101'));
     const polled = await pool.post('/v1/login/poll', { provider, deviceCode });
     expect(polled.status).toBe(200);
-    expect(polled.json).toMatchObject({ status: 'ok', token: anyText(), account: matching(/^acct_[0-9a-f]{32}$/), expiresAt: anyNumber(), signingKey: pool.signingKey() });
+    expect(polled.json).toMatchObject({ status: 'ok', token: anyText(), account: matching(/^acct_[0-9a-f]{32}$/), expiresAt: anyNumber() });
+    // Exactly the public half: a matcher on the whole answer would still pass if the private `d` came along.
+    expect(fieldOf(polled.json, 'signingKey')).toEqual(pool.signingKey());
   });
 
   it('keeps one pseudonym across sign-ins, and a new token each time', async () => {
@@ -90,4 +92,41 @@ describe('a login request that cannot go on', () => {
       await bare.dispose();
     }
   }, 60_000);
+});
+
+describe.each([
+  { provider: 'github', deviceUrl: 'https://github.com/login/device/code', tokenUrl: 'https://github.com/login/oauth/access_token', userUrl: 'https://api.github.com/user' },
+  { provider: 'google', deviceUrl: 'https://oauth2.googleapis.com/device/code', tokenUrl: 'https://oauth2.googleapis.com/token', userUrl: 'https://openidconnect.googleapis.com/v1/userinfo' },
+])('$provider answering HTML', ({ provider, deviceUrl, tokenUrl, userUrl }) => {
+  const providerError = { status: 502, json: { error: 'provider_error' } };
+
+  const withHtmlAt = async (url: string, run: () => Promise<void>): Promise<void> => {
+    pool.stub.html.add(url);
+    try {
+      await run();
+    } finally {
+      pool.stub.html.clear();
+    }
+  };
+
+  it('is a named provider_error when starting a device flow', async () => {
+    await withHtmlAt(deviceUrl, async () => {
+      expect(await pool.post('/v1/login/start', { provider })).toMatchObject(providerError);
+    });
+  });
+
+  it('is a named provider_error when polling for the token', async () => {
+    const deviceCode = textOf((await pool.post('/v1/login/start', { provider })).json, 'deviceCode');
+    await withHtmlAt(tokenUrl, async () => {
+      expect(await pool.post('/v1/login/poll', { provider, deviceCode })).toMatchObject(providerError);
+    });
+  });
+
+  it('is a named provider_error when reading the profile', async () => {
+    const deviceCode = textOf((await pool.post('/v1/login/start', { provider })).json, 'deviceCode');
+    pool.stub.approve(deviceCode, stubUser('301'));
+    await withHtmlAt(userUrl, async () => {
+      expect(await pool.post('/v1/login/poll', { provider, deviceCode })).toMatchObject(providerError);
+    });
+  });
 });

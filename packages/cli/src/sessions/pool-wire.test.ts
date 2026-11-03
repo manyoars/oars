@@ -87,6 +87,25 @@ describe('skeletonOf', () => {
   });
 });
 
+describe('a nested spawn', () => {
+  it('names the transcript that spawned each subagent by its position, since a skeleton holds no session id', () => {
+    const skeleton = skeletonFrom(
+      store({
+        sessions: [session('s1', { frame: framed })],
+        subagents: [
+          session('s1~agent-x', { parent: 's1', spawnedIn: 's1', frame: framed }),
+          session('s1~agent-y', { parent: 's1', spawnedIn: 's1~agent-x', frame: framed }),
+          session('s1~agent-z', { parent: 's1', spawnedIn: 's1~not-held', frame: framed }),
+        ],
+        prompts: [framedPrompt('s1', 0)],
+      }),
+    );
+    expect(skeleton?.transcripts.map((transcript) => transcript.spawnedIn)).toEqual([null, 0, 1, null]);
+    expect(parseSkeleton(JSON.parse(JSON.stringify(skeleton)))).toEqual({ ok: true, skeleton });
+    expect(JSON.stringify(skeleton)).not.toContain('agent-x');
+  });
+});
+
 describe('stacksOf', () => {
   it('reads every language and framework of the frames, sorted and single', () => {
     const skeleton = skeletonFrom(
@@ -122,9 +141,27 @@ describe('parseSkeleton refuses, and names the field', () => {
     { name: 'a missing field', path: ['transcripts', 0, 'frame'], value: undefined, field: 'transcripts[0].frame' },
     { name: 'no transcript at all', path: ['transcripts'], value: [], field: 'transcripts' },
     { name: 'a harness outside the list', path: ['transcripts', 0, 'harness'], value: 'acme', field: 'transcripts[0].harness' },
+    { name: 'a fraction in a count', path: ['transcripts', 0, 'prompts', 0, 'errors'], value: 1.5, field: 'transcripts[0].prompts[0].errors' },
+    { name: 'a count no whole number holds', path: ['transcripts', 0, 'prompts', 0, 'usage', 'input'], value: 1e308, field: 'transcripts[0].prompts[0].usage.input' },
+    { name: 'a fraction in a step number', path: [...firstStep, 'seg'], value: 1.5, field: `${stepField}.seg` },
+    { name: 'a wall time past any real prompt', path: ['transcripts', 0, 'prompts', 0, 'wallSec'], value: 1e308, field: 'transcripts[0].prompts[0].wallSec' },
+    { name: 'a spawner no transcript holds', path: ['transcripts', 0, 'spawnedIn'], value: 5, field: 'transcripts[0].spawnedIn' },
+    { name: 'a fraction for a spawner', path: ['transcripts', 0, 'spawnedIn'], value: 0.5, field: 'transcripts[0].spawnedIn' },
   ];
   it.each(cases)('$name', ({ path, value, field }) => {
     expect(refusedField(sent(path, value))).toBe(field);
+  });
+
+  it('takes a fraction of a second as wall time', () => {
+    expect(refusedField(sent(['transcripts', 0, 'prompts', 0, 'wallSec'], 1.5))).toBe('accepted');
+  });
+
+  it('refuses a skeleton holding no prompt and no tool, which would otherwise count as a deposit', () => {
+    const [transcript] = sample().transcripts;
+    if (transcript === undefined) throw new Error('the sample has no transcript');
+    expect(refusedField(sent(['transcripts', 0], { ...transcript, prompts: [], tools: [] }))).toBe('transcripts');
+    expect(refusedField(sent(['transcripts', 0], { ...transcript, prompts: [] }))).toBe('accepted');
+    expect(refusedField(sent(['transcripts', 0], { ...transcript, tools: [] }))).toBe('accepted');
   });
 
   it('refuses what is not an object', () => {
@@ -155,6 +192,20 @@ describe('parseSkeleton refuses, and names the field', () => {
     expect(refusedField(pull({ name: 'acme-private' }))).toBe(`${stepField}.identity.pulls[0].name`);
     expect(refusedField(pull({ registry: 'acme' }))).toBe(`${stepField}.identity.pulls[0].registry`);
     expect(refusedField(pull({ version: 'latest-acme' }))).toBe(`${stepField}.identity.pulls[0].version`);
+  });
+
+  it('holds a version tail to numbers and known prerelease words', () => {
+    const pull = (version: string): unknown => withStep({ identity: { program: 'npm', sub: null, flags: [], pulls: [{ registry: 'npm', name: 'zod', version }] } });
+    for (const version of ['1.2.3', '^4.0.0', 'v2.x', '1.2.3-rc.1', '1.0.0-beta.2', '1.0.0-next.20250101', '1.0.0+5', '1.0.0-SNAPSHOT']) expect(refusedField(pull(version))).toBe('accepted');
+    for (const version of ['1.0.0-acme-secret', '1.0.0+sha.5114f85', '1.0.0-rc.acme', '1.0.0-']) expect(refusedField(pull(version))).toBe(`${stepField}.identity.pulls[0].version`);
+    const harness = (version: string): string => refusedField(sent(['transcripts', 0, 'frame', 'harnessVersion'], version));
+    for (const version of ['2.1.314', '2.0.0-beta.1', '1.7.0-nightly', '2.0.0-dev.20250101']) expect(harness(version)).toBe('accepted');
+    for (const version of ['1.0.0-acme-secret', '1.0.0.acme', '1.0.0+abc123']) expect(harness(version)).toBe('transcripts[0].frame.harnessVersion');
+  });
+
+  // A pin, not an endorsement: this pattern is the vocabulary spec's to close, so a change to it shows up here. See the report for t758.
+  it('still takes any tool name under a public MCP server', () => {
+    expect(refusedField(withStep({ action: 'mcp.call', native: LITERAL, identity: { server: 'github', tool: 'acme_secret_deploy' } }))).toBe('accepted');
   });
 
   it('holds an edge to its kinds', () => {
