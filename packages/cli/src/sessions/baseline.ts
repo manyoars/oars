@@ -7,13 +7,16 @@ export const BASELINE_MIN_CALLS = 1000;
 /** A baseline needs this many other qualifying weeks (spec 5.4 item 1). */
 export const BASELINE_MIN_WEEKS = 4;
 /** F's bounds: a median distance at or under the low is F 1, at or over the high is F 0. */
-export const FIT_LOW = 1 / 10;
-export const FIT_HIGH = 2 / 5;
+export const FIT_LOW: Fraction = { n: 1n, d: 10n };
+export const FIT_HIGH: Fraction = { n: 2n, d: 5n };
 
-/** The fixed bin edges of the numeric dimensions: a value goes in the first bin whose edge it is under, else the last. */
+/**
+ * The fixed bin edges of the numeric dimensions: a value goes in the first bin whose edge it is under, else the last, so a value exactly on an edge
+ * lands in the upper bin. The cache-read share's edges are tenths (k / 10) and compare as integers: `cacheRead * 10 < k * input`.
+ */
 export const DURATION_EDGES_MS: readonly number[] = [100, 1000, 10_000, 60_000];
 export const WALL_EDGES_SEC: readonly number[] = [5, 30, 120, 600];
-export const CACHE_SHARE_EDGES: readonly number[] = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9];
+export const CACHE_SHARE_TENTHS: readonly number[] = [1, 2, 3, 4, 5, 6, 7, 8, 9];
 export const OUTPUT_PER_TURN_EDGES: readonly number[] = [50, 200, 500, 1000, 2000];
 
 const DAY_MS = 86_400_000;
@@ -49,6 +52,12 @@ export interface SelfBaselineResult {
   f: number | null;
 }
 
+/** An exact rational with a positive denominator: the distances, `m`, and `F` stay in this form until the one rounding at the end (spec 2.2, no float). */
+export interface Fraction {
+  n: bigint;
+  d: bigint;
+}
+
 type Histogram = Map<string, number>;
 type Histograms = Map<Dimension, Histogram>;
 
@@ -61,18 +70,45 @@ export const weekOf = (ts: string | null): number | null => {
   return day - ((((day / DAY_MS) + 3) % 7) * DAY_MS);
 };
 
-/** The median; the mean of the middle two for an even count. Never called with an empty list. */
-export const medianOf = (values: readonly number[]): number => {
-  const sorted = [...values].sort((a, b) => a - b);
-  const mid = sorted.length >> 1;
-  return sorted.length % 2 === 1 ? (sorted[mid] ?? 0) : ((sorted[mid - 1] ?? 0) + (sorted[mid] ?? 0)) / 2;
+const compare = (a: Fraction, b: Fraction): number => {
+  const diff = a.n * b.d - b.n * a.d;
+  return diff < 0n ? -1 : diff > 0n ? 1 : 0;
 };
 
-/** F = 1 - clamp((m - 1/10) / (2/5 - 1/10)). */
-export const fitOf = (m: number): number => 1 - Math.min(1, Math.max(0, (m - FIT_LOW) / (FIT_HIGH - FIT_LOW)));
+const minus = (a: Fraction, b: Fraction): Fraction => ({ n: a.n * b.d - b.n * a.d, d: a.d * b.d });
 
-const binOf = (value: number, edges: readonly number[]): string => {
-  const index = edges.findIndex((edge) => value < edge);
+/** Rounds half-even to 4 places, once, at the end (spec 3.2). A value is never negative here. */
+const roundTo4 = (value: Fraction): number => {
+  const scaled = value.n * 10_000n;
+  const quotient = scaled / value.d;
+  const twiceRest = 2n * (scaled - quotient * value.d);
+  const up = twiceRest > value.d || (twiceRest === value.d && quotient % 2n === 1n);
+  return Number(up ? quotient + 1n : quotient) / 10_000;
+};
+
+/** The median; the mean of the middle two for an even count. Never called with an empty list. */
+export const medianOf = (values: readonly Fraction[]): Fraction => {
+  const sorted = [...values].sort(compare);
+  const mid = sorted.length >> 1;
+  const upper = sorted[mid] ?? { n: 0n, d: 1n };
+  if (sorted.length % 2 === 1) return upper;
+  const lower = sorted[mid - 1] ?? { n: 0n, d: 1n };
+  return { n: lower.n * upper.d + upper.n * lower.d, d: 2n * lower.d * upper.d };
+};
+
+/** F = 1 - clamp((m - 1/10) / (2/5 - 1/10)), exact, rounded half-even to 4 places. */
+export const fitOf = (m: Fraction): number => {
+  const span = minus(FIT_HIGH, FIT_LOW);
+  if (compare(m, FIT_LOW) <= 0) return 1;
+  if (compare(m, FIT_HIGH) >= 0) return 0;
+  const over = minus(m, FIT_LOW);
+  // 1 - (over.n / over.d) / (span.n / span.d) = (over.d * span.n - over.n * span.d) / (over.d * span.n)
+  return roundTo4({ n: over.d * span.n - over.n * span.d, d: over.d * span.n });
+};
+
+/** The first bin whose edge the value is under, else the last: `value < edge * scale` with integers, so the comparison is exact. */
+const binOf = (value: number, edges: readonly number[], scale = 1): string => {
+  const index = edges.findIndex((edge) => value < edge * scale);
   return String(index === -1 ? edges.length : index);
 };
 
@@ -92,13 +128,16 @@ const addInto = (into: Histograms, from: Histograms): void => {
 
 const total = (histogram: Histogram): number => [...histogram.values()].reduce((sum, count) => sum + count, 0);
 
-/** Half the sum of absolute differences of the two normalized histograms. */
-const distanceBetween = (a: Histogram, b: Histogram): number => {
-  const sumA = total(a);
-  const sumB = total(b);
-  let sum = 0;
-  for (const key of new Set([...a.keys(), ...b.keys()])) sum += Math.abs((a.get(key) ?? 0) / sumA - (b.get(key) ?? 0) / sumB);
-  return sum / 2;
+/** Half the sum of absolute differences of the two normalized histograms, over integer counts: sum |a * sumB - b * sumA| / (2 * sumA * sumB). */
+const distanceBetween = (a: Histogram, b: Histogram): Fraction => {
+  const sumA = BigInt(total(a));
+  const sumB = BigInt(total(b));
+  let sum = 0n;
+  for (const key of new Set([...a.keys(), ...b.keys()])) {
+    const diff = BigInt(a.get(key) ?? 0) * sumB - BigInt(b.get(key) ?? 0) * sumA;
+    sum += diff < 0n ? -diff : diff;
+  }
+  return { n: sum, d: 2n * sumA * sumB };
 };
 
 interface WeekGroup {
@@ -145,8 +184,8 @@ export const selfBaseline = (sessions: readonly BaselineSession[], tools: readon
       add(histogramOf(group.histograms, 'prompt class'), prompt.cls);
       if (prompt.wallSec !== null) add(histogramOf(group.histograms, 'wallSec'), binOf(prompt.wallSec, WALL_EDGES_SEC));
       const input = prompt.usage.input + prompt.usage.cacheWrite + prompt.usage.cacheRead;
-      if (input > 0) add(histogramOf(group.histograms, 'cache-read share'), binOf(prompt.usage.cacheRead / input, CACHE_SHARE_EDGES));
-      if (prompt.turns > 0) add(histogramOf(group.histograms, 'output per turn'), binOf(prompt.usage.output / prompt.turns, OUTPUT_PER_TURN_EDGES));
+      if (input > 0) add(histogramOf(group.histograms, 'cache-read share'), binOf(prompt.usage.cacheRead * 10, CACHE_SHARE_TENTHS, input));
+      if (prompt.turns > 0) add(histogramOf(group.histograms, 'output per turn'), binOf(prompt.usage.output, OUTPUT_PER_TURN_EDGES, prompt.turns));
     }
   }
 
@@ -164,12 +203,13 @@ export const selfBaseline = (sessions: readonly BaselineSession[], tools: readon
     }
     const pooled = emptyHistograms();
     for (const other of others) addInto(pooled, other.histograms);
-    const distances = DIMENSIONS.filter((dimension) => total(histogramOf(group.histograms, dimension)) > 0 && total(histogramOf(pooled, dimension)) > 0).map(
-      (dimension): DimensionDistance => ({ dimension, distance: distanceBetween(histogramOf(group.histograms, dimension), histogramOf(pooled, dimension)) }),
+    const exact = DIMENSIONS.filter((dimension) => total(histogramOf(group.histograms, dimension)) > 0 && total(histogramOf(pooled, dimension)) > 0).map(
+      (dimension) => ({ dimension, distance: distanceBetween(histogramOf(group.histograms, dimension), histogramOf(pooled, dimension)) }),
     );
     // The tool mix has counts on both sides whenever the week and the baseline each hold 1,000 calls, so at least one dimension always remains.
-    const m = medianOf(distances.map((entry) => entry.distance));
-    scored.set(key, { ...base, baselineWeeks: others.length, distances, m, f: fitOf(m), status: 'scored', reason: null });
+    const m = medianOf(exact.map((entry) => entry.distance));
+    const distances = exact.map((entry): DimensionDistance => ({ dimension: entry.dimension, distance: roundTo4(entry.distance) }));
+    scored.set(key, { ...base, baselineWeeks: others.length, distances, m: roundTo4(m), f: fitOf(m), status: 'scored', reason: null });
   }
 
   return sessions.map((session): SelfBaselineResult => {
