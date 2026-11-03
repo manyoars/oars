@@ -101,7 +101,7 @@ describe('checkSession (A38)', () => {
     expect(verdict).toEqual({ excluded: true, reason: 'term', hits: [{ key: 's9/subagents/agent-a1.jsonl', main: false, source: 'projects' }] });
   });
 
-  it('scans a symlinked subagent transcript, and excludes a broken link as unreadable', async () => {
+  it('scans a symlinked subagent transcript, and excludes a broken link as unreadable', async (ctx) => {
     const t = setup();
     write(t.main('p', 's10'), [CLEAN]);
     const real = join(t.staged.root, 'outside.jsonl');
@@ -110,7 +110,8 @@ describe('checkSession (A38)', () => {
     try {
       symlinkSync(real, t.agent('p', 's10', 'agent-link'));
     } catch {
-      return; // creating a link needs a privilege some Windows accounts lack
+      ctx.skip(); // creating a link needs a privilege some Windows accounts lack
+      return;
     }
     expect(statSync(t.agent('p', 's10', 'agent-link')).isFile()).toBe(true);
     expect((await checkSession(t.staged.runtime, t.termsFile, 'p', 's10')).hits).toEqual([{ key: 's10/subagents/agent-link.jsonl', main: false, source: 'projects' }]);
@@ -119,7 +120,113 @@ describe('checkSession (A38)', () => {
   });
 });
 
+describe('links to folders (a transcript that was not scanned never reads as clean)', () => {
+  // Creating a link can need a privilege some Windows accounts lack: the test skips there.
+  const link = (target: string, path: string): boolean => {
+    try {
+      mkdirSync(join(path, '..'), { recursive: true });
+      symlinkSync(target, path, 'dir');
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+  it('follows a link to a directory under subagents', async (ctx) => {
+    const t = setup();
+    write(t.main('p', 's11'), [CLEAN]);
+    const elsewhere = join(t.staged.root, 'elsewhere');
+    write(join(elsewhere, 'agent-x.jsonl'), [DIRTY]);
+    if (!link(elsewhere, join(t.staged.projectsRoot, 'p', 's11', 'subagents', 'linked'))) return ctx.skip();
+    const verdict = await checkSession(t.staged.runtime, t.termsFile, 'p', 's11');
+    expect(verdict).toEqual({ excluded: true, reason: 'term', hits: [{ key: 's11/subagents/linked/agent-x.jsonl', main: false, source: 'projects' }] });
+  });
+
+  it('excludes a session whose subagents link leads nowhere as unreadable', async (ctx) => {
+    const t = setup();
+    write(t.main('p', 's12'), [CLEAN]);
+    if (!link(join(t.staged.root, 'gone'), join(t.staged.projectsRoot, 'p', 's12', 'subagents', 'linked'))) return ctx.skip();
+    expect((await checkSession(t.staged.runtime, t.termsFile, 'p', 's12')).reason).toBe('unreadable');
+  });
+
+  it('excludes a session whose own path holds a link that leads nowhere or to a file, though its main is clean', async (ctx) => {
+    const t = setup();
+    const gone = join(t.staged.root, 'gone');
+    // subagents as a broken link
+    write(t.main('p', 's14'), [CLEAN]);
+    if (!link(gone, join(t.staged.projectsRoot, 'p', 's14', 'subagents'))) return ctx.skip();
+    expect((await checkSession(t.staged.runtime, t.termsFile, 'p', 's14')).reason).toBe('unreadable');
+    // subagents as a link to a file holding the term: not a directory, so it was not scanned
+    write(t.main('p', 's15'), [CLEAN]);
+    const file = join(t.staged.root, 'agent.jsonl');
+    write(file, [DIRTY]);
+    mkdirSync(join(t.staged.projectsRoot, 'p', 's15'), { recursive: true });
+    try {
+      symlinkSync(file, join(t.staged.projectsRoot, 'p', 's15', 'subagents'), 'file');
+    } catch {
+      return ctx.skip();
+    }
+    expect((await checkSession(t.staged.runtime, t.termsFile, 'p', 's15')).reason).toBe('unreadable');
+    // the session folder as a broken link
+    write(t.main('p', 's16'), [CLEAN]);
+    if (!link(gone, join(t.staged.projectsRoot, 'p', 's16'))) return ctx.skip();
+    expect((await checkSession(t.staged.runtime, t.termsFile, 'p', 's16')).reason).toBe('unreadable');
+    // the project folder as a broken link, with a clean raw main
+    const raw = join(t.staged.storeDir, 'raw', 'q', 's17.jsonl');
+    write(raw, [CLEAN]);
+    if (!link(gone, join(t.staged.projectsRoot, 'q'))) return ctx.skip();
+    expect((await checkSession(t.staged.runtime, t.termsFile, 'q', 's17')).reason).toBe('unreadable');
+    // the assert gate refuses each
+    await expect(assertDepositable(t.staged.runtime, t.termsFile, 'p', 's14')).rejects.toBeInstanceOf(CliError);
+  });
+
+  it('aborts naming the ordinal when a link inside a project folder leads nowhere', async (ctx) => {
+    const t = setup();
+    write(t.main('p', 's18'), [CLEAN]);
+    if (!link(join(t.staged.root, 'gone'), join(t.staged.projectsRoot, 'p', S_D))) return ctx.skip();
+    const failure = await scanStore(t.staged.runtime, t.termsFile).then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+    expect(failure).toBeInstanceOf(CliError);
+    const message = failure instanceof CliError ? failure.message : '';
+    expect(message).toMatch(/folder 1 .*no list was written/);
+    expect(message).not.toContain(S_D);
+  });
+
+  it('counts a linked project folder and a linked session folder, and aborts on a broken project link', async (ctx) => {
+    const t = setup();
+    const outside = join(t.staged.root, 'outside-proj');
+    write(join(outside, 's13.jsonl'), [DIRTY]);
+    if (!link(outside, join(t.staged.projectsRoot, 'linkedproj'))) return ctx.skip();
+    const sessionOutside = join(t.staged.root, 'outside-session');
+    write(join(sessionOutside, 'subagents', 'agent-y.jsonl'), [DIRTY]);
+    write(t.main('q', 'ignored'), [CLEAN]);
+    if (!link(sessionOutside, join(t.staged.projectsRoot, 'q', S_D))) return ctx.skip();
+    const { counts } = await scanStore(t.staged.runtime, t.termsFile);
+    expect(counts).toMatchObject({ sessions: 3, excluded: 2, notSessions: 0 });
+    expect(counts.folders).toHaveLength(2);
+    expect(counts.reasons).toMatchObject({ term: 2 });
+    link(join(t.staged.root, 'gone'), join(t.staged.projectsRoot, 'brokenproj'));
+    const failure = await scanStore(t.staged.runtime, t.termsFile).then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+    expect(failure).toBeInstanceOf(CliError);
+    expect(failure instanceof CliError ? failure.message : '').toContain('no list was written');
+    expect(failure instanceof CliError ? failure.message : '').not.toContain('brokenproj');
+  });
+});
+
 describe('loadTerms and exclusionPaths', () => {
+  it('counts a file that decodes to garbage (UTF-16, or bytes that are not UTF-8) as holding no terms', async () => {
+    const t = setup(null);
+    writeFileSync(t.termsFile, Buffer.from(String.fromCharCode(0xfeff) + TERM + String.fromCharCode(10), 'utf16le'));
+    expect(await loadTerms(t.termsFile)).toEqual([]);
+    writeFileSync(t.termsFile, Buffer.concat([Buffer.from(TERM), Buffer.from([0x0a, 0xff, 0xfe, 0x0a])]));
+    expect(await loadTerms(t.termsFile)).toEqual([]);
+  });
+
   it('lowercases terms, drops blank lines, and gives none for a missing file', async () => {
     const t = setup('Alpha\r\n\r\n beta \n');
     expect(await loadTerms(t.termsFile)).toEqual(['alpha', 'beta']);
@@ -149,6 +256,24 @@ describe('assertDepositable (the pool deposit gate)', () => {
 });
 
 describe('scanStore and oars sessions exclusions', () => {
+  it('lists a session whose only main is a link, scans it, and fails closed on a broken one', async (ctx) => {
+    const t = setup();
+    const real = join(t.staged.root, 'outside.jsonl');
+    write(real, [DIRTY]);
+    mkdirSync(join(t.staged.projectsRoot, 'p'), { recursive: true });
+    try {
+      symlinkSync(real, t.main('p', 'linked'));
+      symlinkSync(join(t.staged.root, 'nowhere.jsonl'), t.main('p', 'broken'));
+    } catch {
+      ctx.skip(); // creating a link needs a privilege some Windows accounts lack
+      return;
+    }
+    const { counts, excluded } = await scanStore(t.staged.runtime, t.termsFile);
+    expect(counts.sessions).toBe(2);
+    expect(counts.reasons).toMatchObject({ term: 1, noRaw: 1, unreadable: 0 });
+    expect(excluded.map((entry) => entry.session).sort()).toEqual(['broken', 'linked']);
+  });
+
   const populate = (t: ReturnType<typeof setup>): void => {
     write(t.main('p', 'a'), [DIRTY]);
     write(t.main('p', 'b'), [CLEAN]);
