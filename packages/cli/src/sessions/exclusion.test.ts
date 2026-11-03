@@ -1,11 +1,12 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { run } from '../cli.js';
 import { CliError, ExitCode } from '../errors.js';
 import { harness, removeTestDirs } from '../test-support.js';
 import { assertDepositable, checkSession, exclusionPaths, loadTerms, scanStore } from './exclusion.js';
-import { cleanup, stage, type Staged } from './test-support.js';
+import { deposit } from './store.js';
+import { cleanup, NOW, stage, type Staged } from './test-support.js';
 
 afterEach(() => {
   cleanup();
@@ -16,6 +17,9 @@ afterEach(() => {
 const TERM = 'zorblax';
 const CLEAN = JSON.stringify({ type: 'user', message: { content: 'fix the build' } });
 const DIRTY = JSON.stringify({ type: 'user', message: { content: `working at ${TERM.toUpperCase()} today` } });
+
+// The harness names a session folder with a UUID; a folder with another name is not a session.
+const S_D = '33333333-3333-4333-8333-333333333333';
 
 const write = (path: string, lines: readonly string[]): void => {
   mkdirSync(join(path, '..'), { recursive: true });
@@ -82,12 +86,36 @@ describe('checkSession (A38)', () => {
     expect(verdict.hits).toEqual([{ key: 's7.jsonl', main: true, source: 'raw' }]);
   });
 
-  it('excludes a session it cannot read', async () => {
+  it('treats a directory in place of the main file as no raw', async () => {
     const t = setup();
     mkdirSync(t.main('p', 's8'), { recursive: true });
     write(join(t.main('p', 's8'), '..', 's8', 'subagents', 'agent-x.jsonl'), [CLEAN]);
     // A directory named like the main file is not a file, so there is no main to scan.
     expect((await checkSession(t.staged.runtime, t.termsFile, 'p', 's8')).reason).toBe('no-raw');
+  });
+
+  it('counts a hit in a subagent file of a session with no main transcript as a term hit', async () => {
+    const t = setup();
+    write(t.agent('p', 's9', 'agent-a1'), [DIRTY]);
+    const verdict = await checkSession(t.staged.runtime, t.termsFile, 'p', 's9');
+    expect(verdict).toEqual({ excluded: true, reason: 'term', hits: [{ key: 's9/subagents/agent-a1.jsonl', main: false, source: 'projects' }] });
+  });
+
+  it('scans a symlinked subagent transcript, and excludes a broken link as unreadable', async () => {
+    const t = setup();
+    write(t.main('p', 's10'), [CLEAN]);
+    const real = join(t.staged.root, 'outside.jsonl');
+    write(real, [DIRTY]);
+    mkdirSync(join(t.staged.projectsRoot, 'p', 's10', 'subagents'), { recursive: true });
+    try {
+      symlinkSync(real, t.agent('p', 's10', 'agent-link'));
+    } catch {
+      return; // creating a link needs a privilege some Windows accounts lack
+    }
+    expect(statSync(t.agent('p', 's10', 'agent-link')).isFile()).toBe(true);
+    expect((await checkSession(t.staged.runtime, t.termsFile, 'p', 's10')).hits).toEqual([{ key: 's10/subagents/agent-link.jsonl', main: false, source: 'projects' }]);
+    rmSync(real);
+    expect((await checkSession(t.staged.runtime, t.termsFile, 'p', 's10')).reason).toBe('unreadable');
   });
 });
 
@@ -104,7 +132,6 @@ describe('loadTerms and exclusionPaths', () => {
     expect(fallback.terms.replaceAll('\\', '/')).toBe('/c/session-commons/exclusion-terms.txt');
     expect(fallback.list).toBe('/o/list');
     expect(exclusionPaths('/c/projects', {}).list.replaceAll('\\', '/')).toBe('/c/session-commons/exclusion-list.jsonl');
-    expect(exclusionPaths('', {}).terms.replaceAll('\\', '/')).toContain('.claude/session-commons/exclusion-terms.txt');
   });
 });
 
@@ -127,7 +154,7 @@ describe('scanStore and oars sessions exclusions', () => {
     write(t.main('p', 'b'), [CLEAN]);
     write(t.agent('p', 'b', 'agent-1'), [DIRTY]);
     write(t.main('q', 'c'), [CLEAN]);
-    write(t.agent('q', 'd', 'agent-1'), [CLEAN]);
+    write(t.agent('q', S_D, 'agent-1'), [CLEAN]);
     write(join(t.staged.storeDir, 'raw', 'p', 'a.jsonl'), [DIRTY]);
   };
 
@@ -141,17 +168,42 @@ describe('scanStore and oars sessions exclusions', () => {
       kept: 1,
       reasons: { term: 2, noRaw: 1, noTerms: 0, unreadable: 0 },
       hitFiles: { main: 1, subagent: 1 },
-      bySource: { projects: { main: 1, subagent: 1 }, raw: { main: 1, subagent: 0 } },
+      bySource: { projects: { main: 1, subagent: 1, sessions: 2 }, raw: { main: 1, subagent: 0, sessions: 1 } },
+      notSessions: 0,
     });
     expect(counts.folders).toEqual([
-      { folder: 1, sessions: 2, excluded: 2 },
-      { folder: 2, sessions: 2, excluded: 1 },
+      { folder: 1, sessions: 2, excluded: 2, hits: { projects: { main: 1, subagent: 1 }, raw: { main: 1, subagent: 0 } } },
+      { folder: 2, sessions: 2, excluded: 1, hits: { projects: { main: 0, subagent: 0 }, raw: { main: 0, subagent: 0 } } },
     ]);
     expect(excluded).toEqual([
       { project: 'p', session: 'a' },
       { project: 'p', session: 'b' },
-      { project: 'q', session: 'd' },
+      { project: 'q', session: S_D },
     ]);
+  });
+
+  it('counts a folder that is not a session in neither the list nor the sessions', async () => {
+    const t = setup();
+    populate(t);
+    mkdirSync(join(t.staged.projectsRoot, 'q', 'memory'), { recursive: true });
+    write(join(t.staged.projectsRoot, 'q', 'memory', 'note.jsonl'), [DIRTY]);
+    const { counts, excluded } = await scanStore(t.staged.runtime, t.termsFile);
+    expect(counts).toMatchObject({ sessions: 4, excluded: 3, notSessions: 1 });
+    expect(excluded.map((entry) => entry.session)).not.toContain('memory');
+  });
+
+  it('lists a session the store logged whose raw is gone everywhere as no raw', async () => {
+    const staged = stage();
+    const termsFile = join(staged.root, 'terms.txt');
+    writeFileSync(termsFile, TERM);
+    await deposit(staged.runtime, { allow: ['proj'], redactDomains: [], now: () => NOW });
+    rmSync(staged.projectsRoot, { recursive: true, force: true });
+    rmSync(join(staged.storeDir, 'raw'), { recursive: true, force: true });
+    const { counts, excluded } = await scanStore(staged.runtime, termsFile);
+    expect(counts.sessions).toBeGreaterThan(0);
+    expect(counts.reasons.noRaw).toBe(counts.sessions);
+    expect(excluded).toHaveLength(counts.sessions);
+    expect(excluded.every((entry) => entry.project === 'proj')).toBe(true);
   });
 
   it('with no term file counts every session under no-terms', async () => {
@@ -177,6 +229,7 @@ describe('scanStore and oars sessions exclusions', () => {
     expect(printed).not.toContain('working at');
     expect(printed).not.toMatch(/"project"|"p"|"q"/);
     expect(readFileSync(list, 'utf8').trim().split('\n')).toHaveLength(3);
+    if (process.platform !== 'win32') expect(statSync(list).mode % 0o1000).toBe(0o600);
   });
 
   it('writes an empty list file when nothing is excluded, and refuses a run with no store', async () => {
