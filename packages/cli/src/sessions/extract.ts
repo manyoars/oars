@@ -21,6 +21,7 @@ import {
   type Frame,
   type Harness,
   type PromptClass,
+  type PromptOpened,
   type PullEcosystem,
   type SessionObservation,
   type ShellIdentity,
@@ -321,6 +322,7 @@ interface Current {
   skills: Set<string>;
   usage: Usage;
   turns: number;
+  opened: PromptOpened;
   /** The last harness version the prompt's lines name. */
   version: string | undefined;
   effortCounts: Map<string, number>;
@@ -336,11 +338,76 @@ interface PromptFrameParts {
   ts: string | undefined;
 }
 
+const hasToolResult = (content: unknown): boolean => Array.isArray(content) && content.some((block: unknown) => isObj(block) && block.type === 'tool_result');
+
 const firstTextBlock = (content: unknown): string => {
   if (typeof content === 'string') return content;
   if (!Array.isArray(content)) return '';
   for (const block of content) if (isObj(block) && block.type === 'text') return str(block.text) ?? '';
   return '';
+};
+
+// What the harness writes as a user line and the operator did not ask: every such leading tag on the 15,710 transcripts read for t768 (harness and `raw/`), and
+// `local-command-stderr`, the sibling of `local-command-stdout`. The set is closed on purpose: anything else with a leading `<` was typed, or pasted.
+const INJECTED_TAGS: ReadonlySet<string> = new Set([
+  'bash-input',
+  'bash-stderr',
+  'bash-stdout',
+  'local-command-caveat',
+  'local-command-stderr',
+  'local-command-stdout',
+  'scheduled-task',
+  'system-reminder',
+  'task-notification',
+]);
+const LEADING_TAG = /^<([a-zA-Z][\w:-]*)[\s>/]/;
+
+/** What the operator asked, with the wrapper removed: the command's name and its arguments, as they typed them. Either element can come first. */
+const commandAsked = (text: string): string => {
+  const name = /<command-name>([\s\S]*?)<\/command-name>/.exec(text)?.[1] ?? '';
+  const args = /<command-args>([\s\S]*)<\/command-args>/.exec(text)?.[1] ?? '';
+  return `${name} ${args}`.trim();
+};
+
+/**
+ * Whether a model answers a command: the next main-line thing after it is an assistant turn. A meta line (a skill's body, a caveat), a tool result, and an
+ * attachment do not decide it. A later user line does: it opens that turn itself, and when it is a local command's output the command was local. A synthetic
+ * line is the harness speaking, so `/clear` followed by one has still had no turn.
+ */
+const answeredByModel = (lines: readonly string[], from: number, subagent: boolean): boolean => {
+  for (let at = from; at < lines.length; at += 1) {
+    let line: unknown;
+    try {
+      line = JSON.parse(lines[at] ?? '');
+    } catch {
+      continue;
+    }
+    if (!isObj(line) || !isObj(line.message) || (!subagent && truthy(line.isSidechain))) continue;
+    const { content, model, role } = line.message;
+    if (line.type === 'assistant' && role === 'assistant' && model !== '<synthetic>') return true;
+    if (line.type !== 'user' || role !== 'user' || line.isMeta === true) continue;
+    if (firstTextBlock(content) !== '' && !hasToolResult(content)) return false;
+  }
+  return false;
+};
+
+export interface PromptOpening {
+  opened: PromptOpened;
+  /** What the operator asked: the line as written, or a command's name and arguments. Not yet redacted. */
+  request: string;
+}
+
+/**
+ * Whether a main-line user line with text and no tool result opens a prompt in a Claude Code transcript, and how. Capture and the gold reader both number
+ * prompts by this, so a gold entry's index is a capture index. `lines` is the whole transcript and `position` this line's place in it.
+ */
+export const promptOpening = (text: string, lines: readonly string[], position: number, subagent = false): PromptOpening | undefined => {
+  const tag = LEADING_TAG.exec(text.trimStart())?.[1];
+  if (tag === 'command-name' || tag === 'command-message') {
+    const request = commandAsked(text);
+    return request !== '' && answeredByModel(lines, position + 1, subagent) ? { opened: 'command', request } : undefined;
+  }
+  return tag !== undefined && INJECTED_TAGS.has(tag) ? undefined : { opened: 'typed', request: text };
 };
 
 // parse_sessions.py first_text: the first text block that is not empty.
@@ -1167,6 +1234,7 @@ export const captureSession = (input: ExtractInput): Capture => {
       ts: cur.ts ?? null,
       wallSec: wall,
       head: cur.head,
+      opened: cur.opened,
       thinking: cur.thinking,
       turns: cur.turns,
       model: majority(cur.models),
@@ -1278,18 +1346,27 @@ export const captureSession = (input: ExtractInput): Capture => {
       if (!side && lineUsage !== undefined && firstOfResponse) addUsage(session.usage, lineUsage.usage);
     }
 
-    // prompt_graphs.py and cost_per_class.py: a prompt is a main-line user line with text, no tool result, and no leading "<".
+    // prompt_graphs.py and cost_per_class.py: a prompt is a main-line user line with text and no tool result. They also dropped any leading "<", which lost
+    // every turn a command or a skill opened (t768); that is now `promptOpening`'s call. A Cursor bubble keeps the old rule until its own brief.
     if (type === 'user' && role === 'user' && o.isMeta !== true && !side) {
       const text = firstTextBlock(content);
-      const hasResult = Array.isArray(content) && content.some((block: unknown) => isObj(block) && block.type === 'tool_result');
-      if (text !== '' && !hasResult && !text.startsWith('<')) {
+      const opening =
+        text === '' || hasToolResult(content)
+          ? undefined
+          : harness === 'claude-code'
+            ? promptOpening(text, rawLines, position, origin !== undefined)
+            : text.startsWith('<')
+              ? undefined
+              : ({ opened: 'typed', request: text } satisfies PromptOpening);
+      if (opening !== undefined) {
         finish();
         cur = {
           index: prompts.length,
           ts,
           t0: toSeconds(ts),
           t1: undefined,
-          head: cut(redact(text), PROMPT_HEAD_CHARS), // redact first: a key straddling the limit would otherwise lose its tail and slip past the patterns
+          head: cut(redact(opening.request), PROMPT_HEAD_CHARS), // redact first: a key straddling the limit would otherwise lose its tail and slip past the patterns
+          opened: opening.opened,
           thinking: 0,
           models: new Map(),
           efforts: new Set(),
