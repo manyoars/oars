@@ -29,6 +29,8 @@ export interface ActionTable {
   rows: { readonly [native: string]: CanonicalAction };
   /** How this harness spells an MCP call, with named groups `server` and `tool`; null when it has no such calls. */
   mcp: RegExp | null;
+  /** Whether that spelling marks where the server name ends. One that cannot may have read a private server's name as the tool, so the tool stays out of class P. */
+  toolDelimited: boolean;
   /** Native shell tool to the shell it runs, for the frame; a tool not listed does not say which shell it is. */
   shells: { readonly [native: string]: string };
 }
@@ -77,6 +79,7 @@ export const ACTION_TABLES: { readonly [harness in Harness | 'codex']: ActionTab
       ExitWorktree: 'other',
     },
     mcp: /^mcp__(?<server>.+?)__(?<tool>.+)$/,
+    toolDelimited: true,
     shells: { Bash: 'bash', PowerShell: 'powershell' },
   },
   cursor: {
@@ -107,6 +110,7 @@ export const ACTION_TABLES: { readonly [harness in Harness | 'codex']: ActionTab
       read_lints: 'other',
     },
     mcp: /^mcp_(?<server>[^_]+)_(?<tool>.+)$/,
+    toolDelimited: false,
     shells: {},
   },
   // Codex's own names, and `Bash` and `Edit`, which its adapter renames its shell and patch calls to when it keeps no `native`.
@@ -124,6 +128,7 @@ export const ACTION_TABLES: { readonly [harness in Harness | 'codex']: ActionTab
       update_plan: 'plan.update',
     },
     mcp: /^mcp__(?<server>.+?)__(?<tool>.+)$/,
+    toolDelimited: true,
     shells: {},
   },
 };

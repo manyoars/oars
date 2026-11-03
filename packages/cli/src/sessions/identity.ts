@@ -100,6 +100,7 @@ export const callIdentity = (table: ActionTable, action: CanonicalAction, native
   const mcp = action === 'mcp.call' ? mcpOf(table, native) : undefined;
   if (mcp === undefined) return { native: shown, identity: null };
   if (!PUBLIC_MCP_SERVERS.has(mcp.server)) return { native: LITERAL, identity: { server: LITERAL, tool: LITERAL } };
+  if (!table.toolDelimited) return { native: LITERAL, identity: { server: mcp.server, tool: LITERAL } };
   const tool = isMcpToolName(mcp.tool) ? mcp.tool : LITERAL;
   return { native: tool === LITERAL ? LITERAL : native, identity: { server: mcp.server, tool } };
 };
