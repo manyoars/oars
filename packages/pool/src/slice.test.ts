@@ -79,6 +79,53 @@ describe('a slice over three accounts', () => {
   }, 60_000);
 });
 
+describe('clusters over the cells of a read', () => {
+  const inFreshPool = async (run: (spread: TestPool) => Promise<void>): Promise<void> => {
+    const spread = await startPool();
+    try {
+      await run(spread);
+    } finally {
+      await spread.dispose();
+    }
+  };
+
+  const depositOn = async (spread: TestPool, id: string, days: readonly string[]): Promise<string> => {
+    const { token } = await spread.signIn('github', stubUser(id));
+    await spread.post('/v1/covenant/accept', { version: 'v1' }, token);
+    for (const [index, day] of days.entries()) expect((await spread.post('/v1/deposits', sampleSkeleton(`${id}${String(index)}`.padStart(16, '0'), undefined, day), token)).status).toBe(201);
+    return token;
+  };
+
+  const readsIn = async (spread: TestPool, token: string): Promise<Slice> => {
+    const verified = await verifySlice((await spread.get('/v1/slices/all', token)).json, spread.signingKey(), 'all');
+    if (!verified.ok) throw new Error(verified.reason);
+    return verified.slice;
+  };
+
+  // Cells split by day, so no single cell here holds more than one account: only the union over a read's cells can reach the floor.
+  it('three accounts on three different days serve a read with clusters 3, while their cells stay under the floor', async () => {
+    await inFreshPool(async (spread) => {
+      await depositOn(spread, '3001', ['2026-11-01']);
+      await depositOn(spread, '3002', ['2026-11-02']);
+      const token = await depositOn(spread, '3003', ['2026-11-03']);
+      const slice = await readsIn(spread, token);
+      const fit = slice.reads.find((read) => read.family === 'fit' && read.slice.level === 'shape');
+      expect(fit?.clusters).toBe(3);
+      expect(fit?.inputs).toHaveLength(3);
+      for (const read of slice.reads) expect(read.clusters).toBe(3);
+      expect(slice.cells).toEqual([]);
+    });
+  }, 60_000);
+
+  it('one account on several days stays one account', async () => {
+    await inFreshPool(async (spread) => {
+      await depositOn(spread, '3101', ['2026-11-01', '2026-11-02', '2026-11-03']);
+      const token = await depositOn(spread, '3102', ['2026-11-04']);
+      expect((await readsIn(spread, token)).reads).toEqual([]);
+    });
+  }, 60_000);
+});
+
 describe('the client refuses', () => {
   const signed = async (): Promise<{ payload: string; signature: string }> => {
     const { token } = await pool.signIn('github', stubUser('1006'));
