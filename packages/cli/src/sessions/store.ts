@@ -566,7 +566,9 @@ const depositLocked = async (runtime: SessionsRuntime, options: DepositOptions, 
   };
   // A project the harness cleaned up entirely is still visited when the state names it, so its archived transcripts are captured again.
   const stateProjects = Object.keys(state.files).map((key) => key.slice(0, key.indexOf('/'))).filter((name) => name !== CURSOR_SOURCE && allow.allows(name));
-  for (const project of [...new Set([...allowed, ...stateProjects])].sort()) {
+  // The same holds for a lost state.json: raw/ still names the projects whose transcripts can be captured again.
+  const rawProjects = (await listDir(paths(runtime.storeDir).raw)).filter((entry) => entry.isDirectory() && entry.name !== CURSOR_SOURCE && allow.allows(entry.name)).map((entry) => entry.name);
+  for (const project of [...new Set([...allowed, ...stateProjects, ...rawProjects])].sort()) {
     const folder = join(runtime.projectsRoot, project);
     const entries = (await listDir(folder)).filter((entry) => entry.isFile() && entry.name.endsWith('.jsonl')).map((entry) => entry.name).sort();
     const onDisk = [...entries.map((name) => mainTranscript(folder, name)), ...(await subagentTranscripts(folder, await sessionFolders(folder)))];
@@ -704,6 +706,15 @@ const sessionOfRelative = (relative: string): string => {
   return parts.length === 1 ? agent : [parts[0] ?? '', ...parts.slice(2, -1).filter((part) => part !== 'workflows'), agent].join('~');
 };
 
+/** The inverse of `sessionOfRelative`: `<id>.jsonl`, or `<parent>/subagents/[workflows/<wf>/]<agent>.jsonl` for a `<parent>~[<wf>~]agent-x` id. */
+const relativeOfSession = (session: string): string[] => {
+  const [parent = '', ...rest] = session.split('~');
+  if (rest.length === 0) return [`${session}.jsonl`];
+  const agent = rest[rest.length - 1] ?? '';
+  const workflow = rest.slice(0, -1);
+  return [parent, 'subagents', ...(workflow.length === 0 ? [] : ['workflows', ...workflow]), `${agent}.jsonl`];
+};
+
 /**
  * The sessions of `behind` (captured before the current version) whose source is gone (the transcript from both the harness and `raw/`, or the
  * Cursor composer from Cursor's store): they can never be captured again, so `verify` counts them `cv-frozen` instead of failing `--strict` over them.
@@ -718,10 +729,10 @@ export const frozenSessions = async (runtime: SessionsRuntime, behind: readonly 
     const id = `${project}/${sessionOfRelative(rest.join('/'))}`;
     if (wanted.has(id) && !alive.has(id) && ((await exists(join(runtime.projectsRoot, key))) || (await exists(join(paths(runtime.storeDir).raw, key))))) alive.add(id);
   }
-  // A lost or unreadable state.json lists no files, so a main transcript is also looked up by its own path.
+  // A lost or unreadable state.json lists no files, so a transcript is also looked up by the path its session id implies.
   for (const entry of behind) {
     const id = `${entry.project}/${entry.session}`;
-    const relative = join(entry.project, `${entry.session}.jsonl`);
+    const relative = join(entry.project, ...relativeOfSession(entry.session));
     if (!alive.has(id) && ((await exists(join(runtime.projectsRoot, relative))) || (await exists(join(paths(runtime.storeDir).raw, relative))))) alive.add(id);
   }
   const prefix = `${CURSOR_SOURCE}-`;
@@ -749,13 +760,15 @@ export const frozenSessions = async (runtime: SessionsRuntime, behind: readonly 
 const rawOnlyTranscripts = async (context: DepositContext, project: string, onDisk: ReadonlySet<string>): Promise<Transcript[]> => {
   const { storeDir } = context.runtime;
   const prefix = `${project}/`;
-  const behind = Object.entries(context.state.files).filter(([key, entry]) => key.startsWith(prefix) && !onDisk.has(key) && (entry.v !== CAPTURE_VERSION || entry.s !== context.salt.sid));
-  if (behind.length === 0) return [];
+  const root = join(paths(storeDir).raw, project);
+  // Listed from raw/ itself, so a lost state.json (no entries to name the files) still finds them; a file with no entry counts as behind.
+  const behind = (await rawRelatives(root, [])).filter((relative) => {
+    const entry = context.state.files[`${prefix}${relative}`];
+    return !onDisk.has(`${prefix}${relative}`) && (entry === undefined || entry.v !== CAPTURE_VERSION || entry.s !== context.salt.sid);
+  });
   const found: Transcript[] = [];
-  for (const [key] of behind) {
-    const relative = key.slice(prefix.length);
-    const file = join(paths(storeDir).raw, project, ...relative.split('/'));
-    if (!(await stat(file).then(() => true, () => false))) continue;
+  for (const relative of behind) {
+    const file = join(root, ...relative.split('/'));
     const parts = relative.split('/');
     if (parts.length === 1) {
       found.push({ ...mainTranscript(dirname(file), relative), fromRaw: true });
@@ -767,6 +780,16 @@ const rawOnlyTranscripts = async (context: DepositContext, project: string, onDi
     found.push({ file, session, relative, subagent: origin, fromRaw: true });
   }
   return found;
+};
+
+/** The `.jsonl` files under a `raw/<project>/` folder, as paths relative to it. */
+const rawRelatives = async (dir: string, path: string[]): Promise<string[]> => {
+  const found: string[] = [];
+  for (const entry of await listDir(dir)) {
+    if (entry.isDirectory()) found.push(...(await rawRelatives(join(dir, entry.name), [...path, entry.name])));
+    else if (entry.isFile() && entry.name.endsWith('.jsonl')) found.push([...path, entry.name].join('/'));
+  }
+  return found.sort();
 };
 
 const HOOK_LOCK: LockOptions = { waitMs: 3_000, staleMs: 600_000 };
