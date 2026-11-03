@@ -194,18 +194,38 @@ describe('parseSkeleton refuses, and names the field', () => {
     expect(refusedField(pull({ version: 'latest-acme' }))).toBe(`${stepField}.identity.pulls[0].version`);
   });
 
-  it('holds a version tail to numbers and known prerelease words', () => {
+  it('holds a version suffix to digits and release words', () => {
     const pull = (version: string): unknown => withStep({ identity: { program: 'npm', sub: null, flags: [], pulls: [{ registry: 'npm', name: 'zod', version }] } });
-    for (const version of ['1.2.3', '^4.0.0', 'v2.x', '1.2.3-rc.1', '1.0.0-beta.2', '1.0.0-next.20250101', '1.0.0+5', '1.0.0-SNAPSHOT']) expect(refusedField(pull(version))).toBe('accepted');
-    for (const version of ['1.0.0-acme-secret', '1.0.0+sha.5114f85', '1.0.0-rc.acme', '1.0.0-']) expect(refusedField(pull(version))).toBe(`${stepField}.identity.pulls[0].version`);
+    for (const version of ['1.2.3', '^4.0.0', 'v2.x', '1.2.3-rc.1', '1.0.0-beta.2', '1.0.0-next.20250101', '1.0.0+5']) expect(refusedField(pull(version))).toBe('accepted');
+    for (const version of ['1.0.0-acme-secret', '1.0.0+sha.5114f85', '1.0.0-rc.acme', '1.0.0-', '1.0.0-SNAPSHOT']) expect(refusedField(pull(version))).toBe(`${stepField}.identity.pulls[0].version`);
     const harness = (version: string): string => refusedField(sent(['transcripts', 0, 'frame', 'harnessVersion'], version));
     for (const version of ['2.1.314', '2.0.0-beta.1', '1.7.0-nightly', '2.0.0-dev.20250101']) expect(harness(version)).toBe('accepted');
     for (const version of ['1.0.0-acme-secret', '1.0.0.acme', '1.0.0+abc123']) expect(harness(version)).toBe('transcripts[0].frame.harnessVersion');
   });
 
-  // A pin, not an endorsement: this pattern is the vocabulary spec's to close, so a change to it shows up here. See the report for t758.
-  it('still takes any tool name under a public MCP server', () => {
-    expect(refusedField(withStep({ action: 'mcp.call', native: LITERAL, identity: { server: 'github', tool: 'acme_secret_deploy' } }))).toBe('accepted');
+  // The server's own list, as capture applies it, so a name only a forged client could write is refused rather than stored.
+  it('takes an MCP tool only when that server lists it', () => {
+    const tool = (server: string, name: string): unknown => withStep({ action: 'mcp.call', native: LITERAL, identity: { server, tool: name } });
+    const native = (name: string): unknown => withStep({ action: 'mcp.call', native: name, identity: { server: 'github', tool: LITERAL } });
+    expect(refusedField(tool('github', 'acme_secret_deploy'))).toBe(`${stepField}.identity.tool`);
+    expect(refusedField(tool('postgres', 'get_issue'))).toBe(`${stepField}.identity.tool`);
+    expect(refusedField(tool('github', LITERAL))).toBe('accepted');
+    expect(refusedField(native('mcp__github__acme_secret_deploy'))).toBe(`${stepField}.native`);
+  });
+
+  // Cursor's spelling cannot show where a server name ends, so capture keeps the tool and the native name out; a deposit naming either did not come from capture.
+  it('takes no MCP tool name from a harness whose spelling cannot delimit the server', () => {
+    const fromCursor = (over: object): unknown => {
+      const raw = withStep({ action: 'mcp.call', ...over });
+      if (!isHolder(raw)) throw new Error('the sample is not an object');
+      const transcripts: unknown = Reflect.get(raw, 'transcripts');
+      if (!Array.isArray(transcripts) || !isHolder(transcripts[0])) throw new Error('the sample has no transcript');
+      Reflect.set(transcripts[0], 'harness', 'cursor');
+      return raw;
+    };
+    expect(refusedField(fromCursor({ native: LITERAL, identity: { server: 'github', tool: LITERAL } }))).toBe('accepted');
+    expect(refusedField(fromCursor({ native: LITERAL, identity: { server: 'github', tool: 'get_issue' } }))).toBe(`${stepField}.identity.tool`);
+    expect(refusedField(fromCursor({ native: 'mcp_github_get_issue', identity: { server: 'github', tool: LITERAL } }))).toBe(`${stepField}.native`);
   });
 
   it('holds an edge to its kinds', () => {
