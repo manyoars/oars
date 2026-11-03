@@ -165,7 +165,7 @@ describe('check-private-names', () => {
     const dir = join(root, 'cfg');
     mkdirSync(join(dir, 'session-commons'), { recursive: true });
     writeFileSync(join(dir, 'session-commons', 'exclusion-terms.txt'), `${TERM}\n`);
-    const own = { ...env, CLAUDE_CONFIG_DIR: dir };
+    const own: NodeJS.ProcessEnv = { ...env, CLAUDE_CONFIG_DIR: dir };
     delete own.OARS_EXCLUSION_TERMS;
     delete own.OARS_PUBLIC_DENYLIST;
     const sha = commit('b.txt', `${TERM}\n`);
