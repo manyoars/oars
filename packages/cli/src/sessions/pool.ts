@@ -6,7 +6,7 @@ import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { CliError, ExitCode } from '../errors.js';
 import { deriveCells, poolOf, serializeCells, type Pool } from './cells.js';
-import { contentHash, FAMILIES, frozenRead, makeRead, orderResolver, type Family, type Read } from './read.js';
+import { contentHash, FIRST_ORDER_FAMILIES, frozenRead, makeRead, orderResolver, type FirstOrderFamily, type OrderResolver, type Read, type ReadAsOf } from './read.js';
 import { deriveAdoption } from './read-adoption.js';
 import { deriveChange } from './read-change.js';
 import { deriveCost } from './read-cost.js';
@@ -15,10 +15,17 @@ import { deriveLive } from './read-live.js';
 import { deriveMethod } from './read-method.js';
 import { deriveNextStep } from './read-next-step.js';
 import { deriveRecovery } from './read-recovery.js';
-import type { DeriveFamily } from './read-support.js';
+import { deriveToolDay } from './read-tool-day.js';
+import type { DeriveRelation } from './read-order.js';
+import type { DeriveFamily, ReadBody } from './read-support.js';
+import { deriveDayMove } from './read-day-move.js';
+import { deriveInteraction } from './read-interaction.js';
+import { deriveLeadLag } from './read-lead-lag.js';
+import { deriveSubstitution } from './read-substitution.js';
+import { deriveVersionBoundary } from './read-version-boundary.js';
 import { writeAtomic, type Store } from './store.js';
 
-const DERIVERS: { readonly [family in Family]: DeriveFamily } = {
+const DERIVERS: { readonly [family in FirstOrderFamily]: DeriveFamily } = {
   recovery: deriveRecovery,
   fit: deriveFit,
   cost: deriveCost,
@@ -27,7 +34,11 @@ const DERIVERS: { readonly [family in Family]: DeriveFamily } = {
   adoption: deriveAdoption,
   method: deriveMethod,
   'next-step': deriveNextStep,
+  'tool-day': deriveToolDay,
 };
+
+/** Families over reads, one stage per order: a stage reads what the stages before it wrote. */
+const RELATIONS: readonly (readonly DeriveRelation[])[] = [[deriveVersionBoundary, deriveSubstitution, deriveInteraction, deriveDayMove], [deriveLeadLag]];
 
 export const poolFiles = (storeDir: string): { cells: string; motifs: string; reads: (version: string) => string } => ({
   cells: join(storeDir, 'cells.jsonl'),
@@ -35,17 +46,27 @@ export const poolFiles = (storeDir: string): { cells: string; motifs: string; re
   reads: (version) => join(storeDir, 'reads', `${version}.jsonl`),
 });
 
-/** Every family's order-1 reads of one pool, in family order and then by slice, so a rerun writes the same bytes. */
-export const deriveReads = (pool: Pool, store: Store): Read[] => {
+const made = (bodies: readonly ReadBody[], asOf: ReadAsOf, orderOf: OrderResolver): Read[] =>
+  bodies
+    .map((body) => makeRead({ ...body, asOf }, orderOf))
+    .map((read) => ({ read, key: contentHash(read.slice) }))
+    .sort((a, b) => (a.key < b.key ? -1 : 1))
+    .map(({ read }) => read);
+
+/** Every family's order 1 reads of one pool, in family order and then by slice, so a rerun writes the same bytes. */
+export const deriveFirstOrder = (pool: Pool, store: Store): Read[] => {
   const asOf = { pool: pool.version, day: pool.lastDay };
   const orderOf = orderResolver([]);
-  return FAMILIES.flatMap((family) =>
-    DERIVERS[family]({ pool, store })
-      .map((read) => makeRead({ ...read, asOf }, orderOf))
-      .map((read) => ({ read, key: contentHash(read.slice) }))
-      .sort((a, b) => (a.key < b.key ? -1 : 1))
-      .map(({ read }) => read),
-  );
+  return FIRST_ORDER_FAMILIES.flatMap((family) => made(DERIVERS[family]({ pool, store }), asOf, orderOf));
+};
+
+/** Order 1, then each stage of `RELATIONS` over everything before it. */
+export const deriveReads = (pool: Pool, store: Store): Read[] => {
+  const asOf = { pool: pool.version, day: pool.lastDay };
+  return RELATIONS.reduce<Read[]>((known, stage) => {
+    const orderOf = orderResolver(known);
+    return [...known, ...stage.flatMap((derive) => made(derive(known), asOf, orderOf))];
+  }, deriveFirstOrder(pool, store));
 };
 
 export const serializeReads = (reads: readonly Read[]): string => reads.map((read) => `${JSON.stringify(read)}\n`).join('');

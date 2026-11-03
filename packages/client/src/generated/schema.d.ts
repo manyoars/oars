@@ -528,7 +528,7 @@ export interface components {
             /** Format: int32 */
             status: number;
             title: string;
-            /** @example https://api.tradeaor.com/problems/price-not-found */
+            /** @example https://api.example.test/problems/price-not-found */
             type: string;
         };
         /** @enum {string} */

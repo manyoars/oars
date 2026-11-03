@@ -18,8 +18,12 @@ const canonical = (value: unknown): unknown => {
 /** SHA-256 of canonical JSON, 16 hex characters, unsalted: one content reads alike on any account (D1's `hP`). */
 export const contentHash = (value: unknown): string => createHash('sha256').update(JSON.stringify(canonical(value))).digest('hex').slice(0, 16);
 
-/** The eight families (t752), in the order that report ranks them, recovery first: the only one that changes a next call today. */
-export const FAMILIES = ['recovery', 'fit', 'cost', 'change', 'live', 'adoption', 'method', 'next-step'] as const;
+/** The eight families (t752), in the order that report ranks them, recovery first: the only one that changes a next call today. Then `tool-day`, which the reads above order 1 stand on. */
+export const FIRST_ORDER_FAMILIES = ['recovery', 'fit', 'cost', 'change', 'live', 'adoption', 'method', 'next-step', 'tool-day'] as const;
+export type FirstOrderFamily = (typeof FIRST_ORDER_FAMILIES)[number];
+
+/** Families that read other reads, lowest order first. `lead-lag` is the labeled experiment (spec Section 6). */
+export const FAMILIES = [...FIRST_ORDER_FAMILIES, 'version-boundary', 'substitution', 'interaction', 'day-move', 'lead-lag'] as const;
 export type Family = (typeof FAMILIES)[number];
 
 /**
@@ -35,6 +39,12 @@ export const METHODS: { readonly [family in Family]: { readonly name: string; re
   adoption: { name: 'share-and-span', version: '1' },
   method: { name: 'shape-share-by-model', version: '1' },
   'next-step': { name: 'next-action-counts', version: '1' },
+  'tool-day': { name: 'rates-on-day', version: '1' },
+  'version-boundary': { name: 'move-between-buckets', version: '1' },
+  substitution: { name: 'rise-against-fall', version: '1' },
+  interaction: { name: 'failure-gap-across-tier-assigned', version: '1' },
+  'day-move': { name: 'move-to-next-day', version: '2' },
+  'lead-lag': { name: 'failure-move-leads-share-move', version: '1' },
 };
 
 /** `all`, or `unexposed`: only steps outside any recall's consequence window, so a read cannot mistake the pool's influence for the world. */
@@ -50,7 +60,7 @@ export interface ReadValue {
   [metric: string]: number | string | null | { [name: string]: number };
 }
 
-/** A 95 percent interval on a read's headline rate; null when the value is not a rate. */
+/** A 95 percent interval on a read's headline number: a rate at order 1, propagated from the inputs above it (`read-order.ts`), so it can run below zero. Null when the value is not a rate. */
 export interface ReadInterval {
   low: number;
   high: number;
@@ -76,7 +86,7 @@ export interface Read {
   order: number;
   slice: ReadSlice;
   value: ReadValue;
-  /** The observations behind the value: its own count, not its denominator. */
+  /** The observations behind the value. At order 1 its own count; above order 1 the trials of its weakest input, or the observations a relation names, such as pairs. */
   n: number;
   /** The accounts behind the value, as its inputs state it. One operator's store says 1. */
   clusters: number;

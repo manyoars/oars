@@ -4,6 +4,9 @@ import { ExitCode } from '../errors.js';
 import { harness, removeTestDirs } from '../test-support.js';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { tools } from './order-fixture.js';
+import { frame, prompt, session } from './pool-fixture.js';
+import { nextDay } from './read-day-move.js';
 import { addProject, cleanup, composers, FIXTURES, folders, stage, stageCursor, stageRawCursor } from './test-support.js';
 
 afterEach(() => {
@@ -136,6 +139,41 @@ describe('oars sessions', () => {
     out.length = 0;
     expect(await run(['sessions', 'read', '--family', 'cost', '--slice', 'class=no-such-class'], deps)).toBe(ExitCode.OK);
     expect(out.join('')).toContain('No reads match.');
+  });
+
+  it('read serves orders 2 and 3 with their order shown, labels the experiment, and says what this store cannot read', async () => {
+    const { deps, out, staged } = setup();
+    // 45 days on four tools, with Read taking over at a version boundary halfway and failures varying by day.
+    let day = '2026-08-01';
+    const rows: unknown[] = [session('s1')];
+    for (let index = 0; index < 45; index += 1) {
+      const later = index >= 22;
+      rows.push(prompt('s1', index, { frame: frame({ harnessVersion: later ? '2.1.312' : '2.1.305', day }) }));
+      rows.push(...tools('s1', index, [{ name: 'Read', count: later ? 400 : 100 }], (index * 7) % 30), ...tools('s1', index, [{ name: 'Edit', count: 100 }], (index * 11) % 30));
+      rows.push(...tools('s1', index, [{ name: 'Bash', count: 100 }], (index * 13) % 30), ...tools('s1', index, [{ name: 'Write', count: 100 }], (index * 17) % 30));
+      day = nextDay(day);
+    }
+    mkdirSync(staged.storeDir, { recursive: true });
+    writeFileSync(join(staged.storeDir, 'observations.jsonl'), rows.map((row) => `${JSON.stringify(row)}\n`).join(''));
+
+    expect(await run(['sessions', 'read', '--family', 'version-boundary'], deps)).toBe(ExitCode.OK);
+    expect(out.join('')).toContain('version-boundary (');
+    expect(out.join('')).toContain('order=2');
+    expect(out.join('')).toContain('clusters: 1');
+    expect(out.join('')).toContain('Not readable on this store:');
+    expect(out.join('')).toContain('a model version boundary');
+
+    out.length = 0;
+    expect(await run(['sessions', 'read', '--family', 'lead-lag'], deps)).toBe(ExitCode.OK);
+    expect(out.join('')).toContain('experimental: fit on earlier days');
+    expect(out.join('')).toContain('order=3');
+    expect(out.join('')).not.toContain('Not readable on this store:');
+
+    out.length = 0;
+    expect(await run(['--json', 'sessions', 'read', '--family', 'interaction'], deps)).toBe(ExitCode.OK);
+    const document = json(out);
+    expect(field(document, 'reads')).toEqual([]);
+    expect(field(document, 'notReadable')).toEqual([expect.objectContaining({ family: 'interaction' })]);
   });
 
   it('read leaves the capture log as it was, and a second read cites the same reads', async () => {

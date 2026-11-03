@@ -53,7 +53,7 @@ export const workloadView = (extra: object = {}): object => ({
   autoRestartOnCredit: true,
   createdAt: '2026-10-24T00:00:00Z',
   creatorUserId: '99999999-8888-4777-8666-555555555555',
-  deployment: { agentId: WORKLOAD_ID, desiredState: 'RUNNING', health: 'HEALTHY', hostScope: 'aor-test', platformStewarded: true, services: [], status: 'RUNNING' },
+  deployment: { agentId: WORKLOAD_ID, desiredState: 'RUNNING', health: 'HEALTHY', hostScope: 'test-scope', platformStewarded: true, services: [], status: 'RUNNING' },
   egressHosts: [],
   fingerprint: 'abc123',
   hasImagePullSecret: false,

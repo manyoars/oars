@@ -15,7 +15,7 @@ export type ReadBody = Omit<ReadDraft, 'asOf'>;
 
 export type DeriveFamily = (input: FamilyInput) => ReadBody[];
 
-const round = (value: number): number => Math.round(value * 10_000) / 10_000;
+export const round = (value: number): number => Math.round(value * 10_000) / 10_000;
 
 /** A rate to four places, so a value reads alike wherever it is computed; null with nothing to divide by. */
 export const rate = (part: number, whole: number): number | null => (whole === 0 ? null : round(part / whole));
