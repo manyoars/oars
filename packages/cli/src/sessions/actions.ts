@@ -33,7 +33,8 @@ export interface ActionTable {
   shells: { readonly [native: string]: string };
 }
 
-export const ACTION_TABLES: { readonly [harness in Harness]: ActionTable } = {
+// `codex` is named here because the Codex adapter (t749) and this table land separately, in either order; once `Harness` holds it the union is that type.
+export const ACTION_TABLES: { readonly [harness in Harness | 'codex']: ActionTable } = {
   'claude-code': {
     rows: {
       Read: 'file.read',
@@ -105,6 +106,23 @@ export const ACTION_TABLES: { readonly [harness in Harness]: ActionTable } = {
       read_lints: 'other',
     },
     mcp: /^mcp_(?<server>[^_]+)_(?<tool>.+)$/,
+    shells: {},
+  },
+  // Codex's own names, and `Bash` and `Edit`, which its adapter renames its shell and patch calls to when it keeps no `native`.
+  codex: {
+    rows: {
+      shell: 'shell.exec',
+      shell_command: 'shell.exec',
+      exec_command: 'shell.exec',
+      local_shell: 'shell.exec',
+      'container.exec': 'shell.exec',
+      Bash: 'shell.exec',
+      apply_patch: 'file.edit',
+      Edit: 'file.edit',
+      read_file: 'file.read',
+      update_plan: 'plan.update',
+    },
+    mcp: /^mcp__(?<server>.+?)__(?<tool>.+)$/,
     shells: {},
   },
 };

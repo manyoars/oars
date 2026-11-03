@@ -89,7 +89,7 @@ oars sessions verify                        # consistency invariants on the stor
 ```
 
 `deposit` is idempotent (a file is skipped only when its size, mtime, capture version, salt, and `--redact-domain` set are all unchanged; a store written by an older capture version is captured again from the harness's transcript or from `raw/`, and one written by a newer oars is refused) and appends to `<config>/oars/sessions/observations.jsonl`:
-one record per session, user prompt, tool call, and failed tool result; signatures, prompt classes, and recovery episodes are derived
+one record per session, user prompt, tool call, and failed tool result, where each tool call also holds its steps in a canonical action vocabulary and each prompt a frame (harness, model, day, and public stack names); signatures, prompt classes, and recovery episodes are derived
 from that log alone, so a change to a derivation rule never re-reads a transcript. The store format, every field with its class
 (`L` local-only, `A` account store, or `P` pooled), the two version stamps, and the raw archive are in [`docs/sessions-store.md`](../../docs/sessions-store.md);
 the types are in `src/sessions/schema.ts`. Secrets (by pattern and entropy), emails, and the domains you name are masked
