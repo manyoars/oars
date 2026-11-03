@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { EventEmitter, once } from 'node:events';
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -401,6 +401,36 @@ describe('oars sessions gold arms', () => {
     const first = sidecarOf(sidecar).entries.find((entry) => entry.shown.includes('one ask'));
     expect(first?.reads).toBeUndefined();
     expect(first?.answers).toEqual({ evaluator: 'yes' });
+  });
+
+  it('reads the raw archive once the harness has dropped a session: a term only raw holds still excludes, and a clean session is drawn and read', async () => {
+    const h = setup();
+    addProject(h.staged, 'gold', 'clean', [...hidden('clean'), user('thanks, good')]);
+    addProject(h.staged, 'gold', 'named', [...hidden('named'), said('a note about Acme-Term here')]);
+    addProject(h.staged, 'gold', 'sub', hidden('sub'));
+    const agents = join(h.staged.projectsRoot, 'gold', 'sub', 'subagents');
+    mkdirSync(agents, { recursive: true });
+    writeFileSync(join(agents, 'agent-1.jsonl'), `${said('from acme-term, in lower case')}\n`);
+    expect(await run(['sessions', 'deposit', '--allow', 'gold'], h.deps)).toBe(ExitCode.OK);
+    rmSync(join(h.staged.projectsRoot, 'gold'), { recursive: true });
+    h.out.length = 0;
+
+    const dir = join(h.staged.root, 'raw-only');
+    expect(await run(['sessions', 'gold', 'sample', '--exclude-term', 'ACME-term', '--out-dir', dir, '--seed', 's'], h.deps)).toBe(ExitCode.OK);
+    const sampledText = h.out.join('');
+    expect(sampledText).toContain('Excluded 2 sessions');
+    expect(sampledText).toContain('Passed over 0 prompts');
+    const date = new Date(h.deps.now()).toISOString().slice(0, 10);
+    const file = join(dir, `outcome-gold-${date}.md`);
+    const text = readFileSync(file, 'utf8');
+    expect(text).toContain('clean ask');
+    expect(text).not.toContain('named ask');
+    expect(text).not.toContain('sub ask');
+
+    h.staged.runtime.evaluator = answering(() => 'yes');
+    expect(await run(['sessions', 'gold', 'arms', file], h.deps)).toBe(ExitCode.OK);
+    const [entry] = sidecarOf(join(dir, `outcome-gold-${date}.arms.json`)).entries;
+    expect(entry?.reads).toEqual({ claim: 'clean is done.\nConfidence: medium', confidence: 'Confidence: medium', later: 'thanks, good' });
   });
 
   it('stops before any call when the evaluator is not ready, and when none is configured', async () => {
