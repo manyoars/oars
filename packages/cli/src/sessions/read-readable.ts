@@ -28,6 +28,4 @@ export const notReadable = (reads: readonly Read[]): NotReadable[] => {
   return rows;
 };
 
-export const whatOf = (rows: readonly NotReadable[], family: Family): string[] => rows.filter((row) => row.family === family).map((row) => row.what);
-
 export const formatNotReadable = (rows: readonly NotReadable[]): string[] => (rows.length === 0 ? [] : ['Not readable on this store:', ...rows.map(({ family, what, why }) => `  ${family}: ${what}: ${why}`)]);

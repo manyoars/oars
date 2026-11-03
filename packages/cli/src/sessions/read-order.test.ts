@@ -151,7 +151,8 @@ describe('a chain of orders 1 to 3', () => {
   });
 
   it('holds an order 3 read to the floor through what its order 2 inputs state', () => {
-    const { second } = chain(TRIALS_FLOOR);
+    const { second, third } = chain(TRIALS_FLOOR);
+    expect(third).toBeDefined();
     expect(second[0]?.n).toBe(TRIALS_FLOOR);
     expect(second[0] === undefined ? 0 : trialsOf(second[0])).toBe(TRIALS_FLOOR);
   });

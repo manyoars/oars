@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { firstOrderOf, tools } from './order-fixture.js';
 import { frame, prompt, session, store } from './pool-fixture.js';
-import { notReadable, whatOf } from './read-readable.js';
-import { makeRead } from './read.js';
+import { notReadable, type NotReadable } from './read-readable.js';
+import { makeRead, type Family } from './read.js';
 
 const singleVersion = store({
   sessions: [session('s1')],
@@ -29,6 +29,8 @@ const leadLag = makeRead(
   { family: 'lead-lag', method: 'm', methodVersion: '1', inputs: ['cell:a'], slice: {}, value: { label: 'experimental' }, n: 60, clusters: 1, interval: null, asOf: { pool: 'p', day: null }, basis: 'all' },
   () => 0,
 );
+
+const whatOf = (rows: readonly NotReadable[], family: Family): string[] => rows.filter((row) => row.family === family).map((row) => row.what);
 
 describe('what a store cannot read', () => {
   it('always says a model version boundary is not readable, because a cell holds no version of a model', () => {
