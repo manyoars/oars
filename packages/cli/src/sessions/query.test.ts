@@ -227,7 +227,7 @@ describe('books outcome columns', () => {
   it('--by pull gives one row per ecosystem and name, and a prompt once in each row it pulled', () => {
     const list = [prompt({ session: 's', index: 0 }), prompt({ session: 's', index: 1 }), prompt({ session: 's', index: 2 })];
     const foo = { ecosystem: 'npm', name: 'foo', version: null } as const;
-    const server = { ecosystem: 'mcp', name: 'github', version: null } as const;
+    const server = { ecosystem: 'mcp', name: 'example-server', version: null } as const;
     const tools = [
       tool({ session: 's', prompt: 0, pulls: [foo, foo] }),
       tool({ session: 's', prompt: 0, pulls: [server] }),
@@ -235,7 +235,7 @@ describe('books outcome columns', () => {
       tool({ session: 'other', prompt: 0, pulls: [{ ecosystem: 'npm', name: 'subagent-only', version: null }] }),
     ];
     const rows = books(storeOf(list, tools), 'pull', NOW);
-    expect(rows.map((row) => [row.key, row.prompts])).toEqual([['npm:foo', 2], ['mcp:github', 1]]);
+    expect(rows.map((row) => [row.key, row.prompts])).toEqual([['npm:foo', 2], ['mcp:example-server', 1]]);
     expect(formatBooks(rows, 'pull').split('\n')[0]).toMatch(/^pull/);
     expect(formatBooks([], 'pull')).toBe('No pulls in the store.');
   });
