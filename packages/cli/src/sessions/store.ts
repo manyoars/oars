@@ -17,6 +17,7 @@
 //   pipeline-runs.jsonl     the step log: one line per run of a pipeline step, appended when the step ends (steps.ts)
 import type { GoldEvaluator } from './gold-arms.js';
 import { createHash, randomBytes } from 'node:crypto';
+import { createReadStream } from 'node:fs';
 import { performance } from 'node:perf_hooks';
 import { appendFile, mkdir, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { basename, dirname, join } from 'node:path';
@@ -676,16 +677,29 @@ const readCursor = async (context: DepositContext, root: string, result: Deposit
   }
 };
 
-/** What an earlier deposit logged about each subagent transcript, since its `.meta.json` is not archived: session id to origin. */
-const loggedOrigins = async (storeDir: string): Promise<Map<string, SubagentOrigin>> => {
-  const origins = new Map<string, SubagentOrigin>();
-  let text = '';
+/**
+ * The log's lines, a chunk at a time: the log can pass the longest string Node can hold (536,870,888 characters), so it is never one string.
+ * It splits on the newline alone, not through `readline`, which also ends a line at U+2028 and U+2029: `JSON.stringify` leaves those raw inside a
+ * value. A missing log has no lines, and a last line with no newline is yielded as it stands, for the reader to parse or skip.
+ */
+const logLines = async function* (file: string): AsyncGenerator<string> {
+  let rest = '';
   try {
-    text = await readFile(paths(storeDir).observations, 'utf8');
+    for await (const chunk of createReadStream(file, { encoding: 'utf8', highWaterMark: 1 << 20 }) as AsyncIterable<string>) {
+      const lines = (rest + chunk).split('\n');
+      rest = lines.pop() ?? '';
+      yield* lines;
+    }
   } catch (error) {
     if (!isMissing(error)) throw error;
   }
-  for (const line of text.split('\n')) {
+  yield rest;
+};
+
+/** What an earlier deposit logged about each subagent transcript, since its `.meta.json` is not archived: session id to origin. */
+const loggedOrigins = async (storeDir: string): Promise<Map<string, SubagentOrigin>> => {
+  const origins = new Map<string, SubagentOrigin>();
+  for await (const line of logLines(paths(storeDir).observations)) {
     if (!line.includes('"parent":"')) continue;
     try {
       const parsed: unknown = JSON.parse(line);
@@ -861,23 +875,10 @@ interface Captured {
  * (EXTRACTOR_VERSION rules); a session whose last deposit was version 2 keeps the prompt and error lines that deposit wrote.
  */
 export const loadStore = async (storeDir: string): Promise<Store> => {
-  let text = '';
-  try {
-    text = await readFile(paths(storeDir).observations, 'utf8');
-  } catch (error) {
-    if (!isMissing(error)) throw error;
-  }
   const all: Observation[] = [];
   const latest = new Map<string, number>();
-  for (const line of text.split('\n')) {
-    if (line === '') continue;
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(line);
-    } catch {
-      continue;
-    }
-    const observation = asObservation(parsed);
+  for await (const line of logLines(paths(storeDir).observations)) {
+    const observation = observationOf(line);
     if (observation === undefined) continue;
     all.push(observation);
     latest.set(observation.session, Math.max(latest.get(observation.session) ?? 0, observation.rev));
@@ -945,6 +946,15 @@ const agentErrors = (store: Store, agents: readonly (SessionCapture & { parent: 
 
 /** A capture record this code derives from: version 3 (upgraded on read) through the current one, and newer ones for the fields known here. */
 const isReadable = (cv: string): boolean => Number(cv) >= OLDEST_READABLE_CAPTURE;
+
+/** A log line as a record, or undefined when a reader skips it: a blank, torn, or unparsable line, or one of no known shape. */
+const observationOf = (line: string): Observation | undefined => {
+  try {
+    return asObservation(JSON.parse(line));
+  } catch {
+    return undefined;
+  }
+};
 
 // The store is ours, so a line with a known `kind`, a session, and a rev is trusted as the type it says.
 const asObservation = (value: unknown): Observation | undefined => {
