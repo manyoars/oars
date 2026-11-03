@@ -15,7 +15,9 @@ Under `<config>/oars/sessions/` (`%APPDATA%` on Windows, `$XDG_CONFIG_HOME` or `
 | `skeletons/<session>.json` | One per transcript: ids, timestamps, tool linkage, token counts, a SHA-256 for every content field, and a Merkle root over the raw lines. Hashes only, never content. `verify` checks these. |
 | `state.json` | Per file: size, mtime, the `rev`, capture version (`v`), `sid`, and the `--redact-domain` set, so an unchanged file is skipped. |
 | `salt` | This machine's salt, which file targets are hashed with. Local-only (class `L`), never shared. Its `sid` (the first 8 hex characters of its SHA-256) is stamped on every capture record. |
-| `pipeline-runs.jsonl` | The step log: one row per run of a pipeline step (deposit, derive, index, verify, recall), appended when the step ends. See "The step log". |
+| `pipeline-runs.jsonl` | The step log: one row per run of a pipeline step (deposit, derive, index, verify, recall, read), appended when the step ends. See "The step log". |
+| `cells.jsonl`, `motifs.jsonl` | Counts per motif, frame bucket, and day, and the motifs they name. Computed from the log, rewritten by `oars sessions read`, and safe to delete. See "Motifs, cells, and reads". |
+| `reads/<pool>.jsonl` | One pool version's reads, written once and never rewritten, so a read cited by its ID stays what it was. |
 | `raw/<project>/<path>` | oars' own archive of every deposited transcript (below). |
 
 ## Two versions
@@ -134,6 +136,29 @@ an open question (M4); until it is settled two machines of one account hash the 
 `raw/`, or, for a Cursor session, whose composer is gone from Cursor, is counted `cv-frozen` instead and never fails `--strict`, since it
 cannot be captured again), one `sid` across the store, every `fileHash` is a path target of a tool call, and `targetBase` is set on a path
 target and on nothing else.
+
+## Motifs, cells, and reads
+
+Derivation over the capture records, computed locally under `EXTRACTOR_VERSION` (9 adds them). The capture records stay the primary record: cells and reads can be dropped and computed again, and no rollup replaces what they came from.
+
+- A **motif** is a window of one to four steps within one line of work, hashed with no salt and no frame, so one shape joins across accounts and frames. `shape` hashes actions only and `named` hashes actions and public identities. A `class` motif holds no steps and names a prompt class, which is how cost per class comes from cells. A one-step window is there because fit, adoption, and live count one action, and a prompt of one call has no longer window.
+- A **cell** is order 0: `{motifId, frameBucket, day, sessions, clusters, ok, failed, tokens, durationMs, exposed}`. A frame bucket is harness, harness version by tens of patch, model, and effort; versions are bucketed because most prompts run a version not yet seen, so an exact version goes stale in days. `exposed` is false until consequence windows are written.
+- A **read** is any derived value citing its inputs: `{readId, family, method, methodVersion, inputs, order, slice, value, n, clusters, interval, asOf, basis}`. `readId` is the hash of the rest, `order` is 1 + the highest order among `inputs` with a cell at 0, a read that cites nothing is refused, and `asOf.pool` pins the pool, so new data gives a new read even when the value comes out the same.
+
+The eight families at order 1, in the order they are listed. None adjusts for its confounders, so a row is a count and not a finding.
+
+| Family | Slice | Value | Not removed |
+|--------|-------|-------|-------------|
+| `recovery` | signature hash, failed action | sessions, errors, days, what followed | `editFollowed` is not success; refusals and hook denials are local policy |
+| `fit` | motif, frame bucket | failure rate | a failure is not a misfit; prompt class |
+| `cost` | prompt class, model, ISO week | tokens and seconds per prompt, error share | class drift, subagent work, task size |
+| `change` | motif, harness, version bucket | share and failure rate in that bucket; a move between buckets is order 2 | effort, rule commits, class drift, date |
+| `live` | motif, day | share of the day beside its share of the seven days before | the day's mix; no multiple-test control, so it flags nothing |
+| `adoption` | motif | share of all steps, first and last day, days seen | the operator's own rules |
+| `method` | shape of two or more steps, model | share among windows of its length | task assignment by tier, effort; no outcome label |
+| `next-step` | prefix of one to three actions | counts of the next action | no outcome label, so the most common step is not the right one |
+
+A read's slice and value hold closed vocabulary and numbers only: never a path, a prompt, or an error's text. A signature appears as its hash, computed the same way on any account. `clusters` is 1 on every row of one operator's store, and `oars sessions read` applies no floor, because every cell is the operator's own.
 
 ## The step log
 
