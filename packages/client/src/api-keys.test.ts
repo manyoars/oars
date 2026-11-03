@@ -7,7 +7,7 @@ type Key = components['schemas']['DeveloperApiKeyResponse'];
 const workloadId = '3f1c2a9e-5b7d-4e8a-9c01-6d2b7a8e4f10';
 const keyId = '0b9d6c1e-2f4a-4a3b-8d5e-7c1f9a2b3c4d';
 
-// A stand-in for the platform's key endpoints: it keeps what create is sent and answers list and revoke from it, so the test
+// A stand-in for the platform's key endpoints: it keeps what create is sent and answers list from it, so the test
 // shows the workload id survives the client's request and response types, not only the wire.
 const fakePlatform = () => {
   const keys: Key[] = [];
