@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { run } from '../cli.js';
 import { ExitCode } from '../errors.js';
@@ -457,6 +457,18 @@ describe('oars sessions gold', () => {
     expect(h.err.join('')).toContain('already exists');
     expect(readFileSync(file, 'utf8')).toBe(text);
 
+    // Moving the gold file alone, as that refusal advises, must not cost the sidecar's readings.
+    const sidecarPath = join(dir, `outcome-gold-${date}.arms.json`);
+    writeFileSync(sidecarPath, `${sidecar} `);
+    rmSync(file);
+    h.err.length = 0;
+    expect(await run(['sessions', 'gold', 'sample', '--out-dir', dir], h.deps)).toBe(ExitCode.USAGE);
+    expect(h.err.join('')).toContain(`${sidecarPath} already exists`);
+    expect(readFileSync(sidecarPath, 'utf8')).toBe(`${sidecar} `);
+    expect(existsSync(file)).toBe(false);
+    writeFileSync(sidecarPath, sidecar);
+    writeFileSync(file, text);
+
     h.out.length = 0;
     expect(await run(['sessions', 'gold', 'score', file], h.deps)).toBe(ExitCode.OK);
     expect(h.out.join('')).toContain('Judged 0 of 2');
@@ -471,6 +483,15 @@ describe('oars sessions gold', () => {
     expect(await run(['--json', 'sessions', 'gold', 'score', file], h.deps)).toBe(ExitCode.OK);
     const document: unknown = JSON.parse(h.out.join(''));
     expect(document).toMatchObject({ ok: true, judged: 1, total: 2 });
+  });
+
+  it('lets one of two racing samples write, since the refusal is checked long before the write', async () => {
+    const h = setup();
+    await populate(h);
+    const dir = join(h.staged.root, 'race');
+    const codes = await Promise.all([1, 2].map(() => run(['sessions', 'gold', 'sample', '--out-dir', dir, '--seed', 's'], h.deps)));
+    expect(codes.filter((code) => code === ExitCode.OK)).toHaveLength(1);
+    expect(h.err.join('')).toContain('EEXIST');
   });
 
   it('says no session was excluded when no term is named, and takes the default folder beside the projects root', async () => {
