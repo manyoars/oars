@@ -417,9 +417,9 @@ describe('fix round 2 behaviors', () => {
     const home = stageCodex(join(s.root, 'elsewhere-root-name'), [{ id, lines: [line(T(0), 'session_meta', { id, timestamp: T(0), cwd: '/work/app' })] }]);
     const store = await openCodexStore(home);
     const session = store?.sessions[0];
-    expect(session).toBeDefined();
-    rmSync(session?.file ?? '');
-    const failure = await store?.transcript(session as NonNullable<typeof session>).then(
+    if (store === undefined || session === undefined) throw new Error('the staged store lists no rollout');
+    rmSync(session.file);
+    const failure = await store.transcript(session).then(
       () => '',
       (error: unknown) => (error instanceof Error ? error.message : String(error)),
     );
