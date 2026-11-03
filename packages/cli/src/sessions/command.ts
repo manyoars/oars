@@ -158,20 +158,23 @@ export interface VerifyReport {
   audit: { counts: T0Counts; sessions: SessionAudit[] };
 }
 
-/** With `strict`, any violated invariant or stuck step also fails the command (exit 4) after the full report is printed; the report is built first so callers can emit it. */
+/** With `strict`, any violated invariant, stuck step, `merkle: root mismatch`, or `merkle: counts do not bind` also fails the command (exit 4) after the full report is printed; the report is built first so callers can emit it. */
 export const sessionsVerify = async (deps: SessionsDeps, options: { session: string | undefined }): Promise<Outcome & { failed: string[]; report: VerifyReport }> => {
   const runtime = runtimeOf(deps);
   const { storeDir } = runtime;
   // When the store cannot be read there is no high-water mark yet, so a failed run's key is the session asked for and `ev`.
   return runStep(newContext(storeDir, deps.now, 'manual'), 'verify', async () => {
-    const { skeletons, unreadable } = await readSkeletons(storeDir, options.session);
+    // Every skeleton is read even for one session: row 6 takes its subagent transcripts' lines, which `<id>.json` alone would miss.
+    const everySkeleton = await readSkeletons(storeDir);
+    const { unreadable } = options.session === undefined ? everySkeleton : await readSkeletons(storeDir, options.session);
+    const skeletons = everySkeleton.skeletons.filter((skeleton) => options.session === undefined || skeleton.session === options.session);
     const store = await loadStore(storeDir);
     const mine = <T extends { session: string }>(records: readonly T[]): T[] => records.filter((record) => options.session === undefined || record.session === options.session);
     const captured = mine([...store.sessions, ...store.subagents]);
     // A session behind the current version whose transcript is in neither the harness nor raw/ (or, for a Cursor session, whose composer is gone from Cursor) can never be captured again: counted apart, never a strict failure.
     const frozen = await frozenSessions(runtime, captured.filter((session) => Number(session.cv) >= OLDEST_READABLE_CAPTURE && Number(session.cv) < Number(CAPTURE_VERSION)));
     const results = [...verifyAll(skeletons), ...verifyCaptured(captured, mine(store.tools), frozen)];
-    const sessionResults = verifySessions(skeletons, captured, mine(store.tools), frozen);
+    const sessionResults = verifySessions(everySkeleton.skeletons, captured, mine(store.tools), frozen).filter((entry) => options.session === undefined || entry.session === options.session);
     const audits = await auditStore(runtime, captured, skeletons);
     const audit = { counts: auditCounts(audits), sessions: audits };
     // A root that misses a file which matches, or records that disagree with each other, leave `W` at 0 (spec 2.4): they fail `--strict` like a violated invariant.

@@ -26,11 +26,18 @@ export interface SessionAudit {
   bindings: { leaves: number; sessionLines: number; skeletonLines: number; badLines: number; bind: boolean };
 }
 
-const statOrUndefined = (file: string, bigint: boolean) =>
-  stat(file, { bigint }).catch((error: unknown) => {
+const statOrUndefined = (file: string) =>
+  stat(file, { bigint: true }).catch((error: unknown) => {
     if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return undefined;
     throw error;
   });
+
+const unrun = (session: SessionObservation, skeleton: Skeleton | undefined): SessionAudit => {
+  const leaves = skeleton?.leaves ?? 0;
+  const skeletonLines = skeleton?.lines.length ?? 0;
+  const bindings = { leaves, sessionLines: session.lines, skeletonLines, badLines: session.badLines, bind: leaves === session.lines && session.lines === skeletonLines + session.badLines };
+  return { session: session.session, result: 'not run', tier: 'skeleton', mode: null, leaves, belowMinLeaves: leaves < MIN_ROOT_LEAVES, changedSinceDeposit: false, possibleTampering: false, bindings };
+};
 
 const MISSING_SKELETON = { leaves: 0, skeletonLines: 0 };
 
@@ -52,10 +59,10 @@ export const auditSession = async (runtime: SessionsRuntime, session: SessionObs
   if (!bindings.bind) return { ...base, result: 'counts do not bind', tier: 'none', mode: null };
   const relative = join(session.project, ...relativeOfSession(session.session));
   const rawFile = join(paths(runtime.storeDir).raw, relative);
-  const raw = await statOrUndefined(rawFile, true);
+  const raw = await statOrUndefined(rawFile);
   if (raw === undefined) return { ...base, result: 'not run', tier: 'skeleton', mode: null };
   // The mode is read from the file: with the source's inode it is the link, otherwise a copy (or a link whose source is gone).
-  const source = await statOrUndefined(join(runtime.projectsRoot, relative), true);
+  const source = await statOrUndefined(join(runtime.projectsRoot, relative));
   const mode = source !== undefined && source.ino === raw.ino && source.dev === raw.dev ? 'link' : 'copy';
   const held = (state ?? (await readState(runtime.storeDir))).files[relative.split('\\').join('/')];
   // `state.json` holds float milliseconds from a plain `stat`; the match compares against the same reading.
@@ -68,12 +75,16 @@ export const auditSession = async (runtime: SessionsRuntime, session: SessionObs
   return recomputed === skeleton.merkleRoot ? { ...base, result: 'root matches and the counts bind', tier: 'skeleton', mode } : { ...base, result: 'root mismatch', tier: 'none', mode };
 };
 
-/** Every session's T0 result, in the order given. A session with no skeleton in `skeletons` is `not run`. */
+/** Every session's T0 result, in the order given. A session with no skeleton in `skeletons`, or whose raw file cannot be read, is `not run`. */
 export const auditStore = async (runtime: SessionsRuntime, sessions: readonly SessionObservation[], skeletons: readonly Skeleton[]): Promise<SessionAudit[]> => {
   const state = await readState(runtime.storeDir);
   const bySession = new Map(skeletons.map((skeleton) => [skeleton.session, skeleton]));
   const audits: SessionAudit[] = [];
-  for (const session of sessions) audits.push(await auditSession(runtime, session, bySession.get(session.session), state));
+  for (const session of sessions) {
+    const skeleton = bySession.get(session.session);
+    // One unreadable raw file (EACCES, EBUSY, too large for a string) costs that session its result, never the others'.
+    audits.push(await auditSession(runtime, session, skeleton, state).catch((): SessionAudit => unrun(session, skeleton)));
+  }
   return audits;
 };
 
