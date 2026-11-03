@@ -242,7 +242,6 @@ const buildProgram = (deps: RunDeps, argv: string[]): Command => {
       const outcome = await purchasingCard(deps, {
         apiUrl: resolveApiUrl(deps, text(options, 'apiUrl')),
         mode: billingMode(text(options, 'mode') ?? ''),
-        idempotencyKey: text(options, 'idempotencyKey') ?? randomUUID(),
       });
       emit(deps, flag(options, 'json'), outcome);
     });

@@ -11,6 +11,7 @@
   "getAgentPurchase",
   "getOffer",
   "getWorkload",
+  "get_1",
   "listAgentPrices",
   "listTemplates",
   "list_1",
