@@ -106,7 +106,7 @@ describe('buyerResponse', () => {
 
   it('reads the code from the type URI when the problem carries no code member', () => {
     const response = buyerResponse(
-      new BillingProblem({ status: 409, type: 'https://api.tradeaor.com/problems/customer-region-not-supported' }),
+      new BillingProblem({ status: 409, type: 'https://api.example.test/problems/customer-region-not-supported' }),
     );
 
     expect(response.status).toBe(403);

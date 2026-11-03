@@ -1,6 +1,6 @@
 // Parity: `parity/deploy-plans/<templateId>.json` is the golden plan of each catalog template with its defaults (every starter
 // price chosen, start on): the calls the web deploy page makes, in order. The CLI deploys each catalog entry against the fake
-// platform, which lists the entry in its catalog (`--template <id>`), and its recorded calls must equal the golden plan. aor-web syncs the same files (design §6, Parity).
+// platform, which lists the entry in its catalog (`--template <id>`), and its recorded calls must equal the golden plan. The web app syncs the same files (design §6, Parity).
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
