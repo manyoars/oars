@@ -214,14 +214,17 @@ export const sessionsGoldSample = async (deps: SessionsDeps, options: { size: nu
   const date = new Date(deps.now()).toISOString().slice(0, 10);
   const dir = options.outDir ?? join(dirname(runtime.projectsRoot), 'session-commons', 'review');
   const file = join(dir, `outcome-gold-${date}.md`);
-  const taken = await stat(file).then(() => true, () => false);
-  if (taken) throw new CliError(`${file} already exists, and it may hold judgments. Move it, or pass another --out-dir.`, ExitCode.USAGE, 'usage');
+  const arms = armsPath(file);
+  const taken = async (path: string): Promise<boolean> => stat(path).then(() => true, () => false);
+  if (await taken(file)) throw new CliError(`${file} already exists, and it may hold judgments. Move it, or pass another --out-dir.`, ExitCode.USAGE, 'usage');
+  if (await taken(arms)) throw new CliError(`${arms} already exists, and it may hold readings. Move it, or pass another --out-dir.`, ExitCode.USAGE, 'usage');
   const store = await loadStore(runtime.storeDir);
   const redact = makeRedactor(await readRedactDomains(runtime.storeDir));
   const { document, views, unreadable } = await sampleGold(runtime, store, redact, { size: options.size, batch: options.batch, seed: options.seed ?? date, date, excludeTerms: options.excludeTerms });
   await mkdir(dir, { recursive: true });
-  await writeFile(armsPath(file), JSON.stringify(document), { mode: GOLD_MODE });
-  await writeFile(file, renderGold(views, { date, batch: options.batch }), { mode: GOLD_MODE });
+  // The check above came before a long draw; `wx` holds the promise if another run wrote in between.
+  await writeFile(arms, JSON.stringify(document), { mode: GOLD_MODE, flag: 'wx' });
+  await writeFile(file, renderGold(views, { date, batch: options.batch }), { mode: GOLD_MODE, flag: 'wx' });
   const subagents = document.entries.filter((entry) => entry.subagents > 0).length;
   const lines = [
     `Wrote ${String(document.entries.length)} prompts, drawn from ${String(document.frame)}, to ${file}.`,
