@@ -1,6 +1,6 @@
 // Layer 2's self-baseline (spec 2.2, t744): a session against the operator's own other weeks.
 import { describe, expect, it } from 'vitest';
-import { BASELINE_MIN_CALLS, BASELINE_MIN_WEEKS, fitOf, medianOf, selfBaseline, weekOf, type BaselinePrompt, type BaselineSession, type BaselineTool } from './baseline.js';
+import { BASELINE_MIN_CALLS, BASELINE_MIN_WEEKS, fitOf, medianOf, selfBaseline, weekOf, type BaselinePrompt, type BaselineSession, type BaselineTool, type Fraction } from './baseline.js';
 
 const ASOF = Date.parse('2026-06-10T00:00:00Z');
 const usage = { input: 100, cacheWrite: 100, cacheRead: 800, output: 400, thinking: 0 };
@@ -14,7 +14,11 @@ interface Week {
   wallSec?: number;
   cls?: BaselinePrompt['cls'];
   status?: BaselineTool['status'];
+  usage?: Partial<BaselinePrompt['usage']>;
+  turns?: number;
 }
+
+const ratio = (n: number, d: number): Fraction => ({ n: BigInt(n), d: BigInt(d) });
 
 /** One session per week with `calls` tool calls; every other dimension holds one value, so a distance is 0 or 1. */
 const fixture = (weeks: readonly Week[]): { sessions: BaselineSession[]; tools: BaselineTool[]; prompts: BaselinePrompt[] } => {
@@ -25,7 +29,7 @@ const fixture = (weeks: readonly Week[]): { sessions: BaselineSession[]; tools: 
     const session = `s${String(index)}`;
     sessions.push({ session, tsFirst: `${week.start}T12:00:00.000Z`, tools: week.mix ?? { Read: week.calls }, ...(week.harness === undefined ? {} : { harness: week.harness }) });
     tools.push({ session, status: week.status ?? 'ok', durationMs: week.durationMs === undefined ? 50 : week.durationMs });
-    prompts.push({ session, wallSec: week.wallSec ?? 10, cls: week.cls ?? 'mixed', turns: 4, usage });
+    prompts.push({ session, wallSec: week.wallSec ?? 10, cls: week.cls ?? 'mixed', turns: week.turns ?? 4, usage: { ...usage, ...week.usage } });
   });
   return { sessions, tools, prompts };
 };
@@ -51,13 +55,16 @@ describe('selfBaseline', () => {
   });
 
   it('takes the median of the rest, the mean of the middle two for an even count', () => {
-    expect(medianOf([5, 1, 3])).toBe(3);
-    expect(medianOf([4, 1, 2, 9])).toBe(3);
+    expect(medianOf([ratio(5, 1), ratio(1, 1), ratio(3, 1)])).toEqual(ratio(3, 1));
+    // 2 and 3 are the middle two of 1, 2, 3, 9 over mixed denominators: (2/1 + 6/2) / 2 = 10/4.
+    expect(medianOf([ratio(9, 1), ratio(1, 1), ratio(2, 1), ratio(6, 2)])).toEqual(ratio(10, 4));
   });
 
   it('maps m to F: 1 at or under 1/10, 0 at or over 2/5, linear between', () => {
-    expect([fitOf(0), fitOf(0.1), fitOf(0.4), fitOf(0.9)]).toEqual([1, 1, 0, 0]);
-    expect(fitOf(0.25)).toBeCloseTo(0.5, 10);
+    expect([fitOf(ratio(0, 1)), fitOf(ratio(1, 10)), fitOf(ratio(2, 5)), fitOf(ratio(9, 10))]).toEqual([1, 1, 0, 0]);
+    // Exact rational arithmetic: 1/4 is 0.5 with no float residue, and 1/3 rounds to 4 places.
+    expect(fitOf(ratio(1, 4))).toBe(0.5);
+    expect(fitOf(ratio(1, 3))).toBe(0.2222);
   });
 
   it('scores a week identical to its baseline at distance 0 and F 1', () => {
@@ -77,7 +84,7 @@ describe('selfBaseline', () => {
       { start: '2026-06-01', calls: 1000 },
     ];
     const mix = last(weeks)?.distances.find((entry) => entry.dimension === 'tool mix');
-    expect(mix?.distance).toBeCloseTo(3 / 5, 10);
+    expect(mix?.distance).toBe(0.6);
   });
 
   it('drops durationMs for a Cursor week and takes m as the mean of the middle two of the six that remain', () => {
@@ -135,5 +142,62 @@ describe('selfBaseline', () => {
     const target = selfBaseline(data.sessions, data.tools.filter((tool) => tool.session !== 's4'), data.prompts.filter((prompt) => prompt.session !== 's4'), ASOF).find((entry) => entry.session === 's4');
     expect(target?.distances.map((entry) => entry.dimension)).toEqual(['tool mix']);
     expect(target).toMatchObject({ status: 'scored', m: 0, f: 1 });
+  });
+
+  it('gives the same results whatever order the store lists its sessions in', () => {
+    const weeks: Week[] = [
+      { start: '2026-05-04', calls: 2000, mix: { Read: 1500, Grep: 500 }, durationMs: 300 },
+      { start: '2026-05-11', calls: 1000, mix: { Grep: 700, Edit: 300 }, wallSec: 40 },
+      { start: '2026-05-18', calls: 1300, mix: { Read: 1300 }, status: 'error' },
+      { start: '2026-05-25', calls: 1100, mix: { Bash: 1100 }, cls: 'research' },
+      { start: '2026-06-01', calls: 1000 },
+    ];
+    const data = fixture(weeks);
+    const forward = selfBaseline(data.sessions, data.tools, data.prompts, ASOF);
+    const reversed = selfBaseline([...data.sessions].reverse(), [...data.tools].reverse(), [...data.prompts].reverse(), ASOF);
+    expect([...reversed].sort((a, b) => a.session.localeCompare(b.session))).toEqual(forward);
+  });
+
+  describe('a bin edge', () => {
+    /** Two baseline weeks hold `low`, two hold `high`; the target holds `target`. The result is the distance of one dimension. */
+    const across = (dimension: string, low: Partial<Week>, high: Partial<Week>, target: Partial<Week>): number | undefined => {
+      const baseline = BASE.map((week, index): Week => ({ ...week, ...(index < 2 ? low : high) }));
+      return last([...baseline, { start: '2026-06-01', calls: 1000, ...target }])?.distances.find((entry) => entry.dimension === dimension)?.distance;
+    };
+
+    it('splits durationMs at 100 ms: 99 is the lower bin, 100 the upper', () => {
+      expect(across('durationMs', { durationMs: 99 }, { durationMs: 100 }, { durationMs: 99 })).toBe(0.5);
+      expect(across('durationMs', { durationMs: 99 }, { durationMs: 100 }, { durationMs: 100 })).toBe(0.5);
+      expect(across('durationMs', { durationMs: 99 }, { durationMs: 100 }, { durationMs: 5000 })).toBe(1);
+      expect(across('durationMs', { durationMs: 100 }, { durationMs: 100 }, { durationMs: 100 })).toBe(0);
+      expect(across('durationMs', { durationMs: 100 }, { durationMs: 100 }, { durationMs: 99 })).toBe(1);
+    });
+
+    it('splits the cache-read share at 7/10: 699 of 1000 is under it, 700 is the upper bin', () => {
+      const at = (cacheRead: number): Partial<Week> => ({ usage: { input: 100, cacheWrite: 900 - cacheRead, cacheRead } });
+      expect(across('cache-read share', at(699), at(700), at(699))).toBe(0.5);
+      expect(across('cache-read share', at(700), at(700), at(700))).toBe(0);
+      expect(across('cache-read share', at(700), at(700), at(699))).toBe(1);
+      expect(across('cache-read share', at(700), at(700), at(800))).toBe(1);
+    });
+
+    it('splits output per turn at 1000: 3996 over 4 turns is under it, 4000 is the upper bin', () => {
+      const at = (output: number): Partial<Week> => ({ usage: { output } });
+      expect(across('output per turn', at(3996), at(4000), at(3996))).toBe(0.5);
+      expect(across('output per turn', at(4000), at(4000), at(4000))).toBe(0);
+      expect(across('output per turn', at(4000), at(4000), at(3996))).toBe(1);
+      // The same output over more turns is a lower rate: 4000 over 8 turns is 500, also an edge, so the upper bin of [500, 1000).
+      expect(across('output per turn', at(4000), at(4000), { ...at(4000), turns: 8 })).toBe(1);
+      expect(across('output per turn', { ...at(4000), turns: 8 }, { ...at(4000), turns: 8 }, { ...at(4000), turns: 8 })).toBe(0);
+    });
+
+    it('adds no count for zero input or zero turns, so those dimensions are dropped for the week', () => {
+      const none = { input: 0, cacheWrite: 0, cacheRead: 0 };
+      expect(last([...BASE, { start: '2026-06-01', calls: 1000, usage: none }])?.distances.map((entry) => entry.dimension)).not.toContain('cache-read share');
+      expect(last([...BASE, { start: '2026-06-01', calls: 1000, usage: none }])?.distances.map((entry) => entry.dimension)).toContain('output per turn');
+      expect(last([...BASE, { start: '2026-06-01', calls: 1000, turns: 0 }])?.distances.map((entry) => entry.dimension)).not.toContain('output per turn');
+      expect(last([...BASE, { start: '2026-06-01', calls: 1000, turns: 0 }])?.distances.map((entry) => entry.dimension)).toContain('cache-read share');
+      expect(last([...BASE, { start: '2026-06-01', calls: 1000, usage: none, turns: 0 }])?.distances.map((entry) => entry.dimension)).toEqual(['tool mix', 'status', 'durationMs', 'wallSec', 'prompt class']);
+    });
   });
 });
