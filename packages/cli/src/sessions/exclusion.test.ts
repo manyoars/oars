@@ -149,6 +149,51 @@ describe('links to folders (a transcript that was not scanned never reads as cle
     expect((await checkSession(t.staged.runtime, t.termsFile, 'p', 's12')).reason).toBe('unreadable');
   });
 
+  it('excludes a session whose own path holds a link that leads nowhere or to a file, though its main is clean', async (ctx) => {
+    const t = setup();
+    const gone = join(t.staged.root, 'gone');
+    // subagents as a broken link
+    write(t.main('p', 's14'), [CLEAN]);
+    if (!link(gone, join(t.staged.projectsRoot, 'p', 's14', 'subagents'))) return ctx.skip();
+    expect((await checkSession(t.staged.runtime, t.termsFile, 'p', 's14')).reason).toBe('unreadable');
+    // subagents as a link to a file holding the term: not a directory, so it was not scanned
+    write(t.main('p', 's15'), [CLEAN]);
+    const file = join(t.staged.root, 'agent.jsonl');
+    write(file, [DIRTY]);
+    mkdirSync(join(t.staged.projectsRoot, 'p', 's15'), { recursive: true });
+    try {
+      symlinkSync(file, join(t.staged.projectsRoot, 'p', 's15', 'subagents'), 'file');
+    } catch {
+      return ctx.skip();
+    }
+    expect((await checkSession(t.staged.runtime, t.termsFile, 'p', 's15')).reason).toBe('unreadable');
+    // the session folder as a broken link
+    write(t.main('p', 's16'), [CLEAN]);
+    if (!link(gone, join(t.staged.projectsRoot, 'p', 's16'))) return ctx.skip();
+    expect((await checkSession(t.staged.runtime, t.termsFile, 'p', 's16')).reason).toBe('unreadable');
+    // the project folder as a broken link, with a clean raw main
+    const raw = join(t.staged.storeDir, 'raw', 'q', 's17.jsonl');
+    write(raw, [CLEAN]);
+    if (!link(gone, join(t.staged.projectsRoot, 'q'))) return ctx.skip();
+    expect((await checkSession(t.staged.runtime, t.termsFile, 'q', 's17')).reason).toBe('unreadable');
+    // the assert gate refuses each
+    await expect(assertDepositable(t.staged.runtime, t.termsFile, 'p', 's14')).rejects.toBeInstanceOf(CliError);
+  });
+
+  it('aborts naming the ordinal when a link inside a project folder leads nowhere', async (ctx) => {
+    const t = setup();
+    write(t.main('p', 's18'), [CLEAN]);
+    if (!link(join(t.staged.root, 'gone'), join(t.staged.projectsRoot, 'p', S_D))) return ctx.skip();
+    const failure = await scanStore(t.staged.runtime, t.termsFile).then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+    expect(failure).toBeInstanceOf(CliError);
+    const message = failure instanceof CliError ? failure.message : '';
+    expect(message).toMatch(/folder 1 .*no list was written/);
+    expect(message).not.toContain(S_D);
+  });
+
   it('counts a linked project folder and a linked session folder, and aborts on a broken project link', async (ctx) => {
     const t = setup();
     const outside = join(t.staged.root, 'outside-proj');
