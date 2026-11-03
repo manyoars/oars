@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 // Each case spawns git and node processes; under load that takes well past vitest's 5 s default.
-vi.setConfig({ testTimeout: 60_000 });
+vi.setConfig({ testTimeout: 60_000, hookTimeout: 60_000 });
 
 const script = fileURLToPath(new URL('./check-private-names.mjs', import.meta.url));
 const hooksDir = fileURLToPath(new URL('../.githooks', import.meta.url)).replaceAll('\\', '/');
@@ -201,6 +201,32 @@ describe('check-private-names', () => {
     const r = check(git(work, 'rev-parse', 'HEAD'));
     expect(r.status).toBe(1);
     expect(r.stderr).toContain('new.txt:1');
+  });
+
+  it('reports the real line when a hunk header carries function context holding a plus-number', () => {
+    git(work, 'config', 'diff.default.xfuncname', '^int');
+    writeFileSync(join(work, '.gitattributes'), '*.c diff=default\n');
+    // The line chosen as the hunk header's function context holds " +99 @@", which a greedy match would take as the new line.
+    commit('f.c', 'int a; /* +99 @@ */\nx\nx\nx\n', 'base c');
+    commit('f.c', `int a; /* +99 @@ */\nx\nx\nx\n${TERM}\n`, 'edit c');
+    const r = check(git(work, 'rev-parse', 'HEAD'));
+    expect(r.status).toBe(1);
+    expect(r.stderr).toContain('f.c:5');
+    expect(r.stderr).not.toContain('f.c:99');
+  });
+
+  it('withholds the path when git quotes it (a tab in the name) and never names the file listed before it', () => {
+    writeFileSync(join(work, 'plain.txt'), 'clean\n');
+    git(work, 'add', 'plain.txt');
+    // A tab cannot be a file name on Windows, so the entry goes straight into the index.
+    const blob = spawnSync('git', ['hash-object', '-w', '--stdin'], { cwd: work, encoding: 'utf8', env, input: `${TERM}\n` }).stdout.trim();
+    git(work, 'update-index', '--add', '--cacheinfo', `100644,${blob},tab\there.txt`);
+    git(work, 'commit', '-q', '-m', 'tabbed name');
+    const sha = git(work, 'rev-parse', 'HEAD');
+    const r = check(sha);
+    expect(r.status).toBe(1);
+    expect(r.stderr).toContain('<path withheld>:1');
+    expect(r.stderr).not.toContain('plain.txt');
   });
 
   it('exits 2 with usage when no sha is given', () => {
