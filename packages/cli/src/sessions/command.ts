@@ -12,6 +12,7 @@ import { CAPTURE_VERSION, OLDEST_READABLE_CAPTURE, type StepRow } from './schema
 import { deposit, frozenSessions, loadStore, readCalls, readRedactDomains, readSkeletons, slugOf, type SessionsRuntime, type Store } from './store.js';
 import { formatStepCounters, inputKey, newContext, readSteps, stampKey, runDeposit, runStep, stepCounters, stuckSteps, type StuckStep } from './steps.js';
 import { auditCounts, auditStore, formatAudit, type SessionAudit, type T0Counts } from './audit.js';
+import { readSurvival, recordSurvival, SURVIVAL_DAYS } from './survival.js';
 import { CAPTURE_INVARIANTS, formatSessionResults, formatVerify, verifyAll, verifyCaptured, verifySessions, type InvariantResult, type SessionVerification } from './verify.js';
 
 export interface SessionsDeps {
@@ -41,6 +42,7 @@ export const sessionsDeposit = async (deps: SessionsDeps, options: { allow: stri
     const done = await deposit(runtime, { allow, redactDomains: options.redactDomains, now: deps.now }, trace);
     return { value: done, in: { transcript: done.sessions + done.subagents + done.unchanged } };
   });
+  const survival = await recordSurvival(runtime, allow, deps.now);
   const lines = [
     `Deposited ${String(result.sessions)} sessions and ${String(result.subagents)} subagent transcripts (${String(result.lines)} lines, ${String(result.badLines)} unparseable) as ${String(result.observations)} observations; ${String(result.unchanged)} files unchanged.`,
     `Read ${String(result.folders.length)} folders; skipped ${String(result.skippedFolders)} not on the allowlist.`,
@@ -48,8 +50,11 @@ export const sessionsDeposit = async (deps: SessionsDeps, options: { allow: stri
     ...result.cursorUnreadable.map((reason) => `Cursor store not read: ${reason}`),
     ...(result.cursorRejected === 0 ? [] : [`Skipped ${String(result.cursorRejected)} Cursor sessions whose id is not a safe file name.`]),
     ...(result.missing.length === 0 ? [] : [`No project folder matched: ${result.missing.join(', ')}.`]),
+    survival === null
+      ? 'Commit survival not read this run.'
+      : `Commits older than ${String(SURVIVAL_DAYS)} days: ${String(survival.survived)} survived, ${String(survival.reverted)} reverted, ${String(survival.unreachable)} unreachable, ${String(survival.unknown)} unknown.`,
   ];
-  return { document: { ok: true, ...result }, text: lines.join('\n') };
+  return { document: { ok: true, ...result, survival }, text: lines.join('\n') };
 };
 
 export const sessionsRecall = async (deps: SessionsDeps, query: RecallQuery): Promise<Outcome> => {
