@@ -34,7 +34,7 @@ These flags work on every command:
 Signs in with your browser (RFC 8628 device flow) and stores the login.
 
 - `--no-browser` prints the link and code without opening a browser.
-- `--issuer-url <url>` is the Keycloak realm URL. The default is `OARS_ISSUER_URL`. With neither, `login` uses the built-in Many Oars issuer once Many Oars has launched, which it learns from `https://manyoars.com/.well-known/oars.json` (`{"launched": true}`). The flag only switches the built-in issuer on; it never supplies a URL. Before launch, with no `--issuer-url` or `OARS_ISSUER_URL`, the command prints "Many Oars has not launched yet: pass --issuer-url or set OARS_ISSUER_URL." and exits 2.
+- `--issuer-url <url>` is the Keycloak realm URL. The default is `OARS_ISSUER_URL`. With neither, `login` uses the built-in Many Oars issuer once Many Oars has launched, which it learns from `https://manyoars.com/.well-known/oars.json` (`{"launched": true}`). The flag only switches the built-in issuer on; it never supplies a URL. Before launch, or when the built-in issuer does not answer discovery, with no `--issuer-url` or `OARS_ISSUER_URL`, the command prints "Many Oars has not launched yet: pass --issuer-url or set OARS_ISSUER_URL." and exits 2.
 
 ### logout
 
