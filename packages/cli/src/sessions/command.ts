@@ -2,6 +2,7 @@
 import { readFile } from 'node:fs/promises';
 import type { Outcome } from '../cli.js';
 import { parseAllowList } from './allow.js';
+import { sourceLabel } from './sources.js';
 import { CliError, ExitCode } from '../errors.js';
 import { books, formatBooks, formatMeasure, formatRecall, measure, recall, type BooksBy, type RecallQuery } from './query.js';
 import { readHookCalls } from './hook-calls.js';
@@ -43,9 +44,11 @@ export const sessionsDeposit = async (deps: SessionsDeps, options: { allow: stri
   const lines = [
     `Deposited ${String(result.sessions)} sessions and ${String(result.subagents)} subagent transcripts (${String(result.lines)} lines, ${String(result.badLines)} unparseable) as ${String(result.observations)} observations; ${String(result.unchanged)} files unchanged.`,
     `Read ${String(result.folders.length)} folders; skipped ${String(result.skippedFolders)} not on the allowlist.`,
-    ...(result.cursor === 0 ? [] : [`Read ${String(result.cursor)} Cursor sessions.`]),
-    ...result.cursorUnreadable.map((reason) => `Cursor store not read: ${reason}`),
-    ...(result.cursorRejected === 0 ? [] : [`Skipped ${String(result.cursorRejected)} Cursor sessions whose id is not a safe file name.`]),
+    ...Object.entries(result.sources).flatMap(([name, counts]) => [
+      ...(counts.read === 0 ? [] : [`Read ${String(counts.read)} ${sourceLabel(name)} sessions.`]),
+      ...counts.unreadable.map((reason) => `${sourceLabel(name)} store not read: ${reason}`),
+      ...(counts.rejected === 0 ? [] : [`Skipped ${String(counts.rejected)} ${sourceLabel(name)} sessions whose id is not a safe file name.`]),
+    ]),
     ...(result.missing.length === 0 ? [] : [`No project folder matched: ${result.missing.join(', ')}.`]),
   ];
   return { document: { ok: true, ...result }, text: lines.join('\n') };

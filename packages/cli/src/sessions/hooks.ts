@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { performance } from 'node:perf_hooks';
 import { defaultConfigDir } from '../credentials.js';
 import { cursorRoot } from './cursor.js';
+import { SOURCES, sourceLabel } from './sources.js';
 import { signatureOf } from './extract.js';
 import { appendHookCall } from './hook-calls.js';
 import { contextBlock, readIndex } from './hook-index.js';
@@ -93,11 +94,13 @@ const nightly = async (runtime: SessionsRuntime, now: () => number): Promise<Out
     const done = await deposit(runtime, { allow: saved.allow, redactDomains: saved.redactDomains, now }, trace);
     return { value: done, in: { transcript: done.sessions + done.subagents + done.unchanged } };
   });
-  // A Cursor store that could not be read does not fail the run, so the record carries it or nobody sees it.
-  const unreadable = result.cursorUnreadableLogged[0];
+  // A source store that could not be read does not fail the run, so the record carries it or nobody sees it.
+  const counts = Object.entries(result.sources);
+  const unreadable = counts.flatMap(([, tally]) => tally.unreadableLogged)[0];
   if (unreadable !== undefined) return { hit: true, queried: false, error: await errorLine(runtime.storeDir, unreadable) };
-  // A skip for an unsafe composer id is likewise reported, never silent (the `rejected` doc in cursor.ts); an unreadable store, which names its own reason, takes precedence.
-  return result.cursorRejected === 0 ? { hit: true, queried: false } : { hit: true, queried: false, error: `Skipped ${String(result.cursorRejected)} Cursor sessions whose id is not a safe file name` };
+  // A skip for an unsafe session id is likewise reported, never silent (the `rejected` doc in sources.ts); an unreadable store, which names its own reason, takes precedence.
+  const skipped = counts.find(([, tally]) => tally.rejected > 0);
+  return skipped === undefined ? { hit: true, queried: false } : { hit: true, queried: false, error: `Skipped ${String(skipped[1].rejected)} ${sourceLabel(skipped[0])} sessions whose id is not a safe file name` };
 };
 
 /** What a lookup hook looks up, as its recall key (spec 4.2 names none for a lookup): the cwd for session-start, the failure's signature for post-tool; null when it had nothing to look up. */
@@ -111,7 +114,7 @@ const lookupKey = (event: HookEvent, input: Input): string | null => {
   return event === 'post-tool' && tool !== undefined && text !== undefined ? stampKey(event, signatureOf(tool, text, makeRedactor([]))) : null;
 };
 
-/** The runtime a hook process runs with. Only `nightly` reads the Cursor store (a saved `--allow cursor`); the Stop path stays free of it. */
+/** The runtime a hook process runs with. Only `nightly` reads the non-Claude stores (a saved `--allow cursor` or `--allow codex`); the Stop path stays free of it. */
 export const hookRuntime = (
   event: HookEvent,
   env: { [name: string]: string | undefined },
@@ -121,7 +124,7 @@ export const hookRuntime = (
 ): SessionsRuntime => ({
   storeDir: join(defaultConfigDir(env, platform, home), 'oars', 'sessions'),
   projectsRoot: join(env.CLAUDE_CONFIG_DIR ?? join(home, '.claude'), 'projects'),
-  ...(event === 'nightly' ? { cursorRoot: cursorRoot(platform, env, home) } : {}),
+  ...(event === 'nightly' ? { cursorRoot: cursorRoot(platform, env, home), sourceRoots: Object.fromEntries(SOURCES.map((source) => [source.name, source.root(platform, env, home)])) } : {}),
   ...io,
 });
 
