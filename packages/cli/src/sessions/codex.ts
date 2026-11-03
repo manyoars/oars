@@ -10,9 +10,11 @@
 // out as the transcript lines `captureSession` already reads, so redaction, the 1,000-character line cap, the salted file hashes, and the
 // skeleton are the Claude Code path's own code:
 //   session_meta        {id, cwd, cli_version, timestamp, history_mode, parent_thread_id, forked_from_ordinal_exclusive, subagent_history_start_ordinal}: the
-//                       working directory and the harness version. A spawned agent has `parent_thread_id` (protocol.rs:3464); records whose `ordinal` is below
-//                       its `subagent_history_start_ordinal` (:3511) or a fork's `forked_from_ordinal_exclusive` (:3462) are the parent's, and are dropped. A `paginated` rollout holds
-//                       item_completed events instead of the legacy ones below (rollout/src/policy.rs:143), so it is reported unreadable by name
+//                       working directory and the harness version; only the first one in the file (recorder.rs:1157-1158). A spawned agent has `parent_thread_id` (protocol.rs:3464); records whose
+//                       `ordinal` is below its `subagent_history_start_ordinal` (:3511) or a fork's `forked_from_ordinal_exclusive` (:3462) are the parent's, and are dropped. Ordinals exist
+//                       only in a Paginated rollout (ordinal.rs:37), the CLI's default (thread-store/src/local/mod.rs:512-515), which holds item_completed TurnItems
+//                       (UserMessage, AgentMessage, FileChange, McpToolCall) in place of the legacy events below (rollout/src/policy.rs:164-176); both are read.
+//                       A Legacy fork's copied history is dropped by matching the parent rollout record for record
 //   turn_context        {model, cwd}: the model, and the directory when it changes
 //   event_msg user_message {message}            a prompt (the `response_item` user messages also hold injected context, so they are not read)
 //   event_msg agent_message {message}           the assistant's text
@@ -26,7 +28,7 @@
 //                       patch with no end event stays unsettled (a rejected patch is only a `RespondToModel` output, tools/handlers/apply_patch.rs)
 //   event_msg exec_command_end                  never persisted at ac558e2 (policy.rs:165) nor at rust-v0.46.0; read only if a rollout carries one
 // Older shapes: the JSON `{output, metadata.exit_code}` wrapper of a shell output (rust-v0.46.0 core/src/tools/mod.rs:186-210).
-// What Codex has no equivalent of (cost, hooks, a message id) stays at the value capture gives an absent field.
+// What Codex has no equivalent of (cost, a message id) stays at the value capture gives an absent field.
 
 import { createReadStream } from 'node:fs';
 import { readdir, readFile, stat } from 'node:fs/promises';
