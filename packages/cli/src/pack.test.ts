@@ -162,11 +162,22 @@ describe('the public text states facts only', () => {
     expect(description).not.toMatch(/nothing (leaves|is sent)/i);
   });
 
+  it('the description and the 0.3.0 changelog entry carry the gold arms exception', () => {
+    const changelog = readFileSync(join(cliFolder, 'CHANGELOG.md'), 'utf8');
+    const entry = changelog.slice(changelog.indexOf('## 0.3.0'), changelog.indexOf('## 0.2.0') > 0 ? changelog.indexOf('## 0.2.0') : undefined);
+    for (const text of [description, entry]) {
+      expect(text).toContain('gold arms');
+      expect(text).toContain('your own Claude subscription');
+    }
+    expect(entry).toContain('`gold sample`, `gold arms`, and `gold score`');
+  });
+
   it.each([['packages/cli/README.md', join(cliFolder, 'README.md')], ['README.md', join(root, 'README.md')]])('%s says raw/ is unredacted, what the harness sends, where <config> is, and that paid agents are not open', (_name, file) => {
     const text = readFileSync(file, 'utf8');
     expect(text).toContain('raw transcripts');
     expect(text).toMatch(/unredacted/);
-    expect(text).toContain('oars itself sends nothing; the hooks and the MCP tool add recall text to the running session, and your harness sends that to its model like any other context.');
+    expect(text).toContain('except `gold arms`, which sends redacted text through your own Claude subscription');
+    expect(text).toContain('Apart from that, oars itself sends nothing; the hooks and the MCP tool add recall text to the running session, and your harness sends that to its model like any other context.');
     expect(text).toContain(NOT_OPEN);
     expect(text).toContain('%APPDATA%');
     expect(text).toContain('~/.config');
