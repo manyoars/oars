@@ -151,4 +151,22 @@ describe('recall counts', () => {
     expect(recallCounts(deriveConsequences(line([call(2, 'Read', 0)]), [recallAt(1)]))[0]?.followed).toBe(0);
     expect(formatRecallCounts([])).toBe('No recalls in that span.');
   });
+
+  it('counts a held window that shares a call with a shown one, so the baseline states its contamination', () => {
+    const base = line([call(2, 'Edit', 0), call(3, 'Read', 0), call(10, 'Read', 1)]);
+    const recalls = [recallAt(1, 'held'), recallAt(2), recallAt(5, 'held'), recallAt(100, 'held'), recallAt(100)];
+    const rows = recallCounts(deriveConsequences(base, recalls));
+    expect(rows.map(({ arm, windows, overlapped }) => ({ arm, windows, overlapped }))).toEqual([
+      { arm: 'held', windows: 3, overlapped: 1 },
+      { arm: 'shown', windows: 2, overlapped: 0 },
+    ]);
+    expect(formatRecallCounts(rows)).toContain('window tokens unmeasured, 1 overlapped');
+  });
+
+  it('reads the overlap against every shown window, so one day of held recalls still sees a shown one from before it', () => {
+    const base = line([call(2, 'Edit', 0), call(3, 'Read', 0)]);
+    const yesterday = { ...recallAt(1), at: '2026-10-31T23:59:59.000Z' };
+    const rows = recallCounts(deriveConsequences(base, [yesterday, recallAt(1, 'held')]), '2026-11-01');
+    expect(rows.map(({ arm, overlapped }) => ({ arm, overlapped }))).toEqual([{ arm: 'held', overlapped: 1 }]);
+  });
 });
