@@ -19,6 +19,25 @@ Under `<config>/oars/sessions/` (`%APPDATA%` on Windows, `$XDG_CONFIG_HOME` or `
 | `raw/<project>/<path>` | oars' own archive of every deposited transcript (below). |
 | `commit-survival.jsonl` | What became of each commit older than `SURVIVAL_DAYS`, appended on a change of state. See "Commit survival". |
 
+## Capture scope: the allowlist
+
+Capture reads a project folder only when an `--allow` entry names it. The rule is one filter, `allow.allows(folder)`, applied in
+`deposit` (`store.ts`, `depositLocked`) and in the Stop hook (`depositSessionLocked`, which returns `not-allowed` and writes nothing). Everything else under `~/.claude/projects` is
+out of scope by design ("nothing is read from a folder you have not named"), so a transcript there is never in `state.json`, `raw/`, or any record. That is a
+choice the operator makes, not a gap. Three kinds of folder are left out unless named:
+
+- **Other projects.** A repository you never allowed.
+- **Throwaway working directories.** Scratch and test folders under the temp directory, and probe directories a harness job starts in.
+- **Worktree folders of an allowed repository.** Claude Code names a worktree's folder `<repository>--claude-worktrees-<name>`, a new folder per worktree. An entry naming
+  only the repository's folder (`~/work/app`, or its slug) matches that one folder and none of its worktrees. Name them with a folder prefix (`~/work/app/`, trailing slash) or a glob (`*-work-app*`), which matches the repository and every folder under it, including worktrees created later.
+
+A transcript in an allowed folder that is not yet in the store is a different thing: it is a session still running, or one that ended after the last
+whole-store run, and the next `deposit` or nightly run takes it. The SessionEnd hook deposits only its own transcript.
+
+The scope is not silent. `oars sessions deposit` prints the number of folders it skipped. `oars sessions verify` lists, from folder listings alone (it
+opens no transcript), the folders that hold transcripts and are not on the saved allowlist, with their transcript counts: a text line (names capped at ten) and `scope`
+(`folders`, `transcripts`, and every name) in the `--json` document. It is scope, not a failure, so it never fails `--strict`. Subagent transcripts are not counted, as everywhere else.
+
 ## The log's growth and compaction
 
 Every append to `observations.jsonl`, from a hook or a deposit, runs under `store.lock`. A changed transcript adds a full new `rev` of that session, and a
