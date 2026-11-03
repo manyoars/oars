@@ -5,6 +5,7 @@
 import { join } from 'node:path';
 import { codexRoot, openCodexStore } from './codex.js';
 import { cursorRoot, openCursorStore } from './cursor.js';
+import type { SubagentOrigin } from './extract.js';
 import type { Harness } from './schema.js';
 
 /** A session found in a source, before its transcript is read. */
@@ -16,6 +17,8 @@ export interface SourceSession {
   /** With `mtimeMs`, the cursor `state.json` keeps to tell a changed session from one already deposited. */
   size: number;
   mtimeMs: number;
+  /** Set when the session is a spawned agent's: it is deposited as a subagent of its parent, so session counts stay main sessions. */
+  subagent?: SubagentOrigin;
 }
 
 export interface SourceStore {
@@ -86,7 +89,13 @@ const codex: Source = {
     if (store === undefined) return undefined;
     const byId = new Map(store.sessions.map((session) => [session.id, session]));
     return {
-      sessions: store.sessions.map((session) => ({ id: session.id, folder: session.folder, size: session.size, mtimeMs: session.mtimeMs })),
+      sessions: store.sessions.map((session) => ({
+        id: session.id,
+        folder: session.folder,
+        size: session.size,
+        mtimeMs: session.mtimeMs,
+        ...(session.parent === null ? {} : { subagent: { parent: `codex-${session.parent}`, agentType: session.agentRole, spawnedBy: null } }),
+      })),
       transcript: async (session) => await store.transcript(need(byId.get(session.id))),
       rejected: store.rejected,
       unreadable: store.unreadable,

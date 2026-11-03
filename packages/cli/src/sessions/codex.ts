@@ -9,7 +9,9 @@
 // A line is `{timestamp, type, payload}` (history/src/lib.rs `RolloutLine`, rollout_payload.rs). Like cursor.ts, the reader writes each session
 // out as the transcript lines `captureSession` already reads, so redaction, the 1,000-character line cap, the salted file hashes, and the
 // skeleton are the Claude Code path's own code:
-//   session_meta        {id, cwd, cli_version, timestamp, history_mode}: the working directory and the harness version. A `paginated` rollout holds
+//   session_meta        {id, cwd, cli_version, timestamp, history_mode, parent_thread_id, forked_from_ordinal_exclusive, subagent_history_start_ordinal}: the
+//                       working directory and the harness version. A spawned agent has `parent_thread_id` (protocol.rs:3464); records whose `ordinal` is below
+//                       its `subagent_history_start_ordinal` (:3511) or a fork's `forked_from_ordinal_exclusive` (:3462) are the parent's, and are dropped. A `paginated` rollout holds
 //                       item_completed events instead of the legacy ones below (rollout/src/policy.rs:143), so it is reported unreadable by name
 //   turn_context        {model, cwd}: the model, and the directory when it changes
 //   event_msg user_message {message}            a prompt (the `response_item` user messages also hold injected context, so they are not read)
@@ -17,11 +19,14 @@
 //   event_msg token_count {info.last_token_usage}  one model response's usage, closing the lines since the last one
 //   response_item function_call / local_shell_call / custom_tool_call   a tool call
 //   response_item function_call_output {call_id, output}   a shell call's outcome: the text `Exit code: N` / `Process exited with code N` then `Output:`
-//                       (core/src/tools/mod.rs:107-113, context.rs:556), the real exit code. A non-shell call has no failure signal in this format.
-//   event_msg patch_apply_end {call_id, success, stderr}   an apply_patch call's outcome (persisted in Legacy history mode only)
+//                       (core/src/tools/mod.rs:107-113, context.rs:556), the real exit code; `execution error: ...` (core/src/tools/events.rs:438) is a
+//                       call that failed to spawn. `write_stdin` (handlers/shell_spec.rs:113) is a shell call too: the process it polls ends there
+//   event_msg mcp_tool_call_end {call_id, result}   an MCP call's outcome: `result.Err`, or `result.Ok.isError` (protocol.rs:3047, :3076); Legacy mode only
+//   event_msg patch_apply_end {call_id, success, stderr, status}   an apply_patch call's outcome (Legacy mode only); a declined one settles nothing, and a
+//                       patch with no end event stays unsettled (a rejected patch is only a `RespondToModel` output, tools/handlers/apply_patch.rs)
 //   event_msg exec_command_end                  never persisted at ac558e2 (policy.rs:165) nor at rust-v0.46.0; read only if a rollout carries one
 // Older shapes: the JSON `{output, metadata.exit_code}` wrapper of a shell output (rust-v0.46.0 core/src/tools/mod.rs:186-210).
-// What Codex has no equivalent of (subagents, cost, hooks, a message id) stays at the value capture gives an absent field.
+// What Codex has no equivalent of (cost, hooks, a message id) stays at the value capture gives an absent field.
 
 import { createReadStream } from 'node:fs';
 import { readdir, readFile, stat } from 'node:fs/promises';
@@ -55,6 +60,10 @@ export interface CodexSession {
   id: string;
   /** `session_meta.cwd`; null when the first line names none. */
   folder: string | null;
+  /** `session_meta.parent_thread_id`: set for a spawned agent's rollout, which is deposited as a subagent of that thread. */
+  parent: string | null;
+  /** `session_meta.agent_role` (protocol.rs:3489), when the spawned agent has one. */
+  agentRole: string | null;
   file: string;
   size: number;
   mtimeMs: number;
@@ -96,15 +105,17 @@ const firstLine = async (file: string): Promise<string> => {
   }
 };
 
-const walk = async (dir: string, found: string[]): Promise<void> => {
+/** Lists rollout files under `dir`; only a missing folder is silent, any other failure (EACCES, ENOTDIR) is reported as `<dir>: <reason>`. */
+const walk = async (dir: string, found: string[], unreadable: string[]): Promise<void> => {
   let entries;
   try {
     entries = await readdir(dir, { withFileTypes: true });
-  } catch {
+  } catch (error) {
+    if (!(error instanceof Error && 'code' in error && error.code === 'ENOENT')) unreadable.push(`${dir}: ${error instanceof Error ? error.message : String(error)}`);
     return;
   }
   for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name))) {
-    if (entry.isDirectory()) await walk(join(dir, entry.name), found);
+    if (entry.isDirectory()) await walk(join(dir, entry.name), found, unreadable);
     else if (entry.isFile() && ROLLOUT.test(entry.name)) found.push(join(dir, entry.name));
   }
 };
@@ -116,7 +127,7 @@ const iso = (value: unknown): string | undefined => {
 };
 
 /** The tool vocabulary prompt classes and `files` are computed in; a Codex name with no counterpart keeps its own. */
-const SHELL_CALLS = new Set(['shell', 'shell_command', 'exec_command', 'local_shell', 'container.exec']);
+const SHELL_CALLS = new Set(['shell', 'shell_command', 'exec_command', 'local_shell', 'container.exec', 'write_stdin']);
 const PATCH_CALLS = new Set(['apply_patch']);
 
 const commandOf = (args: Obj): string | undefined => {
@@ -130,6 +141,9 @@ const patchFiles = (input: string): string[] => [...input.matchAll(/^\*\*\* (?:A
 
 const EXIT_LINE = /^(?:Exit code: |Process exited with code )(-?\d+)\s*$/m;
 const OUTPUT_MARK = /(?:^|\n)Output:\n?/;
+const RUNNING_LINE = /^Process running with session ID (\S+)\s*$/m;
+/** core/src/tools/events.rs:438: the message of a call that failed before it produced an exit code. */
+const SPAWN_ERROR = /^execution error: /;
 
 /** The text of a `function_call_output` body: a bare string, or an array of `{type: input_text, text}` items (protocol/src/models.rs:2376). */
 const bodyText = (raw: unknown): string => {
@@ -139,17 +153,18 @@ const bodyText = (raw: unknown): string => {
 
 /**
  * What a shell output says: the real exit code and the text after the `Output:` line, which is what an error line is cut from. The two header
- * forms are core/src/tools/mod.rs:107-113 (`Exit code: N`) and core/src/tools/context.rs:556 (`Process exited with code N`); no code means the
- * process was still running. An older Codex wrote JSON `{output, metadata.exit_code}` (rust-v0.46.0 core/src/tools/mod.rs:186-210).
+ * forms are core/src/tools/mod.rs:107-113 (`Exit code: N`) and core/src/tools/context.rs:556 (`Process exited with code N`); no code and no
+ * `Process running with session ID N` line means the call failed to spawn (`execution error: ...`, events.rs:438) or was declined (`... rejected by user`, :456). An older Codex wrote JSON `{output, metadata.exit_code}` (rust-v0.46.0 core/src/tools/mod.rs:186-210).
  */
-const outcomeOf = (raw: unknown): { text: string; exit: number | undefined } => {
+const outcomeOf = (raw: unknown): { text: string; exit: number | undefined; spawnError: boolean; running: string | undefined } => {
   const body = bodyText(raw);
   const wrapped = parse(body);
-  if (isObj(wrapped) && typeof wrapped.output === 'string') return { text: wrapped.output, exit: isObj(wrapped.metadata) ? num(wrapped.metadata.exit_code) : undefined };
+  if (isObj(wrapped) && typeof wrapped.output === 'string') return { text: wrapped.output, exit: isObj(wrapped.metadata) ? num(wrapped.metadata.exit_code) : undefined, spawnError: false, running: undefined };
   const mark = OUTPUT_MARK.exec(body);
-  if (mark === null) return { text: body, exit: undefined };
-  const code = EXIT_LINE.exec(body.slice(0, mark.index))?.[1];
-  return { text: body.slice(mark.index + mark[0].length), exit: code === undefined ? undefined : Number(code) };
+  if (mark === null) return { text: body, exit: undefined, spawnError: SPAWN_ERROR.test(body), running: undefined };
+  const head = body.slice(0, mark.index);
+  const code = EXIT_LINE.exec(head)?.[1];
+  return { text: body.slice(mark.index + mark[0].length), exit: code === undefined ? undefined : Number(code), spawnError: false, running: RUNNING_LINE.exec(head)?.[1] };
 };
 
 const failureOf = (exit: number | undefined, text: string): string | undefined => (exit === undefined || exit === 0 ? undefined : `Exit code ${String(exit)}\n${text}`);
@@ -173,10 +188,10 @@ const usageOf = (info: unknown): Obj | undefined => {
   };
 };
 
-/** One rollout as the lines `captureSession` reads. */
 /** The non-blank lines of a rollout that are not JSON (a torn write), kept so `captureSession` counts them and the deposit line reports them. */
 export const rolloutBadLines = (text: string): string[] => text.split('\n').filter((raw) => raw.trim() !== '' && parse(raw) === undefined);
 
+/** One rollout as the lines `captureSession` reads. */
 export const rolloutLines = (text: string, fallbackId: string): Obj[] => {
   const nonblank = text.split('\n').filter((raw) => raw.trim() !== '');
   if (nonblank.length > 0 && !nonblank.some((raw) => isObj(parse(raw)))) throw new Error('no parseable line');
@@ -189,7 +204,11 @@ export const rolloutLines = (text: string, fallbackId: string): Obj[] => {
   // The assistant lines since the last counted token_count share one response id; the first of them carries its usage.
   let open: Obj | undefined;
   let lastTotal: number | undefined;
-  const calls = new Map<string, { kind: 'shell' | 'patch' | 'other'; ids: string[] }>();
+  const calls = new Map<string, { kind: 'shell' | 'patch' | 'other'; ids: string[]; session?: string }>();
+  // A unified-exec process still running, by its session id, to the exec_command that started it: the `write_stdin` that sees it exit settles both.
+  const running = new Map<string, string>();
+  // Records below this ordinal are inherited from a parent thread (a subagent's or a fork's), not the session's own.
+  let inherited: number | undefined;
   const resolved = new Set<string>();
   const stamp = (value: unknown): string => {
     const candidate = iso(value);
@@ -221,6 +240,8 @@ export const rolloutLines = (text: string, fallbackId: string): Obj[] => {
     const entry = parse(raw);
     if (!isObj(entry) || !isObj(entry.payload)) continue;
     const payload = entry.payload;
+    const ordinal = num(entry.ordinal);
+    if (inherited !== undefined && ordinal !== undefined && ordinal < inherited && entry.type !== 'session_meta') continue;
     const when = stamp(entry.timestamp);
     const type = str(entry.type);
     if (type === 'session_meta') {
@@ -231,6 +252,7 @@ export const rolloutLines = (text: string, fallbackId: string): Obj[] => {
       const version = str(payload.cli_version);
       if (version !== undefined) base.version = version;
       stamp(payload.timestamp);
+      inherited = Math.max(num(payload.subagent_history_start_ordinal) ?? 0, num(payload.forked_from_ordinal_exclusive) ?? 0) || undefined;
       if (str(payload.history_mode) === 'paginated') throw new Error('paginated history mode (item_completed events) is not read');
     } else if (type === 'turn_context') {
       model = str(payload.model) ?? model;
@@ -270,10 +292,20 @@ export const rolloutLines = (text: string, fallbackId: string): Obj[] => {
           // The struct requires exit_code; a missing one with status failed is still a failure.
           result(id, exit === undefined && payload.status === 'failed' ? `Exit code unknown\n${output}` : failureOf(exit, output), when);
         }
+      } else if (kind === 'mcp_tool_call_end') {
+        const id = str(payload.call_id);
+        const known = id === undefined ? undefined : calls.get(id);
+        if (id !== undefined && known?.kind === 'other' && !resolved.has(id)) {
+          resolved.add(id);
+          const outcome = isObj(payload.result) ? payload.result : {};
+          const refused = isObj(outcome.Ok) && outcome.Ok.isError === true;
+          const text = typeof outcome.Err === 'string' ? outcome.Err : isObj(outcome.Ok) ? bodyText(outcome.Ok.content) : '';
+          result(id, typeof outcome.Err === 'string' || refused ? (text === '' ? 'mcp tool call failed' : text) : undefined, when);
+        }
       } else if (kind === 'patch_apply_end') {
         const id = str(payload.call_id);
         const known = id === undefined ? undefined : calls.get(id);
-        if (id !== undefined && known?.kind === 'patch' && !resolved.has(id)) {
+        if (id !== undefined && known?.kind === 'patch' && !resolved.has(id) && payload.status !== 'declined') {
           resolved.add(id);
           const failure = payload.success === false ? (str(payload.stderr) ?? 'patch failed') : undefined;
           for (const part of known.ids) result(part, failure, when);
@@ -290,7 +322,8 @@ export const rolloutLines = (text: string, fallbackId: string): Obj[] => {
         if (id === undefined) continue;
         if (kind === 'local_shell_call' || SHELL_CALLS.has(name)) {
           const command = commandOf(kind === 'local_shell_call' ? action : input);
-          calls.set(id, { kind: 'shell', ids: [id] });
+          const polled = name === 'write_stdin' ? (str(input.session_id) ?? (num(input.session_id) === undefined ? undefined : String(num(input.session_id)))) : undefined;
+          calls.set(id, { kind: 'shell', ids: [id], ...(polled === undefined ? {} : { session: polled }) });
           assistant([{ type: 'tool_use', id, name: 'Bash', input: command === undefined ? {} : { command } }], when);
         } else if (PATCH_CALLS.has(name)) {
           const files = patchFiles(str(input.input) ?? str(input.patch) ?? '');
@@ -311,12 +344,24 @@ export const rolloutLines = (text: string, fallbackId: string): Obj[] => {
         const known = id === undefined ? undefined : calls.get(id);
         if (id !== undefined && known !== undefined && !resolved.has(id)) {
           const out = outcomeOf(payload.output);
-          // Only a shell call has a failure signal (its exit code); another call's output text is not read for one. A shell output with no
-          // exit code (a process still running) stays unsettled.
-          if (known.kind !== 'shell' || out.exit !== undefined) {
+          if (known.kind === 'shell') {
+            // A shell call settles on its exit code, or on a failure to spawn. A process still running stays unsettled and is remembered by its
+            // session id, so the `write_stdin` that sees it exit settles it too. A declined call has neither, and stays unsettled.
+            if (out.exit !== undefined || out.spawnError) {
+              resolved.add(id);
+              const failure = out.spawnError ? out.text : failureOf(out.exit, out.text);
+              result(id, failure, when);
+              const pending = known.session === undefined ? undefined : running.get(known.session);
+              if (pending !== undefined && !resolved.has(pending)) {
+                resolved.add(pending);
+                result(pending, failure, when);
+              }
+            } else if (out.running !== undefined && known.session === undefined) running.set(out.running, id);
+          } else if (known.kind === 'other') {
+            // Another call's output carries no failure signal (an MCP call's comes from its mcp_tool_call_end), and a patch settles only from its
+            // patch_apply_end, because a rejected patch comes back as plain output text (tools/handlers/apply_patch.rs).
             resolved.add(id);
-            const failure = known.kind === 'shell' ? failureOf(out.exit, out.text) : undefined;
-            for (const part of known.ids) result(part, failure, when);
+            result(id, undefined, when);
           }
         }
       }
@@ -328,11 +373,11 @@ export const rolloutLines = (text: string, fallbackId: string): Obj[] => {
 /** Opens the Codex store under `root`; undefined when it holds no `sessions` folder, so a machine without Codex is skipped silently. */
 export const openCodexStore = async (root: string): Promise<CodexStore | undefined> => {
   const files: string[] = [];
-  await walk(join(root, 'sessions'), files);
-  await walk(join(root, 'archived_sessions'), files);
-  if (files.length === 0) return undefined;
-  const sessions = new Map<string, CodexSession>();
   const unreadable: string[] = [];
+  await walk(join(root, 'sessions'), files, unreadable);
+  await walk(join(root, 'archived_sessions'), files, unreadable);
+  if (files.length === 0 && unreadable.length === 0) return undefined;
+  const sessions = new Map<string, CodexSession>();
   let rejected = 0;
   for (const file of files) {
     const id = idOf(basename(file));
@@ -345,8 +390,8 @@ export const openCodexStore = async (root: string): Promise<CodexStore | undefin
     try {
       const info = await stat(file);
       const meta = parse(await firstLine(file));
-      const folder = isObj(meta) && isObj(meta.payload) ? (str(meta.payload.cwd) ?? null) : null;
-      sessions.set(id, { id, folder, file, size: info.size, mtimeMs: Math.floor(info.mtimeMs) });
+      const head = isObj(meta) && isObj(meta.payload) ? meta.payload : {};
+      sessions.set(id, { id, folder: str(head.cwd) ?? null, parent: str(head.parent_thread_id)?.toLowerCase() ?? null, agentRole: str(head.agent_role) ?? null, file, size: info.size, mtimeMs: Math.floor(info.mtimeMs) });
     } catch (error) {
       unreadable.push(`${file}: ${error instanceof Error ? error.message : String(error)}`);
     }
