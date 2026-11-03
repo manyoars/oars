@@ -251,7 +251,7 @@ describe('the frame when a transcript is captured again', () => {
     const { repo } = folders(staged.root);
     writeFileSync(join(repo, '.git', 'index'), indexHolding(50));
     const file = addProject(staged, 'proj', 'framed', lines(repo));
-    return { staged, repo, touch: () => utimesSync(file, new Date(NOW), new Date(NOW + 1000)) };
+    return { staged, repo, touch: () => { utimesSync(file, new Date(NOW), new Date(NOW + 1000)); } };
   };
   const framesOf = async (storeDir: string, session = 'framed'): Promise<{ size: string | null | undefined; ids: Array<string | undefined>; rev: number | undefined }> => {
     const store = await loadStore(storeDir);
