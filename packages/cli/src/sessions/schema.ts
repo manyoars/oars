@@ -9,7 +9,7 @@
 // frame onto its derived record. No capture record changes.
 //
 // Version 9 (CAPTURE 9, t755) adds `frame` and `frameId` to the session and prompt records and `steps` to the tool record, and moves `tool`, `tools`, and a
-// shell-form `target` from class P to class A.
+// shell-form `target` from class P to class A. It changed no derivation, so it left EXTRACTOR at 8.
 //
 // Version 8 (CAPTURE 8 and EXTRACTOR 8) writes one `tool` record per tool call. The harness writes
 // `api-request-blob` lines, copies of the request body with no cwd, uuid, or timestamp, and capture used to read their blocks as conversation: a second
