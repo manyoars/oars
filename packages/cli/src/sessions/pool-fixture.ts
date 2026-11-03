@@ -1,5 +1,6 @@
 // A small store for the cell and family tests: only the fields a cell or a read looks at, so a test states the calls and prompts that matter to it.
-import type { Frame, PromptObservation, SessionObservation, ToolObservation, Usage } from './schema.js';
+import { deriveCells, poolOf, type Pool } from './cells.js';
+import type { ErrorObservation, Frame, PromptObservation, SessionObservation, StepObservation, ToolObservation, Usage } from './schema.js';
 import type { Store } from './store.js';
 
 export const frame = (over: Partial<Frame> = {}): Frame => ({
@@ -68,3 +69,37 @@ export const tool = (id: string, n: number, name: string, over: Partial<ToolObse
 });
 
 export const store = (over: Partial<Store>): Store => ({ sessions: [], prompts: [], errors: [], subagents: [], tools: [], newerCaptures: 0, ...over });
+
+export const step = (n: number, seg: number, action: StepObservation['action'], over: Partial<StepObservation> = {}): StepObservation => ({
+  n,
+  seg,
+  action,
+  native: 'tool',
+  identity: null,
+  status: 'ok',
+  cost: { tokens: null, durationMs: null },
+  parent: null,
+  edges: [],
+  frameId: 'f',
+  ...over,
+});
+
+export const error = (id: string, sig: string, over: Partial<ErrorObservation> = {}): ErrorObservation => ({
+  kind: 'error',
+  v: '9',
+  session: id,
+  rev: 1,
+  ts: '2026-11-01T10:00:00.000Z',
+  harnessVersion: null,
+  tool: 'Read',
+  sig,
+  example: sig,
+  next: [],
+  editFollowed: false,
+  prompt: 0,
+  cls: 'edit-verify',
+  ...over,
+});
+
+/** The pool of a fixture store, for a family test to hand its deriver. */
+export const poolFrom = (from: Store): Pool => poolOf(deriveCells(from));
