@@ -447,7 +447,7 @@ describe('fix round 2 behaviors', () => {
 // agent_message, patch_apply_end, and mcp_tool_call_end events are not persisted there (rollout/src/policy.rs:142-156, `persisted_item_completed_event` at :232), and an `item_completed`
 // event holding a `TurnItem` (protocol/src/items.rs:50, tag `type`, variant names as written) takes their place. Its content parts carry their own tag: a UserMessage's
 // `UserInput` is snake_case (`text`, user_input.rs:16), an AgentMessage's `AgentMessageContent` has no rename_all (`Text`, items.rs:131-135); response_item, turn_context, and
-// token_count are persisted in both modes (policy.rs:20-24, :43-46, :131-133). Every record carries an `ordinal` in this mode (rollout/src/ordinal.rs:28).
+// token_count are persisted in both modes (policy.rs:27-29 response_item, :43 turn_context, :49 session_meta, :134 token_count). Every record carries an `ordinal` in this mode (rollout/src/ordinal.rs:28).
 describe('Paginated rollouts', () => {
   let next = 0;
   const ord = (entry: object): object => ({ ...entry, ordinal: next++ });
@@ -527,7 +527,7 @@ describe('Paginated rollouts', () => {
     expect(lines).toEqual([]);
   });
 
-  it('applies only the first session_meta: a copy from fork history keeps the fork id and cwd (recorder.rs:1157-1158, :1173), in a Legacy rollout, which has no ordinals (ordinal.rs:36)', () => {
+  it('applies only the first session_meta: a copy from fork history keeps the fork id and cwd (recorder.rs:1157-1158, :1173), in a Legacy rollout, which has no ordinals (ordinal.rs:37)', () => {
     const fork = line(T(0), 'session_meta', { id: 'sess-2', timestamp: T(0), cwd: '/work/app', cli_version: '0.60.0', forked_from_id: 'sess-1' });
     const copied = line(T(0), 'session_meta', { id: 'sess-1', timestamp: T(0), cwd: '/work/parent', cli_version: '0.60.0' });
     const lines = rolloutLines(asText([fork, copied, prompt(4, 'own')]), 's');
@@ -537,7 +537,7 @@ describe('Paginated rollouts', () => {
 
   // ordinal.rs:30, :47-53: a rollout's first record takes history_base.end_ordinal_exclusive (0 with none) and every record after it one more. A subagent's file
   // starts with its own session_meta, then the parent's prefix through subagent_history_start_ordinal - 1, which is model context only (ordinal.rs:86-89,
-  // protocol.rs:3505-3511). A fork's file holds no inherited records: its history_base points at the parent's rollout instead (protocol.rs:3499-3501).
+  // protocol.rs:3511-3516). A fork's file holds no inherited records: its history_base points at the parent's rollout instead (protocol.rs:3508-3510).
   it('drops the parent prefix a subagent rollout copied (ordinals below subagent_history_start_ordinal), keeping its own records', () => {
     begin();
     const lines = rolloutLines(
