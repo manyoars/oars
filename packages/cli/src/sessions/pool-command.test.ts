@@ -184,6 +184,19 @@ describe('oars pool login', () => {
     expect(scene.h.err.join('')).toContain('open the link above yourself');
   });
 
+  it('refuses a sign-in link that does not parse, before opening a browser or polling', async () => {
+    const scene = setting();
+    let opened = false;
+    scene.h.deps.openBrowser = () => {
+      opened = true;
+      return Promise.resolve();
+    };
+    startRoute(scene, { verificationUri: 'not a url' });
+    expect(await scene.cli('pool', 'login', '--provider', 'github', '--server', POOL)).toBe(ExitCode.UNEXPECTED);
+    expect(scene.h.err.join('')).toContain('The pool did not start a sign-in.');
+    expect(opened).toBe(false);
+  });
+
   it('polls on the defaults when the pool names no interval', async () => {
     const scene = setting();
     startRoute(scene, { interval: undefined, expiresIn: undefined });
