@@ -89,12 +89,15 @@ const ANY_ARGS_RUNNER = /^(?:vitest|jest|mocha|ava|pytest|tox|nox|rspec|phpunit|
 const VERB_RUNNER = /^(?:npm|pnpm|yarn|bun|mvn|mvnw|gradle|gradlew|just|make|cargo|go|dotnet|deno|swift|astro|nx|turbo) /;
 const WORK_WORD = /^(?:[\w:-]*[-:])?(?:test|tests|check|checks|typecheck|verify|build|lint|compile|e2e|clippy|nextest|vet)(?:[-:][\w:-]*)?$/;
 const OTHER_RUNNER = /^(?:make$|(?:npm|bun) t(?: |$)|(?:mvn|mvnw) (?:.* )?(?:package|install)(?: |$))/;
-const RUN_WRAPPER = /^(?:npx|bunx|uvx|pipx run|uv run|poetry run|pnpm exec|pnpm dlx|yarn dlx|bundle exec|python[\d.]*|py) /;
+/** A subcommand whose later words are names, not work: `npm install lint-staged` and `go run check` verify nothing. */
+const NAMES_WORDS = /^(?:npm|pnpm|yarn|bun|cargo|go|dotnet) (?:add|i|install|uninstall|remove|rm|link|view|get)(?: |$)|^(?:cargo|go) run(?: |$)/;
+const RUN_WRAPPER =/^(?:npx|bunx|uvx|pipx run|uv run|poetry run|pnpm exec|pnpm dlx|yarn dlx|bundle exec|python[\d.]*|py) /;
 
 /** Whether a segment runs a build, a test suite, a type check, or a linter. A rule over the captured `run`, so a change here re-derives without a transcript. */
 export const isRunner = (segment: ShellSegment): boolean => {
   const run = segment.run.replace(RUN_WRAPPER, '');
   if (ANY_ARGS_RUNNER.test(run) || OTHER_RUNNER.test(run)) return true;
+  if (NAMES_WORDS.test(run)) return false;
   return VERB_RUNNER.test(run) && run.split(' ').slice(1).some((word) => WORK_WORD.test(word));
 };
 

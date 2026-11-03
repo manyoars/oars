@@ -323,6 +323,7 @@ describe('prompt outcome signals (t747)', () => {
       ['cargo test', true], ['cargo clippy', true], ['go vet', true], ['go test', true], ['dotnet build', true],
       ['ls', false], ['git status', false], ['git commit', false], ['cat test', false], ['npm install', false], ['npm run dev', false], ['just status', false], ['just checkout', false],
       ['cargo add', false], ['go get', false], ['make clean', false], ['mvn', false], ['python script', false], ['npx foo', false],
+      ['npm install lint-staged', false], ['pnpm add test-utils', false], ['npm uninstall jest-check', false], ['cargo add check', false], ['go get test', false], ['npm view test', false], ['go run check', false],
     ])('%s is a runner: %s', (run, expected) => {
       expect(isRunner({ run, read: true })).toBe(expected);
     });
