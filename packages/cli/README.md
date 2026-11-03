@@ -68,7 +68,7 @@ The SDK key is shown once, so save it when `deploy` prints it.
 
 ### sessions
 
-`oars sessions` keeps a local, deterministic memory of your own Claude Code sessions. No model call, no network, nothing leaves the machine.
+`oars sessions` keeps a local, deterministic memory of your own Claude Code sessions. No model call, no network, nothing leaves the machine. `gold arms` is the one exception: it sends redacted text through your own Claude subscription.
 
 ```bash
 # Read the folders you name (a path, or its name under ~/.claude/projects). At least one --allow is required; there is no "all".
