@@ -6,7 +6,7 @@ import { run } from '../cli.js';
 import { ExitCode } from '../errors.js';
 import { harness, removeTestDirs } from '../test-support.js';
 import { answerOf, claudeEvaluator, readsOf, EVALUATOR_MODEL, WORDINGS, type ClaudeExec, type GoldEvaluator } from './gold-arms.js';
-import { ARMS, confidenceLevel, readTurns, renderShown, viewOf, type GoldDocument, type GoldEntry, type TurnCall } from './gold.js';
+import { ARMS, confidenceLevel, isGoldDocument, readTurns, renderShown, viewOf, type GoldDocument, type GoldEntry, type TurnCall } from './gold.js';
 import { makeRedactor } from './redact.js';
 import { addProject, cleanup, stage } from './test-support.js';
 
@@ -181,7 +181,11 @@ describe('oars sessions gold arms', () => {
     h.out.length = 0;
     return { file: join(dir, `outcome-gold-${date}.md`), sidecar: join(dir, `outcome-gold-${date}.arms.json`) };
   };
-  const sidecarOf = (file: string): GoldDocument => JSON.parse(readFileSync(file, 'utf8')) as GoldDocument;
+  const sidecarOf = (file: string): GoldDocument => {
+    const value: unknown = JSON.parse(readFileSync(file, 'utf8'));
+    if (!isGoldDocument(value)) throw new Error('not a sidecar');
+    return value;
+  };
 
   const answering = (answer: (system: string, text: string) => string): GoldEvaluator & { asked: Array<{ system: string; user: string }> } => {
     const asked: Array<{ system: string; user: string }> = [];
