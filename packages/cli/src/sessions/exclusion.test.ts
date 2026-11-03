@@ -176,10 +176,10 @@ describe('links to folders (a transcript that was not scanned never reads as cle
     await expect(assertDepositable(t.staged.runtime, t.termsFile, 'p', 's14')).rejects.toBeInstanceOf(CliError);
   });
 
-  it('aborts naming the ordinal when a link inside a project folder leads nowhere', async (ctx) => {
+  it('aborts naming the ordinal when a link that is not named like a session leads nowhere', async (ctx) => {
     const t = setup();
     write(t.main('p', 's18'), [CLEAN]);
-    if (!link(join(t.staged.root, 'gone'), join(t.staged.projectsRoot, 'p', S_D))) return ctx.skip();
+    if (!link(join(t.staged.root, 'gone'), join(t.staged.projectsRoot, 'p', 'notes'))) return ctx.skip();
     const failure = await scanStore(t.staged.runtime, t.termsFile).then(
       () => undefined,
       (error: unknown) => error,
@@ -187,7 +187,7 @@ describe('links to folders (a transcript that was not scanned never reads as cle
     expect(failure).toBeInstanceOf(CliError);
     const message = failure instanceof CliError ? failure.message : '';
     expect(message).toMatch(/folder 1 .*no list was written/);
-    expect(message).not.toContain(S_D);
+    expect(message).not.toContain('notes');
   });
 
   it('counts a linked project folder and a linked session folder, and aborts on a broken project link', async (ctx) => {
