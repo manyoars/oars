@@ -49,12 +49,16 @@ export const deriveReads = (pool: Pool, store: Store): Read[] => {
 
 export const serializeReads = (reads: readonly Read[]): string => reads.map((read) => `${JSON.stringify(read)}\n`).join('');
 
+const isRead = (value: unknown): value is Read => typeof value === 'object' && value !== null && 'readId' in value && 'family' in value;
+
+/** A file that is missing, or holds a line that is not a read, is no record of this pool: it is derived and written again. */
 const readStored = async (file: string): Promise<Read[] | undefined> => {
   try {
     const text = await readFile(file, 'utf8');
-    return text.split('\n').flatMap((line) => (line === '' ? [] : [JSON.parse(line) as Read]));
+    const parsed = text.split('\n').flatMap((line): unknown[] => (line === '' ? [] : [JSON.parse(line)]));
+    return parsed.every(isRead) ? parsed : undefined;
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
+    if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return undefined;
     throw error;
   }
 };

@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -33,6 +33,18 @@ describe('refreshPool', () => {
     await refreshPool(dir, one);
     expect(readFileSync(files.cells, 'utf8')).toBe(cells);
     expect(readFileSync(files.motifs, 'utf8')).toBe(motifs);
+  });
+
+  it('derives again over a file that holds no reads, and does not swallow an unreadable one', async () => {
+    const dir = storeDir();
+    const first = await refreshPool(dir, one);
+    const file = poolFiles(dir).reads(first.pool.version);
+    const text = readFileSync(file, 'utf8');
+    writeFileSync(file, '{}\n');
+    expect((await refreshPool(dir, one)).reads).toEqual(first.reads);
+    expect(readFileSync(file, 'utf8')).toBe(text);
+    writeFileSync(file, 'not json\n');
+    await expect(refreshPool(dir, one)).rejects.toThrow();
   });
 
   it('keeps a pool version file as first written, and gives new data a new file', async () => {

@@ -1,5 +1,6 @@
 // A small store for the cell and family tests: only the fields a cell or a read looks at, so a test states the calls and prompts that matter to it.
-import type { Frame, PromptObservation, SessionObservation, ToolObservation, Usage } from './schema.js';
+import { deriveCells, poolOf, type Pool } from './cells.js';
+import type { ErrorObservation, Frame, PromptObservation, SessionObservation, StepObservation, ToolObservation, Usage } from './schema.js';
 import type { Store } from './store.js';
 
 export const frame = (over: Partial<Frame> = {}): Frame => ({
@@ -21,28 +22,67 @@ export const session = (id: string, over: Partial<SessionObservation> = {}): Ses
   cv: '7',
   sid: 'aaaaaaaa',
   session: id,
-  rev: 1,
+  project: 'proj',
   parent: null,
-  models: {},
-  env: { harness: '2.1.300', oars: '0.0.0', node: '24', os: 'linux' },
+  agentType: null,
+  spawnedBy: null,
+  rev: 1,
+  at: '2026-11-01T00:00:00.000Z',
+  bytes: 0,
+  lines: 0,
+  badLines: 0,
+  userTurns: 0,
+  assistantTurns: 0,
   tsFirst: null,
+  tsLast: null,
+  versions: [],
+  models: {},
+  branches: [],
+  tools: {},
+  files: [],
+  fileHashes: [],
+  repo: null,
+  urls: [],
+  searches: [],
+  bashCmds: 0,
+  tldrs: [],
+  confidences: [],
+  compactSummaries: 0,
+  promptFingerprint: null,
+  env: { harness: '2.1.300', oars: '0.0.0', node: '24', os: 'linux' },
+  costUsd: null,
+  usage: USAGE,
   ...over,
-} as SessionObservation);
+});
 
 export const prompt = (id: string, index: number, over: Partial<PromptObservation> = {}): PromptObservation => ({
   kind: 'prompt',
+  v: '9',
   session: id,
+  rev: 1,
   index,
   ts: null,
   wallSec: null,
+  head: '',
   cls: 'edit-verify',
+  tools: [],
+  shape: '',
+  errors: 0,
+  thinking: 0,
+  sideTools: 0,
+  turns: 0,
   model: 'claude-opus-5-5',
   efforts: ['high'],
-  errors: 0,
+  skills: [],
   usage: USAGE,
+  recovery: [],
+  explore: 0,
+  act: 0,
+  bigrams: {},
+  contextFingerprint: null,
   frame: frame(),
   ...over,
-} as PromptObservation);
+});
 
 export const tool = (id: string, n: number, name: string, over: Partial<ToolObservation> = {}): ToolObservation => ({
   kind: 'tool',
@@ -68,3 +108,37 @@ export const tool = (id: string, n: number, name: string, over: Partial<ToolObse
 });
 
 export const store = (over: Partial<Store>): Store => ({ sessions: [], prompts: [], errors: [], subagents: [], tools: [], newerCaptures: 0, ...over });
+
+export const step = (n: number, seg: number, action: StepObservation['action'], over: Partial<StepObservation> = {}): StepObservation => ({
+  n,
+  seg,
+  action,
+  native: 'tool',
+  identity: null,
+  status: 'ok',
+  cost: { tokens: null, durationMs: null },
+  parent: null,
+  edges: [],
+  frameId: 'f',
+  ...over,
+});
+
+export const error = (id: string, sig: string, over: Partial<ErrorObservation> = {}): ErrorObservation => ({
+  kind: 'error',
+  v: '9',
+  session: id,
+  rev: 1,
+  ts: '2026-11-01T10:00:00.000Z',
+  harnessVersion: null,
+  tool: 'Read',
+  sig,
+  example: sig,
+  next: [],
+  editFollowed: false,
+  prompt: 0,
+  cls: 'edit-verify',
+  ...over,
+});
+
+/** The pool of a fixture store, for a family test to hand its deriver. */
+export const poolFrom = (from: Store): Pool => poolOf(deriveCells(from));

@@ -75,6 +75,32 @@ describe('the Cursor table', () => {
   });
 });
 
+describe('the Codex table', () => {
+  it.each([
+    ['shell', 'shell.exec'],
+    ['shell_command', 'shell.exec'],
+    ['exec_command', 'shell.exec'],
+    ['local_shell', 'shell.exec'],
+    ['container.exec', 'shell.exec'],
+    ['Bash', 'shell.exec'],
+    ['apply_patch', 'file.edit'],
+    ['Edit', 'file.edit'],
+    ['read_file', 'file.read'],
+    ['update_plan', 'plan.update'],
+  ])('maps %s to %s', (native, action) => {
+    expect(actionOf(ACTION_TABLES.codex, native)).toEqual({ action, native });
+  });
+
+  it('reads an MCP call in full', () => {
+    expect(actionOf(ACTION_TABLES.codex, 'mcp__private-server__tool').action).toBe('mcp.call');
+    expect(mcpOf(ACTION_TABLES.codex, 'mcp__private-server__tool')).toEqual({ server: 'private-server', tool: 'tool' });
+  });
+
+  it('does not claim to know the shell', () => {
+    expect(shellOf(ACTION_TABLES.codex, 'shell')).toBeNull();
+  });
+});
+
 describe('every table', () => {
   it.each(Object.entries(ACTION_TABLES))('%s holds only canonical actions', (_harness, table) => {
     for (const action of Object.values(table.rows)) expect(CANONICAL_ACTIONS).toContain(action);

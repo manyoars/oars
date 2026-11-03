@@ -8,10 +8,11 @@
 // EXTRACTOR 9 (t756) adds motifs, cells, and reads, computed from the capture records and written beside them (`docs/sessions-store.md`), and carries a prompt's
 // frame onto its derived record. No capture record changes.
 //
-// Version 8 (CAPTURE 8 and EXTRACTOR 8, t762; 6 and 7 are held by t746 and t755) writes one `tool` record per tool call. A resumed transcript replays
-// earlier lines, and capture used to write the replay as a second record with status `none` (and, from another cwd, another path hash). The replay is
-// now skipped, so `session.tools` and `bashCmds` count the call once too; the skeleton still lists every line. The reader folds records already on
-// disk the same way until each transcript is captured again (`foldToolRows` in store.ts).
+// Version 8 (CAPTURE 8 and EXTRACTOR 8, t762; 6 and 7 are held by t746 and t755) writes one `tool` record per tool call. The harness writes
+// `api-request-blob` lines, copies of the request body with no cwd, uuid, or timestamp, and capture used to read their blocks as conversation: a second
+// record with status `none` (and, with no cwd, another path hash) for 99.8% of calls, plus a second error line, thinking count, and TLDR. Those lines are
+// no longer read, and a call a resumed transcript replays under one tool-use id is written once. The skeleton still lists every line. The reader folds
+// records already on disk the same way until each transcript is captured again (`fold.ts`).
 //
 // Store version 5 (CAPTURE 5, t733) keeps version 4's shape and changes one stored value: each `models` entry of the skeleton's cost state names
 // the usage keys it reported, which `verify` uses to class a side call. A version-4 skeleton reads with no keys until it is captured again.
@@ -334,10 +335,11 @@ export interface StepObservation {
 }
 
 /**
- * One per tool call (register A28), captured. Classes: `A` account store: `session`, `parent`, `toolUseId`, `ts`, and a path-form
- * `target` (a salted hash); `P` pooled: `kind`, `cv`, `sid`, `rev`, `agentType`, `n`, `tool`, `status`, `keys`, `durationMs`,
- * `harnessVersion`, `side`, `prompt`, `targetBase`, and a shell-form `target` (program and subcommand). `segments`, `pulls`, and `commits` are `A`:
- * a plain word, a private package name, and a sha can each identify private work.
+ * One per tool call (register A28), captured. Classes: `A` account store: `session`, `parent`, `toolUseId`, `ts`, `tool`, and `target`
+ * in either form (a salted hash, or a program and subcommand); `P` pooled: `kind`, `cv`, `sid`, `rev`, `agentType`, `n`, `status`, `keys`,
+ * `durationMs`, `harnessVersion`, `side`, `prompt`, `targetBase`, and `steps`. `tool` and a shell-form `target` moved to `A` at CAPTURE 7: an MCP
+ * tool name holds a private server's name and a shell word can be anything, and `steps` carries the public reading of both. `segments`, `pulls`,
+ * and `commits` are `A`: a plain word, a private package name, and a sha can each identify private work.
  */
 export interface ToolObservation {
   kind: 'tool';
@@ -582,7 +584,7 @@ export interface HookCall {
 }
 
 /** The pipeline steps the log names (runtime-commons pipeline spec 3.1); `label` is the local labeler step (A5) that no command runs yet; `index` is the hook-index write the nightly and manual runs log. */
-export const STEPS = ['deposit', 'verify', 'derive', 'label', 'index', 'recall'] as const;
+export const STEPS = ['deposit', 'verify', 'derive', 'label', 'index', 'recall', 'read'] as const;
 export type Step = (typeof STEPS)[number];
 
 /** The trigger names of spec 4.1 (the ones nothing local starts are in the schema only: `weekly` (A21) and the hosted `sync`, `cron`, `release`, `run-end`, and `run-start`). The SessionEnd hook is `stop`, never `session-end`. */
