@@ -43,7 +43,8 @@ export const purchasingCard = async (deps: RunDeps, options: PurchasingCardOptio
   const method = unwrap(
     CARD_STEP,
     await client.POST('/billing/purchasing/payment-method', {
-      params: { header: { 'Idempotency-Key': stepKey(options.idempotencyKey, CARD_STEP) } },
+      // The operation declares no key parameter, but the platform dedups a mutation on it, so a retry of this command replays.
+      headers: { 'Idempotency-Key': stepKey(options.idempotencyKey, CARD_STEP) },
       body: { mode: options.mode },
     }),
   );
