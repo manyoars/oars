@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { firstOrderOf, tools } from './order-fixture.js';
 import { frame, prompt, session, store } from './pool-fixture.js';
 import { deriveInteraction } from './read-interaction.js';
+import type { Frame } from './schema.js';
 import type { Store } from './store.js';
 
 const OPUS = 'claude-opus-5-5';
@@ -14,12 +15,12 @@ interface Plant {
 }
 
 /** One prompt per tier, each with the tools planted for it, in one version bucket and at one effort unless told otherwise. */
-const tiers = (opus: readonly Plant[], sonnet: readonly Plant[], sonnetEffort = 'high'): Store =>
+const tiers = (opus: readonly Plant[], sonnet: readonly Plant[], sonnetEffort = 'high', both: Partial<Frame> = {}): Store =>
   store({
     sessions: [session('s1')],
     prompts: [
-      prompt('s1', 0, { model: OPUS, frame: frame({ model: OPUS, effort: 'high' }) }),
-      prompt('s1', 1, { model: SONNET, frame: frame({ model: SONNET, effort: sonnetEffort }) }),
+      prompt('s1', 0, { model: OPUS, frame: frame({ model: OPUS, effort: 'high', ...both }) }),
+      prompt('s1', 1, { model: SONNET, frame: frame({ model: SONNET, effort: sonnetEffort, ...both }) }),
     ],
     tools: [...opus.flatMap((plant) => tools('s1', 0, [plant], plant.failed)), ...sonnet.flatMap((plant) => tools('s1', 1, [plant], plant.failed))],
   });
@@ -94,6 +95,14 @@ describe('interaction', () => {
         ),
       ),
     ).toEqual([]);
+  });
+
+  it('compares nothing in an unknown frame: an unknown effort or version bucket holds neither constant', () => {
+    const planted = (both: Partial<Frame>) =>
+      reads(tiers([{ name: 'Edit', count: 200, failed: 120 }, { name: 'Read', count: 400, failed: 8 }], [{ name: 'Edit', count: 200, failed: 6 }, { name: 'Read', count: 400, failed: 8 }], 'high', both));
+    expect(planted({})).toHaveLength(1);
+    expect(planted({ effort: null })).toEqual([]);
+    expect(planted({ harnessVersion: null })).toEqual([]);
   });
 
   it('does not exist below the floor, on the tool or on the rest', () => {
