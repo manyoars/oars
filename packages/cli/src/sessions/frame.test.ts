@@ -108,6 +108,14 @@ describe('closedFrame', () => {
     expect(closedFrame({ ...base, model: null, harnessVersion: null, effort: null })).toMatchObject({ model: null, harnessVersion: null, effort: null });
   });
 
+  it.each(['2.1.0', '2.1.0-beta.1', '1.2.3-rc1', '3.0.0-canary.20261103', '1.2.3+4'])('keeps %s, a published version shape', (harnessVersion) => {
+    expect(closedFrame({ ...base, harnessVersion }).harnessVersion).toBe(harnessVersion);
+  });
+
+  it.each(['2.1.0-acmecorp', '2.1.0+acmecorp', '2.1.0.acmecorp', '2.1.0-beta.acmecorp', '2.1.0-rcacme'])('masks %s, a version holding a private word', (harnessVersion) => {
+    expect(closedFrame({ ...base, harnessVersion }).harnessVersion).toBe(LITERAL);
+  });
+
   it.each(['claude-opus-5-5', 'claude-fable-5-1', 'claude-haiku-4-5-20251001', 'claude-3-5-sonnet-20241022', 'claude-3-opus-20240229', 'gpt-5.1-codex-max', 'gpt-4o-mini', 'o3-mini', 'gemini-2.5-pro', 'grok-code-fast-1', 'deepseek-r1', 'composer-1', 'cursor-small', 'default', 'auto'])('keeps %s, a published model shape', (model) => {
     expect(closedFrame({ ...base, model }).model).toBe(model);
   });
