@@ -158,7 +158,7 @@ what `verify` checks is untouched.
 
 | `state` | Rule | What it does not say |
 |---------|------|---------------------|
-| `reverted` | A commit on the default branch says `This reverts commit <full sha>`, and that revert was not itself reverted. Checked first. | A hand-written or partial undo, and a revert that names a squash's sha rather than this one, are not seen. |
+| `reverted` | A commit on the default branch says `This reverts commit <full sha>`, and that revert was not itself reverted. Checked first. | A hand-written or partial undo, and a revert that names a squash's sha rather than this one, are not seen. A revert of a merge marks the merge commit only, so the commits it brought in still read `survived`. |
 | `survived` | An ancestor of the default branch. | The lines may since have been rewritten by ordinary later work. |
 | `unreachable` | The repository holds the commit, but the default branch does not reach it. | Not a failure: a squash merge, a rebase on landing, and an open branch all read this way. |
 | `unknown` | The repository is absent or shallow, it has no default branch this code can name, git failed, or it does not hold the sha. | A session that committed in another repository reads this way, since only its own project's repository is read. |
