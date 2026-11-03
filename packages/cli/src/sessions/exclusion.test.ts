@@ -101,7 +101,7 @@ describe('checkSession (A38)', () => {
     expect(verdict).toEqual({ excluded: true, reason: 'term', hits: [{ key: 's9/subagents/agent-a1.jsonl', main: false, source: 'projects' }] });
   });
 
-  it('scans a symlinked subagent transcript, and excludes a broken link as unreadable', async () => {
+  it('scans a symlinked subagent transcript, and excludes a broken link as unreadable', async (ctx) => {
     const t = setup();
     write(t.main('p', 's10'), [CLEAN]);
     const real = join(t.staged.root, 'outside.jsonl');
@@ -110,7 +110,8 @@ describe('checkSession (A38)', () => {
     try {
       symlinkSync(real, t.agent('p', 's10', 'agent-link'));
     } catch {
-      return; // creating a link needs a privilege some Windows accounts lack
+      ctx.skip(); // creating a link needs a privilege some Windows accounts lack
+      return;
     }
     expect(statSync(t.agent('p', 's10', 'agent-link')).isFile()).toBe(true);
     expect((await checkSession(t.staged.runtime, t.termsFile, 'p', 's10')).hits).toEqual([{ key: 's10/subagents/agent-link.jsonl', main: false, source: 'projects' }]);
@@ -120,6 +121,14 @@ describe('checkSession (A38)', () => {
 });
 
 describe('loadTerms and exclusionPaths', () => {
+  it('counts a file that decodes to garbage (UTF-16, or bytes that are not UTF-8) as holding no terms', async () => {
+    const t = setup(null);
+    writeFileSync(t.termsFile, Buffer.from(String.fromCharCode(0xfeff) + TERM + String.fromCharCode(10), 'utf16le'));
+    expect(await loadTerms(t.termsFile)).toEqual([]);
+    writeFileSync(t.termsFile, Buffer.concat([Buffer.from(TERM), Buffer.from([0x0a, 0xff, 0xfe, 0x0a])]));
+    expect(await loadTerms(t.termsFile)).toEqual([]);
+  });
+
   it('lowercases terms, drops blank lines, and gives none for a missing file', async () => {
     const t = setup('Alpha\r\n\r\n beta \n');
     expect(await loadTerms(t.termsFile)).toEqual(['alpha', 'beta']);
@@ -149,6 +158,24 @@ describe('assertDepositable (the pool deposit gate)', () => {
 });
 
 describe('scanStore and oars sessions exclusions', () => {
+  it('lists a session whose only main is a link, scans it, and fails closed on a broken one', async (ctx) => {
+    const t = setup();
+    const real = join(t.staged.root, 'outside.jsonl');
+    write(real, [DIRTY]);
+    mkdirSync(join(t.staged.projectsRoot, 'p'), { recursive: true });
+    try {
+      symlinkSync(real, t.main('p', 'linked'));
+      symlinkSync(join(t.staged.root, 'nowhere.jsonl'), t.main('p', 'broken'));
+    } catch {
+      ctx.skip(); // creating a link needs a privilege some Windows accounts lack
+      return;
+    }
+    const { counts, excluded } = await scanStore(t.staged.runtime, t.termsFile);
+    expect(counts.sessions).toBe(2);
+    expect(counts.reasons).toMatchObject({ term: 1, noRaw: 1, unreadable: 0 });
+    expect(excluded.map((entry) => entry.session).sort()).toEqual(['broken', 'linked']);
+  });
+
   const populate = (t: ReturnType<typeof setup>): void => {
     write(t.main('p', 'a'), [DIRTY]);
     write(t.main('p', 'b'), [CLEAN]);
