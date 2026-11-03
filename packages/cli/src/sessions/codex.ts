@@ -449,6 +449,22 @@ export const rolloutLines = (text: string, fallbackId: string, parentText?: stri
   return lines;
 };
 
+/**
+ * The thread a rollout is deposited under, or null for a main session. A spawned agent's `session_meta` names `parent_thread_id` (protocol.rs:3463-3464); a
+ * delegate Codex starts for itself, such as a review, gets its parent's thread id there too (core/src/codex_delegate.rs:138, through core/src/session/session.rs:1126
+ * and thread-store/src/local/create_thread.rs:35 into rollout/src/recorder.rs:965). Yet `SubAgentSource::parent_thread_id` is Some for ThreadSpawn only
+ * (protocol.rs:3376-3386), so the rollout's `source` decides when it is absent: upstream's `is_non_root_agent` is `Internal(_) | SubAgent(_)` (:3280-3285), and
+ * `SessionMeta.source` (:3477) serializes lowercase and externally tagged (:3141-3144, :3223-3226), so `{subagent: ...}` or `{internal: ...}`. Such a rollout belongs
+ * to `session_id`, "equal to the root thread's ID" (:3451-3452), or else names itself. A reverted file's parent is its own thread.
+ */
+const parentOf = (head: Obj, id: string, thread: string | null): string | null => {
+  const parent = str(head.parent_thread_id)?.toLowerCase() ?? thread;
+  if (parent !== null) return parent;
+  const source = head.source;
+  const nonRoot = isObj(source) && (Object.hasOwn(source, 'subagent') || Object.hasOwn(source, 'internal'));
+  return nonRoot ? (str(head.session_id)?.toLowerCase() ?? id) : null;
+};
+
 /** Opens the Codex store under `root`; undefined when it holds no `sessions` folder, so a machine without Codex is skipped silently. */
 export const openCodexStore = async (root: string): Promise<CodexStore | undefined> => {
   const files: string[] = [];
@@ -470,7 +486,7 @@ export const openCodexStore = async (root: string): Promise<CodexStore | undefin
       const info = await stat(file);
       const meta = parse(await firstLine(file));
       const head = isObj(meta) && isObj(meta.payload) ? meta.payload : {};
-      sessions.set(id, { id, folder: str(head.cwd) ?? null, parent: str(head.parent_thread_id)?.toLowerCase() ?? thread, agentRole: str(head.agent_role) ?? null, forkedFrom: str(head.forked_from_id)?.toLowerCase() ?? null, file, size: info.size, mtimeMs: Math.floor(info.mtimeMs) });
+      sessions.set(id, { id, folder: str(head.cwd) ?? null, parent: parentOf(head, id, thread), agentRole: str(head.agent_role) ?? null, forkedFrom: str(head.forked_from_id)?.toLowerCase() ?? null, file, size: info.size, mtimeMs: Math.floor(info.mtimeMs) });
     } catch (error) {
       unreadable.push({ file, reason: reasonOf(error, file) });
     }
