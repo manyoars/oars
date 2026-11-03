@@ -74,6 +74,19 @@ describe('depositing the Codex source', () => {
     expect(trackedKeys(s.storeDir)).toEqual([`codex/${A}`, `codex/${B}`]);
   });
 
+  // t755's frame and action table meet this source here: the deposit passes the source's own harness, not a literal, so a Codex call is
+  // read by Codex's table and its frame says `codex`, never `cursor` (review M6 on 6f162bf, where main's literal would have won the merge).
+  it('reads a Codex call by its own table and frames its session as Codex, from the deposit down', async () => {
+    const s = staged();
+    await deposit(s.runtime, options(['codex']));
+    const store = await loadStore(s.storeDir);
+    const steps = store.tools.filter((tool) => tool.session === `codex-${A}`).flatMap((tool) => tool.steps ?? []);
+    expect(steps[0]).toMatchObject({ action: 'shell.exec' });
+    const session = store.sessions.find((candidate) => candidate.session === `codex-${A}`);
+    expect(session).toMatchObject({ harness: 'codex' });
+    expect(session?.frame).toMatchObject({ harness: 'codex' });
+  });
+
   it('is read only when allowed, and an allowed name reports nothing missing while a typo does', async () => {
     const s = staged();
     await expect(deposit(s.runtime, options([]))).rejects.toThrow(/Nothing to read/);
