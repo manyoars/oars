@@ -266,8 +266,10 @@ export interface SubagentOrigin {
   parent: string;
   agentType: string | null;
   spawnedBy: string | null;
-  /** The `n` of the `spawnedBy` call in the parent transcript, when the deposit could read it. */
+  /** The `n` of the `spawnedBy` call in the transcript that holds it, when the deposit could read it. */
   spawnedAt?: number | null;
+  /** The session id of that transcript: the main session, or a sibling subagent's. */
+  spawnedIn?: string | null;
 }
 
 export interface ExtractInput {
@@ -1090,6 +1092,7 @@ export const captureSession = (input: ExtractInput): Capture => {
     parent: origin?.parent ?? null,
     agentType: origin?.agentType ?? null,
     spawnedBy: origin?.spawnedBy ?? null,
+    spawnedIn: origin?.spawnedIn ?? null,
     rev: input.rev,
     at: input.at,
     bytes: input.bytes,
