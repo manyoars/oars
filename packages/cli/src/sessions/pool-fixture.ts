@@ -141,4 +141,4 @@ export const error = (id: string, sig: string, over: Partial<ErrorObservation> =
 });
 
 /** The pool of a fixture store, for a family test to hand its deriver. */
-export const poolFrom = (from: Store): Pool => poolOf(deriveCells(from));
+export const poolFrom = (from: Store): Pool => poolOf(deriveCells(from), from.errors);

@@ -18,7 +18,7 @@ export const deriveMethod: DeriveFamily = ({ pool }) => {
     const length = first.motif.steps.length;
     const of = scopeTotals.get(`${String(length)}/${first.model}`) ?? 0;
     return [
-      body('method', 'shape-share-by-model', '1', cells, {
+      body('method', cells, {
         slice: { motif: motifName(first.motif), model: first.model, length: String(length) },
         value: { share: rate(n, of), of, failureRate: rate(total(cells, (cell) => cell.failed), n) },
         n,

@@ -1,7 +1,7 @@
 // What the family modules share: their input, a read's common fields, and the arithmetic of a rate over cells.
 import { cellIdOf, type Cell, type Pool } from './cells.js';
 import type { Motif } from './motif.js';
-import type { Family, ReadDraft, ReadInterval, ReadSlice, ReadValue } from './read.js';
+import { METHODS, type Family, type ReadDraft, type ReadInterval, type ReadSlice, type ReadValue } from './read.js';
 import type { Store } from './store.js';
 
 export interface FamilyInput {
@@ -68,10 +68,10 @@ export const unitCells = (pool: Pool): { cell: Cell; motif: Motif }[] => {
 /** Counts over every one-step `shape` cell, for shares: a named motif's share is of all steps, like its action's. */
 export const shapeUnits = (pool: Pool): Cell[] => unitCells(pool).filter(({ motif }) => motif.level === 'shape').map(({ cell }) => cell);
 
-export const body = (family: Family, method: string, methodVersion: string, cells: readonly Cell[], fields: { slice: ReadSlice; value: ReadValue; n: number; interval: ReadInterval | null }): ReadBody => ({
+export const body = (family: Family, cells: readonly Cell[], fields: { slice: ReadSlice; value: ReadValue; n: number; interval: ReadInterval | null }): ReadBody => ({
   family,
-  method,
-  methodVersion,
+  method: METHODS[family].name,
+  methodVersion: METHODS[family].version,
   inputs: cells.map(cellIdOf),
   // Cell counts cannot give distinct accounts across cells, so this is the floor they do prove, which never overstates what a served floor may rely on.
   clusters: cells.reduce((highest, cell) => Math.max(highest, cell.clusters), 0),

@@ -28,7 +28,7 @@ export const deriveLive: DeriveFamily = ({ pool }) => {
       const share = rate(n, of);
       const baseline = rate(total(baselineCells, settled), baselineOf);
       return [
-        body('live', 'day-against-trailing-week', '1', [...cells, ...baselineCells], {
+        body('live', [...cells, ...baselineCells], {
           slice: { motif: motifName(motif), day },
           value: { share, baseline, of, ratio: share === null || baseline === null || baseline === 0 ? null : rate(share, baseline) },
           n,

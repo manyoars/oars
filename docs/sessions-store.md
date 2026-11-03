@@ -82,7 +82,7 @@ pattern and entropy, emails, and the domains named with `--redact-domain`) befor
 | `prompt` (derived, one per prompt) | `kind`, `v`, `rev`, `index`, `wallSec`, class (`cls`), `tools`, `shape`, `errors`, `thinking`, `sideTools`, `turns`, `model`, `efforts`, `skills`, `usage`, `recovery`, `explore`, `act`, and `bigrams` (the motif vector) | P |
 | | `session`, `head` (the first 300 characters, redacted), `ts`, `promptFingerprint` (`contextFingerprint` on this derived record), and the outcome signals `verify`, `stopped`, `commits`, and `redo` (below) | A |
 | `error` (derived, one per error) | `kind`, `v`, `rev`, `tool`, `harnessVersion`, `editFollowed`, `cls`, `prompt`, `next` (tool names), episode `outcome` and `calls` | P |
-| | `session`, `agent` (the subagent transcript id, a join id), `ts`, `sig` (redacted at capture, normalized at derive), `example` (160 characters) | A |
+| | `session`, `agent` (the subagent transcript id, a join id), `toolUseId` (a join id), `ts`, `sig` (redacted at capture, normalized at derive), `example` (160 characters) | A |
 | store files | `salt`, `state.json`, `raw/`, `hook-index.json` `projects` keys (folder slugs), `mcp-calls.jsonl` `cwd` (the server's working directory, unhashed) | L |
 | | skeleton lines (`skeletons/<session>.json`: ids, usage, block hashes, each cost-state model's usage keys; a pool would hold only `merkleRoot` and `leaves`), `hook-calls.jsonl` `session`, `at`, and `error` (first line, redacted), `mcp-calls.jsonl` `query` and `at` (each `at` is finer than a UTC day; a pool would keep the UTC day) | A |
 | | `hook-calls.jsonl` `event`, `hit`, `ms`; `mcp-calls.jsonl` `matches` | P |
@@ -189,7 +189,7 @@ The eight families at order 1, in the order they are listed. None adjusts for it
 |--------|-------|-------|-------------|
 | `recovery` | signature hash, failed action | sessions, errors, days, what followed | `editFollowed` is not success; refusals and hook denials are local policy |
 | `fit` | motif, frame bucket | failure rate | a failure is not a misfit; prompt class |
-| `cost` | prompt class, model, ISO week | tokens and seconds per prompt, error share | class drift, subagent work, task size |
+| `cost` | prompt class, model, ISO week | tokens and seconds per prompt, error share | class drift, subagent work, task size; a prompt with no wall time adds no seconds but still counts, so seconds per prompt understates |
 | `change` | motif, harness, version bucket | share and failure rate in that bucket; a move between buckets is order 2 | effort, rule commits, class drift, date |
 | `live` | motif, day | share of the day beside its share of the seven days before | the day's mix; no multiple-test control, so it flags nothing |
 | `adoption` | motif | share of all steps, first and last day, days seen | the operator's own rules |
