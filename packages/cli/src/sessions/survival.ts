@@ -95,7 +95,7 @@ const classify = async (git: Git, root: string, shas: readonly string[]): Promis
   const ref = await defaultRef(git, root);
   if (ref === null) return states;
   const reachable = new Set(outputLines(await git(root, ['rev-list', ref])));
-  const reverted = revertedIn(await git(root, ['log', ref, '--grep=This reverts commit', '--format=%H%n%B%x00']));
+  const reverted = revertedIn(await git(root, ['log', ref, '--no-show-signature', '--grep=This reverts commit', '--format=%H%n%B%x00']));
   const resolved = outputLines(await git(root, ['cat-file', '--batch-check=%(objectname) %(objecttype)'], `${shas.join('\n')}\n`));
   shas.forEach((sha, index) => {
     const [full = '', type] = (resolved[index] ?? '').split(' ');
