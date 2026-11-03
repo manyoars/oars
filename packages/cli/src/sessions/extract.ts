@@ -14,6 +14,7 @@ import {
   type CostState,
   type ErrorLineObservation,
   type PromptClass,
+  type PullEcosystem,
   type SessionObservation,
   type ShellSegment,
   type Skeleton,
