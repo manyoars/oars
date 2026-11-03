@@ -4,12 +4,13 @@
 import { createHash } from 'node:crypto';
 import { ACTION_TABLES, actionOf, mcpOf } from './actions.js';
 import { utcDay } from './frame.js';
+import { LITERAL, publicModel, publicVersion } from './public-vocabulary.js';
 import { recall, type RecallQuery, type RecallResult } from './query.js';
-import { contentHash, type Family } from './read.js';
+import { contentHash, FAMILIES, type Family } from './read.js';
 import { namedByPrefix, resolveReads, type CurrentPool } from './recall-pool.js';
 import { makeRecall, type Recall, type RecallForm, type RecallQueryObject, type RecallSlice } from './recall-object.js';
-import { evidenceOf, renderAnswer } from './recall-render.js';
-import { harnessOf, type ErrorObservation, type Frame, type Harness, type ToolObservation } from './schema.js';
+import { closedName, evidenceOf, renderAnswer } from './recall-render.js';
+import { harnessOf, PROMPT_CLASSES, type ErrorObservation, type Frame, type Harness, type ToolObservation } from './schema.js';
 import type { Store } from './store.js';
 
 export type ReadFamily = Family | 'entity';
@@ -316,21 +317,51 @@ export const answerQuery = (store: Store, input: ClosedQuery, now: number, curre
   return current === undefined ? answers : resolveReads(answers, current.reads);
 };
 
-/** The closed form a `recall()` input is recorded under. An error or a path is text the asker typed, so it stays in class A; a class is a closed name. */
+const ID_SHAPE = /^(read:)?[0-9a-f]{16}$/;
+const isIdShape = (value: string): boolean => ID_SHAPE.test(value);
+const isPublicName = (value: string): boolean => closedName(value) === value;
+const isFamily = (value: string): boolean => FAMILIES.some((family) => family === value);
+const isPromptClass = (value: string): boolean => PROMPT_CLASSES.some((cls) => cls === value);
+const isPublicModel = (value: string): boolean => publicModel(value) === value;
+const isPublicVersion = (value: string): boolean => publicVersion(value) === value;
+
+/**
+ * What a recall stores of its query. Every field but `text` is class P, so each holds a value that passes its closed test or `<literal>`, and what it refused joins `text`,
+ * class A, where what an asker typed belongs. The answer has already been read from the query as asked.
+ */
+const recordedQuery = ({ form, prefix, entity, family, slice, text }: ClosedQuery): RecallQueryObject => {
+  const typed = text === undefined ? [] : [text];
+  const close = (value: string, passes: (value: string) => boolean): string => {
+    if (passes(value)) return value;
+    typed.push(value);
+    return LITERAL;
+  };
+  const closed: RecallQueryObject = {
+    form,
+    ...(prefix === undefined ? {} : { prefix: prefix.map((id) => close(id, isIdShape)) }),
+    ...(entity === undefined ? {} : { entity: close(entity, isPublicName) }),
+    ...(family === undefined ? {} : { family: close(family, isFamily) }),
+    ...(slice === undefined
+      ? {}
+      : {
+          slice: {
+            ...(slice.harnessVersion === undefined ? {} : { harnessVersion: close(slice.harnessVersion, isPublicVersion) }),
+            ...(slice.model === undefined ? {} : { model: close(slice.model, isPublicModel) }),
+            ...(slice.tool === undefined ? {} : { tool: close(slice.tool, isPublicName) }),
+            ...(slice.cls === undefined ? {} : { cls: close(slice.cls, isPromptClass) }),
+            ...(slice.sinceDays === undefined ? {} : { sinceDays: slice.sinceDays }),
+          },
+        }),
+  };
+  return typed.length === 0 ? closed : { ...closed, text: typed.join(' ') };
+};
+
+/** The closed form a `recall()` input is recorded under. An error or a path is text the asker typed, so it stays in class A. */
 const closedOf = (query: RecallQuery): RecallQueryObject => {
   const text = query.error ?? query.path;
   if (text !== undefined) return { form: 'text', text };
-  return { form: 'question', family: 'recovery', slice: { ...(query.cls === undefined ? {} : { cls: query.cls }), ...(query.sinceDays === undefined ? {} : { sinceDays: query.sinceDays }) } };
+  return recordedQuery({ form: 'question', family: 'recovery', slice: { ...(query.cls === undefined ? {} : { cls: query.cls }), ...(query.sinceDays === undefined ? {} : { sinceDays: query.sinceDays }) } });
 };
-
-const objectOf = ({ form, prefix, entity, family, slice, text }: ClosedQuery): RecallQueryObject => ({
-  form,
-  ...(prefix === undefined ? {} : { prefix: [...prefix] }),
-  ...(entity === undefined ? {} : { entity }),
-  ...(family === undefined ? {} : { family }),
-  ...(slice === undefined ? {} : { slice }),
-  ...(text === undefined ? {} : { text }),
-});
 
 export interface PullContext {
   /** The session asking; null when the pull came from outside one, which is every pull until the MCP path can name it. */
@@ -367,7 +398,7 @@ export const pull = (store: Store, input: PullInput, context: PullContext): Pull
     at,
     frame: context.frame,
     mode: 'pull',
-    query: isClosed(input) ? objectOf(input) : closedOf(input),
+    query: isClosed(input) ? recordedQuery(input) : closedOf(input),
     poolVersion: poolVersionOf(store),
     arm: 'shown',
     reads: reads.map((read) => read.readId),

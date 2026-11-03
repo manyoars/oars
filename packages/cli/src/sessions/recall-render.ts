@@ -1,7 +1,7 @@
 // What an agent reads from a recall. Answers render from structured fields only (spec Section 3): every name passes a closed test and the rest is numbers, so
 // error text and other authored strings stay out of an agent's context, whatever a store's records hold.
-import { ACTION_TABLES, actionOf } from './actions.js';
-import { LITERAL, publicModel, publicVersion } from './public-vocabulary.js';
+import { ACTION_TABLES, actionOf, CANONICAL_ACTIONS } from './actions.js';
+import { LITERAL, PUBLIC_MCP_SERVERS, publicModel, publicVersion } from './public-vocabulary.js';
 import type { RecallDelta, RecallEvidence } from './recall-object.js';
 import type { RecallRead } from './recall-reads.js';
 import type { Frame, Harness } from './schema.js';
@@ -10,6 +10,12 @@ const DAY_MS = 86_400_000;
 const KEY_NAME = /^[A-Za-z_][A-Za-z0-9_]{0,39}$/;
 const DAY = /^\d{4}-\d{2}-\d{2}$/;
 const READ_ID = /^(read:)?[0-9a-f]{16}$/;
+
+/** A public name as it stands: a model, a canonical action, a tool a harness's table lists, or a published MCP server. Anything else is what the asker or a record wrote. */
+export const closedName = (name: string): string => {
+  const isPublic = publicModel(name) === name || CANONICAL_ACTIONS.some((action) => action === name) || Object.values(ACTION_TABLES).some((table) => Object.hasOwn(table.rows, name)) || PUBLIC_MCP_SERVERS.has(name);
+  return isPublic ? name : LITERAL;
+};
 
 const known = (value: string | null | undefined): value is string => value !== null && value !== undefined && value !== LITERAL;
 
