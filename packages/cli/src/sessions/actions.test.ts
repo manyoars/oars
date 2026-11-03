@@ -124,7 +124,7 @@ describe('every table', () => {
 
 describe('an adapter is rows', () => {
   it('needs nothing but a table to map a name no other harness has', () => {
-    const table: ActionTable = { rows: { apply_patch: 'file.edit' }, mcp: null, shells: {} };
+    const table: ActionTable = { rows: { apply_patch: 'file.edit' }, mcp: null, toolDelimited: true, shells: {} };
     expect(actionOf(table, 'apply_patch')).toEqual({ action: 'file.edit', native: 'apply_patch' });
     expect(actionOf(table, 'mcp__x__y')).toEqual({ action: 'other', native: LITERAL });
   });
