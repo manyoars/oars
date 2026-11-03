@@ -1,6 +1,6 @@
 // Commit survival against real git repositories in a temp folder: the states are git's answers, so a fake git would prove nothing about them.
 import { execFileSync } from 'node:child_process';
-import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -151,6 +151,25 @@ describe('recordSurvival', () => {
     execFileSync('git', ['clone', '-q', '--depth', '1', `file://${source.replace(/\\/g, '/')}`, clone], { stdio: 'ignore' });
     const { s, project } = await staged(clone, [{ sha }]);
     expect(await recordSurvival(s.runtime, [project], () => NOW)).toEqual({ survived: 0, reverted: 0, unreachable: 0, unknown: 1 });
+  });
+
+  it('fetches nothing into a partial clone: a full sha only its remote holds reads as unknown, and the objects stay as they were', async () => {
+    const source = makeRepo();
+    gitIn(source, 'config', 'uploadpack.allowFilter', 'true');
+    gitIn(source, 'config', 'uploadpack.allowAnySHA1InWant', 'true');
+    gitIn(source, 'checkout', '-q', '-b', 'side');
+    commitIn(source, 'side');
+    // Only a full sha can reach the remote: git resolves a short one from local objects alone.
+    const sha = gitIn(source, 'rev-parse', 'HEAD');
+    gitIn(source, 'checkout', '-q', 'main');
+    const clone = mkdtempSync(join(tmpdir(), 'oars-survival-'));
+    dirs.push(clone);
+    execFileSync('git', ['clone', '-q', '--filter=blob:none', '--single-branch', '--branch', 'main', `file://${source.replace(/\\/g, '/')}`, clone], { stdio: 'ignore' });
+    const { s, project } = await staged(clone, [{ sha }]);
+    const objects = (): string[] => readdirSync(join(clone, '.git', 'objects'), { recursive: true, encoding: 'utf8' }).sort();
+    const before = objects();
+    expect(await recordSurvival(s.runtime, [project], () => NOW)).toEqual({ survived: 0, reverted: 0, unreachable: 0, unknown: 1 });
+    expect(objects()).toEqual(before);
   });
 
   it('reads an absent repository as unknown', async () => {
