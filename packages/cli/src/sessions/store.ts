@@ -1,6 +1,6 @@
 // The on-disk session store and `deposit`. Layout under `<config>/oars/sessions/`:
 //   observations.jsonl      append-only; a re-deposited session is appended again under a higher `rev`
-//                           versions 3 and 4 write capture records only (session, user-prompt, tool, error-line; CAPTURE_VERSION);
+//                           versions 3 and later write capture records only (session, user-prompt, tool, error-line; CAPTURE_VERSION);
 //                           signatures, prompt classes, and episodes are derived from them at read time (derive.ts,
 //                           EXTRACTOR_VERSION), so a rule change re-derives without reading any raw transcript
 //   state.json              per file: size, mtime, the `rev`, capture version, `sid`, and redact-domain set last deposited
@@ -928,7 +928,7 @@ const asObservation = (value: unknown): Observation | undefined => {
 };
 
 // The compatibility reader for version-3 (and version-2 session) lines: a field CAPTURE 4 added reads as unknown, and
-// `contextFingerprint` reads as `promptFingerprint`. Nothing is rewritten; the next deposit captures the transcript again at version 4.
+// `contextFingerprint` reads as `promptFingerprint`. Nothing is rewritten; the next deposit captures the transcript again at the current capture version.
 const orNull = (value: unknown): string | null => (typeof value === 'string' ? value : null);
 /** A version-3 `contextFingerprint` is `<prompt|->.<environment|->`: only the prompt half survives, and `-` reads as none. */
 export const promptHalf = (contextFingerprint: unknown): string | null => {

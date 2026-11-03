@@ -232,9 +232,11 @@ export const CAPTURE_INVARIANTS = [
 const HASH = /^[0-9a-f]{16}$/;
 
 /**
- * The CAPTURE 4 fields, checked over the store's capture records (t714): cv-behind sessions (a version-3 session not yet captured
- * again, unless `frozen` names it: its transcript is gone, so it is counted apart, never a violation), a mixed `sid` (two salts in one store, so path joins hold only within each), `fileHashes` that no tool call explains, and
- * `targetBase` set on, or missing from, the wrong kind of target. Skeleton invariants stay in {@link verifyAll}.
+ * The CAPTURE 4 fields, checked over the store's capture records (t714): cv-behind sessions (a session captured at an older readable
+ * version, not yet captured again, unless `frozen` names it: its transcript is gone from the harness and `raw/` (or, for a Cursor
+ * session, its composer is gone from Cursor), so it is counted apart, never a violation), a mixed `sid` (two salts in one store, so
+ * path joins hold only within each), `fileHashes` that no tool call explains, and `targetBase` set on, or missing from, the wrong
+ * kind of target. Skeleton invariants stay in {@link verifyAll}.
  */
 export const verifyCaptured = (sessions: readonly SessionObservation[], tools: readonly ToolObservation[], frozen: ReadonlySet<string> = new Set<string>()): InvariantResult[] => {
   const current = sessions.filter((session) => session.cv === CAPTURE_VERSION);

@@ -20,19 +20,21 @@ Under `<config>/oars/sessions/` (`%APPDATA%` on Windows, `$XDG_CONFIG_HOME` or `
 
 ## Two versions
 
-- `CAPTURE_VERSION` (`cv` on every captured record) names the captured field list. Bump it when the captured field list changes or a stored value of an existing captured record or skeleton changes: a bump
-  re-reads every transcript. The skeleton is written at capture and carries `CAPTURE_VERSION` in its `v`.
-- `EXTRACTOR_VERSION` (`v` on every derived record) names the derivation rules (error normalization, prompt classes,
-  tool-name sequences, recovery episodes). A bump re-derives from the log; no raw transcript is read.
+- `CAPTURE_VERSION` (`cv` on every captured record) names the captured field list. Bump it when the captured field list changes or a stored
+  value of an existing captured record or skeleton changes: a bump re-reads every transcript. The skeleton is written at capture and carries
+  `CAPTURE_VERSION` in its `v`. - `EXTRACTOR_VERSION` (`v` on every derived record) names the derivation rules (error normalization, prompt
+  classes, tool-name sequences, recovery episodes). A bump re-derives from the log; no raw transcript is read.
 
-Version 4 (CAPTURE 4, t714) adds `sid`, `repo`, `fileHashes`, `env`, `promptFingerprint`, `targetBase`, the repository-root path base, and
-a 1,000-character cap on an error line, and a cap of 100 on `files` and `fileHashes` per session (p99 was 61, max 209, on the 8,253-session
-copy store); `recall --path` sees the first 100 sorted paths of a session. Version 5 (CAPTURE 5, t733) changes no field name: it changes the stored `models` value of an existing skeleton to carry the cost-state keys (see the cost-state paragraph below), so a version-4 store is behind and its next deposit captures every transcript again. What an open does with an older store:
+Version 4 (CAPTURE 4, t714) adds `sid`, `repo`, `fileHashes`, `env`, `promptFingerprint`, `targetBase`, the repository-root path base, and a
+1,000-character cap on an error line, and a cap of 100 on `files` and `fileHashes` per session (p99 was 61, max 209, on the 8,253-session
+copy store); `recall --path` sees the first 100 sorted paths of a session. Version 5 (CAPTURE 5, t733) changes no field name: it changes the
+stored `models` value of an existing skeleton to carry the cost-state keys (see the cost-state paragraph below), so a version-4 store is
+behind and its next deposit captures every transcript again. What an open does with an older store:
 
 | Log holds | Action on open | Action at the next deposit |
 |-----------|----------------|----------------------------|
 | `cv` 5, `v` current | read | skip unchanged files |
-| `cv` 3 or 4 (or a version-2 session) and the transcript is on disk or in `raw/` | read through the compatibility reader (for `cv` 3, a field version 4 added reads as null, empty, or `unknown`; the prompt half of `contextFingerprint`, before its `.`, reads as `promptFingerprint`, and `-` reads as null; the environment half is dropped) | capture again at `rev + 1`; derived records regenerate under the current `EXTRACTOR_VERSION` on every open |
+| `cv` 3 or 4 (or a version-2 session) and the transcript is on disk or in `raw/` | read through the compatibility reader (for `cv` 3, a field version 4 added reads as null, empty, or `unknown`; the prompt half of `contextFingerprint`, before its `.`, reads as `promptFingerprint`, and `-` reads as null; the environment half is dropped); `verify` counts it `cv-behind`, and `verify --strict` exits 4 on it | capture again at `rev + 1`; derived records regenerate under the current `EXTRACTOR_VERSION` on every open |
 | `cv` 3 or 4, neither the harness nor `raw/` has the transcript (for a Cursor session, Cursor no longer lists the composer) | read through the compatibility reader; `verify` counts it `cv-frozen` (not `cv-behind`), and `verify --strict` does not fail on it | none |
 | `derived.json` `v` older than `EXTRACTOR_VERSION` | read | rewritten at the next deposit (no reader depends on it today); derived records are regenerated from the log on every read |
 | `cv` newer than this code | read the fields this code knows, and warn ("captured by a newer oars; upgrade oars" on `verify`, `measure`, and `books`) | refuse with "upgrade oars" (`oars sessions deposit` and the nightly run read the log and refuse when a session's latest capture has a newer `cv`; the Stop-hook path reads only `state.json`) |
@@ -98,8 +100,10 @@ captured again from the harness or `raw/` at the next deposit, and nothing else 
 an open question (M4); until it is settled two machines of one account hash the same file differently, and `sid` makes that visible
 (`verify` reports a store holding more than one).
 
-`verify` also checks the version-4 fields: no version-3 or later session is `cv-behind` (one whose transcript is gone from the harness and `raw/` is counted `cv-frozen` instead and never fails `--strict`, since it cannot be captured again), one `sid` across the store, every `fileHash` is
-a path target of a tool call, and `targetBase` is set on a path target and on nothing else.
+`verify` also checks the version-4 fields: no version-3 or later session is `cv-behind` (one whose transcript is gone from the harness and
+`raw/`, or, for a Cursor session, whose composer is gone from Cursor, is counted `cv-frozen` instead and never fails `--strict`, since it
+cannot be captured again), one `sid` across the store, every `fileHash` is a path target of a tool call, and `targetBase` is set on a path
+target and on nothing else.
 
 ## The step log
 
@@ -167,12 +171,13 @@ under `harness side calls` only on a usage key that a `modelUsage` model with no
 transcripts`, each with one example session.
 
 The skeleton's cost state records, per `modelUsage` model (sorted by name), the usage keys its entry reported a nonzero amount on: `input`,
-`cacheWrite`, `cacheRead`, `output`. A side model whose cache keys are absent or zero (the haiku case) therefore explains an
-excess only on `input` and `output`, and an excess on `cacheRead` stays `other`. The field changes the stored `models` value of an existing skeleton, so it bears on `CAPTURE_VERSION`, not `EXTRACTOR_VERSION`: the rule is that a
-captured field changing bumps `CAPTURE_VERSION`, and derived values alone bump `EXTRACTOR_VERSION`. It is `CAPTURE_VERSION` 5 (t733). t700 added
-`models` with no bump because no version-3 store had shipped; a version-4 store is on operators' machines now, so the next deposit captures
-every transcript again and writes the keys. The compatibility reader still fills a skeleton written without them (a bare model name, or no
-`models`) with no keys, so a transcript that is gone from disk keeps its excess keys under `other`. Class A, with the rest of the skeleton lines (a pool would not hold them).
+`cacheWrite`, `cacheRead`, `output`. A side model whose cache keys are absent or zero (the haiku case) therefore explains an excess only on
+`input` and `output`, and an excess on `cacheRead` stays `other`. The field changes the stored `models` value of an existing skeleton, so it
+bears on `CAPTURE_VERSION`, not `EXTRACTOR_VERSION`: the rule is that a captured field changing bumps `CAPTURE_VERSION`, and derived values
+alone bump `EXTRACTOR_VERSION`. It is `CAPTURE_VERSION` 5 (t733). t700 added `models` with no bump because no version-3 store had shipped; a
+version-4 store is on operators' machines now, so the next deposit captures every transcript again and writes the keys. The compatibility
+reader still fills a skeleton written without them (a bare model name, or no `models`) with no keys, so a transcript that is gone from disk
+keeps its excess keys under `other`. Class A, with the rest of the skeleton lines (a pool would not hold them).
 
 ## More than one repository in a store
 
