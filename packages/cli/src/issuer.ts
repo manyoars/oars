@@ -38,3 +38,13 @@ export const resolveIssuerUrl = async (deps: RunDeps, flag?: string): Promise<st
   if (await hasLaunched(deps)) return PRODUCTION_ISSUER_URL;
   throw new CliError(NOT_LAUNCHED, ExitCode.USAGE, 'usage');
 };
+
+const PURCHASING_NOT_LAUNCHED = 'Many Oars has not launched yet: accounts and paid agents are not open, so `oars purchasing` is off. Set OARS_ISSUER_URL to use a platform of your own.';
+
+/** The purchasing commands stay out of the help and refuse like `login` until the launch flag is on (or `OARS_ISSUER_URL` names a platform of your own). */
+export const requireLaunched = async (deps: RunDeps): Promise<void> => {
+  const fromEnv = deps.env.OARS_ISSUER_URL;
+  if (fromEnv !== undefined && fromEnv !== '') return;
+  if (await hasLaunched(deps)) return;
+  throw new CliError(PURCHASING_NOT_LAUNCHED, ExitCode.USAGE, 'usage');
+};

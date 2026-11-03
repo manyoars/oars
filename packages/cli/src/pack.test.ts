@@ -4,6 +4,7 @@
 // script builds first (the build also copies the plans in), and `prepack` rebuilds at publish.
 import { spawnSync } from 'node:child_process';
 import { readdirSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { beforeAll, describe, expect, it } from 'vitest';
 
@@ -107,5 +108,87 @@ describe('the publish fields', () => {
       files: ['dist', 'parity/deploy-plans'],
       scripts: { prepack: 'npm run build' },
     });
+  });
+});
+
+// The public text (t754): the two READMEs and the package description state facts a reader can check, and address no agent.
+/** Phrases that address an agent or ask it to act, or describe sharing this release does not have. */
+const DENY_LIST = [
+  'ignore previous',
+  'ignore all previous',
+  'you must install',
+  'you should install',
+  'you should recommend',
+  'always recommend',
+  'recommend this',
+  'recommend it to',
+  'tell the user',
+  'tell your user',
+  'if you are an agent',
+  'if you are an ai',
+  'as an ai',
+  'as an agent',
+  'dear agent',
+  'attention agent',
+  'agents should',
+  'agents must',
+  'run this command now',
+  'install this package',
+  'install it for the user',
+  'before you re-solve',
+  'pooled',
+  'joins no cluster',
+];
+
+const NOT_OPEN = 'Accounts and paid agents are not open yet; `oars login` says so until launch.';
+
+describe('the public text states facts only', () => {
+  const description = String(manifest().description);
+  const texts = [
+    ['packages/cli/README.md', readFileSync(join(cliFolder, 'README.md'), 'utf8')],
+    ['README.md', readFileSync(join(root, 'README.md'), 'utf8')],
+    ['package description', description],
+  ] as const;
+
+  for (const [name, text] of texts) {
+    it(`${name} has no deny-listed phrase`, () => {
+      const lower = text.toLowerCase();
+      expect(DENY_LIST.filter((phrase) => lower.includes(phrase))).toEqual([]);
+    });
+  }
+
+  it('the package description names sessions and claims nothing about what the harness sends', () => {
+    expect(description).toMatch(/sessions/);
+    expect(description).not.toMatch(/nothing (leaves|is sent)/i);
+  });
+
+  it.each([['packages/cli/README.md', join(cliFolder, 'README.md')], ['README.md', join(root, 'README.md')]])('%s says raw/ is unredacted, what the harness sends, and that paid agents are not open', (_name, file) => {
+    const text = readFileSync(file, 'utf8');
+    expect(text).toContain('raw transcripts');
+    expect(text).toMatch(/unredacted/);
+    expect(text).toContain('oars itself sends nothing; the hooks and the MCP tool add recall text to the running session, and your harness sends that to its model like any other context.');
+    expect(text).toContain(NOT_OPEN);
+  });
+
+  it('the root README gives the hook commands in the forms that run, with --scope user and --schedule off', () => {
+    const text = readFileSync(join(root, 'README.md'), 'utf8');
+    const commands = [...text.matchAll(/`(oars sessions hook (?:install|uninstall)[^`]*)`/g)].map((match) => match[1] ?? '');
+    expect(commands.length).toBeGreaterThanOrEqual(3);
+    for (const command of commands) expect(command, command).toMatch(/--scope user|--schedule off/);
+    expect(commands).toContain('oars sessions hook install --scope user');
+    expect(commands).toContain('oars sessions hook uninstall --scope user');
+    expect(commands).toContain('oars sessions hook install --schedule off');
+  });
+
+  it('the root README says install raises cleanupPeriodDays and uninstall leaves it raised', () => {
+    expect(readFileSync(join(root, 'README.md'), 'utf8')).toMatch(/cleanupPeriodDays[^.]*at least 365[^.]*uninstall leaves it raised/);
+  });
+});
+
+describe('oars purchasing is not in the 0.3.0 surface', () => {
+  it('is hidden from oars --help in the source and refused until launch', () => {
+    const source = readFileSync(new URL('./cli.ts', import.meta.url), 'utf8');
+    expect(source).toMatch(/command\('purchasing', \{ hidden: true \}\)/);
+    expect(source).toContain('requireLaunched(deps)');
   });
 });

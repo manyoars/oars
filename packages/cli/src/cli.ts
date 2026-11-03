@@ -10,6 +10,7 @@ import { templates } from './commands/templates.js';
 import { testCharge } from './commands/test-charge.js';
 import type { CredentialStore } from './credentials.js';
 import { CliError, ExitCode } from './errors.js';
+import { requireLaunched } from './issuer.js';
 import type { JournalStore } from './journal.js';
 import type { BooksBy, RecallQuery } from './sessions/query.js';
 import { sessionsBooks, sessionsContext, sessionsDeposit, sessionsHookInstall, sessionsHookStatus, sessionsHookUninstall, sessionsMcp, sessionsMeasure, sessionsRecall, sessionsVerify, type SessionsDeps } from './sessions/command.js';
@@ -231,7 +232,13 @@ const buildProgram = (deps: RunDeps, argv: string[]): Command => {
       emit(deps, flag(options, 'json'), outcome);
     });
 
-  const purchasing = program.command('purchasing').description("set up an agent's purchasing: the card, the monthly cap, and what it bought");
+  // Hidden and refused until Many Oars launches (t465 is not in 0.3.0); the code stays for it.
+  const purchasing = program
+    .command('purchasing', { hidden: true })
+    .description("set up an agent's purchasing: the card, the monthly cap, and what it bought")
+    .hook('preAction', async () => {
+      await requireLaunched(deps);
+    });
 
   purchasing
     .command('card')
