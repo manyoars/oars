@@ -90,8 +90,14 @@ const isFile = async (path: string): Promise<boolean> => {
   }
 };
 
-/** A link at this path that leads nowhere, or to something that is not a directory, so what is under it was not scanned; an absent path is not one. */
-const brokenLink = async (path: string): Promise<boolean> => {
+/** What a path must lead to: a directory at a root, a project folder, a session folder, or `subagents`; a file at a main transcript. */
+type Kind = 'directory' | 'file';
+
+/**
+ * The one rule for a link at any level (V15): a link that leads nowhere, or to the wrong kind of entry, means what is under it was not scanned.
+ * An absent path is not one, and a path that is not a link is read as it is.
+ */
+const badLink = async (path: string, kind: Kind): Promise<boolean> => {
   let link: boolean;
   try {
     link = (await lstat(path)).isSymbolicLink();
@@ -100,19 +106,20 @@ const brokenLink = async (path: string): Promise<boolean> => {
   }
   if (!link) return false;
   try {
-    return !(await stat(path)).isDirectory();
+    const target = await stat(path);
+    return kind === 'directory' ? !target.isDirectory() : !target.isFile();
   } catch {
     return true;
   }
 };
 
-/** Adds the transcripts of the session in one source (the main file and everything under `<session>/subagents/`) to `found`; true when a folder could not be read. */
+/** Adds the transcripts of the session in one source (the main file and everything under `<session>/subagents/`) to `found`; true when a level could not be read. */
 const filesIn = async (root: string, source: Source, project: string, session: string, found: TranscriptFile[]): Promise<boolean> => {
   const folder = join(root, project);
   const main = join(folder, `${session}.jsonl`);
-  // A project folder, session folder, or subagents folder that is a link leading nowhere reads as an empty one below, so it is checked first.
-  let unreadable = false;
-  for (const path of [folder, join(folder, session), join(folder, session, 'subagents')]) if (await brokenLink(path)) unreadable = true;
+  // A link that leads nowhere reads as an absent entry below, so every level is checked first.
+  let unreadable = await badLink(main, 'file');
+  for (const path of [folder, join(folder, session), join(folder, session, 'subagents')]) if (await badLink(path, 'directory')) unreadable = true;
   try {
     if (await isFile(main)) found.push({ path: main, key: `${session}.jsonl`, main: true, source });
   } catch {
@@ -136,9 +143,13 @@ interface SessionFiles {
 /** Both the harness's folder and oars' raw archive, because either can be the only copy left. */
 const filesOf = async (runtime: SessionsRuntime, project: string, session: string): Promise<SessionFiles> => {
   const files: TranscriptFile[] = [];
+  const raw = paths(runtime.storeDir).raw;
+  // A root that is a link leading nowhere makes `lstat` of everything under it ENOENT, so the roots are checked here.
+  let unreadable = false;
+  for (const root of [runtime.projectsRoot, runtime.storeDir, raw]) if (await badLink(root, 'directory')) unreadable = true;
   const first = await filesIn(runtime.projectsRoot, 'projects', project, session, files);
-  const second = await filesIn(paths(runtime.storeDir).raw, 'raw', project, session, files);
-  return { files, unreadable: first || second };
+  const second = await filesIn(raw, 'raw', project, session, files);
+  return { files, unreadable: unreadable || first || second };
 };
 
 /** Whether any line of the file holds a term. Streamed, so a large transcript is never held whole. */
@@ -224,8 +235,9 @@ const sessionIds = async (root: string, project: string): Promise<{ ids: string[
   const ids: string[] = [];
   const dirs: string[] = [];
   for (const entry of await entriesOf(join(root, project))) {
-    // A link is a session too; `filesIn` follows it, and a `.jsonl` link that leads nowhere has no main to scan, so it is listed as no raw.
+    // A link is a session too, whatever it leads to: `filesIn` follows it, and one that leads nowhere or to the wrong kind reads unreadable.
     if ((entry.isFile() || entry.isSymbolicLink()) && entry.name.endsWith('.jsonl')) ids.push(entry.name.slice(0, -'.jsonl'.length));
+    else if (entry.isSymbolicLink() && SESSION_ID.test(entry.name)) ids.push(entry.name);
     else if (await leadsToDirectory(join(root, project, entry.name), entry)) dirs.push(entry.name);
   }
   return { ids: [...ids, ...dirs.filter((name) => SESSION_ID.test(name))], others: dirs.filter((name) => !SESSION_ID.test(name)) };
@@ -237,13 +249,21 @@ const emptyHits = (): SourceHits => ({ main: 0, subagent: 0 });
 export const scanStore = async (runtime: SessionsRuntime, termsFile: string): Promise<{ counts: ExclusionCounts; excluded: { project: string; session: string }[] }> => {
   const terms = await loadTerms(termsFile);
   const raw = paths(runtime.storeDir).raw;
+  // A root that is a link leading nowhere, or to a file, lists as empty: stop with no list, naming no path.
+  for (const root of [runtime.projectsRoot, runtime.storeDir, raw]) {
+    if (await badLink(root, 'directory')) throw new CliError('A folder that holds the projects is a link that could not be followed, so no list was written.', ExitCode.INVALID, 'unreadable');
+  }
   // A session the store logged stays listed when its raw is gone everywhere: it has nothing to scan, so it is excluded as no raw.
   const logged = new Map<string, Set<string>>();
   for (const session of (await loadStore(runtime.storeDir)).sessions) logged.set(session.project, (logged.get(session.project) ?? new Set<string>()).add(session.session));
   const projects = new Set<string>(logged.keys());
   for (const root of [runtime.projectsRoot, raw]) {
     try {
-      for (const entry of await entriesOf(root)) if (await leadsToDirectory(join(root, entry.name), entry)) projects.add(entry.name);
+      for (const entry of await entriesOf(root)) {
+        // A project folder that is a link to a file was not scanned: stop, as for one that leads nowhere (`stat` throws).
+        if (entry.isSymbolicLink() && (await badLink(join(root, entry.name), 'directory'))) throw new Error('unreadable');
+        if (await leadsToDirectory(join(root, entry.name), entry)) projects.add(entry.name);
+      }
     } catch {
       throw new CliError('A folder that holds the projects could not be listed, so no list was written.', ExitCode.INVALID, 'unreadable');
     }
