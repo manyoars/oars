@@ -35,6 +35,28 @@ describe('sessionsVerify, per session', () => {
     const verified = await sessionsVerify({ sessions: staged.runtime, install: undefined, now: () => NOW }, { session: 'tldr' });
     expect(verified.report.sessionResults.map((entry) => entry.session)).toEqual(['tldr']);
     expect(verified.report.audit.sessions.map((entry) => entry.session)).toEqual(['tldr']);
+    // The baseline reads every week of the store and --session only picks which results are reported; the scoped entry is the unscoped one.
+    const whole = await sessionsVerify({ sessions: staged.runtime, install: undefined, now: () => NOW }, { session: undefined });
+    expect(verified.report.selfBaseline.map((entry) => entry.session)).toEqual(['tldr']);
+    expect(verified.report.selfBaseline[0]?.calls).toBe(whole.report.selfBaseline.find((entry) => entry.session === 'tldr')?.calls);
+    expect(verified.report.selfBaseline[0]?.calls).toBeGreaterThan(0);
+  });
+
+  it('prints the audit ahead of the per-session lines, so a long list of failing sessions comes after the T0 table', async () => {
+    const staged = stage();
+    const usage = { input_tokens: 5, cache_creation_input_tokens: 6, cache_read_input_tokens: 7, output_tokens: 8 };
+    const assistant = (requestId: string, timestamp: string): string => JSON.stringify({ type: 'assistant', requestId, timestamp, message: { role: 'assistant', model: 'm', content: [], usage } });
+    const tokens = (factor: number) => ({ inputTokens: 5 * factor, cacheCreationInputTokens: 6 * factor, cacheReadInputTokens: 7 * factor, outputTokens: 8 * factor });
+    const costState = JSON.stringify({ type: 'cost-state', startTime: Date.parse('2026-10-13T15:00:00.000Z'), modelUsage: { m: tokens(2) } });
+    writeFileSync(join(staged.projectsRoot, 'proj', 'p1.jsonl'), `${[assistant('r1', '2026-10-13T16:00:00.000Z'), costState].join('\n')}\n`);
+    mkdirSync(join(staged.projectsRoot, 'proj', 'p1', 'subagents'), { recursive: true });
+    writeFileSync(join(staged.projectsRoot, 'proj', 'p1', 'subagents', 'agent-a.jsonl'), `${[assistant('s1', '2026-10-13T16:01:00.000Z'), assistant('s2', '2026-10-13T16:02:00.000Z')].join('\n')}\n`);
+    await deposit(staged.runtime, options);
+    const { text } = await sessionsVerify({ sessions: staged.runtime, install: undefined, now: () => NOW }, { session: undefined });
+    expect(text).toContain(': FAIL ');
+    expect(text.indexOf('sessions audited against raw')).toBeGreaterThan(-1);
+    expect(text.indexOf('sessions audited against raw')).toBeLessThan(text.indexOf(': FAIL '));
+    expect(text.indexOf('sessions against their own')).toBeLessThan(text.indexOf(': FAIL '));
   });
 
   it('gives --session <main id> the same row 6 as the whole-store run, its subagent transcripts included', async () => {
