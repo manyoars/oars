@@ -15,6 +15,7 @@
 //   hook-calls.jsonl        one line per hook invocation (event, session, hit, milliseconds)
 //   hook-index.json         the recurring signatures per project and overall, for the hooks
 //   pipeline-runs.jsonl     the step log: one line per run of a pipeline step, appended when the step ends (steps.ts)
+import type { GoldEvaluator } from './gold-arms.js';
 import { createHash, randomBytes } from 'node:crypto';
 import { performance } from 'node:perf_hooks';
 import { appendFile, mkdir, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
@@ -60,6 +61,8 @@ export interface SessionsRuntime {
   cursorRoot?: string;
   /** Where the account's salt comes from; absent means this machine's own (`localSalt`). The seam an account identity replaces (M4). */
   accountSalt?: (storeDir: string) => Promise<AccountSalt>;
+  /** The fresh single-turn reader behind `gold arms`; absent in a run that has none. */
+  evaluator?: GoldEvaluator | undefined;
   stdin: NodeJS.ReadableStream;
   stdout: { write: (text: string) => unknown };
 }

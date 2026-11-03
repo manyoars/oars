@@ -1,7 +1,7 @@
 # The `oars sessions` store (version 5)
 
 `oars sessions` keeps a local, deterministic memory of the operator's own Claude Code sessions: no model call, no network, nothing
-uploads. This page is the store's format. The types are in `packages/cli/src/sessions/schema.ts`; the commands are in the CLI README.
+uploads. `gold arms` is the one exception: it sends redacted text through your own Claude subscription. This page is the store's format. The types are in `packages/cli/src/sessions/schema.ts`; the commands are in the CLI README.
 
 ## Layout
 
@@ -313,3 +313,9 @@ carry `harness: "cursor"`; a record with no `harness` is Claude Code's (`harness
   store stamps a result with the call's own time), a composer id that is not `[A-Za-z0-9._-]+` is skipped and counted, and a composer with no
   `createdAt` accepts no relative `clientStartTime`.
 - **Reading it back.** `recall` and `measure` read the records as they are. `books --by harness` groups the prompts by harness.
+
+## The outcome gold set
+
+`oars sessions gold sample` writes `outcome-gold-<date>.md` to `<claude config>/session-commons/review/`: about 200 prompts in batches of 50, each with the redacted request, the result (commit message and diff stat where found, the transcript's own edit calls, or the actions of a prompt that edited nothing), and a `Judgment: yes|no` line. The draw is seeded and weighted by the square root of each class and model cell, with at most two prompts a session, so its base rate is the sample's, not the store's. `--exclude-term` leaves out any session that mentions a term in its transcript or a subagent's. A marker prompt, a `no-tools` prompt (its reply is the closing claim), and a Cursor session are not drawn. The signals go to the `.arms.json` file beside it. `oars sessions gold score <file>` prints, per model and pooled, each signal's AUROC with a DeLong 95% interval and the base rate, from whatever is judged so far. Both are local, and neither is ever committed. A signal is an observation, not a label, and no signal is combined with another.
+
+`oars sessions gold arms <file>` fills the same sidecar and leaves the gold file alone, so judgments carry over. From the transcript it reads the closing reply, the turn's last `Confidence:` line, and the next prompt that is not a marker. Fresh single-turn readers then give three separate answers: `evaluator` reads what the judge reads and says whether the work did what was asked, `claim` reads the closing reply and says whether it claims success, and `later` reads the next prompt and says whether the person accepted the work, or that it cannot tell. Each runs through `claude -p` on your own subscription login, on one named model, with no tools, hooks, settings, or session file. Its fixed wording is hashed into the sidecar, and a rerun refuses a sidecar written under other words. The command checks the login first and refuses an API key or another provider. It saves after each answer and resumes, and it prints only how many prompts each arm covers; `gold score` reads each arm against the judgments. This is the one `sessions` command that calls a model. The text it sends is redacted and has no tools to act on.
