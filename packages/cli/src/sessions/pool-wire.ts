@@ -3,7 +3,7 @@
 // sending, and the server parses it again, field by field, because a live URL takes anything from anyone. This file imports nothing from the file system: the Worker bundles it.
 
 import { ACTION_TABLES, CANONICAL_ACTIONS, mcpOf, type CanonicalAction } from './actions.js';
-import { FRAMEWORKS, isRegistryVersion, LANGUAGES, LITERAL, publicEffort, publicModel, publicVersion, PUBLIC_FLAGS, PUBLIC_HOSTS, PUBLIC_MCP_SERVERS, PUBLIC_PACKAGES, PUBLIC_PROGRAMS, PUBLIC_SKILLS, PUBLIC_SUBCOMMANDS, REPO_SIZES } from './public-vocabulary.js';
+import { FRAMEWORKS, isPublicMcpTool, isRegistryVersion, LANGUAGES, LITERAL, publicEffort, publicModel, publicVersion, PUBLIC_FLAGS, PUBLIC_HOSTS, PUBLIC_MCP_SERVERS, PUBLIC_PACKAGES, PUBLIC_PROGRAMS, PUBLIC_SKILLS, PUBLIC_SUBCOMMANDS, REPO_SIZES } from './public-vocabulary.js';
 import type { Cell } from './cells.js';
 import type { Motif } from './motif.js';
 import type { Read, ReadAsOf } from './read.js';
@@ -263,15 +263,13 @@ const parsePull = (value: unknown, at: string): PullIdentity => {
   return { registry: oneOf(REGISTRIES, raw.registry, under(at, 'registry')), name: inSet(PUBLIC_PACKAGES, raw.name, under(at, 'name')), version };
 };
 
-const isMcpToolName = (tool: string): boolean => /^[A-Za-z][A-Za-z0-9_.-]{0,63}$/.test(tool);
-
 const parseFlag = (value: unknown, at: string): string => {
   const flag = textOf(value, at);
   if (flag !== LITERAL && !PUBLIC_FLAGS.has(flag) && !SHORT_FLAG.test(flag)) throw new Refused(at, 'outside the vocabulary');
   return flag;
 };
 
-const parseIdentity = (action: CanonicalAction, value: unknown, at: string): StepIdentity => {
+const parseIdentity = (harness: Harness, action: CanonicalAction, value: unknown, at: string): StepIdentity => {
   if (value === null) return null;
   if (action === 'shell.exec') {
     const raw = fieldsOf(value, at, ['program', 'sub', 'flags'], ['pulls']);
@@ -283,9 +281,11 @@ const parseIdentity = (action: CanonicalAction, value: unknown, at: string): Ste
   }
   if (action === 'mcp.call') {
     const raw = fieldsOf(value, at, ['server', 'tool']);
+    const server = inSet(PUBLIC_MCP_SERVERS, raw.server, under(at, 'server'));
     const tool = textOf(raw.tool, under(at, 'tool'));
-    if (tool !== LITERAL && !isMcpToolName(tool)) throw new Refused(under(at, 'tool'), 'outside the vocabulary');
-    return { server: inSet(PUBLIC_MCP_SERVERS, raw.server, under(at, 'server')), tool };
+    // The same rule capture applies (`callIdentity`), so a name it would have masked is refused here rather than stored.
+    if (tool !== LITERAL && !(ACTION_TABLES[harness].toolDelimited && isPublicMcpTool(server, tool))) throw new Refused(under(at, 'tool'), 'outside the vocabulary');
+    return { server, tool };
   }
   if (action === 'skill.run') return { skill: inSet(PUBLIC_SKILLS, fieldsOf(value, at, ['skill']).skill, under(at, 'skill')) };
   if (action === 'web.fetch' || action === 'web.search') {
@@ -301,7 +301,7 @@ const parseNative = (harness: Harness, value: unknown, at: string): string => {
   const table = ACTION_TABLES[harness];
   if (Object.hasOwn(table.rows, native)) return native;
   const mcp = mcpOf(table, native);
-  if (mcp !== undefined && PUBLIC_MCP_SERVERS.has(mcp.server) && isMcpToolName(mcp.tool)) return native;
+  if (mcp !== undefined && table.toolDelimited && isPublicMcpTool(mcp.server, mcp.tool)) return native;
   throw new Refused(at, 'outside the vocabulary');
 };
 
@@ -319,7 +319,7 @@ const parseStep = (harness: Harness, value: unknown, at: string): SkeletonStep =
     seg: countOf(raw.seg, under(at, 'seg')),
     action,
     native: parseNative(harness, raw.native, under(at, 'native')),
-    identity: parseIdentity(action, raw.identity, under(at, 'identity')),
+    identity: parseIdentity(harness, action, raw.identity, under(at, 'identity')),
     status: oneOf(STATUSES, raw.status, under(at, 'status')),
     cost: { tokens: orNull(cost.tokens, under(costAt, 'tokens'), countOf), durationMs: orNull(cost.durationMs, under(costAt, 'durationMs'), countOf) },
     parent: orNull(raw.parent, under(at, 'parent'), countOf),
