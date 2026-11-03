@@ -229,7 +229,7 @@ describe('a link at any level that leads nowhere or to the wrong kind of entry i
   ];
   const cases = levels.flatMap(({ level, targets, stops }) => targets.flatMap((target) => (['projects', 'raw'] as const).map((source) => ({ level, target, stops, source }))));
 
-  it.each(cases)('$level as a $target link in $source reads unreadable (stops the scan: $stops)', async ({ level, target, stops, source }, ctx) => {
+  it.for(cases)('$level as a $target link in $source reads unreadable (stops the scan: $stops)', async ({ level, target, stops, source }, ctx) => {
     // The roots do not depend on the source: run them once.
     if ((level === 'projects root' || level === 'store dir' || level === 'raw root') && source === 'raw') return;
     const t = setup();
