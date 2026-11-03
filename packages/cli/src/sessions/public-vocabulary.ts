@@ -9,6 +9,8 @@ export const LITERAL = '<literal>';
 
 export const REPO_SIZES = ['xs', 's', 'm', 'l', 'xl'] as const;
 export type RepoSize = (typeof REPO_SIZES)[number];
+/** A stored size bucket: null is a size that could not be read, and undefined is a value that is not one. */
+export const asRepoSize = (value: unknown): RepoSize | null | undefined => (value === null ? null : REPO_SIZES.find((size) => size === value));
 
 /** File extension to language: the stack's language mix. */
 export const LANGUAGE_OF_EXTENSION: ReadonlyMap<string, string> = new Map([
