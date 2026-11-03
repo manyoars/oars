@@ -1,14 +1,15 @@
 // One raw file that cannot be read reports that session `not run`, and the audit goes on (t743 fix round).
+import type * as fsp from 'node:fs/promises';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 // A real unreadable file (EACCES, EBUSY) cannot be made portably, so `readFile` fails for one path.
 vi.mock('node:fs/promises', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('node:fs/promises')>();
-  const readFile = ((...args: Parameters<typeof actual.readFile>) => {
-    if (String(args[0]).endsWith(join('raw', 'proj', 'errors-a.jsonl'))) return Promise.reject(Object.assign(new Error('EBUSY: resource busy'), { code: 'EBUSY' }));
-    return actual.readFile(...args);
-  }) as typeof actual.readFile;
+  const actual = await importOriginal<typeof fsp>();
+  const readFile = vi.fn(actual.readFile);
+  readFile.mockImplementation((file, options) =>
+    typeof file === 'string' && file.endsWith(join('raw', 'proj', 'errors-a.jsonl')) ? Promise.reject(Object.assign(new Error('EBUSY: resource busy'), { code: 'EBUSY' })) : actual.readFile(file, options),
+  );
   return { ...actual, readFile };
 });
 
