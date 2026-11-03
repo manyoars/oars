@@ -4,6 +4,7 @@
 // `oars sessions measure` reads for recall calls per session.
 import { appendFile, mkdir } from 'node:fs/promises';
 import { createInterface } from 'node:readline';
+import { currentPool } from './pool.js';
 import { appendRecall } from './recall-object.js';
 import { pull, type PullInput } from './recall-reads.js';
 import { MISS_TEXT } from './recall-render.js';
@@ -73,7 +74,8 @@ export const handleMessage = async (runtime: SessionsRuntime, now: () => number,
     const query = toQuery(params.arguments);
     try {
       // The server is not told which session it serves, so `sid` is null: naming it is what a consequence for an MCP pull still needs.
-      const result = pull(await loadStore(runtime.storeDir), query, { sid: null, now: now(), frame: null, harness: harnessOf({}), redactDomains: await readRedactDomains(runtime.storeDir) });
+      const store = await loadStore(runtime.storeDir);
+      const result = pull(store, query, { sid: null, now: now(), frame: null, harness: harnessOf({}), redactDomains: await readRedactDomains(runtime.storeDir), current: await currentPool(runtime.storeDir, store) });
       const call: RecallCall = { at: new Date(now()).toISOString(), query: JSON.stringify(query), matches: result.legacy?.matches.length ?? result.reads.length, cwd: process.cwd() };
       await mkdir(runtime.storeDir, { recursive: true });
       await appendFile(paths(runtime.storeDir).calls, `${JSON.stringify(call)}\n`, { mode: 0o600 });

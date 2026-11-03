@@ -9,6 +9,7 @@ import { contentHash, FAMILIES, makeRead, orderResolver, type Family, type Read 
 import { deriveConsequences, recallGraphOf } from './recall-consequence.js';
 import { readRecalls } from './recall-object.js';
 import { deriveAdoption } from './read-adoption.js';
+import { deriveCallShape } from './read-call-shape.js';
 import { deriveChange } from './read-change.js';
 import { deriveCost } from './read-cost.js';
 import { deriveFit } from './read-fit.js';
@@ -19,16 +20,17 @@ import { deriveRecovery } from './read-recovery.js';
 import type { DeriveFamily } from './read-support.js';
 import { writeAtomic, type Store } from './store.js';
 
-const DERIVERS: { readonly [family in Family]: DeriveFamily } = {
+// Built on call: `store.ts` imports this file for its refresh and `read-recovery.ts` imports `store.ts`, so these names may not be initialized yet when this module's top level runs.
+const derivers = (): { readonly [family in Family]: DeriveFamily } => ({
   recovery: deriveRecovery,
-  fit: deriveFit,
+  fit: (input) => [...deriveFit(input), ...deriveCallShape(input)],
   cost: deriveCost,
   change: deriveChange,
   live: deriveLive,
   adoption: deriveAdoption,
   method: deriveMethod,
   'next-step': deriveNextStep,
-};
+});
 
 export const poolFiles = (storeDir: string): { cells: string; motifs: string; consequences: string; reads: (version: string) => string } => ({
   cells: join(storeDir, 'cells.jsonl'),
@@ -41,8 +43,9 @@ export const poolFiles = (storeDir: string): { cells: string; motifs: string; co
 export const deriveReads = (pool: Pool, store: Store): Read[] => {
   const asOf = { pool: pool.version, day: pool.lastDay };
   const orderOf = orderResolver([]);
+  const byFamily = derivers();
   return FAMILIES.flatMap((family) =>
-    DERIVERS[family]({ pool, store })
+    byFamily[family]({ pool, store })
       .map((read) => makeRead({ ...read, asOf }, orderOf))
       .map((read) => ({ read, key: contentHash(read.slice) }))
       .sort((a, b) => (a.key < b.key ? -1 : 1))
@@ -82,4 +85,13 @@ export const refreshPool = async (storeDir: string, store: Store): Promise<{ poo
   const reads = deriveReads(pool, store);
   await writeAtomic(file, serializeReads(reads));
   return { pool, reads };
+};
+
+/** The pool a pull answers from. A pull always answers (spec 2.7), so a pool that cannot be read or written costs it only the stored read IDs: its answers keep their stand-ins. */
+export const currentPool = async (storeDir: string, store: Store): Promise<{ pool: Pool; reads: Read[] } | undefined> => {
+  try {
+    return await refreshPool(storeDir, store);
+  } catch {
+    return undefined;
+  }
 };

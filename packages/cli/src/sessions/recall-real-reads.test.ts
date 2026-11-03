@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { buildIndex } from './hook-index.js';
 import { walkLineage } from './lineage.js';
-import { poolFrom, prompt as promptRow, session as sessionRow, store as storeOf, tool as toolRow } from './pool-fixture.js';
+import { frame, poolFrom, prompt as promptRow, session as sessionRow, store as storeOf, tool as toolRow } from './pool-fixture.js';
 import { deriveReads } from './pool.js';
 import { shapeMotif } from './motif.js';
 import { fitReads, pull, toolShapeId } from './recall-reads.js';
@@ -15,8 +15,8 @@ afterEach(cleanup);
 const stocked = (): Store => {
   const sessions = ['a', 'b', 'c'];
   return storeOf({
-    sessions: sessions.map((id) => sessionRow(id)),
-    prompts: sessions.map((id) => promptRow(id, 0)),
+    sessions: sessions.map((id) => sessionRow(id, { at: '2026-06-02T00:00:00.000Z' })),
+    prompts: sessions.map((id) => promptRow(id, 0, { frame: frame({ day: '2026-06-01' }) })),
     errors: ['a', 'b'].map((id) => errorRow(id, 'Monitor | wrong input', { tool: 'Monitor', ts: '2026-06-01T00:00:00.000Z' })),
     tools: sessions.flatMap((id) => Array.from({ length: 10 }, (_, n) => toolRow(id, n, 'Monitor', { keys: ['query'], status: n === 0 ? 'error' : 'ok', ts: '2026-06-01T00:00:00.000Z' }))),
   });

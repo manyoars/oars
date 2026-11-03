@@ -1,15 +1,18 @@
-// The reads a recall answers from. Signature records stand in until the Read file (t756) lands: a signature becomes a read in family `recovery` (spec
-// Section 7), a tool call's input shape a read in family `fit`, the pre-call half of recovery, and a public name a read in family `entity`.
+// The reads a recall answers from, counted over the store: a signature is a read in family `recovery` (spec Section 7), a tool call's input shape a read in family `fit`, the
+// pre-call half of recovery, and a public name a read in family `entity`. `recall-pool.ts` puts each under the ID of the stored read it rests on; a hash here is what stands in
+// where the pool holds none, and the only ID an `entity` read has, because no family stores a read per public name.
 import { createHash } from 'node:crypto';
 import { ACTION_TABLES, actionOf, mcpOf } from './actions.js';
 import { utcDay } from './frame.js';
 import { recall, type RecallQuery, type RecallResult } from './query.js';
+import { contentHash, type Family } from './read.js';
+import { namedByPrefix, resolveReads, type CurrentPool } from './recall-pool.js';
 import { makeRecall, type Recall, type RecallForm, type RecallQueryObject, type RecallSlice } from './recall-object.js';
 import { evidenceOf, renderAnswer } from './recall-render.js';
 import { harnessOf, type ErrorObservation, type Frame, type Harness, type ToolObservation } from './schema.js';
 import type { Store } from './store.js';
 
-export type ReadFamily = 'recovery' | 'fit' | 'entity' | 'exploration';
+export type ReadFamily = Family | 'entity';
 
 export interface RecallRead {
   readId: string;
@@ -40,7 +43,8 @@ const DAY_MS = 86_400_000;
 
 const digest = (parts: readonly unknown[]): string => createHash('sha256').update(JSON.stringify(parts)).digest('hex').slice(0, 16);
 
-export const readIdOf = (sig: string): string => digest(['recovery', sig]);
+/** A signature's stand-in: the hash a stored recovery read holds as `slice.sig`. */
+export const readIdOf = (sig: string): string => contentHash(sig);
 
 /** The ID of a call's shape: its tool and input key names, nothing the caller typed as a value. */
 export const toolShapeId = (tool: string, keys: readonly string[]): string => digest(['fit', tool, [...keys].sort()]);
@@ -258,9 +262,10 @@ const questionReads = (store: Store, family: string | undefined, slice: RecallSl
   return fitReads(store).filter((read) => (slice.tool === undefined || read.tool === slice.tool) && (slice.harnessVersion === undefined || read.harnessVersions.includes(slice.harnessVersion)) && (slice.model === undefined || read.models.includes(slice.model)));
 };
 
-const patternReads = (store: Store, prefix: readonly string[]): RecallRead[] => {
-  const ids = new Set(prefix);
-  return [...recoveryReads(store), ...fitReads(store)].filter((read) => ids.has(read.readId));
+const patternReads = (store: Store, prefix: readonly string[], current: CurrentPool | undefined): RecallRead[] => {
+  const named = current === undefined ? { standIns: [], reads: [] } : namedByPrefix(prefix, current);
+  const ids = new Set([...prefix, ...named.standIns]);
+  return [...[...recoveryReads(store), ...fitReads(store)].filter((read) => ids.has(read.readId)), ...named.reads];
 };
 
 const textReads = (store: Store, text: string): RecallRead[] => {
@@ -294,11 +299,11 @@ export const closedQueryOf = (options: { pattern: readonly string[]; entity?: st
 const ANSWER_LIMIT = 5;
 
 /** The reads a query's form asks for, best first, over the local store: an empty list is a miss, which a recall keeps. */
-export const answerQuery = (store: Store, input: ClosedQuery, now: number): RecallRead[] => {
+export const answerQuery = (store: Store, input: ClosedQuery, now: number, current?: CurrentPool): RecallRead[] => {
   const reads = (): RecallRead[] => {
     switch (input.form) {
       case 'pattern':
-        return patternReads(store, input.prefix ?? []);
+        return patternReads(store, input.prefix ?? [], current);
       case 'entity':
         return input.entity === undefined ? [] : entityReads(store, input.entity);
       case 'question':
@@ -307,7 +312,8 @@ export const answerQuery = (store: Store, input: ClosedQuery, now: number): Reca
         return input.text === undefined ? [] : textReads(store, input.text);
     }
   };
-  return reads().slice(0, ANSWER_LIMIT);
+  const answers = reads().slice(0, ANSWER_LIMIT);
+  return current === undefined ? answers : resolveReads(answers, current.reads);
 };
 
 /** The closed form a `recall()` input is recorded under. An error or a path is text the asker typed, so it stays in class A; a class is a closed name. */
@@ -333,6 +339,8 @@ export interface PullContext {
   frame: Frame | null;
   harness: Harness;
   redactDomains?: readonly string[];
+  /** The pool an answer's stored read comes from; without one, an answer keeps its stand-in hash. */
+  current?: CurrentPool | undefined;
 }
 
 export interface PullResult {
@@ -347,7 +355,12 @@ export const pull = (store: Store, input: PullInput, context: PullContext): Pull
   const at = new Date(context.now).toISOString();
   const legacy = isClosed(input) ? undefined : recall(store, input, context.now, undefined, context.redactDomains);
   const sigs = new Set(legacy?.matches.map((match) => match.sig));
-  const reads = isClosed(input) ? answerQuery(store, input, context.now) : recoveryReads(store, (error) => sigs.has(error.sig)).slice(0, ANSWER_LIMIT);
+  const { current } = context;
+  const legacyReads = (): RecallRead[] => {
+    const found = recoveryReads(store, (error) => sigs.has(error.sig)).slice(0, ANSWER_LIMIT);
+    return current === undefined ? found : resolveReads(found, current.reads);
+  };
+  const reads = isClosed(input) ? answerQuery(store, input, context.now, current) : legacyReads();
   const { rendered, names } = renderAnswer(reads, context.frame, context.harness);
   const made = makeRecall({
     sid: context.sid,

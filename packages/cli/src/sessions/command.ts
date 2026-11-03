@@ -17,7 +17,7 @@ import { readHookCalls } from './hook-calls.js';
 import { buildIndex, contextBlock, inRepository, readIndex, type ContextOptions } from './hook-index.js';
 import { hookStatus, installHooks, scheduleStatus, setSchedule, settingsPath, uninstallHooks, type InstallRuntime, type Scope } from './install.js';
 import { serve } from './mcp.js';
-import { refreshPool } from './pool.js';
+import { currentPool, refreshPool } from './pool.js';
 import { FAMILIES } from './read.js';
 import { formatReads, isFamily, parseSlice, selectReads } from './read-rows.js';
 import { CAPTURE_VERSION, harnessOf, OLDEST_READABLE_CAPTURE, type StepRow } from './schema.js';
@@ -81,7 +81,8 @@ export const sessionsRecall = async (deps: SessionsDeps, query: PullInput, sid: 
     newContext(storeDir, deps.now, 'manual'),
     'recall',
     async () => {
-      const found = pull(await loadStore(storeDir), query, { sid, now: deps.now(), frame: null, harness: harnessOf({}), redactDomains: await readRedactDomains(storeDir) });
+      const store = await loadStore(storeDir);
+      const found = pull(store, query, { sid, now: deps.now(), frame: null, harness: harnessOf({}), redactDomains: await readRedactDomains(storeDir), current: await currentPool(storeDir, store) });
       return { value: found, report: { in: { query: 1 }, out: { matches: found.legacy?.matches.length ?? found.reads.length }, key } };
     },
     key,

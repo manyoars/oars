@@ -24,6 +24,7 @@ import { CliError, ExitCode } from '../errors.js';
 import { compileAllow, requireEntries, slugOf } from './allow.js';
 import { openCursorStore, type CursorStore } from './cursor.js';
 import { buildIndex, indexPath } from './hook-index.js';
+import { refreshPool } from './pool.js';
 import { archiveRaw } from './archive.js';
 import { deriveSession, type SessionCapture } from './derive.js';
 import { captureRuntime, type CaptureRuntime } from './capture-runtime.js';
@@ -534,7 +535,8 @@ export const refresh = async (runtime: SessionsRuntime, redactDomains: readonly 
   }
   const indexStarted = performance.now();
   try {
-    const index = buildIndex(store, redactDomains, at);
+    const { reads } = await refreshPool(runtime.storeDir, store);
+    const index = buildIndex(store, redactDomains, at, reads);
     await writeAtomic(indexPath(runtime.storeDir), JSON.stringify(index));
     if (trace !== undefined) {
       trace.index = {
