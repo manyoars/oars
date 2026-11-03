@@ -4,7 +4,8 @@ import { ExitCode } from '../errors.js';
 import { harness, removeTestDirs } from '../test-support.js';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { addProject, cleanup, composers, FIXTURES, folders, stage, stageCursor, stageRawCursor } from './test-support.js';
+import type { Source } from './sources.js';
+import { addProject, cleanup, composers, FIXTURES, folders, rolloutLine, stage, stageCodex, stageCursor, stageRawCursor } from './test-support.js';
 
 afterEach(() => {
   cleanup();
@@ -210,5 +211,45 @@ describe('oars sessions', () => {
     const empty = join(staged.root, 'empty.txt');
     writeFileSync(empty, '# nothing\n');
     expect(await run(['sessions', 'deposit', '--allow-file', empty], deps)).toBe(ExitCode.USAGE);
+  });
+});
+
+describe('oars sessions with a Codex store', () => {
+  // Fixture written from openai/codex @ ac558e2 (see codex.test.ts).
+  const rollout = (id: string) => [
+    rolloutLine('2026-06-01T10:00:00.000Z', 'session_meta', { id, timestamp: '2026-06-01T10:00:00.000Z', cwd: '/work/app', cli_version: '0.50.0' }),
+    rolloutLine('2026-06-01T10:00:02.000Z', 'event_msg', { type: 'user_message', message: 'hello' }),
+  ];
+  const withCodex = () => {
+    const h = setup();
+    const home = stageCodex(h.staged.root, [{ id: '11111111-1111-4111-8111-111111111111', lines: rollout('a') }, { id: '22222222-2222-4222-8222-222222222222', lines: rollout('b') }]);
+    h.deps.sessions = { ...h.staged.runtime, sourceRoots: { codex: home } };
+    return h;
+  };
+
+  it('prints Read 2 Codex sessions. once, and nothing about Codex when it was not allowed or reported missing', async () => {
+    const { deps, out } = withCodex();
+    expect(await run(['sessions', 'deposit', '--allow', 'codex'], deps)).toBe(ExitCode.OK);
+    const text = out.join('');
+    expect(text.match(/Read 2 Codex sessions\./g)).toHaveLength(1);
+    expect(text).not.toContain('No project folder matched');
+    out.length = 0;
+    expect(await run(['sessions', 'deposit', '--allow', 'proj'], deps)).toBe(ExitCode.OK);
+    expect(out.join('')).not.toContain('Codex');
+  });
+
+  it('labels a source from the table in force', async () => {
+    const h = setup();
+    const entry: Source = {
+      name: 'fake',
+      harness: 'codex',
+      label: 'Fakery',
+      root: () => h.staged.root,
+      storeFile: (root) => join(root, 'fake.db'),
+      open: () => Promise.resolve({ sessions: [{ id: 'one', folder: null, size: 1, mtimeMs: 1 }], transcript: () => '', rejected: 0, unreadable: [], where: () => '', close: () => undefined }),
+    };
+    h.deps.sessions = { ...h.staged.runtime, sources: [entry], sourceRoots: { fake: h.staged.root } };
+    expect(await run(['sessions', 'deposit', '--allow', 'fake'], h.deps)).toBe(ExitCode.OK);
+    expect(h.out.join('')).toContain('Read 1 Fakery sessions.');
   });
 });

@@ -1,7 +1,7 @@
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { codexRoot, openCodexStore, rolloutLines } from './codex.js';
+import { codexRoot, openCodexStore, rolloutBadLines, rolloutLines } from './codex.js';
 import { captureSession } from './extract.js';
 import { makeRedactor } from './redact.js';
 import { makeRepoIdentity, makeRepoRoot } from './repo-root.js';
@@ -11,7 +11,12 @@ afterEach(cleanup);
 
 // Every fixture below is written from openai/codex @ ac558e2 (Apache-2.0): the envelope from codex-rs/history/src/lib.rs (`RolloutLine`) and
 // rollout_payload.rs, the payloads from codex-rs/protocol/src/protocol.rs (`SessionMeta`, `TurnContextItem`, `TokenUsage`, `ExecCommandEndEvent`,
-// `PatchApplyEndEvent`, `UserMessageEvent`, `AgentMessageEvent`) and models.rs (`ResponseItem::FunctionCall`). No live store was read.
+// `PatchApplyEndEvent`, `UserMessageEvent`, `AgentMessageEvent`) and models.rs (`ResponseItem::FunctionCall`; `FunctionCallOutputBody` at :2376 is a
+// bare string or an array of `{type: input_text, text}`). SessionMeta carries `history_mode` (protocol.rs:3507). A shell call's outcome is the text of
+// its function_call_output: `Exit code: N` then `Output:` (core/src/tools/mod.rs:107-113), or `Process exited with code N` (core/src/tools/context.rs:556).
+// Which events a rollout holds is codex-rs/rollout/src/policy.rs: ExecCommandEnd is never persisted (:165), PatchApplyEnd only in Legacy mode (:143).
+// Two shapes are older versions' and say so where used: the JSON `{output, metadata.exit_code}` wrapper (rust-v0.46.0 core/src/tools/mod.rs:186-210)
+// and a persisted exec_command_end (read only if a rollout carries one). No live store was read.
 
 const capture = (text: string) =>
   captureSession({
@@ -49,6 +54,9 @@ const usage = (second: number, input: number, cached: number, output: number, re
     },
   });
 const shellCall = (second: number, id: string, command: string[]) => line(T(second), 'response_item', { type: 'function_call', name: 'shell', arguments: JSON.stringify({ command }), call_id: id });
+// The persisted shape at ac558e2: the text core/src/tools/mod.rs:107-113 writes for `shell` / `shell_command`.
+const execText = (exit: number, output: string): string => `Exit code: ${String(exit)}\nWall time: 0.1 seconds\nOutput:\n${output}`;
+const shellOut = (second: number, id: string, output: unknown) => line(T(second), 'response_item', { type: 'function_call_output', call_id: id, output });
 const shellEnd = (second: number, id: string, exit: number, output: string, status = 'completed') =>
   line(T(second), 'event_msg', { type: 'exec_command_end', call_id: id, command: ['bash', '-lc', 'x'], cwd: '/work/app', exit_code: exit, aggregated_output: output, status });
 
@@ -59,7 +67,7 @@ describe('rolloutLines', () => {
       turn(),
       prompt(2, 'fix the build'),
       shellCall(3, 'c1', ['bash', '-lc', 'npm test']),
-      shellEnd(4, 'c1', 0, 'ok'),
+      shellOut(4, 'c1', execText(0, 'ok')),
       say(5, 'done'),
       usage(6, 1000, 400, 200, 50, 1200),
       usage(7, 1000, 400, 200, 50, 1200),
@@ -82,8 +90,8 @@ describe('rolloutLines', () => {
     expect(out.prompts.map((p) => p.ts)).toEqual([T(2), T(8)]);
   });
 
-  it('records a shell call that returned a nonzero code as an error even when its status reads completed', () => {
-    const out = extractOf([meta('/work/app'), turn(), prompt(2, 'run it'), shellCall(3, 'c1', ['bash', '-lc', 'make']), shellEnd(4, 'c1', 2, 'make: *** No rule to make target\nsecond line'), usage(5, 10, 0, 5, 0, 15)]);
+  it('records a shell call whose output text says Exit code: 2 as an error, with the text after Output: as its error line', () => {
+    const out = extractOf([meta('/work/app'), turn(), prompt(2, 'run it'), shellCall(3, 'c1', ['bash', '-lc', 'make']), shellOut(4, 'c1', execText(2, 'make: *** No rule to make target\nsecond line')), usage(5, 10, 0, 5, 0, 15)]);
     expect(out.tools).toMatchObject([{ tool: 'Bash', status: 'error' }]);
     expect(out.errorLines).toMatchObject([{ tool: 'Bash', line: 'make: *** No rule to make target' }]);
   });
@@ -94,16 +102,70 @@ describe('rolloutLines', () => {
     expect(out.errorLines).toEqual([]);
   });
 
-  it('unwraps a JSON error wrapper so the error line joins a Claude Code signature, and reads the wrapper exit code', () => {
-    const wrapped = JSON.stringify({ output: 'EACCES: permission denied, open /etc/x', metadata: { exit_code: 1, duration_seconds: 0.1 } });
+  it('reads the unified-exec header Process exited with code N (context.rs:556), and leaves a still-running process unsettled', () => {
+    const header = (rest: string): string => `Chunk ID: ab12\nWall time: 0.0100 seconds\n${rest}\nOriginal token count: 3\nOutput:\n`;
+    const call = (second: number, id: string, cmd: string) => line(T(second), 'response_item', { type: 'function_call', name: 'exec_command', arguments: JSON.stringify({ cmd }), call_id: id });
     const out = extractOf([
       meta('/work/app'),
-      line(T(3), 'response_item', { type: 'function_call', name: 'read_file', arguments: JSON.stringify({ path: '/etc/x' }), call_id: 'c1' }),
-      line(T(4), 'response_item', { type: 'function_call_output', call_id: 'c1', output: wrapped }),
-      line(T(5), 'response_item', { type: 'function_call', name: 'update_plan', arguments: '{}', call_id: 'c2' }),
-      line(T(6), 'response_item', { type: 'function_call_output', call_id: 'c2', output: JSON.stringify({ content: 'bad plan', success: false }) }),
+      call(2, 'u1', 'npm test'),
+      shellOut(3, 'u1', `${header('Process exited with code 1')}1 test failed`),
+      call(4, 'u2', 'ls'),
+      shellOut(5, 'u2', `${header('Process exited with code 0')}a.txt`),
+      call(6, 'u3', 'sleep 100'),
+      shellOut(7, 'u3', header('Process running with session ID 42')),
     ]);
-    expect(out.errorLines.map((entry) => entry.line)).toEqual(['Exit code 1', 'bad plan'].map((_, index) => (index === 0 ? 'EACCES: permission denied, open /etc/x' : 'bad plan')));
+    expect(out.tools.map((tool) => [tool.tool, tool.status])).toEqual([['Bash', 'error'], ['Bash', 'ok'], ['Bash', 'none']]);
+    expect(out.errorLines.map((entry) => entry.line)).toEqual(['1 test failed']);
+  });
+
+  it('reads the content-item array form of an output (models.rs:2376)', () => {
+    const out = extractOf([
+      meta('/work/app'),
+      shellCall(2, 'c1', ['make']),
+      shellOut(3, 'c1', [{ type: 'input_text', text: execText(3, 'boom: it broke') }, { type: 'input_image', image_url: 'x' }]),
+    ]);
+    expect(out.tools).toMatchObject([{ tool: 'Bash', status: 'error' }]);
+    expect(out.errorLines.map((entry) => entry.line)).toEqual(['boom: it broke']);
+  });
+
+  it('unwraps the older JSON wrapper (rust-v0.46.0 tools/mod.rs:186-210) so the error line joins a Claude Code signature', () => {
+    const wrapped = JSON.stringify({ output: 'EACCES: permission denied, open /etc/x', metadata: { exit_code: 1, duration_seconds: 0.1 } });
+    const out = extractOf([meta('/work/app'), shellCall(3, 'c1', ['cat', '/etc/x']), shellOut(4, 'c1', wrapped)]);
+    expect(out.errorLines.map((entry) => entry.line)).toEqual(['EACCES: permission denied, open /etc/x']);
+  });
+
+  it('records a non-shell call as ok: ac558e2 writes no failure signal for it', () => {
+    const out = extractOf([
+      meta('/work/app'),
+      line(T(3), 'response_item', { type: 'function_call', name: 'update_plan', arguments: '{}', call_id: 'c2' }),
+      shellOut(4, 'c2', 'plan rejected: bad plan'),
+    ]);
+    expect(out.tools).toMatchObject([{ tool: 'update_plan', status: 'ok' }]);
+    expect(out.errorLines).toEqual([]);
+  });
+
+  it('treats a persisted exec_command_end with status failed and no exit_code as a failure, and settles a call only once', () => {
+    const out = extractOf([
+      meta('/work/app'),
+      shellCall(2, 'c1', ['x']),
+      line(T(3), 'event_msg', { type: 'exec_command_end', call_id: 'c1', status: 'failed', aggregated_output: 'no code here' }),
+      shellOut(4, 'c1', execText(0, 'ignored: already settled')),
+    ]);
+    expect(out.tools).toMatchObject([{ tool: 'Bash', status: 'error' }]);
+  });
+
+  it('reports a Paginated rollout as unreadable by name instead of depositing it empty (policy.rs:143)', () => {
+    const paginated = line(T(0), 'session_meta', { id: 'sess-1', timestamp: T(0), cwd: '/work/app', cli_version: '0.60.0', history_mode: 'paginated' });
+    expect(() => rolloutLines(asText([paginated, line(T(2), 'event_msg', { type: 'item_completed' })]), 's')).toThrow(/paginated/);
+    const legacy = line(T(0), 'session_meta', { id: 'sess-1', timestamp: T(0), cwd: '/work/app', history_mode: 'legacy' });
+    expect(rolloutLines(asText([legacy, prompt(2, 'hi')]), 's').some((entry) => entry.type === 'user')).toBe(true);
+  });
+
+  it('counts torn lines, and treats a nonblank file with no parseable line as unreadable', () => {
+    const text = `${rolloutText(meta('/work/app'))}\n{torn\n\n{also torn\n`;
+    expect(rolloutBadLines(text)).toEqual(['{torn', '{also torn']);
+    expect(() => rolloutLines('{torn\nnot json\n', 's')).toThrow(/no parseable line/);
+    expect(rolloutLines('\n\n', 's')).toEqual([]);
   });
 
   it('writes no usage for a session with none, and never a measured zero', () => {
@@ -113,12 +175,13 @@ describe('rolloutLines', () => {
     expect(hasUsage).toBe(false);
   });
 
-  it('gives every assistant line a requestId, so verify --strict has nothing to fail on', () => {
-    const lines = rolloutLines(asText([meta('/work/app'), say(2, 'a'), usage(3, 5, 0, 5, 0, 10), say(4, 'b')]), 's');
-    const assistants = lines.filter((entry) => entry.type === 'assistant');
-    expect(assistants).toHaveLength(2);
-    expect(assistants.every((entry) => entry.requestId === undefined)).toBe(false);
-    expect(assistants[0]?.requestId).toBeDefined();
+  it('gives every assistant line a requestId, including one after the last token_count and in a session with no usage', () => {
+    const assistants = (lines: readonly unknown[]) => rolloutLines(asText(lines), 's').filter((entry) => entry.type === 'assistant');
+    const trailing = assistants([meta('/work/app'), say(2, 'a'), usage(3, 5, 0, 5, 0, 10), say(4, 'b')]);
+    expect(trailing).toHaveLength(2);
+    expect(trailing.every((entry) => typeof entry.requestId === 'string')).toBe(true);
+    expect(trailing[0]?.requestId).not.toBe(trailing[1]?.requestId);
+    expect(assistants([meta('/work/app'), say(2, 'a'), say(3, 'b')]).every((entry) => typeof entry.requestId === 'string')).toBe(true);
   });
 
   it('keeps each prompt at its own time, and never steps back for a missing, relative, or earlier stamp', () => {
@@ -154,11 +217,11 @@ describe('rolloutLines', () => {
     expect(error?.line.length).toBe(1000);
   });
 
-  it('settles a shell call from its output wrapper when no exec_command_end exists, and a local_shell_call from its action', () => {
+  it('settles a local_shell_call (action.command) from its output, and leaves a shell output with no exit code unsettled', () => {
     const out = extractOf([
       meta('/work/app'),
       line(T(2), 'response_item', { type: 'local_shell_call', call_id: 'c1', status: 'completed', action: { type: 'exec', command: ['ls'] } }),
-      line(T(3), 'response_item', { type: 'function_call_output', call_id: 'c1', output: JSON.stringify({ output: 'ls: nope', metadata: { exit_code: 2 } }) }),
+      shellOut(3, 'c1', JSON.stringify({ output: 'ls: nope', metadata: { exit_code: 2 } })),
       line(T(4), 'response_item', { type: 'function_call', name: 'shell', arguments: JSON.stringify({ command: 'ls' }), call_id: 'c2' }),
       line(T(5), 'response_item', { type: 'function_call_output', call_id: 'c2', output: 'plain text with no metadata' }),
     ]);
@@ -218,6 +281,5 @@ describe('openCodexStore', () => {
   it('reads the Codex home from CODEX_HOME, else ~/.codex', () => {
     expect(codexRoot({ CODEX_HOME: '/x' }, '/home/u')).toBe('/x');
     expect(codexRoot({ CODEX_HOME: '' }, '/home/u')).toBe(join('/home/u', '.codex'));
-    expect(readFileSync).toBeDefined();
   });
 });
