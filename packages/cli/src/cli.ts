@@ -356,9 +356,9 @@ const buildProgram = (deps: RunDeps, argv: string[]): Command => {
 
   sessions
     .command('verify')
-    .description('run the consistency invariants on the stored skeletons and capture records')
+    .description('run the consistency invariants on the stored skeletons and capture records, report every session on its own, and audit each against its raw file (Merkle root, counts)')
     .option('--session <id>', 'one session instead of all')
-    .option('--strict', 'exit non-zero (4) when any invariant has exceptions or a step is stuck; by default FAIL lines still exit 0')
+    .option('--strict', 'exit non-zero (4) when any invariant has exceptions, a step is stuck, or the raw audit finds a root mismatch or counts that do not bind; by default FAIL lines still exit 0')
     .action(async (_options: OptionValues, command: Command) => {
       const options: OptionValues = command.optsWithGlobals();
       const { failed, report, ...outcome } = await sessionsVerify(sessionDeps(deps), { session: text(options, 'session') });

@@ -103,7 +103,7 @@ shows their tokens as the `delegated` column, and their errors are in the signat
 spawned them, so per-session counts still count main sessions. Every deposited transcript is also
 hard-linked (copied across volumes) into `<config>/oars/sessions/raw/`, so it outlives the harness's own cleanup. For each session it also writes a skeleton (ids, timestamps, tool linkage, token counts, a SHA-256 in place of every content
 field, and a Merkle root over the raw lines) that `verify` checks; the skeleton holds hashes only, never content.
-`verify` exits 0 even when an invariant has exceptions; add `--strict` to exit 4 instead. `measure` prints the recurring-error count
+`verify` exits 0 even when an invariant has exceptions; add `--strict` to exit 4 instead. `verify` also reports every session on its own (`--json`: `sessionResults`, each session's ten rows with a status of `pass`, `fail`, or `not run`) and audits each session against its raw file (`audit`): the raw-file match for a hard link and for a copy (a copy of a different size counts as possible tampering), the Merkle root recomputed over the first `leaves` lines, and the count bindings (`leaves`, `session.lines`, and the skeleton's lines plus `badLines` must agree). Each session lands on one of five results: `root matches and the counts bind`, `changed since deposit`, `root mismatch`, `counts do not bind`, or `not run` (no raw file, no skeleton, or a raw file that cannot be read). `root mismatch` and `counts do not bind` fail `--strict`; a local match commits nobody, so none of them raises a tier. Sessions under 10 `leaves` are flagged, since their root joins no cluster. `measure` prints the recurring-error count
 per hundred sessions and, on a second line, the distinct recurring signatures in the window.
 #### Many folders: `--allow` prefixes, globs, and `--allow-file`
 
@@ -149,7 +149,7 @@ Install merges: existing hooks (a Stop hook that rotates sessions, say) stay, ev
 
 With `--json`, stdout carries exactly one JSON document and a success exits 0.
 
-- Success: `{"ok": true, ...}`. The rest depends on the command: `login` adds `email`; `deploy` adds `workloadId`, `prices`, `started`, `nextSteps` and, when this run minted it, `sdkKey`; `templates` adds `templates`; `status` adds `workload` and `billingMode`; `test-charge` adds `chargeId` and `status`; `sessions` commands add their own fields (`deposit` the counts, `recall` `matches`, `books` `rows`, `measure` `last` and `before`, `verify` `sessions`, `unreadable`, and `invariants`).
+- Success: `{"ok": true, ...}`. The rest depends on the command: `login` adds `email`; `deploy` adds `workloadId`, `prices`, `started`, `nextSteps` and, when this run minted it, `sdkKey`; `templates` adds `templates`; `status` adds `workload` and `billingMode`; `test-charge` adds `chargeId` and `status`; `sessions` commands add their own fields (`deposit` the counts, `recall` `matches`, `books` `rows`, `measure` `last` and `before`, `verify` `sessions`, `unreadable`, `invariants`, `sessionResults`, and `audit`).
 - Failure: `{"ok": false, "step": "...", "problem": {...}}`, where `problem` is the platform's problem document (`title`, `detail`, `code`, `actionUrl` when it sent them). A `deploy` that stopped after registering also carries `workloadId`, `rerun` and, if that run minted it, `sdkKey`.
 
 Without `--json`, a failure prints the problem to stderr instead.
