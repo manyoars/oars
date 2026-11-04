@@ -34,7 +34,6 @@ import {
   type Skeleton,
   type SkeletonLine,
   type StepIdentity,
-  type Strata,
   type TargetBase,
   type ToolManifest,
   type ToolObservation,
@@ -136,19 +135,14 @@ export const isErrorResult = (block: Obj, text: string): boolean => {
   return exit !== null && exit[1] !== '0';
 };
 
-/** A name stays only when redaction leaves it as it is: a masked word is no package name. */
-const namesKept = (names: readonly string[], redact: Redactor): string[] => names.filter((name) => redact(name) === name);
-
 /** What an Edit, MultiEdit, or Write shows of a manifest: the names it adds and removes (an edit), or lists (a write). Undefined when it shows none. */
 const manifestOfInput = (file: ManifestFile, tool: string, input: Obj, redact: Redactor): ToolManifest | undefined => {
   if (tool === 'Write') {
-    const seen = namesKept(manifestNames(file, str(input.content) ?? ''), redact);
+    const seen = manifestNames(file, str(input.content) ?? '', redact);
     return seen.length === 0 ? undefined : { file, seen, added: [], removed: [] };
   }
   const edits = tool === 'MultiEdit' && Array.isArray(input.edits) ? input.edits.filter(isObj) : tool === 'Edit' ? [input] : [];
-  const delta = manifestDelta(file, edits.map((edit) => str(edit.old_string) ?? '').join('\n'), edits.map((edit) => str(edit.new_string) ?? '').join('\n'));
-  const added = namesKept(delta.added, redact);
-  const removed = namesKept(delta.removed, redact);
+  const { added, removed } = manifestDelta(file, edits.map((edit) => str(edit.old_string) ?? '').join('\n'), edits.map((edit) => str(edit.new_string) ?? '').join('\n'), redact);
   return added.length === 0 && removed.length === 0 ? undefined : { file, seen: [], added, removed };
 };
 
@@ -166,13 +160,14 @@ const HTTP_STATUS_RE = /(?:status(?: code)?|HTTP\/?[\d.]*|returned error:?)\s*:?
 
 const exitClass = (code: number): string => {
   if (code === 0 || code === 1 || code === 2 || code === 126 || code === 127) return String(code);
-  return code > 128 && code <= 255 ? 'signal' : 'other';
+  // 128 + n for the signals n = 1 to 64 a shell reports; 255 is the usual spawn or ssh failure and stays `other`.
+  return code > 128 && code <= 192 ? 'signal' : 'other';
 };
 
 /**
  * The `errorCode` of a failed result (spec Section 1.2): an exit-code class from a leading `Exit code N` line, else the harness error class its text
  * names, else an HTTP status, else `other`. The result is always a member of `ERROR_CODES`, picked by a table, so no word of the error text is kept. A
- * harness that reports no exit code (Cursor, a Codex call with no status) reaches `other` unless its text names a class.
+ * harness that reports no exit code (a Cursor non-shell call, a Codex call with no status) reaches `other` unless its text names a class.
  */
 export const errorCodeOf = (text: string): string => {
   const exit = EXIT_CODE_RE.exec(text.trim());
@@ -1748,7 +1743,7 @@ export const captureSession = (input: ExtractInput): Capture => {
           call.status = failed ? 'error' : 'ok';
           if (failed) call.errorCode = errorCodeOf(text);
           const read = manifestReads.get(str(block.tool_use_id) ?? '');
-          const seen = read === undefined || failed ? [] : namesKept(manifestNames(read, text), redact);
+          const seen = read === undefined || failed ? [] : manifestNames(read, text, redact);
           if (read !== undefined && seen.length > 0) call.manifest = { file: read, seen, added: [], removed: [] };
           const commits = failed ? [] : commitsRead(plan, text);
           if (commits.length > 0) call.commits = commits;
@@ -1829,12 +1824,18 @@ export const captureSession = (input: ExtractInput): Capture => {
       frameId,
     }));
   }
-  // The strata: the file's evidence once, and each prompt's own `explore`. The size is the one the frame holds, so a re-capture that carries `repoSize` keeps `repoFiles` too.
-  const stepActions = (prompt: number | null): CanonicalAction[] => tools.filter((call) => prompt === null || call.prompt === prompt).flatMap((call) => (call.steps ?? []).map((step) => step.action));
+  // The strata: the file's evidence once, and each prompt's own `explore` from one pass over the calls. The size is the one the frame holds, so a re-capture that carries `repoSize` keeps `repoFiles` too.
   const packageNames = tools.flatMap((call) => [...(call.packages ?? []).map((pkg) => pkg.package), ...(call.manifest?.seen ?? []), ...(call.manifest?.added ?? [])]);
-  const strataFor = (prompt: number | null): Strata => strataOf({ paths: framePaths, packages: packageNames, size, explore: exploreCount(stepActions(prompt)) });
-  session.strata = strataFor(null);
-  for (const [position, prompt] of prompts.entries()) prompt.strata = strataFor(position);
+  const fileStrata = strataOf({ paths: framePaths, packages: packageNames, size });
+  const exploreOfPrompt = new Map<number | null, number>();
+  let explore = 0;
+  for (const call of tools) {
+    const looked = exploreCount((call.steps ?? []).map((step) => step.action));
+    explore += looked;
+    exploreOfPrompt.set(call.prompt, (exploreOfPrompt.get(call.prompt) ?? 0) + looked);
+  }
+  session.strata = { ...fileStrata, explore };
+  for (const [position, prompt] of prompts.entries()) prompt.strata = { ...fileStrata, explore: exploreOfPrompt.get(position) ?? 0 };
   linkSteps(
     tools.map((call, position) => ({
       steps: call.steps ?? [],

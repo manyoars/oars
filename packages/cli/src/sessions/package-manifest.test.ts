@@ -17,6 +17,8 @@ const manifestOf = (name: string, input: object, result = 'ok'): ToolManifest | 
 };
 
 const PACKAGE_JSON = ['{', '  "name": "acme-app",', '  "version": "1.0.0",', '  "scripts": { "build": "tsc" },', '  "dependencies": {', '    "left-pad": "^1.3.0",', '    "@types/node": "24.0.0",', '    "local-lib": "file:../lib"', '  },', '  "engines": {', '    "node": ">=20"', '  }', '}'];
+const SECRET_KEY = 'AKIAIOSFODNN7EXAMPLE';
+const SECRET_MIXED = 'aB3dE5gH7jK9mN1pQ3sT5vX7zA9c';
 const numbered = (lines: readonly string[]): string => lines.map((text, at) => `${String(at + 1).padStart(6)}→${text}`).join('\n');
 
 describe('packages from manifests', () => {
@@ -54,8 +56,48 @@ describe('packages from manifests', () => {
     expect(manifestOf('Edit', { file_path: '/w/package.json', old_string: '"version": "1.0.0"', new_string: '"version": "1.0.1"' })).toBeUndefined();
   });
 
-  it('drops a name redaction would mask', () => {
-    expect(manifestNames('requirements.txt', 'AKIAIOSFODNN7EXAMPLE1234')).toEqual(['pypi:akiaiosfodnn7example1234']);
+  it('stores nothing for a secret written as a requirements line', () => {
+    expect(manifestOf('Write', { file_path: '/w/requirements.txt', content: 'AKIAIOSFODNN7EXAMPLE' })).toBeUndefined();
+  });
+
+  it.each([SECRET_KEY, SECRET_MIXED])('keeps a secret line out of a manifest on every path that reads one: %s', (secret) => {
+    const kept = (manifest: ToolManifest | undefined): string => JSON.stringify(manifest ?? null).toLowerCase();
+    const results = [
+      manifestOf('Read', { file_path: '/w/requirements.txt' }, numbered([secret])),
+      manifestOf('Write', { file_path: '/w/requirements.txt', content: `${secret}\nrequests==2.31.0` }),
+      manifestOf('Edit', { file_path: '/w/requirements.txt', old_string: 'x', new_string: secret }),
+      manifestOf('Edit', { file_path: '/w/requirements.txt', old_string: secret, new_string: 'x' }),
+      manifestOf('MultiEdit', { file_path: '/w/requirements.txt', edits: [{ old_string: 'y', new_string: secret }, { old_string: secret, new_string: 'z' }] }),
+    ];
+    for (const result of results) expect(kept(result)).not.toContain(secret.toLowerCase());
+    expect(results.map((result) => result?.seen.length ?? 0)).toEqual([0, 1, 0, 0, 0]);
+  });
+
+  it('reads no top-level value of a whole package.json as a dependency', () => {
+    const json = ['{', '  "name": "3d-viewer",', '  "description": "3 ways to view things",', '  "main": "1.js",', '  "dependencies": {', '    "left-pad": "1.3.0"', '  }', '}'];
+    expect(manifestOf('Read', { file_path: '/w/package.json' }, numbered(json))).toEqual({ file: 'package.json', seen: ['npm:left-pad'], added: [], removed: [] });
+  });
+
+  it('reads no bare archive of a requirements file as a name', () => {
+    const content = ['acme_internal-1.0-py3-none-any.whl', 'dist.tar.gz', 'a.tgz', 'b.tar.bz2', 'c.zip', 'd.egg', 'requests'].join('\n');
+    expect(manifestNames('requirements.txt', content, makeRedactor([]))).toEqual(['pypi:requests']);
+  });
+
+  it('does not count the manifest of a dependency as the session manifest', () => {
+    const paths = ['/w/node_modules/astro/package.json', 'C:\\w\\vendor\\acme\\requirements.txt', '/w/.venv/lib/site-packages/x/requirements.txt', '/w/lib/site-packages/x/Cargo.toml', '/w/.venv/Cargo.toml'];
+    expect(paths.map(manifestFileOf)).toEqual([null, null, null, null, null]);
+    expect(manifestOf('Read', { file_path: '/w/node_modules/astro/package.json' }, numbered(PACKAGE_JSON))).toBeUndefined();
+    expect(manifestFileOf('/w/my-vendor/package.json')).toBe('package.json');
+  });
+
+  it('reads the real crate behind a renamed Cargo entry, and no entry that holds a path or a git source', () => {
+    const toml = ['[dependencies]', 'alias = { package = "real-crate", version = "1" }', 'local = { path = "../local", version = "1" }', 'remote = { git = "https://example.com/x.git", version = "1" }', 'serde = { version = "1" }'];
+    expect(manifestNames('Cargo.toml', toml.join('\n'), makeRedactor([]))).toEqual(['crates:real-crate', 'crates:serde']);
+  });
+
+  it('reads no config key of a headerless fragment as a dependency', () => {
+    expect(manifestOf('Edit', { file_path: '/w/package.json', old_string: '', new_string: '"tag": "next"' })).toBeUndefined();
+    expect(manifestOf('Edit', { file_path: '/w/Cargo.toml', old_string: '', new_string: 'opt-level = "3"' })).toBeUndefined();
   });
 
   it('names a manifest by its basename', () => {

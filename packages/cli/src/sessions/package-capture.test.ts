@@ -39,6 +39,13 @@ describe('packages from install commands', () => {
     ['cargo install folding the name', 'cargo install cargo_edit', [{ package: 'crates:cargo-edit', packageVersion: null, first: true }]],
     ['go get a module', 'go get github.com/spf13/cobra@v1.8.0', [{ package: 'go:github.com/spf13/cobra', packageVersion: 'v1.8.0', first: true }]],
     ['gem install with a version flag', 'gem install rails -v 7.1.0', [{ package: 'rubygems:rails', packageVersion: '7.1.0', first: true }]],
+    ['yarn add', 'yarn add left-pad@1.3.0', [{ package: 'npm:left-pad', packageVersion: '1.3.0', first: true }]],
+    ['bun add', 'bun add zod', [{ package: 'npm:zod', packageVersion: null, first: true }]],
+    ['bunx', 'bunx cowsay@1.6.0', [{ package: 'npm:cowsay', packageVersion: '1.6.0', first: true }]],
+    ['pnpm dlx', 'pnpm dlx cowsay@1.6.0', [{ package: 'npm:cowsay', packageVersion: '1.6.0', first: true }]],
+    ['uvx', 'uvx ruff', [{ package: 'pypi:ruff', packageVersion: null, first: true }]],
+    ['pipx install', 'pipx install httpie', [{ package: 'pypi:httpie', packageVersion: null, first: true }]],
+    ['go install a module', 'go install github.com/spf13/cobra@v1.8.0', [{ package: 'go:github.com/spf13/cobra', packageVersion: 'v1.8.0', first: true }]],
     ['brew install', 'brew install Jq', [{ package: 'homebrew:jq', packageVersion: null, first: true }]],
   ])('%s', (_name, command, expected) => {
     expect(packagesOf(command)).toEqual(expected);
