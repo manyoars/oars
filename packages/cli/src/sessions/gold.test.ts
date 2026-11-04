@@ -503,6 +503,15 @@ describe('oars sessions gold', () => {
     expect(h.err.join('')).toContain('EEXIST');
   });
 
+  it('refuses to sample when no term file is configured, since every session is then excluded (V15)', async () => {
+    const h = setup();
+    await populate(h);
+    const dir = join(h.staged.root, 'no-terms');
+    expect(await run(['sessions', 'gold', 'sample', '--size', '1', '--batch', '1', '--out-dir', dir, '--seed', 's'], h.deps)).toBe(ExitCode.INVALID);
+    expect(h.err.join('')).toContain('term file');
+    expect(existsSync(dir)).toBe(false);
+  });
+
   it('says no session was excluded when no term is named, and takes the default folder beside the projects root', async () => {
     const h = setup();
     await populate(h);
