@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto';
+import { createHash, webcrypto } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { verifyBundle, type Bundle } from '../../cli/src/sessions/pool-wire.js';
 import { sampleSkeleton } from './sample.js';
@@ -105,7 +105,7 @@ describe('a bundle over five accounts', () => {
   it('serves a framework and a repo size at five accounts and neither at four, and keeps both out of everything but the strata', async () => {
     const fresh = await startPool();
     try {
-      const stack = { languages: ['rust'], frameworks: ['astro'], size: 'xl' } as const;
+      const stack: Parameters<typeof sampleSkeleton>[1] = { languages: ['rust'], frameworks: ['astro'], size: 'xl' };
       const sign = async (id: string, twice = false): Promise<string> => {
         const { token } = await fresh.signIn('github', stubUser(id));
         await fresh.post('/v1/covenant/accept', { version: 'v1' }, token);
@@ -335,12 +335,13 @@ describe('the client refuses', () => {
 
   // Signed by a key the client pins, so the signature holds: only the vocabulary version is wrong.
   it('a correctly signed bundle of another vocabulary version', async () => {
-    const pair = await crypto.subtle.generateKey('Ed25519', true, ['sign', 'verify']);
-    const pinned = await crypto.subtle.exportKey('jwk', pair.publicKey);
+    const pair = await webcrypto.subtle.generateKey('Ed25519', true, ['sign', 'verify']);
+    if (!('privateKey' in pair)) throw new Error('no key pair');
+    const pinned = await webcrypto.subtle.exportKey('jwk', pair.publicKey);
     const key = { kty: String(pinned.kty), crv: String(pinned.crv), x: String(pinned.x) };
     const sign = async (vocabVersion: string): Promise<{ payload: string; signature: string }> => {
       const payload = JSON.stringify({ format: 1, harnessVersion: '2.1.314', vocabVersion, asOf: { pool: 'p', day: '2026-11-04' }, cells: [], motifs: [], reads: [], strata: [] });
-      const signature = Buffer.from(await crypto.subtle.sign('Ed25519', pair.privateKey, new TextEncoder().encode(payload))).toString('base64');
+      const signature = Buffer.from(await webcrypto.subtle.sign('Ed25519', pair.privateKey, new TextEncoder().encode(payload))).toString('base64');
       return { payload, signature };
     };
     expect(await verifyBundle(await sign('0'), key, '2.1.314')).toMatchObject({ ok: true });
