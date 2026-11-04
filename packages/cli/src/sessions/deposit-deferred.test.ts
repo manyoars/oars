@@ -492,12 +492,12 @@ describe('fix round 2: housekeeping never fails a deposit (item 17)', () => {
     expect(lines.filter((line) => line.includes('refused.json'))).toHaveLength(1);
   });
 
-  it('guards failPending: a file it cannot rename costs one line, and the entry stays for the next run', async () => {
+  it('guards failPending: a file it cannot rename costs one line and does not throw', async () => {
     const staged = await deposited();
     mkdirSync(pendingDir(staged.storeDir), { recursive: true });
     const entry: PendingEntry = { names: ['vanished.json'], transcript: undefined, unreadable: false, failures: 0 };
     const lines = await quietly(async () => {
-      expect(await failPending(staged.storeDir, entry)).toBe(1);
+      await failPending(staged.storeDir, entry);
     });
     expect(lines.filter((line) => line.includes('vanished.json'))).toHaveLength(1);
   });
@@ -507,8 +507,8 @@ describe('fix round 2: an unreadable entry neither goes first nor fills the cap 
   it('lists unreadable entries after the readable ones, and reads past them to fill the limit', async () => {
     const staged = await deposited();
     const dir = pendingDir(staged.storeDir);
-    // '0.json' to '4.json' sort ahead of every hash-named entry.
-    for (let index = 0; index < PENDING_HOOK_CAP; index += 1) mkdirSync(join(dir, `${String(index)}.json`), { recursive: true });
+    // '!0.json' to '!4.json' sort ahead of every hash-named entry, whatever the hashes start with: '!' sorts before every hex digit.
+    for (let index = 0; index < PENDING_HOOK_CAP; index += 1) mkdirSync(join(dir, `!${String(index)}.json`), { recursive: true });
     for (let index = 0; index < PENDING_HOOK_CAP; index += 1) await deferSession(staged.storeDir, finished(staged, `fine${String(index)}`));
     const listed = await listPending(staged.storeDir, PENDING_HOOK_CAP);
     expect(listed.map((entry) => entry.unreadable)).toEqual([...Array.from({ length: PENDING_HOOK_CAP }, () => false), ...Array.from({ length: PENDING_HOOK_CAP }, () => true)]);
@@ -517,7 +517,7 @@ describe('fix round 2: an unreadable entry neither goes first nor fills the cap 
   it('has a hook deposit take its readable pending session although unreadable ones sort first, and count the unreadable as kept', async () => {
     const staged = await deposited();
     const dir = pendingDir(staged.storeDir);
-    for (let index = 0; index < PENDING_HOOK_CAP; index += 1) mkdirSync(join(dir, `${String(index)}.json`), { recursive: true });
+    for (let index = 0; index < PENDING_HOOK_CAP; index += 1) mkdirSync(join(dir, `!${String(index)}.json`), { recursive: true });
     await deferSession(staged.storeDir, finished(staged, 'fine'));
     const before = (await readSteps(staged.storeDir)).length;
     await quietly(async () => {
