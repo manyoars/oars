@@ -137,8 +137,8 @@ describe.each([
   { provider: 'google', deviceUrl: 'https://oauth2.googleapis.com/device/code', tokenUrl: 'https://oauth2.googleapis.com/token', userUrl: 'https://openidconnect.googleapis.com/v1/userinfo' },
 ])('$provider out of reach', ({ provider, deviceUrl, tokenUrl, userUrl }) => {
   // Outside the runtime, where a stand-in fetch can reject the way a network failure does.
-  const db = { prepare: () => ({ bind: () => ({ first: () => Promise.resolve(null), all: () => Promise.resolve({ results: [] }), run: () => Promise.resolve({ meta: { changes: 1 } }) }) }) };
-  const env = { DB: db, PSEUDONYM_KEY: 'k', SLICE_SIGNING_KEY: '{}', GITHUB_CLIENT_ID: 'c', GOOGLE_CLIENT_ID: 'c', GOOGLE_CLIENT_SECRET: 's' };
+  const db = { prepare: () => ({ bind: () => ({ first: () => Promise.resolve(null), all: () => Promise.resolve({ results: [] }), run: () => Promise.resolve({ meta: { changes: 1 } }) }) }), batch: () => Promise.resolve([]) };
+  const env = { DB: db, PSEUDONYM_KEY: 'k', BUNDLE_SIGNING_KEY: '{}', GITHUB_CLIENT_ID: 'c', GOOGLE_CLIENT_ID: 'c', GOOGLE_CLIENT_SECRET: 's' };
   const post = (path: string, body: object): Promise<Response> => worker.fetch(new Request(`http://pool.test${path}`, { method: 'POST', body: JSON.stringify(body) }), env);
   const failingAt = (url: string): void => {
     vi.stubGlobal('fetch', (input: string) => (input === url ? Promise.reject(new TypeError('network down')) : Promise.resolve(new Response(JSON.stringify({ access_token: 'an-access-token' })))));

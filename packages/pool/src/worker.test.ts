@@ -93,7 +93,7 @@ describe('an oversized deposit with a declared length', () => {
   // Outside the runtime, because only a stand-in request can show its body was not read; everything past the sign-in is the same code.
   it('is refused on the header, with its body unread', async () => {
     const row = { account: 'acct-1', covenant: 'v1' };
-    const db = { prepare: () => ({ bind: () => ({ first: () => Promise.resolve(row), all: () => Promise.resolve({ results: [] }), run: () => Promise.resolve({ meta: { changes: 0 } }) }) }) };
+    const db = { prepare: () => ({ bind: () => ({ first: () => Promise.resolve(row), all: () => Promise.resolve({ results: [] }), run: () => Promise.resolve({ meta: { changes: 0 } }) }) }), batch: () => Promise.resolve([]) };
     const request = new Request('http://pool.test/v1/deposits', { method: 'POST', body: 'x', headers: { authorization: `Bearer ${TOKEN}`, 'content-length': String(1024 * 1024 + 1) } });
     const read = (): Promise<string> => Promise.reject(new Error('the body was read'));
     Object.defineProperty(request, 'text', { value: read });

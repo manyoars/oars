@@ -21,7 +21,7 @@ export interface Env {
   GOOGLE_CLIENT_ID?: string;
   GOOGLE_CLIENT_SECRET?: string;
   /** An Ed25519 private key as a JWK. */
-  SLICE_SIGNING_KEY?: string;
+  BUNDLE_SIGNING_KEY?: string;
   /** Unset keeps deposits closed (V10). */
   COVENANT_VERSION?: string;
   /** How many bundles an account without access may fetch in one ISO week. */

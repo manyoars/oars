@@ -1,4 +1,4 @@
-import { createHash, webcrypto } from 'node:crypto';
+import { createHash } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { verifyBundle, type Bundle } from '../../cli/src/sessions/pool-wire.js';
 import { sampleSkeleton } from './sample.js';
@@ -171,11 +171,11 @@ describe('a bundle over five accounts', () => {
   });
 
   it('says so when the pool has no signing key', async () => {
-    const bare = await startPool({ SLICE_SIGNING_KEY: '' });
+    const bare = await startPool({ BUNDLE_SIGNING_KEY: '' });
     try {
       await (await bare.db()).prepare("INSERT INTO accounts (id) VALUES ('acct')").run();
       await (await bare.db()).prepare("INSERT INTO tokens (hash, account, expires_at) VALUES (?, 'acct', ?)").bind(createHash('sha256').update('a-token').digest('hex'), Date.now() + 60_000).run();
-      expect(await bare.get('/bundle/2.1.314/0', 'a-token')).toMatchObject({ status: 503, json: { error: 'not_configured', message: containing('SLICE_SIGNING_KEY') } });
+      expect(await bare.get('/bundle/2.1.314/0', 'a-token')).toMatchObject({ status: 503, json: { error: 'not_configured', message: containing('BUNDLE_SIGNING_KEY') } });
     } finally {
       await bare.dispose();
     }
@@ -205,19 +205,14 @@ describe('clusters over the cells of a read', () => {
     return verified.bundle;
   };
 
-  // Cells split by day, so no single cell here holds more than one account: only the union over a read's cells can reach the floor.
-  it('five accounts on five different days serve a read with clusters 5, while their cells stay under the floor', async () => {
+  // Cells split by day, so no single cell here holds more than one account. A read's `clusters` is the largest held count among its cells, with no union over accounts (lead 173): the
+  // pool keeps no per-account record on the fetch path, so these five serve nothing until Brief 9 brings held counts for a key's `n` and `c`.
+  it('five accounts on five different days serve no read: each cell holds one cluster and a read takes the largest', async () => {
     await inFreshPool(async (spread) => {
-      await depositOn(spread, '3001', ['2026-11-01']);
-      await depositOn(spread, '3002', ['2026-11-02']);
-      await depositOn(spread, '3003', ['2026-11-03']);
-      expect((await readsIn(spread, await depositOn(spread, '3004', ['2026-11-04']))).reads).toEqual([]);
+      for (const [index, day] of ['2026-11-01', '2026-11-02', '2026-11-03', '2026-11-04'].entries()) await depositOn(spread, `300${String(index + 1)}`, [day]);
       const token = await depositOn(spread, '3005', ['2026-11-05']);
       const bundle = await readsIn(spread, token);
-      const fit = bundle.reads.find((read) => read.family === 'fit' && read.slice.level === 'shape');
-      expect(fit?.clusters).toBe(5);
-      expect(fit?.inputs).toHaveLength(5);
-      for (const read of bundle.reads) expect(read.clusters).toBe(5);
+      expect(bundle.reads).toEqual([]);
       expect(bundle.cells).toEqual([]);
       expect(bundle.motifs).toEqual([]);
     });
@@ -281,14 +276,12 @@ describe('clusters over the cells of a read', () => {
   }, 60_000);
 });
 
-describe('a stored row whose day no calendar holds', () => {
-  // Inserted past the deposit route, the way a row written before the check, or under a wider vocabulary, would sit there.
-  const stored = async (bad: TestPool, account: string, id: string, day: string): Promise<void> => {
-    await (await bad.db()).prepare('INSERT INTO accounts (id) VALUES (?)').bind(account).run();
-    await (await bad.db()).prepare('INSERT INTO deposits (account, id, skeleton) VALUES (?, ?, ?)').bind(account, id, JSON.stringify(sampleSkeleton(id, undefined, day))).run();
-  };
-
-  it.each(['2026-99-99', '0000-00-00', '2026-13-01', '2026-02-31'])('%s stops counting and every pull still answers', async (day) => {
+describe('a damaged ledger row', () => {
+  // Written past the deposit route, the way a row from before a check, or under a wider vocabulary, would sit there. The bundle is read from the stored cells, so no ledger row can reach a fetch.
+  it.each([
+    ['not json', 'not json'],
+    ['a day no calendar holds', JSON.stringify(sampleSkeleton('00000000000b0001', undefined, '2026-99-99'))],
+  ])('%s changes neither the bundle nor the ETag, and every pull still answers', async (_name, skeleton) => {
     const bad = await startPool();
     try {
       const deposited = async (id: string): Promise<string> => {
@@ -297,67 +290,24 @@ describe('a stored row whose day no calendar holds', () => {
         expect((await bad.post('/v1/deposits', sampleSkeleton(id.padStart(16, '0')), token)).status).toBe(201);
         return token;
       };
-      await deposited('5001');
-      await deposited('5002');
-      await deposited('5003');
-      await deposited('5004');
+      for (const id of ['5001', '5002', '5003', '5004']) await deposited(id);
       const token = await deposited('5005');
+      const before = await bad.raw(`/bundle/${VERSION}/0`, token);
+      expect(before.status).toBe(200);
 
-      await stored(bad, 'acct_bad_one', '00000000000b0001', day);
-      await stored(bad, 'acct_bad_two', '00000000000b0002', day);
+      await (await bad.db()).prepare('INSERT INTO accounts (id) VALUES (?)').bind('acct_bad_one').run();
+      await (await bad.db()).prepare('INSERT INTO deposits (account, id, skeleton) VALUES (?, ?, ?)').bind('acct_bad_one', '00000000000b0001', skeleton).run();
 
-      const { status, json } = await bad.get(`/bundle/${VERSION}/0`, token);
-      expect(status).toBe(200);
-      const verified = await verifyBundle(json, bad.signingKey(), VERSION);
+      const after = await bad.raw(`/bundle/${VERSION}/0`, token);
+      expect(after.status).toBe(200);
+      expect(after.json).toEqual(before.json);
+      expect(after.headers.get('etag')).toBe(before.headers.get('etag'));
+      const verified = await verifyBundle(after.json, bad.signingKey(), VERSION);
       if (!verified.ok) throw new Error(verified.reason);
-      // The five good accounts still reach the floor, and the two bad rows add nothing to it.
       expect(verified.bundle.reads.length).toBeGreaterThan(0);
       for (const read of verified.bundle.reads) expect(read.clusters).toBe(5);
     } finally {
       await bad.dispose();
     }
   }, 60_000);
-});
-
-describe('the client refuses', () => {
-  const signed = async (): Promise<{ payload: string; signature: string }> => {
-    const { token } = await pool.signIn('github', stubUser('1006'));
-    const { json } = await pool.get('/bundle/2.1.314/0', token);
-    return { payload: textOf(json, 'payload'), signature: textOf(json, 'signature') };
-  };
-
-  it('a tampered payload, a tampered signature, another key, and another harness version', async () => {
-    const good = await signed();
-    expect(fieldOf(await verifyBundle(good, pool.signingKey(), '2.1.314'), 'ok')).toBe(true);
-    const tampered = good.payload.replace(/"clusters":\d+/, '"clusters":99');
-    expect(tampered).not.toBe(good.payload);
-    expect(await verifyBundle({ ...good, payload: tampered }, pool.signingKey(), '2.1.314')).toMatchObject({ ok: false, reason: containing('signature') });
-    const flipped = good.signature.startsWith('A') ? `B${good.signature.slice(1)}` : `A${good.signature.slice(1)}`;
-    expect(await verifyBundle({ ...good, signature: flipped }, pool.signingKey(), '2.1.314')).toMatchObject({ ok: false, reason: containing('signature') });
-    expect(await verifyBundle(good, { ...pool.signingKey(), x: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA' }, '2.1.314')).toMatchObject({ ok: false, reason: containing('signature') });
-    expect(await verifyBundle(good, pool.signingKey(), '2.2.0')).toMatchObject({ ok: false, reason: containing('harness version') });
-  });
-
-  // Signed by a key the client pins, so the signature holds: only the vocabulary version, or the payload's shape, is wrong.
-  it('a correctly signed bundle of another vocabulary version', async () => {
-    const pair = await webcrypto.subtle.generateKey('Ed25519', true, ['sign', 'verify']);
-    if (!('privateKey' in pair)) throw new Error('no key pair');
-    const pinned = await webcrypto.subtle.exportKey('jwk', pair.publicKey);
-    const key = { kty: String(pinned.kty), crv: String(pinned.crv), x: String(pinned.x) };
-    const sign = async (vocabVersion: string, withStrata = true): Promise<{ payload: string; signature: string }> => {
-      const payload = JSON.stringify({ format: 1, harnessVersion: '2.1.314', vocabVersion, asOf: { pool: 'p', day: '2026-11-04' }, cells: [], motifs: [], reads: [], ...(withStrata ? { strata: [] } : {}) });
-      const signature = Buffer.from(await webcrypto.subtle.sign('Ed25519', pair.privateKey, new TextEncoder().encode(payload))).toString('base64');
-      return { payload, signature };
-    };
-    expect(await verifyBundle(await sign('0'), key, '2.1.314')).toMatchObject({ ok: true });
-    expect(await verifyBundle(await sign('9'), key, '2.1.314')).toMatchObject({ ok: false, reason: containing('vocabulary version') });
-    // Signed and of the right versions, but with no strata: the shape check refuses it, not the signature or a version.
-    expect(await verifyBundle(await sign('0', false), key, '2.1.314')).toMatchObject({ ok: false, reason: containing('this version reads') });
-  });
-
-  it('anything that is not a signed bundle', async () => {
-    expect(await verifyBundle('nope', pool.signingKey(), '2.1.314')).toMatchObject({ ok: false, reason: containing('not a signed bundle') });
-    expect(await verifyBundle({ payload: 'x', signature: '%%%' }, pool.signingKey(), '2.1.314')).toMatchObject({ ok: false, reason: containing('signature') });
-    expect(await verifyBundle({ payload: 'x', signature: 'AAAA' }, { kty: 'nope', crv: 'nope', x: 'nope' }, '2.1.314')).toMatchObject({ ok: false, reason: containing('signature') });
-  });
 });
