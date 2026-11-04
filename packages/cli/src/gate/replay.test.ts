@@ -206,6 +206,7 @@ describe('a crossing record', () => {
       bash(19, 't19', 'pip install git+https://secret@gitserver'),
       bash(20, 't20', 'npm install ssh://secret@gitserver:repo.git'),
       bash(21, 't21', 'npx skills add ssh://secret@gitserver'),
+      bash(22, 't22', 'npm install "four@a#secret-token"'),
     ]);
     await run([REPO]);
     const text = await readFile(join(storeDir, 'crossings.jsonl'), 'utf8');

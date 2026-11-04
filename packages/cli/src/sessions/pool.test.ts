@@ -3,8 +3,11 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { CliError } from '../errors.js';
+import type * as ReadModuleNamespace from './read.js';
 import { currentPool, poolFiles, refreshPool, servedPool } from './pool.js';
 import { error, prompt, session, step, store, tool } from './pool-fixture.js';
+
+type ReadModule = typeof ReadModuleNamespace;
 
 const dirs: string[] = [];
 const storeDir = (): string => {
@@ -22,6 +25,8 @@ const hasSteps = (value: unknown): value is { steps: object[] } => typeof value 
 const one = store({ sessions: [session('s1')], prompts: [prompt('s1', 0)], tools: [tool('s1', 0, 'Read'), tool('s1', 1, 'Edit')] });
 
 describe('refreshPool', () => {
+  const reads = (dir: string): string[] => readdirSync(join(dir, 'reads')).sort();
+
   it('writes byte-identical cells on a rerun, and dropping them and recomputing loses nothing', async () => {
     const dir = storeDir();
     await refreshPool(dir, one);
@@ -87,6 +92,25 @@ describe('refreshPool', () => {
     const errorsOf = (reads: typeof first.reads) => reads.find((read) => read.family === 'recovery')?.value['errors'];
     expect(errorsOf(first.reads)).toBe(1);
     expect(errorsOf(later.reads)).toBe(2);
+  });
+
+  it('derives again over a reads file written under the old live rule, since the rule version is in the pool version', async () => {
+    const dir = storeDir();
+    vi.resetModules();
+    vi.doMock('./read.js', async (importOriginal) => {
+      const actual = await importOriginal<ReadModule>();
+      return { ...actual, METHODS: { ...actual.METHODS, live: { ...actual.METHODS.live, version: '1' } } };
+    });
+    let old: Awaited<ReturnType<typeof refreshPool>>;
+    try {
+      old = await (await import('./pool.js')).refreshPool(dir, one);
+    } finally {
+      vi.doUnmock('./read.js');
+      vi.resetModules();
+    }
+    const current = await (await import('./pool.js')).refreshPool(dir, one);
+    expect(current.pool.version).not.toBe(old.pool.version);
+    expect(reads(dir)).toEqual([`${old.pool.version}.jsonl`, `${current.pool.version}.jsonl`].sort());
   });
 
   it('serves a stored read as frozen as a derived one', async () => {
