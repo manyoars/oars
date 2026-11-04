@@ -89,6 +89,24 @@ describe('the local read and the deposit share one computation', () => {
     expect(keyed([...viaDeposit.values()])).toEqual(keyed(viaLocalRead));
   });
 
+  // The one difference that stays: a deposit is derived from a skeleton, which has no recall graph, so a recall the local store shows is a step and an exposure only locally.
+  it('derives a session with a shown recall differently from its deposit, which has no recall graph', () => {
+    const base = localStore();
+    const timed = store({ ...base, tools: base.tools.map((held, n) => ({ ...held, ts: `2026-11-01T10:00:0${String(n * 2)}.000Z`, prompt: 0 })) });
+    const recall = makeRecall({ sid: 's1', at: '2026-11-01T10:00:01.000Z', frame: null, mode: 'push', query: { form: 'pattern', prefix: ['shape'] }, poolVersion: '2026-10-01T00:00:00.000Z', arm: 'shown', reads: ['r'], rendered: 'x'.repeat(40), names: ['shell.exec'], evidence: [] });
+    const recallActions = (motifs: readonly { steps: readonly { action: string }[] }[]): number => motifs.filter(({ steps }) => steps.some(({ action }) => action === 'recall.push')).length;
+    const projected = projectedStore(timed, storedNames);
+    const withGraph = cellsOf(projected, recallGraphOf(timed, deriveConsequences(timed, [recall])));
+    const deposit = incrementsOf(skeletonOfLocal(timed));
+    expect(recallActions(withGraph.motifs)).toBeGreaterThan(0);
+    expect(withGraph.cells.some(({ exposed }) => exposed)).toBe(true);
+    expect(recallActions(deposit.motifs)).toBe(0);
+    expect([...deposit.cells.values()].some(({ exposed }) => exposed)).toBe(false);
+    expect(keyed([...deposit.cells.values()])).not.toEqual(keyed(withGraph.cells));
+    // Without the graph the two are the same cells, so the graph is the whole difference.
+    expect(keyed([...deposit.cells.values()])).toEqual(keyed(cellsOf(projected).cells));
+  });
+
   it('reads a record with no steps as it is, and a shell step as a deposit would project it', () => {
     const bare = store({ sessions: [session('s1')], tools: [tool('s1', 0, 'Bash')] });
     expect(projectedStore(bare, storedNames)).toEqual(bare);
