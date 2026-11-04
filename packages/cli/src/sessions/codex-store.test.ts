@@ -87,6 +87,26 @@ describe('depositing the Codex source', () => {
     expect(session?.frame).toMatchObject({ harness: 'codex' });
   });
 
+  // The sha a Codex `git commit` printed reaches the store, where survival and the books' outcome signals read it. The reply is unified exec's
+  // `response_header` plus the output (core/src/tools/context.rs:544-570, the exit code at :556).
+  it('stores the sha a Codex git commit printed, so commit survival has something to read', async () => {
+    const s = stage();
+    const home = stageCodex(s.root, [
+      {
+        id: E,
+        lines: [
+          meta(E, join(s.root, 'not-a-repo')),
+          line(T(2), 'event_msg', { type: 'user_message', message: 'commit it' }),
+          line(T(3), 'response_item', { type: 'function_call', name: 'exec_command', arguments: JSON.stringify({ cmd: 'git commit -m x' }), call_id: 'g1' }),
+          line(T(4), 'response_item', { type: 'function_call_output', call_id: 'g1', output: 'Chunk ID: ab12\nWall time: 0.0100 seconds\nProcess exited with code 0\nOriginal token count: 3\nOutput:\n[main abc1234] x\n 1 file changed' }),
+        ],
+      },
+    ]);
+    await deposit({ ...s.runtime, sourceRoots: { codex: home } }, options(['codex']));
+    const store = await loadStore(s.storeDir);
+    expect(store.tools.filter((tool) => tool.session === `codex-${E}`).map((tool) => tool.commits)).toEqual([['abc1234']]);
+  });
+
   it('is read only when allowed, and an allowed name reports nothing missing while a typo does', async () => {
     const s = staged();
     await expect(deposit(s.runtime, options([]))).rejects.toThrow(/Nothing to read/);
