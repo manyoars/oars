@@ -56,14 +56,22 @@ export const isLocked = async (storeDir: string, ask: Pick<FillAsk, 'class' | 'n
   return held !== undefined && now - held < FILL_LOCK_MS;
 };
 
+/** Takes the lock back: a helper that never started will never release it, and the name would go unasked until `FILL_LOCK_MS` passed. */
+export const releaseLock = (storeDir: string, ask: Pick<FillAsk, 'class' | 'name'>): Promise<void> => rm(lockPath(storeDir, ask), { force: true });
+
 /**
  * Called by the hook after a cut ask: takes the lock and starts the helper. Nothing here throws into the hook: a store that cannot be written, or a helper that cannot
- * start, is an answer that does not come, which the next sight asks about again.
+ * start, is an answer that does not come. The lock goes when the start throws, so the next sight asks about the name again.
  */
 export const startFill = async (storeDir: string, ask: FillAsk, now: number, start: (storeDir: string, ask: FillAsk) => void): Promise<void> => {
   try {
     await mkdir(storeDir, { recursive: true });
-    if (await takeLock(lockPath(storeDir, ask), now)) start(storeDir, ask);
+    if (!(await takeLock(lockPath(storeDir, ask), now))) return;
+    try {
+      start(storeDir, ask);
+    } catch {
+      await releaseLock(storeDir, ask);
+    }
   } catch {
     // Fail-open.
   }

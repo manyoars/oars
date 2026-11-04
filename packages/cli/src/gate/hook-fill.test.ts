@@ -98,6 +98,7 @@ describe('the fill: starting the helper', () => {
         }),
       ),
     ).resolves.toBeUndefined();
+    expect(lockOf(dir)).toBeUndefined();
   });
 });
 
