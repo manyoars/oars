@@ -6,7 +6,7 @@ import { createHash } from 'node:crypto';
 import { posix } from 'node:path';
 import { ACTION_TABLES, actionOf, shellOf, type ActionTable, type CanonicalAction } from './actions.js';
 import { closedFrame, frameIdOf, repoFilesFromIndex, repoSizeOf, stackOf, utcDay } from './frame.js';
-import type { RepoSize } from './public-vocabulary.js';
+import { LITERAL, type RepoSize } from './public-vocabulary.js';
 import { linkSteps } from './graph.js';
 import { callIdentity, shellIdentity, UNREAD_SHELL, type WordOfCommand } from './identity.js';
 import type { Redactor } from './redact.js';
@@ -892,8 +892,12 @@ const readCommands = (tokens: readonly ShellToken[], depth = 0): ShellCommand[] 
 
 const isPlainWord = (word: ShellWord): boolean => !word.quoted && word.text !== '' && !/^-|\$|[\\/]/.test(word.text);
 
+/**
+ * The program and its plain words, joined by one space. A basename that holds whitespace (`"/opt/my tools/git push"`) would read back as a program and a
+ * word, so capture stores `<literal>` in its place: the boundary a `run` cannot carry, and no part of that name is kept (register row A53).
+ */
 const runOf = (command: ShellCommand): string =>
-  [command.program, ...command.args.filter(isPlainWord).map((word) => cut(word.text, RUN_WORD_CHARS))].slice(0, RUN_WORDS_MAX).join(' ');
+  [/\s/.test(command.program) ? LITERAL : command.program, ...command.args.filter(isPlainWord).map((word) => cut(word.text, RUN_WORD_CHARS))].slice(0, RUN_WORDS_MAX).join(' ');
 
 /** Positional words and flag values. A flag in `takesValue` owns the next word, which is therefore not a name. */
 const parseArgs = (args: readonly ShellWord[], takesValue: ReadonlySet<string>): { names: string[]; flags: Map<string, string>; nameAt: number[] } => {
