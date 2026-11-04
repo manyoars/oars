@@ -235,6 +235,33 @@ describe('MCP tool names: a token behind an underscore or in a later part is red
   it.each([`mcp__me_${token}__find`, `mcp__me__${token}__find`, `mcp__me__find_${token}`])('keeps the token out of every stored field for %s', (toolName) => {
     expect(JSON.stringify(capturedFor(toolName))).not.toContain(token);
   });
+  const hex36 = 'abcdefghijklmnopqrstuvwxyz0123456789';
+  const gh = `ghp_${hex36}`;
+  const sk = 'sk-ant-api03-AAAAAAAA';
+  const tail32 = 'abcdefghijklmnopqrstuvwxyzABCDEF';
+  const aiza = 'AIzaAAAAAAAAAA';
+  const tail28 = 'abcdefghijklmnopqrstuvwxyz01';
+  it.each<readonly [string, readonly string[]]>([
+    [`mcp__me_${gh}_x__find`, [gh, hex36]],
+    [`mcp__${gh}_x__find`, [gh, hex36]],
+    [`mcp__me__${gh}_find`, [gh, hex36]],
+    [`mcp__${sk}__${tail32}__find`, [sk, tail32]],
+    [`mcp__me-${aiza}__${tail28}__find`, [aiza, tail28]],
+    [`mcp_me-${gh}_find`, [gh, hex36]],
+  ])('keeps no part of the token in any stored field for %s', (toolName, parts) => {
+    const stored = JSON.stringify(capturedFor(toolName));
+    for (const part of parts) expect(stored).not.toContain(part);
+  });
+  it('reads a name past the cap as one masked value rather than slicing it', () => {
+    const long = `mcp__${'a_'.repeat(100)}find`;
+    expect(storedToolName(long, redact)).toBe('mcp__<oversized>');
+    expect(pullsOfTool(long, redact)).toEqual([{ ecosystem: 'mcp', name: '<oversized>', version: null }]);
+  });
+  it('leaves an ordinary name alone', () => {
+    expect(storedToolName('mcp__github__create_issue', redact)).toBe('mcp__github__create_issue');
+    expect(storedToolName('mcp_oars_oars_recall', redact)).toBe('mcp_oars_oars_recall');
+    expect(storedToolName('Bash', redact)).toBe('Bash');
+  });
   it('masks the token in the stored name and the pull for both forms', () => {
     expect(storedToolName(`mcp__me_${token}__find`, redact)).toBe('mcp__me_<secret>__find');
     expect(storedToolName(`mcp__me__${token}__find`, redact)).toBe('mcp__me__<secret>__find');
