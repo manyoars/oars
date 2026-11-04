@@ -31,10 +31,11 @@ describe('step', () => {
     const failure = new Error(callLog.join(String.fromCharCode(10)));
     failure.name = 'TimeoutError';
     const thrown = await failureOf(step(page, 'sign in', () => Promise.reject(failure)));
-    expect(thrown.message).toBe('The device approval stopped at "sign in" on page "Sign in" at /realms/aor (TimeoutError).');
-    expect(thrown.message).not.toMatch(/ABCD|secret|navigating|fill\(/);
     expect(thrown.cause).toBeUndefined();
-    expect(Object.values(thrown).join(' ')).not.toMatch(/ABCD|secret/);
+    expect(thrown.message).not.toMatch(/ABCD|secret|navigating|fill\(/);
+    // message, stack, and cause are non-enumerable own properties, so Object.values would miss a copied stack.
+    expect(Object.getOwnPropertyNames(thrown).map((name) => String(Reflect.get(thrown, name))).join(' ')).not.toMatch(/ABCD|secret|navigating|fill\(/);
+    expect(thrown.message).toBe('The device approval stopped at "sign in" on page "Sign in" at /realms/aor (TimeoutError).');
   });
 
   it('names a rejection that is not an Error', async () => {
