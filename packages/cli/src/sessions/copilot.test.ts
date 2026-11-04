@@ -38,7 +38,7 @@ const asText = (events: readonly unknown[]): string => events.map((entry) => JSO
 const extractOf = (events: readonly unknown[]) => capture(eventLines(asText(events), 'sess').map((entry) => JSON.stringify(entry)).join('\n'));
 
 const T = (second: number): string => `2026-06-01T10:00:${String(second).padStart(2, '0')}.000Z`;
-const start = (cwd = '/work/app') => event(T(0), 'session.start', { sessionId: 'sess-1', copilotVersion: '1.0.105', producer: 'copilot-agent', selectedModel: 'claude-sonnet-4.5', startTime: T(0), version: 1, context: { cwd } });
+const start = (cwd = '/work/app', extra: { checkpoint?: boolean } = {}) => event(T(0), 'session.start', { sessionId: 'sess-1', copilotVersion: '1.0.105', producer: 'copilot-agent', selectedModel: 'claude-sonnet-4.5', startTime: T(0), version: 1, context: { cwd } }, extra);
 const prompt = (second: number, content: string) => event(T(second), 'user.message', { content });
 const say = (second: number, content: string, extra: object = {}, toolRequests: readonly unknown[] = []) =>
   event(T(second), 'assistant.message', { messageId: `m${String(second)}`, content, ...(toolRequests.length === 0 ? {} : { toolRequests }), ...extra });
@@ -97,7 +97,7 @@ describe('the Copilot CLI reader', () => {
 
   it('reads a rotated head: a journal link and checkpoint events are the only record of the earlier part, and are read once', () => {
     const lines = eventLines(
-      asText([event(T(0), 'session.journal_link', { path: 'events.1.jsonl' }), event(T(0), 'user.message', { content: 'earlier prompt' }, { checkpoint: true }), start(), prompt(1, 'later prompt')]),
+      asText([event(T(0), 'session.journal_link', { previousFile: 'events.1.jsonl', sessionId: 'sess-1', version: 1 }), start('/work/app', { checkpoint: true }), event(T(0), 'user.message', { content: 'earlier prompt' }, { checkpoint: true }), prompt(1, 'later prompt')]),
       's',
     );
     expect(lines.filter((entry) => entry.type === 'user')).toHaveLength(2);
@@ -106,6 +106,13 @@ describe('the Copilot CLI reader', () => {
   it('puts the output the responses did not report on the first line of the last response', () => {
     const lines = eventLines(asText([start(), prompt(1, 'a'), say(2, 'one', { model: 'm1' }), shutdown(3, { m1: { requests: {}, usage: { inputTokens: 10, outputTokens: 40, cacheReadTokens: 0, cacheWriteTokens: 0 } } })]), 's');
     expect(capture(lines.map((entry) => JSON.stringify(entry)).join('\n')).session.usage).toMatchObject({ input: 10, output: 40 });
+  });
+
+  it('applies the totals of a model from the first shutdown only, because the schema does not say whether a later one is cumulative across a resume', () => {
+    const usage = (inputTokens: number) => ({ m1: { requests: {}, usage: { inputTokens, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 } } });
+    const lines = eventLines(asText([start(), prompt(1, 'a'), say(2, 'one', { model: 'm1' }), shutdown(3, usage(10)), prompt(4, 'b'), say(5, 'two', { model: 'm1' }), shutdown(6, usage(25))]), 's');
+    const usages = lines.filter((entry) => entry.type === 'assistant').map((entry) => (typeof entry.message === 'object' && entry.message !== null && 'usage' in entry.message ? entry.message.usage : undefined));
+    expect(usages).toEqual([expect.objectContaining({ input_tokens: 10 }), undefined]);
   });
 
   it('keeps the output as the error line when the exit code is -1, which is no exit status', () => {
@@ -330,7 +337,7 @@ describe('the Copilot home', () => {
     const s = stage();
     const home = stageCopilot(s.root, [
       { id: 'aaa', lines: [start('/work/a'), prompt(1, 'x')] },
-      { id: 'bbb', lines: [event(T(0), 'session.journal_link', {}), start('/work/b')] },
+      { id: 'bbb', lines: [event(T(0), 'session.journal_link', { previousFile: 'events.1.jsonl', sessionId: 'bbb', version: 1 }), start('/work/b')] },
       { id: 'ccc', lines: [event(T(0), 'session.error', {})] },
       { id: 'ddd', lines: [event(T(0), 'session.start', {})] },
       { id: 'bad id', lines: [start()] },

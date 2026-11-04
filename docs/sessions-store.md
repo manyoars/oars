@@ -566,6 +566,12 @@ command with a matching error line, and usage is nonzero (it is written only at 
   from each `assistant.message`, and the input, cache, and reasoning totals from `session.shutdown.modelMetrics` land once, on the first line of the model's last response (one model call may be several `assistant.message` chunks sharing a `requestId`/`apiCallId`; they are one
   response). They are read from `agentMetrics.main` when the runtime writes it, because the session-wide `modelMetrics` include subagents, else from `modelMetrics`;
   output the responses did not report is the total less what they did. A rotated head's `checkpoint: true` events are read like any other (the archives are not).
+  Totals are taken from a model's first `session.shutdown` only: the schema calls `ShutdownModelMetricUsage` "across all requests to this model" and the shutdown's API time "during the session"
+  (`session-events.ts:4364-4376`, `:4019`), and says nothing on whether a resumed session's later shutdown restarts or continues the count, so later ones are not added or substituted (unknown). Whether `inputTokens`
+  includes `cacheReadTokens` is unknown too: the schema says only "Total input tokens consumed" next to "Total tokens read from prompt cache" (`:4374`, `:4366`), so the two are kept as the schema gives them, with no subtraction.
+  The main conversation's metrics are `agentMetrics.main.modelMetrics` (the schema: "The main conversation uses the stable key `main`", `:3951`), each model's entry a `ShutdownModelMetric` with `usage` (`:4313-4332`). A chunk's `outputTokens`
+  is "completion_tokens" of the API response (`:7985`), which does not say whether chunks of one response split it or repeat it; the reader sums them. An `assistant.message` with empty content and no tool requests is dropped with its `outputTokens`
+  (the schema splits chunks one per reasoning boundary), so a session with no shutdown loses that output. The hand run checks all three against a live store: input against cache reads, a resumed session's second shutdown, and chunk output sums against the shutdown total.
   A session that never shut down (a crash) has output tokens only. Subagent events (`agentId`, or the deprecated `parentToolCallId`) are skipped; the parent's `task` call is kept. Torn lines are counted as
   unparseable; a file with no parseable line is unreadable. Idempotent per session (`copilot/<id>` in `state.json`, size and mtime).
 
