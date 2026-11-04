@@ -157,6 +157,46 @@ export const ACTION_TABLES: { readonly [harness in Harness]: ActionTable } = {
     toolDelimited: true,
     shells: { bash: 'bash', powershell: 'powershell' },
   },
+  // Gemini CLI's tool names (google-gemini/gemini-cli @ 89e9d25d, packages/core/src/tools/tool-names.ts). Its adapter names the shell, edit, read, and search
+  // calls in the Claude Code vocabulary for the extractor and keeps the Gemini name in `native`, which is what this table looks up. An MCP tool is
+  // `mcp_<server>_<tool>`, a spelling that does not mark where the server name ends, so its tool stays out of class P.
+  gemini: {
+    rows: {
+      read_file: 'file.read',
+      read_many_files: 'file.read',
+      glob: 'file.search',
+      grep_search: 'file.search',
+      search_file_content: 'file.search',
+      list_directory: 'file.search',
+      replace: 'file.edit',
+      write_file: 'file.write',
+      run_shell_command: 'shell.exec',
+      google_web_search: 'web.search',
+      web_fetch: 'web.fetch',
+      activate_skill: 'skill.run',
+      invoke_agent: 'agent.spawn',
+      write_todos: 'plan.update',
+      enter_plan_mode: 'plan.update',
+      exit_plan_mode: 'plan.update',
+      tracker_create_task: 'plan.update',
+      tracker_update_task: 'plan.update',
+      tracker_get_task: 'plan.update',
+      tracker_list_tasks: 'plan.update',
+      tracker_add_dependency: 'plan.update',
+      tracker_visualize: 'plan.update',
+      ask_user: 'ask.user',
+      mcp_oars_oars_recall: 'recall.pull',
+      'mcp_oars-sessions_oars_recall': 'recall.pull',
+      get_internal_docs: 'other',
+      update_topic: 'other',
+      complete_task: 'other',
+      read_mcp_resource: 'other',
+      list_mcp_resources: 'other',
+    },
+    mcp: /^mcp_(?<server>[^_]+)_(?<tool>.+)$/,
+    toolDelimited: false,
+    shells: { run_shell_command: 'bash' },
+  },
   // Grok Build's own names (xai-org/grok-build @ 2bdd1d6, crates/codegen/xai-grok-tools): a tool's `title` is its name. A shell call and an edit reach the
   // transcript as `Bash` and `Edit` with the original name in `native`, which is what this table looks up. A name the table lacks keeps its own and its step
   // is `other`. An MCP call is `<server>__<tool>` in Grok Build; the reader spells it `mcp__<server>__<tool>`.
