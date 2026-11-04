@@ -80,6 +80,15 @@ export const FILES_PER_SESSION_MAX = 100;
 export const PROMPT_CLASSES = ['no-tools', 'orchestration', 'research', 'edit-verify', 'edit-only', 'explore-only', 'shell-only', 'mixed'] as const;
 export type PromptClass = (typeof PROMPT_CLASSES)[number];
 
+/** The statuses agents recover from differently (pool vocabulary spec Section 7); any other status is `other`. */
+export const HTTP_STATUSES = ['400', '401', '403', '404', '408', '409', '413', '429', '500', '502', '503', '504', '529'] as const;
+/** A shell exit status by what the agent does next: success flagged as failure, the two common failures, not executable, not found, a signal (129 to 255), and the rest. */
+export const EXIT_CLASSES = ['0', '1', '2', '126', '127', 'signal'] as const;
+/** What a harness says when a call fails before or without a shell: it names the harness's own refusal, never the tool's input or output. */
+export const HARNESS_ERROR_CLASSES = ['user-rejected', 'interrupted', 'permission-denied', 'input-validation', 'tool-use-error', 'timeout'] as const;
+/** The `errorCode` of a failed call (class P): a member of this set, never text from the result. `other` covers an exit status or HTTP status outside the lists, and a failure that names no class. */
+export const ERROR_CODES: ReadonlySet<string> = new Set<string>([...EXIT_CLASSES, ...HTTP_STATUSES, ...HARNESS_ERROR_CLASSES, 'other']);
+
 export interface Usage {
   input: number;
   cacheWrite: number;
@@ -396,6 +405,8 @@ export interface ToolObservation {
   targetBase: TargetBase | null;
   /** The input's key names, sorted. Class A (EXTRACTOR 11). */
   keys: string[];
+  /** The class of a failed call (`errorCodeOf`): a member of `ERROR_CODES`, never result text. Absent on a call that did not fail and on a record captured before CAPTURE 13. Class P. */
+  errorCode?: string;
   /** From the call's line to its first result's line; null when either timestamp is missing or no result is in the file. */
   durationMs: number | null;
   toolUseId: string | null;
