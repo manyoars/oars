@@ -7,6 +7,7 @@ import { CUSTOM_AGENT, FRAMEWORKS, isPublicMcpTool, isRegistryVersion, LANGUAGES
 import type { Cell } from './cells.js';
 import type { Motif } from './motif.js';
 import type { Read, ReadAsOf } from './read.js';
+import { recoveryCallsOf, RECOVERY_CALLS, type RecoveryCalls } from './recovery-calls.js';
 import { projectLanguage, projectLanguageShare } from './strata.js';
 import { ERROR_CODES, LANGUAGE_SHARES, type Frame, type FrameStack, type Harness, type LanguageShare, type PromptClass, type PromptObservation, type PullIdentity, type SessionObservation, type ShellIdentity, type StepIdentity, type StepObservation, type Strata, type ToolObservation, type ToolStatus, type Usage } from './schema.js';
 
@@ -64,6 +65,8 @@ export interface SkeletonTool {
   durationMs: number | null;
   /** The failed call's class, a member of `ERROR_CODES` (a user refusal, a policy denial, and a real failure are three codes); null on a call that did not fail and on one whose capture holds none. Never result text. */
   errorCode: string | null;
+  /** For a failed call, what followed it: the actions of up to the next 5 calls of its prompt and whether an edit was among them. Absent on a call that did not fail. Never a signature, command, or text. */
+  recoveryCalls?: RecoveryCalls;
   steps: SkeletonStep[];
 }
 
@@ -302,10 +305,12 @@ const transcriptOf = (
   // The exact tokens of every step, by call and step, which the `remainingTokens` buckets below are computed from: a bucket of a sum is not a sum of buckets.
   const exact: number[][] = [];
   let unrecorded = 0;
-  for (const tool of byCall(tools)) {
+  const ordered = byCall(tools);
+  for (const [at, tool] of ordered.entries()) {
     if (tool.steps === undefined) return null;
     const { side, prompt, status, durationMs } = tool;
     const errorCode = wireErrorCode(tool);
+    const recoveryCalls = recoveryCallsOf(ordered, at);
     // A subagent's call names the prompt that spawned it, which its own transcript holds no record of: such a number takes the next position past the prompts, one per distinct number, so
     // the calls that shared a prompt still share one, and no position reads as a prompt.
     if (prompt !== null && !promptAt.has(prompt)) promptAt.set(prompt, framedPrompts.length + unrecorded++);
@@ -323,7 +328,7 @@ const transcriptOf = (
       agentType,
       parent: parent === null || spawners === null ? null : (spawners.get(parent) ?? null),
     }));
-    steppedTools.push({ side, prompt: promptPosition, status, durationMs, errorCode, steps });
+    steppedTools.push({ side, prompt: promptPosition, status, durationMs, errorCode, ...(recoveryCalls === null ? {} : { recoveryCalls }), steps });
   }
   // A step's remaining tokens are those of the steps after it in its own run; a main-run step also counts the subagent runs its later steps spawned (a run belongs to the spawning call's carrier step).
   let later = 0;
@@ -627,15 +632,27 @@ const parseErrorCode = (status: ToolStatus, value: unknown, at: string): string 
   return code;
 };
 
+/** A call's `recoveryCalls`: absent is none; otherwise at most 5 actions of the closed list and a flag, and only on a call that failed. */
+const parseRecovery = (status: ToolStatus, value: unknown, at: string): RecoveryCalls | undefined => {
+  if (value === undefined) return undefined;
+  if (status !== 'error') throw new Refused(at, 'only a failed call has one');
+  const raw = fieldsOf(value, at, ['next', 'editFollowed']);
+  const next = listOf(raw.next, under(at, 'next'), (entry, entryAt) => oneOf(CANONICAL_ACTIONS, entry, entryAt));
+  if (next.length > RECOVERY_CALLS) throw new Refused(under(at, 'next'), `more than ${String(RECOVERY_CALLS)} calls`);
+  return { next, editFollowed: booleanOf(raw.editFollowed, under(at, 'editFollowed')) };
+};
+
 const parseTool = (harness: Harness, value: unknown, at: string): SkeletonTool => {
-  const raw = fieldsOf(value, at, ['side', 'prompt', 'status', 'durationMs', 'steps'], ['errorCode']);
+  const raw = fieldsOf(value, at, ['side', 'prompt', 'status', 'durationMs', 'steps'], ['errorCode', 'recoveryCalls']);
   const status = oneOf(STATUSES, raw.status, under(at, 'status'));
+  const recoveryCalls = parseRecovery(status, raw.recoveryCalls, under(at, 'recoveryCalls'));
   return {
     side: booleanOf(raw.side, under(at, 'side')),
     prompt: orNull(raw.prompt, under(at, 'prompt'), countOf),
     status,
     durationMs: orNull(raw.durationMs, under(at, 'durationMs'), countOf),
     errorCode: parseErrorCode(status, raw.errorCode, under(at, 'errorCode')),
+    ...(recoveryCalls === undefined ? {} : { recoveryCalls }),
     steps: listOf(raw.steps, under(at, 'steps'), (entry, entryAt) => parseStep(harness, entry, entryAt)),
   };
 };
@@ -664,13 +681,18 @@ const parseRoot = (value: unknown, at: string): string => {
 const parseTranscript = (value: unknown, at: string): SkeletonTranscript => {
   const raw = fieldsOf(value, at, ['merkleRoot', 'leaves', 'harness', 'frame', 'prompts', 'tools']);
   const harness = oneOf(HARNESSES, raw.harness, under(at, 'harness'));
+  const tools = listOf(raw.tools, under(at, 'tools'), (entry, entryAt) => parseTool(harness, entry, entryAt));
+  // What followed a call is read off the calls themselves, so a list that disagrees with them is a wrong deposit, not a new reading.
+  tools.forEach((tool, index) => {
+    if (tool.recoveryCalls !== undefined && JSON.stringify(tool.recoveryCalls) !== JSON.stringify(recoveryCallsOf(tools, index))) throw new Refused(`${at}.tools[${String(index)}].recoveryCalls`, 'not what followed the call');
+  });
   return {
     merkleRoot: parseRoot(raw.merkleRoot, under(at, 'merkleRoot')),
     leaves: countOf(raw.leaves, under(at, 'leaves')),
     harness,
     frame: parseFrame(raw.frame, under(at, 'frame')),
     prompts: listOf(raw.prompts, under(at, 'prompts'), parsePrompt),
-    tools: listOf(raw.tools, under(at, 'tools'), (entry, entryAt) => parseTool(harness, entry, entryAt)),
+    tools,
   };
 };
 
