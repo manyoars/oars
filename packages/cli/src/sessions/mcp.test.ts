@@ -1,4 +1,4 @@
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { appendFileSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { afterEach, describe, expect, it } from 'vitest';
 import { handleMessage, serve, TOOL_NAME } from './mcp.js';
 import { error as errorRow, prompt as promptRow, session as sessionRow } from './pool-fixture.js';
@@ -71,6 +71,17 @@ describe('MCP server', () => {
       const content = field(result, 'content');
       return Array.isArray(content) ? String(field(content[0], 'text')) : '';
     };
+
+    it('answers from the stored pool after the store moves, deriving and writing no new reads file', async () => {
+      const staged = seeded();
+      const readsDir = `${staged.storeDir}/reads`;
+      expect(textOf(await ask(staged, { family: 'recovery' }))).toContain('1 error');
+      const stored = readdirSync(readsDir);
+      expect(stored).toHaveLength(1);
+      appendFileSync(paths(staged.storeDir).observations, `${JSON.stringify(errorRow('a', 'Monitor | second shape', { tool: 'Monitor', example: EXAMPLE, ts: '2026-06-02T00:00:00.000Z' }))}\n`);
+      expect(textOf(await ask(staged, { family: 'recovery' }))).toContain('1 error');
+      expect(readdirSync(readsDir)).toEqual(stored);
+    });
 
     it('narrows a family by the class and the days the tool takes, and records the slice', async () => {
       const staged = seeded();

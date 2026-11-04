@@ -1,9 +1,9 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { CliError } from '../errors.js';
-import { poolFiles, refreshPool } from './pool.js';
+import { currentPool, poolFiles, refreshPool, servedPool } from './pool.js';
 import { error, prompt, session, step, store, tool } from './pool-fixture.js';
 
 const dirs: string[] = [];
@@ -107,5 +107,82 @@ describe('refreshPool', () => {
     const later = await refreshPool(dir, store({ ...one, tools: [...one.tools, tool('s1', 2, 'Read')] }));
     expect(later.pool.version).not.toBe(first.pool.version);
     expect(readFileSync(poolFiles(dir).reads(first.pool.version), 'utf8')).toBe(text);
+  });
+});
+
+describe('currentPool', () => {
+  it('writes one stderr line when the pool cannot be derived, and still answers undefined', async () => {
+    const dir = storeDir();
+    const first = await refreshPool(dir, one);
+    writeFileSync(poolFiles(dir).reads(first.pool.version), 'not json\n');
+    const written = vi.spyOn(process.stderr, 'write').mockReturnValue(true);
+    try {
+      expect(await currentPool(dir, one)).toBeUndefined();
+      expect(written).toHaveBeenCalledTimes(1);
+      expect(String(written.mock.calls[0]?.[0])).toMatch(/^oars: the read pool was not built, and answers keep their stand-ins: .*\n$/);
+    } finally {
+      written.mockRestore();
+    }
+  });
+});
+
+describe('servedPool', () => {
+  const later = store({ ...one, tools: [...one.tools, tool('s1', 2, 'Read')] });
+  const reads = (dir: string): string[] => readdirSync(join(dir, 'reads')).sort();
+
+  it('answers from the newest stored reads with their cells and motifs, and writes nothing', async () => {
+    const dir = storeDir();
+    const derived = await refreshPool(dir, one);
+    const before = { reads: reads(dir), cells: readFileSync(poolFiles(dir).cells, 'utf8'), stamp: statSync(poolFiles(dir).reads(derived.pool.version)).mtimeMs };
+    const served = await servedPool(dir, later);
+    expect(served?.reads).toEqual(derived.reads);
+    expect(served?.pool.version).toBe(derived.pool.version);
+    expect(served?.pool.cells).toEqual(derived.pool.cells);
+    expect([...(served?.pool.motifs.keys() ?? [])]).toEqual([...derived.pool.motifs.keys()]);
+    expect(served?.pool.lastDay).toBe(derived.pool.lastDay);
+    expect(reads(dir)).toEqual(before.reads);
+    expect(readFileSync(poolFiles(dir).cells, 'utf8')).toBe(before.cells);
+    expect(statSync(poolFiles(dir).reads(derived.pool.version)).mtimeMs).toBe(before.stamp);
+  });
+
+  it('prefers the newest of several stored pools', async () => {
+    const dir = storeDir();
+    const first = await refreshPool(dir, one);
+    utimesSync(poolFiles(dir).reads(first.pool.version), new Date(2020, 0, 1), new Date(2020, 0, 1));
+    const second = await refreshPool(dir, later);
+    expect((await servedPool(dir, one))?.pool.version).toBe(second.pool.version);
+  });
+
+  it('derives and writes the pool once when none is stored, then reads it', async () => {
+    const dir = storeDir();
+    const first = await servedPool(dir, one);
+    expect(first?.reads.length).toBeGreaterThan(0);
+    expect(reads(dir)).toHaveLength(1);
+    const text = readFileSync(poolFiles(dir).reads(first?.pool.version ?? ''), 'utf8');
+    expect((await servedPool(dir, later))?.pool.version).toBe(first?.pool.version);
+    expect(reads(dir)).toHaveLength(1);
+    expect(readFileSync(poolFiles(dir).reads(first?.pool.version ?? ''), 'utf8')).toBe(text);
+  });
+
+  it('derives again when reads are stored but their cells are gone', async () => {
+    const dir = storeDir();
+    await refreshPool(dir, one);
+    rmSync(poolFiles(dir).cells);
+    const served = await servedPool(dir, one);
+    expect(served?.pool.cells.length).toBeGreaterThan(0);
+    expect(readFileSync(poolFiles(dir).cells, 'utf8')).not.toBe('');
+  });
+
+  it('writes one stderr line and answers undefined when a stored file is damaged', async () => {
+    const dir = storeDir();
+    const first = await refreshPool(dir, one);
+    writeFileSync(poolFiles(dir).reads(first.pool.version), 'not json\n');
+    const written = vi.spyOn(process.stderr, 'write').mockReturnValue(true);
+    try {
+      expect(await servedPool(dir, one)).toBeUndefined();
+      expect(written).toHaveBeenCalledTimes(1);
+    } finally {
+      written.mockRestore();
+    }
   });
 });
