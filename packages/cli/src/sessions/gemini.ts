@@ -108,7 +108,8 @@ const textOf = (value: unknown): string => {
  */
 const sessionContext = (text: string): { platform: string | undefined; directories: string[] } => {
   const whole = wholeObject(text);
-  const records = whole === undefined ? lineTexts(text).map(parse) : [whole, ...(Array.isArray(whole.messages) ? whole.messages : [])];
+  const messages: unknown[] = whole !== undefined && Array.isArray(whole.messages) ? whole.messages : [];
+  const records: unknown[] = whole === undefined ? lineTexts(text).map(parse) : [whole, ...messages];
   let platform: string | undefined;
   const directories: string[] = [];
   for (const record of records) {
