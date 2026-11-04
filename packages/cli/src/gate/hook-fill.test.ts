@@ -34,7 +34,7 @@ describe('the fill: is the name locked', () => {
   });
 });
 
-describe('the fill: starting the helper', () => {
+describe('the fill: the helper's spawn', () => {
   it('starts one helper per name, however many sights come while it asks', async () => {
     const dir = store();
     const start = vi.fn();
@@ -104,11 +104,11 @@ describe('the fill: starting the helper', () => {
 });
 
 describe('the fill: starting the helper', () => {
-  const spawnOf = (child: EventEmitter): { spawn: HelperSpawn; calls: { command: string; args: string[] }[]; unref: ReturnType<typeof vi.fn> } => {
-    const calls: { command: string; args: string[] }[] = [];
+  const spawnOf = (child: EventEmitter): { spawn: HelperSpawn; calls: { command: string; args: string[]; options: unknown }[]; unref: ReturnType<typeof vi.fn> } => {
+    const calls: { command: string; args: string[]; options: unknown }[] = [];
     const unref = vi.fn();
-    const spawn: HelperSpawn = (command, args) => {
-      calls.push({ command, args });
+    const spawn: HelperSpawn = (command, args, options) => {
+      calls.push({ command, args, options });
       return Object.assign(child, { unref });
     };
     return { spawn, calls, unref };
@@ -120,6 +120,7 @@ describe('the fill: starting the helper', () => {
     expect(calls).toHaveLength(1);
     expect(calls[0]?.command).toBe(process.execPath);
     expect(calls[0]?.args.slice(1)).toEqual(['/store', ASK.class, ASK.name, ASK.cwd]);
+    expect(calls[0]?.options).toEqual({ detached: true, stdio: 'ignore', windowsHide: true });
     expect(unref).toHaveBeenCalledTimes(1);
   });
 
