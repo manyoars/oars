@@ -88,6 +88,6 @@ export const seedIndex = async (storeDir: string, record: string, lines: Iterabl
   await mkdir(storeDir, { recursive: true });
   const file = indexFile(storeDir);
   const temp = `${file}.${String(process.pid)}.tmp`;
-  await writeFile(temp, `${INDEX_HEADER}\n${[...all].join('\n')}\n`, { mode: 0o600 });
+  await writeFile(temp, `${[INDEX_HEADER, ...all].join('\n')}\n`, { mode: 0o600 });
   await rename(temp, file);
 };

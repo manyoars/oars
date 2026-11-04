@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { delimiter, dirname, join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -97,6 +97,42 @@ describe('gate install', () => {
     const dir = scratch();
     await installGateHook(join(dir, 'settings.json'));
     expect(readdirSync(dir)).toEqual(['settings.json']);
+  });
+});
+
+describe('gate install on POSIX files', () => {
+  const windows = process.platform === 'win32';
+
+  it.skipIf(windows)('keeps the mode an operator set, and creates a new file 0600', async () => {
+    const dir = scratch();
+    const file = join(dir, 'settings.json');
+    writeFileSync(file, JSON.stringify({ env: { TOKEN: 'x' } }));
+    chmodSync(file, 0o600);
+    await installGateHook(file);
+    expect(statSync(file).mode & 0o777).toBe(0o600);
+    const loose = join(dir, 'loose.json');
+    writeFileSync(loose, '{}');
+    chmodSync(loose, 0o640);
+    await installGateHook(loose);
+    expect(statSync(loose).mode & 0o777).toBe(0o640);
+    const fresh = join(dir, 'fresh', 'settings.json');
+    await installGateHook(fresh);
+    expect(statSync(fresh).mode & 0o777).toBe(0o600);
+  });
+
+  it.skipIf(windows)('keeps a symlinked settings file a symlink, and writes through it', async () => {
+    const dir = scratch();
+    const real = join(dir, 'dotfiles', 'settings.json');
+    mkdirSync(dirname(real), { recursive: true });
+    writeFileSync(real, JSON.stringify({ model: 'x' }));
+    const link = join(dir, 'claude-settings.json');
+    symlinkSync(real, link);
+    await installGateHook(link);
+    expect(lstatSync(link).isSymbolicLink()).toBe(true);
+    expect(read(real)).toEqual({ model: 'x', hooks: { [EVENT]: [ours] } });
+    await uninstallGateHook(link);
+    expect(lstatSync(link).isSymbolicLink()).toBe(true);
+    expect(read(real)).toEqual({ model: 'x' });
   });
 });
 
