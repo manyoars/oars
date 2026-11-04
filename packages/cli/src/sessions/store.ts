@@ -26,7 +26,7 @@ import { CliError, ExitCode } from '../errors.js';
 import { compileAllow, requireEntries, slugOf } from './allow.js';
 import { openCursorStore, type CursorStore } from './cursor.js';
 import { buildIndex, indexPath } from './hook-index.js';
-import { refreshPool } from './pool.js';
+import { currentPool } from './pool.js';
 import { archiveRaw } from './archive.js';
 import { deriveSession, type SessionCapture } from './derive.js';
 import { captureRuntime, type CaptureRuntime } from './capture-runtime.js';
@@ -537,7 +537,8 @@ export const refresh = async (runtime: SessionsRuntime, redactDomains: readonly 
   }
   const indexStarted = performance.now();
   try {
-    const { reads } = await refreshPool(runtime.storeDir, store);
+    // The pool is derived for the index's fit reads only: one that cannot be read or written costs the index those, never the index itself.
+    const reads = (await currentPool(runtime.storeDir, store))?.reads ?? [];
     const index = buildIndex(store, redactDomains, at, reads);
     await writeAtomic(indexPath(runtime.storeDir), JSON.stringify(index));
     if (trace !== undefined) {
