@@ -16,6 +16,7 @@
 //   hook-calls.jsonl        one line per hook invocation (event, session, hit, milliseconds)
 //   hook-index.json         the recurring signatures per project and overall, for the hooks
 //   pipeline-runs.jsonl     the step log: one line per run of a pipeline step, appended when the step ends (steps.ts)
+//   pending/<hash>.<uuid>.json  one file per Stop deposit the store lock refused: the transcript path only, taken by the next deposit (pending.ts)
 import type { GoldEvaluator } from './gold-arms.js';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { createReadStream } from 'node:fs';
@@ -27,7 +28,7 @@ import { compileAllow, requireEntries, slugOf } from './allow.js';
 import { SOURCES, type Source, type SourceStore } from './sources.js';
 import { buildIndex, indexPath } from './hook-index.js';
 import { archiveRaw } from './archive.js';
-import { deferSession, listPending, PENDING_HOOK_CAP, removePending, type PendingEntry } from './pending.js';
+import { deferSession, failPending, listPending, PENDING_HOOK_CAP, PENDING_MAX_FAILURES, removePending, sweepPendingTemps, type PendingEntry } from './pending.js';
 import { deriveSession, type SessionCapture } from './derive.js';
 import { captureRuntime, type CaptureRuntime } from './capture-runtime.js';
 import { callPositions, captureSession, type Capture, type SubagentOrigin } from './extract.js';
@@ -773,8 +774,6 @@ const depositLocked = async (runtime: SessionsRuntime, options: DepositOptions, 
   state.redactDomains = [...new Set([...state.redactDomains, ...options.redactDomains])];
   state.allow = [...new Set([...state.allow, ...options.allow])];
   const context = await contextFor(runtime, state, options.now);
-  // Sessions a Stop hook deferred come first, then this run's own walk; their entries go once `state.json` is written below.
-  const drained = await drainPending(context, state, runtime.storeDir, Number.POSITIVE_INFINITY, trace);
   const result: DepositResult = {
     sessions: 0,
     unchanged: 0,
@@ -791,6 +790,21 @@ const depositLocked = async (runtime: SessionsRuntime, options: DepositOptions, 
     folders: allowed,
     missing,
   };
+  const record = (extract: Capture, subagent: boolean): void => {
+    if (subagent) result.subagents += 1;
+    else result.sessions += 1;
+    result.lines += extract.session.lines;
+    result.badLines += extract.session.badLines;
+    result.observations += 1 + extract.prompts.length + extract.tools.length + extract.errorLines.length;
+  };
+  // Sessions a Stop hook deferred come first, then this run's own walk; their entries go once `state.json` is written below. What the drain
+  // deposited is in the result, and the walk finds those files current without counting them as unchanged.
+  const drainedKeys = new Set<string>();
+  const drained = await drainPending(context, state, runtime.storeDir, Number.POSITIVE_INFINITY, trace, (extract, subagent, key) => {
+    drainedKeys.add(key);
+    record(extract, subagent);
+  });
+  await sweepPendingTemps(runtime.storeDir, HOOK_LOCK.staleMs);
   // A project the harness cleaned up entirely is still visited when the state names it, so its archived transcripts are captured again.
   const stateProjects = Object.keys(state.files).map((key) => key.slice(0, key.indexOf('/'))).filter((name) => !isSource(table, name) && allow.allows(name));
   // The same holds for a lost state.json: raw/ still names the projects whose transcripts can be captured again.
@@ -803,14 +817,10 @@ const depositLocked = async (runtime: SessionsRuntime, options: DepositOptions, 
     for (const transcript of transcripts) {
       const extract = await depositFile(context, project, transcript);
       if (extract === undefined) {
-        result.unchanged += 1;
+        if (!drainedKeys.has(`${project}/${transcript.relative}`)) result.unchanged += 1;
         continue;
       }
-      if (transcript.subagent === undefined) result.sessions += 1;
-      else result.subagents += 1;
-      result.lines += extract.session.lines;
-      result.badLines += extract.session.badLines;
-      result.observations += 1 + extract.prompts.length + extract.tools.length + extract.errorLines.length;
+      record(extract, transcript.subagent !== undefined);
       tally(trace, extract, transcript.subagent !== undefined);
     }
   }
@@ -1103,9 +1113,11 @@ export const depositSession = async (runtime: SessionsRuntime, transcript: strin
   } catch (error) {
     if (!(error instanceof StoreLockedError)) throw error;
     try {
+      // The allowlist holds without the lock: a session no `--allow` names writes nothing, not even a pending entry.
+      if (!compileAllow((await readState(runtime.storeDir)).allow).allows(basename(dirname(transcript)))) return 'not-allowed';
       await deferSession(runtime.storeDir, transcript);
     } catch {
-      // A pending entry that cannot be written leaves the refusal what it was before: a failed deposit, with the lock's message.
+      // A pending entry that cannot be written (or a state that cannot be read) leaves the refusal what it was before: a failed deposit, with the lock's message.
       throw error;
     }
     if (trace !== undefined) trace.deferred = error.message;
@@ -1119,8 +1131,11 @@ interface SessionInto {
   wrote: boolean;
 }
 
+/** Told of each capture a deposit of a pending session wrote, so a whole-store run counts it: the capture, whether it is a subagent, and the state key. */
+type Taken = (extract: Capture, subagent: boolean, key: string) => void;
+
 /** Deposits one transcript and its subagents into `state` in memory; the caller writes `state.json`. */
-const depositSessionInto = async (context: DepositContext, state: State, transcript: string, trace?: DepositTrace): Promise<SessionInto> => {
+const depositSessionInto = async (context: DepositContext, state: State, transcript: string, trace?: DepositTrace, taken?: Taken): Promise<SessionInto> => {
   const project = basename(dirname(transcript));
   if (!compileAllow(state.allow).allows(project)) return { result: 'not-allowed', wrote: false };
   const folder = dirname(transcript);
@@ -1129,7 +1144,10 @@ const depositSessionInto = async (context: DepositContext, state: State, transcr
   try {
     const extract = await depositFile(context, project, main);
     wrote = extract !== undefined;
-    if (extract !== undefined) tally(trace, extract, false);
+    if (extract !== undefined) {
+      tally(trace, extract, false);
+      taken?.(extract, false, `${project}/${main.relative}`);
+    }
   } catch (error) {
     if (isMissing(error)) return { result: 'missing', wrote: false };
     throw error;
@@ -1137,7 +1155,10 @@ const depositSessionInto = async (context: DepositContext, state: State, transcr
   // The session's subagents finished before it did, so the Stop deposit takes them too (A24).
   for (const subagent of await subagentTranscripts(folder, [main.session])) {
     const extract = await depositFile(context, project, subagent);
-    if (extract !== undefined) tally(trace, extract, true);
+    if (extract !== undefined) {
+      tally(trace, extract, true);
+      taken?.(extract, true, `${project}/${subagent.relative}`);
+    }
     wrote = extract !== undefined || wrote;
   }
   return { result: wrote ? 'deposited' : 'unchanged', wrote };
@@ -1160,19 +1181,32 @@ interface Drained {
  * caller after `state.json` is written, so a crash leaves it for the next run) when its transcript was deposited, was already current, is gone, or
  * is in a folder no `--allow` names now; one that fails to deposit stays, is counted, and does not stop the rest.
  */
-const drainPending = async (context: DepositContext, state: State, storeDir: string, limit: number, trace?: DepositTrace): Promise<Drained> => {
+const drainPending = async (context: DepositContext, state: State, storeDir: string, limit: number, trace?: DepositTrace, taken?: Taken): Promise<Drained> => {
   const drained: Drained = { settled: [], wrote: false };
   for (const entry of await listPending(storeDir, limit)) {
     bump(trace, 'pending');
-    try {
-      const taken = entry.transcript === undefined ? undefined : await depositSessionInto(context, state, entry.transcript, trace);
-      drained.wrote ||= taken?.wrote === true;
-      drained.settled.push(entry);
-      if (taken === undefined || taken.result === 'missing' || taken.result === 'not-allowed') bump(trace, 'pendingDropped');
-    } catch (error) {
+    if (entry.unreadable) {
       bump(trace, 'pendingKept');
-      process.stderr.write(`oars: a pending session was not deposited and stays pending: ${error instanceof Error ? error.message : String(error)}
-`);
+      process.stderr.write('oars: a pending entry could not be read and stays where it is\n');
+      continue;
+    }
+    try {
+      const into = entry.transcript === undefined ? undefined : await depositSessionInto(context, state, entry.transcript, trace, taken);
+      drained.wrote ||= into?.wrote === true;
+      drained.settled.push(entry);
+      if (into === undefined || into.result === 'missing' || into.result === 'not-allowed') bump(trace, 'pendingDropped');
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      // An entry that keeps failing is not retried for ever: a whole-store walk still reaches any transcript on the allowlist, so dropping it loses nothing.
+      if (entry.failures + 1 >= PENDING_MAX_FAILURES) {
+        drained.settled.push(entry);
+        bump(trace, 'pendingDropped');
+        process.stderr.write(`oars: a pending session failed ${String(PENDING_MAX_FAILURES)} times and was dropped: ${message}\n`);
+      } else {
+        await failPending(storeDir, entry);
+        bump(trace, 'pendingKept');
+        process.stderr.write(`oars: a pending session was not deposited and stays pending: ${message}\n`);
+      }
     }
   }
   return drained;
@@ -1181,6 +1215,8 @@ const drainPending = async (context: DepositContext, state: State, storeDir: str
 const depositSessionLocked = async (runtime: SessionsRuntime, transcript: string, now: () => number, trace?: DepositTrace): Promise<SessionDeposit> => {
   const state = await readState(runtime.storeDir);
   refuseNewer(state);
+  // A session no `--allow` names costs nothing when nothing is pending: no salt, no skeletons folder, no context.
+  if (!compileAllow(state.allow).allows(basename(dirname(transcript))) && (await listPending(runtime.storeDir, 1)).length === 0) return 'not-allowed';
   const context = await contextFor(runtime, state, now);
   const drained = await drainPending(context, state, runtime.storeDir, PENDING_HOOK_CAP, trace);
   const own = await depositSessionInto(context, state, transcript, trace);
