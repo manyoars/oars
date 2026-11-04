@@ -35,7 +35,7 @@ export const METHODS: { readonly [family in Family]: { readonly name: string; re
   fit: { name: 'failure-rate', version: '1' },
   cost: { name: 'per-prompt-by-class', version: '1' },
   change: { name: 'share-in-version-bucket', version: '1' },
-  live: { name: 'day-against-trailing-week', version: '1' },
+  live: { name: 'day-against-trailing-week', version: '2' },
   adoption: { name: 'share-and-span', version: '1' },
   method: { name: 'shape-share-by-model', version: '1' },
   'next-step': { name: 'next-action-counts', version: '1' },
