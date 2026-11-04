@@ -54,13 +54,23 @@ const extractOf = (events: readonly unknown[], summary: Obj = summaryOf(), usage
 const prompt = (second: number, text: string, meta?: object) => line(S(second), { sessionUpdate: 'user_message_chunk', content: { type: 'text', text }, ...(meta === undefined ? {} : { _meta: meta }) });
 const say = (second: number, text: string, meta?: object) => line(S(second), { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text }, ...(meta === undefined ? {} : { _meta: meta }) });
 const call = (second: number, toolCallId: string, title: string, rawInput: object = {}, kind = 'other') => line(S(second), { sessionUpdate: 'tool_call', toolCallId, title, kind, status: 'pending', rawInput });
-// A completion upstream writes always carries `rawOutput` (acp_conversion.rs:116-640), and a tool with no richer output type answers with `ToolOutput::Text`
-// (a text part in `content[]` and `{type:"Text", text}`, :501-509); a failure from the tool layer carries a text part only (tool_calls.rs:2834-2838, :3325-3329).
-const finish = (second: number, toolCallId: string, status: string, extra: object = {}) => {
-  const bare = status === 'completed' && !('content' in extra) && !('rawOutput' in extra);
-  const text = { content: [{ type: 'content', content: { type: 'text', text: 'done' } }], rawOutput: { type: 'Text', text: 'done' } };
-  return line(S(second), { sessionUpdate: 'tool_call_update', toolCallId, status, ...(bare ? text : {}), ...extra });
-};
+// A completion upstream writes carries the tool's own `rawOutput` variant (acp_conversion.rs:116-640), so each call site passes the shape its tool writes (`readFileOk`,
+// `mcpOk`, `skillOk`, `todoOk`, `bash`, ...). A failure in the tool layer carries a text part and `tool_execution_failed` (tool_calls.rs:3270-3289); one from a parse failure or
+// a not-executed reason carries a text part only (tool_calls.rs:2834-2838, :3325-3329).
+const finish = (second: number, toolCallId: string, status: string, extra: object = {}) => line(S(second), { sessionUpdate: 'tool_call_update', toolCallId, status, ...extra });
+const textPart = (text: string) => ({ type: 'content', content: { type: 'text', text } });
+// `read_file`: the file as a text part and `ReadFileOutput::FileContent` (acp_conversion.rs:123-131; types/output.rs:188-200).
+const readFileOk = (text: string, path: string) => ({ content: [textPart(text)], rawOutput: { type: 'ReadFile', FileContent: { content: text, absolute_path: path, offset: null } } });
+// An MCP tool: no `content`, and `MCPOutput` with `OkayOutput` (acp_conversion.rs:325-338; types/output.rs:1112-1135). `use_tool` returns the delegate's `ToolOutput` (use_tool/mod.rs:377).
+const mcpOk = (server: string, tool: string, text: string) => ({ rawOutput: { type: 'MCP', tool_name: tool, server_name: server, output: { OkayOutput: text } } });
+// `skill`: its `tool_result` as a text part and `SkillOutput` (acp_conversion.rs:409-432; opencode/skill/mod.rs:224; types/output.rs `SkillOutput`).
+const skillOk = (name: string) => ({ content: [textPart(`Loaded skill: ${name}`)], rawOutput: { type: 'Skill', success: true, tool_result: `Loaded skill: ${name}`, skill_name: name, skill_message: null, error: null } });
+// `todowrite`: a completed update with no `content` and `TodoWriteOutput::TodosUpdated` (acp_conversion.rs:306-323; types/output.rs:956-962; grok_build/todo/mod.rs:153 for `state`).
+const todoOk = () => ({ rawOutput: { type: 'Todo', TodosUpdated: { summary_for_prompt: 'Todos updated', todos: [], state: { todos: {} } } } });
+// A tool that errors in the tool layer: "Tool `name` failed: <message>" as the text part, and `{error, message}` as the `rawOutput` (tool_calls.rs:3270-3289).
+const toolFailed = (tool: string, message: string) => ({ content: [textPart(`Tool \`${tool}\` failed: ${message}`)], rawOutput: { error: 'tool_execution_failed', message } });
+// The not-executed reason for a call refused in plan mode (tool_calls.rs:3300-3312; a text part only, :3325-3329).
+const PLAN_REJECTED = 'Rejected: file edits are not allowed in plan mode - the only editable file is the plan file (/work/app/.grok/plan.md).';
 const bytes = (text: string): number[] => [...Buffer.from(text)];
 // The model-issued path overwrites `output_for_prompt` with the formatted prompt, `exit: N\n<output>` (grok_build/bash/mod.rs:2246, format_default_prompt :386-417), so a
 // fixture of that path writes the header; the `output` bytes stay the raw output (:2232).
@@ -69,10 +79,19 @@ const bash = (exit: number, text: string, extra: object = {}) => ({ type: 'Bash'
 const conciseBash = (exit: number, text: string, extra: object = {}) => bash(exit, text, { output_for_prompt: `Exit code: ${String(exit)}\n\nCommand output:\n\n\`\`\`\n${text}\n\`\`\`\n\nCommand completed.\n\nThe previous shell command ended, so on the next invocation of this tool, you will be using a new shell session.\n\nOn the next terminal tool call, the directory of the shell will be /work/app.`, ...extra });
 // The user's `!cmd` is the one path that keeps `output_for_prompt` plain, and writes `description: None` (tool_dispatch.rs:304-317).
 const bashMode = (exit: number, text: string, extra: object = {}) => bash(exit, text, { output_for_prompt: text, description: null, ...extra });
-const turn = (second: number, extra: object = {}) => ({ turnNumber: 1, endedAt: iso(second), inputTokens: 900, outputTokens: 60, cachedReadTokens: 400, cacheCreationTokens: 100, reasoningTokens: 7, modelCalls: 2, primaryModelId: 'grok-build', ...extra });
+const turn = (second: number, extra: Obj = {}): Obj => {
+  const fields: Obj = { turnNumber: 1, endedAt: iso(second), inputTokens: 900, outputTokens: 60, cachedReadTokens: 400, cacheCreationTokens: 100, reasoningTokens: 7, modelCalls: 2, primaryModelId: 'grok-build', ...extra };
+  // `totalTokens` is input + output (xai-chat-state usage.rs:65), and no token field is skipped when zero (usage_file.rs:27-41).
+  return { ...fields, totalTokens: Number(fields.inputTokens) + Number(fields.outputTokens) };
+};
 // The user's `!cmd` input as upstream writes it: the tagged `ToolInput::Bash` (tool_dispatch.rs:223-229, :250; xai-grok-tools types/tool_io.rs:55-59).
 const BANG = { variant: 'Bash', command: 'ls -a', description: 'ls -a', is_background: false };
-const usageOf = (...turns: Obj[]): Obj => ({ sessionId: 'sess', updatedAt: iso(99), session: {}, turns });
+// `session` is the sum of the turns (usage_file.rs:230-300).
+const usageOf = (...turns: Obj[]): Obj => {
+  const sum = (key: string): number => turns.reduce((total, one) => total + Number(one[key]), 0);
+  const session = Object.fromEntries(['inputTokens', 'outputTokens', 'cachedReadTokens', 'cacheCreationTokens', 'reasoningTokens', 'totalTokens', 'modelCalls'].map((key) => [key, sum(key)]));
+  return { sessionId: 'sess', updatedAt: iso(99), session, turns };
+};
 
 describe('the Grok Build reader', () => {
   it('turns a normal session into prompts, calls with outcomes, usage from usage.json, the model, and the cwd', () => {
@@ -147,9 +166,9 @@ describe('the Grok Build reader', () => {
       call(4, 'c2', 'list_dir', {}),
       finish(5, 'c2', 'failed', { rawOutput: { type: 'ListDir', NotFound: 'no such directory' } }),
       call(6, 'c3', 'bash', { command: 'x' }),
-      finish(7, 'c3', 'failed', { content: [{ type: 'content', content: { type: 'text', text: 'killed' } }] }),
+      finish(7, 'c3', 'failed', { content: [textPart(PLAN_REJECTED)] }),
     ]);
-    expect(out.errorLines.map((error) => error.line)).toEqual(['ENOENT: no such file or directory, open /nope', 'tool failed', 'killed']);
+    expect(out.errorLines.map((error) => error.line)).toEqual(['ENOENT: no such file or directory, open /nope', 'tool failed', PLAN_REJECTED]);
   });
 
   it('writes no usage for a session with no usage.json, and gives every assistant line a requestId', () => {
@@ -162,7 +181,7 @@ describe('the Grok Build reader', () => {
   });
 
   it('captures a session from a folder that is not a repository', () => {
-    const out = extractOf([prompt(1, 'hi'), call(2, 'c1', 'read_file', { path: 'a.txt' }), finish(3, 'c1', 'completed')], summaryOf({ info: { id: 'sess', cwd: '/tmp/notes' } }));
+    const out = extractOf([prompt(1, 'hi'), call(2, 'c1', 'read_file', { path: 'a.txt' }), finish(3, 'c1', 'completed', readFileOk('hello', '/tmp/notes/a.txt'))], summaryOf({ info: { id: 'sess', cwd: '/tmp/notes' } }));
     expect(out.tools).toMatchObject([{ tool: 'read_file', status: 'ok' }]);
     expect(out.session.repo).toBeNull();
   });
@@ -212,20 +231,41 @@ describe('the Grok Build reader', () => {
     expect(lines.filter((entry) => entry.type === 'user').map((entry) => entry.timestamp)).toEqual([iso(0), iso(9), iso(10)]);
   });
 
-  it('follows the shell’s current_dir for the cwd after a directory change', () => {
-    const lines = linesOf([prompt(1, 'cd'), call(2, 'c1', 'bash', { command: 'cd /other' }), finish(3, 'c1', 'completed', { rawOutput: bash(0, '', { current_dir: '/other' }) }), prompt(4, 'next')]);
-    expect(lines.filter((entry) => entry.type === 'user' && typeof entry.cwd === 'string').map((entry) => entry.cwd)).toEqual(['/work/app', '/other', '/other']);
+  it('follows the shell’s current_dir when the session’s own folder has moved, but never reads a cd inside a command', () => {
+    // `current_dir` is the Cwd the command RAN in, resolved before it ran (grok_build/bash/mod.rs:1876, written at :2240), and each call is a new shell
+    // (grok_build_concise/bash.rs:53-54), so a `cd` inside a command never shows; a session whose Cwd moved does (`cwd_generation`, session/persistence.rs:1157-1159).
+    const moved = linesOf([prompt(1, 'go'), call(2, 'c1', 'bash', { command: 'ls' }), finish(3, 'c1', 'completed', { rawOutput: bash(0, '', { current_dir: '/other' }) }), prompt(4, 'next')]);
+    expect(moved.filter((entry) => entry.type === 'user' && typeof entry.cwd === 'string').map((entry) => entry.cwd)).toEqual(['/work/app', '/other', '/other']);
+    const cd = linesOf([prompt(1, 'go'), call(2, 'c1', 'bash', { command: 'cd /other' }), finish(3, 'c1', 'completed', { rawOutput: bash(0, '') }), prompt(4, 'next')]);
+    expect(cd.filter((entry) => entry.type === 'user' && typeof entry.cwd === 'string').map((entry) => entry.cwd)).toEqual(['/work/app', '/work/app', '/work/app']);
+  });
+
+  it('does not take a one-shot workdir for the session’s folder: the next relative edit still resolves against the session’s', () => {
+    // The opencode `bash` tool's `current_dir` is its `workdir` param when one is given (opencode/bash/mod.rs:376, :454; its test :1014, "the resolved workdir, not the
+    // session Cwd"), and the next relative `write` or `edit` resolves against the session Cwd (opencode/write/mod.rs:117, opencode/edit/mod.rs:210).
+    const out = linesOf([
+      prompt(1, 'go'),
+      call(2, 'c1', 'bash', { command: 'ls', workdir: '/tmp', description: 'x' }),
+      finish(3, 'c1', 'completed', { rawOutput: bash(0, '', { current_dir: '/tmp' }) }),
+      call(4, 'c2', 'write', { file_path: 'src/new.ts', content: 'x' }),
+      finish(5, 'c2', 'completed', { content: [{ type: 'diff', path: '/work/app/src/new.ts', newText: 'x' }], rawOutput: { type: 'SearchReplace', EditsApplied: { old_string: '', new_string: 'x', tool_output_for_prompt: 'created', absolute_path: '/work/app/src/new.ts', edits: { details: [] } } } }),
+      prompt(6, 'next'),
+    ]);
+    expect(out.filter((entry) => entry.type === 'user' && typeof entry.cwd === 'string').map((entry) => entry.cwd)).toEqual(['/work/app', '/work/app', '/work/app', '/work/app']);
+    const files = capture(out.map((entry) => JSON.stringify(entry)).join(String.fromCharCode(10))).session.files;
+    expect([...files]).toEqual(['/work/app/src/new.ts']);
   });
 
   it('records an MCP call the way Claude Code does, a user bash-mode command by its kind, and a call with no completion as none', () => {
     const out = extractOf([
       prompt(1, 'go'),
       call(2, 'c1', 'oars__oars_recall', {}, 'other'),
-      finish(3, 'c1', 'completed'),
+      finish(3, 'c1', 'completed', mcpOk('oars', 'oars_recall', 'ok')),
       call(4, 'bash-mode-1', 'Execute `ls -a`', BANG, 'execute'),
       finish(5, 'bash-mode-1', 'failed', { rawOutput: bashMode(2, 'ls: no such file') }),
       call(6, 'c3', 'grep', { pattern: 'x' }),
-      finish(7, 'c3', 'in_progress'),
+      // The progress update after a call carries its real kind and input, and no status (tool_calls.rs:2731-2742).
+      line(S(7), { sessionUpdate: 'tool_call_update', toolCallId: 'c3', kind: 'search', rawInput: { pattern: 'x' } }),
     ]);
     expect(out.tools.map((tool) => [tool.tool, tool.status])).toEqual([['mcp__oars__oars_recall', 'ok'], ['Bash', 'error'], ['grep', 'none']]);
     // The stored step reads the command upstream's input holds (rawInput.command), not the title.
@@ -238,11 +278,11 @@ describe('the Grok Build reader', () => {
     const out = extractOf([
       prompt(1, 'go'),
       call(2, 'c1', 'use_tool', { tool_name: 'linear__save_issue', tool_input: { title: 'x' } }, 'other'),
-      finish(3, 'c1', 'completed'),
+      finish(3, 'c1', 'completed', mcpOk('linear', 'save_issue', 'saved')),
       call(4, 'c2', 'use_tool', { tool_name: 'nounderscores', tool_input: {} }, 'other'),
-      finish(5, 'c2', 'completed'),
+      finish(5, 'c2', 'failed', toolFailed('use_tool', "'nounderscores' is not a valid MCP tool name. Tool names must be qualified as `server__tool` (e.g., `linear__save_issue`).")),
       call(6, 'c3', 'use_tool', { tool_name: 'linear__list', tool_input_file: '/tmp/in.json' }, 'other'),
-      finish(7, 'c3', 'completed'),
+      finish(7, 'c3', 'completed', mcpOk('linear', 'list', '[]')),
     ]);
     expect(out.tools.map((tool) => tool.tool)).toEqual(['mcp__linear__save_issue', 'use_tool', 'mcp__linear__list']);
     expect(out.tools.map((tool) => tool.steps?.[0]?.action)).toEqual(['mcp.call', 'other', 'mcp.call']);
@@ -250,7 +290,7 @@ describe('the Grok Build reader', () => {
 
   it('reads a skill call as skill.run with the skill’s name, and a todowrite call as a plan update', () => {
     // The opencode `skill` tool's input is `{name}` (opencode/skill/mod.rs:50) and `todowrite` is its plan tool (opencode/todowrite/mod.rs, ToolId "todowrite").
-    const out = extractOf([prompt(1, 'go'), call(2, 'c1', 'skill', { name: 'pdf' }), finish(3, 'c1', 'completed'), call(4, 'c2', 'todowrite', { todos: [] }), finish(5, 'c2', 'completed')]);
+    const out = extractOf([prompt(1, 'go'), call(2, 'c1', 'skill', { name: 'pdf' }), finish(3, 'c1', 'completed', skillOk('pdf')), call(4, 'c2', 'todowrite', { todos: [] }), finish(5, 'c2', 'completed', todoOk())]);
     expect(out.tools.map((tool) => tool.steps?.[0]?.action)).toEqual(['skill.run', 'plan.update']);
     expect(linesOf([prompt(1, 'go'), call(2, 'c1', 'skill', { name: 'pdf' })]).flatMap((entry) => JSON.stringify(entry))).toEqual(expect.arrayContaining([expect.stringContaining('"input":{"skill":"pdf"}')]));
   });
@@ -326,19 +366,44 @@ describe('the Grok Build reader', () => {
     expect(failed?.line).not.toContain('alice@example.com');
   });
 
-  it('records an edit by its name even when it fails or the tool reports no path, with the original name kept for the table', () => {
+  it('records an edit by its name even when it fails, with the original name kept for the table', () => {
+    const noMatch = 'The string to replace was not found in the file. Make sure it matches exactly, including whitespace and indentation.';
     const out = extractOf([
       prompt(1, 'edit'),
       call(2, 'c1', 'write', { file_path: 'src/new.ts', content: 'x' }),
-      finish(3, 'c1', 'failed', { content: [{ type: 'content', content: { type: 'text', text: 'denied' } }] }),
+      finish(3, 'c1', 'failed', toolFailed('write', 'permission denied')),
+      // A call whose arguments fail to parse: a failed update with a text part only (handle_tool_parse_error, tool_calls.rs:2834-2838), and an edit with no path stores none.
       call(4, 'c2', 'edit', {}, 'other'),
-      finish(5, 'c2', 'completed'),
+      finish(5, 'c2', 'failed', { content: [textPart('invalid arguments')] }),
+      // A failed edit with valid arguments: `NoMatchesFound` with its message as the text part (opencode/edit/mod.rs:397-403; acp_conversion.rs:216-224).
       call(6, 'c3', 'edit', { filePath: 'src/a.ts', oldString: 'a', newString: 'b' }, 'other'),
-      finish(7, 'c3', 'failed', { content: [{ type: 'content', content: { type: 'text', text: 'oldString not found' } }] }),
+      finish(7, 'c3', 'failed', { content: [textPart(noMatch)], rawOutput: { type: 'SearchReplace', NoMatchesFound: { message: noMatch, file_path: '/work/app/src/a.ts' } } }),
     ]);
-    expect(out.tools.map((tool) => [tool.tool, tool.status])).toEqual([['Edit', 'error'], ['Edit', 'ok'], ['Edit', 'error']]);
+    expect(out.tools.map((tool) => [tool.tool, tool.status])).toEqual([['Edit', 'error'], ['Edit', 'error'], ['Edit', 'error']]);
+    expect(out.errorLines.map((error) => error.line)).toEqual(['Tool `write` failed: permission denied', 'invalid arguments', noMatch]);
     // The opencode `edit` tool's wire key is camelCase (`filePath`: opencode/edit/mod.rs:64, :138, :579), so a failed edit, which has no diff part, still names its file.
     expect([...out.session.files].sort()).toEqual(['/work/app/src/a.ts', '/work/app/src/new.ts']);
+  });
+
+  it('joins a relative request to the session’s folder in that folder’s own style, and leaves an absolute path or a session with no folder alone', () => {
+    const edit = (path: string, diff: string, summary: Obj) =>
+      [...extractOf(
+        [prompt(1, 'edit'), call(2, 'c1', 'search_replace', { file_path: path, old_string: 'a', new_string: 'b' }), finish(3, 'c1', 'completed', { content: [{ type: 'diff', path: diff, oldText: 'a', newText: 'b' }], rawOutput: { type: 'SearchReplace', EditsApplied: { old_string: 'a', new_string: 'b', tool_output_for_prompt: 'edited', absolute_path: diff, edits: { details: [] } } } })],
+        summary,
+      ).session.files].sort();
+    // A Windows folder: the join is a backslash one, so the request and the completion's absolute diff path (acp_conversion.rs:202-204) name one file.
+    expect(edit('src\\a.ts', 'C:\\work\\app\\src\\a.ts', summaryOf({ info: { id: 'sess', cwd: 'C:\\work\\app' } }))).toEqual(['C:\\work\\app\\src\\a.ts']);
+    // An absolute path is stored as the model wrote it.
+    expect(edit('/etc/hosts', '/etc/hosts', summaryOf())).toEqual(['/etc/hosts']);
+    // No folder in the summary: nothing to join against, so the relative path stands (and the diff's absolute one is a second file).
+    expect(edit('src/a.ts', '/work/app/src/a.ts', { created_at: iso(0) })).toEqual(['/work/app/src/a.ts', 'src/a.ts']);
+  });
+
+  it('decides the session’s setup, funnel, and trust fields from what Grok Build records: timing only, so a session shows unattendedRun and no zeros', () => {
+    const { session } = extractOf([prompt(1, 'go'), say(2, 'ok'), prompt(30, 'more'), say(40, 'done')]);
+    expect(session.setup).toBeUndefined();
+    expect(session.funnel).toBeUndefined();
+    expect(session.trust).toEqual({ unattendedRun: [0.02, 0.17] });
   });
 });
 
