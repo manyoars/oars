@@ -122,7 +122,7 @@ const projectLiteralFirst = (vocab: Vocabulary, target: string | null): Projecte
   return PUBLIC_PROGRAMS.has(program) || WRAPPERS.has(program) || program === 'timeout' ? PRIVATE_PROGRAM : projectTarget(vocab, target);
 };
 
-const isShellStep =(identity: StepIdentity | undefined): identity is ShellIdentity => identity !== null && identity !== undefined && 'program' in identity;
+const isShellStep = (identity: StepIdentity | undefined): identity is ShellIdentity => identity !== null && identity !== undefined && 'program' in identity;
 
 /**
  * The shell call of a stored tool record, from what the account store holds (migration, spec Section 2): every command of the call, in order, from the
