@@ -1164,30 +1164,45 @@ export const commitsRead = (plan: readonly PlannedCommit[], result: string): Arr
   return commits;
 };
 
-/**
- * What follows `mcp__` with every secret masked. A token is not matched when a word character follows or precedes it, and `_` is one, so
- * each `__`-separated part is masked alone and every offset right after a `_` inside a part is tried too. The tool part comes from the
- * operator's config as much as the server part does.
- */
-const redactedMcpTail = (tail: string, redact: Redactor): string =>
-  tail
-    .split('__')
-    .map((part) => {
-      let out = redact(part);
-      for (let at = out.indexOf('_'); at !== -1; at = out.indexOf('_', at + 1)) out = out.slice(0, at + 1) + redact(out.slice(at + 1));
-      return out;
-    })
-    .join('__');
+/** The longest MCP name tail masked slice by slice. A tool name is capped near 64 characters and a server name near that, so a longer tail is not a name. */
+const MCP_TAIL_MAX = 192;
 
 /**
- * The tool name as a record stores it. An MCP name is `mcp__<server>__<tool>` and the server comes from the operator's config, where a
- * token can sit, so everything after `mcp__` is redacted wherever the name is kept (the call, its error line, the skeleton line, and the session's count).
+ * What follows `mcp__` (or the Cursor `mcp_`) with every secret masked. A token is matched only at a word boundary and `_` is a word character, so
+ * the redactor is run over every slice of the tail that starts at 0 or right after a `_` and ends at the end or right before a `_`. That
+ * finds a token behind a `_`, in front of one, and one that holds `__` (`sk-` and `AIza` allow it). The slices are quadratic in the number
+ * of underscores, so a tail past `MCP_TAIL_MAX` characters (which bounds that number) is stored as `<oversized>` instead of sliced.
+ * The tool part comes from the operator's config as much as the server part does.
+ */
+const redactedMcpTail = (tail: string, redact: Redactor): string => {
+  if (tail.length > MCP_TAIL_MAX) return '<oversized>';
+  let out = tail;
+  const starts = [0];
+  for (let at = tail.indexOf('_'); at !== -1; at = tail.indexOf('_', at + 1)) starts.push(at + 1);
+  // Last start first, so an edit never moves a start still to come; the longest slice first, so a token that holds a `_` is cut whole.
+  for (const start of starts.toReversed()) {
+    const ends = [out.length];
+    for (let at = out.indexOf('_', start); at !== -1; at = out.indexOf('_', at + 1)) ends.push(at);
+    for (const end of ends.toSorted((left, right) => right - left)) {
+      const slice = out.slice(start, end);
+      const masked = redact(slice);
+      if (masked === slice) continue;
+      out = out.slice(0, start) + masked + out.slice(end);
+      break;
+    }
+  }
+  return out;
+};
+
+/**
+ * The tool name as a record stores it. An MCP name is `mcp__<server>__<tool>` (Cursor: `mcp_<server>_<tool>`) and the server comes from the
+ * operator's config, where a token can sit, so everything after the prefix is redacted wherever the name is kept (the call, its error line,
+ * the skeleton line, and the session's count).
  */
 export const storedToolName = (name: string, redact: Redactor): string => {
-  const parts = name.split('__');
-  const server = parts[1];
-  if (parts[0] !== 'mcp' || server === undefined || server === '') return name;
-  return `mcp__${redactedMcpTail(name.slice('mcp__'.length), redact)}`;
+  const prefix = name.startsWith('mcp__') ? 'mcp__' : name.startsWith('mcp_') ? 'mcp_' : null;
+  if (prefix === null || name.length === prefix.length) return name;
+  return `${prefix}${redactedMcpTail(name.slice(prefix.length), redact)}`;
 };
 
 /** An MCP call's full server name, which `shortName` cuts for the tool sequence, redacted because a harness takes it from the operator's config. */
