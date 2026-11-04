@@ -7,7 +7,7 @@ import { performance } from 'node:perf_hooks';
 import { fileURLToPath } from 'node:url';
 import { defaultConfigDir } from '../credentials.js';
 import { DEADLINE_MS, type GateHookDeps } from './hook.js';
-import { isLocked, startFill, type FillAsk } from './hook-fill.js';
+import { isLocked, releaseLock, startFill, type FillAsk } from './hook-fill.js';
 import { runHookProcess } from './hook-process.js';
 import { managerReader } from './registry.js';
 
@@ -24,7 +24,10 @@ const readStdin = async (): Promise<string> => {
 /** The helper outlives this process: detached, no stdio, never waited on, so the harness's call does not wait for it either. */
 const startHelper = (storeDir: string, ask: FillAsk): void => {
   const child = spawn(process.execPath, [fileURLToPath(new URL('./hook-fill-main.js', import.meta.url)), storeDir, ask.class, ask.name, ask.cwd], { detached: true, stdio: 'ignore', windowsHide: true });
-  child.on('error', () => undefined);
+  // A helper that cannot start never releases its lock: take it back, so the next sight asks again.
+  child.on('error', () => {
+    void releaseLock(storeDir, ask).catch(() => undefined);
+  });
   child.unref();
 };
 
