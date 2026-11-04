@@ -38,7 +38,9 @@ const failedShell = say(2, 'running it', {
     },
   ],
 });
-const session = (id: string): unknown[] => [geminiHead(id), prompt(1, 'fix the build'), failedShell, say(5, 'it failed', { tokens: { input: 120, output: 2, cached: 0, thoughts: 0, tool: 0, total: 122 } })];
+// The CLI's own first turn names the machine (utils/environmentContext.ts), which decides the shell the frame names; without it a Windows-style temp path would read as Windows.
+const context = { id: 'ctx', timestamp: T(0), type: 'user', content: [{ text: '<session_context>\nMy operating system is: linux\n</session_context>' }] };
+const session = (id: string): unknown[] => [geminiHead(id), context, prompt(1, 'fix the build'), failedShell, say(5, 'it failed', { tokens: { input: 120, output: 2, cached: 0, thoughts: 0, tool: 0, total: 122 } })];
 
 const options = (allow: string[]) => ({ allow, redactDomains: [], now: () => NOW });
 
