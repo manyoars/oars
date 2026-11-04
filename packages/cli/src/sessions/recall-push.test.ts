@@ -199,16 +199,16 @@ describe('the pre-tool push', () => {
 
   it('arms an unlisted tool only over the lift bar: a shape over the floors but under twice its action stays silent, one over both fires once per session', async () => {
     const shaped = (session: string, tool: string, failed: number) =>
-      Array.from({ length: 10 }, (_, n) => toolRow(session, n, tool, { ts: '2026-11-01T00:00:00.000Z', status: n < failed ? 'error' : 'ok', keys: ['topic'], durationMs: 5, toolUseId: , harnessVersion: '2.1.300', prompt: 0 }));
+      Array.from({ length: 10 }, (_, n) => toolRow(session, n, tool, { ts: '2026-11-01T00:00:00.000Z', status: n < failed ? 'error' : 'ok', keys: ['topic'], durationMs: 5, toolUseId: `${session}-${tool}-${String(n)}`, harnessVersion: '2.1.300', prompt: 0 }));
     const sessions = ['a', 'b', 'c'];
-    const quiet = Array.from({ length: 200 }, (_, n) => toolRow('q', n, 'Quiet', { ts: '2026-11-01T00:00:00.000Z', status: 'ok', keys: ['x'], durationMs: 5, toolUseId: , harnessVersion: '2.1.300', prompt: 0 }));
-    // Action  fails 18 of 260 (6.9 percent): Sharp at 50 percent clears twice that, Mild at 10 percent clears the fit floors but not 13.8 percent.
+    const quiet = Array.from({ length: 200 }, (_, n) => toolRow('q', n, 'Quiet', { ts: '2026-11-01T00:00:00.000Z', status: 'ok', keys: ['x'], durationMs: 5, toolUseId: `q-${String(n)}`, harnessVersion: '2.1.300', prompt: 0 }));
+    // Action `other` fails 18 of 260 (6.9 percent): Sharp at 50 percent clears twice that, Mild at 10 percent clears the fit floors but not 13.8 percent.
     const tools = [...quiet, ...sessions.flatMap((name) => shaped(name, 'Sharp', 5)), ...sessions.flatMap((name) => shaped(name, 'Mild', 1))];
     const index = buildIndex({ sessions: [], prompts: [], errors: [], subagents: [], tools, newerCaptures: 0 }, [], AT);
     const sharp = toolShapeId('Sharp', ['topic']);
     expect(Object.keys(index.fit ?? {})).toEqual([sharp]);
     const staged = stagedIndex(index);
-    const sid = Array.from({ length: 100 }, (_, at) => ).find((candidate) => armOf(candidate, [sharp], AT) === 'shown') ?? '';
+    const sid = Array.from({ length: 100 }, (_, at) => `live-${String(at)}`).find((candidate) => armOf(candidate, [sharp], AT) === 'shown') ?? '';
     const use = (tool: string) => call(sid, { tool_name: tool, tool_input: { topic: 'x' } });
     expect(await runHook('pre-tool', use('Mild'), staged.runtime, () => NOW)).toBeUndefined();
     expect(await readRecalls(staged.storeDir)).toHaveLength(0);
