@@ -158,6 +158,41 @@ describe('oars gate hook: one record per crossing', () => {
   });
 });
 
+describe('oars gate hook: npx of a bin the folder has', () => {
+  const project = (): string => {
+    const one = folder();
+    mkdirSync(join(one, 'node_modules', '.bin'), { recursive: true });
+    writeFileSync(join(one, 'node_modules', '.bin', 'tsc'), '');
+    mkdirSync(join(one, 'src'), { recursive: true });
+    return one;
+  };
+
+  it('records local-bin-run, and asks the registry nothing, for a present bin and the bin of a parent folder', async () => {
+    const store = folder();
+    const ask = vi.fn(found('5.4.0'));
+    const one = project();
+    await gateHook(payload('npx tsc --noEmit', { cwd: one, tool_use_id: 'u1' }), depsFor(store, { registry: ask }));
+    await gateHook(payload('npx tsc', { cwd: join(one, 'src'), tool_use_id: 'u2' }), depsFor(store, { registry: ask }));
+    expect(rowsOf(store).map((row) => [row.form, row.registryState])).toEqual([
+      ['local-bin-run', 'not-read'],
+      ['local-bin-run', 'not-read'],
+    ]);
+    expect(ask).not.toHaveBeenCalled();
+  });
+
+  it('records an absent bin, and a pinned one, as a fetch-and-run and asks about it', async () => {
+    const store = folder();
+    const ask = vi.fn(found('9.9.9'));
+    const one = project();
+    await gateHook(payload('npx eslint', { cwd: one, tool_use_id: 'u1' }), depsFor(store, { registry: ask }));
+    await gateHook(payload('npx tsc@5.0.0', { cwd: one, tool_use_id: 'u2' }), depsFor(store, { registry: ask }));
+    expect(rowsOf(store).map((row) => [row.form, row.registryState])).toEqual([
+      ['fetch-and-run', 'found'],
+      ['fetch-and-run', 'found'],
+    ]);
+  });
+});
+
 describe('oars gate hook: a call that crosses nothing', () => {
   it.each([['ls -la'], ['npm ci'], ['git status'], ['echo npm install not-a-crossing | cat']])('writes nothing and asks nothing for %s', async (command) => {
     const store = folder();

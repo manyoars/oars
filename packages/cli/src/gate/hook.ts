@@ -6,6 +6,7 @@ import { appendFile, mkdir, readFile, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { makeRedactor } from '../sessions/redact.js';
 import { checkCall, type Crossing } from './checks.js';
+import { withLocalBin, type LocalBinMemo } from './local-bin.js';
 import { loadIndex, keepIndex, noveltyOf, scopesOf } from './novelty.js';
 import { GATE_VERSION, parseRows, permissionOf, type CrossingRecord, type RegistryRow } from './record.js';
 import { askable, type RegistryAnswer, type RegistryReader } from './registry.js';
@@ -188,7 +189,10 @@ export const runGateHook = async (stdin: string, deps: GateHookDeps): Promise<vo
   const rows: CrossingRecord[] = [];
   const lines = new Set<string>();
   const answered: RegistryRow[] = [];
-  for (const crossing of check.crossings) {
+  const binMemo: LocalBinMemo = new Map();
+  for (const seen of check.crossings) {
+    // A project's own bin is a stat walk, local and fast; it runs before the registry ask so a bin that is there is never asked about.
+    const crossing = await withLocalBin(seen, cwd, binMemo);
     const { novelty, add } = noveltyOf(index, scopesOf(keyOf(crossing), repository, session));
     for (const line of add) lines.add(line);
     const read = await registryAnswer(deps, crossing, cwd, kept);
