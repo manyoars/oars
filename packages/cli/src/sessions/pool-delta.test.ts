@@ -1,16 +1,17 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { carriedDeltas, DELTA_DAYS, DELTA_MIN_SESSIONS, deltaMark, deltasOf, markDeltasSent, placedOf, sentDeltas, windowsOf, type Gated } from './pool-delta.js';
 import { prompt, session, sessionsFrom, store, tool } from './pool-fixture.js';
 import type { DeltaEntry, SessionRecords } from './pool-wire.js';
-import type { ToolManifest, ToolStatus } from './schema.js';
+import type { Harness, ToolManifest, ToolStatus } from './schema.js';
 
 const DAY = 24 * 60 * 60 * 1000;
-const START = Date.parse('2026-10-01T09:00:00Z');
+// Windows sit on a fixed grid counted from the epoch, so the first test window starts on a grid line.
+const START = Math.ceil(Date.parse('2026-10-01T00:00:00Z') / (7 * DAY)) * 7 * DAY;
 
-/** `count` sessions spread over the `index`th window (a window is `DELTA_DAYS` long, counted from the first session), named `<prefix><n>`. */
+/** `count` sessions spread over the `index`th window (a window is `DELTA_DAYS` long, on the grid from the epoch), named `<prefix><n>`. */
 const run = (prefix: string, index: number, count: number): { id: string; at: number }[] =>
   Array.from({ length: count }, (_, n) => ({ id: `${prefix}${String(n)}`, at: START + index * DELTA_DAYS * DAY + n * 60 * 60 * 1000 }));
 
@@ -37,6 +38,14 @@ describe('the windows of a delta', () => {
     const [only] = windowsOf([...run('a', 1, 8), ...run('b', 0, 5)].reverse());
     expect(only?.filler.id).toBe('a4');
     expect(only?.after).toHaveLength(8);
+  });
+
+  it('number windows on a grid counted from the epoch, so the earliest session does not move them', () => {
+    const [only] = windowsOf([...run('b', 0, 6), ...run('a', 1, 5)]);
+    const [without] = windowsOf([...run('b', 0, 6).slice(1), ...run('a', 1, 5)]);
+    expect(only?.index).toBe(Math.floor((START + DELTA_DAYS * DAY) / (DELTA_DAYS * DAY)));
+    expect(without?.index).toBe(only?.index);
+    expect(without?.after.map(({ id }) => id)).toEqual(only?.after.map(({ id }) => id));
   });
 
   it('compare only windows next to each other, so a gap of a window builds nothing', () => {
@@ -78,12 +87,18 @@ interface Shape {
   /** The status of the call that holds the manifest; `ok` unless given. */
   manifestStatus?: ToolStatus;
   target?: string | null;
+  /** Hours into its window the session began; 1 unless given. */
+  hour?: number;
+  /** The harness the session came from; Claude Code unless given. */
+  harness?: Harness;
+  /** The tool of the call that holds the manifest; `Bash` unless given. */
+  manifestTool?: string;
 }
 
 const sessionOf = (id: string, shape: Shape): SessionRecords => {
   const calls = shape.calls ?? 2;
   const tools = Array.from({ length: calls }, (_, n) =>
-    tool(id, n, 'Bash', {
+    tool(id, n, n === calls - 1 && shape.manifest !== undefined ? (shape.manifestTool ?? 'Bash') : 'Bash', {
       target: shape.target ?? null,
       ...(shape.packages === undefined || n >= shape.packages.length ? {} : { packages: [{ package: shape.packages[n] ?? '', packageVersion: null, first: true }] }),
       ...(shape.manifest === undefined || n !== calls - 1 ? {} : { manifest: shape.manifest, status: shape.manifestStatus ?? 'ok' }),
@@ -93,7 +108,8 @@ const sessionOf = (id: string, shape: Shape): SessionRecords => {
     store({
       sessions: [
         session(id, {
-          tsFirst: new Date(START + shape.window * DELTA_DAYS * DAY + HOUR).toISOString(),
+          tsFirst: new Date(START + shape.window * DELTA_DAYS * DAY + (shape.hour ?? 1) * HOUR).toISOString(),
+          ...(shape.harness === undefined ? {} : { harness: shape.harness }),
           setup: { ...(shape.mode === undefined ? {} : { permissionMode: shape.mode }), ...(shape.plugins === undefined ? {} : { plugins: shape.plugins }) },
         }),
       ],
@@ -119,6 +135,16 @@ describe('the entries of a delta', () => {
   it('build none when the plugins are the same, and one entry however many plugins went', () => {
     expect(deltasOf(windowOf('b', { window: 0, plugins: ['p'] }), windowOf('a', { window: 1, plugins: ['p'] }))).toEqual([]);
     expect(deltasOf(windowOf('b', { window: 0, plugins: ['p', 'q', 'r'] }), windowOf('a', { window: 1 }))).toHaveLength(1);
+  });
+
+  it('compares plugins only over sessions whose harness records them, so another harness is no false removal or addition', () => {
+    const codex = (prefix: string, window: number): SessionRecords[] => windowOf(prefix, { window, harness: 'codex' });
+    expect(deltasOf(windowOf('b', { window: 0, plugins: ['p'] }), codex('a', 1))).toEqual([]);
+    expect(deltasOf(codex('b', 0), windowOf('a', { window: 1, plugins: ['p'] }))).toEqual([]);
+    expect(deltasOf(codex('b', 0), codex('a', 1))).toEqual([]);
+    // A Claude Code session among them still counts, and its plugin is compared against the sessions that record.
+    const mixed = [...codex('x', 1), ...windowOf('a', { window: 1, plugins: ['q'] }, 2)];
+    expect(deltasOf(windowOf('b', { window: 0, plugins: ['p'] }), mixed).map(({ deltaKind }) => deltaKind)).toEqual(['added', 'removed']);
   });
 
   it('name a permission mode change by field alone, never by the modes', () => {
@@ -172,11 +198,17 @@ describe('the removal of a package', () => {
 
   it('reads a listing of the same file that no longer holds it as gone', () => {
     const listed = before(undefined, { target: 'file-one', manifest: manifest({ seen: ['npm:typescript', 'npm:vitest'] }) });
-    const gone = deltasOf(listed, windowOf('a', { window: 1, calls: 4, target: 'file-one', manifest: manifest({ seen: ['npm:vitest'] }) }));
+    const gone = deltasOf(listed, windowOf('a', { window: 1, calls: 4, target: 'file-one', manifestTool: 'Write', manifest: manifest({ seen: ['npm:vitest'] }) }));
     expect(gone.map(({ name }) => name)).toEqual(['typescript']);
     // A listing of another file says nothing of this one, and a listing that still holds it says it stayed.
     expect(deltasOf(listed, windowOf('a', { window: 1, calls: 4, target: 'file-two', manifest: manifest({ seen: ['npm:vitest'] }) }))).toEqual([]);
     expect(deltasOf(listed, windowOf('a', { window: 1, calls: 4, target: 'file-one', manifest: manifest({ seen: ['npm:typescript'] }) }))).toEqual([]);
+  });
+
+  it('reads a Read of part of the file as no removal: it can say the package stayed, never that it went', () => {
+    const listed = before(undefined, { target: 'file-one', manifest: manifest({ seen: ['npm:typescript', 'npm:vitest'] }) });
+    expect(deltasOf(listed, windowOf('a', { window: 1, calls: 4, target: 'file-one', manifestTool: 'Read', manifest: manifest({ seen: ['npm:vitest'] }) }))).toEqual([]);
+    expect(deltasOf(listed, windowOf('a', { window: 1, calls: 4, target: 'file-one', manifestTool: 'Read', manifest: manifest({ seen: ['npm:typescript'] }) }))).toEqual([]);
   });
 
   it('is not a removal when the package was added back later in the window, or never called before', () => {
@@ -238,15 +270,15 @@ const outbox = (): string => {
 const ENTRY: DeltaEntry = { deltaKind: 'removed', field: 'package', name: 'typescript', registry: 'npm', metric: 'callsPerSession', change: -3 };
 
 describe('the once-only mark of a delta', () => {
-  it('names a delta by its account, kind, field, name, registry, metric, and the session that filled its window', () => {
-    const mark = deltaMark('acct', ENTRY, 'a4');
+  it('names a delta by its account, kind, field, name, registry, metric, and the index of its after window', () => {
+    const mark = deltaMark('acct', ENTRY, 4);
     expect(mark).toMatch(/^[0-9a-f]{16}$/);
-    expect(deltaMark('acct', { ...ENTRY }, 'a4')).toBe(mark);
-    for (const other of [deltaMark('acct2', ENTRY, 'a4'), deltaMark('acct', ENTRY, 'a5'), deltaMark('acct', { ...ENTRY, name: 'react' }, 'a4'), deltaMark('acct', { ...ENTRY, registry: 'pypi' }, 'a4'), deltaMark('acct', { ...ENTRY, field: 'plugin' }, 'a4'), deltaMark('acct', { ...ENTRY, deltaKind: 'added' }, 'a4'), deltaMark('acct', { ...ENTRY, metric: 'thinking' }, 'a4')]) expect(other).not.toBe(mark);
+    expect(deltaMark('acct', { ...ENTRY }, 4)).toBe(mark);
+    for (const other of [deltaMark('acct2', ENTRY, 4), deltaMark('acct', ENTRY, 5), deltaMark('acct', { ...ENTRY, name: 'react' }, 4), deltaMark('acct', { ...ENTRY, registry: 'pypi' }, 4), deltaMark('acct', { ...ENTRY, field: 'plugin' }, 4), deltaMark('acct', { ...ENTRY, deltaKind: 'added' }, 4), deltaMark('acct', { ...ENTRY, metric: 'thinking' }, 4)]) expect(other).not.toBe(mark);
   });
 
   it('ignores the size of the move, so a recount of the same windows never builds the delta again', () => {
-    expect(deltaMark('acct', { ...ENTRY, change: 4 }, 'a4')).toBe(deltaMark('acct', ENTRY, 'a4'));
+    expect(deltaMark('acct', { ...ENTRY, change: 4 }, 4)).toBe(deltaMark('acct', ENTRY, 4));
   });
 
   it('holds no mark before one is written, and an outbox folder that does not exist yet holds none', async () => {
@@ -267,7 +299,14 @@ describe('the once-only mark of a delta', () => {
     expect(() => readFileSync(join(folder, 'deltas-sent.log'), 'utf8')).toThrow();
   });
 
-  it('reads past a blank line, and fails on a log it cannot read rather than read it as empty', async () => {
+  it('reads past a blank line without an empty mark', async () => {
+    const folder = outbox();
+    mkdirSync(folder, { recursive: true });
+    writeFileSync(join(folder, 'deltas-sent.log'), '1111111111111111\n\n2222222222222222\n', 'utf8');
+    expect([...(await sentDeltas(folder))].sort()).toEqual(['1111111111111111', '2222222222222222']);
+  });
+
+  it('fails on a log it cannot read rather than read it as empty', async () => {
     const folder = outbox();
     mkdirSync(join(folder, 'deltas-sent.log'), { recursive: true });
     await expect(sentDeltas(folder)).rejects.toThrow();
@@ -304,7 +343,7 @@ describe('the deltas a deposit carries', () => {
     expect(carried.get('a4')?.entries).toEqual([{ deltaKind: 'changed', field: 'permissionMode', name: null, registry: null, metric: 'callsPerSession', change: 0 }]);
     const [entry] = carried.get('a4')?.entries ?? [];
     if (entry === undefined) throw new Error('no entry');
-    expect(carried.get('a4')?.marks).toEqual([deltaMark('acct', entry, 'a4')]);
+    expect(carried.get('a4')?.marks).toEqual([deltaMark('acct', entry, Math.floor((START + DELTA_DAYS * DAY) / (DELTA_DAYS * DAY)))]);
   });
 
   it('builds nothing while the before window holds 4 sessions', () => {
@@ -327,6 +366,38 @@ describe('the deltas a deposit carries', () => {
   it('builds the same delta whatever the order the sessions come in, so a rebuilt session carries the same one', () => {
     const sessions = [...before(), ...after()];
     expect(carriedDeltas('acct', [...sessions].reverse(), new Set())).toEqual(carriedDeltas('acct', sessions, new Set()));
+  });
+
+  it('keeps the mark when a session is added before the filler, so the delta is not built again', () => {
+    const marks = new Set(carriedDeltas('acct', [...before(), ...after(5)], new Set()).get('a4')?.marks);
+    expect(marks.size).toBe(1);
+    const extra = gated('A', 1, { window: 1, mode: 'plan' });
+    const again = carriedDeltas('acct', [...before(), ...extra, ...after(5)], marks);
+    expect(again.size).toBe(0);
+  });
+
+  it('keeps the mark when a session drops out as not ended and ends later, whichever filler results', () => {
+    const late = (count: number): Gated[] => [...after(count)].filter(({ id }) => id !== 'a1');
+    const first = carriedDeltas('acct', [...before(), ...late(6)], new Set());
+    const marks = new Set([...first.values()].flatMap(({ marks: held }) => held));
+    expect([...first.keys()]).toEqual(['a5']);
+    expect(marks.size).toBe(1);
+    expect(carriedDeltas('acct', [...before(), ...after(6)], marks).size).toBe(0);
+  });
+
+  it('keeps the mark when the earliest session is lost to a gate, so no past pair is rebuilt', () => {
+    const earliest = gated('E', 1, { window: 0, mode: 'default' });
+    const rest = gated('b', 5, { window: 0, mode: 'default', hour: 5 });
+    const marks = new Set(carriedDeltas('acct', [...earliest, ...rest, ...after(5)], new Set()).get('a4')?.marks);
+    expect(marks.size).toBe(1);
+    expect(carriedDeltas('acct', [...rest, ...after(5)], marks).size).toBe(0);
+    // The pair itself stays: with no mark held, the same delta is built again, on the same filler.
+    expect([...carriedDeltas('acct', [...rest, ...after(5)], new Set()).keys()]).toEqual(['a4']);
+  });
+
+  it('fixes the outcome at the fill: a change that shows only in the sessions after the fifth builds nothing', () => {
+    const many = [...gated('a', 5, { window: 1, mode: 'default' }), ...gated('s', 6, { window: 1, mode: 'plan' })];
+    expect(carriedDeltas('acct', [...before(), ...many], new Set()).size).toBe(0);
   });
 
   it('chains: the windows of three weeks carry one delta each, on their own fillers', () => {

@@ -4,6 +4,7 @@ import { isMissing } from './pool-outbox.js';
 import { contentHash } from './read.js';
 import { bucketOf, PACKAGE_REGISTRIES, type BucketKind, type DeltaEntry, type SessionRecords } from './pool-wire.js';
 import { PRIVATE, PUBLIC_PACKAGES, publicEffort } from './public-vocabulary.js';
+import { harnessOf } from './schema.js';
 
 // Local deltas (spec Section 2, "Deltas"): the client compares its own before and after windows and builds each change once. Nothing here reads a store or sends a byte; `pool deposit` hands it the
 // sessions that passed the session gates and carries what comes back in the batch of the session that filled the after window.
@@ -20,25 +21,26 @@ export interface Placed {
   at: number;
 }
 
-/** A before and an after window, each of `DELTA_DAYS`, and the session that brought the after window to its minimum. */
+/** A before and an after window, each of `DELTA_DAYS`, the after window's place on the grid (its index), and the session that brought the after window to its minimum. */
 export interface Windows<T> {
+  index: number;
   before: T[];
   after: T[];
   filler: T;
 }
 
 /**
- * The pairs of windows a set of sessions holds. Windows are consecutive spans of `days`, counted from the earliest session, so a session belongs to exactly one and a change is compared once. A pair is
- * two windows next to each other that each hold at least `min` sessions; a gap of an empty window, or of one with too few, compares nothing across it. The `filler` is the `min`th session of the after
- * window in time order, so it is the same session whenever the deposit runs.
+ * The pairs of windows a set of sessions holds. Windows are consecutive spans of `days` on a grid counted from the epoch, not from any session, so a session belongs to exactly one window and the grid does
+ * not move when a session is added, lost to a gate, or not yet ended: the `index` of a window is the same whenever the deposit runs. A pair is two windows next to each other that each hold at least
+ * `min` sessions; a gap of an empty window, or of one with too few, compares nothing across it. The `filler` is the `min`th session of the after window in time order. It chooses which batch carries
+ * the delta and can change from one deposit to the next, so nothing that must hold still is keyed on it.
  */
 export const windowsOf = <T extends Placed>(sessions: readonly T[], days: number = DELTA_DAYS, min: number = DELTA_MIN_SESSIONS): Windows<T>[] => {
   const ordered = [...sessions].sort((a, b) => a.at - b.at || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
-  const first = ordered[0]?.at ?? 0;
   const span = days * DAY_MS;
   const windows = new Map<number, T[]>();
   for (const session of ordered) {
-    const index = Math.floor((session.at - first) / span);
+    const index = Math.floor(session.at / span);
     const held = windows.get(index);
     if (held === undefined) windows.set(index, [session]);
     else held.push(session);
@@ -47,7 +49,7 @@ export const windowsOf = <T extends Placed>(sessions: readonly T[], days: number
   for (const [index, after] of windows) {
     const before = windows.get(index - 1);
     const filler = after[min - 1];
-    if (before !== undefined && before.length >= min && filler !== undefined) pairs.push({ before, after, filler });
+    if (before !== undefined && before.length >= min && filler !== undefined) pairs.push({ index, before, after, filler });
   }
   return pairs;
 };
@@ -83,7 +85,10 @@ const effortOf = (records: SessionRecords): string | undefined => modal((records
 
 const entryOf = (name: string | null, field: DeltaEntry['field'], deltaKind: DeltaEntry['deltaKind'], metric: DeltaEntry['metric'], change: number, registry: string | null = null): DeltaEntry => ({ deltaKind, field, name, registry, metric, change });
 
-const pluginsIn = (window: readonly SessionRecords[]): Set<string> => new Set(window.flatMap(({ main }) => main.setup?.plugins ?? []));
+/** Only Claude Code records `setup.plugins`; another harness holds none because it records none, not because none were loaded, so it says nothing of a plugin. */
+const recordsPlugins = ({ main }: SessionRecords): boolean => harnessOf(main) === 'claude-code';
+
+const pluginsIn = (window: readonly SessionRecords[]): Set<string> => new Set(window.filter(recordsPlugins).flatMap(({ main }) => main.setup?.plugins ?? []));
 
 /** A stored `<ecosystem>:<name>` as the wire spells it: the public name and its registry, else the word `private` with no registry. */
 const packageNamed = (stored: string): { name: string; registry: string | null } => {
@@ -94,6 +99,7 @@ const packageNamed = (stored: string): { name: string; registry: string | null }
 };
 
 interface ManifestEvent {
+  tool: string;
   target: string | null;
   seen: readonly string[];
   added: readonly string[];
@@ -104,21 +110,22 @@ interface ManifestEvent {
 const manifestsIn = (window: readonly SessionRecords[]): ManifestEvent[] =>
   window.flatMap((records) =>
     records.transcripts.flatMap(({ tools }) =>
-      [...tools].sort((a, b) => a.n - b.n).flatMap(({ manifest, status, target }) => (manifest === undefined || status !== 'ok' ? [] : [{ target, seen: manifest.seen, added: manifest.added, removed: manifest.removed }])),
+      [...tools].sort((a, b) => a.n - b.n).flatMap(({ manifest, status, target, tool }) => (manifest === undefined || status !== 'ok' ? [] : [{ tool, target, seen: manifest.seen, added: manifest.added, removed: manifest.removed }])),
     ),
   );
 
 /**
- * Whether the manifests of the after window leave a package gone. An edit that removes it, or a full listing of a file that held it in the before window and no longer does, says gone; a later edit that
- * adds it back, or a listing that holds it, says it stayed. A listing of any other file says nothing, since one repository's manifest is not another's.
+ * Whether the manifests of the after window leave a package gone. An edit that removes it, or a Write that lists a file that held it in the before window and no longer does, says gone; a later edit that
+ * adds it back, or any listing that holds it, says it stayed. A Read says nothing of what is missing, since it may have shown part of the file (an `offset` or a `limit`), and a listing of any other
+ * file says nothing, since one repository's manifest is not another's.
  */
 const goneFrom = (stored: string, before: readonly ManifestEvent[], after: readonly ManifestEvent[]): boolean => {
   const held = new Set(before.flatMap(({ target, seen }) => (target !== null && seen.includes(stored) ? [target] : [])));
   let gone = false;
-  for (const { target, seen, added, removed } of after) {
+  for (const { tool, target, seen, added, removed } of after) {
     if (removed.includes(stored)) gone = true;
     else if (added.includes(stored) || seen.includes(stored)) gone = false;
-    else if (seen.length > 0 && target !== null && held.has(target)) gone = true;
+    else if (tool === 'Write' && seen.length > 0 && target !== null && held.has(target)) gone = true;
   }
   return gone;
 };
@@ -142,11 +149,13 @@ const order = (a: DeltaEntry, b: DeltaEntry): number => {
 export const deltasOf = (before: readonly SessionRecords[], after: readonly SessionRecords[]): DeltaEntry[] => {
   const calls = signed('count', callsOf(after) - callsOf(before));
   const entries: DeltaEntry[] = [];
-  const pluginsBefore = pluginsIn(before);
-  const pluginsAfter = pluginsIn(after);
-  // No plugin registry is pinned, so a plugin's name never passes its row: it goes as the word `private`.
-  if ([...pluginsAfter].some((plugin) => !pluginsBefore.has(plugin))) entries.push(entryOf(PRIVATE, 'plugin', 'added', 'callsPerSession', calls));
-  if ([...pluginsBefore].some((plugin) => !pluginsAfter.has(plugin))) entries.push(entryOf(PRIVATE, 'plugin', 'removed', 'callsPerSession', calls));
+  // No plugin registry is pinned, so a plugin's name never passes its row: it goes as the word `private`. Plugins are compared only when both windows hold a session that records them.
+  if (before.some(recordsPlugins) && after.some(recordsPlugins)) {
+    const pluginsBefore = pluginsIn(before);
+    const pluginsAfter = pluginsIn(after);
+    if ([...pluginsAfter].some((plugin) => !pluginsBefore.has(plugin))) entries.push(entryOf(PRIVATE, 'plugin', 'added', 'callsPerSession', calls));
+    if ([...pluginsBefore].some((plugin) => !pluginsAfter.has(plugin))) entries.push(entryOf(PRIVATE, 'plugin', 'removed', 'callsPerSession', calls));
+  }
   const modeBefore = modal(before.flatMap(({ main }) => main.setup?.permissionMode ?? []));
   const modeAfter = modal(after.flatMap(({ main }) => main.setup?.permissionMode ?? []));
   if (modeBefore !== undefined && modeAfter !== undefined && modeBefore !== modeAfter) entries.push(entryOf(null, 'permissionMode', 'changed', 'callsPerSession', calls));
@@ -169,10 +178,10 @@ export const deltasOf = (before: readonly SessionRecords[], after: readonly Sess
 const MARKS_FILE = 'deltas-sent.log';
 
 /**
- * The once-only mark of a delta: a hash of the account, the entry without the size of its move, and the session that filled its window. The move is left out so a recount of the same windows is the same
- * delta, and the filler is in so a later pair that shows the same change is a new one.
+ * The once-only mark of a delta: a hash of the account, the entry without the size of its move, and the index of its after window on the grid. The move is left out so a recount of the same windows is
+ * the same delta, and the index is in so a later pair that shows the same change is a new one. The filler is not in it: which session fills a window moves with the sessions ready, a window's index does not.
  */
-export const deltaMark = (account: string, { deltaKind, field, name, registry, metric }: DeltaEntry, filler: string): string => contentHash([account, deltaKind, field, name, registry, metric, filler]);
+export const deltaMark = (account: string, { deltaKind, field, name, registry, metric }: DeltaEntry, index: number): string => contentHash([account, deltaKind, field, name, registry, metric, index]);
 
 /** The marks of the deltas this outbox has already carried in a written batch. A folder with no log holds none; a log that cannot be read is an error, not an empty one, so a delta is never built twice by mistake. */
 export const sentDeltas = async (outbox: string): Promise<Set<string>> => {
@@ -209,16 +218,20 @@ export interface Carried {
 }
 
 /**
- * The deltas not yet sent, by the id of the session that filled their after window: that session's batch carries them. A delta whose mark is held is dropped, so a rebuilt session, or a batch written
+ * The deltas not yet sent, by the id of the session that filled their after window: that session's batch carries them, and the mark is the window's index, so it holds whichever session fills. A delta whose mark is held is dropped, so a rebuilt session, or a batch written
  * again under the same key, builds none it already carried. Nothing is marked here: the caller marks them once the batch is written.
  */
 export const carriedDeltas = (account: string, sessions: readonly Gated[], sent: ReadonlySet<string>): Map<string, Carried> => {
   const carried = new Map<string, Carried>();
-  for (const { before, after, filler } of windowsOf(sessions)) {
+  for (const { index, before, after, filler } of windowsOf(sessions)) {
     const entries: DeltaEntry[] = [];
     const marks: string[] = [];
-    for (const entry of deltasOf(before.map(({ records }) => records), after.map(({ records }) => records))) {
-      const mark = deltaMark(account, entry, filler.id);
+    for (const entry of deltasOf(
+      before.map(({ records }) => records),
+      // The outcome is fixed at the fill: sessions after the filler change nothing, so a delta is the same whenever it is built.
+      after.slice(0, DELTA_MIN_SESSIONS).map(({ records }) => records),
+    )) {
+      const mark = deltaMark(account, entry, index);
       if (sent.has(mark)) continue;
       entries.push(entry);
       marks.push(mark);
