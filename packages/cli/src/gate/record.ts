@@ -147,14 +147,18 @@ const pick = <K extends keyof CrossingRecord>(key: K, live: CrossingRecord, repl
 const merged = (live: CrossingRecord, replayed: CrossingRecord): CrossingRecord => ({
   ...replayed,
   via: 'both',
+  // The folder as it was at the crossing: a bin installed or removed since must not turn a fetch into a local run, or the reverse.
+  form: live.form,
   day: pick('day', live, replayed),
   ts: pick('ts', live, replayed),
   version: pick('version', live, replayed),
   permission: pick('permission', live, replayed),
   novelty: pick('novelty', live, replayed),
-  againstLatest: pick('againstLatest', live, replayed),
-  registryState: pick('registryState', live, replayed),
-  registryAge: pick('registryAge', live, replayed),
+  // One reading, so all three come from one side: the registry as it stood at the crossing when the hook read it, else the replay's. Picked field by field, a hook's
+  // `unreachable` (with `unknown` beside it) would take a later replay's `not-latest`, a row that contradicts itself.
+  ...(live.registryState === NOT_READ
+    ? { againstLatest: replayed.againstLatest, registryState: replayed.registryState, registryAge: replayed.registryAge }
+    : { againstLatest: live.againstLatest, registryState: live.registryState, registryAge: live.registryAge }),
   arm: pick('arm', live, replayed),
   lineShown: pick('lineShown', live, replayed),
 });
