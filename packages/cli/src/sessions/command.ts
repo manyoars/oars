@@ -98,7 +98,8 @@ export const sessionsRecall = async (deps: SessionsDeps, query: PullInput, sid: 
   );
   await tryLog(() => appendRecall(storeDir, result.recall));
   if (result.legacy !== undefined) return { document: { ok: true, ...result.legacy, recall: result.recall }, text: formatRecall(result.legacy) };
-  return { document: { ok: true, recall: result.recall, reads: result.reads }, text: result.recall.answer.rendered === '' ? MISS_TEXT : result.recall.answer.rendered };
+  // The document states the recall and not the raw reads: a read's tool, keys, and versions are store strings that can carry text, and `recall.evidence` already states them closed.
+  return { document: { ok: true, recall: result.recall }, text: result.recall.answer.rendered === '' ? MISS_TEXT : result.recall.answer.rendered };
 };
 
 /** `recall --counts`: push and pull, shown and held, as counts only. */
