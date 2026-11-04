@@ -71,8 +71,8 @@ export const login = async (request: Request, env: Env): Promise<Response> => {
   if (accessToken === undefined) return refuse(400, 'missing_field', "A login names the provider's token.", 'token');
   const pseudonymKey = bound(env.PSEUDONYM_KEY);
   if (pseudonymKey === undefined) return notConfigured('PSEUDONYM_KEY');
-  const signingKey = bound(env.SLICE_SIGNING_KEY);
-  if (signingKey === undefined) return notConfigured('SLICE_SIGNING_KEY');
+  const signingKey = bound(env.BUNDLE_SIGNING_KEY);
+  if (signingKey === undefined) return notConfigured('BUNDLE_SIGNING_KEY');
 
   const profile = await profileOf(provider.userUrl, accessToken);
   if (profile === undefined) return refuse(502, 'provider_error', 'The provider could not be reached.');

@@ -89,7 +89,7 @@ describe('a login request that cannot go on', () => {
 
   it.each([
     ['PSEUDONYM_KEY', { PSEUDONYM_KEY: '' }],
-    ['SLICE_SIGNING_KEY', { SLICE_SIGNING_KEY: '' }],
+    ['BUNDLE_SIGNING_KEY', { BUNDLE_SIGNING_KEY: '' }],
   ])('says so when %s is not bound', async (binding, bindings) => {
     const bare = await startPool(bindings);
     try {
@@ -133,8 +133,8 @@ describe.each([
 
 describe.each(['github', 'google'])('%s out of reach', (provider) => {
   // Outside the runtime, where a stand-in fetch can reject the way a network failure does.
-  const db = { prepare: () => ({ bind: () => ({ first: () => Promise.resolve(null), all: () => Promise.resolve({ results: [] }), run: () => Promise.resolve({ meta: { changes: 1 } }) }) }) };
-  const env = { DB: db, PSEUDONYM_KEY: 'k', SLICE_SIGNING_KEY: '{}' };
+  const db = { prepare: () => ({ bind: () => ({ first: () => Promise.resolve(null), all: () => Promise.resolve({ results: [] }), run: () => Promise.resolve({ meta: { changes: 1 } }) }) }), batch: () => Promise.resolve([]) };
+  const env = { DB: db, PSEUDONYM_KEY: 'k', BUNDLE_SIGNING_KEY: '{}' };
 
   afterEach(() => {
     vi.unstubAllGlobals();

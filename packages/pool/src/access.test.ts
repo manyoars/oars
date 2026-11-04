@@ -1,15 +1,15 @@
 import { describe, expect, it } from 'vitest';
 import { VOCAB_VERSION, type SessionSkeleton } from '../../cli/src/sessions/pool-wire.js';
 import { batchCounts, LEDGER_DAYS } from './access.js';
-import { cellCountOf } from './derive.js';
+import { incrementsOf } from './ingest.js';
 import { sampleSkeleton } from './sample.js';
 import { fieldOf, startPool, stubUser, type TestPool, textOf } from './test-pool.js';
 
 const PATH = `/bundle/2.1.314/${VOCAB_VERSION}`;
 const DAY_MS = 24 * 60 * 60 * 1000;
 
-const oneCell = (): number => 1;
-const noCells = (): number => 0;
+const ONE = 1;
+const NONE = 0;
 
 const without = (skeleton: SessionSkeleton, part: 'prompts' | 'tools'): SessionSkeleton => ({ ...skeleton, transcripts: skeleton.transcripts.map((transcript) => ({ ...transcript, [part]: [] })) });
 
@@ -18,31 +18,31 @@ describe('batchCounts', () => {
   const claude = sampleSkeleton('0000000000000002');
 
   it('counts a rooted tier for any harness, and a skeleton only when every harness writes no raw file', () => {
-    for (const tier of ['committed', 'audited', 'attested'] as const) expect(batchCounts(tier, claude, oneCell), tier).toBe(true);
-    expect(batchCounts('skeleton', cursor, oneCell)).toBe(true);
-    expect(batchCounts('skeleton', claude, oneCell)).toBe(false);
-    expect(batchCounts('none', cursor, oneCell)).toBe(false);
-    expect(batchCounts('none', claude, oneCell)).toBe(false);
+    for (const tier of ['committed', 'audited', 'attested'] as const) expect(batchCounts(tier, claude, ONE), tier).toBe(true);
+    expect(batchCounts('skeleton', cursor, ONE)).toBe(true);
+    expect(batchCounts('skeleton', claude, ONE)).toBe(false);
+    expect(batchCounts('none', cursor, ONE)).toBe(false);
+    expect(batchCounts('none', claude, ONE)).toBe(false);
   });
 
   it('holds a mixed batch to its strictest harness, subagents folded in', () => {
     const mixed: SessionSkeleton = { ...cursor, transcripts: [...cursor.transcripts, ...claude.transcripts.map((transcript) => ({ ...transcript, spawnedIn: 0 }))] };
-    expect(batchCounts('skeleton', mixed, oneCell)).toBe(false);
-    expect(batchCounts('committed', mixed, oneCell)).toBe(true);
+    expect(batchCounts('skeleton', mixed, ONE)).toBe(false);
+    expect(batchCounts('committed', mixed, ONE)).toBe(true);
   });
 
-  it('needs one prompt and one tool step over the whole batch, and one derived cell', () => {
-    expect(batchCounts('committed', without(claude, 'prompts'), oneCell)).toBe(false);
-    expect(batchCounts('committed', without(claude, 'tools'), oneCell)).toBe(false);
-    expect(batchCounts('committed', claude, noCells)).toBe(false);
-    expect(batchCounts('committed', claude, cellCountOf)).toBe(true);
+  it('needs one prompt and one tool step over the whole batch, and a cell increment written', () => {
+    expect(batchCounts('committed', without(claude, 'prompts'), ONE)).toBe(false);
+    expect(batchCounts('committed', without(claude, 'tools'), ONE)).toBe(false);
+    expect(batchCounts('committed', claude, NONE)).toBe(false);
+    expect(batchCounts('committed', claude, incrementsOf(claude).cells.size)).toBe(true);
   });
 
   it('finds the prompt in one transcript and the step in another', () => {
     const [main] = claude.transcripts;
     if (main === undefined) throw new Error('no transcript');
     const split: SessionSkeleton = { ...claude, transcripts: [{ ...main, tools: [] }, { ...main, spawnedIn: 0, prompts: [] }] };
-    expect(batchCounts('committed', split, oneCell)).toBe(true);
+    expect(batchCounts('committed', split, ONE)).toBe(true);
   });
 });
 
@@ -133,12 +133,40 @@ describe('the access flag over the routes', () => {
     await inPool(async (pool) => {
       const { token, account } = await depositor(pool, '3008', 'cursor');
       expect(await fetches(pool, token, 2)).toEqual([200, 200]);
-      // The same id again, now from a harness whose batch does not count at the ingest tier.
-      expect((await pool.post('/v1/deposits', sampleSkeleton('0000000000003008'), token)).status).toBe(201);
+      // The same id again on another day, now from a harness whose batch does not count at the ingest tier: it moves cells, so the date is judged again.
+      expect((await pool.post('/v1/deposits', sampleSkeleton('0000000000003008', undefined, '2026-11-02'), token)).status).toBe(201);
       const row = await (await pool.db()).prepare('SELECT counted_at AS counted FROM deposits WHERE account = ?').bind(account).first();
       expect(fieldOf(row, 'counted')).toBeNull();
       expect(await fetches(pool, token, 2)).toEqual([200, 429]);
       expect(await accessOfAccount(pool, account)).toBeNull();
+    });
+  }, 60_000);
+
+  it('leaves the flag and the date alone when a resend writes no cell increment', async () => {
+    await inPool(async (pool) => {
+      const { token, account } = await depositor(pool, '3009');
+      const sent = sampleSkeleton('0000000000003009');
+      // A claude-code batch does not count at the ingest tier, so its row is raised by hand, as the root check will (Brief 2).
+      await (await pool.db()).prepare("UPDATE deposits SET tier = 'committed', counted_at = ? WHERE account = ?").bind(Date.now() - DAY_MS, account).run();
+      const before = await (await pool.db()).prepare('SELECT counted_at AS counted FROM deposits WHERE account = ?').bind(account).first();
+      expect(typeof fieldOf(before, 'counted')).toBe('number');
+      expect(await fetches(pool, token, 2)).toEqual([200, 200]);
+      // The identical batch again nets no increment: nothing was written, so the date it had stays and the account keeps its access.
+      expect((await pool.post('/v1/deposits', sent, token)).status).toBe(201);
+      const after = await (await pool.db()).prepare('SELECT counted_at AS counted FROM deposits WHERE account = ?').bind(account).first();
+      expect(fieldOf(after, 'counted')).toBe(fieldOf(before, 'counted'));
+      expect(await fetches(pool, token, 2)).toEqual([200, 200]);
+      expect(await accessOfAccount(pool, account)).toBe('pending');
+    });
+  }, 60_000);
+
+  // `ledger_days` is 90 (spec Section 1.4): a batch that counted 89 days ago has not stood it yet.
+  it('is still pending for a batch that counted 89 days ago', async () => {
+    await inPool(async (pool) => {
+      const { token, account } = await depositor(pool, '3010', 'cursor');
+      await (await pool.db()).prepare('UPDATE deposits SET counted_at = ? WHERE account = ?').bind(Date.now() - 89 * DAY_MS, account).run();
+      expect((await pool.get(PATH, token)).status).toBe(200);
+      expect(await accessOfAccount(pool, account)).toBe('pending');
     });
   }, 60_000);
 
