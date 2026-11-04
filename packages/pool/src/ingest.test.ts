@@ -2,8 +2,11 @@ import { describe, expect, it } from 'vitest';
 import { deriveCells } from '../../cli/src/sessions/cells.js';
 import type { SessionSkeleton } from '../../cli/src/sessions/pool-wire.js';
 import { storeOf } from './derive.js';
+import type { Bound, Env, PoolDb } from './http.js';
+import { incrementsOf } from './ingest.js';
 import { sampleSkeleton } from './sample.js';
 import { fieldOf, startPool, stubUser, type TestPool, textOf } from './test-pool.js';
+import worker from './worker.js';
 
 interface Held {
   key: string;
@@ -165,6 +168,77 @@ describe('the held cell count', () => {
       expect(await stratum()).toEqual({ sessions: 2, clusters: 1 });
       await send(target, await accountOn(target, '8602'), sampleSkeleton('0000000000008603', stack));
       expect(await stratum()).toEqual({ sessions: 3, clusters: 2 });
+    });
+  }, 60_000);
+});
+
+describe('two deposits of one session at once', () => {
+  /** An env whose first read of a held batch waits for a second: both deposits then read the same earlier row, as two requests at the same moment do. */
+  const gated = async (target: TestPool): Promise<Env> => {
+    const { DB } = await target.miniflare.getBindings<{ DB: PoolDb }>();
+    const opened = Promise.withResolvers<undefined>();
+    let arrived = 0;
+    return {
+      COVENANT_VERSION: 'v1',
+      DB: {
+        batch: (statements) => DB.batch(statements),
+        prepare: (sql) => ({
+          bind: (...values): Bound => {
+            const bound = DB.prepare(sql).bind(...values);
+            if (!sql.startsWith('SELECT skeleton')) return bound;
+            return {
+              first: async () => {
+                const row = await bound.first();
+                arrived += 1;
+                if (arrived === 2) opened.resolve(undefined);
+                await opened.promise;
+                return row;
+              },
+              all: () => bound.all(),
+              run: () => bound.run(),
+            };
+          },
+        }),
+      },
+    };
+  };
+
+  const deposit = async (env: Env, token: string, skeleton: SessionSkeleton): Promise<number> =>
+    (await worker.fetch(new Request('https://pool.test/v1/deposits', { method: 'POST', body: JSON.stringify(skeleton), headers: { authorization: `Bearer ${token}` } }), env)).status;
+
+  const sessionsOf = (skeleton: SessionSkeleton): number => [...incrementsOf(skeleton).cells.values()].reduce((sum, cell) => sum + cell.sessions, 0);
+
+  it('takes one of two first sends and refuses the other, so the cells hold one batch', async () => {
+    await inFreshPool({}, async (target) => {
+      const token = await accountOn(target, '8701');
+      const sent = sampleSkeleton('0000000000008701', undefined, '2026-11-01');
+      const env = await gated(target);
+      expect((await Promise.all([deposit(env, token, sent), deposit(env, token, sent)])).sort()).toEqual([201, 409]);
+      expect(await total(target)).toBe(sessionsOf(sent));
+      expect(await (await target.db()).prepare('SELECT COUNT(*) AS count FROM deposits').first('count')).toBe(1);
+    });
+  }, 60_000);
+
+  it('takes one of two resends and refuses the other, so the cells hold the replacing batch once', async () => {
+    await inFreshPool({}, async (target) => {
+      const token = await accountOn(target, '8702');
+      await send(target, token, sampleSkeleton('0000000000008702', undefined, '2026-11-01'));
+      const later = sampleSkeleton('0000000000008702', undefined, '2026-11-02');
+      const env = await gated(target);
+      expect((await Promise.all([deposit(env, token, later), deposit(env, token, later)])).sort()).toEqual([201, 409]);
+      expect(await total(target, "day = '2026-11-01'")).toBe(0);
+      expect(await total(target)).toBe(sessionsOf(later));
+    });
+  }, 60_000);
+
+  it('names the refusal for the client to send again', async () => {
+    await inFreshPool({}, async (target) => {
+      const token = await accountOn(target, '8703');
+      const sent = sampleSkeleton('0000000000008703');
+      const env = await gated(target);
+      const answers = await Promise.all([sent, sent].map(async (skeleton) => worker.fetch(new Request('https://pool.test/v1/deposits', { method: 'POST', body: JSON.stringify(skeleton), headers: { authorization: `Bearer ${token}` } }), env)));
+      const refused = answers.find(({ status }) => status === 409);
+      expect(await refused?.json()).toMatchObject({ error: 'deposit_conflict' });
     });
   }, 60_000);
 });

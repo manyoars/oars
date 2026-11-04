@@ -22,8 +22,8 @@ export type Access = 'pending' | 'standing';
 
 /**
  * Whether a batch counts toward access: at tier committed or higher, or at `skeleton` when every transcript's harness writes no raw file; one prompt and one tool step over the
- * whole batch, subagents folded in; and a cell increment written. `written` is how many cell increments ingest wrote for the batch (`incrementsOf`), so the clause reads the stored
- * cells' increment and not a derivation of its own.
+ * whole batch, subagents folded in; and a cell increment written. `written` is how many cell increments ingest writes for the batch over the row held now (`netCellCount`), so the
+ * clause reads the stored cells' increment and not a derivation of its own; a batch sent again unchanged writes none.
  */
 export const batchCounts = (tier: Tier, skeleton: SessionSkeleton, written: number): boolean => {
   const tierCounts = ROOTED.has(tier) || (tier === 'skeleton' && skeleton.transcripts.every(({ harness }) => WRITES_NO_RAW.has(harness)));
