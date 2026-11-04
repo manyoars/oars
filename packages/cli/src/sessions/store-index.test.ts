@@ -1,3 +1,6 @@
+import { readFileSync } from 'node:fs';
+import { basename, dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { deposit, type DepositTrace } from './store.js';
 import { cleanup, NOW, stage } from './test-support.js';
@@ -25,5 +28,29 @@ describe('the index step', () => {
     await deposit(staged.runtime, { allow: ['proj'], redactDomains: [], now: () => NOW }, trace);
     expect(clock.at).toBe(5000);
     expect(trace.index?.ms).toBe(0);
+  });
+});
+
+/** Every module a static import or re-export reaches from `entry` (a dynamic `import()` is not followed: it runs only when its step does). */
+const staticClosure = (entry: string): string[] => {
+  const seen = new Set<string>();
+  const visit = (file: string): void => {
+    if (seen.has(file)) return;
+    seen.add(file);
+    const source = readFileSync(file, 'utf8');
+    for (const match of source.matchAll(/^\s*(?:import|export)\s(?!type\s)[^;'"]*?from\s+'(\.[^']+)'|^\s*import\s+'(\.[^']+)'/gm)) {
+      visit(resolve(dirname(file), (match[1] ?? match[2] ?? '').replace(/\.js$/, '.ts')));
+    }
+  };
+  visit(entry);
+  return [...seen];
+};
+
+describe('the hook entry', () => {
+  it('reaches neither the pool nor a read family through its static imports (t785: it loads them only in the nightly index step)', () => {
+    const modules = staticClosure(fileURLToPath(new URL('../hook-bin.ts', import.meta.url))).map((file) => basename(file));
+    expect(modules).toContain('store.ts');
+    expect(modules).not.toContain('pool.ts');
+    expect(modules.filter((name) => name.startsWith('read-'))).toEqual([]);
   });
 });
