@@ -110,6 +110,23 @@ describe('ordinals', () => {
     expect(parseSkeleton(JSON.parse(text))).toEqual({ ok: true, skeleton });
   });
 
+  it('sends no link for a subagent a subagent spawned, whose parent number is not a call of the main run', () => {
+    const from = store({
+      sessions: [session('s1', { frame: framed })],
+      subagents: [session('s1~agent-x', { parent: 's1', spawnedIn: 's1', frame: framed }), session('s1~agent-y', { parent: 's1', spawnedIn: 's1~agent-x', frame: framed })],
+      prompts: [framedPrompt('s1', 0)],
+      tools: [
+        tool('s1', 1, 'Bash', { steps: [shell] }),
+        tool('s1', 2, 'Bash', { steps: [shell] }),
+        tool('s1~agent-x', 2, 'Bash', { parent: 's1', steps: [shell] }),
+        tool('s1~agent-y', 0, 'Bash', { parent: 's1', steps: [{ ...shell, parent: 2 }] }),
+      ],
+    });
+    const parents = skeletonFrom(from)?.transcripts.map((held) => held.tools[0]?.steps[0]?.parent);
+    // Call 2 of agent-x spawned agent-y, which the main run's own call 2 (position 1) did not.
+    expect(parents?.[2]).toBeNull();
+  });
+
   it('numbers the prompts a subagent names but does not hold after the ones it holds, one position per number', () => {
     const from = store({
       sessions: [session('s1', { frame: framed })],
