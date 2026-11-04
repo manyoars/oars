@@ -6,12 +6,16 @@ import { tmpdir } from 'node:os';
 import { delimiter, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
+import { startFill } from './hook-fill.js';
 import { folderKey } from './record.js';
 
 const bin = fileURLToPath(new URL('../../dist/bin.js', import.meta.url));
+const helperBin = fileURLToPath(new URL('../../dist/gate/hook-fill-main.js', import.meta.url));
 const made: string[] = [];
+// A process the hook left behind (the cut ask's shell, a helper's manager) can still hold a folder for a moment on Windows, so a removal that fails with EPERM or EBUSY is tried
+// again for about two seconds. One that still fails throws: cleanup never hides what the test itself found.
 afterEach(() => {
-  for (const folder of made.splice(0)) rmSync(folder, { recursive: true, force: true });
+  for (const folder of made.splice(0)) rmSync(folder, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
 });
 
 // A store holding a not-found answer for `ghost-lib` read just now in this payload's folder, so the hook reads it from the cache and the test never races the 650 ms cut.
@@ -24,16 +28,18 @@ const seededStore = (home: string): string => {
   return store;
 };
 
+const envFor = (home: string, pathHead?: string): NodeJS.ProcessEnv => ({
+  PATH: [pathHead, process.env.PATH].filter((part) => part !== undefined && part !== '').join(delimiter),
+  APPDATA: home,
+  HOME: home,
+  USERPROFILE: home,
+  XDG_CONFIG_HOME: home,
+});
+
 const runHook = (input: string, extra: readonly string[] = [], pathHead?: string, given?: string): { status: number | null; stdout: string; home: string } => {
   const home = given ?? mkdtempSync(join(tmpdir(), 'oars-gate-bin-'));
   if (given === undefined) made.push(home);
-  const result = spawnSync(process.execPath, [bin, 'gate', 'hook', ...extra], {
-    input,
-    encoding: 'utf8',
-    timeout: 30_000,
-    cwd: home,
-    env: { PATH: [pathHead, process.env.PATH].filter((part) => part !== undefined && part !== '').join(delimiter), APPDATA: home, HOME: home, USERPROFILE: home, XDG_CONFIG_HOME: home },
-  });
+  const result = spawnSync(process.execPath, [bin, 'gate', 'hook', ...extra], { input, encoding: 'utf8', timeout: 30_000, cwd: home, env: envFor(home, pathHead) });
   return { status: result.status, stdout: result.stdout, home };
 };
 
@@ -144,21 +150,30 @@ describe.skipIf(!existsSync(bin))('the built oars gate hook', () => {
     expect(rows).toMatchObject([{ registryState: 'not-read' }, { registryState: 'found' }]);
   });
 
-  it('starts no new ask on later sights while the lock is held, after a down manager', () => {
+  it('starts no new ask on later sights while the lock is held, after a down manager', async () => {
     const payload = JSON.stringify({ session_id: 's1', tool_use_id: 'u1', tool_name: 'Bash', tool_input: { command: 'npm install down-lib' }, cwd: tmpdir(), permission_mode: 'default' });
     const npm = downNpm();
-    const first = runHook(payload, [], npm.folder);
-    expect(first.status).toBe(0);
-    // The helper's ask fails after its 2 s; wait for that finish (the hook's own, stopped ask never finishes), then let its process end.
-    for (let waited = 0; waited < 30_000 && logged(npm.log, 'ended') < 1; waited += 250) pause(250);
-    pause(1000);
-    expect(runHook(payload.replace('"u1"', '"u2"'), [], npm.folder, first.home).status).toBe(0);
-    expect(runHook(payload.replace('"u1"', '"u3"'), [], npm.folder, first.home).status).toBe(0);
-    pause(1500);
-    expect(logged(npm.log, 'started')).toBe(2);
-    const [file] = crossingFiles(first.home);
-    const rows: unknown[] = readFileSync(join(first.home, file ?? ''), 'utf8').trim().split('\n').map((line): unknown => JSON.parse(line));
-    expect(rows).toMatchObject([{ registryState: 'not-read' }, { registryState: 'not-read' }, { registryState: 'not-read' }]);
+    const home = mkdtempSync(join(tmpdir(), 'oars-gate-bin-'));
+    made.push(home);
+    // The hand-off the first sight makes after a cut ask, without the race for the cut: under load a hook can end before its cut (no lock, no helper) or skip its own ask, so a
+    // test that depends on the first sight reaching the lock cannot say anything about the later ones. `startFill` is the code the hook calls to take the lock and start the
+    // helper; the start it is given runs the built helper to its end, so the down manager has been asked once and has failed when it returns.
+    const store = join(home, 'oars', 'sessions');
+    await startFill(store, { class: 'npm-package', name: 'down-lib', cwd: tmpdir() }, Date.now(), (storeDir, ask) => {
+      const helper = spawnSync(process.execPath, [helperBin, storeDir, ask.class, ask.name, ask.cwd], { encoding: 'utf8', timeout: 30_000, cwd: home, env: envFor(home, npm.folder) });
+      expect(helper.status).toBe(0);
+    });
+    expect(logged(npm.log, 'started')).toBe(1);
+    expect(logged(npm.log, 'ended')).toBe(1);
+    expect(readdirSync(store).filter((name) => name.endsWith('.lock'))).toHaveLength(1);
+    // The lock is held and fresh, so neither later sight asks the manager: the log shows no start beyond the helper's.
+    expect(runHook(payload.replace('"u1"', '"u2"'), [], npm.folder, home).status).toBe(0);
+    expect(runHook(payload.replace('"u1"', '"u3"'), [], npm.folder, home).status).toBe(0);
+    expect(logged(npm.log, 'started')).toBe(1);
+    expect(readdirSync(store).filter((name) => name.endsWith('.lock'))).toHaveLength(1);
+    const [file] = crossingFiles(home);
+    const rows: unknown[] = readFileSync(join(home, file ?? ''), 'utf8').trim().split('\n').map((line): unknown => JSON.parse(line));
+    expect(rows).toMatchObject([{ registryState: 'not-read' }, { registryState: 'not-read' }]);
   }, 60_000);
 
   it('prints a labeled deny on stdout and exits 0 when the policy says block and the manager answered not found', () => {
