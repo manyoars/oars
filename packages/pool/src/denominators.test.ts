@@ -103,3 +103,36 @@ describe('two served numbers over one day', () => {
     expect(large.shape).toEqual(small.shape);
   });
 });
+
+describe('a live baseline that is sub-floor is null, not zero', () => {
+  it('reads `baseline: null` for a tool with no baseline cell at the floor, though another tool is served that day', () => {
+    const before = '2026-11-01';
+    // READ is served on DAY and sub-floor the day before; SHELL is served the day before, so the baseline has steps, none of them READ's that are served.
+    const cells = [cellOf(READ.motifId, K_CELL, 10), cellOf(READ.motifId, K_CELL - 1, 4, { day: before }), cellOf(SHELL.motifId, K_CELL, 6, { day: before })];
+    const served = slicedTo(readsOf(cells, 'live'), READ.motifId);
+    expect(served.value.baseline).toBeNull();
+    expect(served.value.ratio).toBeNull();
+    expect(served.value.share).toBe(1);
+  });
+});
+
+// A KNOWN GAP, pinned so a later change that closes it fails here and moves `docs/pool.md` Known gaps with it: a week cell and the day cells of its days count the same steps, and both leave,
+// so a served week less its served days is the sub-floor days' steps. Withholding the days of such a week was tried and withholds a day whenever any other day of its week is sub-floor (the bundle.test.ts
+// "one account on the next day" cases), which is a ruling for the lead and not this task's.
+describe('a week and its days: the cross-grain gap', () => {
+  it('still shows a sub-floor day by a served week less its served days', () => {
+    const bundle = bundleOver([cellOf(READ.motifId, 6, 20, { grain: 'week' }), cellOf(READ.motifId, 5, 18), cellOf(READ.motifId, 1, 2, { day: '2026-11-03' })]);
+    const fit = bundle.reads.find((read) => read.family === 'fit');
+    const monday = bundle.reads.find((read) => read.family === 'tool-day');
+    expect((fit?.n ?? 0) - (monday?.n ?? 0)).toBe(2);
+  });
+});
+
+describe('the last day a bundle states', () => {
+  it('leaves a later sub-floor cell out of `asOf.day` and out of `weeksSinceLast`', () => {
+    const week = (clusters: number, day: string): Cell => cellOf(READ.motifId, clusters, 3, { grain: 'week', day });
+    const bundle = bundleOver([week(K_CELL, '2026-10-12'), week(1, '2026-11-02')]);
+    expect(bundle.asOf.day).toBe('2026-10-12');
+    expect(slicedTo(bundle.reads.filter((read) => read.family === 'adoption'), READ.motifId, 'week').value.weeksSinceLast).toBe(0);
+  });
+});
