@@ -62,7 +62,7 @@ const compare = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
 /** The frame buckets of one harness at one numbered bucket start with this: `frameBucket` is `harness/bucket/model`, and two harnesses can share a numbered bucket. */
 export const bucketPrefix = (harness: string, harnessVersion: string): string => `${harness}/${harnessBucket(harnessVersion)}/`;
 
-/** What one harness's bundle at one version holds: the stored cells of its (harness, bucket), the only pair a landed cell keys on. A share's denominator is the bundle's; only what clears the floor leaves. */
+/** What one harness's bundle at one version holds: the stored cells of its (harness, bucket), and beside them the version-free environment cells, which key on neither. A share's denominator is the bundle's; only what clears the floor leaves. */
 export const bundleOf = (harness: Harness, harnessVersion: string, stored: StoredPool): Bundle => {
   const prefix = bucketPrefix(harness, harnessVersion);
   const cells = stored.cells.filter((cell) => cell.frameBucket.startsWith(prefix)).sort((a, b) => compare(a.motifId, b.motifId) || compare(a.frameBucket, b.frameBucket) || compare(a.grain, b.grain) || compare(a.day, b.day));
@@ -70,7 +70,10 @@ export const bundleOf = (harness: Harness, harnessVersion: string, stored: Store
   // No error rows: a skeleton holds none, and recovery, the one family that reads them, is left out here.
   // The version-free (name, platform, shell) cells sit beside the bucket's: a harness without a version, as Gemini, Cursor, and Pi are, still has them, and they name no version.
   const environment = [...stored.environment].sort((a, b) => compare(a.motifId, b.motifId) || compare(a.frameBucket, b.frameBucket) || compare(a.grain, b.grain) || compare(a.day, b.day));
-  const pool = poolOf({ cells: [...cells, ...environment], motifs }, []);
+  // The environment cells are read with the bucket's, but the pool's last day is the bucket's own: a week held only by another version is not this bundle's, so it cannot age the reads that count weeks since. A bucket with no cell takes the whole pool's.
+  const own = poolOf({ cells, motifs }, []);
+  const whole = poolOf({ cells: [...cells, ...environment], motifs }, []);
+  const pool = { ...whole, lastDay: own.lastDay ?? whole.lastDay };
   const served = [...cells, ...environment].filter((cell) => cell.clusters >= K_CELL);
   const named = new Set(served.map((cell) => cell.motifId));
   return {

@@ -495,10 +495,10 @@ describe('fit by platform and shell', () => {
     }
   };
 
-  const depositFrom = async (spread: TestPool, id: string, harnessVersion: string): Promise<string> => {
+  const depositFrom = async (spread: TestPool, id: string, harnessVersion: string, day = '2026-11-02'): Promise<string> => {
     const { token } = await spread.signIn('github', stubUser(id));
     await spread.post('/v1/covenant/accept', { version: 'v1' }, token);
-    expect((await spread.post('/v1/deposits', sampleSkeleton(id.padStart(16, '0'), undefined, '2026-11-02', 'claude-code', undefined, harnessVersion), token)).status).toBe(201);
+    expect((await spread.post('/v1/deposits', sampleSkeleton(id.padStart(16, '0'), undefined, day, 'claude-code', undefined, harnessVersion), token)).status).toBe(201);
     return token;
   };
 
@@ -557,6 +557,26 @@ describe('fit by platform and shell', () => {
       const askedSessions = partsOf(whole);
       // With every version cell served, the difference of the total and the served cells is nothing: there is no sub-floor remainder to read.
       expect(10 - askedSessions - versionSessions).toBe(0);
+    });
+  }, 120_000);
+
+  // The environment cells take no part in the bucket's own reads: a week that only another version holds is not a week of this bundle's pool, so it cannot move a read that says how long ago.
+  it('leaves the asked version adoption unchanged when another version deposits in a later week, every part at the floor', async () => {
+    await inFreshPool(async (spread) => {
+      let token = '';
+      for (const id of ['5201', '5202', '5203', '5204', '5205']) token = await depositFrom(spread, id, VERSION, '2026-10-12');
+      const before = await bundleFrom(spread, token);
+      // The value, not the read: its id and `asOf.pool` name the pool's cells, which did grow by the served environment cells.
+      const adoptionOf = (bundle: Bundle) => bundle.reads.filter((read) => read.family === 'adoption').map((read) => read.value);
+      expect(adoptionOf(before).length).toBeGreaterThan(0);
+      expect(before.asOf.day).toBe('2026-10-12');
+
+      // Three weeks on, five accounts on another version: its own cells and the version-free ones all clear the floor, so every one of them is served.
+      for (const id of ['5211', '5212', '5213', '5214', '5215']) await depositFrom(spread, id, '2.1.400', '2026-11-02');
+      const after = await bundleFrom(spread, token);
+      expect(environmentCells(after).map((cell) => cell.day)).toContain('2026-11-02');
+      expect(adoptionOf(after)).toEqual(adoptionOf(before));
+      expect(after.asOf.day).toBe(before.asOf.day);
     });
   }, 120_000);
 });
