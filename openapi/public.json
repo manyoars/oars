@@ -189,7 +189,7 @@
             "type": "string"
           },
           "type": {
-            "example": "https://api.example.test/problems/price-not-found",
+            "example": "https://api.example.com/problems/price-not-found",
             "type": "string"
           }
         },
@@ -612,7 +612,7 @@
             "type": "string"
           },
           "prefix": {
-            "description": "First characters of the secret, to recognise a key",
+            "description": "First characters of the secret, to recognize a key",
             "type": "string"
           },
           "revokedAt": {
@@ -1108,6 +1108,59 @@
           "sort",
           "unpaged"
         ]
+      },
+      "PatchWorkloadConfigRequest": {
+        "properties": {
+          "alwaysOn": {
+            "type": "boolean"
+          },
+          "autoRestartOnCredit": {
+            "type": "boolean"
+          },
+          "clearImagePullSecret": {
+            "type": "boolean"
+          },
+          "egressHosts": {
+            "items": {
+              "maxLength": 253,
+              "minLength": 1,
+              "type": "string"
+            },
+            "maxItems": 50,
+            "minItems": 0,
+            "type": "array"
+          },
+          "imagePullSecret": {
+            "$ref": "#/components/schemas/ImagePullCredential"
+          },
+          "secretsDelete": {
+            "items": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Z][A-Z0-9_]*$",
+              "type": "string"
+            },
+            "maxItems": 100,
+            "minItems": 0,
+            "type": "array"
+          },
+          "secretsUpsert": {
+            "items": {
+              "$ref": "#/components/schemas/EnvVar"
+            },
+            "maxItems": 100,
+            "minItems": 0,
+            "type": "array"
+          },
+          "services": {
+            "items": {
+              "$ref": "#/components/schemas/ServiceConfigPatch"
+            },
+            "maxItems": 8,
+            "minItems": 0,
+            "type": "array"
+          }
+        }
       },
       "PriceKind": {
         "enum": [
@@ -1827,6 +1880,82 @@
         ],
         "type": "string"
       },
+      "ServiceConfigPatch": {
+        "properties": {
+          "args": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "command": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "cpuMillicores": {
+            "format": "int32",
+            "maximum": 2000,
+            "minimum": 50,
+            "type": "integer"
+          },
+          "env": {
+            "items": {
+              "$ref": "#/components/schemas/EnvVar"
+            },
+            "maxItems": 100,
+            "minItems": 0,
+            "type": "array"
+          },
+          "healthPath": {
+            "maxLength": 255,
+            "minLength": 0,
+            "type": "string"
+          },
+          "image": {
+            "type": "string"
+          },
+          "imageRepository": {
+            "maxLength": 440,
+            "minLength": 0,
+            "type": "string"
+          },
+          "memoryMib": {
+            "format": "int32",
+            "maximum": 4096,
+            "minimum": 64,
+            "type": "integer"
+          },
+          "name": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "port": {
+            "format": "int32",
+            "maximum": 65535,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "public": {
+            "type": "boolean"
+          },
+          "replicas": {
+            "format": "int32",
+            "maximum": 8,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "scheduleCron": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "cpuMillicores",
+          "memoryMib",
+          "name"
+        ]
+      },
       "ServiceRuntimeStatus": {
         "properties": {
           "desiredReplicas": {
@@ -2407,7 +2536,7 @@
     }
   },
   "info": {
-    "description": "The AOR platform calls that the Many Oars CLI and starter templates make: deploy a workload, read it, exchange a token, set prices and customers, reserve and settle credits, take a payment.",
+    "description": "The AOR platform calls that the Many Oars CLI and starter templates make: deploy a workload, read it, exchange a token, manage API keys and workload config, set prices and customers, reserve and settle credits, take a payment.",
     "title": "Many Oars API",
     "version": "1.0.0"
   },
@@ -3003,6 +3132,199 @@
           }
         },
         "summary": "Get a workload with its deployment status",
+        "tags": [
+          "Workloads"
+        ]
+      }
+    },
+    "/agents/workloads/{workloadId}/config": {
+      "patch": {
+        "description": "Image digests, service names, command and args are the fingerprint and cannot change.",
+        "operationId": "patchWorkloadConfig",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workloadId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PatchWorkloadConfigRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkloadResponse"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "MANIFEST_INVALID, FINGERPRINT_FIELD_IMMUTABLE"
+          },
+          "401": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "402": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Payment Required"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "WORKLOAD_NOT_OWNED"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "WORKLOAD_NOT_FOUND"
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "IMAGE_DIGEST_UNVERIFIED, PLATFORM_STEWARDED, WORKLOAD_TERMINATED, WORKLOAD_SUSPENDED"
+          },
+          "413": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Content Too Large"
+          },
+          "422": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Unprocessable Content"
+          },
+          "423": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Locked"
+          },
+          "429": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Too Many Requests"
+          },
+          "451": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Unavailable For Legal Reasons"
+          },
+          "500": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          },
+          "502": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Bad Gateway"
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "REGISTRY_UNREACHABLE, or a concurrent reconcile outlasted the retries (service_unavailable)"
+          },
+          "504": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Gateway Timeout"
+          }
+        },
+        "summary": "Patch a workload's mutable configuration",
         "tags": [
           "Workloads"
         ]
@@ -7823,7 +8145,7 @@
     "/me/api-keys/{keyId}": {
       "delete": {
         "description": "Immediate and idempotent.",
-        "operationId": "revoke_1",
+        "operationId": "revokeApiKey",
         "parameters": [
           {
             "in": "path",
@@ -7991,6 +8313,199 @@
           }
         },
         "summary": "Revoke an API key",
+        "tags": [
+          "public",
+          "Developer API Keys"
+        ]
+      }
+    },
+    "/me/api-keys/{keyId}/rotate": {
+      "post": {
+        "description": "Same key id, new secret (returned once); the old secret stops working now.",
+        "operationId": "rotate",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "keyId",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Required. The same key with the same body replays (200, no secret), with a different body is IDEMPOTENCY_CONFLICT. Must be a UUID or 64 hexadecimal characters; any other value is a 400 IDEMPOTENCY_KEY_INVALID.",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/IssuedDeveloperApiKeyResponse"
+                }
+              }
+            },
+            "description": "Rotated (or an idempotent replay)"
+          },
+          "400": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Missing Idempotency-Key"
+          },
+          "401": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "402": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Payment Required"
+          },
+          "403": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "API_KEY_SCOPE_EXCEEDS_OWNER or HUMAN_SESSION_REQUIRED"
+          },
+          "404": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "API_KEY_NOT_FOUND"
+          },
+          "409": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "API_KEY_NOT_ACTIVE or IDEMPOTENCY_CONFLICT"
+          },
+          "413": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Content Too Large"
+          },
+          "422": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Unprocessable Content"
+          },
+          "423": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Locked"
+          },
+          "429": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Too Many Requests"
+          },
+          "451": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Unavailable For Legal Reasons"
+          },
+          "500": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          },
+          "502": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Bad Gateway"
+          },
+          "503": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          },
+          "504": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Gateway Timeout"
+          }
+        },
+        "summary": "Rotate an API key",
         "tags": [
           "public",
           "Developer API Keys"
