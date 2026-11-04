@@ -61,6 +61,62 @@ replaces, so the log settles back to the size of the live records. A hook deposi
 - **A holder that hangs.** The holder refreshes the lock for at most six times the stale age (`holdMs`, one hour: the stale age is 10 minutes, and a whole-store re-capture is the work that outlasts it). Past that the refresh stops, the lock ages out like a dead holder's, and the next waiter breaks it and writes one line to stderr naming the holder's pid (`oars: broke the store lock held by pid <pid>, not refreshed for over <staleMs> ms`). A hung process cannot keep every later deposit and hook waiting for good; the run that outlives the cap loses its lock, says so on its own stderr (`oars: this run held the store lock past <holdMs> ms and may lose it; rerun it when it ends`), and should be rerun. The lock names its holder with a per-claim token, so a holder whose lock was broken never deletes the next holder's lock when it ends.
 - **When it gives up.** Compaction leaves the log as it was and writes one line to stderr, and the next deposit tries again, if the log's size changed during the rewrite (a waiter broke the lock) or if Windows keeps refusing the rename for 30 seconds because a reader holds the log open. A failed compaction does not fail the deposit: the records are safe and an uncompacted log still loads.
 
+## Memory
+
+`deposit` and `verify` hold the store as records, so their heap grows with the log's rows, and `verify` also with the skeletons (one entry per transcript line). A reader keeps only each session's highest `rev`, read in
+two passes over the log, so the superseded copies a re-capture leaves behind are never in memory, and it keeps one copy of the strings every tool row repeats (the session id, the tool name, the key names).
+`deposit` checks for newer captures with one pass that keeps a number per session, and `verify` reads each skeleton without its per-line content hashes, which no check reads.
+
+Measured on a synthetic store (`packages/cli/scripts/sessions-heap.mjs`): peak RSS under `--max-old-space-size=4096`, 8 prompts of 14 tool calls per session, five transcript lines per call that make no log row (text, thinking,
+and attachments), so the skeletons hold 2.55 bytes per byte of clean log (the operator's store holds at most 2.8: 1.6 GB beyond a 580 MB log). "No-op" is a deposit that skips every file, the run t784 made (12 captured, 6,757 unchanged);
+"recapture" is a deposit that reads every transcript, as after a `CAPTURE_VERSION` bump. The Log column is the log the no-op and `verify` runs start from, with every record's older copy still in it (a re-capture leaves them until the
+deposit's compaction): twice the clean log. The recapture run starts from the clean log, 49 MB at 400 sessions and 97 MB at 800.
+
+| Sessions | Log | `deposit` no-op | `deposit` recapture | `verify` |
+|---|---|---|---|---|
+| 400 | 97 MB | 409 MB | 419 MB | 567 MB |
+| 800 | 195 MB | 480 MB | 501 MB | 833 MB |
+
+The same stores before the change: no-op 477 and 678 MB, recapture 451 and 731 MB, `verify` 673 and 1,048 MB. On a settled log (nothing superseded, 49 and 97 MB), the change gains little: no-op 501 against 483 MB (4 percent), `verify`
+896 against 828 MB (8 percent) at 800 sessions. Every deposit ends in a compaction, so a settled log is the usual state `verify` meets; the larger gains above are for a deposit that meets a log with superseded records. What was measured:
+one run per build at 800 sessions (a recapture went from 731 to 501 MB, which one run each cannot tell from noise), and the smallest `--max-old-space-size` that finished the 400-session store, before and after: no-op 168 and 104 MB,
+`verify` 336 and 248 MB; the recapture is 112 MB on the old build (one run) and 104 and 120 MB on the new (two runs), so no gain is shown for it at this bisect step. The full load that a deposit used to make first, to check for newer captures, is gone, so a recapture is not unchanged by construction; its measured difference is within the noise.
+
+Where the heap is held (heap by phase, 800 sessions, `sessions-heap.mjs phases`): a no-op `deposit` keeps 150 MB after the load its refresh does, and `verify` keeps 294 MB of lean skeletons and then 439 MB with the store loaded. Which
+phase sets each command's peak is not established: the sampler is a timer that cannot fire during a synchronous phase (derive, the index, the verify checks), so those phases show their heap at the end, and the recapture is measured as
+one run (about 300 MB sampled) rather than as capture, compaction, and refresh. The kept figures are what decide where to cut next: the skeletons are 294 of `verify`'s 439 MB kept, and `sessionsVerify` still holds them all at once.
+Interning the repeated strings took the kept load from 82 to 78 MB at 400 sessions (5 percent); it is not the main holder.
+
+Growth: rows, not files or sessions. One row count (about 45,000 tool rows, and the same skeleton lines) at three session counts gave the same peaks within 6 percent (`--calls` sets the calls per session):
+
+| Sessions x calls | `deposit` no-op | `deposit` recapture | `verify` |
+|---|---|---|---|
+| 200 x 28 | 403 MB | 415 MB | 602 MB |
+| 400 x 14 | 414 MB | 420 MB | 569 MB |
+| 800 x 7 | 423 MB | 430 MB | 576 MB |
+
+A session is one file here, so files and sessions were not separated from each other, and tool rows and skeleton lines scale together (the generator makes the same number of non-row lines per call), so those two were not separated either.
+From the two sizes above, `verify` grows about 5.5 MB of RSS per MB of clean log from a base of about 300 MB, and `deposit` about 1.5 MB. The smallest heap that finishes (`minheap --sizes 400,800`, new build, clean log 49 and 97 MB):
+no-op 104 and 216 MB, recapture 120 and 208 MB, `verify` 248 and 480 MB, which is 4.8 MB of heap per MB of clean log for `verify` (2.3 for a no-op, 1.8 for a recapture), nearly proportional.
+
+**The ratios, old build to old build.** The operator's run before this change, against its 580 MB post-compaction log: `deposit` 6,962 MB, 12.0 times, from a log that still held the stopped runs' copies (t784 compacts only at the end of a
+finished run), so its true ratio to the log it started from is lower; `verify` 6,144 MB, 10.6 times, on a compacted log. The same builds on the synthetic store at 800 sessions (97 MB clean): `verify` 896 MB on a settled log, 9.2 times; `deposit`
+678 MB on the superseded log, 7.0 times (501 MB, 5.2 times, settled). The new build: `verify` 828 MB settled, 8.5 times (833 MB, 8.6 times, superseded), `deposit` 480 MB, 4.9 times (483 MB, 5.0 times, settled). The ratio is not scale-free
+(a fixed base of about 300 MB sits under it), so `verify`'s two are compared at one log size, 580 MB: the synthetic old build grows 6.1 MB per clean-log MB ((896 - 300) / 97), which is 6.7 times at 580 MB, against the real 10.6, a
+factor of about 1.6 and a gap of about 3.9 times. The skeleton share (2.8 bytes per log byte on the real store against 2.55 here, 1.1 times) lifts 6.7 to about 7.3 times: it closes at most 0.6 of that 3.9. No holder sized here
+closes `verify`'s gap, and none closes `deposit`'s (7.0 against at most 12.0). The rest is unlocated; a read-only look at the real store's `reads/`, `cells`, and `motifs` sizes, and at `verify`'s counts, is the way to find it.
+
+**The limit.** The new build is not measured on the operator's store, so the answer is by command:
+
+- `deposit`: unmeasured. The synthetic store extrapolates to about 1.3 GB of heap for a no-op and 1.1 GB for a recapture at a 580 MB clean log, but `deposit` is the command whose real ratio the synthetic store does not reach, so that is
+  a floor, not a forecast.
+- `verify`: unmeasured on that store. The synthetic least heap, 4.8 MB per clean-log MB, extrapolates to about 2.8 GB at 580 MB (the 800-session run's 480 MB over 97 MB, 4.95, gives 2.9). Scaled by the real store's heavier ratio, old build to old build at 580 MB (10.6
+  against 6.7, a factor of about 1.6), it is about 4.5 GB. So the least heap is about 2.8 to 4.5 GB, and the upper end is over node's default heap (about 4 GB on a 64-bit machine): the default may not hold. It agrees with t767's note, `verify` at 2,945 MB RSS under a 2.8 GB heap cap on a smaller store
+  of the older build: RSS runs above the heap (this store's `verify`: 567 MB of RSS against a 248 MB least heap at 400 sessions) and V8 fills the cap it is given, so that figure bounds the need and does not measure it.
+
+Until a run on the real store measures them, set the heap for both: a store that outgrows it sets its own, as the 580 MB log did: t784's deposit needed `NODE_OPTIONS=--max-old-space-size=10240`, and the same works for `verify`.
+`just sessions-heap` checks that both commands finish a generated store under a fixed small heap, and fails unless a recapture reports every session captured and a no-op reports none.
+
 ## Two versions
 
 - `CAPTURE_VERSION` (`cv` on every captured record) names the captured field list. Bump it when the captured field list changes or a

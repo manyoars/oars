@@ -269,8 +269,8 @@ export const sessionsVerify = async (deps: SessionsDeps, options: { session: str
   // When the store cannot be read there is no high-water mark yet, so a failed run's key is the session asked for and `ev`.
   return runStep(newContext(storeDir, deps.now, 'manual'), 'verify', async () => {
     // Every skeleton is read even for one session: row 6 takes its subagent transcripts' lines, which `<id>.json` alone would miss.
-    const everySkeleton = await readSkeletons(storeDir);
-    const { unreadable } = options.session === undefined ? everySkeleton : await readSkeletons(storeDir, options.session);
+    const everySkeleton = await readSkeletons(storeDir, undefined, true);
+    const { unreadable } = options.session === undefined ? everySkeleton : await readSkeletons(storeDir, options.session, true);
     const skeletons = everySkeleton.skeletons.filter((skeleton) => options.session === undefined || skeleton.session === options.session);
     const store = await loadStore(storeDir);
     const mine = <T extends { session: string }>(records: readonly T[]): T[] => records.filter((record) => options.session === undefined || record.session === options.session);
