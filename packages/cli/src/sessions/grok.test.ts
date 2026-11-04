@@ -18,7 +18,7 @@ afterEach(cleanup);
 //   `_meta.hostTurn` (either chunk kind), `_meta.hideFromScrollback`, and `_meta.interjection` mark text the harness wrote; `_meta.promptIndex` numbers a prompt
 //     storage/mod.rs:966, :974, :1009; acp_session.rs:1353-1372; turn.rs:328, :890-901
 //   `title` is the tool's name                                                                              xai-grok-shell tool_calls.rs:1487
-//   rawOutput of a shell call: `{type:"Bash", exit_code, output: bytes, output_for_prompt, signal, timed_out, current_dir}`   xai-grok-tools types/output.rs:384-405
+//   rawOutput of a shell call: `{type:"Bash", output: bytes, output_for_prompt, exit_code, command, truncated, signal, timed_out, description, current_dir, output_file, total_bytes}`   xai-grok-tools types/output.rs:384-403
 //   a call is `failed` only on a timeout or a signal, so exit 2 arrives `completed`                         acp_conversion.rs:241-250
 //   edit keys: `file_path` (search_replace, write, hashline_edit), `filePath` (edit, camelCase), `patch` (apply_patch)   xai-grok-tools implementations/{grok_build/search_replace/mod.rs:74,
 //     opencode/edit/mod.rs:64,:138,:579, opencode/write/mod.rs:31, grok_build_hashline/edit/types.rs:12, codex/apply_patch/tool.rs:104}; the patch format's
@@ -54,9 +54,15 @@ const extractOf = (events: readonly unknown[], summary: Obj = summaryOf(), usage
 const prompt = (second: number, text: string, meta?: object) => line(S(second), { sessionUpdate: 'user_message_chunk', content: { type: 'text', text }, ...(meta === undefined ? {} : { _meta: meta }) });
 const say = (second: number, text: string, meta?: object) => line(S(second), { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text }, ...(meta === undefined ? {} : { _meta: meta }) });
 const call = (second: number, toolCallId: string, title: string, rawInput: object = {}, kind = 'other') => line(S(second), { sessionUpdate: 'tool_call', toolCallId, title, kind, status: 'pending', rawInput });
-const finish = (second: number, toolCallId: string, status: string, extra: object = {}) => line(S(second), { sessionUpdate: 'tool_call_update', toolCallId, status, ...extra });
+// A completion upstream writes always carries `rawOutput` (acp_conversion.rs:116-640), and a tool with no richer output type answers with `ToolOutput::Text`
+// (a text part in `content[]` and `{type:"Text", text}`, :501-509); a failure from the tool layer carries a text part only (tool_calls.rs:2834-2838, :3325-3329).
+const finish = (second: number, toolCallId: string, status: string, extra: object = {}) => {
+  const bare = status === 'completed' && !('content' in extra) && !('rawOutput' in extra);
+  const text = { content: [{ type: 'content', content: { type: 'text', text: 'done' } }], rawOutput: { type: 'Text', text: 'done' } };
+  return line(S(second), { sessionUpdate: 'tool_call_update', toolCallId, status, ...(bare ? text : {}), ...extra });
+};
 const bytes = (text: string): number[] => [...Buffer.from(text)];
-const bash = (exit: number, text: string, extra: object = {}) => ({ type: 'Bash', exit_code: exit, command: 'x', output: bytes(text), output_for_prompt: text, signal: null, timed_out: false, current_dir: '/work/app', ...extra });
+const bash = (exit: number, text: string, extra: object = {}) => ({ type: 'Bash', exit_code: exit, command: 'x', output: bytes(text), output_for_prompt: text, signal: null, timed_out: false, truncated: false, description: null, output_file: '', total_bytes: Buffer.byteLength(text), current_dir: '/work/app', ...extra });
 const turn = (second: number, extra: object = {}) => ({ turnNumber: 1, endedAt: iso(second), inputTokens: 900, outputTokens: 60, cachedReadTokens: 400, cacheCreationTokens: 100, reasoningTokens: 7, modelCalls: 2, primaryModelId: 'grok-build', ...extra });
 // The user's `!cmd` input as upstream writes it: the tagged `ToolInput::Bash` (tool_dispatch.rs:223-229, :250; xai-grok-tools types/tool_io.rs:55-59).
 const BANG = { variant: 'Bash', command: 'ls -a', description: 'ls -a', is_background: false };
@@ -72,9 +78,9 @@ describe('the Grok Build reader', () => {
       call(3, 'c1', 'run_terminal_cmd', { command: 'npm test' }),
       finish(4, 'c1', 'completed', { rawOutput: bash(0, 'ok') }),
       call(5, 'c2', 'search_replace', { file_path: 'src/a.ts', old_string: 'a', new_string: 'b' }),
-      finish(6, 'c2', 'completed', { content: [{ type: 'diff', path: 'src/a.ts', oldText: 'a', newText: 'b' }] }),
+      finish(6, 'c2', 'completed', { content: [{ type: 'diff', path: '/work/app/src/a.ts', oldText: 'a', newText: 'b' }], rawOutput: { type: 'SearchReplace', EditsApplied: { old_string: 'a', new_string: 'b', tool_output_for_prompt: 'edited', absolute_path: '/work/app/src/a.ts', edits: { details: [] } } } }),
       call(7, 'c3', 'apply_patch', { patch: '*** Begin Patch\n*** Update File: docs/b.md\n@@\n-x\n+y\n*** Add File: docs/c.md\n+z\n*** End Patch' }),
-      finish(8, 'c3', 'completed'),
+      finish(8, 'c3', 'completed', { content: [{ type: 'diff', path: '/work/app/docs/b.md', oldText: 'x', newText: 'y' }, { type: 'diff', path: '/work/app/docs/c.md', newText: 'z' }], rawOutput: { type: 'ApplyPatch', Success: { files: [{ path: '/work/app/docs/b.md', action: 'modified', old_text: 'x', new_text: 'y' }, { path: '/work/app/docs/c.md', action: 'added', new_text: 'z' }], tool_output_for_prompt: 'applied' } } }),
       say(9, 'done'),
     ];
     const out = extractOf(events, summaryOf(), usageOf(turn(10)));
@@ -84,7 +90,8 @@ describe('the Grok Build reader', () => {
     // inputTokens includes the cache reads and writes, and capture's fields are disjoint: 900 - 400 - 100.
     expect(out.session.usage).toMatchObject({ input: 400, cacheRead: 400, cacheWrite: 100, output: 60, thinking: 7 });
     expect(out.tools.map((tool) => [tool.tool, tool.status])).toEqual([['Bash', 'ok'], ['Edit', 'ok'], ['Edit', 'ok'], ['Edit', 'ok']]);
-    expect(out.session.files).toEqual(expect.arrayContaining(['src/a.ts', 'docs/b.md', 'docs/c.md']));
+    // A relative request and the completion's absolute diff path name one file, so each file is stored once, in the absolute form Claude Code's `file_path` has.
+    expect([...out.session.files].sort()).toEqual(['/work/app/docs/b.md', '/work/app/docs/c.md', '/work/app/src/a.ts']);
     expect(out.errorLines).toEqual([]);
     expect(out.session.tsFirst).toBe(iso(1));
   });
@@ -95,7 +102,7 @@ describe('the Grok Build reader', () => {
     expect(out.errorLines).toMatchObject([{ tool: 'Bash', line: 'make: *** No rule to make target' }]);
   });
 
-  it('records a shell call that exited zero with status failed as an error, and one cut by a signal with its output', () => {
+  it('records a timed-out shell call as an error with its output, and one that exited zero but was cut by a signal as an error', () => {
     const out = extractOf([
       prompt(1, 'run them'),
       call(2, 'c', 'bash', { command: 'sleep 9' }),
@@ -122,9 +129,9 @@ describe('the Grok Build reader', () => {
     const out = extractOf([
       prompt(1, 'read it'),
       call(2, 'c1', 'read_file', { path: '/nope' }),
-      finish(3, 'c1', 'failed', { content: [{ type: 'content', content: { type: 'text', text: 'ENOENT: no such file or directory, open /nope' } }], rawOutput: { type: 'ReadFile', FileNotFound: 'wrapped' } }),
-      call(4, 'c2', 'read_file', {}),
-      finish(5, 'c2', 'failed', { rawOutput: { type: 'ReadFile' } }),
+      finish(3, 'c1', 'failed', { content: [{ type: 'content', content: { type: 'text', text: 'ENOENT: no such file or directory, open /nope' } }], rawOutput: { type: 'ReadFile', FileNotFound: 'ENOENT: no such file or directory, open <workspace>/nope' } }),
+      call(4, 'c2', 'list_dir', {}),
+      finish(5, 'c2', 'failed', { rawOutput: { type: 'ListDir', NotFound: 'no such directory' } }),
       call(6, 'c3', 'bash', { command: 'x' }),
       finish(7, 'c3', 'failed', { content: [{ type: 'content', content: { type: 'text', text: 'killed' } }] }),
     ]);
@@ -317,7 +324,7 @@ describe('the Grok Build reader', () => {
     ]);
     expect(out.tools.map((tool) => [tool.tool, tool.status])).toEqual([['Edit', 'error'], ['Edit', 'ok'], ['Edit', 'error']]);
     // The opencode `edit` tool's wire key is camelCase (`filePath`: opencode/edit/mod.rs:64, :138, :579), so a failed edit, which has no diff part, still names its file.
-    expect(out.session.files).toEqual(expect.arrayContaining(['src/new.ts', 'src/a.ts']));
+    expect([...out.session.files].sort()).toEqual(['/work/app/src/a.ts', '/work/app/src/new.ts']);
   });
 });
 
