@@ -62,6 +62,26 @@ describe('the leak test: a private name in a path, a program, a package, an argu
     for (const bytes of [PLANTED.toLowerCase(), 'acme-deploy', 'abc123', 'secret.ts', 'feat/']) expect(text).not.toContain(bytes);
   });
 
+  // Capture already masks what it stores, so the fixture above cannot show projection at work: here the stored step holds the private name itself, as an older or damaged store could.
+  it('keeps a private name a stored step identity holds out of the batch, which only the projection can do', () => {
+    const stored = store({
+      sessions: [session('s', { frame: framed })],
+      prompts: [prompt('s', 0, { frame: framed })],
+      tools: [
+        tool('s', 0, 'Bash', { steps: [step(0, 0, 'shell.exec', { native: 'Bash', identity: { program: 'acme-deploy', sub: PLANTED, flags: [`--${PLANTED}`, '--force'] } })] }),
+        tool('s', 1, 'Bash', { steps: [step(1, 0, 'shell.exec', { native: 'Bash', identity: { program: 'git', sub: PLANTED, flags: [`--${PLANTED}`, '--force'] } })] }),
+      ],
+    });
+    const [only] = sessionsOf(stored);
+    const skeleton = only === undefined ? null : skeletonOf(only, '0123456789abcdef', shellReader(vocab));
+    expect(JSON.stringify(skeleton).toLowerCase()).not.toContain(PLANTED.toLowerCase());
+    expect(JSON.stringify(skeleton).toLowerCase()).not.toContain('acme');
+    expect(skeleton === null ? [] : shellIdentities(skeleton)).toEqual([
+      { program: PRIVATE, sub: null, flags: [] },
+      { program: 'git', sub: null, flags: ['--force'] },
+    ]);
+  });
+
   it('holds a batch the parser accepts unchanged', () => {
     const skeleton = capturedSkeleton();
     expect(parseSkeleton(JSON.parse(JSON.stringify(skeleton)))).toEqual({ ok: true, skeleton });
