@@ -64,6 +64,9 @@ describe('a bundle over five accounts', () => {
     expect(other.cells).toEqual([]);
     expect(other.motifs).toEqual([]);
     expect(other.reads).toEqual([]);
+    // Strata run over every harness version (rule 3), so the bundle for a version with no cells of its own holds the same ones.
+    expect(bundle.strata.length).toBeGreaterThan(0);
+    expect(other.strata).toEqual(bundle.strata);
     const fit = bundle.reads.find((read) => read.family === 'fit' && read.slice.level === 'shape');
     expect(fit?.value).toMatchObject({ failed: 0 });
     // Six deposits of two steps each.
@@ -154,6 +157,8 @@ describe('a bundle over five accounts', () => {
     expect((await pool.get('/bundle/2.1.314/0')).status).toBe(401);
     expect((await pool.get('/bundle/2.1.314/0', 'not-a-token')).status).toBe(401);
     expect(await pool.get('/bundle/acme/0', token)).toMatchObject({ status: 400, json: { error: 'unknown_harness_version', field: 'harnessVersion' } });
+    // The literal stands in for a private version, and publicVersion hands it back unchanged, so only the guard keeps the pooled private bucket from being served by name.
+    expect(await pool.get('/bundle/%3Cliteral%3E/0', token)).toMatchObject({ status: 400, json: { error: 'unknown_harness_version', field: 'harnessVersion' } });
     expect(await pool.get('/bundle/2.1.314/9', token)).toMatchObject({ status: 400, json: { error: 'unknown_vocab_version', field: 'vocabVersion' } });
   });
 
@@ -333,19 +338,21 @@ describe('the client refuses', () => {
     expect(await verifyBundle(good, pool.signingKey(), '2.2.0')).toMatchObject({ ok: false, reason: containing('harness version') });
   });
 
-  // Signed by a key the client pins, so the signature holds: only the vocabulary version is wrong.
+  // Signed by a key the client pins, so the signature holds: only the vocabulary version, or the payload's shape, is wrong.
   it('a correctly signed bundle of another vocabulary version', async () => {
     const pair = await webcrypto.subtle.generateKey('Ed25519', true, ['sign', 'verify']);
     if (!('privateKey' in pair)) throw new Error('no key pair');
     const pinned = await webcrypto.subtle.exportKey('jwk', pair.publicKey);
     const key = { kty: String(pinned.kty), crv: String(pinned.crv), x: String(pinned.x) };
-    const sign = async (vocabVersion: string): Promise<{ payload: string; signature: string }> => {
-      const payload = JSON.stringify({ format: 1, harnessVersion: '2.1.314', vocabVersion, asOf: { pool: 'p', day: '2026-11-04' }, cells: [], motifs: [], reads: [], strata: [] });
+    const sign = async (vocabVersion: string, withStrata = true): Promise<{ payload: string; signature: string }> => {
+      const payload = JSON.stringify({ format: 1, harnessVersion: '2.1.314', vocabVersion, asOf: { pool: 'p', day: '2026-11-04' }, cells: [], motifs: [], reads: [], ...(withStrata ? { strata: [] } : {}) });
       const signature = Buffer.from(await webcrypto.subtle.sign('Ed25519', pair.privateKey, new TextEncoder().encode(payload))).toString('base64');
       return { payload, signature };
     };
     expect(await verifyBundle(await sign('0'), key, '2.1.314')).toMatchObject({ ok: true });
     expect(await verifyBundle(await sign('9'), key, '2.1.314')).toMatchObject({ ok: false, reason: containing('vocabulary version') });
+    // Signed and of the right versions, but with no strata: the shape check refuses it, not the signature or a version.
+    expect(await verifyBundle(await sign('0', false), key, '2.1.314')).toMatchObject({ ok: false, reason: containing('this version reads') });
   });
 
   it('anything that is not a signed bundle', async () => {

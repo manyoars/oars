@@ -550,6 +550,11 @@ describe('oars pool pull', () => {
     const { scene } = await signedScene();
     expect(await scene.cli('pool', 'pull', '--harness-version', '../secret', '--server', POOL)).toBe(ExitCode.USAGE);
     expect(scene.seen).toEqual([]);
+    expect(await scene.cli('pool', 'pull', '--harness-version', '<literal>', '--server', POOL)).toBe(ExitCode.USAGE);
+    expect(scene.seen).toEqual([]);
+    // The option is required: no default version stands in for one.
+    expect(await scene.cli('pool', 'pull', '--server', POOL)).toBe(ExitCode.USAGE);
+    expect(scene.seen).toEqual([]);
 
     on(scene, 'get', '/bundle/2.1.314/0', () => HttpResponse.json({ error: 'fetch_cap', message: 'An account without access may fetch 1 per ISO week.' }, { status: 429 }));
     expect(await scene.cli('pool', 'pull', '--harness-version', '2.1.314', '--server', POOL, '--json')).toBe(ExitCode.RATE_LIMITED);

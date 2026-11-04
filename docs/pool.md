@@ -33,7 +33,7 @@ Every command takes the server from `--server <url>` or `OARS_POOL_URL`. There i
 | `GET /v1/covenant` | `{version, accepted}`. `version` is null when deposits are closed. Sign-in is optional. |
 | `POST /v1/covenant/accept` | Takes `{version}`. 409 `covenant_version` for any version but the one in force. |
 | `POST /v1/deposits` | Takes one skeleton, 1 MB at most. A larger one gets 413 `too_large`, unread when it declares its length. |
-| `GET /bundle/:harnessVersion/:vocabVersion` | A signed bundle for one harness version: `{payload, signature}`, Ed25519 over the payload's exact bytes. The request names no family. It holds the cells for that version's bucket and the reads the pool derives today (fit without call shape, cost, change, live, adoption, method, and next-step; recovery, tool-day, and reads above order 1 are not served), plus rule 3's strata cells (language, framework, repo size) counted pool-wide. 401 with no valid credential, 400 `unknown_harness_version` or `unknown_vocab_version` by name, 404 for any other path. The old `/v1/slices/:stack` route is gone. |
+| `GET /bundle/:harnessVersion/:vocabVersion` | A signed bundle for one harness version: `{payload, signature}`, Ed25519 over the payload's exact bytes. The request names no family. It holds the cells for that version's bucket and the reads the pool derives today (fit without call shape, cost, change, live, adoption, method, and next-step; recovery, tool-day, and reads above order 1 are not served), plus rule 3's strata cells (language, framework, and repo size) counted pool-wide. 401 with no valid credential, 400 `unknown_harness_version` or `unknown_vocab_version` by name, 404 for any other path. The old `/v1/slices/:stack` route is gone. |
 
 ## Bindings
 
@@ -53,6 +53,10 @@ All of these are set at the deploy, never in `wrangler.jsonc`, which holds no ac
 ## Tests
 
 `packages/pool` runs the bundled handler and its D1 store under the Workers runtime through Miniflare, in-process, with a stub sign-in provider, so it needs no Docker, account, or network. `full-run.test.ts` drives the real CLI commands against it over a local socket.
+
+## Known gaps
+
+A live read's baseline is not traceable through lineage: the floor counts only the sliced day's cells, so the read cites those and states `value.baseline` from cells it does not cite. A separate citation field that the floor does not count is new surface with no reader asking for it.
 
 ## Deploy steps
 

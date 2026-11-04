@@ -168,7 +168,7 @@ const NO_STORE: Store = { sessions: [], prompts: [], errors: [], subagents: [], 
 
 /**
  * Each family states the highest of a read's cells, the most one store can prove. The pool knows who holds each cell, so a read here counts the accounts across all of them: cells
- * split by day and frame bucket, and three accounts on three days are three accounts behind one read.
+ * split by day and frame bucket, and five accounts on five days are five accounts behind one read.
  */
 const readsOf = (pool: Pool, accountsOf: MergedCells['accountsOf']): Read[] => {
   const orderOf = orderResolver([]);
