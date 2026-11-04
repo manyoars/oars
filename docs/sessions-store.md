@@ -70,9 +70,10 @@ replaces, so the log settles back to the size of the live records. A hook deposi
   recovery episodes, prompt outcome signals). A bump re-derives from the log; no raw transcript is read. Version 11 (t811, pool vocabulary spec Section 2) changes no stored value: it moves raw
   `agentType`, `keys`, and `frameId` with the joined `frame` from class P to class A, so they stay in the account store and only their projections (`projectAgentType`, `projectKeys`) may pool; the joined frame pools only as its separate cells (the projection functions ship in this release; the deposit skeleton does not call them yet and keeps sending the joined `frame` until the next pool brief). A store written at 10 re-derives
   on its next deposit with every captured record as it was. What the projection takes from the shell form is computed from the store and never written: `program`,
-  `subcommand`, and `flags` come from the A copy of `target` and the record's `steps` (a record captured before CAPTURE 9 has no steps, so its flags
-  are lost and it projects the program and subcommand alone; a step's own names are limited to the curated lists, since capture narrowed them to
-  those (a program only the snapshot lists, such as `ffmpeg -i in out`, keeps its program but loses `-i` stored, a snapshot-only program after the first command projects `private`, and so does one behind a wrapper, `timeout`, or a block keyword such as `bash -c "ffmpeg -i a"`); a `target` cut at 30 characters or masked by redaction projects `program: private`).
+  `subcommand`, and `flags` come from the record's `steps`, and from its `segments` for a program the curated list does not name. A step's own names are limited to the
+  curated lists, since capture narrowed them to those: a program only the snapshot lists, such as `ffmpeg -i in out`, keeps its program, first or later and behind any wrapper,
+  `timeout`, or block keyword, but loses `-i` stored, because a segment holds no flag; a program no list names projects `private`. A record captured before CAPTURE 9 has no
+  steps, so its flags are lost and it projects the program and subcommand alone from the A copy of `target` (a `target` cut at 30 characters or masked by redaction projects `program: private`).
   No staged pooled file or outbox exists for the migration to delete.
 
 Version 4 (CAPTURE 4, t714) adds `sid`, `repo`, `fileHashes`, `env`, `promptFingerprint`, `targetBase`, the repository-root path base, and a

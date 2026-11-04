@@ -3,7 +3,7 @@
 // or the word `private`: the output is built from list members, never from the input text, so a private name cannot be copied through by a
 // parsing mistake. A form the parser cannot read projects to `private`.
 
-import { BLOCK_WORDS, SHELL, shellCommands, WRAPPERS } from './extract.js';
+import { SHELL, shellCommands } from './extract.js';
 import { isPositional, type WordOfCommand } from './identity.js';
 import {
   BUNDLING_PROGRAMS,
@@ -21,7 +21,7 @@ import {
   TOOL_INPUT_KEYS,
 } from './public-vocabulary.js';
 import type { Redactor } from './redact.js';
-import type { ShellIdentity, StepIdentity, ToolObservation } from './schema.js';
+import type { ShellIdentity, ShellSegment, StepIdentity, ToolObservation } from './schema.js';
 import type { Vocabulary } from './vocab-load.js';
 
 /** One program of a shell call, as `index` carries it. */
@@ -113,15 +113,17 @@ const projectStep = (vocab: Vocabulary, identity: ShellIdentity): ProjectedProgr
 };
 
 /**
- * The first step reads `<literal>`: the program is not curated, so the target's program is either a snapshot-only program (it stays admitted) or the
- * wrapper in front of a private one (`bash -c "acme-deploy"` is stored as `bash acme-deploy`, `timeout 5 acme-deploy` as `timeout 5`). A curated program
- * would have read as itself in its step, so a curated, wrapper, or block-keyword program in the target means the step names another command: `private`. Every word capture skips to reach the real
- * program is in that check (`BLOCK_WORDS`, `WRAPPERS`, `timeout`, and the shells, which are curated), which also sends a snapshot-only program behind one of them
- * (`bash -c "ffmpeg -i a"`, `timeout 5 ffmpeg a`, `nohup ffmpeg -i a`) to `private`: the target cannot tell it from a private one. Counted in extractor-11.test.ts.
+ * A step that reads `<literal>` names no curated program, so its program comes from the same parse, the call's `segments`: `readShell` builds both from
+ * the same commands (extract.ts), so segment `at` is step `at`, however many words (`sudo`, `timeout 5`, `bash -c`, an assignment, a block keyword) capture
+ * skipped to reach it. `run` is the program and its plain words, so a program only the snapshot lists stays admitted, with a subcommand when a plain word
+ * is a listed one; it holds no flag, so flags are lost here (Q5). A word cut at the `run` limit is no subcommand. Segments that do not pair with the
+ * steps (none stored, or a different count) cannot say which command ran: `private`.
  */
-const projectLiteralFirst = (vocab: Vocabulary, target: string | null): ProjectedProgram => {
-  const program = target?.split(' ')[0] ?? '';
-  return PUBLIC_PROGRAMS.has(program) || WRAPPERS.has(program) || BLOCK_WORDS.has(program) || program === 'timeout' ? PRIVATE_PROGRAM : projectTarget(vocab, target);
+const projectLiteralStep = (vocab: Vocabulary, segments: readonly ShellSegment[] | undefined, steps: number, at: number): ProjectedProgram => {
+  const run = segments?.length === steps ? segments[at]?.run : undefined;
+  if (run === undefined) return PRIVATE_PROGRAM;
+  const [program = '', ...words] = run.split(' ');
+  return projectProgram(vocab, program, words.filter((text) => text.length < STORED_SUBCOMMAND_CUT).map((text) => ({ text, quoted: false })));
 };
 
 const isShellStep = (identity: StepIdentity | undefined): identity is ShellIdentity => identity !== null && identity !== undefined && 'program' in identity;
@@ -130,15 +132,15 @@ const isShellStep = (identity: StepIdentity | undefined): identity is ShellIdent
  * The shell call of a stored tool record, from what the account store holds (migration, spec Section 2): every command of the call, in order, from the
  * record's `steps` (CAPTURE 9 and later), which carry the public program, subcommand, and flag names of each; so a pipeline, an `&&` chain, a `cd` hop,
  * a `bash -c` body, and `git -C repo status` project as the raw command reads. A program the curated list does not name reads `<literal>` in its step and
- * projects `private`, except the first, which falls back to the class A `target` so a program only the snapshot lists stays admitted (unless a wrapper or block keyword precedes it: then `private`). A record with no
+ * is read from the call's `segments` (`projectLiteralStep`): it stays admitted when only the snapshot lists it, and loses its flags (Q5). A record with no
  * steps (captured before CAPTURE 9) projects its `target` reading alone: one program and its first plain word, no flags (Q5). A target that cannot be
  * read back, a hashed path target, or a record that is not a shell call projects `private`.
  */
-export const projectStoredShell = (vocab: Vocabulary, tool: Pick<ToolObservation, 'tool' | 'target' | 'steps'>): ProjectedShell => {
+export const projectStoredShell = (vocab: Vocabulary, tool: Pick<ToolObservation, 'tool' | 'target' | 'steps' | 'segments'>): ProjectedShell => {
   if (!SHELL.has(tool.tool)) return UNREAD_SHELL_PROJECTION;
   const steps = (tool.steps ?? []).map(({ identity }) => identity);
   if (steps.length === 0) return projectedShell([projectTarget(vocab, tool.target)]);
-  return projectedShell(steps.map((identity, at) => (!isShellStep(identity) ? PRIVATE_PROGRAM : at === 0 && identity.program === LITERAL ? projectLiteralFirst(vocab, tool.target) : projectStep(vocab, identity))));
+  return projectedShell(steps.map((identity, at) => (!isShellStep(identity) ? PRIVATE_PROGRAM : identity.program === LITERAL ? projectLiteralStep(vocab, tool.segments, steps.length, at) : projectStep(vocab, identity))));
 };
 
 const MCP_TOOL = /^mcp__(.+?)__(.+)$/;

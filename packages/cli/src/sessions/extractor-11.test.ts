@@ -3,7 +3,7 @@
 import { readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { BLOCK_WORDS, captureSession, WRAPPERS } from './extract.js';
+import { captureSession } from './extract.js';
 import { PRIVATE_PROGRAM, projectShell, projectStoredShell, type ProjectedShell } from './projection.js';
 import { PRIVATE, PUBLIC_PROGRAMS } from './public-vocabulary.js';
 import { makeRedactor } from './redact.js';
@@ -105,27 +105,44 @@ describe('the shell form projected from the account store (Q5)', () => {
     expect(JSON.stringify(projected(COMMANDS))).not.toContain(PLANTED);
   });
 
-  it('limits a step to the curated lists: a snapshot-only program loses its flags stored, and a later one goes private (3 of 3 flags, 1 of 3 programs)', () => {
-    // ffmpeg is in the snapshot but not the curated lists, and `-exec` is on find's page but not the curated flags: capture narrowed both to `<literal>`.
+  it('limits a step to the curated lists: a snapshot-only program loses its flags stored, and keeps its program (3 of 3 flags, 0 of 3 programs)', () => {
+    // ffmpeg is in the snapshot but not the curated lists, and `-exec` is on find's page but not the curated flags: capture narrowed both to `<literal>`,
+    // and read the program back from the call's `segments`, which name each command the step does.
     const forms = ['ffmpeg -i in out', 'cd /w && ffmpeg -i in out', 'find . -exec acme-deploy {} ;'];
     const raw = forms.map((command) => projectShell(vocab, command, makeRedactor()));
     const stored = projected(forms);
     expect(raw.flatMap(flagsOf)).toEqual(['-i', '-i', '-exec']);
     expect(lossesOf(stored, raw, flagsOf)).toBe(3);
-    expect(lossesOf(stored, raw, (shell) => shell.programs)).toBe(1);
+    expect(lossesOf(stored, raw, (shell) => shell.programs)).toBe(0);
     expect(lossesOf(stored, raw, subcommandsOf)).toBe(0);
-    expect(stored[1]?.programs).toEqual(['cd', PRIVATE]);
+    expect(stored[1]?.programs).toEqual(['cd', 'ffmpeg']);
     expect(JSON.stringify(stored)).not.toContain('acme-deploy');
   });
 
-  it('loses a snapshot-only program behind a wrapper: it projects private where the raw command reads it (3 of 3 program lists)', () => {
-    // The step reads `<literal>` and the stored target names the wrapper, which cannot tell `bash -c ffmpeg` from `bash -c acme-deploy`: the wrapper rule wins.
-    const forms = ['bash -c "ffmpeg -i a"', 'timeout 5 ffmpeg a', 'nohup ffmpeg -i a'];
+  it('reads the program of a literal step from the same parse as the step: stored programs equal the raw command for the eight forms that once pooled under a wrong name', () => {
+    // Round 4 read the program from `target`, which a different parser builds, so a private program pooled as `hello`, `ffmpeg`, `say`, or a wrapper.
+    // `segments` come from the same commands as `steps` (extract.ts readShell), so the two cannot disagree.
+    const forms = [
+      'MSG="say hello" acme-deploy --x',
+      'MSG="run ffmpeg" acme-deploy --x',
+      '"say ffmpeg"; acme-deploy',
+      '#!/usr/bin/ffmpeg\nacme-deploy',
+      'bash -c "ffmpeg -i a"',
+      'timeout 5 ffmpeg a',
+      'nohup ffmpeg -i a',
+      'cd /w && ffmpeg -i in out',
+    ];
     const raw = forms.map((command) => projectShell(vocab, command, makeRedactor()));
     const stored = projected(forms);
-    expect(raw.map((shell) => shell.programs)).toEqual([['ffmpeg'], ['ffmpeg'], ['ffmpeg']]);
-    expect(stored.map((shell) => shell.programs)).toEqual([[PRIVATE], [PRIVATE], [PRIVATE]]);
-    expect(lossesOf(stored, raw, (shell) => shell.programs)).toBe(3);
+    expect(stored.map((shell) => shell.programs)).toEqual(raw.map((shell) => shell.programs));
+    expect(stored.map(subcommandsOf)).toEqual(raw.map(subcommandsOf));
+    // Not vacuous: the snapshot-only program is kept, and the private one is not.
+    expect(stored.slice(4).flatMap((shell) => shell.programs)).toEqual(['ffmpeg', 'ffmpeg', 'ffmpeg', 'cd', 'ffmpeg']);
+    expect(stored.slice(0, 2).map((shell) => shell.programs)).toEqual([[PRIVATE], [PRIVATE]]);
+    // The program of a call that shows no segments cannot be read back, so it is private rather than a guess from the target.
+    const [call] = captured(['MSG="say hello" acme-deploy --x']);
+    expect(projectStoredShell(vocab, { tool: 'Bash', target: call?.target ?? null, steps: call?.steps }).programs).toEqual([PRIVATE]);
+    expect(projectStoredShell(vocab, { tool: 'Bash', target: call?.target ?? null, steps: call?.steps, segments: [] }).programs).toEqual([PRIVATE]);
   });
 
   it('caps the program list of a long pipeline at pipe_max and keeps every command', () => {
@@ -134,14 +151,13 @@ describe('the shell form projected from the account store (Q5)', () => {
     expect(shell?.programs).toEqual(['cat', 'sort', 'uniq', 'head']);
   });
 
-  it('projects a first step the curated list does not name from the target, so a program only the snapshot lists stays admitted', () => {
+  it('projects a step the curated list does not name from the segments, so a program only the snapshot lists stays admitted, first or later', () => {
     const snapshotOnly = [...vocab.programs.keys()].find((name) => !PUBLIC_PROGRAMS.has(name) && /^[a-z]+$/.test(name));
     expect(snapshotOnly).toBeDefined();
     const name = snapshotOnly ?? '';
     expect(projected([`${name} --version`])).toEqual([{ commands: [one(name, null, [])], programs: [name] }]);
     expect(projected(['acme-deploy --prod'])).toEqual([{ commands: [PRIVATE_PROGRAM], programs: [PRIVATE] }]);
-    // A later step it does not name is private: only the first step has a target to read back.
-    expect(projected([`cd /w && ${name}`])[0]?.programs).toEqual(['cd', PRIVATE]);
+    expect(projected([`cd /w && ${name}`])[0]?.programs).toEqual(['cd', name]);
   });
 
   it('projects a private program behind a wrapper as private, never as the wrapper: bash -c and timeout', () => {
@@ -151,15 +167,12 @@ describe('the shell form projected from the account store (Q5)', () => {
     expect(projectShell(vocab, 'timeout 5 acme-deploy', makeRedactor()).programs).toEqual([PRIVATE]);
   });
 
-  it('projects a private program behind a block word as private, never as the keyword', () => {
-    // Capture skips every BLOCK_WORDS entry to reach the real program (extract.ts afterPrelude), so the stored target names the keyword.
+  it('projects a private program behind a block word, a wrapper, an assignment, or a shell as private, never as the word in front', () => {
     expect(projected(['if acme-deploy; then ls; fi'])).toEqual([{ commands: [PRIVATE_PROGRAM, one('ls', null, [])], programs: [PRIVATE, 'ls'] }]);
     expect(projectShell(vocab, 'if acme-deploy; then ls; fi', makeRedactor()).programs).toEqual([PRIVATE, 'ls']);
-    for (const word of [...BLOCK_WORDS].filter((keyword) => keyword !== '!')) {
-      expect(projected([`${word} acme-deploy`]), word).toEqual([{ commands: [PRIVATE_PROGRAM], programs: [PRIVATE] }]);
-    }
-    // The rest of what capture's afterPrelude walks past to reach the real program: every wrapper, `timeout`, an assignment, and a shell that runs its argument.
-    for (const word of [...WRAPPERS, 'timeout', 'X=1', 'bash -c', 'sh -c', 'zsh -c', 'pwsh -Command', 'cmd /c']) {
+    // What capture's afterPrelude walks past to reach the real program, written out (the projection reads `segments` and does not need the list).
+    const words = ['if', 'then', 'elif', 'else', 'elseif', 'do', 'while', 'until', 'fi', 'done', 'esac', 'try', 'finally', '!', 'sudo', 'env', '.', 'command', 'exec', 'nohup', 'nice', 'time', 'call', 'timeout', 'X=1'];
+    for (const word of [...words, 'bash -c', 'sh -c', 'zsh -c', 'dash -c', 'pwsh -Command', 'powershell -Command', 'cmd /c']) {
       expect(projected([`${word} acme-deploy --x`]), word).toEqual([{ commands: [PRIVATE_PROGRAM], programs: [PRIVATE] }]);
     }
     // A lone closing keyword names nothing, so it is not a program either.
