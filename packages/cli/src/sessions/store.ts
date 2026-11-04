@@ -27,6 +27,7 @@ import { compileAllow, requireEntries, slugOf } from './allow.js';
 import { SOURCES, type Source, type SourceStore } from './sources.js';
 import { buildIndex, indexPath } from './hook-index.js';
 import { archiveRaw } from './archive.js';
+import { deferSession, listPending, PENDING_HOOK_CAP, removePending, type PendingEntry } from './pending.js';
 import { deriveSession, type SessionCapture } from './derive.js';
 import { captureRuntime, type CaptureRuntime } from './capture-runtime.js';
 import { callPositions, captureSession, type Capture, type SubagentOrigin } from './extract.js';
@@ -549,6 +550,10 @@ export interface DeriveTrace {
 export interface DepositTrace {
   /** Records written, by kind: `session` (main), `subagent`, `user-prompt`, `tool`, `error-line`. */
   kinds: StepCounts;
+  /** Pending sessions (t832) this deposit took before its own, as step-row `in` counts: `pending` found, `pendingDropped` (transcript gone, folder no longer allowed, or not an entry), `pendingKept` (failed, left for the next run). */
+  pending?: StepCounts;
+  /** Set to the refusal's first line when the Stop hook found the store locked and recorded its session in the pending list instead of depositing: the caller logs a `deferred` row, not an `error` one. */
+  deferred?: string;
   /** The derive pass a whole-store deposit ends with (the index pass follows it: `index`). */
   derive?: DeriveTrace;
   /** A derive pass that failed after the deposit's records and `state.json` were written: the caller logs `deposit` ok and `derive` error, then rethrows. */
@@ -644,6 +649,14 @@ const commitCapture = async (context: DepositContext, key: string, extract: Capt
   context.state.files[key] = { ...cursor, v: CAPTURE_VERSION, s: context.salt.sid, d: context.domains, repoSize: extract.session.frame?.stack.size ?? null };
 };
 
+/** Another deposit holds the store lock and the wait ran out: the one failure the Stop hook defers (t832) instead of counting as a failed run. */
+export class StoreLockedError extends CliError {
+  constructor() {
+    super('The store is locked by another deposit; try again shortly.', ExitCode.UNEXPECTED, 'unexpected');
+    this.name = 'StoreLockedError';
+  }
+}
+
 interface LockOptions {
   /** How long to wait for a holder before giving up. */
   waitMs: number;
@@ -713,7 +726,7 @@ export const withLock = async <T>(storeDir: string, work: () => Promise<T>, opti
     await breakStale(lock, options.staleMs);
     if (Date.now() - started >= options.waitMs) {
       if (claimed instanceof Error && !(await stat(lock).then(() => true, (error: unknown) => !isCode(error, 'ENOENT')))) throw claimed;
-      throw new CliError('The store is locked by another deposit; try again shortly.', ExitCode.UNEXPECTED, 'unexpected');
+      throw new StoreLockedError();
     }
     await sleep(25);
     claimed = await claim(lock, token);
@@ -760,6 +773,8 @@ const depositLocked = async (runtime: SessionsRuntime, options: DepositOptions, 
   state.redactDomains = [...new Set([...state.redactDomains, ...options.redactDomains])];
   state.allow = [...new Set([...state.allow, ...options.allow])];
   const context = await contextFor(runtime, state, options.now);
+  // Sessions a Stop hook deferred come first, then this run's own walk; their entries go once `state.json` is written below.
+  const drained = await drainPending(context, state, runtime.storeDir, Number.POSITIVE_INFINITY, trace);
   const result: DepositResult = {
     sessions: 0,
     unchanged: 0,
@@ -811,6 +826,7 @@ const depositLocked = async (runtime: SessionsRuntime, options: DepositOptions, 
     result.cursorRejected = cursor.rejected;
   }
   await writeAtomic(paths(runtime.storeDir).state, JSON.stringify(state));
+  await removePending(runtime.storeDir, drained.settled);
   // Decided by what the log holds, not by what this run captured: a run that died after its re-capture left the copies for this one. The hook
   // path never compacts, since it has seconds. The records are safe by now and an uncompacted log still loads, so a failure here does not fail the deposit.
   await compactLog(runtime.storeDir).catch((error: unknown) => {
@@ -1072,22 +1088,41 @@ const rawRelatives = async (dir: string, path: string[]): Promise<string[]> => {
 
 const HOOK_LOCK: LockOptions = { waitMs: 3_000, staleMs: 600_000 };
 
-export type SessionDeposit = 'deposited' | 'unchanged' | 'not-allowed' | 'missing';
+export type SessionDeposit = 'deposited' | 'unchanged' | 'not-allowed' | 'missing' | 'deferred';
 
 /**
  * Deposits one transcript, as the SessionEnd hook does: only from a folder that earlier `--allow` entries name, and idempotent by size and
  * mtime. It does not rebuild `derived.json` or the hook index (that is a whole-store pass; the nightly run does it), so it stays fast.
+ * Under the lock it first takes up to `PENDING_HOOK_CAP` sessions an earlier hook deferred, then its own. If the lock is still held after the
+ * wait it records the session in the pending list, which needs no lock, and returns `deferred`: the next deposit of any kind takes it.
  */
-export const depositSession = (runtime: SessionsRuntime, transcript: string, now: () => number, trace?: DepositTrace): Promise<SessionDeposit> =>
-  // The hook path gives up after 3 s so a SessionEnd behind the nightly deposit cannot hold session exit past its 5 s budget.
-  withLock(runtime.storeDir, () => depositSessionLocked(runtime, transcript, now, trace), HOOK_LOCK);
+export const depositSession = async (runtime: SessionsRuntime, transcript: string, now: () => number, trace?: DepositTrace): Promise<SessionDeposit> => {
+  try {
+    // The hook path gives up after 3 s so a SessionEnd behind the nightly deposit cannot hold session exit past its 5 s budget.
+    return await withLock(runtime.storeDir, () => depositSessionLocked(runtime, transcript, now, trace), HOOK_LOCK);
+  } catch (error) {
+    if (!(error instanceof StoreLockedError)) throw error;
+    try {
+      await deferSession(runtime.storeDir, transcript);
+    } catch {
+      // A pending entry that cannot be written leaves the refusal what it was before: a failed deposit, with the lock's message.
+      throw error;
+    }
+    if (trace !== undefined) trace.deferred = error.message;
+    return 'deferred';
+  }
+};
 
-const depositSessionLocked = async (runtime: SessionsRuntime, transcript: string, now: () => number, trace?: DepositTrace): Promise<SessionDeposit> => {
+/** What one transcript's deposit did to `state`: the outcome, and whether `state.json` needs writing. */
+interface SessionInto {
+  result: Exclude<SessionDeposit, 'deferred'>;
+  wrote: boolean;
+}
+
+/** Deposits one transcript and its subagents into `state` in memory; the caller writes `state.json`. */
+const depositSessionInto = async (context: DepositContext, state: State, transcript: string, trace?: DepositTrace): Promise<SessionInto> => {
   const project = basename(dirname(transcript));
-  const state = await readState(runtime.storeDir);
-  refuseNewer(state);
-  if (!compileAllow(state.allow).allows(project)) return 'not-allowed';
-  const context = await contextFor(runtime, state, now);
+  if (!compileAllow(state.allow).allows(project)) return { result: 'not-allowed', wrote: false };
   const folder = dirname(transcript);
   const main = mainTranscript(folder, basename(transcript));
   let wrote: boolean;
@@ -1096,7 +1131,7 @@ const depositSessionLocked = async (runtime: SessionsRuntime, transcript: string
     wrote = extract !== undefined;
     if (extract !== undefined) tally(trace, extract, false);
   } catch (error) {
-    if (isMissing(error)) return 'missing';
+    if (isMissing(error)) return { result: 'missing', wrote: false };
     throw error;
   }
   // The session's subagents finished before it did, so the Stop deposit takes them too (A24).
@@ -1105,9 +1140,53 @@ const depositSessionLocked = async (runtime: SessionsRuntime, transcript: string
     if (extract !== undefined) tally(trace, extract, true);
     wrote = extract !== undefined || wrote;
   }
-  if (!wrote) return 'unchanged';
-  await writeAtomic(paths(runtime.storeDir).state, JSON.stringify(state));
-  return 'deposited';
+  return { result: wrote ? 'deposited' : 'unchanged', wrote };
+};
+
+const bump = (trace: DepositTrace | undefined, kind: string): void => {
+  if (trace === undefined) return;
+  trace.pending ??= {};
+  trace.pending[kind] = (trace.pending[kind] ?? 0) + 1;
+};
+
+interface Drained {
+  /** Entries to remove once `state.json` is written. */
+  settled: PendingEntry[];
+  wrote: boolean;
+}
+
+/**
+ * Deposits up to `limit` pending sessions into `state`, before the caller's own work, under the store lock. An entry is settled (and removed by the
+ * caller after `state.json` is written, so a crash leaves it for the next run) when its transcript was deposited, was already current, is gone, or
+ * is in a folder no `--allow` names now; one that fails to deposit stays, is counted, and does not stop the rest.
+ */
+const drainPending = async (context: DepositContext, state: State, storeDir: string, limit: number, trace?: DepositTrace): Promise<Drained> => {
+  const drained: Drained = { settled: [], wrote: false };
+  for (const entry of await listPending(storeDir, limit)) {
+    bump(trace, 'pending');
+    try {
+      const taken = entry.transcript === undefined ? undefined : await depositSessionInto(context, state, entry.transcript, trace);
+      drained.wrote ||= taken?.wrote === true;
+      drained.settled.push(entry);
+      if (taken === undefined || taken.result === 'missing' || taken.result === 'not-allowed') bump(trace, 'pendingDropped');
+    } catch (error) {
+      bump(trace, 'pendingKept');
+      process.stderr.write(`oars: a pending session was not deposited and stays pending: ${error instanceof Error ? error.message : String(error)}
+`);
+    }
+  }
+  return drained;
+};
+
+const depositSessionLocked = async (runtime: SessionsRuntime, transcript: string, now: () => number, trace?: DepositTrace): Promise<SessionDeposit> => {
+  const state = await readState(runtime.storeDir);
+  refuseNewer(state);
+  const context = await contextFor(runtime, state, now);
+  const drained = await drainPending(context, state, runtime.storeDir, PENDING_HOOK_CAP, trace);
+  const own = await depositSessionInto(context, state, transcript, trace);
+  if (drained.wrote || own.wrote) await writeAtomic(paths(runtime.storeDir).state, JSON.stringify(state));
+  await removePending(runtime.storeDir, drained.settled);
+  return own.result;
 };
 
 export interface Store {

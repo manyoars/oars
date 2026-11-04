@@ -136,13 +136,13 @@ export interface StuckStep {
 
 /**
  * Keys that failed on three runs in a row, per step and trigger (a nightly that fails every night is not cleared by the `stop` deposits
- * between nights). A `skipped` row is no run of its step; an `ok` row ends the open streaks of its own step and trigger, and of its step on the same key under another trigger, because a step's
+ * between nights). A `skipped` or `deferred` row is no run of its step (a deferred deposit neither failed nor succeeded: it is waiting in the pending list); an `ok` row ends the open streaks of its own step and trigger, and of its step on the same key under another trigger, because a step's
  * good run can carry a key (verify's high-water mark) that its failed run could not know before the work.
  */
 export const stuckSteps = (rows: readonly StepRow[]): StuckStep[] => {
   const streaks = new Map<string, StuckStep>();
   for (const row of rows) {
-    if (row.key === null || row.status === 'skipped') continue;
+    if (row.key === null || row.status === 'skipped' || row.status === 'deferred') continue;
     const id = `${row.step}:${row.trigger}:${row.key}`;
     if (row.status === 'ok') {
       // Its own trigger's streaks end whatever key the good run carries; another trigger's streak ends only on the same key, which now has output (spec 4.2).
@@ -162,7 +162,9 @@ export interface StepLine {
   ok: number;
   error: number;
   skipped: number;
-  /** Mean wall time of the runs that ran (not the skipped ones), in ms. */
+  /** Stop deposits that found the store locked and went to the pending list (t832): not failed runs, and not in `error`. */
+  deferred: number;
+  /** Mean wall time of the runs that ran (not the skipped or deferred ones), in ms. */
   meanMs: number;
 }
 
@@ -189,7 +191,7 @@ const add = (counts: StepCounts, kind: string, count: number): void => {
 };
 
 export const stepCounters = (rows: readonly StepRow[]): StepCounters => {
-  const lines = new Map<string, { step: Step; ev: string; runs: number; ok: number; error: number; skipped: number; ms: number }>();
+  const lines = new Map<string, { step: Step; ev: string; runs: number; ok: number; error: number; skipped: number; deferred: number; ms: number }>();
   const deposited: StepCounts = {};
   const failures: StepCounts = {};
   let derived: StepCounts = {};
@@ -197,10 +199,10 @@ export const stepCounters = (rows: readonly StepRow[]): StepCounters => {
   let verify: StepCounts | null = null;
   const recall = { queries: 0, matches: 0 };
   for (const row of rows) {
-    const line = lines.get(`${row.step}@${row.ev}`) ?? { step: row.step, ev: row.ev, runs: 0, ok: 0, error: 0, skipped: 0, ms: 0 };
+    const line = lines.get(`${row.step}@${row.ev}`) ?? { step: row.step, ev: row.ev, runs: 0, ok: 0, error: 0, skipped: 0, deferred: 0, ms: 0 };
     line.runs += 1;
     line[row.status] += 1;
-    if (row.status !== 'skipped') line.ms += row.ms;
+    if (row.status !== 'skipped' && row.status !== 'deferred') line.ms += row.ms;
     lines.set(`${row.step}@${row.ev}`, line);
     if (row.status === 'error') add(failures, `${row.step}@${row.ev}`, 1);
     if (row.status !== 'ok') continue;
@@ -213,7 +215,7 @@ export const stepCounters = (rows: readonly StepRow[]): StepCounters => {
       recall.matches += row.out.matches ?? 0;
     }
   }
-  const steps = [...lines.values()].map((line): StepLine => ({ step: line.step, ev: line.ev, runs: line.runs, ok: line.ok, error: line.error, skipped: line.skipped, meanMs: line.runs === line.skipped ? 0 : Math.round(line.ms / (line.runs - line.skipped)) }));
+  const steps = [...lines.values()].map((line): StepLine => ({ step: line.step, ev: line.ev, runs: line.runs, ok: line.ok, error: line.error, skipped: line.skipped, deferred: line.deferred, meanMs: line.runs === line.skipped + line.deferred ? 0 : Math.round(line.ms / (line.runs - line.skipped - line.deferred)) }));
   return { runs: rows.length, steps, deposited, derived, indexed, verify, recall, failures, stuck: stuckSteps(rows) };
 };
 
@@ -224,7 +226,7 @@ export const formatStepCounters = (counters: StepCounters): string => {
   const verify = counters.verify;
   return [
     row('pipeline step log (all time)', 'value'),
-    ...counters.steps.flatMap((line) => [row(`${line.step}@${line.ev} runs (ok/error/skipped)`, `${String(line.ok)}/${String(line.error)}/${String(line.skipped)}`), row(`${line.step}@${line.ev} mean ms`, String(line.meanMs))]),
+    ...counters.steps.flatMap((line) => [row(`${line.step}@${line.ev} runs (ok/error/skipped)`, `${String(line.ok)}/${String(line.error)}/${String(line.skipped)}`), row(`${line.step}@${line.ev} mean ms`, String(line.meanMs)), ...(line.deferred === 0 ? [] : [row(`${line.step}@${line.ev} deferred (store locked)`, String(line.deferred))])]),
     ...by('records deposited,', counters.deposited),
     ...by('records derived,', counters.derived),
     ...by('index holds,', counters.indexed),
@@ -271,13 +273,21 @@ export const runDeposit = async <T>(context: StepContext, withDerive: boolean, k
     }
     throw error;
   }
+  // The pending sessions a deposit took first are inputs it was asked for beside its own transcripts.
+  const counted = { ...done.in, ...trace.pending };
+  // A Stop deposit that found the store locked wrote nothing and went to the pending list: its own outcome, with the refusal's line (t832).
+  const refusal = trace.deferred;
+  if (refusal !== undefined) {
+    await tryLog(() => logStep(context, 'deposit', 'deferred', performance.now() - started, { in: counted, out: trace.kinds, key }, refusal));
+    return done.value;
+  }
   const derive = trace.derive;
   const failure = trace.deriveFailure;
   const index = trace.index;
   const indexFailure = trace.indexFailure;
   // The deposit row keeps its own time: the derive and index passes ran inside its work and have rows of their own.
   const passes = (derive?.ms ?? failure?.ms ?? 0) + (index?.ms ?? indexFailure?.ms ?? 0);
-  await tryLog(() => logStep(context, 'deposit', 'ok', performance.now() - started - passes, { in: done.in, out: trace.kinds, key }, null));
+  await tryLog(() => logStep(context, 'deposit', 'ok', performance.now() - started - passes, { in: counted, out: trace.kinds, key }, null));
   if (derive !== undefined) await tryLog(() => logStep(context, 'derive', 'ok', derive.ms, { in: derive.in, out: derive.out, key: derive.key }, null));
   if (failure !== undefined) {
     await logFailure(context, 'derive', failure.ms, failure.key, failure.error);
