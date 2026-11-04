@@ -163,6 +163,8 @@ describe('the Copilot table', () => {
     ['apply_patch', 'file.edit'],
     ['str_replace_editor', 'file.edit'],
     ['edit', 'file.edit'],
+    ['task', 'agent.spawn'],
+    ['web_fetch', 'web.fetch'],
   ] as const)('maps %s to %s and keeps the name', (native, action) => {
     expect(actionOf(ACTION_TABLES.copilot, native)).toEqual({ action, native });
   });

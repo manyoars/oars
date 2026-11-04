@@ -150,6 +150,8 @@ export const ACTION_TABLES: { readonly [harness in Harness]: ActionTable } = {
       apply_patch: 'file.edit',
       write_file: 'file.write',
       delete_file: 'other',
+      task: 'agent.spawn',
+      web_fetch: 'web.fetch',
     },
     mcp: /^mcp__(?<server>.+?)__(?<tool>.+)$/,
     toolDelimited: true,

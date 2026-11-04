@@ -152,6 +152,8 @@ export const eventLines = (text: string, fallbackId: string): Obj[] => {
   let sequence = 0;
   // The assistant lines since the last shutdown, whose last response per model receives that shutdown's input and cache totals on its first line.
   let span: Response[] = [];
+  // The schema does not say whether a later shutdown's totals are cumulative across a resume, so a model's totals are taken from the first shutdown only.
+  const totaled = new Set<string>();
   const responses: Response[] = [];
   const calls = new Map<string, { block: Obj; shell: boolean }>();
   const resolved = new Set<string>();
@@ -306,7 +308,8 @@ export const eventLines = (text: string, fallbackId: string): Obj[] => {
         const usage = isObj(value) && isObj(value.usage) ? value.usage : undefined;
         const last = span.findLast((candidate) => candidate.model === name);
         const first = last === undefined ? undefined : span.find((candidate) => candidate.key === last.key);
-        if (usage === undefined || first === undefined) continue;
+        if (usage === undefined || first === undefined || totaled.has(name)) continue;
+        totaled.add(name);
         first.message.usage = { ...usageOf(usage), output_tokens: 0 };
         // Output the responses did not report themselves is the total less what they did.
         first.residual = Math.max(0, (num(usage.outputTokens) ?? 0) - span.filter((candidate) => candidate.model === name).reduce((sum, candidate) => sum + candidate.own, 0));
