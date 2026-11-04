@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import { VOCAB_VERSION, type SessionSkeleton } from '../../cli/src/sessions/pool-wire.js';
-import { batchCounts, batchTier, LEDGER_DAYS } from './access.js';
+import { batchCounts, batchTier, STANDING_AFTER_DAYS } from './access.js';
 import { incrementsOf } from './ingest.js';
 import { sampleSkeleton } from './sample.js';
 import { fieldOf, startPool, stubUser, type TestPool, textOf } from './test-pool.js';
@@ -239,7 +239,7 @@ describe('the access flag over the routes', () => {
     });
   }, 60_000);
 
-  // `ledger_days` is 90 (spec Section 1.4): a batch that counted 89 days ago has not stood it yet.
+  // `STANDING_AFTER_DAYS` is 90 (spec Section 1.4): a batch that counted 89 days ago has not stood it yet.
   it('is still pending for a batch that counted 89 days ago', async () => {
     await inPool(async (pool) => {
       const { token, account } = await depositor(pool, '3010', 'cursor');
@@ -252,7 +252,7 @@ describe('the access flag over the routes', () => {
   it('stands once a counting batch has stood the ledger days, and stays when that batch later falls to none', async () => {
     await inPool(async (pool) => {
       const { token, account } = await depositor(pool, '3005', 'cursor');
-      await (await pool.db()).prepare('UPDATE deposits SET counted_at = ? WHERE account = ?').bind(Date.now() - (LEDGER_DAYS + 1) * DAY_MS, account).run();
+      await (await pool.db()).prepare('UPDATE deposits SET counted_at = ? WHERE account = ?').bind(Date.now() - (STANDING_AFTER_DAYS + 1) * DAY_MS, account).run();
       expect((await pool.get(PATH, token)).status).toBe(200);
       expect(await accessOfAccount(pool, account)).toBe('standing');
       await (await pool.db()).prepare("UPDATE deposits SET tier = 'none' WHERE account = ?").bind(account).run();
