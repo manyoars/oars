@@ -139,13 +139,15 @@ const isFolder = (path: string): Promise<boolean> =>
 
 /** One question per name, from the first call whose folder still exists: the manager reads its registry from there, and a guess at another folder could ask the wrong one. */
 const askRegistry = async (rows: readonly Held[], reader: RegistryReader, cached: ReadonlyMap<string, RegistryRow>): Promise<Map<string, RegistryAnswer>> => {
-  const answers = new Map<string, RegistryAnswer>([...cached].map(([key, row]) => [key, asAnswer(row)]));
+  // A command, its environment, or an earlier `cd` chose that call's registry or config: the gate cannot read it from here, so the name is not asked, kept answers included.
+  const unasked = new Set(rows.filter(({ found }) => !found.crossing.registryAsked).map(({ found }) => keyOf(found.crossing)));
+  const answers = new Map<string, RegistryAnswer>([...cached].filter(([key]) => !unasked.has(key)).map(([key, row]) => [key, asAnswer(row)]));
   const folders = new Map<string, boolean>();
   const asks = new Map<string, RegistryAsk>();
   for (const { found } of rows) {
     const { crossing, cwd } = found;
     const key = keyOf(crossing);
-    if (cwd === null || answers.has(key) || asks.has(key) || crossing.versionForm === 'url' || !ASKED_PROGRAMS.has(crossing.program) || !askable(crossing.class, crossing.name)) continue;
+    if (cwd === null || unasked.has(key) || answers.has(key) || asks.has(key) || crossing.versionForm === 'url' || !ASKED_PROGRAMS.has(crossing.program) || !askable(crossing.class, crossing.name)) continue;
     const exists = folders.get(cwd) ?? (await isFolder(cwd));
     folders.set(cwd, exists);
     if (exists) asks.set(key, { class: crossing.class, name: crossing.name, cwd });
@@ -161,9 +163,11 @@ const askRegistry = async (rows: readonly Held[], reader: RegistryReader, cached
   return answers;
 };
 
-const recordOf = (held: Held, novelty: Novelty, removedAt: string | undefined, answer: RegistryAnswer | undefined): CrossingRecord => {
+const recordOf = (held: Held, novelty: Novelty, removedAt: string | undefined, answers: ReadonlyMap<string, RegistryAnswer> | undefined): CrossingRecord => {
   const { found, transcript, origin, prompted, next } = held;
   const { crossing, ts, side } = found;
+  // An answer reaches a row only when that row's own program was asked and its command left the registry to the default: the same name can cross twice.
+  const answer = crossing.registryAsked && ASKED_PROGRAMS.has(crossing.program) ? answers?.get(keyOf(crossing)) : undefined;
   return {
     kind: 'crossing',
     v: GATE_VERSION,
@@ -264,7 +268,7 @@ export const replay = async (runtime: Pick<SessionsRuntime, 'storeDir' | 'projec
   const cached = await cachedAnswers(file, options.now());
   const answers = options.registry === undefined ? undefined : await askRegistry(held, options.registry, cached);
   const novelty = noveltyWalker();
-  const records = held.map((one) => recordOf(one, novelty(one), removedAt.get(`${repositoryOf(one.transcript.project)}\0${keyOf(one.found.crossing)}`), answers?.get(keyOf(one.found.crossing))));
+  const records = held.map((one) => recordOf(one, novelty(one), removedAt.get(`${repositoryOf(one.transcript.project)}\0${keyOf(one.found.crossing)}`), answers));
   const unread: Partial<Record<UnreadShape, number>> = {};
   for (const { read } of reads) {
     for (const shape of read.unread) unread[shape] = (unread[shape] ?? 0) + 1;

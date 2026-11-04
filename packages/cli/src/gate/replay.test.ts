@@ -432,6 +432,40 @@ describe('the registry option', () => {
     expect(new Set((await written()).crossings.map((row) => row.registryState))).toEqual(new Set(['not-read']));
   });
 
+  it('answers only the row whose own program was asked, though another program crossed the same name', async () => {
+    await mkdir(join(root, 'cwd'));
+    await writeLog(projectsRoot, REPO, 'a.jsonl', [bash(1, 't1', 'npm install both-ways'), bash(2, 't2', 'yarn add both-ways')]);
+    const first = answering();
+    await run([REPO], first);
+    expect(first).toHaveBeenCalledTimes(1);
+    const states = async (): Promise<string[]> => (await written()).crossings.map((row) => `${row.program} ${row.registryState}`);
+    expect(await states()).toEqual(['npm found', 'yarn not-read']);
+    // The kept row answers the name too, and still only for the npm row.
+    const second = answering();
+    await run([REPO], second);
+    expect(second).not.toHaveBeenCalled();
+    expect(await states()).toEqual(['npm found', 'yarn not-read']);
+  });
+
+  it('does not ask for a name whose command, environment, or folder chose the registry or config, and leaves every row of it not-read', async () => {
+    await mkdir(join(root, 'cwd'));
+    await writeLog(projectsRoot, REPO, 'a.jsonl', [
+      bash(1, 't1', 'pip install --index-url https://private.example/simple secret-lib'),
+      bash(2, 't2', 'npm install --registry https://npm.private.example/ secret-npm'),
+      bash(3, 't3', 'NPM_CONFIG_REGISTRY=https://npm.private.example/ npm install secret-env'),
+      bash(4, 't4', 'cd sub && npm install secret-cd'),
+      bash(5, 't5', 'npm --prefix sub install secret-prefix'),
+      bash(6, 't6', 'npm install mixed'),
+      bash(7, 't7', 'npm install --registry https://npm.private.example/ mixed'),
+    ]);
+    const reader = answering();
+    await run([REPO], reader);
+    expect(reader).not.toHaveBeenCalled();
+    const { crossings } = await written();
+    expect(crossings).toHaveLength(7);
+    expect(new Set(crossings.map((row) => row.registryState))).toEqual(new Set(['not-read']));
+  });
+
   it('keeps not-found and unreachable apart, and a failed read stays out of the cache', async () => {
     await mkdir(join(root, 'cwd'));
     await writeLog(projectsRoot, REPO, 'a.jsonl', [bash(1, 't1', 'npm install absent'), bash(2, 't2', 'npm install dark'), bash(3, 't3', 'npm install thrown')]);
