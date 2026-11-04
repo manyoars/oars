@@ -211,7 +211,9 @@ const NOT_TYPED = ['/', '?', '<session_context>', '<hook_context>'];
  * fixes: loop recovery re-sends the operator's `displayContent` beside it (core/client.ts:1338-1354, so the recorded prompt would read twice); the IDE context (client.ts:503,613);
  * the `!cmd` turn (cli useExecutionLifecycle.ts:61-66); the manual plan exit note (cli useGeminiStream.ts:2060, utils/approvalModeUtils.ts:36-39); and the directory context
  * (client.ts:396, utils/environmentContext.ts:37). `Please continue.` (client.ts:930) is the whole text, so it is matched exactly. An AfterAgent hook's `continueReason`
- * (client.ts:1052,1061) is free text and cannot be told from a typed prompt.
+ * (client.ts:1052,1061) is free text; it is sent with the operator's `displayContent` (client.ts:1061-1067), so the turn reads as the operator's prompt again, which is left as a known limit
+ * because a repeated `/cmd` writes a like shape. The auto-nudge after a tool round with an empty reply (cli useGeminiStream.ts:720,1796-1811; core agent/legacy-agent-session.ts:254-258)
+ * goes through `submitQuery` and is recorded as a `user` message (geminiChat.ts:563). The other `[System:` nudges (geminiChat.ts:263,269) only reach `contentsToUse` and are never recorded.
  */
 const INJECTED = [
   'System: Potential loop detected.',
@@ -220,10 +222,13 @@ const INJECTED = [
   'I ran the following shell command:\n',
   'User has manually exited Plan Mode. Switching to ',
   '- **Workspace Directories:**',
+  '[System: You successfully executed a tool but returned an empty response.',
 ];
 const NEXT_SPEAKER = 'Please continue.';
 /** What a compression records in place of the history it replaced: the summary as a user turn, then this canned reply as the model's (context/chatCompressionService.ts:665-673). */
 const SUMMARY = '<state_snapshot>';
+/** What upstream closes a turn with when a stream fails after a tool response (geminiChat.ts:118,921-934, patched onto the message; or a tokenless `gemini` message at the next sync, chatRecordingService.ts:1465-1480). No model wrote it. */
+const INTERRUPTED = '[The previous response was interrupted before it completed.]';
 const CANNED_REPLY = 'Got it. Thanks for the additional context!';
 /** The canned reply: a model message with that text and no usage, calls, or model, which only the CLI writes. */
 const isCanned = (message: Obj): boolean =>
@@ -336,7 +341,7 @@ export const chatLines = (text: string, fallbackId: string, cwd: string | null):
       sequence += 1;
       lines.push({ ...base, type: 'user', uuid: `${fallbackId}-u${String(sequence)}`, timestamp: when, message: { role: 'user', content: [{ type: 'text', text: typed }] } });
     } else if (message.type === 'gemini') {
-      const answer = textOf(message.content);
+      const answer = textOf(message.content).trim() === INTERRUPTED ? '' : textOf(message.content);
       const calls = (Array.isArray(message.toolCalls) ? message.toolCalls : []).filter(isObj);
       const tokens = isObj(message.tokens) ? message.tokens : undefined;
       // A response of only a thought (the synthetic "binary content" note) says nothing.

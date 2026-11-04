@@ -184,6 +184,21 @@ ${text}
     expect(out.session.usage).toMatchObject({ input: 0, cacheRead: 250, output: 5 });
   });
 
+  // The placeholder upstream closes an interrupted turn with (geminiChat.ts:118,921-934): no model wrote it.
+  const INTERRUPTED = '[The previous response was interrupted before it completed.]';
+
+  it('drops the interrupted-response placeholder recorded as a tokenless model message at the next sync (chatRecordingService.ts:1465-1480)', () => {
+    const lines = linesOf([head, prompt(1, 'run it'), say(2, 'working'), say(3, INTERRUPTED, { model: undefined })]);
+    expect(lines.filter((entry) => entry.type === 'assistant')).toHaveLength(1);
+    expect(JSON.stringify(lines)).not.toContain('interrupted');
+  });
+
+  it('keeps the usage of an empty turn whose content a patch sets to the interrupted placeholder, as a usage-only line (geminiChat.ts:925-926)', () => {
+    const records = [head, prompt(1, 'run it'), say(2, '', { tokens: tokens(100, 5, 40) }), { $patch: { updates: [{ id: 'g2', content: [{ text: INTERRUPTED }] }] } }];
+    expect(extractOf(records).session.usage).toMatchObject({ input: 60, cacheRead: 40, output: 5 });
+    expect(JSON.stringify(linesOf(records))).not.toContain('interrupted');
+  });
+
   it('captures a session from a folder that is not a repository, and one that names no folder at all', () => {
     const out = extractOf([head, prompt(1, 'hi'), say(2, '', { toolCalls: [call('c1', 'read_file', { file_path: 'a.txt' }, 'success', 3, reply('c1', 'read_file', { output: 'text' }))] })], '/tmp/notes');
     expect(out.tools).toMatchObject([{ tool: 'Read', status: 'ok' }]);
@@ -230,6 +245,7 @@ ${text}
     { name: 'shell escape', text: 'I ran the following shell command:\n```sh\nls\n```\n\nThis produced the following result:\n```\na\n```', writer: 'cli useExecutionLifecycle.ts:61-66' },
     { name: 'plan exit', text: 'User has manually exited Plan Mode. Switching to Default mode (edits will require confirmation).', writer: 'cli useGeminiStream.ts:2060, utils/approvalModeUtils.ts:36-39' },
     { name: 'directory context', text: '- **Workspace Directories:**\n  - /work/app\n- **Directory Structure:**\n\n/work/app/', writer: 'core/client.ts:396, utils/environmentContext.ts:37' },
+    { name: 'empty-reply nudge', text: '[System: You successfully executed a tool but returned an empty response. Please analyze the tool output and explain your progress or final answer.]', writer: 'cli useGeminiStream.ts:720,1796-1811; core agent/legacy-agent-session.ts:254-258' },
   ];
   const typedOf = (records: readonly unknown[]): string[] =>
     linesOf(records)
