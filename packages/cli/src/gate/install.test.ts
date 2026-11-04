@@ -34,7 +34,7 @@ describe('gate install', () => {
   });
 
   it('calls the installed binary, never npx', () => {
-    expect(COMMAND).toBe('command -v oars >/dev/null 2>&1 || exit 0; oars gate hook');
+    expect(COMMAND).toBe('command -v oars >/dev/null 2>&1 || exit 0; oars gate hook >/dev/null 2>&1; exit 0');
     expect(COMMAND).not.toContain('npx');
   });
 
@@ -167,6 +167,18 @@ describe('the installed command', () => {
     const result = spawnSync(shell ?? '', ['-c', COMMAND], { encoding: 'utf8', timeout: 30_000, env: { PATH: `${bin}${delimiter}${dirname(shell ?? '')}`, MARK: mark } });
     expect(result.status).toBe(0);
     expect(readFileSync(mark, 'utf8')).toBe('ran gate hook\n');
+  }, 60_000);
+
+  // Exit 2 from a PreToolUse hook blocks the tool call, and an `oars` without `gate hook` (a rollback, an older install) exits 2 with output.
+  it.skipIf(shell === undefined)('exits 0 with empty stdout when oars prints and exits 2', () => {
+    const bin = scratch();
+    const script = join(bin, 'oars');
+    writeFileSync(script, '#!/bin/sh\necho "unknown command"\necho "usage" >&2\nexit 2\n');
+    chmodSync(script, 0o755);
+    const result = spawnSync(shell ?? '', ['-c', COMMAND], { encoding: 'utf8', timeout: 30_000, env: { PATH: `${bin}${delimiter}${dirname(shell ?? '')}` } });
+    expect(result.status).toBe(0);
+    expect(result.stdout).toBe('');
+    expect(result.stderr).toBe('');
   }, 60_000);
 });
 
