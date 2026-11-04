@@ -17,6 +17,8 @@ import type { BooksBy, RecallQuery } from './sessions/query.js';
 import { closedQueryOf, formsRefusal, RECALL_FAMILIES } from './sessions/recall-reads.js';
 import { FAMILIES } from './sessions/read.js';
 import { sessionsBooks, sessionsContext, sessionsDeposit, sessionsGoldArms, sessionsGoldSample, sessionsGoldScore, sessionsHookInstall, sessionsHookStatus, sessionsHookUninstall, sessionsMcp, sessionsLineage, sessionsMeasure, sessionsRead, sessionsRecall, sessionsRecallCounts, sessionsVerify, type SessionsDeps } from './sessions/command.js';
+import { gateReplay, gateReport } from './gate/command.js';
+import { managerReader } from './gate/registry.js';
 import { exclusionPaths, sessionsExclusions } from './sessions/exclusion.js';
 import { poolDeposit, poolLogin, poolPull } from './sessions/pool-command.js';
 import type { InstallRuntime, Scope } from './sessions/install.js';
@@ -491,11 +493,12 @@ const buildProgram = (deps: RunDeps, argv: string[]): Command => {
     .option('--out-dir <folder>', 'where to write (default <claude config>/session-commons/review)')
     .action(async (_options: OptionValues, command: Command) => {
       const options: OptionValues = command.optsWithGlobals();
+      if (deps.sessions === undefined) throw new CliError('The session store is not configured in this run.', ExitCode.UNEXPECTED, 'unexpected');
       emit(
         deps,
         flag(options, 'json'),
         await sessionsGoldSample(sessionDeps(deps), {
-          termsFile: exclusionPaths(deps.sessions?.projectsRoot ?? '', deps.env).terms,
+          termsFile: exclusionPaths(deps.sessions.projectsRoot, deps.env).terms,
           size: count(options, 'size') ?? 200,
           batch: count(options, 'batch') ?? 50,
           seed: text(options, 'seed'),
@@ -575,6 +578,25 @@ const buildProgram = (deps: RunDeps, argv: string[]): Command => {
     .action(async (_options: OptionValues, command: Command) => {
       const options: OptionValues = command.optsWithGlobals();
       emit(deps, flag(options, 'json'), await sessionsHookStatus(sessionDeps(deps), { file: text(options, 'file') }));
+    });
+
+  const gate = program.command('gate').description('replay the install, fetch-and-run, MCP, and skill picks your agents made, from logs already on disk: local and read-only, and it records what happened without judging it');
+
+  gate
+    .command('replay')
+    .description('find the crossings in your session logs and write them to crossings.jsonl in the sessions store; reads nothing outside the folders you name, and no network unless --registry-state')
+    .option('--allow <folder>', 'a project folder to read, as for `oars sessions deposit` (repeatable); default: the allowlist a deposit saved', collect)
+    .option('--registry-state', 'ask the package manager what the registry holds for each package named (npm view, pip index versions); off by default, and the manager keeps its own cache')
+    .action(async (_options: OptionValues, command: Command) => {
+      const options: OptionValues = command.optsWithGlobals();
+      emit(deps, flag(options, 'json'), await gateReplay(sessionDeps(deps), { allow: list(options, 'allow'), ...(flag(options, 'registryState') ? { registry: managerReader() } : {}) }));
+    });
+
+  gate
+    .command('report')
+    .description('count the crossings the last replay found, and say what replay cannot see')
+    .action(async (_options: OptionValues, command: Command) => {
+      emit(deps, flag(command.optsWithGlobals(), 'json'), await gateReport(sessionDeps(deps)));
     });
 
   const pool = program.command('pool').description('sign in to a pool server, deposit closed-vocabulary session skeletons, and pull signed reads; local capture, recall, and reads need none of it');

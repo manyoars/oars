@@ -116,7 +116,7 @@ oars sessions measure --last 50             # recurring errors per 100 sessions,
 oars sessions measure --last 50 --repo <root>  # the same, for one repository's sessions
 oars sessions verify                        # consistency invariants on the stored skeletons and capture records
 oars sessions exclusions                    # V15: list sessions excluded by the local term file (counts only; OARS_EXCLUSION_TERMS names the file)
-oars sessions gold sample --exclude-term <text>   # about 200 prompts to judge blind; `gold arms <file>` adds the claim and fresh readers on your Claude subscription; `gold score <file>` reads each arm against the judgments
+oars sessions gold sample                   # about 200 prompts to judge blind; needs the term file (`OARS_EXCLUSION_TERMS`), and `--exclude-term <text>` adds to it; `gold arms <file>` adds the claim and fresh readers on your Claude subscription; `gold score <file>` reads each arm against the judgments
 ```
 
 `deposit` is idempotent (a file is skipped only when its size, mtime, capture version, salt, and `--redact-domain` set are all unchanged; a store written by an older capture version is captured again from the harness's transcript or from `raw/`, and one written by a newer oars is refused) and appends to `<config>/oars/sessions/observations.jsonl`:
@@ -175,6 +175,16 @@ Install merges: existing hooks (a Stop hook that rotates sessions, say) stay, ev
 #### Remove everything
 
 `oars sessions hook uninstall --scope user` (or the scope you installed); `oars sessions hook install --schedule off`; delete the store folder `<config>/oars/sessions/` (observations, skeletons, state, the hook index, `hook-calls.jsonl`, and `raw/`, which holds the unredacted transcripts). `gold sample` also writes its prompt file and sidecar to `~/.claude/session-commons/review/` (or `$CLAUDE_CONFIG_DIR/session-commons/review/`, or your `--out-dir`); delete those too. Nothing else is created. `cleanupPeriodDays` stays at the value install set unless you change it.
+
+### Gate: what your agents picked
+
+```
+oars gate replay --allow ~/work/app    # find installs, fetch-and-runs, MCP servers, and skills in logs on disk
+oars gate replay --registry-state      # also ask npm or pip what the registry holds (off by default)
+oars gate report                       # counts from the last replay, and what replay cannot see
+```
+
+Replay is local and read-only; it writes `crossings.jsonl` into the sessions store and nothing else. It records picks and does not judge them. See `docs/gate.md` in the repository.
 
 ## The `--json` contract
 

@@ -562,7 +562,7 @@ export const readTranscript = async (roots: readonly string[], project: string, 
 export interface GoldSample {
   document: GoldDocument;
   views: Array<{ id: string; view: GoldView }>;
-  /** Prompts the store names whose transcript is gone or no longer matches at that index. */
+  /** Prompts the store names whose transcript no longer matches at that index. */
   unreadable: number;
 }
 

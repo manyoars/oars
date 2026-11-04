@@ -11,20 +11,22 @@ export const FIXTURES = fileURLToPath(new URL('./fixtures/', import.meta.url));
 const dirs: string[] = [];
 
 const HELD = new Set(['EPERM', 'EBUSY', 'ENOTEMPTY']);
+const ATTEMPTS = 50;
+const DELAY_MS = 200;
 
 /**
  * Removes a temp folder a git child may still hold as its cwd (a test that timed out leaves the child running). On Windows that is an
  * EPERM, and `rmSync`'s own `maxRetries` does not retry it for a live child's cwd on Node 24, so the retry is written out here.
  * Synchronous so the `afterEach` call sites stay as they are; the wait is `Atomics.wait`, which does not spin.
  */
-export const removeHeld = (dir: string, attempts = 50, delayMs = 200): void => {
+export const removeHeld = (dir: string): void => {
   for (let attempt = 1; ; attempt++) {
     try {
       rmSync(dir, { recursive: true, force: true });
       return;
     } catch (error) {
-      if (attempt >= attempts || !(error instanceof Error && 'code' in error && typeof error.code === 'string' && HELD.has(error.code))) throw error;
-      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, delayMs);
+      if (attempt >= ATTEMPTS || !(error instanceof Error && 'code' in error && typeof error.code === 'string' && HELD.has(error.code))) throw error;
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, DELAY_MS);
     }
   }
 };
