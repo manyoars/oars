@@ -2,7 +2,7 @@ import { appendFileSync, mkdirSync, readFileSync, readdirSync, statSync, utimesS
 import { join, resolve } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { CliError, ExitCode } from '../errors.js';
-import { deposit, depositSession, derive, loadStore, paths, readCalls, readRedactDomains, readSkeletons, slugOf, withLock } from './store.js';
+import { compactLog, deposit, depositSession, derive, loadStore, paths, readCalls, readRedactDomains, readSkeletons, slugOf, withLock } from './store.js';
 import { CAPTURE_VERSION, EXTRACTOR_VERSION } from './schema.js';
 import { addProject, cleanup, NOW, stage } from './test-support.js';
 
@@ -184,7 +184,7 @@ describe('deposit', () => {
     expect(await readRedactDomains(join(staged.root, 'none'))).toEqual([]);
   });
 
-  it('keeps a tool row that has no key list instead of failing every reader', async () => {
+  it('reads a tool row with no key list as an empty one instead of failing every reader', async () => {
     const staged = stage();
     await deposit(staged.runtime, options(['proj']));
     const [tool] = (await loadStore(staged.storeDir)).tools;
@@ -194,27 +194,79 @@ describe('deposit', () => {
     appendFileSync(paths(staged.storeDir).observations, `${JSON.stringify(without)}\n`);
     const kept = (await loadStore(staged.storeDir)).tools.find((row) => row.toolUseId === 'toolu_without_keys');
     expect(kept).toMatchObject({ session: tool.session, tool: tool.tool });
-    expect(kept?.keys).toBeUndefined();
+    expect(kept?.keys).toEqual([]);
   });
 
-  it('keeps a tool row whose segments are not a list of records instead of failing every reader', async () => {
+  it('normalizes a tool row whose segments are not a list of records instead of failing every reader', async () => {
     const staged = stage();
     await deposit(staged.runtime, options(['proj']));
     const [tool] = (await loadStore(staged.storeDir)).tools;
     if (tool === undefined) throw new Error('the fixture deposits no tool row');
-    const odd: Array<[string, unknown]> = [
-      ['toolu_text_segments', 'not a list'],
-      ['toolu_null_segment', [null, { run: 'git status', read: true }]],
-      ['toolu_runless_segment', [{ read: true }]],
+    const odd: Array<[string, unknown, unknown]> = [
+      ['toolu_text_segments', 'not a list', undefined],
+      ['toolu_null_segment', [null, { run: 'git status', read: true }], [{ run: 'git status', read: true }]],
+      ['toolu_runless_segment', [{ read: true }], []],
+      ['toolu_numeric_run', [{ run: 5, read: true }], []],
     ];
     for (const [toolUseId, segments] of odd) {
-      appendFileSync(paths(staged.storeDir).observations, `${JSON.stringify({ ...tool, n: 999, toolUseId, segments })}
-`);
+      appendFileSync(paths(staged.storeDir).observations, `${JSON.stringify({ ...tool, n: 999, toolUseId, segments })}\n`);
     }
     const rows = (await loadStore(staged.storeDir)).tools;
-    expect(rows.find((row) => row.toolUseId === 'toolu_text_segments')?.segments).toBe('not a list');
-    expect(rows.find((row) => row.toolUseId === 'toolu_null_segment')?.segments).toEqual([null, { run: 'git status', read: true }]);
-    expect(rows.find((row) => row.toolUseId === 'toolu_runless_segment')?.segments).toEqual([{ read: true }]);
+    for (const [toolUseId, , expected] of odd) {
+      const row = rows.find((candidate) => candidate.toolUseId === toolUseId);
+      expect(row?.segments).toEqual(expected);
+      // A text list reads as a record captured before `segments`, which has no such key.
+      if (expected === undefined) expect(row).not.toHaveProperty('segments');
+    }
+  });
+
+  it('derives a prompt whose shell call after an edit holds a malformed key list or segment', async () => {
+    // The shapes a hand-edited or foreign log can hold; capture never writes them (t808 review). All but the text key list used to throw in derive.ts and abort every reader.
+    const shapes: Array<[string, { [key: string]: unknown }]> = [
+      ['keys is null', { keys: null }],
+      ['keys is text', { keys: 'run_in_background' }],
+      ['segments is text', { segments: 'not a list' }],
+      ['a segment is null', { segments: [null] }],
+      ['a segment has no run', { segments: [{ read: true }] }],
+      ['a segment run is a number', { segments: [{ run: 5, read: true }] }],
+    ];
+    for (const [shape, fields] of shapes) {
+      const staged = stage();
+      await deposit(staged.runtime, options(['proj']));
+      const [tool] = (await loadStore(staged.storeDir)).tools;
+      if (tool === undefined) throw new Error('the fixture deposits no tool row');
+      const edit = { ...tool, tool: 'Edit', status: 'ok', n: 998, toolUseId: 'toolu_edit' };
+      const shell = { ...tool, tool: 'Bash', status: 'ok', n: 999, toolUseId: 'toolu_shell', ...fields };
+      appendFileSync(paths(staged.storeDir).observations, `${JSON.stringify(edit)}\n${JSON.stringify(shell)}\n`);
+      await expect(loadStore(staged.storeDir), shape).resolves.toHaveProperty('tools');
+      cleanup();
+    }
+  });
+
+  it('keeps a session a compaction between the two passes would have dropped', async () => {
+    // A lock-free reader (`verify`, the MCP server) can meet a recapture and its compaction between the passes. Both passes read one open file, so the
+    // second pass sees the log the first one scanned and the session stays; a reopen would see the compacted log and fail the rev match (t808 review).
+    const staged = stage();
+    await deposit(staged.runtime, options(['proj']));
+    const file = paths(staged.storeDir).observations;
+    const before = await loadStore(staged.storeDir);
+    const target = before.sessions[0];
+    if (target === undefined) throw new Error('the fixture deposits no session');
+    const recapture = readFileSync(file, 'utf8')
+      .split('\n')
+      .filter((line) => line.includes(`"session":"${target.session}"`))
+      .map((line) => line.replace(/"rev":\d+/, `"rev":${String(target.rev + 1)}`));
+    const compact = async (): Promise<void> => {
+      appendFileSync(file, `${recapture.join('\n')}\n`);
+      // Windows refuses to rename over a file a reader holds open, so there the compaction fails and the log is as it was: the reader is safe either way.
+      await compactLog(staged.storeDir, 0).catch((error: unknown) => {
+        if (process.platform !== 'win32') throw error;
+      });
+    };
+    const during = await loadStore(staged.storeDir, compact);
+    expect(during.sessions.map((session) => session.session)).toContain(target.session);
+    expect(during.sessions).toHaveLength(before.sessions.length);
+    expect((await loadStore(staged.storeDir)).sessions.find((session) => session.session === target.session)?.rev).toBe(target.rev + 1);
   });
 
   it('reads an empty or missing store as empty', async () => {

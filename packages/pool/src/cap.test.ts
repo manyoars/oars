@@ -1,8 +1,9 @@
 import { createHash } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { harnessBucket } from '../../cli/src/sessions/cells.js';
 import { verifyBundle, VOCAB_VERSION } from '../../cli/src/sessions/pool-wire.js';
 import { sampleSkeleton } from './sample.js';
-import { fieldOf, startPool, stubUser, type TestPool } from './test-pool.js';
+import { fieldOf, startPool, stubUser, type TestDb, type TestPool } from './test-pool.js';
 import { isoWeekOf } from './week.js';
 
 const PATH = `/bundle/2.1.314/${VOCAB_VERSION}`;
@@ -14,6 +15,12 @@ const deposit = async (target: TestPool, id: string): Promise<string> => {
   await target.post('/v1/covenant/accept', { version: 'v1' }, token);
   expect((await target.post('/v1/deposits', sampleSkeleton(id.padStart(16, '0')), token)).status).toBe(201);
   return token;
+};
+
+/** An index row no ingest would write, one that breaks a parse: only a write past the routes puts it there, and a ledger row can no longer do the same. */
+const damageIndex = async (db: TestDb): Promise<void> => {
+  await db.prepare("INSERT INTO motifs (motif_id, motif) VALUES ('damaged', 'not json')").run();
+  await db.prepare("INSERT INTO cells (key, harness_bucket, motif_id, frame_bucket, day, exposed, sessions, clusters, ok, failed, tokens, duration_ms) VALUES ('damaged', ?, 'damaged', 'f', '2026-11-01', 0, 1, 1, 0, 0, 0, 0)").bind(harnessBucket('2.1.314')).run();
 };
 
 const tally = async (target: TestPool, account: string): Promise<{ week: unknown; fetches: unknown }> => {
@@ -95,7 +102,7 @@ describe('fetch_cap: fetches per account per ISO week', () => {
     expect((await pool.raw('/bundle/2.1.314/9', token)).status).toBe(400);
     expect(await tally(pool, account)).toEqual({ week: null, fetches: 0 });
 
-    const bare = await startPool({ SLICE_SIGNING_KEY: '' });
+    const bare = await startPool({ BUNDLE_SIGNING_KEY: '' });
     try {
       // No key, no sign-in: the account and its token are written directly.
       const db = await bare.db();
@@ -125,14 +132,14 @@ describe('across an ISO week boundary', () => {
     expect((await tally(pool, account)).fetches).toBe(1);
   });
 
-  it('answers an account past its cap before it reads the pool: a stored row that would break a parse is not met', async () => {
+  it('answers an account past its cap before it reads the pool: an index row that would break a parse is not met', async () => {
     const bare = await startPool({ FETCH_CAP: '' });
     try {
       const { token, account } = await bare.signIn('github', stubUser('2205'));
       const other = await bare.signIn('github', stubUser('2206'));
       const db = await bare.db();
       await db.prepare('UPDATE accounts SET fetch_week = ?, fetches = 1 WHERE id = ?').bind(isoWeekOf(Date.now()), account).run();
-      await db.prepare("INSERT INTO deposits (account, id, skeleton) VALUES (?, 'damaged', 'not json')").bind(other.account).run();
+      await damageIndex(db);
       const refused = await bare.raw(PATH, token);
       expect(refused).toMatchObject({ status: 429, json: { error: 'fetch_cap' } });
       // The same row is met by an account that is under its cap, so the 429 above is the order of the spend and the read, not a clean pool.
@@ -166,6 +173,21 @@ describe('across an ISO week boundary', () => {
     expect((await pool.raw(PATH, fresh.token)).status).toBe(200);
     expect(await tally(pool, stale.account)).toEqual({ week: null, fetches: 0 });
   });
+});
+
+describe('a fetch that fails', () => {
+  it('gives back the fetch it spent: the account had no bundle, and a 304 spends none for the same reason', async () => {
+    const own = await startPool({ FETCH_CAP: '' });
+    try {
+      const { token, account } = await own.signIn('github', stubUser('2601'));
+      // A read that throws: the index tables are gone, past the routes.
+      await (await own.db()).prepare('DROP TABLE cells').run();
+      await expect(own.raw(PATH, token)).rejects.toThrow();
+      expect((await tally(own, account)).fetches).toBe(0);
+    } finally {
+      await own.dispose();
+    }
+  }, 60_000);
 });
 
 describe('a 304 spends none', () => {
@@ -204,17 +226,16 @@ describe('a 304 spends none', () => {
     expect((await tally(pool, other.account)).fetches).toBe(1);
   });
 
-  it('never reads the pool: a conditional request is answered when a stored row would break a parse', async () => {
+  it('never reads the pool: a conditional request is answered when an index row would break a parse', async () => {
     const bare = await startPool();
     try {
       await deposit(bare, '2401');
       const { token } = await bare.signIn('github', stubUser('2402'));
       const etag = etagOf((await bare.raw(PATH, token)).headers);
       const db = await bare.db();
-      // The generation trigger is dropped so the damaged row does not move the ETag: only a read of the pool would find it.
-      await db.prepare('DROP TRIGGER deposits_generation_insert').run();
-      const other = await bare.signIn('github', stubUser('2403'));
-      await db.prepare("INSERT INTO deposits (account, id, skeleton) VALUES (?, 'damaged', 'not json')").bind(other.account).run();
+      // The generation triggers are dropped so the damaged row does not move the ETag: only a read of the pool would find it.
+      await db.prepare('DROP TRIGGER cells_generation_insert').run();
+      await damageIndex(db);
       expect((await bare.raw(PATH, token, { 'if-none-match': etag })).status).toBe(304);
     } finally {
       await bare.dispose();
@@ -239,8 +260,11 @@ describe('the ETag follows the rows', () => {
       const changed = await etag('2505');
       expect(changed).not.toBe(after);
 
+      // Expiry takes the ledger's rows and changes no served cell, so a conditional read stays unchanged; only a change to a stored cell moves it.
       await (await own.db()).prepare('DELETE FROM deposits').run();
-      expect(await etag('2506')).not.toBe(changed);
+      expect(await etag('2506')).toBe(changed);
+      await (await own.db()).prepare('DELETE FROM cells').run();
+      expect(await etag('2509')).not.toBe(changed);
     } finally {
       await own.dispose();
     }

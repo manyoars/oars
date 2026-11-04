@@ -70,6 +70,24 @@ describe('the reader', () => {
     expect(runner).toHaveBeenCalledTimes(1);
   });
 
+  it('hands the manager its own timeout when given one, so the child ends itself with the process', async () => {
+    const npm = vi.fn<ManagerRunner>(async () => Promise.resolve(ran(0, '{"dist-tags.latest":"1.0.0"}')));
+    await managerReader(npm, 650)({ class: 'npm-package', name: 'one', cwd: 'here' });
+    expect(npm.mock.calls[0]?.[1]).toEqual(expect.arrayContaining(['--fetch-timeout=650', '--fetch-retries=0']));
+    const pip = vi.fn<ManagerRunner>(async () => Promise.resolve(ran(0, 'one (1.0.0)\n')));
+    await managerReader(pip, 650)({ class: 'python-package', name: 'one', cwd: 'here' });
+    expect(pip.mock.calls[0]?.[1]).toEqual(expect.arrayContaining(['--timeout', '1', '--retries', '0']));
+  });
+
+  it('adds no timeout flags when none is given, so a replay keeps the manager defaults', async () => {
+    const npm = vi.fn<ManagerRunner>(async () => Promise.resolve(ran(0, '{"dist-tags.latest":"1.0.0"}')));
+    await managerReader(npm)({ class: 'npm-package', name: 'one', cwd: 'here' });
+    expect(npm.mock.calls[0]?.[1].join(' ')).not.toContain('timeout');
+    const pip = vi.fn<ManagerRunner>(async () => Promise.resolve(ran(0, 'one (1.0.0)\n')));
+    await managerReader(pip)({ class: 'python-package', name: 'one', cwd: 'here' });
+    expect(pip.mock.calls[0]?.[1].join(' ')).not.toContain('timeout');
+  });
+
   it('asks pip for a Python name', async () => {
     const runner = vi.fn<ManagerRunner>(async () => Promise.resolve(ran(0, 'one (1.0.0)\n')));
     await expect(managerReader(runner)({ class: 'python-package', name: 'one', cwd: 'here' })).resolves.toMatchObject({ state: 'found', latest: '1.0.0' });
