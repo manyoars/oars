@@ -1,5 +1,5 @@
 // Cells and reads (recall spec Sections 2.5 and 2.6), with the same code a local store runs. A deposit's skeleton becomes cells in `cell-increments.ts`, which ingest adds to the stored
-// ones; a bundle is derived from the stored cells, whose `clusters` is the held count of accounts. Recovery is left out: its signature is class A text, which a skeleton does not hold.
+// ones; a bundle is derived from the stored cells, whose `clusters` is the held count of accounts. Recovery and the call-shape method are left out: a skeleton holds no error row, signature, or tool input keys (`docs/pool.md`, "What a bundle serves").
 import { cellIdOf, harnessBucket, poolOf, type Pool } from '../../cli/src/sessions/cells.js';
 import { motifName } from '../../cli/src/sessions/motif.js';
 import { BUNDLE_FORMAT, type Bundle, VOCAB_VERSION } from '../../cli/src/sessions/pool-wire.js';
@@ -11,6 +11,7 @@ import { deriveFit } from '../../cli/src/sessions/read-fit.js';
 import { baselineDaysOf, deriveLive } from '../../cli/src/sessions/read-live.js';
 import { deriveMethod } from '../../cli/src/sessions/read-method.js';
 import { deriveNextStep } from '../../cli/src/sessions/read-next-step.js';
+import { deriveToolDay } from '../../cli/src/sessions/read-tool-day.js';
 import { unitCells, type DeriveFamily, type ReadBody } from '../../cli/src/sessions/read-support.js';
 import type { Harness } from '../../cli/src/sessions/schema.js';
 import type { Store } from '../../cli/src/sessions/store.js';
@@ -19,7 +20,7 @@ import type { StoredPool } from './stored.js';
 /** A served cell needs this many accounts, and a served read this many in at least one of its cells (spec Section 8; D4 may move this proposal, so it stays one constant). */
 export const K_CELL = 5;
 
-const DERIVERS: readonly DeriveFamily[] = [deriveFit, deriveCost, deriveChange, deriveLive, deriveAdoption, deriveMethod, deriveNextStep];
+const DERIVERS: readonly DeriveFamily[] = [deriveFit, deriveCost, deriveChange, deriveLive, deriveAdoption, deriveMethod, deriveNextStep, deriveToolDay];
 
 const NO_STORE: Store = { sessions: [], prompts: [], errors: [], subagents: [], tools: [], newerCaptures: 0 };
 
