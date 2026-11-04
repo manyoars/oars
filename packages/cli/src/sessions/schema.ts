@@ -5,6 +5,8 @@
 // captured records to `<config>/oars/sessions/observations.jsonl`. The log is appended to, and a whole-store deposit drops superseded revs (`compactLog` in `store.ts`): a session whose file changed is deposited
 // again under a higher `rev`, and a reader keeps only the highest `rev` of each session.
 //
+// EXTRACTOR 11 (t811, pool vocabulary spec Section 2) changes no stored value. It moves raw `agentType`, `keys`, and `frameId` with the joined `frame` from class P to
+// class A, so a store written at 10 re-derives on its next deposit and only the pooled projection (computed at deposit, never written) changes.
 // Version 12 (CAPTURE 12, t815) adds the optional `setup`, `funnel`, and `trust` to the session record, read from the transcript only (`session-shape.ts`;
 // `docs/sessions-store.md`). It changed no derivation, so it leaves EXTRACTOR at 10.
 //
@@ -64,7 +66,7 @@ export const CAPTURE_VERSION = '12';
 export const OLDEST_READABLE_CAPTURE = 3;
 
 /** Stamped `v` on every derived record. A bump re-derives from the log; no transcript is read. */
-export const EXTRACTOR_VERSION = '10';
+export const EXTRACTOR_VERSION = '11';
 
 export const PROMPT_HEAD_CHARS = 300;
 export const ERROR_EXAMPLE_CHARS = 160;
@@ -102,8 +104,8 @@ export interface FrameStack {
 }
 
 /**
- * Where and when something ran (recall spec Section 2.1): the coordinate every comparison uses. Class P: every field is a public name, a
- * UTC day, or null, and it is never served below the cell floor, because a set of tools can fingerprint an account. Its `shell` and `stack`
+ * Where and when something ran (recall spec Section 2.1): the coordinate every comparison uses. The joined frame is class A (EXTRACTOR 11); its fields pool only as cells, and every field is a public name, a
+ * UTC day, or null, and a cell is never served below the cell floor, because a set of tools can fingerprint an account. Its `shell` and `stack`
  * belong to the file at this `rev`, so capturing a transcript that has grown can change the `frameId` of its earlier prompts.
  */
 export interface Frame {
@@ -139,7 +141,8 @@ export interface CaptureEnv {
  * One per transcript, captured: the `parse_sessions.py` record, minus anything that is raw content. Classes (t711 Section 1.2):
  * `L` local-only: `project`, `files`. `A` account store: `session`, `parent`, `spawnedBy`, `spawnedIn`, `branches`, `urls`, `searches`, `tldrs`,
  * `confidences`, `promptFingerprint`, `repo`, `fileHashes`, `tools`, `setup`, `funnel`, `trust`, `at`, `tsFirst`, `tsLast`. `P` pooled: `kind`, `cv`, `rev`, `sid`,
- * `agentType`, the counts, `versions`, `models`, `env`, `costUsd`, `usage`, `frame`, `frameId` (`at`, `tsFirst`, and `tsLast` at UTC day).
+ * the counts, `versions`, `models`, `env`, `costUsd`, `usage` (`at`, `tsFirst`, and `tsLast` at UTC day). `agentType`, `frame`, and `frameId` moved to `A` at EXTRACTOR 11:
+ * a custom agent's name is private, and the joined frame is one value that links rows.
  */
 export interface SessionObservation {
   kind: 'session';
@@ -157,7 +160,7 @@ export interface SessionObservation {
   project: string;
   /** The main session a subagent transcript belongs to; null for a main transcript. */
   parent: string | null;
-  /** The subagent type from the transcript's `.meta.json` (`general-purpose`, `Explore`); null for a main transcript. */
+  /** The subagent type from the transcript's `.meta.json` (`general-purpose`, `Explore`); null for a main transcript. Class A: a custom agent's name is private. */
   agentType: string | null;
   /** The parent's `Agent` tool call that spawned this subagent (the meta file's `toolUseId`); null for a main transcript. */
   spawnedBy: string | null;
@@ -193,9 +196,9 @@ export interface SessionObservation {
   promptFingerprint: string | null;
   /** Class P: where and with what this transcript was captured. */
   env: CaptureEnv;
-  /** The frame of a call before the file's first prompt; absent on a record captured before this field existed. Class P. */
+  /** The frame of a call before the file's first prompt; absent on a record captured before this field existed. Class A (EXTRACTOR 11): its fields pool only as cells. */
   frame?: Frame;
-  /** The hash of `frame`. Class P. */
+  /** The hash of `frame`. Class A: one value over the whole frame links rows. */
   frameId?: string;
   /** The harness's own `cost-state` totals when the file has one. */
   costUsd: number | null;
@@ -220,12 +223,12 @@ export type PromptStop = 'interrupt' | 'rejected';
 
 /**
  * One per user prompt: the `prompt_graphs.py` and `cost_per_class.py` records joined. Derived. Classes: `session`,
- * `contextFingerprint`, `head`, `ts`, `skills`, `verify`, `stopped`, `commits`, and `redo` (A); `kind`, `v`, `rev`, `index`, `wallSec`, `cls`, `tools`,
+ * `contextFingerprint`, `frame`, `head`, `ts`, `skills`, `verify`, `stopped`, `commits`, and `redo` (A); `kind`, `v`, `rev`, `index`, `wallSec`, `cls`, `tools`,
  * `shape`, `errors`, `thinking`, `sideTools`, `turns`, `model`, `efforts`, `usage`, `recovery`, `explore`, `act`, and `bigrams` (P).
  */
 export interface PromptObservation {
   kind: 'prompt';
-  /** Where and when the prompt ran, from its capture record; absent on a record captured before frames existed. Class P. */
+  /** Where and when the prompt ran, from its capture record; absent on a record captured before frames existed. Class A (EXTRACTOR 11). */
   frame?: Frame;
   v: string;
   session: string;
@@ -337,7 +340,7 @@ export interface StepEdge {
   seg: number;
 }
 
-/** One observed event in the canonical vocabulary of any harness (recall spec Section 2.2). Class P: it holds only positions, public names, and a frame hash. */
+/** One observed event in the canonical vocabulary of any harness (recall spec Section 2.2). Class P but for `frameId`, which is class A (EXTRACTOR 11): it holds only positions and public names. */
 export interface StepObservation {
   /** The `n` of the tool call this step came from. */
   n: number;
@@ -356,14 +359,14 @@ export interface StepObservation {
   parent: number | null;
   /** The edges that arrive at this step. */
   edges: StepEdge[];
-  /** The frame of the call's prompt, or the session's own frame before the first prompt. */
+  /** The frame of the call's prompt, or the session's own frame before the first prompt. Class A (EXTRACTOR 11). */
   frameId: string;
 }
 
 /**
  * One per tool call (register A28), captured. Classes: `A` account store: `session`, `parent`, `toolUseId`, `ts`, `tool`, and `target`
- * in either form (a salted hash, or a program and subcommand); `P` pooled: `kind`, `cv`, `sid`, `rev`, `agentType`, `n`, `status`, `keys`,
- * `durationMs`, `harnessVersion`, `side`, `prompt`, `targetBase`, and `steps`. `tool` and a shell-form `target` moved to `A` at CAPTURE 9: an MCP
+ * in either form (a salted hash, or a program and subcommand); `P` pooled: `kind`, `cv`, `sid`, `rev`, `n`, `status`,
+ * `durationMs`, `harnessVersion`, `side`, `prompt`, `targetBase`, and `steps`. `agentType` and `keys` moved to `A` at EXTRACTOR 11 (a custom agent's name and a private MCP tool's input keys are private). `tool` and a shell-form `target` moved to `A` at CAPTURE 9: an MCP
  * tool name holds a private server's name and a shell word can be anything, and `steps` carries the public reading of both. `segments`, `pulls`,
  * and `commits` are `A`: a plain word, a private package name, and a sha can each identify private work.
  */
@@ -375,7 +378,7 @@ export interface ToolObservation {
   rev: number;
   /** The main session id: the session itself, or the parent of a subagent transcript. */
   parent: string;
-  /** The subagent type when the call ran inside one; null on a main transcript. */
+  /** The subagent type when the call ran inside one; null on a main transcript. Class A (EXTRACTOR 11). */
   agentType: string | null;
   /** The call's position among the file's tool calls, from 0. */
   n: number;
@@ -391,7 +394,7 @@ export interface ToolObservation {
   target: string | null;
   /** For a path target: `repo` when it was hashed relative to the repository root, `cwd` when no repository held it; null for any other target. */
   targetBase: TargetBase | null;
-  /** The input's key names, sorted. */
+  /** The input's key names, sorted. Class A (EXTRACTOR 11). */
   keys: string[];
   /** From the call's line to its first result's line; null when either timestamp is missing or no result is in the file. */
   durationMs: number | null;
@@ -455,7 +458,7 @@ export type PromptOpened = 'typed' | 'command';
 
 /**
  * One per user prompt, captured: what the transcript says about a prompt besides its tool calls. Classes: `A` account store: `session`, `head` (switchable text),
- * `ts`, `promptFingerprint`, `skills` (a skill's name can be private); `P` pooled: `kind`, `cv`, `sid`, `rev`, `index`, `wallSec`, `thinking`, `turns`, `model`, `efforts`, `usage`, `opened`. Derive joins it with the prompt's tool calls and errors into a {@link PromptObservation}.
+ * `ts`, `promptFingerprint`, `skills` (a skill's name can be private), `frame`, `frameId` (the joined frame links rows); `P` pooled: `kind`, `cv`, `sid`, `rev`, `index`, `wallSec`, `thinking`, `turns`, `model`, `efforts`, `usage`, `opened`. Derive joins it with the prompt's tool calls and errors into a {@link PromptObservation}.
  */
 export interface UserPromptObservation {
   kind: 'user-prompt';
@@ -477,9 +480,9 @@ export interface UserPromptObservation {
   usage: Usage;
   /** Class A: the session's prompt fingerprint at the time of the prompt, when one had been seen. */
   promptFingerprint: string | null;
-  /** Where and when this prompt ran; absent on a record captured before this field existed. Class P. */
+  /** Where and when this prompt ran; absent on a record captured before this field existed. Class A (EXTRACTOR 11): its fields pool only as cells. */
   frame?: Frame;
-  /** The hash of `frame` (`frameIdOf`). Class P. */
+  /** The hash of `frame` (`frameIdOf`). Class A (EXTRACTOR 11). */
   frameId?: string;
 }
 

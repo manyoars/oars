@@ -7,7 +7,8 @@ import { run } from '../cli.js';
 import { ExitCode } from '../errors.js';
 import { harness, server, useServer, type Harness } from '../test-support.js';
 import { poolServer } from './pool-command.js';
-import { parseSkeleton, type PinnedKey } from './pool-wire.js';
+import { REGISTRY_MAX_AGE_DAYS, VOCAB_SNAPSHOT_DATE } from './public-vocabulary.js';
+import { parseSkeleton, VOCAB_VERSION, type PinnedKey } from './pool-wire.js';
 import { deposit } from './store.js';
 import { addProject, cleanup, NOW, stage, type Staged } from './test-support.js';
 
@@ -328,7 +329,7 @@ describe('no harness token is ever read', () => {
     expect(await scene.cli('pool', 'login', '--provider', 'github', '--server', POOL)).toBe(ExitCode.OK);
     openPool(scene);
     expect(await scene.cli('pool', 'deposit', '--server', POOL)).toBe(ExitCode.OK);
-    on(scene, 'get', '/bundle/2.1.314/0', () => HttpResponse.json({ error: 'fetch_cap', message: 'capped' }, { status: 429 }));
+    on(scene, 'get', `/bundle/2.1.314/${VOCAB_VERSION}`, () => HttpResponse.json({ error: 'fetch_cap', message: 'capped' }, { status: 429 }));
     await scene.cli('pool', 'pull', '--harness-version', '2.1.314', '--server', POOL);
     expect(scene.seen.length).toBeGreaterThan(3);
     expect(scene.sent()).not.toContain(HARNESS_SECRET);
@@ -347,6 +348,16 @@ describe('oars pool deposit', () => {
     scene.h.deps.now = () => LATER + 1;
     expect(await scene.cli('pool', 'deposit', '--server', POOL)).toBe(ExitCode.AUTH);
     expect(scene.seen).toEqual([]);
+  });
+
+  it('builds no batch once its vocabulary is past registry_max_age, and names the upgrade', async () => {
+    const scene = setting();
+    await signIn(scene);
+    const before = scene.seen.length;
+    scene.h.deps.now = () => Date.parse(`${VOCAB_SNAPSHOT_DATE}T00:00:00Z`) + (REGISTRY_MAX_AGE_DAYS + 1) * 86_400_000;
+    expect(await scene.cli('pool', 'deposit', '--server', POOL)).toBe(ExitCode.CONFLICT);
+    expect(scene.h.err.join('')).toContain('Upgrade with npm install -g @manyoars/oars');
+    expect(scene.seen).toHaveLength(before);
   });
 
   it('sends a closed skeleton for each clean session, under an id that is not the session id', async () => {
@@ -497,7 +508,7 @@ describe('oars pool deposit', () => {
 });
 
 describe('oars pool pull', () => {
-  const bundleBody = (version: string): string => JSON.stringify({ format: 1, harnessVersion: version, vocabVersion: '0', asOf: { pool: 'p' }, cells: [{}], motifs: [], reads: [{}, {}], strata: [] });
+  const bundleBody = (version: string): string => JSON.stringify({ format: 1, harnessVersion: version, vocabVersion: VOCAB_VERSION, asOf: { pool: 'p' }, cells: [{}], motifs: [], reads: [{}, {}], strata: [] });
 
   const signedScene = async (): Promise<{ scene: Scene; sign: (text: string) => Promise<string> }> => {
     const scene = setting();
@@ -515,7 +526,7 @@ describe('oars pool pull', () => {
     const { scene, sign } = await signedScene();
     const payload = bundleBody('2.1.314');
     const signature = await sign(payload);
-    on(scene, 'get', '/bundle/2.1.314/0', () => HttpResponse.json({ payload, signature }));
+    on(scene, 'get', `/bundle/2.1.314/${VOCAB_VERSION}`, () => HttpResponse.json({ payload, signature }));
     expect(await scene.cli('pool', 'pull', '--harness-version', '2.1.314', '--server', POOL, '--json')).toBe(ExitCode.OK);
     const answer = scene.document();
     expect(answer).toMatchObject({ ok: true, harnessVersion: '2.1.314', reads: 2, cells: 1, motifs: 0 });
@@ -527,7 +538,7 @@ describe('oars pool pull', () => {
     const { scene, sign } = await signedScene();
     const payload = bundleBody('2.1.9');
     const signature = await sign(payload);
-    on(scene, 'get', '/bundle/2.1.9/0', () => HttpResponse.json({ payload, signature }));
+    on(scene, 'get', `/bundle/2.1.9/${VOCAB_VERSION}`, () => HttpResponse.json({ payload, signature }));
     expect(await scene.cli('pool', 'pull', '--harness-version', '2.1.9', '--server', POOL)).toBe(ExitCode.OK);
     expect(scene.h.out.join('')).toContain('Pulled 2.1.9: 2 reads');
   });
@@ -536,12 +547,12 @@ describe('oars pool pull', () => {
     const { scene, sign } = await signedScene();
     const payload = bundleBody('2.1.314');
     const signature = await sign(payload);
-    on(scene, 'get', '/bundle/2.1.314/0', () => HttpResponse.json({ payload: payload.replace('"cells":[{}]', '"cells":[{},{}]'), signature }));
+    on(scene, 'get', `/bundle/2.1.314/${VOCAB_VERSION}`, () => HttpResponse.json({ payload: payload.replace('"cells":[{}]', '"cells":[{},{}]'), signature }));
     expect(await scene.cli('pool', 'pull', '--harness-version', '2.1.314', '--server', POOL, '--json')).toBe(ExitCode.INVALID);
     expect(scene.document()).toMatchObject({ problem: { code: 'bundle_unverified' } });
     expect(replicas(scene)).toEqual([]);
 
-    on(scene, 'get', '/bundle/2.1.9/0', () => HttpResponse.json({ payload, signature }));
+    on(scene, 'get', `/bundle/2.1.9/${VOCAB_VERSION}`, () => HttpResponse.json({ payload, signature }));
     expect(await scene.cli('pool', 'pull', '--harness-version', '2.1.9', '--server', POOL)).toBe(ExitCode.INVALID);
     expect(replicas(scene)).toEqual([]);
   });
@@ -556,7 +567,7 @@ describe('oars pool pull', () => {
     expect(await scene.cli('pool', 'pull', '--server', POOL)).toBe(ExitCode.USAGE);
     expect(scene.seen).toEqual([]);
 
-    on(scene, 'get', '/bundle/2.1.314/0', () => HttpResponse.json({ error: 'fetch_cap', message: 'An account without access may fetch 1 per ISO week.' }, { status: 429 }));
+    on(scene, 'get', `/bundle/2.1.314/${VOCAB_VERSION}`, () => HttpResponse.json({ error: 'fetch_cap', message: 'An account without access may fetch 1 per ISO week.' }, { status: 429 }));
     expect(await scene.cli('pool', 'pull', '--harness-version', '2.1.314', '--server', POOL, '--json')).toBe(ExitCode.RATE_LIMITED);
     expect(scene.document()).toMatchObject({ problem: { code: 'fetch_cap' } });
 
