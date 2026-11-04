@@ -2,7 +2,7 @@
 // computed by the asker's client) and public names only; `recall()` is still how an operator reads the text. Confounders: `editFollowed` is not success, and refusals and
 // hook denials are local policy. Its evidence is the cells holding the failed call and the step after it, on the days the signature occurred and the days their frames were written.
 import { ACTION_TABLES, actionOf, type CanonicalAction } from './actions.js';
-import { UNKNOWN, type Cell } from './cells.js';
+import { UNKNOWN, weekStartOf, type Cell } from './cells.js';
 import { utcDay } from './frame.js';
 import { shapeMotif } from './motif.js';
 import { contentHash } from './read.js';
@@ -56,7 +56,9 @@ export const recoveryOf = ({ pool, store }: FamilyInput): RecoveryOutcome => {
   const sessions = new Map([...store.sessions, ...store.subagents].map((session) => [session.session, session]));
   const prompts = new Map(store.prompts.map((prompt) => [`${prompt.session}#${String(prompt.index)}`, prompt]));
   const actionIn = (session: string, tool: string): CanonicalAction => actionOf(ACTION_TABLES[harnessOf(sessions.get(session) ?? {})], tool).action;
+  // The failed call is a one-step shape, which has a live day cell. The step after it is a two-step window, which has a week cell only (rule 6), so it is found on the week its day falls in.
   const cellsAt = groupBy(atGrain(pool, 'day'), (cell) => `${cell.motifId}/${cell.day}`);
+  const weeksAt = groupBy(atGrain(pool, 'week'), (cell) => `${cell.motifId}/${cell.day}`);
   const cellsOf = groupBy(atGrain(pool, 'day'), (cell) => cell.motifId);
   /** The day a cell files this error's call under: its frame's, which is its prompt's, or its session's for a subagent or a call before the first prompt. An error can run past that midnight. */
   const frameDayOf = (error: ErrorObservation): string => {
@@ -76,7 +78,7 @@ export const recoveryOf = ({ pool, store }: FamilyInput): RecoveryOutcome => {
       const next = error.next[0] === undefined ? undefined : actionIn(session(error), error.next[0]);
       for (const day of new Set([utcDay(error.ts) ?? UNKNOWN, frameDayOf(error)])) {
         for (const cell of cellsAt.get(`${shapeOf([failedAction])}/${day}`) ?? []) if (cell.failed > 0) inputs.add(cell);
-        if (next !== undefined) for (const cell of cellsAt.get(`${shapeOf([failedAction, next])}/${day}`) ?? []) inputs.add(cell);
+        if (next !== undefined) for (const cell of weeksAt.get(`${shapeOf([failedAction, next])}/${weekStartOf(day)}`) ?? []) inputs.add(cell);
       }
       for (const tool of error.next) {
         const action = actionIn(session(error), tool);

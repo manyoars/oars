@@ -155,12 +155,12 @@ export const deriveCells = (store: Store, graph: RecallGraph = NO_RECALLS): Cell
     tallies.set(key, fresh);
     return fresh;
   };
-  /** The tallies one occurrence counts into: its week cell, and for a shape motif with a known day its live cell too (rule 6). A named or class motif has no day cell. */
+  /** The tallies one occurrence counts into: its week cell, and for a one-step shape motif with a known day its live cell too (rule 6). A window of two or more steps, a named motif, and a class motif have no day cell. */
   const talliesOf = (motif: Motif, frame: Frame, exposed: boolean, frameBucket = frameBucketOf(frame)): Tally[] => {
     motifs.set(motif.motifId, motif);
     const day = frame.day ?? UNKNOWN;
     const weekly = tallyAt(motif, frameBucket, 'week', weekStartOf(day), exposed);
-    return motif.level === 'shape' && day !== UNKNOWN ? [weekly, tallyAt(motif, frameBucket, 'day', day, exposed)] : [weekly];
+    return motif.level === 'shape' && motif.steps.length === 1 && day !== UNKNOWN ? [weekly, tallyAt(motif, frameBucket, 'day', day, exposed)] : [weekly];
   };
 
   const sessions = new Map<string, SessionObservation>([...store.sessions, ...store.subagents].map((session) => [session.session, session]));
