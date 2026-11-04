@@ -68,6 +68,8 @@ describe('a bundle over five accounts', () => {
     expect(other.cells.length).toBeGreaterThan(0);
     expect(other.reads.every((read) => read.family === 'fit' && read.slice.platform !== undefined)).toBe(true);
     expect(other.reads.length).toBeGreaterThan(0);
+    // No cell of its own: the bucket takes the whole pool's last day, the Monday of the fixture's week.
+    expect(other.asOf.day).toBe('2026-10-26');
     expect(other.motifs.map(({ motifId }) => motifId).sort()).toEqual([...new Set(other.cells.map(({ motifId }) => motifId))].sort());
     // Strata run over every harness version (rule 3), so the bundle for a version with no cells of its own holds the same ones.
     expect(bundle.strata.length).toBeGreaterThan(0);
