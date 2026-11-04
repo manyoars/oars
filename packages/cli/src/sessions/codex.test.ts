@@ -607,6 +607,24 @@ describe('Paginated rollouts', () => {
       expect(out.tools.map((tool) => [tool.tool, tool.status])).toEqual([['Bash', 'error'], ['Bash', 'error']]);
       expect(out.errorLines.map((entry) => entry.line)).toEqual(['failed', 'failed']);
     });
+
+    // A poll that fails says nothing about the process it polled: a non-empty write to a process with no tty is `StdinClosed` (unified_exec/process_manager.rs:1021-1026,
+    // errors.rs:19-22), answered `write_stdin failed: <err>` (handlers/unified_exec/write_stdin.rs:123), and the process runs on to its own exit.
+    it('does not settle the exec_command a failed write_stdin polled: the poll is the error, and the item carries the real exit, so the commit records its sha', () => {
+      begin();
+      const closed = 'write_stdin failed: stdin is closed for this session; rerun exec_command with tty=true to keep stdin open';
+      const out = extractOf([
+        pmeta(),
+        execCall(2, 'u1', 'git commit -m x'),
+        backgrounded(3, 'u1'),
+        call(4, 'u2', 'write_stdin', { arguments: JSON.stringify({ session_id: 9, chars: 'y' }) }),
+        ord(shellOut(5, 'u2', closed)),
+        exited(6, 'u1', { status: 'completed', exit_code: 0, aggregated_output: '[main abc1234] x' }),
+      ]);
+      expect(out.tools.map((tool) => [tool.tool, tool.status])).toEqual([['Bash', 'ok'], ['Bash', 'error']]);
+      expect(out.tools[0]).toMatchObject({ commits: ['abc1234'] });
+      expect(out.errorLines.map((entry) => entry.line)).toEqual([closed]);
+    });
   });
 
   it('applies only the first session_meta: a copy from fork history keeps the fork id and cwd (recorder.rs:1157-1158, :1173), in a Legacy rollout, which has no ordinals (ordinal.rs:37)', () => {
@@ -809,6 +827,20 @@ describe('a unified-exec shell call (core/src/tools/handlers/unified_exec)', () 
     ]);
     expect(out.tools.map((tool) => [tool.tool, tool.status])).toEqual([['Bash', 'error'], ['Bash', 'error']]);
     expect(out.errorLines.map((entry) => entry.line)).toEqual(['write_stdin failed: UnknownSessionId { process_id: 5 }', 'write_stdin approval failed: sandbox denied']);
+  });
+
+  // The Legacy form of the case in a CommandExecution describe above: no item exists to say how the process ended, so the exec_command stays unsettled.
+  it('leaves the exec_command a failed write_stdin polled unsettled (process_manager.rs:1026, write_stdin.rs:123): the poll is the error, the process runs on', () => {
+    const closed = 'write_stdin failed: stdin is closed for this session; rerun exec_command with tty=true to keep stdin open';
+    const out = extractOf([
+      meta('/work/app'),
+      unified(2, 'u1', 'exec_command', { cmd: 'git commit -m x' }),
+      shellOut(3, 'u1', head('Process running with session ID 9')),
+      unified(4, 'u2', 'write_stdin', { session_id: 9, chars: 'y' }),
+      shellOut(5, 'u2', closed),
+    ]);
+    expect(out.tools.map((tool) => [tool.tool, tool.status])).toEqual([['Bash', 'none'], ['Bash', 'error']]);
+    expect(out.errorLines.map((entry) => entry.line)).toEqual([closed]);
   });
 
   it('leaves write_stdin rejected: <reason> (write_stdin.rs:118) unsettled, as a declined call is', () => {
