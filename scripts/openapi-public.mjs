@@ -4,8 +4,8 @@
 //   node scripts/openapi-public.mjs <source openapi.json> [--operations <file>] [--out <file>]
 //
 // Exit 0: written. Exit 1: the source or the list is unusable, a listed operationId is not in the source (each one is
-// named), or a $ref points at a component the source lacks. A listed operation on the platform's money side is dropped, not
-// written (see MONEY_PATH below). Exit 2: bad usage. The output is deterministic: object keys
+// named), or a $ref points at a component the source lacks. A listed operation on the platform's withheld side is dropped, not
+// written (see WITHHELD_PATH below). Exit 2: bad usage. The output is deterministic: object keys
 // sorted at every depth, two-space indent, one trailing newline, and no path of the machine that ran it. Its info.title
 // and info.description are fixed in this file; info.version is the source's.
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
@@ -21,26 +21,32 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 // The source's title and description name the platform's internal services, so the public spec states its own; only the
 // version is carried over. The public spec E32 produces replaces this file whole.
 const PUBLIC_TITLE = 'Many Oars API';
-const PUBLIC_DESCRIPTION = 'The Many Oars calls the CLI, starter templates, and coding agents use: register, read, configure, and deploy a workload; exchange an OIDC token; and create, list, rotate, and revoke API keys.';
+const PUBLIC_DESCRIPTION = 'The Many Oars API: register, read, configure, and deploy a workload; exchange an OIDC token; and create, list, rotate, and revoke API keys.';
 
-// The platform's spec also carries a money side, and the public one states none of it. public-operations.json selects
+// The platform's spec also carries operations the public one withholds. public-operations.json selects
 // operations, but this is the backstop that a regeneration cannot get past: a listed operation is dropped when its path
-// is under /billing, one of its tags starts with "Billing", or it reaches a component whose name is a money name. The
+// is under /billing, one of its tags starts with "Billing", or it reaches a component whose name is a withheld name. The
 // components only that operation reached go with it, because the closure below starts from the operations that are kept.
-const MONEY_PATH = /^\/billing(?:\/|$)/;
-const MONEY_TAG = /^billing/i;
-const MONEY_COMPONENT = /billing|price|purchas|charge|credit|payout|payment/i;
-// Kept operations still carry a 402 response and a few texts that name money; the status and the texts are the
+const WITHHELD_PATH = /^\/billing(?:\/|$)/;
+const WITHHELD_TAG = /^billing/i;
+const WITHHELD_COMPONENT = /billing|price|purchas|charge|credit|payout|payment/i;
+// Kept operations still carry a 402 response and a few texts the public spec withholds; the status and the texts are the
 // platform's, so the public spec drops the one and rewrites the others here. Each phrase is the platform's exact wording:
 // wording that changes there stops matching, and the deny-list test over the generated files names what to add.
-const MONEY_STATUS = '402';
-// A schema property that only a payment fills in; ProblemDetail carries one.
-const MONEY_PROPERTIES = new Set(['paymentId']);
+const WITHHELD_STATUS = '402';
+// Schema properties the public spec withholds: ProblemDetail.paymentId, and WorkloadResponse.monthlyReservedCostUsd, an estimate in
+// US dollars.
+const WITHHELD_PROPERTIES = new Set(['paymentId', 'monthlyReservedCostUsd']);
 /** @type {{ phrase: string, plain: string }[]} */
 const TEXT_REWRITES = [
   { phrase: ' (actionUrl: add compute credit)', plain: '' },
   { phrase: ' (Stripe onboarding, a credit-pack checkout)', plain: '' },
   { phrase: "after a credit-driven stop once the creator's compute credit is replenished", plain: 'after a stop at a usage limit once the limit clears' },
+  // The dash in this phrase is the platform's own character, kept so the phrase matches.
+  {
+    phrase: "Platform role names. Matches the bare authority strings used in JWT 'roles' claims, DB role rows, and Spring Security GrantedAuthority — no ROLE_ prefix.",
+    plain: "Platform role names, as they appear in the JWT 'roles' claim, without a ROLE_ prefix.",
+  },
 ];
 
 /**
@@ -99,14 +105,21 @@ const collect = (node, refs, schemes) => {
 
 /**
  * @param {JsonObject} properties a schema's `properties`
- * @returns {JsonObject} the same without the money properties
+ * @returns {JsonObject} the same without the withheld properties
  */
-const withoutMoneyProperties = (properties) =>
-  Object.fromEntries(Object.entries(properties).filter(([name]) => !MONEY_PROPERTIES.has(name)));
+const withoutWithheldProperties = (properties) =>
+  Object.fromEntries(Object.entries(properties).filter(([name]) => !WITHHELD_PROPERTIES.has(name)));
+
+/**
+ * @param {JsonObject} responses an operation's or component's `responses`
+ * @returns {JsonObject} the same without the withheld status, whatever its description says
+ */
+const withoutWithheldStatus = (responses) =>
+  Object.fromEntries(Object.entries(responses).filter(([status]) => status !== WITHHELD_STATUS));
 
 /**
  * @param {JsonValue} node
- * @returns {JsonValue} a copy without a 402 response anywhere and with each phrase of TEXT_REWRITES replaced
+ * @returns {JsonValue} a copy without a 402 response under any `responses` and with each phrase of TEXT_REWRITES replaced
  */
 const neutralize = (node) => {
   if (typeof node === 'string') return TEXT_REWRITES.reduce((text, { phrase, plain }) => text.replaceAll(phrase, plain), node);
@@ -115,8 +128,9 @@ const neutralize = (node) => {
   /** @type {JsonObject} */
   const copy = {};
   for (const [key, value] of Object.entries(node)) {
-    if (key === MONEY_STATUS && isObject(value) && value['description'] === 'Payment Required') continue;
-    copy[key] = neutralize(key === 'properties' && isObject(value) ? withoutMoneyProperties(value) : value);
+    if (key === 'properties' && isObject(value)) copy[key] = neutralize(withoutWithheldProperties(value));
+    else if (key === 'responses' && isObject(value)) copy[key] = neutralize(withoutWithheldStatus(value));
+    else copy[key] = neutralize(value);
   }
   return copy;
 };
@@ -145,12 +159,12 @@ const reachedNames = (node, sourceComponents) => {
  * @param {string} path
  * @param {JsonObject} operation
  * @param {JsonObject} sourceComponents
- * @returns {boolean} whether the operation is on the money side
+ * @returns {boolean} whether the operation is on the withheld side
  */
-const isMoneyOperation = (path, operation, sourceComponents) =>
-  MONEY_PATH.test(path) ||
-  (Array.isArray(operation['tags']) && operation['tags'].some((tag) => typeof tag === 'string' && MONEY_TAG.test(tag))) ||
-  reachedNames(operation, sourceComponents).some((name) => MONEY_COMPONENT.test(name));
+const isWithheldOperation = (path, operation, sourceComponents) =>
+  WITHHELD_PATH.test(path) ||
+  (Array.isArray(operation['tags']) && operation['tags'].some((tag) => typeof tag === 'string' && WITHHELD_TAG.test(tag))) ||
+  reachedNames(operation, sourceComponents).some((name) => WITHHELD_COMPONENT.test(name));
 
 /**
  * @param {JsonObject} source a parsed OpenAPI document
@@ -174,7 +188,7 @@ const filterSpec = (source, operationIds) => {
         kept[key] = value;
       } else if (isObject(value) && typeof value['operationId'] === 'string' && wanted.has(value['operationId'])) {
         found.add(value['operationId']);
-        if (isMoneyOperation(path, value, sourceComponents)) continue;
+        if (isWithheldOperation(path, value, sourceComponents)) continue;
         kept[key] = value;
         keptOperation = true;
       }
