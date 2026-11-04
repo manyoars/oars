@@ -33,11 +33,11 @@
 //                       keeps none, :238-251). `id` is the exec_command's call id (events.rs:571), written when the process exits (events.rs:561-590):
 //                       by the exit watcher for a process the model never polled (unified_exec/async_watcher.rs:158, :224), or by the call itself when it exits in
 //                       its first yield (process_manager.rs:827). It settles a known unresolved shell call from the real `exit_code` and the output; a
-//                       `declined` one (exit code -1, events.rs:552-554) settles nothing. A `failed` one with exit code -1 is a failure with no exit status (a tool
+//                       `declined` one (exit code -1, events.rs:552-554) settles as a refusal only where its output is the user's refusal text (`exec command rejected by user`), and nothing otherwise. A `failed` one with exit code -1 is a failure with no exit status (a tool
 //                       failure message, events.rs:538-542; a process with none, async_watcher.rs:213, :409), so its text is the error line. So a backgrounded process keeps its failure and its commit sha
 //                       even with no `write_stdin` poll; only a Legacy rollout leaves it unsettled until a poll, and there the poll settles it
 //   event_msg mcp_tool_call_end {call_id, result}   an MCP call's outcome: `result.Err`, or `result.Ok.isError` (protocol.rs:3047, :3076); Legacy mode only
-//   event_msg patch_apply_end {call_id, success, stderr, status}   an apply_patch call's outcome (Legacy mode only); a declined one settles nothing, and a
+//   event_msg patch_apply_end {call_id, success, stderr, status}   an apply_patch call's outcome (Legacy mode only); a declined one settles as a refusal only where its stderr is the user's refusal text (`patch rejected by user`), and nothing otherwise, and a
 //                       patch with no end event stays unsettled (a rejected patch is only a `RespondToModel` output, tools/handlers/apply_patch.rs)
 //   event_msg exec_command_end                  never persisted at ac558e2 (policy.rs:165) nor at rust-v0.46.0, so it is not read: the CommandExecution item and the call's output are the two sources
 // Older shapes: the JSON `{output, metadata.exit_code}` wrapper of a shell output (rust-v0.46.0 core/src/tools/mod.rs:186-210).
@@ -200,13 +200,17 @@ const RUNNING_LINE = /^Process running with session ID (\S+)\s*$/m;
  */
 const SPAWN_ERROR = /^(?:execution error|exec_command failed|write_stdin(?: approval)? failed): /;
 /**
- * A declined call is the user's refusal: Codex writes `exec command rejected by user` as a shell call's whole output (events.rs:456), and a `declined` status on a
- * patch or a CommandExecution item (protocol.rs:4072; events.rs:552-554) is the same decision with no text. Both settle as these two sentences, which `errorCodeOf`
- * classes `user-rejected`. `write_stdin rejected: <reason>` (:118) is not read this way: its reason is the approval policy's, which the user may not have given.
+ * A declined call is the user's refusal only where its message says so. Codex reports `ToolError::Rejected` as `declined` for a user's refusal and for some
+ * runtime rejections, and normalizes only the literal text `rejected by user` (events.rs:448-458): `exec command rejected by user` for a shell call (:456) and
+ * `patch rejected by user` for a patch (:457). So a `declined` item settles as the user's refusal when the message it carries is that text (`aggregated_output`
+ * for a CommandExecution item, events.rs:549-551; `stderr` for a FileChange item and `patch_apply_end`, events.rs:341, :616), and any other `declined` message
+ * stays unsettled. A settled one is these two sentences, which `errorCodeOf` classes `user-rejected`. `write_stdin rejected: <reason>` (:118) is not read this
+ * way either: its reason is the approval policy's, which the user may not have given.
  */
 const DECLINED_SHELL = 'exec command rejected by user';
 const DECLINED_OUTPUT = /^exec command rejected by user\s*$/;
 const DECLINED_PATCH = 'patch rejected by user';
+const DECLINED_PATCH_TEXT = /^(?:patch )?rejected by user\s*$/;
 
 /** The text of a `function_call_output` body: a bare string, or an array of `{type: input_text, text}` items (protocol/src/models.rs:2376). */
 const bodyText = (raw: unknown): string => {
@@ -382,10 +386,10 @@ export const rolloutLines = (text: string, fallbackId: string, parentText?: stri
     } else if (kind === 'AgentMessage') {
       const message = contentText(item.content, 'Text');
       if (message !== '') assistant([{ type: 'text', text: message }], when);
-    } else if (kind === 'FileChange' && id !== undefined && (item.status === 'completed' || item.status === 'failed' || item.status === 'declined')) {
+    } else if (kind === 'FileChange' && id !== undefined && (item.status === 'completed' || item.status === 'failed' || (item.status === 'declined' && DECLINED_PATCH_TEXT.test(str(item.stderr) ?? '')))) {
       settlePatch(id, item.status === 'declined' ? DECLINED_PATCH : item.status === 'failed' ? (str(item.stderr) ?? 'patch failed') : undefined, when);
-    } else if (kind === 'CommandExecution' && id !== undefined && item.status === 'declined') {
-      // A `declined` one has exit code -1 and no outcome (events.rs:552-554): the user refused it, so it settles as a refusal.
+    } else if (kind === 'CommandExecution' && id !== undefined && item.status === 'declined' && DECLINED_OUTPUT.test(str(item.aggregated_output) ?? '')) {
+      // A `declined` one has exit code -1 (events.rs:552-554); only the user's refusal text settles it, as a refusal.
       settleShell(id, DECLINED_SHELL, '', when);
     } else if (kind === 'CommandExecution' && id !== undefined && (item.status === 'completed' || item.status === 'failed')) {
       // The exec_command's own item: `id` is its call id, written when the process exits, even one the model never polled (header). It carries the
@@ -480,7 +484,11 @@ export const rolloutLines = (text: string, fallbackId: string, parentText?: stri
         if (id !== undefined) settleMcp(id, typeof outcome.Err === 'string' || refused ? (text === '' ? 'mcp tool call failed' : text) : undefined, when);
       } else if (kind === 'patch_apply_end') {
         const id = str(payload.call_id);
-        if (id !== undefined) settlePatch(id, payload.status === 'declined' ? DECLINED_PATCH : payload.success === false ? (str(payload.stderr) ?? 'patch failed') : undefined, when);
+        const declined = payload.status === 'declined';
+        // A declined patch settles only where its stderr is the user's refusal text (`DECLINED_PATCH_TEXT`); any other declined one stays unsettled.
+        if (id !== undefined && (!declined || DECLINED_PATCH_TEXT.test(str(payload.stderr) ?? ''))) {
+          settlePatch(id, declined ? DECLINED_PATCH : payload.success === false ? (str(payload.stderr) ?? 'patch failed') : undefined, when);
+        }
       }
     } else if (type === 'response_item') {
       const kind = str(payload.type);

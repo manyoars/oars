@@ -196,7 +196,7 @@ const errorText = (raw: unknown): string => {
   return message ?? str(raw) ?? 'error';
 };
 
-/** An aborted terminal call (the user stopped it) has no outcome: it reads `none`, as a cancelled edit does, so it never counts as a fix. */
+/** An aborted terminal call (the user stopped it) has no outcome: it reads `none`, as a cancelled edit does, so it never counts as a fix. A call the user rejected is settled before this is asked. */
 const aborted = (call: Obj, name: string): boolean => {
   const result = name === 'run_terminal_cmd' ? parse(call.result) : undefined;
   return isObj(result) && (str(result.endedReason) ?? '').endsWith('_ABORTED');
@@ -240,7 +240,7 @@ const linesOf = (bubble: Bubble, base: Obj, at: string, model: string | undefine
   // A zero count means Cursor did not record one, so no usage is written rather than a measured zero.
   if (input > 0 || output > 0) message.usage = { input_tokens: input, output_tokens: output };
   const lines: Obj[] = [{ ...base, type: 'assistant', uuid: bubble.id, requestId: bubble.id, timestamp: at, ...(model === undefined ? {} : { requestedModel: model }), message }];
-  if (call !== undefined && name !== undefined && (call.status === 'error' || call.status === 'completed' || call.userDecision === 'rejected') && !aborted(call, name)) {
+  if (call !== undefined && name !== undefined && (call.userDecision === 'rejected' || ((call.status === 'error' || call.status === 'completed') && !aborted(call, name)))) {
     const failure = failureOf(call, name);
     lines.push({
       ...base,

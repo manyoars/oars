@@ -16,8 +16,8 @@
 // record, all read from the transcript except `repoFiles`, which keeps its existing source. It changes no value captured before, so EXTRACTOR stays 11.
 // Version 15 (CAPTURE 15) changes three stored values of version 14: a Cargo table header that ends in a comment (`[package] # x`) is seen as a header, so the next
 // `version =` is no longer stored as `crates:version`; and `packageVersion` keeps only a version of three or four dotted numbers, so a bare `@1` or `==2.31` stores null; and, since calls with a null `packageVersion` share one `first`, a later short pin of the same package now marks `false`. EXTRACTOR stays 11.
-// Version 16 (CAPTURE 16) stores a call the user refused as Claude Code does, `status` `error` and `errorCode` `user-rejected`: a Cursor call whose `toolFormerData.userDecision` is `rejected`; a Codex declined
-// shell call, `declined` patch, or `declined` command item (each `none` before); and a Gemini call the user cancelled (`errorCode` `other` before). A call that was `none` or `ok` gains an `error-line` record whose `line` is
+// Version 16 (CAPTURE 16) stores a call the user refused as Claude Code does, `status` `error` and `errorCode` `user-rejected`: a Cursor call whose `toolFormerData.userDecision` is `rejected`; a Codex shell
+// call, patch, or command item that is `declined` with the user's refusal text (each `none` before; any other `declined` stays `none`); and a Gemini call the user cancelled or denied (`errorCode` `other` before). A call that was `none` or `ok` gains an `error-line` record whose `line` is
 // the refusal text and loses its `manifest`, and where a result line is new (every Codex refusal, a Cursor one whose status is neither `error` nor `completed`) its session's `lines` and skeleton move. Any other
 // decision value, or none, changes nothing and is never stored; a Grok plan-mode refusal and a Codex `write_stdin rejected:` stay as they were. EXTRACTOR stays 11.
 //

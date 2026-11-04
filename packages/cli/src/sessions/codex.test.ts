@@ -341,6 +341,16 @@ describe('shell, MCP, patch, and usage outcomes', () => {
     expect(out.errorLines.map((entry) => entry.line)).toEqual(['patch rejected by user']);
   });
 
+  it('leaves a declined patch_apply_end unsettled when its stderr is a setup failure, not the user refusal text (events.rs:448-458)', () => {
+    const out = extractOf([
+      meta('/work/app'),
+      line(T(2), 'response_item', { type: 'custom_tool_call', name: 'apply_patch', call_id: 'p1', input: '*** Update File: src/a.ts' }),
+      line(T(3), 'event_msg', { type: 'patch_apply_end', call_id: 'p1', success: false, stderr: 'sandbox setup failed', status: 'declined' }),
+    ]);
+    expect(out.tools).toMatchObject([{ tool: 'Edit', status: 'none' }]);
+    expect(out.errorLines).toEqual([]);
+  });
+
   it('reads cache_write_input_tokens as cache creation, outside input: input 100 = cached 40 + write 60 (responses.rs:889-911)', () => {
     const withWrite = line(T(4), 'event_msg', { type: 'token_count', info: { last_token_usage: { input_tokens: 100, cached_input_tokens: 20, cache_write_input_tokens: 30, output_tokens: 10, total_tokens: 110 } } });
     const out = extractOf([meta('/work/app'), say(3, 'hello'), withWrite]);
@@ -614,10 +624,17 @@ describe('Paginated rollouts', () => {
       patchCall(4, 'p2'),
       change(5, 'p2', 'completed'),
       patchCall(6, 'p3'),
-      change(7, 'p3', 'declined', 'rejected by user'),
+      change(7, 'p3', 'declined', 'patch rejected by user'),
     ]);
     expect(out.tools.map((tool) => [tool.status, tool.errorCode ?? null])).toEqual([['error', 'other'], ['ok', null], ['error', 'user-rejected']]);
     expect(out.errorLines.map((entry) => entry.line)).toEqual(['could not apply', 'patch rejected by user']);
+  });
+
+  it('leaves a declined FileChange item unsettled when its stderr is a setup failure, not the user refusal text', () => {
+    begin();
+    const out = extractOf([pmeta(), patchCall(2, 'p1'), done(3, { type: 'FileChange', id: 'p1', changes: {}, status: 'declined', stdout: '', stderr: 'sandbox setup failed' })]);
+    expect(out.tools).toMatchObject([{ tool: 'Edit', status: 'none' }]);
+    expect(out.errorLines).toEqual([]);
   });
 
   it('settles an MCP call from its McpToolCall item (mcp_tool_call.rs:1189-1207, items.rs:459): an error or an isError result fails it', () => {
@@ -706,6 +723,18 @@ describe('Paginated rollouts', () => {
       ]);
       expect(out.tools.map((tool) => [tool.status, tool.errorCode ?? null])).toEqual([['error', 'user-rejected'], ['none', null]]);
       expect(out.errorLines.map((entry) => entry.line)).toEqual(['exec command rejected by user']);
+    });
+
+    it('leaves a Declined item unsettled when its output is a setup failure, not the user refusal text (events.rs:448-458)', () => {
+      begin();
+      const out = extractOf([
+        pmeta(),
+        execCall(2, 'u1', 'rm -rf x'),
+        backgrounded(3, 'u1'),
+        exited(4, 'u1', { status: 'declined', exit_code: -1, aggregated_output: 'sandbox setup failed' }),
+      ]);
+      expect(out.tools).toMatchObject([{ tool: 'Bash', status: 'none' }]);
+      expect(out.errorLines).toEqual([]);
     });
 
     it('settles a polled exec_command once: the write_stdin that saw it exit and then the item', () => {
@@ -1050,7 +1079,7 @@ describe('a unified-exec shell call (core/src/tools/handlers/unified_exec)', () 
     expect(out.errorLines.map((entry) => entry.line)).toEqual([closed]);
   });
 
-  it('leaves write_stdin rejected: <reason> (write_stdin.rs:118) unsettled, as a declined call is', () => {
+  it('leaves write_stdin rejected: <reason> (write_stdin.rs:118) unsettled: the approval policy gave the reason', () => {
     const out = extractOf([meta('/work/app'), unified(2, 'u1', 'write_stdin', { session_id: 5, chars: 'y' }), shellOut(3, 'u1', 'write_stdin rejected: not allowed')]);
     expect(out.tools).toMatchObject([{ tool: 'Bash', status: 'none' }]);
     expect(out.errorLines).toEqual([]);
