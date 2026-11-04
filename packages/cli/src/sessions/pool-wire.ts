@@ -3,7 +3,7 @@
 // sending, and the server parses it again, field by field, because a live URL takes anything from anyone. This file imports nothing from the file system: the Worker bundles it.
 
 import { ACTION_TABLES, CANONICAL_ACTIONS, mcpOf, type CanonicalAction } from './actions.js';
-import { FRAMEWORKS, isPublicMcpTool, isRegistryVersion, LANGUAGES, LITERAL, PRIVATE, publicEffort, publicModel, publicVersion, PUBLIC_FLAGS, PUBLIC_HOSTS, PUBLIC_MCP_SERVERS, PUBLIC_PACKAGES, PUBLIC_PROGRAMS, PUBLIC_SKILLS, PUBLIC_SUBCOMMANDS, REPO_SIZES, VOCAB_VERSION } from './public-vocabulary.js';
+import { CUSTOM_AGENT, FRAMEWORKS, isPublicMcpTool, isRegistryVersion, LANGUAGES, LITERAL, PRIVATE, publicEffort, publicModel, publicVersion, PUBLIC_FLAGS, PUBLIC_HOSTS, PUBLIC_MCP_SERVERS, PUBLIC_PACKAGES, PUBLIC_PROGRAMS, PUBLIC_SKILLS, projectedAgentType, PUBLIC_SUBCOMMANDS, REPO_SIZES, VOCAB_VERSION } from './public-vocabulary.js';
 import type { Cell } from './cells.js';
 import type { Motif } from './motif.js';
 import type { Read, ReadAsOf } from './read.js';
@@ -42,6 +42,10 @@ export type SkeletonStep = Omit<StepObservation, 'n' | 'seg' | 'frameId' | 'cost
   tokens: number | null;
   /** An `ms` bucket of the step's time. */
   ms: number | null;
+  /** A `tokens` bucket of the tokens the run spent after this step (spec Section 1.2): the bucket of the exact sum, never a sum of buckets. */
+  remainingTokens: number;
+  /** The projected type of the subagent whose run holds the step, a built-in or `custom`; null on a main-run step. */
+  agentType: string | null;
 };
 
 /** A call's order is its position in `tools`, and its `prompt` is a position in the same transcript's `prompts`: ordinals inside the batch, never the session's own numbers. */
@@ -68,6 +72,9 @@ export interface SkeletonPrompt {
 }
 
 export interface SkeletonTranscript {
+  /** The transcript's Merkle root and the count of its lines it covers (Section 2, "Subagents"): one pair for each transcript, the main's first. */
+  merkleRoot: string;
+  leaves: number;
   harness: Harness;
   frame: Frame;
   prompts: SkeletonPrompt[];
@@ -80,6 +87,8 @@ export interface SessionSkeleton {
   id: string;
   /** The main transcript first, then each subagent's. */
   transcripts: SkeletonTranscript[];
+  /** One for the batch: a hash of the main transcript's non-null call durations in call order, only with `MIN_TIMED_CALLS` of them; a subagent's calls never join it. */
+  timingPrint: string | null;
   /** The batch's client-built delta entries (Section 2, "Deltas"). Empty until the client builds them; a non-empty list is refused. */
   deltas: never[];
 }
@@ -87,8 +96,29 @@ export interface SessionSkeleton {
 /** One main session and the subagents it spawned, as the local store holds them. */
 export interface SessionRecords {
   main: SessionObservation;
-  transcripts: { session: SessionObservation; prompts: PromptObservation[]; tools: ToolObservation[] }[];
+  /** The main transcript first, then each subagent's, ordered by session so one store builds one batch. */
+  transcripts: { session: SessionObservation; prompts: PromptObservation[]; tools: ToolObservation[]; root: TranscriptRoot | null }[];
 }
+
+/** What a skeleton file holds of a transcript that may leave the machine: its root and the count of lines under it. */
+export interface TranscriptRoot {
+  merkleRoot: string;
+  leaves: number;
+}
+
+/** W's minimum for a timing print (deposit-weighting spec, layer 5): fewer timed calls than this say too little to tell sessions apart. */
+export const MIN_TIMED_CALLS = 50;
+
+/** A session has ended once no transcript of it has gained a line for this long (`session_idle_hours`, spec Section 7). */
+export const SESSION_IDLE_HOURS = 6;
+const HOUR_MS = 60 * 60 * 1000;
+
+/**
+ * Whether a session's batch may be built at `now`: no transcript of it, main or subagent, has gained a line for `SESSION_IDLE_HOURS`. A transcript gains a line when capture sees it change, which
+ * stamps a new `rev` in epoch milliseconds, but a transcript can grow after the last capture, so `written` (the newest write to any raw file of the session, 0 when none is known) counts too: the
+ * session was last active at the later of the two. A subagent that died without an end marker holds its session back at most that long.
+ */
+export const hasEnded = (records: SessionRecords, now: number, written: number): boolean => now - Math.max(written, ...records.transcripts.map(({ session }) => session.rev)) >= SESSION_IDLE_HOURS * HOUR_MS;
 
 const groupBy = <T, K>(items: readonly T[], keyOf: (item: T) => K): Map<K, T[]> => {
   const groups = new Map<K, T[]>();
@@ -102,13 +132,17 @@ const groupBy = <T, K>(items: readonly T[], keyOf: (item: T) => K): Map<K, T[]> 
 };
 
 /** Every main session of a store, with its records. */
-export const sessionsOf = (store: { sessions: readonly SessionObservation[]; subagents: readonly SessionObservation[]; prompts: readonly PromptObservation[]; tools: readonly ToolObservation[] }): SessionRecords[] => {
+export const sessionsOf = (
+  store: { sessions: readonly SessionObservation[]; subagents: readonly SessionObservation[]; prompts: readonly PromptObservation[]; tools: readonly ToolObservation[] },
+  roots: ReadonlyMap<string, TranscriptRoot>,
+): SessionRecords[] => {
   // Grouped once: a fleet's store holds thousands of sessions over hundreds of thousands of rows, and a scan per session would be quadratic.
   const prompts = groupBy(store.prompts, (prompt) => prompt.session);
   const tools = groupBy(store.tools, (tool) => tool.session);
   const subagents = groupBy(store.subagents, (subagent) => subagent.parent);
-  const recordsOf = (session: SessionObservation): SessionRecords['transcripts'][number] => ({ session, prompts: prompts.get(session.session) ?? [], tools: tools.get(session.session) ?? [] });
-  return store.sessions.map((main) => ({ main, transcripts: [main, ...(subagents.get(main.session) ?? [])].map(recordsOf) }));
+  const recordsOf = (session: SessionObservation): SessionRecords['transcripts'][number] => ({ session, prompts: prompts.get(session.session) ?? [], tools: tools.get(session.session) ?? [], root: roots.get(session.session) ?? null });
+  // A subagent whose main transcript the store does not hold is in no group: it cannot be folded, and counting it alone would raise `n`.
+  return store.sessions.map((main) => ({ main, transcripts: [main, ...[...(subagents.get(main.session) ?? [])].sort((a, b) => (a.session < b.session ? -1 : 1))].map(recordsOf) }));
 };
 
 /** One command of a shell call as the projection reads it (`projectStoredShell`): a program, its subcommand, and its flags, each a list member or `private`. */
@@ -138,22 +172,60 @@ const wireCommand = ({ program, subcommand, flags }: ShellCommand): ShellIdentit
   return { program, sub: subcommand !== null && PUBLIC_SUBCOMMANDS.get(program)?.has(subcommand) === true ? subcommand : null, flags: flags.filter(isWireFlag) };
 };
 
-/** A stored tool's steps with each shell step's identity replaced by the projected, wire-held command; the other steps keep theirs. The one place a deposit and a local read take it from. */
-export const projectedSteps = (tool: ToolObservation, read: ShellReader): StepObservation[] => {
+/** The wire's one spelling of "not admitted": a name the server's list does not hold goes as `private`, whatever the local store spells it. */
+const listed = (allowed: ReadonlySet<string>, name: string): string => (allowed.has(name) ? name : PRIVATE);
+
+/** A pull in the wire's spelling: its package name is a list member or `private`. A version beside a masked name could identify it, so it goes as `<literal>` (null stays null), the rule capture applies. */
+const wirePull = (pull: PullIdentity): PullIdentity => {
+  const name = listed(PUBLIC_PACKAGES, pull.name);
+  return { ...pull, name, version: name === PRIVATE && pull.version !== null ? LITERAL : pull.version };
+};
+
+/** A non-shell step's identity in the wire's spelling; a shell step's comes from `wireCommand`. */
+const wireIdentity = (identity: StepIdentity): StepIdentity => {
+  if (identity === null || 'program' in identity) return identity;
+  if ('server' in identity) {
+    const server = listed(PUBLIC_MCP_SERVERS, identity.server);
+    // A tool beside a masked server has no list to be checked against, so it goes as the literal.
+    return server === PRIVATE ? { server, tool: LITERAL } : { ...identity, server };
+  }
+  if ('skill' in identity) return { skill: listed(PUBLIC_SKILLS, identity.skill) };
+  return { host: identity.host === null ? null : listed(PUBLIC_HOSTS, identity.host) };
+};
+
+/**
+ * A stored tool's steps as the wire holds them: each shell step's identity is replaced by the projected command, and every name the server has no row for (a native name, MCP server,
+ * skill, host, or pull name) reads `private`. A `private` program holds no pull, so a stored step whose public program has since left the list carries none. The one place a deposit and a local read take it from.
+ */
+export const projectedSteps = (tool: ToolObservation, read: ShellReader, harness: Harness): StepObservation[] => {
   const commands = read(tool);
   return (tool.steps ?? []).map((step, at) => {
-    if (step.action !== 'shell.exec') return step;
+    const native = admittedNative(harness, step.native) ? step.native : PRIVATE;
+    if (step.action !== 'shell.exec') return { ...step, native, identity: wireIdentity(step.identity) };
     const command = wireCommand(commands[at] ?? { program: PRIVATE, subcommand: null, flags: [] });
     const pulls = step.identity !== null && 'program' in step.identity ? step.identity.pulls : undefined;
-    return { ...step, identity: pulls === undefined ? command : { ...command, pulls } };
+    return { ...step, native, identity: pulls === undefined || command.program === PRIVATE ? command : { ...command, pulls: pulls.map(wirePull) } };
   });
 };
 
 /** A transcript's calls in the order they ran, which is the order a skeleton holds them in. */
 const byCall = (tools: readonly ToolObservation[]): ToolObservation[] => [...tools].sort((a, b) => a.n - b.n);
 
-const transcriptOf = ({ session, prompts, tools }: SessionRecords['transcripts'][number], spawners: ReadonlyMap<number, number> | null, read: ShellReader): SkeletonTranscript | null => {
-  if (session.frame === undefined) return null;
+/** The step of a call that carries the runs it spawned: its first spawn step, else its first step. A call with no step carries none. */
+const carrier = (steps: readonly { action: string }[]): number => Math.max(0, steps.findIndex(({ action }) => action === 'agent.spawn'));
+
+/** What a run does about the subagent runs its calls spawned: the exact tokens each call's runs spent, by the call's position in the main run. Empty for a subagent's run. */
+type Spawned = ReadonlyMap<number, number>;
+
+const transcriptOf = (
+  { session, prompts, tools, root }: SessionRecords['transcripts'][number],
+  spawners: ReadonlyMap<number, number> | null,
+  spawned: Spawned,
+  agentType: string | null,
+  read: ShellReader,
+): SkeletonTranscript | null => {
+  if (session.frame === undefined || root === null) return null;
+  const harness = session.harness ?? 'claude-code';
   const framedPrompts: SkeletonPrompt[] = [];
   const promptAt = new Map<number, number>();
   for (const { index, cls, errors, wallSec, usage, frame } of [...prompts].sort((a, b) => a.index - b.index)) {
@@ -168,6 +240,8 @@ const transcriptOf = ({ session, prompts, tools }: SessionRecords['transcripts']
     });
   }
   const steppedTools: SkeletonTool[] = [];
+  // The exact tokens of every step, by call and step, which the `remainingTokens` buckets below are computed from: a bucket of a sum is not a sum of buckets.
+  const exact: number[][] = [];
   let unrecorded = 0;
   for (const tool of byCall(tools)) {
     if (tool.steps === undefined) return null;
@@ -176,32 +250,68 @@ const transcriptOf = ({ session, prompts, tools }: SessionRecords['transcripts']
     // the calls that shared a prompt still share one, and no position reads as a prompt.
     if (prompt !== null && !promptAt.has(prompt)) promptAt.set(prompt, framedPrompts.length + unrecorded++);
     const promptPosition = prompt === null ? null : (promptAt.get(prompt) ?? null);
-    const steps = projectedSteps(tool, read).map(({ action, native, identity, status: reported, cost, parent }): SkeletonStep => ({
+    const projected = projectedSteps(tool, read, harness);
+    exact.push(projected.map(({ cost }) => cost.tokens ?? 0));
+    const steps = projected.map(({ action, native, identity, status: reported, cost, parent }): SkeletonStep => ({
       action,
       native,
       identity,
       status: reported,
       tokens: cost.tokens === null ? null : bucketOf('tokens', cost.tokens),
       ms: cost.durationMs === null ? null : bucketOf('ms', cost.durationMs),
+      remainingTokens: 0,
+      agentType,
       parent: parent === null || spawners === null ? null : (spawners.get(parent) ?? null),
     }));
     steppedTools.push({ side, prompt: promptPosition, status, durationMs, steps });
   }
-  return { harness: session.harness ?? 'claude-code', frame: session.frame, prompts: framedPrompts, tools: steppedTools };
+  // A step's remaining tokens are those of the steps after it in its own run; a main-run step also counts the subagent runs its later steps spawned (a run belongs to the spawning call's carrier step).
+  let later = 0;
+  for (let call = steppedTools.length - 1; call >= 0; call -= 1) {
+    const steps = steppedTools[call]?.steps ?? [];
+    const held = carrier(steps);
+    for (let at = steps.length - 1; at >= 0; at -= 1) {
+      const step = steps[at];
+      if (step === undefined) continue;
+      step.remainingTokens = bucketOf('tokens', later);
+      later += (exact[call]?.[at] ?? 0) + (at === held ? (spawned.get(call) ?? 0) : 0);
+    }
+  }
+  return { merkleRoot: root.merkleRoot, leaves: root.leaves, harness, frame: session.frame, prompts: framedPrompts, tools: steppedTools };
 };
 
-/** The skeleton of a session; null when any record of it was captured before steps and frames, which holds no closed reading to send. */
-export const skeletonOf = (records: SessionRecords, id: string, read: ShellReader): SessionSkeleton | null => {
+/** The hash a batch's timing print is made with, over the durations in call order: the client's `contentHash` (D1's `hP`). */
+export type Print = (durations: readonly number[]) => string;
+
+/**
+ * The skeleton of a session; null when any record of it was captured before steps and frames, or a transcript of it has no root, which holds no closed reading to send. The batch holds the main
+ * transcript's run first, then each subagent's as its own run; its `id` is the main session's, and its one `timingPrint` is over the main transcript's calls alone.
+ */
+export const skeletonOf = (records: SessionRecords, id: string, read: ShellReader, print: Print): SessionSkeleton | null => {
+  const mainTools = byCall(records.transcripts[0]?.tools ?? []);
   // A subagent's step names the call that spawned it by that call's `n` in the main run, which the skeleton holds as the call's position.
-  const spawners = new Map(byCall(records.transcripts[0]?.tools ?? []).map(({ n }, position) => [n, position]));
+  const spawners = new Map(mainTools.map(({ n }, position) => [n, position]));
+  const spawnedBy = (entry: SessionRecords['transcripts'][number]): boolean => entry.session.spawnedIn === records.main.session;
+  // The exact tokens of the runs each main-run call spawned. A run a subagent spawned names a call of that other transcript, so it joins no main-run step.
+  const spawned = new Map<number, number>();
+  for (const entry of records.transcripts.slice(1)) {
+    if (!spawnedBy(entry)) continue;
+    for (const tool of entry.tools) {
+      for (const { cost, parent } of tool.steps ?? []) {
+        const position = parent === null ? undefined : spawners.get(parent);
+        if (position !== undefined) spawned.set(position, (spawned.get(position) ?? 0) + (cost.tokens ?? 0));
+      }
+    }
+  }
   const transcripts: SkeletonTranscript[] = [];
-  for (const entry of records.transcripts) {
+  for (const [index, entry] of records.transcripts.entries()) {
     // Only a call of the main run has a position here: a step of a subagent a subagent spawned names a call of that other transcript, so it sends no link rather than a false one.
-    const transcript = transcriptOf(entry, entry.session.spawnedIn === records.main.session ? spawners : null, read);
+    const transcript = transcriptOf(entry, index > 0 && spawnedBy(entry) ? spawners : null, index === 0 ? spawned : new Map(), index === 0 ? null : projectedAgentType(entry.session.agentType ?? CUSTOM_AGENT), read);
     if (transcript === null) return null;
     transcripts.push(transcript);
   }
-  return { format: SKELETON_FORMAT, id, transcripts, deltas: [] };
+  const durations = mainTools.flatMap(({ durationMs }) => (durationMs === null ? [] : [durationMs]));
+  return { format: SKELETON_FORMAT, id, transcripts, timingPrint: durations.length < MIN_TIMED_CALLS ? null : print(durations), deltas: [] };
 };
 
 /** A harness version a bundle can be asked for: public, so the request carries nothing private. The admitted list replaces this shape rule when it ships. */
@@ -274,7 +384,7 @@ const oneOf = <T extends string>(list: readonly T[], value: unknown, at: string)
 
 const inSet = (allowed: ReadonlySet<string>, value: unknown, at: string): string => {
   const name = textOf(value, at);
-  if (name !== LITERAL && !allowed.has(name)) throw new Refused(at, 'outside the vocabulary');
+  if (name !== PRIVATE && !allowed.has(name)) throw new Refused(at, 'outside the vocabulary');
   return name;
 };
 
@@ -351,12 +461,15 @@ const parseUsage = (value: unknown, at: string): SkeletonUsage => {
 
 const parsePull = (value: unknown, at: string): PullIdentity => {
   const raw = fieldsOf(value, at, ['registry', 'name', 'version']);
+  const name = inSet(PUBLIC_PACKAGES, raw.name, under(at, 'name'));
   const version = orNull(raw.version, under(at, 'version'), (entry, entryAt) => {
     const text = textOf(entry, entryAt);
     if (text !== LITERAL && !isRegistryVersion(text)) throw new Refused(entryAt, 'outside the vocabulary');
+    // A version beside a masked name could identify it: capture masks the two together.
+    if (name === PRIVATE && text !== LITERAL) throw new Refused(entryAt, 'a private name holds no version');
     return text;
   });
-  return { registry: oneOf(REGISTRIES, raw.registry, under(at, 'registry')), name: inSet(PUBLIC_PACKAGES, raw.name, under(at, 'name')), version };
+  return { registry: oneOf(REGISTRIES, raw.registry, under(at, 'registry')), name, version };
 };
 
 const parseFlag = (value: unknown, at: string): string => {
@@ -369,11 +482,11 @@ const parseIdentity = (harness: Harness, action: CanonicalAction, value: unknown
   if (value === null) return null;
   if (action === 'shell.exec') {
     const raw = fieldsOf(value, at, ['program', 'sub', 'flags'], ['pulls']);
-    // A program is a list member or `private`, and a `private` program holds no subcommand: the projection writes nothing else.
+    // A program is a list member or `private`, and a `private` program holds no subcommand, flag, or pull.
     const program = textOf(raw.program, under(at, 'program'));
     if (program !== PRIVATE && !PUBLIC_PROGRAMS.has(program)) throw new Refused(under(at, 'program'), 'outside the vocabulary');
     if (program === PRIVATE) {
-      if (raw.flags !== undefined && !(Array.isArray(raw.flags) && raw.flags.length === 0)) throw new Refused(under(at, 'flags'), 'a private program holds no flags');
+      if (!(Array.isArray(raw.flags) && raw.flags.length === 0)) throw new Refused(under(at, 'flags'), 'a private program holds no flags');
       if (raw.pulls !== undefined) throw new Refused(under(at, 'pulls'), 'a private program holds no pulls');
     }
     const subs = PUBLIC_SUBCOMMANDS.get(program) ?? new Set<string>();
@@ -397,18 +510,30 @@ const parseIdentity = (harness: Harness, action: CanonicalAction, value: unknown
   throw new Refused(at, 'this action has no identity');
 };
 
+/** Whether the harness's table names this native, so it can cross as itself; anything else (including the literal) crosses as `private`. */
+const admittedNative = (harness: Harness, native: string): boolean => {
+  if (native === PRIVATE) return true;
+  const table = ACTION_TABLES[harness];
+  if (Object.hasOwn(table.rows, native)) return true;
+  const mcp = mcpOf(table, native);
+  return mcp !== undefined && table.toolDelimited && isPublicMcpTool(mcp.server, mcp.tool);
+};
+
 const parseNative = (harness: Harness, value: unknown, at: string): string => {
   const native = textOf(value, at);
-  if (native === LITERAL) return native;
-  const table = ACTION_TABLES[harness];
-  if (Object.hasOwn(table.rows, native)) return native;
-  const mcp = mcpOf(table, native);
-  if (mcp !== undefined && table.toolDelimited && isPublicMcpTool(mcp.server, mcp.tool)) return native;
-  throw new Refused(at, 'outside the vocabulary');
+  if (!admittedNative(harness, native)) throw new Refused(at, 'outside the vocabulary');
+  return native;
+};
+
+/** A subagent type as the projection leaves it: a built-in of a harness, or `custom`; a custom agent's own name is private and never admitted. */
+const parseAgentType = (value: unknown, at: string): string => {
+  const name = textOf(value, at);
+  if (projectedAgentType(name) !== name) throw new Refused(at, 'outside the vocabulary');
+  return name;
 };
 
 const parseStep = (harness: Harness, value: unknown, at: string): SkeletonStep => {
-  const raw = fieldsOf(value, at, ['action', 'native', 'identity', 'status', 'tokens', 'ms', 'parent']);
+  const raw = fieldsOf(value, at, ['action', 'native', 'identity', 'status', 'tokens', 'ms', 'remainingTokens', 'agentType', 'parent']);
   const action = oneOf(CANONICAL_ACTIONS, raw.action, under(at, 'action'));
   return {
     action,
@@ -417,6 +542,8 @@ const parseStep = (harness: Harness, value: unknown, at: string): SkeletonStep =
     status: oneOf(STATUSES, raw.status, under(at, 'status')),
     tokens: orNull(raw.tokens, under(at, 'tokens'), (entry, entryAt) => bucketIn('tokens', entry, entryAt)),
     ms: orNull(raw.ms, under(at, 'ms'), (entry, entryAt) => bucketIn('ms', entry, entryAt)),
+    remainingTokens: bucketIn('tokens', raw.remainingTokens, under(at, 'remainingTokens')),
+    agentType: orNull(raw.agentType, under(at, 'agentType'), parseAgentType),
     parent: orNull(raw.parent, under(at, 'parent'), countOf),
   };
 };
@@ -443,10 +570,21 @@ const parsePrompt = (value: unknown, at: string): SkeletonPrompt => {
   };
 };
 
+const ROOT = /^[0-9a-f]{64}$/;
+const PRINT = /^[0-9a-f]{16}$/;
+
+const parseRoot = (value: unknown, at: string): string => {
+  const root = textOf(value, at);
+  if (!ROOT.test(root)) throw new Refused(at, 'not a SHA-256');
+  return root;
+};
+
 const parseTranscript = (value: unknown, at: string): SkeletonTranscript => {
-  const raw = fieldsOf(value, at, ['harness', 'frame', 'prompts', 'tools']);
+  const raw = fieldsOf(value, at, ['merkleRoot', 'leaves', 'harness', 'frame', 'prompts', 'tools']);
   const harness = oneOf(HARNESSES, raw.harness, under(at, 'harness'));
   return {
+    merkleRoot: parseRoot(raw.merkleRoot, under(at, 'merkleRoot')),
+    leaves: countOf(raw.leaves, under(at, 'leaves')),
     harness,
     frame: parseFrame(raw.frame, under(at, 'frame')),
     prompts: listOf(raw.prompts, under(at, 'prompts'), parsePrompt),
@@ -459,7 +597,7 @@ export const parseSkeleton = (value: unknown): { ok: true; skeleton: SessionSkel
   try {
     // The first form sent exact usage; it is named here, since its fields would otherwise read as a list of strangers.
     if (isFields(value) && value.format === 1) throw new Refused('format', 'the exact-count form (format 1) is no longer read; send format 2');
-    const raw = fieldsOf(value, '', ['format', 'id', 'transcripts', 'deltas']);
+    const raw = fieldsOf(value, '', ['format', 'id', 'transcripts', 'timingPrint', 'deltas']);
     if (raw.format !== SKELETON_FORMAT) throw new Refused('format', 'not a format this version reads');
     const id = textOf(raw.id, 'id');
     if (!ID.test(id)) throw new Refused('id', 'not a hash');
@@ -468,6 +606,22 @@ export const parseSkeleton = (value: unknown): { ok: true; skeleton: SessionSkel
     if (transcripts.length === 0) throw new Refused('transcripts', 'empty');
     // A counting batch is what lifts the fetch cap, so a deposit has to hold something to derive from.
     if (transcripts.every(({ prompts, tools }) => prompts.length === 0 && tools.length === 0)) throw new Refused('transcripts', 'holds no prompt and no tool');
+    // The main run's calls make the one print, so it exists exactly when the main run holds enough timed calls; a subagent's calls never decide it.
+    const timed = (transcripts[0]?.tools ?? []).filter(({ durationMs }) => durationMs !== null).length;
+    const timingPrint = orNull(raw.timingPrint, 'timingPrint', (entry, entryAt) => {
+      const text = textOf(entry, entryAt);
+      if (!PRINT.test(text)) throw new Refused(entryAt, 'not a hash');
+      return text;
+    });
+    if ((timingPrint === null) !== (timed < MIN_TIMED_CALLS)) throw new Refused('timingPrint', timingPrint === null ? 'missing: the main run holds enough timed calls' : 'not allowed: the main run holds too few timed calls');
+    // A step carries the type of the subagent whose run holds it, so the main run's steps carry none and every subagent step carries one.
+    transcripts.forEach(({ tools }, index) => {
+      tools.forEach(({ steps }, call) => {
+        steps.forEach(({ agentType }, position) => {
+          if ((agentType === null) !== (index === 0)) throw new Refused(`transcripts[${String(index)}].tools[${String(call)}].steps[${String(position)}].agentType`, index === 0 ? 'a main-run step has no subagent type' : 'a subagent step needs its type');
+        });
+      });
+    });
     // Positions are the only ordinals on the wire, so each must name something the batch holds.
     const mainCalls = transcripts[0]?.tools.length ?? 0;
     transcripts.forEach(({ prompts, tools }, index) => {
@@ -480,7 +634,7 @@ export const parseSkeleton = (value: unknown): { ok: true; skeleton: SessionSkel
         });
       });
     });
-    return { ok: true, skeleton: { format: SKELETON_FORMAT, id, transcripts, deltas: [] } };
+    return { ok: true, skeleton: { format: SKELETON_FORMAT, id, transcripts, timingPrint, deltas: [] } };
   } catch (error) {
     if (error instanceof Refused) return { ok: false, field: error.field, reason: error.reason };
     throw error;

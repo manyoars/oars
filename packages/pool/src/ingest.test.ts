@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { storeOf } from '../../cli/src/sessions/cell-increments.js';
 import { deriveCells } from '../../cli/src/sessions/cells.js';
-import { frame, prompt, session, step, storedNames, store, tool } from '../../cli/src/sessions/pool-fixture.js';
-import { sessionsOf, skeletonOf, type SessionSkeleton } from '../../cli/src/sessions/pool-wire.js';
+import { frame, printOf, prompt, session, sessionsFrom, step, storedNames, store, tool } from '../../cli/src/sessions/pool-fixture.js';
+import { skeletonOf, type SessionSkeleton } from '../../cli/src/sessions/pool-wire.js';
 import type { CanonicalAction } from '../../cli/src/sessions/actions.js';
 import { PUBLIC_PROGRAMS, PUBLIC_SUBCOMMANDS } from '../../cli/src/sessions/public-vocabulary.js';
 import type { Bound, Env, PoolDb } from './http.js';
@@ -306,7 +306,7 @@ describe('what stored cells cannot take back', () => {
   }, 60_000);
 });
 
-// A deposit inside the route's 1 MB limit binds far more than 1 MB of cell JSON (the cells run about four times the skeleton), and D1 refuses a value over 2 MB, so each payload goes in chunks.
+// A deposit inside the route's 1 MB limit binds far more than 1 MB of cell JSON (a large batch of varied steps runs its cell JSON to about four times the skeleton), and D1 refuses a value over 2 MB, so each payload goes in chunks.
 describe('a large deposit', () => {
   const NATIVES: [CanonicalAction, string][] = [
     ['file.read', 'Read'],
@@ -324,7 +324,7 @@ describe('a large deposit', () => {
   const programs = [...PUBLIC_PROGRAMS];
 
   /** One prompt of `STEPS` calls whose actions follow a fixed pseudo-random line, so the windows over it are mostly distinct and so are its cells. */
-  const largeSkeleton = (id: string): SessionSkeleton => {
+  const largeSkeleton = (id: string, steps = STEPS, perCall = 1): SessionSkeleton => {
     let seed = 7;
     const next = (): number => {
       seed = (seed * 1103515245 + 12345) % 2147483648;
@@ -332,16 +332,21 @@ describe('a large deposit', () => {
       return Math.floor(seed / 65536);
     };
     const framed = frame({ shell: 'bash', day: '2026-11-01', stack: { languages: ['typescript'], frameworks: [], size: null } });
-    const calls = Array.from({ length: STEPS }, (_, n) => {
+    const observed = Array.from({ length: steps }, (_, n) => {
       const [action, native] = NATIVES[next() % NATIVES.length] ?? NATIVES[0] ?? ['other', 'x'];
       // A program, one of its subcommands, and a short flag, all from the public vocabulary: thousands of identities, so the named windows over them rarely repeat.
       const program = programs[next() % programs.length] ?? 'git';
       const subs = [null, ...(PUBLIC_SUBCOMMANDS.get(program) ?? [])];
       const identity = action === 'shell.exec' ? { program, sub: subs[next() % subs.length] ?? null, flags: [`-${FLAGS[next() % FLAGS.length] ?? 'a'}`] } : null;
-      return tool('s1', n, native, { steps: [step(n, 0, action, { native, identity })] });
+      return { native, observed: step(n, n % perCall, action, { native, identity }) };
     });
-    const [only] = sessionsOf(store({ sessions: [session('s1', { frame: framed })], prompts: [prompt('s1', 0, { frame: framed })], tools: calls }));
-    const built = only === undefined ? null : skeletonOf(only, id, storedNames);
+    // Several steps to a call carry fewer bytes of call wrapper per step, so a deposit can hold more cells' keys under the route's size limit.
+    const calls = Array.from({ length: Math.ceil(steps / perCall) }, (_, call) => {
+      const held = observed.slice(call * perCall, (call + 1) * perCall);
+      return tool('s1', call, held[0]?.native ?? 'x', { steps: held.map(({ observed: one }) => one) });
+    });
+    const [only] = sessionsFrom(store({ sessions: [session('s1', { frame: framed })], prompts: [prompt('s1', 0, { frame: framed })], tools: calls }));
+    const built = only === undefined ? null : skeletonOf(only, id, storedNames, printOf);
     if (built === null) throw new Error('no skeleton');
     return built;
   };
@@ -364,6 +369,22 @@ describe('a large deposit', () => {
       expect(await db.prepare('SELECT COUNT(*) AS count FROM motifs').first('count')).toBe(wanted.motifs.length);
       expect(await db.prepare("SELECT COUNT(*) AS count FROM contributors WHERE kind = 'cell'").first('count')).toBe(wanted.cells.size);
       expect(await db.prepare("SELECT COUNT(*) AS count FROM cells WHERE clusters = 1").first('count')).toBe(wanted.cells.size);
+    });
+  }, 120_000);
+
+  // The keys of a deposit near the route's limit run past one chunk too, so the cluster update and the contributor insert must pair across chunks.
+  it('counts one cluster for every cell when its keys alone take more than one chunk', async () => {
+    const skeleton = largeSkeleton('0000000000009102', 4800, 4);
+    const wanted = incrementsOf(skeleton);
+    expect(JSON.stringify(skeleton).length).toBeLessThan(1024 * 1024);
+    expect(chunksOf([...wanted.cells.keys()]).length).toBeGreaterThan(1);
+    await inFreshPool({}, async (target) => {
+      const token = await accountOn(target, '9102');
+      expect((await target.post('/v1/deposits', skeleton, token)).status).toBe(201);
+      const db = await target.db();
+      expect(await db.prepare('SELECT COUNT(*) AS count FROM cells').first('count')).toBe(wanted.cells.size);
+      expect(await db.prepare('SELECT COUNT(*) AS count FROM cells WHERE clusters = 1').first('count')).toBe(wanted.cells.size);
+      expect(await db.prepare("SELECT COUNT(*) AS count FROM contributors WHERE kind = 'cell'").first('count')).toBe(wanted.cells.size);
     });
   }, 120_000);
 
