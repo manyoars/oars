@@ -187,9 +187,7 @@ describe('deposit', () => {
   it('keeps a tool row that has no key list instead of failing every reader', async () => {
     const staged = stage();
     await deposit(staged.runtime, options(['proj']));
-    type Row = { kind: string; session: string; tool: string; toolUseId?: string; keys?: string[] };
-    const rows: Row[] = readFileSync(paths(staged.storeDir).observations, 'utf8').split('\n').filter((line) => line !== '').map((line) => JSON.parse(line) as Row);
-    const tool = rows.find((row) => row.kind === 'tool');
+    const [tool] = (await loadStore(staged.storeDir)).tools;
     if (tool === undefined) throw new Error('the fixture deposits no tool row');
     const { keys, ...without } = { ...tool, n: 999, toolUseId: 'toolu_without_keys' };
     expect(Array.isArray(keys)).toBe(true);
