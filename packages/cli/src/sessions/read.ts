@@ -42,7 +42,7 @@ export const METHODS: { readonly [family in Family]: { readonly name: string; re
   'tool-day': { name: 'rates-on-day', version: '1' },
   'version-boundary': { name: 'move-between-buckets', version: '1' },
   substitution: { name: 'rise-against-fall', version: '1' },
-  interaction: { name: 'failure-gap-across-tier-assigned', version: '1' },
+  interaction: { name: 'failure-gap-across-tier-assigned', version: '2' },
   'day-move': { name: 'move-to-next-day', version: '2' },
   'lead-lag': { name: 'failure-move-leads-share-move', version: '1' },
 };

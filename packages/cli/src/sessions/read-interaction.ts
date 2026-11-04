@@ -6,13 +6,12 @@ import { UNKNOWN } from './cells.js';
 import { candidateOf, differenceOf, estimateOf, screen, TRIALS_FLOOR, type Candidate, type DeriveRelation } from './read-order.js';
 import type { Read } from './read.js';
 import { groupBy, rate, wilson } from './read-support.js';
+import { toolKey } from './read-version-boundary.js';
 
 const countOf = (read: Read, metric: string): number => {
   const value = read.value[metric];
   return typeof value === 'number' ? value : 0;
 };
-
-const toolKey = (read: Read): string => `${read.slice.level ?? UNKNOWN}\n${read.slice.motif ?? UNKNOWN}`;
 
 /** One tier in one version bucket at one effort. */
 interface Tier {
@@ -72,4 +71,10 @@ export const interactionCandidates = (reads: readonly Read[]): Candidate[] => {
   });
 };
 
-export const deriveInteraction: DeriveRelation = (reads) => screen(interactionCandidates(reads));
+/**
+ * The tool fails more on the tier that fails more elsewhere, or less on the tier that fails less: `moved` asks only that each gate is large, not its sign. A gap and an interaction
+ * of opposite signs mean the tool resists the main effect (it still fails more on that tier, only by less than the other tools do), which is not a tool that works on one tier and not the other.
+ */
+const sameSign = ({ gates }: Candidate): boolean => gates.every((gate) => gate.value > 0) || gates.every((gate) => gate.value < 0);
+
+export const deriveInteraction: DeriveRelation = (reads) => screen(interactionCandidates(reads), sameSign);
