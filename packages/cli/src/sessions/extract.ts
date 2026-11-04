@@ -5,6 +5,7 @@
 import { createHash } from 'node:crypto';
 import { posix } from 'node:path';
 import { ACTION_TABLES, actionOf, shellOf, type ActionTable, type CanonicalAction } from './actions.js';
+import { exploreCount, strataOf } from './strata.js';
 import { closedFrame, frameIdOf, repoFilesFromIndex, repoSizeOf, stackOf, utcDay } from './frame.js';
 import type { RepoSize } from './public-vocabulary.js';
 import { linkSteps } from './graph.js';
@@ -33,6 +34,7 @@ import {
   type Skeleton,
   type SkeletonLine,
   type StepIdentity,
+  type Strata,
   type TargetBase,
   type ToolManifest,
   type ToolObservation,
@@ -1827,6 +1829,12 @@ export const captureSession = (input: ExtractInput): Capture => {
       frameId,
     }));
   }
+  // The strata: the file's evidence once, and each prompt's own `explore`. The size is the one the frame holds, so a re-capture that carries `repoSize` keeps `repoFiles` too.
+  const stepActions = (prompt: number | null): CanonicalAction[] => tools.filter((call) => prompt === null || call.prompt === prompt).flatMap((call) => (call.steps ?? []).map((step) => step.action));
+  const packageNames = tools.flatMap((call) => [...(call.packages ?? []).map((pkg) => pkg.package), ...(call.manifest?.seen ?? []), ...(call.manifest?.added ?? [])]);
+  const strataFor = (prompt: number | null): Strata => strataOf({ paths: framePaths, packages: packageNames, size, explore: exploreCount(stepActions(prompt)) });
+  session.strata = strataFor(null);
+  for (const [position, prompt] of prompts.entries()) prompt.strata = strataFor(position);
   linkSteps(
     tools.map((call, position) => ({
       steps: call.steps ?? [],
