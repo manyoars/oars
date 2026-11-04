@@ -142,6 +142,33 @@ describe('the access flag over the routes', () => {
     });
   }, 60_000);
 
+  it('leaves the flag and the date alone when a resend writes no cell increment', async () => {
+    await inPool(async (pool) => {
+      const { token, account } = await depositor(pool, '3009', 'cursor');
+      const before = await (await pool.db()).prepare('SELECT counted_at AS counted FROM deposits WHERE account = ?').bind(account).first();
+      expect(typeof fieldOf(before, 'counted')).toBe('number');
+      expect(await fetches(pool, token, 2)).toEqual([200, 200]);
+      // The same id with no prompt and every tool's steps emptied: the route takes it (it holds a tool), but it derives no cell, so there is no increment for the flag to read. A prompt would add a class cell.
+      const sent = sampleSkeleton('0000000000003009', undefined, undefined, 'cursor');
+      const bare: SessionSkeleton = { ...sent, transcripts: sent.transcripts.map((transcript) => ({ ...transcript, prompts: [], tools: transcript.tools.map((tool) => ({ ...tool, steps: [] })) })) };
+      expect((await pool.post('/v1/deposits', bare, token)).status).toBe(201);
+      const after = await (await pool.db()).prepare('SELECT counted_at AS counted FROM deposits WHERE account = ?').bind(account).first();
+      expect(fieldOf(after, 'counted')).toBe(fieldOf(before, 'counted'));
+      expect(await fetches(pool, token, 2)).toEqual([200, 200]);
+      expect(await accessOfAccount(pool, account)).toBe('pending');
+    });
+  }, 60_000);
+
+  // `ledger_days` is 90 (spec Section 1.4): a batch that counted 89 days ago has not stood it yet.
+  it('is still pending for a batch that counted 89 days ago', async () => {
+    await inPool(async (pool) => {
+      const { token, account } = await depositor(pool, '3010', 'cursor');
+      await (await pool.db()).prepare('UPDATE deposits SET counted_at = ? WHERE account = ?').bind(Date.now() - 89 * DAY_MS, account).run();
+      expect((await pool.get(PATH, token)).status).toBe(200);
+      expect(await accessOfAccount(pool, account)).toBe('pending');
+    });
+  }, 60_000);
+
   it('stands once a counting batch has stood the ledger days, and stays when that batch later falls to none', async () => {
     await inPool(async (pool) => {
       const { token, account } = await depositor(pool, '3005', 'cursor');
