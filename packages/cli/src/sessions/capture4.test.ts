@@ -52,7 +52,7 @@ const capture = (text: string, sid: string | null, root: string | null) =>
 describe('the CAPTURE 4 fields', () => {
   it('stamps sid on every capture record and records env, repo, fileHashes, and promptFingerprint on the session', () => {
     const result = capture(transcript('/w/app/pkg', '/w/app/src/a.ts'), 'abcd1234', '/w/app');
-    expect(CAPTURE_VERSION).toBe('11');
+    expect(CAPTURE_VERSION).toBe('12');
     for (const record of [result.session, ...result.prompts, ...result.tools, ...result.errorLines]) expect(record).toMatchObject({ cv: CAPTURE_VERSION, sid: 'abcd1234' });
     expect(result.session.env).toEqual({ harness: '2.1.301', oars: '1.2.3', node: 'v99', os: 'plan9' });
     expect(result.session.repo).toMatch(/^[0-9a-f]{16}$/);
@@ -151,6 +151,35 @@ describe('a capped session', () => {
     expect(recall(store, { path: kept }, NOW).matches.length).toBeGreaterThan(0);
     expect(dropped).not.toBe('');
     expect(recall(store, { path: dropped }, NOW).matches).toHaveLength(0);
+  });
+});
+
+describe('the setup, funnel, and trust shape in the store', () => {
+  const options = { allow: ['proj'], redactDomains: [], now: () => NOW };
+
+  it('survives a deposit and loadStore: the record written is the record read back', async () => {
+    const staged = stage();
+    const stamp = (seconds: number): string => new Date(Date.UTC(2026, 5, 1, 0, 0, seconds)).toISOString();
+    const lines = [
+      line({ type: 'permission-mode', permissionMode: 'plan', sessionId: 's' }),
+      line({ type: 'user', uuid: 'h1', timestamp: stamp(0), version: '2.1.318', cwd: '/w', message: { role: 'user', content: 'go' } }),
+      line({ type: 'attachment', uuid: 'd1', timestamp: stamp(1), version: '2.1.318', cwd: '/w', attachment: { type: 'deferred_tools_delta', addedNames: ['Read', 'Grep'], removedNames: ['Grep'] } }),
+      line({
+        type: 'assistant', uuid: 'a1', timestamp: stamp(60), version: '2.1.318', cwd: '/w',
+        message: { role: 'assistant', model: 'm', content: [{ type: 'tool_use', id: 't1', name: 'Read', input: { file_path: '/w/a.ts' } }], usage: { input_tokens: 1, output_tokens: 1 } },
+      }),
+      line({
+        type: 'user', uuid: 'r1', timestamp: stamp(61), version: '2.1.318', cwd: '/w',
+        message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 't1', is_error: true, content: "The user doesn't want to proceed with this tool use. The tool use was rejected." }] },
+      }),
+    ];
+    addProject(staged, 'proj', 'shaped', lines);
+    await deposit(staged.runtime, options);
+    const store = await loadStore(staged.storeDir);
+    const session = store.sessions.find((candidate) => candidate.session === 'shaped');
+    expect(session?.setup).toEqual({ permissionMode: 'plan' });
+    expect(session?.funnel).toEqual({ offered: ['Read'], removed: ['Grep'] });
+    expect(session?.trust).toMatchObject({ interrupts: 0, rejections: 1, denials: 0, unattendedRun: [1], trustEvent: [{ event: 'rejection', tool: 'Read', prompt: 0 }] });
   });
 });
 
