@@ -1,4 +1,4 @@
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { appendFileSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { afterEach, describe, expect, it } from 'vitest';
 import { handleMessage, serve, TOOL_NAME } from './mcp.js';
 import { error as errorRow, prompt as promptRow, session as sessionRow } from './pool-fixture.js';
@@ -72,13 +72,36 @@ describe('MCP server', () => {
       return Array.isArray(content) ? String(field(content[0], 'text')) : '';
     };
 
+    it('answers from the stored pool after the store moves, deriving and writing no new reads file', async () => {
+      const staged = seeded();
+      const readsDir = `${staged.storeDir}/reads`;
+      expect(textOf(await ask(staged, { family: 'recovery' }))).toContain('1 error');
+      const stored = readdirSync(readsDir);
+      expect(stored).toHaveLength(1);
+      appendFileSync(paths(staged.storeDir).observations, `${JSON.stringify(errorRow('a', 'Monitor | second shape', { tool: 'Monitor', example: EXAMPLE, ts: '2026-06-02T00:00:00.000Z' }))}\n`);
+      expect(textOf(await ask(staged, { family: 'recovery' }))).toContain('1 error');
+      expect(readdirSync(readsDir)).toEqual(stored);
+    });
+
     it('narrows a family by the class and the days the tool takes, and records the slice', async () => {
       const staged = seeded();
       expect(textOf(await ask(staged, { family: 'recovery', class: 'edit-verify', sinceDays: 30 }))).toContain('1 error');
       expect(textOf(await ask(staged, { family: 'recovery', class: 'mixed' }))).toBe(MISS_TEXT);
       expect(textOf(await ask(staged, { family: 'recovery', sinceDays: 1 }))).toBe(MISS_TEXT);
-      await ask(staged, { family: 'recovery', sinceDays: 1.5 });
-      expect((await readRecalls(staged.storeDir)).map((recall) => recall.query.slice)).toEqual([{ cls: 'edit-verify', sinceDays: 30 }, { cls: 'mixed' }, { sinceDays: 1 }, {}]);
+      expect((await readRecalls(staged.storeDir)).map((recall) => recall.query.slice)).toEqual([{ cls: 'edit-verify', sinceDays: 30 }, { cls: 'mixed' }, { sinceDays: 1 }]);
+    });
+
+    it('refuses a sinceDays that is not a positive integer and a class that is not a string, on any form, as invalid params with nothing recorded', async () => {
+      const staged = seeded();
+      const refuse = async (args: object): Promise<unknown> =>
+        field(field(await handleMessage(staged.runtime, now, { jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: TOOL_NAME, arguments: args } }), 'error'), 'code');
+      for (const sinceDays of [0, -1, 1.5, '3', null]) {
+        expect(await refuse({ family: 'recovery', sinceDays })).toBe(-32602);
+        expect(await refuse({ text: 'x', sinceDays })).toBe(-32602);
+        expect(await refuse({ error: 'x', sinceDays })).toBe(-32602);
+      }
+      for (const cls of [5, true, null, ['mixed']]) expect(await refuse({ family: 'recovery', class: cls })).toBe(-32602);
+      expect(await readRecalls(staged.storeDir)).toEqual([]);
     });
 
     it('states narrowed counts when the error, path, and class inputs and the days narrow a pull', async () => {
@@ -135,6 +158,42 @@ describe('MCP server', () => {
       const listed = JSON.stringify(field(await handleMessage(staged.runtime, now, { jsonrpc: '2.0', id: 1, method: 'tools/list' }), 'result'));
       expect(listed).toContain('tool-day');
       expect(listed).not.toContain('recovery or fit');
+      // lead-lag is experimental, so a question never serves it (recall-reads.ts RECALL_FAMILIES).
+      expect(listed).not.toContain('lead-lag');
+      expect(listed).toContain('count all time and refuse both');
+    });
+
+    it('states the refusal rule on the class and sinceDays properties a caller reads', async () => {
+      const staged = seeded();
+      const tools = field(field(await handleMessage(staged.runtime, now, { jsonrpc: '2.0', id: 1, method: 'tools/list' }), 'result'), 'tools');
+      const properties = Array.isArray(tools) ? field(field(tools[0], 'inputSchema'), 'properties') : undefined;
+      for (const name of ['class', 'sinceDays']) {
+        expect(String(field(field(properties, name), 'description'))).toContain('Recovery and fit questions and the error, path, and class inputs only; any other form refuses it.');
+      }
+    });
+
+    it('stores the asker query redacted in the call log, as the recall row is', async () => {
+      const staged = seeded();
+      const secret = ['gh', 'p_', 'a1B2c3D4e5F6g7H8i9J0k1L2'].join('');
+      await ask(staged, { text: `failed for ${secret}` });
+      const logged = readFileSync(paths(staged.storeDir).calls, 'utf8');
+      expect(logged).not.toContain(secret);
+      expect(logged).toContain('<secret>');
+    });
+
+    it('masks a name-value secret in the call log, which JSON escaping of the quotes would hide from the rules', async () => {
+      const staged = seeded();
+      await ask(staged, { error: 'password="hunter2hunter2"' });
+      const logged = readFileSync(paths(staged.storeDir).calls, 'utf8');
+      expect(logged).not.toContain('hunter2hunter2');
+    });
+
+    it('masks a key on the second line of an error in the call log, which an escaped newline would hide from the word boundary', async () => {
+      const staged = seeded();
+      const key = ['AKIA', 'IOSFODNN7EXAMPLE'].join('');
+      await ask(staged, { error: `first line\n${key}` });
+      const logged = readFileSync(paths(staged.storeDir).calls, 'utf8');
+      expect(logged).not.toContain(key);
     });
 
     it('keeps a poisoned model and version out of the reply and out of the stored evidence', async () => {

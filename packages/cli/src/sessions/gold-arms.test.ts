@@ -384,6 +384,24 @@ describe('oars sessions gold arms', () => {
     expect(evaluator.asked).toHaveLength(0);
   });
 
+  it('names one reading in the singular, on a failure and on the run that finishes it', async () => {
+    const h = setup();
+    const { file } = await sampled(h);
+    let calls = 0;
+    h.staged.runtime.evaluator = {
+      ready: () => Promise.resolve(),
+      ask: () => {
+        calls += 1;
+        return calls === 5 ? Promise.reject(new Error('limit reached')) : Promise.resolve('no');
+      },
+    };
+    expect(await run(['sessions', 'gold', 'arms', file], h.deps)).toBe(ExitCode.UNEXPECTED);
+    expect(h.err.join('')).toContain('1 reading left, and every answer so far is saved');
+    h.staged.runtime.evaluator = answering(() => 'yes');
+    expect(await run(['sessions', 'gold', 'arms', file], h.deps)).toBe(ExitCode.OK);
+    expect(h.out.join('')).toContain('Asked 1 reading on');
+  });
+
   it('refuses to mix readings when the recorded wording differs', async () => {
     const h = setup();
     const { file, sidecar } = await sampled(h);

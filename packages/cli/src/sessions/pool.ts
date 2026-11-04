@@ -2,10 +2,11 @@
 // rewritten from the log and can be dropped at any time. Each pool version's reads go in a file of their own that is written once and never rewritten, so a read cited by
 // its ID stays what it was.
 
-import { readFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { readdir, readFile, stat } from 'node:fs/promises';
+import { basename, dirname, join } from 'node:path';
 import { CliError, ExitCode } from '../errors.js';
-import { deriveCells, poolOf, serializeCells, type Pool } from './cells.js';
+import { deriveCells, poolOf, serializeCells, UNKNOWN, type Cell, type Pool } from './cells.js';
+import type { Motif } from './motif.js';
 import { contentHash, FIRST_ORDER_FAMILIES, frozenRead, makeRead, orderResolver, type FirstOrderFamily, type OrderResolver, type Read, type ReadAsOf } from './read.js';
 import { deriveConsequences, recallGraphOf } from './recall-consequence.js';
 import { readRecalls } from './recall-object.js';
@@ -28,7 +29,7 @@ import { deriveSubstitution } from './read-substitution.js';
 import { deriveVersionBoundary } from './read-version-boundary.js';
 import { writeAtomic, type Store } from './store.js';
 
-// Built on call: `store.ts` imports this file for its refresh and `read-recovery.ts` imports `store.ts`, so these names may not be initialized yet when this module's top level runs.
+// Built on call.
 const derivers = (): { readonly [family in FirstOrderFamily]: DeriveFamily } => ({
   recovery: deriveRecovery,
   fit: (input) => [...deriveFit(input), ...deriveCallShape(input)],
@@ -41,7 +42,7 @@ const derivers = (): { readonly [family in FirstOrderFamily]: DeriveFamily } => 
   'tool-day': deriveToolDay,
 });
 
-/** Families over reads, one stage per order: a stage reads what the stages before it wrote. Built on call, for the same reason as `derivers`. */
+/** Families over reads, one stage per order: a stage reads what the stages before it wrote. Built on call. */
 const relations = (): readonly (readonly DeriveRelation[])[] => [[deriveVersionBoundary, deriveSubstitution, deriveInteraction, deriveDayMove], [deriveLeadLag]];
 
 export const poolFiles = (storeDir: string): { cells: string; motifs: string; consequences: string; reads: (version: string) => string } => ({
@@ -78,6 +79,8 @@ export const deriveReads = (pool: Pool, store: Store): Read[] => {
 export const serializeReads = (reads: readonly Read[]): string => reads.map((read) => `${JSON.stringify(read)}\n`).join('');
 
 const isRead = (value: unknown): value is Read => typeof value === 'object' && value !== null && 'readId' in value && 'family' in value;
+const isCell = (value: unknown): value is Cell => typeof value === 'object' && value !== null && 'motifId' in value && 'frameBucket' in value;
+const isMotif = (value: unknown): value is Motif => typeof value === 'object' && value !== null && 'motifId' in value && 'level' in value;
 
 const parsedLine = (file: string, line: string): unknown => {
   try {
@@ -87,17 +90,19 @@ const parsedLine = (file: string, line: string): unknown => {
   }
 };
 
-/** A file that is missing, or whose lines are JSON but not reads, is no record of this pool: it is derived and written again. A line that is not JSON is damage, so it stops here and asks the operator to delete the file. */
-const readStored = async (file: string): Promise<Read[] | undefined> => {
+/** A file that is missing, or whose lines are JSON but not all of the kind asked for, is no record of this pool: it is derived and written again. A line that is not JSON is damage, so it stops here and asks the operator to delete the file. */
+const storedRows = async <Row>(file: string, isRow: (value: unknown) => value is Row): Promise<Row[] | undefined> => {
   try {
     const text = await readFile(file, 'utf8');
     const parsed = text.split('\n').flatMap((line): unknown[] => (line === '' ? [] : [parsedLine(file, line)]));
-    return parsed.every(isRead) ? parsed.map(frozenRead) : undefined;
+    return parsed.every(isRow) ? parsed : undefined;
   } catch (error) {
     if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return undefined;
     throw error;
   }
 };
+
+const readStored = async (file: string): Promise<Read[] | undefined> => (await storedRows(file, isRead))?.map(frozenRead);
 
 /** The current pool's reads: already written when this pool has been read before, else derived and written once. */
 export const refreshPool = async (storeDir: string, store: Store): Promise<{ pool: Pool; reads: Read[] }> => {
@@ -116,11 +121,55 @@ export const refreshPool = async (storeDir: string, store: Store): Promise<{ poo
   return { pool, reads };
 };
 
-/** The pool a pull answers from. A pull always answers (spec 2.7), so a pool that cannot be read or written costs it only the stored read IDs: its answers keep their stand-ins. */
+const POOL_FAILED = 'oars: the read pool was not built, and answers keep their stand-ins: ';
+
+const unbuilt = (error: unknown): void => {
+  process.stderr.write(`${POOL_FAILED}${error instanceof Error ? error.message : String(error)}\n`);
+};
+
+/** The pool a deposit's index step reads. It answers without one (spec 2.7): a pool that cannot be read or written costs only the stored read IDs, whose answers keep their stand-ins, and one line on stderr says so. */
 export const currentPool = async (storeDir: string, store: Store): Promise<{ pool: Pool; reads: Read[] } | undefined> => {
   try {
     return await refreshPool(storeDir, store);
-  } catch {
+  } catch (error) {
+    unbuilt(error);
+    return undefined;
+  }
+};
+
+/** The reads file written last: a deposit writes one per new pool version and nothing prunes them, so the newest by time is the pool the last deposit left. */
+const newestReadsFile = async (dir: string): Promise<string | undefined> => {
+  try {
+    const names = (await readdir(dir)).filter((name) => name.endsWith('.jsonl'));
+    const stamped = await Promise.all(names.map(async (name) => ({ file: join(dir, name), at: (await stat(join(dir, name))).mtimeMs })));
+    return stamped.sort((a, b) => b.at - a.at || (a.file < b.file ? -1 : 1))[0]?.file;
+  } catch (error) {
+    if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return undefined;
+    throw error;
+  }
+};
+
+/** The newest stored pool as the files hold it, or undefined when a file of it is missing. A damaged file throws. */
+const storedPool = async (storeDir: string): Promise<{ pool: Pool; reads: Read[] } | undefined> => {
+  const files = poolFiles(storeDir);
+  const file = await newestReadsFile(dirname(files.reads('any')));
+  const reads = file === undefined ? undefined : await readStored(file);
+  const cells = await storedRows(files.cells, isCell);
+  const motifs = await storedRows(files.motifs, isMotif);
+  if (file === undefined || reads === undefined || cells === undefined || motifs === undefined) return undefined;
+  const lastDay = cells.reduce<string | null>((last, cell) => (cell.day !== UNKNOWN && (last === null || cell.day > last) ? cell.day : last), null);
+  return { pool: { cells, motifs: new Map(motifs.map((motif) => [motif.motifId, motif])), version: basename(file, '.jsonl'), lastDay }, reads };
+};
+
+/**
+ * The pool a pull answers from: the newest one already stored, with nothing derived or written. A pull used to refresh the pool, and a deposit that moved it left the next pull to
+ * derive every read again (12 to 17 s on a real store, t756) and write a file nothing prunes. Only a store with no stored pool derives one, once, and a stored one is read after that.
+ */
+export const servedPool = async (storeDir: string, store: Store): Promise<{ pool: Pool; reads: Read[] } | undefined> => {
+  try {
+    return (await storedPool(storeDir)) ?? (await refreshPool(storeDir, store));
+  } catch (error) {
+    unbuilt(error);
     return undefined;
   }
 };

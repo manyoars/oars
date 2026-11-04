@@ -64,6 +64,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/agents/workloads/{workloadId}/config": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Patch a workload's mutable configuration
+         * @description Image digests, service names, command and args are the fingerprint and cannot change.
+         */
+        patch: operations["patchWorkloadConfig"];
+        trace?: never;
+    };
     "/agents/workloads/{workloadId}/deploy": {
         parameters: {
             query?: never;
@@ -459,7 +479,27 @@ export interface paths {
          * Revoke an API key
          * @description Immediate and idempotent.
          */
-        delete: operations["revoke_1"];
+        delete: operations["revokeApiKey"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/me/api-keys/{keyId}/rotate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Rotate an API key
+         * @description Same key id, new secret (returned once); the old secret stops working now.
+         */
+        post: operations["rotate"];
+        delete?: never;
         options?: never;
         head?: never;
         patch?: never;
@@ -568,7 +608,7 @@ export interface components {
             /** Format: int32 */
             status: number;
             title: string;
-            /** @example https://api.example.test/problems/price-not-found */
+            /** @example https://api.example.com/problems/price-not-found */
             type: string;
         };
         /** @enum {string} */
@@ -730,7 +770,7 @@ export interface components {
              */
             lastUsedAt?: string;
             name: string;
-            /** @description First characters of the secret, to recognise a key */
+            /** @description First characters of the secret, to recognize a key */
             prefix: string;
             /**
              * Format: date-time
@@ -970,6 +1010,16 @@ export interface components {
             sort: components["schemas"]["SortObject"];
             /** @description True if pagination is disabled (unpaged) */
             unpaged: boolean;
+        };
+        PatchWorkloadConfigRequest: {
+            alwaysOn?: boolean;
+            autoRestartOnCredit?: boolean;
+            clearImagePullSecret?: boolean;
+            egressHosts?: string[];
+            imagePullSecret?: components["schemas"]["ImagePullCredential"];
+            secretsDelete?: string[];
+            secretsUpsert?: components["schemas"]["EnvVar"][];
+            services?: components["schemas"]["ServiceConfigPatch"][];
         };
         /** @enum {string} */
         PriceKind: "ONE_TIME" | "RECURRING_MONTHLY" | "CREDIT_PACK";
@@ -1245,6 +1295,25 @@ export interface components {
          * @enum {string}
          */
         Role: "SYSTEM_ADMIN" | "ADMIN" | "INVESTOR" | "ISSUER" | "DEVELOPER" | "OPERATOR" | "USER_MANAGER" | "AI_AGENT_MANAGER" | "COMPLIANCE_OFFICER" | "AUDITOR" | "USER" | "SECURITY_ADMIN" | "SYSTEM" | "TRADING_MANAGER" | "FINANCE" | "SUPPORT";
+        ServiceConfigPatch: {
+            args?: string[];
+            command?: string[];
+            /** Format: int32 */
+            cpuMillicores: number;
+            env?: components["schemas"]["EnvVar"][];
+            healthPath?: string;
+            image?: string;
+            imageRepository?: string;
+            /** Format: int32 */
+            memoryMib: number;
+            name: string;
+            /** Format: int32 */
+            port?: number;
+            public?: boolean;
+            /** Format: int32 */
+            replicas?: number;
+            scheduleCron?: string;
+        };
         ServiceRuntimeStatus: {
             /** Format: int32 */
             desiredReplicas: number;
@@ -1968,6 +2037,167 @@ export interface operations {
                 };
                 content: {
                     "*/*": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Gateway Timeout */
+            504: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "*/*": components["schemas"]["ProblemDetail"];
+                };
+            };
+        };
+    };
+    patchWorkloadConfig: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workloadId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PatchWorkloadConfigRequest"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "*/*": components["schemas"]["WorkloadResponse"];
+                };
+            };
+            /** @description MANIFEST_INVALID, FINGERPRINT_FIELD_IMMUTABLE */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "*/*": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Payment Required */
+            402: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "*/*": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description WORKLOAD_NOT_OWNED */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description WORKLOAD_NOT_FOUND */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description IMAGE_DIGEST_UNVERIFIED, PLATFORM_STEWARDED, WORKLOAD_TERMINATED, WORKLOAD_SUSPENDED */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Content Too Large */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "*/*": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Unprocessable Content */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "*/*": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Locked */
+            423: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "*/*": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Too Many Requests */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "*/*": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Unavailable For Legal Reasons */
+            451: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "*/*": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "*/*": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Bad Gateway */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "*/*": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description REGISTRY_UNREACHABLE, or a concurrent reconcile outlasted the retries (service_unavailable) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetail"];
                 };
             };
             /** @description Gateway Timeout */
@@ -5981,7 +6211,7 @@ export interface operations {
             };
         };
     };
-    revoke_1: {
+    revokeApiKey: {
         parameters: {
             query?: never;
             header?: never;
@@ -6045,6 +6275,166 @@ export interface operations {
                 };
             };
             /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "*/*": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Content Too Large */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "*/*": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Unprocessable Content */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "*/*": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Locked */
+            423: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "*/*": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Too Many Requests */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "*/*": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Unavailable For Legal Reasons */
+            451: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "*/*": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "*/*": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Bad Gateway */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "*/*": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "*/*": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Gateway Timeout */
+            504: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "*/*": components["schemas"]["ProblemDetail"];
+                };
+            };
+        };
+    };
+    rotate: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Required. The same key with the same body replays (200, no secret), with a different body is IDEMPOTENCY_CONFLICT. Must be a UUID or 64 hexadecimal characters; any other value is a 400 IDEMPOTENCY_KEY_INVALID. */
+                "Idempotency-Key": string;
+            };
+            path: {
+                keyId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Rotated (or an idempotent replay) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "*/*": components["schemas"]["IssuedDeveloperApiKeyResponse"];
+                };
+            };
+            /** @description Missing Idempotency-Key */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "*/*": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "*/*": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Payment Required */
+            402: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "*/*": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description API_KEY_SCOPE_EXCEEDS_OWNER or HUMAN_SESSION_REQUIRED */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "*/*": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description API_KEY_NOT_FOUND */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "*/*": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description API_KEY_NOT_ACTIVE or IDEMPOTENCY_CONFLICT */
             409: {
                 headers: {
                     [name: string]: unknown;
