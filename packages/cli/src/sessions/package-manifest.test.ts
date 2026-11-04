@@ -111,7 +111,7 @@ describe('packages from manifests', () => {
   });
 
   it.each([
-    ['a commented [dependencies.local] header', ['[dependencies.local] # note', 'path = "../local"', 'version = "1"'], []],
+    ['a commented [dependencies.local] header after [dependencies]', ['[dependencies]', 'serde = "1.0"', '[dependencies.local] # note', 'path = "../local"', 'version = "1"'], ['crates:serde']],
     ['a commented [dependencies.rand] header', ['[dependencies.rand] # note', 'version = "0.8"'], ['crates:rand']],
     ['a commented [package] header after [dependencies]', ['[dependencies]', 'serde = "1.0"', '[package] # x', 'version = "0.1.0"'], ['crates:serde']],
     ['a commented [[bin]] header after [dependencies]', ['[dependencies]', 'serde = "1.0"', '[[bin]] # x', 'version = "0.1.0"'], ['crates:serde']],
