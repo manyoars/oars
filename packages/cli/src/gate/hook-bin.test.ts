@@ -134,7 +134,7 @@ const sightWithRow = (payload: string, id: string, npm: { folder: string }, home
     if (!printed) expect(result.stdout).toBe('');
     if (rowsOf(home).length > before && (!printed || result.stdout !== '')) return result.stdout;
   }
-  return expect.unreachable(`no row was written in ${String(MAX_SIGHTS)} sights`);
+  return expect.unreachable(`no row or no output in ${String(MAX_SIGHTS)} sights`);
 };
 
 /** How many lines of the manager's log read `word`. */
@@ -297,10 +297,18 @@ describe.skipIf(!existsSync(bin))('the built oars gate hook', () => {
 
   it('does not deny the same name under the default policy: it notes it, with the holdback off so the note always shows', () => {
     const payload = JSON.stringify({ session_id: 's1', tool_use_id: 'u1', tool_name: 'Bash', tool_input: { command: 'npm install ghost-lib' }, cwd: tmpdir(), permission_mode: 'default' });
-    const home = mkdtempSync(join(tmpdir(), 'oars-gate-bin-'));
-    made.push(home);
-    writeFileSync(join(seededStore(home), 'gate-policy.json'), '{"holdbackPercent":0}');
-    const stdout = sightWithRow(payload, 'u1', { folder: missingNpm() }, home, true);
+    const npm = { folder: missingNpm() };
+    // A hook ended after it noted the name but before it printed leaves the name noted, so a repeat in the same home stays silent: each try is a fresh home.
+    let stdout = '';
+    for (let tries = 0; tries < MAX_SIGHTS && stdout === ''; tries += 1) {
+      const home = mkdtempSync(join(tmpdir(), 'oars-gate-bin-'));
+      made.push(home);
+      writeFileSync(join(seededStore(home), 'gate-policy.json'), '{"holdbackPercent":0}');
+      const result = runHook(payload, [], npm.folder, home);
+      expect(result.status).toBe(0);
+      stdout = result.stdout;
+    }
+    expect(stdout).not.toBe('');
     expect(stdout).not.toContain('deny');
     expect(JSON.parse(stdout)).toEqual({
       hookSpecificOutput: { hookEventName: 'PreToolUse', additionalContext: 'Registry note: ghost-lib was not found in the registry your package manager uses.' },
