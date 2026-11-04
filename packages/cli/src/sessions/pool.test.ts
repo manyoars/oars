@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { CliError } from '../errors.js';
 import type * as ReadModuleNamespace from './read.js';
-import { deriveCells, type Cell } from './cells.js';
+import { deriveCells } from './cells.js';
 import { currentPool, poolFiles, refreshPool, servedPool } from './pool.js';
 import { cellsOf, incrementsOf, projectedStore } from './cell-increments.js';
 import { error, frame, prompt, session, step, store, tool } from './pool-fixture.js';
@@ -56,7 +56,7 @@ describe('refreshPool', () => {
       prompts: [prompt('s1', 0, { frame: framed, usage: { input: 123456, cacheWrite: 0, cacheRead: 0, output: 0, thinking: 0 } })],
       tools: [tool('s1', 0, 'Bash', { steps: [step(0, 0, 'shell.exec', { native: 'Bash', identity: push, cost: { tokens: 98765, durationMs: 4321 } })] })],
     });
-    const keyed = (cells: readonly Cell[]): string[] => cells.map(({ motifId, frameBucket, day, exposed, sessions, ok, failed, tokens, durationMs }) => `${motifId}/${frameBucket}/${day}/${String(Number(exposed))} ${String(sessions)} ${String(ok)} ${String(failed)} ${String(tokens)} ${String(durationMs)}`).sort();
+    const keyed = (cells: readonly { motifId: string; frameBucket: string; day: string; exposed: boolean | number; sessions: number; ok: number; failed: number; tokens: number; durationMs: number }[]): string[] => cells.map(({ motifId, frameBucket, day, exposed, sessions, ok, failed, tokens, durationMs }) => `${motifId}/${frameBucket}/${day}/${String(Number(exposed))} ${String(sessions)} ${String(ok)} ${String(failed)} ${String(tokens)} ${String(durationMs)}`).sort();
     const [only] = sessionsOf(local);
     const skeleton = only === undefined ? null : skeletonOf(only, '0123456789abcdef', shellReader(vocabulary()));
     if (skeleton === null) throw new Error('the local store has no skeleton');
