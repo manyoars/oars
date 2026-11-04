@@ -313,7 +313,7 @@ describe('a large deposit', () => {
     ['shell.exec', 'Bash'],
   ];
   const STEPS = 3400;
-  const FLAGS = [...'abcdefghijklmnopqrstuvwxyz'];
+  const FLAGS = 'abcdefghijklmnopqrstuvwxyz'.split(/(?:)/u);
   const programs = [...PUBLIC_PROGRAMS];
 
   /** One prompt of `STEPS` calls whose actions follow a fixed pseudo-random line, so the windows over it are mostly distinct and so are its cells. */
@@ -361,11 +361,16 @@ describe('a large deposit', () => {
   }, 120_000);
 
   it('splits a payload into arrays that stay under the limit and hold every item once, in order', () => {
+    const parsed = (chunk: string): unknown[] => {
+      const value: unknown = JSON.parse(chunk);
+      if (!Array.isArray(value)) throw new Error('a chunk is an array');
+      return value;
+    };
     const items = ['aaaa', 'bbbb', 'cccc', 'dddddddddddddddddddddddd', 'ee'];
     const chunks = chunksOf(items, 24);
-    expect(chunks.every((chunk) => new TextEncoder().encode(chunk).length <= 24 || (JSON.parse(chunk) as unknown[]).length === 1)).toBe(true);
+    expect(chunks.every((chunk) => new TextEncoder().encode(chunk).length <= 24 || parsed(chunk).length === 1)).toBe(true);
     expect(chunks.length).toBeGreaterThan(1);
-    expect(chunks.flatMap((chunk) => JSON.parse(chunk) as unknown[])).toEqual(items);
+    expect(chunks.flatMap(parsed)).toEqual(items);
     // An item over the limit has a chunk of its own, and nothing at all gives no chunk.
     expect(chunksOf(['x'.repeat(40)], 24)).toEqual([JSON.stringify(['x'.repeat(40)])]);
     expect(chunksOf([])).toEqual([]);
