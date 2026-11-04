@@ -2,7 +2,7 @@ import { appendFileSync, mkdirSync, readFileSync, readdirSync, statSync, utimesS
 import { join, resolve } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { CliError, ExitCode } from '../errors.js';
-import { deposit, depositSession, derive, loadStore, paths, readCalls, readRedactDomains, readSkeletons, slugOf, withLock } from './store.js';
+import { compactLog, deposit, depositSession, derive, loadStore, paths, readCalls, readRedactDomains, readSkeletons, slugOf, withLock } from './store.js';
 import { CAPTURE_VERSION, EXTRACTOR_VERSION } from './schema.js';
 import { addProject, cleanup, NOW, stage } from './test-support.js';
 
@@ -245,6 +245,30 @@ ${JSON.stringify(shell)}
       await expect(loadStore(staged.storeDir), shape).resolves.toHaveProperty('tools');
       cleanup();
     }
+  });
+
+  it('keeps a session a compaction between the two passes would have dropped', async () => {
+    // A lock-free reader (`verify`, the MCP server) can meet a recapture and its compaction between the passes. Both passes read one open file, so the
+    // second pass sees the log the first one scanned and the session stays; a reopen would see the compacted log and fail the rev match (t808 review).
+    const staged = stage();
+    await deposit(staged.runtime, options(['proj']));
+    const file = paths(staged.storeDir).observations;
+    const before = await loadStore(staged.storeDir);
+    const target = before.sessions[0];
+    if (target === undefined) throw new Error('the fixture deposits no session');
+    const recapture = readFileSync(file, 'utf8')
+      .split('\n')
+      .filter((line) => line.includes(`"session":"${target.session}"`))
+      .map((line) => JSON.stringify({ ...(JSON.parse(line) as { rev: number }), rev: target.rev + 1 }));
+    const compact = async (): Promise<void> => {
+      appendFileSync(file, `${recapture.join('\n')}\n`);
+      // Windows refuses to rename over a file a reader holds open, so there the compaction fails and the log is as it was: the reader is safe either way.
+      await compactLog(staged.storeDir, 0).catch(() => undefined);
+    };
+    const during = await loadStore(staged.storeDir, compact);
+    expect(during.sessions.map((session) => session.session)).toContain(target.session);
+    expect(during.sessions).toHaveLength(before.sessions.length);
+    expect((await loadStore(staged.storeDir)).sessions.find((session) => session.session === target.session)?.rev).toBe(target.rev + 1);
   });
 
   it('reads an empty or missing store as empty', async () => {
