@@ -278,6 +278,35 @@ export const stageCopilot = (root: string, files: readonly CopilotFixture[]): st
   return home;
 };
 
+export interface VscodeFixture {
+  /** The session id, which is the file's name without its extension. */
+  id: string;
+  /** The serialized chat data (`.json` form), or raw text for a torn file. */
+  data?: object | string;
+  /** The mutation-log entries (`.jsonl` form), or raw text. */
+  log?: readonly unknown[] | string;
+  /** The build's `nameShort` folder; `Code` when absent. */
+  channel?: string;
+  /** The workspace hash folder; absent writes the session under `globalStorage/emptyWindowChatSessions`. */
+  hash?: string;
+  /** What the hash's `workspace.json` holds, written once per hash; absent writes none. */
+  workspace?: object;
+}
+
+/** A VS Code app-data folder (what `%APPDATA%` is) holding the given chat sessions; returns the folder. */
+export const stageVscode = (root: string, files: readonly VscodeFixture[]): string => {
+  const appData = join(root, 'vscode-appdata');
+  for (const file of files) {
+    const user = join(appData, file.channel ?? 'Code', 'User');
+    const dir = file.hash === undefined ? join(user, 'globalStorage', 'emptyWindowChatSessions') : join(user, 'workspaceStorage', file.hash, 'chatSessions');
+    mkdirSync(dir, { recursive: true });
+    if (file.hash !== undefined && file.workspace !== undefined) writeFileSync(join(user, 'workspaceStorage', file.hash, 'workspace.json'), JSON.stringify(file.workspace));
+    if (file.data !== undefined) writeFileSync(join(dir, `${file.id}.json`), typeof file.data === 'string' ? file.data : JSON.stringify(file.data));
+    if (file.log !== undefined) writeFileSync(join(dir, `${file.id}.jsonl`), typeof file.log === 'string' ? file.log : `${file.log.map((entry) => JSON.stringify(entry)).join('\n')}\n`);
+  }
+  return appData;
+};
+
 /** A Gemini CLI chat-file line: the head metadata, a message, or a `$set`/`$patch`/`$rewindTo` record (google-gemini/gemini-cli @ 89e9d25d, packages/core/src/services/chatRecordingTypes.ts). */
 export const geminiHead = (sessionId: string, extra: object = {}): object => ({ sessionId, projectHash: 'a1b2c3', startTime: '2026-06-01T10:00:00.000Z', lastUpdated: '2026-06-01T10:00:00.000Z', kind: 'main', ...extra });
 
