@@ -1,4 +1,4 @@
-// EXTRACTOR 11 (t811, pool vocabulary spec Section 2): raw `agentType`, `keys`, and `frameId` with the joined frame are class A, and the pooled shell form is
+// EXTRACTOR 11 (pool vocabulary spec Section 2): raw `agentType`, `keys`, and `frameId` with the joined frame are class A, and the pooled shell form is
 // computed at deposit from what the account store holds. A store written at 10 is re-derived from its log alone.
 import { readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -209,7 +209,7 @@ describe('the shell form projected from the account store (Q5)', () => {
     }
   });
 
-  // A block word is never written with a path, so a script named like one is the program (review of t826: `./do git push --force` read as `git push --force`).
+  // A block word is never written with a path, so a script named like one is the program (a review found `./do git push --force` read as `git push --force`).
   it('reads a path or a script named like a block word as the program it is, never skips it as a keyword', () => {
     const runs = (form: string): readonly (string | undefined)[] | undefined => captured([form])[0]?.segments?.map((segment) => segment.run);
     expect(runs('./do git push --force')).toEqual(['do git push']);

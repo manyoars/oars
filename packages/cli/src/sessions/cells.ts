@@ -1,4 +1,4 @@
-// The cell (t756, recall spec Section 2.5): counts for one motif in one frame bucket on one day, order 0. Cells are computed from the capture records, which
+// The cell (recall spec Section 2.5): counts for one motif in one frame bucket on one day, order 0. Cells are computed from the capture records, which
 // stay the primary record, so a cell file can be dropped and rebuilt and any later derivation can run over old data. Nothing here reads raw.
 
 import { closedFrame, utcDay } from './frame.js';
@@ -34,7 +34,7 @@ export const UNKNOWN = 'unknown';
 const ONE_OPERATOR = 1;
 
 /**
- * A harness version's bucket: its patch by tens (t752, ruling on harness versions). 70.5 percent of one operator's later prompts ran a version not yet seen, so an
+ * A harness version's bucket: its patch by tens (ruling on harness versions). 70.5 percent of one operator's later prompts ran a version not yet seen, so an
  * exact-version cell goes stale in days; a reader compares buckets by distance instead. A version with no patch stands for itself.
  */
 export const harnessBucket = (version: string | null): string => {

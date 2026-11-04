@@ -1,4 +1,4 @@
-// `oars pool` (t758): the only part of the sessions code that talks to a remote. The server is always named, by flag or environment, so nothing leaves on a default. Sign-in runs the provider's device flow here and reads no harness token; a session leaves only as a closed-vocabulary skeleton, and only after the V15 check found it clean. Local capture, recall,
+// `oars pool`: the only part of the sessions code that talks to a remote. The server is always named, by flag or environment, so nothing leaves on a default. Sign-in runs the provider's device flow here and reads no harness token; a session leaves only as a closed-vocabulary skeleton, and only after the V15 check found it clean. Local capture, recall,
 // and reads never come through here.
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';

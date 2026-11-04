@@ -128,7 +128,7 @@ describe('SessionEnd deposit hook', () => {
     copyFileSync(join(FIXTURES, 'proj', 'tldr.jsonl'), transcript);
     writeFileSync(join(staged.storeDir, 'store.lock'), 'a holder that never frees');
     const started = Date.now();
-    // The refusal is deferred to the pending list (t832), not a failure; the step log holds it as its own status.
+    // The refusal is deferred to the pending list, not a failure; the step log holds it as its own status.
     await expect(depositSession(staged.runtime, transcript, () => NOW)).resolves.toBe('deferred');
     expect(Date.now() - started).toBeLessThan(4500);
     expect(await runHook('stop', JSON.stringify({ session_id: 'blocked', transcript_path: transcript }), staged.runtime, () => NOW)).toBeUndefined();

@@ -1,4 +1,4 @@
-// The Cursor source (t728): a Cursor user's chat and composer history becomes the same capture records a Claude Code transcript does.
+// The Cursor source: a Cursor user's chat and composer history becomes the same capture records a Claude Code transcript does.
 //
 // Cursor keeps history in SQLite, not in one JSON event per line. The reader opens the store read-only and writes each composer
 // session out as the transcript lines `captureSession` already reads (user and assistant lines, `tool_use` and `tool_result` blocks, one

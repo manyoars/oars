@@ -1,4 +1,4 @@
-// The OpenAI Codex CLI source (t749): a Codex session log becomes the same capture records a Claude Code transcript does.
+// The OpenAI Codex CLI source: a Codex session log becomes the same capture records a Claude Code transcript does.
 //
 // FIXTURE-DERIVED: written from the open-source Codex CLI (github.com/openai/codex, Apache-2.0, commit ac558e2a, 2026-11-03), not from a live
 // store. Each field read below cites the file it comes from; `docs/sessions-store.md` says what a live run would still have to prove.

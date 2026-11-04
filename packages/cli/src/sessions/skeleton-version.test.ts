@@ -11,7 +11,7 @@ const { CAPTURE_VERSION } = await import('./schema.js');
 const { FIXTURES } = await import('./test-support.js');
 
 describe('the skeleton stamp', () => {
-  it('is CAPTURE_VERSION, not EXTRACTOR_VERSION (t700 Item 17)', () => {
+  it('is CAPTURE_VERSION, not EXTRACTOR_VERSION', () => {
     const text = readFileSync(join(FIXTURES, 'proj', 'errors-a.jsonl'), 'utf8');
     const capture = captureSession({ text, session: 'errors-a', project: 'proj', rev: 1, at: '2026-06-10T00:00:00.000Z', bytes: text.length, redact: makeRedactor(), salt: 'salt' });
     expect(capture.skeleton.v).toBe(CAPTURE_VERSION);

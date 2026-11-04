@@ -1,5 +1,5 @@
 // The self-scheduling recipe in skills/make-me-money/SKILL.md, extracted and run as written against a stub of the platform's
-// workload routes. The stub refuses what t679's floor refuses (400)
+// workload routes. The stub refuses what the server's floor refuses (400)
 // and what a scoped key refuses (403 WORKLOAD_NOT_OWNED: a non-null imageRepository, a schedule added or cleared, or any other field differing), so the
 // recipe is checked inside the limits the client CHANGELOG lists, not wider.
 import { execFile } from 'node:child_process';
@@ -93,7 +93,7 @@ const answer = async (request: IncomingMessage, response: ServerResponse): Promi
     patches.push({ authorization: request.headers.authorization, services });
     const cron = services.find((service) => service.name === 'job')?.scheduleCron;
     if (changesMoreThanSchedule(services)) send(403, { code: 'WORKLOAD_NOT_OWNED', detail: 'a scoped key may change scheduleCron only' });
-    // t679's floor: a schedule that fires every minute is under the five-minute minimum.
+    // The server's floor: a schedule that fires every minute is under the five-minute minimum.
     else if (cron === '* * * * *') send(400, { code: 'MANIFEST_INVALID', detail: 'scheduleCron fires more often than every 5 minutes' });
     else send(200, view);
   } else {

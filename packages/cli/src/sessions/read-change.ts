@@ -1,4 +1,4 @@
-// Change (t752, rank 4), at order 1: each tool's share and failure rate inside one harness version bucket. What moved between two buckets is a relation between
+// Change (rank 4), at order 1: each tool's share and failure rate inside one harness version bucket. What moved between two buckets is a relation between
 // these reads, so it is order 2 (spec Section 6) and composes on them. Confounders: effort, role by brief, rule commits, class drift, and date.
 import { bucketFields, UNKNOWN, type Cell } from './cells.js';
 import { motifName } from './motif.js';

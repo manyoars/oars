@@ -1,5 +1,5 @@
 // A live read's baseline is not traceable through lineage: the read cites only the sliced day's cells, and `value.baseline` comes from cells it does not cite.
-// The read (t756, recall spec Section 2.6): any derived value, citing its inputs. A read's ID is the hash of its content and a read never changes, so
+// The read (recall spec Section 2.6): any derived value, citing its inputs. A read's ID is the hash of its content and a read never changes, so
 // a recall can cite one and lineage can walk back from it. Its order is computed from its inputs and has no ceiling: a cell is 0 and a read is one more
 // than the highest order it cites, so a read over reads needs nothing here that a read over cells does not.
 
@@ -19,7 +19,7 @@ const canonical = (value: unknown): unknown => {
 /** SHA-256 of canonical JSON, 16 hex characters, unsalted: one content reads alike on any account (D1's `hP`). */
 export const contentHash = (value: unknown): string => createHash('sha256').update(JSON.stringify(canonical(value))).digest('hex').slice(0, 16);
 
-/** The eight families (t752), in the order that report ranks them, recovery first: the only one that changes a next call today. Then `tool-day`, which the reads above order 1 stand on. */
+/** The eight families, in the order that report ranks them, recovery first: the only one that changes a next call today. Then `tool-day`, which the reads above order 1 stand on. */
 export const FIRST_ORDER_FAMILIES = ['recovery', 'fit', 'cost', 'change', 'live', 'adoption', 'method', 'next-step', 'tool-day'] as const;
 export type FirstOrderFamily = (typeof FIRST_ORDER_FAMILIES)[number];
 

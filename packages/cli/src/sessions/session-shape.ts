@@ -1,9 +1,9 @@
-// What a transcript shows of a session's setup, its tool funnel, and its trust shape (t815, the capture half of pool vocabulary Brief 3). Read from the
+// What a transcript shows of a session's setup, its tool funnel, and its trust shape (the capture half of pool vocabulary Brief 3). Read from the
 // transcript only: never today's config or instruction files, because a file read now is not that session's setup. A field the transcript does not
 // hold is absent, never guessed. Counts, names, and sizes only: no instruction text, hook command, or tool description is kept. Class A, local; nothing
 // here is projected or uploaded.
 //
-// One collector per transcript, fed line by line by `captureSession`. It reads the Claude Code line shapes (t816's census of 2.1.312 to 2.1.318) and
+// One collector per transcript, fed line by line by `captureSession`. It reads the Claude Code line shapes (a census of 2.1.312 to 2.1.318) and
 // two neutral lines an adapter may write for a harness whose records are not Claude-shaped (`oars-tools`, `oars-interrupt`).
 
 import type { Harness } from './schema.js';

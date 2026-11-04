@@ -1,4 +1,4 @@
-// The derive pass over cells (t756): motifs and cells from the store, each family's reads from those, and the files they are kept in. `cells.jsonl` and `motifs.jsonl` are
+// The derive pass over cells: motifs and cells from the store, each family's reads from those, and the files they are kept in. `cells.jsonl` and `motifs.jsonl` are
 // rewritten from the log and can be dropped at any time. Each pool version's reads go in a file of their own that is written once and never rewritten, so a read cited by
 // its ID stays what it was.
 
@@ -163,7 +163,7 @@ const storedPool = async (storeDir: string): Promise<{ pool: Pool; reads: Read[]
 
 /**
  * The pool a pull answers from: the newest one already stored, with nothing derived or written. A pull used to refresh the pool, and a deposit that moved it left the next pull to
- * derive every read again (12 to 17 s on a real store, t756) and write a file nothing prunes. Only a store with no stored pool derives one, once, and a stored one is read after that.
+ * derive every read again (12 to 17 s on a real store) and write a file nothing prunes. Only a store with no stored pool derives one, once, and a stored one is read after that.
  */
 export const servedPool = async (storeDir: string, store: Store): Promise<{ pool: Pool; reads: Read[] } | undefined> => {
   try {

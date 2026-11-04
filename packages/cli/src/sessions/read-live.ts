@@ -1,10 +1,10 @@
-// Live (t752, rank 5): an action's share of one day's steps, beside its share over the trailing week. Confounders: the day's mix, and no multiple-test control, which
+// Live (rank 5): an action's share of one day's steps, beside its share over the trailing week. Confounders: the day's mix, and no multiple-test control, which
 // is why this states the two shares and flags nothing.
 import { UNKNOWN, type Cell } from './cells.js';
 import { motifName } from './motif.js';
 import { body, groupBy, rate, settled, total, unitCells, wilson, type DeriveFamily } from './read-support.js';
 
-/** t752's baseline: the seven days before the day read. */
+/** The baseline: the seven days before the day read. */
 export const LIVE_BASELINE_DAYS = 7;
 
 const DAY_MS = 86_400_000;
@@ -31,7 +31,7 @@ export const deriveLive: DeriveFamily = ({ pool }) => {
       const share = rate(n, of);
       const baseline = rate(total(baselineCells, settled), baselineOf);
       return [
-        // The read cites the day's cells only: a pool counts accounts over a read's inputs, and the baseline must not lift the floor of a day it does not hold (Section 4 rule 1).
+        // The read cites the day's cells only: a pool counts accounts over a read's inputs, and the baseline must not lift the floor of a day it does not hold (spec Section 4 rule 1).
         body('live', cells, {
           slice: { motif: motifName(motif), day },
           value: { share, baseline, of, ratio: share === null || baseline === null || baseline === 0 ? null : rate(share, baseline) },

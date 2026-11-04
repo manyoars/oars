@@ -1,4 +1,4 @@
-// `oars sessions verify` with the per-session results and the T0 audit (t743).
+// `oars sessions verify` with the per-session results and the T0 audit.
 import { appendFileSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';

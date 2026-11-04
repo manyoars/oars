@@ -1,7 +1,7 @@
 // Derive (register A28): what version 2 computed while reading a transcript, now a pure function of the capture records. Nothing here
 // reads raw, so a change to a rule below bumps EXTRACTOR_VERSION and re-derives the store from the log alone. The rules match the
 // version-2 extractor line for line (error_signatures.py, prompt_graphs.py, cost_per_class.py), and the recovery episodes match
-// recovery_episodes.py (t693), so the numbers measured before the split reproduce after it.
+// recovery_episodes.py, so the numbers measured before the split reproduce after it.
 import { captureSession, classify, compress, cut, EDITS, EXPLORE, ACT, normalize, SHELL, shortName, type Capture, type ExtractInput } from './extract.js';
 import type { Redactor } from './redact.js';
 import { INTERRUPT_MARKER, REJECTED_RE } from './session-shape.js';
@@ -48,7 +48,7 @@ const groupBy = <T>(items: readonly T[], keyOf: (item: T) => number | null): Map
   return groups;
 };
 
-// The prompt outcome signals (t747). All of them read the main line with a resumed session's repeats dropped: a repeated call has status
+// The prompt outcome signals. All of them read the main line with a resumed session's repeats dropped: a repeated call has status
 // `none` under a later prompt, so it would read as a fresh edit of the same path. A subagent transcript's calls are not read here.
 
 /**
@@ -238,7 +238,7 @@ export const extractSession = (input: ExtractInput): Extract => {
   return { ...capture, ...deriveSession(capture, input.redact) };
 };
 
-// Recovery episodes, ported from recovery_episodes.py (t693).
+// Recovery episodes, ported from recovery_episodes.py.
 
 export type EpisodeOutcome = 'fixed' | 'worked around' | 'abandoned';
 

@@ -117,7 +117,7 @@ describe('the publish fields', () => {
   });
 });
 
-// The public text (t754): the two READMEs and the package description state facts a reader can check, and address no agent.
+// The public text: the two READMEs and the package description state facts a reader can check, and address no agent.
 /** Phrases that address an agent or ask it to act, or describe sharing this release does not have. */
 const DENY_LIST = [
   'ignore previous',
