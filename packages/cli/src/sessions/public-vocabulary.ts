@@ -267,3 +267,37 @@ const REGISTRY_VERSION = new RegExp(`^[~^<>=!]*v?\\d+(?:\\.(?:\\d+|x|\\*))*${VER
 
 export const isRegistryVersion = (version: string): boolean => version.length <= NAME_MAX && REGISTRY_VERSION.test(version);
 export const isPublicMcpTool = (server: string, tool: string): boolean => PUBLIC_MCP_TOOLS.get(server)?.has(tool) === true;
+
+// The pooled vocabulary (pool vocabulary spec Section 1.3, t811). Everything above is what capture keeps in a P field; everything below is what may
+// leave the machine. The pinned snapshots live in packages/cli/vocab/ and are loaded by vocab-load.ts, so this file stays free of the filesystem
+// and the pool's Worker can bundle it.
+
+/**
+ * The version of every pinned snapshot and curated list below, as one number. Change a snapshot file, or `PUBLIC_PROGRAMS`, `PUBLIC_SUBCOMMANDS`,
+ * `PUBLIC_FLAGS`, `PUBLIC_MCP_TOOLS`, or `HARNESS_TOOLS`, and bump it: vocab-pin.test.ts fails otherwise.
+ */
+export const VOCAB_VERSION = '1';
+/** The day the snapshots were taken. It must equal `snapshotDate` in vocab/manifest.json, which the loader checks. */
+export const VOCAB_SNAPSHOT_DATE = '2026-11-04';
+/** How old a snapshot may be before `deposit` builds no batch (spec Section 7, `registry_max_age`). */
+export const REGISTRY_MAX_AGE_DAYS = 30;
+/** Names admitted per package ecosystem, by the registry's own download counts (spec Section 7, `seed_top`). */
+export const SEED_TOP = 1000;
+/** The longest ordered `program` list a compound command pools as (spec Section 7, `pipe_max`). */
+export const PIPE_MAX = 4;
+/** What a name that is not admitted pools as. */
+export const PRIVATE = 'private';
+
+const DAY_MS = 86_400_000;
+/** Whole days from the snapshot to `now`; a clock before the snapshot reads as 0. */
+export const vocabularyAgeDays = (now: Date, snapshotDate: string = VOCAB_SNAPSHOT_DATE): number => Math.max(0, Math.floor((now.getTime() - Date.parse(`${snapshotDate}T00:00:00Z`)) / DAY_MS));
+/** A client past `registry_max_age` builds no batch: its sessions wait in `A` until it upgrades. */
+export const isVocabularyExpired = (now: Date, snapshotDate: string = VOCAB_SNAPSHOT_DATE): boolean => vocabularyAgeDays(now, snapshotDate) > REGISTRY_MAX_AGE_DAYS;
+
+/** The built-in tools of Claude Code, by the names a transcript records. Curated, since no registry publishes them (spec Section 1.3, the name seed). */
+export const HARNESS_TOOLS: ReadonlyMap<string, ReadonlySet<string>> = new Map(
+  Object.entries({
+    'claude-code':
+      'Agent AskUserQuestion Bash BashOutput Edit EnterPlanMode ExitPlanMode Glob Grep KillBash KillShell MultiEdit NotebookEdit NotebookRead Read SlashCommand Skill Task TaskCreate TaskGet TaskList TaskOutput TaskStop TaskUpdate TodoRead TodoWrite ToolSearch WebFetch WebSearch Write',
+  }).map(([harness, tools]) => [harness, words(tools)]),
+);

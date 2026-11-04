@@ -7,6 +7,7 @@ import type { Outcome, RunDeps } from '../cli.js';
 import { CliError, exitCodeForProblem, ExitCode, unreachableError } from '../errors.js';
 import { checkSession, exclusionPaths, type Reason } from './exclusion.js';
 import { isStack, parseSkeleton, sessionsOf, skeletonOf, verifySlice, type PinnedKey } from './pool-wire.js';
+import { isVocabularyExpired, REGISTRY_MAX_AGE_DAYS, VOCAB_SNAPSHOT_DATE, VOCAB_VERSION } from './public-vocabulary.js';
 import { contentHash } from './read.js';
 import { loadStore, type SessionsRuntime } from './store.js';
 
@@ -240,6 +241,12 @@ export const poolDeposit = async (deps: RunDeps, options: { server?: string | un
   const runtime = runtimeOf(deps);
   const server = poolServer(deps.env, DEPOSIT, options.server);
   const { account, token } = await signedIn(deps, runtime.storeDir, server, DEPOSIT);
+  // A client past `registry_max_age` builds no batch (spec Section 1.3): every projection is computed here, so its sessions wait in `A` and nothing
+  // is lost. This comes before the first request, so nothing leaves the machine.
+  if (isVocabularyExpired(new Date(deps.now()))) {
+    const title = `This oars is out of date: its vocabulary ${VOCAB_VERSION} was taken on ${VOCAB_SNAPSHOT_DATE}, over ${String(REGISTRY_MAX_AGE_DAYS)} days ago. Upgrade with npm install -g @manyoars/oars, then run oars pool deposit again. Your sessions stay on this machine.`;
+    throw new CliError(title, ExitCode.CONFLICT, DEPOSIT, { code: 'vocabulary_expired', title, status: 409 });
+  }
   await openCovenant(deps, server, token, options.acceptCovenant);
   const { terms } = exclusionPaths(runtime.projectsRoot, deps.env);
   const counts: DepositCounts = { sessions: 0, deposited: 0, excluded: { term: 0, noRaw: 0, noTerms: 0, unreadable: 0 }, uncaptured: 0, refused: 0, refusedFields: [], tooLarge: 0 };

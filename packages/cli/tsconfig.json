@@ -4,5 +4,8 @@
     "allowJs": true,
     "checkJs": true
   },
-  "include": ["src", "scripts", "vitest.live.config.ts"]
+  // vocab-snapshot.mjs reads untyped JSON from public registries throughout; typing every field would restate each registry's schema. Its output is
+  // checked where it is used: vocab-load.ts validates every file and vocab-pin.test.ts pins the bytes.
+  "include": ["src", "scripts", "vitest.live.config.ts"],
+  "exclude": ["scripts/vocab-snapshot.mjs"]
 }
