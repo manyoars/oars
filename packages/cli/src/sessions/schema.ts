@@ -102,6 +102,27 @@ export type Harness = 'claude-code' | 'cursor' | 'codex' | 'copilot';
 /** The harness a session record came from; a record that does not name one is Claude Code's. */
 export const harnessOf = (session: { harness?: Harness }): Harness => session.harness ?? 'claude-code';
 
+/** A language's share of the files a transcript touched (pool vocabulary spec Section 7): none, incidental, secondary, primary. The lower edge is inclusive, so 10 percent is secondary and 50 is primary. */
+export const LANGUAGE_SHARES = ['0', 'under-10', '10-50', 'over-50'] as const;
+export type LanguageShare = (typeof LANGUAGE_SHARES)[number];
+
+/** A repository's tracked-file count by order of magnitude (Section 7). The lower edge is inclusive, so exactly 100 is `100-1k` and exactly 100000 is `over-100k`, as `repoSizeOf` buckets them. */
+export const REPO_FILE_BUCKETS = ['under-100', '100-1k', '1k-10k', '10k-100k', 'over-100k'] as const;
+export type RepoFilesBucket = (typeof REPO_FILE_BUCKETS)[number];
+
+/**
+ * The stack strata of a session or a prompt (CAPTURE 13, class A): kept beside `frame`, not inside `frame.stack`, because the wire refuses any extra key
+ * in a stack. `languages` lists each touched language of the pinned list (else `other`) with its share bucket, `repoFiles` is the git index's count
+ * bucketed (null when there is no index), `frameworks` are the vocabulary's frameworks that a resolved package shows, and `explore` counts the steps that
+ * only look: `file.read`, `file.search`, `web.search`, and `web.fetch`. A prompt's `explore` is its own; the rest is the file's.
+ */
+export interface Strata {
+  languages: Array<{ language: string; share: LanguageShare }>;
+  repoFiles: RepoFilesBucket | null;
+  frameworks: string[];
+  explore: number;
+}
+
 /** Where a path target is hashed from (class P): the repository root, or the line's working directory when no repository holds the path. */
 export type TargetBase = 'repo' | 'cwd';
 
@@ -209,6 +230,8 @@ export interface SessionObservation {
   frame?: Frame;
   /** The hash of `frame`. Class A: one value over the whole frame links rows. */
   frameId?: string;
+  /** The stack strata of the file (CAPTURE 13). Class A; absent on a record captured earlier. */
+  strata?: Strata;
   /** The harness's own `cost-state` totals when the file has one. */
   costUsd: number | null;
   /** Summed assistant usage of the file's own line (a main transcript's sidechain lines are not counted; a subagent transcript is its own line). */
@@ -515,6 +538,8 @@ export interface UserPromptObservation {
   frame?: Frame;
   /** The hash of `frame` (`frameIdOf`). Class A (EXTRACTOR 11). */
   frameId?: string;
+  /** The stack strata of the file with this prompt's own `explore` count (CAPTURE 13). Class A; absent on a record captured earlier. */
+  strata?: Strata;
 }
 
 export type CaptureRecord = SessionObservation | UserPromptObservation | ToolObservation | ErrorLineObservation;

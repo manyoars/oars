@@ -363,7 +363,7 @@ describe('a version-3 store opened under version 4', () => {
     await deposit(staged.runtime, options);
     const after = await loadStore(staged.storeDir);
     const key = (record: { session: string; n: number }): string => `${record.session}#${String(record.n)}`;
-    const expectedToChange = new Set(['steps', 'target', 'targetBase', 'sid', 'cv', 'rev', 'segments', 'pulls', 'commits']);
+    const expectedToChange = new Set(['steps', 'target', 'targetBase', 'sid', 'cv', 'rev', 'segments', 'pulls', 'commits', 'errorCode']);
     const changed = new Set<string>();
     expect(after.tools.length).toBe(before.tools.length);
     for (const tool of after.tools) {
