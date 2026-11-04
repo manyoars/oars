@@ -737,8 +737,8 @@ export const withLock = async <T>(storeDir: string, work: () => Promise<T>, opti
     return await work();
   } finally {
     clearInterval(heartbeat);
-    // A refused read (an antivirus share violation) counts as ours, so the lock is not left standing for the stale window; `rm` with `force` is a no-op on a missing file.
-    if ((await readFile(lock, 'utf8').catch(() => token)) === token) await rm(lock, { force: true });
+    // A refused read (an antivirus share violation) counts as ours, so the lock is not left standing for the stale window; `rm` retries a share violation, and a refusal that outlasts the retries is swallowed so the finished work's result is not lost (the stale window then clears the lock).
+    if ((await readFile(lock, 'utf8').catch(() => token)) === token) await rm(lock, { force: true, recursive: true, maxRetries: 3, retryDelay: 50 }).catch(() => undefined);
   }
 };
 
