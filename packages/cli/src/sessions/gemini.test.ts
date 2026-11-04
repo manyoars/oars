@@ -147,6 +147,26 @@ describe('the Gemini CLI reader', () => {
     expect(out.errorLines).toEqual([]);
   });
 
+  it('leaves a shell call under the summarizeToolOutput setting as none: upstream stores only the wrapped summary, with no Output: prefix and no exit code, and status success whatever the exit (tools/shell.ts:1175-1187; settings/settingsSchema.ts:1090)', () => {
+    const summary = (text: string): string => `<untrusted_context source="shell">
+${text}
+</untrusted_context>`;
+    const out = extractOf([
+      head,
+      prompt(1, 'x'),
+      say(2, '', {
+        toolCalls: [
+          shell('a', 'make', 'success', 3, summary('make failed: 3 errors in main.c')),
+          shell('b', 'sleep 1 &', 'success', 4, 'Command moved to background (PID: 41). Output hint: none'),
+          shell('c', 'fine', 'success', 5, shellText('all good')),
+        ],
+      }),
+    ]);
+    // A call moved to the background has settled as far as the CLI knows, and reads ok; the summary is unsettled.
+    expect(out.tools.map((tool) => tool.status)).toEqual(['none', 'ok', 'ok']);
+    expect(out.errorLines).toEqual([]);
+  });
+
   it('records a shell call whose spawn failed (status error) with the error message', () => {
     const out = extractOf([head, prompt(1, 'x'), say(2, '', { toolCalls: [call('c1', 'run_shell_command', { command: 'zzz' }, 'error', 3, reply('c1', 'run_shell_command', { error: 'spawn zzz ENOENT' }))] })]);
     expect(out.errorLines).toMatchObject([{ tool: 'Bash', line: 'spawn zzz ENOENT' }]);
@@ -369,6 +389,30 @@ describe('the Gemini CLI reader', () => {
       expect(extractOf(twice).session.usage).toMatchObject({ input: 1000, output: 20 });
       // A rewind to the first copy rolls the whole history back.
       expect(text([...withTurn(failed), ...firstPass, { $rewindTo: 'mu1a' }, prompt(50, 'fresh')])).toEqual(['fresh']);
+    });
+
+    it('keeps the hidden copies of earlier turns when a rewind names a later copy, so a later pass still hides the copies it re-records (chatRecordingService.ts:1380-1410)', () => {
+      const records = [
+        head,
+        prompt(1, 'first'),
+        say(2, 'answer one', { tokens: tokens(100, 5) }),
+        prompt(3, 'second'),
+        say(4, 'answer two', { tokens: tokens(200, 6) }),
+        copy('a1', 'user', 'first', 20),
+        copy('a2', 'gemini', 'answer one', 20),
+        copy('a3', 'user', 'second', 20),
+        copy('a4', 'gemini', 'answer two', 20),
+        { $patch: { removeIds: ['u1', 'g2', 'u3', 'g4'], orderIds: ['a1', 'a2', 'a3', 'a4'] } },
+        { $rewindTo: 'a3' },
+        prompt(30, 'retyped'),
+        copy('b1', 'user', 'first', 40),
+        copy('b2', 'gemini', 'answer one', 40),
+        copy('b3', 'user', 'retyped', 40),
+        { $patch: { removeIds: ['a1', 'a2', 'u30'], orderIds: ['b1', 'b2', 'b3'] } },
+      ];
+      const out = extractOf(records);
+      expect(out.session.userTurns).toBe(2);
+      expect(out.session.assistantTurns).toBe(1);
     });
 
     it('drops a copy once per removed message, so a prompt typed twice stays two and an identical later prompt is not mistaken for a copy', () => {

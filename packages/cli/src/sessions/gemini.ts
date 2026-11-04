@@ -168,8 +168,11 @@ const foldChat = (text: string): { meta: Obj; messages: Obj[] } => {
     if (typeof record.$rewindTo === 'string') {
       const ids = [...messages.keys()];
       const at = ids.indexOf(original.get(record.$rewindTo) ?? record.$rewindTo);
+      const named = ids.indexOf(record.$rewindTo);
+      // Upstream keeps everything before the named copy (chatRecordingService.ts:1380-1410), which includes the hidden copies of earlier turns; a later pass lists them in
+      // `removeIds`, and `retire` must still find them.
       if (at === -1) messages.clear();
-      else for (const id of ids.slice(at)) messages.delete(id);
+      else for (const [offset, id] of ids.slice(at).entries()) if (!(at + offset < named && echoes.has(id))) messages.delete(id);
     } else if (isObj(record.$patch)) {
       const patch = record.$patch;
       patchOne(patch);
@@ -376,6 +379,9 @@ export const chatLines = (text: string, fallbackId: string, cwd: string | null):
         // On the inactivity timeout the tool writes one sentence and no trailer, and the executor still records `success` (tools/shell.ts:929-933, tool-executor.ts:144-154).
         // It has no `Output: ` prefix (tools/shell.ts:929-933), so it is tested on the unwrapped text, not on `output`, which a command printing that sentence first would also match.
         const timedOut = shell ? TIMED_OUT.exec(unwrap(raw).trim()) : null;
+        // Under the `summarizeToolOutput` setting upstream stores only the wrapped summary: no `Output: ` and no trailer, and `success` whatever the exit code (tools/shell.ts:1175-1187).
+        // A success that opens with none of the shell tool's own forms is unsettled, as for a cut-short call.
+        if (shell && status === 'success' && error === undefined && timedOut === null && !/^(?:Output: |Command moved to background)/.test(unwrap(raw).trim())) continue;
         let failure: string | undefined;
         if (status !== 'success' || error !== undefined) {
           failure = error ?? unwrap(raw).trim();
