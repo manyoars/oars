@@ -1,9 +1,12 @@
 // Serving a bundle: one harness version's cells, derived and signed. The signature covers the exact payload bytes and the client pinned the public half at login, so a replica can be
 // kept and checked again anywhere.
-import { type Bundle, isBundleVersion, parseSkeleton, type SessionSkeleton, type SignedBundle, VOCAB_VERSION } from '../../cli/src/sessions/pool-wire.js';
-import { bundleOf } from './derive.js';
+import { type Bundle, isBundleVersion, parseSkeleton, type SessionSkeleton, type SignedBundle, VOCAB_VERSION, BUNDLE_FORMAT } from '../../cli/src/sessions/pool-wire.js';
+import { CALL_SHAPE_METHOD, contentHash, METHODS } from '../../cli/src/sessions/read.js';
+import { EXTRACTOR_VERSION } from '../../cli/src/sessions/schema.js';
+import { bundleOf, SERVED_FLOOR } from './derive.js';
 import { answer, bound, fieldOf, notConfigured, refuse, textField, wholeBinding, type Env } from './http.js';
 import { accountOf } from './identity.js';
+import { isoWeekOf, secondsToNextWeek } from './week.js';
 
 const signed = async (bundle: Bundle, privateJwk: string): Promise<SignedBundle> => {
   const parsed: unknown = JSON.parse(privateJwk);
@@ -28,29 +31,31 @@ const depositsOf = async (env: Env): Promise<SessionSkeleton[][]> => {
   return [...accounts.values()];
 };
 
-const DEFAULT_READ_CAP = 50;
-const RESERVE_ATTEMPTS = 8;
+/** One fetch a week unless the deploy sets more (V12). */
+const DEFAULT_FETCH_CAP = 1;
 
-const hasDeposited = async (env: Env, account: string): Promise<boolean> => (await env.DB.prepare('SELECT 1 AS held FROM deposits WHERE account = ? LIMIT 1').bind(account).first()) !== null;
-
-const servedSoFar = async (env: Env, account: string, limit: number): Promise<number> => {
-  const held = fieldOf(await env.DB.prepare('SELECT reads_served AS served FROM accounts WHERE id = ?').bind(account).first(), 'served');
-  return typeof held === 'number' ? held : limit;
+/** The count of changes to the pool's rows, kept by triggers on `deposits` so it moves in the same write as the change. */
+const generationOf = async (env: Env): Promise<number> => {
+  const held = fieldOf(await env.DB.prepare('SELECT generation FROM pool_generation WHERE id = 1').bind().first(), 'generation');
+  return typeof held === 'number' ? held : 0;
 };
 
 /**
- * Takes up to `wanted` reads out of what is left of the cap; undefined when nothing is left. A compare-and-swap, because two pulls at once would otherwise both spend the same
- * remainder, and a retry after losing it reads the count again.
+ * What names this bundle: the code that derives it, the floor, the version asked for, and the generation of the rows. It is known without reading a row, so a conditional request
+ * costs no parse and an account cannot force one by sending it. Read before the rows, so a bundle is never older than the ETag it carries.
  */
-const reserve = async (env: Env, account: string, limit: number, wanted: number): Promise<{ taken: number; total: number } | undefined> => {
-  for (let attempt = 0; attempt < RESERVE_ATTEMPTS; attempt += 1) {
-    const served = await servedSoFar(env, account, limit);
-    if (served >= limit) return undefined;
-    const taken = Math.min(limit - served, wanted);
-    const { meta } = await env.DB.prepare('UPDATE accounts SET reads_served = ? WHERE id = ? AND reads_served = ?').bind(served + taken, account, served).run();
-    if (meta.changes === 1) return { taken, total: served + taken };
-  }
-  return undefined;
+const etagOf = (harnessVersion: string, generation: number): string => `"${contentHash([BUNDLE_FORMAT, EXTRACTOR_VERSION, METHODS, CALL_SHAPE_METHOD, SERVED_FLOOR, harnessVersion, VOCAB_VERSION, generation])}"`;
+
+/** Whether an If-None-Match names this ETag. A proxy that compresses may weaken it to `W/"..."`, so the prefix is not compared. */
+const matches = (header: string | null, etag: string): boolean => (header ?? '').split(',').some((token) => token.trim().replace(/^W\//, '') === etag);
+
+/**
+ * Spends one of the account's fetches this ISO week; false when none is left. One statement, so two fetches at once cannot both take the last. A count from an earlier week is
+ * replaced by this fetch's, and an account at its cap is not touched.
+ */
+const spend = async (env: Env, account: string, week: string, cap: number): Promise<boolean> => {
+  const { meta } = await env.DB.prepare('UPDATE accounts SET fetches = CASE WHEN fetch_week = ? THEN fetches + 1 ELSE 1 END, fetch_week = ? WHERE id = ? AND (fetch_week IS NOT ? OR fetches < ?)').bind(week, week, account, week, cap).run();
+  return meta.changes === 1;
 };
 
 export const fetchBundle = async (request: Request, env: Env, harnessVersion: string, vocabVersion: string): Promise<Response> => {
@@ -60,15 +65,18 @@ export const fetchBundle = async (request: Request, env: Env, harnessVersion: st
   if (vocabVersion !== VOCAB_VERSION) return refuse(400, 'unknown_vocab_version', `This pool holds vocabulary version ${VOCAB_VERSION}.`, 'vocabVersion');
   const key = bound(env.SLICE_SIGNING_KEY);
   if (key === undefined) return notConfigured('SLICE_SIGNING_KEY');
-  const deposited = await hasDeposited(env, account);
-  const limit = wholeBinding(env.READ_CAP, DEFAULT_READ_CAP);
-  const capReached = (): Response => refuse(403, 'read_cap', `An account with no deposit is served ${String(limit)} reads. Run oars pool deposit for the whole pool.`);
+  const generation = await generationOf(env);
+  const etag = etagOf(harnessVersion, generation);
+  // Before the spend and before the pool is read: a bundle that has not changed is not sent, so it costs the account nothing.
+  if (matches(request.headers.get('if-none-match'), etag)) return new Response(null, { status: 304, headers: { etag } });
+  const now = Date.now();
+  const week = isoWeekOf(now);
+  const cap = wholeBinding(env.FETCH_CAP, DEFAULT_FETCH_CAP);
   // Answered before the pool is read: a spent account must not be able to force a parse of every deposit on each request.
-  if (!deposited && (await servedSoFar(env, account, limit)) >= limit) return capReached();
-  const whole = bundleOf(harnessVersion, await depositsOf(env));
-  if (deposited) return answer(200, await signed(whole, key));
-  const served = await reserve(env, account, limit, whole.reads.length);
-  if (served === undefined) return capReached();
-  // Cells are what a depositor gets on top: they would let a capped account compute every read it was not served.
-  return answer(200, await signed({ ...whole, cells: [], motifs: [], reads: whole.reads.slice(0, served.taken), capped: { limit, served: served.total } }, key));
+  if (!(await spend(env, account, week, cap))) {
+    return refuse(429, 'fetch_cap', `An account without access may fetch ${String(cap)} per ISO week. Deposit sessions for the whole pool.`, undefined, { 'retry-after': String(secondsToNextWeek(now)) });
+  }
+  // The count is dropped when its week ends, so what stays per account is only this week's.
+  await env.DB.prepare('UPDATE accounts SET fetch_week = NULL, fetches = 0 WHERE fetch_week <> ?').bind(week).run();
+  return answer(200, await signed(bundleOf(harnessVersion, await depositsOf(env)), key), { etag });
 };

@@ -305,10 +305,9 @@ export const poolPull = async (deps: RunDeps, options: { server?: string | undef
   const file = replicaFile(storeDir, server, harnessVersion);
   await mkdir(dirname(file), { recursive: true });
   await writeFile(file, `${JSON.stringify(reply.body)}\n`);
-  const { cells, motifs, reads, capped, asOf } = verified.bundle;
-  const cappedLine = capped === null ? '' : ` Capped: ${String(capped.served)} of ${String(capped.limit)} reads served to this account; a deposit lifts the cap.`;
+  const { cells, motifs, reads, asOf } = verified.bundle;
   return {
-    document: { ok: true, server, harnessVersion, file, cells: cells.length, motifs: motifs.length, reads: reads.length, capped, asOf },
-    text: `Pulled ${harnessVersion}: ${String(reads.length)} reads, ${String(cells.length)} cells, and ${String(motifs.length)} motifs, verified against the pinned key and kept at ${file}.${cappedLine}`,
+    document: { ok: true, server, harnessVersion, file, cells: cells.length, motifs: motifs.length, reads: reads.length, asOf },
+    text: `Pulled ${harnessVersion}: ${String(reads.length)} reads, ${String(cells.length)} cells, and ${String(motifs.length)} motifs, verified against the pinned key and kept at ${file}.`,
   };
 };

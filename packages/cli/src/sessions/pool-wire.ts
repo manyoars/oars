@@ -393,12 +393,11 @@ export interface StrataCell {
   clusters: number;
 }
 
-/** One harness version's replica, as the server signs it. Nothing in it is keyed by stack. `capped` says an account with no deposit got part of it. */
+/** One harness version's replica, as the server signs it. Nothing in it is keyed by stack. */
 export interface Bundle {
   format: typeof BUNDLE_FORMAT;
   harnessVersion: string;
   vocabVersion: string;
-  capped: { limit: number; served: number } | null;
   asOf: ReadAsOf;
   cells: Cell[];
   motifs: Motif[];
@@ -423,7 +422,7 @@ export interface PinnedKey {
 const isSignedBundle = (value: unknown): value is SignedBundle => isFields(value) && typeof value.payload === 'string' && typeof value.signature === 'string';
 
 const isBundle = (value: unknown): value is Bundle =>
-  isFields(value) && value.format === BUNDLE_FORMAT && typeof value.harnessVersion === 'string' && typeof value.vocabVersion === 'string' && isFields(value.asOf) && Array.isArray(value.cells) && Array.isArray(value.motifs) && Array.isArray(value.reads) && Array.isArray(value.strata) && (value.capped === null || isFields(value.capped));
+  isFields(value) && value.format === BUNDLE_FORMAT && typeof value.harnessVersion === 'string' && typeof value.vocabVersion === 'string' && isFields(value.asOf) && Array.isArray(value.cells) && Array.isArray(value.motifs) && Array.isArray(value.reads) && Array.isArray(value.strata);
 
 const signatureHolds = async ({ payload, signature }: SignedBundle, key: PinnedKey): Promise<boolean> => {
   try {

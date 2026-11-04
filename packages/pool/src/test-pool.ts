@@ -93,7 +93,13 @@ const stubProvider = (): StubProvider => {
 
 export interface Answer {
   status: number;
+  /** Null for an answer with no body, such as a 304. */
   json: unknown;
+}
+
+/** An answer with its headers, for the tests that read an ETag or a Retry-After. */
+export interface RawAnswer extends Answer {
+  headers: Headers;
 }
 
 export interface TestPool {
@@ -102,6 +108,7 @@ export interface TestPool {
   db: () => Promise<TestDb>;
   post: (path: string, body: unknown, token?: string) => Promise<Answer>;
   get: (path: string, token?: string) => Promise<Answer>;
+  raw: (path: string, token?: string, headers?: { [name: string]: string }) => Promise<RawAnswer>;
   /** The whole device flow through the routes, approved at the stub. */
   signIn: (provider: string, user: StubUser) => Promise<{ token: string; account: string; signingKey: unknown }>;
   stub: StubProvider;
@@ -137,7 +144,7 @@ export const startPool = async (bindings: { [name: string]: string } = {}): Prom
     compatibilityDate: config.compatibilityDate,
     compatibilityFlags: config.compatibilityFlags,
     d1Databases: { DB: 'pool-test' },
-    bindings: { PSEUDONYM_KEY: 'a-test-pseudonym-key', GITHUB_CLIENT_ID: 'github-client', GOOGLE_CLIENT_ID: 'google-client', GOOGLE_CLIENT_SECRET: 'google-secret', SLICE_SIGNING_KEY: key.jwk, COVENANT_VERSION: 'v1', ...bindings },
+    bindings: { PSEUDONYM_KEY: 'a-test-pseudonym-key', GITHUB_CLIENT_ID: 'github-client', GOOGLE_CLIENT_ID: 'google-client', GOOGLE_CLIENT_SECRET: 'google-secret', SLICE_SIGNING_KEY: key.jwk, COVENANT_VERSION: 'v1', FETCH_CAP: '1000', ...bindings },
     outboundService: stub.outbound,
   });
   await miniflare.ready;
@@ -147,18 +154,27 @@ export const startPool = async (bindings: { [name: string]: string } = {}): Prom
     for (const line of readFileSync(fileIn(`../migrations/${file}`), 'utf8').split('\n')) if (line.trim() !== '' && !line.startsWith('--')) await database.prepare(line).run();
   }
 
-  const call = async (path: string, init: { method: string; body?: string }, token?: string): Promise<Answer> => {
-    const response = await miniflare.dispatchFetch(`http://pool.test${path}`, { ...init, headers: token === undefined ? {} : { authorization: `Bearer ${token}` } });
-    return { status: response.status, json: await response.json() };
+  const call = async (path: string, init: { method: string; body?: string }, token?: string, headers: { [name: string]: string } = {}): Promise<RawAnswer> => {
+    const response = await miniflare.dispatchFetch(`http://pool.test${path}`, { ...init, headers: { ...(token === undefined ? {} : { authorization: `Bearer ${token}` }), ...headers } });
+    const text = await response.text();
+    return { status: response.status, json: text === '' ? null : JSON.parse(text), headers: response.headers };
   };
-  const post: TestPool['post'] = (path, body, token) => call(path, { method: 'POST', body: typeof body === 'string' ? body : JSON.stringify(body) }, token);
-  const get: TestPool['get'] = (path, token) => call(path, { method: 'GET' }, token);
+  const post: TestPool['post'] = async (path, body, token) => {
+    const { status, json } = await call(path, { method: 'POST', body: typeof body === 'string' ? body : JSON.stringify(body) }, token);
+    return { status, json };
+  };
+  const raw: TestPool['raw'] = (path, token, headers) => call(path, { method: 'GET' }, token, headers);
+  const get: TestPool['get'] = async (path, token) => {
+    const { status, json } = await raw(path, token);
+    return { status, json };
+  };
   return {
     miniflare,
     url: async () => (await miniflare.ready).origin,
     db,
     post,
     get,
+    raw,
     stub,
     signIn: async (provider, user) => {
       const started = await post('/v1/login/start', { provider });
