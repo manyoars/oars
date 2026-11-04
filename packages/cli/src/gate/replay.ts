@@ -7,9 +7,10 @@ import { compileAllow } from '../sessions/allow.js';
 import { makeRedactor } from '../sessions/redact.js';
 import { paths, readState, writeAtomic, type SessionsRuntime } from '../sessions/store.js';
 import type { Crossing, UnreadShape } from './checks.js';
-import { GATE_VERSION, parseRows, type CrossingRecord, type Next, type Novelty, type Origin, type RegistryRow, type RunRow } from './record.js';
+import { GATE_VERSION, liveCrossings, mergeCrossings, parseRows, type CrossingRecord, type Next, type Novelty, type Origin, type RegistryRow, type RunRow } from './record.js';
 import { askable, type RegistryAnswer, type RegistryAsk, type RegistryReader } from './registry.js';
 import { ageOf, againstLatestOf, ASKED_PROGRAMS, askedOf, DAY_MS } from './registry-state.js';
+import { scopesOf, seedIndex } from './novelty.js';
 import { repositoryOf } from './scope.js';
 import { discover, readCalls, readOrigins, type CallsSeen, type Origins, type Found, type FoundRemoval, type TranscriptFile, type TranscriptRead } from './transcripts.js';
 
@@ -268,6 +269,17 @@ export const replay = async (runtime: Pick<SessionsRuntime, 'storeDir' | 'projec
     registryRead: options.registry !== undefined,
   };
   const registry = answers === undefined ? [...cached.values()] : registryRows(answers, held, cached, day);
-  await writeAtomic(file, `${[run, ...registry, ...records].map((row) => JSON.stringify(row)).join('\n')}\n`);
+  // The file is read again here, as late as it can be, so a row the hook appended while the transcripts were read is kept, not overwritten.
+  const live = liveCrossings(parseRows(await readFile(file, 'utf8').catch(() => '')));
+  await writeAtomic(file, `${[run, ...registry, ...mergeCrossings(records, live)].map((row) => JSON.stringify(row)).join('\n')}\n`);
+  // The hook reads novelty from a kept index, not from this file; every name a transcript showed is in it, in the scopes the hook names them in.
+  await seedIndex(
+    runtime.storeDir,
+    file,
+    held.flatMap((one) => {
+      const scopes = scopesOf(keyOf(one.found.crossing), repositoryOf(one.transcript.project), one.transcript.session);
+      return [scopes.fleet, scopes.repository, scopes.session];
+    }),
+  );
   return { run, file, text: summaryText(run, file) };
 };

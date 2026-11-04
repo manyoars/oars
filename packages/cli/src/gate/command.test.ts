@@ -58,6 +58,17 @@ describe('oars gate replay and report', () => {
     expect(err.join('')).toContain('oars gate replay');
   });
 
+  it('reports a store holding only hook rows, with no replay run', async () => {
+    const { deps, out, staged } = setup();
+    const row = { kind: 'crossing', v: 1, via: 'hook', class: 'npm-package', form: 'install', name: 'left-pad', session: 's', toolUseId: 't', novelty: 'fleet', registryState: 'not-read', origin: 'not-read' };
+    mkdirSync(staged.storeDir, { recursive: true });
+    writeFileSync(join(staged.storeDir, 'crossings.jsonl'), `${JSON.stringify(row)}\n`);
+    expect(await run(['gate', 'report'], deps)).toBe(ExitCode.OK);
+    expect(out.join('')).toContain('No replay has run');
+    expect(out.join('')).toContain('Crossings: 1');
+    expect(out.join('')).toContain('Recorded by: hook 1');
+  });
+
   it('says so when the store is not configured', async () => {
     const { deps, err } = setup();
     delete deps.sessions;
