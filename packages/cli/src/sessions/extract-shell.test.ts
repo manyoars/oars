@@ -336,6 +336,15 @@ describe('shell structure: forms that must not hide the commands after them', ()
     expect(runs('echo $(npm test && echo ok) | tail').filter(([run]) => run.startsWith('npm') || run.startsWith('echo ok'))).toEqual([['npm test', false], ['echo ok', false]]);
     expect(runs('foreach ($f in $x) { npm test && echo ok } | tail').filter(([run]) => run.startsWith('npm') || run.startsWith('echo ok'))).toEqual([['npm test', false], ['echo ok', false]]);
   });
+  it('hides the commands of a group that holds a nested group, and the command whose words open a group', () => {
+    const only = (command: string, ...starts: string[]) => runs(command).filter(([run]) => starts.some((start) => run.startsWith(start)));
+    expect(only('(npm test && foreach ($f in $x) { echo $f }) | tail', 'npm')).toEqual([['npm test', false]]);
+    expect(only('(npm test && if ($y) { echo ok }) | tail', 'npm')).toEqual([['npm test', false]]);
+    expect(only('pytest $(git ls-files) | tail', 'pytest', 'git')).toEqual([['pytest', false], ['git ls-files', false]]);
+    expect(only('npm run build $(x) | tail', 'npm')).toEqual([['npm run build', false]]);
+    expect(only('echo $(npm test && echo ok) | tail', 'echo', 'npm')).toEqual([['echo', false], ['npm test', false], ['echo ok', false]]);
+    expect(only('pytest $(git ls-files) && tail', 'pytest')).toEqual([['pytest', true]]);
+  });
   it('hides only the command before the pipe when no group closes before it', () => {
     expect(runs('a && b | c')).toEqual([['a', true], ['b', false], ['c', true]]);
     expect(runs('a | (b && c)')).toEqual([['a', false], ['b', true], ['c', true]]);

@@ -8,8 +8,8 @@
 // Version 10 (CAPTURE 10, t768) gives a turn opened by a slash command or a skill a `user-prompt` record, adds `opened` to that record, and moves `skills`
 // from class P to class A, since a skill's name can be private. It changed no derivation, so it leaves EXTRACTOR at 9.
 //
-// Version 11 (CAPTURE 11) redacts the server part of an MCP tool name wherever it is stored (`tool`, the session's `tools`, an error line's `tool`, the skeleton's tool names),
-// reads package-manager and shell forms more exactly (so `pulls`, `segments`, and `commits` change), and opens a typed prompt from a line that only starts with an injected tag's name without closing it.
+// Version 11 (CAPTURE 11) redacts the part of an MCP tool name after `mcp__` (Cursor: `mcp_`) wherever it is stored (`tool`, the session's `tools`, an error line's `tool`, the skeleton's tool names),
+// reads package-manager and shell forms more exactly (so `pulls`, `segments`, `commits`, and each tool's `steps` change), and opens a typed prompt from a line that only starts with an injected tag's name without closing it.
 // EXTRACTOR 10 reads more command forms as a run or a verify (package runners, `unittest`, installs that are not runs, a leading word before a name); no capture record changes.
 //
 // EXTRACTOR 9 adds motifs, cells, and reads, computed from the capture records and written beside them (`docs/sessions-store.md`), and carries a prompt's
