@@ -270,7 +270,7 @@ describe('the Grok Build reader', () => {
 
   it('records an edit by its name even when it fails or the tool reports no path, with the original name kept for the table', () => {
     const out = extractOf([
-      prompt(1),
+      prompt(1, 'edit'),
       call(2, 'c1', 'write', { file_path: 'src/new.ts', content: 'x' }),
       finish(3, 'c1', 'failed', { content: [{ type: 'content', content: { type: 'text', text: 'denied' } }] }),
       call(4, 'c2', 'edit', {}, 'other'),
