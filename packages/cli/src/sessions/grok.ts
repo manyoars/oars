@@ -175,6 +175,8 @@ interface Call {
   block: Obj;
   content: Obj[];
   shell: boolean;
+  /** The request's one-shot `workdir` (opencode `bash`), which is not a directory change. */
+  workdir: string | undefined;
   /** The files the request names (for an edit); the block keeps only the first. */
   paths: string[];
 }
@@ -309,7 +311,7 @@ export const grokLines = (text: string, fallbackId: string, summary: Obj, usage:
         block.input = path === undefined ? {} : { file_path: path };
       }
       current.content.push(block);
-      calls.set(id, { block, content: current.content, shell, paths });
+      calls.set(id, { block, content: current.content, shell, workdir: str(input.workdir), paths });
     } else if (kind === 'tool_call_update') {
       const id = str(update.toolCallId);
       const status = str(update.status);
@@ -324,7 +326,9 @@ export const grokLines = (text: string, fallbackId: string, summary: Obj, usage:
       if (known.shell) {
         const exit = num(output.exit_code);
         const dir = str(output.current_dir);
-        if (dir !== undefined) base.cwd = dir;
+        // With a `workdir` the opencode `bash` tool reports that directory as `current_dir` (opencode/bash/mod.rs:376, :454), and the next relative `write` or `edit` still resolves against
+        // the session's own (opencode/write/mod.rs:117, opencode/edit/mod.rs:210), so only a call without one follows `current_dir`.
+        if (dir !== undefined && known.workdir === undefined) base.cwd = dir;
         shown = shellText(output, update);
         if (exit !== undefined && exit !== 0) failure = failureOf(exit, shown);
         else if (status === 'failed') failure = shown === '' ? 'tool failed' : shown;
