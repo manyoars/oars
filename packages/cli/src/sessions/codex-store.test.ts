@@ -23,10 +23,9 @@ const E = 'eeee5555-5555-4555-8555-555555555555';
 const STEM = (id: string): string => `2026-06-01T10-00-00-${id}`;
 
 const T = (second: number): string => `2026-06-01T10:00:${String(second).padStart(2, '0')}.000Z`;
-const NL = String.fromCharCode(10);
 // SessionMeta requires session_id (equal to the root thread's id, protocol.rs:3451-3452) and originator (:3474), beside id and cli_version.
 const meta = (id: string, cwd: string, extra: object = {}) => line(T(0), 'session_meta', { session_id: id, id, timestamp: T(0), cwd, originator: 'codex_cli_rs', cli_version: '0.50.0', ...extra });
-// A failed shell call in the persisted text form (core/src/tools/mod.rs:107-113), as ac558e2 writes it.
+// A failed shell call in the persisted text form (the unified-exec emitter's own text, core/src/tools/events.rs:400, :416, :423), as ac558e2 writes it.
 const failedShell = [
   line(T(3), 'response_item', { type: 'function_call', name: 'shell', arguments: JSON.stringify({ command: ['bash', '-lc', 'make'] }), call_id: 'c1' }),
   line(T(4), 'response_item', { type: 'function_call_output', call_id: 'c1', output: 'Exit code: 2\nWall time: 0.1 seconds\nOutput:\nmake: *** No rule' }),
@@ -141,11 +140,11 @@ describe('depositing the Codex source', () => {
     const s = staged();
     const project = join(s.projectsRoot, 'mine');
     mkdirSync(project, { recursive: true });
-    writeFileSync(join(project, 'one.jsonl'), `${JSON.stringify({ type: 'user', timestamp: '2026-06-02T00:00:00Z', message: { role: 'user', content: 'hello' } })}${NL}`);
+    writeFileSync(join(project, 'one.jsonl'), `${JSON.stringify({ type: 'user', timestamp: '2026-06-02T00:00:00Z', message: { role: 'user', content: 'hello' } })}\n`);
     writeFileSync(join(s.home, 'sessions', '2026', '06', '01', `rollout-${STEM(C)}.jsonl.zst`), 'not zstd at all');
     const result = await deposit(s.runtime, options(['mine', 'codex']));
     expect(trackedKeys(s.storeDir)).toEqual(expect.arrayContaining(['mine/one.jsonl', `codex/${A}`, `codex/${B}`]));
-    expect(result.sources.codex?.unreadable.join(NL)).toContain(C);
+    expect(result.sources.codex?.unreadable.join('\n')).toContain(C);
   });
 
   it('names a wholly corrupt rollout and leaves its cursor alone, so a fixed file is read next time', async () => {
@@ -154,7 +153,7 @@ describe('depositing the Codex source', () => {
       { id: E, lines: '{torn\nnot json\n' },
     ]);
     const result = await deposit(s.runtime, options(['codex']));
-    const unreadable = result.sources.codex?.unreadable.join(NL) ?? '';
+    const unreadable = result.sources.codex?.unreadable.join('\n') ?? '';
     expect(unreadable).toContain(E);
     expect(trackedKeys(s.storeDir)).toEqual([`codex/${A}`, `codex/${B}`]);
     expect(result.sessions).toBe(2);
@@ -162,7 +161,7 @@ describe('depositing the Codex source', () => {
 
   it('counts a torn line in the rollout as a bad line, so the deposit line does not under-report', async () => {
     const s = staged();
-    stageCodex(s.root, [{ id: E, lines: `${JSON.stringify(meta(E, '/x'))}${NL}{torn${NL}${JSON.stringify(line(T(2), 'event_msg', { type: 'user_message', message: 'hi' }))}${NL}` }]);
+    stageCodex(s.root, [{ id: E, lines: `${JSON.stringify(meta(E, '/x'))}\n{torn\n${JSON.stringify(line(T(2), 'event_msg', { type: 'user_message', message: 'hi' }))}\n` }]);
     const result = await deposit(s.runtime, options(['codex']));
     expect(result.badLines).toBe(1);
   });
@@ -170,7 +169,7 @@ describe('depositing the Codex source', () => {
   it('lets the nightly run repeat a saved allow, so it reads Codex with no flag', async () => {
     const s = staged();
     await deposit(s.runtime, options(['codex']));
-    const text = `${rollout(D, '/x').map((entry) => JSON.stringify(entry)).join(NL)}${NL}`;
+    const text = `${rollout(D, '/x').map((entry) => JSON.stringify(entry)).join('\n')}\n`;
     writeFileSync(join(s.home, 'sessions', '2026', '06', '01', `rollout-${STEM(D)}.jsonl`), text);
     await runHook('nightly', '', s.runtime, () => NOW);
     expect(trackedKeys(s.storeDir)).toContain(`codex/${D}`);
@@ -226,7 +225,7 @@ describe('the source table', () => {
         close: () => undefined,
       }),
   });
-  const hi = `${JSON.stringify({ type: 'user', timestamp: T(1), message: { role: 'user', content: 'hi' } })}${NL}`;
+  const hi = `${JSON.stringify({ type: 'user', timestamp: T(1), message: { role: 'user', content: 'hi' } })}\n`;
 
   it('picks up a second entry with no other wiring, labeled from the table in force', async () => {
     const s = stage();
@@ -243,7 +242,7 @@ describe('the source table', () => {
     const t = stage();
     const stop = await deposit({ ...t.runtime, sources: [fake(t.root, transcripts, true)], sourceRoots: { fake: t.root } }, options(['fake']));
     expect(stop.sources.fake?.read).toBe(0);
-    expect(stop.sources.fake?.unreadable.join(NL)).toContain('bad one');
+    expect(stop.sources.fake?.unreadable.join('\n')).toContain('bad one');
   });
 });
 
@@ -347,7 +346,7 @@ describe('Paginated and forked rollouts through the store', () => {
     const original = paginated(A);
     // Reverting before the second turn keeps the records before its UserMessage (index 7): seven records, so the next ordinal is 7.
     const base = 7;
-    const bytes = Buffer.byteLength(`${original.slice(0, base).map((record) => JSON.stringify(record)).join(NL)}${NL}`);
+    const bytes = Buffer.byteLength(`${original.slice(0, base).map((record) => JSON.stringify(record)).join('\n')}\n`);
     const home = stageCodex(s.root, [
       { id: A, lines: original },
       { id: `${A}_${B}`, lines: reverted(A, base, bytes) },
@@ -399,7 +398,7 @@ describe('Paginated and forked rollouts through the store', () => {
     mkdirSync(outside, { recursive: true });
     writeFileSync(join(outside, 'sessions'), 'a plain file, not a folder');
     const result = await deposit({ ...s.runtime, sourceRoots: { codex: outside } }, options(['codex']));
-    const logged = result.sources.codex?.unreadableLogged.join(NL) ?? '';
+    const logged = result.sources.codex?.unreadableLogged.join('\n') ?? '';
     expect(logged).toContain('sessions');
     expect(logged).not.toContain('codex-home-name');
   });

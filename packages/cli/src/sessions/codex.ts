@@ -22,7 +22,7 @@
 //   event_msg token_count {info.last_token_usage}  one model response's usage, closing the lines since the last one
 //   response_item function_call / local_shell_call / custom_tool_call   a tool call
 //   response_item function_call_output {call_id, output}   a shell call's outcome: the text `Exit code: N` / `Process exited with code N` then `Output:`
-//                       (core/src/tools/mod.rs:107-113, context.rs:556), the real exit code; `execution error: ...` (core/src/tools/events.rs:438) is a
+//                       (the unified-exec emitter's own text, core/src/tools/events.rs:400, :416, :423; context.rs:556), the real exit code; `execution error: ...` (core/src/tools/events.rs:438) is a
 //                       call that failed to spawn. `write_stdin` (handlers/shell_spec.rs:113) is a shell call too: the process it polls ends only where the
 //                       poll reports its exit code; a poll that failed (`write_stdin failed: ...`, write_stdin.rs:123) is its own error and settles nothing else
 //   event_msg item_completed CommandExecution {id, exit_code, status, aggregated_output}   Paginated mode only (policy.rs:253 arm, kept by `_ =>` :284; Legacy
@@ -35,7 +35,7 @@
 //   event_msg mcp_tool_call_end {call_id, result}   an MCP call's outcome: `result.Err`, or `result.Ok.isError` (protocol.rs:3047, :3076); Legacy mode only
 //   event_msg patch_apply_end {call_id, success, stderr, status}   an apply_patch call's outcome (Legacy mode only); a declined one settles nothing, and a
 //                       patch with no end event stays unsettled (a rejected patch is only a `RespondToModel` output, tools/handlers/apply_patch.rs)
-//   event_msg exec_command_end                  never persisted at ac558e2 (policy.rs:165) nor at rust-v0.46.0; read only if a rollout carries one
+//   event_msg exec_command_end                  never persisted at ac558e2 (policy.rs:165) nor at rust-v0.46.0, so it is not read: the CommandExecution item and the call's output are the two sources
 // Older shapes: the JSON `{output, metadata.exit_code}` wrapper of a shell output (rust-v0.46.0 core/src/tools/mod.rs:186-210).
 // What Codex has no equivalent of (cost, a message id) stays at the value capture gives an absent field.
 
@@ -44,7 +44,8 @@ import { readdir, readFile, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { basename, join } from 'node:path';
 import { createInterface } from 'node:readline';
-import { zstdDecompressSync } from 'node:zlib';
+import { PassThrough, pipeline } from 'node:stream';
+import { createZstdDecompress, zstdDecompressSync } from 'node:zlib';
 
 /** The Codex home for an environment; a test passes its own so it never reads the real one. */
 export const codexRoot = (env: { [name: string]: string | undefined }, home: string = homedir()): string => {
@@ -120,14 +121,22 @@ const textOf = async (file: string): Promise<string> => {
   return (file.endsWith('.zst') ? zstdDecompressSync(bytes) : bytes).toString('utf8');
 };
 
-/** The first line of a plain file read without loading the rest; a compressed file is decompressed whole. */
+/** The first line of a rollout, read without loading the rest: a compressed file is decompressed as a stream and the read stops at the line, so the cost does not grow with the file. */
 const firstLine = async (file: string): Promise<string> => {
-  if (file.endsWith('.zst')) return ((await textOf(file)).split('\n')[0] ?? '');
-  const stream = createReadStream(file, { encoding: 'utf8' });
+  const source = createReadStream(file);
+  const stream = new PassThrough({ encoding: 'utf8' });
+  // pipeline hands a failure in either stage (a missing file, a corrupt frame) to `stream`, and the early destroy below ends it with a premature close nobody awaits.
+  if (file.endsWith('.zst')) pipeline(source, createZstdDecompress(), stream, () => undefined);
+  else pipeline(source, stream, () => undefined);
+  const failed = new Promise<never>((_, reject) => stream.once('error', reject));
+  failed.catch(() => undefined);
   const lines = createInterface({ input: stream, crlfDelay: Infinity });
-  try {
+  const first = async (): Promise<string> => {
     for await (const line of lines) return line;
     return '';
+  };
+  try {
+    return await Promise.race([first(), failed]);
   } finally {
     lines.close();
     stream.destroy();
@@ -180,7 +189,7 @@ const RUNNING_LINE = /^Process running with session ID (\S+)\s*$/m;
  * The message of a call that failed before it produced an exit code, written as the whole output (no `Output:` header): `execution error: ` for a
  * shell call (core/src/tools/events.rs:438), and for the default unified-exec tool (ConfigShellToolType is only `UnifiedExec | Disabled`,
  * protocol/src/openai_models.rs:330-333) `exec_command failed: ` (core/src/tools/handlers/unified_exec/exec_command.rs:270), `write_stdin failed: `
- * (write_stdin.rs:121), and `write_stdin approval failed: ` (:123). `write_stdin rejected: ` (:118) is a declined call and stays unsettled.
+ * (write_stdin.rs:123), and `write_stdin approval failed: ` (:121). `write_stdin rejected: ` (:118) is a declined call and stays unsettled.
  */
 const SPAWN_ERROR = /^(?:execution error|exec_command failed|write_stdin(?: approval)? failed): /;
 
@@ -192,8 +201,10 @@ const bodyText = (raw: unknown): string => {
 
 /**
  * What a shell output says: the real exit code and the text after the `Output:` line, which is what an error line is cut from. The two header
- * forms are core/src/tools/mod.rs:107-113 (`Exit code: N`) and core/src/tools/context.rs:556 (`Process exited with code N`); no code and no
- * `Process running with session ID N` line means the call failed before it ran (`SPAWN_ERROR` above) or was declined (`... rejected by user`, events.rs:456). An older Codex wrote JSON `{output, metadata.exit_code}` (rust-v0.46.0 core/src/tools/mod.rs:186-210).
+ * forms are the unified-exec emitter's own `Exit code: N` (core/src/tools/events.rs:400, :416, :423; `shell` and `shell_command` are older names for it) and
+ * core/src/tools/context.rs:556 (`Process exited with code N`); no code and no `Process running with session ID N` line means the call failed before it
+ * ran (`SPAWN_ERROR` above), was declined (`... rejected by user`, events.rs:456), or is a process with no exit status, whose reply header gets neither line
+ * (`None` writes none, context.rs:555-557; its -1 goes to the item only, process_manager.rs:823, :839). An older Codex wrote JSON `{output, metadata.exit_code}` (rust-v0.46.0 core/src/tools/mod.rs:186-210).
  */
 const outcomeOf = (raw: unknown): { text: string; exit: number | undefined; spawnError: boolean; running: string | undefined } => {
   const body = bodyText(raw);
@@ -212,7 +223,7 @@ const outcomeOf = (raw: unknown): { text: string; exit: number | undefined; spaw
  * an `Exit code -1` line would be the error line and the message lost. The message stands alone then, and a code is the line capture skips.
  */
 const failureOf = (exit: number | undefined, text: string): string | undefined =>
-  exit === undefined || exit === 0 ? undefined : exit < 0 && text !== '' ? text : `Exit code ${String(exit)}\n${text}`;
+  exit === undefined || exit === 0 ? undefined : exit < 0 && text.trim() !== '' ? text : `Exit code ${String(exit)}\n${text}`;
 
 const usageOf = (info: unknown): Obj | undefined => {
   const last = isObj(info) && isObj(info.last_token_usage) ? info.last_token_usage : undefined;
@@ -255,7 +266,7 @@ export const rolloutLines = (text: string, fallbackId: string, parentText?: stri
   // A unified-exec process still running, by its session id, to the exec_command that started it: the `write_stdin` that sees it exit settles both.
   const running = new Map<string, string>();
   // Records below this ordinal are the parent prefix a subagent's rollout copied (ordinal.rs:86-89), not the session's own. Only a Paginated rollout
-  // holds ordinals (rollout/src/ordinal.rs:28, :37).
+  // holds ordinals (rollout/src/ordinal.rs:29-30, :37).
   let inherited: number | undefined;
   // Only the first session_meta is the rollout's own; later ones are copied from fork history (rollout/src/recorder.rs:1157-1158, :1173).
   let seenMeta = false;
@@ -279,8 +290,8 @@ export const rolloutLines = (text: string, fallbackId: string, parentText?: stri
   };
   // A failure is the error text; a success carries the call's own output when it has one, which capture reads transiently, as on the Claude Code
   // path: a shell call's `[branch sha]` line is how a commit's sha is found. The output follows an `Exit code 0` line, the shape a Claude Code Bash
-  // result has (fixtures/proj/errors-a.jsonl:15): capture marks a result whose text starts `Exit code <nonzero>` as failed (extract.ts:125-129), and a
-  // call that exited 0 may print such a line (`cat ci.log`). The commit patterns read every line (`gm`, extract.ts:978, :980), so the sha is still found.
+  // result has (fixtures/proj/errors-a.jsonl:15): capture marks a result whose text starts `Exit code <nonzero>` as failed (`isErrorResult` in extract.ts), and a
+  // call that exited 0 may print such a line (`cat ci.log`). The commit patterns read every line (`COMMIT_LINE` and `HASH_LINE` in extract.ts, both `gm`), so the sha is still found.
   const result = (id: string, failure: string | undefined, when: string, output = ''): void => {
     sequence += 1;
     lines.push({
@@ -290,8 +301,7 @@ export const rolloutLines = (text: string, fallbackId: string, parentText?: stri
       timestamp: when,
       // Codex stamps a result with its own time, but the call's start is not paired to it, so no duration is claimed.
       noDuration: true,
-      message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: id, is_error: failure !== undefined, content: failure ?? (output === '' ? '' : `Exit code 0
-${output}`) }] },
+      message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: id, is_error: failure !== undefined, content: failure ?? (output === '' ? '' : `Exit code 0\n${output}`) }] },
     });
   };
   const prompted = (message: string, when: string): void => {
@@ -384,7 +394,7 @@ ${output}`) }] },
       if (version !== undefined) base.version = version;
       stamp(payload.timestamp);
       inherited = num(payload.subagent_history_start_ordinal);
-      if (inherited === undefined && parentText !== undefined && str(payload.forked_from_id) !== undefined) copied = { keys: parentKeys(parentText), at: 0 };
+      if (inherited === undefined && parentText !== undefined && str(payload.forked_from_id) !== undefined && !isObj(payload.history_base)) copied = { keys: parentKeys(parentText), at: 0 };
     } else if (type === 'turn_context') {
       model = str(payload.model) ?? model;
       const cwd = str(payload.cwd);
@@ -411,16 +421,6 @@ ${output}`) }] },
           lastTotal = total;
           response += 1;
           open = undefined;
-        }
-      } else if (kind === 'exec_command_end') {
-        const id = str(payload.call_id);
-        const known = id === undefined ? undefined : calls.get(id);
-        if (id !== undefined && known?.kind === 'shell' && !resolved.has(id) && payload.status !== 'declined') {
-          resolved.add(id);
-          const exit = num(payload.exit_code);
-          const output = str(payload.aggregated_output) ?? '';
-          // The struct requires exit_code; a missing one with status failed is still a failure.
-          result(id, exit === undefined && payload.status === 'failed' ? `Exit code unknown\n${output}` : failureOf(exit, output), when);
         }
       } else if (kind === 'mcp_tool_call_end') {
         const id = str(payload.call_id);
