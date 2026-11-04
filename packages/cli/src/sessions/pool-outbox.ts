@@ -49,6 +49,7 @@ export const FIELD_ROWS: { readonly [field: string]: string } = {
   explore: 'A bucket of how many steps of a prompt only looked (read a file, searched files, searched the web, or fetched a page), a number or null; never the exact count.',
   field: 'What a delta is about, one of plugin, package, permissionMode, and effort: the field alone, never its value.',
   flags: 'The flags of a shell command, each a public flag or a short flag; never an argument.',
+  fieldsVersion: 'The version of the field list this client builds a batch from: a constant of this client, never a value from a session.',
   format: 'The skeleton format number: a constant of this client, never a value from a session.',
   frame: 'Where a session ran: the harness and its version, the model, the effort, the day, the platform, the shell, and the stack, every value checked against the closed vocabulary.',
   frameworks: 'The frameworks of the project, each from a closed public list; never a path or a name of yours.',
@@ -95,6 +96,7 @@ export const FIELD_ROWS: { readonly [field: string]: string } = {
   transcripts: 'The main transcript, then each subagent: its frame, prompts, and tool calls, every value checked against the closed vocabulary before the batch is built.',
   usage: 'The tokens of a prompt as buckets (lower bounds): input, cache write, cache read, output, and thinking.',
   version: 'The version of a pulled package, only when it is a registry version; else the literal placeholder or null.',
+  vocabVersion: 'The version of the closed vocabulary this client built the batch under: a constant of this client, never a value from a session.',
   wallSec: 'A bucket of the seconds a prompt took, or null.',
 };
 
