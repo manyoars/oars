@@ -6,24 +6,32 @@
 // text promises the on-disk format. `docs/sessions-store.md` says what a live run would still have to prove.
 //
 // Where it reads from (`copilotRoot`): `$COPILOT_HOME`, else `~/.copilot` (`%USERPROFILE%\.copilot` on Windows). Inside it,
-// `session-state/<sessionId>/events.jsonl` is one session (docs/features/session-persistence.md, "What gets persisted"; the changelog's 0.0.342 entry
-// moved new sessions there). The older `history-session-state` is migrated by the CLI on resume and is not read. A rotated archive `events.N.jsonl`
-// is not read either: the head file holds checkpoint events that rebuild the session (the same document, "Linked event journals").
+// `session-state/<sessionId>/events.jsonl` is one session (docs/features/session-persistence.md, "Linked event journals", which names the file; the
+// SDK's `session.resume.eventsFileSizeBytes`, session-events.ts, is a second mention; the changelog's 0.0.342 entry moved new sessions there). The older
+// `history-session-state` is migrated by the CLI on resume and is not read. A rotated archive `events.N.jsonl` is not read either. Its head file holds a
+// `session.journal_link` and `checkpoint: true` events that replay earlier state; since the archives are not read, that prefix is the only record of the
+// earlier part of the session, so it is read like any other line (a fixture in copilot.test.ts holds one) and `session.journal_link` is ignored.
 // A line is `{id, parentId, timestamp, type, data, agentId?, ephemeral?, checkpoint?}`. An `ephemeral` event is never written to disk (session-events.ts,
 // the `ephemeral` field), which is why `assistant.usage` is not read: it is not there. Like codex.ts, the reader writes each session out as the
 // transcript lines `captureSession` reads, so redaction, the 1,000-character line cap, the salted hashes, and the skeleton are the Claude Code
 // path's own code:
 //   session.start        data {sessionId, copilotVersion, selectedModel, context.cwd}: the id, the harness version, the model, and the working directory
 //   session.model_change data {newModel}: the model from then on
-//   user.message         data {content}: a prompt; one with `isAutopilotContinuation` is the harness continuing, not the operator, and is not read
-//   assistant.message    data {content, model, outputTokens, requestId, toolRequests[{toolCallId, name, arguments, mcpServerName, mcpToolName}]}
+//   session.resume       data {selectedModel, context.cwd}, and session.context_changed data {cwd}: the model and working directory from then on
+//   user.message         data {content}: a prompt; one with `isAutopilotContinuation`, or a `source` starting `skill-` (a hidden skill injection) or `agent-`
+//                        (a prompt from another agent), is the harness writing, not the operator, and is not read
+//   assistant.message    data {content, model, outputTokens, requestId, apiCallId, messageId, toolRequests[{toolCallId, name, arguments, mcpServerName, mcpToolName}]}
+//                        one model call may be several chunks sharing `requestId`/`apiCallId`: they are one response. A request for an edit tool
+//                        (`edit`, `str_replace_editor`, `apply_patch`, `write_file`) is an `Edit` by name, so a failed one is still an edit
 //   tool.execution_start data {toolCallId, toolName, shellToolInfo}: a call with `shellToolInfo` is a shell call whatever its name (the schema lists no tool
 //                        names and the vendor's own hook examples disagree), so a shell call is read by shape
-//   tool.execution_complete data {toolCallId, success, error.message, result.content, shellExecution.exitCode, contents[shell_exit|terminal].exitCode, fileEdits[{kind, path}]}
-//                        the outcome: the real exit code, else `success`; a call with `fileEdits` is an edit by shape too
-//   session.shutdown     data {modelMetrics[model].usage{inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens, reasoningTokens}}: per-model totals,
-//                        the only place input and cache tokens persist
-// Events that carry an `agentId` are a subagent's own and are not read; the parent's call that spawned it is. `session.error` and `abort` are not read:
+//   tool.execution_complete data {toolCallId, success, error.message, result.content, shellExecution.exitCode, fileEdits[{kind, path}]}
+//                        the outcome: `shellExecution` (which also marks a shell call the start did not) gives the real exit code and it decides, whatever
+//                        `success` says; `success` decides only a call with no exit code. `fileEdits` makes a call an edit and overrides the path
+//   session.shutdown     data {agentMetrics.main.modelMetrics, else modelMetrics: [model].usage{inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens, reasoningTokens}}:
+//                        per-model totals (the main conversation's when the runtime writes them, since the session-wide ones include subagents), the only
+//                        place input and cache tokens persist; they land once on the first line of the model's last response
+// Events that carry an `agentId` (or the deprecated `parentToolCallId`) are a subagent's own and are not read; the parent's call that spawned it is. `session.error` and `abort` are not read:
 // a call they cut short has no completion event and stays `none`.
 
 import { createReadStream } from 'node:fs';
@@ -109,18 +117,29 @@ const iso = (value: unknown): string | undefined => {
 /** The non-blank lines that are not JSON (a torn write), kept so `captureSession` counts them and the deposit line reports them. */
 export const eventBadLines = (text: string): string[] => text.split('\n').filter((raw) => raw.trim() !== '' && parse(raw) === undefined);
 
-/** The exit code of a shell call: `shellExecution.exitCode`, else the first `shell_exit` or `terminal` content (session-events.ts, ToolExecutionComplete*). */
-const exitOf = (data: Obj): number | undefined => {
-  const direct = isObj(data.shellExecution) ? num(data.shellExecution.exitCode) : undefined;
-  if (direct !== undefined) return direct;
-  const result = isObj(data.result) ? data.result : {};
-  const contents = Array.isArray(result.contents) ? result.contents : [];
-  for (const part of contents) if (isObj(part) && (part.type === 'shell_exit' || part.type === 'terminal') && num(part.exitCode) !== undefined) return num(part.exitCode);
-  return undefined;
-};
+/**
+ * The exit code of a shell call: `shellExecution.exitCode` (session-events.ts, ToolExecutionCompleteData, "Experimental shell completion facts"). The
+ * schema's `result.contents` also has `shell_exit` parts, but it says `shellExecution` is captured before persisted result contents are stripped, and no
+ * source shows a persisted line holding them, so they are not read.
+ */
+const exitOf = (data: Obj): number | undefined => (isObj(data.shellExecution) ? num(data.shellExecution.exitCode) : undefined);
 
 /** A nonzero exit code is a failure whatever `success` says; a negative one is no exit status, so the output stands as the error line. */
 const failureOf = (exit: number, text: string): string => (exit < 0 && text.trim() !== '' ? text : `Exit code ${String(exit)}\n${text}`);
+
+/** An `assistant.message` line, kept until the end so its usage can be settled once per response. */
+interface Response {
+  key: string;
+  model: string | undefined;
+  message: Obj;
+  /** The line's own `outputTokens`. */
+  own: number;
+  /** The output the shutdown totals hold beyond what the responses reported; set on a response's first line. */
+  residual: number;
+}
+
+/** Tools that are edits by name, for when the runtime writes no `fileEdits` or the edit failed. */
+const EDIT_TOOLS: ReadonlySet<string> = new Set(['edit', 'str_replace_editor', 'apply_patch', 'write_file']);
 
 /** One session as the lines `captureSession` reads. */
 export const eventLines = (text: string, fallbackId: string): Obj[] => {
@@ -131,8 +150,9 @@ export const eventLines = (text: string, fallbackId: string): Obj[] => {
   let at: string | undefined;
   let model: string | undefined;
   let sequence = 0;
-  // The assistant lines since the last shutdown, whose last line per model receives that shutdown's input and cache totals.
-  let span: { model: string | undefined; message: Obj }[] = [];
+  // The assistant lines since the last shutdown, whose last response per model receives that shutdown's input and cache totals on its first line.
+  let span: Response[] = [];
+  const responses: Response[] = [];
   const calls = new Map<string, { block: Obj; shell: boolean }>();
   const resolved = new Set<string>();
   const stamp = (value: unknown): string => {
@@ -153,9 +173,7 @@ export const eventLines = (text: string, fallbackId: string): Obj[] => {
       message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: id, is_error: failure !== undefined, content: failure ?? (output === '' ? '' : `Exit code 0\n${output}`) }] },
     });
   };
-  const usageOf = (metrics: Obj): Obj | undefined => {
-    const usage = isObj(metrics.usage) ? metrics.usage : undefined;
-    if (usage === undefined) return undefined;
+  const usageOf = (usage: Obj): Obj => {
     const reasoning = num(usage.reasoningTokens);
     return {
       input_tokens: num(usage.inputTokens) ?? 0,
@@ -164,12 +182,20 @@ export const eventLines = (text: string, fallbackId: string): Obj[] => {
       ...(reasoning === undefined ? {} : { output_tokens_details: { thinking_tokens: reasoning } }),
     };
   };
+  // The tool's own words say it is a shell call: a start with `shellToolInfo`, or a completion with `shellExecution`.
+  const asShell = (known: { block: Obj; shell: boolean }, command: string | undefined): void => {
+    known.shell = true;
+    known.block.native = known.block.native ?? known.block.name;
+    known.block.name = 'Bash';
+    known.block.input = command === undefined ? {} : { command };
+  };
 
   for (const raw of nonblank) {
     const entry = parse(raw);
     if (!isObj(entry) || !isObj(entry.data) || str(entry.type) === undefined) continue;
     // A subagent's own events are inline in the file; the parent's call that spawned it is the record.
-    if (str(entry.agentId) !== undefined) continue;
+    // `parentToolCallId` is the deprecated spelling of the same fact (session-events.ts, "when this event originates from a sub-agent").
+    if (str(entry.agentId) !== undefined || str(entry.data.parentToolCallId) !== undefined) continue;
     const data = entry.data;
     const when = stamp(entry.timestamp);
     const type = entry.type;
@@ -180,11 +206,20 @@ export const eventLines = (text: string, fallbackId: string): Obj[] => {
       const cwd = isObj(data.context) ? str(data.context.cwd) : undefined;
       if (cwd !== undefined) base.cwd = cwd;
       stamp(data.startTime);
+    } else if (type === 'session.resume') {
+      // A resume may happen elsewhere: its context and model are the session's from here on.
+      const cwd = isObj(data.context) ? str(data.context.cwd) : undefined;
+      if (cwd !== undefined) base.cwd = cwd;
+      model = str(data.selectedModel) ?? model;
+    } else if (type === 'session.context_changed') {
+      base.cwd = str(data.cwd) ?? base.cwd;
     } else if (type === 'session.model_change') {
       model = str(data.newModel) ?? model;
     } else if (type === 'user.message') {
       const content = str(data.content);
-      if (content !== undefined && data.isAutopilotContinuation !== true) {
+      // `source` marks text the harness wrote: a skill injected as a hidden message (`skill-<name>`) or a prompt from another agent (`agent-<id>`).
+      const source = str(data.source) ?? '';
+      if (content !== undefined && data.isAutopilotContinuation !== true && !source.startsWith('skill-') && !source.startsWith('agent-')) {
         sequence += 1;
         lines.push({ ...base, type: 'user', uuid: `${fallbackId}-u${String(sequence)}`, timestamp: when, message: { role: 'user', content: [{ type: 'text', text: content }] } });
       }
@@ -198,7 +233,15 @@ export const eventLines = (text: string, fallbackId: string): Obj[] => {
         if (!isObj(request) || id === undefined || name === undefined) continue;
         const server = str(request.mcpServerName);
         const tool = str(request.mcpToolName);
-        const block: Obj = { type: 'tool_use', id, name: server !== undefined && tool !== undefined ? `mcp__${server}__${tool}` : name, input: isObj(request.arguments) ? request.arguments : {} };
+        const input = isObj(request.arguments) ? request.arguments : {};
+        const block: Obj = { type: 'tool_use', id, name: server !== undefined && tool !== undefined ? `mcp__${server}__${tool}` : name, input };
+        // A tool known by name as an edit is one even when it fails or the runtime writes no `fileEdits`; `fileEdits` still overrides the path on completion.
+        if (EDIT_TOOLS.has(name) && server === undefined) {
+          const path = str(input.path) ?? str(input.file_path);
+          block.native = name;
+          block.name = 'Edit';
+          block.input = path === undefined ? {} : { file_path: path };
+        }
         content.push(block);
         calls.set(id, { block, shell: false });
       }
@@ -207,10 +250,13 @@ export const eventLines = (text: string, fallbackId: string): Obj[] => {
         const modelOf = str(data.model) ?? model;
         const output = num(data.outputTokens);
         const message: Obj = { role: 'assistant', content, ...(output === undefined ? {} : { usage: { output_tokens: output } }) };
-        // The request id is Copilot's own when the line has one; else the message id, since each assistant.message is one model response.
-        const requestId = str(data.requestId) ?? str(data.messageId) ?? `${String(base.sessionId)}-resp${String(sequence)}`;
+        // One model call can be written as several chunks (`chunkCount`, `chunkIndex`) that share `requestId` and `apiCallId`; the response is keyed on the
+        // first of those the line has, else its own message id, so the chunks of one call are one response and its totals land once.
+        const requestId = str(data.requestId) ?? str(data.apiCallId) ?? str(data.messageId) ?? `${String(base.sessionId)}-resp${String(sequence)}`;
         lines.push({ ...base, type: 'assistant', uuid: `${fallbackId}-a${String(sequence)}`, requestId, timestamp: when, ...(modelOf === undefined ? {} : { requestedModel: modelOf }), message });
-        span.push({ model: modelOf, message });
+        const held: Response = { key: requestId, model: modelOf, message, own: output ?? 0, residual: 0 };
+        span.push(held);
+        responses.push(held);
       }
     } else if (type === 'tool.execution_start') {
       const id = str(data.toolCallId);
@@ -218,10 +264,7 @@ export const eventLines = (text: string, fallbackId: string): Obj[] => {
       if (known !== undefined && isObj(data.shellToolInfo)) {
         const args = isObj(data.arguments) ? data.arguments : {};
         const command = str(args.command) ?? str(data.shellToolInfo.displayCommand);
-        known.shell = true;
-        known.block.native = known.block.name;
-        known.block.name = 'Bash';
-        known.block.input = command === undefined ? {} : { command };
+        asShell(known, command);
       }
     } else if (type === 'tool.execution_complete') {
       const id = str(data.toolCallId);
@@ -234,14 +277,19 @@ export const eventLines = (text: string, fallbackId: string): Obj[] => {
       const edits = (Array.isArray(data.fileEdits) ? data.fileEdits : []).flatMap((edit) => (isObj(edit) && str(edit.path) !== undefined ? [String(edit.path)] : []));
       if (edits.length > 0) {
         // A call that changed files is an edit whatever the tool is called; the first path rides the call's own block and any other gets its own, in the same line.
-        known.block.native = known.block.name;
+        known.block.native = known.block.native ?? known.block.name;
         known.block.name = 'Edit';
         known.block.input = { file_path: edits[0] };
       }
-      const exit = known.shell ? exitOf(data) : undefined;
+      // The completion can name a shell call the start did not (`shellToolInfo` is optional); its exit code then decides like any other.
+      const exit = exitOf(data);
+      if (exit !== undefined && !known.shell && edits.length === 0) {
+        const input = isObj(known.block.input) ? known.block.input : {};
+        asShell(known, str(input.command));
+      }
       let failure: string | undefined;
-      if (exit !== undefined && exit !== 0) failure = failureOf(exit, output);
-      else if (failed) failure = message ?? (output === '' ? 'tool failed' : output);
+      if (exit !== undefined && exit !== 0) failure = failureOf(exit, output === '' ? (message ?? '') : output);
+      else if (exit === undefined && failed) failure = message ?? (output === '' ? 'tool failed' : output);
       result(id, failure, when, known.shell ? output : '');
       for (const [index, path] of edits.slice(1).entries()) {
         const extra = `${id}:${String(index + 2)}`;
@@ -250,16 +298,27 @@ export const eventLines = (text: string, fallbackId: string): Obj[] => {
         result(extra, failure, when);
       }
     } else if (type === 'session.shutdown') {
-      const metrics = isObj(data.modelMetrics) ? data.modelMetrics : {};
+      // The session-wide totals include subagents; the main conversation's own are under `agentMetrics.main` when the runtime writes them.
+      const agents = isObj(data.agentMetrics) ? data.agentMetrics : {};
+      const main = isObj(agents.main) && isObj(agents.main.modelMetrics) ? agents.main.modelMetrics : undefined;
+      const metrics = main ?? (isObj(data.modelMetrics) ? data.modelMetrics : {});
       for (const [name, value] of Object.entries(metrics)) {
-        const totals = isObj(value) ? usageOf(value) : undefined;
+        const usage = isObj(value) && isObj(value.usage) ? value.usage : undefined;
         const last = span.findLast((candidate) => candidate.model === name);
-        if (totals === undefined || last === undefined) continue;
-        const own = isObj(last.message.usage) ? last.message.usage : {};
-        last.message.usage = { ...totals, output_tokens: num(own.output_tokens) ?? 0 };
+        const first = last === undefined ? undefined : span.find((candidate) => candidate.key === last.key);
+        if (usage === undefined || first === undefined) continue;
+        first.message.usage = { ...usageOf(usage), output_tokens: 0 };
+        // Output the responses did not report themselves is the total less what they did.
+        first.residual = Math.max(0, (num(usage.outputTokens) ?? 0) - span.filter((candidate) => candidate.model === name).reduce((sum, candidate) => sum + candidate.own, 0));
       }
       span = [];
     }
+  }
+  // Extract counts a response's usage once, from its first line, so that line carries the output of every chunk of the response.
+  for (const first of responses) {
+    if (responses.find((candidate) => candidate.key === first.key) !== first) continue;
+    const output = responses.filter((candidate) => candidate.key === first.key).reduce((sum, candidate) => sum + candidate.own, 0) + first.residual;
+    if (output > 0 || isObj(first.message.usage)) first.message.usage = { ...(isObj(first.message.usage) ? first.message.usage : {}), output_tokens: output };
   }
   return lines;
 };

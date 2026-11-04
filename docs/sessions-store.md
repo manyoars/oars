@@ -541,9 +541,12 @@ writes its own chat model under `workspaceStorage/<hash>/chatSessions/` and is n
 **Fixture-derived, never run live.** This reader was written from the public Copilot SDK's generated event types (github/copilot-sdk @ d28a136, MIT,
 `nodejs/src/generated/session-events.ts`, "AUTO-GENERATED ... from session-events.schema.json") and its `docs/features/session-persistence.md`, and tested only on
 synthetic fixtures; no Copilot store has ever been read by it. The CLI itself (github/copilot-cli) is closed source, and no vendor statement promises the on-disk
-format: the changelog calls the 0.0.342 move "a new session logging format". The SDK has hook input (`docs/hooks/*.md`: tool name, arguments, error string), but it
+format: the changelog calls the 0.0.342 move "a new session logging format", and the schema marks both fields the outcome rests on `@experimental`:
+`shellExecution` is "Experimental shell completion facts" (session-events.ts:9976-9980) and `fileEdits` begins "Experimental. File mutations..." (:9929-9933). When
+`shellExecution` is absent a shell call falls back to `success` (false is an error, else ok) with an unknown exit; when `fileEdits` is absent an edit is still
+found by its tool name (`edit`, `str_replace_editor`, `apply_patch`, `write_file`), with the path from its request arguments, and a failed one is still an edit. The SDK has hook input (`docs/hooks/*.md`: tool name, arguments, error string), but it
 holds no usage and no transcript path, and it sees only what runs after install, so it is not used. A Copilot release can change the log; an unreadable
-session is warned about by name and skipped, never fatal. The one hand run that would settle it: on a machine with a Copilot account, run one `copilot -p` task that
+session is warned about by name and skipped, never fatal. The one hand run that would settle it: on a machine with a Copilot account, run one `copilot -p "<task>" --allow-all-tools` task (the flag lets a non-interactive run execute the command and the edit) that
 makes one prompt, runs one command that exits nonzero (for example `ls /nonexistent`), and edits one file, then `oars sessions deposit --allow copilot` and
 `oars sessions verify --strict`. It is settled only if the session count is nonzero, there are zero violations, the session holds an `error` tool record for that
 command with a matching error line, and usage is nonzero (it is written only at a clean exit).
@@ -553,12 +556,17 @@ command with a matching error line, and usage is nonzero (it is written only at 
   `history-session-state` folder are not read. Opt-in like Cursor and Codex: discovered by default, opened only when `--allow copilot` names it; the nightly run
   repeats a saved allow.
 - **Mapping.** `session.start` gives the cwd and `copilotVersion`; `assistant.message.model` the model; `user.message.content` a prompt; `assistant.message` a response.
-  A shell call is found by shape, not name (`shellToolInfo` on the start event, `shellExecution` on the completion), because the schema does not list tool names and the
-  vendor's docs disagree on them; its outcome is the real `shellExecution.exitCode` (or the `shell_exit` content), never `success`, so a call that exited 2 with
-  `success: true` is an error. An edit is found by `fileEdits`, which also gives the files touched. The error line is the unwrapped message or output, not the wrapper.
+  A shell call is found by shape, not name (`shellToolInfo` on the start event, or `shellExecution` on the completion, which also marks one the start did not),
+  because the schema does not list tool names and the vendor's docs disagree on them; its outcome is the real `shellExecution.exitCode`, which decides whatever
+  `success` says, so a call that exited 2 with `success: true` is an error and one that exited 0 with `success: false` is not. The schema's `shell_exit` result
+  contents are not read: it says persisted result contents are stripped, and no source shows a persisted line holding them. An edit is found by `fileEdits`
+  (which also gives the files touched) or by its tool name. `session.resume` and `session.context_changed` move the cwd and model. A `user.message` whose `source`
+  starts `skill-` or `agent-` is the harness writing, not a prompt, and is skipped, as is an autopilot continuation. The error line is the unwrapped message or output, not the wrapper.
 - **Absent.** Cost has no equivalent. `assistant.usage` is `ephemeral` and never on disk, so per-response input and cache tokens do not exist: output tokens come
-  from each `assistant.message`, and the input, cache, and reasoning totals from `session.shutdown.modelMetrics` land once, on the last response of that model.
-  A session that never shut down (a crash) has output tokens only. Subagent events (`agentId`) are skipped; the parent's `task` call is kept. Torn lines are counted as
+  from each `assistant.message`, and the input, cache, and reasoning totals from `session.shutdown.modelMetrics` land once, on the first line of the model's last response (one model call may be several `assistant.message` chunks sharing a `requestId`/`apiCallId`; they are one
+  response). They are read from `agentMetrics.main` when the runtime writes it, because the session-wide `modelMetrics` include subagents, else from `modelMetrics`;
+  output the responses did not report is the total less what they did. A rotated head's `checkpoint: true` events are read like any other (the archives are not).
+  A session that never shut down (a crash) has output tokens only. Subagent events (`agentId`, or the deprecated `parentToolCallId`) are skipped; the parent's `task` call is kept. Torn lines are counted as
   unparseable; a file with no parseable line is unreadable. Idempotent per session (`copilot/<id>` in `state.json`, size and mtime).
 
 ## The outcome gold set
