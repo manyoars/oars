@@ -35,7 +35,7 @@
 
 import { readdir, readFile, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { basename, join } from 'node:path';
+import { basename, join, posix, win32 } from 'node:path';
 
 /** The Grok home for an environment; a test passes its own so it never reads the real one. */
 export const grokRoot = (env: { [name: string]: string | undefined }, home: string = homedir()): string => {
@@ -140,6 +140,15 @@ const requestedPaths = (input: Obj): string[] => {
   if (path !== undefined) return [path];
   const patch = str(input.patch);
   return patch === undefined ? [] : [...patch.matchAll(PATCH_HEADER)].map((match) => String(match[1]).trim());
+};
+
+/**
+ * A path the model named, made absolute against the session's folder. The completion's `diff` parts carry the absolute path (`absolute_path`, acp_conversion.rs:202-204),
+ * and the model's own `file_path` may be relative, so only the same form tells that two lines name one file. The folder's own style (POSIX or Windows) decides the join.
+ */
+const absolute = (path: string, cwd: string | undefined): string => {
+  if (cwd === undefined || posix.isAbsolute(path) || win32.isAbsolute(path)) return path;
+  return (cwd.startsWith('/') ? posix : win32).join(cwd, path);
 };
 
 /** The files a completion reports having changed: the `diff` parts of `content[]` (ACP ToolCallContent `diff`, `path`). */
@@ -274,7 +283,7 @@ export const grokLines = (text: string, fallbackId: string, summary: Obj, usage:
         input: wrapped ? (isObj(input.tool_input) ? input.tool_input : {}) : input,
       };
       const shell = SHELL_TOOLS.has(title) || update.kind === 'execute';
-      const paths = EDIT_TOOLS.has(title) ? requestedPaths(input) : [];
+      const paths = EDIT_TOOLS.has(title) ? requestedPaths(input).map((path) => absolute(path, str(base.cwd))) : [];
       if (shell) {
         const command = str(input.command);
         // The user's `!cmd` is titled "Execute `cmd`", which has no table row: it is the `bash` row's call.
