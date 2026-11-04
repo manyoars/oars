@@ -1,5 +1,5 @@
 // The public vocabulary (t755, recall spec Sections 2.1, 2.2, and 7): the one file that says which names may stand in a class P field of a
-// captured step or frame. Anything else becomes `<literal>`, so a private script, host, package, or server name never reaches a pooled field.
+// captured step (the frame's fields pool only as cells). Anything else becomes `<literal>`, so a private script, host, package, or server name never reaches a pooled field.
 //
 // A simple list on purpose, and it fails closed: a missing public name costs a `<literal>`, while a wrongly listed one costs a leak. The D11 and
 // D13 vocabulary spec owns the final list and wins on what may leave the machine. This repository is public, so nothing private is ever added here.
@@ -267,3 +267,79 @@ const REGISTRY_VERSION = new RegExp(`^[~^<>=!]*v?\\d+(?:\\.(?:\\d+|x|\\*))*${VER
 
 export const isRegistryVersion = (version: string): boolean => version.length <= NAME_MAX && REGISTRY_VERSION.test(version);
 export const isPublicMcpTool = (server: string, tool: string): boolean => PUBLIC_MCP_TOOLS.get(server)?.has(tool) === true;
+
+// The pooled vocabulary (pool vocabulary spec Section 1.3, t811). Everything above is what capture keeps in a P field; everything below is what may
+// leave the machine. The pinned snapshots live in packages/cli/vocab/ and are loaded by vocab-load.ts, so this file stays free of the filesystem
+// and the pool's Worker can bundle it.
+
+/**
+ * The version of every pinned snapshot and curated list below, as one number. Change a snapshot file or any curated list in vocab-pin.test.ts's
+ * `curatedDigest`, and bump it: that test fails otherwise.
+ */
+export const VOCAB_VERSION = '1';
+/** The day the snapshots were taken. It must equal `snapshotDate` in vocab/manifest.json, which the loader checks. */
+export const VOCAB_SNAPSHOT_DATE = '2026-11-04';
+/** How old a snapshot may be before `deposit` builds no batch (spec Section 7, `registry_max_age`). */
+export const REGISTRY_MAX_AGE_DAYS = 30;
+/** Names admitted per package ecosystem, by the registry's own download counts (spec Section 7, `seed_top`). */
+export const SEED_TOP = 1000;
+/** The longest ordered `program` list a compound command pools as (spec Section 7, `pipe_max`). */
+export const PIPE_MAX = 4;
+/** What a name that is not admitted pools as. */
+export const PRIVATE = 'private';
+
+const DAY_MS = 86_400_000;
+/** A client more than `registry_max_age` past its snapshot builds no batch (the exact elapsed time, not whole days): its sessions wait in `A` until it upgrades. */
+export const isVocabularyExpired = (now: Date): boolean =>
+  now.getTime() - Date.parse(`${VOCAB_SNAPSHOT_DATE}T00:00:00Z`) > REGISTRY_MAX_AGE_DAYS * DAY_MS;
+
+/** The built-in tools of Claude Code, by the names a transcript records. Curated, since no registry publishes them (spec Section 1.3, the name seed). */
+export const HARNESS_TOOLS: ReadonlyMap<string, ReadonlySet<string>> = new Map(
+  Object.entries({
+    'claude-code':
+      'Agent AskUserQuestion Bash BashOutput Edit EnterPlanMode ExitPlanMode Glob Grep KillBash KillShell MultiEdit NotebookEdit NotebookRead Read SlashCommand Skill Task TaskCreate TaskGet TaskList TaskOutput TaskStop TaskUpdate TodoRead TodoWrite ToolSearch WebFetch WebSearch Write',
+  }).map(([harness, tools]) => [harness, words(tools)]),
+);
+
+/**
+ * The built-in subagent types of each harness, by the names a transcript records (`agentType`). Curated, since no registry publishes them. No plugin registry
+ * is pinned yet, so an admitted plugin agent is not on this list and pools as `custom` (spec Section 2).
+ */
+export const HARNESS_AGENT_TYPES: ReadonlyMap<string, ReadonlySet<string>> = new Map(
+  Object.entries({
+    'claude-code': 'general-purpose Explore Plan statusline-setup output-style-setup claude-code-guide',
+  }).map(([harness, types]) => [harness, words(types)]),
+);
+
+/**
+ * The input keys each built-in tool's published schema lists, by the tool's name. Curated from the harness's tool reference. A key outside the tool's list, and every
+ * key of an MCP tool (no pinned registry lists their schemas), is counted and never named (spec Section 1.3).
+ */
+export const TOOL_INPUT_KEYS: ReadonlyMap<string, ReadonlySet<string>> = new Map(
+  Object.entries({
+    Agent: 'description prompt subagent_type model run_in_background',
+    AskUserQuestion: 'questions answers',
+    Bash: 'command description timeout run_in_background dangerouslyDisableSandbox',
+    BashOutput: 'bash_id filter',
+    Edit: 'file_path old_string new_string replace_all',
+    ExitPlanMode: 'plan',
+    Glob: 'pattern path',
+    Grep: 'pattern path glob output_mode -B -A -C context -n -i type head_limit offset multiline',
+    KillBash: 'shell_id',
+    KillShell: 'shell_id',
+    MultiEdit: 'file_path edits',
+    NotebookEdit: 'notebook_path new_source cell_id cell_type edit_mode',
+    NotebookRead: 'notebook_path cell_id',
+    Read: 'file_path offset limit pages',
+    Skill: 'skill args',
+    SlashCommand: 'command',
+    Task: 'description prompt subagent_type model run_in_background resume',
+    TaskOutput: 'task_id block timeout',
+    TaskStop: 'task_id',
+    TodoWrite: 'todos',
+    ToolSearch: 'query max_results',
+    WebFetch: 'url prompt',
+    WebSearch: 'query allowed_domains blocked_domains',
+    Write: 'file_path content',
+  }).map(([tool, keys]) => [tool, words(keys)]),
+);

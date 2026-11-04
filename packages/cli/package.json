@@ -17,7 +17,8 @@
   },
   "files": [
     "dist",
-    "parity/deploy-plans"
+    "parity/deploy-plans",
+    "vocab"
   ],
   "publishConfig": {
     "access": "public"
