@@ -27,7 +27,7 @@ const prompt = (second: number, text: string) => line(S(second), { sessionUpdate
 const say = (second: number, text: string) => line(S(second), { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text } });
 // A failed shell call: the status says completed, the exit code says 2 (types/output.rs:384-405, acp_conversion.rs:241-250).
 const failedShell = [
-  line(S(2), { sessionUpdate: 'tool_call', toolCallId: 'c1', title: 'run_terminal_cmd', kind: 'execute', status: 'pending', rawInput: { command: 'make' } }),
+  line(S(2), { sessionUpdate: 'tool_call', toolCallId: 'c1', title: 'run_terminal_cmd', kind: 'other', status: 'pending', rawInput: { command: 'make' } }),
   line(S(3), {
     sessionUpdate: 'tool_call_update',
     toolCallId: 'c1',

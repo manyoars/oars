@@ -14,8 +14,9 @@
 //     user_message_chunk   content {type: "text", text}: the operator's prompt; chunks merge until the agent speaks. `_meta.hostTurn` (a turn boundary marker) ends a
 //                          prompt and `_meta.interjection` (a mid-turn steer whose text is a model-facing frame) is not one (storage/mod.rs:966, :974)
 //     agent_message_chunk  content {type: "text", text}: the response, chunks merged
-//     tool_call            {toolCallId, title, kind, rawInput}: `title` IS the tool's name (tool_calls.rs:1487). A shell call is a name in SHELL_TOOLS or `kind` execute
-//                          (the user's `!cmd` is `bash-mode-<uuid>` titled "Execute `cmd`", tool_dispatch.rs:213, :245)
+//     tool_call            {toolCallId, title, kind, rawInput}: `title` IS the tool's name (tool_calls.rs:1487). A model-issued call always has `kind` other here (tool_calls.rs:1488); its real kind
+//                          arrives only on a later tool_call_update (tool_calls.rs:2734). A shell call is therefore a name in SHELL_TOOLS, or the user's `!cmd`, the one path that
+//                          writes `kind` execute on the call itself (`bash-mode-<uuid>` titled "Execute `cmd`", tool_dispatch.rs:213, :245-246)
 //     tool_call_update     {toolCallId, status, content[], rawOutput}: the outcome. A shell call's `rawOutput` is `{type: "Bash", exit_code, output: bytes,
 //                          output_for_prompt, signal, timed_out, current_dir}` (types/output.rs:384-405). The agent path marks a shell call `failed` only on a timeout
 //                          or a signal, so exit 2 arrives `completed` (acp_conversion.rs:241-250): the exit code decides, not the status. Any other tool's error text is its
