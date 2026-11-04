@@ -177,9 +177,33 @@ describe('parseSkeleton refuses, and names the field', () => {
     { name: 'the exact index of a prompt', path: ['transcripts', 0, 'prompts', 0, 'index'], value: 3, field: 'transcripts[0].prompts[0].index' },
     { name: 'a spawner address', path: ['transcripts', 0, 'spawnedIn'], value: 0, field: 'transcripts[0].spawnedIn' },
     { name: 'a step edge', path: [...firstStep, 'edges'], value: [], field: `${stepField}.edges` },
+    { name: 'a private agent name as a subagent type', path: [...firstStep, 'agentType'], value: 'acme-private-agent', field: `${stepField}.agentType` },
+    { name: 'a subagent type on a main-run step', path: [...firstStep, 'agentType'], value: 'Explore', field: `${stepField}.agentType` },
+    { name: 'a root that is not a SHA-256', path: ['transcripts', 0, 'merkleRoot'], value: 'acme-root', field: 'transcripts[0].merkleRoot' },
+    { name: 'a timing print that is not a hash', path: ['timingPrint'], value: 'acme', field: 'timingPrint' },
+    { name: 'a timing print over too few timed calls', path: ['timingPrint'], value: '0123456789abcdef', field: 'timingPrint' },
+    { name: 'a remaining-token count that is no bucket', path: [...firstStep, 'remainingTokens'], value: 12, field: `${stepField}.remainingTokens` },
   ];
   it.each(cases)('$name', ({ path, value, field }) => {
     expect(refusedField(sent(path, value))).toBe(field);
+  });
+
+  it('refuses a subagent step that carries no type', () => {
+    const [main, other] = [session('s1', { frame: framed }), session('s1~a', { parent: 's1', spawnedIn: 's1', agentType: 'Explore', frame: framed })];
+    const skeleton = skeletonFrom(
+      store({
+        sessions: [main],
+        subagents: [other],
+        prompts: [framedPrompt('s1', 0), framedPrompt('s1~a', 0)],
+        tools: [tool('s1', 0, 'Bash', { steps: [shell] }), tool('s1~a', 0, 'Bash', { steps: [shell] })],
+      }),
+    );
+    const raw: unknown = JSON.parse(JSON.stringify(skeleton));
+    expect(refusedField(raw)).toBe('accepted');
+    const subStep = ['transcripts', 1, 'tools', 0, 'steps', 0].reduce<unknown>((at, key) => (isHolder(at) ? Reflect.get(at, key) : undefined), raw);
+    if (!isHolder(subStep)) throw new Error('the subagent has no step');
+    Reflect.set(subStep, 'agentType', null);
+    expect(refusedField(raw)).toBe('transcripts[1].tools[0].steps[0].agentType');
   });
 
   it('takes a bucket of wall time, and refuses an exact one: a fraction is no bucket', () => {

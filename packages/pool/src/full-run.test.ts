@@ -8,7 +8,7 @@ import { ExitCode } from '../../cli/src/errors.js';
 import { networkSender, poolDeposit } from '../../cli/src/sessions/pool-command.js';
 import { verifyBundle } from '../../cli/src/sessions/pool-wire.js';
 import { deposit } from '../../cli/src/sessions/store.js';
-import { cleanup, NOW, stage, type Staged } from '../../cli/src/sessions/test-support.js';
+import { cleanup, NOW, settledClock, stage, type Staged } from '../../cli/src/sessions/test-support.js';
 import { harness, type Harness } from '../../cli/src/test-support.js';
 import { fieldOf, startPool, stubUser, textOf, type TestPool } from './test-pool.js';
 
@@ -42,6 +42,7 @@ const person = async (pool: TestPool, id: string): Promise<Person> => {
   writeFileSync(terms, `${TERM}\n`);
   const h = harness({ OARS_EXCLUSION_TERMS: terms, OARS_POOL_URL: await pool.url(), OARS_GITHUB_CLIENT_ID: 'github-client', OARS_GOOGLE_CLIENT_ID: 'google-client', OARS_GOOGLE_CLIENT_SECRET: 'google-secret' });
   h.deps.sessions = staged.runtime;
+  h.deps.now = settledClock;
   // The person approves the code the command just printed, at the provider, while it waits.
   h.deps.sleep = () => {
     const issued = /USER-(\d+)/.exec(h.err.join(''))?.[1];
