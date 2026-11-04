@@ -66,7 +66,7 @@ interface SignIn {
   account: string;
   token: string;
   expiresAt: number;
-  /** Pinned at the first login to this server; every slice is checked against it. */
+  /** Pinned at the first login to this server; every bundle is checked against it. */
   signingKey: PinnedKey;
 }
 

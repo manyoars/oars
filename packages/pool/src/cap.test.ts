@@ -143,6 +143,15 @@ describe('across an ISO week boundary', () => {
     }
   }, 60_000);
 
+  it('leaves a count already spent in a later week: a request that computed its week before Monday does not wipe it', async () => {
+    const early = await pool.signIn('github', stubUser('2207'));
+    const ahead = await pool.signIn('github', stubUser('2208'));
+    // A week after this one stands for the account that already fetched in the new week while this request still holds the old one.
+    await (await pool.db()).prepare('UPDATE accounts SET fetch_week = ?, fetches = 1 WHERE id = ?').bind('2999-W01', ahead.account).run();
+    expect((await pool.raw(PATH, early.token)).status).toBe(200);
+    expect(await tally(pool, ahead.account)).toEqual({ week: '2999-W01', fetches: 1 });
+  });
+
   it('drops every earlier week\'s count when a fetch is served, so only this week is kept per account', async () => {
     const stale = await pool.signIn('github', stubUser('2203'));
     const fresh = await pool.signIn('github', stubUser('2204'));

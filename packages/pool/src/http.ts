@@ -28,9 +28,15 @@ export interface Env {
   MAX_DEPOSIT_BYTES_PER_ACCOUNT?: string;
 }
 
-export const answer = (status: number, body: object, headers: { [name: string]: string } = {}): Response => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json', ...headers } });
+/** The response headers this worker sets: the ETag of a bundle and the `Retry-After` of a spent cap. */
+export interface AnswerHeaders {
+  etag?: string;
+  'retry-after'?: string;
+}
 
-export const refuse = (status: number, error: string, message: string, field?: string, headers?: { [name: string]: string }): Response => answer(status, { error, message, ...(field === undefined ? {} : { field }) }, headers);
+export const answer = (status: number, body: object, headers: AnswerHeaders = {}): Response => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json', ...headers } });
+
+export const refuse = (status: number, error: string, message: string, field?: string, headers?: AnswerHeaders): Response => answer(status, { error, message, ...(field === undefined ? {} : { field }) }, headers);
 
 /** A binding with a value; an empty one counts as unset, the way a blank secret should. */
 export const bound = (value: string | undefined): string | undefined => (value === undefined || value === '' ? undefined : value);

@@ -112,6 +112,22 @@ describe('the access flag over the routes', () => {
     });
   }, 60_000);
 
+  it('stays pending while one of two counting batches is left, and clears when the second falls to none', async () => {
+    await inPool(async (pool) => {
+      const { token, account } = await depositor(pool, '3007', 'cursor');
+      expect((await pool.post('/v1/deposits', sampleSkeleton('00000000000a3007', undefined, undefined, 'cursor'), token)).status).toBe(201);
+      const ids = (await (await pool.db()).prepare('SELECT id FROM deposits WHERE account = ? ORDER BY id').bind(account).all()).results.map((row) => fieldOf(row, 'id'));
+      expect(ids).toHaveLength(2);
+      expect(await fetches(pool, token, 2)).toEqual([200, 200]);
+      await (await pool.db()).prepare("UPDATE deposits SET tier = 'none' WHERE account = ? AND id = ?").bind(account, ids[0]).run();
+      expect(await fetches(pool, token, 2)).toEqual([200, 200]);
+      expect(await accessOfAccount(pool, account)).toBe('pending');
+      await (await pool.db()).prepare("UPDATE deposits SET tier = 'none' WHERE account = ? AND id = ?").bind(account, ids[1]).run();
+      expect(await fetches(pool, token, 2)).toEqual([200, 429]);
+      expect(await accessOfAccount(pool, account)).toBeNull();
+    });
+  }, 60_000);
+
   it('stands once a counting batch has stood the ledger days, and stays when that batch later falls to none', async () => {
     await inPool(async (pool) => {
       const { token, account } = await depositor(pool, '3005', 'cursor');

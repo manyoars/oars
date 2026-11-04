@@ -75,9 +75,9 @@ export const fetchBundle = async (request: Request, env: Env, harnessVersion: st
   const cap = wholeBinding(env.FETCH_CAP, DEFAULT_FETCH_CAP);
   // Answered before the pool is read: a spent account must not be able to force a parse of every deposit on each request. An account with access has no cap.
   if ((await accessOf(env, account, now)) === null && !(await spend(env, account, week, cap))) {
-    return refuse(429, 'fetch_cap', `An account without access may fetch ${String(cap)} per ISO week. Deposit sessions for the whole pool.`, undefined, { 'retry-after': String(secondsToNextWeek(now)) });
+    return refuse(429, 'fetch_cap', `An account without access may fetch ${String(cap)} per ISO week. A deposit that counts lifts the cap.`, undefined, { 'retry-after': String(secondsToNextWeek(now)) });
   }
-  // The count is dropped when its week ends, so what stays per account is only this week's.
-  await env.DB.prepare('UPDATE accounts SET fetch_week = NULL, fetches = 0 WHERE fetch_week <> ?').bind(week).run();
+  // The count is dropped when its week ends, so what stays per account is only this week's. Earlier only (`<`, and `YYYY-Www` orders): a request that computed its week just before Monday must not wipe a count already spent in the new week.
+  await env.DB.prepare('UPDATE accounts SET fetch_week = NULL, fetches = 0 WHERE fetch_week < ?').bind(week).run();
   return answer(200, await signed(bundleOf(harnessVersion, await depositsOf(env)), key), { etag });
 };
