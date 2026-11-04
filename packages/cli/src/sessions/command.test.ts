@@ -442,7 +442,7 @@ describe('oars sessions', () => {
 describe('oars sessions with a Codex store', () => {
   // Fixture written from openai/codex @ ac558e2 (see codex.test.ts).
   const rollout = (id: string) => [
-    rolloutLine('2026-06-01T10:00:00.000Z', 'session_meta', { id, originator: 'codex_cli_rs', timestamp: '2026-06-01T10:00:00.000Z', cwd: '/work/app', cli_version: '0.50.0' }),
+    rolloutLine('2026-06-01T10:00:00.000Z', 'session_meta', { id, session_id: id, originator: 'codex_cli_rs', timestamp: '2026-06-01T10:00:00.000Z', cwd: '/work/app', cli_version: '0.50.0' }),
     rolloutLine('2026-06-01T10:00:02.000Z', 'event_msg', { type: 'user_message', message: 'hello' }),
   ];
   const withCodex = () => {
