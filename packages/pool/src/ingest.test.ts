@@ -115,6 +115,12 @@ describe('ingest writes cell increments to stored cells', () => {
       await send(target, token, sampleSkeleton('0000000000008301', undefined, '2026-11-02'));
       expect(await total(target, "day = '2026-11-01'")).toBe(0);
       expect(await total(target, "day = '2026-11-02'")).toBe(once);
+      // The same id with another language moves the stratum too: the old one gives its session back and the new one takes it.
+      const stratum = async (key: string): Promise<unknown> => (await target.db()).prepare('SELECT sessions FROM strata WHERE key = ?').bind(key).first('sessions');
+      expect(await stratum('language/typescript')).toBe(1);
+      await send(target, token, sampleSkeleton('0000000000008301', { languages: ['rust'] }, '2026-11-02'));
+      expect(await stratum('language/typescript')).toBe(0);
+      expect(await stratum('language/rust')).toBe(1);
     });
   }, 60_000);
 
@@ -239,6 +245,50 @@ describe('two deposits of one session at once', () => {
       const answers = await Promise.all([sent, sent].map(async (skeleton) => worker.fetch(new Request('https://pool.test/v1/deposits', { method: 'POST', body: JSON.stringify(skeleton), headers: { authorization: `Bearer ${token}` } }), env)));
       const refused = answers.find(({ status }) => status === 409);
       expect(await refused?.json()).toMatchObject({ error: 'deposit_conflict' });
+    });
+  }, 60_000);
+});
+
+// Two limits of the stored form, pinned and not solved: each needs the ledger or the cluster record rebuilt, which a later change owns. A test here changing means that change landed.
+describe('what stored cells cannot take back', () => {
+  it('counts a session a second time when its held row no longer parses and it is sent again', async () => {
+    await inFreshPool({}, async (target) => {
+      const token = await accountOn(target, '8801');
+      const sent = sampleSkeleton('0000000000008801', undefined, '2026-11-01');
+      await send(target, token, sent);
+      const once = await total(target);
+      expect(once).toBeGreaterThan(0);
+      const db = await target.db();
+      // Past the routes: valid JSON that is not a skeleton (the `parsed.ok` branch), then text that is not JSON (the `catch`). The increments the row made are still in the cells.
+      await db.prepare("UPDATE deposits SET skeleton = '{}'").run();
+      await send(target, token, sent);
+      expect(await total(target)).toBe(Number(once) * 2);
+      await db.prepare("UPDATE deposits SET skeleton = 'not json'").run();
+      await send(target, token, sent);
+      expect(await total(target)).toBe(Number(once) * 3);
+    });
+  }, 60_000);
+
+  it('keeps an account counted in a cell it withdrew its session from', async () => {
+    await inFreshPool({}, async (target) => {
+      const db = await target.db();
+      const tokens: string[] = [];
+      for (const id of ['8811', '8812', '8813', '8814', '8815']) {
+        const token = await accountOn(target, id);
+        tokens.push(token);
+        await send(target, token, sampleSkeleton(`${id.padStart(16, '0')}`, undefined, '2026-11-01'));
+      }
+      const held = async (): Promise<{ sessions: number; clusters: number }[]> =>
+        (await db.prepare("SELECT sessions, clusters FROM cells WHERE day = '2026-11-01' AND sessions > 0").all()).results.map((row) => ({ sessions: Number(fieldOf(row, 'sessions')), clusters: Number(fieldOf(row, 'clusters')) }));
+      expect((await held()).every(({ sessions, clusters }) => sessions === 5 && clusters === 5)).toBe(true);
+      // The fifth account moves its session to another day: four accounts hold the cell now, and the count still says five.
+      const fifth = tokens[4];
+      if (fifth === undefined) throw new Error('no fifth account');
+      await send(target, fifth, sampleSkeleton('0000000000008815', undefined, '2026-11-02'));
+      const after = await held();
+      expect(after.length).toBeGreaterThan(0);
+      expect(after.every(({ sessions, clusters }) => sessions === 4 && clusters === 5)).toBe(true);
+      expect(await db.prepare("SELECT COUNT(*) AS count FROM contributors WHERE kind = 'cell' AND key LIKE '%/2026-11-01/%'").first('count')).toBe(after.length * 5);
     });
   }, 60_000);
 });

@@ -260,7 +260,7 @@ describe('the ETag follows the rows', () => {
       const changed = await etag('2505');
       expect(changed).not.toBe(after);
 
-      // Expiry takes the ledger's rows and changes no served cell, so a conditional read stays unchanged (lead 166); only a change to a stored cell moves it.
+      // Expiry takes the ledger's rows and changes no served cell, so a conditional read stays unchanged; only a change to a stored cell moves it.
       await (await own.db()).prepare('DELETE FROM deposits').run();
       expect(await etag('2506')).toBe(changed);
       await (await own.db()).prepare('DELETE FROM cells').run();

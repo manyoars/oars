@@ -39,7 +39,7 @@ export const EARLIEST_COUNTED = "SELECT MIN(counted_at) AS first FROM deposits W
 /**
  * The account's access, written to its record when it changes. `standing` is latched: once a counting batch has stood `ledger_days`, nothing can audit it, so the flag stays while
  * the account exists. Before that it is `pending` while any counting batch is not `none`, and clears when none is left. A resend that still counts keeps a batch's first `counted_at`, so a
- * client resending every session does not push a batch back toward pending; one that no longer counts clears it, and the flag falls if no counting batch is left.
+ * client resending every session does not push a batch back toward pending; one that no longer counts clears it, and the flag falls if no counting batch is left; an ingest that writes no cell increment leaves it alone.
  */
 export const accessOf = async (env: Env, account: string, now: number): Promise<Access | null> => {
   const held = fieldOf(await env.DB.prepare('SELECT access FROM accounts WHERE id = ?').bind(account).first(), 'access');

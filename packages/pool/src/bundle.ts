@@ -73,7 +73,7 @@ export const fetchBundle = async (request: Request, env: Env, harnessVersion: st
     await env.DB.prepare(WEEK_RESET).bind(week).run();
     return answer(200, await signed(bundleOf(harnessVersion, await storedOf(env, harnessVersion)), key), { etag });
   } catch (error) {
-    // The spend came first so two fetches at once cannot both take the last, but a 304 spends nothing because it sends no bundle, and neither does a fetch that throws (spec:254-255).
+    // The spend came first so two fetches at once cannot both take the last, but a 304 spends nothing because it sends no bundle, and neither does a fetch that throws.
     if (capped) await env.DB.prepare('UPDATE accounts SET fetches = fetches - 1 WHERE id = ? AND fetch_week = ? AND fetches > 0').bind(account, week).run();
     throw error;
   }

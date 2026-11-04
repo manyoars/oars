@@ -205,8 +205,8 @@ describe('clusters over the cells of a read', () => {
     return verified.bundle;
   };
 
-  // Cells split by day, so no single cell here holds more than one account. A read's `clusters` is the largest held count among its cells, with no union over accounts (lead 173): the
-  // pool keeps no per-account record on the fetch path, so these five serve nothing until Brief 9 brings held counts for a key's `n` and `c`.
+  // Cells split by day, so no single cell here holds more than one account. A read's `clusters` is the largest held count among its cells, with no union over accounts: the
+  // pool keeps no per-account record on the fetch path, so these five serve nothing until a later change brings held counts for a key's `n` and `c`.
   it('five accounts on five different days serve no read: each cell holds one cluster and a read takes the largest', async () => {
     await inFreshPool(async (spread) => {
       for (const [index, day] of ['2026-11-01', '2026-11-02', '2026-11-03', '2026-11-04'].entries()) await depositOn(spread, `300${String(index + 1)}`, [day]);
