@@ -1,4 +1,4 @@
-// Adoption (t752, rank 6): when a tool was first and last seen (as the Monday of its UTC week, the grain of an index cell, rule 6), in how many weeks, and its share of all steps. Confounders: the operator's own rules move these, and
+// Adoption (rank 6): when a tool was first and last seen (as the Monday of its UTC week, the grain of an index cell, rule 6), in how many weeks, and its share of all steps. Confounders: the operator's own rules move these, and
 // a program name can be noise.
 import { UNKNOWN, weekStartOf } from './cells.js';
 import { motifName } from './motif.js';

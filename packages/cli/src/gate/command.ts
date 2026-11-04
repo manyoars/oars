@@ -52,7 +52,7 @@ export const gateInstall = async (deps: SessionsDeps): Promise<Outcome> => {
   // A record with no kept index cannot tell what is new without a scan the hook must not do, so it reads `not-read` until a replay seeds the index.
   const storeDir = deps.sessions?.storeDir;
   if (storeDir !== undefined && (await loadIndex(storeDir, crossingsPath(storeDir))).state === 'unseeded') {
-    lines.push('Run `oars gate replay --allow <folder>` once to seed the novelty index; until then the hook records novelty as not-read.');
+    lines.push('Run `oars gate replay --allow <folder>` once to seed the novelty index; until then the hook records novelty as not-read and shows no note.');
   }
   return { document: { ok: true, file, changed: result.changed, event: EVENT, matcher: MATCHER, command: COMMAND }, text: lines.join('\n') };
 };

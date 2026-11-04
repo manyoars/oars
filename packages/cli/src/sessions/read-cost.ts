@@ -1,4 +1,4 @@
-// Cost (t752, rank 3): tokens and wall time per prompt, by prompt class, model, and ISO week. Confounders: class drift, subagent work outside the prompt's own usage, and
+// Cost (rank 3): tokens and wall time per prompt, by prompt class, model, and ISO week. Confounders: class drift, subagent work outside the prompt's own usage, and
 // task size, which nothing here can see. Tokens are plain counts, not priced. A prompt with no wall time adds no seconds and stays in the denominator, so seconds per prompt understates.
 import { bucketFields, EFFORT_CLASS, UNKNOWN, type Cell } from './cells.js';
 import { motifName } from './motif.js';

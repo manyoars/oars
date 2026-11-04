@@ -1,4 +1,4 @@
-// Layer 2's self-baseline (spec 2.2, t744): a session's week against the operator's own other weeks on the same harness. Local only: no pooled field,
+// Layer 2's self-baseline (spec 2.2): a session's week against the operator's own other weeks on the same harness. Local only: no pooled field,
 // no network, no account step. The peer baseline waits for T2.
 import { harnessOf, type Harness, type PromptObservation, type SessionObservation, type ToolObservation } from './schema.js';
 

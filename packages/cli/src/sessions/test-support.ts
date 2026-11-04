@@ -74,7 +74,7 @@ export interface FixtureBubble {
   createdAt?: string;
   tokens?: [number, number];
   /** `result` is written as Cursor does, a JSON string; a failed shell command is `completed` with a nonzero `exitCodeV2` in it. */
-  tool?: { name: string; params: unknown; status: 'completed' | 'error'; error?: string; result?: unknown };
+  tool?: { name: string; params: unknown; status: 'completed' | 'error' | 'cancelled'; error?: string; result?: unknown; decision?: string };
   /** `timingInfo.clientStartTime`, epoch milliseconds (or a small relative clock). */
   clientStart?: number;
 }
@@ -120,7 +120,7 @@ export const stageCursor = async (root: string, composers: readonly FixtureCompo
           tokenCount: { inputTokens: bubble.tokens?.[0] ?? 0, outputTokens: bubble.tokens?.[1] ?? 0 },
           ...(bubble.tool === undefined
             ? {}
-            : { toolFormerData: { name: bubble.tool.name, toolCallId: `tc${String(index)}`, status: bubble.tool.status, params: JSON.stringify(bubble.tool.params), ...(bubble.tool.error === undefined ? {} : { error: bubble.tool.error }), ...(bubble.tool.result === undefined ? {} : { result: JSON.stringify(bubble.tool.result) }) } }),
+            : { toolFormerData: { name: bubble.tool.name, toolCallId: `tc${String(index)}`, status: bubble.tool.status, params: JSON.stringify(bubble.tool.params), ...(bubble.tool.decision === undefined ? {} : { userDecision: bubble.tool.decision }), ...(bubble.tool.error === undefined ? {} : { error: bubble.tool.error }), ...(bubble.tool.result === undefined ? {} : { result: JSON.stringify(bubble.tool.result) }) } }),
         }),
       );
     });

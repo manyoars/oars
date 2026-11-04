@@ -1,8 +1,8 @@
-// The pool server (t758): a Workers fetch handler over one D1 database. Deposits take closed-vocabulary skeletons only, and a refusal names the field.
+// The pool server: a Workers fetch handler over one D1 database. Deposits take closed-vocabulary skeletons only, and a refusal names the field.
 import { parseSkeleton, type SessionSkeleton } from '../../cli/src/sessions/pool-wire.js';
 import type { Frame } from '../../cli/src/sessions/schema.js';
 import { batchCounts, INGEST_TIER } from './access.js';
-import { fetchBundle } from './bundle.js';
+import { fetchBundle, harnessRequired } from './bundle.js';
 import { covenantAccept, covenantNotAccepted, covenantStatus, depositsClosed, hasAccepted } from './covenant.js';
 import { answer, bound, refuse, wholeBinding, type Env } from './http.js';
 import { incrementsOf, incrementStatements, netCellCount, previousOf } from './ingest.js';
@@ -18,7 +18,9 @@ const DEFAULT_MAX_ACCOUNT_BYTES = 64 * 1024 * 1024;
 /** What a batch's `deltas` hold until the wire carries them (spec Section 2, "Deltas"): the client builds them, so ingest has none to take. */
 const DELTAS = '[]';
 
-const BUNDLE = /^\/bundle\/([^/]*)\/([^/]*)$/;
+const BUNDLE = /^\/bundle\/([^/]*)\/([^/]*)\/([^/]*)$/;
+/** The route as it stood before the harness segment: refused by name rather than served. */
+const BUNDLE_WITHOUT_HARNESS = /^\/bundle\/([^/]*)\/([^/]*)$/;
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -60,7 +62,7 @@ const deposit = async (request: Request, env: Env): Promise<Response> => {
   const limit = wholeBinding(env.MAX_DEPOSITS_PER_ACCOUNT, DEFAULT_MAX_DEPOSITS);
   const budget = wholeBinding(env.MAX_DEPOSIT_BYTES_PER_ACCOUNT, DEFAULT_MAX_ACCOUNT_BYTES);
   const stored = JSON.stringify(skeleton);
-  // Whether this batch counts toward access is decided here, from the batch and the row it replaces; it is judged at the ingest tier, so a resend that writes an increment over a row raised by hand clears its date until Brief 2 sends the batch's own tier.
+  // Whether this batch counts toward access is decided here, from the batch and the row it replaces; it is judged at the ingest tier, so a resend that writes an increment over a row raised by hand clears its date until a wire sends the batch's own tier.
   // `written` is what ingest will write over the row held now, not what the batch derives: a batch sent again unchanged writes nothing and leaves the row's date alone.
   const next = incrementsOf(skeleton);
   const previous = await previousOf(env, account, skeleton.id);
@@ -103,7 +105,8 @@ export default {
     if (request.method === 'GET') {
       if (pathname === '/v1/covenant') return covenantStatus(request, env);
       const route = BUNDLE.exec(pathname);
-      if (route !== null) return fetchBundle(request, env, decoded(route[1] ?? ''), decoded(route[2] ?? ''));
+      if (route !== null) return fetchBundle(request, env, decoded(route[1] ?? ''), decoded(route[2] ?? ''), decoded(route[3] ?? ''));
+      if (BUNDLE_WITHOUT_HARNESS.test(pathname)) return harnessRequired();
     }
     return refuse(404, 'not_found', 'No such route.');
   },

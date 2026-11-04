@@ -1,4 +1,4 @@
-// The source table (t749): one entry per non-Claude harness whose sessions `deposit` can read. `--allow <name>` opens an entry, the nightly hook
+// The source table: one entry per non-Claude harness whose sessions `deposit` can read. `--allow <name>` opens an entry, the nightly hook
 // runtime, `allow.unmatched`, the deposit lines, `measure`, and `verify` read this table, so a new harness is one entry here plus its reader file.
 // Claude Code is not an entry: its transcripts are files the deposit walks itself (`depositLocked`), and its behavior does not change.
 
