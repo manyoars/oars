@@ -249,3 +249,31 @@ export const stageCodex = (root: string, files: readonly CodexFixture[]): string
   }
   return home;
 };
+
+/** One Copilot CLI event: `{id, parentId, timestamp, type, data}` (github/copilot-sdk @ d28a136, nodejs/src/generated/session-events.ts, every event's envelope). */
+export const copilotEvent = (timestamp: string, type: string, data: unknown, extra: object = {}): { id: string; parentId: null; timestamp: string; type: string; data: unknown } => ({
+  id: `00000000-0000-4000-8000-${String(Math.abs(Date.parse(timestamp)) % 1e12).padStart(12, '0')}`,
+  parentId: null,
+  timestamp,
+  type,
+  data,
+  ...extra,
+});
+
+export interface CopilotFixture {
+  /** The session folder's name, which is the session id. */
+  id: string;
+  /** Lines as objects, or raw text for a torn file. */
+  lines: readonly unknown[] | string;
+}
+
+/** A Copilot home holding the given sessions under `session-state/<id>/events.jsonl`; returns the home. */
+export const stageCopilot = (root: string, files: readonly CopilotFixture[]): string => {
+  const home = join(root, 'copilot-home');
+  for (const file of files) {
+    const dir = join(home, 'session-state', file.id);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, 'events.jsonl'), typeof file.lines === 'string' ? file.lines : `${file.lines.map((line) => JSON.stringify(line)).join('\n')}\n`);
+  }
+  return home;
+};
