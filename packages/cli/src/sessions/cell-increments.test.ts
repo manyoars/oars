@@ -1,0 +1,121 @@
+// One cell computation for a deposit and a local read (pool vocabulary spec Section 4, rules 1 to 6).
+import { describe, expect, it } from 'vitest';
+import { cellsOf, incrementsOf, projectedStore, storeOf, type Increments } from './cell-increments.js';
+import { deriveCells } from './cells.js';
+import { classMotif } from './motif.js';
+import { frame, prompt, session, step, storedNames, store, tool } from './pool-fixture.js';
+import { floorOf, sessionsOf, skeletonOf, type SessionSkeleton } from './pool-wire.js';
+import type { Store } from './store.js';
+
+const framed = frame({ shell: 'bash', stack: { languages: ['rust'], frameworks: ['astro'], size: 'xl' } });
+const ID = '0123456789abcdef';
+
+const pushStep = (n: number, cost: { tokens: number | null; durationMs: number | null }) => step(n, 0, 'shell.exec', { native: 'Bash', identity: { program: 'git', sub: 'push', flags: ['--force'] }, cost });
+
+// A local store holding exact values, the way capture writes them.
+const localStore = (): Store =>
+  store({
+    sessions: [session('s1', { frame: framed })],
+    prompts: [prompt('s1', 0, { frame: framed, errors: 4, wallSec: 37, usage: { input: 123456, cacheWrite: 1500, cacheRead: 987654, output: 4321, thinking: 6 } })],
+    tools: [tool('s1', 0, 'Bash', { steps: [pushStep(0, { tokens: 98765, durationMs: 4321 })] }), tool('s1', 1, 'Bash', { steps: [pushStep(1, { tokens: 5000, durationMs: 150 })] })],
+  });
+
+const skeletonOfLocal = (local: Store): SessionSkeleton => {
+  const [only] = sessionsOf(local);
+  const skeleton = only === undefined ? null : skeletonOf(only, ID, storedNames);
+  if (skeleton === null) throw new Error('the local store has no skeleton');
+  return skeleton;
+};
+
+const keyed = (cells: readonly { motifId: string; frameBucket: string; day: string; exposed: boolean | number; sessions: number; ok: number; failed: number; tokens: number; durationMs: number }[]) =>
+  cells.map(({ motifId, frameBucket, day, exposed, sessions, ok, failed, tokens, durationMs }) => `${motifId}/${frameBucket}/${day}/${String(Number(exposed))} ${String(sessions)} ${String(ok)} ${String(failed)} ${String(tokens)} ${String(durationMs)}`).sort();
+
+describe('storeOf', () => {
+  it('turns the position of a spawner back into the address a nested spawn resolves against', () => {
+    const skeleton = skeletonOfLocal(localStore());
+    const [main] = skeleton.transcripts;
+    if (main === undefined) throw new Error('the skeleton has no transcript');
+    const rebuilt = storeOf([{ ...skeleton, transcripts: [main, { ...main, spawnedIn: 0 }, { ...main, spawnedIn: 1 }] }]);
+    expect(rebuilt.sessions.map((held) => held.spawnedIn)).toEqual([null]);
+    expect(rebuilt.subagents.map((agent) => [agent.session, agent.spawnedIn])).toEqual([
+      [`${ID}#1`, `${ID}#0`],
+      [`${ID}#2`, `${ID}#1`],
+    ]);
+  });
+});
+
+describe('rule 5: a bucket and no exact number', () => {
+  it('counts a prompt as the lowest value of each bucket, never the exact tokens or seconds', () => {
+    const { cells } = incrementsOf(skeletonOfLocal(localStore()));
+    const asked = classMotif('edit-verify').motifId;
+    const cell = [...cells.values()].find((held) => held.motifId === asked);
+    // 123456, 1500, 987654, and 4321 tokens read as 64,000, 1,000, 512,000, and 4,000; 37 s reads as 32 s.
+    expect(cell).toMatchObject({ tokens: floorOf('tokens', 7) + floorOf('tokens', 1) + floorOf('tokens', 10) + floorOf('tokens', 3), durationMs: floorOf('seconds', 6) * 1000 });
+    expect(cell?.tokens).toBe(581_000);
+    expect(cell?.durationMs).toBe(32_000);
+    expect(cell?.failed).toBe(1);
+  });
+
+  it('reads a lower bound of what the local store derives exactly, and equal when every value sits on a floor', () => {
+    const exact = deriveCells(localStore());
+    const floored = incrementsOf(skeletonOfLocal(localStore()));
+    const sum = (rows: readonly { tokens: number; durationMs: number }[], field: 'tokens' | 'durationMs'): number => rows.reduce((total, row) => total + row[field], 0);
+    expect(sum([...floored.cells.values()], 'tokens')).toBeLessThan(sum(exact.cells, 'tokens'));
+    expect(sum([...floored.cells.values()], 'durationMs')).toBeLessThan(sum(exact.cells, 'durationMs'));
+    const onFloors = store({
+      sessions: [session('s1', { frame: framed })],
+      prompts: [prompt('s1', 0, { frame: framed, wallSec: 32, usage: { input: 64000, cacheWrite: 1000, cacheRead: 512000, output: 4000, thinking: 4 } })],
+      tools: [tool('s1', 0, 'Bash', { steps: [pushStep(0, { tokens: 64000, durationMs: 3200 })] })],
+    });
+    expect(keyed([...incrementsOf(skeletonOfLocal(onFloors)).cells.values()])).toEqual(keyed(deriveCells(onFloors).cells));
+  });
+});
+
+describe('the local read and the deposit share one computation', () => {
+  it('gives a local store and the skeleton of that store the same cells', () => {
+    const local = localStore();
+    const viaLocalRead = cellsOf(projectedStore(local, storedNames)).cells;
+    const viaDeposit = incrementsOf(skeletonOfLocal(local)).cells;
+    expect(viaDeposit.size).toBeGreaterThan(1);
+    expect(keyed([...viaDeposit.values()])).toEqual(keyed(viaLocalRead));
+  });
+
+  it('reads a record with no steps as it is, and a shell step as a deposit would project it', () => {
+    const bare = store({ sessions: [session('s1')], tools: [tool('s1', 0, 'Bash')] });
+    expect(projectedStore(bare, storedNames)).toEqual(bare);
+    const projected = projectedStore(localStore(), () => [{ program: 'ffmpeg', subcommand: null, flags: ['-i'] }]);
+    expect(projected.tools[0]?.steps?.[0]?.identity).toEqual({ program: 'private', sub: null, flags: [] });
+  });
+});
+
+describe('rules 1 to 3 and 6: what a cell and a stratum hold', () => {
+  const increments = (): Increments => incrementsOf(skeletonOfLocal(localStore()));
+
+  it('keeps one element per cell: one motif, one frame bucket, one day, and one exposure, with no row joining two cells', () => {
+    const { cells, motifs } = increments();
+    const known = new Set(motifs.map(({ motifId }) => motifId));
+    expect(cells.size).toBeGreaterThan(1);
+    for (const [key, cell] of cells) {
+      expect(key).toBe(`${cell.motifId}/${cell.frameBucket}/${cell.day}/${String(cell.exposed)}`);
+      expect(known.has(cell.motifId)).toBe(true);
+      expect(cell.frameBucket.split('/')).toHaveLength(4);
+    }
+    expect(new Set([...cells.values()].map(({ key }) => key)).size).toBe(cells.size);
+  });
+
+  it('pools a stack stratum alone, per value, and no other bound field', () => {
+    const { strata } = increments();
+    expect([...strata.keys()].sort()).toEqual(['framework/astro', 'language/rust', 'repoFiles/xl']);
+    for (const stratum of strata.values()) expect(stratum.sessions).toBe(1);
+  });
+
+  it('puts only the axes and effort in a cell key', () => {
+    const [cell] = increments().cells.values();
+    expect(cell?.frameBucket).toBe('claude-code/2.1.31x/claude-opus-5-5/high');
+  });
+
+  // Stated limit (pool.md): the cell model is at UTC day, and its frame bucket still names `effort`. Rules 6 (week) and 3 (no `effort` in a cell key) need the cells rebuilt.
+  it('keeps the cells at the frame\'s UTC day, the grain the cell model holds today', () => {
+    for (const cell of increments().cells.values()) expect(cell.day).toBe('2026-11-01');
+  });
+});
