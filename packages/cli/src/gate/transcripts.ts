@@ -39,7 +39,7 @@ export const discover = async (roots: readonly string[], allow: Allow): Promise<
   const files: TranscriptFile[] = [];
   let unreadable = 0;
   for (const root of roots) {
-    // Replay reads only the harness's transcript format: a source-table folder (Cursor, Codex) is not that format, and a project folder is never named for one.
+    // Replay reads only the harness's transcript format: a source-table folder (Cursor, Codex, Copilot) is not that format, and a project folder is never named for one.
     const projects = (await listDir(root)).filter((entry) => entry.isDirectory() && !SOURCES.some((source) => source.name === entry.name) && allow.allows(entry.name));
     for (const project of projects) {
       try {
