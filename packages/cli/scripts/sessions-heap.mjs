@@ -22,7 +22,7 @@ const bin = binArg === -1 ? join(cliRoot, 'dist', 'bin.js') : resolve(process.ar
 const NL = String.fromCharCode(10);
 const PROJECT = 'bench-project';
 const PROMPTS = 8;
-// Characters of a clean tool result. The log keeps none of it, so it sizes the transcript on disk (the operator's: 1.8 MB each against 52 KB of log).
+// Characters of a clean tool result. The log keeps none of it, so it sizes the transcript on disk (the operator's: 1.8 MB each against 86 KB of log).
 const BULK = Number(process.argv[process.argv.indexOf('--bulk') + 1] ?? 400) || 400;
 
 /** @typedef {{ root: string, appdata: string, claude: string, projects: string, store: string, home: string }} Dirs */
@@ -83,7 +83,7 @@ const iso = (base, seconds) => new Date(base + seconds * 1000).toISOString();
  * @returns {{ id: string, text: string }}
  *
  * One transcript: PROMPTS prompts, each followed by `--calls` (default 14) tool calls (every sixth fails). Every line is distinct, so nothing dedupes, and
- * a session is tens of KB of log, like the operator's (6,757 files made a 349 MB log: about 52 KB each).
+ * a session is about 125 KB of log (49 MB at 400 sessions), against the operator's 86 KB (6,757 files made a 580 MB log): a little heavier per session.
  */
 const transcript = (index) => {
   const id = `bench-${String(index).padStart(6, '0')}`;
@@ -129,7 +129,7 @@ const transcript = (index) => {
       line({ type: 'user', uuid: result, parentUuid: parent, isSidechain: false, timestamp: iso(base, clock), version: '2.1.300', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: toolId, is_error: failed, content }] } });
       parent = result;
       // Lines the skeleton lists and the log does not: the model's text, its thinking, and harness attachments make no tool or prompt row, but a
-      // real transcript is mostly these (1.8 MB of transcript against 52 KB of log), and the skeleton holds one entry for each.
+      // real transcript is mostly these (1.8 MB of transcript against 86 KB of log), and the skeleton holds one entry for each.
       for (let k = 0; k < chatter; k += 1) {
         clock += 1;
         const extra = `${id}-${String(n++)}`;
@@ -201,7 +201,7 @@ const depositArgs = ['sessions', 'deposit', '--allow', PROJECT, '--json'];
 const verifyArgs = ['sessions', 'verify'];
 // The three measured runs: a deposit that skips every file (the t784 run: 12 captured, 6,757 unchanged), a deposit that captures every transcript
 // (a CAPTURE_VERSION bump), and verify. The last element is the heap `check` gives each, in MB: the least that passes the new build (400 sessions:
-// 104, 104, and 248) and the least that passes the build before t808 (168, 112, and 336) sit either side of it, 32 to 40 MB away where they differ.
+// 104, 104, and 248) and the least that passes the build before t808 (168, 112, and 336) sit either side of it, 32 to 48 MB away where they differ (verify: the old build's 336 is 48 above the 288 cap).
 // The fifth element is how many transcripts the deposit must report as captured: 0 for the no-op, and for a recapture the store's sessions (`check` fills
 // it in), so a recapture that skipped every file fails instead of passing on its exit code. verify has none.
 /** @type {[string, string[], boolean, number, 'none' | 'zero' | 'all'][]} */
