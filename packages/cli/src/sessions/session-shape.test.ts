@@ -6,10 +6,11 @@
 import { describe, expect, it } from 'vitest';
 import { rolloutLines } from './codex.js';
 import { eventLines } from './copilot.js';
+import { chatLines } from './gemini.js';
 import { captureSession } from './extract.js';
 import { makeRedactor } from './redact.js';
 import { CAPTURE_VERSION } from './schema.js';
-import { copilotEvent, rolloutLine } from './test-support.js';
+import { copilotEvent, geminiHead, rolloutLine } from './test-support.js';
 
 const redact = makeRedactor();
 const line = (value: object): string => JSON.stringify(value);
@@ -24,7 +25,7 @@ const answered = (seconds: number, id: string, content: unknown, failed = false)
   line({ ...base(seconds), type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: id, is_error: failed, content }] } });
 const attach = (seconds: number, attachment: object): string => line({ ...base(seconds), type: 'attachment', attachment });
 
-const capture = (lines: readonly string[], options: { harness?: 'codex' | 'copilot' | 'cursor'; subagent?: boolean } = {}) => {
+const capture = (lines: readonly string[], options: { harness?: 'codex' | 'copilot' | 'cursor' | 'gemini'; subagent?: boolean } = {}) => {
   const text = lines.join('\n');
   return captureSession({
     text,
@@ -332,6 +333,16 @@ describe("the shape's edge cases", () => {
       copilotEvent(at(40), 'assistant.message', { content: 'done', model: 'm', messageId: 'm2' }),
     ];
     const session = capture(eventLines(events.map((entry) => JSON.stringify(entry)).join('\n'), 'k1').map((entry) => JSON.stringify(entry)), { harness: 'copilot' });
+    expect(session.setup).toBeUndefined();
+    expect(session.funnel).toBeUndefined();
+    expect(session.trust).toEqual({ unattendedRun: [0.02, 0.17] });
+  });
+
+  it('stores a Gemini CLI session as absent for everything its reader does not record, and its prompts as runs (timing is real: each message has its own time)', () => {
+    const user = (seconds: number, text: string) => ({ id: `u${String(seconds)}`, timestamp: at(seconds), type: 'user', content: [{ text }] });
+    const model = (seconds: number, text: string) => ({ id: `g${String(seconds)}`, timestamp: at(seconds), type: 'gemini', content: text, model: 'm', tokens: { input: 10, output: 5, cached: 0, thoughts: 0, tool: 0, total: 15 } });
+    const records = [geminiHead('g1'), user(1, 'go'), model(2, 'ok'), user(30, 'more'), model(40, 'done')];
+    const session = capture(chatLines(records.map((entry) => JSON.stringify(entry)).join('\n'), 'g1', '/w').map((entry) => JSON.stringify(entry)), { harness: 'gemini' });
     expect(session.setup).toBeUndefined();
     expect(session.funnel).toBeUndefined();
     expect(session.trust).toEqual({ unattendedRun: [0.02, 0.17] });
