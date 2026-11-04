@@ -5,16 +5,20 @@
 import { createHash } from 'node:crypto';
 import { posix } from 'node:path';
 import { ACTION_TABLES, actionOf, shellOf, type ActionTable, type CanonicalAction } from './actions.js';
+import { exploreCount, strataOf } from './strata.js';
 import { closedFrame, frameIdOf, repoFilesFromIndex, repoSizeOf, stackOf, utcDay } from './frame.js';
 import { LITERAL, type RepoSize } from './public-vocabulary.js';
 import { linkSteps } from './graph.js';
 import { callIdentity, shellIdentity, UNREAD_SHELL, type WordOfCommand } from './identity.js';
 import type { Redactor } from './redact.js';
+import { manifestDelta, manifestFileOf, manifestNames, packagesOf, type ManifestFile } from './package-resolve.js';
 import { createShape, INTERRUPT_MARKER } from './session-shape.js';
 import {
   CAPTURE_VERSION,
   ERROR_LINE_CHARS,
   FILES_PER_SESSION_MAX,
+  type HARNESS_ERROR_CLASSES,
+  HTTP_STATUSES,
   PROMPT_HEAD_CHARS,
   SIGNATURE_CHARS,
   type CostState,
@@ -31,6 +35,7 @@ import {
   type SkeletonLine,
   type StepIdentity,
   type TargetBase,
+  type ToolManifest,
   type ToolObservation,
   type ToolPull,
   type Usage,
@@ -128,6 +133,49 @@ export const isErrorResult = (block: Obj, text: string): boolean => {
   if (truthy(block.is_error)) return true;
   const exit = EXIT_RE.exec(text.trim());
   return exit !== null && exit[1] !== '0';
+};
+
+/** What an Edit, MultiEdit, or Write shows of a manifest: the names it adds and removes (an edit), or lists (a write). Undefined when it shows none. */
+const manifestOfInput = (file: ManifestFile, tool: string, input: Obj, redact: Redactor): ToolManifest | undefined => {
+  if (tool === 'Write') {
+    const seen = manifestNames(file, str(input.content) ?? '', redact);
+    return seen.length === 0 ? undefined : { file, seen, added: [], removed: [] };
+  }
+  const edits = tool === 'MultiEdit' && Array.isArray(input.edits) ? input.edits.filter(isObj) : tool === 'Edit' ? [input] : [];
+  const { added, removed } = manifestDelta(file, edits.map((edit) => str(edit.old_string) ?? '').join('\n'), edits.map((edit) => str(edit.new_string) ?? '').join('\n'), redact);
+  return added.length === 0 && removed.length === 0 ? undefined : { file, seen: [], added, removed };
+};
+
+const EXIT_CODE_RE = /^Exit code:? (-?\d+)/;
+/** The harness's own refusals, most specific first: each names a class, and the match never leaves this table (the text is not kept). */
+const HARNESS_ERROR_PATTERNS: ReadonlyArray<readonly [RegExp, (typeof HARNESS_ERROR_CLASSES)[number]]> = [
+  [/^\[Request interrupted by user/, 'interrupted'],
+  [/The user doesn't want to proceed with this tool use|The tool use was rejected/, 'user-rejected'],
+  [/Permission to use [^\n]* has been denied/, 'permission-denied'],
+  [/InputValidationError/, 'input-validation'],
+  [/<tool_use_error>/, 'tool-use-error'],
+  [/\btimed out\b/i, 'timeout'],
+];
+const HTTP_STATUS_RE = /(?:status(?: code)?|HTTP\/?[\d.]*|returned error:?)\s*:?\s*([1-5]\d\d)\b/i;
+
+const exitClass = (code: number): string => {
+  if (code === 0 || code === 1 || code === 2 || code === 126 || code === 127) return String(code);
+  // 128 + n for the signals n = 1 to 64 a shell reports; 255 is the usual spawn or ssh failure and stays `other`.
+  return code > 128 && code <= 192 ? 'signal' : 'other';
+};
+
+/**
+ * The `errorCode` of a failed result (spec Section 1.2): an exit-code class from a leading `Exit code N` line, else the harness error class its text
+ * names, else an HTTP status, else `other`. The result is always a member of `ERROR_CODES`, picked by a table, so no word of the error text is kept. A
+ * harness that reports no exit code (a Cursor non-shell call, a Codex call with no status) reaches `other` unless its text names a class.
+ */
+export const errorCodeOf = (text: string): string => {
+  const exit = EXIT_CODE_RE.exec(text.trim());
+  if (exit !== null) return exitClass(Number(exit[1]));
+  const harness = HARNESS_ERROR_PATTERNS.find(([pattern]) => pattern.test(text));
+  if (harness !== undefined) return harness[1];
+  const status = HTTP_STATUS_RE.exec(text)?.[1];
+  return HTTP_STATUSES.find((listed) => listed === status) ?? 'other';
 };
 
 export const shortName = (name: string): string => {
@@ -1402,6 +1450,10 @@ export const captureSession = (input: ExtractInput): Capture => {
   const skeletonLines: SkeletonLine[] = [];
   const toolById = new Map<string | undefined, string>();
   const callById = new Map<string, { call: ToolObservation; at: number | undefined; plan: readonly PlannedCommit[] }>();
+  // Packages named so far in this file, by package and version, so a call's `first` mark is true once per version.
+  const seenPackages = new Set<string>();
+  // A Read of a manifest shows its names in the result, so the call waits here for it, by tool_use id.
+  const manifestReads = new Map<string, ManifestFile>();
   // The evidence for the frame: read across the whole file, so one session's prompts share a stack and a shell, and held only until the frame is built.
   const framePaths: string[] = [];
   const framePrograms = new Set<string>();
@@ -1662,7 +1714,11 @@ export const captureSession = (input: ExtractInput): Capture => {
         drafts.push(draftsOf(actions, named, native, shell, aimed.target, toolInput));
         responseOfCall.push(response);
         callsPerResponse.set(response, (callsPerResponse.get(response) ?? 0) + 1);
+        const manifestFile = PATH_TOOLS.has(name) && filePath !== undefined ? manifestFileOf(filePath) : null;
+        const manifest = manifestFile === null ? undefined : manifestOfInput(manifestFile, name, toolInput, redact);
+        if (manifestFile !== null && name === 'Read' && id !== undefined) manifestReads.set(id, manifestFile);
         const pulls = shell?.pulls ?? pullsOfTool(name, redact);
+        const packages = packagesOf(pulls, seenPackages);
         const call: ToolObservation = {
           kind: 'tool',
           cv: CAPTURE_VERSION,
@@ -1685,6 +1741,8 @@ export const captureSession = (input: ExtractInput): Capture => {
           prompt: cur?.index ?? null,
           ...(shell === undefined ? {} : { segments: shell.segments }),
           ...(pulls.length === 0 ? {} : { pulls }),
+          ...(packages.length === 0 ? {} : { packages }),
+          ...(manifest === undefined ? {} : { manifest }),
         };
         tools.push(call);
         if (id !== undefined) callById.set(id, { call, at: lineSeconds, plan: shell?.commitPlan ?? [] });
@@ -1696,6 +1754,14 @@ export const captureSession = (input: ExtractInput): Capture => {
           const { call, at, plan } = answered;
           if (at !== undefined && lineSeconds !== undefined && o.noDuration !== true) call.durationMs = Math.round((lineSeconds - at) * 1000);
           call.status = failed ? 'error' : 'ok';
+          if (failed) {
+            call.errorCode = errorCodeOf(text);
+            // An edit that did not apply changed no dependency: what its input showed is not what the file holds.
+            delete call.manifest;
+          }
+          const read = manifestReads.get(str(block.tool_use_id) ?? '');
+          const seen = read === undefined || failed ? [] : manifestNames(read, text, redact);
+          if (read !== undefined && seen.length > 0) call.manifest = { file: read, seen, added: [], removed: [] };
           const commits = failed ? [] : commitsRead(plan, text);
           if (commits.length > 0) call.commits = commits;
         }
@@ -1775,6 +1841,18 @@ export const captureSession = (input: ExtractInput): Capture => {
       frameId,
     }));
   }
+  // The strata: the file's evidence once, and each prompt's own `explore` from one pass over the calls. The size is the one the frame holds, so a re-capture that carries `repoSize` keeps `repoFiles` too.
+  const packageNames = tools.flatMap((call) => [...(call.packages ?? []).map((pkg) => pkg.package), ...(call.manifest?.seen ?? []), ...(call.manifest?.added ?? [])]);
+  const fileStrata = strataOf({ paths: framePaths, packages: packageNames, size });
+  const exploreOfPrompt = new Map<number | null, number>();
+  let explore = 0;
+  for (const call of tools) {
+    const looked = exploreCount((call.steps ?? []).map((step) => step.action));
+    explore += looked;
+    exploreOfPrompt.set(call.prompt, (exploreOfPrompt.get(call.prompt) ?? 0) + looked);
+  }
+  session.strata = { ...fileStrata, explore };
+  for (const [position, prompt] of prompts.entries()) prompt.strata = { ...fileStrata, explore: exploreOfPrompt.get(position) ?? 0 };
   linkSteps(
     tools.map((call, position) => ({
       steps: call.steps ?? [],
