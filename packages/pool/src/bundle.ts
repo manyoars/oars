@@ -46,6 +46,9 @@ const spend = async (env: Env, account: string, week: string, cap: number): Prom
   return meta.changes === 1;
 };
 
+/** Drops the counts of an earlier week, through the `accounts_by_fetch_week` index, so it reads no row of an account that has a current count. Exported so a test can ask SQLite for its plan. */
+export const WEEK_RESET = 'UPDATE accounts SET fetch_week = NULL, fetches = 0 WHERE fetch_week < ?';
+
 export const fetchBundle = async (request: Request, env: Env, harnessVersion: string, vocabVersion: string): Promise<Response> => {
   const account = await accountOf(request, env);
   if (account === undefined) return refuse(401, 'unauthorized', 'Sign in with oars pool login first.');
@@ -67,7 +70,7 @@ export const fetchBundle = async (request: Request, env: Env, harnessVersion: st
   }
   try {
     // The count is dropped when its week ends, so what stays per account is only this week's. Earlier only (`<`, and `YYYY-Www` orders): a request that computed its week just before Monday must not wipe a count already spent in the new week.
-    await env.DB.prepare('UPDATE accounts SET fetch_week = NULL, fetches = 0 WHERE fetch_week < ?').bind(week).run();
+    await env.DB.prepare(WEEK_RESET).bind(week).run();
     return answer(200, await signed(bundleOf(harnessVersion, await storedOf(env, harnessVersion)), key), { etag });
   } catch (error) {
     // The spend came first so two fetches at once cannot both take the last, but a 304 spends nothing because it sends no bundle, and neither does a fetch that throws (spec:254-255).

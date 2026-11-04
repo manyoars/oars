@@ -1,9 +1,11 @@
 // Item 4 of the stored form (t813): the bundle is read from the stored `index` cells, never from the ledger plane. These tests delete or ignore the ledger and the contributor records and
 // look for any change in what is served, and count the rows a read touches.
+import { webcrypto } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { VOCAB_VERSION } from '../../cli/src/sessions/pool-wire.js';
+import { verifyBundle, VOCAB_VERSION } from '../../cli/src/sessions/pool-wire.js';
 import { sampleSkeleton } from './sample.js';
-import { storedOf } from './stored.js';
+import { EARLIEST_COUNTED } from './access.js';
+import { fetchBundle, WEEK_RESET } from './bundle.js';
 import type { PoolDb } from './http.js';
 import { fieldOf, startPool, stubUser, type TestPool } from './test-pool.js';
 
@@ -34,6 +36,11 @@ describe('the bundle reads the stored cells', () => {
       const token = await depositor(own, '7005');
       const before = await own.raw(PATH, token);
       expect(before.status).toBe(200);
+      // Served something, or an empty bundle before and after would pass this test for nothing.
+      const verified = await verifyBundle(before.json, own.signingKey(), '2.1.314');
+      if (!verified.ok) throw new Error(verified.reason);
+      expect(verified.bundle.cells.length).toBeGreaterThan(0);
+      expect(verified.bundle.reads.length).toBeGreaterThan(0);
 
       const db = await own.db();
       await db.prepare('DELETE FROM deposits').run();
@@ -49,11 +56,19 @@ describe('the bundle reads the stored cells', () => {
     }
   }, 60_000);
 
-  it('reads the same number of rows when the pool holds many more deposits', async () => {
+  it('a whole fetch reads the same number of rows when the pool holds many more deposits and accounts', async () => {
     const own = await startPool();
     try {
-      // The rows D1 says a read scanned, summed over the statements it makes (its returned rows when the runtime reports none).
-      const reads = async (): Promise<number> => {
+      const signing = await webcrypto.subtle.generateKey('Ed25519', true, ['sign', 'verify']);
+      if (!('privateKey' in signing)) throw new Error('no key pair');
+      const BUNDLE_SIGNING_KEY = JSON.stringify(await webcrypto.subtle.exportKey('jwk', signing.privateKey));
+      // The rows D1 says each statement of a fetch scanned, summed over `first`, `all`, and `run` (a statement's returned rows when the runtime reports none).
+      const rowsOf = (answered: unknown): number => {
+        const read = fieldOf(fieldOf(answered, 'meta'), 'rows_read');
+        const results = fieldOf(answered, 'results');
+        return typeof read === 'number' ? read : Array.isArray(results) ? results.length : 0;
+      };
+      const fetched = async (token: string): Promise<{ status: number; rows: number }> => {
         const db = await own.db();
         let rows = 0;
         const counted: PoolDb = {
@@ -61,31 +76,61 @@ describe('the bundle reads the stored cells', () => {
             bind: (...values) => {
               const bound = db.prepare(sql).bind(...values);
               return {
-                first: () => bound.first(),
+                first: async () => {
+                  const answered = await bound.all();
+                  rows += rowsOf(answered);
+                  return answered.results[0] ?? null;
+                },
                 all: async () => {
                   const answered = await bound.all();
-                  const read = fieldOf(fieldOf(answered, 'meta'), 'rows_read');
-                  rows += typeof read === 'number' ? read : answered.results.length;
+                  rows += rowsOf(answered);
                   return answered;
                 },
-                run: () => Promise.reject(new Error('a read writes nothing')),
+                run: async () => {
+                  const done = await bound.run();
+                  rows += rowsOf(done);
+                  const changes = fieldOf(fieldOf(done, 'meta'), 'changes');
+                  return { meta: { changes: typeof changes === 'number' ? changes : 0 } };
+                },
               };
             },
           }),
           batch: () => Promise.reject(new Error('a read writes nothing')),
         };
-        await storedOf({ DB: counted }, '2.1.314');
-        return rows;
+        const answered = await fetchBundle(new Request('https://pool.test/bundle', { headers: { authorization: `Bearer ${token}` } }), { DB: counted, BUNDLE_SIGNING_KEY, FETCH_CAP: '1000' }, '2.1.314', VOCAB_VERSION);
+        return { status: answered.status, rows };
       };
-      for (const id of ['7101', '7102', '7103', '7104', '7105']) await depositor(own, id);
-      const small = await reads();
-      expect(small).toBeGreaterThan(0);
-      // Ten more accounts and three more sessions each: the same cells, many more ledger rows and contributor records.
-      for (const id of ['7106', '7107', '7108', '7109', '7110', '7111', '7112', '7113', '7114', '7115']) await depositor(own, id, 3);
-      expect(await (await own.db()).prepare('SELECT COUNT(*) AS count FROM deposits').first('count')).toBeGreaterThan(30);
-      expect(await reads()).toBe(small);
+      for (const id of ['7101', '7102', '7103', '7104']) await depositor(own, id);
+      // One account with a ledger row (its access is read from it) and one with none (its cap is spent, and the week's reset runs).
+      const holder = await depositor(own, '7105');
+      const bare = (await own.signIn('github', stubUser('7106'))).token;
+      const small = { holder: await fetched(holder), bare: await fetched(bare) };
+      expect(small.holder.status).toBe(200);
+      expect(small.bare.status).toBe(200);
+      expect(small.holder.rows).toBeGreaterThan(0);
+      expect(small.bare.rows).toBeGreaterThan(0);
+      // The fetching account's own ledger grows, and so do the other accounts and their rows: the same cells, many more ledger rows, contributor records, and accounts.
+      for (let session = 1; session <= 6; session += 1) expect((await own.post('/v1/deposits', sampleSkeleton(`${String(session)}7105`.padStart(16, '0')), holder)).status).toBe(201);
+      for (const id of ['7107', '7108', '7109', '7110', '7111', '7112', '7113', '7114', '7115', '7116']) await depositor(own, id, 3);
+      for (const id of ['7117', '7118', '7119', '7120']) await own.signIn('github', stubUser(id));
+      expect(await (await own.db()).prepare('SELECT COUNT(*) AS count FROM deposits').first('count')).toBeGreaterThan(40);
+      // The week count of the bare account is spent already; a second fetch spends another, so compare a fresh bare account.
+      const fresh = (await own.signIn('github', stubUser('7121'))).token;
+      expect(await fetched(holder)).toEqual(small.holder);
+      expect(await fetched(fresh)).toEqual(small.bare);
     } finally {
       await own.dispose();
     }
   }, 120_000);
+
+  // An index bounds the rows a statement scans, which a count over the PoolDb cannot show: ask SQLite for the plan of the two statements a fetch runs that grow with the pool.
+  it('the statements of a fetch that could scan a table use their index', async () => {
+    const db = await pool.db();
+    const planOf = async (sql: string, ...values: (string | number)[]): Promise<string> => {
+      const { results } = await db.prepare(`EXPLAIN QUERY PLAN ${sql}`).bind(...values).all();
+      return results.map((row) => String(fieldOf(row, 'detail'))).join('; ');
+    };
+    expect(await planOf(EARLIEST_COUNTED, 'acct')).toContain('USING INDEX deposits_counted');
+    expect(await planOf(WEEK_RESET, '2026-W45')).toContain('USING INDEX accounts_by_fetch_week');
+  });
 });
