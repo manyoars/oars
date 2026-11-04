@@ -142,6 +142,8 @@ const registryAnswer = async (deps: GateHookDeps, crossing: Crossing, cwd: strin
   const stop = new AbortController();
   let answer: RegistryAnswer | undefined;
   if (budgetOf(deps) >= MIN_ASK_MS) {
+    // The first sight on a fresh store has no folder yet, and the deadline's synchronous write needs one: made here, before the ask, so a cut-off hook can still leave its row.
+    await mkdir(deps.storeDir, { recursive: true }).catch(() => undefined);
     hold(() => { stop.abort(); });
     const pending = deps.registry({ ...ask, signal: stop.signal });
     // Starting the manager is a blocking spawn that can take a good part of the budget, so the cut counts what is left now, not what was left before the call: read before it, the cut
