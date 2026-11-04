@@ -1,9 +1,10 @@
 // EXTRACTOR 11 (t811, pool vocabulary spec Section 2): raw `agentType`, `keys`, and `frameId` with the joined frame are class A, and the pooled shell form is
 // computed at deposit from what the account store holds. A store written at 10 is re-derived from its log alone.
-import { readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { captureSession } from './extract.js';
-import { PRIVATE_PROGRAM, projectStoredShell } from './projection.js';
+import { PRIVATE_PROGRAM, projectShell, projectStoredShell } from './projection.js';
 import { makeRedactor } from './redact.js';
 import { EXTRACTOR_VERSION, type ToolObservation } from './schema.js';
 import { deposit, derive, loadStore, paths, refresh } from './store.js';
@@ -17,7 +18,7 @@ const PLANTED = 'AcmeWidgetMerger';
 const vocab = readVocabulary();
 const line = (value: object): string => JSON.stringify(value);
 
-const COMMANDS = [`git commit --amend --message=${PLANTED}`, 'ls -a -l', `grep ${PLANTED}`, 'acme-deploy --prod', 'git push --force', `git ${PLANTED} --acme-flag`];
+const COMMANDS = [`git commit --amend --message=${PLANTED}`, 'ls -a -l', `grep ${PLANTED}`, 'acme-deploy --prod', 'git push --force', `git ${PLANTED} --acme-flag`, 'git -C repo status'];
 
 const shellSession = (): string =>
   [
@@ -60,8 +61,12 @@ describe('EXTRACTOR_VERSION 11', () => {
     const staged = stage();
     addProject(staged, 'proj', 'shell', shellSession().split('\n'));
     await deposit(staged.runtime, { allow: ['proj'], redactDomains: [], now: () => NOW });
-    const files = Object.values(paths(staged.storeDir)).filter((path) => /pool|outbox/.test(path));
-    expect(files).toEqual([]);
+    // The store on disk, not the table of paths the code knows: a deposit writes no file or folder named for a pool, an outbox, or a staged batch.
+    // (`pool-replica/` is the signed slice `oars pool pull` keeps; a deposit never writes it.)
+    const walk = (dir: string): string[] => readdirSync(dir, { withFileTypes: true }).flatMap((entry) => [join(dir, entry.name), ...(entry.isDirectory() ? walk(join(dir, entry.name)) : [])]);
+    const written = walk(staged.storeDir);
+    expect(written.length).toBeGreaterThan(0);
+    expect(written.filter((path) => /pool|outbox|staged/i.test(path.slice(staged.storeDir.length)))).toEqual([]);
   });
 });
 
@@ -75,15 +80,25 @@ describe('the shell form projected from the account store (Q5)', () => {
       PRIVATE_PROGRAM,
       { program: 'git', subcommand: 'push', flags: ['--force'] },
       { program: 'git', subcommand: null, flags: [] },
+      { program: 'git', subcommand: null, flags: ['-C'] },
     ]);
   });
 
-  it('loses the flags of a record captured before CAPTURE 9 and states the loss by count: 3 of 6 fixture calls lose their flags', () => {
+  it('loses the subcommand of a call whose first plain word is not the subcommand and states the loss by count: 1 of 7 fixture calls', () => {
+    // `shellTarget` stores the first plain token after the program, so `git -C repo status` is stored as `git repo`.
+    const stored = captured().map((tool) => projectStoredShell(vocab, tool));
+    const fromRaw = COMMANDS.map((command) => projectShell(vocab, command, makeRedactor()).commands[0]);
+    const lost = fromRaw.filter((read, i) => read?.subcommand !== null && stored[i]?.subcommand === null);
+    expect(lost).toEqual([{ program: 'git', subcommand: 'status', flags: ['-C'] }]);
+    expect(stored[COMMANDS.length - 1]).toEqual({ program: 'git', subcommand: null, flags: ['-C'] });
+  });
+
+  it('loses the flags of a record captured before CAPTURE 9 and states the loss by count: 4 of 7 fixture calls lose their flags', () => {
     const tools = captured();
     const withSteps = tools.map((tool) => projectStoredShell(vocab, tool).flags.length > 0);
     // The same calls as a CAPTURE 8 store holds them: the A copy of `target` and no `steps`.
     const before9 = tools.map((tool) => projectStoredShell(vocab, { tool: tool.tool, target: tool.target }));
-    expect(withSteps.filter(Boolean)).toHaveLength(3);
+    expect(withSteps.filter(Boolean)).toHaveLength(4);
     expect(before9.filter((projected) => projected.flags.length > 0)).toHaveLength(0);
     expect(JSON.stringify(before9)).not.toContain(PLANTED);
   });
