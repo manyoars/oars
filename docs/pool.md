@@ -43,7 +43,7 @@ All of these are set at the deploy, never in `wrangler.jsonc`, which holds no ac
 |---------|-------|
 | `DB` | The D1 database. |
 | `PSEUDONYM_KEY` | The key accounts are hashed under. Changing it makes every account new. |
-| `SLICE_SIGNING_KEY` | An Ed25519 private key as a JWK. Clients pin the public half, so changing it fails their next login. |
+| `BUNDLE_SIGNING_KEY` | An Ed25519 private key as a JWK. Clients pin the public half, so changing it fails their next login. |
 | `GITHUB_CLIENT_ID`, `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | The OAuth values. |
 | `COVENANT_VERSION` | The covenant in force. Leave it unset until the covenant is published. |
 | `FETCH_CAP` | Optional. Bundles one account may fetch per ISO week; a value that is not a positive whole number is 1. |
@@ -66,6 +66,6 @@ Nothing has been deployed or provisioned. Each step is owed once, by the account
 2. Create a Google OAuth client of type "TVs and Limited Input devices", and note its id and secret.
 3. Run `wrangler d1 create oars-pool` in `packages/pool`. The config binds it by name, so commit no `database_id`.
 4. Run `wrangler d1 migrations apply oars-pool --remote` in `packages/pool`.
-5. Run `wrangler secret put` for `PSEUDONYM_KEY` (32 random bytes), `SLICE_SIGNING_KEY`, `GITHUB_CLIENT_ID`, `GOOGLE_CLIENT_ID`, and `GOOGLE_CLIENT_SECRET`, and leave `COVENANT_VERSION` unset.
+5. Run `wrangler secret put` for `PSEUDONYM_KEY` (32 random bytes), `BUNDLE_SIGNING_KEY`, `GITHUB_CLIENT_ID`, `GOOGLE_CLIENT_ID`, and `GOOGLE_CLIENT_SECRET`, and leave `COVENANT_VERSION` unset.
 6. Run `wrangler deploy` in `packages/pool`, confirm it bound the database from step 3 rather than creating another, and attach the custom domain in the dashboard or with `--domain`. Only `--dry-run` has been exercised.
 7. Publish the covenant, and only then run `wrangler secret put COVENANT_VERSION`, which opens deposits.
