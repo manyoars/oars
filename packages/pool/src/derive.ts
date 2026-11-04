@@ -1,8 +1,8 @@
 // Cells and reads over deposits (recall spec Sections 2.5 and 2.6), with the same code a local store runs. Each account's skeletons become that account's store and its cells, and
 // the cells merge by key, so `clusters` counts accounts and nothing here can count one account twice. Recovery is left out: its signature is class A text, which a skeleton does not hold.
-import { cellIdOf, deriveCells, poolOf, type Cell, type CellSet, type Pool } from '../../cli/src/sessions/cells.js';
+import { bucketFields, cellIdOf, deriveCells, harnessBucket, poolOf, type Cell, type CellSet, type Pool } from '../../cli/src/sessions/cells.js';
 import type { Motif } from '../../cli/src/sessions/motif.js';
-import { type Slice, type SessionSkeleton, type SkeletonTranscript, SLICE_FORMAT } from '../../cli/src/sessions/pool-wire.js';
+import { BUNDLE_FORMAT, type Bundle, type SessionSkeleton, type SkeletonTranscript, type StrataCell, VOCAB_VERSION } from '../../cli/src/sessions/pool-wire.js';
 import { makeRead, orderResolver, type Read } from '../../cli/src/sessions/read.js';
 import { deriveAdoption } from '../../cli/src/sessions/read-adoption.js';
 import { deriveChange } from '../../cli/src/sessions/read-change.js';
@@ -177,20 +177,49 @@ const readsOf = (pool: Pool, accountsOf: MergedCells['accountsOf']): Read[] => {
   return DERIVERS.flatMap((derive) => derive({ pool, store: NO_STORE }).map((read) => makeRead({ ...read, asOf, clusters: clustersOf(read.inputs) }, orderOf)));
 };
 
-/** What one stack's slice holds. Every family reads the whole pool, so a share keeps its true denominator; only what clears the floor leaves. */
-export const sliceOf = (stack: string, byAccount: readonly (readonly SessionSkeleton[])[]): Slice => {
-  const set = mergeCells(byAccount.map((skeletons) => deriveCells(storeOf(skeletons))));
+/** Rule 3's strata cells the frame holds: which accounts and sessions name each value, over every harness version, so a bound field is never joined to one. */
+export const strataOf = (byAccount: readonly (readonly SessionSkeleton[])[]): StrataCell[] => {
+  const tallies = new Map<string, { dimension: StrataCell['dimension']; value: string; sessions: number; accounts: Set<number> }>();
+  const count = (dimension: StrataCell['dimension'], value: string, account: number): void => {
+    const key = `${dimension}/${value}`;
+    const held = tallies.get(key) ?? { dimension, value, sessions: 0, accounts: new Set<number>() };
+    held.sessions += 1;
+    held.accounts.add(account);
+    tallies.set(key, held);
+  };
+  byAccount.forEach((skeletons, account) => {
+    for (const { transcripts } of skeletons) {
+      const frames = transcripts.flatMap(({ frame, prompts }) => [frame, ...prompts.map((prompt) => prompt.frame)]);
+      for (const value of new Set(frames.flatMap(({ stack }) => stack.languages))) count('language', value, account);
+      for (const value of new Set(frames.flatMap(({ stack }) => stack.frameworks))) count('framework', value, account);
+      for (const value of new Set(frames.flatMap(({ stack }) => (stack.size === null ? [] : [stack.size])))) count('repoFiles', value, account);
+    }
+  });
+  return [...tallies.values()]
+    .map(({ dimension, value, sessions, accounts }) => ({ dimension, value, sessions, clusters: accounts.size }))
+    .filter((cell) => cell.clusters >= SERVED_FLOOR)
+    .sort((a, b) => compare(a.dimension, b.dimension) || compare(a.value, b.value));
+};
+
+/** What one harness version's bundle holds: the cells of its bucket, the only version a landed cell keys on. A share's denominator is the bundle's; only what clears the floor leaves. */
+export const bundleOf = (harnessVersion: string, byAccount: readonly (readonly SessionSkeleton[])[]): Bundle => {
+  const merged = mergeCells(byAccount.map((skeletons) => deriveCells(storeOf(skeletons))));
+  const bucket = harnessBucket(harnessVersion);
+  const inBundle = merged.cells.filter((cell) => bucketFields(cell.frameBucket).harnessBucket === bucket);
+  const set = { cells: inBundle, motifs: merged.motifs.filter((motif) => inBundle.some((cell) => cell.motifId === motif.motifId)) };
   // No error rows: a skeleton holds none, and recovery, the one family that reads them, is left out here.
   const pool = poolOf(set, []);
-  const cells = set.cells.filter((cell) => cell.clusters >= SERVED_FLOOR);
+  const cells = inBundle.filter((cell) => cell.clusters >= SERVED_FLOOR);
   const held = new Set(cells.map((cell) => cell.motifId));
   return {
-    format: SLICE_FORMAT,
-    stack,
+    format: BUNDLE_FORMAT,
+    harnessVersion,
+    vocabVersion: VOCAB_VERSION,
     capped: null,
     asOf: { pool: pool.version, day: pool.lastDay },
     cells,
     motifs: set.motifs.filter((motif) => held.has(motif.motifId)),
-    reads: readsOf(pool, set.accountsOf).filter((read) => read.clusters >= SERVED_FLOOR),
+    reads: readsOf(pool, merged.accountsOf).filter((read) => read.clusters >= SERVED_FLOOR),
+    strata: strataOf(byAccount),
   };
 };
