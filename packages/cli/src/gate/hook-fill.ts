@@ -2,9 +2,10 @@
 // name reads it inside the budget. The helper calls the installed manager as the hook does (`managerReader`), contacts nothing the manager would not, and a failed or
 // unreachable ask writes nothing. One ask per name at a time: a lock file in the store, dated by its mtime, is taken before the helper starts.
 import { createHash } from 'node:crypto';
-import { writeFileSync } from 'node:fs';
+import { rmSync, writeFileSync } from 'node:fs';
 import { appendFile, mkdir, rm, stat } from 'node:fs/promises';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import type { CrossingClass } from './checks.js';
 import { GATE_VERSION, folderKey, type RegistryRow } from './record.js';
 import { askable, type RegistryReader } from './registry.js';
@@ -56,8 +57,33 @@ export const isLocked = async (storeDir: string, ask: Pick<FillAsk, 'class' | 'n
   return held !== undefined && now - held < FILL_LOCK_MS;
 };
 
-/** Takes the lock back: a helper that never started will never release it, and the name would go unasked until `FILL_LOCK_MS` passed. */
-export const releaseLock = (storeDir: string, ask: Pick<FillAsk, 'class' | 'name'>): Promise<void> => rm(lockPath(storeDir, ask), { force: true });
+/**
+ * Takes the lock back: a helper that never started will never release it, and the name would go unasked until `FILL_LOCK_MS` passed. Synchronous, like `create`, so a deadline's
+ * `exit(0)` cannot end the process between the failed start and the removal.
+ */
+export const releaseLock = (storeDir: string, ask: Pick<FillAsk, 'class' | 'name'>): void => {
+  try {
+    rmSync(lockPath(storeDir, ask), { force: true });
+  } catch {
+    // Fail-open: a lock that stays is only a name left unasked until it ages out.
+  }
+};
+
+/** The part of `child_process.spawn` the helper start uses, so a test can hand in a child that fails to start. */
+export type HelperSpawn = (
+  command: string,
+  args: string[],
+  options: { detached: true; stdio: 'ignore'; windowsHide: true },
+) => { on: (event: 'error', listener: () => void) => unknown; unref: () => void };
+
+/** The helper outlives the hook: detached, no stdio, never waited on, so the harness's call does not wait for it either. One that cannot start never releases its lock, so the lock goes on its `error`. */
+export const startHelper = (spawn: HelperSpawn, storeDir: string, ask: FillAsk): void => {
+  const child = spawn(process.execPath, [fileURLToPath(new URL('./hook-fill-main.js', import.meta.url)), storeDir, ask.class, ask.name, ask.cwd], { detached: true, stdio: 'ignore', windowsHide: true });
+  child.on('error', () => {
+    releaseLock(storeDir, ask);
+  });
+  child.unref();
+};
 
 /**
  * Called by the hook after a cut ask: takes the lock and starts the helper. Nothing here throws into the hook: a store that cannot be written, or a helper that cannot
@@ -70,7 +96,7 @@ export const startFill = async (storeDir: string, ask: FillAsk, now: number, sta
     try {
       start(storeDir, ask);
     } catch {
-      await releaseLock(storeDir, ask);
+      releaseLock(storeDir, ask);
     }
   } catch {
     // Fail-open.

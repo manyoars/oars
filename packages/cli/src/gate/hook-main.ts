@@ -4,10 +4,9 @@ import { spawn } from 'node:child_process';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { performance } from 'node:perf_hooks';
-import { fileURLToPath } from 'node:url';
 import { defaultConfigDir } from '../credentials.js';
 import { DEADLINE_MS, type GateHookDeps } from './hook.js';
-import { isLocked, releaseLock, startFill, type FillAsk } from './hook-fill.js';
+import { isLocked, startFill, startHelper } from './hook-fill.js';
 import { runHookProcess } from './hook-process.js';
 import { managerReader } from './registry.js';
 
@@ -21,16 +20,6 @@ const readStdin = async (): Promise<string> => {
   return text;
 };
 
-/** The helper outlives this process: detached, no stdio, never waited on, so the harness's call does not wait for it either. */
-const startHelper = (storeDir: string, ask: FillAsk): void => {
-  const child = spawn(process.execPath, [fileURLToPath(new URL('./hook-fill-main.js', import.meta.url)), storeDir, ask.class, ask.name, ask.cwd], { detached: true, stdio: 'ignore', windowsHide: true });
-  // A helper that cannot start never releases its lock: take it back, so the next sight asks again.
-  child.on('error', () => {
-    void releaseLock(storeDir, ask).catch(() => undefined);
-  });
-  child.unref();
-};
-
 const depsFor = (stage: NonNullable<GateHookDeps['stage']>): GateHookDeps => {
   const storeDir = join(defaultConfigDir(process.env, process.platform, homedir()), 'oars', 'sessions');
   return {
@@ -40,7 +29,7 @@ const depsFor = (stage: NonNullable<GateHookDeps['stage']>): GateHookDeps => {
     clock: () => performance.now(),
     deadlineMs: DEADLINE_MS,
     registry: managerReader(undefined, DEADLINE_MS),
-    fill: (ask) => startFill(storeDir, ask, Date.now(), startHelper),
+    fill: (ask) => startFill(storeDir, ask, Date.now(), (dir, one) => { startHelper(spawn, dir, one); }),
     locked: (ask) => isLocked(storeDir, ask, Date.now()),
     stage,
   };
