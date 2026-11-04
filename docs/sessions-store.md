@@ -1,4 +1,4 @@
-# The `oars sessions` store (version 10)
+# The `oars sessions` store (version 11)
 
 `oars sessions` keeps a local, deterministic memory of the operator's own Claude Code sessions: no model call, no network, nothing
 uploads. `gold arms` is the one exception: it sends redacted text through your own Claude subscription. This page is the store's format. The types are in `packages/cli/src/sessions/schema.ts`; the commands are in the CLI README.
@@ -83,7 +83,7 @@ moves to match, so `next` and `editFollowed` read the same calls as a current ca
 adds `frame` and `frameId` to the session and prompt records and `steps` to the tool record (see "Frames and steps"), and moves `tool`, `tools`, and a shell-form
 `target` from class P to class A; a version-8 store's next deposit captures every transcript again from the harness or `raw/`. Version 10 (CAPTURE 10, t768) gives a turn opened by a slash command or a
 skill a `user-prompt` record (see "What opens a prompt"), adds `opened` to that record, and moves `skills` from class P to class A, since a skill's name can be private. Prompt
-`index` values move in a session that had such a turn, so a version-9 store's next deposit captures every transcript again from the harness or `raw/`. Version 11 (CAPTURE 11) redacts the server part of an MCP tool name in `tool`, the session's `tools`, an error line's `tool`, and the skeleton's tool names; reads package-manager and shell forms more exactly, so `pulls`, `segments`, and `commits` change; and opens no prompt from a hand-typed line that merely starts with an injected tag's name without closing it (it reads as typed). A version-10 store's next deposit captures every transcript again from the harness or `raw/`. What an open does with an older store:
+`index` values move in a session that had such a turn, so a version-9 store's next deposit captures every transcript again from the harness or `raw/`. Version 11 (CAPTURE 11) redacts the server part of an MCP tool name in `tool`, the session's `tools`, an error line's `tool`, and the skeleton's tool names; reads package-manager and shell forms more exactly, so `pulls`, `segments`, `commits`, and each tool's `steps` change; and opens a `typed` prompt from a hand-typed line that merely starts with an injected tag's name without closing it, where it opened none before. A version-10 store's next deposit captures every transcript again from the harness or `raw/`. EXTRACTOR 10 reads more command forms as a run or a verify; derived records regenerate and no transcript is read. What an open does with an older store:
 
 | Log holds | Action on open | Action at the next deposit |
 |-----------|----------------|----------------------------|
@@ -143,9 +143,9 @@ A prompt is a main-line, non-meta user line with text and no tool result, read b
 | The line | Prompt | `opened` | `head` |
 |----------|--------|----------|--------|
 | The operator's text, a leading `<` included | yes | `typed` | the line |
-| A `command-name` or `command-message` wrapper, when a model's turn comes next | yes | `command` | the command and its arguments with the wrapper tags removed, redacted and cut like any prompt |
+| A `command-name` or `command-message` wrapper, when a model's turn comes next and the text also holds the closing tag; an unclosed one reads as `typed` | yes | `command` | the command and its arguments with the wrapper tags removed, redacted and cut like any prompt |
 | The same wrapper with no model's turn next (`/clear`, a local command with output, a synthetic line alone) | no | | |
-| A line the harness injected: `local-command-caveat`, `local-command-stdout`, `local-command-stderr`, `system-reminder`, `task-notification`, `teammate-message`, `scheduled-task`, `bash-input`, `bash-stdout`, `bash-stderr` | no | | |
+| A line the harness injected: `local-command-caveat`, `local-command-stdout`, `local-command-stderr`, `system-reminder`, `task-notification`, `teammate-message`, `scheduled-task`, `bash-input`, `bash-stdout`, `bash-stderr`, when the text also holds the closing tag; an unclosed one reads as `typed` | no | | |
 
 A slash command and a skill write the same wrapper, so one value covers both; a skill's body is a meta line and stays out of `head`. The wrong-way risk is known: a tag the harness adds later reads as `typed` until it joins this list, and its row shows it in `head`. The interrupt marker reads as `typed`. A line that opens no prompt belongs to the prompt before it, or to none at the start of a session. The Cursor source keeps its old rule, no leading `<`, for now.
 
