@@ -89,7 +89,7 @@ export const projectShell = (vocab: Vocabulary, command: string, redact: Redacto
   return projectedShell(read.length === 0 ? [PRIVATE_PROGRAM] : read.map(({ program, args }) => projectProgram(vocab, program, args)));
 };
 
-/** `shellTarget` cuts a subcommand at this many characters (extract.ts), so a stored subcommand this long may be a prefix of a longer private word. */
+/** `shellTarget` cuts a subcommand at this many characters, and so does a `run` word (`RUN_WORD_CHARS`, extract.ts), so a stored word this long may be a prefix of a longer private one. */
 const STORED_SUBCOMMAND_CUT = 30;
 
 /** The first command of a stored call as its class A `target` reads: the program and the first plain word after it. A target cut at the subcommand limit, masked by redaction, or not a program and one word projects `private`. */
