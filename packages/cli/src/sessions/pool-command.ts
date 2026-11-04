@@ -392,7 +392,8 @@ const sendBatch = async (deps: RunDeps, options: { outbox: string; server: strin
 
 /**
  * `oars pool deposit`: every session in the store that passes both session gates is built into a canonical batch in the outbox, and the command stops: nothing is sent. The gates run before any projection does: the folder
- * allowlist, then the V15 check. A session that fails either, or has no raw to scan, is counted and never built. `--send <hash>` is the lock in `sendBatch`.
+ * allowlist, then the V15 check. A session that fails either, or has no raw to scan, is counted and never built. A session is built only once it has ended: no transcript of it, main or subagent, has gained a line (the later of its capture
+ * and its raw file's last write) for `session_idle_hours` (6 hours). One that has not is counted under `notEnded`, and any batch of it from an earlier pass is withdrawn. `--send <hash>` is the lock in `sendBatch`.
  */
 export const poolDeposit = async (deps: RunDeps, options: { server?: string | undefined; acceptCovenant?: string | undefined; send?: string | undefined; via?: Sender | undefined }): Promise<Outcome> => {
   const runtime = runtimeOf(deps);
@@ -445,7 +446,7 @@ export const poolDeposit = async (deps: RunDeps, options: { server?: string | un
     built.add(key);
     counts.batched += 1;
   }
-  // A session that fails a gate never enters the outbox, so a batch of it from an earlier pass goes too, and so does a batch of a session or account this store no longer holds.
+  // A session that fails a gate, or has not ended, never enters the outbox, so a batch of it from an earlier pass goes too, and so does a batch of a session or account this store no longer holds.
   counts.withdrawn = await removeBatchesExcept(outbox, built);
   counts.refusedFields = [...refusedFields].sort();
   const { folder, term, noRaw, noTerms, unreadable } = counts.excluded;
@@ -453,7 +454,7 @@ export const poolDeposit = async (deps: RunDeps, options: { server?: string | un
     `Wrote ${String(counts.batched)} of ${String(counts.sessions)} sessions to the outbox for ${server}. Nothing was sent.`,
     `Kept out by the session gates, never built: ${String(folder)} in a folder not on the allowlist, ${String(term)} for a term, ${String(noRaw)} with no raw to scan, ${String(noTerms)} with no term file, ${String(unreadable)} unreadable.`,
     `Not built: ${String(counts.uncaptured)} captured before steps and frames or with no root, ${String(counts.notEnded)} not ended (a transcript gained a line within ${String(SESSION_IDLE_HOURS)} hours), ${String(counts.refused)} refused by the vocabulary${counts.refusedFields.length === 0 ? '' : ` (${counts.refusedFields.join(', ')})`}.`,
-    ...(counts.withdrawn === 0 ? [] : [`Removed ${String(counts.withdrawn)} ${counts.withdrawn === 1 ? 'batch' : 'batches'} of sessions that no longer pass the gates or are no longer in the store.`]),
+    ...(counts.withdrawn === 0 ? [] : [`Removed ${String(counts.withdrawn)} ${counts.withdrawn === 1 ? 'batch' : 'batches'} of sessions that no longer pass the gates, have not ended, or are no longer in the store.`]),
     ...(discarded === 0 ? [] : [`Discarded ${String(discarded)} ${discarded === 1 ? 'batch' : 'batches'} built under an older vocabulary or field list.`]),
     'Run oars pool outbox to print exactly what would be sent.',
   ];
