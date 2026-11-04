@@ -11,7 +11,7 @@ installs or imports to do that:
 | `openapi/public.json` | The slice of the platform API that Many Oars exposes to the CLI, the templates, and coding agents (including the API key operations), generated from the platform's OpenAPI by `scripts/openapi-public.mjs` and the operation list in `openapi/public-operations.json` | here |
 | `templates/paid-api` | Starter template: an HTTP API that charges per call | here |
 | `templates/per-task-agent` | Starter template: a job that charges per finished task | here |
-| `packages/cli` | `@manyoars/oars`, the `oars` command: `login`, `templates`, `deploy`, `status`, `test-charge`, `keys` (`create`, `list`, `revoke`), and `sessions` (a local memory of your own Claude Code sessions) | published on npm as [`@manyoars/oars`](https://www.npmjs.com/package/@manyoars/oars) |
+| `packages/cli` | `@manyoars/oars`, the `oars` command: `login`, `templates`, `deploy`, `status`, `test-charge`, `keys` (`create`, `list`, `revoke`), `sessions` (a local memory of your own Claude Code sessions), `gate` (a record of the install, MCP, and skill picks your agents make), and `pool` (outbox and fetch commands for a pool server you name) | published on npm as [`@manyoars/oars`](https://www.npmjs.com/package/@manyoars/oars) |
 
 ## Let your coding agent do it
 

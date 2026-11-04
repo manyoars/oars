@@ -83,7 +83,7 @@ The SDK key is shown once, so save it when `deploy` prints it.
 
 `oars sessions` keeps a local, deterministic memory of your own Claude Code sessions. oars makes no model call and no network call, except `gold arms`, which sends redacted text through your own Claude subscription.
 
-What it captures: the Claude Code sessions in the folders you name with `--allow`, and Cursor sessions if you pass `--allow cursor`. Where it stores them: `<config>/oars/sessions/` on your machine (`<config>` is `%APPDATA%` on Windows, `$XDG_CONFIG_HOME` or `~/.config` elsewhere). The `raw/` folder in it is on by default and holds raw transcripts (a hard link or copy of each deposited one). Secret masking applies to the log, not to `raw/`: those files are unredacted and keep whatever the transcript held, secrets included. They stay on your machine and, apart from `gold arms`, nothing is uploaded. To remove them, see [Remove everything](#remove-everything).
+What it captures: the Claude Code sessions in the folders you name with `--allow`, and, by name, the sessions of Cursor, Codex, Copilot CLI, Gemini CLI, Grok Build, and VS Code Copilot Chat (`--allow cursor`, `codex`, `copilot`, `gemini`, `grok`, `vscode-copilot`). Where it stores them: `<config>/oars/sessions/` on your machine (`<config>` is `%APPDATA%` on Windows, `$XDG_CONFIG_HOME` or `~/.config` elsewhere). The `raw/` folder in it is on by default and holds raw transcripts (a hard link or copy of each deposited one). Secret masking applies to the log, not to `raw/`: those files are unredacted and keep whatever the transcript held, secrets included. They stay on your machine and, apart from `gold arms`, nothing is uploaded. To remove them, see [Remove everything](#remove-everything).
 
 Apart from that, oars itself sends nothing; the hooks and the MCP tool add recall text to the running session, and your harness sends that to its model like any other context.
 
@@ -188,6 +188,15 @@ oars gate policy                       # print the policy in force (warn, block,
 ```
 
 Replay is local and read-only on your transcripts; it writes `crossings.jsonl` and the novelty index `gate-index.txt` into the sessions store and nothing else (with `--registry-state`, npm and pip also keep their own caches). The hook (`oars gate hook`, run by Claude Code, not by you) appends to `crossings.jsonl` as each crossing happens, plus `gate-index.txt`, `gate-registry.jsonl`, and the empty `gate-ask-*.lock` files in the same store (a registry ask the hook had to cut is finished by a helper process that ends on its own timeouts, and the package manager keeps its own cache outside the store), and always exits 0. With no policy file it adds a note about a name first published in the last 30 days or an npm name the registry does not hold; `gate-policy.json` changes that per class, and a block needs `block` written by you. A block is a labeled deny, and a crossing goes nowhere unless you opt in (no opt-in exists yet). `report` reads only `crossings.jsonl`. Both record picks and neither judges them; a note or label states a fact about the registry and nothing else. See `docs/gate.md` in the repository.
+
+### pool
+
+`oars pool` talks to a pool server that you name with `--server <url>` or `OARS_POOL_URL`; there is no default server. Every other command works without it.
+
+- `oars pool login --provider github|google` signs in by the provider's device flow, run here, and prints every request before it sends it. `OARS_GITHUB_CLIENT_ID` (or `OARS_GOOGLE_CLIENT_ID` and `OARS_GOOGLE_CLIENT_SECRET`) must be set; an unset one stops the command before anything is sent and names the variable.
+- `oars pool deposit` writes a batch of closed-vocabulary session skeletons to an outbox for each session that passes your folder allowlist and the exclusion check, and stops. Nothing is sent: `--send <hash>` stops with `sending_disabled` in this release.
+- `oars pool outbox` prints each batch exactly as it would be sent, with its SHA-256, and `--explain` adds each field's rule.
+- `oars pool fetch --harness-version <version>` fetches that version's signed bundle, verifies it against the key pinned at login, and keeps it locally.
 
 ## The `--json` contract
 
