@@ -391,7 +391,17 @@ export const rolloutLines = (text: string, fallbackId: string, parentText?: stri
       }
     } else if (type === 'response_item') {
       const kind = str(payload.type);
-      if (kind === 'function_call' || kind === 'local_shell_call' || kind === 'custom_tool_call') {
+      if (kind === 'web_search_call') {
+        // A search is its own response item (protocol/src/models.rs:1270; persisted, rollout/src/policy.rs:94), with no call_id and no output item: the item
+        // is the finished call (`response.output_item.done`, models.rs:1262-1269), so it carries no failure signal and is recorded ok, as another non-shell call is.
+        // Only a `search` action has a query (`query`, else the first of `queries`; models.rs:2125-2132); `open_page` and `find_in_page` carry a url (:2134-2145).
+        const action = isObj(payload.action) ? payload.action : {};
+        const first = Array.isArray(action.queries) ? str(action.queries[0]) : undefined;
+        const query = action.type === 'search' ? (str(action.query) ?? first) : undefined;
+        const id = str(payload.id) ?? `${fallbackId}-ws${String(sequence + 1)}`;
+        assistant([{ type: 'tool_use', id, name: 'WebSearch', native: 'web_search', input: query === undefined ? {} : { query } }], when);
+        result(id, undefined, when);
+      } else if (kind === 'function_call' || kind === 'local_shell_call' || kind === 'custom_tool_call') {
         const id = str(payload.call_id) ?? str(payload.id);
         const bare = str(payload.name) ?? 'shell';
         // A namespaced function (models.rs:1154) is not its bare name: only a plain one is Codex's own shell or patch tool. The router makes every
@@ -412,13 +422,14 @@ export const rolloutLines = (text: string, fallbackId: string, parentText?: stri
           const command = commandOf(kind === 'local_shell_call' ? action : input);
           const polled = name === 'write_stdin' ? (str(input.session_id) ?? (num(input.session_id) === undefined ? undefined : String(num(input.session_id)))) : undefined;
           calls.set(id, { kind: 'shell', ids: [id], ...(polled === undefined ? {} : { session: polled }) });
-          assistant([{ type: 'tool_use', id, name: 'Bash', input: command === undefined ? {} : { command } }], when);
+          // `native` keeps Codex's own name for the action table (the contract at extract.ts, as cursor.ts does); a `local_shell_call` has no name field.
+          assistant([{ type: 'tool_use', id, name: 'Bash', native: kind === 'local_shell_call' ? 'local_shell' : name, input: command === undefined ? {} : { command } }], when);
         } else if (namespace === undefined && PATCH_CALLS.has(name)) {
           const files = patchFiles(str(input.input) ?? str(input.patch) ?? '');
           const ids = (files.length === 0 ? [''] : files).map((_, index) => `${id}#${String(index)}`);
           calls.set(id, { kind: 'patch', ids });
           assistant(
-            ids.map((part, index) => ({ type: 'tool_use', id: part, name: 'Edit', input: files[index] === undefined ? {} : { file_path: files[index] } })),
+            ids.map((part, index) => ({ type: 'tool_use', id: part, name: 'Edit', native: name, input: files[index] === undefined ? {} : { file_path: files[index] } })),
             when,
           );
         } else {
