@@ -340,7 +340,7 @@ export const sessionsGoldSample = async (deps: SessionsDeps, options: { size: nu
   const lines = [
     `Wrote ${plural(document.entries.length, 'prompt')}, drawn from ${String(document.frame)}, to ${file}.`,
     `Excluded ${plural(document.excludedSessions, 'session')} the draw reached under the V15 rule (a listed term, no raw to scan, or unreadable).`,
-    `Passed over ${plural(unreadable, 'prompt')} whose transcript is gone or no longer matches the store.`,
+    `Passed over ${plural(unreadable, 'prompt')} whose transcript no longer matches the store.`,
     `${plural(subagents, 'sampled prompt')} ran subagents, whose work is not read.`,
     `Score it after any batch: oars sessions gold score ${file}`,
   ];
