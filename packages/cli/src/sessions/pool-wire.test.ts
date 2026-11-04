@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { frame, prompt, session, step, storedNames, store, tool } from './pool-fixture.js';
 import { parseSkeleton, sessionsOf, skeletonOf, type SessionSkeleton } from './pool-wire.js';
 import type { Harness } from './schema.js';
-import { LITERAL } from './public-vocabulary.js';
+import { LITERAL, PRIVATE } from './public-vocabulary.js';
 
 // Real capture writes the shell as `shellOf` names it; the shared fixture's frame predates that spelling.
 const framed = frame({ shell: 'bash' });
@@ -53,7 +53,7 @@ const refusedField = (value: unknown): string => {
 };
 
 const firstStep = ['transcripts', 0, 'tools', 0, 'steps', 0];
-const withStep = (over: object): unknown => sent(firstStep, JSON.parse(JSON.stringify({ ...shell, n: undefined, frameId: undefined, ...over })));
+const withStep = (over: object): unknown => sent(firstStep, JSON.parse(JSON.stringify({ ...shell, n: undefined, frameId: undefined, cost: undefined, tokens: null, ms: null, ...over })));
 const stepField = 'transcripts[0].tools[0].steps[0]';
 
 describe('skeletonOf', () => {
@@ -144,8 +144,34 @@ describe('parseSkeleton refuses, and names the field', () => {
     expect(refusedField(sent(path, value))).toBe(field);
   });
 
-  it('takes a fraction of a second as wall time', () => {
-    expect(refusedField(sent(['transcripts', 0, 'prompts', 0, 'wallSec'], 1.5))).toBe('accepted');
+  it('takes a bucket of wall time, and refuses an exact one: a fraction is no bucket', () => {
+    expect(refusedField(sent(['transcripts', 0, 'prompts', 0, 'wallSec'], 6))).toBe('accepted');
+    expect(refusedField(sent(['transcripts', 0, 'prompts', 0, 'wallSec'], null))).toBe('accepted');
+    expect(refusedField(sent(['transcripts', 0, 'prompts', 0, 'wallSec'], 1.5))).toBe('transcripts[0].prompts[0].wallSec');
+  });
+
+  it('holds every bucketed field to its own edges', () => {
+    const prompt = ['transcripts', 0, 'prompts', 0];
+    expect(refusedField(sent([...prompt, 'usage', 'input'], 11))).toBe('accepted');
+    expect(refusedField(sent([...prompt, 'usage', 'input'], 12))).toBe('transcripts[0].prompts[0].usage.input');
+    expect(refusedField(sent([...prompt, 'usage', 'thinking'], 8))).toBe('transcripts[0].prompts[0].usage.thinking');
+    expect(refusedField(sent([...prompt, 'errors'], -1))).toBe('transcripts[0].prompts[0].errors');
+    expect(refusedField(sent([...prompt, 'wallSec'], 18))).toBe('transcripts[0].prompts[0].wallSec');
+    expect(refusedField(sent([...firstStep, 'tokens'], 12))).toBe(`${stepField}.tokens`);
+    expect(refusedField(sent([...firstStep, 'ms'], 18))).toBe(`${stepField}.ms`);
+    expect(refusedField(sent([...firstStep, 'ms'], 17))).toBe('accepted');
+  });
+
+  it('refuses an exact count where the form holds a bucket: the old step cost and a stray exact field', () => {
+    expect(refusedField(withStep({ cost: { tokens: 1500, durationMs: 40 } }))).toBe(`${stepField}.cost`);
+    expect(refusedField(sent(['transcripts', 0, 'prompts', 0, 'usage', 'total'], 1500))).toBe('transcripts[0].prompts[0].usage.total');
+  });
+
+  it('refuses the frame form (format 1) by name, and a deposit that carries deltas', () => {
+    const old = parseSkeleton({ ...(JSON.parse(JSON.stringify(sample())) as object), format: 1 });
+    expect(old).toMatchObject({ ok: false, field: 'format', reason: expect.stringContaining('format 1') });
+    expect(refusedField(sent(['deltas'], [{}]))).toBe('deltas');
+    expect(refusedField(sent(['deltas'], undefined))).toBe('deltas');
   });
 
   it('refuses a skeleton holding no prompt and no tool, which would otherwise count as a deposit', () => {
@@ -162,8 +188,16 @@ describe('parseSkeleton refuses, and names the field', () => {
     expect(refusedField([])).toBe('skeleton');
   });
 
-  it('keeps the literal, which is the vocabulary saying it does not know a name', () => {
-    expect(refusedField(withStep({ native: LITERAL, identity: { program: LITERAL, sub: null, flags: [] } }))).toBe('accepted');
+  it('keeps the literal for a native name, which is the vocabulary saying it does not know one', () => {
+    expect(refusedField(withStep({ native: LITERAL }))).toBe('accepted');
+  });
+
+  it('reads a shell program as a list member or private, never the literal, and a private program holds no subcommand', () => {
+    expect(refusedField(withStep({ identity: { program: PRIVATE, sub: null, flags: [] } }))).toBe('accepted');
+    expect(refusedField(withStep({ identity: { program: LITERAL, sub: null, flags: [] } }))).toBe(`${stepField}.identity.program`);
+    expect(refusedField(withStep({ identity: { program: PRIVATE, sub: 'push', flags: [] } }))).toBe(`${stepField}.identity.sub`);
+    expect(refusedField(withStep({ identity: { program: 'git', sub: 'push', flags: ['-f', '--force'] } }))).toBe('accepted');
+    expect(refusedField(withStep({ identity: { program: 'git', sub: 'push', flags: ['-force'] } }))).toBe(`${stepField}.identity.flags[0]`);
   });
 
   it('holds MCP, skill, and web identities to their own lists', () => {
