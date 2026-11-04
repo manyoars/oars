@@ -1174,12 +1174,17 @@ export const commitsRead = (plan: readonly PlannedCommit[], result: string): Arr
 /** The longest MCP name tail masked slice by slice. A tool name is capped near 64 characters and a server name near that, so a longer tail is not a name. */
 const MCP_TAIL_MAX = 192;
 
+/** The pattern rules of the redactor whose class allows `_`, so a token holding `__` is still one token. */
+const UNDERSCORE_TOKEN = /\b(?:sk-|AIza|github_pat_)/;
+
 /**
  * What follows `mcp__` (or the Cursor `mcp_`) with every secret masked. A token is matched only at a word boundary and `_` is a word character, so
  * the redactor is run over every slice of the tail that starts at 0 or right after a `_` and ends at the end or right before a `_`. That
  * finds a token behind a `_`, in front of one, and one that holds `__` (`sk-` and `AIza` allow it). The slices are quadratic in the number
  * of underscores, so a tail past `MCP_TAIL_MAX` characters (which bounds that number) is stored as `<oversized>` instead of sliced.
- * The tool part comes from the operator's config as much as the server part does.
+ * The tool part comes from the operator's config as much as the server part does. A slice that holds `__` is run through the redactor only when
+ * it holds a pattern rule whose class allows `_` (`sk-`, `AIza`, `github_pat_`): otherwise the entropy rule reads two harmless parts
+ * (`Context7__resolve-library-id`) as one random token and the server loses its name.
  */
 const redactedMcpTail = (tail: string, redact: Redactor): string => {
   if (tail.length > MCP_TAIL_MAX) return '<oversized>';
@@ -1192,6 +1197,7 @@ const redactedMcpTail = (tail: string, redact: Redactor): string => {
     for (let at = out.indexOf('_', start); at !== -1; at = out.indexOf('_', at + 1)) ends.push(at);
     for (const end of ends.toSorted((left, right) => right - left)) {
       const slice = out.slice(start, end);
+      if (slice.includes('__') && !UNDERSCORE_TOKEN.test(slice)) continue;
       const masked = redact(slice);
       if (masked === slice) continue;
       out = out.slice(0, start) + masked + out.slice(end);
