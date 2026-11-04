@@ -23,7 +23,8 @@
 //   response_item function_call / local_shell_call / custom_tool_call   a tool call
 //   response_item function_call_output {call_id, output}   a shell call's outcome: the text `Exit code: N` / `Process exited with code N` then `Output:`
 //                       (core/src/tools/mod.rs:107-113, context.rs:556), the real exit code; `execution error: ...` (core/src/tools/events.rs:438) is a
-//                       call that failed to spawn. `write_stdin` (handlers/shell_spec.rs:113) is a shell call too: the process it polls ends there
+//                       call that failed to spawn. `write_stdin` (handlers/shell_spec.rs:113) is a shell call too: the process it polls ends only where the
+//                       poll reports its exit code; a poll that failed (`write_stdin failed: ...`, write_stdin.rs:123) is its own error and settles nothing else
 //   event_msg item_completed CommandExecution {id, exit_code, status, aggregated_output}   Paginated mode only (policy.rs:253 arm, kept by `_ =>` :284; Legacy
 //                       keeps none, :238-251). `id` is the exec_command's call id (events.rs:571), written when the process exits (events.rs:561-590):
 //                       by the exit watcher for a process the model never polled (unified_exec/async_watcher.rs:158, :224), or by the call itself when it exits in
@@ -297,15 +298,16 @@ ${output}`) }] },
     result(id, failure, when);
   };
   // A shell call settles on its exit code, or on a failure to spawn, whether that comes from its own output or from a CommandExecution item. A
-  // process still running was remembered by its session id, so the one outcome that sees it exit (the `write_stdin` that polled it, or its item)
-  // settles both calls.
-  const settleShell = (id: string, failure: string | undefined, output: string, when: string): void => {
+  // process still running was remembered by its session id, so the outcome that sees it exit (the `write_stdin` that polled it and read its exit
+  // code, or its item) settles both calls. A poll that failed instead (`write_stdin failed: ...`, `exited` false) says nothing about the process: a
+  // non-empty write to one with no tty is `StdinClosed` (unified_exec/process_manager.rs:1021-1026) and it runs on, so only the poll is the error.
+  const settleShell = (id: string, failure: string | undefined, output: string, when: string, exited = true): void => {
     const known = calls.get(id);
     if (known?.kind !== 'shell' || resolved.has(id)) return;
     resolved.add(id);
     result(id, failure, when, output);
     const pending = known.session === undefined ? undefined : running.get(known.session);
-    if (pending !== undefined && !resolved.has(pending)) {
+    if (exited && pending !== undefined && !resolved.has(pending)) {
       resolved.add(pending);
       result(pending, failure, when, output);
     }
@@ -475,7 +477,7 @@ ${output}`) }] },
           if (known.kind === 'shell') {
             // A shell call settles on its exit code, or on a failure to spawn. A process still running stays unsettled and is remembered by its
             // session id, so the `write_stdin` that sees it exit settles it too. A declined call has neither, and stays unsettled.
-            if (out.exit !== undefined || out.spawnError) settleShell(id, out.spawnError ? out.text : failureOf(out.exit, out.text), out.text, when);
+            if (out.exit !== undefined || out.spawnError) settleShell(id, out.spawnError ? out.text : failureOf(out.exit, out.text), out.text, when, out.exit !== undefined);
             else if (out.running !== undefined && known.session === undefined) running.set(out.running, id);
           } else if (known.kind === 'other') {
             // Another call's output carries no failure signal (an MCP call's comes from its mcp_tool_call_end), and a patch settles only from its
