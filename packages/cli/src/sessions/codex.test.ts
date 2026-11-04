@@ -396,7 +396,7 @@ describe('shell, MCP, patch, and usage outcomes', () => {
   // rollout/src/rollout_file_name.rs:12-14, :41-47, :66-73: `rollout-<time>-<thread>.jsonl`, and for a reverted thread `rollout-<time>-<thread>_<rollout>.jsonl`. Revert
   // is for a Paginated thread only and writes a new file whose session_meta carries history_base (thread-store/src/local/revert_thread.rs:15-18, :66-70, :198-200;
   // protocol/src/protocol.rs:3508-3510) and takes history_base.end_ordinal_exclusive as its first ordinal (rollout/src/ordinal.rs:29-31).
-  it('keys the rollout of a reverted thread <thread>_<rollout> and files it under its thread, so one thread is one session', async () => {
+  it('folds the rollout of a reverted thread into its thread, so one thread is one session, and keeps it a subagent of the thread when the thread is not in the store', async () => {
     const s = stage();
     const thread = '66666666-6666-4666-8666-666666666666';
     const reverted = '77777777-7777-4777-8777-777777777777';
@@ -407,13 +407,31 @@ describe('shell, MCP, patch, and usage outcomes', () => {
       { id: `${thread}_${reverted}`, lines: [{ ...line(T(0), 'session_meta', { ...paginated, history_base: base }), ordinal: 3 }] },
     ]);
     const store = await openCodexStore(home);
-    expect(store?.sessions.map((session) => [session.id, session.parent])).toEqual(
-      expect.arrayContaining([
-        [thread, null],
-        [`${thread}_${reverted}`, thread],
-      ]),
-    );
-    expect(store?.sessions).toHaveLength(2);
+    expect(store?.sessions.map((session) => [session.id, session.parent, session.revisions.length])).toEqual([[thread, null, 1]]);
+    const alone = stageCodex(join(s.root, 'alone'), [{ id: `${thread}_${reverted}`, lines: [{ ...line(T(0), 'session_meta', { ...paginated, history_base: base }), ordinal: 3 }] }]);
+    expect((await openCodexStore(alone))?.sessions.map((session) => [session.id, session.parent])).toEqual([[`${thread}_${reverted}`, thread]]);
+  });
+
+  // Each file is read only below the start of the files written after it: the second revert drops the first's own records, and both drop the original's tail.
+  it('reads the latest revert over an earlier one, each cutting the records at and after its start from the files before it', async () => {
+    const s = stage();
+    const thread = '66666666-6666-4666-8666-666666666666';
+    const first = '77777777-7777-4777-8777-777777777777';
+    const second = '88888888-8888-4888-8888-888888888888';
+    const prompt = (id: string, at: number, ordinal: number, message: string) => ({ ...line(T(at), 'event_msg', { type: 'user_message', message }), ordinal, id });
+    const head = { id: thread, session_id: thread, timestamp: T(0), cwd: '/work/app', history_mode: 'paginated' };
+    const start = (at: number, from: number) => ({ ...line(T(at), 'session_meta', { ...head, timestamp: T(at), history_base: { thread_id: thread, end_ordinal_exclusive: from, end_byte_offset: 1 } }), ordinal: from });
+    const home = stageCodex(s.root, [
+      { id: thread, lines: [{ ...line(T(0), 'session_meta', head), ordinal: 0 }, prompt('a', 1, 1, 'kept'), prompt('b', 2, 2, 'dropped by the first revert'), prompt('c', 3, 3, 'dropped too')] },
+      { id: `${thread}_${first}`, lines: [start(4, 2), prompt('d', 5, 3, 'dropped by the second revert')] },
+      { id: `${thread}_${second}`, lines: [start(6, 3), prompt('e', 7, 4, 'last')] },
+    ]);
+    const store = await openCodexStore(home);
+    const only = store?.sessions[0];
+    if (store === undefined || only === undefined) throw new Error('the store holds no session');
+    const prompts = (await store.transcript(only)).split('\n').filter((raw) => raw.includes('"type":"user"'));
+    expect(store.sessions).toHaveLength(1);
+    expect(prompts.map((text) => /kept|dropped by the first|dropped too|dropped by the second|last/.exec(text)?.[0])).toEqual(['kept', 'last']);
   });
 
   it('keeps every record of a reverted rollout though its ordinals start at history_base.end_ordinal_exclusive, since the prefix is not copied into the file (ordinal.rs:29-31)', () => {
