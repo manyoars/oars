@@ -4,10 +4,11 @@
 // `oars sessions measure` reads for recall calls per session.
 import { appendFile, mkdir } from 'node:fs/promises';
 import { createInterface } from 'node:readline';
-import { currentPool } from './pool.js';
+import { servedPool } from './pool.js';
 import { appendRecall } from './recall-object.js';
 import { formsRefusal, pull, pullRefusal, RECALL_FAMILIES, type PullInput } from './recall-reads.js';
 import { MISS_TEXT } from './recall-render.js';
+import { makeRedactor } from './redact.js';
 import type { RecallCall } from './schema.js';
 import { tryLog } from './steps.js';
 import { loadStore, paths, readRedactDomains, type SessionsRuntime } from './store.js';
@@ -25,11 +26,11 @@ const TOOL = {
     properties: {
       error: { type: 'string', description: 'The error text, as printed.' },
       path: { type: 'string', description: 'A file path or file name an earlier session touched.' },
-      class: { type: 'string', description: 'A prompt class: edit-verify, edit-only, shell-only, research, orchestration, explore-only, mixed, no-tools.' },
-      sinceDays: { type: 'integer', minimum: 1, description: 'Only errors from the last N days.' },
+      class: { type: 'string', description: 'A prompt class: edit-verify, edit-only, shell-only, research, orchestration, explore-only, mixed, no-tools. Recovery and fit questions and the error, path, and class inputs only; any other form refuses it.' },
+      sinceDays: { type: 'integer', minimum: 1, description: 'Only errors from the last N days. Recovery and fit questions and the error, path, and class inputs only; any other form refuses it.' },
       prefix: { type: 'array', items: { type: 'string' }, description: 'Read IDs for your steps so far: what happened from here?' },
       entity: { type: 'string', description: 'A public name: a package, a tool, an MCP server, an action, or a model.' },
-      family: { type: 'string', description: `A read family to answer: ${RECALL_FAMILIES.join(', ')}. Only recovery and fit can be narrowed by class or sinceDays.` },
+      family: { type: 'string', description: `A read family to answer: ${RECALL_FAMILIES.join(', ')}. Only recovery and fit can be narrowed by class or sinceDays; any other family, and the prefix, entity, and text forms, count all time and refuse both. Name one form per call.` },
       text: { type: 'string', description: 'Text to look for in the local record.' },
     },
   },
@@ -52,6 +53,15 @@ const namedForms = (args: unknown): Parameters<typeof formsRefusal>[0] => {
     ...(typeof source.text === 'string' ? ['text' as const] : []),
     ...(typeof source.error === 'string' || typeof source.path === 'string' ? ['error or path' as const] : []),
   ];
+};
+
+/** A `sinceDays` or `class` that is present but outside the schema is refused, not dropped: dropping it answers all time under a count that looks narrowed. */
+const narrowingRefusal = (args: unknown): string | undefined => {
+  const source = isObj(args) ? args : {};
+  if (Object.hasOwn(source, 'class') && typeof source.class !== 'string') return 'class must be a string.';
+  const days = source.sinceDays;
+  if (Object.hasOwn(source, 'sinceDays') && !(typeof days === 'number' && Number.isInteger(days) && days > 0)) return 'sinceDays must be a positive integer.';
+  return undefined;
 };
 
 const toQuery = (args: unknown): PullInput => {
@@ -86,6 +96,8 @@ export const handleMessage = async (runtime: SessionsRuntime, now: () => number,
   if (method === 'tools/call') {
     const params = isObj(message.params) ? message.params : {};
     if (params.name !== TOOL_NAME) return failure(id, -32602, `Unknown tool: ${typeof params.name === 'string' ? params.name : ''}`);
+    const invalid = narrowingRefusal(params.arguments);
+    if (invalid !== undefined) return failure(id, -32602, invalid);
     const conflict = formsRefusal(namedForms(params.arguments));
     if (conflict !== undefined) return failure(id, -32602, conflict);
     const query = toQuery(params.arguments);
@@ -94,8 +106,12 @@ export const handleMessage = async (runtime: SessionsRuntime, now: () => number,
     try {
       // The server is not told which session it serves, so `sid` is null: naming it is what a consequence for an MCP pull still needs.
       const store = await loadStore(runtime.storeDir);
-      const result = pull(store, query, { sid: null, now: now(), frame: null, redactDomains: await readRedactDomains(runtime.storeDir), current: await currentPool(runtime.storeDir, store) });
-      const call: RecallCall = { at: new Date(now()).toISOString(), query: JSON.stringify(query), matches: result.legacy?.matches.length ?? result.reads.length, cwd: process.cwd() };
+      const redactDomains = await readRedactDomains(runtime.storeDir);
+      const result = pull(store, query, { sid: null, now: now(), frame: null, redactDomains, current: await servedPool(runtime.storeDir, store) });
+      // What an asker typed is class A: the call log masks each string with the redactor `pull` applies to the recall row, before it is serialized, because JSON escaping of a quote or newline hides a secret from the rules.
+      const redact = makeRedactor(redactDomains);
+      const masked = JSON.stringify(query, (_key, value: unknown) => (typeof value === 'string' ? redact(value) : value));
+      const call: RecallCall = { at: new Date(now()).toISOString(), query: masked, matches: result.legacy?.matches.length ?? result.reads.length, cwd: process.cwd() };
       // A pull always answers: a log or recall row that cannot be written costs the record, never the agent's answer.
       await tryLog(async () => {
         await mkdir(runtime.storeDir, { recursive: true });

@@ -176,7 +176,7 @@ export interface StepCounters {
   derived: StepCounts;
   /** The newest ok index's output: the recurring signatures and projects it holds. */
   indexed: StepCounts;
-  /** The newest ok verify's `out`: invariants checked and passed, `cv-behind` sessions, and stuck steps. */
+  /** The newest ok verify's `out`: invariants checked and passed, `cv-behind` sessions, sessions failing the raw audit (`merkle`), and stuck steps. */
   verify: StepCounts | null;
   recall: { queries: number; matches: number };
   /** Failed runs by `<step>@<ev>`. */
@@ -228,7 +228,7 @@ export const formatStepCounters = (counters: StepCounters): string => {
     ...by('records deposited,', counters.deposited),
     ...by('records derived,', counters.derived),
     ...by('index holds,', counters.indexed),
-    ...(verify === null ? [] : [row('invariants passed of checked', `${String(verify.passed ?? 0)}/${String(verify.checked ?? 0)}`), row('cv-behind sessions', String(verify.cvBehind ?? 0))]),
+    ...(verify === null ? [] : [row('invariants passed of checked', `${String(verify.passed ?? 0)}/${String(verify.checked ?? 0)}`), row('cv-behind sessions', String(verify.cvBehind ?? 0)), row('sessions failing the raw audit', String(verify.merkle ?? 0))]),
     ...(counters.recall.queries === 0 ? [] : [row('recall queries', String(counters.recall.queries)), row('recall matches', String(counters.recall.matches))]),
     ...by('failed runs,', counters.failures),
     row('stuck steps', String(counters.stuck.length)),

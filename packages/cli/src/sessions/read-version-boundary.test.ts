@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { firstOrderOf, tools } from './order-fixture.js';
 import { frame, prompt, session, store } from './pool-fixture.js';
-import { boundariesOf, deriveVersionBoundary } from './read-version-boundary.js';
+import { boundariesOf, deriveVersionBoundary, toolKey } from './read-version-boundary.js';
 import { TRIALS_FLOOR } from './read-order.js';
 import type { Store } from './store.js';
 
@@ -108,5 +108,11 @@ describe('version boundary', () => {
       tools: [...tools('s1', 0, [{ name: 'Read', count: 40 }]), ...tools('s1', 1, [{ name: 'Read', count: 40 }])],
     });
     expect(boundariesOf(firstOrderOf(from))).toEqual([]);
+  });
+
+  it('keys a read that lacks its level or motif by the UNKNOWN placeholder, not an empty string', () => {
+    const read = firstOrderOf(twoBuckets([['Read', 800, 200], ['Edit', 200, 800]])).at(0);
+    if (read === undefined) throw new Error('expected a read');
+    expect(toolKey({ ...read, slice: Object.fromEntries(Object.entries(read.slice).filter(([name]) => name !== 'level' && name !== 'motif')) })).toBe('unknown\nunknown');
   });
 });

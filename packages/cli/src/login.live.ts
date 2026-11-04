@@ -10,6 +10,7 @@ import { run, type RunDeps } from './cli.js';
 import { fileCredentialStore } from './credentials.js';
 import { fileJournalStore } from './journal.js';
 import { ExitCode } from './errors.js';
+import { step, stderrSink } from './live-page.js';
 import { discover, refreshTokens } from './oidc.js';
 
 // Design §6 *CLI*, live login: the real CLI against a running Keycloak holding T67's realm (the local stack's, or the throwaway
@@ -85,18 +86,33 @@ const startStubApi = async (): Promise<StubApi> => {
   };
 };
 
-/** What a developer does in the browser: open the link, sign in, grant the CLI access. */
+/** What a developer does in the browser: open the link, sign in, accept the terms if asked, grant the CLI access. */
 const approveDeviceCode = async (verificationUrl: string, username: string, password: string): Promise<void> => {
   const browser = await chromium.launch();
   try {
     const page = await browser.newPage();
-    await page.goto(verificationUrl);
-    await page.locator('#username').fill(username);
-    await page.locator('#password').fill(password);
-    await page.locator('#kc-login').click();
+    await step(page, 'open the verification link', async () => {
+      await page.goto(verificationUrl);
+    });
+    await step(page, 'sign in', async () => {
+      await page.locator('#username').fill(username);
+      await page.locator('#password').fill(password);
+      await page.locator('#kc-login').click();
+      await page.locator('#username').waitFor({ state: 'detached' });
+    });
+    // The realm's users carry the TERMS_AND_CONDITIONS required action, so the first sign-in lands on a Terms and Conditions page
+    // (button #kc-accept) before anything else. Wait for whichever page follows the sign-in form.
+    await step(page, 'accept the terms', async () => {
+      await page.locator('#kc-accept, #kc-login').first().waitFor();
+      if ((await page.locator('#kc-accept').count()) > 0) await page.locator('#kc-accept').click();
+    });
     // The oars-cli client has consentRequired: Keycloak asks the user to grant it access.
-    await page.locator('#kc-login').click();
-    await page.getByText(/device login successful/i).waitFor();
+    await step(page, 'grant access', async () => {
+      await page.locator('#kc-login').click();
+    });
+    await step(page, 'wait for the success page', async () => {
+      await page.getByText(/device login successful/i).waitFor();
+    });
   } finally {
     await browser.close();
   }
@@ -121,11 +137,9 @@ const loginThenLogout = async ({ api, configDir, username, password, audience }:
     env: {},
     io: {
       stdout: (chunk) => out.push(chunk),
-      stderr: (chunk) => {
-        err.push(chunk);
-        const url = /open (\S+)/.exec(chunk)?.[1];
-        if (url !== undefined) announce(url);
-      },
+      stderr: stderrSink((url) => {
+        announce(url);
+      }, err),
     },
     store: fileCredentialStore(configDir),
     journal: fileJournalStore(configDir),
@@ -157,18 +171,27 @@ const loginThenLogout = async ({ api, configDir, username, password, audience }:
   expect(JSON.stringify(claim(exchanged, 'aud'))).toContain(audience);
 
   const stored = await deps.store.read();
-  expect(stored).toMatchObject({ issuerUrl: ISSUER_URL, apiUrl: api.url, email: username, accessToken: 'stub-api-access-token' });
+  // Asserted as booleans: a failing toMatchObject would print the stored refresh token into the public job log.
+  expect(stored?.issuerUrl, 'stored issuerUrl').toBe(ISSUER_URL);
+  expect(stored?.apiUrl, 'stored apiUrl').toBe(api.url);
+  expect(stored?.email, 'stored email').toBe(username);
+  expect(stored?.accessToken === 'stub-api-access-token', 'stored accessToken is the stub API token').toBe(true);
   const refreshToken = stored?.refreshToken ?? '';
-  expect(refreshToken).not.toBe('');
+  expect(refreshToken !== '', 'stored refreshToken is present').toBe(true);
 
   err.length = 0;
   expect(await run(['logout', '--json'], deps), err.join('')).toBe(ExitCode.OK);
   expect(err.join('')).toBe('');
-  expect(await deps.store.read()).toBeUndefined();
+  expect((await deps.store.read()) === undefined, 'credentials are removed after logout').toBe(true);
 
   // Revoked at Keycloak, not merely forgotten locally: the old refresh token is refused.
   const config = await discover(ISSUER_URL, { ...deps, step: 'live' });
-  await expect(refreshTokens(config, refreshToken, 'live')).rejects.toMatchObject({ exitCode: ExitCode.AUTH });
+  // A boolean outcome: if the refresh succeeded, its result holds newly issued tokens that must not reach the log.
+  const refused = await refreshTokens(config, refreshToken, 'live').then(
+    () => 'accepted',
+    (error: unknown) => (error instanceof Error && 'exitCode' in error ? `refused with exit code ${String(error.exitCode)}` : 'failed'),
+  );
+  expect(refused, 'the revoked refresh token is refused by Keycloak').toBe(`refused with exit code ${String(ExitCode.AUTH)}`);
 };
 
 describe('oars login against a live Keycloak', () => {

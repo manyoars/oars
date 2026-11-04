@@ -1,12 +1,13 @@
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { readHookCalls } from './hook-calls.js';
-import { indexPath, readIndex, type HookIndex } from './hook-index.js';
+import { buildIndex, indexPath, readIndex, type HookIndex } from './hook-index.js';
 import { runHook } from './hooks.js';
 import { armOf, HOLDBACK_RATE, readRecalls, recallsPath } from './recall-object.js';
 import { frameOfTail, tailOf } from './recall-push.js';
-import { toolShapeId, type RecallRead } from './recall-reads.js';
+import { fitReads, toolShapeId, type RecallRead } from './recall-reads.js';
+import { tool as toolRow } from './pool-fixture.js';
 import { readSteps } from './steps.js';
 import { deposit } from './store.js';
 import { addProject, cleanup, NOW, stage } from './test-support.js';
@@ -157,6 +158,77 @@ describe('the pre-tool push', () => {
     expect((await readSteps(staged.storeDir))[0]).toMatchObject({ step: 'recall', trigger: 'pre-tool', status: 'error' });
   });
 
+  it('logs one pre-tool row per call with timing and outcome only: no tool name, input, or query', async () => {
+    const staged = stagedIndex();
+    const sid = sessionOn('shown');
+    await runHook('pre-tool', call(sid, { tool_input: { query: 'secret-typed-value', max_results: 3 } }), staged.runtime, () => NOW);
+    await runHook('pre-tool', call(sid, { tool_name: 'Bash', tool_input: { command: 'ls secret-path' } }), staged.runtime, () => NOW + 1);
+    const text = readFileSync(join(staged.storeDir, 'hook-calls.jsonl'), 'utf8');
+    const rows = text.trim().split('\n').map((row): { [key: string]: unknown } => {
+      const parsed: unknown = JSON.parse(row);
+      return typeof parsed === 'object' && parsed !== null ? Object.fromEntries(Object.entries(parsed)) : {};
+    });
+    expect(rows).toHaveLength(2);
+    for (const row of rows) expect(Object.keys(row).sort()).toEqual(['at', 'error', 'event', 'hit', 'ms', 'session', 'startMs']);
+    expect(rows.map((row) => row.hit)).toEqual([true, false]);
+    expect(rows[0]).toMatchObject({ event: 'pre-tool', session: sid, error: null });
+    expect(typeof rows[0]?.ms).toBe('number');
+    expect(rows[0]?.startMs).toBeGreaterThan(0);
+    // The reader keeps startMs; a row written before the field existed reads back without the key.
+    const written = await readHookCalls(staged.storeDir);
+    expect(written[0]?.startMs).toBe(rows[0]?.startMs);
+    writeFileSync(join(staged.storeDir, 'hook-calls.jsonl'), `${JSON.stringify({ at: 'a', event: 'stop', session: null, hit: false, ms: 1, error: null })}\n`);
+    expect(Object.keys((await readHookCalls(staged.storeDir))[0] ?? {})).not.toContain('startMs');
+    expect(text).not.toMatch(/secret|Monitor|Bash|query/);
+  });
+
+  it('still lets the tool run, with its push, when the hook-calls log cannot be written', async () => {
+    const staged = stagedIndex();
+    mkdirSync(join(staged.storeDir, 'hook-calls.jsonl'));
+    const output = await runHook('pre-tool', call(sessionOn('shown')), staged.runtime, () => NOW);
+    expect(specific(output).additionalContext).toContain('Monitor');
+  });
+
+  it('fires for a shape in no action table once per session, and stays silent for one under the floors', async () => {
+    const unlisted = toolShapeId('Zeta', ['topic']);
+    const fires: RecallRead = { ...read, readId: unlisted, tool: 'Zeta', keys: ['topic'] };
+    const staged = stagedIndex({ fit: { [unlisted]: fires } });
+    const sid = Array.from({ length: 100 }, (_, at) => `live-${String(at)}`).find((candidate) => armOf(candidate, [unlisted], AT) === 'shown') ?? '';
+    const zeta = (session: string) => call(session, { tool_name: 'Zeta', tool_input: { topic: 'x' } });
+    expect(specific(await runHook('pre-tool', zeta(sid), staged.runtime, () => NOW)).additionalContext).toContain('other [topic]');
+    expect(await runHook('pre-tool', zeta(sid), staged.runtime, () => NOW + 1)).toBeUndefined();
+    expect(await readRecalls(staged.storeDir)).toHaveLength(1);
+    // A shape with no read in the index is silent whatever the tool.
+    expect(await runHook('pre-tool', call(sid, { tool_name: 'Zeta', tool_input: { other: 1 } }), staged.runtime, () => NOW + 2)).toBeUndefined();
+    expect(await readRecalls(staged.storeDir)).toHaveLength(1);
+  });
+
+  it('arms an unlisted tool only over the lift bar: a shape over the floors but under twice its action stays silent, one over both fires once per session', async () => {
+    const shaped = (session: string, tool: string, failed: number) =>
+      Array.from({ length: 10 }, (_, n) => toolRow(session, n, tool, { ts: '2026-11-01T00:00:00.000Z', status: n < failed ? 'error' : 'ok', keys: ['topic'], durationMs: 5, toolUseId: `${session}-${tool}-${String(n)}`, harnessVersion: '2.1.300', prompt: 0 }));
+    const sessions = ['a', 'b', 'c'];
+    const quiet = Array.from({ length: 200 }, (_, n) => toolRow('q', n, 'Quiet', { ts: '2026-11-01T00:00:00.000Z', status: 'ok', keys: ['x'], durationMs: 5, toolUseId: `q-${String(n)}`, harnessVersion: '2.1.300', prompt: 0 }));
+    // Action `other` fails 28 of 280 (10 percent): Sharp at 50 percent clears twice that. Mild at 10 percent sits on the fit floors but not on 20 percent. Thin fails 5 of 10 in
+    // two sessions: its lift clears, but two failed sessions are under the three the fit floors ask for.
+    const tools = [...quiet, ...sessions.flatMap((name) => shaped(name, 'Sharp', 5)), ...sessions.flatMap((name) => shaped(name, 'Mild', 1)), ...['d', 'e'].flatMap((name) => shaped(name, 'Thin', 5))];
+    const store = { sessions: [], prompts: [], errors: [], subagents: [], tools, newerCaptures: 0 };
+    const index = buildIndex(store, [], AT);
+    const sharp = toolShapeId('Sharp', ['topic']);
+    // Mild is read by the fit floors, so its silence below is the lift bar's, not the floors'; Thin is held back by the floors.
+    expect(fitReads(store).map((read) => read.tool)).toEqual(expect.arrayContaining(['Mild', 'Sharp']));
+    expect(fitReads(store).map((read) => read.tool)).not.toContain('Thin');
+    expect(Object.keys(index.fit ?? {})).toEqual([sharp]);
+    const staged = stagedIndex(index);
+    const sid = Array.from({ length: 100 }, (_, at) => `live-${String(at)}`).find((candidate) => armOf(candidate, [sharp], AT) === 'shown') ?? '';
+    const use = (tool: string) => call(sid, { tool_name: tool, tool_input: { topic: 'x' } });
+    expect(await runHook('pre-tool', use('Mild'), staged.runtime, () => NOW)).toBeUndefined();
+    expect(await runHook('pre-tool', use('Thin'), staged.runtime, () => NOW)).toBeUndefined();
+    expect(await readRecalls(staged.storeDir)).toHaveLength(0);
+    expect(specific(await runHook('pre-tool', use('Sharp'), staged.runtime, () => NOW + 1)).additionalContext).toContain('other [topic]');
+    expect(await runHook('pre-tool', use('Sharp'), staged.runtime, () => NOW + 2)).toBeUndefined();
+    expect(await readRecalls(staged.storeDir)).toHaveLength(1);
+  });
+
   it('reads the frame from the transcript tail and states the distance', async () => {
     const staged = stagedIndex();
     const transcript = join(staged.root, 'transcript.jsonl');
@@ -207,9 +279,19 @@ describe('from a deposit to a push', () => {
     ]).flat(),
   ];
 
+  /** A session whose ten calls of a tool no table lists all succeed: `Monitor` is also `other`, and a push must beat that action's base rate. */
+  const quiet = (name: string): string[] => [
+    line(name, 0, { type: 'user', message: { role: 'user', content: 'look at the quiet' } }),
+    ...Array.from({ length: 10 }, (_, call) => [
+      line(name, 1 + call * 2, { type: 'assistant', requestId: `${name}-r${String(call)}`, message: { role: 'assistant', model: 'claude-opus-5-5', content: [{ type: 'tool_use', id: `t${String(call)}`, name: 'Quiet', input: { query: 'a typed value' } }], usage: USAGE } }),
+      line(name, 2 + call * 2, { type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: `t${String(call)}`, is_error: false, content: 'fine' }] } }),
+    ]).flat(),
+  ];
+
   it('pushes a shape the deposit found over the floors', async () => {
     const staged = stage();
     for (const name of ['aaaa1111', 'bbbb2222', 'cccc3333']) addProject(staged, 'proj', name, failing(name));
+    for (const name of ['dddd4444', 'eeee5555', 'ffff6666', 'gggg7777']) addProject(staged, 'proj', name, quiet(name));
     await deposit(staged.runtime, { allow: ['proj'], redactDomains: [], now: () => NOW });
     const shape = toolShapeId('Monitor', ['query']);
     const index = await readIndex(staged.storeDir);

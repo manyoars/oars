@@ -11,20 +11,22 @@ export const FIXTURES = fileURLToPath(new URL('./fixtures/', import.meta.url));
 const dirs: string[] = [];
 
 const HELD = new Set(['EPERM', 'EBUSY', 'ENOTEMPTY']);
+const ATTEMPTS = 50;
+const DELAY_MS = 200;
 
 /**
  * Removes a temp folder a git child may still hold as its cwd (a test that timed out leaves the child running). On Windows that is an
  * EPERM, and `rmSync`'s own `maxRetries` does not retry it for a live child's cwd on Node 24, so the retry is written out here.
  * Synchronous so the `afterEach` call sites stay as they are; the wait is `Atomics.wait`, which does not spin.
  */
-export const removeHeld = (dir: string, attempts = 50, delayMs = 200): void => {
+export const removeHeld = (dir: string): void => {
   for (let attempt = 1; ; attempt++) {
     try {
       rmSync(dir, { recursive: true, force: true });
       return;
     } catch (error) {
-      if (attempt >= attempts || !(error instanceof Error && 'code' in error && typeof error.code === 'string' && HELD.has(error.code))) throw error;
-      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, delayMs);
+      if (attempt >= ATTEMPTS || !(error instanceof Error && 'code' in error && typeof error.code === 'string' && HELD.has(error.code))) throw error;
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, DELAY_MS);
     }
   }
 };
@@ -240,10 +242,38 @@ export const stageCodex = (root: string, files: readonly CodexFixture[]): string
   for (const file of files) {
     const dir = file.archived === true ? join(home, 'archived_sessions') : join(home, 'sessions', '2026', '06', '01');
     mkdirSync(dir, { recursive: true });
-    const text = typeof file.lines === 'string' ? file.lines : `${file.lines.map((line) => JSON.stringify(line)).join(String.fromCharCode(10))}${String.fromCharCode(10)}`;
+    const text = typeof file.lines === 'string' ? file.lines : `${file.lines.map((line) => JSON.stringify(line)).join('\n')}\n`;
     const name = `rollout-2026-06-01T10-00-00-${file.id}.jsonl`;
     if (file.compressed === true) writeFileSync(join(dir, `${name}.zst`), zstdCompressSync(Buffer.from(text)));
     else writeFileSync(join(dir, name), text);
+  }
+  return home;
+};
+
+/** One Copilot CLI event: `{id, parentId, timestamp, type, data}` (github/copilot-sdk @ d28a136, nodejs/src/generated/session-events.ts, every event's envelope). */
+export const copilotEvent = (timestamp: string, type: string, data: unknown, extra: object = {}): { id: string; parentId: null; timestamp: string; type: string; data: unknown } => ({
+  id: `00000000-0000-4000-8000-${String(Math.abs(Date.parse(timestamp)) % 1e12).padStart(12, '0')}`,
+  parentId: null,
+  timestamp,
+  type,
+  data,
+  ...extra,
+});
+
+export interface CopilotFixture {
+  /** The session folder's name, which is the session id. */
+  id: string;
+  /** Lines as objects, or raw text for a torn file. */
+  lines: readonly unknown[] | string;
+}
+
+/** A Copilot home holding the given sessions under `session-state/<id>/events.jsonl`; returns the home. */
+export const stageCopilot = (root: string, files: readonly CopilotFixture[]): string => {
+  const home = join(root, 'copilot-home');
+  for (const file of files) {
+    const dir = join(home, 'session-state', file.id);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, 'events.jsonl'), typeof file.lines === 'string' ? file.lines : `${file.lines.map((line) => JSON.stringify(line)).join('\n')}\n`);
   }
   return home;
 };

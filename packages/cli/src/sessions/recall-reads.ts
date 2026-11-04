@@ -2,7 +2,7 @@
 // pre-call half of recovery, and a public name a read in family `entity`. `recall-pool.ts` puts each under the ID of the stored read it rests on; a hash here is what stands in
 // where the pool holds none, and the only ID an `entity` read has, because no family stores a read per public name.
 import { createHash } from 'node:crypto';
-import { ACTION_TABLES, actionOf, mcpOf } from './actions.js';
+import { ACTION_TABLES, actionOf, mcpOf, type CanonicalAction } from './actions.js';
 import { utcDay } from './frame.js';
 import { LITERAL, PUBLIC_PACKAGES, publicModel, publicVersion } from './public-vocabulary.js';
 import { recall, recallRows, type RecallQuery, type RecallResult } from './query.js';
@@ -10,6 +10,7 @@ import { contentHash, FAMILIES, type Family } from './read.js';
 import { namedByPrefix, readsOfFamily, resolveReads, type CurrentPool } from './recall-pool.js';
 import { makeRecall, type Recall, type RecallForm, type RecallQueryObject, type RecallSlice } from './recall-object.js';
 import { closedName, evidenceOf, renderAnswer, type RecallAsker } from './recall-render.js';
+import { makeRedactor } from './redact.js';
 import { harnessOf, PROMPT_CLASSES, type ErrorObservation, type Frame, type Harness, type SessionObservation, type ToolObservation } from './schema.js';
 import type { Store } from './store.js';
 
@@ -197,6 +198,42 @@ export const fitReads = (store: Store, floors: FitFloors = FIT_FLOORS, keep: (ca
     });
   }
   return reads.sort((a, b) => b.count - a.count || a.readId.localeCompare(b.readId));
+};
+
+/** The action of a tool under the first of its harnesses whose table lists it, else under the first harness (the default one when a read names none). */
+export const actionOfShape = (tool: string, harnesses: readonly string[]): CanonicalAction => {
+  const tables = Object.entries(ACTION_TABLES).flatMap(([name, table]) => (harnesses.includes(name) ? [table] : []));
+  return actionOf(tables.find((table) => Object.hasOwn(table.rows, tool)) ?? tables[0] ?? ACTION_TABLES[harnessOf({})], tool).action;
+};
+
+/**
+ * What a push must beat: a shape is pushed only when its failure share is at least this many times the share of all calls of its action (t785). The floors above keep
+ * a shape that fails often; this keeps one that fails more often than its action does, and guards a store whose base rate is high. On the replay of 2026-11-02 it kept
+ * 79 of 79 pushes, at 4.5x and 8.6x their action's share: a real signal, not a defect. Open parameter, like the floors.
+ */
+export const PUSH_MIN_LIFT = 2;
+
+/**
+ * The reads whose shape fails at `lift` times the share of its whole action or more, where the action's share counts every call of every shape of it, those under the floors too.
+ * A tool no table lists is the action `other` (or `mcp.call`), so it is held to that action's share like any other and can enter the index and fire. Compared in integers, so a tie is exact.
+ */
+export const aboveBaseRate = (store: Store, reads: readonly RecallRead[], lift: number = PUSH_MIN_LIFT): RecallRead[] => {
+  const harnesses = harnessesOf(store);
+  const byAction = new Map<CanonicalAction, { calls: number; failed: number }>();
+  for (const calls of callsBySession(store).values()) {
+    for (const call of calls) {
+      const action = actionOfShape(call.tool, [harnesses.get(call.session) ?? harnessOf({})]);
+      const tally = byAction.get(action) ?? { calls: 0, failed: 0 };
+      byAction.set(action, tally);
+      tally.calls += 1;
+      if (call.status === 'error') tally.failed += 1;
+    }
+  }
+  return reads.filter((read) => {
+    const base = byAction.get(actionOfShape(read.tool, read.harnesses));
+    // A fit read always counts its calls (`calls` is null only for entity reads), and its own calls are in the tally, so `base` is there; the fallbacks keep the types honest.
+    return base !== undefined && read.calls !== null && read.count * base.calls >= lift * base.failed * read.calls;
+  });
 };
 
 /** The snapshot a store answers from: its latest deposit. A deposit time compares with a recall's `at`, which is what "older than the recall" needs. */
@@ -392,11 +429,12 @@ const recordedQuery = ({ form, prefix, entity, family, slice, text }: ClosedQuer
   return typed.length === 0 ? closed : { ...closed, text: typed.join(' ') };
 };
 
-/** The closed form a `recall()` input is recorded under. An error or a path is text the asker typed, so it stays in class A. */
+/** The closed form a `recall()` input is recorded under. An error and a path are text the asker typed, so both stay in class A, and the narrowing that applied is kept as the slice. */
 const closedOf = (query: RecallQuery): RecallQueryObject => {
-  const text = query.error ?? query.path;
-  if (text !== undefined) return { form: 'text', text };
-  return recordedQuery({ form: 'question', family: 'recovery', slice: { ...(query.cls === undefined ? {} : { cls: query.cls }), ...(query.sinceDays === undefined ? {} : { sinceDays: query.sinceDays }) } });
+  const slice = { ...(query.cls === undefined ? {} : { cls: query.cls }), ...(query.sinceDays === undefined ? {} : { sinceDays: query.sinceDays }) };
+  const text = [query.error, query.path].filter((typed) => typed !== undefined).join(' ');
+  if (text === '') return recordedQuery({ form: 'question', family: 'recovery', slice });
+  return recordedQuery({ form: 'text', text, ...(Object.keys(slice).length === 0 ? {} : { slice }) });
 };
 
 export interface PullContext {
@@ -437,12 +475,15 @@ export const pull = (store: Store, input: PullInput, context: PullContext): Pull
   };
   const reads = isClosed(input) ? answerQuery(store, input, context.now, current) : legacyReads(input);
   const { rendered, names } = renderAnswer(reads, asker);
+  const recorded = isClosed(input) ? recordedQuery(input) : closedOf(input);
+  // What an asker typed is class A: redacted here, as a deposit redacts what it reads.
+  const redact = makeRedactor(context.redactDomains);
   const made = makeRecall({
     sid: context.sid,
     at,
     frame,
     mode: 'pull',
-    query: isClosed(input) ? recordedQuery(input) : closedOf(input),
+    query: recorded.text === undefined ? recorded : { ...recorded, text: redact(recorded.text) },
     poolVersion: poolVersionOf(store),
     arm: 'shown',
     reads: reads.map((read) => read.readId),
