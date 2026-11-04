@@ -105,6 +105,8 @@ export interface RegistryRow {
   kind: 'registry';
   v: number;
   day: string;
+  /** When the answer was read, to the millisecond; a row an earlier build wrote has none. A not-found answer is trusted for minutes, not days. */
+  ts?: string;
   class: CrossingClass;
   state: 'found' | 'not-found';
   created: string | null;

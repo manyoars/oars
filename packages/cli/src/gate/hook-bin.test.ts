@@ -13,9 +13,9 @@ afterEach(() => {
   for (const folder of made.splice(0)) rmSync(folder, { recursive: true, force: true });
 });
 
-const runHook = (input: string, extra: readonly string[] = [], pathHead?: string): { status: number | null; stdout: string; home: string } => {
-  const home = mkdtempSync(join(tmpdir(), 'oars-gate-bin-'));
-  made.push(home);
+const runHook = (input: string, extra: readonly string[] = [], pathHead?: string, given?: string): { status: number | null; stdout: string; home: string } => {
+  const home = given ?? mkdtempSync(join(tmpdir(), 'oars-gate-bin-'));
+  if (given === undefined) made.push(home);
   const result = spawnSync(process.execPath, [bin, 'gate', 'hook', ...extra], {
     input,
     encoding: 'utf8',
@@ -35,6 +35,18 @@ const fakeNpm = (): { folder: string; marker: string } => {
   chmodSync(join(folder, 'npm'), 0o755);
   writeFileSync(join(folder, 'npm.cmd'), `@echo off\r\necho started> "${marker}"\r\n`);
   return { folder, marker };
+};
+
+// A manager that answers 2 s late, past the hook's 650 ms cut: a script that sleeps, then prints what `npm view` prints. It logs each start, one line apiece.
+const slowNpm = (): { folder: string; log: string } => {
+  const folder = mkdtempSync(join(tmpdir(), 'oars-gate-slownpm-'));
+  made.push(folder);
+  const log = join(folder, 'npm-starts');
+  const answer = '{"dist-tags.latest":"1.0.0","time.created":"2020-01-01T00:00:00.000Z"}';
+  writeFileSync(join(folder, 'npm'), `#!/bin/sh\necho started >> "${log}"\nsleep 2\necho '${answer}'\n`);
+  chmodSync(join(folder, 'npm'), 0o755);
+  writeFileSync(join(folder, 'npm.cmd'), `@echo off\r\necho started>> "${log}"\r\nping -n 3 127.0.0.1 >nul\r\necho ${answer}\r\n`);
+  return { folder, log };
 };
 
 const crossingFiles =(home: string): string[] => readdirSync(home, { recursive: true, encoding: 'utf8' }).filter((path) => path.endsWith('crossings.jsonl'));
@@ -70,5 +82,22 @@ describe.skipIf(!existsSync(bin))('the built oars gate hook', () => {
     const lines = readFileSync(join(result.home, file ?? ''), 'utf8').trim().split('\n');
     expect(lines).toHaveLength(1);
     expect(JSON.parse(lines[0] ?? '')).toMatchObject({ kind: 'crossing', via: 'hook', name: 'left-pad', registryState: 'not-read' });
+  });
+
+  it('fills the cache after a cut ask: the first sight reads not-read, the next reads found', () => {
+    const payload = JSON.stringify({ session_id: 's1', tool_use_id: 'u1', tool_name: 'Bash', tool_input: { command: 'npm install slow-lib' }, cwd: tmpdir(), permission_mode: 'default' });
+    const npm = slowNpm();
+    const first = runHook(payload, [], npm.folder);
+    expect(first.status).toBe(0);
+    const cache = join(first.home, 'oars', 'sessions', 'gate-registry.jsonl');
+    // The helper outlives the hook: wait for its answer to land before the next sight, and before cleanup removes the home under it.
+    for (let waited = 0; waited < 30_000 && !existsSync(cache); waited += 250) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 250);
+    expect(existsSync(cache)).toBe(true);
+    const second = runHook(payload.replace('"u1"', '"u2"'), [], npm.folder, first.home);
+    expect(second.status).toBe(0);
+    expect(second.stdout).toBe('');
+    const [file] = crossingFiles(first.home);
+    const rows: unknown[] = readFileSync(join(first.home, file ?? ''), 'utf8').trim().split('\n').map((line): unknown => JSON.parse(line));
+    expect(rows).toMatchObject([{ registryState: 'not-read' }, { registryState: 'found' }]);
   });
 });

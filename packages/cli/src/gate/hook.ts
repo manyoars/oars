@@ -7,6 +7,7 @@ import { join } from 'node:path';
 import { makeRedactor } from '../sessions/redact.js';
 import { checkCall, type Crossing } from './checks.js';
 import { withLocalBin, type LocalBinMemo } from './local-bin.js';
+import type { FillAsk } from './hook-fill.js';
 import { loadIndex, keepIndex, noveltyOf, scopesOf } from './novelty.js';
 import { GATE_VERSION, parseRows, permissionOf, type CrossingRecord, type RegistryRow } from './record.js';
 import { askable, type RegistryAnswer, type RegistryReader } from './registry.js';
@@ -39,6 +40,8 @@ export interface GateHookDeps {
   registry?: RegistryReader;
   /** Appends text to a file. Replaceable so a full disk can be tried. */
   append?: (file: string, text: string) => Promise<void>;
+  /** Called with the name whose ask was cut or had no time to start, so a helper can finish it and fill the cache for the next sight. Absent: nothing is finished. */
+  fill?: (ask: FillAsk) => Promise<void>;
   /** Told what is about to be written (and `null` once it is), so a process that must stop at a hard deadline can write the record it has. */
   stage?: (pending: { file: string; text: string } | null) => void;
 }
@@ -116,10 +119,15 @@ const registryAnswer = async (deps: GateHookDeps, crossing: Crossing, cwd: strin
   const held = kept.get(keyOf(crossing));
   if (held !== undefined && fresh(held, deps.now())) return { answer: asAnswer(held), asked: false };
   if (deps.registry === undefined || cwd === null || !(await isFolder(cwd))) return undefined;
+  const ask: FillAsk = { class: crossing.class, name: crossing.name, cwd };
   const left = deps.deadlineMs - WRITE_RESERVE_MS - deps.clock();
-  if (left < MIN_ASK_MS) return undefined;
-  const answer = await within(deps.registry({ class: crossing.class, name: crossing.name, cwd }), left);
-  return answer === undefined ? undefined : { answer, asked: true };
+  const answer = left < MIN_ASK_MS ? undefined : await within(deps.registry(ask), left);
+  if (answer === undefined) {
+    // Not answered in time: the row reads not-read, and a helper finishes the ask so the next sight reads it from the cache.
+    await deps.fill?.(ask).catch(() => undefined);
+    return undefined;
+  }
+  return { answer, asked: true };
 };
 
 const recordOf = (
@@ -197,7 +205,7 @@ export const runGateHook = async (stdin: string, deps: GateHookDeps): Promise<vo
     for (const line of add) lines.add(line);
     const read = await registryAnswer(deps, crossing, cwd, kept);
     if (read?.asked === true && read.answer.state !== 'unreachable') {
-      answered.push({ kind: 'registry', v: GATE_VERSION, day: ts.slice(0, 10), class: crossing.class, state: read.answer.state, created: read.answer.created, name: crossing.name, latest: read.answer.latest });
+      answered.push({ kind: 'registry', v: GATE_VERSION, day: ts.slice(0, 10), ts, class: crossing.class, state: read.answer.state, created: read.answer.created, name: crossing.name, latest: read.answer.latest });
     }
     rows.push(recordOf(common, crossing, novelty, read));
   }

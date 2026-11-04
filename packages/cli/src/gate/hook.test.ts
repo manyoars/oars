@@ -330,6 +330,37 @@ describe('oars gate hook: the deadline', () => {
   });
 });
 
+describe('oars gate hook: finishing a cut ask', () => {
+  const stalled: RegistryReader = () => new Promise<RegistryAnswer>(() => undefined);
+
+  it('hands the name to the fill when the ask is cut, and again when there was no time to start it', async () => {
+    const store = folder();
+    const fill = vi.fn<NonNullable<GateHookDeps['fill']>>(() => Promise.resolve());
+    await gateHook(payload('npm install left-pad'), depsFor(store, { registry: stalled, clock: () => 0, deadlineMs: 400, fill }));
+    await gateHook(payload('npm install left-pad', { tool_use_id: 'b' }), depsFor(store, { registry: stalled, clock: () => 790, fill }));
+    expect(fill).toHaveBeenCalledTimes(2);
+    expect(fill).toHaveBeenCalledWith({ class: 'npm-package', name: 'left-pad', cwd: tmpdir() });
+    expect(rowsOf(store).map((row) => row.registryState)).toEqual(['not-read', 'not-read']);
+  });
+
+  it('does not hand over a name whose answer came, was kept, or could not be asked', async () => {
+    const store = folder();
+    const fill = vi.fn<NonNullable<GateHookDeps['fill']>>(() => Promise.resolve());
+    await gateHook(payload('npm install left-pad', { tool_use_id: 'a' }), depsFor(store, { registry: found('1.0.0'), fill }));
+    await gateHook(payload('npm install left-pad', { tool_use_id: 'b' }), depsFor(store, { registry: stalled, fill }));
+    await gateHook(payload('yarn add other-lib', { tool_use_id: 'c' }), depsFor(store, { registry: stalled, fill }));
+    await gateHook(payload('npm install third-lib', { tool_use_id: 'd' }), depsFor(store, { fill }));
+    expect(fill).not.toHaveBeenCalled();
+  });
+
+  it('keeps the row and its empty output when the fill throws', async () => {
+    const store = folder();
+    const fill = (): Promise<void> => Promise.reject(new Error('lock failed'));
+    expect(await gateHook(payload('npm install left-pad'), depsFor(store, { registry: stalled, clock: () => 0, deadlineMs: 400, fill }))).toBe('');
+    expect(rowsOf(store)).toHaveLength(1);
+  });
+});
+
 // Class A names, versions, and session ids: the store is the user's, and every other write in it is 0600.
 describe('oars gate hook: the files it creates', () => {
   it.skipIf(process.platform === 'win32')('creates the record, the registry answers, and the index private to the user', async () => {
