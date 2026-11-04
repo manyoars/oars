@@ -17,7 +17,7 @@ A tool call that takes something from outside the repository into the agent's se
 |---------|-------|-------|
 | `Bash` (and `PowerShell`, since the corpus this was built on runs on Windows) | `npm-package`, `python-package` | `install`, `url-install` (a git or tarball URL), `fetch-and-run` (`npx`, `bunx`, `pnpm dlx`, `uvx`, `pipx run`), `url-fetch-and-run` |
 | `mcp__.*` | `mcp-server` | `mcp-call` |
-| `Skill` | `skill` | `skill-call` |
+| `Skill`, and `Bash` for `npx skills add <source>` | `skill` | `skill-call`, `install` (the source as written, minus any query; a variable or a path names nothing) |
 
 A lockfile-only install (`npm ci`, `pip install -r`, a bare `npm install`) names nothing and crosses nothing; it is counted under "replay cannot see" by shape. So is a pipe into a shell and a command behind `xargs`.
 
