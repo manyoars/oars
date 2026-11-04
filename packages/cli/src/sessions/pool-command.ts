@@ -554,8 +554,8 @@ export const poolFetch = async (deps: RunDeps, options: { server?: string | unde
   const server = poolServer(deps.env, FETCH, options.server);
   const { harnessVersion } = options;
   if (!isBundleVersion(harnessVersion)) throw usage(`${harnessVersion} is not a public harness version.`, FETCH);
-  const harness = await fetchHarness(deps, storeDir, options.harness);
   const { token, signingKey } = await signedIn(deps, storeDir, server, FETCH);
+  const harness = await fetchHarness(deps, storeDir, options.harness);
   const file = replicaFile(storeDir, server, harness, harnessVersion);
   const kept = await keptReplica(file, signingKey, harness, harnessVersion);
   const credential = new Masker();
