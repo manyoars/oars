@@ -117,6 +117,34 @@ describe('the four query forms', () => {
     expect(new Set(reads.map(({ readId }) => readId)).size).toBe(2);
   });
 
+  describe('entity: a package', () => {
+    const pulled = (session: string, n: number, name: string): ToolObservation => ({ ...tool(session, n, 'Bash', ['command'], 'ok'), pulls: [{ ecosystem: 'npm', name, version: null }] });
+    const pulling = (): Store =>
+      storeOf({
+        sessions: [sessionRow('a'), sessionRow('b'), sessionRow('c')],
+        tools: [pulled('a', 0, 'vitest'), pulled('a', 1, 'vitest'), pulled('b', 0, 'vitest'), pulled('c', 0, 'an-invented-private-package'), { ...pulled('c', 1, 'vitest'), side: true }],
+      });
+
+    it('answers with the calls and the sessions whose pulls name it, and the record keeps its name', () => {
+      expect(ask(pulling(), { form: 'entity', entity: 'vitest' })).toMatchObject([{ family: 'entity', tool: 'vitest', n: 2, count: 3, calls: null, firstDay: expect.any(String), harnesses: ['claude-code'] }]);
+      const { recall } = pull(pulling(), { form: 'entity', entity: 'vitest' }, { sid: null, now: NOW, frame: null });
+      expect(recall.query).toEqual({ form: 'entity', entity: 'vitest' });
+      expect(recall.answer.rendered).toContain('\nvitest | 3 calls, 2 sessions');
+    });
+
+    it('misses on a public package no call pulled, and on a private one even where a call did, since a pull is class A', () => {
+      expect(ask(pulling(), { form: 'entity', entity: 'react' })).toEqual([]);
+      expect(ask(pulling(), { form: 'entity', entity: 'an-invented-private-package' })).toEqual([]);
+    });
+
+    it('keeps a package read apart from a tool of the same name', () => {
+      const both = storeOf({ sessions: [sessionRow('a', { tools: { uv: 2 } })], tools: [{ ...toolRow('a', 0, 'uv'), pulls: [{ ecosystem: 'pypi', name: 'uv', version: null }] }] });
+      const reads = ask(both, { form: 'entity', entity: 'uv' });
+      expect(reads.map(({ count }) => count)).toEqual([2, 1]);
+      expect(new Set(reads.map(({ readId }) => readId)).size).toBe(2);
+    });
+  });
+
   it('question: answers a family over a slice, and misses on a slice or family with nothing', () => {
     const store = synthetic();
     expect(ask(store, { form: 'question', family: 'recovery' })).toHaveLength(1);
