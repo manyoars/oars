@@ -214,10 +214,11 @@ const errorText = (part: Obj): string | undefined => {
   if (typeof part.resultError === 'string' && part.resultError !== '') return part.resultError;
   if (part.resultError === true) return 'tool failed';
   if (!isObj(part.resultDetails) || part.resultDetails.isError !== true) return undefined;
-  const output = part.resultDetails.output;
+  const output: unknown = part.resultDetails.output;
+  const embeds: unknown[] = Array.isArray(output) ? output : [];
   // `output` is an array of `{type:'embed', value, isText}` (common/tools/languageModelToolsService.ts:290-296, written as an array at contrib/mcp/common/
   // mcpLanguageModelToolContribution.ts:279-280): the first text embed is the message. A plain string is the older spelling (`isToolResultInputOutputDetails`, :305).
-  const embed = Array.isArray(output) ? output.find((entry) => isObj(entry) && entry.isText === true && str(entry.value) !== undefined) : undefined;
+  const embed = embeds.find((entry) => isObj(entry) && entry.isText === true && str(entry.value) !== undefined);
   return (isObj(embed) ? str(embed.value) : str(output)) ?? 'tool failed';
 };
 
