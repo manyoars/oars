@@ -301,6 +301,15 @@ describe('oars gate hook: a damaged index', () => {
     expect(rowsOf(store).map((row) => row.novelty)).toEqual(['fleet', 'none']);
   });
 
+  it('costs one torn line, not the index, when the next new name appends after it', async () => {
+    const store = folder();
+    await gateHook(payload('npm install left-pad', { tool_use_id: 'a' }), depsFor(store));
+    appendFileSync(indexFile(store), 'f0123');
+    await gateHook(payload('npm install right-pad', { tool_use_id: 'b' }), depsFor(store));
+    await gateHook(payload('npm install right-pad', { tool_use_id: 'c' }), depsFor(store));
+    expect(rowsOf(store).map((row) => row.novelty)).toEqual(['fleet', 'fleet', 'none']);
+  });
+
   it('is not seeded, and says so, when a record exists without one', async () => {
     const store = folder();
     writeFileSync(crossingsPath(store), '{"kind":"run","v":1}\n');

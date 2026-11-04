@@ -2,7 +2,7 @@
 // `crossings.jsonl`, which a long-lived record would make slow. It holds hashes only (a name, a repository, or a session id is never written here), one per line, and a
 // line is only ever appended, so two hooks running at once cannot lose each other's update. A file that does not read cleanly is `damaged`: the row says `not-read`.
 import { createHash } from 'node:crypto';
-import { appendFile, mkdir, readFile, rename, stat, writeFile } from 'node:fs/promises';
+import { appendFile, mkdir, open, readFile, rename, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { Novelty } from './record.js';
 
@@ -10,6 +10,7 @@ export const INDEX_HEADER = 'oars-gate-index 1';
 export const indexFile = (storeDir: string): string => join(storeDir, 'gate-index.txt');
 
 const LINE = /^[frs][0-9a-f]{12}$/;
+const TORN = /^[frs][0-9a-f]{0,11}$/;
 
 const digest = (...parts: string[]): string => createHash('sha256').update(parts.join('\0')).digest('hex').slice(0, 12);
 
@@ -47,8 +48,10 @@ const parseIndex = (text: string): KeptIndex => {
   parts.pop();
   if (parts[0] !== INDEX_HEADER) return { state: 'damaged' };
   const lines = new Set<string>();
-  for (const line of parts) {
+  for (const [at, line] of parts.entries()) {
     if (line === INDEX_HEADER) continue;
+    // A torn line that the next append closed with a line break: it is a cut-off hash, skipped, and only ever sits before a later line.
+    if (at < parts.length - 1 && TORN.test(line)) continue;
     if (!LINE.test(line)) return { state: 'damaged' };
     lines.add(line);
   }
@@ -73,11 +76,29 @@ export const noveltyOf = (index: KeptIndex, scopes: Scopes): { novelty: Novelty;
   return { novelty: held.has(scopes.session) ? 'none' : 'session', add };
 };
 
-/** Appends the lines a crossing added. A `fresh` index starts with its header (a second header from a hook racing this one is skipped on read). */
+/** True when the file's last byte is a line break, so an append starts a line of its own. The caller has read the header, so the file is not empty. */
+const endsClean = async (file: string): Promise<boolean> => {
+  const handle = await open(file, 'r');
+  try {
+    const { size } = await handle.stat();
+    const last = Buffer.alloc(1);
+    await handle.read(last, 0, 1, size - 1);
+    return last[0] === 0x0a;
+  } finally {
+    await handle.close();
+  }
+};
+
+/**
+ * Appends the lines a crossing added. A `fresh` index starts with its header (a second header from a hook racing this one is skipped on read). A torn tail (a line cut off
+ * before its line break) gets one first, so the append is its own lines and the torn one costs only itself.
+ */
 export const keepIndex = async (storeDir: string, index: KeptIndex, add: readonly string[]): Promise<void> => {
   if (add.length === 0 || (index.state !== 'ready' && index.state !== 'fresh')) return;
   await mkdir(storeDir, { recursive: true });
-  await appendFile(indexFile(storeDir), `${index.state === 'fresh' ? `${INDEX_HEADER}\n` : ''}${add.join('\n')}\n`, { mode: 0o600 });
+  const file = indexFile(storeDir);
+  const lead = index.state === 'fresh' ? `${INDEX_HEADER}\n` : (await endsClean(file)) ? '' : '\n';
+  await appendFile(file, `${lead}${add.join('\n')}\n`, { mode: 0o600 });
 };
 
 /** Writes the index from every line given plus the ones already kept, whole and atomic. Used by `replay`, which is not in a hurry. */
