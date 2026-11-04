@@ -277,6 +277,7 @@ export const ACTION_TABLES: { readonly [harness in Harness]: ActionTable } = {
       replace: 'file.edit',
       write_file: 'file.write',
       run_shell_command: 'shell.exec',
+      PowerShell: 'shell.exec',
       google_web_search: 'web.search',
       web_fetch: 'web.fetch',
       activate_skill: 'skill.run',
@@ -301,7 +302,7 @@ export const ACTION_TABLES: { readonly [harness in Harness]: ActionTable } = {
     },
     mcp: /^mcp_(?<server>[^_]+)_(?<tool>.+)$/,
     toolDelimited: false,
-    shells: { run_shell_command: 'bash' },
+    shells: { run_shell_command: 'bash', PowerShell: 'powershell' },
   },
   // Grok Build's own names (xai-org/grok-build @ 2bdd1d6, crates/codegen/xai-grok-tools): a tool's `title` is its name. A shell call and an edit reach the
   // transcript as `Bash` and `Edit` with the original name in `native`, which is what this table looks up. A name the table lacks keeps its own and its step

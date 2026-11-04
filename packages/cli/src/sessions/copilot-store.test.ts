@@ -139,6 +139,34 @@ describe('depositing the Copilot source', () => {
     expect(result.badLines).toBe(1);
   });
 
+  it('reads rotated events.N.jsonl archives in order with the live file as one session, once, and a second deposit adds nothing', async () => {
+    const s = staged();
+    const link = (previous: string) => event(T(20), 'session.journal_link', { previousFile: previous, sessionId: D, version: 1 });
+    stageCopilot(s.root, [
+      {
+        id: D,
+        archives: [
+          { n: 2, lines: [link('events.1.jsonl'), start(D, '/work/d'), prompt(21, 'second prompt'), say(22, 'two', { outputTokens: 1 })] },
+          { n: 10, lines: [link('events.2.jsonl'), prompt(30, 'third prompt'), say(31, 'three', { outputTokens: 1 })] },
+          { n: 1, lines: [start(D, '/work/d'), prompt(10, 'first prompt'), say(11, 'one', { outputTokens: 1 })] },
+        ],
+        // The live head replays earlier state as checkpoint events (the same user.message as the archive holds, under a fresh id, so only the checkpoint flag drops it), then goes on.
+        lines: [link('events.10.jsonl'), { ...prompt(30, 'third prompt'), id: 'replayed-30', checkpoint: true }, prompt(40, 'fourth prompt'), say(41, 'four', { outputTokens: 1 })],
+      },
+    ]);
+    await deposit(s.runtime, options(['copilot']));
+    const store = await loadStore(s.storeDir);
+    expect(store.sessions.filter((entry) => entry.session.endsWith(D))).toHaveLength(1);
+    expect(store.prompts.filter((entry) => entry.session === `copilot-${D}`)).toHaveLength(4);
+    const log = readFileSync(paths(s.storeDir).observations, 'utf8');
+    expect(await deposit(s.runtime, options(['copilot']))).toMatchObject({ sessions: 0, unchanged: 3 });
+    expect(readFileSync(paths(s.storeDir).observations, 'utf8')).toBe(log);
+    // A new archive is a change, so the session is read again.
+    writeFileSync(join(s.home, 'session-state', D, 'events.11.jsonl'), `${JSON.stringify(prompt(35, 'late archive'))}
+`);
+    expect(await deposit(s.runtime, options(['copilot']))).toMatchObject({ sessions: 1 });
+  });
+
   it('lets the nightly run repeat a saved allow, so it reads Copilot with no flag', async () => {
     const s = staged();
     await deposit(s.runtime, options(['copilot']));
