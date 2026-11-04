@@ -16,6 +16,8 @@
 //                                                           (platform/storage/electron-main/storageMain.ts:425,481-492)
 //   globalStorage/emptyWindowChatSessions/<id>.json|.jsonl  sessions from a window with no folder (no working directory)
 //   workspaceStorage/no-workspace/chatSessions              the older spelling of the last one, read the same way
+//   globalStorage/transferredChatSessions                   NOT READ: a hand-off written when a session moves to another workspace, removed once read and expired after five
+//                                                           minutes (chatSessionStore.ts:79,275,316); the destination workspace then holds its own copy
 // A session moved between workspaces is copied and the original kept (chatSessionStore.ts:150-175), so one id can sit in two folders: the newest copy is read.
 //
 // `.json` is one `JSON.stringify(ISerializableChatData)`. `.jsonl` is an append log, one entry per line (model/objectMutationLog.ts:195-215, 345-390):
@@ -33,7 +35,11 @@
 //                    `kind:'toolInvocationSerialized'` is a tool call (service/chatService.ts:1246-1270); `kind:'textEditGroup'` or `'notebookEditGroup'` `{uri}` is a file edited
 //   usage            `completionTokens` the whole turn's output (model/chatModel.ts:1929-1934), `modelTotals[{model, inputTokens, cachedTokens, outputTokens}]`
 //                    (chatService.ts:176-188) the only per-model figure. `promptTokens` is the last model call alone, so it is not read as consumption. The source does not
-//                    say whether `inputTokens` includes `cachedTokens`, so it is not subtracted: that is a stated limit (a store that includes it counts the cache twice)
+//                    say whether `inputTokens` includes `cachedTokens`, so it is not subtracted: that is a stated limit (a store that includes it counts the cache twice).
+//                    `modelTotals` is rare: the extension API bridge hands the editor only promptTokens, completionTokens, outputBuffer, copilotCredits, and promptTokenDetails
+//                    (api/common/extHostChatAgents2.ts:463-468), and a public code search found `modelTotals` written only by the agent-host adapter
+//                    (contrib/chat/browser/agentSessions/agentHost/stateToProgressAdapter.ts:936). So on an extension-written session, which is the surface this reader exists
+//                    for, `input` 0 with a nonzero `output` means the input is NOT KNOWN, not that none was spent
 // A tool call's `toolId` is the bare name (`run_in_terminal`) or the contributed one (`copilot_applyPatch`), both in extensions/copilot/src/extension/tools/common/toolNames.ts.
 // A call with `subAgentInvocationId` is a subagent's own and is not read; the parent's `runSubagent` call is. Tool inputs are not persisted (model/chatToolInvocation.ts:504-533),
 // so only a terminal command (`toolSpecificData.commandLine`) and an edit's file (the `textEditGroup` after the call) are known. A shell call's outcome is its exit code
