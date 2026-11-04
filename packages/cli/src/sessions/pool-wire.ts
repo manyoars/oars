@@ -208,7 +208,7 @@ const heldTo = (isHeld: (value: string | null) => string | null, value: unknown,
 
 // `satisfies` checks every entry is a `Harness` but not that every `Harness` is listed; this refuses a list that leaves one out at compile time.
 const allHarnesses = <const T extends readonly Harness[]>(list: [Exclude<Harness, T[number]>] extends [never] ? T : never): T => list;
-const HARNESSES = allHarnesses(['claude-code', 'cursor', 'codex']);
+const HARNESSES = allHarnesses(['claude-code', 'cursor', 'codex', 'copilot']);
 const PROMPT_CLASSES = ['no-tools', 'orchestration', 'research', 'edit-verify', 'edit-only', 'explore-only', 'shell-only', 'mixed'] as const satisfies readonly PromptClass[];
 const STATUSES = ['ok', 'error', 'none'] as const satisfies readonly ToolStatus[];
 const EDGE_KINDS = ['next', 'spawned', 'retried', 'after-error'] as const satisfies readonly StepEdge['kind'][];
