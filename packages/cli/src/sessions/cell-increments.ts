@@ -197,8 +197,9 @@ const toolRecords = (id: string, main: string, { tools }: SkeletonTranscript): T
     harnessVersion: null,
     side,
     prompt,
-    steps: steps.map(({ tokens, ms, ...step }) => ({
+    steps: steps.map(({ tokens, ms, ...step }, seg) => ({
       ...step,
+      seg,
       edges: [],
       cost: { tokens: tokens === null ? null : floorOf('tokens', tokens), durationMs: ms === null ? null : floorOf('ms', ms) },
       n,
