@@ -129,9 +129,12 @@ export const recallGraphOf = (store: Store, recalls: readonly Recall[]): RecallG
     const line = recall.sid === null ? undefined : lines.get(recall.sid);
     if (recall.arm === 'held' || recall.consequence === undefined || line === undefined) continue;
     const { from, to } = recall.consequence.window;
-    for (const tool of line.slice(from, to)) {
-      exposedCalls.add(callKey(tool));
-      exposedPrompts.add(promptKey(tool.session, tool.prompt));
+    // A shown miss showed no evidence, so its window is not an exposure; the step stays, since the pull happened.
+    if (recall.answer.kind !== 'miss') {
+      for (const tool of line.slice(from, to)) {
+        exposedCalls.add(callKey(tool));
+        exposedPrompts.add(promptKey(tool.session, tool.prompt));
+      }
     }
     const previous = line[from - 1];
     const first = line[from];

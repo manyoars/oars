@@ -3,7 +3,7 @@ import { execFileSync, spawn } from 'node:child_process';
 import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { deposit, loadStore } from './store.js';
 import { addProject, cleanup, removeHeld, stage, type Staged } from './test-support.js';
 import { readSurvival, recordSurvival, survivalFile, SURVIVAL_DAYS, type Git } from './survival.js';
@@ -17,6 +17,19 @@ import { runHook } from './hooks.js';
 const NOW = Date.parse('2026-06-30T00:00:00Z');
 const OLD = '2026-06-01T00:00:00.000Z';
 const dirs: string[] = [];
+const saved = { dir: process.env.GIT_DIR, tree: process.env.GIT_WORK_TREE, index: process.env.GIT_INDEX_FILE };
+
+// A run under a hook or `git rebase --exec` inherits these, and `git -C` does not override `GIT_DIR`: the helper's config writes would land in the real repository.
+beforeAll(() => {
+  delete process.env.GIT_DIR;
+  delete process.env.GIT_WORK_TREE;
+  delete process.env.GIT_INDEX_FILE;
+});
+afterAll(() => {
+  if (saved.dir !== undefined) process.env.GIT_DIR = saved.dir;
+  if (saved.tree !== undefined) process.env.GIT_WORK_TREE = saved.tree;
+  if (saved.index !== undefined) process.env.GIT_INDEX_FILE = saved.index;
+});
 
 afterEach(() => {
   cleanup();

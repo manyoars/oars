@@ -10,6 +10,7 @@ import { run, type RunDeps } from './cli.js';
 import { fileCredentialStore } from './credentials.js';
 import { fileJournalStore } from './journal.js';
 import { ExitCode } from './errors.js';
+import { step, stderrSink } from './live-page.js';
 import { discover, refreshTokens } from './oidc.js';
 
 // Design §6 *CLI*, live login: the real CLI against a running Keycloak holding T67's realm (the local stack's, or the throwaway
@@ -90,13 +91,28 @@ const approveDeviceCode = async (verificationUrl: string, username: string, pass
   const browser = await chromium.launch();
   try {
     const page = await browser.newPage();
-    await page.goto(verificationUrl);
-    await page.locator('#username').fill(username);
-    await page.locator('#password').fill(password);
-    await page.locator('#kc-login').click();
+    await step(page, 'open the verification link', async () => {
+      await page.goto(verificationUrl);
+    });
+    await step(page, 'sign in', async () => {
+      await page.locator('#username').fill(username);
+      await page.locator('#password').fill(password);
+      await page.locator('#kc-login').click();
+      await page.locator('#username').waitFor({ state: 'detached' });
+    });
+    // The realm's users carry the TERMS_AND_CONDITIONS required action, so the first sign-in lands on a Terms and Conditions page
+    // (button #kc-accept) before anything else. Wait for whichever page follows the sign-in form.
+    await step(page, 'accept the terms', async () => {
+      await page.locator('#kc-accept, #kc-login').first().waitFor();
+      if ((await page.locator('#kc-accept').count()) > 0) await page.locator('#kc-accept').click();
+    });
     // The oars-cli client has consentRequired: Keycloak asks the user to grant it access.
-    await page.locator('#kc-login').click();
-    await page.getByText(/device login successful/i).waitFor();
+    await step(page, 'grant access', async () => {
+      await page.locator('#kc-login').click();
+    });
+    await step(page, 'wait for the success page', async () => {
+      await page.getByText(/device login successful/i).waitFor();
+    });
   } finally {
     await browser.close();
   }
@@ -121,11 +137,9 @@ const loginThenLogout = async ({ api, configDir, username, password, audience }:
     env: {},
     io: {
       stdout: (chunk) => out.push(chunk),
-      stderr: (chunk) => {
-        err.push(chunk);
-        const url = /open (\S+)/.exec(chunk)?.[1];
-        if (url !== undefined) announce(url);
-      },
+      stderr: stderrSink((url) => {
+        announce(url);
+      }, err),
     },
     store: fileCredentialStore(configDir),
     journal: fileJournalStore(configDir),

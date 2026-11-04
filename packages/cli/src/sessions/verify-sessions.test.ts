@@ -145,6 +145,8 @@ describe('sessionsVerify, per session', () => {
     const verified = await sessionsVerify({ sessions: staged.runtime, install: undefined, now: () => NOW }, { session: undefined });
     expect(verified.failed).toEqual(['merkle: counts do not bind']);
     expect(verified.text).toContain('FAIL  tldr: counts do not bind');
+    const row = (await readSteps(staged.storeDir)).filter((entry) => entry.step === 'verify').at(-1);
+    expect(row?.out.merkle).toBe(1);
   });
 
   it('lists a grown file as changed since deposit and does not fail it', async () => {

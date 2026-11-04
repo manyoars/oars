@@ -68,7 +68,9 @@ describe('a recall cites the stored read of the current pool', () => {
   it('carries the stored read ID in the index, keyed by the shape a hook can compute', () => {
     const store = stocked();
     const { reads } = currentOf(store);
-    const index = buildIndex(store, [], '2026-06-02T00:00:00.000Z', reads);
+    // Calls of a tool no table lists that never fail: `Monitor` is also `other`, and a push must beat that action's base rate.
+    const quiet = Array.from({ length: 100 }, (_, n) => toolRow('a', 100 + n, 'Quiet', { keys: ['x'], status: 'ok', ts: '2026-06-01T00:00:00.000Z' }));
+    const index = buildIndex({ ...store, tools: [...store.tools, ...quiet] }, [], '2026-06-02T00:00:00.000Z', reads);
     expect(index.fit?.[toolShapeId('Monitor', ['query'])]?.readId).toMatch(/^read:/);
   });
 

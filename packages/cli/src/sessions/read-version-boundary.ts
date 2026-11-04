@@ -30,7 +30,7 @@ const dayOf = (read: Read, field: 'firstDay' | 'lastDay'): string[] => {
   return typeof day === 'string' ? [day] : [];
 };
 
-export const toolKey = (read: Read): string => `${read.slice.level ?? ''}\n${read.slice.motif ?? ''}`;
+export const toolKey = (read: Read): string => `${read.slice.level ?? UNKNOWN}\n${read.slice.motif ?? UNKNOWN}`;
 
 const bucketOf = (name: string, reads: readonly [Read, ...Read[]]): Bucket => ({
   name,

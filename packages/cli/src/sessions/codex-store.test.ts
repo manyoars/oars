@@ -2,6 +2,7 @@ import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 
+import { openCodexStore } from './codex.js';
 import { runHook } from './hooks.js';
 import { books, formatMeasure, measure, recall } from './query.js';
 import { harnessOf } from './schema.js';
@@ -22,10 +23,9 @@ const E = 'eeee5555-5555-4555-8555-555555555555';
 const STEM = (id: string): string => `2026-06-01T10-00-00-${id}`;
 
 const T = (second: number): string => `2026-06-01T10:00:${String(second).padStart(2, '0')}.000Z`;
-const NL = String.fromCharCode(10);
 // SessionMeta requires session_id (equal to the root thread's id, protocol.rs:3451-3452) and originator (:3474), beside id and cli_version.
 const meta = (id: string, cwd: string, extra: object = {}) => line(T(0), 'session_meta', { session_id: id, id, timestamp: T(0), cwd, originator: 'codex_cli_rs', cli_version: '0.50.0', ...extra });
-// A failed shell call in the persisted text form (core/src/tools/mod.rs:107-113), as ac558e2 writes it.
+// A failed shell call in the persisted text form (the unified-exec emitter's own text, core/src/tools/events.rs:400, :416, :423), as ac558e2 writes it.
 const failedShell = [
   line(T(3), 'response_item', { type: 'function_call', name: 'shell', arguments: JSON.stringify({ command: ['bash', '-lc', 'make'] }), call_id: 'c1' }),
   line(T(4), 'response_item', { type: 'function_call_output', call_id: 'c1', output: 'Exit code: 2\nWall time: 0.1 seconds\nOutput:\nmake: *** No rule' }),
@@ -140,11 +140,11 @@ describe('depositing the Codex source', () => {
     const s = staged();
     const project = join(s.projectsRoot, 'mine');
     mkdirSync(project, { recursive: true });
-    writeFileSync(join(project, 'one.jsonl'), `${JSON.stringify({ type: 'user', timestamp: '2026-06-02T00:00:00Z', message: { role: 'user', content: 'hello' } })}${NL}`);
+    writeFileSync(join(project, 'one.jsonl'), `${JSON.stringify({ type: 'user', timestamp: '2026-06-02T00:00:00Z', message: { role: 'user', content: 'hello' } })}\n`);
     writeFileSync(join(s.home, 'sessions', '2026', '06', '01', `rollout-${STEM(C)}.jsonl.zst`), 'not zstd at all');
     const result = await deposit(s.runtime, options(['mine', 'codex']));
     expect(trackedKeys(s.storeDir)).toEqual(expect.arrayContaining(['mine/one.jsonl', `codex/${A}`, `codex/${B}`]));
-    expect(result.sources.codex?.unreadable.join(NL)).toContain(C);
+    expect(result.sources.codex?.unreadable.join('\n')).toContain(C);
   });
 
   it('names a wholly corrupt rollout and leaves its cursor alone, so a fixed file is read next time', async () => {
@@ -153,7 +153,7 @@ describe('depositing the Codex source', () => {
       { id: E, lines: '{torn\nnot json\n' },
     ]);
     const result = await deposit(s.runtime, options(['codex']));
-    const unreadable = result.sources.codex?.unreadable.join(NL) ?? '';
+    const unreadable = result.sources.codex?.unreadable.join('\n') ?? '';
     expect(unreadable).toContain(E);
     expect(trackedKeys(s.storeDir)).toEqual([`codex/${A}`, `codex/${B}`]);
     expect(result.sessions).toBe(2);
@@ -161,7 +161,7 @@ describe('depositing the Codex source', () => {
 
   it('counts a torn line in the rollout as a bad line, so the deposit line does not under-report', async () => {
     const s = staged();
-    stageCodex(s.root, [{ id: E, lines: `${JSON.stringify(meta(E, '/x'))}${NL}{torn${NL}${JSON.stringify(line(T(2), 'event_msg', { type: 'user_message', message: 'hi' }))}${NL}` }]);
+    stageCodex(s.root, [{ id: E, lines: `${JSON.stringify(meta(E, '/x'))}\n{torn\n${JSON.stringify(line(T(2), 'event_msg', { type: 'user_message', message: 'hi' }))}\n` }]);
     const result = await deposit(s.runtime, options(['codex']));
     expect(result.badLines).toBe(1);
   });
@@ -169,7 +169,7 @@ describe('depositing the Codex source', () => {
   it('lets the nightly run repeat a saved allow, so it reads Codex with no flag', async () => {
     const s = staged();
     await deposit(s.runtime, options(['codex']));
-    const text = `${rollout(D, '/x').map((entry) => JSON.stringify(entry)).join(NL)}${NL}`;
+    const text = `${rollout(D, '/x').map((entry) => JSON.stringify(entry)).join('\n')}\n`;
     writeFileSync(join(s.home, 'sessions', '2026', '06', '01', `rollout-${STEM(D)}.jsonl`), text);
     await runHook('nightly', '', s.runtime, () => NOW);
     expect(trackedKeys(s.storeDir)).toContain(`codex/${D}`);
@@ -225,7 +225,7 @@ describe('the source table', () => {
         close: () => undefined,
       }),
   });
-  const hi = `${JSON.stringify({ type: 'user', timestamp: T(1), message: { role: 'user', content: 'hi' } })}${NL}`;
+  const hi = `${JSON.stringify({ type: 'user', timestamp: T(1), message: { role: 'user', content: 'hi' } })}\n`;
 
   it('picks up a second entry with no other wiring, labeled from the table in force', async () => {
     const s = stage();
@@ -242,7 +242,7 @@ describe('the source table', () => {
     const t = stage();
     const stop = await deposit({ ...t.runtime, sources: [fake(t.root, transcripts, true)], sourceRoots: { fake: t.root } }, options(['fake']));
     expect(stop.sources.fake?.read).toBe(0);
-    expect(stop.sources.fake?.unreadable.join(NL)).toContain('bad one');
+    expect(stop.sources.fake?.unreadable.join('\n')).toContain('bad one');
   });
 });
 
@@ -341,28 +341,32 @@ describe('Paginated and forked rollouts through the store', () => {
     return records.map((record, index) => ({ ...record, ordinal: base + index }));
   };
 
-  it('deposits a thread and its reverted rollout (post-revert records, ordinals from history_base) as one session and one subagent, with no prefix prompt counted twice', async () => {
+  it('deposits a thread and its reverted rollout as one lineage: the retained prefix, then the post-revert records, with the turn the revert dropped gone', async () => {
     const s = stage();
     const original = paginated(A);
     // Reverting before the second turn keeps the records before its UserMessage (index 7): seven records, so the next ordinal is 7.
     const base = 7;
-    const bytes = Buffer.byteLength(`${original.slice(0, base).map((record) => JSON.stringify(record)).join(NL)}${NL}`);
+    const bytes = Buffer.byteLength(`${original.slice(0, base).map((record) => JSON.stringify(record)).join('\n')}\n`);
     const home = stageCodex(s.root, [
       { id: A, lines: original },
       { id: `${A}_${B}`, lines: reverted(A, base, bytes) },
     ]);
+    const opened = await openCodexStore(home);
+    expect(opened?.sessions.map((session) => session.id)).toEqual([A]);
+    const only = opened?.sessions[0];
+    if (opened === undefined || only === undefined) throw new Error('the store holds no session');
+    const text = await opened.transcript(only);
+    expect(text).toContain('try the other rule');
+    expect(text).not.toContain('explain why');
     const result = await deposit({ ...s.runtime, sourceRoots: { codex: home } }, options(['codex']));
-    expect(result).toMatchObject({ sessions: 1, subagents: 1 });
+    expect(result).toMatchObject({ sessions: 1, subagents: 0 });
     const { skeletons } = await readSkeletons(s.storeDir);
     const store = await loadStore(s.storeDir);
-    // The continuing turns of a reverted thread land under subagents, parent the thread, so the thread is still one session in the counts. A subagent's prompts are
-    // not prompt records (store.ts:1088-1095: only a main session derives them), so the one post-revert prompt shows in the session's userTurns and nowhere in
-    // store.prompts. That is the documented limit; the prefix is not copied into the new file, so no prompt is counted twice.
-    expect(store.subagents.map((session) => [session.session, session.parent])).toEqual([[`codex-${A}_${B}`, `codex-${A}`]]);
-    expect(store.subagents[0]).toMatchObject({ userTurns: 1 });
-    expect(store.prompts.filter((entry) => entry.session === `codex-${A}_${B}`)).toHaveLength(0);
+    // The reverted thread is one main session, so its prompts are prompt records and the dropped turn's prompt is not among them: the first turn and the post-revert one.
+    expect(store.subagents).toEqual([]);
+    expect(store.sessions[0]).toMatchObject({ userTurns: 2 });
     expect(store.prompts.filter((entry) => entry.session === `codex-${A}`)).toHaveLength(2);
-    expect([...verifyAll(skeletons), ...verifyCaptured([...store.sessions, ...store.subagents], store.tools)].filter((entry) => entry.violations > 0)).toEqual([]);
+    expect([...verifyAll(skeletons), ...verifyCaptured(store.sessions, store.tools)].filter((entry) => entry.violations > 0)).toEqual([]);
   });
 
   it('drops a Legacy fork copy of its parent, found through forked_from_id in the same store', async () => {
@@ -394,7 +398,7 @@ describe('Paginated and forked rollouts through the store', () => {
     mkdirSync(outside, { recursive: true });
     writeFileSync(join(outside, 'sessions'), 'a plain file, not a folder');
     const result = await deposit({ ...s.runtime, sourceRoots: { codex: outside } }, options(['codex']));
-    const logged = result.sources.codex?.unreadableLogged.join(NL) ?? '';
+    const logged = result.sources.codex?.unreadableLogged.join('\n') ?? '';
     expect(logged).toContain('sessions');
     expect(logged).not.toContain('codex-home-name');
   });
