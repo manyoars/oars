@@ -85,7 +85,7 @@ const UV_VERBS: Verbs = [
   [['sync'], 'manifest'], [['pip', 'sync'], 'manifest'],
   [['remove'], 'remove'], [['pip', 'uninstall'], 'remove'], [['tool', 'uninstall'], 'remove'],
 ];
-const PIPX_VERBS: Verbs = [[['install'], 'install'], [['run'], 'run'], [['uninstall'], 'remove']];
+const PIPX_VERBS: Verbs = [[['install'], 'install'], [['inject'], 'install'], [['run'], 'run'], [['uninstall'], 'remove']];
 const PROJECT_VERBS: Verbs = [[['add'], 'install'], [['install'], 'manifest'], [['sync'], 'manifest'], [['remove'], 'remove']];
 const PIPENV_VERBS: Verbs = [[['install'], 'install'], [['sync'], 'manifest'], [['uninstall'], 'remove']];
 const CONDA_VERBS: Verbs = [[['install'], 'install'], [['remove'], 'remove'], [['uninstall'], 'remove']];
@@ -103,6 +103,7 @@ const TOOLS: ReadonlyMap<string, Tool> = new Map<string, Tool>([
   ['yarn', { family: 'npm-package', verbs: YARN_VERBS }],
   ['bun', { family: 'npm-package', verbs: BUN_VERBS }],
   ['npx', { family: 'npm-package', verbs: RUNNER_VERBS }],
+  ['pnpx', { family: 'npm-package', verbs: RUNNER_VERBS }],
   ['bunx', { family: 'npm-package', verbs: RUNNER_VERBS }],
   ['pip', { family: 'python-package', verbs: PIP_VERBS }],
   ['uv', { family: 'python-package', verbs: UV_VERBS }],
@@ -120,7 +121,7 @@ const TOOLS: ReadonlyMap<string, Tool> = new Map<string, Tool>([
 /** A flag here owns the next word, which is therefore not a package name. */
 const VALUE_FLAGS: Readonly<Record<Family, ReadonlySet<string>>> = {
   'npm-package': new Set(['-w', '--workspace', '--registry', '--prefix', '--filter', '-F', '-C', '--dir', '--cache', '--tag', '--cwd', '--loglevel', '--userconfig', '--globalconfig', '-p', '--package', '-c', '--call', '--omit', '--include', '--save-prefix', '--cafile', '--cert', '--key', '--nodedir', '--store-dir', '--modules-dir', '--virtual-store-dir', '--lockfile-dir', '--global-dir', '--cache-dir', '--cache-folder', '--modules-folder', '--global-folder', '--link-folder', '--script-shell', '--tmp']),
-  'python-package': new Set(['-r', '--requirement', '-e', '--editable', '-c', '--constraint', '-i', '--index-url', '--extra-index-url', '--index', '--default-index', '-t', '--target', '-f', '--find-links', '--python', '-p', '--from', '--with', '--with-editable', '--with-requirements', '--prefix', '--root', '--group', '--extra', '--only-binary', '--no-binary', '--trusted-host', '--proxy', '--cache-dir', '--timeout', '--suffix', '--pip-args', '--spec', '--channel', '-n', '--name', '-G']),
+  'python-package': new Set(['-r', '--requirement', '-e', '--editable', '-c', '--constraint', '-i', '--index-url', '--extra-index-url', '--index', '--default-index', '-t', '--target', '-f', '--find-links', '--python', '-p', '--from', '--with', '--with-editable', '--with-requirements', '--prefix', '--root', '--group', '--extra', '--only-binary', '--no-binary', '--trusted-host', '--proxy', '--cache-dir', '--timeout', '--retries', '--upgrade-strategy', '--log', '--file', '--suffix', '--pip-args', '--spec', '--channel', '-n', '--name', '-G']),
 };
 
 /** These tell a runner to use only what is already local, so nothing crosses. */
@@ -183,7 +184,7 @@ const urlSpec = (text: string): Spec => {
  */
 const FILE_SPEC = /^(?:(?:@[^@/\s]+\/)?[^@/\s]+\s*@\s*)?(?:git\+)?(?:file|link|workspace|portal):/i;
 /** pip's PEP 508 direct reference, `name @ url` with spaces: the name before it is only a label, so the URL is what is read. */
-const withoutLabel = (text: string): string => text.replace(/^(?:@[^@/\s]+\/)?[^@/\s]+(?:\s+@\s*|\s*@\s+)(?=\S)/, '');
+const withoutLabel = (text: string): string => text.replace(/^(?:@[^@/\s]+\/)?[^@/\s]+(?:\s+@\s*|\s*@\s+|@(?=git\+))(?=\S)/, '');
 const isUrl = (text: string): boolean => text.includes('://') || text.startsWith('git+') || HOSTED.test(text) || SCP_URL.test(text);
 
 const atVersion = (text: string): { name: string; version: string | null } => {
@@ -197,20 +198,29 @@ const nodeSpec = (whole: string): Spec => {
   if (nothing !== null) return nothing;
   const text = withoutLabel(whole);
   // `alias@npm:real@1` installs `real`; the alias is only what the code imports it as. It reads like an scp URL, so it goes first.
-  const alias = /^@?[^@]+@npm:(.+)$/.exec(text)?.[1];
+  // A leading `npm:` is the same protocol with no alias.
+  const alias = /^(?:@?[^@]+@)?npm:(.+)$/.exec(text)?.[1];
   if (alias !== undefined) return nodeSpec(alias);
+  // pnpm's `catalog:` takes its version from the workspace, and `jsr:` names a version or a JSR package; neither is a path or an scp URL.
+  const protocol = /^(@?[^@]+)@(catalog|jsr):(.*)$/.exec(text);
+  if (protocol !== null) {
+    const [, label = '', kind, rest = ''] = protocol;
+    if (kind === 'jsr' && (rest.startsWith('@') || rest.includes('/'))) return nodeSpec(rest);
+    const version = kind === 'jsr' && rest !== '' ? rest : null;
+    return { kind: 'named', name: label, version, versionForm: versionFormOf(version), url: false };
+  }
   if (FILE_SPEC.test(text)) return { kind: 'unread', shape: 'local-path' };
   if (isUrl(text)) return urlSpec(text);
   if (LOCAL_SPEC.test(text) || ARCHIVE.test(text)) return { kind: 'unread', shape: 'local-path' };
   // One slash with no leading `@` is a GitHub shorthand; more than one is a folder.
-  const parts = text.split('/').length;
+  const parts = (text.split('#')[0] ?? text).split('/').length;
   if (parts > 2 || text.includes('\\')) return { kind: 'unread', shape: 'local-path' };
   if (parts === 2 && !text.startsWith('@')) return urlSpec(text);
   const { name, version } = atVersion(text);
   return { kind: 'named', name, version, versionForm: versionFormOf(version), url: false };
 };
 
-const PYTHON_SPEC = /^([A-Za-z0-9][A-Za-z0-9._-]*)(?:\[[^\]]*\])?(===?|~=|!=|>=|<=|<|>)?(.*)$/;
+const PYTHON_SPEC = /^([A-Za-z0-9][A-Za-z0-9._-]*)(?:\[[^\]]*\])?\s*(===?|~=|!=|>=|<=|<|>)?\s*(.*)$/;
 
 const pythonSpec = (whole: string): Spec => {
   const nothing = namesNothing(whole);
@@ -221,9 +231,12 @@ const pythonSpec = (whole: string): Spec => {
   if (LOCAL_SPEC.test(text) || ARCHIVE.test(text) || /[\\/]/.test(text)) return { kind: 'unread', shape: 'local-path' };
   // uv writes `name@version`, where the `@` is not a PEP 508 direct reference (a URL, handled above).
   const { name: head, version: atStated } = atVersion(text);
-  const match = PYTHON_SPEC.exec(head);
+  // An environment marker (`;python_version<3`) says where the requirement applies, not which one it is.
+  const match = PYTHON_SPEC.exec((head.split(';')[0] ?? head).trim());
   if (match === null) return { kind: 'unread', shape: 'local-path' };
   const [, raw = '', operator = '', stated = ''] = match;
+  // Text after the name that no operator introduces is outside PEP 508: refused, never kept as a version.
+  if (operator === '' && stated !== '' && atStated === null) return { kind: 'unread', shape: 'unreadable-name' };
   // PEP 503: these spellings are one project, so novelty must not count them twice.
   const name = raw.toLowerCase().replace(/[-_.]+/g, '-');
   if (atStated !== null) return { kind: 'named', name, version: atStated, versionForm: versionFormOf(atStated), url: false };
@@ -292,13 +305,15 @@ const allFlags = (words: Words, ...names: readonly string[]): string[] => names.
 
 const PIP_NAME = /^pip[\d.]*$/;
 const PYTHON_NAME = /^(?:python[\d.]*|py)$/;
+const MODULE_NAME = /^(?:pip[\d.]*|pipx|uv)$/;
 
-/** `python -m pip ...` is `pip ...`. The words before `-m` are the interpreter's own flags. */
+/** `python -m pip ...` is `pip ...`, and `-m pipx` and `-m uv` the same. The words before `-m` are the interpreter's own flags. */
 const moduleCommand = (command: ShellCommand): ShellCommand | null => {
   if (!PYTHON_NAME.test(command.program)) return null;
   const module = command.args.findIndex((word) => word.text === '-m');
-  if (module < 0 || !PIP_NAME.test(command.args[module + 1]?.text ?? '')) return null;
-  return { ...command, program: 'pip', args: command.args.slice(module + 2) };
+  const name = command.args[module + 1]?.text ?? '';
+  if (module < 0 || !MODULE_NAME.test(name)) return null;
+  return { ...command, program: PIP_NAME.test(name) ? 'pip' : name, args: command.args.slice(module + 2) };
 };
 
 const toolOf = (program: string): Tool | undefined => TOOLS.get(PIP_NAME.test(program) ? 'pip' : program);
@@ -349,9 +364,11 @@ const readRun = (reading: Reading, family: Family, words: Words, rest: readonly 
       reading.unread.push('local-path');
       return;
     }
-    const spec = namesNothing(source) ?? (isUrl(source) ? urlSpec(source) : null);
+    // `owner/repo@skill` picks one skill of a source: the source is what crosses.
+    const picked = /^([^@:\s]+\/[^@:\s]+)@[^@/:\s]+$/.exec(source)?.[1] ?? source;
+    const spec = namesNothing(picked) ?? (isUrl(picked) ? urlSpec(picked) : null);
     if (spec?.kind === 'unread') reading.unread.push(spec.shape);
-    else if (!LOCAL_SPEC.test(source)) reading.crossings.push({ class: 'skill', form: 'install', name: spec?.name ?? source, version: null, versionForm: 'unstated', program: command.program, statusReports: command.read, registryAsked: true });
+    else if (!LOCAL_SPEC.test(picked)) reading.crossings.push({ class: 'skill', form: 'install', name: spec?.name ?? picked, version: null, versionForm: 'unstated', program: command.program, statusReports: command.read, registryAsked: true });
     return;
   }
   const packaged = family === 'npm-package' ? allFlags(words, '-p', '--package') : allFlags(words, '--from', '--spec');
@@ -369,7 +386,7 @@ const readRemoval = (reading: Reading, family: Family, names: readonly string[])
 const readInstall = (reading: Reading, family: Family, words: Words, rest: readonly string[], command: ShellCommand): void => {
   const editable = allFlags(words, '-e', '--editable');
   const texts = [...editable, ...rest];
-  if (texts.length === 0 || allFlags(words, '-r', '--requirement').length > 0) reading.unread.push('manifest-install');
+  if (texts.length === 0 || allFlags(words, '-r', '--requirement', '--file').length > 0) reading.unread.push('manifest-install');
   addSpecs(reading, family, texts, 'install', command.program, command.read);
 };
 
@@ -408,7 +425,7 @@ const readTool = (reading: Reading, tool: Tool, command: ShellCommand): void => 
   const toolForm = command.program === 'uvx' || (command.program === 'uv' && verb.path[0] === 'tool');
   if (verb.action === 'manifest') reading.unread.push('manifest-install');
   else if (verb.action === 'remove') readRemoval(reading, family, verb.rest);
-  else if (verb.action === 'install') readInstall(reading, family, words, verb.rest, command);
+  else if (verb.action === 'install') readInstall(reading, family, words, verb.path[0] === 'inject' ? verb.rest.slice(1) : verb.rest, command);
   else if (verb.action === 'run') readRun(reading, family, words, verb.rest, command);
   else if (verb.rest[0] !== undefined) readCreator(reading, family, verb.rest[0], command);
   // uv's tool forms take extra packages with `--with`; they install beside the tool.
@@ -442,7 +459,7 @@ const readCommand = (reading: Reading, command: ShellCommand, previous: ShellCom
   readTool(reading, tool, direct);
   // `python -m pip` is how a call goes around a stopped `pip`, so a record has to keep the two apart. `pip3.12` is one program with `pip`.
   for (const crossing of reading.crossings.slice(from)) {
-    if (viaModule !== null) crossing.program = 'python -m pip';
+    if (viaModule !== null) crossing.program = `python -m ${direct.program}`;
     else if (PIP_NAME.test(crossing.program)) crossing.program = 'pip';
   }
 };
@@ -462,7 +479,12 @@ const ATTACHED_INDEX = /^-i./;
 /** PowerShell's own folder stack. Local to the gate: `CHANGES_FOLDER` also drives capture's read-back of the working folder. */
 const FOLDER_STACK = new Set(['push-location', 'pop-location']);
 /** An assignment of a manager's own variable, in any shell's spelling, which can name a registry or a config file. Over-matching only leaves a name unasked. */
-const REGISTRY_ENVIRONMENT = /(?:^|[^A-Za-z0-9_])(?:npm_config_|pip_|uv_)[A-Za-z0-9_]*\s*=/i;
+const REGISTRY_ENVIRONMENT = /(?:^|[^A-Za-z0-9_])(?:(?:npm_config_|pip_|uv_)[A-Za-z0-9_]*|home|userprofile|xdg_config_home|virtual_env)\s*=/i;
+/**
+ * Other ways a call reads another config than the one the gate's question reads: `sudo` (root's), a venv's `activate` (its `pip.conf`), and
+ * a manager run by path (`.venv/bin/pip`, which reads that venv's). Over-matching only leaves a name unasked.
+ */
+const OTHER_CONFIG = /(?:^|[\s;&|(])sudo(?:\s|$)|(?:^|[\\/\s;&|(])activate(?:\.ps1|\.bat)?(?=[\s;&|)]|$)|[\\/](?:npm|npx|pnpm|pnpx|pip[\d.]*|python[\d.]*|py)(?:\.cmd|\.exe)?(?=\s|$)/i;
 
 const choosesRegistry = (command: ShellCommand): boolean => command.args.some(({ text }) => REGISTRY_FLAGS.has(text.split('=')[0] ?? '') || SCOPE_REGISTRY.test(text) || CONFIG_REGISTRY.test(text) || ATTACHED_INDEX.test(text));
 
@@ -471,7 +493,7 @@ const checkShell = (input: unknown, redact: Redactor): CallCheck => {
   const reading = emptyReading();
   if (command === undefined) return reading;
   const commands = shellCommands(command, redact);
-  const environment = REGISTRY_ENVIRONMENT.test(command);
+  const environment = REGISTRY_ENVIRONMENT.test(command) || OTHER_CONFIG.test(command);
   let moved = false;
   commands.forEach((held, at) => {
     const from = reading.crossings.length;
@@ -497,7 +519,7 @@ const NAME_LENGTH = 214;
 const LABEL_LENGTH = 128;
 const SEGMENT = '[A-Za-z0-9._-]+';
 /** A segment that is not `.` or `..`: those two name a folder, never an owner, a repository, or a part of a URL's path. */
-const PLAIN = String.raw`(?!\.{1,2}(?:/|$))`;
+const PLAIN = String.raw`(?!(?:\.|%2[eE]){1,2}(?:/|$))`;
 /** An owner starts with a letter or digit, so `.secret/x` and `C:x` are not `owner/repo`. */
 const OWNER = '[A-Za-z0-9][A-Za-z0-9_-]*';
 const MASK = '<(?:secret|email|org-domain)>';

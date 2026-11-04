@@ -12,16 +12,16 @@ const words = (command: string, limit?: number) => {
   const [held] = shellCommands(command, redact);
   if (held === undefined) throw new Error('no command');
   const read = readWords(held, 'npm-package', limit);
-  return { names: read.names, flags: Object.fromEntries(read.flags), bare: [...read.bare] };
+  return { names: read.names, flags: [...read.flags], bare: [...read.bare] };
 };
 
 describe('readWords', () => {
-  it.each<[string, number | undefined, string[], Record<string, string[]>, string[]]>([
-    ['npx tsc --noEmit -p tsconfig.json', 1, ['tsc', '--noEmit', '-p', 'tsconfig.json'], {}, []],
-    ['npx -y -p a tsc -p b --x', 1, ['tsc', '-p', 'b', '--x'], { '-p': ['a'] }, ['-y']],
-    ['npm exec -w web foo bar --no', 2, ['exec', 'foo', 'bar', '--no'], { '-w': ['web'] }, []],
-    ['npm install -D a --save-prefix x b', undefined, ['install', 'a', 'b'], { '--save-prefix': ['x'] }, ['-D']],
-    ['npx foo', 0, ['foo'], {}, []],
+  it.each<[string, number | undefined, string[], Array<[string, string[]]>, string[]]>([
+    ['npx tsc --noEmit -p tsconfig.json', 1, ['tsc', '--noEmit', '-p', 'tsconfig.json'], [], []],
+    ['npx -y -p a tsc -p b --x', 1, ['tsc', '-p', 'b', '--x'], [['-p', ['a']]], ['-y']],
+    ['npm exec -w web foo bar --no', 2, ['exec', 'foo', 'bar', '--no'], [['-w', ['web']]], []],
+    ['npm install -D a --save-prefix x b', undefined, ['install', 'a', 'b'], [['--save-prefix', ['x']]], ['-D']],
+    ['npx foo', 0, ['foo'], [], []],
   ])('%s, stopping after %s names', (command, limit, names, flags, bare) => {
     expect(words(command, limit)).toEqual({ names, flags, bare });
   });
@@ -53,7 +53,29 @@ describe('checkCall on a shell command', () => {
     ['pdm add attrs', ['python-package install attrs unstated']],
     ['pipenv install rich', ['python-package install rich unstated']],
     ['conda install -c conda-forge scipy', ['python-package install scipy unstated']],
+    // Python's own modules and `pipx inject`, whose first word is the venv.
+    ['python -m pipx install black', ['python-package install black unstated']],
+    ['python -m uv pip install rich', ['python-package install rich unstated']],
+    ['pipx inject venv extra-pkg', ['python-package install extra-pkg unstated']],
+    // A value flag owns its word in the Python family too.
+    ['pip install --retries 3 x', ['python-package install x unstated']],
+    ['pip install --upgrade-strategy eager x', ['python-package install x unstated']],
+    ['pip install --log pip.log x', ['python-package install x unstated']],
+    // PEP 508: a marker is dropped, a space may sit around the operator, and `name @ url` and `name@git+url` are one direct reference.
+    ['pip install "numpy;python_version<3"', ['python-package install numpy unstated']],
+    ['pip install "numpy>=1;python_version<3"', ['python-package install numpy range']],
+    ['pip install "foo >= 1"', ['python-package install foo range']],
+    ['pip install "foo @ git+https://github.com/org/foo"', ['python-package url-install https://github.com/org/foo url']],
+    ['pip install "foo@git+https://github.com/org/repo"', ['python-package url-install https://github.com/org/repo url']],
+    ['uv add "foo@git+https://github.com/org/repo@main"', ['python-package url-install https://github.com/org/repo url']],
+    // pnpm's `catalog:` and `jsr:`, and a leading `npm:`, name a package; a ref with a slash does not make `org/repo#ref` a folder.
+    ['pnpm add foo@catalog:', ['npm-package install foo unstated']],
+    ['pnpm add foo@catalog:react18', ['npm-package install foo unstated']],
+    ['pnpm add foo@jsr:1.0.0', ['npm-package install foo pinned']],
+    ['npm install npm:foo', ['npm-package install foo unstated']],
+    ['npm install org/repo#feature/x', ['npm-package url-install org/repo url']],
     // Fetch-and-run forms.
+    ['pnpx foo', ['npm-package fetch-and-run foo unstated']],
     ['npx cowsay hello', ['npm-package fetch-and-run cowsay unstated']],
     ['npx -y @modelcontextprotocol/inspector@1.0.0 --port 1', ['npm-package fetch-and-run @modelcontextprotocol/inspector pinned']],
     ['npx --package=typescript tsc --noEmit', ['npm-package fetch-and-run typescript unstated']],
@@ -131,6 +153,9 @@ describe('checkCall on a shell command', () => {
     ['npx skills add -g owner/repo', ['skill install owner/repo unstated']],
     ['npx skills add --skill one --agent claude owner/repo', ['skill install owner/repo unstated']],
     ['npx skills add owner/repo -s one', ['skill install owner/repo unstated']],
+    // `owner/repo@skill` picks one skill of the source; `owner/repo/folder` is a hosted folder (skills 1.7.6 reads any such word as a shorthand).
+    ['npx skills add owner/repo@one', ['skill install owner/repo unstated']],
+    ['npx skills add some/hosted/folder', ['skill install some/hosted/folder unstated']],
     // `-s` is silent for the npm family and `-d` is dev for pdm and pipenv: neither takes a value.
     ['npm install -s axios', ['npm-package install axios unstated']],
     ['pnpm add -s zod', ['npm-package install zod unstated']],
@@ -171,11 +196,16 @@ describe('checkCall on a shell command', () => {
     ['yarn install --immutable', ['manifest-install']],
     ['bun install', ['manifest-install']],
     ['pip install -r requirements.txt', ['manifest-install']],
+    ['conda install --file reqs.txt', ['manifest-install']],
     ['uv sync', ['manifest-install']],
     ['uv pip sync requirements.txt', ['manifest-install']],
     ['poetry install', ['manifest-install']],
     ['pdm sync', ['manifest-install']],
     ['pipenv sync', ['manifest-install']],
+    // A word outside PEP 508 is refused, never kept as a version.
+    ['pip install "foo bar baz"', ['unreadable-name']],
+    ['pip install "a#secret-token"', ['unreadable-name']],
+    ['npm install ""', ['unreadable-name']],
     // A path or a variable names nothing either.
     ['pip install -e .', ['local-path']],
     ['npm install ./packages/one', ['local-path']],
@@ -268,6 +298,8 @@ describe('checkCall on a shell command', () => {
     'npx --no-install tsc',
     'npx --no tsc',
     'npx --offline tsc',
+    // Known limit: a manager run through `uv run` is not read (docs/gate.md).
+    'uv run pip install rich',
     'echo "npm install axios"',
     'grep -rn "pip install" docs',
     "git commit -m 'npm install axios'",
@@ -310,6 +342,16 @@ describe('checkCall on a shell command', () => {
     ['npm install --globalconfig=sub/.npmrc x', false],
     ['npm install --globalconfig sub/.npmrc x', false],
     ['UV_INDEX_URL=https://private.example/simple uvx tool', false],
+    // Another home, config folder, or venv is another config: the question runs with the operator's.
+    ['HOME=/other npm install x', false],
+    ['XDG_CONFIG_HOME=/other npm install x', false],
+    ['USERPROFILE=C:/other npm install x', false],
+    ['VIRTUAL_ENV=/other pip install x', false],
+    ['. .venv/bin/activate && pip install x', false],
+    ['source .venv/Scripts/Activate.ps1; pip install x', false],
+    ['.venv/bin/pip install x', false],
+    ['/usr/local/bin/npm install x', false],
+    ['sudo npm install x', false],
   ])('marks whether the registry a command would contact is the default one: %s', (command, asked) => {
     expect(bash(command).crossings.map((crossing) => crossing.registryAsked)).toEqual([asked]);
   });
@@ -479,6 +521,18 @@ describe('admitName, the one point every recorded name passes', () => {
     ['npm-package', 'url-install', 'https://../secret/home/x', unread('local-path')],
     ['npm-package', 'url-install', 'ssh://./x', unread('local-path')],
     ['npm-package', 'url-install', 'https://-x/y', unread('local-path')],
+    // A percent-encoded dot is a dot segment too.
+    ['npm-package', 'url-install', 'https://host.example/%2e%2e/secret', unread('local-path')],
+    ['npm-package', 'url-install', 'https://host.example/%2E/secret', unread('local-path')],
+    ['npm-package', 'url-install', 'https://host.example/.%2e/secret', unread('local-path')],
+    ['npm-package', 'url-install', 'https://host.example/a%2eb/x.tgz', named('https://host.example/a%2eb/x.tgz')],
+    // The two limits are 214 for a package and 128 for a server or a skill's name, and neither stands in for the other.
+    ['npm-package', 'install', 'x'.repeat(214), named('x'.repeat(214))],
+    ['npm-package', 'install', 'x'.repeat(215), unread('unreadable-name')],
+    ['npm-package', 'install', 'x'.repeat(129), named('x'.repeat(129))],
+    ['mcp-server', 'mcp-call', 'x'.repeat(128), named('x'.repeat(128))],
+    ['mcp-server', 'mcp-call', 'x'.repeat(129), unread('unreadable-name')],
+    ['skill', 'skill-call', 'x'.repeat(129), unread('unreadable-name')],
     ['npm-package', 'url-install', '..:x/y', unread('local-path')],
     ['npm-package', 'url-install', '-x:y/z', unread('local-path')],
     ['npm-package', 'url-install', 'https://host.example:8080/x.tgz', named('https://host.example:8080/x.tgz')],

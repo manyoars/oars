@@ -460,9 +460,9 @@ describe('the registry option', () => {
     ]);
     const reader = answering();
     await run([REPO], reader);
-    expect(reader.mock.calls.map(([ask]) => ask.name).sort()).toEqual(['via-module', 'via-npm', 'via-npx', 'via-pip', 'via-pnpm']);
+    expect(reader.mock.calls.map(([ask]) => ask.name).sort()).toEqual(['via-module', 'via-npm', 'via-npx', 'via-pip']);
     const { crossings } = await written();
-    expect(crossings.filter((row) => row.registryState === 'not-read').map((row) => row.name)).toEqual(['via-poetry', 'via-conda', 'via-yarn', 'via-uv', 'via-bun']);
+    expect(crossings.filter((row) => row.registryState === 'not-read').map((row) => row.name)).toEqual(['via-pnpm', 'via-poetry', 'via-conda', 'via-yarn', 'via-uv', 'via-bun']);
   });
 
   it('counts a kept answer older than the age limit as absent, by the clock of the run, and asks again', async () => {

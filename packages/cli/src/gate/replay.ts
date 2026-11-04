@@ -35,8 +35,8 @@ const DAY_MS = 86_400_000;
 const REGISTRY_WORKERS = 4;
 /** A kept registry answer older than this many days is asked again: a `latest` goes stale, and a row would otherwise read "as of this run" forever. */
 export const REGISTRY_MAX_DAYS = 30;
-/** Only these managers read the registry the `npm view` and `pip index` asks reach. A `poetry`, `uv`, `yarn`, or `conda` install may use one they do not. */
-const ASKED_PROGRAMS: ReadonlySet<string> = new Set(['npm', 'npx', 'pnpm', 'pip', 'python -m pip']);
+/** Only these managers read the registry the `npm view` and `pip index` asks reach. A `pnpm` (its own global `rc`), `poetry`, `uv`, `yarn`, or `conda` install may use one they do not. */
+const ASKED_PROGRAMS: ReadonlySet<string> = new Set(['npm', 'npx', 'pip', 'python -m pip']);
 
 const keyOf = (crossing: Pick<Crossing, 'class' | 'name'>): string => `${crossing.class}\0${crossing.name}`;
 
