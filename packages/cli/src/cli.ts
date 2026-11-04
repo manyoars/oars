@@ -474,7 +474,7 @@ const buildProgram = (deps: RunDeps, argv: string[]): Command => {
 
   sessions
     .command('exclusions')
-    .description('scan the local store and transcripts under the V15 rule, write the excluded sessions to a local file, and print counts only (the term file is named by OARS_EXCLUSION_TERMS)')
+    .description('scan the local store and transcripts under the exclusion rule, write the excluded sessions to a local file, and print counts only (the term file is named by OARS_EXCLUSION_TERMS)')
     .option('--out <file>', 'where to write the excluded sessions (default: session-commons/exclusion-list.jsonl beside the claude projects folder)')
     .action(async (_options: OptionValues, command: Command) => {
       const options: OptionValues = command.optsWithGlobals();
@@ -650,7 +650,7 @@ const buildProgram = (deps: RunDeps, argv: string[]): Command => {
 
   pool
     .command('deposit')
-    .description('write a batch to the outbox for each session that passes the folder allowlist and the V15 check, and stop: nothing is sent, and only counts print. --send <hash> runs the checks that a batch was printed and is unchanged, then stops: sending is disabled in this release')
+    .description('write a batch to the outbox for each session that passes the folder allowlist and the exclusion check, and stop: nothing is sent, and only counts print. --send <hash> runs the checks that a batch was printed and is unchanged, then stops: sending is disabled in this release')
     .option('--accept-covenant <version>', 'accept this version of the pool covenant before sending (with --send, which is disabled in this release)')
     .option('--send <hash>', 'the SHA-256 of a batch that oars pool outbox printed')
     .option(serverOption, serverHelp)
@@ -672,11 +672,12 @@ const buildProgram = (deps: RunDeps, argv: string[]): Command => {
   pool
     .command('fetch')
     .description('fetch the signed bundle for one harness version, verify it against the key pinned at login, and keep it locally')
+    .option('--harness <name>', 'the harness whose bundle to fetch (default: the one your local store holds the most sessions of, claude-code when none leads)')
     .requiredOption('--harness-version <version>', 'the public harness version whose bundle to fetch')
     .option(serverOption, serverHelp)
     .action(async (_options: OptionValues, command: Command) => {
       const options: OptionValues = command.optsWithGlobals();
-      emit(deps, flag(options, 'json'), await poolFetch(deps, { server: text(options, 'server'), harnessVersion: text(options, 'harnessVersion') ?? '' }));
+      emit(deps, flag(options, 'json'), await poolFetch(deps, { server: text(options, 'server'), harness: text(options, 'harness'), harnessVersion: text(options, 'harnessVersion') ?? '' }));
     });
 
   return program;

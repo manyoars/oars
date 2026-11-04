@@ -1,4 +1,4 @@
-// Item 4 of the stored form: the bundle is read from the stored `index` cells, never from the ledger plane. These tests delete or ignore the ledger and the contributor records and
+// The stored form: the bundle is read from the stored `index` cells, never from the ledger plane. These tests delete or ignore the ledger and the contributor records and
 // look for any change in what is served, and count the rows a read touches.
 import { webcrypto } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -10,7 +10,7 @@ import { fetchBundle, WEEK_RESET } from './bundle.js';
 import type { PoolDb } from './http.js';
 import { fieldOf, startPool, stubUser, type TestPool } from './test-pool.js';
 
-const PATH = `/bundle/2.1.314/${VOCAB_VERSION}`;
+const PATH = `/bundle/claude-code/2.1.314/${VOCAB_VERSION}`;
 
 let pool: TestPool;
 
@@ -38,7 +38,7 @@ describe('the bundle reads the stored cells', () => {
       const before = await own.raw(PATH, token);
       expect(before.status).toBe(200);
       // Served something, or an empty bundle before and after would pass this test for nothing.
-      const verified = await verifyBundle(before.json, own.signingKey(), '2.1.314');
+      const verified = await verifyBundle(before.json, own.signingKey(), 'claude-code', '2.1.314');
       if (!verified.ok) throw new Error(verified.reason);
       expect(verified.bundle.cells.length).toBeGreaterThan(0);
       expect(verified.bundle.reads.length).toBeGreaterThan(0);
@@ -98,7 +98,7 @@ describe('the bundle reads the stored cells', () => {
           }),
           batch: () => Promise.reject(new Error('a read writes nothing')),
         };
-        const answered = await fetchBundle(new Request('https://pool.test/bundle', { headers: { authorization: `Bearer ${token}` } }), { DB: counted, BUNDLE_SIGNING_KEY, FETCH_CAP: '1000' }, '2.1.314', VOCAB_VERSION);
+        const answered = await fetchBundle(new Request('https://pool.test/bundle', { headers: { authorization: `Bearer ${token}` } }), { DB: counted, BUNDLE_SIGNING_KEY, FETCH_CAP: '1000' }, 'claude-code', '2.1.314', VOCAB_VERSION);
         return { status: answered.status, rows };
       };
       for (const id of ['7101', '7102', '7103', '7104']) await depositor(own, id);

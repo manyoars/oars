@@ -5,7 +5,7 @@ import { incrementsOf } from './ingest.js';
 import { sampleSkeleton } from './sample.js';
 import { fieldOf, startPool, stubUser, type TestPool, textOf } from './test-pool.js';
 
-const PATH = `/bundle/2.1.314/${VOCAB_VERSION}`;
+const PATH = `/bundle/claude-code/2.1.314/${VOCAB_VERSION}`;
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 const ONE = 1;
@@ -26,7 +26,7 @@ describe('batchCounts', () => {
   });
 
   it('holds a mixed batch to its strictest harness, subagents folded in', () => {
-    const mixed: SessionSkeleton = { ...cursor, transcripts: [...cursor.transcripts, ...claude.transcripts.map((transcript) => ({ ...transcript }))] };
+    const mixed: SessionSkeleton = { ...cursor, transcripts: [...cursor.transcripts, ...claude.transcripts] };
     expect(batchCounts('skeleton', mixed, ONE)).toBe(false);
     expect(batchCounts('committed', mixed, ONE)).toBe(true);
   });

@@ -1,4 +1,4 @@
-// `oars pool`: the only part of the sessions code that talks to a remote. The server is always named, by flag or environment, so nothing leaves on a default. Sign-in runs the provider's device flow here and reads no harness token; a session leaves only as a closed-vocabulary skeleton, and only after the V15 check found it clean. Local capture, recall,
+// `oars pool`: the only part of the sessions code that talks to a remote. The server is always named, by flag or environment, so nothing leaves on a default. Sign-in runs the provider's device flow here and reads no harness token; a session leaves only as a closed-vocabulary skeleton, and only after the exclusion check found it clean. Local capture, recall,
 // and reads never come through here.
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
@@ -6,12 +6,13 @@ import type { Outcome, RunDeps } from '../cli.js';
 import { CliError, exitCodeForProblem, ExitCode, unreachableError } from '../errors.js';
 import { compileAllow } from './allow.js';
 import { checkSession, exclusionPaths, type Reason } from './exclusion.js';
-import { discardStale, FIELD_ROWS, fieldsOf, heldBatches, lockedBatch, markShown, outboxFolder, removeBatchesExcept, staleBatches, unchangedBytes, writeBatch, type LockRefusal } from './pool-outbox.js';
-import { isBundleVersion, parseSkeleton, sessionsOf, skeletonOf, VOCAB_VERSION, verifyBundle, type Bundle, type PinnedKey } from './pool-wire.js';
+import { discardStale, FIELD_ROWS, fieldsOf, heldBatches, lockedBatch, markShown, outboxFolder, removeBatchesExcept, removeBatchOf, staleBatches, unchangedBytes, writeBatch, type LockRefusal } from './pool-outbox.js';
+import { HARNESSES, isBundleVersion, isHarness, parseSkeleton, sessionsOf, skeletonOf, VOCAB_VERSION, verifyBundle, type Bundle, type PinnedKey } from './pool-wire.js';
 import { Masker, printed, TRANSPORT_HEADERS, waitWords, type Outgoing } from './pool-print.js';
 import { shellReader } from './projection.js';
 import { isVocabularyExpired, REGISTRY_MAX_AGE_DAYS, VOCAB_SNAPSHOT_DATE } from './public-vocabulary.js';
 import { contentHash } from './read.js';
+import { harnessOf as sessionHarness, type Harness } from './schema.js';
 import { loadStore, readSaved, type SessionsRuntime } from './store.js';
 import { vocabulary } from './vocab-load.js';
 
@@ -337,7 +338,7 @@ interface DepositCounts {
   /** Refused by the vocabulary here; the count of those and which fields, never a value. */
   refused: number;
   refusedFields: string[];
-  /** Batches built under an older vocabulary or field list, removed from the outbox. */
+  /** Batches built under an older vocabulary, field list, or skeleton format, removed from the outbox. */
   discarded: number;
   /** Batches of an earlier pass whose session no longer passes (a gate, the allowlist, a refusal) or is gone from the store, removed so the outbox holds only what this pass built. */
   withdrawn: number;
@@ -390,7 +391,7 @@ const sendBatch = async (deps: RunDeps, options: { outbox: string; server: strin
 
 /**
  * `oars pool deposit`: every session in the store that passes both session gates is built into a canonical batch in the outbox, and the command stops: nothing is sent. The gates run before any projection does: the folder
- * allowlist, then the V15 check. A session that fails either, or has no raw to scan, is counted and never built. `--send <hash>` is the lock in `sendBatch`.
+ * allowlist, then the exclusion check. A session that fails either, or has no raw to scan, is counted and never built. `--send <hash>` is the lock in `sendBatch`.
  */
 export const poolDeposit = async (deps: RunDeps, options: { server?: string | undefined; acceptCovenant?: string | undefined; send?: string | undefined; via?: Sender | undefined }): Promise<Outcome> => {
   const runtime = runtimeOf(deps);
@@ -411,34 +412,42 @@ export const poolDeposit = async (deps: RunDeps, options: { server?: string | un
   const refusedFields = new Set<string>();
   for (const records of sessionsOf(await loadStore(runtime.storeDir))) {
     counts.sessions += 1;
+    // Hashed with the account, so a redeposit replaces its own batch and two accounts' copies of one session cannot be joined.
+    const key = contentHash([account, records.main.session]);
+    // A session that fails a gate here loses its earlier batch at once, so a later throw in this pass cannot leave one in the outbox.
+    const withdraw = async (): Promise<void> => {
+      counts.withdrawn += await removeBatchOf(outbox, key);
+    };
     if (!allow.allows(records.main.project)) {
       counts.excluded.folder += 1;
+      await withdraw();
       continue;
     }
     const verdict = await checkSession(runtime, terms, records.main.project, records.main.session);
     if (verdict.reason !== 'clean') {
       counts.excluded[excludedKey(verdict.reason)] += 1;
+      await withdraw();
       continue;
     }
-    // Hashed with the account, so a redeposit replaces its own batch and two accounts' copies of one session cannot be joined.
-    const key = contentHash([account, records.main.session]);
     const skeleton = skeletonOf(records, key, shellReader(vocabulary()));
     if (skeleton === null) {
       counts.uncaptured += 1;
+      await withdraw();
       continue;
     }
     const parsed = parseSkeleton(skeleton);
     if (!parsed.ok) {
       counts.refused += 1;
       refusedFields.add(parsed.field);
+      await withdraw();
       continue;
     }
     await writeBatch(outbox, key, parsed.skeleton);
     built.add(key);
     counts.batched += 1;
   }
-  // A session that fails a gate never enters the outbox, so a batch of it from an earlier pass goes too, and so does a batch of a session or account this store no longer holds.
-  counts.withdrawn = await removeBatchesExcept(outbox, built);
+  // The batch of a session or account this store no longer holds goes too.
+  counts.withdrawn += await removeBatchesExcept(outbox, built);
   counts.refusedFields = [...refusedFields].sort();
   const { folder, term, noRaw, noTerms, unreadable } = counts.excluded;
   const lines = [
@@ -446,7 +455,7 @@ export const poolDeposit = async (deps: RunDeps, options: { server?: string | un
     `Kept out by the session gates, never built: ${String(folder)} in a folder not on the allowlist, ${String(term)} for a term, ${String(noRaw)} with no raw to scan, ${String(noTerms)} with no term file, ${String(unreadable)} unreadable.`,
     `Not built: ${String(counts.uncaptured)} captured before steps and frames, ${String(counts.refused)} refused by the vocabulary${counts.refusedFields.length === 0 ? '' : ` (${counts.refusedFields.join(', ')})`}.`,
     ...(counts.withdrawn === 0 ? [] : [`Removed ${String(counts.withdrawn)} ${counts.withdrawn === 1 ? 'batch' : 'batches'} of sessions that no longer pass the gates or are no longer in the store.`]),
-    ...(discarded === 0 ? [] : [`Discarded ${String(discarded)} ${discarded === 1 ? 'batch' : 'batches'} built under an older vocabulary or field list.`]),
+    ...(discarded === 0 ? [] : [`Discarded ${String(discarded)} ${discarded === 1 ? 'batch' : 'batches'} built under an older vocabulary, field list, or skeleton format.`]),
     'Run oars pool outbox to print exactly what would be sent.',
   ];
   return { document: { ok: true, server, ...counts }, text: lines.join('\n') };
@@ -491,17 +500,18 @@ export const poolOutbox = async (deps: RunDeps, options: { server?: string | und
   return { document: { ok: true, server, batches: shown, edited, stale }, text };
 };
 
-const replicaFile = (storeDir: string, server: string, harnessVersion: string): string => join(storeDir, 'pool-replica', contentHash(server), `${encodeURIComponent(harnessVersion)}.json`);
+/** One folder per harness under the server's, so a fetch for one harness never overwrites another's bundle of the same version. */
+const replicaFile = (storeDir: string, server: string, harness: Harness, harnessVersion: string): string => join(storeDir, 'pool-replica', contentHash(server), harness, `${encodeURIComponent(harnessVersion)}.json`);
 
 /** What an earlier fetch kept: the bundle, checked again against the pinned key, and the ETag the pool sent with it. Nothing readable and verified is nothing kept, and the next fetch is then an ordinary one. */
-const keptReplica = async (file: string, key: PinnedKey, harnessVersion: string): Promise<{ etag: string | undefined; bundle: Bundle } | undefined> => {
+const keptReplica = async (file: string, key: PinnedKey, harness: Harness, harnessVersion: string): Promise<{ etag: string | undefined; bundle: Bundle } | undefined> => {
   let parsed: unknown;
   try {
     parsed = JSON.parse(await readFile(file, 'utf8'));
   } catch {
     return undefined;
   }
-  const verified = await verifyBundle(parsed, key, harnessVersion);
+  const verified = await verifyBundle(parsed, key, harness, harnessVersion);
   return verified.ok ? { etag: isObject(parsed) ? textIn(parsed, 'etag') : undefined, bundle: verified.bundle } : undefined;
 };
 
@@ -514,30 +524,55 @@ const cappedError = (deps: RunDeps, reply: Reply, kept: boolean): CliError => {
   return new CliError(title, ExitCode.CAPPED, FETCH, { code: 'fetch_cap', title, status: 429 }, undefined, { retryAfter });
 };
 
-/** `oars pool fetch`: one harness version's signed bundle, kept only once the key pinned at login has verified it. It keeps the signed form, so the replica can be checked again later, and the ETag, so the next fetch asks only whether it changed. The request prints before it is sent. */
-export const poolFetch = async (deps: RunDeps, options: { server?: string | undefined; harnessVersion: string }): Promise<Outcome> => {
+/** What a fetch asks for when no `--harness` is given, and what it falls back to when no one harness leads the local store. */
+const DEFAULT_HARNESS: Harness = 'claude-code';
+
+/**
+ * The harness a fetch asks for. `--harness` names it, and nothing is printed. Without the flag it is the harness the local store holds the most sessions of, and the choice and the way to
+ * change it go to stderr before the request: a fetch never picks silently. An empty store or a tie asks for Claude Code's and says so. It reads counts only, and none of them leaves the machine.
+ */
+const fetchHarness = async (deps: RunDeps, storeDir: string, named: string | undefined): Promise<Harness> => {
+  if (named !== undefined) {
+    if (!isHarness(named)) throw usage(`${named} is not a harness the pool serves. Choose one of ${HARNESSES.join(', ')}.`, FETCH);
+    return named;
+  }
+  const counts = new Map<Harness, number>();
+  for (const session of (await loadStore(storeDir)).sessions) counts.set(sessionHarness(session), (counts.get(sessionHarness(session)) ?? 0) + 1);
+  const [top, runnerUp] = [...counts.entries()].sort((a, b) => b[1] - a[1]);
+  const lead = top !== undefined && (runnerUp === undefined || top[1] > runnerUp[1]) ? top : undefined;
+  const harness = lead === undefined ? DEFAULT_HARNESS : lead[0];
+  const total = [...counts.values()].reduce((sum, count) => sum + count, 0);
+  const why = lead === undefined ? `${total === 0 ? 'your local store is empty' : 'no one harness leads your local store'}, so Claude Code is the default` : `the harness your local store holds the most sessions of (${String(lead[1])} of ${String(total)})`;
+  deps.io.stderr(`No --harness given: fetching ${harness}, ${why}. Pass --harness <name> to fetch another (${HARNESSES.join(', ')}).
+`);
+  return harness;
+};
+
+/** `oars pool fetch`: one harness's signed bundle at one version, kept only once the key pinned at login has verified it. It keeps the signed form, so the replica can be checked again later, and the ETag, so the next fetch asks only whether it changed. The request prints before it is sent. */
+export const poolFetch = async (deps: RunDeps, options: { server?: string | undefined; harness?: string | undefined; harnessVersion: string }): Promise<Outcome> => {
   const { storeDir } = runtimeOf(deps);
   const server = poolServer(deps.env, FETCH, options.server);
   const { harnessVersion } = options;
   if (!isBundleVersion(harnessVersion)) throw usage(`${harnessVersion} is not a public harness version.`, FETCH);
+  const harness = await fetchHarness(deps, storeDir, options.harness);
   const { token, signingKey } = await signedIn(deps, storeDir, server, FETCH);
-  const file = replicaFile(storeDir, server, harnessVersion);
-  const kept = await keptReplica(file, signingKey, harnessVersion);
+  const file = replicaFile(storeDir, server, harness, harnessVersion);
+  const kept = await keptReplica(file, signingKey, harness, harnessVersion);
   const credential = new Masker();
   credential.add(token);
-  const reply = await ask(deps, FETCH, server, `/bundle/${encodeURIComponent(harnessVersion)}/${encodeURIComponent(VOCAB_VERSION)}`, { token, show: credential, ...(kept?.etag === undefined ? {} : { ifNoneMatch: kept.etag }) });
+  const reply = await ask(deps, FETCH, server, `/bundle/${harness}/${encodeURIComponent(harnessVersion)}/${encodeURIComponent(VOCAB_VERSION)}`, { token, show: credential, ...(kept?.etag === undefined ? {} : { ifNoneMatch: kept.etag }) });
   if (reply.status === 429) throw cappedError(deps, reply, kept !== undefined);
   if (reply.status === 304) {
     // A 304 answers an If-None-Match, so one to a fetch that sent none is a pool that has lost track of what it was asked.
     if (kept?.etag === undefined) throw new CliError('The pool answered 304 to a fetch that named no kept bundle.', ExitCode.UNEXPECTED, FETCH);
     const { cells, motifs, reads, asOf } = kept.bundle;
     return {
-      document: { ok: true, server, harnessVersion, file, unchanged: true, cells: cells.length, motifs: motifs.length, reads: reads.length, asOf },
-      text: `${harnessVersion} is unchanged: the bundle at ${file} is still current (${String(reads.length)} reads, ${String(cells.length)} cells, and ${String(motifs.length)} motifs).`,
+      document: { ok: true, server, harness, harnessVersion, file, unchanged: true, cells: cells.length, motifs: motifs.length, reads: reads.length, asOf },
+      text: `${harness} ${harnessVersion} is unchanged: the bundle at ${file} is still current (${String(reads.length)} reads, ${String(cells.length)} cells, and ${String(motifs.length)} motifs).`,
     };
   }
   if (reply.status !== 200) throw refusal(FETCH, reply);
-  const verified = await verifyBundle(reply.body, signingKey, harnessVersion);
+  const verified = await verifyBundle(reply.body, signingKey, harness, harnessVersion);
   if (!verified.ok) {
     const title = `Refused the bundle: ${verified.reason}.`;
     throw new CliError(title, ExitCode.INVALID, FETCH, { code: 'bundle_unverified', title });
@@ -548,7 +583,7 @@ export const poolFetch = async (deps: RunDeps, options: { server?: string | unde
 `);
   const { cells, motifs, reads, asOf } = verified.bundle;
   return {
-    document: { ok: true, server, harnessVersion, file, unchanged: false, cells: cells.length, motifs: motifs.length, reads: reads.length, asOf },
-    text: `Fetched ${harnessVersion}: ${String(reads.length)} reads, ${String(cells.length)} cells, and ${String(motifs.length)} motifs, verified against the pinned key and kept at ${file}.`,
+    document: { ok: true, server, harness, harnessVersion, file, unchanged: false, cells: cells.length, motifs: motifs.length, reads: reads.length, asOf },
+    text: `Fetched ${harness} ${harnessVersion}: ${String(reads.length)} reads, ${String(cells.length)} cells, and ${String(motifs.length)} motifs, verified against the pinned key and kept at ${file}.`,
   };
 };

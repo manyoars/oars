@@ -2,10 +2,10 @@
 import { parseSkeleton, type SessionSkeleton } from '../../cli/src/sessions/pool-wire.js';
 import type { Frame } from '../../cli/src/sessions/schema.js';
 import { batchCounts, INGEST_TIER } from './access.js';
-import { fetchBundle } from './bundle.js';
+import { fetchBundle, harnessRequired } from './bundle.js';
 import { covenantAccept, covenantNotAccepted, covenantStatus, depositsClosed, hasAccepted } from './covenant.js';
 import { answer, bound, refuse, wholeBinding, type Env } from './http.js';
-import { incrementsOf, incrementStatements, netCellCount, previousOf } from './ingest.js';
+import { incrementsOf, incrementStatements, markOf, netCellCount, previousOf } from './ingest.js';
 import { accountOf, login } from './identity.js';
 
 /** D1 holds at most 2 MB in one value. A body declaring more is refused unread, and one that declares nothing is measured before it is parsed. */
@@ -18,7 +18,9 @@ const DEFAULT_MAX_ACCOUNT_BYTES = 64 * 1024 * 1024;
 /** What a batch's `deltas` hold until the wire carries them (spec Section 2, "Deltas"): the client builds them, so ingest has none to take. */
 const DELTAS = '[]';
 
-const BUNDLE = /^\/bundle\/([^/]*)\/([^/]*)$/;
+const BUNDLE = /^\/bundle\/([^/]*)\/([^/]*)\/([^/]*)$/;
+/** The route as it stood before the harness segment: refused by name rather than served. */
+const BUNDLE_WITHOUT_HARNESS = /^\/bundle\/([^/]*)\/([^/]*)$/;
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -76,8 +78,8 @@ const deposit = async (request: Request, env: Env): Promise<Response> => {
   const [inserted] = await env.DB.batch([insert, ...incrementStatements(env, account, skeleton.id, ingest, new Date().toISOString().slice(0, 10), next, previous?.increments)]);
   if ((inserted?.meta.changes ?? 0) === 0) {
     // The upsert changes nothing in two cases: a limit refused the row, or another deposit of this session set the row after this one read it. Only the second leaves a row with another mark than the one read.
-    const held = await previousOf(env, account, skeleton.id);
-    if (held !== undefined && held.ingest !== (previous?.ingest ?? '')) return refuse(409, 'deposit_conflict', 'Another deposit of this session landed first. Send it again.');
+    const held = await markOf(env, account, skeleton.id);
+    if (held !== undefined && held !== (previous?.ingest ?? '')) return refuse(409, 'deposit_conflict', 'Another deposit of this session landed first. Send it again.');
     return refuse(403, 'deposit_limit', `An account holds at most ${String(limit)} deposits and ${String(budget)} stored bytes.`);
   }
   return answer(201, { ok: true, id: skeleton.id });
@@ -103,7 +105,8 @@ export default {
     if (request.method === 'GET') {
       if (pathname === '/v1/covenant') return covenantStatus(request, env);
       const route = BUNDLE.exec(pathname);
-      if (route !== null) return fetchBundle(request, env, decoded(route[1] ?? ''), decoded(route[2] ?? ''));
+      if (route !== null) return fetchBundle(request, env, decoded(route[1] ?? ''), decoded(route[2] ?? ''), decoded(route[3] ?? ''));
+      if (BUNDLE_WITHOUT_HARNESS.test(pathname)) return harnessRequired();
     }
     return refuse(404, 'not_found', 'No such route.');
   },
