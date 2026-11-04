@@ -1349,6 +1349,16 @@ describe('oars pool fetch', () => {
       expect(scene.seen[0]?.body).toBe('');
     });
 
+    it('reads no store and prints no choice line for a signed-out fetch with no --harness', async () => {
+      const scene = setting();
+      mkdirSync(scene.staged.storeDir, { recursive: true });
+      holding(scene, [['cursor', 3]]);
+      expect(await scene.cli('pool', 'fetch', '--harness-version', '2.1.314', '--server', POOL)).toBe(ExitCode.AUTH);
+      expect(scene.h.err.join('')).toContain('oars pool login');
+      expect(scene.h.err.join('')).not.toContain('No --harness given');
+      expect(scene.seen).toEqual([]);
+    });
+
     it('asks for claude-code and says so when the store is empty or two harnesses tie', async () => {
       const empty = await signedScene();
       await serve(empty.scene, empty.sign, 'claude-code');

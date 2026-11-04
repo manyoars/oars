@@ -58,7 +58,7 @@ export const resolveIssuerUrl = async (deps: RunDeps, flag?: string): Promise<st
 const PURCHASING_CLOSED = 'Paid agents are not open yet, so `oars purchasing` is off. Set OARS_ISSUER_URL to use a platform of your own.';
 
 /**
- * `oars purchasing` is closed to the public: V13 holds that nothing is sold before business verification, and the launch flag
+ * `oars purchasing` is closed to the public: the launch rule holds that nothing is sold before business verification, and the launch flag
  * is already true, so it cannot be the gate. Only `OARS_ISSUER_URL` (dev, staging, tests) opens it, with no network call.
  * Opening paid agents removes this gate.
  */

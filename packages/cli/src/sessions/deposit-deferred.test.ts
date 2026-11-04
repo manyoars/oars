@@ -278,7 +278,7 @@ describe('item 4: a deferred deposit is its own outcome', () => {
   });
 });
 
-describe('fix round 1: the allowlist holds under a held lock (items 6 and 7)', () => {
+describe('the allowlist holds under a held lock', () => {
   it('writes nothing for an off-allowlist session when the lock is held: no pending entry, no deferred row', async () => {
     const staged = await deposited();
     const other = join(staged.projectsRoot, 'not-named');
@@ -321,7 +321,7 @@ const quietly = async (work: () => Promise<void>): Promise<string[]> => {
   }
 };
 
-describe('fix round 1: pending entries (items 8, 9, and 13)', () => {
+describe('pending entries', () => {
   it('never loses a session that defers again between a drain reading its entry and removing it', async () => {
     const staged = await deposited();
     const transcript = finished(staged, 'again');
@@ -409,7 +409,7 @@ describe('fix round 1: pending entries (items 8, 9, and 13)', () => {
   });
 });
 
-describe('fix round 1: a whole-store drain (items 10 and 12)', () => {
+describe('a whole-store drain', () => {
   const whole = (staged: Staged, trace?: DepositTrace) => deposit(staged.runtime, { allow: [REPO], redactDomains: [], now: () => NOW }, trace);
 
   it('leaves the entry when the whole-store run dies before state.json is written, and a rerun settles it', async () => {
@@ -448,7 +448,7 @@ describe('fix round 1: a whole-store drain (items 10 and 12)', () => {
   });
 });
 
-describe('fix round 1: leftover temp files (item 14)', () => {
+describe('leftover temp files', () => {
   it('has a whole-store run remove a pending temp file older than the stale-lock age, and nothing newer, and a hook remove none', async () => {
     const staged = await deposited();
     mkdirSync(pendingDir(staged.storeDir), { recursive: true });
@@ -465,7 +465,7 @@ describe('fix round 1: leftover temp files (item 14)', () => {
   });
 });
 
-describe('fix round 2: housekeeping never fails a deposit (item 17)', () => {
+describe('housekeeping never fails a deposit', () => {
   it('resolves a whole-store deposit when pending holds a folder named like an old temp file, and leaves the folder', async () => {
     const staged = await deposited();
     const folder = join(pendingDir(staged.storeDir), 'old.tmp');
@@ -503,7 +503,7 @@ describe('fix round 2: housekeeping never fails a deposit (item 17)', () => {
   });
 });
 
-describe('fix round 2: an unreadable entry neither goes first nor fills the cap (item 19)', () => {
+describe('an unreadable entry neither goes first nor fills the cap', () => {
   it('lists unreadable entries after the readable ones, and reads past them to fill the limit', async () => {
     const staged = await deposited();
     const dir = pendingDir(staged.storeDir);
@@ -528,7 +528,7 @@ describe('fix round 2: an unreadable entry neither goes first nor fills the cap 
   });
 });
 
-describe('fix round 2: the failure ordering is pinned (item 20)', () => {
+describe('the failure ordering is pinned', () => {
   it('lists the entry with fewer failures first although its name sorts last', async () => {
     const staged = await deposited();
     const dir = pendingDir(staged.storeDir);

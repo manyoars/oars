@@ -319,7 +319,7 @@ describe('oars purchasing list', () => {
   });
 });
 
-describe('oars purchasing is closed until paid agents open (V13: nothing is sold before business verification)', () => {
+describe('oars purchasing is closed until paid agents open (nothing is sold before business verification)', () => {
   it('is not listed in oars --help', async () => {
     const h = harness();
     await expect(run(['--help'], h.deps)).resolves.toBe(ExitCode.OK);

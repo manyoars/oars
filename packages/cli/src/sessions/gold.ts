@@ -579,7 +579,7 @@ export const sampleGold = async (runtime: SessionsRuntime, store: Store, redact:
     if (excluded.has(prompt.session)) return false;
     if (!checked.has(prompt.session)) {
       checked.add(prompt.session);
-      // The one V15 rule (A38): a session that holds a term, has no raw to scan, or could not be read is out, and so is every session when the term file is empty.
+      // The one exclusion rule (A38): a session that holds a term, has no raw to scan, or could not be read is out, and so is every session when the term file is empty.
       if ((await checkSession(runtime, options.termsFile, project, prompt.session, options.extraTerms)).excluded) {
         excluded.add(prompt.session);
         return false;

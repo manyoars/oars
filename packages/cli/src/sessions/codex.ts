@@ -196,7 +196,7 @@ const RUNNING_LINE = /^Process running with session ID (\S+)\s*$/m;
  * The message of a call that failed before it produced an exit code, written as the whole output (no `Output:` header): `execution error: ` for a
  * shell call (core/src/tools/events.rs:438), and for the default unified-exec tool (ConfigShellToolType is only `UnifiedExec | Disabled`,
  * protocol/src/openai_models.rs:330-333) `exec_command failed: ` (core/src/tools/handlers/unified_exec/exec_command.rs:270), `write_stdin failed: `
- * (write_stdin.rs:123), and `write_stdin approval failed: ` (:121). `write_stdin rejected: ` (:118) is a declined call and stays unsettled.
+ * (write_stdin.rs:123), and `write_stdin approval failed: ` (:121). `write_stdin rejected: ` (:118) stays unsettled: its reason is the approval policy's.
  */
 const SPAWN_ERROR = /^(?:execution error|exec_command failed|write_stdin(?: approval)? failed): /;
 /**
@@ -552,7 +552,7 @@ export const rolloutLines = (text: string, fallbackId: string, parentText?: stri
           const out = outcomeOf(payload.output);
           if (known.kind === 'shell') {
             // A shell call settles on its exit code, or on a failure to spawn. A process still running stays unsettled and is remembered by its
-            // session id, so in a Legacy rollout the `write_stdin` that sees it exit settles it too. A declined call has neither and settles as the user's refusal.
+            // session id, so in a Legacy rollout the `write_stdin` that sees it exit settles it too. A call declined with the user's refusal text has neither and settles as that refusal; any other declined text stays unsettled.
             if (out.exit === undefined && DECLINED_OUTPUT.test(out.text)) settleShell(id, DECLINED_SHELL, '', when, false);
             else if (out.exit !== undefined || out.spawnError) settleShell(id, out.spawnError ? out.text : failureOf(out.exit, out.text), out.text, when, out.exit !== undefined);
             else if (out.running !== undefined && known.session === undefined) running.set(out.running, id);

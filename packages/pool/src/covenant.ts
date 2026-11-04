@@ -1,4 +1,4 @@
-// The covenant gate (V10). It lives at the server because a live URL is reachable by anyone and a CLI check would not hold: with no COVENANT_VERSION nothing can deposit, and once one is set an account must have accepted exactly that version.
+// The covenant gate. It lives at the server because a live URL is reachable by anyone and a CLI check would not hold: with no COVENANT_VERSION nothing can deposit, and once one is set an account must have accepted exactly that version.
 import { answer, bodyOf, bound, refuse, textField, type Env } from './http.js';
 import { accountOf } from './identity.js';
 
