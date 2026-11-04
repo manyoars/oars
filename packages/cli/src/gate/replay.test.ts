@@ -589,6 +589,18 @@ describe('the registry option', () => {
     expect(registry).toEqual([]);
   });
 
+  it('drops a kept answer for a name now unasked from a replay that reads no registry state', async () => {
+    await mkdir(join(root, 'cwd'));
+    await writeLog(projectsRoot, REPO, 'a.jsonl', [bash(1, 't1', 'npm install mixed'), bash(2, 't2', 'npm install --registry https://npm.private.example/ mixed')]);
+    const kept = JSON.stringify({ kind: 'registry', v: 1, day: '2026-11-01', class: 'npm-package', state: 'found', created: null, name: 'mixed', latest: '0.0.1' });
+    await writeFile(join(storeDir, 'crossings.jsonl'), `${kept}
+`);
+    await run([REPO]);
+    const { crossings, registry } = await written();
+    expect(crossings.map((row) => row.registryState)).toEqual(['not-read', 'not-read']);
+    expect(registry).toEqual([]);
+  });
+
   it('keeps not-found and unreachable apart, and a failed read stays out of the cache', async () => {
     await mkdir(join(root, 'cwd'));
     await writeLog(projectsRoot, REPO, 'a.jsonl', [bash(1, 't1', 'npm install absent'), bash(2, 't2', 'npm install dark'), bash(3, 't3', 'npm install thrown')]);
