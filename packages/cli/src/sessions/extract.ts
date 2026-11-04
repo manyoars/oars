@@ -1547,7 +1547,7 @@ export const captureSession = (input: ExtractInput): Capture => {
     }
 
     // prompt_graphs.py and cost_per_class.py: a prompt is a main-line user line with text and no tool result. They also dropped any leading "<", which lost
-    // every turn a command or a skill opened (t768); that is now `promptOpening`'s call. A Cursor bubble keeps the old rule until its own brief.
+    // every turn a command or a skill opened (t768); that is now `promptOpening`'s call. A line from any other harness keeps the old rule until its own brief.
     // A `!` shell command the operator typed, or an image they pasted with no words: neither opens a prompt (the tag is injected, the image has no text), but
     // both are the operator's turn. A line the agent did not write (a meta line, a local command, a synthetic reply) is neither the operator nor the agent.
     let operatorTurn = false;
