@@ -27,7 +27,8 @@ describe('live', () => {
   it('states a day share beside its share of the trailing week, and flags nothing', () => {
     expect(of('file.read', '2026-11-02')?.value).toEqual({ share: 0.5, baseline: 0.75, of: 2, ratio: 0.6667 });
     expect(of('file.read', '2026-11-02')?.n).toBe(1);
-    expect(of('file.read', '2026-11-02')?.inputs).toHaveLength(2);
+    // The day's cells only: the baseline is stated but never cited, so a pool's floor cannot lean on it.
+    expect(of('file.read', '2026-11-02')?.inputs).toHaveLength(1);
   });
 
   it('keeps a day outside the seven before it out of the baseline', () => {
