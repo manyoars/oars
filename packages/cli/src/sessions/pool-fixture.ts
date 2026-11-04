@@ -1,6 +1,8 @@
 // A small store for the cell and family tests: only the fields a cell or a read looks at, so a test states the calls and prompts that matter to it.
 import { deriveCells, poolOf, type Pool } from './cells.js';
-import type { ShellReader } from './pool-wire.js';
+import { sessionsOf, type Print, type SessionRecords, type ShellReader, type TranscriptRoot } from './pool-wire.js';
+import { contentHash } from './read.js';
+import { createHash } from 'node:crypto';
 import type { ErrorObservation, Frame, PromptObservation, SessionObservation, StepObservation, ToolObservation, Usage } from './schema.js';
 import type { Store } from './store.js';
 
@@ -148,3 +150,13 @@ export const poolFrom = (from: Store): Pool => poolOf(deriveCells(from), from.er
 /** A reader that sends each shell step's own stored identity, for a fixture whose steps already hold public names; the client's reader is the vocabulary projection (`shellReader`). */
 export const storedNames: ShellReader = (call) =>
   (call.steps ?? []).map(({ identity }) => (identity !== null && 'program' in identity ? { program: identity.program, subcommand: identity.sub, flags: identity.flags } : { program: 'private', subcommand: null, flags: [] }));
+
+/** A root for every transcript a store holds, as capture would have written one: a hash of the session's id over twelve lines. */
+export const rootsOf = (from: Pick<Store, 'sessions' | 'subagents'>): Map<string, TranscriptRoot> =>
+  new Map([...from.sessions, ...from.subagents].map(({ session: id }): [string, TranscriptRoot] => [id, { merkleRoot: createHash('sha256').update(id).digest('hex'), leaves: 12 }]));
+
+/** `sessionsOf` over a fixture store with a root for each transcript. */
+export const sessionsFrom = (from: Pick<Store, 'sessions' | 'subagents' | 'prompts' | 'tools'>): SessionRecords[] => sessionsOf(from, rootsOf(from));
+
+/** The timing print the client makes. */
+export const printOf: Print = contentHash;
