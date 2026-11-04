@@ -942,7 +942,11 @@ const atVersion = (ecosystem: PullEcosystem, text: string): ToolPull | null => {
 
 const wholeName = (ecosystem: PullEcosystem, text: string): ToolPull | null => (namesNothing(text) ? null : { ecosystem, name: text, version: null });
 
-const nodeSpec = (text: string): ToolPull | null => {
+// `alias@npm:real@1.0.0` and a leading `npm:real` install the package `real`: the pick is the real name, never the alias spelling.
+const NPM_ALIAS = /^(?:(?:@[^@/\s]+\/)?[^@/\s]+@)?npm:(.+)$/;
+
+const nodeSpec = (spec: string): ToolPull | null => {
+  const text = NPM_ALIAS.exec(spec)?.[1] ?? spec;
   if (isUrl(text)) return wholeName('npm', text);
   if (LOCAL_SPEC.test(text) || ARCHIVE.test(text)) return null;
   // One slash is a scoped name or a GitHub shorthand; more is a folder.
