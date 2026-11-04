@@ -175,6 +175,9 @@ const send = async (deps: RunDeps, step: string, request: Outgoing, show: Masker
   return { status: response.status, body, headers: response.headers };
 };
 
+/** The sender a real send would use: the request goes out over the network as built. The command line does not pass it (sending waits on the covenant); the loopback test does, to read what reaches the socket. */
+export const networkSender = (deps: RunDeps, step: string): Sender => (request) => send(deps, step, request, undefined);
+
 /** The server's named refusal, as a failure: its `error` is the problem's code in `--json`. */
 const refusal = (step: string, { status, body }: Reply): CliError => {
   const code = isObject(body) ? textIn(body, 'error') : undefined;
