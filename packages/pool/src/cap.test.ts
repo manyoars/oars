@@ -125,6 +125,24 @@ describe('across an ISO week boundary', () => {
     expect((await tally(pool, account)).fetches).toBe(1);
   });
 
+  it('answers an account past its cap before it reads the pool: a stored row that would break a parse is not met', async () => {
+    const bare = await startPool({ FETCH_CAP: '' });
+    try {
+      const { token, account } = await bare.signIn('github', stubUser('2205'));
+      const other = await bare.signIn('github', stubUser('2206'));
+      const db = await bare.db();
+      await db.prepare('UPDATE accounts SET fetch_week = ?, fetches = 1 WHERE id = ?').bind(isoWeekOf(Date.now()), account).run();
+      await db.prepare("INSERT INTO deposits (account, id, skeleton) VALUES (?, 'damaged', 'not json')").bind(other.account).run();
+      const refused = await bare.raw(PATH, token);
+      expect(refused).toMatchObject({ status: 429, json: { error: 'fetch_cap' } });
+      // The same row is met by an account that is under its cap, so the 429 above is the order of the spend and the read, not a clean pool.
+      // The worker answers it with a 500 whose body is not JSON, which `raw` cannot parse.
+      await expect(bare.raw(PATH, other.token)).rejects.toThrow();
+    } finally {
+      await bare.dispose();
+    }
+  }, 60_000);
+
   it('drops every earlier week\'s count when a fetch is served, so only this week is kept per account', async () => {
     const stale = await pool.signIn('github', stubUser('2203'));
     const fresh = await pool.signIn('github', stubUser('2204'));
