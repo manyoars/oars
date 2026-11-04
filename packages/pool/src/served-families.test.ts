@@ -1,13 +1,14 @@
-// The families a bundle does not serve, pinned at the boundary that keeps them out: the wire. Recovery reads error rows (a signature, an error class, an outcome), and fit's call-shape
-// method reads a tool's input key names; no skeleton field carries any of them, so neither can be derived from stored cells. The refusing tests below (a tool, a step, a transcript, and the
-// skeleton's top level) fail if a later wire gains one of these fields.
+// The families a bundle serves and does not serve. Recovery is served from cells (t868): what others did next after a failed call, by (failed action, `errorCode`, next action), at the floor of 5 accounts.
+// What stays out is pinned at the boundary that keeps it out, the wire: a signature hash, an outcome, and a tool's input key names are on no skeleton field, so fit's call-shape method and a
+// signature record cannot be derived from stored cells. The refusing tests below (a tool, a step, a transcript, and the skeleton's top level) fail if a later wire gains one of these fields.
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { parseSkeleton, verifyBundle, VOCAB_VERSION } from '../../cli/src/sessions/pool-wire.js';
+import { parseSkeleton, skeletonOf, verifyBundle, VOCAB_VERSION } from '../../cli/src/sessions/pool-wire.js';
 import { CALL_SHAPE_METHOD } from '../../cli/src/sessions/read.js';
+import { frame, printOf, prompt, session, sessionsFrom, step, store, storedNames, tool } from '../../cli/src/sessions/pool-fixture.js';
 import { sampleSkeleton } from './sample.js';
 import { startPool, stubUser, type TestPool } from './test-pool.js';
 
-// The fields a withheld family would read, none of them on the wire today.
+// The fields a withheld family would read, none of them on the wire today. A value off the closed list for `errorCode` and `recoveryCalls` is refused too.
 interface WithheldFields {
   keys?: string[];
   errorCode?: string;
@@ -83,7 +84,7 @@ describe('a bundle over five accounts', () => {
     await pool.dispose();
   });
 
-  it('serves tool-day and holds no recovery read and no call-shape read', async () => {
+  it('serves tool-day and holds no recovery read when no call failed, and no call-shape read', async () => {
     let last = '';
     for (const id of ['4001', '4002', '4003', '4004', '4005']) {
       const { token } = await pool.signIn('github', stubUser(id));
@@ -98,4 +99,59 @@ describe('a bundle over five accounts', () => {
     expect(families.has('recovery')).toBe(false);
     expect(verified.bundle.reads.some((read) => read.method === CALL_SHAPE_METHOD.name)).toBe(false);
   }, 60_000);
+});
+
+/** A session whose first call failed with a 429 and was followed by a read and then an edit. */
+const failingSkeleton = (id: string) => {
+  const framed = frame({ harnessVersion: '2.1.314', shell: 'bash', day: '2026-11-01' });
+  const shell = step(0, 0, 'shell.exec', { native: 'Bash', status: 'error', identity: { program: 'git', sub: 'push', flags: [] } });
+  const [only] = sessionsFrom(
+    store({
+      sessions: [session('s1', { frame: framed })],
+      prompts: [prompt('s1', 0, { frame: framed })],
+      tools: [
+        tool('s1', 0, 'Bash', { status: 'error', errorCode: '429', steps: [shell] }),
+        tool('s1', 1, 'Read', { steps: [step(1, 0, 'file.read', { native: 'Read' })] }),
+        tool('s1', 2, 'Edit', { steps: [step(2, 0, 'file.edit', { native: 'Edit' })] }),
+      ],
+    }),
+  );
+  const built = only === undefined ? null : skeletonOf(only, id, storedNames, printOf);
+  if (built === null) throw new Error('no skeleton');
+  return built;
+};
+
+describe('the recovery family in a bundle', () => {
+  let pool: TestPool;
+
+  beforeAll(async () => {
+    pool = await startPool();
+  }, 60_000);
+
+  afterAll(async () => {
+    await pool.dispose();
+  });
+
+  const bundleAfter = async (ids: readonly string[]) => {
+    let last = '';
+    for (const id of ids) {
+      const { token } = await pool.signIn('github', stubUser(id));
+      await pool.post('/v1/covenant/accept', { version: 'v1' }, token);
+      expect((await pool.post('/v1/deposits', failingSkeleton(id.padStart(16, '0')), token)).status).toBe(201);
+      last = token;
+    }
+    const verified = await verifyBundle((await pool.get(`/bundle/claude-code/2.1.314/${VOCAB_VERSION}`, last)).json, pool.signingKey(), 'claude-code', '2.1.314');
+    if (!verified.ok) throw new Error(verified.reason);
+    return verified.bundle;
+  };
+
+  it('is withheld at 4 accounts and served at 5, and states what followed, never a fix', async () => {
+    const four = await bundleAfter(['5001', '5002', '5003', '5004']);
+    expect(four.reads.some((read) => read.family === 'recovery')).toBe(false);
+    expect(four.cells.some((cell) => cell.failed > 0 && cell.grain === 'week' && cell.frameBucket.endsWith('/-'))).toBe(false);
+    const five = await bundleAfter(['5005']);
+    const recovery = five.reads.filter((read) => read.family === 'recovery');
+    expect(recovery.map(({ slice, value }) => [slice.action, slice.errorCode, slice.next, value.followed, value.of])).toEqual([['shell.exec', '429', 'file.read', 5, 5]]);
+    expect(JSON.stringify(recovery)).not.toMatch(/fix|outcome|sig/i);
+  }, 120_000);
 });

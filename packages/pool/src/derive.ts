@@ -1,5 +1,5 @@
 // Cells and reads (recall spec Sections 2.5 and 2.6), with the same code a local store runs. A deposit's skeleton becomes cells in `cell-increments.ts`, which ingest adds to the stored
-// ones; a bundle is derived from the stored cells, whose `clusters` is the held count of accounts. Recovery and the call-shape method are left out: a skeleton holds no error row, signature, or tool input keys (`docs/pool.md`, "What a bundle serves").
+// ones; a bundle is derived from the stored cells, whose `clusters` is the held count of accounts. Recovery is served from cells alone (what others did next after a failed call, `read-recovery-edge.ts`); the signature record and the call-shape method are left out: a skeleton holds no signature or tool input keys (`docs/pool.md`, "What a bundle serves").
 import { cellIdOf, harnessBucket, poolOf, type Pool } from '../../cli/src/sessions/cells.js';
 import { motifName } from '../../cli/src/sessions/motif.js';
 import { BUNDLE_FORMAT, type Bundle, VOCAB_VERSION } from '../../cli/src/sessions/pool-wire.js';
@@ -11,6 +11,7 @@ import { deriveFit, deriveFitEnvironment } from '../../cli/src/sessions/read-fit
 import { baselineDaysOf, deriveLive } from '../../cli/src/sessions/read-live.js';
 import { deriveMethod } from '../../cli/src/sessions/read-method.js';
 import { deriveNextStep } from '../../cli/src/sessions/read-next-step.js';
+import { deriveRecoveryEdges } from '../../cli/src/sessions/read-recovery-edge.js';
 import { deriveToolDay } from '../../cli/src/sessions/read-tool-day.js';
 import { unitCells, type DeriveFamily, type ReadBody } from '../../cli/src/sessions/read-support.js';
 import type { Harness } from '../../cli/src/sessions/schema.js';
@@ -31,6 +32,7 @@ export const SERVED: readonly { name: string; derive: DeriveFamily }[] = [
   { name: 'method', derive: deriveMethod },
   { name: 'next-step', derive: deriveNextStep },
   { name: 'tool-day', derive: deriveToolDay },
+  { name: 'recovery', derive: deriveRecoveryEdges },
 ];
 
 const NO_STORE: Store = { sessions: [], prompts: [], errors: [], subagents: [], tools: [], newerCaptures: 0 };
@@ -67,7 +69,7 @@ export const bundleOf = (harness: Harness, harnessVersion: string, stored: Store
   const prefix = bucketPrefix(harness, harnessVersion);
   const cells = stored.cells.filter((cell) => cell.frameBucket.startsWith(prefix)).sort((a, b) => compare(a.motifId, b.motifId) || compare(a.frameBucket, b.frameBucket) || compare(a.grain, b.grain) || compare(a.day, b.day));
   const motifs = [...stored.motifs].sort((a, b) => compare(a.motifId, b.motifId));
-  // No error rows: a skeleton holds none, and recovery, the one family that reads them, is left out here.
+  // No error rows: a skeleton holds none, and the signature record that reads them is left out here; recovery is served from the failed calls' cells.
   // The version-free (name, platform, shell) cells sit beside the bucket's: a harness without a version, as Gemini, Cursor, and Pi are, still has them, and they name no version.
   const environment = [...stored.environment].sort((a, b) => compare(a.motifId, b.motifId) || compare(a.frameBucket, b.frameBucket) || compare(a.grain, b.grain) || compare(a.day, b.day));
   // The environment cells are read with the bucket's, but the pool's last day is the bucket's own: a week held only by another version is not this bundle's, so it cannot age the reads that count weeks since. A bucket with no cell takes the whole pool's.
