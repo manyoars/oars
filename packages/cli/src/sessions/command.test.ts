@@ -307,6 +307,18 @@ describe('oars sessions', () => {
     expect(recalls.every((recall) => recall.mode === 'pull' && recall.arm === 'shown')).toBe(true);
   });
 
+  it('answers a family only the pool holds, as `read` does, and refuses a slice its reads cannot apply with nothing recorded', async () => {
+    const { deps, err, out, staged } = setup();
+    expect(await run(['sessions', 'deposit', '--allow', 'proj'], deps)).toBe(ExitCode.OK);
+    out.length = 0;
+    expect(await run(['sessions', 'recall', '--family', 'tool-day'], deps)).toBe(ExitCode.OK);
+    expect(out.join('')).toContain('(tool-day)');
+    expect(await run(['sessions', 'recall', '--family', 'tool-day', '--class', 'mixed'], deps)).toBe(ExitCode.USAGE);
+    expect(await run(['sessions', 'recall', '--family', 'tool-day', '--since', '3'], deps)).toBe(ExitCode.USAGE);
+    expect(err.join('')).toContain('oars sessions read --family tool-day');
+    expect((await readRecalls(staged.storeDir)).map((recall) => recall.answer.kind)).toEqual(['hit']);
+  });
+
   it('records a recall through the --error form under its signature text, and the answer is still the signature result', async () => {
     const { deps, out, staged } = setup();
     expect(await run(['sessions', 'deposit', '--allow', 'proj'], deps)).toBe(ExitCode.OK);

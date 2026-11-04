@@ -103,6 +103,20 @@ describe('MCP server', () => {
       expect(textOf(await ask(staged, { path: 'target.ts' }))).toContain('1 error, 1 session');
     });
 
+    it('refuses a slice a family only the pool holds cannot apply, as invalid params, with nothing recorded', async () => {
+      const staged = seeded();
+      const refused = await handleMessage(staged.runtime, now, { jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: TOOL_NAME, arguments: { family: 'tool-day', class: 'mixed' } } });
+      expect(field(field(refused, 'error'), 'code')).toBe(-32602);
+      expect(await readRecalls(staged.storeDir)).toEqual([]);
+    });
+
+    it('lists every family it answers in the tool schema', async () => {
+      const staged = seeded();
+      const listed = JSON.stringify(field(await handleMessage(staged.runtime, now, { jsonrpc: '2.0', id: 1, method: 'tools/list' }), 'result'));
+      expect(listed).toContain('tool-day');
+      expect(listed).not.toContain('recovery or fit');
+    });
+
     it('keeps a poisoned model and version out of the reply and out of the stored evidence', async () => {
       const staged = seeded({ model: POISON, harnessVersion: POISON });
       const result = await ask(staged, { family: 'recovery' });
