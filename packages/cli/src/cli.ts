@@ -672,11 +672,12 @@ const buildProgram = (deps: RunDeps, argv: string[]): Command => {
   pool
     .command('fetch')
     .description('fetch the signed bundle for one harness version, verify it against the key pinned at login, and keep it locally')
+    .option('--harness <name>', 'the harness whose bundle to fetch (default: the one your local store holds the most sessions of, claude-code when none leads)')
     .requiredOption('--harness-version <version>', 'the public harness version whose bundle to fetch')
     .option(serverOption, serverHelp)
     .action(async (_options: OptionValues, command: Command) => {
       const options: OptionValues = command.optsWithGlobals();
-      emit(deps, flag(options, 'json'), await poolFetch(deps, { server: text(options, 'server'), harnessVersion: text(options, 'harnessVersion') ?? '' }));
+      emit(deps, flag(options, 'json'), await poolFetch(deps, { server: text(options, 'server'), harness: text(options, 'harness'), harnessVersion: text(options, 'harnessVersion') ?? '' }));
     });
 
   return program;

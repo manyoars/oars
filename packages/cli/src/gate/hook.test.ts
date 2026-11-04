@@ -430,6 +430,17 @@ describe('oars gate hook: finishing a cut ask', () => {
     expect(rowsOf(store).map((row) => row.registryState)).toEqual(['not-read', 'not-read']);
   });
 
+  it('starts at most three helpers in one call, and leaves the other names to a later sight', async () => {
+    const store = folder();
+    const fill = vi.fn<NonNullable<GateHookDeps['fill']>>(() => Promise.resolve());
+    const names = Array.from({ length: 20 }, (_, at) => `lib-${String(at)}`);
+    await gateHook(payload(`npm install ${names.join(' ')}`), depsFor(store, { registry: stalled, clock: () => 790, fill }));
+    expect(fill.mock.calls.map(([ask]) => ask.name)).toEqual(['lib-0', 'lib-1', 'lib-2']);
+    expect(rowsOf(store)).toHaveLength(20);
+    await gateHook(payload('npm install lib-3', { tool_use_id: 'b' }), depsFor(store, { registry: stalled, clock: () => 790, fill }));
+    expect(fill).toHaveBeenCalledTimes(4);
+  });
+
   it('does not hand over a name whose answer came, was kept, or could not be asked', async () => {
     const store = folder();
     const fill = vi.fn<NonNullable<GateHookDeps['fill']>>(() => Promise.resolve());

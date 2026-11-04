@@ -118,7 +118,7 @@ export interface RegistryRow {
   day: string;
   /** When the answer was read, to the millisecond; a row an earlier build wrote has none. A not-found answer is trusted for minutes, not days. */
   ts?: string;
-  /** Which folder the answer came from (`folderKey`): a folder's own config can name another registry, so a kept not-found answers only that folder. A row with none is not fresh. Class A. */
+  /** Which folder the answer came from (`folderKey`): a folder's own config can name another registry, so a kept answer answers only that folder. A row with none is not fresh. Class A. */
   folder?: string;
   class: CrossingClass;
   state: 'found' | 'not-found';
