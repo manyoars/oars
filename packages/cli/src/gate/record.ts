@@ -1,5 +1,6 @@
 // The shape of `crossings.jsonl`, in closed vocabulary. Field classes are in `docs/gate.md` and `docs/sessions-store.md`: a name and a stated
 // version are class A because a private package's name can identify private work, and no path, working folder, or command text is kept at all.
+import { createHash } from 'node:crypto';
 import type { PolicySource } from './policy.js';
 import { CROSSING_CLASSES, CROSSING_FORMS, type CrossingClass, type CrossingForm, type UnreadShape, type VersionForm } from './checks.js';
 
@@ -117,6 +118,8 @@ export interface RegistryRow {
   day: string;
   /** When the answer was read, to the millisecond; a row an earlier build wrote has none. A not-found answer is trusted for minutes, not days. */
   ts?: string;
+  /** Which folder the answer came from (`folderKey`): a folder's own config can name another registry, so a kept not-found answers only that folder. A row with none is not fresh. Class A. */
+  folder?: string;
   class: CrossingClass;
   state: 'found' | 'not-found';
   created: string | null;
@@ -125,6 +128,9 @@ export interface RegistryRow {
 }
 
 export type Row = CrossingRecord | RunRow | RegistryRow;
+
+/** A truncated SHA-256 of the folder an ask ran in, so a kept answer names its folder without storing the path. */
+export const folderKey = (cwd: string): string => createHash('sha256').update(cwd).digest('hex').slice(0, 16);
 
 /** The harness's permission mode, in the closed vocabulary: a mode this version does not know reads `other`. */
 export const permissionOf = (value: string): Permission => PERMISSIONS.find((known) => known === value) ?? 'other';

@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { crossingsPath, gateHook, registryCachePath, type GateHookDeps } from './hook.js';
-import { parseRows, type CrossingRecord } from './record.js';
+import { folderKey, parseRows, type CrossingRecord } from './record.js';
 import type { RegistryAnswer, RegistryReader } from './registry.js';
 
 const made: string[] = [];
@@ -20,8 +20,8 @@ const folder = (): string => {
 
 const NOW = Date.parse('2026-11-04T10:00:00.000Z');
 const depsFor = (storeDir: string, extra: Partial<GateHookDeps> = {}): GateHookDeps => ({ storeDir, now: () => NOW, clock: () => 0, deadlineMs: 800, ...extra });
-const payload = (command: string, id = 'u1'): string =>
-  JSON.stringify({ session_id: 's1', tool_use_id: id, tool_name: 'Bash', tool_input: { command }, cwd: tmpdir(), permission_mode: 'default', hook_event_name: 'PreToolUse' });
+const payload = (command: string, id = 'u1', cwd: string = tmpdir()): string =>
+  JSON.stringify({ session_id: 's1', tool_use_id: id, tool_name: 'Bash', tool_input: { command }, cwd, permission_mode: 'default', hook_event_name: 'PreToolUse' });
 const rowsOf = (storeDir: string): CrossingRecord[] =>
   parseRows(readFileSync(crossingsPath(storeDir), 'utf8')).filter((row): row is CrossingRecord => row.kind === 'crossing');
 const withPolicy = (store: string, body: string): void => {
@@ -177,12 +177,23 @@ describe('oars gate hook: a block, as a label', () => {
   it('blocks on a not-found answer kept a minute ago, and asks again once it is ten minutes old', async () => {
     const store = folder();
     withPolicy(store, '{"classes":{"not-found":"block"}}');
-    const kept = { kind: 'registry', v: 1, day: '2026-11-04', ts: new Date(NOW - 60_000).toISOString(), class: 'npm-package', state: 'not-found', created: null, name: 'ghost-lib', latest: null };
+    const kept = { kind: 'registry', v: 1, day: '2026-11-04', ts: new Date(NOW - 60_000).toISOString(), folder: folderKey(tmpdir()), class: 'npm-package', state: 'not-found', created: null, name: 'ghost-lib', latest: null };
     writeFileSync(registryCachePath(store), `${JSON.stringify(kept)}\n`);
     const reader = vi.fn<RegistryReader>(found(OLD));
     expect(await gateHook(payload('npm install ghost-lib', 'a'), depsFor(store, { registry: reader }))).toBe(deny(REASON));
     expect(reader).not.toHaveBeenCalled();
     expect(await gateHook(payload('npm install ghost-lib', 'b'), depsFor(store, { registry: reader, now: () => NOW + 10 * 60_000 }))).toBe('');
+    expect(reader).toHaveBeenCalledTimes(1);
+  });
+
+  it('answers a kept not-found only for the folder it was asked in: another folder asks again and is not denied', async () => {
+    const store = folder();
+    const first = folder();
+    const second = folder();
+    withPolicy(store, '{"classes":{"not-found":"block"}}');
+    expect(await gateHook(payload('npm install ghost-lib', 'a', first), depsFor(store, { registry: missing }))).toBe(deny(REASON));
+    const reader = vi.fn<RegistryReader>(found(OLD));
+    expect(await gateHook(payload('npm install ghost-lib', 'b', second), depsFor(store, { registry: reader }))).toBe('');
     expect(reader).toHaveBeenCalledTimes(1);
   });
 

@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { FILL_LOCK_MS, isLocked, runFill, startFill, type FillAsk } from './hook-fill.js';
-import { parseRows } from './record.js';
+import { folderKey, parseRows } from './record.js';
 import type { RegistryAnswer, RegistryReader } from './registry.js';
 
 const made: string[] = [];
@@ -88,7 +88,7 @@ describe('the fill: the helper', () => {
     expect(lockOf(dir)).toBeDefined();
     await runFill(dir, ASK, { registry: reader({ state: 'found', latest: '1.0.0', created: '2020-01-01T00:00:00.000Z' }), now: () => NOW });
     expect(cacheOf(dir)).toEqual([
-      { kind: 'registry', v: 1, day: '2026-11-04', ts: '2026-11-04T10:00:00.000Z', class: 'npm-package', state: 'found', created: '2020-01-01T00:00:00.000Z', name: 'slow-lib', latest: '1.0.0' },
+      { kind: 'registry', v: 1, day: '2026-11-04', ts: '2026-11-04T10:00:00.000Z', folder: folderKey(tmpdir()), class: 'npm-package', state: 'found', created: '2020-01-01T00:00:00.000Z', name: 'slow-lib', latest: '1.0.0' },
     ]);
     expect(lockOf(dir)).toBeUndefined();
   });

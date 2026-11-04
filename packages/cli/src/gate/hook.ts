@@ -11,7 +11,7 @@ import type { FillAsk } from './hook-fill.js';
 import { decide, type Decision } from './notes.js';
 import { loadPolicy, type PolicySource } from './policy.js';
 import { loadIndex, keepIndex, noveltyOf, scopesOf } from './novelty.js';
-import { GATE_VERSION, parseRows, permissionOf, type CrossingRecord, type RegistryRow } from './record.js';
+import { GATE_VERSION, folderKey, parseRows, permissionOf, type CrossingRecord, type RegistryRow } from './record.js';
 import { askable, type RegistryAnswer, type RegistryReader } from './registry.js';
 import { ageOf, againstLatestOf, askedOf, DAY_MS } from './registry-state.js';
 import { repositoryOfCwd } from './scope.js';
@@ -99,9 +99,9 @@ const keptAnswers = async (storeDir: string): Promise<Map<string, RegistryRow>> 
   return kept;
 };
 
-/** A kept answer is dated by its UTC day, so "a day" is that day and the next: at most 48 hours old. */
-const fresh = (row: RegistryRow, now: number): boolean =>
-  row.state === 'not-found' ? row.ts !== undefined && now - Date.parse(row.ts) < NOT_FOUND_MS : now - Date.parse(row.day) < (HOOK_REGISTRY_DAYS + 1) * DAY_MS;
+/** A kept answer is dated by its UTC day, so "a day" is that day and the next: at most 48 hours old. A not-found answer is trusted only for the folder that asked, since its config can name another registry. */
+const fresh = (row: RegistryRow, now: number, folder: string): boolean =>
+  row.state === 'not-found' ? row.ts !== undefined && row.folder === folder && now - Date.parse(row.ts) < NOT_FOUND_MS : now - Date.parse(row.day) < (HOOK_REGISTRY_DAYS + 1) * DAY_MS;
 
 const within = <T>(promise: Promise<T>, ms: number): Promise<T | undefined> =>
   new Promise((resolve) => {
@@ -126,7 +126,7 @@ const asAnswer = (row: RegistryRow): RegistryAnswer => ({ state: row.state, late
 const registryAnswer = async (deps: GateHookDeps, crossing: Crossing, cwd: string | null, kept: ReadonlyMap<string, RegistryRow>): Promise<{ answer: RegistryAnswer; asked: boolean } | undefined> => {
   if (!askedOf(crossing) || crossing.versionForm === 'url' || !askable(crossing.class, crossing.name)) return undefined;
   const held = kept.get(keyOf(crossing));
-  if (held !== undefined && fresh(held, deps.now())) return { answer: asAnswer(held), asked: false };
+  if (held !== undefined && cwd !== null && fresh(held, deps.now(), folderKey(cwd))) return { answer: asAnswer(held), asked: false };
   if (deps.registry === undefined || cwd === null || !(await isFolder(cwd))) return undefined;
   const ask: FillAsk = { class: crossing.class, name: crossing.name, cwd };
   // A helper already asks for this name (or failed within the last five minutes): one ask per name, so this sight reads nothing.
@@ -235,7 +235,7 @@ export const runGateHook = async (stdin: string, deps: GateHookDeps): Promise<st
     // A sight with no reading (a cut ask, no time, a name not asked) spends nothing: the session's note waits for the first sight that has one.
     if (read !== undefined && !noted) lines.add(scopes.read);
     if (read?.asked === true && read.answer.state !== 'unreachable') {
-      answered.push({ kind: 'registry', v: GATE_VERSION, day: ts.slice(0, 10), ts, class: crossing.class, state: read.answer.state, created: read.answer.created, name: crossing.name, latest: read.answer.latest });
+      answered.push({ kind: 'registry', v: GATE_VERSION, day: ts.slice(0, 10), ts, folder: folderKey(cwd ?? ''), class: crossing.class, state: read.answer.state, created: read.answer.created, name: crossing.name, latest: read.answer.latest });
     }
     const state = read?.answer.state;
     const decision = decide(policy, state === 'found' || state === 'not-found' ? { state, created: read?.answer.created ?? null, noted } : undefined, deps.now(), random, crossing.name);
