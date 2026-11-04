@@ -10,13 +10,13 @@ import { cleanup, rolloutLine as line, stage, stageCodex } from './test-support.
 afterEach(cleanup);
 
 // Every fixture below is written from openai/codex @ ac558e2 (Apache-2.0): the envelope from codex-rs/history/src/lib.rs (`RolloutLine`) and
-// rollout_payload.rs, the payloads from codex-rs/protocol/src/protocol.rs (`SessionMeta`, `TurnContextItem`, `TokenUsage`, `ExecCommandEndEvent`,
+// rollout_payload.rs, the payloads from codex-rs/protocol/src/protocol.rs (`SessionMeta`, `TurnContextItem`, `TokenUsage`,
 // `PatchApplyEndEvent`, `UserMessageEvent`, `AgentMessageEvent`) and models.rs (`ResponseItem::FunctionCall`; `FunctionCallOutputBody` at :2376 is a
 // bare string or an array of `{type: input_text, text}`). SessionMeta carries `history_mode` (protocol.rs:3507). A shell call's outcome is the text of
-// its function_call_output: `Exit code: N` then `Output:` (core/src/tools/mod.rs:107-113), or `Process exited with code N` (core/src/tools/context.rs:556).
-// Which events a rollout holds is codex-rs/rollout/src/policy.rs: ExecCommandEnd is never persisted (:165), PatchApplyEnd only in Legacy mode (:143).
-// Two shapes are older versions' and say so where used: the JSON `{output, metadata.exit_code}` wrapper (rust-v0.46.0 core/src/tools/mod.rs:186-210)
-// and a persisted exec_command_end (read only if a rollout carries one). No live store was read.
+// its function_call_output: `Exit code: N` then `Output:` (the unified-exec emitter's own text, core/src/tools/events.rs:400, :416, :423), or `Process exited with code N` (core/src/tools/context.rs:556).
+// Which events a rollout holds is codex-rs/rollout/src/policy.rs: ExecCommandEnd is never persisted (:165) and so is not read, PatchApplyEnd only in Legacy mode (:143).
+// One shape is an older version's and says so where used: the JSON `{output, metadata.exit_code}` wrapper (rust-v0.46.0 core/src/tools/mod.rs:186-210)
+// No live store was read.
 
 const capture = (text: string, harness?: 'codex') =>
   captureSession({
@@ -42,7 +42,7 @@ const extractOf = (lines: readonly unknown[], harness?: 'codex') => {
 };
 
 const T = (second: number): string => `2026-06-01T10:00:${String(second).padStart(2, '0')}.000Z`;
-const meta = (cwd: string) => line(T(0), 'session_meta', { id: 'sess-1', timestamp: T(0), cwd, originator: 'codex_cli_rs', cli_version: '0.50.0' });
+const meta = (cwd: string) => line(T(0), 'session_meta', { id: 'sess-1', session_id: 'sess-1', timestamp: T(0), cwd, originator: 'codex_cli_rs', cli_version: '0.50.0' });
 const turn = (model = 'gpt-5-codex') => line(T(1), 'turn_context', { model, cwd: '/work/app' });
 const prompt = (second: number, message: string) => line(T(second), 'event_msg', { type: 'user_message', message });
 const say = (second: number, message: string) => line(T(second), 'event_msg', { type: 'agent_message', message });
@@ -55,11 +55,9 @@ const usage = (second: number, input: number, cached: number, output: number, re
     },
   });
 const shellCall = (second: number, id: string, command: string[]) => line(T(second), 'response_item', { type: 'function_call', name: 'shell', arguments: JSON.stringify({ command }), call_id: id });
-// The persisted shape at ac558e2: the text core/src/tools/mod.rs:107-113 writes for `shell` / `shell_command`.
+// The persisted shape at ac558e2: the unified-exec emitter's own text (core/src/tools/events.rs:400, :416, :423); `shell` and `shell_command` are older names for it.
 const execText = (exit: number, output: string): string => `Exit code: ${String(exit)}\nWall time: 0.1 seconds\nOutput:\n${output}`;
 const shellOut = (second: number, id: string, output: unknown) => line(T(second), 'response_item', { type: 'function_call_output', call_id: id, output });
-const shellEnd = (second: number, id: string, exit: number, output: string, status = 'completed') =>
-  line(T(second), 'event_msg', { type: 'exec_command_end', call_id: id, command: ['bash', '-lc', 'x'], cwd: '/work/app', exit_code: exit, aggregated_output: output, status });
 
 describe('rolloutLines', () => {
   it('turns a normal session into prompts, calls with outcomes, usage once per response, the model, the cwd, and the version', () => {
@@ -98,7 +96,7 @@ describe('rolloutLines', () => {
   });
 
   it('leaves a declined command with no outcome, so it never counts as a fix', () => {
-    const out = extractOf([meta('/work/app'), shellCall(3, 'c1', ['rm', '-rf', 'x']), shellEnd(4, 'c1', 1, '', 'declined')]);
+    const out = extractOf([meta('/work/app'), shellCall(3, 'c1', ['rm', '-rf', 'x']), line(T(4), 'event_msg', { type: 'item_completed', thread_id: 'sess-1', turn_id: 't1', item: { type: 'CommandExecution', id: 'c1', status: 'declined', exit_code: -1, aggregated_output: '' } })]);
     expect(out.tools).toMatchObject([{ tool: 'Bash', status: 'none' }]);
     expect(out.errorLines).toEqual([]);
   });
@@ -143,16 +141,6 @@ describe('rolloutLines', () => {
     ]);
     expect(out.tools).toMatchObject([{ tool: 'update_plan', status: 'ok' }]);
     expect(out.errorLines).toEqual([]);
-  });
-
-  it('treats a persisted exec_command_end with status failed and no exit_code as a failure, and settles a call only once', () => {
-    const out = extractOf([
-      meta('/work/app'),
-      shellCall(2, 'c1', ['x']),
-      line(T(3), 'event_msg', { type: 'exec_command_end', call_id: 'c1', status: 'failed', aggregated_output: 'no code here' }),
-      shellOut(4, 'c1', execText(0, 'ignored: already settled')),
-    ]);
-    expect(out.tools).toMatchObject([{ tool: 'Bash', status: 'error' }]);
   });
 
   it('counts torn lines, and treats a nonblank file with no parseable line as unreadable', () => {
@@ -206,7 +194,7 @@ describe('rolloutLines', () => {
 
   it('redacts a secret and an email, and cuts a 1,500-character error at 1,000 characters', () => {
     const long = `fail: sk-abcdefghijklmnopqrstuvwxyz0123 for alice@example.com ${'x'.repeat(1500)}`;
-    const out = extractOf([meta('/work/app'), shellCall(3, 'c1', ['make']), shellEnd(4, 'c1', 1, long)]);
+    const out = extractOf([meta('/work/app'), shellCall(3, 'c1', ['make']), shellOut(4, 'c1', execText(1, long))]);
     const [error] = out.errorLines;
     expect(error?.line).not.toContain('sk-abcdefghijklmnopqrstuvwxyz0123');
     expect(error?.line).not.toContain('alice@example.com');
@@ -388,7 +376,7 @@ describe('shell, MCP, patch, and usage outcomes', () => {
   it('carries parent_thread_id and agent_role from session_meta on the listed session', async () => {
     const s = stage();
     const id = '55555555-5555-4555-8555-555555555555';
-    const home = stageCodex(s.root, [{ id, lines: [line(T(0), 'session_meta', { id, timestamp: T(0), cwd: '/work/app', parent_thread_id: 'sess-1', agent_role: 'explorer' })] }]);
+    const home = stageCodex(s.root, [{ id, lines: [line(T(0), 'session_meta', { id, originator: 'codex_cli_rs', timestamp: T(0), cwd: '/work/app', parent_thread_id: 'sess-1', agent_role: 'explorer' })] }]);
     const store = await openCodexStore(home);
     expect(store?.sessions[0]).toMatchObject({ parent: 'sess-1', agentRole: 'explorer' });
   });
@@ -396,7 +384,7 @@ describe('shell, MCP, patch, and usage outcomes', () => {
   // rollout/src/rollout_file_name.rs:12-14, :41-47, :66-73: `rollout-<time>-<thread>.jsonl`, and for a reverted thread `rollout-<time>-<thread>_<rollout>.jsonl`. Revert
   // is for a Paginated thread only and writes a new file whose session_meta carries history_base (thread-store/src/local/revert_thread.rs:15-18, :66-70, :198-200;
   // protocol/src/protocol.rs:3508-3510) and takes history_base.end_ordinal_exclusive as its first ordinal (rollout/src/ordinal.rs:29-31).
-  it('keys the rollout of a reverted thread <thread>_<rollout> and files it under its thread, so one thread is one session', async () => {
+  it('folds the rollout of a reverted thread into its thread, so one thread is one session, and keeps it a subagent of the thread when the thread is not in the store', async () => {
     const s = stage();
     const thread = '66666666-6666-4666-8666-666666666666';
     const reverted = '77777777-7777-4777-8777-777777777777';
@@ -407,19 +395,90 @@ describe('shell, MCP, patch, and usage outcomes', () => {
       { id: `${thread}_${reverted}`, lines: [{ ...line(T(0), 'session_meta', { ...paginated, history_base: base }), ordinal: 3 }] },
     ]);
     const store = await openCodexStore(home);
-    expect(store?.sessions.map((session) => [session.id, session.parent])).toEqual(
-      expect.arrayContaining([
-        [thread, null],
-        [`${thread}_${reverted}`, thread],
-      ]),
-    );
-    expect(store?.sessions).toHaveLength(2);
+    expect(store?.sessions.map((session) => [session.id, session.parent, session.revisions.length])).toEqual([[thread, null, 1]]);
+    const alone = stageCodex(join(s.root, 'alone'), [{ id: `${thread}_${reverted}`, lines: [{ ...line(T(0), 'session_meta', { ...paginated, history_base: base }), ordinal: 3 }] }]);
+    expect((await openCodexStore(alone))?.sessions.map((session) => [session.id, session.parent])).toEqual([[`${thread}_${reverted}`, thread]]);
+  });
+
+  // Each file is read only below the start of the files written after it: the second revert drops the first's own records, and both drop the original's tail.
+  it('reads the latest revert over an earlier one, each cutting the records at and after its start from the files before it', async () => {
+    const s = stage();
+    const thread = '66666666-6666-4666-8666-666666666666';
+    const first = '77777777-7777-4777-8777-777777777777';
+    const second = '88888888-8888-4888-8888-888888888888';
+    const prompt = (id: string, at: number, ordinal: number, message: string) => ({ ...line(T(at), 'event_msg', { type: 'user_message', message }), ordinal, id });
+    const head = { id: thread, session_id: thread, timestamp: T(0), cwd: '/work/app', history_mode: 'paginated' };
+    const start = (at: number, from: number) => ({ ...line(T(at), 'session_meta', { ...head, originator: 'codex_cli_rs', timestamp: T(at), history_base: { thread_id: thread, end_ordinal_exclusive: from, end_byte_offset: 1 } }), ordinal: from });
+    const home = stageCodex(s.root, [
+      { id: thread, lines: [{ ...line(T(0), 'session_meta', head), ordinal: 0 }, prompt('a', 1, 1, 'kept'), prompt('b', 2, 2, 'dropped by the first revert'), prompt('c', 3, 3, 'dropped too')] },
+      { id: `${thread}_${first}`, lines: [start(4, 2), prompt('d', 5, 3, 'dropped by the second revert')] },
+      { id: `${thread}_${second}`, lines: [start(6, 3), prompt('e', 7, 4, 'last')] },
+    ]);
+    const store = await openCodexStore(home);
+    const only = store?.sessions[0];
+    if (store === undefined || only === undefined) throw new Error('the store holds no session');
+    const prompts = (await store.transcript(only)).split('\n').filter((raw) => raw.includes('"type":"user"'));
+    expect(store.sessions).toHaveLength(1);
+    expect(prompts.map((text) => /kept|dropped by the first|dropped too|dropped by the second|last/.exec(text)?.[0])).toEqual(['kept', 'last']);
+  });
+
+  // A Copied fork matches its copied records against the parent's lineage as it stood when the fork started: a fork after the revert copied the post-revert
+  // turn, and one before it copied a turn the revert later dropped.
+  describe('a Copied fork of a reverted thread', () => {
+    const thread = '66666666-6666-4666-8666-666666666666';
+    const revert = '77777777-7777-4777-8777-777777777777';
+    const early = '88888888-8888-4888-8888-888888888888';
+    const late = '99999999-9999-4999-8999-999999999999';
+    const asked = (at: number, ordinal: number, message: string) => ({
+      ...line(T(at), 'event_msg', { type: 'item_completed', thread_id: thread, turn_id: `t-${message}`, item: { type: 'UserMessage', id: `u-${message}`, content: [{ type: 'text', text: message, text_elements: [] }] } }),
+      ordinal,
+    });
+    const head = (id: string, at: number, extra: object = {}) => ({
+      ...line(T(at), 'session_meta', { id, session_id: id, originator: 'codex_cli_rs', timestamp: T(at), cwd: '/work/app', history_mode: 'paginated', ...extra }),
+      ordinal: 0,
+    });
+    const fork = (id: string, at: number, copies: readonly object[]) => ({ id, lines: [head(id, at, { forked_from_id: thread }), ...copies, asked(at + 5, copies.length + 1, `own ${id.slice(0, 1)}`)] });
+    const promptsOf = async (home: string, id: string): Promise<string[]> => {
+      const store = await openCodexStore(home);
+      const session = store?.sessions.find((candidate) => candidate.id === id);
+      if (store === undefined || session === undefined) throw new Error(`the store lists no ${id}`);
+      return (await store.transcript(session)).split('\n').flatMap((raw) => /"text":"([^"]*)"/.exec(raw)?.[1] ?? []);
+    };
+    const stageForks = (): string => {
+      const s = stage();
+      const base = { thread_id: thread, end_ordinal_exclusive: 2, end_byte_offset: 1 };
+      return stageCodex(s.root, [
+        { id: thread, lines: [head(thread, 0), asked(1, 1, 'kept'), asked(2, 2, 'dropped')] },
+        { id: `${thread}_${revert}`, lines: [{ ...head(thread, 10, { history_base: base }), ordinal: 2 }, asked(11, 3, 'post-revert')] },
+        fork(early, 5, [asked(6, 1, 'kept'), asked(7, 2, 'dropped')]),
+        fork(late, 20, [asked(21, 1, 'kept'), asked(22, 2, 'post-revert')]),
+      ]);
+    };
+
+    it('drops a fork taken after the revert against the reverted lineage, so the copied post-revert turn is not counted twice', async () => {
+      expect(await promptsOf(stageForks(), late)).toEqual(['own 9']);
+    });
+
+    it('drops a fork taken before the revert against the lineage as it stood then, so its copy of the later-dropped turn goes too', async () => {
+      expect(await promptsOf(stageForks(), early)).toEqual(['own 8']);
+    });
+  });
+
+  it('reports a compressed rollout whose frame is corrupt as unreadable, without reading the whole file', async () => {
+    const s = stage();
+    const dir = join(s.root, 'codex-home', 'sessions', '2026', '06', '01');
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, 'rollout-2026-06-01T10-00-00-66666666-6666-4666-8666-666666666666.jsonl.zst'), 'not a zstd frame');
+    const store = await openCodexStore(join(s.root, 'codex-home'));
+    expect(store?.sessions).toEqual([]);
+    expect(store?.unreadable).toHaveLength(1);
+    expect(store?.unreadable[0]?.reason).not.toContain(s.root);
   });
 
   it('keeps every record of a reverted rollout though its ordinals start at history_base.end_ordinal_exclusive, since the prefix is not copied into the file (ordinal.rs:29-31)', () => {
     const lines = rolloutLines(
       asText([
-        { ...line(T(0), 'session_meta', { id: 'sess-1', session_id: 'sess-1', timestamp: T(0), cwd: '/work/app', history_mode: 'paginated', history_base: { thread_id: 'sess-1', end_ordinal_exclusive: 7, end_byte_offset: 900 } }), ordinal: 7 },
+        { ...line(T(0), 'session_meta', { id: 'sess-1', session_id: 'sess-1', originator: 'codex_cli_rs', timestamp: T(0), cwd: '/work/app', history_mode: 'paginated', history_base: { thread_id: 'sess-1', end_ordinal_exclusive: 7, end_byte_offset: 900 } }), ordinal: 7 },
         { ...line(T(2), 'event_msg', { type: 'item_completed', thread_id: 'sess-1', turn_id: 't3', item: { type: 'UserMessage', id: 'u3', content: [{ type: 'text', text: 'after the revert', text_elements: [] }] } }), ordinal: 8 },
       ]),
       's',
@@ -430,7 +489,7 @@ describe('shell, MCP, patch, and usage outcomes', () => {
   it('reports a rollout that vanishes after it is listed by file name only, even when the root is outside the home folder', async () => {
     const s = stage();
     const id = '88888888-8888-4888-8888-888888888888';
-    const home = stageCodex(join(s.root, 'elsewhere-root-name'), [{ id, lines: [line(T(0), 'session_meta', { id, timestamp: T(0), cwd: '/work/app' })] }]);
+    const home = stageCodex(join(s.root, 'elsewhere-root-name'), [{ id, lines: [line(T(0), 'session_meta', { id, originator: 'codex_cli_rs', timestamp: T(0), cwd: '/work/app' })] }]);
     const store = await openCodexStore(home);
     const session = store?.sessions[0];
     if (store === undefined || session === undefined) throw new Error('the staged store lists no rollout');
@@ -448,11 +507,11 @@ describe('shell, MCP, patch, and usage outcomes', () => {
 // agent_message, patch_apply_end, and mcp_tool_call_end events are not persisted there (rollout/src/policy.rs:142-156, `persisted_item_completed_event` at :232), and an `item_completed`
 // event holding a `TurnItem` (protocol/src/items.rs:50, tag `type`, variant names as written) takes their place. Its content parts carry their own tag: a UserMessage's
 // `UserInput` is snake_case (`text`, user_input.rs:16), an AgentMessage's `AgentMessageContent` has no rename_all (`Text`, items.rs:131-135); response_item, turn_context, and
-// token_count are persisted in both modes (policy.rs:27-29 response_item, :43 turn_context, :49 session_meta, :134 token_count). Every record carries an `ordinal` in this mode (rollout/src/ordinal.rs:28).
+// token_count are persisted in both modes (policy.rs:27-29 response_item, :43 turn_context, :49 session_meta, :134 token_count). Every record carries an `ordinal` in this mode (rollout/src/ordinal.rs:29-30).
 describe('Paginated rollouts', () => {
   let next = 0;
   const ord = (entry: object): object => ({ ...entry, ordinal: next++ });
-  const pmeta = (extra: object = {}) => ord(line(T(0), 'session_meta', { id: 'sess-1', timestamp: T(0), cwd: '/work/app', cli_version: '0.60.0', history_mode: 'paginated', ...extra }));
+  const pmeta = (extra: object = {}) => ord(line(T(0), 'session_meta', { id: 'sess-1', session_id: 'sess-1', originator: 'codex_cli_rs', timestamp: T(0), cwd: '/work/app', cli_version: '0.60.0', history_mode: 'paginated', ...extra }));
   const done = (second: number, item: object) => ord(line(T(second), 'event_msg', { type: 'item_completed', thread_id: 'sess-1', turn_id: 't1', item }));
   const call = (second: number, id: string, name: string, extra: object = {}) => ord(line(T(second), 'response_item', { type: 'function_call', name, arguments: '{}', call_id: id, ...extra }));
   const patchCall = (second: number, id: string) => ord(line(T(second), 'response_item', { type: 'custom_tool_call', name: 'apply_patch', call_id: id, input: '*** Begin Patch\n*** Update File: src/a.ts\n*** End Patch' }));
@@ -608,6 +667,21 @@ describe('Paginated rollouts', () => {
       expect(out.errorLines.map((entry) => entry.line)).toEqual(['failed', 'failed']);
     });
 
+    // The watcher's item carries the whole `aggregated_output`, so a Paginated poll that sees the exit leaves the polled exec_command to it: the poll's own last chunk
+    // would lose a `[branch sha]` line printed in an earlier chunk, and which of the two is recorded first is a race upstream (unified_exec/async_watcher.rs:158, :224).
+    it('leaves the exec_command a poll saw exit to its item in a Paginated rollout, so a sha printed in an earlier chunk is kept', () => {
+      begin();
+      const out = extractOf([
+        pmeta(),
+        execCall(2, 'u1', 'git commit -m x'),
+        ord(shellOut(3, 'u1', running.replace('Output:\n', 'Output:\n[main abc1234] x\n'))),
+        call(4, 'u2', 'write_stdin', { arguments: JSON.stringify({ session_id: 9, chars: '' }) }),
+        ord(shellOut(5, 'u2', 'Chunk ID: ab12\nWall time: 0.0100 seconds\nProcess exited with code 0\nOriginal token count: 3\nOutput:\n done')),
+        exited(6, 'u1', { status: 'completed', exit_code: 0, aggregated_output: '[main abc1234] x\n done' }),
+      ]);
+      expect(out.tools[0]).toMatchObject({ status: 'ok', commits: ['abc1234'] });
+    });
+
     // A poll that fails says nothing about the process it polled: a non-empty write to a process with no tty is `StdinClosed` (unified_exec/process_manager.rs:1021-1026,
     // errors.rs:19-22), answered `write_stdin failed: <err>` (handlers/unified_exec/write_stdin.rs:123), and the process runs on to its own exit.
     it('does not settle the exec_command a failed write_stdin polled: the poll is the error, and the item carries the real exit, so the commit records its sha', () => {
@@ -656,6 +730,12 @@ describe('Paginated rollouts', () => {
       expect(out.errorLines.map((entry) => entry.line)).toEqual(['fatal: lost connection']);
     });
 
+    it('keeps "Exit code -1" for a failed item whose text is only whitespace, since there is no line to show', () => {
+      begin();
+      const out = extractOf([pmeta(), execCall(2, 'u1', 'make'), backgrounded(3, 'u1'), exited(4, 'u1', { status: 'failed', exit_code: -1, aggregated_output: '\n' })]);
+      expect(out.errorLines.map((entry) => entry.line)).toEqual(['Exit code -1']);
+    });
+
     it('keeps "Exit code -1" for a failed item with exit code -1 and no text, since nothing better exists', () => {
       begin();
       const out = extractOf([pmeta(), execCall(2, 'u1', 'make'), backgrounded(3, 'u1'), exited(4, 'u1', { status: 'failed', exit_code: -1, aggregated_output: '' })]);
@@ -665,8 +745,8 @@ describe('Paginated rollouts', () => {
   });
 
   it('applies only the first session_meta: a copy from fork history keeps the fork id and cwd (recorder.rs:1157-1158, :1173), in a Legacy rollout, which has no ordinals (ordinal.rs:37)', () => {
-    const fork = line(T(0), 'session_meta', { id: 'sess-2', timestamp: T(0), cwd: '/work/app', cli_version: '0.60.0', forked_from_id: 'sess-1' });
-    const copied = line(T(0), 'session_meta', { id: 'sess-1', timestamp: T(0), cwd: '/work/parent', cli_version: '0.60.0' });
+    const fork = line(T(0), 'session_meta', { id: 'sess-2', session_id: 'sess-2', originator: 'codex_cli_rs', timestamp: T(0), cwd: '/work/app', cli_version: '0.60.0', forked_from_id: 'sess-1' });
+    const copied = line(T(0), 'session_meta', { id: 'sess-1', session_id: 'sess-1', originator: 'codex_cli_rs', timestamp: T(0), cwd: '/work/parent', cli_version: '0.60.0' });
     const lines = rolloutLines(asText([fork, copied, prompt(4, 'own')]), 's');
     expect(lines.filter((entry) => entry.type === 'user')).toHaveLength(1);
     expect(lines.every((entry) => entry.sessionId === 'sess-2' && entry.cwd === '/work/app')).toBe(true);
@@ -711,7 +791,7 @@ describe('Paginated rollouts', () => {
 describe('a Copied fork', () => {
   const [m0, p1, r2, p3] = [meta('/work/app'), prompt(1, 'first'), say(2, 'reply'), prompt(3, 'second')] as const;
   const parent = [m0, p1, r2, p3];
-  const forkMeta = (id: string) => line(T(10), 'session_meta', { id, timestamp: T(10), cwd: '/work/app', forked_from_id: 'sess-1' });
+  const forkMeta = (id: string) => line(T(10), 'session_meta', { id, originator: 'codex_cli_rs', timestamp: T(10), cwd: '/work/app', forked_from_id: 'sess-1' });
   const at = (offset: number, entry: { timestamp: string }) => ({ ...entry, timestamp: T(offset) });
   const prompts = (lines: ReturnType<typeof rolloutLines>) => lines.filter((entry) => entry.type === 'user');
 
@@ -732,13 +812,19 @@ describe('a Copied fork', () => {
     expect(prompts(rolloutLines(asText(child), 'sess-2'))).toHaveLength(2);
   });
 
+  it('keeps a Referenced fork whole: a history_base means it copied none, so a leading record equal to the first of the parent is its own (protocol.rs:3508-3510)', () => {
+    const referenced = line(T(10), 'session_meta', { id: 'sess-2', session_id: 'sess-2', originator: 'codex_cli_rs', timestamp: T(10), cwd: '/work/app', forked_from_id: 'sess-1', history_base: { thread_id: 'sess-1', end_ordinal_exclusive: 4, end_byte_offset: 800 } });
+    const lines = rolloutLines(asText([referenced, at(11, p1), prompt(20, 'own prompt')]), 'sess-2', asText(parent));
+    expect(prompts(lines)).toHaveLength(2);
+  });
+
   it('drops the copy in a Paginated fork too, where the copied records carry fresh ordinals and the meta has no history_base', () => {
     const item = (second: number, body: object) => line(T(second), 'event_msg', { type: 'item_completed', thread_id: 'sess-1', turn_id: 't1', item: body });
     const asked = item(1, { type: 'UserMessage', id: 'u1', content: [{ type: 'text', text: 'first', text_elements: [] }] });
     const replied = item(2, { type: 'AgentMessage', id: 'a1', content: [{ type: 'Text', text: 'reply' }] });
     const numbered = (entries: readonly object[], from: number): object[] => entries.map((entry, index) => ({ ...entry, ordinal: from + index }));
-    const parentMeta = line(T(0), 'session_meta', { id: 'sess-1', timestamp: T(0), cwd: '/work/app', history_mode: 'paginated' });
-    const forked = line(T(10), 'session_meta', { id: 'sess-2', timestamp: T(10), cwd: '/work/app', history_mode: 'paginated', forked_from_id: 'sess-1' });
+    const parentMeta = line(T(0), 'session_meta', { id: 'sess-1', session_id: 'sess-1', originator: 'codex_cli_rs', timestamp: T(0), cwd: '/work/app', history_mode: 'paginated' });
+    const forked = line(T(10), 'session_meta', { id: 'sess-2', session_id: 'sess-2', originator: 'codex_cli_rs', timestamp: T(10), cwd: '/work/app', history_mode: 'paginated', forked_from_id: 'sess-1' });
     const own = item(20, { type: 'UserMessage', id: 'u2', content: [{ type: 'text', text: 'own prompt', text_elements: [] }] });
     // The fork's own session_meta is ordinal 0 (no history_base), then the copy of the parent's records, then its own turn.
     const child = numbered([forked, at(11, parentMeta), at(12, asked), at(13, replied), own], 0);
@@ -841,9 +927,9 @@ describe('a unified-exec shell call (core/src/tools/handlers/unified_exec)', () 
     expect(out.errorLines).toEqual([]);
   });
 
-  // A process with no exit status is reported as -1 (process_manager.rs:823, `exit_code.unwrap_or(-1)`; async_watcher.rs:213) and written as `Process exited with
-  // code -1` (context.rs:556). -1 is no exit status and capture's `Exit code (\d+)` cannot read it, so the output's text must be the error line, as it is for code 1.
-  it('records the output of a call that exited with code -1 as the error line, not "Exit code -1" (process_manager.rs:823, async_watcher.rs:213)', () => {
+  // A child that exits with code -1 is written as `Process exited with code -1` (unified_exec/process.rs:222, context.rs:555-557). -1 is no exit status and capture's
+  // `Exit code (\d+)` cannot read it, so the output's text must be the error line, as it is for code 1.
+  it('records the output of a call that exited with code -1 as the error line, not "Exit code -1" (process.rs:222, context.rs:555-557)', () => {
     const out = extractOf([
       meta('/work/app'),
       unified(2, 'u1', 'exec_command', { cmd: 'git push' }),
@@ -862,6 +948,14 @@ describe('a unified-exec shell call (core/src/tools/handlers/unified_exec)', () 
     expect(out.errorLines.map((entry) => entry.line)).toEqual(['fatal: lost connection']);
   });
 
+  // `None` for the exit status writes no exit line and no running line (context.rs:555-557; its -1 goes only to the item, process_manager.rs:823, :839): the call is neither
+  // failed nor finished, and it stays unsettled.
+  it('leaves a reply header with neither an exit line nor a running line unsettled', () => {
+    const out = extractOf([meta('/work/app'), unified(2, 'u1', 'exec_command', { cmd: 'sleep 9' }), shellOut(3, 'u1', `${head('Chunk id: 1')}partial`)]);
+    expect(out.tools).toMatchObject([{ tool: 'Bash', status: 'none' }]);
+    expect(out.errorLines).toEqual([]);
+  });
+
   it('records a call that exited 0 with no output as ok, and still finds a commit sha past a first line that is not one', () => {
     const quiet = extractOf([meta('/work/app'), unified(2, 'u1', 'exec_command', { cmd: 'true' }), shellOut(3, 'u1', head('Process exited with code 0'))]);
     expect(quiet.tools).toMatchObject([{ status: 'ok' }]);
@@ -869,22 +963,22 @@ describe('a unified-exec shell call (core/src/tools/handlers/unified_exec)', () 
     expect(commit.tools[0]).toMatchObject({ status: 'ok', commits: ['abc1234'] });
   });
 
-  it('records exec_command failed: <err> (exec_command.rs:270) as an error, with its text as the error line', () => {
-    const out = extractOf([meta('/work/app'), unified(2, 'u1', 'exec_command', { cmd: 'nope' }), shellOut(3, 'u1', 'exec_command failed: Os { code: 2, kind: NotFound }')]);
+  it('records exec_command failed: <err> (exec_command.rs:270, UnifiedExecError::CreateProcess, errors.rs:9) as an error, with its text as the error line', () => {
+    const out = extractOf([meta('/work/app'), unified(2, 'u1', 'exec_command', { cmd: 'nope' }), shellOut(3, 'u1', 'exec_command failed: CreateProcess { message: "not found" }')]);
     expect(out.tools).toMatchObject([{ tool: 'Bash', status: 'error' }]);
-    expect(out.errorLines.map((entry) => entry.line)).toEqual(['exec_command failed: Os { code: 2, kind: NotFound }']);
+    expect(out.errorLines.map((entry) => entry.line)).toEqual(['exec_command failed: CreateProcess { message: "not found" }']);
   });
 
-  it('records write_stdin failed: <err> and write_stdin approval failed: <err> (write_stdin.rs:121, :123) as errors', () => {
+  it('records write_stdin failed: <err> and write_stdin approval failed: <err> (write_stdin.rs:123, :121) as errors', () => {
     const out = extractOf([
       meta('/work/app'),
       unified(2, 'u1', 'write_stdin', { session_id: 5, chars: 'y' }),
-      shellOut(3, 'u1', 'write_stdin failed: UnknownSessionId { process_id: 5 }'),
+      shellOut(3, 'u1', 'write_stdin failed: Unknown process id 5'),
       unified(4, 'u2', 'write_stdin', { session_id: 6, chars: 'y' }),
       shellOut(5, 'u2', 'write_stdin approval failed: sandbox denied'),
     ]);
     expect(out.tools.map((tool) => [tool.tool, tool.status])).toEqual([['Bash', 'error'], ['Bash', 'error']]);
-    expect(out.errorLines.map((entry) => entry.line)).toEqual(['write_stdin failed: UnknownSessionId { process_id: 5 }', 'write_stdin approval failed: sandbox denied']);
+    expect(out.errorLines.map((entry) => entry.line)).toEqual(['write_stdin failed: Unknown process id 5', 'write_stdin approval failed: sandbox denied']);
   });
 
   // The Legacy form of the case in a CommandExecution describe above: no item exists to say how the process ended, so the exec_command stays unsettled.

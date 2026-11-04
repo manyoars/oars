@@ -442,12 +442,12 @@ describe('oars sessions', () => {
 describe('oars sessions with a Codex store', () => {
   // Fixture written from openai/codex @ ac558e2 (see codex.test.ts).
   const rollout = (id: string) => [
-    rolloutLine('2026-06-01T10:00:00.000Z', 'session_meta', { id, timestamp: '2026-06-01T10:00:00.000Z', cwd: '/work/app', cli_version: '0.50.0' }),
+    rolloutLine('2026-06-01T10:00:00.000Z', 'session_meta', { id, originator: 'codex_cli_rs', timestamp: '2026-06-01T10:00:00.000Z', cwd: '/work/app', cli_version: '0.50.0' }),
     rolloutLine('2026-06-01T10:00:02.000Z', 'event_msg', { type: 'user_message', message: 'hello' }),
   ];
   const withCodex = () => {
     const h = setup();
-    const home = stageCodex(h.staged.root, [{ id: '11111111-1111-4111-8111-111111111111', lines: rollout('a') }, { id: '22222222-2222-4222-8222-222222222222', lines: rollout('b') }]);
+    const home = stageCodex(h.staged.root, [{ id: '11111111-1111-4111-8111-111111111111', lines: rollout('11111111-1111-4111-8111-111111111111') }, { id: '22222222-2222-4222-8222-222222222222', lines: rollout('22222222-2222-4222-8222-222222222222') }]);
     h.deps.sessions = { ...h.staged.runtime, sourceRoots: { codex: home } };
     return h;
   };
