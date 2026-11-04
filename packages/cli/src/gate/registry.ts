@@ -46,12 +46,14 @@ const textField = (value: unknown, key: string): string | null => {
   return typeof field === 'string' && field !== '' ? field : null;
 };
 
-/** `npm view <name> dist-tags.latest time.created --json`. A not-found answer is an `E404` on either stream. */
+/** `npm view <name> dist-tags.latest time.created --json`, as an object or a one-element array. A not-found answer is an `E404` on either stream. */
 export const readNpmView = (run: ManagerRun): RegistryAnswer => {
   if (/\bE404\b/.test(run.stdout) || /\bE404\b/.test(run.stderr)) return NOT_FOUND;
   if (run.code !== 0) return UNREACHABLE;
   try {
-    const parsed: unknown = JSON.parse(run.stdout);
+    const answer: unknown = JSON.parse(run.stdout);
+    // npm 12 wraps the two-field answer in a one-element array; older npm prints the object itself.
+    const parsed: unknown = Array.isArray(answer) ? answer[0] : answer;
     const latest = textField(parsed, 'dist-tags.latest');
     return latest === null ? UNREACHABLE : { state: 'found', latest, created: textField(parsed, 'time.created') };
   } catch {
