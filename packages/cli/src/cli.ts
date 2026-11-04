@@ -307,7 +307,7 @@ const buildProgram = (deps: RunDeps, argv: string[]): Command => {
     .option('--class <name>', 'a prompt class (edit-verify, edit-only, shell-only, research, orchestration, explore-only, mixed, no-tools)')
     .option('--since <days>', 'only the last N days', positiveInteger)
     .option('--pattern <id>', 'what happened from here: a read ID for a step so far (repeatable)', collect)
-    .option('--entity <name>', 'what is known about a public name: a tool, an MCP server, an action, or a model')
+    .option('--entity <name>', 'what is known about a public name: a package, a tool, an MCP server, an action, or a model')
     .option('--family <name>', `one read family (${RECALL_FAMILIES.join(', ')}); only recovery and fit are narrowed by --class and --since`)
     .option('--text <text>', 'look for text in the local record')
     .option('--session <id>', 'the session asking, so what it did next can be read for this recall')

@@ -4,7 +4,7 @@
 import { createHash } from 'node:crypto';
 import { ACTION_TABLES, actionOf, mcpOf } from './actions.js';
 import { utcDay } from './frame.js';
-import { LITERAL, publicModel, publicVersion } from './public-vocabulary.js';
+import { LITERAL, PUBLIC_PACKAGES, publicModel, publicVersion } from './public-vocabulary.js';
 import { recall, recallRows, type RecallQuery, type RecallResult } from './query.js';
 import { contentHash, FAMILIES, type Family } from './read.js';
 import { namedByPrefix, readsOfFamily, resolveReads, type CurrentPool } from './recall-pool.js';
@@ -239,8 +239,14 @@ const entityReads = (store: Store, name: string): RecallRead[] => {
   };
   const calls = usage(['entity', name], [], (session) => Object.entries(session.tools).reduce((sum, [tool, times]) => (namedInTable(name, tool) ? sum + times : sum), 0));
   const requests = usage(['entity', 'model', name], [name], (session) => session.models[name] ?? 0);
+  // A pull's name is class A, so only a name the public vocabulary lists is looked for: a private package gets no answer that its asker could read as a count of it.
+  const pulling = new Map<string, number>();
+  if (PUBLIC_PACKAGES.has(name)) {
+    for (const [session, list] of callsBySession(store)) pulling.set(session, list.filter((call) => call.pulls?.some((one) => one.name === name)).length);
+  }
+  const pulled = usage(['entity', 'package', name], [], (session) => pulling.get(session.session) ?? 0);
   const errors = recoveryReads(store, (error) => namedInTable(name, error.tool) || models.get(`${error.session}#${String(error.prompt)}`) === name);
-  return [...calls, ...requests, ...errors];
+  return [...calls, ...requests, ...pulled, ...errors];
 };
 
 const promptKey = (row: { session: string; prompt: number | null }): string => `${row.session}#${String(row.prompt)}`;
