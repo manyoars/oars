@@ -21,7 +21,7 @@ import { gateInstall, gateReplay, gateReport, gateUninstall } from './gate/comma
 import { DEADLINE_MS, gateHook } from './gate/hook.js';
 import { managerReader } from './gate/registry.js';
 import { exclusionPaths, sessionsExclusions } from './sessions/exclusion.js';
-import { poolDeposit, poolFetch, poolLogin } from './sessions/pool-command.js';
+import { poolDeposit, poolFetch, poolLogin, poolOutbox } from './sessions/pool-command.js';
 import type { InstallRuntime, Scope } from './sessions/install.js';
 import type { SessionsRuntime } from './sessions/store.js';
 
@@ -642,12 +642,23 @@ const buildProgram = (deps: RunDeps, argv: string[]): Command => {
 
   pool
     .command('deposit')
-    .description('send every session that passes the V15 check as a closed-vocabulary skeleton, and print counts only')
-    .option('--accept-covenant <version>', 'accept this version of the pool covenant before depositing')
+    .description('write a batch to the outbox for each session that passes the folder allowlist and the V15 check, and stop: nothing is sent, and only counts print. --send <hash> sends only a batch that oars pool outbox printed and that is unchanged')
+    .option('--accept-covenant <version>', 'accept this version of the pool covenant before sending')
+    .option('--send <hash>', 'the SHA-256 of a batch that oars pool outbox printed')
     .option(serverOption, serverHelp)
     .action(async (_options: OptionValues, command: Command) => {
       const options: OptionValues = command.optsWithGlobals();
-      emit(deps, flag(options, 'json'), await poolDeposit(deps, { server: text(options, 'server'), acceptCovenant: text(options, 'acceptCovenant') }));
+      emit(deps, flag(options, 'json'), await poolDeposit(deps, { server: text(options, 'server'), acceptCovenant: text(options, 'acceptCovenant'), send: text(options, 'send') }));
+    });
+
+  pool
+    .command('outbox')
+    .description('print every batch exactly as it would be sent, request line and headers included, with the credential as its size; prints each batch SHA-256 and records that it was shown')
+    .option('--explain', 'print each field of a batch with the rule that admits its values')
+    .option(serverOption, serverHelp)
+    .action(async (_options: OptionValues, command: Command) => {
+      const options: OptionValues = command.optsWithGlobals();
+      emit(deps, flag(options, 'json'), await poolOutbox(deps, { server: text(options, 'server'), explain: flag(options, 'explain') }));
     });
 
   pool
