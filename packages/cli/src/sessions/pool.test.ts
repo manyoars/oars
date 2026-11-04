@@ -4,8 +4,13 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { CliError } from '../errors.js';
 import type * as ReadModuleNamespace from './read.js';
+import { deriveCells, type Cell } from './cells.js';
 import { currentPool, poolFiles, refreshPool, servedPool } from './pool.js';
-import { error, prompt, session, step, store, tool } from './pool-fixture.js';
+import { cellsOf, incrementsOf, projectedStore } from './cell-increments.js';
+import { error, frame, prompt, session, step, store, tool } from './pool-fixture.js';
+import { sessionsOf, skeletonOf } from './pool-wire.js';
+import { shellReader } from './projection.js';
+import { vocabulary } from './vocab-load.js';
 
 type ReadModule = typeof ReadModuleNamespace;
 
@@ -41,6 +46,27 @@ describe('refreshPool', () => {
     await refreshPool(dir, one);
     expect(readFileSync(files.cells, 'utf8')).toBe(cells);
     expect(readFileSync(files.motifs, 'utf8')).toBe(motifs);
+  });
+
+  it('writes the cells the shared module computes, with the flag cells and floored numbers a raw derivation would not hold', async () => {
+    const push = { program: 'git', sub: 'push', flags: ['--force', '--tags'] };
+    const framed = frame({ shell: 'bash', stack: { languages: ['rust'], frameworks: ['astro'], size: 'xl' } });
+    const local = store({
+      sessions: [session('s1', { frame: framed })],
+      prompts: [prompt('s1', 0, { frame: framed, usage: { input: 123456, cacheWrite: 0, cacheRead: 0, output: 0, thinking: 0 } })],
+      tools: [tool('s1', 0, 'Bash', { steps: [step(0, 0, 'shell.exec', { native: 'Bash', identity: push, cost: { tokens: 98765, durationMs: 4321 } })] })],
+    });
+    const keyed = (cells: readonly Cell[]): string[] => cells.map(({ motifId, frameBucket, day, exposed, sessions, ok, failed, tokens, durationMs }) => `${motifId}/${frameBucket}/${day}/${String(Number(exposed))} ${String(sessions)} ${String(ok)} ${String(failed)} ${String(tokens)} ${String(durationMs)}`).sort();
+    const [only] = sessionsOf(local);
+    const skeleton = only === undefined ? null : skeletonOf(only, '0123456789abcdef', shellReader(vocabulary()));
+    if (skeleton === null) throw new Error('the local store has no skeleton');
+    const shared = [...incrementsOf(skeleton).cells.values()];
+    const { pool } = await refreshPool(storeDir(), local);
+    expect(shared.length).toBeGreaterThan(2);
+    expect(keyed(pool.cells)).toEqual(keyed(shared));
+    // The module reads the projected store, so a number is a floor: the raw derivation holds the exact 123456 and 98765.
+    expect(keyed(pool.cells)).not.toEqual(keyed(deriveCells(local).cells));
+    expect(keyed(pool.cells)).toEqual(keyed(cellsOf(projectedStore(local, shellReader(vocabulary()))).cells));
   });
 
   it('writes byte-identical motifs from a reversed store, holding only action and identity per step', async () => {
