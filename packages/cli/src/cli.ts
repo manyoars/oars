@@ -17,7 +17,8 @@ import type { BooksBy, RecallQuery } from './sessions/query.js';
 import { closedQueryOf, formsRefusal, RECALL_FAMILIES } from './sessions/recall-reads.js';
 import { FAMILIES } from './sessions/read.js';
 import { sessionsBooks, sessionsContext, sessionsDeposit, sessionsGoldArms, sessionsGoldSample, sessionsGoldScore, sessionsHookInstall, sessionsHookStatus, sessionsHookUninstall, sessionsMcp, sessionsLineage, sessionsMeasure, sessionsRead, sessionsRecall, sessionsRecallCounts, sessionsVerify, type SessionsDeps } from './sessions/command.js';
-import { gateReplay, gateReport } from './gate/command.js';
+import { gateInstall, gateReplay, gateReport, gateUninstall } from './gate/command.js';
+import { DEADLINE_MS, gateHook } from './gate/hook.js';
 import { managerReader } from './gate/registry.js';
 import { exclusionPaths, sessionsExclusions } from './sessions/exclusion.js';
 import { poolDeposit, poolLogin, poolPull } from './sessions/pool-command.js';
@@ -336,7 +337,7 @@ const buildProgram = (deps: RunDeps, argv: string[]): Command => {
   sessions
     .command('deposit')
     .description('read session logs from the folders you name into the local observation log; idempotent. Subagent transcripts under each session (<project>/<session>/subagents/) are deposited with their parent, and each raw transcript is hard-linked into the oars archive beside the store')
-    .option('--allow <folder>', 'a project folder to read: its path, or its name under ~/.claude/projects (repeatable); `cursor`, `codex`, and `copilot` name the Cursor, Codex, and Copilot CLI stores. A trailing slash names everything under a folder; * and ? are wildcards', collect)
+    .option('--allow <folder>', 'a project folder to read: its path, or its name under ~/.claude/projects (repeatable); `cursor`, `codex`, `copilot`, and `grok` name the Cursor, Codex, Copilot CLI, and Grok Build stores. A trailing slash names everything under a folder; * and ? are wildcards', collect)
     .option('--allow-file <list>', 'a file of --allow entries, one per line (# starts a comment); repeatable, combines with --allow', collect)
     .option('--redact-domain <domain>', 'an organization domain to mask in everything written (repeatable)', collect)
     .action(async (_options: OptionValues, command: Command) => {
@@ -580,7 +581,7 @@ const buildProgram = (deps: RunDeps, argv: string[]): Command => {
       emit(deps, flag(options, 'json'), await sessionsHookStatus(sessionDeps(deps), { file: text(options, 'file') }));
     });
 
-  const gate = program.command('gate').description('replay the install, fetch-and-run, MCP, and skill picks your agents made, from logs already on disk: local and read-only, and it records what happened without judging it');
+  const gate = program.command('gate').description('record the install, fetch-and-run, MCP, and skill picks your agents make, live through a hook or from logs already on disk, without judging them');
 
   gate
     .command('replay')
@@ -593,8 +594,34 @@ const buildProgram = (deps: RunDeps, argv: string[]): Command => {
     });
 
   gate
+    .command('hook')
+    .description('the PreToolUse hook: reads the tool call on stdin, records any crossing in crossings.jsonl, and prints nothing; it never allows, denies, or changes a call (bin.js answers this command itself, before the rest of the CLI loads)')
+    .action(async () => {
+      const runtime = sessionDeps(deps).sessions;
+      // No store means no file: an empty store folder would put crossings.jsonl in the working folder.
+      if (runtime === undefined) return;
+      let stdin = '';
+      for await (const chunk of runtime.stdin) stdin += String(chunk);
+      await gateHook(stdin, { storeDir: runtime.storeDir, now: deps.now, clock: () => performance.now(), deadlineMs: DEADLINE_MS });
+    });
+
+  gate
+    .command('install')
+    .description('wire the gate hook into Claude Code at user scope (PreToolUse for Bash, PowerShell, Skill, and MCP tools); rerunning changes nothing, and every other setting and hook is kept')
+    .action(async (_options: OptionValues, command: Command) => {
+      emit(deps, flag(command.optsWithGlobals(), 'json'), await gateInstall(sessionDeps(deps)));
+    });
+
+  gate
+    .command('uninstall')
+    .description('remove only the gate hook `install` wrote from the user settings; crossings.jsonl stays')
+    .action(async (_options: OptionValues, command: Command) => {
+      emit(deps, flag(command.optsWithGlobals(), 'json'), await gateUninstall(sessionDeps(deps)));
+    });
+
+  gate
     .command('report')
-    .description('count the crossings the last replay found, and say what replay cannot see')
+    .description('count the crossings in crossings.jsonl, by who recorded them, and say what replay cannot see')
     .action(async (_options: OptionValues, command: Command) => {
       emit(deps, flag(command.optsWithGlobals(), 'json'), await gateReport(sessionDeps(deps)));
     });
