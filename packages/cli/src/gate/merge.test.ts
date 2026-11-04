@@ -252,6 +252,19 @@ describe('replay beside the hook', () => {
     expect(last?.novelty).toBe('repository');
   });
 
+  it('seeds a readable index even when the replay found no crossing, so the next hook row reads fleet', async () => {
+    const lines = [
+      { type: 'user', timestamp: '2026-10-01T10:00:00.000Z', permissionMode: 'default', message: { role: 'user', content: 'list files' } },
+      { type: 'assistant', timestamp: '2026-10-01T10:00:01.000Z', cwd: root, message: { role: 'assistant', content: [{ type: 'tool_use', id: 'q1', name: 'Bash', input: { command: 'ls -la' } }] } },
+    ];
+    await writeFile(join(projectsRoot, 'C--work-app', 'sess1.jsonl'), `${lines.map((line) => JSON.stringify(line)).join('\n')}\n`);
+    await replay({ storeDir, projectsRoot }, { allow: ['C--work-app'], now: () => NOW });
+    expect((await loadIndex(storeDir, join(storeDir, 'crossings.jsonl'))).state).toBe('ready');
+    await hook('t7', 'sess1', COMMAND_LINE);
+    const last = (await fileRows()).filter((row): row is CrossingRecord => row.kind === 'crossing' && row.via === 'hook').at(-1);
+    expect(last?.novelty).toBe('fleet');
+  });
+
   describe('when the hook and the project folder name the same repository', () => {
     // A repository root holding `.git`, a session started at the root, and a project folder named as Claude Code names it.
     const repoWithSession = async (startedIn: string): Promise<string> => {

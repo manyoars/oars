@@ -59,9 +59,10 @@ describe('the hook process: the deadline', () => {
   it('writes nothing at the deadline once the record is on disk', async () => {
     const store = folder();
     const exit = vi.fn();
-    await runHookProcess({ stdin: () => Promise.resolve(PAYLOAD), deps: depsFor(store), exit, deadlineMs: 5_000 });
-    expect(exit).toHaveBeenCalledTimes(1);
+    // The deadline is short, and the test waits until it has passed: a timer that still held the staged record would append it a second time.
+    await runHookProcess({ stdin: () => Promise.resolve(PAYLOAD), deps: depsFor(store), exit, deadlineMs: 150 });
     expect(exit).toHaveBeenCalledWith(0);
+    await new Promise<void>((resolve) => setTimeout(resolve, 400));
     expect(readFileSync(crossingsPath(store), 'utf8').trim().split('\n')).toHaveLength(1);
   });
 });

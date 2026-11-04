@@ -2,7 +2,7 @@
 // exactly `COMMAND`, so uninstall removes that entry and nothing else, and every other key and hook in the file is carried through as parsed JSON. The command calls the
 // installed `oars`, never `npx` (which would fetch a package on the hook's clock), and does nothing when `oars` is not on the PATH, so a settings file that outlives the
 // install cannot cost a session its tool calls.
-import { mkdir, rename, writeFile } from 'node:fs/promises';
+import { mkdir, realpath, rename, stat, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { CliError, ExitCode } from '../errors.js';
 import { readSettings } from '../sessions/install.js';
@@ -47,12 +47,25 @@ const withOwn = (groups: unknown[]): unknown[] => {
 
 const withoutOwn = (groups: unknown[]): unknown[] => groups.flatMap((group) => (holdsOwn(group) ? remainder(group) : [group]));
 
-/** Whole and atomic: a half-written settings file would take every other hook in it down too. */
+/** The file as it stands, followed through a symlink (a dotfile manager's), with its permission bits; `undefined` when there is none yet. */
+const existing = async (path: string): Promise<{ target: string; mode: number } | undefined> => {
+  try {
+    const target = await realpath(path);
+    return { target, mode: (await stat(target)).mode & 0o777 };
+  } catch {
+    return undefined;
+  }
+};
+
+/** Whole and atomic: a half-written settings file would take every other hook in it down too. The temp file sits beside the real target with the file's own mode (0600 when new: `env` can hold secrets), and the rename lands on the resolved path, so a symlinked settings file stays a symlink. */
 const writeSettings = async (path: string, settings: Json): Promise<void> => {
-  await mkdir(dirname(path), { recursive: true });
-  const temp = `${path}.${String(process.pid)}.oars-gate.tmp`;
-  await writeFile(temp, `${JSON.stringify(settings, null, 2)}\n`);
-  await rename(temp, path);
+  const found = await existing(path);
+  const target = found?.target ?? path;
+  await mkdir(dirname(target), { recursive: true });
+  const temp = `${target}.${String(process.pid)}.oars-gate.tmp`;
+  await writeFile(temp, `${JSON.stringify(settings, null, 2)}
+`, { mode: found?.mode ?? 0o600 });
+  await rename(temp, target);
 };
 
 // A `hooks` key, or a PreToolUse key under it, of another shape is the operator's and this version cannot merge into it: refuse it, and write nothing.
