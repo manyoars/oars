@@ -290,7 +290,8 @@ export const chatLines = (text: string, fallbackId: string, cwd: string | null):
                 input_tokens: Math.max((num(tokens.input) ?? 0) - cached, 0),
                 cache_read_input_tokens: cached,
                 cache_creation_input_tokens: 0,
-                output_tokens: num(tokens.output) ?? 0,
+                // `output` is candidatesTokenCount and `thoughts` is counted apart from it (chatRecordingTypes.ts:21-25), but thinking is part of the output, which verify holds.
+                output_tokens: (num(tokens.output) ?? 0) + (thoughts ?? 0),
                 ...(thoughts === undefined ? {} : { output_tokens_details: { thinking_tokens: thoughts } }),
               },
             };
