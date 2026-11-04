@@ -46,7 +46,7 @@ export const gateInstall = async (deps: SessionsDeps): Promise<Outcome> => {
   const result = await installGateHook(file);
   const lines = [
     result.changed
-      ? `Installed the gate hook in ${file}: ${EVENT} for ${MATCHER}, running \`${COMMAND}\`. It records each crossing in crossings.jsonl and prints nothing; it never allows, denies, or changes a call.`
+      ? `Installed the gate hook in ${file}: ${EVENT} for ${MATCHER}, running \`${COMMAND}\`. It records each crossing in crossings.jsonl, adds a note about a young or missing name by default, and denies a call only if you write \`block\` in gate-policy.json; it never allows or changes a call.`
       : `The gate hook is already installed in ${file}; nothing was changed.`,
   ];
   // A record with no kept index cannot tell what is new without a scan the hook must not do, so it reads `not-read` until a replay seeds the index.

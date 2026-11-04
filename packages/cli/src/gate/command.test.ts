@@ -6,7 +6,7 @@ import { run } from '../cli.js';
 import { CliError, ExitCode } from '../errors.js';
 import { harness, removeTestDirs } from '../test-support.js';
 import { addProject, cleanup, stage } from '../sessions/test-support.js';
-import { gatePolicy, gateReplay, gateReport } from './command.js';
+import { gateInstall, gatePolicy, gateReplay, gateReport } from './command.js';
 import { parseRows } from './record.js';
 import type { RegistryReader } from './registry.js';
 
@@ -130,6 +130,19 @@ describe('oars gate policy', () => {
 
   it('says so when the store is not configured', async () => {
     await expect(gatePolicy({ sessions: undefined, install: undefined, now: () => 0 })).rejects.toBeInstanceOf(CliError);
+  });
+});
+
+describe('oars gate install, at the moment of opting in', () => {
+  it('tells the operator what the hook does: records, notes by default, denies only on block, never allows or changes', async () => {
+    const staged = stage();
+    const userSettings = join(staged.storeDir, '..', 'claude', 'settings.json');
+    const install = { nodePath: 'node', hookBin: 'hook-bin.js', userSettings, cwd: tmpdir(), schtasks: () => Promise.resolve({ code: 0, output: '' }) };
+    const outcome = await gateInstall({ sessions: staged.runtime, install, now: () => 0 });
+    expect(outcome.text).toContain(
+      'It records each crossing in crossings.jsonl, adds a note about a young or missing name by default, and denies a call only if you write `block` in gate-policy.json; it never allows or changes a call.',
+    );
+    expect(outcome.text).not.toContain('prints nothing');
   });
 });
 
