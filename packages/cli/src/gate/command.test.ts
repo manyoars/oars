@@ -7,7 +7,7 @@ import { CliError, ExitCode } from '../errors.js';
 import { harness, removeTestDirs } from '../test-support.js';
 import { addProject, cleanup, stage } from '../sessions/test-support.js';
 import { gateInstall, gatePolicy, gateReplay, gateReport } from './command.js';
-import { parseRows } from './record.js';
+import { folderKey, parseRows } from './record.js';
 import type { RegistryReader } from './registry.js';
 
 afterEach(() => {
@@ -175,7 +175,7 @@ describe('oars gate hook, through the command', () => {
     mkdirSync(staged.storeDir, { recursive: true });
     writeFileSync(join(staged.storeDir, 'gate-policy.json'), '{"classes":{"not-found":"block"}}');
     const now = deps.now();
-    const answer = { kind: 'registry', v: 1, day: new Date(now).toISOString().slice(0, 10), ts: new Date(now).toISOString(), class: 'npm-package', state: 'not-found', created: null, name: 'left-pad', latest: null };
+    const answer = { kind: 'registry', v: 1, day: new Date(now).toISOString().slice(0, 10), ts: new Date(now).toISOString(), folder: folderKey(tmpdir()), class: 'npm-package', state: 'not-found', created: null, name: 'left-pad', latest: null };
     writeFileSync(join(staged.storeDir, 'gate-registry.jsonl'), `${JSON.stringify(answer)}
 `);
     staged.stdin.end(payload);

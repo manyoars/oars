@@ -113,7 +113,7 @@ One row stands for one crossing: its key is the session, the tool use id, the cl
 | `session`, `agent`, `toolUseId`, `ts` | A | join ids and a finer time |
 | `name`, `version` | A | what the command stated. A package or server name can identify private work, as `pulls` already says |
 | `registry` row: `kind`, `v`, `day`, `class`, `state` | P | row kind, gate version, UTC day the answer was read, package class, `found` or `not-found` |
-| `registry` row: `name`, `latest`, `created`, `ts` | A | the name asked, the registry's latest version, the name's creation time, and when the answer was read, to the millisecond. `created` and `ts` are full timestamps, so they are not class P |
+| `registry` row: `name`, `latest`, `created`, `ts`, `folder` | A | the name asked, the registry's latest version, the name's creation time, when the answer was read to the millisecond, and a truncated SHA-256 of the folder the ask ran in (a kept not-found answers only that folder, since its config can name another registry; a row with none is not fresh). `created` and `ts` are full timestamps, so they are not class P |
 
 `run` row: counts of transcripts, unreadable files, torn lines, calls, and crossings, the commands it could not name by shape, and whether the registry was read (class P).
 

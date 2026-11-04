@@ -5,7 +5,7 @@ import { createHash } from 'node:crypto';
 import { appendFile, mkdir, rm, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { CrossingClass } from './checks.js';
-import { GATE_VERSION, type RegistryRow } from './record.js';
+import { GATE_VERSION, folderKey, type RegistryRow } from './record.js';
 import { askable, type RegistryReader } from './registry.js';
 
 export interface FillAsk {
@@ -68,7 +68,7 @@ export const runFill = async (storeDir: string, ask: FillAsk, deps: { registry: 
   const answer = await deps.registry(ask);
   if (answer.state === 'unreachable') return;
   const at = new Date(deps.now()).toISOString();
-  const row: RegistryRow = { kind: 'registry', v: GATE_VERSION, day: at.slice(0, 10), ts: at, class: ask.class, state: answer.state, created: answer.created, name: ask.name, latest: answer.latest };
+  const row: RegistryRow = { kind: 'registry', v: GATE_VERSION, day: at.slice(0, 10), ts: at, folder: folderKey(ask.cwd), class: ask.class, state: answer.state, created: answer.created, name: ask.name, latest: answer.latest };
   await appendFile(join(storeDir, 'gate-registry.jsonl'), `${JSON.stringify(row)}\n`, { mode: 0o600 });
   await rm(lockPath(storeDir, ask), { force: true });
 };
