@@ -213,6 +213,34 @@ describe('MCP pulls', () => {
   });
 });
 
+describe('MCP tool names: a token behind an underscore or in a later part is redacted', () => {
+  const token = 'ghp_abcdefghijklmnopqrstuvwxyz012345';
+  const line = (message: object, extra: object = {}): string => JSON.stringify({ timestamp: '2026-06-10T00:00:00.000Z', cwd: '/w', ...extra, message });
+  const capturedFor = (toolName: string) =>
+    captureSession({
+      text: [
+        line({ role: 'user', content: 'go' }, { type: 'user' }),
+        line({ role: 'assistant', content: [{ type: 'tool_use', id: 'a', name: toolName, input: {} }] }, { type: 'assistant' }),
+        line({ role: 'user', content: [{ type: 'tool_result', tool_use_id: 'a', content: 'Exit code 1\nboom', is_error: true }] }, { type: 'user' }),
+      ].join('\n'),
+      session: 's',
+      project: 'p',
+      rev: 1,
+      at: '',
+      bytes: 0,
+      redact,
+    });
+  it.each([`mcp__me_${token}__find`, `mcp__me__${token}__find`, `mcp__me__find_${token}`])('keeps the token out of every stored field for %s', (toolName) => {
+    expect(JSON.stringify(capturedFor(toolName))).not.toContain(token);
+  });
+  it('masks the token in the stored name and the pull for both forms', () => {
+    expect(storedToolName(`mcp__me_${token}__find`, redact)).toBe('mcp__me_<secret>__find');
+    expect(storedToolName(`mcp__me__${token}__find`, redact)).toBe('mcp__me__<secret>__find');
+    expect(pullsOfTool(`mcp__me_${token}__find`, redact)).toEqual([{ ecosystem: 'mcp', name: 'me_<secret>', version: null }]);
+    expect(pullsOfTool(`mcp__me__${token}__find`, redact)).toEqual([{ ecosystem: 'mcp', name: 'me', version: null }]);
+  });
+});
+
 describe('MCP tool names: a server name that holds a token is stored redacted', () => {
   const token = 'ghp_abcdefghijklmnopqrstuvwxyz012345';
   const line = (message: object, extra: object = {}): string => JSON.stringify({ timestamp: '2026-06-10T00:00:00.000Z', cwd: '/w', ...extra, message });

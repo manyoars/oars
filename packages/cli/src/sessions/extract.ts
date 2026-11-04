@@ -1161,19 +1161,35 @@ export const commitsRead = (plan: readonly PlannedCommit[], result: string): Arr
 };
 
 /**
+ * What follows `mcp__` with every secret masked. A token is not matched when a word character follows or precedes it, and `_` is one, so
+ * each `__`-separated part is masked alone and every offset right after a `_` inside a part is tried too. The tool part comes from the
+ * operator's config as much as the server part does.
+ */
+const redactedMcpTail = (tail: string, redact: Redactor): string =>
+  tail
+    .split('__')
+    .map((part) => {
+      let out = redact(part);
+      for (let at = out.indexOf('_'); at !== -1; at = out.indexOf('_', at + 1)) out = out.slice(0, at + 1) + redact(out.slice(at + 1));
+      return out;
+    })
+    .join('__');
+
+/**
  * The tool name as a record stores it. An MCP name is `mcp__<server>__<tool>` and the server comes from the operator's config, where a
- * token can sit, so the server part is redacted wherever the name is kept (the call, its error line, the skeleton line, and the session's count).
+ * token can sit, so everything after `mcp__` is redacted wherever the name is kept (the call, its error line, the skeleton line, and the session's count).
  */
 export const storedToolName = (name: string, redact: Redactor): string => {
   const parts = name.split('__');
   const server = parts[1];
   if (parts[0] !== 'mcp' || server === undefined || server === '') return name;
-  return ['mcp', redact(server), ...parts.slice(2)].join('__');
+  return `mcp__${redactedMcpTail(name.slice('mcp__'.length), redact)}`;
 };
 
 /** An MCP call's full server name, which `shortName` cuts for the tool sequence, redacted because a harness takes it from the operator's config. */
 export const pullsOfTool = (name: string, redact: Redactor): ToolPull[] => {
-  const pull = name.startsWith('mcp__') ? wholeName('mcp', redact(name.split('__')[1] ?? '')) : null;
+  if (!name.startsWith('mcp__')) return [];
+  const pull = wholeName('mcp', redactedMcpTail(name.slice('mcp__'.length), redact).split('__')[0] ?? '');
   return pull === null ? [] : [pull];
 };
 
