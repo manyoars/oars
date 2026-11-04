@@ -14,11 +14,12 @@ const TORN = /^(?:[frs][0-9a-f]{0,11})?$/;
 
 const digest = (...parts: string[]): string => createHash('sha256').update(parts.join('\0')).digest('hex').slice(0, 12);
 
-/** The three entries of one crossing, as the lines the index keeps. */
+/** The entries of one crossing, as the lines the index keeps. `read` is the session's sight of the name that had a registry reading, which is what spends the session's one note. */
 export interface Scopes {
   fleet: string;
   repository: string;
   session: string;
+  read: string;
 }
 
 /** `key` is the class and name; the repository and session ids are as the caller knows them. */
@@ -26,6 +27,7 @@ export const scopesOf = (key: string, repository: string, session: string): Scop
   fleet: `f${digest(key)}`,
   repository: `r${digest(repository, key)}`,
   session: `s${digest(session, key)}`,
+  read: `s${digest(session, key, 'read')}`,
 });
 
 /**
@@ -67,13 +69,14 @@ export const loadIndex = async (storeDir: string, record: string): Promise<KeptI
   }
 };
 
-export const noveltyOf = (index: KeptIndex, scopes: Scopes): { novelty: Novelty; add: string[] } => {
-  if (index.state === 'damaged' || index.state === 'unseeded') return { novelty: 'not-read', add: [] };
+export const noveltyOf = (index: KeptIndex, scopes: Scopes): { novelty: Novelty; add: string[]; noted: boolean } => {
+  if (index.state === 'damaged' || index.state === 'unseeded') return { novelty: 'not-read', add: [], noted: false };
   const held: ReadonlySet<string> = index.state === 'ready' ? index.lines : new Set<string>();
   const add = [scopes.fleet, scopes.repository, scopes.session].filter((line) => !held.has(line));
-  if (!held.has(scopes.fleet)) return { novelty: 'fleet', add };
-  if (!held.has(scopes.repository)) return { novelty: 'repository', add };
-  return { novelty: held.has(scopes.session) ? 'none' : 'session', add };
+  const noted = held.has(scopes.read);
+  if (!held.has(scopes.fleet)) return { novelty: 'fleet', add, noted };
+  if (!held.has(scopes.repository)) return { novelty: 'repository', add, noted };
+  return { novelty: held.has(scopes.session) ? 'none' : 'session', add, noted };
 };
 
 /** True when the file's last byte is a line break, so an append starts a line of its own. The caller has read the header, so the file is not empty. */
