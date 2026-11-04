@@ -174,6 +174,12 @@ describe('a crossing record', () => {
       bash(5, 't5', 'npm install foo@file:///secret/home/x'),
       bash(6, 't6', 'pip install "foo @ file:///secret/home/x.whl"'),
       bash(7, 't7', 'npm install https://user:secret@host.example/x.tgz?token=secret'),
+      bash(8, 't8', 'npm install C:secret/x'),
+      bash(9, 't9', 'npx skills add .claude/skills/secret-one'),
+      bash(10, 't10', 'npm install "https://host.example/x.tgz#/secret/home/x"'),
+      bash(11, 't11', 'pip install "git+https://host.example/org/repo#subdirectory=secret/home&egg=x"'),
+      bash(12, 't12', 'npm create /secret'),
+      bash(13, 't13', 'npm install .secret/pkg'),
     ]);
     await run([REPO]);
     const text = await readFile(join(storeDir, 'crossings.jsonl'), 'utf8');

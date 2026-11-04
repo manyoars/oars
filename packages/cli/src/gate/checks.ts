@@ -119,7 +119,7 @@ const TOOLS: ReadonlyMap<string, Tool> = new Map<string, Tool>([
 
 /** A flag here owns the next word, which is therefore not a package name. */
 const VALUE_FLAGS: Readonly<Record<Family, ReadonlySet<string>>> = {
-  'npm-package': new Set(['-w', '--workspace', '--registry', '--prefix', '--filter', '-F', '-C', '--dir', '--cache', '--tag', '--cwd', '--loglevel', '--userconfig', '--globalconfig', '-p', '--package', '-c', '--call', '--omit', '--include', '--save-prefix']),
+  'npm-package': new Set(['-w', '--workspace', '--registry', '--prefix', '--filter', '-F', '-C', '--dir', '--cache', '--tag', '--cwd', '--loglevel', '--userconfig', '--globalconfig', '-p', '--package', '-c', '--call', '--omit', '--include', '--save-prefix', '--cafile', '--cert', '--key', '--nodedir', '--store-dir', '--modules-dir', '--virtual-store-dir', '--lockfile-dir', '--global-dir', '--cache-dir', '--cache-folder', '--modules-folder', '--global-folder', '--link-folder', '--script-shell', '--tmp']),
   'python-package': new Set(['-r', '--requirement', '-e', '--editable', '-c', '--constraint', '-i', '--index-url', '--extra-index-url', '--index', '--default-index', '-t', '--target', '-f', '--find-links', '--python', '-p', '--from', '--with', '--with-editable', '--with-requirements', '--prefix', '--root', '--group', '--extra', '--only-binary', '--no-binary', '--trusted-host', '--proxy', '--cache-dir', '--timeout', '--suffix', '--pip-args', '--spec', '--channel', '-n', '--name', '-G']),
 };
 
@@ -169,6 +169,8 @@ const urlSpec = (text: string): Spec => {
  * path becomes a name. A name may come before it (`foo@file:...`, `foo @ file:...`), and `link:`, `workspace:`, and `portal:` are folders too.
  */
 const FILE_SPEC = /^(?:(?:@[^@/\s]+\/)?[^@/\s]+\s*@\s*)?(?:git\+)?(?:file|link|workspace|portal):/i;
+/** pip's PEP 508 direct reference, `name @ url` with spaces: the name before it is only a label, so the URL is what is read. */
+const withoutLabel = (text: string): string => text.replace(/^(?:@[^@/\s]+\/)?[^@/\s]+(?:\s+@\s*|\s*@\s+)(?=\S)/, '');
 const isUrl = (text: string): boolean => text.includes('://') || text.startsWith('git+') || HOSTED.test(text) || SCP_URL.test(text);
 
 const atVersion = (text: string): { name: string; version: string | null } => {
@@ -177,9 +179,10 @@ const atVersion = (text: string): { name: string; version: string | null } => {
   return { name: text.slice(0, at), version: text.slice(at + 1) === '' ? null : text.slice(at + 1) };
 };
 
-const nodeSpec = (text: string): Spec => {
-  const nothing = namesNothing(text);
+const nodeSpec = (whole: string): Spec => {
+  const nothing = namesNothing(whole);
   if (nothing !== null) return nothing;
+  const text = withoutLabel(whole);
   // `alias@npm:real@1` installs `real`; the alias is only what the code imports it as. It reads like an scp URL, so it goes first.
   const alias = /^@?[^@]+@npm:(.+)$/.exec(text)?.[1];
   if (alias !== undefined) return nodeSpec(alias);
@@ -196,9 +199,10 @@ const nodeSpec = (text: string): Spec => {
 
 const PYTHON_SPEC = /^([A-Za-z0-9][A-Za-z0-9._-]*)(?:\[[^\]]*\])?(===?|~=|!=|>=|<=|<|>)?(.*)$/;
 
-const pythonSpec = (text: string): Spec => {
-  const nothing = namesNothing(text);
+const pythonSpec = (whole: string): Spec => {
+  const nothing = namesNothing(whole);
   if (nothing !== null) return nothing;
+  const text = withoutLabel(whole);
   if (FILE_SPEC.test(text)) return { kind: 'unread', shape: 'local-path' };
   if (isUrl(text)) return urlSpec(text);
   if (LOCAL_SPEC.test(text) || ARCHIVE.test(text) || /[\\/]/.test(text)) return { kind: 'unread', shape: 'local-path' };
@@ -356,6 +360,14 @@ const readInstall = (reading: Reading, family: Family, words: Words, rest: reado
   addSpecs(reading, family, texts, 'install', command.program, command.read);
 };
 
+/** A creator is a plain name that gets `create-` put before it; a path, a URL, or `org/repo` is no creator and is not prefixed into a name. */
+const readCreator = (reading: Reading, family: Family, text: string, command: ShellCommand): void => {
+  const spec = nodeSpec(text);
+  if (spec.kind === 'unread') reading.unread.push(spec.shape);
+  else if (spec.url) reading.unread.push('unreadable-name');
+  else addSpecs(reading, family, [creatorSpec(text)], 'run', command.program, command.read);
+};
+
 const readTool = (reading: Reading, tool: Tool, command: ShellCommand): void => {
   const { family } = tool;
   let words = readWords(command, family);
@@ -385,10 +397,7 @@ const readTool = (reading: Reading, tool: Tool, command: ShellCommand): void => 
   else if (verb.action === 'remove') readRemoval(reading, family, verb.rest);
   else if (verb.action === 'install') readInstall(reading, family, words, verb.rest, command);
   else if (verb.action === 'run') readRun(reading, family, words, verb.rest, command);
-  else if (verb.rest[0] !== undefined) {
-    if (FILE_SPEC.test(verb.rest[0])) reading.unread.push('local-path');
-    else addSpecs(reading, family, [creatorSpec(verb.rest[0])], 'run', command.program, command.read);
-  }
+  else if (verb.rest[0] !== undefined) readCreator(reading, family, verb.rest[0], command);
   // uv's tool forms take extra packages with `--with`; they install beside the tool.
   if (toolForm && (verb.action === 'run' || verb.action === 'install')) addSpecs(reading, family, allFlags(words, '--with'), verb.action, command.program, command.read);
 };
@@ -474,14 +483,26 @@ const NAME_LENGTH = 214;
 /** The harness and a skill's author name these in a line or two; nothing near the length of a package's limit. */
 const LABEL_LENGTH = 128;
 const SEGMENT = '[A-Za-z0-9._-]+';
-/** A URL keeps a scheme, a host with an optional port, and a path: no credentials, query, or fragment. */
+/** A segment that is not `.` or `..`: those two name a folder, never an owner, a repository, or a part of a URL's path. */
+const PLAIN = String.raw`(?!\.{1,2}(?:/|$))`;
+/** An owner starts with a letter or digit, so `.secret/x` and `C:x` are not `owner/repo`. */
+const OWNER = '[A-Za-z0-9][A-Za-z0-9_-]*';
 const MASK = '<(?:secret|email|org-domain)>';
-const URL_NAME = new RegExp(String.raw`^(?:https?|ssh|git)://(?:[A-Za-z0-9.-]|${MASK})+(?::\d+)?(?:/(?:[A-Za-z0-9._~%+-]|${MASK})*)*$`, 'i');
-const SCP_NAME = new RegExp(`^(?:[A-Za-z0-9.-]|${MASK})+:${SEGMENT}(?:/${SEGMENT})*$`);
-const HOSTED_NAME = new RegExp(`^(?:github|gitlab|bitbucket|gist):${SEGMENT}(?:/${SEGMENT})?$`);
-const SHORTHAND_NAME = new RegExp(String.raw`^(?!\.{1,2}/)${SEGMENT}/${SEGMENT}$`);
+const HOST = String.raw`(?:[A-Za-z0-9.-]|${MASK})+`;
+const URL_CHARS = String.raw`(?:[A-Za-z0-9._~%+@-]|${MASK})*`;
+/**
+ * A URL keeps a scheme, a host, and a path: no credentials, query, or fragment. `ssh://` and `git://` also take npm's scp spelling,
+ * `host:owner/repo`, where an `https` URL takes only a port. No segment of the path is `.` or `..`.
+ */
+const URL_NAME = new RegExp(String.raw`^(?:https?://${HOST}(?::\d+)?|(?:ssh|git)://${HOST}(?::${OWNER}(?:\.[A-Za-z0-9_-]+)*)?)(?:/${PLAIN}${URL_CHARS})*$`, 'i');
+/** `host:path`, with a host of at least two characters, so `C:secret/x` is a drive and never a host. */
+const SCP_NAME = new RegExp(String.raw`^(?=[^:]{2})${HOST}:${PLAIN}${SEGMENT}(?:/${PLAIN}${SEGMENT})*$`);
+const HOSTED_NAME = new RegExp(String.raw`^(?:github|gitlab|bitbucket|gist):${PLAIN}${SEGMENT}(?:/${PLAIN}${SEGMENT})?$`);
+const SHORTHAND_NAME = new RegExp(String.raw`^${OWNER}/${PLAIN}${SEGMENT}$`);
 /** A skill source is a hosted `owner/repo`, optionally into a folder, or a URL. */
-const SKILL_SOURCE = new RegExp(String.raw`^(?!\.{1,2}/)${SEGMENT}(?:/${SEGMENT}){1,5}$`);
+const SKILL_SOURCE = new RegExp(String.raw`^${OWNER}(?:/${PLAIN}${SEGMENT}){1,5}$`);
+/** A URL's ref is a tag, a branch, or a commit, and `semver:` ranges: anything else could carry a path or a parameter. */
+const PLAIN_REF = /^(?:semver:)?[\w.^~*+-]+$/;
 /** A version that is not a URL's ref has none of a slash, a backslash, `:`, or `@`: those mark a path or a spec, not a version. */
 const VERSION = /^[^/\\:@]*$/;
 
@@ -524,7 +545,7 @@ const admitted = (check: CallCheck): CallCheck => {
     const verdict = admitName(crossing.class, crossing.form, crossing.name);
     if (verdict.kind === 'unread') unread.push(verdict.shape);
     else if (crossing.versionForm !== 'url' && crossing.version !== null && !VERSION.test(crossing.version)) unread.push('local-path');
-    else crossings.push({ ...crossing, name: verdict.name });
+    else crossings.push({ ...crossing, name: verdict.name, version: crossing.versionForm === 'url' && crossing.version !== null && !PLAIN_REF.test(crossing.version) ? null : crossing.version });
   }
   const removals = check.removals.filter((removal) => admitName(removal.class, 'removal', removal.name).kind === 'named');
   return { crossings, unread, removals };
