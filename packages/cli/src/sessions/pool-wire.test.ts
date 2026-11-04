@@ -54,7 +54,7 @@ const refusedField = (value: unknown): string => {
 };
 
 const firstStep = ['transcripts', 0, 'tools', 0, 'steps', 0];
-const withStep = (over: object): unknown => sent(firstStep, JSON.parse(JSON.stringify({ ...shell, n: undefined, seg: undefined, frameId: undefined, edges: undefined, cost: undefined, tokens: null, ms: null, remainingTokens: 0, agentType: null, ...over })));
+const withStep = (over: object): unknown => sent(firstStep, JSON.parse(JSON.stringify({ ...shell, n: undefined, seg: undefined, frameId: undefined, edges: undefined, cost: undefined, tokens: null, ms: null, remainingTokens: 0, agentType: null, frame: 0, ...over })));
 const stepField = 'transcripts[0].tools[0].steps[0]';
 
 describe('skeletonOf', () => {
@@ -249,7 +249,7 @@ describe('parseSkeleton refuses, and names the field', () => {
 
   it('refuses the exact-count form (format 1) by name, and a deposit that carries deltas', () => {
     const old = parseSkeleton({ ...sample(), format: 1 });
-    expect(old).toMatchObject({ ok: false, field: 'format', reason: 'the exact-count form (format 1) is no longer read; send format 2' });
+    expect(old).toMatchObject({ ok: false, field: 'format', reason: 'the exact-count form (format 1) is no longer read; send format 3' });
     expect(refusedField(sent(['deltas'], [{}]))).toBe('deltas[0].deltaKind');
     expect(refusedField(sent(['deltas'], undefined))).toBe('deltas');
     expect(refusedField(sent(['deltas'], 'none'))).toBe('deltas');

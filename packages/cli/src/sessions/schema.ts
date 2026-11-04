@@ -459,6 +459,10 @@ export interface ToolObservation {
   durationMs: number | null;
   toolUseId: string | null;
   harnessVersion: string | null;
+  /** The model the call's own line names (`requestedModel`, else the message's model), so a step is attributed to the model that made it and not only to its prompt's majority (t867). Absent when the line names none and on a record captured before it. Class P, like the prompt's. */
+  model?: string;
+  /** The skill whose run the call's line sits in (`attributionSkill`): the harness stops naming it on the first line after the run, so that is where a run ends. Absent outside a run and on an earlier record. Class A, since a skill's name can be private. */
+  skill?: string;
   /** A sidechain line inside a main transcript. */
   side: boolean;
   /** The prompt index the call ran under; null before the first prompt. */

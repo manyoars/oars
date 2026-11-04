@@ -76,7 +76,8 @@ describe('the outbox', () => {
 
 // A batch the vocabulary accepts, holding every field the format has: each identity form, a pull, and a nested stack. It is kept by hand: a new optional field (one the parser takes as absent) must be added here, or only the `--explain` test on a staged batch can catch its missing row.
 const FRAME = { harness: 'claude-code', harnessVersion: '2.1.314', model: 'claude-opus-5-5', effort: 'high', day: '2026-11-01', platform: 'linux', shell: 'bash', stack: { languages: ['python'], frameworks: [], size: null, languageShares: [{ language: 'python', languageShare: 'over-50' }, { language: 'other', languageShare: '10-50' }] } };
-const STEP = { status: 'ok', tokens: 3, ms: 4, remainingTokens: 2, agentType: null, parent: null };
+const STEP = { status: 'ok', tokens: 3, ms: 4, remainingTokens: 2, agentType: null, parent: null, frame: 1 };
+const REACH = { filled: true, mcp: ['github', 'private'], skills: ['commit'], plugins: ['private'] };
 const REAL = {
   format: SKELETON_FORMAT,
   id: '0123456789abcdef',
@@ -87,7 +88,8 @@ const REAL = {
       merkleRoot: 'a'.repeat(64),
       leaves: 12,
       harness: 'claude-code',
-      frame: FRAME,
+      frame: { ...FRAME, reach: REACH },
+      frames: [{ ...FRAME, reach: REACH }, { ...FRAME, model: 'claude-sonnet-5-5', reach: REACH }],
       prompts: [{ cls: 'edit-verify', errors: 0, wallSec: 5, usage: { input: 1, cacheWrite: 2, cacheRead: 3, output: 4, thinking: 5 }, explore: 6, frame: FRAME }],
       tools: [
         {
@@ -98,7 +100,7 @@ const REAL = {
           steps: [
             { ...STEP, action: 'shell.exec', native: 'Bash', identity: { program: 'npm', sub: null, flags: [], pulls: [{ registry: 'npm', name: 'zod', version: null }] } },
             { ...STEP, action: 'mcp.call', native: 'mcp__github__get_issue', identity: { server: 'github', tool: 'get_issue' } },
-            { ...STEP, action: 'skill.run', native: 'Skill', identity: { skill: 'commit' } },
+            { ...STEP, action: 'skill.run', native: 'Skill', identity: { skill: 'commit' }, skill: 'commit' },
             { ...STEP, action: 'web.fetch', native: 'WebFetch', identity: { host: 'github.com' } },
           ],
         },
