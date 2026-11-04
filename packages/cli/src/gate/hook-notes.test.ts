@@ -159,6 +159,12 @@ describe('oars gate hook: a block, as a label', () => {
     ]);
   });
 
+  it('prints a block label once when one name is named twice in a call, and still denies', async () => {
+    const store = folder();
+    withPolicy(store, '{"classes":{"not-found":"block"}}');
+    expect(await gateHook(payload('npm install ghost-lib ghost-lib'), depsFor(store, { registry: missing, random: () => 0.5 }))).toBe(deny(REASON));
+  });
+
   it('records no exposure for a note that was never printed: a call that holds a block prints only the deny', async () => {
     const store = folder();
     withPolicy(store, '{"classes":{"not-found":"block"}}');
