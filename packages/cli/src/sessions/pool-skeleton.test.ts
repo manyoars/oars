@@ -2,8 +2,8 @@
 import { describe, expect, it } from 'vitest';
 import { cellsOf, projectedStore } from './cell-increments.js';
 import { captureSession } from './extract.js';
-import { frame, prompt, session, step, storedNames, store, tool } from './pool-fixture.js';
-import { bucketOf, parseSkeleton, sessionsOf, skeletonOf, type SessionSkeleton } from './pool-wire.js';
+import { frame, printOf, prompt, session, sessionsFrom, step, store, storedNames, tool } from './pool-fixture.js';
+import { bucketOf, parseSkeleton, skeletonOf, type SessionSkeleton } from './pool-wire.js';
 import { shellReader } from './projection.js';
 import { makeRedactor } from './redact.js';
 import { PRIVATE } from './public-vocabulary.js';
@@ -48,9 +48,9 @@ const capturedSkeleton = (): SessionSkeleton => {
     prompts: [prompt('s', 0, { frame: framed, head: `fix ${PLANTED}`, shape: PLANTED })],
     tools,
   });
-  const [only] = sessionsOf(from);
+  const [only] = sessionsFrom(from);
   if (only === undefined) throw new Error('the store has no session');
-  const skeleton = skeletonOf(only, '0123456789abcdef', shellReader(vocab));
+  const skeleton = skeletonOf(only, '0123456789abcdef', shellReader(vocab), printOf);
   if (skeleton === null) throw new Error('the captured session has no skeleton');
   return skeleton;
 };
@@ -73,8 +73,8 @@ describe('the leak test: a private name in a path, a program, a package, an argu
         tool('s', 1, 'Bash', { steps: [step(1, 0, 'shell.exec', { native: 'Bash', identity: { program: 'git', sub: PLANTED, flags: [`--${PLANTED}`, '--force'] } })] }),
       ],
     });
-    const [only] = sessionsOf(stored);
-    const skeleton = only === undefined ? null : skeletonOf(only, '0123456789abcdef', shellReader(vocab));
+    const [only] = sessionsFrom(stored);
+    const skeleton = only === undefined ? null : skeletonOf(only, '0123456789abcdef', shellReader(vocab), printOf);
     expect(JSON.stringify(skeleton).toLowerCase()).not.toContain(PLANTED.toLowerCase());
     expect(JSON.stringify(skeleton).toLowerCase()).not.toContain('acme');
     expect(skeleton === null ? [] : shellIdentities(skeleton)).toEqual([
@@ -89,8 +89,8 @@ describe('the leak test: a private name in a path, a program, a package, an argu
       prompts: [prompt('s', 0, { frame: framed })],
       tools: steps.map((one, at) => tool('s', at, 'Bash', { steps: [one] })),
     });
-    const [only] = sessionsOf(stored);
-    return only === undefined ? null : skeletonOf(only, '0123456789abcdef', shellReader(vocab));
+    const [only] = sessionsFrom(stored);
+    return only === undefined ? null : skeletonOf(only, '0123456789abcdef', shellReader(vocab), printOf);
   };
   const stepsOf = (skeleton: SessionSkeleton | null): SessionSkeleton['transcripts'][number]['tools'][number]['steps'] => (skeleton === null ? [] : skeleton.transcripts.flatMap((one) => one.tools.flatMap((each) => each.steps)));
 
@@ -178,6 +178,32 @@ describe('the leak test: a private name in a path, a program, a package, an argu
   });
 });
 
+describe('the leak test: the name of a custom subagent', () => {
+  const PRIVATE_AGENT = 'acme-release-captain';
+
+  it('leaves as custom on every step of its run, and nowhere else in the batch', () => {
+    const [only] = sessionsFrom(
+      store({
+        sessions: [session('s1', { frame: framed })],
+        subagents: [session('s1~a', { parent: 's1', spawnedIn: 's1', agentType: PRIVATE_AGENT, frame: framed })],
+        prompts: [prompt('s1', 0, { frame: framed }), prompt('s1~a', 0, { frame: framed })],
+        tools: [
+          tool('s1', 0, 'Bash', { steps: [step(0, 0, 'shell.exec', { native: 'Bash' })] }),
+          tool('s1~a', 0, 'Bash', { steps: [step(0, 0, 'shell.exec', { native: 'Bash' }), step(0, 1, 'shell.exec', { native: 'Bash' })] }),
+          tool('s1~a', 1, 'Bash', { steps: [step(1, 0, 'shell.exec', { native: 'Bash' })] }),
+        ],
+      }),
+    );
+    if (only === undefined) throw new Error('the store has no session');
+    const skeleton = skeletonOf(only, '0123456789abcdef', storedNames, printOf);
+    if (skeleton === null) throw new Error('no skeleton');
+    const types = (skeleton.transcripts[1]?.tools ?? []).flatMap(({ steps }) => steps.map(({ agentType }) => agentType));
+    expect(types).toEqual(['custom', 'custom', 'custom']);
+    expect(JSON.stringify(skeleton).toLowerCase()).not.toContain('acme');
+    expect(parseSkeleton(JSON.parse(JSON.stringify(skeleton)))).toEqual({ ok: true, skeleton });
+  });
+});
+
 describe('what a batch sends in place of a count', () => {
   const sample = (): SessionSkeleton => {
     const from = store({
@@ -190,9 +216,9 @@ describe('what a batch sends in place of a count', () => {
         }),
       ],
     });
-    const [only] = sessionsOf(from);
+    const [only] = sessionsFrom(from);
     if (only === undefined) throw new Error('the store has no session');
-    const skeleton = skeletonOf(only, '0123456789abcdef', storedNames);
+    const skeleton = skeletonOf(only, '0123456789abcdef', storedNames, printOf);
     if (skeleton === null) throw new Error('the sample has no skeleton');
     return skeleton;
   };
@@ -216,7 +242,8 @@ describe('what a batch sends in place of a count', () => {
   });
 
   it('puts no token count, byte count, or duration on the wire but the exact time per tool step that Section 1.2 names', () => {
-    const text = JSON.stringify(sample());
+    // A root is 64 hex digits, which can hold any two digits between letters: only the counts are scanned.
+    const text = JSON.stringify(sample()).replace(/"merkleRoot":"[0-9a-f]{64}"/g, '"merkleRoot":""');
     for (const exact of ['123456', '1500', '987654', '4321', '98765', '37']) expect(text).not.toMatch(new RegExp(`[^0-9]${exact}[^0-9]`));
     expect(JSON.parse(text)).toMatchObject({ transcripts: [{ tools: [{ durationMs: 777 }] }] });
   });
