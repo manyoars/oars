@@ -133,6 +133,7 @@ describe('an entity read names itself', () => {
     ['a tool of the asking harness', 'Monitor'],
     ['a tool of another harness', 'run_terminal_cmd'],
     ['a published MCP server', 'github'],
+    ['a public package', 'vitest'],
   ])('%s by its name', (_kind, name) => {
     expect(renderAnswer([entity(name)], frame()).rendered).toContain(`\n${name} | 4 calls,`);
   });
