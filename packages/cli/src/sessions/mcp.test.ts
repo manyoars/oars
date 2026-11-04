@@ -119,6 +119,17 @@ describe('MCP server', () => {
       expect(await readRecalls(staged.storeDir)).toEqual([]);
     });
 
+    it('refuses a pull naming more than one form as invalid params, with nothing recorded, and keeps error with path as one form', async () => {
+      const staged = seeded();
+      const call = (args: object): Promise<object | undefined> => handleMessage(staged.runtime, now, { jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: TOOL_NAME, arguments: args } });
+      for (const args of [{ path: 'a.ts', family: 'recovery' }, { entity: 'y', text: 'x' }, { error: 'x', prefix: ['0123456789abcdef'] }]) {
+        const refused = await call(args);
+        expect(field(field(refused, 'error'), 'code')).toBe(-32602);
+      }
+      expect(await readRecalls(staged.storeDir)).toEqual([]);
+      expect(field(await call({ error: 'x', path: 'a.ts' }), 'error')).toBeUndefined();
+    });
+
     it('lists every family it answers in the tool schema', async () => {
       const staged = seeded();
       const listed = JSON.stringify(field(await handleMessage(staged.runtime, now, { jsonrpc: '2.0', id: 1, method: 'tools/list' }), 'result'));
