@@ -1,5 +1,5 @@
 // The push: a pre-tool hook's recall (spec Section 2.7). The harness tells the hook only the call it is about to run, so the query is the call's shape, and a shape
-// with a read over the floors is the one thing that can arm a push. A held push stores what it would have shown and injects nothing, which is the unexposed baseline.
+// with a read over the floors and `PUSH_MIN_LIFT` is the one thing that can arm a push. A held push stores what it would have shown and injects nothing, which is the unexposed baseline.
 import { open, type FileHandle } from 'node:fs/promises';
 import { closedFrame, closedStack, utcDay } from './frame.js';
 import type { HookIndex } from './hook-index.js';

@@ -94,6 +94,11 @@ oars sessions deposit --allow ~/work/app --allow ~/work/tools --redact-domain co
 # Look up an error as printed, a file, or a prompt class.
 oars sessions recall --error "unexpected EOF while looking for matching \`''"
 oars sessions recall --path src/main.ts --since 30   # sees the first 100 sorted paths of a session
+oars sessions recall --family recovery --class edit-verify --since 30  # a read family; only recovery and fit take --class and --since
+oars sessions recall --entity Monitor                # what is known about a public name: a package, a tool, an MCP server, an action, or a model
+oars sessions recall --text "wrong input"            # look for text in the local record (counts all time)
+oars sessions recall --pattern <readId> --pattern <readId>  # what happened from here, from the read IDs of your steps so far (repeatable; counts all time)
+oars sessions recall --error "..." --session <id>    # name the asking session, so what it did next can be read for this recall
 
 # Serve the same query to a running agent as one MCP tool, oars_recall (stdio):
 oars sessions recall --mcp
@@ -141,7 +146,11 @@ An `--allow` entry is a folder (or its slug), a folder prefix with a trailing sl
 | Event | Does | Budget |
 |---|---|---|
 | `SessionStart` | injects `oars sessions recall --context` for the session's cwd as additional context: the top 5 errors by sessions within the latest 300 sessions of the repository (the `measure --last 300 --repo` window) and what usually followed | under 500 ms |
+<<<<<<< HEAD
 | `PreToolUse` (no matcher: every tool) | for a call whose tool and input key names match a shape the store has seen fail often enough, injects its counts as additional context, once per session and shape, and records the recall. 10 percent of those sessions and shapes are held back: a held arm records what it would have shown and injects nothing. Starts node per matched call | under 500 ms |
+=======
+| `PreToolUse` (matcher `PowerShell\|Monitor\|Edit\|Agent`) | for a call whose tool and input key names match a shape the store has seen fail often enough, and at least twice as often as its action does, injects its counts as additional context, once per session and shape (the check reads the last 64 KB of the recall log, about 44 rows, so a very long session can be told again, and the arm redraws when the nightly index moves), and records the recall. 10 percent of those sessions and shapes are held back: a held arm records what it would have shown and injects nothing. Starts node per matched call | under 500 ms |
+>>>>>>> origin/main
 | `PostToolUseFailure` (matcher `Bash\|PowerShell`) | for a failed tool call whose error starts with `Exit code N` normalizes the first informative line as `deposit` does and, on a hit, adds "seen in N sessions; what followed: X". A shell pre-filter in the registered command reads the event first and starts node only when it carries `Exit code` | pre-filter: shell builtins only, no node start; whole path under 1 s |
 | `SessionEnd` | deposits that one transcript (idempotent by size and mtime), only from a folder an earlier `--allow` named. Once per session: `Stop` fires after every turn and would append a new revision of the growing transcript each time. A session the harness ends without `SessionEnd` is picked up by the nightly deposit | under 5 s |
 
