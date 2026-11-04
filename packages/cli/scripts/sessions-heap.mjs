@@ -1,0 +1,274 @@
+// Memory check for `oars sessions deposit` and `oars sessions verify` (t808). Builds a synthetic store in a temp folder, then runs both
+// commands from the built CLI under a fixed `--max-old-space-size`, with no NODE_OPTIONS.
+//
+//   node scripts/sessions-heap.mjs check [--sessions 600] [--heap 96]    # the pass/fail check: `just sessions-heap`
+//   node scripts/sessions-heap.mjs table [--sizes 400,800] [--heap 4096] # peak RSS of each command by store size (the docs table)
+//   node scripts/sessions-heap.mjs minheap [--sizes 400,800]             # smallest --max-old-space-size at which each command passes
+//   node scripts/sessions-heap.mjs phases [--sessions 800]               # heap kept after each phase, in one process
+//
+// Needs `npm run build -w packages/cli` first (it runs dist/bin.js). Nothing here touches the real store or ~/.claude: every run points
+// APPDATA, XDG_CONFIG_HOME, HOME, USERPROFILE, and CLAUDE_CONFIG_DIR at a fresh folder under the OS temp folder, and refuses to go on
+// when a path the CLI will use is not inside it.
+import { spawnSync } from 'node:child_process';
+import { mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join, resolve, sep } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const cliRoot = fileURLToPath(new URL('..', import.meta.url));
+// `--bin <file>` runs another build of the CLI (a copy of dist/ from before a change), to compare two builds on one store.
+const binArg = process.argv.indexOf('--bin');
+const bin = binArg === -1 ? join(cliRoot, 'dist', 'bin.js') : resolve(process.argv[binArg + 1] ?? '');
+const PROJECT = 'bench-project';
+const PROMPTS = 8;
+const CALLS = 14;
+
+/** @typedef {{ root: string, appdata: string, claude: string, projects: string, store: string, home: string }} Dirs */
+
+/**
+ * The folders one run uses, all under one temp folder.
+ * @param {string} root
+ * @returns {Dirs}
+ */
+const layout = (root) => ({
+  root,
+  appdata: join(root, 'appdata'),
+  claude: join(root, 'claude'),
+  projects: join(root, 'claude', 'projects', PROJECT),
+  store: join(root, 'appdata', 'oars', 'sessions'),
+  home: join(root, 'home'),
+});
+
+/** @param {Dirs} dirs */
+const envOf = (dirs) => ({
+  PATH: process.env.PATH,
+  SystemRoot: process.env.SystemRoot,
+  APPDATA: dirs.appdata,
+  XDG_CONFIG_HOME: dirs.appdata,
+  HOME: dirs.home,
+  USERPROFILE: dirs.home,
+  CLAUDE_CONFIG_DIR: dirs.claude,
+});
+
+/**
+ * Throws unless every path this run uses is inside the OS temp folder.
+ * @param {Dirs} dirs
+ */
+const assertScratch = (dirs) => {
+  const temp = resolve(tmpdir()) + sep;
+  for (const path of [dirs.store, dirs.projects, dirs.home, dirs.claude]) {
+    if (!resolve(path).startsWith(temp)) throw new Error(`${path} is outside ${temp}: refusing to run`);
+  }
+};
+
+/**
+ * @param {string} name
+ * @param {string} fallback
+ */
+const arg = (name, fallback) => {
+  const at = process.argv.indexOf(`--${name}`);
+  return at === -1 ? fallback : (process.argv[at + 1] ?? fallback);
+};
+
+/**
+ * @param {number} base
+ * @param {number} seconds
+ */
+const iso = (base, seconds) => new Date(base + seconds * 1000).toISOString();
+
+/**
+ * @param {number} index
+ * @returns {{ id: string, text: string }}
+ *
+ * One transcript: PROMPTS prompts, each followed by CALLS tool calls (every sixth fails). Every line is distinct, so nothing dedupes, and
+ * a session is tens of KB of log, like the operator's (6,757 files made a 349 MB log: about 52 KB each).
+ */
+const transcript = (index) => {
+  const id = `bench-${String(index).padStart(6, '0')}`;
+  const base = Date.parse('2026-01-05T08:00:00Z') + (index % 140) * 86_400_000;
+  /** @type {string[]} */
+  const lines = [];
+  let clock = 0;
+  let n = 0;
+  /** @param {unknown} value */
+  const line = (value) => lines.push(JSON.stringify(value));
+  line({ type: 'attachment', uuid: `${id}-${String(n++)}`, parentUuid: null, timestamp: iso(base, clock), version: '2.1.300', attachment: { type: 'environment', snapshot: { workingDirectory: '/work/app', platform: 'linux' } } });
+  let parent = null;
+  for (let p = 0; p < PROMPTS; p += 1) {
+    clock += 5;
+    const prompt = `${id}-${String(n++)}`;
+    line({ type: 'user', uuid: prompt, parentUuid: parent, isSidechain: false, timestamp: iso(base, clock), version: '2.1.300', cwd: '/work/app', gitBranch: 'main', message: { role: 'user', content: `step ${String(p)} of ${id}: fix the failing build in /work/app/src/module-${String(index % 97)}.ts and explain what you changed` } });
+    parent = prompt;
+    for (let c = 0; c < CALLS; c += 1) {
+      const toolId = `toolu_${id}_${String(p)}_${String(c)}`;
+      const module = String((index + c) % 211);
+      /** @type {[string, Record<string, string>][]} */
+      const inputs = [
+        ['Read', { file_path: `/work/app/src/module-${module}/file-${String(p)}-${String(c)}.ts` }],
+        ['Edit', { file_path: `/work/app/src/module-${module}/file-${String(c)}.ts`, old_string: `old ${id} ${String(c)}`, new_string: `new ${id} ${String(c)}` }],
+        ['Bash', { command: `npm test -- --run src/module-${module} --id ${id}-${String(p)}-${String(c)}` }],
+        ['Grep', { pattern: `symbol${String((index * 7 + c) % 503)}` }],
+      ];
+      const [name, input] = inputs[(index + p + c) % inputs.length] ?? ['Read', {}];
+      clock += 3;
+      const call = `${id}-${String(n++)}`;
+      line({ type: 'assistant', uuid: call, parentUuid: parent, isSidechain: false, timestamp: iso(base, clock), version: '2.1.300', requestedModel: 'claude-opus-5-5', requestId: `req_${id}_${String(p)}_${String(c)}`, apiBlockIndex: 0, message: { role: 'assistant', model: 'claude-opus-5-5', content: [{ type: 'tool_use', id: toolId, name, input }], usage: { input_tokens: 10, cache_creation_input_tokens: 200 + c, cache_read_input_tokens: 9000 + c * 40, output_tokens: 100 + c } } });
+      parent = call;
+      clock += 2;
+      const failed = (index + p + c) % 6 === 5;
+      const result = `${id}-${String(n++)}`;
+      const content = failed
+        ? `Exit code 1\nTraceback (most recent call last):\n  File "/work/app/src/module-${String(index % 97)}.py", line ${String(c + 10)}, in <module>\nKeyError: 'key-${String(index % 31)}'`
+        : `ok ${id} ${'x'.repeat(400)}`;
+      line({ type: 'user', uuid: result, parentUuid: parent, isSidechain: false, timestamp: iso(base, clock), version: '2.1.300', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: toolId, is_error: failed, content }] } });
+      parent = result;
+    }
+  }
+  return { id, text: `${lines.join('\n')}\n` };
+};
+
+/**
+ * @param {Dirs} dirs
+ * @param {number} sessions
+ */
+const generate = (dirs, sessions) => {
+  mkdirSync(dirs.projects, { recursive: true });
+  mkdirSync(dirs.appdata, { recursive: true });
+  mkdirSync(dirs.home, { recursive: true });
+  for (let i = 0; i < sessions; i += 1) {
+    const { id, text } = transcript(i);
+    writeFileSync(join(dirs.projects, `${id}.jsonl`), text);
+  }
+};
+
+/** @param {string} path */
+const sizeMb = (path) => {
+  try {
+    return statSync(path).size / 1048576;
+  } catch {
+    return 0;
+  }
+};
+
+/**
+ * @param {Dirs} dirs
+ * @param {number} heapMb
+ * @param {string[]} args
+ * @param {string} [preload]
+ *
+ * Runs the built CLI under `--max-old-space-size=<heapMb>` (default heap when 0). With `--require` of a preload that prints the child's
+ * peak RSS on exit, the figure reaches `peakMb`.
+ */
+const runCli = (dirs, heapMb, args, preload) => {
+  assertScratch(dirs);
+  const started = Date.now();
+  const flags = [...(heapMb === 0 ? [] : [`--max-old-space-size=${String(heapMb)}`]), ...(preload === undefined ? [] : ['--require', preload])];
+  const child = spawnSync(process.execPath, [...flags, bin, ...args], { env: envOf(dirs), encoding: 'utf8', maxBuffer: 64 << 20, cwd: dirs.root });
+  const peak = /PEAK_RSS_MB (\d+)/.exec(child.stderr)?.[1];
+  return { code: child.status, seconds: (Date.now() - started) / 1000, peakMb: peak === undefined ? null : Number(peak), stderr: child.stderr, oom: /heap out of memory|FATAL ERROR/.test(child.stderr) };
+};
+
+const depositArgs = ['sessions', 'deposit', '--allow', PROJECT];
+const verifyArgs = ['sessions', 'verify'];
+
+/** @param {string} label */
+const scratch = (label) => {
+  const dirs = layout(mkdtempSync(join(tmpdir(), `oars-heap-${label}-`)));
+  assertScratch(dirs);
+  return dirs;
+};
+
+/** A store of `sessions` transcripts: generated, then deposited once under a heap large enough for building it. */
+/**
+ * @param {Dirs} dirs
+ * @param {number} sessions
+ */
+const build = (dirs, sessions) => {
+  generate(dirs, sessions);
+  const made = runCli(dirs, 8192, depositArgs);
+  if (made.code !== 0) throw new Error(`building the store failed (exit ${String(made.code)}): ${made.stderr.slice(-600)}`);
+  return sizeMb(join(dirs.store, 'observations.jsonl'));
+};
+
+const peakPreload = () => {
+  const file = join(mkdtempSync(join(tmpdir(), 'oars-heap-preload-')), 'peak.cjs');
+  writeFileSync(file, "process.on('exit', () => { process.stderr.write(`\\nPEAK_RSS_MB ${String(Math.round(process.resourceUsage().maxRSS / 1024))}\\n`); });\n");
+  return file;
+};
+
+const command = process.argv[2];
+
+if (command === 'check') {
+  const sessions = Number(arg('sessions', '600'));
+  const heap = Number(arg('heap', '96'));
+  const dirs = scratch('check');
+  console.log(`store: ${dirs.store}`);
+  try {
+    console.log(`built ${String(sessions)} sessions: log ${build(dirs, sessions).toFixed(1)} MB`);
+    let failed = false;
+    // `verify` may exit 4 under --strict only; plain verify exits 0, so any non-zero exit or out-of-memory is a failure.
+    /** @type {[string, string[]][]} */
+    const commands = [['deposit', depositArgs], ['verify', verifyArgs]];
+    for (const [name, args] of commands) {
+      const ran = runCli(dirs, heap, args);
+      const ok = ran.code === 0 && !ran.oom;
+      console.log(`${ok ? 'PASS' : 'FAIL'}  ${name} under --max-old-space-size=${String(heap)}: exit ${String(ran.code)}, ${ran.seconds.toFixed(1)} s${ok ? '' : `\n${ran.stderr.slice(0, 300)}`}`);
+      failed ||= !ok;
+    }
+    process.exitCode = failed ? 1 : 0;
+  } finally {
+    rmSync(dirs.root, { recursive: true, force: true });
+  }
+} else if (command === 'table') {
+  const heap = Number(arg('heap', '4096'));
+  const preload = peakPreload();
+  console.log('sessions | log MB | deposit peak RSS MB | verify peak RSS MB');
+  for (const sessions of arg('sizes', '400,800').split(',').map(Number)) {
+    const dirs = scratch('table');
+    try {
+      const log = build(dirs, sessions);
+      const deposit = runCli(dirs, heap, depositArgs, preload);
+      const verify = runCli(dirs, heap, verifyArgs, preload);
+      console.log(`${String(sessions)} | ${log.toFixed(0)} | ${String(deposit.peakMb)} (exit ${String(deposit.code)}, ${deposit.seconds.toFixed(0)} s) | ${String(verify.peakMb)} (exit ${String(verify.code)}, ${verify.seconds.toFixed(0)} s)`);
+    } finally {
+      rmSync(dirs.root, { recursive: true, force: true });
+    }
+  }
+  rmSync(join(preload, '..'), { recursive: true, force: true });
+} else if (command === 'minheap') {
+  // Bisects the heap in 8 MB steps between 24 MB (node alone needs about that) and 6 GB; the answer is the first size that exits 0.
+  for (const sessions of arg('sizes', '400,800').split(',').map(Number)) {
+    const dirs = scratch('minheap');
+    try {
+      const log = build(dirs, sessions);
+      /** @param {string[]} args */
+      const least = (args) => {
+        let low = 24;
+        let high = 6144;
+        while (high - low > 8) {
+          const mid = Math.floor((low + high) / 16) * 8;
+          const ran = runCli(dirs, mid, args);
+          if (ran.code === 0 && !ran.oom) high = mid;
+          else low = mid;
+        }
+        return high;
+      };
+      console.log(`${String(sessions)} sessions, log ${log.toFixed(0)} MB: deposit ${String(least(depositArgs))} MB, verify ${String(least(verifyArgs))} MB`);
+    } finally {
+      rmSync(dirs.root, { recursive: true, force: true });
+    }
+  }
+} else if (command === 'phases') {
+  const dirs = scratch('phases');
+  console.log(`store: ${dirs.store}`);
+  try {
+    console.log(`log ${build(dirs, Number(arg('sessions', '800'))).toFixed(0)} MB`);
+    const ran = spawnSync(process.execPath, ['--expose-gc', '--max-old-space-size=8192', join(cliRoot, 'scripts', 'sessions-heap-phases.mjs'), dirs.store, dirs.claude], { env: envOf(dirs), encoding: 'utf8', cwd: dirs.root, maxBuffer: 64 << 20 });
+    console.log(ran.stdout + ran.stderr.slice(-800));
+  } finally {
+    rmSync(dirs.root, { recursive: true, force: true });
+  }
+} else {
+  console.error('usage: sessions-heap.mjs check|table|minheap|phases');
+  process.exitCode = 2;
+}

@@ -755,7 +755,7 @@ const depositLocked = async (runtime: SessionsRuntime, options: DepositOptions, 
   const state = await readState(runtime.storeDir);
   refuseNewer(state);
   // A log written by a newer oars is refused even when state.json is older or lost; the Stop-hook path reads only state.json.
-  const held = (await loadStore(runtime.storeDir)).newerCaptures;
+  const held = (await scanLog(paths(runtime.storeDir).observations)).newerCaptures;
   if (held > 0) throw new CliError(`The log holds captures by a newer oars (sessions: ${String(held)}); upgrade oars.`, ExitCode.UNEXPECTED, 'unexpected');
   state.redactDomains = [...new Set([...state.redactDomains, ...options.redactDomains])];
   state.allow = [...new Set([...state.allow, ...options.allow])];
@@ -1130,19 +1130,43 @@ interface Captured {
   errorLines: ErrorLineObservation[];
 }
 
+/** What one pass over the log keeps: a number or two per session, never the records. */
+interface LogScan {
+  /** Each session's highest rev, over every kind of record. */
+  latest: Map<string, number>;
+  /** True when some session has a record below its highest rev, which a compaction would drop. */
+  superseded: boolean;
+  /** Sessions whose newest capture record was written by a newer oars, counted as `loadStore` counts them. */
+  newerCaptures: number;
+}
+
+const scanLog = async (file: string): Promise<LogScan> => {
+  const latest = new Map<string, number>();
+  const cvAt = new Map<string, { rev: number; cv: string }>();
+  let superseded = false;
+  for await (const line of logLines(file)) {
+    const observation = observationOf(line);
+    if (observation === undefined) continue;
+    const seen = latest.get(observation.session);
+    superseded ||= seen !== undefined && seen !== observation.rev;
+    latest.set(observation.session, Math.max(seen ?? 0, observation.rev));
+    // The last session record at the highest rev is the one `loadStore` reads.
+    if (observation.kind === 'session' && observation.rev >= (cvAt.get(observation.session)?.rev ?? 0)) cvAt.set(observation.session, { rev: observation.rev, cv: observation.cv });
+  }
+  let newerCaptures = 0;
+  for (const [session, held] of cvAt) if (held.rev === latest.get(session) && Number(held.cv) > Number(CAPTURE_VERSION)) newerCaptures += 1;
+  return { latest, superseded, newerCaptures };
+};
+
 /**
  * The store as a reader sees it: for each session only the highest `rev`. A version-3 or later session is derived here from its capture records
  * (EXTRACTOR_VERSION rules); a session whose last deposit was version 2 keeps the prompt and error lines that deposit wrote.
  */
 export const loadStore = async (storeDir: string): Promise<Store> => {
-  const all: Observation[] = [];
-  const latest = new Map<string, number>();
-  for await (const line of logLines(paths(storeDir).observations)) {
-    const observation = observationOf(line);
-    if (observation === undefined) continue;
-    all.push(observation);
-    latest.set(observation.session, Math.max(latest.get(observation.session) ?? 0, observation.rev));
-  }
+  // Two passes, so a superseded record is never held: the first keeps one number per session, the second keeps only the records at that rev.
+  // A re-capture leaves the old copies in the log until a compaction, and holding them as well doubled the heap of every read (t808).
+  const file = paths(storeDir).observations;
+  const { latest } = await scanLog(file);
   const store: Store = { sessions: [], prompts: [], errors: [], subagents: [], tools: [], newerCaptures: 0 };
   const captured = new Map<string, Captured>();
   const of = (session: string): Captured => {
@@ -1150,8 +1174,9 @@ export const loadStore = async (storeDir: string): Promise<Store> => {
     captured.set(session, found);
     return found;
   };
-  for (const observation of all) {
-    if (observation.rev !== latest.get(observation.session)) continue;
+  for await (const line of logLines(file)) {
+    const observation = observationOf(line);
+    if (observation === undefined || observation.rev !== latest.get(observation.session)) continue;
     if (observation.kind === 'session') of(observation.session).session = observation;
     else if (observation.kind === 'user-prompt') of(observation.session).prompts.push(observation);
     else if (observation.kind === 'tool') of(observation.session).tools.push(observation);
@@ -1254,15 +1279,7 @@ export const compactLog = async (storeDir: string, renameWaitMs = LOG_RENAME_WAI
     if (entry.name.startsWith(`${basename(file)}.`) && entry.name.endsWith('.tmp')) await rm(join(storeDir, entry.name), { force: true });
   }
   const size = await stat(file).then((info) => info.size, () => 0);
-  const latest = new Map<string, number>();
-  let superseded = false;
-  for await (const line of logLines(file)) {
-    const observation = observationOf(line);
-    if (observation === undefined) continue;
-    const seen = latest.get(observation.session);
-    superseded ||= seen !== undefined && seen !== observation.rev;
-    latest.set(observation.session, Math.max(seen ?? 0, observation.rev));
-  }
+  const { latest, superseded } = await scanLog(file);
   if (!superseded) return;
   const temp = `${file}.${String(process.pid)}.tmp`;
   try {
@@ -1379,9 +1396,11 @@ const costModelOf = (entry: unknown): CostModel[] => {
 };
 
 /** A skeleton written before `since` (version 2), `models` (early version 3), or the model keys existed reads with them empty, as the check expects. */
-const withCostFields = (skeleton: Skeleton): Skeleton => ({
+const withCostFields = (skeleton: Skeleton, lean: boolean): Skeleton => ({
   ...skeleton,
-  lines: skeleton.lines.map((line) => {
+  lines: skeleton.lines.map((read) => {
+    // The content hashes are a skeleton's bulk (a 64-character string per block) and no invariant reads them, so a lean read does not keep them.
+    const line = lean ? { ...read, hashes: [] } : read;
     const state: unknown = line.costState;
     if (line.costState === null || !isRecord(state)) return line;
     const since = typeof state.since === 'string' ? state.since : null;
@@ -1390,8 +1409,11 @@ const withCostFields = (skeleton: Skeleton): Skeleton => ({
   }),
 });
 
-/** `unreadable` counts skeleton files that are torn, corrupted, or not a skeleton, so verify reports them instead of aborting. */
-export const readSkeletons = async (storeDir: string, only?: string): Promise<{ skeletons: Skeleton[]; unreadable: number }> => {
+/**
+ * `unreadable` counts skeleton files that are torn, corrupted, or not a skeleton, so verify reports them instead of aborting. With `lean`, each
+ * line's `hashes` read as empty: `verify` holds every skeleton at once and checks structure, never content (t808).
+ */
+export const readSkeletons = async (storeDir: string, only?: string, lean = false): Promise<{ skeletons: Skeleton[]; unreadable: number }> => {
   const folder = paths(storeDir).skeletons;
   let names: string[];
   try {
@@ -1410,7 +1432,7 @@ export const readSkeletons = async (storeDir: string, only?: string): Promise<{ 
     } catch (error) {
       if (!(error instanceof SyntaxError)) throw error;
     }
-    if (isSkeleton(parsed)) skeletons.push(withCostFields(parsed));
+    if (isSkeleton(parsed)) skeletons.push(withCostFields(parsed, lean));
     else unreadable += 1;
   }
   return { skeletons, unreadable };
