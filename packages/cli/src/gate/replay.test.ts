@@ -224,6 +224,17 @@ describe('a crossing record', () => {
     expect(crossings.map((row) => row.novelty)).toEqual(['fleet', 'none', 'session', 'repository']);
   });
 
+  it('gives the fleet-first mark to the earlier call, whatever order the folders list in', async () => {
+    await writeLog(projectsRoot, REPO, 'late.jsonl', [bash(9, 't1', 'npm install one')]);
+    await writeLog(projectsRoot, OTHER_REPO, 'early.jsonl', [bash(1, 't2', 'npm install one')]);
+    await run([REPO, OTHER_REPO]);
+    const { crossings } = await written();
+    expect(crossings.map((row) => [row.toolUseId, row.novelty])).toEqual([
+      ['t2', 'fleet'],
+      ['t1', 'repository'],
+    ]);
+  });
+
   it('treats a subagent as the session of its parent and marks its depth', async () => {
     await writeLog(projectsRoot, REPO, 'main.jsonl', [bash(1, 't1', 'npm install one')]);
     await writeLog(projectsRoot, REPO, 'main/subagents/agent-x.jsonl', [typed(1, 'install another-lib'), bash(2, 't2', 'npm install one'), bash(3, 't3', 'npm install another-lib')]);
