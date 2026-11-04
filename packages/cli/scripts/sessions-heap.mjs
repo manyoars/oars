@@ -12,7 +12,7 @@
 //   --chatter <n>       skeleton-only lines per call: text, thinking, attachment (default 5)
 //   --bulk <n>          characters of a clean tool result (default 400)
 //   --superseded off    leave the log clean for a no-op run, with no older copy of any record (default on; a recapture run ignores it)
-//   --bin <file>        run another build of the CLI (a copy of dist/ from before a change) instead of dist/bin.js, to compare two builds on one store
+//   --bin <file>        run another build of the CLI (a copy of dist/ from before a change) instead of dist/bin.js, to compare two builds on one store (`phases` ignores it: it always measures dist/)
 //
 // Needs `npm run build -w packages/cli` first (it runs dist/bin.js, and refuses one older than src/sessions/store.ts unless `--bin` names the build). Nothing here touches the real store or ~/.claude: every run points
 // APPDATA, XDG_CONFIG_HOME, HOME, USERPROFILE, and CLAUDE_CONFIG_DIR at a fresh folder under the OS temp folder, and refuses to go on
@@ -418,6 +418,7 @@ log ${build(dirs, Number(arg('sessions', '5'))).toFixed(1)} MB`);
       const ran = spawnSync(process.execPath, ['--expose-gc', '--max-old-space-size=8192', join(cliRoot, 'scripts', 'sessions-heap-phases.mjs'), dirs.store, dirs.claude, shape], { env: envOf(dirs), encoding: 'utf8', cwd: dirs.root, maxBuffer: 64 << 20 });
       console.log(`${shape}:
 ${ran.stdout}${ran.stderr.slice(-800)}`);
+      if (ran.status !== 0) process.exitCode = 1;
     }
   } finally {
     rmSync(dirs.root, { recursive: true, force: true });
