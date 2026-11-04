@@ -191,6 +191,9 @@ describe('the Grok Build table', () => {
     ['grep', 'file.search'],
     ['glob', 'file.search'],
     ['task', 'agent.spawn'],
+    // The spawn tool's other wire names (grok_build/task/mod.rs:193-196: "names arrive over the wire from arbitrary toolsets").
+    ['Task', 'agent.spawn'],
+    ['spawn_subagent', 'agent.spawn'],
     ['todo_write', 'plan.update'],
     ['todowrite', 'plan.update'],
     ['skill', 'skill.run'],

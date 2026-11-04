@@ -32,7 +32,7 @@ const failedShell = [
     sessionUpdate: 'tool_call_update',
     toolCallId: 'c1',
     status: 'completed',
-    rawOutput: { type: 'Bash', exit_code: 2, command: 'make', output: [], output_for_prompt: 'make: *** No rule to make target', signal: null, timed_out: false, current_dir: '/work' },
+    rawOutput: { type: 'Bash', exit_code: 2, command: 'make', output: [...Buffer.from('make: *** No rule to make target')], output_for_prompt: 'make: *** No rule to make target', signal: null, timed_out: false, current_dir: '/work' },
   }),
 ];
 const usage = { sessionId: 'x', updatedAt: iso(9), session: {}, turns: [{ turnNumber: 1, endedAt: iso(8), inputTokens: 10, outputTokens: 7, cachedReadTokens: 0, cacheCreationTokens: 0, reasoningTokens: 0, primaryModelId: 'grok-build' }] };
@@ -94,8 +94,8 @@ describe('depositing the Grok Build source', () => {
         cwd: '/x',
         updates: [
           prompt(1, 'ls'),
-          line(S(2), { sessionUpdate: 'tool_call', toolCallId: 'bash-mode-1', title: 'Execute `ls -a`', kind: 'execute', status: 'in_progress', rawInput: {} }),
-          line(S(3), { sessionUpdate: 'tool_call_update', toolCallId: 'bash-mode-1', status: 'completed', rawOutput: { type: 'Bash', exit_code: 0, output: [], output_for_prompt: 'a b', signal: null, timed_out: false, current_dir: '/x' } }),
+          line(S(2), { sessionUpdate: 'tool_call', toolCallId: 'bash-mode-1', title: 'Execute `ls -a`', kind: 'execute', status: 'in_progress', rawInput: { variant: 'Bash', command: 'ls -a', description: 'ls -a', is_background: false } }),
+          line(S(3), { sessionUpdate: 'tool_call_update', toolCallId: 'bash-mode-1', status: 'completed', rawOutput: { type: 'Bash', exit_code: 0, output: [...Buffer.from('a b')], output_for_prompt: 'a b', signal: null, timed_out: false, current_dir: '/x' } }),
         ],
       },
     ]);
@@ -103,7 +103,8 @@ describe('depositing the Grok Build source', () => {
     const store = await loadStore(s.storeDir);
     const calls = store.tools.filter((tool) => tool.session === `grok-${E}`);
     expect(calls.map((tool) => tool.tool)).toEqual(['Bash']);
-    expect(calls.flatMap((tool) => tool.steps ?? [])[0]).toMatchObject({ action: 'shell.exec' });
+    // The stored step reads the command upstream's input holds (rawInput.command), not the title.
+    expect(calls.flatMap((tool) => tool.steps ?? [])[0]).toMatchObject({ action: 'shell.exec', identity: { program: 'ls' } });
   });
 
   it('is read only when allowed, and an allowed name reports nothing missing while a typo does', async () => {

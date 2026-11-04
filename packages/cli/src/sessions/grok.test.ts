@@ -15,7 +15,8 @@ afterEach(cleanup);
 //   update kinds `user_message_chunk`, `agent_message_chunk` (content {type:"text", text}, _meta), `tool_call` (toolCallId, title, kind, status, rawInput),
 //     a model-issued `tool_call` has kind `other` (tool_calls.rs:1488; the real kind comes on a later update, :2734), so only the `bash-mode-` call (tool_dispatch.rs:246) is `execute`;
 //     `tool_call_update` (toolCallId, status, content[], rawOutput)                                         ACP schema.json SessionUpdate
-//   `_meta.hostTurn` and `_meta.interjection` mark text the harness wrote                                   storage/mod.rs:966, :974
+//   `_meta.hostTurn` (either chunk kind), `_meta.hideFromScrollback`, and `_meta.interjection` mark text the harness wrote; `_meta.promptIndex` numbers a prompt
+//     storage/mod.rs:966, :974, :1009; acp_session.rs:1353-1372; turn.rs:328, :890-901
 //   `title` is the tool's name                                                                              xai-grok-shell tool_calls.rs:1487
 //   rawOutput of a shell call: `{type:"Bash", exit_code, output: bytes, output_for_prompt, signal, timed_out, current_dir}`   xai-grok-tools types/output.rs:384-405
 //   a call is `failed` only on a timeout or a signal, so exit 2 arrives `completed`                         acp_conversion.rs:241-250
@@ -57,6 +58,8 @@ const finish = (second: number, toolCallId: string, status: string, extra: objec
 const bytes = (text: string): number[] => [...Buffer.from(text)];
 const bash = (exit: number, text: string, extra: object = {}) => ({ type: 'Bash', exit_code: exit, command: 'x', output: bytes(text), output_for_prompt: text, signal: null, timed_out: false, current_dir: '/work/app', ...extra });
 const turn = (second: number, extra: object = {}) => ({ turnNumber: 1, endedAt: iso(second), inputTokens: 900, outputTokens: 60, cachedReadTokens: 400, cacheCreationTokens: 100, reasoningTokens: 7, modelCalls: 2, primaryModelId: 'grok-build', ...extra });
+// The user's `!cmd` input as upstream writes it: the tagged `ToolInput::Bash` (tool_dispatch.rs:223-229, :250; xai-grok-tools types/tool_io.rs:55-59).
+const BANG = { variant: 'Bash', command: 'ls -a', description: 'ls -a', is_background: false };
 const usageOf = (...turns: Obj[]): Obj => ({ sessionId: 'sess', updatedAt: iso(99), session: {}, turns });
 
 describe('the Grok Build reader', () => {
@@ -98,7 +101,7 @@ describe('the Grok Build reader', () => {
       call(2, 'c', 'bash', { command: 'sleep 9' }),
       finish(3, 'c', 'failed', { rawOutput: bash(-1, 'timed out after 5s', { timed_out: true }) }),
       call(4, 'd', 'bash', { command: 'true' }),
-      finish(5, 'd', 'failed', { rawOutput: bash(0, '') }),
+      finish(5, 'd', 'failed', { rawOutput: bash(0, '', { signal: 'killed' }) }),
     ]);
     expect(out.tools.map((tool) => tool.status)).toEqual(['error', 'error']);
     expect(out.errorLines.map((error) => error.line)[0]).toBe('timed out after 5s');
@@ -198,12 +201,14 @@ describe('the Grok Build reader', () => {
       prompt(1, 'go'),
       call(2, 'c1', 'oars__oars_recall', {}, 'other'),
       finish(3, 'c1', 'completed'),
-      call(4, 'bash-mode-1', 'Execute `ls -a`', {}, 'execute'),
+      call(4, 'bash-mode-1', 'Execute `ls -a`', BANG, 'execute'),
       finish(5, 'bash-mode-1', 'failed', { rawOutput: bash(2, 'ls: no such file') }),
       call(6, 'c3', 'grep', { pattern: 'x' }),
       finish(7, 'c3', 'in_progress'),
     ]);
     expect(out.tools.map((tool) => [tool.tool, tool.status])).toEqual([['mcp__oars__oars_recall', 'ok'], ['Bash', 'error'], ['grep', 'none']]);
+    // The stored step reads the command upstream's input holds (rawInput.command), not the title.
+    expect(out.tools[1]?.steps?.[0]).toMatchObject({ action: 'shell.exec', identity: { program: 'ls' } });
   });
 
   it('attributes an MCP call made through the use_tool wrapper to its server, as mcp.call', () => {
@@ -232,6 +237,36 @@ describe('the Grok Build reader', () => {
   it('starts a new response after a host-turn marker, so a say, a marker, and a say are two assistant lines', () => {
     const lines = linesOf([prompt(1, 'go'), say(2, 'first'), prompt(3, 'boundary', { hostTurn: true }), say(4, 'second')]);
     expect(lines.filter((entry) => entry.type === 'assistant')).toHaveLength(2);
+  });
+
+  it('does not read a slash command’s output as a model response: an agent chunk with hostTurn ends the turn and its text is dropped', () => {
+    // A slash command's output is persisted as an agent_message_chunk with _meta.hostTurn (acp_session.rs:1353-1372, slash_exec.rs:64), and upstream's own
+    // rebuilders treat it as a boundary and drop the text (storage/mod.rs:429-432, replay.rs:448-452).
+    const lines = linesOf([prompt(1, 'go'), say(2, 'first'), say(3, 'COMMAND OUTPUT', { hostTurn: true }), say(4, 'second')]);
+    const assistants = lines.filter((entry) => entry.type === 'assistant');
+    expect(JSON.stringify(assistants)).not.toContain('COMMAND OUTPUT');
+    expect(assistants).toHaveLength(2);
+  });
+
+  it('does not count a harness-started turn as the operator’s prompt: a user chunk with hideFromScrollback is dropped and separates the responses', () => {
+    // upstream marks the user chunk of a TaskCompleted, SubagentCompleted, WorkflowCompleted, NotificationDrain, GoalSummary, or GoalClassifierNudge turn
+    // (turn.rs:328, :896-901, session/mod.rs:242-255).
+    const events = [prompt(1, 'go', { promptIndex: 0 }), say(2, 'first'), prompt(3, 'task finished', { promptIndex: 1, hideFromScrollback: true }), say(4, 'second')];
+    const lines = linesOf(events);
+    expect(lines.filter((entry) => entry.type === 'user')).toHaveLength(1);
+    expect(JSON.stringify(lines)).not.toContain('task finished');
+    expect(lines.filter((entry) => entry.type === 'assistant')).toHaveLength(2);
+    expect(extractOf(events).session.userTurns).toBe(1);
+  });
+
+  it('keeps two prompts apart when no reply falls between them: a change of promptIndex opens a new prompt, the same index merges, an unmarked chunk joins', () => {
+    // upstream writes _meta.promptIndex on each prompt (turn.rs:890-895) and a change of it opens a new run (storage/mod.rs:1009, replay.rs:427-432); a `!cmd`
+    // prompt carries only modelId (tool_dispatch.rs:185-187), so an unmarked chunk is kept.
+    const texts = (events: readonly unknown[]) => linesOf(events).filter((entry) => entry.type === 'user').map((entry) => JSON.stringify(entry.message));
+    const one = (text: string) => JSON.stringify({ role: 'user', content: [{ type: 'text', text }] });
+    expect(texts([prompt(1, 'first try', { promptIndex: 0 }), prompt(2, 'retry', { promptIndex: 1 })])).toEqual([one('first try'), one('retry')]);
+    expect(texts([prompt(1, 'in ', { promptIndex: 3 }), prompt(1, 'two', { promptIndex: 3 })])).toEqual([one('in two')]);
+    expect(texts([prompt(1, 'in ', { promptIndex: 3 }), prompt(1, 'parts')])).toEqual([one('in parts')]);
   });
 
   it('gives a session whose lines all lack a time one time: created_at, else the epoch', () => {
