@@ -362,3 +362,77 @@ describe('parseSkeleton refuses, and names the field', () => {
     }
   });
 });
+
+describe('the language shares on the wire', () => {
+  const stackFrame = frame({ shell: 'bash', stack: { languages: ['python', 'typescript'], frameworks: [], size: null } });
+  const withStrata = (languages: { language: string; share: string }[]): SessionSkeleton => {
+    const strata = { languages, repoFiles: null, frameworks: [], explore: 0 };
+    // The stored share is text on a record, so a test can hold one the list does not.
+    const stored = JSON.parse(JSON.stringify(strata)) as NonNullable<ReturnType<typeof session>['strata']>;
+    const skeleton = skeletonFrom(store({ sessions: [session('s1', { frame: stackFrame, strata: stored })], prompts: [prompt('s1', 0, { frame: stackFrame, strata: stored })] }));
+    if (skeleton === null) throw new Error('no skeleton');
+    return skeleton;
+  };
+
+  it('each language carries its share bucket, in the session frame and in each prompt frame', () => {
+    const skeleton = withStrata([
+      { language: 'python', share: 'under-10' },
+      { language: 'typescript', share: 'over-50' },
+    ]);
+    const shares = [
+      { language: 'python', languageShare: 'under-10' },
+      { language: 'typescript', languageShare: 'over-50' },
+    ];
+    expect(skeleton.transcripts[0]?.frame.stack.languageShares).toEqual(shares);
+    expect(skeleton.transcripts[0]?.prompts[0]?.frame.stack.languageShares).toEqual(shares);
+    expect(parseSkeleton(JSON.parse(JSON.stringify(skeleton)))).toEqual({ ok: true, skeleton });
+  });
+
+  it('drops a share outside its list and still sends the language', () => {
+    const skeleton = withStrata([
+      { language: 'python', share: '37' },
+      { language: 'typescript', share: 'over-50' },
+    ]);
+    expect(skeleton.transcripts[0]?.frame.stack.languages).toEqual(['python', 'typescript']);
+    expect(skeleton.transcripts[0]?.frame.stack.languageShares).toEqual([{ language: 'typescript', languageShare: 'over-50' }]);
+  });
+
+  it('sends a language outside the pinned list as other, and one share for it', () => {
+    const skeleton = withStrata([
+      { language: 'klingon', share: '10-50' },
+      { language: 'other', share: 'under-10' },
+    ]);
+    expect(skeleton.transcripts[0]?.frame.stack.languageShares).toEqual([{ language: 'other', languageShare: '10-50' }]);
+  });
+
+  it('sends none for a record captured before the strata', () => {
+    const skeleton = skeletonFrom(store({ sessions: [session('s1', { frame: stackFrame })], prompts: [prompt('s1', 0, { frame: stackFrame })] }));
+    expect(skeleton?.transcripts[0]?.frame.stack.languageShares).toEqual([]);
+  });
+
+  const at = ['transcripts', 0, 'frame', 'stack', 'languageShares'] as const;
+  const field = 'transcripts[0].frame.stack.languageShares';
+  it.each([
+    { name: 'a share outside the list', value: [{ language: 'python', languageShare: '37' }], field: `${field}[0].languageShare` },
+    { name: 'a language outside the vocabulary', value: [{ language: 'acme-lang', languageShare: '0' }], field: `${field}[0].language` },
+    { name: 'a smuggled key beside a share', value: [{ language: 'python', languageShare: '0', files: 12 }], field: `${field}[0].files` },
+    { name: 'text for the list', value: 'python', field },
+    { name: 'a missing share', value: [{ language: 'python' }], field: `${field}[0].languageShare` },
+  ])('parseSkeleton refuses $name', ({ value, field: refused }) => {
+    const raw: unknown = JSON.parse(JSON.stringify(withStrata([])));
+    let holder: unknown = raw;
+    for (const key of at.slice(0, -1)) holder = isHolder(holder) ? Reflect.get(holder, key) : undefined;
+    if (!isHolder(holder)) throw new Error('no stack');
+    Reflect.set(holder, 'languageShares', value);
+    expect(refusedField(raw)).toBe(refused);
+  });
+
+  it('parseSkeleton refuses a stack with no list of shares', () => {
+    const raw: unknown = JSON.parse(JSON.stringify(withStrata([])));
+    let holder: unknown = raw;
+    for (const key of at.slice(0, -1)) holder = isHolder(holder) ? Reflect.get(holder, key) : undefined;
+    if (!isHolder(holder)) throw new Error('no stack');
+    Reflect.deleteProperty(holder, 'languageShares');
+    expect(refusedField(raw)).toBe(field);
+  });
+});
