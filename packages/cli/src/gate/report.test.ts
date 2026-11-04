@@ -117,6 +117,24 @@ describe('the counts', () => {
     expect(count(read.againstLatest, 'not-latest')).toBe(1);
   });
 
+  it('separates the notes shown from the notes held, and the line each carried', () => {
+    const arms = reportOf([
+      run(),
+      crossing({ name: 'quiet', toolUseId: 't1' }),
+      crossing({ name: 'young', toolUseId: 't2', arm: 'shown', lineShown: 'young-name-note' }),
+      crossing({ name: 'ghost', toolUseId: 't3', arm: 'held', lineHeld: 'not-found-note' }),
+    ]);
+    expect(arms.arm).toEqual([{ value: 'none', count: 1 }, { value: 'shown', count: 1 }, { value: 'held', count: 1 }]);
+    expect(count(arms.lineShown, 'none')).toBe(2);
+    expect(count(arms.lineShown, 'young-name-note')).toBe(1);
+    expect(count(arms.lineHeld, 'none')).toBe(2);
+    expect(count(arms.lineHeld, 'not-found-note')).toBe(1);
+    const text = formatReport(arms);
+    expect(text).toContain('Notes: none 1, shown 1, held 1');
+    expect(text).toContain('Line shown: none 2, young-name-note 1');
+    expect(text).toContain('Line held: none 2, not-found-note 1');
+  });
+
   it('uses no evaluative word anywhere in what it prints', () => {
     const text = formatReport(report) + formatReport(reportOf([run({ registryRead: true }), crossing()])) + LIMITS.join(' ');
     expect(text).not.toMatch(/malicious|threat|attack|danger|unsafe|suspicious|risk|vulnerab|safe|\bbad\b|evil|hostile/i);
