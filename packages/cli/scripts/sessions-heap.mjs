@@ -194,16 +194,18 @@ const runCli = (dirs, heapMb, args, preload, recapture = false) => {
   const flags = [...(heapMb === 0 ? [] : [`--max-old-space-size=${String(heapMb)}`]), ...(preload === undefined ? [] : ['--require', preload])];
   const child = spawnSync(process.execPath, [...flags, bin, ...args], { env: envOf(dirs), encoding: 'utf8', maxBuffer: 64 << 20, cwd: dirs.root });
   const peak = /PEAK_RSS_MB (\d+)/.exec(child.stderr)?.[1];
-  return { code: child.status, seconds: (Date.now() - started) / 1000, peakMb: peak === undefined ? null : Number(peak), stderr: child.stderr, oom: /heap out of memory|FATAL ERROR/.test(child.stderr) };
+  return { code: child.status, seconds: (Date.now() - started) / 1000, peakMb: peak === undefined ? null : Number(peak), stdout: child.stdout, stderr: child.stderr, oom: /heap out of memory|FATAL ERROR/.test(child.stderr) };
 };
 
-const depositArgs = ['sessions', 'deposit', '--allow', PROJECT];
+const depositArgs = ['sessions', 'deposit', '--allow', PROJECT, '--json'];
 const verifyArgs = ['sessions', 'verify'];
 // The three measured runs: a deposit that skips every file (the t784 run: 12 captured, 6,757 unchanged), a deposit that captures every transcript
 // (a CAPTURE_VERSION bump), and verify. The last element is the heap `check` gives each, in MB: the least that passes the new build (400 sessions:
 // 104, 104, and 248) and the least that passes the build before t808 (168, 112, and 336) sit either side of it, 32 to 40 MB away where they differ.
-/** @type {[string, string[], boolean, number][]} */
-const runs = [['deposit no-op', depositArgs, false, 136], ['deposit recapture', depositArgs, true, 136], ['verify', verifyArgs, false, 288]];
+// The fifth element is how many transcripts the deposit must report as captured: 0 for the no-op, and for a recapture the store's sessions (`check` fills
+// it in), so a recapture that skipped every file fails instead of passing on its exit code. verify has none.
+/** @type {[string, string[], boolean, number, 'none' | 'zero' | 'all'][]} */
+const runs = [['deposit no-op', depositArgs, false, 136, 'zero'], ['deposit recapture', depositArgs, true, 136, 'all'], ['verify', verifyArgs, false, 288, 'none']];
 
 /** @param {string} label */
 const scratch = (label) => {
@@ -276,6 +278,20 @@ const peakPreload = () => {
   return file;
 };
 
+/**
+ * The `sessions` count of a deposit's `--json` document: the transcripts it parsed this run (the skipped ones are `unchanged`). Undefined when the
+ * output is not that document, which `check` treats as a failure.
+ * @param {string} stdout
+ */
+const capturedOf = (stdout) => {
+  try {
+    const sessions = JSON.parse(stdout).sessions;
+    return typeof sessions === 'number' ? sessions : undefined;
+  } catch {
+    return undefined;
+  }
+};
+
 const command = process.argv[2];
 
 if (command === 'check') {
@@ -286,11 +302,14 @@ if (command === 'check') {
     console.log(`built ${String(sessions)} sessions: log ${build(dirs, sessions).toFixed(1)} MB`);
     let failed = false;
     // `verify` may exit 4 under --strict only; plain verify exits 0, so any non-zero exit or out-of-memory is a failure.
-    for (const [name, args, recapture, cap] of runs) {
+    for (const [name, args, recapture, cap, captured] of runs) {
       const heap = Number(arg('heap', String(cap)));
       const ran = runCli(dirs, heap, args, undefined, recapture);
-      const ok = ran.code === 0 && !ran.oom;
-      console.log(`${ok ? 'PASS' : 'FAIL'}  ${name} under --max-old-space-size=${String(heap)}: exit ${String(ran.code)}, ${ran.seconds.toFixed(1)} s${ok ? '' : `\n${ran.stderr.slice(0, 300)}`}`);
+      const got = captured === 'none' ? undefined : capturedOf(ran.stdout);
+      const want = captured === 'all' ? sessions : 0;
+      const ok = ran.code === 0 && !ran.oom && (captured === 'none' || got === want);
+      const note = captured === 'none' ? '' : `, captured ${String(got)} of ${String(sessions)} (wanted ${String(want)})`;
+      console.log(`${ok ? 'PASS' : 'FAIL'}  ${name} under --max-old-space-size=${String(heap)}: exit ${String(ran.code)}, ${ran.seconds.toFixed(1)} s${note}${ok ? '' : `${NL}${ran.stderr.slice(0, 300)}`}`);
       failed ||= !ok;
     }
     process.exitCode = failed ? 1 : 0;
