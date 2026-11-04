@@ -464,7 +464,7 @@ export interface ShellSegment {
 export interface ToolPackage {
   package: string;
   packageVersion: string | null;
-  /** True on the first call of the session that names this package at this version (D13 counts only that call). */
+  /** True on the first call of the session that names this package at this version (package health counts only that call). */
   first: boolean;
 }
 

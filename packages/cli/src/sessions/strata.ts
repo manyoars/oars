@@ -1,4 +1,4 @@
-// The stack strata a capture stores (pool vocabulary spec Sections 1.1 and 7, t827): language and its share of the touched files, the repository's file
+// The stack strata a capture stores (pool vocabulary spec Sections 1.1 and 7): language and its share of the touched files, the repository's file
 // count by order of magnitude, the framework a resolved package shows, and how many steps only looked. Every value is a member of a closed list or a count,
 // so no path, package name, or program text is kept. The projections that gate these at deposit are in `projection.ts`.
 
@@ -53,18 +53,18 @@ export const FRAMEWORK_OF_PACKAGE: ReadonlyMap<string, string> = new Map([
   ['rubygems:rails', 'rails'],
 ]);
 
-/** The language of one touched path: the vocabulary's name for its extension, else `other`; null for a path with no extension, which shows no language. */
+/** The language of one touched path: the vocabulary's name for its extension, else `other`; null for a path with no extension, which shows no language. A dotfile (`.gitignore`) has none: its only dot leads the name. */
 const languageOfPath = (path: string): string | null => {
   const base = path.replace(/\\/g, '/').split('/').pop() ?? path;
-  if (!base.includes('.')) return null;
+  if (base.lastIndexOf('.') <= 0) return null;
   return LANGUAGE_OF_EXTENSION.get(base.split('.').pop()?.toLowerCase() ?? '') ?? 'other';
 };
 
-/** The strata of a file's evidence. `explore` is the file's count; a prompt overrides it with its own. */
-export const strataOf = (evidence: { paths: readonly string[]; packages: readonly string[]; size: RepoSize | null; explore: number }): Strata => {
+/** The strata of a file's evidence but `explore`, which the caller counts for the file and for each prompt. Files are counted, not touches: a path read ten times is one. */
+export const strataOf = (evidence: { paths: readonly string[]; packages: readonly string[]; size: RepoSize | null }): Omit<Strata, 'explore'> => {
   const counts = new Map<string, number>();
   let total = 0;
-  for (const path of evidence.paths) {
+  for (const path of new Set(evidence.paths)) {
     const language = languageOfPath(path);
     if (language === null) continue;
     counts.set(language, (counts.get(language) ?? 0) + 1);
@@ -74,6 +74,5 @@ export const strataOf = (evidence: { paths: readonly string[]; packages: readonl
     languages: [...counts].sort(([a], [b]) => a.localeCompare(b)).map(([language, files]) => ({ language, share: languageShareBucket(files, total) })),
     repoFiles: repoFilesBucketOf(evidence.size),
     frameworks: [...new Set(evidence.packages.flatMap((name) => FRAMEWORK_OF_PACKAGE.get(name) ?? []))].sort(),
-    explore: evidence.explore,
   };
 };

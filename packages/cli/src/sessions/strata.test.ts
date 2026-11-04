@@ -67,6 +67,20 @@ describe('language and languageShare', () => {
     expect(languageShareBucket(count, total)).toBe(expected);
   });
 
+  it('counts files and not touches: one path read many times is one file', () => {
+    const strata = capture([...Array.from({ length: 10 }, () => read('/w/a.ts')), read('/w/b.py')]).session.strata;
+    expect(strata?.languages).toEqual([
+      { language: 'python', share: 'over-50' },
+      { language: 'typescript', share: 'over-50' },
+    ]);
+  });
+
+  it('counts a dotfile for nothing, since its only dot leads the name', () => {
+    expect(capture([read('/w/.gitignore'), read('/w/a.ts')]).session.strata?.languages).toEqual([{ language: 'typescript', share: 'over-50' }]);
+    expect(capture([read('/w/src/.env')]).session.strata?.languages).toEqual([]);
+    expect(capture([read('/w/.hidden.py')]).session.strata?.languages).toEqual([{ language: 'python', share: 'over-50' }]);
+  });
+
   it('keeps names off the value: a path holding a private name leaves only a language', () => {
     expect(JSON.stringify(capture([read('/w/acme-secret-project/billing.ts')]).session.strata)).not.toContain('acme');
   });
@@ -86,6 +100,19 @@ describe('repoFiles', () => {
     [100001, 'over-100k'],
   ] as const)('%i tracked files is %s', (files, expected) => {
     expect(capture([read('/w/a.ts')], [], files).session.strata?.repoFiles).toBe(expected);
+  });
+
+  it('keeps the size a re-capture carries and does not open the repository, and a carried null stays null', () => {
+    const text = [
+      line({ type: 'user', cwd: '/w', timestamp: '2026-05-29T04:30:00Z', message: { role: 'user', content: 'one' } }),
+      line({ type: 'assistant', cwd: '/w', timestamp: '2026-05-29T04:30:01Z', message: { role: 'assistant', content: [{ type: 'tool_use', id: 't1', name: 'Read', input: { file_path: '/w/a.ts' } }] } }),
+    ].join('\n');
+    const throwing = (): number => {
+      throw new Error('the repository must not be read again');
+    };
+    const again = (repoSize: 'm' | null) => captureSession({ text, session: 's', project: 'p', rev: 1, at: 'x', bytes: 1, redact: makeRedactor([]), repoRoot: () => '/w', repoFiles: throwing, repoSize });
+    expect(again('m').session.strata?.repoFiles).toBe('1k-10k');
+    expect(again(null).session.strata?.repoFiles).toBeNull();
   });
 
   it('is null when the repository has no readable index', () => {
@@ -141,8 +168,8 @@ describe('explore', () => {
 
 describe('strataOf', () => {
   it('is a pure function of its evidence', () => {
-    const strata: Strata = strataOf({ paths: ['a.go'], packages: ['pypi:django', 'npm:nope'], size: 'xl', explore: 3 });
-    expect(strata).toEqual({ languages: [{ language: 'go', share: 'over-50' }], repoFiles: 'over-100k', frameworks: ['django'], explore: 3 });
+    const strata: Omit<Strata, 'explore'> = strataOf({ paths: ['a.go'], packages: ['pypi:django', 'npm:nope'], size: 'xl' });
+    expect(strata).toEqual({ languages: [{ language: 'go', share: 'over-50' }], repoFiles: 'over-100k', frameworks: ['django'] });
   });
 });
 
