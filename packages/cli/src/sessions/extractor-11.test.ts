@@ -1,5 +1,5 @@
-// EXTRACTOR 10 (t811, pool vocabulary spec Section 2): raw `agentType`, `keys`, and `frameId` with the joined frame are class A, and the pooled shell form is
-// computed at deposit from what the account store holds. A store written at 9 is re-derived from its log alone.
+// EXTRACTOR 11 (t811, pool vocabulary spec Section 2): raw `agentType`, `keys`, and `frameId` with the joined frame are class A, and the pooled shell form is
+// computed at deposit from what the account store holds. A store written at 10 is re-derived from its log alone.
 import { readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { afterEach, describe, expect, it } from 'vitest';
 import { captureSession } from './extract.js';
@@ -33,23 +33,23 @@ const shellSession = (): string =>
 const captured = (): ToolObservation[] =>
   captureSession({ text: shellSession(), session: 's', project: 'p', rev: 1, at: 'x', bytes: 1, redact: makeRedactor(), salt: 'salt', sid: null, repoRoot: () => null, runtime: { oars: '1.2.3', node: 'v99', os: 'plan9' } }).tools;
 
-describe('EXTRACTOR_VERSION 10', () => {
-  it('is 10, the version that moves agentType, keys, and frameId to class A', () => {
-    expect(EXTRACTOR_VERSION).toBe('10');
+describe('EXTRACTOR_VERSION 11', () => {
+  it('is 11, the version that moves agentType, keys, and frameId to class A', () => {
+    expect(EXTRACTOR_VERSION).toBe('11');
   });
 
-  it('re-derives a store written at 9 from its log alone, keeping every class A field it held', async () => {
+  it('re-derives a store written at 10 from its log alone, keeping every class A field it held', async () => {
     const staged = stage();
     await deposit(staged.runtime, { allow: ['proj'], redactDomains: [], now: () => NOW });
     const before = await loadStore(staged.storeDir);
-    // The store as version 9 left it: its derived records stamped '9'. The transcripts are gone, so nothing can be read from raw.
-    writeFileSync(paths(staged.storeDir).derived, readFileSync(paths(staged.storeDir).derived, 'utf8').replaceAll(`"v":"${EXTRACTOR_VERSION}"`, '"v":"9"'));
+    // The store as version 10 left it: its derived records stamped '10'. The transcripts are gone, so nothing can be read from raw.
+    writeFileSync(paths(staged.storeDir).derived, readFileSync(paths(staged.storeDir).derived, 'utf8').replaceAll(`"v":"${EXTRACTOR_VERSION}"`, '"v":"10"'));
     expect(readFileSync(paths(staged.storeDir).derived, 'utf8')).not.toContain(`"v":"${EXTRACTOR_VERSION}"`);
     rmSync(staged.projectsRoot, { recursive: true, force: true });
     await refresh(staged.runtime, [], '2026-06-10T00:00:00.000Z');
     const written = readFileSync(paths(staged.storeDir).derived, 'utf8');
     expect(written).toContain(`"v":"${EXTRACTOR_VERSION}"`);
-    expect(written).not.toContain('"v":"9"');
+    expect(written).not.toContain('"v":"10"');
     const after = await loadStore(staged.storeDir);
     expect(after.tools).toEqual(before.tools);
     expect(after.tools.some((tool) => tool.keys.length > 0)).toBe(true);

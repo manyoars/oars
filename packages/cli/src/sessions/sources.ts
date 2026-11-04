@@ -4,6 +4,7 @@
 
 import { join } from 'node:path';
 import { codexRoot, openCodexStore } from './codex.js';
+import { copilotRoot, openCopilotStore } from './copilot.js';
 import { cursorRoot, openCursorStore } from './cursor.js';
 import type { SubagentOrigin } from './extract.js';
 import type { Harness } from './schema.js';
@@ -105,8 +106,29 @@ const codex: Source = {
   },
 };
 
+const copilot: Source = {
+  name: 'copilot',
+  harness: 'copilot',
+  label: 'Copilot',
+  root: (_platform, env, home) => copilotRoot(env, home),
+  storeFile: (root) => join(root, 'session-state'),
+  open: async (root) => {
+    const store = await openCopilotStore(root);
+    if (store === undefined) return undefined;
+    const byId = new Map(store.sessions.map((session) => [session.id, session]));
+    return {
+      sessions: store.sessions.map((session) => ({ id: session.id, folder: session.folder, size: session.size, mtimeMs: session.mtimeMs })),
+      transcript: async (session) => await store.transcript(need(byId.get(session.id))),
+      rejected: store.rejected,
+      unreadable: store.unreadable,
+      where: (session) => byId.get(session.id)?.file ?? root,
+      close: () => undefined,
+    };
+  },
+};
+
 /** Every non-Claude source, in the order the deposit reads them. */
-export const SOURCES: readonly Source[] = [cursor, codex];
+export const SOURCES: readonly Source[] = [cursor, codex, copilot];
 
 /** How a source is named in a deposit line; a name the table does not know (a test's) is its own label. */
 export const sourceLabel = (name: string, table: readonly Source[] = SOURCES): string => table.find((source) => source.name === name)?.label ?? name;

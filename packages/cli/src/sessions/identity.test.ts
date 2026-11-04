@@ -34,7 +34,7 @@ const shell = (command: string): StepObservation[] => stepsOf([{ name: 'Bash', i
 // The class A and L fields of each record, from the class table in `docs/sessions-store.md`. Named as the fields to drop, so a field added later counts as class P and is checked until someone classes it.
 const NOT_POOLED = {
   session: ['session', 'parent', 'spawnedBy', 'spawnedIn', 'at', 'tsFirst', 'tsLast', 'promptFingerprint', 'repo', 'tools', 'fileHashes', 'urls', 'searches', 'branches', 'tldrs', 'confidences', 'project', 'files'],
-  prompt: ['session', 'ts', 'head', 'promptFingerprint'],
+  prompt: ['session', 'ts', 'head', 'promptFingerprint', 'skills'],
   tool: ['session', 'parent', 'toolUseId', 'ts', 'tool', 'target', 'segments', 'pulls', 'commits'],
   errorLine: ['session', 'toolUseId', 'tool', 'ts', 'line'],
 } as const;
