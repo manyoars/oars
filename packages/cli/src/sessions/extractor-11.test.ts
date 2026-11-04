@@ -86,7 +86,7 @@ describe('the shell form projected from the account store (Q5)', () => {
   const withoutSteps = (commands: readonly string[]) => captured(commands).map((tool) => projectStoredShell(vocab, { tool: tool.tool, target: tool.target }));
   const lossesOf = (kept: readonly ProjectedShell[], raw: readonly ProjectedShell[], pick: (shell: ProjectedShell) => unknown): number => kept.filter((shell, i) => JSON.stringify(pick(shell)) !== JSON.stringify(pick(raw[i] ?? UNREAD))).length;
   const subcommandsOf = (shell: ProjectedShell) => shell.commands.flatMap(({ subcommand }) => subcommand ?? []);
-  const flagsOf = (shell: ProjectedShell) => shell.commands.map(({ flags }) => flags);
+  const flagsOf = (shell: ProjectedShell) => shell.commands.flatMap(({ flags }) => flags);
 
   it('projects every command of a call from its steps: a pipeline, an && chain, a cd hop, a bash -c body, and a git -C call keep their programs, subcommands, and flags', () => {
     const forms = ['cat f | grep x | sort', 'npm test && git push --force', 'cd /w && git commit --amend', 'bash -c "git push --force"', 'git -C repo status'];
@@ -105,6 +105,19 @@ describe('the shell form projected from the account store (Q5)', () => {
     expect(JSON.stringify(projected(COMMANDS))).not.toContain(PLANTED);
   });
 
+  it('limits a step to the curated lists: a snapshot-only program loses its flags stored, and a later one goes private (3 of 3 flags, 1 of 3 programs)', () => {
+    // ffmpeg is in the snapshot but not the curated lists, and `-exec` is on find's page but not the curated flags: capture narrowed both to `<literal>`.
+    const forms = ['ffmpeg -i in out', 'cd /w && ffmpeg -i in out', 'find . -exec acme-deploy {} ;'];
+    const raw = forms.map((command) => projectShell(vocab, command, makeRedactor()));
+    const stored = projected(forms);
+    expect(raw.flatMap(flagsOf)).toEqual(['-i', '-i', '-exec']);
+    expect(lossesOf(stored, raw, flagsOf)).toBe(3);
+    expect(lossesOf(stored, raw, (shell) => shell.programs)).toBe(1);
+    expect(lossesOf(stored, raw, subcommandsOf)).toBe(0);
+    expect(stored[1]?.programs).toEqual(['cd', PRIVATE]);
+    expect(JSON.stringify(stored)).not.toContain('acme-deploy');
+  });
+
   it('caps the program list of a long pipeline at pipe_max and keeps every command', () => {
     const [shell] = projected(['cat a | sort | uniq | head | wc | tr x y']);
     expect(shell?.commands).toHaveLength(6);
@@ -121,15 +134,30 @@ describe('the shell form projected from the account store (Q5)', () => {
     expect(projected([`cd /w && ${name}`])[0]?.programs).toEqual(['cd', PRIVATE]);
   });
 
+  it('projects a private program behind a wrapper as private, never as the wrapper: bash -c and timeout', () => {
+    // The step reads `<literal>`, and the stored target names the wrapper (`bash acme-deploy`, `timeout 5`), a curated program a literal step cannot be.
+    expect(projected(['bash -c "acme-deploy --x"', 'timeout 5 acme-deploy', 'sudo acme-deploy --x', 'env X=1 acme-deploy'])).toEqual(Array.from({ length: 4 }, () => ({ commands: [PRIVATE_PROGRAM], programs: [PRIVATE] })));
+    expect(projectShell(vocab, 'bash -c "acme-deploy --x"', makeRedactor()).programs).toEqual([PRIVATE]);
+    expect(projectShell(vocab, 'timeout 5 acme-deploy', makeRedactor()).programs).toEqual([PRIVATE]);
+  });
+
+  it('projects a Bash step whose identity is null as private', () => {
+    // Capture gives a shell call only a shell identity, so the step is rewritten to the one other shape a stored step can hold.
+    const [call] = captured(['git status']);
+    const steps = (call?.steps ?? []).map((step) => ({ ...step, identity: null }));
+    expect(steps).toHaveLength(1);
+    expect(projectStoredShell(vocab, { tool: 'Bash', target: call?.target ?? null, steps })).toEqual({ commands: [PRIVATE_PROGRAM], programs: [PRIVATE] });
+  });
+
   it('loses the subcommands of a record without steps and states the loss by count: 2 of 10 fixture calls', () => {
-    // `shellTarget` stores the first plain token after the program, so `git -C repo status` is stored as `git repo`, and `bash -c "..."` as `bash`.
+    // `shellTarget` stores the first plain token after the program, so `git -C repo status` is stored as `git repo`, and `bash -c "..."` as `bash git`, which projects `bash`.
     const raw = COMMANDS.map((command) => projectShell(vocab, command, makeRedactor()));
     expect(lossesOf(withoutSteps(COMMANDS), raw, subcommandsOf)).toBe(2);
   });
 
-  it('loses the flags of a record without steps and states the loss by count: 7 of 10 fixture calls', () => {
+  it('loses the flags of a record without steps and states the loss by count: 6 of 10 fixture calls', () => {
     const raw = COMMANDS.map((command) => projectShell(vocab, command, makeRedactor()));
-    expect(lossesOf(withoutSteps(COMMANDS), raw, flagsOf)).toBe(7);
+    expect(lossesOf(withoutSteps(COMMANDS), raw, flagsOf)).toBe(6);
     expect(withoutSteps(COMMANDS).every((shell) => shell.commands.every(({ flags }) => flags.length === 0))).toBe(true);
   });
 

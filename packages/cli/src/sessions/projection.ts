@@ -3,7 +3,7 @@
 // or the word `private`: the output is built from list members, never from the input text, so a private name cannot be copied through by a
 // parsing mistake. A form the parser cannot read projects to `private`.
 
-import { SHELL, shellCommands } from './extract.js';
+import { SHELL, shellCommands, WRAPPERS } from './extract.js';
 import { isPositional, type WordOfCommand } from './identity.js';
 import {
   BUNDLING_PROGRAMS,
@@ -112,7 +112,17 @@ const projectStep = (vocab: Vocabulary, identity: ShellIdentity): ProjectedProgr
   };
 };
 
-const isShellStep = (identity: StepIdentity | undefined): identity is ShellIdentity => identity !== null && identity !== undefined && 'program' in identity;
+/**
+ * The first step reads `<literal>`: the program is not curated, so the target's program is either a snapshot-only program (it stays admitted) or the
+ * wrapper in front of a private one (`bash -c "acme-deploy"` is stored as `bash acme-deploy`, `timeout 5 acme-deploy` as `timeout 5`). A curated program
+ * would have read as itself in its step, so a curated or wrapper program in the target means the step names another command: `private`.
+ */
+const projectLiteralFirst = (vocab: Vocabulary, target: string | null): ProjectedProgram => {
+  const program = target?.split(' ')[0] ?? '';
+  return PUBLIC_PROGRAMS.has(program) || WRAPPERS.has(program) || program === 'timeout' ? PRIVATE_PROGRAM : projectTarget(vocab, target);
+};
+
+const isShellStep =(identity: StepIdentity | undefined): identity is ShellIdentity => identity !== null && identity !== undefined && 'program' in identity;
 
 /**
  * The shell call of a stored tool record, from what the account store holds (migration, spec Section 2): every command of the call, in order, from the
@@ -126,7 +136,7 @@ export const projectStoredShell = (vocab: Vocabulary, tool: Pick<ToolObservation
   if (!SHELL.has(tool.tool)) return UNREAD_SHELL_PROJECTION;
   const steps = (tool.steps ?? []).map(({ identity }) => identity);
   if (steps.length === 0) return projectedShell([projectTarget(vocab, tool.target)]);
-  return projectedShell(steps.map((identity, at) => (!isShellStep(identity) ? PRIVATE_PROGRAM : at === 0 && identity.program === LITERAL ? projectTarget(vocab, tool.target) : projectStep(vocab, identity))));
+  return projectedShell(steps.map((identity, at) => (!isShellStep(identity) ? PRIVATE_PROGRAM : at === 0 && identity.program === LITERAL ? projectLiteralFirst(vocab, tool.target) : projectStep(vocab, identity))));
 };
 
 const MCP_TOOL = /^mcp__(.+?)__(.+)$/;

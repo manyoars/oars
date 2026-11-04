@@ -71,7 +71,8 @@ replaces, so the log settles back to the size of the live records. A hook deposi
   `agentType`, `keys`, and `frameId` with the joined `frame` from class P to class A, so the projection never reads them (the projection functions ship in this release; the deposit skeleton does not call them yet and keeps sending the joined `frame` until the next pool brief). A store written at 10 re-derives
   on its next deposit with every captured record as it was. What the projection takes from the shell form is computed from the store and never written: `program`,
   `subcommand`, and `flags` come from the A copy of `target` and the record's `steps` (a record captured before CAPTURE 9 has no steps, so its flags
-  are lost and it projects the program and subcommand alone; a `target` cut at 30 characters or masked by redaction projects `program: private`).
+  are lost and it projects the program and subcommand alone; a step's own names are limited to the curated lists, since capture narrowed them to
+  those (a program only the snapshot lists, such as `ffmpeg -i in out`, keeps its program but loses `-i` stored, and a snapshot-only program after the first command projects `private`); a `target` cut at 30 characters or masked by redaction projects `program: private`).
   No staged pooled file or outbox exists for the migration to delete.
 
 Version 4 (CAPTURE 4, t714) adds `sid`, `repo`, `fileHashes`, `env`, `promptFingerprint`, `targetBase`, the repository-root path base, and a
