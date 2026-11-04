@@ -150,10 +150,9 @@ export const eventLines = (text: string, fallbackId: string): Obj[] => {
   let at: string | undefined;
   let model: string | undefined;
   let sequence = 0;
-  // The assistant lines since the last shutdown, whose last response per model receives that shutdown's input and cache totals on its first line.
-  let span: Response[] = [];
-  // The schema does not say whether a later shutdown's totals are cumulative across a resume, so a model's totals are taken from the first shutdown only.
-  const totaled = new Set<string>();
+  // Each model's latest shutdown totals. Upstream's accounting is session-wide and kept for resume (usage-and-billing.md, session-events.ts:4450), so a later
+  // shutdown replaces an earlier one instead of adding to it.
+  const totals = new Map<string, Obj>();
   const responses: Response[] = [];
   const calls = new Map<string, { block: Obj; shell: boolean }>();
   const resolved = new Set<string>();
@@ -178,7 +177,8 @@ export const eventLines = (text: string, fallbackId: string): Obj[] => {
   const usageOf = (usage: Obj): Obj => {
     const reasoning = num(usage.reasoningTokens);
     return {
-      input_tokens: num(usage.inputTokens) ?? 0,
+      // `inputTokens` already includes the cache reads and writes (usage-and-billing.md:58), and capture's fields are disjoint, so only the uncached part is input.
+      input_tokens: Math.max((num(usage.inputTokens) ?? 0) - (num(usage.cacheReadTokens) ?? 0) - (num(usage.cacheWriteTokens) ?? 0), 0),
       cache_read_input_tokens: num(usage.cacheReadTokens) ?? 0,
       cache_creation_input_tokens: num(usage.cacheWriteTokens) ?? 0,
       ...(reasoning === undefined ? {} : { output_tokens_details: { thinking_tokens: reasoning } }),
@@ -257,7 +257,6 @@ export const eventLines = (text: string, fallbackId: string): Obj[] => {
         const requestId = str(data.requestId) ?? str(data.apiCallId) ?? str(data.messageId) ?? `${String(base.sessionId)}-resp${String(sequence)}`;
         lines.push({ ...base, type: 'assistant', uuid: `${fallbackId}-a${String(sequence)}`, requestId, timestamp: when, ...(modelOf === undefined ? {} : { requestedModel: modelOf }), message });
         const held: Response = { key: requestId, model: modelOf, message, own: output ?? 0, residual: 0 };
-        span.push(held);
         responses.push(held);
       }
     } else if (type === 'tool.execution_start') {
@@ -305,17 +304,17 @@ export const eventLines = (text: string, fallbackId: string): Obj[] => {
       const main = isObj(agents.main) && isObj(agents.main.modelMetrics) ? agents.main.modelMetrics : undefined;
       const metrics = main ?? (isObj(data.modelMetrics) ? data.modelMetrics : {});
       for (const [name, value] of Object.entries(metrics)) {
-        const usage = isObj(value) && isObj(value.usage) ? value.usage : undefined;
-        const last = span.findLast((candidate) => candidate.model === name);
-        const first = last === undefined ? undefined : span.find((candidate) => candidate.key === last.key);
-        if (usage === undefined || first === undefined || totaled.has(name)) continue;
-        totaled.add(name);
-        first.message.usage = { ...usageOf(usage), output_tokens: 0 };
-        // Output the responses did not report themselves is the total less what they did.
-        first.residual = Math.max(0, (num(usage.outputTokens) ?? 0) - span.filter((candidate) => candidate.model === name).reduce((sum, candidate) => sum + candidate.own, 0));
+        if (isObj(value) && isObj(value.usage)) totals.set(name, value.usage);
       }
-      span = [];
     }
+  }
+  // Each model's last totals go on the first line of that model's last response; output beyond what all of its responses reported is the residual.
+  for (const [name, usage] of totals) {
+    const last = responses.findLast((candidate) => candidate.model === name);
+    const first = last === undefined ? undefined : responses.find((candidate) => candidate.key === last.key);
+    if (first === undefined) continue;
+    first.message.usage = { ...usageOf(usage), output_tokens: 0 };
+    first.residual = Math.max(0, (num(usage.outputTokens) ?? 0) - responses.filter((candidate) => candidate.model === name).reduce((sum, candidate) => sum + candidate.own, 0));
   }
   // Extract counts a response's usage once, from its first line, so that line carries the output of every chunk of the response.
   for (const first of responses) {

@@ -549,7 +549,7 @@ holds no usage and no transcript path, and it sees only what runs after install,
 session is warned about by name and skipped, never fatal. The one hand run that would settle it: on a machine with a Copilot account, run one `copilot -p "<task>" --allow-all-tools` task (the flag lets a non-interactive run execute the command and the edit) that
 makes one prompt, runs one command that exits nonzero (for example `ls /nonexistent`), and edits one file, then `oars sessions deposit --allow copilot` and
 `oars sessions verify --strict`. It is settled only if the session count is nonzero, there are zero violations, the session holds an `error` tool record for that
-command with a matching error line, and usage is nonzero (it is written only at a clean exit).
+command with a matching error line, and usage is nonzero (it is written only at a clean exit). To check the resume case, resume that session (`copilot --resume`), send one more prompt, and exit: it is cumulative only if the second `session.shutdown`'s `usage` is at least the first's, and the chunk case holds only if a multi-chunk response's summed `outputTokens` does not exceed the shutdown's.
 
 - **Where.** `$COPILOT_HOME`, else `~/.copilot` (`%USERPROFILE%\.copilot` on Windows): `session-state/<sessionId>/events.jsonl`, one JSON event per line:
   `{id, parentId, timestamp, type, data}`. Rotated `events.N.jsonl` archives (when `COPILOT_SESSION_EVENT_LOG_ROTATION_BYTES` is set) and the pre-October-2025
@@ -566,12 +566,16 @@ command with a matching error line, and usage is nonzero (it is written only at 
   from each `assistant.message`, and the input, cache, and reasoning totals from `session.shutdown.modelMetrics` land once, on the first line of the model's last response (one model call may be several `assistant.message` chunks sharing a `requestId`/`apiCallId`; they are one
   response). They are read from `agentMetrics.main` when the runtime writes it, because the session-wide `modelMetrics` include subagents, else from `modelMetrics`;
   output the responses did not report is the total less what they did. A rotated head's `checkpoint: true` events are read like any other (the archives are not).
-  Totals are taken from a model's first `session.shutdown` only: the schema calls `ShutdownModelMetricUsage` "across all requests to this model" and the shutdown's API time "during the session"
-  (`session-events.ts:4364-4376`, `:4019`), and says nothing on whether a resumed session's later shutdown restarts or continues the count, so later ones are not added or substituted (unknown). Whether `inputTokens`
-  includes `cacheReadTokens` is unknown too: the schema says only "Total input tokens consumed" next to "Total tokens read from prompt cache" (`:4374`, `:4366`), so the two are kept as the schema gives them, with no subtraction.
+  `inputTokens` already includes the cache reads and writes (github/copilot-sdk @ d28a136 `docs/features/usage-and-billing.md:58`: "`inputTokens` already includes `cacheReadTokens` and
+  `cacheWriteTokens`, so do not add them to it. The uncached part of the input is `inputTokens - cacheReadTokens - cacheWriteTokens`", the same at `:679` for `getMetrics`, and
+  `docs/features/streaming-events.md:717` makes the shutdown's `modelMetrics` the same `ModelMetric`), so the stored input is that uncached part and the cache fields are kept apart, as capture's are.
+  A model's totals are taken from its last `session.shutdown`, replacing earlier ones rather than adding to them. Cited: usage totals "belong to a session ... retains its usage and history for resume"
+  and are "running totals for the whole session" (`usage-and-billing.md:36`, `:671`), a "Durable session usage checkpoint for reconstructing aggregate accounting on resume" (`session-events.ts:4450`),
+  "Accumulated session usage metrics" (`:4042`), and the shutdown holds that same accounting state (`:3945-3949`). Inferred: no line says outright that a resumed session's `session.shutdown.modelMetrics`
+  continues the earlier count, but all of it points to cumulative, so the last shutdown is the right one. The totals go on the first line of the model's last response, and the output beyond what all of that model's responses reported is the residual.
   The main conversation's metrics are `agentMetrics.main.modelMetrics` (the schema: "The main conversation uses the stable key `main`", `:3951`), each model's entry a `ShutdownModelMetric` with `usage` (`:4313-4332`). A chunk's `outputTokens`
   is "completion_tokens" of the API response (`:7985`), which does not say whether chunks of one response split it or repeat it; the reader sums them. An `assistant.message` with empty content and no tool requests is dropped with its `outputTokens`
-  (the schema splits chunks one per reasoning boundary), so a session with no shutdown loses that output. The hand run checks all three against a live store: input against cache reads, a resumed session's second shutdown, and chunk output sums against the shutdown total.
+  (the schema splits chunks one per reasoning boundary), so a session with no shutdown loses that output. The hand run checks two against a live store: that a resumed session's second shutdown continues the first, and chunk output sums against the shutdown total.
   A session that never shut down (a crash) has output tokens only. Subagent events (`agentId`, or the deprecated `parentToolCallId`) are skipped; the parent's `task` call is kept. Torn lines are counted as
   unparseable; a file with no parseable line is unreadable. Idempotent per session (`copilot/<id>` in `state.json`, size and mtime).
 

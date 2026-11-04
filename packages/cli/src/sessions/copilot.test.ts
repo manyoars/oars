@@ -68,7 +68,7 @@ describe('the Copilot CLI reader', () => {
     expect(out.session.env.harness).toBe('1.0.105');
     expect(out.session.models).toEqual({ 'claude-sonnet-4.5': 3 });
     // Input, cache, and reasoning come from the shutdown totals and land once, on the last response of that model; output is the sum of the responses' own.
-    expect(out.session.usage).toMatchObject({ input: 900, cacheRead: 400, cacheWrite: 100, output: 60, thinking: 7 });
+    expect(out.session.usage).toMatchObject({ input: 400, cacheRead: 400, cacheWrite: 100, output: 60, thinking: 7 });
     expect(out.tools.map((tool) => [tool.tool, tool.status])).toEqual([['Bash', 'ok'], ['Edit', 'ok'], ['Edit', 'ok']]);
     expect(out.session.files).toEqual(expect.arrayContaining(['src/a.ts', 'docs/b.md']));
     expect(out.errorLines).toEqual([]);
@@ -108,11 +108,12 @@ describe('the Copilot CLI reader', () => {
     expect(capture(lines.map((entry) => JSON.stringify(entry)).join('\n')).session.usage).toMatchObject({ input: 10, output: 40 });
   });
 
-  it('applies the totals of a model from the first shutdown only, because the schema does not say whether a later one is cumulative across a resume', () => {
-    const usage = (inputTokens: number) => ({ m1: { requests: {}, usage: { inputTokens, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 } } });
-    const lines = eventLines(asText([start(), prompt(1, 'a'), say(2, 'one', { model: 'm1' }), shutdown(3, usage(10)), prompt(4, 'b'), say(5, 'two', { model: 'm1' }), shutdown(6, usage(25))]), 's');
+  it('takes the totals of a model from its last shutdown, which is cumulative across a resume, and lands them once on its last response', () => {
+    const usage = (inputTokens: number, outputTokens: number) => ({ m1: { requests: {}, usage: { inputTokens, outputTokens, cacheReadTokens: 0, cacheWriteTokens: 0 } } });
+    const lines = eventLines(asText([start(), prompt(1, 'a'), say(2, 'one', { model: 'm1', outputTokens: 4 }), shutdown(3, usage(10, 4)), prompt(4, 'b'), say(5, 'two', { model: 'm1', outputTokens: 6 }), shutdown(6, usage(25, 12))]), 's');
     const usages = lines.filter((entry) => entry.type === 'assistant').map((entry) => (typeof entry.message === 'object' && entry.message !== null && 'usage' in entry.message ? entry.message.usage : undefined));
-    expect(usages).toEqual([expect.objectContaining({ input_tokens: 10 }), undefined]);
+    // The second shutdown replaces the first rather than adding to it; its output beyond the responses' own (12 - 10) lands on the last response.
+    expect(usages).toEqual([{ output_tokens: 4 }, expect.objectContaining({ input_tokens: 25, output_tokens: 8 })]);
   });
 
   it('keeps the output as the error line when the exit code is -1, which is no exit status', () => {
@@ -173,7 +174,8 @@ describe('the Copilot CLI reader', () => {
       's',
     );
     const usages = lines.filter((entry) => entry.type === 'assistant').map((entry) => (typeof entry.message === 'object' && entry.message !== null && 'usage' in entry.message ? entry.message.usage : undefined));
-    expect(usages).toEqual([undefined, { input_tokens: 10, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, output_tokens: 5 }, undefined]);
+    // The totals are the model's latest, so they sit on its last response overall (a line after the shutdown included); the responses' own output stays where it was.
+    expect(usages).toEqual([undefined, { output_tokens: 5 }, { input_tokens: 10, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, output_tokens: 0 }]);
   });
 
   it('gives a prompt with a missing, relative, or earlier stamp the latest time so far, never an earlier one', () => {
@@ -248,7 +250,7 @@ describe('the Copilot CLI reader, fix round 1', () => {
       's',
     );
     expect(lines.filter((entry) => entry.type === 'assistant').map((entry) => entry.requestId)).toEqual(['r1', 'r1']);
-    expect(capture(lines.map((entry) => JSON.stringify(entry)).join('\n')).session.usage).toMatchObject({ input: 100, cacheRead: 20, output: 7 });
+    expect(capture(lines.map((entry) => JSON.stringify(entry)).join('\n')).session.usage).toMatchObject({ input: 80, cacheRead: 20, output: 7 });
     expect(eventLines(asText([start(), say(2, 'x', { apiCallId: 'api9', messageId: 'mm' })]), 's').find((entry) => entry.type === 'assistant')?.requestId).toBe('api9');
   });
 
