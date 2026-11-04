@@ -118,7 +118,7 @@ pattern and entropy, emails, and the domains named with `--redact-domain`) befor
 | Record | Fields | Class |
 |--------|--------|-------|
 | every capture record | `kind`, `cv`, `rev`, `sid` | P |
-| `session` (one per transcript) | `agentType` (set on a subagent transcript), `harness` (set on a Cursor session; absent reads as Claude Code), `bytes`, `lines`, `badLines`, `userTurns`, `assistantTurns`, `versions`, `models`, `bashCmds`, `compactSummaries`, `costUsd`, `usage`, `env` (below) | P |
+| `session` (one per transcript) | `harness` (set on a Cursor session; absent reads as Claude Code), `bytes`, `lines`, `badLines`, `userTurns`, `assistantTurns`, `versions`, `models`, `bashCmds`, `compactSummaries`, `costUsd`, `usage`, `env` (below) | P |
 | | `agentType` (set on a subagent transcript; a custom agent's name is private), `frame`, `frameId` (the joined frame is one value that links rows; its fields pool only as cells), `session`, `parent`, `spawnedBy`, `spawnedIn` (join ids), `at`, `tsFirst`, `tsLast`, `promptFingerprint`, `repo`, `tools` (native names, which can hold a private MCP server's), `fileHashes`, `urls`, `searches`, `branches`, `tldrs` (400 chars), `confidences` (120 chars) | A |
 | | `project` (the folder slug, with the username and directory names), `files` (the paths as written, redacted) | L |
 | `user-prompt` (one per prompt) | `index`, `opened` (`typed` or `command`; absent before CAPTURE 10, when only a typed line opened a prompt), `wallSec`, `thinking`, `turns`, `model`, `efforts`, `usage` | P |
