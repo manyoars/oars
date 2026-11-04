@@ -104,6 +104,17 @@ describe('the VS Code Copilot Chat reader', () => {
     expect(out.session.tsFirst).toBe(iso(1));
   });
 
+  it('gives every public tool name a row: a notebook edit is an edit that touches its file, a directory is a write, terminal driving and a kernel run are other with the name kept, and a skill is a skill', () => {
+    // toolNames.ts lists `edit_notebook_file`, `create_directory`, `send_to_terminal`, `run_notebook_cell`, and `skill`; the notebook edit part is `kind:'notebookEditGroup'` (model/chatModel.ts:1321,1331).
+    const notebook = { kind: 'notebookEditGroup', uri: { scheme: 'file', path: '/work/app/n.ipynb' }, edits: [], done: true };
+    const out = extractOf(
+      chat([request(1, 'x', [tool('c1', 'edit_notebook_file'), notebook, tool('c2', 'copilot_createDirectory'), tool('c3', 'send_to_terminal'), tool('c4', 'run_notebook_cell'), tool('c5', 'skill'), tool('c6', 'runTests')])]),
+    );
+    expect(out.tools.map((entry) => entry.steps?.[0]?.action)).toEqual(['file.edit', 'file.write', 'other', 'other', 'skill.run', 'other']);
+    expect(out.tools.map((entry) => entry.steps?.[0]?.native)).toEqual(['edit_notebook_file', 'copilot_createDirectory', 'send_to_terminal', 'run_notebook_cell', 'skill', 'runTests']);
+    expect(out.session.files).toHaveLength(1);
+  });
+
   it('records a shell call that exited nonzero as an error from its exit code, whatever the error field says, with the output as its error line', () => {
     const out = extractOf(chat([request(1, 'run it', [shell('c1', 'make', { exitCode: 2 }, 'make: *** No rule to make target\nsecond'), shell('c2', 'true', { exitCode: 0 }, 'fine', { resultError: 'a status that says failed' })])]));
     expect(out.tools).toMatchObject([
