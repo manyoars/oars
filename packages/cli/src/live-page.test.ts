@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { describePage } from './live-page.js';
+import { describePage, step } from './live-page.js';
 
 describe('describePage', () => {
   it('names the title and the URL path only', () => {
@@ -11,5 +11,46 @@ describe('describePage', () => {
   it('does not throw on a URL it cannot parse', () => {
     expect(describePage('', 'about:blank?x=1')).toBe('page "" at blank');
     expect(describePage('Blank', 'not a url?secret=1')).toBe('page "Blank" at (unparsable URL)');
+  });
+});
+
+const failureOf = async (outcome: Promise<void>): Promise<Error> => {
+  try {
+    await outcome;
+  } catch (error) {
+    if (error instanceof Error) return error;
+  }
+  throw new Error('The step did not reject.');
+};
+
+describe('step', () => {
+  const page = { title: () => Promise.resolve('Sign in'), url: () => 'http://x/realms/aor?user_code=ABCD' };
+
+  it('keeps the Playwright call log, with the device code and typed values, out of the thrown error', async () => {
+    const callLog = ['Timeout 30000ms exceeded.', 'Call log:', '  - navigating to "http://x/device?user_code=ABCD"', '  - fill("secret")'];
+    const failure = new Error(callLog.join(String.fromCharCode(10)));
+    failure.name = 'TimeoutError';
+    const thrown = await failureOf(step(page, 'sign in', () => Promise.reject(failure)));
+    expect(thrown.message).toBe('The device approval stopped at "sign in" on page "Sign in" at /realms/aor (TimeoutError).');
+    expect(thrown.message).not.toMatch(/ABCD|secret|navigating|fill\(/);
+    expect(thrown.cause).toBeUndefined();
+    expect(Object.values(thrown).join(' ')).not.toMatch(/ABCD|secret/);
+  });
+
+  it('names a rejection that is not an Error', async () => {
+    const foreign = new Error('secret');
+    Object.setPrototypeOf(foreign, null);
+    const thrown = await failureOf(step(page, 'open', () => Promise.reject(foreign)));
+    expect(thrown.message).toBe('The device approval stopped at "open" on page "Sign in" at /realms/aor (Error).');
+  });
+
+  it('passes a successful action through', async () => {
+    await expect(step(page, 'ok', () => Promise.resolve())).resolves.toBeUndefined();
+  });
+
+  it('survives a title lookup that fails', async () => {
+    const closed = { title: () => Promise.reject(new Error('closed')), url: () => 'http://x/a' };
+    const thrown = await failureOf(step(closed, 'x', () => Promise.reject(new Error('e'))));
+    expect(thrown.message).toContain('page "" at /a');
   });
 });
