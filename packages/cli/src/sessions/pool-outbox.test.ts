@@ -31,6 +31,12 @@ describe('canonical bytes', () => {
     expect(Buffer.from(canonicalBytes(reordered)).equals(Buffer.from(BYTES, 'utf8'))).toBe(true);
   });
 
+  it('sort integer-like keys as strings, not as numbers, and write a value JSON cannot hold as JSON does', () => {
+    expect(canonicalBytes({ 10: 'b', 9: 'a', b: 1, a: 2 })).toBe('{"10":"b","9":"a","a":2,"b":1}\n');
+    expect(canonicalBytes({ a: undefined, b: [undefined, 1], c: null })).toBe('{"b":[null,1],"c":null}\n');
+    expect(canonicalBytes(undefined)).toBe('null\n');
+  });
+
   it('hash to a pinned SHA-256, over the UTF-8 bytes', () => {
     expect(batchHash(BYTES)).toBe(HASH);
     expect(createHash('sha256').update(Buffer.from(BYTES, 'utf8')).digest('hex')).toBe(HASH);

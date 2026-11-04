@@ -397,6 +397,8 @@ export const poolDeposit = async (deps: RunDeps, options: { server?: string | un
   // A client past `registry_max_age` builds no batch (spec Section 1.3): its sessions wait in `A` and nothing is lost. This comes before anything is written or sent.
   const expired = vocabularyExpired(deps);
   if (expired !== undefined) throw expired;
+  // Accepting the covenant is a step of sending, which is disabled in this release: say so rather than exit 0 as though it was accepted.
+  if (options.send === undefined && options.acceptCovenant !== undefined) throw usage('--accept-covenant belongs to --send, and sending is disabled in this release. Nothing was accepted.', DEPOSIT);
   const outbox = outboxFolder(runtime.storeDir, server);
   if (options.send !== undefined) return sendBatch(deps, { outbox, server, token, hash: options.send, acceptCovenant: options.acceptCovenant, via: options.via });
   const { terms } = exclusionPaths(runtime.projectsRoot, deps.env);
@@ -480,8 +482,8 @@ export const poolOutbox = async (deps: RunDeps, options: { server?: string | und
   const stale = await staleBatches(outbox);
   const blocks = shown.map(({ hash, request, fields }) => [request, `sha256: ${hash}`, ...Object.entries(fields ?? {}).map(([field, row]) => `  ${field}: ${row}`)].join('\n'));
   const notes = [
-    ...(edited === 0 ? [] : [`${String(edited)} batches were edited on disk since they were written and are not printed or sent. Run oars pool deposit to build them again.`]),
-    ...(stale === 0 ? [] : [`${String(stale)} batches were built under an older vocabulary or field list and will never be sent.`]),
+    ...(edited === 0 ? [] : [`${String(edited)} ${edited === 1 ? 'batch was' : 'batches were'} edited on disk since ${edited === 1 ? 'it was' : 'they were'} written and ${edited === 1 ? 'is' : 'are'} not printed or sent. Run oars pool deposit to build ${edited === 1 ? 'it' : 'them'} again.`]),
+    ...(stale === 0 ? [] : [`${String(stale)} ${stale === 1 ? 'batch was' : 'batches were'} built under an older vocabulary, field list, or skeleton format and will never be sent.`]),
   ];
   const text = shown.length === 0 ? ['The outbox is empty. Run oars pool deposit first.', ...notes].join('\n') : [...blocks, ...notes].join('\n\n');
   return { document: { ok: true, server, batches: shown, edited, stale }, text };

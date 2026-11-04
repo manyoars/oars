@@ -870,6 +870,13 @@ describe('oars pool deposit --send', () => {
     expect(pool.requests).toEqual([]);
   });
 
+  it('refuses --accept-covenant without --send, as a usage error, and sends nothing', async () => {
+    const scene = await batched();
+    expect(await scene.cli('pool', 'deposit', '--server', POOL, '--accept-covenant', 'v1', '--json')).toBe(ExitCode.USAGE);
+    expect(JSON.stringify(scene.document())).toContain('--accept-covenant belongs to --send');
+    expect(scene.seen).toEqual([]);
+  });
+
   it('is disabled from the command line: every check runs, and then it refuses with no request made', async () => {
     const scene = await batched();
     const hash = await printedAndHash(scene);
@@ -981,11 +988,11 @@ describe('oars pool outbox --explain and older batches', () => {
     const old = await writeBatch(outbox, 'dddddddddddddddd', { format: 1, id: 'old', transcripts: [] }, 'v0-00000000');
     expect(await scene.cli('pool', 'outbox', '--server', POOL)).toBe(ExitCode.OK);
     expect(printedHashes(scene)).not.toContain(old.hash);
-    expect(scene.h.out.join('')).toContain('1 batches were built under an older vocabulary or field list and will never be sent.');
+    expect(scene.h.out.join('')).toContain('1 batch was built under an older vocabulary, field list, or skeleton format and will never be sent.');
     await expect(poolDeposit(scene.h.deps, sendOptions(old.hash, wire({}).via))).rejects.toMatchObject({ problem: { code: 'batch_unknown' } });
     scene.h.out.length = 0;
-    expect(await scene.cli('pool', 'deposit', '--server', POOL, '--json')).toBe(ExitCode.OK);
-    expect(scene.document()).toMatchObject({ discarded: 1 });
+    expect(await scene.cli('pool', 'deposit', '--server', POOL)).toBe(ExitCode.OK);
+    expect(scene.h.out.join('')).toContain('Discarded 1 batch built under an older vocabulary or field list.');
     expect(existsSync(old.folder)).toBe(false);
   });
 
@@ -997,7 +1004,7 @@ describe('oars pool outbox --explain and older batches', () => {
     expect(await scene.cli('pool', 'outbox', '--server', POOL)).toBe(ExitCode.OK);
     expect(printedHashes(scene)).not.toContain(edited);
     expect(printedHashes(scene)).toHaveLength(outboxFiles(scene).length - 1);
-    expect(scene.h.out.join('')).toContain('1 batches were edited on disk');
+    expect(scene.h.out.join('')).toContain('1 batch was edited on disk since it was written and is not printed or sent.');
   });
 });
 

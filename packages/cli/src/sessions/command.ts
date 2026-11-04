@@ -293,7 +293,8 @@ export const sessionsVerify = async (deps: SessionsDeps, options: { session: str
     // A verify that got here has succeeded, so a verify streak is the one this run ends and is not listed.
     const stuck = stuckSteps(await readSteps(storeDir).catch((): StepRow[] => [])).filter((entry) => entry.step !== 'verify');
     const scope = await scopeOf(runtime);
-    const staleBatches = await staleBatchesAnywhere(storeDir);
+    // A local count like the scope: an outbox folder that cannot be read is no reason for `verify` to fail.
+    const staleBatches = await staleBatchesAnywhere(storeDir).catch(() => 0);
     const report: VerifyReport = { sessions: skeletons.length, unreadable, cvFrozen: frozen.size, scope, invariants: results.map((result) => ({ ...result, pass: result.violations === 0 })), stuck, sessionResults, audit, selfBaseline, staleBatches };
     const failed = [...results.filter((result) => result.violations > 0).map((result) => result.name), ...(unreadable > 0 ? ['unreadable skeletons'] : []), ...merkleFailed, ...stuck.map((entry) => `stuck: ${entry.step}`)];
     const stuckLines = stuck.map((entry) => `FAIL  ${entry.step} is stuck: key ${entry.key} failed ${String(entry.runs)} runs in a row: ${entry.error}`);
