@@ -22,15 +22,21 @@ export interface Env {
   SLICE_SIGNING_KEY?: string;
   /** Unset keeps deposits closed (V10). */
   COVENANT_VERSION?: string;
-  /** How many reads an account with no deposit may be served. */
-  READ_CAP?: string;
+  /** How many bundles an account without access may fetch in one ISO week. */
+  FETCH_CAP?: string;
   MAX_DEPOSITS_PER_ACCOUNT?: string;
   MAX_DEPOSIT_BYTES_PER_ACCOUNT?: string;
 }
 
-export const answer = (status: number, body: object): Response => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
+/** The response headers this worker sets: the ETag of a bundle and the `Retry-After` of a spent cap. */
+export interface AnswerHeaders {
+  etag?: string;
+  'retry-after'?: string;
+}
 
-export const refuse = (status: number, error: string, message: string, field?: string): Response => answer(status, { error, message, ...(field === undefined ? {} : { field }) });
+export const answer = (status: number, body: object, headers: AnswerHeaders = {}): Response => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json', ...headers } });
+
+export const refuse = (status: number, error: string, message: string, field?: string, headers?: AnswerHeaders): Response => answer(status, { error, message, ...(field === undefined ? {} : { field }) }, headers);
 
 /** A binding with a value; an empty one counts as unset, the way a blank secret should. */
 export const bound = (value: string | undefined): string | undefined => (value === undefined || value === '' ? undefined : value);

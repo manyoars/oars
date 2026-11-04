@@ -1,3 +1,4 @@
+// A live read's baseline is not traceable through lineage: the read cites only the sliced day's cells, and `value.baseline` comes from cells it does not cite.
 // The read (t756, recall spec Section 2.6): any derived value, citing its inputs. A read's ID is the hash of its content and a read never changes, so
 // a recall can cite one and lineage can walk back from it. Its order is computed from its inputs and has no ceiling: a cell is 0 and a read is one more
 // than the highest order it cites, so a read over reads needs nothing here that a read over cells does not.
@@ -35,7 +36,7 @@ export const METHODS: { readonly [family in Family]: { readonly name: string; re
   fit: { name: 'failure-rate', version: '1' },
   cost: { name: 'per-prompt-by-class', version: '1' },
   change: { name: 'share-in-version-bucket', version: '1' },
-  live: { name: 'day-against-trailing-week', version: '1' },
+  live: { name: 'day-against-trailing-week', version: '2' },
   adoption: { name: 'share-and-span', version: '1' },
   method: { name: 'shape-share-by-model', version: '1' },
   'next-step': { name: 'next-action-counts', version: '1' },

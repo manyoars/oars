@@ -10,18 +10,20 @@ Every command takes the server from `--server <url>` or `OARS_POOL_URL`. There i
 |---------|--------------|
 | `oars pool login --provider github\|google` | Device flow through the pool. It saves the pool's own token at `<store>/pool-accounts.json` (mode 0600) and pins the pool's signing key on first login. No harness token is read. |
 | `oars pool deposit [--accept-covenant <version>]` | Sends every session that passes the exclusion check as a skeleton, and prints counts only. A session that fails the check, or has no raw to scan, is never built or sent. |
-| `oars pool pull [--stack <name>]` | Fetches one stack's signed slice, verifies it against the pinned key, and keeps it at `<store>/pool-replica/<hash of server>/<stack>.json`, still signed. A slice that fails verification is refused and not written. |
+| `oars pool pull --harness-version <version>` | Fetches that harness version's signed bundle, verifies it against the pinned key, and keeps it at `<store>/pool-replica/<hash of server>/<version>.json`, still signed. A bundle that fails verification, or is for another version, is refused and not written. The version must be a public one; nothing is keyed by stack. |
 
 ## What the server enforces
 
 - **Deposits are closed by default.** With no `COVENANT_VERSION` binding, every deposit gets 403 `deposits_closed`. Once one is set, an account must have accepted exactly that version, or it gets 403 `covenant_not_accepted`, and a new version asks again. Reads and `pull` are not affected.
 - **Closed vocabulary.** A skeleton holding an unknown field or a value outside the vocabulary gets 422 `closed_vocabulary` with the field named, and nothing is stored. What is stored is the parsed skeleton, not the text that came in.
 - **Pseudonymous accounts.** The provider's user id is hashed under `PSEUDONYM_KEY`, which the database never holds. No email, login, or provider id is stored.
-- **Three accounts to a read.** A read is served only at 3 or more clusters, and a cluster is an account, so one account's many sessions count once. The floor applies to the read's aggregate: its `clusters` is the distinct accounts across all the cells it cites, so three accounts on three different days serve a read even though each day's cell holds one. A cell served on its own needs 3 accounts in that cell.
-- **Deposit or capped access.** An account with a deposit pulls on an ongoing basis. One without is served up to `READ_CAP` reads (default 50), and past that gets 403 `read_cap` before the pool is read.
-- **A deposit holds something.** A skeleton with no prompt and no tool gets 422 `closed_vocabulary` naming `transcripts`, since a deposit is what lifts the read cap. A forged skeleton that holds invented prompts still counts.
-- **Deposits per account.** Past `MAX_DEPOSITS_PER_ACCOUNT` rows (default 20,000) a new session gets 403 `deposit_limit`, and so does any deposit that would take the account past `MAX_DEPOSIT_BYTES_PER_ACCOUNT` stored bytes (default 64 MB). A redeposit of a held session replaces it if the account still fits. Every pull parses every row, so these bound one account's share of a pull's cost. They do not bound the pool: a pull still loads every matching row across all accounts at once.
-- **A frame's day is real and not ahead of the server.** A day that is not a calendar date, or is later than tomorrow UTC, gets 422 `closed_vocabulary` naming the field, since the latest day sets a slice's `asOf`.
+- **Five accounts to a read.** A read is served only at 5 or more clusters (`K_CELL` in `packages/pool/src/derive.ts`, the spec's proposal, which a later decision may move), and a cluster is an account, so one account's many sessions count once. The floor applies to the read's aggregate: its `clusters` is the distinct accounts across all the cells it cites, so five accounts on five different days serve a read even though each day's cell holds one. A cell served on its own needs 5 accounts in that cell, and a strata cell needs 5 accounts pool-wide. A `live` read cites only the sliced day's cells, so its floor counts the accounts on that day and never the accounts in its seven-day baseline; the baseline takes the same floor on its own, and under it `value.baseline` and `value.ratio` are `null`.
+- **A fetch cap.** Every account may fetch `FETCH_CAP` bundles (default 1) per ISO week, counted per account and not per harness version. Past it the pool answers 429 `fetch_cap` with `Retry-After` in seconds to the next Monday 00:00 UTC, before it reads the pool. The count is one atomic statement, and a count from an earlier week is dropped. An account with access is not capped.
+- **Access.** The `access` record is null, `pending`, or `standing`, and only a counting batch sets it: ingested at tier committed or higher, or at `skeleton` when every transcript's harness writes no raw file (Cursor), with one prompt and one tool step over the batch, subagents folded in, and at least one derived cell. It is `pending` while it rests on batches inside `ledger_days` (90), clears when every one falls to `none`, and is `standing` once one has stood the 90 days. A resend that still counts keeps a batch's first `counted_at`; one that no longer counts clears it, and the flag falls if no counting batch is left. Until a wire carries a root, ingest writes tier `skeleton` only, so a claude-code batch cannot lift the cap yet.
+- **A 304 spends nothing.** A 200 carries an `ETag` that names the code, the floor, the version asked for, and a generation of the pool's rows (a trigger on `deposits` moves it in the same write as a change). An `If-None-Match` that holds it gets 304 with no body, before the spend and without reading the pool, so a conditional request can neither use up a fetch nor force a parse. A weakened `W/` tag matches.
+- **A deposit holds something.** A skeleton with no prompt and no tool gets 422 `closed_vocabulary` naming `transcripts`, since only a counting batch lifts the fetch cap (see Access). A forged skeleton that holds invented prompts passes this check, and it lifts the cap only if it names a harness that writes no raw file.
+- **Deposits per account.** Past `MAX_DEPOSITS_PER_ACCOUNT` rows (default 20,000) a new session gets 403 `deposit_limit`, and so does any deposit that would take the account past `MAX_DEPOSIT_BYTES_PER_ACCOUNT` stored bytes (default 64 MB). A redeposit of a held session replaces it if the account still fits. Every pull parses every row, so these bound one account's share of a pull's cost. They do not bound the pool: a pull still loads every row across all accounts at once.
+- **A frame's day is real and not ahead of the server.** A day that is not a calendar date, or is later than tomorrow UTC, gets 422 `closed_vocabulary` naming the field, since the latest day sets a bundle's `asOf`.
 
 ## Routes
 
@@ -31,7 +33,7 @@ Every command takes the server from `--server <url>` or `OARS_POOL_URL`. There i
 | `GET /v1/covenant` | `{version, accepted}`. `version` is null when deposits are closed. Sign-in is optional. |
 | `POST /v1/covenant/accept` | Takes `{version}`. 409 `covenant_version` for any version but the one in force. |
 | `POST /v1/deposits` | Takes one skeleton, 1 MB at most. A larger one gets 413 `too_large`, unread when it declares its length. |
-| `GET /v1/slices/:stack` | A signed slice: `{payload, signature}`, Ed25519 over the payload's exact bytes. |
+| `GET /bundle/:harnessVersion/:vocabVersion` | A signed bundle for one harness version: `{payload, signature}`, Ed25519 over the payload's exact bytes. The request names no family. It holds the cells for that version's bucket and the reads the pool derives today (fit without call shape, cost, change, live, adoption, method, and next-step; recovery, tool-day, and reads above order 1 are not served), plus rule 3's strata cells (language, framework, and repo size) counted pool-wide. 401 with no valid credential, 400 `unknown_harness_version` or `unknown_vocab_version` by name, 404 for any other path. The old `/v1/slices/:stack` route is gone. |
 
 ## Bindings
 
@@ -44,13 +46,17 @@ All of these are set at the deploy, never in `wrangler.jsonc`, which holds no ac
 | `SLICE_SIGNING_KEY` | An Ed25519 private key as a JWK. Clients pin the public half, so changing it fails their next login. |
 | `GITHUB_CLIENT_ID`, `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | The OAuth values. |
 | `COVENANT_VERSION` | The covenant in force. Leave it unset until the covenant is published. |
-| `READ_CAP` | Optional. Reads served to an account with no deposit. |
+| `FETCH_CAP` | Optional. Bundles one account may fetch per ISO week; a value that is not a positive whole number is 1. |
 | `MAX_DEPOSITS_PER_ACCOUNT` | Optional. Rows one account may hold. |
 | `MAX_DEPOSIT_BYTES_PER_ACCOUNT` | Optional. Stored bytes one account may hold. |
 
 ## Tests
 
 `packages/pool` runs the bundled handler and its D1 store under the Workers runtime through Miniflare, in-process, with a stub sign-in provider, so it needs no Docker, account, or network. `full-run.test.ts` drives the real CLI commands against it over a local socket.
+
+## Known gaps
+
+A live read's baseline is not traceable through lineage: the floor counts only the sliced day's cells, so the read cites those and states `value.baseline` from cells it does not cite. A separate citation field that the floor does not count is new surface with no reader asking for it.
 
 ## Deploy steps
 
