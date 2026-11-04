@@ -12,6 +12,8 @@
 // Version 13 (CAPTURE 13, t826) changes three stored values: the email mask keeps a plain dotted version after `npm:` or `jsr:` (a pinned alias keeps its pick),
 // a block word in another case or a wrapper in another case or by path is skipped to reach the real program, and a `segments` `run` whose program basename holds
 // whitespace stores `<literal>`. It also settles the two stored forms of a `copilot` step at version 12. EXTRACTOR stays 11.
+// Version 14 (CAPTURE 14) adds the optional `errorCode`, `packages`, and `manifest` to a tool call and the optional `stack` strata to the file record and the prompt
+// record, all read from the transcript. It changes no value captured before, so EXTRACTOR stays 11.
 //
 // Version 10 (CAPTURE 10, t768) gives a turn opened by a slash command or a skill a `user-prompt` record, adds `opened` to that record, and moves `skills`
 // from class P to class A, since a skill's name can be private. It changed no derivation, so it leaves EXTRACTOR at 9.
@@ -63,7 +65,7 @@ import type { RepoSize } from './public-vocabulary.js';
 import type { SessionFunnel, SessionSetup, SessionTrust } from './session-shape.js';
 
 /** Stamped `cv` on every captured record. Bump it when the captured field list changes or a stored value of an existing captured record or skeleton changes: a bump re-reads every transcript. */
-export const CAPTURE_VERSION = '13';
+export const CAPTURE_VERSION = '14';
 
 /** Capture versions the reader derives from. A version-3 record is upgraded on read; a newer one is read for the fields this code knows. */
 export const OLDEST_READABLE_CAPTURE = 3;
@@ -83,6 +85,15 @@ export const FILES_PER_SESSION_MAX = 100;
 export const PROMPT_CLASSES = ['no-tools', 'orchestration', 'research', 'edit-verify', 'edit-only', 'explore-only', 'shell-only', 'mixed'] as const;
 export type PromptClass = (typeof PROMPT_CLASSES)[number];
 
+/** The statuses agents recover from differently (pool vocabulary spec Section 7); any other status is `other`. */
+export const HTTP_STATUSES = ['400', '401', '403', '404', '408', '409', '413', '429', '500', '502', '503', '504', '529'] as const;
+/** A shell exit status by what the agent does next: success flagged as failure, the two common failures, not executable, not found, a signal (129 to 192), and the rest. */
+export const EXIT_CLASSES = ['0', '1', '2', '126', '127', 'signal'] as const;
+/** What a harness says when a call fails before or without a shell: it names the harness's own refusal, never the tool's input or output. */
+export const HARNESS_ERROR_CLASSES = ['user-rejected', 'interrupted', 'permission-denied', 'input-validation', 'tool-use-error', 'timeout'] as const;
+/** The `errorCode` of a failed call (class P): a member of this set, never text from the result. `other` covers an exit status or HTTP status outside the lists, and a failure that names no class. */
+export const ERROR_CODES: ReadonlySet<string> = new Set<string>([...EXIT_CLASSES, ...HTTP_STATUSES, ...HARNESS_ERROR_CLASSES, 'other']);
+
 export interface Usage {
   input: number;
   cacheWrite: number;
@@ -95,6 +106,27 @@ export type Harness = 'claude-code' | 'cursor' | 'codex' | 'copilot' | 'gemini' 
 
 /** The harness a session record came from; a record that does not name one is Claude Code's. */
 export const harnessOf = (session: { harness?: Harness }): Harness => session.harness ?? 'claude-code';
+
+/** A language's share of the files a transcript touched (pool vocabulary spec Section 7): none, incidental, secondary, primary. The lower edge is inclusive, so 10 percent is secondary and 50 is primary. */
+export const LANGUAGE_SHARES = ['0', 'under-10', '10-50', 'over-50'] as const;
+export type LanguageShare = (typeof LANGUAGE_SHARES)[number];
+
+/** A repository's tracked-file count by order of magnitude (Section 7). The lower edge is inclusive, so exactly 100 is `100-1k` and exactly 100000 is `over-100k`, as `repoSizeOf` buckets them. */
+export const REPO_FILE_BUCKETS = ['under-100', '100-1k', '1k-10k', '10k-100k', 'over-100k'] as const;
+export type RepoFilesBucket = (typeof REPO_FILE_BUCKETS)[number];
+
+/**
+ * The stack strata of a session or a prompt (CAPTURE 14, class A): kept beside `frame`, not inside `frame.stack`, because the wire refuses any extra key
+ * in a stack. `languages` lists each touched language of the pinned list (else `other`) with its share bucket, `repoFiles` is the git index's count
+ * bucketed (null when there is no index), `frameworks` are the vocabulary's frameworks that a resolved package shows, and `explore` counts the steps that
+ * only look: `file.read`, `file.search`, `web.search`, and `web.fetch`. A prompt's `explore` is its own; the rest is the file's.
+ */
+export interface Strata {
+  languages: Array<{ language: string; share: LanguageShare }>;
+  repoFiles: RepoFilesBucket | null;
+  frameworks: string[];
+  explore: number;
+}
 
 /** Where a path target is hashed from (class P): the repository root, or the line's working directory when no repository holds the path. */
 export type TargetBase = 'repo' | 'cwd';
@@ -203,6 +235,8 @@ export interface SessionObservation {
   frame?: Frame;
   /** The hash of `frame`. Class A: one value over the whole frame links rows. */
   frameId?: string;
+  /** The stack strata of the file (CAPTURE 14). Class A; absent on a record captured earlier. */
+  strata?: Strata;
   /** The harness's own `cost-state` totals when the file has one. */
   costUsd: number | null;
   /** Summed assistant usage of the file's own line (a main transcript's sidechain lines are not counted; a subagent transcript is its own line). */
@@ -399,6 +433,8 @@ export interface ToolObservation {
   targetBase: TargetBase | null;
   /** The input's key names, sorted. Class A (EXTRACTOR 11). */
   keys: string[];
+  /** The class of a failed call (`errorCodeOf`): a member of `ERROR_CODES`, never result text. Absent on a call that did not fail and on a record captured before CAPTURE 14. Class P. */
+  errorCode?: string;
   /** From the call's line to its first result's line; null when either timestamp is missing or no result is in the file. */
   durationMs: number | null;
   toolUseId: string | null;
@@ -413,6 +449,10 @@ export interface ToolObservation {
   segments?: ShellSegment[];
   /** What the call pulled (CAPTURE 6). Absent when it pulled nothing. */
   pulls?: ToolPull[];
+  /** The packages the call installs or runs, resolved; absent when it names none (CAPTURE 14). Class A. */
+  packages?: ToolPackage[];
+  /** The dependency names a call read, wrote, or edited in a manifest (CAPTURE 14). Class A. */
+  manifest?: ToolManifest;
   /** One entry per commit a clean shell call made, in order: the sha its result names, or null when it names none (CAPTURE 6). Absent when it made none. */
   commits?: Array<string | null>;
 }
@@ -423,6 +463,22 @@ export interface ShellSegment {
   run: string;
   /** Whether the call's status reports this command: false when a pipe follows it, a later `;`, `&`, newline, or `||` overrides it, or it runs in the background. */
   read: boolean;
+}
+
+/** One package a call installs or runs, as capture resolved it (class A: a private package's name identifies private work). `package` is `<ecosystem>:<name>` in the registry's spelling, `packageVersion` an exact published version or null. */
+export interface ToolPackage {
+  package: string;
+  packageVersion: string | null;
+  /** True on the first call of the session that names this package at this version (package health counts only that call). */
+  first: boolean;
+}
+
+/** What a call showed of a dependency manifest (class A, CAPTURE 14): names as `<ecosystem>:<name>`. A Read's result and a Write's content list `seen`; an Edit's text gives the names it `added` and `removed`. Absent when none is shown. */
+export interface ToolManifest {
+  file: 'package.json' | 'requirements.txt' | 'Cargo.toml';
+  seen: string[];
+  added: string[];
+  removed: string[];
 }
 
 export type PullEcosystem = 'npm' | 'pypi' | 'cargo' | 'go' | 'gem' | 'brew' | 'skill' | 'plugin' | 'mcp';
@@ -487,6 +543,8 @@ export interface UserPromptObservation {
   frame?: Frame;
   /** The hash of `frame` (`frameIdOf`). Class A (EXTRACTOR 11). */
   frameId?: string;
+  /** The stack strata of the file with this prompt's own `explore` count (CAPTURE 14). Class A; absent on a record captured earlier. */
+  strata?: Strata;
 }
 
 export type CaptureRecord = SessionObservation | UserPromptObservation | ToolObservation | ErrorLineObservation;
@@ -631,7 +689,8 @@ export type Step = (typeof STEPS)[number];
 export const TRIGGERS = ['session-start', 'pre-tool', 'post-tool', 'stop', 'nightly', 'manual', 'weekly', 'sync', 'cron', 'release', 'run-end', 'run-start'] as const;
 export type Trigger = (typeof TRIGGERS)[number];
 
-export const STEP_STATUSES = ['ok', 'error', 'skipped'] as const;
+/** `deferred` (t832): a Stop deposit that found the store locked and recorded its session in the pending list. It is neither a success nor a failed run. */
+export const STEP_STATUSES = ['ok', 'error', 'skipped', 'deferred'] as const;
 export type StepStatus = (typeof STEP_STATUSES)[number];
 
 /** Counts by record kind or type (`{"session": 1, "tool": 212}`). */

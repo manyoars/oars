@@ -16,17 +16,19 @@
 //   hook-calls.jsonl        one line per hook invocation (event, session, hit, milliseconds)
 //   hook-index.json         the recurring signatures per project and overall, for the hooks
 //   pipeline-runs.jsonl     the step log: one line per run of a pipeline step, appended when the step ends (steps.ts)
+//   pending/<hash>.<uuid>.json  one file per Stop deposit the store lock refused: the transcript path only, taken by the next deposit (pending.ts)
 import type { GoldEvaluator } from './gold-arms.js';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { createReadStream } from 'node:fs';
 import { performance } from 'node:perf_hooks';
-import { appendFile, mkdir, open, readdir, readFile, rename, rm, stat, utimes, writeFile } from 'node:fs/promises';
+import { appendFile, mkdir, open, readdir, readFile, rename, rm, stat, utimes, writeFile, type FileHandle } from 'node:fs/promises';
 import { basename, dirname, join, resolve } from 'node:path';
 import { CliError, ExitCode } from '../errors.js';
 import { compileAllow, requireEntries, slugOf } from './allow.js';
 import { SOURCES, type Source, type SourceStore } from './sources.js';
 import { buildIndex, indexPath } from './hook-index.js';
 import { archiveRaw } from './archive.js';
+import { deferSession, failPending, listPending, PENDING_HOOK_CAP, PENDING_MAX_FAILURES, removePending, sweepPendingTemps, type PendingEntry } from './pending.js';
 import { deriveSession, type SessionCapture } from './derive.js';
 import { captureRuntime, type CaptureRuntime } from './capture-runtime.js';
 import { callPositions, captureSession, type Capture, type SubagentOrigin } from './extract.js';
@@ -46,6 +48,7 @@ import {
   type PromptObservation,
   type RecallCall,
   type SessionObservation,
+  type ShellSegment,
   type SessionSummary,
   type SignatureRecord,
   type StepCounts,
@@ -549,6 +552,10 @@ export interface DeriveTrace {
 export interface DepositTrace {
   /** Records written, by kind: `session` (main), `subagent`, `user-prompt`, `tool`, `error-line`. */
   kinds: StepCounts;
+  /** Pending sessions (t832) this deposit took before its own, as step-row `in` counts: `pending` found, `pendingDropped` (transcript gone, folder no longer allowed, not an entry, or removed at `PENDING_MAX_FAILURES` failures), `pendingKept` (failed, or an unreadable file; left for the next run). */
+  pending?: StepCounts;
+  /** Set to the refusal's first line when the Stop hook found the store locked and recorded its session in the pending list instead of depositing: the caller logs a `deferred` row, not an `error` one. */
+  deferred?: string;
   /** The derive pass a whole-store deposit ends with (the index pass follows it: `index`). */
   derive?: DeriveTrace;
   /** A derive pass that failed after the deposit's records and `state.json` were written: the caller logs `deposit` ok and `derive` error, then rethrows. */
@@ -644,6 +651,14 @@ const commitCapture = async (context: DepositContext, key: string, extract: Capt
   context.state.files[key] = { ...cursor, v: CAPTURE_VERSION, s: context.salt.sid, d: context.domains, repoSize: extract.session.frame?.stack.size ?? null };
 };
 
+/** Another deposit holds the store lock and the wait ran out: the one failure the Stop hook defers (t832) instead of counting as a failed run. */
+export class StoreLockedError extends CliError {
+  constructor() {
+    super('The store is locked by another deposit; try again shortly.', ExitCode.UNEXPECTED, 'unexpected');
+    this.name = 'StoreLockedError';
+  }
+}
+
 interface LockOptions {
   /** How long to wait for a holder before giving up. */
   waitMs: number;
@@ -713,7 +728,7 @@ export const withLock = async <T>(storeDir: string, work: () => Promise<T>, opti
     await breakStale(lock, options.staleMs);
     if (Date.now() - started >= options.waitMs) {
       if (claimed instanceof Error && !(await stat(lock).then(() => true, (error: unknown) => !isCode(error, 'ENOENT')))) throw claimed;
-      throw new CliError('The store is locked by another deposit; try again shortly.', ExitCode.UNEXPECTED, 'unexpected');
+      throw new StoreLockedError();
     }
     await sleep(25);
     claimed = await claim(lock, token);
@@ -776,6 +791,21 @@ const depositLocked = async (runtime: SessionsRuntime, options: DepositOptions, 
     folders: allowed,
     missing,
   };
+  const record = (extract: Capture, subagent: boolean): void => {
+    if (subagent) result.subagents += 1;
+    else result.sessions += 1;
+    result.lines += extract.session.lines;
+    result.badLines += extract.session.badLines;
+    result.observations += 1 + extract.prompts.length + extract.tools.length + extract.errorLines.length;
+  };
+  // Sessions a Stop hook deferred come first, then this run's own walk; their entries go once `state.json` is written below. What the drain
+  // deposited is in the result, and the walk finds those files current without counting them as unchanged.
+  const drainedKeys = new Set<string>();
+  const drained = await drainPending(context, state, runtime.storeDir, Number.POSITIVE_INFINITY, trace, (extract, subagent, key) => {
+    drainedKeys.add(key);
+    record(extract, subagent);
+  });
+  await sweepPendingTemps(runtime.storeDir, HOOK_LOCK.staleMs);
   // A project the harness cleaned up entirely is still visited when the state names it, so its archived transcripts are captured again.
   const stateProjects = Object.keys(state.files).map((key) => key.slice(0, key.indexOf('/'))).filter((name) => !isSource(table, name) && allow.allows(name));
   // The same holds for a lost state.json: raw/ still names the projects whose transcripts can be captured again.
@@ -788,14 +818,10 @@ const depositLocked = async (runtime: SessionsRuntime, options: DepositOptions, 
     for (const transcript of transcripts) {
       const extract = await depositFile(context, project, transcript);
       if (extract === undefined) {
-        result.unchanged += 1;
+        if (!drainedKeys.has(`${project}/${transcript.relative}`)) result.unchanged += 1;
         continue;
       }
-      if (transcript.subagent === undefined) result.sessions += 1;
-      else result.subagents += 1;
-      result.lines += extract.session.lines;
-      result.badLines += extract.session.badLines;
-      result.observations += 1 + extract.prompts.length + extract.tools.length + extract.errorLines.length;
+      record(extract, transcript.subagent !== undefined);
       tally(trace, extract, transcript.subagent !== undefined);
     }
   }
@@ -811,6 +837,7 @@ const depositLocked = async (runtime: SessionsRuntime, options: DepositOptions, 
     result.cursorRejected = cursor.rejected;
   }
   await writeAtomic(paths(runtime.storeDir).state, JSON.stringify(state));
+  await removePending(runtime.storeDir, drained.settled);
   // Decided by what the log holds, not by what this run captured: a run that died after its re-capture left the copies for this one. The hook
   // path never compacts, since it has seconds. The records are safe by now and an uncompacted log still loads, so a failure here does not fail the deposit.
   await compactLog(runtime.storeDir).catch((error: unknown) => {
@@ -928,10 +955,12 @@ const readSource = async (context: DepositContext, source: Source, root: string,
  * It splits on the newline alone, not through `readline`, which also ends a line at U+2028 and U+2029: `JSON.stringify` leaves those raw inside a
  * value. A missing log has no lines, and a last line with no newline is yielded as it stands, for the reader to parse or skip.
  */
-export const logLines = async function* (file: string): AsyncGenerator<string> {
+export const logLines = async function* (file: string, held?: FileHandle): AsyncGenerator<string> {
   let rest = '';
   try {
-    for await (const chunk of createReadStream(file, { encoding: 'utf8', highWaterMark: 1 << 20 })) {
+    // From a handle, each call reads from byte 0 of the same open file, which a compaction's rename leaves as it was; `autoClose` is off so the caller closes it.
+    const stream = held === undefined ? createReadStream(file, { encoding: 'utf8', highWaterMark: 1 << 20 }) : held.createReadStream({ encoding: 'utf8', highWaterMark: 1 << 20, start: 0, autoClose: false });
+    for await (const chunk of stream) {
       const lines = (rest + String(chunk)).split('\n');
       rest = lines.pop() ?? '';
       yield* lines;
@@ -940,6 +969,16 @@ export const logLines = async function* (file: string): AsyncGenerator<string> {
     if (!isMissing(error)) throw error;
   }
   yield rest;
+};
+
+/** The log opened for reading, or undefined when there is none. A reader that makes more than one pass holds this open across them (`loadStore`). */
+const openLog = async (file: string): Promise<FileHandle | undefined> => {
+  try {
+    return await open(file, 'r');
+  } catch (error) {
+    if (!isMissing(error)) throw error;
+    return undefined;
+  }
 };
 
 /** What an earlier deposit logged about each transcript. */
@@ -1072,42 +1111,131 @@ const rawRelatives = async (dir: string, path: string[]): Promise<string[]> => {
 
 const HOOK_LOCK: LockOptions = { waitMs: 3_000, staleMs: 600_000 };
 
-export type SessionDeposit = 'deposited' | 'unchanged' | 'not-allowed' | 'missing';
+export type SessionDeposit = 'deposited' | 'unchanged' | 'not-allowed' | 'missing' | 'deferred';
 
 /**
  * Deposits one transcript, as the SessionEnd hook does: only from a folder that earlier `--allow` entries name, and idempotent by size and
  * mtime. It does not rebuild `derived.json` or the hook index (that is a whole-store pass; the nightly run does it), so it stays fast.
+ * Under the lock it first takes up to `PENDING_HOOK_CAP` sessions an earlier hook deferred, then its own. If the lock is still held after the
+ * wait it records the session in the pending list, which needs no lock, and returns `deferred`: the next deposit of any kind takes it.
  */
-export const depositSession = (runtime: SessionsRuntime, transcript: string, now: () => number, trace?: DepositTrace): Promise<SessionDeposit> =>
-  // The hook path gives up after 3 s so a SessionEnd behind the nightly deposit cannot hold session exit past its 5 s budget.
-  withLock(runtime.storeDir, () => depositSessionLocked(runtime, transcript, now, trace), HOOK_LOCK);
+export const depositSession = async (runtime: SessionsRuntime, transcript: string, now: () => number, trace?: DepositTrace): Promise<SessionDeposit> => {
+  try {
+    // The hook path waits 3 s for the lock, well under the harness's 30 s ceiling on the hook (install.ts), so a SessionEnd behind the nightly deposit cannot hold session exit.
+    return await withLock(runtime.storeDir, () => depositSessionLocked(runtime, transcript, now, trace), HOOK_LOCK);
+  } catch (error) {
+    if (!(error instanceof StoreLockedError)) throw error;
+    try {
+      // The allowlist holds without the lock: a session no `--allow` names writes nothing, not even a pending entry.
+      if (!compileAllow((await readState(runtime.storeDir)).allow).allows(basename(dirname(transcript)))) return 'not-allowed';
+      await deferSession(runtime.storeDir, transcript);
+    } catch {
+      // A pending entry that cannot be written (or a state that cannot be read) leaves the refusal what it was before: a failed deposit, with the lock's message.
+      throw error;
+    }
+    if (trace !== undefined) trace.deferred = error.message;
+    return 'deferred';
+  }
+};
 
-const depositSessionLocked = async (runtime: SessionsRuntime, transcript: string, now: () => number, trace?: DepositTrace): Promise<SessionDeposit> => {
+/** What one transcript's deposit did to `state`: the outcome, and whether `state.json` needs writing. */
+interface SessionInto {
+  result: Exclude<SessionDeposit, 'deferred'>;
+  wrote: boolean;
+}
+
+/** Told of each capture a deposit of a pending session wrote, so a whole-store run counts it: the capture, whether it is a subagent, and the state key. */
+type Taken = (extract: Capture, subagent: boolean, key: string) => void;
+
+/** Deposits one transcript and its subagents into `state` in memory; the caller writes `state.json`. */
+const depositSessionInto = async (context: DepositContext, state: State, transcript: string, trace?: DepositTrace, taken?: Taken): Promise<SessionInto> => {
   const project = basename(dirname(transcript));
-  const state = await readState(runtime.storeDir);
-  refuseNewer(state);
-  if (!compileAllow(state.allow).allows(project)) return 'not-allowed';
-  const context = await contextFor(runtime, state, now);
+  if (!compileAllow(state.allow).allows(project)) return { result: 'not-allowed', wrote: false };
   const folder = dirname(transcript);
   const main = mainTranscript(folder, basename(transcript));
   let wrote: boolean;
   try {
     const extract = await depositFile(context, project, main);
     wrote = extract !== undefined;
-    if (extract !== undefined) tally(trace, extract, false);
+    if (extract !== undefined) {
+      tally(trace, extract, false);
+      taken?.(extract, false, `${project}/${main.relative}`);
+    }
   } catch (error) {
-    if (isMissing(error)) return 'missing';
+    if (isMissing(error)) return { result: 'missing', wrote: false };
     throw error;
   }
   // The session's subagents finished before it did, so the Stop deposit takes them too (A24).
   for (const subagent of await subagentTranscripts(folder, [main.session])) {
     const extract = await depositFile(context, project, subagent);
-    if (extract !== undefined) tally(trace, extract, true);
+    if (extract !== undefined) {
+      tally(trace, extract, true);
+      taken?.(extract, true, `${project}/${subagent.relative}`);
+    }
     wrote = extract !== undefined || wrote;
   }
-  if (!wrote) return 'unchanged';
-  await writeAtomic(paths(runtime.storeDir).state, JSON.stringify(state));
-  return 'deposited';
+  return { result: wrote ? 'deposited' : 'unchanged', wrote };
+};
+
+const bump = (trace: DepositTrace | undefined, kind: string): void => {
+  if (trace === undefined) return;
+  trace.pending ??= {};
+  trace.pending[kind] = (trace.pending[kind] ?? 0) + 1;
+};
+
+interface Drained {
+  /** Entries to remove once `state.json` is written. */
+  settled: PendingEntry[];
+  wrote: boolean;
+}
+
+/**
+ * Deposits up to `limit` pending sessions into `state`, before the caller's own work, under the store lock. An entry is settled (and removed by the
+ * caller after `state.json` is written, so a crash leaves it for the next run) when its transcript was deposited, was already current, is gone, or
+ * is in a folder no `--allow` names now; one that fails to deposit stays, is counted, and does not stop the rest.
+ */
+const drainPending = async (context: DepositContext, state: State, storeDir: string, limit: number, trace?: DepositTrace, taken?: Taken): Promise<Drained> => {
+  const drained: Drained = { settled: [], wrote: false };
+  for (const entry of await listPending(storeDir, limit)) {
+    bump(trace, 'pending');
+    if (entry.unreadable) {
+      bump(trace, 'pendingKept');
+      process.stderr.write('oars: a pending entry could not be read and stays where it is\n');
+      continue;
+    }
+    try {
+      const into = entry.transcript === undefined ? undefined : await depositSessionInto(context, state, entry.transcript, trace, taken);
+      drained.wrote ||= into?.wrote === true;
+      drained.settled.push(entry);
+      if (into === undefined || into.result === 'missing' || into.result === 'not-allowed') bump(trace, 'pendingDropped');
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      // An entry that keeps failing is not retried forever: a whole-store walk still reaches any transcript on the allowlist, so dropping it loses nothing.
+      if (entry.failures + 1 >= PENDING_MAX_FAILURES) {
+        drained.settled.push(entry);
+        bump(trace, 'pendingDropped');
+        process.stderr.write(`oars: a pending session failed ${String(PENDING_MAX_FAILURES)} times and was dropped: ${message}\n`);
+      } else {
+        await failPending(storeDir, entry);
+        bump(trace, 'pendingKept');
+        process.stderr.write(`oars: a pending session was not deposited and stays pending: ${message}\n`);
+      }
+    }
+  }
+  return drained;
+};
+
+const depositSessionLocked = async (runtime: SessionsRuntime, transcript: string, now: () => number, trace?: DepositTrace): Promise<SessionDeposit> => {
+  const state = await readState(runtime.storeDir);
+  refuseNewer(state);
+  // A session no `--allow` names costs nothing when nothing is pending: no salt, no skeletons folder, no context.
+  if (!compileAllow(state.allow).allows(basename(dirname(transcript))) && (await listPending(runtime.storeDir, 1)).length === 0) return 'not-allowed';
+  const context = await contextFor(runtime, state, now);
+  const drained = await drainPending(context, state, runtime.storeDir, PENDING_HOOK_CAP, trace);
+  const own = await depositSessionInto(context, state, transcript, trace);
+  if (drained.wrote || own.wrote) await writeAtomic(paths(runtime.storeDir).state, JSON.stringify(state));
+  await removePending(runtime.storeDir, drained.settled);
+  return own.result;
 };
 
 export interface Store {
@@ -1140,11 +1268,11 @@ interface LogScan {
   newerCaptures: number;
 }
 
-export const scanLog = async (file: string): Promise<LogScan> => {
+export const scanLog = async (file: string, held?: FileHandle): Promise<LogScan> => {
   const latest = new Map<string, number>();
   const cvAt = new Map<string, { rev: number; cv: string }>();
   let superseded = false;
-  for await (const line of logLines(file)) {
+  for await (const line of logLines(file, held)) {
     const observation = observationOf(line);
     if (observation === undefined) continue;
     const seen = latest.get(observation.session);
@@ -1179,25 +1307,25 @@ const internTool = (tool: ToolObservation, intern: (value: string) => string): T
   session: intern(tool.session),
   parent: intern(tool.parent),
   tool: intern(tool.tool),
-  // A row with no key list is kept as read: `isTool` admits it, and one such row must not abort every reader.
-  keys: Array.isArray(tool.keys) ? tool.keys.map(intern) : tool.keys,
+  keys: tool.keys.map(intern),
   sid: tool.sid === null ? null : intern(tool.sid),
   agentType: tool.agentType === null ? null : intern(tool.agentType),
   harnessVersion: tool.harnessVersion === null ? null : intern(tool.harnessVersion),
   target: tool.target === null ? null : intern(tool.target),
-  // Segments are interned only when they are a list of records with a text `run`; `isTool` admits any other value, which `...tool` already carries.
-  ...(Array.isArray(tool.segments) ? { segments: tool.segments.map((segment) => (isRecord(segment) && typeof segment.run === 'string' ? { ...segment, run: intern(segment.run) } : segment)) } : {}),
+  ...(tool.segments === undefined ? {} : { segments: tool.segments.map((segment) => ({ ...segment, run: intern(segment.run) })) }),
 });
 
 /**
  * The store as a reader sees it: for each session only the highest `rev`. A version-3 or later session is derived here from its capture records
  * (EXTRACTOR_VERSION rules); a session whose last deposit was version 2 keeps the prompt and error lines that deposit wrote.
+ * `afterFirstPass` runs between the two passes over the log: a seam for the test that compacts the log there.
  */
-export const loadStore = async (storeDir: string): Promise<Store> => {
+export const loadStore = async (storeDir: string, afterFirstPass?: () => Promise<void>): Promise<Store> => {
   // Two passes, so a superseded record is never held: the first keeps one number per session, the second keeps only the records at that rev.
   // A re-capture leaves the old copies in the log until a compaction, and holding them as well doubled the heap of every read (t808).
+  // Both passes read one open file: a lock-free reader can meet a compaction between them, and a second open would see the compacted log, where
+  // a session recaptured in that window fails the rev match and drops out of this read.
   const file = paths(storeDir).observations;
-  const { latest } = await scanLog(file);
   const store: Store = { sessions: [], prompts: [], errors: [], subagents: [], tools: [], newerCaptures: 0 };
   const intern = interner();
   const captured = new Map<string, Captured>();
@@ -1206,15 +1334,22 @@ export const loadStore = async (storeDir: string): Promise<Store> => {
     captured.set(session, found);
     return found;
   };
-  for await (const line of logLines(file)) {
-    const observation = observationOf(line);
-    if (observation === undefined || observation.rev !== latest.get(observation.session)) continue;
-    if (observation.kind === 'session') of(observation.session).session = observation;
-    else if (observation.kind === 'user-prompt') of(observation.session).prompts.push(observation);
-    else if (observation.kind === 'tool') of(observation.session).tools.push(internTool(observation, intern));
-    else if (observation.kind === 'error-line') of(observation.session).errorLines.push(observation);
-    else if (observation.kind === 'prompt') store.prompts.push(observation);
-    else store.errors.push(observation);
+  const held = await openLog(file);
+  try {
+    const { latest } = await scanLog(file, held);
+    await afterFirstPass?.();
+    for await (const line of logLines(file, held)) {
+      const observation = observationOf(line);
+      if (observation === undefined || observation.rev !== latest.get(observation.session)) continue;
+      if (observation.kind === 'session') of(observation.session).session = observation;
+      else if (observation.kind === 'user-prompt') of(observation.session).prompts.push(observation);
+      else if (observation.kind === 'tool') of(observation.session).tools.push(internTool(observation, intern));
+      else if (observation.kind === 'error-line') of(observation.session).errorLines.push(observation);
+      else if (observation.kind === 'prompt') store.prompts.push(observation);
+      else store.errors.push(observation);
+    }
+  } finally {
+    await held?.close();
   }
   const redact = makeRedactor((await readState(storeDir)).redactDomains);
   const agents: (SessionCapture & { parent: string })[] = [];
@@ -1371,7 +1506,23 @@ const upgradeUserPrompt = (value: UserPromptObservation & { contextFingerprint?:
   const { contextFingerprint, ...rest } = value;
   return { ...rest, sid: orNull(value.sid), promptFingerprint: value.promptFingerprint ?? promptHalf(contextFingerprint) };
 };
-const upgradeTool = (value: ToolObservation): ToolObservation => ({ ...value, sid: orNull(value.sid), targetBase: value.targetBase ?? null });
+/**
+ * `isTool` admits a row by its tool name and position alone, and derive reads `keys` and `segments` as lists: a row whose `keys` is not a list reads
+ * as having none, a `segments` that is not a list reads as a record captured before `segments`, and a segment without a text `run` is dropped.
+ * Capture never writes these shapes; one hand-edited or foreign row must not abort every reader.
+ */
+const upgradeTool = (value: ToolObservation): ToolObservation => {
+  const { segments, ...rest } = value;
+  const readable: unknown = segments;
+  return {
+    ...rest,
+    sid: orNull(value.sid),
+    targetBase: value.targetBase ?? null,
+    keys: Array.isArray(value.keys) ? value.keys : [],
+    ...(Array.isArray(readable) ? { segments: readable.filter(isSegment) } : {}),
+  };
+};
+const isSegment = (value: unknown): value is ShellSegment => isRecord(value) && typeof value.run === 'string';
 const upgradeErrorLine = (value: ErrorLineObservation): ErrorLineObservation => ({ ...value, sid: orNull(value.sid) });
 
 /** A version-2 session line has `v` and no `cv`, `parent`, or agent fields: it reads as a main transcript of that version. */
