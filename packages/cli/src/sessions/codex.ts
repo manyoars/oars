@@ -67,7 +67,7 @@ const parse = (text: unknown): unknown => {
 
 /** A rollout file found in the store, before its lines are read. */
 export interface CodexSession {
-  /** The rollout's key: the thread uuid in the file name (Codex's own session id), `<thread>_<rollout>` for a reverted thread's file, else the file's stem. */
+  /** The rollout's key: the thread uuid in the file name (Codex's own session id), `<thread>_<rollout>` for a reverted thread's file when the thread itself is not in the store (else its file is folded into the thread's, `revisions`), else the file's stem. */
   id: string;
   /** `session_meta.cwd`; null when the first line names none. */
   folder: string | null;
@@ -77,6 +77,11 @@ export interface CodexSession {
   agentRole: string | null;
   /** `session_meta.forked_from_id`: the thread whose history a fork copied, to match its copied records against. */
   forkedFrom: string | null;
+  /**
+   * The rollouts of the thread's reverts, folded into this one (thread-store/src/local/revert_thread.rs:15-18): each starts at `from`, the ordinal it
+   * takes from `history_base.end_ordinal_exclusive`, and supersedes the records at or after it in every earlier file. Empty for a thread never reverted.
+   */
+  revisions: { file: string; from: number; at: number }[];
   file: string;
   size: number;
   mtimeMs: number;
@@ -101,7 +106,7 @@ const UUID = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}';
 const ROLLOUT_NAME = new RegExp(String.raw`^rollout-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-(${UUID})(?:_(${UUID}))?\.jsonl(?:\.zst)?$`, 'i');
 const SAFE_ID = /^(?!\.+$)[A-Za-z0-9._-]+$/;
 
-/** The key a rollout is deposited under, and the thread it belongs to when it is a reverted copy of one (so one thread counts once). */
+/** The key a rollout is deposited under, and the thread it belongs to when it is a reverted copy of one (folded into that thread's lineage when the thread is in the store). */
 const idOf = (name: string): { id: string; thread: string | null } => {
   const match = ROLLOUT_NAME.exec(name);
   const thread = match?.[1]?.toLowerCase();
@@ -515,6 +520,32 @@ const parentOf = (head: Obj, id: string, thread: string | null): string | null =
   return nonRoot ? (str(head.session_id)?.toLowerCase() ?? id) : null;
 };
 
+/**
+ * A thread's records as one text: its own file, then each revert's file in the order they were written. A later file supersedes the records at or after
+ * its `from` ordinal in every earlier one (the prefix a revert retains is below it), so the turns a revert dropped are not read. A record with no
+ * ordinal (a line that is not a Paginated record) is kept, and so is a line that is not JSON, which `captureSession` counts.
+ */
+const lineageText = async (session: CodexSession): Promise<string> => {
+  const read = (file: string): Promise<string> =>
+    textOf(file).catch((error: unknown) => {
+      throw new Error(reasonOf(error, file));
+    });
+  if (session.revisions.length === 0) return read(session.file);
+  const revisions = [...session.revisions].sort((a, b) => a.at - b.at || a.from - b.from);
+  const parts = [{ file: session.file, from: Infinity }, ...revisions];
+  const texts: string[] = [];
+  for (const [index, part] of parts.entries()) {
+    const cut = Math.min(...parts.slice(index + 1).map((later) => later.from), Infinity);
+    const kept = (await read(part.file)).split('\n').filter((raw) => {
+      const entry = parse(raw);
+      const ordinal = isObj(entry) ? num(entry.ordinal) : undefined;
+      return ordinal === undefined || ordinal < cut;
+    });
+    texts.push(kept.join('\n'));
+  }
+  return texts.join('\n');
+};
+
 /** Opens the Codex store under `root`; undefined when it holds no `sessions` folder, so a machine without Codex is skipped silently. */
 export const openCodexStore = async (root: string): Promise<CodexStore | undefined> => {
   const files: string[] = [];
@@ -523,6 +554,7 @@ export const openCodexStore = async (root: string): Promise<CodexStore | undefin
   await walk(join(root, 'archived_sessions'), files, unreadable);
   if (files.length === 0 && unreadable.length === 0) return undefined;
   const sessions = new Map<string, CodexSession>();
+  const reverts = new Map<string, { thread: string; from: number; at: number }>();
   let rejected = 0;
   for (const file of files) {
     const { id, thread } = idOf(basename(file));
@@ -536,10 +568,23 @@ export const openCodexStore = async (root: string): Promise<CodexStore | undefin
       const info = await stat(file);
       const meta = parse(await firstLine(file));
       const head = isObj(meta) && isObj(meta.payload) ? meta.payload : {};
-      sessions.set(id, { id, folder: str(head.cwd) ?? null, parent: parentOf(head, id, thread), agentRole: str(head.agent_role) ?? null, forkedFrom: str(head.forked_from_id)?.toLowerCase() ?? null, file, size: info.size, mtimeMs: Math.floor(info.mtimeMs) });
+      const base = isObj(head.history_base) ? head.history_base : {};
+      if (thread !== null) reverts.set(id, { thread, from: num(base.end_ordinal_exclusive) ?? 0, at: Date.parse(str(head.timestamp) ?? '') || 0 });
+      sessions.set(id, { id, folder: str(head.cwd) ?? null, parent: parentOf(head, id, thread), agentRole: str(head.agent_role) ?? null, forkedFrom: str(head.forked_from_id)?.toLowerCase() ?? null, revisions: [], file, size: info.size, mtimeMs: Math.floor(info.mtimeMs) });
     } catch (error) {
       unreadable.push({ file, reason: reasonOf(error, file) });
     }
+  }
+  // A reverted thread is one lineage: the new file holds only the records written after the revert, so it is folded into the thread's own session, whose
+  // retained prefix and these records read as one. A reverted file whose thread is not in the store stays a session of its own, a subagent of that thread.
+  for (const [id, revert] of reverts) {
+    const origin = sessions.get(revert.thread);
+    const own = sessions.get(id);
+    if (origin === undefined || own === undefined) continue;
+    origin.revisions.push({ file: own.file, from: revert.from, at: revert.at });
+    origin.size += own.size;
+    origin.mtimeMs = Math.max(origin.mtimeMs, own.mtimeMs);
+    sessions.delete(id);
   }
   const ordered = [...sessions.values()].sort((a, b) => a.mtimeMs - b.mtimeMs || a.id.localeCompare(b.id));
   return {
@@ -548,9 +593,7 @@ export const openCodexStore = async (root: string): Promise<CodexStore | undefin
     unreadable,
     transcript: async (session) => {
       // A rollout that vanished after it was listed (Codex compresses an old one) fails with its reason, which names no path.
-      const text = await textOf(session.file).catch((error: unknown) => {
-        throw new Error(reasonOf(error, session.file));
-      });
+      const text = await lineageText(session);
       // A Copied fork's history is found by matching it against the parent's rollout; a parent outside the store (or unreadable) leaves it whole.
       const parent = session.forkedFrom === null ? undefined : sessions.get(session.forkedFrom);
       const parentText = parent === undefined ? undefined : await textOf(parent.file).catch(() => undefined);

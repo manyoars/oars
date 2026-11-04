@@ -2,6 +2,7 @@ import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 
+import { openCodexStore } from './codex.js';
 import { runHook } from './hooks.js';
 import { books, formatMeasure, measure, recall } from './query.js';
 import { harnessOf } from './schema.js';
@@ -341,7 +342,7 @@ describe('Paginated and forked rollouts through the store', () => {
     return records.map((record, index) => ({ ...record, ordinal: base + index }));
   };
 
-  it('deposits a thread and its reverted rollout (post-revert records, ordinals from history_base) as one session and one subagent, with no prefix prompt counted twice', async () => {
+  it('deposits a thread and its reverted rollout as one lineage: the retained prefix, then the post-revert records, with the turn the revert dropped gone', async () => {
     const s = stage();
     const original = paginated(A);
     // Reverting before the second turn keeps the records before its UserMessage (index 7): seven records, so the next ordinal is 7.
@@ -351,18 +352,22 @@ describe('Paginated and forked rollouts through the store', () => {
       { id: A, lines: original },
       { id: `${A}_${B}`, lines: reverted(A, base, bytes) },
     ]);
+    const opened = await openCodexStore(home);
+    expect(opened?.sessions.map((session) => session.id)).toEqual([A]);
+    const only = opened?.sessions[0];
+    if (opened === undefined || only === undefined) throw new Error('the store holds no session');
+    const text = await opened.transcript(only);
+    expect(text).toContain('try the other rule');
+    expect(text).not.toContain('explain why');
     const result = await deposit({ ...s.runtime, sourceRoots: { codex: home } }, options(['codex']));
-    expect(result).toMatchObject({ sessions: 1, subagents: 1 });
+    expect(result).toMatchObject({ sessions: 1, subagents: 0 });
     const { skeletons } = await readSkeletons(s.storeDir);
     const store = await loadStore(s.storeDir);
-    // The continuing turns of a reverted thread land under subagents, parent the thread, so the thread is still one session in the counts. A subagent's prompts are
-    // not prompt records (store.ts:1088-1095: only a main session derives them), so the one post-revert prompt shows in the session's userTurns and nowhere in
-    // store.prompts. That is the documented limit; the prefix is not copied into the new file, so no prompt is counted twice.
-    expect(store.subagents.map((session) => [session.session, session.parent])).toEqual([[`codex-${A}_${B}`, `codex-${A}`]]);
-    expect(store.subagents[0]).toMatchObject({ userTurns: 1 });
-    expect(store.prompts.filter((entry) => entry.session === `codex-${A}_${B}`)).toHaveLength(0);
+    // The reverted thread is one main session, so its prompts are prompt records and the dropped turn's prompt is not among them: the first turn and the post-revert one.
+    expect(store.subagents).toEqual([]);
+    expect(store.sessions[0]).toMatchObject({ userTurns: 2 });
     expect(store.prompts.filter((entry) => entry.session === `codex-${A}`)).toHaveLength(2);
-    expect([...verifyAll(skeletons), ...verifyCaptured([...store.sessions, ...store.subagents], store.tools)].filter((entry) => entry.violations > 0)).toEqual([]);
+    expect([...verifyAll(skeletons), ...verifyCaptured(store.sessions, store.tools)].filter((entry) => entry.violations > 0)).toEqual([]);
   });
 
   it('drops a Legacy fork copy of its parent, found through forked_from_id in the same store', async () => {
