@@ -36,11 +36,11 @@ Every name passes one function, `admitName` in `packages/cli/src/gate/checks.ts`
 | `mcp-server` | the harness's server segment: letters, digits, `_`, `.`, `-`, at most 128 characters |
 | `skill` (`skill-call`) | letters, digits, `_`, `.`, `-`, and `:` for a plugin's prefix, at most 128 characters |
 | `skill` (`install`) | `owner/repo`, optionally into a folder, or a URL. The owner starts with a letter or digit and no segment is `.` or `..` |
-| a URL form (`url-install`, `url-fetch-and-run`) | an `http`, `https`, `ssh`, or `git` URL (host, port, path; `ssh` and `git` also take npm's scp spelling `host:owner/repo`, and a path segment may hold `@`), a hosted shorthand (`github:org/repo`), `org/repo`, or `host:path` with a host of at least two characters. The owner of `org/repo` starts with a letter or digit, and no path segment is `.` or `..`. Credentials, query, and fragment are removed first; a mask the redactor placed stays. pip's `name @ url`, with spaces, is read as the URL |
+| a URL form (`url-install`, `url-fetch-and-run`) | an `http`, `https`, `ssh`, or `git` URL (host, port, path; `ssh` and `git` also take npm's scp spelling `host:owner/repo`, and a path segment may start with `@`, a scope's, but an `@` that ends a segment or sits inside one is a ref or a path, so the word counts as `local-path`), a hosted shorthand (`github:org/repo`), `org/repo`, or `host:path` with a host of at least two characters. The owner of `org/repo` starts with a letter or digit, and no path segment is `.` or `..`. Credentials, query, and fragment are removed first; a mask the redactor placed stays. pip's `name @ url`, with spaces, is read as the URL |
 
 A version that is not a URL's ref is also refused when it holds a slash, a backslash, `:`, or `@`; the whole crossing is then counted as `local-path`.
 
-A URL's ref (the `#...` fragment, or a git URL's `@ref`) is kept as `version` only when it is a plain ref: letters, digits, and `.`, `_`, `^`, `~`, `*`, `+`, `-`, optionally after `semver:`. Anything else (a path, `key=value`, a query) is dropped: the crossing stays, with no version.
+A URL's ref (the `#...` fragment, or a git URL's `@ref`, which starts at the first `@` past the host that does not follow a `/`) is kept as `version` only when it is a plain ref: letters, digits, and `.`, `_`, `^`, `~`, `*`, `+`, `-`, optionally after `semver:`. Anything else (a path, `key=value`, a query) is dropped: the crossing stays, with no version.
 
 The words a manager's flag owns are not read as names. The flags are listed in `VALUE_FLAGS` in `checks.ts`; a value flag that list does not hold is read as part of the command, so its bare `a/b` value still reads as `org/repo` and is recorded as a `url-install` of that spelling.
 
