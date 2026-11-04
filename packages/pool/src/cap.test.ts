@@ -268,7 +268,7 @@ describe('the ETag follows the rows', () => {
       expect(changed).not.toBe(after);
 
       // A write to the ledger's rows changes no served cell, so a conditional read stays unchanged; only a change to a stored cell moves it. (The ledger takes no delete: a trigger aborts it.)
-      await (await own.db()).prepare('UPDATE deposits SET counted_at = 1').run();
+      await (await own.db()).prepare("UPDATE deposits SET skeleton = '{}', counted_at = 1").run();
       expect(await etag('2506')).toBe(changed);
       await (await own.db()).prepare('DELETE FROM cells').run();
       expect(await etag('2509')).not.toBe(changed);

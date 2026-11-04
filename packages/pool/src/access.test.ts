@@ -249,7 +249,7 @@ describe('the access flag over the routes', () => {
     });
   }, 60_000);
 
-  it('stands once a counting batch has stood the ledger days, and stays when that batch later falls to none', async () => {
+  it('stands once a counting batch has stood STANDING_AFTER_DAYS, and stays when that batch later falls to none', async () => {
     await inPool(async (pool) => {
       const { token, account } = await depositor(pool, '3005', 'cursor');
       await (await pool.db()).prepare('UPDATE deposits SET counted_at = ? WHERE account = ?').bind(Date.now() - (STANDING_AFTER_DAYS + 1) * DAY_MS, account).run();
