@@ -167,13 +167,15 @@ describe('other for an unknown value', () => {
     return sent;
   };
 
-  it.each(FIELDS)('parses an unknown $name as other, counts it, and keeps the value in the bag', ({ path }) => {
+  it.each(FIELDS)('parses an unknown $name as other, counts it, and notes its place in the bag without the value', ({ path }) => {
     const sent = withEnough();
     set(sent, path, 'a-value-no-vocabulary-holds');
     const result = parsed(sent);
     expect(at(result.skeleton, ...path)).toBe('other');
     expect(result.others).toBe(1);
-    expect(result.extensions.filter(({ kind }) => kind === 'value')).toEqual([expect.objectContaining({ kind: 'value', value: 'a-value-no-vocabulary-holds' })]);
+    // The place of the unknown value comes first; a part of the step it leaves unread (the identity of an unknown action, the flags of an unknown program) is noted after it, also without its content.
+    expect(result.extensions[0]).toEqual({ at: path.reduce((place, key) => (typeof key === 'number' ? `${place}[${String(key)}]` : place === '' ? key : `${place}.${key}`), ''), kind: 'value', value: null });
+    expect(result.extensions.every(({ kind, value }) => kind === 'value' && value === null)).toBe(true);
   });
 
   it('takes an explicit other without counting it, and refuses a value of the wrong type', () => {
@@ -203,12 +205,12 @@ describe('other for an unknown value', () => {
     expect(parseSkeleton(wrong)).toMatchObject({ ok: false, field: 'transcripts[0].tools[0].statusLiteral', reason: 'not text' });
   });
 
-  it('keeps the identity of a step whose action is unknown in the bag and sends none beside other', () => {
+  it('notes the identity of a step whose action is unknown and sends none beside other', () => {
     const sent = wire();
     set(sent, ['transcripts', 0, 'tools', 0, 'steps', 0, 'action'], 'browser.drive');
     const result = parsed(sent);
     expect(at(result.skeleton, 'transcripts', 0, 'tools', 0, 'steps', 0)).toMatchObject({ action: 'other', identity: null });
-    expect(result.extensions.map(({ at: found, kind }) => `${kind}:${found}`)).toEqual(['value:transcripts[0].tools[0].steps[0].action', 'field:transcripts[0].tools[0].steps[0].identity']);
+    expect(result.extensions.map(({ at: found, kind }) => `${kind}:${found}`)).toEqual(['value:transcripts[0].tools[0].steps[0].action', 'value:transcripts[0].tools[0].steps[0].identity']);
   });
 });
 
