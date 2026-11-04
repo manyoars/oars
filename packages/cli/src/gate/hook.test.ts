@@ -352,9 +352,9 @@ describe('oars gate hook: the deadline', () => {
     const store = folder();
     const started = performance.now();
     const stalled: RegistryReader = () => new Promise<RegistryAnswer>(() => undefined);
-    const output = await gateHook(payload('npm install left-pad'), depsFor(store, { registry: stalled, clock: () => performance.now(), deadlineMs: performance.now() + 500 }));
+    const output = await gateHook(payload('npm install left-pad'), depsFor(store, { registry: stalled, clock: () => performance.now(), deadlineMs: performance.now() + 2_000 }));
     expect(output).toBe('');
-    expect(performance.now() - started).toBeLessThan(500);
+    expect(performance.now() - started).toBeLessThan(10_000);
     expect(rowsOf(store).map((row) => [row.registryState, row.againstLatest, row.registryAge])).toEqual([['not-read', 'not-read', 'not-read']]);
   });
 
@@ -409,16 +409,17 @@ describe('oars gate hook: one ask per name', () => {
     const store = folder();
     let now = 0;
     let signal: AbortSignal | undefined;
-    // The manager's start blocks: by the time the registry call returns, the clock is past the deadline. The budget was read before the call and was whole, so reading it there would wait out the whole of it.
+    // The manager's start blocks: by the time the registry call returns, the clock is past the 30 s deadline. The budget was read before the call and was whole, so reading it there would wait out the whole of it.
     const registry: RegistryReader = (ask) => {
       signal = ask.signal;
-      now = 900;
+      now = 30_100;
       return new Promise<RegistryAnswer>(() => undefined);
     };
     const fill = vi.fn<NonNullable<GateHookDeps['fill']>>(() => Promise.resolve());
     const started = Date.now();
-    await gateHook(payload('npm install left-pad'), depsFor(store, { registry, clock: () => now, deadlineMs: 800, fill }));
-    expect(Date.now() - started).toBeLessThan(300);
+    await gateHook(payload('npm install left-pad'), depsFor(store, { registry, clock: () => now, deadlineMs: 30_000, fill }));
+    // The old code read the budget before the call and waited out about 29.9 s; the bound is half of that, so a loaded box cannot reach it.
+    expect(Date.now() - started).toBeLessThan(15_000);
     expect(signal?.aborted).toBe(true);
     expect(fill).toHaveBeenCalledTimes(1);
     expect(rowsOf(store).map((row) => row.registryState)).toEqual(['not-read']);

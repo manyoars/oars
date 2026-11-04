@@ -7,7 +7,6 @@ import { setTimeout as sleep } from 'node:timers/promises';
 import { openBrowser } from './browser.js';
 import { run } from './cli.js';
 import { defaultConfigDir, fileCredentialStore } from './credentials.js';
-import { fileJournalStore } from './journal.js';
 import { cursorRoot } from './sessions/cursor.js';
 import { claudeEvaluator, runClaude } from './sessions/gold-arms.js';
 import { SOURCES } from './sessions/sources.js';
@@ -29,7 +28,6 @@ process.exitCode = await run(process.argv.slice(2), {
     stderr: (text) => process.stderr.write(text),
   },
   store: fileCredentialStore(configDir),
-  journal: fileJournalStore(configDir),
   version: readVersion(),
   sleep: (ms) => sleep(ms),
   random: Math.random,

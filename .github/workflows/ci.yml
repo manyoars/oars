@@ -47,20 +47,6 @@ jobs:
       - run: npm ci
       - run: just audit
 
-  # What a developer gets: each template copied out of the monorepo, the packed client installed in place of the registry
-  # version, then the copy's typecheck and unit tests. A separate job because it runs two fresh installs from the registry.
-  template-copy:
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        with:
-          node-version: 24
-          cache: npm
-      - run: npm ci
-      - run: npm run check:template-copy
-
   # Opt-in (Actions > ci > Run workflow > live-login): the CLI's device flow against a real Keycloak holding T67's realm, with
   # Playwright approving the code on the verification page. The realm file lives in the private platform repo, so the job reads
   # it with a token; a user of that realm comes from the OARS_LIVE_* secrets. Nothing else of the platform runs: a stub answers

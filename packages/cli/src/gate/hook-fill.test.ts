@@ -2,7 +2,8 @@ import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, utimesSync 
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { FILL_LOCK_MS, isLocked, runFill, startFill, type FillAsk } from './hook-fill.js';
+import { EventEmitter } from 'node:events';
+import { FILL_LOCK_MS, isLocked, runFill, startFill, startHelper, type FillAsk, type HelperSpawn } from './hook-fill.js';
 import { folderKey, parseRows } from './record.js';
 import type { RegistryAnswer, RegistryReader } from './registry.js';
 
@@ -98,6 +99,39 @@ describe('the fill: starting the helper', () => {
         }),
       ),
     ).resolves.toBeUndefined();
+    expect(lockOf(dir)).toBeUndefined();
+  });
+});
+
+describe('the fill: the helper\'s spawn', () => {
+  const spawnOf = (child: EventEmitter): { spawn: HelperSpawn; calls: { command: string; args: string[]; options: unknown }[]; unref: ReturnType<typeof vi.fn> } => {
+    const calls: { command: string; args: string[]; options: unknown }[] = [];
+    const unref = vi.fn();
+    const spawn: HelperSpawn = (command, args, options) => {
+      calls.push({ command, args, options });
+      return Object.assign(child, { unref });
+    };
+    return { spawn, calls, unref };
+  };
+
+  it('starts the helper detached with the store, class, name, and folder, and lets go of it', () => {
+    const { spawn, calls, unref } = spawnOf(new EventEmitter());
+    startHelper(spawn, '/store', ASK);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.command).toBe(process.execPath);
+    expect(calls[0]?.args.slice(1)).toEqual(['/store', ASK.class, ASK.name, ASK.cwd]);
+    expect(calls[0]?.options).toEqual({ detached: true, stdio: 'ignore', windowsHide: true });
+    expect(unref).toHaveBeenCalledTimes(1);
+  });
+
+  it('removes the lock when the child emits error, since a helper that cannot start never releases it', async () => {
+    const dir = store();
+    const child = new EventEmitter();
+    const { spawn } = spawnOf(child);
+    await startFill(dir, ASK, NOW, (storeDir, ask) => { startHelper(spawn, storeDir, ask); });
+    expect(lockOf(dir)).toBeDefined();
+    child.emit('error', new Error('spawn ENOENT'));
+    expect(lockOf(dir)).toBeUndefined();
   });
 });
 

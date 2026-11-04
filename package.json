@@ -2,24 +2,22 @@
   "name": "oars",
   "version": "0.0.0",
   "private": true,
-  "description": "Many Oars open-source monorepo: starter templates, the generated client and the oars CLI",
+  "description": "Many Oars open-source monorepo: the generated client and the oars CLI",
   "license": "Apache-2.0",
   "type": "module",
   "engines": {
     "node": ">=24"
   },
   "workspaces": [
-    "packages/*",
-    "templates/*"
+    "packages/*"
   ],
   "scripts": {
     "lint": "eslint --max-warnings 0 .",
     "typecheck": "tsc --noEmit && npm run typecheck --workspaces --if-present",
     "test": "vitest run",
     "build": "npm run build -w packages/client && npm run build -w packages/cli",
-    "check:template-copy": "node scripts/check-template-copy.mjs",
     "check:licenses": "node scripts/check-licenses.mjs",
-    "check": "node scripts/check-billing-sync.mjs && node scripts/check-licenses.mjs && npm run build && npm run lint && npm run typecheck && npm run test"
+    "check": "node scripts/check-licenses.mjs && npm run build && npm run lint && npm run typecheck && npm run test"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

@@ -541,7 +541,7 @@ const cappedError = (deps: RunDeps, reply: Reply, kept: boolean): CliError => {
   const wait = retryAfter === null ? undefined : waitWords(retryAfter, deps.now());
   const when = wait === undefined ? 'The pool did not say when; it counts fetches per ISO week, so try again next week.' : `Try again ${wait}.`;
   const title = `The pool's weekly fetch cap is used up. ${when} ${kept ? 'The bundle already on disk is untouched.' : 'No verified bundle is kept.'}`;
-  return new CliError(title, ExitCode.CAPPED, FETCH, { code: 'fetch_cap', title, status: 429 }, undefined, { retryAfter });
+  return new CliError(title, ExitCode.CAPPED, FETCH, { code: 'fetch_cap', title, status: 429 }, { retryAfter });
 };
 
 /** What a fetch asks for when no `--harness` is given, and what it falls back to when no one harness leads the local store. */
