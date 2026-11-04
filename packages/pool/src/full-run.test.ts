@@ -1,7 +1,8 @@
 // The whole path a person walks: the real CLI commands over a real socket to the handler and its D1 store under workerd. Only the sign-in provider is stubbed, and every session is an invented fixture.
+// The CLI now runs the provider's device flow itself, so its own `fetch` to a provider host is answered by the same stub the Worker's profile read reaches.
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { run } from '../../cli/src/cli.js';
 import { ExitCode } from '../../cli/src/errors.js';
 import { verifyBundle } from '../../cli/src/sessions/pool-wire.js';
@@ -12,6 +13,17 @@ import { fieldOf, startPool, stubUser, textOf, type TestPool } from './test-pool
 
 // An invented term: a session holding it would never leave, and a missing file would exclude everything.
 const TERM = 'zorblax';
+
+const PROVIDER_HOSTS = new Set(['github.com', 'oauth2.googleapis.com']);
+
+/** Sends a provider host to the stub and everything else, the pool included, to the real network stack. */
+const stubProviders = (pool: TestPool): void => {
+  const real = globalThis.fetch;
+  vi.stubGlobal('fetch', (input: string | URL | Request, init?: RequestInit) => {
+    const url = input instanceof Request ? input.url : String(input);
+    return PROVIDER_HOSTS.has(new URL(url).host) ? pool.providerFetch(url, init) : real(input, init);
+  });
+};
 
 interface Person {
   h: Harness;
@@ -24,7 +36,7 @@ const person = async (pool: TestPool, id: string): Promise<Person> => {
   const staged = stage();
   const terms = join(staged.root, 'terms.txt');
   writeFileSync(terms, `${TERM}\n`);
-  const h = harness({ OARS_EXCLUSION_TERMS: terms, OARS_POOL_URL: await pool.url() });
+  const h = harness({ OARS_EXCLUSION_TERMS: terms, OARS_POOL_URL: await pool.url(), OARS_GITHUB_CLIENT_ID: 'github-client', OARS_GOOGLE_CLIENT_ID: 'google-client', OARS_GOOGLE_CLIENT_SECRET: 'google-secret' });
   h.deps.sessions = staged.runtime;
   // The person approves the code the command just printed, at the provider, while it waits.
   h.deps.sleep = () => {
@@ -44,7 +56,10 @@ const person = async (pool: TestPool, id: string): Promise<Person> => {
   };
 };
 
-afterEach(cleanup);
+afterEach(() => {
+  vi.unstubAllGlobals();
+  cleanup();
+});
 
 describe('login, deposit, and fetch against a local server', () => {
   let pool: TestPool;
@@ -52,6 +67,10 @@ describe('login, deposit, and fetch against a local server', () => {
   beforeAll(async () => {
     pool = await startPool();
   }, 60_000);
+
+  beforeEach(() => {
+    stubProviders(pool);
+  });
 
   afterAll(async () => {
     await pool.dispose();
@@ -101,6 +120,7 @@ describe('a pool with no covenant published', () => {
   it('takes no deposit from the CLI, whatever it offers to accept, and still serves a fetch', async () => {
     const closed = await startPool({ COVENANT_VERSION: '' });
     try {
+      stubProviders(closed);
       const one = await person(closed, '4101');
       expect(await one.cli('login', '--provider', 'google')).toBe(ExitCode.OK);
       expect(await one.cli('deposit', '--accept-covenant', 'v1')).toBe(ExitCode.AUTH);

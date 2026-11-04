@@ -6,7 +6,7 @@ import { fetchBundle } from './bundle.js';
 import { covenantAccept, covenantNotAccepted, covenantStatus, depositsClosed, hasAccepted } from './covenant.js';
 import { answer, bound, refuse, wholeBinding, type Env } from './http.js';
 import { cellCountOf } from './derive.js';
-import { accountOf, loginPoll, loginStart } from './identity.js';
+import { accountOf, login } from './identity.js';
 
 /** D1 holds at most 2 MB in one value. A body declaring more is refused unread, and one that declares nothing is measured before it is parsed. */
 const MAX_DEPOSIT_BYTES = 1024 * 1024;
@@ -83,8 +83,7 @@ export default {
     const { pathname } = new URL(request.url);
     if (request.method === 'POST') {
       if (pathname === '/v1/deposits') return deposit(request, env);
-      if (pathname === '/v1/login/start') return loginStart(request, env);
-      if (pathname === '/v1/login/poll') return loginPoll(request, env);
+      if (pathname === '/v1/login') return login(request, env);
       if (pathname === '/v1/covenant/accept') return covenantAccept(request, env);
     }
     if (request.method === 'GET') {
