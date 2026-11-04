@@ -1,5 +1,5 @@
 // What the family modules share: their input, a read's common fields, and the arithmetic of a rate over cells.
-import { cellIdOf, type Cell, type Pool } from './cells.js';
+import { cellIdOf, type Cell, type Grain, type Pool } from './cells.js';
 import type { Motif } from './motif.js';
 import { METHODS, type Family, type ReadDraft, type ReadInterval, type ReadSlice, type ReadValue } from './read.js';
 import type { Store } from './store.js';
@@ -54,10 +54,16 @@ export const groupBy = <K, T>(items: Iterable<T>, keyOf: (item: T) => K): Map<K,
   return groups;
 };
 
-/** The cells of one-step motifs: every action, and every identity capture has named. */
-export const unitCells = (pool: Pool): { cell: Cell; motif: Motif }[] => {
+/**
+ * The pool's cells at one grain (rule 6). Weekly and day cells share a table and count the same steps, so a read that sums over both counts a step twice and a read that
+ * names a day from a week answers from the wrong grain: every read takes the grain it answers from here, and no read iterates `pool.cells` itself.
+ */
+export const atGrain = (pool: Pool, grain: Grain): Cell[] => pool.cells.filter((cell) => cell.grain === grain);
+
+/** The cells of one-step motifs at one grain: every action, and every identity capture has named. */
+export const unitCells = (pool: Pool, grain: Grain): { cell: Cell; motif: Motif }[] => {
   const units: { cell: Cell; motif: Motif }[] = [];
-  for (const cell of pool.cells) {
+  for (const cell of atGrain(pool, grain)) {
     const motif = pool.motifs.get(cell.motifId);
     if (motif === undefined || motif.steps.length !== 1) continue;
     if (motif.level === 'named' && motif.steps[0]?.identity === null) continue;
@@ -67,7 +73,7 @@ export const unitCells = (pool: Pool): { cell: Cell; motif: Motif }[] => {
 };
 
 /** Counts over every one-step `shape` cell, for shares: a named motif's share is of all steps, like its action's. */
-export const shapeUnits = (pool: Pool): Cell[] => unitCells(pool).filter(({ motif }) => motif.level === 'shape').map(({ cell }) => cell);
+export const shapeUnits = (pool: Pool, grain: Grain): Cell[] => unitCells(pool, grain).filter(({ motif }) => motif.level === 'shape').map(({ cell }) => cell);
 
 export const body = (
   family: Family,

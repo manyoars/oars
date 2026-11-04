@@ -1,6 +1,6 @@
 // Live (rank 5): an action's share of one day's steps, beside its share over the trailing week. Confounders: the day's mix, and no multiple-test control, which
 // is why this states the two shares and flags nothing.
-import { UNKNOWN, type Cell } from './cells.js';
+import type { Cell } from './cells.js';
 import { motifName } from './motif.js';
 import { body, groupBy, rate, settled, total, unitCells, wilson, type DeriveFamily } from './read-support.js';
 
@@ -15,7 +15,7 @@ const dayBefore = (day: string, back: number): string => new Date(Date.parse(day
 export const baselineDaysOf = (day: string): string[] => Array.from({ length: LIVE_BASELINE_DAYS }, (_, index) => dayBefore(day, index + 1));
 
 export const deriveLive: DeriveFamily = ({ pool }) => {
-  const units = unitCells(pool).filter(({ cell, motif }) => motif.level === 'shape' && cell.day !== UNKNOWN);
+  const units = unitCells(pool, 'day').filter(({ motif }) => motif.level === 'shape');
   const stepsOn = new Map([...groupBy(units, ({ cell }) => cell.day)].map(([day, group]) => [day, total(group.map(({ cell }) => cell), settled)]));
   return [...groupBy(units, ({ cell }) => cell.motifId).values()].flatMap((group) => {
     const motif = group[0]?.motif;

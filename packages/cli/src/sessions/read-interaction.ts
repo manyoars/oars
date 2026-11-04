@@ -1,7 +1,7 @@
 // Interaction (spec Section 6, order 2): a tool fails more on one tier than another, beyond how those two tiers differ on every other tool. The difference of differences is
 // what makes it an interaction: a tier that fails more on everything has a main effect, usually the harder work it is given. The axis is the tier assigned, not a model version
-// (ruling mrd5591-08: one version per model on this store), and comparisons hold the version bucket and the effort constant. Confounders it does not remove: task assignment by
-// tier, which is the operator's own choice and the largest of them, prompt class, and a failure not being a misfit.
+// (ruling mrd5591-08: one version per model on this store), and comparisons hold the version bucket constant. Effort is not in a cell (rule 3), so nothing here holds it. Confounders it does not remove: task assignment by
+// tier, which is the operator's own choice and the largest of them, effort, prompt class, and a failure not being a misfit.
 import { UNKNOWN } from './cells.js';
 import { candidateOf, differenceOf, estimateOf, screen, TRIALS_FLOOR, type Candidate, type DeriveRelation } from './read-order.js';
 import type { Read } from './read.js';
@@ -13,7 +13,7 @@ const countOf = (read: Read, metric: string): number => {
   return typeof value === 'number' ? value : 0;
 };
 
-/** One tier in one version bucket at one effort. */
+/** One tier in one version bucket. */
 interface Tier {
   model: string;
   tools: ReadonlyMap<string, Read>;
@@ -32,7 +32,7 @@ const restOf = (tier: Tier, read: Read) => {
   return trials < TRIALS_FLOOR || value === null || interval === null ? undefined : { value, interval, cites: tier.shapes.filter((shape) => shape.readId !== read.readId) };
 };
 
-const candidateFor = (a: Tier, b: Tier, key: string, scope: { harness: string; harnessBucket: string; effort: string }): Candidate | undefined => {
+const candidateFor = (a: Tier, b: Tier, key: string, scope: { harness: string; harnessBucket: string }): Candidate | undefined => {
   const readA = a.tools.get(key);
   const readB = b.tools.get(key);
   if (readA === undefined || readB === undefined) return undefined;
@@ -55,15 +55,15 @@ const candidateFor = (a: Tier, b: Tier, key: string, scope: { harness: string; h
 
 /** The comparisons a store's fit reads allow, above the floor, whether or not any of them moved. */
 export const interactionCandidates = (reads: readonly Read[]): Candidate[] => {
-  const known = reads.filter((read) => read.family === 'fit' && read.slice.model !== UNKNOWN && read.slice.harnessBucket !== UNKNOWN && read.slice.effort !== UNKNOWN);
-  const frames = groupBy(known, (read) => `${read.slice.harness ?? UNKNOWN}\n${read.slice.harnessBucket ?? UNKNOWN}\n${read.slice.effort ?? UNKNOWN}`);
+  const known = reads.filter((read) => read.family === 'fit' && read.slice.model !== UNKNOWN && read.slice.harnessBucket !== UNKNOWN);
+  const frames = groupBy(known, (read) => `${read.slice.harness ?? UNKNOWN}\n${read.slice.harnessBucket ?? UNKNOWN}`);
   return [...frames].flatMap(([frame, group]) => {
-    const [harness = UNKNOWN, harnessBucket = UNKNOWN, effort = UNKNOWN] = frame.split('\n');
+    const [harness = UNKNOWN, harnessBucket = UNKNOWN] = frame.split('\n');
     const tiers = [...groupBy(group, (read) => read.slice.model ?? UNKNOWN)].map(([model, inTier]) => tierOf(model, inTier)).sort((a, b) => (a.model < b.model ? -1 : 1));
     return tiers.flatMap((a, index) =>
       tiers.slice(index + 1).flatMap((b) =>
         [...a.tools.keys()].flatMap((key) => {
-          const candidate = candidateFor(a, b, key, { harness, harnessBucket, effort });
+          const candidate = candidateFor(a, b, key, { harness, harnessBucket });
           return candidate === undefined ? [] : [candidate];
         }),
       ),

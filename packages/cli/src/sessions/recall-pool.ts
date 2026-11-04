@@ -1,6 +1,6 @@
 // What ties a recall's answer to the stored read of the current pool. A store-wide count answers the asker, and the read it rests on is what `lineage` can
 // walk, so each answer carries that read's ID. Without a stored read for it, an answer keeps its stand-in hash, which `lineage` reports as evidence with no further hop.
-import { bucketFields, cellIdOf, UNKNOWN, type Cell, type Pool } from './cells.js';
+import { bucketFields, cellIdOf, lastDayOfCell, UNKNOWN, type Cell, type Pool } from './cells.js';
 import { motifName, type Motif } from './motif.js';
 import type { Read } from './read.js';
 import type { RecallRead } from './recall-reads.js';
@@ -45,7 +45,11 @@ const presentOf = (values: readonly string[]): string[] => [...new Set(values.fi
 const answerOfStored = (read: Read, cells: ReadonlyMap<string, Cell>): RecallRead => {
   const cited = read.inputs.flatMap((input) => cells.get(input) ?? []);
   const frames = cited.map((cell) => bucketFields(cell.frameBucket));
+  // `firstDay` over a week cell is that week's Monday: the earliest day the evidence can hold, which the evidence may not have touched.
   const days = presentOf(cited.map((cell) => cell.day));
+  // A week cell may hold any of its seven days, so the last day the evidence can hold is the week's end, but never past the pool the read was made from: a read cannot hold a day its pool
+  // had not seen, and a recall made on the Wednesday of its evidence's week must not find that evidence dated after itself.
+  const lastDays = presentOf(cited.map((cell) => (read.asOf.day !== null && lastDayOfCell(cell) > read.asOf.day ? read.asOf.day : lastDayOfCell(cell))));
   const isRate = read.family === 'fit';
   const failed = countIn(read.value.failed);
   return {
@@ -58,7 +62,7 @@ const answerOfStored = (read: Read, cells: ReadonlyMap<string, Cell>): RecallRea
     calls: isRate ? failed + countIn(read.value.ok) : null,
     clusters: read.clusters,
     firstDay: days[0] ?? null,
-    lastDay: days[days.length - 1] ?? null,
+    lastDay: lastDays[lastDays.length - 1] ?? null,
     harnesses: presentOf(frames.map((frame) => frame.harness)),
     harnessVersions: [],
     models: presentOf(frames.map((frame) => frame.model)),

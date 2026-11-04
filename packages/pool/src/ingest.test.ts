@@ -29,7 +29,7 @@ const oracleOf = (byAccount: readonly (readonly SessionSkeleton[])[]): Held[] =>
   const accounts = new Map<string, Set<number>>();
   byAccount.forEach((skeletons, account) => {
     for (const cell of deriveCells(storeOf(skeletons)).cells) {
-      const key = `${cell.motifId}/${cell.frameBucket}/${cell.day}/${cell.exposed ? '1' : '0'}`;
+      const key = `${cell.motifId}/${cell.frameBucket}/${cell.grain}/${cell.day}/${cell.exposed ? '1' : '0'}`;
       const held = merged.get(key) ?? { key, sessions: 0, clusters: 0, ok: 0, failed: 0, tokens: 0, durationMs: 0 };
       merged.set(key, { key, sessions: held.sessions + cell.sessions, clusters: 0, ok: held.ok + cell.ok, failed: held.failed + cell.failed, tokens: held.tokens + cell.tokens, durationMs: held.durationMs + cell.durationMs });
       accounts.set(key, (accounts.get(key) ?? new Set<number>()).add(account));
@@ -111,13 +111,20 @@ describe('ingest writes cell increments to stored cells', () => {
       const token = await accountOn(target, '8301');
       const first = sampleSkeleton('0000000000008301', undefined, '2026-11-01');
       await send(target, token, first);
-      const once = await total(target, "day = '2026-11-01'");
+      // 2026-11-01 is a Sunday: its week cells sit on Monday 2026-10-26, and 2026-11-02 opens the next week.
+      const onDay = (day: string, grain: string): string => `grain = '${grain}' AND day = '${day}'`;
+      const once = await total(target, onDay('2026-11-01', 'day'));
+      const week = await total(target, onDay('2026-10-26', 'week'));
       expect(once).toBeGreaterThan(0);
+      expect(Number(week)).toBeGreaterThan(Number(once));
       await send(target, token, first);
-      expect(await total(target, "day = '2026-11-01'")).toBe(once);
+      expect(await total(target, onDay('2026-11-01', 'day'))).toBe(once);
+      expect(await total(target, onDay('2026-10-26', 'week'))).toBe(week);
       await send(target, token, sampleSkeleton('0000000000008301', undefined, '2026-11-02'));
-      expect(await total(target, "day = '2026-11-01'")).toBe(0);
-      expect(await total(target, "day = '2026-11-02'")).toBe(once);
+      expect(await total(target, onDay('2026-11-01', 'day'))).toBe(0);
+      expect(await total(target, onDay('2026-10-26', 'week'))).toBe(0);
+      expect(await total(target, onDay('2026-11-02', 'day'))).toBe(once);
+      expect(await total(target, onDay('2026-11-02', 'week'))).toBe(week);
       // The same id with another language moves the stratum too: the old one gives its session back and the new one takes it.
       const stratum = async (key: string): Promise<unknown> => (await target.db()).prepare('SELECT sessions FROM strata WHERE key = ?').bind(key).first('sessions');
       expect(await stratum('language/typescript')).toBe(1);
@@ -350,6 +357,10 @@ describe('a large deposit', () => {
     // The fixture must reach the case: more cell JSON than one value may hold, from a skeleton the route accepts.
     expect(JSON.stringify([...wanted.cells.values()]).length).toBeGreaterThan(2 * 1024 * 1024);
     expect(JSON.stringify(skeleton).length).toBeLessThan(1024 * 1024);
+    // The sizes docs/pool.md states, so they cannot drift unseen: the skeleton as the worker stores it, the cells, and their JSON.
+    expect(JSON.stringify(skeleton).length).toBe(784_544);
+    expect(wanted.cells.size).toBe(11_139);
+    expect(JSON.stringify([...wanted.cells.values()]).length).toBe(3_241_663);
     await inFreshPool({}, async (target) => {
       const token = await accountOn(target, '9101');
       const response = await target.post('/v1/deposits', skeleton, token);
@@ -358,6 +369,8 @@ describe('a large deposit', () => {
       expect(expected).toBeGreaterThan(0);
       expect(await total(target)).toBe(expected);
       const db = await target.db();
+      // What the account's byte limit counts: the skeleton and the deltas column (`[]`, two bytes).
+      expect(await db.prepare('SELECT LENGTH(CAST(skeleton AS BLOB)) + LENGTH(CAST(deltas AS BLOB)) AS bytes FROM deposits').first('bytes')).toBe(784_546);
       expect(await db.prepare('SELECT COUNT(*) AS count FROM cells').first('count')).toBe(wanted.cells.size);
       expect(await db.prepare('SELECT COUNT(*) AS count FROM motifs').first('count')).toBe(wanted.motifs.length);
       expect(await db.prepare("SELECT COUNT(*) AS count FROM contributors WHERE kind = 'cell'").first('count')).toBe(wanted.cells.size);

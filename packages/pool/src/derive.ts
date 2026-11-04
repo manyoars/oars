@@ -25,7 +25,7 @@ const NO_STORE: Store = { sessions: [], prompts: [], errors: [], subagents: [], 
 
 /**
  * Each family states the highest of a read's cells, the most one store can prove. A read's `clusters` here is the largest held count among its input cells: the fetch path
- * reads no per-account record, so five accounts on five days are five cells of one cluster each and serve nothing until a later change brings held counts for a key's `n` and `c`.
+ * reads no per-account record, so five accounts in five different weeks are five cells of one cluster each and serve nothing until a later change brings held counts for a key's `n` and `c`. Five accounts on five days of one week share each week cell and serve the week reads; a `live` cell is a day, so they serve no live read.
  */
 const readsOf = (pool: Pool): Read[] => {
   const orderOf = orderResolver([]);
@@ -33,7 +33,7 @@ const readsOf = (pool: Pool): Read[] => {
   const held = new Map(pool.cells.map((cell) => [cellIdOf(cell), cell.clusters]));
   const clustersOf = (inputs: readonly string[]): number => inputs.reduce((most, input) => Math.max(most, held.get(input) ?? 0), 0);
   // Once for every live read of a bundle: the shape-level units are the same for each.
-  const shapeUnits = unitCells(pool).filter(({ motif }) => motif.level === 'shape');
+  const shapeUnits = unitCells(pool, 'day').filter(({ motif }) => motif.level === 'shape');
   // A live read's baseline is a second set of cells its inputs do not cite, so it takes the same floor on its own: under it, the baseline and the ratio against it are null.
   const baselined = (read: ReadBody): ReadBody => {
     if (read.family !== 'live') return read;
@@ -47,13 +47,13 @@ const readsOf = (pool: Pool): Read[] => {
 
 const compare = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
 
-/** The frame buckets of one harness at one numbered bucket start with this: `frameBucket` is `harness/bucket/model/effort`, and two harnesses can share a numbered bucket. */
+/** The frame buckets of one harness at one numbered bucket start with this: `frameBucket` is `harness/bucket/model`, and two harnesses can share a numbered bucket. */
 export const bucketPrefix = (harness: string, harnessVersion: string): string => `${harness}/${harnessBucket(harnessVersion)}/`;
 
 /** What one harness's bundle at one version holds: the stored cells of its (harness, bucket), the only pair a landed cell keys on. A share's denominator is the bundle's; only what clears the floor leaves. */
 export const bundleOf = (harness: Harness, harnessVersion: string, stored: StoredPool): Bundle => {
   const prefix = bucketPrefix(harness, harnessVersion);
-  const cells = stored.cells.filter((cell) => cell.frameBucket.startsWith(prefix)).sort((a, b) => compare(a.motifId, b.motifId) || compare(a.frameBucket, b.frameBucket) || compare(a.day, b.day));
+  const cells = stored.cells.filter((cell) => cell.frameBucket.startsWith(prefix)).sort((a, b) => compare(a.motifId, b.motifId) || compare(a.frameBucket, b.frameBucket) || compare(a.grain, b.grain) || compare(a.day, b.day));
   const motifs = [...stored.motifs].sort((a, b) => compare(a.motifId, b.motifId));
   // No error rows: a skeleton holds none, and recovery, the one family that reads them, is left out here.
   const pool = poolOf({ cells, motifs }, []);

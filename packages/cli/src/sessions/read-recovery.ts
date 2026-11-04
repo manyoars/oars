@@ -2,11 +2,11 @@
 // computed by the asker's client) and public names only; `recall()` is still how an operator reads the text. Confounders: `editFollowed` is not success, and refusals and
 // hook denials are local policy. Its evidence is the cells holding the failed call and the step after it, on the days the signature occurred and the days their frames were written.
 import { ACTION_TABLES, actionOf, type CanonicalAction } from './actions.js';
-import { UNKNOWN, type Cell } from './cells.js';
+import { UNKNOWN, weekStartOf, type Cell } from './cells.js';
 import { utcDay } from './frame.js';
 import { shapeMotif } from './motif.js';
 import { contentHash } from './read.js';
-import { body, groupBy, type DeriveFamily, type FamilyInput, type ReadBody } from './read-support.js';
+import { atGrain, body, groupBy, type DeriveFamily, type FamilyInput, type ReadBody } from './read-support.js';
 import { harnessOf, type ErrorObservation } from './schema.js';
 import { signatureRecord } from './store.js';
 
@@ -44,7 +44,9 @@ export type RecoveryDrop =
   /** Calls of this action in cells, none of them failed: the error line's call did not settle as an error. */
   | 'no-failed-cell-of-action'
   /** Failed calls of this action in cells, none on a day this signature occurred. */
-  | 'no-failed-cell-on-day';
+  | 'no-failed-cell-on-day'
+  /** Every day the signature's errors and their frames can name is unknown. A day cell exists for a known day only (rule 6), so there is no cell to cite however many failed calls the action has. */
+  | 'frame-has-no-day';
 
 export interface RecoveryOutcome {
   reads: ReadBody[];
@@ -56,8 +58,10 @@ export const recoveryOf = ({ pool, store }: FamilyInput): RecoveryOutcome => {
   const sessions = new Map([...store.sessions, ...store.subagents].map((session) => [session.session, session]));
   const prompts = new Map(store.prompts.map((prompt) => [`${prompt.session}#${String(prompt.index)}`, prompt]));
   const actionIn = (session: string, tool: string): CanonicalAction => actionOf(ACTION_TABLES[harnessOf(sessions.get(session) ?? {})], tool).action;
-  const cellsAt = groupBy(pool.cells, (cell) => `${cell.motifId}/${cell.day}`);
-  const cellsOf = groupBy(pool.cells, (cell) => cell.motifId);
+  // The failed call is a one-step shape, which has a live day cell. The step after it is a two-step window, which has a week cell only (rule 6), so it is found on the week its day falls in.
+  const cellsAt = groupBy(atGrain(pool, 'day'), (cell) => `${cell.motifId}/${cell.day}`);
+  const weeksAt = groupBy(atGrain(pool, 'week'), (cell) => `${cell.motifId}/${cell.day}`);
+  const cellsOf = groupBy(atGrain(pool, 'day'), (cell) => cell.motifId);
   /** The day a cell files this error's call under: its frame's, which is its prompt's, or its session's for a subagent or a call before the first prompt. An error can run past that midnight. */
   const frameDayOf = (error: ErrorObservation): string => {
     const prompt = error.agent === undefined ? prompts.get(`${error.session}#${String(error.prompt)}`) : undefined;
@@ -65,18 +69,21 @@ export const recoveryOf = ({ pool, store }: FamilyInput): RecoveryOutcome => {
     const session = sessions.get(error.agent ?? error.session);
     return session?.frame?.day ?? utcDay(session?.tsFirst) ?? UNKNOWN;
   };
-  const dropped: RecoveryOutcome['dropped'] = { 'no-cell-of-action': 0, 'no-failed-cell-of-action': 0, 'no-failed-cell-on-day': 0 };
+  const dropped: RecoveryOutcome['dropped'] = { 'no-cell-of-action': 0, 'no-failed-cell-of-action': 0, 'no-failed-cell-on-day': 0, 'frame-has-no-day': 0 };
   const reads = [...groupBy(oneRowPerCall(store.errors), (error) => error.sig)].flatMap(([sig, list]) => {
     const inputs = new Set<Cell>();
     const following: { [action: string]: number } = {};
     let failedAction: CanonicalAction = 'other';
+    let dated = false;
     const session = (error: ErrorObservation): string => error.agent ?? error.session;
     for (const error of list) {
       failedAction = actionIn(session(error), error.tool);
       const next = error.next[0] === undefined ? undefined : actionIn(session(error), error.next[0]);
       for (const day of new Set([utcDay(error.ts) ?? UNKNOWN, frameDayOf(error)])) {
+        dated ||= day !== UNKNOWN;
         for (const cell of cellsAt.get(`${shapeOf([failedAction])}/${day}`) ?? []) if (cell.failed > 0) inputs.add(cell);
-        if (next !== undefined) for (const cell of cellsAt.get(`${shapeOf([failedAction, next])}/${day}`) ?? []) inputs.add(cell);
+        // A frame of no day names no week, though a week cell sits at the unknown week.
+        if (next !== undefined && day !== UNKNOWN) for (const cell of weeksAt.get(`${shapeOf([failedAction, next])}/${weekStartOf(day)}`) ?? []) inputs.add(cell);
       }
       for (const tool of error.next) {
         const action = actionIn(session(error), tool);
@@ -85,7 +92,7 @@ export const recoveryOf = ({ pool, store }: FamilyInput): RecoveryOutcome => {
     }
     if (inputs.size === 0) {
       const ofAction = cellsOf.get(shapeOf([failedAction])) ?? [];
-      const reason: RecoveryDrop = ofAction.length === 0 ? 'no-cell-of-action' : ofAction.some((cell) => cell.failed > 0) ? 'no-failed-cell-on-day' : 'no-failed-cell-of-action';
+      const reason: RecoveryDrop = !dated ? 'frame-has-no-day' : ofAction.length === 0 ? 'no-cell-of-action' : ofAction.some((cell) => cell.failed > 0) ? 'no-failed-cell-on-day' : 'no-failed-cell-of-action';
       dropped[reason] += 1;
       return [];
     }

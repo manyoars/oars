@@ -58,10 +58,18 @@ describe('recovery', () => {
     expect(deriveRecovery({ pool, store: { ...failed, errors: [error('s1', SIG, { ts: '2026-10-01T10:00:00.000Z', prompt: null })] } })).toEqual([]);
   });
 
-  it('keeps a signature whose error has no timestamp, on its prompt frame day or on no day at all', () => {
+  it('keeps a signature whose error has no timestamp on its prompt frame day, and finds no cell for a frame of no day: a day cell exists only for a known day', () => {
     expect(recovery({ ...failed, errors: [error('s1', SIG, { ts: null })] })).toHaveLength(1);
     const undated = store({ sessions: [session('s1')], prompts: [prompt('s1', 0, { frame: frame({ day: null }) })], tools: [tool('s1', 0, 'Read', { status: 'error' })] });
-    expect(recovery({ ...undated, errors: [error('s1', SIG, { ts: null })] })).toHaveLength(1);
+    expect(recovery({ ...undated, errors: [error('s1', SIG, { ts: null })] })).toEqual([]);
+    // A failed week cell of the action exists, so the drop is named for the frame's missing day and not for a missing cell.
+    const outcome = recoveryOf({ pool: poolFrom(undated), store: { ...undated, errors: [error('s1', SIG, { ts: null })] } });
+    expect(outcome.dropped).toEqual({ 'no-cell-of-action': 0, 'no-failed-cell-of-action': 0, 'no-failed-cell-on-day': 0, 'frame-has-no-day': 1 });
+    // A step after the failure changes nothing: a week cell exists at the unknown week, but a frame of no day names no week to look in.
+    const stepped = { ...undated, tools: [...undated.tools, tool('s1', 1, 'Edit')] };
+    const withNext = recoveryOf({ pool: poolFrom(stepped), store: { ...stepped, errors: [error('s1', SIG, { ts: null, next: ['Edit'] })] } });
+    expect(withNext.reads).toEqual([]);
+    expect(withNext.dropped).toEqual({ 'no-cell-of-action': 0, 'no-failed-cell-of-action': 0, 'no-failed-cell-on-day': 0, 'frame-has-no-day': 1 });
   });
 
   it('finds the call of an error past midnight on its prompt frame day, and keeps the error its own day', () => {
@@ -87,13 +95,13 @@ describe('recovery', () => {
 
   it('states why a signature record has no read, and accounts for every record', () => {
     const elsewhere = { ...failed, errors: [error('s1', SIG, { ts: '2026-10-01T10:00:00.000Z', prompt: null })] };
-    expect(recoveryOf({ pool: poolFrom(elsewhere), store: elsewhere }).dropped).toEqual({ 'no-cell-of-action': 0, 'no-failed-cell-of-action': 0, 'no-failed-cell-on-day': 1 });
+    expect(recoveryOf({ pool: poolFrom(elsewhere), store: elsewhere }).dropped).toEqual({ 'no-cell-of-action': 0, 'no-failed-cell-of-action': 0, 'no-failed-cell-on-day': 1, 'frame-has-no-day': 0 });
     const clean = store({ sessions: [session('s1')], prompts: [prompt('s1', 0)], tools: [tool('s1', 0, 'Read')], errors: [error('s1', SIG)] });
-    expect(recoveryOf({ pool: poolFrom(clean), store: clean }).dropped).toEqual({ 'no-cell-of-action': 0, 'no-failed-cell-of-action': 1, 'no-failed-cell-on-day': 0 });
+    expect(recoveryOf({ pool: poolFrom(clean), store: clean }).dropped).toEqual({ 'no-cell-of-action': 0, 'no-failed-cell-of-action': 1, 'no-failed-cell-on-day': 0, 'frame-has-no-day': 0 });
     const none = store({ sessions: [session('s1')], errors: [error('s1', SIG), error('s1', 'Read | another'), { ...error('s1', 'Bash | third'), tool: 'Bash' }] });
     const outcome = recoveryOf({ pool: poolFrom(none), store: none });
     expect(outcome.reads).toEqual([]);
-    expect(outcome.dropped).toEqual({ 'no-cell-of-action': 3, 'no-failed-cell-of-action': 0, 'no-failed-cell-on-day': 0 });
+    expect(outcome.dropped).toEqual({ 'no-cell-of-action': 3, 'no-failed-cell-of-action': 0, 'no-failed-cell-on-day': 0, 'frame-has-no-day': 0 });
     const kept = { ...failed, errors: [error('s1', SIG)] };
     expect(recoveryOf({ pool: poolFrom(kept), store: kept }).reads).toEqual(deriveRecovery({ pool: poolFrom(kept), store: kept }));
   });

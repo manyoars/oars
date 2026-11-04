@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { CliError } from '../errors.js';
 import type * as ReadModuleNamespace from './read.js';
-import { deriveCells } from './cells.js';
+import { deriveCells, serializeCells } from './cells.js';
 import { currentPool, poolFiles, refreshPool, servedPool } from './pool.js';
 import { cellsOf, incrementsOf, projectedStore } from './cell-increments.js';
 import { error, frame, printOf, prompt, session, sessionsFrom, step, store, tool } from './pool-fixture.js';
@@ -221,6 +221,21 @@ describe('servedPool', () => {
     const served = await servedPool(dir, one);
     expect(served?.pool.cells.length).toBeGreaterThan(0);
     expect(readFileSync(poolFiles(dir).cells, 'utf8')).not.toBe('');
+  });
+
+  it('rebuilds a store whose cells predate the grain, deriving every cell again with its grain', async () => {
+    const dir = storeDir();
+    const first = await refreshPool(dir, one);
+    const oldForm = first.pool.cells
+      .map((cell) => JSON.stringify({ ...cell, grain: undefined }))
+      .join('\n');
+    expect(oldForm).not.toContain('"grain"');
+    writeFileSync(poolFiles(dir).cells, `${oldForm}\n`);
+    const served = await servedPool(dir, one);
+    expect(served?.pool.cells).toEqual(first.pool.cells);
+    const rewritten = readFileSync(poolFiles(dir).cells, 'utf8');
+    expect(rewritten).toContain('"grain"');
+    expect(rewritten).toBe(serializeCells(first.pool.cells));
   });
 
   it('writes one stderr line and answers undefined when a stored file is damaged', async () => {

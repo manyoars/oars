@@ -2,10 +2,10 @@
 // the class axis waits for a field on the cell. Confounders: task assignment by tier, effort, and no outcome label, so nothing here says a method is better.
 import { bucketFields, type Cell } from './cells.js';
 import { motifName } from './motif.js';
-import { body, groupBy, rate, settled, total, wilson, type DeriveFamily } from './read-support.js';
+import { body, atGrain, groupBy, rate, settled, total, wilson, type DeriveFamily } from './read-support.js';
 
 export const deriveMethod: DeriveFamily = ({ pool }) => {
-  const windows = pool.cells.flatMap((cell) => {
+  const windows = atGrain(pool, 'week').flatMap((cell) => {
     const motif = pool.motifs.get(cell.motifId);
     return motif?.level === 'shape' && motif.steps.length >= 2 ? [{ cell, motif, model: bucketFields(cell.frameBucket).model }] : [];
   });
