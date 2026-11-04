@@ -6,9 +6,9 @@ const clock = vi.hoisted(() => ({ at: 0 }));
 
 // A pool that takes 5 s to derive, on a clock only this test moves.
 vi.mock('./pool.js', () => ({
-  currentPool: async (): Promise<undefined> => {
+  currentPool: (): Promise<undefined> => {
     clock.at += 5000;
-    return undefined;
+    return Promise.resolve(undefined);
   },
 }));
 
