@@ -1,4 +1,4 @@
-// The public vocabulary (t755, recall spec Sections 2.1, 2.2, and 7): the one file that says which names may stand in a class P field of a
+// The public vocabulary (recall spec Sections 2.1, 2.2, and 7): the one file that says which names may stand in a class P field of a
 // captured step (the frame's fields pool only as cells). Anything else becomes `<literal>`, so a private script, host, package, or server name never reaches a pooled field.
 //
 // A simple list on purpose, and it fails closed: a missing public name costs a `<literal>`, while a wrongly listed one costs a leak. The D11 and
@@ -268,7 +268,7 @@ const REGISTRY_VERSION = new RegExp(`^[~^<>=!]*v?\\d+(?:\\.(?:\\d+|x|\\*))*${VER
 export const isRegistryVersion = (version: string): boolean => version.length <= NAME_MAX && REGISTRY_VERSION.test(version);
 export const isPublicMcpTool = (server: string, tool: string): boolean => PUBLIC_MCP_TOOLS.get(server)?.has(tool) === true;
 
-// The pooled vocabulary (pool vocabulary spec Section 1.3, t811). Everything above is what capture keeps in a P field; everything below is what may
+// The pooled vocabulary (pool vocabulary spec Section 1.3). Everything above is what capture keeps in a P field; everything below is what may
 // leave the machine. The pinned snapshots live in packages/cli/vocab/ and are loaded by vocab-load.ts, so this file stays free of the filesystem
 // and the pool's Worker can bundle it.
 

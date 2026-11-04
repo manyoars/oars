@@ -109,15 +109,25 @@ describe('the Gemini CLI reader', () => {
     expect(out.tools.map((tool) => tool.status)).toEqual(['ok', 'error']);
   });
 
-  it('records a signal-terminated call as an error, and a cancelled call as an error with its message', () => {
+  it('records a signal-terminated call as an error, and a call the user cancelled as a user-rejected error with its message', () => {
     const signalled = shellText('partial', ['Signal: SIGTERM']);
     const out = extractOf([
       head,
       prompt(1, 'x'),
       say(2, '', { toolCalls: [shell('a', 'sleep 9', 'success', 3, signalled), call('b', 'run_shell_command', { command: 'x' }, 'cancelled', 4, reply('b', 'run_shell_command', { error: '[Operation Cancelled] User cancelled tool execution.' }))] }),
     ]);
-    expect(out.tools.map((tool) => tool.status)).toEqual(['error', 'error']);
+    expect(out.tools.map((tool) => [tool.status, tool.errorCode ?? null])).toEqual([['error', 'other'], ['error', 'user-rejected']]);
     expect(out.errorLines.map((error) => error.line)).toEqual(['partial', '[Operation Cancelled] User cancelled tool execution.']);
+  });
+
+  it('records a call the user denied at the confirmation prompt as user-rejected, and a cancellation that names no user as other', () => {
+    const refusal = (id: string, error: string) => call(id, 'run_shell_command', { command: 'x' }, 'cancelled', 3, reply(id, 'run_shell_command', { error }));
+    const out = extractOf([
+      head,
+      prompt(1, 'x'),
+      say(2, '', { toolCalls: [refusal('a', '[Operation Cancelled] Reason: User denied execution.'), refusal('b', '[Operation Cancelled] Reason: Operation cancelled.')] }),
+    ]);
+    expect(out.tools.map((tool) => [tool.status, tool.errorCode ?? null])).toEqual([['error', 'user-rejected'], ['error', 'other']]);
   });
 
   it('unwraps an error result to its message, never the wrapper, so the error line joins a Claude Code signature', () => {
@@ -611,7 +621,7 @@ ${text}
   });
 
   it('never steps a prompt back before the one before it, and gives one whose time is missing or relative the last good time (upstream always writes an ISO time, so this is defensive)', () => {
-    // The relative time `'2 minutes ago'` is a defensive input (the brief's missing-or-relative-timestamp bullet); upstream writes an ISO `timestamp` on every message.
+    // The relative time `'2 minutes ago'` is a defensive input; upstream writes an ISO `timestamp` on every message.
     const times = linesOf([head, prompt(5, 'a'), { ...prompt(6, 'b'), timestamp: undefined }, { ...prompt(7, 'c'), timestamp: '2 minutes ago' }, prompt(2, 'd'), prompt(9, 'e')]).map((entry) => entry.timestamp);
     expect(times).toEqual([T(5), T(5), T(5), T(5), T(9)]);
     expect(linesOf([{ ...prompt(1, 'a'), timestamp: undefined }])[0]?.timestamp).toBe(new Date(0).toISOString());

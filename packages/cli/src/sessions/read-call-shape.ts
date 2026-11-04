@@ -1,4 +1,4 @@
-// Call shape (t757, the fit family's other method): one tool and its input key names, over the floors a shape needs before a hook may push it. A shape is what a pre-tool hook can
+// Call shape (the fit family's other method): one tool and its input key names, over the floors a shape needs before a hook may push it. A shape is what a pre-tool hook can
 // compute from the call it is about to run, so this read is what a push cites. A failure is not in a cell by shape, so its evidence is the failed one-step cells of the
 // tool's action on the days the shape failed. Same confounders as `read-fit.ts`: a failure is not a misfit, and prompt class is not adjusted for.
 import { UNKNOWN } from './cells.js';

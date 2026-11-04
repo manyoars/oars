@@ -1,4 +1,4 @@
-// How a turn opens (t768): a slash command or a skill opens a prompt like a typed line, and a line the harness injected opens nothing.
+// How a turn opens: a slash command or a skill opens a prompt like a typed line, and a line the harness injected opens nothing.
 // Every name here is invented.
 import { describe, expect, it } from 'vitest';
 import { captureSession, type Capture } from './extract.js';
@@ -200,7 +200,7 @@ describe('a sidechain or Cursor line', () => {
     expect(capture([user(command('frobnicate', 'go'), { isSidechain: true }), answer('x', { isSidechain: true })]).prompts).toEqual([]);
   });
 
-  it('a Cursor session keeps its leading < rule: this brief fixes Claude Code only', () => {
+  it('a Cursor session keeps its leading < rule: only Claude Code reads the opening so far', () => {
     expect(capture([user('<div> breaks the widget'), answer()], { harness: 'cursor' }).prompts).toEqual([]);
     expect(capture([user(command('frobnicate', 'go')), answer()], { harness: 'cursor' }).prompts).toEqual([]);
     expect(capture([user('fix the widget'), answer()], { harness: 'cursor' }).prompts.map(({ head, opened }) => ({ head, opened }))).toEqual([{ head: 'fix the widget', opened: 'typed' }]);

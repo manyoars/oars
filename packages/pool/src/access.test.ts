@@ -5,7 +5,7 @@ import { incrementsOf } from './ingest.js';
 import { sampleSkeleton } from './sample.js';
 import { fieldOf, startPool, stubUser, type TestPool, textOf } from './test-pool.js';
 
-const PATH = `/bundle/2.1.314/${VOCAB_VERSION}`;
+const PATH = `/bundle/claude-code/2.1.314/${VOCAB_VERSION}`;
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 const ONE = 1;
@@ -146,7 +146,7 @@ describe('the access flag over the routes', () => {
     await inPool(async (pool) => {
       const { token, account } = await depositor(pool, '3009');
       const sent = sampleSkeleton('0000000000003009');
-      // A claude-code batch does not count at the ingest tier, so its row is raised by hand, as the root check will (Brief 2).
+      // A claude-code batch does not count at the ingest tier, so its row is raised by hand, as the root check will.
       await (await pool.db()).prepare("UPDATE deposits SET tier = 'committed', counted_at = ? WHERE account = ?").bind(Date.now() - DAY_MS, account).run();
       const before = await (await pool.db()).prepare('SELECT counted_at AS counted FROM deposits WHERE account = ?').bind(account).first();
       expect(typeof fieldOf(before, 'counted')).toBe('number');

@@ -12,6 +12,7 @@ import { baselineDaysOf, deriveLive } from '../../cli/src/sessions/read-live.js'
 import { deriveMethod } from '../../cli/src/sessions/read-method.js';
 import { deriveNextStep } from '../../cli/src/sessions/read-next-step.js';
 import { unitCells, type DeriveFamily, type ReadBody } from '../../cli/src/sessions/read-support.js';
+import type { Harness } from '../../cli/src/sessions/schema.js';
 import type { Store } from '../../cli/src/sessions/store.js';
 import type { StoredPool } from './stored.js';
 
@@ -50,7 +51,7 @@ const compare = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
 export const bucketPrefix = (harness: string, harnessVersion: string): string => `${harness}/${harnessBucket(harnessVersion)}/`;
 
 /** What one harness's bundle at one version holds: the stored cells of its (harness, bucket), the only pair a landed cell keys on. A share's denominator is the bundle's; only what clears the floor leaves. */
-export const bundleOf = (harness: string, harnessVersion: string, stored: StoredPool): Bundle => {
+export const bundleOf = (harness: Harness, harnessVersion: string, stored: StoredPool): Bundle => {
   const prefix = bucketPrefix(harness, harnessVersion);
   const cells = stored.cells.filter((cell) => cell.frameBucket.startsWith(prefix)).sort((a, b) => compare(a.motifId, b.motifId) || compare(a.frameBucket, b.frameBucket) || compare(a.grain, b.grain) || compare(a.day, b.day));
   const motifs = [...stored.motifs].sort((a, b) => compare(a.motifId, b.motifId));
@@ -60,6 +61,7 @@ export const bundleOf = (harness: string, harnessVersion: string, stored: Stored
   const named = new Set(served.map((cell) => cell.motifId));
   return {
     format: BUNDLE_FORMAT,
+    harness,
     harnessVersion,
     vocabVersion: VOCAB_VERSION,
     asOf: { pool: pool.version, day: pool.lastDay },

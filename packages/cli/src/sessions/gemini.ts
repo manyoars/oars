@@ -1,4 +1,4 @@
-// The Gemini CLI source (t817): a Gemini CLI chat file becomes the same capture records a Claude Code transcript does.
+// The Gemini CLI source: a Gemini CLI chat file becomes the same capture records a Claude Code transcript does.
 //
 // FIXTURE-DERIVED: written from the open-source Gemini CLI (github.com/google-gemini/gemini-cli, Apache-2.0, commit 89e9d25d, v0.67.0-nightly.20261020), not from
 // a live store. Nothing was copied; the reader is original. Paths below are under `packages/core/src/`. `docs/sessions-store.md` says what a live run would still

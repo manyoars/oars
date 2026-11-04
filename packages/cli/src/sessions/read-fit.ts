@@ -1,4 +1,4 @@
-// Fit (t752, rank 2): how often a tool fails on this frame, by harness version bucket and model. Effort is not in a cell (rule 3), so it is not a slice. Confounders it does not remove: a failure is not a
+// Fit (rank 2): how often a tool fails on this frame, by harness version bucket and model. Effort is not in a cell (rule 3), so it is not a slice. Confounders it does not remove: a failure is not a
 // misfit, red tests can be the method, effort, and prompt class is not adjusted for.
 import { bucketFields } from './cells.js';
 import { motifName } from './motif.js';

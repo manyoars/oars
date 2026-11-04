@@ -293,7 +293,7 @@ describe('the Cursor reader: times', () => {
   });
 });
 
-describe('the Cursor reader: t731 outcomes', () => {
+describe('the Cursor reader: outcomes', () => {
   const shell = (extra: Partial<NonNullable<FixtureBubble['tool']>>): FixtureBubble => ({
     type: 2,
     createdAt: '2025-06-01T00:00:02.000Z',
@@ -306,6 +306,28 @@ describe('the Cursor reader: t731 outcomes', () => {
     const { tools, errorLines } = capture(store.transcript(session), 'x');
     expect(tools.map((t) => t.status)).toEqual(['none']);
     expect(errorLines).toEqual([]);
+    store.close();
+  });
+
+  it('reads toolFormerData.userDecision: a rejected call is a user-rejected failure, any other value is not', async () => {
+    const { store, session } = await only([
+      user,
+      shell({ decision: 'accepted', result: { exitCodeV2: 0, output: 'fine' } }),
+      shell({ decision: 'rejected', status: 'cancelled' }),
+      shell({ decision: 'rejected', status: 'error', error: 'boom' }),
+      shell({ decision: 'rejected', status: 'completed' }),
+      shell({ decision: 'rejected', status: 'completed', result: { exitCodeV2: 0, output: '', endedReason: 'RUN_TERMINAL_COMMAND_ENDED_REASON_EXECUTION_ABORTED' } }),
+      shell({ result: { exitCodeV2: 0, output: 'fine' } }),
+      shell({ decision: 'maybe', result: { exitCodeV2: 0, output: 'fine' } }),
+    ]);
+    const out = capture(store.transcript(session), 'x');
+    const refused: [string, string] = ['error', 'user-rejected'];
+    expect(out.tools.map((t) => [t.status, t.errorCode ?? null])).toEqual([['ok', null], refused, refused, refused, refused, ['ok', null], ['ok', null]]);
+    // The decision decides whatever the status says, so each rejected call has one error line (its own refusal text, not the status's `boom`), even one whose result ended aborted.
+    expect(out.errorLines).toHaveLength(4);
+    expect(out.errorLines.map((e) => e.line)).not.toContain('boom');
+    // An unknown decision is never stored as a string.
+    expect(JSON.stringify(out)).not.toContain('maybe');
     store.close();
   });
 

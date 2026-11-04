@@ -1,4 +1,4 @@
-// Method (t752, rank 7): a shape's share of all windows of its length, per model. t752 reads this by class as well; a cell holds no class, because a step has none, so
+// Method (rank 7): a shape's share of all windows of its length, per model. The family would also read this by class; a cell holds no class, because a step has none, so
 // the class axis waits for a field on the cell. Confounders: task assignment by tier, effort, and no outcome label, so nothing here says a method is better.
 import { bucketFields, type Cell } from './cells.js';
 import { motifName } from './motif.js';

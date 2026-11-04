@@ -1,4 +1,4 @@
-// The copy rule a developer's copied template follows (lead 30/31): the monorepo-only tests, their configs and the dev
+// The copy rule a developer's copied template follows: the monorepo-only tests, their configs and the dev
 // dependencies only they use are gone; everything else is the template as shipped. scripts/check-template-copy.mjs installs
 // and tests such a copy outside the monorepo; this file pins what the copy contains, without an install.
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
