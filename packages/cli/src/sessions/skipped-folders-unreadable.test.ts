@@ -1,4 +1,4 @@
-// t776: a folder off the allowlist that cannot be listed is scope, not a failure: `verify` names it and goes on.
+// A folder off the allowlist that cannot be listed is scope, not a failure: `verify` names it and goes on.
 import type * as fsp from 'node:fs/promises';
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';

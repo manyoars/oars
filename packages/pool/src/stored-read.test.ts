@@ -1,4 +1,4 @@
-// Item 4 of the stored form (t813): the bundle is read from the stored `index` cells, never from the ledger plane. These tests delete or ignore the ledger and the contributor records and
+// Item 4 of the stored form: the bundle is read from the stored `index` cells, never from the ledger plane. These tests delete or ignore the ledger and the contributor records and
 // look for any change in what is served, and count the rows a read touches.
 import { webcrypto } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';

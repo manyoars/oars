@@ -8,6 +8,7 @@ import type { SessionsRuntime } from '../sessions/store.js';
 import { crossingsPath } from './hook.js';
 import { COMMAND, EVENT, installGateHook, MATCHER, uninstallGateHook } from './install.js';
 import { loadIndex } from './novelty.js';
+import { formatPolicy, loadPolicy, policyPath } from './policy.js';
 import { parseRows } from './record.js';
 import type { RegistryReader } from './registry.js';
 import { formatReport, reportOf } from './report.js';
@@ -45,15 +46,22 @@ export const gateInstall = async (deps: SessionsDeps): Promise<Outcome> => {
   const result = await installGateHook(file);
   const lines = [
     result.changed
-      ? `Installed the gate hook in ${file}: ${EVENT} for ${MATCHER}, running \`${COMMAND}\`. It records each crossing in crossings.jsonl and prints nothing; it never allows, denies, or changes a call.`
+      ? `Installed the gate hook in ${file}: ${EVENT} for ${MATCHER}, running \`${COMMAND}\`. It records each crossing in crossings.jsonl, adds a note about a young or missing name by default, and denies a call only if you write \`block\` in gate-policy.json; it never allows or changes a call.`
       : `The gate hook is already installed in ${file}; nothing was changed.`,
   ];
   // A record with no kept index cannot tell what is new without a scan the hook must not do, so it reads `not-read` until a replay seeds the index.
   const storeDir = deps.sessions?.storeDir;
   if (storeDir !== undefined && (await loadIndex(storeDir, crossingsPath(storeDir))).state === 'unseeded') {
-    lines.push('Run `oars gate replay --allow <folder>` once to seed the novelty index; until then the hook records novelty as not-read.');
+    lines.push('Run `oars gate replay --allow <folder>` once to seed the novelty index; until then the hook records novelty as not-read and shows no note.');
   }
   return { document: { ok: true, file, changed: result.changed, event: EVENT, matcher: MATCHER, command: COMMAND }, text: lines.join('\n') };
+};
+
+/** The policy in force for this store: the file's settings, or the defaults and why. Reads one file, writes none. */
+export const gatePolicy = async (deps: SessionsDeps): Promise<Outcome> => {
+  const storeDir = runtimeOf(deps).storeDir;
+  const read = await loadPolicy(storeDir);
+  return { document: { ok: true, file: policyPath(storeDir), source: read.source, policy: read.policy }, text: formatPolicy(read, policyPath(storeDir)) };
 };
 
 export const gateUninstall = async (deps: SessionsDeps): Promise<Outcome> => {

@@ -1,23 +1,27 @@
-// The session store's schema, in one file (t689 and t700, T0 of docs/research/2026-11-01-session-commons-direction.md).
+// The session store's schema, in one file.
 //
 // Everything here is deterministic and local: no model call, no network. `oars sessions deposit` reads the operator's own Claude Code
 // logs (`~/.claude/projects/<path-slug>/*.jsonl` and each session's `subagents/` transcripts, one JSON event per line) and appends
 // captured records to `<config>/oars/sessions/observations.jsonl`. The log is appended to, and a whole-store deposit drops superseded revs (`compactLog` in `store.ts`): a session whose file changed is deposited
 // again under a higher `rev`, and a reader keeps only the highest `rev` of each session.
 //
-// EXTRACTOR 11 (t811, pool vocabulary spec Section 2) changes no stored value. It moves raw `agentType`, `keys`, and `frameId` with the joined `frame` from class P to
+// EXTRACTOR 11 (pool vocabulary spec Section 2) changes no stored value. It moves raw `agentType`, `keys`, and `frameId` with the joined `frame` from class P to
 // class A, so a store written at 10 re-derives on its next deposit and only the pooled projection (computed at deposit, never written) changes.
-// Version 12 (CAPTURE 12, t815) adds the optional `setup`, `funnel`, and `trust` to the session record, read from the transcript only (`session-shape.ts`;
+// Version 12 (CAPTURE 12) adds the optional `setup`, `funnel`, and `trust` to the session record, read from the transcript only (`session-shape.ts`;
 // `docs/sessions-store.md`). It changed no derivation, so it leaves EXTRACTOR at 10.
-// Version 13 (CAPTURE 13, t826) changes three stored values: the email mask keeps a plain dotted version after `npm:` or `jsr:` (a pinned alias keeps its pick),
+// Version 13 (CAPTURE 13) changes three stored values: the email mask keeps a plain dotted version after `npm:` or `jsr:` (a pinned alias keeps its pick),
 // a block word in another case or a wrapper in another case or by path is skipped to reach the real program, and a `segments` `run` whose program basename holds
 // whitespace stores `<literal>`. It also settles the two stored forms of a `copilot` step at version 12. EXTRACTOR stays 11.
 // Version 14 (CAPTURE 14) adds the optional `errorCode`, `packages`, and `manifest` to a tool call and the optional `stack` strata to the file record and the prompt
 // record, all read from the transcript except `repoFiles`, which keeps its existing source. It changes no value captured before, so EXTRACTOR stays 11.
-// Version 15 (CAPTURE 15, t836) changes two stored values of version 14: a Cargo table header that ends in a comment (`[package] # x`) is seen as a header, so the next
-// `version =` is no longer stored as `crates:version`; and `packageVersion` keeps only a version of three or four dotted numbers, so a bare `@1` or `==2.31` stores null. EXTRACTOR stays 11.
+// Version 15 (CAPTURE 15) changes three stored values of version 14: a Cargo table header that ends in a comment (`[package] # x`) is seen as a header, so the next
+// `version =` is no longer stored as `crates:version`; and `packageVersion` keeps only a version of three or four dotted numbers, so a bare `@1` or `==2.31` stores null; and, since calls with a null `packageVersion` share one `first`, a later short pin of the same package now marks `false`. EXTRACTOR stays 11.
+// Version 16 (CAPTURE 16) stores a call the user refused as Claude Code does, `status` `error` and `errorCode` `user-rejected`: a Cursor call whose `toolFormerData.userDecision` is `rejected`; a Codex shell
+// call, patch, or command item that is `declined` with the user's refusal text (each `none` before; any other `declined` stays `none`); and a Gemini call the user cancelled or denied (`errorCode` `other` before). A call that was `none` or `ok` gains an `error-line` record whose `line` is
+// the refusal text and loses its `manifest`, and where a result line is new (every Codex refusal, a Cursor one whose status is neither `error` nor `completed`) its session's `lines` and skeleton move. Any other
+// decision value, or none, changes nothing and is never stored; a Grok plan-mode refusal and a Codex `write_stdin rejected:` stay as they were. EXTRACTOR stays 11.
 //
-// Version 10 (CAPTURE 10, t768) gives a turn opened by a slash command or a skill a `user-prompt` record, adds `opened` to that record, and moves `skills`
+// Version 10 (CAPTURE 10) gives a turn opened by a slash command or a skill a `user-prompt` record, adds `opened` to that record, and moves `skills`
 // from class P to class A, since a skill's name can be private. It changed no derivation, so it leaves EXTRACTOR at 9.
 //
 // Version 11 (CAPTURE 11) redacts the part of an MCP tool name after `mcp__` (Cursor: `mcp_`) wherever it is stored (`tool`, the session's `tools`, an error line's `tool`, the skeleton's tool names),
@@ -27,7 +31,7 @@
 // EXTRACTOR 9 adds motifs, cells, and reads, computed from the capture records and written beside them (`docs/sessions-store.md`), and carries a prompt's
 // frame onto its derived record. No capture record changes.
 //
-// Version 9 (CAPTURE 9, t755) adds `frame` and `frameId` to the session and prompt records and `steps` to the tool record, and moves `tool`, `tools`, and a
+// Version 9 (CAPTURE 9) adds `frame` and `frameId` to the session and prompt records and `steps` to the tool record, and moves `tool`, `tools`, and a
 // shell-form `target` from class P to class A. It changed no derivation, so it left EXTRACTOR at 8.
 //
 // Version 8 (CAPTURE 8 and EXTRACTOR 8) writes one `tool` record per tool call. The harness writes
@@ -36,10 +40,10 @@
 // no longer read, and a call a resumed transcript replays under one tool-use id is written once. The skeleton still lists every line. The reader folds
 // records already on disk the same way until each transcript is captured again (`fold.ts`).
 //
-// Store version 5 (CAPTURE 5, t733) keeps version 4's shape and changes one stored value: each `models` entry of the skeleton's cost state names
+// Store version 5 (CAPTURE 5) keeps version 4's shape and changes one stored value: each `models` entry of the skeleton's cost state names
 // the usage keys it reported, which `verify` uses to class a side call. A version-4 skeleton reads with no keys until it is captured again.
 //
-// Store version 4 (CAPTURE 4, t714) keeps version 3's shape and adds to it: `sid` on every capture record, `repo`, `fileHashes`, and `env` on
+// Store version 4 (CAPTURE 4) keeps version 3's shape and adds to it: `sid` on every capture record, `repo`, `fileHashes`, and `env` on
 // the session, `targetBase` on the tool record, `promptFingerprint` in place of `contextFingerprint`, and a 1,000-character cap on an
 // error-line's `line`. A version-3 store is read through the compatibility reader (`upgradeSession` and its siblings in store.ts) until each transcript is captured again.
 //
@@ -50,7 +54,7 @@
 // a derivation rule re-derives the store without reading a transcript. Version-2 `prompt` and `error` lines (already derived) are still
 // read for a session that has no version-3 rev.
 //
-// Field classes (t711 Section 1.1): `L` local-only, never leaves the machine at any tier; `A` account store, the account's own store only;
+// Field classes (spec Section 1.1): `L` local-only, never leaves the machine at any tier; `A` account store, the account's own store only;
 // `P` pooled index, names, versions, counts, and day-resolution dates. The session, prompt, tool, error, and error-line records name
 // each field's class in a doc comment; the skeleton and the two call logs carry theirs on the type, and docs/sessions-store.md lists
 // them all. The log is the local derived-records tier: redacted text, never raw content, and nothing uploads.
@@ -67,7 +71,7 @@ import type { RepoSize } from './public-vocabulary.js';
 import type { SessionFunnel, SessionSetup, SessionTrust } from './session-shape.js';
 
 /** Stamped `cv` on every captured record. Bump it when the captured field list changes or a stored value of an existing captured record or skeleton changes: a bump re-reads every transcript. */
-export const CAPTURE_VERSION = '15';
+export const CAPTURE_VERSION = '16';
 
 /** Capture versions the reader derives from. A version-3 record is upgraded on read; a newer one is read for the fields this code knows. */
 export const OLDEST_READABLE_CAPTURE = 3;
@@ -79,7 +83,7 @@ export const PROMPT_HEAD_CHARS = 300;
 export const ERROR_EXAMPLE_CHARS = 160;
 /** The reference scripts cut a normalized signature at 110 characters. */
 export const SIGNATURE_CHARS = 110;
-/** An error-line's `line` is redacted, then cut to this many characters (t711 Section 1.2; version 3 stored it uncut). */
+/** An error-line's `line` is redacted, then cut to this many characters (spec Section 1.2; version 3 stored it uncut). */
 export const ERROR_LINE_CHARS = 1000;
 /** Per-session cap on `files` and `fileHashes` (L3): the hand run on the copy store had p99 61 and max 209 files per session; 100 is the round number above p99. */
 export const FILES_PER_SESSION_MAX = 100;
@@ -175,7 +179,7 @@ export interface CaptureEnv {
 }
 
 /**
- * One per transcript, captured: the `parse_sessions.py` record, minus anything that is raw content. Classes (t711 Section 1.2):
+ * One per transcript, captured: the `parse_sessions.py` record, minus anything that is raw content. Classes (spec Section 1.2):
  * `L` local-only: `project`, `files`. `A` account store: `session`, `parent`, `spawnedBy`, `spawnedIn`, `branches`, `urls`, `searches`, `tldrs`,
  * `confidences`, `promptFingerprint`, `repo`, `fileHashes`, `tools`, `setup`, `funnel`, `trust`, `at`, `tsFirst`, `tsLast`. `P` pooled: `kind`, `cv`, `rev`, `sid`,
  * the counts, `versions`, `models`, `env`, `costUsd`, `usage` (`at`, `tsFirst`, and `tsLast` at UTC day). `agentType`, `frame`, and `frameId` moved to `A` at EXTRACTOR 11:
@@ -184,7 +188,7 @@ export interface CaptureEnv {
 export interface SessionObservation {
   kind: 'session';
   /**
-   * The tool the transcript came from (t728, class P). Only a non-default source writes it: absent reads as `claude-code` (`harnessOf`), so
+   * The tool the transcript came from (class P). Only a non-default source writes it: absent reads as `claude-code` (`harnessOf`), so
    * the Claude Code path's records and CAPTURE_VERSION are unchanged and an older oars reads a Cursor session as a session with no harness version.
    */
   harness?: Harness;
@@ -243,7 +247,7 @@ export interface SessionObservation {
   costUsd: number | null;
   /** Summed assistant usage of the file's own line (a main transcript's sidechain lines are not counted; a subagent transcript is its own line). */
   usage: Usage;
-  /** What the transcript shows of the setup the session ran with (t815, class A); absent when it shows none, and on a record captured before version 12. */
+  /** What the transcript shows of the setup the session ran with (class A); absent when it shows none, and on a record captured before version 12. */
   setup?: SessionSetup;
   /** The tool names at each funnel stage the transcript shows (class A); same absence rules. */
   funnel?: SessionFunnel;
@@ -299,7 +303,7 @@ export interface PromptObservation {
   bigrams: { [bigram: string]: number };
   /** The session's prompt fingerprint at the time of the prompt (kept under this name on the derived record), when one had been seen. */
   contextFingerprint: string | null;
-  // The outcome signals (t747), kept separate on purpose: no composite. Optional because a version-2 line, read as written, predates them.
+  // The outcome signals, kept separate on purpose: no composite. Optional because a version-2 line, read as written, predates them.
   /** Exit status of a build or test runner, not its coverage. Undefined when a shell call after the edit was captured before `segments` (CAPTURE 6), which cannot say what ran. */
   verify?: PromptVerify;
   stopped?: PromptStop | null;
@@ -691,7 +695,7 @@ export type Step = (typeof STEPS)[number];
 export const TRIGGERS = ['session-start', 'pre-tool', 'post-tool', 'stop', 'nightly', 'manual', 'weekly', 'sync', 'cron', 'release', 'run-end', 'run-start'] as const;
 export type Trigger = (typeof TRIGGERS)[number];
 
-/** `deferred` (t832): a Stop deposit that found the store locked and recorded its session in the pending list. It is neither a success nor a failed run. */
+/** `deferred`: a Stop deposit that found the store locked and recorded its session in the pending list. It is neither a success nor a failed run. */
 export const STEP_STATUSES = ['ok', 'error', 'skipped', 'deferred'] as const;
 export type StepStatus = (typeof STEP_STATUSES)[number];
 

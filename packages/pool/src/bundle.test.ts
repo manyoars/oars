@@ -354,3 +354,52 @@ describe('the client refuses', () => {
     expect(await verifyBundle({ payload: 'x', signature: 'AAAA' }, { kty: 'nope', crv: 'nope', x: 'nope' }, '2.1.314')).toMatchObject({ ok: false, reason: containing('signature') });
   });
 });
+
+describe('a bundle is one harness at one numbered bucket', () => {
+  // A frame bucket starts with the harness, so two harnesses on one numbered bucket must not share a bundle.
+  it('holds only the asked harness\'s cells when two harnesses deposit on the same version', async () => {
+    const fresh = await startPool();
+    try {
+      let reader = '';
+      for (const [harness, base, command] of [['claude-code', 7000, { program: 'git', sub: 'push' }], ['cursor', 7100, { program: 'ls', sub: null }]] as const) {
+        for (let at = 0; at < 5; at += 1) {
+          const id = String(base + at);
+          const { token } = await fresh.signIn('github', stubUser(id));
+          await fresh.post('/v1/covenant/accept', { version: 'v1' }, token);
+          expect((await fresh.post('/v1/deposits', sampleSkeleton(id.padStart(16, '0'), { languages: ['typescript'] }, '2026-11-01', harness, command), token)).status).toBe(201);
+          reader = token;
+        }
+      }
+      const bundleOf = async (query: string): Promise<Bundle> => {
+        const { status, json } = await fresh.get(`/bundle/${VERSION}/${VOCAB_VERSION}${query}`, reader);
+        expect(status).toBe(200);
+        const verified = await verifyBundle(json, fresh.signingKey(), VERSION);
+        if (!verified.ok) throw new Error(verified.reason);
+        return verified.bundle;
+      };
+      const harnessesOf = (bundle: Bundle): string[] => [...new Set(bundle.cells.map((cell) => cell.frameBucket.split('/')[0] ?? ''))];
+      const claude = await bundleOf('');
+      const cursor = await bundleOf('?harness=cursor');
+      expect(claude.cells.length).toBeGreaterThan(0);
+      expect(cursor.cells.length).toBeGreaterThan(0);
+      expect(harnessesOf(claude)).toEqual(['claude-code']);
+      expect(harnessesOf(cursor)).toEqual(['cursor']);
+      // Each bundle holds the motifs its own cells name and no other harness's: git push is claude-code's, and ls is cursor's.
+      const programsOf = (bundle: Bundle): string[] => [...new Set(bundle.motifs.flatMap(({ steps }) => steps.flatMap(({ identity }) => (identity !== null && 'program' in identity ? [identity.program] : []))))].sort();
+      for (const bundle of [claude, cursor]) expect(bundle.motifs.map(({ motifId }) => motifId).sort()).toEqual([...new Set(bundle.cells.map(({ motifId }) => motifId))].sort());
+      expect(programsOf(claude)).toEqual(['git']);
+      expect(programsOf(cursor)).toEqual(['ls']);
+      // The ETag names the harness: the claude-code ETag does not answer a cursor request with a 304.
+      const path = `/bundle/${VERSION}/${VOCAB_VERSION}`;
+      const claudeTag = (await fresh.raw(path, reader)).headers.get('etag');
+      expect(claudeTag).not.toBeNull();
+      expect((await fresh.raw(path, reader, { 'if-none-match': claudeTag ?? '' })).status).toBe(304);
+      const crossed = await fresh.raw(`${path}?harness=cursor`, reader, { 'if-none-match': claudeTag ?? '' });
+      expect(crossed.status).toBe(200);
+      expect(crossed.headers.get('etag')).not.toBe(claudeTag);
+      expect(await fresh.get(`/bundle/${VERSION}/${VOCAB_VERSION}?harness=acme`, reader)).toMatchObject({ status: 400, json: { error: 'unknown_harness', field: 'harness' } });
+    } finally {
+      await fresh.dispose();
+    }
+  }, 60_000);
+});

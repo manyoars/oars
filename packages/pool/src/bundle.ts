@@ -1,6 +1,6 @@
 // Serving a bundle: one harness version's cells, derived and signed. The signature covers the exact payload bytes and the client pinned the public half at login, so a replica can be
 // kept and checked again anywhere.
-import { type Bundle, isBundleVersion, type SignedBundle, VOCAB_VERSION, BUNDLE_FORMAT } from '../../cli/src/sessions/pool-wire.js';
+import { type Bundle, isBundleVersion, isHarness, type SignedBundle, VOCAB_VERSION, BUNDLE_FORMAT } from '../../cli/src/sessions/pool-wire.js';
 import { CALL_SHAPE_METHOD, contentHash, METHODS } from '../../cli/src/sessions/read.js';
 import { EXTRACTOR_VERSION } from '../../cli/src/sessions/schema.js';
 import { accessOf } from './access.js';
@@ -31,7 +31,7 @@ const generationOf = async (env: Env): Promise<number> => {
  * What names this bundle: the code that derives it, the floor, the version asked for, and the generation of the rows. It is known without reading a row, so a conditional request
  * costs no parse and an account cannot force one by sending it. Read before the rows, so a bundle is never older than the ETag it carries.
  */
-const etagOf = (harnessVersion: string, generation: number): string => `"${contentHash([BUNDLE_FORMAT, EXTRACTOR_VERSION, METHODS, CALL_SHAPE_METHOD, K_CELL, harnessVersion, VOCAB_VERSION, generation])}"`;
+const etagOf = (harness: string, harnessVersion: string, generation: number): string => `"${contentHash([BUNDLE_FORMAT, EXTRACTOR_VERSION, METHODS, CALL_SHAPE_METHOD, K_CELL, harness, harnessVersion, VOCAB_VERSION, generation])}"`;
 
 /** Whether an If-None-Match names this ETag. A proxy that compresses may weaken it to `W/"..."`, so the prefix is not compared. */
 const matches = (header: string | null, etag: string): boolean => (header ?? '').split(',').some((token) => token.trim().replace(/^W\//, '') === etag);
@@ -49,15 +49,20 @@ const spend = async (env: Env, account: string, week: string, cap: number): Prom
 /** Drops the counts of an earlier week, through the `accounts_by_fetch_week` index, so it reads no row of an account that has a current count. Exported so a test can ask SQLite for its plan. */
 export const WEEK_RESET = 'UPDATE accounts SET fetch_week = NULL, fetches = 0 WHERE fetch_week < ?';
 
+/** The harness a bundle is asked for. A version number does not name its harness, so the route takes it as `?harness=`; the one harness whose numbering the route served before is the default until the admitted list names each version's harness. */
+const DEFAULT_HARNESS = 'claude-code';
+
 export const fetchBundle = async (request: Request, env: Env, harnessVersion: string, vocabVersion: string): Promise<Response> => {
   const account = await accountOf(request, env);
   if (account === undefined) return refuse(401, 'unauthorized', 'Sign in with oars pool login first.');
   if (!isBundleVersion(harnessVersion)) return refuse(400, 'unknown_harness_version', 'That is not a public harness version.', 'harnessVersion');
+  const harness = new URL(request.url).searchParams.get('harness') ?? DEFAULT_HARNESS;
+  if (!isHarness(harness)) return refuse(400, 'unknown_harness', 'That is not a harness this pool serves.', 'harness');
   if (vocabVersion !== VOCAB_VERSION) return refuse(400, 'unknown_vocab_version', `This pool holds vocabulary version ${VOCAB_VERSION}.`, 'vocabVersion');
   const key = bound(env.BUNDLE_SIGNING_KEY);
   if (key === undefined) return notConfigured('BUNDLE_SIGNING_KEY');
   const generation = await generationOf(env);
-  const etag = etagOf(harnessVersion, generation);
+  const etag = etagOf(harness, harnessVersion, generation);
   // Before the spend and before the pool is read: a bundle that has not changed is not sent, so it costs the account nothing.
   if (matches(request.headers.get('if-none-match'), etag)) return new Response(null, { status: 304, headers: { etag } });
   const now = Date.now();
@@ -71,7 +76,7 @@ export const fetchBundle = async (request: Request, env: Env, harnessVersion: st
   try {
     // The count is dropped when its week ends, so what stays per account is only this week's. Earlier only (`<`, and `YYYY-Www` orders): a request that computed its week just before Monday must not wipe a count already spent in the new week.
     await env.DB.prepare(WEEK_RESET).bind(week).run();
-    return answer(200, await signed(bundleOf(harnessVersion, await storedOf(env, harnessVersion)), key), { etag });
+    return answer(200, await signed(bundleOf(harness, harnessVersion, await storedOf(env, harness, harnessVersion)), key), { etag });
   } catch (error) {
     // The spend came first so two fetches at once cannot both take the last, but a 304 spends nothing because it sends no bundle, and neither does a fetch that throws.
     if (capped) await env.DB.prepare('UPDATE accounts SET fetches = fetches - 1 WHERE id = ? AND fetch_week = ? AND fetches > 0').bind(account, week).run();

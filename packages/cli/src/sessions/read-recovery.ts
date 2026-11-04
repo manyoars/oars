@@ -1,4 +1,4 @@
-// Recovery (t752, rank 1; spec Section 7): each signature record, as a read. A signature's text is class A, so the read holds its hash (the same value on any account,
+// Recovery (rank 1; spec Section 7): each signature record, as a read. A signature's text is class A, so the read holds its hash (the same value on any account,
 // computed by the asker's client) and public names only; `recall()` is still how an operator reads the text. Confounders: `editFollowed` is not success, and refusals and
 // hook denials are local policy. Its evidence is the cells holding the failed call and the step after it, on the days the signature occurred and the days their frames were written.
 import { ACTION_TABLES, actionOf, type CanonicalAction } from './actions.js';
@@ -19,7 +19,7 @@ const standsBefore = (a: ErrorObservation, b: ErrorObservation): boolean => {
 };
 
 /**
- * One row per session and tool-use id (t752, t762). The tool fold leaves every error line in place, so a store not yet captured again keeps a replayed result's line beside the
+ * One row per session and tool-use id. The tool fold leaves every error line in place, so a store not yet captured again keeps a replayed result's line beside the
  * first, and fit's folded `failed` would disagree with these counts. The earliest copy stands for the call, whatever order they came in; a row with no id is its own call.
  */
 const oneRowPerCall = (errors: readonly ErrorObservation[]): ErrorObservation[] => {

@@ -207,7 +207,7 @@ export const actionOfShape = (tool: string, harnesses: readonly string[]): Canon
 };
 
 /**
- * What a push must beat: a shape is pushed only when its failure share is at least this many times the share of all calls of its action (t785). The floors above keep
+ * What a push must beat: a shape is pushed only when its failure share is at least this many times the share of all calls of its action. The floors above keep
  * a shape that fails often; this keeps one that fails more often than its action does, and guards a store whose base rate is high. On the replay of 2026-11-02 it kept
  * 79 of 79 pushes, at 4.5x and 8.6x their action's share: a real signal, not a defect. Open parameter, like the floors.
  */

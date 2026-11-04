@@ -1,9 +1,10 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { crossingsPath, type GateHookDeps } from './hook.js';
 import { runHookProcess } from './hook-process.js';
+import type { RegistryAnswer } from './registry.js';
 
 const made: string[] = [];
 afterEach(() => {
@@ -37,6 +38,30 @@ describe('the hook process: the deadline', () => {
     const lines = readFileSync(crossingsPath(store), 'utf8').trim().split('\n');
     expect(lines).toHaveLength(1);
     expect(JSON.parse(lines[0] ?? '')).toMatchObject({ kind: 'crossing', via: 'hook', name: 'left-pad', session: 's1' });
+  });
+
+  it.each([
+    ['shown', 0.5],
+    ['held', 0],
+  ])('writes a %s note row as no exposure at the deadline, since nothing was printed', async (_arm, draw) => {
+    const store = folder();
+    const exit = vi.fn();
+    const found = (): Promise<RegistryAnswer> => Promise.resolve({ state: 'found', latest: '1.0.0', created: '2026-10-30T00:00:00.000Z' });
+    void runHookProcess({ stdin: () => Promise.resolve(PAYLOAD), deps: depsFor(store, { append: () => new Promise<void>(() => undefined), registry: found, random: () => draw }), exit, deadlineMs: 300 });
+    await vi.waitFor(() => { expect(exit).toHaveBeenCalledWith(0); }, { timeout: 2_000 });
+    const lines = readFileSync(crossingsPath(store), 'utf8').trim().split('\n');
+    expect(JSON.parse(lines[0] ?? '')).toMatchObject({ name: 'left-pad', arm: 'none', lineShown: 'none', lineHeld: 'none' });
+  });
+
+  it('writes a staged block row as no exposure at the deadline, since the deny never printed', async () => {
+    const store = folder();
+    writeFileSync(join(store, 'gate-policy.json'), '{"classes":{"not-found":"block"}}');
+    const exit = vi.fn();
+    const missing = (): Promise<RegistryAnswer> => Promise.resolve({ state: 'not-found', latest: null, created: null });
+    void runHookProcess({ stdin: () => Promise.resolve(PAYLOAD), deps: depsFor(store, { append: () => new Promise<void>(() => undefined), registry: missing }), exit, deadlineMs: 300 });
+    await vi.waitFor(() => { expect(exit).toHaveBeenCalledWith(0); }, { timeout: 2_000 });
+    const lines = readFileSync(crossingsPath(store), 'utf8').trim().split('\n');
+    expect(JSON.parse(lines[0] ?? '')).toMatchObject({ name: 'left-pad', arm: 'none', lineShown: 'none', lineHeld: 'none' });
   });
 
   it.skipIf(process.platform === 'win32')('creates the staged file private to the user', async () => {
@@ -92,6 +117,46 @@ describe('the hook process: every failure exits 0', () => {
       throw new Error('setEncoding is not a function');
     };
     await runHookProcess({ stdin: sync, deps: depsFor(folder()), exit, deadlineMs: 5_000 });
+    expect(exit).toHaveBeenCalledWith(0);
+  });
+});
+
+describe('the hook process: the answer on stdout', () => {
+  const missing = (): Promise<RegistryAnswer> => Promise.resolve({ state: 'not-found', latest: null, created: null });
+
+  it('hands the hook output to `write` before it exits, when the policy blocks', async () => {
+    const store = folder();
+    writeFileSync(join(store, 'gate-policy.json'), '{"classes":{"not-found":"block"}}');
+    const order: string[] = [];
+    const write = vi.fn<(text: string) => Promise<void>>(() => {
+      order.push('write');
+      return Promise.resolve();
+    });
+    const exit = vi.fn<(code: number) => void>(() => {
+      order.push('exit');
+    });
+    await runHookProcess({ stdin: () => Promise.resolve(PAYLOAD), deps: depsFor(store, { registry: missing }), exit, write, deadlineMs: 5_000 });
+    expect(write).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(write.mock.calls[0]?.[0] ?? '')).toMatchObject({ hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny' } });
+    expect(order).toEqual(['write', 'exit']);
+    expect(exit).toHaveBeenCalledWith(0);
+  });
+
+  it('writes nothing when the hook has nothing to say', async () => {
+    const write = vi.fn<(text: string) => Promise<void>>(() => Promise.resolve());
+    const exit = vi.fn();
+    const old = (): Promise<RegistryAnswer> => Promise.resolve({ state: 'found', latest: '1.0.0', created: '2020-01-01T00:00:00.000Z' });
+    await runHookProcess({ stdin: () => Promise.resolve(PAYLOAD), deps: depsFor(folder(), { registry: old }), exit, write, deadlineMs: 5_000 });
+    expect(write).not.toHaveBeenCalled();
+    expect(exit).toHaveBeenCalledWith(0);
+  });
+
+  it('still exits 0 when `write` rejects', async () => {
+    const store = folder();
+    writeFileSync(join(store, 'gate-policy.json'), '{"classes":{"not-found":"block"}}');
+    const exit = vi.fn();
+    await runHookProcess({ stdin: () => Promise.resolve(PAYLOAD), deps: depsFor(store, { registry: missing }), exit, write: () => Promise.reject(new Error('closed pipe')), deadlineMs: 5_000 });
+    expect(exit).toHaveBeenCalledTimes(1);
     expect(exit).toHaveBeenCalledWith(0);
   });
 });

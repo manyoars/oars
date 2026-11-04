@@ -27,6 +27,7 @@ const crossing = (extra: Partial<CrossingRecord> = {}): CrossingRecord => ({
   registryAge: 'not-read',
   arm: 'none',
   lineShown: 'none',
+  lineHeld: 'none',
   session: 's1',
   agent: null,
   toolUseId: 't1',
@@ -76,6 +77,17 @@ describe('the counts', () => {
     expect(text).toContain('Removed later: 1');
   });
 
+  it('counts the policy the hook rows were written under, and leaves a replay row out of it', () => {
+    const counted = reportOf([crossing({ policy: 'default' }), crossing({ toolUseId: 't2', policy: 'default' }), crossing({ toolUseId: 't3', policy: 'invalid' }), crossing({ toolUseId: 't4' })]);
+    expect(counted.policy).toEqual([
+      { value: 'default', count: 2 },
+      { value: 'file', count: 0 },
+      { value: 'invalid', count: 1 },
+    ]);
+    expect(formatReport(counted)).toContain('Policy: default 2, invalid 1');
+    expect(formatReport(report)).not.toContain('Policy:');
+  });
+
   it('says the registry state was not read, and never guesses', () => {
     expect(formatReport(report)).toContain('registry state not read');
     expect(formatReport(report)).not.toContain('Against latest');
@@ -103,6 +115,24 @@ describe('the counts', () => {
     expect(text).toContain('Against latest: ');
     expect(count(read.registryState, 'not-found')).toBe(1);
     expect(count(read.againstLatest, 'not-latest')).toBe(1);
+  });
+
+  it('separates the notes shown from the notes held, and the line each carried', () => {
+    const arms = reportOf([
+      run(),
+      crossing({ name: 'quiet', toolUseId: 't1' }),
+      crossing({ name: 'young', toolUseId: 't2', arm: 'shown', lineShown: 'young-name-note' }),
+      crossing({ name: 'ghost', toolUseId: 't3', arm: 'held', lineHeld: 'not-found-note' }),
+    ]);
+    expect(arms.arm).toEqual([{ value: 'none', count: 1 }, { value: 'shown', count: 1 }, { value: 'held', count: 1 }]);
+    expect(count(arms.lineShown, 'none')).toBe(2);
+    expect(count(arms.lineShown, 'young-name-note')).toBe(1);
+    expect(count(arms.lineHeld, 'none')).toBe(2);
+    expect(count(arms.lineHeld, 'not-found-note')).toBe(1);
+    const text = formatReport(arms);
+    expect(text).toContain('Notes: none 1, shown 1, held 1');
+    expect(text).toContain('Line shown: none 2, young-name-note 1');
+    expect(text).toContain('Line held: none 2, not-found-note 1');
   });
 
   it('uses no evaluative word anywhere in what it prints', () => {

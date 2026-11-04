@@ -84,7 +84,7 @@ interface FileState {
   rev: number;
   /** The capture version that wrote this file's records; a file recorded under another version is deposited again. */
   v: string;
-  /** The `sid` of the salt the file's records were hashed with; a file recorded under another salt is captured again from raw (t711 Section 4). */
+  /** The `sid` of the salt the file's records were hashed with; a file recorded under another salt is captured again from raw (spec Section 4). */
   s?: string;
   /** The sorted `--redact-domain` set in force when this file was deposited; a file recorded under another set is deposited again. */
   d: string[];
@@ -250,7 +250,7 @@ const projectFolders = async (projectsRoot: string): Promise<string[]> => {
   }
 };
 
-/** What a deposit never reads: project folders that hold transcripts but that no `--allow` entry names (t776). */
+/** What a deposit never reads: project folders that hold transcripts but that no `--allow` entry names. */
 export interface SkippedScope {
   folders: number;
   /** Main transcripts in those folders; subagent transcripts are not counted, as everywhere else. */
@@ -552,7 +552,7 @@ export interface DeriveTrace {
 export interface DepositTrace {
   /** Records written, by kind: `session` (main), `subagent`, `user-prompt`, `tool`, `error-line`. */
   kinds: StepCounts;
-  /** Pending sessions (t832) this deposit took before its own, as step-row `in` counts: `pending` found, `pendingDropped` (transcript gone, folder no longer allowed, not an entry, or removed at `PENDING_MAX_FAILURES` failures), `pendingKept` (failed, or an unreadable file; left for the next run). */
+  /** Pending sessions this deposit took before its own, as step-row `in` counts: `pending` found, `pendingDropped` (transcript gone, folder no longer allowed, not an entry, or removed at `PENDING_MAX_FAILURES` failures), `pendingKept` (failed, or an unreadable file; left for the next run). */
   pending?: StepCounts;
   /** Set to the refusal's first line when the Stop hook found the store locked and recorded its session in the pending list instead of depositing: the caller logs a `deferred` row, not an `error` one. */
   deferred?: string;
@@ -613,7 +613,7 @@ export const refresh = async (runtime: SessionsRuntime, redactDomains: readonly 
     trace.deriveFailure = { error, key, ms: Math.round(performance.now() - started) };
     return;
   }
-  // The pool is derived for the index's fit reads only: one that cannot be read or written costs the index those, never the index itself (`currentPool` says so on stderr). Loaded here, not at the top: the pool imports every read family, and a lookup hook never reaches this step. It runs before the clock starts, so the index's `ms` is the index and not the derive (t756: the first pool run takes 12 to 17 s on a store copy).
+  // The pool is derived for the index's fit reads only: one that cannot be read or written costs the index those, never the index itself (`currentPool` says so on stderr). Loaded here, not at the top: the pool imports every read family, and a lookup hook never reaches this step. It runs before the clock starts, so the index's `ms` is the index and not the derive (the first pool run takes 12 to 17 s on a store copy).
   // A module that will not load costs the index the same fit reads, with one line on stderr, as `currentPool` does when the pool cannot be built.
   const reads = await import('./pool.js').then(
     async ({ currentPool }) => (await currentPool(runtime.storeDir, store))?.reads ?? [],
@@ -651,7 +651,7 @@ const commitCapture = async (context: DepositContext, key: string, extract: Capt
   context.state.files[key] = { ...cursor, v: CAPTURE_VERSION, s: context.salt.sid, d: context.domains, repoSize: extract.session.frame?.stack.size ?? null };
 };
 
-/** Another deposit holds the store lock and the wait ran out: the one failure the Stop hook defers (t832) instead of counting as a failed run. */
+/** Another deposit holds the store lock and the wait ran out: the one failure the Stop hook defers instead of counting as a failed run. */
 export class StoreLockedError extends CliError {
   constructor() {
     super('The store is locked by another deposit; try again shortly.', ExitCode.UNEXPECTED, 'unexpected');
@@ -870,7 +870,7 @@ const noteUnreadable = (counts: SourceTally, file: string, error: unknown): void
 };
 
 /**
- * Deposits the sessions of one non-Claude source under `root` (t728 for Cursor, t749 for the table). A session's cursor is its size and
+ * Deposits the sessions of one non-Claude source under `root`. A session's cursor is its size and
  * mtime (for Cursor, its message count and `lastUpdatedAt`), kept in `state.json` like a transcript file's, so a second deposit adds nothing
  * until the harness writes the session again. The store is opened read-only and a missing one is skipped silently. Nothing is archived: a
  * source keeps its own history, and this store never copies it.
@@ -1072,7 +1072,7 @@ export const frozenSessions = async (runtime: SessionsRuntime, behind: readonly 
 
 /**
  * Transcripts the harness no longer has but the raw archive does, whose last capture is behind this code or used another salt: they are
- * captured again from `<store>/raw/` (t711 Section 4, re-capture source). One with neither stays as logged, read through the compatibility reader.
+ * captured again from `<store>/raw/` (spec Section 4, re-capture source). One with neither stays as logged, read through the compatibility reader.
  */
 const rawOnlyTranscripts = async (context: DepositContext, project: string, onDisk: ReadonlySet<string>): Promise<Transcript[]> => {
   const { storeDir } = context.runtime;
@@ -1299,7 +1299,7 @@ const interner = (): ((value: string) => string) => {
 
 /**
  * Every tool row carries the session id, the tool name, and its key names, and `JSON.parse` makes a new string of each: a log of a million rows
- * held a million copies of a few thousand strings (t808). The row is the same value with the strings shared.
+ * held a million copies of a few thousand strings. The row is the same value with the strings shared.
  */
 const internTool = (tool: ToolObservation, intern: (value: string) => string): ToolObservation => ({
   ...tool,
@@ -1322,7 +1322,7 @@ const internTool = (tool: ToolObservation, intern: (value: string) => string): T
  */
 export const loadStore = async (storeDir: string, afterFirstPass?: () => Promise<void>): Promise<Store> => {
   // Two passes, so a superseded record is never held: the first keeps one number per session, the second keeps only the records at that rev.
-  // A re-capture leaves the old copies in the log until a compaction, and holding them as well doubled the heap of every read (t808).
+  // A re-capture leaves the old copies in the log until a compaction, and holding them as well doubled the heap of every read.
   // Both passes read one open file: a lock-free reader can meet a compaction between them, and a second open would see the compacted log, where
   // a session recaptured in that window fails the rev match and drops out of this read.
   const file = paths(storeDir).observations;
@@ -1355,7 +1355,7 @@ export const loadStore = async (storeDir: string, afterFirstPass?: () => Promise
   const agents: (SessionCapture & { parent: string })[] = [];
   for (const { session: written, prompts, tools: writtenTools, errorLines: writtenErrorLines } of captured.values()) {
     if (written === undefined) continue;
-    // One tool call is one record: a replay an older capture wrote beside the call is folded here (t762).
+    // One tool call is one record: a replay an older capture wrote beside the call is folded here.
     const folded = foldToolRows(writtenTools, writtenErrorLines);
     const session = withoutReplays(written, folded.dropped);
     const { tools, errorLines } = folded;
@@ -1594,7 +1594,7 @@ const withCostFields = (skeleton: Skeleton, lean: boolean): Skeleton => ({
 
 /**
  * `unreadable` counts skeleton files that are torn, corrupted, or not a skeleton, so verify reports them instead of aborting. With `lean`, each
- * line's `hashes` read as empty: `verify` holds every skeleton at once and checks structure, never content (t808).
+ * line's `hashes` read as empty: `verify` holds every skeleton at once and checks structure, never content.
  */
 export const readSkeletons = async (storeDir: string, only?: string, lean = false): Promise<{ skeletons: Skeleton[]; unreadable: number }> => {
   const folder = paths(storeDir).skeletons;

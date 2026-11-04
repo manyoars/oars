@@ -1,4 +1,4 @@
-// The Grok Build source (t818): a Grok Build session log becomes the same capture records a Claude Code transcript does.
+// The Grok Build source: a Grok Build session log becomes the same capture records a Claude Code transcript does.
 //
 // FIXTURE-DERIVED: written from the public source of the CLI (github.com/xai-org/grok-build @ 2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8, Apache-2.0, Rust,
 // under crates/codegen/) and the Agent Client Protocol schema it implements (github.com/agentclientprotocol/agent-client-protocol @ 0e486bcd, schema/v1/

@@ -60,7 +60,7 @@ const PURCHASING_CLOSED = 'Paid agents are not open yet, so `oars purchasing` is
 /**
  * `oars purchasing` is closed to the public: V13 holds that nothing is sold before business verification, and the launch flag
  * is already true, so it cannot be the gate. Only `OARS_ISSUER_URL` (dev, staging, tests) opens it, with no network call.
- * t465's release removes this gate.
+ * Opening paid agents removes this gate.
  */
 export const requirePurchasingOpen = (deps: RunDeps): void => {
   const fromEnv = deps.env.OARS_ISSUER_URL;

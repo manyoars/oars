@@ -1,4 +1,4 @@
-// What ties a recall's answer to the stored read of the current pool (t757, fix round). A store-wide count answers the asker, and the read it rests on is what `lineage` can
+// What ties a recall's answer to the stored read of the current pool. A store-wide count answers the asker, and the read it rests on is what `lineage` can
 // walk, so each answer carries that read's ID. Without a stored read for it, an answer keeps its stand-in hash, which `lineage` reports as evidence with no further hop.
 import { bucketFields, cellIdOf, UNKNOWN, type Cell, type Pool } from './cells.js';
 import { motifName, type Motif } from './motif.js';

@@ -1,4 +1,4 @@
-// `readSkeletons(..., lean)` and the verify that uses it (t808): verify holds every skeleton at once and no check reads a line's content hashes.
+// `readSkeletons(..., lean)` and the verify that uses it: verify holds every skeleton at once and no check reads a line's content hashes.
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type * as Store from './store.js';
 import { cleanup, NOW, stage } from './test-support.js';
