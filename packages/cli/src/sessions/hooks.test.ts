@@ -122,7 +122,7 @@ describe('SessionEnd deposit hook', () => {
     expect(calls[0]?.session).toBe('fresh');
   });
 
-  it('defers on a held store lock inside the 5 s budget and still returns nothing', async () => {
+  it('defers on a held store lock after its 3 s wait and still returns nothing', async () => {
     const staged = await deposited();
     const transcript = join(staged.projectsRoot, slugOf(REPO), 'blocked.jsonl');
     copyFileSync(join(FIXTURES, 'proj', 'tldr.jsonl'), transcript);
