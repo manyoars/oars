@@ -115,13 +115,17 @@ const MAX_SIGHTS = 10;
 // cut before it asks at all. The second and third leave the name unasked, and the next sight asks once itself, so a store with no lock and no kept answer sends the case to its next
 // sight, at most MAX_SIGHTS, and then fails. Returns the number of sights run, the last of which handed off.
 const sightsToHandOff = (payload: string, npm: { folder: string }, home: string, store: string): number => {
+  // What each sight left, so a failure names how every one ended instead of leaving the cause to be inferred.
+  const seen: string[] = [];
   for (let sight = 1; sight <= MAX_SIGHTS; sight += 1) {
+    const began = Date.now();
     const result = runHook(payload.replace('"u1"', `"u${String(sight)}"`), [], npm.folder, home);
     expect(result.status).toBe(0);
     expect(result.stdout).toBe('');
     if (lockFiles(store).length > 0 || existsSync(join(store, 'gate-registry.jsonl'))) return sight;
+    seen.push(`#${String(sight)} ${String(Date.now() - began)} ms, ${String(rowsOf(home).length)} rows`);
   }
-  return expect.unreachable(`no sight of ${String(MAX_SIGHTS)} took the lock or started the helper`);
+  return expect.unreachable(`no sight of ${String(MAX_SIGHTS)} took the lock or started the helper: ${seen.join('; ')}`);
 };
 
 // One sight after the hand-off, run again if the box was so loaded that the hook was ended before it wrote its row (or, when `printed` is set, before it printed): with the lock or the
