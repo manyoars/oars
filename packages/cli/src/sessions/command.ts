@@ -11,7 +11,7 @@ import { books, BOOKS_CAVEAT, formatBooks, formatMeasure, formatRecall, measure,
 import { formatLineage, loadLineage, walkLineage } from './lineage.js';
 import { appendRecall, readRecalls } from './recall-object.js';
 import { deriveConsequences, formatRecallCounts, recallCounts } from './recall-consequence.js';
-import { pull, type PullInput } from './recall-reads.js';
+import { pull, pullRefusal, type PullInput } from './recall-reads.js';
 import { MISS_TEXT } from './recall-render.js';
 import { readHookCalls } from './hook-calls.js';
 import { buildIndex, contextBlock, inRepository, readIndex, type ContextOptions } from './hook-index.js';
@@ -81,6 +81,8 @@ export const sessionsRecall = async (deps: SessionsDeps, query: PullInput, sid: 
   if (!isAnswerable(query)) {
     throw new CliError('Pass --error "<text>", --path <file>, --class <name>, --pattern <id>, --entity <name>, --family <name>, or --text "<text>".', ExitCode.USAGE, 'usage');
   }
+  const refusal = pullRefusal(query);
+  if (refusal !== undefined) throw new CliError(refusal, ExitCode.USAGE, 'usage');
   const { storeDir } = runtimeOf(deps);
   // The key is the query and `ev`, known before the work, so a recall that keeps failing is the same key each time.
   const key = stampKey(JSON.stringify(query));
@@ -115,7 +117,7 @@ export const sessionsLineage = async (deps: SessionsDeps, ref: string): Promise<
 /**
  * `read`: rows from the current pool's reads. The step log holds it under its own step, because the `recall` counters answer how often a recall was asked for. Every row states
  * its clusters and order. No floor applies at order 1, because every cell here is the operator's own; above it a read below its floor does not exist, so this also says what the
- * store cannot read, which tells that apart from a read that found nothing. This verb is the one way out for reads: no agent path serves them.
+ * store cannot read, which tells that apart from a read that found nothing. A recall states a read as counts; this verb is the one way out for a read's whole value and for an experimental read.
  */
 export const sessionsRead = async (deps: SessionsDeps, options: { family: string | undefined; slices: readonly string[] }): Promise<Outcome> => {
   const { family } = options;

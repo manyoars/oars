@@ -13,7 +13,7 @@ import { CliError, ExitCode } from './errors.js';
 import { requirePurchasingOpen } from './issuer.js';
 import type { JournalStore } from './journal.js';
 import type { BooksBy, RecallQuery } from './sessions/query.js';
-import { closedQueryOf } from './sessions/recall-reads.js';
+import { closedQueryOf, RECALL_FAMILIES } from './sessions/recall-reads.js';
 import { FAMILIES } from './sessions/read.js';
 import { sessionsBooks, sessionsContext, sessionsDeposit, sessionsGoldArms, sessionsGoldSample, sessionsGoldScore, sessionsHookInstall, sessionsHookStatus, sessionsHookUninstall, sessionsMcp, sessionsLineage, sessionsMeasure, sessionsRead, sessionsRecall, sessionsRecallCounts, sessionsVerify, type SessionsDeps } from './sessions/command.js';
 import type { InstallRuntime, Scope } from './sessions/install.js';
@@ -308,7 +308,7 @@ const buildProgram = (deps: RunDeps, argv: string[]): Command => {
     .option('--since <days>', 'only the last N days', positiveInteger)
     .option('--pattern <id>', 'what happened from here: a read ID for a step so far (repeatable)', collect)
     .option('--entity <name>', 'what is known about a public name: a tool, an MCP server, an action, or a model')
-    .option('--family <name>', 'one read family (recovery or fit), narrowed by --class and --since')
+    .option('--family <name>', `one read family (${RECALL_FAMILIES.join(', ')}); only recovery and fit are narrowed by --class and --since`)
     .option('--text <text>', 'look for text in the local record')
     .option('--session <id>', 'the session asking, so what it did next can be read for this recall')
     .option('--counts', 'print counts of recalls by mode, arm, and answer, with what followed, instead of answering (see --day)')

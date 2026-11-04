@@ -137,6 +137,8 @@ const motifOf = (tool: string): string | undefined => {
 const nameOf = (read: RecallRead): string => {
   // An entity read is about the name itself, which need not be a tool: `actionOf` would read a model or a server as `other`, naming nothing.
   if (read.family === 'entity') return closedName(read.tool);
+  // A stored read whose slice names no motif or action goes by its family, which is a closed name too.
+  if (read.tool === read.family) return read.family;
   const motif = motifOf(read.tool);
   if (motif !== undefined) return motif;
   const { action, native } = toolOf(read, read.tool);

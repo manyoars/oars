@@ -6,7 +6,7 @@ import { appendFile, mkdir } from 'node:fs/promises';
 import { createInterface } from 'node:readline';
 import { currentPool } from './pool.js';
 import { appendRecall } from './recall-object.js';
-import { pull, type PullInput } from './recall-reads.js';
+import { pull, pullRefusal, RECALL_FAMILIES, type PullInput } from './recall-reads.js';
 import { MISS_TEXT } from './recall-render.js';
 import type { RecallCall } from './schema.js';
 import { loadStore, paths, readRedactDomains, type SessionsRuntime } from './store.js';
@@ -28,7 +28,7 @@ const TOOL = {
       sinceDays: { type: 'integer', minimum: 1, description: 'Only errors from the last N days.' },
       prefix: { type: 'array', items: { type: 'string' }, description: 'Read IDs for your steps so far: what happened from here?' },
       entity: { type: 'string', description: 'A public name: a tool, an MCP server, an action, or a model.' },
-      family: { type: 'string', description: 'A read family to answer: recovery or fit.' },
+      family: { type: 'string', description: `A read family to answer: ${RECALL_FAMILIES.join(', ')}. Only recovery and fit can be narrowed by class or sinceDays.` },
       text: { type: 'string', description: 'Text to look for in the local record.' },
     },
   },
@@ -73,6 +73,8 @@ export const handleMessage = async (runtime: SessionsRuntime, now: () => number,
     const params = isObj(message.params) ? message.params : {};
     if (params.name !== TOOL_NAME) return failure(id, -32602, `Unknown tool: ${typeof params.name === 'string' ? params.name : ''}`);
     const query = toQuery(params.arguments);
+    const refusal = pullRefusal(query);
+    if (refusal !== undefined) return failure(id, -32602, refusal);
     try {
       // The server is not told which session it serves, so `sid` is null: naming it is what a consequence for an MCP pull still needs.
       const store = await loadStore(runtime.storeDir);
