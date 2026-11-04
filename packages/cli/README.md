@@ -68,6 +68,16 @@ The SDK key is shown once, so save it when `deploy` prints it.
 
 - `--price <ref>` picks the price. The default is the workload's only active price.
 
+### keys
+
+`oars keys` manages the API keys of your account.
+
+- `oars keys create --name <name>` creates a key and prints its secret once; the platform keeps no copy. The default authorities are `AGENT_OPERATE` and `AGENT_READ`; `--authority <name>` (repeatable) sets others, and `--expires-in-days <n>` sets an expiry.
+- `--workload <id>` limits the key to one workload you created. Such a key may carry only `AGENT_OPERATE` and `AGENT_READ` (more is a 400, `API_KEY_WORKLOAD_SCOPE_EXCEEDS_CAP`), and it works on that workload only.
+- A retry with the same `--idempotency-key` returns no secret: the command exits 5 and names the key, and you revoke it and create another.
+- `oars keys list` lists the keys with their prefix, scope, and expiry. A secret never comes back.
+- `oars keys revoke <keyId>` ends a key at once. There is no `rotate`: revoke the key and create another.
+
 ### sessions
 
 `oars sessions` keeps a local, deterministic memory of your own Claude Code sessions. oars makes no model call and no network call, except `gold arms`, which sends redacted text through your own Claude subscription.
@@ -160,7 +170,7 @@ Install merges: existing hooks (a Stop hook that rotates sessions, say) stay, ev
 
 With `--json`, stdout carries exactly one JSON document and a success exits 0.
 
-- Success: `{"ok": true, ...}`. The rest depends on the command: `login` adds `email`; `deploy` adds `workloadId`, `prices`, `started`, `nextSteps` and, when this run minted it, `sdkKey`; `templates` adds `templates`; `status` adds `workload` and `billingMode`; `test-charge` adds `chargeId` and `status`; `sessions` commands add their own fields (`deposit` the counts, `recall` `matches`, `books` `rows`, `measure` `last` and `before`, `verify` `sessions`, `unreadable`, `invariants`, `sessionResults`, and `audit`).
+- Success: `{"ok": true, ...}`. The rest depends on the command: `login` adds `email`; `deploy` adds `workloadId`, `prices`, `started`, `nextSteps` and, when this run minted it, `sdkKey`; `templates` adds `templates`; `status` adds `workload` and `billingMode`; `test-charge` adds `chargeId` and `status`; `keys create` adds `key` and `secret`, `keys list` adds `keys`, and `keys revoke` adds `keyId` and `revoked`; `sessions` commands add their own fields (`deposit` the counts, `recall` `matches`, `books` `rows`, `measure` `last` and `before`, `verify` `sessions`, `unreadable`, `invariants`, `sessionResults`, and `audit`).
 - Failure: `{"ok": false, "step": "...", "problem": {...}}`, where `problem` is the platform's problem document (`title`, `detail`, `code`, `actionUrl` when it sent them). A `deploy` that stopped after registering also carries `workloadId`, `rerun` and, if that run minted it, `sdkKey`.
 
 Without `--json`, a failure prints the problem to stderr instead.
