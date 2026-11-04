@@ -141,13 +141,20 @@ const wireCommand = ({ program, subcommand, flags }: ShellCommand): ShellIdentit
 /** The wire's one spelling of "not admitted": a name the server's list does not hold goes as `private`, whatever the local store spells it. */
 const listed = (allowed: ReadonlySet<string>, name: string): string => (allowed.has(name) ? name : PRIVATE);
 
-/** A pull in the wire's spelling: its package name is a list member or `private`; the version keeps the registry's own `<literal>` for one it does not show. */
-const wirePull = (pull: PullIdentity): PullIdentity => ({ ...pull, name: listed(PUBLIC_PACKAGES, pull.name) });
+/** A pull in the wire's spelling: its package name is a list member or `private`. A version beside a masked name could identify it, so it goes as `<literal>` (null stays null), the rule capture applies. */
+const wirePull = (pull: PullIdentity): PullIdentity => {
+  const name = listed(PUBLIC_PACKAGES, pull.name);
+  return { ...pull, name, version: name === PRIVATE && pull.version !== null ? LITERAL : pull.version };
+};
 
 /** A non-shell step's identity in the wire's spelling; a shell step's comes from `wireCommand`. */
 const wireIdentity = (identity: StepIdentity): StepIdentity => {
   if (identity === null || 'program' in identity) return identity;
-  if ('server' in identity) return { ...identity, server: listed(PUBLIC_MCP_SERVERS, identity.server) };
+  if ('server' in identity) {
+    const server = listed(PUBLIC_MCP_SERVERS, identity.server);
+    // A tool beside a masked server has no list to be checked against, so it goes as the literal.
+    return server === PRIVATE ? { server, tool: LITERAL } : { ...identity, server };
+  }
   if ('skill' in identity) return { skill: listed(PUBLIC_SKILLS, identity.skill) };
   return { host: identity.host === null ? null : listed(PUBLIC_HOSTS, identity.host) };
 };
@@ -156,10 +163,10 @@ const wireIdentity = (identity: StepIdentity): StepIdentity => {
  * A stored tool's steps as the wire holds them: each shell step's identity is replaced by the projected command, and every name the server has no row for (a native name, MCP server,
  * skill, host, or pull name) reads `private`. A `private` program holds no pull, so a stored step whose public program has since left the list carries none. The one place a deposit and a local read take it from.
  */
-export const projectedSteps = (tool: ToolObservation, read: ShellReader): StepObservation[] => {
+export const projectedSteps = (tool: ToolObservation, read: ShellReader, harness: Harness): StepObservation[] => {
   const commands = read(tool);
   return (tool.steps ?? []).map((step, at) => {
-    const native = step.native === LITERAL ? PRIVATE : step.native;
+    const native = admittedNative(harness, step.native) ? step.native : PRIVATE;
     if (step.action !== 'shell.exec') return { ...step, native, identity: wireIdentity(step.identity) };
     const command = wireCommand(commands[at] ?? { program: PRIVATE, subcommand: null, flags: [] });
     const pulls = step.identity !== null && 'program' in step.identity ? step.identity.pulls : undefined;
@@ -172,6 +179,7 @@ const byCall = (tools: readonly ToolObservation[]): ToolObservation[] => [...too
 
 const transcriptOf = ({ session, prompts, tools }: SessionRecords['transcripts'][number], spawners: ReadonlyMap<number, number> | null, read: ShellReader): SkeletonTranscript | null => {
   if (session.frame === undefined) return null;
+  const harness = session.harness ?? 'claude-code';
   const framedPrompts: SkeletonPrompt[] = [];
   const promptAt = new Map<number, number>();
   for (const { index, cls, errors, wallSec, usage, frame } of [...prompts].sort((a, b) => a.index - b.index)) {
@@ -194,7 +202,7 @@ const transcriptOf = ({ session, prompts, tools }: SessionRecords['transcripts']
     // the calls that shared a prompt still share one, and no position reads as a prompt.
     if (prompt !== null && !promptAt.has(prompt)) promptAt.set(prompt, framedPrompts.length + unrecorded++);
     const promptPosition = prompt === null ? null : (promptAt.get(prompt) ?? null);
-    const steps = projectedSteps(tool, read).map(({ action, native, identity, status: reported, cost, parent }): SkeletonStep => ({
+    const steps = projectedSteps(tool, read, harness).map(({ action, native, identity, status: reported, cost, parent }): SkeletonStep => ({
       action,
       native,
       identity,
@@ -205,7 +213,7 @@ const transcriptOf = ({ session, prompts, tools }: SessionRecords['transcripts']
     }));
     steppedTools.push({ side, prompt: promptPosition, status, durationMs, steps });
   }
-  return { harness: session.harness ?? 'claude-code', frame: session.frame, prompts: framedPrompts, tools: steppedTools };
+  return { harness, frame: session.frame, prompts: framedPrompts, tools: steppedTools };
 };
 
 /** The skeleton of a session; null when any record of it was captured before steps and frames, which holds no closed reading to send. */
@@ -369,12 +377,15 @@ const parseUsage = (value: unknown, at: string): SkeletonUsage => {
 
 const parsePull = (value: unknown, at: string): PullIdentity => {
   const raw = fieldsOf(value, at, ['registry', 'name', 'version']);
+  const name = inSet(PUBLIC_PACKAGES, raw.name, under(at, 'name'));
   const version = orNull(raw.version, under(at, 'version'), (entry, entryAt) => {
     const text = textOf(entry, entryAt);
     if (text !== LITERAL && !isRegistryVersion(text)) throw new Refused(entryAt, 'outside the vocabulary');
+    // A version beside a masked name could identify it: capture masks the two together.
+    if (name === PRIVATE && text !== LITERAL) throw new Refused(entryAt, 'a private name holds no version');
     return text;
   });
-  return { registry: oneOf(REGISTRIES, raw.registry, under(at, 'registry')), name: inSet(PUBLIC_PACKAGES, raw.name, under(at, 'name')), version };
+  return { registry: oneOf(REGISTRIES, raw.registry, under(at, 'registry')), name, version };
 };
 
 const parseFlag = (value: unknown, at: string): string => {
@@ -415,14 +426,19 @@ const parseIdentity = (harness: Harness, action: CanonicalAction, value: unknown
   throw new Refused(at, 'this action has no identity');
 };
 
+/** Whether the harness's table names this native, so it can cross as itself; anything else (including the literal) crosses as `private`. */
+const admittedNative = (harness: Harness, native: string): boolean => {
+  if (native === PRIVATE) return true;
+  const table = ACTION_TABLES[harness];
+  if (Object.hasOwn(table.rows, native)) return true;
+  const mcp = mcpOf(table, native);
+  return mcp !== undefined && table.toolDelimited && isPublicMcpTool(mcp.server, mcp.tool);
+};
+
 const parseNative = (harness: Harness, value: unknown, at: string): string => {
   const native = textOf(value, at);
-  if (native === PRIVATE) return native;
-  const table = ACTION_TABLES[harness];
-  if (Object.hasOwn(table.rows, native)) return native;
-  const mcp = mcpOf(table, native);
-  if (mcp !== undefined && table.toolDelimited && isPublicMcpTool(mcp.server, mcp.tool)) return native;
-  throw new Refused(at, 'outside the vocabulary');
+  if (!admittedNative(harness, native)) throw new Refused(at, 'outside the vocabulary');
+  return native;
 };
 
 const parseStep = (harness: Harness, value: unknown, at: string): SkeletonStep => {

@@ -778,6 +778,20 @@ describe('oars pool deposit', () => {
         expect(outboxFiles(scene)).toEqual([]);
       });
 
+      it('before a later session fails the pass, when the term check stopped the first', async () => {
+        const { scene } = await built();
+        addProject(scene.staged, 'second-folder', '66666666-6666-4666-8666-666666666666', [line('another request')]);
+        await deposit(scene.staged.runtime, { allow: [OTHER_FOLDER, 'second-folder'], redactDomains: [], now: () => NOW });
+        writeFileSync(join(scene.staged.root, 'terms.txt'), `${TERM}
+plain
+`);
+        vi.mocked(skeletonOf).mockImplementationOnce(() => {
+          throw new Error('the disk is full');
+        });
+        expect(await scene.cli('pool', 'deposit', '--server', POOL)).not.toBe(ExitCode.OK);
+        expect(outboxFiles(scene)).toEqual([]);
+      });
+
       it('and says so in the text, in the singular', async () => {
         const { scene } = await built();
         const state = join(scene.staged.storeDir, 'state.json');
