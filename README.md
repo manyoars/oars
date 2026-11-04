@@ -2,12 +2,12 @@
 
 The Many Oars open-source monorepo. Apache-2.0.
 
-Many Oars lets a developer put a paid agent on the AOR platform in minutes. This repository holds what a developer copies,
-installs or imports to do that:
+Many Oars is the open-source `oars` command line, its generated client, and starter templates. This repository holds what a developer copies,
+installs, or imports:
 
 | Path | What it is | State |
 |------|------------|-------|
-| `packages/client` | `@manyoars/oars-client`: TypeScript types generated from `openapi/public.json` and a thin `openapi-fetch` wrapper that adds the bearer token, `Idempotency-Key` and `User-Agent` | published on npm as [`@manyoars/oars-client`](https://www.npmjs.com/package/@manyoars/oars-client) at 0.1.x |
+| `packages/client` | `@manyoars/oars-client`: TypeScript types generated from `openapi/public.json` and a thin `openapi-fetch` wrapper that adds the bearer token, `Idempotency-Key`, and `User-Agent` | published on npm as [`@manyoars/oars-client`](https://www.npmjs.com/package/@manyoars/oars-client) at 0.1.x |
 | `openapi/public.json` | The slice of the platform API that Many Oars exposes to the CLI, the templates, and coding agents (including the API key operations), generated from the platform's OpenAPI by `scripts/openapi-public.mjs` and the operation list in `openapi/public-operations.json` | here |
 | `templates/paid-api` | Starter template: an HTTP API that charges per call | here |
 | `templates/per-task-agent` | Starter template: a job that charges per finished task | here |
