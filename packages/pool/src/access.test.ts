@@ -1,15 +1,15 @@
 import { describe, expect, it } from 'vitest';
 import type { SessionSkeleton } from '../../cli/src/sessions/pool-wire.js';
 import { batchCounts, LEDGER_DAYS } from './access.js';
-import { cellCountOf } from './derive.js';
+import { incrementsOf } from './ingest.js';
 import { sampleSkeleton } from './sample.js';
 import { fieldOf, startPool, stubUser, type TestPool, textOf } from './test-pool.js';
 
 const PATH = '/bundle/2.1.314/0';
 const DAY_MS = 24 * 60 * 60 * 1000;
 
-const oneCell = (): number => 1;
-const noCells = (): number => 0;
+const ONE = 1;
+const NONE = 0;
 
 const without = (skeleton: SessionSkeleton, part: 'prompts' | 'tools'): SessionSkeleton => ({ ...skeleton, transcripts: skeleton.transcripts.map((transcript) => ({ ...transcript, [part]: [] })) });
 
@@ -18,31 +18,31 @@ describe('batchCounts', () => {
   const claude = sampleSkeleton('0000000000000002');
 
   it('counts a rooted tier for any harness, and a skeleton only when every harness writes no raw file', () => {
-    for (const tier of ['committed', 'audited', 'attested'] as const) expect(batchCounts(tier, claude, oneCell), tier).toBe(true);
-    expect(batchCounts('skeleton', cursor, oneCell)).toBe(true);
-    expect(batchCounts('skeleton', claude, oneCell)).toBe(false);
-    expect(batchCounts('none', cursor, oneCell)).toBe(false);
-    expect(batchCounts('none', claude, oneCell)).toBe(false);
+    for (const tier of ['committed', 'audited', 'attested'] as const) expect(batchCounts(tier, claude, ONE), tier).toBe(true);
+    expect(batchCounts('skeleton', cursor, ONE)).toBe(true);
+    expect(batchCounts('skeleton', claude, ONE)).toBe(false);
+    expect(batchCounts('none', cursor, ONE)).toBe(false);
+    expect(batchCounts('none', claude, ONE)).toBe(false);
   });
 
   it('holds a mixed batch to its strictest harness, subagents folded in', () => {
     const mixed: SessionSkeleton = { ...cursor, transcripts: [...cursor.transcripts, ...claude.transcripts.map((transcript) => ({ ...transcript, spawnedIn: 0 }))] };
-    expect(batchCounts('skeleton', mixed, oneCell)).toBe(false);
-    expect(batchCounts('committed', mixed, oneCell)).toBe(true);
+    expect(batchCounts('skeleton', mixed, ONE)).toBe(false);
+    expect(batchCounts('committed', mixed, ONE)).toBe(true);
   });
 
-  it('needs one prompt and one tool step over the whole batch, and one derived cell', () => {
-    expect(batchCounts('committed', without(claude, 'prompts'), oneCell)).toBe(false);
-    expect(batchCounts('committed', without(claude, 'tools'), oneCell)).toBe(false);
-    expect(batchCounts('committed', claude, noCells)).toBe(false);
-    expect(batchCounts('committed', claude, cellCountOf)).toBe(true);
+  it('needs one prompt and one tool step over the whole batch, and a cell increment written', () => {
+    expect(batchCounts('committed', without(claude, 'prompts'), ONE)).toBe(false);
+    expect(batchCounts('committed', without(claude, 'tools'), ONE)).toBe(false);
+    expect(batchCounts('committed', claude, NONE)).toBe(false);
+    expect(batchCounts('committed', claude, incrementsOf(claude).cells.size)).toBe(true);
   });
 
   it('finds the prompt in one transcript and the step in another', () => {
     const [main] = claude.transcripts;
     if (main === undefined) throw new Error('no transcript');
     const split: SessionSkeleton = { ...claude, transcripts: [{ ...main, tools: [] }, { ...main, spawnedIn: 0, prompts: [] }] };
-    expect(batchCounts('committed', split, oneCell)).toBe(true);
+    expect(batchCounts('committed', split, ONE)).toBe(true);
   });
 });
 

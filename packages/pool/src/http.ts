@@ -1,6 +1,6 @@
 // What every route shares: the bindings and how an answer is written. A refusal always names its error, and its field when one is to blame.
 
-interface Bound {
+export interface Bound {
   first: () => Promise<unknown>;
   all: () => Promise<{ results: readonly unknown[] }>;
   run: () => Promise<{ meta: { changes: number } }>;
@@ -9,6 +9,8 @@ interface Bound {
 /** The part of a D1 binding this server uses, so the code does not take the ambient Workers types, which clash with Node's. */
 export interface PoolDb {
   prepare: (sql: string) => { bind: (...values: (string | number | null)[]) => Bound };
+  /** Runs the statements in order as one transaction: all of them take effect or none does. */
+  batch: (statements: readonly Bound[]) => Promise<{ meta: { changes: number } }[]>;
 }
 
 /** Every value but `DB` is a binding the deploy sets, so a secret lives in the account and never in the config. Unset ones refuse the route that needs them. */
