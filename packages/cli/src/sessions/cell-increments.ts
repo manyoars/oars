@@ -6,7 +6,7 @@ import { bucketFields, deriveCells, type CellSet } from './cells.js';
 import type { Motif } from './motif.js';
 import { bucketOf, floorOf, projectedSteps, type SessionSkeleton, type ShellReader, type SkeletonTranscript } from './pool-wire.js';
 import { NO_RECALLS, type RecallGraph } from './recall-consequence.js';
-import type { PromptObservation, SessionObservation, StepObservation, ToolObservation, Usage } from './schema.js';
+import { harnessOf, type PromptObservation, type SessionObservation, type StepObservation, type ToolObservation, type Usage } from './schema.js';
 import type { Store } from './store.js';
 
 export interface CellRow {
@@ -96,7 +96,10 @@ export const cellsOf = (store: Store, graph: RecallGraph = NO_RECALLS): CellSet 
 };
 
 /** A local store with each shell step read as a deposit reads it (`projectedSteps`), so its named motifs are the ones the pool holds. */
-export const projectedStore = (store: Store, read: ShellReader): Store => ({ ...store, tools: store.tools.map((tool) => (tool.steps === undefined ? tool : { ...tool, steps: projectedSteps(tool, read) })) });
+export const projectedStore = (store: Store, read: ShellReader): Store => {
+  const harnesses = new Map([...store.sessions, ...store.subagents].map((session) => [session.session, harnessOf(session)]));
+  return { ...store, tools: store.tools.map((tool) => (tool.steps === undefined ? tool : { ...tool, steps: projectedSteps(tool, read, harnesses.get(tool.session) ?? 'claude-code') })) };
+};
 
 const NO_USAGE: Usage = { input: 0, cacheWrite: 0, cacheRead: 0, output: 0, thinking: 0 };
 

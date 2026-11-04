@@ -45,6 +45,13 @@ export const previousOf = async (env: Env, account: string, id: string): Promise
   }
 };
 
+/** The mark of the write that set the row an account holds under this id, or none. It reads the mark alone: `previousOf` parses the held skeleton and derives its whole batch, which a refusal never uses. */
+export const markOf = async (env: Env, account: string, id: string): Promise<string | undefined> => {
+  const held = await env.DB.prepare('SELECT ingest FROM deposits WHERE account = ? AND id = ?').bind(account, id).first();
+  const ingest = fieldOf(held, 'ingest');
+  return typeof ingest === 'string' ? ingest : undefined;
+};
+
 /** The cells a write of `next` over `previous` changes: how many increments ingest writes, which is none for a batch sent again unchanged. */
 export const netCellCount = (next: Increments, previous: Increments | undefined): number => netOf(next.cells, previous?.cells ?? new Map<string, CellRow>(), CELL_FIELDS).length;
 
@@ -59,7 +66,7 @@ export const chunksOf = (items: readonly unknown[], limit = CHUNK_BYTES): string
   let size = 2;
   for (const item of items) {
     const text = JSON.stringify(item);
-    // The brackets and one comma either side of it.
+    // One comma per item; the last is spare, so a chunk only ever comes in under the limit.
     const bytes = encoder.encode(text).length + 1;
     if (size + bytes > limit && held.length > 0) {
       chunks.push(`[${held.join(',')}]`);
@@ -84,7 +91,7 @@ export const incrementStatements = (env: Env, account: string, id: string, inges
   const strata = netOf(next.strata, previous?.strata ?? new Map<string, StratumRow>(), STRATUM_FIELDS);
   const guard = [account, id, ingest] as const;
   const statements: Bound[] = [];
-  // One statement per chunk, all in the one batch under the one guard: a batch's cells run about four times its skeleton, and D1 refuses a bound value over 2 MB.
+  // One statement per chunk, all in the one batch under the one guard: a large batch of varied steps runs its cell JSON to about four times its skeleton, and D1 refuses a bound value over 2 MB.
   for (const chunk of chunksOf(cells)) {
     statements.push(
       env.DB.prepare(
