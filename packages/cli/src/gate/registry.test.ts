@@ -47,7 +47,8 @@ describe('what may be asked', () => {
 describe('how a manager is started', () => {
   it('keeps the folder of the call out of the executable search, so a shim a transcript left there does not run', () => {
     const options = managerOptions('here', 'win32');
-    expect(options).toMatchObject({ cwd: 'here', shell: true, windowsHide: true, encoding: 'utf8', env: expect.objectContaining({ NoDefaultCurrentDirectoryInExePath: '1' }) });
+    expect(options).toMatchObject({ cwd: 'here', shell: true, windowsHide: true, encoding: 'utf8' });
+    expect(options.env).toMatchObject({ NoDefaultCurrentDirectoryInExePath: '1' });
     expect(options.timeout).toBeGreaterThan(0);
   });
 
