@@ -328,8 +328,8 @@ export const writeGoldFiles = async (file: string, arms: string, sidecar: string
 /** `gold sample`: writes the blind gold file and its hidden sidecar. It never overwrites one: the file may hold judgments. */
 export const sessionsGoldSample = async (deps: SessionsDeps, options: { size: number; batch: number; seed: string | undefined; termsFile: string; excludeTerms: string[]; outDir: string | undefined }): Promise<Outcome> => {
   const runtime = runtimeOf(deps);
-  // With no terms every session is excluded under V15, so a draw would be empty: say so before anything is read or written.
-  if ((await loadTerms(options.termsFile)).length === 0) throw new CliError('The term file is missing or empty, so every session is excluded (V15). Set OARS_EXCLUSION_TERMS to a file of terms, one per line.', ExitCode.INVALID, 'unreadable');
+  // With no terms every session is excluded, so a draw would be empty: say so before anything is read or written.
+  if ((await loadTerms(options.termsFile)).length === 0) throw new CliError('The term file is missing or empty, so every session is excluded. Set OARS_EXCLUSION_TERMS to a file of terms, one per line.', ExitCode.INVALID, 'unreadable');
   const date = new Date(deps.now()).toISOString().slice(0, 10);
   const dir = options.outDir ?? join(dirname(runtime.projectsRoot), 'session-commons', 'review');
   const file = join(dir, `outcome-gold-${date}.md`);
@@ -345,7 +345,7 @@ export const sessionsGoldSample = async (deps: SessionsDeps, options: { size: nu
   const subagents = document.entries.filter((entry) => entry.subagents > 0).length;
   const lines = [
     `Wrote ${plural(document.entries.length, 'prompt')}, drawn from ${String(document.frame)}, to ${file}.`,
-    `Excluded ${plural(document.excludedSessions, 'session')} the draw reached under the V15 rule (a listed term, no raw to scan, or unreadable).`,
+    `Excluded ${plural(document.excludedSessions, 'session')} the draw reached under the exclusion rule (a listed term, no raw to scan, or unreadable).`,
     `Passed over ${plural(unreadable, 'prompt')} whose transcript no longer matches the store.`,
     `${plural(subagents, 'sampled prompt')} ran subagents, whose work is not read.`,
     `Score it after any batch: oars sessions gold score ${file}`,

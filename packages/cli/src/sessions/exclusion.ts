@@ -1,4 +1,4 @@
-// The V15 exclusion rule (register A38): a session is excluded if any line of its main or subagent transcript holds a listed term,
+// The exclusion rule (register A38): a session is excluded if any line of its main or subagent transcript holds a listed term,
 // scanned locally before anything is deposited to the pool. A session with no raw to scan is excluded, and so is every session when
 // the term file is missing or empty (fail closed). The term list is a local file and never lives in this repository; nothing here
 // prints, logs, or returns a term or a line of a transcript, only counts and session ids.
@@ -71,7 +71,7 @@ const entriesOf = async (dir: string) => {
 type Kind = 'directory' | 'file';
 
 /**
- * The one rule for a path at any level (V15): a link that leads nowhere, or an entry of the wrong kind (a plain file where a folder belongs, a folder where
+ * The one rule for a path at any level: a link that leads nowhere, or an entry of the wrong kind (a plain file where a folder belongs, a folder where
  * a transcript belongs), means what is under it was not scanned. Windows reports a listing of a path under a plain file as ENOENT, so the kind is checked here and not left to the listing.
  * An absent path is not one.
  */
@@ -93,7 +93,7 @@ const badLink = async (path: string, kind: Kind): Promise<boolean> => {
 /**
  * A link is followed, as the main file's `stat` follows one; a link that leads nowhere or to the wrong kind, or a plain entry named like a transcript that is not a file, is a bad entry, and so is a folder that cannot be listed
  * and a folder reached a second time (a link back into a folder already walked, which would loop and count a transcript once per pass).
- * The walk goes on past every bad entry and `found` holds every transcript it reached, so the verdict does not depend on the listing order (V5); true when any entry was bad.
+ * The walk goes on past every bad entry and `found` holds every transcript it reached, so the verdict does not depend on the listing order; true when any entry was bad.
  * `seen` holds the real path of every folder entered.
  */
 const jsonlUnder = async (dir: string, found: string[], seen: Set<string>): Promise<boolean> => {
@@ -214,6 +214,16 @@ const judge = async (terms: readonly string[], session: SessionFiles): Promise<V
   return unreadable ? { excluded: true, reason: 'unreadable', hits } : { excluded: false, reason: 'clean', hits };
 };
 
+/**
+ * When the newest file of a session was last written, in epoch milliseconds, over the same files the gate scans (the main transcript, its subagents, and oars' raw copies), or 0 when it has none.
+ * A transcript that kept growing since the last capture is newer here than in the store, so the deposit command reads it to tell a session still in progress from one that has ended.
+ */
+export const lastWritten = async (runtime: SessionsRuntime, project: string, session: string): Promise<number> => {
+  const { files } = await filesOf(runtime, project, session);
+  const times = await Promise.all(files.map(async ({ path }) => (await stat(path)).mtimeMs));
+  return Math.max(0, ...times);
+};
+
 /** The A38 rule for one session; `extra` adds terms to the file's, but never stands in for it, so a missing or empty term file still excludes everything. */
 export const checkSession = async (runtime: SessionsRuntime, termsFile: string, project: string, session: string, extra: readonly string[] = []): Promise<Verdict> => {
   const fromFile = await loadTerms(termsFile);
@@ -307,7 +317,7 @@ export const scanStore = async (runtime: SessionsRuntime, termsFile: string): Pr
   const excluded: { project: string; session: string }[] = [];
   const distinct = new Set<string>();
   for (const [index, project] of [...projects].sort().entries()) {
-    // The platform's message carries the path, and a folder name can carry the term (V15): name the ordinal only.
+    // The platform's message carries the path, and a folder name can carry the term: name the ordinal only.
     const listed = async (root: string) => {
       try {
         return await sessionIds(root, project);

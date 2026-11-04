@@ -1,6 +1,7 @@
+import { createHash } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import { VOCAB_VERSION, type SessionSkeleton } from '../../cli/src/sessions/pool-wire.js';
-import { batchCounts, LEDGER_DAYS } from './access.js';
+import { batchCounts, batchTier, LEDGER_DAYS } from './access.js';
 import { incrementsOf } from './ingest.js';
 import { sampleSkeleton } from './sample.js';
 import { fieldOf, startPool, stubUser, type TestPool, textOf } from './test-pool.js';
@@ -12,6 +13,37 @@ const ONE = 1;
 const NONE = 0;
 
 const without = (skeleton: SessionSkeleton, part: 'prompts' | 'tools'): SessionSkeleton => ({ ...skeleton, transcripts: skeleton.transcripts.map((transcript) => ({ ...transcript, [part]: [] })) });
+
+const EMPTY_ROOT = createHash('sha256').update('').digest('hex');
+
+const withRoot = (skeleton: SessionSkeleton, root: { merkleRoot: string; leaves: number }): SessionSkeleton => ({ ...skeleton, transcripts: skeleton.transcripts.map((transcript) => ({ ...transcript, ...root })) });
+
+describe('batchTier', () => {
+  const claude = sampleSkeleton('0000000000000002');
+  const cursor = sampleSkeleton('0000000000000001', undefined, undefined, 'cursor');
+
+  it('is committed for a claude-code batch that carries roots, and skeleton for a harness that writes no raw file', () => {
+    expect(batchTier(claude)).toBe('committed');
+    expect(batchTier(cursor)).toBe('skeleton');
+  });
+
+  it('is the lowest tier of its transcripts, subagents folded in', () => {
+    const [main] = claude.transcripts;
+    const [other] = cursor.transcripts;
+    if (main === undefined || other === undefined) throw new Error('no transcript');
+    expect(batchTier({ ...claude, transcripts: [main, other] })).toBe('skeleton');
+    expect(batchTier({ ...claude, transcripts: [main, { ...main, leaves: 0 }] })).toBe('none');
+    expect(batchTier({ ...cursor, transcripts: [other, { ...other, leaves: 0 }] })).toBe('none');
+  });
+
+  it('is none for a root that cannot be real: no leaves without the empty hash, or the empty hash with leaves', () => {
+    const real = { merkleRoot: createHash('sha256').update('x').digest('hex'), leaves: 12 };
+    expect(batchTier(withRoot(claude, real))).toBe('committed');
+    expect(batchTier(withRoot(claude, { ...real, leaves: 0 }))).toBe('none');
+    expect(batchTier(withRoot(claude, { merkleRoot: EMPTY_ROOT, leaves: 12 }))).toBe('none');
+    expect(batchTier(withRoot(claude, { merkleRoot: EMPTY_ROOT, leaves: 0 }))).toBe('committed');
+  });
+});
 
 describe('batchCounts', () => {
   const cursor = sampleSkeleton('0000000000000001', undefined, undefined, 'cursor');
@@ -72,11 +104,64 @@ describe('the access flag over the routes', () => {
     }
   };
 
-  it('does not lift the cap for a claude-code batch at the ingest tier, whatever the skeleton holds', async () => {
+  const tierOf = async (pool: TestPool, account: string): Promise<unknown> => fieldOf(await (await pool.db()).prepare('SELECT tier FROM deposits WHERE account = ?').bind(account).first(), 'tier');
+
+  it('lifts the cap, pending, for a claude-code batch with one prompt and one tool step over the whole batch', async () => {
     await inPool(async (pool) => {
       const { token, account } = await depositor(pool, '3001');
-      expect(await fetches(pool, token, 2)).toEqual([200, 429]);
+      expect(await fetches(pool, token, 3)).toEqual([200, 200, 200]);
+      expect(await accessOfAccount(pool, account)).toBe('pending');
+      expect(await tierOf(pool, account)).toBe('committed');
+    });
+  }, 60_000);
+
+  it('does not lift the cap for a claude-code batch without a tool step', async () => {
+    await inPool(async (pool) => {
+      const signed = await pool.signIn('github', stubUser('3011'));
+      await pool.post('/v1/covenant/accept', { version: 'v1' }, signed.token);
+      expect((await pool.post('/v1/deposits', without(sampleSkeleton('0000000000003011'), 'tools'), signed.token)).status).toBe(201);
+      expect(await fetches(pool, signed.token, 2)).toEqual([200, 429]);
+    });
+  }, 60_000);
+
+  it('writes none for a batch whose root cannot be real, and the cap stays', async () => {
+    await inPool(async (pool) => {
+      const signed = await pool.signIn('github', stubUser('3012'));
+      await pool.post('/v1/covenant/accept', { version: 'v1' }, signed.token);
+      const failed = withRoot(sampleSkeleton('0000000000003012'), { merkleRoot: createHash('sha256').update('x').digest('hex'), leaves: 0 });
+      expect((await pool.post('/v1/deposits', failed, signed.token)).status).toBe(201);
+      const { account } = signed;
+      expect(await tierOf(pool, account)).toBe('none');
+      expect(await fetches(pool, signed.token, 2)).toEqual([200, 429]);
       expect(await accessOfAccount(pool, account)).toBeNull();
+    });
+  }, 60_000);
+
+  it('keeps the rule on a resend: the tier of the row follows the batch sent last', async () => {
+    await inPool(async (pool) => {
+      const { token, account } = await depositor(pool, '3013');
+      expect(await tierOf(pool, account)).toBe('committed');
+      const failed = withRoot(sampleSkeleton('0000000000003013'), { merkleRoot: createHash('sha256').update('x').digest('hex'), leaves: 0 });
+      expect((await pool.post('/v1/deposits', failed, token)).status).toBe(201);
+      expect(await tierOf(pool, account)).toBe('none');
+      expect(await fetches(pool, token, 2)).toEqual([200, 429]);
+      expect((await pool.post('/v1/deposits', sampleSkeleton('0000000000003013'), token)).status).toBe(201);
+      expect(await tierOf(pool, account)).toBe('committed');
+      expect(await fetches(pool, token, 2)).toEqual([200, 200]);
+    });
+  }, 60_000);
+
+  it('counts a batch first ingested at none once a resend fixes its root, though its cells are unchanged', async () => {
+    await inPool(async (pool) => {
+      const signed = await pool.signIn('github', stubUser('3014'));
+      await pool.post('/v1/covenant/accept', { version: 'v1' }, signed.token);
+      const failed = withRoot(sampleSkeleton('0000000000003014'), { merkleRoot: createHash('sha256').update('x').digest('hex'), leaves: 0 });
+      expect((await pool.post('/v1/deposits', failed, signed.token)).status).toBe(201);
+      expect(await tierOf(pool, signed.account)).toBe('none');
+      expect((await pool.post('/v1/deposits', sampleSkeleton('0000000000003014'), signed.token)).status).toBe(201);
+      expect(await tierOf(pool, signed.account)).toBe('committed');
+      expect(await fetches(pool, signed.token, 2)).toEqual([200, 200]);
+      expect(await accessOfAccount(pool, signed.account)).toBe('pending');
     });
   }, 60_000);
 
@@ -91,23 +176,16 @@ describe('the access flag over the routes', () => {
     });
   }, 60_000);
 
-  it('lifts it for a batch at committed, set by a row edit since no wire carries a root yet', async () => {
-    await inPool(async (pool) => {
-      const { token, account } = await depositor(pool, '3003');
-      await (await pool.db()).prepare("UPDATE deposits SET tier = 'committed', counted_at = ? WHERE account = ?").bind(Date.now(), account).run();
-      expect(await fetches(pool, token, 2)).toEqual([200, 200]);
-      expect(await accessOfAccount(pool, account)).toBe('pending');
-    });
-  }, 60_000);
-
-  it('clears when every counting batch falls to none, and a resend does not bring it back', async () => {
+  it('clears when every counting batch falls to none, and a resend that still fails does not bring it back', async () => {
     await inPool(async (pool) => {
       const { token, account } = await depositor(pool, '3004', 'cursor');
       expect(await fetches(pool, token, 2)).toEqual([200, 200]);
-      await (await pool.db()).prepare("UPDATE deposits SET tier = 'none' WHERE account = ?").bind(account).run();
+      const failed = withRoot(sampleSkeleton('0000000000003004', undefined, undefined, 'cursor'), { merkleRoot: createHash('sha256').update('x').digest('hex'), leaves: 0 });
+      expect((await pool.post('/v1/deposits', failed, token)).status).toBe(201);
+      expect(await tierOf(pool, account)).toBe('none');
       expect(await fetches(pool, token, 2)).toEqual([200, 429]);
       expect(await accessOfAccount(pool, account)).toBeNull();
-      expect((await pool.post('/v1/deposits', sampleSkeleton('0000000000003004', undefined, undefined, 'cursor'), token)).status).toBe(201);
+      expect((await pool.post('/v1/deposits', failed, token)).status).toBe(201);
       expect(await fetches(pool, token, 1)).toEqual([429]);
     });
   }, 60_000);
@@ -133,8 +211,9 @@ describe('the access flag over the routes', () => {
     await inPool(async (pool) => {
       const { token, account } = await depositor(pool, '3008', 'cursor');
       expect(await fetches(pool, token, 2)).toEqual([200, 200]);
-      // The same id again on another day, now from a harness whose batch does not count at the ingest tier: it moves cells, so the date is judged again.
-      expect((await pool.post('/v1/deposits', sampleSkeleton('0000000000003008', undefined, '2026-11-02'), token)).status).toBe(201);
+      // The same id again on another day, now with a root that cannot be real: it moves cells, so the date is judged again and the batch no longer counts.
+      const failed = withRoot(sampleSkeleton('0000000000003008', undefined, '2026-11-02'), { merkleRoot: createHash('sha256').update('x').digest('hex'), leaves: 0 });
+      expect((await pool.post('/v1/deposits', failed, token)).status).toBe(201);
       const row = await (await pool.db()).prepare('SELECT counted_at AS counted FROM deposits WHERE account = ?').bind(account).first();
       expect(fieldOf(row, 'counted')).toBeNull();
       expect(await fetches(pool, token, 2)).toEqual([200, 429]);
@@ -146,8 +225,8 @@ describe('the access flag over the routes', () => {
     await inPool(async (pool) => {
       const { token, account } = await depositor(pool, '3009');
       const sent = sampleSkeleton('0000000000003009');
-      // A claude-code batch does not count at the ingest tier, so its row is raised by hand, as the root check will.
-      await (await pool.db()).prepare("UPDATE deposits SET tier = 'committed', counted_at = ? WHERE account = ?").bind(Date.now() - DAY_MS, account).run();
+      // Move the date back, so a rewrite of it would show.
+      await (await pool.db()).prepare('UPDATE deposits SET counted_at = ? WHERE account = ?').bind(Date.now() - DAY_MS, account).run();
       const before = await (await pool.db()).prepare('SELECT counted_at AS counted FROM deposits WHERE account = ?').bind(account).first();
       expect(typeof fieldOf(before, 'counted')).toBe('number');
       expect(await fetches(pool, token, 2)).toEqual([200, 200]);

@@ -7,8 +7,8 @@ import type * as ReadModuleNamespace from './read.js';
 import { deriveCells } from './cells.js';
 import { currentPool, poolFiles, refreshPool, servedPool } from './pool.js';
 import { cellsOf, incrementsOf, projectedStore } from './cell-increments.js';
-import { error, frame, prompt, session, step, store, tool } from './pool-fixture.js';
-import { sessionsOf, skeletonOf } from './pool-wire.js';
+import { error, frame, printOf, prompt, session, sessionsFrom, step, store, tool } from './pool-fixture.js';
+import { skeletonOf } from './pool-wire.js';
 import { shellReader } from './projection.js';
 import { vocabulary } from './vocab-load.js';
 
@@ -57,8 +57,8 @@ describe('refreshPool', () => {
       tools: [tool('s1', 0, 'Bash', { steps: [step(0, 0, 'shell.exec', { native: 'Bash', identity: push, cost: { tokens: 98765, durationMs: 4321 } })] })],
     });
     const keyed = (cells: readonly { motifId: string; frameBucket: string; day: string; exposed: boolean | number; sessions: number; ok: number; failed: number; tokens: number; durationMs: number }[]): string[] => cells.map(({ motifId, frameBucket, day, exposed, sessions, ok, failed, tokens, durationMs }) => `${motifId}/${frameBucket}/${day}/${String(Number(exposed))} ${String(sessions)} ${String(ok)} ${String(failed)} ${String(tokens)} ${String(durationMs)}`).sort();
-    const [only] = sessionsOf(local);
-    const skeleton = only === undefined ? null : skeletonOf(only, '0123456789abcdef', shellReader(vocabulary()));
+    const [only] = sessionsFrom(local);
+    const skeleton = only === undefined ? null : skeletonOf(only, '0123456789abcdef', shellReader(vocabulary()), printOf);
     if (skeleton === null) throw new Error('the local store has no skeleton');
     const shared = [...incrementsOf(skeleton).cells.values()];
     const { pool } = await refreshPool(storeDir(), local);

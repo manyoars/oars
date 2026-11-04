@@ -1,5 +1,5 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { copilotRoot, eventBadLines, eventLines, openCopilotStore } from './copilot.js';
 import { captureSession } from './extract.js';
@@ -233,7 +233,7 @@ describe('the Copilot CLI reader', () => {
   });
 });
 
-describe('the Copilot CLI reader, fix round 1', () => {
+describe('the Copilot CLI reader', () => {
   it('decides a shell call by the completion alone: no shellToolInfo on the start, success true, exit 2 is an error', () => {
     const out = extractOf([start(), prompt(1, 'run'), say(2, '', {}, [ask('c1', 'bash', { command: 'make' })]), begin(3, 'c1', 'bash', { arguments: { command: 'make' } }), done(4, 'c1', { success: true, shellExecution: { exitCode: 2 }, result: { content: 'make: *** No rule' } })]);
     expect(out.tools).toMatchObject([{ tool: 'Bash', status: 'error' }]);
@@ -366,7 +366,42 @@ describe('the Copilot home', () => {
     const first = store?.sessions[0];
     expect(await store?.transcript(first ?? never())).toContain('"text":"x"');
     expect(await openCopilotStore(join(s.root, 'nowhere'))).toBeUndefined();
-    await expect(store?.transcript({ ...(first ?? never()), file: join(home, 'gone.jsonl') })).rejects.toThrow();
+    await expect(store?.transcript({ ...(first ?? never()), file: join(home, 'gone.jsonl'), archives: [] })).rejects.toThrow();
+  });
+
+  it('joins a rotated session: the cwd from the oldest file, a torn line and an id-less line kept, an empty archive and a repeated id dropped, the size summed', async () => {
+    const s = stage();
+    const home = stageCopilot(s.root, [
+      {
+        id: 'rot',
+        archives: [
+          { n: 10, lines: '' },
+          { n: 1, lines: [start('/work/old'), prompt(1, 'first')] },
+          { n: 2, lines: ['{torn', JSON.stringify({ type: 'user.message', timestamp: T(2), data: { content: 'no id' } }), JSON.stringify(prompt(1, 'first')), JSON.stringify(prompt(3, 'second'))].join('\n') },
+        ],
+        lines: [event(T(5), 'session.journal_link', { previousFile: 'events.10.jsonl', sessionId: 'rot', version: 1 }), prompt(6, 'last')],
+      },
+    ]);
+    const store = await openCopilotStore(home);
+    const rotated = store?.sessions[0];
+    expect(rotated?.folder).toBe('/work/old');
+    expect(rotated?.archives.map((path) => basename(path))).toEqual(['events.1.jsonl', 'events.2.jsonl', 'events.10.jsonl']);
+    const text = await store?.transcript(rotated ?? never());
+    expect(text?.match(/"text":"first"/g)).toHaveLength(1);
+    expect(text).toContain('no id');
+    expect(text).toContain('"text":"last"');
+    expect(text).toContain('{torn');
+    // Archive order (1, 2, 10), then the live file: a lexical sort (1, 10, 2) or a reversed list changes this sequence.
+    expect([...(text ?? '').matchAll(/"text":"(first|second|last)"/g)].map((match) => match[1])).toEqual(['first', 'second', 'last']);
+  });
+
+  it('leaves a session with no archives untouched: a lone events.jsonl keeps a line whose event id repeats, and a checkpoint line', async () => {
+    const s = stage();
+    const home = stageCopilot(s.root, [{ id: 'lone', lines: [start('/work/lone'), prompt(1, 'same'), prompt(1, 'same'), { ...prompt(2, 'replay'), checkpoint: true }] }]);
+    const store = await openCopilotStore(home);
+    const text = await store?.transcript(store.sessions[0] ?? never());
+    expect(text?.match(/"text":"same"/g)).toHaveLength(2);
+    expect(text).toContain('"text":"replay"');
   });
 
   it('reports a store folder that cannot be listed by its base name, never fatal', async () => {
@@ -378,7 +413,7 @@ describe('the Copilot home', () => {
     expect(store?.sessions).toEqual([]);
     expect(store?.unreadable).toHaveLength(1);
     expect(store?.unreadable[0]?.reason).not.toContain(s.root);
-    await expect(store?.transcript({ id: 'x', folder: null, file: 'x', size: 0, mtimeMs: 0 })).rejects.toThrow();
+    await expect(store?.transcript({ id: 'x', folder: null, file: 'x', archives: [], size: 0, mtimeMs: 0 })).rejects.toThrow();
   });
 });
 
