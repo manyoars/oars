@@ -52,8 +52,11 @@ export interface GateHookDeps {
   fill?: (ask: FillAsk) => Promise<void>;
   /** Whether a helper already holds the name, which keeps the hook from asking the manager a second time. Absent: never locked. */
   locked?: (ask: FillAsk) => Promise<boolean>;
-  /** Told what is about to be written (and `null` once it is), so a process that must stop at a hard deadline can write the record it has. */
-  stage?: (pending: { file: string; text: string } | null) => void;
+  /**
+   * Told what is about to be written (and `null` once it is), so a process that must stop at a hard deadline can write the record it has. While a registry ask is live the record
+   * is the rows so far plus a not-read row for the crossing asked about, with `stop` ending that ask: a process cut off mid-ask stops it and leaves one row, not a manager running unseen.
+   */
+  stage?: (pending: { file: string; text: string; stop?: () => void } | null) => void;
 }
 
 interface Input {
@@ -122,10 +125,13 @@ const within = <T>(promise: Promise<T>, ms: number): Promise<T | undefined> =>
     );
   });
 
+/** What is left for a registry ask on the process clock, less the room a row's write is given. */
+const budgetOf = (deps: Pick<GateHookDeps, 'deadlineMs' | 'clock'>): number => deps.deadlineMs - WRITE_RESERVE_MS - deps.clock();
+
 const asAnswer = (row: RegistryRow): RegistryAnswer => ({ state: row.state, latest: row.latest, created: row.created });
 
 /** The registry state at the moment: a kept answer first, else one bounded ask. `undefined` is "not read": not asked, not askable, or not answered in time. */
-const registryAnswer = async (deps: GateHookDeps, crossing: Crossing, cwd: string | null, kept: ReadonlyMap<string, RegistryRow>, helpers: { started: number }): Promise<{ answer: RegistryAnswer; asked: boolean } | undefined> => {
+const registryAnswer = async (deps: GateHookDeps, crossing: Crossing, cwd: string | null, kept: ReadonlyMap<string, RegistryRow>, helpers: { started: number }, hold: (stop: () => void) => void): Promise<{ answer: RegistryAnswer; asked: boolean } | undefined> => {
   if (!askedOf(crossing) || crossing.versionForm === 'url' || !askable(crossing.class, crossing.name)) return undefined;
   const held = kept.get(keyOf(crossing));
   if (held !== undefined && cwd !== null && fresh(held, deps.now(), folderKey(cwd))) return { answer: asAnswer(held), asked: false };
@@ -133,9 +139,15 @@ const registryAnswer = async (deps: GateHookDeps, crossing: Crossing, cwd: strin
   const ask: FillAsk = { class: crossing.class, name: crossing.name, cwd };
   // A helper already asks for this name (or failed within the last five minutes): one ask per name, so this sight reads nothing.
   if ((await deps.locked?.(ask).catch(() => false)) === true) return undefined;
-  const left = deps.deadlineMs - WRITE_RESERVE_MS - deps.clock();
   const stop = new AbortController();
-  const answer = left < MIN_ASK_MS ? undefined : await within(deps.registry({ ...ask, signal: stop.signal }), left);
+  let answer: RegistryAnswer | undefined;
+  if (budgetOf(deps) >= MIN_ASK_MS) {
+    hold(() => { stop.abort(); });
+    const pending = deps.registry({ ...ask, signal: stop.signal });
+    // Starting the manager is a blocking spawn that can take a good part of the budget, so the cut counts what is left now, not what was left before the call: read before it, the cut
+    // could land behind the process's own deadline, which ends the process with the ask still running.
+    answer = await within(pending, budgetOf(deps));
+  }
   if (answer === undefined) {
     // Not answered in time: the row reads not-read, and a helper finishes the ask so the next sight reads it from the cache. This ask is stopped first, so the manager is never asked twice at once.
     stop.abort();
@@ -246,7 +258,13 @@ export const runGateHook = async (stdin: string, deps: GateHookDeps): Promise<st
     const noted = indexed || inCall.has(key);
     inCall.add(key);
     for (const line of add) lines.add(line);
-    const read = await registryAnswer(deps, crossing, cwd, kept, helpers);
+    // What a process cut off during this ask writes: the rows so far and a not-read row for this crossing (the cut-off hook prints nothing, so none shows a note).
+    const hold = (stop: () => void): void => {
+      const unread = recordOf(common, crossing, novelty, undefined, source, { arm: 'none', lineId: 'none', kind: 'none', text: null });
+      deps.stage?.({ file: crossingsPath(deps.storeDir), text: [...rows, unread].map((row) => `${JSON.stringify(row)}\n`).join(''), stop });
+    };
+    const read = await registryAnswer(deps, crossing, cwd, kept, helpers, hold);
+    deps.stage?.(null);
     const state = read?.answer.state;
     const answeredState = state === 'found' || state === 'not-found' ? state : undefined;
     // A sight with no answer (a cut ask, no time, a name not asked, an unreachable registry) spends nothing: the session's note waits for the first sight that has one.
