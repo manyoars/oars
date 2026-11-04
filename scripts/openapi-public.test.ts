@@ -198,33 +198,37 @@ describe('openapi-public.mjs', () => {
   // The platform's spec also carries a money side. The list file selects operations, but the generator is the backstop: a
   // listed operation on a money path, tag, or schema is dropped, so a regeneration cannot bring it back.
   describe('the money side', () => {
-    const moneySource = structuredClone(source) as typeof source & {
-      paths: { [path: string]: unknown };
-      components: { schemas: { [name: string]: unknown } };
-    };
-    moneySource.paths['/billing/charges'] = {
-      post: {
-        tags: ['Billing charges'],
-        operationId: 'createCharge',
-        responses: { '200': ok('Charged', '#/components/schemas/ChargeView') },
+    const moneySource = {
+      ...source,
+      paths: {
+        ...source.paths,
+        '/billing/charges': {
+          post: {
+            tags: ['Billing charges'],
+            operationId: 'createCharge',
+            responses: { '200': ok('Charged', '#/components/schemas/ChargeView') },
+          },
+        },
+        '/agents/templates': {
+          get: {
+            tags: ['Agent Templates'],
+            operationId: 'listTemplates',
+            responses: { '200': ok('Templates', '#/components/schemas/TemplateStarterPrice') },
+          },
+        },
+        '/orders/{orderId}/tagged': {
+          get: { tags: ['Billing mode'], operationId: 'taggedOnly', responses: { '200': { description: 'Tagged' } } },
+        },
+      },
+      components: {
+        ...source.components,
+        schemas: {
+          ...source.components.schemas,
+          ChargeView: { type: 'object', properties: { id: { type: 'string' } } },
+          TemplateStarterPrice: { type: 'object', properties: { id: { type: 'string' } } },
+        },
       },
     };
-    moneySource.paths['/agents/templates'] = {
-      get: {
-        tags: ['Agent Templates'],
-        operationId: 'listTemplates',
-        responses: { '200': ok('Templates', '#/components/schemas/TemplateStarterPrice') },
-      },
-    };
-    moneySource.paths['/orders/{orderId}/tagged'] = {
-      get: {
-        tags: ['Billing mode'],
-        operationId: 'taggedOnly',
-        responses: { '200': { description: 'Tagged' } },
-      },
-    };
-    moneySource.components.schemas['ChargeView'] = { type: 'object', properties: { id: { type: 'string' } } };
-    moneySource.components.schemas['TemplateStarterPrice'] = { type: 'object', properties: { id: { type: 'string' } } };
 
     it('drops a listed operation on a billing path, with a billing tag, or reaching a money-named schema', () => {
       const result = run(['getOrder', 'createCharge', 'listTemplates', 'taggedOnly'], moneySource);
@@ -246,23 +250,41 @@ describe('openapi-public.mjs', () => {
     });
 
     it('drops the 402 response and a payment property, and rewrites the platform texts that name money', () => {
-      const withTexts = structuredClone(source) as typeof source & {
-        paths: { '/orders/{orderId}': { get: { responses: { [code: string]: unknown } } } };
-        components: { schemas: { [name: string]: unknown } };
-      };
-      withTexts.paths['/orders/{orderId}'].get.responses['402'] = { description: 'Payment Required' };
-      withTexts.paths['/orders/{orderId}'].get.responses['409'] = {
-        description:
-          'PLATFORM_STEWARDED, WORKLOAD_SUSPENDED, COMPUTE_CREDIT_EXHAUSTED (actionUrl: add compute credit)',
-      };
-      withTexts.components.schemas['Order'] = {
-        type: 'object',
-        properties: {
-          paymentId: { type: 'string' },
-          actionUrl: {
-            type: 'string',
-            description:
-              'A URL where a human completes the step that clears this rejection (Stripe onboarding, a credit-pack checkout). Present only when such a step exists.',
+      const orderPath = source.paths['/orders/{orderId}'];
+      const withTexts = {
+        ...source,
+        paths: {
+          ...source.paths,
+          '/orders/{orderId}': {
+            ...orderPath,
+            get: {
+              ...orderPath.get,
+              responses: {
+                ...orderPath.get.responses,
+                '402': { description: 'Payment Required' },
+                '409': {
+                  description:
+                    'PLATFORM_STEWARDED, WORKLOAD_SUSPENDED, COMPUTE_CREDIT_EXHAUSTED (actionUrl: add compute credit)',
+                },
+              },
+            },
+          },
+        },
+        components: {
+          ...source.components,
+          schemas: {
+            ...source.components.schemas,
+            Order: {
+              type: 'object',
+              properties: {
+                paymentId: { type: 'string' },
+                actionUrl: {
+                  type: 'string',
+                  description:
+                    'A URL where a human completes the step that clears this rejection (Stripe onboarding, a credit-pack checkout). Present only when such a step exists.',
+                },
+              },
+            },
           },
         },
       };
