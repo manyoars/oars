@@ -206,6 +206,22 @@ const partsOf = (value: unknown): Obj[] => (Array.isArray(value) ? value.filter(
 
 /** A user message the operator did not type: slash commands, help, and context the CLI or a hook injects (utils/sessionUtils.ts:97). */
 const NOT_TYPED = ['/', '?', '<session_context>', '<hook_context>'];
+/**
+ * User turns the CLI itself puts to the model, which the chat file records like a typed prompt (geminiChat.ts:553-567; `addHistory`, :1345-1352). Each opens with the text its writer
+ * fixes: loop recovery re-sends the operator's `displayContent` beside it (core/client.ts:1338-1354, so the recorded prompt would read twice); the IDE context (client.ts:503,613);
+ * the `!cmd` turn (cli useExecutionLifecycle.ts:61-66); the manual plan exit note (cli useGeminiStream.ts:2060, utils/approvalModeUtils.ts:36-39); and the directory context
+ * (client.ts:396, utils/environmentContext.ts:37). `Please continue.` (client.ts:930) is the whole text, so it is matched exactly. An AfterAgent hook's `continueReason`
+ * (client.ts:1052,1061) is free text and cannot be told from a typed prompt.
+ */
+const INJECTED = [
+  'System: Potential loop detected.',
+  "Here is the user's editor context as a JSON object.",
+  "Here is a summary of changes in the user's editor context, in JSON format.",
+  'I ran the following shell command:\n',
+  'User has manually exited Plan Mode. Switching to ',
+  '- **Workspace Directories:**',
+];
+const NEXT_SPEAKER = 'Please continue.';
 /** What a compression records in place of the history it replaced: the summary as a user turn, then this canned reply as the model's (context/chatCompressionService.ts:665-673). */
 const SUMMARY = '<state_snapshot>';
 const CANNED_REPLY = 'Got it. Thanks for the additional context!';
@@ -314,7 +330,7 @@ export const chatLines = (text: string, fallbackId: string, cwd: string | null):
       // The vendor's filter reads the text SENT (`content`, chatRecordingService.ts:220-227); a custom command sends its expansion and shows `/cmd` (nonInteractiveCli.ts:289-300),
       // so the shown text is only what is recorded.
       const sent = textOf(message.content).trim();
-      if (sent === '' || NOT_TYPED.some((prefix) => sent.startsWith(prefix)) || sent.startsWith(SUMMARY) || summaries.has(message)) continue;
+      if (sent === '' || sent === NEXT_SPEAKER || NOT_TYPED.some((prefix) => sent.startsWith(prefix)) || INJECTED.some((prefix) => sent.startsWith(prefix)) || sent.startsWith(SUMMARY) || summaries.has(message)) continue;
       const shown = textOf(message.displayContent);
       const typed = shown.trim() === '' ? textOf(message.content) : shown;
       sequence += 1;
