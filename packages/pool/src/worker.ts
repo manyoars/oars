@@ -2,7 +2,7 @@
 import { parseSkeleton, type SessionSkeleton } from '../../cli/src/sessions/pool-wire.js';
 import type { Frame } from '../../cli/src/sessions/schema.js';
 import { batchCounts, INGEST_TIER } from './access.js';
-import { fetchBundle } from './bundle.js';
+import { fetchBundle, harnessRequired } from './bundle.js';
 import { covenantAccept, covenantNotAccepted, covenantStatus, depositsClosed, hasAccepted } from './covenant.js';
 import { answer, bound, refuse, wholeBinding, type Env } from './http.js';
 import { incrementsOf, incrementStatements, netCellCount, previousOf } from './ingest.js';
@@ -18,7 +18,9 @@ const DEFAULT_MAX_ACCOUNT_BYTES = 64 * 1024 * 1024;
 /** What a batch's `deltas` hold until the wire carries them (spec Section 2, "Deltas"): the client builds them, so ingest has none to take. */
 const DELTAS = '[]';
 
-const BUNDLE = /^\/bundle\/([^/]*)\/([^/]*)$/;
+const BUNDLE = /^\/bundle\/([^/]*)\/([^/]*)\/([^/]*)$/;
+/** The route as it stood before the harness segment: refused by name rather than served. */
+const BUNDLE_WITHOUT_HARNESS = /^\/bundle\/([^/]*)\/([^/]*)$/;
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -103,7 +105,8 @@ export default {
     if (request.method === 'GET') {
       if (pathname === '/v1/covenant') return covenantStatus(request, env);
       const route = BUNDLE.exec(pathname);
-      if (route !== null) return fetchBundle(request, env, decoded(route[1] ?? ''), decoded(route[2] ?? ''));
+      if (route !== null) return fetchBundle(request, env, decoded(route[1] ?? ''), decoded(route[2] ?? ''), decoded(route[3] ?? ''));
+      if (BUNDLE_WITHOUT_HARNESS.test(pathname)) return harnessRequired();
     }
     return refuse(404, 'not_found', 'No such route.');
   },
