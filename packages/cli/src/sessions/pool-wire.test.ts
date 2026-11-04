@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { frame, prompt, session, step, storedNames, store, tool } from './pool-fixture.js';
-import { parseSkeleton, sessionsOf, skeletonOf, type SessionSkeleton } from './pool-wire.js';
+import { frame, printOf, prompt, session, sessionsFrom, step, store, storedNames, tool } from './pool-fixture.js';
+import { parseSkeleton, skeletonOf, type SessionSkeleton } from './pool-wire.js';
 import type { Harness } from './schema.js';
 import { LITERAL, PRIVATE } from './public-vocabulary.js';
 
@@ -11,9 +11,9 @@ const framedPrompt = (id: string, index: number, over: Parameters<typeof prompt>
 const shell = step(0, 0, 'shell.exec', { native: 'Bash', identity: { program: 'git', sub: 'push', flags: ['--force'] } });
 
 const skeletonFrom = (from: ReturnType<typeof store>): SessionSkeleton | null => {
-  const [only] = sessionsOf(from);
+  const [only] = sessionsFrom(from);
   if (only === undefined) throw new Error('the store has no session');
-  return skeletonOf(only, '0123456789abcdef', storedNames);
+  return skeletonOf(only, '0123456789abcdef', storedNames, printOf);
 };
 
 const sample = (): SessionSkeleton => {
@@ -53,7 +53,7 @@ const refusedField = (value: unknown): string => {
 };
 
 const firstStep = ['transcripts', 0, 'tools', 0, 'steps', 0];
-const withStep = (over: object): unknown => sent(firstStep, JSON.parse(JSON.stringify({ ...shell, n: undefined, seg: undefined, frameId: undefined, edges: undefined, cost: undefined, tokens: null, ms: null, ...over })));
+const withStep = (over: object): unknown => sent(firstStep, JSON.parse(JSON.stringify({ ...shell, n: undefined, seg: undefined, frameId: undefined, edges: undefined, cost: undefined, tokens: null, ms: null, remainingTokens: 0, agentType: null, ...over })));
 const stepField = 'transcripts[0].tools[0].steps[0]';
 
 describe('skeletonOf', () => {
@@ -81,7 +81,7 @@ describe('skeletonOf', () => {
       prompts: [framedPrompt('s1', 0)],
       tools: [tool('s1', 0, 'Bash', { steps: [shell] }), tool('s1~agent-x', 0, 'Bash', { parent: 's1', steps: [shell] })],
     });
-    expect(sessionsOf(from)).toHaveLength(1);
+    expect(sessionsFrom(from)).toHaveLength(1);
     const skeleton = skeletonFrom(from);
     expect(skeleton?.transcripts).toHaveLength(2);
     expect(skeleton?.transcripts[1]?.tools).toHaveLength(1);
@@ -177,9 +177,33 @@ describe('parseSkeleton refuses, and names the field', () => {
     { name: 'the exact index of a prompt', path: ['transcripts', 0, 'prompts', 0, 'index'], value: 3, field: 'transcripts[0].prompts[0].index' },
     { name: 'a spawner address', path: ['transcripts', 0, 'spawnedIn'], value: 0, field: 'transcripts[0].spawnedIn' },
     { name: 'a step edge', path: [...firstStep, 'edges'], value: [], field: `${stepField}.edges` },
+    { name: 'a private agent name as a subagent type', path: [...firstStep, 'agentType'], value: 'acme-private-agent', field: `${stepField}.agentType` },
+    { name: 'a subagent type on a main-run step', path: [...firstStep, 'agentType'], value: 'Explore', field: `${stepField}.agentType` },
+    { name: 'a root that is not a SHA-256', path: ['transcripts', 0, 'merkleRoot'], value: 'acme-root', field: 'transcripts[0].merkleRoot' },
+    { name: 'a timing print that is not a hash', path: ['timingPrint'], value: 'acme', field: 'timingPrint' },
+    { name: 'a timing print over too few timed calls', path: ['timingPrint'], value: '0123456789abcdef', field: 'timingPrint' },
+    { name: 'a remaining-token count that is no bucket', path: [...firstStep, 'remainingTokens'], value: 12, field: `${stepField}.remainingTokens` },
   ];
   it.each(cases)('$name', ({ path, value, field }) => {
     expect(refusedField(sent(path, value))).toBe(field);
+  });
+
+  it('refuses a subagent step that carries no type', () => {
+    const [main, other] = [session('s1', { frame: framed }), session('s1~a', { parent: 's1', spawnedIn: 's1', agentType: 'Explore', frame: framed })];
+    const skeleton = skeletonFrom(
+      store({
+        sessions: [main],
+        subagents: [other],
+        prompts: [framedPrompt('s1', 0), framedPrompt('s1~a', 0)],
+        tools: [tool('s1', 0, 'Bash', { steps: [shell] }), tool('s1~a', 0, 'Bash', { steps: [shell] })],
+      }),
+    );
+    const raw: unknown = JSON.parse(JSON.stringify(skeleton));
+    expect(refusedField(raw)).toBe('accepted');
+    const subStep = ['transcripts', 1, 'tools', 0, 'steps', 0].reduce<unknown>((at, key) => (isHolder(at) ? Reflect.get(at, key) : undefined), raw);
+    if (!isHolder(subStep)) throw new Error('the subagent has no step');
+    Reflect.set(subStep, 'agentType', null);
+    expect(refusedField(raw)).toBe('transcripts[1].tools[0].steps[0].agentType');
   });
 
   it('takes a bucket of wall time, and refuses an exact one: a fraction is no bucket', () => {
@@ -226,8 +250,9 @@ describe('parseSkeleton refuses, and names the field', () => {
     expect(refusedField([])).toBe('skeleton');
   });
 
-  it('keeps the literal for a native name, which is the vocabulary saying it does not know one', () => {
-    expect(refusedField(withStep({ native: LITERAL }))).toBe('accepted');
+  it('spells a native name the vocabulary does not know as private, never the literal', () => {
+    expect(refusedField(withStep({ native: PRIVATE }))).toBe('accepted');
+    expect(refusedField(withStep({ native: LITERAL }))).toBe(`${stepField}.native`);
   });
 
   it('reads a shell program as a list member or private, never the literal, and a private program holds no subcommand', () => {
@@ -241,11 +266,17 @@ describe('parseSkeleton refuses, and names the field', () => {
   });
 
   it('holds MCP, skill, and web identities to their own lists', () => {
-    expect(refusedField(withStep({ action: 'mcp.call', native: LITERAL, identity: { server: 'github', tool: 'get_issue' } }))).toBe('accepted');
+    expect(refusedField(withStep({ action: 'mcp.call', native: PRIVATE, identity: { server: 'github', tool: 'get_issue' } }))).toBe('accepted');
     expect(refusedField(withStep({ action: 'mcp.call', native: 'mcp__github__get_issue', identity: { server: 'github', tool: 'get_issue' } }))).toBe('accepted');
     expect(refusedField(withStep({ action: 'mcp.call', native: 'mcp__acme__get_issue', identity: null }))).toBe(`${stepField}.native`);
-    expect(refusedField(withStep({ action: 'mcp.call', native: LITERAL, identity: { server: 'acme', tool: 'x' } }))).toBe(`${stepField}.identity.server`);
+    expect(refusedField(withStep({ action: 'mcp.call', native: PRIVATE, identity: { server: 'acme', tool: 'x' } }))).toBe(`${stepField}.identity.server`);
     expect(refusedField(withStep({ action: 'skill.run', native: 'Skill', identity: { skill: 'acme-skill' } }))).toBe(`${stepField}.identity.skill`);
+    expect(refusedField(withStep({ action: 'mcp.call', native: PRIVATE, identity: { server: PRIVATE, tool: LITERAL } }))).toBe('accepted');
+    expect(refusedField(withStep({ action: 'mcp.call', native: PRIVATE, identity: { server: LITERAL, tool: LITERAL } }))).toBe(`${stepField}.identity.server`);
+    expect(refusedField(withStep({ action: 'skill.run', native: 'Skill', identity: { skill: PRIVATE } }))).toBe('accepted');
+    expect(refusedField(withStep({ action: 'skill.run', native: 'Skill', identity: { skill: LITERAL } }))).toBe(`${stepField}.identity.skill`);
+    expect(refusedField(withStep({ action: 'web.fetch', native: 'WebFetch', identity: { host: PRIVATE } }))).toBe('accepted');
+    expect(refusedField(withStep({ action: 'web.fetch', native: 'WebFetch', identity: { host: LITERAL } }))).toBe(`${stepField}.identity.host`);
     expect(refusedField(withStep({ action: 'web.fetch', native: 'WebFetch', identity: { host: 'acme.internal' } }))).toBe(`${stepField}.identity.host`);
     expect(refusedField(withStep({ action: 'web.fetch', native: 'WebFetch', identity: { host: 'github.com' } }))).toBe('accepted');
     expect(refusedField(withStep({ action: 'file.read', native: 'Read', identity: { path: '/home/me' } }))).toBe(`${stepField}.identity`);
@@ -256,8 +287,14 @@ describe('parseSkeleton refuses, and names the field', () => {
     expect(refusedField(pull({}))).toBe('accepted');
     expect(refusedField(pull({ version: '^4.0.0' }))).toBe('accepted');
     expect(refusedField(pull({ name: 'acme-private' }))).toBe(`${stepField}.identity.pulls[0].name`);
+    expect(refusedField(pull({ name: PRIVATE }))).toBe('accepted');
+    expect(refusedField(pull({ name: LITERAL }))).toBe(`${stepField}.identity.pulls[0].name`);
     expect(refusedField(pull({ registry: 'acme' }))).toBe(`${stepField}.identity.pulls[0].registry`);
     expect(refusedField(pull({ version: 'latest-acme' }))).toBe(`${stepField}.identity.pulls[0].version`);
+    // A version beside a masked name identifies the name, so only a null version or the literal travels with `private`.
+    expect(refusedField(pull({ name: PRIVATE, version: null }))).toBe('accepted');
+    expect(refusedField(pull({ name: PRIVATE, version: LITERAL }))).toBe('accepted');
+    expect(refusedField(pull({ name: PRIVATE, version: '7.3.1' }))).toBe(`${stepField}.identity.pulls[0].version`);
   });
 
   it('holds a version suffix to digits and release words', () => {
@@ -271,7 +308,7 @@ describe('parseSkeleton refuses, and names the field', () => {
 
   // The server's own list, as capture applies it, so a name only a forged client could write is refused rather than stored.
   it('takes an MCP tool only when that server lists it', () => {
-    const tool = (server: string, name: string): unknown => withStep({ action: 'mcp.call', native: LITERAL, identity: { server, tool: name } });
+    const tool = (server: string, name: string): unknown => withStep({ action: 'mcp.call', native: PRIVATE, identity: { server, tool: name } });
     const native = (name: string): unknown => withStep({ action: 'mcp.call', native: name, identity: { server: 'github', tool: LITERAL } });
     expect(refusedField(tool('github', 'acme_secret_deploy'))).toBe(`${stepField}.identity.tool`);
     expect(refusedField(tool('postgres', 'get_issue'))).toBe(`${stepField}.identity.tool`);
@@ -289,8 +326,8 @@ describe('parseSkeleton refuses, and names the field', () => {
       Reflect.set(transcripts[0], 'harness', 'cursor');
       return raw;
     };
-    expect(refusedField(fromCursor({ native: LITERAL, identity: { server: 'github', tool: LITERAL } }))).toBe('accepted');
-    expect(refusedField(fromCursor({ native: LITERAL, identity: { server: 'github', tool: 'get_issue' } }))).toBe(`${stepField}.identity.tool`);
+    expect(refusedField(fromCursor({ native: PRIVATE, identity: { server: 'github', tool: LITERAL } }))).toBe('accepted');
+    expect(refusedField(fromCursor({ native: PRIVATE, identity: { server: 'github', tool: 'get_issue' } }))).toBe(`${stepField}.identity.tool`);
     expect(refusedField(fromCursor({ native: 'mcp_github_get_issue', identity: { server: 'github', tool: LITERAL } }))).toBe(`${stepField}.native`);
   });
 

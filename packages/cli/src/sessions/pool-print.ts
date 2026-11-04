@@ -1,4 +1,4 @@
-// What `oars pool fetch` and `oars pool login` print before they send (the pool vocabulary spec, Section 1.4): the request line and every header, then the body, with a credential
+// What `oars pool fetch` and `oars pool login` print before they send: the request line and every header, then the body, with a credential
 // masked as `<credential: n bytes>`. The text printed is built from the very headers and body handed to `fetch`, so the two cannot drift apart.
 
 /** One request as it will leave this machine. */

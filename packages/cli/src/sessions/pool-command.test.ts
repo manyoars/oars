@@ -1,8 +1,7 @@
-import { webcrypto } from 'node:crypto';
-import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { createHash, webcrypto } from 'node:crypto';
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { http, HttpResponse } from 'msw';
-import { createHash } from 'node:crypto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { run } from '../cli.js';
 import { ExitCode } from '../errors.js';
@@ -15,7 +14,7 @@ import type * as PoolWire from './pool-wire.js';
 import { session as sessionRow } from './pool-fixture.js';
 import { parseSkeleton, skeletonOf, VOCAB_VERSION, type PinnedKey } from './pool-wire.js';
 import { deposit } from './store.js';
-import { addProject, cleanup, NOW, stage, type Staged } from './test-support.js';
+import { addProject, cleanup, NOW, settledClock, stage, type Staged } from './test-support.js';
 
 // The session gates must stop a session before the projection runs; the real projection is wrapped so a test can see whether it was called.
 vi.mock('./pool-wire.js', async (importOriginal) => {
@@ -56,6 +55,7 @@ const setting = (env: NodeJS.ProcessEnv = {}): Scene => {
   writeFileSync(termsFile, `${TERM}\n`);
   const h = harness({ OARS_EXCLUSION_TERMS: termsFile, OARS_GITHUB_CLIENT_ID: 'gh-client', OARS_GOOGLE_CLIENT_ID: 'google-client', OARS_GOOGLE_CLIENT_SECRET: 'google-secret', ...env });
   h.deps.sessions = staged.runtime;
+  h.deps.now = settledClock;
   const seen: Seen[] = [];
   return {
     h,
@@ -572,6 +572,19 @@ describe('oars pool deposit', () => {
     expect(skeletonOf).not.toHaveBeenCalled();
   });
 
+  it('refuses a send past registry_max_age too, with no request made', async () => {
+    const scene = setting();
+    await capture(scene);
+    await signIn(scene);
+    expect(await scene.cli('pool', 'deposit', '--server', POOL)).toBe(ExitCode.OK);
+    expect(await scene.cli('pool', 'outbox', '--server', POOL)).toBe(ExitCode.OK);
+    const hash = printedHashes(scene)[0] ?? '';
+    const pool = wire({ 'GET /v1/covenant': OPEN_COVENANT, 'POST /v1/deposits': answer(201) });
+    scene.h.deps.now = () => Date.parse(`${VOCAB_SNAPSHOT_DATE}T00:00:00Z`) + (REGISTRY_MAX_AGE_DAYS + 1) * 86_400_000;
+    await expect(poolDeposit(scene.h.deps, sendOptions(hash, pool.via))).rejects.toMatchObject({ problem: { code: 'vocabulary_expired' } });
+    expect(pool.requests).toEqual([]);
+  });
+
   it('writes one canonical batch for each clean session, under an id that is not the session id, and sends nothing', async () => {
     const scene = setting();
     await capture(scene);
@@ -713,6 +726,184 @@ describe('oars pool deposit', () => {
         expect(scene.document()).toMatchObject({ batched: 1, withdrawn: 1 });
         expect(readdirSync(join(server, current))).toHaveLength(1);
       });
+
+      /** Rewrites every stored session record, the way an older capture or a damaged store would hold it. */
+      const rewriteSessions = (scene: Scene, change: (session: { frame?: { model?: unknown } }) => void): void => {
+        const file = join(scene.staged.storeDir, 'observations.jsonl');
+        const isSession = (record: unknown): record is { kind: 'session'; frame?: { model?: unknown } } => at(record, 'kind') === 'session';
+        const lines = readFileSync(file, 'utf8').split('\n').filter((text) => text !== '').map((text) => {
+          const record: unknown = JSON.parse(text);
+          if (isSession(record)) change(record);
+          return JSON.stringify(record);
+        });
+        writeFileSync(file, `${lines.join('\n')}\n`);
+      };
+
+      it('a session the store holds without steps and frames', async () => {
+        const { scene, hash } = await built();
+        rewriteSessions(scene, (session) => {
+          delete session.frame;
+        });
+        await expectWithdrawn(scene, hash);
+      });
+
+      it('a session the vocabulary now refuses', async () => {
+        const { scene, hash } = await built();
+        rewriteSessions(scene, (session) => {
+          if (session.frame !== undefined) session.frame.model = 'acme-private-llm';
+        });
+        await expectWithdrawn(scene, hash);
+      });
+
+      it('the same sessions under another account', async () => {
+        const { scene, hash } = await built();
+        on(scene, 'post', '/v1/login', () => HttpResponse.json({ ...okLogin(), account: 'acct_two' }));
+        expect(await scene.cli('pool', 'login', '--provider', 'github', '--server', POOL)).toBe(ExitCode.OK);
+        scene.h.out.length = 0;
+        expect(await scene.cli('pool', 'deposit', '--server', POOL, '--json')).toBe(ExitCode.OK);
+        expect(outboxFiles(scene)).toHaveLength(1);
+        expect(outboxFiles(scene).join('')).not.toContain(hash);
+        expect(scene.document()).toMatchObject({ batched: 1, withdrawn: 1 });
+      });
+
+      // The batch goes when its session fails a gate, not after the pass: a session handled later may throw, and the pass stops there.
+      it('before a later session fails the pass', async () => {
+        const { scene } = await built();
+        addProject(scene.staged, 'second-folder', '66666666-6666-4666-8666-666666666666', [line('another plain request')]);
+        await deposit(scene.staged.runtime, { allow: [OTHER_FOLDER, 'second-folder'], redactDomains: [], now: () => NOW });
+        const state = join(scene.staged.storeDir, 'state.json');
+        writeFileSync(state, JSON.stringify({ ...JSON.parse(readFileSync(state, 'utf8')), allow: ['second-folder'] }));
+        vi.mocked(skeletonOf).mockImplementationOnce(() => {
+          throw new Error('the disk is full');
+        });
+        expect(await scene.cli('pool', 'deposit', '--server', POOL)).not.toBe(ExitCode.OK);
+        expect(outboxFiles(scene)).toEqual([]);
+      });
+
+      it('before a later session fails the pass, when the term check stopped the first', async () => {
+        const { scene } = await built();
+        addProject(scene.staged, 'second-folder', '66666666-6666-4666-8666-666666666666', [line('another request')]);
+        await deposit(scene.staged.runtime, { allow: [OTHER_FOLDER, 'second-folder'], redactDomains: [], now: () => NOW });
+        writeFileSync(join(scene.staged.root, 'terms.txt'), `${TERM}
+plain
+`);
+        vi.mocked(skeletonOf).mockImplementationOnce(() => {
+          throw new Error('the disk is full');
+        });
+        expect(await scene.cli('pool', 'deposit', '--server', POOL)).not.toBe(ExitCode.OK);
+        expect(outboxFiles(scene)).toEqual([]);
+      });
+
+      it('and says so in the text, in the singular', async () => {
+        const { scene } = await built();
+        const state = join(scene.staged.storeDir, 'state.json');
+        writeFileSync(state, JSON.stringify({ ...JSON.parse(readFileSync(state, 'utf8')), allow: ['some-other-folder'] }));
+        expect(await scene.cli('pool', 'deposit', '--server', POOL)).toBe(ExitCode.OK);
+        expect(scene.h.out.join('')).toContain('Removed 1 batch of sessions that no longer pass the gates, have not ended, or are no longer in the store.');
+      });
+
+      // Nothing is sent from an older spelling: a deposit builds the session's batch again and removes the older file under its key, so a batch written before the wire spelled "not admitted" one way is not left to send.
+      it('a batch of the same session written before the wire spelled a name one way is replaced, not kept', async () => {
+        const { scene, hash } = await built();
+        const server = join(scene.staged.storeDir, 'pool-outbox', outboxFiles(scene)[0]?.split(/[\\/]/)[0] ?? '');
+        const current = readdirSync(server).filter((name) => name.startsWith('v'))[0] ?? '';
+        const [name = ''] = readdirSync(join(server, current));
+        const older = `${name.split('.')[0] ?? ''}.${'a'.repeat(64)}.jsonl`;
+        writeFileSync(join(server, current, older), '{"native":"<literal>"}\n');
+        expect(await scene.cli('pool', 'deposit', '--server', POOL, '--json')).toBe(ExitCode.OK);
+        expect(readdirSync(join(server, current))).toEqual([`${name.split('.')[0] ?? ''}.${hash}.jsonl`]);
+      });
+    });
+  });
+
+  describe('a session is built once it has ended', () => {
+    const FOLDER = 'ended-folder';
+    const MAIN = '66666666-6666-4666-8666-666666666666';
+    const HOUR = 60 * 60 * 1000;
+    // The harness clock of the command tests: the command reads it as now.
+    const END = Date.parse('2026-10-23T00:00:00Z');
+    const user = (text: string): string => JSON.stringify({ type: 'user', sessionId: MAIN, cwd: '/w', timestamp: '2026-06-01T00:00:00Z', message: { role: 'user', content: text } });
+
+    /** Sets every file under a folder to one time, as the harness's files are when nothing has written them since. */
+    const settle = (folder: string, at: number): void => {
+      for (const name of readdirSync(folder, { recursive: true, encoding: 'utf8' })) {
+        const path = join(folder, name);
+        if (statSync(path).isFile()) utimesSync(path, at / 1000, at / 1000);
+      }
+    };
+
+    interface Quiet {
+      scene: Scene;
+      agentFile: string;
+    }
+
+    /** A signed-in store holding one session and one subagent: the main last captured `mainHours` before the command runs, and the subagent `agentHours` before it. */
+    const quiet = async (mainHours: number, agentHours: number): Promise<Quiet> => {
+      const scene = setting();
+      rmSync(join(scene.staged.projectsRoot, 'proj'), { recursive: true, force: true });
+      addProject(scene.staged, FOLDER, MAIN, [user('a plain request')]);
+      const agents = join(scene.staged.projectsRoot, FOLDER, MAIN, 'subagents');
+      mkdirSync(agents, { recursive: true });
+      const agentFile = join(agents, 'agent-a.jsonl');
+      writeFileSync(agentFile, `${user('the subagent starts')}
+`);
+      await deposit(scene.staged.runtime, { allow: [FOLDER], redactDomains: [], now: () => END - mainHours * HOUR });
+      writeFileSync(agentFile, `${user('the subagent starts')}
+${user('and goes on')}
+`);
+      await deposit(scene.staged.runtime, { allow: [FOLDER], redactDomains: [], now: () => END - agentHours * HOUR });
+      settle(scene.staged.projectsRoot, END - 10 * HOUR);
+      settle(join(scene.staged.storeDir, 'raw'), END - 10 * HOUR);
+      await signIn(scene);
+      scene.h.deps.now = () => END;
+      return { scene, agentFile };
+    };
+
+    const deposited = async (scene: Scene): Promise<void> => {
+      scene.h.out.length = 0;
+      expect(await scene.cli('pool', 'deposit', '--server', POOL, '--json')).toBe(ExitCode.OK);
+    };
+
+    it('builds one batch when the session and its subagent have both been quiet for six hours', async () => {
+      const { scene } = await quiet(7, 7);
+      await deposited(scene);
+      expect(scene.document()).toMatchObject({ sessions: 1, batched: 1, notEnded: 0, uncaptured: 0 });
+      expect(outboxFiles(scene)).toHaveLength(1);
+    });
+
+    it('builds nothing while the subagent has been quiet for five hours, and withdraws the batch it built before', async () => {
+      const { scene } = await quiet(7, 5);
+      scene.h.deps.now = () => END + 2 * HOUR;
+      await deposited(scene);
+      expect(scene.document()).toMatchObject({ batched: 1, notEnded: 0 });
+      expect(outboxFiles(scene)).toHaveLength(1);
+      scene.h.deps.now = () => END;
+      await deposited(scene);
+      expect(scene.document()).toMatchObject({ sessions: 1, batched: 0, notEnded: 1, withdrawn: 1 });
+      expect(outboxFiles(scene)).toEqual([]);
+    });
+
+    it('counts a captured subagent that has no root as not built', async () => {
+      const { scene } = await quiet(7, 7);
+      const folder = join(scene.staged.storeDir, 'skeletons');
+      const agent = readdirSync(folder).filter((name) => name.includes('~'));
+      expect(agent).toHaveLength(1);
+      rmSync(join(folder, agent[0] ?? ''));
+      await deposited(scene);
+      expect(scene.document()).toMatchObject({ sessions: 1, batched: 0, uncaptured: 1, notEnded: 0 });
+      expect(outboxFiles(scene)).toEqual([]);
+    });
+
+    it.each(['main', 'subagent'])('reads a transcript as still growing when its %s raw file is newer than the last capture', async (which) => {
+      const { scene, agentFile } = await quiet(7, 7);
+      const file = which === 'main' ? join(scene.staged.projectsRoot, FOLDER, `${MAIN}.jsonl`) : agentFile;
+      const grown = END - 2 * HOUR;
+      utimesSync(file, grown / 1000, grown / 1000);
+      await deposited(scene);
+      expect(scene.document()).toMatchObject({ batched: 0, notEnded: 1 });
+      scene.h.deps.now = () => grown + 6 * HOUR;
+      await deposited(scene);
+      expect(scene.document()).toMatchObject({ batched: 1, notEnded: 0 });
     });
   });
 
@@ -983,7 +1174,7 @@ describe('oars pool outbox --explain and older batches', () => {
     expect(JSON.stringify(scene.document())).toContain('surprise');
   });
 
-  it('discards a batch built under an older vocabulary or field list: never printed, never sent, counted by deposit', async () => {
+  it('discards a batch built under an older vocabulary, field list, or skeleton format: never printed, never sent, counted by deposit', async () => {
     const scene = await batched();
     const outbox = join(scene.staged.storeDir, 'pool-outbox', readdirSync(join(scene.staged.storeDir, 'pool-outbox'))[0] ?? '');
     const old = await writeBatch(outbox, 'dddddddddddddddd', { format: 1, id: 'old', transcripts: [] }, 'v0-00000000');
@@ -993,7 +1184,7 @@ describe('oars pool outbox --explain and older batches', () => {
     await expect(poolDeposit(scene.h.deps, sendOptions(old.hash, wire({}).via))).rejects.toMatchObject({ problem: { code: 'batch_unknown' } });
     scene.h.out.length = 0;
     expect(await scene.cli('pool', 'deposit', '--server', POOL)).toBe(ExitCode.OK);
-    expect(scene.h.out.join('')).toContain('Discarded 1 batch built under an older vocabulary or field list.');
+    expect(scene.h.out.join('')).toContain('Discarded 1 batch built under an older vocabulary, field list, or skeleton format.');
     expect(existsSync(old.folder)).toBe(false);
   });
 

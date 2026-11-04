@@ -3,8 +3,8 @@ import { describe, expect, it } from 'vitest';
 import { cellsOf, incrementsOf, projectedStore, storeOf, type Increments } from './cell-increments.js';
 import { deriveCells, effortClass, NO_AXES } from './cells.js';
 import { classMotif } from './motif.js';
-import { frame, prompt, session, step, storedNames, store, tool } from './pool-fixture.js';
-import { floorOf, sessionsOf, skeletonOf, type SessionSkeleton } from './pool-wire.js';
+import { frame, printOf, prompt, session, sessionsFrom, step, store, storedNames, tool } from './pool-fixture.js';
+import { floorOf, skeletonOf, type SessionSkeleton } from './pool-wire.js';
 import { deriveConsequences, recallGraphOf } from './recall-consequence.js';
 import { makeRecall } from './recall-object.js';
 import type { Store } from './store.js';
@@ -25,8 +25,8 @@ const localStore = (): Store =>
   });
 
 const skeletonOfLocal = (local: Store): SessionSkeleton => {
-  const [only] = sessionsOf(local);
-  const skeleton = only === undefined ? null : skeletonOf(only, ID, storedNames);
+  const [only] = sessionsFrom(local);
+  const skeleton = only === undefined ? null : skeletonOf(only, ID, storedNames, printOf);
   if (skeleton === null) throw new Error('the local store has no skeleton');
   return skeleton;
 };
@@ -140,7 +140,7 @@ describe('rules 1 to 3 and 6: what a cell and a stratum hold', () => {
           prompts: [prompt('s1', 0, { frame: manyFramed })],
           tools: [
             tool('s1', 0, 'Bash', {
-              steps: [step(0, 0, 'shell.exec', { native: 'Bash', identity: { program: 'git', sub: 'push', flags: ['--force', '--tags'], pulls: [{ registry: 'npm', name: 'left-pad', version: null }, { registry: 'npm', name: 'is-odd', version: '1.0.0' }] } })],
+              steps: [step(0, 0, 'shell.exec', { native: 'Bash', identity: { program: 'git', sub: 'push', flags: ['--force', '--tags'], pulls: [{ registry: 'npm', name: 'zod', version: null }, { registry: 'npm', name: 'react', version: '1.0.0' }] } })],
             }),
           ],
         }),
@@ -160,8 +160,8 @@ describe('rules 1 to 3 and 6: what a cell and a stratum hold', () => {
       motifs.filter(({ level, steps }) => level === 'named' && steps.length === 1 && steps.some(({ identity }) => identity !== null && 'program' in identity && identity.flags.join() === (flag ?? '') && (identity.pulls ?? []).map(({ name }) => name).join() === (pull ?? ''))).length;
     expect(single('--force', null)).toBe(1);
     expect(single('--tags', null)).toBe(1);
-    expect(single(null, 'left-pad')).toBe(1);
-    expect(single(null, 'is-odd')).toBe(1);
+    expect(single(null, 'zod')).toBe(1);
+    expect(single(null, 'react')).toBe(1);
     expect(single(null, null)).toBe(1);
     expect([...strata.keys()].sort()).toEqual(['framework/astro', 'framework/vite', 'language/go', 'language/rust', 'repoFiles/xl']);
   });
