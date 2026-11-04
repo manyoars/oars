@@ -579,6 +579,58 @@ command with a matching error line, and usage is nonzero (it is written only at 
   A session that never shut down (a crash) has output tokens only. Subagent events (`agentId`, or the deprecated `parentToolCallId`) are skipped; the parent's `task` call is kept. Torn lines are counted as
   unparseable; a file with no parseable line is unreadable. Idempotent per session (`copilot/<id>` in `state.json`, size and mtime).
 
+## The Grok Build source
+
+`oars sessions deposit --allow grok` reads Grok Build (xAI's `grok` CLI) session logs into the same store. The records carry `harness: "grok"`, take the same field
+classes, redaction, and 1,000-character `line` cap as every other source, and `recall`, `measure`, `books`, and `verify` read them with no special case. It is one
+more entry in the source table (`sources.ts`). The TUI, `grok -p`, and the ACP agent mode share one store, so one reader covers them.
+
+**Fixture-derived, never run live.** This reader was written from the public source of the CLI (github.com/xai-org/grok-build @ 2bdd1d6, Apache-2.0, Rust,
+`crates/codegen/`) and the Agent Client Protocol schema it implements (agentclientprotocol/agent-client-protocol @ 0e486bcd, `schema/v1/schema.json`), and tested only
+on synthetic fixtures; no Grok Build store has ever been read by it. No vendor statement promises the session-file format: the user guide (`17-sessions.md:278`)
+steers readers to `grok usage` ("Use this instead of reading session files"), and the only versioned surfaces are the OTel metrics ("Status: alpha") and the
+status-line payload. Hooks exist (`10-hooks.md:274-283`, with `exit_code` on `PostToolUse`), but they carry no usage and no history and see only what runs after
+install, so they are not used. A Grok Build release can change the files; an unreadable session is warned about by name and skipped, never fatal. The one hand run that
+would settle it: on a machine with `grok` signed in, run one `grok -p "<task>"` that makes one prompt, runs one command that exits nonzero (for example `ls /nonexistent`),
+and edits one file, then `oars sessions deposit --allow grok` and `oars sessions verify --strict`. It is settled only if the session count is nonzero, there are zero
+violations, the session holds an `error` tool record for that command with a matching error line, and usage is nonzero. To check the resume and fork cases, resume
+that session (`grok -c`), send one more prompt, and confirm `usage.json` `turns` kept adding; then `/fork` it and confirm the child's `summary.json` has `forked_at` and
+that a deposit counts only the child's own prompts.
+
+- **Where.** `$GROK_HOME` if set and non-empty, else `~/.grok` (`%USERPROFILE%\.grok` on Windows) (`xai-dirs/src/lib.rs:51-57`; `17-sessions.md:18`):
+  `sessions/<percent-encoded cwd>/<session id>/`. The cwd is `summary.json` `info.cwd` (a long path's folder name is a hash, so the name is not read). Three files are
+  read: `updates.jsonl` ("the authoritative conversation log", `17-sessions.md:42`), `summary.json`, and `usage.json` (not in the documented layout, but `grok usage`
+  prints it). `events.jsonl` is telemetry with no prompt text or cwd, and `chat_history.jsonl` is the model-facing copy; neither is read. Opt-in like Cursor, Codex, and
+  Copilot: discovered by default, opened only when `--allow grok` names it; the nightly run repeats a saved allow. A deposit only reads.
+- **Mapping.** Each `updates.jsonl` line is `{timestamp, method, params: {sessionId, update}}` with an ACP `update`. `user_message_chunk` text is a prompt (chunks
+  merge until the agent speaks; a chunk with `_meta.hostTurn` ends a prompt and one with `_meta.interjection` is a mid-turn steer whose text is a model-facing frame,
+  so neither is a prompt); `agent_message_chunk` text is a response; a `tool_call`'s `title` is the tool's name, its arguments are `rawInput`, and its outcome is the
+  `tool_call_update` with `completed` or `failed`. A shell call is a `run_terminal_cmd`, `run_terminal_command`, or `bash` call, or any call of `kind` `execute` (the
+  user's `!cmd` is one). Its outcome is `rawOutput.exit_code`, not the status: the agent path marks a call `failed` only on a timeout or a signal, so exit 2 arrives
+  `completed` (`acp_conversion.rs:241-250`); the `!` path marks nonzero `failed`. Any other tool's error text is its `content[]` text; its `rawOutput` is a tagged wrapper
+  and is never the error line. An edit is found by tool name (`search_replace`, `apply_patch`, `edit`, `write`, `hashline_edit`); its files are `file_path` (the tools'
+  input structs: `search_replace/mod.rs:74`, `opencode/edit/mod.rs:68`, `opencode/write/mod.rs:31`, `hashline_edit types.rs:12`), the `*** Add|Update|Delete File:` headers
+  of an `apply_patch` `patch` (`codex/apply_patch/tool.rs:104`, `parser.rs:40-42`), and the `diff` parts of the completion's `content[]`; those key names are read from the
+  structs, not from a recorded line, so they are inferred. An MCP call is titled `<server>__<tool>` and is recorded as `mcp__<server>__<tool>`. The cwd is `info.cwd`,
+  then each shell call's `current_dir` ("the current working directory after the command completes", `types/output.rs:397`); a resume in another directory, or a
+  `cd` outside a shell call, is not seen until the next shell call (`summary.json` holds `cwd_generation` and `previous_cwd`, which are not used).
+- **Timestamps.** The envelope's `timestamp` is epoch seconds with a serde default of 0. A zero, missing, or earlier time takes the latest time so far, starting from
+  `summary.created_at`, so many prompts never share one time and none goes backward.
+- **Absent.** There is no cost field in the skeleton (`usage.json` has `costUsdTicks`, 1e10 per USD, which is not read), no reasoning text, no per-call model, and no
+  per-response usage: usage is per turn. Each turn's totals land on the last response before its `endedAt`, else the first (turn numbers are not used, since a rewind
+  renumbers them), and that turn's `primaryModelId` becomes the response's model; other responses carry `summary.current_model_id`, the model the session ended on. No
+  file records the Grok Build version, so the skeleton's harness version is empty. `inputTokens` is the full prompt, cache reads and writes included
+  (`xai-grok-sampling-types/src/conversation.rs:771-773`: "`prompt_tokens` is always the FULL prompt size (uncached + cache reads + cache writes)", mapped to `inputTokens` at
+  `usage_file.rs:100-110`), so the stored input is `inputTokens - cachedReadTokens - cacheCreationTokens` (never below 0) and the cache fields are kept apart, as capture's are.
+- **Totals.** `usage.json` `turns[]` are per-turn deltas and `session` is their sum (`usage_file.rs:230-300`), so every turn is added once; there is no cumulative first
+  summary to avoid. A resumed session continues the same file. A fork copies its parent's `usage.json` and `updates.jsonl` (`persistence.rs:2608`, `copy.rs:229`): lines older
+  than `summary.forked_at` and turns that ended at or before it are not the fork's own and are skipped.
+- **Subagents.** A subagent is a separate session in the same tree with `summary.session_kind` `subagent` or `subagent_fork` (`persistence.rs:3016`); it is not listed, and
+  the parent's `task` call is the record. A session with `num_messages` 0 holds nothing and is not listed.
+- **Known gaps.** `forked_at` is read as the parent reference, as the user guide describes it (`17-sessions.md:42`: "parent session reference for forked or restored
+  sessions"); only forks and subagent forks were traced, so a restore that sets it would read as a fork and lose the lines before it. Torn lines are counted as unparseable; a
+  file with no parseable line is unreadable. Idempotent per session (`grok/<id>` in `state.json`, the size and latest mtime of `updates.jsonl` and `usage.json`).
+
 ## The outcome gold set
 
 `oars sessions gold sample` writes `outcome-gold-<date>.md` to `<claude config>/session-commons/review/`: about 200 prompts in batches of 50, each with the redacted request, the result (commit message and diff stat where found, the transcript's own edit calls, or the actions of a prompt that edited nothing), and a `Judgment: yes|no` line. The draw is seeded and weighted by the square root of each class and model cell, with at most two prompts a session, so its base rate is the sample's, not the store's. Every session passes the V15 rule (`checkSession`) first: one that holds a listed term, has no raw to scan, or cannot be read is left out, and a missing or empty term file (`OARS_EXCLUSION_TERMS`) refuses the draw. `--exclude-term` adds terms to the file's, never in place of it. A marker prompt, a `no-tools` prompt (its reply is the closing claim), and a session from any other harness (every `SOURCES` name: Cursor, Codex) are not drawn. The signals go to the `.arms.json` file beside it. `oars sessions gold score <file>` prints, per model and pooled, each signal's AUROC with a DeLong 95% interval and the base rate, from whatever is judged so far. Both are local, and neither is ever committed. A signal is an observation, not a label, and no signal is combined with another.
