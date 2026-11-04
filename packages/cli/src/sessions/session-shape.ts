@@ -1,6 +1,6 @@
 // What a transcript shows of a session's setup, its tool funnel, and its trust shape (t815, the capture half of pool vocabulary Brief 3). Read from the
 // transcript only: never today's config or instruction files, because a file read now is not that session's setup. A field the transcript does not
-// hold is absent, never guessed. Counts and sizes only: no instruction text, hook command, or tool description is kept. Class A, local; nothing
+// hold is absent, never guessed. Counts, names, and sizes only: no instruction text, hook command, or tool description is kept. Class A, local; nothing
 // here is projected or uploaded.
 //
 // One collector per transcript, fed line by line by `captureSession`. It reads the Claude Code line shapes (t816's census of 2.1.312 to 2.1.318) and
@@ -20,7 +20,8 @@ export const REJECTED_RE = /^The user doesn't want to (?:proceed with this tool 
 export const INTERRUPT_MARKER = '[Request interrupted by user';
 /** A policy refusal: the permission rules or the auto-mode classifier (`Permission ... has been denied`), or a hook (`PreToolUse:Bash hook error`). Not the human's. */
 const DENIED_RE = /^(?:Permission (?:to use .{1,200}?|for this action) has been denied|[A-Za-z]+:[^\s]+ hook error|Hook [A-Za-z]+:[^\s]+ denied)/;
-/** A plugin's MCP server names its tools `mcp__plugin_<plugin>_<server>__<tool>`; that is the only evidence of an installed plugin read here. */
+/** A plugin's MCP server names its tools `mcp__plugin_<plugin>_<server>__<tool>`; that is the only evidence of an installed plugin read here.
+ * The name stops at its first `_`, since the tool name cannot say where the plugin ends and the server begins: `mcp__plugin_my_plugin_srv__t` reads as `my`. */
 const PLUGIN_TOOL_RE = /^mcp__plugin_([A-Za-z0-9-]+)_/;
 
 /** A hook of the `Stop` event, named `Stop` or `Stop:<matcher>`. */
@@ -296,11 +297,12 @@ export const createShape = (harness: Harness, stored: (tool: string) => string, 
         open.clear();
         rejectedLast = false;
       }
-      if (!timing || seconds === undefined) return;
+      if (!timing) return;
+      // A human turn with no usable time still ends the run before it: the agent lines after it are not that run's.
       if (kind === 'human') {
         close();
         start = seconds;
-      } else if (kind === 'agent' && start !== undefined && seconds >= start && (end === undefined || seconds > end)) end = seconds;
+      } else if (kind === 'agent' && seconds !== undefined && start !== undefined && seconds >= start && (end === undefined || seconds > end)) end = seconds;
     },
 
     finish() {
@@ -321,11 +323,12 @@ export const createShape = (harness: Harness, stored: (tool: string) => string, 
       if (Object.keys(setup).length > 0) out.setup = setup;
 
       const funnel: SessionFunnel = {};
-      const sideOf = (which: 'offered' | 'removed'): string[] => [...standing].filter(([, side]) => side === which).map(([name]) => stored(name)).sort();
+      // Two names that redact to one form are one tool, as `tools` keys it.
+      const sideOf = (which: 'offered' | 'removed'): string[] => [...new Set([...standing].filter(([, side]) => side === which).map(([name]) => stored(name)))].sort();
       const offered = sideOf('offered');
       const removed = sideOf('removed');
       if (offered.length > 0) funnel.offered = offered;
-      if (loaded.size > 0) funnel.loaded = [...loaded].map(stored).sort();
+      if (loaded.size > 0) funnel.loaded = [...new Set([...loaded].map(stored))].sort();
       if (removed.length > 0) funnel.removed = removed;
       if (Object.keys(funnel).length > 0) out.funnel = funnel;
 
