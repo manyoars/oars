@@ -1,18 +1,24 @@
-// The cell (t756, recall spec Section 2.5): counts for one motif in one frame bucket on one day, order 0. Cells are computed from the capture records, which
+// The cell (t756, recall spec Section 2.5): counts for one motif in one frame bucket in one UTC week (or, for a live cell, one UTC day), order 0. Cells are computed from the capture records, which
 // stay the primary record, so a cell file can be dropped and rebuilt and any later derivation can run over old data. Nothing here reads raw.
 
 import { closedFrame, utcDay } from './frame.js';
 import { classMotif, motifsOf, stepsOfCall, type Motif } from './motif.js';
+import { bucketOf } from './pool-wire.js';
 import { CALL_SHAPE_METHOD, cellRef, contentHash, METHODS } from './read.js';
 import { NO_RECALLS, type RecallGraph } from './recall-consequence.js';
 import { EXTRACTOR_VERSION, harnessOf, type ErrorObservation, type Frame, type Harness, type PromptObservation, type SessionObservation, type ToolObservation } from './schema.js';
 import type { Store } from './store.js';
 
+/** Rule 6: an `index` cell is weekly, except a live cell, which stays at the UTC day. */
+export type Grain = 'day' | 'week';
+
 export interface Cell {
   motifId: string;
-  /** `harness/versionBucket/model/effort`, public names (`frameBucketOf`). */
+  /** `harness/versionBucket/model`, public names (`frameBucketOf`). Effort is not in it (rule 3). */
   frameBucket: string;
-  /** The UTC day of the step's frame, or `unknown`. */
+  /** What `day` names: a UTC day, or a UTC week. A read takes the grain it answers from and never the other. */
+  grain: Grain;
+  /** The UTC day of the step's frame for a day cell, the Monday of its UTC week for a week cell, or `unknown`. */
   day: string;
   /** Distinct main sessions: a subagent's steps count under the session that spawned it. */
   sessions: number;
@@ -31,6 +37,15 @@ export interface Cell {
 
 export const UNKNOWN = 'unknown';
 
+/** The class name an effort cell carries: a class motif with no prompt class in it, so a read of prompt classes skips it by this prefix. */
+export const EFFORT_CLASS = 'effort:';
+
+/**
+ * Rule 3: effort is not in a cell's key. The one cell that holds it pairs it with the bucket of the prompt's thinking tokens, which is the fact an effort level explains, and it
+ * carries `week`, `exposure`, and the frame's axes like any other.
+ */
+export const effortClass = (effort: string, thinking: number): string => `${EFFORT_CLASS}${effort}/thinking:${String(bucketOf('tokens', thinking))}`;
+
 const ONE_OPERATOR = 1;
 
 /**
@@ -44,12 +59,24 @@ export const harnessBucket = (version: string | null): string => {
 };
 
 /** Only what most comparisons cross: platform, shell, and stack are on the frame and in the records, so a later extractor can add them without new capture. */
-export const frameBucketOf = (frame: Frame): string => [frame.harness, harnessBucket(frame.harnessVersion), frame.model ?? UNKNOWN, frame.effort ?? UNKNOWN].join('/');
+export const frameBucketOf = (frame: Frame): string => [frame.harness, harnessBucket(frame.harnessVersion), frame.model ?? UNKNOWN].join('/');
 
-export const bucketFields = (bucket: string): { harness: string; harnessBucket: string; model: string; effort: string } => {
-  const [harness = UNKNOWN, version = UNKNOWN, model = UNKNOWN, effort = UNKNOWN] = bucket.split('/');
-  return { harness, harnessBucket: version, model, effort };
+export const bucketFields = (bucket: string): { harness: string; harnessBucket: string; model: string } => {
+  const [harness = UNKNOWN, version = UNKNOWN, model = UNKNOWN] = bucket.split('/');
+  return { harness, harnessBucket: version, model };
 };
+
+const DAY_MS = 86_400_000;
+
+/** The Monday of the UTC week a UTC day falls in, as a day: the week's name in a cell. An unknown day is an unknown week. */
+export const weekStartOf = (day: string): string => {
+  if (day === UNKNOWN) return UNKNOWN;
+  const millis = Date.parse(day);
+  return new Date(millis - ((new Date(millis).getUTCDay() + 6) % 7) * DAY_MS).toISOString().slice(0, 10);
+};
+
+/** The last UTC day a cell can hold: its day, or the Sunday that closes its week. A check that evidence predates a day reads this, since a week's cell may hold any of its seven days. */
+export const lastDayOfCell = (cell: Cell): string => (cell.grain === 'week' && cell.day !== UNKNOWN ? new Date(Date.parse(cell.day) + 6 * DAY_MS).toISOString().slice(0, 10) : cell.day);
 
 const cellIds = new WeakMap<Cell, string>();
 
@@ -70,6 +97,7 @@ export interface CellSet {
 interface Tally {
   motifId: string;
   frameBucket: string;
+  grain: Grain;
   day: string;
   sessions: Set<string>;
   ok: number;
@@ -79,7 +107,7 @@ interface Tally {
   exposed: boolean;
 }
 
-const newTally = (motifId: string, frameBucket: string, day: string, exposed: boolean): Tally => ({ motifId, frameBucket, day, sessions: new Set(), ok: 0, failed: 0, tokens: 0, durationMs: 0, exposed });
+const newTally = (motifId: string, frameBucket: string, grain: Grain, day: string, exposed: boolean): Tally => ({ motifId, frameBucket, grain, day, sessions: new Set(), ok: 0, failed: 0, tokens: 0, durationMs: 0, exposed });
 
 const compare = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
 
@@ -116,16 +144,21 @@ const linesOf = (tools: readonly ToolObservation[]): ToolObservation[][] => {
 export const deriveCells = (store: Store, graph: RecallGraph = NO_RECALLS): CellSet => {
   const tallies = new Map<string, Tally>();
   const motifs = new Map<string, Motif>();
-  const tallyOf = (motif: Motif, frame: Frame, exposed: boolean): Tally => {
+  const tallyAt = (motif: Motif, frameBucket: string, grain: Grain, day: string, exposed: boolean): Tally => {
+    const key = `${motif.motifId}/${frameBucket}/${grain}/${day}/${String(exposed)}`;
+    const found = tallies.get(key);
+    if (found !== undefined) return found;
+    const fresh = newTally(motif.motifId, frameBucket, grain, day, exposed);
+    tallies.set(key, fresh);
+    return fresh;
+  };
+  /** The tallies one occurrence counts into: its week cell, and for a shape motif with a known day its live cell too (rule 6). A named or class motif has no day cell. */
+  const talliesOf = (motif: Motif, frame: Frame, exposed: boolean): Tally[] => {
     motifs.set(motif.motifId, motif);
     const frameBucket = frameBucketOf(frame);
     const day = frame.day ?? UNKNOWN;
-    const key = `${motif.motifId}/${frameBucket}/${day}/${String(exposed)}`;
-    const found = tallies.get(key);
-    if (found !== undefined) return found;
-    const fresh = newTally(motif.motifId, frameBucket, day, exposed);
-    tallies.set(key, fresh);
-    return fresh;
+    const weekly = tallyAt(motif, frameBucket, 'week', weekStartOf(day), exposed);
+    return motif.level === 'shape' && day !== UNKNOWN ? [weekly, tallyAt(motif, frameBucket, 'day', day, exposed)] : [weekly];
   };
 
   const sessions = new Map<string, SessionObservation>([...store.sessions, ...store.subagents].map((session) => [session.session, session]));
@@ -146,14 +179,15 @@ export const deriveCells = (store: Store, graph: RecallGraph = NO_RECALLS): Cell
     const steps = placed.map(({ step }) => step);
     for (const { motif, start } of motifsOf(steps)) {
       const window = steps.slice(start, start + motif.steps.length);
-      const tally = tallyOf(motif, frame, placed.slice(start, start + motif.steps.length).some(({ exposed }) => exposed));
-      tally.sessions.add(first.parent);
       const status = window.at(-1)?.status;
-      if (status === 'ok') tally.ok += 1;
-      if (status === 'error') tally.failed += 1;
-      for (const step of window) {
-        tally.tokens += step.tokens;
-        tally.durationMs += step.durationMs;
+      for (const tally of talliesOf(motif, frame, placed.slice(start, start + motif.steps.length).some(({ exposed }) => exposed))) {
+        tally.sessions.add(first.parent);
+        if (status === 'ok') tally.ok += 1;
+        if (status === 'error') tally.failed += 1;
+        for (const step of window) {
+          tally.tokens += step.tokens;
+          tally.durationMs += step.durationMs;
+        }
       }
     }
   }
@@ -161,18 +195,21 @@ export const deriveCells = (store: Store, graph: RecallGraph = NO_RECALLS): Cell
   for (const prompt of store.prompts) {
     const session = sessions.get(prompt.session);
     const frame = framedPrompt(prompt, harnessOf(session ?? {}), session?.env.harness ?? null, null, session?.env.os ?? UNKNOWN);
-    const tally = tallyOf(classMotif(prompt.cls), frame, graph.exposedPrompt(prompt.session, prompt.index));
-    tally.sessions.add(prompt.session);
-    if (prompt.errors > 0) tally.failed += 1;
-    else tally.ok += 1;
-    const { input, cacheWrite, cacheRead, output } = prompt.usage;
-    tally.tokens += input + cacheWrite + cacheRead + output;
-    tally.durationMs += (prompt.wallSec ?? 0) * 1000;
+    const exposed = graph.exposedPrompt(prompt.session, prompt.index);
+    const classes = [prompt.cls, ...(frame.effort === null ? [] : [effortClass(frame.effort, prompt.usage.thinking)])];
+    for (const tally of classes.flatMap((cls) => talliesOf(classMotif(cls), frame, exposed))) {
+      tally.sessions.add(prompt.session);
+      if (prompt.errors > 0) tally.failed += 1;
+      else tally.ok += 1;
+      const { input, cacheWrite, cacheRead, output } = prompt.usage;
+      tally.tokens += input + cacheWrite + cacheRead + output;
+      tally.durationMs += (prompt.wallSec ?? 0) * 1000;
+    }
   }
 
   const cells = [...tallies.values()]
-    .sort((a, b) => compare(a.motifId, b.motifId) || compare(a.frameBucket, b.frameBucket) || compare(a.day, b.day) || Number(a.exposed) - Number(b.exposed))
-    .map((tally): Cell => ({ motifId: tally.motifId, frameBucket: tally.frameBucket, day: tally.day, sessions: tally.sessions.size, clusters: ONE_OPERATOR, ok: tally.ok, failed: tally.failed, tokens: tally.tokens, durationMs: tally.durationMs, exposed: tally.exposed }));
+    .sort((a, b) => compare(a.motifId, b.motifId) || compare(a.frameBucket, b.frameBucket) || compare(a.grain, b.grain) || compare(a.day, b.day) || Number(a.exposed) - Number(b.exposed))
+    .map((tally): Cell => ({ motifId: tally.motifId, frameBucket: tally.frameBucket, grain: tally.grain, day: tally.day, sessions: tally.sessions.size, clusters: ONE_OPERATOR, ok: tally.ok, failed: tally.failed, tokens: tally.tokens, durationMs: tally.durationMs, exposed: tally.exposed }));
   return { cells, motifs: [...motifs.values()].sort((a, b) => compare(a.motifId, b.motifId)) };
 };
 

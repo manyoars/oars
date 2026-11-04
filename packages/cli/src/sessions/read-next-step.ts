@@ -2,7 +2,7 @@
 // not the right one; t752 scored this barely above repeating the last tool. Remaining cost is not read here, because a window's cost stops at the window.
 import { type Cell } from './cells.js';
 import { motifName, shapeMotif, type WindowStep } from './motif.js';
-import { body, groupBy, rate, settled, total, wilson, type DeriveFamily } from './read-support.js';
+import { body, atGrain, groupBy, rate, settled, total, wilson, type DeriveFamily } from './read-support.js';
 
 interface Extension {
   cell: Cell;
@@ -17,7 +17,7 @@ const countsOf = (group: readonly Extension[]): { [action: string]: number } => 
 };
 
 export const deriveNextStep: DeriveFamily = ({ pool }) => {
-  const extensions = pool.cells.flatMap((cell): Extension[] => {
+  const extensions = atGrain(pool, 'week').flatMap((cell): Extension[] => {
     const motif = pool.motifs.get(cell.motifId);
     const last = motif?.steps.at(-1);
     return motif?.level === 'shape' && motif.steps.length >= 2 && last !== undefined ? [{ cell, prefix: motif.steps.slice(0, -1), next: last.action }] : [];

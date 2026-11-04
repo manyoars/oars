@@ -2,7 +2,7 @@
 // increments with `incrementsOf`, and a local read derives its cells with `cellsOf` over the store it holds, projected the way a deposit projects it (`projectedStore`). Both end in the
 // one `cellsOf`, so a session gives the same cells at the pool and on the machine. This file reads no file system: the pool's Worker bundles it.
 
-import { bucketFields, deriveCells, type CellSet } from './cells.js';
+import { bucketFields, deriveCells, type CellSet, type Grain } from './cells.js';
 import type { Motif } from './motif.js';
 import { bucketOf, floorOf, projectedSteps, type SessionSkeleton, type ShellReader, type SkeletonTranscript } from './pool-wire.js';
 import { NO_RECALLS, type RecallGraph } from './recall-consequence.js';
@@ -14,6 +14,7 @@ export interface CellRow {
   harnessBucket: string;
   motifId: string;
   frameBucket: string;
+  grain: Grain;
   day: string;
   exposed: number;
   sessions: number;
@@ -91,7 +92,7 @@ export const cellsOf = (store: Store, graph: RecallGraph = NO_RECALLS): CellSet 
   const named = new Set(marginal.motifs.filter(({ level, steps }) => level === 'named' && steps.length === 1 && steps[0]?.identity !== null).map(({ motifId }) => motifId));
   const motifs = new Map([...whole.motifs, ...marginal.motifs.filter(({ motifId }) => named.has(motifId))].map((motif) => [motif.motifId, motif]));
   const order = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
-  const cells = [...whole.cells, ...marginal.cells.filter(({ motifId }) => named.has(motifId))].sort((a, b) => order(a.motifId, b.motifId) || order(a.frameBucket, b.frameBucket) || order(a.day, b.day) || Number(a.exposed) - Number(b.exposed));
+  const cells = [...whole.cells, ...marginal.cells.filter(({ motifId }) => named.has(motifId))].sort((a, b) => order(a.motifId, b.motifId) || order(a.frameBucket, b.frameBucket) || order(a.grain, b.grain) || order(a.day, b.day) || Number(a.exposed) - Number(b.exposed));
   return { cells, motifs: [...motifs.values()].sort((a, b) => order(a.motifId, b.motifId)) };
 };
 
@@ -229,8 +230,8 @@ export const incrementsOf = (skeleton: SessionSkeleton): Increments => {
   const cells = new Map<string, CellRow>();
   for (const cell of derived.cells) {
     const exposed = cell.exposed ? 1 : 0;
-    const key = `${cell.motifId}/${cell.frameBucket}/${cell.day}/${String(exposed)}`;
-    cells.set(key, { key, harnessBucket: bucketFields(cell.frameBucket).harnessBucket, motifId: cell.motifId, frameBucket: cell.frameBucket, day: cell.day, exposed, sessions: cell.sessions, ok: cell.ok, failed: cell.failed, tokens: cell.tokens, durationMs: cell.durationMs });
+    const key = `${cell.motifId}/${cell.frameBucket}/${cell.grain}/${cell.day}/${String(exposed)}`;
+    cells.set(key, { key, harnessBucket: bucketFields(cell.frameBucket).harnessBucket, motifId: cell.motifId, frameBucket: cell.frameBucket, grain: cell.grain, day: cell.day, exposed, sessions: cell.sessions, ok: cell.ok, failed: cell.failed, tokens: cell.tokens, durationMs: cell.durationMs });
   }
   // A session counts once per value, so each value is one session of this batch.
   const strata = new Map<string, StratumRow>();

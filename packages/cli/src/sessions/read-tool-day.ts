@@ -5,7 +5,7 @@ import { motifName } from './motif.js';
 import { body, groupBy, rate, settled, total, unitCells, wilson, type DeriveFamily } from './read-support.js';
 
 export const deriveToolDay: DeriveFamily = ({ pool }) => {
-  const known = unitCells(pool).filter(({ cell, motif }) => motif.level === 'shape' && cell.day !== UNKNOWN);
+  const known = unitCells(pool, 'day').filter(({ cell, motif }) => motif.level === 'shape' && cell.day !== UNKNOWN);
   const steps = new Map([...groupBy(known, ({ cell }) => cell.day)].map(([day, group]) => [day, total(group.map(({ cell }) => cell), settled)]));
   return [...groupBy(known, ({ cell }) => `${cell.motifId}/${cell.day}`).values()].flatMap((group) => {
     const [first] = group;

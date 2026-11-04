@@ -5,14 +5,14 @@ import { UNKNOWN } from './cells.js';
 import { shapeMotif } from './motif.js';
 import { CALL_SHAPE_METHOD } from './read.js';
 import { actionOfShape, fitReads, toolShapeId } from './recall-reads.js';
-import { body, rate, wilson, type DeriveFamily } from './read-support.js';
+import { body, atGrain, rate, wilson, type DeriveFamily } from './read-support.js';
 
 export const deriveCallShape: DeriveFamily = ({ pool, store }) =>
   fitReads(store).flatMap((read) => {
     const action = actionOfShape(read.tool, read.harnesses);
     const motifId = shapeMotif([{ action, identity: null }]).motifId;
     const within = (day: string): boolean => day === UNKNOWN || (read.firstDay !== null && read.lastDay !== null && day >= read.firstDay && day <= read.lastDay);
-    const cells = pool.cells.filter((cell) => cell.motifId === motifId && cell.failed > 0 && within(cell.day));
+    const cells = atGrain(pool, 'day').filter((cell) => cell.motifId === motifId && cell.failed > 0 && within(cell.day));
     // A shape whose failures are in no cell has nothing to cite, so it is not a read: its answers keep their stand-in.
     if (cells.length === 0) return [];
     const calls = read.calls ?? read.count;

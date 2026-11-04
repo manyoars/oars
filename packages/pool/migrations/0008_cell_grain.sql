@@ -1,0 +1,2 @@
+-- Rule 6 (spec Section 4): an `index` cell is weekly, except a live cell, which stays at the UTC day, so a cell names its grain and `day` holds the UTC day of a day cell or the Monday of the UTC week of a week cell. `key` is now `motifId/frameBucket/grain/day/exposed`, and the frame bucket no longer holds effort (rule 3). Nothing is deployed, so no stored row is migrated; a row written before this would read as a day cell under its old key, and none exists.
+ALTER TABLE cells ADD COLUMN grain TEXT NOT NULL DEFAULT 'day';
