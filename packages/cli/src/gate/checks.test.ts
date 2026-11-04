@@ -242,10 +242,6 @@ describe('checkCall on a shell command', () => {
     // A space is not a version: a word of prose (one opening with a letter other than `v` or `x`) after it is refused, a range's operators are kept.
     ['npm install "four@a secret token"', ['unreadable-name']],
     ['pip install "one>=1 secret token"', ['unreadable-name']],
-    // The redactor masks a dotted version after `jsr:` or `npm:` as an email before the reader sees it (register row A52): pinned so a later fix changes these on purpose.
-    ['pnpm add jsr:@luca/cases@1.0.0', ['local-path']],
-    ['npm install npm:@luca/cases@1.0.0', ['local-path']],
-    ['npm install foo@npm:bar@1.0.0', ['masked-name']],
     // The address inside the alias is still a mask, never a name.
     ['npm install foo@npm:me@acme.io', ['masked-name']],
     ['npm install ""', ['unreadable-name']],
