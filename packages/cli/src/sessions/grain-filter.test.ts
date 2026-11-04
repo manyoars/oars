@@ -2,12 +2,14 @@
 // the answer it gives holding only its own grain.
 import { describe, expect, it } from 'vitest';
 import type { Cell, Pool } from './cells.js';
+import { tools } from './order-fixture.js';
 import { error, frame, poolFrom, prompt, session, store, tool } from './pool-fixture.js';
 import { deriveFirstOrder } from './pool.js';
 import { deriveAdoption } from './read-adoption.js';
 import { deriveCallShape } from './read-call-shape.js';
 import { deriveChange } from './read-change.js';
 import { deriveCost } from './read-cost.js';
+import { deriveDayMove } from './read-day-move.js';
 import { deriveFit } from './read-fit.js';
 import { deriveLive } from './read-live.js';
 import { deriveMethod } from './read-method.js';
@@ -85,10 +87,20 @@ describe('a grain filter on every read', () => {
     for (const derive of [deriveLive, deriveToolDay, deriveFit, deriveChange, deriveAdoption, deriveRecovery]) expect(answers(derive, both).length).toBeGreaterThan(0);
   });
 
-  it('gives the day move the answer it gives from day cells alone, through the tool-day reads it moves over', () => {
-    const moves = (pool: Pool) => deriveFirstOrder(pool, spanning).filter((read) => read.family === 'tool-day');
-    expect(moves(both)).toEqual(moves(days));
-    expect(moves(both).length).toBeGreaterThan(0);
+  it('gives the day move the answer it gives from day cells alone, over the first-order reads of each table', () => {
+    // A Sunday and the Monday after it: adjacent days in two weeks, each above the floor of steps, so the move has a failure rate and a share to state.
+    const rows = [['2026-11-01', 100, 10, 100], ['2026-11-02', 300, 90, 100]] as const;
+    const moving: Store = store({
+      sessions: [session('s1')],
+      prompts: rows.map(([day], index) => prompt('s1', index, { frame: frame({ day }) })),
+      tools: rows.flatMap(([, reads, failed, edits], index) => [...tools('s1', index, [{ name: 'Read', count: reads }], failed), ...tools('s1', index, [{ name: 'Edit', count: edits }])]),
+    });
+    const all = poolFrom(moving);
+    const dayCells = only(all, 'day');
+    const moves = (pool: Pool) => deriveDayMove(deriveFirstOrder(pool, moving));
+    expect(moves(dayCells).length).toBeGreaterThan(0);
+    expect(moves(all)).toEqual(moves(dayCells));
+    expect(moves(all).every((read) => read.family === 'day-move')).toBe(true);
   });
 
   it('would change a day answer if a week cell leaked in: a live read over the week cells alone finds nothing', () => {
