@@ -879,19 +879,22 @@ const runOf = (command: ShellCommand): string =>
   [command.program, ...command.args.filter(isPlainWord).map((word) => cut(word.text, RUN_WORD_CHARS))].slice(0, RUN_WORDS_MAX).join(' ');
 
 /** Positional words and flag values. A flag in `takesValue` owns the next word, which is therefore not a name. */
-const parseArgs = (args: readonly ShellWord[], takesValue: ReadonlySet<string>): { names: string[]; flags: Map<string, string> } => {
+const parseArgs = (args: readonly ShellWord[], takesValue: ReadonlySet<string>): { names: string[]; flags: Map<string, string>; nameAt: number[] } => {
   const names: string[] = [];
+  const nameAt: number[] = [];
   const flags = new Map<string, string>();
   for (let at = 0; at < args.length; at += 1) {
     const text = args[at]?.text ?? '';
-    if (!text.startsWith('-')) names.push(text);
-    else if (text.includes('=')) flags.set(text.slice(0, text.indexOf('=')), text.slice(text.indexOf('=') + 1));
+    if (!text.startsWith('-')) {
+      names.push(text);
+      nameAt.push(at);
+    } else if (text.includes('=')) flags.set(text.slice(0, text.indexOf('=')), text.slice(text.indexOf('=') + 1));
     else if (takesValue.has(text)) {
       flags.set(text, args[at + 1]?.text ?? '');
       at += 1;
     }
   }
-  return { names, flags };
+  return { names, flags, nameAt };
 };
 
 // `-w` and `-s` are left out: `-w` owns a value only on npm (`--workspace`; on pnpm it means the workspace root) and `-s` only for `skills add` (on npm it is silent).
@@ -955,7 +958,7 @@ const localOr = (ecosystem: PullEcosystem, text: string): ToolPull | null => (LO
 const present = (pull: ToolPull | null): pull is ToolPull => pull !== null;
 
 /** `npx`, `bunx`, and `dlx` run one package: a `--package` flag names it, else the first word. `skills add` installs a skill rather than running a tool. */
-const runnerPulls = (args: readonly ShellWord[], valueFlags: ReadonlySet<string>): Array<ToolPull | null> => {
+const runnerPulls = (args: readonly ShellWord[], valueFlags: ReadonlySet<string>, outer: ReadonlyMap<string, string> = new Map()): Array<ToolPull | null> => {
   let { names, flags } = parseArgs(args, valueFlags);
   const [first, sub] = names;
   const skills = first !== undefined && atVersion('npm', first)?.name === 'skills' && sub === 'add';
@@ -963,17 +966,19 @@ const runnerPulls = (args: readonly ShellWord[], valueFlags: ReadonlySet<string>
   if (skills) ({ names, flags } = parseArgs(args, new Set([...valueFlags, ...SKILLS_VALUE_FLAGS])));
   const source = names[2];
   if (skills && source !== undefined) return [LOCAL_SPEC.test(source) ? null : wholeName('skill', source)];
-  const packaged = flags.get('-p') ?? flags.get('--package');
+  const packaged = flags.get('-p') ?? flags.get('--package') ?? outer.get('-p') ?? outer.get('--package');
   if (packaged !== undefined) return [nodeSpec(packaged)];
   return first === undefined ? [] : [nodeSpec(first)];
 };
 
 const nodePulls = (program: string, args: readonly ShellWord[]): Array<ToolPull | null> => {
   const valueFlags = nodeFlags(program);
-  const { names } = parseArgs(args, valueFlags);
+  const { names, flags, nameAt } = parseArgs(args, valueFlags);
   // `global` and `workspace <name>` only say where the install goes.
-  const [sub, ...specs] = names[0] === 'global' ? names.slice(1) : names[0] === 'workspace' ? names.slice(2) : names;
-  if (sub === 'dlx') return runnerPulls(args.slice(args.findIndex((word) => word.text === 'dlx') + 1), valueFlags);
+  const lead = names[0] === 'global' ? 1 : names[0] === 'workspace' ? 2 : 0;
+  const [sub, ...specs] = names.slice(lead);
+  // The words after the `dlx` name, found by its place in the parse rather than by its text, since a flag's value can read `dlx` too; a flag before it (pnpm's `--package=foo dlx bar`) still counts.
+  if (sub === 'dlx') return runnerPulls(args.slice((nameAt[lead] ?? 0) + 1), valueFlags, flags);
   return sub === 'add' || sub === 'install' || sub === 'i' ? specs.map(nodeSpec) : [];
 };
 

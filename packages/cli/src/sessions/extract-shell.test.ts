@@ -26,6 +26,8 @@ describe('pulls: one row per form', () => {
     ['yarn add', 'yarn add foo@1', ['npm:foo@@1']],
     ['yarn global add', 'yarn global add foo', ['npm:foo']],
     ['yarn dlx', 'yarn dlx foo --flag', ['npm:foo']],
+    ['pnpm dlx behind a package flag', 'pnpm --package=foo dlx bar', ['npm:foo']],
+    ['pnpm dlx behind a filter whose value reads dlx', 'pnpm --filter dlx dlx foo', ['npm:foo']],
     ['bun add', 'bun add foo', ['npm:foo']],
     ['bun install name', 'bun install foo', ['npm:foo']],
     ['bun i', 'bun i foo', ['npm:foo']],
