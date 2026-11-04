@@ -309,8 +309,12 @@ describe('clusters over the cells of a read', () => {
       for (const read of toolDay) {
         expect(read.clusters).toBe(5);
         expect(read.inputs.length).toBeGreaterThan(0);
-        expect(fieldOf(read.value, 'steps')).toBeGreaterThan(0);
       }
+      // The fixture's five accounts each settle two clean shell calls on the day: ten steps, none failed, and the one shape is the whole day.
+      const [shell, ...rest] = toolDay;
+      expect(rest).toEqual([]);
+      const value = shell?.value;
+      expect(['failureRate', 'failed', 'share', 'steps'].map((key) => fieldOf(value, key))).toEqual([0, 0, 1, 10]);
     });
   }, 60_000);
 

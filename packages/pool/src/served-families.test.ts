@@ -1,27 +1,73 @@
 // The families a bundle does not serve, pinned at the boundary that keeps them out: the wire. Recovery reads error rows (a signature, an error class, an outcome), and fit's call-shape
-// method reads a tool's input key names; no skeleton field carries any of them, so neither can be derived from stored cells. The refusing tests below fail if a later wire gains one of these fields.
+// method reads a tool's input key names; no skeleton field carries any of them, so neither can be derived from stored cells. The refusing tests below (a tool, a step, a transcript, and the
+// skeleton's top level) fail if a later wire gains one of these fields.
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { parseSkeleton, verifyBundle, VOCAB_VERSION } from '../../cli/src/sessions/pool-wire.js';
+import { CALL_SHAPE_METHOD } from '../../cli/src/sessions/read.js';
 import { sampleSkeleton } from './sample.js';
 import { startPool, stubUser, type TestPool } from './test-pool.js';
 
+// The fields a withheld family would read, none of them on the wire today.
+interface WithheldFields {
+  keys?: string[];
+  errorCode?: string;
+  sigHash?: string;
+  outcome?: string;
+  recoveryCalls?: string;
+}
+
+const WITHHELD: readonly (readonly [keyof WithheldFields, string[] | string])[] = [
+  ['keys', ['command']],
+  ['errorCode', 'x'],
+  ['sigHash', 'x'],
+  ['outcome', 'x'],
+  ['recoveryCalls', 'x'],
+];
+
 describe('the wire holds no field a withheld family needs', () => {
-  const withTool = (extra: { [field: string]: unknown }): unknown => {
-    const skeleton = sampleSkeleton('0000000000000001');
+  const firstOf = (id: string) => {
+    const skeleton = sampleSkeleton(id);
     const [first] = skeleton.transcripts;
     if (first === undefined) throw new Error('no transcript');
+    return { skeleton, first };
+  };
+  const withTool = (extra: WithheldFields): unknown => {
+    const { skeleton, first } = firstOf('0000000000000001');
     return { ...skeleton, transcripts: [{ ...first, tools: first.tools.map((entry) => ({ ...entry, ...extra })) }] };
   };
+  const withStep = (extra: WithheldFields): unknown => {
+    const { skeleton, first } = firstOf('0000000000000003');
+    return { ...skeleton, transcripts: [{ ...first, tools: first.tools.map((entry) => ({ ...entry, steps: entry.steps.map((step) => ({ ...step, ...extra })) })) }] };
+  };
+  const withTranscript = (extra: WithheldFields): unknown => {
+    const { skeleton, first } = firstOf('0000000000000004');
+    return { ...skeleton, transcripts: [{ ...first, ...extra }] };
+  };
 
-  it('accepts the sample skeleton', () => {
+  it('accepts the sample skeleton, with and without an empty extra', () => {
     expect(parseSkeleton(withTool({})).ok).toBe(true);
+    expect(parseSkeleton(withStep({})).ok).toBe(true);
+    expect(parseSkeleton(withTranscript({})).ok).toBe(true);
   });
 
-  it.each(['keys', 'errorCode', 'sigHash', 'outcome', 'recoveryCalls'])('refuses a tool that carries `%s`', (field) => {
-    expect(parseSkeleton(withTool({ [field]: field === 'keys' ? ['command'] : 'x' })).ok).toBe(false);
+  it.each(WITHHELD)('refuses a tool that carries `%s`', (field, value) => {
+    expect(parseSkeleton(withTool({ [field]: value })).ok).toBe(false);
   });
 
-  it('refuses a skeleton that carries error rows', () => {
+  it.each(WITHHELD)('refuses a step that carries `%s`', (field, value) => {
+    expect(parseSkeleton(withStep({ [field]: value })).ok).toBe(false);
+  });
+
+  it.each(WITHHELD)('refuses a transcript that carries `%s`', (field, value) => {
+    expect(parseSkeleton(withTranscript({ [field]: value })).ok).toBe(false);
+  });
+
+  it('refuses a transcript that carries error rows', () => {
+    const { first } = firstOf('0000000000000005');
+    expect(parseSkeleton({ ...sampleSkeleton('0000000000000005'), transcripts: [{ ...first, errors: [] }] }).ok).toBe(false);
+  });
+
+  it('refuses a skeleton that carries error rows at its top level', () => {
     expect(parseSkeleton({ ...sampleSkeleton('0000000000000002'), errors: [] }).ok).toBe(false);
   });
 });
@@ -50,6 +96,6 @@ describe('a bundle over five accounts', () => {
     const families = new Set(verified.bundle.reads.map((read) => read.family));
     expect(families.has('tool-day')).toBe(true);
     expect(families.has('recovery')).toBe(false);
-    expect(verified.bundle.reads.some((read) => read.method === 'call-shape')).toBe(false);
+    expect(verified.bundle.reads.some((read) => read.method === CALL_SHAPE_METHOD.name)).toBe(false);
   }, 60_000);
 });
