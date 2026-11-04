@@ -1158,6 +1158,35 @@ export const scanLog = async (file: string): Promise<LogScan> => {
   return { latest, superseded, newerCaptures };
 };
 
+/** Returns the first copy it was given of each string, so the strings a log repeats are held once. */
+const interner = (): ((value: string) => string) => {
+  const seen = new Map<string, string>();
+  return (value) => {
+    const held = seen.get(value);
+    if (held !== undefined) return held;
+    seen.set(value, value);
+    return value;
+  };
+};
+
+/**
+ * Every tool row carries the session id, the tool name, and its key names, and `JSON.parse` makes a new string of each: a log of a million rows
+ * held a million copies of a few thousand strings (t808). The row is the same value with the strings shared.
+ */
+const internTool = (tool: ToolObservation, intern: (value: string) => string): ToolObservation => ({
+  ...tool,
+  cv: intern(tool.cv),
+  session: intern(tool.session),
+  parent: intern(tool.parent),
+  tool: intern(tool.tool),
+  keys: tool.keys.map(intern),
+  sid: tool.sid === null ? null : intern(tool.sid),
+  agentType: tool.agentType === null ? null : intern(tool.agentType),
+  harnessVersion: tool.harnessVersion === null ? null : intern(tool.harnessVersion),
+  target: tool.target === null ? null : intern(tool.target),
+  ...(tool.segments === undefined ? {} : { segments: tool.segments.map((segment) => ({ ...segment, run: intern(segment.run) })) }),
+});
+
 /**
  * The store as a reader sees it: for each session only the highest `rev`. A version-3 or later session is derived here from its capture records
  * (EXTRACTOR_VERSION rules); a session whose last deposit was version 2 keeps the prompt and error lines that deposit wrote.
@@ -1168,6 +1197,7 @@ export const loadStore = async (storeDir: string): Promise<Store> => {
   const file = paths(storeDir).observations;
   const { latest } = await scanLog(file);
   const store: Store = { sessions: [], prompts: [], errors: [], subagents: [], tools: [], newerCaptures: 0 };
+  const intern = interner();
   const captured = new Map<string, Captured>();
   const of = (session: string): Captured => {
     const found = captured.get(session) ?? { prompts: [], tools: [], errorLines: [] };
@@ -1179,7 +1209,7 @@ export const loadStore = async (storeDir: string): Promise<Store> => {
     if (observation === undefined || observation.rev !== latest.get(observation.session)) continue;
     if (observation.kind === 'session') of(observation.session).session = observation;
     else if (observation.kind === 'user-prompt') of(observation.session).prompts.push(observation);
-    else if (observation.kind === 'tool') of(observation.session).tools.push(observation);
+    else if (observation.kind === 'tool') of(observation.session).tools.push(internTool(observation, intern));
     else if (observation.kind === 'error-line') of(observation.session).errorLines.push(observation);
     else if (observation.kind === 'prompt') store.prompts.push(observation);
     else store.errors.push(observation);
