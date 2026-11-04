@@ -235,9 +235,12 @@ describe('claudeEvaluator', () => {
 });
 
 describe('oars sessions gold arms', () => {
-  const setup = () => {
+  // Under V15 a draw needs a term file (none excludes every session): an invented term that no fixture holds, unless the test is about its absence.
+  const setup = (withTerms = true) => {
     const staged = stage();
-    const h = harness();
+    const termsFile = join(staged.root, 'exclusion-terms.txt');
+    if (withTerms) writeFileSync(termsFile, 'unrelated-invented-term\n');
+    const h = harness({ OARS_EXCLUSION_TERMS: termsFile });
     h.deps.sessions = staged.runtime;
     return { ...h, staged };
   };
@@ -401,7 +404,7 @@ describe('oars sessions gold arms', () => {
     const evaluator = answering(() => 'yes');
     h.staged.runtime.evaluator = evaluator;
     expect(await run(['sessions', 'gold', 'arms', file], h.deps)).toBe(ExitCode.OK);
-    expect(h.out.join('')).toContain('1 prompts');
+    expect(h.out.join('')).toContain('1 prompt has a transcript that is gone or no longer matches what the judge sees, so its text arm is unread.');
     const first = sidecarOf(sidecar).entries.find((entry) => entry.shown.includes('one ask'));
     expect(first?.reads).toBeUndefined();
     expect(first?.answers).toEqual({ evaluator: 'yes' });

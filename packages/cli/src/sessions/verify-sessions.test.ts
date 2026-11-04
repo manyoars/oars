@@ -3,6 +3,7 @@ import { appendFileSync, mkdirSync, readFileSync, statSync, writeFileSync } from
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { sessionsVerify } from './command.js';
+import { readSteps } from './steps.js';
 import { deposit, paths, readState } from './store.js';
 import { cleanup, NOW, stage } from './test-support.js';
 
@@ -25,7 +26,7 @@ describe('sessionsVerify, per session', () => {
     // Four sessions in one week hold far under 1,000 calls: layer 2 says so and scores nothing. The audit prints ahead of it.
     expect(verified.report.selfBaseline.map((entry) => [entry.status, entry.f])).toEqual([['not run', null], ['not run', null], ['not run', null], ['not run', null]]);
     expect(verified.text).toContain('not run, week under 1000 tool calls: 4');
-    expect(verified.text.indexOf('sessions audited against raw')).toBeLessThan(verified.text.indexOf('sessions against their own earlier weeks'));
+    expect(verified.text.indexOf('sessions audited against raw')).toBeLessThan(verified.text.indexOf('sessions against their own other weeks'));
     for (const row of ['root matches and the counts bind', 'changed since deposit', 'root mismatch', 'counts do not bind', 'not run']) expect(verified.text).toContain(row);
   });
 
@@ -113,7 +114,7 @@ describe('sessionsVerify, per session', () => {
     expect(audit.sessions.map((entry) => entry.session).sort()).toEqual(sessionResults.map((entry) => entry.session).sort());
   });
 
-  it('fails a session whose raw file edit kept the size and mtime, by name, so --strict exits 4', async () => {
+  it('fails a session whose raw file edit kept the size and mtime, by name, and logs the mismatch in the verify row', async () => {
     const staged = stage();
     await deposit(staged.runtime, options);
     const raw = join(paths(staged.storeDir).raw, 'proj', 'tldr.jsonl');
@@ -129,6 +130,9 @@ describe('sessionsVerify, per session', () => {
     expect(verified.failed).toEqual(['merkle: root mismatch']);
     expect(verified.text).toContain('FAIL  tldr: root mismatch');
     expect(verified.report.audit.counts['root mismatch']).toBe(1);
+    // `stepCounters` reads this row, so a mismatch that left `merkle` out would report every check passed.
+    const row = (await readSteps(staged.storeDir)).filter((entry) => entry.step === 'verify').at(-1);
+    expect(row?.out.merkle).toBe(1);
   });
 
   it('fails a session whose skeleton leaf count disagrees with its session, by name', async () => {

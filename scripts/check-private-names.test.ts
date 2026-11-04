@@ -68,6 +68,15 @@ describe('check-private-names', () => {
     expect(r.stdout).toBe('');
   });
 
+  it('blocks a listed term in a root commit even where a contributor set log.showRoot=false', () => {
+    // `git show` prints no diff for a root commit under that setting, so a guard that reads the diff would pass an orphan branch's first commit.
+    git(work, 'config', 'log.showRoot', 'false');
+    git(work, 'checkout', '-q', '--orphan', 'fresh');
+    const r = check(commit('b.txt', `${TERM}\n`, 'root with the term'));
+    expect(r.status).toBe(1);
+    expect(r.stderr).toContain('b.txt:1');
+  });
+
   it('reads the second list too', () => {
     const r = check(commit('b.txt', `${OTHER}\n`));
     expect(r.status).toBe(1);
@@ -182,17 +191,14 @@ describe('check-private-names', () => {
   it('finds both default lists under the home folder when no override is set', () => {
     const home = join(root, 'home');
     mkdirSync(join(home, '.claude', 'session-commons'), { recursive: true });
-    writeFileSync(join(home, '.claude', 'session-commons', 'exclusion-terms.txt'), `${TERM}
-`);
-    writeFileSync(join(home, '.claude', 'session-commons', 'public-denylist.txt'), `${OTHER}
-`);
+    writeFileSync(join(home, '.claude', 'session-commons', 'exclusion-terms.txt'), `${TERM}\n`);
+    writeFileSync(join(home, '.claude', 'session-commons', 'public-denylist.txt'), `${OTHER}\n`);
     const own: NodeJS.ProcessEnv = { ...env, HOME: home, USERPROFILE: home };
     delete own.CLAUDE_CONFIG_DIR;
     delete own.OARS_EXCLUSION_TERMS;
     delete own.OARS_PUBLIC_DENYLIST;
     for (const term of [TERM, OTHER]) {
-      const sha = commit(`${term}.txt`, `${term}
-`);
+      const sha = commit(`${term}.txt`, `${term}\n`);
       const r = spawnSync('node', [script, sha], { cwd: work, encoding: 'utf8', env: own });
       expect(r.status).toBe(1);
       expect(r.stderr).not.toContain('not found');
@@ -288,7 +294,7 @@ describe('pre-push hook, end to end', () => {
     commit('c2.txt', `${TERM}\n`, 'ref with the term');
     const r = push('origin', 'c1', 'c2');
     expect(r.status).not.toBe(0);
-    const heads = spawnSync('git', ['show-ref', '--verify', '--quiet', 'refs/heads/c2'], { cwd: remote });
+    const heads = spawnSync('git', ['show-ref', '--verify', '--quiet', 'refs/heads/c2'], { cwd: remote, env });
     expect(heads.status).not.toBe(0);
   });
 

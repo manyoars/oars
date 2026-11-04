@@ -24,7 +24,7 @@ import { appendFile, mkdir, open, readdir, readFile, rename, rm, stat, utimes, w
 import { basename, dirname, join, resolve } from 'node:path';
 import { CliError, ExitCode } from '../errors.js';
 import { compileAllow, requireEntries, slugOf } from './allow.js';
-import { openCursorStore, type CursorStore } from './cursor.js';
+import { SOURCES, type Source, type SourceStore } from './sources.js';
 import { buildIndex, indexPath } from './hook-index.js';
 import { archiveRaw } from './archive.js';
 import { deriveSession, type SessionCapture } from './derive.js';
@@ -61,8 +61,12 @@ export interface SessionsRuntime {
   storeDir: string;
   /** `~/.claude/projects` (or `$CLAUDE_CONFIG_DIR/projects`). */
   projectsRoot: string;
-  /** Cursor's `User` folder (`cursorRoot` in cursor.ts); absent means no Cursor source. `deposit` reads it only when `--allow` names `cursor`. */
+  /** Cursor's `User` folder (`cursorRoot` in cursor.ts), kept as the alias of `sourceRoots.cursor`; absent means no Cursor source. */
   cursorRoot?: string;
+  /** Where each non-Claude source's store lives, by `Source.name` (sources.ts); a source with no root is not read. `deposit` reads one only when `--allow` names it. */
+  sourceRoots?: { [source: string]: string };
+  /** The source table; absent means `SOURCES`. The seam a test uses to prove an entry needs no other wiring. */
+  sources?: readonly Source[];
   /** Where the account's salt comes from; absent means this machine's own (`localSalt`). The seam an account identity replaces (M4). */
   accountSalt?: (storeDir: string) => Promise<AccountSalt>;
   /** The fresh single-turn reader behind `gold arms`; absent in a run that has none. */
@@ -194,6 +198,18 @@ export interface DepositOptions {
   now: () => number;
 }
 
+/** What one deposit run read from one source. */
+export interface SourceTally {
+  /** Of `sessions`, the ones this source supplied. */
+  read: number;
+  /** Why the store (or a file in it) could not be read: the full path for the terminal. */
+  unreadable: string[];
+  /** The same reasons with the file reduced to its base name: the hook-call record (class A) must not carry the user name in a path. */
+  unreadableLogged: string[];
+  /** Sessions skipped because their id is not a safe file name. */
+  rejected: number;
+}
+
 export interface DepositResult {
   /** Session files parsed this run. */
   sessions: number;
@@ -204,7 +220,9 @@ export interface DepositResult {
   observations: number;
   /** Subagent transcripts parsed this run (A24); not counted in `sessions`, so per-session denominators stay main sessions. */
   subagents: number;
-  /** Of `sessions`, the Cursor composer sessions parsed this run; 0 when the Cursor source is not allowed or absent. */
+  /** Per source name (sources.ts): what this run read from it. A source that was not allowed or has no store has no entry. */
+  sources: { [source: string]: SourceTally };
+  /** Of `sessions`, the Cursor composer sessions parsed this run; 0 when the Cursor source is not allowed or absent. Alias of `sources.cursor`. */
   cursor: number;
   /** Why the Cursor store could not be read this run (locked, corrupt, or from a Cursor version this reader does not know); empty when it was read or absent. */
   cursorUnreadable: string[];
@@ -362,8 +380,6 @@ const readMeta = async (file: string): Promise<{ agentType: string | null; toolU
   return { agentType: null, toolUseId: null };
 };
 
-// The subagent transcript files of the given sessions, from folder listings alone:
-// <session>/subagents/agent-*.jsonl and <session>/subagents/workflows/wf_*/agent-*.jsonl. No file is opened, so `skippedFolders` can use it on a folder no allow entry names.
 interface SubagentFile {
   dir: string;
   /** The folders between `subagents` and the file, for example `['workflows', 'wf_x']`. */
@@ -372,6 +388,8 @@ interface SubagentFile {
   name: string;
 }
 
+// The subagent transcript files of the given sessions, from folder listings alone:
+// <session>/subagents/agent-*.jsonl and <session>/subagents/workflows/wf_*/agent-*.jsonl. No file is opened, so `skippedFolders` can use it on a folder no allow entry names.
 const subagentFiles = async (folder: string, sessions: readonly string[]): Promise<SubagentFile[]> => {
   const found: SubagentFile[] = [];
   for (const parent of sessions) {
@@ -711,7 +729,9 @@ const depositLocked = async (runtime: SessionsRuntime, options: DepositOptions, 
   const allow = compileAllow(options.allow);
   const folders = await projectFolders(runtime.projectsRoot);
   const allowed = folders.filter((name) => allow.allows(name));
-  const missing = allow.unmatched(runtime.cursorRoot === undefined ? folders : [...folders, CURSOR_SOURCE]);
+  const roots = sourceRoots(runtime);
+  const table = sourcesOf(runtime);
+  const missing = allow.unmatched([...folders, ...table.filter((source) => roots.has(source.name)).map((source) => source.name)]);
   const state = await readState(runtime.storeDir);
   refuseNewer(state);
   // A log written by a newer oars is refused even when state.json is older or lost; the Stop-hook path reads only state.json.
@@ -727,6 +747,7 @@ const depositLocked = async (runtime: SessionsRuntime, options: DepositOptions, 
     badLines: 0,
     observations: 0,
     subagents: 0,
+    sources: {},
     cursor: 0,
     cursorUnreadable: [],
     cursorUnreadableLogged: [],
@@ -736,9 +757,9 @@ const depositLocked = async (runtime: SessionsRuntime, options: DepositOptions, 
     missing,
   };
   // A project the harness cleaned up entirely is still visited when the state names it, so its archived transcripts are captured again.
-  const stateProjects = Object.keys(state.files).map((key) => key.slice(0, key.indexOf('/'))).filter((name) => name !== CURSOR_SOURCE && allow.allows(name));
+  const stateProjects = Object.keys(state.files).map((key) => key.slice(0, key.indexOf('/'))).filter((name) => !isSource(table, name) && allow.allows(name));
   // The same holds for a lost state.json: raw/ still names the projects whose transcripts can be captured again.
-  const rawProjects = (await listDir(paths(runtime.storeDir).raw)).filter((entry) => entry.isDirectory() && entry.name !== CURSOR_SOURCE && allow.allows(entry.name)).map((entry) => entry.name);
+  const rawProjects = (await listDir(paths(runtime.storeDir).raw)).filter((entry) => entry.isDirectory() && !isSource(table, entry.name) && allow.allows(entry.name)).map((entry) => entry.name);
   for (const project of [...new Set([...allowed, ...stateProjects, ...rawProjects])].sort()) {
     const folder = join(runtime.projectsRoot, project);
     const entries = (await listDir(folder)).filter((entry) => entry.isFile() && entry.name.endsWith('.jsonl')).map((entry) => entry.name).sort();
@@ -758,7 +779,17 @@ const depositLocked = async (runtime: SessionsRuntime, options: DepositOptions, 
       tally(trace, extract, transcript.subagent !== undefined);
     }
   }
-  if (runtime.cursorRoot !== undefined && allow.allows(CURSOR_SOURCE)) await readCursor(context, runtime.cursorRoot, result, trace);
+  for (const source of table) {
+    const root = roots.get(source.name);
+    if (root !== undefined && allow.allows(source.name)) await readSource(context, source, root, result, trace);
+  }
+  const cursor = result.sources.cursor;
+  if (cursor !== undefined) {
+    result.cursor = cursor.read;
+    result.cursorUnreadable = cursor.unreadable;
+    result.cursorUnreadableLogged = cursor.unreadableLogged;
+    result.cursorRejected = cursor.rejected;
+  }
   await writeAtomic(paths(runtime.storeDir).state, JSON.stringify(state));
   // Decided by what the log holds, not by what this run captured: a run that died after its re-capture left the copies for this one. The hook
   // path never compacts, since it has seconds. The records are safe by now and an uncompacted log still loads, so a failure here does not fail the deposit.
@@ -769,42 +800,58 @@ const depositLocked = async (runtime: SessionsRuntime, options: DepositOptions, 
   return result;
 };
 
-/** The source name `--allow` uses for Cursor, and the first segment of its `state.json` keys (`cursor/<composerId>`). */
-const CURSOR_SOURCE = 'cursor';
+/** The table in force: the runtime's own (a test's), else every source. */
+const sourcesOf = (runtime: SessionsRuntime): readonly Source[] => runtime.sources ?? SOURCES;
 
-/** Reports an unreadable Cursor store: the full path for the terminal, the base name for the hook-call record. */
-const noteUnreadable = (root: string, error: unknown, result: DepositResult): void => {
-  const reason = error instanceof Error ? error.message : String(error);
-  const file = join(root, 'globalStorage', 'state.vscdb');
-  result.cursorUnreadable.push(`${file}: ${reason}`);
-  result.cursorUnreadableLogged.push(`${basename(file)}: ${reason}`);
+/** A source's name is the first `state.json` key segment, and no project folder uses it, so the Claude Code walk skips it. */
+const isSource = (table: readonly Source[], name: string): boolean => table.some((source) => source.name === name);
+
+/** The roots the runtime names, by source name; `cursorRoot` stays the alias of the Cursor entry. */
+const sourceRoots = (runtime: SessionsRuntime): Map<string, string> =>
+  new Map(Object.entries({ ...(runtime.cursorRoot === undefined ? {} : { cursor: runtime.cursorRoot }), ...runtime.sourceRoots }));
+
+/** Reports an unreadable source store or file, once per reason: the full path for the terminal, the base name for the hook-call record. */
+const noteReason = (counts: SourceTally, file: string, reason: string): void => {
+  const line = `${file}: ${reason}`;
+  if (counts.unreadable.includes(line)) return;
+  counts.unreadable.push(line);
+  counts.unreadableLogged.push(`${basename(file)}: ${reason}`);
+};
+
+const noteUnreadable = (counts: SourceTally, file: string, error: unknown): void => {
+  noteReason(counts, file, error instanceof Error ? error.message : String(error));
 };
 
 /**
- * Deposits the Cursor composer sessions under `root` (t728). A session's cursor is its message count and `lastUpdatedAt`, kept in
- * `state.json` like a file's size and mtime, so a second deposit adds nothing until Cursor writes the session again. The store is opened
- * read-only and a missing one is skipped silently. Nothing is archived: there is no transcript file to link, only the database.
+ * Deposits the sessions of one non-Claude source under `root` (t728 for Cursor, t749 for the table). A session's cursor is its size and
+ * mtime (for Cursor, its message count and `lastUpdatedAt`), kept in `state.json` like a transcript file's, so a second deposit adds nothing
+ * until the harness writes the session again. The store is opened read-only and a missing one is skipped silently. Nothing is archived: a
+ * source keeps its own history, and this store never copies it.
  */
-const readCursor = async (context: DepositContext, root: string, result: DepositResult, trace: DepositTrace | undefined): Promise<void> => {
-  // The Cursor source fails open per source, and only its own read is guarded: the store's write failures (a full disk) propagate as they
-  // do on the Claude Code path instead of blaming the Cursor file.
-  let source: CursorStore | undefined;
+const readSource = async (context: DepositContext, source: Source, root: string, result: DepositResult, trace: DepositTrace | undefined): Promise<void> => {
+  const counts: SourceTally = { read: 0, unreadable: [], unreadableLogged: [], rejected: 0 };
+  // A source fails open on its own: only its read is guarded, and the store's write failures (a full disk) propagate as they do on the
+  // Claude Code path instead of blaming the source's file.
+  let store: SourceStore | undefined;
   try {
-    source = await openCursorStore(root);
+    store = await source.open(root);
   } catch (error) {
-    noteUnreadable(root, error, result);
+    noteUnreadable(counts, source.storeFile(root), error);
+    result.sources[source.name] = counts;
     return;
   }
-  if (source === undefined) return;
-  result.cursorRejected += source.rejected;
+  if (store === undefined) return;
+  result.sources[source.name] = counts;
+  counts.rejected += store.rejected;
+  for (const entry of store.unreadable) noteReason(counts, entry.file, entry.reason);
   try {
-    for (const session of source.sessions) {
-      const key = `${CURSOR_SOURCE}/${session.composerId}`;
+    for (const session of store.sessions) {
+      const key = `${source.name}/${session.id}`;
       const previous = context.state.files[key];
       if (
         previous !== undefined &&
-        previous.size === session.messages &&
-        previous.mtimeMs === session.lastUpdatedAt &&
+        previous.size === session.size &&
+        previous.mtimeMs === session.mtimeMs &&
         previous.v === CAPTURE_VERSION &&
         previous.s === context.salt.sid &&
         sameSet(previous.d, context.domains)
@@ -814,17 +861,18 @@ const readCursor = async (context: DepositContext, root: string, result: Deposit
       }
       let text: string;
       try {
-        text = source.transcript(session);
+        text = await store.transcript(session);
       } catch (error) {
-        noteUnreadable(root, error, result);
-        break;
+        noteUnreadable(counts, store.where(session), error);
+        if (source.stopOnTranscriptError === true) break;
+        continue;
       }
       const rev = Math.max((previous?.rev ?? 0) + 1, context.now());
-      const id = `${CURSOR_SOURCE}-${session.composerId}`;
+      const id = `${source.name}-${session.id}`;
       const extract = captureSession({
         text,
         session: id,
-        project: session.folder === null ? CURSOR_SOURCE : slugOf(session.folder),
+        project: session.folder === null ? source.name : slugOf(session.folder),
         rev,
         at: context.at,
         bytes: Buffer.byteLength(text),
@@ -834,20 +882,24 @@ const readCursor = async (context: DepositContext, root: string, result: Deposit
         repoRoot: context.repoRoot,
         repoIdentity: context.repoIdentity,
         runtime: context.captureRuntime,
+        subagent: session.subagent,
         repoSize: await earlierRepoSize(context, previous, id),
-        harness: 'cursor',
+        harness: source.harness,
       });
-      extract.session.harness = 'cursor';
-      await commitCapture(context, key, extract, { size: session.messages, mtimeMs: session.lastUpdatedAt, rev });
-      tally(trace, extract, false);
-      result.sessions += 1;
-      result.cursor += 1;
+      // The input names the frame and the action table; the session record carries the harness for `harnessOf`, `books --by harness`, and `measure`.
+      extract.session.harness = source.harness;
+      await commitCapture(context, key, extract, { size: session.size, mtimeMs: session.mtimeMs, rev });
+      tally(trace, extract, session.subagent !== undefined);
+      if (session.subagent === undefined) {
+        result.sessions += 1;
+        counts.read += 1;
+      } else result.subagents += 1;
       result.lines += extract.session.lines;
       result.badLines += extract.session.badLines;
       result.observations += 1 + extract.prompts.length + extract.tools.length + extract.errorLines.length;
     }
   } finally {
-    source.close();
+    store.close();
   }
 };
 
@@ -920,7 +972,7 @@ export const relativeOfSession = (session: string): string[] => {
 
 /**
  * The sessions of `behind` (captured before the current version) whose source is gone (the transcript from both the harness and `raw/`, or the
- * Cursor composer from Cursor's store): they can never be captured again, so `verify` counts them `cv-frozen` instead of failing `--strict` over them.
+ * session from its source's store, such as a Cursor composer): they can never be captured again, so `verify` counts them `cv-frozen` instead of failing `--strict` over them.
  */
 export const frozenSessions = async (runtime: SessionsRuntime, behind: readonly { project: string; session: string }[]): Promise<Set<string>> => {
   const wanted = new Set(behind.map((entry) => `${entry.project}/${entry.session}`));
@@ -938,20 +990,23 @@ export const frozenSessions = async (runtime: SessionsRuntime, behind: readonly 
     const relative = join(entry.project, ...relativeOfSession(entry.session));
     if (!alive.has(id) && ((await exists(join(runtime.projectsRoot, relative))) || (await exists(join(paths(runtime.storeDir).raw, relative))))) alive.add(id);
   }
-  const prefix = `${CURSOR_SOURCE}-`;
-  const cursorBehind = behind.filter((entry) => entry.session.startsWith(prefix) && !alive.has(`${entry.project}/${entry.session}`));
-  if (cursorBehind.length > 0 && runtime.cursorRoot !== undefined) {
-    // A Cursor session has no transcript file: its source is the composer, which the next deposit reads again while Cursor still lists it.
-    // An unreadable store counts as alive too, since it may read again once Cursor releases it.
+  const roots = sourceRoots(runtime);
+  for (const source of sourcesOf(runtime)) {
+    const prefix = `${source.name}-`;
+    const pending = behind.filter((entry) => entry.session.startsWith(prefix) && !alive.has(`${entry.project}/${entry.session}`));
+    const root = roots.get(source.name);
+    if (pending.length === 0 || root === undefined) continue;
+    // A source session has no transcript file here: its origin is the source's own store, which the next deposit reads again while the
+    // harness still lists it. An unreadable store counts as alive too, since it may read again once the harness releases it.
     let listed: ReadonlySet<string> | undefined;
     try {
-      const source = await openCursorStore(runtime.cursorRoot);
-      listed = new Set((source?.sessions ?? []).map((session) => `${prefix}${session.composerId}`));
-      source?.close();
+      const store = await source.open(root);
+      listed = store !== undefined && store.unreadable.length > 0 ? undefined : new Set((store?.sessions ?? []).map((session) => `${prefix}${session.id}`));
+      store?.close();
     } catch {
       listed = undefined;
     }
-    for (const entry of cursorBehind) if (listed === undefined || listed.has(entry.session)) alive.add(`${entry.project}/${entry.session}`);
+    for (const entry of pending) if (listed === undefined || listed.has(entry.session)) alive.add(`${entry.project}/${entry.session}`);
   }
   return new Set(behind.filter((entry) => !alive.has(`${entry.project}/${entry.session}`)).map((entry) => entry.session));
 };
