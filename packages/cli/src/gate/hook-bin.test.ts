@@ -95,7 +95,47 @@ const until = async (done: () => boolean, ms = 20_000): Promise<void> => {
   while (!done() && Date.now() < end) await new Promise<void>((resolve) => setTimeout(resolve, 50));
 };
 
-const lockFiles = (store: string): string[] => readdirSync(store).filter((name) => name.endsWith('.lock'));
+const lockFiles = (store: string): string[] => (existsSync(store) ? readdirSync(store).filter((name) => name.endsWith('.lock')) : []);
+
+const rowsOf = (home: string): unknown[] => {
+  const [file] = crossingFiles(home);
+  return file === undefined
+    ? []
+    : readFileSync(join(home, file), 'utf8')
+        .split('\n')
+        .filter((line) => line !== '')
+        .map((line): unknown => JSON.parse(line));
+};
+
+/** How many built-hook sights a case runs before it says no hand-off happened. */
+const MAX_SIGHTS = 5;
+
+// Runs the built hook's sights of one name until one hands the name off. A sight ends one of three ways: it takes the name's lock and starts the helper (the lock, or the answer the helper
+// kept, is on disk when the hook exits); it ends at its own deadline with the ask stopped (no lock, no helper, no answer: node's start or the blocking spawn used the budget); or it is
+// cut before it asks at all. The second and third leave the name unasked, and the next sight asks once itself, so a store with no lock and no kept answer sends the case to its next
+// sight, at most MAX_SIGHTS, and then fails. Returns the number of sights run, the last of which handed off.
+const sightsToHandOff = (payload: string, npm: { folder: string }, home: string, store: string): number => {
+  for (let sight = 1; sight <= MAX_SIGHTS; sight += 1) {
+    const result = runHook(payload.replace('"u1"', `"u${String(sight)}"`), [], npm.folder, home);
+    expect(result.status).toBe(0);
+    expect(result.stdout).toBe('');
+    if (lockFiles(store).length > 0 || existsSync(join(store, 'gate-registry.jsonl'))) return sight;
+  }
+  return expect.unreachable(`no sight of ${String(MAX_SIGHTS)} took the lock or started the helper`);
+};
+
+// One sight after the hand-off, run again if the box was so loaded that the hook was ended before it wrote its row: with the lock or the answer kept it asks nothing, so a repeat can start no
+// manager. At most MAX_SIGHTS, then the case fails.
+const sightWithRow = (payload: string, id: string, npm: { folder: string }, home: string): void => {
+  for (let tries = 0; tries < MAX_SIGHTS; tries += 1) {
+    const before = rowsOf(home).length;
+    const result = runHook(payload.replace('"u1"', `"${id}"`), [], npm.folder, home);
+    expect(result.status).toBe(0);
+    expect(result.stdout).toBe('');
+    if (rowsOf(home).length > before) return;
+  }
+  expect.unreachable(`no row was written in ${String(MAX_SIGHTS)} sights`);
+};
 
 /** How many lines of the manager's log read `word`. */
 const logged = (log: string, word: 'started' | 'ended'): number => (existsSync(log) ? readFileSync(log, 'utf8').split(/\r?\n/).filter((line) => line.trim() === word).length : 0);
@@ -145,17 +185,16 @@ describe.skipIf(!existsSync(bin))('the built oars gate hook', () => {
     expect(JSON.parse(lines[0] ?? '')).toMatchObject({ kind: 'crossing', via: 'hook', name: 'left-pad', registryState: 'not-read' });
   });
 
-  // The built hook takes the first sight and starts the helper itself, as the harness runs it. Under load the hook may skip its own ask (node's start used the budget) or run it and cut
-  // it, so the first sight leaves one start or two; what the cases pin is what follows: the helper's single finish, the lock or the cache it leaves, and no start after it.
+  // The built hook takes the sight and starts the helper itself, as the harness runs it. A sight is one of three things: it may skip its own ask (node's start used the budget), run it and
+  // cut it, or be ended by its deadline before it holds a lock (no lock, no helper, so the next sight asks). `sightsToHandOff` runs sights until one hands off, so the cases pin what follows
+  // exactly: at most two starts a sight, the helper's single finish, the lock or the cache it leaves, no start after the hand-off, and a row on every sight after it.
   it('fills the cache after a cut ask: the built hook starts the helper, and the sight after it reads found and asks nothing', async () => {
     const payload = JSON.stringify({ session_id: 's1', tool_use_id: 'u1', tool_name: 'Bash', tool_input: { command: 'npm install slow-lib' }, cwd: tmpdir(), permission_mode: 'default' });
     const npm = slowNpm();
     const home = mkdtempSync(join(tmpdir(), 'oars-gate-bin-'));
     made.push(home);
     const store = join(home, 'oars', 'sessions');
-    const first = runHook(payload, [], npm.folder, home);
-    expect(first.status).toBe(0);
-    expect(first.stdout).toBe('');
+    const sights = sightsToHandOff(payload, npm, home, store);
     // The helper is detached: it has finished when it has logged its end, kept its answer, and let go of the lock.
     await until(() => logged(npm.log, 'ended') >= 1 && existsSync(join(store, 'gate-registry.jsonl')) && lockFiles(store).length === 0);
     expect(logged(npm.log, 'ended')).toBe(1);
@@ -163,14 +202,15 @@ describe.skipIf(!existsSync(bin))('the built oars gate hook', () => {
     expect(lockFiles(store)).toEqual([]);
     const asked = logged(npm.log, 'started');
     expect(asked).toBeGreaterThanOrEqual(1);
-    expect(asked).toBeLessThanOrEqual(2);
-    const sight = runHook(payload.replace('"u1"', '"u2"'), [], npm.folder, home);
-    expect(sight.status).toBe(0);
-    expect(sight.stdout).toBe('');
+    expect(asked).toBeLessThanOrEqual(2 * sights);
+    sightWithRow(payload, 'u-after', npm, home);
     expect(logged(npm.log, 'started')).toBe(asked);
-    const [file] = crossingFiles(home);
-    const rows: unknown[] = readFileSync(join(home, file ?? ''), 'utf8').trim().split('\n').map((line): unknown => JSON.parse(line));
-    expect(rows).toMatchObject([{ registryState: 'not-read' }, { registryState: 'found' }]);
+    // A sight ended by its deadline may leave no row, so the count is a range; the sight after the hand-off wrote one, which reads the kept answer.
+    const rows = rowsOf(home);
+    expect(rows.length).toBeGreaterThanOrEqual(1);
+    expect(rows.length).toBeLessThanOrEqual(sights + 1);
+    for (const row of rows.slice(0, -1)) expect(row).toMatchObject({ registryState: 'not-read' });
+    expect(rows.at(-1)).toMatchObject({ registryState: 'found' });
   }, 60_000);
 
   it('starts no new ask on later sights while the lock is held, after a down manager', async () => {
@@ -179,23 +219,24 @@ describe.skipIf(!existsSync(bin))('the built oars gate hook', () => {
     const home = mkdtempSync(join(tmpdir(), 'oars-gate-bin-'));
     made.push(home);
     const store = join(home, 'oars', 'sessions');
-    const first = runHook(payload, [], npm.folder, home);
-    expect(first.status).toBe(0);
+    const sights = sightsToHandOff(payload, npm, home, store);
     // A failed ask keeps its lock, so the helper is done when it has logged its end with the lock still there.
     await until(() => logged(npm.log, 'ended') >= 1 && lockFiles(store).length === 1);
     expect(logged(npm.log, 'ended')).toBe(1);
     expect(lockFiles(store)).toHaveLength(1);
     const asked = logged(npm.log, 'started');
     expect(asked).toBeGreaterThanOrEqual(1);
-    expect(asked).toBeLessThanOrEqual(2);
-    // The lock is held and fresh, so neither later sight asks the manager: the log shows no start beyond the first sight's.
-    expect(runHook(payload.replace('"u1"', '"u2"'), [], npm.folder, home).status).toBe(0);
-    expect(runHook(payload.replace('"u1"', '"u3"'), [], npm.folder, home).status).toBe(0);
+    expect(asked).toBeLessThanOrEqual(2 * sights);
+    // The lock is held and fresh, so neither later sight asks the manager: the log shows no start beyond the sights up to the hand-off.
+    sightWithRow(payload, 'u-after-1', npm, home);
+    sightWithRow(payload, 'u-after-2', npm, home);
     expect(logged(npm.log, 'started')).toBe(asked);
     expect(lockFiles(store)).toHaveLength(1);
-    const [file] = crossingFiles(home);
-    const rows: unknown[] = readFileSync(join(home, file ?? ''), 'utf8').trim().split('\n').map((line): unknown => JSON.parse(line));
-    expect(rows).toMatchObject([{ registryState: 'not-read' }, { registryState: 'not-read' }, { registryState: 'not-read' }]);
+    // A sight ended by its deadline may leave no row, so the count is a range; the two sights after the hand-off each wrote one.
+    const rows = rowsOf(home);
+    expect(rows.length).toBeGreaterThanOrEqual(2);
+    expect(rows.length).toBeLessThanOrEqual(sights + 2);
+    for (const row of rows) expect(row).toMatchObject({ registryState: 'not-read' });
   }, 60_000);
 
   // The same two outcomes through `startFill` and the built helper, without the hook's first sight: the hand-off is the code the hook calls, and this holds even on a box so loaded that the
