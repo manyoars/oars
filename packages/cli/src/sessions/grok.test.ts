@@ -79,7 +79,7 @@ const bytes = (text: string): number[] => [...Buffer.from(text)];
 // without them, and then no `BashOutput` is ever written. `workdir` is the opencode tool's optional one (opencode/bash/mod.rs:185-189).
 const DESCRIBED = 'Run the command';
 const sh = (command: string, extra: object = {}) => ({ command, description: DESCRIBED, ...extra });
-// What the tool builds: the `output` bytes stay the raw output (grok_build/bash/mod.rs:2232), `command` and `description` echo the call's input (:2235, :2239), and the model-issued path
+// What the tool builds: the `output` bytes stay the raw output (grok_build/bash/mod.rs:2233), `command` and `description` echo the call's input (:2235, :2239), and the model-issued path
 // overwrites `output_for_prompt` with the formatted prompt (:2246; format_default_prompt :386-417): `exit: N`, or `exit: killed (<reason>)` for a signal that parses as a KillReason (:318-362).
 const KILLS = /^(?:timeout|max_runtime|cancelled|killed|signal \d+)$/;
 const bash = (command: string, exit: number, text: string, extra: Obj = {}): Obj => {
@@ -182,10 +182,13 @@ describe('the Grok Build reader', () => {
       finish(3, 'c1', 'failed', { content: [{ type: 'content', content: { type: 'text', text: 'ENOENT: no such file or directory, open /nope' } }], rawOutput: { type: 'ReadFile', FileNotFound: 'ENOENT: no such file or directory, open <workspace>/nope' } }),
       call(4, 'c2', 'list_dir', { target_directory: '/nope' }),
       finish(5, 'c2', 'failed', { rawOutput: { type: 'ListDir', NotFound: 'no such directory' } }),
-      call(6, 'c3', 'bash', sh('x')),
+      // Plan mode refuses only an edit or a patch (tool_calls.rs:178-199): a shell call is allowed, so the shell path is an arguments parse failure (no `description`).
+      call(6, 'c3', 'search_replace', { file_path: '/work/app/a.ts', old_string: 'a', new_string: 'b' }),
       finish(7, 'c3', 'failed', { content: [textPart(PLAN_REJECTED)] }),
+      call(8, 'c4', 'bash', { command: 'x' }),
+      finish(9, 'c4', 'failed', { content: [textPart('invalid arguments')] }),
     ]);
-    expect(out.errorLines.map((error) => error.line)).toEqual(['ENOENT: no such file or directory, open /nope', 'tool failed', PLAN_REJECTED]);
+    expect(out.errorLines.map((error) => error.line)).toEqual(['ENOENT: no such file or directory, open /nope', 'tool failed', PLAN_REJECTED, 'invalid arguments']);
   });
 
   it('writes no usage for a session with no usage.json, and gives every assistant line a requestId', () => {
@@ -318,18 +321,23 @@ describe('the Grok Build reader', () => {
   });
 
   it('names a backend-hosted search by its variant, since upstream titles the call "Web search:" or "X search:"', () => {
-    // backend_tool_display titles the call and puts `{variant, backend: true}` in rawInput (acp_session_impl/tool_dispatch.rs:94-105); the completion carries no rawOutput (sampling_events.rs:559-585).
+    const done = (second: number, toolCallId: string, status: string, title: string, action: string) => line(S(second), { sessionUpdate: 'tool_call_update', toolCallId, status, title, rawOutput: { action, id: toolCallId, status } });
+    // backend_tool_display titles the call and puts `{variant, backend: true}` in rawInput (acp_session_impl/tool_dispatch.rs:94-105); the completion is titled and carries a `{action, id, status}` rawOutput (sampling_events.rs:581-582, tool_dispatch.rs:403-412), and `status: 'failed'` makes the update failed (tool_dispatch.rs:117-127).
     const out = extractOf([
       prompt(1, 'search'),
       call(2, 'w1', 'Web search:', { variant: 'WebSearch', backend: true }, 'search'),
-      line(S(3), { sessionUpdate: 'tool_call_update', toolCallId: 'w1', status: 'completed' }),
+      done(3, 'w1', 'completed', 'Web search: grok build', 'WebSearch'),
       call(4, 'x1', 'X search:', { variant: 'XSearch', backend: true }, 'search'),
-      line(S(5), { sessionUpdate: 'tool_call_update', toolCallId: 'x1', status: 'completed' }),
+      done(5, 'x1', 'completed', 'X search: grok build', 'XSearch'),
       call(6, 'o1', 'code_execution', { backend: true }),
-      line(S(7), { sessionUpdate: 'tool_call_update', toolCallId: 'o1', status: 'completed' }),
+      done(7, 'o1', 'completed', 'Code execution', 'CodeExecution'),
+      call(8, 'w2', 'Web search:', { variant: 'WebSearch', backend: true }, 'search'),
+      done(9, 'w2', 'failed', 'Web search: grok build', 'WebSearch'),
     ]);
-    expect(out.tools.map((tool) => tool.tool)).toEqual(['web_search', 'x_search', 'code_execution']);
-    expect(out.tools.map((tool) => tool.steps?.[0]?.action)).toEqual(['web.search', 'web.search', 'other']);
+    expect(out.tools.map((tool) => tool.tool)).toEqual(['web_search', 'x_search', 'code_execution', 'web_search']);
+    expect(out.tools.map((tool) => tool.steps?.[0]?.action)).toEqual(['web.search', 'web.search', 'other', 'web.search']);
+    // A failed backend-hosted search has neither `content[]` nor text in its rawOutput, so its error line is the generic one.
+    expect(out.errorLines.map((error) => error.line)).toEqual(['tool failed']);
   });
 
   it('reads a skill call as skill.run with the skill’s name, and a todowrite call as a plan update', () => {
