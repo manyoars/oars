@@ -7,6 +7,7 @@ import { frame, printOf, prompt, session, sessionsFrom, step, store, storedNames
 import { floorOf, skeletonOf, type SessionSkeleton } from './pool-wire.js';
 import { deriveConsequences, recallGraphOf } from './recall-consequence.js';
 import { makeRecall } from './recall-object.js';
+import type { Strata } from './schema.js';
 import type { Store } from './store.js';
 
 const framed = frame({ shell: 'bash', stack: { languages: ['rust'], frameworks: ['astro'], size: 'xl' } });
@@ -48,6 +49,13 @@ describe('storeOf', () => {
 });
 
 describe('rule 5: a bucket and no exact number', () => {
+  it('counts the explore steps of a prompt as the lowest value of their bucket, and none when the record held none', () => {
+    const strata = { languages: [], repoFiles: null, frameworks: [], explore: 37 };
+    const local = store({ sessions: [session('s1', { frame: framed })], prompts: [prompt('s1', 0, { frame: framed, strata }), prompt('s1', 1, { frame: framed })] });
+    // 37 steps is bucket 7, whose lowest value is 33.
+    expect(storeOf([skeletonOfLocal(local)]).prompts.map(({ explore }) => explore)).toEqual([33, 0]);
+  });
+
   it('counts a prompt as the lowest value of each bucket, never the exact tokens or seconds', () => {
     const { cells } = incrementsOf(skeletonOfLocal(localStore()));
     const asked = classMotif('edit-verify').motifId;
@@ -185,6 +193,24 @@ describe('rules 1 to 3 and 6: what a cell and a stratum hold', () => {
     const { strata } = increments();
     expect([...strata.keys()].sort()).toEqual(['framework/astro', 'language/rust', 'repoFiles/xl']);
     for (const stratum of strata.values()) expect(stratum.sessions).toBe(1);
+  });
+
+  it('pools the two pair strata per value, each beside the single ones, and no pair for a language without a share or a prompt without a count', () => {
+    // A stored share is text on a record, so a test can hold one the list does not: Object.assign types the result as the record while the input stays loose.
+    const strata: Strata = Object.assign({ languages: [], repoFiles: null, frameworks: [], explore: 37 }, { languages: [{ language: 'rust', share: 'over-50' }, { language: 'go', share: 'nonsense' }], repoFiles: 'over-100k' });
+    const local = store({ sessions: [session('s1', { frame: framed })], prompts: [prompt('s1', 0, { frame: framed, strata }), prompt('s1', 1, { frame: framed })] });
+    const keys = [...incrementsOf(skeletonOfLocal(local)).strata.keys()];
+    // 37 explore steps is bucket 7; the second prompt held no count, and a share outside its list is dropped with its pair.
+    expect(keys.filter((key) => key.startsWith('languageShare/') || key.startsWith('repoFilesExplore/')).sort()).toEqual(['languageShare/rust/over-50', 'repoFilesExplore/xl/7']);
+    expect(keys).toContain('repoFiles/xl');
+    for (const stratum of incrementsOf(skeletonOfLocal(local)).strata.values()) expect(stratum.sessions).toBe(1);
+  });
+
+  it('pools a language outside the pinned list as other, beside its share', () => {
+    const strata: Strata = { languages: [{ language: 'other', share: '10-50' }, { language: 'rust', share: 'over-50' }], repoFiles: null, frameworks: [], explore: 0 };
+    const local = store({ sessions: [session('s1', { frame: framed, strata })], prompts: [prompt('s1', 0, { frame: framed, strata })] });
+    const keys = [...incrementsOf(skeletonOfLocal(local)).strata.keys()].filter((key) => key.startsWith('languageShare/')).sort();
+    expect(keys).toEqual(['languageShare/other/10-50', 'languageShare/rust/over-50']);
   });
 
   it('puts only the axes in a cell key, and never effort (rule 3)', () => {
