@@ -263,6 +263,20 @@ describe('oars pool login', () => {
     expect(scene.seen).toHaveLength(1);
   });
 
+  it.each([['github', 'device_flow_disabled', 200], ['google', 'invalid_client', 401]] as const)('names what the %s device route refused (%s), as a refused sign-in and not an unexpected one', async (flavor, error, status) => {
+    const scene = setting();
+    const hits: string[] = [];
+    server.use(http.post(PROVIDER_URLS[flavor].device, () => {
+      hits.push('device');
+      return HttpResponse.json({ error, error_description: 'set up the app first' }, { status });
+    }));
+    expect(await scene.cli('pool', 'login', '--provider', flavor, '--server', POOL, '--json')).toBe(ExitCode.AUTH);
+    expect(scene.document()).toMatchObject({ problem: { code: 'login_refused', title: `The provider refused the sign-in: ${error}.` } });
+    expect(hits).toEqual(['device']);
+    expect(scene.h.sleeps).toEqual([]);
+    expect(scene.seen.filter((entry) => entry.url.startsWith(POOL))).toEqual([]);
+  });
+
   it('polls on the defaults when the provider names no interval', async () => {
     const scene = setting();
     providerAt(scene, 'github', { device: { interval: undefined, expires_in: undefined } });

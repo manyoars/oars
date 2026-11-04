@@ -65,7 +65,7 @@ const listen = async (err: string[]): Promise<Loopback> => {
   };
 };
 
-const json = (status: number, body: unknown, headers: Record<string, string> = {}) => (response: ServerResponse): void => {
+const json = (status: number, body: unknown, headers: { [name: string]: string } = {}) => (response: ServerResponse): void => {
   response.writeHead(status, { 'content-type': 'application/json', ...headers });
   response.end(JSON.stringify(body));
 };
@@ -79,7 +79,10 @@ const signer = async (): Promise<{ x: string; sign: (text: string) => Promise<st
 
 /** Every line the wire carried is in the print, name and value, with the credential as its size. */
 const expectPrinted = (arrival: Arrival, secret: string | undefined): void => {
-  const lines = arrival.printedBefore.split('\n').map((line) => line.toLowerCase());
+  // Only this request's block counts: a line printed for an earlier request must not satisfy a later one.
+  const start = arrival.printedBefore.lastIndexOf(`${arrival.method} ${arrival.url} HTTP/1.1`);
+  expect(start, `${arrival.method} ${arrival.url} was not printed before it arrived`).toBeGreaterThanOrEqual(0);
+  const lines = arrival.printedBefore.slice(start).split('\n').map((line) => line.toLowerCase());
   const mask = `<credential: ${String(Buffer.byteLength(secret ?? ''))} bytes>`;
   for (const [name, value] of arrival.raw) {
     const shown = secret === undefined ? value : value.split(secret).join(mask);
@@ -92,7 +95,7 @@ describe('what is printed is what goes over the socket', () => {
   const real = globalThis.fetch;
 
   beforeEach(() => {
-    // The two provider hosts are the only requests that leave the loopback: they are sent to it here, with the request as built.
+    // The GitHub host is the only request that would leave the loopback in this file, so it is sent to the loopback here, with the request as built.
     vi.stubGlobal('fetch', (input: URL | string | Request, init?: RequestInit): Promise<Response> => {
       const url = new URL(input instanceof Request ? input.url : input);
       if (url.hostname !== 'github.com') return real(input, init);
