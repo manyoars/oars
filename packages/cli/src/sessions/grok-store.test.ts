@@ -25,15 +25,17 @@ const S = (second: number): number => BASE + second;
 const iso = (second: number): string => new Date((BASE + second) * 1000).toISOString();
 const prompt = (second: number, text: string) => line(S(second), { sessionUpdate: 'user_message_chunk', content: { type: 'text', text } });
 const say = (second: number, text: string) => line(S(second), { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text } });
-// A failed shell call: the status says completed, the exit code says 2 (types/output.rs:384-405, acp_conversion.rs:241-250), and output_for_prompt is the formatted
-// prompt with its `exit: 2` header (grok_build/bash/mod.rs:2246).
+// A failed shell call: its input names `command` and `description`, both required (grok_build/bash/mod.rs:225, :249); the status says completed, the exit code says 2
+// (types/output.rs:384-405, acp_conversion.rs:241-250); the update carries the output as a text part (acp_conversion.rs:251-258) beside the `BashOutput`, whose
+// output_for_prompt is the formatted prompt with its `exit: 2` header (grok_build/bash/mod.rs:2246).
 const failedShell = [
-  line(S(2), { sessionUpdate: 'tool_call', toolCallId: 'c1', title: 'run_terminal_cmd', kind: 'other', status: 'pending', rawInput: { command: 'make' } }),
+  line(S(2), { sessionUpdate: 'tool_call', toolCallId: 'c1', title: 'run_terminal_cmd', kind: 'other', status: 'pending', rawInput: { command: 'make', description: 'Build it' } }),
   line(S(3), {
     sessionUpdate: 'tool_call_update',
     toolCallId: 'c1',
     status: 'completed',
-    rawOutput: { type: 'Bash', exit_code: 2, command: 'make', output: [...Buffer.from('make: *** No rule to make target')], output_for_prompt: 'exit: 2\nmake: *** No rule to make target', signal: null, timed_out: false, truncated: false, description: null, output_file: '', total_bytes: Buffer.byteLength('make: *** No rule to make target'), current_dir: '/work' },
+    content: [{ type: 'content', content: { type: 'text', text: 'make: *** No rule to make target' } }],
+    rawOutput: { type: 'Bash', exit_code: 2, command: 'make', output: [...Buffer.from('make: *** No rule to make target')], output_for_prompt: 'exit: 2\nmake: *** No rule to make target', signal: null, timed_out: false, truncated: false, description: 'Build it', output_file: '', total_bytes: Buffer.byteLength('make: *** No rule to make target'), current_dir: '/work' },
   }),
 ];
 const usage = { sessionId: 'x', updatedAt: iso(9), session: { inputTokens: 10, outputTokens: 7, cachedReadTokens: 0, cacheCreationTokens: 0, reasoningTokens: 0, totalTokens: 17, modelCalls: 1 }, turns: [{ turnNumber: 1, endedAt: iso(8), inputTokens: 10, outputTokens: 7, cachedReadTokens: 0, cacheCreationTokens: 0, reasoningTokens: 0, totalTokens: 17, modelCalls: 1, primaryModelId: 'grok-build' }] };
