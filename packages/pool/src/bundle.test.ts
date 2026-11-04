@@ -1,6 +1,6 @@
 import { createHash, webcrypto } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { verifyBundle, VOCAB_VERSION, type Bundle } from '../../cli/src/sessions/pool-wire.js';
+import { HARNESSES, verifyBundle, VOCAB_VERSION, type Bundle } from '../../cli/src/sessions/pool-wire.js';
 import type { Harness } from '../../cli/src/sessions/schema.js';
 import { sampleSkeleton } from './sample.js';
 import { containing, fieldOf, startPool, stubUser, type TestPool, textOf } from './test-pool.js';
@@ -179,9 +179,11 @@ describe('a bundle over five accounts', () => {
     expect(await pool.get(`/bundle/acme/2.1.314/${VOCAB_VERSION}`, token)).toMatchObject({ status: 400, json: { error: 'unknown_harness', field: 'harness' } });
     // A query string does not name the harness any more.
     expect(await pool.get(`/bundle/2.1.314/${VOCAB_VERSION}?harness=cursor`, token)).toMatchObject({ status: 400, json: { error: 'harness_required' } });
-    // Every harness the schema names is served (an empty bundle for one nobody deposited on).
-    for (const harness of ['claude-code', 'cursor', 'codex', 'copilot', 'gemini', 'grok']) expect((await pool.get(`/bundle/${harness}/2.1.314/${VOCAB_VERSION}`, token)).status).toBe(200);
+    // Every harness the client names is served (an empty bundle for one nobody deposited on).
+    for (const harness of HARNESSES) expect((await pool.get(`/bundle/${harness}/2.1.314/${VOCAB_VERSION}`, token)).status).toBe(200);
     expect(await pool.get(`/bundle/claude-code/2.1.314/${VOCAB_VERSION}`)).toMatchObject({ status: 401 });
+    // The old path is named before any credential is read, so a stale client with no token is told what to send.
+    expect(await pool.get(`/bundle/2.1.314/${VOCAB_VERSION}`)).toMatchObject({ status: 400, json: { error: 'harness_required', field: 'harness' } });
   });
 
   it('says so when the pool has no signing key', async () => {

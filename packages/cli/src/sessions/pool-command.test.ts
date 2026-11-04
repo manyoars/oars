@@ -1146,8 +1146,10 @@ describe('oars pool fetch', () => {
     it('defaults to the harness the local store holds the most sessions of, says so on stderr, and sends no count', async () => {
       const { scene, sign } = await signedScene();
       holding(scene, [['cursor', 3], ['claude-code', 1]]);
-      await serve(scene, sign, 'cursor');
+      const arrivals = await serve(scene, sign, 'cursor');
       expect(await scene.cli('pool', 'fetch', '--harness-version', '2.1.314', '--server', POOL, '--json')).toBe(ExitCode.OK);
+      // The choice is on stderr before the request goes out, not after it.
+      expect(arrivals[0]?.printedBefore).toContain('No --harness given: fetching cursor');
       expect(scene.h.err.join('')).toContain('No --harness given: fetching cursor, the harness your local store holds the most sessions of (3 of 4). Pass --harness <name> to fetch another (claude-code, cursor, codex, copilot, gemini, grok).');
       expect(scene.document()).toMatchObject({ ok: true, harness: 'cursor' });
       // Counts stay here: the request names the harness and the versions, nothing else.

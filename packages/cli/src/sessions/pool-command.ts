@@ -516,7 +516,6 @@ const cappedError = (deps: RunDeps, reply: Reply, kept: boolean): CliError => {
   return new CliError(title, ExitCode.CAPPED, FETCH, { code: 'fetch_cap', title, status: 429 }, undefined, { retryAfter });
 };
 
-/** `oars pool fetch`: one harness's signed bundle at one version, kept only once the key pinned at login has verified it. It keeps the signed form, so the replica can be checked again later, and the ETag, so the next fetch asks only whether it changed. The request prints before it is sent. */
 /** What a fetch asks for when no `--harness` is given, and what it falls back to when no one harness leads the local store. */
 const DEFAULT_HARNESS: Harness = 'claude-code';
 
@@ -541,6 +540,7 @@ const fetchHarness = async (deps: RunDeps, storeDir: string, named: string | und
   return harness;
 };
 
+/** `oars pool fetch`: one harness's signed bundle at one version, kept only once the key pinned at login has verified it. It keeps the signed form, so the replica can be checked again later, and the ETag, so the next fetch asks only whether it changed. The request prints before it is sent. */
 export const poolFetch = async (deps: RunDeps, options: { server?: string | undefined; harness?: string | undefined; harnessVersion: string }): Promise<Outcome> => {
   const { storeDir } = runtimeOf(deps);
   const server = poolServer(deps.env, FETCH, options.server);

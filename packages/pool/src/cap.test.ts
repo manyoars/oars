@@ -68,6 +68,12 @@ describe('fetch_cap: fetches per account per ISO week', () => {
     expect((await pool.raw(`/bundle/claude-code/2.2.0/${VOCAB_VERSION}`, token)).status).toBe(429);
   });
 
+  it('counts per account, not per harness: a second harness is the second fetch', async () => {
+    const { token } = await pool.signIn('github', stubUser('2109'));
+    expect((await pool.raw(PATH, token)).status).toBe(200);
+    expect((await pool.raw(`/bundle/cursor/2.1.314/${VOCAB_VERSION}`, token)).status).toBe(429);
+  });
+
   it('keeps the count per account: another account still has its own fetch', async () => {
     const one = await pool.signIn('github', stubUser('2103'));
     const two = await pool.signIn('github', stubUser('2104'));
@@ -96,8 +102,9 @@ describe('fetch_cap: fetches per account per ISO week', () => {
     expect(answers.map(({ status }) => status).sort()).toEqual([200, 429]);
   });
 
-  it('spends nothing on a refusal before the spend: a bad version, a bad vocabulary, no signing key', async () => {
+  it('spends nothing on a refusal before the spend: an unknown harness, a bad version, a bad vocabulary, no signing key', async () => {
     const { token, account } = await pool.signIn('github', stubUser('2108'));
+    expect((await pool.raw(`/bundle/acme/2.1.314/${VOCAB_VERSION}`, token)).status).toBe(400);
     expect((await pool.raw(`/bundle/claude-code/acme/${VOCAB_VERSION}`, token)).status).toBe(400);
     expect((await pool.raw('/bundle/claude-code/2.1.314/9', token)).status).toBe(400);
     expect(await tally(pool, account)).toEqual({ week: null, fetches: 0 });
