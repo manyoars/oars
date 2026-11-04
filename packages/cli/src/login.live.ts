@@ -4,13 +4,13 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { text } from 'node:stream/consumers';
-import { chromium, type Page } from '@playwright/test';
+import { chromium } from '@playwright/test';
 import { describe, expect, it } from 'vitest';
 import { run, type RunDeps } from './cli.js';
 import { fileCredentialStore } from './credentials.js';
 import { fileJournalStore } from './journal.js';
 import { ExitCode } from './errors.js';
-import { describePage } from './live-page.js';
+import { step } from './live-page.js';
 import { discover, refreshTokens } from './oidc.js';
 
 // Design §6 *CLI*, live login: the real CLI against a running Keycloak holding T67's realm (the local stack's, or the throwaway
@@ -86,16 +86,6 @@ const startStubApi = async (): Promise<StubApi> => {
   };
 };
 
-/** Runs one step of the browser flow; a timeout names the page that was showing instead of the locator that never appeared. */
-const step = async (page: Page, what: string, action: () => Promise<void>): Promise<void> => {
-  try {
-    await action();
-  } catch (error) {
-    const title = await page.title().catch(() => '');
-    throw new Error(`The device approval stopped at "${what}" on ${describePage(title, page.url())}.`, { cause: error });
-  }
-};
-
 /** What a developer does in the browser: open the link, sign in, grant the CLI access. */
 const approveDeviceCode = async (verificationUrl: string, username: string, password: string): Promise<void> => {
   const browser = await chromium.launch();
@@ -108,11 +98,11 @@ const approveDeviceCode = async (verificationUrl: string, username: string, pass
       await page.locator('#username').fill(username);
       await page.locator('#password').fill(password);
       await page.locator('#kc-login').click();
+      await page.locator('#username').waitFor({ state: 'detached' });
     });
     // The realm's users carry the TERMS_AND_CONDITIONS required action, so the first sign-in lands on a Terms and Conditions page
-    // (button #kc-accept) before anything else. Wait for the sign-in form to go, then for whichever page follows.
+    // (button #kc-accept) before anything else. Wait for whichever page follows the sign-in form.
     await step(page, 'accept the terms', async () => {
-      await page.locator('#username').waitFor({ state: 'detached' });
       await page.locator('#kc-accept, #kc-login').first().waitFor();
       if ((await page.locator('#kc-accept').count()) > 0) await page.locator('#kc-accept').click();
     });
