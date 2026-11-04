@@ -141,6 +141,7 @@ const DENY_LIST = [
   'run this command now',
   'install this package',
   'install it for the user',
+  'npx skills add',
   'before you re-solve',
   'pooled',
   'joins no cluster',

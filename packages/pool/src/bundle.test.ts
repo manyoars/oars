@@ -4,7 +4,7 @@ import { HARNESSES, verifyBundle, VOCAB_VERSION, type Bundle } from '../../cli/s
 import type { Harness } from '../../cli/src/sessions/schema.js';
 import { etagOf } from './bundle.js';
 import { SERVED } from './derive.js';
-import { sampleSkeleton } from './sample.js';
+import { sampleSkeleton, withPairs } from './sample.js';
 import { containing, fieldOf, startPool, stubUser, type TestPool, textOf } from './test-pool.js';
 
 let pool: TestPool;
@@ -137,6 +137,34 @@ describe('a bundle over five accounts', () => {
       // Six sessions from five accounts: the first account's second session counts toward sessions and not toward clusters.
       for (const cell of five.strata) expect(cell).toMatchObject({ sessions: 6, clusters: 5 });
       for (const value of ['"rust"', 'astro', '"xl"']) expect(five.outside).not.toContain(value);
+    } finally {
+      await fresh.dispose();
+    }
+  }, 60_000);
+
+  // Rule 3's two pairs are strata of their own: (language, share) and (repo size, explore bucket) reach the floor the way a single value does, and a pair never rides in any cell.
+  it('serves each pair at five accounts and holds it at four, and keeps both pairs out of everything but the strata', async () => {
+    const fresh = await startPool();
+    try {
+      const sign = async (id: string): Promise<string> => {
+        const { token } = await fresh.signIn('github', stubUser(id));
+        await fresh.post('/v1/covenant/accept', { version: 'v1' }, token);
+        const skeleton = withPairs(sampleSkeleton(id.padStart(16, '0'), { languages: ['rust'], size: 'xl' }), [{ language: 'rust', languageShare: 'over-50' }], 7);
+        expect((await fresh.post('/v1/deposits', skeleton, token)).status).toBe(201);
+        return token;
+      };
+      const payloadOf = async (token: string): Promise<{ pairs: string[]; outside: string }> => {
+        const { json } = await fresh.get(`/bundle/claude-code/${VERSION}/${VOCAB_VERSION}`, token);
+        const verified = await verifyBundle(json, fresh.signingKey(), 'claude-code', VERSION);
+        if (!verified.ok) throw new Error(verified.reason);
+        const { strata } = verified.bundle;
+        return { pairs: strata.filter((cell) => cell.dimension === 'languageShare' || cell.dimension === 'repoFilesExplore').map((cell) => `${cell.dimension}/${cell.value} ${String(cell.clusters)}`), outside: JSON.stringify({ ...verified.bundle, strata: undefined }) };
+      };
+      for (const id of ['7001', '7002', '7003']) await sign(id);
+      expect((await payloadOf(await sign('7004'))).pairs).toEqual([]);
+      const five = await payloadOf(await sign('7005'));
+      expect(five.pairs).toEqual(['languageShare/rust/over-50 5', 'repoFilesExplore/xl/7 5']);
+      for (const value of ['over-50', 'xl/7']) expect(five.outside).not.toContain(value);
     } finally {
       await fresh.dispose();
     }

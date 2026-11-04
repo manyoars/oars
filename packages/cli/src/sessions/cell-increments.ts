@@ -146,7 +146,7 @@ const sessionRecord = (id: string, parent: string | null, { harness, frame }: Sk
 });
 
 const promptRecords = (id: string, { prompts }: SkeletonTranscript): PromptObservation[] =>
-  prompts.map(({ cls, errors, wallSec, usage, frame }, index) => ({
+  prompts.map(({ cls, errors, wallSec, usage, explore, frame }, index) => ({
     kind: 'prompt',
     v: '',
     session: id,
@@ -173,7 +173,8 @@ const promptRecords = (id: string, { prompts }: SkeletonTranscript): PromptObser
       thinking: floorOf('tokens', usage.thinking),
     },
     recovery: [],
-    explore: 0,
+    // The lowest value of the bucket, as every other bucketed value counts; a prompt that sent none counts none.
+    explore: explore === null ? 0 : floorOf('calls', explore),
     act: 0,
     bigrams: {},
     contextFingerprint: null,
@@ -247,6 +248,9 @@ export const incrementsOf = (skeleton: SessionSkeleton): Increments => {
     ...frames.flatMap(({ stack }) => stack.languages.map((value): [string, string] => ['language', value])),
     ...frames.flatMap(({ stack }) => stack.frameworks.map((value): [string, string] => ['framework', value])),
     ...frames.flatMap(({ stack }) => (stack.size === null ? [] : [['repoFiles', stack.size] satisfies [string, string]])),
+    // The two pairs (rule 3): each is a stratum of its own, never a cell and never keyed by the stack's other values. A language with no share, and a prompt with no count, make none.
+    ...frames.flatMap(({ stack }) => stack.languageShares.map(({ language, languageShare }): [string, string] => ['languageShare', `${language}/${languageShare}`])),
+    ...skeleton.transcripts.flatMap(({ prompts }) => prompts.flatMap(({ explore, frame }) => (explore === null || frame.stack.size === null ? [] : [['repoFilesExplore', `${frame.stack.size}/${String(explore)}`] satisfies [string, string]]))),
   ];
   for (const [dimension, value] of named) strata.set(`${dimension}/${value}`, { key: `${dimension}/${value}`, dimension, value, sessions: 1 });
   return { cells, motifs: derived.motifs, strata };

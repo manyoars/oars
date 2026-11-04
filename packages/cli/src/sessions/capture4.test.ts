@@ -385,10 +385,12 @@ describe('a version-3 store opened under version 4', () => {
     expect(verifyAt(after.prompts, 'errors-b', 0)).toBe('none');
     expect(verifyAt(before.prompts, 'tldr', 0)).toBe('na');
     expect(verifyAt(after.prompts, 'tldr', 0)).toBe('na');
-    // A version-3 record has no frame either, and a prompt's derived record carries the one capture now writes.
+    // A version-3 record has no frame or strata either, and a prompt's derived record carries the ones capture now writes.
     expect(before.prompts.every((prompt) => prompt.frame === undefined)).toBe(true);
     expect(after.prompts.every((prompt) => prompt.frame !== undefined)).toBe(true);
-    const unverified = <T extends { rev: number }>(records: T[]): T[] => unrev(records).map((record) => ({ ...record, verify: null, frame: null }));
+    expect(before.prompts.every((prompt) => prompt.strata === undefined)).toBe(true);
+    expect(after.prompts.every((prompt) => prompt.strata !== undefined)).toBe(true);
+    const unverified = <T extends { rev: number }>(records: T[]): T[] => unrev(records).map((record) => ({ ...record, verify: null, frame: null, strata: null }));
     expect(unverified(after.prompts)).toEqual(unverified(before.prompts));
     expect(unrev(after.errors)).toEqual(unrev(before.errors));
     expect(after.sessions.map((session) => session.promptFingerprint)).toEqual(before.sessions.map((session) => session.promptFingerprint));

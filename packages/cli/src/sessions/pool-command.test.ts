@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { run } from '../cli.js';
 import { ExitCode } from '../errors.js';
 import { harness, server, useServer, type Harness } from '../test-support.js';
-import { poolDeposit, poolServer, type Reply, type Sender } from './pool-command.js';
+import { networkSender, poolDeposit, poolServer, type Reply, type Sender } from './pool-command.js';
 import { batchHash, canonicalBytes, FIELD_ROWS, fieldsOf, writeBatch } from './pool-outbox.js';
 import type { Outgoing } from './pool-print.js';
 import { REGISTRY_MAX_AGE_DAYS, VOCAB_SNAPSHOT_DATE } from './public-vocabulary.js';
@@ -940,6 +940,19 @@ ${user('and goes on')}
     expect(scene.h.out.join('')).toContain('refused by the vocabulary (transcripts[0].frame.model)');
     expect(scene.h.out.join('')).not.toContain('acme-private-llm');
     expect(scene.seen).toEqual([]);
+  });
+});
+
+describe('the pool request that gets no answer', () => {
+  it('names the pool server and the reason the network gave', async () => {
+    const cause = new AggregateError([new Error('connect ECONNREFUSED ::1:9')], '');
+    const fetching = vi.spyOn(globalThis, 'fetch').mockRejectedValue(new TypeError('fetch failed', { cause }));
+    try {
+      const failure = await networkSender(harness().deps, 'pool-fetch')({ method: 'GET', url: new URL('/v1/covenant', POOL), headers: [] }).catch((error: unknown) => error);
+      expect(failure).toMatchObject({ exitCode: ExitCode.UNREACHABLE, step: 'pool-fetch', message: `Cannot reach the server at ${POOL}: connect ECONNREFUSED ::1:9` });
+    } finally {
+      fetching.mockRestore();
+    }
   });
 });
 
