@@ -1,6 +1,6 @@
 # The pool
 
-The pool is an optional server that accounts sign in to, deposit closed-vocabulary session skeletons to, and pull cells and reads from. Local capture, recall, and reads need none of it: nothing leaves your machine unless you run `oars pool deposit`. The code is in `packages/pool`, a Cloudflare Worker over one D1 database.
+The pool is an optional server that accounts sign in to, deposit closed-vocabulary session skeletons to, and fetch cells and reads from. Local capture, recall, and reads need none of it: nothing leaves your machine unless you run `oars pool deposit`. The code is in `packages/pool`, a Cloudflare Worker over one D1 database.
 
 ## Commands
 
@@ -10,11 +10,11 @@ Every command takes the server from `--server <url>` or `OARS_POOL_URL`. There i
 |---------|--------------|
 | `oars pool login --provider github\|google` | Device flow through the pool. It saves the pool's own token at `<store>/pool-accounts.json` (mode 0600) and pins the pool's signing key on first login. No harness token is read. |
 | `oars pool deposit [--accept-covenant <version>]` | Sends every session that passes the exclusion check as a skeleton, and prints counts only. A session that fails the check, or has no raw to scan, is never built or sent. |
-| `oars pool pull --harness-version <version>` | Fetches that harness version's signed bundle, verifies it against the pinned key, and keeps it at `<store>/pool-replica/<hash of server>/<version>.json`, still signed. A bundle that fails verification, or is for another version, is refused and not written. The version must be a public one; nothing is keyed by stack. |
+| `oars pool fetch --harness-version <version>` | Fetches that harness version's signed bundle, verifies it against the pinned key, and keeps it at `<store>/pool-replica/<hash of server>/<version>.json`, still signed. A bundle that fails verification, or is for another version, is refused and not written. The version must be a public one; nothing is keyed by stack. |
 
 ## What the server enforces
 
-- **Deposits are closed by default.** With no `COVENANT_VERSION` binding, every deposit gets 403 `deposits_closed`. Once one is set, an account must have accepted exactly that version, or it gets 403 `covenant_not_accepted`, and a new version asks again. Reads and `pull` are not affected.
+- **Deposits are closed by default.** With no `COVENANT_VERSION` binding, every deposit gets 403 `deposits_closed`. Once one is set, an account must have accepted exactly that version, or it gets 403 `covenant_not_accepted`, and a new version asks again. Reads and `fetch` are not affected.
 - **Closed vocabulary.** A skeleton holding an unknown field or a value outside the vocabulary gets 422 `closed_vocabulary` with the field named, and nothing is stored. What is stored is the parsed skeleton, not the text that came in.
 - **Pseudonymous accounts.** The provider's user id is hashed under `PSEUDONYM_KEY`, which the database never holds. No email, login, or provider id is stored.
 - **Five accounts to a read.** A read is served only at 5 or more clusters (`K_CELL` in `packages/pool/src/derive.ts`, the spec's proposal, which a later decision may move), and a cluster is an account, so one account's many sessions count once. The floor applies to the read's aggregate: its `clusters` is the distinct accounts across all the cells it cites, so five accounts on five different days serve a read even though each day's cell holds one. A cell served on its own needs 5 accounts in that cell, and a strata cell needs 5 accounts pool-wide. A `live` read cites only the sliced day's cells, so its floor counts the accounts on that day and never the accounts in its seven-day baseline; the baseline takes the same floor on its own, and under it `value.baseline` and `value.ratio` are `null`.
