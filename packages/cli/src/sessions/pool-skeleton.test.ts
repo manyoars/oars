@@ -82,6 +82,20 @@ describe('the leak test: a private name in a path, a program, a package, an argu
     ]);
   });
 
+  // `projectedSteps` copies a stored pull through, so it is the parser that keeps a private package name off the wire: a batch holding one is refused, never sent.
+  it('refuses a batch whose stored pull holds a private package name', () => {
+    const stored = store({
+      sessions: [session('s', { frame: framed })],
+      prompts: [prompt('s', 0, { frame: framed })],
+      tools: [tool('s', 0, 'Bash', { steps: [step(0, 0, 'shell.exec', { native: 'Bash', identity: { program: 'npm', sub: 'install', flags: [], pulls: [{ registry: 'npm', name: PLANTED, version: null }] } })] })],
+    });
+    const [only] = sessionsOf(stored);
+    const skeleton = only === undefined ? null : skeletonOf(only, '0123456789abcdef', shellReader(vocab));
+    const parsed = parseSkeleton(JSON.parse(JSON.stringify(skeleton)));
+    expect(parsed.ok).toBe(false);
+    expect(parsed.ok ? '' : parsed.field).toContain('pulls');
+  });
+
   it('holds a batch the parser accepts unchanged', () => {
     const skeleton = capturedSkeleton();
     expect(parseSkeleton(JSON.parse(JSON.stringify(skeleton)))).toEqual({ ok: true, skeleton });
@@ -148,6 +162,6 @@ describe('what a batch sends in place of a count', () => {
     const whole = sample();
     expect(whole).toMatchObject({ format: 2, deltas: [] });
     expect(parseSkeleton({ ...whole, deltas: [{}] })).toMatchObject({ ok: false, field: 'deltas' });
-    expect(parseSkeleton({ ...whole, format: 1 })).toMatchObject({ ok: false, field: 'format', reason: 'the frame form (format 1) is no longer read; send format 2' });
+    expect(parseSkeleton({ ...whole, format: 1 })).toMatchObject({ ok: false, field: 'format', reason: 'the exact-count form (format 1) is no longer read; send format 2' });
   });
 });
