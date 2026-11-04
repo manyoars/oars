@@ -22,12 +22,13 @@
 // decision value, or none, changes nothing and is never stored; a Grok plan-mode refusal and a Codex `write_stdin rejected:` stay as they were. EXTRACTOR stays 11.
 //
 // Version 17 (CAPTURE 17) frames a Gemini CLI shell call as the shell that ran it. A session whose own `<session_context>` turn says `My operating system is: win32` (or,
-// with no such turn, whose working directory is written the Windows way) stores its shell calls as `PowerShell` where it stored `Bash`: the tool record's `tool`, the
-// session's `tools` and the skeleton's tool names, each step's `native` (`run_shell_command` before), and the frame's `shell` (`bash` before), so every `frameId` of that
+// with no such turn, whose working directory is written the Windows way) stores its shell calls as `PowerShell` where it stored `Bash`: the tool record's `tool`, an
+// error line's `tool`, the session's `tools` and the skeleton's tool names, each step's `native` (`run_shell_command` before), and the frame's `shell` (`bash` before), so every `frameId` of that
 // session moves. Upstream picks PowerShell on every Windows machine (`tools/shell-utils` `getShellConfiguration`). A Linux or macOS session is unchanged. It also gives a
 // session in a project folder named for a hash of its path (from before the slug registry) the cwd that hash matches when the path is known, which moves its `project`
 // (`gemini` before) and every value read from the cwd; a folder whose path is not known keeps none. Sessions under `~/.cache/.gemini` (`SANDBOX=sandbox-exec`) are new
-// reads, not moved ones. EXTRACTOR stays 11. A version-16 store's next deposit captures every transcript again from the harness or `raw/`.
+// reads, not moved ones. A Copilot CLI session with rotated `events.N.jsonl` archives is now read as one session, so its `prompts`, `tools`, `lines`, and skeleton move; one
+// with no archives is unchanged. EXTRACTOR stays 11. A version-16 store's next deposit captures every transcript again from the harness or `raw/`.
 //
 // Version 10 (CAPTURE 10) gives a turn opened by a slash command or a skill a `user-prompt` record, adds `opened` to that record, and moves `skills`
 // from class P to class A, since a skill's name can be private. It changed no derivation, so it leaves EXTRACTOR at 9.
