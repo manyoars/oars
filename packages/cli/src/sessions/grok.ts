@@ -12,7 +12,7 @@
 //   updates.jsonl "the authoritative conversation log" (17-sessions.md:42): one `{timestamp, method, params: {sessionId, update}}` per line, `timestamp` epoch
 //                 SECONDS (serde default 0), `update` an ACP SessionUpdate tagged by `sessionUpdate`:
 //     user_message_chunk   content {type: "text", text}: the operator's prompt; chunks merge into one prompt until the agent speaks or `_meta.promptIndex`
-//                          changes (turn.rs:890-895, storage/mod.rs:1009). `_meta.hostTurn` (a slash command's turn), `_meta.hideFromScrollback` (a turn the harness started:
+//                          changes, including between marked and unmarked (turn.rs:890-895, storage/mod.rs:1009, :1038-1039). `_meta.hostTurn` (a slash command's turn), `_meta.hideFromScrollback` (a turn the harness started:
 //                          a finished task, subagent, workflow, notification, or goal check, turn.rs:328, :896-901) and `_meta.interjection` (a mid-turn steer whose text is a
 //                          model-facing frame) are not prompts (storage/mod.rs:966, :974); the first two end the turn, and `hostTurn` marks an agent chunk as well
 //                          (acp_session.rs:1353-1372), whose text is dropped as upstream's own rebuilders do (storage/mod.rs:429-432)
@@ -238,12 +238,12 @@ export const grokLines = (text: string, fallbackId: string, summary: Obj, usage:
         continue;
       }
       if (meta.interjection === true || part === undefined) continue;
-      // A change of `promptIndex` is a new prompt even when no reply fell between them (a prompt cancelled before its first reply, then a retry); an unmarked chunk
-      // (the user's `!cmd` carries only a model id) joins the prompt being read.
+      // A change of `promptIndex` is a new prompt even when no reply fell between them (a prompt cancelled before its first reply, then a retry), and so is a change
+      // between marked and unmarked (the user's `!cmd` carries only a model id): upstream opens a new run on either (storage/mod.rs:1038-1039). Two unmarked chunks merge.
       const index = num(meta.promptIndex);
-      if (pending !== undefined && index !== undefined && pending.index !== undefined && index !== pending.index) flushPrompt();
+      if (pending !== undefined && index !== pending.index) flushPrompt();
       open = undefined;
-      pending = { text: (pending?.text ?? '') + part, when: pending?.when ?? when, index: pending?.index ?? index };
+      pending = { text: (pending?.text ?? '') + part, when: pending?.when ?? when, index: pending === undefined ? index : pending.index };
     } else if (kind === 'agent_message_chunk') {
       flushPrompt();
       if (meta.hostTurn === true) {
