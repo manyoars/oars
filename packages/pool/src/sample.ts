@@ -1,6 +1,6 @@
 // An invented session for the pool's tests: no real session reaches this package, not even as a fixture.
 import { frame, printOf, prompt, session, sessionsFrom, step, storedNames, store, tool } from '../../cli/src/sessions/pool-fixture.js';
-import { skeletonOf, type SessionSkeleton } from '../../cli/src/sessions/pool-wire.js';
+import { skeletonOf, type LanguageShareEntry, type SessionSkeleton } from '../../cli/src/sessions/pool-wire.js';
 import type { RepoSize } from '../../cli/src/sessions/public-vocabulary.js';
 import type { Harness } from '../../cli/src/sessions/schema.js';
 
@@ -19,3 +19,13 @@ export const sampleSkeleton = (id: string, stack: { languages: string[]; framewo
   if (built === null) throw new Error('no skeleton');
   return built;
 };
+
+/** A sample skeleton with the stack's pair evidence the wire carries: a share per language on every frame, and an `explore` bucket on every prompt. */
+export const withPairs = (skeleton: SessionSkeleton, shares: LanguageShareEntry[], explore: number | null): SessionSkeleton => ({
+  ...skeleton,
+  transcripts: skeleton.transcripts.map((transcript) => ({
+    ...transcript,
+    frame: { ...transcript.frame, stack: { ...transcript.frame.stack, languageShares: shares } },
+    prompts: transcript.prompts.map((held) => ({ ...held, explore, frame: { ...held.frame, stack: { ...held.frame.stack, languageShares: shares } } })),
+  })),
+});
