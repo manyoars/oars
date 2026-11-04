@@ -20,8 +20,8 @@ const recipe = /```js\r?\n([\s\S]*?)```/.exec(skill)?.[1] ?? '';
 
 const view = {
   services: [
-    { name: 'job', imageRepository: 'r/job', imageDigest: 'sha256:aa', port: 8080, healthPath: '/h', public: false, replicas: 1, cpuMillicores: 250, memoryMib: 256, env: [{ name: 'A', value: 'b' }], command: [], args: [], scheduleCron: '0 * * * *' },
-    { name: 'web', imageRepository: 'r/web', imageDigest: 'sha256:bb', public: true, replicas: 2, cpuMillicores: 500, memoryMib: 512, env: [], command: [], args: [] },
+    { name: 'job', imageRepository: 'r/job', imageDigest: 'sha256:aa', public: false, replicas: 1, cpuMillicores: 250, memoryMib: 256, env: [{ name: 'A', value: 'b' }], command: [], args: [], scheduleCron: '0 * * * *' },
+    { name: 'web', imageRepository: 'r/web', imageDigest: 'sha256:bb', port: 8080, healthPath: '/h', public: true, replicas: 2, cpuMillicores: 500, memoryMib: 512, env: [], command: [], args: [] },
   ],
 };
 
@@ -31,8 +31,15 @@ const noScheduleView = { services: [view.services[1]] };
 
 interface Service {
   name?: unknown;
+  imageRepository?: unknown;
   scheduleCron?: unknown;
-  [field: string]: unknown;
+  port?: unknown;
+  healthPath?: unknown;
+  public?: unknown;
+  replicas?: unknown;
+  cpuMillicores?: unknown;
+  memoryMib?: unknown;
+  env?: unknown;
 }
 
 const FIELDS = ['port', 'healthPath', 'public', 'replicas', 'cpuMillicores', 'memoryMib', 'env'];
@@ -44,7 +51,7 @@ const changesMoreThanSchedule = (services: Service[]): boolean =>
     if (current === undefined || (patched.imageRepository !== undefined && patched.imageRepository !== null)) return true;
     const hadSchedule = 'scheduleCron' in current;
     if (hadSchedule !== (patched.scheduleCron !== undefined && patched.scheduleCron !== null)) return true;
-    return FIELDS.some((field) => JSON.stringify(Reflect.get(current, field)) !== JSON.stringify(patched[field]));
+    return FIELDS.some((field) => JSON.stringify(Reflect.get(current, field)) !== JSON.stringify(Reflect.get(patched, field)));
   });
 
 interface Patch {
@@ -134,9 +141,9 @@ describe('the self-scheduling recipe in the skill', () => {
     expect(patches[0]?.authorization).toBe(`Bearer ${KEY}`);
     const [job, web] = patches[0]?.services ?? [];
     // imageRepository is omitted: a scoped key gets 403 for any non-null value.
-    expect(job).toEqual({ name: 'job', port: 8080, healthPath: '/h', public: false, replicas: 1, cpuMillicores: 250, memoryMib: 256, env: [{ name: 'A', value: 'b' }], scheduleCron: '*/15 * * * *' });
+    expect(job).toEqual({ name: 'job', public: false, replicas: 1, cpuMillicores: 250, memoryMib: 256, env: [{ name: 'A', value: 'b' }], scheduleCron: '*/15 * * * *' });
     // A service with no schedule gets none: adding one is a 403 for a scoped key.
-    expect(web).toEqual({ name: 'web', public: true, replicas: 2, cpuMillicores: 500, memoryMib: 512, env: [] });
+    expect(web).toEqual({ name: 'web', port: 8080, healthPath: '/h', public: true, replicas: 2, cpuMillicores: 500, memoryMib: 512, env: [] });
   });
 
   it('exits 1 before any PATCH when no service has a schedule', async () => {

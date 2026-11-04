@@ -43,7 +43,7 @@ what a person must (signing in, and Stripe's identity and bank steps). Run every
    billing mode. Going live and the payout itself are the human's, in the web app; Stripe pays out on its own schedule,
    typically seven to fourteen days after the first live payment. Do not promise a date.
 
-## Let a per-task agent change its own schedule
+## Let a scheduled agent change its own schedule
 
 Only for a workload registered with a `scheduleCron` (`deploy --manifest <file>` or the web deploy page). Neither starter
 template has a schedule, so nothing the steps above deploy qualifies on its own, and a scoped key cannot add one. Give the
@@ -53,7 +53,8 @@ or reach any other workload.
 1. **Mint the key.** After `deploy`, run `npx @manyoars/oars keys create --name <name> --workload <workloadId> --json`.
    The `secret` field is shown once; the platform keeps no copy. Treat it as you do the SDK key: never print it, log it,
    or commit it. `keys list` shows the prefix and scope, and `npx @manyoars/oars keys revoke <keyId>` ends the key at
-   once. There is no `rotate` here: to replace a key, revoke it and create another.
+   once. There is no `rotate` here: to replace a key, revoke it and create another. A key expires after 90 days unless
+   `--expires-in-days <n>` (at most 365) says otherwise; replace it before then.
 2. **Hand it to the agent.** A hosted workload gets the key from the human: ask them to add a workload secret named
    `OARS_API_KEY` (the `secret` value) and an env var `OARS_WORKLOAD_ID` (the workload id) on the workload's Config tab in
    the Many Oars web app. `--secret-from-env` cannot do it: the key needs the workload id, which exists only after the
@@ -86,7 +87,7 @@ if (!view.services.some((s) => s.scheduleCron)) {
   process.exit(1);
 }
 // The patch resends each service's other fields unchanged, except imageRepository, which a scoped key must omit;
-// only a service that already has a schedule takes the new one.
+// only a service that already has a schedule takes the new one (every service that has a schedule takes this one cron).
 const services = view.services.map((s) => ({
   name: s.name, port: s.port, healthPath: s.healthPath, public: s.public,
   replicas: s.replicas, cpuMillicores: s.cpuMillicores, memoryMib: s.memoryMib, env: s.env,
@@ -106,6 +107,8 @@ What the key can and cannot do, so the agent does not try more:
   workload under `/agents/workloads` is a 404 `WORKLOAD_NOT_FOUND`.
 - Creating the key with more than `AGENT_OPERATE` and `AGENT_READ` for a workload is a 400
   `API_KEY_WORKLOAD_SCOPE_EXCEEDS_CAP`; leave `--authority` off.
+- Creating or revoking a key needs a signed-in person. With `OARS_API_KEY` set, any API key gets 403
+  `HUMAN_SESSION_REQUIRED` (exit 3) and logging in again does not help: unset it and use the `oars login` session.
 
 ## Exit codes to handle
 
@@ -115,9 +118,9 @@ Read the exit code of every command. With `--json` a failure is `{"ok": false, "
 |------|---------|-------------|
 | 0 | success | go to the next step |
 | 2 | usage error | read the message and fix the command; see "Not launched yet" below for the one that matters most |
-| 3 | login expired or denied | run `login` again (step 1) |
+| 3 | login expired or denied | run `login` again (step 1); for `keys create` or `keys revoke` with `HUMAN_SESSION_REQUIRED`, unset `OARS_API_KEY` and use the `oars login` session |
 | 4 | the platform rejected the input | read the detail it printed (`problem.detail` with `--json`), fix the input, rerun |
-| 5 | conflict (key or workload already used) | same `--idempotency-key` if resuming; if the workload already exists, run `status` on it instead of deploying again; for `keys create`, revoke the key and create another without that key |
+| 5 | conflict (key or workload already used) | same `--idempotency-key` if resuming; if the workload already exists, run `status` on it instead of deploying again; for `keys create`, revoke the API key and create another with a new `--idempotency-key` or none |
 | 6 | a person must act first | stop, see "Needs you" below |
 | 7 | rate limited | wait a minute, rerun the same command |
 | 8 | the platform could not be reached | retry once; if it persists, tell the human |
