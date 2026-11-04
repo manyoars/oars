@@ -1140,7 +1140,7 @@ interface LogScan {
   newerCaptures: number;
 }
 
-const scanLog = async (file: string): Promise<LogScan> => {
+export const scanLog = async (file: string): Promise<LogScan> => {
   const latest = new Map<string, number>();
   const cvAt = new Map<string, { rev: number; cv: string }>();
   let superseded = false;
