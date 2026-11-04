@@ -5,7 +5,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { slugOf } from './allow.js';
 import { readHookCalls } from './hook-calls.js';
 import { runHook } from './hooks.js';
-import { deferSession, listPending, PENDING_HOOK_CAP, PENDING_MAX_FAILURES, pendingDir, removePending } from './pending.js';
+import { deferSession, failPending, listPending, PENDING_HOOK_CAP, PENDING_MAX_FAILURES, pendingDir, removePending, type PendingEntry } from './pending.js';
+import type { StepCounts } from './schema.js';
 import { appendStep, formatStepCounters, readSteps, stepCounters, stuckSteps } from './steps.js';
 import { deposit, loadStore, paths, scanLog, type DepositTrace } from './store.js';
 import { cleanup, FIXTURES, NOW, stage, type Staged } from './test-support.js';
@@ -82,6 +83,21 @@ describe('item 1: a Stop hook deposit that meets a held store lock', () => {
     expect(await sessionIds(staged)).toContain('missed');
     expect(pendingNames(staged)).toEqual([]);
   }, 20_000);
+
+  it('counts a drained session’s subagent transcript as a subagent, and not as unchanged, in a whole-store run', async () => {
+    const staged = await deposited();
+    const baseline = await deposit(staged.runtime, { allow: [REPO], redactDomains: [], now: () => NOW });
+    const transcript = finished(staged, 'missed');
+    const subagents = join(staged.projectsRoot, slugOf(REPO), 'missed', 'subagents');
+    mkdirSync(subagents, { recursive: true });
+    copyFileSync(join(FIXTURES, 'proj', 'sidechain.jsonl'), join(subagents, 'agent-x.jsonl'));
+    await deferSession(staged.storeDir, transcript);
+    const result = await deposit(staged.runtime, { allow: [REPO], redactDomains: [], now: () => NOW });
+    expect(result.sessions).toBe(1);
+    expect(result.subagents).toBe(1);
+    expect(result.unchanged).toBe(baseline.unchanged);
+    expect(pendingNames(staged)).toEqual([]);
+  });
 });
 
 describe('item 2: deferring on a held lock', () => {
@@ -363,7 +379,7 @@ describe('fix round 1: pending entries (items 8, 9, and 13)', () => {
   it('counts an entry failures and removes it at PENDING_MAX_FAILURES, counted as dropped, with its own session deposited each time', async () => {
     const staged = await deposited();
     await deferSession(staged.storeDir, broken(staged, 'bad'));
-    const rows: (Record<string, number> | undefined)[] = [];
+    const rows: (StepCounts | undefined)[] = [];
     for (let run = 1; run <= PENDING_MAX_FAILURES; run += 1) {
       const before = (await readSteps(staged.storeDir)).length;
       await quietly(async () => {
@@ -446,5 +462,81 @@ describe('fix round 1: leftover temp files (item 14)', () => {
     expect(pendingNames(staged).sort()).toEqual(['fresh.tmp', 'old.tmp']);
     await deposit(staged.runtime, { allow: [REPO], redactDomains: [], now: () => NOW });
     expect(pendingNames(staged)).toEqual(['fresh.tmp']);
+  });
+});
+
+describe('fix round 2: housekeeping never fails a deposit (item 17)', () => {
+  it('resolves a whole-store deposit when pending holds a folder named like an old temp file, and leaves the folder', async () => {
+    const staged = await deposited();
+    const folder = join(pendingDir(staged.storeDir), 'old.tmp');
+    mkdirSync(folder, { recursive: true });
+    const hourAgo = new Date(Date.now() - 3_600_000);
+    utimesSync(folder, hourAgo, hourAgo);
+    const lines = await quietly(async () => {
+      await deposit(staged.runtime, { allow: [REPO], redactDomains: [], now: () => NOW });
+    });
+    expect(pendingNames(staged)).toEqual(['old.tmp']);
+    expect(lines.filter((line) => line.includes('old.tmp'))).toHaveLength(1);
+  });
+
+  it('guards removePending: a file it cannot remove costs one line and that file, not the rest', async () => {
+    const staged = await deposited();
+    const dir = pendingDir(staged.storeDir);
+    mkdirSync(join(dir, 'refused.json'), { recursive: true });
+    writeFileSync(join(dir, 'settled.json'), '{}');
+    const entry: PendingEntry = { names: ['refused.json', 'settled.json'], transcript: undefined, unreadable: false, failures: 0 };
+    const lines = await quietly(async () => {
+      await removePending(staged.storeDir, [entry]);
+    });
+    expect(pendingNames(staged)).toEqual(['refused.json']);
+    expect(lines.filter((line) => line.includes('refused.json'))).toHaveLength(1);
+  });
+
+  it('guards failPending: a file it cannot rename costs one line, and the entry stays for the next run', async () => {
+    const staged = await deposited();
+    mkdirSync(pendingDir(staged.storeDir), { recursive: true });
+    const entry: PendingEntry = { names: ['vanished.json'], transcript: undefined, unreadable: false, failures: 0 };
+    const lines = await quietly(async () => {
+      expect(await failPending(staged.storeDir, entry)).toBe(1);
+    });
+    expect(lines.filter((line) => line.includes('vanished.json'))).toHaveLength(1);
+  });
+});
+
+describe('fix round 2: an unreadable entry neither goes first nor fills the cap (item 19)', () => {
+  it('lists unreadable entries after the readable ones, and reads past them to fill the limit', async () => {
+    const staged = await deposited();
+    const dir = pendingDir(staged.storeDir);
+    // '0.json' to '4.json' sort ahead of every hash-named entry.
+    for (let index = 0; index < PENDING_HOOK_CAP; index += 1) mkdirSync(join(dir, `${String(index)}.json`), { recursive: true });
+    for (let index = 0; index < PENDING_HOOK_CAP; index += 1) await deferSession(staged.storeDir, finished(staged, `fine${String(index)}`));
+    const listed = await listPending(staged.storeDir, PENDING_HOOK_CAP);
+    expect(listed.map((entry) => entry.unreadable)).toEqual([...Array.from({ length: PENDING_HOOK_CAP }, () => false), ...Array.from({ length: PENDING_HOOK_CAP }, () => true)]);
+  });
+
+  it('has a hook deposit take its readable pending session although unreadable ones sort first, and count the unreadable as kept', async () => {
+    const staged = await deposited();
+    const dir = pendingDir(staged.storeDir);
+    for (let index = 0; index < PENDING_HOOK_CAP; index += 1) mkdirSync(join(dir, `${String(index)}.json`), { recursive: true });
+    await deferSession(staged.storeDir, finished(staged, 'fine'));
+    const before = (await readSteps(staged.storeDir)).length;
+    await quietly(async () => {
+      await runHook('stop', stopInput('own', finished(staged, 'own')), staged.runtime, () => NOW);
+    });
+    expect(await sessionIds(staged)).toContain('fine');
+    expect((await stopRows(staged, before)).at(-1)?.in).toEqual({ transcript: 1, pending: PENDING_HOOK_CAP + 1, pendingKept: PENDING_HOOK_CAP });
+  });
+});
+
+describe('fix round 2: the failure ordering is pinned (item 20)', () => {
+  it('lists the entry with fewer failures first although its name sorts last', async () => {
+    const staged = await deposited();
+    const dir = pendingDir(staged.storeDir);
+    mkdirSync(dir, { recursive: true });
+    const failing = finished(staged, 'failing');
+    const fresh = finished(staged, 'fresh');
+    writeFileSync(join(dir, `${'0'.repeat(32)}.a.f1.json`), JSON.stringify({ transcript: failing }));
+    writeFileSync(join(dir, `${'f'.repeat(32)}.b.json`), JSON.stringify({ transcript: fresh }));
+    expect((await listPending(staged.storeDir, 1)).map((entry) => entry.transcript)).toEqual([fresh]);
   });
 });

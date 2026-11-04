@@ -551,7 +551,7 @@ export interface DeriveTrace {
 export interface DepositTrace {
   /** Records written, by kind: `session` (main), `subagent`, `user-prompt`, `tool`, `error-line`. */
   kinds: StepCounts;
-  /** Pending sessions (t832) this deposit took before its own, as step-row `in` counts: `pending` found, `pendingDropped` (transcript gone, folder no longer allowed, or not an entry), `pendingKept` (failed, left for the next run). */
+  /** Pending sessions (t832) this deposit took before its own, as step-row `in` counts: `pending` found, `pendingDropped` (transcript gone, folder no longer allowed, not an entry, or removed at `PENDING_MAX_FAILURES` failures), `pendingKept` (failed, or an unreadable file; left for the next run). */
   pending?: StepCounts;
   /** Set to the refusal's first line when the Stop hook found the store locked and recorded its session in the pending list instead of depositing: the caller logs a `deferred` row, not an `error` one. */
   deferred?: string;
@@ -1108,7 +1108,7 @@ export type SessionDeposit = 'deposited' | 'unchanged' | 'not-allowed' | 'missin
  */
 export const depositSession = async (runtime: SessionsRuntime, transcript: string, now: () => number, trace?: DepositTrace): Promise<SessionDeposit> => {
   try {
-    // The hook path gives up after 3 s so a SessionEnd behind the nightly deposit cannot hold session exit past its 5 s budget.
+    // The hook path waits 3 s for the lock, well under the harness's 30 s ceiling on the hook (install.ts), so a SessionEnd behind the nightly deposit cannot hold session exit.
     return await withLock(runtime.storeDir, () => depositSessionLocked(runtime, transcript, now, trace), HOOK_LOCK);
   } catch (error) {
     if (!(error instanceof StoreLockedError)) throw error;
@@ -1197,7 +1197,7 @@ const drainPending = async (context: DepositContext, state: State, storeDir: str
       if (into === undefined || into.result === 'missing' || into.result === 'not-allowed') bump(trace, 'pendingDropped');
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      // An entry that keeps failing is not retried for ever: a whole-store walk still reaches any transcript on the allowlist, so dropping it loses nothing.
+      // An entry that keeps failing is not retried forever: a whole-store walk still reaches any transcript on the allowlist, so dropping it loses nothing.
       if (entry.failures + 1 >= PENDING_MAX_FAILURES) {
         drained.settled.push(entry);
         bump(trace, 'pendingDropped');
