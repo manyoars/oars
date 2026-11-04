@@ -3,7 +3,7 @@
 // or the word `private`: the output is built from list members, never from the input text, so a private name cannot be copied through by a
 // parsing mistake. A form the parser cannot read projects to `private`.
 
-import { shellCommands } from './extract.js';
+import { SHELL, shellCommands } from './extract.js';
 import { isPositional, type WordOfCommand } from './identity.js';
 import {
   BUNDLING_PROGRAMS,
@@ -17,6 +17,7 @@ import {
   PUBLIC_SUBCOMMANDS,
 } from './public-vocabulary.js';
 import type { Redactor } from './redact.js';
+import type { ToolObservation } from './schema.js';
 import type { Vocabulary } from './vocab-load.js';
 
 /** One program of a shell call, as `index` carries it. */
@@ -76,6 +77,27 @@ export const projectShell = (vocab: Vocabulary, command: string, redact: Redacto
   const read = shellCommands(command, redact);
   const commands = read.length === 0 ? [PRIVATE_PROGRAM] : read.map(({ program, args }) => projectProgram(vocab, program, args));
   return { commands, programs: commands.slice(0, PIPE_MAX).map(({ program }) => program) };
+};
+
+/** `shellTarget` cuts a subcommand at this many characters (extract.ts), so a stored subcommand this long may be a prefix of a longer private word. */
+const STORED_SUBCOMMAND_CUT = 30;
+
+/**
+ * The shell call of a stored tool record, from what the account store holds (migration, spec Section 2): the program and subcommand from the class A
+ * `target` text, the flags from the record's first step when that step is the same program. A record captured before CAPTURE 9 has no steps, so its
+ * flags are lost (Q5): it projects the program and subcommand alone. A target that cannot be read back, cut at the subcommand limit or masked by
+ * redaction, projects `private`, as does a hashed path target or a record that is not a shell call.
+ */
+export const projectStoredShell = (vocab: Vocabulary, tool: Pick<ToolObservation, 'tool' | 'target' | 'steps'>): ProjectedProgram => {
+  if (!SHELL.has(tool.tool) || tool.target === null || tool.target === '' || tool.target.includes('<')) return PRIVATE_PROGRAM;
+  const [program = '', sub, ...extra] = tool.target.split(' ');
+  if (extra.length > 0 || (sub?.length ?? 0) >= STORED_SUBCOMMAND_CUT) return PRIVATE_PROGRAM;
+  const words: WordOfCommand[] = sub === undefined ? [] : [{ text: sub, quoted: false }];
+  const projected = projectProgram(vocab, program, words);
+  const identity = tool.steps?.[0]?.identity;
+  const stored = identity !== null && identity !== undefined && 'flags' in identity && identity.program === program ? identity.flags : [];
+  const listed = flagsOf(vocab, program);
+  return projected.program === PRIVATE ? projected : { ...projected, flags: [...new Set(stored.filter((name) => listed.has(name)))].sort() };
 };
 
 const MCP_TOOL = /^mcp__(.+?)__(.+)$/;
