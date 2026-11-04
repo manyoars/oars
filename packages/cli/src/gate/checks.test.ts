@@ -60,6 +60,13 @@ describe('checkCall on a shell command', () => {
     ['npx -p one -p two run-it', ['npm-package fetch-and-run one unstated', 'npm-package fetch-and-run two unstated']],
     ['npm exec -- prettier .', ['npm-package fetch-and-run prettier unstated']],
     ['npm install --globalconfig sub/.npmrc x', ['npm-package install x unstated']],
+    // A value flag owns its word, so a relative path after it is no `org/repo`.
+    ['npm install --cafile certs/ca.pem plain-one', ['npm-package install plain-one unstated']],
+    ['pnpm add --store-dir sub/store plain-two', ['npm-package install plain-two unstated']],
+    ['pnpm add --modules-dir sub/mods x', ['npm-package install x unstated']],
+    ['yarn add --cache-folder sub/cache x', ['npm-package install x unstated']],
+    ['yarn add --modules-folder sub/mods x', ['npm-package install x unstated']],
+    ['npm install --nodedir sub/node x', ['npm-package install x unstated']],
     ['pnpm dlx create-next-app@latest', ['npm-package fetch-and-run create-next-app tag']],
     ['yarn dlx sort-package-json', ['npm-package fetch-and-run sort-package-json unstated']],
     ['bunx cowsay', ['npm-package fetch-and-run cowsay unstated']],
@@ -77,6 +84,10 @@ describe('checkCall on a shell command', () => {
     ['npm install git+https://github.com/org/repo.git#v1', ['npm-package url-install https://github.com/org/repo.git url']],
     ['npm install github:org/repo', ['npm-package url-install github:org/repo url']],
     ['npm install org/repo', ['npm-package url-install org/repo url']],
+    // Forms npm's own docs give: scp after `ssh://`, an `@` inside a path, and pip's `name @ url` with spaces.
+    ['npm install git+ssh://git@github.com:npm/cli.git#v1.0.27', ['npm-package url-install ssh://<email>:npm/cli.git url']],
+    ['npm install https://registry.npmjs.org/@scope/x/-/x-1.0.0.tgz', ['npm-package url-install https://registry.npmjs.org/@scope/x/-/x-1.0.0.tgz url']],
+    ['pip install "foo @ https://host.example/x.whl"', ['python-package url-install https://host.example/x.whl url']],
     ['pip install git+https://github.com/org/repo@main', ['python-package url-install https://github.com/org/repo url']],
     ['pip install https://example.test/a-1.0.tar.gz', ['python-package url-install https://example.test/a-1.0.tar.gz url']],
     ['pip install -e git+https://github.com/org/repo#egg=repo', ['python-package url-install https://github.com/org/repo url']],
@@ -177,6 +188,21 @@ describe('checkCall on a shell command', () => {
     ['uv run --with "foo @ file:///secret/home/x" s.py', ['local-path']],
     ['npm exec foo@file:///secret/home/x', ['local-path']],
     ['npm create file:///secret/home/x', ['local-path']],
+    // A creator is a name: a path or an `org/repo` is no creator, and none is prefixed into a name.
+    ['npm create /secret', ['local-path']],
+    ['npm create ../secret', ['local-path']],
+    ['npm init /secret', ['local-path']],
+    ['npm create ./secret', ['local-path']],
+    ['bun create ./secret', ['local-path']],
+    ['npm create secret/dir', ['unreadable-name']],
+    // A path-shaped word that fits `org/repo` or `host:path` by its slashes and colon alone.
+    ['npm install .secret/pkg', ['local-path']],
+    ['npx .secret/tool', ['local-path']],
+    ['npm install sub/..', ['local-path']],
+    ['npm install C:secret/x', ['local-path']],
+    ['npm install foo@C:secret/x', ['local-path']],
+    ['npx skills add .claude/skills/private-one', ['local-path']],
+    ['npx skills add owner/../../secret', ['local-path']],
     ['npx skills add git+file:///secret/home/x', ['local-path']],
     ['npx skills add file:///secret/home/x', ['local-path']],
     // The redactor reads an alias's `name@1.2.3` as an email, as it does in capture: a mask is not a name.
@@ -410,6 +436,21 @@ describe('admitName, the one point every recorded name passes', () => {
     ['npm-package', 'url-install', 'https://host.example/a b', unread('local-path')],
     ['npm-package', 'url-install', 'a b', unread('unreadable-name')],
     ['skill', 'install', 'one two', unread('unreadable-name')],
+    // A dot segment or a dotted owner is a folder on this machine, not an `owner/repo` or a host.
+    ['npm-package', 'url-install', '.secret/pkg', unread('local-path')],
+    ['npm-package', 'url-fetch-and-run', '.secret/tool', unread('local-path')],
+    ['skill', 'install', '.claude/skills/private-one', unread('local-path')],
+    ['skill', 'install', 'owner/../../secret', unread('local-path')],
+    ['npm-package', 'url-install', 'sub/..', unread('local-path')],
+    ['npm-package', 'url-install', 'C:secret/x', unread('local-path')],
+    ['npm-package', 'url-install', 'owner/.', unread('local-path')],
+    ['npm-package', 'url-install', 'https://host.example/a/../b', unread('local-path')],
+    ['npm-package', 'url-install', 'host.example:../x', unread('local-path')],
+    // The widened URL grammar keeps its edges: a scp spelling after `ssh://`, an `@` in a path, and a host of its own.
+    ['npm-package', 'url-install', 'ssh://<email>:npm/cli.git', named('ssh://<email>:npm/cli.git')],
+    ['npm-package', 'url-install', 'https://registry.npmjs.org/@scope/x/-/x-1.0.0.tgz', named('https://registry.npmjs.org/@scope/x/-/x-1.0.0.tgz')],
+    ['npm-package', 'url-install', 'https://host.example:8080/x.tgz', named('https://host.example:8080/x.tgz')],
+    ['npm-package', 'url-install', 'https://host.example:secret/x', unread('local-path')],
     // A mask and a variable keep the shapes they have.
     ['npm-package', 'install', '<secret>', unread('masked-name')],
     ['mcp-server', 'mcp-call', '<secret>', unread('masked-name')],
@@ -427,6 +468,22 @@ describe('admitName, the one point every recorded name passes', () => {
     expect(bash('npm install foo@../secret/dir').crossings).toEqual([]);
     expect(bash('npm install foo@../secret/dir').unread).toEqual(['local-path']);
     expect(bash('npm install foo@^1.2.0 bar@next').crossings.map((c) => c.version)).toEqual(['^1.2.0', 'next']);
+  });
+
+  it.each<[string, string | null]>([
+    ['npm install "https://host.example/x.tgz#/secret/home/x"', null],
+    ['pip install "git+https://host.example/org/repo#subdirectory=secret/home&egg=x"', null],
+    ['npm install "https://host.example/x.tgz#token=secret"', null],
+    ['npm install "https://host.example/x.tgz#v1?token=secret"', null],
+    ['npm install "https://host.example/x.tgz#sha256=abc"', null],
+    ['npm install "https://host.example/x.tgz#semver:^1.2.0"', 'semver:^1.2.0'],
+    ['npm install git+https://github.com/org/repo.git#v1', 'v1'],
+    ['pip install git+https://github.com/org/repo@main', 'main'],
+    ['pip install git+https://github.com/org/repo@feature/x', null],
+  ])('keeps a URL ref only when it is a plain ref, and the crossing either way: %s', (command, version) => {
+    const { crossings } = bash(command);
+    expect(crossings).toHaveLength(1);
+    expect(crossings[0]?.version).toBe(version);
   });
 
   it('reaches every crossing and removal a call yields', () => {
