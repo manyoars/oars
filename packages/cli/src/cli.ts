@@ -17,6 +17,8 @@ import type { BooksBy, RecallQuery } from './sessions/query.js';
 import { closedQueryOf, formsRefusal, RECALL_FAMILIES } from './sessions/recall-reads.js';
 import { FAMILIES } from './sessions/read.js';
 import { sessionsBooks, sessionsContext, sessionsDeposit, sessionsGoldArms, sessionsGoldSample, sessionsGoldScore, sessionsHookInstall, sessionsHookStatus, sessionsHookUninstall, sessionsMcp, sessionsLineage, sessionsMeasure, sessionsRead, sessionsRecall, sessionsRecallCounts, sessionsVerify, type SessionsDeps } from './sessions/command.js';
+import { gateReplay, gateReport } from './gate/command.js';
+import { managerReader } from './gate/registry.js';
 import { exclusionPaths, sessionsExclusions } from './sessions/exclusion.js';
 import { poolDeposit, poolLogin, poolPull } from './sessions/pool-command.js';
 import type { InstallRuntime, Scope } from './sessions/install.js';
@@ -334,7 +336,7 @@ const buildProgram = (deps: RunDeps, argv: string[]): Command => {
   sessions
     .command('deposit')
     .description('read session logs from the folders you name into the local observation log; idempotent. Subagent transcripts under each session (<project>/<session>/subagents/) are deposited with their parent, and each raw transcript is hard-linked into the oars archive beside the store')
-    .option('--allow <folder>', 'a project folder to read: its path, or its name under ~/.claude/projects (repeatable); `cursor` and `codex` name the Cursor and Codex stores. A trailing slash names everything under a folder; * and ? are wildcards', collect)
+    .option('--allow <folder>', 'a project folder to read: its path, or its name under ~/.claude/projects (repeatable); `cursor`, `codex`, and `copilot` name the Cursor, Codex, and Copilot CLI stores. A trailing slash names everything under a folder; * and ? are wildcards', collect)
     .option('--allow-file <list>', 'a file of --allow entries, one per line (# starts a comment); repeatable, combines with --allow', collect)
     .option('--redact-domain <domain>', 'an organization domain to mask in everything written (repeatable)', collect)
     .action(async (_options: OptionValues, command: Command) => {
@@ -491,11 +493,12 @@ const buildProgram = (deps: RunDeps, argv: string[]): Command => {
     .option('--out-dir <folder>', 'where to write (default <claude config>/session-commons/review)')
     .action(async (_options: OptionValues, command: Command) => {
       const options: OptionValues = command.optsWithGlobals();
+      if (deps.sessions === undefined) throw new CliError('The session store is not configured in this run.', ExitCode.UNEXPECTED, 'unexpected');
       emit(
         deps,
         flag(options, 'json'),
         await sessionsGoldSample(sessionDeps(deps), {
-          termsFile: exclusionPaths(deps.sessions?.projectsRoot ?? '', deps.env).terms,
+          termsFile: exclusionPaths(deps.sessions.projectsRoot, deps.env).terms,
           size: count(options, 'size') ?? 200,
           batch: count(options, 'batch') ?? 50,
           seed: text(options, 'seed'),
@@ -577,6 +580,25 @@ const buildProgram = (deps: RunDeps, argv: string[]): Command => {
       emit(deps, flag(options, 'json'), await sessionsHookStatus(sessionDeps(deps), { file: text(options, 'file') }));
     });
 
+  const gate = program.command('gate').description('replay the install, fetch-and-run, MCP, and skill picks your agents made, from logs already on disk: local and read-only, and it records what happened without judging it');
+
+  gate
+    .command('replay')
+    .description('find the crossings in your session logs and write them to crossings.jsonl in the sessions store; reads nothing outside the folders you name, and no network unless --registry-state')
+    .option('--allow <folder>', 'a project folder to read, as for `oars sessions deposit` (repeatable); default: the allowlist a deposit saved', collect)
+    .option('--registry-state', 'ask the package manager what the registry holds for each package named (npm view, pip index versions); off by default, and the manager keeps its own cache')
+    .action(async (_options: OptionValues, command: Command) => {
+      const options: OptionValues = command.optsWithGlobals();
+      emit(deps, flag(options, 'json'), await gateReplay(sessionDeps(deps), { allow: list(options, 'allow'), ...(flag(options, 'registryState') ? { registry: managerReader() } : {}) }));
+    });
+
+  gate
+    .command('report')
+    .description('count the crossings the last replay found, and say what replay cannot see')
+    .action(async (_options: OptionValues, command: Command) => {
+      emit(deps, flag(command.optsWithGlobals(), 'json'), await gateReport(sessionDeps(deps)));
+    });
+
   const pool = program.command('pool').description('sign in to a pool server, deposit closed-vocabulary session skeletons, and pull signed reads; local capture, recall, and reads need none of it');
   const serverOption = '--server <url>';
   const serverHelp = 'the pool server, https or plain http to localhost (or OARS_POOL_URL; there is no default)';
@@ -603,12 +625,12 @@ const buildProgram = (deps: RunDeps, argv: string[]): Command => {
 
   pool
     .command('pull')
-    .description('fetch one signed slice of the pool, verify it against the key pinned at login, and keep it locally')
-    .option('--stack <name>', 'a language or framework, or all', 'all')
+    .description('fetch the signed bundle for one harness version, verify it against the key pinned at login, and keep it locally')
+    .requiredOption('--harness-version <version>', 'the public harness version whose bundle to fetch')
     .option(serverOption, serverHelp)
     .action(async (_options: OptionValues, command: Command) => {
       const options: OptionValues = command.optsWithGlobals();
-      emit(deps, flag(options, 'json'), await poolPull(deps, { server: text(options, 'server'), stack: text(options, 'stack') ?? 'all' }));
+      emit(deps, flag(options, 'json'), await poolPull(deps, { server: text(options, 'server'), harnessVersion: text(options, 'harnessVersion') ?? '' }));
     });
 
   return program;

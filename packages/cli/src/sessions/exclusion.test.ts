@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
+import { execFileSync } from 'node:child_process';
 import { mkdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { run } from '../cli.js';
@@ -20,6 +21,7 @@ const DIRTY = JSON.stringify({ type: 'user', message: { content: `working at ${T
 
 // The harness names a session folder with a UUID; a folder with another name is not a session.
 const S_D = '33333333-3333-4333-8333-333333333333';
+const S_E = '44444444-4444-4444-8444-444444444444';
 
 const write = (path: string, lines: readonly string[]): void => {
   mkdirSync(join(path, '..'), { recursive: true });
@@ -61,6 +63,12 @@ describe('checkSession (A38)', () => {
     expect(verdict).toEqual({ excluded: true, reason: 'term', hits: [{ key: 's1.jsonl', main: true, source: 'projects' }] });
   });
 
+  it('never lets an extra term stand in for a missing term file', async () => {
+    const t = setup(null);
+    write(t.main('p', 's1x'), [CLEAN]);
+    expect((await checkSession(t.staged.runtime, t.termsFile, 'p', 's1x', [TERM])).reason).toBe('no-terms');
+  });
+
   it('excludes a session whose subagent transcript has the term, though its main is clean', async () => {
     const t = setup();
     write(t.main('p', 's2'), [CLEAN]);
@@ -100,7 +108,7 @@ describe('checkSession (A38)', () => {
     expect(verdict.hits).toEqual([{ key: 's7.jsonl', main: true, source: 'raw' }]);
   });
 
-  it('treats a directory in place of the main file as no raw', async () => {
+  it('reads a directory in place of the main file as unreadable', async () => {
     const t = setup();
     mkdirSync(t.main('p', 's8'), { recursive: true });
     write(join(t.main('p', 's8'), '..', 's8', 'subagents', 'agent-x.jsonl'), [CLEAN]);
@@ -124,8 +132,7 @@ describe('checkSession (A38)', () => {
     write(join(t.staged.projectsRoot, 'p', 's8d'), [DIRTY]);
     expect((await checkSession(t.staged.runtime, t.termsFile, 'p', 's8d')).reason).toBe('unreadable');
     rmSync(t.staged.projectsRoot, { recursive: true, force: true });
-    writeFileSync(t.staged.projectsRoot, `${DIRTY}
-`);
+    writeFileSync(t.staged.projectsRoot, `${DIRTY}\n`);
     const failure = await scanStore(t.staged.runtime, t.termsFile).then(
       () => undefined,
       (error: unknown) => error,
@@ -152,6 +159,29 @@ describe('checkSession (A38)', () => {
     const verdict = await checkSession(t.staged.runtime, t.termsFile, 'p', 's8f');
     expect(verdict.reason).toBe('term');
     expect(verdict.hits).toHaveLength(1);
+  });
+
+  it('reads a link back into a folder already walked as unreadable, though every transcript is clean', async (ctx) => {
+    const t = setup();
+    write(t.main('p', 's8h'), [CLEAN]);
+    write(t.agent('p', 's8h', 'z'), [CLEAN]);
+    const subagents = join(t.staged.projectsRoot, 'p', 's8h', 'subagents');
+    if (!makeLink(subagents, join(subagents, 'loop'), 'dir')) return ctx.skip();
+    expect((await checkSession(t.staged.runtime, t.termsFile, 'p', 's8h')).reason).toBe('unreadable');
+  });
+
+  it.for(['directory', 'fifo'] as const)('reads a plain %s named like a transcript under subagents as unreadable, as a link to one reads', async (shape, ctx) => {
+    // Git Bash's mkfifo makes nothing on Windows: a FIFO is the shape under test only where the OS has one.
+    if (shape === 'fifo' && process.platform === 'win32') return ctx.skip();
+    const t = setup();
+    write(t.main('p', 's8i'), [CLEAN]);
+    const entry = t.agent('p', 's8i', 'agent-x');
+    if (shape === 'directory') write(join(entry, 'notes.txt'), [DIRTY]);
+    else {
+      mkdirSync(join(entry, '..'), { recursive: true });
+      execFileSync('mkfifo', [entry]);
+    }
+    expect((await checkSession(t.staged.runtime, t.termsFile, 'p', 's8i')).reason).toBe('unreadable');
   });
 
   it('finishes a walk over self-links, counting one transcript once', async (ctx) => {
@@ -380,6 +410,20 @@ describe('a link at any level that leads nowhere or to the wrong kind of entry i
     const { counts } = await scanStore(t.staged.runtime, t.termsFile);
     expect(counts).toMatchObject({ sessions: 2, notSessions: 0, reasons: { unreadable: 1 } });
     expect((await checkSession(t.staged.runtime, t.termsFile, 'p', S_D)).reason).toBe('unreadable');
+  });
+});
+
+describe('a plain wrong-kind entry named like a session is listed as the gate reads it', () => {
+  it('lists a directory named <session>.jsonl and a plain file named <session> as unreadable', async () => {
+    const t = setup();
+    write(t.main('p', 's20'), [CLEAN]);
+    write(join(t.staged.projectsRoot, 'p', `${S_D}.jsonl`, 'notes.txt'), [DIRTY]);
+    write(join(t.staged.projectsRoot, 'p', S_E), [DIRTY]);
+    const { counts, excluded } = await scanStore(t.staged.runtime, t.termsFile);
+    expect(counts).toMatchObject({ sessions: 3, notSessions: 0, reasons: { unreadable: 2 } });
+    expect(excluded.map((entry) => entry.session).sort()).toEqual([S_D, S_E]);
+    expect((await checkSession(t.staged.runtime, t.termsFile, 'p', S_D)).reason).toBe('unreadable');
+    expect((await checkSession(t.staged.runtime, t.termsFile, 'p', S_E)).reason).toBe('unreadable');
   });
 });
 

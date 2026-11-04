@@ -136,7 +136,7 @@ describe('SessionEnd deposit hook', () => {
     expect(failed.map((call) => [call.event, call.hit])).toEqual([['stop', false]]);
     expect(failed[0]?.error).toContain('store is locked');
     expect(failed[0]?.error).not.toContain('\n');
-  }, 15_000);
+  }, 20_000); // waits out the 3 s hook lock wait twice by design: 7.0 s measured alone, so about 3x
 
   it('does not read a folder no --allow named, a missing transcript, or an event without a transcript', async () => {
     const staged = await deposited();

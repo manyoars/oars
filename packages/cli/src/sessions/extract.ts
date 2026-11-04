@@ -1,6 +1,6 @@
 // Capture: turns one transcript's text into its capture records and a skeleton in a single pass (derivation is `derive.ts`). The
 // parsing rules are ported from the reference scripts in docs/research/2026-11-01-session-commons/ (parse_sessions.py, error_signatures.py, prompt_graphs.py,
-// cost_per_class.py) so the counts agree: same normalization, same prompt boundaries, same class rule. Where two scripts
+// cost_per_class.py) so the counts agree: same normalization and class rule (prompt boundaries differ from the scripts: see `promptOpening`). Where two scripts
 // read a thing differently the comment says which rule is used.
 import { createHash } from 'node:crypto';
 import { posix } from 'node:path';
@@ -10,6 +10,7 @@ import type { RepoSize } from './public-vocabulary.js';
 import { linkSteps } from './graph.js';
 import { callIdentity, shellIdentity, UNREAD_SHELL, type WordOfCommand } from './identity.js';
 import type { Redactor } from './redact.js';
+import { createShape, INTERRUPT_MARKER } from './session-shape.js';
 import {
   CAPTURE_VERSION,
   ERROR_LINE_CHARS,
@@ -37,11 +38,11 @@ import {
   type UserPromptObservation,
 } from './schema.js';
 
-interface Obj {
+export interface Obj {
   [key: string]: unknown;
 }
 
-const isObj = (value: unknown): value is Obj => typeof value === 'object' && value !== null && !Array.isArray(value);
+export const isObj = (value: unknown): value is Obj => typeof value === 'object' && value !== null && !Array.isArray(value);
 const str = (value: unknown): string | undefined => (typeof value === 'string' ? value : undefined);
 const num = (value: unknown): number | undefined => (typeof value === 'number' && Number.isFinite(value) ? value : undefined);
 
@@ -111,7 +112,7 @@ export const errorKey = (text: string, redact: Redactor): string => redact(norma
 /** The signature of an error: `<tool> | <errorKey>`. */
 export const signatureOf = (tool: string, text: string, redact: Redactor): string => `${tool} | ${errorKey(text, redact)}`;
 
-const resultText = (block: Obj): string => {
+export const resultText = (block: Obj): string => {
   const content = block.content;
   if (typeof content === 'string') return content;
   if (Array.isArray(content)) {
@@ -123,7 +124,7 @@ const resultText = (block: Obj): string => {
   return '';
 };
 
-const isErrorResult = (block: Obj, text: string): boolean => {
+export const isErrorResult = (block: Obj, text: string): boolean => {
   if (truthy(block.is_error)) return true;
   const exit = EXIT_RE.exec(text.trim());
   return exit !== null && exit[1] !== '0';
@@ -340,6 +341,12 @@ interface PromptFrameParts {
 
 const hasToolResult = (content: unknown): boolean => Array.isArray(content) && content.some((block: unknown) => isObj(block) && block.type === 'tool_result');
 
+const hasImage = (content: unknown): boolean => Array.isArray(content) && content.some((block: unknown) => isObj(block) && block.type === 'image');
+
+// The tags a local command (a slash command the harness ran itself) leaves as user lines. A model's answer to a command makes it a prompt, and that case never reaches
+// the run: a tag listed here that is still on a line there was not answered.
+const LOCAL_COMMAND_TAGS: ReadonlySet<string> = new Set(['command-name', 'command-message', 'local-command-stdout', 'local-command-stderr', 'local-command-caveat']);
+
 const firstTextBlock = (content: unknown): string => {
   if (typeof content === 'string') return content;
   if (!Array.isArray(content)) return '';
@@ -350,7 +357,7 @@ const firstTextBlock = (content: unknown): string => {
 // What the harness writes as a user line and the operator did not ask. t768 checked this against a full re-capture: the only leading tag left on a `typed` row is
 // the paste wrapper. `local-command-stderr` is here as the sibling of `local-command-stdout`. The set is closed on purpose: anything else with a leading `<` was
 // typed, or pasted. A `teammate-message` is another agent speaking to a teammate, so a teammate's turns after one stay in its prompt before, or outside any.
-const INJECTED_TAGS: ReadonlySet<string> = new Set([
+export const INJECTED_TAGS: ReadonlySet<string> = new Set([
   'bash-input',
   'bash-stderr',
   'bash-stdout',
@@ -362,7 +369,7 @@ const INJECTED_TAGS: ReadonlySet<string> = new Set([
   'task-notification',
   'teammate-message',
 ]);
-const LEADING_TAG = /^<([a-zA-Z][\w:-]*)[\s>/]/;
+export const LEADING_TAG = /^<([a-zA-Z][\w:-]*)[\s>/]/;
 
 /** What the operator asked, with the wrapper removed: the command's name and its arguments, as they typed them. Either element can come first. */
 const commandAsked = (text: string): string => {
@@ -404,7 +411,9 @@ export interface PromptOpening {
  * prompts by this, so a gold entry's index is a capture index. `lines` is the whole transcript and `position` this line's place in it.
  */
 export const promptOpening = (text: string, lines: readonly string[], position: number, subagent = false): PromptOpening | undefined => {
-  const tag = LEADING_TAG.exec(text.trimStart())?.[1];
+  const leading = LEADING_TAG.exec(text.trimStart())?.[1];
+  // A tag name with no closing tag is the operator's own words ("<system-reminder> keeps showing, why?"), not the harness's wrapper.
+  const tag = leading !== undefined && text.includes(`</${leading}>`) ? leading : undefined;
   if (tag === 'command-name' || tag === 'command-message') {
     const request = commandAsked(text);
     return request !== '' && answeredByModel(lines, position + 1, subagent) ? { opened: 'command', request } : undefined;
@@ -520,17 +529,19 @@ const RUN_WORDS_MAX = 12;
 const RUN_WORD_CHARS = 30;
 
 type ShellWord = WordOfCommand;
-type ShellOp = '&&' | '||' | '|' | ';' | '&' | '\n' | 'group';
+type ShellOp = '&&' | '||' | '|' | ';' | '&' | '\n' | 'open' | 'close';
 type ShellToken = ShellWord | ShellOp;
 type ShellLink = 'and' | 'pipe' | 'break' | 'end';
 
 /** One simple command, after its prelude. */
-interface ShellCommand {
+export interface ShellCommand {
   program: string;
   args: ShellWord[];
   read: boolean;
   /** How the next command joins this one. */
   link: ShellLink;
+  /** A pipe follows the group this command sits in, so its status is hidden whatever its own link says. */
+  hidden: boolean;
 }
 
 /** One command of a shell call, as its step reads. `run` compares a retry and is not kept. */
@@ -556,7 +567,37 @@ export interface ShellRead {
 }
 
 const HEREDOC = /(?<!<)<<-?\s*(?:'([^']+)'|"([^"]+)"|\\?([A-Za-z_][\w.-]*))/g;
-const HERE_STRING = /@(['"])\s*$/;
+// The `@` opens a here-string only at the start of a line or after whitespace, `=`, or `(`: `echo "me@"` ends in `@"` and opens nothing.
+const HERE_STRING = /(?<=^|[\s=(])@(['"])\s*$/;
+
+/**
+ * Whether each character of a line sits in literal quoted text, where a `<<` opens no heredoc: `git commit -m "x << y"`. A `$(` inside
+ * double quotes is code again, so `"$(cat <<'EOF'` still opens one. A line is read alone, so a quote left open on an earlier line is not seen.
+ */
+const literalMask = (line: string): boolean[] => {
+  const literal: boolean[] = [];
+  const stack: string[] = [];
+  for (let at = 0; at < line.length; at += 1) {
+    const char = line.charAt(at);
+    const top = stack.at(-1);
+    literal[at] = top === "'" || top === '"';
+    if (top === "'") {
+      if (char === "'") stack.pop();
+    } else if (char === '\\') {
+      literal[at + 1] = top === '"';
+      at += 1;
+    } else if (char === '"') {
+      if (top === '"') stack.pop();
+      else stack.push('"');
+    } else if (char === "'" && top !== '"') stack.push("'");
+    else if (char === '$' && line.charAt(at + 1) === '(') {
+      stack.push('(');
+      literal[at + 1] = false;
+      at += 1;
+    } else if (char === ')' && top === '(') stack.pop();
+  }
+  return literal;
+};
 
 /** A heredoc or here-string body is data, and it may hold a whole script, so it goes before anything reads the command. */
 const dropBodies = (command: string): string => {
@@ -583,7 +624,8 @@ const dropBodies = (command: string): string => {
     }
     kept.push(line);
     // Two heredocs on a line close in order, so reading to the last tag drops both bodies.
-    const last = [...line.matchAll(HEREDOC)].at(-1);
+    const literal = literalMask(line);
+    const last = [...line.matchAll(HEREDOC)].filter((match) => literal[match.index] !== true).at(-1);
     if (last !== undefined) tag = last[1] ?? last[2] ?? last[3] ?? null;
   }
   return kept.join('\n');
@@ -608,7 +650,7 @@ const tokenize = (text: string): ShellToken[] => {
   let redirected = false;
   const flush = (): void => {
     if (started && redirected) redirected = false;
-    else if (started && !quoted && (word === '{' || word === '}')) tokens.push('group');
+    else if (started && !quoted && (word === '{' || word === '}')) tokens.push(word === '{' ? 'open' : 'close');
     else if (started) tokens.push({ text: word, quoted });
     word = '';
     quoted = false;
@@ -694,7 +736,7 @@ const tokenize = (text: string): ShellToken[] => {
       op('&');
       at += 1;
     } else if (char === '(' || char === ')') {
-      op('group');
+      op(char === '(' ? 'open' : 'close');
       at += 1;
     } else {
       word += char;
@@ -710,6 +752,21 @@ const tokenize = (text: string): ShellToken[] => {
 const BLOCK_WORDS = new Set(['if', 'then', 'elif', 'else', 'elseif', 'do', 'while', 'until', 'fi', 'done', 'esac', 'try', 'finally', '!']);
 const WRAPPERS = new Set(['sudo', 'env', '.', 'command', 'exec', 'nohup', 'nice', 'time', 'call']);
 const ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*=/;
+/** The flags of a wrapper that own the next word: `sudo -u root npm i`, `env -u X`, `nice -n 5`, `timeout -k 5 60`. */
+const WRAPPER_VALUE_FLAGS: ReadonlyMap<string, readonly string[]> = new Map([
+  ['sudo', ['-u', '-g']],
+  ['env', ['-u']],
+  ['nice', ['-n']],
+  ['timeout', ['-k', '-s']],
+]);
+const POWERSHELL_VARIABLE = /^\$[A-Za-z_]\w*$/;
+const COMMAND_START = /^[A-Za-z_.\\/~]/;
+
+/** A PowerShell `$name = <command>` at `at`: the variable and the `=` hold no program, and the command after them is the real one. A quoted or numeric value is no command. */
+const assignsCommand = (words: readonly ShellWord[], at: number): boolean => {
+  const [name, equals, value] = [words[at], words[at + 1], words[at + 2]];
+  return name !== undefined && !name.quoted && POWERSHELL_VARIABLE.test(name.text) && equals?.text === '=' && !equals.quoted && value !== undefined && !value.quoted && COMMAND_START.test(value.text);
+};
 
 /** The words from the command's real program on. */
 const afterPrelude = (words: readonly ShellWord[]): readonly ShellWord[] => {
@@ -719,10 +776,12 @@ const afterPrelude = (words: readonly ShellWord[]): readonly ShellWord[] => {
     if (word === undefined) return [];
     if (word.quoted) return words.slice(at);
     if (BLOCK_WORDS.has(word.text) || ASSIGNMENT.test(word.text)) at += 1;
+    else if (assignsCommand(words, at)) at += 2;
     else if (WRAPPERS.has(word.text) || word.text === 'timeout') {
       const isTimeout = word.text === 'timeout';
+      const owning = WRAPPER_VALUE_FLAGS.get(word.text) ?? [];
       at += 1;
-      while (words[at]?.text.startsWith('-') === true) at += 1;
+      while (words[at]?.text.startsWith('-') === true) at += owning.includes(words[at]?.text ?? '') ? 2 : 1;
       if (isTimeout && /^\d+(?:\.\d+)?[smhd]?$/.test(words[at]?.text ?? '')) at += 1;
     } else return words.slice(at);
   }
@@ -741,6 +800,10 @@ const programOf = (word: ShellWord): string | null => {
 const SHELLS = new Set(['bash', 'sh', 'zsh', 'dash', 'pwsh', 'powershell', 'cmd']);
 const COMMAND_FLAG = /^(?:-[a-z]*c|-command|\/c)$/i;
 
+/** PowerShell takes any prefix of `-Command` (`-c`, `-com`), so a flag that merely ends in `c`, like `-Exec`, is not the command flag; the other shells end theirs in `c`. */
+const isCommandFlag = (program: string, text: string): boolean =>
+  program === 'pwsh' || program === 'powershell' ? /^[-/]/.test(text) && text.length >= 2 && '-command'.startsWith(`-${text.slice(1).toLowerCase()}`) : COMMAND_FLAG.test(text);
+
 /** The shells that run every word after the flag as the command. `bash -c npm test` runs `npm` with `test` as `$0`, so bash and its kin take one word. */
 const JOINING_SHELLS = new Set(['pwsh', 'powershell', 'cmd']);
 
@@ -750,11 +813,14 @@ const JOINING_SHELLS = new Set(['pwsh', 'powershell', 'cmd']);
  */
 const shellArgument = (program: string, args: readonly ShellWord[]): readonly ShellToken[] | null => {
   if (!SHELLS.has(program)) return null;
-  const flag = args.findIndex((word) => !word.quoted && COMMAND_FLAG.test(word.text));
+  const flag = args.findIndex((word) => !word.quoted && isCommandFlag(program, word.text));
   const first = flag < 0 ? undefined : args[flag + 1];
   if (first === undefined) return null;
   return JOINING_SHELLS.has(program) && !first.quoted ? args.slice(flag + 1) : tokenize(first.text);
 };
+
+/** How many shells deep a command is read. Real commands nest two or three; the cap keeps a torn or hostile one from exhausting the stack. */
+const SHELL_DEPTH_MAX = 8;
 
 const linkOf = (ops: readonly ShellOp[]): ShellLink => {
   if (ops.some((op) => op === ';' || op === '&' || op === '||' || op === '\n')) return 'break';
@@ -762,10 +828,14 @@ const linkOf = (ops: readonly ShellOp[]): ShellLink => {
 };
 
 /** Every simple command in order, with whether the call's status reports it. A shell's argument takes the place of the shell, under the shell's own read. */
-const readCommands = (tokens: readonly ShellToken[]): ShellCommand[] => {
+const readCommands = (tokens: readonly ShellToken[], depth = 0): ShellCommand[] => {
   const commands: ShellCommand[] = [];
   let pending: ShellOp[] = [];
   let words: ShellWord[] = [];
+  // The index of the first command of each group still open.
+  const opened: number[] = [];
+  // Where an `open` in `pending` follows a command's own words (`pytest $(a)`), the group's first command is that command, not the next one.
+  const owned = new Map<number, number>();
   const close = (): void => {
     const real = afterPrelude(words);
     words = [];
@@ -774,26 +844,40 @@ const readCommands = (tokens: readonly ShellToken[]): ShellCommand[] => {
     if (program === null) return;
     const previous = commands.at(-1);
     if (previous !== undefined) previous.link = linkOf(pending);
+    // The tokens say which way each group goes, so they are walked in order: an open pushes, a close pops, and a pipe after that close hides the group.
+    // A group that holds no program (`{ echo $f }` after `if ($y)`) therefore pops its own open, never an outer one.
+    pending.forEach((op, at) => {
+      if (op === 'open') opened.push(owned.get(at) ?? commands.length);
+      else if (op === 'close') {
+        const start = opened.pop();
+        if (start !== undefined && pending.includes('|', at + 1)) for (const held of commands.slice(start)) held.hidden = true;
+      }
+    });
+    owned.clear();
     pending = [];
-    commands.push({ program, args, read: true, link: 'end' });
+    commands.push({ program, args, read: true, link: 'end', hidden: false });
   };
   for (const token of tokens) {
     if (typeof token === 'string') {
+      const behindWords = token === 'open' && words.length > 0;
+      const before = commands.length;
       close();
+      if (behindWords && commands.length > before) owned.set(pending.length, before);
       pending.push(token);
     } else words.push(token);
   }
   close();
-  // Walking back, a later `;`, `&`, newline, or `||` means the status is no longer this command's; a pipe hides only the command it follows.
+  // Walking back, a later `;`, `&`, newline, or `||` means the status is no longer this command's; a pipe hides the command it follows and every command of a group closed before it.
   let overridden = pending.includes('&');
   for (const command of commands.toReversed()) {
     if (command.link === 'break') overridden = true;
-    command.read = !overridden && command.link !== 'pipe';
+    command.read = !overridden && command.link !== 'pipe' && !command.hidden;
   }
   return commands.flatMap((command) => {
-    const argument = shellArgument(command.program, command.args);
+    // Past the cap a shell is a plain command: `'pwsh -c '.repeat(5000)` would otherwise recurse once per word and overflow the stack.
+    const argument = depth >= SHELL_DEPTH_MAX ? null : shellArgument(command.program, command.args);
     if (argument === null) return [command];
-    const inner = readCommands(argument);
+    const inner = readCommands(argument, depth + 1);
     if (inner.length === 0) return [command];
     for (const held of inner) held.read &&= command.read;
     const last = inner.at(-1);
@@ -808,22 +892,29 @@ const runOf = (command: ShellCommand): string =>
   [command.program, ...command.args.filter(isPlainWord).map((word) => cut(word.text, RUN_WORD_CHARS))].slice(0, RUN_WORDS_MAX).join(' ');
 
 /** Positional words and flag values. A flag in `takesValue` owns the next word, which is therefore not a name. */
-const parseArgs = (args: readonly ShellWord[], takesValue: ReadonlySet<string>): { names: string[]; flags: Map<string, string> } => {
+const parseArgs = (args: readonly ShellWord[], takesValue: ReadonlySet<string>): { names: string[]; flags: Map<string, string>; nameAt: number[] } => {
   const names: string[] = [];
+  const nameAt: number[] = [];
   const flags = new Map<string, string>();
   for (let at = 0; at < args.length; at += 1) {
     const text = args[at]?.text ?? '';
-    if (!text.startsWith('-')) names.push(text);
-    else if (text.includes('=')) flags.set(text.slice(0, text.indexOf('=')), text.slice(text.indexOf('=') + 1));
+    if (!text.startsWith('-')) {
+      names.push(text);
+      nameAt.push(at);
+    } else if (text.includes('=')) flags.set(text.slice(0, text.indexOf('=')), text.slice(text.indexOf('=') + 1));
     else if (takesValue.has(text)) {
       flags.set(text, args[at + 1]?.text ?? '');
       at += 1;
     }
   }
-  return { names, flags };
+  return { names, flags, nameAt };
 };
 
-const NODE_VALUE_FLAGS = new Set(['-w', '--workspace', '--registry', '--prefix', '--filter', '-F', '-C', '--dir', '--cache', '--tag', '--cwd', '--loglevel', '--userconfig', '-p', '--package', '-c', '--call', '--omit', '--include', '--save-prefix', '--skill', '-s']);
+// `-w` and `-s` are left out: `-w` owns a value only on npm (`--workspace`; on pnpm it means the workspace root) and `-s` only for `skills add` (on npm it is silent).
+const NODE_VALUE_FLAGS = new Set(['--workspace', '--registry', '--prefix', '--filter', '-F', '-C', '--dir', '--cache', '--tag', '--cwd', '--loglevel', '--userconfig', '-p', '--package', '-c', '--call', '--omit', '--include', '--save-prefix', '--skill']);
+const NPM_VALUE_FLAGS = new Set([...NODE_VALUE_FLAGS, '-w']);
+const SKILLS_VALUE_FLAGS = new Set(['-s']);
+const nodeFlags = (program: string): ReadonlySet<string> => (program === 'npm' || program === 'npx' ? NPM_VALUE_FLAGS : NODE_VALUE_FLAGS);
 const PYTHON_VALUE_FLAGS = new Set(['-r', '--requirement', '-e', '--editable', '-c', '--constraint', '-i', '--index-url', '--extra-index-url', '--index', '--default-index', '-t', '--target', '-f', '--find-links', '--python', '-p', '--from', '--with', '--prefix', '--root', '--group', '--extra', '--only-binary', '--no-binary', '--trusted-host', '--proxy', '--cache-dir', '--timeout', '--suffix', '--pip-args', '--spec']);
 const CARGO_VALUE_FLAGS = new Set(['--path', '--git', '--branch', '--tag', '--rev', '--root', '--features', '-F', '--target', '--registry', '--index', '-j', '--jobs', '--profile', '--bin', '--example', '--package', '-p', '--rename', '--manifest-path', '--version', '--vers', '--target-dir', '--config']);
 const GO_VALUE_FLAGS = new Set(['-o', '-tags', '-modfile', '-C', '-ldflags', '-gcflags', '-mod', '-p']);
@@ -835,14 +926,18 @@ const LOCAL_SPEC = /^(?:\.{1,2}$|\.{0,2}[\\/]|~|[A-Za-z]:[\\/]|file:|link:|works
 const ARCHIVE = /\.(?:whl|tgz|zip|tar\.gz)$/;
 const isUrl = (text: string): boolean => text.includes('://');
 const namesNothing = (text: string): boolean => text === '' || text.includes('$') || /^%.*%$/.test(text) || ONLY_MASKS.test(text);
+const HOLDS_MASK = /<(?:secret|email|org-domain)>/;
+/** A version with a mask inside says only that something was masked: `alias@npm:foo@1.2.3` reads as `npm:<email>`. It is no version. */
+const versionOf = (text: string): string | null => (text === '' || text.includes('$') || HOLDS_MASK.test(text) ? null : text);
 
 /** `name@version`, keeping a leading `@` with the name. */
 const atVersion = (ecosystem: PullEcosystem, text: string): ToolPull | null => {
   const at = text.lastIndexOf('@');
   const name = at > 0 ? text.slice(0, at) : text;
   const version = at > 0 ? text.slice(at + 1) : '';
-  if (namesNothing(name)) return null;
-  return { ecosystem, name, version: version === '' || version.includes('$') ? null : version };
+  // A name that starts with a mask is not a package: `git@github.com:org/repo.git` reads as `<email>:org/repo.git`. A Go module path may start with `<org-domain>`.
+  if (namesNothing(name) || (ecosystem !== 'go' && MASK.test(name))) return null;
+  return { ecosystem, name, version: versionOf(version) };
 };
 
 const wholeName = (ecosystem: PullEcosystem, text: string): ToolPull | null => (namesNothing(text) ? null : { ecosystem, name: text, version: null });
@@ -864,7 +959,7 @@ const pythonSpec = (text: string): ToolPull | null => {
   if (match === null) return null;
   const operator = match[2] ?? '';
   const stated = match[3] ?? '';
-  const version = stated === '' || stated.includes('$') ? null : operator === '==' || operator === '===' || operator === '@' ? stated : `${operator}${stated}`;
+  const version = versionOf(operator === '==' || operator === '===' || operator === '@' ? stated : stated === '' ? '' : `${operator}${stated}`);
   return { ecosystem: 'pypi', name: match[1] ?? '', version };
 };
 
@@ -876,18 +971,27 @@ const localOr = (ecosystem: PullEcosystem, text: string): ToolPull | null => (LO
 const present = (pull: ToolPull | null): pull is ToolPull => pull !== null;
 
 /** `npx`, `bunx`, and `dlx` run one package: a `--package` flag names it, else the first word. `skills add` installs a skill rather than running a tool. */
-const runnerPulls = (names: readonly string[], flags: ReadonlyMap<string, string>): Array<ToolPull | null> => {
-  const [first, sub, source] = names;
-  if (first !== undefined && atVersion('npm', first)?.name === 'skills' && sub === 'add' && source !== undefined) return [LOCAL_SPEC.test(source) ? null : wholeName('skill', source)];
-  const packaged = flags.get('-p') ?? flags.get('--package');
+const runnerPulls = (args: readonly ShellWord[], valueFlags: ReadonlySet<string>, outer: ReadonlyMap<string, string> = new Map()): Array<ToolPull | null> => {
+  let { names, flags } = parseArgs(args, valueFlags);
+  const [first, sub] = names;
+  const skills = first !== undefined && atVersion('npm', first)?.name === 'skills' && sub === 'add';
+  // `-s` names a skill there, so it owns the next word: `npx skills add -s one owner/repo`.
+  if (skills) ({ names, flags } = parseArgs(args, new Set([...valueFlags, ...SKILLS_VALUE_FLAGS])));
+  const source = names[2];
+  if (skills && source !== undefined) return [LOCAL_SPEC.test(source) ? null : wholeName('skill', source)];
+  const packaged = flags.get('-p') ?? flags.get('--package') ?? outer.get('-p') ?? outer.get('--package');
   if (packaged !== undefined) return [nodeSpec(packaged)];
   return first === undefined ? [] : [nodeSpec(first)];
 };
 
-const nodePulls = (args: readonly ShellWord[]): Array<ToolPull | null> => {
-  const { names, flags } = parseArgs(args, NODE_VALUE_FLAGS);
-  const [sub, ...specs] = names[0] === 'global' ? names.slice(1) : names;
-  if (sub === 'dlx') return runnerPulls(specs, flags);
+const nodePulls = (program: string, args: readonly ShellWord[]): Array<ToolPull | null> => {
+  const valueFlags = nodeFlags(program);
+  const { names, flags, nameAt } = parseArgs(args, valueFlags);
+  // `global` and `workspace <name>` only say where the install goes.
+  const lead = names[0] === 'global' ? 1 : names[0] === 'workspace' ? 2 : 0;
+  const [sub, ...specs] = names.slice(lead);
+  // The words after the `dlx` name, found by its place in the parse rather than by its text, since a flag's value can read `dlx` too; a flag before it (pnpm's `--package=foo dlx bar`) still counts.
+  if (sub === 'dlx') return runnerPulls(args.slice((nameAt[lead] ?? 0) + 1), valueFlags, flags);
   return sub === 'add' || sub === 'install' || sub === 'i' ? specs.map(nodeSpec) : [];
 };
 
@@ -920,14 +1024,11 @@ const pipxPulls = (args: readonly ShellWord[]): Array<ToolPull | null> => {
 const versionedPulls = (ecosystem: PullEcosystem, names: readonly string[], stated: string | undefined): Array<ToolPull | null> =>
   names
     .map((name) => localOr(ecosystem, name))
-    .map((pull) => (pull !== null && pull.version === null && stated !== undefined && stated !== '' ? { ...pull, version: stated } : pull));
+    .map((pull) => (pull !== null && pull.version === null && stated !== undefined && versionOf(stated) !== null ? { ...pull, version: stated } : pull));
 
 const pullsOfCommand = (program: string, args: readonly ShellWord[]): Array<ToolPull | null> => {
-  if (program === 'npm' || program === 'pnpm' || program === 'yarn' || program === 'bun') return nodePulls(args);
-  if (program === 'npx' || program === 'bunx') {
-    const { names, flags } = parseArgs(args, NODE_VALUE_FLAGS);
-    return runnerPulls(names, flags);
-  }
+  if (program === 'npm' || program === 'pnpm' || program === 'yarn' || program === 'bun') return nodePulls(program, args);
+  if (program === 'npx' || program === 'bunx') return runnerPulls(args, nodeFlags(program));
   if (/^pip[\d.]*$/.test(program)) return pipPulls(args);
   if (/^(?:python[\d.]*|py)$/.test(program)) {
     const module = args.findIndex((word) => word.text === '-m');
@@ -937,8 +1038,13 @@ const pullsOfCommand = (program: string, args: readonly ShellWord[]): Array<Tool
   if (program === 'uvx') return uvxPulls(args);
   if (program === 'pipx') return pipxPulls(args);
   if (program === 'cargo') {
-    const { names, flags } = parseArgs(args, CARGO_VALUE_FLAGS);
-    return names[0] === 'add' || names[0] === 'install' ? versionedPulls('cargo', names.slice(1), flags.get('--version') ?? flags.get('--vers')) : [];
+    // A leading `+toolchain` word picks the compiler and is no subcommand.
+    const { names, flags } = parseArgs(args[0]?.text.startsWith('+') === true ? args.slice(1) : args, CARGO_VALUE_FLAGS);
+    if (names[0] !== 'add' && names[0] !== 'install') return [];
+    const git = flags.get('--git');
+    // With no name, `--git` is the thing pulled.
+    if (names.length === 1 && git !== undefined) return [LOCAL_SPEC.test(git) ? null : wholeName('cargo', git)];
+    return versionedPulls('cargo', names.slice(1), flags.get('--version') ?? flags.get('--vers'));
   }
   if (program === 'go') {
     const { names } = parseArgs(args, GO_VALUE_FLAGS);
@@ -969,6 +1075,7 @@ interface GitCall {
 }
 
 const GIT_VALUE_FLAGS = new Set(['-C', '-c', '--git-dir', '--work-tree', '--namespace', '--exec-path']);
+const GIT_SCOPE_EQUALS = /^--(?:git-dir|work-tree|namespace)=/;
 
 const gitCall = (command: ShellCommand): GitCall | null => {
   if (command.program !== 'git') return null;
@@ -978,6 +1085,9 @@ const gitCall = (command: ShellCommand): GitCall | null => {
     if (GIT_VALUE_FLAGS.has(text)) {
       if (text !== '-c') scope += `${text} ${command.args[at + 1]?.text ?? ''};`;
       at += 1;
+    } else if (GIT_SCOPE_EQUALS.test(text)) {
+      // The `--git-dir=/a` form names the repository like `--git-dir /a`, so it is the same scope.
+      scope += `${text.slice(0, text.indexOf('='))} ${text.slice(text.indexOf('=') + 1)};`;
     } else if (!text.startsWith('-')) return { sub: text, args: command.args.slice(at + 1), scope };
   }
   return null;
@@ -986,7 +1096,7 @@ const gitCall = (command: ShellCommand): GitCall | null => {
 const NOT_A_COMMIT = /^(?:--dry-run|-h|--help|--porcelain|--short|--long)$/;
 const QUIET = /^(?:--quiet|-[a-zA-Z]*q[a-zA-Z]*)$/;
 const MOVES_HEAD = new Set(['checkout', 'switch', 'pull', 'merge', 'rebase', 'reset', 'cherry-pick', 'revert', 'am', 'commit']);
-const CHANGES_FOLDER = new Set(['cd', 'pushd', 'popd', 'set-location', 'sl', 'chdir']);
+export const CHANGES_FOLDER: ReadonlySet<string> = new Set(['cd', 'pushd', 'popd', 'set-location', 'sl', 'chdir']);
 const LOG_ONE = /^(?:-1|-n1|--max-count=1)$/;
 const LOG_FILTER = /^--(?:grep|author|committer|since|until|after|before|all|branches|remotes|tags|skip|reverse)(?:=|$)/;
 const LOG_FORMAT = /^--(?:format|pretty)=/;
@@ -995,6 +1105,8 @@ const LOG_FORMAT = /^--(?:format|pretty)=/;
 const readsHead = (git: GitCall): boolean => {
   const words = git.args.map((word) => word.text);
   if (git.sub === 'rev-parse') {
+    // `--abbrev-ref` and `--symbolic` print a branch or a ref, never a sha.
+    if (words.some((word) => word.startsWith('--abbrev-ref') || word.startsWith('--symbolic'))) return false;
     const refs = words.filter((word) => !word.startsWith('-'));
     return refs.length === 1 && refs[0] === 'HEAD';
   }
@@ -1024,13 +1136,16 @@ const isReadBack = (commands: readonly ShellCommand[], from: number, scope: stri
 const commitPlanOf = (commands: readonly ShellCommand[]): PlannedCommit[] =>
   commands.flatMap((command, at) => {
     const git = gitCall(command);
-    if (git === null || git.sub !== 'commit' || git.args.some((word) => NOT_A_COMMIT.test(word.text))) return [];
+    if (git === null || git.sub !== 'commit' || git.args.some((word) => !word.quoted && NOT_A_COMMIT.test(word.text))) return [];
     return [{ quiet: git.args.some((word) => !word.quoted && QUIET.test(word.text)), readBack: isReadBack(commands, at, git.scope) }];
   });
 
+/** Every simple command of a shell call, in order, after the bodies are dropped and the command is redacted. `oars gate` reads the same commands as capture. */
+export const shellCommands = (command: string, redact: Redactor): ShellCommand[] => readCommands(tokenize(redactCommand(dropBodies(command.replace(/\r\n/g, '\n')), redact)));
+
 /** A shell call's segments, pulls, and the commits it holds, from the command alone. The command is redacted before anything is kept. */
 export const readShell = (command: string, redact: Redactor): ShellRead => {
-  const commands = readCommands(tokenize(redactCommand(dropBodies(command.replace(/\r\n/g, '\n')), redact)));
+  const commands = shellCommands(command, redact);
   const kept = commands.slice(-SEGMENTS_PER_CALL_MAX);
   const pulls = new Map<string, ToolPull>();
   for (const { program, args } of commands) {
@@ -1066,9 +1181,77 @@ export const commitsRead = (plan: readonly PlannedCommit[], result: string): Arr
   return commits;
 };
 
+/** The longest MCP name tail masked slice by slice. A tool name is capped near 64 characters and a server name near that, so a longer tail is not a name. */
+const MCP_TAIL_MAX = 192;
+
+/**
+ * The pattern rules of the redactor that can match across a `_`, and so across half of a separator: a class that allows `_` (`sk-`, `AIza`,
+ * `github_pat_`, `eyJ`), and a NAME=value rule, whose value takes anything. `sk-` is the shape the rule is for (`sk-ant-`, 16 characters of the
+ * class before any `_`, or a capital and a digit anywhere in the slice), so `sk-learn` and `task-sk-tools` are not taken for a key.
+ */
+const UNDERSCORE_TOKEN = /\b(?:sk-(?:ant-|[A-Za-z0-9-]{16}|(?=[\w-]*[A-Z])(?=[\w-]*\d))|AIza|github_pat_|eyJ)|[=:]/;
+
+/** The pattern rules a Cursor name can hold across a `_`: a prefix that ends in `_`, plus the `UNDERSCORE_TOKEN` rules, since it has no `__` to cut at. */
+const CURSOR_TOKEN = /\b(?:sk-(?:ant-|[A-Za-z0-9-]{16}|(?=[\w-]*[A-Z])(?=[\w-]*\d))|[srp]k_(?:live|test)_|AIza|github_pat_|gh[pousr]_|whsec_|eyJ)|[=:]/;
+
+/**
+ * What follows `mcp__` (or the Cursor `mcp_`) with every secret masked. A token is matched only at a word boundary and `_` is a word character, so
+ * the redactor is run over every slice of the tail that starts at 0 or right after a `_` and ends at the end or right before a `_`. That
+ * finds a token behind a `_`, in front of one, and one that holds `__` (`sk-`, `AIza`, `github_pat_`, and `eyJ` allow it). The slices are
+ * quadratic in the number of underscores, so a tail past `MCP_TAIL_MAX` characters (which bounds that number) is stored as `<oversized>`.
+ * The tool part comes from the operator's config as much as the server part does. A slice that holds `__`, or starts or ends at a `_` (it holds
+ * half of a separator), is run through the redactor only when it holds one of the `UNDERSCORE_TOKEN` rules: otherwise the entropy rule reads two
+ * harmless parts (`Context7__resolve-library-id`) as one random token, or eats the separator, and the server loses its name. A Cursor name has
+ * no `__` to tell server from tool, so any slice that holds a `_` is run only for a `CURSOR_TOKEN` rule. Limits, each on the side of the secret
+ * or an accepted miss: a public name that starts like a pattern rule (`sk-ant-tools`, `github_pat_helper`) loses its server, since it cannot be
+ * told from a token that holds `__` (`sk-learn__PCA2Transform` and `task-sk-tools__Get2Items` are masked, since a tool part supplies the capital
+ * and the digit); an `sk-` key with neither that holds a `_` before 16 characters, `mcp_sk-abc_defghijklmnopqrstuvwxyz_find`, is stored raw, since it
+ * cannot be told from `mcp_sk-learn_fit_transform`; a name that holds `:` or `=` (`mcp__ns:Context7__resolve-library-id`,
+ * `mcp__ns=Context7__resolve-library-id`) opens a NAME=value slice, so its parts are read as one token and the server is lost (no harness is known to
+ * write such a name); a tool part of 24 characters or more with a capital and a digit is masked, since it cannot be told from a token; a token right
+ * behind a Slack-shaped run keeps what that run's match leaves (`mcp_xoxb-1234567890-ghp_...` stores `mcp_<secret>_...`, `mcp__xoxb-a-eyJ...` keeps
+ * the JWT's other segments), since no earlier start exists to finish it; and a random token with no pattern rule whose every part is under 24
+ * characters (`TOKEN`'s minimum) cannot be told from two ordinary parts and is not found.
+ */
+const redactedMcpTail = (tail: string, redact: Redactor, cursor: boolean): string => {
+  if (tail.length > MCP_TAIL_MAX) return '<oversized>';
+  let out = tail;
+  const starts = [0];
+  for (let at = tail.indexOf('_'); at !== -1; at = tail.indexOf('_', at + 1)) starts.push(at + 1);
+  // Last start first, so an edit never moves a start still to come; the longest slice first, so a token that holds a `_` is cut whole.
+  for (const start of starts.toReversed()) {
+    const ends = [out.length];
+    for (let at = out.indexOf('_', start); at !== -1; at = out.indexOf('_', at + 1)) ends.push(at);
+    for (const end of ends.toSorted((left, right) => right - left)) {
+      const slice = out.slice(start, end);
+      if (/__|^_|_$/.test(slice) && !UNDERSCORE_TOKEN.test(slice)) continue;
+      if (cursor && slice.includes('_') && !CURSOR_TOKEN.test(slice)) continue;
+      const masked = redact(slice);
+      if (masked === slice) continue;
+      out = out.slice(0, start) + masked + out.slice(end);
+      break;
+    }
+  }
+  // A Slack token stops at a `_`, but the redactor backtracks to its `-`, so the rest of the token follows the mask: it goes with the mask.
+  // It goes last, since a later slice has to read a token that rest opens.
+  return out.replace(/<secret>[A-Za-z0-9]+(?=_)/g, '<secret>');
+};
+
+/**
+ * The tool name as a record stores it. An MCP name is `mcp__<server>__<tool>` (Cursor: `mcp_<server>_<tool>`) and the server comes from the
+ * operator's config, where a token can sit, so everything after the prefix is redacted wherever the name is kept (the call, its error line,
+ * the skeleton line, and the session's count).
+ */
+export const storedToolName = (name: string, redact: Redactor): string => {
+  const prefix = name.startsWith('mcp__') ? 'mcp__' : name.startsWith('mcp_') ? 'mcp_' : null;
+  if (prefix === null || name.length === prefix.length) return name;
+  return `${prefix}${redactedMcpTail(name.slice(prefix.length), redact, prefix === 'mcp_')}`;
+};
+
 /** An MCP call's full server name, which `shortName` cuts for the tool sequence, redacted because a harness takes it from the operator's config. */
 export const pullsOfTool = (name: string, redact: Redactor): ToolPull[] => {
-  const pull = name.startsWith('mcp__') ? wholeName('mcp', redact(name.split('__')[1] ?? '')) : null;
+  if (!name.startsWith('mcp__')) return [];
+  const pull = wholeName('mcp', redactedMcpTail(name.slice('mcp__'.length), redact, false).split('__')[0] ?? '');
   return pull === null ? [] : [pull];
 };
 
@@ -1222,6 +1405,8 @@ export const captureSession = (input: ExtractInput): Capture => {
   const seenResponses = new Set<string>();
   let promptFingerprint: string | null = null;
   let cur: Current | undefined;
+  // The setup, funnel, and trust shape (t815). A subagent's run is the parent's, so it has no run of its own alone.
+  const shape = createShape(harness, (tool) => storedToolName(tool, redact), { timing: origin === undefined });
 
   const finish = (): void => {
     if (cur === undefined) return;
@@ -1314,7 +1499,7 @@ export const captureSession = (input: ExtractInput): Capture => {
       parentUuid: str(o.parentUuid) ?? null,
       ts: ts ?? null,
       role: role ?? null,
-      tools: blocks.filter((block) => block.type === 'tool_use').map((block) => ({ id: str(block.id) ?? null, name: str(block.name) ?? '?' })),
+      tools: blocks.filter((block) => block.type === 'tool_use').map((block) => ({ id: str(block.id) ?? null, name: storedToolName(str(block.name) ?? '?', redact) })),
       results: blocks.filter((block) => block.type === 'tool_result').map((block) => str(block.tool_use_id) ?? null),
       usage: lineUsage?.usage ?? null,
       hasThinking: lineUsage?.hasThinking ?? false,
@@ -1326,6 +1511,7 @@ export const captureSession = (input: ExtractInput): Capture => {
       costState: type === 'cost-state' ? sumModelUsage(o.modelUsage, o.startTime) : null,
     });
 
+    shape.read(o, { side, prompt: cur?.index ?? null });
     if (type === 'attachment') {
       const attachment = isObj(o.attachment) ? o.attachment : undefined;
       if (attachment?.type === 'prompt_snapshot' && attachment.systemPrompt !== undefined) promptFingerprint = sha256(JSON.stringify(attachment.systemPrompt)).slice(0, 12);
@@ -1350,6 +1536,16 @@ export const captureSession = (input: ExtractInput): Capture => {
 
     // prompt_graphs.py and cost_per_class.py: a prompt is a main-line user line with text and no tool result. They also dropped any leading "<", which lost
     // every turn a command or a skill opened (t768); that is now `promptOpening`'s call. A Cursor bubble keeps the old rule until its own brief.
+    // A `!` shell command the operator typed, or an image they pasted with no words: neither opens a prompt (the tag is injected, the image has no text), but
+    // both are the operator's turn. A line the agent did not write (a meta line, a local command, a synthetic reply) is neither the operator nor the agent.
+    let operatorTurn = false;
+    let harnessLine = type === 'assistant' && messageModel === '<synthetic>';
+    if (type === 'user' && role === 'user' && !side && !hasToolResult(content)) {
+      const leading = LEADING_TAG.exec(firstTextBlock(content).trimStart())?.[1];
+      harnessLine = o.isMeta === true || (leading !== undefined && LOCAL_COMMAND_TAGS.has(leading));
+      // `promptOpening` is Claude Code's alone: a prompt from any other harness that starts with `<` gets no opening below, yet it is still the operator typing.
+      operatorTurn = o.isMeta !== true && (leading === 'bash-input' || hasImage(content) || (harness !== 'claude-code' && firstTextBlock(content).startsWith('<')));
+    }
     if (type === 'user' && role === 'user' && o.isMeta !== true && !side) {
       const text = firstTextBlock(content);
       const opening =
@@ -1361,6 +1557,9 @@ export const captureSession = (input: ExtractInput): Capture => {
               ? undefined
               : ({ opened: 'typed', request: text } satisfies PromptOpening);
       if (opening !== undefined) {
+        // The harness's interrupt marker is a line it wrote after the operator pressed Esc, not a turn the operator took.
+        // A compaction summary is the harness writing the session's history back, so the agent is still working through it.
+        shape.turn(text.startsWith(INTERRUPT_MARKER) ? 'none' : o.isCompactSummary === true ? 'agent' : 'human', toSeconds(ts), str(o.uuid));
         finish();
         cur = {
           index: prompts.length,
@@ -1383,6 +1582,9 @@ export const captureSession = (input: ExtractInput): Capture => {
       }
     }
 
+    // Anything else on the main line is the agent at work, an automated turn included: only the operator's own turn ends a run alone. A line the agent did not
+    // write is skipped, since it would stretch the run to a time the agent never worked until.
+    if (!side && (type === 'assistant' || type === 'user')) shape.turn(harnessLine ? 'none' : operatorTurn ? 'human' : 'agent', toSeconds(ts), str(o.uuid));
     if (cur !== undefined) {
       // cost_per_class.py reads wall time, turns, model, and tokens from main-line lines only.
       if (!side) {
@@ -1421,8 +1623,9 @@ export const captureSession = (input: ExtractInput): Capture => {
         // The first copy is the call and already holds the result; a replay would be a second row with status none (t762). The skeleton
         // still lists every line, and a replayed failure stays an error line, as derive.ts counts it.
         if (id !== undefined && callById.has(id)) continue;
-        session.tools[name] = (session.tools[name] ?? 0) + 1;
-        toolById.set(id, name);
+        const stored = storedToolName(name, redact);
+        session.tools[stored] = (session.tools[stored] ?? 0) + 1;
+        toolById.set(id, stored);
         const toolInput = isObj(block.input) ? block.input : {};
         // An adapter that renames its tools for the extractor keeps the harness's own name in `native`.
         const native = str(block.native) ?? name;
@@ -1457,7 +1660,7 @@ export const captureSession = (input: ExtractInput): Capture => {
           agentType: origin?.agentType ?? null,
           n: tools.length,
           ts: ts ?? null,
-          tool: name,
+          tool: stored,
           status: 'none',
           target: aimed.target,
           targetBase: aimed.base,
@@ -1505,6 +1708,7 @@ export const captureSession = (input: ExtractInput): Capture => {
   }
   finish();
 
+  Object.assign(session, shape.finish());
   session.versions = [...versions].sort();
   session.branches = [...branches].sort();
   const kept = [...files].sort().slice(0, FILES_PER_SESSION_MAX);

@@ -32,9 +32,9 @@ describe('with no COVENANT_VERSION binding', () => {
     expect(await pool.db().then((db) => db.prepare('SELECT COUNT(*) AS count FROM accounts WHERE covenant IS NOT NULL').first('count'))).toBe(0);
   });
 
-  it('still serves a slice: reads and pull are not behind the covenant', async () => {
+  it('still serves a bundle: reads and pull are not behind the covenant', async () => {
     const { token } = await pool.signIn('github', stubUser('2003'));
-    expect((await pool.get('/v1/slices/all', token)).status).toBe(200);
+    expect((await pool.get('/bundle/2.1.314/0', token)).status).toBe(200);
   });
 });
 
@@ -54,7 +54,7 @@ describe('with COVENANT_VERSION set', () => {
     expect(await pool.get('/v1/covenant', token)).toEqual({ status: 200, json: { version: 'v2', accepted: false } });
     expect(await pool.post('/v1/deposits', sampleSkeleton('0000000000003001'), token)).toMatchObject({ status: 403, json: { error: 'covenant_not_accepted' } });
     expect(await storedCount(pool)).toBe(0);
-    expect((await pool.get('/v1/slices/all', token)).status).toBe(200);
+    expect((await pool.get('/bundle/2.1.314/0', token)).status).toBe(200);
   });
 
   it('names the version with no sign-in, and asks a caller with no account to sign in before depositing', async () => {

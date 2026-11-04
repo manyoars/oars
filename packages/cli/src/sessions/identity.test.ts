@@ -34,7 +34,7 @@ const shell = (command: string): StepObservation[] => stepsOf([{ name: 'Bash', i
 // The class A and L fields of each record, from the class table in `docs/sessions-store.md`. Named as the fields to drop, so a field added later counts as class P and is checked until someone classes it.
 const NOT_POOLED = {
   session: ['session', 'parent', 'spawnedBy', 'spawnedIn', 'at', 'tsFirst', 'tsLast', 'promptFingerprint', 'repo', 'tools', 'fileHashes', 'urls', 'searches', 'branches', 'tldrs', 'confidences', 'project', 'files'],
-  prompt: ['session', 'ts', 'head', 'promptFingerprint'],
+  prompt: ['session', 'ts', 'head', 'promptFingerprint', 'skills'],
   tool: ['session', 'parent', 'toolUseId', 'ts', 'tool', 'target', 'segments', 'pulls', 'commits'],
   errorLine: ['session', 'toolUseId', 'tool', 'ts', 'line'],
 } as const;
@@ -53,6 +53,10 @@ const pooled = (capture: Capture): string =>
 describe('identity holds public names only', () => {
   it('reads a shell step as its program, subcommand, and flag names', () => {
     expect(shell('git push --force origin main')[0]?.identity).toEqual({ program: 'git', sub: 'push', flags: ['--force'] });
+  });
+
+  it('keeps copilot as a public program name', () => {
+    expect(shell('copilot --resume')[0]?.identity).toMatchObject({ program: 'copilot' });
   });
 
   it('finds the subcommand behind a global flag and its value', () => {

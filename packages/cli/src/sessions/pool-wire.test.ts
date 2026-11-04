@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { frame, prompt, session, step, store, tool } from './pool-fixture.js';
-import { parseSkeleton, sessionsOf, skeletonOf, stacksOf, type SessionSkeleton } from './pool-wire.js';
+import { parseSkeleton, sessionsOf, skeletonOf, type SessionSkeleton } from './pool-wire.js';
 import type { Harness } from './schema.js';
 import { LITERAL } from './public-vocabulary.js';
 
@@ -104,19 +104,6 @@ describe('a nested spawn', () => {
     expect(skeleton?.transcripts.map((transcript) => transcript.spawnedIn)).toEqual([null, 0, 1, null]);
     expect(parseSkeleton(JSON.parse(JSON.stringify(skeleton)))).toEqual({ ok: true, skeleton });
     expect(JSON.stringify(skeleton)).not.toContain('agent-x');
-  });
-});
-
-describe('stacksOf', () => {
-  it('reads every language and framework of the frames, sorted and single', () => {
-    const skeleton = skeletonFrom(
-      store({
-        sessions: [session('s1', { frame: frame({ shell: 'bash', stack: { languages: ['typescript'], frameworks: ['vite'], size: 'm' } }) })],
-        prompts: [framedPrompt('s1', 0, { frame: frame({ shell: 'bash', stack: { languages: ['go', 'typescript'], frameworks: [], size: null } }) })],
-        tools: [tool('s1', 0, 'Bash', { steps: [shell] })],
-      }),
-    );
-    expect(skeleton === null ? [] : stacksOf(skeleton)).toEqual(['go', 'typescript', 'vite']);
   });
 });
 
@@ -235,7 +222,7 @@ describe('parseSkeleton refuses, and names the field', () => {
 
   // The harness list is the schema's `Harness` union: a skeleton from a harness missing from it is refused whole, so each name needs a pass here.
   it('accepts a skeleton from every harness the schema names', () => {
-    const natives: [Harness, string][] = [['claude-code', 'Bash'], ['cursor', 'run_terminal_cmd'], ['codex', 'exec_command']];
+    const natives: [Harness, string][] = [['claude-code', 'Bash'], ['cursor', 'run_terminal_cmd'], ['codex', 'exec_command'], ['copilot', 'bash']];
     for (const [harness, native] of natives) {
       const raw = withStep({ native });
       if (!isHolder(raw)) throw new Error('the sample is not an object');

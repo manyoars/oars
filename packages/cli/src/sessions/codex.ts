@@ -5,7 +5,7 @@
 //
 // Where it reads from (`codexRoot`): `$CODEX_HOME`, else `~/.codex` (`%USERPROFILE%\.codex` on Windows); the same on every OS
 // (codex-rs/utils/home-dir/src/lib.rs:5-18). Inside it, `sessions/YYYY/MM/DD/rollout-YYYY-MM-DDThh-mm-ss-<uuid>.jsonl` and `archived_sessions/` hold one
-// file per session; Codex compresses an old one to `.jsonl.zst` and reads either (rollout/src/compression.rs), so this reader does too.
+// file per session (a reverted thread's session spans several); Codex compresses an old one to `.jsonl.zst` and reads either (rollout/src/compression.rs), so this reader does too.
 // A line is `{timestamp, type, payload}` (history/src/lib.rs `RolloutLine`, rollout_payload.rs). Like cursor.ts, the reader writes each session
 // out as the transcript lines `captureSession` already reads, so redaction, the 1,000-character line cap, the salted file hashes, and the
 // skeleton are the Claude Code path's own code:
@@ -15,8 +15,12 @@
 //                       (`fork_thread_from_history` is `ForkPersistence::Copied`, core/src/thread_manager.rs:1680; session.rs:1139; app-server takes it when no prepared fork exists, app-server/src/request_processors/thread_processor.rs:5724-5728). Ordinals exist
 //                       only in a Paginated rollout (ordinal.rs:37), the CLI's default (thread-store/src/local/mod.rs:512-515), which holds item_completed TurnItems
 //                       (UserMessage, AgentMessage, FileChange, McpToolCall) in place of the legacy events below (rollout/src/policy.rs:142-156, `persisted_item_completed_event` :232, its Paginated arm :253); both are read.
-//                       A Copied fork's history, in either mode, is dropped by matching the parent rollout record for record
-//   turn_context        {model, cwd}: the model, and the directory when it changes
+//                       A Copied fork's history, in either mode, is dropped by matching the parent's lineage as of the fork's start, record for record
+//   turn_context        {model, cwd, approval_policy}: the model, the directory when it changes, and the approval policy, which rides later lines as `permissionMode`
+//   session_meta also holds `dynamic_tools`, the tools the session declared (a `DynamicToolSpec`, dynamic_tools.rs), read as the offered list
+//   event_msg turn_aborted {reason}             `interrupted` is the operator cutting a turn short (TurnAbortReason, protocol.rs:4580-4585); the others are the harness's own
+//   response_item additional_tools {tools} / tool_search_output {tools}   tools offered later, and tools a search loaded (models.rs:1076, :1257)
+//                       That these records are persisted into the rollout is rollout/src/policy.rs:83, :91, and :137 at ac558e2.
 //   event_msg user_message {message}            a prompt (the `response_item` user messages also hold injected context, so they are not read)
 //   event_msg agent_message {message}           the assistant's text
 //   event_msg token_count {info.last_token_usage}  one model response's usage, closing the lines since the last one
@@ -37,7 +41,7 @@
 //                       patch with no end event stays unsettled (a rejected patch is only a `RespondToModel` output, tools/handlers/apply_patch.rs)
 //   event_msg exec_command_end                  never persisted at ac558e2 (policy.rs:165) nor at rust-v0.46.0, so it is not read: the CommandExecution item and the call's output are the two sources
 // Older shapes: the JSON `{output, metadata.exit_code}` wrapper of a shell output (rust-v0.46.0 core/src/tools/mod.rs:186-210).
-// What Codex has no equivalent of (cost, a message id) stays at the value capture gives an absent field.
+// What Codex has no equivalent of (cost) stays at the value capture gives an absent field; message ids and duration are persisted and not read.
 
 import { createReadStream } from 'node:fs';
 import { readdir, readFile, stat } from 'node:fs/promises';
@@ -46,6 +50,7 @@ import { basename, join } from 'node:path';
 import { createInterface } from 'node:readline';
 import { PassThrough, pipeline } from 'node:stream';
 import { createZstdDecompress, zstdDecompressSync } from 'node:zlib';
+import { SHAPE_INTERRUPT_LINE, SHAPE_TOOLS_LINE } from './session-shape.js';
 
 /** The Codex home for an environment; a test passes its own so it never reads the real one. */
 export const codexRoot = (env: { [name: string]: string | undefined }, home: string = homedir()): string => {
@@ -251,6 +256,19 @@ const usageOf = (info: unknown): Obj | undefined => {
 /** The non-blank lines of a rollout that are not JSON (a torn write), kept so `captureSession` counts them and the deposit line reports them. */
 export const rolloutBadLines = (text: string): string[] => text.split('\n').filter((raw) => raw.trim() !== '' && parse(raw) === undefined);
 
+/**
+ * The names in a list of tool declarations: each entry's `name` (a `DynamicToolSpec` function, dynamic_tools.rs; an `additional_tools` or
+ * `tool_search_output` entry is an untyped value, models.rs:1076, :1257), and the names of a namespace's own `tools`; a namespace's own name is a grouping, not a tool. Nothing else is read: a
+ * declaration's description and schema stay where they are.
+ */
+const toolNames = (list: unknown): string[] =>
+  (Array.isArray(list) ? list : [])
+    .flatMap((entry: unknown) => (isObj(entry) ? [Array.isArray(entry.tools) ? undefined : str(entry.name), ...toolNames(entry.tools)] : []))
+    .filter((name): name is string => name !== undefined && name !== '');
+
+/** The approval policy as the permission mode: a string, or the tag of an externally tagged object (`{granular: {...}}`, protocol.rs:1181), which `mode()` keeps if documented and stores as `other` if not. */
+const approvalMode = (policy: unknown): string | undefined => (isObj(policy) ? Object.keys(policy)[0] : str(policy));
+
 /** One rollout as the lines `captureSession` reads. */
 export const rolloutLines = (text: string, fallbackId: string, parentText?: string): Obj[] => {
   const nonblank = text.split('\n').filter((raw) => raw.trim() !== '');
@@ -265,7 +283,7 @@ export const rolloutLines = (text: string, fallbackId: string, parentText?: stri
   let open: Obj | undefined;
   let lastTotal: number | undefined;
   const calls = new Map<string, { kind: 'shell' | 'patch' | 'other'; ids: string[]; session?: string }>();
-  // A unified-exec process still running, by its session id, to the exec_command that started it: the `write_stdin` that sees it exit settles both.
+  // A unified-exec process still running, by its session id, to the exec_command that started it: in a Legacy rollout the `write_stdin` that sees it exit settles both.
   const running = new Map<string, string>();
   // Records below this ordinal are the parent prefix a subagent's rollout copied (ordinal.rs:86-89), not the session's own. Only a Paginated rollout
   // holds ordinals (rollout/src/ordinal.rs:29-30, :37).
@@ -308,6 +326,11 @@ export const rolloutLines = (text: string, fallbackId: string, parentText?: stri
       message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: id, is_error: failure !== undefined, content: failure ?? (output === '' ? '' : `Exit code 0\n${output}`) }] },
     });
   };
+  // A neutral line for the setup, funnel, and trust shape (session-shape.ts): none of it is a Claude-shaped line, and none carries a message.
+  const tools = (fields: Obj): void => {
+    sequence += 1;
+    lines.push({ ...base, type: SHAPE_TOOLS_LINE, uuid: `${fallbackId}-t${String(sequence)}`, ...fields });
+  };
   const prompted = (message: string, when: string): void => {
     sequence += 1;
     lines.push({ ...base, type: 'user', uuid: `${fallbackId}-u${String(sequence)}`, timestamp: when, message: { role: 'user', content: [{ type: 'text', text: message }] } });
@@ -324,8 +347,8 @@ export const rolloutLines = (text: string, fallbackId: string, parentText?: stri
     result(id, failure, when);
   };
   // A shell call settles on its exit code, or on a failure to spawn, whether that comes from its own output or from a CommandExecution item. A
-  // process still running was remembered by its session id, so the outcome that sees it exit (the `write_stdin` that polled it and read its exit
-  // code, or its item) settles both calls. A poll that failed instead (`write_stdin failed: ...`, `exited` false) says nothing about the process: a
+  // process still running was remembered by its session id, so in a Legacy rollout the `write_stdin` that polled it and read its exit
+  // code settles both calls (in a Paginated one an item settles only its own exec_command). A poll that failed instead (`write_stdin failed: ...`, `exited` false) says nothing about the process: a
   // non-empty write to one with no tty is `StdinClosed` (unified_exec/process_manager.rs:1021-1026) and it runs on, so only the poll is the error.
   const settleShell = (id: string, failure: string | undefined, output: string, when: string, exited = true): void => {
     const known = calls.get(id);
@@ -397,11 +420,16 @@ export const rolloutLines = (text: string, fallbackId: string, parentText?: stri
       const version = str(payload.cli_version);
       if (version !== undefined) base.version = version;
       stamp(payload.timestamp);
+      const declared = toolNames(payload.dynamic_tools);
+      if (declared.length > 0) tools({ offered: declared });
       inherited = num(payload.subagent_history_start_ordinal);
       paginated = payload.history_mode === 'paginated';
       if (inherited === undefined && parentText !== undefined && str(payload.forked_from_id) !== undefined && !isObj(payload.history_base)) copied = { keys: parentKeys(parentText), at: 0 };
     } else if (type === 'turn_context') {
       model = str(payload.model) ?? model;
+      // The policy rides every later line as `permissionMode`, the key a Claude Code user line carries.
+      const mode = approvalMode(payload.approval_policy);
+      if (mode !== undefined) base.permissionMode = mode;
       const cwd = str(payload.cwd);
       if (cwd !== undefined) base.cwd = cwd;
     } else if (type === 'event_msg') {
@@ -411,6 +439,12 @@ export const rolloutLines = (text: string, fallbackId: string, parentText?: stri
         if (message !== undefined) prompted(message, when);
       } else if (kind === 'item_completed') {
         if (isObj(payload.item)) completed(payload.item, when);
+      } else if (kind === 'turn_aborted') {
+        // Only `interrupted` is the operator cutting a turn short: `replaced`, `review_ended`, and `budget_limited` are the harness's own (protocol.rs:4580-4585).
+        if (payload.reason === 'interrupted') {
+          sequence += 1;
+          lines.push({ ...base, type: SHAPE_INTERRUPT_LINE, uuid: `${fallbackId}-i${String(sequence)}` });
+        }
       } else if (kind === 'agent_message') {
         const message = str(payload.message);
         if (message !== undefined) assistant([{ type: 'text', text: message }], when);
@@ -439,7 +473,13 @@ export const rolloutLines = (text: string, fallbackId: string, parentText?: stri
       }
     } else if (type === 'response_item') {
       const kind = str(payload.type);
-      if (kind === 'web_search_call') {
+      if (kind === 'additional_tools') {
+        const declared = toolNames(payload.tools);
+        if (declared.length > 0) tools({ offered: declared });
+      } else if (kind === 'tool_search_output') {
+        const found = toolNames(payload.tools);
+        if (found.length > 0) tools({ loaded: found });
+      } else if (kind === 'web_search_call') {
         // A search is its own response item (protocol/src/models.rs:1270; persisted, rollout/src/policy.rs:94), with no call_id and no output item: the item
         // is the finished call (`response.output_item.done`, models.rs:1262-1269), so it carries no failure signal and is recorded ok, as another non-shell call is.
         // Only a `search` action has a query (`query`, else the first of `queries`; models.rs:2125-2132); `open_page` and `find_in_page` carry a url (:2134-2145).
@@ -493,7 +533,7 @@ export const rolloutLines = (text: string, fallbackId: string, parentText?: stri
           const out = outcomeOf(payload.output);
           if (known.kind === 'shell') {
             // A shell call settles on its exit code, or on a failure to spawn. A process still running stays unsettled and is remembered by its
-            // session id, so the `write_stdin` that sees it exit settles it too. A declined call has neither, and stays unsettled.
+            // session id, so in a Legacy rollout the `write_stdin` that sees it exit settles it too. A declined call has neither, and stays unsettled.
             if (out.exit !== undefined || out.spawnError) settleShell(id, out.spawnError ? out.text : failureOf(out.exit, out.text), out.text, when, out.exit !== undefined);
             else if (out.running !== undefined && known.session === undefined) running.set(out.running, id);
           } else if (known.kind === 'other') {
@@ -536,7 +576,7 @@ const lineageText = async (session: CodexSession, before = Infinity): Promise<st
     textOf(file).catch((error: unknown) => {
       throw new Error(reasonOf(error, file));
     });
-  const revisions = session.revisions.filter((revision) => revision.at <= before).sort((a, b) => a.at - b.at || a.from - b.from);
+  const revisions = session.revisions.filter((revision) => revision.at <= before).sort((a, b) => a.at - b.at);
   if (revisions.length === 0) return read(session.file);
   const parts = [{ file: session.file, from: Infinity }, ...revisions];
   const texts: string[] = [];
@@ -576,7 +616,7 @@ export const openCodexStore = async (root: string): Promise<CodexStore | undefin
       const head = isObj(meta) && isObj(meta.payload) ? meta.payload : {};
       const base = isObj(head.history_base) ? head.history_base : {};
       const started = Date.parse(str(head.timestamp) ?? '') || 0;
-      if (thread !== null) reverts.set(id, { thread, from: num(base.end_ordinal_exclusive) ?? 0, at: started });
+      if (thread !== null && isObj(meta)) reverts.set(id, { thread, from: num(base.end_ordinal_exclusive) ?? 0, at: started });
       sessions.set(id, { id, folder: str(head.cwd) ?? null, parent: parentOf(head, id, thread), agentRole: str(head.agent_role) ?? null, forkedFrom: str(head.forked_from_id)?.toLowerCase() ?? null, revisions: [], started, file, size: info.size, mtimeMs: Math.floor(info.mtimeMs) });
     } catch (error) {
       unreadable.push({ file, reason: reasonOf(error, file) });
