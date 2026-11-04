@@ -136,7 +136,7 @@ describe('SessionEnd deposit hook', () => {
     expect(failed.map((call) => [call.event, call.hit])).toEqual([['stop', false]]);
     expect(failed[0]?.error).toContain('store is locked');
     expect(failed[0]?.error).not.toContain('\n');
-  }, 15_000);
+  }, 20_000); // waits out the 3 s hook lock wait twice by design: 7.0 s measured alone, so about 3x
 
   it('does not read a folder no --allow named, a missing transcript, or an event without a transcript', async () => {
     const staged = await deposited();
@@ -158,6 +158,13 @@ describe('hookRuntime', () => {
   it('gives only the nightly task the Cursor root, so the Stop path never opens the store', () => {
     expect(hookRuntime('nightly', env, 'win32', 'home', io).cursorRoot).toBe(join(env.APPDATA, 'Cursor', 'User'));
     for (const event of ['session-start', 'post-tool', 'stop'] as const) expect(hookRuntime(event, env, 'win32', 'home', io)).not.toHaveProperty('cursorRoot');
+  });
+
+  it('gives the nightly task the Codex root (CODEX_HOME), and no other event any sourceRoots', () => {
+    const nightly = hookRuntime('nightly', { ...env, CODEX_HOME: join('x', 'codex') }, 'win32', 'home', io);
+    expect(nightly.sourceRoots?.codex).toBe(join('x', 'codex'));
+    expect(hookRuntime('nightly', env, 'win32', 'home', io).sourceRoots?.codex).toBe(join('home', '.codex'));
+    for (const event of ['session-start', 'post-tool', 'stop'] as const) expect(hookRuntime(event, env, 'win32', 'home', io)).not.toHaveProperty('sourceRoots');
   });
 
   it('places the store under the config dir and projects under the Claude config dir', () => {

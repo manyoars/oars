@@ -118,4 +118,8 @@ describe('where the sync check runs', () => {
     expect(repo('.github/workflows/ci.yml')).toMatch(/^\s*- run: just check$/m);
     expect(repo('justfile')).toMatch(/^check:\r?\n\s+npm run check\r?$/m);
   });
+
+  it('builds the client before the live login resolves it, in the recipe CI and a local run share', () => {
+    expect(repo('justfile')).toMatch(/^live-login:\r?\n\s+npm run build -w packages\/client\r?\n\s+npm run test:live -w packages\/cli\r?$/m);
+  });
 });

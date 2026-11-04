@@ -336,7 +336,7 @@ const buildProgram = (deps: RunDeps, argv: string[]): Command => {
   sessions
     .command('deposit')
     .description('read session logs from the folders you name into the local observation log; idempotent. Subagent transcripts under each session (<project>/<session>/subagents/) are deposited with their parent, and each raw transcript is hard-linked into the oars archive beside the store')
-    .option('--allow <folder>', 'a project folder to read: its path, or its name under ~/.claude/projects (repeatable); `cursor` names the Cursor store. A trailing slash names everything under a folder; * and ? are wildcards', collect)
+    .option('--allow <folder>', 'a project folder to read: its path, or its name under ~/.claude/projects (repeatable); `cursor` and `codex` name the Cursor and Codex stores. A trailing slash names everything under a folder; * and ? are wildcards', collect)
     .option('--allow-file <list>', 'a file of --allow entries, one per line (# starts a comment); repeatable, combines with --allow', collect)
     .option('--redact-domain <domain>', 'an organization domain to mask in everything written (repeatable)', collect)
     .action(async (_options: OptionValues, command: Command) => {
@@ -489,14 +489,16 @@ const buildProgram = (deps: RunDeps, argv: string[]): Command => {
     .option('--size <n>', 'prompts to draw (default 200)', positiveInteger)
     .option('--batch <n>', 'prompts per batch (default 50)', positiveInteger)
     .option('--seed <text>', "the draw's seed (default today's date)")
-    .option('--exclude-term <text>', 'leave out any session that mentions this, in any case, in its transcript or a subagent transcript (repeatable)', collect)
+    .option('--exclude-term <text>', 'also leave out any session that mentions this, in any case, beyond the local term file (OARS_EXCLUSION_TERMS) that always applies (repeatable)', collect)
     .option('--out-dir <folder>', 'where to write (default <claude config>/session-commons/review)')
     .action(async (_options: OptionValues, command: Command) => {
       const options: OptionValues = command.optsWithGlobals();
+      if (deps.sessions === undefined) throw new CliError('The session store is not configured in this run.', ExitCode.UNEXPECTED, 'unexpected');
       emit(
         deps,
         flag(options, 'json'),
         await sessionsGoldSample(sessionDeps(deps), {
+          termsFile: exclusionPaths(deps.sessions.projectsRoot, deps.env).terms,
           size: count(options, 'size') ?? 200,
           batch: count(options, 'batch') ?? 50,
           seed: text(options, 'seed'),

@@ -1,6 +1,7 @@
 import { cpSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { zstdCompressSync } from 'node:zlib';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { PassThrough } from 'node:stream';
 import type { SessionsRuntime } from './store.js';
@@ -10,20 +11,22 @@ export const FIXTURES = fileURLToPath(new URL('./fixtures/', import.meta.url));
 const dirs: string[] = [];
 
 const HELD = new Set(['EPERM', 'EBUSY', 'ENOTEMPTY']);
+const ATTEMPTS = 50;
+const DELAY_MS = 200;
 
 /**
  * Removes a temp folder a git child may still hold as its cwd (a test that timed out leaves the child running). On Windows that is an
  * EPERM, and `rmSync`'s own `maxRetries` does not retry it for a live child's cwd on Node 24, so the retry is written out here.
  * Synchronous so the `afterEach` call sites stay as they are; the wait is `Atomics.wait`, which does not spin.
  */
-export const removeHeld = (dir: string, attempts = 50, delayMs = 200): void => {
+export const removeHeld = (dir: string): void => {
   for (let attempt = 1; ; attempt++) {
     try {
       rmSync(dir, { recursive: true, force: true });
       return;
     } catch (error) {
-      if (attempt >= attempts || !(error instanceof Error && 'code' in error && typeof error.code === 'string' && HELD.has(error.code))) throw error;
-      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, delayMs);
+      if (attempt >= ATTEMPTS || !(error instanceof Error && 'code' in error && typeof error.code === 'string' && HELD.has(error.code))) throw error;
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, DELAY_MS);
     }
   }
 };
@@ -217,4 +220,32 @@ export const stageRawCursor = async (root: string, composerDocs: readonly { id: 
     db.close();
   });
   return user;
+};
+
+/** One Codex rollout line: `{timestamp, type, payload}` (codex-rs/history/src/lib.rs `RolloutLine`, openai/codex ac558e2). */
+export const rolloutLine = (timestamp: string, type: string, payload: unknown): { timestamp: string; type: string; payload: unknown } => ({ timestamp, type, payload });
+
+export interface CodexFixture {
+  /** The thread uuid in the file name. */
+  id: string;
+  /** Lines as objects, or raw text for a torn file. */
+  lines: readonly unknown[] | string;
+  /** `archived_sessions/` instead of `sessions/YYYY/MM/DD/`. */
+  archived?: boolean;
+  /** Written as `.jsonl.zst`, which Codex reads transparently (rollout/src/compression.rs). */
+  compressed?: boolean;
+}
+
+/** A Codex home holding the given rollouts under `sessions/2026/06/01/rollout-2026-06-01T10-00-00-<id>.jsonl`; returns the home. */
+export const stageCodex = (root: string, files: readonly CodexFixture[]): string => {
+  const home = join(root, 'codex-home');
+  for (const file of files) {
+    const dir = file.archived === true ? join(home, 'archived_sessions') : join(home, 'sessions', '2026', '06', '01');
+    mkdirSync(dir, { recursive: true });
+    const text = typeof file.lines === 'string' ? file.lines : `${file.lines.map((line) => JSON.stringify(line)).join('\n')}\n`;
+    const name = `rollout-2026-06-01T10-00-00-${file.id}.jsonl`;
+    if (file.compressed === true) writeFileSync(join(dir, `${name}.zst`), zstdCompressSync(Buffer.from(text)));
+    else writeFileSync(join(dir, name), text);
+  }
+  return home;
 };

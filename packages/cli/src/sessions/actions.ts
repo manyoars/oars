@@ -35,8 +35,7 @@ export interface ActionTable {
   shells: { readonly [native: string]: string };
 }
 
-// `codex` is named here because the Codex adapter (t749) and this table land separately, in either order; once `Harness` holds it the union is that type.
-export const ACTION_TABLES: { readonly [harness in Harness | 'codex']: ActionTable } = {
+export const ACTION_TABLES: { readonly [harness in Harness]: ActionTable } = {
   'claude-code': {
     rows: {
       Read: 'file.read',
@@ -113,7 +112,9 @@ export const ACTION_TABLES: { readonly [harness in Harness | 'codex']: ActionTab
     toolDelimited: false,
     shells: {},
   },
-  // Codex's own names, and `Bash` and `Edit`, which its adapter renames its shell and patch calls to when it keeps no `native`.
+  // Codex's own names: its adapter names a shell and a patch call in the Claude Code vocabulary for the extractor and keeps the Codex name in `native`.
+  // `write_stdin` feeds a running process (it runs no command), so it is `other`, as Claude Code's `BashOutput` is; `web_search` is the adapter's name for a
+  // persisted `web_search_call`.
   codex: {
     rows: {
       shell: 'shell.exec',
@@ -121,10 +122,10 @@ export const ACTION_TABLES: { readonly [harness in Harness | 'codex']: ActionTab
       exec_command: 'shell.exec',
       local_shell: 'shell.exec',
       'container.exec': 'shell.exec',
-      Bash: 'shell.exec',
+      write_stdin: 'other',
       apply_patch: 'file.edit',
-      Edit: 'file.edit',
       read_file: 'file.read',
+      web_search: 'web.search',
       update_plan: 'plan.update',
     },
     mcp: /^mcp__(?<server>.+?)__(?<tool>.+)$/,
