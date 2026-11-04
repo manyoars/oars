@@ -14,7 +14,7 @@ export interface StoredPool {
 }
 
 const LEVELS: ReadonlySet<unknown> = new Set<MotifLevel>(['shape', 'named', 'class']);
-const DIMENSIONS: ReadonlySet<unknown> = new Set<StrataCell['dimension']>(['language', 'framework', 'repoFiles']);
+const DIMENSIONS: ReadonlySet<unknown> = new Set<StrataCell['dimension']>(['language', 'framework', 'repoFiles', 'languageShare', 'repoFilesExplore']);
 
 // Narrowing by what ingest wrote: the tables hold nothing a derivation did not produce, so these check the outer shape and trust the rest.
 const isLevel = (value: unknown): value is MotifLevel => LEVELS.has(value);

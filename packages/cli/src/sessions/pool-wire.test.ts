@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { frame, printOf, prompt, session, sessionsFrom, step, store, storedNames, tool } from './pool-fixture.js';
-import { parseSkeleton, skeletonOf, type SessionSkeleton } from './pool-wire.js';
-import type { Harness } from './schema.js';
+import { strataOf } from './strata.js';
+import { parseSkeleton, projectExplore, skeletonOf, type SessionSkeleton } from './pool-wire.js';
+import type { Harness, Strata } from './schema.js';
 import { LITERAL, PRIVATE } from './public-vocabulary.js';
 
 // Real capture writes the shell as `shellOf` names it; the shared fixture's frame predates that spelling.
@@ -360,5 +361,138 @@ describe('parseSkeleton refuses, and names the field', () => {
       Reflect.set(transcripts[0], 'harness', harness);
       expect(refusedField(raw), harness).toBe('accepted');
     }
+  });
+});
+
+describe('the language shares on the wire', () => {
+  const stackFrame = frame({ shell: 'bash', stack: { languages: ['python', 'typescript'], frameworks: [], size: null } });
+  const withStrata = (languages: { language: string; share: string }[]): SessionSkeleton => {
+    // The stored share is text on a record, so a test can hold one the list does not: Object.assign types the result as the record while the input stays loose.
+    const stored: Strata = Object.assign({ languages: [], repoFiles: null, frameworks: [], explore: 0 }, { languages });
+    const skeleton = skeletonFrom(store({ sessions: [session('s1', { frame: stackFrame, strata: stored })], prompts: [prompt('s1', 0, { frame: stackFrame, strata: stored })] }));
+    if (skeleton === null) throw new Error('no skeleton');
+    return skeleton;
+  };
+
+  it('each language carries its share bucket, in the session frame and in each prompt frame', () => {
+    const skeleton = withStrata([
+      { language: 'python', share: 'under-10' },
+      { language: 'typescript', share: 'over-50' },
+    ]);
+    const shares = [
+      { language: 'python', languageShare: 'under-10' },
+      { language: 'typescript', languageShare: 'over-50' },
+    ];
+    expect(skeleton.transcripts[0]?.frame.stack.languageShares).toEqual(shares);
+    expect(skeleton.transcripts[0]?.prompts[0]?.frame.stack.languageShares).toEqual(shares);
+    expect(parseSkeleton(JSON.parse(JSON.stringify(skeleton)))).toEqual({ ok: true, skeleton });
+  });
+
+  it('drops a share outside its list and still sends the language', () => {
+    const skeleton = withStrata([
+      { language: 'python', share: '37' },
+      { language: 'typescript', share: 'over-50' },
+    ]);
+    expect(skeleton.transcripts[0]?.frame.stack.languages).toEqual(['python', 'typescript']);
+    expect(skeleton.transcripts[0]?.frame.stack.languageShares).toEqual([{ language: 'typescript', languageShare: 'over-50' }]);
+  });
+
+  it('sends a language outside the pinned list as other, and one share for it', () => {
+    const skeleton = withStrata([
+      { language: 'klingon', share: '10-50' },
+      { language: 'other', share: 'under-10' },
+    ]);
+    expect(skeleton.transcripts[0]?.frame.stack.languageShares).toEqual([{ language: 'other', languageShare: '10-50' }]);
+    expect(parseSkeleton(JSON.parse(JSON.stringify(skeleton)))).toEqual({ ok: true, skeleton });
+  });
+
+  it('parses the batch of a session that touched a .ts, a .ts, and a README.md', () => {
+    // The strata come from the real strataOf, so the language other that it stores for an off-list extension must pass the parse.
+    const strata: Strata = { ...strataOf({ paths: ['/r/a.ts', '/r/b.ts', '/r/README.md'], packages: [], size: null }), explore: 0 };
+    expect(strata.languages).toEqual([{ language: 'other', share: '10-50' }, { language: 'typescript', share: 'over-50' }]);
+    const skeleton = skeletonFrom(store({ sessions: [session('s1', { frame: stackFrame, strata })], prompts: [prompt('s1', 0, { frame: stackFrame, strata })] }));
+    if (skeleton === null) throw new Error('no skeleton');
+    expect(skeleton.transcripts[0]?.frame.stack.languageShares).toEqual([{ language: 'other', languageShare: '10-50' }, { language: 'typescript', languageShare: 'over-50' }]);
+    expect(parseSkeleton(JSON.parse(JSON.stringify(skeleton)))).toEqual({ ok: true, skeleton });
+  });
+
+  it('keeps other out of the frame languages, which stay closed', () => {
+    const raw: unknown = JSON.parse(JSON.stringify(withStrata([])));
+    let holder: unknown = raw;
+    for (const key of ['transcripts', 0, 'frame', 'stack']) holder = isHolder(holder) ? Reflect.get(holder, key) : undefined;
+    if (!isHolder(holder)) throw new Error('no stack');
+    Reflect.set(holder, 'languages', ['other']);
+    expect(refusedField(raw)).toBe('transcripts[0].frame.stack.languages[0]');
+  });
+
+  it('sends none for a record captured before the strata', () => {
+    const skeleton = skeletonFrom(store({ sessions: [session('s1', { frame: stackFrame })], prompts: [prompt('s1', 0, { frame: stackFrame })] }));
+    expect(skeleton?.transcripts[0]?.frame.stack.languageShares).toEqual([]);
+  });
+
+  const at = ['transcripts', 0, 'frame', 'stack', 'languageShares'] as const;
+  const field = 'transcripts[0].frame.stack.languageShares';
+  it.each([
+    { name: 'a share outside the list', value: [{ language: 'python', languageShare: '37' }], field: `${field}[0].languageShare` },
+    { name: 'a language outside the vocabulary', value: [{ language: 'acme-lang', languageShare: '0' }], field: `${field}[0].language` },
+    { name: 'a smuggled key beside a share', value: [{ language: 'python', languageShare: '0', files: 12 }], field: `${field}[0].files` },
+    { name: 'text for the list', value: 'python', field },
+    { name: 'a missing share', value: [{ language: 'python' }], field: `${field}[0].languageShare` },
+  ])('parseSkeleton refuses $name', ({ value, field: refused }) => {
+    const raw: unknown = JSON.parse(JSON.stringify(withStrata([])));
+    let holder: unknown = raw;
+    for (const key of at.slice(0, -1)) holder = isHolder(holder) ? Reflect.get(holder, key) : undefined;
+    if (!isHolder(holder)) throw new Error('no stack');
+    Reflect.set(holder, 'languageShares', value);
+    expect(refusedField(raw)).toBe(refused);
+  });
+
+  it('parseSkeleton refuses a stack with no list of shares', () => {
+    const raw: unknown = JSON.parse(JSON.stringify(withStrata([])));
+    let holder: unknown = raw;
+    for (const key of at.slice(0, -1)) holder = isHolder(holder) ? Reflect.get(holder, key) : undefined;
+    if (!isHolder(holder)) throw new Error('no stack');
+    Reflect.deleteProperty(holder, 'languageShares');
+    expect(refusedField(raw)).toBe(field);
+  });
+});
+
+describe('explore on the wire', () => {
+  const exploring = (explore: number | undefined): SessionSkeleton => {
+    const strata = explore === undefined ? undefined : { languages: [], repoFiles: null, frameworks: [], explore };
+    const skeleton = skeletonFrom(store({ sessions: [session('s1', { frame: framed })], prompts: [prompt('s1', 0, { frame: framed, strata }), prompt('s1', 1, { frame: framed, strata })] }));
+    if (skeleton === null) throw new Error('no skeleton');
+    return skeleton;
+  };
+
+  it('is the count bucket of the exact count, and the exact count is nowhere in the batch', () => {
+    const skeleton = exploring(37);
+    // 37 is past the edges 1, 2, 3, 5, 9, 17, and 33: bucket 7.
+    expect(skeleton.transcripts[0]?.prompts.map(({ explore }) => explore)).toEqual([7, 7]);
+    expect(JSON.stringify(skeleton)).not.toContain('"explore":37');
+    expect(parseSkeleton(JSON.parse(JSON.stringify(skeleton)))).toEqual({ ok: true, skeleton });
+  });
+
+  it('has buckets of doubling width past 32, so a long session still tells 100 from 3,000', () => {
+    expect([0, 1, 4, 32, 33, 64, 65, 3000, 4096, 4097, 1e9].map((count) => projectExplore(count))).toEqual([0, 1, 3, 6, 7, 7, 8, 13, 13, 14, 14]);
+  });
+
+  it('is null for a record captured before the strata, and for a count no bucket holds', () => {
+    expect(exploring(undefined).transcripts[0]?.prompts.map(({ explore }) => explore)).toEqual([null, null]);
+    for (const stored of [-1, 1.5, Number.NaN, Number.POSITIVE_INFINITY, undefined]) expect(projectExplore(stored)).toBeNull();
+  });
+
+  const field = 'transcripts[0].prompts[0].explore';
+  it.each([
+    { name: 'text for a bucket', value: 'many' },
+    { name: 'a bucket past the last', value: 15 },
+    { name: 'a fraction', value: 2.5 },
+    { name: 'a negative bucket', value: -1 },
+  ])('parseSkeleton refuses $name', ({ value }) => {
+    expect(refusedField(sent(['transcripts', 0, 'prompts', 0, 'explore'], value))).toBe(field);
+  });
+
+  it('parseSkeleton refuses a prompt with no explore field', () => {
+    expect(refusedField(sent(['transcripts', 0, 'prompts', 0, 'explore'], undefined))).toBe(field);
   });
 });
