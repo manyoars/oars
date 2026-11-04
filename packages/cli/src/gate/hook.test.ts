@@ -59,6 +59,7 @@ describe('oars gate hook: one record per crossing', () => {
       registryAge: 'under-7-days',
       arm: 'held',
       lineShown: 'none',
+      lineHeld: 'young-name-note',
       origin: 'not-read',
       decidedBy: 'not-read',
       status: 'not-read',

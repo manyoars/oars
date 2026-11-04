@@ -57,9 +57,9 @@ describe('what a row says and shows', () => {
     expect(decide(policy({}, { 'not-found': 'off' }), missing, NOW, shown, 'ghost').kind).toBe('none');
   });
 
-  it('holds back a note when the draw falls inside the share: the arm is held and no line is shown', () => {
-    expect(decide(policy(), young, NOW, held, 'x')).toEqual({ arm: 'held', lineId: 'none', kind: 'none', text: null });
-    expect(decide(policy(), missing, NOW, held, 'ghost')).toEqual({ arm: 'held', lineId: 'none', kind: 'none', text: null });
+  it('holds back a note when the draw falls inside the share: the arm is held, no text shows, and the withheld line id stays', () => {
+    expect(decide(policy(), young, NOW, held, 'x')).toEqual({ arm: 'held', lineId: 'young-name-note', kind: 'none', text: null });
+    expect(decide(policy(), missing, NOW, held, 'ghost')).toEqual({ arm: 'held', lineId: 'not-found-note', kind: 'none', text: null });
     expect(decide(policy({ holdbackPercent: 0 }), young, NOW, held, 'x').arm).toBe('shown');
     expect(decide(policy({ holdbackPercent: 100 }), young, NOW, shown, 'x').arm).toBe('held');
     expect(decide(policy({ holdbackPercent: 10 }), young, NOW, () => 0.0999, 'x').arm).toBe('held');

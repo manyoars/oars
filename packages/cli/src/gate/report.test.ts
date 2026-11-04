@@ -27,6 +27,7 @@ const crossing = (extra: Partial<CrossingRecord> = {}): CrossingRecord => ({
   registryAge: 'not-read',
   arm: 'none',
   lineShown: 'none',
+  lineHeld: 'none',
   session: 's1',
   agent: null,
   toolUseId: 't1',

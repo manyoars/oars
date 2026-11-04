@@ -216,7 +216,7 @@ describe('a crossing record', () => {
     await run([REPO]);
     const { crossings } = await written();
     expect(crossings).toHaveLength(4);
-    expect(named(crossings, 'left')).toMatchObject({ kind: 'crossing', v: 1, day: '2026-10-01', class: 'npm-package', form: 'install', program: 'npm', version: '1.2.3', versionForm: 'pinned', status: 'ok', statusReports: true, arm: 'none', lineShown: 'none', session: 'a', agent: null, toolUseId: 't1', ts: stamp(1) });
+    expect(named(crossings, 'left')).toMatchObject({ kind: 'crossing', v: 1, day: '2026-10-01', class: 'npm-package', form: 'install', program: 'npm', version: '1.2.3', versionForm: 'pinned', status: 'ok', statusReports: true, arm: 'none', lineShown: 'none', lineHeld: 'none', session: 'a', agent: null, toolUseId: 't1', ts: stamp(1) });
     expect(named(crossings, 'server-one')).toMatchObject({ class: 'mcp-server', form: 'mcp-call', program: 'mcp' });
     expect(named(crossings, 'a-skill')).toMatchObject({ class: 'skill', form: 'skill-call', program: 'skill' });
   });
