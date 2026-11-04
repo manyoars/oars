@@ -150,6 +150,8 @@ export const createShape = (harness: Harness, stored: (tool: string) => string, 
   const humans = new Set<string>();
   const markers = new Set<string>();
   let rejectedLast = false;
+  // The human refused a call: the run ended at the agent's last line before it, and what the agent does after the refusal waits for the next human turn.
+  let declined = false;
   const counts = { interrupts: 0, rejections: 0, denials: 0 };
   const runs: number[] = [];
   let start: number | undefined;
@@ -217,7 +219,10 @@ export const createShape = (harness: Harness, stored: (tool: string) => string, 
     if (block.is_error !== true) return;
     const line = firstLine(block.content);
     if (REJECTED_RE.test(line)) {
-      if (complete.rejections) rejectedLast = true;
+      if (complete.rejections) {
+        rejectedLast = true;
+        declined = true;
+      }
       event('rejection', tool, at.prompt);
     } else if (DENIED_RE.test(line)) event('denial', tool, at.prompt);
   };
@@ -297,7 +302,14 @@ export const createShape = (harness: Harness, stored: (tool: string) => string, 
         open.clear();
         rejectedLast = false;
       }
+      // The line after a rejection ends the run; a human turn does that anyway, so it falls through to start the next one.
+      const afterRejection = declined && kind !== 'human';
+      declined = false;
       if (!timing) return;
+      if (afterRejection) {
+        close();
+        return;
+      }
       // A human turn with no usable time still ends the run before it: the agent lines after it are not that run's.
       if (kind === 'human') {
         close();

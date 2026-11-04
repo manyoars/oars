@@ -229,6 +229,18 @@ describe('unattendedRun', () => {
     expect(session.trust?.unattendedRun).toEqual([0.13, 0.5]);
   });
 
+  it('counts a Codex prompt that starts with a tag as a human turn, so it ends the run before it', () => {
+    const rollout = [
+      rolloutLine(at(0), 'session_meta', { id: 'c1', cwd: '/w', cli_version: '0.50.0' }),
+      rolloutLine(at(2), 'event_msg', { type: 'user_message', message: 'go' }),
+      rolloutLine(at(10), 'event_msg', { type: 'agent_message', message: 'done' }),
+      rolloutLine(at(36000), 'event_msg', { type: 'user_message', message: '<div> broken' }),
+      rolloutLine(at(36030), 'event_msg', { type: 'agent_message', message: 'done' }),
+    ];
+    const session = capture(rolloutLines(rollout.map((entry) => JSON.stringify(entry)).join('\n'), 'c1').map((entry) => JSON.stringify(entry)), { harness: 'codex' });
+    expect(session.trust?.unattendedRun).toEqual([0.13, 0.5]);
+  });
+
   it('counts a compaction summary as the agent working, not a human turn', () => {
     const summary = typed(600, 'This session is being continued from a previous conversation', { isCompactSummary: true });
     const session = capture([typed(0, 'start'), said(60), summary, said(660), typed(36000, 'next morning'), said(36030)]);
@@ -247,6 +259,28 @@ describe('unattendedRun', () => {
     expect(session.trust?.unattendedRun).toEqual([1]);
   });
 
+  describe('a rejection', () => {
+    const refusal = "The user doesn't want to proceed with this tool use. The tool use was rejected.";
+
+    it('ends the run at the last agent line before it, so a prompt rejected the next morning is not an overnight run', () => {
+      const session = capture([
+        typed(0, 'start'),
+        said(60),
+        called(120, 'a', 'Bash'),
+        answered(36000, 'a', refusal, true),
+        typed(36001, '[Request interrupted by user for tool use]'),
+        typed(36010, 'next morning'),
+        said(36030),
+      ]);
+      expect(session.trust?.unattendedRun).toEqual([2, 0.33]);
+    });
+
+    it('counts nothing for the work after a rejection with feedback until the next human turn', () => {
+      const session = capture([typed(0, 'start'), said(60), called(120, 'a', 'Bash'), answered(36000, 'a', refusal, true), said(36020), typed(36100, 'more'), said(36130)]);
+      expect(session.trust?.unattendedRun).toEqual([2, 0.5]);
+    });
+  });
+
   describe('a line the agent did not write', () => {
     // A late line, then the next human turn: if the late line extended the run, the first run would read 600 minutes.
     const late = (middle: string): readonly string[] => [typed(0, 'start'), said(60), middle, typed(36010, 'next morning'), said(36030)];
@@ -260,6 +294,8 @@ describe('unattendedRun', () => {
       expect(capture(late(typed(36000, '<command-name>/status</command-name>'))).trust?.unattendedRun).toEqual([1, 0.33]);
       expect(capture(late(typed(36000, '<local-command-stdout>Status dialog dismissed</local-command-stdout>'))).trust?.unattendedRun).toEqual([1, 0.33]);
       expect(capture(late(typed(36000, '<local-command-stderr>failed</local-command-stderr>'))).trust?.unattendedRun).toEqual([1, 0.33]);
+      expect(capture(late(typed(36000, '<command-message>status</command-message>'))).trust?.unattendedRun).toEqual([1, 0.33]);
+      expect(capture(late(typed(36000, '<local-command-caveat>Caveat: x</local-command-caveat>'))).trust?.unattendedRun).toEqual([1, 0.33]);
     });
 
     it('does not extend a run with a meta line the harness wrote', () => {
