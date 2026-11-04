@@ -75,7 +75,7 @@ export const keysCreate = async (deps: RunDeps, options: KeysCreateOptions): Pro
   }
   return {
     document: { ok: true, key: issued.key, secret: issued.secret },
-    text: [`Created key ${issued.key.keyId} (${describeKey(issued.key)}).`, `Secret (shown once; save it now): ${issued.secret}`].join('\n'),
+    text: [`Created key: ${describeKey(issued.key)}.`, `Secret (shown once; save it now): ${issued.secret}`].join('\n'),
   };
 };
 

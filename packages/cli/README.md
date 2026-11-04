@@ -72,9 +72,10 @@ The SDK key is shown once, so save it when `deploy` prints it.
 
 `oars keys` manages the API keys of your account.
 
-- `oars keys create --name <name>` creates a key and prints its secret once; the platform keeps no copy. The default authorities are `AGENT_OPERATE` and `AGENT_READ`; `--authority <name>` (repeatable) sets others, and `--expires-in-days <n>` sets an expiry.
+- `oars keys create --name <name>` creates a key and prints its secret once; the platform keeps no copy. The default authorities are `AGENT_OPERATE` and `AGENT_READ`; `--authority <name>` (repeatable) sets others, and `--expires-in-days <n>` sets an expiry. A key expires after 90 days unless `--expires-in-days <n>` (at most 365) says otherwise; replace it before then.
 - `--workload <id>` limits the key to one workload you created. Such a key may carry only `AGENT_OPERATE` and `AGENT_READ` (more is a 400, `API_KEY_WORKLOAD_SCOPE_EXCEEDS_CAP`), and it works on that workload only.
 - A retry with the same `--idempotency-key` returns no secret: the command exits 5 and names the key, and you revoke it and create another.
+- Creating or revoking a key needs a signed-in person. With `OARS_API_KEY` set, any API key gets 403 `HUMAN_SESSION_REQUIRED` (exit 3) and logging in again does not help: unset it and use the `oars login` session.
 - `oars keys list` lists the keys with their prefix, scope, and expiry. A secret never comes back.
 - `oars keys revoke <keyId>` ends a key at once. There is no `rotate`: revoke the key and create another.
 
