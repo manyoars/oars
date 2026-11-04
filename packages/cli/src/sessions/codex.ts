@@ -31,7 +31,7 @@
 //                       its first yield (process_manager.rs:827). It settles a known unresolved shell call from the real `exit_code` and the output; a
 //                       `declined` one (exit code -1, events.rs:552-554) settles nothing. A `failed` one with exit code -1 is a failure with no exit status (a tool
 //                       failure message, events.rs:538-542; a process with none, async_watcher.rs:213, :409), so its text is the error line. So a backgrounded process keeps its failure and its commit sha
-//                       even with no `write_stdin` poll; only a Legacy rollout leaves it unsettled until a poll
+//                       even with no `write_stdin` poll; only a Legacy rollout leaves it unsettled until a poll, and there the poll settles it
 //   event_msg mcp_tool_call_end {call_id, result}   an MCP call's outcome: `result.Err`, or `result.Ok.isError` (protocol.rs:3047, :3076); Legacy mode only
 //   event_msg patch_apply_end {call_id, success, stderr, status}   an apply_patch call's outcome (Legacy mode only); a declined one settles nothing, and a
 //                       patch with no end event stays unsettled (a rejected patch is only a `RespondToModel` output, tools/handlers/apply_patch.rs)
@@ -270,6 +270,8 @@ export const rolloutLines = (text: string, fallbackId: string, parentText?: stri
   let inherited: number | undefined;
   // Only the first session_meta is the rollout's own; later ones are copied from fork history (rollout/src/recorder.rs:1157-1158, :1173).
   let seenMeta = false;
+  // A Paginated rollout holds the exit watcher's item, which carries the whole output, so there a poll that sees the exit settles only itself.
+  let paginated = false;
   // A Copied fork's file holds the parent's records first (no ordinal marks them: a Paginated one numbers them afresh from 0, ordinal.rs:28-33, and a Legacy
   // one has none), so the leading records equal to the parent's, in order, are its copied history, in either mode. Null once it stops matching.
   let copied: { keys: string[]; at: number } | null = null;
@@ -329,7 +331,7 @@ export const rolloutLines = (text: string, fallbackId: string, parentText?: stri
     resolved.add(id);
     result(id, failure, when, output);
     const pending = known.session === undefined ? undefined : running.get(known.session);
-    if (exited && pending !== undefined && !resolved.has(pending)) {
+    if (exited && !paginated && pending !== undefined && !resolved.has(pending)) {
       resolved.add(pending);
       result(pending, failure, when, output);
     }
@@ -394,6 +396,7 @@ export const rolloutLines = (text: string, fallbackId: string, parentText?: stri
       if (version !== undefined) base.version = version;
       stamp(payload.timestamp);
       inherited = num(payload.subagent_history_start_ordinal);
+      paginated = payload.history_mode === 'paginated';
       if (inherited === undefined && parentText !== undefined && str(payload.forked_from_id) !== undefined && !isObj(payload.history_base)) copied = { keys: parentKeys(parentText), at: 0 };
     } else if (type === 'turn_context') {
       model = str(payload.model) ?? model;

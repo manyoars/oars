@@ -465,7 +465,7 @@ describe('shell, MCP, patch, and usage outcomes', () => {
 // agent_message, patch_apply_end, and mcp_tool_call_end events are not persisted there (rollout/src/policy.rs:142-156, `persisted_item_completed_event` at :232), and an `item_completed`
 // event holding a `TurnItem` (protocol/src/items.rs:50, tag `type`, variant names as written) takes their place. Its content parts carry their own tag: a UserMessage's
 // `UserInput` is snake_case (`text`, user_input.rs:16), an AgentMessage's `AgentMessageContent` has no rename_all (`Text`, items.rs:131-135); response_item, turn_context, and
-// token_count are persisted in both modes (policy.rs:27-29 response_item, :43 turn_context, :49 session_meta, :134 token_count). Every record carries an `ordinal` in this mode (rollout/src/ordinal.rs:28).
+// token_count are persisted in both modes (policy.rs:27-29 response_item, :43 turn_context, :49 session_meta, :134 token_count). Every record carries an `ordinal` in this mode (rollout/src/ordinal.rs:29-30).
 describe('Paginated rollouts', () => {
   let next = 0;
   const ord = (entry: object): object => ({ ...entry, ordinal: next++ });
@@ -623,6 +623,21 @@ describe('Paginated rollouts', () => {
       ]);
       expect(out.tools.map((tool) => [tool.tool, tool.status])).toEqual([['Bash', 'error'], ['Bash', 'error']]);
       expect(out.errorLines.map((entry) => entry.line)).toEqual(['failed', 'failed']);
+    });
+
+    // The watcher's item carries the whole `aggregated_output`, so a Paginated poll that sees the exit leaves the polled exec_command to it: the poll's own last chunk
+    // would lose a `[branch sha]` line printed in an earlier chunk, and which of the two is recorded first is a race upstream (unified_exec/async_watcher.rs:158, :224).
+    it('leaves the exec_command a poll saw exit to its item in a Paginated rollout, so a sha printed in an earlier chunk is kept', () => {
+      begin();
+      const out = extractOf([
+        pmeta(),
+        execCall(2, 'u1', 'git commit -m x'),
+        ord(shellOut(3, 'u1', running.replace('Output:\n', 'Output:\n[main abc1234] x\n'))),
+        call(4, 'u2', 'write_stdin', { arguments: JSON.stringify({ session_id: 9, chars: '' }) }),
+        ord(shellOut(5, 'u2', 'Chunk ID: ab12\nWall time: 0.0100 seconds\nProcess exited with code 0\nOriginal token count: 3\nOutput:\n done')),
+        exited(6, 'u1', { status: 'completed', exit_code: 0, aggregated_output: '[main abc1234] x\n done' }),
+      ]);
+      expect(out.tools[0]).toMatchObject({ status: 'ok', commits: ['abc1234'] });
     });
 
     // A poll that fails says nothing about the process it polled: a non-empty write to a process with no tty is `StdinClosed` (unified_exec/process_manager.rs:1021-1026,
