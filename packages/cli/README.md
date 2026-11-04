@@ -186,7 +186,7 @@ oars gate install                      # add the hook to Claude Code at user sco
 oars gate uninstall                    # remove only that hook entry
 ```
 
-Replay is local and read-only on your transcripts; it writes `crossings.jsonl` and the novelty index `gate-index.txt` into the sessions store and nothing else. The hook (`oars gate hook`, run by Claude Code, not by you) appends to `crossings.jsonl` as each crossing happens, plus `gate-index.txt` and `gate-registry.jsonl` in the same store, and always exits 0 with no output. `report` reads only `crossings.jsonl`. Both record picks and neither judges them. See `docs/gate.md` in the repository.
+Replay is local and read-only on your transcripts; it writes `crossings.jsonl` and the novelty index `gate-index.txt` into the sessions store and nothing else (with `--registry-state`, npm and pip also keep their own caches). The hook (`oars gate hook`, run by Claude Code, not by you) appends to `crossings.jsonl` as each crossing happens, plus `gate-index.txt` and `gate-registry.jsonl` in the same store, and always exits 0 with no output. `report` reads only `crossings.jsonl`. Both record picks and neither judges them. See `docs/gate.md` in the repository.
 
 ## The `--json` contract
 

@@ -5,8 +5,8 @@ import type { RegistryAnswer } from './registry.js';
 
 export const DAY_MS = 86_400_000;
 
-/** Only these managers read the registry the `npm view` and `pip index` asks reach. A `poetry`, `uv`, `yarn`, or `conda` install may use one they do not. */
-export const ASKED_PROGRAMS: ReadonlySet<string> = new Set(['npm', 'npx', 'pnpm', 'pip', 'python -m pip']);
+/** Only these managers read the registry the `npm view` and `pip index` asks reach. A `pnpm` (its own global `rc`), `poetry`, `uv`, `yarn`, or `conda` install may use one they do not. */
+export const ASKED_PROGRAMS: ReadonlySet<string> = new Set(['npm', 'npx', 'pip', 'python -m pip']);
 
 export const ageOf = (answer: RegistryAnswer, ts: string | null): RegistryAge => {
   if (answer.created === null || ts === null) return 'unknown';
