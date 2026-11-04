@@ -13,6 +13,7 @@ import { REGISTRY_MAX_AGE_DAYS, VOCAB_SNAPSHOT_DATE } from './public-vocabulary.
 import type * as PoolWire from './pool-wire.js';
 import { session as sessionRow } from './pool-fixture.js';
 import { parseSkeleton, skeletonOf, VOCAB_VERSION, type PinnedKey } from './pool-wire.js';
+import { contentHash } from './read.js';
 import { deposit } from './store.js';
 import { addProject, cleanup, NOW, settledClock, stage, type Staged } from './test-support.js';
 
@@ -1620,6 +1621,9 @@ describe('oars pool deposit: local deltas', () => {
     const carried = carriedBy(scene);
     expect(carried.map(({ entry }) => entry)).toEqual([MODE_DELTA]);
     expect(logOf(scene)).toHaveLength(1);
+    // The batch that carries it is the 5th session of the after window, the filler.
+    const [only] = carried;
+    expect(at(JSON.parse(batchBytes(scene)[only?.batch ?? -1] ?? 'null'), 'id')).toBe(contentHash(['acct_one', sid(14)]));
     // The entry names no session, no root, no date, and neither mode.
     const text = JSON.stringify(carried);
     expect(text).not.toMatch(/66666666|merkle|2026|default|plan/);
