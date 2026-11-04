@@ -50,6 +50,8 @@ interface StubProvider {
   calls: StubCall[];
   /** URLs answered with an HTML 502, the way a provider's outage looks. */
   html: Set<string>;
+  /** URLs answered 403, the way GitHub answers a call over its rate limit. */
+  forbidden: Set<string>;
   outbound: (request: StubRequest) => Promise<StubResponse>;
 }
 
@@ -58,6 +60,7 @@ const stubProvider = (): StubProvider => {
   const users = new Map<string, StubUser | 'denied' | null>();
   const calls: StubCall[] = [];
   const html = new Set<string>();
+  const forbidden = new Set<string>();
   let issued = 0;
   const device = (): { device_code: string; user_code: string; expires_in: number; interval: number } => {
     issued += 1;
@@ -79,6 +82,7 @@ const stubProvider = (): StubProvider => {
     const body = await request.text();
     calls.push({ url: at, body });
     if (html.has(at)) return new StubResponse('<html>Bad Gateway</html>', { status: 502, headers: { 'content-type': 'text/html' } });
+    if (forbidden.has(at)) return json({ message: 'API rate limit exceeded' }, 403);
     const form = new URLSearchParams(body);
     if (at === 'https://github.com/login/device/code') return json({ ...device(), verification_uri: 'https://github.com/login/device' });
     if (at === 'https://oauth2.googleapis.com/device/code') return json({ ...device(), verification_url: 'https://www.google.com/device' });
@@ -95,7 +99,7 @@ const stubProvider = (): StubProvider => {
     users.set(code, user);
     return `access-${code}`;
   };
-  return { approve: (code, user) => users.set(code, user), issue, deny: (code) => users.set(code, 'denied'), calls, html, outbound };
+  return { approve: (code, user) => users.set(code, user), issue, deny: (code) => users.set(code, 'denied'), calls, html, forbidden, outbound };
 };
 
 export interface Answer {

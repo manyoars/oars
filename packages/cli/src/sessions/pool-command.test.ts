@@ -215,6 +215,8 @@ describe('oars pool login', () => {
       // Google's token route takes the client secret; GitHub's takes none.
       expect(form.get('client_secret')).toBe(flavor === 'github' ? null : 'google-secret');
     }
+    // GitHub answers form-encoded unless it is asked for JSON, so the device and token requests both ask.
+    for (const request of [device, ...polls]) expect(JSON.parse(request?.headers ?? '[]')).toContainEqual(['accept', 'application/json']);
     // The pool sees the provider's token once, in one request, and nothing of the device flow.
     const pool = rest.slice(3);
     expect(pool).toHaveLength(1);
@@ -266,6 +268,14 @@ describe('oars pool login', () => {
     on(scene, 'post', '/v1/login', () => HttpResponse.json(okLogin()));
     expect(await scene.cli('pool', 'login', '--provider', 'github', '--server', POOL)).toBe(ExitCode.OK);
     expect(scene.h.sleeps).toEqual([5000]);
+  });
+
+  it.each([0, -3])('takes the default wait for an interval of %i, rather than polling with none', async (interval) => {
+    const scene = setting();
+    providerAt(scene, 'github', { device: { interval }, polls: [pending('github'), granted()] });
+    on(scene, 'post', '/v1/login', () => HttpResponse.json(okLogin()));
+    expect(await scene.cli('pool', 'login', '--provider', 'github', '--server', POOL)).toBe(ExitCode.OK);
+    expect(scene.h.sleeps).toEqual([5000, 5000]);
   });
 
   it('refuses a provider it does not know, before sending anything', async () => {
@@ -695,7 +705,7 @@ describe('oars pool fetch', () => {
     expect(replicas(scene)).toEqual([]);
   });
 
-  it('refuses a harness version the vocabulary does not hold before asking, asks for a sign-in, and passes on a named refusal', async () => {
+  it('refuses a harness version the vocabulary does not hold before asking, asks for a sign-in, and takes the weekly cap as its own exit code', async () => {
     const { scene } = await signedScene();
     expect(await scene.cli('pool', 'fetch', '--harness-version', '../secret', '--server', POOL)).toBe(ExitCode.USAGE);
     expect(scene.seen).toEqual([]);
@@ -836,7 +846,21 @@ describe('oars pool fetch', () => {
       expect(scene.document()).toMatchObject({ retryAfter: null });
       expect(String(at(at(scene.document(), 'problem'), 'title'))).toContain('did not say when');
       expect(await scene.cli('pool', 'fetch', '--harness-version', '2.1.314', '--server', POOL)).toBe(ExitCode.CAPPED);
-      expect(scene.h.err.join('')).toContain('already on disk is untouched');
+      expect(scene.h.err.join('')).toContain('The bundle already on disk is untouched.');
+      // Nothing reads the kept bundle yet, so the message promises nothing about what reads it.
+      expect(scene.h.err.join('')).not.toContain('recall');
+    });
+
+    it('a refusal the pool names (a revoked credential, 401) passes on as its own exit code and message, and the bundle on disk is untouched', async () => {
+      const { scene, sign } = await signedScene();
+      const revoked = (): Response => HttpResponse.json({ error: 'unauthorized', message: 'This credential is no longer valid.' }, { status: 401 });
+      bundleRoute(scene, '2.1.314', [await signedReply(sign, '2.1.314', '"e1"'), revoked]);
+      await scene.cli('pool', 'fetch', '--harness-version', '2.1.314', '--server', POOL);
+      const before = readFileSync(keptFile(scene));
+      scene.h.err.length = 0;
+      expect(await scene.cli('pool', 'fetch', '--harness-version', '2.1.314', '--server', POOL)).toBe(ExitCode.AUTH);
+      expect(scene.h.err.join('')).toContain('This credential is no longer valid.');
+      expect(readFileSync(keptFile(scene)).equals(before)).toBe(true);
     });
 
     it('a 429 as a date, and one with nothing kept yet, are read the same way', async () => {

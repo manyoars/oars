@@ -76,7 +76,8 @@ export const login = async (request: Request, env: Env): Promise<Response> => {
 
   const profile = await profileOf(provider.userUrl, accessToken);
   if (profile === undefined) return refuse(502, 'provider_error', 'The provider could not be reached.');
-  if (profile.status === 401 || profile.status === 403) return refuse(401, 'login_refused', 'The provider did not accept the token.');
+  // Only a 401 says the token is bad. GitHub answers a call over its rate limit with 403, so a 403 falls through to provider_error: the token may be fine.
+  if (profile.status === 401) return refuse(401, 'login_refused', 'The provider did not accept the token.');
   const userId = provider.userIdOf(profile.body);
   if (userId === undefined) return refuse(502, 'provider_error', 'The provider did not name the user.');
 
