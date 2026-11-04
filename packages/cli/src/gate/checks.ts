@@ -501,7 +501,8 @@ const PLAIN = String.raw`(?!\.{1,2}(?:/|$))`;
 /** An owner starts with a letter or digit, so `.secret/x` and `C:x` are not `owner/repo`. */
 const OWNER = '[A-Za-z0-9][A-Za-z0-9_-]*';
 const MASK = '<(?:secret|email|org-domain)>';
-const HOST = String.raw`(?:[A-Za-z0-9.-]|${MASK})+`;
+/** A host starts with a letter, a digit, or a mask, so `..` and `-x` are not hosts. */
+const HOST = String.raw`(?:[A-Za-z0-9]|${MASK})(?:[A-Za-z0-9.-]|${MASK})*`;
 const URL_CHARS = String.raw`(?:[A-Za-z0-9._~%+-]|${MASK})*`;
 /** An `@` in a path opens a segment (a scope, `/@scope`) and is followed by a name: one that ends a segment or sits inside one is a ref or a path. */
 const URL_SEGMENT = String.raw`/${PLAIN}(?:@(?![/@]|$))?${URL_CHARS}`;
