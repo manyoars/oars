@@ -101,7 +101,7 @@ describe('a bundle over five accounts', () => {
       return Object.entries(value).flatMap(([key, held]) => [...(/stack/i.test(key) ? [`${path}.${key}`] : []), ...walk(held, `${path}.${key}`)]);
     };
     expect(walk(JSON.parse(textOf(json, 'payload')), 'bundle')).toEqual([]);
-    expect(Object.keys(json as object).sort()).toEqual(['payload', 'signature']);
+    expect(typeof json === 'object' && json !== null ? Object.keys(json).sort() : []).toEqual(['payload', 'signature']);
   });
 
   it('turns away a caller with no credential, and names a version outside the vocabulary', async () => {
