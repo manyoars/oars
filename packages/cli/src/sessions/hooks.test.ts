@@ -122,20 +122,18 @@ describe('SessionEnd deposit hook', () => {
     expect(calls[0]?.session).toBe('fresh');
   });
 
-  it('gives up on a held store lock inside the 5 s budget and still returns nothing', async () => {
+  it('defers on a held store lock inside the 5 s budget and still returns nothing', async () => {
     const staged = await deposited();
     const transcript = join(staged.projectsRoot, slugOf(REPO), 'blocked.jsonl');
     copyFileSync(join(FIXTURES, 'proj', 'tldr.jsonl'), transcript);
     writeFileSync(join(staged.storeDir, 'store.lock'), 'a holder that never frees');
     const started = Date.now();
-    await expect(depositSession(staged.runtime, transcript, () => NOW)).rejects.toThrow('store is locked');
+    // The refusal is deferred to the pending list (t832), not a failure; the step log holds it as its own status.
+    await expect(depositSession(staged.runtime, transcript, () => NOW)).resolves.toBe('deferred');
     expect(Date.now() - started).toBeLessThan(4500);
     expect(await runHook('stop', JSON.stringify({ session_id: 'blocked', transcript_path: transcript }), staged.runtime, () => NOW)).toBeUndefined();
-    // The failed deposit is evidence, not silence: its hook-call line carries the failure's first line.
-    const failed = (await readHookCalls(staged.storeDir)).filter((call) => call.session === 'blocked');
-    expect(failed.map((call) => [call.event, call.hit])).toEqual([['stop', false]]);
-    expect(failed[0]?.error).toContain('store is locked');
-    expect(failed[0]?.error).not.toContain('\n');
+    const deferred = (await readHookCalls(staged.storeDir)).filter((call) => call.session === 'blocked');
+    expect(deferred.map((call) => [call.event, call.hit, call.error])).toEqual([['stop', false, null]]);
   }, 20_000); // waits out the 3 s hook lock wait twice by design: 7.0 s measured alone, so about 3x
 
   it('does not read a folder no --allow named, a missing transcript, or an event without a transcript', async () => {

@@ -1,20 +1,12 @@
-// Sign-in (recall spec Section 5): GitHub or Google device flow, run from the server because Google's token route takes a client secret. The provider's access token is used once,
-// to learn the stable user id, and dropped. That id is hashed under a key the database never holds, so a read of the database names nobody: no email, login, or provider id is kept.
+// Sign-in (pool vocabulary spec, Section 3): the client runs the GitHub or Google device flow itself and sends the provider's access token here once, in one route. The token is used once, to learn
+// the stable user id, and dropped. That id is hashed under a key the database never holds, so a read of the database names nobody: no email, login, provider id, or provider token is kept.
 import { createHash, createHmac, randomBytes } from 'node:crypto';
 import { answer, bodyOf, bound, fieldOf, notConfigured, refuse, textField, type Env } from './http.js';
 
-const DEVICE_GRANT = 'urn:ietf:params:oauth:grant-type:device_code';
 const TOKEN_LIFETIME_MS = 90 * 24 * 60 * 60 * 1000;
 
 interface Provider {
-  deviceUrl: string;
-  tokenUrl: string;
   userUrl: string;
-  /** The least that names the user: GitHub's public profile needs no scope, and Google's `openid` gives only `sub`. */
-  scope: string;
-  clientBinding: 'GITHUB_CLIENT_ID' | 'GOOGLE_CLIENT_ID';
-  /** Google's device flow requires its client secret at the token route; GitHub's refuses nothing without one. */
-  secretBinding?: 'GOOGLE_CLIENT_SECRET';
   userIdOf: (user: unknown) => string | undefined;
 }
 
@@ -22,11 +14,7 @@ const PROVIDERS = new Map<string, Provider>([
   [
     'github',
     {
-      deviceUrl: 'https://github.com/login/device/code',
-      tokenUrl: 'https://github.com/login/oauth/access_token',
       userUrl: 'https://api.github.com/user',
-      scope: '',
-      clientBinding: 'GITHUB_CLIENT_ID',
       userIdOf: (user) => {
         const id = fieldOf(user, 'id');
         return typeof id === 'number' ? String(id) : undefined;
@@ -36,42 +24,20 @@ const PROVIDERS = new Map<string, Provider>([
   [
     'google',
     {
-      deviceUrl: 'https://oauth2.googleapis.com/device/code',
-      tokenUrl: 'https://oauth2.googleapis.com/token',
       userUrl: 'https://openidconnect.googleapis.com/v1/userinfo',
-      scope: 'openid',
-      clientBinding: 'GOOGLE_CLIENT_ID',
-      secretBinding: 'GOOGLE_CLIENT_SECRET',
       userIdOf: (user) => textField(user, 'sub'),
     },
   ],
 ]);
 
-const unknownProvider = (): Response => refuse(400, 'unknown_provider', 'The provider is github or google.', 'provider');
-
-/** Both providers answer JSON on the status they choose (Google's pending poll is a 428), so the body decides and the status does not. Undefined when the body is not JSON or the provider cannot be reached, and the route refuses by the field it needed. */
-const providerBody = async (url: string, init: RequestInit): Promise<unknown> => {
+/** The provider's answer to the profile read: its status, and its body when it is JSON. Undefined when the provider cannot be reached, so the route says it could not. */
+const profileOf = async (url: string, accessToken: string): Promise<{ status: number; body: unknown } | undefined> => {
   try {
-    return await bodyOf(await fetch(url, init));
+    const response = await fetch(url, { headers: { accept: 'application/json', authorization: `Bearer ${accessToken}`, 'user-agent': 'oars-pool' } });
+    return { status: response.status, body: await bodyOf(response) };
   } catch {
     return undefined;
   }
-};
-
-const askProvider = (url: string, form: URLSearchParams): Promise<unknown> => providerBody(url, { method: 'POST', headers: { accept: 'application/json', 'content-type': 'application/x-www-form-urlencoded' }, body: form.toString() });
-
-export const loginStart = async (request: Request, env: Env): Promise<Response> => {
-  const provider = PROVIDERS.get(textField(await bodyOf(request), 'provider') ?? '');
-  if (provider === undefined) return unknownProvider();
-  const clientId = bound(env[provider.clientBinding]);
-  if (clientId === undefined) return notConfigured(provider.clientBinding);
-  const device = await askProvider(provider.deviceUrl, new URLSearchParams({ client_id: clientId, scope: provider.scope }));
-  const deviceCode = textField(device, 'device_code');
-  const userCode = textField(device, 'user_code');
-  // Google names this `verification_url`, against the RFC's `verification_uri`.
-  const verificationUri = textField(device, 'verification_uri') ?? textField(device, 'verification_url');
-  if (deviceCode === undefined || userCode === undefined || verificationUri === undefined) return refuse(502, 'provider_error', 'The provider did not start a device flow.');
-  return answer(200, { deviceCode, userCode, verificationUri, interval: fieldOf(device, 'interval') ?? 5, expiresIn: fieldOf(device, 'expires_in') ?? 900 });
 };
 
 /** The same person on the same provider is always this account; the same id on another provider is not, since nothing joins them. */
@@ -95,40 +61,33 @@ export const publicKeyOf = (privateJwk: string): { kty: unknown; crv: unknown; x
   return { kty: fieldOf(parsed, 'kty'), crv: fieldOf(parsed, 'crv'), x: fieldOf(parsed, 'x') };
 };
 
-const PENDING = new Set(['authorization_pending', 'slow_down']);
-
-export const loginPoll = async (request: Request, env: Env): Promise<Response> => {
+/** `POST /v1/login` with `{ provider, token }`: the provider's access token, read once for its subject and not kept. Answers the pool's own credential, its expiry, and the public half of the signing key. */
+export const login = async (request: Request, env: Env): Promise<Response> => {
   const body = await bodyOf(request);
   const name = textField(body, 'provider') ?? '';
   const provider = PROVIDERS.get(name);
-  if (provider === undefined) return unknownProvider();
-  const deviceCode = textField(body, 'deviceCode');
-  if (deviceCode === undefined) return refuse(400, 'missing_field', 'A poll names its deviceCode.', 'deviceCode');
-  const clientId = bound(env[provider.clientBinding]);
-  if (clientId === undefined) return notConfigured(provider.clientBinding);
+  if (provider === undefined) return refuse(400, 'unknown_provider', 'The provider is github or google.', 'provider');
+  const accessToken = textField(body, 'token');
+  if (accessToken === undefined) return refuse(400, 'missing_field', "A login names the provider's token.", 'token');
   const pseudonymKey = bound(env.PSEUDONYM_KEY);
   if (pseudonymKey === undefined) return notConfigured('PSEUDONYM_KEY');
   const signingKey = bound(env.BUNDLE_SIGNING_KEY);
   if (signingKey === undefined) return notConfigured('BUNDLE_SIGNING_KEY');
-  const secret = provider.secretBinding === undefined ? undefined : bound(env[provider.secretBinding]);
-  if (provider.secretBinding !== undefined && secret === undefined) return notConfigured(provider.secretBinding);
 
-  const form = new URLSearchParams({ client_id: clientId, device_code: deviceCode, grant_type: DEVICE_GRANT, ...(secret === undefined ? {} : { client_secret: secret }) });
-  const granted = await askProvider(provider.tokenUrl, form);
-  if (granted === undefined) return refuse(502, 'provider_error', 'The provider did not answer in JSON.');
-  const accessToken = textField(granted, 'access_token');
-  if (accessToken === undefined) {
-    const error = textField(granted, 'error') ?? 'no_token';
-    return PENDING.has(error) ? answer(200, { status: 'pending', ...(error === 'slow_down' ? { slowDown: true } : {}) }) : refuse(401, 'login_refused', `The provider refused the sign-in: ${error}.`);
-  }
-  const profile = await providerBody(provider.userUrl, { headers: { accept: 'application/json', authorization: `Bearer ${accessToken}`, 'user-agent': 'oars-pool' } });
-  const userId = provider.userIdOf(profile);
+  const profile = await profileOf(provider.userUrl, accessToken);
+  if (profile === undefined) return refuse(502, 'provider_error', 'The provider could not be reached.');
+  // Only a 401 says the token is bad. GitHub answers a call over its rate limit with 403, so a 403 falls through to provider_error: the token may be fine.
+  if (profile.status === 401) return refuse(401, 'login_refused', 'The provider did not accept the token.');
+  const userId = provider.userIdOf(profile.body);
   if (userId === undefined) return refuse(502, 'provider_error', 'The provider did not name the user.');
 
   const account = pseudonymOf(pseudonymKey, name, userId);
   const token = randomBytes(32).toString('hex');
-  const expiresAt = Date.now() + TOKEN_LIFETIME_MS;
+  const now = Date.now();
+  const expiresAt = now + TOKEN_LIFETIME_MS;
   await env.DB.prepare('INSERT INTO accounts (id) VALUES (?) ON CONFLICT (id) DO NOTHING').bind(account).run();
+  // A row past its expiry signs nobody in, so a login is also when the table sheds them.
+  await env.DB.prepare('DELETE FROM tokens WHERE expires_at <= ?').bind(now).run();
   await env.DB.prepare('INSERT INTO tokens (hash, account, expires_at) VALUES (?, ?, ?)').bind(hashToken(token), account, expiresAt).run();
-  return answer(200, { status: 'ok', token, account, expiresAt, signingKey: publicKeyOf(signingKey) });
+  return answer(200, { token, account, expiresAt, signingKey: publicKeyOf(signingKey) });
 };
