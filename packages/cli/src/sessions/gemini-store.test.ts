@@ -26,7 +26,7 @@ const prompt = (second: number, text: string) => ({ id: `u${String(second)}`, ti
 const say = (second: number, content: string, extra: object = {}) => ({ id: `g${String(second)}`, timestamp: T(second), type: 'gemini', content, model: 'gemini-2.5-pro', ...extra });
 // A failed shell call: status says success, the `Exit Code:` trailer says 2 (packages/core/src/tools/shell.ts).
 const failedShell = say(2, 'running it', {
-  tokens: { input: 100, output: 5, cached: 40, total: 105 },
+  tokens: { input: 100, output: 5, cached: 40, thoughts: 0, tool: 0, total: 105 },
   toolCalls: [
     {
       id: 'c1',
@@ -156,9 +156,13 @@ describe('depositing the Gemini source', () => {
     expect(result.badLines).toBe(1);
   });
 
-  it('does not deposit a head-only file (a launch and quit, or a /clear: chatRecordingService.ts:855-865) as an empty session, and deposits it once a prompt is appended', async () => {
+  it('does not deposit a file with no prompt (a head alone, chatRecordingService.ts:855-865, or a head and the CLI\'s own <session_context> turn, geminiChat.ts:453-458, environmentContext.ts:69,101-108) as an empty session, and deposits the head-only file once a prompt is appended', async () => {
     const s = staged();
-    const home = stageGemini(s.root, [{ id: E, slug: 'quit', projectRoot: '/x', lines: [geminiHead(E)] }]);
+    const context = { id: 'ctx', timestamp: T(0), type: 'user', content: [{ text: '<session_context>\nThis is the Gemini CLI. We are setting up the context for our chat.\n</session_context>' }] };
+    const home = stageGemini(s.root, [
+      { id: E, slug: 'quit', projectRoot: '/x', lines: [geminiHead(E)] },
+      { id: G, slug: 'context', projectRoot: '/x', lines: [geminiHead(G), context] },
+    ]);
     const file = join(home, 'tmp', 'quit', 'chats', `session-2026-06-01T10-00-${E.slice(0, 8)}.jsonl`);
     const first = await deposit(s.runtime, options(['gemini']));
     expect(first.sessions).toBe(2);

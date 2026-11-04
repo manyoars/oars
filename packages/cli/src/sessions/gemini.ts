@@ -303,7 +303,7 @@ export const chatLines = (text: string, fallbackId: string, cwd: string | null):
 
   // The summary is the text user turn recorded just before the canned reply, whatever it opens with: the model is asked to reason in a scratchpad first and its text is stored as
   // written (context/chatCompressionService.ts:603,614,643,668), and upstream itself tests for the tag with `includes` (:588). A summary whose reply is gone still opens with the tag.
-  const summaries = new Set<Obj>(messages.flatMap((message, at) => (isCanned(message) ? messages.slice(Math.max(at - 1, 0), at) : [])));
+  const summaries = new Set<Obj>(messages.flatMap((message, index) => (isCanned(message) ? messages.slice(Math.max(index - 1, 0), index) : [])));
 
   for (const message of messages) {
     const when = stamp(message.timestamp);
