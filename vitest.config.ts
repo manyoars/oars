@@ -5,8 +5,8 @@ export default defineConfig({
   test: {
     include: ['scripts/**/*.test.ts', 'packages/*/{src,scripts}/**/*.test.ts', 'templates/*/{src,test}/**/*.test.ts'],
     environment: 'node',
-    // The spawn-heavy suites (git per test) took about 30 s in total for 33 tests (survival.test.ts, 4 files in parallel); under a busy box a single test
-    // outgrew the 5 s default (t758's gate read RED on it twice). 30 s still catches a hang. No retry: a retry would hide a real flake.
+    // Spawn-heavy suites (git per test): with survival.test.ts run in 4 parallel processes the slowest test took 5.0 s (the 5 s default failed 7-8 tests per copy), so
+    // 30 s leaves about 6x that margin and still catches a hang. No retry: a retry would hide a real flake. Binds root runs (`just check`), not a run from packages/cli.
     testTimeout: 30_000,
     hookTimeout: 30_000,
   },
