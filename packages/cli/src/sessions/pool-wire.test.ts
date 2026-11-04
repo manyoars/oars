@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { frame, prompt, session, step, store, tool } from './pool-fixture.js';
 import { parseSkeleton, sessionsOf, skeletonOf, stacksOf, type SessionSkeleton } from './pool-wire.js';
+import type { Harness } from './schema.js';
 import { LITERAL } from './public-vocabulary.js';
 
 // Real capture writes the shell as `shellOf` names it; the shared fixture's frame predates that spelling.
@@ -230,6 +231,19 @@ describe('parseSkeleton refuses, and names the field', () => {
     expect(refusedField(fromCursor({ native: LITERAL, identity: { server: 'github', tool: LITERAL } }))).toBe('accepted');
     expect(refusedField(fromCursor({ native: LITERAL, identity: { server: 'github', tool: 'get_issue' } }))).toBe(`${stepField}.identity.tool`);
     expect(refusedField(fromCursor({ native: 'mcp_github_get_issue', identity: { server: 'github', tool: LITERAL } }))).toBe(`${stepField}.native`);
+  });
+
+  // The harness list is the schema's `Harness` union: a skeleton from a harness missing from it is refused whole, so each name needs a pass here.
+  it('accepts a skeleton from every harness the schema names', () => {
+    const natives: Readonly<Record<Harness, string>> = { 'claude-code': 'Bash', cursor: 'run_terminal_cmd', codex: 'exec_command' };
+    for (const harness of Object.keys(natives) as Harness[]) {
+      const raw = withStep({ native: natives[harness] });
+      if (!isHolder(raw)) throw new Error('the sample is not an object');
+      const transcripts: unknown = Reflect.get(raw, 'transcripts');
+      if (!Array.isArray(transcripts) || !isHolder(transcripts[0])) throw new Error('the sample has no transcript');
+      Reflect.set(transcripts[0], 'harness', harness);
+      expect(refusedField(raw), harness).toBe('accepted');
+    }
   });
 
   it('holds an edge to its kinds', () => {
