@@ -199,7 +199,7 @@ export const skeletonOf = (records: SessionRecords, id: string, read: ShellReade
 export const isBundleVersion = (version: string): boolean => version !== LITERAL && publicVersion(version) === version;
 
 /** Whether `name` is a harness the schema names. */
-export const isHarness = (name: string): name is Harness => (HARNESSES as readonly string[]).includes(name);
+export const isHarness = (name: string): name is Harness => HARNESSES.some((harness) => harness === name);
 
 export interface Refusal {
   ok: false;
