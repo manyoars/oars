@@ -17,7 +17,7 @@
 //   hook-index.json         the recurring signatures per project and overall, for the hooks
 //   pipeline-runs.jsonl     the step log: one line per run of a pipeline step, appended when the step ends (steps.ts)
 import type { GoldEvaluator } from './gold-arms.js';
-import { createHash, randomBytes } from 'node:crypto';
+import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { createReadStream } from 'node:fs';
 import { performance } from 'node:perf_hooks';
 import { appendFile, mkdir, open, readdir, readFile, rename, rm, stat, utimes, writeFile } from 'node:fs/promises';
@@ -647,7 +647,7 @@ const commitCapture = async (context: DepositContext, key: string, extract: Capt
 interface LockOptions {
   /** How long to wait for a holder before giving up. */
   waitMs: number;
-  /** A lock file older than this belongs to a process that died; it is broken. */
+  /** A lock file older than this belongs to a process that died or passed `holdMs`; it is broken. */
   staleMs: number;
   /**
    * The longest a holder keeps its lock refreshed; default six times `staleMs` (an hour). Past it the heartbeat stops, so a holder that
@@ -664,9 +664,9 @@ const isCode = (error: unknown, ...codes: string[]): boolean => error instanceof
  * Creates `file` only if absent. False when it exists; EPERM or EACCES is Windows saying the previous holder's delete has not
  * finished, so it is returned (not thrown) and `withLock` rethrows it when the wait runs out with no lock file standing.
  */
-const claim = async (file: string): Promise<boolean | Error> => {
+const claim = async (file: string, token: string = String(process.pid)): Promise<boolean | Error> => {
   try {
-    await writeFile(file, String(process.pid), { flag: 'wx', mode: 0o600 });
+    await writeFile(file, token, { flag: 'wx', mode: 0o600 });
     return true;
   } catch (error) {
     if (isCode(error, 'EEXIST')) return false;
@@ -689,7 +689,7 @@ const breakStale = async (lock: string, staleMs: number): Promise<void> => {
   try {
     const age = await stat(lock).then((info) => Date.now() - info.mtimeMs, () => 0);
     if (age > staleMs) {
-      const holder = (await readFile(lock, 'utf8').catch(() => '')).trim();
+      const holder = ((await readFile(lock, 'utf8').catch(() => '')).trim().split(' ')[0]) ?? '';
       await rm(lock, { force: true });
       process.stderr.write(`oars: broke the store lock held by pid ${holder === '' ? 'unknown' : holder}, not refreshed for over ${String(staleMs)} ms\n`);
     }
@@ -706,7 +706,9 @@ export const withLock = async <T>(storeDir: string, work: () => Promise<T>, opti
   const lock = join(storeDir, 'store.lock');
   await mkdir(storeDir, { recursive: true });
   const started = Date.now();
-  let claimed = await claim(lock);
+  // The token names this claim, so a holder whose lock was broken cannot delete the next holder's lock when it ends.
+  const token = `${String(process.pid)} ${randomUUID()}`;
+  let claimed = await claim(lock, token);
   while (claimed !== true) {
     await breakStale(lock, options.staleMs);
     if (Date.now() - started >= options.waitMs) {
@@ -714,15 +716,18 @@ export const withLock = async <T>(storeDir: string, work: () => Promise<T>, opti
       throw new CliError('The store is locked by another deposit; try again shortly.', ExitCode.UNEXPECTED, 'unexpected');
     }
     await sleep(25);
-    claimed = await claim(lock);
+    claimed = await claim(lock, token);
   }
   // A waiter breaks a lock older than `staleMs`, and a full re-capture runs longer than that: the holder keeps its lock young, or a hook
   // would break it and append during the compaction that ends the run.
   const holdMs = options.holdMs ?? options.staleMs * 6;
-  const heldAt = Date.now();
+  // Beats are counted, not timed: a suspended machine fires one tick on wake, and elapsed time would read that as a hung holder.
+  let beats = 0;
   const heartbeat = setInterval(() => {
-    if (Date.now() - heldAt >= holdMs) {
+    if (++beats * (options.staleMs / 4) >= holdMs) {
       clearInterval(heartbeat);
+      process.stderr.write(`oars: this run held the store lock past ${String(holdMs)} ms and may lose it; rerun it when it ends
+`);
       return;
     }
     const now = new Date();
@@ -733,7 +738,7 @@ export const withLock = async <T>(storeDir: string, work: () => Promise<T>, opti
     return await work();
   } finally {
     clearInterval(heartbeat);
-    await rm(lock, { force: true });
+    if ((await readFile(lock, 'utf8').catch(() => '')) === token) await rm(lock, { force: true });
   }
 };
 
