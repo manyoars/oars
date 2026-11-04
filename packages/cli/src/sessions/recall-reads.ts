@@ -10,6 +10,7 @@ import { contentHash, FAMILIES, type Family } from './read.js';
 import { namedByPrefix, readsOfFamily, resolveReads, type CurrentPool } from './recall-pool.js';
 import { makeRecall, type Recall, type RecallForm, type RecallQueryObject, type RecallSlice } from './recall-object.js';
 import { closedName, evidenceOf, renderAnswer, type RecallAsker } from './recall-render.js';
+import { makeRedactor } from './redact.js';
 import { harnessOf, PROMPT_CLASSES, type ErrorObservation, type Frame, type Harness, type SessionObservation, type ToolObservation } from './schema.js';
 import type { Store } from './store.js';
 
@@ -428,11 +429,12 @@ const recordedQuery = ({ form, prefix, entity, family, slice, text }: ClosedQuer
   return typed.length === 0 ? closed : { ...closed, text: typed.join(' ') };
 };
 
-/** The closed form a `recall()` input is recorded under. An error or a path is text the asker typed, so it stays in class A. */
+/** The closed form a `recall()` input is recorded under. An error and a path are text the asker typed, so both stay in class A, and the narrowing that applied is kept as the slice. */
 const closedOf = (query: RecallQuery): RecallQueryObject => {
-  const text = query.error ?? query.path;
-  if (text !== undefined) return { form: 'text', text };
-  return recordedQuery({ form: 'question', family: 'recovery', slice: { ...(query.cls === undefined ? {} : { cls: query.cls }), ...(query.sinceDays === undefined ? {} : { sinceDays: query.sinceDays }) } });
+  const slice = { ...(query.cls === undefined ? {} : { cls: query.cls }), ...(query.sinceDays === undefined ? {} : { sinceDays: query.sinceDays }) };
+  const text = [query.error, query.path].filter((typed) => typed !== undefined).join(' ');
+  if (text === '') return recordedQuery({ form: 'question', family: 'recovery', slice });
+  return recordedQuery({ form: 'text', text, ...(Object.keys(slice).length === 0 ? {} : { slice }) });
 };
 
 export interface PullContext {
@@ -473,12 +475,15 @@ export const pull = (store: Store, input: PullInput, context: PullContext): Pull
   };
   const reads = isClosed(input) ? answerQuery(store, input, context.now, current) : legacyReads(input);
   const { rendered, names } = renderAnswer(reads, asker);
+  const recorded = isClosed(input) ? recordedQuery(input) : closedOf(input);
+  // What an asker typed is class A: redacted here, as a deposit redacts what it reads.
+  const redact = makeRedactor(context.redactDomains);
   const made = makeRecall({
     sid: context.sid,
     at,
     frame,
     mode: 'pull',
-    query: isClosed(input) ? recordedQuery(input) : closedOf(input),
+    query: recorded.text === undefined ? recorded : { ...recorded, text: redact(recorded.text) },
     poolVersion: poolVersionOf(store),
     arm: 'shown',
     reads: reads.map((read) => read.readId),
