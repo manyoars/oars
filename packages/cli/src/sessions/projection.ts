@@ -10,6 +10,7 @@ import {
   HARNESS_AGENT_TYPES,
   HARNESS_TOOLS,
   isPublicMcpTool,
+  LITERAL,
   PIPE_MAX,
   PRIVATE,
   PUBLIC_FLAGS,
@@ -20,7 +21,7 @@ import {
   TOOL_INPUT_KEYS,
 } from './public-vocabulary.js';
 import type { Redactor } from './redact.js';
-import type { ToolObservation } from './schema.js';
+import type { ShellIdentity, StepIdentity, ToolObservation } from './schema.js';
 import type { Vocabulary } from './vocab-load.js';
 
 /** One program of a shell call, as `index` carries it. */
@@ -40,6 +41,10 @@ export interface ProjectedShell {
 export const CUSTOM = 'custom';
 
 export const PRIVATE_PROGRAM: ProjectedProgram = { program: PRIVATE, subcommand: null, flags: [] };
+
+const UNREAD_SHELL_PROJECTION: ProjectedShell = { commands: [PRIVATE_PROGRAM], programs: [PRIVATE] };
+
+const projectedShell = (commands: ProjectedProgram[]): ProjectedShell => ({ commands, programs: commands.slice(0, PIPE_MAX).map(({ program }) => program) });
 
 const subcommandsOf = (vocab: Vocabulary, program: string): ReadonlySet<string> => {
   const own = vocab.programs.get(program)?.subs;
@@ -81,29 +86,47 @@ export const projectProgram = (vocab: Vocabulary, program: string, args: readonl
  */
 export const projectShell = (vocab: Vocabulary, command: string, redact: Redactor): ProjectedShell => {
   const read = shellCommands(command, redact);
-  const commands = read.length === 0 ? [PRIVATE_PROGRAM] : read.map(({ program, args }) => projectProgram(vocab, program, args));
-  return { commands, programs: commands.slice(0, PIPE_MAX).map(({ program }) => program) };
+  return projectedShell(read.length === 0 ? [PRIVATE_PROGRAM] : read.map(({ program, args }) => projectProgram(vocab, program, args)));
 };
 
 /** `shellTarget` cuts a subcommand at this many characters (extract.ts), so a stored subcommand this long may be a prefix of a longer private word. */
 const STORED_SUBCOMMAND_CUT = 30;
 
-/**
- * The shell call of a stored tool record, from what the account store holds (migration, spec Section 2): the program and subcommand from the class A
- * `target` text, the flags from the record's first step when that step is the same program. A record captured before CAPTURE 9 has no steps, so its
- * flags are lost (Q5): it projects the program and subcommand alone. A target that cannot be read back, cut at the subcommand limit or masked by
- * redaction, projects `private`, as does a hashed path target or a record that is not a shell call.
- */
-export const projectStoredShell = (vocab: Vocabulary, tool: Pick<ToolObservation, 'tool' | 'target' | 'steps'>): ProjectedProgram => {
-  if (!SHELL.has(tool.tool) || tool.target === null || tool.target === '' || tool.target.includes('<')) return PRIVATE_PROGRAM;
-  const [program = '', sub, ...extra] = tool.target.split(' ');
+/** The first command of a stored call as its class A `target` reads: the program and the first plain word after it. A target cut at the subcommand limit, masked by redaction, or not a program and one word projects `private`. */
+const projectTarget = (vocab: Vocabulary, target: string | null): ProjectedProgram => {
+  if (target === null || target === '' || target.includes('<')) return PRIVATE_PROGRAM;
+  const [program = '', sub, ...extra] = target.split(' ');
   if (extra.length > 0 || (sub?.length ?? 0) >= STORED_SUBCOMMAND_CUT) return PRIVATE_PROGRAM;
-  const words: WordOfCommand[] = sub === undefined ? [] : [{ text: sub, quoted: false }];
-  const projected = projectProgram(vocab, program, words);
-  const identity = tool.steps?.[0]?.identity;
-  const stored = identity !== null && identity !== undefined && 'flags' in identity && identity.program === program ? identity.flags : [];
-  const listed = flagsOf(vocab, program);
-  return projected.program === PRIVATE ? projected : { ...projected, flags: [...new Set(stored.filter((name) => listed.has(name)))].sort() };
+  return projectProgram(vocab, program, sub === undefined ? [] : [{ text: sub, quoted: false }]);
+};
+
+/** One stored step: its public names, each checked against the pinned vocabulary again, so a step stamped under an older list admits nothing the current one does not. */
+const projectStep = (vocab: Vocabulary, identity: ShellIdentity): ProjectedProgram => {
+  if (!isAdmittedProgram(vocab, identity.program)) return PRIVATE_PROGRAM;
+  const subs = subcommandsOf(vocab, identity.program);
+  const listed = flagsOf(vocab, identity.program);
+  return {
+    program: identity.program,
+    subcommand: identity.sub !== null && subs.has(identity.sub) ? identity.sub : null,
+    flags: [...new Set(identity.flags.filter((name) => listed.has(name)))].sort(),
+  };
+};
+
+const isShellStep = (identity: StepIdentity | undefined): identity is ShellIdentity => identity !== null && identity !== undefined && 'program' in identity;
+
+/**
+ * The shell call of a stored tool record, from what the account store holds (migration, spec Section 2): every command of the call, in order, from the
+ * record's `steps` (CAPTURE 9 and later), which carry the public program, subcommand, and flag names of each; so a pipeline, an `&&` chain, a `cd` hop,
+ * a `bash -c` body, and `git -C repo status` project as the raw command reads. A program the curated list does not name reads `<literal>` in its step and
+ * projects `private`, except the first, which falls back to the class A `target` so a program only the snapshot lists stays admitted. A record with no
+ * steps (captured before CAPTURE 9) projects its `target` reading alone: one program and its first plain word, no flags (Q5). A target that cannot be
+ * read back, a hashed path target, or a record that is not a shell call projects `private`.
+ */
+export const projectStoredShell = (vocab: Vocabulary, tool: Pick<ToolObservation, 'tool' | 'target' | 'steps'>): ProjectedShell => {
+  if (!SHELL.has(tool.tool)) return UNREAD_SHELL_PROJECTION;
+  const steps = (tool.steps ?? []).map(({ identity }) => identity);
+  if (steps.length === 0) return projectedShell([projectTarget(vocab, tool.target)]);
+  return projectedShell(steps.map((identity, at) => (!isShellStep(identity) ? PRIVATE_PROGRAM : at === 0 && identity.program === LITERAL ? projectTarget(vocab, tool.target) : projectStep(vocab, identity))));
 };
 
 const MCP_TOOL = /^mcp__(.+?)__(.+)$/;
