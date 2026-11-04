@@ -74,6 +74,23 @@ describe('skeletonOf', () => {
     for (const from of [noFrame, noSteps, noPromptFrame]) expect(skeletonFrom(from)).toBeNull();
   });
 
+  it('sends the literal for a stored tool its server no longer lists, so the parser takes the whole session', () => {
+    const dropped = step(0, 0, 'mcp.call', { native: 'mcp__github__acme_secret_deploy', identity: { server: 'github', tool: 'acme_secret_deploy' } });
+    const kept = step(1, 0, 'mcp.call', { native: 'mcp__github__get_issue', identity: { server: 'github', tool: 'get_issue' } });
+    const skeleton = skeletonFrom(
+      store({
+        sessions: [session('s1', { frame: framed })],
+        prompts: [framedPrompt('s1', 0)],
+        tools: [tool('s1', 0, 'mcp__github__acme_secret_deploy', { steps: [dropped] }), tool('s1', 1, 'mcp__github__get_issue', { steps: [kept] })],
+      }),
+    );
+    expect(skeleton?.transcripts[0]?.tools.map((entry) => entry.steps[0]?.identity)).toEqual([
+      { server: 'github', tool: LITERAL },
+      { server: 'github', tool: 'get_issue' },
+    ]);
+    expect(parseSkeleton(JSON.parse(JSON.stringify(skeleton)))).toEqual({ ok: true, skeleton });
+  });
+
   it('folds a subagent transcript under the session that spawned it', () => {
     const from = store({
       sessions: [session('s1', { frame: framed })],

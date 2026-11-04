@@ -148,12 +148,14 @@ const wirePull = (pull: PullIdentity): PullIdentity => {
 };
 
 /** A non-shell step's identity in the wire's spelling; a shell step's comes from `wireCommand`. */
-const wireIdentity = (identity: StepIdentity): StepIdentity => {
+const wireIdentity = (identity: StepIdentity, harness: Harness): StepIdentity => {
   if (identity === null || 'program' in identity) return identity;
   if ('server' in identity) {
     const server = listed(PUBLIC_MCP_SERVERS, identity.server);
-    // A tool beside a masked server has no list to be checked against, so it goes as the literal.
-    return server === PRIVATE ? { server, tool: LITERAL } : { ...identity, server };
+    // A tool beside a masked server has no list to be checked against, so it goes as the literal. Beside a listed one it goes as itself only where the server's list still holds it
+    // and the harness's spelling delimits the server (the parser's rule); a tool an older list held, or one stored before that rule, goes as the literal rather than refusing the session.
+    const named = server !== PRIVATE && ACTION_TABLES[harness].toolDelimited && isPublicMcpTool(server, identity.tool);
+    return { server, tool: named ? identity.tool : LITERAL };
   }
   if ('skill' in identity) return { skill: listed(PUBLIC_SKILLS, identity.skill) };
   return { host: identity.host === null ? null : listed(PUBLIC_HOSTS, identity.host) };
@@ -167,7 +169,7 @@ export const projectedSteps = (tool: ToolObservation, read: ShellReader, harness
   const commands = read(tool);
   return (tool.steps ?? []).map((step, at) => {
     const native = admittedNative(harness, step.native) ? step.native : PRIVATE;
-    if (step.action !== 'shell.exec') return { ...step, native, identity: wireIdentity(step.identity) };
+    if (step.action !== 'shell.exec') return { ...step, native, identity: wireIdentity(step.identity, harness) };
     const command = wireCommand(commands[at] ?? { program: PRIVATE, subcommand: null, flags: [] });
     const pulls = step.identity !== null && 'program' in step.identity ? step.identity.pulls : undefined;
     return { ...step, native, identity: pulls === undefined || command.program === PRIVATE ? command : { ...command, pulls: pulls.map(wirePull) } };
