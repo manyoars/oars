@@ -95,6 +95,31 @@ export const previousOf = async (env: Env, account: string, id: string): Promise
 /** The cells a write of `next` over `previous` changes: how many increments ingest writes, which is none for a batch sent again unchanged. */
 export const netCellCount = (next: Increments, previous: Increments | undefined): number => netOf(next.cells, previous?.cells ?? new Map<string, CellRow>(), CELL_FIELDS).length;
 
+/** What D1 takes as one bound value is 2 MB (`worker.ts`), so a payload goes in chunks of at most half that. */
+const CHUNK_BYTES = 1024 * 1024;
+
+/** `items` as JSON arrays of at most `limit` bytes each, in order; one item over the limit gets an array of its own. */
+export const chunksOf = (items: readonly unknown[], limit = CHUNK_BYTES): string[] => {
+  const encoder = new TextEncoder();
+  const chunks: string[] = [];
+  let held: string[] = [];
+  let size = 2;
+  for (const item of items) {
+    const text = JSON.stringify(item);
+    // The brackets and one comma either side of it.
+    const bytes = encoder.encode(text).length + 1;
+    if (size + bytes > limit && held.length > 0) {
+      chunks.push(`[${held.join(',')}]`);
+      held = [];
+      size = 2;
+    }
+    held.push(text);
+    size += bytes;
+  }
+  if (held.length > 0) chunks.push(`[${held.join(',')}]`);
+  return chunks;
+};
+
 const GUARD = 'EXISTS (SELECT 1 FROM deposits WHERE account = ? AND id = ? AND ingest = ?)';
 
 /**
@@ -106,30 +131,30 @@ export const incrementStatements = (env: Env, account: string, id: string, inges
   const strata = netOf(next.strata, previous?.strata ?? new Map<string, StratumRow>(), STRATUM_FIELDS);
   const guard = [account, id, ingest] as const;
   const statements: Bound[] = [];
-  if (cells.length > 0) {
+  // One statement per chunk, all in the one batch under the one guard: a batch's cells run about four times its skeleton, and D1 refuses a bound value over 2 MB.
+  for (const chunk of chunksOf(cells)) {
     statements.push(
       env.DB.prepare(
         `INSERT INTO cells (key, harness_bucket, motif_id, frame_bucket, day, exposed, sessions, ok, failed, tokens, duration_ms) SELECT json_extract(value, '$.key'), json_extract(value, '$.harnessBucket'), json_extract(value, '$.motifId'), json_extract(value, '$.frameBucket'), json_extract(value, '$.day'), json_extract(value, '$.exposed'), json_extract(value, '$.sessions'), json_extract(value, '$.ok'), json_extract(value, '$.failed'), json_extract(value, '$.tokens'), json_extract(value, '$.durationMs') FROM json_each(?) WHERE ${GUARD} ON CONFLICT (key) DO UPDATE SET sessions = cells.sessions + excluded.sessions, ok = cells.ok + excluded.ok, failed = cells.failed + excluded.failed, tokens = cells.tokens + excluded.tokens, duration_ms = cells.duration_ms + excluded.duration_ms`,
-      ).bind(JSON.stringify(cells), ...guard),
+      ).bind(chunk, ...guard),
     );
   }
-  if (next.motifs.length > 0) {
-    statements.push(env.DB.prepare(`INSERT OR IGNORE INTO motifs (motif_id, motif) SELECT json_extract(value, '$.motifId'), value FROM json_each(?) WHERE ${GUARD}`).bind(JSON.stringify(next.motifs), ...guard));
+  for (const chunk of chunksOf(next.motifs)) {
+    statements.push(env.DB.prepare(`INSERT OR IGNORE INTO motifs (motif_id, motif) SELECT json_extract(value, '$.motifId'), value FROM json_each(?) WHERE ${GUARD}`).bind(chunk, ...guard));
   }
-  if (next.cells.size > 0) {
-    const keys = JSON.stringify([...next.cells.keys()]);
+  // A chunk's keys are its own: the cluster count of a key reads the record before this chunk writes it, and no other chunk writes that key's record.
+  for (const keys of chunksOf([...next.cells.keys()])) {
     statements.push(
       env.DB.prepare(`UPDATE cells SET clusters = clusters + 1 WHERE key IN (SELECT value FROM json_each(?)) AND NOT EXISTS (SELECT 1 FROM contributors WHERE contributors.kind = 'cell' AND contributors.key = cells.key AND contributors.account = ?) AND ${GUARD}`).bind(keys, account, ...guard),
       env.DB.prepare(`INSERT OR IGNORE INTO contributors (kind, key, account, day) SELECT 'cell', value, ?, ? FROM json_each(?) WHERE ${GUARD}`).bind(account, today, keys, ...guard),
     );
   }
-  if (strata.length > 0) {
+  for (const chunk of chunksOf(strata)) {
     statements.push(
-      env.DB.prepare(`INSERT INTO strata (key, dimension, value, sessions) SELECT json_extract(value, '$.key'), json_extract(value, '$.dimension'), json_extract(value, '$.value'), json_extract(value, '$.sessions') FROM json_each(?) WHERE ${GUARD} ON CONFLICT (key) DO UPDATE SET sessions = strata.sessions + excluded.sessions`).bind(JSON.stringify(strata), ...guard),
+      env.DB.prepare(`INSERT INTO strata (key, dimension, value, sessions) SELECT json_extract(value, '$.key'), json_extract(value, '$.dimension'), json_extract(value, '$.value'), json_extract(value, '$.sessions') FROM json_each(?) WHERE ${GUARD} ON CONFLICT (key) DO UPDATE SET sessions = strata.sessions + excluded.sessions`).bind(chunk, ...guard),
     );
   }
-  if (next.strata.size > 0) {
-    const keys = JSON.stringify([...next.strata.keys()]);
+  for (const keys of chunksOf([...next.strata.keys()])) {
     statements.push(
       env.DB.prepare(`UPDATE strata SET clusters = clusters + 1 WHERE key IN (SELECT value FROM json_each(?)) AND NOT EXISTS (SELECT 1 FROM contributors WHERE contributors.kind = 'stratum' AND contributors.key = strata.key AND contributors.account = ?) AND ${GUARD}`).bind(keys, account, ...guard),
       env.DB.prepare(`INSERT OR IGNORE INTO contributors (kind, key, account, day) SELECT 'stratum', value, ?, ? FROM json_each(?) WHERE ${GUARD}`).bind(account, today, keys, ...guard),
