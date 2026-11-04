@@ -4,6 +4,7 @@
 // recovery_episodes.py (t693), so the numbers measured before the split reproduce after it.
 import { captureSession, classify, compress, cut, EDITS, EXPLORE, ACT, normalize, SHELL, shortName, type Capture, type ExtractInput } from './extract.js';
 import type { Redactor } from './redact.js';
+import { INTERRUPT_MARKER, REJECTED_RE } from './session-shape.js';
 import {
   ERROR_EXAMPLE_CHARS,
   EXTRACTOR_VERSION,
@@ -56,10 +57,8 @@ const groupBy = <T>(items: readonly T[], keyOf: (item: T) => number | null): Map
  */
 export const REDO_WINDOW = 3;
 
-/** The harness's tool-rejection results, both worded for the operator declining: a classifier or hook denial is policy, and the model carries on. */
-const REJECTED_RE = /^The user doesn't want to (?:proceed with this tool use|take this action)/;
-/** The harness writes this as a user line, so capture keeps it as a prompt of its own; it says the prompt before it was cut short. */
-export const INTERRUPT_MARKER = '[Request interrupted by user';
+// The rejection result and the interrupt marker live in session-shape.ts, which capture also reads; the marker is a user line capture keeps as a prompt of its own.
+export { INTERRUPT_MARKER };
 
 export const firstCopies = <T extends { side: boolean; toolUseId: string | null }>(records: readonly T[]): T[] => {
   const seen = new Set<string>();
