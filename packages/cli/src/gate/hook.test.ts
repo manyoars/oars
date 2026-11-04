@@ -432,8 +432,9 @@ describe('oars gate hook: one ask per name', () => {
       signal = ask.signal;
       // The record staged at this moment is what a process cut off here writes.
       const live = staged.at(-1);
-      expect(live?.text.trim().split('\n').map((line) => (JSON.parse(line) as { name: string; registryState: string }).name)).toEqual(['first-lib', 'left-pad']);
-      expect(JSON.parse(live?.text.trim().split('\n')[1] ?? '')).toMatchObject({ registryState: 'not-read', arm: 'none', lineShown: 'none', lineHeld: 'none' });
+      const held = parseRows(live?.text ?? '').filter((row): row is CrossingRecord => row.kind === 'crossing');
+      expect(held.map((row) => row.name)).toEqual(['first-lib', 'left-pad']);
+      expect(held[1]).toMatchObject({ registryState: 'not-read', arm: 'none', lineShown: 'none', lineHeld: 'none' });
       live?.stop?.();
       return Promise.resolve({ state: 'found', latest: '1.0.0', created: '2020-01-01T00:00:00.000Z' });
     };
