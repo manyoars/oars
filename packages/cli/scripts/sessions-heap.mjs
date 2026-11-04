@@ -10,7 +10,7 @@
 // APPDATA, XDG_CONFIG_HOME, HOME, USERPROFILE, and CLAUDE_CONFIG_DIR at a fresh folder under the OS temp folder, and refuses to go on
 // when a path the CLI will use is not inside it.
 import { spawnSync } from 'node:child_process';
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -88,6 +88,7 @@ const iso = (base, seconds) => new Date(base + seconds * 1000).toISOString();
  */
 const transcript = (index) => {
   const id = `bench-${String(index).padStart(6, '0')}`;
+  const chatter = Number(arg('chatter', '5'));
   const base = Date.parse('2026-01-05T08:00:00Z') + (index % 140) * 86_400_000;
   /** @type {string[]} */
   const lines = [];
@@ -127,6 +128,20 @@ const transcript = (index) => {
         : `ok ${id} ${'x'.repeat(BULK)}`;
       line({ type: 'user', uuid: result, parentUuid: parent, isSidechain: false, timestamp: iso(base, clock), version: '2.1.300', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: toolId, is_error: failed, content }] } });
       parent = result;
+      // Lines the skeleton lists and the log does not: the model's text, its thinking, and harness attachments make no tool or prompt row, but a
+      // real transcript is mostly these (1.8 MB of transcript against 52 KB of log), and the skeleton holds one entry for each.
+      for (let k = 0; k < chatter; k += 1) {
+        clock += 1;
+        const extra = `${id}-${String(n++)}`;
+        const kind = (p + c + k) % 3;
+        if (kind === 2) {
+          line({ type: 'attachment', uuid: extra, parentUuid: parent, timestamp: iso(base, clock), version: '2.1.300', attachment: { type: 'hook_success', hookName: 'PostToolUse', content: `ran ${id} ${String(p)}-${String(c)}-${String(k)}` } });
+        } else {
+          const block = kind === 0 ? { type: 'text', text: `I looked at ${id} step ${String(p)} call ${String(c)} part ${String(k)} and the next change is in src/module-${String(index % 97)}.ts` } : { type: 'thinking', thinking: `reasoning about ${id} ${String(p)}-${String(c)}-${String(k)}`, signature: 'sig' };
+          line({ type: 'assistant', uuid: extra, parentUuid: parent, isSidechain: false, timestamp: iso(base, clock), version: '2.1.300', requestedModel: 'claude-opus-5-5', requestId: `req_${id}_${String(p)}_${String(c)}_${String(k)}`, apiBlockIndex: k + 1, message: { role: 'assistant', model: 'claude-opus-5-5', content: [block], usage: { input_tokens: 10, cache_creation_input_tokens: 100 + k, cache_read_input_tokens: 9000 + k * 40, output_tokens: 50 + k } } });
+        }
+        parent = extra;
+      }
     }
   }
   return { id, text: `${lines.join('\n')}\n` };
@@ -154,6 +169,9 @@ const sizeMb = (path) => {
     return 0;
   }
 };
+
+/** @param {string} folder */
+const folderMb = (folder) => readdirSync(folder).reduce((sum, name) => sum + sizeMb(join(folder, name)), 0);
 
 /**
  * @param {Dirs} dirs
@@ -202,6 +220,8 @@ const build = (dirs, sessions) => {
   if (made.code !== 0) throw new Error(`building the store failed (exit ${String(made.code)}): ${made.stderr.slice(-600)}`);
   copyFileSync(join(dirs.store, 'observations.jsonl'), join(dirs.root, 'clean.jsonl'));
   copyFileSync(join(dirs.store, 'state.json'), join(dirs.root, 'clean-state.json'));
+  const clean = sizeMb(join(dirs.root, 'clean.jsonl'));
+  console.log(`store shape: clean log ${clean.toFixed(0)} MB, skeletons ${folderMb(join(dirs.store, 'skeletons')).toFixed(0)} MB (${(folderMb(join(dirs.store, 'skeletons')) / clean).toFixed(2)} per log byte), transcripts ${folderMb(dirs.projects).toFixed(0)} MB`);
   restore(dirs, false);
   return sizeMb(join(dirs.store, 'observations.jsonl'));
 };
@@ -328,8 +348,13 @@ log ${build(dirs, Number(arg('sessions', '5'))).toFixed(1)} MB`);
   console.log(`store: ${dirs.store}`);
   try {
     console.log(`log ${build(dirs, Number(arg('sessions', '800'))).toFixed(0)} MB`);
-    const ran = spawnSync(process.execPath, ['--expose-gc', '--max-old-space-size=8192', join(cliRoot, 'scripts', 'sessions-heap-phases.mjs'), dirs.store, dirs.claude], { env: envOf(dirs), encoding: 'utf8', cwd: dirs.root, maxBuffer: 64 << 20 });
-    console.log(ran.stdout + ran.stderr.slice(-800));
+    // The no-op shape on the superseded log, then the recapture shape on the clean log with every file marked as captured by an older version.
+    for (const shape of ['noop', 'recapture']) {
+      restore(dirs, shape === 'recapture');
+      const ran = spawnSync(process.execPath, ['--expose-gc', '--max-old-space-size=8192', join(cliRoot, 'scripts', 'sessions-heap-phases.mjs'), dirs.store, dirs.claude, shape], { env: envOf(dirs), encoding: 'utf8', cwd: dirs.root, maxBuffer: 64 << 20 });
+      console.log(`${shape}:
+${ran.stdout}${ran.stderr.slice(-800)}`);
+    }
   } finally {
     rmSync(dirs.root, { recursive: true, force: true });
   }
