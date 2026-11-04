@@ -1,9 +1,9 @@
 // The built `dist/bin.js` run as the harness runs it: `gate hook` with a payload on stdin, in a temp home. It proves the dispatch in `bin.ts` and the process-level exit 0 with
 // empty stdout, which the in-process tests cannot. Like `pack.test.ts` it reads `dist/`, which the root `check` builds before the tests run; without a build it is skipped.
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs';
+import { chmodSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { delimiter, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
 
@@ -13,7 +13,7 @@ afterEach(() => {
   for (const folder of made.splice(0)) rmSync(folder, { recursive: true, force: true });
 });
 
-const runHook = (input: string, extra: readonly string[] = []): { status: number | null; stdout: string; home: string } => {
+const runHook = (input: string, extra: readonly string[] = [], pathHead?: string): { status: number | null; stdout: string; home: string } => {
   const home = mkdtempSync(join(tmpdir(), 'oars-gate-bin-'));
   made.push(home);
   const result = spawnSync(process.execPath, [bin, 'gate', 'hook', ...extra], {
@@ -21,12 +21,23 @@ const runHook = (input: string, extra: readonly string[] = []): { status: number
     encoding: 'utf8',
     timeout: 30_000,
     cwd: home,
-    env: { PATH: process.env.PATH ?? '', APPDATA: home, HOME: home, USERPROFILE: home, XDG_CONFIG_HOME: home },
+    env: { PATH: [pathHead, process.env.PATH].filter((part) => part !== undefined && part !== '').join(delimiter), APPDATA: home, HOME: home, USERPROFILE: home, XDG_CONFIG_HOME: home },
   });
   return { status: result.status, stdout: result.stdout, home };
 };
 
-const crossingFiles = (home: string): string[] => readdirSync(home, { recursive: true, encoding: 'utf8' }).filter((path) => path.endsWith('crossings.jsonl'));
+// A folder holding `npm` and `npm.cmd` that only write a marker. First on PATH, it shows whether the hook starts an `npm view` child: the marker exists if it did.
+const fakeNpm = (): { folder: string; marker: string } => {
+  const folder = mkdtempSync(join(tmpdir(), 'oars-gate-fakenpm-'));
+  made.push(folder);
+  const marker = join(folder, 'npm-started');
+  writeFileSync(join(folder, 'npm'), `#!/bin/sh\necho started > "${marker}"\n`);
+  chmodSync(join(folder, 'npm'), 0o755);
+  writeFileSync(join(folder, 'npm.cmd'), `@echo off\r\necho started> "${marker}"\r\n`);
+  return { folder, marker };
+};
+
+const crossingFiles =(home: string): string[] => readdirSync(home, { recursive: true, encoding: 'utf8' }).filter((path) => path.endsWith('crossings.jsonl'));
 
 describe.skipIf(!existsSync(bin))('the built oars gate hook', () => {
   it('exits 0 with empty stdout on bad stdin, and writes no record', () => {
@@ -49,9 +60,11 @@ describe.skipIf(!existsSync(bin))('the built oars gate hook', () => {
   it('records one row for a crossing, still with empty stdout and exit 0', () => {
     // yarn is never asked of the registry (ASKED_PROGRAMS), so no `npm view` child outlives the test and writes into the temp home after its cleanup.
     const payload = JSON.stringify({ session_id: 's1', tool_use_id: 'u1', tool_name: 'Bash', tool_input: { command: 'yarn add left-pad' }, cwd: tmpdir(), permission_mode: 'default' });
-    const result = runHook(payload);
+    const npm = fakeNpm();
+    const result = runHook(payload, [], npm.folder);
     expect(result.status).toBe(0);
     expect(result.stdout).toBe('');
+    expect(existsSync(npm.marker)).toBe(false);
     const [file] = crossingFiles(result.home);
     expect(file).toBeDefined();
     const lines = readFileSync(join(result.home, file ?? ''), 'utf8').trim().split('\n');
