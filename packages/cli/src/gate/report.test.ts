@@ -59,7 +59,7 @@ describe('the counts', () => {
     expect(count(report.origin, 'prompt')).toBe(3);
     expect(count(report.origin, 'none-seen')).toBe(1);
     expect(count(report.origin, 'web')).toBe(0);
-    expect(report.novelty.map((one) => one.value)).toEqual(['fleet', 'repository', 'session', 'none']);
+    expect(report.novelty.map((one) => one.value)).toEqual(['fleet', 'repository', 'session', 'none', 'not-read']);
     expect(count(report.decidedBy, 'agent')).toBe(1);
     expect(count(report.next, 'routed-around')).toBe(1);
     expect(count(report.status, 'error')).toBe(1);

@@ -6,7 +6,7 @@ import type { Redactor } from '../sessions/redact.js';
 import { SOURCES } from '../sessions/sources.js';
 import { listDir, logLines, sessionFolders, subagentFiles } from '../sessions/store.js';
 import { checkCall, type Crossing, type Removal, type UnreadShape } from './checks.js';
-import { PERMISSIONS, type Miss, type Origin, type Permission, type Status } from './record.js';
+import { permissionOf, type Miss, type Origin, type Permission, type Status } from './record.js';
 
 export interface TranscriptFile {
   file: string;
@@ -92,8 +92,6 @@ export interface TranscriptRead {
 }
 
 const stringOf = (value: unknown): string | null => (typeof value === 'string' && value !== '' ? value : null);
-
-const permissionOf = (value: string): Permission => PERMISSIONS.find((known) => known === value) ?? 'other';
 
 const blocksOf = (line: Obj): Obj[] => {
   const content = isObj(line.message) ? line.message.content : undefined;

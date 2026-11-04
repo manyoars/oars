@@ -4,25 +4,32 @@ import { CROSSING_CLASSES, CROSSING_FORMS, type CrossingClass, type CrossingForm
 
 export const GATE_VERSION = 1;
 
-export const ORIGINS = ['prompt', 'repo-file', 'web', 'tool-output', 'skill', 'harness', 'none-seen'] as const;
+/** Where a row came from. A replay row is read from a transcript, a hook row was written as the call crossed, and `both` is a hook row a replay then filled in. */
+export const VIAS = ['hook', 'replay', 'both'] as const;
+export type Via = (typeof VIAS)[number];
+
+/** `not-read` on a field says no one has read it for this row yet: a hook row has no transcript, so the fields a transcript gives read `not-read` until a replay fills them. */
+export const NOT_READ = 'not-read';
+
+export const ORIGINS = ['prompt', 'repo-file', 'web', 'tool-output', 'skill', 'harness', 'none-seen', 'not-read'] as const;
 export type Origin = (typeof ORIGINS)[number];
 
-export const NOVELTIES = ['fleet', 'repository', 'session', 'none'] as const;
+export const NOVELTIES = ['fleet', 'repository', 'session', 'none', 'not-read'] as const;
 export type Novelty = (typeof NOVELTIES)[number];
 
-export const DECIDERS = ['operator', 'agent'] as const;
+export const DECIDERS = ['operator', 'agent', 'not-read'] as const;
 export type Decider = (typeof DECIDERS)[number];
 
 export const PERMISSIONS = ['default', 'acceptEdits', 'plan', 'bypassPermissions', 'dontAsk', 'auto', 'other', 'unknown'] as const;
 export type Permission = (typeof PERMISSIONS)[number];
 
-export const STATUSES = ['ok', 'error', 'refused', 'none'] as const;
+export const STATUSES = ['ok', 'error', 'refused', 'none', 'not-read'] as const;
 export type Status = (typeof STATUSES)[number];
 
-export const NEXTS = ['proceeded', 'retried', 'routed-around', 'changed-name', 'stopped', 'no-result'] as const;
+export const NEXTS = ['proceeded', 'retried', 'routed-around', 'changed-name', 'stopped', 'no-result', 'not-read'] as const;
 export type Next = (typeof NEXTS)[number];
 
-export const MISSES = ['none', 'not-found'] as const;
+export const MISSES = ['none', 'not-found', 'not-read'] as const;
 export type Miss = (typeof MISSES)[number];
 
 export const AGAINST_LATEST = ['not-read', 'latest', 'not-latest', 'range', 'unstated', 'unknown'] as const;
@@ -43,6 +50,8 @@ export type NotShown = 'none';
 export interface CrossingRecord {
   kind: 'crossing';
   v: number;
+  /** Absent in a row an earlier build wrote: those were all replays. */
+  via?: Via;
   // Class P: closed vocabulary, booleans, and a UTC day.
   day: string | null;
   class: CrossingClass;
@@ -56,7 +65,7 @@ export interface CrossingRecord {
   permission: Permission;
   status: Status;
   next: Next;
-  removedLater: boolean;
+  removedLater: boolean | typeof NOT_READ;
   depth: Depth;
   miss: Miss;
   againstLatest: AgainstLatest;
@@ -100,6 +109,9 @@ export interface RegistryRow {
 }
 
 export type Row = CrossingRecord | RunRow | RegistryRow;
+
+/** The harness's permission mode, in the closed vocabulary: a mode this version does not know reads `other`. */
+export const permissionOf = (value: string): Permission => PERMISSIONS.find((known) => known === value) ?? 'other';
 
 const isRow = (value: unknown): value is Row => {
   const kind: unknown = typeof value === 'object' && value !== null ? Reflect.get(value, 'kind') : undefined;

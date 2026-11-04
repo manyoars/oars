@@ -101,7 +101,7 @@ export const reportOf = (rows: readonly Row[]): Report => {
     againstLatest: tally(AGAINST_LATEST, crossings, (row) => row.againstLatest),
     registryState: tally(REGISTRY_STATES, crossings, (row) => row.registryState),
     registryAge: tally(REGISTRY_AGES, crossings, (row) => row.registryAge),
-    removedLater: crossings.filter((row) => row.removedLater).length,
+    removedLater: crossings.filter((row) => row.removedLater === true).length,
     unseen: Object.entries(run?.unread ?? {}).map(([value, count]) => ({ value, count })),
     limits: [...LIMITS],
   };
