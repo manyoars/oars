@@ -214,7 +214,7 @@ export type PromptStop = 'interrupt' | 'rejected';
 
 /**
  * One per user prompt: the `prompt_graphs.py` and `cost_per_class.py` records joined. Derived. Classes: `session`,
- * `contextFingerprint`, `head`, `ts`, `skills`, `verify`, `stopped`, `commits`, and `redo` (A); `kind`, `v`, `rev`, `index`, `wallSec`, `cls`, `tools`,
+ * `contextFingerprint`, `frame`, `head`, `ts`, `skills`, `verify`, `stopped`, `commits`, and `redo` (A); `kind`, `v`, `rev`, `index`, `wallSec`, `cls`, `tools`,
  * `shape`, `errors`, `thinking`, `sideTools`, `turns`, `model`, `efforts`, `usage`, `recovery`, `explore`, `act`, and `bigrams` (P).
  */
 export interface PromptObservation {

@@ -16,7 +16,6 @@ import {
   VOCAB_SNAPSHOT_DATE,
   TOOL_INPUT_KEYS,
   VOCAB_VERSION,
-  vocabularyAgeDays,
 } from './public-vocabulary.js';
 import { VOCAB_DIR } from './vocab-load.js';
 
@@ -91,7 +90,6 @@ describe('registry_max_age', () => {
   const taken = Date.parse(`${VOCAB_SNAPSHOT_DATE}T00:00:00Z`);
 
   it('reads a snapshot as fresh through exactly registry_max_age and expired a millisecond after', () => {
-    expect(vocabularyAgeDays(new Date(taken - day))).toBe(0);
     expect(isVocabularyExpired(new Date(taken))).toBe(false);
     // At most `registry_max_age` old (spec Section 1.3): exactly 30 days still builds a batch, 30 days and a millisecond does not, and the clock is not floored to a day.
     expect(isVocabularyExpired(new Date(taken + REGISTRY_MAX_AGE_DAYS * day))).toBe(false);

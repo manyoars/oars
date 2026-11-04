@@ -54,6 +54,12 @@ describe('EXTRACTOR_VERSION 11', () => {
     expect(written).not.toContain('"v":"10"');
     const after = await loadStore(staged.storeDir);
     expect(after.tools).toEqual(before.tools);
+    // The other class A fields Item 4 moves: the joined frame and its id on sessions and prompts, and a subagent's agentType.
+    expect(after.sessions).toEqual(before.sessions);
+    expect(after.subagents).toEqual(before.subagents);
+    expect(after.prompts.map((prompt) => prompt.frame)).toEqual(before.prompts.map((prompt) => prompt.frame));
+    expect(after.prompts.map((prompt) => prompt.frameId)).toEqual(before.prompts.map((prompt) => prompt.frameId));
+    expect(before.sessions.some((session) => session.frame !== undefined && session.frameId !== undefined)).toBe(true);
     expect(after.tools.some((tool) => tool.keys.length > 0)).toBe(true);
     expect(derive(after, '2026-06-10T00:00:00.000Z').signatures.every((record) => record.v === EXTRACTOR_VERSION)).toBe(true);
   });
