@@ -229,8 +229,7 @@ describe('oars gate hook: a block, as a label', () => {
   });
 
   const keptFound = (extra: { ts: string; folder: string }): string =>
-    `${JSON.stringify({ kind: 'registry', v: 1, day: '2026-11-04', class: 'npm-package', state: 'found', created: '2026-10-30T00:00:00.000Z', name: 'left-pad', latest: '1.0.0', ...extra })}
-`;
+    `${JSON.stringify({ kind: 'registry', v: 1, day: '2026-11-04', class: 'npm-package', state: 'found', created: '2026-10-30T00:00:00.000Z', name: 'left-pad', latest: '1.0.0', ...extra })}\n`;
 
   it('answers a kept found only for the folder it was asked in: another folder asks again', async () => {
     const store = folder();
@@ -263,8 +262,7 @@ describe('oars gate hook: a block, as a label', () => {
     const store = folder();
     withPolicy(store, '{"classes":{"not-found":"block"}}');
     const kept = { kind: 'registry', v: 1, day: '2026-11-04', ts: new Date(NOW - 60_000).toISOString(), class: 'npm-package', state: 'not-found', created: null, name: 'ghost-lib', latest: null };
-    writeFileSync(registryCachePath(store), `${JSON.stringify(kept)}
-`);
+    writeFileSync(registryCachePath(store), `${JSON.stringify(kept)}\n`);
     const reader = vi.fn<RegistryReader>(found(OLD));
     expect(await gateHook(payload('npm install ghost-lib'), depsFor(store, { registry: reader }))).toBe('');
     expect(reader).toHaveBeenCalledTimes(1);

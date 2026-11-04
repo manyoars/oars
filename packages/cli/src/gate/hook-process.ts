@@ -2,7 +2,7 @@
 // the process before the harness's own, writing the record it has staged if the write had not finished. Nothing here may throw past `runHookProcess`: exit 1 from a
 // PreToolUse hook is a visible error and exit 2 blocks the tool call, and the hook must never cost a session either.
 import { appendFileSync } from 'node:fs';
-import { gateHook, withoutExposure, type GateHookDeps } from './hook.js';
+import { gateHook, type GateHookDeps } from './hook.js';
 import { parseRows } from './record.js';
 
 export interface HookProcess {
@@ -17,10 +17,10 @@ export interface HookProcess {
   deadlineMs: number;
 }
 
-/** The staged record is written before anything prints, so when the deadline ends the process with it still staged no note was shown: its crossing rows read as no exposure, since a row cannot be backfilled. */
+/** The staged record is written before anything prints, so when the deadline ends the process with it still staged no note or deny was shown: its crossing rows read as no exposure, since a row cannot be backfilled. A block row has `arm: none` already but names its line, so every crossing row is reset, not only those with an arm. */
 const unprinted = (text: string): string =>
   parseRows(text)
-    .map((row) => `${JSON.stringify(row.kind === 'crossing' ? withoutExposure(row) : row)}\n`)
+    .map((row) => `${JSON.stringify(row.kind === 'crossing' ? { ...row, arm: 'none', lineShown: 'none', lineHeld: 'none' } : row)}\n`)
     .join('');
 
 /** Resolves once `exit(0)` has been called, or never when the deadline timer is what ended the process. */
