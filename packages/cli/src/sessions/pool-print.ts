@@ -12,7 +12,8 @@ export interface Outgoing {
 
 /**
  * The headers Node's `fetch` would otherwise add on its own, set here so the print lists all of them. `identity` also means a reply is never compressed, so the bytes read are the bytes signed.
- * `sec-fetch-mode` and `accept-language` carry no information; they are pinned to what `fetch` sends anyway.
+ * `sec-fetch-mode` and `accept-language` carry no information; they are pinned to what `fetch` sends anyway. A conditional request also gets `cache-control: no-cache` and `pragma: no-cache` from `fetch`; `ask` sets both beside `if-none-match`.
+ * `pool-socket.test.ts` compares the print with the headers a loopback server reads off the socket, so a header a later Node adds fails there.
  */
 export const TRANSPORT_HEADERS: ReadonlyArray<[string, string]> = [
   ['accept-encoding', 'identity'],

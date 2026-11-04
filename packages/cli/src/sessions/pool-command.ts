@@ -133,7 +133,8 @@ interface Call {
 const ask = async (deps: RunDeps, step: string, server: string, path: string, init: Call): Promise<Reply> => {
   const headers: Array<[string, string]> = [['user-agent', `oars/${deps.version}`], ['accept', 'application/json']];
   if (init.token !== undefined) headers.push(['authorization', `Bearer ${init.token}`]);
-  if (init.ifNoneMatch !== undefined) headers.push(['if-none-match', init.ifNoneMatch]);
+  // Node's `fetch` writes `cache-control` and `pragma` itself whenever `if-none-match` is set, so they are named here to be printed.
+  if (init.ifNoneMatch !== undefined) headers.push(['if-none-match', init.ifNoneMatch], ['cache-control', 'no-cache'], ['pragma', 'no-cache']);
   if (init.body !== undefined) headers.push(['content-type', 'application/json']);
   headers.push(...TRANSPORT_HEADERS);
   const request: Outgoing = { method: init.body === undefined ? 'GET' : 'POST', url: new URL(path, server), headers, ...(init.body === undefined ? {} : { body: JSON.stringify(init.body) }) };
@@ -218,7 +219,9 @@ const deviceOf = ({ body }: Reply): Device => {
   const [deviceCode, userCode, verificationUri] = isObject(body) ? [textIn(body, 'device_code'), textIn(body, 'user_code'), textIn(body, 'verification_uri') ?? textIn(body, 'verification_url')] : [];
   // `openBrowser` parses the link before it returns its promise, so one that cannot parse has to stop here or it throws past the login's catch.
   if (!isObject(body) || deviceCode === undefined || userCode === undefined || verificationUri === undefined || !URL.canParse(verificationUri)) throw new CliError('The provider did not start a sign-in.', ExitCode.UNEXPECTED, LOGIN);
-  return { deviceCode, userCode, verificationUri, intervalMs: (numberIn(body, 'interval') ?? DEFAULT_INTERVAL_SEC) * 1000, expiresMs: (numberIn(body, 'expires_in') ?? DEFAULT_EXPIRY_SEC) * 1000 };
+  // An interval of 0 or below would poll with no wait and never run out the clock, so it takes the default like a missing one.
+  const interval = numberIn(body, 'interval');
+  return { deviceCode, userCode, verificationUri, intervalMs: (interval === undefined || interval <= 0 ? DEFAULT_INTERVAL_SEC : interval) * 1000, expiresMs: (numberIn(body, 'expires_in') ?? DEFAULT_EXPIRY_SEC) * 1000 };
 };
 
 /** Polls the provider's token route until the operator approves, and returns the provider's token. Time is counted in the waits asked for, so a machine that slept through the code still gets one poll that says it expired. */
@@ -382,7 +385,7 @@ const cappedError = (deps: RunDeps, reply: Reply, kept: boolean): CliError => {
   const retryAfter = reply.headers.get('retry-after');
   const wait = retryAfter === null ? undefined : waitWords(retryAfter, deps.now());
   const when = wait === undefined ? 'The pool did not say when; it counts fetches per ISO week, so try again next week.' : `Try again ${wait}.`;
-  const title = `The pool's weekly fetch cap is used up. ${when} ${kept ? 'The bundle already on disk is untouched, and recall keeps reading it.' : 'No bundle is kept yet.'}`;
+  const title = `The pool's weekly fetch cap is used up. ${when} ${kept ? 'The bundle already on disk is untouched.' : 'No bundle is kept yet.'}`;
   return new CliError(title, ExitCode.CAPPED, FETCH, { code: 'fetch_cap', title, status: 429 }, undefined, { retryAfter });
 };
 

@@ -115,6 +115,22 @@ describe.each([
   });
 });
 
+describe.each([
+  { provider: 'github', userUrl: 'https://api.github.com/user' },
+  { provider: 'google', userUrl: 'https://openidconnect.googleapis.com/v1/userinfo' },
+])('$provider answering 403', ({ provider, userUrl }) => {
+  // GitHub answers a call over its rate limit with 403, so the token may be fine: this is the provider's trouble, not a refused token.
+  it('is a named provider_error, not a refused token', async () => {
+    const token = pool.stub.issue(stubUser('302'));
+    pool.stub.forbidden.add(userUrl);
+    try {
+      expect(await pool.post('/v1/login', { provider, token })).toMatchObject({ status: 502, json: { error: 'provider_error' } });
+    } finally {
+      pool.stub.forbidden.clear();
+    }
+  });
+});
+
 describe.each(['github', 'google'])('%s out of reach', (provider) => {
   // Outside the runtime, where a stand-in fetch can reject the way a network failure does.
   const db = { prepare: () => ({ bind: () => ({ first: () => Promise.resolve(null), all: () => Promise.resolve({ results: [] }), run: () => Promise.resolve({ meta: { changes: 1 } }) }) }) };
