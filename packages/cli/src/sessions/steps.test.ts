@@ -337,7 +337,7 @@ describe('the steps each hook logs', () => {
     appendFileSync(join(staged.storeDir, 'store.lock'), 'a holder that never frees');
     await runHook('stop', JSON.stringify({ session_id: 'other', transcript_path: other }), staged.runtime, () => NOW);
     expect((await readSteps(staged.storeDir))[2]?.key).not.toBe(rows[0]?.key);
-  }, 20_000); // waits out the 5 s lock budget by design: 6.4 s measured alone, so about 3x
+  }, 20_000); // waits out the 3 s hook lock wait twice by design: 6.4 s measured alone, so about 3x
 
   it('a stop for a folder off the allowlist, or a transcript that is gone, logs an ok deposit row with nothing written and a key', async () => {
     const staged = await deposited();

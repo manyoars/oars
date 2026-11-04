@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { execFileSync } from 'node:child_process';
-import { existsSync, lstatSync, mkdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { run } from '../cli.js';
 import { CliError, ExitCode } from '../errors.js';
@@ -63,7 +63,7 @@ describe('checkSession (A38)', () => {
     expect(verdict).toEqual({ excluded: true, reason: 'term', hits: [{ key: 's1.jsonl', main: true, source: 'projects' }] });
   });
 
-  it('lets an extra term add to the term file but never stand in for a missing one', async () => {
+  it('never lets an extra term stand in for a missing term file', async () => {
     const t = setup(null);
     write(t.main('p', 's1x'), [CLEAN]);
     expect((await checkSession(t.staged.runtime, t.termsFile, 'p', 's1x', [TERM])).reason).toBe('no-terms');
@@ -171,19 +171,15 @@ describe('checkSession (A38)', () => {
   });
 
   it.for(['directory', 'fifo'] as const)('reads a plain %s named like a transcript under subagents as unreadable, as a link to one reads', async (shape, ctx) => {
+    // Git Bash's mkfifo makes nothing on Windows: a FIFO is the shape under test only where the OS has one.
+    if (shape === 'fifo' && process.platform === 'win32') return ctx.skip();
     const t = setup();
     write(t.main('p', 's8i'), [CLEAN]);
     const entry = t.agent('p', 's8i', 'agent-x');
     if (shape === 'directory') write(join(entry, 'notes.txt'), [DIRTY]);
     else {
       mkdirSync(join(entry, '..'), { recursive: true });
-      try {
-        execFileSync('mkfifo', [entry]);
-      } catch {
-        return ctx.skip();
-      }
-      // Git Bash's mkfifo makes nothing on Windows: only a real FIFO is the shape under test.
-      if (!existsSync(entry) || !lstatSync(entry).isFIFO()) return ctx.skip();
+      execFileSync('mkfifo', [entry]);
     }
     expect((await checkSession(t.staged.runtime, t.termsFile, 'p', 's8i')).reason).toBe('unreadable');
   });
