@@ -25,10 +25,16 @@ const unprinted = (text: string): string =>
 
 /** Resolves once `exit(0)` has been called, or never when the deadline timer is what ended the process. */
 export const runHookProcess = async ({ stdin, deps, exit, write, deadlineMs }: HookProcess): Promise<void> => {
-  let staged: { file: string; text: string } | null = null;
+  let staged: { file: string; text: string; stop?: () => void } | null = null;
   // The last resort when the process is stuck past its grace: keep the staged record, then go. A write that fails here has nowhere to report, so it is dropped.
   setTimeout(
     () => {
+      // A registry ask still running is stopped first, so the manager the hook started does not outlive it; a stop that throws must not cost the row.
+      try {
+        staged?.stop?.();
+      } catch {
+        // Fail-open.
+      }
       try {
         if (staged !== null) appendFileSync(staged.file, unprinted(staged.text), { mode: 0o600 });
       } catch {

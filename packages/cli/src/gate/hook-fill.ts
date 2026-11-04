@@ -2,7 +2,8 @@
 // name reads it inside the budget. The helper calls the installed manager as the hook does (`managerReader`), contacts nothing the manager would not, and a failed or
 // unreachable ask writes nothing. One ask per name at a time: a lock file in the store, dated by its mtime, is taken before the helper starts.
 import { createHash } from 'node:crypto';
-import { appendFile, mkdir, rm, stat, writeFile } from 'node:fs/promises';
+import { writeFileSync } from 'node:fs';
+import { appendFile, mkdir, rm, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { CrossingClass } from './checks.js';
 import { GATE_VERSION, folderKey, type RegistryRow } from './record.js';
@@ -21,16 +22,22 @@ export const FILL_LOCK_MS = 300_000;
 const lockPath = (storeDir: string, ask: Pick<FillAsk, 'class' | 'name'>): string =>
   join(storeDir, `gate-ask-${createHash('sha256').update(`${ask.class}\0${ask.name}`).digest('hex').slice(0, 16)}.lock`);
 
-/** Creates the lock, failing if it exists: of two hooks racing for the name, one wins. */
-const create = (path: string): Promise<boolean> =>
-  writeFile(path, '', { mode: 0o600, flag: 'wx' }).then(
-    () => true,
-    () => false,
-  );
+/**
+ * Creates the lock, failing if it exists: of two hooks racing for the name, one wins. It is synchronous so the lock never exists across a turn of the event loop before the
+ * helper starts: a deadline timer firing in such a turn would end the hook with a lock held and nothing behind it.
+ */
+const create = (path: string): boolean => {
+  try {
+    writeFileSync(path, '', { mode: 0o600, flag: 'wx' });
+    return true;
+  } catch {
+    return false;
+  }
+};
 
 /** Takes the name's lock. False when a younger one is held; an older one is a helper that died, and is taken over. */
 const takeLock = async (path: string, now: number): Promise<boolean> => {
-  if (await create(path)) return true;
+  if (create(path)) return true;
   const held = await stat(path).then(
     (found) => found.mtimeMs,
     () => now,

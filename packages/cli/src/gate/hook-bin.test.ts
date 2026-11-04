@@ -6,12 +6,17 @@ import { tmpdir } from 'node:os';
 import { delimiter, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
+import { startFill, type FillAsk } from './hook-fill.js';
 import { folderKey } from './record.js';
 
 const bin = fileURLToPath(new URL('../../dist/bin.js', import.meta.url));
+const helperBin = fileURLToPath(new URL('../../dist/gate/hook-fill-main.js', import.meta.url));
 const made: string[] = [];
+// A process the hook left behind (the cut ask's shell, a helper's manager) can still hold a folder for a moment on Windows, so a removal that fails with EPERM or EBUSY is tried
+// again: `rmSync` waits `retryDelay` longer after each failure, so four tries at 200 ms wait 0.2, 0.4, 0.6, and 0.8 s, two seconds in all. One that still fails throws: cleanup never
+// hides what the test itself found.
 afterEach(() => {
-  for (const folder of made.splice(0)) rmSync(folder, { recursive: true, force: true });
+  for (const folder of made.splice(0)) rmSync(folder, { recursive: true, force: true, maxRetries: 4, retryDelay: 200 });
 });
 
 // A store holding a not-found answer for `ghost-lib` read just now in this payload's folder, so the hook reads it from the cache and the test never races the 650 ms cut.
@@ -24,16 +29,18 @@ const seededStore = (home: string): string => {
   return store;
 };
 
+const envFor = (home: string, pathHead?: string): NodeJS.ProcessEnv => ({
+  PATH: [pathHead, process.env.PATH].filter((part) => part !== undefined && part !== '').join(delimiter),
+  APPDATA: home,
+  HOME: home,
+  USERPROFILE: home,
+  XDG_CONFIG_HOME: home,
+});
+
 const runHook = (input: string, extra: readonly string[] = [], pathHead?: string, given?: string): { status: number | null; stdout: string; home: string } => {
   const home = given ?? mkdtempSync(join(tmpdir(), 'oars-gate-bin-'));
   if (given === undefined) made.push(home);
-  const result = spawnSync(process.execPath, [bin, 'gate', 'hook', ...extra], {
-    input,
-    encoding: 'utf8',
-    timeout: 30_000,
-    cwd: home,
-    env: { PATH: [pathHead, process.env.PATH].filter((part) => part !== undefined && part !== '').join(delimiter), APPDATA: home, HOME: home, USERPROFILE: home, XDG_CONFIG_HOME: home },
-  });
+  const result = spawnSync(process.execPath, [bin, 'gate', 'hook', ...extra], { input, encoding: 'utf8', timeout: 30_000, cwd: home, env: envFor(home, pathHead) });
   return { status: result.status, stdout: result.stdout, home };
 };
 
@@ -72,8 +79,62 @@ const downNpm = (): { folder: string; log: string } => {
   return { folder, log };
 };
 
-const pause = (ms: number): void => {
-  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+// The `start` `startFill` is given, run as the hook runs it but to its end: the built helper asks the manager on PATH and writes what it learns, and has finished when this returns.
+// `startFill` is the code the hook calls to take the name's lock and start the helper, so this hand-off is the real one without the race for the hook's 650 ms cut: under load a
+// hook can end before its cut (no lock, no helper) or skip its own ask, and a test that depends on the first sight reaching the lock then says nothing about what follows it.
+// `startFill` swallows what `start` throws, so the helper's exit status is recorded for the test to assert after the hand-off: an assertion inside `start` could never fail it, and
+// an empty list shows `start` never ran.
+const helperRun = (home: string, pathHead: string, statuses: (number | null)[]) => (storeDir: string, ask: FillAsk): void => {
+  const helper = spawnSync(process.execPath, [helperBin, storeDir, ask.class, ask.name, ask.cwd], { encoding: 'utf8', timeout: 30_000, cwd: home, env: envFor(home, pathHead) });
+  statuses.push(helper.status);
+};
+
+/** Waits, by polling, until `done` holds or `ms` have passed; the caller asserts what it waited for, so a timeout reads as that assertion failing. */
+const until = async (done: () => boolean, ms = 20_000): Promise<void> => {
+  const end = Date.now() + ms;
+  while (!done() && Date.now() < end) await new Promise<void>((resolve) => setTimeout(resolve, 50));
+};
+
+const lockFiles = (store: string): string[] => (existsSync(store) ? readdirSync(store).filter((name) => name.endsWith('.lock')) : []);
+
+const rowsOf = (home: string): unknown[] => {
+  const [file] = crossingFiles(home);
+  return file === undefined
+    ? []
+    : readFileSync(join(home, file), 'utf8')
+        .split('\n')
+        .filter((line) => line !== '')
+        .map((line): unknown => JSON.parse(line));
+};
+
+/** How many built-hook sights a case runs before it says no hand-off happened. */
+const MAX_SIGHTS = 5;
+
+// Runs the built hook's sights of one name until one hands the name off. A sight ends one of three ways: it takes the name's lock and starts the helper (the lock, or the answer the helper
+// kept, is on disk when the hook exits); it ends at its own deadline with the ask stopped (no lock, no helper, no answer: node's start or the blocking spawn used the budget); or it is
+// cut before it asks at all. The second and third leave the name unasked, and the next sight asks once itself, so a store with no lock and no kept answer sends the case to its next
+// sight, at most MAX_SIGHTS, and then fails. Returns the number of sights run, the last of which handed off.
+const sightsToHandOff = (payload: string, npm: { folder: string }, home: string, store: string): number => {
+  for (let sight = 1; sight <= MAX_SIGHTS; sight += 1) {
+    const result = runHook(payload.replace('"u1"', `"u${String(sight)}"`), [], npm.folder, home);
+    expect(result.status).toBe(0);
+    expect(result.stdout).toBe('');
+    if (lockFiles(store).length > 0 || existsSync(join(store, 'gate-registry.jsonl'))) return sight;
+  }
+  return expect.unreachable(`no sight of ${String(MAX_SIGHTS)} took the lock or started the helper`);
+};
+
+// One sight after the hand-off, run again if the box was so loaded that the hook was ended before it wrote its row: with the lock or the answer kept it asks nothing, so a repeat can start no
+// manager. At most MAX_SIGHTS, then the case fails.
+const sightWithRow = (payload: string, id: string, npm: { folder: string }, home: string): void => {
+  for (let tries = 0; tries < MAX_SIGHTS; tries += 1) {
+    const before = rowsOf(home).length;
+    const result = runHook(payload.replace('"u1"', `"${id}"`), [], npm.folder, home);
+    expect(result.status).toBe(0);
+    expect(result.stdout).toBe('');
+    if (rowsOf(home).length > before) return;
+  }
+  expect.unreachable(`no row was written in ${String(MAX_SIGHTS)} sights`);
 };
 
 /** How many lines of the manager's log read `word`. */
@@ -124,41 +185,104 @@ describe.skipIf(!existsSync(bin))('the built oars gate hook', () => {
     expect(JSON.parse(lines[0] ?? '')).toMatchObject({ kind: 'crossing', via: 'hook', name: 'left-pad', registryState: 'not-read' });
   });
 
-  it('fills the cache after a cut ask: the first sight reads not-read, the next reads found', () => {
+  // The built hook takes the sight and starts the helper itself, as the harness runs it. A sight is one of three things: it may skip its own ask (node's start used the budget), run it and
+  // cut it, or be ended by its deadline before it holds a lock (no lock, no helper, so the next sight asks). `sightsToHandOff` runs sights until one hands off, so the cases pin what follows
+  // exactly: at most two starts a sight, the helper's single finish, the lock or the cache it leaves, no start after the hand-off, and a row on every sight after it.
+  it('fills the cache after a cut ask: the built hook starts the helper, and the sight after it reads found and asks nothing', async () => {
     const payload = JSON.stringify({ session_id: 's1', tool_use_id: 'u1', tool_name: 'Bash', tool_input: { command: 'npm install slow-lib' }, cwd: tmpdir(), permission_mode: 'default' });
     const npm = slowNpm();
-    const first = runHook(payload, [], npm.folder);
-    expect(first.status).toBe(0);
-    const cache = join(first.home, 'oars', 'sessions', 'gate-registry.jsonl');
-    // The helper outlives the hook: wait for its answer to land before the next sight, and before cleanup removes the home under it.
-    for (let waited = 0; waited < 30_000 && !existsSync(cache); waited += 250) pause(250);
-    expect(existsSync(cache)).toBe(true);
-    // One ask at a time per name: the hook's own ask was stopped before the helper began, so it never finished. Two starts, one finish.
-    expect(logged(npm.log, 'started')).toBe(2);
+    const home = mkdtempSync(join(tmpdir(), 'oars-gate-bin-'));
+    made.push(home);
+    const store = join(home, 'oars', 'sessions');
+    const sights = sightsToHandOff(payload, npm, home, store);
+    // The helper is detached: it has finished when it has logged its end, kept its answer, and let go of the lock.
+    await until(() => logged(npm.log, 'ended') >= 1 && existsSync(join(store, 'gate-registry.jsonl')) && lockFiles(store).length === 0);
     expect(logged(npm.log, 'ended')).toBe(1);
-    const second = runHook(payload.replace('"u1"', '"u2"'), [], npm.folder, first.home);
-    expect(second.status).toBe(0);
-    expect(second.stdout).toBe('');
-    const [file] = crossingFiles(first.home);
-    const rows: unknown[] = readFileSync(join(first.home, file ?? ''), 'utf8').trim().split('\n').map((line): unknown => JSON.parse(line));
-    expect(rows).toMatchObject([{ registryState: 'not-read' }, { registryState: 'found' }]);
-  });
+    expect(existsSync(join(store, 'gate-registry.jsonl'))).toBe(true);
+    expect(lockFiles(store)).toEqual([]);
+    const asked = logged(npm.log, 'started');
+    expect(asked).toBeGreaterThanOrEqual(1);
+    expect(asked).toBeLessThanOrEqual(2 * sights);
+    sightWithRow(payload, 'u-after', npm, home);
+    expect(logged(npm.log, 'started')).toBe(asked);
+    // A sight ended by its deadline may leave no row, so the count is a range; the sight after the hand-off wrote one, which reads the kept answer.
+    const rows = rowsOf(home);
+    expect(rows.length).toBeGreaterThanOrEqual(1);
+    expect(rows.length).toBeLessThanOrEqual(sights + 1);
+    for (const row of rows.slice(0, -1)) expect(row).toMatchObject({ registryState: 'not-read' });
+    expect(rows.at(-1)).toMatchObject({ registryState: 'found' });
+  }, 60_000);
 
-  it('starts no new ask on later sights while the lock is held, after a down manager', () => {
+  it('starts no new ask on later sights while the lock is held, after a down manager', async () => {
     const payload = JSON.stringify({ session_id: 's1', tool_use_id: 'u1', tool_name: 'Bash', tool_input: { command: 'npm install down-lib' }, cwd: tmpdir(), permission_mode: 'default' });
     const npm = downNpm();
-    const first = runHook(payload, [], npm.folder);
-    expect(first.status).toBe(0);
-    // The helper's ask fails after its 2 s; wait for that finish (the hook's own, stopped ask never finishes), then let its process end.
-    for (let waited = 0; waited < 30_000 && logged(npm.log, 'ended') < 1; waited += 250) pause(250);
-    pause(1000);
-    expect(runHook(payload.replace('"u1"', '"u2"'), [], npm.folder, first.home).status).toBe(0);
-    expect(runHook(payload.replace('"u1"', '"u3"'), [], npm.folder, first.home).status).toBe(0);
-    pause(1500);
-    expect(logged(npm.log, 'started')).toBe(2);
-    const [file] = crossingFiles(first.home);
-    const rows: unknown[] = readFileSync(join(first.home, file ?? ''), 'utf8').trim().split('\n').map((line): unknown => JSON.parse(line));
-    expect(rows).toMatchObject([{ registryState: 'not-read' }, { registryState: 'not-read' }, { registryState: 'not-read' }]);
+    const home = mkdtempSync(join(tmpdir(), 'oars-gate-bin-'));
+    made.push(home);
+    const store = join(home, 'oars', 'sessions');
+    const sights = sightsToHandOff(payload, npm, home, store);
+    // A failed ask keeps its lock, so the helper is done when it has logged its end with the lock still there.
+    await until(() => logged(npm.log, 'ended') >= 1 && lockFiles(store).length === 1);
+    expect(logged(npm.log, 'ended')).toBe(1);
+    expect(lockFiles(store)).toHaveLength(1);
+    const asked = logged(npm.log, 'started');
+    expect(asked).toBeGreaterThanOrEqual(1);
+    expect(asked).toBeLessThanOrEqual(2 * sights);
+    // The lock is held and fresh, so neither later sight asks the manager: the log shows no start beyond the sights up to the hand-off.
+    sightWithRow(payload, 'u-after-1', npm, home);
+    sightWithRow(payload, 'u-after-2', npm, home);
+    expect(logged(npm.log, 'started')).toBe(asked);
+    expect(lockFiles(store)).toHaveLength(1);
+    // A sight ended by its deadline may leave no row, so the count is a range; the two sights after the hand-off each wrote one.
+    const rows = rowsOf(home);
+    expect(rows.length).toBeGreaterThanOrEqual(2);
+    expect(rows.length).toBeLessThanOrEqual(sights + 2);
+    for (const row of rows) expect(row).toMatchObject({ registryState: 'not-read' });
+  }, 60_000);
+
+  // The same two outcomes through `startFill` and the built helper, without the hook's first sight: the hand-off is the code the hook calls, and this holds even on a box so loaded that the
+  // first sight never reaches its cut.
+  it('hands a cut ask to the built helper through startFill, which fills the cache and lets go of the lock', async () => {
+    const payload = JSON.stringify({ session_id: 's1', tool_use_id: 'u1', tool_name: 'Bash', tool_input: { command: 'npm install slow-lib' }, cwd: tmpdir(), permission_mode: 'default' });
+    const npm = slowNpm();
+    const home = mkdtempSync(join(tmpdir(), 'oars-gate-bin-'));
+    made.push(home);
+    const store = join(home, 'oars', 'sessions');
+    const statuses: (number | null)[] = [];
+    await startFill(store, { class: 'npm-package', name: 'slow-lib', cwd: tmpdir() }, Date.now(), helperRun(home, npm.folder, statuses));
+    expect(statuses).toEqual([0]);
+    // One ask for the name: the helper's, which finished and kept its answer, and let go of the lock.
+    expect(existsSync(join(store, 'gate-registry.jsonl'))).toBe(true);
+    expect(logged(npm.log, 'started')).toBe(1);
+    expect(logged(npm.log, 'ended')).toBe(1);
+    expect(lockFiles(store)).toEqual([]);
+    const sight = runHook(payload, [], npm.folder, home);
+    expect(sight.status).toBe(0);
+    expect(sight.stdout).toBe('');
+    expect(logged(npm.log, 'started')).toBe(1);
+    const [file] = crossingFiles(home);
+    const rows: unknown[] = readFileSync(join(home, file ?? ''), 'utf8').trim().split('\n').map((line): unknown => JSON.parse(line));
+    expect(rows).toMatchObject([{ registryState: 'found' }]);
+  }, 60_000);
+
+  it('keeps the lock after a down manager answers the helper startFill started, so later sights start no ask', async () => {
+    const payload = JSON.stringify({ session_id: 's1', tool_use_id: 'u1', tool_name: 'Bash', tool_input: { command: 'npm install down-lib' }, cwd: tmpdir(), permission_mode: 'default' });
+    const npm = downNpm();
+    const home = mkdtempSync(join(tmpdir(), 'oars-gate-bin-'));
+    made.push(home);
+    const store = join(home, 'oars', 'sessions');
+    const statuses: (number | null)[] = [];
+    await startFill(store, { class: 'npm-package', name: 'down-lib', cwd: tmpdir() }, Date.now(), helperRun(home, npm.folder, statuses));
+    expect(statuses).toEqual([0]);
+    expect(logged(npm.log, 'started')).toBe(1);
+    expect(logged(npm.log, 'ended')).toBe(1);
+    expect(lockFiles(store)).toHaveLength(1);
+    expect(runHook(payload.replace('"u1"', '"u2"'), [], npm.folder, home).status).toBe(0);
+    expect(runHook(payload.replace('"u1"', '"u3"'), [], npm.folder, home).status).toBe(0);
+    expect(logged(npm.log, 'started')).toBe(1);
+    expect(lockFiles(store)).toHaveLength(1);
+    const [file] = crossingFiles(home);
+    const rows: unknown[] = readFileSync(join(home, file ?? ''), 'utf8').trim().split('\n').map((line): unknown => JSON.parse(line));
+    expect(rows).toMatchObject([{ registryState: 'not-read' }, { registryState: 'not-read' }]);
   }, 60_000);
 
   it('prints a labeled deny on stdout and exits 0 when the policy says block and the manager answered not found', () => {
