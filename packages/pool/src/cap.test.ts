@@ -58,9 +58,9 @@ describe('deposit or capped access (V12)', () => {
     expect(await pool.get('/bundle/2.1.314/0', token)).toMatchObject({ status: 403, json: { error: 'read_cap', message: containing('oars pool deposit') } });
   });
 
-  it('counts across pulls below the cap: a stack with fewer reads than the cap leaves the rest', async () => {
+  it('counts across pulls below the cap: a version with fewer reads than the cap leaves the rest', async () => {
     const { token } = await pool.signIn('github', stubUser('2005'));
-    const none = await pool.get('/v1/slices/python', token);
+    const none = await pool.get('/bundle/9.9.9/0', token);
     expect(none.status).toBe(200);
     const after = await slice(token);
     expect(after.reads).toHaveLength(CAP);
@@ -127,7 +127,7 @@ describe('deposit or capped access (V12)', () => {
       const other = await bare.signIn('github', stubUser('2202'));
       const db = await bare.db();
       await db.prepare('UPDATE accounts SET reads_served = 1 WHERE id = ?').bind(account).run();
-      await db.prepare("INSERT INTO deposits (account, id, stacks, skeleton) VALUES (?, 'damaged', '[]', 'not json')").bind(other.account).run();
+      await db.prepare("INSERT INTO deposits (account, id, skeleton) VALUES (?, 'damaged', 'not json')").bind(other.account).run();
       expect(await bare.get('/bundle/2.1.314/0', token)).toMatchObject({ status: 403, json: { error: 'read_cap' } });
     } finally {
       await bare.dispose();

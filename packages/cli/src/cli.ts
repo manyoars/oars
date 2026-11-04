@@ -625,7 +625,7 @@ const buildProgram = (deps: RunDeps, argv: string[]): Command => {
 
   pool
     .command('pull')
-    .description('fetch one harness version's signed bundle, verify it against the key pinned at login, and keep it locally')
+    .description('fetch the signed bundle for one harness version, verify it against the key pinned at login, and keep it locally')
     .requiredOption('--harness-version <version>', 'the public harness version whose bundle to fetch')
     .option(serverOption, serverHelp)
     .action(async (_options: OptionValues, command: Command) => {

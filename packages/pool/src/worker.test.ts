@@ -103,9 +103,9 @@ describe('an oversized deposit with a declared length', () => {
   });
 });
 
-describe('a stack name that does not decode', () => {
+describe('a harness version that does not decode', () => {
   it('is a named refusal, not an uncaught error', async () => {
-    expect(await pool.get('/v1/slices/%E0%A4%A', TOKEN)).toMatchObject({ status: 400, json: { error: 'unknown_stack', field: 'stack' } });
+    expect(await pool.get('/bundle/%E0%A4%A/0', TOKEN)).toMatchObject({ status: 400, json: { error: 'unknown_harness_version', field: 'harnessVersion' } });
   });
 });
 

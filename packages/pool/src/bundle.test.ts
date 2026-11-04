@@ -21,50 +21,74 @@ const depositor = async (id: string, stack: { languages: string[] } = { language
   return token;
 };
 
-const pulled = async (stack: string, token: string): Promise<Bundle> => {
-  const { status, json } = await pool.get(`/v1/slices/${stack}`, token);
+const VERSION = '2.1.314';
+
+const pulled = async (token: string, version = VERSION): Promise<Bundle> => {
+  const { status, json } = await pool.get(`/bundle/${version}/0`, token);
   expect(status).toBe(200);
-  const verified = await verifyBundle(json, pool.signingKey(), stack);
+  const verified = await verifyBundle(json, pool.signingKey(), version);
   if (!verified.ok) throw new Error(verified.reason);
   return verified.bundle;
 };
 
-describe('a slice over three accounts', () => {
+describe('a bundle over three accounts', () => {
   it('serves a read only at the third account, with clusters counted by account', async () => {
     const first = await depositor('1001');
-    expect((await pulled('all', first)).reads).toEqual([]);
-    expect((await pulled('all', first)).cells).toEqual([]);
+    expect((await pulled(first)).reads).toEqual([]);
+    expect((await pulled(first)).cells).toEqual([]);
 
     const second = await depositor('1002');
-    expect((await pulled('all', second)).reads).toEqual([]);
+    expect((await pulled(second)).reads).toEqual([]);
 
     // A second session from one account is still one cluster.
     expect((await pool.post('/v1/deposits', sampleSkeleton('00000000000a1002'), second)).status).toBe(201);
-    expect((await pulled('all', second)).reads).toEqual([]);
+    expect((await pulled(second)).reads).toEqual([]);
 
     await depositor('1003');
-    const slice = await pulled('all', first);
+    const slice = await pulled(first);
     expect(slice.reads.length).toBeGreaterThan(0);
     for (const read of slice.reads) expect(read.clusters).toBe(3);
     expect(new Set(slice.reads.map((read) => read.family)).has('fit')).toBe(true);
     expect(slice.cells.length).toBeGreaterThan(0);
     for (const cell of slice.cells) expect(cell.clusters).toBe(3);
-    const fit = slice.reads.find((read) => read.family === 'fit' && read.bundle.level === 'shape');
+    const fit = slice.reads.find((read) => read.family === 'fit' && read.slice.level === 'shape');
     expect(fit?.value).toMatchObject({ failed: 0 });
     // Four deposits of two steps each.
     expect(fit?.n).toBe(8);
   });
 
-  it('cuts by stack: an account on another stack lifts nothing here', async () => {
+  it('serves rule 3 strata pool-wide: a language under the floor is withheld, one over it is served', async () => {
     const token = await depositor('1004', { languages: ['python'] });
-    expect((await pulled('python', token)).reads).toEqual([]);
-    expect((await pulled('typescript', token)).reads.length).toBeGreaterThan(0);
+    const bundle = await pulled(token);
+    expect(bundle.strata.find((cell) => cell.dimension === 'language' && cell.value === 'python')).toBeUndefined();
+    expect(bundle.strata.find((cell) => cell.dimension === 'language' && cell.value === 'typescript')).toMatchObject({ clusters: 3 });
+    expect(bundle.reads.length).toBeGreaterThan(0);
   });
 
-  it('names a stack outside the vocabulary, and turns away a caller with no account', async () => {
+  it('names no stack in any key of a response', async () => {
+    const { json } = await pool.get(`/bundle/${VERSION}/0`, await depositor('1006'));
+    const walk = (value: unknown, path: string): string[] => {
+      if (typeof value !== 'object' || value === null) return [];
+      return Object.entries(value).flatMap(([key, held]) => [...(/stack/i.test(key) ? [`${path}.${key}`] : []), ...walk(held, `${path}.${key}`)]);
+    };
+    expect(walk(JSON.parse(textOf(json, 'payload')), 'bundle')).toEqual([]);
+    expect(Object.keys(json as object).sort()).toEqual(['payload', 'signature']);
+  });
+
+  it('turns away a caller with no credential, and names a version outside the vocabulary', async () => {
     const { token } = await pool.signIn('github', stubUser('1005'));
-    expect(await pool.get('/v1/slices/acme', token)).toMatchObject({ status: 400, json: { error: 'unknown_stack', field: 'stack' } });
     expect((await pool.get('/bundle/2.1.314/0')).status).toBe(401);
+    expect((await pool.get('/bundle/2.1.314/0', 'not-a-token')).status).toBe(401);
+    expect(await pool.get('/bundle/acme/0', token)).toMatchObject({ status: 400, json: { error: 'unknown_harness_version', field: 'harnessVersion' } });
+    expect(await pool.get('/bundle/2.1.314/9', token)).toMatchObject({ status: 400, json: { error: 'unknown_vocab_version', field: 'vocabVersion' } });
+  });
+
+  it('has no route by stack, and no other path shape', async () => {
+    const { token } = await pool.signIn('github', stubUser('1007'));
+    expect((await pool.get('/v1/slices/typescript', token)).status).toBe(404);
+    expect((await pool.get('/v1/slices/all', token)).status).toBe(404);
+    expect((await pool.get('/bundle/2.1.314', token)).status).toBe(404);
+    expect((await pool.get('/bundle/2.1.314/0/typescript', token)).status).toBe(404);
   });
 
   it('says so when the pool has no signing key', async () => {
@@ -109,7 +133,7 @@ describe('clusters over the cells of a read', () => {
       await depositOn(spread, '3002', ['2026-11-02']);
       const token = await depositOn(spread, '3003', ['2026-11-03']);
       const slice = await readsIn(spread, token);
-      const fit = slice.reads.find((read) => read.family === 'fit' && read.bundle.level === 'shape');
+      const fit = slice.reads.find((read) => read.family === 'fit' && read.slice.level === 'shape');
       expect(fit?.clusters).toBe(3);
       expect(fit?.inputs).toHaveLength(3);
       for (const read of slice.reads) expect(read.clusters).toBe(3);
@@ -128,9 +152,9 @@ describe('clusters over the cells of a read', () => {
 
 describe('a stored row whose day no calendar holds', () => {
   // Inserted past the deposit route, the way a row written before the check, or under a wider vocabulary, would sit there.
-  const stored = async (bad: TestPool, account: string, id: string, stacks: readonly string[], day: string): Promise<void> => {
+  const stored = async (bad: TestPool, account: string, id: string, day: string): Promise<void> => {
     await (await bad.db()).prepare('INSERT INTO accounts (id) VALUES (?)').bind(account).run();
-    await (await bad.db()).prepare('INSERT INTO deposits (account, id, stacks, skeleton) VALUES (?, ?, ?, ?)').bind(account, id, JSON.stringify(stacks), JSON.stringify(sampleSkeleton(id, undefined, day))).run();
+    await (await bad.db()).prepare('INSERT INTO deposits (account, id, skeleton) VALUES (?, ?, ?)').bind(account, id, JSON.stringify(sampleSkeleton(id, undefined, day))).run();
   };
 
   it.each(['2026-99-99', '0000-00-00', '2026-13-01', '2026-02-31'])('%s stops counting and every pull still answers', async (day) => {
@@ -146,19 +170,16 @@ describe('a stored row whose day no calendar holds', () => {
       await deposited('5002');
       const token = await deposited('5003');
 
-      await stored(bad, 'acct_bad_typescript', '00000000000b0001', ['typescript'], day);
-      // A row naming no stack reaches only `all`, which reads every row.
-      await stored(bad, 'acct_bad_no_stack', '00000000000b0002', [], day);
+      await stored(bad, 'acct_bad_one', '00000000000b0001', day);
+      await stored(bad, 'acct_bad_two', '00000000000b0002', day);
 
-      for (const stack of ['all', 'typescript']) {
-        const { status, json } = await bad.get(`/v1/slices/${stack}`, token);
-        expect(status).toBe(200);
-        const verified = await verifyBundle(json, bad.signingKey(), stack);
-        if (!verified.ok) throw new Error(verified.reason);
-        // The three good accounts still reach the floor, and the two bad rows add nothing to it.
-        expect(verified.bundle.reads.length).toBeGreaterThan(0);
-        for (const read of verified.bundle.reads) expect(read.clusters).toBe(3);
-      }
+      const { status, json } = await bad.get(`/bundle/${VERSION}/0`, token);
+      expect(status).toBe(200);
+      const verified = await verifyBundle(json, bad.signingKey(), VERSION);
+      if (!verified.ok) throw new Error(verified.reason);
+      // The three good accounts still reach the floor, and the two bad rows add nothing to it.
+      expect(verified.bundle.reads.length).toBeGreaterThan(0);
+      for (const read of verified.bundle.reads) expect(read.clusters).toBe(3);
     } finally {
       await bad.dispose();
     }
@@ -172,7 +193,7 @@ describe('the client refuses', () => {
     return { payload: textOf(json, 'payload'), signature: textOf(json, 'signature') };
   };
 
-  it('a tampered payload, a tampered signature, another key, and another stack', async () => {
+  it('a tampered payload, a tampered signature, another key, and another harness version', async () => {
     const good = await signed();
     expect(fieldOf(await verifyBundle(good, pool.signingKey(), '2.1.314'), 'ok')).toBe(true);
     const tampered = good.payload.replace(/"clusters":\d+/, '"clusters":99');
@@ -180,13 +201,13 @@ describe('the client refuses', () => {
     expect(await verifyBundle({ ...good, payload: tampered }, pool.signingKey(), '2.1.314')).toMatchObject({ ok: false, reason: containing('signature') });
     const flipped = good.signature.startsWith('A') ? `B${good.signature.slice(1)}` : `A${good.signature.slice(1)}`;
     expect(await verifyBundle({ ...good, signature: flipped }, pool.signingKey(), '2.1.314')).toMatchObject({ ok: false, reason: containing('signature') });
-    expect(await verifyBundle(good, { ...pool.signingKey(), x: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA' }, 'all')).toMatchObject({ ok: false, reason: containing('signature') });
-    expect(await verifyBundle(good, pool.signingKey(), 'python')).toMatchObject({ ok: false, reason: containing('stack') });
+    expect(await verifyBundle(good, { ...pool.signingKey(), x: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA' }, '2.1.314')).toMatchObject({ ok: false, reason: containing('signature') });
+    expect(await verifyBundle(good, pool.signingKey(), '2.2.0')).toMatchObject({ ok: false, reason: containing('harness version') });
   });
 
-  it('anything that is not a signed slice', async () => {
-    expect(await verifyBundle('nope', pool.signingKey(), '2.1.314')).toMatchObject({ ok: false, reason: containing('not a signed slice') });
+  it('anything that is not a signed bundle', async () => {
+    expect(await verifyBundle('nope', pool.signingKey(), '2.1.314')).toMatchObject({ ok: false, reason: containing('not a signed bundle') });
     expect(await verifyBundle({ payload: 'x', signature: '%%%' }, pool.signingKey(), '2.1.314')).toMatchObject({ ok: false, reason: containing('signature') });
-    expect(await verifyBundle({ payload: 'x', signature: 'AAAA' }, { kty: 'nope', crv: 'nope', x: 'nope' }, 'all')).toMatchObject({ ok: false, reason: containing('signature') });
+    expect(await verifyBundle({ payload: 'x', signature: 'AAAA' }, { kty: 'nope', crv: 'nope', x: 'nope' }, '2.1.314')).toMatchObject({ ok: false, reason: containing('signature') });
   });
 });

@@ -511,7 +511,7 @@ describe('oars pool pull', () => {
     return existsSync(root) ? readdirSync(root, { recursive: true }).map(String).filter((name) => name.endsWith('.json')) : [];
   };
 
-  it('verifies the slice against the pinned key and keeps it in its signed form', async () => {
+  it('verifies the bundle against the pinned key and keeps it in its signed form', async () => {
     const { scene, sign } = await signedScene();
     const payload = sliceBody('2.1.314');
     const signature = await sign(payload);
@@ -523,7 +523,7 @@ describe('oars pool pull', () => {
     expect(JSON.parse(readFileSync(String(at(answer, 'file')), 'utf8'))).toEqual({ payload, signature });
   });
 
-  it('names a stack, and says when an account was capped', async () => {
+  it('names the version, and says when an account was capped', async () => {
     const { scene, sign } = await signedScene();
     const payload = sliceBody('2.1.9', { limit: 50, served: 2 });
     const signature = await sign(payload);
@@ -533,7 +533,7 @@ describe('oars pool pull', () => {
     expect(scene.h.out.join('')).toContain('Capped: 2 of 50 reads');
   });
 
-  it('refuses a tampered slice and a slice of another stack, and keeps neither', async () => {
+  it('refuses a tampered bundle and a bundle of another harness version, and keeps neither', async () => {
     const { scene, sign } = await signedScene();
     const payload = sliceBody('2.1.314');
     const signature = await sign(payload);
@@ -547,7 +547,7 @@ describe('oars pool pull', () => {
     expect(replicas(scene)).toEqual([]);
   });
 
-  it('refuses a stack the vocabulary does not hold before asking, asks for a sign-in, and passes on a named refusal', async () => {
+  it('refuses a harness version the vocabulary does not hold before asking, asks for a sign-in, and passes on a named refusal', async () => {
     const { scene } = await signedScene();
     expect(await scene.cli('pool', 'pull', '--harness-version', '../secret', '--server', POOL)).toBe(ExitCode.USAGE);
     expect(scene.seen).toEqual([]);
