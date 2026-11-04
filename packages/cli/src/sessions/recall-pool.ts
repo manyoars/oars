@@ -45,9 +45,11 @@ const presentOf = (values: readonly string[]): string[] => [...new Set(values.fi
 const answerOfStored = (read: Read, cells: ReadonlyMap<string, Cell>): RecallRead => {
   const cited = read.inputs.flatMap((input) => cells.get(input) ?? []);
   const frames = cited.map((cell) => bucketFields(cell.frameBucket));
+  // `firstDay` over a week cell is that week's Monday: the earliest day the evidence can hold, which the evidence may not have touched.
   const days = presentOf(cited.map((cell) => cell.day));
-  // A week cell may hold any of its seven days, so the last day the evidence can hold is the week's end, which is what a check that it predates a recall must read.
-  const lastDays = presentOf(cited.map(lastDayOfCell));
+  // A week cell may hold any of its seven days, so the last day the evidence can hold is the week's end, but never past the pool the read was made from: a read cannot hold a day its pool
+  // had not seen, and a recall made on the Wednesday of its evidence's week must not find that evidence dated after itself.
+  const lastDays = presentOf(cited.map((cell) => (read.asOf.day !== null && lastDayOfCell(cell) > read.asOf.day ? read.asOf.day : lastDayOfCell(cell))));
   const isRate = read.family === 'fit';
   const failed = countIn(read.value.failed);
   return {
