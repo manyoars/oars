@@ -4,7 +4,7 @@
 // For each phase: the heap in use before it (after a full collection), the largest heap sampled while it ran, and what it keeps after a full collection.
 // The sample is taken by a timer every 2 ms, which cannot fire during synchronous work, so a phase that is one synchronous call (marked `*`) shows
 // its heap at its end, not its peak, and no number here establishes which phase sets a command's peak: the figures show what is kept, and where
-// the heap is large when a phase ends. (--trace-gc under a small cap would show true peaks; the earlier run did not take that step.)
+// the heap is large when a phase ends. (--trace-gc under a small cap would show true peaks; no run here takes that step.)
 import { PassThrough } from 'node:stream';
 import { join, resolve, sep } from 'node:path';
 import { tmpdir } from 'node:os';

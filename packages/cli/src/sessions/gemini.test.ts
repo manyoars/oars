@@ -611,7 +611,7 @@ ${text}
   });
 
   it('never steps a prompt back before the one before it, and gives one whose time is missing or relative the last good time (upstream always writes an ISO time, so this is defensive)', () => {
-    // The relative time `'2 minutes ago'` is a defensive input (the brief's missing-or-relative-timestamp bullet); upstream writes an ISO `timestamp` on every message.
+    // The relative time `'2 minutes ago'` is a defensive input; upstream writes an ISO `timestamp` on every message.
     const times = linesOf([head, prompt(5, 'a'), { ...prompt(6, 'b'), timestamp: undefined }, { ...prompt(7, 'c'), timestamp: '2 minutes ago' }, prompt(2, 'd'), prompt(9, 'e')]).map((entry) => entry.timestamp);
     expect(times).toEqual([T(5), T(5), T(5), T(5), T(9)]);
     expect(linesOf([{ ...prompt(1, 'a'), timestamp: undefined }])[0]?.timestamp).toBe(new Date(0).toISOString());

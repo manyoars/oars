@@ -58,7 +58,7 @@ describe('item 1: a Stop hook deposit that meets a held store lock', () => {
     expect(await runHook('stop', stopInput('missed', transcript), staged.runtime, () => NOW)).toBeUndefined();
     expect(await sessionIds(staged)).not.toContain('missed');
 
-    // Without the pending list (what the walk alone did before the pending list): a whole-store deposit finds the transcript because state.json never saw it.
+    // What the walk alone does, without the pending list: a whole-store deposit finds the transcript because state.json never saw it.
     rmSync(pendingDir(staged.storeDir), { recursive: true });
     await rm(join(staged.storeDir, 'store.lock'));
     const walked = await deposit(staged.runtime, { allow: [REPO], redactDomains: [], now: () => NOW });

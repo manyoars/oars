@@ -117,7 +117,7 @@ export const harnessOf = (session: { harness?: Harness }): Harness => session.ha
 export const LANGUAGE_SHARES = ['0', 'under-10', '10-50', 'over-50'] as const;
 export type LanguageShare = (typeof LANGUAGE_SHARES)[number];
 
-/** A repository's tracked-file count by order of magnitude (spec Section 7). The lower edge is inclusive, so exactly 100 is `100-1k` and exactly 100000 is `over-100k`, as `repoSizeOf` buckets them. */
+/** A repository's tracked-file count by order of magnitude (Section 7). The lower edge is inclusive, so exactly 100 is `100-1k` and exactly 100000 is `over-100k`, as `repoSizeOf` buckets them. */
 export const REPO_FILE_BUCKETS = ['under-100', '100-1k', '1k-10k', '10k-100k', 'over-100k'] as const;
 export type RepoFilesBucket = (typeof REPO_FILE_BUCKETS)[number];
 

@@ -200,7 +200,7 @@ describe('a sidechain or Cursor line', () => {
     expect(capture([user(command('frobnicate', 'go'), { isSidechain: true }), answer('x', { isSidechain: true })]).prompts).toEqual([]);
   });
 
-  it('a Cursor session keeps its leading < rule: this brief fixes Claude Code only', () => {
+  it('a Cursor session keeps its leading < rule: only Claude Code reads the opening so far', () => {
     expect(capture([user('<div> breaks the widget'), answer()], { harness: 'cursor' }).prompts).toEqual([]);
     expect(capture([user(command('frobnicate', 'go')), answer()], { harness: 'cursor' }).prompts).toEqual([]);
     expect(capture([user('fix the widget'), answer()], { harness: 'cursor' }).prompts.map(({ head, opened }) => ({ head, opened }))).toEqual([{ head: 'fix the widget', opened: 'typed' }]);

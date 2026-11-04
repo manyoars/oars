@@ -81,7 +81,7 @@ The cost is time: every read parses the log twice, once for each session's highe
 `deposit` checks for newer captures with one pass that keeps a number per session, and `verify` reads each skeleton without its per-line content hashes, which no check reads.
 
 Measured on a synthetic store (`packages/cli/scripts/sessions-heap.mjs`): peak RSS under `--max-old-space-size=4096`, 8 prompts of 14 tool calls per session, five transcript lines per call that make no log row (text, thinking,
-and attachments), so the skeletons hold 2.55 bytes per byte of clean log (the operator's store holds at most 2.8: 1.6 GB beyond a 580 MB log). "No-op" is a deposit that skips every file, a run that made 12 captured, 6,757 unchanged);
+and attachments), so the skeletons hold 2.55 bytes per byte of clean log (the operator's store holds at most 2.8: 1.6 GB beyond a 580 MB log). "No-op" is a deposit that skips every file, as the operator's run did (12 captured, 6,757 unchanged);
 "recapture" is a deposit that reads every transcript, as after a `CAPTURE_VERSION` bump. The Log column is the log the no-op and `verify` runs start from, with every record's older copy still in it (a re-capture leaves them until the
 deposit's compaction): twice the clean log. The recapture run starts from the clean log, 49 MB at 400 sessions and 97 MB at 800.
 

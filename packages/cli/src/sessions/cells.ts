@@ -34,7 +34,7 @@ export const UNKNOWN = 'unknown';
 const ONE_OPERATOR = 1;
 
 /**
- * A harness version's bucket: its patch by tens (ruling on harness versions). 70.5 percent of one operator's later prompts ran a version not yet seen, so an
+ * A harness version's bucket: its patch by tens. 70.5 percent of one operator's later prompts ran a version not yet seen, so an
  * exact-version cell goes stale in days; a reader compares buckets by distance instead. A version with no patch stands for itself.
  */
 export const harnessBucket = (version: string | null): string => {

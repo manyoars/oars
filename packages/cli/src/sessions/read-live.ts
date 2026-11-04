@@ -31,7 +31,7 @@ export const deriveLive: DeriveFamily = ({ pool }) => {
       const share = rate(n, of);
       const baseline = rate(total(baselineCells, settled), baselineOf);
       return [
-        // The read cites the day's cells only: a pool counts accounts over a read's inputs, and the baseline must not lift the floor of a day it does not hold (spec Section 4 rule 1).
+        // The read cites the day's cells only: a pool counts accounts over a read's inputs, and the baseline must not lift the floor of a day it does not hold (Section 4 rule 1).
         body('live', cells, {
           slice: { motif: motifName(motif), day },
           value: { share, baseline, of, ratio: share === null || baseline === null || baseline === 0 ? null : rate(share, baseline) },
