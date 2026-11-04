@@ -85,19 +85,29 @@ const commitsIn = (tool: ToolObservation): number => {
 /** The `edit-verify` rule's shell call, less a backgrounded one, whose `ok` says only that it started. */
 const isVerifyCall = (tool: ToolObservation): boolean => SHELL.has(tool.tool) && !tool.keys.includes('run_in_background');
 
-const ANY_ARGS_RUNNER = /^(?:vitest|jest|mocha|ava|pytest|tox|nox|rspec|phpunit|ctest|tsc|eslint|ruff|mypy|pyright|playwright|cypress|bazel|ninja|pre-commit)(?: |$)/;
+const ANY_ARGS_RUNNER = /^(?:vitest|jest|mocha|ava|pytest|tox|nox|rspec|phpunit|ctest|tsc|eslint|ruff|mypy|pyright|playwright|cypress|bazel|ninja|pre-commit|unittest)(?: |$)/;
+/** A package manager that runs a tool by name: `pnpm vitest run`, `yarn tsc`, `npm exec vitest`. */
+const PACKAGE_RUNNER = /^(?:npm exec|pnpm|yarn|bun) /;
+/** Runners whose installing or opening subcommand verifies nothing. */
+const NOT_A_RUN = /^(?:playwright install|pre-commit install|cypress open)(?: |$)/;
 const VERB_RUNNER = /^(?:npm|pnpm|yarn|bun|mvn|mvnw|gradle|gradlew|just|make|cargo|go|dotnet|deno|swift|astro|nx|turbo) /;
 const WORK_WORD = /^(?:[\w:-]*[-:])?(?:test|tests|check|checks|typecheck|verify|build|lint|compile|e2e|clippy|nextest|vet)(?:[-:][\w:-]*)?$/;
 const OTHER_RUNNER = /^(?:make$|(?:npm|bun) t(?: |$)|(?:mvn|mvnw) (?:.* )?(?:package|install)(?: |$))/;
-/** A subcommand whose later words are names, not work: `npm install lint-staged` and `go run check` verify nothing. */
-const NAMES_WORDS = /^(?:npm|pnpm|yarn|bun|cargo|go|dotnet) (?:add|i|install|uninstall|remove|rm|link|view|get)(?: |$)|^(?:cargo|go) run(?: |$)/;
-const RUN_WRAPPER =/^(?:npx|bunx|uvx|pipx run|uv run|poetry run|pnpm exec|pnpm dlx|yarn dlx|bundle exec|python[\d.]*|py) /;
+/**
+ * A subcommand whose later words are names, not work: `npm install lint-staged` and `go run check` verify nothing. One word may come before it, because
+ * a flag's value stays in `run`: `pnpm --filter web add test-utils` reads `pnpm web add test-utils`, and `yarn workspace web add x` has two. A first
+ * word that is itself work (`cargo test add`, `npm test install`) runs that work, and the name after it is its argument.
+ */
+const NAMES_WORDS = /^(?:npm|pnpm|yarn|bun|cargo|go|dotnet) (?:(?!run )(?:workspace \S+|\S+) )?(?:add|i|install|uninstall|remove|rm|link|view|get)(?: |$)|^(?:cargo|go) run(?: |$)/;
+const RUN_WRAPPER = /^(?:npx|bunx|uvx|pipx run|uv run|poetry run|pnpm exec|pnpm dlx|yarn dlx|bundle exec|python[\d.]*|py) /;
 
 /** Whether a segment runs a build, a test suite, a type check, or a linter. A rule over the captured `run`, so a change here re-derives without a transcript. */
 export const isRunner = (segment: ShellSegment): boolean => {
   const run = segment.run.replace(RUN_WRAPPER, '');
-  if (ANY_ARGS_RUNNER.test(run) || OTHER_RUNNER.test(run)) return true;
-  if (NAMES_WORDS.test(run)) return false;
+  const bare = run.replace(PACKAGE_RUNNER, '');
+  if (NOT_A_RUN.test(bare)) return false;
+  if (ANY_ARGS_RUNNER.test(run) || ANY_ARGS_RUNNER.test(bare) || OTHER_RUNNER.test(run)) return true;
+  if (NAMES_WORDS.test(run) && !WORK_WORD.test(run.split(' ')[1] ?? '')) return false;
   return VERB_RUNNER.test(run) && run.split(' ').slice(1).some((word) => WORK_WORD.test(word));
 };
 
