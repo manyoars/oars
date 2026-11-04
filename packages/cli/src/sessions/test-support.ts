@@ -277,3 +277,36 @@ export const stageCopilot = (root: string, files: readonly CopilotFixture[]): st
   }
   return home;
 };
+
+/** A Gemini CLI chat-file line: the head metadata, a message, or a `$set`/`$patch`/`$rewindTo` record (google-gemini/gemini-cli @ 89e9d25d, packages/core/src/services/chatRecordingTypes.ts). */
+export const geminiHead = (sessionId: string, extra: object = {}): object => ({ sessionId, projectHash: 'a1b2c3', startTime: '2026-06-01T10:00:00.000Z', lastUpdated: '2026-06-01T10:00:00.000Z', kind: 'main', ...extra });
+
+export interface GeminiFixture {
+  /** The session id, which is the head's `sessionId`; the file is `session-2026-06-01T10-00-<first 8>.jsonl`. */
+  id: string;
+  /** The project folder's name under `tmp/` (the vendor's slug). */
+  slug?: string;
+  /** What `.project_root` holds; null writes none (a pre-slug folder). */
+  projectRoot?: string | null;
+  /** Lines as objects, or raw text for a torn file. */
+  lines: readonly unknown[] | string;
+  /** Set for a subagent: its file is `chats/<parent>/<id>.jsonl`. */
+  parent?: string;
+  /** Written as a legacy `.json` file holding one pretty-printed object. */
+  legacy?: boolean;
+}
+
+/** A Gemini home holding the given sessions under `.gemini/tmp/<slug>/chats/`; returns the `.gemini` folder. */
+export const stageGemini = (root: string, files: readonly GeminiFixture[]): string => {
+  const gemini = join(root, 'gemini-home', '.gemini');
+  for (const file of files) {
+    const slug = join(gemini, 'tmp', file.slug ?? 'app');
+    const dir = file.parent === undefined ? join(slug, 'chats') : join(slug, 'chats', file.parent);
+    mkdirSync(dir, { recursive: true });
+    if (file.projectRoot !== null) writeFileSync(join(slug, '.project_root'), file.projectRoot ?? join(root, 'not-a-repo'));
+    const text = typeof file.lines === 'string' ? file.lines : `${file.lines.map((line) => JSON.stringify(line)).join('\n')}\n`;
+    if (file.legacy === true) writeFileSync(join(dir, `session-2026-06-01T10-00-${file.id.slice(0, 8)}.json`), text);
+    else writeFileSync(join(dir, file.parent === undefined ? `session-2026-06-01T10-00-${file.id.slice(0, 8)}.jsonl` : `${file.id}.jsonl`), text);
+  }
+  return gemini;
+};
