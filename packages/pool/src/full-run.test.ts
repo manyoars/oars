@@ -100,7 +100,7 @@ describe('login, deposit, and fetch against a local server', () => {
       // The four invented sessions in the fixture folder are built into the outbox, and `deposit` itself sends nothing.
       expect(await one.cli('deposit')).toBe(ExitCode.OK);
       expect(one.last()).toMatchObject({ ok: true, sessions: 4, batched: 4, uncaptured: 0, refused: 0, excluded: { term: 0, noRaw: 0, noTerms: 0, unreadable: 0 } });
-      // V10 at the server's word: nothing goes up before the covenant is accepted.
+      // At the server's word: nothing goes up before the covenant is accepted.
       await expect(one.send(0)).rejects.toMatchObject({ exitCode: ExitCode.AUTH, problem: { code: 'covenant_not_accepted' } });
       expect(await one.send(0, 'v1')).toMatchObject({ document: { ok: true, sent: true } });
       for (const index of [1, 2, 3]) expect(await one.send(index)).toMatchObject({ document: { ok: true, sent: true } });

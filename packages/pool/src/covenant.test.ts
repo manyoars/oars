@@ -1,4 +1,4 @@
-// Deposits closed by default (V10): the gate is at the server, because a live URL is reachable by anyone and a CLI check would not hold.
+// Deposits closed by default: the gate is at the server, because a live URL is reachable by anyone and a CLI check would not hold.
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { VOCAB_VERSION } from '../../cli/src/sessions/pool-wire.js';
 import { sampleSkeleton } from './sample.js';

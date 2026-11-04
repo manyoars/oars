@@ -74,6 +74,23 @@ describe('skeletonOf', () => {
     for (const from of [noFrame, noSteps, noPromptFrame]) expect(skeletonFrom(from)).toBeNull();
   });
 
+  it('sends the literal for a stored tool its server no longer lists, so the parser takes the whole session', () => {
+    const dropped = step(0, 0, 'mcp.call', { native: 'mcp__github__acme_secret_deploy', identity: { server: 'github', tool: 'acme_secret_deploy' } });
+    const kept = step(1, 0, 'mcp.call', { native: 'mcp__github__get_issue', identity: { server: 'github', tool: 'get_issue' } });
+    const skeleton = skeletonFrom(
+      store({
+        sessions: [session('s1', { frame: framed })],
+        prompts: [framedPrompt('s1', 0)],
+        tools: [tool('s1', 0, 'mcp__github__acme_secret_deploy', { steps: [dropped] }), tool('s1', 1, 'mcp__github__get_issue', { steps: [kept] })],
+      }),
+    );
+    expect(skeleton?.transcripts[0]?.tools.map((entry) => entry.steps[0]?.identity)).toEqual([
+      { server: 'github', tool: LITERAL },
+      { server: 'github', tool: 'get_issue' },
+    ]);
+    expect(parseSkeleton(JSON.parse(JSON.stringify(skeleton)))).toEqual({ ok: true, skeleton });
+  });
+
   it('folds a subagent transcript under the session that spawned it', () => {
     const from = store({
       sessions: [session('s1', { frame: framed })],
@@ -232,8 +249,9 @@ describe('parseSkeleton refuses, and names the field', () => {
   it('refuses the exact-count form (format 1) by name, and a deposit that carries deltas', () => {
     const old = parseSkeleton({ ...sample(), format: 1 });
     expect(old).toMatchObject({ ok: false, field: 'format', reason: 'the exact-count form (format 1) is no longer read; send format 2' });
-    expect(refusedField(sent(['deltas'], [{}]))).toBe('deltas');
+    expect(refusedField(sent(['deltas'], [{}]))).toBe('deltas[0].deltaKind');
     expect(refusedField(sent(['deltas'], undefined))).toBe('deltas');
+    expect(refusedField(sent(['deltas'], 'none'))).toBe('deltas');
   });
 
   it('refuses a skeleton holding no prompt and no tool, which would otherwise count as a deposit', () => {
@@ -333,7 +351,7 @@ describe('parseSkeleton refuses, and names the field', () => {
 
   // The harness list is the schema's `Harness` union: a skeleton from a harness missing from it is refused whole, so each name needs a pass here.
   it('accepts a skeleton from every harness the schema names', () => {
-    const natives: [Harness, string][] = [['claude-code', 'Bash'], ['cursor', 'run_terminal_cmd'], ['codex', 'exec_command'], ['copilot', 'bash'], ['gemini', 'run_shell_command'], ['grok', 'run_terminal_cmd']];
+    const natives: [Harness, string][] = [['claude-code', 'Bash'], ['cursor', 'run_terminal_cmd'], ['codex', 'exec_command'], ['copilot', 'bash'], ['gemini', 'run_shell_command'], ['grok', 'run_terminal_cmd'], ['vscode-copilot', 'run_in_terminal']];
     for (const [harness, native] of natives) {
       const raw = withStep({ native });
       if (!isHolder(raw)) throw new Error('the sample is not an object');
