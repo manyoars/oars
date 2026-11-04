@@ -85,7 +85,7 @@ describe('what a batch sends in place of a count', () => {
   const sample = (): SessionSkeleton => {
     const from = store({
       sessions: [session('s1', { frame: framed })],
-      prompts: [prompt('s1', 0, { frame: framed, errors: 4, wallSec: 37, thinking: 6, usage: { input: 123456, cacheWrite: 1500, cacheRead: 987654, output: 4321, thinking: 6 } })],
+      prompts: [prompt('s1', 0, { frame: framed, errors: 4, wallSec: 37, thinking: 6, usage: { input: 123456, cacheWrite: 1500, cacheRead: 987654, output: 4321, thinking: 5000 } })],
       tools: [
         tool('s1', 0, 'Bash', {
           durationMs: 777,
@@ -108,9 +108,9 @@ describe('what a batch sends in place of a count', () => {
       cacheWrite: bucketOf('tokens', 1500),
       cacheRead: bucketOf('tokens', 987654),
       output: bucketOf('tokens', 4321),
-      thinking: bucketOf('count', 6),
+      thinking: bucketOf('tokens', 5000),
     });
-    expect(sentPrompt?.usage).toEqual({ input: 7, cacheWrite: 1, cacheRead: 10, output: 3, thinking: 4 });
+    expect(sentPrompt?.usage).toEqual({ input: 7, cacheWrite: 1, cacheRead: 10, output: 3, thinking: 3 });
     expect(sentPrompt?.errors).toBe(3);
     expect(sentPrompt?.wallSec).toBe(6);
     const [sentStep] = transcript?.tools[0]?.steps ?? [];

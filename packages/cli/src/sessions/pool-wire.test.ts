@@ -154,7 +154,7 @@ describe('parseSkeleton refuses, and names the field', () => {
     const prompt = ['transcripts', 0, 'prompts', 0];
     expect(refusedField(sent([...prompt, 'usage', 'input'], 11))).toBe('accepted');
     expect(refusedField(sent([...prompt, 'usage', 'input'], 12))).toBe('transcripts[0].prompts[0].usage.input');
-    expect(refusedField(sent([...prompt, 'usage', 'thinking'], 8))).toBe('transcripts[0].prompts[0].usage.thinking');
+    expect(refusedField(sent([...prompt, 'usage', 'thinking'], 12))).toBe('transcripts[0].prompts[0].usage.thinking');
     expect(refusedField(sent([...prompt, 'errors'], -1))).toBe('transcripts[0].prompts[0].errors');
     expect(refusedField(sent([...prompt, 'wallSec'], 18))).toBe('transcripts[0].prompts[0].wallSec');
     expect(refusedField(sent([...firstStep, 'tokens'], 12))).toBe(`${stepField}.tokens`);

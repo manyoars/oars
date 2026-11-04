@@ -51,7 +51,7 @@ export interface SkeletonTool {
   steps: SkeletonStep[];
 }
 
-/** A prompt's usage as `tokens` buckets, and its `thinking` as a `count` bucket. */
+/** A prompt's usage as `tokens` buckets: `thinking` is a token count (the thinking tokens of the output), so it takes the same edges as the rest. */
 export type SkeletonUsage = { [field in keyof Usage]: number };
 
 export interface SkeletonPrompt {
@@ -159,7 +159,7 @@ const transcriptOf = ({ session, prompts, tools }: SessionRecords['transcripts']
       cls,
       errors: bucketOf('count', errors),
       wallSec: wallSec === null ? null : bucketOf('seconds', wallSec),
-      usage: { input: bucketOf('tokens', usage.input), cacheWrite: bucketOf('tokens', usage.cacheWrite), cacheRead: bucketOf('tokens', usage.cacheRead), output: bucketOf('tokens', usage.output), thinking: bucketOf('count', usage.thinking) },
+      usage: { input: bucketOf('tokens', usage.input), cacheWrite: bucketOf('tokens', usage.cacheWrite), cacheRead: bucketOf('tokens', usage.cacheRead), output: bucketOf('tokens', usage.output), thinking: bucketOf('tokens', usage.thinking) },
       frame,
     });
   }
@@ -337,7 +337,7 @@ const parseUsage = (value: unknown, at: string): SkeletonUsage => {
     cacheWrite: bucketIn('tokens', raw.cacheWrite, under(at, 'cacheWrite')),
     cacheRead: bucketIn('tokens', raw.cacheRead, under(at, 'cacheRead')),
     output: bucketIn('tokens', raw.output, under(at, 'output')),
-    thinking: bucketIn('count', raw.thinking, under(at, 'thinking')),
+    thinking: bucketIn('tokens', raw.thinking, under(at, 'thinking')),
   };
 };
 

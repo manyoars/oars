@@ -136,10 +136,11 @@ const isShellStep = (identity: StepIdentity | undefined): identity is ShellIdent
  * a `bash -c` body, and `git -C repo status` project as the raw command reads. A program the curated list does not name reads `<literal>` in its step and
  * is read from the call's `segments` (`projectLiteralStep`): it stays admitted when only the snapshot lists it, and loses its flags (Q5). A record with no
  * steps (captured before CAPTURE 9) projects its `target` reading alone: one program and its first plain word, no flags (Q5). A target that cannot be
- * read back, a hashed path target, or a record that is not a shell call projects `private`.
+ * read back, a hashed path target, or a record that is not a shell call (a tool other than `Bash` or `PowerShell` holding no `shell.exec` step) projects `private`.
  */
 export const projectStoredShell = (vocab: Vocabulary, tool: Pick<ToolObservation, 'tool' | 'target' | 'steps' | 'segments'>): ProjectedShell => {
-  if (!SHELL.has(tool.tool)) return UNREAD_SHELL_PROJECTION;
+  // `SHELL` names Claude Code's two shell tools. Another harness's (`run_terminal_cmd`, `exec_command`) is told by the step capture classed `shell.exec`.
+  if (!SHELL.has(tool.tool) && tool.steps?.some(({ action }) => action === 'shell.exec') !== true) return UNREAD_SHELL_PROJECTION;
   const steps = (tool.steps ?? []).map(({ identity }) => identity);
   if (steps.length === 0) return projectedShell([projectTarget(vocab, tool.target)]);
   return projectedShell(steps.map((identity, at) => (!isShellStep(identity) ? PRIVATE_PROGRAM : identity.program === LITERAL ? projectLiteralStep(vocab, tool.segments, steps.length, at) : projectStep(vocab, identity))));

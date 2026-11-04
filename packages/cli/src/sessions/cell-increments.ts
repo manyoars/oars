@@ -44,7 +44,7 @@ const floorUsage = ({ input, cacheWrite, cacheRead, output, thinking }: Usage): 
   cacheWrite: floorTokens(cacheWrite),
   cacheRead: floorTokens(cacheRead),
   output: floorTokens(output),
-  thinking: floorOf('count', bucketOf('count', thinking)),
+  thinking: floorTokens(thinking),
 });
 
 const floorPrompt = (prompt: PromptObservation): PromptObservation => ({
@@ -166,7 +166,7 @@ const promptRecords = (id: string, { prompts }: SkeletonTranscript): PromptObser
       cacheWrite: floorOf('tokens', usage.cacheWrite),
       cacheRead: floorOf('tokens', usage.cacheRead),
       output: floorOf('tokens', usage.output),
-      thinking: floorOf('count', usage.thinking),
+      thinking: floorOf('tokens', usage.thinking),
     },
     recovery: [],
     explore: 0,
