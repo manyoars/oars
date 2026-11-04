@@ -299,11 +299,12 @@ const isClosed = (input: PullInput): input is ClosedQuery => 'form' in input;
 
 /** The closed form a command line asks for; undefined when it names none, and only `recall()`'s inputs are left. */
 export const closedQueryOf = (options: { pattern: readonly string[]; entity?: string | undefined; family?: string | undefined; text?: string | undefined; cls?: string | undefined; sinceDays?: number | undefined }): ClosedQuery | undefined => {
-  if (options.pattern.length > 0) return { form: 'pattern', prefix: options.pattern };
-  if (options.entity !== undefined) return { form: 'entity', entity: options.entity };
-  if (options.text !== undefined) return { form: 'text', text: options.text };
+  const slice = { ...(options.cls === undefined ? {} : { cls: options.cls }), ...(options.sinceDays === undefined ? {} : { sinceDays: options.sinceDays }) };
+  if (options.pattern.length > 0) return { form: 'pattern', prefix: options.pattern, slice };
+  if (options.entity !== undefined) return { form: 'entity', entity: options.entity, slice };
+  if (options.text !== undefined) return { form: 'text', text: options.text, slice };
   if (options.family === undefined) return undefined;
-  return { form: 'question', family: options.family, slice: { ...(options.cls === undefined ? {} : { cls: options.cls }), ...(options.sinceDays === undefined ? {} : { sinceDays: options.sinceDays }) } };
+  return { form: 'question', family: options.family, slice };
 };
 
 const ANSWER_LIMIT = 5;
@@ -335,13 +336,14 @@ const isFamily = (value: string): boolean => FAMILIES.some((family) => family ==
 export const RECALL_FAMILIES: readonly Family[] = FAMILIES.filter((family) => family !== 'lead-lag');
 
 /**
- * Why this question cannot be asked; undefined when it can. Only `recovery` and `fit` count their answers from the store's own rows, so any other family's reads cannot apply a
- * slice, and answering them anyway would state counts the slice did not narrow. The family named here has passed `isFamily`, so the text holds nothing an asker typed.
+ * Why this pull cannot be asked; undefined when it can. Only `recovery` and `fit` count their answers from the store's own rows, so any other closed form or family cannot apply a
+ * slice, and answering them anyway would state counts the slice did not narrow. The text names a form or a family that has passed `isFamily`, so it holds nothing an asker typed.
  */
 export const pullRefusal = (input: PullInput): string | undefined => {
-  if (!isClosed(input) || input.form !== 'question' || input.family === undefined) return undefined;
-  const { family, slice } = input;
-  if (family === 'recovery' || family === 'fit' || !isFamily(family) || Object.keys(slice ?? {}).length === 0) return undefined;
+  if (!isClosed(input) || Object.keys(input.slice ?? {}).length === 0) return undefined;
+  if (input.form !== 'question') return `The ${input.form} form counts all time, which a class or a number of days cannot narrow. Ask without them.`;
+  const { family } = input;
+  if (family === undefined || family === 'recovery' || family === 'fit' || !isFamily(family)) return undefined;
   return `Family ${family} answers from stored reads, which a class or a number of days cannot narrow. Ask without them, or slice its rows with oars sessions read --family ${family} --slice <axis>=<value>.`;
 };
 
