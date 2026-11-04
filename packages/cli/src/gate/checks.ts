@@ -132,7 +132,7 @@ const VALUE_FLAGS: Readonly<Record<Family, ReadonlySet<string>>> = {
 
 /**
  * Flags that own the next word for the family but are a switch for one program: pnpm's `-w` is `--workspace-root`, `-n` is `--no-interaction`
- * for poetry and `--no-cache` for uv, and `-f` is `--force` for pipx.
+ * for poetry and `--no-cache` for uv and uvx, and `-f` is `--force` for pipx.
  */
 const FLAG_WITHOUT_VALUE: ReadonlySet<string> = new Set(['pnpm -w', 'poetry -n', 'uv -n', 'uvx -n', 'pipx -f']);
 
@@ -509,9 +509,11 @@ const FOLDER_STACK = new Set(['push-location', 'pop-location']);
 const REGISTRY_ENVIRONMENT = /(?:^|[^A-Za-z0-9_])(?:(?:npm_config_|pip_|uv_)[A-Za-z0-9_]*|home|userprofile|xdg_config_home|xdg_config_dirs|appdata|path|virtual_env)\s*\+?=/i;
 /**
  * Other ways a call reads another config than the one the gate's question reads: `sudo` (root's), a venv's `activate` (its `pip.conf`), and
- * a manager run by path (`.venv/bin/pip`, which reads that venv's). Over-matching only leaves a name unasked.
+ * a manager run by path (`.venv/bin/pip`, which reads that venv's); a sourced file (`source`, `.`, `workon`), which can set anything; an environment
+ * set without an `=` (`Set-Item Env:`, `SetEnvironmentVariable`); and `npm config set`, which writes the config the next command reads.
+ * Over-matching only leaves a name unasked.
  */
-const OTHER_CONFIG = /(?:^|[\s;&|(])sudo(?:\s|$)|(?:^|[\\/\s;&|("'])activate(?:\.\w+)?(?=["'\s;&|)]|$)|[\\/](?:npm|npx|pnpm|pnpx|pip[\d.]*|python[\d.]*|py)(?:\.cmd|\.exe|\.bat)?(?=["']?(?:\s|$))/i;
+const OTHER_CONFIG = /(?:^|[\s;&|(])sudo(?:\s|$)|(?:^|[\s;&|(])(?:source|\.|workon)\s|\bset-item\s+(?:-path\s+)?env:|\bsetenvironmentvariable\b|\bnpm\s+config\s+set\b|(?:^|[\\/\s;&|("'])activate(?:\.\w+)?(?=["'\s;&|)]|$)|[\\/](?:npm|npx|pnpm|pnpx|pip[\d.]*|python[\d.]*|py)(?:\.cmd|\.exe|\.bat)?(?=["']?(?:\s|$))/i;
 
 const choosesRegistry = (command: ShellCommand): boolean => command.args.some(({ text }) => REGISTRY_FLAGS.has(text.split('=')[0] ?? '') || SCOPE_REGISTRY.test(text) || CONFIG_REGISTRY.test(text) || ATTACHED_INDEX.test(text) || /(?:^|@)jsr:/.test(text));
 
@@ -572,6 +574,8 @@ const PLAIN_REF = /^(?:semver:)?[\w.^~*+-]+$/;
 const VERSION = /^[^/\\:@]*$/;
 /** What a version may hold: word characters and the range operators. Anything else (`#`, `&`, `?`, `;`, `%`) is a secret or a path in the shape of a version. */
 const PLAIN_VERSION = /^[\w.^~*+<>=!,|\s-]*$/;
+/** A space between range parts is allowed (`>=1 <2`), but a word of prose in a version is not: one opening with a letter other than `v` or `x` (`a secret token`). */
+const holdsProse = (version: string): boolean => /\s/.test(version) && version.split(/\s+/).some((word) => /^[a-uwyz]/i.test(word));
 
 const withoutCredentials = (name: string): string =>
   name
@@ -612,7 +616,7 @@ const admitted = (check: CallCheck): CallCheck => {
     const verdict = admitName(crossing.class, crossing.form, crossing.name);
     if (verdict.kind === 'unread') unread.push(verdict.shape);
     else if (crossing.versionForm !== 'url' && crossing.version !== null && !VERSION.test(crossing.version)) unread.push('local-path');
-    else if (crossing.versionForm !== 'url' && crossing.version !== null && !PLAIN_VERSION.test(crossing.version)) unread.push('unreadable-name');
+    else if (crossing.versionForm !== 'url' && crossing.version !== null && (!PLAIN_VERSION.test(crossing.version) || holdsProse(crossing.version))) unread.push('unreadable-name');
     else crossings.push({ ...crossing, name: verdict.name, version: crossing.versionForm === 'url' && crossing.version !== null && !PLAIN_REF.test(crossing.version) ? null : crossing.version });
   }
   const removals = check.removals.filter((removal) => admitName(removal.class, 'removal', removal.name).kind === 'named');

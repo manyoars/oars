@@ -26,6 +26,10 @@ const index = await dist('hook-index.js');
 const runtime = { storeDir, projectsRoot: join(claudeDir, 'projects'), stdin: new PassThrough(), stdout: { write: () => true } };
 /** @param {number} bytes */
 const mb = (bytes) => Math.round(bytes / 1048576);
+/** @typedef {import('../src/sessions/store.js').Store} Store */
+/** @typedef {import('../src/sessions/schema.js').DerivedRecords} DerivedRecords */
+/** @typedef {import('../src/sessions/read.js').Read} Read */
+/** @typedef {import('../src/sessions/store.js').DepositResult} DepositResult */
 /** @typedef {{ name: string, before: number, peak: number, kept: number, ms: number, sync: boolean }} PhaseRow */
 /** @type {PhaseRow[]} */
 const rows = [];
@@ -62,26 +66,29 @@ console.log(`${'phase'.padEnd(52)} ${'before'.padStart(6)} ${'sampled'.padStart(
 if (shape === 'recapture') {
   // The whole run in one row: the scan, a capture of every transcript (one at a time), the compaction, and the refresh. It is not split into
   // capture, compaction, and refresh, so no figure here says which of them sets the recapture's heap (t808 left that open).
-  await phase('deposit: recapture, whole run (scan+capture+compact+refresh)', () => store.deposit(runtime, { allow: ['bench-project'], redactDomains: [], now: Date.now }));
+  /** @type {DepositResult} */
+  const deposited = await phase('deposit: recapture, whole run (scan+capture+compact+refresh)', () => store.deposit(runtime, { allow: ['bench-project'], redactDomains: [], now: Date.now }));
+  // A deposit that captured nothing is a no-op, and its row would print as a measured recapture (the failure `sessions-heap.mjs` closes in check, table, and minheap).
+  if (!(deposited.sessions > 0)) throw new Error(`the recapture shape captured ${String(deposited.sessions)} sessions: its row is not a recapture`);
 } else {
   const log = join(storeDir, 'observations.jsonl');
   // Deposit: the newer-captures check is one pass over the log that keeps a number per session.
   await phase('deposit: scanLog for the newer-captures check', async () => (await store.scanLog(log)).newerCaptures);
   await phase('deposit: compactLog', () => store.compactLog(storeDir));
   // Deposit: refresh loads the store and keeps it through derive, the pool, and the index.
-  /** @type {any} */
+  /** @type {Store | undefined} */
   let loaded;
   await phase('deposit: refresh loadStore (kept)', async () => {
     loaded = await store.loadStore(storeDir);
   });
   const at = new Date().toISOString();
-  /** @type {any} */
+  /** @type {DerivedRecords | undefined} */
   let derived;
   await phase('deposit: refresh derive (store kept)', async () => {
     derived = store.derive(loaded, at);
   }, true);
   await phase('deposit: refresh JSON.stringify(derived)', async () => JSON.stringify(derived).length, true);
-  /** @type {any} */
+  /** @type {Read[] | undefined} */
   let reads;
   await phase('deposit: refresh currentPool (store kept)', async () => {
     reads = (await pool.currentPool(storeDir, loaded))?.reads ?? [];

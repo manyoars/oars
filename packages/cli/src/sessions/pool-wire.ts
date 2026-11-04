@@ -464,7 +464,7 @@ export const parseSkeleton = (value: unknown): { ok: true; skeleton: SessionSkel
     if (!Array.isArray(raw.deltas) || raw.deltas.length > 0) throw new Refused('deltas', 'not empty: a delta entry is not read yet');
     const transcripts = listOf(raw.transcripts, 'transcripts', parseTranscript);
     if (transcripts.length === 0) throw new Refused('transcripts', 'empty');
-    // A deposit is what lifts the read cap, so one has to hold something to derive from.
+    // A counting batch is what lifts the fetch cap, so a deposit has to hold something to derive from.
     if (transcripts.every(({ prompts, tools }) => prompts.length === 0 && tools.length === 0)) throw new Refused('transcripts', 'holds no prompt and no tool');
     transcripts.forEach(({ spawnedIn }, index) => {
       if (spawnedIn !== null && spawnedIn >= transcripts.length) throw new Refused(`transcripts[${String(index)}].spawnedIn`, 'no such transcript');

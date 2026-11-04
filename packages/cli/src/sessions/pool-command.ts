@@ -1,12 +1,12 @@
-// `oars pool` (t758): the only part of the sessions code that talks to a remote. The server is always named, by flag or environment, so nothing leaves on a default. Sign-in is the
-// pool's own device flow and reads no harness token; a session leaves only as a closed-vocabulary skeleton, and only after the V15 check found it clean. Local capture, recall,
+// `oars pool` (t758): the only part of the sessions code that talks to a remote. The server is always named, by flag or environment, so nothing leaves on a default. Sign-in runs the provider's device flow here and reads no harness token; a session leaves only as a closed-vocabulary skeleton, and only after the V15 check found it clean. Local capture, recall,
 // and reads never come through here.
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import type { Outcome, RunDeps } from '../cli.js';
 import { CliError, exitCodeForProblem, ExitCode, unreachableError } from '../errors.js';
 import { checkSession, exclusionPaths, type Reason } from './exclusion.js';
-import { isBundleVersion, parseSkeleton, sessionsOf, skeletonOf, VOCAB_VERSION, verifyBundle, type PinnedKey } from './pool-wire.js';
+import { isBundleVersion, parseSkeleton, sessionsOf, skeletonOf, VOCAB_VERSION, verifyBundle, type Bundle, type PinnedKey } from './pool-wire.js';
+import { Masker, printed, TRANSPORT_HEADERS, waitWords, type Outgoing } from './pool-print.js';
 import { shellReader } from './projection.js';
 import { isVocabularyExpired, REGISTRY_MAX_AGE_DAYS, VOCAB_SNAPSHOT_DATE } from './public-vocabulary.js';
 import { contentHash } from './read.js';
@@ -15,7 +15,7 @@ import { vocabulary } from './vocab-load.js';
 
 const LOGIN = 'pool-login';
 const DEPOSIT = 'pool-deposit';
-const PULL = 'pool-pull';
+const FETCH = 'pool-fetch';
 const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]']);
 export const POOL_PROVIDERS = ['github', 'google'] as const;
 const DEFAULT_INTERVAL_SEC = 5;
@@ -119,14 +119,37 @@ const signedIn = async (deps: RunDeps, storeDir: string, server: string, step: s
 interface Reply {
   status: number;
   body: unknown;
+  headers: Headers;
+}
+
+interface Call {
+  body?: unknown;
+  token?: string;
+  /** The ETag of the bundle already kept, so the pool can answer 304 with no bundle. */
+  ifNoneMatch?: string;
+  /** Set for a command that prints what it sends: the print comes first, with these secrets masked. */
+  show?: Masker;
 }
 
 /** One call to the pool. A redirect is an error: it could carry a skeleton or a token somewhere the checks on the named server never saw. */
-const ask = async (deps: RunDeps, step: string, server: string, path: string, init: { body?: unknown; token?: string }): Promise<Reply> => {
-  const headers = { 'user-agent': `oars/${deps.version}`, ...(init.token === undefined ? {} : { authorization: `Bearer ${init.token}` }) };
+const ask = async (deps: RunDeps, step: string, server: string, path: string, init: Call): Promise<Reply> => {
+  const headers: Array<[string, string]> = [['user-agent', `oars/${deps.version}`], ['accept', 'application/json']];
+  if (init.token !== undefined) headers.push(['authorization', `Bearer ${init.token}`]);
+  // Node's `fetch` writes `cache-control` and `pragma` itself whenever `if-none-match` is set, so they are named here to be printed.
+  if (init.ifNoneMatch !== undefined) headers.push(['if-none-match', init.ifNoneMatch], ['cache-control', 'no-cache'], ['pragma', 'no-cache']);
+  if (init.body !== undefined) headers.push(['content-type', 'application/json']);
+  headers.push(...TRANSPORT_HEADERS);
+  const request: Outgoing = { method: init.body === undefined ? 'GET' : 'POST', url: new URL(path, server), headers, ...(init.body === undefined ? {} : { body: JSON.stringify(init.body) }) };
+  return send(deps, step, request, init.show);
+};
+
+/** Prints the request when asked to, then sends exactly those headers and that body. */
+const send = async (deps: RunDeps, step: string, request: Outgoing, show: Masker | undefined): Promise<Reply> => {
+  if (show !== undefined) deps.io.stderr(`${printed(request, show)}
+`);
   let response: Response;
   try {
-    response = await fetch(new URL(path, server), init.body === undefined ? { headers, redirect: 'error' } : { method: 'POST', headers: { ...headers, 'content-type': 'application/json' }, body: JSON.stringify(init.body), redirect: 'error' });
+    response = await fetch(request.url, { method: request.method, headers: request.headers, redirect: 'error', ...(request.body === undefined ? {} : { body: request.body }) });
   } catch (error) {
     throw unreachableError(step, error);
   }
@@ -136,7 +159,7 @@ const ask = async (deps: RunDeps, step: string, server: string, path: string, in
   } catch {
     body = undefined;
   }
-  return { status: response.status, body };
+  return { status: response.status, body, headers: response.headers };
 };
 
 /** The server's named refusal, as a failure: its `error` is the problem's code in `--json`. */
@@ -144,6 +167,45 @@ const refusal = (step: string, { status, body }: Reply): CliError => {
   const code = isObject(body) ? textIn(body, 'error') : undefined;
   const message = (isObject(body) ? textIn(body, 'message') : undefined) ?? `The pool answered HTTP ${String(status)}.`;
   return new CliError(message, exitCodeForProblem(status, code === undefined ? undefined : { code }), step, { title: message, status, ...(code === undefined ? {} : { code }) });
+};
+
+/** What the client needs to run one provider's device flow itself. The client ID and Google's `client_secret` come from the environment, since the OAuth apps are the operator's to create. */
+interface Provider {
+  deviceUrl: string;
+  tokenUrl: string;
+  /** The least that names the account: Google's `openid` gives only `sub`, and GitHub's public profile needs no scope. */
+  scope: string;
+  clientIdVar: 'OARS_GITHUB_CLIENT_ID' | 'OARS_GOOGLE_CLIENT_ID';
+  /** Google's device flow requires its client secret at the token route, which is not secret for an installed app; GitHub's takes none. */
+  secretVar?: 'OARS_GOOGLE_CLIENT_SECRET';
+}
+
+const PROVIDER_FLOWS = new Map<string, Provider>([
+  ['github', { deviceUrl: 'https://github.com/login/device/code', tokenUrl: 'https://github.com/login/oauth/access_token', scope: '', clientIdVar: 'OARS_GITHUB_CLIENT_ID' }],
+  ['google', { deviceUrl: 'https://oauth2.googleapis.com/device/code', tokenUrl: 'https://oauth2.googleapis.com/token', scope: 'openid', clientIdVar: 'OARS_GOOGLE_CLIENT_ID', secretVar: 'OARS_GOOGLE_CLIENT_SECRET' }],
+]);
+
+const DEVICE_GRANT = 'urn:ietf:params:oauth:grant-type:device_code';
+
+interface ProviderConfig {
+  clientId: string;
+  clientSecret: string | undefined;
+}
+
+/** The provider's side of the flow, read from the environment. An unset value stops the command before anything is sent, and names what is missing. */
+const configOf = (env: NodeJS.ProcessEnv, provider: Provider): ProviderConfig => {
+  const set = (name: string): string | undefined => (env[name] === undefined || env[name] === '' ? undefined : env[name]);
+  const clientId = set(provider.clientIdVar);
+  if (clientId === undefined) throw usage(`Set ${provider.clientIdVar} to the client ID of the Many Oars OAuth app; it is not set.`, LOGIN);
+  const clientSecret = provider.secretVar === undefined ? undefined : set(provider.secretVar);
+  if (provider.secretVar !== undefined && clientSecret === undefined) throw usage(`Set ${provider.secretVar} to the client secret of the Many Oars OAuth app; it is not set.`, LOGIN);
+  return { clientId, clientSecret };
+};
+
+/** One form POST to a provider, printed before it is sent. The provider answers JSON on whatever status it chooses (Google's pending poll is a 428), so the caller reads the body and not the status. */
+const askProvider = (deps: RunDeps, url: string, form: Array<[string, string]>, masker: Masker): Promise<Reply> => {
+  const headers: Array<[string, string]> = [['user-agent', `oars/${deps.version}`], ['accept', 'application/json'], ['content-type', 'application/x-www-form-urlencoded'], ...TRANSPORT_HEADERS];
+  return send(deps, LOGIN, { method: 'POST', url: new URL(url), headers, body: new URLSearchParams(form).toString() }, masker);
 };
 
 interface Device {
@@ -154,48 +216,71 @@ interface Device {
   expiresMs: number;
 }
 
-const deviceOf = (reply: Reply): Device => {
-  if (reply.status !== 200) throw refusal(LOGIN, reply);
-  const { body } = reply;
-  const [deviceCode, userCode, verificationUri] = isObject(body) ? [textIn(body, 'deviceCode'), textIn(body, 'userCode'), textIn(body, 'verificationUri')] : [];
+const deviceOf = ({ body }: Reply): Device => {
+  // Google names the link `verification_url`, against the RFC's `verification_uri`.
+  const [deviceCode, userCode, verificationUri] = isObject(body) ? [textIn(body, 'device_code'), textIn(body, 'user_code'), textIn(body, 'verification_uri') ?? textIn(body, 'verification_url')] : [];
+  // A provider that refuses here (GitHub's `device_flow_disabled`, Google's `invalid_client`) is how an unfinished OAuth app shows, so its word goes to the operator.
+  const refusal = isObject(body) ? textIn(body, 'error') : undefined;
+  if (refusal !== undefined) {
+    const title = `The provider refused the sign-in: ${refusal}.`;
+    throw new CliError(title, ExitCode.AUTH, LOGIN, { code: 'login_refused', title });
+  }
   // `openBrowser` parses the link before it returns its promise, so one that cannot parse has to stop here or it throws past the login's catch.
-  if (!isObject(body) || deviceCode === undefined || userCode === undefined || verificationUri === undefined || !URL.canParse(verificationUri)) throw new CliError('The pool did not start a sign-in.', ExitCode.UNEXPECTED, LOGIN);
-  return { deviceCode, userCode, verificationUri, intervalMs: (numberIn(body, 'interval') ?? DEFAULT_INTERVAL_SEC) * 1000, expiresMs: (numberIn(body, 'expiresIn') ?? DEFAULT_EXPIRY_SEC) * 1000 };
+  if (!isObject(body) || deviceCode === undefined || userCode === undefined || verificationUri === undefined || !URL.canParse(verificationUri)) throw new CliError('The provider did not start a sign-in.', ExitCode.UNEXPECTED, LOGIN);
+  // An interval of 0 or below would poll with no wait and never run out the clock, so it takes the default like a missing one.
+  const interval = numberIn(body, 'interval');
+  return { deviceCode, userCode, verificationUri, intervalMs: (interval === undefined || interval <= 0 ? DEFAULT_INTERVAL_SEC : interval) * 1000, expiresMs: (numberIn(body, 'expires_in') ?? DEFAULT_EXPIRY_SEC) * 1000 };
 };
 
-/** Polls until the provider approves. Time is counted in the waits it asked for, so a machine that slept through the code still gets one poll that says it expired. */
-const awaitSignIn = async (deps: RunDeps, server: string, provider: string, device: Device): Promise<SignIn> => {
+/** Polls the provider's token route until the operator approves, and returns the provider's token. Time is counted in the waits asked for, so a machine that slept through the code still gets one poll that says it expired. */
+const awaitToken = async (deps: RunDeps, provider: Provider, config: ProviderConfig, device: Device, masker: Masker): Promise<string> => {
   let { intervalMs } = device;
+  const form: Array<[string, string]> = [['client_id', config.clientId], ['device_code', device.deviceCode], ['grant_type', DEVICE_GRANT]];
+  if (config.clientSecret !== undefined) form.push(['client_secret', config.clientSecret]);
   for (let waited = 0; waited < device.expiresMs; waited += intervalMs) {
     await deps.sleep(intervalMs);
-    const reply = await ask(deps, LOGIN, server, '/v1/login/poll', { body: { provider, deviceCode: device.deviceCode } });
-    if (reply.status !== 200) throw refusal(LOGIN, reply);
-    const { body } = reply;
-    if (!isObject(body)) throw new CliError('The pool answered a sign-in poll with no body.', ExitCode.UNEXPECTED, LOGIN);
-    if (textIn(body, 'status') === 'ok') {
-      const signIn = signInOf({ ...body, server });
-      if (signIn === undefined) throw new CliError('The pool answered a sign-in with no account, token, or signing key.', ExitCode.UNEXPECTED, LOGIN);
-      return signIn;
+    const { body } = await askProvider(deps, provider.tokenUrl, form, masker);
+    if (!isObject(body)) throw new CliError('The provider answered a sign-in poll with no body.', ExitCode.UNEXPECTED, LOGIN);
+    const accessToken = textIn(body, 'access_token');
+    if (accessToken !== undefined) return accessToken;
+    const error = textIn(body, 'error') ?? 'no_token';
+    if (error === 'slow_down') intervalMs += SLOW_DOWN_MS;
+    else if (error === 'expired_token') break;
+    else if (error !== 'authorization_pending') {
+      const title = `The provider refused the sign-in: ${error}.`;
+      throw new CliError(title, ExitCode.AUTH, LOGIN, { code: 'login_refused', title });
     }
-    if (Reflect.get(body, 'slowDown') === true) intervalMs += SLOW_DOWN_MS;
   }
   const title = 'The sign-in code expired. Run oars pool login again.';
   throw new CliError(title, ExitCode.AUTH, LOGIN, { code: 'EXPIRED_TOKEN', title });
 };
 
-/** `oars pool login`: the provider's device flow through the pool, which keeps the provider's token and hands back its own. */
+/**
+ * `oars pool login` (spec Section 3): the device flow runs here, against the provider, and the pool sees only the provider's token, once, and answers its own credential. Every request prints before it is sent, with the device code, the provider's token,
+ * and the credential masked as `<credential: n bytes>`. A client ID, scope, grant type, and Google's `client_secret` print as they are: none is secret.
+ */
 export const poolLogin = async (deps: RunDeps, options: { server?: string | undefined; provider?: string | undefined }): Promise<Outcome> => {
   const { storeDir } = runtimeOf(deps);
   const server = poolServer(deps.env, LOGIN, options.server);
   const { provider } = options;
-  if (provider === undefined || !POOL_PROVIDERS.some((name) => name === provider)) throw usage(`The provider is one of ${POOL_PROVIDERS.join(', ')}.`, LOGIN);
+  const flow = PROVIDER_FLOWS.get(provider ?? '');
+  if (provider === undefined || flow === undefined) throw usage(`The provider is one of ${POOL_PROVIDERS.join(', ')}.`, LOGIN);
+  const config = configOf(deps.env, flow);
   const saved = await loadSignIns(storeDir, LOGIN);
-  const device = deviceOf(await ask(deps, LOGIN, server, '/v1/login/start', { body: { provider } }));
+  const masker = new Masker();
+  const device = deviceOf(await askProvider(deps, flow.deviceUrl, [['client_id', config.clientId], ['scope', flow.scope]], masker));
+  masker.add(device.deviceCode);
   deps.io.stderr(`To sign in, open ${device.verificationUri}\nand confirm the code ${device.userCode}\n`);
   await deps.openBrowser(device.verificationUri).catch(() => {
     deps.io.stderr('Could not open a browser; open the link above yourself.\n');
   });
-  const signIn = await awaitSignIn(deps, server, provider, device);
+  const accessToken = await awaitToken(deps, flow, config, device, masker);
+  masker.add(accessToken);
+  const reply = await ask(deps, LOGIN, server, '/v1/login', { body: { provider, token: accessToken }, show: masker });
+  if (reply.status !== 200) throw refusal(LOGIN, reply);
+  const signIn = signInOf(isObject(reply.body) ? { ...reply.body, server } : undefined);
+  if (signIn === undefined) throw new CliError('The pool answered a sign-in with no account, token, or signing key.', ExitCode.UNEXPECTED, LOGIN);
+  masker.add(signIn.token);
   const known = saved.find((entry) => entry.server === server);
   // The key is trusted once, here, and never replaced by a later login: a server that swaps it could otherwise sign anything it likes.
   if (known !== undefined && known.signingKey.x !== signIn.signingKey.x) throw new CliError(`${server} now signs with a different key than the one pinned at your first login. Nothing was saved. If the pool really did change its key, remove ${server} from ${signInsFile(storeDir)} and sign in again.`, ExitCode.AUTH, LOGIN, { code: 'signing_key_changed', title: 'The pool signing key changed.' });
@@ -297,26 +382,62 @@ export const poolDeposit = async (deps: RunDeps, options: { server?: string | un
 
 const replicaFile = (storeDir: string, server: string, harnessVersion: string): string => join(storeDir, 'pool-replica', contentHash(server), `${encodeURIComponent(harnessVersion)}.json`);
 
-/** `oars pool pull`: one harness version's signed bundle, kept only once the key pinned at login has verified it. It keeps the signed form, so the replica can be checked again later. */
-export const poolPull = async (deps: RunDeps, options: { server?: string | undefined; harnessVersion: string }): Promise<Outcome> => {
+/** What an earlier fetch kept: the bundle, checked again against the pinned key, and the ETag the pool sent with it. Nothing readable and verified is nothing kept, and the next fetch is then an ordinary one. */
+const keptReplica = async (file: string, key: PinnedKey, harnessVersion: string): Promise<{ etag: string | undefined; bundle: Bundle } | undefined> => {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(await readFile(file, 'utf8'));
+  } catch {
+    return undefined;
+  }
+  const verified = await verifyBundle(parsed, key, harnessVersion);
+  return verified.ok ? { etag: isObject(parsed) ? textIn(parsed, 'etag') : undefined, bundle: verified.bundle } : undefined;
+};
+
+/** The weekly cap, as a failure of its own code: the bundle on disk is untouched, and the words say when the pool will answer again. */
+const cappedError = (deps: RunDeps, reply: Reply, kept: boolean): CliError => {
+  const retryAfter = reply.headers.get('retry-after');
+  const wait = retryAfter === null ? undefined : waitWords(retryAfter, deps.now());
+  const when = wait === undefined ? 'The pool did not say when; it counts fetches per ISO week, so try again next week.' : `Try again ${wait}.`;
+  const title = `The pool's weekly fetch cap is used up. ${when} ${kept ? 'The bundle already on disk is untouched.' : 'No bundle is kept yet.'}`;
+  return new CliError(title, ExitCode.CAPPED, FETCH, { code: 'fetch_cap', title, status: 429 }, undefined, { retryAfter });
+};
+
+/** `oars pool fetch`: one harness version's signed bundle, kept only once the key pinned at login has verified it. It keeps the signed form, so the replica can be checked again later, and the ETag, so the next fetch asks only whether it changed. The request prints before it is sent. */
+export const poolFetch = async (deps: RunDeps, options: { server?: string | undefined; harnessVersion: string }): Promise<Outcome> => {
   const { storeDir } = runtimeOf(deps);
-  const server = poolServer(deps.env, PULL, options.server);
+  const server = poolServer(deps.env, FETCH, options.server);
   const { harnessVersion } = options;
-  if (!isBundleVersion(harnessVersion)) throw usage(`${harnessVersion} is not a public harness version.`, PULL);
-  const { token, signingKey } = await signedIn(deps, storeDir, server, PULL);
-  const reply = await ask(deps, PULL, server, `/bundle/${encodeURIComponent(harnessVersion)}/${encodeURIComponent(VOCAB_VERSION)}`, { token });
-  if (reply.status !== 200) throw refusal(PULL, reply);
+  if (!isBundleVersion(harnessVersion)) throw usage(`${harnessVersion} is not a public harness version.`, FETCH);
+  const { token, signingKey } = await signedIn(deps, storeDir, server, FETCH);
+  const file = replicaFile(storeDir, server, harnessVersion);
+  const kept = await keptReplica(file, signingKey, harnessVersion);
+  const credential = new Masker();
+  credential.add(token);
+  const reply = await ask(deps, FETCH, server, `/bundle/${encodeURIComponent(harnessVersion)}/${encodeURIComponent(VOCAB_VERSION)}`, { token, show: credential, ...(kept?.etag === undefined ? {} : { ifNoneMatch: kept.etag }) });
+  if (reply.status === 429) throw cappedError(deps, reply, kept !== undefined);
+  if (reply.status === 304) {
+    // A 304 answers an If-None-Match, so one to a fetch that sent none is a pool that has lost track of what it was asked.
+    if (kept?.etag === undefined) throw new CliError('The pool answered 304 to a fetch that named no kept bundle.', ExitCode.UNEXPECTED, FETCH);
+    const { cells, motifs, reads, asOf } = kept.bundle;
+    return {
+      document: { ok: true, server, harnessVersion, file, unchanged: true, cells: cells.length, motifs: motifs.length, reads: reads.length, asOf },
+      text: `${harnessVersion} is unchanged: the bundle at ${file} is still current (${String(reads.length)} reads, ${String(cells.length)} cells, and ${String(motifs.length)} motifs).`,
+    };
+  }
+  if (reply.status !== 200) throw refusal(FETCH, reply);
   const verified = await verifyBundle(reply.body, signingKey, harnessVersion);
   if (!verified.ok) {
     const title = `Refused the bundle: ${verified.reason}.`;
-    throw new CliError(title, ExitCode.INVALID, PULL, { code: 'bundle_unverified', title });
+    throw new CliError(title, ExitCode.INVALID, FETCH, { code: 'bundle_unverified', title });
   }
-  const file = replicaFile(storeDir, server, harnessVersion);
+  const etag = reply.headers.get('etag');
   await mkdir(dirname(file), { recursive: true });
-  await writeFile(file, `${JSON.stringify(reply.body)}\n`);
+  await writeFile(file, `${JSON.stringify({ ...(isObject(reply.body) ? reply.body : {}), ...(etag === null ? {} : { etag }) })}
+`);
   const { cells, motifs, reads, asOf } = verified.bundle;
   return {
-    document: { ok: true, server, harnessVersion, file, cells: cells.length, motifs: motifs.length, reads: reads.length, asOf },
-    text: `Pulled ${harnessVersion}: ${String(reads.length)} reads, ${String(cells.length)} cells, and ${String(motifs.length)} motifs, verified against the pinned key and kept at ${file}.`,
+    document: { ok: true, server, harnessVersion, file, unchanged: false, cells: cells.length, motifs: motifs.length, reads: reads.length, asOf },
+    text: `Fetched ${harnessVersion}: ${String(reads.length)} reads, ${String(cells.length)} cells, and ${String(motifs.length)} motifs, verified against the pinned key and kept at ${file}.`,
   };
 };
