@@ -20,7 +20,7 @@ describe('reading a manager answer', () => {
 
   it.each<[string, ManagerRun, object]>([
     ['found', ran(0, 'requests (2.32.3)\nAvailable versions: 2.32.3, 2.32.2\n'), { state: 'found', latest: '2.32.3', created: null }],
-    ['not found', ran(1, '', 'ERROR: No matching distribution found for nothing-here'), { state: 'not-found' }],
+    ['a missing name, which reads the same as a down index', ran(1, '', 'ERROR: No matching distribution found for nothing-here'), { state: 'unreachable' }],
     ['a failed run', ran(1, '', 'ERROR: unknown command'), { state: 'unreachable' }],
     ['no first line', ran(0, 'WARNING: nothing'), { state: 'unreachable' }],
   ])('pip: %s', (_label, run, expected) => {

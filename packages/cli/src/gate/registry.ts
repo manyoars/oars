@@ -63,9 +63,11 @@ export const readNpmView = (run: ManagerRun): RegistryAnswer => {
   }
 };
 
-/** `pip index versions <name>` prints `name (latest)` first. It states no dates, so a Python name's age stays unknown. */
+/**
+ * `pip index versions <name>` prints `name (latest)` first. It states no dates, so a Python name's age stays unknown. A Python name never reads
+ * `not-found`: pip prints "No matching distribution" for a missing name and for a down index alike, so the line cannot tell them apart.
+ */
 export const readPipIndex = (run: ManagerRun): RegistryAnswer => {
-  if (/No matching distribution/i.test(run.stdout) || /No matching distribution/i.test(run.stderr)) return NOT_FOUND;
   if (run.code !== 0) return UNREACHABLE;
   const latest = /^\S+ \(([^)]+)\)/m.exec(run.stdout)?.[1];
   return latest === undefined ? UNREACHABLE : { state: 'found', latest, created: null };
