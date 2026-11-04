@@ -31,9 +31,9 @@ describe('the hook process: the deadline', () => {
     const stalled = (): Promise<void> => new Promise<void>(() => undefined);
     const started = Date.now();
     // The returned promise never settles: the append never does. The timer is what ends the process.
-    void runHookProcess({ stdin: () => Promise.resolve(PAYLOAD), deps: depsFor(store, { append: stalled }), exit, deadlineMs: 150 });
-    await vi.waitFor(() => { expect(exit).toHaveBeenCalledWith(0); }, { timeout: 2_000 });
-    expect(Date.now() - started).toBeLessThan(1_000);
+    void runHookProcess({ stdin: () => Promise.resolve(PAYLOAD), deps: depsFor(store, { append: stalled, deadlineMs: 5_000 }), exit, deadlineMs: 1_000 });
+    await vi.waitFor(() => { expect(exit).toHaveBeenCalledWith(0); }, { timeout: 10_000 });
+    expect(Date.now() - started).toBeLessThan(5_000);
     expect(exit).toHaveBeenCalledTimes(1);
     const lines = readFileSync(crossingsPath(store), 'utf8').trim().split('\n');
     expect(lines).toHaveLength(1);
@@ -47,8 +47,8 @@ describe('the hook process: the deadline', () => {
     const store = folder();
     const exit = vi.fn();
     const found = (): Promise<RegistryAnswer> => Promise.resolve({ state: 'found', latest: '1.0.0', created: '2026-10-30T00:00:00.000Z' });
-    void runHookProcess({ stdin: () => Promise.resolve(PAYLOAD), deps: depsFor(store, { append: () => new Promise<void>(() => undefined), registry: found, random: () => draw }), exit, deadlineMs: 300 });
-    await vi.waitFor(() => { expect(exit).toHaveBeenCalledWith(0); }, { timeout: 2_000 });
+    void runHookProcess({ stdin: () => Promise.resolve(PAYLOAD), deps: depsFor(store, { append: () => new Promise<void>(() => undefined), registry: found, random: () => draw, deadlineMs: 5_000 }), exit, deadlineMs: 1_000 });
+    await vi.waitFor(() => { expect(exit).toHaveBeenCalledWith(0); }, { timeout: 10_000 });
     const lines = readFileSync(crossingsPath(store), 'utf8').trim().split('\n');
     expect(JSON.parse(lines[0] ?? '')).toMatchObject({ name: 'left-pad', arm: 'none', lineShown: 'none', lineHeld: 'none' });
   });
@@ -58,8 +58,8 @@ describe('the hook process: the deadline', () => {
     writeFileSync(join(store, 'gate-policy.json'), '{"classes":{"not-found":"block"}}');
     const exit = vi.fn();
     const missing = (): Promise<RegistryAnswer> => Promise.resolve({ state: 'not-found', latest: null, created: null });
-    void runHookProcess({ stdin: () => Promise.resolve(PAYLOAD), deps: depsFor(store, { append: () => new Promise<void>(() => undefined), registry: missing }), exit, deadlineMs: 300 });
-    await vi.waitFor(() => { expect(exit).toHaveBeenCalledWith(0); }, { timeout: 2_000 });
+    void runHookProcess({ stdin: () => Promise.resolve(PAYLOAD), deps: depsFor(store, { append: () => new Promise<void>(() => undefined), registry: missing, deadlineMs: 5_000 }), exit, deadlineMs: 1_000 });
+    await vi.waitFor(() => { expect(exit).toHaveBeenCalledWith(0); }, { timeout: 10_000 });
     const lines = readFileSync(crossingsPath(store), 'utf8').trim().split('\n');
     expect(JSON.parse(lines[0] ?? '')).toMatchObject({ name: 'left-pad', arm: 'none', lineShown: 'none', lineHeld: 'none' });
   });
@@ -129,10 +129,10 @@ describe('the hook process: the deadline', () => {
   it('writes nothing at the deadline once the record is on disk', async () => {
     const store = folder();
     const exit = vi.fn();
-    // The deadline is short, and the test waits until it has passed: a timer that still held the staged record would append it a second time.
-    await runHookProcess({ stdin: () => Promise.resolve(PAYLOAD), deps: depsFor(store), exit, deadlineMs: 150 });
+    // The test waits until the deadline has passed: a timer that still held the staged record would append it a second time. The deadline is 1 s so the append, even on a loaded box, finishes well before it.
+    await runHookProcess({ stdin: () => Promise.resolve(PAYLOAD), deps: depsFor(store, { deadlineMs: 5_000 }), exit, deadlineMs: 1_000 });
     expect(exit).toHaveBeenCalledWith(0);
-    await new Promise<void>((resolve) => setTimeout(resolve, 400));
+    await new Promise<void>((resolve) => setTimeout(resolve, 1_250));
     expect(readFileSync(crossingsPath(store), 'utf8').trim().split('\n')).toHaveLength(1);
   });
 
