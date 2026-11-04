@@ -357,6 +357,10 @@ describe('a large deposit', () => {
     // The fixture must reach the case: more cell JSON than one value may hold, from a skeleton the route accepts.
     expect(JSON.stringify([...wanted.cells.values()]).length).toBeGreaterThan(2 * 1024 * 1024);
     expect(JSON.stringify(skeleton).length).toBeLessThan(1024 * 1024);
+    // The sizes docs/pool.md states, so they cannot drift unseen: the skeleton as the worker stores it, the cells, and their JSON.
+    expect(JSON.stringify(skeleton).length).toBe(784_544);
+    expect(wanted.cells.size).toBe(11_139);
+    expect(JSON.stringify([...wanted.cells.values()]).length).toBe(3_241_663);
     await inFreshPool({}, async (target) => {
       const token = await accountOn(target, '9101');
       const response = await target.post('/v1/deposits', skeleton, token);
@@ -365,6 +369,8 @@ describe('a large deposit', () => {
       expect(expected).toBeGreaterThan(0);
       expect(await total(target)).toBe(expected);
       const db = await target.db();
+      // What the account's byte limit counts: the skeleton and the deltas column (`[]`, two bytes).
+      expect(await db.prepare('SELECT LENGTH(CAST(skeleton AS BLOB)) + LENGTH(CAST(deltas AS BLOB)) AS bytes FROM deposits').first('bytes')).toBe(784_546);
       expect(await db.prepare('SELECT COUNT(*) AS count FROM cells').first('count')).toBe(wanted.cells.size);
       expect(await db.prepare('SELECT COUNT(*) AS count FROM motifs').first('count')).toBe(wanted.motifs.length);
       expect(await db.prepare("SELECT COUNT(*) AS count FROM contributors WHERE kind = 'cell'").first('count')).toBe(wanted.cells.size);
