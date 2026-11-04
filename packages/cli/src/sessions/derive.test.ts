@@ -2,7 +2,7 @@ import { copyFileSync, mkdirSync, readFileSync, rmSync, utimesSync, writeFileSyn
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { deriveSession, episodesOf, extractSession, isRunner, rankRecovery, RECOVERY_WINDOW, REDO_WINDOW, type Episode, type EpisodeOutcome, type SessionCapture } from './derive.js';
-import { captureSession, emptyUsage } from './extract.js';
+import { captureSession, emptyUsage, shellTarget } from './extract.js';
 import { books, formatBooks, formatMeasure, measure } from './query.js';
 import { makeRedactor } from './redact.js';
 import { CAPTURE_VERSION, type ErrorLineObservation, type ErrorObservation, type PromptVerify, type ShellSegment, type ToolObservation, type ToolStatus, type UserPromptObservation } from './schema.js';
@@ -317,6 +317,10 @@ describe('prompt outcome signals (t747)', () => {
     ])('%s', (_name, calls, expected) => {
       expect(one(calls)?.verify).toBe(expected);
     });
+    it('reads the first copies of a repeated call, so a resumed repeat does not turn a later prompt into none', () => {
+      // The repeat of `x` under prompt 1 is dropped, leaving that prompt no calls: `na`, not the `none` its own edit would read as.
+      expect(derived(['work', 'work'], [{ ...edit(0), id: 'x' }, { ...edit(1, 'hash-a', 'none'), id: 'x' }]).map((prompt) => prompt.verify)).toEqual(['none', 'na']);
+    });
     it('says nothing about a shell call captured before segments, which could have been a runner', () => {
       expect(one([edit(0), older(shell(0))])?.verify).toBeUndefined();
       expect(one([edit(0), shell(0), older(shell(0))])?.verify).toBeUndefined();
@@ -331,7 +335,11 @@ describe('prompt outcome signals (t747)', () => {
       ['cargo test', true], ['cargo clippy', true], ['go vet', true], ['go test', true], ['dotnet build', true],
       ['ls', false], ['git status', false], ['git commit', false], ['cat test', false], ['npm install', false], ['npm run dev', false], ['just status', false], ['just checkout', false],
       ['cargo add', false], ['go get', false], ['make clean', false], ['mvn', false], ['python script', false], ['npx foo', false],
+      ['pnpm vitest run', true], ['yarn tsc', true], ['npm exec vitest', true], ['bun jest', true], ['python unittest', true], ['pnpm playwright test', true],
+      ['playwright install', false], ['npx playwright install', false], ['yarn playwright install', false], ['pre-commit install', false], ['cypress open', false],
+      ['pnpm web add test-utils', false], ['npm web install test-utils', false], ['npm run test-utils', true],
       ['npm install lint-staged', false], ['pnpm add test-utils', false], ['npm uninstall jest-check', false], ['cargo add check', false], ['go get test', false], ['npm view test', false], ['go run check', false],
+      ['cargo test add', true], ['npm test install', true], ['pnpm test view', true], ['yarn workspace web add test-utils', false], ['yarn workspace web test', true],
     ])('%s is a runner: %s', (run, expected) => {
       expect(isRunner({ run, read: true })).toBe(expected);
     });
@@ -444,7 +452,10 @@ describe('prompt outcome signals (t747)', () => {
 
     // The target is the first line's program and subcommand, so this form is out of reach until the captured commits field lands (t746).
     it('is a floor: a commit behind another command on the line is not seen', () => {
-      expect(one([shell(0, 'ok', 'git add')])?.commits).toBe(0);
+      // The target is what `shellTarget` reads from the real command, so the form runs through it.
+      const target = shellTarget('git add . && git commit -m x');
+      expect(target).toBe('git add');
+      expect(one([shell(0, 'ok', target)])?.commits).toBe(0);
     });
 
     it('counts a call a resumed session repeats once, under the prompt that made it', () => {

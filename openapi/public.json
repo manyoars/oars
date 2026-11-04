@@ -2536,7 +2536,7 @@
     }
   },
   "info": {
-    "description": "The AOR platform calls that the Many Oars CLI and starter templates make: deploy a workload, read it, exchange a token, manage API keys and workload config, set prices and customers, reserve and settle credits, take a payment.",
+    "description": "The AOR platform calls that Many Oars exposes to the CLI, starter templates, and coding agents: deploy a workload, read it, exchange a token, manage API keys and workload config, set prices and customers, reserve and settle credits, take a payment.",
     "title": "Many Oars API",
     "version": "1.0.0"
   },

@@ -10,7 +10,9 @@ import type { Read, ReadAsOf } from './read.js';
 import type { Frame, Harness, PromptClass, PromptObservation, PullIdentity, SessionObservation, StepEdge, StepIdentity, StepObservation, ToolObservation, ToolStatus, Usage } from './schema.js';
 
 export const SKELETON_FORMAT = 1;
-export const SLICE_FORMAT = 1;
+export const BUNDLE_FORMAT = 1;
+/** Stands in until the vocabulary brief ships the real one: the pool serves only the version it holds. */
+export const VOCAB_VERSION = '0';
 
 /** A step without what a server can compute: `n` is its call's, and `frameId` hashes a frame the skeleton holds. */
 export type SkeletonStep = Omit<StepObservation, 'n' | 'frameId'>;
@@ -104,18 +106,8 @@ export const skeletonOf = (records: SessionRecords, id: string): SessionSkeleton
   return { format: SKELETON_FORMAT, id, transcripts };
 };
 
-/** The stacks a session counts under: every language and framework any of its frames names. */
-export const stacksOf = (skeleton: SessionSkeleton): string[] => {
-  const stacks = new Set<string>();
-  for (const { frame, prompts } of skeleton.transcripts) {
-    for (const { stack } of [frame, ...prompts.map((prompt) => prompt.frame)]) for (const name of [...stack.languages, ...stack.frameworks]) stacks.add(name);
-  }
-  return [...stacks].sort();
-};
-
-/** Whether a stack can be asked for: `all`, or a name the vocabulary holds. */
-export const ALL_STACKS = 'all';
-export const isStack = (name: string): boolean => name === ALL_STACKS || LANGUAGES.has(name) || FRAMEWORKS.has(name);
+/** A harness version a bundle can be asked for: public, so the request carries nothing private. The admitted list replaces this shape rule when it ships. */
+export const isBundleVersion = (version: string): boolean => version !== LITERAL && publicVersion(version) === version;
 
 export interface Refusal {
   ok: false;
@@ -208,7 +200,7 @@ const heldTo = (isHeld: (value: string | null) => string | null, value: unknown,
 
 // `satisfies` checks every entry is a `Harness` but not that every `Harness` is listed; this refuses a list that leaves one out at compile time.
 const allHarnesses = <const T extends readonly Harness[]>(list: [Exclude<Harness, T[number]>] extends [never] ? T : never): T => list;
-const HARNESSES = allHarnesses(['claude-code', 'cursor', 'codex']);
+const HARNESSES = allHarnesses(['claude-code', 'cursor', 'codex', 'copilot']);
 const PROMPT_CLASSES = ['no-tools', 'orchestration', 'research', 'edit-verify', 'edit-only', 'explore-only', 'shell-only', 'mixed'] as const satisfies readonly PromptClass[];
 const STATUSES = ['ok', 'error', 'none'] as const satisfies readonly ToolStatus[];
 const EDGE_KINDS = ['next', 'spawned', 'retried', 'after-error'] as const satisfies readonly StepEdge['kind'][];
@@ -393,19 +385,28 @@ export const parseSkeleton = (value: unknown): { ok: true; skeleton: SessionSkel
   }
 };
 
-/** One stack's replica, as the server signs it. `capped` says an account with no deposit got part of it. */
-export interface Slice {
-  format: typeof SLICE_FORMAT;
-  stack: string;
-  capped: { limit: number; served: number } | null;
+/** One count of a stack stratum (spec Section 4, rule 3), across every harness version, so it is never joined to one. */
+export interface StrataCell {
+  dimension: 'language' | 'framework' | 'repoFiles';
+  value: string;
+  sessions: number;
+  clusters: number;
+}
+
+/** One harness version's replica, as the server signs it. Nothing in it is keyed by stack. */
+export interface Bundle {
+  format: typeof BUNDLE_FORMAT;
+  harnessVersion: string;
+  vocabVersion: string;
   asOf: ReadAsOf;
   cells: Cell[];
   motifs: Motif[];
   reads: Read[];
+  strata: StrataCell[];
 }
 
 /** The signature covers these exact bytes, so nothing has to be canonicalized on either side. */
-export interface SignedSlice {
+export interface SignedBundle {
   payload: string;
   /** Ed25519 over the payload's UTF-8 bytes, in base64. */
   signature: string;
@@ -418,12 +419,12 @@ export interface PinnedKey {
   x: string;
 }
 
-const isSignedSlice = (value: unknown): value is SignedSlice => isFields(value) && typeof value.payload === 'string' && typeof value.signature === 'string';
+const isSignedBundle = (value: unknown): value is SignedBundle => isFields(value) && typeof value.payload === 'string' && typeof value.signature === 'string';
 
-const isSlice = (value: unknown): value is Slice =>
-  isFields(value) && value.format === SLICE_FORMAT && typeof value.stack === 'string' && isFields(value.asOf) && Array.isArray(value.cells) && Array.isArray(value.motifs) && Array.isArray(value.reads) && (value.capped === null || isFields(value.capped));
+const isBundle = (value: unknown): value is Bundle =>
+  isFields(value) && value.format === BUNDLE_FORMAT && typeof value.harnessVersion === 'string' && typeof value.vocabVersion === 'string' && isFields(value.asOf) && Array.isArray(value.cells) && Array.isArray(value.motifs) && Array.isArray(value.reads) && Array.isArray(value.strata);
 
-const signatureHolds = async ({ payload, signature }: SignedSlice, key: PinnedKey): Promise<boolean> => {
+const signatureHolds = async ({ payload, signature }: SignedBundle, key: PinnedKey): Promise<boolean> => {
   try {
     const verifier = await crypto.subtle.importKey('jwk', { kty: key.kty, crv: key.crv, x: key.x }, 'Ed25519', false, ['verify']);
     return await crypto.subtle.verify('Ed25519', verifier, Uint8Array.from(atob(signature), (char) => char.charCodeAt(0)), new TextEncoder().encode(payload));
@@ -432,12 +433,13 @@ const signatureHolds = async ({ payload, signature }: SignedSlice, key: PinnedKe
   }
 };
 
-/** The slice, only when the pinned key signed these bytes for the stack that was asked for: a replica of another stack, under a good signature, is still the wrong answer. */
-export const verifySlice = async (signed: unknown, key: PinnedKey, stack: string): Promise<{ ok: true; slice: Slice } | { ok: false; reason: string }> => {
-  if (!isSignedSlice(signed)) return { ok: false, reason: 'not a signed slice' };
+/** The bundle, only when the pinned key signed these bytes for the version that was asked for: another version's bundle, under a good signature, is still the wrong answer. */
+export const verifyBundle = async (signed: unknown, key: PinnedKey, harnessVersion: string): Promise<{ ok: true; bundle: Bundle } | { ok: false; reason: string }> => {
+  if (!isSignedBundle(signed)) return { ok: false, reason: 'not a signed bundle' };
   if (!(await signatureHolds(signed, key))) return { ok: false, reason: 'the signature does not match the key pinned at login' };
-  const slice: unknown = JSON.parse(signed.payload);
-  if (!isSlice(slice)) return { ok: false, reason: 'not a signed slice this version reads' };
-  if (slice.stack !== stack) return { ok: false, reason: `this slice is for stack ${slice.stack}, not ${stack}` };
-  return { ok: true, slice };
+  const bundle: unknown = JSON.parse(signed.payload);
+  if (!isBundle(bundle)) return { ok: false, reason: 'not a signed bundle this version reads' };
+  if (bundle.vocabVersion !== VOCAB_VERSION) return { ok: false, reason: `this bundle is for vocabulary version ${bundle.vocabVersion}, not ${VOCAB_VERSION}` };
+  if (bundle.harnessVersion !== harnessVersion) return { ok: false, reason: `this bundle is for harness version ${bundle.harnessVersion}, not ${harnessVersion}` };
+  return { ok: true, bundle };
 };

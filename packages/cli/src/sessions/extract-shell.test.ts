@@ -1,6 +1,6 @@
 // The captured `pulls`, `commits`, and `segments` of a shell call (t746 Item 2): one table row per form.
 import { describe, expect, it } from 'vitest';
-import { commitsRead, captureSession, pullsOfTool, readShell } from './extract.js';
+import { commitsRead, captureSession, pullsOfTool, readShell, storedToolName } from './extract.js';
 import { makeRedactor } from './redact.js';
 import { CAPTURE_VERSION } from './schema.js';
 
@@ -26,6 +26,8 @@ describe('pulls: one row per form', () => {
     ['yarn add', 'yarn add foo@1', ['npm:foo@@1']],
     ['yarn global add', 'yarn global add foo', ['npm:foo']],
     ['yarn dlx', 'yarn dlx foo --flag', ['npm:foo']],
+    ['pnpm dlx behind a package flag', 'pnpm --package=foo dlx bar', ['npm:foo']],
+    ['pnpm dlx behind a filter whose value reads dlx', 'pnpm --filter dlx dlx foo', ['npm:foo']],
     ['bun add', 'bun add foo', ['npm:foo']],
     ['bun install name', 'bun install foo', ['npm:foo']],
     ['bun i', 'bun i foo', ['npm:foo']],
@@ -62,6 +64,27 @@ describe('pulls: one row per form', () => {
     ['skills installer', 'npx skills add owner/repo', ['skill:owner/repo']],
     ['skills installer with a yes flag and version', 'npx -y skills@latest add owner/repo --skill one', ['skill:owner/repo']],
     ['skills, not an install, is the npm package', 'npx skills list', ['npm:skills']],
+    ['yarn install with a name', 'yarn install foo', ['npm:foo']],
+    ['yarn i with a name', 'yarn i foo', ['npm:foo']],
+    ['npm dlx', 'npm dlx foo', ['npm:foo']],
+    ['pnpm add with the workspace-root flag', 'pnpm add -w foo', ['npm:foo']],
+    ['pnpm with the workspace-root flag first', 'pnpm -w add foo', ['npm:foo']],
+    ['npm silent flag takes no value', 'npm install -s foo', ['npm:foo']],
+    ['npm silent flag after the name', 'npm install foo -s', ['npm:foo']],
+    ['npx skills add -s takes the skill name', 'npx skills add -s one owner/repo', ['skill:owner/repo']],
+    ['yarn workspace names the folder, not the pull', 'yarn workspace web add foo', ['npm:foo']],
+    ['yarn workspace with a version', 'yarn workspace @scope/web add foo@2', ['npm:foo@@2']],
+    ['cargo with a toolchain word', 'cargo +nightly install foo', ['cargo:foo']],
+    ['cargo add with a toolchain word', 'cargo +stable add foo@1', ['cargo:foo@@1']],
+    ['cargo install from a git URL', 'cargo install --git https://github.com/a/b', ['cargo:https://github.com/a/b']],
+    ['cargo install from a git URL, named', 'cargo install --git https://github.com/a/b foo', ['cargo:foo']],
+    ['sudo -u takes a user', 'sudo -u root npm i foo', ['npm:foo']],
+    ['sudo -g takes a group', 'sudo -g wheel pip install foo', ['pypi:foo']],
+    ['env -u takes a variable', 'env -u X npm i foo', ['npm:foo']],
+    ['nice -n takes a level', 'nice -n 5 npm i foo', ['npm:foo']],
+    ['timeout -k takes a duration', 'timeout -k 5 60 npm i foo', ['npm:foo']],
+    ['timeout -s takes a signal', 'timeout -s KILL 60 npm i foo', ['npm:foo']],
+    ['sudo with a flag that takes no value', 'sudo -E npm i foo', ['npm:foo']],
     ['claude plugin', 'claude plugin install foo@market', ['plugin:foo@market']],
     ['codex plugin', 'codex plugin add foo', ['plugin:foo']],
     ['a Windows wrapper', '& "C:\\Program Files\\nodejs\\npm.cmd" install foo', ['npm:foo']],
@@ -91,6 +114,7 @@ describe('pulls: what names nothing', () => {
     ['go with no module path', 'go install cmd/x'],
     ['go test', 'go test ./...'],
     ['npm local folder', 'npm install ../pkg'],
+    ['an scp-style git spec, whose name reads as a mask', 'npm install git@github.com:org/repo.git'],
     ['npm file spec', 'npm install file:../pkg'],
     ['npm variable', 'npm install $PKG'],
     ['PowerShell variable', 'npm install $env:PKG'],
@@ -158,8 +182,13 @@ describe('pulls: redaction', () => {
   });
   it('keeps a token out of a name and out of a version', () => {
     const token = 'ghp_abcdefghijklmnopqrstuvwxyz012345';
-    expect(pullsOf(`npm install foo@${token}`)).toEqual(['npm:foo@@<secret>']);
+    // A version that holds a mask says only that something was masked, so it is dropped rather than kept as noise.
+    expect(pullsOf(`npm install foo@${token}`)).toEqual(['npm:foo']);
+    expect(pullsOf(`pip install foo==${token}`)).toEqual(['pypi:foo']);
     expect(JSON.stringify(readShell(`npm install foo@${token}`, redact))).not.toContain(token);
+  });
+  it('keeps a mask out of the version of an npm alias, which the redactor reads as an email', () => {
+    expect(pullsOf('npm install alias@npm:foo@1.2.3')).toEqual(['npm:alias']);
   });
   it('drops a name that is all mask, which says nothing', () => {
     expect(pullsOf('npm install ghp_abcdefghijklmnopqrstuvwxyz012345 foo')).toEqual(['npm:foo']);
@@ -183,6 +212,251 @@ describe('MCP pulls', () => {
     const token = 'ghp_abcdefghijklmnopqrstuvwxyz012345';
     expect(pullsOfTool(`mcp__${token}__x`, redact)).toEqual([]);
     expect(pullsOfTool(`mcp__me-${token}__x`, redact)).toEqual([{ ecosystem: 'mcp', name: 'me-<secret>', version: null }]);
+  });
+});
+
+describe('MCP tool names: a token behind an underscore or in a later part is redacted', () => {
+  const token = 'ghp_abcdefghijklmnopqrstuvwxyz012345';
+  const line = (message: object, extra: object = {}): string => JSON.stringify({ timestamp: '2026-06-10T00:00:00.000Z', cwd: '/w', ...extra, message });
+  const capturedFor = (toolName: string) =>
+    captureSession({
+      text: [
+        line({ role: 'user', content: 'go' }, { type: 'user' }),
+        line({ role: 'assistant', content: [{ type: 'tool_use', id: 'a', name: toolName, input: {} }] }, { type: 'assistant' }),
+        line({ role: 'user', content: [{ type: 'tool_result', tool_use_id: 'a', content: 'Exit code 1\nboom', is_error: true }] }, { type: 'user' }),
+      ].join('\n'),
+      session: 's',
+      project: 'p',
+      rev: 1,
+      at: '',
+      bytes: 0,
+      redact,
+    });
+  it.each([`mcp__me_${token}__find`, `mcp__me__${token}__find`, `mcp__me__find_${token}`])('keeps the token out of every stored field for %s', (toolName) => {
+    expect(JSON.stringify(capturedFor(toolName))).not.toContain(token);
+  });
+  const hex36 = 'abcdefghijklmnopqrstuvwxyz0123456789';
+  const gh = `ghp_${hex36}`;
+  const sk = 'sk-ant-api03-AAAAAAAA';
+  const tail32 = 'abcdefghijklmnopqrstuvwxyzABCDEF';
+  const aiza = 'AIzaAAAAAAAAAA';
+  const tail28 = 'abcdefghijklmnopqrstuvwxyz01';
+  it.each<readonly [string, readonly string[]]>([
+    [`mcp__me_${gh}_x__find`, [gh, hex36]],
+    [`mcp__${gh}_x__find`, [gh, hex36]],
+    [`mcp__me__${gh}_find`, [gh, hex36]],
+    [`mcp__${sk}__${tail32}__find`, [sk, tail32]],
+    [`mcp__me-${aiza}__${tail28}__find`, [aiza, tail28]],
+    [`mcp_me-${gh}_find`, [gh, hex36]],
+    ['mcp__github_pat_AAAAAAAAAA__BBBBBBBBBBBBBBBBBBBB__find', ['AAAAAAAAAA', 'BBBBBBBBBBBBBBBBBBBB']],
+    ['mcp__eyJhbGciOiJ__IUzI1NiJ9.eyJzdWIiOiIx.c2lnbmF0dXJl__find', ['eyJhbGciOiJ', 'IUzI1NiJ9', 'eyJzdWIiOiIx', 'c2lnbmF0dXJl']],
+    ['mcp_eyJhbGciOiJ_IUzI1NiJ9.eyJzdWIiOiIx.c2lnbmF0dXJl_find', ['eyJhbGciOiJ', 'IUzI1NiJ9', 'eyJzdWIiOiIx', 'c2lnbmF0dXJl']],
+    ['mcp_eyJhbGciOiJIUzI1NiJ9.eyJz_dWIiOiIx.c2lnbmF0dXJl_find', ['eyJhbGciOiJIUzI1NiJ9', 'dWIiOiIx', 'c2lnbmF0dXJl']],
+    ['mcp_api_key=abcd1234_find', ['abcd1234']],
+    ['mcp_private_key=abcd1234_find', ['abcd1234']],
+    ['mcp_secret_name=abcd1234_find', ['abcd1234']],
+    ['mcp__token=ab__cdefgh__find', ['ab__cdefgh']],
+    ['mcp__api_key=abcd1234__find', ['abcd1234']],
+    ['mcp__sk-AbC1__DeFgHiJkLmNoPqRsTuVw__find', ['AbC1', 'DeFgHiJkLmNoPqRsTuVw']],
+    ['mcp__me-sk-AbC1__DeFgHiJkLmNoPqRsTuVw__find', ['AbC1', 'DeFgHiJkLmNoPqRsTuVw']],
+    ['mcp_sk-AbC1__DeFgHiJkLmNoPqRsTuVw_find', ['AbC1', 'DeFgHiJkLmNoPqRsTuVw']],
+    ['mcp_sk-AbC1_DeFgHiJkLmNoPqRsTuVw_find', ['AbC1', 'DeFgHiJkLmNoPqRsTuVw']],
+    ['mcp__sk-proj-xoxa-Ab1_DeFgHiJkLmNoPqRsTuVw__find', ['DeFgHiJkLmNoPqRsTuVw']],
+    ['mcp_sk-proj-xoxa-Ab1_DeFgHiJkLmNoPqRsTuVw_find', ['DeFgHiJkLmNoPqRsTuVw']],
+    ['mcp__AIzaSyA-xoxb-abc_defghijklmnopqrstuvwxyz0123__find', ['defghijklmnopqrstuvwxyz0123']],
+    ['mcp__eyJhbGciOi-xoxb-a_JIUzI1NiJ9.eyJzdWIiOiIx.c2lnbmF0dXJl__find', ['JIUzI1NiJ9', 'eyJzdWIiOiIx', 'c2lnbmF0dXJl']],
+    ['mcp__token=xoxb-short_hunter2hunter2__find', ['hunter2hunter2']],
+    ['mcp__api_key=abc-xoxb-1_hunter2hunter2__find', ['hunter2hunter2']],
+    ['mcp_token=xoxb-short_hunter2hunter2_find', ['hunter2hunter2']],
+    ['mcp__xoxb-a-ghp_abcdefghijklmnopqrstuvwxyz0123456789__find', ['abcdefghijklmnopqrstuvwxyz0123456789']],
+    ['mcp__xoxb-a-sk_live_abcdefghijklmnop__find', ['abcdefghijklmnop']],
+    ['mcp__xoxb-a-whsec_abcdefghijklmnop__find', ['abcdefghijklmnop']],
+    ['mcp__xoxb-a-api_key=abcd1234__find', ['abcd1234']],
+    ['mcp_xoxb-a-api_key=abcd1234_find', ['abcd1234']],
+    ['mcp__ns:xoxb-1234567890-abcdefghij_x__find', ['abcdefghij']],
+    ['mcp__eyJ-xoxb-1234567890-abcdefghij_x__find', ['abcdefghij']],
+    ['mcp__me_xoxb-1234567890-ghp_abcdefghijklmnopqrstuvwxyz0123456789_x__find', ['abcdefghijklmnopqrstuvwxyz0123456789']],
+    ['mcp__me_xoxb-1234567890-sk_live_abcdefghijklmnop_x__find', ['abcdefghijklmnop']],
+    ['mcp__me_xoxb-1234567890-whsec_abcdefghijklmnop_x__find', ['abcdefghijklmnop']],
+    ['mcp_me_xoxb-1234567890-ghp_abcdefghijklmnopqrstuvwxyz0123456789_x_find', ['abcdefghijklmnopqrstuvwxyz0123456789']],
+  ])('keeps no part of the token in any stored field for %s', (toolName, parts) => {
+    const stored = JSON.stringify(capturedFor(toolName));
+    for (const part of parts) expect(stored).not.toContain(part);
+  });
+  it('reads a name-and-value secret as the name and a masked value', () => {
+    expect(storedToolName('mcp__api_key=abcd1234__find', redact)).toBe('mcp__api_key=<secret>');
+  });
+  it('reads a name past the cap as one masked value rather than slicing it', () => {
+    const long = `mcp__${'a_'.repeat(100)}find`;
+    expect(storedToolName(long, redact)).toBe('mcp__<oversized>');
+    expect(pullsOfTool(long, redact)).toEqual([{ ecosystem: 'mcp', name: '<oversized>', version: null }]);
+  });
+  it('leaves an ordinary name alone', () => {
+    expect(storedToolName('mcp__github__create_issue', redact)).toBe('mcp__github__create_issue');
+    expect(storedToolName('mcp_oars_oars_recall', redact)).toBe('mcp_oars_oars_recall');
+    expect(storedToolName('mcp__Server2__listItemsByWorkspaceId', redact)).toBe('mcp__Server2__listItemsByWorkspaceId');
+    expect(storedToolName('mcp_Server2_listItems', redact)).toBe('mcp_Server2_listItems');
+    expect(storedToolName('mcp_Server2_listItemsByWorkspaceId', redact)).toBe('mcp_Server2_listItemsByWorkspaceId');
+    expect(storedToolName('Bash', redact)).toBe('Bash');
+  });
+  it.each<readonly [string, string]>([
+    ['mcp__Context7__resolve-library-id', 'Context7'],
+    ['mcp__n8n__createWorkflowFromTemplate', 'n8n'],
+    ['mcp__aws_s3__ListObjectsV2Command', 'aws_s3'],
+  ])('keeps the server name of %s, a name with a capital and a digit', (toolName, server) => {
+    expect(storedToolName(toolName, redact)).toBe(toolName);
+    expect(pullsOfTool(toolName, redact)).toEqual([{ ecosystem: 'mcp', name: server, version: null }]);
+  });
+  it.each<readonly [string, string, string]>([
+    ['mcp__ListObjectsV2CommandFoo__find', 'mcp__ListObjectsV2CommandFoo__find', 'ListObjectsV2CommandFoo'],
+    ['mcp__aws__ListObjectsV2CommandFoo', 'mcp__aws__ListObjectsV2CommandFoo', 'aws'],
+    ['mcp__sk-learn__fit_transform', 'mcp__sk-learn__fit_transform', 'sk-learn'],
+    ['mcp__task-sk-tools__resolve-library-id', 'mcp__task-sk-tools__resolve-library-id', 'task-sk-tools'],
+    ['mcp_Context7_resolve-library-id', 'mcp_Context7_resolve-library-id', ''],
+    ['mcp_aws_s3_ListObjectsV2Command', 'mcp_aws_s3_ListObjectsV2Command', ''],
+    ['mcp_my_Context7_resolve-library-id', 'mcp_my_Context7_resolve-library-id', ''],
+    ['mcp_my_server_Context7_resolve-library-id', 'mcp_my_server_Context7_resolve-library-id', ''],
+    ['mcp_x_Server2_listItemsByWorkspaceId', 'mcp_x_Server2_listItemsByWorkspaceId', ''],
+    ['mcp_aws_s3_ListObjectsV2CommandFoo', 'mcp_aws_s3_ListObjectsV2CommandFoo', ''],
+    ['mcp_sk-learn_fit_transform', 'mcp_sk-learn_fit_transform', ''],
+    ['mcp_pk_Context7_resolve-library-id', 'mcp_pk_Context7_resolve-library-id', ''],
+    ['mcp_rk_tools_ListObjectsV2Command', 'mcp_rk_tools_ListObjectsV2Command', ''],
+    ['mcp_x_sk_Context7_resolve-library-id', 'mcp_x_sk_Context7_resolve-library-id', ''],
+    ['mcp_task-sk-tools_resolve-library-id', 'mcp_task-sk-tools_resolve-library-id', ''],
+  ])('reads %s as main reads it: a lone underscore beside a separator does not join two harmless parts', (toolName, stored, server) => {
+    expect(storedToolName(toolName, redact)).toBe(stored);
+    expect(pullsOfTool(toolName, redact)).toEqual(server === '' ? [] : [{ ecosystem: 'mcp', name: server, version: null }]);
+  });
+  it('masks a random server name that has no pattern rule and keeps no pull for a name that is all mask', () => {
+    const random = 'aB3dE5gH7jK9mN1pQ3rS5tU7vW9x';
+    expect(storedToolName(`mcp__${random}__find`, redact)).toBe('mcp__<secret>__find');
+    expect(pullsOfTool(`mcp__${random}__find`, redact)).toEqual([]);
+    expect(storedToolName(`mcp_${random}_find`, redact)).toBe('mcp_<secret>_find');
+  });
+  it.each(['ghp_abcdefghijklmnopqrstuvwxyz0123456789', 'sk-ant-api03-AAAAAAAAAAAA', 'whsec_abcdefghijklmnop', 'pk_live_abcdefghijklmnop'])(
+    'masks the Cursor form of a server named %s',
+    (server) => {
+      const stored = storedToolName(`mcp_${server}_find`, redact);
+      expect(stored).toMatch(/^mcp_<secret>/);
+      expect(stored).not.toContain(server);
+    },
+  );
+  it('names the limits that favor the secret: a public name that starts like a pattern rule loses its server, and a tool part of 24 characters with a capital and a digit is masked', () => {
+    for (const name of ['mcp__sk-ant-tools__find_items_in_db', 'mcp__github_pat_helper__create_issue_comment', 'mcp__AIza-tools__list_all_the_maps_in_the_big_account']) {
+      expect(storedToolName(name, redact)).toMatch(/^mcp__<secret>/);
+      expect(pullsOfTool(name, redact)).toEqual([]);
+    }
+    for (const name of ['mcp__sk-learn__PCA2Transform', 'mcp__task-sk-tools__Get2Items']) expect(storedToolName(name, redact)).toMatch(/<secret>/);
+    expect(storedToolName('mcp__aws__ListObjectsV2CommandFooBar', redact)).toBe('mcp__aws__<secret>');
+    expect(pullsOfTool('mcp__aws__ListObjectsV2CommandFooBar', redact)).toEqual([{ ecosystem: 'mcp', name: 'aws', version: null }]);
+  });
+  it('stores raw an sk- key with no capital and digit that holds a _ before 16 characters, an accepted limit', () => {
+    for (const name of ['mcp_sk-abc_defghijklmnopqrstuvwxyz_find', 'mcp__sk-abc__defghijklmnopqrstuvwxyz__find']) expect(storedToolName(name, redact)).toBe(name);
+  });
+  it('masks a name that holds : or = as one random token and loses its server, an accepted limit', () => {
+    for (const name of ['mcp__ns:Context7__resolve-library-id', 'mcp__ns=Context7__resolve-library-id']) {
+      const stored = storedToolName(name, redact);
+      expect(stored).toMatch(/<secret>/);
+      expect(stored).not.toContain('Context7');
+    }
+  });
+  it('keeps what a Slack match leaves of a token right behind a Slack-shaped run, an accepted limit', () => {
+    expect(storedToolName('mcp_xoxb-1234567890-ghp_abcdefghijklmnopqrstuvwxyz0123456789_find', redact)).toBe('mcp_<secret>_abcdefghijklmnopqrstuvwxyz0123456789_find');
+    expect(storedToolName('mcp__xoxb-a-eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0.c2lnbmF0dXJlMTIz__find', redact)).toBe(
+      'mcp__<secret>.eyJzdWIiOiIxMjM0.c2lnbmF0dXJlMTIz__find',
+    );
+  });
+  it('does not find a token with no pattern rule whose every part is under 24 characters, an accepted limit', () => {
+    const name = 'mcp__aB3dE5gH7jK9mN1pQ3rS__tU5vW7xY9zA1bC3dE5fG__find';
+    expect(storedToolName(name, redact)).toBe(name);
+  });
+  it('masks the token in the stored name and the pull for both forms', () => {
+    expect(storedToolName(`mcp__me_${token}__find`, redact)).toBe('mcp__me_<secret>__find');
+    expect(storedToolName(`mcp__me__${token}__find`, redact)).toBe('mcp__me__<secret>__find');
+    expect(pullsOfTool(`mcp__me_${token}__find`, redact)).toEqual([{ ecosystem: 'mcp', name: 'me_<secret>', version: null }]);
+    expect(pullsOfTool(`mcp__me__${token}__find`, redact)).toEqual([{ ecosystem: 'mcp', name: 'me', version: null }]);
+  });
+});
+
+describe('MCP tool names: a server name that holds a token is stored redacted', () => {
+  const token = 'ghp_abcdefghijklmnopqrstuvwxyz012345';
+  const line = (message: object, extra: object = {}): string => JSON.stringify({ timestamp: '2026-06-10T00:00:00.000Z', cwd: '/w', ...extra, message });
+  const lines = [
+    line({ role: 'user', content: 'go' }, { type: 'user' }),
+    line({ role: 'assistant', content: [{ type: 'tool_use', id: 'a', name: `mcp__me-${token}__find`, input: {} }] }, { type: 'assistant' }),
+    line({ role: 'user', content: [{ type: 'tool_result', tool_use_id: 'a', content: 'Exit code 1\nboom', is_error: true }] }, { type: 'user' }),
+  ];
+  const captured = captureSession({ text: lines.join('\n'), session: 's', project: 'p', rev: 1, at: '', bytes: 0, redact });
+  it('keeps the token out of the tool record, the per-session count, and the error line', () => {
+    expect(captured.tools[0]?.tool).toBe('mcp__me-<secret>__find');
+    expect(captured.session.tools).toEqual({ 'mcp__me-<secret>__find': 1 });
+    expect(captured.errorLines[0]?.tool).toBe('mcp__me-<secret>__find');
+    expect(JSON.stringify(captured)).not.toContain(token);
+  });
+  it('leaves a name with no secret as it was', () => {
+    expect(storedToolName('mcp__claude-in-chrome__navigate', redact)).toBe('mcp__claude-in-chrome__navigate');
+    expect(storedToolName('Read', redact)).toBe('Read');
+    expect(storedToolName('mcp__', redact)).toBe('mcp__');
+  });
+});
+
+describe('shell structure: forms that must not hide the commands after them', () => {
+  const runs = (command: string): Array<readonly [string, boolean]> => readShell(command, redact).segments.map((segment) => [segment.run, segment.read]);
+  it('opens no here-string for a line that merely ends in @ and a quote', () => {
+    expect(pullsOf('echo "me@"\nnpm install foo')).toEqual(['npm:foo']);
+    expect(pullsOf("echo 'me@'\nnpm install foo")).toEqual(['npm:foo']);
+  });
+  it('still opens a here-string at the start of a line, after a space, an equals sign, or a parenthesis', () => {
+    for (const opening of ["@'", "git commit -m @'", "$x=@'", "$x = @'", "f(@'"]) expect(pullsOf(`${opening}\nnpm install hidden\n'@\nnpm install shown`)).toEqual(['npm:shown']);
+  });
+  it('opens no heredoc for a << inside quotes', () => {
+    expect(pullsOf('echo "a << b"\nnpm install foo')).toEqual(['npm:foo']);
+    expect(pullsOf('git commit -m "x << y"\nnpm install foo')).toEqual(['npm:foo']);
+    expect(pullsOf("echo 'a <<EOF'\nnpm install foo")).toEqual(['npm:foo']);
+  });
+  it('still opens a heredoc outside quotes and inside a command substitution', () => {
+    expect(pullsOf("cat <<'EOF'\nnpm install hidden\nEOF\nnpm install shown")).toEqual(['npm:shown']);
+    expect(pullsOf('echo "$(cat <<EOF\nnpm install hidden\nEOF\n)"\nnpm install shown')).toEqual(['npm:shown']);
+  });
+  it('reads a command behind a PowerShell assignment', () => {
+    expect(runs('$x = npm test')).toEqual([['npm test', true]]);
+    expect(readShell('$sha = git commit -m x', redact).commitPlan).toHaveLength(1);
+    expect(runs('$out = & npm test')).toEqual([['npm test', true]]);
+  });
+  it('reads a quoted or numeric assignment value as no command, as before', () => {
+    expect(runs('$x = "1"')).toEqual([]);
+    expect(runs('$x = 5')).toEqual([]);
+    expect(runs('$env:CI = "1"; npm test')).toEqual([['npm test', true]]);
+  });
+  it('reads only -c and a prefix of -command as the command flag of PowerShell', () => {
+    expect(runs('powershell -Exec Bypass -Command "npm test"')).toEqual([['npm test', true]]);
+    expect(runs('pwsh -NoProfile -c "npm test"')).toEqual([['npm test', true]]);
+    expect(runs('pwsh -Com "npm test"')).toEqual([['npm test', true]]);
+    expect(runs('powershell -Exec Bypass')).toEqual([['powershell Bypass', true]]);
+    expect(runs('bash -lc "npm test"')).toEqual([['npm test', true]]);
+    expect(runs('cmd /c npm test')).toEqual([['npm test', true]]);
+  });
+  it('hides every command of a group a pipe follows', () => {
+    expect(runs('(npm test && echo ok) | tail')).toEqual([['npm test', false], ['echo ok', false], ['tail', true]]);
+    expect(runs('(npm test) | tail')).toEqual([['npm test', false], ['tail', true]]);
+  });
+  it('hides the commands of a group opened behind a word when a pipe follows its close', () => {
+    expect(runs('echo $(npm test && echo ok) | tail').filter(([run]) => run.startsWith('npm') || run.startsWith('echo ok'))).toEqual([['npm test', false], ['echo ok', false]]);
+    expect(runs('foreach ($f in $x) { npm test && echo ok } | tail').filter(([run]) => run.startsWith('npm') || run.startsWith('echo ok'))).toEqual([['npm test', false], ['echo ok', false]]);
+  });
+  it('hides the commands of a group that holds a nested group, and the command whose words open a group', () => {
+    const only = (command: string, ...starts: string[]) => runs(command).filter(([run]) => starts.some((start) => run.startsWith(start)));
+    expect(only('(npm test && foreach ($f in $x) { echo $f }) | tail', 'npm')).toEqual([['npm test', false]]);
+    expect(only('(npm test && if ($y) { echo ok }) | tail', 'npm')).toEqual([['npm test', false]]);
+    expect(only('pytest $(git ls-files) | tail', 'pytest', 'git')).toEqual([['pytest', false], ['git ls-files', false]]);
+    expect(only('npm run build $(x) | tail', 'npm')).toEqual([['npm run build', false]]);
+    expect(only('echo $(npm test && echo ok) | tail', 'echo', 'npm')).toEqual([['echo', false], ['npm test', false], ['echo ok', false]]);
+    expect(only('pytest $(git ls-files) && tail', 'pytest')).toEqual([['pytest', true]]);
+  });
+  it('hides only the command before the pipe when no group closes before it', () => {
+    expect(runs('a && b | c')).toEqual([['a', true], ['b', false], ['c', true]]);
+    expect(runs('a | (b && c)')).toEqual([['a', false], ['b', true], ['c', true]]);
+    expect(runs('(a && b) && c')).toEqual([['a', true], ['b', true], ['c', true]]);
   });
 });
 
@@ -237,6 +511,12 @@ describe('segments: what the status of the call says about each', () => {
   it('never throws on a torn command', () => {
     for (const torn of ['"unclosed', "'unclosed", 'a \\', '$(', '"$(', '<<EOF', "@'", ') (', '&& ||', '> ']) expect(() => readShell(torn, redact)).not.toThrow();
   });
+  it('never throws on a long chain of joining shells, and reads the command beneath the cap', () => {
+    for (const count of [10, 1000, 5000]) expect(() => readShell(`${'pwsh -c '.repeat(count)}ls`, redact)).not.toThrow();
+    expect(readShell('pwsh -c pwsh -c pwsh -c npm test', redact).segments.map((segment) => segment.run)).toEqual(['npm test']);
+    // Past the cap a shell is a plain command, so the call still reads as a command and never as a crash.
+    expect(readShell(`${'pwsh -c '.repeat(5000)}ls`, redact).segments.length).toBeGreaterThan(0);
+  });
 });
 
 describe('commits: a successful `git commit` and the sha its result names', () => {
@@ -258,6 +538,14 @@ describe('commits: a successful `git commit` and the sha its result names', () =
     ['a pipe between them', 'git commit -qm x 2>&1 | tail -1 && git log --oneline -1', 'abc1234 x', ['abc1234']],
     ['same repository flag', 'git -C /a commit -qm x && git -C /a log --oneline -1', 'abc1234 x', ['abc1234']],
     ['a read of another repository is not this commit', 'git -C /a commit -qm x && git -C /b log --oneline -1', 'abc1234 x', [null]],
+    ['a read of another --git-dir is not this commit', 'git --git-dir=/a commit -qm x && git --git-dir=/b log --oneline -1', 'abc1234 x', [null]],
+    ['a read of the same --git-dir is this commit', 'git --git-dir=/a commit -qm x && git --git-dir=/a log --oneline -1', 'abc1234 x', ['abc1234']],
+    ['a read of another --work-tree is not this commit', 'git --work-tree=/a commit -qm x && git --work-tree=/b rev-parse --short HEAD', 'abc1234', [null]],
+    ['a quoted -h is a message, not help', 'git commit -m "-h"', '[main abc1234] x', ['abc1234']],
+    ['a quoted --dry-run is a message', 'git commit -m "--dry-run"', '[main abc1234] x', ['abc1234']],
+    ['an unquoted -h is help', 'git commit -h', '[main abc1234] x', []],
+    ['rev-parse --abbrev-ref prints a branch, not a sha', 'git log --oneline -1 && git commit -qm x && git rev-parse --abbrev-ref HEAD', 'abc1234 prior\nmain', [null]],
+    ['rev-parse --symbolic-full-name prints a ref, not a sha', 'git commit -qm x && git rev-parse --symbolic-full-name HEAD', 'refs/heads/main', [null]],
     ['a read of another ref is not this commit', 'git commit -qm x && git log --oneline -1 origin/main', 'abc1234 x', [null]],
     ['rev-parse of another ref', 'git commit -qm x && git rev-parse origin/main', 'abc1234', [null]],
     ['behind a semicolon, the log may read an older commit', 'git commit -qm x; git log --oneline -1', 'abc1234 x', [null]],

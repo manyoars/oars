@@ -232,7 +232,7 @@ export const viewOf = (turns: readonly Turn[], index: number, redact: Redactor):
 
 /**
  * The prompts that can be judged. A marker is not a request. A `no-tools` prompt has only its reply to show, and the reply is the closing claim the
- * file must hide. A session from any other harness (`SOURCES`: Cursor, Codex) has no Claude Code transcript to read. A prompt with no signals has nothing to score.
+ * file must hide. A session from any other harness (every harness `SOURCES` names) has no Claude Code transcript to read. A prompt with no signals has nothing to score.
  */
 export const frameOf = (prompts: readonly PromptObservation[]): PromptObservation[] =>
   prompts.filter((prompt) => !prompt.head.startsWith(INTERRUPT_MARKER) && prompt.cls !== 'no-tools' && !SOURCES.some((source) => prompt.session.startsWith(`${source.name}-`)) && prompt.verify !== undefined && prompt.model !== '');
@@ -562,7 +562,7 @@ export const readTranscript = async (roots: readonly string[], project: string, 
 export interface GoldSample {
   document: GoldDocument;
   views: Array<{ id: string; view: GoldView }>;
-  /** Prompts the store names whose transcript is gone or no longer matches at that index. */
+  /** Prompts the store names whose transcript no longer matches at that index. */
   unreadable: number;
 }
 

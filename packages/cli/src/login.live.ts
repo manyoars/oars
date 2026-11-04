@@ -86,7 +86,7 @@ const startStubApi = async (): Promise<StubApi> => {
   };
 };
 
-/** What a developer does in the browser: open the link, sign in, grant the CLI access. */
+/** What a developer does in the browser: open the link, sign in, accept the terms if asked, grant the CLI access. */
 const approveDeviceCode = async (verificationUrl: string, username: string, password: string): Promise<void> => {
   const browser = await chromium.launch();
   try {
@@ -164,25 +164,34 @@ const loginThenLogout = async ({ api, configDir, username, password, audience }:
 
   // The exchange got a real Keycloak access token for this client, issued for the audience the realm names.
   const [exchanged = ''] = api.exchanged;
-  expect(api.exchanged).toHaveLength(1);
+  expect(api.exchanged.length, 'exactly one token exchange').toBe(1);
   expect(claim(exchanged, 'azp')).toBe('oars-cli');
   expect(claim(exchanged, 'iss')).toBe(ISSUER_URL);
   expect(claim(exchanged, 'email')).toBe(username);
   expect(JSON.stringify(claim(exchanged, 'aud'))).toContain(audience);
 
   const stored = await deps.store.read();
-  expect(stored).toMatchObject({ issuerUrl: ISSUER_URL, apiUrl: api.url, email: username, accessToken: 'stub-api-access-token' });
+  // Derived values only: a failing toMatchObject would print the stored refresh token into the public job log.
+  expect(stored?.issuerUrl, 'stored issuerUrl').toBe(ISSUER_URL);
+  expect(stored?.apiUrl, 'stored apiUrl').toBe(api.url);
+  expect(stored?.email, 'stored email').toBe(username);
+  expect(stored?.accessToken === 'stub-api-access-token', 'stored accessToken is the stub API token').toBe(true);
   const refreshToken = stored?.refreshToken ?? '';
-  expect(refreshToken).not.toBe('');
+  expect(refreshToken !== '', 'stored refreshToken is present').toBe(true);
 
   err.length = 0;
   expect(await run(['logout', '--json'], deps), err.join('')).toBe(ExitCode.OK);
   expect(err.join('')).toBe('');
-  expect(await deps.store.read()).toBeUndefined();
+  expect((await deps.store.read()) === undefined, 'credentials are removed after logout').toBe(true);
 
   // Revoked at Keycloak, not merely forgotten locally: the old refresh token is refused.
   const config = await discover(ISSUER_URL, { ...deps, step: 'live' });
-  await expect(refreshTokens(config, refreshToken, 'live')).rejects.toMatchObject({ exitCode: ExitCode.AUTH });
+  // A derived outcome: if the refresh succeeded, its result holds newly issued tokens that must not reach the log.
+  const refused = await refreshTokens(config, refreshToken, 'live').then(
+    () => 'accepted',
+    (error: unknown) => (error instanceof Error && 'exitCode' in error ? `refused with exit code ${String(error.exitCode)}` : 'failed'),
+  );
+  expect(refused, 'the revoked refresh token is refused by Keycloak').toBe(`refused with exit code ${String(ExitCode.AUTH)}`);
 };
 
 describe('oars login against a live Keycloak', () => {

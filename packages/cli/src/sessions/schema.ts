@@ -5,8 +5,15 @@
 // captured records to `<config>/oars/sessions/observations.jsonl`. The log is appended to, and a whole-store deposit drops superseded revs (`compactLog` in `store.ts`): a session whose file changed is deposited
 // again under a higher `rev`, and a reader keeps only the highest `rev` of each session.
 //
+// Version 12 (CAPTURE 12, t815) adds the optional `setup`, `funnel`, and `trust` to the session record, read from the transcript only (`session-shape.ts`;
+// `docs/sessions-store.md`). It changed no derivation, so it leaves EXTRACTOR at 10.
+//
 // Version 10 (CAPTURE 10, t768) gives a turn opened by a slash command or a skill a `user-prompt` record, adds `opened` to that record, and moves `skills`
 // from class P to class A, since a skill's name can be private. It changed no derivation, so it leaves EXTRACTOR at 9.
+//
+// Version 11 (CAPTURE 11) redacts the part of an MCP tool name after `mcp__` (Cursor: `mcp_`) wherever it is stored (`tool`, the session's `tools`, an error line's `tool`, the skeleton's tool names),
+// reads package-manager and shell forms more exactly (so `pulls`, `segments`, `commits`, and each tool's `steps` change), and opens a typed prompt from a line that only starts with an injected tag's name without closing it.
+// EXTRACTOR 10 reads more command forms as a run or a verify (package runners, `unittest`, installs that are not runs, a leading word before a name); no capture record changes.
 //
 // EXTRACTOR 9 adds motifs, cells, and reads, computed from the capture records and written beside them (`docs/sessions-store.md`), and carries a prompt's
 // frame onto its derived record. No capture record changes.
@@ -43,20 +50,21 @@
 // to 1,000 characters in the `error-line` record, 160 characters in a derived example), TLDR lines (400), Confidence lines (120), and,
 // with no length limit, WebSearch queries, fetched URLs, file paths, and git branch names. Also kept as written, not redacted: the
 // project folder slug (it holds the username and directory names; the log stays local), skill names, effort values, model names,
-// harness versions, and tool names (including MCP server names). `redact` masks secrets by pattern and entropy, emails, and the
+// harness versions, and tool names (an MCP name's part after its prefix is redacted). `redact` masks secrets by pattern and entropy, emails, and the
 // organization domains the operator names. The skeleton holds hashes only.
 
 import type { CanonicalAction } from './actions.js';
 import type { RepoSize } from './public-vocabulary.js';
+import type { SessionFunnel, SessionSetup, SessionTrust } from './session-shape.js';
 
 /** Stamped `cv` on every captured record. Bump it when the captured field list changes or a stored value of an existing captured record or skeleton changes: a bump re-reads every transcript. */
-export const CAPTURE_VERSION = '10';
+export const CAPTURE_VERSION = '12';
 
 /** Capture versions the reader derives from. A version-3 record is upgraded on read; a newer one is read for the fields this code knows. */
 export const OLDEST_READABLE_CAPTURE = 3;
 
 /** Stamped `v` on every derived record. A bump re-derives from the log; no transcript is read. */
-export const EXTRACTOR_VERSION = '9';
+export const EXTRACTOR_VERSION = '10';
 
 export const PROMPT_HEAD_CHARS = 300;
 export const ERROR_EXAMPLE_CHARS = 160;
@@ -78,7 +86,7 @@ export interface Usage {
   thinking: number;
 }
 
-export type Harness = 'claude-code' | 'cursor' | 'codex';
+export type Harness = 'claude-code' | 'cursor' | 'codex' | 'copilot';
 
 /** The harness a session record came from; a record that does not name one is Claude Code's. */
 export const harnessOf = (session: { harness?: Harness }): Harness => session.harness ?? 'claude-code';
@@ -130,7 +138,7 @@ export interface CaptureEnv {
 /**
  * One per transcript, captured: the `parse_sessions.py` record, minus anything that is raw content. Classes (t711 Section 1.2):
  * `L` local-only: `project`, `files`. `A` account store: `session`, `parent`, `spawnedBy`, `spawnedIn`, `branches`, `urls`, `searches`, `tldrs`,
- * `confidences`, `promptFingerprint`, `repo`, `fileHashes`, `tools`, `at`, `tsFirst`, `tsLast`. `P` pooled: `kind`, `cv`, `rev`, `sid`,
+ * `confidences`, `promptFingerprint`, `repo`, `fileHashes`, `tools`, `setup`, `funnel`, `trust`, `at`, `tsFirst`, `tsLast`. `P` pooled: `kind`, `cv`, `rev`, `sid`,
  * `agentType`, the counts, `versions`, `models`, `env`, `costUsd`, `usage`, `frame`, `frameId` (`at`, `tsFirst`, and `tsLast` at UTC day).
  */
 export interface SessionObservation {
@@ -193,6 +201,12 @@ export interface SessionObservation {
   costUsd: number | null;
   /** Summed assistant usage of the file's own line (a main transcript's sidechain lines are not counted; a subagent transcript is its own line). */
   usage: Usage;
+  /** What the transcript shows of the setup the session ran with (t815, class A); absent when it shows none, and on a record captured before version 12. */
+  setup?: SessionSetup;
+  /** The tool names at each funnel stage the transcript shows (class A); same absence rules. */
+  funnel?: SessionFunnel;
+  /** How often a human or a policy stopped the session and how long it ran alone (class A); same absence rules. */
+  trust?: SessionTrust;
 }
 
 /**

@@ -235,11 +235,11 @@ describe('claudeEvaluator', () => {
 });
 
 describe('oars sessions gold arms', () => {
-  // Under V15 a draw needs a term file (none excludes every session): an invented term that no fixture holds, unless the test is about its absence.
-  const setup = (withTerms = true) => {
+  // Under V15 a draw needs a term file (none excludes every session): an invented term that no fixture holds.
+  const setup = () => {
     const staged = stage();
     const termsFile = join(staged.root, 'exclusion-terms.txt');
-    if (withTerms) writeFileSync(termsFile, 'unrelated-invented-term\n');
+    writeFileSync(termsFile, 'unrelated-invented-term\n');
     const h = harness({ OARS_EXCLUSION_TERMS: termsFile });
     h.deps.sessions = staged.runtime;
     return { ...h, staged };

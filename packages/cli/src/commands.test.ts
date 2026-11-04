@@ -43,7 +43,7 @@ describe('oars login', () => {
     expect(await run(['login', '--no-browser'], h.deps)).toBe(ExitCode.OK);
     const [first = 0, second = 0] = keycloak.times;
     expect(second - first).toBeGreaterThanOrEqual(4900);
-  }, 20_000);
+  }, 15_000); // sleeps the 5 s slow_down interval by design: 5.1 s measured alone, so about 3x
 
   it.each([['expired_token'], ['access_denied']])('exits 3 on %s and prints the {ok:false, step, problem} document', async (error) => {
     const h = harness();
