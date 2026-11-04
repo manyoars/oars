@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { codexRoot, openCodexStore } from './codex.js';
 import { copilotRoot, openCopilotStore } from './copilot.js';
 import { cursorRoot, openCursorStore } from './cursor.js';
+import { grokRoot, openGrokStore } from './grok.js';
 import type { SubagentOrigin } from './extract.js';
 import type { Harness } from './schema.js';
 
@@ -127,8 +128,29 @@ const copilot: Source = {
   },
 };
 
+const grok: Source = {
+  name: 'grok',
+  harness: 'grok',
+  label: 'Grok Build',
+  root: (_platform, env, home) => grokRoot(env, home),
+  storeFile: (root) => join(root, 'sessions'),
+  open: async (root) => {
+    const store = await openGrokStore(root);
+    if (store === undefined) return undefined;
+    const byId = new Map(store.sessions.map((session) => [session.id, session]));
+    return {
+      sessions: store.sessions.map((session) => ({ id: session.id, folder: session.folder, size: session.size, mtimeMs: session.mtimeMs })),
+      transcript: async (session) => await store.transcript(need(byId.get(session.id))),
+      rejected: store.rejected,
+      unreadable: store.unreadable,
+      where: (session) => join(byId.get(session.id)?.dir ?? root, 'updates.jsonl'),
+      close: () => undefined,
+    };
+  },
+};
+
 /** Every non-Claude source, in the order the deposit reads them. */
-export const SOURCES: readonly Source[] = [cursor, codex, copilot];
+export const SOURCES: readonly Source[] = [cursor, codex, copilot, grok];
 
 /** How a source is named in a deposit line; a name the table does not know (a test's) is its own label. */
 export const sourceLabel = (name: string, table: readonly Source[] = SOURCES): string => table.find((source) => source.name === name)?.label ?? name;
