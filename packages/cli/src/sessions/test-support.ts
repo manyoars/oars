@@ -10,7 +10,7 @@ export const FIXTURES = fileURLToPath(new URL('./fixtures/', import.meta.url));
 const dirs: string[] = [];
 
 export const cleanup = (): void => {
-  for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+  for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
 };
 
 export interface Staged {
