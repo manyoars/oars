@@ -68,10 +68,12 @@ interface Held {
 
 const originsOf = async (transcript: TranscriptFile, read: TranscriptRead): Promise<Origins> => {
   const firstLines = new Map<string, number>();
+  const servers = new Set<string>();
   for (const { crossing, line } of read.found) {
     if (!firstLines.has(crossing.name)) firstLines.set(crossing.name, line);
+    if (crossing.class === 'mcp-server') servers.add(crossing.name);
   }
-  return firstLines.size === 0 ? { origins: new Map<string, Origin>(), prompted: new Set<string>() } : readOrigins(transcript.file, firstLines);
+  return firstLines.size === 0 ? { origins: new Map<string, Origin>(), prompted: new Set<string>() } : readOrigins(transcript.file, firstLines, servers);
 };
 
 const byTime = (one: { ts: string | null }, two: { ts: string | null }): number => {

@@ -240,6 +240,13 @@ describe('a crossing record', () => {
     expect(named((await written()).crossings, 'listed-only')).toMatchObject({ origin: 'harness' });
   });
 
+  it('does not read a package that shares a listed server\'s name as that server\'s mention', async () => {
+    const listing = { type: 'attachment', timestamp: stamp(0), attachment: { type: 'deferred_tools_delta', addedNames: ['mcp__handy-lib__search'] } };
+    await writeLog(projectsRoot, REPO, 'a.jsonl', [listing, bash(1, 't1', 'npm install handy-lib'), result(2, 't1', 'added')]);
+    await run([REPO]);
+    expect(named((await written()).crossings, 'handy-lib')).toMatchObject({ origin: 'none-seen', decidedBy: 'agent' });
+  });
+
   it('does not read a longer tool name as the server, nor a server name inside another word', async () => {
     const listing = { type: 'attachment', timestamp: stamp(0), attachment: { type: 'deferred_tools_delta', addedNames: ['mcp__listed-only-extra__search', 'xmcp__listed-only__search'] } };
     await writeLog(projectsRoot, REPO, 'a.jsonl', [listing, use(1, 'm1', 'mcp__listed-only__search', {}), result(2, 'm1', 'ok')]);
