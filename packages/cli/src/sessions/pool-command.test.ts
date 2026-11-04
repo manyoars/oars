@@ -1,5 +1,5 @@
 import { webcrypto } from 'node:crypto';
-import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { http, HttpResponse } from 'msw';
 import { createHash } from 'node:crypto';
@@ -14,7 +14,7 @@ import { REGISTRY_MAX_AGE_DAYS, VOCAB_SNAPSHOT_DATE } from './public-vocabulary.
 import type * as PoolWire from './pool-wire.js';
 import { parseSkeleton, skeletonOf, VOCAB_VERSION, type PinnedKey } from './pool-wire.js';
 import { deposit } from './store.js';
-import { addProject, cleanup, NOW, stage, type Staged } from './test-support.js';
+import { addProject, cleanup, NOW, settledClock, stage, type Staged } from './test-support.js';
 
 // The session gates must stop a session before the projection runs; the real projection is wrapped so a test can see whether it was called.
 vi.mock('./pool-wire.js', async (importOriginal) => {
@@ -55,6 +55,7 @@ const setting = (env: NodeJS.ProcessEnv = {}): Scene => {
   writeFileSync(termsFile, `${TERM}\n`);
   const h = harness({ OARS_EXCLUSION_TERMS: termsFile, OARS_GITHUB_CLIENT_ID: 'gh-client', OARS_GOOGLE_CLIENT_ID: 'google-client', OARS_GOOGLE_CLIENT_SECRET: 'google-secret', ...env });
   h.deps.sessions = staged.runtime;
+  h.deps.now = settledClock;
   const seen: Seen[] = [];
   return {
     h,
@@ -712,6 +713,97 @@ describe('oars pool deposit', () => {
         expect(scene.document()).toMatchObject({ batched: 1, withdrawn: 1 });
         expect(readdirSync(join(server, current))).toHaveLength(1);
       });
+    });
+  });
+
+  describe('a session is built once it has ended', () => {
+    const FOLDER = 'ended-folder';
+    const MAIN = '66666666-6666-4666-8666-666666666666';
+    const HOUR = 60 * 60 * 1000;
+    // The harness clock of the command tests: the command reads it as now.
+    const END = Date.parse('2026-10-23T00:00:00Z');
+    const user = (text: string): string => JSON.stringify({ type: 'user', sessionId: MAIN, cwd: '/w', timestamp: '2026-06-01T00:00:00Z', message: { role: 'user', content: text } });
+
+    /** Sets every file under a folder to one time, as the harness's files are when nothing has written them since. */
+    const settle = (folder: string, at: number): void => {
+      for (const name of readdirSync(folder, { recursive: true, encoding: 'utf8' })) {
+        const path = join(folder, name);
+        if (statSync(path).isFile()) utimesSync(path, at / 1000, at / 1000);
+      }
+    };
+
+    interface Quiet {
+      scene: Scene;
+      agentFile: string;
+    }
+
+    /** A signed-in store holding one session and one subagent: the main last captured `mainHours` before the command runs, and the subagent `agentHours` before it. */
+    const quiet = async (mainHours: number, agentHours: number): Promise<Quiet> => {
+      const scene = setting();
+      rmSync(join(scene.staged.projectsRoot, 'proj'), { recursive: true, force: true });
+      addProject(scene.staged, FOLDER, MAIN, [user('a plain request')]);
+      const agents = join(scene.staged.projectsRoot, FOLDER, MAIN, 'subagents');
+      mkdirSync(agents, { recursive: true });
+      const agentFile = join(agents, 'agent-a.jsonl');
+      writeFileSync(agentFile, `${user('the subagent starts')}
+`);
+      await deposit(scene.staged.runtime, { allow: [FOLDER], redactDomains: [], now: () => END - mainHours * HOUR });
+      writeFileSync(agentFile, `${user('the subagent starts')}
+${user('and goes on')}
+`);
+      await deposit(scene.staged.runtime, { allow: [FOLDER], redactDomains: [], now: () => END - agentHours * HOUR });
+      settle(scene.staged.projectsRoot, END - 10 * HOUR);
+      settle(join(scene.staged.storeDir, 'raw'), END - 10 * HOUR);
+      await signIn(scene);
+      scene.h.deps.now = () => END;
+      return { scene, agentFile };
+    };
+
+    const deposited = async (scene: Scene): Promise<void> => {
+      scene.h.out.length = 0;
+      expect(await scene.cli('pool', 'deposit', '--server', POOL, '--json')).toBe(ExitCode.OK);
+    };
+
+    it('builds one batch when the session and its subagent have both been quiet for six hours', async () => {
+      const { scene } = await quiet(7, 7);
+      await deposited(scene);
+      expect(scene.document()).toMatchObject({ sessions: 1, batched: 1, notEnded: 0, uncaptured: 0 });
+      expect(outboxFiles(scene)).toHaveLength(1);
+    });
+
+    it('builds nothing while the subagent has been quiet for five hours, and withdraws the batch it built before', async () => {
+      const { scene } = await quiet(7, 5);
+      scene.h.deps.now = () => END + 2 * HOUR;
+      await deposited(scene);
+      expect(scene.document()).toMatchObject({ batched: 1, notEnded: 0 });
+      expect(outboxFiles(scene)).toHaveLength(1);
+      scene.h.deps.now = () => END;
+      await deposited(scene);
+      expect(scene.document()).toMatchObject({ sessions: 1, batched: 0, notEnded: 1, withdrawn: 1 });
+      expect(outboxFiles(scene)).toEqual([]);
+    });
+
+    it('counts a captured subagent that has no root as not built', async () => {
+      const { scene } = await quiet(7, 7);
+      const folder = join(scene.staged.storeDir, 'skeletons');
+      const agent = readdirSync(folder).filter((name) => name.includes('~'));
+      expect(agent).toHaveLength(1);
+      rmSync(join(folder, agent[0] ?? ''));
+      await deposited(scene);
+      expect(scene.document()).toMatchObject({ sessions: 1, batched: 0, uncaptured: 1, notEnded: 0 });
+      expect(outboxFiles(scene)).toEqual([]);
+    });
+
+    it.each(['main', 'subagent'])('reads a transcript as still growing when its %s raw file is newer than the last capture', async (which) => {
+      const { scene, agentFile } = await quiet(7, 7);
+      const file = which === 'main' ? join(scene.staged.projectsRoot, FOLDER, `${MAIN}.jsonl`) : agentFile;
+      const grown = END - 2 * HOUR;
+      utimesSync(file, grown / 1000, grown / 1000);
+      await deposited(scene);
+      expect(scene.document()).toMatchObject({ batched: 0, notEnded: 1 });
+      scene.h.deps.now = () => grown + 6 * HOUR;
+      await deposited(scene);
+      expect(scene.document()).toMatchObject({ batched: 1, notEnded: 0 });
     });
   });
 
