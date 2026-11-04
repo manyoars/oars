@@ -16,7 +16,7 @@ const configDirs: string[] = [];
 
 /** Removes the config directories `harness()` made so far: each holds token-shaped credentials files. */
 export const removeTestDirs = (): void => {
-  for (const dir of configDirs.splice(0)) rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
+  for (const dir of configDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 };
 
 /** Starts the shared msw server for one test file; an unmocked request fails the test. */
