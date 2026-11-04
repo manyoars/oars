@@ -1,5 +1,4 @@
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { handleMessage, serve, TOOL_NAME } from './mcp.js';
 import { error as errorRow, prompt as promptRow, session as sessionRow } from './pool-fixture.js';
@@ -149,11 +148,11 @@ describe('MCP server', () => {
     });
   });
 
-  it('answers a store failure inside tools/call with -32603 instead of rejecting', async () => {
+  it('answers a store read failure inside tools/call with -32603 instead of rejecting', async () => {
     const staged = stage();
-    writeFileSync(join(staged.root, 'blocker'), 'a file where the store folder should be');
-    const runtime = { ...staged.runtime, storeDir: join(staged.root, 'blocker') };
-    const reply = await handleMessage(runtime, now, { jsonrpc: '2.0', id: 8, method: 'tools/call', params: { name: TOOL_NAME, arguments: { class: 'edit-verify' } } });
+    // A directory where the observation log should be: the read fails (a missing file would not), and no write is involved.
+    mkdirSync(paths(staged.storeDir).observations, { recursive: true });
+    const reply = await handleMessage(staged.runtime, now, { jsonrpc: '2.0', id: 8, method: 'tools/call', params: { name: TOOL_NAME, arguments: { class: 'edit-verify' } } });
     expect(field(field(reply, 'error'), 'code')).toBe(-32603);
   });
 
