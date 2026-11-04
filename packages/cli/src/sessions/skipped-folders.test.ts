@@ -1,10 +1,10 @@
 // t776: a project folder that holds transcripts but is not on the allowlist is never read; `verify` says so instead of leaving it silent.
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { slugOf } from './allow.js';
-import { sessionsVerify } from './command.js';
-import { deposit, skippedFolders } from './store.js';
+import { sessionsBooks, sessionsVerify } from './command.js';
+import { deposit, paths, skippedFolders } from './store.js';
 import { addProject, cleanup, NOW, stage } from './test-support.js';
 
 afterEach(cleanup);
@@ -61,6 +61,15 @@ describe('skippedFolders', () => {
     expect(await skippedFolders(staged.runtime)).toEqual({ folders: 1, transcripts: 0, names: ['delta-app'] });
   });
 
+  it('names every folder holding transcripts when state.json is gone, since the saved allowlist is gone with it', async () => {
+    const staged = stage();
+    addProject(staged, 'beta-app', 'one', [LINE]);
+    await deposit(staged.runtime, { allow: ['proj'], redactDomains: [], now: () => NOW });
+    expect(await skippedFolders(staged.runtime)).toMatchObject({ names: ['beta-app'] });
+    rmSync(paths(staged.storeDir).state);
+    expect(await skippedFolders(staged.runtime)).toMatchObject({ names: ['beta-app', 'proj'] });
+  });
+
   it('is empty when the projects root is missing', async () => {
     const staged = stage();
     expect(await skippedFolders({ ...staged.runtime, projectsRoot: join(staged.root, 'absent') })).toEqual({ folders: 0, transcripts: 0, names: [] });
@@ -89,6 +98,19 @@ describe('sessions verify and the folders it never reads', () => {
     expect(verified.report.scope.names).toHaveLength(12);
     expect(verified.text).toMatch(/12 project folders hold 12 main transcripts; they are never read/);
     expect(verified.text).toMatch(/extra-09, and 2 more\./);
+  });
+
+  it('prints the same scope line under books, and none when every folder is allowed', async () => {
+    const staged = stage();
+    addProject(staged, 'beta-app', 'one', [LINE]);
+    await deposit(staged.runtime, { allow: ['proj'], redactDomains: [], now: () => NOW });
+    const verified = await sessionsVerify(deps(staged), { session: undefined });
+    const line = verified.text.split('\n').find((entry) => entry.includes('never read'));
+    expect(line).toBeDefined();
+    expect((await sessionsBooks(deps(staged), { by: 'class', sinceDays: undefined })).text.split('\n')).toContain(line);
+    const allowed = stage();
+    await deposit(allowed.runtime, { allow: ['proj'], redactDomains: [], now: () => NOW });
+    expect((await sessionsBooks(deps(allowed), { by: 'class', sinceDays: undefined })).text).not.toMatch(/never read/);
   });
 
   it('prints no scope line when every folder is allowed', async () => {
