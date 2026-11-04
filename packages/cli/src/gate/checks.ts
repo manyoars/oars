@@ -3,6 +3,7 @@
 // keeps its own table, because capture's `pulls` say a name was stated and the gate has to say how: installed, or fetched and run.
 import type { Redactor } from '../sessions/redact.js';
 import { CHANGES_FOLDER, shellCommands, type ShellCommand } from '../sessions/extract.js';
+import type { Program } from './record.js';
 
 export const CROSSING_CLASSES = ['npm-package', 'python-package', 'mcp-server', 'skill'] as const;
 export type CrossingClass = (typeof CROSSING_CLASSES)[number];
@@ -24,7 +25,7 @@ export interface Crossing {
   version: string | null;
   versionForm: VersionForm;
   /** The program that crossed (`npm`, `uvx`), or `mcp` and `skill` for those tools. */
-  program: string;
+  program: Program;
   /** Whether the call's own status reports this command: false behind a pipe or a later `;`. */
   statusReports: boolean;
   /**
@@ -85,7 +86,7 @@ const UV_VERBS: Verbs = [
   [['sync'], 'manifest'], [['pip', 'sync'], 'manifest'],
   [['remove'], 'remove'], [['pip', 'uninstall'], 'remove'], [['tool', 'uninstall'], 'remove'],
 ];
-const PIPX_VERBS: Verbs = [[['install'], 'install'], [['run'], 'run'], [['uninstall'], 'remove']];
+const PIPX_VERBS: Verbs = [[['install'], 'install'], [['inject'], 'install'], [['run'], 'run'], [['uninstall'], 'remove']];
 const PROJECT_VERBS: Verbs = [[['add'], 'install'], [['install'], 'manifest'], [['sync'], 'manifest'], [['remove'], 'remove']];
 const PIPENV_VERBS: Verbs = [[['install'], 'install'], [['sync'], 'manifest'], [['uninstall'], 'remove']];
 const CONDA_VERBS: Verbs = [[['install'], 'install'], [['remove'], 'remove'], [['uninstall'], 'remove']];
@@ -97,12 +98,18 @@ interface Tool {
   verbs: Verbs;
 }
 
-const TOOLS: ReadonlyMap<string, Tool> = new Map<string, Tool>([
+/** The programs read as package tools: the closed list less the `python -m` forms (`pip`, `pipx`, and `uv` run as modules) and the two tools. */
+type ToolProgram = Exclude<Program, 'python -m pip' | 'python -m pipx' | 'python -m uv' | 'mcp' | 'skill'>;
+/** A command whose program is one of those, so a crossing built from it names a listed program. */
+type ToolCommand = ShellCommand & { program: ToolProgram };
+
+const TOOLS: ReadonlyMap<ToolProgram, Tool> = new Map<ToolProgram, Tool>([
   ['npm', { family: 'npm-package', verbs: NPM_VERBS }],
   ['pnpm', { family: 'npm-package', verbs: PNPM_VERBS }],
   ['yarn', { family: 'npm-package', verbs: YARN_VERBS }],
   ['bun', { family: 'npm-package', verbs: BUN_VERBS }],
   ['npx', { family: 'npm-package', verbs: RUNNER_VERBS }],
+  ['pnpx', { family: 'npm-package', verbs: RUNNER_VERBS }],
   ['bunx', { family: 'npm-package', verbs: RUNNER_VERBS }],
   ['pip', { family: 'python-package', verbs: PIP_VERBS }],
   ['uv', { family: 'python-package', verbs: UV_VERBS }],
@@ -120,8 +127,14 @@ const TOOLS: ReadonlyMap<string, Tool> = new Map<string, Tool>([
 /** A flag here owns the next word, which is therefore not a package name. */
 const VALUE_FLAGS: Readonly<Record<Family, ReadonlySet<string>>> = {
   'npm-package': new Set(['-w', '--workspace', '--registry', '--prefix', '--filter', '-F', '-C', '--dir', '--cache', '--tag', '--cwd', '--loglevel', '--userconfig', '--globalconfig', '-p', '--package', '-c', '--call', '--omit', '--include', '--save-prefix', '--cafile', '--cert', '--key', '--nodedir', '--store-dir', '--modules-dir', '--virtual-store-dir', '--lockfile-dir', '--global-dir', '--cache-dir', '--cache-folder', '--modules-folder', '--global-folder', '--link-folder', '--script-shell', '--tmp']),
-  'python-package': new Set(['-r', '--requirement', '-e', '--editable', '-c', '--constraint', '-i', '--index-url', '--extra-index-url', '--index', '--default-index', '-t', '--target', '-f', '--find-links', '--python', '-p', '--from', '--with', '--with-editable', '--with-requirements', '--prefix', '--root', '--group', '--extra', '--only-binary', '--no-binary', '--trusted-host', '--proxy', '--cache-dir', '--timeout', '--suffix', '--pip-args', '--spec', '--channel', '-n', '--name', '-G']),
+  'python-package': new Set(['-r', '--requirement', '-e', '--editable', '-c', '--constraint', '-i', '--index-url', '--extra-index-url', '--index', '--default-index', '-t', '--target', '-f', '--find-links', '--python', '-p', '--from', '--with', '--with-editable', '--with-requirements', '--prefix', '--root', '--group', '--extra', '--only-binary', '--no-binary', '--trusted-host', '--proxy', '--cache-dir', '--timeout', '--retries', '--upgrade-strategy', '--log', '--file', '--suffix', '--pip-args', '--spec', '--channel', '-n', '--name', '-G']),
 };
+
+/**
+ * Flags that own the next word for the family but are a switch for one program: pnpm's `-w` is `--workspace-root`, `-n` is `--no-interaction`
+ * for poetry and `--no-cache` for uv, and `-f` is `--force` for pipx.
+ */
+const FLAG_WITHOUT_VALUE: ReadonlySet<string> = new Set(['pnpm -w', 'poetry -n', 'uv -n', 'uvx -n', 'pipx -f']);
 
 /** These tell a runner to use only what is already local, so nothing crosses. */
 const NO_FETCH_FLAGS: ReadonlySet<string> = new Set(['--no-install', '--no', '--offline']);
@@ -183,7 +196,7 @@ const urlSpec = (text: string): Spec => {
  */
 const FILE_SPEC = /^(?:(?:@[^@/\s]+\/)?[^@/\s]+\s*@\s*)?(?:git\+)?(?:file|link|workspace|portal):/i;
 /** pip's PEP 508 direct reference, `name @ url` with spaces: the name before it is only a label, so the URL is what is read. */
-const withoutLabel = (text: string): string => text.replace(/^(?:@[^@/\s]+\/)?[^@/\s]+(?:\s+@\s*|\s*@\s+)(?=\S)/, '');
+const withoutLabel = (text: string): string => text.replace(/^(?:@[^@/\s]+\/)?[^@/\s]+(?:\s+@\s*|\s*@\s+|@(?=git\+))(?=\S)/, '');
 const isUrl = (text: string): boolean => text.includes('://') || text.startsWith('git+') || HOSTED.test(text) || SCP_URL.test(text);
 
 const atVersion = (text: string): { name: string; version: string | null } => {
@@ -197,20 +210,32 @@ const nodeSpec = (whole: string): Spec => {
   if (nothing !== null) return nothing;
   const text = withoutLabel(whole);
   // `alias@npm:real@1` installs `real`; the alias is only what the code imports it as. It reads like an scp URL, so it goes first.
-  const alias = /^@?[^@]+@npm:(.+)$/.exec(text)?.[1];
+  // A leading `npm:` is the same protocol with no alias.
+  const alias = /^(?:@?[^@]+@)?npm:(.+)$/.exec(text)?.[1];
   if (alias !== undefined) return nodeSpec(alias);
+  // pnpm's leading `jsr:@scope/name[@version]` is the JSR package itself.
+  const jsr = /^jsr:(.+)$/.exec(text)?.[1];
+  if (jsr !== undefined) return nodeSpec(jsr);
+  // pnpm's `catalog:` takes its version from the workspace, and `jsr:` names a version or a JSR package; neither is a path or an scp URL.
+  const protocol = /^(@?[^@]+)@(catalog|jsr):(.*)$/.exec(text);
+  if (protocol !== null) {
+    const [, label = '', kind, rest = ''] = protocol;
+    if (kind === 'jsr' && (rest.startsWith('@') || rest.includes('/'))) return nodeSpec(rest);
+    const version = kind === 'jsr' && rest !== '' ? rest : null;
+    return { kind: 'named', name: label, version, versionForm: versionFormOf(version), url: false };
+  }
   if (FILE_SPEC.test(text)) return { kind: 'unread', shape: 'local-path' };
   if (isUrl(text)) return urlSpec(text);
   if (LOCAL_SPEC.test(text) || ARCHIVE.test(text)) return { kind: 'unread', shape: 'local-path' };
   // One slash with no leading `@` is a GitHub shorthand; more than one is a folder.
-  const parts = text.split('/').length;
+  const parts = (text.split('#')[0] ?? text).split('/').length;
   if (parts > 2 || text.includes('\\')) return { kind: 'unread', shape: 'local-path' };
   if (parts === 2 && !text.startsWith('@')) return urlSpec(text);
   const { name, version } = atVersion(text);
   return { kind: 'named', name, version, versionForm: versionFormOf(version), url: false };
 };
 
-const PYTHON_SPEC = /^([A-Za-z0-9][A-Za-z0-9._-]*)(?:\[[^\]]*\])?(===?|~=|!=|>=|<=|<|>)?(.*)$/;
+const PYTHON_SPEC = /^([A-Za-z0-9][A-Za-z0-9._-]*)(?:\[[^\]]*\])?\s*(===?|~=|!=|>=|<=|<|>)?\s*(.*)$/;
 
 const pythonSpec = (whole: string): Spec => {
   const nothing = namesNothing(whole);
@@ -221,9 +246,14 @@ const pythonSpec = (whole: string): Spec => {
   if (LOCAL_SPEC.test(text) || ARCHIVE.test(text) || /[\\/]/.test(text)) return { kind: 'unread', shape: 'local-path' };
   // uv writes `name@version`, where the `@` is not a PEP 508 direct reference (a URL, handled above).
   const { name: head, version: atStated } = atVersion(text);
-  const match = PYTHON_SPEC.exec(head);
+  // An environment marker (`;python_version<3`) says where the requirement applies, not which one it is.
+  const match = PYTHON_SPEC.exec((head.split(';')[0] ?? head).trim());
   if (match === null) return { kind: 'unread', shape: 'local-path' };
   const [, raw = '', operator = '', stated = ''] = match;
+  // Text after the name that no operator introduces is outside PEP 508: refused, never kept as a version.
+  if (operator === '' && stated !== '') return { kind: 'unread', shape: 'unreadable-name' };
+  // The same holds after the `@`: a word outside PEP 508 there would be kept as a version.
+  if (atStated !== null && /[\s#;]/.test(atStated)) return { kind: 'unread', shape: 'unreadable-name' };
   // PEP 503: these spellings are one project, so novelty must not count them twice.
   const name = raw.toLowerCase().replace(/[-_.]+/g, '-');
   if (atStated !== null) return { kind: 'named', name, version: atStated, versionForm: versionFormOf(atStated), url: false };
@@ -264,8 +294,7 @@ export const readWords = (command: ShellCommand, family: Family, limit: number =
     const { text, quoted } = command.args[at] ?? { text: '', quoted: false };
     if (quoted || !text.startsWith('-') || names.length >= limit) names.push(text);
     else if (text.includes('=')) put(text.slice(0, text.indexOf('=')), text.slice(text.indexOf('=') + 1));
-    // pnpm's `-w` is `--workspace-root`, where npm's takes a workspace name.
-    else if (VALUE_FLAGS[family].has(text) && !(command.program === 'pnpm' && text === '-w')) {
+    else if (VALUE_FLAGS[family].has(text) && !FLAG_WITHOUT_VALUE.has(`${command.program} ${text}`)) {
       put(text, command.args[at + 1]?.text ?? '');
       at += 1;
     } else bare.add(text);
@@ -292,16 +321,27 @@ const allFlags = (words: Words, ...names: readonly string[]): string[] => names.
 
 const PIP_NAME = /^pip[\d.]*$/;
 const PYTHON_NAME = /^(?:python[\d.]*|py)$/;
+const MODULE_NAME = /^(?:pip[\d.]*|pipx|uv)$/;
+type ModuleProgram = 'pip' | 'pipx' | 'uv';
+const MODULE_PROGRAMS: { readonly [name in ModuleProgram]: Program } = { pip: 'python -m pip', pipx: 'python -m pipx', uv: 'python -m uv' };
 
-/** `python -m pip ...` is `pip ...`. The words before `-m` are the interpreter's own flags. */
-const moduleCommand = (command: ShellCommand): ShellCommand | null => {
+/** `python -m pip ...` is `pip ...`, and `-m pipx` and `-m uv` the same. The words before `-m` are the interpreter's own flags. */
+const moduleCommand = (command: ShellCommand): { module: ModuleProgram; command: ToolCommand } | null => {
   if (!PYTHON_NAME.test(command.program)) return null;
-  const module = command.args.findIndex((word) => word.text === '-m');
-  if (module < 0 || !PIP_NAME.test(command.args[module + 1]?.text ?? '')) return null;
-  return { ...command, program: 'pip', args: command.args.slice(module + 2) };
+  const at = command.args.findIndex((word) => word.text === '-m');
+  const name = command.args[at + 1]?.text ?? '';
+  if (at < 0 || !MODULE_NAME.test(name)) return null;
+  const module = name === 'pipx' || name === 'uv' ? name : 'pip';
+  return { module, command: { ...command, program: module, args: command.args.slice(at + 2) } };
 };
 
-const toolOf = (program: string): Tool | undefined => TOOLS.get(PIP_NAME.test(program) ? 'pip' : program);
+const PIP_TOOL: Tool = { family: 'python-package', verbs: PIP_VERBS };
+/** The listed program a word names, with its table row. `pip3.12` is `pip`. */
+const toolOf = (program: string): { program: ToolProgram; tool: Tool } | undefined => {
+  const named = PIP_NAME.test(program) ? 'pip' : program;
+  for (const [key, tool] of TOOLS) if (key === named) return { program: key, tool };
+  return undefined;
+};
 
 const SHELL_SINK = /^(?:sh|bash|zsh|dash|python[\d.]*|node|iex|invoke-expression|pwsh|powershell)$/;
 const FETCHER = /^(?:curl|wget|irm|iwr|invoke-restmethod|invoke-webrequest)$/;
@@ -314,12 +354,12 @@ interface Reading {
 
 const emptyReading = (): Reading => ({ crossings: [], unread: [], removals: [] });
 
-const crossingOf = (family: Family, spec: Extract<Spec, { kind: 'named' }>, action: 'install' | 'run', program: string, statusReports: boolean): Crossing => {
+const crossingOf = (family: Family, spec: Extract<Spec, { kind: 'named' }>, action: 'install' | 'run', program: Program, statusReports: boolean): Crossing => {
   const form: CrossingForm = action === 'run' ? (spec.url ? 'url-fetch-and-run' : 'fetch-and-run') : spec.url ? 'url-install' : 'install';
   return { class: family, form, name: spec.name, version: spec.version, versionForm: spec.versionForm, program, statusReports, registryAsked: true };
 };
 
-const addSpecs = (reading: Reading, family: Family, texts: readonly string[], action: 'install' | 'run', program: string, statusReports: boolean): void => {
+const addSpecs = (reading: Reading, family: Family, texts: readonly string[], action: 'install' | 'run', program: Program, statusReports: boolean): void => {
   for (const text of texts) {
     const spec = specOf(family, text);
     if (spec.kind === 'unread') reading.unread.push(spec.shape);
@@ -340,7 +380,7 @@ const skillSource = (words: readonly string[]): string | undefined => {
   return undefined;
 };
 
-const readRun = (reading: Reading, family: Family, words: Words, rest: readonly string[], command: ShellCommand): void => {
+const readRun = (reading: Reading, family: Family, words: Words, rest: readonly string[], command: ToolCommand): void => {
   if ([...NO_FETCH_FLAGS].some((flag) => words.bare.has(flag))) return;
   const [first, sub] = rest;
   const source = sub === 'add' ? skillSource(rest.slice(2)) : undefined;
@@ -349,9 +389,11 @@ const readRun = (reading: Reading, family: Family, words: Words, rest: readonly 
       reading.unread.push('local-path');
       return;
     }
-    const spec = namesNothing(source) ?? (isUrl(source) ? urlSpec(source) : null);
+    // `owner/repo@skill` picks one skill of a source: the source is what crosses.
+    const picked = /^([^@:\s]+\/[^@:\s]+)@[^@/:\s]+$/.exec(source)?.[1] ?? source;
+    const spec = namesNothing(picked) ?? (isUrl(picked) ? urlSpec(picked) : null);
     if (spec?.kind === 'unread') reading.unread.push(spec.shape);
-    else if (!LOCAL_SPEC.test(source)) reading.crossings.push({ class: 'skill', form: 'install', name: spec?.name ?? source, version: null, versionForm: 'unstated', program: command.program, statusReports: command.read, registryAsked: true });
+    else if (!LOCAL_SPEC.test(picked)) reading.crossings.push({ class: 'skill', form: 'install', name: spec?.name ?? picked, version: null, versionForm: 'unstated', program: command.program, statusReports: command.read, registryAsked: true });
     return;
   }
   const packaged = family === 'npm-package' ? allFlags(words, '-p', '--package') : allFlags(words, '--from', '--spec');
@@ -366,22 +408,22 @@ const readRemoval = (reading: Reading, family: Family, names: readonly string[])
   }
 };
 
-const readInstall = (reading: Reading, family: Family, words: Words, rest: readonly string[], command: ShellCommand): void => {
+const readInstall = (reading: Reading, family: Family, words: Words, rest: readonly string[], command: ToolCommand): void => {
   const editable = allFlags(words, '-e', '--editable');
   const texts = [...editable, ...rest];
-  if (texts.length === 0 || allFlags(words, '-r', '--requirement').length > 0) reading.unread.push('manifest-install');
+  if (texts.length === 0 || allFlags(words, '-r', '--requirement', '--file').length > 0) reading.unread.push('manifest-install');
   addSpecs(reading, family, texts, 'install', command.program, command.read);
 };
 
 /** A creator is a plain name that gets `create-` put before it; a path, a URL, or `org/repo` is no creator and is not prefixed into a name. */
-const readCreator = (reading: Reading, family: Family, text: string, command: ShellCommand): void => {
+const readCreator = (reading: Reading, family: Family, text: string, command: ToolCommand): void => {
   const spec = nodeSpec(text);
   if (spec.kind === 'unread') reading.unread.push(spec.shape);
   else if (spec.url) reading.unread.push('unreadable-name');
   else addSpecs(reading, family, [creatorSpec(text)], 'run', command.program, command.read);
 };
 
-const readTool = (reading: Reading, tool: Tool, command: ShellCommand): void => {
+const readTool = (reading: Reading, tool: Tool, command: ToolCommand): void => {
   const { family } = tool;
   let words = readWords(command, family);
   // A bare `yarn` is its install; `yarn foo` runs a script.
@@ -391,7 +433,12 @@ const readTool = (reading: Reading, tool: Tool, command: ShellCommand): void => 
   }
   // `uv run --with a` installs into a throwaway environment and runs: a fetch-and-run, whatever the script is.
   if (command.program === 'uv' && words.names[0] === 'run') {
+    // `uv run pip install x` is the same pick as `pip install x`: read it as that. Any other program after `run` stays unread.
+    // It stays recorded under `uv`: uv's pip runs in the project venv and reads that venv's `pip.conf`, so the registry question must refuse it.
     addSpecs(reading, family, allFlags(words, '--with'), 'run', command.program, command.read);
+    // A flag may sit between the two (`pip -q install x`).
+    const pip = command.args.findIndex((word, at) => word.text === 'pip' && readWords({ ...command, args: command.args.slice(at + 1) }, family).names[0] === 'install');
+    if (words.names[1] === 'pip' && words.names[2] === 'install' && pip >= 0) readTool(reading, PIP_TOOL, { ...command, args: command.args.slice(pip + 1) });
     return;
   }
   // `yarn workspace <name> add x` is `yarn add x` run in that workspace: two words that are not the verb's.
@@ -408,7 +455,7 @@ const readTool = (reading: Reading, tool: Tool, command: ShellCommand): void => 
   const toolForm = command.program === 'uvx' || (command.program === 'uv' && verb.path[0] === 'tool');
   if (verb.action === 'manifest') reading.unread.push('manifest-install');
   else if (verb.action === 'remove') readRemoval(reading, family, verb.rest);
-  else if (verb.action === 'install') readInstall(reading, family, words, verb.rest, command);
+  else if (verb.action === 'install') readInstall(reading, family, words, verb.path[0] === 'inject' ? verb.rest.slice(1) : verb.rest, command);
   else if (verb.action === 'run') readRun(reading, family, words, verb.rest, command);
   else if (verb.rest[0] !== undefined) readCreator(reading, family, verb.rest[0], command);
   // uv's tool forms take extra packages with `--with`; they install beside the tool.
@@ -422,9 +469,9 @@ const readShape = (reading: Reading, command: ShellCommand, previous: ShellComma
   const names = namesOf(command);
   if (previous?.link === 'pipe' && FETCHER.test(previous.program) && SHELL_SINK.test(command.program)) reading.unread.push('pipe-to-shell');
   if (command.program === 'xargs') {
-    const at = names.findIndex((name) => TOOLS.has(name) || PIP_NAME.test(name));
-    const tool = toolOf(names[at] ?? '');
-    if (tool !== undefined && verbOf(tool.verbs, names.slice(at + 1))?.action === 'install') reading.unread.push('behind-xargs');
+    const at = names.findIndex((name) => toolOf(name) !== undefined);
+    const found = toolOf(names[at] ?? '');
+    if (found !== undefined && verbOf(found.tool.verbs, names.slice(at + 1))?.action === 'install') reading.unread.push('behind-xargs');
   }
   if (command.program === 'claude' || command.program === 'codex') {
     const [first, second] = names;
@@ -435,16 +482,13 @@ const readShape = (reading: Reading, command: ShellCommand, previous: ShellComma
 const readCommand = (reading: Reading, command: ShellCommand, previous: ShellCommand | undefined): void => {
   readShape(reading, command, previous);
   const viaModule = moduleCommand(command);
-  const direct = viaModule ?? command;
-  const tool = toolOf(direct.program);
-  if (tool === undefined) return;
+  const found = viaModule === null ? toolOf(command.program) : toolOf(viaModule.module);
+  if (found === undefined) return;
+  const direct: ToolCommand = { ...(viaModule?.command ?? command), program: found.program };
   const from = reading.crossings.length;
-  readTool(reading, tool, direct);
-  // `python -m pip` is how a call goes around a stopped `pip`, so a record has to keep the two apart. `pip3.12` is one program with `pip`.
-  for (const crossing of reading.crossings.slice(from)) {
-    if (viaModule !== null) crossing.program = 'python -m pip';
-    else if (PIP_NAME.test(crossing.program)) crossing.program = 'pip';
-  }
+  readTool(reading, found.tool, direct);
+  // `python -m pip` is how a call goes around a stopped `pip`, so a record has to keep the two apart.
+  if (viaModule !== null) for (const crossing of reading.crossings.slice(from)) crossing.program = MODULE_PROGRAMS[viaModule.module];
 };
 
 const stringField = (input: unknown, key: string): string | undefined => {
@@ -461,17 +505,22 @@ const CONFIG_REGISTRY = /^--config\.[^=\s]*registry(?:=|$)/;
 const ATTACHED_INDEX = /^-i./;
 /** PowerShell's own folder stack. Local to the gate: `CHANGES_FOLDER` also drives capture's read-back of the working folder. */
 const FOLDER_STACK = new Set(['push-location', 'pop-location']);
-/** An assignment of a manager's own variable, in any shell's spelling, which can name a registry or a config file. Over-matching only leaves a name unasked. */
-const REGISTRY_ENVIRONMENT = /(?:^|[^A-Za-z0-9_])(?:npm_config_|pip_|uv_)[A-Za-z0-9_]*\s*=/i;
+/** An assignment of a manager's own variable, or of one that moves its config or changes which manager runs, in any shell's spelling. Over-matching only leaves a name unasked. */
+const REGISTRY_ENVIRONMENT = /(?:^|[^A-Za-z0-9_])(?:(?:npm_config_|pip_|uv_)[A-Za-z0-9_]*|home|userprofile|xdg_config_home|xdg_config_dirs|appdata|path|virtual_env)\s*\+?=/i;
+/**
+ * Other ways a call reads another config than the one the gate's question reads: `sudo` (root's), a venv's `activate` (its `pip.conf`), and
+ * a manager run by path (`.venv/bin/pip`, which reads that venv's). Over-matching only leaves a name unasked.
+ */
+const OTHER_CONFIG = /(?:^|[\s;&|(])sudo(?:\s|$)|(?:^|[\\/\s;&|("'])activate(?:\.\w+)?(?=["'\s;&|)]|$)|[\\/](?:npm|npx|pnpm|pnpx|pip[\d.]*|python[\d.]*|py)(?:\.cmd|\.exe|\.bat)?(?=["']?(?:\s|$))/i;
 
-const choosesRegistry = (command: ShellCommand): boolean => command.args.some(({ text }) => REGISTRY_FLAGS.has(text.split('=')[0] ?? '') || SCOPE_REGISTRY.test(text) || CONFIG_REGISTRY.test(text) || ATTACHED_INDEX.test(text));
+const choosesRegistry = (command: ShellCommand): boolean => command.args.some(({ text }) => REGISTRY_FLAGS.has(text.split('=')[0] ?? '') || SCOPE_REGISTRY.test(text) || CONFIG_REGISTRY.test(text) || ATTACHED_INDEX.test(text) || /(?:^|@)jsr:/.test(text));
 
 const checkShell = (input: unknown, redact: Redactor): CallCheck => {
   const command = stringField(input, 'command');
   const reading = emptyReading();
   if (command === undefined) return reading;
   const commands = shellCommands(command, redact);
-  const environment = REGISTRY_ENVIRONMENT.test(command);
+  const environment = REGISTRY_ENVIRONMENT.test(command) || OTHER_CONFIG.test(command);
   let moved = false;
   commands.forEach((held, at) => {
     const from = reading.crossings.length;
@@ -497,7 +546,7 @@ const NAME_LENGTH = 214;
 const LABEL_LENGTH = 128;
 const SEGMENT = '[A-Za-z0-9._-]+';
 /** A segment that is not `.` or `..`: those two name a folder, never an owner, a repository, or a part of a URL's path. */
-const PLAIN = String.raw`(?!\.{1,2}(?:/|$))`;
+const PLAIN = String.raw`(?!(?:\.|%2[eE]){1,2}(?:/|$))`;
 /** An owner starts with a letter or digit, so `.secret/x` and `C:x` are not `owner/repo`. */
 const OWNER = '[A-Za-z0-9][A-Za-z0-9_-]*';
 const MASK = '<(?:secret|email|org-domain)>';
@@ -521,6 +570,8 @@ const SKILL_SOURCE = new RegExp(String.raw`^${OWNER}(?:/${PLAIN}${SEGMENT}){1,5}
 const PLAIN_REF = /^(?:semver:)?[\w.^~*+-]+$/;
 /** A version that is not a URL's ref has none of a slash, a backslash, `:`, or `@`: those mark a path or a spec, not a version. */
 const VERSION = /^[^/\\:@]*$/;
+/** What a version may hold: word characters and the range operators. Anything else (`#`, `&`, `?`, `;`, `%`) is a secret or a path in the shape of a version. */
+const PLAIN_VERSION = /^[\w.^~*+<>=!,|\s-]*$/;
 
 const withoutCredentials = (name: string): string =>
   name
@@ -561,6 +612,7 @@ const admitted = (check: CallCheck): CallCheck => {
     const verdict = admitName(crossing.class, crossing.form, crossing.name);
     if (verdict.kind === 'unread') unread.push(verdict.shape);
     else if (crossing.versionForm !== 'url' && crossing.version !== null && !VERSION.test(crossing.version)) unread.push('local-path');
+    else if (crossing.versionForm !== 'url' && crossing.version !== null && !PLAIN_VERSION.test(crossing.version)) unread.push('unreadable-name');
     else crossings.push({ ...crossing, name: verdict.name, version: crossing.versionForm === 'url' && crossing.version !== null && !PLAIN_REF.test(crossing.version) ? null : crossing.version });
   }
   const removals = check.removals.filter((removal) => admitName(removal.class, 'removal', removal.name).kind === 'named');
