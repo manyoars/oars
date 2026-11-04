@@ -198,6 +198,13 @@ describe('the Grok Build table', () => {
     ['todowrite', 'plan.update'],
     ['skill', 'skill.run'],
     ['web_fetch', 'web.fetch'],
+    ['web_search', 'web.search'],
+    // The backend-hosted X search (acp_session_impl/tool_dispatch.rs:94-105).
+    ['x_search', 'web.search'],
+    // The three tools that talk to the operator or switch plan mode (grok_build/ask_user_question/mod.rs:300, enter_plan_mode/mod.rs:76, exit_plan_mode/mod.rs:83).
+    ['ask_user_question', 'ask.user'],
+    ['enter_plan_mode', 'plan.update'],
+    ['exit_plan_mode', 'plan.update'],
   ] as const)('maps %s to %s and keeps the name', (native, action) => {
     expect(actionOf(ACTION_TABLES.grok, native)).toEqual({ action, native });
   });

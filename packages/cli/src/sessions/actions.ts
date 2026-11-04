@@ -179,7 +179,12 @@ export const ACTION_TABLES: { readonly [harness in Harness]: ActionTable } = {
       glob: 'file.search',
       hashline_grep: 'file.search',
       web_search: 'web.search',
+      // The backend-hosted X search, named from its `variant` by the grok reader (acp_session_impl/tool_dispatch.rs:94-105).
+      x_search: 'web.search',
       web_fetch: 'web.fetch',
+      ask_user_question: 'ask.user',
+      enter_plan_mode: 'plan.update',
+      exit_plan_mode: 'plan.update',
       task: 'agent.spawn',
       // The spawn tool also arrives under these wire names (grok_build/task/mod.rs:193-196).
       Task: 'agent.spawn',

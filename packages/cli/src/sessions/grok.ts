@@ -17,14 +17,16 @@
 //                          model-facing frame) are not prompts (storage/mod.rs:966, :974); the first two end the turn, and `hostTurn` marks an agent chunk as well
 //                          (acp_session.rs:1353-1372), whose text is dropped as upstream's own rebuilders do (storage/mod.rs:429-432)
 //     agent_message_chunk  content {type: "text", text}: the response, chunks merged
-//     tool_call            {toolCallId, title, kind, rawInput}: `title` IS the tool's name (tool_calls.rs:1487). A model-issued call always has `kind` other here (tool_calls.rs:1488); its real kind
+//     tool_call            {toolCallId, title, kind, rawInput}: `title` IS the tool's name (tool_calls.rs:1487), except a backend-hosted search, which is titled for display ("Web search:") and named by `rawInput.variant`
+//                          when `rawInput.backend` is true (tool_dispatch.rs:94-105). A model-issued call always has `kind` other here (tool_calls.rs:1488); its real kind
 //                          arrives only on a later tool_call_update (tool_calls.rs:2734). A shell call is therefore a name in SHELL_TOOLS, or the user's `!cmd`, the one path that
 //                          writes `kind` execute on the call itself (`bash-mode-<uuid>` titled "Execute `cmd`", tool_dispatch.rs:213, :245-246)
 //     tool_call_update     {toolCallId, status, content[], rawOutput}: the outcome. A shell call's `rawOutput` is `{type: "Bash", exit_code, output: bytes,
 //                          output_for_prompt, signal, timed_out, current_dir}` (types/output.rs:384-405); the reader takes the `output` bytes, because on the model-issued
 //                          path `output_for_prompt` is the formatted prompt (`exit: N` header or the concise tool's `Exit code: N` fence, bash/mod.rs:2246). The agent path marks a shell call `failed` only on a timeout
 //                          or a signal, so exit 2 arrives `completed` (acp_conversion.rs:241-250): the exit code decides, not the status. Any other tool's error text is its
-//                          `content[]` text; its `rawOutput` is a tagged wrapper that is never the error line. `current_dir` is the cwd the writer resolved BEFORE the command ran
+//                          `content[]` text, except a failed MCP call, which has none and keeps its text in `rawOutput.output.Error` (acp_conversion.rs:325-338); `list_dir`, `grep_files`,
+//                          `get_task_output`, and `kill_task` failures carry neither (Known gaps). A `rawOutput` is otherwise a tagged wrapper that is never the error line. `current_dir` is the cwd the writer resolved BEFORE the command ran
 //                          (grok_build/bash/mod.rs:1876, stored at :2240), so a `cd` inside a command never shows; it moves only when the session's own folder moved
 //   usage.json    {turns: [{endedAt, inputTokens, outputTokens, cachedReadTokens, cacheCreationTokens, reasoningTokens, primaryModelId}]} (usage_file.rs:10-80): per-TURN
 //                 deltas (`session` is their sum, :230-300), so every turn is added once. `inputTokens` is the FULL prompt, cache reads and writes included (xai-grok-sampling-types
@@ -88,6 +90,8 @@ const SUBAGENT_KINDS: ReadonlySet<string> = new Set(['subagent', 'subagent_fork'
 const SHELL_TOOLS: ReadonlySet<string> = new Set(['run_terminal_cmd', 'run_terminal_command', 'bash']);
 /** The tools that change files, named so a failed edit is still an edit. Their path keys are `file_path` (`filePath` for `edit`) and, for `apply_patch`, the `*** <Add|Update|Delete> File:` headers of `patch`. */
 const EDIT_TOOLS: ReadonlySet<string> = new Set(['search_replace', 'apply_patch', 'edit', 'write', 'hashline_edit']);
+/** The backend-hosted searches' `rawInput.variant`, by the tool name each stands for (acp_session_impl/tool_dispatch.rs:94-105). */
+const BACKEND_NAMES: ReadonlyMap<string, string> = new Map([['WebSearch', 'web_search'], ['XSearch', 'x_search']]);
 const PATCH_HEADER = /^\*\*\* (?:Add|Update|Delete) File: (.+)$/gm;
 
 /** An error's message with `file` cut to its base name, so a reason that is logged names no folder. */
@@ -278,10 +282,12 @@ export const grokLines = (text: string, fallbackId: string, summary: Obj, usage:
     } else if (kind === 'tool_call') {
       flushPrompt();
       const id = str(update.toolCallId);
-      const title = str(update.title);
-      if (id === undefined || title === undefined) continue;
+      const shownTitle = str(update.title);
+      if (id === undefined || shownTitle === undefined) continue;
       const current = response(when);
       const input = isObj(update.rawInput) ? update.rawInput : {};
+      // A backend-hosted search is titled for display ("Web search:", "X search:"), with its kind in `rawInput.variant` (acp_session_impl/tool_dispatch.rs:94-105; sampling_events.rs:541-553).
+      const title = input.backend === true ? (BACKEND_NAMES.get(str(input.variant) ?? '') ?? shownTitle) : shownTitle;
       // An MCP tool is reached two ways: titled `<server>__<tool>` itself, or through the `use_tool` wrapper, whose `rawInput.tool_name` is the qualified name
       // (use_tool/input.rs:19-20, use_tool/mod.rs:308) and `tool_input` its arguments.
       const target = title === 'use_tool' ? str(input.tool_name) : undefined;
@@ -333,7 +339,9 @@ export const grokLines = (text: string, fallbackId: string, summary: Obj, usage:
         if (exit !== undefined && exit !== 0) failure = failureOf(exit, shown);
         else if (status === 'failed') failure = shown === '' ? 'tool failed' : shown;
       } else if (status === 'failed') {
-        failure = contentText(update) ?? 'tool failed';
+        // A failed MCP call has no `content[]`: its text rides `rawOutput.output.Error` (acp_conversion.rs:325-338; types/output.rs:1112-1158).
+        const mcp = output.type === 'MCP' && isObj(output.output) ? str(output.output.Error) : undefined;
+        failure = contentText(update) ?? mcp ?? 'tool failed';
       }
       result(id, failure, when, shown);
       if (EDIT_TOOLS.has(str(known.block.native) ?? '')) {
