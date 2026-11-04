@@ -10,7 +10,7 @@ Every command takes the server from `--server <url>` or `OARS_POOL_URL`. There i
 |---------|--------------|
 | `oars pool login --provider github\|google` | Device flow through the pool. It saves the pool's own token at `<store>/pool-accounts.json` (mode 0600) and pins the pool's signing key on first login. No harness token is read. |
 | `oars pool deposit [--accept-covenant <version>]` | Sends every session that passes the exclusion check as a skeleton, and prints counts only. A session that fails the check, or has no raw to scan, is never built or sent. |
-| `oars pool pull [--stack <name>]` | Fetches one stack's signed slice, verifies it against the pinned key, and keeps it at `<store>/pool-replica/<hash of server>/<stack>.json`, still signed. A slice that fails verification is refused and not written. |
+| `oars pool pull --harness-version <version>` | Fetches that harness version's signed bundle, verifies it against the pinned key, and keeps it at `<store>/pool-replica/<hash of server>/<version>.json`, still signed. A bundle that fails verification, or is for another version, is refused and not written. The version must be a public one; nothing is keyed by stack. |
 
 ## What the server enforces
 
@@ -21,7 +21,7 @@ Every command takes the server from `--server <url>` or `OARS_POOL_URL`. There i
 - **Deposit or capped access.** An account with a deposit pulls on an ongoing basis. One without is served up to `READ_CAP` reads (default 50), and past that gets 403 `read_cap` before the pool is read.
 - **A deposit holds something.** A skeleton with no prompt and no tool gets 422 `closed_vocabulary` naming `transcripts`, since a deposit is what lifts the read cap. A forged skeleton that holds invented prompts still counts.
 - **Deposits per account.** Past `MAX_DEPOSITS_PER_ACCOUNT` rows (default 20,000) a new session gets 403 `deposit_limit`, and so does any deposit that would take the account past `MAX_DEPOSIT_BYTES_PER_ACCOUNT` stored bytes (default 64 MB). A redeposit of a held session replaces it if the account still fits. Every pull parses every row, so these bound one account's share of a pull's cost. They do not bound the pool: a pull still loads every matching row across all accounts at once.
-- **A frame's day is real and not ahead of the server.** A day that is not a calendar date, or is later than tomorrow UTC, gets 422 `closed_vocabulary` naming the field, since the latest day sets a slice's `asOf`.
+- **A frame's day is real and not ahead of the server.** A day that is not a calendar date, or is later than tomorrow UTC, gets 422 `closed_vocabulary` naming the field, since the latest day sets a bundle's `asOf`.
 
 ## Routes
 
@@ -31,7 +31,7 @@ Every command takes the server from `--server <url>` or `OARS_POOL_URL`. There i
 | `GET /v1/covenant` | `{version, accepted}`. `version` is null when deposits are closed. Sign-in is optional. |
 | `POST /v1/covenant/accept` | Takes `{version}`. 409 `covenant_version` for any version but the one in force. |
 | `POST /v1/deposits` | Takes one skeleton, 1 MB at most. A larger one gets 413 `too_large`, unread when it declares its length. |
-| `GET /v1/slices/:stack` | A signed slice: `{payload, signature}`, Ed25519 over the payload's exact bytes. |
+| `GET /bundle/:harnessVersion/:vocabVersion` | A signed bundle for one harness version: `{payload, signature}`, Ed25519 over the payload's exact bytes. It holds every family's cells and reads for that version's bucket, plus rule 3's strata cells (language, framework, repo size) counted pool-wide. 401 with no valid credential, 400 `unknown_harness_version` or `unknown_vocab_version` by name, 404 for any other path. The old `/v1/slices/:stack` route is gone. |
 
 ## Bindings
 

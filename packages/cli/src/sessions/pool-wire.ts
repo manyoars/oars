@@ -106,7 +106,6 @@ export const skeletonOf = (records: SessionRecords, id: string): SessionSkeleton
   return { format: SKELETON_FORMAT, id, transcripts };
 };
 
-/** The stacks a session counts under: every language and framework any of its frames names. */
 /** A harness version a bundle can be asked for: public, so the request carries nothing private. The admitted list replaces this shape rule when it ships. */
 export const isBundleVersion = (version: string): boolean => version !== LITERAL && publicVersion(version) === version;
 
