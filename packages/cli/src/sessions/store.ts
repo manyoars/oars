@@ -20,7 +20,7 @@ import type { GoldEvaluator } from './gold-arms.js';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { createReadStream } from 'node:fs';
 import { performance } from 'node:perf_hooks';
-import { appendFile, mkdir, open, readdir, readFile, rename, rm, stat, utimes, writeFile } from 'node:fs/promises';
+import { appendFile, mkdir, open, readdir, readFile, rename, rm, stat, utimes, writeFile, type FileHandle } from 'node:fs/promises';
 import { basename, dirname, join, resolve } from 'node:path';
 import { CliError, ExitCode } from '../errors.js';
 import { compileAllow, requireEntries, slugOf } from './allow.js';
@@ -929,10 +929,12 @@ const readSource = async (context: DepositContext, source: Source, root: string,
  * It splits on the newline alone, not through `readline`, which also ends a line at U+2028 and U+2029: `JSON.stringify` leaves those raw inside a
  * value. A missing log has no lines, and a last line with no newline is yielded as it stands, for the reader to parse or skip.
  */
-export const logLines = async function* (file: string): AsyncGenerator<string> {
+export const logLines = async function* (file: string, held?: FileHandle): AsyncGenerator<string> {
   let rest = '';
   try {
-    for await (const chunk of createReadStream(file, { encoding: 'utf8', highWaterMark: 1 << 20 })) {
+    // From a handle, each call reads from byte 0 of the same open file, which a compaction's rename leaves as it was; `autoClose` is off so the caller closes it.
+    const stream = held === undefined ? createReadStream(file, { encoding: 'utf8', highWaterMark: 1 << 20 }) : held.createReadStream({ encoding: 'utf8', highWaterMark: 1 << 20, start: 0, autoClose: false });
+    for await (const chunk of stream) {
       const lines = (rest + String(chunk)).split('\n');
       rest = lines.pop() ?? '';
       yield* lines;
@@ -941,6 +943,16 @@ export const logLines = async function* (file: string): AsyncGenerator<string> {
     if (!isMissing(error)) throw error;
   }
   yield rest;
+};
+
+/** The log opened for reading, or undefined when there is none. A reader that makes more than one pass holds this open across them (`loadStore`). */
+const openLog = async (file: string): Promise<FileHandle | undefined> => {
+  try {
+    return await open(file, 'r');
+  } catch (error) {
+    if (!isMissing(error)) throw error;
+    return undefined;
+  }
 };
 
 /** What an earlier deposit logged about each transcript. */
@@ -1141,11 +1153,11 @@ interface LogScan {
   newerCaptures: number;
 }
 
-export const scanLog = async (file: string): Promise<LogScan> => {
+export const scanLog = async (file: string, held?: FileHandle): Promise<LogScan> => {
   const latest = new Map<string, number>();
   const cvAt = new Map<string, { rev: number; cv: string }>();
   let superseded = false;
-  for await (const line of logLines(file)) {
+  for await (const line of logLines(file, held)) {
     const observation = observationOf(line);
     if (observation === undefined) continue;
     const seen = latest.get(observation.session);
@@ -1191,12 +1203,14 @@ const internTool = (tool: ToolObservation, intern: (value: string) => string): T
 /**
  * The store as a reader sees it: for each session only the highest `rev`. A version-3 or later session is derived here from its capture records
  * (EXTRACTOR_VERSION rules); a session whose last deposit was version 2 keeps the prompt and error lines that deposit wrote.
+ * `afterFirstPass` runs between the two passes over the log: a seam for the test that compacts the log there.
  */
-export const loadStore = async (storeDir: string): Promise<Store> => {
+export const loadStore = async (storeDir: string, afterFirstPass?: () => Promise<void>): Promise<Store> => {
   // Two passes, so a superseded record is never held: the first keeps one number per session, the second keeps only the records at that rev.
   // A re-capture leaves the old copies in the log until a compaction, and holding them as well doubled the heap of every read (t808).
+  // Both passes read one open file: a lock-free reader can meet a compaction between them, and a second open would see the compacted log, where
+  // a session recaptured in that window fails the rev match and drops out of this read.
   const file = paths(storeDir).observations;
-  const { latest } = await scanLog(file);
   const store: Store = { sessions: [], prompts: [], errors: [], subagents: [], tools: [], newerCaptures: 0 };
   const intern = interner();
   const captured = new Map<string, Captured>();
@@ -1205,15 +1219,22 @@ export const loadStore = async (storeDir: string): Promise<Store> => {
     captured.set(session, found);
     return found;
   };
-  for await (const line of logLines(file)) {
-    const observation = observationOf(line);
-    if (observation === undefined || observation.rev !== latest.get(observation.session)) continue;
-    if (observation.kind === 'session') of(observation.session).session = observation;
-    else if (observation.kind === 'user-prompt') of(observation.session).prompts.push(observation);
-    else if (observation.kind === 'tool') of(observation.session).tools.push(internTool(observation, intern));
-    else if (observation.kind === 'error-line') of(observation.session).errorLines.push(observation);
-    else if (observation.kind === 'prompt') store.prompts.push(observation);
-    else store.errors.push(observation);
+  const held = await openLog(file);
+  try {
+    const { latest } = await scanLog(file, held);
+    await afterFirstPass?.();
+    for await (const line of logLines(file, held)) {
+      const observation = observationOf(line);
+      if (observation === undefined || observation.rev !== latest.get(observation.session)) continue;
+      if (observation.kind === 'session') of(observation.session).session = observation;
+      else if (observation.kind === 'user-prompt') of(observation.session).prompts.push(observation);
+      else if (observation.kind === 'tool') of(observation.session).tools.push(internTool(observation, intern));
+      else if (observation.kind === 'error-line') of(observation.session).errorLines.push(observation);
+      else if (observation.kind === 'prompt') store.prompts.push(observation);
+      else store.errors.push(observation);
+    }
+  } finally {
+    await held?.close();
   }
   const redact = makeRedactor((await readState(storeDir)).redactDomains);
   const agents: (SessionCapture & { parent: string })[] = [];
