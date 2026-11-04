@@ -224,7 +224,8 @@ export const sessionsBooks = async (deps: SessionsDeps, options: { by: BooksBy; 
       : emptyWindow
         ? `No ${options.by === 'pull' ? 'pulls' : 'prompts'} in the --since window.`
         : formatBooks(rows, options.by);
-  return { document: { ok: true, by: options.by, rows, newerCaptures: store.newerCaptures }, text: [table, ...skippedNotice(await scopeOf(runtime)), ...newerNotice(store), ...(rows.length === 0 ? [] : [BOOKS_CAVEAT])].join('\n') };
+  const scope = await scopeOf(runtime);
+  return { document: { ok: true, by: options.by, rows, newerCaptures: store.newerCaptures, scope }, text: [table, ...skippedNotice(scope), ...newerNotice(store), ...(rows.length === 0 ? [] : [BOOKS_CAVEAT])].join('\n') };
 };
 
 export const sessionsMeasure = async (deps: SessionsDeps, options: { last: number; since: string | undefined; repo?: string }): Promise<Outcome> => {

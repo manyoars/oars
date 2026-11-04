@@ -4,6 +4,7 @@ All notable changes to `@manyoars/oars`. Versions follow semver; a release is th
 
 ## Unreleased
 
+- A store lock whose holder hangs is no longer kept for good: the holder refreshes it for at most an hour, then the next deposit breaks it and prints one line naming the holder's pid.
 - `oars keys create|list|revoke` manages your API keys. `keys create --workload <id>` mints a key limited to one workload (authorities `AGENT_OPERATE` and `AGENT_READ` only), so a scheduled agent can change its own schedule without being able to spend or reach another workload. The `make-me-money` skill shows the recipe.
 
 ## 0.3.0
@@ -13,7 +14,7 @@ All notable changes to `@manyoars/oars`. Versions follow semver; a release is th
 - Every deposited transcript is also hard-linked (copied across volumes) into `<config>/oars/sessions/raw/`, on by default, so it outlives Claude Code's own cleanup. These are raw transcripts on your machine, and the files themselves are not uploaded.
 - `oars purchasing` is hidden from `--help` and refuses with "Paid agents are not open yet" unless `OARS_ISSUER_URL` names a platform of your own; it never reads the launch flag.
 - `oars login` with the built-in issuer not answering discovery (no answer, an error status, or a body that is not discovery JSON) now exits 2 with the not-launched message instead of exit 8 or 1; a failure on `--issuer-url` or `OARS_ISSUER_URL` keeps its current error.
-- `verify` and `books` name the project folders that hold transcripts but are not on the saved allowlist, which are never read (`scope` in `verify --json`); the list never fails `verify --strict`.
+- `verify` and `books` name the project folders that hold transcripts but are not on the saved allowlist, which are never read (`scope` in `verify --json` and `books --json`); the list never fails `verify --strict`.
 - `verify` audits each session against its raw file (raw-file match, Merkle root, count bindings); it also reports every session on its own and scores each against your own other weeks on its harness (`selfBaseline`).
 
 ## 0.2.0
