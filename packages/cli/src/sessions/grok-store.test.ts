@@ -86,6 +86,26 @@ describe('depositing the Grok Build source', () => {
     expect(found?.frame).toMatchObject({ harness: 'grok' });
   });
 
+  it('reads the user’s own !cmd call (titled "Execute `cmd`") as a shell call, not an unknown tool', async () => {
+    const s = staged();
+    stageGrok(s.root, [
+      {
+        id: E,
+        cwd: '/x',
+        updates: [
+          prompt(1, 'ls'),
+          line(S(2), { sessionUpdate: 'tool_call', toolCallId: 'bash-mode-1', title: 'Execute `ls -a`', kind: 'execute', status: 'in_progress', rawInput: {} }),
+          line(S(3), { sessionUpdate: 'tool_call_update', toolCallId: 'bash-mode-1', status: 'completed', rawOutput: { type: 'Bash', exit_code: 0, output: [], output_for_prompt: 'a b', signal: null, timed_out: false, current_dir: '/x' } }),
+        ],
+      },
+    ]);
+    await deposit(s.runtime, options(['grok']));
+    const store = await loadStore(s.storeDir);
+    const calls = store.tools.filter((tool) => tool.session === `grok-${E}`);
+    expect(calls.map((tool) => tool.tool)).toEqual(['Bash']);
+    expect(calls.flatMap((tool) => tool.steps ?? [])[0]).toMatchObject({ action: 'shell.exec' });
+  });
+
   it('is read only when allowed, and an allowed name reports nothing missing while a typo does', async () => {
     const s = staged();
     await expect(deposit(s.runtime, options([]))).rejects.toThrow(/Nothing to read/);
