@@ -91,6 +91,17 @@ const wholeObject = (text: string): Obj | undefined => {
 /** The non-blank lines that are not JSON (a torn write), kept so `captureSession` counts them and the deposit line reports them. */
 export const chatBadLines = (text: string): string[] => (wholeObject(text) === undefined ? lineTexts(text).filter((raw) => parse(raw) === undefined) : []);
 
+/** The text of a `PartListUnion`: a string, a part, or a list of them; a `thought` part is the model's reasoning, not its answer. */
+const textOf = (value: unknown): string => {
+  if (typeof value === 'string') return value;
+  if (Array.isArray(value)) return value.map(textOf).join('');
+  return isObj(value) && value.thought !== true && typeof value.text === 'string' ? value.text : '';
+};
+
+/** A re-recorded copy (a history sync makes it with no usage, calls, or model) of `message`: the same kind of message with the same text. */
+const isCopyOf = (candidate: Obj, message: Obj): boolean =>
+  candidate.type === message.type && !isObj(candidate.tokens) && !(Array.isArray(candidate.toolCalls) && candidate.toolCalls.length > 0) && candidate.model === undefined && textOf(candidate.content) === textOf(message.content);
+
 /** The messages a chat file holds once its records are folded the way the vendor's loader folds them (chatRecordingService.ts:304-530), and its metadata. */
 const foldChat = (text: string): { meta: Obj; messages: Obj[] } => {
   const whole = wholeObject(text);
@@ -117,6 +128,20 @@ const foldChat = (text: string): { meta: Obj; messages: Obj[] } => {
       }
     }
   };
+  // A history sync (compression, masking) re-records the kept turns under fresh ids with no `tokens`, `toolCalls`, or `model`, then lists every old id in `removeIds`
+  // (chatRecordingService.ts:1427-1590; geminiChat.ts:412-417,456,1386-1395). The vendor's loader drops those ids; this reader keeps the removed message, which is the
+  // only record of its prompt, usage, calls, and errors, and hides the copy instead, so each is read once and with its own time.
+  const echoes = new Set<string>();
+  const retire = (ids: readonly unknown[]): void => {
+    const gone = new Set(ids.filter((id): id is string => typeof id === 'string'));
+    for (const id of gone) {
+      const removed = messages.get(id);
+      if (removed === undefined) continue;
+      // The newest match first: the copies are recorded last, after any older message that happens to read the same.
+      const copy = [...messages.entries()].reverse().find(([other, message]) => !gone.has(other) && !echoes.has(other) && isCopyOf(message, removed));
+      if (copy !== undefined) echoes.add(copy[0]);
+    }
+  };
   for (const record of records) {
     if (!isObj(record)) continue;
     if (typeof record.$rewindTo === 'string') {
@@ -128,13 +153,13 @@ const foldChat = (text: string): { meta: Obj; messages: Obj[] } => {
       const patch = record.$patch;
       patchOne(patch);
       for (const update of Array.isArray(patch.updates) ? patch.updates : []) patchOne(update);
-      for (const id of Array.isArray(patch.removeIds) ? patch.removeIds : []) if (typeof id === 'string') messages.delete(id);
+      retire(Array.isArray(patch.removeIds) ? patch.removeIds : []);
       if (Array.isArray(patch.orderIds)) {
         const ordered = patch.orderIds.flatMap((id) => (typeof id === 'string' && messages.has(id) ? [id] : []));
-        const rest = [...messages.keys()].filter((id) => !ordered.includes(id));
-        const held = new Map(messages);
+        // The messages the list does not name stay first, in their order; the named ones follow in the listed order.
+        const entries = [...messages.entries()].sort(([a], [b]) => ordered.indexOf(a) - ordered.indexOf(b));
         messages.clear();
-        for (const id of [...rest, ...ordered]) messages.set(id, held.get(id) ?? {});
+        for (const [id, message] of entries) messages.set(id, message);
       }
     } else if (str(record.id) !== undefined) {
       messages.set(String(record.id), record);
@@ -149,20 +174,16 @@ const foldChat = (text: string): { meta: Obj; messages: Obj[] } => {
       seed(record.messages);
     }
   }
-  return { meta, messages: [...messages.values()] };
-};
-
-/** The text of a `PartListUnion`: a string, a part, or a list of them; a `thought` part is the model's reasoning, not its answer. */
-const textOf = (value: unknown): string => {
-  if (typeof value === 'string') return value;
-  if (Array.isArray(value)) return value.map(textOf).join('');
-  return isObj(value) && value.thought !== true && typeof value.text === 'string' ? value.text : '';
+  return { meta, messages: [...messages.entries()].filter(([id]) => !echoes.has(id)).map(([, message]) => message) };
 };
 
 const partsOf = (value: unknown): Obj[] => (Array.isArray(value) ? value.filter(isObj) : isObj(value) ? [value] : []);
 
 /** A user message the operator did not type: slash commands, help, and context the CLI or a hook injects (utils/sessionUtils.ts:97). */
 const NOT_TYPED = ['/', '?', '<session_context>', '<hook_context>'];
+/** What a compression records in place of the history it replaced: the summary as a user turn, then this canned reply as the model's (context/chatCompressionService.ts:665-673). */
+const SUMMARY = '<state_snapshot>';
+const CANNED_REPLY = 'Got it. Thanks for the additional context!';
 
 /** Gemini tools the reader names in the Claude Code vocabulary, so the extractor classifies them; the Gemini name stays in `native` for the action table. */
 const RENAMED: ReadonlyMap<string, string> = new Map([
@@ -193,12 +214,17 @@ const unwrap = (text: string): string => {
   if (end === -1) return text;
   return trimmed.slice(0, end).replace(/\n$/, '').replace(THROUGH_OPEN, '');
 };
-/** The vendor's `Error: Tool call execution failed. Reason: ` prefix on a failed call's text (tools/tools.ts:670). */
-const unprefixed = (text: string): string => text.replace(/^Error: Tool call execution failed\. Reason: /, '');
+/** The suffix `truncateToolOutput` puts after the head of a stored result over the 64 KB cap (utils/tool-utils.ts:178-205), with the saved file's path when there is one. */
+const CUT_SHORT = /\n\.{3} \[Tool output truncated to conserve memory(?:\. For full output see: [^\]]*)?\]$/;
 
-/** What a call's result holds: the `functionResponse` output and error, else any plain text. */
-const responseOf = (result: unknown): { output: string; error: string | undefined } => {
-  const responses = partsOf(result).flatMap((part) => (isObj(part.functionResponse) && isObj(part.functionResponse.response) ? [part.functionResponse.response] : []));
+/**
+ * What a call's result holds: the output and error of the `functionResponse` whose `id` is the call's, else (when none matches) the first one, else any plain text. A history
+ * sync writes the whole user turn, every parallel call's response, as the result of each call in it (chatRecordingService.ts:1500-1525), so the first response is not the call's.
+ */
+const responseOf = (result: unknown, callId: string): { output: string; error: string | undefined } => {
+  const all = partsOf(result).flatMap((part) => (isObj(part.functionResponse) && isObj(part.functionResponse.response) ? [{ id: part.functionResponse.id, response: part.functionResponse.response }] : []));
+  const own = all.filter((entry) => entry.id === callId);
+  const responses = (own.length > 0 ? own : all).map((entry) => entry.response);
   const output = responses.map((response) => str(response.output)).find((text) => text !== undefined);
   return { output: output ?? (responses.length === 0 ? textOf(result) : ''), error: responses.map((response) => str(response.error)).find((text) => text !== undefined) };
 };
@@ -256,7 +282,7 @@ export const chatLines = (text: string, fallbackId: string, cwd: string | null):
       // The vendor's filter reads the text SENT (`content`, chatRecordingService.ts:220-227); a custom command sends its expansion and shows `/cmd` (nonInteractiveCli.ts:289-300),
       // so the shown text is only what is recorded.
       const sent = textOf(message.content).trim();
-      if (sent === '' || NOT_TYPED.some((prefix) => sent.startsWith(prefix))) continue;
+      if (sent === '' || NOT_TYPED.some((prefix) => sent.startsWith(prefix)) || sent.startsWith(SUMMARY)) continue;
       const shown = textOf(message.displayContent);
       const typed = shown.trim() === '' ? textOf(message.content) : shown;
       sequence += 1;
@@ -267,6 +293,8 @@ export const chatLines = (text: string, fallbackId: string, cwd: string | null):
       const tokens = isObj(message.tokens) ? message.tokens : undefined;
       // A response of only a thought (the synthetic "binary content" note) says nothing.
       if (answer.trim() === '' && calls.length === 0 && tokens === undefined) continue;
+      // The canned reply after a compression summary is the CLI's, not a response: it has no usage, calls, or model.
+      if (answer.trim() === CANNED_REPLY && calls.length === 0 && tokens === undefined && message.model === undefined) continue;
       const content: Obj[] = answer.trim() === '' ? [] : [{ type: 'text', text: answer }];
       const held: { id: string; native: string; shell: boolean; call: Obj }[] = [];
       for (const entry of calls) {
@@ -302,7 +330,7 @@ export const chatLines = (text: string, fallbackId: string, cwd: string | null):
         ...base,
         type: 'assistant',
         uuid: `${fallbackId}-a${String(sequence)}`,
-        requestId: str(message.id) ?? `${String(base.sessionId)}-resp${String(sequence)}`,
+        requestId: message.id,
         timestamp: when,
         ...(model === undefined ? {} : { requestedModel: model }),
         message: { role: 'assistant', content, ...usage },
@@ -311,14 +339,17 @@ export const chatLines = (text: string, fallbackId: string, cwd: string | null):
         const status = str(call.status);
         if (status !== 'success' && status !== 'error' && status !== 'cancelled') continue;
         const finished = stamp(call.timestamp);
-        const { output: raw, error } = responseOf(call.result);
+        const { output: raw, error } = responseOf(call.result, id);
+        // The cap keeps the head only, so the closing tag and the exit code are gone: the outcome is unknown, as for a call with no result yet.
+        if (shell && status === 'success' && error === undefined && !raw.includes(CLOSE) && CUT_SHORT.test(raw.trimEnd())) continue;
         const parsed = shell ? shellResult(raw) : undefined;
         const output = parsed?.output ?? '';
         // On the inactivity timeout the tool writes one sentence and no trailer, and the executor still records `success` (tools/shell.ts:929-933, tool-executor.ts:144-154).
-        const timedOut = TIMED_OUT.exec(output);
+        // It has no `Output: ` prefix (tools/shell.ts:929-933), so it is tested on the unwrapped text, not on `output`, which a command printing that sentence first would also match.
+        const timedOut = shell ? TIMED_OUT.exec(unwrap(raw).trim()) : null;
         let failure: string | undefined;
         if (status !== 'success' || error !== undefined) {
-          failure = error ?? unprefixed(unwrap(raw)).trim();
+          failure = error ?? unwrap(raw).trim();
           if (failure === '') failure = 'tool failed';
         } else if (parsed?.exit !== undefined && parsed.exit !== 0) {
           // A nonzero exit code is a failure whatever `status` says. Upstream writes only `result.exitCode` here (tools/shell.ts:953-979) and no negative code is handled apart.
@@ -353,7 +384,7 @@ const headOf = (file: string, text: string): { id: string | undefined; kind: str
 /** True when the file holds no prompt or response: a head written at a chat's start and nothing after it (chatRecordingService.ts:855-865). A torn file is not empty; it is named when read. */
 const holdsNothing = (text: string, id: string): boolean => {
   try {
-    return chatLines(text, id, null).length === 0;
+    return chatBadLines(text).length === 0 && chatLines(text, id, null).length === 0;
   } catch {
     return false;
   }

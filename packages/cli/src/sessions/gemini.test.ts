@@ -41,9 +41,10 @@ const say = (second: number, content: unknown, extra: object = {}) => ({ id: `g$
 const tokens = (input: number, output: number, cached = 0, extra: object = {}) => ({ input, output, cached, total: input + output, ...extra });
 // The shell tool's result text: `Output: ...` then optional trailer lines, wrapped in <untrusted_context> (shell.ts:953-979, textUtils.ts wrapUntrusted).
 const shellText = (output: string, trailer: readonly string[] = []): string => `<untrusted_context source="shell">\nOutput: ${output}${trailer.map((line) => `\n${line}`).join('')}\n</untrusted_context>`;
-const reply = (name: string, response: object) => [{ functionResponse: { id: 'x', name, response } }];
+// The executor stores the call's own id on its response (utils/generateContentResponseUtilities.ts:29-33).
+const reply = (id: string, name: string, response: object) => [{ functionResponse: { id, name, response } }];
 const call = (id: string, name: string, args: object, status: string, second: number, result?: unknown) => ({ id, name, args, status, timestamp: T(second), ...(result === undefined ? {} : { result }) });
-const shell = (id: string, command: string, status: string, second: number, text: string) => call(id, 'run_shell_command', { command }, status, second, reply('run_shell_command', { output: text }));
+const shell = (id: string, command: string, status: string, second: number, text: string) => call(id, 'run_shell_command', { command }, status, second, reply(id, 'run_shell_command', { output: text }));
 
 describe('the Gemini CLI reader', () => {
   it('turns a normal session into prompts, calls with outcomes, per-message usage with the cache subtracted, the model, and the cwd', () => {
@@ -53,7 +54,7 @@ describe('the Gemini CLI reader', () => {
       say(2, 'running it', { tokens: tokens(1000, 20, 400, { thoughts: 7, tool: 5 }), toolCalls: [shell('c1', 'npm test', 'success', 3, shellText('ok'))] }),
       say(5, 'now the edit', {
         tokens: tokens(1200, 30, 1000),
-        toolCalls: [call('c2', 'replace', { file_path: 'src/a.ts', old_string: 'a', new_string: 'b' }, 'success', 6, reply('replace', { output: 'Successfully modified file' })), call('c3', 'write_file', { file_path: 'docs/b.md', content: 'x' }, 'success', 6, reply('write_file', { output: 'ok' }))],
+        toolCalls: [call('c2', 'replace', { file_path: 'src/a.ts', old_string: 'a', new_string: 'b' }, 'success', 6, reply('c2', 'replace', { output: 'Successfully modified file' })), call('c3', 'write_file', { file_path: 'docs/b.md', content: 'x' }, 'success', 6, reply('c3', 'write_file', { output: 'ok' }))],
       }),
       say(8, 'done', { tokens: tokens(1300, 10, 1300) }),
     ];
@@ -112,7 +113,7 @@ describe('the Gemini CLI reader', () => {
     const out = extractOf([
       head,
       prompt(1, 'x'),
-      say(2, '', { toolCalls: [shell('a', 'sleep 9', 'success', 3, signalled), call('b', 'run_shell_command', { command: 'x' }, 'cancelled', 4, reply('run_shell_command', { error: '[Operation Cancelled] User cancelled tool execution.' }))] }),
+      say(2, '', { toolCalls: [shell('a', 'sleep 9', 'success', 3, signalled), call('b', 'run_shell_command', { command: 'x' }, 'cancelled', 4, reply('b', 'run_shell_command', { error: '[Operation Cancelled] User cancelled tool execution.' }))] }),
     ]);
     expect(out.tools.map((tool) => tool.status)).toEqual(['error', 'error']);
     expect(out.errorLines.map((error) => error.line)).toEqual(['partial', '[Operation Cancelled] User cancelled tool execution.']);
@@ -124,18 +125,29 @@ describe('the Gemini CLI reader', () => {
       prompt(1, 'read it'),
       say(2, '', {
         toolCalls: [
-          call('c1', 'read_file', { file_path: '/nope' }, 'error', 3, reply('read_file', { error: 'ENOENT: no such file or directory, open /nope' })),
-          call('c2', 'read_file', { file_path: '/nada' }, 'error', 4, reply('read_file', { output: 'Error: Tool call execution failed. Reason: bad path' })),
+          call('c1', 'read_file', { file_path: '/nope' }, 'error', 3, reply('c1', 'read_file', { error: 'ENOENT: no such file or directory, open /nope' })),
+          // Defensive: upstream stores `response: { error }` for a failed call (scheduler/tool-executor.ts:156-167), never an empty result with status `error`.
           call('c3', 'read_file', { file_path: '/zip' }, 'error', 5, []),
         ],
       }),
     ]);
-    expect(out.tools.map((tool) => tool.status)).toEqual(['error', 'error', 'error']);
-    expect(out.errorLines.map((error) => error.line)).toEqual(['ENOENT: no such file or directory, open /nope', 'bad path', 'tool failed']);
+    expect(out.tools.map((tool) => tool.status)).toEqual(['error', 'error']);
+    expect(out.errorLines.map((error) => error.line)).toEqual(['ENOENT: no such file or directory, open /nope', 'tool failed']);
+  });
+
+  it('leaves a shell call whose stored result the 64 KB cap cut short as none: the closing tag and the exit code went with the tail (utils/tool-utils.ts:178-205)', () => {
+    const cut = (suffix: string): string => `<untrusted_context source="shell">\nOutput: ${'x'.repeat(200)}\nsecond line${suffix}`;
+    const out = extractOf([
+      head,
+      prompt(1, 'x'),
+      say(2, '', { toolCalls: [shell('a', 'big', 'success', 3, cut('\n... [Tool output truncated to conserve memory]')), shell('b', 'big', 'success', 4, cut('\n... [Tool output truncated to conserve memory. For full output see: /home/u/.gemini/tmp/app/tool-outputs/s/shell_b.txt]')), shell('c', 'fine', 'success', 5, shellText('all good'))] }),
+    ]);
+    expect(out.tools.map((tool) => tool.status)).toEqual(['none', 'none', 'ok']);
+    expect(out.errorLines).toEqual([]);
   });
 
   it('records a shell call whose spawn failed (status error) with the error message', () => {
-    const out = extractOf([head, prompt(1, 'x'), say(2, '', { toolCalls: [call('c1', 'run_shell_command', { command: 'zzz' }, 'error', 3, reply('run_shell_command', { error: 'spawn zzz ENOENT' }))] })]);
+    const out = extractOf([head, prompt(1, 'x'), say(2, '', { toolCalls: [call('c1', 'run_shell_command', { command: 'zzz' }, 'error', 3, reply('c1', 'run_shell_command', { error: 'spawn zzz ENOENT' }))] })]);
     expect(out.errorLines).toMatchObject([{ tool: 'Bash', line: 'spawn zzz ENOENT' }]);
   });
 
@@ -151,7 +163,7 @@ describe('the Gemini CLI reader', () => {
   });
 
   it('captures a session from a folder that is not a repository, and one that names no folder at all', () => {
-    const out = extractOf([head, prompt(1, 'hi'), say(2, '', { toolCalls: [call('c1', 'read_file', { file_path: 'a.txt' }, 'success', 3, reply('read_file', { output: 'text' }))] })], '/tmp/notes');
+    const out = extractOf([head, prompt(1, 'hi'), say(2, '', { toolCalls: [call('c1', 'read_file', { file_path: 'a.txt' }, 'success', 3, reply('c1', 'read_file', { output: 'text' }))] })], '/tmp/notes');
     expect(out.tools).toMatchObject([{ tool: 'Read', status: 'ok' }]);
     expect(out.session.repo).toBeNull();
     expect(linesOf([head, prompt(1, 'hi')], null)[0]).not.toHaveProperty('cwd');
@@ -209,6 +221,93 @@ describe('the Gemini CLI reader', () => {
     expect(linesOf(records).map((entry) => entry.type)).toEqual(['user', 'assistant', 'user', 'user']);
   });
 
+  describe('a history sync (services/chatRecordingService.ts:1427-1590)', () => {
+    // Compression (core/client.ts:724,1294) and masking (client.ts:734,1321) call setHistory, which re-records every kept turn under a fresh id with no tokens, toolCalls, or
+    // model (geminiChat.ts:1386-1395, recordSyntheticMessage at chatRecordingService.ts:1116), then removes all the old ids in one $patch (chatRecordingService.ts:1533-1590).
+    const original = (): unknown[] => [
+      head,
+      prompt(1, 'fix the build'),
+      say(2, 'running it', { tokens: tokens(1000, 20), toolCalls: [shell('c1', 'make', 'success', 3, shellText('boom', ['Exit Code: 2']))] }),
+      prompt(5, 'try again'),
+    ];
+    const copy = (id: string, type: 'user' | 'gemini', text: string, second: number) => ({ id, timestamp: T(second), type, content: [{ text }] });
+    const summary = (id: string, second: number) => copy(id, 'user', '<state_snapshot>\n<overall_goal>fix the build</overall_goal>\n</state_snapshot>', second);
+    const gotIt = (id: string, second: number) => copy(id, 'gemini', 'Got it. Thanks for the additional context!', second);
+
+    it('keeps the prompts, usage, calls, and errors from before a compression, and reads neither the summary as a prompt nor the canned reply as a response', () => {
+      const records = [
+        ...original(),
+        summary('s1', 20),
+        gotIt('s2', 20),
+        copy('k1', 'user', 'try again', 20),
+        { $patch: { removeIds: ['u1', 'g2', 'u5'], orderIds: ['s1', 's2', 'k1'] } },
+        prompt(30, 'and now'),
+      ];
+      const lines = linesOf(records);
+      const prompts = lines.filter((entry) => entry.type === 'user' && JSON.stringify(entry.message).includes('"type":"text"')).map((entry) => (entry.message as { content: { text: string }[] }).content[0]?.text);
+      expect(prompts).toEqual(['fix the build', 'try again', 'and now']);
+      const out = extractOf(records);
+      expect(out.session.userTurns).toBe(3);
+      expect(out.session.assistantTurns).toBe(1);
+      expect(out.session.usage).toMatchObject({ input: 1000, output: 20 });
+      expect(out.tools).toMatchObject([{ tool: 'Bash', status: 'error' }]);
+      expect(out.errorLines).toMatchObject([{ tool: 'Bash', line: 'boom' }]);
+      // The kept messages keep their own times, not the one time of the re-recorded copies.
+      expect(out.session.tsFirst).toBe(T(1));
+      expect(lines.map((entry) => entry.timestamp)).toEqual([T(1), T(2), T(3), T(5), T(30)]);
+    });
+
+    it('keeps them through a masking pass, which re-records every turn under a fresh id, and through a second pass over those copies', () => {
+      const pass = (suffix: string, second: number): unknown[] => [
+        copy(`mu1${suffix}`, 'user', 'fix the build', second),
+        copy(`mg2${suffix}`, 'gemini', 'running it', second),
+        copy(`mu5${suffix}`, 'user', 'try again', second),
+      ];
+      const records = [
+        ...original(),
+        ...pass('a', 20),
+        { $patch: { removeIds: ['u1', 'g2', 'u5'], orderIds: ['mu1a', 'mg2a', 'mu5a'] } },
+        ...pass('b', 40),
+        { $patch: { removeIds: ['mu1a', 'mg2a', 'mu5a'], orderIds: ['mu1b', 'mg2b', 'mu5b'] } },
+      ];
+      const out = extractOf(records);
+      expect(out.session.userTurns).toBe(2);
+      expect(out.session.assistantTurns).toBe(1);
+      expect(out.session.usage).toMatchObject({ input: 1000, output: 20 });
+      expect(out.tools).toMatchObject([{ tool: 'Bash', status: 'error' }]);
+      expect(out.session.tsFirst).toBe(T(1));
+      expect(out.session.tsLast).toBe(T(5));
+    });
+
+    it('drops a copy once per removed message, so a prompt typed twice stays two and an identical later prompt is not mistaken for a copy', () => {
+      const records = [
+        head,
+        prompt(1, 'again'),
+        prompt(2, 'again'),
+        copy('k1', 'user', 'again', 20),
+        copy('k2', 'user', 'again', 20),
+        { $patch: { removeIds: ['u1', 'u2'], orderIds: ['k1', 'k2'] } },
+        prompt(30, 'again'),
+      ];
+      expect(extractOf(records).session.userTurns).toBe(3);
+    });
+  });
+
+  it('reads each parallel call from the functionResponse whose id is the call, also after a history sync patches every call with the whole user turn (chatRecordingService.ts:1500-1525)', () => {
+    const calls = [shell('a', 'ok-one', 'success', 3, shellText('fine')), shell('b', 'bad-two', 'success', 3, shellText('boom', ['Exit Code: 2']))];
+    // `tc.result = turnParts` gives every call in the turn the same list: both calls' responses, in the order the model asked.
+    const turn = [...reply('a', 'run_shell_command', { output: shellText('fine') }), ...reply('b', 'run_shell_command', { output: shellText('boom', ['Exit Code: 2']) })];
+    const before = extractOf([head, prompt(1, 'x'), say(2, '', { toolCalls: calls })]);
+    expect(before.tools.map((tool) => tool.status)).toEqual(['ok', 'error']);
+    const synced = [head, prompt(1, 'x'), say(2, '', { toolCalls: calls.map((entry) => ({ ...entry, result: [] })) }), { $patch: { updates: [{ id: 'g2', toolCalls: calls.map((entry) => ({ id: entry.id, result: turn })) }] } }];
+    const out = extractOf(synced);
+    expect(out.tools.map((tool) => tool.status)).toEqual(['ok', 'error']);
+    expect(out.errorLines).toMatchObject([{ line: 'boom' }]);
+    // Defensive: upstream always writes the call's id on its response; a response under any other id is the fallback, read as the call's own.
+    const stray = call('s', 'run_shell_command', { command: 'x' }, 'success', 3, reply('other', 'run_shell_command', { output: shellText('late', ['Exit Code: 4']) }));
+    expect(extractOf([head, prompt(1, 'x'), say(2, '', { toolCalls: [stray] })]).tools).toMatchObject([{ status: 'error' }]);
+  });
+
   it('applies $rewindTo (drop that message and every later one; an unknown id clears all), $patch, and $set.messages as the vendor loader does', () => {
     const prompts = (records: readonly unknown[]): string =>
       linesOf(records)
@@ -220,8 +319,9 @@ describe('the Gemini CLI reader', () => {
     expect(prompts([...body, { $rewindTo: 'u2' }, prompt(4, 'four')])).not.toMatch(/two|three/);
     expect(prompts([...body, { $rewindTo: 'nope' }])).toBe('');
     expect(prompts([...body, { $patch: { id: 'u1', content: [{ text: 'edited' }] } }])).toContain('edited');
+    // A removed message stays (a history sync's $patch lists every old id, and the message is the only record of what was said); only a copy of it is hidden.
     // Defensive inputs upstream cannot write (the loader guards each, chatRecordingService.ts:362,394): a numeric id in `removeIds` and `orderIds`, a non-object entry in `$set.messages`, a non-string `$rewindTo`.
-    expect(prompts([...body, { $patch: { updates: [{ id: 'u3', content: [{ text: 'bulk' }] }], removeIds: ['u2', 7] } }])).toMatch(/one.*bulk/);
+    expect(prompts([...body, { $patch: { updates: [{ id: 'u3', content: [{ text: 'bulk' }] }], removeIds: ['u2', 7] } }])).toMatch(/one.*two.*bulk/);
     // `orderIds` with a number and an unknown id: defensive, same guard.
     expect(prompts([...body, { $patch: { orderIds: ['u3', 'u1', 'ghost', 4] } }])).toMatch(/two.*three.*one/);
     expect(prompts([...body, { $patch: { id: 'ghost', content: [{ text: 'x' }] } }]).split('|')).toHaveLength(3);
@@ -233,7 +333,8 @@ describe('the Gemini CLI reader', () => {
 
   it('patches a tool call result in place, so a result recorded later by a $patch decides the outcome', () => {
     const open = say(2, 'x', { toolCalls: [call('c1', 'run_shell_command', { command: 'make' }, 'success', 3, [])] });
-    const patch = { $patch: { id: 'g2', toolCalls: [{ id: 'c1', result: reply('run_shell_command', { output: shellText('no', ['Exit Code: 3']) }) }, { id: 'zzz', result: [] }] } };
+    // `{ id: 'zzz' }` below names a call the message does not hold, and the second expectation patches a user message: defensive, the loader only reaches a call it holds.
+    const patch = { $patch: { id: 'g2', toolCalls: [{ id: 'c1', result: reply('c1', 'run_shell_command', { output: shellText('no', ['Exit Code: 3']) }) }, { id: 'zzz', result: [] }] } };
     expect(extractOf([head, prompt(1, 'a'), open, patch]).tools).toMatchObject([{ status: 'error' }]);
     expect(extractOf([head, prompt(1, 'a'), prompt(5, 'b'), { $patch: { id: 'u1', toolCalls: [{ id: 'c1', result: [] }] } }]).session.userTurns).toBe(2);
   });
@@ -272,7 +373,7 @@ describe('the Gemini CLI reader', () => {
     expect(viaShell?.line.length).toBeLessThanOrEqual(1000);
     expect(viaShell?.line).not.toContain('sk-abcdefghijklmnopqrstuvwxyz0123');
     expect(viaShell?.line).not.toContain('alice@example.com');
-    const viaTool = extractOf([head, prompt(1, 'go'), say(2, '', { toolCalls: [call('c1', 'read_file', { file_path: 'f' }, 'error', 3, reply('read_file', { error: long }))] })]).errorLines[0];
+    const viaTool = extractOf([head, prompt(1, 'go'), say(2, '', { toolCalls: [call('c1', 'read_file', { file_path: 'f' }, 'error', 3, reply('c1', 'read_file', { error: long }))] })]).errorLines[0];
     expect(viaTool?.line.length).toBeLessThanOrEqual(1000);
     expect(viaTool?.line).not.toContain('alice@example.com');
   });
@@ -284,6 +385,10 @@ describe('the Gemini CLI reader', () => {
     const out = extractOf([head, prompt(1, 'x'), say(2, '', { toolCalls: [shell('a', 'sleep 999', 'success', 3, quiet), shell('b', 'tail -f x', 'success', 4, partial)] })]);
     expect(out.tools.map((tool) => tool.status)).toEqual(['error', 'error']);
     expect(out.errorLines.map((error) => error.line)).toEqual([sentence, sentence]);
+    // A command that PRINTS that sentence first is a success: the real one has no `Output: ` prefix, which the wrapper of a printed one has.
+    const printed = extractOf([head, prompt(1, 'x'), say(2, '', { toolCalls: [shell('c', 'echo', 'success', 3, shellText(`${sentence} (printed by the command)`))] })]);
+    expect(printed.tools).toMatchObject([{ status: 'ok' }]);
+    expect(printed.errorLines).toEqual([]);
   });
 
   it('reads a successful git commit through the Exit code 0 line, so its commit survives', () => {
@@ -330,15 +435,15 @@ describe('the Gemini CLI action table', () => {
       prompt(1, 'x'),
       say(2, '', {
         toolCalls: [
-          call('a', 'read_file', { file_path: 'a.ts' }, 'success', 3, reply('read_file', { output: 't' })),
-          call('b', 'replace', { file_path: 'a.ts' }, 'success', 4, reply('replace', { output: 't' })),
-          call('c', 'write_file', { file_path: 'b.ts' }, 'success', 5, reply('write_file', { output: 't' })),
+          call('a', 'read_file', { file_path: 'a.ts' }, 'success', 3, reply('a', 'read_file', { output: 't' })),
+          call('b', 'replace', { file_path: 'a.ts' }, 'success', 4, reply('b', 'replace', { output: 't' })),
+          call('c', 'write_file', { file_path: 'b.ts' }, 'success', 5, reply('c', 'write_file', { output: 't' })),
           shell('d', 'ls', 'success', 6, shellText('x')),
-          call('e', 'glob', { pattern: '*.ts' }, 'success', 7, reply('glob', { output: 't' })),
-          call('f', 'grep_search', { pattern: 'x' }, 'success', 8, reply('grep_search', { output: 't' })),
-          call('g', 'google_web_search', { query: 'q' }, 'success', 9, reply('google_web_search', { output: 't' })),
-          call('h', 'web_fetch', { prompt: 'p' }, 'success', 10, reply('web_fetch', { output: 't' })),
-          call('i', 'invoke_agent', { agent_name: 'x' }, 'success', 11, reply('invoke_agent', { output: 't' })),
+          call('e', 'glob', { pattern: '*.ts' }, 'success', 7, reply('e', 'glob', { output: 't' })),
+          call('f', 'grep_search', { pattern: 'x' }, 'success', 8, reply('f', 'grep_search', { output: 't' })),
+          call('g', 'google_web_search', { query: 'q' }, 'success', 9, reply('g', 'google_web_search', { output: 't' })),
+          call('h', 'web_fetch', { prompt: 'p' }, 'success', 10, reply('h', 'web_fetch', { output: 't' })),
+          call('i', 'invoke_agent', { agent_name: 'x' }, 'success', 11, reply('i', 'invoke_agent', { output: 't' })),
         ],
       }),
     ]);
@@ -362,8 +467,16 @@ describe('the Gemini home', () => {
       // A subagent with no parent set is written at the root of chats/ (chatRecordingService.ts:787,813-814); the vendor's own listing skips it by `kind` (cli/src/utils/sessionUtils.ts:301), so it is no main session.
       { id: 'subroot0', projectRoot: '/work/a', lines: [geminiHead('subroot0', { kind: 'subagent' }), prompt(1, 'a subagent at the root')] },
       { id: 'cccccccc-3', slug: 'legacy', projectRoot: '/work/l', legacy: true, lines: JSON.stringify({ ...geminiHead('cccccccc-3'), messages: [prompt(1, 'old')] }, null, 2) },
+      // Defensive: upstream sanitizes the id in a file name (chatRecordingService.ts:805), so a head whose `sessionId` holds `/../` is not one it writes.
       { id: 'rejected1', slug: 'rejected', lines: [geminiHead('bad id/../x')] },
+      // Defensive: upstream writes the head line first (chatRecordingService.ts:865), so a file that starts with a prompt is not one it writes.
       { id: 'dddddddd-4', slug: 'nohead', projectRoot: '/work/n', lines: [prompt(1, 'no head line')] },
+      // Defensive: a folder under chats/ is a parent session's id, which upstream sanitizes, so one with a space is not one it writes.
+      { id: 'agent-8', parent: 'bad dir', projectRoot: '/work/a', lines: [geminiHead('agent-8', { kind: 'subagent' }), prompt(1, 'in an unsafe folder')] },
+      // A head and a torn line is a torn file, not an empty one: it is listed, and its bad line is counted when it is read.
+      { id: 'gggggggg-7', slug: 'torn', projectRoot: '/work/t', lines: `${JSON.stringify(geminiHead('gggggggg-7'))}
+{"id": "u1", "ty
+` },
     ]);
     mkdirSync(join(root, 'tmp', 'empty'));
     writeFileSync(join(root, 'tmp', 'stray.txt'), 'x');
@@ -377,10 +490,13 @@ describe('the Gemini home', () => {
         'aaaaaaaa-1-agent-9|/work/a|aaaaaaaa-1',
         'cccccccc-3|/work/l|',
         'session-2026-06-01T10-00-dddddddd|/work/n|',
+        'gggggggg-7|/work/t|',
       ].sort(),
     );
-    expect(store?.rejected).toBe(1);
+    expect(store?.rejected).toBe(2);
     expect(store?.unreadable).toEqual([]);
+    const torn = store?.sessions.find((session) => session.id === 'gggggggg-7');
+    expect(chatBadLines(await (store?.transcript(torn ?? never()) ?? Promise.resolve('')))).toHaveLength(1);
     const first = store?.sessions.find((session) => session.id === 'aaaaaaaa-1');
     expect(await store?.transcript(first ?? never())).toContain('"text":"x"');
     expect(await openGeminiStore(join(s.root, 'nowhere'))).toBeUndefined();

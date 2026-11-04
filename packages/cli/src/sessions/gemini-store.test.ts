@@ -19,6 +19,7 @@ const C = 'cccc3333-3333-4333-8333-333333333333';
 const D = 'dddd4444-4444-4444-8444-444444444444';
 const E = 'eeee5555-5555-4555-8555-555555555555';
 const F = 'ffff6666-6666-4666-8666-666666666666';
+const G = '99996666-6666-4666-8666-666666666666';
 
 const T = (second: number): string => `2026-06-01T10:00:${String(second).padStart(2, '0')}.000Z`;
 const prompt = (second: number, text: string) => ({ id: `u${String(second)}`, timestamp: T(second), type: 'user', content: [{ text }] });
@@ -100,10 +101,22 @@ describe('depositing the Gemini source', () => {
       { id: D, slug: 'ended', projectRoot: '/x', lines: [...session(D), say(8, 'aborted turn')] },
       // A short tool-call response of a thinking model: thoughts above candidates (chatRecordingTypes.ts:21-25 keeps them apart), so the stored output must hold both.
       { id: F, slug: 'thinking', projectRoot: '/x', lines: [geminiHead(F), prompt(1, 'plan it'), say(2, '', { tokens: { input: 50, output: 3, cached: 0, thoughts: 40, total: 93 } })] },
+      // A compressed session: the summary and the kept turn are re-recorded under fresh ids and the old ids removed (chatRecordingService.ts:1533-1590, chatCompressionService.ts:665-673).
+      {
+        id: G,
+        slug: 'compressed',
+        projectRoot: '/x',
+        lines: [
+          ...session(G),
+          { id: 's1', timestamp: T(20), type: 'user', content: [{ text: '<state_snapshot>\n<overall_goal>fix the build</overall_goal>\n</state_snapshot>' }] },
+          { id: 's2', timestamp: T(20), type: 'gemini', content: [{ text: 'Got it. Thanks for the additional context!' }] },
+          { $patch: { removeIds: ['u1', 'g2', 'g5'], orderIds: ['s1', 's2'] } },
+        ],
+      },
     ]);
     await deposit(s.runtime, options(['gemini']));
     const { skeletons } = await readSkeletons(s.storeDir);
-    expect(skeletons).toHaveLength(5);
+    expect(skeletons).toHaveLength(6);
     const store = await loadStore(s.storeDir);
     expect([...verifyAll(skeletons), ...verifyCaptured(store.sessions, store.tools)].filter((result) => result.violations > 0)).toEqual([]);
   });
