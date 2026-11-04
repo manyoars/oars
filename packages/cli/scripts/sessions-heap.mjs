@@ -200,8 +200,9 @@ const runCli = (dirs, heapMb, args, preload, recapture = false) => {
 const depositArgs = ['sessions', 'deposit', '--allow', PROJECT, '--json'];
 const verifyArgs = ['sessions', 'verify'];
 // The three measured runs: a deposit that skips every file (the t784 run: 12 captured, 6,757 unchanged), a deposit that captures every transcript
-// (a CAPTURE_VERSION bump), and verify. The last element is the heap `check` gives each, in MB: the least that passes the new build (400 sessions:
-// 104, 104, and 248) and the least that passes the build before t808 (168, 112, and 336) sit either side of it, 32 to 48 MB away where they differ (verify: the old build's 336 is 48 above the 288 cap).
+// (a CAPTURE_VERSION bump), and verify. The fourth element is the heap `check` gives each, in MB. At 400 sessions the new build's least heap is 104 and
+// 120 MB in two runs for the recapture (the no-op 104, verify 248), and the old build's is 112 MB (one run; the no-op 168, verify 336). So the cap
+// goes red on the old build for the no-op (168 against 136) and verify (336 against 288) only; the recapture passes on both builds, with a margin of 16 MB at the 120 MB figure.
 // The fifth element is how many transcripts the deposit must report as captured: 0 for the no-op, and for a recapture the store's sessions (`check` fills
 // it in), so a recapture that skipped every file fails instead of passing on its exit code. verify has none.
 /** @type {[string, string[], boolean, number, 'none' | 'zero' | 'all'][]} */
@@ -292,6 +293,29 @@ const capturedOf = (stdout) => {
   }
 };
 
+/**
+ * What a run reported: the transcripts it captured against the count its kind of run must capture (`zero` for the no-op, `all` for the recapture, nothing for
+ * verify). Every table and bisect step goes through this, so a run that exits 0 but did the wrong work cannot pass for a measurement.
+ * @param {{ code: number | null, oom: boolean, stdout: string }} ran
+ * @param {'none' | 'zero' | 'all'} captured
+ * @param {number} sessions
+ */
+const judge = (ran, captured, sessions) => {
+  const got = captured === 'none' ? undefined : capturedOf(ran.stdout);
+  const want = captured === 'all' ? sessions : 0;
+  const finished = ran.code === 0 && !ran.oom;
+  return { finished, ok: finished && (captured === 'none' || got === want), got, want };
+};
+
+/**
+ * Throws when a run that exited 0 captured the wrong count: the `v` rewrite no longer forces a recapture, or a no-op recaptured, and the figures would be another run's.
+ * @param {string} name
+ * @param {ReturnType<typeof judge>} verdict
+ */
+const assertWork = (name, verdict) => {
+  if (verdict.finished && !verdict.ok) throw new Error(`${name} exited 0 but captured ${String(verdict.got)} (wanted ${String(verdict.want)}): its figures are not that run's`);
+};
+
 const command = process.argv[2];
 
 if (command === 'check') {
@@ -305,9 +329,7 @@ if (command === 'check') {
     for (const [name, args, recapture, cap, captured] of runs) {
       const heap = Number(arg('heap', String(cap)));
       const ran = runCli(dirs, heap, args, undefined, recapture);
-      const got = captured === 'none' ? undefined : capturedOf(ran.stdout);
-      const want = captured === 'all' ? sessions : 0;
-      const ok = ran.code === 0 && !ran.oom && (captured === 'none' || got === want);
+      const { ok, got, want } = judge(ran, captured, sessions);
       const note = captured === 'none' ? '' : `, captured ${String(got)} of ${String(sessions)} (wanted ${String(want)})`;
       console.log(`${ok ? 'PASS' : 'FAIL'}  ${name} under --max-old-space-size=${String(heap)}: exit ${String(ran.code)}, ${ran.seconds.toFixed(1)} s${note}${ok ? '' : `${NL}${ran.stderr.slice(0, 300)}`}`);
       failed ||= !ok;
@@ -329,8 +351,9 @@ log ${build(dirs, Number(arg('sessions', '5'))).toFixed(1)} MB`);
     const dirs = scratch('table');
     try {
       const log = build(dirs, sessions);
-      const cells = runs.map(([, args, recapture]) => {
+      const cells = runs.map(([name, args, recapture, , captured]) => {
         const ran = runCli(dirs, heap, args, preload, recapture);
+        assertWork(name, judge(ran, captured, sessions));
         return `${String(ran.peakMb)} (exit ${String(ran.code)}, ${ran.seconds.toFixed(0)} s)`;
       });
       console.log(`${String(sessions)} | ${log.toFixed(0)} | ${cells.join(' | ')}`);
@@ -346,21 +369,25 @@ log ${build(dirs, Number(arg('sessions', '5'))).toFixed(1)} MB`);
     try {
       const log = build(dirs, sessions);
       /**
+       * @param {string} name
        * @param {string[]} args
        * @param {boolean} recapture
+       * @param {'none' | 'zero' | 'all'} captured
        */
-      const least = (args, recapture) => {
+      const least = (name, args, recapture, captured) => {
         let low = 24;
         let high = 6144;
         while (high - low > 8) {
           const mid = Math.floor((low + high) / 16) * 8;
           const ran = runCli(dirs, mid, args, undefined, recapture);
-          if (ran.code === 0 && !ran.oom) high = mid;
+          const verdict = judge(ran, captured, sessions);
+          assertWork(name, verdict);
+          if (verdict.ok) high = mid;
           else low = mid;
         }
         return high;
       };
-      console.log(`${String(sessions)} sessions, log ${log.toFixed(0)} MB: ${runs.map(([name, args, recapture]) => `${name} ${String(least(args, recapture))} MB`).join(', ')}`);
+      console.log(`${String(sessions)} sessions, log ${log.toFixed(0)} MB: ${runs.map(([name, args, recapture, , captured]) => `${name} ${String(least(name, args, recapture, captured))} MB`).join(', ')}`);
     } finally {
       rmSync(dirs.root, { recursive: true, force: true });
     }
