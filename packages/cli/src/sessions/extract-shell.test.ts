@@ -187,8 +187,16 @@ describe('pulls: redaction', () => {
     expect(pullsOf(`pip install foo==${token}`)).toEqual(['pypi:foo']);
     expect(JSON.stringify(readShell(`npm install foo@${token}`, redact))).not.toContain(token);
   });
-  it('keeps a mask out of the version of an npm alias, which the redactor reads as an email', () => {
-    expect(pullsOf('npm install alias@npm:foo@1.2.3')).toEqual(['npm:alias']);
+  // Register row A52: the redactor used to read `foo@1.2.3` after `npm:` as an email, so the pick was the alias with no version.
+  it('picks the real package of an npm alias, with its pinned version', () => {
+    expect(pullsOf('npm install alias@npm:foo@1.2.3')).toEqual(['npm:foo@@1.2.3']);
+    expect(pullsOf('npm install @scope/alias@npm:foo@1.2.3')).toEqual(['npm:foo@@1.2.3']);
+    expect(pullsOf('npm install npm:@scope/foo@1.2.3')).toEqual(['npm:@scope/foo@@1.2.3']);
+    expect(pullsOf('npm install alias@npm:foo')).toEqual(['npm:foo']);
+  });
+  it('still keeps a real address on the same line out of the pick', () => {
+    expect(pullsOf('npm install alias@npm:foo@1.2.3 me@acme.io')).toEqual(['npm:foo@@1.2.3']);
+    expect(pullsOf('npm install alias@npm:me@acme.io')).toEqual([]);
   });
   it('drops a name that is all mask, which says nothing', () => {
     expect(pullsOf('npm install ghp_abcdefghijklmnopqrstuvwxyz012345 foo')).toEqual(['npm:foo']);

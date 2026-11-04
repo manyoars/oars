@@ -21,6 +21,10 @@ export const PATTERNS: ReadonlyArray<readonly [RegExp, string]> = [
 ];
 
 const EMAIL = /[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+/g;
+// A pinned alias, `foo@npm:bar@1.0.0` or `jsr:@scope/bar@1.0.0`, ends in `bar@1.0.0`, which EMAIL reads as an address. Digits and dots after
+// the `@` are a version, never a domain, so that one shape right after `npm:` or `jsr:` (and an optional scope) is kept; any other address stays masked.
+const ALIAS_PREFIX = /(?<![A-Za-z0-9])(?:npm|jsr):(?:@[A-Za-z0-9._~-]+\/)?$/;
+const DOTTED_VERSION = /@\d+(?:\.\d+)+$/;
 const TOKEN = /[A-Za-z0-9+_=-]{24,}/g;
 
 const escapeRegExp = (text: string): string => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -48,7 +52,8 @@ export const makeRedactor = (domains: readonly string[] = []): Redactor => {
   return (text) => {
     let out = text;
     for (const [pattern, replacement] of PATTERNS) out = out.replace(pattern, replacement);
-    out = out.replace(EMAIL, '<email>');
+    out = out.replace(EMAIL, (match, offset: number, whole: string) =>
+      DOTTED_VERSION.test(match) && ALIAS_PREFIX.test(whole.slice(0, offset)) ? match : '<email>');
     if (domainRule !== undefined) out = out.replace(domainRule, '<org-domain>');
     return out.replace(TOKEN, (token) => (looksRandom(token) ? '<secret>' : token));
   };
