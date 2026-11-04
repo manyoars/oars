@@ -5,8 +5,10 @@
 import { readdir, readFile, stat } from 'node:fs/promises';
 import { basename, dirname, join } from 'node:path';
 import { CliError, ExitCode } from '../errors.js';
-import { deriveCells, poolOf, serializeCells, UNKNOWN, type Cell, type Pool } from './cells.js';
+import { cellsOf, projectedStore } from './cell-increments.js';
+import { poolOf, serializeCells, UNKNOWN, type Cell, type Pool } from './cells.js';
 import type { Motif } from './motif.js';
+import { shellReader } from './projection.js';
 import { contentHash, FIRST_ORDER_FAMILIES, frozenRead, makeRead, orderResolver, type FirstOrderFamily, type OrderResolver, type Read, type ReadAsOf } from './read.js';
 import { deriveConsequences, recallGraphOf } from './recall-consequence.js';
 import { readRecalls } from './recall-object.js';
@@ -22,6 +24,7 @@ import { deriveRecovery } from './read-recovery.js';
 import { deriveToolDay } from './read-tool-day.js';
 import type { DeriveRelation } from './read-order.js';
 import type { DeriveFamily, ReadBody } from './read-support.js';
+import { vocabulary } from './vocab-load.js';
 import { deriveDayMove } from './read-day-move.js';
 import { deriveInteraction } from './read-interaction.js';
 import { deriveLeadLag } from './read-lead-lag.js';
@@ -107,7 +110,7 @@ const readStored = async (file: string): Promise<Read[] | undefined> => (await s
 /** The current pool's reads: already written when this pool has been read before, else derived and written once. */
 export const refreshPool = async (storeDir: string, store: Store): Promise<{ pool: Pool; reads: Read[] }> => {
   const recalls = deriveConsequences(store, await readRecalls(storeDir));
-  const set = deriveCells(store, recallGraphOf(store, recalls));
+  const set = cellsOf(projectedStore(store, shellReader(vocabulary())), recallGraphOf(store, recalls));
   const pool = poolOf(set, store.errors);
   const files = poolFiles(storeDir);
   await writeAtomic(files.consequences, recalls.flatMap(({ id, n, consequence }) => (consequence === undefined ? [] : [`${JSON.stringify({ id, n, consequence })}\n`])).join(''));

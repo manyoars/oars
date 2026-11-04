@@ -1,5 +1,6 @@
 // A small store for the cell and family tests: only the fields a cell or a read looks at, so a test states the calls and prompts that matter to it.
 import { deriveCells, poolOf, type Pool } from './cells.js';
+import type { ShellReader } from './pool-wire.js';
 import type { ErrorObservation, Frame, PromptObservation, SessionObservation, StepObservation, ToolObservation, Usage } from './schema.js';
 import type { Store } from './store.js';
 
@@ -143,3 +144,7 @@ export const error = (id: string, sig: string, over: Partial<ErrorObservation> =
 
 /** The pool of a fixture store, for a family test to hand its deriver. */
 export const poolFrom = (from: Store): Pool => poolOf(deriveCells(from), from.errors);
+
+/** A reader that sends each shell step's own stored identity, for a fixture whose steps already hold public names; the client's reader is the vocabulary projection (`shellReader`). */
+export const storedNames: ShellReader = (call) =>
+  (call.steps ?? []).map(({ identity }) => (identity !== null && 'program' in identity ? { program: identity.program, subcommand: identity.sub, flags: identity.flags } : { program: 'private', subcommand: null, flags: [] }));

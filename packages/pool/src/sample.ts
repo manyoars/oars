@@ -1,5 +1,5 @@
 // An invented session for the pool's tests: no real session reaches this package, not even as a fixture.
-import { frame, prompt, session, step, store, tool } from '../../cli/src/sessions/pool-fixture.js';
+import { frame, prompt, session, step, storedNames, store, tool } from '../../cli/src/sessions/pool-fixture.js';
 import { sessionsOf, skeletonOf, type SessionSkeleton } from '../../cli/src/sessions/pool-wire.js';
 import type { RepoSize } from '../../cli/src/sessions/public-vocabulary.js';
 import type { Harness } from '../../cli/src/sessions/schema.js';
@@ -15,7 +15,7 @@ export const sampleSkeleton = (id: string, stack: { languages: string[]; framewo
       tools: [tool('s1', 0, 'Bash', { steps: [shell(0)] }), tool('s1', 1, 'Bash', { steps: [shell(1)] })],
     }),
   );
-  const built = only === undefined ? null : skeletonOf(only, id);
+  const built = only === undefined ? null : skeletonOf(only, id, storedNames);
   if (built === null) throw new Error('no skeleton');
   return built;
 };
