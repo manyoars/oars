@@ -111,7 +111,7 @@ oars sessions read --family lead-lag         # order 3: a labeled experiment beh
 oars sessions read --family fit --slice model=claude-opus-5-5 --json
 oars sessions books --by class --since 30   # tokens, wall time, turns, errors, verify-after-edit rate, and the outcome signals
 oars sessions books --by pull               # the same per package, MCP server, plugin, or skill a prompt pulled
-oars sessions books --by harness            # the same, grouped by Claude Code, Cursor, Codex, and Copilot (deposit the others with --allow cursor, --allow codex, or --allow copilot)
+oars sessions books --by harness            # the same, grouped by Claude Code, Cursor, Codex, Copilot, and Grok Build (deposit the others with --allow cursor, --allow codex, --allow copilot, or --allow grok)
 oars sessions measure --last 50             # recurring errors per 100 sessions, cache-write per session, recall calls per session
 oars sessions measure --last 50 --repo <root>  # the same, for one repository's sessions
 oars sessions verify                        # consistency invariants on the stored skeletons and capture records

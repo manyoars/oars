@@ -91,7 +91,7 @@ export interface Usage {
   thinking: number;
 }
 
-export type Harness = 'claude-code' | 'cursor' | 'codex' | 'copilot';
+export type Harness = 'claude-code' | 'cursor' | 'codex' | 'copilot' | 'grok';
 
 /** The harness a session record came from; a record that does not name one is Claude Code's. */
 export const harnessOf = (session: { harness?: Harness }): Harness => session.harness ?? 'claude-code';
