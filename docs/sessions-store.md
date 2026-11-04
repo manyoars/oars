@@ -288,7 +288,7 @@ A read above order 1 takes its inputs from the orders below and its interval fro
 |--------|-------|-------|-------|-------------|
 | `version-boundary` | 2 | motif, harness, two neighboring version buckets, metric | before, after, and the move in share or failure rate | date, effort, rule commits, class drift |
 | `substitution` | 2 | rising tool, falling tool, the boundary | each share move, and the falling tool's move among the steps that are not the rising tool's | date, class drift, rule commits |
-| `interaction` | 2 | motif, frame, two tiers | each tier's failure rate, and the gap beyond how those tiers differ on every other tool | task assignment by tier, prompt class |
+| `interaction` | 2 | motif, frame, two tiers | each tier's failure rate, and the gap beyond how those tiers differ on every other tool, kept only when that beyond points the same way as the gap (a tool that resists a tier's main effect is not one that fails more on it) | task assignment by tier, prompt class |
 | `day-move` | 2 | motif, metric, two adjacent days | before, after, and the move; a share move exists for a tool on either day, a failure move only for one with 30 calls on both | not screened, so a row is an input and not a finding |
 | `lead-lag` | 3 | lead, lag, level | slope, its check, and the score | see below |
 

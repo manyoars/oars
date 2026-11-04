@@ -23,7 +23,7 @@ export const notReadable = (reads: readonly Read[]): NotReadable[] => {
   if (substitutionWhy !== undefined) rows.push({ family: 'substitution', what: 'one tool replacing another at a boundary', why: substitutionWhy });
   if (interactionCandidates(reads).length === 0) rows.push({ family: 'interaction', what: 'a tool across the tiers assigned', why: 'no tool clears the floor on two tiers in one frame' });
   if (!reads.some((read) => read.family === 'lead-lag')) {
-    rows.push({ family: 'lead-lag', what: 'a failure move leading a share move', why: `${String(leadLagPairs(reads).length)} pairs, and it needs ${String(PAIRS_FLOOR)} on each side of the cut` });
+    rows.push({ family: 'lead-lag', what: 'a failure move leading a share move (experimental)', why: `${String(leadLagPairs(reads).length)} pairs, and it needs ${String(PAIRS_FLOOR)} on each side of the cut` });
   }
   return rows;
 };

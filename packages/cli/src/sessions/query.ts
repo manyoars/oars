@@ -225,7 +225,7 @@ export const books = (store: Store, by: BooksBy, now: number, sinceDays?: number
     .sort((a, b) => b.prompts - a.prompts || a.key.localeCompare(b.key));
 };
 
-/** The closing line of `books` text: what the columns can and cannot be read as (V7). */
+/** The closing line of `books` text: what the columns can and cannot be read as. */
 export const BOOKS_CAVEAT = "These are associations in one operator's logs, not measured lift.";
 
 const shareCell = (cell: BooksShare): string => (cell.share === null ? 'too few' : `${String(Math.round(cell.share * 100))}%`);
