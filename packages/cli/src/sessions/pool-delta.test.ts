@@ -207,7 +207,10 @@ describe('what an entry holds', () => {
     const leaves: unknown[] = [];
     const walk = (value: unknown): void => {
       if (Array.isArray(value)) value.forEach(walk);
-      else if (typeof value === 'object' && value !== null) for (const [key, held] of Object.entries(value)) (leaves.push(key), walk(held));
+      else if (typeof value === 'object' && value !== null) for (const [key, held] of Object.entries(value)) {
+        leaves.push(key);
+        walk(held);
+      }
       else leaves.push(value);
     };
     walk(entries);
@@ -299,7 +302,9 @@ describe('the deltas a deposit carries', () => {
     const carried = carriedDeltas('acct', [...before(), ...after(5)], new Set());
     expect([...carried.keys()]).toEqual(['a4']);
     expect(carried.get('a4')?.entries).toEqual([{ deltaKind: 'changed', field: 'permissionMode', name: null, registry: null, metric: 'callsPerSession', change: 0 }]);
-    expect(carried.get('a4')?.marks).toEqual([deltaMark('acct', carried.get('a4')?.entries[0] as DeltaEntry, 'a4')]);
+    const [entry] = carried.get('a4')?.entries ?? [];
+    if (entry === undefined) throw new Error('no entry');
+    expect(carried.get('a4')?.marks).toEqual([deltaMark('acct', entry, 'a4')]);
   });
 
   it('builds nothing while the before window holds 4 sessions', () => {
