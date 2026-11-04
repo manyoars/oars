@@ -195,8 +195,8 @@ const appendText = async (file: string, body: string): Promise<void> => {
   await appendFile(file, body, { mode: 0o600 });
 };
 
-/** A row for a note that never reached the agent: no exposure, no arm. Used when a deny prints instead, and when the deadline ends the process before anything is printed. */
-export const withoutExposure = (row: CrossingRecord): CrossingRecord =>
+/** A row for a note that never reached the agent: no exposure, no arm. Used when a deny prints instead of the note. */
+const withoutExposure = (row: CrossingRecord): CrossingRecord =>
   row.arm === 'none' ? row : { ...row, arm: 'none', lineShown: 'none', lineHeld: 'none' };
 
 /** A block is a deny whose reason is the label; else the notes are context for the agent. Never an allow, an ask, or a changed input: with neither, nothing is printed. */

@@ -53,6 +53,17 @@ describe('the hook process: the deadline', () => {
     expect(JSON.parse(lines[0] ?? '')).toMatchObject({ name: 'left-pad', arm: 'none', lineShown: 'none', lineHeld: 'none' });
   });
 
+  it('writes a staged block row as no exposure at the deadline, since the deny never printed', async () => {
+    const store = folder();
+    writeFileSync(join(store, 'gate-policy.json'), '{"classes":{"not-found":"block"}}');
+    const exit = vi.fn();
+    const missing = (): Promise<RegistryAnswer> => Promise.resolve({ state: 'not-found', latest: null, created: null });
+    void runHookProcess({ stdin: () => Promise.resolve(PAYLOAD), deps: depsFor(store, { append: () => new Promise<void>(() => undefined), registry: missing }), exit, deadlineMs: 300 });
+    await vi.waitFor(() => { expect(exit).toHaveBeenCalledWith(0); }, { timeout: 2_000 });
+    const lines = readFileSync(crossingsPath(store), 'utf8').trim().split('\n');
+    expect(JSON.parse(lines[0] ?? '')).toMatchObject({ name: 'left-pad', arm: 'none', lineShown: 'none', lineHeld: 'none' });
+  });
+
   it.skipIf(process.platform === 'win32')('creates the staged file private to the user', async () => {
     const store = folder();
     const exit = vi.fn();
