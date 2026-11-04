@@ -21,6 +21,6 @@ describe('wrangler.jsonc', () => {
   });
 
   it('names no secret: the signing key, OAuth values, and covenant version are bindings the deploy sets', () => {
-    for (const binding of ['SLICE_SIGNING_KEY', 'PSEUDONYM_KEY', 'GITHUB_CLIENT_ID', 'GOOGLE_CLIENT_ID', 'GOOGLE_CLIENT_SECRET', 'COVENANT_VERSION']) expect(text).not.toContain(binding);
+    for (const binding of ['BUNDLE_SIGNING_KEY', 'PSEUDONYM_KEY', 'GITHUB_CLIENT_ID', 'GOOGLE_CLIENT_ID', 'GOOGLE_CLIENT_SECRET', 'COVENANT_VERSION']) expect(text).not.toContain(binding);
   });
 });

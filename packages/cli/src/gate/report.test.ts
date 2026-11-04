@@ -59,7 +59,7 @@ describe('the counts', () => {
     expect(count(report.origin, 'prompt')).toBe(3);
     expect(count(report.origin, 'none-seen')).toBe(1);
     expect(count(report.origin, 'web')).toBe(0);
-    expect(report.novelty.map((one) => one.value)).toEqual(['fleet', 'repository', 'session', 'none']);
+    expect(report.novelty.map((one) => one.value)).toEqual(['fleet', 'repository', 'session', 'none', 'not-read']);
     expect(count(report.decidedBy, 'agent')).toBe(1);
     expect(count(report.next, 'routed-around')).toBe(1);
     expect(count(report.status, 'error')).toBe(1);
@@ -97,7 +97,7 @@ describe('the counts', () => {
   });
 
   it('shows the registry counts only when the registry was read', () => {
-    const read = reportOf([run({ registryRead: true }), crossing({ againstLatest: 'latest', registryState: 'found', registryAge: 'older' }), crossing({ againstLatest: 'not-latest', registryState: 'not-found', registryAge: 'under-7-days' })]);
+    const read = reportOf([run({ registryRead: true }), crossing({ againstLatest: 'latest', registryState: 'found', registryAge: 'older' }), crossing({ toolUseId: 't2', againstLatest: 'not-latest', registryState: 'not-found', registryAge: 'under-7-days' })]);
     const text = formatReport(read);
     expect(text).not.toContain('registry state not read');
     expect(text).toContain('Against latest: ');
