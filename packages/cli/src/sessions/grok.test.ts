@@ -18,8 +18,8 @@ afterEach(cleanup);
 //   `title` is the tool's name                                                                              xai-grok-shell tool_calls.rs:1487
 //   rawOutput of a shell call: `{type:"Bash", exit_code, output: bytes, output_for_prompt, signal, timed_out, current_dir}`   xai-grok-tools types/output.rs:384-405
 //   a call is `failed` only on a timeout or a signal, so exit 2 arrives `completed`                         acp_conversion.rs:241-250
-//   edit keys: `file_path` (search_replace, edit, write, hashline_edit), `patch` (apply_patch)              xai-grok-tools implementations/{grok_build/search_replace/mod.rs:74,
-//     opencode/edit/mod.rs:68, opencode/write/mod.rs:31, grok_build_hashline/edit/types.rs:12, codex/apply_patch/tool.rs:104}; the patch format's
+//   edit keys: `file_path` (search_replace, write, hashline_edit), `filePath` (edit, camelCase), `patch` (apply_patch)   xai-grok-tools implementations/{grok_build/search_replace/mod.rs:74,
+//     opencode/edit/mod.rs:64,:138,:579, opencode/write/mod.rs:31, grok_build_hashline/edit/types.rs:12, codex/apply_patch/tool.rs:104}; the patch format's
 //     `*** Update File: <path>` headers are codex/apply_patch/parser.rs:40-42
 //   usage.json `{turns: [{endedAt, inputTokens, outputTokens, cachedReadTokens, cacheCreationTokens, reasoningTokens, primaryModelId}]}`   usage_file.rs:10-80
 // `inputTokens` includes cache reads and writes (xai-grok-sampling-types conversation.rs:771-773). No live store was read.
@@ -235,11 +235,14 @@ describe('the Grok Build reader', () => {
       prompt(1, 'edit'),
       call(2, 'c1', 'write', { file_path: 'src/new.ts', content: 'x' }, 'edit'),
       finish(3, 'c1', 'failed', { content: [{ type: 'content', content: { type: 'text', text: 'denied' } }] }),
-      call(4, 'c2', 'edit', {}, 'edit'),
+      call(4, 'c2', 'edit', {}, 'other'),
       finish(5, 'c2', 'completed'),
+      call(6, 'c3', 'edit', { filePath: 'src/a.ts', oldString: 'a', newString: 'b' }, 'other'),
+      finish(7, 'c3', 'failed', { content: [{ type: 'content', content: { type: 'text', text: 'oldString not found' } }] }),
     ]);
-    expect(out.tools.map((tool) => [tool.tool, tool.status])).toEqual([['Edit', 'error'], ['Edit', 'ok']]);
-    expect(out.session.files).toContain('src/new.ts');
+    expect(out.tools.map((tool) => [tool.tool, tool.status])).toEqual([['Edit', 'error'], ['Edit', 'ok'], ['Edit', 'error']]);
+    // The opencode `edit` tool's wire key is camelCase (`filePath`: opencode/edit/mod.rs:64, :138, :579), so a failed edit, which has no diff part, still names its file.
+    expect(out.session.files).toEqual(expect.arrayContaining(['src/new.ts', 'src/a.ts']));
   });
 });
 
