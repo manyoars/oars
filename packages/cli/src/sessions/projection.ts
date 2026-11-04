@@ -20,6 +20,7 @@ import {
   PUBLIC_SUBCOMMANDS,
   TOOL_INPUT_KEYS,
 } from './public-vocabulary.js';
+import type { ShellReader } from './pool-wire.js';
 import type { Redactor } from './redact.js';
 import type { ShellIdentity, ShellSegment, StepIdentity, ToolObservation } from './schema.js';
 import type { Vocabulary } from './vocab-load.js';
@@ -143,6 +144,9 @@ export const projectStoredShell = (vocab: Vocabulary, tool: Pick<ToolObservation
   if (steps.length === 0) return projectedShell([projectTarget(vocab, tool.target)]);
   return projectedShell(steps.map((identity, at) => (!isShellStep(identity) ? PRIVATE_PROGRAM : identity.program === LITERAL ? projectLiteralStep(vocab, tool.segments, steps.length, at) : projectStep(vocab, identity))));
 };
+
+/** The reader a deposit and a local read share: a stored shell call's commands under the pinned vocabulary, one per step, in order. */
+export const shellReader = (vocab: Vocabulary): ShellReader => (tool) => projectStoredShell(vocab, tool).commands;
 
 const MCP_TOOL = /^mcp__(.+?)__(.+)$/;
 

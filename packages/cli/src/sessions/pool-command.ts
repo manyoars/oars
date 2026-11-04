@@ -7,9 +7,11 @@ import type { Outcome, RunDeps } from '../cli.js';
 import { CliError, exitCodeForProblem, ExitCode, unreachableError } from '../errors.js';
 import { checkSession, exclusionPaths, type Reason } from './exclusion.js';
 import { isBundleVersion, parseSkeleton, sessionsOf, skeletonOf, VOCAB_VERSION, verifyBundle, type PinnedKey } from './pool-wire.js';
+import { shellReader } from './projection.js';
 import { isVocabularyExpired, REGISTRY_MAX_AGE_DAYS, VOCAB_SNAPSHOT_DATE } from './public-vocabulary.js';
 import { contentHash } from './read.js';
 import { loadStore, type SessionsRuntime } from './store.js';
+import { vocabulary } from './vocab-load.js';
 
 const LOGIN = 'pool-login';
 const DEPOSIT = 'pool-deposit';
@@ -259,7 +261,7 @@ export const poolDeposit = async (deps: RunDeps, options: { server?: string | un
       continue;
     }
     // Hashed with the account, so a redeposit replaces its own row and two accounts' copies of one session cannot be joined.
-    const skeleton = skeletonOf(records, contentHash([account, records.main.session]));
+    const skeleton = skeletonOf(records, contentHash([account, records.main.session]), shellReader(vocabulary()));
     if (skeleton === null) {
       counts.uncaptured += 1;
       continue;

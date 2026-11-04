@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { frame, prompt, session, step, store, tool } from './pool-fixture.js';
+import { frame, prompt, session, step, storedNames, store, tool } from './pool-fixture.js';
 import { parseSkeleton, sessionsOf, skeletonOf, type SessionSkeleton } from './pool-wire.js';
 import type { Harness } from './schema.js';
 import { LITERAL } from './public-vocabulary.js';
@@ -13,7 +13,7 @@ const shell = step(0, 0, 'shell.exec', { native: 'Bash', identity: { program: 'g
 const skeletonFrom = (from: ReturnType<typeof store>): SessionSkeleton | null => {
   const [only] = sessionsOf(from);
   if (only === undefined) throw new Error('the store has no session');
-  return skeletonOf(only, '0123456789abcdef');
+  return skeletonOf(only, '0123456789abcdef', storedNames);
 };
 
 const sample = (): SessionSkeleton => {

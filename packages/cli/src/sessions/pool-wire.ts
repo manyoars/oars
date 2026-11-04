@@ -3,35 +3,65 @@
 // sending, and the server parses it again, field by field, because a live URL takes anything from anyone. This file imports nothing from the file system: the Worker bundles it.
 
 import { ACTION_TABLES, CANONICAL_ACTIONS, mcpOf, type CanonicalAction } from './actions.js';
-import { FRAMEWORKS, isPublicMcpTool, isRegistryVersion, LANGUAGES, LITERAL, publicEffort, publicModel, publicVersion, PUBLIC_FLAGS, PUBLIC_HOSTS, PUBLIC_MCP_SERVERS, PUBLIC_PACKAGES, PUBLIC_PROGRAMS, PUBLIC_SKILLS, PUBLIC_SUBCOMMANDS, REPO_SIZES, VOCAB_VERSION } from './public-vocabulary.js';
+import { FRAMEWORKS, isPublicMcpTool, isRegistryVersion, LANGUAGES, LITERAL, PRIVATE, publicEffort, publicModel, publicVersion, PUBLIC_FLAGS, PUBLIC_HOSTS, PUBLIC_MCP_SERVERS, PUBLIC_PACKAGES, PUBLIC_PROGRAMS, PUBLIC_SKILLS, PUBLIC_SUBCOMMANDS, REPO_SIZES, VOCAB_VERSION } from './public-vocabulary.js';
 import type { Cell } from './cells.js';
 import type { Motif } from './motif.js';
 import type { Read, ReadAsOf } from './read.js';
-import type { Frame, Harness, PromptClass, PromptObservation, PullIdentity, SessionObservation, StepEdge, StepIdentity, StepObservation, ToolObservation, ToolStatus, Usage } from './schema.js';
+import type { Frame, Harness, PromptClass, PromptObservation, PullIdentity, SessionObservation, ShellIdentity, StepEdge, StepIdentity, StepObservation, ToolObservation, ToolStatus, Usage } from './schema.js';
 
-export const SKELETON_FORMAT = 1;
+export const SKELETON_FORMAT = 2;
 export const BUNDLE_FORMAT = 1;
 /** One constant: the pool serves only the vocabulary version the client holds. */
 export { VOCAB_VERSION };
 
-/** A step without what a server can compute: `n` is its call's, and `frameId` hashes a frame the skeleton holds. */
-export type SkeletonStep = Omit<StepObservation, 'n' | 'frameId'>;
+/**
+ * Section 7's edges. A bucket is the count of edges a value reaches, so bucket 0 is under the first edge and the last is the first edge's doubling past the cap. `tokens`: under 1k, then
+ * doubling to 1.024M and over. `ms`: under 100 ms, then doubling to 6,553.6 s and over. `seconds`: under 1 s, then doubling to 65,536 s and over. `count`: 0, 1, 2, 3-4, 5-8, 9-16, 17-32, over 32.
+ */
+const EDGES = {
+  tokens: Array.from({ length: 11 }, (_, power) => 1000 * 2 ** power),
+  ms: Array.from({ length: 17 }, (_, power) => 100 * 2 ** power),
+  seconds: Array.from({ length: 17 }, (_, power) => 2 ** power),
+  count: [1, 2, 3, 5, 9, 17, 33],
+} as const satisfies { [kind: string]: readonly number[] };
+
+export type BucketKind = keyof typeof EDGES;
+
+/** The bucket a value falls in. */
+export const bucketOf = (kind: BucketKind, value: number): number => EDGES[kind].filter((edge) => value >= edge).length;
+
+/** The lowest value of a bucket, which is what a derivation counts a bucketed value as: it never reads above what the sender held. */
+export const floorOf = (kind: BucketKind, bucket: number): number => EDGES[kind][bucket - 1] ?? 0;
+
+/** A step without what a server can compute: `n` is its call's, and `frameId` hashes a frame the skeleton holds. Its cost is two buckets, never the exact counts (Section 1.2). */
+export type SkeletonStep = Omit<StepObservation, 'n' | 'frameId' | 'cost'> & {
+  /** A `tokens` bucket of the step's tokens. */
+  tokens: number | null;
+  /** An `ms` bucket of the step's time. */
+  ms: number | null;
+};
 
 export interface SkeletonTool {
   n: number;
   side: boolean;
   prompt: number | null;
   status: ToolStatus;
+  /** Exact, per tool: the one exact time on the wire, which W reads on `ledger` (Section 1.2, `durationMs`). A cell never reads it. */
   durationMs: number | null;
   steps: SkeletonStep[];
 }
 
+/** A prompt's usage as `tokens` buckets, and its `thinking` as a `count` bucket. */
+export type SkeletonUsage = { [field in keyof Usage]: number };
+
 export interface SkeletonPrompt {
   index: number;
   cls: PromptClass;
+  /** A `count` bucket. */
   errors: number;
+  /** A `seconds` bucket. */
   wallSec: number | null;
-  usage: Usage;
+  usage: SkeletonUsage;
   frame: Frame;
 }
 
@@ -50,6 +80,8 @@ export interface SessionSkeleton {
   id: string;
   /** The main transcript first, then each subagent's. */
   transcripts: SkeletonTranscript[];
+  /** The batch's client-built delta entries (Section 2, "Deltas"). Empty until the client builds them; a non-empty list is refused. */
+  deltas: never[];
 }
 
 /** One main session and the subagents it spawned, as the local store holds them. */
@@ -79,31 +111,88 @@ export const sessionsOf = (store: { sessions: readonly SessionObservation[]; sub
   return store.sessions.map((main) => ({ main, transcripts: [main, ...(subagents.get(main.session) ?? [])].map(recordsOf) }));
 };
 
-const transcriptOf = ({ session, prompts, tools }: SessionRecords['transcripts'][number], spawnedIn: number | null): SkeletonTranscript | null => {
+/** One command of a shell call as the projection reads it (`projectStoredShell`): a program, its subcommand, and its flags, each a list member or `private`. */
+export interface ShellCommand {
+  program: string;
+  subcommand: string | null;
+  flags: readonly string[];
+}
+
+/** Reads a stored shell call's commands in order. The client passes the projection; this file holds no vocabulary snapshot, so the Worker can bundle it. */
+export type ShellReader = (tool: ToolObservation) => readonly ShellCommand[];
+
+
+const SHORT_FLAG = /^-[A-Za-z]$/;
+
+/** The flags the wire has a row for: the curated list and a single letter. */
+const isWireFlag = (flag: string): boolean => PUBLIC_FLAGS.has(flag) || SHORT_FLAG.test(flag);
+
+const PRIVATE_COMMAND = { program: PRIVATE, sub: null, flags: [] } satisfies ShellIdentity;
+
+/**
+ * A projected command as the server's parser reads it. The client's snapshot lists more programs than the curated list the server holds, and a name the server has no row for
+ * does not go on the wire (Section 1.2): such a program is `private`, and a subcommand or flag outside the curated lists is dropped, as the projection drops an unlisted one.
+ */
+const wireCommand = ({ program, subcommand, flags }: ShellCommand): ShellIdentity => {
+  if (!PUBLIC_PROGRAMS.has(program)) return PRIVATE_COMMAND;
+  return { program, sub: subcommand !== null && PUBLIC_SUBCOMMANDS.get(program)?.has(subcommand) === true ? subcommand : null, flags: flags.filter(isWireFlag) };
+};
+
+/** A stored tool's steps with each shell step's identity replaced by the projected, wire-held command; the other steps keep theirs. The one place a deposit and a local read take it from. */
+export const projectedSteps = (tool: ToolObservation, read: ShellReader): StepObservation[] => {
+  const commands = read(tool);
+  return (tool.steps ?? []).map((step, at) => {
+    if (step.action !== 'shell.exec') return step;
+    const command = wireCommand(commands[at] ?? { program: PRIVATE, subcommand: null, flags: [] });
+    const pulls = step.identity !== null && 'program' in step.identity ? step.identity.pulls : undefined;
+    return { ...step, identity: pulls === undefined ? command : { ...command, pulls } };
+  });
+};
+
+const transcriptOf = ({ session, prompts, tools }: SessionRecords['transcripts'][number], spawnedIn: number | null, read: ShellReader): SkeletonTranscript | null => {
   if (session.frame === undefined) return null;
   const framedPrompts: SkeletonPrompt[] = [];
   for (const { index, cls, errors, wallSec, usage, frame } of prompts) {
     if (frame === undefined) return null;
-    framedPrompts.push({ index, cls, errors, wallSec, usage, frame });
+    framedPrompts.push({
+      index,
+      cls,
+      errors: bucketOf('count', errors),
+      wallSec: wallSec === null ? null : bucketOf('seconds', wallSec),
+      usage: { input: bucketOf('tokens', usage.input), cacheWrite: bucketOf('tokens', usage.cacheWrite), cacheRead: bucketOf('tokens', usage.cacheRead), output: bucketOf('tokens', usage.output), thinking: bucketOf('count', usage.thinking) },
+      frame,
+    });
   }
   const steppedTools: SkeletonTool[] = [];
-  for (const { n, side, prompt, status, durationMs, steps } of tools) {
-    if (steps === undefined) return null;
-    steppedTools.push({ n, side, prompt, status, durationMs, steps: steps.map(({ seg, action, native, identity, status: reported, cost, parent, edges }) => ({ seg, action, native, identity, status: reported, cost, parent, edges })) });
+  for (const tool of tools) {
+    if (tool.steps === undefined) return null;
+    const { n, side, prompt, status, durationMs } = tool;
+    const steps = projectedSteps(tool, read).map(({ seg, action, native, identity, status: reported, cost, parent, edges }): SkeletonStep => ({
+      seg,
+      action,
+      native,
+      identity,
+      status: reported,
+      tokens: cost.tokens === null ? null : bucketOf('tokens', cost.tokens),
+      ms: cost.durationMs === null ? null : bucketOf('ms', cost.durationMs),
+      parent,
+      edges,
+    }));
+    steppedTools.push({ n, side, prompt, status, durationMs, steps });
   }
   return { spawnedIn, harness: session.harness ?? 'claude-code', frame: session.frame, prompts: framedPrompts, tools: steppedTools };
 };
 
 /** The skeleton of a session; null when any record of it was captured before steps and frames, which holds no closed reading to send. */
-export const skeletonOf = (records: SessionRecords, id: string): SessionSkeleton | null => {
+export const skeletonOf = (records: SessionRecords, id: string, read: ShellReader): SessionSkeleton | null => {
   const positions = new Map<string | null, number>(records.transcripts.map(({ session }, index) => [session.session, index]));
   const transcripts: SkeletonTranscript[] = [];
   for (const entry of records.transcripts) {
-    const transcript = transcriptOf(entry, positions.get(entry.session.spawnedIn) ?? null);
+    const transcript = transcriptOf(entry, positions.get(entry.session.spawnedIn) ?? null, read);
     if (transcript === null) return null;
     transcripts.push(transcript);
   }
-  return { format: SKELETON_FORMAT, id, transcripts };
+  return { format: SKELETON_FORMAT, id, transcripts, deltas: [] };
 };
 
 /** A harness version a bundle can be asked for: public, so the request carries nothing private. The admitted list replaces this shape rule when it ships. */
@@ -157,14 +246,6 @@ const countOf = (value: unknown, at: string): number => {
   return value;
 };
 
-/** Ten years. Wall time is the one measure that is not whole: it is a difference of timestamps in seconds. */
-const WALL_SEC_MAX = 315_360_000;
-
-const wallSecOf = (value: unknown, at: string): number => {
-  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0 || value > WALL_SEC_MAX) throw new Refused(at, 'not a wall time');
-  return value;
-};
-
 const orNull = <T>(value: unknown, at: string, item: (entry: unknown, entryAt: string) => T): T | null => (value === null ? null : item(value, at));
 
 const booleanOf = (value: unknown, at: string): boolean => {
@@ -209,8 +290,6 @@ const SHELLS: ReadonlySet<string> = new Set(Object.values(ACTION_TABLES).flatMap
 const REGISTRIES = ['npm', 'pypi', 'crates', 'go', 'rubygems', 'homebrew', 'skill', 'plugin', 'mcp'] as const;
 const DAY = /^\d{4}-\d{2}-\d{2}$/;
 const ID = /^[0-9a-f]{16}$/;
-const SHORT_FLAG = /^-[A-Za-z]$/;
-
 /** A real date, not just its shape. `Date.parse` rolls 2026-02-31 over to March instead of failing, so the day must also survive the trip back to text. */
 const isCalendarDay = (text: string): boolean => {
   if (!DAY.test(text)) return false;
@@ -243,14 +322,19 @@ const parseFrame = (value: unknown, at: string): Frame => {
   };
 };
 
-const parseUsage = (value: unknown, at: string): Usage => {
+const bucketIn = (kind: BucketKind, value: unknown, at: string): number => {
+  if (typeof value !== 'number' || !Number.isInteger(value) || value < 0 || value > EDGES[kind].length) throw new Refused(at, 'not a bucket');
+  return value;
+};
+
+const parseUsage = (value: unknown, at: string): SkeletonUsage => {
   const raw = fieldsOf(value, at, ['input', 'cacheWrite', 'cacheRead', 'output', 'thinking']);
   return {
-    input: countOf(raw.input, under(at, 'input')),
-    cacheWrite: countOf(raw.cacheWrite, under(at, 'cacheWrite')),
-    cacheRead: countOf(raw.cacheRead, under(at, 'cacheRead')),
-    output: countOf(raw.output, under(at, 'output')),
-    thinking: countOf(raw.thinking, under(at, 'thinking')),
+    input: bucketIn('tokens', raw.input, under(at, 'input')),
+    cacheWrite: bucketIn('tokens', raw.cacheWrite, under(at, 'cacheWrite')),
+    cacheRead: bucketIn('tokens', raw.cacheRead, under(at, 'cacheRead')),
+    output: bucketIn('tokens', raw.output, under(at, 'output')),
+    thinking: bucketIn('count', raw.thinking, under(at, 'thinking')),
   };
 };
 
@@ -266,7 +350,7 @@ const parsePull = (value: unknown, at: string): PullIdentity => {
 
 const parseFlag = (value: unknown, at: string): string => {
   const flag = textOf(value, at);
-  if (flag !== LITERAL && !PUBLIC_FLAGS.has(flag) && !SHORT_FLAG.test(flag)) throw new Refused(at, 'outside the vocabulary');
+  if (!isWireFlag(flag)) throw new Refused(at, 'outside the vocabulary');
   return flag;
 };
 
@@ -274,9 +358,11 @@ const parseIdentity = (harness: Harness, action: CanonicalAction, value: unknown
   if (value === null) return null;
   if (action === 'shell.exec') {
     const raw = fieldsOf(value, at, ['program', 'sub', 'flags'], ['pulls']);
-    const program = inSet(PUBLIC_PROGRAMS, raw.program, under(at, 'program'));
+    // A program is a list member or `private`, and a `private` program holds no subcommand: the projection writes nothing else.
+    const program = textOf(raw.program, under(at, 'program'));
+    if (program !== PRIVATE && !PUBLIC_PROGRAMS.has(program)) throw new Refused(under(at, 'program'), 'outside the vocabulary');
     const subs = PUBLIC_SUBCOMMANDS.get(program) ?? new Set<string>();
-    const sub = orNull(raw.sub, under(at, 'sub'), (entry, entryAt) => inSet(subs, entry, entryAt));
+    const sub = orNull(raw.sub, under(at, 'sub'), exactlyIn(subs));
     const flags = listOf(raw.flags, under(at, 'flags'), parseFlag);
     return raw.pulls === undefined ? { program, sub, flags } : { program, sub, flags, pulls: listOf(raw.pulls, under(at, 'pulls'), parsePull) };
   }
@@ -312,9 +398,7 @@ const parseEdge = (value: unknown, at: string): StepEdge => {
 };
 
 const parseStep = (harness: Harness, value: unknown, at: string): SkeletonStep => {
-  const raw = fieldsOf(value, at, ['seg', 'action', 'native', 'identity', 'status', 'cost', 'parent', 'edges']);
-  const costAt = under(at, 'cost');
-  const cost = fieldsOf(raw.cost, costAt, ['tokens', 'durationMs']);
+  const raw = fieldsOf(value, at, ['seg', 'action', 'native', 'identity', 'status', 'tokens', 'ms', 'parent', 'edges']);
   const action = oneOf(CANONICAL_ACTIONS, raw.action, under(at, 'action'));
   return {
     seg: countOf(raw.seg, under(at, 'seg')),
@@ -322,7 +406,8 @@ const parseStep = (harness: Harness, value: unknown, at: string): SkeletonStep =
     native: parseNative(harness, raw.native, under(at, 'native')),
     identity: parseIdentity(harness, action, raw.identity, under(at, 'identity')),
     status: oneOf(STATUSES, raw.status, under(at, 'status')),
-    cost: { tokens: orNull(cost.tokens, under(costAt, 'tokens'), countOf), durationMs: orNull(cost.durationMs, under(costAt, 'durationMs'), countOf) },
+    tokens: orNull(raw.tokens, under(at, 'tokens'), (entry, entryAt) => bucketIn('tokens', entry, entryAt)),
+    ms: orNull(raw.ms, under(at, 'ms'), (entry, entryAt) => bucketIn('ms', entry, entryAt)),
     parent: orNull(raw.parent, under(at, 'parent'), countOf),
     edges: listOf(raw.edges, under(at, 'edges'), parseEdge),
   };
@@ -345,8 +430,8 @@ const parsePrompt = (value: unknown, at: string): SkeletonPrompt => {
   return {
     index: countOf(raw.index, under(at, 'index')),
     cls: oneOf(PROMPT_CLASSES, raw.cls, under(at, 'cls')),
-    errors: countOf(raw.errors, under(at, 'errors')),
-    wallSec: orNull(raw.wallSec, under(at, 'wallSec'), wallSecOf),
+    errors: bucketIn('count', raw.errors, under(at, 'errors')),
+    wallSec: orNull(raw.wallSec, under(at, 'wallSec'), (entry, entryAt) => bucketIn('seconds', entry, entryAt)),
     usage: parseUsage(raw.usage, under(at, 'usage')),
     frame: parseFrame(raw.frame, under(at, 'frame')),
   };
@@ -367,10 +452,13 @@ const parseTranscript = (value: unknown, at: string): SkeletonTranscript => {
 /** The skeleton in `value`, rebuilt from the fields read; else the first field that is not closed vocabulary, and why. */
 export const parseSkeleton = (value: unknown): { ok: true; skeleton: SessionSkeleton } | Refusal => {
   try {
-    const raw = fieldsOf(value, '', ['format', 'id', 'transcripts']);
+    // The first form sent a frame beside exact usage; it is named here, since its fields would otherwise read as a list of strangers.
+    if (isFields(value) && value.format === 1) throw new Refused('format', 'the frame form (format 1) is no longer read; send format 2');
+    const raw = fieldsOf(value, '', ['format', 'id', 'transcripts', 'deltas']);
     if (raw.format !== SKELETON_FORMAT) throw new Refused('format', 'not a format this version reads');
     const id = textOf(raw.id, 'id');
     if (!ID.test(id)) throw new Refused('id', 'not a hash');
+    if (!Array.isArray(raw.deltas) || raw.deltas.length > 0) throw new Refused('deltas', 'not empty: a delta entry is not read yet');
     const transcripts = listOf(raw.transcripts, 'transcripts', parseTranscript);
     if (transcripts.length === 0) throw new Refused('transcripts', 'empty');
     // A deposit is what lifts the read cap, so one has to hold something to derive from.
@@ -378,7 +466,7 @@ export const parseSkeleton = (value: unknown): { ok: true; skeleton: SessionSkel
     transcripts.forEach(({ spawnedIn }, index) => {
       if (spawnedIn !== null && spawnedIn >= transcripts.length) throw new Refused(`transcripts[${String(index)}].spawnedIn`, 'no such transcript');
     });
-    return { ok: true, skeleton: { format: SKELETON_FORMAT, id, transcripts } };
+    return { ok: true, skeleton: { format: SKELETON_FORMAT, id, transcripts, deltas: [] } };
   } catch (error) {
     if (error instanceof Refused) return { ok: false, field: error.field, reason: error.reason };
     throw error;

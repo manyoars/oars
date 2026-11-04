@@ -1,59 +1,10 @@
 // Ingest (spec Section 2, "the deposit form"): a batch's skeleton becomes cell increments on the stored `index` cells, and a `contributor` record per (cell, account, UTC day) lets a
 // cell tell a new cluster from a returning one. Everything one deposit writes goes in one transaction, guarded by the deposit row that this write set, so a refused deposit writes none.
-import { bucketFields, deriveCells } from '../../cli/src/sessions/cells.js';
-import type { Motif } from '../../cli/src/sessions/motif.js';
-import { parseSkeleton, type SessionSkeleton } from '../../cli/src/sessions/pool-wire.js';
-import { storeOf } from './derive.js';
+import { incrementsOf, type CellRow, type Increments, type StratumRow } from '../../cli/src/sessions/cell-increments.js';
+import { parseSkeleton } from '../../cli/src/sessions/pool-wire.js';
 import { fieldOf, type Bound, type Env } from './http.js';
 
-export interface CellRow {
-  key: string;
-  harnessBucket: string;
-  motifId: string;
-  frameBucket: string;
-  day: string;
-  exposed: number;
-  sessions: number;
-  ok: number;
-  failed: number;
-  tokens: number;
-  durationMs: number;
-}
-
-export interface StratumRow {
-  key: string;
-  dimension: string;
-  value: string;
-  sessions: number;
-}
-
-/** What one batch adds to the index: its cells, the motifs they name, and rule 3's strata. */
-export interface Increments {
-  cells: Map<string, CellRow>;
-  motifs: Motif[];
-  strata: Map<string, StratumRow>;
-}
-
-/** Whole cells and strata, summed over a batch's own sessions: the same cells a store of that batch alone derives. */
-export const incrementsOf = (skeleton: SessionSkeleton): Increments => {
-  const derived = deriveCells(storeOf([skeleton]));
-  const cells = new Map<string, CellRow>();
-  for (const cell of derived.cells) {
-    const exposed = cell.exposed ? 1 : 0;
-    const key = `${cell.motifId}/${cell.frameBucket}/${cell.day}/${String(exposed)}`;
-    cells.set(key, { key, harnessBucket: bucketFields(cell.frameBucket).harnessBucket, motifId: cell.motifId, frameBucket: cell.frameBucket, day: cell.day, exposed, sessions: cell.sessions, ok: cell.ok, failed: cell.failed, tokens: cell.tokens, durationMs: cell.durationMs });
-  }
-  // A session counts once per value, so each value is one session of this batch.
-  const strata = new Map<string, StratumRow>();
-  const frames = skeleton.transcripts.flatMap(({ frame, prompts }) => [frame, ...prompts.map((prompt) => prompt.frame)]);
-  const named: [string, string][] = [
-    ...frames.flatMap(({ stack }) => stack.languages.map((value): [string, string] => ['language', value])),
-    ...frames.flatMap(({ stack }) => stack.frameworks.map((value): [string, string] => ['framework', value])),
-    ...frames.flatMap(({ stack }) => (stack.size === null ? [] : [['repoFiles', stack.size] satisfies [string, string]])),
-  ];
-  for (const [dimension, value] of named) strata.set(`${dimension}/${value}`, { key: `${dimension}/${value}`, dimension, value, sessions: 1 });
-  return { cells, motifs: derived.motifs, strata };
-};
+export { incrementsOf, type CellRow, type Increments, type StratumRow };
 
 /** What replacing `previous` with `next` adds to each cell: next's counts less the replaced batch's, and only where something changes. */
 const netOf = <Row extends { key: string }>(next: ReadonlyMap<string, Row>, previous: ReadonlyMap<string, Row>, fields: readonly (keyof Row)[]): Row[] => {
