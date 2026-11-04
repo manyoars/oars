@@ -134,7 +134,7 @@ const VALUE_FLAGS: Readonly<Record<Family, ReadonlySet<string>>> = {
  * Flags that own the next word for the family but are a switch for one program: pnpm's `-w` is `--workspace-root`, `-n` is `--no-interaction`
  * for poetry and `--no-cache` for uv, and `-f` is `--force` for pipx.
  */
-const FLAG_WITHOUT_VALUE: ReadonlySet<string> = new Set(['pnpm -w', 'poetry -n', 'uv -n', 'python -m uv -n', 'pipx -f', 'python -m pipx -f']);
+const FLAG_WITHOUT_VALUE: ReadonlySet<string> = new Set(['pnpm -w', 'poetry -n', 'uv -n', 'uvx -n', 'pipx -f']);
 
 /** These tell a runner to use only what is already local, so nothing crosses. */
 const NO_FETCH_FLAGS: ReadonlySet<string> = new Set(['--no-install', '--no', '--offline']);
@@ -252,6 +252,8 @@ const pythonSpec = (whole: string): Spec => {
   const [, raw = '', operator = '', stated = ''] = match;
   // Text after the name that no operator introduces is outside PEP 508: refused, never kept as a version.
   if (operator === '' && stated !== '') return { kind: 'unread', shape: 'unreadable-name' };
+  // The same holds after the `@`: a word outside PEP 508 there would be kept as a version.
+  if (atStated !== null && /[\s#;]/.test(atStated)) return { kind: 'unread', shape: 'unreadable-name' };
   // PEP 503: these spellings are one project, so novelty must not count them twice.
   const name = raw.toLowerCase().replace(/[-_.]+/g, '-');
   if (atStated !== null) return { kind: 'named', name, version: atStated, versionForm: versionFormOf(atStated), url: false };
@@ -434,7 +436,8 @@ const readTool = (reading: Reading, tool: Tool, command: ToolCommand): void => {
     // `uv run pip install x` is the same pick as `pip install x`: read it as that. Any other program after `run` stays unread.
     // It stays recorded under `uv`: uv's pip runs in the project venv and reads that venv's `pip.conf`, so the registry question must refuse it.
     addSpecs(reading, family, allFlags(words, '--with'), 'run', command.program, command.read);
-    const pip = command.args.findIndex((word, at) => word.text === 'pip' && command.args[at + 1]?.text === 'install');
+    // A flag may sit between the two (`pip -q install x`).
+    const pip = command.args.findIndex((word, at) => word.text === 'pip' && command.args.slice(at + 1).find((next) => !next.text.startsWith('-'))?.text === 'install');
     if (words.names[1] === 'pip' && words.names[2] === 'install' && pip >= 0) readTool(reading, PIP_TOOL, { ...command, args: command.args.slice(pip + 1) });
     return;
   }
@@ -503,14 +506,14 @@ const ATTACHED_INDEX = /^-i./;
 /** PowerShell's own folder stack. Local to the gate: `CHANGES_FOLDER` also drives capture's read-back of the working folder. */
 const FOLDER_STACK = new Set(['push-location', 'pop-location']);
 /** An assignment of a manager's own variable, in any shell's spelling, which can name a registry or a config file. Over-matching only leaves a name unasked. */
-const REGISTRY_ENVIRONMENT = /(?:^|[^A-Za-z0-9_])(?:(?:npm_config_|pip_|uv_)[A-Za-z0-9_]*|home|userprofile|xdg_config_home|virtual_env)\s*=/i;
+const REGISTRY_ENVIRONMENT = /(?:^|[^A-Za-z0-9_])(?:(?:npm_config_|pip_|uv_)[A-Za-z0-9_]*|home|userprofile|xdg_config_home|xdg_config_dirs|appdata|path|virtual_env)\s*=/i;
 /**
  * Other ways a call reads another config than the one the gate's question reads: `sudo` (root's), a venv's `activate` (its `pip.conf`), and
  * a manager run by path (`.venv/bin/pip`, which reads that venv's). Over-matching only leaves a name unasked.
  */
-const OTHER_CONFIG = /(?:^|[\s;&|(])sudo(?:\s|$)|(?:^|[\\/\s;&|(])activate(?:\.\w+)?(?=[\s;&|)]|$)|[\\/](?:npm|npx|pnpm|pnpx|pip[\d.]*|python[\d.]*|py)(?:\.cmd|\.exe)?(?=["']?(?:\s|$))/i;
+const OTHER_CONFIG = /(?:^|[\s;&|(])sudo(?:\s|$)|(?:^|[\\/\s;&|("'])activate(?:\.\w+)?(?=["'\s;&|)]|$)|[\\/](?:npm|npx|pnpm|pnpx|pip[\d.]*|python[\d.]*|py)(?:\.cmd|\.exe|\.bat)?(?=["']?(?:\s|$))/i;
 
-const choosesRegistry = (command: ShellCommand): boolean => command.args.some(({ text }) => REGISTRY_FLAGS.has(text.split('=')[0] ?? '') || SCOPE_REGISTRY.test(text) || CONFIG_REGISTRY.test(text) || ATTACHED_INDEX.test(text));
+const choosesRegistry = (command: ShellCommand): boolean => command.args.some(({ text }) => REGISTRY_FLAGS.has(text.split('=')[0] ?? '') || SCOPE_REGISTRY.test(text) || CONFIG_REGISTRY.test(text) || ATTACHED_INDEX.test(text) || /(?:^|@)jsr:/.test(text));
 
 const checkShell = (input: unknown, redact: Redactor): CallCheck => {
   const command = stringField(input, 'command');
