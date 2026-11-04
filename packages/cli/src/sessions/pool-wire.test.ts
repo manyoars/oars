@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { frame, prompt, session, step, store, tool } from './pool-fixture.js';
-import { parseSkeleton, sessionsOf, skeletonOf, stacksOf, type SessionSkeleton } from './pool-wire.js';
+import { parseSkeleton, sessionsOf, skeletonOf, type SessionSkeleton } from './pool-wire.js';
 import type { Harness } from './schema.js';
 import { LITERAL } from './public-vocabulary.js';
 
@@ -104,19 +104,6 @@ describe('a nested spawn', () => {
     expect(skeleton?.transcripts.map((transcript) => transcript.spawnedIn)).toEqual([null, 0, 1, null]);
     expect(parseSkeleton(JSON.parse(JSON.stringify(skeleton)))).toEqual({ ok: true, skeleton });
     expect(JSON.stringify(skeleton)).not.toContain('agent-x');
-  });
-});
-
-describe('stacksOf', () => {
-  it('reads every language and framework of the frames, sorted and single', () => {
-    const skeleton = skeletonFrom(
-      store({
-        sessions: [session('s1', { frame: frame({ shell: 'bash', stack: { languages: ['typescript'], frameworks: ['vite'], size: 'm' } }) })],
-        prompts: [framedPrompt('s1', 0, { frame: frame({ shell: 'bash', stack: { languages: ['go', 'typescript'], frameworks: [], size: null } }) })],
-        tools: [tool('s1', 0, 'Bash', { steps: [shell] })],
-      }),
-    );
-    expect(skeleton === null ? [] : stacksOf(skeleton)).toEqual(['go', 'typescript', 'vite']);
   });
 });
 
