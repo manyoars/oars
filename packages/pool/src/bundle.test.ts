@@ -216,7 +216,8 @@ describe('clusters over the cells of a read', () => {
 
   it('one account on several days stays one account', async () => {
     await inFreshPool(async (spread) => {
-      await depositOn(spread, '3101', ['2026-11-01', '2026-11-02', '2026-11-03']);
+      // Four days, so a count per cell would reach 5 with the one account that follows.
+      await depositOn(spread, '3101', ['2026-10-31', '2026-11-01', '2026-11-02', '2026-11-03']);
       const token = await depositOn(spread, '3102', ['2026-11-04']);
       expect((await readsIn(spread, token)).reads).toEqual([]);
     });
