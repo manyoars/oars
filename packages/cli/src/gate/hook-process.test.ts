@@ -104,11 +104,11 @@ describe('the hook process: the answer on stdout', () => {
     const store = folder();
     writeFileSync(join(store, 'gate-policy.json'), '{"classes":{"not-found":"block"}}');
     const order: string[] = [];
-    const write = vi.fn((_text: string): Promise<void> => {
+    const write = vi.fn<(text: string) => Promise<void>>(() => {
       order.push('write');
       return Promise.resolve();
     });
-    const exit = vi.fn((_code: number): void => {
+    const exit = vi.fn<(code: number) => void>(() => {
       order.push('exit');
     });
     await runHookProcess({ stdin: () => Promise.resolve(PAYLOAD), deps: depsFor(store, { registry: missing }), exit, write, deadlineMs: 5_000 });
@@ -119,7 +119,7 @@ describe('the hook process: the answer on stdout', () => {
   });
 
   it('writes nothing when the hook has nothing to say', async () => {
-    const write = vi.fn((_text: string): Promise<void> => Promise.resolve());
+    const write = vi.fn<(text: string) => Promise<void>>(() => Promise.resolve());
     const exit = vi.fn();
     const old = (): Promise<RegistryAnswer> => Promise.resolve({ state: 'found', latest: '1.0.0', created: '2020-01-01T00:00:00.000Z' });
     await runHookProcess({ stdin: () => Promise.resolve(PAYLOAD), deps: depsFor(folder(), { registry: old }), exit, write, deadlineMs: 5_000 });

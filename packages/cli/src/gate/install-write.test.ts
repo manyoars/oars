@@ -3,11 +3,12 @@ import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, 
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import type * as FsPromises from 'node:fs/promises';
 import { EVENT, installGateHook } from './install.js';
 
 const failing = vi.hoisted(() => ({ rename: false }));
 vi.mock('node:fs/promises', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('node:fs/promises')>();
+  const actual = await importOriginal<typeof FsPromises>();
   return { ...actual, rename: (...args: Parameters<typeof actual.rename>) => (failing.rename ? Promise.reject(new Error('EXDEV: cross-device link not permitted')) : actual.rename(...args)) };
 });
 
