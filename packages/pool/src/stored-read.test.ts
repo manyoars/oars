@@ -1,4 +1,4 @@
-// The stored form: the bundle is read from the stored `index` cells, never from the ledger plane. These tests delete or ignore the ledger and the contributor records and
+// The stored form: the bundle is read from the stored `index` cells, never from the ledger plane. These tests rewrite or ignore the ledger and the contributor records (the ledger takes no delete: a trigger aborts it) and
 // look for any change in what is served, and count the rows a read touches.
 import { webcrypto } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -30,7 +30,7 @@ const depositor = async (target: TestPool, id: string, extra = 0, harness: Harne
 };
 
 describe('the bundle reads the stored cells', () => {
-  it('serves the same bytes and ETag after the batch\'s ledger rows and contributor records are deleted', async () => {
+  it('serves the same bytes and ETag after the batch\'s ledger rows and contributor records are rewritten', async () => {
     const own = await startPool();
     try {
       for (const id of ['7001', '7002', '7003', '7004']) await depositor(own, id);
@@ -44,9 +44,9 @@ describe('the bundle reads the stored cells', () => {
       expect(verified.bundle.reads.length).toBeGreaterThan(0);
 
       const db = await own.db();
-      await db.prepare('DELETE FROM deposits').run();
-      await db.prepare('DELETE FROM contributors').run();
-      // The account now holds no ledger row: another account takes the second fetch, so the read does not lean on the first account's rows.
+      await db.prepare("UPDATE deposits SET skeleton = '{}'").run();
+      await db.prepare("UPDATE contributors SET day = '2000-01-01'").run();
+      // The ledger no longer holds the batch, and another account takes the second fetch, so the read does not lean on the first account's rows.
       const reader = await own.signIn('github', stubUser('7006'));
       const after = await own.raw(PATH, reader.token);
       expect(after.status).toBe(200);

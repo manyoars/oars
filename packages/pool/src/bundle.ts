@@ -21,7 +21,7 @@ const signed = async (bundle: Bundle, privateJwk: string): Promise<SignedBundle>
 /** One fetch a week unless the deploy sets more. */
 const DEFAULT_FETCH_CAP = 1;
 
-/** The count of changes to the stored cells and strata, kept by triggers on them so it moves in the same write as the change. Rows of the ledger plane expire without moving it. */
+/** The count of changes to the stored cells and strata, kept by triggers on them so it moves in the same write as the change. A write to the ledger plane does not move it. */
 const generationOf = async (env: Env): Promise<number> => {
   const held = fieldOf(await env.DB.prepare('SELECT generation FROM pool_generation WHERE id = 1').bind().first(), 'generation');
   return typeof held === 'number' ? held : 0;
