@@ -14,13 +14,12 @@ import { UNKNOWN } from './cells.js';
 import { estimateOf, relate, type DeriveRelation, type Estimate } from './read-order.js';
 import { nextDay } from './read-day-move.js';
 import type { Read } from './read.js';
-import { rate, round, wilson } from './read-support.js';
+import { rate, round, wilson, Z_95 } from './read-support.js';
 
 /** The fewest pairs on each side of the cut. */
 export const PAIRS_FLOOR = 30;
 
 const FIT_SHARE = 0.7;
-const Z_95 = 1.96;
 const SIGMA_FLOOR = 0.0001;
 const CHANCE = 0.5;
 

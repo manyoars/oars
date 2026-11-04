@@ -35,6 +35,7 @@ export const readHookCalls = async (storeDir: string): Promise<HookCall[]> => {
           session: typeof parsed.session === 'string' ? parsed.session : null,
           hit: parsed.hit,
           ms: parsed.ms,
+          ...(typeof parsed.startMs === 'number' ? { startMs: parsed.startMs } : {}),
           error: typeof parsed.error === 'string' ? parsed.error : null,
         });
       }

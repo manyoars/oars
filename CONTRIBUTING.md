@@ -33,6 +33,7 @@ nothing in silence; an empty list only warns.
 - It does not look at removed lines, file contents outside the diff, file names, branch names, annotated tag messages, binary
   files, or commit author and committer names and emails (both are published with each commit).
 - It cannot see anything **already on origin**. Cleaning up what was published is a separate, manual job.
+- A conflict resolution that keeps a listed term from the other side is flagged even if that line is already on origin.
 - A stale `origin/*` tracking ref counts as already on origin. After a history rewrite, commits reachable only from an unpruned
   ref are not scanned; run `git fetch --prune origin` first.
 - `git push --no-verify` skips it.

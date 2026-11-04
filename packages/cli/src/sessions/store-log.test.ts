@@ -363,13 +363,13 @@ describe('a store already past the limit', () => {
 describe('the store lock', () => {
   it('stays with a holder that outlives the stale age: a waiter does not break a lock in use', async () => {
     const staged = stage();
-    const lockOptions = { waitMs: 5000, staleMs: 200 };
+    const lockOptions = { waitMs: 5000, staleMs: 1000 };
     const events: string[] = [];
     const holder = withLock(
       staged.storeDir,
       async () => {
         events.push('holder in');
-        await new Promise((done) => setTimeout(done, 700));
+        await new Promise((done) => setTimeout(done, 1500));
         events.push('holder out');
       },
       lockOptions,
@@ -385,5 +385,129 @@ describe('the store lock', () => {
     );
     await Promise.all([holder, waiter]);
     expect(events).toEqual(['holder in', 'holder out', 'waiter in']);
+  });
+
+  it('stops refreshing a lock held past its hard cap, so a waiter breaks it and logs the holder', async () => {
+    const staged = stage();
+    const lockOptions = { waitMs: 4000, staleMs: 300, holdMs: 400 };
+    const notes = vi.spyOn(process.stderr, 'write').mockReturnValue(true);
+    const events: string[] = [];
+    let release: () => void = () => undefined;
+    let entered: () => void = () => undefined;
+    const inside = new Promise<void>((done) => (entered = done));
+    const hung = withLock(
+      staged.storeDir,
+      () =>
+        new Promise<void>((done) => {
+          release = done;
+          entered();
+        }),
+      lockOptions,
+    );
+    await inside;
+    await withLock(
+      staged.storeDir,
+      () => {
+        events.push('waiter in');
+        return Promise.resolve();
+      },
+      lockOptions,
+    );
+    release();
+    await hung;
+    const lines = notes.mock.calls.map(([line]) => String(line));
+    notes.mockRestore();
+    expect(events).toEqual(['waiter in']);
+    const broke = lines.filter((line) => line.includes('broke the store lock'));
+    expect(broke).toHaveLength(1);
+    expect(broke[0]).toContain(`pid ${String(process.pid)},`);
+    expect(broke[0]).not.toContain('-');
+    expect(broke[0]).toContain('not refreshed for over 300 ms');
+    expect(lines.filter((line) => line.startsWith('oars: this run held the store lock past 400 ms and may lose it; rerun it when it ends'))).toHaveLength(1);
+  });
+
+  it('caps a holder at six times the stale age when no holdMs is given', async () => {
+    const staged = stage();
+    const lockOptions = { waitMs: 4000, staleMs: 100 };
+    const notes = vi.spyOn(process.stderr, 'write').mockReturnValue(true);
+    let release: () => void = () => undefined;
+    let entered: () => void = () => undefined;
+    const inside = new Promise<void>((done) => (entered = done));
+    const hung = withLock(
+      staged.storeDir,
+      () =>
+        new Promise<void>((done) => {
+          release = done;
+          entered();
+        }),
+      lockOptions,
+    );
+    await inside;
+    const tookAt = Date.now();
+    await withLock(staged.storeDir, () => Promise.resolve(), lockOptions);
+    const waited = Date.now() - tookAt;
+    release();
+    await hung;
+    notes.mockRestore();
+    expect(waited).toBeGreaterThanOrEqual(590);
+  });
+
+  it('keeps the next holder locked in when the broken holder ends', async () => {
+    const staged = stage();
+    const notes = vi.spyOn(process.stderr, 'write').mockReturnValue(true);
+    let releaseFirst: () => void = () => undefined;
+    let releaseSecond: () => void = () => undefined;
+    let firstIn: () => void = () => undefined;
+    let secondIn: () => void = () => undefined;
+    const firstEntered = new Promise<void>((done) => (firstIn = done));
+    const secondEntered = new Promise<void>((done) => (secondIn = done));
+    const first = withLock(
+      staged.storeDir,
+      () =>
+        new Promise<void>((done) => {
+          releaseFirst = done;
+          firstIn();
+        }),
+      { waitMs: 4000, staleMs: 300, holdMs: 400 },
+    );
+    await firstEntered;
+    const second = withLock(
+      staged.storeDir,
+      () =>
+        new Promise<void>((done) => {
+          releaseSecond = done;
+          secondIn();
+        }),
+      { waitMs: 4000, staleMs: 300 },
+    );
+    await secondEntered;
+    releaseFirst();
+    await first;
+    await expect(withLock(staged.storeDir, () => Promise.resolve(), { waitMs: 400, staleMs: 300 })).rejects.toThrow('locked');
+    releaseSecond();
+    await second;
+    notes.mockRestore();
+    await withLock(staged.storeDir, () => Promise.resolve(), { waitMs: 400, staleMs: 300 });
+  });
+
+  it('keeps refreshing a live holder after the clock jumps past the cap, as a suspended machine does', async () => {
+    const staged = stage();
+    const lockFile = join(staged.storeDir, 'store.lock');
+    let before = 0;
+    let after = 0;
+    const jump = vi.spyOn(Date, 'now');
+    await withLock(
+      staged.storeDir,
+      async () => {
+        before = statSync(lockFile).mtimeMs;
+        const real = Date.now();
+        jump.mockReturnValue(real + 7_200_000);
+        await new Promise((done) => setTimeout(done, 350));
+        after = statSync(lockFile).mtimeMs;
+      },
+      { waitMs: 1000, staleMs: 400 },
+    );
+    jump.mockRestore();
+    expect(after).toBeGreaterThan(before);
   });
 });
