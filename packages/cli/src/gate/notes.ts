@@ -34,7 +34,7 @@ const NONE: Decision = { arm: 'none', lineId: 'none', kind: 'none', text: null }
 
 /** A note that would show, held back when the draw falls inside the share. The draw is spent on a note only. */
 const note = (policy: Policy, lineId: Exclude<LineId, 'none' | 'not-found-block'>, name: string, days: number, random: () => number): Decision =>
-  random() < policy.holdbackPercent / 100 ? { arm: 'held', lineId: 'none', kind: 'none', text: null } : { arm: 'shown', lineId, kind: 'note', text: lineText(lineId, name, days) };
+  random() < policy.holdbackPercent / 100 ? { arm: 'held', lineId, kind: 'none', text: null } : { arm: 'shown', lineId, kind: 'note', text: lineText(lineId, name, days) };
 
 /** Silent unless a class fires. A block is for a name the registry answered as not found, only when the policy says `block`, and is never held back. */
 export const decide = (policy: Policy, facts: LineFacts | undefined, now: number, random: () => number, name: string): Decision => {

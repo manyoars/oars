@@ -46,10 +46,10 @@ describe('oars gate hook: a note, and the arm it is shown in', () => {
     expect(rowsOf(store)).toMatchObject([{ arm: 'shown', lineShown: 'young-name-note', registryAge: 'under-7-days' }]);
   });
 
-  it('shows nothing for a held note, and records that it was held with no line shown', async () => {
+  it('shows nothing for a held note, and records the line it withheld apart from the line shown', async () => {
     const store = folder();
     expect(await gateHook(payload('npm install left-pad'), depsFor(store, { registry: found(), random: () => 0 }))).toBe('');
-    expect(rowsOf(store)).toMatchObject([{ arm: 'held', lineShown: 'none' }]);
+    expect(rowsOf(store)).toMatchObject([{ arm: 'held', lineShown: 'none', lineHeld: 'young-name-note' }]);
   });
 
   it('draws with Math.random when no draw is handed in', async () => {
@@ -110,7 +110,14 @@ describe('oars gate hook: a block, as a label', () => {
     const store = folder();
     withPolicy(store, '{"classes":{"not-found":"block"},"holdbackPercent":100}');
     expect(await gateHook(payload('npm install ghost-lib'), depsFor(store, { registry: missing, random: () => 0 }))).toBe(deny(REASON));
-    expect(rowsOf(store)).toMatchObject([{ arm: 'none', lineShown: 'not-found-block' }]);
+    expect(rowsOf(store)).toMatchObject([{ arm: 'none', lineShown: 'not-found-block', lineHeld: 'none' }]);
+  });
+
+  it('records the withheld line per class, so arms can be compared line by line', async () => {
+    const store = folder();
+    withPolicy(store, '{"holdbackPercent":100}');
+    expect(await gateHook(payload('npm install ghost-lib'), depsFor(store, { registry: missing, random: () => 0 }))).toBe('');
+    expect(rowsOf(store)).toMatchObject([{ arm: 'held', lineShown: 'none', lineHeld: 'not-found-note' }]);
   });
 
   it('never blocks on a reading it does not have: a cut ask, no time to ask, an unreachable registry, or a manager it cannot ask', async () => {

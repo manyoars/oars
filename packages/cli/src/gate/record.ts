@@ -83,6 +83,8 @@ export interface CrossingRecord {
   registryAge: RegistryAge;
   arm: Arm;
   lineShown: LineId;
+  /** The line a held note would have shown. Recorded apart from `lineShown` (which stays `none` when held) so the arms can be compared line by line; a row cannot be backfilled. */
+  lineHeld: LineId;
   /** Which policy stood when the hook wrote the row. Absent in a replay row and in a row an earlier build wrote: no policy was read. */
   policy?: PolicySource;
   // Class A: join ids, a finer time, and what the command stated.
@@ -179,6 +181,7 @@ const merged = (live: CrossingRecord, replayed: CrossingRecord): CrossingRecord 
   ...(live.policy === undefined ? {} : { policy: live.policy }),
   arm: pick('arm', live, replayed),
   lineShown: pick('lineShown', live, replayed),
+  lineHeld: pick('lineHeld', live, replayed),
 });
 
 /** The key a call crossing is counted by: nothing counts twice when a row has a tool use id and another row has the same one. */

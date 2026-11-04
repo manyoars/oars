@@ -1,7 +1,7 @@
 // The built `dist/bin.js` run as the harness runs it: `gate hook` with a payload on stdin, in a temp home. It proves the dispatch in `bin.ts` and the process-level exit 0 with
 // empty stdout, which the in-process tests cannot. Like `pack.test.ts` it reads `dist/`, which the root `check` builds before the tests run; without a build it is skipped.
 import { spawnSync } from 'node:child_process';
-import { chmodSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { delimiter, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -49,7 +49,17 @@ const slowNpm = (): { folder: string; log: string } => {
   return { folder, log };
 };
 
-const crossingFiles =(home: string): string[] => readdirSync(home, { recursive: true, encoding: 'utf8' }).filter((path) => path.endsWith('crossings.jsonl'));
+// A manager that answers an `E404` at once, as `npm view` does for a name the registry it is configured for does not have.
+const missingNpm = (): string => {
+  const folder = mkdtempSync(join(tmpdir(), 'oars-gate-missingnpm-'));
+  made.push(folder);
+  writeFileSync(join(folder, 'npm'), `#!/bin/sh\necho 'npm error code E404' >&2\nexit 1\n`);
+  chmodSync(join(folder, 'npm'), 0o755);
+  writeFileSync(join(folder, 'npm.cmd'), `@echo off\r\necho npm error code E404 1>&2\r\nexit /b 1\r\n`);
+  return folder;
+};
+
+const crossingFiles = (home: string): string[] => readdirSync(home, { recursive: true, encoding: 'utf8' }).filter((path) => path.endsWith('crossings.jsonl'));
 
 describe.skipIf(!existsSync(bin))('the built oars gate hook', () => {
   it('exits 0 with empty stdout on bad stdin, and writes no record', () => {
@@ -99,5 +109,34 @@ describe.skipIf(!existsSync(bin))('the built oars gate hook', () => {
     const [file] = crossingFiles(first.home);
     const rows: unknown[] = readFileSync(join(first.home, file ?? ''), 'utf8').trim().split('\n').map((line): unknown => JSON.parse(line));
     expect(rows).toMatchObject([{ registryState: 'not-read' }, { registryState: 'found' }]);
+  });
+
+  it('prints a labeled deny on stdout and exits 0 when the policy says block and the manager answered not found', () => {
+    const home = mkdtempSync(join(tmpdir(), 'oars-gate-bin-'));
+    made.push(home);
+    const store = join(home, 'oars', 'sessions');
+    mkdirSync(store, { recursive: true });
+    writeFileSync(join(store, 'gate-policy.json'), '{"classes":{"not-found":"block"}}');
+    const payload = JSON.stringify({ session_id: 's1', tool_use_id: 'u1', tool_name: 'Bash', tool_input: { command: 'npm install ghost-lib' }, cwd: tmpdir(), permission_mode: 'default' });
+    const result = runHook(payload, [], missingNpm(), home);
+    expect(result.status).toBe(0);
+    const output: unknown = JSON.parse(result.stdout);
+    expect(output).toEqual({
+      hookSpecificOutput: {
+        hookEventName: 'PreToolUse',
+        permissionDecision: 'deny',
+        permissionDecisionReason: 'Blocked by your gate policy: ghost-lib was not found in the registry your package manager uses.',
+      },
+    });
+    const [file] = crossingFiles(home);
+    const lines = readFileSync(join(home, file ?? ''), 'utf8').trim().split('\n');
+    expect(JSON.parse(lines[0] ?? '')).toMatchObject({ name: 'ghost-lib', registryState: 'not-found', arm: 'none', lineShown: 'not-found-block', policy: 'file' });
+  });
+
+  it('stays silent on stdout for the same name under the default policy', () => {
+    const payload = JSON.stringify({ session_id: 's1', tool_use_id: 'u1', tool_name: 'Bash', tool_input: { command: 'npm install ghost-lib' }, cwd: tmpdir(), permission_mode: 'default' });
+    const result = runHook(payload, [], missingNpm());
+    expect(result.status).toBe(0);
+    expect(result.stdout).not.toContain('deny');
   });
 });

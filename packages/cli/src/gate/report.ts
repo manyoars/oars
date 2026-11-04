@@ -63,6 +63,8 @@ export interface Report {
   arm: Tally[];
   /** The fixed id of the line a row showed. */
   lineShown: Tally[];
+  /** The fixed id of the line a held note withheld. */
+  lineHeld: Tally[];
   /** Which policy stood for the rows the hook wrote: no file, a file that fit, or one that did not (the defaults stood). Rows with no policy read (replay) are not counted. */
   policy: Tally[];
   removedLater: number;
@@ -120,6 +122,7 @@ export const reportOf = (rows: readonly Row[]): Report => {
     registryAge: tally(REGISTRY_AGES, crossings, (row) => row.registryAge),
     arm: tally(ARMS, crossings, (row) => row.arm),
     lineShown: tally(LINE_IDS, crossings, (row) => row.lineShown),
+    lineHeld: tally(LINE_IDS, crossings, (row) => row.lineHeld),
     policy: tally(POLICY_SOURCES, crossings.filter((row) => row.policy !== undefined), (row) => row.policy ?? 'default'),
     removedLater: crossings.filter((row) => row.removedLater === true).length,
     unseen: Object.entries(run?.unread ?? {}).map(([value, count]) => ({ value, count })),
@@ -155,6 +158,7 @@ export const formatReport = (report: Report): string => {
     `Removed later: ${String(report.removedLater)}`,
     line('Notes', report.arm),
     line('Line shown', report.lineShown),
+    line('Line held', report.lineHeld),
     ...(report.policy.some((one) => one.count > 0) ? [line('Policy', report.policy)] : []),
     ...registry,
     'Replay cannot see:',
