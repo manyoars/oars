@@ -261,9 +261,30 @@ describe('MCP tool names: a token behind an underscore or in a later part is red
     ['mcp__me-sk-AbC1__DeFgHiJkLmNoPqRsTuVw__find', ['AbC1', 'DeFgHiJkLmNoPqRsTuVw']],
     ['mcp_sk-AbC1__DeFgHiJkLmNoPqRsTuVw_find', ['AbC1', 'DeFgHiJkLmNoPqRsTuVw']],
     ['mcp_sk-AbC1_DeFgHiJkLmNoPqRsTuVw_find', ['AbC1', 'DeFgHiJkLmNoPqRsTuVw']],
+    ['mcp__sk-proj-xoxa-Ab1_DeFgHiJkLmNoPqRsTuVw__find', ['DeFgHiJkLmNoPqRsTuVw']],
+    ['mcp_sk-proj-xoxa-Ab1_DeFgHiJkLmNoPqRsTuVw_find', ['DeFgHiJkLmNoPqRsTuVw']],
+    ['mcp__AIzaSyA-xoxb-abc_defghijklmnopqrstuvwxyz0123__find', ['defghijklmnopqrstuvwxyz0123']],
+    ['mcp__eyJhbGciOi-xoxb-a_JIUzI1NiJ9.eyJzdWIiOiIx.c2lnbmF0dXJl__find', ['JIUzI1NiJ9', 'eyJzdWIiOiIx', 'c2lnbmF0dXJl']],
+    ['mcp__token=xoxb-short_hunter2hunter2__find', ['hunter2hunter2']],
+    ['mcp__api_key=abc-xoxb-1_hunter2hunter2__find', ['hunter2hunter2']],
+    ['mcp_token=xoxb-short_hunter2hunter2_find', ['hunter2hunter2']],
+    ['mcp__xoxb-a-ghp_abcdefghijklmnopqrstuvwxyz0123456789__find', ['abcdefghijklmnopqrstuvwxyz0123456789']],
+    ['mcp__xoxb-a-sk_live_abcdefghijklmnop__find', ['abcdefghijklmnop']],
+    ['mcp__xoxb-a-whsec_abcdefghijklmnop__find', ['abcdefghijklmnop']],
+    ['mcp__xoxb-a-api_key=abcd1234__find', ['abcd1234']],
+    ['mcp_xoxb-a-api_key=abcd1234_find', ['abcd1234']],
+    ['mcp__ns:xoxb-1234567890-abcdefghij_x__find', ['abcdefghij']],
+    ['mcp__eyJ-xoxb-1234567890-abcdefghij_x__find', ['abcdefghij']],
+    ['mcp__me_xoxb-1234567890-ghp_abcdefghijklmnopqrstuvwxyz0123456789_x__find', ['abcdefghijklmnopqrstuvwxyz0123456789']],
+    ['mcp__me_xoxb-1234567890-sk_live_abcdefghijklmnop_x__find', ['abcdefghijklmnop']],
+    ['mcp__me_xoxb-1234567890-whsec_abcdefghijklmnop_x__find', ['abcdefghijklmnop']],
+    ['mcp_me_xoxb-1234567890-ghp_abcdefghijklmnopqrstuvwxyz0123456789_x_find', ['abcdefghijklmnopqrstuvwxyz0123456789']],
   ])('keeps no part of the token in any stored field for %s', (toolName, parts) => {
     const stored = JSON.stringify(capturedFor(toolName));
     for (const part of parts) expect(stored).not.toContain(part);
+  });
+  it('reads a name-and-value secret as the name and a masked value', () => {
+    expect(storedToolName('mcp__api_key=abcd1234__find', redact)).toBe('mcp__api_key=<secret>');
   });
   it('reads a name past the cap as one masked value rather than slicing it', () => {
     const long = `mcp__${'a_'.repeat(100)}find`;
@@ -298,6 +319,9 @@ describe('MCP tool names: a token behind an underscore or in a later part is red
     ['mcp_x_Server2_listItemsByWorkspaceId', 'mcp_x_Server2_listItemsByWorkspaceId', ''],
     ['mcp_aws_s3_ListObjectsV2CommandFoo', 'mcp_aws_s3_ListObjectsV2CommandFoo', ''],
     ['mcp_sk-learn_fit_transform', 'mcp_sk-learn_fit_transform', ''],
+    ['mcp_pk_Context7_resolve-library-id', 'mcp_pk_Context7_resolve-library-id', ''],
+    ['mcp_rk_tools_ListObjectsV2Command', 'mcp_rk_tools_ListObjectsV2Command', ''],
+    ['mcp_x_sk_Context7_resolve-library-id', 'mcp_x_sk_Context7_resolve-library-id', ''],
     ['mcp_task-sk-tools_resolve-library-id', 'mcp_task-sk-tools_resolve-library-id', ''],
   ])('reads %s as main reads it: a lone underscore beside a separator does not join two harmless parts', (toolName, stored, server) => {
     expect(storedToolName(toolName, redact)).toBe(stored);
@@ -322,8 +346,25 @@ describe('MCP tool names: a token behind an underscore or in a later part is red
       expect(storedToolName(name, redact)).toMatch(/^mcp__<secret>/);
       expect(pullsOfTool(name, redact)).toEqual([]);
     }
+    for (const name of ['mcp__sk-learn__PCA2Transform', 'mcp__task-sk-tools__Get2Items']) expect(storedToolName(name, redact)).toMatch(/<secret>/);
     expect(storedToolName('mcp__aws__ListObjectsV2CommandFooBar', redact)).toBe('mcp__aws__<secret>');
     expect(pullsOfTool('mcp__aws__ListObjectsV2CommandFooBar', redact)).toEqual([{ ecosystem: 'mcp', name: 'aws', version: null }]);
+  });
+  it('stores raw an sk- key with no capital and digit that holds a _ before 16 characters, an accepted limit', () => {
+    for (const name of ['mcp_sk-abc_defghijklmnopqrstuvwxyz_find', 'mcp__sk-abc__defghijklmnopqrstuvwxyz__find']) expect(storedToolName(name, redact)).toBe(name);
+  });
+  it('masks a name that holds : or = as one random token and loses its server, an accepted limit', () => {
+    for (const name of ['mcp__ns:Context7__resolve-library-id', 'mcp__ns=Context7__resolve-library-id']) {
+      const stored = storedToolName(name, redact);
+      expect(stored).toMatch(/<secret>/);
+      expect(stored).not.toContain('Context7');
+    }
+  });
+  it('keeps what a Slack match leaves of a token right behind a Slack-shaped run, an accepted limit', () => {
+    expect(storedToolName('mcp_xoxb-1234567890-ghp_abcdefghijklmnopqrstuvwxyz0123456789_find', redact)).toBe('mcp_<secret>_abcdefghijklmnopqrstuvwxyz0123456789_find');
+    expect(storedToolName('mcp__xoxb-a-eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0.c2lnbmF0dXJlMTIz__find', redact)).toBe(
+      'mcp__<secret>.eyJzdWIiOiIxMjM0.c2lnbmF0dXJlMTIz__find',
+    );
   });
   it('does not find a token with no pattern rule whose every part is under 24 characters, an accepted limit', () => {
     const name = 'mcp__aB3dE5gH7jK9mN1pQ3rS__tU5vW7xY9zA1bC3dE5fG__find';

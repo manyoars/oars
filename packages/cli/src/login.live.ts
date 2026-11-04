@@ -164,14 +164,14 @@ const loginThenLogout = async ({ api, configDir, username, password, audience }:
 
   // The exchange got a real Keycloak access token for this client, issued for the audience the realm names.
   const [exchanged = ''] = api.exchanged;
-  expect(api.exchanged).toHaveLength(1);
+  expect(api.exchanged.length, 'exactly one token exchange').toBe(1);
   expect(claim(exchanged, 'azp')).toBe('oars-cli');
   expect(claim(exchanged, 'iss')).toBe(ISSUER_URL);
   expect(claim(exchanged, 'email')).toBe(username);
   expect(JSON.stringify(claim(exchanged, 'aud'))).toContain(audience);
 
   const stored = await deps.store.read();
-  // Asserted as booleans: a failing toMatchObject would print the stored refresh token into the public job log.
+  // Derived values only: a failing toMatchObject would print the stored refresh token into the public job log.
   expect(stored?.issuerUrl, 'stored issuerUrl').toBe(ISSUER_URL);
   expect(stored?.apiUrl, 'stored apiUrl').toBe(api.url);
   expect(stored?.email, 'stored email').toBe(username);
@@ -186,7 +186,7 @@ const loginThenLogout = async ({ api, configDir, username, password, audience }:
 
   // Revoked at Keycloak, not merely forgotten locally: the old refresh token is refused.
   const config = await discover(ISSUER_URL, { ...deps, step: 'live' });
-  // A boolean outcome: if the refresh succeeded, its result holds newly issued tokens that must not reach the log.
+  // A derived outcome: if the refresh succeeded, its result holds newly issued tokens that must not reach the log.
   const refused = await refreshTokens(config, refreshToken, 'live').then(
     () => 'accepted',
     (error: unknown) => (error instanceof Error && 'exitCode' in error ? `refused with exit code ${String(error.exitCode)}` : 'failed'),

@@ -16,7 +16,11 @@
 //                       only in a Paginated rollout (ordinal.rs:37), the CLI's default (thread-store/src/local/mod.rs:512-515), which holds item_completed TurnItems
 //                       (UserMessage, AgentMessage, FileChange, McpToolCall) in place of the legacy events below (rollout/src/policy.rs:142-156, `persisted_item_completed_event` :232, its Paginated arm :253); both are read.
 //                       A Copied fork's history, in either mode, is dropped by matching the parent's lineage as of the fork's start, record for record
-//   turn_context        {model, cwd}: the model, and the directory when it changes
+//   turn_context        {model, cwd, approval_policy}: the model, the directory when it changes, and the approval policy, which rides later lines as `permissionMode`
+//   session_meta also holds `dynamic_tools`, the tools the session declared (a `DynamicToolSpec`, dynamic_tools.rs), read as the offered list
+//   event_msg turn_aborted {reason}             `interrupted` is the operator cutting a turn short (TurnAbortReason, protocol.rs:4580-4585); the others are the harness's own
+//   response_item additional_tools {tools} / tool_search_output {tools}   tools offered later, and tools a search loaded (models.rs:1076, :1257)
+//                       That these records are persisted into the rollout is rollout/src/policy.rs:83, :91, and :137 at ac558e2.
 //   event_msg user_message {message}            a prompt (the `response_item` user messages also hold injected context, so they are not read)
 //   event_msg agent_message {message}           the assistant's text
 //   event_msg token_count {info.last_token_usage}  one model response's usage, closing the lines since the last one
@@ -46,6 +50,7 @@ import { basename, join } from 'node:path';
 import { createInterface } from 'node:readline';
 import { PassThrough, pipeline } from 'node:stream';
 import { createZstdDecompress, zstdDecompressSync } from 'node:zlib';
+import { SHAPE_INTERRUPT_LINE, SHAPE_TOOLS_LINE } from './session-shape.js';
 
 /** The Codex home for an environment; a test passes its own so it never reads the real one. */
 export const codexRoot = (env: { [name: string]: string | undefined }, home: string = homedir()): string => {
@@ -251,6 +256,19 @@ const usageOf = (info: unknown): Obj | undefined => {
 /** The non-blank lines of a rollout that are not JSON (a torn write), kept so `captureSession` counts them and the deposit line reports them. */
 export const rolloutBadLines = (text: string): string[] => text.split('\n').filter((raw) => raw.trim() !== '' && parse(raw) === undefined);
 
+/**
+ * The names in a list of tool declarations: each entry's `name` (a `DynamicToolSpec` function, dynamic_tools.rs; an `additional_tools` or
+ * `tool_search_output` entry is an untyped value, models.rs:1076, :1257), and the names of a namespace's own `tools`; a namespace's own name is a grouping, not a tool. Nothing else is read: a
+ * declaration's description and schema stay where they are.
+ */
+const toolNames = (list: unknown): string[] =>
+  (Array.isArray(list) ? list : [])
+    .flatMap((entry: unknown) => (isObj(entry) ? [Array.isArray(entry.tools) ? undefined : str(entry.name), ...toolNames(entry.tools)] : []))
+    .filter((name): name is string => name !== undefined && name !== '');
+
+/** The approval policy as the permission mode: a string, or the externally tagged `{granular: {...}}` form (protocol.rs:1181). */
+const approvalMode = (policy: unknown): string | undefined => (isObj(policy) && Object.hasOwn(policy, 'granular') ? 'granular' : str(policy));
+
 /** One rollout as the lines `captureSession` reads. */
 export const rolloutLines = (text: string, fallbackId: string, parentText?: string): Obj[] => {
   const nonblank = text.split('\n').filter((raw) => raw.trim() !== '');
@@ -307,6 +325,11 @@ export const rolloutLines = (text: string, fallbackId: string, parentText?: stri
       noDuration: true,
       message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: id, is_error: failure !== undefined, content: failure ?? (output === '' ? '' : `Exit code 0\n${output}`) }] },
     });
+  };
+  // A neutral line for the setup, funnel, and trust shape (session-shape.ts): none of it is a Claude-shaped line, and none carries a message.
+  const tools = (fields: Obj): void => {
+    sequence += 1;
+    lines.push({ ...base, type: SHAPE_TOOLS_LINE, uuid: `${fallbackId}-t${String(sequence)}`, ...fields });
   };
   const prompted = (message: string, when: string): void => {
     sequence += 1;
@@ -397,11 +420,16 @@ export const rolloutLines = (text: string, fallbackId: string, parentText?: stri
       const version = str(payload.cli_version);
       if (version !== undefined) base.version = version;
       stamp(payload.timestamp);
+      const declared = toolNames(payload.dynamic_tools);
+      if (declared.length > 0) tools({ offered: declared });
       inherited = num(payload.subagent_history_start_ordinal);
       paginated = payload.history_mode === 'paginated';
       if (inherited === undefined && parentText !== undefined && str(payload.forked_from_id) !== undefined && !isObj(payload.history_base)) copied = { keys: parentKeys(parentText), at: 0 };
     } else if (type === 'turn_context') {
       model = str(payload.model) ?? model;
+      // The policy rides every later line as `permissionMode`, the key a Claude Code user line carries.
+      const mode = approvalMode(payload.approval_policy);
+      if (mode !== undefined) base.permissionMode = mode;
       const cwd = str(payload.cwd);
       if (cwd !== undefined) base.cwd = cwd;
     } else if (type === 'event_msg') {
@@ -411,6 +439,12 @@ export const rolloutLines = (text: string, fallbackId: string, parentText?: stri
         if (message !== undefined) prompted(message, when);
       } else if (kind === 'item_completed') {
         if (isObj(payload.item)) completed(payload.item, when);
+      } else if (kind === 'turn_aborted') {
+        // Only `interrupted` is the operator cutting a turn short: `replaced`, `review_ended`, and `budget_limited` are the harness's own (protocol.rs:4580-4585).
+        if (payload.reason === 'interrupted') {
+          sequence += 1;
+          lines.push({ ...base, type: SHAPE_INTERRUPT_LINE, uuid: `${fallbackId}-i${String(sequence)}` });
+        }
       } else if (kind === 'agent_message') {
         const message = str(payload.message);
         if (message !== undefined) assistant([{ type: 'text', text: message }], when);
@@ -439,7 +473,13 @@ export const rolloutLines = (text: string, fallbackId: string, parentText?: stri
       }
     } else if (type === 'response_item') {
       const kind = str(payload.type);
-      if (kind === 'web_search_call') {
+      if (kind === 'additional_tools') {
+        const declared = toolNames(payload.tools);
+        if (declared.length > 0) tools({ offered: declared });
+      } else if (kind === 'tool_search_output') {
+        const found = toolNames(payload.tools);
+        if (found.length > 0) tools({ loaded: found });
+      } else if (kind === 'web_search_call') {
         // A search is its own response item (protocol/src/models.rs:1270; persisted, rollout/src/policy.rs:94), with no call_id and no output item: the item
         // is the finished call (`response.output_item.done`, models.rs:1262-1269), so it carries no failure signal and is recorded ok, as another non-shell call is.
         // Only a `search` action has a query (`query`, else the first of `queries`; models.rs:2125-2132); `open_page` and `find_in_page` carry a url (:2134-2145).
