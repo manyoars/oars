@@ -228,14 +228,17 @@ export const runGateHook = async (stdin: string, deps: GateHookDeps): Promise<st
   for (const seen of check.crossings) {
     // A project's own bin is a stat walk, local and fast; it runs before the registry ask so a bin that is there is never asked about.
     const crossing = await withLocalBin(seen, cwd, binMemo);
-    const { novelty, add } = noveltyOf(index, scopesOf(keyOf(crossing), repository, session));
+    const scopes = scopesOf(keyOf(crossing), repository, session);
+    const { novelty, add, noted } = noveltyOf(index, scopes);
     for (const line of add) lines.add(line);
     const read = await registryAnswer(deps, crossing, cwd, kept);
+    // A sight with no reading (a cut ask, no time, a name not asked) spends nothing: the session's note waits for the first sight that has one.
+    if (read !== undefined && !noted) lines.add(scopes.read);
     if (read?.asked === true && read.answer.state !== 'unreachable') {
       answered.push({ kind: 'registry', v: GATE_VERSION, day: ts.slice(0, 10), ts, class: crossing.class, state: read.answer.state, created: read.answer.created, name: crossing.name, latest: read.answer.latest });
     }
     const state = read?.answer.state;
-    const decision = decide(policy, state === 'found' || state === 'not-found' ? { state, created: read?.answer.created ?? null, novelty } : undefined, deps.now(), random, crossing.name);
+    const decision = decide(policy, state === 'found' || state === 'not-found' ? { state, created: read?.answer.created ?? null, noted } : undefined, deps.now(), random, crossing.name);
     if (decision.kind === 'block' && decision.text !== null) blocks.push(decision.text);
     if (decision.kind === 'note' && decision.text !== null) notes.push(decision.text);
     rows.push(recordOf(common, crossing, novelty, read, source, decision));

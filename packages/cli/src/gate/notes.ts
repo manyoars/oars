@@ -2,14 +2,14 @@
 // line comes from `LINE_TABLE`, so the id a row records is one of a closed few and the words are reviewed in one place. The hook never allows or rewrites a call, so nothing
 // here can: a decision is only a line to show, or a label to deny with.
 import type { Policy } from './policy.js';
-import type { Arm, LineId, Novelty } from './record.js';
+import type { Arm, LineId } from './record.js';
 import { DAY_MS } from './registry-state.js';
 
-/** The facts a decision reads: what the registry answered, when the name was first published, and whether this session has seen the name. */
+/** The facts a decision reads: what the registry answered, when the name was first published, and whether this session has already had a sight of the name with a reading (`noted`). */
 export interface LineFacts {
   state: 'found' | 'not-found';
   created: string | null;
-  novelty: Novelty;
+  noted: boolean;
 }
 
 export interface Decision {
@@ -42,9 +42,9 @@ export const decide = (policy: Policy, facts: LineFacts | undefined, now: number
   if (facts.state === 'not-found') {
     const action = policy.classes['not-found'];
     if (action === 'block') return { arm: 'none', lineId: 'not-found-block', kind: 'block', text: lineText('not-found-block', name, 0) };
-    return action === 'warn' && facts.novelty !== 'none' ? note(policy, 'not-found-note', name, 0, random) : NONE;
+    return action === 'warn' && !facts.noted ? note(policy, 'not-found-note', name, 0, random) : NONE;
   }
-  if (policy.classes['young-name'] !== 'warn' || facts.created === null || facts.novelty === 'none') return NONE;
+  if (policy.classes['young-name'] !== 'warn' || facts.created === null || facts.noted) return NONE;
   const days = (now - Date.parse(facts.created)) / DAY_MS;
   return days >= 0 && days < policy.youngDays ? note(policy, 'young-name-note', name, Math.floor(days), random) : NONE;
 };

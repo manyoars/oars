@@ -4,8 +4,8 @@ import { DEFAULT_POLICY, type Policy } from './policy.js';
 import { ARMS, LINE_IDS } from './record.js';
 
 const NOW = Date.parse('2026-11-04T10:00:00.000Z');
-const young: LineFacts = { state: 'found', created: '2026-11-01T10:00:00.000Z', novelty: 'fleet' };
-const missing: LineFacts = { state: 'not-found', created: null, novelty: 'fleet' };
+const young: LineFacts = { state: 'found', created: '2026-11-01T10:00:00.000Z', noted: false };
+const missing: LineFacts = { state: 'not-found', created: null, noted: false };
 const policy = (extra: Partial<Policy> = {}, classes: Partial<Policy['classes']> = {}): Policy => ({ ...DEFAULT_POLICY, ...extra, classes: { ...DEFAULT_POLICY.classes, ...classes } });
 const shown = (): number => 0.99;
 const held = (): number => 0;
@@ -47,8 +47,8 @@ describe('what a row says and shows', () => {
     expect(decide(policy(), young, NOW, shown, 'left-pad')).toEqual({ arm: 'shown', lineId: 'young-name-note', kind: 'note', text: 'Registry note: left-pad was first published 3 days ago in the registry your package manager uses.' });
     expect(decide(policy({ youngDays: 3 }), young, NOW, shown, 'x').kind).toBe('none');
     expect(decide(policy({ youngDays: 4 }), young, NOW, shown, 'x').kind).toBe('note');
-    expect(decide(policy(), { ...young, novelty: 'none' }, NOW, shown, 'x').kind).toBe('none');
-    expect(decide(policy(), { ...young, novelty: 'not-read' }, NOW, shown, 'x').kind).toBe('note');
+    expect(decide(policy(), { ...young, noted: true }, NOW, shown, 'x').kind).toBe('none');
+    expect(decide(policy(), { ...young, noted: false }, NOW, shown, 'x').kind).toBe('note');
   });
 
   it('notes a name not found by default, blocks it only when the policy says block, and says nothing when it is off', () => {
