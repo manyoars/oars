@@ -10,19 +10,19 @@ const scopeOf = (cell: Cell): string => {
 };
 
 export const deriveChange: DeriveFamily = ({ pool }) => {
-  const steps = new Map([...groupBy(shapeUnits(pool), scopeOf)].map(([scope, cells]) => [scope, total(cells, settled)]));
-  return [...groupBy(unitCells(pool), ({ cell }) => `${cell.motifId}/${scopeOf(cell)}`).values()].flatMap((group) => {
+  const steps = new Map([...groupBy(shapeUnits(pool, 'week'), scopeOf)].map(([scope, cells]) => [scope, total(cells, settled)]));
+  return [...groupBy(unitCells(pool, 'week'), ({ cell }) => `${cell.motifId}/${scopeOf(cell)}`).values()].flatMap((group) => {
     const [first] = group;
     const cells = group.map(({ cell }) => cell);
     const n = total(cells, settled);
     if (first === undefined || n === 0) return [];
     const of = steps.get(scopeOf(first.cell)) ?? 0;
     const { harness, harnessBucket } = bucketFields(first.cell.frameBucket);
-    const days = cells.map((cell) => cell.day).filter((day) => day !== UNKNOWN);
+    const weeks = cells.map((cell) => cell.day).filter((week) => week !== UNKNOWN);
     return [
       body('change', cells, {
         slice: { motif: motifName(first.motif), level: first.motif.level, harness, harnessBucket },
-        value: { share: rate(n, of), of, failureRate: rate(total(cells, (cell) => cell.failed), n), firstDay: firstDayOf(days), lastDay: lastDayOf(days) },
+        value: { share: rate(n, of), of, failureRate: rate(total(cells, (cell) => cell.failed), n), firstWeek: firstDayOf(weeks), lastWeek: lastDayOf(weeks) },
         n,
         interval: wilson(n, of),
       }),

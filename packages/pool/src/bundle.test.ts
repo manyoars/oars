@@ -221,12 +221,25 @@ describe('clusters over the cells of a read', () => {
     return verified.bundle;
   };
 
-  // Cells split by day, so no single cell here holds more than one account. A read's `clusters` is the largest held count among its cells, with no union over accounts: the
-  // pool keeps no per-account record on the fetch path, so these five serve nothing until a later change brings held counts for a key's `n` and `c`.
-  it('five accounts on five different days serve no read: each cell holds one cluster and a read takes the largest', async () => {
+  // A non-live cell is a week (rule 6), so five accounts on five days of one week share each week cell and reach the floor there, while a `live` cell is a day and holds one of them. A read's
+  // `clusters` is the largest held count among its cells, with no union over accounts: the pool keeps no per-account record on the fetch path.
+  it('five accounts on five days of one week serve the week reads at 5 clusters and no live read', async () => {
     await inFreshPool(async (spread) => {
-      for (const [index, day] of ['2026-11-01', '2026-11-02', '2026-11-03', '2026-11-04'].entries()) await depositOn(spread, `300${String(index + 1)}`, [day]);
-      const token = await depositOn(spread, '3005', ['2026-11-05']);
+      for (const [index, day] of ['2026-10-26', '2026-10-27', '2026-10-28', '2026-10-29'].entries()) await depositOn(spread, `300${String(index + 1)}`, [day]);
+      const token = await depositOn(spread, '3005', ['2026-10-30']);
+      const bundle = await readsIn(spread, token);
+      expect(bundle.reads.length).toBeGreaterThan(0);
+      expect(bundle.reads.filter((read) => read.family === 'live')).toEqual([]);
+      for (const read of bundle.reads) expect(read.clusters).toBe(5);
+      expect(bundle.cells.length).toBeGreaterThan(0);
+      expect(bundle.cells.every((cell) => cell.grain === 'week' && cell.day === '2026-10-26')).toBe(true);
+    });
+  }, 60_000);
+
+  it('five accounts in five different weeks serve no read: each week cell holds one cluster and a read takes the largest', async () => {
+    await inFreshPool(async (spread) => {
+      for (const [index, day] of ['2026-10-05', '2026-10-12', '2026-10-19', '2026-10-26'].entries()) await depositOn(spread, `310${String(index + 1)}`, [day]);
+      const token = await depositOn(spread, '3105', ['2026-11-02']);
       const bundle = await readsIn(spread, token);
       expect(bundle.reads).toEqual([]);
       expect(bundle.cells).toEqual([]);

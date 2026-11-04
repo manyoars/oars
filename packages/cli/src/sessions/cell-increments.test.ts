@@ -1,7 +1,7 @@
 // One cell computation for a deposit and a local read (pool vocabulary spec Section 4, rules 1 to 6).
 import { describe, expect, it } from 'vitest';
 import { cellsOf, incrementsOf, projectedStore, storeOf, type Increments } from './cell-increments.js';
-import { deriveCells } from './cells.js';
+import { deriveCells, effortClass, NO_AXES } from './cells.js';
 import { classMotif } from './motif.js';
 import { frame, printOf, prompt, session, sessionsFrom, step, store, storedNames, tool } from './pool-fixture.js';
 import { floorOf, skeletonOf, type SessionSkeleton } from './pool-wire.js';
@@ -11,6 +11,8 @@ import type { Store } from './store.js';
 
 const framed = frame({ shell: 'bash', stack: { languages: ['rust'], frameworks: ['astro'], size: 'xl' } });
 const ID = '0123456789abcdef';
+// The local store's one prompt runs at high effort and spends 5,000 thinking tokens.
+const effortPairId = classMotif(effortClass('high', 5000)).motifId;
 
 const pushStep = (n: number, cost: { tokens: number | null; durationMs: number | null }) => step(n, 0, 'shell.exec', { native: 'Bash', identity: { program: 'git', sub: 'push', flags: ['--force'] }, cost });
 
@@ -29,8 +31,8 @@ const skeletonOfLocal = (local: Store): SessionSkeleton => {
   return skeleton;
 };
 
-const keyed = (cells: readonly { motifId: string; frameBucket: string; day: string; exposed: boolean | number; sessions: number; ok: number; failed: number; tokens: number; durationMs: number }[]) =>
-  cells.map(({ motifId, frameBucket, day, exposed, sessions, ok, failed, tokens, durationMs }) => `${motifId}/${frameBucket}/${day}/${String(Number(exposed))} ${String(sessions)} ${String(ok)} ${String(failed)} ${String(tokens)} ${String(durationMs)}`).sort();
+const keyed = (cells: readonly { motifId: string; frameBucket: string; grain: string; day: string; exposed: boolean | number; sessions: number; ok: number; failed: number; tokens: number; durationMs: number }[]) =>
+  cells.map(({ motifId, frameBucket, grain, day, exposed, sessions, ok, failed, tokens, durationMs }) => `${motifId}/${frameBucket}/${grain}/${day}/${String(Number(exposed))} ${String(sessions)} ${String(ok)} ${String(failed)} ${String(tokens)} ${String(durationMs)}`).sort();
 
 describe('storeOf', () => {
   it('numbers the calls and prompts of a transcript by position, and ties each subagent to the main run', () => {
@@ -72,7 +74,7 @@ describe('rule 5: a bucket and no exact number', () => {
     const exactCells = deriveCells(onFloors).cells;
     const flooredCells = [...incrementsOf(skeletonOfLocal(onFloors)).cells.values()];
     const unnamed = new Set(exactCells.filter(({ motifId }) => flooredCells.some((cell) => cell.motifId === motifId)).map(({ motifId }) => motifId));
-    expect(unnamed.size).toBe(3);
+    expect(unnamed.size).toBe(4);
     expect(keyed(flooredCells.filter(({ motifId }) => unnamed.has(motifId)))).toEqual(keyed(exactCells.filter(({ motifId }) => unnamed.has(motifId))));
     expect(flooredCells).toHaveLength(exactCells.length + 1);
   });
@@ -87,6 +89,24 @@ describe('the local read and the deposit share one computation', () => {
     expect(keyed([...viaDeposit.values()])).toEqual(keyed(viaLocalRead));
   });
 
+  // The one difference that stays: a deposit is derived from a skeleton, which has no recall graph, so a recall the local store shows is a step and an exposure only locally.
+  it('derives a session with a shown recall differently from its deposit, which has no recall graph', () => {
+    const base = localStore();
+    const timed = store({ ...base, tools: base.tools.map((held, n) => ({ ...held, ts: `2026-11-01T10:00:0${String(n * 2)}.000Z`, prompt: 0 })) });
+    const recall = makeRecall({ sid: 's1', at: '2026-11-01T10:00:01.000Z', frame: null, mode: 'push', query: { form: 'pattern', prefix: ['shape'] }, poolVersion: '2026-10-01T00:00:00.000Z', arm: 'shown', reads: ['r'], rendered: 'x'.repeat(40), names: ['shell.exec'], evidence: [] });
+    const recallActions = (motifs: readonly { steps: readonly { action: string }[] }[]): number => motifs.filter(({ steps }) => steps.some(({ action }) => action === 'recall.push')).length;
+    const projected = projectedStore(timed, storedNames);
+    const withGraph = cellsOf(projected, recallGraphOf(timed, deriveConsequences(timed, [recall])));
+    const deposit = incrementsOf(skeletonOfLocal(timed));
+    expect(recallActions(withGraph.motifs)).toBeGreaterThan(0);
+    expect(withGraph.cells.some(({ exposed }) => exposed)).toBe(true);
+    expect(recallActions(deposit.motifs)).toBe(0);
+    expect([...deposit.cells.values()].some(({ exposed }) => exposed)).toBe(false);
+    expect(keyed([...deposit.cells.values()])).not.toEqual(keyed(withGraph.cells));
+    // Without the graph the two are the same cells, so the graph is the whole difference.
+    expect(keyed([...deposit.cells.values()])).toEqual(keyed(cellsOf(projected).cells));
+  });
+
   it('reads a record with no steps as it is, and a shell step as a deposit would project it', () => {
     const bare = store({ sessions: [session('s1')], tools: [tool('s1', 0, 'Bash')] });
     expect(projectedStore(bare, storedNames)).toEqual(bare);
@@ -98,14 +118,15 @@ describe('the local read and the deposit share one computation', () => {
 describe('rules 1 to 3 and 6: what a cell and a stratum hold', () => {
   const increments = (): Increments => incrementsOf(skeletonOfLocal(localStore()));
 
-  it('keeps one element per cell: one motif, one frame bucket, one day, and one exposure, with no row joining two cells', () => {
+  it('keeps one element per cell: one motif, one frame bucket, one grain and period, and one exposure, with no row joining two cells', () => {
     const { cells, motifs } = increments();
     const known = new Set(motifs.map(({ motifId }) => motifId));
     expect(cells.size).toBeGreaterThan(1);
     for (const [key, cell] of cells) {
-      expect(key).toBe(`${cell.motifId}/${cell.frameBucket}/${cell.day}/${String(cell.exposed)}`);
+      expect(key).toBe(`${cell.motifId}/${cell.frameBucket}/${cell.grain}/${cell.day}/${String(cell.exposed)}`);
       expect(known.has(cell.motifId)).toBe(true);
-      expect(cell.frameBucket.split('/')).toHaveLength(4);
+      // The effort pair joins no axis (rule 3); every other cell holds a harness, a version bucket, and a model.
+      if (cell.frameBucket !== NO_AXES) expect(cell.frameBucket.split('/')).toHaveLength(3);
     }
   });
 
@@ -156,7 +177,7 @@ describe('rules 1 to 3 and 6: what a cell and a stratum hold', () => {
     });
     const recall = makeRecall({ sid: 's1', at: '2026-11-01T10:00:01.000Z', frame: null, mode: 'push', query: { form: 'pattern', prefix: ['shape'] }, poolVersion: '2026-10-01T00:00:00.000Z', arm: 'shown', reads: ['r'], rendered: 'x'.repeat(40), names: ['file.edit'], evidence: [] });
     const { cells } = cellsOf(projectedStore(flagged, storedNames), recallGraphOf(flagged, deriveConsequences(flagged, [recall])));
-    const keys = cells.map(({ motifId, frameBucket, day, exposed }) => `${motifId}/${frameBucket}/${day}/${String(exposed)}`);
+    const keys = cells.map(({ motifId, frameBucket, grain, day, exposed }) => `${motifId}/${frameBucket}/${grain}/${day}/${String(exposed)}`);
     expect(new Set(keys).size).toBe(keys.length);
   });
 
@@ -166,13 +187,15 @@ describe('rules 1 to 3 and 6: what a cell and a stratum hold', () => {
     for (const stratum of strata.values()) expect(stratum.sessions).toBe(1);
   });
 
-  it('puts only the axes and effort in a cell key', () => {
-    const [cell] = increments().cells.values();
-    expect(cell?.frameBucket).toBe('claude-code/2.1.31x/claude-opus-5-5/high');
+  it('puts only the axes in a cell key, and never effort (rule 3)', () => {
+    for (const cell of increments().cells.values()) expect(cell.frameBucket).toBe(cell.motifId === effortPairId ? NO_AXES : 'claude-code/2.1.31x/claude-opus-5-5');
   });
 
-  // Stated limit (pool.md): the cell model is at UTC day, and its frame bucket still names `effort`. Rules 6 (week) and 3 (no `effort` in a cell key) need the cells rebuilt.
-  it('keeps the cells at the frame\'s UTC day, the grain the cell model holds today', () => {
-    for (const cell of increments().cells.values()) expect(cell.day).toBe('2026-11-01');
+  // Rule 6: a cell is weekly except `live`. 2026-11-01 is a Sunday, so its UTC week starts on Monday 2026-10-26.
+  it('keys every cell on its UTC week, and only a live shape cell on the UTC day', () => {
+    const held = [...increments().cells.values()];
+    for (const cell of held) expect(cell.day).toBe(cell.grain === 'week' ? '2026-10-26' : '2026-11-01');
+    expect(held.filter(({ grain }) => grain === 'day').length).toBeGreaterThan(0);
+    expect(held.filter(({ grain }) => grain === 'week').length).toBeGreaterThan(0);
   });
 });

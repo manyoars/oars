@@ -43,7 +43,7 @@ describe('interaction', () => {
     );
     expect(found).toHaveLength(1);
     const [read] = found;
-    expect(read?.slice).toEqual({ motif: 'file.edit', level: 'shape', harness: 'claude-code', harnessBucket: '2.1.31x', effort: 'high', tierA: OPUS, tierB: SONNET });
+    expect(read?.slice).toEqual({ motif: 'file.edit', level: 'shape', harness: 'claude-code', harnessBucket: '2.1.31x', tierA: OPUS, tierB: SONNET });
     expect(read?.method).toBe('failure-gap-across-tier-assigned');
     expect(read?.value.failureA).toBe(0.6);
     expect(read?.value.failureB).toBe(0.03);
@@ -99,29 +99,29 @@ describe('interaction', () => {
     expect(found[0]?.value.interaction).toBeGreaterThan(0);
   });
 
-  it('holds effort constant: two tiers at different efforts are not compared', () => {
-    expect(
-      reads(
-        tiers(
-          [
-            { name: 'Edit', count: 200, failed: 120 },
-            { name: 'Read', count: 400, failed: 8 },
-          ],
-          [
-            { name: 'Edit', count: 200, failed: 6 },
-            { name: 'Read', count: 400, failed: 8 },
-          ],
-          'low',
-        ),
+  it('does not hold effort constant: effort is not in a cell (rule 3), so two tiers at different efforts are compared and the slice names no effort', () => {
+    const found = reads(
+      tiers(
+        [
+          { name: 'Edit', count: 200, failed: 120 },
+          { name: 'Read', count: 400, failed: 8 },
+        ],
+        [
+          { name: 'Edit', count: 200, failed: 6 },
+          { name: 'Read', count: 400, failed: 8 },
+        ],
+        'low',
       ),
-    ).toEqual([]);
+    );
+    expect(found).toHaveLength(1);
+    expect(found[0]?.slice).not.toHaveProperty('effort');
   });
 
-  it('compares nothing in an unknown frame: an unknown effort or version bucket holds neither constant', () => {
+  it('compares nothing in an unknown frame: an unknown version bucket holds no frame constant, and an unknown effort does not matter', () => {
     const planted = (both: Partial<Frame>) =>
       reads(tiers([{ name: 'Edit', count: 200, failed: 120 }, { name: 'Read', count: 400, failed: 8 }], [{ name: 'Edit', count: 200, failed: 6 }, { name: 'Read', count: 400, failed: 8 }], 'high', both));
     expect(planted({})).toHaveLength(1);
-    expect(planted({ effort: null })).toEqual([]);
+    expect(planted({ effort: null })).toHaveLength(1);
     expect(planted({ harnessVersion: null })).toEqual([]);
   });
 

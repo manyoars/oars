@@ -32,24 +32,24 @@ export type Family = (typeof FAMILIES)[number];
  * It lives here and not beside each family because the pool hash needs it, and a family module imports the cells the hash is in.
  */
 export const METHODS: { readonly [family in Family]: { readonly name: string; readonly version: string } } = {
-  recovery: { name: 'signature-record', version: '1' },
-  fit: { name: 'failure-rate', version: '1' },
+  recovery: { name: 'signature-record', version: '2' },
+  fit: { name: 'failure-rate', version: '2' },
   cost: { name: 'per-prompt-by-class', version: '1' },
-  change: { name: 'share-in-version-bucket', version: '1' },
+  change: { name: 'share-in-version-bucket', version: '2' },
   live: { name: 'day-against-trailing-week', version: '2' },
-  adoption: { name: 'share-and-span', version: '1' },
+  adoption: { name: 'share-and-span', version: '2' },
   method: { name: 'shape-share-by-model', version: '1' },
   'next-step': { name: 'next-action-counts', version: '1' },
   'tool-day': { name: 'rates-on-day', version: '1' },
-  'version-boundary': { name: 'move-between-buckets', version: '1' },
+  'version-boundary': { name: 'move-between-buckets', version: '2' },
   substitution: { name: 'rise-against-fall', version: '1' },
-  interaction: { name: 'failure-gap-across-tier-assigned', version: '2' },
+  interaction: { name: 'failure-gap-across-tier-assigned', version: '3' },
   'day-move': { name: 'move-to-next-day', version: '2' },
   'lead-lag': { name: 'failure-move-leads-share-move', version: '1' },
 };
 
 /** The fit family's other method (`read-call-shape.ts`). The pool's version hashes it beside the table, for the same reason. */
-export const CALL_SHAPE_METHOD = { name: 'call-shape', version: '1' } as const;
+export const CALL_SHAPE_METHOD = { name: 'call-shape', version: '2' } as const;
 
 /** `all`, or `unexposed`: only steps outside any recall's consequence window, so a read cannot mistake the pool's influence for the world. */
 export type ReadBasis = 'all' | 'unexposed';

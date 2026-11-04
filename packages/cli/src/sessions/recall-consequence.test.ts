@@ -98,6 +98,15 @@ describe('recalls in the graph', () => {
     expect(cells.find((cell) => cell.motifId === shapeId([{ action: 'file.read', identity: null }]))?.exposed).toBe(false);
   });
 
+  // Rule 5: no cell holds a number finer than its bucket's floor. A recall step is placed after the store is floored, so its own count is floored where it enters.
+  it('floors the tokens of a recall step to its bucket where the step enters a cell', () => {
+    const sized = (tokens: number): Recall => ({ ...recallAt(1), answer: { ...recallAt(1).answer, tokens } });
+    const tokensOf = (tokens: number): number | undefined => cellsWith([sized(tokens)]).find((cell) => cell.motifId === shapeId([push]))?.tokens;
+    expect(tokensOf(1500)).toBe(1000);
+    expect(tokensOf(2999)).toBe(2000);
+    expect(tokensOf(999)).toBe(0);
+  });
+
   it('keeps a held recall out of the steps and out of exposure, so the cells are those of no recall', () => {
     expect(cellsWith([recallAt(1, 'held')])).toEqual(deriveCells(line(tools)).cells);
   });

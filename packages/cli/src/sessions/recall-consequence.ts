@@ -2,6 +2,7 @@
 // `recalls.jsonl` stays append-only and a change here needs no re-deposit. Held recalls get a consequence too: they are the baseline a shown recall reads against. Only a
 // shown recall touches the graph, because a held one reached nobody: it adds no `recall.*` step and exposes no cell.
 import { motifsOf, stepsOfCall, type CountedStep } from './motif.js';
+import { bucketOf, floorOf } from './pool-wire.js';
 import type { Recall, RecallConsequence, RecallOutcome } from './recall-object.js';
 import { harnessOf, type Harness, type PromptObservation, type ToolObservation } from './schema.js';
 import type { Store } from './store.js';
@@ -110,8 +111,9 @@ const pushTo = (map: Map<string, PlacedStep[]>, key: string, step: PlacedStep): 
   else found.push(step);
 };
 
+/** The step enters a cell after the store is floored, so its own count is floored here: no cell holds a number finer than its bucket's floor (rule 5). */
 const recallStep = (recall: Recall): PlacedStep => ({
-  step: { action: recall.mode === 'pull' ? 'recall.pull' : 'recall.push', identity: null, status: 'ok', tokens: recall.answer.tokens, durationMs: 0 },
+  step: { action: recall.mode === 'pull' ? 'recall.pull' : 'recall.push', identity: null, status: 'ok', tokens: floorOf('tokens', bucketOf('tokens', recall.answer.tokens)), durationMs: 0 },
   exposed: true,
 });
 

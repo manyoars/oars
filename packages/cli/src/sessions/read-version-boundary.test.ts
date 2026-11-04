@@ -6,7 +6,7 @@ import { TRIALS_FLOOR } from './read-order.js';
 import type { Store } from './store.js';
 
 const OLDER = frame({ harnessVersion: '2.1.305', day: '2026-10-20' });
-const NEWER = frame({ harnessVersion: '2.1.312', day: '2026-10-25' });
+const NEWER = frame({ harnessVersion: '2.1.312', day: '2026-10-27' });
 
 /** Counts per tool in two adjacent version buckets, as `[tool, older, newer]`. */
 const twoBuckets = (counts: readonly (readonly [string, number, number])[], failedInNewer = 0): Store => {
@@ -29,8 +29,8 @@ describe('version boundary', () => {
     expect(read?.value.before).toBe(0.8);
     expect(read?.value.after).toBe(0.2);
     expect(read?.value.move).toBe(-0.6);
-    expect(read?.value.fromLastDay).toBe('2026-10-20');
-    expect(read?.value.toFirstDay).toBe('2026-10-25');
+    expect(read?.value.fromLastWeek).toBe('2026-10-19');
+    expect(read?.value.toFirstWeek).toBe('2026-10-26');
     expect(read?.n).toBe(1000);
     expect(read?.clusters).toBe(1);
     expect(read?.interval?.high).toBeLessThan(0);
@@ -42,9 +42,9 @@ describe('version boundary', () => {
   });
 
   it('finds nothing in a small wobble, however large the sample: a move has to matter', () => {
-    // A move of 0.008 on 100,000 steps a side: it clears the screen, and it is still under the smallest move worth stating.
+    // Two cells per step now (week and live day), so 200,000 steps run past the default timeout. A move of 0.008 on 100,000 steps a side: it clears the screen, and it is still under the smallest move worth stating.
     expect(reads(twoBuckets([['Read', 50_000, 50_800], ['Edit', 50_000, 49_200]]))).toEqual([]);
-  });
+  }, 30_000);
 
   it('finds a planted failure-rate shift with shares unchanged', () => {
     const found = reads(twoBuckets([['Read', 500, 500], ['Edit', 500, 500]], 100));

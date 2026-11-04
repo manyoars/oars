@@ -85,6 +85,7 @@ export const walkLineage = (sources: LineageSources, start: string): LineageHop[
     }
     const cell = cells.get(ref);
     if (cell !== undefined) {
+      // A week cell is named by its Monday, so only a week that opens after the recall is newer than it; a week that straddles the recall is checked by the read's own day, above.
       if (limit !== null && cell.day !== UNKNOWN && cell.day > limit) throw refuse(ref, cell.day, limit);
       hops.push({ depth, kind: 'cell', ref, frames: [cell.frameBucket], day: cell.day, detail: `${String(cell.sessions)} sessions, ${String(cell.ok)} ok, ${String(cell.failed)} failed${cell.exposed ? ', exposed' : ''}` });
       return;
@@ -119,7 +120,7 @@ const rowsOf = async <T>(file: string, isRow: (value: unknown) => value is T): P
 };
 
 const isRead = (value: unknown): value is Read => typeof value === 'object' && value !== null && 'readId' in value && 'inputs' in value;
-const isCell = (value: unknown): value is Cell => typeof value === 'object' && value !== null && 'motifId' in value && 'frameBucket' in value;
+const isCell = (value: unknown): value is Cell => typeof value === 'object' && value !== null && 'motifId' in value && 'frameBucket' in value && 'grain' in value;
 
 const readFiles = async (dir: string): Promise<string[]> => {
   try {
