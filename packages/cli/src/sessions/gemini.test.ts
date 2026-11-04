@@ -187,14 +187,21 @@ ${text}
   // The placeholder upstream closes an interrupted turn with (geminiChat.ts:118,921-934): no model wrote it.
   const INTERRUPTED = '[The previous response was interrupted before it completed.]';
 
+  // The placeholder follows a user turn that holds only a functionResponse (closeUnansweredToolResponseTurn returns otherwise, geminiChat.ts:917-922).
+  const toolAnswered = (): object[] => [
+    prompt(1, 'run it'),
+    say(2, 'working', { toolCalls: [shell('c1', 'make', 'success', 3, shellText('done'))] }),
+    { id: 'u3', timestamp: T(3), type: 'user', content: reply('c1', 'run_shell_command', { output: shellText('done') }) },
+  ];
+
   it('drops the interrupted-response placeholder recorded as a tokenless model message at the next sync (chatRecordingService.ts:1465-1480)', () => {
-    const lines = linesOf([head, prompt(1, 'run it'), say(2, 'working'), say(3, INTERRUPTED, { model: undefined })]);
+    const lines = linesOf([head, ...toolAnswered(), say(4, INTERRUPTED, { model: undefined })]);
     expect(lines.filter((entry) => entry.type === 'assistant')).toHaveLength(1);
     expect(JSON.stringify(lines)).not.toContain('interrupted');
   });
 
   it('keeps the usage of an empty turn whose content a patch sets to the interrupted placeholder, as a usage-only line (geminiChat.ts:925-926)', () => {
-    const records = [head, prompt(1, 'run it'), say(2, '', { tokens: tokens(100, 5, 40) }), { $patch: { updates: [{ id: 'g2', content: [{ text: INTERRUPTED }] }] } }];
+    const records = [head, ...toolAnswered(), say(4, '', { tokens: tokens(100, 5, 40), model: undefined }), { $patch: { updates: [{ id: 'g4', content: [{ text: INTERRUPTED }] }] } }];
     expect(extractOf(records).session.usage).toMatchObject({ input: 60, cacheRead: 40, output: 5 });
     expect(JSON.stringify(linesOf(records))).not.toContain('interrupted');
   });
@@ -273,6 +280,12 @@ ${text}
     expect(linesOf([head, hooked]).filter((entry) => entry.type === 'user')).toEqual([]);
   });
 
+  it('leaves the context of a BeforeAgent hook out of a typed prompt that has no displayContent: the ACP path sends none and the client appends the hook part (acpSession.ts:434, core/client.ts:985-989)', () => {
+    const typed = { id: 'u2', timestamp: T(2), type: 'user', content: [{ text: 'typed' }, { text: '<hook_context>from a hook</hook_context>' }] };
+    expect(JSON.stringify(linesOf([head, typed]).filter((entry) => entry.type === 'user'))).toContain('"text":"typed"');
+    expect(JSON.stringify(linesOf([head, typed]))).not.toContain('hook_context');
+  });
+
   it('reads a tool-result turn with a "User steering update:" text beside the result as a prompt: the operator typed the hint (cli useGeminiStream.ts:2345-2347, fastAckHelper.ts:67-70, utils/messageInspectors.ts:9-13)', () => {
     // The CLI unshifts `buildUserSteeringHintPrompt` (the operator's words in `<user_input>`) beside the function responses, and `isFunctionResponse` tests with `some`, so that turn is recorded.
     const response = { functionResponse: { id: 'x', name: 'read_file', response: { output: 'file text' } } };
@@ -339,7 +352,7 @@ ${text}
         summary('s1', 20),
         gotIt('s2', 20),
         copy('k1', 'user', 'try again', 20),
-        { $patch: { removeIds: ['u1', 'g2', 'u5'], orderIds: ['s1', 's2', 'k1'] } },
+        { $patch: { removeIds: ['u1', 'g2', 'u5'] } },
         prompt(30, 'and now'),
       ];
       const lines = linesOf(records);
@@ -376,7 +389,7 @@ ${text}
       copy(`mu5${suffix}`, 'user', 'try again', second),
     ];
     const passPatch = (suffix: string, removed: readonly string[], updates: readonly unknown[] = []) => ({
-      $patch: { ...(updates.length === 0 ? {} : { updates }), removeIds: removed, orderIds: [`mu1${suffix}`, `mg2${suffix}`, `mt4${suffix}`, `mu5${suffix}`] },
+      $patch: { ...(updates.length === 0 ? {} : { updates }), removeIds: removed },
     });
     const maskedUpdate = [{ id: 'g2', toolCalls: [{ id: 'c1', result: maskedTurn }] }];
     const firstPass = [...maskingPass('a', 20), passPatch('a', ['u1', 'g2', 't4', 'u5'], maskedUpdate)];
@@ -429,7 +442,7 @@ ${text}
           copy('k1', 'user', 'fix the build', 20),
           copy('k2', 'gemini', raw, 20),
           copy('k3', 'user', 'try again', 20),
-          { $patch: { removeIds: ['u1', 'g2', 'u5'], orderIds: ['k1', 'k2', 'k3'] } },
+          { $patch: { removeIds: ['u1', 'g2', 'u5'] } },
         ];
         expect(extractOf(records).session.assistantTurns).toBe(1);
       }
@@ -437,13 +450,35 @@ ${text}
 
     it('treats the text user turn before the canned reply as the summary whatever it opens with (a scratchpad, a code fence), and still skips a bare summary whose reply is gone (context/chatCompressionService.ts:588,603,665-673)', () => {
       const userTurns = (text: string, withReply = true) =>
-        extractOf([...original(), copy('s1', 'user', text, 20), ...(withReply ? [gotIt('s2', 20)] : []), { $patch: { removeIds: ['u1', 'g2', 'u5'], orderIds: withReply ? ['s1', 's2'] : ['s1'] } }]).session.userTurns;
+        extractOf([...original(), copy('s1', 'user', text, 20), ...(withReply ? [gotIt('s2', 20)] : []), { $patch: { removeIds: ['u1', 'g2', 'u5'] } }]).session.userTurns;
       expect(userTurns('<state_snapshot>\n<overall_goal>g</overall_goal>\n</state_snapshot>')).toBe(2);
       expect(userTurns('<scratchpad>thinking</scratchpad>\n<state_snapshot>x</state_snapshot>')).toBe(2);
       expect(userTurns('```xml\n<state_snapshot>x</state_snapshot>\n```')).toBe(2);
       expect(userTurns('<state_snapshot>x</state_snapshot>', false)).toBe(2);
       // A typed prompt before a response that has usage is a prompt, even when the response reads like the canned one.
       expect(extractOf([head, prompt(1, 'no reply yet'), say(2, 'Got it. Thanks for the additional context!', { tokens: tokens(5, 5) })]).session.userTurns).toBe(1);
+    });
+
+    it('reads a saved chat loaded with `/resume resume <tag>` as neither prompts nor responses: setHistory records each turn with no tokens or model, and only the typed prompt after it is a prompt (chatCommand.ts:228, slashCommandProcessor.ts:553, geminiChat.ts:1386-1395)', () => {
+      const records = [
+        head,
+        copy('ctx', 'user', '<session_context>\nToday is a day.\n</session_context>', 1),
+        copy('c1', 'user', '<session_context>\nToday is a day.\n</session_context>', 2),
+        copy('c2', 'user', 'old prompt from the saved chat', 2),
+        copy('c3', 'gemini', 'old answer from the saved chat', 2),
+        copy('c4', 'user', 'second old prompt', 2),
+        copy('c5', 'gemini', 'second old answer', 2),
+        { $patch: { removeIds: ['ctx'] } },
+        prompt(20, 'the only typed prompt'),
+        say(21, 'the answer', { tokens: tokens(10, 5) }),
+      ];
+      const lines = linesOf(records);
+      const prompts = lines.filter((entry) => entry.type === 'user').map((entry) => /"text":"([^"]*)"/.exec(JSON.stringify(entry.message))?.[1]);
+      expect(prompts).toEqual(['the only typed prompt']);
+      expect(lines.filter((entry) => entry.type === 'assistant')).toHaveLength(1);
+      const out = extractOf(records);
+      expect(out.session.userTurns).toBe(1);
+      expect(out.session.assistantTurns).toBe(1);
     });
 
     it('applies a rewind to a copy as a rewind from its original: the rolled-back prompt and response are gone and earlier turns stay (chatRecordingService.ts:1380-1410)', () => {
@@ -474,13 +509,13 @@ ${text}
         copy('a2', 'gemini', 'answer one', 20),
         copy('a3', 'user', 'second', 20),
         copy('a4', 'gemini', 'answer two', 20),
-        { $patch: { removeIds: ['u1', 'g2', 'u3', 'g4'], orderIds: ['a1', 'a2', 'a3', 'a4'] } },
+        { $patch: { removeIds: ['u1', 'g2', 'u3', 'g4'] } },
         { $rewindTo: 'a3' },
         prompt(30, 'retyped'),
         copy('b1', 'user', 'first', 40),
         copy('b2', 'gemini', 'answer one', 40),
         copy('b3', 'user', 'retyped', 40),
-        { $patch: { removeIds: ['a1', 'a2', 'u30'], orderIds: ['b1', 'b2', 'b3'] } },
+        { $patch: { removeIds: ['a1', 'a2', 'u30'] } },
       ];
       const out = extractOf(records);
       expect(out.session.userTurns).toBe(2);
@@ -494,7 +529,7 @@ ${text}
         prompt(2, 'again'),
         copy('k1', 'user', 'again', 20),
         copy('k2', 'user', 'again', 20),
-        { $patch: { removeIds: ['u1', 'u2'], orderIds: ['k1', 'k2'] } },
+        { $patch: { removeIds: ['u1', 'u2'] } },
         prompt(30, 'again'),
       ];
       expect(extractOf(records).session.userTurns).toBe(3);
@@ -532,7 +567,7 @@ ${text}
     // A removed message stays (a history sync's $patch lists every old id, and the message is the only record of what was said); only a copy of it is hidden.
     // Defensive inputs upstream cannot write (the loader guards each, chatRecordingService.ts:362,394): a numeric id in `removeIds` and `orderIds`, a non-object entry in `$set.messages`, a non-string `$rewindTo`.
     expect(prompts([...body, { $patch: { updates: [{ id: 'u3', content: [{ text: 'bulk' }] }], removeIds: ['u2', 7] } }])).toMatch(/one.*two.*bulk/);
-    // `orderIds` with a number and an unknown id: defensive, same guard.
+    // `orderIds` with a number and an unknown id: defensive, same guard. The writer writes `orderIds` only when a sync reorders the kept messages (chatRecordingService.ts:1552-1556), which no pass here does.
     expect(prompts([...body, { $patch: { orderIds: ['u3', 'u1', 'ghost', 4] } }])).toMatch(/two.*three.*one/);
     // Defensive: an update for an id the file does not hold (the writer patches only ids it indexed, chatRecordingService.ts:1437), and a top-level `$patch.id` (only the loader
     // reads it, :343-345; the writer, :1577-1587, writes `updates`, `removeIds`, and `orderIds`).
@@ -572,7 +607,7 @@ ${text}
     expect(linesOf([head, prompt(1, 'x')])[0]).toMatchObject({ sessionId: 'sess-1' });
     // Defensive: the writer's first line is the head (chatRecordingService.ts:855-866), so a file with none is one `openGeminiStore` has already refused; this proves the fallback id only.
     expect(chatLines(asText([prompt(1, 'x'), say(2, 'y')]), 'fallback', null)[0]).toMatchObject({ sessionId: 'fallback' });
-    expect(linesOf([head, prompt(1, 'x'), say(2, 'y', { model: undefined })]).find((entry) => entry.type === 'assistant')).not.toHaveProperty('requestedModel');
+    expect(linesOf([head, prompt(1, 'x'), say(2, 'y', { model: undefined, tokens: tokens(1, 1) })]).find((entry) => entry.type === 'assistant')).not.toHaveProperty('requestedModel');
   });
 
   it('never steps a prompt back before the one before it, and gives one whose time is missing or relative the last good time (upstream always writes an ISO time, so this is defensive)', () => {
