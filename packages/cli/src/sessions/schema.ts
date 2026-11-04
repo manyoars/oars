@@ -5,6 +5,9 @@
 // captured records to `<config>/oars/sessions/observations.jsonl`. The log is appended to, and a whole-store deposit drops superseded revs (`compactLog` in `store.ts`): a session whose file changed is deposited
 // again under a higher `rev`, and a reader keeps only the highest `rev` of each session.
 //
+// Version 11 (CAPTURE 11, t815) adds the optional `setup`, `funnel`, and `trust` to the session record, read from the transcript only (`session-shape.ts`;
+// `docs/sessions-store.md`). It changed no derivation, so it leaves EXTRACTOR at 9.
+//
 // Version 10 (CAPTURE 10, t768) gives a turn opened by a slash command or a skill a `user-prompt` record, adds `opened` to that record, and moves `skills`
 // from class P to class A, since a skill's name can be private. It changed no derivation, so it leaves EXTRACTOR at 9.
 //
@@ -131,7 +134,7 @@ export interface CaptureEnv {
 /**
  * One per transcript, captured: the `parse_sessions.py` record, minus anything that is raw content. Classes (t711 Section 1.2):
  * `L` local-only: `project`, `files`. `A` account store: `session`, `parent`, `spawnedBy`, `spawnedIn`, `branches`, `urls`, `searches`, `tldrs`,
- * `confidences`, `promptFingerprint`, `repo`, `fileHashes`, `tools`, `at`, `tsFirst`, `tsLast`. `P` pooled: `kind`, `cv`, `rev`, `sid`,
+ * `confidences`, `promptFingerprint`, `repo`, `fileHashes`, `tools`, `setup`, `funnel`, `trust`, `at`, `tsFirst`, `tsLast`. `P` pooled: `kind`, `cv`, `rev`, `sid`,
  * `agentType`, the counts, `versions`, `models`, `env`, `costUsd`, `usage`, `frame`, `frameId` (`at`, `tsFirst`, and `tsLast` at UTC day).
  */
 export interface SessionObservation {

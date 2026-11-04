@@ -23,7 +23,10 @@ const DENIED_RE = /^(?:Permission (?:to use .{1,200}?|for this action) has been 
 /** A plugin's MCP server names its tools `mcp__plugin_<plugin>_<server>__<tool>`; that is the only evidence of an installed plugin read here. */
 const PLUGIN_TOOL_RE = /^mcp__plugin_([A-Za-z0-9-]+)_/;
 
-/** An adapter's neutral line naming tools: `offered`, `loaded`, and `removed` are arrays of tool names. */
+/** A hook of the `Stop` event, named `Stop` or `Stop:<matcher>`. */
+const STOP_HOOK_RE = /^Stop(?::|$)/;
+
+/** An adapter's neutral line naming tools: `offered` and `loaded` are arrays of tool names. */
 export const SHAPE_TOOLS_LINE = 'oars-tools';
 /** An adapter's neutral line for a turn the operator cut short, for a harness whose record is not a Claude marker line. */
 export const SHAPE_INTERRUPT_LINE = 'oars-interrupt';
@@ -32,6 +35,8 @@ export const SHAPE_INTERRUPT_LINE = 'oars-interrupt';
 const PERMISSION_MODES: { readonly [harness in Harness]: ReadonlySet<string> } = {
   'claude-code': new Set(['default', 'acceptEdits', 'plan', 'auto', 'dontAsk', 'bypassPermissions']),
   codex: new Set(['untrusted', 'on-failure', 'on-request', 'never', 'granular']),
+  // Cursor's and Copilot's readers record no permission mode, so no value is documented to keep.
+  copilot: new Set(),
   cursor: new Set(),
 };
 
@@ -42,6 +47,8 @@ const PERMISSION_MODES: { readonly [harness in Harness]: ReadonlySet<string> } =
 const COMPLETE: { readonly [harness in Harness]: { readonly interrupts: boolean; readonly rejections: boolean; readonly denials: boolean; readonly timing: boolean } } = {
   'claude-code': { interrupts: true, rejections: true, denials: true, timing: true },
   codex: { interrupts: true, rejections: false, denials: false, timing: true },
+  // Copilot's reader writes the prompts and the agent's lines with their times (so the runs are real), and reads no `abort`, tool outcome refusal, or hook denial.
+  copilot: { interrupts: false, rejections: false, denials: false, timing: true },
   cursor: { interrupts: false, rejections: false, denials: false, timing: false },
 };
 
@@ -60,7 +67,7 @@ export interface SessionSetup {
   permissionMode?: string;
   /** Plugins evidenced by a tool named after them, sorted. */
   plugins?: string[];
-  /** Distinct hooks seen to fire (event and command), a floor; never the command. */
+  /** Distinct hooks seen to fire, by the name the harness gives each, a floor; never the command. */
   hookCount?: number;
   /** Bytes of instruction files the harness loaded mid-session, a floor: the opening instruction files are in a blob capture skips. */
   instructionBytes?: number;
@@ -105,7 +112,7 @@ export interface LineContext {
 export interface ShapeCollector {
   read(line: Obj, at: LineContext): void;
   /** A turn: `human` opens a run of the agent alone and closes the last; `agent` is the agent (or an automated turn) working; `none` is neither. */
-  turn(kind: 'human' | 'agent' | 'none', seconds: number | undefined): void;
+  turn(kind: 'human' | 'agent' | 'none', seconds: number | undefined, uuid?: string): void;
   finish(): SessionShape;
 }
 
@@ -120,10 +127,14 @@ const firstLine = (content: unknown): string => firstText(content).trimStart().s
 
 const pluginOf = (tool: string): string | undefined => PLUGIN_TOOL_RE.exec(tool)?.[1];
 
-export const createShape = (harness: Harness, redact: (text: string) => string, options: { timing: boolean } = { timing: true }): ShapeCollector => {
+export const createShape = (harness: Harness, redact: (text: string) => string, options: { timing: boolean }): ShapeCollector => {
   const complete = COMPLETE[harness];
   const modes = new Map<string, number>();
+  /** Hooks seen to fire, by the name the harness gives them (`PreToolUse:Bash`, `Stop`). */
   const hooks = new Set<string>();
+  /** The commands a `stop_hook_summary` lists: counted only when no line of a `Stop` hook was seen, since that line and the summary are the same hooks. */
+  const stopCommands = new Set<string>();
+  let stopSeen = false;
   const memory = new Map<string, number>();
   const plugins = new Set<string>();
   /** Every name offered or removed, in order: the last event on a name decides which side it ends on. */
@@ -131,7 +142,10 @@ export const createShape = (harness: Harness, redact: (text: string) => string, 
   const loaded = new Set<string>();
   const events: TrustEvent[] = [];
   const open = new Map<string, string>();
-  const settled = new Set<string>();
+  /** Every tool call id that has had its result, so a replayed call or result is neither re-opened nor counted twice. */
+  const finished = new Set<string>();
+  /** Human turns already taken, by uuid: a resume replays them. */
+  const humans = new Set<string>();
   const markers = new Set<string>();
   let rejectedLast = false;
   const counts = { interrupts: 0, rejections: 0, denials: 0 };
@@ -147,7 +161,8 @@ export const createShape = (harness: Harness, redact: (text: string) => string, 
     modes.set(kept, (modes.get(kept) ?? 0) + 1);
   };
   const noted = (tool: string): void => {
-    const plugin = pluginOf(tool);
+    // The `mcp__plugin_<plugin>_` naming is Claude Code's; another harness's tool of that shape is not evidence of a plugin.
+    const plugin = harness === 'claude-code' ? pluginOf(tool) : undefined;
     if (plugin !== undefined) plugins.add(plugin);
   };
   const offer = (list: string[]): void => {
@@ -175,6 +190,8 @@ export const createShape = (harness: Harness, redact: (text: string) => string, 
     events.push({ event: kind, tool, prompt });
   };
   const interrupt = (tool: string | null, prompt: number | null): void => {
+    // The turn ended, so no call is still in flight: a later marker must not name this one.
+    open.clear();
     if (rejectedLast) {
       rejectedLast = false;
       return;
@@ -190,11 +207,11 @@ export const createShape = (harness: Harness, redact: (text: string) => string, 
     if (Array.isArray(block.content)) {
       for (const inner of block.content) if (isObj(inner) && inner.type === 'tool_reference') load(names([inner.tool_name]));
     }
-    if (id === undefined) return;
+    if (id === undefined || finished.has(id)) return;
+    finished.add(id);
     const tool = open.get(id) ?? null;
     open.delete(id);
-    if (block.is_error !== true || settled.has(id)) return;
-    settled.add(id);
+    if (block.is_error !== true) return;
     const line = firstLine(block.content);
     if (REJECTED_RE.test(line)) {
       rejectedLast = true;
@@ -207,12 +224,12 @@ export const createShape = (harness: Harness, redact: (text: string) => string, 
     if (kind === 'deferred_tools_delta') {
       offer(names(a.addedNames));
       remove(names(a.removedNames));
-    } else if (kind === 'hook_success') {
-      const command = str(a.command);
-      if (command !== undefined) hooks.add(`${str(a.hookEvent) ?? ''}\u0000${command}`);
-    } else if (kind === 'hook_blocking_error') {
-      const command = isObj(a.blockingError) ? str(a.blockingError.command) : undefined;
-      if (command !== undefined) hooks.add(`${str(a.hookEvent) ?? ''}\u0000${command}`);
+    } else if (kind === 'hook_success' || kind === 'hook_additional_context' || kind === 'hook_blocking_error') {
+      const name = str(a.hookName);
+      if (name !== undefined && name !== '') {
+        hooks.add(name);
+        if (STOP_HOOK_RE.test(name)) stopSeen = true;
+      }
     } else if (kind === 'nested_memory' && isObj(a.content) && typeof a.content.content === 'string') {
       // The same file comes again when the harness reloads it, so one path counts once.
       const key = str(a.path) ?? str(a.content.path) ?? `#${String(memory.size)}`;
@@ -228,6 +245,8 @@ export const createShape = (harness: Harness, redact: (text: string) => string, 
 
   return {
     read(line, at) {
+      // A sidechain line is a subagent's own, not the main session's setup.
+      if (at.side) return;
       const type = str(line.type);
       if (type === 'permission-mode') mode(line.permissionMode);
       else if (type === 'api-request-shape') {
@@ -236,14 +255,13 @@ export const createShape = (harness: Harness, redact: (text: string) => string, 
         if (Array.isArray(shape?.tools)) offer(names(shape.tools.map((tool: unknown) => (isObj(tool) ? tool.name : undefined))));
       } else if (type === SHAPE_TOOLS_LINE) {
         offer(names(line.offered));
-        remove(names(line.removed));
         load(names(line.loaded));
       } else if (type === SHAPE_INTERRUPT_LINE) interrupt(inFlight(), at.prompt);
       else if (type === 'attachment') {
         if (isObj(line.attachment)) attachment(line.attachment);
       } else if (type === 'system' && line.subtype === 'stop_hook_summary') {
-        if (Array.isArray(line.hookInfos)) for (const info of line.hookInfos) if (isObj(info) && str(info.command) !== undefined) hooks.add(`Stop\u0000${str(info.command) ?? ''}`);
-      } else if ((type === 'user' || type === 'assistant') && !at.side && isObj(line.message)) {
+        if (Array.isArray(line.hookInfos)) for (const info of line.hookInfos) if (isObj(info) && str(info.command) !== undefined) stopCommands.add(str(info.command) ?? '');
+      } else if ((type === 'user' || type === 'assistant') && isObj(line.message)) {
         if (type === 'user') mode(line.permissionMode);
         const content = line.message.content;
         if (type === 'user' && firstText(content).startsWith(INTERRUPT_MARKER)) {
@@ -259,18 +277,28 @@ export const createShape = (harness: Harness, redact: (text: string) => string, 
             const id = str(block.id);
             const name = str(block.name);
             if (name !== undefined) noted(name);
-            if (id !== undefined && name !== undefined && !open.has(id)) open.set(id, name);
+            if (id !== undefined && name !== undefined && !open.has(id) && !finished.has(id)) open.set(id, name);
           } else if (block.type === 'tool_result') result(block, at);
         }
       }
     },
 
-    turn(kind, seconds) {
+    turn(kind, seconds, uuid) {
+      if (kind === 'human') {
+        // A resume replays earlier lines: a human turn already taken is not a new one.
+        if (uuid !== undefined) {
+          if (humans.has(uuid)) return;
+          humans.add(uuid);
+        }
+        // The operator spoke again: nothing is still in flight, and a rejection before this is not what a later marker follows.
+        open.clear();
+        rejectedLast = false;
+      }
       if (!timing || seconds === undefined) return;
       if (kind === 'human') {
         close();
         start = seconds;
-      } else if (kind === 'agent' && start !== undefined && (end === undefined || seconds > end)) end = seconds;
+      } else if (kind === 'agent' && start !== undefined && seconds >= start && (end === undefined || seconds > end)) end = seconds;
     },
 
     finish() {
@@ -284,8 +312,9 @@ export const createShape = (harness: Harness, redact: (text: string) => string, 
           setup.permissionMode = value;
         }
       }
-      if (plugins.size > 0) setup.plugins = [...plugins].sort();
-      if (hooks.size > 0) setup.hookCount = hooks.size;
+      if (plugins.size > 0) setup.plugins = [...plugins].map(redact).sort();
+      const hookTotal = hooks.size + (stopSeen ? 0 : stopCommands.size);
+      if (hookTotal > 0) setup.hookCount = hookTotal;
       if (memory.size > 0) setup.instructionBytes = [...memory.values()].reduce((sum, bytes) => sum + bytes, 0);
       if (Object.keys(setup).length > 0) out.setup = setup;
 

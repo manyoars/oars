@@ -5,10 +5,11 @@
 // and ToolSearchOutput, models.rs). No real session or store was read.
 import { describe, expect, it } from 'vitest';
 import { rolloutLines } from './codex.js';
+import { eventLines } from './copilot.js';
 import { captureSession } from './extract.js';
 import { makeRedactor } from './redact.js';
 import { CAPTURE_VERSION } from './schema.js';
-import { rolloutLine } from './test-support.js';
+import { copilotEvent, rolloutLine } from './test-support.js';
 
 const redact = makeRedactor();
 const line = (value: object): string => JSON.stringify(value);
@@ -23,7 +24,7 @@ const answered = (seconds: number, id: string, content: unknown, failed = false)
   line({ ...base(seconds), type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: id, is_error: failed, content }] } });
 const attach = (seconds: number, attachment: object): string => line({ ...base(seconds), type: 'attachment', attachment });
 
-const capture = (lines: readonly string[], options: { harness?: 'codex' | 'cursor'; subagent?: boolean } = {}) => {
+const capture = (lines: readonly string[], options: { harness?: 'codex' | 'copilot' | 'cursor'; subagent?: boolean } = {}) => {
   const text = lines.join('\n');
   return captureSession({
     text,
@@ -48,7 +49,7 @@ describe('the setup snapshot', () => {
     line({ type: 'permission-mode', permissionMode: 'acceptEdits', sessionId: 's' }),
     attach(3, { type: 'hook_success', hookName: 'PreToolUse:Bash', hookEvent: 'PreToolUse', command: 'node a.js', exitCode: 0, stdout: 'SECRET-OUT', stderr: '' }),
     attach(4, { type: 'hook_success', hookName: 'PreToolUse:Bash', hookEvent: 'PreToolUse', command: 'node a.js', exitCode: 0 }),
-    attach(5, { type: 'hook_blocking_error', hookEvent: 'PreToolUse', blockingError: { blockingError: 'no', command: 'node b.js' } }),
+    attach(5, { type: 'hook_blocking_error', hookName: 'PreToolUse:Write', hookEvent: 'PreToolUse', blockingError: { blockingError: 'no', command: 'node b.js' } }),
     line({ ...base(6), type: 'system', subtype: 'stop_hook_summary', hookCount: 1, hookInfos: [{ command: 'node c.js', durationMs: 5 }] }),
     attach(7, { type: 'nested_memory', path: '/w/CLAUDE.md', content: { path: '/w/CLAUDE.md', content: 'abcde' } }),
     attach(8, { type: 'nested_memory', path: '/w/CLAUDE.md', content: { path: '/w/CLAUDE.md', content: 'abcde' } }),
@@ -61,6 +62,10 @@ describe('the setup snapshot', () => {
     const session = capture(recorded);
     expect(session.cv).toBe(CAPTURE_VERSION);
     expect(session.setup).toEqual({ permissionMode: 'acceptEdits', plugins: ['demo-kit', 'other'], hookCount: 3, instructionBytes: 5 + 4 });
+  });
+
+  it('reads the mode from permission-mode lines alone when no user line carries it', () => {
+    expect(capture([line({ type: 'permission-mode', permissionMode: 'plan', sessionId: 's' }), typed(1, 'go')]).setup).toEqual({ permissionMode: 'plan' });
   });
 
   it('stores an unknown mode as other, and keeps no hook command or output', () => {
@@ -85,7 +90,7 @@ describe('the setup snapshot', () => {
     ];
     const session = capture(rolloutLines(rollout.map((entry) => JSON.stringify(entry)).join('\n'), 'c1').map((entry) => JSON.stringify(entry)), { harness: 'codex' });
     expect(session.setup).toEqual({ permissionMode: 'granular' });
-    expect(session.funnel).toEqual({ offered: ['extra', 'inner', 'lookup', 'ns'], loaded: ['lookup'] });
+    expect(session.funnel).toEqual({ offered: ['extra', 'inner', 'lookup'], loaded: ['lookup'] });
   });
 
   it('stores a Codex rollout with no approval policy and no tools as absent', () => {
@@ -222,5 +227,138 @@ describe('unattendedRun', () => {
     ];
     const session = capture(rolloutLines(rollout.map((entry) => JSON.stringify(entry)).join('\n'), 'c1').map((entry) => JSON.stringify(entry)), { harness: 'codex' });
     expect(session.trust?.unattendedRun).toEqual([0.13, 0.5]);
+  });
+});
+
+describe('fix round 1', () => {
+  const codex = (rollout: readonly object[]) => capture(rolloutLines(rollout.map((entry) => JSON.stringify(entry)).join('\n'), 'c1').map((entry) => JSON.stringify(entry)), { harness: 'codex' });
+
+  it('stores a Copilot session as absent for everything its reader does not record, and its prompts as runs', () => {
+    const events = [
+      copilotEvent(at(0), 'session.start', { sessionId: 'k1', copilotVersion: '1.0.105', selectedModel: 'm', context: { cwd: '/w' } }),
+      copilotEvent(at(1), 'user.message', { content: 'go' }),
+      copilotEvent(at(2), 'assistant.message', { content: 'ok', model: 'm', messageId: 'm1' }),
+      copilotEvent(at(30), 'user.message', { content: 'more' }),
+      copilotEvent(at(40), 'assistant.message', { content: 'done', model: 'm', messageId: 'm2' }),
+    ];
+    const session = capture(eventLines(events.map((entry) => JSON.stringify(entry)).join('\n'), 'k1').map((entry) => JSON.stringify(entry)), { harness: 'copilot' });
+    expect(session.setup).toBeUndefined();
+    expect(session.funnel).toBeUndefined();
+    expect(session.trust).toEqual({ unattendedRun: [0.02, 0.17] });
+  });
+
+  it('counts a compaction summary as the agent working, not a human turn', () => {
+    const summary = typed(600, 'This session is being continued from a previous conversation', { isCompactSummary: true });
+    const session = capture([typed(0, 'start'), said(60), summary, said(660), typed(36000, 'next morning'), said(36030)]);
+    expect(session.trust?.unattendedRun).toEqual([11, 0.5]);
+  });
+
+  it('counts a replayed human line once: a resume replays the lines it resumed from', () => {
+    const first = typed(0, 'a', { uuid: 'h1' });
+    const second = typed(120, 'b', { uuid: 'h2' });
+    const session = capture([first, said(60), second, said(180), first, said(60), second, said(180), typed(240, 'c'), said(270)]);
+    expect(session.trust?.unattendedRun).toEqual([1, 1, 0.5]);
+  });
+
+  it('reads nothing from a sidechain line: a subagent setup is not the main session', () => {
+    const side = (seconds: number, attachment: object): string => line({ ...base(seconds), type: 'attachment', isSidechain: true, attachment });
+    const session = capture([
+      typed(0, 'go'),
+      side(1, { type: 'hook_success', hookName: 'PreToolUse:Bash', hookEvent: 'PreToolUse', command: 'node a.js' }),
+      side(2, { type: 'nested_memory', path: '/w/CLAUDE.md', content: { path: '/w/CLAUDE.md', content: 'abcde' } }),
+      side(3, { type: 'deferred_tools_delta', addedNames: ['mcp__sub__tool'], removedNames: [] }),
+      said(4),
+    ]);
+    expect(session.setup).toBeUndefined();
+    expect(session.funnel).toBeUndefined();
+  });
+
+  it('counts a hook by its name, from any of the three hook attachments', () => {
+    const session = capture([
+      typed(0, 'go'),
+      attach(1, { type: 'hook_additional_context', hookName: 'SessionStart:startup', hookEvent: 'SessionStart', content: ['context text'] }),
+      attach(2, { type: 'hook_additional_context', hookName: 'SessionStart:startup', hookEvent: 'SessionStart', content: ['again'] }),
+      attach(3, { type: 'hook_additional_context', hookName: 'UserPromptSubmit', hookEvent: 'UserPromptSubmit', content: ['x'] }),
+    ]);
+    expect(session.setup).toEqual({ hookCount: 2 });
+    expect(JSON.stringify(session)).not.toMatch(/context text/);
+  });
+
+  it('counts a Stop hook once when its own line was seen, and from the summary when it was not', () => {
+    const summary = line({ ...base(5), type: 'system', subtype: 'stop_hook_summary', hookCount: 1, hookInfos: [{ command: 'node c.js', durationMs: 5 }] });
+    expect(capture([typed(0, 'go'), attach(1, { type: 'hook_success', hookName: 'Stop', hookEvent: 'Stop', command: 'node c.js' }), summary]).setup).toEqual({ hookCount: 1 });
+    expect(capture([typed(0, 'go'), summary]).setup).toEqual({ hookCount: 1 });
+  });
+
+  it('redacts a plugin name that looks like a secret, as it does a tool name', () => {
+    const token = 'sk-ant-api03Xk29fjQ81zLmPq7Rt';
+    const session = capture([typed(0, 'go'), attach(1, { type: 'deferred_tools_delta', addedNames: [`mcp__plugin_${token}_srv__t`], removedNames: [] })]);
+    expect(JSON.stringify(session)).not.toContain(token);
+    expect(session.setup?.plugins).toEqual(['<secret>']);
+  });
+
+  it('forgets a call that never got a result once an interrupt is recorded and once the human speaks again', () => {
+    const session = capture([typed(0, 'go'), called(1, 'e', 'Edit'), typed(2, '[Request interrupted by user for tool use]'), typed(3, 'again'), said(4), typed(5, '[Request interrupted by user]')]);
+    expect(session.trust?.trustEvent?.map((item) => item.tool)).toEqual(['Edit', null]);
+    const none = capture([typed(0, 'go'), called(1, 'e', 'Edit'), typed(2, 'never mind'), said(3), typed(4, '[Request interrupted by user]')]);
+    expect(none.trust?.trustEvent?.map((item) => item.tool)).toEqual([null]);
+  });
+
+  it('does not reopen a call a replayed tool_use repeats after its result', () => {
+    const call = called(1, 'a', 'Bash');
+    const session = capture([typed(0, 'go'), call, answered(2, 'a', 'ok'), call, typed(3, '[Request interrupted by user]')]);
+    expect(session.trust?.trustEvent).toEqual([{ event: 'interrupt', tool: null, prompt: 0 }]);
+  });
+
+  it('keeps the first and last line times of a Codex rollout whether or not it declares tools', () => {
+    const rollout = (declared: object[] | null) => [
+      rolloutLine(at(0), 'session_meta', { id: 'c1', cwd: '/w', cli_version: '0.50.0', dynamic_tools: declared }),
+      rolloutLine(at(500), 'event_msg', { type: 'user_message', message: 'go' }),
+      rolloutLine(at(600), 'event_msg', { type: 'turn_aborted', turn_id: 't', reason: 'interrupted' }),
+    ];
+    const plain = codex(rollout(null));
+    const declared = codex(rollout([{ type: 'function', name: 'lookup' }]));
+    expect(declared.tsFirst).toBe(plain.tsFirst);
+    expect(declared.tsLast).toBe(plain.tsLast);
+    expect(declared.funnel).toEqual({ offered: ['lookup'] });
+  });
+
+  it('never stores a negative run: an agent line older than its human turn does not move the end', () => {
+    const session = capture([typed(100, 'go'), said(10), said(160)]);
+    expect(session.trust?.unattendedRun).toEqual([1]);
+    expect(capture([typed(100, 'go'), said(10)]).trust?.unattendedRun).toEqual([0]);
+  });
+
+  it('does not let a rejection hide the interrupt that follows a typed prompt', () => {
+    const session = capture([
+      typed(0, 'go'),
+      called(1, 'a', 'Bash'),
+      answered(2, 'a', "The user doesn't want to proceed with this tool use. The tool use was rejected.", true),
+      typed(3, 'try something else'),
+      typed(4, '[Request interrupted by user]'),
+    ]);
+    expect(session.trust).toMatchObject({ rejections: 1, interrupts: 1 });
+  });
+
+  it('reads plugins for Claude Code only', () => {
+    const rollout = [
+      rolloutLine(at(0), 'session_meta', { id: 'c1', cwd: '/w', cli_version: '0.50.0', dynamic_tools: [{ type: 'function', name: 'mcp__plugin_kit_s__t' }] }),
+      rolloutLine(at(1), 'event_msg', { type: 'user_message', message: 'go' }),
+    ];
+    const session = codex(rollout);
+    expect(session.funnel).toEqual({ offered: ['mcp__plugin_kit_s__t'] });
+    expect(session.setup).toBeUndefined();
+  });
+
+  it('counts the other two wordings of a policy denial', () => {
+    const session = capture([
+      typed(0, 'go'),
+      called(1, 'a', 'Bash'),
+      answered(2, 'a', 'Permission for this action has been denied. Reason: classifier', true),
+      called(3, 'b', 'Write'),
+      answered(4, 'b', 'Hook PreToolUse:Write denied this tool', true),
+    ]);
+    expect(session.trust).toMatchObject({ denials: 2, rejections: 0 });
+    expect(session.trust?.trustEvent?.map((item) => item.tool)).toEqual(['Bash', 'Write']);
   });
 });
