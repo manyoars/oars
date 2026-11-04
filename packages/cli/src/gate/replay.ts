@@ -7,8 +7,10 @@ import { compileAllow } from '../sessions/allow.js';
 import { makeRedactor } from '../sessions/redact.js';
 import { paths, readState, writeAtomic, type SessionsRuntime } from '../sessions/store.js';
 import type { Crossing, UnreadShape } from './checks.js';
-import { GATE_VERSION, parseRows, type AgainstLatest, type CrossingRecord, type Next, type Novelty, type Origin, type RegistryAge, type RegistryRow, type RunRow } from './record.js';
+import { GATE_VERSION, parseRows, type CrossingRecord, type Next, type Novelty, type Origin, type RegistryRow, type RunRow } from './record.js';
 import { askable, type RegistryAnswer, type RegistryAsk, type RegistryReader } from './registry.js';
+import { ageOf, againstLatestOf, ASKED_PROGRAMS, askedOf, DAY_MS } from './registry-state.js';
+import { repositoryOf } from './scope.js';
 import { discover, readCalls, readOrigins, type CallsSeen, type Origins, type Found, type FoundRemoval, type TranscriptFile, type TranscriptRead } from './transcripts.js';
 
 export const crossingsFile = (storeDir: string): string => join(storeDir, 'crossings.jsonl');
@@ -31,17 +33,11 @@ export interface ReplayResult {
 
 /** A failed install is looked at for this many calls after it. */
 const NEXT_WINDOW = 10;
-const DAY_MS = 86_400_000;
 const REGISTRY_WORKERS = 4;
 /** A kept registry answer older than this many days is asked again: a `latest` goes stale, and a row would otherwise read "as of this run" forever. */
 export const REGISTRY_MAX_DAYS = 30;
-/** Only these managers read the registry the `npm view` and `pip index` asks reach. A `poetry`, `uv`, `yarn`, or `conda` install may use one they do not. */
-const ASKED_PROGRAMS: ReadonlySet<string> = new Set(['npm', 'npx', 'pnpm', 'pip', 'python -m pip']);
 
 const keyOf = (crossing: Pick<Crossing, 'class' | 'name'>): string => `${crossing.class}\0${crossing.name}`;
-
-/** Claude Code names a worktree's folder `<repository>--claude-worktrees-<name>`, and a worktree is its repository. */
-const repositoryOf = (project: string): string => project.replace(/--claude-worktrees-.*$/, '');
 
 const PACKAGE_CLASSES: ReadonlySet<string> = new Set(['npm-package', 'python-package']);
 
@@ -113,24 +109,6 @@ const lastRemovals = (removals: readonly { removal: FoundRemoval; transcript: Tr
   return last;
 };
 
-const ageOf = (answer: RegistryAnswer, ts: string | null): RegistryAge => {
-  if (answer.created === null || ts === null) return 'unknown';
-  const days = (Date.parse(ts) - Date.parse(answer.created)) / DAY_MS;
-  if (Number.isNaN(days)) return 'unknown';
-  if (days < 0) return 'after-crossing';
-  if (days < 7) return 'under-7-days';
-  if (days < 30) return 'under-30-days';
-  return days < 365 ? 'under-1-year' : 'older';
-};
-
-const againstLatestOf = (crossing: Crossing, answer: RegistryAnswer): AgainstLatest => {
-  if (answer.state !== 'found') return 'unknown';
-  if (crossing.versionForm === 'unstated') return 'unstated';
-  if (crossing.versionForm === 'range') return 'range';
-  if (crossing.version === 'latest' || crossing.version === answer.latest) return 'latest';
-  return crossing.versionForm === 'pinned' ? 'not-latest' : 'unknown';
-};
-
 const asAnswer = (row: RegistryRow): RegistryAnswer => ({ state: row.state, latest: row.latest, created: row.created });
 
 const isFolder = (path: string): Promise<boolean> =>
@@ -169,10 +147,11 @@ const recordOf = (held: Held, novelty: Novelty, removedAt: string | undefined, a
   const { found, transcript, origin, prompted, next } = held;
   const { crossing, ts, side } = found;
   // An answer reaches a row only when that row's own program was asked and its command left the registry to the default: the same name can cross twice.
-  const answer = crossing.registryAsked && ASKED_PROGRAMS.has(crossing.program) ? answers?.get(keyOf(crossing)) : undefined;
+  const answer = askedOf(crossing) ? answers?.get(keyOf(crossing)) : undefined;
   return {
     kind: 'crossing',
     v: GATE_VERSION,
+    via: 'replay',
     day: ts === null ? null : ts.slice(0, 10),
     class: crossing.class,
     form: crossing.form,
