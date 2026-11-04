@@ -168,8 +168,8 @@ describe('parseSkeleton refuses, and names the field', () => {
   });
 
   it('refuses the frame form (format 1) by name, and a deposit that carries deltas', () => {
-    const old = parseSkeleton({ ...(JSON.parse(JSON.stringify(sample())) as object), format: 1 });
-    expect(old).toMatchObject({ ok: false, field: 'format', reason: expect.stringContaining('format 1') });
+    const old = parseSkeleton({ ...sample(), format: 1 });
+    expect(old).toMatchObject({ ok: false, field: 'format', reason: 'the frame form (format 1) is no longer read; send format 2' });
     expect(refusedField(sent(['deltas'], [{}]))).toBe('deltas');
     expect(refusedField(sent(['deltas'], undefined))).toBe('deltas');
   });
