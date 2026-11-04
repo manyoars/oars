@@ -634,3 +634,56 @@ describe('a namespaced function_call (models.rs:1154)', () => {
     expect(extractOf([meta('/work/app'), patch, line(T(3), 'response_item', { type: 'function_call_output', call_id: 'c1', output: 'ok' })]).tools[0]?.tool).toBe('Edit');
   });
 });
+
+// The default shell tool at ac558e2 is unified exec: ConfigShellToolType is only UnifiedExec | Disabled (protocol/src/openai_models.rs:330-333). Its
+// reply is `response_header` + the output (core/src/tools/context.rs:544-570, the exit code at :556), and a call that fails before it has an exit code
+// comes back as a plain message through `RespondToModel` (tools/src/function_call_error.rs:5-7), written as the output with `success: false`
+// (core/src/tools/parallel.rs:454-480).
+describe('a unified-exec shell call (core/src/tools/handlers/unified_exec)', () => {
+  const unified = (second: number, id: string, name: string, args: unknown) => line(T(second), 'response_item', { type: 'function_call', name, arguments: JSON.stringify(args), call_id: id });
+  const head = (rest: string): string => `Chunk ID: ab12\nWall time: 0.0100 seconds\n${rest}\nOriginal token count: 3\nOutput:\n`;
+
+  it('hands a clean call\'s output on, so a git commit records the sha its [branch sha] line printed (context.rs:556)', () => {
+    const out = extractOf([
+      meta('/work/app'),
+      unified(2, 'u1', 'exec_command', { cmd: 'git commit -m x' }),
+      shellOut(3, 'u1', `${head('Process exited with code 0')}[main abc1234] x\n 1 file changed, 1 insertion(+)`),
+    ]);
+    expect(out.tools[0]).toMatchObject({ tool: 'Bash', status: 'ok', commits: ['abc1234'] });
+  });
+
+  it('hands on the output of the write_stdin that saw a backgrounded git commit exit, to the exec_command that started it', () => {
+    const out = extractOf([
+      meta('/work/app'),
+      unified(2, 'u1', 'exec_command', { cmd: 'git commit -m x' }),
+      shellOut(3, 'u1', head('Process running with session ID 9')),
+      unified(4, 'u2', 'write_stdin', { session_id: 9, chars: '' }),
+      shellOut(5, 'u2', `${head('Process exited with code 0')}[main def5678] x`),
+    ]);
+    expect(out.tools[0]).toMatchObject({ status: 'ok', commits: ['def5678'] });
+  });
+
+  it('records exec_command failed: <err> (exec_command.rs:270) as an error, with its text as the error line', () => {
+    const out = extractOf([meta('/work/app'), unified(2, 'u1', 'exec_command', { cmd: 'nope' }), shellOut(3, 'u1', 'exec_command failed: Os { code: 2, kind: NotFound }')]);
+    expect(out.tools).toMatchObject([{ tool: 'Bash', status: 'error' }]);
+    expect(out.errorLines.map((entry) => entry.line)).toEqual(['exec_command failed: Os { code: 2, kind: NotFound }']);
+  });
+
+  it('records write_stdin failed: <err> and write_stdin approval failed: <err> (write_stdin.rs:121, :123) as errors', () => {
+    const out = extractOf([
+      meta('/work/app'),
+      unified(2, 'u1', 'write_stdin', { session_id: 5, chars: 'y' }),
+      shellOut(3, 'u1', 'write_stdin failed: UnknownSessionId { process_id: 5 }'),
+      unified(4, 'u2', 'write_stdin', { session_id: 6, chars: 'y' }),
+      shellOut(5, 'u2', 'write_stdin approval failed: sandbox denied'),
+    ]);
+    expect(out.tools.map((tool) => [tool.tool, tool.status])).toEqual([['Bash', 'error'], ['Bash', 'error']]);
+    expect(out.errorLines.map((entry) => entry.line)).toEqual(['write_stdin failed: UnknownSessionId { process_id: 5 }', 'write_stdin approval failed: sandbox denied']);
+  });
+
+  it('leaves write_stdin rejected: <reason> (write_stdin.rs:118) unsettled, as a declined call is', () => {
+    const out = extractOf([meta('/work/app'), unified(2, 'u1', 'write_stdin', { session_id: 5, chars: 'y' }), shellOut(3, 'u1', 'write_stdin rejected: not allowed')]);
+    expect(out.tools).toMatchObject([{ tool: 'Bash', status: 'none' }]);
+    expect(out.errorLines).toEqual([]);
+  });
+});
