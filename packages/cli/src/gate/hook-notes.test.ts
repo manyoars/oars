@@ -104,8 +104,12 @@ describe('oars gate hook: a note, and the arm it is shown in', () => {
   });
 
   it.each([
-    ['a record with no index, as a hook killed between its row and its index leaves', (store: string) => writeFileSync(crossingsPath(store), '{"kind":"run"}\n')],
-    ['a damaged index', (store: string) => writeFileSync(join(store, 'gate-index.txt'), 'oars-gate-index 1\nfabc\n')],
+    ['a record with no index, as a hook killed between its row and its index leaves', (store: string) => {
+      writeFileSync(crossingsPath(store), '{"kind":"run"}\n');
+    }],
+    ['a damaged index', (store: string) => {
+      writeFileSync(join(store, 'gate-index.txt'), 'oars-gate-index 1\nfabc\n');
+    }],
   ])('shows no note for %s, on any sight', async (_name, seed) => {
     const store = folder();
     seed(store);
