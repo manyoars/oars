@@ -7,18 +7,23 @@ import { CliError, ExitCode } from '../errors.js';
 import { EVALUATOR_MODEL, fillArms, sidecarSaver } from './gold-arms.js';
 import { armsPath, coverageLines, formatScore, isGoldDocument, parseGold, renderGold, sampleGold, scoreGold, type GoldDocument } from './gold.js';
 import { makeRedactor } from './redact.js';
-import { books, BOOKS_CAVEAT, formatBooks, formatMeasure, formatRecall, measure, recall, type BooksBy, type RecallQuery } from './query.js';
+import { books, BOOKS_CAVEAT, formatBooks, formatMeasure, formatRecall, measure, type BooksBy } from './query.js';
+import { formatLineage, loadLineage, walkLineage } from './lineage.js';
+import { appendRecall, readRecalls } from './recall-object.js';
+import { deriveConsequences, formatRecallCounts, recallCounts } from './recall-consequence.js';
+import { pull, pullRefusal, type PullInput } from './recall-reads.js';
+import { MISS_TEXT } from './recall-render.js';
 import { readHookCalls } from './hook-calls.js';
 import { buildIndex, contextBlock, inRepository, readIndex, type ContextOptions } from './hook-index.js';
 import { hookStatus, installHooks, scheduleStatus, setSchedule, settingsPath, uninstallHooks, type InstallRuntime, type Scope } from './install.js';
 import { serve } from './mcp.js';
-import { refreshPool } from './pool.js';
+import { currentPool, refreshPool } from './pool.js';
 import { FAMILIES } from './read.js';
 import { formatNotReadable, notReadable } from './read-readable.js';
 import { formatReads, isFamily, parseSlice, selectReads } from './read-rows.js';
 import { CAPTURE_VERSION, OLDEST_READABLE_CAPTURE, type StepRow } from './schema.js';
 import { deposit, frozenSessions, loadStore, readCalls, readRedactDomains, readSkeletons, skippedFolders, slugOf, type SessionsRuntime, type SkippedScope, type Store } from './store.js';
-import { formatStepCounters, inputKey, newContext, readSteps, stampKey, runDeposit, runStep, stepCounters, stuckSteps, type StuckStep } from './steps.js';
+import { formatStepCounters, inputKey, newContext, readSteps, stampKey, runDeposit, runStep, stepCounters, stuckSteps, tryLog, type StuckStep } from './steps.js';
 import { formatSelfBaseline, selfBaseline as selfBaselineOf, type SelfBaselineResult } from './baseline.js';
 import { auditCounts, auditStore, formatAudit, type SessionAudit, type T0Counts } from './audit.js';
 import { readSurvival, recordSurvival, SURVIVAL_DAYS } from './survival.js';
@@ -66,29 +71,54 @@ export const sessionsDeposit = async (deps: SessionsDeps, options: { allow: stri
   return { document: { ok: true, ...result, survival }, text: lines.join('\n') };
 };
 
-export const sessionsRecall = async (deps: SessionsDeps, query: RecallQuery): Promise<Outcome> => {
-  if (query.error === undefined && query.path === undefined && query.cls === undefined) {
-    throw new CliError('Pass --error "<text>", --path <file>, or --class <name>.', ExitCode.USAGE, 'usage');
+const isAnswerable = (query: PullInput): boolean => ('form' in query ? true : query.error !== undefined || query.path !== undefined || query.cls !== undefined);
+
+/**
+ * One pull: it writes its own recall record, a hit or a miss, because no harness writes one for it. A record that cannot be written costs the asker nothing, and
+ * this command answers an operator, so the `--error`, `--path`, and `--class` forms keep the signature text they have always printed; the MCP tool, which answers an agent, does not.
+ */
+export const sessionsRecall = async (deps: SessionsDeps, query: PullInput, sid: string | null = null): Promise<Outcome> => {
+  if (!isAnswerable(query)) {
+    throw new CliError('Pass --error "<text>", --path <file>, --class <name>, --pattern <id>, --entity <name>, --family <name>, or --text "<text>".', ExitCode.USAGE, 'usage');
   }
+  const refusal = pullRefusal(query);
+  if (refusal !== undefined) throw new CliError(refusal, ExitCode.USAGE, 'usage');
   const { storeDir } = runtimeOf(deps);
   // The key is the query and `ev`, known before the work, so a recall that keeps failing is the same key each time.
-  const key = stampKey(query.error ?? '', query.path ?? '', query.cls ?? '', String(query.sinceDays ?? ''));
+  const key = stampKey(JSON.stringify(query));
   const result = await runStep(
     newContext(storeDir, deps.now, 'manual'),
     'recall',
     async () => {
-      const found = recall(await loadStore(storeDir), query, deps.now(), undefined, await readRedactDomains(storeDir));
-      return { value: found, report: { in: { query: 1 }, out: { matches: found.matches.length }, key } };
+      const store = await loadStore(storeDir);
+      const found = pull(store, query, { sid, now: deps.now(), frame: null, redactDomains: await readRedactDomains(storeDir), current: await currentPool(storeDir, store) });
+      return { value: found, report: { in: { query: 1 }, out: { matches: found.legacy?.matches.length ?? found.reads.length }, key } };
     },
     key,
   );
-  return { document: { ok: true, ...result }, text: formatRecall(result) };
+  await tryLog(() => appendRecall(storeDir, result.recall));
+  if (result.legacy !== undefined) return { document: { ok: true, ...result.legacy, recall: result.recall }, text: formatRecall(result.legacy) };
+  // The document states the recall and not the raw reads: a read's tool, keys, and versions are store strings that can carry text, and `recall.evidence` already states them closed.
+  return { document: { ok: true, recall: result.recall }, text: result.recall.answer.rendered === '' ? MISS_TEXT : result.recall.answer.rendered };
+};
+
+/** `recall --counts`: push and pull, shown and held, as counts only. */
+export const sessionsRecallCounts = async (deps: SessionsDeps, day: string | undefined): Promise<Outcome> => {
+  const { storeDir } = runtimeOf(deps);
+  const rows = recallCounts(deriveConsequences(await loadStore(storeDir), await readRecalls(storeDir)), day);
+  return { document: { ok: true, day: day ?? null, rows }, text: formatRecallCounts(rows) };
+};
+
+/** `lineage`: a walk over files the derive already wrote. It computes nothing, so it logs no step. */
+export const sessionsLineage = async (deps: SessionsDeps, ref: string): Promise<Outcome> => {
+  const hops = walkLineage(await loadLineage(runtimeOf(deps).storeDir), ref);
+  return { document: { ok: true, hops }, text: formatLineage(hops) };
 };
 
 /**
  * `read`: rows from the current pool's reads. The step log holds it under its own step, because the `recall` counters answer how often a recall was asked for. Every row states
  * its clusters and order. No floor applies at order 1, because every cell here is the operator's own; above it a read below its floor does not exist, so this also says what the
- * store cannot read, which tells that apart from a read that found nothing. This verb is the one way out for reads: no agent path serves them.
+ * store cannot read, which tells that apart from a read that found nothing. A recall states a read as counts; this verb is the one way out for a read's whole value and for an experimental read.
  */
 export const sessionsRead = async (deps: SessionsDeps, options: { family: string | undefined; slices: readonly string[] }): Promise<Outcome> => {
   const { family } = options;

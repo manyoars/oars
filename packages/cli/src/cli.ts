@@ -14,8 +14,9 @@ import { CliError, ExitCode } from './errors.js';
 import { requirePurchasingOpen } from './issuer.js';
 import type { JournalStore } from './journal.js';
 import type { BooksBy, RecallQuery } from './sessions/query.js';
+import { closedQueryOf, formsRefusal, RECALL_FAMILIES } from './sessions/recall-reads.js';
 import { FAMILIES } from './sessions/read.js';
-import { sessionsBooks, sessionsContext, sessionsDeposit, sessionsGoldArms, sessionsGoldSample, sessionsGoldScore, sessionsHookInstall, sessionsHookStatus, sessionsHookUninstall, sessionsMcp, sessionsMeasure, sessionsRead, sessionsRecall, sessionsVerify, type SessionsDeps } from './sessions/command.js';
+import { sessionsBooks, sessionsContext, sessionsDeposit, sessionsGoldArms, sessionsGoldSample, sessionsGoldScore, sessionsHookInstall, sessionsHookStatus, sessionsHookUninstall, sessionsMcp, sessionsLineage, sessionsMeasure, sessionsRead, sessionsRecall, sessionsRecallCounts, sessionsVerify, type SessionsDeps } from './sessions/command.js';
 import { exclusionPaths, sessionsExclusions } from './sessions/exclusion.js';
 import { poolDeposit, poolLogin, poolPull } from './sessions/pool-command.js';
 import type { InstallRuntime, Scope } from './sessions/install.js';
@@ -348,6 +349,13 @@ const buildProgram = (deps: RunDeps, argv: string[]): Command => {
     .option('--path <file>', 'a file path or name that earlier sessions touched')
     .option('--class <name>', 'a prompt class (edit-verify, edit-only, shell-only, research, orchestration, explore-only, mixed, no-tools)')
     .option('--since <days>', 'only the last N days', positiveInteger)
+    .option('--pattern <id>', 'what happened from here: a read ID for a step so far (repeatable)', collect)
+    .option('--entity <name>', 'what is known about a public name: a package, a tool, an MCP server, an action, or a model')
+    .option('--family <name>', `one read family (${RECALL_FAMILIES.join(', ')}); only recovery and fit are narrowed by --class and --since`)
+    .option('--text <text>', 'look for text in the local record')
+    .option('--session <id>', 'the session asking, so what it did next can be read for this recall')
+    .option('--counts', 'print counts of recalls by mode, arm, and answer, with what followed, instead of answering (see --day)')
+    .option('--day <yyyy-mm-dd>', 'with --counts: only this UTC day')
     .option('--mcp', 'serve one recall tool over MCP on stdio instead of answering once')
     .option('--context', "print the repository's top recurring errors as a short block for injection into a session (see --cwd, --harness, --top, --max-chars)")
     .option('--cwd <dir>', "with --context: the session's working directory (default: this one)")
@@ -356,6 +364,10 @@ const buildProgram = (deps: RunDeps, argv: string[]): Command => {
     .option('--max-chars <n>', "with --context: the block's length limit (default 1200)", positiveInteger)
     .action(async (_options: OptionValues, command: Command) => {
       const options: OptionValues = command.optsWithGlobals();
+      if (flag(options, 'counts')) {
+        emit(deps, flag(options, 'json'), await sessionsRecallCounts(sessionDeps(deps), text(options, 'day')));
+        return;
+      }
       if (flag(options, 'context')) {
         emit(
           deps,
@@ -373,13 +385,34 @@ const buildProgram = (deps: RunDeps, argv: string[]): Command => {
         await sessionsMcp(sessionDeps(deps));
         return;
       }
+      const session = text(options, 'session') ?? null;
+      const conflict = formsRefusal([
+        ...(list(options, 'pattern').length > 0 ? ['prefix' as const] : []),
+        ...(text(options, 'entity') === undefined ? [] : ['entity' as const]),
+        ...(text(options, 'family') === undefined ? [] : ['family' as const]),
+        ...(text(options, 'text') === undefined ? [] : ['text' as const]),
+        ...(text(options, 'error') === undefined && text(options, 'path') === undefined ? [] : ['error or path' as const]),
+      ]);
+      if (conflict !== undefined) throw new CliError(conflict, ExitCode.USAGE, 'usage');
+      const closed = closedQueryOf({ pattern: list(options, 'pattern'), entity: text(options, 'entity'), family: text(options, 'family'), text: text(options, 'text'), cls: text(options, 'class'), sinceDays: count(options, 'since') });
+      if (closed !== undefined) {
+        emit(deps, flag(options, 'json'), await sessionsRecall(sessionDeps(deps), closed, session));
+        return;
+      }
       const query: RecallQuery = {
         ...(text(options, 'error') === undefined ? {} : { error: text(options, 'error') }),
         ...(text(options, 'path') === undefined ? {} : { path: text(options, 'path') }),
         ...(text(options, 'class') === undefined ? {} : { cls: text(options, 'class') }),
         ...(count(options, 'since') === undefined ? {} : { sinceDays: count(options, 'since') }),
       };
-      emit(deps, flag(options, 'json'), await sessionsRecall(sessionDeps(deps), query));
+      emit(deps, flag(options, 'json'), await sessionsRecall(sessionDeps(deps), query, session));
+    });
+
+  sessions
+    .command('lineage <id>')
+    .description('walk a recall or read back through its evidence, one line per hop with its frame range and day; refuses evidence newer than the recall')
+    .action(async (id: string, _options: OptionValues, command: Command) => {
+      emit(deps, flag(command.optsWithGlobals(), 'json'), await sessionsLineage(sessionDeps(deps), id));
     });
 
   sessions

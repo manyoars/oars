@@ -38,7 +38,8 @@ const splitTool = (query: string): { tool: string | undefined; text: string } =>
 
 const touched = (session: SessionObservation, path: string): boolean => session.files.some((file) => file === path || file.endsWith(`/${path}`) || file.endsWith(`\\${path}`));
 
-export const recall = (store: Store, query: RecallQuery, now: number, limit = 10, redactDomains: readonly string[] = []): RecallResult => {
+/** Which error rows a query selects, and the normalized text it matched them on. A count stated for a narrowed query reads through this, so it counts what the query narrowed to. */
+export const recallRows = (store: Store, query: RecallQuery, now: number, redactDomains: readonly string[] = []): { normalized: string | null; keep: (error: ErrorObservation) => boolean } => {
   const redact = makeRedactor(redactDomains);
   const cutoff = sinceCutoff(now, query.sinceDays);
   let tool: string | undefined;
@@ -50,17 +51,22 @@ export const recall = (store: Store, query: RecallQuery, now: number, limit = 10
   }
   const path = query.path === undefined ? undefined : redact(query.path);
   const sessions = path === undefined ? undefined : new Set(store.sessions.filter((session) => touched(session, path)).map((session) => session.session));
+  const keep = (error: ErrorObservation): boolean => {
+    if (cutoff !== undefined && (error.ts === null || error.ts < cutoff)) return false;
+    if (query.cls !== undefined && error.cls !== query.cls) return false;
+    if (sessions !== undefined && !sessions.has(error.session)) return false;
+    if (tool !== undefined && error.tool !== tool) return false;
+    if (normalized === null) return true;
+    return normalized !== '' && error.sig.slice(error.sig.indexOf(' | ') + 3).includes(normalized);
+  };
+  return { normalized, keep };
+};
+
+export const recall = (store: Store, query: RecallQuery, now: number, limit = 10, redactDomains: readonly string[] = []): RecallResult => {
+  const { normalized, keep } = recallRows(store, query, now, redactDomains);
   const bySig = new Map<string, ErrorObservation[]>();
   for (const error of store.errors) {
-    if (cutoff !== undefined && (error.ts === null || error.ts < cutoff)) continue;
-    if (query.cls !== undefined && error.cls !== query.cls) continue;
-    if (sessions !== undefined && !sessions.has(error.session)) continue;
-    if (tool !== undefined && error.tool !== tool) continue;
-    if (normalized !== null) {
-      const text = error.sig.slice(error.sig.indexOf(' | ') + 3);
-      if (normalized === '' || !text.includes(normalized)) continue;
-    }
-    bySig.set(error.sig, [...(bySig.get(error.sig) ?? []), error]);
+    if (keep(error)) bySig.set(error.sig, [...(bySig.get(error.sig) ?? []), error]);
   }
   const matches: RecallMatch[] = [...bySig.entries()]
     .map(([sig, list]) => signatureRecord(sig, list))

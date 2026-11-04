@@ -1,4 +1,4 @@
-// The one entry file the installed hooks and the nightly task run: `node hook-bin.js <session-start|post-tool|stop|nightly>`, with the
+// The one entry file the installed hooks and the nightly task run: `node hook-bin.js <session-start|pre-tool|post-tool|stop|nightly>`, with the
 // hook event JSON on stdin. It imports only the store modules (not the CLI), so a call costs little more than the node start, and it
 // always exits 0 with no output on any failure: a hook must never fail or block a session.
 import { homedir } from 'node:os';

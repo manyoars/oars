@@ -7,7 +7,10 @@ import { join } from 'node:path';
 import { CliError, ExitCode } from '../errors.js';
 import { deriveCells, poolOf, serializeCells, type Pool } from './cells.js';
 import { contentHash, FIRST_ORDER_FAMILIES, frozenRead, makeRead, orderResolver, type FirstOrderFamily, type OrderResolver, type Read, type ReadAsOf } from './read.js';
+import { deriveConsequences, recallGraphOf } from './recall-consequence.js';
+import { readRecalls } from './recall-object.js';
 import { deriveAdoption } from './read-adoption.js';
+import { deriveCallShape } from './read-call-shape.js';
 import { deriveChange } from './read-change.js';
 import { deriveCost } from './read-cost.js';
 import { deriveFit } from './read-fit.js';
@@ -25,9 +28,10 @@ import { deriveSubstitution } from './read-substitution.js';
 import { deriveVersionBoundary } from './read-version-boundary.js';
 import { writeAtomic, type Store } from './store.js';
 
-const DERIVERS: { readonly [family in FirstOrderFamily]: DeriveFamily } = {
+// Built on call: `store.ts` imports this file for its refresh and `read-recovery.ts` imports `store.ts`, so these names may not be initialized yet when this module's top level runs.
+const derivers = (): { readonly [family in FirstOrderFamily]: DeriveFamily } => ({
   recovery: deriveRecovery,
-  fit: deriveFit,
+  fit: (input) => [...deriveFit(input), ...deriveCallShape(input)],
   cost: deriveCost,
   change: deriveChange,
   live: deriveLive,
@@ -35,13 +39,14 @@ const DERIVERS: { readonly [family in FirstOrderFamily]: DeriveFamily } = {
   method: deriveMethod,
   'next-step': deriveNextStep,
   'tool-day': deriveToolDay,
-};
+});
 
-/** Families over reads, one stage per order: a stage reads what the stages before it wrote. */
-const RELATIONS: readonly (readonly DeriveRelation[])[] = [[deriveVersionBoundary, deriveSubstitution, deriveInteraction, deriveDayMove], [deriveLeadLag]];
+/** Families over reads, one stage per order: a stage reads what the stages before it wrote. Built on call, for the same reason as `derivers`. */
+const relations = (): readonly (readonly DeriveRelation[])[] => [[deriveVersionBoundary, deriveSubstitution, deriveInteraction, deriveDayMove], [deriveLeadLag]];
 
-export const poolFiles = (storeDir: string): { cells: string; motifs: string; reads: (version: string) => string } => ({
+export const poolFiles = (storeDir: string): { cells: string; motifs: string; consequences: string; reads: (version: string) => string } => ({
   cells: join(storeDir, 'cells.jsonl'),
+  consequences: join(storeDir, 'consequences.jsonl'),
   motifs: join(storeDir, 'motifs.jsonl'),
   reads: (version) => join(storeDir, 'reads', `${version}.jsonl`),
 });
@@ -57,13 +62,14 @@ const made = (bodies: readonly ReadBody[], asOf: ReadAsOf, orderOf: OrderResolve
 export const deriveFirstOrder = (pool: Pool, store: Store): Read[] => {
   const asOf = { pool: pool.version, day: pool.lastDay };
   const orderOf = orderResolver([]);
-  return FIRST_ORDER_FAMILIES.flatMap((family) => made(DERIVERS[family]({ pool, store }), asOf, orderOf));
+  const byFamily = derivers();
+  return FIRST_ORDER_FAMILIES.flatMap((family) => made(byFamily[family]({ pool, store }), asOf, orderOf));
 };
 
-/** Order 1, then each stage of `RELATIONS` over everything before it. */
+/** Order 1, then each stage of `relations` over everything before it. */
 export const deriveReads = (pool: Pool, store: Store): Read[] => {
   const asOf = { pool: pool.version, day: pool.lastDay };
-  return RELATIONS.reduce<Read[]>((known, stage) => {
+  return relations().reduce<Read[]>((known, stage) => {
     const orderOf = orderResolver(known);
     return [...known, ...stage.flatMap((derive) => made(derive(known), asOf, orderOf))];
   }, deriveFirstOrder(pool, store));
@@ -95,9 +101,11 @@ const readStored = async (file: string): Promise<Read[] | undefined> => {
 
 /** The current pool's reads: already written when this pool has been read before, else derived and written once. */
 export const refreshPool = async (storeDir: string, store: Store): Promise<{ pool: Pool; reads: Read[] }> => {
-  const set = deriveCells(store);
+  const recalls = deriveConsequences(store, await readRecalls(storeDir));
+  const set = deriveCells(store, recallGraphOf(store, recalls));
   const pool = poolOf(set, store.errors);
   const files = poolFiles(storeDir);
+  await writeAtomic(files.consequences, recalls.flatMap(({ id, n, consequence }) => (consequence === undefined ? [] : [`${JSON.stringify({ id, n, consequence })}\n`])).join(''));
   await writeAtomic(files.cells, serializeCells(set.cells));
   await writeAtomic(files.motifs, set.motifs.map((motif) => `${JSON.stringify(motif)}\n`).join(''));
   const file = files.reads(pool.version);
@@ -106,4 +114,13 @@ export const refreshPool = async (storeDir: string, store: Store): Promise<{ poo
   const reads = deriveReads(pool, store);
   await writeAtomic(file, serializeReads(reads));
   return { pool, reads };
+};
+
+/** The pool a pull answers from. A pull always answers (spec 2.7), so a pool that cannot be read or written costs it only the stored read IDs: its answers keep their stand-ins. */
+export const currentPool = async (storeDir: string, store: Store): Promise<{ pool: Pool; reads: Read[] } | undefined> => {
+  try {
+    return await refreshPool(storeDir, store);
+  } catch {
+    return undefined;
+  }
 };
