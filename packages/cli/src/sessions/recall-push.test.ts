@@ -1,4 +1,4 @@
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { readHookCalls } from './hook-calls.js';
@@ -155,6 +155,42 @@ describe('the pre-tool push', () => {
     expect(row).toMatchObject({ event: 'pre-tool', hit: false });
     expect(row?.error).not.toBeNull();
     expect((await readSteps(staged.storeDir))[0]).toMatchObject({ step: 'recall', trigger: 'pre-tool', status: 'error' });
+  });
+
+  it('logs one pre-tool row per call with timing and outcome only: no tool name, input, or query', async () => {
+    const staged = stagedIndex();
+    const sid = sessionOn('shown');
+    await runHook('pre-tool', call(sid, { tool_input: { query: 'secret-typed-value', max_results: 3 } }), staged.runtime, () => NOW);
+    await runHook('pre-tool', call(sid, { tool_name: 'Bash', tool_input: { command: 'ls secret-path' } }), staged.runtime, () => NOW + 1);
+    const text = readFileSync(join(staged.storeDir, 'hook-calls.jsonl'), 'utf8');
+    const rows = text.trim().split('\n').map((row): { [key: string]: unknown } => Object.fromEntries(Object.entries(JSON.parse(row) as object)));
+    expect(rows).toHaveLength(2);
+    for (const row of rows) expect(Object.keys(row).sort()).toEqual(['at', 'error', 'event', 'hit', 'ms', 'session']);
+    expect(rows.map((row) => row.hit)).toEqual([true, false]);
+    expect(rows[0]).toMatchObject({ event: 'pre-tool', session: sid, error: null });
+    expect(typeof rows[0]?.ms).toBe('number');
+    expect(text).not.toMatch(/secret|Monitor|Bash|query/);
+  });
+
+  it('still lets the tool run, with its push, when the hook-calls log cannot be written', async () => {
+    const staged = stagedIndex();
+    mkdirSync(join(staged.storeDir, 'hook-calls.jsonl'));
+    const output = await runHook('pre-tool', call(sessionOn('shown')), staged.runtime, () => NOW);
+    expect(specific(output).additionalContext).toContain('Monitor');
+  });
+
+  it('fires for a shape in no action table once per session, and stays silent for one under the floors', async () => {
+    const unlisted = toolShapeId('Zeta', ['topic']);
+    const fires: RecallRead = { ...read, readId: unlisted, tool: 'Zeta', keys: ['topic'] };
+    const staged = stagedIndex({ fit: { [unlisted]: fires } });
+    const sid = Array.from({ length: 100 }, (_, at) => `live-${String(at)}`).find((candidate) => armOf(candidate, [unlisted], AT) === 'shown') ?? '';
+    const zeta = (session: string) => call(session, { tool_name: 'Zeta', tool_input: { topic: 'x' } });
+    expect(specific(await runHook('pre-tool', zeta(sid), staged.runtime, () => NOW)).additionalContext).toContain('other [topic]');
+    expect(await runHook('pre-tool', zeta(sid), staged.runtime, () => NOW + 1)).toBeUndefined();
+    expect(await readRecalls(staged.storeDir)).toHaveLength(1);
+    // A shape the index left out (under the floors) has no read, so it is silent whatever the tool.
+    expect(await runHook('pre-tool', call(sid, { tool_name: 'Zeta', tool_input: { other: 1 } }), staged.runtime, () => NOW + 2)).toBeUndefined();
+    expect(await readRecalls(staged.storeDir)).toHaveLength(1);
   });
 
   it('reads the frame from the transcript tail and states the distance', async () => {
