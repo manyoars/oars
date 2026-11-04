@@ -3,6 +3,7 @@
 // keeps its own table, because capture's `pulls` say a name was stated and the gate has to say how: installed, or fetched and run.
 import type { Redactor } from '../sessions/redact.js';
 import { CHANGES_FOLDER, shellCommands, type ShellCommand } from '../sessions/extract.js';
+import type { Program } from './record.js';
 
 export const CROSSING_CLASSES = ['npm-package', 'python-package', 'mcp-server', 'skill'] as const;
 export type CrossingClass = (typeof CROSSING_CLASSES)[number];
@@ -24,7 +25,7 @@ export interface Crossing {
   version: string | null;
   versionForm: VersionForm;
   /** The program that crossed (`npm`, `uvx`), or `mcp` and `skill` for those tools. */
-  program: string;
+  program: Program;
   /** Whether the call's own status reports this command: false behind a pipe or a later `;`. */
   statusReports: boolean;
   /**
@@ -97,7 +98,12 @@ interface Tool {
   verbs: Verbs;
 }
 
-const TOOLS: ReadonlyMap<string, Tool> = new Map<string, Tool>([
+/** The programs read as package tools: the closed list less the `python -m` forms (`pip`, `pipx`, and `uv` run as modules) and the two tools. */
+type ToolProgram = Exclude<Program, 'python -m pip' | 'python -m pipx' | 'python -m uv' | 'mcp' | 'skill'>;
+/** A command whose program is one of those, so a crossing built from it names a listed program. */
+type ToolCommand = ShellCommand & { program: ToolProgram };
+
+const TOOLS: ReadonlyMap<ToolProgram, Tool> = new Map<ToolProgram, Tool>([
   ['npm', { family: 'npm-package', verbs: NPM_VERBS }],
   ['pnpm', { family: 'npm-package', verbs: PNPM_VERBS }],
   ['yarn', { family: 'npm-package', verbs: YARN_VERBS }],
@@ -306,17 +312,25 @@ const allFlags = (words: Words, ...names: readonly string[]): string[] => names.
 const PIP_NAME = /^pip[\d.]*$/;
 const PYTHON_NAME = /^(?:python[\d.]*|py)$/;
 const MODULE_NAME = /^(?:pip[\d.]*|pipx|uv)$/;
+type ModuleProgram = 'pip' | 'pipx' | 'uv';
+const MODULE_PROGRAMS: { readonly [name in ModuleProgram]: Program } = { pip: 'python -m pip', pipx: 'python -m pipx', uv: 'python -m uv' };
 
 /** `python -m pip ...` is `pip ...`, and `-m pipx` and `-m uv` the same. The words before `-m` are the interpreter's own flags. */
-const moduleCommand = (command: ShellCommand): ShellCommand | null => {
+const moduleCommand = (command: ShellCommand): { module: ModuleProgram; command: ToolCommand } | null => {
   if (!PYTHON_NAME.test(command.program)) return null;
-  const module = command.args.findIndex((word) => word.text === '-m');
-  const name = command.args[module + 1]?.text ?? '';
-  if (module < 0 || !MODULE_NAME.test(name)) return null;
-  return { ...command, program: PIP_NAME.test(name) ? 'pip' : name, args: command.args.slice(module + 2) };
+  const at = command.args.findIndex((word) => word.text === '-m');
+  const name = command.args[at + 1]?.text ?? '';
+  if (at < 0 || !MODULE_NAME.test(name)) return null;
+  const module = name === 'pipx' || name === 'uv' ? name : 'pip';
+  return { module, command: { ...command, program: module, args: command.args.slice(at + 2) } };
 };
 
-const toolOf = (program: string): Tool | undefined => TOOLS.get(PIP_NAME.test(program) ? 'pip' : program);
+/** The listed program a word names, with its table row. `pip3.12` is `pip`. */
+const toolOf = (program: string): { program: ToolProgram; tool: Tool } | undefined => {
+  const named = PIP_NAME.test(program) ? 'pip' : program;
+  for (const [key, tool] of TOOLS) if (key === named) return { program: key, tool };
+  return undefined;
+};
 
 const SHELL_SINK = /^(?:sh|bash|zsh|dash|python[\d.]*|node|iex|invoke-expression|pwsh|powershell)$/;
 const FETCHER = /^(?:curl|wget|irm|iwr|invoke-restmethod|invoke-webrequest)$/;
@@ -329,12 +343,12 @@ interface Reading {
 
 const emptyReading = (): Reading => ({ crossings: [], unread: [], removals: [] });
 
-const crossingOf = (family: Family, spec: Extract<Spec, { kind: 'named' }>, action: 'install' | 'run', program: string, statusReports: boolean): Crossing => {
+const crossingOf = (family: Family, spec: Extract<Spec, { kind: 'named' }>, action: 'install' | 'run', program: Program, statusReports: boolean): Crossing => {
   const form: CrossingForm = action === 'run' ? (spec.url ? 'url-fetch-and-run' : 'fetch-and-run') : spec.url ? 'url-install' : 'install';
   return { class: family, form, name: spec.name, version: spec.version, versionForm: spec.versionForm, program, statusReports, registryAsked: true };
 };
 
-const addSpecs = (reading: Reading, family: Family, texts: readonly string[], action: 'install' | 'run', program: string, statusReports: boolean): void => {
+const addSpecs = (reading: Reading, family: Family, texts: readonly string[], action: 'install' | 'run', program: Program, statusReports: boolean): void => {
   for (const text of texts) {
     const spec = specOf(family, text);
     if (spec.kind === 'unread') reading.unread.push(spec.shape);
@@ -355,7 +369,7 @@ const skillSource = (words: readonly string[]): string | undefined => {
   return undefined;
 };
 
-const readRun = (reading: Reading, family: Family, words: Words, rest: readonly string[], command: ShellCommand): void => {
+const readRun = (reading: Reading, family: Family, words: Words, rest: readonly string[], command: ToolCommand): void => {
   if ([...NO_FETCH_FLAGS].some((flag) => words.bare.has(flag))) return;
   const [first, sub] = rest;
   const source = sub === 'add' ? skillSource(rest.slice(2)) : undefined;
@@ -383,7 +397,7 @@ const readRemoval = (reading: Reading, family: Family, names: readonly string[])
   }
 };
 
-const readInstall = (reading: Reading, family: Family, words: Words, rest: readonly string[], command: ShellCommand): void => {
+const readInstall = (reading: Reading, family: Family, words: Words, rest: readonly string[], command: ToolCommand): void => {
   const editable = allFlags(words, '-e', '--editable');
   const texts = [...editable, ...rest];
   if (texts.length === 0 || allFlags(words, '-r', '--requirement', '--file').length > 0) reading.unread.push('manifest-install');
@@ -391,14 +405,14 @@ const readInstall = (reading: Reading, family: Family, words: Words, rest: reado
 };
 
 /** A creator is a plain name that gets `create-` put before it; a path, a URL, or `org/repo` is no creator and is not prefixed into a name. */
-const readCreator = (reading: Reading, family: Family, text: string, command: ShellCommand): void => {
+const readCreator = (reading: Reading, family: Family, text: string, command: ToolCommand): void => {
   const spec = nodeSpec(text);
   if (spec.kind === 'unread') reading.unread.push(spec.shape);
   else if (spec.url) reading.unread.push('unreadable-name');
   else addSpecs(reading, family, [creatorSpec(text)], 'run', command.program, command.read);
 };
 
-const readTool = (reading: Reading, tool: Tool, command: ShellCommand): void => {
+const readTool = (reading: Reading, tool: Tool, command: ToolCommand): void => {
   const { family } = tool;
   let words = readWords(command, family);
   // A bare `yarn` is its install; `yarn foo` runs a script.
@@ -439,9 +453,9 @@ const readShape = (reading: Reading, command: ShellCommand, previous: ShellComma
   const names = namesOf(command);
   if (previous?.link === 'pipe' && FETCHER.test(previous.program) && SHELL_SINK.test(command.program)) reading.unread.push('pipe-to-shell');
   if (command.program === 'xargs') {
-    const at = names.findIndex((name) => TOOLS.has(name) || PIP_NAME.test(name));
-    const tool = toolOf(names[at] ?? '');
-    if (tool !== undefined && verbOf(tool.verbs, names.slice(at + 1))?.action === 'install') reading.unread.push('behind-xargs');
+    const at = names.findIndex((name) => toolOf(name) !== undefined);
+    const found = toolOf(names[at] ?? '');
+    if (found !== undefined && verbOf(found.tool.verbs, names.slice(at + 1))?.action === 'install') reading.unread.push('behind-xargs');
   }
   if (command.program === 'claude' || command.program === 'codex') {
     const [first, second] = names;
@@ -452,16 +466,13 @@ const readShape = (reading: Reading, command: ShellCommand, previous: ShellComma
 const readCommand = (reading: Reading, command: ShellCommand, previous: ShellCommand | undefined): void => {
   readShape(reading, command, previous);
   const viaModule = moduleCommand(command);
-  const direct = viaModule ?? command;
-  const tool = toolOf(direct.program);
-  if (tool === undefined) return;
+  const found = viaModule === null ? toolOf(command.program) : toolOf(viaModule.module);
+  if (found === undefined) return;
+  const direct: ToolCommand = { ...(viaModule?.command ?? command), program: found.program };
   const from = reading.crossings.length;
-  readTool(reading, tool, direct);
-  // `python -m pip` is how a call goes around a stopped `pip`, so a record has to keep the two apart. `pip3.12` is one program with `pip`.
-  for (const crossing of reading.crossings.slice(from)) {
-    if (viaModule !== null) crossing.program = `python -m ${direct.program}`;
-    else if (PIP_NAME.test(crossing.program)) crossing.program = 'pip';
-  }
+  readTool(reading, found.tool, direct);
+  // `python -m pip` is how a call goes around a stopped `pip`, so a record has to keep the two apart.
+  if (viaModule !== null) for (const crossing of reading.crossings.slice(from)) crossing.program = MODULE_PROGRAMS[viaModule.module];
 };
 
 const stringField = (input: unknown, key: string): string | undefined => {

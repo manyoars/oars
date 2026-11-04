@@ -403,6 +403,31 @@ describe('a crossing record', () => {
     expect(head.unread['pipe-to-shell']).toBe(1);
   });
 
+  // Captured 2026-11-04 from npm 11 and pip 25.0.1 installing a name that is not registered: the whole failure text, not a fragment.
+  it.each([
+    ['npm', 'npm install no-such-pkg-1', [
+      "npm error code E404",
+      "npm error 404 Not Found - GET https://registry.npmjs.org/no-such-pkg-1 - Not found",
+      "npm error 404",
+      "npm error 404  The requested resource 'no-such-pkg-1@*' could not be found or you do not have permission to access.",
+      "npm error 404",
+      "npm error 404 Note that you can also install from a",
+      "npm error 404 tarball, folder, http url, or git url.",
+    ].join('\n')],
+    ['pip', 'pip install no-such-pkg-1', [
+      'ERROR: Could not find a version that satisfies the requirement no-such-pkg-1 (from versions: none)',
+      '',
+      '[notice] A new release of pip is available: 25.0.1 -> 26.3',
+      '[notice] To update, run: python.exe -m pip install --upgrade pip',
+      'ERROR: No matching distribution found for no-such-pkg-1',
+    ].join('\n')],
+  ])('reads %s’s real not-found wording as a miss', async (_manager, command, text) => {
+    await writeLog(projectsRoot, REPO, 'a.jsonl', [bash(1, 'nf1', command), result(1, 'nf1', text, true)]);
+    await run([REPO]);
+    const { crossings } = await written();
+    expect(named(crossings, 'no-such-pkg-1')).toMatchObject({ status: 'error', miss: 'not-found' });
+  });
+
   it('marks a later removal, in any session of the repository, and not a failed one', async () => {
     await writeLog(projectsRoot, REPO, 'a.jsonl', [bash(1, 't1', 'npm install gone-later keeps-it failed-removal'), result(1, 't1', 'added')]);
     await writeLog(projectsRoot, WORKTREE, 'b.jsonl', [bash(5, 't2', 'npm uninstall gone-later'), result(5, 't2', 'removed'), bash(6, 't3', 'npm uninstall failed-removal'), result(6, 't3', 'nope', true)]);
