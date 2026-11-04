@@ -278,6 +278,41 @@ export const stageCopilot = (root: string, files: readonly CopilotFixture[]): st
   return home;
 };
 
+/** A Gemini CLI chat-file line: the head metadata, a message, or a `$set`/`$patch`/`$rewindTo` record (google-gemini/gemini-cli @ 89e9d25d, packages/core/src/services/chatRecordingTypes.ts). */
+export const geminiHead = (sessionId: string, extra: object = {}): object => ({ sessionId, projectHash: 'a1b2c3', startTime: '2026-06-01T10:00:00.000Z', lastUpdated: '2026-06-01T10:00:00.000Z', kind: 'main', ...extra });
+
+export interface GeminiFixture {
+  /** The session id, which is the head's `sessionId`; the file is `session-2026-06-01T10-00-<first 8>.jsonl`. */
+  id: string;
+  /** The project folder's name under `tmp/` (the vendor's slug). */
+  slug?: string;
+  /** What `.project_root` holds; null writes none (a pre-slug folder). */
+  projectRoot?: string | null;
+  /** Lines as objects, or raw text for a torn file. */
+  lines: readonly unknown[] | string;
+  /** Set for a subagent: its file is `chats/<parent>/<id>.jsonl`. */
+  parent?: string;
+  /** Written as a legacy `.json` file holding one pretty-printed object. */
+  legacy?: boolean;
+  /** The file's name without its extension, when it is not `session-2026-06-01T10-00-<first 8>`: a second chat file under one session id. */
+  stem?: string;
+}
+
+/** A Gemini home holding the given sessions under `.gemini/tmp/<slug>/chats/`; returns the `.gemini` folder. */
+export const stageGemini = (root: string, files: readonly GeminiFixture[]): string => {
+  const gemini = join(root, 'gemini-home', '.gemini');
+  for (const file of files) {
+    const slug = join(gemini, 'tmp', file.slug ?? 'app');
+    const dir = file.parent === undefined ? join(slug, 'chats') : join(slug, 'chats', file.parent);
+    mkdirSync(dir, { recursive: true });
+    if (file.projectRoot !== null) writeFileSync(join(slug, '.project_root'), file.projectRoot ?? join(root, 'not-a-repo'));
+    const text = typeof file.lines === 'string' ? file.lines : `${file.lines.map((line) => JSON.stringify(line)).join('\n')}\n`;
+    const stem = file.stem ?? (file.parent === undefined ? `session-2026-06-01T10-00-${file.id.slice(0, 8)}` : file.id);
+    writeFileSync(join(dir, `${stem}${file.legacy === true ? '.json' : '.jsonl'}`), text);
+  }
+  return gemini;
+};
+
 /**
  * One Grok Build `updates.jsonl` line: `{timestamp, method, params: {sessionId, update}}` (xai-org/grok-build @ 2bdd1d6, crates/codegen/xai-grok-shell
  * storage/mod.rs:721-725; `timestamp` is epoch seconds). `update` is an ACP `SessionUpdate`, tagged by `sessionUpdate`.

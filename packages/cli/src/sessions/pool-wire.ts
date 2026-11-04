@@ -200,7 +200,7 @@ const heldTo = (isHeld: (value: string | null) => string | null, value: unknown,
 
 // `satisfies` checks every entry is a `Harness` but not that every `Harness` is listed; this refuses a list that leaves one out at compile time.
 const allHarnesses = <const T extends readonly Harness[]>(list: [Exclude<Harness, T[number]>] extends [never] ? T : never): T => list;
-const HARNESSES = allHarnesses(['claude-code', 'cursor', 'codex', 'copilot', 'grok']);
+const HARNESSES = allHarnesses(['claude-code', 'cursor', 'codex', 'copilot', 'gemini', 'grok']);
 const PROMPT_CLASSES = ['no-tools', 'orchestration', 'research', 'edit-verify', 'edit-only', 'explore-only', 'shell-only', 'mixed'] as const satisfies readonly PromptClass[];
 const STATUSES = ['ok', 'error', 'none'] as const satisfies readonly ToolStatus[];
 const EDGE_KINDS = ['next', 'spawned', 'retried', 'after-error'] as const satisfies readonly StepEdge['kind'][];
@@ -373,7 +373,7 @@ export const parseSkeleton = (value: unknown): { ok: true; skeleton: SessionSkel
     if (!ID.test(id)) throw new Refused('id', 'not a hash');
     const transcripts = listOf(raw.transcripts, 'transcripts', parseTranscript);
     if (transcripts.length === 0) throw new Refused('transcripts', 'empty');
-    // A deposit is what lifts the read cap, so one has to hold something to derive from.
+    // A counting batch is what lifts the fetch cap, so a deposit has to hold something to derive from.
     if (transcripts.every(({ prompts, tools }) => prompts.length === 0 && tools.length === 0)) throw new Refused('transcripts', 'holds no prompt and no tool');
     transcripts.forEach(({ spawnedIn }, index) => {
       if (spawnedIn !== null && spawnedIn >= transcripts.length) throw new Refused(`transcripts[${String(index)}].spawnedIn`, 'no such transcript');

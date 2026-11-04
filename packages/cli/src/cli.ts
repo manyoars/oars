@@ -21,7 +21,7 @@ import { gateInstall, gateReplay, gateReport, gateUninstall } from './gate/comma
 import { DEADLINE_MS, gateHook } from './gate/hook.js';
 import { managerReader } from './gate/registry.js';
 import { exclusionPaths, sessionsExclusions } from './sessions/exclusion.js';
-import { poolDeposit, poolLogin, poolPull } from './sessions/pool-command.js';
+import { poolDeposit, poolFetch, poolLogin } from './sessions/pool-command.js';
 import type { InstallRuntime, Scope } from './sessions/install.js';
 import type { SessionsRuntime } from './sessions/store.js';
 
@@ -337,7 +337,7 @@ const buildProgram = (deps: RunDeps, argv: string[]): Command => {
   sessions
     .command('deposit')
     .description('read session logs from the folders you name into the local observation log; idempotent. Subagent transcripts under each session (<project>/<session>/subagents/) are deposited with their parent, and each raw transcript is hard-linked into the oars archive beside the store')
-    .option('--allow <folder>', 'a project folder to read: its path, or its name under ~/.claude/projects (repeatable); `cursor`, `codex`, `copilot`, and `grok` name the Cursor, Codex, Copilot CLI, and Grok Build stores. A trailing slash names everything under a folder; * and ? are wildcards', collect)
+    .option('--allow <folder>', 'a project folder to read: its path, or its name under ~/.claude/projects (repeatable); `cursor`, `codex`, `copilot`, `gemini`, and `grok` name the Cursor, Codex, Copilot CLI, Gemini CLI, and Grok Build stores. A trailing slash names everything under a folder; * and ? are wildcards', collect)
     .option('--allow-file <list>', 'a file of --allow entries, one per line (# starts a comment); repeatable, combines with --allow', collect)
     .option('--redact-domain <domain>', 'an organization domain to mask in everything written (repeatable)', collect)
     .action(async (_options: OptionValues, command: Command) => {
@@ -626,13 +626,13 @@ const buildProgram = (deps: RunDeps, argv: string[]): Command => {
       emit(deps, flag(command.optsWithGlobals(), 'json'), await gateReport(sessionDeps(deps)));
     });
 
-  const pool = program.command('pool').description('sign in to a pool server, deposit closed-vocabulary session skeletons, and pull signed reads; local capture, recall, and reads need none of it');
+  const pool = program.command('pool').description('sign in to a pool server, deposit closed-vocabulary session skeletons, and fetch signed reads; local capture, recall, and reads need none of it');
   const serverOption = '--server <url>';
   const serverHelp = 'the pool server, https or plain http to localhost (or OARS_POOL_URL; there is no default)';
 
   pool
     .command('login')
-    .description('sign in by GitHub or Google device flow; the pool keeps a pseudonym, and no harness token is read')
+    .description('sign in by GitHub or Google device flow, run here against the provider; prints each request before sending it, and the pool keeps a pseudonym; no harness token is read')
     .requiredOption('--provider <name>', 'github or google')
     .option(serverOption, serverHelp)
     .action(async (_options: OptionValues, command: Command) => {
@@ -651,13 +651,13 @@ const buildProgram = (deps: RunDeps, argv: string[]): Command => {
     });
 
   pool
-    .command('pull')
+    .command('fetch')
     .description('fetch the signed bundle for one harness version, verify it against the key pinned at login, and keep it locally')
     .requiredOption('--harness-version <version>', 'the public harness version whose bundle to fetch')
     .option(serverOption, serverHelp)
     .action(async (_options: OptionValues, command: Command) => {
       const options: OptionValues = command.optsWithGlobals();
-      emit(deps, flag(options, 'json'), await poolPull(deps, { server: text(options, 'server'), harnessVersion: text(options, 'harnessVersion') ?? '' }));
+      emit(deps, flag(options, 'json'), await poolFetch(deps, { server: text(options, 'server'), harnessVersion: text(options, 'harnessVersion') ?? '' }));
     });
 
   return program;
