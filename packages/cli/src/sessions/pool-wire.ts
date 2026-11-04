@@ -467,7 +467,7 @@ export const parseSkeleton = (value: unknown): { ok: true; skeleton: SessionSkel
     if (transcripts.every(({ prompts, tools }) => prompts.length === 0 && tools.length === 0)) throw new Refused('transcripts', 'holds no prompt and no tool');
     // Positions are the only ordinals on the wire, so each must name something the batch holds.
     const mainCalls = transcripts[0]?.tools.length ?? 0;
-    transcripts.forEach(({ prompts, tools }, index) =>
+    transcripts.forEach(({ prompts, tools }, index) => {
       tools.forEach(({ prompt, steps }, call) => {
         const callAt = `transcripts[${String(index)}].tools[${String(call)}]`;
         // Past the prompts it names a prompt with no record, numbered in order of appearance: no more of those than calls.
@@ -475,8 +475,8 @@ export const parseSkeleton = (value: unknown): { ok: true; skeleton: SessionSkel
         steps.forEach(({ parent }, position) => {
           if (parent !== null && parent >= mainCalls) throw new Refused(`${callAt}.steps[${String(position)}].parent`, 'no such call in the main run');
         });
-      }),
-    );
+      });
+    });
     return { ok: true, skeleton: { format: SKELETON_FORMAT, id, transcripts, deltas: [] } };
   } catch (error) {
     if (error instanceof Refused) return { ok: false, field: error.field, reason: error.reason };
