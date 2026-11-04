@@ -479,6 +479,8 @@ describe('admitName, the one point every recorded name passes', () => {
     ['npm-package', 'url-install', 'https://../secret/home/x', unread('local-path')],
     ['npm-package', 'url-install', 'ssh://./x', unread('local-path')],
     ['npm-package', 'url-install', 'https://-x/y', unread('local-path')],
+    ['npm-package', 'url-install', '..:x/y', unread('local-path')],
+    ['npm-package', 'url-install', '-x:y/z', unread('local-path')],
     ['npm-package', 'url-install', 'https://host.example:8080/x.tgz', named('https://host.example:8080/x.tgz')],
     ['npm-package', 'url-install', 'https://host.example:secret/x', unread('local-path')],
     // A mask and a variable keep the shapes they have.
