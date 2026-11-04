@@ -54,7 +54,8 @@ describe('the scope listing of a folder off the allowlist', () => {
     // Positive control: the spies see a read when one happens, so an empty list above means no read.
     expect(opened.some((path) => path.endsWith('state.json'))).toBe(true);
     opened.length = 0;
-    await sessionsBooks({ sessions: staged.runtime, install: undefined, now: () => NOW }, { by: 'class', sinceDays: undefined });
+    const booked = await sessionsBooks({ sessions: staged.runtime, install: undefined, now: () => NOW }, { by: 'class', sinceDays: undefined });
     expect(opened.filter((path) => path.includes('omega-app'))).toEqual([]);
+    expect(booked.document).toMatchObject({ scope: { folders: 1, transcripts: 0, names: ['omega-app'] } });
   });
 });

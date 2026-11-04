@@ -386,4 +386,29 @@ describe('the store lock', () => {
     await Promise.all([holder, waiter]);
     expect(events).toEqual(['holder in', 'holder out', 'waiter in']);
   });
+
+  it('stops refreshing a lock held past its hard cap, so a waiter breaks it and logs the holder', async () => {
+    const staged = stage();
+    const lockOptions = { waitMs: 4000, staleMs: 300, holdMs: 400 };
+    const notes = vi.spyOn(process.stderr, 'write').mockReturnValue(true);
+    const events: string[] = [];
+    let release: () => void = () => undefined;
+    const hung = withLock(staged.storeDir, () => new Promise<void>((done) => (release = done)), lockOptions);
+    await new Promise((done) => setTimeout(done, 50));
+    await withLock(
+      staged.storeDir,
+      () => {
+        events.push('waiter in');
+        return Promise.resolve();
+      },
+      lockOptions,
+    );
+    release();
+    await hung;
+    expect(events).toEqual(['waiter in']);
+    const lines = notes.mock.calls.map(([line]) => String(line)).filter((line) => line.includes('store lock'));
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toContain(`pid ${String(process.pid)}`);
+    expect(lines[0]).toContain('not refreshed for over 300 ms');
+  });
 });

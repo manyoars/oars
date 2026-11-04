@@ -57,6 +57,7 @@ replaces, so the log settles back to the size of the live records. A hook deposi
 - **What stays.** Only a superseded line goes. A line this version cannot read stays, since a later oars may read it, and a kept line is written back byte for byte. What `loadStore` returns does not change.
 - **What triggers it.** What the log holds, not what the run captured, so a run that died after its re-capture is compacted by the next deposit, even one with nothing left to capture. A log with nothing superseded is read once and not rewritten.
 - **How it stays safe.** The rewrite goes to `observations.jsonl.<pid>.tmp`, is synced, and replaces the log by `rename`, all under the store lock, which its holder keeps refreshed so a long deposit is not judged stale. A crash before the rename leaves the old log whole and a temp file no reader opens, which the next compaction removes.
+- **A holder that hangs.** The holder refreshes the lock for at most six times the stale age (`holdMs`, one hour: the stale age is 10 minutes, and a whole-store re-capture is the work that outlasts it). Past that the refresh stops, the lock ages out like a dead holder's, and the next waiter breaks it and writes one line to stderr naming the holder's pid (`oars: broke the store lock held by pid <pid>, not refreshed for over <staleMs> ms`). A hung process cannot keep every later deposit and hook waiting for good; the run that outlives the cap loses its lock and should be rerun.
 - **When it gives up.** Compaction leaves the log as it was and writes one line to stderr, and the next deposit tries again, if the log's size changed during the rewrite (a waiter broke the lock) or if Windows keeps refusing the rename for 30 seconds because a reader holds the log open. A failed compaction does not fail the deposit: the records are safe and an uncompacted log still loads.
 
 ## Two versions
@@ -257,7 +258,7 @@ and an `unknown` never replaces a known state, so a passing failure does not und
 
 ### What `books` adds
 
-`oars sessions books --by class|model|harness|pull` adds these columns, in text and `--json`. The signals stay separate, and the text ends
+`oars sessions books --by class|model|harness|pull` adds these columns, in text and `--json`. `--json` also carries `scope`, the same folders-not-read list `verify --json` carries. The signals stay separate, and the text ends
 with a line saying they are associations in one operator's logs, not measured lift.
 
 | Column | `--json` | Count, of what |

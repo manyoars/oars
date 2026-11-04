@@ -649,6 +649,11 @@ interface LockOptions {
   waitMs: number;
   /** A lock file older than this belongs to a process that died; it is broken. */
   staleMs: number;
+  /**
+   * The longest a holder keeps its lock refreshed; default six times `staleMs` (an hour). Past it the heartbeat stops, so a holder that
+   * hangs while its process lives ages out like a dead one and the next waiter breaks it, rather than every deposit waiting on it for good.
+   */
+  holdMs?: number;
 }
 
 const sleep = (ms: number): Promise<void> => new Promise((done) => setTimeout(done, ms));
@@ -683,7 +688,11 @@ const breakStale = async (lock: string, staleMs: number): Promise<void> => {
   }
   try {
     const age = await stat(lock).then((info) => Date.now() - info.mtimeMs, () => 0);
-    if (age > staleMs) await rm(lock, { force: true });
+    if (age > staleMs) {
+      const holder = (await readFile(lock, 'utf8').catch(() => '')).trim();
+      await rm(lock, { force: true });
+      process.stderr.write(`oars: broke the store lock held by pid ${holder === '' ? 'unknown' : holder}, not refreshed for over ${String(staleMs)} ms\n`);
+    }
   } finally {
     await rm(guard, { force: true });
   }
@@ -709,7 +718,13 @@ export const withLock = async <T>(storeDir: string, work: () => Promise<T>, opti
   }
   // A waiter breaks a lock older than `staleMs`, and a full re-capture runs longer than that: the holder keeps its lock young, or a hook
   // would break it and append during the compaction that ends the run.
+  const holdMs = options.holdMs ?? options.staleMs * 6;
+  const heldAt = Date.now();
   const heartbeat = setInterval(() => {
+    if (Date.now() - heldAt >= holdMs) {
+      clearInterval(heartbeat);
+      return;
+    }
     const now = new Date();
     void utimes(lock, now, now).catch(() => undefined);
   }, options.staleMs / 4);
