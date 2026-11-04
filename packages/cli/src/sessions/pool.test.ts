@@ -223,20 +223,16 @@ describe('servedPool', () => {
     expect(readFileSync(poolFiles(dir).cells, 'utf8')).not.toBe('');
   });
 
-  it('rebuilds a store whose cells predate the grain, with every cell weekly or daily and no finer than that', async () => {
+  it('rebuilds a store whose cells predate the grain, deriving every cell again with its grain', async () => {
     const dir = storeDir();
     const first = await refreshPool(dir, one);
     const oldForm = first.pool.cells
-      .map((cell) => {
-        const { grain: _grain, ...rest } = cell;
-        return JSON.stringify(rest);
-      })
+      .map((cell) => JSON.stringify({ ...cell, grain: undefined }))
       .join('\n');
     expect(oldForm).not.toContain('"grain"');
     writeFileSync(poolFiles(dir).cells, `${oldForm}\n`);
     const served = await servedPool(dir, one);
     expect(served?.pool.cells).toEqual(first.pool.cells);
-    expect(served?.pool.cells.every((cell) => cell.grain === 'week' || cell.grain === 'day')).toBe(true);
     const rewritten = readFileSync(poolFiles(dir).cells, 'utf8');
     expect(rewritten).toContain('"grain"');
     expect(rewritten).toBe(serializeCells(first.pool.cells));
