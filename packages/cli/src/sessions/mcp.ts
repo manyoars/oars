@@ -54,6 +54,15 @@ const namedForms = (args: unknown): Parameters<typeof formsRefusal>[0] => {
   ];
 };
 
+/** A `sinceDays` or `class` that is present but outside the schema is refused, not dropped: dropping it answers all time under a count that looks narrowed. */
+const narrowingRefusal = (args: unknown): string | undefined => {
+  const source = isObj(args) ? args : {};
+  if (Object.hasOwn(source, 'class') && typeof source.class !== 'string') return 'class must be a string.';
+  const days = source.sinceDays;
+  if (Object.hasOwn(source, 'sinceDays') && !(typeof days === 'number' && Number.isInteger(days) && days > 0)) return 'sinceDays must be a positive integer.';
+  return undefined;
+};
+
 const toQuery = (args: unknown): PullInput => {
   const source = isObj(args) ? args : {};
   const narrowing: { cls?: string; sinceDays?: number } = {};
@@ -86,6 +95,8 @@ export const handleMessage = async (runtime: SessionsRuntime, now: () => number,
   if (method === 'tools/call') {
     const params = isObj(message.params) ? message.params : {};
     if (params.name !== TOOL_NAME) return failure(id, -32602, `Unknown tool: ${typeof params.name === 'string' ? params.name : ''}`);
+    const invalid = narrowingRefusal(params.arguments);
+    if (invalid !== undefined) return failure(id, -32602, invalid);
     const conflict = formsRefusal(namedForms(params.arguments));
     if (conflict !== undefined) return failure(id, -32602, conflict);
     const query = toQuery(params.arguments);

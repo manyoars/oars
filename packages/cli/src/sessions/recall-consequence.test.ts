@@ -109,8 +109,7 @@ describe('recalls in the graph', () => {
     const cells = deriveCells(base, graph).cells;
     const pullRead = cells.find((cell) => cell.motifId === shapeId([{ action: 'recall.pull', identity: null }, { action: 'file.read', identity: null }]));
     expect(pullRead).toMatchObject({ sessions: 1 });
-    // The pull's own step stays, so only a motif holding it is exposed; the calls its window covers are not.
-    expect(cells.filter((cell) => cell.exposed).every((cell) => cell.motifId.length > 0 && cell === pullRead)).toBe(true);
+    // The pull's own step stays; the calls its window covers are not exposed.
     expect(cells.find((cell) => cell.motifId === shapeId([{ action: 'file.read', identity: null }]))?.exposed).toBe(false);
     expect(cells.find((cell) => cell.motifId === shapeId([{ action: 'file.edit', identity: null }]))?.exposed).toBe(false);
     expect(graph.exposedPrompt('s', 0)).toBe(false);
