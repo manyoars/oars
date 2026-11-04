@@ -157,7 +157,7 @@ describe('oars gate hook, through the command', () => {
     expect(rows[0]).toMatchObject({ kind: 'crossing', via: 'hook', name: 'left-pad', session: 's1', toolUseId: 'u1' });
   });
 
-  it('writes no file, in the working folder or anywhere, when no store is configured', async () => {
+  it('writes no crossings.jsonl or gate-index.txt in the working folder when no store is configured', async () => {
     const work = mkdtempSync(join(tmpdir(), 'oars-gate-nostore-'));
     const before = process.cwd();
     process.chdir(work);
