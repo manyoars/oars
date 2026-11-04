@@ -5,6 +5,9 @@
 // captured records to `<config>/oars/sessions/observations.jsonl`. The log is append-only: a session whose file changed is deposited
 // again under a higher `rev`, and a reader keeps only the highest `rev` of each session.
 //
+// Version 10 (CAPTURE 10, t768) gives a turn opened by a slash command or a skill a `user-prompt` record, adds `opened` to that record, and moves `skills`
+// from class P to class A, since a skill's name can be private. It changed no derivation, so it leaves EXTRACTOR at 9.
+//
 // EXTRACTOR 9 adds motifs, cells, and reads, computed from the capture records and written beside them (`docs/sessions-store.md`), and carries a prompt's
 // frame onto its derived record. No capture record changes.
 //
@@ -47,7 +50,7 @@ import type { CanonicalAction } from './actions.js';
 import type { RepoSize } from './public-vocabulary.js';
 
 /** Stamped `cv` on every captured record. Bump it when the captured field list changes or a stored value of an existing captured record or skeleton changes: a bump re-reads every transcript. */
-export const CAPTURE_VERSION = '9';
+export const CAPTURE_VERSION = '10';
 
 /** Capture versions the reader derives from. A version-3 record is upgraded on read; a newer one is read for the fields this code knows. */
 export const OLDEST_READABLE_CAPTURE = 3;
@@ -64,7 +67,8 @@ export const ERROR_LINE_CHARS = 1000;
 /** Per-session cap on `files` and `fileHashes` (L3): the hand run on the copy store had p99 61 and max 209 files per session; 100 is the round number above p99. */
 export const FILES_PER_SESSION_MAX = 100;
 
-export type PromptClass = 'no-tools' | 'orchestration' | 'research' | 'edit-verify' | 'edit-only' | 'explore-only' | 'shell-only' | 'mixed';
+export const PROMPT_CLASSES = ['no-tools', 'orchestration', 'research', 'edit-verify', 'edit-only', 'explore-only', 'shell-only', 'mixed'] as const;
+export type PromptClass = (typeof PROMPT_CLASSES)[number];
 
 export interface Usage {
   input: number;
@@ -202,8 +206,8 @@ export type PromptStop = 'interrupt' | 'rejected';
 
 /**
  * One per user prompt: the `prompt_graphs.py` and `cost_per_class.py` records joined. Derived. Classes: `session`,
- * `contextFingerprint`, `head`, `ts`, `verify`, `stopped`, `commits`, and `redo` (A); `kind`, `v`, `rev`, `index`, `wallSec`, `cls`, `tools`,
- * `shape`, `errors`, `thinking`, `sideTools`, `turns`, `model`, `efforts`, `skills`, `usage`, `recovery`, `explore`, `act`, and `bigrams` (P).
+ * `contextFingerprint`, `head`, `ts`, `skills`, `verify`, `stopped`, `commits`, and `redo` (A); `kind`, `v`, `rev`, `index`, `wallSec`, `cls`, `tools`,
+ * `shape`, `errors`, `thinking`, `sideTools`, `turns`, `model`, `efforts`, `usage`, `recovery`, `explore`, `act`, and `bigrams` (P).
  */
 export interface PromptObservation {
   kind: 'prompt';
@@ -432,9 +436,12 @@ export interface ErrorLineObservation {
   after: number;
 }
 
+/** How a prompt opened: `typed`, the operator's own line, or `command`, a slash command or a skill. Closed: it never names the command. Class P. */
+export type PromptOpened = 'typed' | 'command';
+
 /**
  * One per user prompt, captured: what the transcript says about a prompt besides its tool calls. Classes: `A` account store: `session`, `head` (switchable text),
- * `ts`, `promptFingerprint`; `P` pooled: `kind`, `cv`, `sid`, `rev`, `index`, `wallSec`, `thinking`, `turns`, `model`, `efforts`, `skills`, `usage`. Derive joins it with the prompt's tool calls and errors into a {@link PromptObservation}.
+ * `ts`, `promptFingerprint`, `skills` (a skill's name can be private); `P` pooled: `kind`, `cv`, `sid`, `rev`, `index`, `wallSec`, `thinking`, `turns`, `model`, `efforts`, `usage`, `opened`. Derive joins it with the prompt's tool calls and errors into a {@link PromptObservation}.
  */
 export interface UserPromptObservation {
   kind: 'user-prompt';
@@ -446,6 +453,8 @@ export interface UserPromptObservation {
   ts: string | null;
   wallSec: number | null;
   head: string;
+  /** Absent on a record captured before CAPTURE 10, when only a typed line opened a prompt. */
+  opened?: PromptOpened;
   thinking: number;
   turns: number;
   model: string;
@@ -581,7 +590,7 @@ export interface RecallCall {
 /** One hook invocation, appended to `hook-calls.jsonl` by the hook itself; `measure` counts these per session. Class A: `session`, `at`, `error`; P: `event`, `hit`, `ms`. */
 export interface HookCall {
   at: string;
-  event: 'session-start' | 'post-tool' | 'stop' | 'nightly';
+  event: 'session-start' | 'pre-tool' | 'post-tool' | 'stop' | 'nightly';
   /** The Claude Code session the hook ran in; null for the nightly run. */
   session: string | null;
   /** Whether the hook had something to say (an injected block, a recall hit, or a session deposited). */
@@ -596,7 +605,7 @@ export const STEPS = ['deposit', 'verify', 'derive', 'label', 'index', 'recall',
 export type Step = (typeof STEPS)[number];
 
 /** The trigger names of spec 4.1 (the ones nothing local starts are in the schema only: `weekly` (A21) and the hosted `sync`, `cron`, `release`, `run-end`, and `run-start`). The SessionEnd hook is `stop`, never `session-end`. */
-export const TRIGGERS = ['session-start', 'post-tool', 'stop', 'nightly', 'manual', 'weekly', 'sync', 'cron', 'release', 'run-end', 'run-start'] as const;
+export const TRIGGERS = ['session-start', 'pre-tool', 'post-tool', 'stop', 'nightly', 'manual', 'weekly', 'sync', 'cron', 'release', 'run-end', 'run-start'] as const;
 export type Trigger = (typeof TRIGGERS)[number];
 
 export const STEP_STATUSES = ['ok', 'error', 'skipped'] as const;
