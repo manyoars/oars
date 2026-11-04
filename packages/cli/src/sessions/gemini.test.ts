@@ -147,7 +147,7 @@ describe('the Gemini CLI reader', () => {
     expect(out.errorLines).toEqual([]);
   });
 
-  it('leaves a shell call under the summarizeToolOutput setting as none: upstream stores only the wrapped summary, with no Output: prefix and no exit code, and status success whatever the exit (tools/shell.ts:1175-1187; settings/settingsSchema.ts:1090)', () => {
+  it('leaves a shell call under the summarizeToolOutput setting as none: upstream stores only the wrapped summary, with no Output: prefix and no exit code, and status success whatever the exit (tools/shell.ts:1175-1187; packages/cli/src/config/settingsSchema.ts:1090)', () => {
     const summary = (text: string): string => `<untrusted_context source="shell">
 ${text}
 </untrusted_context>`;
@@ -157,12 +157,12 @@ ${text}
       say(2, '', {
         toolCalls: [
           shell('a', 'make', 'success', 3, summary('make failed: 3 errors in main.c')),
-          shell('b', 'sleep 1 &', 'success', 4, 'Command moved to background (PID: 41). Output hint: none'),
+          shell('b', 'sleep 1 &', 'success', 4, summary('Command moved to background (PID: 41). Output hidden. Press Ctrl+B to view.')),
           shell('c', 'fine', 'success', 5, shellText('all good')),
         ],
       }),
     ]);
-    // A call moved to the background has settled as far as the CLI knows, and reads ok; the summary is unsettled.
+    // A call moved to the background has settled as far as the CLI knows, and reads ok (tools/shell.ts:944,1197 write the sentence inside `wrapUntrusted`); the summary is unsettled.
     expect(out.tools.map((tool) => tool.status)).toEqual(['none', 'ok', 'ok']);
     expect(out.errorLines).toEqual([]);
   });
@@ -220,10 +220,48 @@ ${text}
     expect(lines.filter((entry) => entry.type === 'user').map((entry) => JSON.stringify(entry.message))).toEqual([expect.stringContaining('real'), expect.stringContaining('what I typed')]);
   });
 
-  it('does not read a tool-result turn with a <hook_context> note beside the result as a prompt: the only text upstream puts beside a function response (core/client.ts:985-989)', () => {
+  // Each text below is one the CLI itself puts to the model as a user turn, which the chat file records like a typed prompt (geminiChat.ts:553-567 records `content` and, when it differs,
+  // `displayContent`; addHistory records the rest through recordSyntheticMessage, geminiChat.ts:1345-1352). None is an operator prompt.
+  const injected: readonly { name: string; text: string; writer: string }[] = [
+    { name: 'loop recovery', text: "System: Potential loop detected. Details: same call. Please take a step back and confirm you're making forward progress.", writer: 'core/client.ts:1338' },
+    { name: 'IDE context', text: "Here is the user's editor context as a JSON object. This is for your information only.\n```json\n{}\n```", writer: 'core/client.ts:503' },
+    { name: 'IDE context changes', text: "Here is a summary of changes in the user's editor context, in JSON format. This is for your information only.\n```json\n{}\n```", writer: 'core/client.ts:613' },
+    { name: 'next speaker', text: 'Please continue.', writer: 'core/client.ts:930' },
+    { name: 'shell escape', text: 'I ran the following shell command:\n```sh\nls\n```\n\nThis produced the following result:\n```\na\n```', writer: 'cli useExecutionLifecycle.ts:61-66' },
+    { name: 'plan exit', text: 'User has manually exited Plan Mode. Switching to Default mode (edits will require confirmation).', writer: 'cli useGeminiStream.ts:2060, utils/approvalModeUtils.ts:36-39' },
+    { name: 'directory context', text: '- **Workspace Directories:**\n  - /work/app\n- **Directory Structure:**\n\n/work/app/', writer: 'core/client.ts:396, utils/environmentContext.ts:37' },
+  ];
+  const typedOf = (records: readonly unknown[]): string[] =>
+    linesOf(records)
+      .filter((entry) => entry.type === 'user')
+      .map((entry) => JSON.stringify(entry.message));
+
+  it.each(injected)('does not read the $name turn the CLI injects as a prompt ($writer)', ({ text }) => {
+    expect(typedOf([head, prompt(1, 'real'), say(2, 'ok'), prompt(3, text)])).toEqual([expect.stringContaining('real')]);
+  });
+
+  it('reads the operator prompt once when loop recovery re-sends it: the recovery turn carries the operator\'s displayContent (core/client.ts:1349-1354, cli useGeminiStream.ts:1933-1938, geminiChat.ts:553-567)', () => {
+    const recovery = 'System: Potential loop detected. Details: x. Please take a step back.';
+    const texts = typedOf([head, prompt(1, 'expanded', { displayContent: [{ text: 'fix the build' }] }), say(2, 'ok'), prompt(3, recovery, { displayContent: [{ text: 'fix the build' }] })]);
+    expect(texts).toHaveLength(1);
+    expect(texts[0]).toContain('fix the build');
+  });
+
+  it('matches the next-speaker turn exactly, so an operator who types more than "Please continue." still has a prompt (core/client.ts:930)', () => {
+    expect(typedOf([head, prompt(1, 'Please continue. Start with the tests.')])).toEqual([expect.stringContaining('Please continue. Start with the tests.')]);
+  });
+
+  it('does not read a tool-result turn with a <hook_context> note beside the result as a prompt: one of the two texts upstream puts beside a function response, the other being the steering hint below (core/client.ts:985-989)', () => {
     const response = { functionResponse: { id: 'x', name: 'read_file', response: { output: 'file text' } } };
     const hooked = { id: 'm', timestamp: T(2), type: 'user', content: [response, { text: '<hook_context>x</hook_context>' }] };
     expect(linesOf([head, hooked]).filter((entry) => entry.type === 'user')).toEqual([]);
+  });
+
+  it('reads a tool-result turn with a "User steering update:" text beside the result as a prompt: the operator typed the hint (cli useGeminiStream.ts:2345-2347, fastAckHelper.ts:67-70, utils/messageInspectors.ts:9-13)', () => {
+    // The CLI unshifts `buildUserSteeringHintPrompt` (the operator's words in `<user_input>`) beside the function responses, and `isFunctionResponse` tests with `some`, so that turn is recorded.
+    const response = { functionResponse: { id: 'x', name: 'read_file', response: { output: 'file text' } } };
+    const steered = { id: 'm', timestamp: T(2), type: 'user', content: [{ text: 'User steering update:\n<user_input>\nuse the v2 api\n</user_input>\nInternal instruction: Re-evaluate the active plan.' }, response] };
+    expect(typedOf([head, steered])).toEqual([expect.stringContaining('use the v2 api')]);
   });
 
   it('reads a user message with a tool result AND other typed text as a prompt: only a message made wholly of tool results is not a prompt (geminiChat.ts:527,547)', () => {
