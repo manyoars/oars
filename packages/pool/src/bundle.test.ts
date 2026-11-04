@@ -3,6 +3,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { HARNESSES, verifyBundle, VOCAB_VERSION, type Bundle } from '../../cli/src/sessions/pool-wire.js';
 import type { Harness } from '../../cli/src/sessions/schema.js';
 import { etagOf } from './bundle.js';
+import { SERVED } from './derive.js';
 import { sampleSkeleton } from './sample.js';
 import { containing, fieldOf, startPool, stubUser, type TestPool, textOf } from './test-pool.js';
 
@@ -483,6 +484,18 @@ describe('the ETag', () => {
   });
 });
 
+describe('the ETag of a fetch', () => {
+  // `etagOf` is tested with its own lists above; here the route's own use of the served list is pinned, so a route that passed a constant would fail.
+  it('is the tag of the served families at the generation of the pool', async () => {
+    const token = await depositor('5401');
+    const answer = await pool.raw(`/bundle/claude-code/${VERSION}/${VOCAB_VERSION}`, token);
+    const db = await pool.db();
+    const held = await db.prepare('SELECT generation FROM pool_generation WHERE id = 1').first<{ generation: number }>();
+    expect(held?.generation).toBeGreaterThan(0);
+    expect(answer.headers.get('etag')).toBe(etagOf('claude-code', VERSION, held?.generation ?? 0, SERVED.map(({ name }) => name)));
+  });
+});
+
 describe('fit by platform and shell', () => {
   // The cell is version-free, so it joins every version of a motif in a week: a total that is the sum of the version cells it sits beside. Served beside only some of them, its difference
   // from the served ones would be the others, so it is served only when no cell of its motif, week, and exposure is under the floor.
@@ -495,10 +508,10 @@ describe('fit by platform and shell', () => {
     }
   };
 
-  const depositFrom = async (spread: TestPool, id: string, harnessVersion: string, day = '2026-11-02'): Promise<string> => {
+  const depositFrom = async (spread: TestPool, id: string, harnessVersion: string, day = '2026-11-02', shell = 'bash'): Promise<string> => {
     const { token } = await spread.signIn('github', stubUser(id));
     await spread.post('/v1/covenant/accept', { version: 'v1' }, token);
-    expect((await spread.post('/v1/deposits', sampleSkeleton(id.padStart(16, '0'), undefined, day, 'claude-code', undefined, harnessVersion), token)).status).toBe(201);
+    expect((await spread.post('/v1/deposits', sampleSkeleton(id.padStart(16, '0'), undefined, day, 'claude-code', undefined, harnessVersion, shell), token)).status).toBe(201);
     return token;
   };
 
@@ -557,6 +570,24 @@ describe('fit by platform and shell', () => {
       const askedSessions = partsOf(whole);
       // With every version cell served, the difference of the total and the served cells is nothing: there is no sub-floor remainder to read.
       expect(10 - askedSessions - versionSessions).toBe(0);
+    });
+  }, 120_000);
+
+  it('does not serve the version-free total beside an environment cell under the floor: five accounts on one shell and three on another', async () => {
+    await inFreshPool(async (spread) => {
+      for (const id of ['5301', '5302', '5303', '5304']) await depositFrom(spread, id, VERSION);
+      const token = await depositFrom(spread, '5305', VERSION);
+      // The version cell holds eight accounts and is served; the bash cell holds five, so served it would show the three on powershell as the version cell less it.
+      for (const id of ['5311', '5312', '5313']) await depositFrom(spread, id, VERSION, '2026-11-02', 'powershell');
+      const bundle = await bundleFrom(spread, token);
+      expect(bundle.cells.some((cell) => cell.frameBucket.startsWith('claude-code/'))).toBe(true);
+      expect(environmentCells(bundle)).toEqual([]);
+      expect(environmentReads(bundle)).toEqual([]);
+
+      // Two more on powershell lift it to the floor: both shells are served, and the difference is nothing.
+      for (const id of ['5314', '5315']) await depositFrom(spread, id, VERSION, '2026-11-02', 'powershell');
+      const whole = await bundleFrom(spread, token);
+      expect(environmentCells(whole).map((cell) => [cell.frameBucket, cell.sessions])).toEqual([['env:linux:bash', 5], ['env:linux:powershell', 5]]);
     });
   }, 120_000);
 
