@@ -163,7 +163,10 @@ describe('the pre-tool push', () => {
     await runHook('pre-tool', call(sid, { tool_input: { query: 'secret-typed-value', max_results: 3 } }), staged.runtime, () => NOW);
     await runHook('pre-tool', call(sid, { tool_name: 'Bash', tool_input: { command: 'ls secret-path' } }), staged.runtime, () => NOW + 1);
     const text = readFileSync(join(staged.storeDir, 'hook-calls.jsonl'), 'utf8');
-    const rows = text.trim().split('\n').map((row): { [key: string]: unknown } => Object.fromEntries(Object.entries(JSON.parse(row) as object)));
+    const rows = text.trim().split('\n').map((row): { [key: string]: unknown } => {
+      const parsed: unknown = JSON.parse(row);
+      return typeof parsed === 'object' && parsed !== null ? Object.fromEntries(Object.entries(parsed)) : {};
+    });
     expect(rows).toHaveLength(2);
     for (const row of rows) expect(Object.keys(row).sort()).toEqual(['at', 'error', 'event', 'hit', 'ms', 'session']);
     expect(rows.map((row) => row.hit)).toEqual([true, false]);
