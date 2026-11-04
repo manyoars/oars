@@ -1,7 +1,7 @@
 // Memory check for `oars sessions deposit` and `oars sessions verify` (t808). Builds a synthetic store in a temp folder, then runs both
 // commands from the built CLI under a fixed `--max-old-space-size`, with no NODE_OPTIONS.
 //
-//   node scripts/sessions-heap.mjs check [--sessions 600] [--heap 96]    # the pass/fail check: `just sessions-heap`
+//   node scripts/sessions-heap.mjs check [--sessions 400] [--heap 160]    # the pass/fail check: `just sessions-heap`
 //   node scripts/sessions-heap.mjs table [--sizes 400,800] [--heap 4096] # peak RSS of each command by store size (the docs table)
 //   node scripts/sessions-heap.mjs minheap [--sizes 400,800]             # smallest --max-old-space-size at which each command passes
 //   node scripts/sessions-heap.mjs phases [--sessions 800]               # heap kept after each phase, in one process
@@ -10,7 +10,7 @@
 // APPDATA, XDG_CONFIG_HOME, HOME, USERPROFILE, and CLAUDE_CONFIG_DIR at a fresh folder under the OS temp folder, and refuses to go on
 // when a path the CLI will use is not inside it.
 import { spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -19,9 +19,12 @@ const cliRoot = fileURLToPath(new URL('..', import.meta.url));
 // `--bin <file>` runs another build of the CLI (a copy of dist/ from before a change), to compare two builds on one store.
 const binArg = process.argv.indexOf('--bin');
 const bin = binArg === -1 ? join(cliRoot, 'dist', 'bin.js') : resolve(process.argv[binArg + 1] ?? '');
+const NL = String.fromCharCode(10);
 const PROJECT = 'bench-project';
 const PROMPTS = 8;
 const CALLS = 14;
+// Characters of a clean tool result. The log keeps none of it, so it sizes the transcript on disk (the operator's: 1.8 MB each against 52 KB of log).
+const BULK = Number(process.argv[process.argv.indexOf('--bulk') + 1] ?? 400) || 400;
 
 /** @typedef {{ root: string, appdata: string, claude: string, projects: string, store: string, home: string }} Dirs */
 
@@ -106,8 +109,10 @@ const transcript = (index) => {
       const inputs = [
         ['Read', { file_path: `/work/app/src/module-${module}/file-${String(p)}-${String(c)}.ts` }],
         ['Edit', { file_path: `/work/app/src/module-${module}/file-${String(c)}.ts`, old_string: `old ${id} ${String(c)}`, new_string: `new ${id} ${String(c)}` }],
-        ['Bash', { command: `npm test -- --run src/module-${module} --id ${id}-${String(p)}-${String(c)}` }],
+        ['Bash', { command: `cd /work/app && npm test -- --run src/module-${module} --id ${id}-${String(p)}-${String(c)} 2>&1 | tail -40 && git status --short && git diff --stat -- src/module-${module}` }],
         ['Grep', { pattern: `symbol${String((index * 7 + c) % 503)}` }],
+        ['Bash', { command: `git add src/module-${module} && git commit -m "fix module ${module} step ${String(p)}-${String(c)}" && git log --oneline -3` }],
+        ['Bash', { command: `rg -n "symbol${String(c)}" src/module-${module} | head -20; sed -n 1,40p src/module-${module}/file-${String(c)}.ts` }],
       ];
       const [name, input] = inputs[(index + p + c) % inputs.length] ?? ['Read', {}];
       clock += 3;
@@ -119,7 +124,7 @@ const transcript = (index) => {
       const result = `${id}-${String(n++)}`;
       const content = failed
         ? `Exit code 1\nTraceback (most recent call last):\n  File "/work/app/src/module-${String(index % 97)}.py", line ${String(c + 10)}, in <module>\nKeyError: 'key-${String(index % 31)}'`
-        : `ok ${id} ${'x'.repeat(400)}`;
+        : `ok ${id} ${'x'.repeat(BULK)}`;
       line({ type: 'user', uuid: result, parentUuid: parent, isSidechain: false, timestamp: iso(base, clock), version: '2.1.300', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: toolId, is_error: failed, content }] } });
       parent = result;
     }
@@ -161,6 +166,8 @@ const sizeMb = (path) => {
  */
 const runCli = (dirs, heapMb, args, preload) => {
   assertScratch(dirs);
+  // Each measured run starts from the superseded log: a deposit compacts it, and a later run would see a clean one.
+  if (existsSync(join(dirs.root, 'clean.jsonl'))) supersede(dirs);
   const started = Date.now();
   const flags = [...(heapMb === 0 ? [] : [`--max-old-space-size=${String(heapMb)}`]), ...(preload === undefined ? [] : ['--require', preload])];
   const child = spawnSync(process.execPath, [...flags, bin, ...args], { env: envOf(dirs), encoding: 'utf8', maxBuffer: 64 << 20, cwd: dirs.root });
@@ -187,7 +194,31 @@ const build = (dirs, sessions) => {
   generate(dirs, sessions);
   const made = runCli(dirs, 8192, depositArgs);
   if (made.code !== 0) throw new Error(`building the store failed (exit ${String(made.code)}): ${made.stderr.slice(-600)}`);
+  copyFileSync(join(dirs.store, 'observations.jsonl'), join(dirs.root, 'clean.jsonl'));
+  supersede(dirs);
   return sizeMb(join(dirs.store, 'observations.jsonl'));
+};
+
+/**
+ * A recapture appends each session's records at a new rev and leaves the old ones in the log until the deposit's compaction, so t784's store held
+ * every record twice while its commands ran. This appends a copy of the whole log one rev lower, which is the same log with the old revs
+ * superseded (the highest rev of each session is unchanged, so the store a reader sees is too). Turn it off with `--superseded off`.
+ * @param {Dirs} dirs
+ */
+const supersede = (dirs) => {
+  const clean = join(dirs.root, 'clean.jsonl');
+  const file = join(dirs.store, 'observations.jsonl');
+  if (arg('superseded', 'on') === 'off') return copyFileSync(clean, file);
+  const log = readFileSync(clean, 'utf8');
+  const older = log
+    .split(NL)
+    .filter((line) => line !== '')
+    .map((line) => {
+      const record = JSON.parse(line);
+      return JSON.stringify({ ...record, rev: record.rev - 1 });
+    })
+    .join(NL);
+  writeFileSync(file, `${log}${older}${NL}`);
 };
 
 const peakPreload = () => {
@@ -199,8 +230,8 @@ const peakPreload = () => {
 const command = process.argv[2];
 
 if (command === 'check') {
-  const sessions = Number(arg('sessions', '600'));
-  const heap = Number(arg('heap', '96'));
+  const sessions = Number(arg('sessions', '400'));
+  const heap = Number(arg('heap', '160'));
   const dirs = scratch('check');
   console.log(`store: ${dirs.store}`);
   try {
@@ -219,6 +250,11 @@ if (command === 'check') {
   } finally {
     rmSync(dirs.root, { recursive: true, force: true });
   }
+} else if (command === 'keep') {
+  // Builds a store and leaves it, for looking at the records (`rm -r` the printed folder after).
+  const dirs = scratch('keep');
+  console.log(`store: ${dirs.store}
+log ${build(dirs, Number(arg('sessions', '5'))).toFixed(1)} MB`);
 } else if (command === 'table') {
   const heap = Number(arg('heap', '4096'));
   const preload = peakPreload();
@@ -269,6 +305,6 @@ if (command === 'check') {
     rmSync(dirs.root, { recursive: true, force: true });
   }
 } else {
-  console.error('usage: sessions-heap.mjs check|table|minheap|phases');
+  console.error('usage: sessions-heap.mjs check|table|minheap|phases|keep');
   process.exitCode = 2;
 }

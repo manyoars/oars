@@ -460,8 +460,13 @@ describe('a version-3 store opened under version 4', () => {
     const sessionLines = lines.filter((entry) => entry.includes('"kind":"session"'));
     expect(sessionLines.length).toBeGreaterThan(1);
     const newer = String(Number(CAPTURE_VERSION) + 1);
-    const copy = (entry: string, rev: number, cv: string): string => JSON.stringify({ ...(JSON.parse(entry) as Record<string, unknown>), rev, cv });
-    const first = JSON.parse(sessionLines[0] ?? '') as { rev: number };
+    const parse = (entry: string): object => {
+      const parsed: unknown = JSON.parse(entry);
+      return typeof parsed === 'object' && parsed !== null ? parsed : {};
+    };
+    const copy = (entry: string, rev: number, cv: string): string => JSON.stringify({ ...parse(entry), rev, cv });
+    const parsedRev = parse(sessionLines[0] ?? '');
+    const first = { rev: 'rev' in parsedRev && typeof parsedRev.rev === 'number' ? parsedRev.rev : 0 };
     // A newer oars wrote an older rev of the session; a current rev followed it. The current one is the session as a reader sees it.
     writeFileSync(file, `${[copy(sessionLines[0] ?? '', first.rev - 1, newer), ...lines].join('\n')}\n`);
     expect((await loadStore(staged.storeDir)).newerCaptures).toBe(0);
