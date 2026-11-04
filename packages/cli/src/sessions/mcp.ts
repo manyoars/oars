@@ -6,7 +6,7 @@ import { appendFile, mkdir } from 'node:fs/promises';
 import { createInterface } from 'node:readline';
 import { currentPool } from './pool.js';
 import { appendRecall } from './recall-object.js';
-import { pull, pullRefusal, RECALL_FAMILIES, type PullInput } from './recall-reads.js';
+import { formsRefusal, pull, pullRefusal, RECALL_FAMILIES, type PullInput } from './recall-reads.js';
 import { MISS_TEXT } from './recall-render.js';
 import type { RecallCall } from './schema.js';
 import { tryLog } from './steps.js';
@@ -41,6 +41,19 @@ interface Obj {
 
 const isObj = (value: unknown): value is Obj => typeof value === 'object' && value !== null && !Array.isArray(value);
 
+/** The forms an MCP call names, by the same tests `toQuery` reads them with. */
+const namedForms = (args: unknown): Parameters<typeof formsRefusal>[0] => {
+  const source = isObj(args) ? args : {};
+  const prefix = Array.isArray(source.prefix) ? source.prefix.filter((id): id is string => typeof id === 'string') : [];
+  return [
+    ...(prefix.length > 0 ? ['prefix' as const] : []),
+    ...(typeof source.entity === 'string' ? ['entity' as const] : []),
+    ...(typeof source.family === 'string' ? ['family' as const] : []),
+    ...(typeof source.text === 'string' ? ['text' as const] : []),
+    ...(typeof source.error === 'string' || typeof source.path === 'string' ? ['error or path' as const] : []),
+  ];
+};
+
 const toQuery = (args: unknown): PullInput => {
   const source = isObj(args) ? args : {};
   const narrowing: { cls?: string; sinceDays?: number } = {};
@@ -73,6 +86,8 @@ export const handleMessage = async (runtime: SessionsRuntime, now: () => number,
   if (method === 'tools/call') {
     const params = isObj(message.params) ? message.params : {};
     if (params.name !== TOOL_NAME) return failure(id, -32602, `Unknown tool: ${typeof params.name === 'string' ? params.name : ''}`);
+    const conflict = formsRefusal(namedForms(params.arguments));
+    if (conflict !== undefined) return failure(id, -32602, conflict);
     const query = toQuery(params.arguments);
     const refusal = pullRefusal(query);
     if (refusal !== undefined) return failure(id, -32602, refusal);

@@ -347,6 +347,16 @@ export const pullRefusal = (input: PullInput): string | undefined => {
   return `Family ${family} answers from stored reads, which a class or a number of days cannot narrow. Ask without them, or slice its rows with oars sessions read --family ${family} --slice <axis>=<value>.`;
 };
 
+/** The forms a pull can name, in the order a refusal lists them. `error` with `path` is one form: the signature lookup. */
+export const FORM_NAMES = ['prefix', 'entity', 'family', 'text', 'error or path'] as const;
+
+/**
+ * Why a pull naming several forms cannot be asked; undefined when it names at most one. Answering the first form and dropping the rest would state counts for a question the asker did
+ * not put, and the rendered answer names no signature to show it. The text lists fixed form names, so it holds nothing an asker typed.
+ */
+export const formsRefusal = (named: readonly (typeof FORM_NAMES)[number][]): string | undefined =>
+  named.length > 1 ? `Name one form per pull: ${FORM_NAMES.join(', ')}. This one named ${named.join(' and ')}.` : undefined;
+
 const isPromptClass = (value: string): boolean => PROMPT_CLASSES.some((cls) => cls === value);
 const isPublicModel = (value: string): boolean => publicModel(value) === value;
 const isPublicVersion = (value: string): boolean => publicVersion(value) === value;
