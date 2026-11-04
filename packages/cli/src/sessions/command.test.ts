@@ -326,6 +326,15 @@ describe('oars sessions', () => {
     expect(out.join('')).not.toContain('curl');
   });
 
+  it('refuses a narrowing on the entity, text, and pattern forms, which count all time, as a usage error with nothing recorded', async () => {
+    const { deps, err, staged } = setup();
+    expect(await run(['sessions', 'recall', '--entity', 'y', '--since', '1'], deps)).toBe(ExitCode.USAGE);
+    expect(await run(['sessions', 'recall', '--text', 'x', '--class', 'mixed'], deps)).toBe(ExitCode.USAGE);
+    expect(await run(['sessions', 'recall', '--pattern', '0123456789abcdef', '--since', '2'], deps)).toBe(ExitCode.USAGE);
+    expect(err.join('')).toContain('cannot narrow');
+    expect(await readRecalls(staged.storeDir)).toEqual([]);
+  });
+
   it('answers a family only the pool holds, as `read` does, and refuses a slice its reads cannot apply with nothing recorded', async () => {
     const { deps, err, out, staged } = setup();
     expect(await run(['sessions', 'deposit', '--allow', 'proj'], deps)).toBe(ExitCode.OK);
