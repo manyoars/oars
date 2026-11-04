@@ -114,6 +114,12 @@ describe('the reader', () => {
     expect(pip.mock.calls[0]?.[1]).toEqual(expect.arrayContaining(['--timeout', '1', '--retries', '0']));
   });
 
+  it('gives pip a longer budget in whole seconds', async () => {
+    const pip = vi.fn<ManagerRunner>(async () => Promise.resolve(ran(0, 'one (1.0.0)\n')));
+    await managerReader(pip, 15_000)({ class: 'python-package', name: 'one', cwd: 'here' });
+    expect(pip.mock.calls[0]?.[1]).toEqual(expect.arrayContaining(['--timeout', '15']));
+  });
+
   it('adds no timeout flags when none is given, so a replay keeps the manager defaults', async () => {
     const npm = vi.fn<ManagerRunner>(async () => Promise.resolve(ran(0, '{"dist-tags.latest":"1.0.0"}')));
     await managerReader(npm)({ class: 'npm-package', name: 'one', cwd: 'here' });
