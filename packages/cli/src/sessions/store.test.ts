@@ -259,7 +259,10 @@ ${JSON.stringify(shell)}
     const recapture = readFileSync(file, 'utf8')
       .split('\n')
       .filter((line) => line.includes(`"session":"${target.session}"`))
-      .map((line) => JSON.stringify({ ...(JSON.parse(line) as { rev: number }), rev: target.rev + 1 }));
+      .map((line) => {
+        const row: { [key: string]: unknown } = JSON.parse(line);
+        return JSON.stringify({ ...row, rev: target.rev + 1 });
+      });
     const compact = async (): Promise<void> => {
       appendFileSync(file, `${recapture.join('\n')}\n`);
       // Windows refuses to rename over a file a reader holds open, so there the compaction fails and the log is as it was: the reader is safe either way.
