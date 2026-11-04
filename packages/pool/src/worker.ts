@@ -57,7 +57,7 @@ const deposit = async (request: Request, env: Env): Promise<Response> => {
   const limit = wholeBinding(env.MAX_DEPOSITS_PER_ACCOUNT, DEFAULT_MAX_DEPOSITS);
   const budget = wholeBinding(env.MAX_DEPOSIT_BYTES_PER_ACCOUNT, DEFAULT_MAX_ACCOUNT_BYTES);
   const stored = JSON.stringify(skeleton);
-  // Whether this batch counts toward access is decided here, from the batch alone; the tier is the ingest tier, and a later tier change (Brief 2) is a row edit that leaves this alone.
+  // Whether this batch counts toward access is decided here, from the batch alone; it is judged at the ingest tier, so a resend of a row raised by hand clears its date until Brief 2 sends the batch's own tier.
   const countedAt = batchCounts(INGEST_TIER, skeleton, cellCountOf) ? Date.now() : null;
   // One statement, so two deposits at once cannot both take the last of either limit. A redeposit replaces its own row: it adds no row, so it passes the count at the limit, and only its new size counts against the budget.
   const { meta } = await env.DB.prepare(
