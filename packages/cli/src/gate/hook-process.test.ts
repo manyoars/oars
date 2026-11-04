@@ -31,7 +31,7 @@ describe('the hook process: the deadline', () => {
     const started = Date.now();
     // The returned promise never settles: the append never does. The timer is what ends the process.
     void runHookProcess({ stdin: () => Promise.resolve(PAYLOAD), deps: depsFor(store, { append: stalled }), exit, deadlineMs: 150 });
-    await vi.waitFor(() => expect(exit).toHaveBeenCalledWith(0), { timeout: 2_000 });
+    await vi.waitFor(() => { expect(exit).toHaveBeenCalledWith(0); }, { timeout: 2_000 });
     expect(Date.now() - started).toBeLessThan(1_000);
     expect(exit).toHaveBeenCalledTimes(1);
     const lines = readFileSync(crossingsPath(store), 'utf8').trim().split('\n');
@@ -43,7 +43,7 @@ describe('the hook process: the deadline', () => {
     const store = folder();
     const exit = vi.fn();
     void runHookProcess({ stdin: () => Promise.resolve(PAYLOAD), deps: depsFor(store, { append: () => new Promise<void>(() => undefined) }), exit, deadlineMs: 100 });
-    await vi.waitFor(() => expect(exit).toHaveBeenCalled(), { timeout: 2_000 });
+    await vi.waitFor(() => { expect(exit).toHaveBeenCalled(); }, { timeout: 2_000 });
     expect(statSync(crossingsPath(store)).mode & 0o777).toBe(0o600);
   });
 
@@ -52,7 +52,7 @@ describe('the hook process: the deadline', () => {
     const exit = vi.fn();
     // The store folder is never made (the append that would make it stalls), so the synchronous write has nowhere to go.
     void runHookProcess({ stdin: () => Promise.resolve(PAYLOAD), deps: depsFor(join(store, 'missing', 'deeper'), { append: () => new Promise<void>(() => undefined) }), exit, deadlineMs: 100 });
-    await vi.waitFor(() => expect(exit).toHaveBeenCalledWith(0), { timeout: 2_000 });
+    await vi.waitFor(() => { expect(exit).toHaveBeenCalledWith(0); }, { timeout: 2_000 });
     expect(existsSync(join(store, 'missing'))).toBe(false);
   });
 
