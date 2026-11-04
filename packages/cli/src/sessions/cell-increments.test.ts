@@ -16,7 +16,7 @@ const pushStep = (n: number, cost: { tokens: number | null; durationMs: number |
 const localStore = (): Store =>
   store({
     sessions: [session('s1', { frame: framed })],
-    prompts: [prompt('s1', 0, { frame: framed, errors: 4, wallSec: 37, usage: { input: 123456, cacheWrite: 1500, cacheRead: 987654, output: 4321, thinking: 6 } })],
+    prompts: [prompt('s1', 0, { frame: framed, errors: 4, wallSec: 37, usage: { input: 123456, cacheWrite: 1500, cacheRead: 987654, output: 4321, thinking: 5000 } })],
     tools: [tool('s1', 0, 'Bash', { steps: [pushStep(0, { tokens: 98765, durationMs: 4321 })] }), tool('s1', 1, 'Bash', { steps: [pushStep(1, { tokens: 5000, durationMs: 150 })] })],
   });
 
@@ -64,7 +64,7 @@ describe('rule 5: a bucket and no exact number', () => {
     expect(sum([...floored.cells.values()], 'durationMs')).toBeLessThan(sum(exact.cells, 'durationMs'));
     const onFloors = store({
       sessions: [session('s1', { frame: framed })],
-      prompts: [prompt('s1', 0, { frame: framed, wallSec: 32, usage: { input: 64000, cacheWrite: 1000, cacheRead: 512000, output: 4000, thinking: 4 } })],
+      prompts: [prompt('s1', 0, { frame: framed, wallSec: 32, usage: { input: 64000, cacheWrite: 1000, cacheRead: 512000, output: 4000, thinking: 4000 } })],
       tools: [tool('s1', 0, 'Bash', { steps: [pushStep(0, { tokens: 64000, durationMs: 3200 })] })],
     });
     // The named cell keys on the program and subcommand alone now (rule 1), so a one-flag step's old named cell is now its flag cell (same id, same counts) and the program-and-subcommand cell is new.
