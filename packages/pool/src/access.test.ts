@@ -58,7 +58,7 @@ describe('batchCounts', () => {
   });
 
   it('holds a mixed batch to its strictest harness, subagents folded in', () => {
-    const mixed: SessionSkeleton = { ...cursor, transcripts: [...cursor.transcripts, ...claude.transcripts.map((transcript) => ({ ...transcript }))] };
+    const mixed: SessionSkeleton = { ...cursor, transcripts: [...cursor.transcripts, ...claude.transcripts] };
     expect(batchCounts('skeleton', mixed, ONE)).toBe(false);
     expect(batchCounts('committed', mixed, ONE)).toBe(true);
   });

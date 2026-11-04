@@ -1,4 +1,4 @@
-// `oars pool`: the only part of the sessions code that talks to a remote. The server is always named, by flag or environment, so nothing leaves on a default. Sign-in runs the provider's device flow here and reads no harness token; a session leaves only as a closed-vocabulary skeleton, and only after the V15 check found it clean. Local capture, recall,
+// `oars pool`: the only part of the sessions code that talks to a remote. The server is always named, by flag or environment, so nothing leaves on a default. Sign-in runs the provider's device flow here and reads no harness token; a session leaves only as a closed-vocabulary skeleton, and only after the exclusion check found it clean. Local capture, recall,
 // and reads never come through here.
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
@@ -6,7 +6,7 @@ import type { Outcome, RunDeps } from '../cli.js';
 import { CliError, exitCodeForProblem, ExitCode, unreachableError } from '../errors.js';
 import { compileAllow } from './allow.js';
 import { checkSession, exclusionPaths, lastWritten, type Reason } from './exclusion.js';
-import { discardStale, FIELD_ROWS, fieldsOf, heldBatches, lockedBatch, markShown, outboxFolder, removeBatchesExcept, staleBatches, unchangedBytes, writeBatch, type LockRefusal } from './pool-outbox.js';
+import { discardStale, FIELD_ROWS, fieldsOf, heldBatches, lockedBatch, markShown, outboxFolder, removeBatchesExcept, removeBatchOf, staleBatches, unchangedBytes, writeBatch, type LockRefusal } from './pool-outbox.js';
 import { HARNESSES, hasEnded, SESSION_IDLE_HOURS, isBundleVersion, isHarness, parseSkeleton, sessionsOf, skeletonOf, VOCAB_VERSION, verifyBundle, type Bundle, type PinnedKey, type TranscriptRoot } from './pool-wire.js';
 import { Masker, printed, TRANSPORT_HEADERS, waitWords, type Outgoing } from './pool-print.js';
 import { shellReader } from './projection.js';
@@ -340,7 +340,7 @@ interface DepositCounts {
   /** Refused by the vocabulary here; the count of those and which fields, never a value. */
   refused: number;
   refusedFields: string[];
-  /** Batches built under an older vocabulary or field list, removed from the outbox. */
+  /** Batches built under an older vocabulary, field list, or skeleton format, removed from the outbox. */
   discarded: number;
   /** Batches of an earlier pass whose session no longer passes (a gate, the allowlist, a refusal) or is gone from the store, removed so the outbox holds only what this pass built. */
   withdrawn: number;
@@ -393,7 +393,7 @@ const sendBatch = async (deps: RunDeps, options: { outbox: string; server: strin
 
 /**
  * `oars pool deposit`: every session in the store that passes both session gates is built into a canonical batch in the outbox, and the command stops: nothing is sent. The gates run before any projection does: the folder
- * allowlist, then the V15 check. A session that fails either, or has no raw to scan, is counted and never built. A session is built only once it has ended: no transcript of it, main or subagent, has gained a line (the later of its capture
+ * allowlist, then the exclusion check. A session that fails either, or has no raw to scan, is counted and never built. A session is built only once it has ended: no transcript of it, main or subagent, has gained a line (the later of its capture
  * and its raw file's last write) for `session_idle_hours` (6 hours). One that has not is counted under `notEnded`, and any batch of it from an earlier pass is withdrawn. `--send <hash>` is the lock in `sendBatch`.
  */
 export const poolDeposit = async (deps: RunDeps, options: { server?: string | undefined; acceptCovenant?: string | undefined; send?: string | undefined; via?: Sender | undefined }): Promise<Outcome> => {
@@ -416,39 +416,48 @@ export const poolDeposit = async (deps: RunDeps, options: { server?: string | un
   const roots = new Map<string, TranscriptRoot>((await readSkeletons(runtime.storeDir, undefined, true)).skeletons.map(({ session, merkleRoot, leaves }) => [session, { merkleRoot, leaves }]));
   for (const records of sessionsOf(await loadStore(runtime.storeDir), roots)) {
     counts.sessions += 1;
+    // Hashed with the account, so a redeposit replaces its own batch and two accounts' copies of one session cannot be joined.
+    const key = contentHash([account, records.main.session]);
+    // A session that fails a gate here loses its earlier batch at once, so a later throw in this pass cannot leave one in the outbox.
+    const withdraw = async (): Promise<void> => {
+      counts.withdrawn += await removeBatchOf(outbox, key);
+    };
     if (!allow.allows(records.main.project)) {
       counts.excluded.folder += 1;
+      await withdraw();
       continue;
     }
     const verdict = await checkSession(runtime, terms, records.main.project, records.main.session);
     if (verdict.reason !== 'clean') {
       counts.excluded[excludedKey(verdict.reason)] += 1;
+      await withdraw();
       continue;
     }
-    // The batch of a session is built once the session and its subagents have ended; a session still in progress waits, and an earlier batch of it is withdrawn below.
+    // The batch of a session is built once the session and its subagents have ended; a session still in progress waits, and an earlier batch of it is withdrawn.
     if (!hasEnded(records, deps.now(), await lastWritten(runtime, records.main.project, records.main.session))) {
       counts.notEnded += 1;
+      await withdraw();
       continue;
     }
-    // Hashed with the account, so a redeposit replaces its own batch and two accounts' copies of one session cannot be joined.
-    const key = contentHash([account, records.main.session]);
     const skeleton = skeletonOf(records, key, shellReader(vocabulary()), contentHash);
     if (skeleton === null) {
       counts.uncaptured += 1;
+      await withdraw();
       continue;
     }
     const parsed = parseSkeleton(skeleton);
     if (!parsed.ok) {
       counts.refused += 1;
       refusedFields.add(parsed.field);
+      await withdraw();
       continue;
     }
     await writeBatch(outbox, key, parsed.skeleton);
     built.add(key);
     counts.batched += 1;
   }
-  // A session that fails a gate, or has not ended, never enters the outbox, so a batch of it from an earlier pass goes too, and so does a batch of a session or account this store no longer holds.
-  counts.withdrawn = await removeBatchesExcept(outbox, built);
+  // The batch of a session or account this store no longer holds goes too.
+  counts.withdrawn += await removeBatchesExcept(outbox, built);
   counts.refusedFields = [...refusedFields].sort();
   const { folder, term, noRaw, noTerms, unreadable } = counts.excluded;
   const lines = [
@@ -456,7 +465,7 @@ export const poolDeposit = async (deps: RunDeps, options: { server?: string | un
     `Kept out by the session gates, never built: ${String(folder)} in a folder not on the allowlist, ${String(term)} for a term, ${String(noRaw)} with no raw to scan, ${String(noTerms)} with no term file, ${String(unreadable)} unreadable.`,
     `Not built: ${String(counts.uncaptured)} captured before steps and frames or with no root, ${String(counts.notEnded)} not ended (a transcript gained a line within ${String(SESSION_IDLE_HOURS)} hours), ${String(counts.refused)} refused by the vocabulary${counts.refusedFields.length === 0 ? '' : ` (${counts.refusedFields.join(', ')})`}.`,
     ...(counts.withdrawn === 0 ? [] : [`Removed ${String(counts.withdrawn)} ${counts.withdrawn === 1 ? 'batch' : 'batches'} of sessions that no longer pass the gates, have not ended, or are no longer in the store.`]),
-    ...(discarded === 0 ? [] : [`Discarded ${String(discarded)} ${discarded === 1 ? 'batch' : 'batches'} built under an older vocabulary or field list.`]),
+    ...(discarded === 0 ? [] : [`Discarded ${String(discarded)} ${discarded === 1 ? 'batch' : 'batches'} built under an older vocabulary, field list, or skeleton format.`]),
     'Run oars pool outbox to print exactly what would be sent.',
   ];
   return { document: { ok: true, server, ...counts }, text: lines.join('\n') };
