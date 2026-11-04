@@ -36,8 +36,9 @@ export const SHAPE_INTERRUPT_LINE = 'oars-interrupt';
 const PERMISSION_MODES: { readonly [harness in Harness]: ReadonlySet<string> } = {
   'claude-code': new Set(['default', 'acceptEdits', 'plan', 'auto', 'dontAsk', 'bypassPermissions']),
   codex: new Set(['untrusted', 'on-failure', 'on-request', 'never', 'granular']),
-  // Cursor's and Copilot's readers record no permission mode, so no value is documented to keep.
+  // Cursor's, Copilot's, and Gemini CLI's readers record no permission mode, so no value is documented to keep.
   copilot: new Set(),
+  gemini: new Set(),
   cursor: new Set(),
 };
 
@@ -50,6 +51,8 @@ const COMPLETE: { readonly [harness in Harness]: { readonly interrupts: boolean;
   codex: { interrupts: true, rejections: false, denials: false, timing: true },
   // Copilot's reader writes the prompts and the agent's lines with their times (so the runs are real), and reads no `abort`, tool outcome refusal, or hook denial.
   copilot: { interrupts: false, rejections: false, denials: false, timing: true },
+  // Gemini CLI's reader writes each message with its own time (so the runs are real), and reads no interrupt, refusal, or denial: the chat file holds a cancelled call as an error and no more.
+  gemini: { interrupts: false, rejections: false, denials: false, timing: true },
   cursor: { interrupts: false, rejections: false, denials: false, timing: false },
 };
 

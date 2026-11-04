@@ -38,7 +38,7 @@ const failedShell = say(2, 'running it', {
     },
   ],
 });
-const session = (id: string): unknown[] => [geminiHead(id), prompt(1, 'fix the build'), failedShell, say(5, 'it failed', { tokens: { input: 120, output: 2, cached: 0, total: 122 } })];
+const session = (id: string): unknown[] => [geminiHead(id), prompt(1, 'fix the build'), failedShell, say(5, 'it failed', { tokens: { input: 120, output: 2, cached: 0, thoughts: 0, tool: 0, total: 122 } })];
 
 const options = (allow: string[]) => ({ allow, redactDomains: [], now: () => NOW });
 
@@ -100,7 +100,7 @@ describe('depositing the Gemini source', () => {
       { id: C, slug: 'plain', projectRoot: '/x', lines: [geminiHead(C), prompt(1, 'hi'), say(2, 'hello'), say(3, 'more')] },
       { id: D, slug: 'ended', projectRoot: '/x', lines: [...session(D), say(8, 'aborted turn')] },
       // A short tool-call response of a thinking model: thoughts above candidates (chatRecordingTypes.ts:21-25 keeps them apart), so the stored output must hold both.
-      { id: F, slug: 'thinking', projectRoot: '/x', lines: [geminiHead(F), prompt(1, 'plan it'), say(2, '', { tokens: { input: 50, output: 3, cached: 0, thoughts: 40, total: 93 } })] },
+      { id: F, slug: 'thinking', projectRoot: '/x', lines: [geminiHead(F), prompt(1, 'plan it'), say(2, '', { tokens: { input: 50, output: 3, cached: 0, thoughts: 40, tool: 0, total: 93 } })] },
       // A compressed session: the summary and the kept turn are re-recorded under fresh ids and the old ids removed (chatRecordingService.ts:1533-1590, chatCompressionService.ts:665-673).
       {
         id: G,
