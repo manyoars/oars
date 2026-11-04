@@ -4,7 +4,7 @@ import { ExitCode } from '../errors.js';
 import { harness, removeTestDirs } from '../test-support.js';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { readRecalls } from './recall-object.js';
+import { readRecalls, recallsPath } from './recall-object.js';
 import { MISS_TEXT } from './recall-render.js';
 import { tools } from './order-fixture.js';
 import { frame, prompt, session } from './pool-fixture.js';
@@ -305,6 +305,17 @@ describe('oars sessions', () => {
     expect(recalls.map((recall) => recall.answer.kind)).toEqual(['miss', 'hit', 'hit', 'hit', 'miss']);
     expect(recalls.map((recall) => recall.sid)).toEqual(['asker', 'asker', 'asker', 'asker', null]);
     expect(recalls.every((recall) => recall.mode === 'pull' && recall.arm === 'shown')).toBe(true);
+  });
+
+  it('answers a pull whose recall row cannot be written, and writes no row', async () => {
+    const { deps, out, staged } = setup();
+    expect(await run(['sessions', 'deposit', '--allow', 'proj'], deps)).toBe(ExitCode.OK);
+    // A folder where the file belongs: the append fails with EISDIR, as a full disk or a lock would.
+    mkdirSync(recallsPath(staged.storeDir));
+    out.length = 0;
+    expect(await run(['--json', 'sessions', 'recall', '--text', 'unexpected EOF'], deps)).toBe(ExitCode.OK);
+    expect(field(json(out), 'ok')).toBe(true);
+    expect(field(field(field(json(out), 'recall'), 'answer'), 'kind')).toBe('hit');
   });
 
   it('keeps a poisoned tool name out of the --json document of a closed-form pull: the document states the recall, not the raw reads', async () => {

@@ -158,6 +158,9 @@ describe('MCP server', () => {
       const listed = JSON.stringify(field(await handleMessage(staged.runtime, now, { jsonrpc: '2.0', id: 1, method: 'tools/list' }), 'result'));
       expect(listed).toContain('tool-day');
       expect(listed).not.toContain('recovery or fit');
+      // lead-lag is experimental, so a question never serves it (recall-reads.ts RECALL_FAMILIES).
+      expect(listed).not.toContain('lead-lag');
+      expect(listed).toContain('count all time and refuse both');
     });
 
     it('keeps a poisoned model and version out of the reply and out of the stored evidence', async () => {

@@ -94,6 +94,11 @@ oars sessions deposit --allow ~/work/app --allow ~/work/tools --redact-domain co
 # Look up an error as printed, a file, or a prompt class.
 oars sessions recall --error "unexpected EOF while looking for matching \`''"
 oars sessions recall --path src/main.ts --since 30   # sees the first 100 sorted paths of a session
+oars sessions recall --family recovery --class edit-verify --since 30  # a read family; only recovery and fit take --class and --since
+oars sessions recall --entity Monitor                # what is known about a public name: a package, a tool, an MCP server, an action, or a model
+oars sessions recall --text "wrong input"            # look for text in the local record (counts all time)
+oars sessions recall --pattern <readId> --pattern <readId>  # what happened from here, from the read IDs of your steps so far (repeatable; counts all time)
+oars sessions recall --error "..." --session <id>    # name the asking session, so what it did next can be read for this recall
 
 # Serve the same query to a running agent as one MCP tool, oars_recall (stdio):
 oars sessions recall --mcp
