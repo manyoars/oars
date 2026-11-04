@@ -13,7 +13,7 @@ import { CliError, ExitCode } from './errors.js';
 import { requirePurchasingOpen } from './issuer.js';
 import type { JournalStore } from './journal.js';
 import type { BooksBy, RecallQuery } from './sessions/query.js';
-import { closedQueryOf, RECALL_FAMILIES } from './sessions/recall-reads.js';
+import { closedQueryOf, formsRefusal, RECALL_FAMILIES } from './sessions/recall-reads.js';
 import { FAMILIES } from './sessions/read.js';
 import { sessionsBooks, sessionsContext, sessionsDeposit, sessionsGoldArms, sessionsGoldSample, sessionsGoldScore, sessionsHookInstall, sessionsHookStatus, sessionsHookUninstall, sessionsMcp, sessionsLineage, sessionsMeasure, sessionsRead, sessionsRecall, sessionsRecallCounts, sessionsVerify, type SessionsDeps } from './sessions/command.js';
 import { exclusionPaths, sessionsExclusions } from './sessions/exclusion.js';
@@ -345,6 +345,14 @@ const buildProgram = (deps: RunDeps, argv: string[]): Command => {
         return;
       }
       const session = text(options, 'session') ?? null;
+      const conflict = formsRefusal([
+        ...(list(options, 'pattern').length > 0 ? ['prefix' as const] : []),
+        ...(text(options, 'entity') === undefined ? [] : ['entity' as const]),
+        ...(text(options, 'family') === undefined ? [] : ['family' as const]),
+        ...(text(options, 'text') === undefined ? [] : ['text' as const]),
+        ...(text(options, 'error') === undefined && text(options, 'path') === undefined ? [] : ['error or path' as const]),
+      ]);
+      if (conflict !== undefined) throw new CliError(conflict, ExitCode.USAGE, 'usage');
       const closed = closedQueryOf({ pattern: list(options, 'pattern'), entity: text(options, 'entity'), family: text(options, 'family'), text: text(options, 'text'), cls: text(options, 'class'), sinceDays: count(options, 'since') });
       if (closed !== undefined) {
         emit(deps, flag(options, 'json'), await sessionsRecall(sessionDeps(deps), closed, session));
