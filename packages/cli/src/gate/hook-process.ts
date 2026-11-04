@@ -10,12 +10,14 @@ export interface HookProcess {
   /** Builds the hook's dependencies, handed the function that records what is about to be written. Called inside the guard. */
   deps: (stage: NonNullable<GateHookDeps['stage']>) => GateHookDeps;
   exit: (code: number) => void;
+  /** Writes the hook's answer to stdout and resolves once it is flushed. Absent: nothing is written. */
+  write?: (text: string) => Promise<void>;
   /** Milliseconds from now until the process ends itself. */
   deadlineMs: number;
 }
 
 /** Resolves once `exit(0)` has been called, or never when the deadline timer is what ended the process. */
-export const runHookProcess = async ({ stdin, deps, exit, deadlineMs }: HookProcess): Promise<void> => {
+export const runHookProcess = async ({ stdin, deps, exit, write, deadlineMs }: HookProcess): Promise<void> => {
   let staged: { file: string; text: string } | null = null;
   // The last resort when the process is stuck past its grace: keep the staged record, then go. A write that fails here has nowhere to report, so it is dropped.
   setTimeout(
@@ -33,7 +35,8 @@ export const runHookProcess = async ({ stdin, deps, exit, deadlineMs }: HookProc
     const built = deps((pending) => {
       staged = pending;
     });
-    await gateHook(await stdin(), built);
+    const output = await gateHook(await stdin(), built);
+    if (output !== '') await write?.(output);
   } catch {
     // Fail-open: a throw anywhere above is a record not written, never an exit code.
   }

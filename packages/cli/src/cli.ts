@@ -595,7 +595,7 @@ const buildProgram = (deps: RunDeps, argv: string[]): Command => {
 
   gate
     .command('hook')
-    .description('the PreToolUse hook: reads the tool call on stdin, records any crossing in crossings.jsonl, and prints nothing; it never allows, denies, or changes a call (bin.js answers this command itself, before the rest of the CLI loads)')
+    .description('the PreToolUse hook: reads the tool call on stdin, records any crossing in crossings.jsonl, and prints nothing unless the gate policy says to: a note as context, or a deny labeled with the fact for a name the registry does not hold; it never allows or changes a call (bin.js answers this command itself, before the rest of the CLI loads)')
     .action(async () => {
       const runtime = sessionDeps(deps).sessions;
       // No store means no file: an empty store folder would put crossings.jsonl in the working folder.

@@ -1,5 +1,5 @@
-// `oars gate hook`: the PreToolUse hook that records a crossing as it happens. It only records. It reads the call the harness hands it, runs the same
-// `checkCall` replay runs, and appends one row per crossing to `crossings.jsonl`; it never answers the harness (no permission decision, no changed input), so the call
+// `oars gate hook`: the PreToolUse hook that records a crossing as it happens. It records, and says something only when the policy (`policy.ts`) says to: a note, or a deny labeled with a fact. It reads the call the harness hands it, runs the same
+// `checkCall` replay runs, and appends one row per crossing to `crossings.jsonl`; it never allows a call and never changes its input, so the call
 // runs as asked whatever happens here. Every failure is swallowed: malformed input, a missing store, a full disk, a throw. It imports only what it needs, because the
 // harness waits on it before every matching tool call, and it ends before `deadlineMs` however slow the registry is.
 import { appendFile, mkdir, readFile, stat } from 'node:fs/promises';
@@ -8,6 +8,7 @@ import { makeRedactor } from '../sessions/redact.js';
 import { checkCall, type Crossing } from './checks.js';
 import { withLocalBin, type LocalBinMemo } from './local-bin.js';
 import type { FillAsk } from './hook-fill.js';
+import { decide, type Decision } from './notes.js';
 import { loadPolicy, type PolicySource } from './policy.js';
 import { loadIndex, keepIndex, noveltyOf, scopesOf } from './novelty.js';
 import { GATE_VERSION, parseRows, permissionOf, type CrossingRecord, type RegistryRow } from './record.js';
@@ -25,6 +26,8 @@ export const DEADLINE_MS = 800;
 
 /** A registry answer the hook kept is used for this many days. A `latest` is read "as of the crossing", so an older one is asked again. */
 export const HOOK_REGISTRY_DAYS = 1;
+/** A not-found answer is trusted this long: a name can be published any minute, and a block rests on the answer. */
+export const NOT_FOUND_MS = 600_000;
 /** The room a row's write is given after the registry ask has been cut off. */
 const WRITE_RESERVE_MS = 150;
 /** An ask with less than this left is not started: it could not finish. */
@@ -37,6 +40,8 @@ export interface GateHookDeps {
   clock: () => number;
   /** The whole hook ends by this many ms on `clock`. */
   deadlineMs: number;
+  /** The draw for the holdback, in [0, 1). Absent: `Math.random`. */
+  random?: () => number;
   /** Asks the package manager. Absent: no question is ever asked. */
   registry?: RegistryReader;
   /** Appends text to a file. Replaceable so a full disk can be tried. */
@@ -93,7 +98,8 @@ const keptAnswers = async (storeDir: string): Promise<Map<string, RegistryRow>> 
 };
 
 /** A kept answer is dated by its UTC day, so "a day" is that day and the next: at most 48 hours old. */
-const fresh = (row: RegistryRow, now: number): boolean => now - Date.parse(row.day) < (HOOK_REGISTRY_DAYS + 1) * DAY_MS;
+const fresh = (row: RegistryRow, now: number): boolean =>
+  row.state === 'not-found' ? row.ts !== undefined && now - Date.parse(row.ts) < NOT_FOUND_MS : now - Date.parse(row.day) < (HOOK_REGISTRY_DAYS + 1) * DAY_MS;
 
 const within = <T>(promise: Promise<T>, ms: number): Promise<T | undefined> =>
   new Promise((resolve) => {
@@ -137,6 +143,7 @@ const recordOf = (
   novelty: CrossingRecord['novelty'],
   read: { answer: RegistryAnswer } | undefined,
   policy: PolicySource,
+  decision: Decision,
 ): CrossingRecord => ({
   kind: 'crossing',
   v: GATE_VERSION,
@@ -160,8 +167,8 @@ const recordOf = (
   againstLatest: read === undefined ? 'not-read' : againstLatestOf(crossing, read.answer),
   registryState: read?.answer.state ?? 'not-read',
   registryAge: read === undefined ? 'not-read' : ageOf(read.answer, input.ts),
-  arm: 'none',
-  lineShown: 'none',
+  arm: decision.arm,
+  lineShown: decision.lineId,
   policy,
   session: input.session,
   agent: input.agent,
@@ -176,18 +183,24 @@ const appendText = async (file: string, body: string): Promise<void> => {
   await appendFile(file, body, { mode: 0o600 });
 };
 
+/** A block is a deny whose reason is the label; else the notes are context for the agent. Never an allow, an ask, or a changed input: with neither, nothing is printed. */
+const outputOf = (blocks: readonly string[], notes: readonly string[]): string => {
+  if (blocks.length > 0) return JSON.stringify({ hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: blocks.join('\n') } });
+  return notes.length > 0 ? JSON.stringify({ hookSpecificOutput: { hookEventName: 'PreToolUse', additionalContext: notes.join('\n') } }) : '';
+};
+
 /**
  * Records the crossings of one tool call. Resolves with nothing in every case: the caller writes no output, so the harness never reads a decision from this hook.
  * Nothing is written, and no network is touched, for a call that crosses nothing.
  */
-export const runGateHook = async (stdin: string, deps: GateHookDeps): Promise<void> => {
+export const runGateHook = async (stdin: string, deps: GateHookDeps): Promise<string> => {
   const input = parse(stdin);
   const tool = text(input.tool_name);
   const session = text(input.session_id);
-  if (tool === null || session === null) return;
+  if (tool === null || session === null) return '';
   const call = { tool, input: input.tool_input };
   let check = checkCall(call, makeRedactor());
-  if (check.crossings.length === 0) return;
+  if (check.crossings.length === 0) return '';
   const domains = await redactDomains(deps.storeDir);
   if (domains.length > 0) check = checkCall(call, makeRedactor(domains));
   const append = deps.append ?? appendText;
@@ -197,7 +210,10 @@ export const runGateHook = async (stdin: string, deps: GateHookDeps): Promise<vo
   const index = await loadIndex(deps.storeDir, crossingsPath(deps.storeDir));
   const repository = cwd === null ? '' : await repositoryOfCwd(cwd);
   const kept = await keptAnswers(deps.storeDir);
-  const { source } = await loadPolicy(deps.storeDir);
+  const { policy, source } = await loadPolicy(deps.storeDir);
+  const random = deps.random ?? Math.random;
+  const blocks: string[] = [];
+  const notes: string[] = [];
   const rows: CrossingRecord[] = [];
   const lines = new Set<string>();
   const answered: RegistryRow[] = [];
@@ -211,7 +227,11 @@ export const runGateHook = async (stdin: string, deps: GateHookDeps): Promise<vo
     if (read?.asked === true && read.answer.state !== 'unreachable') {
       answered.push({ kind: 'registry', v: GATE_VERSION, day: ts.slice(0, 10), ts, class: crossing.class, state: read.answer.state, created: read.answer.created, name: crossing.name, latest: read.answer.latest });
     }
-    rows.push(recordOf(common, crossing, novelty, read, source));
+    const state = read?.answer.state;
+    const decision = decide(policy, state === 'found' || state === 'not-found' ? { state, created: read?.answer.created ?? null, novelty } : undefined, deps.now(), random, crossing.name);
+    if (decision.kind === 'block' && decision.text !== null) blocks.push(decision.text);
+    if (decision.kind === 'note' && decision.text !== null) notes.push(decision.text);
+    rows.push(recordOf(common, crossing, novelty, read, source, decision));
   }
   // The record first: an index line for a row that was never written would call the next crossing of the name old.
   const record = { file: crossingsPath(deps.storeDir), text: rows.map((row) => `${JSON.stringify(row)}\n`).join('') };
@@ -223,12 +243,13 @@ export const runGateHook = async (stdin: string, deps: GateHookDeps): Promise<vo
   }
   await keepIndex(deps.storeDir, index, [...lines]).catch(() => undefined);
   if (answered.length > 0) await append(registryCachePath(deps.storeDir), answered.map((row) => `${JSON.stringify(row)}\n`).join('')).catch(() => undefined);
+  return outputOf(blocks, notes);
 };
 
 /** What the hook writes to stdout: nothing, whatever happened. The harness reads no decision and no changed input from it, so the call runs as asked. */
 export const gateHook = async (stdin: string, deps: GateHookDeps): Promise<string> => {
   try {
-    await runGateHook(stdin, deps);
+    return await runGateHook(stdin, deps);
   } catch {
     // Fail-open: a recorder that cannot record must not cost a session its tool call.
   }

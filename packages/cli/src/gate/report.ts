@@ -1,6 +1,8 @@
 // `oars gate report`: counts over the rows the hook and a replay wrote, each crossing once. No judgment word appears here; a count says what was seen, and `LIMITS` says what was not.
 import {
   AGAINST_LATEST,
+  ARMS,
+  LINE_IDS,
   CROSSING_CLASSES,
   CROSSING_FORMS,
   DEPTHS,
@@ -57,6 +59,10 @@ export interface Report {
   againstLatest: Tally[];
   registryState: Tally[];
   registryAge: Tally[];
+  /** Whether a note that would show did (`shown`) or was held back (`held`); `none` is every row with no note to show, and every block. */
+  arm: Tally[];
+  /** The fixed id of the line a row showed. */
+  lineShown: Tally[];
   /** Which policy stood for the rows the hook wrote: no file, a file that fit, or one that did not (the defaults stood). Rows with no policy read (replay) are not counted. */
   policy: Tally[];
   removedLater: number;
@@ -112,6 +118,8 @@ export const reportOf = (rows: readonly Row[]): Report => {
     againstLatest: tally(AGAINST_LATEST, crossings, (row) => row.againstLatest),
     registryState: tally(REGISTRY_STATES, crossings, (row) => row.registryState),
     registryAge: tally(REGISTRY_AGES, crossings, (row) => row.registryAge),
+    arm: tally(ARMS, crossings, (row) => row.arm),
+    lineShown: tally(LINE_IDS, crossings, (row) => row.lineShown),
     policy: tally(POLICY_SOURCES, crossings.filter((row) => row.policy !== undefined), (row) => row.policy ?? 'default'),
     removedLater: crossings.filter((row) => row.removedLater === true).length,
     unseen: Object.entries(run?.unread ?? {}).map(([value, count]) => ({ value, count })),
@@ -145,6 +153,8 @@ export const formatReport = (report: Report): string => {
     line('Name not found', report.miss),
     line('Line', report.depth),
     `Removed later: ${String(report.removedLater)}`,
+    line('Notes', report.arm),
+    line('Line shown', report.lineShown),
     ...(report.policy.some((one) => one.count > 0) ? [line('Policy', report.policy)] : []),
     ...registry,
     'Replay cannot see:',
