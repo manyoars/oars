@@ -93,7 +93,7 @@ describe('the counts', () => {
   });
 
   it('names the sources replay does not read', () => {
-    expect(LIMITS.join(' ')).toMatch(/Codex, Cursor, or Copilot/);
+    expect(LIMITS.join(' ')).toMatch(/Codex, Cursor, Copilot, Gemini CLI, or Grok Build/);
   });
 
   it('shows the registry counts only when the registry was read', () => {

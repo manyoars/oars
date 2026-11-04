@@ -199,7 +199,7 @@ describe('the shell form projected from the account store (Q5)', () => {
       expect(projectShell(vocab, form, makeRedactor()).programs, form).toEqual([PRIVATE]);
     }
     // A quoted word is an argument, not a wrapper: `"IF"` is the program.
-    expect(projected(['"IF" acme-deploy'])[0]?.programs).not.toEqual([PRIVATE]);
+    expect(projected(['"IF" acme-deploy'])[0]?.programs).toEqual(['if']);
   });
 
   // The wrapper is skipped, not the command: the program behind each form is still read.

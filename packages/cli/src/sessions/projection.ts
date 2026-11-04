@@ -9,7 +9,9 @@ import {
   BUNDLING_PROGRAMS,
   HARNESS_AGENT_TYPES,
   HARNESS_TOOLS,
+  FRAMEWORKS,
   isPublicMcpTool,
+  LANGUAGES,
   LITERAL,
   PIPE_MAX,
   PRIVATE,
@@ -20,9 +22,10 @@ import {
   PUBLIC_SUBCOMMANDS,
   TOOL_INPUT_KEYS,
 } from './public-vocabulary.js';
+import { NORMALIZE } from './package-resolve.js';
 import type { ShellReader } from './pool-wire.js';
 import type { Redactor } from './redact.js';
-import type { ShellIdentity, ShellSegment, StepIdentity, ToolObservation } from './schema.js';
+import { ERROR_CODES, LANGUAGE_SHARES, REPO_FILE_BUCKETS, type LanguageShare, type RepoFilesBucket, type ShellIdentity, type ShellSegment, type StepIdentity, type ToolObservation, type ToolPackage } from './schema.js';
 import type { Vocabulary } from './vocab-load.js';
 
 /** One program of a shell call, as `index` carries it. */
@@ -186,15 +189,6 @@ export const projectKeys = (tool: string, keys: readonly string[]): ProjectedNam
   return admit(keys, (name) => listed?.has(name) === true);
 };
 
-/** The registry's own normalization (spec Section 1.3): npm lowercases, PyPI folds `-`, `_`, and `.`, crates.io folds `-` and `_`. */
-const NORMALIZE: ReadonlyMap<string, (name: string) => string> = new Map<string, (name: string) => string>([
-  ['npm', (name) => name.toLowerCase()],
-  ['pypi', (name) => name.toLowerCase().replace(/[-_.]+/g, '-')],
-  ['crates', (name) => name.toLowerCase().replace(/_/g, '-')],
-  ['rubygems', (name) => name],
-  ['homebrew', (name) => name.toLowerCase()],
-]);
-
 export interface ProjectedPackage {
   /** `<ecosystem>:<name>` for a seeded name, else `private`. */
   package: string;
@@ -213,8 +207,29 @@ export const projectPackage = (vocab: Vocabulary, ecosystem: string, name: strin
   return { package: `${ecosystem}:${normalize(name)}`, packageVersion: version === null ? null : versions.has(version) ? version : PRIVATE };
 };
 
+/** A stored package (`<ecosystem>:<name>`, from `packages` on a tool record) as it pools: the name when it is in its ecosystem's `seed_top`, else `private`. */
+export const projectStoredPackage = (vocab: Vocabulary, stored: Pick<ToolPackage, 'package' | 'packageVersion'>): ProjectedPackage => {
+  const colon = stored.package.indexOf(':');
+  return projectPackage(vocab, stored.package.slice(0, colon), stored.package.slice(colon + 1), stored.packageVersion);
+};
+
 /** A model id, lowercased the way the snapshot stores it. */
 export const projectModel = (vocab: Vocabulary, model: string): string => (vocab.models.has(model.toLowerCase()) ? model.toLowerCase() : PRIVATE);
 
 /** A harness release up to the snapshot; one published after it pools as `private` until the next VOCAB_VERSION (spec R3). */
 export const projectHarnessVersion = (vocab: Vocabulary, harness: string, version: string): string => (vocab.harnessVersions.get(harness)?.has(version) === true ? version : PRIVATE);
+
+/** An `errorCode` as it pools: a stored class that is still a member of the closed list, else `other`. A record captured before CAPTURE 14 holds none and projects `other`. */
+export const projectErrorCode = (stored: string | undefined): string => (stored !== undefined && ERROR_CODES.has(stored) ? stored : 'other');
+
+/** A stored language as it pools: a member of the pinned list, else `other`. */
+export const projectLanguage = (stored: string): string => (LANGUAGES.has(stored) ? stored : 'other');
+
+/** A stored share bucket as it pools: itself when it is one of the four, else null (no bucket is guessed from a value this code does not know). */
+export const projectLanguageShare = (stored: string): LanguageShare | null => LANGUAGE_SHARES.find((bucket) => bucket === stored) ?? null;
+
+/** A stored `repoFiles` bucket as it pools: itself when it is one of the five, else null. */
+export const projectRepoFiles = (stored: string | null): RepoFilesBucket | null => REPO_FILE_BUCKETS.find((bucket) => bucket === stored) ?? null;
+
+/** A stored framework as it pools: a name the vocabulary marks as a framework, else `private`. */
+export const projectFramework = (stored: string): string => (FRAMEWORKS.has(stored) ? stored : PRIVATE);
