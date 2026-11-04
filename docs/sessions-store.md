@@ -659,7 +659,7 @@ matching error line. A rollout whose shell outcomes were all lost would still sh
 `oars sessions deposit --allow copilot` reads GitHub Copilot CLI session logs into the same store. The records carry `harness: "copilot"`, take the same
 field classes, redaction, and 1,000-character `line` cap as every other source, and `recall`, `measure`, `books`, and `verify` read them with no special case.
 It is one more entry in the source table (`sources.ts`). Only the CLI (the agent in a terminal, which the Copilot SDK also drives) is read; VS Code's Copilot Chat
-writes its own chat model under `workspaceStorage/<hash>/chatSessions/` and is not.
+writes its own chat model under `workspaceStorage/<hash>/chatSessions/` and has its own reader (below).
 
 **Fixture-derived, never run live.** This reader was written from the public Copilot SDK's generated event types (github/copilot-sdk @ d28a136, MIT,
 `nodejs/src/generated/session-events.ts`, "AUTO-GENERATED ... from session-events.schema.json") and its `docs/features/session-persistence.md`, and tested only on
@@ -705,6 +705,42 @@ command with a matching error line, and usage is nonzero (it is written at shutd
   (the schema splits chunks one per reasoning boundary), so a session with no shutdown loses that output. The hand run checks two against a live store: that a resumed session's second shutdown continues the first, and chunk output sums against the shutdown total.
   A session that never shut down (a crash) has output tokens only from this reader. Its last `session.usage_checkpoint` may hold `providerModelMetrics` (session-events.ts:4472-4474, "Provider/model accounting snapshot that subsumes preceding usage receipts"), per-model totals that are not read; to look for one, open a crashed session's `events.jsonl`, find its last `session.usage_checkpoint`, and see whether `providerModelMetrics` is there. Subagent events (`agentId`, or the deprecated `parentToolCallId`) are skipped; the parent's `task` call is kept. Torn lines are counted as
   unparseable; a file with no parseable line is unreadable. Idempotent per session (`copilot/<id>` in `state.json`, size and mtime).
+
+## The VS Code Copilot Chat source
+
+`oars sessions deposit --allow vscode-copilot` reads the chat sessions VS Code itself writes into the same store. The records carry `harness: "vscode-copilot"`, take
+the same field classes, redaction, and 1,000-character `line` cap as every other source, and `recall`, `measure`, `books`, and `verify` read them with no special
+case. It is one more entry in the source table (`sources.ts`), and a different surface from the Copilot CLI above: VS Code serializes its own chat model, not Copilot's event log.
+
+**Fixture-derived, never run live.** This reader was written from the public source of microsoft/vscode @ f92b8f3 (`f92b8f3adcd9bc034e6b9ade05c093dd59b99c5f`, MIT; the Copilot Chat
+extension is in-tree at `extensions/copilot/`) and tested only on synthetic fixtures that each cite a line upstream can write; no VS Code store has ever been read by it. No vendor text promises the
+format: the log form is behind `chat.useLogSessionStorage` with a "remove after stabilizing" note (`chatSessionStore.ts:739`), and the schema is versioned (`version: 3`,
+`chatModel.ts:2593`). An unreadable session is warned about by name and skipped, never fatal. The one hand run that would settle it: on a machine with VS Code Stable and Copilot Chat,
+open one chat that runs a terminal command and has one tool call refused (press Skip on the confirmation), copy the `Code` folder under `%APPDATA%` (or the platform's equivalent) to a temp
+folder, set `APPDATA` and `HOME` to a temp folder with that copy inside, confirm `oars sessions` points at it, then `oars sessions deposit --allow vscode-copilot` and `oars sessions verify --strict`.
+It is settled only if the session count is nonzero, there are zero violations, the command's `Bash` record carries its real exit code, the refused call reads `user-rejected`, and usage is nonzero; also check whether the request holds `modelTotals` at all (if it does not, `input` 0 is expected and means not known, and the `inputTokens` comparison cannot be made).
+
+- **Where.** The folder that holds one folder per VS Code build: `%APPDATA%` on Windows, `~/Library/Application Support` on macOS, `$XDG_CONFIG_HOME` (else `~/.config`) on Linux; `VSCODE_APPDATA` replaces it.
+  The builds read are `Code` (Stable), `Code - Insiders`, and `Code - OSS`; a build with another `nameShort`, a portable install, or `--user-data-dir` is not discovered. Inside a build's `User` folder: `workspaceStorage/<hash>/chatSessions/<id>.json` or `.jsonl`,
+  `globalStorage/emptyWindowChatSessions/<id>.json|.jsonl` (a window with no folder, so no working directory), and the older `workspaceStorage/no-workspace/chatSessions`. The `<hash>` leads to a working directory through the sibling `workspace.json`
+  (`{folder}` or `{workspace}`, a uri). Opt-in like Cursor and Codex: discovered by default, opened only when `--allow vscode-copilot` names it; the nightly run repeats a saved allow.
+- **Two file forms.** `.json` is one `ISerializableChatData`. `.jsonl` is a mutation log, one entry per line: `{kind:0,v}` the initial value, `{kind:1,k,v}` a set, `{kind:2,k,v,i}` a push, `{kind:3,k}` a delete. VS Code reads the `.jsonl` first and the `.json` only when that is unreadable. With `chat.useLogSessionStorage` off it writes only the `.json` (`chatSessionStore.ts:353,394`), so a log left from an earlier run is the older file: this reader stats both files, reads the newer first (the `.jsonl` on a tie), and takes the cursor from it, so a changed `.json` is re-read.
+  A malformed log line is skipped and counted in the deposit line (VS Code throws on one). A session moved between workspaces is copied and the original kept, so the newest copy of an id is read. Idempotent per session (`vscode-copilot/<id>` in `state.json`, the newest file's size and mtime).
+- **Mapping.** A request is one prompt (`message.text`, or the string in the old format) and one response. A request flagged `isSystemInitiated` or hidden from the transcript is the harness writing, not the operator: its prompt is not read, its response is.
+  `modelId` is the model, kept with its vendor prefix. A `toolInvocationSerialized` part is a tool call; its `toolId` is the bare name (`run_in_terminal`) or the contributed one (`copilot_applyPatch`), and both spellings have an `ACTION_TABLES` row, so a shell call reads as `Bash` and an edit as `Edit` or `Write`.
+  A `textEditGroup` after an edit gives the file touched. Tool inputs are not persisted, so only a terminal command (`toolSpecificData.commandLine`) and an edit's file are known. A call with `subAgentInvocationId` is a subagent's own and is not read; the parent's `runSubagent` call is.
+  A shell call's outcome is its real exit code (`terminalCommandState.exitCode`), never a status field: with no exit code and no error it is unknown. A failed call's error is the unwrapped message, cut at 1,000 characters after redaction.
+  A refusal is `isConfirmed` `{type:5, source:'user'}` (the Skip button, which is a confirmation's decline button), `{type:0, source:'user'}` (an explicit cancel), or the boolean `false` (before VS Code 1.104): all store `user-rejected`.
+  `{type:0}` or `{type:5}` with `source` `hook` or `riskAssessment` reads as a permission denial, and a `Denied` with no `source` claims neither actor (`chatService.ts:910`: "absence does not identify an actor"), so it is a plain denial.
+  A `{type:5}` with no `source` is the skip after approval and has no outcome. Timestamps are epoch milliseconds; a missing or implausible one is never made up, the time carries forward.
+- **Absent.** Cost, a harness version, and working-directory changes have no equivalent: the file holds none. `completionTokens` on the request is the whole turn's output; `modelTotals[{model, inputTokens, cachedTokens, outputTokens}]`, also on the request (`chatModel.ts:2086,2093`), is the only per-model figure
+  (`chatService.ts:176-188`); neither sits under a `usage` key in the file, and a turn that used several models has them summed on its one assistant line, subagent-model tokens attributed to the request model. `promptTokens` is the last model call alone, so it is not read as consumption.
+  **Input 0 means not known.** A normal Copilot Chat session, written by the extension, carries no `modelTotals`: the extension API bridge passes the editor only `promptTokens`, `completionTokens`, `outputBuffer`, `copilotCredits`, and
+  `promptTokenDetails` (`extHostChatAgents2.ts:463-468`), and a public code search found `modelTotals` written only by the agent-host adapter (`stateToProgressAdapter.ts:936`). On such a session the reader stores
+  `input` 0 with the whole turn's `output`, which means the input is not known, not that none was spent; do not read it as a cheap turn. The hand run checks whether the request holds `modelTotals` at all, and the cache comparison below applies only when it does.
+  **Stated limit:** the source does not say whether `inputTokens` includes `cachedTokens`, so `inputTokens` is stored whole and the cache field kept apart. If VS Code's figure includes the cache reads, the cache is counted twice;
+  the hand run settles it by comparing one turn's figures with the provider's usage. Not read: `result.errorDetails`, per-call durations, and `globalStorage/transferredChatSessions` (a short-lived hand-off written when a session moves to another workspace, removed once read and expired after five minutes, `chatSessionStore.ts:79,275,316`; the destination workspace then holds its own copy, so reading it would only repeat a session). An MCP call reads as `other`: VS Code's spelling of an MCP tool id is unverified, so no pattern is guessed, and the hand run shows the spelling.
+  The session's `workingDirectory` overrides the folder in the transcript only, not in the listing's project slug.
 
 ## The Gemini source
 
