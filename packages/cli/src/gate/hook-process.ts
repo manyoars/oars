@@ -1,7 +1,7 @@
 // The process behind `oars gate hook`, with every side effect handed in so a test can drive it: stdin in, at most one JSON document out, `exit(0)` whatever happens. A hard deadline ends
 // the process before the harness's own, writing the record it has staged if the write had not finished. Nothing here may throw past `runHookProcess`: exit 1 from a
 // PreToolUse hook is a visible error and exit 2 blocks the tool call, and the hook must never cost a session either.
-import { appendFileSync, statSync } from 'node:fs';
+import { appendFileSync, readFileSync, statSync } from 'node:fs';
 import { gateHook, type GateHookDeps } from './hook.js';
 import { parseRows } from './record.js';
 
@@ -31,16 +31,25 @@ const sizeOf = (file: string): number => {
   }
 };
 
+/** Whether the record's own bytes are in the file past the length it had when the record was staged. Another hook's row may have grown the file too, so growth alone proves nothing. */
+const landed = (file: string, text: string, size: number): boolean => {
+  try {
+    return readFileSync(file).subarray(size).includes(text);
+  } catch {
+    return false;
+  }
+};
+
 /** Resolves once `exit(0)` has been called, or never when the deadline timer is what ended the process. */
 export const runHookProcess = async ({ stdin, deps, exit, write, deadlineMs }: HookProcess): Promise<void> => {
-  // `size` is the file's length when the record was staged: an append that wrote and then stalled has grown it by the record's length, and the deadline must not write it again.
+  // `size` is the file's length when the record was staged: an append that wrote and then stalled has put the record's own bytes past it, and the deadline must not write it again.
   let staged: { file: string; text: string; size: number; stop?: () => void } | null = null;
   // The last resort when the process is stuck past its grace: keep the staged record, then go. A write that fails here has nowhere to report, so it is dropped.
   setTimeout(
     () => {
       // The row first: it is the record this timer exists to keep, and the stop can be slow (on Windows it is a `taskkill` spawn at a moment already past the deadline).
       try {
-        if (staged !== null && sizeOf(staged.file) < staged.size + Buffer.byteLength(staged.text)) appendFileSync(staged.file, unprinted(staged.text), { mode: 0o600 });
+        if (staged !== null && !landed(staged.file, staged.text, staged.size)) appendFileSync(staged.file, unprinted(staged.text), { mode: 0o600 });
       } catch {
         // Fail-open.
       }
