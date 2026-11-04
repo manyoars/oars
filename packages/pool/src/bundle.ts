@@ -3,6 +3,7 @@
 import { type Bundle, isBundleVersion, parseSkeleton, type SessionSkeleton, type SignedBundle, VOCAB_VERSION, BUNDLE_FORMAT } from '../../cli/src/sessions/pool-wire.js';
 import { CALL_SHAPE_METHOD, contentHash, METHODS } from '../../cli/src/sessions/read.js';
 import { EXTRACTOR_VERSION } from '../../cli/src/sessions/schema.js';
+import { accessOf } from './access.js';
 import { bundleOf, SERVED_FLOOR } from './derive.js';
 import { answer, bound, fieldOf, notConfigured, refuse, textField, wholeBinding, type Env } from './http.js';
 import { accountOf } from './identity.js';
@@ -72,8 +73,8 @@ export const fetchBundle = async (request: Request, env: Env, harnessVersion: st
   const now = Date.now();
   const week = isoWeekOf(now);
   const cap = wholeBinding(env.FETCH_CAP, DEFAULT_FETCH_CAP);
-  // Answered before the pool is read: a spent account must not be able to force a parse of every deposit on each request.
-  if (!(await spend(env, account, week, cap))) {
+  // Answered before the pool is read: a spent account must not be able to force a parse of every deposit on each request. An account with access has no cap.
+  if ((await accessOf(env, account, now)) === null && !(await spend(env, account, week, cap))) {
     return refuse(429, 'fetch_cap', `An account without access may fetch ${String(cap)} per ISO week. Deposit sessions for the whole pool.`, undefined, { 'retry-after': String(secondsToNextWeek(now)) });
   }
   // The count is dropped when its week ends, so what stays per account is only this week's.
