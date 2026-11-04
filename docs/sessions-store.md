@@ -22,7 +22,9 @@ Under `<config>/oars/sessions/` (`%APPDATA%` on Windows, `$XDG_CONFIG_HOME` or `
 | `reads/<pool>.jsonl` | One pool version's reads, written once and never rewritten, so a read cited by its ID stays what it was. |
 | `raw/<project>/<path>` | oars' own archive of every deposited transcript (below). |
 | `commit-survival.jsonl` | What became of each commit older than `SURVIVAL_DAYS`, appended on a change of state. See "Commit survival". |
-| `crossings.jsonl` | Written by `oars gate replay` only: one `run` row, `registry` rows, and one `crossing` row per package, MCP server, or skill pick found in raw transcripts. Closed-vocabulary fields are class P; `session`, `agent`, `toolUseId`, `ts`, `name`, and `version` are class A, and so are a `registry` row's `name`, `latest`, and `created`. See `docs/gate.md`. |
+| `crossings.jsonl` | Written by `oars gate replay` and appended to by the `oars gate hook` as each crossing happens (a `via` field says which): one `run` row, `registry` rows, and one `crossing` row per package, MCP server, or skill pick found in raw transcripts. Closed-vocabulary fields are class P; `session`, `agent`, `toolUseId`, `ts`, `name`, and `version` are class A, and so are a `registry` row's `name`, `latest`, and `created`. See `docs/gate.md`. |
+| `gate-registry.jsonl` | The registry answers the gate hook asked for, kept one day so a name asked about is not asked about again at once: one row per answer, with the `name`, `latest`, and `created` of what the registry held. Appended by the hook. Class A (a name and a version). Safe to delete; the next crossing asks again. |
+| `gate-index.txt` | The hook's novelty index: a header, then one line per name, repository, and session ever seen, each a truncated unsalted SHA-256, never the text. Seeded whole by `oars gate replay`, appended by the hook. Class A, because a guessed name can be tested against an unsalted hash. Safe to delete; the next replay rebuilds it, and until then a hook row reads novelty as `not-read`. |
 
 ## Capture scope: the allowlist
 
