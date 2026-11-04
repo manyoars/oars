@@ -125,6 +125,7 @@ Read the exit code of every command. With `--json` a failure is `{"ok": false, "
 | 7 | rate limited | wait a minute, rerun the same command |
 | 8 | the platform could not be reached | retry once; if it persists, tell the human |
 | 9 | `deploy` stopped partway | rerun the `Rerun to resume:` command it printed (with `--json`, the `rerun` field), exactly as printed |
+| 10 | `pool fetch` hit the pool's weekly fetch cap | not part of this recipe; the message says when to try again |
 | 1 | unexpected error | show the human the message and stop |
 
 ### Not launched yet
