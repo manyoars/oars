@@ -280,7 +280,7 @@ describe('openCodexStore', () => {
   });
 });
 
-describe('fix round 2 behaviors', () => {
+describe('shell, MCP, patch, and usage outcomes', () => {
   const unified = (second: number, id: string, name: string, args: unknown) => line(T(second), 'response_item', { type: 'function_call', name, arguments: JSON.stringify(args), call_id: id });
   const head = (rest: string): string => `Chunk ID: ab12\nWall time: 0.0100 seconds\n${rest}\nOriginal token count: 3\nOutput:\n`;
 
@@ -444,7 +444,7 @@ describe('fix round 2 behaviors', () => {
   });
 });
 
-// Fix round 3. Paginated rollouts are what the cited commit writes by default (thread-store/src/local/mod.rs:512-515): the legacy user_message,
+// Paginated rollouts are what the cited commit writes by default (thread-store/src/local/mod.rs:512-515): the legacy user_message,
 // agent_message, patch_apply_end, and mcp_tool_call_end events are not persisted there (rollout/src/policy.rs:142-156, `persisted_item_completed_event` at :232), and an `item_completed`
 // event holding a `TurnItem` (protocol/src/items.rs:50, tag `type`, variant names as written) takes their place. Its content parts carry their own tag: a UserMessage's
 // `UserInput` is snake_case (`text`, user_input.rs:16), an AgentMessage's `AgentMessageContent` has no rename_all (`Text`, items.rs:131-135); response_item, turn_context, and
