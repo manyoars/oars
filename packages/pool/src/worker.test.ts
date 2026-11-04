@@ -35,24 +35,7 @@ afterAll(async () => {
 });
 
 describe('POST /v1/deposits, under the Workers runtime', () => {
-  it('refuses a smuggled class A field and names it, storing nothing', async () => {
-    const sent = skeleton();
-    const body = JSON.stringify({ ...sent, transcripts: sent.transcripts.map((transcript) => ({ ...transcript, prompts: transcript.prompts.map((entry) => ({ ...entry, head: 'a private prompt' })) })) });
-    const { status, json } = await post(body);
-    expect(status).toBe(422);
-    expect(json).toMatchObject({ error: 'closed_vocabulary', field: 'transcripts[0].prompts[0].head' });
-    expect(await storedCount()).toBe(0);
-  });
-
-  it('refuses a value outside the vocabulary and names it, storing nothing', async () => {
-    const sent = skeleton();
-    const body = JSON.stringify({ ...sent, transcripts: sent.transcripts.map((transcript) => ({ ...transcript, frame: { ...transcript.frame, model: 'acme-llm' } })) });
-    const { status, json } = await post(body);
-    expect(status).toBe(422);
-    expect(json).toMatchObject({ error: 'closed_vocabulary', field: 'transcripts[0].frame.model' });
-    expect(await storedCount()).toBe(0);
-  });
-
+  // A smuggled field and a value outside the vocabulary are no longer refused (rules 3 and 4): they land in the bag and read as `other`. `wire-contract.test.ts` holds those proofs.
   it('refuses a body that is not JSON, one too large, and a caller with no account', async () => {
     expect((await post('not json')).status).toBe(400);
     expect((await post('x'.repeat(1024 * 1024 + 1))).status).toBe(413);
