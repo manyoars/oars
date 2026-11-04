@@ -1,6 +1,6 @@
 // The self-scheduling recipe in skills/make-me-money/SKILL.md, extracted and run as written against a stub of the platform's
-// workload routes. The stub refuses what t679's floor refuses (400) and what a scoped key refuses (403 WORKLOAD_NOT_OWNED, the
-// platform's changesMoreThanCron: a non-null imageRepository, a schedule added or cleared, or any other field differing), so the
+// workload routes. The stub refuses what t679's floor refuses (400)
+// and what a scoped key refuses (403 WORKLOAD_NOT_OWNED: a non-null imageRepository, a schedule added or cleared, or any other field differing), so the
 // recipe is checked inside the limits the client CHANGELOG lists, not wider.
 import { execFile } from 'node:child_process';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -37,8 +37,8 @@ interface Service {
 
 const FIELDS = ['port', 'healthPath', 'public', 'replicas', 'cpuMillicores', 'memoryMib', 'env'];
 
-// Mirrors WorkloadLifecycleServiceImpl.changesMoreThanCron: what a scoped key may not touch.
-const changesMoreThanCron = (services: Service[]): boolean =>
+// What a scoped key may not touch, as the platform checks it.
+const changesMoreThanSchedule = (services: Service[]): boolean =>
   services.some((patched) => {
     const current = view.services.find((candidate) => candidate.name === patched.name);
     if (current === undefined || (patched.imageRepository !== undefined && patched.imageRepository !== null)) return true;
@@ -85,7 +85,7 @@ const answer = async (request: IncomingMessage, response: ServerResponse): Promi
     const services = servicesOf(JSON.parse(await readBody(request)));
     patches.push({ authorization: request.headers.authorization, services });
     const cron = services.find((service) => service.name === 'job')?.scheduleCron;
-    if (changesMoreThanCron(services)) send(403, { code: 'WORKLOAD_NOT_OWNED', detail: 'a scoped key may change scheduleCron only' });
+    if (changesMoreThanSchedule(services)) send(403, { code: 'WORKLOAD_NOT_OWNED', detail: 'a scoped key may change scheduleCron only' });
     // t679's floor: a schedule that fires every minute is under the five-minute minimum.
     else if (cron === '* * * * *') send(400, { code: 'MANIFEST_INVALID', detail: 'scheduleCron fires more often than every 5 minutes' });
     else send(200, view);
