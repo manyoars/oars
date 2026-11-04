@@ -142,7 +142,7 @@ describe('the pool server is always named', () => {
   it('a run with no session store says so', async () => {
     const scene = setting();
     delete scene.h.deps.sessions;
-    expect(await scene.cli('pool', 'pull', '--server', POOL)).toBe(ExitCode.UNEXPECTED);
+    expect(await scene.cli('pool', 'pull', '--harness-version', '2.1.314', '--server', POOL)).toBe(ExitCode.UNEXPECTED);
     expect(scene.h.err.join('')).toContain('not configured');
   });
 });
@@ -252,7 +252,7 @@ describe('oars pool login', () => {
     const file = join(scene.staged.storeDir, 'pool-accounts.json');
     rmSync(file);
     mkdirSync(file);
-    expect(await scene.cli('pool', 'pull', '--server', POOL)).toBe(ExitCode.UNEXPECTED);
+    expect(await scene.cli('pool', 'pull', '--harness-version', '2.1.314', '--server', POOL)).toBe(ExitCode.UNEXPECTED);
   });
 
   it('names the refusal when the provider denies, and when the pool will not start', async () => {
@@ -328,8 +328,8 @@ describe('no harness token is ever read', () => {
     expect(await scene.cli('pool', 'login', '--provider', 'github', '--server', POOL)).toBe(ExitCode.OK);
     openPool(scene);
     expect(await scene.cli('pool', 'deposit', '--server', POOL)).toBe(ExitCode.OK);
-    on(scene, 'get', '/v1/slices/all', () => HttpResponse.json({ error: 'read_cap', message: 'capped' }, { status: 403 }));
-    await scene.cli('pool', 'pull', '--server', POOL);
+    on(scene, 'get', '/bundle/2.1.314/0', () => HttpResponse.json({ error: 'fetch_cap', message: 'capped' }, { status: 429 }));
+    await scene.cli('pool', 'pull', '--harness-version', '2.1.314', '--server', POOL);
     expect(scene.seen.length).toBeGreaterThan(3);
     expect(scene.sent()).not.toContain(HARNESS_SECRET);
     expect(scene.sent()).toContain('a-pool-token');
@@ -497,7 +497,7 @@ describe('oars pool deposit', () => {
 });
 
 describe('oars pool pull', () => {
-  const sliceBody = (stack: string, capped: object | null = null): string => JSON.stringify({ format: 1, stack, capped, asOf: { pool: 'p' }, cells: [{}], motifs: [], reads: [{}, {}] });
+  const bundleBody = (version: string): string => JSON.stringify({ format: 1, harnessVersion: version, vocabVersion: '0', asOf: { pool: 'p' }, cells: [{}], motifs: [], reads: [{}, {}], strata: [] });
 
   const signedScene = async (): Promise<{ scene: Scene; sign: (text: string) => Promise<string> }> => {
     const scene = setting();
@@ -511,53 +511,57 @@ describe('oars pool pull', () => {
     return existsSync(root) ? readdirSync(root, { recursive: true }).map(String).filter((name) => name.endsWith('.json')) : [];
   };
 
-  it('verifies the slice against the pinned key and keeps it in its signed form', async () => {
+  it('verifies the bundle against the pinned key and keeps it in its signed form', async () => {
     const { scene, sign } = await signedScene();
-    const payload = sliceBody('all');
+    const payload = bundleBody('2.1.314');
     const signature = await sign(payload);
-    on(scene, 'get', '/v1/slices/all', () => HttpResponse.json({ payload, signature }));
-    expect(await scene.cli('pool', 'pull', '--server', POOL, '--json')).toBe(ExitCode.OK);
+    on(scene, 'get', '/bundle/2.1.314/0', () => HttpResponse.json({ payload, signature }));
+    expect(await scene.cli('pool', 'pull', '--harness-version', '2.1.314', '--server', POOL, '--json')).toBe(ExitCode.OK);
     const answer = scene.document();
-    expect(answer).toMatchObject({ ok: true, stack: 'all', reads: 2, cells: 1, motifs: 0, capped: null });
+    expect(answer).toMatchObject({ ok: true, harnessVersion: '2.1.314', reads: 2, cells: 1, motifs: 0 });
     expect(scene.seen[0]?.headers).toContain('a-pool-token');
     expect(JSON.parse(readFileSync(String(at(answer, 'file')), 'utf8'))).toEqual({ payload, signature });
   });
 
-  it('names a stack, and says when an account was capped', async () => {
+  it('names the version it pulled', async () => {
     const { scene, sign } = await signedScene();
-    const payload = sliceBody('typescript', { limit: 50, served: 2 });
+    const payload = bundleBody('2.1.9');
     const signature = await sign(payload);
-    on(scene, 'get', '/v1/slices/typescript', () => HttpResponse.json({ payload, signature }));
-    expect(await scene.cli('pool', 'pull', '--stack', 'typescript', '--server', POOL)).toBe(ExitCode.OK);
-    expect(scene.h.out.join('')).toContain('Pulled typescript: 2 reads');
-    expect(scene.h.out.join('')).toContain('Capped: 2 of 50 reads');
+    on(scene, 'get', '/bundle/2.1.9/0', () => HttpResponse.json({ payload, signature }));
+    expect(await scene.cli('pool', 'pull', '--harness-version', '2.1.9', '--server', POOL)).toBe(ExitCode.OK);
+    expect(scene.h.out.join('')).toContain('Pulled 2.1.9: 2 reads');
   });
 
-  it('refuses a tampered slice and a slice of another stack, and keeps neither', async () => {
+  it('refuses a tampered bundle and a bundle of another harness version, and keeps neither', async () => {
     const { scene, sign } = await signedScene();
-    const payload = sliceBody('all');
+    const payload = bundleBody('2.1.314');
     const signature = await sign(payload);
-    on(scene, 'get', '/v1/slices/all', () => HttpResponse.json({ payload: payload.replace('"cells":[{}]', '"cells":[{},{}]'), signature }));
-    expect(await scene.cli('pool', 'pull', '--server', POOL, '--json')).toBe(ExitCode.INVALID);
-    expect(scene.document()).toMatchObject({ problem: { code: 'slice_unverified' } });
+    on(scene, 'get', '/bundle/2.1.314/0', () => HttpResponse.json({ payload: payload.replace('"cells":[{}]', '"cells":[{},{}]'), signature }));
+    expect(await scene.cli('pool', 'pull', '--harness-version', '2.1.314', '--server', POOL, '--json')).toBe(ExitCode.INVALID);
+    expect(scene.document()).toMatchObject({ problem: { code: 'bundle_unverified' } });
     expect(replicas(scene)).toEqual([]);
 
-    on(scene, 'get', '/v1/slices/typescript', () => HttpResponse.json({ payload, signature }));
-    expect(await scene.cli('pool', 'pull', '--stack', 'typescript', '--server', POOL)).toBe(ExitCode.INVALID);
+    on(scene, 'get', '/bundle/2.1.9/0', () => HttpResponse.json({ payload, signature }));
+    expect(await scene.cli('pool', 'pull', '--harness-version', '2.1.9', '--server', POOL)).toBe(ExitCode.INVALID);
     expect(replicas(scene)).toEqual([]);
   });
 
-  it('refuses a stack the vocabulary does not hold before asking, asks for a sign-in, and passes on a named refusal', async () => {
+  it('refuses a harness version the vocabulary does not hold before asking, asks for a sign-in, and passes on a named refusal', async () => {
     const { scene } = await signedScene();
-    expect(await scene.cli('pool', 'pull', '--stack', '../secret', '--server', POOL)).toBe(ExitCode.USAGE);
+    expect(await scene.cli('pool', 'pull', '--harness-version', '../secret', '--server', POOL)).toBe(ExitCode.USAGE);
+    expect(scene.seen).toEqual([]);
+    expect(await scene.cli('pool', 'pull', '--harness-version', '<literal>', '--server', POOL)).toBe(ExitCode.USAGE);
+    expect(scene.seen).toEqual([]);
+    // The option is required: no default version stands in for one.
+    expect(await scene.cli('pool', 'pull', '--server', POOL)).toBe(ExitCode.USAGE);
     expect(scene.seen).toEqual([]);
 
-    on(scene, 'get', '/v1/slices/all', () => HttpResponse.json({ error: 'read_cap', message: 'An account with no deposit is served 50 reads.' }, { status: 403 }));
-    expect(await scene.cli('pool', 'pull', '--server', POOL, '--json')).toBe(ExitCode.AUTH);
-    expect(scene.document()).toMatchObject({ problem: { code: 'read_cap' } });
+    on(scene, 'get', '/bundle/2.1.314/0', () => HttpResponse.json({ error: 'fetch_cap', message: 'An account without access may fetch 1 per ISO week.' }, { status: 429 }));
+    expect(await scene.cli('pool', 'pull', '--harness-version', '2.1.314', '--server', POOL, '--json')).toBe(ExitCode.RATE_LIMITED);
+    expect(scene.document()).toMatchObject({ problem: { code: 'fetch_cap' } });
 
     const anon = setting();
-    expect(await anon.cli('pool', 'pull', '--server', POOL)).toBe(ExitCode.AUTH);
+    expect(await anon.cli('pool', 'pull', '--harness-version', '2.1.314', '--server', POOL)).toBe(ExitCode.AUTH);
   });
 });
 

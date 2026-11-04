@@ -437,7 +437,7 @@ const readTool = (reading: Reading, tool: Tool, command: ToolCommand): void => {
     // It stays recorded under `uv`: uv's pip runs in the project venv and reads that venv's `pip.conf`, so the registry question must refuse it.
     addSpecs(reading, family, allFlags(words, '--with'), 'run', command.program, command.read);
     // A flag may sit between the two (`pip -q install x`).
-    const pip = command.args.findIndex((word, at) => word.text === 'pip' && command.args.slice(at + 1).find((next) => !next.text.startsWith('-'))?.text === 'install');
+    const pip = command.args.findIndex((word, at) => word.text === 'pip' && readWords({ ...command, args: command.args.slice(at + 1) }, family).names[0] === 'install');
     if (words.names[1] === 'pip' && words.names[2] === 'install' && pip >= 0) readTool(reading, PIP_TOOL, { ...command, args: command.args.slice(pip + 1) });
     return;
   }
@@ -505,8 +505,8 @@ const CONFIG_REGISTRY = /^--config\.[^=\s]*registry(?:=|$)/;
 const ATTACHED_INDEX = /^-i./;
 /** PowerShell's own folder stack. Local to the gate: `CHANGES_FOLDER` also drives capture's read-back of the working folder. */
 const FOLDER_STACK = new Set(['push-location', 'pop-location']);
-/** An assignment of a manager's own variable, in any shell's spelling, which can name a registry or a config file. Over-matching only leaves a name unasked. */
-const REGISTRY_ENVIRONMENT = /(?:^|[^A-Za-z0-9_])(?:(?:npm_config_|pip_|uv_)[A-Za-z0-9_]*|home|userprofile|xdg_config_home|xdg_config_dirs|appdata|path|virtual_env)\s*=/i;
+/** An assignment of a manager's own variable, or of one that moves its config or changes which manager runs, in any shell's spelling. Over-matching only leaves a name unasked. */
+const REGISTRY_ENVIRONMENT = /(?:^|[^A-Za-z0-9_])(?:(?:npm_config_|pip_|uv_)[A-Za-z0-9_]*|home|userprofile|xdg_config_home|xdg_config_dirs|appdata|path|virtual_env)\s*\+?=/i;
 /**
  * Other ways a call reads another config than the one the gate's question reads: `sudo` (root's), a venv's `activate` (its `pip.conf`), and
  * a manager run by path (`.venv/bin/pip`, which reads that venv's). Over-matching only leaves a name unasked.
@@ -570,6 +570,8 @@ const SKILL_SOURCE = new RegExp(String.raw`^${OWNER}(?:/${PLAIN}${SEGMENT}){1,5}
 const PLAIN_REF = /^(?:semver:)?[\w.^~*+-]+$/;
 /** A version that is not a URL's ref has none of a slash, a backslash, `:`, or `@`: those mark a path or a spec, not a version. */
 const VERSION = /^[^/\\:@]*$/;
+/** What a version may hold: word characters and the range operators. Anything else (`#`, `&`, `?`, `;`, `%`) is a secret or a path in the shape of a version. */
+const PLAIN_VERSION = /^[\w.^~*+<>=!,|\s-]*$/;
 
 const withoutCredentials = (name: string): string =>
   name
@@ -610,6 +612,7 @@ const admitted = (check: CallCheck): CallCheck => {
     const verdict = admitName(crossing.class, crossing.form, crossing.name);
     if (verdict.kind === 'unread') unread.push(verdict.shape);
     else if (crossing.versionForm !== 'url' && crossing.version !== null && !VERSION.test(crossing.version)) unread.push('local-path');
+    else if (crossing.versionForm !== 'url' && crossing.version !== null && !PLAIN_VERSION.test(crossing.version)) unread.push('unreadable-name');
     else crossings.push({ ...crossing, name: verdict.name, version: crossing.versionForm === 'url' && crossing.version !== null && !PLAIN_REF.test(crossing.version) ? null : crossing.version });
   }
   const removals = check.removals.filter((removal) => admitName(removal.class, 'removal', removal.name).kind === 'named');

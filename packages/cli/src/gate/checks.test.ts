@@ -114,6 +114,7 @@ describe('checkCall on a shell command', () => {
     ['uv run --with pip pip install x', ['python-package fetch-and-run pip unstated', 'python-package install x unstated']],
     ['uv run pip -q install x', ['python-package install x unstated']],
     ['uv run pip --verbose install x', ['python-package install x unstated']],
+    ['uv run pip -i https://private.example/simple install y', ['python-package install y unstated']],
     ['uv run --with rich --with pyyaml script.py', ['python-package fetch-and-run rich unstated', 'python-package fetch-and-run pyyaml unstated']],
     ['uvx -p 3.12 ruff', ['python-package fetch-and-run ruff unstated']],
     ['uvx -n ruff', ['python-package fetch-and-run ruff unstated']],
@@ -227,6 +228,10 @@ describe('checkCall on a shell command', () => {
     // Nor is one after the `@`: it would be kept as a version in `crossings.jsonl`.
     ['pip install "foo@a#secret-token"', ['unreadable-name']],
     ['pip install "foo@bar baz"', ['unreadable-name']],
+    ['pip install "one==a#secret-token"', ['unreadable-name']],
+    ['npm install "four@a#secret-token"', ['unreadable-name']],
+    ['pip install "two@a&sig=hunter2value"', ['unreadable-name']],
+    ['pip install "three@%2Fsecret%2Fhome"', ['unreadable-name']],
     // The redactor masks a dotted version after `jsr:` or `npm:` as an email before the reader sees it (register row A52): pinned so a later fix changes these on purpose.
     ['pnpm add jsr:@luca/cases@1.0.0', ['local-path']],
     ['npm install npm:@luca/cases@1.0.0', ['local-path']],
@@ -390,6 +395,8 @@ describe('checkCall on a shell command', () => {
     ['XDG_CONFIG_DIRS=/x pip install x', false],
     ['export PATH=.venv/bin:$PATH; pip install x', false],
     ['$env:PATH = ".venv\\Scripts;$env:PATH"; pip install x', false],
+    ['$env:PATH += ";.venv"; pip install x', false],
+    ['export PATH+=:.venv/bin; pip install x', false],
     ['npm install foo@jsr:1.0.0', false],
     ['npx jsr:@luca/cases', false],
     ['/usr/local/bin/npm install x', false],
