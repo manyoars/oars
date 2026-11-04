@@ -23,7 +23,7 @@ A tool call that takes something from outside the repository into the agent's se
 
 ## The source: raw transcripts, not the store
 
-Replay reads raw transcripts under the allowlist, from the harness's folder and the store's `raw/` archive, one copy per relative path. It does not read Codex or Cursor: Codex keeps rollouts in its own format, and Cursor has no transcript files. The store loses what the checks need: form (`pulls` has no install or fetch-and-run, and is per call, not per command), flags and quoted words, permission mode, Skill input, and the earlier text "where the name came from" needs. Reading raw costs parse time, and raw is class `L`, so nothing of class `L` goes in the record: no path, working directory, or command text.
+Replay reads raw transcripts under the allowlist, from the harness's folder and the store's `raw/` archive, one copy per relative path. It does not read Codex, Cursor, or Copilot: they keep sessions in their own formats, not as transcript files, so `--allow codex`, `--allow cursor`, and `--allow copilot` add nothing, and the report says so. A name's `origin` is keyed by name alone, so a package that also crossed as a server of the same name in one transcript shares that server's origin. The store loses what the checks need: form (`pulls` has no install or fetch-and-run, and is per call, not per command), flags and quoted words, permission mode, Skill input, and the earlier text "where the name came from" needs. Reading raw costs parse time, and raw is class `L`, so nothing of class `L` goes in the record: no path, working directory, or command text.
 
 ## What a name may be
 
@@ -76,7 +76,7 @@ Off by default. With `--registry-state`, replay asks `npm view` or `pip index ve
 
 ## What replay cannot see
 
-A command run from a script, alias, or Makefile; a manifest edit a later bare install picked up; what a person saw or approved; an MCP server started and never called; folders off the allowlist; logs the harness already cleaned up; a session in Codex or Cursor, which replay does not read. `oars gate report` ends with this list and the counts by shape.
+A command run from a script, alias, or Makefile; a manifest edit a later bare install picked up; what a person saw or approved; an MCP server started and never called; folders off the allowlist; logs the harness already cleaned up; a session in Codex, Cursor, or Copilot, which replay does not read. `oars gate report` ends with this list and the counts by shape.
 
 ## Measured
 

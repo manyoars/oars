@@ -283,7 +283,7 @@ export const replay = async (runtime: Pick<SessionsRuntime, 'storeDir' | 'projec
     transcripts,
     unreadable,
     badLines: reads.reduce((sum, { read }) => sum + read.badLines, 0),
-    calls: reads.reduce((sum, { read }) => sum + read.calls, 0),
+    calls: reads.reduce((sum, { read }) => sum + read.fresh, 0),
     crossings: records.length,
     unread,
     registryRead: options.registry !== undefined,
