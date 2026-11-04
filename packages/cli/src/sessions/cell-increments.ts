@@ -86,9 +86,9 @@ const marginalStore = (store: Store): Store => ({ ...store, tools: store.tools.f
 export const cellsOf = (store: Store, graph: RecallGraph = NO_RECALLS): CellSet => {
   const floored = flooredStore(store);
   const whole = deriveCells({ ...floored, tools: floored.tools.map((tool) => (tool.steps === undefined ? tool : { ...tool, steps: tool.steps.map(withoutLists) })) }, graph);
-  // Only the one-step named motifs of the marginal pass: its prompts, its shape motifs, and its longer windows repeat or splice what `whole` holds.
+  // Only the one-step named motifs of the marginal pass that hold a shell identity (a recall step the graph places there has none, and `whole` already counts it): its prompts, its shape motifs, and its longer windows repeat or splice what `whole` holds.
   const marginal = deriveCells(marginalStore(floored), graph);
-  const named = new Set(marginal.motifs.filter(({ level, steps }) => level === 'named' && steps.length === 1).map(({ motifId }) => motifId));
+  const named = new Set(marginal.motifs.filter(({ level, steps }) => level === 'named' && steps.length === 1 && steps[0]?.identity !== null).map(({ motifId }) => motifId));
   const motifs = new Map([...whole.motifs, ...marginal.motifs.filter(({ motifId }) => named.has(motifId))].map((motif) => [motif.motifId, motif]));
   const order = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
   const cells = [...whole.cells, ...marginal.cells.filter(({ motifId }) => named.has(motifId))].sort((a, b) => order(a.motifId, b.motifId) || order(a.frameBucket, b.frameBucket) || order(a.day, b.day) || Number(a.exposed) - Number(b.exposed));
