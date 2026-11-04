@@ -1175,13 +1175,14 @@ export const commitsRead = (plan: readonly PlannedCommit[], result: string): Arr
 const MCP_TAIL_MAX = 192;
 
 /**
- * The pattern rules of the redactor whose class allows `_`, so a token holding `__` is still one token. `sk-` is narrowed to the shapes the
- * rule is for (`sk-ant-` or 16 characters of the class before any `_`), so `sk-learn` and `task-sk-tools` are not taken for a key.
+ * The pattern rules of the redactor that can match across a `_`, and so across half of a separator: a class that allows `_` (`sk-`, `AIza`,
+ * `github_pat_`, `eyJ`), and a NAME=value rule, whose value takes anything. `sk-` is the shape the rule is for (`sk-ant-`, 16 characters of the
+ * class before any `_`, or a capital and a digit in the first run), so `sk-learn` and `task-sk-tools` are not taken for a key.
  */
-const UNDERSCORE_TOKEN = /\b(?:sk-(?:ant-|[A-Za-z0-9-]{16})|AIza|github_pat_|eyJ)/;
+const UNDERSCORE_TOKEN = /\b(?:sk-(?:ant-|[A-Za-z0-9-]{16}|(?=[\w-]*[A-Z])(?=[\w-]*\d))|AIza|github_pat_|eyJ)|[=:]/;
 
-/** The pattern rules a Cursor server name can start with, which are the only ones allowed to hold the first `_` of its `mcp_<server>_<tool>` tail. */
-const CURSOR_TOKEN = /\b(?:sk[-_]|[rp]k_|AIza|github_pat_|gh[pousr]_|whsec_)/;
+/** The pattern rules a Cursor name can hold across a `_`: a prefix that ends in `_`, plus the `UNDERSCORE_TOKEN` rules, since it has no `__` to cut at. */
+const CURSOR_TOKEN = /\b(?:sk-(?:ant-|[A-Za-z0-9-]{16}|(?=[\w-]*[A-Z])(?=[\w-]*\d))|[srp]k_|AIza|github_pat_|gh[pousr]_|whsec_|eyJ)|[=:]/;
 
 /**
  * What follows `mcp__` (or the Cursor `mcp_`) with every secret masked. A token is matched only at a word boundary and `_` is a word character, so
@@ -1191,15 +1192,17 @@ const CURSOR_TOKEN = /\b(?:sk[-_]|[rp]k_|AIza|github_pat_|gh[pousr]_|whsec_)/;
  * The tool part comes from the operator's config as much as the server part does. A slice that holds `__`, or starts or ends at a `_` (it holds
  * half of a separator), is run through the redactor only when it holds one of the `UNDERSCORE_TOKEN` rules: otherwise the entropy rule reads two
  * harmless parts (`Context7__resolve-library-id`) as one random token, or eats the separator, and the server loses its name. A Cursor name has
- * no `__` to tell server from tool, so the slice that holds its first `_` is run only for a `CURSOR_TOKEN` rule. The limit: a random token with no
- * pattern rule whose every part is under 24 characters (`TOKEN`'s minimum) cannot be told from two ordinary parts and is not found.
+ * no `__` to tell server from tool, so any slice that holds a `_` is run only for a `CURSOR_TOKEN` rule. Limits, each on the side of the secret
+ * or an accepted miss: a public name that starts like a pattern rule (`sk-ant-tools`, `github_pat_helper`) loses its server, since it cannot be
+ * told from a token that holds `__`; a tool part of 24 characters or more with a capital and a digit is masked, since it cannot be told from a
+ * token; and a random token with no pattern rule whose every part is under 24 characters (`TOKEN`'s minimum) cannot be told from two ordinary
+ * parts and is not found.
  */
 const redactedMcpTail = (tail: string, redact: Redactor, cursor: boolean): string => {
   if (tail.length > MCP_TAIL_MAX) return '<oversized>';
   let out = tail;
-  const first = tail.indexOf('_');
   const starts = [0];
-  for (let at = first; at !== -1; at = tail.indexOf('_', at + 1)) starts.push(at + 1);
+  for (let at = tail.indexOf('_'); at !== -1; at = tail.indexOf('_', at + 1)) starts.push(at + 1);
   // Last start first, so an edit never moves a start still to come; the longest slice first, so a token that holds a `_` is cut whole.
   for (const start of starts.toReversed()) {
     const ends = [out.length];
@@ -1207,7 +1210,7 @@ const redactedMcpTail = (tail: string, redact: Redactor, cursor: boolean): strin
     for (const end of ends.toSorted((left, right) => right - left)) {
       const slice = out.slice(start, end);
       if (/__|^_|_$/.test(slice) && !UNDERSCORE_TOKEN.test(slice)) continue;
-      if (cursor && start === 0 && end > first && first !== -1 && !CURSOR_TOKEN.test(slice)) continue;
+      if (cursor && slice.includes('_') && !CURSOR_TOKEN.test(slice)) continue;
       const masked = redact(slice);
       if (masked === slice) continue;
       out = out.slice(0, start) + masked + out.slice(end);
