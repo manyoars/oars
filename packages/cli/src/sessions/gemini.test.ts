@@ -388,15 +388,15 @@ ${text}
       { id: `mt4${suffix}`, timestamp: T(second), type: 'user', content: maskedTurn },
       copy(`mu5${suffix}`, 'user', 'try again', second),
     ];
-    const passPatch = (suffix: string, removed: readonly string[], updates: readonly unknown[] = []) => ({
+    const passPatch = (removed: readonly string[], updates: readonly unknown[] = []) => ({
       $patch: { ...(updates.length === 0 ? {} : { updates }), removeIds: removed },
     });
     const maskedUpdate = [{ id: 'g2', toolCalls: [{ id: 'c1', result: maskedTurn }] }];
-    const firstPass = [...maskingPass('a', 20), passPatch('a', ['u1', 'g2', 't4', 'u5'], maskedUpdate)];
+    const firstPass = [...maskingPass('a', 20), passPatch(['u1', 'g2', 't4', 'u5'], maskedUpdate)];
     const failed = shellText('boom', ['Exit Code: 2']);
 
     it('keeps them through a masking pass (a tool response turn, its masked copy, and updates on the removed message), and through a second pass over the copies', () => {
-      const records = [...withTurn(failed), ...firstPass, ...maskingPass('b', 40), passPatch('b', ['mu1a', 'mg2a', 'mt4a', 'mu5a'])];
+      const records = [...withTurn(failed), ...firstPass, ...maskingPass('b', 40), passPatch(['mu1a', 'mg2a', 'mt4a', 'mu5a'])];
       const out = extractOf(records);
       expect(out.session.userTurns).toBe(2);
       expect(out.session.assistantTurns).toBe(1);
@@ -491,7 +491,7 @@ ${text}
       expect(text(once)).toEqual(['fix the build', 'retyped']);
       expect(extractOf(once).session.assistantTurns).toBe(1);
       // Through a second pass the new copy still rewinds from the original.
-      const twice = [...withTurn(failed), ...firstPass, ...maskingPass('b', 40), passPatch('b', ['mu1a', 'mg2a', 'mt4a', 'mu5a']), ...after, { $rewindTo: 'mu5b' }, prompt(50, 'retyped')];
+      const twice = [...withTurn(failed), ...firstPass, ...maskingPass('b', 40), passPatch(['mu1a', 'mg2a', 'mt4a', 'mu5a']), ...after, { $rewindTo: 'mu5b' }, prompt(50, 'retyped')];
       expect(text(twice)).toEqual(['fix the build', 'retyped']);
       expect(extractOf(twice).session.usage).toMatchObject({ input: 1000, output: 20 });
       // A rewind to the first copy rolls the whole history back.
