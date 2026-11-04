@@ -149,6 +149,9 @@ const skippedNotice = (scope: SkippedScope): string[] => {
   return [`${folders} ${transcripts}; ${one ? 'it is' : 'they are'} never read: not on the allowlist. Not captured: ${shown}${more}.`];
 };
 
+/** Scope is an extra, like the step log: a projects root this process cannot list reports an empty scope and fails neither `verify` nor `books`. */
+const scopeOf = (runtime: SessionsRuntime): Promise<SkippedScope> => skippedFolders(runtime).catch((): SkippedScope => ({ folders: 0, transcripts: 0, names: [] }));
+
 /** One line for a store a newer oars wrote into (spec state-on-open row for a newer `cv`: read known fields, warn). */
 const newerNotice = (store: Store): string[] => (store.newerCaptures > 0 ? [`captured by a newer oars; upgrade oars (${String(store.newerCaptures)} sessions)`] : []);
 
@@ -173,7 +176,8 @@ const inRepositoryStore = (store: Store, repo: string): Store => {
 };
 
 export const sessionsBooks = async (deps: SessionsDeps, options: { by: BooksBy; sinceDays: number | undefined; repo?: string }): Promise<Outcome> => {
-  const { storeDir } = runtimeOf(deps);
+  const runtime = runtimeOf(deps);
+  const { storeDir } = runtime;
   const loaded = await loadStore(storeDir);
   const store = options.repo === undefined ? loaded : inRepositoryStore(loaded, options.repo);
   const rows = books(store, options.by, deps.now(), options.sinceDays, await readSurvival(storeDir));
@@ -185,7 +189,7 @@ export const sessionsBooks = async (deps: SessionsDeps, options: { by: BooksBy; 
       : emptyWindow
         ? `No ${options.by === 'pull' ? 'pulls' : 'prompts'} in the --since window.`
         : formatBooks(rows, options.by);
-  return { document: { ok: true, by: options.by, rows, newerCaptures: store.newerCaptures }, text: [table, ...newerNotice(store), ...(rows.length === 0 ? [] : [BOOKS_CAVEAT])].join('\n') };
+  return { document: { ok: true, by: options.by, rows, newerCaptures: store.newerCaptures }, text: [table, ...skippedNotice(await scopeOf(runtime)), ...newerNotice(store), ...(rows.length === 0 ? [] : [BOOKS_CAVEAT])].join('\n') };
 };
 
 export const sessionsMeasure = async (deps: SessionsDeps, options: { last: number; since: string | undefined; repo?: string }): Promise<Outcome> => {
@@ -249,8 +253,7 @@ export const sessionsVerify = async (deps: SessionsDeps, options: { session: str
     // A step log that cannot be read leaves the invariant check as it is: the stuck check is an extra, never a reason `verify` fails.
     // A verify that got here has succeeded, so a verify streak is the one this run ends and is not listed.
     const stuck = stuckSteps(await readSteps(storeDir).catch((): StepRow[] => [])).filter((entry) => entry.step !== 'verify');
-    // Scope is an extra, like the step log: a projects root this process cannot list reports an empty scope and does not fail `verify`.
-    const scope = await skippedFolders(runtime).catch((): SkippedScope => ({ folders: 0, transcripts: 0, names: [] }));
+    const scope = await scopeOf(runtime);
     const report: VerifyReport = { sessions: skeletons.length, unreadable, cvFrozen: frozen.size, scope, invariants: results.map((result) => ({ ...result, pass: result.violations === 0 })), stuck, sessionResults, audit, selfBaseline };
     const failed = [...results.filter((result) => result.violations > 0).map((result) => result.name), ...(unreadable > 0 ? ['unreadable skeletons'] : []), ...merkleFailed, ...stuck.map((entry) => `stuck: ${entry.step}`)];
     const stuckLines = stuck.map((entry) => `FAIL  ${entry.step} is stuck: key ${entry.key} failed ${String(entry.runs)} runs in a row: ${entry.error}`);
@@ -265,7 +268,7 @@ export const sessionsVerify = async (deps: SessionsDeps, options: { session: str
     const cvBehind = results.find((result) => result.name === CAPTURE_INVARIANTS[0])?.violations ?? 0;
     // The key is the sessions checked, each at its rev and cv, and the code's ev (spec 4.2).
     const key = stampKey(...highWater);
-    const counts = { checked: results.length, passed: results.filter((result) => result.violations === 0).length, cvBehind, cvFrozen: frozen.size, stuck: stuck.length };
+    const counts = { checked: results.length, passed: results.filter((result) => result.violations === 0).length, cvBehind, cvFrozen: frozen.size, stuck: stuck.length, merkle: audit.counts['root mismatch'] + audit.counts['counts do not bind'] };
     return { value: outcome, report: { in: { session: mine(store.sessions).length, subagent: mine(store.subagents).length }, out: counts, key } };
   }, stampKey('verify', options.session ?? ''));
 };

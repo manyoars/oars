@@ -362,8 +362,6 @@ const readMeta = async (file: string): Promise<{ agentType: string | null; toolU
   return { agentType: null, toolUseId: null };
 };
 
-// The subagent transcript files of the given sessions, from folder listings alone:
-// <session>/subagents/agent-*.jsonl and <session>/subagents/workflows/wf_*/agent-*.jsonl. No file is opened, so `skippedFolders` can use it on a folder no allow entry names.
 interface SubagentFile {
   dir: string;
   /** The folders between `subagents` and the file, for example `['workflows', 'wf_x']`. */
@@ -372,6 +370,8 @@ interface SubagentFile {
   name: string;
 }
 
+// The subagent transcript files of the given sessions, from folder listings alone:
+// <session>/subagents/agent-*.jsonl and <session>/subagents/workflows/wf_*/agent-*.jsonl. No file is opened, so `skippedFolders` can use it on a folder no allow entry names.
 const subagentFiles = async (folder: string, sessions: readonly string[]): Promise<SubagentFile[]> => {
   const found: SubagentFile[] = [];
   for (const parent of sessions) {
