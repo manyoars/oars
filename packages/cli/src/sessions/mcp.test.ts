@@ -181,6 +181,21 @@ describe('MCP server', () => {
       expect(logged).toContain('<secret>');
     });
 
+    it('masks a name-value secret in the call log, which JSON escaping of the quotes would hide from the rules', async () => {
+      const staged = seeded();
+      await ask(staged, { error: 'password="hunter2hunter2"' });
+      const logged = readFileSync(paths(staged.storeDir).calls, 'utf8');
+      expect(logged).not.toContain('hunter2hunter2');
+    });
+
+    it('masks a key on the second line of an error in the call log, which an escaped newline would hide from the word boundary', async () => {
+      const staged = seeded();
+      const key = ['AKIA', 'IOSFODNN7EXAMPLE'].join('');
+      await ask(staged, { error: `first line\n${key}` });
+      const logged = readFileSync(paths(staged.storeDir).calls, 'utf8');
+      expect(logged).not.toContain(key);
+    });
+
     it('keeps a poisoned model and version out of the reply and out of the stored evidence', async () => {
       const staged = seeded({ model: POISON, harnessVersion: POISON });
       const result = await ask(staged, { family: 'recovery' });
