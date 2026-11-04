@@ -297,10 +297,10 @@ describe('shell, MCP, patch, and usage outcomes', () => {
     expect(out.errorLines.map((entry) => entry.line)).toEqual(['execution error: Os { code: 2, kind: NotFound }']);
   });
 
-  it('leaves a declined shell call in the plain-text form (events.rs:456) with no outcome', () => {
+  it('reads a declined shell call in the plain-text form (events.rs:456) as the user rejecting it', () => {
     const out = extractOf([meta('/work/app'), shellCall(2, 'c1', ['rm', 'x']), shellOut(3, 'c1', 'exec command rejected by user')]);
-    expect(out.tools).toMatchObject([{ tool: 'Bash', status: 'none' }]);
-    expect(out.errorLines).toEqual([]);
+    expect(out.tools).toMatchObject([{ tool: 'Bash', status: 'error', errorCode: 'user-rejected' }]);
+    expect(out.errorLines.map((entry) => entry.line)).toEqual(['exec command rejected by user']);
   });
 
   const mcpCall = (second: number, id: string) => line(T(second), 'response_item', { type: 'function_call', name: 'mcp__notes__find', arguments: '{}', call_id: id });
@@ -331,14 +331,14 @@ describe('shell, MCP, patch, and usage outcomes', () => {
     expect(out.tools).toMatchObject([{ tool: 'Edit', status: 'none' }]);
   });
 
-  it('leaves a declined patch (status declined, protocol.rs:4072) unsettled, as a declined shell call is', () => {
+  it('reads a declined patch (status declined, protocol.rs:4072) as the user rejecting it, as a declined shell call is', () => {
     const out = extractOf([
       meta('/work/app'),
       line(T(2), 'response_item', { type: 'custom_tool_call', name: 'apply_patch', call_id: 'p1', input: '*** Update File: src/a.ts' }),
       line(T(3), 'event_msg', { type: 'patch_apply_end', call_id: 'p1', success: false, stderr: 'patch rejected by user', status: 'declined' }),
     ]);
-    expect(out.tools).toMatchObject([{ tool: 'Edit', status: 'none' }]);
-    expect(out.errorLines).toEqual([]);
+    expect(out.tools).toMatchObject([{ tool: 'Edit', status: 'error', errorCode: 'user-rejected' }]);
+    expect(out.errorLines.map((entry) => entry.line)).toEqual(['patch rejected by user']);
   });
 
   it('reads cache_write_input_tokens as cache creation, outside input: input 100 = cached 40 + write 60 (responses.rs:889-911)', () => {
@@ -604,7 +604,7 @@ describe('Paginated rollouts', () => {
     expect(out.session.usage).toMatchObject({ input: 60, cacheRead: 40, output: 10 });
   });
 
-  it('settles a patch from its FileChange item (events.rs:610-617, id is the call id): failed is an error, completed is ok, declined settles nothing', () => {
+  it('settles a patch from its FileChange item (events.rs:610-617, id is the call id): failed is an error, completed is ok, declined is the user rejecting it', () => {
     begin();
     const change = (second: number, id: string, status: string, stderr = '') => done(second, { type: 'FileChange', id, changes: {}, status, stdout: '', stderr });
     const out = extractOf([
@@ -616,8 +616,8 @@ describe('Paginated rollouts', () => {
       patchCall(6, 'p3'),
       change(7, 'p3', 'declined', 'rejected by user'),
     ]);
-    expect(out.tools.map((tool) => tool.status)).toEqual(['error', 'ok', 'none']);
-    expect(out.errorLines.map((entry) => entry.line)).toEqual(['could not apply']);
+    expect(out.tools.map((tool) => [tool.status, tool.errorCode ?? null])).toEqual([['error', 'other'], ['ok', null], ['error', 'user-rejected']]);
+    expect(out.errorLines.map((entry) => entry.line)).toEqual(['could not apply', 'patch rejected by user']);
   });
 
   it('settles an MCP call from its McpToolCall item (mcp_tool_call.rs:1189-1207, items.rs:459): an error or an isError result fails it', () => {
@@ -692,7 +692,7 @@ describe('Paginated rollouts', () => {
       expect(outputFirst.errorLines.map((entry) => entry.line)).toEqual(['boom']);
     });
 
-    it('leaves a Declined item unsettled (exit code -1, events.rs:552-554), an item with no exit_code (an Option, skipped when None, items.rs:284-286), and an item for a call it never saw', () => {
+    it('reads a Declined item (exit code -1, events.rs:552-554) as the user rejecting the call, and leaves an item with no exit_code (an Option, skipped when None, items.rs:284-286) and an item for a call it never saw unsettled', () => {
       begin();
       const out = extractOf([
         pmeta(),
@@ -704,8 +704,8 @@ describe('Paginated rollouts', () => {
         exited(7, 'u2', { status: 'failed' }),
         exited(8, 'nope', { status: 'failed', exit_code: 1, aggregated_output: 'x' }),
       ]);
-      expect(out.tools.map((tool) => tool.status)).toEqual(['none', 'none']);
-      expect(out.errorLines).toEqual([]);
+      expect(out.tools.map((tool) => [tool.status, tool.errorCode ?? null])).toEqual([['error', 'user-rejected'], ['none', null]]);
+      expect(out.errorLines.map((entry) => entry.line)).toEqual(['exec command rejected by user']);
     });
 
     it('settles a polled exec_command once: the write_stdin that saw it exit and then the item', () => {
