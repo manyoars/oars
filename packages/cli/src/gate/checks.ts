@@ -1,0 +1,389 @@
+// The checks of `oars gate`: from one tool call, name the crossing. Pure and synchronous, with no file, clock, or network, so `replay` and
+// the later hook call this same function and cannot disagree on what crossed. It reads the commands capture reads (`shellCommands`) and
+// keeps its own table, because capture's `pulls` say a name was stated and the gate has to say how: installed, or fetched and run.
+import type { Redactor } from '../sessions/redact.js';
+import { shellCommands, type ShellCommand } from '../sessions/extract.js';
+
+export const CROSSING_CLASSES = ['npm-package', 'python-package', 'mcp-server', 'skill'] as const;
+export type CrossingClass = (typeof CROSSING_CLASSES)[number];
+
+export const CROSSING_FORMS = ['install', 'url-install', 'fetch-and-run', 'url-fetch-and-run', 'mcp-call', 'skill-call'] as const;
+export type CrossingForm = (typeof CROSSING_FORMS)[number];
+
+/** A command that looks like a crossing and states no name to record. Counted, so a report can say what it could not read. */
+export const UNREAD_SHAPES = ['manifest-install', 'local-path', 'variable-name', 'masked-name', 'pipe-to-shell', 'behind-xargs', 'harness-registration'] as const;
+export type UnreadShape = (typeof UNREAD_SHAPES)[number];
+
+export type VersionForm = 'pinned' | 'range' | 'tag' | 'url' | 'unstated';
+
+export interface Crossing {
+  class: CrossingClass;
+  form: CrossingForm;
+  /** The name as stated, redacted, normalized only where the package manager itself treats the spellings as one. */
+  name: string;
+  version: string | null;
+  versionForm: VersionForm;
+  /** The program that crossed (`npm`, `uvx`), or `mcp` and `skill` for those tools. */
+  program: string;
+  /** Whether the call's own status reports this command: false behind a pipe or a later `;`. */
+  statusReports: boolean;
+}
+
+export interface Removal {
+  class: CrossingClass;
+  name: string;
+}
+
+export interface CallCheck {
+  crossings: Crossing[];
+  unread: UnreadShape[];
+  removals: Removal[];
+}
+
+export interface ToolCall {
+  tool: string;
+  input: unknown;
+}
+
+type Family = 'npm-package' | 'python-package';
+type Action = 'install' | 'run' | 'create' | 'remove' | 'manifest';
+
+/** A verb path and what it does. The longest path that starts the positional words wins, so `uv pip install` beats `uv`. */
+type Verbs = ReadonlyArray<readonly [readonly string[], Action]>;
+
+const NPM_VERBS: Verbs = [
+  [['install'], 'install'], [['i'], 'install'], [['in'], 'install'], [['ins'], 'install'], [['add'], 'install'],
+  [['ci'], 'manifest'], [['clean-install'], 'manifest'],
+  [['exec'], 'run'], [['x'], 'run'],
+  [['init'], 'create'], [['create'], 'create'],
+  [['uninstall'], 'remove'], [['un'], 'remove'], [['remove'], 'remove'], [['rm'], 'remove'], [['r'], 'remove'],
+];
+const PNPM_VERBS: Verbs = [
+  [['install'], 'install'], [['i'], 'install'], [['add'], 'install'],
+  [['dlx'], 'run'], [['create'], 'create'],
+  [['remove'], 'remove'], [['rm'], 'remove'], [['uninstall'], 'remove'], [['un'], 'remove'],
+];
+const YARN_VERBS: Verbs = [
+  [['install'], 'install'], [['add'], 'install'], [['global', 'add'], 'install'],
+  [['dlx'], 'run'], [['create'], 'create'],
+  [['remove'], 'remove'], [['global', 'remove'], 'remove'],
+];
+const BUN_VERBS: Verbs = [
+  [['install'], 'install'], [['i'], 'install'], [['add'], 'install'], [['a'], 'install'],
+  [['x'], 'run'], [['create'], 'create'],
+  [['remove'], 'remove'], [['rm'], 'remove'], [['uninstall'], 'remove'],
+];
+const PIP_VERBS: Verbs = [[['install'], 'install'], [['uninstall'], 'remove']];
+const UV_VERBS: Verbs = [
+  [['add'], 'install'], [['pip', 'install'], 'install'], [['tool', 'install'], 'install'],
+  [['tool', 'run'], 'run'],
+  [['sync'], 'manifest'], [['pip', 'sync'], 'manifest'],
+  [['remove'], 'remove'], [['pip', 'uninstall'], 'remove'], [['tool', 'uninstall'], 'remove'],
+];
+const PIPX_VERBS: Verbs = [[['install'], 'install'], [['run'], 'run'], [['uninstall'], 'remove']];
+const PROJECT_VERBS: Verbs = [[['add'], 'install'], [['install'], 'manifest'], [['sync'], 'manifest'], [['remove'], 'remove']];
+const PIPENV_VERBS: Verbs = [[['install'], 'install'], [['sync'], 'manifest'], [['uninstall'], 'remove']];
+const CONDA_VERBS: Verbs = [[['install'], 'install'], [['remove'], 'remove'], [['uninstall'], 'remove']];
+/** The runners take the name straight after the program. */
+const RUNNER_VERBS: Verbs = [[[], 'run']];
+
+interface Tool {
+  family: Family;
+  verbs: Verbs;
+}
+
+const TOOLS: ReadonlyMap<string, Tool> = new Map<string, Tool>([
+  ['npm', { family: 'npm-package', verbs: NPM_VERBS }],
+  ['pnpm', { family: 'npm-package', verbs: PNPM_VERBS }],
+  ['yarn', { family: 'npm-package', verbs: YARN_VERBS }],
+  ['bun', { family: 'npm-package', verbs: BUN_VERBS }],
+  ['npx', { family: 'npm-package', verbs: RUNNER_VERBS }],
+  ['bunx', { family: 'npm-package', verbs: RUNNER_VERBS }],
+  ['pip', { family: 'python-package', verbs: PIP_VERBS }],
+  ['uv', { family: 'python-package', verbs: UV_VERBS }],
+  ['uvx', { family: 'python-package', verbs: RUNNER_VERBS }],
+  ['pipx', { family: 'python-package', verbs: PIPX_VERBS }],
+  ['poetry', { family: 'python-package', verbs: PROJECT_VERBS }],
+  ['pdm', { family: 'python-package', verbs: PROJECT_VERBS }],
+  ['rye', { family: 'python-package', verbs: PROJECT_VERBS }],
+  ['pipenv', { family: 'python-package', verbs: PIPENV_VERBS }],
+  ['conda', { family: 'python-package', verbs: CONDA_VERBS }],
+  ['mamba', { family: 'python-package', verbs: CONDA_VERBS }],
+  ['micromamba', { family: 'python-package', verbs: CONDA_VERBS }],
+]);
+
+/** A flag here owns the next word, which is therefore not a package name. */
+const VALUE_FLAGS: Readonly<Record<Family, ReadonlySet<string>>> = {
+  'npm-package': new Set(['-w', '--workspace', '--registry', '--prefix', '--filter', '-F', '-C', '--dir', '--cache', '--tag', '--cwd', '--loglevel', '--userconfig', '-p', '--package', '-c', '--call', '--omit', '--include', '--save-prefix', '--skill', '-s']),
+  'python-package': new Set(['-r', '--requirement', '-e', '--editable', '-c', '--constraint', '-i', '--index-url', '--extra-index-url', '--index', '--default-index', '-t', '--target', '-f', '--find-links', '--python', '-p', '--from', '--with', '--with-editable', '--with-requirements', '--prefix', '--root', '--group', '--extra', '--only-binary', '--no-binary', '--trusted-host', '--proxy', '--cache-dir', '--timeout', '--suffix', '--pip-args', '--spec', '--channel', '-n', '--name', '-G', '-d']),
+};
+
+/** These tell a runner to use only what is already local, so nothing crosses. */
+const NO_FETCH_FLAGS: ReadonlySet<string> = new Set(['--no-install', '--no', '--offline']);
+
+const LOCAL_SPEC = /^(?:\.{1,2}$|\.{0,2}[\\/]|~|[A-Za-z]:[\\/]|file:|link:|workspace:|portal:)/;
+const ARCHIVE = /\.(?:whl|tgz|zip|tar\.gz)$/;
+const HOSTED = /^(?:github|gitlab|bitbucket|gist):/;
+const SCP_URL = /^[^@/\s]+@[^:/\s]+:/;
+const VARIABLE = /\$|^%.*%$/;
+/** The redactor took the whole word. A mask is not a name, and novelty must not count one. */
+const MASKED = /^(?:<(?:secret|email|org-domain)>)+$/;
+const namesNothing = (text: string): Spec | null => {
+  if (VARIABLE.test(text)) return { kind: 'unread', shape: 'variable-name' };
+  return MASKED.test(text) ? { kind: 'unread', shape: 'masked-name' } : null;
+};
+
+type Spec = { kind: 'named'; name: string; version: string | null; versionForm: VersionForm; url: boolean } | { kind: 'unread'; shape: UnreadShape };
+
+const versionFormOf = (version: string | null): VersionForm => {
+  if (version === null) return 'unstated';
+  if (/^v?\d+\.\d+\.\d+(?:\.\d+)*(?:[-+.][0-9A-Za-z.+-]*)?$/.test(version)) return 'pinned';
+  if (/^[\^~<>=!*]/.test(version) || /(?:^|\.)(?:x|\*)(?:\.|$)/.test(version) || /[,|\s]/.test(version)) return 'range';
+  return 'tag';
+};
+
+/** A query can hold a signed token no pattern knows, and a ref after `#` is the version; neither belongs in a name. */
+const urlSpec = (text: string): Spec => {
+  const bare = text.replace(/^git\+/, '');
+  const hash = bare.indexOf('#');
+  const end = hash < 0 ? bare : bare.slice(0, hash);
+  const ref = hash < 0 ? null : bare.slice(hash + 1);
+  const query = end.indexOf('?');
+  const stem = query < 0 ? end : end.slice(0, query);
+  // A git URL's `@ref` follows the path; an `@` in the host part is credentials, already masked.
+  const at = stem.lastIndexOf('@');
+  const slash = stem.lastIndexOf('/');
+  const hasRef = at > slash && slash > stem.indexOf('://') + 2;
+  const name = hasRef ? stem.slice(0, at) : stem;
+  const stated = hasRef ? stem.slice(at + 1) : ref === null || ref.startsWith('egg=') ? null : ref;
+  return { kind: 'named', name, version: stated, versionForm: 'url', url: true };
+};
+
+const isUrl = (text: string): boolean => text.includes('://') || text.startsWith('git+') || HOSTED.test(text) || SCP_URL.test(text);
+
+const atVersion = (text: string): { name: string; version: string | null } => {
+  const at = text.lastIndexOf('@');
+  if (at <= 0) return { name: text, version: null };
+  return { name: text.slice(0, at), version: text.slice(at + 1) === '' ? null : text.slice(at + 1) };
+};
+
+const nodeSpec = (text: string): Spec => {
+  const nothing = namesNothing(text);
+  if (nothing !== null) return nothing;
+  // `alias@npm:real@1` installs `real`; the alias is only what the code imports it as. It reads like an scp URL, so it goes first.
+  const alias = /^@?[^@]+@npm:(.+)$/.exec(text)?.[1];
+  if (alias !== undefined) return nodeSpec(alias);
+  if (isUrl(text)) return urlSpec(text);
+  if (LOCAL_SPEC.test(text) || ARCHIVE.test(text)) return { kind: 'unread', shape: 'local-path' };
+  // One slash with no leading `@` is a GitHub shorthand; more than one is a folder.
+  const parts = text.split('/').length;
+  if (parts > 2 || text.includes('\\')) return { kind: 'unread', shape: 'local-path' };
+  if (parts === 2 && !text.startsWith('@')) return urlSpec(text);
+  const { name, version } = atVersion(text);
+  return { kind: 'named', name, version, versionForm: versionFormOf(version), url: false };
+};
+
+const PYTHON_SPEC = /^([A-Za-z0-9][A-Za-z0-9._-]*)(?:\[[^\]]*\])?(===?|~=|!=|>=|<=|<|>)?(.*)$/;
+
+const pythonSpec = (text: string): Spec => {
+  const nothing = namesNothing(text);
+  if (nothing !== null) return nothing;
+  if (isUrl(text)) return urlSpec(text);
+  if (LOCAL_SPEC.test(text) || ARCHIVE.test(text) || /[\\/]/.test(text)) return { kind: 'unread', shape: 'local-path' };
+  const match = PYTHON_SPEC.exec(text);
+  if (match === null) return { kind: 'unread', shape: 'local-path' };
+  const [, raw = '', operator = '', stated = ''] = match;
+  // PEP 503: these spellings are one project, so novelty must not count them twice.
+  const name = raw.toLowerCase().replace(/[-_.]+/g, '-');
+  if (stated === '') return { kind: 'named', name, version: null, versionForm: 'unstated', url: false };
+  const exact = operator === '==' || operator === '===';
+  return { kind: 'named', name, version: exact ? stated : `${operator}${stated}`, versionForm: exact ? 'pinned' : 'range', url: false };
+};
+
+const specOf = (family: Family, text: string): Spec => (family === 'npm-package' ? nodeSpec(text) : pythonSpec(text));
+
+/** `npm init foo` runs `create-foo`, `npm init @scope/foo` runs `@scope/create-foo`, and `npm init @scope` runs `@scope/create`. */
+const creatorSpec = (text: string): string => {
+  const { name, version } = atVersion(text);
+  const suffix = version === null ? '' : `@${version}`;
+  if (!name.startsWith('@')) return `create-${name}${suffix}`;
+  const [scope = '', rest] = name.split('/');
+  return `${scope}/${rest === undefined ? 'create' : `create-${rest}`}${suffix}`;
+};
+
+interface Words {
+  names: string[];
+  flags: Map<string, string[]>;
+  bare: Set<string>;
+}
+
+const readWords = (command: ShellCommand, family: Family): Words => {
+  const names: string[] = [];
+  const flags = new Map<string, string[]>();
+  const bare = new Set<string>();
+  const put = (flag: string, value: string): void => {
+    flags.set(flag, [...(flags.get(flag) ?? []), value]);
+  };
+  for (let at = 0; at < command.args.length; at += 1) {
+    const { text, quoted } = command.args[at] ?? { text: '', quoted: false };
+    if (quoted || !text.startsWith('-')) names.push(text);
+    else if (text.includes('=')) put(text.slice(0, text.indexOf('=')), text.slice(text.indexOf('=') + 1));
+    // pnpm's `-w` is `--workspace-root`, where npm's takes a workspace name.
+    else if (VALUE_FLAGS[family].has(text) && !(command.program === 'pnpm' && text === '-w')) {
+      put(text, command.args[at + 1]?.text ?? '');
+      at += 1;
+    } else bare.add(text);
+  }
+  return { names, flags, bare };
+};
+
+const verbOf = (verbs: Verbs, names: readonly string[]): { action: Action; rest: string[] } | null => {
+  let best: { action: Action; rest: string[]; length: number } | null = null;
+  for (const [path, action] of verbs) {
+    if ((best === null || path.length > best.length) && path.every((word, at) => names[at] === word)) best = { action, rest: names.slice(path.length), length: path.length };
+  }
+  return best;
+};
+
+const allFlags = (words: Words, ...names: readonly string[]): string[] => names.flatMap((name) => words.flags.get(name) ?? []);
+
+const PIP_NAME = /^pip[\d.]*$/;
+const PYTHON_NAME = /^(?:python[\d.]*|py)$/;
+
+/** `python -m pip ...` is `pip ...`. The words before `-m` are the interpreter's own flags. */
+const moduleCommand = (command: ShellCommand): ShellCommand | null => {
+  if (!PYTHON_NAME.test(command.program)) return null;
+  const module = command.args.findIndex((word) => word.text === '-m');
+  if (module < 0 || !PIP_NAME.test(command.args[module + 1]?.text ?? '')) return null;
+  return { ...command, program: 'pip', args: command.args.slice(module + 2) };
+};
+
+const toolOf = (program: string): Tool | undefined => TOOLS.get(PIP_NAME.test(program) ? 'pip' : program);
+
+const SHELL_SINK = /^(?:sh|bash|zsh|dash|python[\d.]*|node|iex|invoke-expression|pwsh|powershell)$/;
+const FETCHER = /^(?:curl|wget|irm|iwr|invoke-restmethod|invoke-webrequest)$/;
+
+interface Reading {
+  crossings: Crossing[];
+  unread: UnreadShape[];
+  removals: Removal[];
+}
+
+const emptyReading = (): Reading => ({ crossings: [], unread: [], removals: [] });
+
+const crossingOf = (family: Family, spec: Extract<Spec, { kind: 'named' }>, action: 'install' | 'run', program: string, statusReports: boolean): Crossing => {
+  const form: CrossingForm = action === 'run' ? (spec.url ? 'url-fetch-and-run' : 'fetch-and-run') : spec.url ? 'url-install' : 'install';
+  return { class: family, form, name: spec.name, version: spec.version, versionForm: spec.versionForm, program, statusReports };
+};
+
+const addSpecs = (reading: Reading, family: Family, texts: readonly string[], action: 'install' | 'run', program: string, statusReports: boolean): void => {
+  for (const text of texts) {
+    const spec = specOf(family, text);
+    if (spec.kind === 'unread') reading.unread.push(spec.shape);
+    else reading.crossings.push(crossingOf(family, spec, action, program, statusReports));
+  }
+};
+
+const readRun = (reading: Reading, family: Family, words: Words, rest: readonly string[], command: ShellCommand): void => {
+  if ([...NO_FETCH_FLAGS].some((flag) => words.bare.has(flag))) return;
+  const [first, sub, source] = rest;
+  if (first !== undefined && atVersion(first).name === 'skills' && sub === 'add' && source !== undefined) {
+    if (!LOCAL_SPEC.test(source)) reading.crossings.push({ class: 'skill', form: 'install', name: source, version: null, versionForm: 'unstated', program: command.program, statusReports: command.read });
+    return;
+  }
+  const packaged = family === 'npm-package' ? allFlags(words, '-p', '--package') : allFlags(words, '--from', '--spec');
+  if (packaged.length > 0) addSpecs(reading, family, packaged, 'run', command.program, command.read);
+  else if (first !== undefined) addSpecs(reading, family, [first], 'run', command.program, command.read);
+};
+
+const readRemoval = (reading: Reading, family: Family, names: readonly string[]): void => {
+  for (const text of names) {
+    const spec = specOf(family, text);
+    if (spec.kind === 'named') reading.removals.push({ class: family, name: spec.name });
+  }
+};
+
+const readInstall = (reading: Reading, family: Family, words: Words, rest: readonly string[], command: ShellCommand): void => {
+  const editable = allFlags(words, '-e', '--editable');
+  const texts = [...editable, ...rest];
+  if (texts.length === 0 || allFlags(words, '-r', '--requirement').length > 0) reading.unread.push('manifest-install');
+  addSpecs(reading, family, texts, 'install', command.program, command.read);
+};
+
+const readTool = (reading: Reading, tool: Tool, command: ShellCommand): void => {
+  const { family } = tool;
+  const words = readWords(command, family);
+  // A bare `yarn` is its install; `yarn foo` runs a script.
+  if (command.program === 'yarn' && words.names.length === 0) {
+    reading.unread.push('manifest-install');
+    return;
+  }
+  // `uv run --with a` installs into a throwaway environment and runs: a fetch-and-run, whatever the script is.
+  if (command.program === 'uv' && words.names[0] === 'run') {
+    addSpecs(reading, family, allFlags(words, '--with'), 'run', command.program, command.read);
+    return;
+  }
+  const verb = verbOf(tool.verbs, words.names);
+  if (verb === null) return;
+  if (verb.action === 'manifest') reading.unread.push('manifest-install');
+  else if (verb.action === 'remove') readRemoval(reading, family, verb.rest);
+  else if (verb.action === 'install') readInstall(reading, family, words, verb.rest, command);
+  else if (verb.action === 'run') readRun(reading, family, words, verb.rest, command);
+  else if (verb.rest[0] !== undefined) addSpecs(reading, family, [creatorSpec(verb.rest[0])], 'run', command.program, command.read);
+};
+
+const namesOf = (command: ShellCommand): string[] => command.args.filter((word) => !word.text.startsWith('-')).map((word) => word.text);
+
+/** Names no package, and says a crossing's shape went by: the name is behind a pipe, or the harness took it. */
+const readShape = (reading: Reading, command: ShellCommand, previous: ShellCommand | undefined): void => {
+  const names = namesOf(command);
+  if (previous?.link === 'pipe' && FETCHER.test(previous.program) && SHELL_SINK.test(command.program)) reading.unread.push('pipe-to-shell');
+  if (command.program === 'xargs') {
+    const at = names.findIndex((name) => TOOLS.has(name) || PIP_NAME.test(name));
+    const tool = toolOf(names[at] ?? '');
+    if (tool !== undefined && verbOf(tool.verbs, names.slice(at + 1))?.action === 'install') reading.unread.push('behind-xargs');
+  }
+  if (command.program === 'claude' || command.program === 'codex') {
+    const [first, second] = names;
+    if ((first === 'mcp' || first === 'plugin') && (second === 'add' || second === 'install')) reading.unread.push('harness-registration');
+  }
+};
+
+const readCommand = (reading: Reading, command: ShellCommand, previous: ShellCommand | undefined): void => {
+  readShape(reading, command, previous);
+  const direct = moduleCommand(command) ?? command;
+  const tool = toolOf(direct.program);
+  if (tool !== undefined) readTool(reading, tool, direct.program === command.program ? command : direct);
+};
+
+const stringField = (input: unknown, key: string): string | undefined => {
+  const value: unknown = typeof input === 'object' && input !== null ? Reflect.get(input, key) : undefined;
+  return typeof value === 'string' && value !== '' ? value : undefined;
+};
+
+const checkShell = (input: unknown, redact: Redactor): CallCheck => {
+  const command = stringField(input, 'command');
+  const reading = emptyReading();
+  if (command === undefined) return reading;
+  const commands = shellCommands(command, redact);
+  commands.forEach((held, at) => {
+    readCommand(reading, held, commands[at - 1]);
+  });
+  return reading;
+};
+
+/** The harness's own tool names: a shell call and the two tools that name a pick. */
+const SHELL_TOOLS: ReadonlySet<string> = new Set(['Bash', 'PowerShell']);
+
+/** Names the crossing a tool call makes, if any. The later hook calls this same function with the call it is handed. */
+export const checkCall = (call: ToolCall, redact: Redactor): CallCheck => {
+  if (SHELL_TOOLS.has(call.tool)) return checkShell(call.input, redact);
+  if (call.tool.startsWith('mcp__')) {
+    const server = call.tool.split('__')[1] ?? '';
+    if (server === '') return emptyReading();
+    return { ...emptyReading(), crossings: [{ class: 'mcp-server', form: 'mcp-call', name: redact(server), version: null, versionForm: 'unstated', program: 'mcp', statusReports: true }] };
+  }
+  const skill = call.tool === 'Skill' ? (stringField(call.input, 'skill') ?? stringField(call.input, 'command')) : undefined;
+  if (skill === undefined) return emptyReading();
+  return { ...emptyReading(), crossings: [{ class: 'skill', form: 'skill-call', name: redact(skill), version: null, versionForm: 'unstated', program: 'skill', statusReports: true }] };
+};

@@ -525,7 +525,7 @@ type ShellToken = ShellWord | ShellOp;
 type ShellLink = 'and' | 'pipe' | 'break' | 'end';
 
 /** One simple command, after its prelude. */
-interface ShellCommand {
+export interface ShellCommand {
   program: string;
   args: ShellWord[];
   read: boolean;
@@ -1028,9 +1028,12 @@ const commitPlanOf = (commands: readonly ShellCommand[]): PlannedCommit[] =>
     return [{ quiet: git.args.some((word) => !word.quoted && QUIET.test(word.text)), readBack: isReadBack(commands, at, git.scope) }];
   });
 
+/** Every simple command of a shell call, in order, after the bodies are dropped and the command is redacted. `oars gate` reads the same commands as capture. */
+export const shellCommands = (command: string, redact: Redactor): ShellCommand[] => readCommands(tokenize(redactCommand(dropBodies(command.replace(/\r\n/g, '\n')), redact)));
+
 /** A shell call's segments, pulls, and the commits it holds, from the command alone. The command is redacted before anything is kept. */
 export const readShell = (command: string, redact: Redactor): ShellRead => {
-  const commands = readCommands(tokenize(redactCommand(dropBodies(command.replace(/\r\n/g, '\n')), redact)));
+  const commands = shellCommands(command, redact);
   const kept = commands.slice(-SEGMENTS_PER_CALL_MAX);
   const pulls = new Map<string, ToolPull>();
   for (const { program, args } of commands) {
