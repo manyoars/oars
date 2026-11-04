@@ -6,13 +6,13 @@ import { join } from 'node:path';
 import { SKELETON_FORMAT, VOCAB_VERSION } from './pool-wire.js';
 import { contentHash } from './read.js';
 
+/** What `JSON.stringify` writes for a value, or undefined for one JSON cannot hold (the lib types call this a string always). */
+const encoded = (value: unknown): string | undefined => JSON.stringify(value);
+
 /**
  * JSON with keys sorted at every depth, so two writers of one batch write the same bytes. The sorted entries are written out directly: rebuilding an object would put an integer-like key such as `10` before `9` whatever the sort said.
  * A value JSON cannot hold is left out of an object and written as null in an array, as `JSON.stringify` does.
  */
-/** What `JSON.stringify` writes for a value, or undefined for one JSON cannot hold (the lib types call this a string always). */
-const encoded = (value: unknown): string | undefined => JSON.stringify(value);
-
 const canonical = (value: unknown): string => {
   if (Array.isArray(value)) return `[${value.map(canonical).join(',')}]`;
   if (typeof value === 'object' && value !== null) {
@@ -49,15 +49,15 @@ export const FIELD_ROWS: { readonly [field: string]: string } = {
   frameworks: 'The frameworks of the project, each from a closed public list; never a path or a name of yours.',
   harness: 'Which harness wrote the session, one of a closed list.',
   harnessVersion: 'The harness version, only when it is a public release; else the literal placeholder.',
-  host: 'The host of a web fetch or search, only when it is on the public list; else null.',
-  id: 'A hash the client computes per account from the account and the session, so a redeposit replaces and two accounts sessions cannot be joined. Never the session id.',
+  host: 'The host of a web fetch or search, only when it is on the public list; else private, or null when the step names no host.',
+  id: "A hash the client computes per account from the account and the session, so a redeposit replaces and two accounts' sessions cannot be joined. Never the session id.",
   identity: 'What a step called, in closed vocabulary: a shell program with its subcommand and flags, an MCP server and tool, a skill, or a web host; null for an action with none.',
   input: 'A bucket of the input tokens in a prompt, a number.',
   languages: 'The programming languages of the project, each from a closed public list.',
   model: 'The model name, only when it is a public one; else the literal placeholder.',
   ms: 'A bucket of the milliseconds a step took (a lower bound), a number or null; never the exact time.',
-  name: 'The name of a package a shell command pulled, only when it is on the public list.',
-  native: 'The name the harness gave the tool, only when it is in this client action table; else the literal placeholder.',
+  name: 'The name of a package a shell command pulled, only when it is on the public list; else private.',
+  native: "The name the harness gave the tool, only when it is in this client's action table; else private.",
   output: 'A bucket of the output tokens in a prompt, a number.',
   parent: 'The position of the main-run call that spawned this step, a number, or null (also null for a subagent a subagent spawned).',
   platform: 'The operating system family, one of a closed list.',
@@ -66,11 +66,11 @@ export const FIELD_ROWS: { readonly [field: string]: string } = {
   prompts: 'The prompts of a transcript: each a class, bucketed counts and tokens, and a frame; never their words.',
   pulls: 'The packages a shell command pulled from a registry: the registry, the public package name, and its version.',
   registry: 'Which registry a pull came from, one of a closed list.',
-  server: 'The MCP server a call went to, only when it is on the public list.',
+  server: 'The MCP server a call went to, only when it is on the public list; else private.',
   shell: 'The shell a command ran in, one of a closed list, or null.',
   side: 'Whether a tool call ran as a side call, true or false.',
   size: 'A size class of the repository, one of a closed list, or null; never a count of files.',
-  skill: 'The skill a step ran, only when it is on the public list.',
+  skill: 'The skill a step ran, only when it is on the public list; else private.',
   stack: 'The languages, frameworks, and size class of the project.',
   status: 'Whether a tool call or a step succeeded: ok, error, or none.',
   steps: 'The steps of a tool call, each an action in closed vocabulary with its bucketed cost and spawner.',
@@ -86,8 +86,8 @@ export const FIELD_ROWS: { readonly [field: string]: string } = {
 };
 
 /**
- * Every field name a batch holds, at any depth, sorted: the rows above. A batch is filed under this list, the skeleton format, and `VOCAB_VERSION`, so one built under an older list, form, or vocabulary is never printed or sent (spec Section 1.4).
- * A test holds this list equal to the fields of a real batch, so a field added to the batch without its row fails there.
+ * Every field name a batch holds, at any depth, sorted: the rows above. A batch is filed under this list, the skeleton format, and `VOCAB_VERSION`, so one built under an older list, form, or vocabulary is never printed or sent.
+ * A test holds this list equal to the fields of a real batch, so a field the sample holds without its row fails there.
  */
 export const BATCH_FIELDS: readonly string[] = Object.keys(FIELD_ROWS).sort();
 
@@ -101,7 +101,7 @@ export const outboxFolder = (storeDir: string, server: string): string => join(s
 
 const BATCH_FILE = /^([0-9a-f]{16})\.([0-9a-f]{64})\.jsonl$/;
 
-/** Writes one session's batch under the current stamp. A session has one batch: an older batch of it is removed, and an identical one is left as it is. */
+/** Writes one session's batch under the current stamp. A session has one batch: an older batch of it is removed, and an identical one is written again, so an edited file is restored. */
 export const writeBatch = async (outbox: string, key: string, batch: unknown, stamp: string = currentStamp()): Promise<{ hash: string; folder: string }> => {
   const bytes = canonicalBytes(batch);
   const hash = batchHash(bytes);
@@ -131,18 +131,21 @@ const namesIn = async (folder: string): Promise<string[]> => {
 };
 
 /** Removes every batch under this stamp whose session is not in `kept`, and returns how many went. A session that fails a gate, leaves the allowlist, or is gone from the store never enters the outbox, so an earlier pass's batch of it cannot stay. */
-export const removeBatchesExcept = async (outbox: string, kept: ReadonlySet<string>, stamp: string = currentStamp()): Promise<number> => {
+export const removeBatchesExcept = async (outbox: string, kept: ReadonlySet<string>, stamp: string = currentStamp(), only?: string): Promise<number> => {
   const folder = join(outbox, stamp);
   let removed = 0;
   for (const name of await namesIn(folder)) {
     const found = BATCH_FILE.exec(name);
-    if (found !== null && !kept.has(found[1] ?? '')) {
+    if (found !== null && !kept.has(found[1] ?? '') && (only === undefined || found[1] === only)) {
       await rm(join(folder, name), { force: true });
       removed += 1;
     }
   }
   return removed;
 };
+
+/** Removes the batch of one session, if it has one under this stamp, and returns how many files went. */
+export const removeBatchOf = async (outbox: string, key: string, stamp: string = currentStamp()): Promise<number> => removeBatchesExcept(outbox, new Set(), stamp, key);
 
 /** The bytes of a batch file, when they still hash to the name the file was written under; undefined when the file is gone or was edited. */
 export const unchangedBytes = async (file: string, hash: string): Promise<string | undefined> => {
@@ -164,7 +167,7 @@ export interface Held {
   bytes: string;
 }
 
-/** The batches built under this client's vocabulary and field list, and how many of their files no longer hash to their names. An edited file is not printed and cannot be sent: run `deposit` again to rebuild it. */
+/** The batches built under this client's vocabulary, field list, and skeleton format, and how many of their files no longer hash to their names. An edited file is not printed and cannot be sent: run `deposit` again to rebuild it. */
 export const heldBatches = async (outbox: string, stamp: string = currentStamp()): Promise<{ batches: Held[]; edited: number }> => {
   const folder = join(outbox, stamp);
   const batches: Held[] = [];
@@ -211,7 +214,7 @@ export const lockedBatch = async (outbox: string, hash: string, stamp: string = 
   return bytes === undefined ? { ok: false, code: 'batch_changed' } : { ok: true, file, bytes };
 };
 
-/** Folders of an outbox other than the current stamp's: batches built under another vocabulary or field list. */
+/** Folders of an outbox other than the current stamp's: batches built under another vocabulary, field list, or skeleton format. */
 const staleFolders = async (outbox: string, stamp: string): Promise<string[]> => {
   const names: string[] = [];
   for (const name of await namesIn(outbox)) {
@@ -224,7 +227,7 @@ const STAMP_FOLDER = /^v[^./]+-[0-9a-f]{8}$/;
 
 const batchesIn = async (folder: string): Promise<number> => (await namesIn(folder)).filter((name) => BATCH_FILE.test(name)).length;
 
-/** Batches in one server's outbox that were built under another vocabulary or field list: never printed, never sent. */
+/** Batches in one server's outbox that were built under another vocabulary, field list, or skeleton format: never printed, never sent. */
 export const staleBatches = async (outbox: string, stamp: string = currentStamp()): Promise<number> => {
   let count = 0;
   for (const folder of await staleFolders(outbox, stamp)) count += await batchesIn(folder);

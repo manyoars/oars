@@ -168,7 +168,7 @@ describe('sessionsVerify, per session', () => {
 });
 
 describe('sessionsVerify, outbox batches', () => {
-  it('counts batches built under an older vocabulary or field list, on every server, and says they will never be sent', async () => {
+  it('counts batches built under an older vocabulary, field list, or skeleton format, on every server, and says they will never be sent', async () => {
     const staged = stage();
     await deposit(staged.runtime, options);
     const deps = { sessions: staged.runtime, install: undefined, now: () => NOW };
@@ -182,7 +182,7 @@ describe('sessionsVerify, outbox batches', () => {
     const stale = await sessionsVerify(deps, { session: undefined });
     expect(stale.report.staleBatches).toBe(2);
     expect(stale.document).toMatchObject({ staleBatches: 2 });
-    expect(stale.text).toContain('2 outbox batches were built under an older vocabulary or field list');
+    expect(stale.text).toContain('2 outbox batches were built under an older vocabulary, field list, or skeleton format');
     expect(stale.failed).toEqual([]);
   });
 
