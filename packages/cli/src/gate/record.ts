@@ -151,7 +151,7 @@ export { CROSSING_CLASSES, CROSSING_FORMS };
 const isLive = (row: CrossingRecord): boolean => row.via === 'hook' || row.via === 'both';
 
 /** A hook never saw these, so a hook row says them as `not-read`, `null`, or `unknown`: then the replay's value stands. */
-const unsaid = (value: unknown): boolean => value === NOT_READ || value === null || value === 'unknown';
+const unsaid = (value: unknown): boolean => value === undefined || value === NOT_READ || value === null || value === 'unknown';
 
 const pick = <K extends keyof CrossingRecord>(key: K, live: CrossingRecord, replayed: CrossingRecord): CrossingRecord[K] => (unsaid(live[key]) ? replayed[key] : live[key]);
 
@@ -181,8 +181,8 @@ const merged = (live: CrossingRecord, replayed: CrossingRecord): CrossingRecord 
   ...(live.policy === undefined ? {} : { policy: live.policy }),
   arm: pick('arm', live, replayed),
   lineShown: pick('lineShown', live, replayed),
-  // A hook row from an earlier build has no `lineHeld`; `pick` would write `undefined` over the replay's `none`.
-  lineHeld: live.lineHeld ?? replayed.lineHeld,
+  // A hook row from an earlier build has no `lineHeld`: `unsaid` reads it as nothing said, so the replay's `none` stands.
+  lineHeld: pick('lineHeld', live, replayed),
 });
 
 /** The key a call crossing is counted by: nothing counts twice when a row has a tool use id and another row has the same one. */
