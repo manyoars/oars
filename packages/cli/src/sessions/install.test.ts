@@ -56,7 +56,27 @@ describe('hook install', () => {
     const written = await readJson(file);
     const preTool: unknown = expect.stringMatching(/hook-bin\.js" pre-tool$/);
     expect(written.model).toBe('opus');
-    expect(written.hooks).toMatchObject({ Stop: [rotation], SessionEnd: [expect.anything()], SessionStart: [expect.anything()], PreToolUse: [{ matcher: 'Bash', hooks: [] }, { matcher: 'PowerShell|Monitor|Edit|Agent', hooks: [{ command: preTool }] }] });
+    expect(written.hooks).toMatchObject({ Stop: [rotation], SessionEnd: [expect.anything()], SessionStart: [expect.anything()], PreToolUse: [{ matcher: 'Bash', hooks: [] }, { hooks: [{ command: preTool }] }] });
+  });
+
+  it('writes the pre-tool entry with no matcher, so it runs on every tool', async () => {
+    const dir = scratch();
+    const file = join(dir, 'settings.json');
+    await installHooks(runtimeIn(dir), file, false);
+    const groups = (await readJson(file)).hooks;
+    expect(groups).toMatchObject({ PreToolUse: [{ hooks: [{ command: expect.stringMatching(/hook-bin\.js" pre-tool$/) }] }] });
+    expect(JSON.stringify(Reflect.get(Object(groups), 'PreToolUse'))).not.toContain('matcher');
+  });
+
+  it('replaces the old four-tool pre-tool entry and adds no second one', async () => {
+    const dir = scratch();
+    const file = join(dir, 'settings.json');
+    const old = { matcher: 'PowerShell|Monitor|Edit|Agent', hooks: [{ type: 'command', command: '"C:/node/node.exe" "C:/oars/dist/hook-bin.js" pre-tool', timeout: 5 }] };
+    writeFileSync(file, JSON.stringify({ hooks: { PreToolUse: [old] } }));
+    await installHooks(runtimeIn(dir), file, false);
+    const groups: unknown = Reflect.get(Object((await readJson(file)).hooks), 'PreToolUse');
+    expect(groups).toHaveLength(1);
+    expect(JSON.stringify(groups)).not.toContain('matcher');
   });
 
   it('removes a per-turn Stop entry the first build wrote and keeps the rotation hook, on install and on uninstall', async () => {
