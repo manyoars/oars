@@ -291,7 +291,7 @@ export const replay = async (runtime: Pick<SessionsRuntime, 'storeDir' | 'projec
     unread,
     registryRead: options.registry !== undefined,
   };
-  const registry = answers === undefined ? [...cached.values()] : registryRows(answers, held, cached, day);
+  const registry = registryRows(answers ?? new Map<string, RegistryAnswer>(), held, cached, day);
   await writeAtomic(file, `${[run, ...registry, ...records].map((row) => JSON.stringify(row)).join('\n')}\n`);
   return { run, file, text: summaryText(run, file) };
 };
