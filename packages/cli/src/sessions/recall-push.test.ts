@@ -2,11 +2,12 @@ import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { readHookCalls } from './hook-calls.js';
-import { indexPath, readIndex, type HookIndex } from './hook-index.js';
+import { buildIndex, indexPath, readIndex, type HookIndex } from './hook-index.js';
 import { runHook } from './hooks.js';
 import { armOf, HOLDBACK_RATE, readRecalls, recallsPath } from './recall-object.js';
 import { frameOfTail, tailOf } from './recall-push.js';
 import { toolShapeId, type RecallRead } from './recall-reads.js';
+import { tool as toolRow } from './pool-fixture.js';
 import { readSteps } from './steps.js';
 import { deposit } from './store.js';
 import { addProject, cleanup, NOW, stage } from './test-support.js';
@@ -193,6 +194,26 @@ describe('the pre-tool push', () => {
     expect(await readRecalls(staged.storeDir)).toHaveLength(1);
     // A shape the index left out (under the floors) has no read, so it is silent whatever the tool.
     expect(await runHook('pre-tool', call(sid, { tool_name: 'Zeta', tool_input: { other: 1 } }), staged.runtime, () => NOW + 2)).toBeUndefined();
+    expect(await readRecalls(staged.storeDir)).toHaveLength(1);
+  });
+
+  it('arms an unlisted tool only over the lift bar: a shape over the floors but under twice its action stays silent, one over both fires once per session', async () => {
+    const shaped = (session: string, tool: string, failed: number) =>
+      Array.from({ length: 10 }, (_, n) => toolRow(session, n, tool, { ts: '2026-11-01T00:00:00.000Z', status: n < failed ? 'error' : 'ok', keys: ['topic'], durationMs: 5, toolUseId: , harnessVersion: '2.1.300', prompt: 0 }));
+    const sessions = ['a', 'b', 'c'];
+    const quiet = Array.from({ length: 200 }, (_, n) => toolRow('q', n, 'Quiet', { ts: '2026-11-01T00:00:00.000Z', status: 'ok', keys: ['x'], durationMs: 5, toolUseId: , harnessVersion: '2.1.300', prompt: 0 }));
+    // Action  fails 18 of 260 (6.9 percent): Sharp at 50 percent clears twice that, Mild at 10 percent clears the fit floors but not 13.8 percent.
+    const tools = [...quiet, ...sessions.flatMap((name) => shaped(name, 'Sharp', 5)), ...sessions.flatMap((name) => shaped(name, 'Mild', 1))];
+    const index = buildIndex({ sessions: [], prompts: [], errors: [], subagents: [], tools, newerCaptures: 0 }, [], AT);
+    const sharp = toolShapeId('Sharp', ['topic']);
+    expect(Object.keys(index.fit ?? {})).toEqual([sharp]);
+    const staged = stagedIndex(index);
+    const sid = Array.from({ length: 100 }, (_, at) => ).find((candidate) => armOf(candidate, [sharp], AT) === 'shown') ?? '';
+    const use = (tool: string) => call(sid, { tool_name: tool, tool_input: { topic: 'x' } });
+    expect(await runHook('pre-tool', use('Mild'), staged.runtime, () => NOW)).toBeUndefined();
+    expect(await readRecalls(staged.storeDir)).toHaveLength(0);
+    expect(specific(await runHook('pre-tool', use('Sharp'), staged.runtime, () => NOW + 1)).additionalContext).toContain('other [topic]');
+    expect(await runHook('pre-tool', use('Sharp'), staged.runtime, () => NOW + 2)).toBeUndefined();
     expect(await readRecalls(staged.storeDir)).toHaveLength(1);
   });
 
