@@ -726,8 +726,7 @@ export const withLock = async <T>(storeDir: string, work: () => Promise<T>, opti
   const heartbeat = setInterval(() => {
     if (++beats * (options.staleMs / 4) >= holdMs) {
       clearInterval(heartbeat);
-      process.stderr.write(`oars: this run held the store lock past ${String(holdMs)} ms and may lose it; rerun it when it ends
-`);
+      process.stderr.write(`oars: this run held the store lock past ${String(holdMs)} ms and may lose it; rerun it when it ends\n`);
       return;
     }
     const now = new Date();
@@ -738,7 +737,8 @@ export const withLock = async <T>(storeDir: string, work: () => Promise<T>, opti
     return await work();
   } finally {
     clearInterval(heartbeat);
-    if ((await readFile(lock, 'utf8').catch(() => '')) === token) await rm(lock, { force: true });
+    // A refused read (an antivirus share violation) counts as ours, so the lock is not left standing for the stale window; `rm` with `force` is a no-op on a missing file.
+    if ((await readFile(lock, 'utf8').catch(() => token)) === token) await rm(lock, { force: true });
   }
 };
 
