@@ -369,6 +369,26 @@ describe('Paginated and forked rollouts through the store', () => {
     expect([...verifyAll(skeletons), ...verifyCaptured(store.sessions, store.tools)].filter((entry) => entry.violations > 0)).toEqual([]);
   });
 
+  // The fold sums the files' sizes and takes the latest mtime, so a revert written after the thread was deposited changes the thread's key and the thread is read again.
+  it('reads a thread again when a revert is written after its deposit, and the dropped turn leaves the store', async () => {
+    const s = stage();
+    const original = paginated(A);
+    const home = stageCodex(s.root, [{ id: A, lines: original }]);
+    const runtime = { ...s.runtime, sourceRoots: { codex: home } };
+    expect(await deposit(runtime, options(['codex']))).toMatchObject({ sessions: 1 });
+    const before = (await loadStore(s.storeDir)).sessions[0];
+    expect(before).toMatchObject({ userTurns: 2, assistantTurns: 3 });
+    // Reverting before the failed shell call (index 3) keeps the first prompt alone, so the call, its reply, and the second turn are the dropped ones.
+    const base = 3;
+    const bytes = Buffer.byteLength(`${original.slice(0, base).map((record) => JSON.stringify(record)).join('\n')}\n`);
+    stageCodex(s.root, [{ id: `${A}_${B}`, lines: reverted(A, base, bytes) }]);
+    expect(await deposit(runtime, options(['codex']))).toMatchObject({ sessions: 1, unchanged: 0 });
+    const store = await loadStore(s.storeDir);
+    expect(store.sessions).toHaveLength(1);
+    expect(store.sessions[0]).toMatchObject({ userTurns: 2, assistantTurns: 1 });
+    expect(store.tools.filter((entry) => entry.session === `codex-${A}`)).toEqual([]);
+  });
+
   it('drops a Legacy fork copy of its parent, found through forked_from_id in the same store', async () => {
     const s = stage();
     const fork = [meta(B, '/work/app', { forked_from_id: A }), ...rollout(A, '/work/app').slice(1, 3), line(T(20), 'event_msg', { type: 'user_message', message: 'own prompt' })];
