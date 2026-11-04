@@ -426,10 +426,10 @@ const projectRootOf = async (slug: string): Promise<string | null> => {
   }
 };
 
-/** The session id and kind (`main` or `subagent`) a chat file's head names, read from the first line of a `.jsonl` file or the object of a `.json` file. */
-const headOf = (file: string, text: string): { id: string | undefined; kind: string | undefined } => {
+/** The session id, kind (`main` or `subagent`), and start time a chat file's head names, read from the first line of a `.jsonl` file or the object of a `.json` file. */
+const headOf = (file: string, text: string): { id: string | undefined; kind: string | undefined; start: string } => {
   const first = extname(file) === '.json' ? wholeObject(text) : parse(lineTexts(text)[0] ?? '');
-  return { id: isObj(first) ? str(first.sessionId) : undefined, kind: isObj(first) ? str(first.kind) : undefined };
+  return { id: isObj(first) ? str(first.sessionId) : undefined, kind: isObj(first) ? str(first.kind) : undefined, start: isObj(first) ? (str(first.startTime) ?? '') : '' };
 };
 
 /** True when the file holds no prompt or response: a head written at a chat's start and nothing after it (chatRecordingService.ts:855-865). A torn file is not empty; it is named when read. */
@@ -451,7 +451,8 @@ export const openGeminiStore = async (root: string): Promise<GeminiStore | undef
     if (missing(error)) return undefined;
     return { sessions: [], transcript: () => Promise.reject(new Error('no sessions')), rejected: 0, unreadable: [{ file: base, reason: reasonOf(error, base) }] };
   }
-  const found = new Map<string, GeminiSession>();
+  // A file is a candidate under its session id; `start` and `stem` order the files of one id.
+  const found = new Map<string, { session: GeminiSession; start: string; stem: string }>();
   let rejected = 0;
   const list = async (dir: string): Promise<{ name: string; directory: boolean }[]> => {
     try {
@@ -480,9 +481,10 @@ export const openGeminiStore = async (root: string): Promise<GeminiStore | undef
       // Every new chat appends a head (geminiChat.ts:453), so a launch and quit, or a /clear, leaves a file with nothing in it: no session, and not an unreadable one.
       if (holdsNothing(text, named)) return;
       const session: GeminiSession = { id, folder, file, size: info.size, mtimeMs: Math.floor(info.mtimeMs), parent };
-      // A `.json` file migrated to `.jsonl` can leave both; the newer one is the session.
-      const held = found.get(id);
-      if (held === undefined || held.mtimeMs < session.mtimeMs) found.set(id, session);
+      // A `.json` file migrated to `.jsonl` can leave both, with one name; the newer one is the session. Files of other names under one id are other chats (below).
+      const key = `${id}/${name}`;
+      const held = found.get(key);
+      if (held === undefined || held.session.mtimeMs < session.mtimeMs) found.set(key, { session, start: head.start, stem: name });
     } catch (error) {
       unreadable.push({ file, reason: reasonOf(error, file) });
     }
@@ -501,7 +503,21 @@ export const openGeminiStore = async (root: string): Promise<GeminiStore | undef
       }
     }
   }
-  const sessions = [...found.values()].sort((a, b) => a.mtimeMs - b.mtimeMs || a.id.localeCompare(b.id));
+  // An AfterAgent hook's `clearContext` resets the chat, and the reset starts a new file under the same id (core/client.ts:1032,1050; chatRecordingService.ts:780,811-818); `/clear`
+  // changes the id first (cli clearCommand.ts:38). Each file is a chat of its own, so the earliest by its head's start time keeps the id (a file name does not order two files of one
+  // minute) and a later one is `<id>-<file name>`, which keeps its cursor stable.
+  const byId = new Map<string, { session: GeminiSession; start: string; stem: string }[]>();
+  for (const entry of found.values()) byId.set(entry.session.id, [...(byId.get(entry.session.id) ?? []), entry]);
+  const listed: GeminiSession[] = [];
+  for (const [id, files] of byId) {
+    files.sort((a, b) => a.start.localeCompare(b.start) || a.stem.localeCompare(b.stem));
+    files.forEach((entry, position) => {
+      const named = position === 0 ? id : `${id}-${entry.stem}`;
+      if (SAFE_ID.test(named)) listed.push({ ...entry.session, id: named });
+      else rejected += 1;
+    });
+  }
+  const sessions = listed.sort((a, b) => a.mtimeMs - b.mtimeMs || a.id.localeCompare(b.id));
   return {
     sessions,
     rejected,

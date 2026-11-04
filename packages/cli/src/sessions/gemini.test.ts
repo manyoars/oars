@@ -725,6 +725,25 @@ describe('the Gemini home', () => {
     expect(store?.sessions[0]?.file.endsWith('.jsonl')).toBe(true);
   });
 
+  it('lists a second chat file under one session id as its own session, so a clearContext reset does not hide the first chat (core/client.ts:1032,1050; chatRecordingService.ts:780,811-818)', async () => {
+    // An AfterAgent hook's `clearContext` calls `resetChat`, which starts a new file under the same `promptId`; the vendor adds `-<n>-` to a name that already exists in that minute.
+    // The earlier chat (by its head's startTime) keeps the plain id even though its file name sorts after the reset's, and each file is read for its own prompts.
+    const s = stage();
+    const root = stageGemini(s.root, [
+      { id: 'sess-1', projectRoot: '/work/a', lines: [geminiHead('sess-1'), prompt(1, 'first chat')] },
+      { id: 'sess-1', projectRoot: '/work/a', stem: 'session-2026-06-01T10-00-1-sess-1', lines: [geminiHead('sess-1', { startTime: '2026-06-01T10:00:30.000Z' }), prompt(31, 'second chat')] },
+      // A file name the skeleton cannot carry is counted, not listed.
+      { id: 'sess-1', projectRoot: '/work/a', stem: 'session-with a space', lines: [geminiHead('sess-1', { startTime: '2026-06-01T10:02:00.000Z' }), prompt(40, 'third chat')] },
+    ]);
+    const store = await openGeminiStore(root);
+    expect(store?.sessions.map((session) => session.id).sort()).toEqual(['sess-1', 'sess-1-session-2026-06-01T10-00-1-sess-1']);
+    expect(store?.rejected).toBe(1);
+    const own = async (id: string): Promise<string> => store?.transcript(store.sessions.find((session) => session.id === id) ?? never()) ?? '';
+    expect(await own('sess-1')).toContain('first chat');
+    expect(await own('sess-1')).not.toContain('second chat');
+    expect(await own('sess-1-session-2026-06-01T10-00-1-sess-1')).toContain('second chat');
+  });
+
   it('reports a store folder that cannot be listed by its base name, never fatal', async () => {
     const s = stage();
     const root = join(s.root, 'gemini-file');

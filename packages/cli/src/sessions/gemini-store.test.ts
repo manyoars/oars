@@ -75,6 +75,20 @@ describe('depositing the Gemini source', () => {
     expect(trackedKeys(s.storeDir)).toEqual([`gemini/${A}`, `gemini/${B}`]);
   });
 
+  it('deposits both chats when a clearContext reset writes a second file under one session id, each with its own cursor (core/client.ts:1032,1050; chatRecordingService.ts:780,811-818)', async () => {
+    const s = stage();
+    const home = stageGemini(s.root, [
+      { id: A, projectRoot: join(s.root, 'not-a-repo'), lines: session(A) },
+      { id: A, projectRoot: join(s.root, 'not-a-repo'), stem: 'session-2026-06-01T10-00-1-aaaa1111', lines: [geminiHead(A, { startTime: '2026-06-01T10:00:30.000Z' }), prompt(31, 'after the reset'), say(32, 'done')] },
+    ]);
+    const runtime = { ...s.runtime, sourceRoots: { gemini: home } };
+    expect(await deposit(runtime, options(['gemini']))).toMatchObject({ sessions: 2, unchanged: 0 });
+    const store = await loadStore(s.storeDir);
+    expect(store.sessions.map((entry) => entry.session).sort()).toEqual([`gemini-${A}`, `gemini-${A}-session-2026-06-01T10-00-1-aaaa1111`]);
+    expect(await deposit(runtime, options(['gemini']))).toMatchObject({ sessions: 0, unchanged: 2 });
+    expect(trackedKeys(s.storeDir)).toEqual([`gemini/${A}`, `gemini/${A}-session-2026-06-01T10-00-1-aaaa1111`]);
+  });
+
   it('reads a Gemini call by its own table and frames its session as Gemini, with the failed call an error', async () => {
     const s = staged();
     await deposit(s.runtime, options(['gemini']));

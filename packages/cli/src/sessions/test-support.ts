@@ -294,6 +294,8 @@ export interface GeminiFixture {
   parent?: string;
   /** Written as a legacy `.json` file holding one pretty-printed object. */
   legacy?: boolean;
+  /** The file's name without its extension, when it is not `session-2026-06-01T10-00-<first 8>`: a second chat file under one session id. */
+  stem?: string;
 }
 
 /** A Gemini home holding the given sessions under `.gemini/tmp/<slug>/chats/`; returns the `.gemini` folder. */
@@ -305,8 +307,8 @@ export const stageGemini = (root: string, files: readonly GeminiFixture[]): stri
     mkdirSync(dir, { recursive: true });
     if (file.projectRoot !== null) writeFileSync(join(slug, '.project_root'), file.projectRoot ?? join(root, 'not-a-repo'));
     const text = typeof file.lines === 'string' ? file.lines : `${file.lines.map((line) => JSON.stringify(line)).join('\n')}\n`;
-    if (file.legacy === true) writeFileSync(join(dir, `session-2026-06-01T10-00-${file.id.slice(0, 8)}.json`), text);
-    else writeFileSync(join(dir, file.parent === undefined ? `session-2026-06-01T10-00-${file.id.slice(0, 8)}.jsonl` : `${file.id}.jsonl`), text);
+    const stem = file.stem ?? (file.parent === undefined ? `session-2026-06-01T10-00-${file.id.slice(0, 8)}` : file.id);
+    writeFileSync(join(dir, `${stem}${file.legacy === true ? '.json' : '.jsonl'}`), text);
   }
   return gemini;
 };
