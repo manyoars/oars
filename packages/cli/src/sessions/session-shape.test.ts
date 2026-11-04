@@ -327,6 +327,7 @@ describe('fix round 1', () => {
     const plain = codex(rollout(null));
     const declared = codex(rollout([{ type: 'function', name: 'lookup' }]));
     expect(declared.tsFirst).toBe(plain.tsFirst);
+    expect(plain.tsLast).toBe(at(500));
     expect(declared.tsLast).toBe(plain.tsLast);
     expect(declared.funnel).toEqual({ offered: ['lookup'] });
   });
