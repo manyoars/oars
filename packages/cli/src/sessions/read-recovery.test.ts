@@ -58,10 +58,10 @@ describe('recovery', () => {
     expect(deriveRecovery({ pool, store: { ...failed, errors: [error('s1', SIG, { ts: '2026-10-01T10:00:00.000Z', prompt: null })] } })).toEqual([]);
   });
 
-  it('keeps a signature whose error has no timestamp, on its prompt frame day or on no day at all', () => {
+  it('keeps a signature whose error has no timestamp on its prompt frame day, and finds no cell for a frame of no day: a day cell exists only for a known day', () => {
     expect(recovery({ ...failed, errors: [error('s1', SIG, { ts: null })] })).toHaveLength(1);
     const undated = store({ sessions: [session('s1')], prompts: [prompt('s1', 0, { frame: frame({ day: null }) })], tools: [tool('s1', 0, 'Read', { status: 'error' })] });
-    expect(recovery({ ...undated, errors: [error('s1', SIG, { ts: null })] })).toHaveLength(1);
+    expect(recovery({ ...undated, errors: [error('s1', SIG, { ts: null })] })).toEqual([]);
   });
 
   it('finds the call of an error past midnight on its prompt frame day, and keeps the error its own day', () => {

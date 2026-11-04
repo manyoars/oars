@@ -1,6 +1,6 @@
 // Version boundary (spec Section 6, order 2): what moved between two neighboring harness version buckets, from order 1 change reads. Only moves past the screen exist, each
 // with how many comparisons it was screened among. A step counts as independent in the inputs and steps cluster in sessions, so the intervals run narrow, which is one reason
-// the screen runs wide. Confounders it does not remove: date (a later bucket is mostly later days, and `fromLastDay` and `toFirstDay` show any overlap), effort, role by brief,
+// the screen runs wide. Confounders it does not remove: date (a later bucket is mostly later days, and `fromLastWeek` and `toFirstWeek` show any overlap), effort, role by brief,
 // rule commits, and class drift. A model version boundary is not readable here: a cell holds a model's name and no version of it (`read-readable.ts`).
 import { UNKNOWN } from './cells.js';
 import { candidateOf, differenceOf, estimateOf, screen, trialsOf, TRIALS_FLOOR, type Candidate, type DeriveRelation, type Estimate } from './read-order.js';
@@ -12,8 +12,8 @@ export interface Bucket {
   name: string;
   /** Settled steps in the bucket. */
   of: number;
-  firstDay: string | null;
-  lastDay: string | null;
+  firstWeek: string | null;
+  lastWeek: string | null;
   reads: ReadonlyMap<string, Read>;
   /** A read that states `of`, cited when the tool being compared has no read here. */
   witness: Read;
@@ -25,9 +25,9 @@ export interface Boundary {
   to: Bucket;
 }
 
-const dayOf = (read: Read, field: 'firstDay' | 'lastDay'): string[] => {
-  const day = read.value[field];
-  return typeof day === 'string' ? [day] : [];
+const weekOf = (read: Read, field: 'firstWeek' | 'lastWeek'): string[] => {
+  const week = read.value[field];
+  return typeof week === 'string' ? [week] : [];
 };
 
 export const toolKey = (read: Read): string => `${read.slice.level ?? UNKNOWN}\n${read.slice.motif ?? UNKNOWN}`;
@@ -35,8 +35,8 @@ export const toolKey = (read: Read): string => `${read.slice.level ?? UNKNOWN}\n
 const bucketOf = (name: string, reads: readonly [Read, ...Read[]]): Bucket => ({
   name,
   of: trialsOf(reads[0]),
-  firstDay: firstDayOf(reads.flatMap((read) => dayOf(read, 'firstDay'))),
-  lastDay: lastDayOf(reads.flatMap((read) => dayOf(read, 'lastDay'))),
+  firstWeek: firstDayOf(reads.flatMap((read) => weekOf(read, 'firstWeek'))),
+  lastWeek: lastDayOf(reads.flatMap((read) => weekOf(read, 'lastWeek'))),
   reads: new Map(reads.map((read) => [toolKey(read), read])),
   witness: reads[0],
 });
@@ -80,8 +80,8 @@ const movement = (boundary: Boundary, move: Estimate, before: number, after: num
   before,
   after,
   move: move.value,
-  fromLastDay: boundary.from.lastDay,
-  toFirstDay: boundary.to.firstDay,
+  fromLastWeek: boundary.from.lastWeek,
+  toFirstWeek: boundary.to.firstWeek,
 });
 
 const shareCandidate = (boundary: Boundary, key: string): Candidate | undefined => {

@@ -18,11 +18,11 @@ export const deriveChange: DeriveFamily = ({ pool }) => {
     if (first === undefined || n === 0) return [];
     const of = steps.get(scopeOf(first.cell)) ?? 0;
     const { harness, harnessBucket } = bucketFields(first.cell.frameBucket);
-    const days = cells.map((cell) => cell.day).filter((day) => day !== UNKNOWN);
+    const weeks = cells.map((cell) => cell.day).filter((week) => week !== UNKNOWN);
     return [
       body('change', cells, {
         slice: { motif: motifName(first.motif), level: first.motif.level, harness, harnessBucket },
-        value: { share: rate(n, of), of, failureRate: rate(total(cells, (cell) => cell.failed), n), firstDay: firstDayOf(days), lastDay: lastDayOf(days) },
+        value: { share: rate(n, of), of, failureRate: rate(total(cells, (cell) => cell.failed), n), firstWeek: firstDayOf(weeks), lastWeek: lastDayOf(weeks) },
         n,
         interval: wilson(n, of),
       }),
