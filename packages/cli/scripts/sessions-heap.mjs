@@ -160,14 +160,16 @@ const sizeMb = (path) => {
  * @param {number} heapMb
  * @param {string[]} args
  * @param {string} [preload]
+ * @param {boolean} [recapture]
  *
  * Runs the built CLI under `--max-old-space-size=<heapMb>` (default heap when 0). With `--require` of a preload that prints the child's
- * peak RSS on exit, the figure reaches `peakMb`.
+ * peak RSS on exit, the figure reaches `peakMb`. With `recapture`, every file in `state.json` is first marked as captured by an older
+ * version, as a CAPTURE_VERSION bump does, so a deposit reads and captures every transcript instead of skipping them all.
  */
-const runCli = (dirs, heapMb, args, preload) => {
+const runCli = (dirs, heapMb, args, preload, recapture = false) => {
   assertScratch(dirs);
-  // Each measured run starts from the superseded log: a deposit compacts it, and a later run would see a clean one.
-  if (existsSync(join(dirs.root, 'clean.jsonl'))) supersede(dirs);
+  // Each measured run starts from the stored form: a deposit compacts the log and moves the state, and a later run would see a clean one.
+  if (existsSync(join(dirs.root, 'clean.jsonl'))) restore(dirs, recapture);
   const started = Date.now();
   const flags = [...(heapMb === 0 ? [] : [`--max-old-space-size=${String(heapMb)}`]), ...(preload === undefined ? [] : ['--require', preload])];
   const child = spawnSync(process.execPath, [...flags, bin, ...args], { env: envOf(dirs), encoding: 'utf8', maxBuffer: 64 << 20, cwd: dirs.root });
@@ -177,6 +179,10 @@ const runCli = (dirs, heapMb, args, preload) => {
 
 const depositArgs = ['sessions', 'deposit', '--allow', PROJECT];
 const verifyArgs = ['sessions', 'verify'];
+// The three measured runs: a deposit that skips every file (the t784 run: 12 captured, 6,757 unchanged), a deposit that captures every transcript
+// (a CAPTURE_VERSION bump), and verify.
+/** @type {[string, string[], boolean][]} */
+const runs = [['deposit no-op', depositArgs, false], ['deposit recapture', depositArgs, true], ['verify', verifyArgs, false]];
 
 /** @param {string} label */
 const scratch = (label) => {
@@ -195,7 +201,8 @@ const build = (dirs, sessions) => {
   const made = runCli(dirs, 8192, depositArgs);
   if (made.code !== 0) throw new Error(`building the store failed (exit ${String(made.code)}): ${made.stderr.slice(-600)}`);
   copyFileSync(join(dirs.store, 'observations.jsonl'), join(dirs.root, 'clean.jsonl'));
-  supersede(dirs);
+  copyFileSync(join(dirs.store, 'state.json'), join(dirs.root, 'clean-state.json'));
+  restore(dirs, false);
   return sizeMb(join(dirs.store, 'observations.jsonl'));
 };
 
@@ -221,6 +228,25 @@ const supersede = (dirs) => {
   writeFileSync(file, `${log}${older}${NL}`);
 };
 
+/**
+ * Puts the store back to the form a measured run starts from. A no-op run (recapture false) sees the log with every record's older copy
+ * appended and `state.json` as deposited, so a deposit skips every file. A recapture run sees the clean log and a `state.json` whose
+ * files all carry the previous capture version, so a deposit reads every transcript and appends a new rev of each (the log then holds
+ * every record twice until the compaction, as in t784's recapture).
+ * @param {Dirs} dirs
+ * @param {boolean} recapture
+ */
+const restore = (dirs, recapture) => {
+  const state = JSON.parse(readFileSync(join(dirs.root, 'clean-state.json'), 'utf8'));
+  if (recapture) {
+    for (const entry of Object.values(state.files)) entry.v = String(Number(entry.v) - 1);
+    copyFileSync(join(dirs.root, 'clean.jsonl'), join(dirs.store, 'observations.jsonl'));
+  } else {
+    supersede(dirs);
+  }
+  writeFileSync(join(dirs.store, 'state.json'), JSON.stringify(state));
+};
+
 const peakPreload = () => {
   const file = join(mkdtempSync(join(tmpdir(), 'oars-heap-preload-')), 'peak.cjs');
   writeFileSync(file, "process.on('exit', () => { process.stderr.write(`\\nPEAK_RSS_MB ${String(Math.round(process.resourceUsage().maxRSS / 1024))}\\n`); });\n");
@@ -238,10 +264,8 @@ if (command === 'check') {
     console.log(`built ${String(sessions)} sessions: log ${build(dirs, sessions).toFixed(1)} MB`);
     let failed = false;
     // `verify` may exit 4 under --strict only; plain verify exits 0, so any non-zero exit or out-of-memory is a failure.
-    /** @type {[string, string[]][]} */
-    const commands = [['deposit', depositArgs], ['verify', verifyArgs]];
-    for (const [name, args] of commands) {
-      const ran = runCli(dirs, heap, args);
+    for (const [name, args, recapture] of runs) {
+      const ran = runCli(dirs, heap, args, undefined, recapture);
       const ok = ran.code === 0 && !ran.oom;
       console.log(`${ok ? 'PASS' : 'FAIL'}  ${name} under --max-old-space-size=${String(heap)}: exit ${String(ran.code)}, ${ran.seconds.toFixed(1)} s${ok ? '' : `\n${ran.stderr.slice(0, 300)}`}`);
       failed ||= !ok;
@@ -258,14 +282,16 @@ log ${build(dirs, Number(arg('sessions', '5'))).toFixed(1)} MB`);
 } else if (command === 'table') {
   const heap = Number(arg('heap', '4096'));
   const preload = peakPreload();
-  console.log('sessions | log MB | deposit peak RSS MB | verify peak RSS MB');
+  console.log('sessions | log MB | deposit no-op peak RSS MB | deposit recapture peak RSS MB | verify peak RSS MB');
   for (const sessions of arg('sizes', '400,800').split(',').map(Number)) {
     const dirs = scratch('table');
     try {
       const log = build(dirs, sessions);
-      const deposit = runCli(dirs, heap, depositArgs, preload);
-      const verify = runCli(dirs, heap, verifyArgs, preload);
-      console.log(`${String(sessions)} | ${log.toFixed(0)} | ${String(deposit.peakMb)} (exit ${String(deposit.code)}, ${deposit.seconds.toFixed(0)} s) | ${String(verify.peakMb)} (exit ${String(verify.code)}, ${verify.seconds.toFixed(0)} s)`);
+      const cells = runs.map(([, args, recapture]) => {
+        const ran = runCli(dirs, heap, args, preload, recapture);
+        return `${String(ran.peakMb)} (exit ${String(ran.code)}, ${ran.seconds.toFixed(0)} s)`;
+      });
+      console.log(`${String(sessions)} | ${log.toFixed(0)} | ${cells.join(' | ')}`);
     } finally {
       rmSync(dirs.root, { recursive: true, force: true });
     }
@@ -277,19 +303,22 @@ log ${build(dirs, Number(arg('sessions', '5'))).toFixed(1)} MB`);
     const dirs = scratch('minheap');
     try {
       const log = build(dirs, sessions);
-      /** @param {string[]} args */
-      const least = (args) => {
+      /**
+       * @param {string[]} args
+       * @param {boolean} recapture
+       */
+      const least = (args, recapture) => {
         let low = 24;
         let high = 6144;
         while (high - low > 8) {
           const mid = Math.floor((low + high) / 16) * 8;
-          const ran = runCli(dirs, mid, args);
+          const ran = runCli(dirs, mid, args, undefined, recapture);
           if (ran.code === 0 && !ran.oom) high = mid;
           else low = mid;
         }
         return high;
       };
-      console.log(`${String(sessions)} sessions, log ${log.toFixed(0)} MB: deposit ${String(least(depositArgs))} MB, verify ${String(least(verifyArgs))} MB`);
+      console.log(`${String(sessions)} sessions, log ${log.toFixed(0)} MB: ${runs.map(([name, args, recapture]) => `${name} ${String(least(args, recapture))} MB`).join(', ')}`);
     } finally {
       rmSync(dirs.root, { recursive: true, force: true });
     }
