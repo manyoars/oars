@@ -36,7 +36,7 @@ interface HookSpec {
 
 const SPECS: readonly HookSpec[] = [
   { event: 'SessionStart', arg: 'session-start', timeout: 5 },
-  // Every tool (no matcher): the push is gated by the index's fit floors and lift, not by the tool's name, so a sharp read on any tool can fire. The cost is one node start per call (t791).
+  // Every tool (no matcher): the push is gated by the index's fit floors and lift, not by the tool's name, so a sharp read on any tool can fire. The cost is one node start per call.
   { event: 'PreToolUse', arg: 'pre-tool', timeout: 5 },
   // A failed Bash call arrives as PostToolUseFailure with `error` = "Exit code N ...": PostToolUse itself fires on success only.
   { event: 'PostToolUseFailure', arg: 'post-tool', timeout: 5, matcher: 'Bash|PowerShell' },

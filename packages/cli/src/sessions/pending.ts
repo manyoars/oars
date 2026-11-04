@@ -1,4 +1,4 @@
-// The pending list (t832, register row A55): the sessions a Stop hook deposit could not take because another deposit held the store lock.
+// The pending list (register row A55): the sessions a Stop hook deposit could not take because another deposit held the store lock.
 //
 // One small file per deferral under `<store>/pending/`, named `<hash of the transcript path>.<uuid>.json` and holding `{"transcript": "<path>"}`:
 // what a later deposit needs to find the transcript, and nothing else (no prompt text, no id, no project name beyond the path). One file per

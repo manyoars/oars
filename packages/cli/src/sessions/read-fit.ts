@@ -1,4 +1,4 @@
-// Fit (t752, rank 2): how often a tool fails on this frame, by harness version bucket, model, and effort. Confounders it does not remove: a failure is not a
+// Fit (rank 2): how often a tool fails on this frame, by harness version bucket, model, and effort. Confounders it does not remove: a failure is not a
 // misfit, red tests can be the method, and prompt class is not adjusted for.
 import { bucketFields } from './cells.js';
 import { motifName } from './motif.js';

@@ -1,4 +1,4 @@
-// The D11 projection (pool vocabulary spec Sections 1.3 and 2, t811): which names in a P field may pool as themselves. A pure function of the pinned
+// The D11 projection (pool vocabulary spec Sections 1.3 and 2): which names in a P field may pool as themselves. A pure function of the pinned
 // `Vocabulary` and the value, computed at deposit and never written to a file. Every value that leaves here is either a member of a pinned list
 // or the word `private`: the output is built from list members, never from the input text, so a private name cannot be copied through by a
 // parsing mistake. A form the parser cannot read projects to `private`.

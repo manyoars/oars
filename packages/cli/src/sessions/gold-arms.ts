@@ -1,4 +1,4 @@
-// The label arms beside the gold set (t748): what the acting session said, and what fresh single-turn readers say, each kept apart in the sidecar and
+// The label arms beside the gold set: what the acting session said, and what fresh single-turn readers say, each kept apart in the sidecar and
 // never shown in the gold file. An arm is an observation to score against human judgments, never a label by itself (A31). The readers run through the
 // operator's own `claude` login, so a run bills the subscription and sends only redacted text; the guards below refuse anything else rather than spend.
 import { spawn } from 'node:child_process';

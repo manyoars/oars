@@ -1,4 +1,4 @@
--- The generation follows the stored cells (t813), not the ledger. Expiry deletes `deposits` rows and changes no served cell, so a trigger there would move the ETag and answer a conditional read with a spurious 200.
+-- The generation follows the stored cells, not the ledger. Expiry deletes `deposits` rows and changes no served cell, so a trigger there would move the ETag and answer a conditional read with a spurious 200.
 DROP TRIGGER deposits_generation_insert;
 DROP TRIGGER deposits_generation_delete;
 DROP TRIGGER deposits_generation_update;

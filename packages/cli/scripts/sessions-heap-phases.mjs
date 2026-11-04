@@ -1,10 +1,10 @@
-// The phases of `sessions deposit` and `sessions verify`, one process, one phase at a time (t808). Run through `sessions-heap.mjs phases`,
+// The phases of `sessions deposit` and `sessions verify`, one process, one phase at a time. Run through `sessions-heap.mjs phases`,
 // which sets the scratch environment and starts this with --expose-gc. Arguments: the store folder, the Claude config folder, and the shape
 // of the run: `noop` (a deposit that skips every file, then verify) or `recapture` (a deposit that captures every transcript).
 // For each phase: the heap in use before it (after a full collection), the largest heap sampled while it ran, and what it keeps after a full collection.
 // The sample is taken by a timer every 2 ms, which cannot fire during synchronous work, so a phase that is one synchronous call (marked `*`) shows
 // its heap at its end, not its peak, and no number here establishes which phase sets a command's peak: the figures show what is kept, and where
-// the heap is large when a phase ends. (--trace-gc under a small cap would show true peaks; t808 did not take that step.)
+// the heap is large when a phase ends. (--trace-gc under a small cap would show true peaks; no run here takes that step.)
 import { PassThrough } from 'node:stream';
 import { join, resolve, sep } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -65,7 +65,7 @@ console.log(`${'phase'.padEnd(52)} ${'before'.padStart(6)} ${'sampled'.padStart(
 
 if (shape === 'recapture') {
   // The whole run in one row: the scan, a capture of every transcript (one at a time), the compaction, and the refresh. It is not split into
-  // capture, compaction, and refresh, so no figure here says which of them sets the recapture's heap (t808 left that open).
+  // capture, compaction, and refresh, so no figure here says which of them sets the recapture's heap.
   /** @type {DepositResult} */
   const deposited = await phase('deposit: recapture, whole run (scan+capture+compact+refresh)', () => store.deposit(runtime, { allow: ['bench-project'], redactDomains: [], now: Date.now }));
   // A deposit that captured nothing is a no-op, and its row would print as a measured recapture (the failure `sessions-heap.mjs` closes in check, table, and minheap).

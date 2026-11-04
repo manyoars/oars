@@ -1,4 +1,4 @@
-// Reading the pool for a bundle (t813): the stored `index` cells of one harness version and the strata, three statements whose rows grow with the cells and never with deposits. The
+// Reading the pool for a bundle: the stored `index` cells of one harness version and the strata, three statements whose rows grow with the cells and never with deposits. The
 // ledger plane (`deposits`) and the `contributor` records are not read here, so expiry on them cannot change what is served.
 import { harnessBucket, type Cell } from '../../cli/src/sessions/cells.js';
 import type { Motif, MotifLevel, WindowStep } from '../../cli/src/sessions/motif.js';

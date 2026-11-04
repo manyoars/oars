@@ -80,7 +80,7 @@ const addedLines = (/** @type {string} */ sha) => {
 
 /** @param {string} sha @param {NodeJS.ProcessEnv} env */
 export const main = (sha, env) => {
-  // t763 resolves its term file beside the projects folder, which honors CLAUDE_CONFIG_DIR.
+  // The check resolves its term file beside the projects folder, which honors CLAUDE_CONFIG_DIR.
   const base = env.CLAUDE_CONFIG_DIR || join(homedir(), '.claude');
   const lists = [
     loadTerms('OARS_EXCLUSION_TERMS', env.OARS_EXCLUSION_TERMS || join(base, 'session-commons', 'exclusion-terms.txt')),

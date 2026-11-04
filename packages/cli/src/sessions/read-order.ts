@@ -7,7 +7,7 @@ import { round, Z_95, type ReadBody } from './read-support.js';
 /** A family over reads: it reads every read of the stages before it. */
 export type DeriveRelation = (reads: readonly Read[]) => ReadBody[];
 
-/** The fewest trials a rate may rest on and still be compared: t752's k. */
+/** The fewest trials a rate may rest on and still be compared. */
 export const TRIALS_FLOOR = 30;
 
 /** The smallest move worth stating. Large samples clear zero on moves no one would act on, so a move has to be large as well as unlikely. */

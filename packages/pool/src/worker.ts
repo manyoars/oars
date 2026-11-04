@@ -1,4 +1,4 @@
-// The pool server (t758): a Workers fetch handler over one D1 database. Deposits take closed-vocabulary skeletons only, and a refusal names the field.
+// The pool server: a Workers fetch handler over one D1 database. Deposits take closed-vocabulary skeletons only, and a refusal names the field.
 import { parseSkeleton, type SessionSkeleton } from '../../cli/src/sessions/pool-wire.js';
 import type { Frame } from '../../cli/src/sessions/schema.js';
 import { batchCounts, batchTier } from './access.js';
