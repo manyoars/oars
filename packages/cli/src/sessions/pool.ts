@@ -123,9 +123,8 @@ export const refreshPool = async (storeDir: string, store: Store): Promise<{ poo
 
 const POOL_FAILED = 'oars: the read pool was not built, and answers keep their stand-ins: ';
 
-const unbuilt = (error: unknown): undefined => {
+const unbuilt = (error: unknown): void => {
   process.stderr.write(`${POOL_FAILED}${error instanceof Error ? error.message : String(error)}\n`);
-  return undefined;
 };
 
 /** The pool a deposit's index step reads. It answers without one (spec 2.7): a pool that cannot be read or written costs only the stored read IDs, whose answers keep their stand-ins, and one line on stderr says so. */
@@ -133,7 +132,8 @@ export const currentPool = async (storeDir: string, store: Store): Promise<{ poo
   try {
     return await refreshPool(storeDir, store);
   } catch (error) {
-    return unbuilt(error);
+    unbuilt(error);
+    return undefined;
   }
 };
 
@@ -169,6 +169,7 @@ export const servedPool = async (storeDir: string, store: Store): Promise<{ pool
   try {
     return (await storedPool(storeDir)) ?? (await refreshPool(storeDir, store));
   } catch (error) {
-    return unbuilt(error);
+    unbuilt(error);
+    return undefined;
   }
 };

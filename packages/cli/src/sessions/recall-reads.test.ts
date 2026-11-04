@@ -222,7 +222,7 @@ describe('pull', () => {
 });
 
 describe('the text a recall records is redacted before it is stored', () => {
-  const SECRET = `gh${'p'}_${'a1B2c3D4e5F6g7H8i9J0k1L2'}`;
+  const SECRET = ['gh', 'p_', 'a1B2c3D4e5F6g7H8i9J0k1L2'].join('');
   const context = { sid: null, now: NOW, frame: null, redactDomains: ['example.com'] } as const;
 
   it('masks a secret pattern and an organization domain in every form that carries text', () => {
