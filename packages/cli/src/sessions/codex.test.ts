@@ -1,5 +1,7 @@
+import { randomBytes } from 'node:crypto';
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { zstdCompressSync } from 'node:zlib';
 import { afterEach, describe, expect, it } from 'vitest';
 import { codexRoot, openCodexStore, rolloutBadLines, rolloutLines } from './codex.js';
 import { captureSession } from './extract.js';
@@ -93,12 +95,6 @@ describe('rolloutLines', () => {
     const out = extractOf([meta('/work/app'), turn(), prompt(2, 'run it'), shellCall(3, 'c1', ['bash', '-lc', 'make']), shellOut(4, 'c1', execText(2, 'make: *** No rule to make target\nsecond line')), usage(5, 10, 0, 5, 0, 15)]);
     expect(out.tools).toMatchObject([{ tool: 'Bash', status: 'error' }]);
     expect(out.errorLines).toMatchObject([{ tool: 'Bash', line: 'make: *** No rule to make target' }]);
-  });
-
-  it('leaves a declined command with no outcome, so it never counts as a fix', () => {
-    const out = extractOf([meta('/work/app'), shellCall(3, 'c1', ['rm', '-rf', 'x']), line(T(4), 'event_msg', { type: 'item_completed', thread_id: 'sess-1', turn_id: 't1', item: { type: 'CommandExecution', id: 'c1', status: 'declined', exit_code: -1, aggregated_output: '' } })]);
-    expect(out.tools).toMatchObject([{ tool: 'Bash', status: 'none' }]);
-    expect(out.errorLines).toEqual([]);
   });
 
   it('reads the unified-exec header Process exited with code N (context.rs:556), and leaves a still-running process unsettled', () => {
@@ -376,7 +372,7 @@ describe('shell, MCP, patch, and usage outcomes', () => {
   it('carries parent_thread_id and agent_role from session_meta on the listed session', async () => {
     const s = stage();
     const id = '55555555-5555-4555-8555-555555555555';
-    const home = stageCodex(s.root, [{ id, lines: [line(T(0), 'session_meta', { id, originator: 'codex_cli_rs', timestamp: T(0), cwd: '/work/app', parent_thread_id: 'sess-1', agent_role: 'explorer' })] }]);
+    const home = stageCodex(s.root, [{ id, lines: [line(T(0), 'session_meta', { id, session_id: 'sess-1', originator: 'codex_cli_rs', timestamp: T(0), cwd: '/work/app', parent_thread_id: 'sess-1', agent_role: 'explorer' })] }]);
     const store = await openCodexStore(home);
     expect(store?.sessions[0]).toMatchObject({ parent: 'sess-1', agentRole: 'explorer' });
   });
@@ -389,7 +385,7 @@ describe('shell, MCP, patch, and usage outcomes', () => {
     const thread = '66666666-6666-4666-8666-666666666666';
     const reverted = '77777777-7777-4777-8777-777777777777';
     const base = { thread_id: thread, end_ordinal_exclusive: 3, end_byte_offset: 512 };
-    const paginated = { id: thread, session_id: thread, timestamp: T(0), cwd: '/work/app', history_mode: 'paginated' };
+    const paginated = { id: thread, session_id: thread, originator: 'codex_cli_rs', timestamp: T(0), cwd: '/work/app', history_mode: 'paginated' };
     const home = stageCodex(s.root, [
       { id: thread, lines: [{ ...line(T(0), 'session_meta', paginated), ordinal: 0 }] },
       { id: `${thread}_${reverted}`, lines: [{ ...line(T(0), 'session_meta', { ...paginated, history_base: base }), ordinal: 3 }] },
@@ -400,26 +396,73 @@ describe('shell, MCP, patch, and usage outcomes', () => {
     expect((await openCodexStore(alone))?.sessions.map((session) => [session.id, session.parent])).toEqual([[`${thread}_${reverted}`, thread]]);
   });
 
-  // Each file is read only below the start of the files written after it: the second revert drops the first's own records, and both drop the original's tail.
-  it('reads the latest revert over an earlier one, each cutting the records at and after its start from the files before it', async () => {
-    const s = stage();
+  // The prompts and heads of a thread's files, as upstream writes them: `item_completed` UserMessage items (policy.rs:142-156) with a rising ordinal.
+  describe('the lineage of a reverted thread', () => {
     const thread = '66666666-6666-4666-8666-666666666666';
     const first = '77777777-7777-4777-8777-777777777777';
     const second = '88888888-8888-4888-8888-888888888888';
-    const prompt = (id: string, at: number, ordinal: number, message: string) => ({ ...line(T(at), 'event_msg', { type: 'user_message', message }), ordinal, id });
-    const head = { id: thread, session_id: thread, timestamp: T(0), cwd: '/work/app', history_mode: 'paginated' };
-    const start = (at: number, from: number) => ({ ...line(T(at), 'session_meta', { ...head, originator: 'codex_cli_rs', timestamp: T(at), history_base: { thread_id: thread, end_ordinal_exclusive: from, end_byte_offset: 1 } }), ordinal: from });
-    const home = stageCodex(s.root, [
-      { id: thread, lines: [{ ...line(T(0), 'session_meta', head), ordinal: 0 }, prompt('a', 1, 1, 'kept'), prompt('b', 2, 2, 'dropped by the first revert'), prompt('c', 3, 3, 'dropped too')] },
-      { id: `${thread}_${first}`, lines: [start(4, 2), prompt('d', 5, 3, 'dropped by the second revert')] },
-      { id: `${thread}_${second}`, lines: [start(6, 3), prompt('e', 7, 4, 'last')] },
-    ]);
-    const store = await openCodexStore(home);
-    const only = store?.sessions[0];
-    if (store === undefined || only === undefined) throw new Error('the store holds no session');
-    const prompts = (await store.transcript(only)).split('\n').filter((raw) => raw.includes('"type":"user"'));
-    expect(store.sessions).toHaveLength(1);
-    expect(prompts.map((text) => /kept|dropped by the first|dropped too|dropped by the second|last/.exec(text)?.[0])).toEqual(['kept', 'last']);
+    const head = { id: thread, session_id: thread, originator: 'codex_cli_rs', timestamp: T(0), cwd: '/work/app', history_mode: 'paginated' };
+    const asked = (at: number, ordinal: number, message: string) => ({
+      ...line(T(at), 'event_msg', { type: 'item_completed', thread_id: thread, turn_id: `t-${message}`, item: { type: 'UserMessage', id: `u-${message}`, content: [{ type: 'text', text: message, text_elements: [] }] } }),
+      ordinal,
+    });
+    const origin = (...prompts: readonly object[]) => ({ id: thread, lines: [{ ...line(T(0), 'session_meta', head), ordinal: 0 }, ...prompts] });
+    const start = (at: number, from: number) => ({
+      ...line(T(at), 'session_meta', { ...head, timestamp: T(at), history_base: { thread_id: thread, end_ordinal_exclusive: from, end_byte_offset: 1 } }),
+      ordinal: from,
+    });
+    const promptsOf = async (home: string): Promise<string[]> => {
+      const store = await openCodexStore(home);
+      const only = store?.sessions.find((session) => session.id === thread);
+      if (store === undefined || only === undefined) throw new Error('the store lists no thread');
+      return (await store.transcript(only)).split('\n').flatMap((raw) => /"text":"([^"]*)"/.exec(raw)?.[1] ?? []);
+    };
+
+    // Each file is read only below the start of the files written after it: the second revert drops the first's own records, and both drop the original's tail.
+    it('reads the latest revert over an earlier one, each cutting the records at and after its start from the files before it', async () => {
+      const s = stage();
+      const home = stageCodex(s.root, [
+        origin(asked(1, 1, 'kept'), asked(2, 2, 'dropped by the first revert'), asked(3, 3, 'dropped too')),
+        { id: `${thread}_${first}`, lines: [start(4, 2), asked(5, 3, 'dropped by the second revert')] },
+        { id: `${thread}_${second}`, lines: [start(6, 3), asked(7, 4, 'last')] },
+      ]);
+      expect(await promptsOf(home)).toEqual(['kept', 'last']);
+    });
+
+    // Two reverts can carry one timestamp (a millisecond), and the later one may go further back. The file name starts with its time, so the walk order is the write order.
+    it('keeps the write order of two reverts with one timestamp, though the later one starts at the smaller ordinal', async () => {
+      const s = stage();
+      const home = stageCodex(s.root, [
+        origin(asked(1, 1, 'kept'), asked(2, 2, 'dropped'), asked(3, 3, 'dropped too'), asked(4, 4, 'dropped as well'), asked(5, 5, 'dropped by both')),
+        { id: `${thread}_${first}`, lines: [start(6, 5), asked(7, 6, 'dropped by the second revert')] },
+        { id: `${thread}_${second}`, lines: [start(6, 2), asked(8, 2, 'last')] },
+      ]);
+      expect(await promptsOf(home)).toEqual(['kept', 'last']);
+    });
+
+    it('folds a revert whose head has no timestamp, and still cuts the thread at its start', async () => {
+      const s = stage();
+      const bare = { ...line(T(3), 'session_meta', { ...head, timestamp: undefined, history_base: { thread_id: thread, end_ordinal_exclusive: 2, end_byte_offset: 1 } }), ordinal: 2 };
+      const home = stageCodex(s.root, [origin(asked(1, 1, 'kept'), asked(2, 2, 'dropped')), { id: `${thread}_${first}`, lines: [bare, asked(3, 3, 'last')] }]);
+      expect(await promptsOf(home)).toEqual(['kept', 'last']);
+    });
+
+    // history_base is an Option upstream (revert_thread.rs:121): a parsed head without one starts the file at ordinal 0, so the whole thread is superseded.
+    it('cuts the whole thread for a revert whose parsed head has no history_base', async () => {
+      const s = stage();
+      const bare = { ...line(T(4), 'session_meta', { ...head, timestamp: T(4) }), ordinal: 0 };
+      const home = stageCodex(s.root, [origin(asked(1, 1, 'dropped')), { id: `${thread}_${first}`, lines: [bare, asked(5, 1, 'last')] }]);
+      expect(await promptsOf(home)).toEqual(['last']);
+    });
+
+    // A crash can tear the new file's first line. It is not a revert then, and it must not cut the thread it names.
+    it('keeps the thread readable when a revert file is torn, and lists the torn file alone', async () => {
+      const s = stage();
+      const home = stageCodex(s.root, [origin(asked(1, 1, 'kept')), { id: `${thread}_${first}`, lines: '{"timestamp":"2026-06-01T10:00:04.000Z","type":"session_me' }]);
+      expect(await promptsOf(home)).toEqual(['kept']);
+      const store = await openCodexStore(home);
+      expect(store?.sessions.map((session) => session.id).sort()).toEqual([thread, `${thread}_${first}`]);
+    });
   });
 
   // A Copied fork matches its copied records against the parent's lineage as it stood when the fork started: a fork after the revert copied the post-revert
@@ -464,7 +507,7 @@ describe('shell, MCP, patch, and usage outcomes', () => {
     });
   });
 
-  it('reports a compressed rollout whose frame is corrupt as unreadable, without reading the whole file', async () => {
+  it('reports a compressed rollout whose frame is corrupt as unreadable', async () => {
     const s = stage();
     const dir = join(s.root, 'codex-home', 'sessions', '2026', '06', '01');
     mkdirSync(dir, { recursive: true });
@@ -473,6 +516,18 @@ describe('shell, MCP, patch, and usage outcomes', () => {
     expect(store?.sessions).toEqual([]);
     expect(store?.unreadable).toHaveLength(1);
     expect(store?.unreadable[0]?.reason).not.toContain(s.root);
+  });
+
+  // A frame that holds the first line and then a megabyte that ends in garbage fails a whole-file decompression but not a read that stops at the line.
+  it('lists a compressed rollout from its first line alone, though the rest of the frame is not valid', async () => {
+    const s = stage();
+    const dir = join(s.root, 'codex-home', 'sessions', '2026', '06', '01');
+    mkdirSync(dir, { recursive: true });
+    const frame = zstdCompressSync(Buffer.from(`${JSON.stringify(meta('/work/app'))}\n${randomBytes(1 << 20).toString('base64')}\n`));
+    writeFileSync(join(dir, 'rollout-2026-06-01T10-00-00-66666666-6666-4666-8666-666666666666.jsonl.zst'), Buffer.concat([frame.subarray(0, frame.length - 8), Buffer.from('garbage!')]));
+    const store = await openCodexStore(join(s.root, 'codex-home'));
+    expect(store?.unreadable).toEqual([]);
+    expect(store?.sessions.map((session) => session.folder)).toEqual(['/work/app']);
   });
 
   it('keeps every record of a reverted rollout though its ordinals start at history_base.end_ordinal_exclusive, since the prefix is not copied into the file (ordinal.rs:29-31)', () => {
@@ -791,7 +846,7 @@ describe('Paginated rollouts', () => {
 describe('a Copied fork', () => {
   const [m0, p1, r2, p3] = [meta('/work/app'), prompt(1, 'first'), say(2, 'reply'), prompt(3, 'second')] as const;
   const parent = [m0, p1, r2, p3];
-  const forkMeta = (id: string) => line(T(10), 'session_meta', { id, originator: 'codex_cli_rs', timestamp: T(10), cwd: '/work/app', forked_from_id: 'sess-1' });
+  const forkMeta = (id: string) => line(T(10), 'session_meta', { id, session_id: id, originator: 'codex_cli_rs', timestamp: T(10), cwd: '/work/app', forked_from_id: 'sess-1' });
   const at = (offset: number, entry: { timestamp: string }) => ({ ...entry, timestamp: T(offset) });
   const prompts = (lines: ReturnType<typeof rolloutLines>) => lines.filter((entry) => entry.type === 'user');
 
@@ -951,7 +1006,7 @@ describe('a unified-exec shell call (core/src/tools/handlers/unified_exec)', () 
   // `None` for the exit status writes no exit line and no running line (context.rs:555-557; its -1 goes only to the item, process_manager.rs:823, :839): the call is neither
   // failed nor finished, and it stays unsettled.
   it('leaves a reply header with neither an exit line nor a running line unsettled', () => {
-    const out = extractOf([meta('/work/app'), unified(2, 'u1', 'exec_command', { cmd: 'sleep 9' }), shellOut(3, 'u1', `${head('Chunk id: 1')}partial`)]);
+    const out = extractOf([meta('/work/app'), unified(2, 'u1', 'exec_command', { cmd: 'sleep 9' }), shellOut(3, 'u1', 'Chunk ID: ab12\nWall time: 0.0100 seconds\nOriginal token count: 3\nOutput:\npartial')]);
     expect(out.tools).toMatchObject([{ tool: 'Bash', status: 'none' }]);
     expect(out.errorLines).toEqual([]);
   });

@@ -132,6 +132,31 @@ export const ACTION_TABLES: { readonly [harness in Harness]: ActionTable } = {
     toolDelimited: true,
     shells: {},
   },
+  // Copilot CLI's names are not listed by its event schema; these are the ones the SDK's own hook docs use (docs/hooks/*.md). A shell call and an edit are
+  // also found by shape (`shellToolInfo`, `shellExecution`, `fileEdits`) or by name and arrive in the transcript as `Bash` and `Edit` with the original name
+  // in `native`, which is what this table looks up; so a name this table lacks still reads as a shell call or an edit in the tool log, but its step is `other`.
+  copilot: {
+    rows: {
+      shell: 'shell.exec',
+      bash: 'shell.exec',
+      powershell: 'shell.exec',
+      local_shell: 'shell.exec',
+      read_file: 'file.read',
+      view: 'file.read',
+      glob: 'file.search',
+      grep: 'file.search',
+      edit: 'file.edit',
+      str_replace_editor: 'file.edit',
+      apply_patch: 'file.edit',
+      write_file: 'file.write',
+      delete_file: 'other',
+      task: 'agent.spawn',
+      web_fetch: 'web.fetch',
+    },
+    mcp: /^mcp__(?<server>.+?)__(?<tool>.+)$/,
+    toolDelimited: true,
+    shells: { bash: 'bash', powershell: 'powershell' },
+  },
 };
 
 /** The MCP call a native name spells, in full, as the transcript wrote it; undefined for any other name. */

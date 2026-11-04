@@ -5,11 +5,15 @@
 // captured records to `<config>/oars/sessions/observations.jsonl`. The log is appended to, and a whole-store deposit drops superseded revs (`compactLog` in `store.ts`): a session whose file changed is deposited
 // again under a higher `rev`, and a reader keeps only the highest `rev` of each session.
 //
-// EXTRACTOR 10 (t811, pool vocabulary spec Section 2) changes no stored value. It moves raw `agentType`, `keys`, and `frameId` with the joined `frame` from class P to
-// class A, so a store written at 9 re-derives on its next deposit and only the pooled projection (computed at deposit, never written) changes.
+// EXTRACTOR 11 (t811, pool vocabulary spec Section 2) changes no stored value. It moves raw `agentType`, `keys`, and `frameId` with the joined `frame` from class P to
+// class A, so a store written at 10 re-derives on its next deposit and only the pooled projection (computed at deposit, never written) changes.
 //
 // Version 10 (CAPTURE 10, t768) gives a turn opened by a slash command or a skill a `user-prompt` record, adds `opened` to that record, and moves `skills`
 // from class P to class A, since a skill's name can be private. It changed no derivation, so it leaves EXTRACTOR at 9.
+//
+// Version 11 (CAPTURE 11) redacts the part of an MCP tool name after `mcp__` (Cursor: `mcp_`) wherever it is stored (`tool`, the session's `tools`, an error line's `tool`, the skeleton's tool names),
+// reads package-manager and shell forms more exactly (so `pulls`, `segments`, `commits`, and each tool's `steps` change), and opens a typed prompt from a line that only starts with an injected tag's name without closing it.
+// EXTRACTOR 10 reads more command forms as a run or a verify (package runners, `unittest`, installs that are not runs, a leading word before a name); no capture record changes.
 //
 // EXTRACTOR 9 adds motifs, cells, and reads, computed from the capture records and written beside them (`docs/sessions-store.md`), and carries a prompt's
 // frame onto its derived record. No capture record changes.
@@ -53,13 +57,13 @@ import type { CanonicalAction } from './actions.js';
 import type { RepoSize } from './public-vocabulary.js';
 
 /** Stamped `cv` on every captured record. Bump it when the captured field list changes or a stored value of an existing captured record or skeleton changes: a bump re-reads every transcript. */
-export const CAPTURE_VERSION = '10';
+export const CAPTURE_VERSION = '11';
 
 /** Capture versions the reader derives from. A version-3 record is upgraded on read; a newer one is read for the fields this code knows. */
 export const OLDEST_READABLE_CAPTURE = 3;
 
 /** Stamped `v` on every derived record. A bump re-derives from the log; no transcript is read. */
-export const EXTRACTOR_VERSION = '10';
+export const EXTRACTOR_VERSION = '11';
 
 export const PROMPT_HEAD_CHARS = 300;
 export const ERROR_EXAMPLE_CHARS = 160;
@@ -81,7 +85,7 @@ export interface Usage {
   thinking: number;
 }
 
-export type Harness = 'claude-code' | 'cursor' | 'codex';
+export type Harness = 'claude-code' | 'cursor' | 'codex' | 'copilot';
 
 /** The harness a session record came from; a record that does not name one is Claude Code's. */
 export const harnessOf = (session: { harness?: Harness }): Harness => session.harness ?? 'claude-code';
@@ -381,7 +385,7 @@ export interface ToolObservation {
   target: string | null;
   /** For a path target: `repo` when it was hashed relative to the repository root, `cwd` when no repository held it; null for any other target. */
   targetBase: TargetBase | null;
-  /** The input's key names, sorted. Class A (EXTRACTOR 10). */
+  /** The input's key names, sorted. Class A (EXTRACTOR 11). */
   keys: string[];
   /** From the call's line to its first result's line; null when either timestamp is missing or no result is in the file. */
   durationMs: number | null;
@@ -469,7 +473,7 @@ export interface UserPromptObservation {
   promptFingerprint: string | null;
   /** Where and when this prompt ran; absent on a record captured before this field existed. Class P. */
   frame?: Frame;
-  /** The hash of `frame` (`frameIdOf`). Class A (EXTRACTOR 10). */
+  /** The hash of `frame` (`frameIdOf`). Class A (EXTRACTOR 11). */
   frameId?: string;
 }
 

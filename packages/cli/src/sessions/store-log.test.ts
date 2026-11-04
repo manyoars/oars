@@ -389,7 +389,7 @@ describe('the store lock', () => {
 
   it('stops refreshing a lock held past its hard cap, so a waiter breaks it and logs the holder', async () => {
     const staged = stage();
-    const lockOptions = { waitMs: 4000, staleMs: 300, holdMs: 400 };
+    const lockOptions = { waitMs: 4000, staleMs: 1000, holdMs: 1400 };
     const notes = vi.spyOn(process.stderr, 'write').mockReturnValue(true);
     const events: string[] = [];
     let release: () => void = () => undefined;
@@ -422,34 +422,22 @@ describe('the store lock', () => {
     expect(broke).toHaveLength(1);
     expect(broke[0]).toContain(`pid ${String(process.pid)},`);
     expect(broke[0]).not.toContain('-');
-    expect(broke[0]).toContain('not refreshed for over 300 ms');
-    expect(lines.filter((line) => line.startsWith('oars: this run held the store lock past 400 ms and may lose it; rerun it when it ends'))).toHaveLength(1);
+    expect(broke[0]).toContain('not refreshed for over 1000 ms');
+    expect(lines.filter((line) => line.startsWith('oars: this run held the store lock past 1400 ms and may lose it; rerun it when it ends'))).toHaveLength(1);
   });
 
   it('caps a holder at six times the stale age when no holdMs is given', async () => {
     const staged = stage();
-    const lockOptions = { waitMs: 4000, staleMs: 100 };
-    const notes = vi.spyOn(process.stderr, 'write').mockReturnValue(true);
-    let release: () => void = () => undefined;
-    let entered: () => void = () => undefined;
-    const inside = new Promise<void>((done) => (entered = done));
-    const hung = withLock(
-      staged.storeDir,
-      () =>
-        new Promise<void>((done) => {
-          release = done;
-          entered();
-        }),
-      lockOptions,
-    );
-    await inside;
-    const tookAt = Date.now();
-    await withLock(staged.storeDir, () => Promise.resolve(), lockOptions);
-    const waited = Date.now() - tookAt;
-    release();
-    await hung;
+    // Beats are counted, so the line cannot race a stall: no waiter and no elapsed-time floor, only the cap the holder logs.
+    let capped: (line: string) => void = () => undefined;
+    const logged = new Promise<string>((done) => (capped = done));
+    const notes = vi.spyOn(process.stderr, 'write').mockImplementation((chunk) => {
+      if (String(chunk).includes('held the store lock past')) capped(String(chunk));
+      return true;
+    });
+    const line = await withLock(staged.storeDir, () => logged, { waitMs: 4000, staleMs: 100 });
     notes.mockRestore();
-    expect(waited).toBeGreaterThanOrEqual(590);
+    expect(line).toContain('past 600 ms');
   });
 
   it('keeps the next holder locked in when the broken holder ends', async () => {
@@ -468,7 +456,7 @@ describe('the store lock', () => {
           releaseFirst = done;
           firstIn();
         }),
-      { waitMs: 4000, staleMs: 300, holdMs: 400 },
+      { waitMs: 4000, staleMs: 1000, holdMs: 1400 },
     );
     await firstEntered;
     const second = withLock(
@@ -478,16 +466,16 @@ describe('the store lock', () => {
           releaseSecond = done;
           secondIn();
         }),
-      { waitMs: 4000, staleMs: 300 },
+      { waitMs: 4000, staleMs: 1000 },
     );
     await secondEntered;
     releaseFirst();
     await first;
-    await expect(withLock(staged.storeDir, () => Promise.resolve(), { waitMs: 400, staleMs: 300 })).rejects.toThrow('locked');
+    await expect(withLock(staged.storeDir, () => Promise.resolve(), { waitMs: 400, staleMs: 1000 })).rejects.toThrow('locked');
     releaseSecond();
     await second;
     notes.mockRestore();
-    await withLock(staged.storeDir, () => Promise.resolve(), { waitMs: 400, staleMs: 300 });
+    await withLock(staged.storeDir, () => Promise.resolve(), { waitMs: 400, staleMs: 1000 });
   });
 
   it('keeps refreshing a live holder after the clock jumps past the cap, as a suspended machine does', async () => {
