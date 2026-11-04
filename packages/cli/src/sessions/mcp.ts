@@ -47,10 +47,10 @@ const toQuery = (args: unknown): PullInput => {
   if (typeof source.class === 'string') narrowing.cls = source.class;
   if (typeof source.sinceDays === 'number' && Number.isInteger(source.sinceDays) && source.sinceDays > 0) narrowing.sinceDays = source.sinceDays;
   const prefix = Array.isArray(source.prefix) ? source.prefix.filter((id): id is string => typeof id === 'string') : [];
-  if (prefix.length > 0) return { form: 'pattern', prefix };
-  if (typeof source.entity === 'string') return { form: 'entity', entity: source.entity };
+  if (prefix.length > 0) return { form: 'pattern', prefix, slice: narrowing };
+  if (typeof source.entity === 'string') return { form: 'entity', entity: source.entity, slice: narrowing };
   if (typeof source.family === 'string') return { form: 'question', family: source.family, slice: narrowing };
-  if (typeof source.text === 'string') return { form: 'text', text: source.text };
+  if (typeof source.text === 'string') return { form: 'text', text: source.text, slice: narrowing };
   const query: { error?: string; path?: string } = {};
   if (typeof source.error === 'string') query.error = source.error;
   if (typeof source.path === 'string') query.path = source.path;
