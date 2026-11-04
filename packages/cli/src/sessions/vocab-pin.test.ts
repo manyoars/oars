@@ -70,7 +70,7 @@ const PINNED: { readonly [version: string]: { readonly files: { readonly [file: 
       'pypi.json': '4fd0e73a16ec5abcee1c970f7e28cc84af68aaceb0197b8007a8be690878f442',
       'rubygems.json': '0cfec417beb17efdbd60634fe7e6c9252bebc6be5bab086446431099d939be33',
     },
-    curated: '0ce1973ca3a94ed197bb11ed6d574083954e8f94bb170eb0527cb5b9d2664cb1',
+    curated: '66557363da0f1bee1e7264b5126b8ae8231a483a7e36b89151a41bc52a9ad76f',
   },
 };
 
