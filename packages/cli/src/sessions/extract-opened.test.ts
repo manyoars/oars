@@ -21,6 +21,7 @@ const CAVEAT = '<local-command-caveat>Caveat: generated while running local comm
 const OUTPUT = '<local-command-stdout>Set the widget to blue</local-command-stdout>';
 const REMINDER = '<system-reminder>The widget list changed.</system-reminder>';
 const NOTIFICATION = '<task-notification><task-id>1</task-id><status>completed</status></task-notification>';
+const TEAMMATE = '<teammate-message teammate_id="lead">Please polish the widget.</teammate-message>';
 
 describe('a turn opened by a command or a skill', () => {
   it('opens a prompt from a slash command with arguments, the wrapper tags removed', () => {
@@ -105,6 +106,7 @@ describe('a line the harness injected', () => {
     ['local command errors', '<local-command-stderr>no such widget</local-command-stderr>'],
     ['a system reminder', REMINDER],
     ['a task notification', NOTIFICATION],
+    ['a teammate message', TEAMMATE],
     ['a scheduled task', '<scheduled-task name="n">go</scheduled-task>'],
     ['a shell-mode input', '<bash-input>ls</bash-input>'],
     ['a shell-mode output', '<bash-stdout>a.txt</bash-stdout><bash-stderr></bash-stderr>'],
@@ -171,6 +173,18 @@ describe('a local command, with no assistant turn after it', () => {
 
   it('opens no prompt from a wrapper with nothing in it', () => {
     expect(capture([user('<command-name></command-name>'), answer()]).prompts).toEqual([]);
+  });
+});
+
+describe('a teammate transcript', () => {
+  it('opens no prompt from a teammate message, and neither names it typed nor keeps its text', () => {
+    const { prompts } = capture([user(TEAMMATE, { isSidechain: true }), answer('x', { isSidechain: true })], { subagent: { parent: 'p', agentType: 'worker', spawnedBy: null, spawnedIn: null } });
+    expect(prompts).toEqual([]);
+  });
+
+  it('keeps the plain first line a subagent is given, so its turns stay in a prompt', () => {
+    const { prompts } = capture([user('polish the widget', { isSidechain: true }), answer('x', { isSidechain: true }), user(TEAMMATE, { isSidechain: true }), answer('y', { isSidechain: true })], { subagent: { parent: 'p', agentType: 'worker', spawnedBy: null, spawnedIn: null } });
+    expect(prompts.map(({ head, opened, turns }) => ({ head, opened, turns }))).toEqual([{ head: 'polish the widget', opened: 'typed', turns: 2 }]);
   });
 });
 
