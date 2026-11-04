@@ -537,7 +537,8 @@ describe('Paginated rollouts', () => {
 
   // ordinal.rs:30, :47-53: a rollout's first record takes history_base.end_ordinal_exclusive (0 with none) and every record after it one more. A subagent's file
   // starts with its own session_meta, then the parent's prefix through subagent_history_start_ordinal - 1, which is model context only (ordinal.rs:86-89,
-  // protocol.rs:3511-3516). A fork's file holds no inherited records: its history_base points at the parent's rollout instead (protocol.rs:3508-3510).
+  // protocol.rs:3511-3516). A Referenced fork's file holds no inherited records: its history_base points at the parent's rollout instead (protocol.rs:3508-3510,
+  // session.rs:1139-1140). A Copied fork's does (thread_manager.rs:1680, session.rs:1139), in either mode: see 'a Copied fork' below.
   it('drops the parent prefix a subagent rollout copied (ordinals below subagent_history_start_ordinal), keeping its own records', () => {
     begin();
     const lines = rolloutLines(
@@ -568,7 +569,9 @@ describe('Paginated rollouts', () => {
   });
 });
 
-describe('a Legacy fork (no ordinals)', () => {
+// A Copied fork writes the parent's history into its own file in either mode (thread_manager.rs:1680, session.rs:1139: no history_base). A Legacy one has no
+// ordinals; a Paginated one numbers the copy afresh from 0 (ordinal.rs:28-33), so no ordinal marks it and the match against the parent finds it in both.
+describe('a Copied fork', () => {
   const [m0, p1, r2, p3] = [meta('/work/app'), prompt(1, 'first'), say(2, 'reply'), prompt(3, 'second')] as const;
   const parent = [m0, p1, r2, p3];
   const forkMeta = (id: string) => line(T(10), 'session_meta', { id, timestamp: T(10), cwd: '/work/app', forked_from_id: 'sess-1' });
@@ -590,6 +593,21 @@ describe('a Legacy fork (no ordinals)', () => {
   it('keeps every record when the parent rollout is absent, since nothing can be matched', () => {
     const child = [forkMeta('sess-2'), at(11, p1), prompt(20, 'own prompt')];
     expect(prompts(rolloutLines(asText(child), 'sess-2'))).toHaveLength(2);
+  });
+
+  it('drops the copy in a Paginated fork too, where the copied records carry fresh ordinals and the meta has no history_base', () => {
+    const item = (second: number, body: object) => line(T(second), 'event_msg', { type: 'item_completed', thread_id: 'sess-1', turn_id: 't1', item: body });
+    const asked = item(1, { type: 'UserMessage', id: 'u1', content: [{ type: 'text', text: 'first', text_elements: [] }] });
+    const replied = item(2, { type: 'AgentMessage', id: 'a1', content: [{ type: 'Text', text: 'reply' }] });
+    const numbered = (entries: readonly object[], from: number): object[] => entries.map((entry, index) => ({ ...entry, ordinal: from + index }));
+    const parentMeta = line(T(0), 'session_meta', { id: 'sess-1', timestamp: T(0), cwd: '/work/app', history_mode: 'paginated' });
+    const forked = line(T(10), 'session_meta', { id: 'sess-2', timestamp: T(10), cwd: '/work/app', history_mode: 'paginated', forked_from_id: 'sess-1' });
+    const own = item(20, { type: 'UserMessage', id: 'u2', content: [{ type: 'text', text: 'own prompt', text_elements: [] }] });
+    // The fork's own session_meta is ordinal 0 (no history_base), then the copy of the parent's records, then its own turn.
+    const child = numbered([forked, at(11, parentMeta), at(12, asked), at(13, replied), own], 0);
+    const lines = rolloutLines(asText(child), 'sess-2', asText(numbered([parentMeta, asked, replied], 0)));
+    expect(prompts(lines)).toMatchObject([{ message: { content: [{ text: 'own prompt' }] } }]);
+    expect(lines.filter((entry) => entry.type === 'assistant')).toHaveLength(0);
   });
 });
 

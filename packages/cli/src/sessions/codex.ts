@@ -11,10 +11,11 @@
 // skeleton are the Claude Code path's own code:
 //   session_meta        {id, cwd, cli_version, timestamp, history_mode, parent_thread_id, forked_from_id, subagent_history_start_ordinal}: the
 //                       working directory and the harness version; only the first one in the file (recorder.rs:1157-1158). A spawned agent has `parent_thread_id` (protocol.rs:3464); records whose
-//                       `ordinal` is below its `subagent_history_start_ordinal` (:3511-3516) are the parent's prefix (ordinal.rs:86-89), and are dropped. A Paginated fork copies none: its `history_base` points at the parent (:3508-3510). Ordinals exist
+//                       `ordinal` is below its `subagent_history_start_ordinal` (:3511-3516) are the parent's prefix (ordinal.rs:86-89), and are dropped. A Referenced fork copies none: its `history_base` points at the parent (:3508-3510; core/src/session/session.rs:1139-1140). A Copied fork, in either mode, does copy the parent's history and writes no `history_base`
+//                       (`fork_thread_from_history` is `ForkPersistence::Copied`, core/src/thread_manager.rs:1680; session.rs:1139; app-server takes it when no prepared fork exists, app-server/src/request_processors/thread_processor.rs:5724-5728). Ordinals exist
 //                       only in a Paginated rollout (ordinal.rs:37), the CLI's default (thread-store/src/local/mod.rs:512-515), which holds item_completed TurnItems
 //                       (UserMessage, AgentMessage, FileChange, McpToolCall) in place of the legacy events below (rollout/src/policy.rs:142-156, `persisted_item_completed_event` :232, its Paginated arm :253); both are read.
-//                       A Legacy fork's copied history is dropped by matching the parent rollout record for record
+//                       A Copied fork's history, in either mode, is dropped by matching the parent rollout record for record
 //   turn_context        {model, cwd}: the model, and the directory when it changes
 //   event_msg user_message {message}            a prompt (the `response_item` user messages also hold injected context, so they are not read)
 //   event_msg agent_message {message}           the assistant's text
@@ -239,7 +240,8 @@ export const rolloutLines = (text: string, fallbackId: string, parentText?: stri
   let inherited: number | undefined;
   // Only the first session_meta is the rollout's own; later ones are copied from fork history (rollout/src/recorder.rs:1157-1158, :1173).
   let seenMeta = false;
-  // A Legacy fork has no ordinals: the leading records equal to the parent's, in order, are its copied history. Null once it stops matching.
+  // A Copied fork's file holds the parent's records first (no ordinal marks them: a Paginated one numbers them afresh from 0, ordinal.rs:28-33, and a Legacy
+  // one has none), so the leading records equal to the parent's, in order, are its copied history, in either mode. Null once it stops matching.
   let copied: { keys: string[]; at: number } | null = null;
   const resolved = new Set<string>();
   const stamp = (value: unknown): string => {
@@ -508,7 +510,7 @@ export const openCodexStore = async (root: string): Promise<CodexStore | undefin
       const text = await textOf(session.file).catch((error: unknown) => {
         throw new Error(reasonOf(error, session.file));
       });
-      // A Legacy fork's copied history is found by matching it against the parent's rollout; a parent outside the store (or unreadable) leaves it whole.
+      // A Copied fork's history is found by matching it against the parent's rollout; a parent outside the store (or unreadable) leaves it whole.
       const parent = session.forkedFrom === null ? undefined : sessions.get(session.forkedFrom);
       const parentText = parent === undefined ? undefined : await textOf(parent.file).catch(() => undefined);
       const lines = [...rolloutLines(text, session.id, parentText).map((line) => JSON.stringify(line)), ...rolloutBadLines(text)];
