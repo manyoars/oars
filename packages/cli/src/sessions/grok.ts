@@ -249,7 +249,8 @@ export const grokLines = (text: string, fallbackId: string, summary: Obj, usage:
       if (shell) {
         // The user's `!cmd` carries its command only in the title: "Execute `cmd`".
         const command = str(input.command) ?? /`([^`]+)`/.exec(title)?.[1];
-        block.native = title;
+        // The user's `!cmd` is titled "Execute `cmd`", which has no table row: it is the `bash` row's call.
+        block.native = SHELL_TOOLS.has(title) ? title : 'bash';
         block.name = 'Bash';
         block.input = command === undefined ? {} : { command };
       } else if (EDIT_TOOLS.has(title)) {
