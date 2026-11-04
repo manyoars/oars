@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { contentHash, makeRead, orderResolver, readIdOf, type ReadDraft } from './read.js';
+import { CALL_SHAPE_METHOD, contentHash, makeRead, METHODS, orderResolver, readIdOf, type ReadDraft } from './read.js';
 
 const CELL_A = 'cell:aaaaaaaaaaaaaaaa';
 const CELL_B = 'cell:bbbbbbbbbbbbbbbb';
@@ -17,6 +17,21 @@ const draft = (over: Partial<ReadDraft> = {}): ReadDraft => ({
   asOf: { pool: 'pool-one', day: '2026-11-02' },
   basis: 'all',
   ...over,
+});
+
+describe('METHODS', () => {
+  it('states a new version for every family whose rule or value fields moved with the cell grain, so an old read is told from a new one', () => {
+    const moved: [string, string][] = [
+      [METHODS.recovery.version, '2'],
+      [METHODS.fit.version, '2'],
+      [CALL_SHAPE_METHOD.version, '2'],
+      [METHODS.change.version, '2'],
+      [METHODS.adoption.version, '2'],
+      [METHODS['version-boundary'].version, '2'],
+      [METHODS.interaction.version, '3'],
+    ];
+    for (const [stated, wanted] of moved) expect(stated).toBe(wanted);
+  });
 });
 
 describe('contentHash', () => {

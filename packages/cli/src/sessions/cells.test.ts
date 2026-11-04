@@ -261,7 +261,7 @@ describe('poolOf', () => {
     vi.resetModules();
     vi.doMock('./read.js', async (importActual) => {
       const actual = await importActual<typeof ReadModule>();
-      return { ...actual, METHODS: { ...actual.METHODS, fit: { ...actual.METHODS.fit, version: '2' } } };
+      return { ...actual, METHODS: { ...actual.METHODS, fit: { ...actual.METHODS.fit, version: '99' } } };
     });
     try {
       const fresh = await import('./cells.js');
@@ -277,7 +277,7 @@ describe('poolOf', () => {
     vi.resetModules();
     vi.doMock('./read.js', async (importActual) => {
       const actual = await importActual<typeof ReadModule>();
-      return { ...actual, CALL_SHAPE_METHOD: { ...actual.CALL_SHAPE_METHOD, version: '2' } };
+      return { ...actual, CALL_SHAPE_METHOD: { ...actual.CALL_SHAPE_METHOD, version: '99' } };
     });
     try {
       const fresh = await import('./cells.js');
