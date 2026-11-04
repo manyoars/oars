@@ -6,6 +6,7 @@ import { parseSkeleton, skeletonOf, type SessionSkeleton } from './pool-wire.js'
 import { PRIVATE } from './public-vocabulary.js';
 
 const framed = frame({ shell: 'bash', model: 'claude-opus-5-5' });
+const clone = (skeleton: SessionSkeleton): SessionSkeleton => structuredClone(skeleton);
 const read = step(0, 0, 'file.read', { native: 'Read' });
 
 /** The wire form of a store's one session. */
@@ -53,9 +54,9 @@ describe('a step names its frame', () => {
 
   it('survives the parser, and the parser refuses a position outside the list', () => {
     const skeleton = midPrompt();
-    const parsed = parseSkeleton(JSON.parse(JSON.stringify(skeleton)));
+    const parsed = parseSkeleton(clone(skeleton));
     expect(parsed.ok).toBe(true);
-    const bad: SessionSkeleton = JSON.parse(JSON.stringify(skeleton));
+    const bad: SessionSkeleton = clone(skeleton);
     const first = bad.transcripts[0]?.tools[0]?.steps[0];
     if (first === undefined) throw new Error('no step');
     first.frame = bad.transcripts[0]?.frames.length ?? 99;
@@ -65,12 +66,12 @@ describe('a step names its frame', () => {
   });
 
   it('refuses a step with no frame, and a format-2 batch', () => {
-    const raw: SessionSkeleton = JSON.parse(JSON.stringify(midPrompt()));
+    const raw: SessionSkeleton = clone(midPrompt());
     const first = raw.transcripts[0]?.tools[0]?.steps[0];
     if (first === undefined) throw new Error('no step');
     Reflect.deleteProperty(first, 'frame');
     expect(parseSkeleton(raw)).toEqual({ ok: false, field: 'transcripts[0].tools[0].steps[0].frame', reason: 'missing' });
-    expect(parseSkeleton({ ...JSON.parse(JSON.stringify(midPrompt())), format: 2 })).toEqual({ ok: false, field: 'format', reason: 'not a format this version reads' });
+    expect(parseSkeleton({ ...clone(midPrompt()), format: 2 })).toEqual({ ok: false, field: 'format', reason: 'not a format this version reads' });
   });
 });
 
@@ -96,8 +97,8 @@ describe('the skill behind a call', () => {
   });
 
   it('survives the parser, which holds the skill to the list', () => {
-    expect(parseSkeleton(JSON.parse(JSON.stringify(inRun()))).ok).toBe(true);
-    const bad: SessionSkeleton = JSON.parse(JSON.stringify(inRun()));
+    expect(parseSkeleton(clone(inRun())).ok).toBe(true);
+    const bad: SessionSkeleton = clone(inRun());
     const held = bad.transcripts[0]?.tools[1]?.steps[0];
     if (held === undefined) throw new Error('no step');
     held.skill = 'acme-private-skill';
@@ -114,7 +115,7 @@ describe('the reach on the frame', () => {
     expect(skeleton.transcripts[0]?.frame.reach).toEqual({ filled: true, mcp: ['github', 'playwright', PRIVATE], skills: [], plugins: [PRIVATE] });
     expect(skeleton.transcripts[0]?.frames.every(({ reach }) => reach?.filled === true)).toBe(true);
     expect(JSON.stringify(skeleton)).not.toContain('acme');
-    expect(parseSkeleton(JSON.parse(JSON.stringify(skeleton))).ok).toBe(true);
+    expect(parseSkeleton(clone(skeleton)).ok).toBe(true);
   });
 
   it('says it is unfilled when the harness filled no setup, so absence is not read as no tools', () => {
@@ -123,7 +124,7 @@ describe('the reach on the frame', () => {
   });
 
   it('refuses a name outside the lists, and a filled reach that is empty only by being unfilled', () => {
-    const bad: SessionSkeleton = JSON.parse(JSON.stringify(midPrompt({ setup: { plugins: ['x'] } })));
+    const bad: SessionSkeleton = clone(midPrompt({ setup: { plugins: ['x'] } }));
     const reach = bad.transcripts[0]?.frame.reach;
     if (reach === undefined) throw new Error('no reach');
     reach.mcp = ['acme-internal'];
@@ -132,7 +133,7 @@ describe('the reach on the frame', () => {
 });
 
 describe('the lists the parser holds', () => {
-  const raw = (): SessionSkeleton => JSON.parse(JSON.stringify(midPrompt()));
+  const raw = (): SessionSkeleton => clone(midPrompt());
 
   it('refuses an unfilled reach that lists a name, and a transcript with no frames', () => {
     const unfilled = raw();
