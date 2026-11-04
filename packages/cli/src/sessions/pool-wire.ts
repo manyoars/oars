@@ -7,7 +7,8 @@ import { CUSTOM_AGENT, FRAMEWORKS, isPublicMcpTool, isRegistryVersion, LANGUAGES
 import type { Cell } from './cells.js';
 import type { Motif } from './motif.js';
 import type { Read, ReadAsOf } from './read.js';
-import type { Frame, Harness, PromptClass, PromptObservation, PullIdentity, SessionObservation, ShellIdentity, StepIdentity, StepObservation, ToolObservation, ToolStatus, Usage } from './schema.js';
+import { projectLanguage, projectLanguageShare } from './strata.js';
+import { LANGUAGE_SHARES, type Frame, type FrameStack, type Harness, type LanguageShare, type PromptClass, type PromptObservation, type PullIdentity, type SessionObservation, type ShellIdentity, type StepIdentity, type StepObservation, type Strata, type ToolObservation, type ToolStatus, type Usage } from './schema.js';
 
 export const SKELETON_FORMAT = 2;
 export const BUNDLE_FORMAT = 1;
@@ -61,6 +62,15 @@ export interface SkeletonTool {
 /** A prompt's usage as `tokens` buckets: `thinking` is a token count (the thinking tokens of the output), so it takes the same edges as the rest. */
 export type SkeletonUsage = { [field in keyof Usage]: number };
 
+/** A language of the stack with its share of the touched files (spec Section 7): one of four buckets, never a count. */
+export interface LanguageShareEntry {
+  language: string;
+  languageShare: LanguageShare;
+}
+
+/** The frame a skeleton holds: the stored frame, with the stack's shares beside its languages. A language whose share is not known is in `languages` and has no entry here. */
+export type SkeletonFrame = Omit<Frame, 'stack'> & { stack: FrameStack & { languageShares: LanguageShareEntry[] } };
+
 export interface SkeletonPrompt {
   cls: PromptClass;
   /** A `count` bucket. */
@@ -68,7 +78,7 @@ export interface SkeletonPrompt {
   /** A `seconds` bucket. */
   wallSec: number | null;
   usage: SkeletonUsage;
-  frame: Frame;
+  frame: SkeletonFrame;
 }
 
 export interface SkeletonTranscript {
@@ -76,7 +86,7 @@ export interface SkeletonTranscript {
   merkleRoot: string;
   leaves: number;
   harness: Harness;
-  frame: Frame;
+  frame: SkeletonFrame;
   prompts: SkeletonPrompt[];
   tools: SkeletonTool[];
 }
@@ -238,6 +248,20 @@ const carrier = (steps: readonly { action: string }[]): number => Math.max(0, st
 /** What a run does about the subagent runs its calls spawned: the exact tokens each call's runs spent, by the call's position in the main run. Empty for a subagent's run. */
 type Spawned = ReadonlyMap<number, number>;
 
+/**
+ * A stored frame with its stack's language shares: each stored share is read through its projection, so a share outside the list is dropped and its language stays in `languages`. A stored
+ * language outside the pinned list is `other`, and `other` holds the first share a record gives it. A record captured before the strata holds none.
+ */
+const wireFrame = (frame: Frame, strata: Strata | undefined): SkeletonFrame => {
+  const shares = new Map<string, LanguageShare>();
+  for (const { language, share } of strata?.languages ?? []) {
+    const held = projectLanguageShare(share);
+    const name = projectLanguage(language);
+    if (held !== null && !shares.has(name)) shares.set(name, held);
+  }
+  return { ...frame, stack: { ...frame.stack, languageShares: [...shares].map(([language, languageShare]) => ({ language, languageShare })) } };
+};
+
 const transcriptOf = (
   { session, prompts, tools, root }: SessionRecords['transcripts'][number],
   spawners: ReadonlyMap<number, number> | null,
@@ -249,7 +273,7 @@ const transcriptOf = (
   const harness = session.harness ?? 'claude-code';
   const framedPrompts: SkeletonPrompt[] = [];
   const promptAt = new Map<number, number>();
-  for (const { index, cls, errors, wallSec, usage, frame } of [...prompts].sort((a, b) => a.index - b.index)) {
+  for (const { index, cls, errors, wallSec, usage, frame, strata } of [...prompts].sort((a, b) => a.index - b.index)) {
     if (frame === undefined) return null;
     promptAt.set(index, framedPrompts.length);
     framedPrompts.push({
@@ -257,7 +281,7 @@ const transcriptOf = (
       errors: bucketOf('count', errors),
       wallSec: wallSec === null ? null : bucketOf('seconds', wallSec),
       usage: { input: bucketOf('tokens', usage.input), cacheWrite: bucketOf('tokens', usage.cacheWrite), cacheRead: bucketOf('tokens', usage.cacheRead), output: bucketOf('tokens', usage.output), thinking: bucketOf('tokens', usage.thinking) },
-      frame,
+      frame: wireFrame(frame, strata),
     });
   }
   const steppedTools: SkeletonTool[] = [];
@@ -298,7 +322,7 @@ const transcriptOf = (
       later += (exact[call]?.[at] ?? 0) + (at === held ? (spawned.get(call) ?? 0) : 0);
     }
   }
-  return { merkleRoot: root.merkleRoot, leaves: root.leaves, harness, frame: session.frame, prompts: framedPrompts, tools: steppedTools };
+  return { merkleRoot: root.merkleRoot, leaves: root.leaves, harness, frame: wireFrame(session.frame, session.strata), prompts: framedPrompts, tools: steppedTools };
 };
 
 /** The hash a batch's timing print is made with, over the durations in call order: the client's `contentHash` (D1's `hP`). */
@@ -441,10 +465,15 @@ const isCalendarDay = (text: string): boolean => {
   return !Number.isNaN(parsed) && new Date(parsed).toISOString().slice(0, 10) === text;
 };
 
-const parseFrame = (value: unknown, at: string): Frame => {
+const parseLanguageShare = (value: unknown, at: string): LanguageShareEntry => {
+  const raw = fieldsOf(value, at, ['language', 'languageShare']);
+  return { language: exactlyIn(LANGUAGES)(raw.language, under(at, 'language')), languageShare: oneOf(LANGUAGE_SHARES, raw.languageShare, under(at, 'languageShare')) };
+};
+
+const parseFrame = (value: unknown, at: string): SkeletonFrame => {
   const raw = fieldsOf(value, at, ['harness', 'harnessVersion', 'model', 'effort', 'day', 'platform', 'shell', 'stack']);
   const stackAt = under(at, 'stack');
-  const stack = fieldsOf(raw.stack, stackAt, ['languages', 'frameworks', 'size']);
+  const stack = fieldsOf(raw.stack, stackAt, ['languages', 'frameworks', 'size', 'languageShares']);
   const day = orNull(raw.day, under(at, 'day'), (entry, entryAt) => {
     const text = textOf(entry, entryAt);
     if (!isCalendarDay(text)) throw new Refused(entryAt, 'not a UTC day');
@@ -462,6 +491,7 @@ const parseFrame = (value: unknown, at: string): Frame => {
       languages: listOf(stack.languages, under(stackAt, 'languages'), exactlyIn(LANGUAGES)),
       frameworks: listOf(stack.frameworks, under(stackAt, 'frameworks'), exactlyIn(FRAMEWORKS)),
       size: orNull(stack.size, under(stackAt, 'size'), (entry, entryAt) => oneOf(REPO_SIZES, entry, entryAt)),
+      languageShares: listOf(stack.languageShares, under(stackAt, 'languageShares'), parseLanguageShare),
     },
   };
 };

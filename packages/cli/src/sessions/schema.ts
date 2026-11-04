@@ -307,6 +307,8 @@ export interface PromptObservation {
   /** The two tools after the first error of each error run (the recovery pair); empty when no error. */
   recovery: string[];
   explore: number;
+  /** The user prompt's stack strata with its own action-based `explore` count (CAPTURE 14), carried through derive so the skeleton can send them; absent on a record captured earlier. */
+  strata?: Strata;
   act: number;
   /** Transition bigrams `a>b` of `tools`, with counts. */
   bigrams: { [bigram: string]: number };

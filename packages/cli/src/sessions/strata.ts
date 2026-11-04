@@ -2,8 +2,8 @@
 // count by order of magnitude, the framework a resolved package shows, and how many steps only looked. Every value is a member of a closed list or a count,
 // so no path, package name, or program text is kept. The projections that gate these at deposit are in `projection.ts`.
 
-import { LANGUAGE_OF_EXTENSION, type RepoSize } from './public-vocabulary.js';
-import { type LanguageShare, type RepoFilesBucket, type Strata } from './schema.js';
+import { LANGUAGE_OF_EXTENSION, LANGUAGES, type RepoSize } from './public-vocabulary.js';
+import { LANGUAGE_SHARES, type LanguageShare, type RepoFilesBucket, type Strata } from './schema.js';
 import type { CanonicalAction } from './actions.js';
 
 /** The steps that only look at the code or the web. `file.read`, `file.search`, `web.search`, and `web.fetch`; a shell step is not counted, because what it does is not known from its action. */
@@ -76,3 +76,9 @@ export const strataOf = (evidence: { paths: readonly string[]; packages: readonl
     frameworks: [...new Set(evidence.packages.flatMap((name) => FRAMEWORK_OF_PACKAGE.get(name) ?? []))].sort(),
   };
 };
+
+/** A stored language as it pools: a member of the pinned list, else `other`. */
+export const projectLanguage = (stored: string): string => (LANGUAGES.has(stored) ? stored : 'other');
+
+/** A stored share bucket as it pools: itself when it is one of the four, else null (no bucket is guessed from a value this code does not know). */
+export const projectLanguageShare = (stored: string): LanguageShare | null => LANGUAGE_SHARES.find((bucket) => bucket === stored) ?? null;
