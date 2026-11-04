@@ -150,8 +150,8 @@ describe('depositing the Copilot source', () => {
           { n: 10, lines: [link('events.2.jsonl'), prompt(30, 'third prompt'), say(31, 'three', { outputTokens: 1 })] },
           { n: 1, lines: [start(D, '/work/d'), prompt(10, 'first prompt'), say(11, 'one', { outputTokens: 1 })] },
         ],
-        // The live head replays earlier state as checkpoint events (the same user.message as the archive holds), then goes on.
-        lines: [link('events.10.jsonl'), { ...prompt(30, 'third prompt'), checkpoint: true }, prompt(40, 'fourth prompt'), say(41, 'four', { outputTokens: 1 })],
+        // The live head replays earlier state as checkpoint events (the same user.message as the archive holds, under a fresh id, so only the checkpoint flag drops it), then goes on.
+        lines: [link('events.10.jsonl'), { ...prompt(30, 'third prompt'), id: 'replayed-30', checkpoint: true }, prompt(40, 'fourth prompt'), say(41, 'four', { outputTokens: 1 })],
       },
     ]);
     await deposit(s.runtime, options(['copilot']));

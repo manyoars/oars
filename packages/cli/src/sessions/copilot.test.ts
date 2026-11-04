@@ -375,22 +375,24 @@ describe('the Copilot home', () => {
       {
         id: 'rot',
         archives: [
-          { n: 3, lines: '' },
+          { n: 10, lines: '' },
           { n: 1, lines: [start('/work/old'), prompt(1, 'first')] },
-          { n: 2, lines: ['{torn', JSON.stringify({ type: 'user.message', timestamp: T(2), data: { content: 'no id' } }), JSON.stringify(prompt(1, 'first'))].join('\n') },
+          { n: 2, lines: ['{torn', JSON.stringify({ type: 'user.message', timestamp: T(2), data: { content: 'no id' } }), JSON.stringify(prompt(1, 'first')), JSON.stringify(prompt(3, 'second'))].join('\n') },
         ],
-        lines: [event(T(5), 'session.journal_link', { previousFile: 'events.3.jsonl', sessionId: 'rot', version: 1 }), prompt(6, 'last')],
+        lines: [event(T(5), 'session.journal_link', { previousFile: 'events.10.jsonl', sessionId: 'rot', version: 1 }), prompt(6, 'last')],
       },
     ]);
     const store = await openCopilotStore(home);
     const rotated = store?.sessions[0];
     expect(rotated?.folder).toBe('/work/old');
-    expect(rotated?.archives.map((path) => basename(path))).toEqual(['events.1.jsonl', 'events.2.jsonl', 'events.3.jsonl']);
+    expect(rotated?.archives.map((path) => basename(path))).toEqual(['events.1.jsonl', 'events.2.jsonl', 'events.10.jsonl']);
     const text = await store?.transcript(rotated ?? never());
     expect(text?.match(/"text":"first"/g)).toHaveLength(1);
     expect(text).toContain('no id');
     expect(text).toContain('"text":"last"');
     expect(text).toContain('{torn');
+    // Archive order (1, 2, 10), then the live file: a lexical sort (1, 10, 2) or a reversed list changes this sequence.
+    expect([...(text ?? '').matchAll(/"text":"(first|second|last)"/g)].map((match) => match[1])).toEqual(['first', 'second', 'last']);
   });
 
   it('leaves a session with no archives untouched: a lone events.jsonl keeps a line whose event id repeats, and a checkpoint line', async () => {
