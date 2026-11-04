@@ -748,7 +748,7 @@ describe('the Gemini home', () => {
     const root = stageGemini(s.root, [
       { id: 'sess-1', projectRoot: '/work/a', lines: [geminiHead('sess-1'), prompt(1, 'first chat')] },
       { id: 'sess-1', projectRoot: '/work/a', stem: 'session-2026-06-01T10-00-1-sess-1', lines: [geminiHead('sess-1', { startTime: '2026-06-01T10:00:30.000Z' }), prompt(31, 'second chat')] },
-      // A file name the skeleton cannot carry is counted, not listed.
+      // Defensive: upstream builds the name from a sanitized id and a timestamp (chatRecordingService.ts:800-818), so it cannot write a space; the row proves the reader counts a name the skeleton cannot carry instead of listing it.
       { id: 'sess-1', projectRoot: '/work/a', stem: 'session-with a space', lines: [geminiHead('sess-1', { startTime: '2026-06-01T10:02:00.000Z' }), prompt(40, 'third chat')] },
     ]);
     const store = await openGeminiStore(root);
