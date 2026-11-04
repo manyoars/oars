@@ -307,7 +307,7 @@ describe('oars gate hook: a damaged index', () => {
     expect(readFileSync(indexFile(store), 'utf8')).toBe('garbage\n');
   });
 
-  it.each([['an empty file', ''], ['a line outside the grammar', 'oars-gate-index 1\nfabc\n'], ['a line from another version', 'oars-gate-index 2\nf0123456789ab\n']])('treats %s as damaged', async (_name, body) => {
+  it.each([['an empty file', ''], ['a line outside the grammar', 'oars-gate-index 1\nfabc\n'], ['a line from another version', 'oars-gate-index 2\nf0123456789ab\n'], ['a line of another shape before a later one', 'oars-gate-index 1\nzzz\nf0123456789ab\n']])('treats %s as damaged', async (_name, body) => {
     const store = folder();
     writeFileSync(indexFile(store), body);
     await gateHook(payload('npm install left-pad'), depsFor(store));
@@ -320,6 +320,22 @@ describe('oars gate hook: a damaged index', () => {
     appendFileSync(indexFile(store), 'oars-gate-index 1\nf0123');
     await gateHook(payload('npm install left-pad', { tool_use_id: 'b' }), depsFor(store));
     expect(rowsOf(store).map((row) => row.novelty)).toEqual(['fleet', 'none']);
+  });
+
+  it('costs one torn line, not the index, when the next new name appends after it', async () => {
+    const store = folder();
+    await gateHook(payload('npm install left-pad', { tool_use_id: 'a' }), depsFor(store));
+    appendFileSync(indexFile(store), 'f0123');
+    await gateHook(payload('npm install right-pad', { tool_use_id: 'b' }), depsFor(store));
+    await gateHook(payload('npm install right-pad', { tool_use_id: 'c' }), depsFor(store));
+    expect(rowsOf(store).map((row) => row.novelty)).toEqual(['fleet', 'fleet', 'none']);
+  });
+
+  it('reads the index when two hooks racing on a torn tail left an empty line', async () => {
+    const store = folder();
+    writeFileSync(indexFile(store), 'oars-gate-index 1\nf0123\n\nf0123456789ab\n');
+    await gateHook(payload('npm install left-pad'), depsFor(store));
+    expect(rowsOf(store).map((row) => row.novelty)).toEqual(['fleet']);
   });
 
   it('is not seeded, and says so, when a record exists without one', async () => {
