@@ -8,9 +8,7 @@ installs, or imports:
 | Path | What it is | State |
 |------|------------|-------|
 | `packages/client` | `@manyoars/oars-client`: TypeScript types generated from `openapi/public.json` and a thin `openapi-fetch` wrapper that adds the bearer token, `Idempotency-Key`, and `User-Agent` | published on npm as [`@manyoars/oars-client`](https://www.npmjs.com/package/@manyoars/oars-client) at 0.1.x |
-| `openapi/public.json` | The slice of the platform API that Many Oars exposes to the CLI, the templates, and coding agents (including the API key operations), generated from the platform's OpenAPI by `scripts/openapi-public.mjs` and the operation list in `openapi/public-operations.json` | here |
-| `templates/paid-api` | Starter template: an HTTP API that charges per call | here |
-| `templates/per-task-agent` | Starter template: a job that charges per finished task | here |
+| `openapi/public.json` | The slice of the platform API that Many Oars exposes to the CLI and coding agents (including the API key operations), generated from the platform's OpenAPI by `scripts/openapi-public.mjs` and the operation list in `openapi/public-operations.json` | here |
 | `packages/cli` | `@manyoars/oars`, the `oars` command: `login`, `templates`, `deploy`, `status`, `test-charge`, `keys` (`create`, `list`, `revoke`), `sessions` (a local memory of your own Claude Code sessions), `gate` (a record of the install, MCP, and skill picks your agents make), and `pool` (outbox and fetch commands for a pool server you name) | published on npm as [`@manyoars/oars`](https://www.npmjs.com/package/@manyoars/oars) |
 
 Accounts and paid agents are not open yet; `oars login` says so until launch.
@@ -32,15 +30,12 @@ Node 24 (LTS) and [`just`](https://github.com/casey/just).
 
 ```sh
 npm ci
-just check     # billing sync, dependency licenses, client build, lint, typecheck, and unit tests; CI runs the same recipe
+just check     # dependency licenses, client build, lint, typecheck, and unit tests; CI runs the same recipe
 just audit     # npm audit for high or critical advisories in what ships; needs the network, so CI runs it as its own job
 ```
 
 `just check` includes a staleness test: it regenerates the client's types from `openapi/public.json` and fails when
 `packages/client/src/generated/schema.d.ts` differs.
-
-It also runs `scripts/check-billing-sync.mjs`, which fails (naming both paths) when the two templates' `src/billing.ts`
-differ. The file holds all the money handling and is one file in every template: change both copies or neither.
 
 ## The public API spec
 
