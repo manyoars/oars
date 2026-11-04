@@ -138,14 +138,39 @@ const wireCommand = ({ program, subcommand, flags }: ShellCommand): ShellIdentit
   return { program, sub: subcommand !== null && PUBLIC_SUBCOMMANDS.get(program)?.has(subcommand) === true ? subcommand : null, flags: flags.filter(isWireFlag) };
 };
 
-/** A stored tool's steps with each shell step's identity replaced by the projected, wire-held command; the other steps keep theirs. The one place a deposit and a local read take it from. */
-export const projectedSteps = (tool: ToolObservation, read: ShellReader): StepObservation[] => {
+/** The wire's one spelling of "not admitted": a name the server's list does not hold goes as `private`, whatever the local store spells it. */
+const listed = (allowed: ReadonlySet<string>, name: string): string => (allowed.has(name) ? name : PRIVATE);
+
+/** A pull in the wire's spelling: its package name is a list member or `private`. A version beside a masked name could identify it, so it goes as `<literal>` (null stays null), the rule capture applies. */
+const wirePull = (pull: PullIdentity): PullIdentity => {
+  const name = listed(PUBLIC_PACKAGES, pull.name);
+  return { ...pull, name, version: name === PRIVATE && pull.version !== null ? LITERAL : pull.version };
+};
+
+/** A non-shell step's identity in the wire's spelling; a shell step's comes from `wireCommand`. */
+const wireIdentity = (identity: StepIdentity): StepIdentity => {
+  if (identity === null || 'program' in identity) return identity;
+  if ('server' in identity) {
+    const server = listed(PUBLIC_MCP_SERVERS, identity.server);
+    // A tool beside a masked server has no list to be checked against, so it goes as the literal.
+    return server === PRIVATE ? { server, tool: LITERAL } : { ...identity, server };
+  }
+  if ('skill' in identity) return { skill: listed(PUBLIC_SKILLS, identity.skill) };
+  return { host: identity.host === null ? null : listed(PUBLIC_HOSTS, identity.host) };
+};
+
+/**
+ * A stored tool's steps as the wire holds them: each shell step's identity is replaced by the projected command, and every name the server has no row for (a native name, MCP server,
+ * skill, host, or pull name) reads `private`. A `private` program holds no pull, so a stored step whose public program has since left the list carries none. The one place a deposit and a local read take it from.
+ */
+export const projectedSteps = (tool: ToolObservation, read: ShellReader, harness: Harness): StepObservation[] => {
   const commands = read(tool);
   return (tool.steps ?? []).map((step, at) => {
-    if (step.action !== 'shell.exec') return step;
+    const native = admittedNative(harness, step.native) ? step.native : PRIVATE;
+    if (step.action !== 'shell.exec') return { ...step, native, identity: wireIdentity(step.identity) };
     const command = wireCommand(commands[at] ?? { program: PRIVATE, subcommand: null, flags: [] });
     const pulls = step.identity !== null && 'program' in step.identity ? step.identity.pulls : undefined;
-    return { ...step, identity: pulls === undefined ? command : { ...command, pulls } };
+    return { ...step, native, identity: pulls === undefined || command.program === PRIVATE ? command : { ...command, pulls: pulls.map(wirePull) } };
   });
 };
 
@@ -154,6 +179,7 @@ const byCall = (tools: readonly ToolObservation[]): ToolObservation[] => [...too
 
 const transcriptOf = ({ session, prompts, tools }: SessionRecords['transcripts'][number], spawners: ReadonlyMap<number, number> | null, read: ShellReader): SkeletonTranscript | null => {
   if (session.frame === undefined) return null;
+  const harness = session.harness ?? 'claude-code';
   const framedPrompts: SkeletonPrompt[] = [];
   const promptAt = new Map<number, number>();
   for (const { index, cls, errors, wallSec, usage, frame } of [...prompts].sort((a, b) => a.index - b.index)) {
@@ -176,7 +202,7 @@ const transcriptOf = ({ session, prompts, tools }: SessionRecords['transcripts']
     // the calls that shared a prompt still share one, and no position reads as a prompt.
     if (prompt !== null && !promptAt.has(prompt)) promptAt.set(prompt, framedPrompts.length + unrecorded++);
     const promptPosition = prompt === null ? null : (promptAt.get(prompt) ?? null);
-    const steps = projectedSteps(tool, read).map(({ action, native, identity, status: reported, cost, parent }): SkeletonStep => ({
+    const steps = projectedSteps(tool, read, harness).map(({ action, native, identity, status: reported, cost, parent }): SkeletonStep => ({
       action,
       native,
       identity,
@@ -187,7 +213,7 @@ const transcriptOf = ({ session, prompts, tools }: SessionRecords['transcripts']
     }));
     steppedTools.push({ side, prompt: promptPosition, status, durationMs, steps });
   }
-  return { harness: session.harness ?? 'claude-code', frame: session.frame, prompts: framedPrompts, tools: steppedTools };
+  return { harness, frame: session.frame, prompts: framedPrompts, tools: steppedTools };
 };
 
 /** The skeleton of a session; null when any record of it was captured before steps and frames, which holds no closed reading to send. */
@@ -274,7 +300,7 @@ const oneOf = <T extends string>(list: readonly T[], value: unknown, at: string)
 
 const inSet = (allowed: ReadonlySet<string>, value: unknown, at: string): string => {
   const name = textOf(value, at);
-  if (name !== LITERAL && !allowed.has(name)) throw new Refused(at, 'outside the vocabulary');
+  if (name !== PRIVATE && !allowed.has(name)) throw new Refused(at, 'outside the vocabulary');
   return name;
 };
 
@@ -293,7 +319,7 @@ const heldTo = (isHeld: (value: string | null) => string | null, value: unknown,
 
 // `satisfies` checks every entry is a `Harness` but not that every `Harness` is listed; this refuses a list that leaves one out at compile time.
 const allHarnesses = <const T extends readonly Harness[]>(list: [Exclude<Harness, T[number]>] extends [never] ? T : never): T => list;
-const HARNESSES = allHarnesses(['claude-code', 'cursor', 'codex', 'copilot', 'gemini', 'grok', 'vscode-copilot']);
+export const HARNESSES = allHarnesses(['claude-code', 'cursor', 'codex', 'copilot', 'gemini', 'grok', 'vscode-copilot']);
 const PROMPT_CLASSES = ['no-tools', 'orchestration', 'research', 'edit-verify', 'edit-only', 'explore-only', 'shell-only', 'mixed'] as const satisfies readonly PromptClass[];
 const STATUSES = ['ok', 'error', 'none'] as const satisfies readonly ToolStatus[];
 const PLATFORMS: ReadonlySet<string> = new Set(['aix', 'android', 'cygwin', 'darwin', 'freebsd', 'haiku', 'linux', 'netbsd', 'openbsd', 'sunos', 'win32']);
@@ -351,12 +377,15 @@ const parseUsage = (value: unknown, at: string): SkeletonUsage => {
 
 const parsePull = (value: unknown, at: string): PullIdentity => {
   const raw = fieldsOf(value, at, ['registry', 'name', 'version']);
+  const name = inSet(PUBLIC_PACKAGES, raw.name, under(at, 'name'));
   const version = orNull(raw.version, under(at, 'version'), (entry, entryAt) => {
     const text = textOf(entry, entryAt);
     if (text !== LITERAL && !isRegistryVersion(text)) throw new Refused(entryAt, 'outside the vocabulary');
+    // A version beside a masked name could identify it: capture masks the two together.
+    if (name === PRIVATE && text !== LITERAL) throw new Refused(entryAt, 'a private name holds no version');
     return text;
   });
-  return { registry: oneOf(REGISTRIES, raw.registry, under(at, 'registry')), name: inSet(PUBLIC_PACKAGES, raw.name, under(at, 'name')), version };
+  return { registry: oneOf(REGISTRIES, raw.registry, under(at, 'registry')), name, version };
 };
 
 const parseFlag = (value: unknown, at: string): string => {
@@ -369,11 +398,11 @@ const parseIdentity = (harness: Harness, action: CanonicalAction, value: unknown
   if (value === null) return null;
   if (action === 'shell.exec') {
     const raw = fieldsOf(value, at, ['program', 'sub', 'flags'], ['pulls']);
-    // A program is a list member or `private`, and a `private` program holds no subcommand: the projection writes nothing else.
+    // A program is a list member or `private`, and a `private` program holds no subcommand, flag, or pull.
     const program = textOf(raw.program, under(at, 'program'));
     if (program !== PRIVATE && !PUBLIC_PROGRAMS.has(program)) throw new Refused(under(at, 'program'), 'outside the vocabulary');
     if (program === PRIVATE) {
-      if (raw.flags !== undefined && !(Array.isArray(raw.flags) && raw.flags.length === 0)) throw new Refused(under(at, 'flags'), 'a private program holds no flags');
+      if (!(Array.isArray(raw.flags) && raw.flags.length === 0)) throw new Refused(under(at, 'flags'), 'a private program holds no flags');
       if (raw.pulls !== undefined) throw new Refused(under(at, 'pulls'), 'a private program holds no pulls');
     }
     const subs = PUBLIC_SUBCOMMANDS.get(program) ?? new Set<string>();
@@ -397,14 +426,19 @@ const parseIdentity = (harness: Harness, action: CanonicalAction, value: unknown
   throw new Refused(at, 'this action has no identity');
 };
 
+/** Whether the harness's table names this native, so it can cross as itself; anything else (including the literal) crosses as `private`. */
+const admittedNative = (harness: Harness, native: string): boolean => {
+  if (native === PRIVATE) return true;
+  const table = ACTION_TABLES[harness];
+  if (Object.hasOwn(table.rows, native)) return true;
+  const mcp = mcpOf(table, native);
+  return mcp !== undefined && table.toolDelimited && isPublicMcpTool(mcp.server, mcp.tool);
+};
+
 const parseNative = (harness: Harness, value: unknown, at: string): string => {
   const native = textOf(value, at);
-  if (native === LITERAL) return native;
-  const table = ACTION_TABLES[harness];
-  if (Object.hasOwn(table.rows, native)) return native;
-  const mcp = mcpOf(table, native);
-  if (mcp !== undefined && table.toolDelimited && isPublicMcpTool(mcp.server, mcp.tool)) return native;
-  throw new Refused(at, 'outside the vocabulary');
+  if (!admittedNative(harness, native)) throw new Refused(at, 'outside the vocabulary');
+  return native;
 };
 
 const parseStep = (harness: Harness, value: unknown, at: string): SkeletonStep => {
@@ -495,9 +529,10 @@ export interface StrataCell {
   clusters: number;
 }
 
-/** One harness version's replica, as the server signs it. Nothing in it is keyed by stack. */
+/** One harness version's replica, as the server signs it. It names its harness, which the signature covers, so a bundle for one harness cannot stand in for another's. Nothing in it is keyed by stack. */
 export interface Bundle {
   format: typeof BUNDLE_FORMAT;
+  harness: Harness;
   harnessVersion: string;
   vocabVersion: string;
   asOf: ReadAsOf;
@@ -524,7 +559,7 @@ export interface PinnedKey {
 const isSignedBundle = (value: unknown): value is SignedBundle => isFields(value) && typeof value.payload === 'string' && typeof value.signature === 'string';
 
 const isBundle = (value: unknown): value is Bundle =>
-  isFields(value) && value.format === BUNDLE_FORMAT && typeof value.harnessVersion === 'string' && typeof value.vocabVersion === 'string' && isFields(value.asOf) && Array.isArray(value.cells) && Array.isArray(value.motifs) && Array.isArray(value.reads) && Array.isArray(value.strata);
+  isFields(value) && value.format === BUNDLE_FORMAT && typeof value.harness === 'string' && isHarness(value.harness) && typeof value.harnessVersion === 'string' && typeof value.vocabVersion === 'string' && isFields(value.asOf) && Array.isArray(value.cells) && Array.isArray(value.motifs) && Array.isArray(value.reads) && Array.isArray(value.strata);
 
 const signatureHolds = async ({ payload, signature }: SignedBundle, key: PinnedKey): Promise<boolean> => {
   try {
@@ -535,13 +570,14 @@ const signatureHolds = async ({ payload, signature }: SignedBundle, key: PinnedK
   }
 };
 
-/** The bundle, only when the pinned key signed these bytes for the version that was asked for: another version's bundle, under a good signature, is still the wrong answer. */
-export const verifyBundle = async (signed: unknown, key: PinnedKey, harnessVersion: string): Promise<{ ok: true; bundle: Bundle } | { ok: false; reason: string }> => {
+/** The bundle, only when the pinned key signed these bytes for the harness and version that were asked for: another harness's or version's bundle, under a good signature, is still the wrong answer. */
+export const verifyBundle = async (signed: unknown, key: PinnedKey, harness: Harness, harnessVersion: string): Promise<{ ok: true; bundle: Bundle } | { ok: false; reason: string }> => {
   if (!isSignedBundle(signed)) return { ok: false, reason: 'not a signed bundle' };
   if (!(await signatureHolds(signed, key))) return { ok: false, reason: 'the signature does not match the key pinned at login' };
   const bundle: unknown = JSON.parse(signed.payload);
   if (!isBundle(bundle)) return { ok: false, reason: 'not a signed bundle this version reads' };
   if (bundle.vocabVersion !== VOCAB_VERSION) return { ok: false, reason: `this bundle is for vocabulary version ${bundle.vocabVersion}, not ${VOCAB_VERSION}` };
+  if (bundle.harness !== harness) return { ok: false, reason: `this bundle is for harness ${bundle.harness}, not ${harness}` };
   if (bundle.harnessVersion !== harnessVersion) return { ok: false, reason: `this bundle is for harness version ${bundle.harnessVersion}, not ${harnessVersion}` };
   return { ok: true, bundle };
 };
