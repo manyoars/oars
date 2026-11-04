@@ -201,7 +201,7 @@ export interface SessionObservation {
   costUsd: number | null;
   /** Summed assistant usage of the file's own line (a main transcript's sidechain lines are not counted; a subagent transcript is its own line). */
   usage: Usage;
-  /** What the transcript shows of the setup the session ran with (t815, class A); absent when it shows none, and on a record captured before version 11. */
+  /** What the transcript shows of the setup the session ran with (t815, class A); absent when it shows none, and on a record captured before version 12. */
   setup?: SessionSetup;
   /** The tool names at each funnel stage the transcript shows (class A); same absence rules. */
   funnel?: SessionFunnel;
