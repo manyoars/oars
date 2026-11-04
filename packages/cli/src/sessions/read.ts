@@ -19,7 +19,7 @@ const canonical = (value: unknown): unknown => {
 /** SHA-256 of canonical JSON, 16 hex characters, unsalted: one content reads alike on any account (D1's `hP`). */
 export const contentHash = (value: unknown): string => createHash('sha256').update(JSON.stringify(canonical(value))).digest('hex').slice(0, 16);
 
-/** The eight families, in the order that report ranks them, recovery first: the only one that changes a next call today. Then `tool-day`, which the reads above order 1 stand on. */
+/** The eight families, in rank order, recovery first: the only one that changes a next call today. Then `tool-day`, which the reads above order 1 stand on. */
 export const FIRST_ORDER_FAMILIES = ['recovery', 'fit', 'cost', 'change', 'live', 'adoption', 'method', 'next-step', 'tool-day'] as const;
 export type FirstOrderFamily = (typeof FIRST_ORDER_FAMILIES)[number];
 

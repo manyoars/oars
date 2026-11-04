@@ -60,7 +60,7 @@ const deposit = async (request: Request, env: Env): Promise<Response> => {
   const limit = wholeBinding(env.MAX_DEPOSITS_PER_ACCOUNT, DEFAULT_MAX_DEPOSITS);
   const budget = wholeBinding(env.MAX_DEPOSIT_BYTES_PER_ACCOUNT, DEFAULT_MAX_ACCOUNT_BYTES);
   const stored = JSON.stringify(skeleton);
-  // Whether this batch counts toward access is decided here, from the batch and the row it replaces; it is judged at the ingest tier, so a resend that writes an increment over a row raised by hand clears its date until Brief 2 sends the batch's own tier.
+  // Whether this batch counts toward access is decided here, from the batch and the row it replaces; it is judged at the ingest tier, so a resend that writes an increment over a row raised by hand clears its date until a wire sends the batch's own tier.
   // `written` is what ingest will write over the row held now, not what the batch derives: a batch sent again unchanged writes nothing and leaves the row's date alone.
   const next = incrementsOf(skeleton);
   const previous = await previousOf(env, account, skeleton.id);

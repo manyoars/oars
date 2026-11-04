@@ -114,4 +114,4 @@ Read by hand (30 crossings drawn at random from sessions that pass the exclusion
 
 ## Not in this release
 
-Pool reads, sign-in, deposit prompts, blocking, warnings, notes, a policy file, a holdback, and any committed or managed-settings hook. The hook records and nothing else; policy comes in the next brief.
+Pool reads, sign-in, deposit prompts, blocking, warnings, notes, a policy file, a holdback, and any committed or managed-settings hook. The hook records and nothing else; policy comes later.

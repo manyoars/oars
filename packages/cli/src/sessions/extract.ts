@@ -403,7 +403,7 @@ const firstTextBlock = (content: unknown): string => {
   return '';
 };
 
-// What the harness writes as a user line and the operator did not ask. A full re-capture checked this against a full re-capture: the only leading tag left on a `typed` row is
+// What the harness writes as a user line and the operator did not ask. A full re-capture checked this: the only leading tag left on a `typed` row is
 // the paste wrapper. `local-command-stderr` is here as the sibling of `local-command-stdout`. The set is closed on purpose: anything else with a leading `<` was
 // typed, or pasted. A `teammate-message` is another agent speaking to a teammate, so a teammate's turns after one stay in its prompt before, or outside any.
 export const INJECTED_TAGS: ReadonlySet<string> = new Set([
@@ -1601,7 +1601,7 @@ export const captureSession = (input: ExtractInput): Capture => {
     }
 
     // prompt_graphs.py and cost_per_class.py: a prompt is a main-line user line with text and no tool result. They also dropped any leading "<", which lost
-    // every turn a command or a skill opened; that is now `promptOpening`'s call. A line from any other harness keeps the old rule until its own brief.
+    // every turn a command or a skill opened; that is now `promptOpening`'s call. A line from any other harness keeps the old rule.
     // A `!` shell command the operator typed, or an image they pasted with no words: neither opens a prompt (the tag is injected, the image has no text), but
     // both are the operator's turn. A line the agent did not write (a meta line, a local command, a synthetic reply) is neither the operator nor the agent.
     let operatorTurn = false;
