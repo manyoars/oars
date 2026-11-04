@@ -54,7 +54,7 @@ const motifOf = (row: unknown): Motif => {
 /**
  * The version-free (name, platform, shell) cells that clear the floor, for a motif only when no cell of that motif, grain, day, and exposure is under it, in any bucket or environment.
  * They count the same calls as the version cells, so a total beside only some of its parts shows the rest by subtraction: five accounts on one version and three on another make an
- * environment total of eight, and the total less the served five is the three. Held whole, every part is served or none is, and the difference is nothing. A cell's key starts with its
+ * environment total of eight, and the total less the served five is the three. Every part is served or the total is not, so the difference is nothing. A cell's key starts with its
  * motif, so the subquery reads the motif's rows through the key's index.
  */
 export const ENVIRONMENT_CELLS =
