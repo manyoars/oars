@@ -16,7 +16,7 @@ import type { PromptObservation, SessionObservation, ToolObservation } from '../
 import type { Store } from '../../cli/src/sessions/store.js';
 import type { StoredPool } from './stored.js';
 
-/** A served cell needs this many accounts, and a served read this many across its cells together (spec Section 8; D4 may move this proposal, so it stays one constant). */
+/** A served cell needs this many accounts, and a served read this many in at least one of its cells (spec Section 8; D4 may move this proposal, so it stays one constant). */
 export const K_CELL = 5;
 
 const DERIVERS: readonly DeriveFamily[] = [deriveFit, deriveCost, deriveChange, deriveLive, deriveAdoption, deriveMethod, deriveNextStep];
@@ -136,8 +136,8 @@ export const storeOf = (skeletons: readonly SessionSkeleton[]): Store => {
 const NO_STORE: Store = { sessions: [], prompts: [], errors: [], subagents: [], tools: [], newerCaptures: 0 };
 
 /**
- * Each family states the highest of a read's cells, the most one store can prove. A read's `clusters` here is the largest held count among its input cells (lead 173): the fetch path
- * reads no per-account record, so five accounts on five days are five cells of one cluster each and serve nothing until Brief 9 brings held counts for a key's `n` and `c`.
+ * Each family states the highest of a read's cells, the most one store can prove. A read's `clusters` here is the largest held count among its input cells: the fetch path
+ * reads no per-account record, so five accounts on five days are five cells of one cluster each and serve nothing until a later change brings held counts for a key's `n` and `c`.
  */
 const readsOf = (pool: Pool): Read[] => {
   const orderOf = orderResolver([]);

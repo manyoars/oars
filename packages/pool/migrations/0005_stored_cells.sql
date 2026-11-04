@@ -7,5 +7,5 @@ CREATE TABLE cells (key TEXT PRIMARY KEY, harness_bucket TEXT NOT NULL, motif_id
 CREATE INDEX cells_by_harness ON cells (harness_bucket);
 -- Rule 3's strata (spec Section 4): one row per (dimension, value) over every harness version.
 CREATE TABLE strata (key TEXT PRIMARY KEY, dimension TEXT NOT NULL, value TEXT NOT NULL, sessions INTEGER NOT NULL, clusters INTEGER NOT NULL DEFAULT 0) STRICT;
--- The ledger plane's `contributor` record: one per (cell or stratum, account, UTC day of ingest). It tells a new cluster from a returning one, and a live read's cells their accounts.
+-- The ledger plane's `contributor` record: one per (cell or stratum, account, UTC day of ingest). It tells a new cluster from a returning one.
 CREATE TABLE contributors (kind TEXT NOT NULL, key TEXT NOT NULL, account TEXT NOT NULL, day TEXT NOT NULL, PRIMARY KEY (kind, key, account, day)) STRICT, WITHOUT ROWID;
