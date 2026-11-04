@@ -675,8 +675,12 @@ makes one prompt, runs one command that exits nonzero (for example `ls /nonexist
 command with a matching error line, and usage is nonzero (it is written at shutdown, and is absent when the process dies without one). To check the resume case, resume that session (`copilot --resume`), send one more prompt, and exit: it is cumulative only if the second `session.shutdown`'s `outputTokens` is at least the first's plus the `outputTokens` of every `assistant.message` after the resume, and the chunk case holds only if a multi-chunk response's summed `outputTokens` does not exceed the shutdown's.
 
 - **Where.** `$COPILOT_HOME`, else `~/.copilot` (`%USERPROFILE%\.copilot` on Windows): `session-state/<sessionId>/events.jsonl`, one JSON event per line:
-  `{id, parentId, timestamp, type, data}`. Rotated `events.N.jsonl` archives (when `COPILOT_SESSION_EVENT_LOG_ROTATION_BYTES` is set) and the pre-October-2025
-  `history-session-state` folder are not read. Opt-in like Cursor and Codex: discovered by default, opened only when `--allow copilot` names it; the nightly run
+  `{id, parentId, timestamp, type, data}`. The pre-October-2025
+  `history-session-state` folder is not read. A log that rotated (when `COPILOT_SESSION_EVENT_LOG_ROTATION_BYTES` is set) leaves archives `events.N.jsonl` beside the
+  live file; they are read oldest N first, then the live file, as one session. The session's cursor is the sum of its files' sizes and the newest modification
+  time, so a new archive or a longer live file reads the session again and a second deposit adds nothing. The cwd comes from the oldest file's `session.start`.
+  The live head's `session.journal_link {previousFile, sessionId, version}` is ignored. The N order is inferred from the link's `previousFile` (no page states how
+  the archives are numbered). Opt-in like Cursor and Codex: discovered by default, opened only when `--allow copilot` names it; the nightly run
   repeats a saved allow.
 - **Mapping.** `session.start` gives the cwd and `copilotVersion`; `assistant.message.model` the model; `user.message.content` a prompt; `assistant.message` a response.
   A shell call is found by shape, not name (`shellToolInfo` on the start event, or `shellExecution` on the completion, which also marks one the start did not),
@@ -688,7 +692,7 @@ command with a matching error line, and usage is nonzero (it is written at shutd
 - **Absent.** Cost has no equivalent. `assistant.usage` is `ephemeral` and never on disk, so per-response input and cache tokens do not exist: output tokens come
   from each `assistant.message`, and the input, cache, and reasoning totals from `session.shutdown.modelMetrics` land once, on the first line of the model's last response (one model call may be several `assistant.message` chunks sharing a `requestId`/`apiCallId`; they are one
   response). They are read from `agentMetrics.main` when the runtime writes it, because the session-wide `modelMetrics` include subagents, else from `modelMetrics`;
-  output the responses did not report is the total less what they did. A rotated head's `checkpoint: true` events are read like any other (the archives are not).
+  output the responses did not report is the total less what they did. A rotated head's `checkpoint: true` events replay state the archives already hold, so with an archive present they are dropped, and so is any later line whose event `id` was already read: each event counts once. A lone rotated head (its archives deleted) is read as it is, checkpoint events included, since they are then the only record of the earlier part.
   `inputTokens` already includes the cache reads and writes (github/copilot-sdk @ d28a136 `docs/features/usage-and-billing.md:58`: "`inputTokens` already includes `cacheReadTokens` and
   `cacheWriteTokens`, so do not add them to it. The uncached part of the input is `inputTokens - cacheReadTokens - cacheWriteTokens`", the same at `:679` for `getMetrics`, and
   `docs/features/streaming-events.md:717` makes the shutdown's `modelMetrics` the same `ModelMetric`), so the stored input is that uncached part and the cache fields are kept apart, as capture's are.

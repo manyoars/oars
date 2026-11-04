@@ -8,9 +8,9 @@
 // Where it reads from (`copilotRoot`): `$COPILOT_HOME`, else `~/.copilot` (`%USERPROFILE%\.copilot` on Windows). Inside it,
 // `session-state/<sessionId>/events.jsonl` is one session (docs/features/session-persistence.md, "Linked event journals", which names the file; the
 // SDK's `session.resume.eventsFileSizeBytes`, session-events.ts, is a second mention; the changelog's 0.0.342 entry moved new sessions there). The older
-// `history-session-state` is migrated by the CLI on resume and is not read. A rotated archive `events.N.jsonl` is not read either. Its head file holds a
-// `session.journal_link` and `checkpoint: true` events that replay earlier state; since the archives are not read, that prefix is the only record of the
-// earlier part of the session, so it is read like any other line (a fixture in copilot.test.ts holds one) and `session.journal_link` is ignored.
+// `history-session-state` is migrated by the CLI on resume and is not read. A rotated archive `events.N.jsonl` is read, oldest N first, then the live
+// file, as one session (`joinFiles`). Its head file holds a `session.journal_link` and `checkpoint: true` events that replay earlier state; with the archives
+// read those replays are dropped (and any repeated event id), and `eventLines` itself reads a lone head like any other line (a fixture in copilot.test.ts holds one) and ignores `session.journal_link`.
 // A line is `{id, parentId, timestamp, type, data, agentId?, ephemeral?, checkpoint?}`. An `ephemeral` event is never written to disk (session-events.ts,
 // the `ephemeral` field), which is why `assistant.usage` is not read: it is not there. Like codex.ts, the reader writes each session out as the
 // transcript lines `captureSession` reads, so redaction, the 1,000-character line cap, the salted hashes, and the skeleton are the Claude Code
@@ -64,8 +64,13 @@ export interface CopilotSession {
   id: string;
   /** `session.start` `context.cwd`; null when the head names none. */
   folder: string | null;
+  /** The live `events.jsonl`. */
   file: string;
+  /** Rotated archives `events.N.jsonl`, oldest first (by N); the session is these, then `file`. */
+  archives: string[];
+  /** The bytes of every file of the session, so a new archive or a longer live file changes the cursor. */
   size: number;
+  /** The newest modification time among the session's files. */
   mtimeMs: number;
 }
 
@@ -81,6 +86,9 @@ export interface CopilotStore {
 
 const SAFE_ID = /^(?!\.+$)[A-Za-z0-9._-]+$/;
 const EVENTS = 'events.jsonl';
+const NEWLINE = String.fromCharCode(10);
+/** A rotated archive's name; N counts up as the log rotates (docs/features/session-persistence.md, "Linked event journals"; the order is inferred from the head's `previousFile`). */
+const ARCHIVE = /^events\.(\d+)\.jsonl$/;
 /** How many leading lines are searched for `session.start`; a rotated head may begin with a `session.journal_link` and checkpoint events. */
 const HEAD_LINES = 8;
 
@@ -325,6 +333,32 @@ export const eventLines = (text: string, fallbackId: string): Obj[] => {
   return lines;
 };
 
+/**
+ * The session's files as one transcript text. A rotated head replays earlier state as `checkpoint: true` events, which the archives already hold in full,
+ * so a checkpoint line in a file after the first is dropped, and any other line whose event `id` was already seen is too: each event is read once.
+ * A line that is not JSON is kept, so it is still counted.
+ */
+const joinFiles = (texts: readonly string[]): string => {
+  const seen = new Set<string>();
+  const kept: string[] = [];
+  texts.forEach((text, index) => {
+    for (const raw of text.split(NEWLINE)) {
+      if (raw.trim() === '') continue;
+      const entry = parse(raw);
+      if (isObj(entry)) {
+        if (index > 0 && entry.checkpoint === true) continue;
+        const id = str(entry.id);
+        if (id !== undefined) {
+          if (seen.has(id)) continue;
+          seen.add(id);
+        }
+      }
+      kept.push(raw);
+    }
+  });
+  return kept.join(NEWLINE) + (kept.length === 0 ? '' : NEWLINE);
+};
+
 export const openCopilotStore = async (root: string): Promise<CopilotStore | undefined> => {
   const base = join(root, 'session-state');
   const unreadable: { file: string; reason: string }[] = [];
@@ -345,7 +379,27 @@ export const openCopilotStore = async (root: string): Promise<CopilotStore | und
     const file = join(base, entry.name, EVENTS);
     try {
       const info = await stat(file);
-      sessions.push({ id: entry.name, folder: await startFolder(file), file, size: info.size, mtimeMs: Math.floor(info.mtimeMs) });
+      const archives = (await readdir(join(base, entry.name)))
+        .flatMap((name) => {
+          const n = ARCHIVE.exec(name)?.[1];
+          return n === undefined ? [] : [{ n: Number(n), path: join(base, entry.name, name) }];
+        })
+        .sort((a, b) => a.n - b.n)
+        .map((archive) => archive.path);
+      let size = info.size;
+      let mtimeMs = info.mtimeMs;
+      for (const archive of archives) {
+        const archived = await stat(archive);
+        size += archived.size;
+        mtimeMs = Math.max(mtimeMs, archived.mtimeMs);
+      }
+      // The oldest file holds the real `session.start`; the live head of a rotated log only replays it.
+      let folder: string | null = null;
+      for (const candidate of [...archives, file]) {
+        folder = await startFolder(candidate);
+        if (folder !== null) break;
+      }
+      sessions.push({ id: entry.name, folder, file, archives, size, mtimeMs: Math.floor(mtimeMs) });
     } catch (error) {
       // A folder with no events file (only a workspace.yaml or a plan) is no session; any other failure is reported.
       if (!missing(error)) unreadable.push({ file, reason: reasonOf(error, file) });
@@ -357,7 +411,7 @@ export const openCopilotStore = async (root: string): Promise<CopilotStore | und
     rejected,
     unreadable,
     transcript: async (session) => {
-      const text = await readFile(session.file, 'utf8');
+      const text = joinFiles(await Promise.all([...session.archives, session.file].map((path) => readFile(path, 'utf8'))));
       const lines = [...eventLines(text, session.id).map((line) => JSON.stringify(line)), ...eventBadLines(text)];
       return lines.join('\n') + (lines.length === 0 ? '' : '\n');
     },
