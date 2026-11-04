@@ -105,9 +105,9 @@ describe('the shell form projected from the account store (Q5)', () => {
     expect(JSON.stringify(projected(COMMANDS))).not.toContain(PLANTED);
   });
 
-  it('limits a step to the curated lists: a flag outside the curated lists is lost stored, and the program kept (3 of 3 flags, 0 of 3 programs)', () => {
-    // `-i` and `-exec` are outside the curated flags, so capture stored each as `<literal>`. `ffmpeg` is in the snapshot but not the curated programs, so its step is
-    // `<literal>` too and the program is read from the call's `segments`; `find` is curated, so its step keeps its own program and only its flag is lost.
+  it('every flag of a snapshot-only program and a curated program\'s uncurated flag are lost stored, and the program kept (3 of 3 flags, 0 of 3 programs)', () => {
+    // `ffmpeg` is in the snapshot but not the curated programs, so its step is `<literal>` with no flags and its program is read from the call's `segments`; `-exec` is
+    // outside the curated flags, so `find`'s step keeps its own program and stores that flag as `<literal>`.
     const forms = ['ffmpeg -i in out', 'cd /w && ffmpeg -i in out', 'find . -exec acme-deploy {} ;'];
     const raw = forms.map((command) => projectShell(vocab, command, makeRedactor()));
     const stored = projected(forms);

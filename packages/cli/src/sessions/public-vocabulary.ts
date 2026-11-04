@@ -143,7 +143,7 @@ export const PUBLIC_PROGRAMS: ReadonlySet<string> = new Set([
     docker-compose podman k3d kind minikube aws az gcloud flyctl vercel netlify stripe psql mysql sqlite3 redis-cli curl wget ssh scp rsync
     ls dir cat type head tail less more wc sort uniq cut tr sed awk grep rg find fd tree du df stat file touch mkdir rmdir rm cp mv ln chmod chown pwd cd pushd popd
     echo printf test true false sleep date which where whoami hostname export set unset source tee xargs diff patch tar zip unzip gzip gunzip jq yq sha256sum md5sum base64
-    ps kill killall pkill pgrep top lsof netstat taskkill tasklist bash sh zsh dash fish pwsh powershell cmd code cursor claude codex gemini oars
+    ps kill killall pkill pgrep top lsof netstat taskkill tasklist bash sh zsh dash fish pwsh powershell cmd code cursor claude codex copilot gemini oars
     get-childitem get-content set-content add-content get-item set-item new-item remove-item copy-item move-item rename-item test-path select-string select-object where-object foreach-object sort-object measure-object get-process stop-process start-process write-output write-host out-file get-command set-location get-location invoke-webrequest invoke-restmethod
   `),
 ]);
