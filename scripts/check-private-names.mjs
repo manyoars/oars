@@ -46,7 +46,8 @@ const addedLines = (/** @type {string} */ sha) => {
   let file = '';
   let line = 0;
   let parents = 1;
-  for (const raw of git(['-c', 'core.quotePath=false', 'show', '--src-prefix=a/', '--dst-prefix=b/', '--format=', '-U0', '--no-color', '--no-ext-diff', sha]).split('\n')) {
+  // `--root` because `log.showRoot=false` in a contributor's config makes `git show` print no diff for a root commit, and a guard must not fail open on a config value.
+  for (const raw of git(['-c', 'core.quotePath=false', 'show', '--root', '--src-prefix=a/', '--dst-prefix=b/', '--format=', '-U0', '--no-color', '--no-ext-diff', sha]).split('\n')) {
     const head = /^(@@+) [^+]*\+(\d+)(?:,\d+)? @@/.exec(raw);
     if (head) {
       parents = (head[1] ?? '').length - 1;
