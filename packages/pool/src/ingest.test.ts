@@ -1,9 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import { deriveCells } from '../../cli/src/sessions/cells.js';
-import type { SessionSkeleton } from '../../cli/src/sessions/pool-wire.js';
+import { frame, prompt, session, step, store, tool } from '../../cli/src/sessions/pool-fixture.js';
+import { sessionsOf, skeletonOf, type SessionSkeleton } from '../../cli/src/sessions/pool-wire.js';
+import type { CanonicalAction } from '../../cli/src/sessions/actions.js';
+import { PUBLIC_PROGRAMS, PUBLIC_SUBCOMMANDS } from '../../cli/src/sessions/public-vocabulary.js';
 import { storeOf } from './derive.js';
 import type { Bound, Env, PoolDb } from './http.js';
-import { incrementsOf } from './ingest.js';
+import { chunksOf, incrementsOf } from './ingest.js';
 import { sampleSkeleton } from './sample.js';
 import { fieldOf, startPool, stubUser, type TestPool, textOf } from './test-pool.js';
 import worker from './worker.js';
@@ -294,4 +297,77 @@ describe('what stored cells cannot take back', () => {
       expect(await db.prepare("SELECT COUNT(*) AS count FROM contributors WHERE kind = 'cell' AND key LIKE '%/2026-11-01/%'").first('count')).toBe(after.length * 5);
     });
   }, 60_000);
+});
+
+// A deposit inside the route's 1 MB limit binds far more than 1 MB of cell JSON (the cells run about four times the skeleton), and D1 refuses a value over 2 MB, so each payload goes in chunks.
+describe('a large deposit', () => {
+  const NATIVES: [CanonicalAction, string][] = [
+    ['file.read', 'Read'],
+    ['file.edit', 'Edit'],
+    ['file.write', 'Write'],
+    ['file.search', 'Grep'],
+    ['plan.update', 'TodoWrite'],
+    ['shell.exec', 'Bash'],
+    ['shell.exec', 'Bash'],
+    ['shell.exec', 'Bash'],
+    ['shell.exec', 'Bash'],
+  ];
+  const STEPS = 3400;
+  const FLAGS = [...'abcdefghijklmnopqrstuvwxyz'];
+  const programs = [...PUBLIC_PROGRAMS];
+
+  /** One prompt of `STEPS` calls whose actions follow a fixed pseudo-random line, so the windows over it are mostly distinct and so are its cells. */
+  const largeSkeleton = (id: string): SessionSkeleton => {
+    let seed = 7;
+    const next = (): number => {
+      seed = (seed * 1103515245 + 12345) % 2147483648;
+      // The high bits: the low bits of this generator cycle with a short period.
+      return Math.floor(seed / 65536);
+    };
+    const framed = frame({ shell: 'bash', day: '2026-11-01', stack: { languages: ['typescript'], frameworks: [], size: null } });
+    const calls = Array.from({ length: STEPS }, (_, n) => {
+      const [action, native] = NATIVES[next() % NATIVES.length] ?? NATIVES[0] ?? ['other', 'x'];
+      // A program, one of its subcommands, and a short flag, all from the public vocabulary: thousands of identities, so the named windows over them rarely repeat.
+      const program = programs[next() % programs.length] ?? 'git';
+      const subs = [null, ...(PUBLIC_SUBCOMMANDS.get(program) ?? [])];
+      const identity = action === 'shell.exec' ? { program, sub: subs[next() % subs.length] ?? null, flags: [`-${FLAGS[next() % FLAGS.length] ?? 'a'}`] } : null;
+      return tool('s1', n, native, { steps: [step(n, 0, action, { native, identity })] });
+    });
+    const [only] = sessionsOf(store({ sessions: [session('s1', { frame: framed })], prompts: [prompt('s1', 0, { frame: framed })], tools: calls }));
+    const built = only === undefined ? null : skeletonOf(only, id);
+    if (built === null) throw new Error('no skeleton');
+    return built;
+  };
+
+  it('is stored whole when its cells run past the size D1 takes in one value', async () => {
+    const skeleton = largeSkeleton('0000000000009101');
+    const wanted = incrementsOf(skeleton);
+    // The fixture must reach the case: more cell JSON than one value may hold, from a skeleton the route accepts.
+    expect(JSON.stringify([...wanted.cells.values()]).length).toBeGreaterThan(2 * 1024 * 1024);
+    expect(JSON.stringify(skeleton).length).toBeLessThan(1024 * 1024);
+    await inFreshPool({}, async (target) => {
+      const token = await accountOn(target, '9101');
+      const response = await target.post('/v1/deposits', skeleton, token);
+      expect(response.status).toBe(201);
+      const expected = [...wanted.cells.values()].reduce((sum, cell) => sum + cell.sessions, 0);
+      expect(expected).toBeGreaterThan(0);
+      expect(await total(target)).toBe(expected);
+      const db = await target.db();
+      expect(await db.prepare('SELECT COUNT(*) AS count FROM cells').first('count')).toBe(wanted.cells.size);
+      expect(await db.prepare('SELECT COUNT(*) AS count FROM motifs').first('count')).toBe(wanted.motifs.length);
+      expect(await db.prepare("SELECT COUNT(*) AS count FROM contributors WHERE kind = 'cell'").first('count')).toBe(wanted.cells.size);
+      expect(await db.prepare("SELECT COUNT(*) AS count FROM cells WHERE clusters = 1").first('count')).toBe(wanted.cells.size);
+    });
+  }, 120_000);
+
+  it('splits a payload into arrays that stay under the limit and hold every item once, in order', () => {
+    const items = ['aaaa', 'bbbb', 'cccc', 'dddddddddddddddddddddddd', 'ee'];
+    const chunks = chunksOf(items, 24);
+    expect(chunks.every((chunk) => new TextEncoder().encode(chunk).length <= 24 || (JSON.parse(chunk) as unknown[]).length === 1)).toBe(true);
+    expect(chunks.length).toBeGreaterThan(1);
+    expect(chunks.flatMap((chunk) => JSON.parse(chunk) as unknown[])).toEqual(items);
+    // An item over the limit has a chunk of its own, and nothing at all gives no chunk.
+    expect(chunksOf(['x'.repeat(40)], 24)).toEqual([JSON.stringify(['x'.repeat(40)])]);
+    expect(chunksOf([])).toEqual([]);
+  });
 });
