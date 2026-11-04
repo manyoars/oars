@@ -298,6 +298,8 @@ describe('the Gemini CLI action table', () => {
     ['activate_skill', 'skill.run'],
     ['invoke_agent', 'agent.spawn'],
     ['write_todos', 'plan.update'],
+    ['tracker_add_dependency', 'plan.update'],
+    ['tracker_visualize', 'plan.update'],
     ['ask_user', 'ask.user'],
     ['mcp_oars_oars_recall', 'recall.pull'],
     ['complete_task', 'other'],
