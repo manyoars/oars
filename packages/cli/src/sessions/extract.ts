@@ -10,6 +10,7 @@ import type { RepoSize } from './public-vocabulary.js';
 import { linkSteps } from './graph.js';
 import { callIdentity, shellIdentity, UNREAD_SHELL, type WordOfCommand } from './identity.js';
 import type { Redactor } from './redact.js';
+import { createShape, INTERRUPT_MARKER } from './session-shape.js';
 import {
   CAPTURE_VERSION,
   ERROR_LINE_CHARS,
@@ -339,6 +340,12 @@ interface PromptFrameParts {
 }
 
 const hasToolResult = (content: unknown): boolean => Array.isArray(content) && content.some((block: unknown) => isObj(block) && block.type === 'tool_result');
+
+const hasImage = (content: unknown): boolean => Array.isArray(content) && content.some((block: unknown) => isObj(block) && block.type === 'image');
+
+// The tags a local command (a slash command the harness ran itself) leaves as user lines. A model's answer to a command makes it a prompt, and that case never reaches
+// the run: a tag listed here that is still on a line there was not answered.
+const LOCAL_COMMAND_TAGS: ReadonlySet<string> = new Set(['command-name', 'command-message', 'local-command-stdout', 'local-command-stderr', 'local-command-caveat']);
 
 const firstTextBlock = (content: unknown): string => {
   if (typeof content === 'string') return content;
@@ -1180,12 +1187,12 @@ const MCP_TAIL_MAX = 192;
 /**
  * The pattern rules of the redactor that can match across a `_`, and so across half of a separator: a class that allows `_` (`sk-`, `AIza`,
  * `github_pat_`, `eyJ`), and a NAME=value rule, whose value takes anything. `sk-` is the shape the rule is for (`sk-ant-`, 16 characters of the
- * class before any `_`, or a capital and a digit in the first run), so `sk-learn` and `task-sk-tools` are not taken for a key.
+ * class before any `_`, or a capital and a digit anywhere in the slice), so `sk-learn` and `task-sk-tools` are not taken for a key.
  */
 const UNDERSCORE_TOKEN = /\b(?:sk-(?:ant-|[A-Za-z0-9-]{16}|(?=[\w-]*[A-Z])(?=[\w-]*\d))|AIza|github_pat_|eyJ)|[=:]/;
 
 /** The pattern rules a Cursor name can hold across a `_`: a prefix that ends in `_`, plus the `UNDERSCORE_TOKEN` rules, since it has no `__` to cut at. */
-const CURSOR_TOKEN = /\b(?:sk-(?:ant-|[A-Za-z0-9-]{16}|(?=[\w-]*[A-Z])(?=[\w-]*\d))|[srp]k_|AIza|github_pat_|gh[pousr]_|whsec_|eyJ)|[=:]/;
+const CURSOR_TOKEN = /\b(?:sk-(?:ant-|[A-Za-z0-9-]{16}|(?=[\w-]*[A-Z])(?=[\w-]*\d))|[srp]k_(?:live|test)_|AIza|github_pat_|gh[pousr]_|whsec_|eyJ)|[=:]/;
 
 /**
  * What follows `mcp__` (or the Cursor `mcp_`) with every secret masked. A token is matched only at a word boundary and `_` is a word character, so
@@ -1197,9 +1204,14 @@ const CURSOR_TOKEN = /\b(?:sk-(?:ant-|[A-Za-z0-9-]{16}|(?=[\w-]*[A-Z])(?=[\w-]*\
  * harmless parts (`Context7__resolve-library-id`) as one random token, or eats the separator, and the server loses its name. A Cursor name has
  * no `__` to tell server from tool, so any slice that holds a `_` is run only for a `CURSOR_TOKEN` rule. Limits, each on the side of the secret
  * or an accepted miss: a public name that starts like a pattern rule (`sk-ant-tools`, `github_pat_helper`) loses its server, since it cannot be
- * told from a token that holds `__`; a tool part of 24 characters or more with a capital and a digit is masked, since it cannot be told from a
- * token; and a random token with no pattern rule whose every part is under 24 characters (`TOKEN`'s minimum) cannot be told from two ordinary
- * parts and is not found.
+ * told from a token that holds `__` (`sk-learn__PCA2Transform` and `task-sk-tools__Get2Items` are masked, since a tool part supplies the capital
+ * and the digit); an `sk-` key with neither that holds a `_` before 16 characters, `mcp_sk-abc_defghijklmnopqrstuvwxyz_find`, is stored raw, since it
+ * cannot be told from `mcp_sk-learn_fit_transform`; a name that holds `:` or `=` (`mcp__ns:Context7__resolve-library-id`, `mcp__ns=Context7__resolve-library-id`)
+ * opens a NAME=value slice, so its parts are read as one token and the server is lost (no harness is known to write such a name); a tool part
+ * of 24 characters or more with a capital and a digit is masked, since it cannot be told from a token; a token right behind a Slack-shaped run
+ * keeps what that run's match leaves (`mcp_xoxb-1234567890-ghp_...` stores `mcp_<secret>_...`, `mcp__xoxb-a-eyJ...` keeps the JWT's other segments),
+ * since no earlier start exists to finish it; and a random token with no pattern rule whose every part is under 24 characters (`TOKEN`'s
+ * minimum) cannot be told from two ordinary parts and is not found.
  */
 const redactedMcpTail = (tail: string, redact: Redactor, cursor: boolean): string => {
   if (tail.length > MCP_TAIL_MAX) return '<oversized>';
@@ -1220,7 +1232,9 @@ const redactedMcpTail = (tail: string, redact: Redactor, cursor: boolean): strin
       break;
     }
   }
-  return out;
+  // A Slack token stops at a `_`, but the redactor backtracks to its `-`, so the rest of the token follows the mask: it goes with the mask.
+  // It goes last, since a later slice has to read a token that rest opens.
+  return out.replace(/<secret>[A-Za-z0-9]+(?=_)/g, '<secret>');
 };
 
 /**
@@ -1391,6 +1405,8 @@ export const captureSession = (input: ExtractInput): Capture => {
   const seenResponses = new Set<string>();
   let promptFingerprint: string | null = null;
   let cur: Current | undefined;
+  // The setup, funnel, and trust shape (t815). A subagent's run is the parent's, so it has no run of its own alone.
+  const shape = createShape(harness, (tool) => storedToolName(tool, redact), { timing: origin === undefined });
 
   const finish = (): void => {
     if (cur === undefined) return;
@@ -1495,6 +1511,7 @@ export const captureSession = (input: ExtractInput): Capture => {
       costState: type === 'cost-state' ? sumModelUsage(o.modelUsage, o.startTime) : null,
     });
 
+    shape.read(o, { side, prompt: cur?.index ?? null });
     if (type === 'attachment') {
       const attachment = isObj(o.attachment) ? o.attachment : undefined;
       if (attachment?.type === 'prompt_snapshot' && attachment.systemPrompt !== undefined) promptFingerprint = sha256(JSON.stringify(attachment.systemPrompt)).slice(0, 12);
@@ -1519,6 +1536,16 @@ export const captureSession = (input: ExtractInput): Capture => {
 
     // prompt_graphs.py and cost_per_class.py: a prompt is a main-line user line with text and no tool result. They also dropped any leading "<", which lost
     // every turn a command or a skill opened (t768); that is now `promptOpening`'s call. A Cursor bubble keeps the old rule until its own brief.
+    // A `!` shell command the operator typed, or an image they pasted with no words: neither opens a prompt (the tag is injected, the image has no text), but
+    // both are the operator's turn. A line the agent did not write (a meta line, a local command, a synthetic reply) is neither the operator nor the agent.
+    let operatorTurn = false;
+    let harnessLine = type === 'assistant' && messageModel === '<synthetic>';
+    if (type === 'user' && role === 'user' && !side && !hasToolResult(content)) {
+      const leading = LEADING_TAG.exec(firstTextBlock(content).trimStart())?.[1];
+      harnessLine = o.isMeta === true || (leading !== undefined && LOCAL_COMMAND_TAGS.has(leading));
+      // `promptOpening` is Claude Code's alone: a Codex prompt that starts with `<` gets no opening below, yet it is still the operator typing.
+      operatorTurn = o.isMeta !== true && (leading === 'bash-input' || hasImage(content) || (harness === 'codex' && firstTextBlock(content).startsWith('<')));
+    }
     if (type === 'user' && role === 'user' && o.isMeta !== true && !side) {
       const text = firstTextBlock(content);
       const opening =
@@ -1530,6 +1557,9 @@ export const captureSession = (input: ExtractInput): Capture => {
               ? undefined
               : ({ opened: 'typed', request: text } satisfies PromptOpening);
       if (opening !== undefined) {
+        // The harness's interrupt marker is a line it wrote after the operator pressed Esc, not a turn the operator took.
+        // A compaction summary is the harness writing the session's history back, so the agent is still working through it.
+        shape.turn(text.startsWith(INTERRUPT_MARKER) ? 'none' : o.isCompactSummary === true ? 'agent' : 'human', toSeconds(ts), str(o.uuid));
         finish();
         cur = {
           index: prompts.length,
@@ -1552,6 +1582,9 @@ export const captureSession = (input: ExtractInput): Capture => {
       }
     }
 
+    // Anything else on the main line is the agent at work, an automated turn included: only the operator's own turn ends a run alone. A line the agent did not
+    // write is skipped, since it would stretch the run to a time the agent never worked until.
+    if (!side && (type === 'assistant' || type === 'user')) shape.turn(harnessLine ? 'none' : operatorTurn ? 'human' : 'agent', toSeconds(ts), str(o.uuid));
     if (cur !== undefined) {
       // cost_per_class.py reads wall time, turns, model, and tokens from main-line lines only.
       if (!side) {
@@ -1675,6 +1708,7 @@ export const captureSession = (input: ExtractInput): Capture => {
   }
   finish();
 
+  Object.assign(session, shape.finish());
   session.versions = [...versions].sort();
   session.branches = [...branches].sort();
   const kept = [...files].sort().slice(0, FILES_PER_SESSION_MAX);

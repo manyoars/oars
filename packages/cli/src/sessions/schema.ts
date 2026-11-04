@@ -7,6 +7,8 @@
 //
 // EXTRACTOR 11 (t811, pool vocabulary spec Section 2) changes no stored value. It moves raw `agentType`, `keys`, and `frameId` with the joined `frame` from class P to
 // class A, so a store written at 10 re-derives on its next deposit and only the pooled projection (computed at deposit, never written) changes.
+// Version 12 (CAPTURE 12, t815) adds the optional `setup`, `funnel`, and `trust` to the session record, read from the transcript only (`session-shape.ts`;
+// `docs/sessions-store.md`). It changed no derivation, so it leaves EXTRACTOR at 10.
 //
 // Version 10 (CAPTURE 10, t768) gives a turn opened by a slash command or a skill a `user-prompt` record, adds `opened` to that record, and moves `skills`
 // from class P to class A, since a skill's name can be private. It changed no derivation, so it leaves EXTRACTOR at 9.
@@ -50,14 +52,15 @@
 // to 1,000 characters in the `error-line` record, 160 characters in a derived example), TLDR lines (400), Confidence lines (120), and,
 // with no length limit, WebSearch queries, fetched URLs, file paths, and git branch names. Also kept as written, not redacted: the
 // project folder slug (it holds the username and directory names; the log stays local), skill names, effort values, model names,
-// harness versions, and tool names (including MCP server names). `redact` masks secrets by pattern and entropy, emails, and the
+// harness versions, and tool names (an MCP name's part after its prefix is redacted). `redact` masks secrets by pattern and entropy, emails, and the
 // organization domains the operator names. The skeleton holds hashes only.
 
 import type { CanonicalAction } from './actions.js';
 import type { RepoSize } from './public-vocabulary.js';
+import type { SessionFunnel, SessionSetup, SessionTrust } from './session-shape.js';
 
 /** Stamped `cv` on every captured record. Bump it when the captured field list changes or a stored value of an existing captured record or skeleton changes: a bump re-reads every transcript. */
-export const CAPTURE_VERSION = '11';
+export const CAPTURE_VERSION = '12';
 
 /** Capture versions the reader derives from. A version-3 record is upgraded on read; a newer one is read for the fields this code knows. */
 export const OLDEST_READABLE_CAPTURE = 3;
@@ -137,7 +140,7 @@ export interface CaptureEnv {
 /**
  * One per transcript, captured: the `parse_sessions.py` record, minus anything that is raw content. Classes (t711 Section 1.2):
  * `L` local-only: `project`, `files`. `A` account store: `session`, `parent`, `spawnedBy`, `spawnedIn`, `branches`, `urls`, `searches`, `tldrs`,
- * `confidences`, `promptFingerprint`, `repo`, `fileHashes`, `tools`, `at`, `tsFirst`, `tsLast`. `P` pooled: `kind`, `cv`, `rev`, `sid`,
+ * `confidences`, `promptFingerprint`, `repo`, `fileHashes`, `tools`, `setup`, `funnel`, `trust`, `at`, `tsFirst`, `tsLast`. `P` pooled: `kind`, `cv`, `rev`, `sid`,
  * the counts, `versions`, `models`, `env`, `costUsd`, `usage` (`at`, `tsFirst`, and `tsLast` at UTC day). `agentType`, `frame`, and `frameId` moved to `A` at EXTRACTOR 11:
  * a custom agent's name is private, and the joined frame is one value that links rows.
  */
@@ -201,6 +204,12 @@ export interface SessionObservation {
   costUsd: number | null;
   /** Summed assistant usage of the file's own line (a main transcript's sidechain lines are not counted; a subagent transcript is its own line). */
   usage: Usage;
+  /** What the transcript shows of the setup the session ran with (t815, class A); absent when it shows none, and on a record captured before version 12. */
+  setup?: SessionSetup;
+  /** The tool names at each funnel stage the transcript shows (class A); same absence rules. */
+  funnel?: SessionFunnel;
+  /** How often a human or a policy stopped the session and how long it ran alone (class A); same absence rules. */
+  trust?: SessionTrust;
 }
 
 /**
