@@ -481,6 +481,31 @@ describe('a version-3 store opened under version 4', () => {
     expect(readFileSync(file).equals(before)).toBe(true);
   });
 
+  it('counts a session as newer only when its highest rev is, as the full load does', async () => {
+    const staged = stage();
+    await deposit(staged.runtime, options);
+    const file = paths(staged.storeDir).observations;
+    const lines = readFileSync(file, 'utf8').split('\n').filter((entry) => entry !== '');
+    const sessionLines = lines.filter((entry) => entry.includes('"kind":"session"'));
+    expect(sessionLines.length).toBeGreaterThan(1);
+    const newer = String(Number(CAPTURE_VERSION) + 1);
+    const parse = (entry: string): object => {
+      const parsed: unknown = JSON.parse(entry);
+      return typeof parsed === 'object' && parsed !== null ? parsed : {};
+    };
+    const copy = (entry: string, rev: number, cv: string): string => JSON.stringify({ ...parse(entry), rev, cv });
+    const parsedRev = parse(sessionLines[0] ?? '');
+    const first = { rev: 'rev' in parsedRev && typeof parsedRev.rev === 'number' ? parsedRev.rev : 0 };
+    // A newer oars wrote an older rev of the session; a current rev followed it. The current one is the session as a reader sees it.
+    writeFileSync(file, `${[copy(sessionLines[0] ?? '', first.rev - 1, newer), ...lines].join('\n')}\n`);
+    expect((await loadStore(staged.storeDir)).newerCaptures).toBe(0);
+    await expect(deposit(staged.runtime, options)).resolves.toBeDefined();
+    // The newer record is the highest rev: both counts see it, and the deposit refuses.
+    appendFileSync(file, `${copy(sessionLines[0] ?? '', first.rev + 1, newer)}\n`);
+    expect((await loadStore(staged.storeDir)).newerCaptures).toBe(1);
+    await expect(deposit(staged.runtime, options)).rejects.toThrow(/sessions: 1\)/);
+  });
+
   it('reads a line written by a newer capture version for the fields it knows', async () => {
     const staged = stage();
     await deposit(staged.runtime, options);
