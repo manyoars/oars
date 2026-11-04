@@ -178,6 +178,12 @@ describe('the Gemini CLI reader', () => {
     expect(lines.filter((entry) => entry.type === 'user').map((entry) => JSON.stringify(entry.message))).toEqual([expect.stringContaining('real'), expect.stringContaining('what I typed')]);
   });
 
+  it('applies the resume filter to the sent text (content), not to what was shown: a custom command is a prompt whose content is its expansion (chatRecordingService.ts:220-227, nonInteractiveCli.ts:289-300)', () => {
+    const lines = linesOf([head, prompt(1, 'expanded text', { displayContent: [{ text: '/cmd' }] }), say(2, 'ok'), prompt(3, '/clear', { displayContent: [{ text: '/clear' }] })]);
+    expect(lines.filter((entry) => entry.type === 'user').map((entry) => JSON.stringify(entry.message))).toEqual([expect.stringContaining('/cmd')]);
+    expect(lines.map((entry) => entry.type)).toEqual(['user', 'assistant']);
+  });
+
   it('skips a response that holds only a thought, and leaves thought text out of the response', () => {
     const lines = linesOf([head, prompt(1, 'x'), say(2, '', { thoughts: [{ subject: 's', description: 'd', timestamp: T(2) }] }), say(3, [{ text: 'hidden', thought: true }, { text: 'shown' }])]);
     expect(lines.filter((entry) => entry.type === 'assistant')).toHaveLength(1);
@@ -259,6 +265,20 @@ describe('the Gemini CLI reader', () => {
     expect(viaTool?.line).not.toContain('alice@example.com');
   });
 
+  it('records a shell call that hit the inactivity timeout as an error: the tool writes a sentence and no trailer (tools/shell.ts:929-933, 1197) and the executor records success (tool-executor.ts:144-154)', () => {
+    const sentence = 'Command was automatically cancelled because it exceeded the timeout of 5.0 minutes without output.';
+    const quiet = `<untrusted_context source="shell">\n${sentence} There was no output before it was cancelled.\n</untrusted_context>`;
+    const partial = `<untrusted_context source="shell">\n${sentence} Below is the output before it was cancelled:\nhalf a log\n</untrusted_context>`;
+    const out = extractOf([head, prompt(1, 'x'), say(2, '', { toolCalls: [shell('a', 'sleep 999', 'success', 3, quiet), shell('b', 'tail -f x', 'success', 4, partial)] })]);
+    expect(out.tools.map((tool) => tool.status)).toEqual(['error', 'error']);
+    expect(out.errorLines.map((error) => error.line)).toEqual([sentence, sentence]);
+  });
+
+  it('reads a successful git commit through the Exit code 0 line, so its commit survives', () => {
+    const out = extractOf([head, prompt(1, 'commit it'), say(2, '', { toolCalls: [shell('a', 'git commit -m x', 'success', 3, shellText('[main abc1234] x\n 1 file changed, 1 insertion(+)'))] })]);
+    expect(out.tools[0]).toMatchObject({ tool: 'Bash', status: 'ok', commits: ['abc1234'] });
+  });
+
   it('reports a signal with no output as the signal, and a nonzero exit with no output as "Exit code N"', () => {
     const out = extractOf([head, prompt(1, 'x'), say(2, '', { toolCalls: [shell('a', 'q', 'success', 3, shellText('(empty)', ['Signal: SIGKILL'])), shell('b', 'r', 'success', 4, shellText('(empty)', ['Exit Code: 7']))] })]);
     expect(out.errorLines.map((error) => error.line)).toEqual(['Signal: SIGKILL', 'Exit code 7']);
@@ -325,6 +345,8 @@ describe('the Gemini home', () => {
       { id: 'aaaaaaaa-1', projectRoot: '/work/a\n', lines: [geminiHead('aaaaaaaa-1'), prompt(1, 'x')] },
       { id: 'bbbbbbbb-2', slug: 'nomarker', projectRoot: null, lines: [geminiHead('bbbbbbbb-2'), prompt(1, 'y')] },
       { id: 'agent-9', parent: 'aaaaaaaa-1', projectRoot: '/work/a', lines: [geminiHead('agent-9', { kind: 'subagent' }), prompt(1, 'sub')] },
+      // A subagent with no parent set is written at the root of chats/ (chatRecordingService.ts:787,813-814); the vendor's own listing skips it by `kind` (cli/src/utils/sessionUtils.ts:301), so it is no main session.
+      { id: 'subroot0', projectRoot: '/work/a', lines: [geminiHead('subroot0', { kind: 'subagent' }), prompt(1, 'a subagent at the root')] },
       { id: 'cccccccc-3', slug: 'legacy', projectRoot: '/work/l', legacy: true, lines: JSON.stringify({ ...geminiHead('cccccccc-3'), messages: [prompt(1, 'old')] }, null, 2) },
       { id: 'rejected1', slug: 'rejected', lines: [geminiHead('bad id/../x')] },
       { id: 'dddddddd-4', slug: 'nohead', projectRoot: '/work/n', lines: [prompt(1, 'no head line')] },
