@@ -7,7 +7,7 @@ import { run } from '../cli.js';
 import { ExitCode } from '../errors.js';
 import { harness, server, useServer, type Harness } from '../test-support.js';
 import { poolServer } from './pool-command.js';
-import { parseSkeleton, type PinnedKey } from './pool-wire.js';
+import { parseSkeleton, type PinnedKey, VOCAB_VERSION } from './pool-wire.js';
 import { deposit } from './store.js';
 import { addProject, cleanup, NOW, stage, type Staged } from './test-support.js';
 
@@ -480,7 +480,7 @@ describe('no harness token is ever read', () => {
     expect(await scene.cli('pool', 'login', '--provider', 'github', '--server', POOL)).toBe(ExitCode.OK);
     openPool(scene);
     expect(await scene.cli('pool', 'deposit', '--server', POOL)).toBe(ExitCode.OK);
-    on(scene, 'get', '/bundle/2.1.314/0', () => HttpResponse.json({ error: 'fetch_cap', message: 'capped' }, { status: 429 }));
+    on(scene, 'get', `/bundle/2.1.314/${VOCAB_VERSION}`, () => HttpResponse.json({ error: 'fetch_cap', message: 'capped' }, { status: 429 }));
     await scene.cli('pool', 'fetch', '--harness-version', '2.1.314', '--server', POOL);
     expect(scene.seen.length).toBeGreaterThan(3);
     expect(scene.sent()).not.toContain(HARNESS_SECRET);
@@ -656,7 +656,7 @@ describe('oars pool fetch', () => {
     expect(scene.seen).toEqual([]);
   });
 
-  const bundleBody = (version: string): string => JSON.stringify({ format: 1, harnessVersion: version, vocabVersion: '0', asOf: { pool: 'p' }, cells: [{}], motifs: [], reads: [{}, {}], strata: [] });
+  const bundleBody = (version: string): string => JSON.stringify({ format: 1, harnessVersion: version, vocabVersion: VOCAB_VERSION, asOf: { pool: 'p' }, cells: [{}], motifs: [], reads: [{}, {}], strata: [] });
 
   const signedScene = async (): Promise<{ scene: Scene; sign: (text: string) => Promise<string> }> => {
     const scene = setting();
@@ -674,7 +674,7 @@ describe('oars pool fetch', () => {
     const { scene, sign } = await signedScene();
     const payload = bundleBody('2.1.314');
     const signature = await sign(payload);
-    on(scene, 'get', '/bundle/2.1.314/0', () => HttpResponse.json({ payload, signature }));
+    on(scene, 'get', `/bundle/2.1.314/${VOCAB_VERSION}`, () => HttpResponse.json({ payload, signature }));
     expect(await scene.cli('pool', 'fetch', '--harness-version', '2.1.314', '--server', POOL, '--json')).toBe(ExitCode.OK);
     const answer = scene.document();
     expect(answer).toMatchObject({ ok: true, harnessVersion: '2.1.314', reads: 2, cells: 1, motifs: 0 });
@@ -686,7 +686,7 @@ describe('oars pool fetch', () => {
     const { scene, sign } = await signedScene();
     const payload = bundleBody('2.1.9');
     const signature = await sign(payload);
-    on(scene, 'get', '/bundle/2.1.9/0', () => HttpResponse.json({ payload, signature }));
+    on(scene, 'get', `/bundle/2.1.9/${VOCAB_VERSION}`, () => HttpResponse.json({ payload, signature }));
     expect(await scene.cli('pool', 'fetch', '--harness-version', '2.1.9', '--server', POOL)).toBe(ExitCode.OK);
     expect(scene.h.out.join('')).toContain('Fetched 2.1.9: 2 reads');
   });
@@ -695,12 +695,12 @@ describe('oars pool fetch', () => {
     const { scene, sign } = await signedScene();
     const payload = bundleBody('2.1.314');
     const signature = await sign(payload);
-    on(scene, 'get', '/bundle/2.1.314/0', () => HttpResponse.json({ payload: payload.replace('"cells":[{}]', '"cells":[{},{}]'), signature }));
+    on(scene, 'get', `/bundle/2.1.314/${VOCAB_VERSION}`, () => HttpResponse.json({ payload: payload.replace('"cells":[{}]', '"cells":[{},{}]'), signature }));
     expect(await scene.cli('pool', 'fetch', '--harness-version', '2.1.314', '--server', POOL, '--json')).toBe(ExitCode.INVALID);
     expect(scene.document()).toMatchObject({ problem: { code: 'bundle_unverified' } });
     expect(replicas(scene)).toEqual([]);
 
-    on(scene, 'get', '/bundle/2.1.9/0', () => HttpResponse.json({ payload, signature }));
+    on(scene, 'get', `/bundle/2.1.9/${VOCAB_VERSION}`, () => HttpResponse.json({ payload, signature }));
     expect(await scene.cli('pool', 'fetch', '--harness-version', '2.1.9', '--server', POOL)).toBe(ExitCode.INVALID);
     expect(replicas(scene)).toEqual([]);
   });
@@ -717,7 +717,7 @@ describe('oars pool fetch', () => {
     expect(scene.h.err.join('')).toContain('--harness-version');
     expect(scene.seen).toEqual([]);
 
-    on(scene, 'get', '/bundle/2.1.314/0', () => HttpResponse.json({ error: 'fetch_cap', message: 'An account without access may fetch 1 per ISO week.' }, { status: 429 }));
+    on(scene, 'get', `/bundle/2.1.314/${VOCAB_VERSION}`, () => HttpResponse.json({ error: 'fetch_cap', message: 'An account without access may fetch 1 per ISO week.' }, { status: 429 }));
     expect(await scene.cli('pool', 'fetch', '--harness-version', '2.1.314', '--server', POOL, '--json')).toBe(ExitCode.CAPPED);
     expect(scene.document()).toMatchObject({ problem: { code: 'fetch_cap' } });
 
@@ -729,7 +729,7 @@ describe('oars pool fetch', () => {
   const bundleRoute = (scene: Scene, version: string, replies: Array<(request: Request) => Response>): Array<{ headers: Headers; printedBefore: string }> => {
     const arrivals: Array<{ headers: Headers; printedBefore: string }> = [];
     server.use(
-      http.get(`${POOL}/bundle/${version}/0`, ({ request }) => {
+      http.get(`${POOL}/bundle/${version}/${VOCAB_VERSION}`, ({ request }) => {
         arrivals.push({ headers: request.headers, printedBefore: scene.h.err.join('') });
         scene.seen.push({ url: request.url, headers: JSON.stringify([...request.headers.entries()]), body: '', err: scene.h.err.join('') });
         return (replies.shift() ?? (() => new HttpResponse(null, { status: 500 })))(request);
@@ -739,7 +739,7 @@ describe('oars pool fetch', () => {
   };
 
   const signedReply = async (sign: (text: string) => Promise<string>, version: string, etag: string | null, reads = 2): Promise<() => Response> => {
-    const payload = JSON.stringify({ format: 1, harnessVersion: version, vocabVersion: '0', asOf: { pool: 'p' }, cells: [{}], motifs: [], reads: Array.from({ length: reads }, () => ({})), strata: [] });
+    const payload = JSON.stringify({ format: 1, harnessVersion: version, vocabVersion: VOCAB_VERSION, asOf: { pool: 'p' }, cells: [{}], motifs: [], reads: Array.from({ length: reads }, () => ({})), strata: [] });
     const signature = await sign(payload);
     return () => HttpResponse.json({ payload, signature }, etag === null ? {} : { headers: { etag } });
   };
@@ -752,7 +752,7 @@ describe('oars pool fetch', () => {
       const arrivals = bundleRoute(scene, '2.1.314', [await signedReply(sign, '2.1.314', '"e1"')]);
       expect(await scene.cli('pool', 'fetch', '--harness-version', '2.1.314', '--server', POOL)).toBe(ExitCode.OK);
       const before = arrivals[0]?.printedBefore ?? '';
-      expect(before).toContain('GET /bundle/2.1.314/0 HTTP/1.1\nhost: pool.test\nconnection: keep-alive\n');
+      expect(before).toContain(`GET /bundle/2.1.314/${VOCAB_VERSION} HTTP/1.1\nhost: pool.test\nconnection: keep-alive\n`);
       expect(before).toContain('authorization: Bearer <credential: 12 bytes>');
       expect(before).toContain('user-agent: oars/');
       // Whatever header the request carried when it arrived is in the print, word for word, except the credential.
@@ -768,7 +768,7 @@ describe('oars pool fetch', () => {
       const { scene, sign } = await signedScene();
       bundleRoute(scene, '2.1.314', [await signedReply(sign, '2.1.314', null)]);
       expect(await scene.cli('pool', 'fetch', '--harness-version', '2.1.314', '--server', POOL, '--json')).toBe(ExitCode.OK);
-      expect(scene.h.err.join('')).toContain('GET /bundle/2.1.314/0 HTTP/1.1');
+      expect(scene.h.err.join('')).toContain(`GET /bundle/2.1.314/${VOCAB_VERSION} HTTP/1.1`);
       expect(scene.document()).toMatchObject({ ok: true });
     });
 
