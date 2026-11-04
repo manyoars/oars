@@ -62,7 +62,13 @@ const finish = (second: number, toolCallId: string, status: string, extra: objec
   return line(S(second), { sessionUpdate: 'tool_call_update', toolCallId, status, ...(bare ? text : {}), ...extra });
 };
 const bytes = (text: string): number[] => [...Buffer.from(text)];
-const bash = (exit: number, text: string, extra: object = {}) => ({ type: 'Bash', exit_code: exit, command: 'x', output: bytes(text), output_for_prompt: text, signal: null, timed_out: false, truncated: false, description: null, output_file: '', total_bytes: Buffer.byteLength(text), current_dir: '/work/app', ...extra });
+// The model-issued path overwrites `output_for_prompt` with the formatted prompt, `exit: N\n<output>` (grok_build/bash/mod.rs:2246, format_default_prompt :386-417), so a
+// fixture of that path writes the header; the `output` bytes stay the raw output (:2232).
+const bash = (exit: number, text: string, extra: object = {}) => ({ type: 'Bash', exit_code: exit, command: 'x', output: bytes(text), output_for_prompt: `exit: ${String(exit)}\n${text}`, signal: null, timed_out: false, truncated: false, description: null, output_file: '', total_bytes: Buffer.byteLength(text), current_dir: '/work/app', ...extra });
+// The concise tool's form (grok_build_concise/bash.rs:37-58, :187): `Exit code: N`, then the output in a fence.
+const conciseBash = (exit: number, text: string, extra: object = {}) => bash(exit, text, { output_for_prompt: `Exit code: ${String(exit)}\n\nCommand output:\n\n\`\`\`\n${text}\n\`\`\`\n\nCommand completed.\n\nThe previous shell command ended, so on the next invocation of this tool, you will be using a new shell session.\n\nOn the next terminal tool call, the directory of the shell will be /work/app.`, ...extra });
+// The user's `!cmd` is the one path that keeps `output_for_prompt` plain, and writes `description: None` (tool_dispatch.rs:304-317).
+const bashMode = (exit: number, text: string, extra: object = {}) => bash(exit, text, { output_for_prompt: text, description: null, ...extra });
 const turn = (second: number, extra: object = {}) => ({ turnNumber: 1, endedAt: iso(second), inputTokens: 900, outputTokens: 60, cachedReadTokens: 400, cacheCreationTokens: 100, reasoningTokens: 7, modelCalls: 2, primaryModelId: 'grok-build', ...extra });
 // The user's `!cmd` input as upstream writes it: the tagged `ToolInput::Bash` (tool_dispatch.rs:223-229, :250; xai-grok-tools types/tool_io.rs:55-59).
 const BANG = { variant: 'Bash', command: 'ls -a', description: 'ls -a', is_background: false };
@@ -114,15 +120,23 @@ describe('the Grok Build reader', () => {
     expect(out.errorLines.map((error) => error.line)[0]).toBe('timed out after 5s');
   });
 
-  it('reads the output bytes when output_for_prompt is empty, and says "Exit code" when there is no output at all', () => {
+  it('reads the output bytes, not the formatted prompt header or the concise tool’s fence, and says "Exit code" when there is no output at all', () => {
     const out = extractOf([
       prompt(1, 'x'),
       call(2, 'c', 'bash', { command: 'a' }),
-      finish(3, 'c', 'completed', { rawOutput: bash(1, 'raw bytes only', { output_for_prompt: '' }) }),
+      finish(3, 'c', 'completed', { rawOutput: bash(1, 'raw bytes only') }),
       call(4, 'd', 'bash', { command: 'b' }),
       finish(5, 'd', 'completed', { rawOutput: bash(3, '') }),
+      call(6, 'e', 'run_terminal_cmd', { command: 'c' }),
+      finish(7, 'e', 'completed', { rawOutput: conciseBash(2, 'concise output') }),
     ]);
-    expect(out.errorLines.map((error) => error.line)).toEqual(['raw bytes only', 'Exit code 3']);
+    expect(out.errorLines.map((error) => error.line)).toEqual(['raw bytes only', 'Exit code 3', 'concise output']);
+  });
+
+  it('strips ANSI sequences from the output bytes, so a coloured error line still joins a plain one', () => {
+    const esc = String.fromCharCode(27);
+    const out = extractOf([prompt(1, 'x'), call(2, 'c', 'bash', { command: 'a' }), finish(3, 'c', 'completed', { rawOutput: bash(1, `${esc}[31;1merror${esc}[0m: bad thing`) })]);
+    expect(out.errorLines.map((error) => error.line)).toEqual(['error: bad thing']);
   });
 
   it('unwraps a failed tool to the text of its content, never the rawOutput wrapper, so the error line joins a Claude Code signature', () => {
@@ -209,7 +223,7 @@ describe('the Grok Build reader', () => {
       call(2, 'c1', 'oars__oars_recall', {}, 'other'),
       finish(3, 'c1', 'completed'),
       call(4, 'bash-mode-1', 'Execute `ls -a`', BANG, 'execute'),
-      finish(5, 'bash-mode-1', 'failed', { rawOutput: bash(2, 'ls: no such file') }),
+      finish(5, 'bash-mode-1', 'failed', { rawOutput: bashMode(2, 'ls: no such file') }),
       call(6, 'c3', 'grep', { pattern: 'x' }),
       finish(7, 'c3', 'in_progress'),
     ]);

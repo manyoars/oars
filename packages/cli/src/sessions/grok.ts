@@ -21,7 +21,8 @@
 //                          arrives only on a later tool_call_update (tool_calls.rs:2734). A shell call is therefore a name in SHELL_TOOLS, or the user's `!cmd`, the one path that
 //                          writes `kind` execute on the call itself (`bash-mode-<uuid>` titled "Execute `cmd`", tool_dispatch.rs:213, :245-246)
 //     tool_call_update     {toolCallId, status, content[], rawOutput}: the outcome. A shell call's `rawOutput` is `{type: "Bash", exit_code, output: bytes,
-//                          output_for_prompt, signal, timed_out, current_dir}` (types/output.rs:384-405). The agent path marks a shell call `failed` only on a timeout
+//                          output_for_prompt, signal, timed_out, current_dir}` (types/output.rs:384-405); the reader takes the `output` bytes, because on the model-issued
+//                          path `output_for_prompt` is the formatted prompt (`exit: N` header or the concise tool's `Exit code: N` fence, bash/mod.rs:2246). The agent path marks a shell call `failed` only on a timeout
 //                          or a signal, so exit 2 arrives `completed` (acp_conversion.rs:241-250): the exit code decides, not the status. Any other tool's error text is its
 //                          `content[]` text; its `rawOutput` is a tagged wrapper that is never the error line. `current_dir` is the cwd after the command, the only
 //                          place a directory change shows
@@ -128,10 +129,17 @@ const contentText = (update: Obj): string | undefined => {
   return parts.length === 0 ? undefined : parts.join('\n');
 };
 
-/** A shell call's output: the ANSI-stripped text, else the bytes. */
+/** An ANSI CSI sequence (ESC [ parameters, intermediates, final byte); the output bytes are the raw terminal output. */
+const ANSI = new RegExp(`${String.fromCharCode(27)}\\[[0-?]*[ -/]*[@-~]`, 'g');
+
+/**
+ * A shell call's output: the `output` bytes (always present, types/output.rs:385) with ANSI sequences stripped, else the update's text. `output_for_prompt` is not read:
+ * on the model-issued path it is the formatted prompt, `exit: N [annotations]\n<output>` (grok_build/bash/mod.rs:2246, :386-417) or the concise tool's `Exit code: N` and a
+ * fenced block (grok_build_concise/bash.rs:37-58, :187), a header the error line must not become; only the user's `!cmd` keeps it plain (tool_dispatch.rs:304).
+ */
 const shellText = (raw: Obj, update: Obj): string => {
   const bytes = Array.isArray(raw.output) ? raw.output.filter((byte): byte is number => typeof byte === 'number') : [];
-  return str(raw.output_for_prompt) ?? str(Buffer.from(bytes).toString('utf8')) ?? contentText(update) ?? '';
+  return str(Buffer.from(bytes).toString('utf8').replace(ANSI, '')) ?? contentText(update) ?? '';
 };
 
 /** The files a request names: `file_path`, or `filePath` for the opencode `edit` tool (camelCase, opencode/edit/mod.rs:64, :138), or the headers of an `apply_patch` patch. */
