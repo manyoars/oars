@@ -17,7 +17,7 @@ import type { BooksBy, RecallQuery } from './sessions/query.js';
 import { closedQueryOf, formsRefusal, RECALL_FAMILIES } from './sessions/recall-reads.js';
 import { FAMILIES } from './sessions/read.js';
 import { sessionsBooks, sessionsContext, sessionsDeposit, sessionsGoldArms, sessionsGoldSample, sessionsGoldScore, sessionsHookInstall, sessionsHookStatus, sessionsHookUninstall, sessionsMcp, sessionsLineage, sessionsMeasure, sessionsRead, sessionsRecall, sessionsRecallCounts, sessionsVerify, type SessionsDeps } from './sessions/command.js';
-import { gateReplay, gateReport } from './gate/command.js';
+import { gateInstall, gateReplay, gateReport, gateUninstall } from './gate/command.js';
 import { DEADLINE_MS, gateHook } from './gate/hook.js';
 import { managerReader } from './gate/registry.js';
 import { exclusionPaths, sessionsExclusions } from './sessions/exclusion.js';
@@ -603,6 +603,20 @@ const buildProgram = (deps: RunDeps, argv: string[]): Command => {
         for await (const chunk of runtime.stdin) stdin += String(chunk);
       }
       await gateHook(stdin, { storeDir: runtime?.storeDir ?? '', now: deps.now, clock: () => performance.now(), deadlineMs: DEADLINE_MS });
+    });
+
+  gate
+    .command('install')
+    .description('wire the gate hook into Claude Code at user scope (PreToolUse for Bash, PowerShell, Skill, and MCP tools); rerunning changes nothing, and every other setting and hook is kept')
+    .action(async (_options: OptionValues, command: Command) => {
+      emit(deps, flag(command.optsWithGlobals(), 'json'), await gateInstall(sessionDeps(deps)));
+    });
+
+  gate
+    .command('uninstall')
+    .description('remove only the gate hook `install` wrote from the user settings; crossings.jsonl stays')
+    .action(async (_options: OptionValues, command: Command) => {
+      emit(deps, flag(command.optsWithGlobals(), 'json'), await gateUninstall(sessionDeps(deps)));
     });
 
   gate
