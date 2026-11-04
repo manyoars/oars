@@ -241,7 +241,7 @@ export const poolDeposit = async (deps: RunDeps, options: { server?: string | un
   const runtime = runtimeOf(deps);
   const server = poolServer(deps.env, DEPOSIT, options.server);
   const { account, token } = await signedIn(deps, runtime.storeDir, server, DEPOSIT);
-  // A client past `registry_max_age` builds no batch (spec Section 1.3): every projection is computed here, so its sessions wait in `A` and nothing
+  // A client past `registry_max_age` builds no batch (spec Section 1.3): the projection functions will run here once the deposit calls them (the skeleton below still sends the joined frame), so its sessions wait in `A` and nothing
   // is lost. This comes before the first request, so nothing leaves the machine.
   if (isVocabularyExpired(new Date(deps.now()))) {
     const title = `This oars is out of date: its vocabulary ${VOCAB_VERSION} was taken on ${VOCAB_SNAPSHOT_DATE}, over ${String(REGISTRY_MAX_AGE_DAYS)} days ago. Upgrade with npm install -g @manyoars/oars, then run oars pool deposit again. Your sessions stay on this machine.`;

@@ -68,8 +68,8 @@ replaces, so the log settles back to the size of the live records. A hook deposi
   carries `CAPTURE_VERSION` in its `v`.
 - `EXTRACTOR_VERSION` (`v` on every derived record) names the derivation rules (error normalization, prompt classes, tool-name sequences,
   recovery episodes, prompt outcome signals). A bump re-derives from the log; no raw transcript is read. Version 11 (t811, pool vocabulary spec Section 2) changes no stored value: it moves raw
-  `agentType`, `keys`, and `frameId` with the joined `frame` from class P to class A, so no pooled projection carries them. A store written at 10 re-derives
-  on its next deposit with every captured record as it was. What pools from the shell form is computed at deposit and never written: `program`,
+  `agentType`, `keys`, and `frameId` with the joined `frame` from class P to class A, so the projection never reads them (the projection functions ship in this release; the deposit skeleton does not call them yet and keeps sending the joined `frame` until the next pool brief). A store written at 10 re-derives
+  on its next deposit with every captured record as it was. What the projection takes from the shell form is computed from the store and never written: `program`,
   `subcommand`, and `flags` come from the A copy of `target` and the record's `steps` (a record captured before CAPTURE 9 has no steps, so its flags
   are lost and it projects the program and subcommand alone; a `target` cut at 30 characters or masked by redaction projects `program: private`).
   No staged pooled file or outbox exists for the migration to delete.
@@ -172,7 +172,7 @@ line and at every shell separator, after heredoc and here-string bodies are drop
 ### Frames and steps
 
 CAPTURE 9 gives every call a shared coordinate, so calls compare across harnesses, models, versions, and dates. Nothing here is asked of a
-network or a model: a value outside a closed list reads `<literal>` or is dropped. `frame` and `frameId` are class A (EXTRACTOR 11): one hash over harness, version, model, effort, day, platform, shell, and stack is an identifier that links rows, so only the frame's separate fields pool, each as a cell under its own rule. The lists live in one file,
+network or a model: a value outside a closed list reads `<literal>` or is dropped. `frame` and `frameId` are class A (EXTRACTOR 11): one hash over harness, version, model, effort, day, platform, shell, and stack is an identifier that links rows, so only the frame's separate fields are to pool, each as a cell under its own rule (the projection functions ship now; the deposit skeleton keeps the joined frame until the next pool brief). The lists live in one file,
 `src/sessions/public-vocabulary.ts`, and default to `<literal>` when unsure.
 
 A `frame` sits on each prompt, and on the session for the calls before the first prompt: `{ harness, harnessVersion, model, effort, day, platform,
