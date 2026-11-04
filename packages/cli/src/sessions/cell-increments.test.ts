@@ -31,16 +31,14 @@ const keyed = (cells: readonly { motifId: string; frameBucket: string; day: stri
   cells.map(({ motifId, frameBucket, day, exposed, sessions, ok, failed, tokens, durationMs }) => `${motifId}/${frameBucket}/${day}/${String(Number(exposed))} ${String(sessions)} ${String(ok)} ${String(failed)} ${String(tokens)} ${String(durationMs)}`).sort();
 
 describe('storeOf', () => {
-  it('turns the position of a spawner back into the address a nested spawn resolves against', () => {
+  it('numbers the calls and prompts of a transcript by position, and ties each subagent to the main run', () => {
     const skeleton = skeletonOfLocal(localStore());
     const [main] = skeleton.transcripts;
     if (main === undefined) throw new Error('the skeleton has no transcript');
-    const rebuilt = storeOf([{ ...skeleton, transcripts: [main, { ...main, spawnedIn: 0 }, { ...main, spawnedIn: 1 }] }]);
-    expect(rebuilt.sessions.map((held) => held.spawnedIn)).toEqual([null]);
-    expect(rebuilt.subagents.map((agent) => [agent.session, agent.spawnedIn])).toEqual([
-      [`${ID}#1`, `${ID}#0`],
-      [`${ID}#2`, `${ID}#1`],
-    ]);
+    const rebuilt = storeOf([{ ...skeleton, transcripts: [main, main] }]);
+    expect(rebuilt.tools.map((held) => [held.session, held.n])).toEqual([[`${ID}#0`, 0], [`${ID}#0`, 1], [`${ID}#1`, 0], [`${ID}#1`, 1]]);
+    expect(rebuilt.prompts.map((held) => [held.session, held.index])).toEqual([[`${ID}#0`, 0], [`${ID}#1`, 0]]);
+    expect(rebuilt.subagents.map((agent) => [agent.session, agent.parent])).toEqual([[`${ID}#1`, `${ID}#0`]]);
   });
 });
 

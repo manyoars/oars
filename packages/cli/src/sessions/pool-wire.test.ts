@@ -53,7 +53,7 @@ const refusedField = (value: unknown): string => {
 };
 
 const firstStep = ['transcripts', 0, 'tools', 0, 'steps', 0];
-const withStep = (over: object): unknown => sent(firstStep, JSON.parse(JSON.stringify({ ...shell, n: undefined, frameId: undefined, cost: undefined, tokens: null, ms: null, ...over })));
+const withStep = (over: object): unknown => sent(firstStep, JSON.parse(JSON.stringify({ ...shell, n: undefined, frameId: undefined, edges: undefined, cost: undefined, tokens: null, ms: null, ...over })));
 const stepField = 'transcripts[0].tools[0].steps[0]';
 
 describe('skeletonOf', () => {
@@ -88,22 +88,38 @@ describe('skeletonOf', () => {
   });
 });
 
-describe('a nested spawn', () => {
-  it('names the transcript that spawned each subagent by its position, since a skeleton holds no session id', () => {
-    const skeleton = skeletonFrom(
-      store({
-        sessions: [session('s1', { frame: framed })],
-        subagents: [
-          session('s1~agent-x', { parent: 's1', spawnedIn: 's1', frame: framed }),
-          session('s1~agent-y', { parent: 's1', spawnedIn: 's1~agent-x', frame: framed }),
-          session('s1~agent-z', { parent: 's1', spawnedIn: 's1~not-held', frame: framed }),
-        ],
-        prompts: [framedPrompt('s1', 0)],
-      }),
-    );
-    expect(skeleton?.transcripts.map((transcript) => transcript.spawnedIn)).toEqual([null, 0, 1, null]);
+describe('ordinals', () => {
+  it('sends a call and a prompt as positions, never the numbers the session gave them, and no spawner or edge', () => {
+    const from = store({
+      sessions: [session('s1', { frame: framed })],
+      subagents: [session('s1~agent-x', { parent: 's1', spawnedIn: 's1', frame: framed })],
+      prompts: [framedPrompt('s1', 4), framedPrompt('s1', 2)],
+      tools: [
+        tool('s1', 9, 'Bash', { prompt: 2, steps: [shell] }),
+        tool('s1', 3, 'Bash', { prompt: 4, steps: [shell] }),
+        tool('s1', 7, 'Bash', { prompt: 2, steps: [shell] }),
+        tool('s1~agent-x', 21, 'Bash', { parent: 's1', prompt: null, steps: [{ ...shell, parent: 7, edges: [{ kind: 'spawned', n: 7, seg: 0 }] }] }),
+      ],
+    });
+    const skeleton = skeletonFrom(from);
+    // Calls 3, 7, and 9 are positions 0, 1, and 2; prompts 2 and 4 are positions 0 and 1.
+    expect(skeleton?.transcripts[0]?.tools.map((held) => held.prompt)).toEqual([1, 0, 0]);
+    expect(skeleton?.transcripts[1]?.tools[0]?.steps[0]?.parent).toBe(1);
+    const text = JSON.stringify(skeleton);
+    for (const field of ['"spawnedIn"', '"edges"', '"index"', '"n"']) expect(text).not.toContain(field);
+    expect(parseSkeleton(JSON.parse(text))).toEqual({ ok: true, skeleton });
+  });
+
+  it('numbers the prompts a subagent names but does not hold after the ones it holds, one position per number', () => {
+    const from = store({
+      sessions: [session('s1', { frame: framed })],
+      subagents: [session('s1~agent-x', { parent: 's1', frame: framed })],
+      prompts: [framedPrompt('s1', 0)],
+      tools: [tool('s1', 0, 'Bash', { prompt: 0, steps: [shell] }), tool('s1~agent-x', 0, 'Bash', { parent: 's1', prompt: 5, steps: [shell] }), tool('s1~agent-x', 1, 'Bash', { parent: 's1', prompt: 8, steps: [shell] }), tool('s1~agent-x', 2, 'Bash', { parent: 's1', prompt: 5, steps: [shell] })],
+    });
+    const skeleton = skeletonFrom(from);
+    expect(skeleton?.transcripts[1]?.tools.map((held) => held.prompt)).toEqual([0, 1, 0]);
     expect(parseSkeleton(JSON.parse(JSON.stringify(skeleton)))).toEqual({ ok: true, skeleton });
-    expect(JSON.stringify(skeleton)).not.toContain('agent-x');
   });
 });
 
@@ -137,8 +153,13 @@ describe('parseSkeleton refuses, and names the field', () => {
     { name: 'a count no whole number holds', path: ['transcripts', 0, 'prompts', 0, 'usage', 'input'], value: 1e308, field: 'transcripts[0].prompts[0].usage.input' },
     { name: 'a fraction in a step number', path: [...firstStep, 'seg'], value: 1.5, field: `${stepField}.seg` },
     { name: 'a wall time past any real prompt', path: ['transcripts', 0, 'prompts', 0, 'wallSec'], value: 1e308, field: 'transcripts[0].prompts[0].wallSec' },
-    { name: 'a spawner no transcript holds', path: ['transcripts', 0, 'spawnedIn'], value: 5, field: 'transcripts[0].spawnedIn' },
-    { name: 'a fraction for a spawner', path: ['transcripts', 0, 'spawnedIn'], value: 0.5, field: 'transcripts[0].spawnedIn' },
+    { name: 'a prompt position past anything the transcript could number', path: ['transcripts', 0, 'tools', 0, 'prompt'], value: 99, field: 'transcripts[0].tools[0].prompt' },
+    { name: 'a spawning call the main run does not hold', path: [...firstStep, 'parent'], value: 99, field: `${stepField}.parent` },
+    { name: 'a fraction for a parent', path: [...firstStep, 'parent'], value: 0.5, field: `${stepField}.parent` },
+    { name: 'the exact number of a call', path: ['transcripts', 0, 'tools', 0, 'n'], value: 3, field: 'transcripts[0].tools[0].n' },
+    { name: 'the exact index of a prompt', path: ['transcripts', 0, 'prompts', 0, 'index'], value: 3, field: 'transcripts[0].prompts[0].index' },
+    { name: 'a spawner address', path: ['transcripts', 0, 'spawnedIn'], value: 0, field: 'transcripts[0].spawnedIn' },
+    { name: 'a step edge', path: [...firstStep, 'edges'], value: [], field: `${stepField}.edges` },
   ];
   it.each(cases)('$name', ({ path, value, field }) => {
     expect(refusedField(sent(path, value))).toBe(field);
@@ -265,10 +286,5 @@ describe('parseSkeleton refuses, and names the field', () => {
       Reflect.set(transcripts[0], 'harness', harness);
       expect(refusedField(raw), harness).toBe('accepted');
     }
-  });
-
-  it('holds an edge to its kinds', () => {
-    expect(refusedField(withStep({ edges: [{ kind: 'acme', n: 0, seg: 0 }] }))).toBe(`${stepField}.edges[0].kind`);
-    expect(refusedField(withStep({ edges: [{ kind: 'next', n: 0, seg: 0 }] }))).toBe('accepted');
   });
 });
