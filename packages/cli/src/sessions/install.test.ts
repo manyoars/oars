@@ -63,8 +63,9 @@ describe('hook install', () => {
     const dir = scratch();
     const file = join(dir, 'settings.json');
     await installHooks(runtimeIn(dir), file, false);
+    const preTool: unknown = expect.stringMatching(/hook-bin\.js" pre-tool$/);
     const groups = (await readJson(file)).hooks;
-    expect(groups).toMatchObject({ PreToolUse: [{ hooks: [{ command: expect.stringMatching(/hook-bin\.js" pre-tool$/) }] }] });
+    expect(groups).toMatchObject({ PreToolUse: [{ hooks: [{ command: preTool }] }] });
     expect(JSON.stringify(Reflect.get(Object(groups), 'PreToolUse'))).not.toContain('matcher');
   });
 
