@@ -25,7 +25,7 @@ const NO_STORE: Store = { sessions: [], prompts: [], errors: [], subagents: [], 
 
 /**
  * Each family states the highest of a read's cells, the most one store can prove. A read's `clusters` here is the largest held count among its input cells: the fetch path
- * reads no per-account record, so five accounts on five days are five cells of one cluster each and serve nothing until a later change brings held counts for a key's `n` and `c`.
+ * reads no per-account record, so five accounts in five different weeks are five cells of one cluster each and serve nothing until a later change brings held counts for a key's `n` and `c`. Five accounts on five days of one week share each week cell and serve the week reads; a `live` cell is a day, so they serve no live read.
  */
 const readsOf = (pool: Pool): Read[] => {
   const orderOf = orderResolver([]);
