@@ -211,6 +211,32 @@ describe('checkCall on a shell command', () => {
     expect(bash(command)).toEqual({ crossings: [], unread: [], removals: [] });
   });
 
+  it.each<[string, boolean]>([
+    ['npm install x', true],
+    ['npm install x && cd sub', true],
+    ['npx --yes x', true],
+    ['pip install --index-url https://private.example/simple x', false],
+    ['pip install --index-url=https://private.example/simple x', false],
+    ['pip install -i https://private.example/simple x', false],
+    ['pip install --extra-index-url https://private.example/simple x', false],
+    ['pip install --index https://private.example/simple x', false],
+    ['pip install --default-index https://private.example/simple x', false],
+    ['npm install --registry https://npm.private.example/ x', false],
+    ['npm install --@scope:registry=https://npm.private.example/ x', false],
+    ['npm install --userconfig sub/.npmrc x', false],
+    ['NPM_CONFIG_REGISTRY=https://npm.private.example/ npm install x', false],
+    ['env PIP_INDEX_URL=https://private.example/simple pip install x', false],
+    ['$env:NPM_CONFIG_REGISTRY = "https://npm.private.example/"; npm install x', false],
+    ['cd sub && npm install x', false],
+    ['Set-Location sub; npm install x', false],
+    ['npm --prefix sub install x', false],
+    ['pnpm -C sub add x', false],
+    ['pnpm --dir sub add x', false],
+    ['python -m pip install --index-url https://private.example/simple x', false],
+  ])('marks whether the registry a command would contact is the default one: %s', (command, asked) => {
+    expect(bash(command).crossings.map((crossing) => crossing.registryAsked)).toEqual([asked]);
+  });
+
   it('says whether the call status reports the install', () => {
     const [piped] = bash('npm install axios | tail -5').crossings;
     const [plain] = bash('npm install axios').crossings;
@@ -222,7 +248,7 @@ describe('checkCall on a shell command', () => {
 
   it('keeps the program, the stated version, and the family', () => {
     expect(bash('pnpm add zod@3.25.0').crossings).toEqual([
-      { class: 'npm-package', form: 'install', name: 'zod', version: '3.25.0', versionForm: 'pinned', program: 'pnpm', statusReports: true },
+      { class: 'npm-package', form: 'install', name: 'zod', version: '3.25.0', versionForm: 'pinned', program: 'pnpm', statusReports: true, registryAsked: true },
     ]);
     expect(bash('pip install "flask>=2,<3"').crossings[0]?.version).toBe('>=2,<3');
     expect(bash('npm install git+https://github.com/org/repo.git#v1').crossings[0]?.version).toBe('v1');
@@ -278,7 +304,7 @@ describe('checkCall on a shell command', () => {
 describe('checkCall on other tools', () => {
   it('names the server of an MCP call, and never its tool', () => {
     expect(checkCall({ tool: 'mcp__one-server__do_it', input: { secret: 'x' } }, redact)).toEqual({
-      crossings: [{ class: 'mcp-server', form: 'mcp-call', name: 'one-server', version: null, versionForm: 'unstated', program: 'mcp', statusReports: true }],
+      crossings: [{ class: 'mcp-server', form: 'mcp-call', name: 'one-server', version: null, versionForm: 'unstated', program: 'mcp', statusReports: true, registryAsked: true }],
       unread: [],
       removals: [],
     });
@@ -289,7 +315,7 @@ describe('checkCall on other tools', () => {
   });
 
   it('names a skill from either input key', () => {
-    const skill = { class: 'skill', form: 'skill-call', name: 'one-skill', version: null, versionForm: 'unstated', program: 'skill', statusReports: true };
+    const skill = { class: 'skill', form: 'skill-call', name: 'one-skill', version: null, versionForm: 'unstated', program: 'skill', statusReports: true, registryAsked: true };
     expect(checkCall({ tool: 'Skill', input: { skill: 'one-skill', args: 'x' } }, redact).crossings).toEqual([skill]);
     expect(checkCall({ tool: 'Skill', input: { command: 'one-skill' } }, redact).crossings).toEqual([skill]);
     expect(checkCall({ tool: 'Skill', input: {} }, redact).crossings).toEqual([]);

@@ -986,7 +986,7 @@ const gitCall = (command: ShellCommand): GitCall | null => {
 const NOT_A_COMMIT = /^(?:--dry-run|-h|--help|--porcelain|--short|--long)$/;
 const QUIET = /^(?:--quiet|-[a-zA-Z]*q[a-zA-Z]*)$/;
 const MOVES_HEAD = new Set(['checkout', 'switch', 'pull', 'merge', 'rebase', 'reset', 'cherry-pick', 'revert', 'am', 'commit']);
-const CHANGES_FOLDER = new Set(['cd', 'pushd', 'popd', 'set-location', 'sl', 'chdir']);
+export const CHANGES_FOLDER: ReadonlySet<string> = new Set(['cd', 'pushd', 'popd', 'set-location', 'sl', 'chdir']);
 const LOG_ONE = /^(?:-1|-n1|--max-count=1)$/;
 const LOG_FILTER = /^--(?:grep|author|committer|since|until|after|before|all|branches|remotes|tags|skip|reverse)(?:=|$)/;
 const LOG_FORMAT = /^--(?:format|pretty)=/;

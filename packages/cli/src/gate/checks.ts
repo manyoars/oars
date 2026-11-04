@@ -2,7 +2,7 @@
 // the later hook call this same function and cannot disagree on what crossed. It reads the commands capture reads (`shellCommands`) and
 // keeps its own table, because capture's `pulls` say a name was stated and the gate has to say how: installed, or fetched and run.
 import type { Redactor } from '../sessions/redact.js';
-import { shellCommands, type ShellCommand } from '../sessions/extract.js';
+import { CHANGES_FOLDER, shellCommands, type ShellCommand } from '../sessions/extract.js';
 
 export const CROSSING_CLASSES = ['npm-package', 'python-package', 'mcp-server', 'skill'] as const;
 export type CrossingClass = (typeof CROSSING_CLASSES)[number];
@@ -27,6 +27,11 @@ export interface Crossing {
   program: string;
   /** Whether the call's own status reports this command: false behind a pipe or a later `;`. */
   statusReports: boolean;
+  /**
+   * Whether a registry question for this name would reach the registry the command itself would: false when the command, its environment,
+   * or an earlier `cd` of the call chose the registry, the config, or the folder. A replay then leaves the name unasked.
+   */
+  registryAsked: boolean;
 }
 
 export interface Removal {
@@ -287,7 +292,7 @@ const emptyReading = (): Reading => ({ crossings: [], unread: [], removals: [] }
 
 const crossingOf = (family: Family, spec: Extract<Spec, { kind: 'named' }>, action: 'install' | 'run', program: string, statusReports: boolean): Crossing => {
   const form: CrossingForm = action === 'run' ? (spec.url ? 'url-fetch-and-run' : 'fetch-and-run') : spec.url ? 'url-install' : 'install';
-  return { class: family, form, name: spec.name, version: spec.version, versionForm: spec.versionForm, program, statusReports };
+  return { class: family, form, name: spec.name, version: spec.version, versionForm: spec.versionForm, program, statusReports, registryAsked: true };
 };
 
 const addSpecs = (reading: Reading, family: Family, texts: readonly string[], action: 'install' | 'run', program: string, statusReports: boolean): void => {
@@ -318,7 +323,7 @@ const readRun = (reading: Reading, family: Family, words: Words, rest: readonly 
   if (first !== undefined && atVersion(first).name === 'skills' && source !== undefined) {
     const spec = namesNothing(source) ?? (isUrl(source) ? urlSpec(source) : null);
     if (spec?.kind === 'unread') reading.unread.push(spec.shape);
-    else if (!LOCAL_SPEC.test(source)) reading.crossings.push({ class: 'skill', form: 'install', name: spec?.name ?? source, version: null, versionForm: 'unstated', program: command.program, statusReports: command.read });
+    else if (!LOCAL_SPEC.test(source)) reading.crossings.push({ class: 'skill', form: 'install', name: spec?.name ?? source, version: null, versionForm: 'unstated', program: command.program, statusReports: command.read, registryAsked: true });
     return;
   }
   const packaged = family === 'npm-package' ? allFlags(words, '-p', '--package') : allFlags(words, '--from', '--spec');
@@ -411,13 +416,29 @@ const stringField = (input: unknown, key: string): string | undefined => {
   return typeof value === 'string' && value !== '' ? value : undefined;
 };
 
+/** A flag that points a manager at another registry, config, or folder, so its config is not the one the gate's question would read. */
+const REGISTRY_FLAGS: ReadonlySet<string> = new Set(['--registry', '-i', '--index-url', '--extra-index-url', '--index', '--default-index', '--userconfig', '--globalconfig', '--prefix', '-C', '--dir']);
+/** `--@scope:registry=url` sends one scope elsewhere. */
+const SCOPE_REGISTRY = /^--@[^=\s]*:registry(?:=|$)/;
+/** An assignment of a manager's own variable, in any shell's spelling, which can name a registry or a config file. Over-matching only leaves a name unasked. */
+const REGISTRY_ENVIRONMENT = /(?:^|[^A-Za-z0-9_])(?:npm_config_|pip_|uv_)[A-Za-z0-9_]*\s*=/i;
+
+const choosesRegistry = (command: ShellCommand): boolean => command.args.some(({ text }) => REGISTRY_FLAGS.has(text.split('=')[0] ?? '') || SCOPE_REGISTRY.test(text));
+
 const checkShell = (input: unknown, redact: Redactor): CallCheck => {
   const command = stringField(input, 'command');
   const reading = emptyReading();
   if (command === undefined) return reading;
   const commands = shellCommands(command, redact);
+  const environment = REGISTRY_ENVIRONMENT.test(command);
+  let moved = false;
   commands.forEach((held, at) => {
+    const from = reading.crossings.length;
     readCommand(reading, held, commands[at - 1]);
+    if (environment || moved || choosesRegistry(held)) {
+      for (const crossing of reading.crossings.slice(from)) crossing.registryAsked = false;
+    }
+    moved ||= CHANGES_FOLDER.has(held.program);
   });
   return reading;
 };
@@ -431,9 +452,9 @@ export const checkCall = (call: ToolCall, redact: Redactor): CallCheck => {
   if (call.tool.startsWith('mcp__')) {
     const server = call.tool.split('__')[1] ?? '';
     if (server === '') return emptyReading();
-    return { ...emptyReading(), crossings: [{ class: 'mcp-server', form: 'mcp-call', name: redact(server), version: null, versionForm: 'unstated', program: 'mcp', statusReports: true }] };
+    return { ...emptyReading(), crossings: [{ class: 'mcp-server', form: 'mcp-call', name: redact(server), version: null, versionForm: 'unstated', program: 'mcp', statusReports: true, registryAsked: true }] };
   }
   const skill = call.tool === 'Skill' ? (stringField(call.input, 'skill') ?? stringField(call.input, 'command')) : undefined;
   if (skill === undefined) return emptyReading();
-  return { ...emptyReading(), crossings: [{ class: 'skill', form: 'skill-call', name: redact(skill), version: null, versionForm: 'unstated', program: 'skill', statusReports: true }] };
+  return { ...emptyReading(), crossings: [{ class: 'skill', form: 'skill-call', name: redact(skill), version: null, versionForm: 'unstated', program: 'skill', statusReports: true, registryAsked: true }] };
 };
