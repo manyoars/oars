@@ -7,7 +7,8 @@ import { CliError, exitCodeForProblem, ExitCode, unreachableError } from '../err
 import { compileAllow } from './allow.js';
 import { checkSession, exclusionPaths, lastWritten, type Reason } from './exclusion.js';
 import { discardStale, FIELD_ROWS, fieldsOf, heldBatches, lockedBatch, markShown, outboxFolder, removeBatchesExcept, removeBatchOf, staleBatches, unchangedBytes, writeBatch, type LockRefusal } from './pool-outbox.js';
-import { HARNESSES, hasEnded, SESSION_IDLE_HOURS, isBundleVersion, isHarness, parseSkeleton, sessionsOf, skeletonOf, VOCAB_VERSION, verifyBundle, type Bundle, type PinnedKey, type TranscriptRoot } from './pool-wire.js';
+import { HARNESSES, hasEnded, SESSION_IDLE_HOURS, isBundleVersion, isHarness, parseSkeleton, sessionsOf, skeletonOf, VOCAB_VERSION, verifyBundle, type Bundle, type PinnedKey, type SessionRecords, type TranscriptRoot } from './pool-wire.js';
+import { carriedDeltas, markDeltasSent, placedOf, sentDeltas } from './pool-delta.js';
 import { Masker, printed, TRANSPORT_HEADERS, waitWords, type Outgoing } from './pool-print.js';
 import { shellReader } from './projection.js';
 import { isVocabularyExpired, REGISTRY_MAX_AGE_DAYS, VOCAB_SNAPSHOT_DATE } from './public-vocabulary.js';
@@ -414,45 +415,55 @@ export const poolDeposit = async (deps: RunDeps, options: { server?: string | un
   const built = new Set<string>();
   const refusedFields = new Set<string>();
   const roots = new Map<string, TranscriptRoot>((await readSkeletons(runtime.storeDir, undefined, true)).skeletons.map(({ session, merkleRoot, leaves }) => [session, { merkleRoot, leaves }]));
+  // The sessions that pass both gates and have ended, in the order the store holds them: the windows of a delta are counted over these alone, and the batch of each is built after, once its deltas are known.
+  const ready: { records: SessionRecords; key: string }[] = [];
+  // A session that fails a gate loses its earlier batch at once, so a later throw in this pass cannot leave one in the outbox.
+  const withdraw = async (key: string): Promise<void> => {
+    counts.withdrawn += await removeBatchOf(outbox, key);
+  };
   for (const records of sessionsOf(await loadStore(runtime.storeDir), roots)) {
     counts.sessions += 1;
     // Hashed with the account, so a redeposit replaces its own batch and two accounts' copies of one session cannot be joined.
     const key = contentHash([account, records.main.session]);
-    // A session that fails a gate here loses its earlier batch at once, so a later throw in this pass cannot leave one in the outbox.
-    const withdraw = async (): Promise<void> => {
-      counts.withdrawn += await removeBatchOf(outbox, key);
-    };
     if (!allow.allows(records.main.project)) {
       counts.excluded.folder += 1;
-      await withdraw();
+      await withdraw(key);
       continue;
     }
     const verdict = await checkSession(runtime, terms, records.main.project, records.main.session);
     if (verdict.reason !== 'clean') {
       counts.excluded[excludedKey(verdict.reason)] += 1;
-      await withdraw();
+      await withdraw(key);
       continue;
     }
     // The batch of a session is built once the session and its subagents have ended; a session still in progress waits, and an earlier batch of it is withdrawn.
     if (!hasEnded(records, deps.now(), await lastWritten(runtime, records.main.project, records.main.session))) {
       counts.notEnded += 1;
-      await withdraw();
+      await withdraw(key);
       continue;
     }
-    const skeleton = skeletonOf(records, key, shellReader(vocabulary()), contentHash);
+    ready.push({ records, key });
+  }
+  // A delta is built from the sessions that passed, carried by the batch of the session that filled its after window, and marked sent only once that batch is written: a deposit that stops first builds it again.
+  const placed = ready.flatMap(({ records }) => placedOf(records) ?? []);
+  const carried = carriedDeltas(account, placed, await sentDeltas(outbox));
+  for (const { records, key } of ready) {
+    const delta = carried.get(records.main.session);
+    const skeleton = skeletonOf(records, key, shellReader(vocabulary()), contentHash, delta?.entries);
     if (skeleton === null) {
       counts.uncaptured += 1;
-      await withdraw();
+      await withdraw(key);
       continue;
     }
     const parsed = parseSkeleton(skeleton);
     if (!parsed.ok) {
       counts.refused += 1;
       refusedFields.add(parsed.field);
-      await withdraw();
+      await withdraw(key);
       continue;
     }
     await writeBatch(outbox, key, parsed.skeleton);
+    await markDeltasSent(outbox, delta?.marks ?? []);
     built.add(key);
     counts.batched += 1;
   }

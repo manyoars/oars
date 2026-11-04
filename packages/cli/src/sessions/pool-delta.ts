@@ -190,3 +190,40 @@ export const markDeltasSent = async (outbox: string, marks: readonly string[]): 
   await mkdir(outbox, { recursive: true });
   await appendFile(join(outbox, MARKS_FILE), marks.map((mark) => `${mark}\n`).join(''), 'utf8');
 };
+
+/** A session that passed the session gates, placed for the windows: its records, when it began, and its id. */
+export interface Gated extends Placed {
+  records: SessionRecords;
+}
+
+/** The session placed by when it began (epoch milliseconds) and its own id; none when it has no start that reads as a time, since no window can hold it. */
+export const placedOf = (records: SessionRecords): Gated | undefined => {
+  const at = records.main.tsFirst === null ? Number.NaN : Date.parse(records.main.tsFirst);
+  return Number.isNaN(at) ? undefined : { id: records.main.session, at, records };
+};
+
+/** What one batch carries: its delta entries and the marks to write once the batch is written. */
+export interface Carried {
+  entries: DeltaEntry[];
+  marks: string[];
+}
+
+/**
+ * The deltas not yet sent, by the id of the session that filled their after window: that session's batch carries them. A delta whose mark is held is dropped, so a rebuilt session, or a batch written
+ * again under the same key, builds none it already carried. Nothing is marked here: the caller marks them once the batch is written.
+ */
+export const carriedDeltas = (account: string, sessions: readonly Gated[], sent: ReadonlySet<string>): Map<string, Carried> => {
+  const carried = new Map<string, Carried>();
+  for (const { before, after, filler } of windowsOf(sessions)) {
+    const entries: DeltaEntry[] = [];
+    const marks: string[] = [];
+    for (const entry of deltasOf(before.map(({ records }) => records), after.map(({ records }) => records))) {
+      const mark = deltaMark(account, entry, filler.id);
+      if (sent.has(mark)) continue;
+      entries.push(entry);
+      marks.push(mark);
+    }
+    if (entries.length > 0) carried.set(filler.id, { entries, marks });
+  }
+  return carried;
+};

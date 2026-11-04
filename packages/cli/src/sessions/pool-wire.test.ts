@@ -232,8 +232,9 @@ describe('parseSkeleton refuses, and names the field', () => {
   it('refuses the exact-count form (format 1) by name, and a deposit that carries deltas', () => {
     const old = parseSkeleton({ ...sample(), format: 1 });
     expect(old).toMatchObject({ ok: false, field: 'format', reason: 'the exact-count form (format 1) is no longer read; send format 2' });
-    expect(refusedField(sent(['deltas'], [{}]))).toBe('deltas');
+    expect(refusedField(sent(['deltas'], [{}]))).toBe('deltas[0].deltaKind');
     expect(refusedField(sent(['deltas'], undefined))).toBe('deltas');
+    expect(refusedField(sent(['deltas'], 'none'))).toBe('deltas');
   });
 
   it('refuses a skeleton holding no prompt and no tool, which would otherwise count as a deposit', () => {

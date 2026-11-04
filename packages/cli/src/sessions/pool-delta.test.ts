@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { DELTA_DAYS, DELTA_MIN_SESSIONS, deltaMark, deltasOf, markDeltasSent, sentDeltas, windowsOf } from './pool-delta.js';
+import { carriedDeltas, DELTA_DAYS, DELTA_MIN_SESSIONS, deltaMark, deltasOf, markDeltasSent, placedOf, sentDeltas, windowsOf, type Gated } from './pool-delta.js';
 import { prompt, session, sessionsFrom, store, tool } from './pool-fixture.js';
 import type { DeltaEntry, SessionRecords } from './pool-wire.js';
 import type { ToolManifest, ToolStatus } from './schema.js';
@@ -268,5 +268,65 @@ describe('the once-only mark of a delta', () => {
     const folder = outbox();
     mkdirSync(join(folder, 'deltas-sent.log'), { recursive: true });
     await expect(sentDeltas(folder)).rejects.toThrow();
+  });
+});
+
+const gated = (prefix: string, count: number, shape: Shape): Gated[] =>
+  Array.from({ length: count }, (_, n) => {
+    const records = sessionOf(`${prefix}${String(n)}`, shape);
+    const placed = placedOf(records);
+    if (placed === undefined) throw new Error('no start');
+    return placed;
+  });
+
+describe('the deltas a deposit carries', () => {
+  const before = (count = 5): Gated[] => gated('b', count, { window: 0, mode: 'default' });
+  const after = (count = 5, mode = 'plan'): Gated[] => gated('a', count, { window: 1, mode });
+
+  it('places a session by when it began and its own id, and none that has no start', () => {
+    const [first] = before(1);
+    expect(first?.id).toBe('b0');
+    expect(first?.at).toBe(START + HOUR);
+    const bare = sessionOf('x', { window: 0 });
+    bare.main.tsFirst = null;
+    expect(placedOf(bare)).toBeUndefined();
+    bare.main.tsFirst = 'not a time';
+    expect(placedOf(bare)).toBeUndefined();
+  });
+
+  it('builds nothing while the after window holds 4 sessions, and carries the entry on the fifth', () => {
+    expect([...carriedDeltas('acct', [...before(), ...after(4)], new Set()).keys()]).toEqual([]);
+    const carried = carriedDeltas('acct', [...before(), ...after(5)], new Set());
+    expect([...carried.keys()]).toEqual(['a4']);
+    expect(carried.get('a4')?.entries).toEqual([{ deltaKind: 'changed', field: 'permissionMode', name: null, registry: null, metric: 'callsPerSession', change: 0 }]);
+    expect(carried.get('a4')?.marks).toEqual([deltaMark('acct', carried.get('a4')?.entries[0] as DeltaEntry, 'a4')]);
+  });
+
+  it('builds nothing while the before window holds 4 sessions', () => {
+    expect(carriedDeltas('acct', [...before(4), ...after(5)], new Set()).size).toBe(0);
+  });
+
+  it('builds nothing for windows that show no change', () => {
+    expect(carriedDeltas('acct', [...before(), ...after(5, 'default')], new Set()).size).toBe(0);
+  });
+
+  it('builds a delta once: one whose mark is held is not built again, whoever asks', () => {
+    const sessions = [...before(), ...after()];
+    const first = carriedDeltas('acct', sessions, new Set());
+    const marks = new Set(first.get('a4')?.marks);
+    expect(marks.size).toBe(1);
+    expect(carriedDeltas('acct', sessions, marks).size).toBe(0);
+    expect(carriedDeltas('other', sessions, marks).get('a4')?.entries).toHaveLength(1);
+  });
+
+  it('builds the same delta whatever the order the sessions come in, so a rebuilt session carries the same one', () => {
+    const sessions = [...before(), ...after()];
+    expect(carriedDeltas('acct', [...sessions].reverse(), new Set())).toEqual(carriedDeltas('acct', sessions, new Set()));
+  });
+
+  it('chains: the windows of three weeks carry one delta each, on their own fillers', () => {
+    const third = gated('c', 5, { window: 2, mode: 'default' });
+    const carried = carriedDeltas('acct', [...before(), ...after(), ...third], new Set());
+    expect([...carried.keys()].sort()).toEqual(['a4', 'c4']);
   });
 });
