@@ -135,14 +135,14 @@ describe('the pool server is always named', () => {
     const scene = setting();
     expect(await scene.cli('pool', 'login', '--provider', 'github')).toBe(ExitCode.USAGE);
     expect(await scene.cli('pool', 'deposit')).toBe(ExitCode.USAGE);
-    expect(await scene.cli('pool', 'pull')).toBe(ExitCode.USAGE);
+    expect(await scene.cli('pool', 'fetch')).toBe(ExitCode.USAGE);
     expect(scene.seen).toEqual([]);
   });
 
   it('a run with no session store says so', async () => {
     const scene = setting();
     delete scene.h.deps.sessions;
-    expect(await scene.cli('pool', 'pull', '--harness-version', '2.1.314', '--server', POOL)).toBe(ExitCode.UNEXPECTED);
+    expect(await scene.cli('pool', 'fetch', '--harness-version', '2.1.314', '--server', POOL)).toBe(ExitCode.UNEXPECTED);
     expect(scene.h.err.join('')).toContain('not configured');
   });
 });
@@ -252,7 +252,7 @@ describe('oars pool login', () => {
     const file = join(scene.staged.storeDir, 'pool-accounts.json');
     rmSync(file);
     mkdirSync(file);
-    expect(await scene.cli('pool', 'pull', '--harness-version', '2.1.314', '--server', POOL)).toBe(ExitCode.UNEXPECTED);
+    expect(await scene.cli('pool', 'fetch', '--harness-version', '2.1.314', '--server', POOL)).toBe(ExitCode.UNEXPECTED);
   });
 
   it('names the refusal when the provider denies, and when the pool will not start', async () => {
@@ -319,7 +319,7 @@ describe('oars pool login', () => {
 });
 
 describe('no harness token is ever read', () => {
-  it('a token planted in the harness config and environment appears in no request across login, deposit, and pull', async () => {
+  it('a token planted in the harness config and environment appears in no request across login, deposit, and fetch', async () => {
     const scene = setting({ ANTHROPIC_API_KEY: HARNESS_SECRET, CLAUDE_CODE_OAUTH_TOKEN: HARNESS_SECRET });
     writeFileSync(join(scene.staged.projectsRoot, '..', '.credentials.json'), JSON.stringify({ claudeAiOauth: { accessToken: HARNESS_SECRET } }));
     await capture(scene);
@@ -329,7 +329,7 @@ describe('no harness token is ever read', () => {
     openPool(scene);
     expect(await scene.cli('pool', 'deposit', '--server', POOL)).toBe(ExitCode.OK);
     on(scene, 'get', '/bundle/2.1.314/0', () => HttpResponse.json({ error: 'fetch_cap', message: 'capped' }, { status: 429 }));
-    await scene.cli('pool', 'pull', '--harness-version', '2.1.314', '--server', POOL);
+    await scene.cli('pool', 'fetch', '--harness-version', '2.1.314', '--server', POOL);
     expect(scene.seen.length).toBeGreaterThan(3);
     expect(scene.sent()).not.toContain(HARNESS_SECRET);
     expect(scene.sent()).toContain('a-pool-token');
@@ -496,7 +496,14 @@ describe('oars pool deposit', () => {
   });
 });
 
-describe('oars pool pull', () => {
+describe('oars pool fetch', () => {
+  it('has no pull, since that word belongs to recall: it is an unknown command', async () => {
+    const scene = setting();
+    expect(await scene.cli('pool', 'pull', '--harness-version', '2.1.314', '--server', POOL)).toBe(ExitCode.USAGE);
+    expect(scene.h.err.join('')).toContain("unknown command 'pull'");
+    expect(scene.seen).toEqual([]);
+  });
+
   const bundleBody = (version: string): string => JSON.stringify({ format: 1, harnessVersion: version, vocabVersion: '0', asOf: { pool: 'p' }, cells: [{}], motifs: [], reads: [{}, {}], strata: [] });
 
   const signedScene = async (): Promise<{ scene: Scene; sign: (text: string) => Promise<string> }> => {
@@ -516,20 +523,20 @@ describe('oars pool pull', () => {
     const payload = bundleBody('2.1.314');
     const signature = await sign(payload);
     on(scene, 'get', '/bundle/2.1.314/0', () => HttpResponse.json({ payload, signature }));
-    expect(await scene.cli('pool', 'pull', '--harness-version', '2.1.314', '--server', POOL, '--json')).toBe(ExitCode.OK);
+    expect(await scene.cli('pool', 'fetch', '--harness-version', '2.1.314', '--server', POOL, '--json')).toBe(ExitCode.OK);
     const answer = scene.document();
     expect(answer).toMatchObject({ ok: true, harnessVersion: '2.1.314', reads: 2, cells: 1, motifs: 0 });
     expect(scene.seen[0]?.headers).toContain('a-pool-token');
     expect(JSON.parse(readFileSync(String(at(answer, 'file')), 'utf8'))).toEqual({ payload, signature });
   });
 
-  it('names the version it pulled', async () => {
+  it('names the version it fetched', async () => {
     const { scene, sign } = await signedScene();
     const payload = bundleBody('2.1.9');
     const signature = await sign(payload);
     on(scene, 'get', '/bundle/2.1.9/0', () => HttpResponse.json({ payload, signature }));
-    expect(await scene.cli('pool', 'pull', '--harness-version', '2.1.9', '--server', POOL)).toBe(ExitCode.OK);
-    expect(scene.h.out.join('')).toContain('Pulled 2.1.9: 2 reads');
+    expect(await scene.cli('pool', 'fetch', '--harness-version', '2.1.9', '--server', POOL)).toBe(ExitCode.OK);
+    expect(scene.h.out.join('')).toContain('Fetched 2.1.9: 2 reads');
   });
 
   it('refuses a tampered bundle and a bundle of another harness version, and keeps neither', async () => {
@@ -537,31 +544,33 @@ describe('oars pool pull', () => {
     const payload = bundleBody('2.1.314');
     const signature = await sign(payload);
     on(scene, 'get', '/bundle/2.1.314/0', () => HttpResponse.json({ payload: payload.replace('"cells":[{}]', '"cells":[{},{}]'), signature }));
-    expect(await scene.cli('pool', 'pull', '--harness-version', '2.1.314', '--server', POOL, '--json')).toBe(ExitCode.INVALID);
+    expect(await scene.cli('pool', 'fetch', '--harness-version', '2.1.314', '--server', POOL, '--json')).toBe(ExitCode.INVALID);
     expect(scene.document()).toMatchObject({ problem: { code: 'bundle_unverified' } });
     expect(replicas(scene)).toEqual([]);
 
     on(scene, 'get', '/bundle/2.1.9/0', () => HttpResponse.json({ payload, signature }));
-    expect(await scene.cli('pool', 'pull', '--harness-version', '2.1.9', '--server', POOL)).toBe(ExitCode.INVALID);
+    expect(await scene.cli('pool', 'fetch', '--harness-version', '2.1.9', '--server', POOL)).toBe(ExitCode.INVALID);
     expect(replicas(scene)).toEqual([]);
   });
 
   it('refuses a harness version the vocabulary does not hold before asking, asks for a sign-in, and passes on a named refusal', async () => {
     const { scene } = await signedScene();
-    expect(await scene.cli('pool', 'pull', '--harness-version', '../secret', '--server', POOL)).toBe(ExitCode.USAGE);
+    expect(await scene.cli('pool', 'fetch', '--harness-version', '../secret', '--server', POOL)).toBe(ExitCode.USAGE);
     expect(scene.seen).toEqual([]);
-    expect(await scene.cli('pool', 'pull', '--harness-version', '<literal>', '--server', POOL)).toBe(ExitCode.USAGE);
+    expect(await scene.cli('pool', 'fetch', '--harness-version', '<literal>', '--server', POOL)).toBe(ExitCode.USAGE);
     expect(scene.seen).toEqual([]);
     // The option is required: no default version stands in for one.
-    expect(await scene.cli('pool', 'pull', '--server', POOL)).toBe(ExitCode.USAGE);
+    scene.h.err.length = 0;
+    expect(await scene.cli('pool', 'fetch', '--server', POOL)).toBe(ExitCode.USAGE);
+    expect(scene.h.err.join('')).toContain('--harness-version');
     expect(scene.seen).toEqual([]);
 
     on(scene, 'get', '/bundle/2.1.314/0', () => HttpResponse.json({ error: 'fetch_cap', message: 'An account without access may fetch 1 per ISO week.' }, { status: 429 }));
-    expect(await scene.cli('pool', 'pull', '--harness-version', '2.1.314', '--server', POOL, '--json')).toBe(ExitCode.RATE_LIMITED);
+    expect(await scene.cli('pool', 'fetch', '--harness-version', '2.1.314', '--server', POOL, '--json')).toBe(ExitCode.RATE_LIMITED);
     expect(scene.document()).toMatchObject({ problem: { code: 'fetch_cap' } });
 
     const anon = setting();
-    expect(await anon.cli('pool', 'pull', '--harness-version', '2.1.314', '--server', POOL)).toBe(ExitCode.AUTH);
+    expect(await anon.cli('pool', 'fetch', '--harness-version', '2.1.314', '--server', POOL)).toBe(ExitCode.AUTH);
   });
 });
 

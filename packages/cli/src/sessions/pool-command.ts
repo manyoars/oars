@@ -12,7 +12,7 @@ import { loadStore, type SessionsRuntime } from './store.js';
 
 const LOGIN = 'pool-login';
 const DEPOSIT = 'pool-deposit';
-const PULL = 'pool-pull';
+const FETCH = 'pool-fetch';
 const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]']);
 export const POOL_PROVIDERS = ['github', 'google'] as const;
 const DEFAULT_INTERVAL_SEC = 5;
@@ -288,19 +288,19 @@ export const poolDeposit = async (deps: RunDeps, options: { server?: string | un
 
 const replicaFile = (storeDir: string, server: string, harnessVersion: string): string => join(storeDir, 'pool-replica', contentHash(server), `${encodeURIComponent(harnessVersion)}.json`);
 
-/** `oars pool pull`: one harness version's signed bundle, kept only once the key pinned at login has verified it. It keeps the signed form, so the replica can be checked again later. */
-export const poolPull = async (deps: RunDeps, options: { server?: string | undefined; harnessVersion: string }): Promise<Outcome> => {
+/** `oars pool fetch`: one harness version's signed bundle, kept only once the key pinned at login has verified it. It keeps the signed form, so the replica can be checked again later. */
+export const poolFetch = async (deps: RunDeps, options: { server?: string | undefined; harnessVersion: string }): Promise<Outcome> => {
   const { storeDir } = runtimeOf(deps);
-  const server = poolServer(deps.env, PULL, options.server);
+  const server = poolServer(deps.env, FETCH, options.server);
   const { harnessVersion } = options;
-  if (!isBundleVersion(harnessVersion)) throw usage(`${harnessVersion} is not a public harness version.`, PULL);
-  const { token, signingKey } = await signedIn(deps, storeDir, server, PULL);
-  const reply = await ask(deps, PULL, server, `/bundle/${encodeURIComponent(harnessVersion)}/${encodeURIComponent(VOCAB_VERSION)}`, { token });
-  if (reply.status !== 200) throw refusal(PULL, reply);
+  if (!isBundleVersion(harnessVersion)) throw usage(`${harnessVersion} is not a public harness version.`, FETCH);
+  const { token, signingKey } = await signedIn(deps, storeDir, server, FETCH);
+  const reply = await ask(deps, FETCH, server, `/bundle/${encodeURIComponent(harnessVersion)}/${encodeURIComponent(VOCAB_VERSION)}`, { token });
+  if (reply.status !== 200) throw refusal(FETCH, reply);
   const verified = await verifyBundle(reply.body, signingKey, harnessVersion);
   if (!verified.ok) {
     const title = `Refused the bundle: ${verified.reason}.`;
-    throw new CliError(title, ExitCode.INVALID, PULL, { code: 'bundle_unverified', title });
+    throw new CliError(title, ExitCode.INVALID, FETCH, { code: 'bundle_unverified', title });
   }
   const file = replicaFile(storeDir, server, harnessVersion);
   await mkdir(dirname(file), { recursive: true });
@@ -308,6 +308,6 @@ export const poolPull = async (deps: RunDeps, options: { server?: string | undef
   const { cells, motifs, reads, asOf } = verified.bundle;
   return {
     document: { ok: true, server, harnessVersion, file, cells: cells.length, motifs: motifs.length, reads: reads.length, asOf },
-    text: `Pulled ${harnessVersion}: ${String(reads.length)} reads, ${String(cells.length)} cells, and ${String(motifs.length)} motifs, verified against the pinned key and kept at ${file}.`,
+    text: `Fetched ${harnessVersion}: ${String(reads.length)} reads, ${String(cells.length)} cells, and ${String(motifs.length)} motifs, verified against the pinned key and kept at ${file}.`,
   };
 };

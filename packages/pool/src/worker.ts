@@ -11,7 +11,7 @@ import { accountOf, loginPoll, loginStart } from './identity.js';
 /** D1 holds at most 2 MB in one value. A body declaring more is refused unread, and one that declares nothing is measured before it is parsed. */
 const MAX_DEPOSIT_BYTES = 1024 * 1024;
 
-/** Every pull parses every row, so one account's rows are a cost on every other account's pull. These two bound that one account's share, by row and by stored byte; they do not bound the pool, whose rows across all accounts a pull still loads at once. */
+/** Every fetch parses every row, so one account's rows are a cost on every other account's fetch. These two bound that one account's share, by row and by stored byte; they do not bound the pool, whose rows across all accounts a fetch still loads at once. */
 const DEFAULT_MAX_DEPOSITS = 20_000;
 const DEFAULT_MAX_ACCOUNT_BYTES = 64 * 1024 * 1024;
 
