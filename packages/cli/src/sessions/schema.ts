@@ -421,6 +421,8 @@ export interface ToolObservation {
   segments?: ShellSegment[];
   /** What the call pulled (CAPTURE 6). Absent when it pulled nothing. */
   pulls?: ToolPull[];
+  /** The packages the call installs or runs, resolved; absent when it names none (CAPTURE 13). Class A. */
+  packages?: ToolPackage[];
   /** One entry per commit a clean shell call made, in order: the sha its result names, or null when it names none (CAPTURE 6). Absent when it made none. */
   commits?: Array<string | null>;
 }
@@ -431,6 +433,14 @@ export interface ShellSegment {
   run: string;
   /** Whether the call's status reports this command: false when a pipe follows it, a later `;`, `&`, newline, or `||` overrides it, or it runs in the background. */
   read: boolean;
+}
+
+/** One package a call installs or runs, as capture resolved it (class A: a private package's name identifies private work). `package` is `<ecosystem>:<name>` in the registry's spelling, `packageVersion` an exact published version or null. */
+export interface ToolPackage {
+  package: string;
+  packageVersion: string | null;
+  /** True on the first call of the session that names this package at this version (D13 counts only that call). */
+  first: boolean;
 }
 
 export type PullEcosystem = 'npm' | 'pypi' | 'cargo' | 'go' | 'gem' | 'brew' | 'skill' | 'plugin' | 'mcp';

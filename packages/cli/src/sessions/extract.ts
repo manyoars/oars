@@ -10,6 +10,7 @@ import type { RepoSize } from './public-vocabulary.js';
 import { linkSteps } from './graph.js';
 import { callIdentity, shellIdentity, UNREAD_SHELL, type WordOfCommand } from './identity.js';
 import type { Redactor } from './redact.js';
+import { packagesOf } from './package-resolve.js';
 import { createShape, INTERRUPT_MARKER } from './session-shape.js';
 import {
   CAPTURE_VERSION,
@@ -1422,6 +1423,8 @@ export const captureSession = (input: ExtractInput): Capture => {
   const skeletonLines: SkeletonLine[] = [];
   const toolById = new Map<string | undefined, string>();
   const callById = new Map<string, { call: ToolObservation; at: number | undefined; plan: readonly PlannedCommit[] }>();
+  // Packages named so far in this file, by package and version, so a call's `first` mark is true once per version.
+  const seenPackages = new Set<string>();
   // The evidence for the frame: read across the whole file, so one session's prompts share a stack and a shell, and held only until the frame is built.
   const framePaths: string[] = [];
   const framePrograms = new Set<string>();
@@ -1683,6 +1686,7 @@ export const captureSession = (input: ExtractInput): Capture => {
         responseOfCall.push(response);
         callsPerResponse.set(response, (callsPerResponse.get(response) ?? 0) + 1);
         const pulls = shell?.pulls ?? pullsOfTool(name, redact);
+        const packages = packagesOf(pulls, seenPackages);
         const call: ToolObservation = {
           kind: 'tool',
           cv: CAPTURE_VERSION,
@@ -1705,6 +1709,7 @@ export const captureSession = (input: ExtractInput): Capture => {
           prompt: cur?.index ?? null,
           ...(shell === undefined ? {} : { segments: shell.segments }),
           ...(pulls.length === 0 ? {} : { pulls }),
+          ...(packages.length === 0 ? {} : { packages }),
         };
         tools.push(call);
         if (id !== undefined) callById.set(id, { call, at: lineSeconds, plan: shell?.commitPlan ?? [] });
