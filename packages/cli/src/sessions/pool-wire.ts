@@ -81,6 +81,25 @@ export interface SkeletonTranscript {
   tools: SkeletonTool[];
 }
 
+/** What a delta entry may change (spec Section 4, rule 4): `permissionMode` and `effort` by name only, a `plugin` as added or removed, and a `package` as removed. */
+export type DeltaField = 'plugin' | 'package' | 'permissionMode' | 'effort';
+export type DeltaKind = 'added' | 'removed' | 'changed';
+/** The one metric an entry's change is in: `callsPerSession` (tool calls in a session, or calls naming the package) in `count` buckets, `thinking` (thinking tokens in a prompt) in `tokens` buckets. */
+export type DeltaMetric = 'callsPerSession' | 'thinking';
+
+/**
+ * One change between a client's own before and after windows. It holds no `sid`, root, window date, or exact value: `name` is the public package or the word `private` (a plugin has no pinned registry, so
+ * always `private`), null when the field is named alone; `registry` is the package's registry and is null for a `private` name; `change` is the signed bucket of the metric's move, never the metric.
+ */
+export interface DeltaEntry {
+  deltaKind: DeltaKind;
+  field: DeltaField;
+  name: string | null;
+  registry: string | null;
+  metric: DeltaMetric;
+  change: number;
+}
+
 export interface SessionSkeleton {
   format: typeof SKELETON_FORMAT;
   /** A hash the client computes per account, so a redeposit replaces and two accounts' sessions cannot be joined. Never the session's own id. */
@@ -408,7 +427,9 @@ const PROMPT_CLASSES = ['no-tools', 'orchestration', 'research', 'edit-verify', 
 const STATUSES = ['ok', 'error', 'none'] as const satisfies readonly ToolStatus[];
 const PLATFORMS: ReadonlySet<string> = new Set(['aix', 'android', 'cygwin', 'darwin', 'freebsd', 'haiku', 'linux', 'netbsd', 'openbsd', 'sunos', 'win32']);
 const SHELLS: ReadonlySet<string> = new Set(Object.values(ACTION_TABLES).flatMap((table) => Object.values(table.shells)));
-const REGISTRIES = ['npm', 'pypi', 'crates', 'go', 'rubygems', 'homebrew', 'skill', 'plugin', 'mcp'] as const;
+/** The registries a package comes from; a pull may also come from a skill, plugin, or MCP registry. */
+export const PACKAGE_REGISTRIES = ['npm', 'pypi', 'crates', 'go', 'rubygems', 'homebrew'] as const;
+const REGISTRIES = [...PACKAGE_REGISTRIES, 'skill', 'plugin', 'mcp'] as const;
 const DAY = /^\d{4}-\d{2}-\d{2}$/;
 const ID = /^[0-9a-f]{16}$/;
 /** A real date, not just its shape. `Date.parse` rolls 2026-02-31 over to March instead of failing, so the day must also survive the trip back to text. */
