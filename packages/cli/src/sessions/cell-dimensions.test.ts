@@ -3,18 +3,22 @@ import { describe, expect, it } from 'vitest';
 import { cellsOf, projectedStore } from './cell-increments.js';
 import { EFFORT_CLASS, NO_AXES, bucketFields, deriveCells, type Cell, type CellSet } from './cells.js';
 import type { Motif } from './motif.js';
+import type { Strata } from './schema.js';
 import { frame, prompt, session, step, storedNames, store, tool } from './pool-fixture.js';
 
 const Q_DIMS = 3;
 
 const framed = frame({ shell: 'bash', effort: 'high', stack: { languages: ['rust', 'go'], frameworks: ['astro'], size: 'xl' } });
 
+// The stack strata the pair cells read: a share beside each language and a nonzero explore count, so the pair inputs reach the cells this file checks.
+const strata: Strata = { languages: [{ language: 'rust', share: 'over-50' }, { language: 'go', share: '10-50' }], repoFiles: 'over-100k', frameworks: ['astro'], explore: 5 };
+
 // A prompt with a thinking spend, a shell step with a flag and a pull, a plain step, and a second effort: every kind of cell the model derives.
 const fixture = () =>
   store({
-    sessions: [session('s1', { frame: framed }), session('s2', { frame: frame({ effort: 'low' }) })],
+    sessions: [session('s1', { frame: framed, strata }), session('s2', { frame: frame({ effort: 'low' }) })],
     prompts: [
-      prompt('s1', 0, { frame: framed, usage: { input: 1, cacheWrite: 0, cacheRead: 0, output: 1, thinking: 9000 } }),
+      prompt('s1', 0, { frame: framed, strata, usage: { input: 1, cacheWrite: 0, cacheRead: 0, output: 1, thinking: 9000 } }),
       prompt('s2', 0, { frame: frame({ effort: 'low' }), usage: { input: 1, cacheWrite: 0, cacheRead: 0, output: 1, thinking: 10 } }),
     ],
     tools: [

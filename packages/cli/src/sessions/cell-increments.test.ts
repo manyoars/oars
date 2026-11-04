@@ -206,6 +206,13 @@ describe('rules 1 to 3 and 6: what a cell and a stratum hold', () => {
     for (const stratum of incrementsOf(skeletonOfLocal(local)).strata.values()) expect(stratum.sessions).toBe(1);
   });
 
+  it('pools a language outside the pinned list as other, beside its share', () => {
+    const strata: Strata = { languages: [{ language: 'other', share: '10-50' }, { language: 'rust', share: 'over-50' }], repoFiles: null, frameworks: [], explore: 0 };
+    const local = store({ sessions: [session('s1', { frame: framed, strata })], prompts: [prompt('s1', 0, { frame: framed, strata })] });
+    const keys = [...incrementsOf(skeletonOfLocal(local)).strata.keys()].filter((key) => key.startsWith('languageShare/')).sort();
+    expect(keys).toEqual(['languageShare/other/10-50', 'languageShare/rust/over-50']);
+  });
+
   it('puts only the axes in a cell key, and never effort (rule 3)', () => {
     for (const cell of increments().cells.values()) expect(cell.frameBucket).toBe(cell.motifId === effortPairId ? NO_AXES : 'claude-code/2.1.31x/claude-opus-5-5');
   });
