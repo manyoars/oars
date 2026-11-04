@@ -437,7 +437,7 @@ describe('shell, MCP, patch, and usage outcomes', () => {
       ...line(T(at), 'session_meta', { id, session_id: id, originator: 'codex_cli_rs', timestamp: T(at), cwd: '/work/app', history_mode: 'paginated', ...extra }),
       ordinal: 0,
     });
-    const fork = (id: string, at: number, copies: readonly object[]) => ({ id, lines: [head(id, at, { forked_from_id: thread }), ...copies, asked(at + 5, copies.length + 1, `own ${id[0]}`)] });
+    const fork = (id: string, at: number, copies: readonly object[]) => ({ id, lines: [head(id, at, { forked_from_id: thread }), ...copies, asked(at + 5, copies.length + 1, `own ${id.slice(0, 1)}`)] });
     const promptsOf = async (home: string, id: string): Promise<string[]> => {
       const store = await openCodexStore(home);
       const session = store?.sessions.find((candidate) => candidate.id === id);
