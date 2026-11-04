@@ -23,13 +23,16 @@ const STEM = (id: string): string => `2026-06-01T10-00-00-${id}`;
 
 const T = (second: number): string => `2026-06-01T10:00:${String(second).padStart(2, '0')}.000Z`;
 const NL = String.fromCharCode(10);
-const meta = (id: string, cwd: string, extra: object = {}) => line(T(0), 'session_meta', { id, timestamp: T(0), cwd, cli_version: '0.50.0', ...extra });
+// SessionMeta requires session_id (equal to the root thread's id, protocol.rs:3451-3452) and originator (:3474), beside id and cli_version.
+const meta = (id: string, cwd: string, extra: object = {}) => line(T(0), 'session_meta', { session_id: id, id, timestamp: T(0), cwd, originator: 'codex_cli_rs', cli_version: '0.50.0', ...extra });
 // A failed shell call in the persisted text form (core/src/tools/mod.rs:107-113), as ac558e2 writes it.
 const failedShell = [
   line(T(3), 'response_item', { type: 'function_call', name: 'shell', arguments: JSON.stringify({ command: ['bash', '-lc', 'make'] }), call_id: 'c1' }),
   line(T(4), 'response_item', { type: 'function_call_output', call_id: 'c1', output: 'Exit code: 2\nWall time: 0.1 seconds\nOutput:\nmake: *** No rule' }),
 ];
-const usage = line(T(6), 'event_msg', { type: 'token_count', info: { last_token_usage: { input_tokens: 10, cached_input_tokens: 0, output_tokens: 5, reasoning_output_tokens: 0, total_tokens: 15 } } });
+// TokenUsageInfo requires total_token_usage as well as last_token_usage (protocol.rs:2539-2541); the reader's repeated-total check reads the first.
+const tokens = { input_tokens: 10, cached_input_tokens: 0, output_tokens: 5, reasoning_output_tokens: 0, total_tokens: 15 };
+const usage = line(T(6), 'event_msg', { type: 'token_count', info: { total_token_usage: tokens, last_token_usage: tokens } });
 const rollout = (id: string, cwd: string): unknown[] => [
   meta(id, cwd),
   line(T(1), 'turn_context', { model: 'gpt-5-codex', cwd }),
@@ -74,8 +77,8 @@ describe('depositing the Codex source', () => {
     expect(trackedKeys(s.storeDir)).toEqual([`codex/${A}`, `codex/${B}`]);
   });
 
-  // t755's frame and action table meet this source here: the deposit passes the source's own harness, not a literal, so a Codex call is
-  // read by Codex's table and its frame says `codex`, never `cursor` (review M6 on 6f162bf, where main's literal would have won the merge).
+  // The frame and action table meet this source here: the deposit passes the source's own harness, not a literal, so a Codex call is read by
+  // Codex's table and its frame says `codex`, never `cursor`.
   it('reads a Codex call by its own table and frames its session as Codex, from the deposit down', async () => {
     const s = staged();
     await deposit(s.runtime, options(['codex']));
