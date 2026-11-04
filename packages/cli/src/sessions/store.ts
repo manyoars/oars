@@ -1179,7 +1179,8 @@ const internTool = (tool: ToolObservation, intern: (value: string) => string): T
   session: intern(tool.session),
   parent: intern(tool.parent),
   tool: intern(tool.tool),
-  keys: tool.keys.map(intern),
+  // A row with no key list is kept as read: `isTool` admits it, and one such row must not abort every reader.
+  keys: Array.isArray(tool.keys) ? tool.keys.map(intern) : tool.keys,
   sid: tool.sid === null ? null : intern(tool.sid),
   agentType: tool.agentType === null ? null : intern(tool.agentType),
   harnessVersion: tool.harnessVersion === null ? null : intern(tool.harnessVersion),

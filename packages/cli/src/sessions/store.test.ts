@@ -184,6 +184,20 @@ describe('deposit', () => {
     expect(await readRedactDomains(join(staged.root, 'none'))).toEqual([]);
   });
 
+  it('keeps a tool row that has no key list instead of failing every reader', async () => {
+    const staged = stage();
+    await deposit(staged.runtime, options(['proj']));
+    const rows: Array<{ kind: string; session: string; tool: string; toolUseId?: string; keys?: string[] }> = readFileSync(paths(staged.storeDir).observations, 'utf8').split('\n').filter((line) => line !== '').map((line) => JSON.parse(line));
+    const tool = rows.find((row) => row.kind === 'tool');
+    if (tool === undefined) throw new Error('the fixture deposits no tool row');
+    const { keys, ...without } = { ...tool, n: 999, toolUseId: 'toolu_without_keys' };
+    expect(Array.isArray(keys)).toBe(true);
+    appendFileSync(paths(staged.storeDir).observations, `${JSON.stringify(without)}\n`);
+    const kept = (await loadStore(staged.storeDir)).tools.find((row) => row.toolUseId === 'toolu_without_keys');
+    expect(kept).toMatchObject({ session: tool.session, tool: tool.tool });
+    expect(kept?.keys).toBeUndefined();
+  });
+
   it('reads an empty or missing store as empty', async () => {
     const staged = stage();
     expect(await loadStore(staged.storeDir)).toEqual({ sessions: [], prompts: [], errors: [], subagents: [], tools: [], newerCaptures: 0 });

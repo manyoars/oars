@@ -61,4 +61,19 @@ describe('sessionsVerify reads lean', () => {
     expect(lean.text).toBe(full.text);
     expect(lean.failed).toEqual(full.failed);
   });
+
+  it('asks for the lean read of the one session as well, and its report equals the one a full read gives', async () => {
+    const staged = stage();
+    await deposit(staged.runtime, options);
+    const deps = { sessions: staged.runtime, install: undefined, now: () => NOW };
+    const lean = await sessionsVerify(deps, { session: 'tldr' });
+    // The read of every skeleton, then the read of the one asked for.
+    expect(asked).toHaveLength(2);
+    expect(asked.every((lean) => lean === true)).toBe(true);
+    forced.full = true;
+    const full = await sessionsVerify(deps, { session: 'tldr' });
+    expect(lean.report.sessions).toBe(1);
+    expect(lean.report).toEqual(full.report);
+    expect(lean.failed).toEqual(full.failed);
+  });
 });
