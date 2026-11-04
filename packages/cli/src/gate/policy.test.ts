@@ -29,6 +29,11 @@ describe('the gate policy file', () => {
     expect(await loadPolicy(store('{}'))).toEqual({ policy: DEFAULT_POLICY, source: 'file' });
   });
 
+  it('reads a file that starts with a byte order mark, as Windows PowerShell 5.1 writes one, so a block still applies', async () => {
+    const read = await loadPolicy(store('﻿{"classes":{"not-found":"block"}}'));
+    expect(read).toEqual({ policy: { ...DEFAULT_POLICY, classes: { 'young-name': 'warn', 'not-found': 'block' } }, source: 'file' });
+  });
+
   it.each([
     ['not JSON', '{"classes":'],
     ['an array', '[]'],

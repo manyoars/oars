@@ -6,12 +6,23 @@ import { tmpdir } from 'node:os';
 import { delimiter, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
+import { folderKey } from './record.js';
 
 const bin = fileURLToPath(new URL('../../dist/bin.js', import.meta.url));
 const made: string[] = [];
 afterEach(() => {
   for (const folder of made.splice(0)) rmSync(folder, { recursive: true, force: true });
 });
+
+// A store holding a not-found answer for `ghost-lib` read just now in this payload's folder, so the hook reads it from the cache and the test never races the 650 ms cut.
+const seededStore = (home: string): string => {
+  const store = join(home, 'oars', 'sessions');
+  mkdirSync(store, { recursive: true });
+  const now = new Date();
+  const answer = { kind: 'registry', v: 1, day: now.toISOString().slice(0, 10), ts: now.toISOString(), folder: folderKey(tmpdir()), class: 'npm-package', state: 'not-found', created: null, name: 'ghost-lib', latest: null };
+  writeFileSync(join(store, 'gate-registry.jsonl'), `${JSON.stringify(answer)}\n`);
+  return store;
+};
 
 const runHook = (input: string, extra: readonly string[] = [], pathHead?: string, given?: string): { status: number | null; stdout: string; home: string } => {
   const home = given ?? mkdtempSync(join(tmpdir(), 'oars-gate-bin-'));
@@ -133,7 +144,7 @@ describe.skipIf(!existsSync(bin))('the built oars gate hook', () => {
     expect(rows).toMatchObject([{ registryState: 'not-read' }, { registryState: 'found' }]);
   });
 
-  it('asks a down manager once, not once per sight, while the lock is held', () => {
+  it('starts no new ask on later sights while the lock is held, after a down manager', () => {
     const payload = JSON.stringify({ session_id: 's1', tool_use_id: 'u1', tool_name: 'Bash', tool_input: { command: 'npm install down-lib' }, cwd: tmpdir(), permission_mode: 'default' });
     const npm = downNpm();
     const first = runHook(payload, [], npm.folder);
@@ -153,8 +164,7 @@ describe.skipIf(!existsSync(bin))('the built oars gate hook', () => {
   it('prints a labeled deny on stdout and exits 0 when the policy says block and the manager answered not found', () => {
     const home = mkdtempSync(join(tmpdir(), 'oars-gate-bin-'));
     made.push(home);
-    const store = join(home, 'oars', 'sessions');
-    mkdirSync(store, { recursive: true });
+    const store = seededStore(home);
     writeFileSync(join(store, 'gate-policy.json'), '{"classes":{"not-found":"block"}}');
     const payload = JSON.stringify({ session_id: 's1', tool_use_id: 'u1', tool_name: 'Bash', tool_input: { command: 'npm install ghost-lib' }, cwd: tmpdir(), permission_mode: 'default' });
     const result = runHook(payload, [], missingNpm(), home);
@@ -172,10 +182,16 @@ describe.skipIf(!existsSync(bin))('the built oars gate hook', () => {
     expect(JSON.parse(lines[0] ?? '')).toMatchObject({ name: 'ghost-lib', registryState: 'not-found', arm: 'none', lineShown: 'not-found-block', policy: 'file' });
   });
 
-  it('does not deny the same name under the default policy', () => {
+  it('does not deny the same name under the default policy: it notes it, with the holdback off so the note always shows', () => {
     const payload = JSON.stringify({ session_id: 's1', tool_use_id: 'u1', tool_name: 'Bash', tool_input: { command: 'npm install ghost-lib' }, cwd: tmpdir(), permission_mode: 'default' });
-    const result = runHook(payload, [], missingNpm());
+    const home = mkdtempSync(join(tmpdir(), 'oars-gate-bin-'));
+    made.push(home);
+    writeFileSync(join(seededStore(home), 'gate-policy.json'), '{"holdbackPercent":0}');
+    const result = runHook(payload, [], missingNpm(), home);
     expect(result.status).toBe(0);
     expect(result.stdout).not.toContain('deny');
+    expect(JSON.parse(result.stdout)).toEqual({
+      hookSpecificOutput: { hookEventName: 'PreToolUse', additionalContext: 'Registry note: ghost-lib was not found in the registry your package manager uses.' },
+    });
   });
 });

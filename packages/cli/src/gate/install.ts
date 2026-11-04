@@ -1,5 +1,5 @@
 // `oars gate install` and `oars gate uninstall`: one PreToolUse entry in Claude Code's user settings that runs `oars gate hook`. The entry is ours when its command is
-// exactly `COMMAND`, so uninstall removes that entry and nothing else, and every other key and hook in the file is carried through as parsed JSON. The command calls the
+// exactly `COMMAND` or `PREVIOUS_COMMAND`, so uninstall removes that entry and nothing else, and every other key and hook in the file is carried through as parsed JSON. The command calls the
 // installed `oars`, never `npx` (which would fetch a package on the hook's clock), and does nothing when `oars` is not on the PATH, so a settings file that outlives the
 // install cannot cost a session its tool calls.
 import { chmod, lstat, mkdir, readlink, realpath, rename, rm, stat, writeFile } from 'node:fs/promises';

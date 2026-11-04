@@ -73,7 +73,8 @@ export const loadPolicy = async (storeDir: string): Promise<PolicyRead> => {
   }
   let parsed: unknown;
   try {
-    parsed = JSON.parse(body);
+    // Windows PowerShell 5.1 writes UTF-8 with a byte order mark, and `JSON.parse` refuses it: an operator's `block` would silently not apply.
+    parsed = JSON.parse(body.charCodeAt(0) === 0xfeff ? body.slice(1) : body);
   } catch {
     return { policy: DEFAULT_POLICY, source: 'invalid' };
   }
