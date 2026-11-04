@@ -52,7 +52,7 @@ const capture = (text: string, sid: string | null, root: string | null) =>
 describe('the CAPTURE 4 fields', () => {
   it('stamps sid on every capture record and records env, repo, fileHashes, and promptFingerprint on the session', () => {
     const result = capture(transcript('/w/app/pkg', '/w/app/src/a.ts'), 'abcd1234', '/w/app');
-    expect(CAPTURE_VERSION).toBe('10');
+    expect(CAPTURE_VERSION).toBe('11');
     for (const record of [result.session, ...result.prompts, ...result.tools, ...result.errorLines]) expect(record).toMatchObject({ cv: CAPTURE_VERSION, sid: 'abcd1234' });
     expect(result.session.env).toEqual({ harness: '2.1.301', oars: '1.2.3', node: 'v99', os: 'plan9' });
     expect(result.session.repo).toMatch(/^[0-9a-f]{16}$/);
@@ -509,6 +509,25 @@ describe('a deposit over a version-4 store', () => {
     expect(await deposit(staged.runtime, options)).toMatchObject({ sessions: 4 });
     expect((await loadStore(staged.storeDir)).sessions.map((session) => session.cv)).toEqual(Array(4).fill(CAPTURE_VERSION));
     expect(readFileSync(join(folder, name), 'utf8')).toContain('"models":[{"model":"claude-haiku-4-5","keys":["input","output"]}]');
+  });
+});
+
+describe('a deposit over a version-9 store', () => {
+  const options = { allow: ['proj'], redactDomains: [], now: () => NOW };
+
+  it('fails --strict as cv-behind, then captures every transcript again at the current version', async () => {
+    const staged = stage();
+    await deposit(staged.runtime, options);
+    const file = paths(staged.storeDir).observations;
+    const old = readFileSync(file, 'utf8').split('\n').filter((entry) => entry !== '').map((entry) => ({ ...parseObject(entry), cv: '9' }));
+    writeFileSync(file, old.map((record) => `${JSON.stringify(record)}\n`).join(''));
+    editState(staged.storeDir, (entry) => {
+      Reflect.set(entry, 'v', '9');
+    });
+    const deps = { sessions: staged.runtime, install: undefined, now: () => NOW };
+    expect((await sessionsVerify(deps, { session: undefined })).failed).toContain('every session is captured at the current capture version (none is cv-behind)');
+    expect(await deposit(staged.runtime, options)).toMatchObject({ sessions: 4 });
+    expect((await loadStore(staged.storeDir)).sessions.map((session) => session.cv)).toEqual(Array(4).fill(CAPTURE_VERSION));
   });
 });
 
