@@ -626,7 +626,7 @@ with the file, and usage is nonzero with `input_tokens` equal to the model's pro
   A legacy single-object `*.json` is read too, and the newer of a `.json` and `.jsonl` with one session id wins. A subagent's file is
   `chats/<parentSessionId>/<agentId>.jsonl`, deposited as a subagent of `gemini-<parentSessionId>` so session counts stay main sessions; the parent's `invoke_agent` call
   stays. A file at the root of `chats/` whose head says `kind: "subagent"` (written there when no parent is set, `chatRecordingService.ts:787,813-814`) is skipped, as the vendor's own
-  listing does (`cli/src/utils/sessionUtils.ts:301`). A file holding only a head (every new chat appends one, `geminiChat.ts:453`, so a launch and quit or a `/clear` leaves it) is no session until
+  listing does (`cli/src/utils/sessionUtils.ts:301`). A file holding a head and the CLI's own context turn (every new chat appends a head, `geminiChat.ts:453`, and the `<session_context>` turn, `geminiChat.ts:453-458`, `environmentContext.ts:69,101-108`, so a launch and quit or a `/clear` leaves them) is no session until
   a prompt is appended; it is not reported as unreadable. Opt-in like the other sources: discovered by default, opened only when `--allow gemini` names it, read-only, with its own cursor (`gemini/<id>` in
   `state.json`, size and mtime); the nightly run repeats a saved allow. The prompt log `logs.json`, the `checkpoint-*.json` copies, and the opt-in telemetry file are
   not read (a subset, copies, and off by default).
@@ -654,7 +654,7 @@ with the file, and usage is nonzero with `input_tokens` equal to the model's pro
   resume and each message is taken as it stands. `tokens.input` is the prompt count and includes the cache (`uiTelemetry.ts:317-320` computes the uncached part as
   `input - cached`), so the stored `input_tokens` is `input - cached` with the cache read kept apart, as capture's fields are disjoint. The vendor counts `thoughts` apart from `output` (candidates; `chatRecordingTypes.ts:21-25`), so `output_tokens` is `output + thoughts` and `thoughts` is also
   `output_tokens_details.thinking_tokens`, which keeps thinking within output as `verify` holds; `tool` (the tool-use prompt) is not mapped. A message with no `tokens` has no usage and is not an error.
-- **Absent.** `info`, `warning`, and `error` messages (`chatRecordingTypes.ts:74`) are not read: they are the CLI talking to the operator, not a prompt or a response. Cost has no equivalent. The CLI version is not in the record and is left unset. A call's duration is not recorded.
+- **Absent.** `info`, `warning`, and `error` messages (`chatRecordingTypes.ts:74`) are not read: they are the CLI talking to the operator, not a prompt or a response. Cost has no equivalent. The CLI version is not in the record and is left unset. A call's duration is not recorded. `setup`, `funnel`, and `trust` other than `unattendedRun` are absent, as for Copilot (`session-shape.ts`).
 
 **Known gaps.**
 

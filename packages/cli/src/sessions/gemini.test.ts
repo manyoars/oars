@@ -178,8 +178,9 @@ ${text}
     expect(out.session.assistantTurns).toBe(2);
   });
 
-  it('reads a usage-only response (no text, no calls) and clamps a cache larger than the input to zero input', () => {
-    const out = extractOf([head, prompt(1, 'hi'), say(2, '', { tokens: tokens(100, 5, 250) })]);
+  it('reads a usage-only response (no text, no calls, and no model: recordSyntheticMessage writes none, geminiChat.ts:1815) and clamps a cache larger than the input to zero input', () => {
+    // The clamp row is defensive: upstream counts the cache inside the input (uiTelemetry.ts:317-320), so `cached` never exceeds `input`; the `Math.max` guards a bad figure.
+    const out = extractOf([head, prompt(1, 'hi'), say(2, '', { tokens: tokens(100, 5, 250), model: undefined })]);
     expect(out.session.usage).toMatchObject({ input: 0, cacheRead: 250, output: 5 });
   });
 
@@ -191,6 +192,9 @@ ${text}
   });
 
   it('leaves a call with no result yet, or still running, as none', () => {
+    // Defensive: `recordToolCalls` (chatRecordingService.ts:1168) has one caller, `recordCompletedToolCalls` (geminiChat.ts:1842-1871), and each caller of that passes only a call that is
+    // `success`, `error`, or `cancelled` (useGeminiStream.ts:917-932, nonInteractiveCli.ts:567, local-executor.ts:1294, acpSession.ts:884,932), so `executing` and `awaiting_approval`
+    // (with a null result) are never written; they prove the reader's status guard.
     const out = extractOf([head, prompt(1, 'x'), say(2, '', { toolCalls: [call('a', 'run_shell_command', { command: 'x' }, 'executing', 3), call('b', 'read_file', { file_path: 'f' }, 'awaiting_approval', 4, null)] })]);
     expect(out.tools.map((tool) => tool.status)).toEqual(['none', 'none']);
   });
@@ -216,9 +220,15 @@ ${text}
     expect(lines.filter((entry) => entry.type === 'user').map((entry) => JSON.stringify(entry.message))).toEqual([expect.stringContaining('real'), expect.stringContaining('what I typed')]);
   });
 
-  // Writable: upstream calls a user turn a tool response when SOME part is a function response (utils/messageInspectors.ts:9-15) and records it through the synthetic path (geminiChat.ts:593),
-  // so text beside a result (a hook's added context) can be in one. The reader treats such a turn as a prompt (an earlier review's choice); see the report.
-  it('reads a user message with a tool result AND typed text as a prompt: only a message made wholly of tool results is not a prompt (geminiChat.ts:527,547)', () => {
+  it('does not read a tool-result turn with a <hook_context> note beside the result as a prompt: the only text upstream puts beside a function response (core/client.ts:985-989)', () => {
+    const response = { functionResponse: { id: 'x', name: 'read_file', response: { output: 'file text' } } };
+    const hooked = { id: 'm', timestamp: T(2), type: 'user', content: [response, { text: '<hook_context>x</hook_context>' }] };
+    expect(linesOf([head, hooked]).filter((entry) => entry.type === 'user')).toEqual([]);
+  });
+
+  it('reads a user message with a tool result AND other typed text as a prompt: only a message made wholly of tool results is not a prompt (geminiChat.ts:527,547)', () => {
+    // Defensive: upstream puts only `<hook_context>` text beside a function response (core/client.ts:985-989), and `convertToFunctionResponse` folds a tool's own text into the
+    // response `output` (utils/generateContentResponseUtilities.ts:69,131-136), so this shape is one only the reader's rule meets.
     const mixed = { id: 'm', timestamp: T(2), type: 'user', content: [{ functionResponse: { id: 'x', name: 'read_file', response: { output: 'file text' } } }, { text: 'and also this' }] };
     expect(linesOf([head, mixed]).map((entry) => JSON.stringify(entry.message))).toEqual([expect.stringContaining('and also this')]);
   });
@@ -237,14 +247,22 @@ ${text}
     expect(JSON.stringify(lines)).not.toContain('hidden');
   });
 
-  it('keeps the last record of a message id at its first position, so a call recorded pending then finished is one call with its outcome', () => {
-    const pending = say(2, 'working', { toolCalls: [call('c1', 'run_shell_command', { command: 'make' }, 'executing', 3)] });
-    const finished = say(2, 'working', { toolCalls: [shell('c1', 'make', 'success', 3, shellText('boom', ['Exit Code: 1']))] });
-    const records = [head, prompt(1, 'a'), pending, prompt(4, 'b'), finished];
-    const out = extractOf(records);
+  it('keeps the last record of a message id, so a call recorded without its result and then finished is one response with its outcome (chatRecordingService.ts:1152,1187-1190)', () => {
+    // Upstream rewrites only the LAST message, and only while it is a `gemini` one: `recordToolCalls` and `recordMessageTokens` update it in place, and start a new id otherwise.
+    // So the two records of one id are adjacent. A call is recorded only once finished (see above), so the first record carries the text and no tokens, the second the tokens and the call.
+    const first = say(2, 'working', { tokens: null });
+    const second = say(2, 'working', { tokens: tokens(100, 5), toolCalls: [shell('c1', 'make', 'success', 3, shellText('boom', ['Exit Code: 1']))] });
+    const out = extractOf([head, prompt(1, 'a'), first, second, prompt(4, 'b')]);
     expect(out.tools).toMatchObject([{ tool: 'Bash', status: 'error' }]);
     expect(out.session.assistantTurns).toBe(1);
-    // The assistant line keeps the pending record's place between the two prompts; its result line follows it.
+    expect(out.session.usage).toMatchObject({ input: 100, output: 5 });
+  });
+
+  it('keeps a rewritten id at its first position (defensive: the loader allows an id to return after a message between, chatRecordingService.ts:448, and the writer never does)', () => {
+    const finished = say(2, 'working', { tokens: tokens(100, 5), toolCalls: [shell('c1', 'make', 'success', 3, shellText('boom', ['Exit Code: 1']))] });
+    const records = [head, prompt(1, 'a'), say(2, 'working', { tokens: null }), prompt(4, 'b'), finished];
+    expect(extractOf(records).session.assistantTurns).toBe(1);
+    // The assistant line keeps the first record's place between the two prompts; its result line follows it.
     expect(linesOf(records).map((entry) => entry.type)).toEqual(['user', 'assistant', 'user', 'user']);
   });
 
