@@ -4,7 +4,7 @@ import { type Bundle, isBundleVersion, parseSkeleton, type SessionSkeleton, type
 import { CALL_SHAPE_METHOD, contentHash, METHODS } from '../../cli/src/sessions/read.js';
 import { EXTRACTOR_VERSION } from '../../cli/src/sessions/schema.js';
 import { accessOf } from './access.js';
-import { bundleOf, SERVED_FLOOR } from './derive.js';
+import { bundleOf, K_CELL } from './derive.js';
 import { answer, bound, fieldOf, notConfigured, refuse, textField, wholeBinding, type Env } from './http.js';
 import { accountOf } from './identity.js';
 import { isoWeekOf, secondsToNextWeek } from './week.js';
@@ -45,7 +45,7 @@ const generationOf = async (env: Env): Promise<number> => {
  * What names this bundle: the code that derives it, the floor, the version asked for, and the generation of the rows. It is known without reading a row, so a conditional request
  * costs no parse and an account cannot force one by sending it. Read before the rows, so a bundle is never older than the ETag it carries.
  */
-const etagOf = (harnessVersion: string, generation: number): string => `"${contentHash([BUNDLE_FORMAT, EXTRACTOR_VERSION, METHODS, CALL_SHAPE_METHOD, SERVED_FLOOR, harnessVersion, VOCAB_VERSION, generation])}"`;
+const etagOf = (harnessVersion: string, generation: number): string => `"${contentHash([BUNDLE_FORMAT, EXTRACTOR_VERSION, METHODS, CALL_SHAPE_METHOD, K_CELL, harnessVersion, VOCAB_VERSION, generation])}"`;
 
 /** Whether an If-None-Match names this ETag. A proxy that compresses may weaken it to `W/"..."`, so the prefix is not compared. */
 const matches = (header: string | null, etag: string): boolean => (header ?? '').split(',').some((token) => token.trim().replace(/^W\//, '') === etag);

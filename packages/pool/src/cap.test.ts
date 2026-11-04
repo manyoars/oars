@@ -30,7 +30,7 @@ const etagOf = (headers: Headers): string => {
 beforeAll(async () => {
   // The default cap, one fetch a week, so a test meets the cap without setting it.
   pool = await startPool({ FETCH_CAP: '' });
-  for (const id of ['2001', '2002', '2003']) await deposit(pool, id);
+  for (const id of ['2001', '2002', '2003', '2004', '2005']) await deposit(pool, id);
 }, 60_000);
 
 afterAll(async () => {

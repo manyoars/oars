@@ -15,8 +15,8 @@ import type { DeriveFamily } from '../../cli/src/sessions/read-support.js';
 import type { PromptObservation, SessionObservation, ToolObservation } from '../../cli/src/sessions/schema.js';
 import type { Store } from '../../cli/src/sessions/store.js';
 
-/** A served cell needs this many accounts, and a served read this many across its cells together (spec Section 8; D4's k rule). */
-export const SERVED_FLOOR = 3;
+/** A served cell needs this many accounts, and a served read this many across its cells together (spec Section 8; D4 may move this proposal, so it stays one constant). */
+export const K_CELL = 5;
 
 const DERIVERS: readonly DeriveFamily[] = [deriveFit, deriveCost, deriveChange, deriveLive, deriveAdoption, deriveMethod, deriveNextStep];
 
@@ -200,7 +200,7 @@ export const strataOf = (byAccount: readonly (readonly SessionSkeleton[])[]): St
   });
   return [...tallies.values()]
     .map(({ dimension, value, sessions, accounts }) => ({ dimension, value, sessions, clusters: accounts.size }))
-    .filter((cell) => cell.clusters >= SERVED_FLOOR)
+    .filter((cell) => cell.clusters >= K_CELL)
     .sort((a, b) => compare(a.dimension, b.dimension) || compare(a.value, b.value));
 };
 
@@ -212,7 +212,7 @@ export const bundleOf = (harnessVersion: string, byAccount: readonly (readonly S
   const set = { cells: inBundle, motifs: merged.motifs.filter((motif) => inBundle.some((cell) => cell.motifId === motif.motifId)) };
   // No error rows: a skeleton holds none, and recovery, the one family that reads them, is left out here.
   const pool = poolOf(set, []);
-  const cells = inBundle.filter((cell) => cell.clusters >= SERVED_FLOOR);
+  const cells = inBundle.filter((cell) => cell.clusters >= K_CELL);
   const held = new Set(cells.map((cell) => cell.motifId));
   return {
     format: BUNDLE_FORMAT,
@@ -221,7 +221,7 @@ export const bundleOf = (harnessVersion: string, byAccount: readonly (readonly S
     asOf: { pool: pool.version, day: pool.lastDay },
     cells,
     motifs: set.motifs.filter((motif) => held.has(motif.motifId)),
-    reads: readsOf(pool, merged.accountsOf).filter((read) => read.clusters >= SERVED_FLOOR),
+    reads: readsOf(pool, merged.accountsOf).filter((read) => read.clusters >= K_CELL),
     strata: strataOf(byAccount),
   };
 };
