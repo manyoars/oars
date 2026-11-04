@@ -473,9 +473,12 @@ const isCalendarDay = (text: string): boolean => {
   return !Number.isNaN(parsed) && new Date(parsed).toISOString().slice(0, 10) === text;
 };
 
+/** The languages a share can name: the pinned list and `other`, which `projectLanguage` gives any language off the list. The frame's own `languages` stay closed to the list. */
+const SHARE_LANGUAGES: ReadonlySet<string> = new Set([...LANGUAGES, 'other']);
+
 const parseLanguageShare = (value: unknown, at: string): LanguageShareEntry => {
   const raw = fieldsOf(value, at, ['language', 'languageShare']);
-  return { language: exactlyIn(LANGUAGES)(raw.language, under(at, 'language')), languageShare: oneOf(LANGUAGE_SHARES, raw.languageShare, under(at, 'languageShare')) };
+  return { language: exactlyIn(SHARE_LANGUAGES)(raw.language, under(at, 'language')), languageShare: oneOf(LANGUAGE_SHARES, raw.languageShare, under(at, 'languageShare')) };
 };
 
 const parseFrame = (value: unknown, at: string): SkeletonFrame => {
@@ -734,7 +737,7 @@ export const parseSkeleton = (value: unknown): { ok: true; skeleton: SessionSkel
 
 /**
  * One count of a stack stratum (spec Section 4, rule 3), across every harness version, so it is never joined to one. The two pairs hold two values each, joined by a slash:
- * `languageShare` is `<language>/<share bucket>` and `repoFilesExplore` is `<repoFiles bucket>/<explore calls bucket>`.
+ * `languageShare` is `<language>/<share bucket>` and `repoFilesExplore` is `<stack size, xs to xl>/<explore calls bucket>`.
  */
 export interface StrataCell {
   dimension: 'language' | 'framework' | 'repoFiles' | 'languageShare' | 'repoFilesExplore';

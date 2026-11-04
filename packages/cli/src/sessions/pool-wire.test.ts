@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { frame, printOf, prompt, session, sessionsFrom, step, store, storedNames, tool } from './pool-fixture.js';
+import { strataOf } from './strata.js';
 import { parseSkeleton, projectExplore, skeletonOf, type SessionSkeleton } from './pool-wire.js';
 import type { Harness, Strata } from './schema.js';
 import { LITERAL, PRIVATE } from './public-vocabulary.js';
@@ -402,6 +403,26 @@ describe('the language shares on the wire', () => {
       { language: 'other', share: 'under-10' },
     ]);
     expect(skeleton.transcripts[0]?.frame.stack.languageShares).toEqual([{ language: 'other', languageShare: '10-50' }]);
+    expect(parseSkeleton(JSON.parse(JSON.stringify(skeleton)))).toEqual({ ok: true, skeleton });
+  });
+
+  it('parses the batch of a session that touched a .ts, a .ts, and a README.md', () => {
+    // The strata come from the real strataOf, so the language other that it stores for an off-list extension must pass the parse.
+    const strata: Strata = { ...strataOf({ paths: ['/r/a.ts', '/r/b.ts', '/r/README.md'], packages: [], size: null }), explore: 0 };
+    expect(strata.languages).toEqual([{ language: 'other', share: '10-50' }, { language: 'typescript', share: 'over-50' }]);
+    const skeleton = skeletonFrom(store({ sessions: [session('s1', { frame: stackFrame, strata })], prompts: [prompt('s1', 0, { frame: stackFrame, strata })] }));
+    if (skeleton === null) throw new Error('no skeleton');
+    expect(skeleton.transcripts[0]?.frame.stack.languageShares).toEqual([{ language: 'other', languageShare: '10-50' }, { language: 'typescript', languageShare: 'over-50' }]);
+    expect(parseSkeleton(JSON.parse(JSON.stringify(skeleton)))).toEqual({ ok: true, skeleton });
+  });
+
+  it('keeps other out of the frame languages, which stay closed', () => {
+    const raw: unknown = JSON.parse(JSON.stringify(withStrata([])));
+    let holder: unknown = raw;
+    for (const key of ['transcripts', 0, 'frame', 'stack']) holder = isHolder(holder) ? Reflect.get(holder, key) : undefined;
+    if (!isHolder(holder)) throw new Error('no stack');
+    Reflect.set(holder, 'languages', ['other']);
+    expect(refusedField(raw)).toBe('transcripts[0].frame.stack.languages[0]');
   });
 
   it('sends none for a record captured before the strata', () => {

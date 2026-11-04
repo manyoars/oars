@@ -1,6 +1,6 @@
 // The stack strata a capture stores (pool vocabulary spec Sections 1.1 and 7): language and its share of the touched files, the repository's file
 // count by order of magnitude, the framework a resolved package shows, and how many steps only looked. Every value is a member of a closed list or a count,
-// so no path, package name, or program text is kept. The projections that gate these at deposit are in `projection.ts`.
+// so no path, package name, or program text is kept. The language and share projections are here; the rest that gate these at deposit are in `projection.ts`.
 
 import { LANGUAGE_OF_EXTENSION, LANGUAGES, type RepoSize } from './public-vocabulary.js';
 import { LANGUAGE_SHARES, type LanguageShare, type RepoFilesBucket, type Strata } from './schema.js';

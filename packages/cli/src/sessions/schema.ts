@@ -30,6 +30,9 @@
 // reads, not moved ones. A Copilot CLI session with rotated `events.N.jsonl` archives is now read as one session, so its `prompts`, `tools`, `lines`, and skeleton move; one
 // with no archives is unchanged. EXTRACTOR stays 11. A version-16 store's next deposit captures every transcript again from the harness or `raw/`.
 //
+// EXTRACTOR 12 gives a derived prompt the strata of its user-prompt record, so its own `explore` count reaches the pool's wire as a bucket. No transcript is read: a store at
+// 11 re-derives from its log alone.
+//
 // Version 10 (CAPTURE 10) gives a turn opened by a slash command or a skill a `user-prompt` record, adds `opened` to that record, and moves `skills`
 // from class P to class A, since a skill's name can be private. It changed no derivation, so it leaves EXTRACTOR at 9.
 //
@@ -86,7 +89,7 @@ export const CAPTURE_VERSION = '17';
 export const OLDEST_READABLE_CAPTURE = 3;
 
 /** Stamped `v` on every derived record. A bump re-derives from the log; no transcript is read. */
-export const EXTRACTOR_VERSION = '11';
+export const EXTRACTOR_VERSION = '12';
 
 export const PROMPT_HEAD_CHARS = 300;
 export const ERROR_EXAMPLE_CHARS = 160;
