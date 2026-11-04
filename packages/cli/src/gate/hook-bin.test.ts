@@ -39,7 +39,8 @@ describe.skipIf(!existsSync(bin))('the built oars gate hook', () => {
   });
 
   it('records one row for a crossing, still with empty stdout and exit 0', () => {
-    const payload = JSON.stringify({ session_id: 's1', tool_use_id: 'u1', tool_name: 'Bash', tool_input: { command: 'npm install left-pad' }, cwd: tmpdir(), permission_mode: 'default' });
+    // yarn is never asked of the registry (ASKED_PROGRAMS), so no `npm view` child outlives the test and writes into the temp home after its cleanup.
+    const payload = JSON.stringify({ session_id: 's1', tool_use_id: 'u1', tool_name: 'Bash', tool_input: { command: 'yarn add left-pad' }, cwd: tmpdir(), permission_mode: 'default' });
     const result = runHook(payload);
     expect(result.status).toBe(0);
     expect(result.stdout).toBe('');
@@ -47,6 +48,6 @@ describe.skipIf(!existsSync(bin))('the built oars gate hook', () => {
     expect(file).toBeDefined();
     const lines = readFileSync(join(result.home, file ?? ''), 'utf8').trim().split('\n');
     expect(lines).toHaveLength(1);
-    expect(JSON.parse(lines[0] ?? '')).toMatchObject({ kind: 'crossing', via: 'hook', name: 'left-pad' });
+    expect(JSON.parse(lines[0] ?? '')).toMatchObject({ kind: 'crossing', via: 'hook', name: 'left-pad', registryState: 'not-read' });
   });
 });
