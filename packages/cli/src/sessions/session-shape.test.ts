@@ -341,7 +341,7 @@ describe("the shape's edge cases", () => {
       rolloutLine(at(1), 'turn_context', { model: 'gpt', cwd: '/w', approval_policy: { reject: {} } }),
       rolloutLine(at(2), 'event_msg', { type: 'user_message', message: 'go' }),
     ];
-    const session = capture(rolloutLines(rollout.map((entry) => JSON.stringify(entry)).join('\n'), 'c1').map((entry) => JSON.stringify(entry)), { harness: 'codex' });
+    const session = codex(rollout);
     expect(session.setup).toEqual({ permissionMode: 'other' });
   });
 
