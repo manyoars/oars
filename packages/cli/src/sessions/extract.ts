@@ -10,6 +10,7 @@ import type { RepoSize } from './public-vocabulary.js';
 import { linkSteps } from './graph.js';
 import { callIdentity, shellIdentity, UNREAD_SHELL, type WordOfCommand } from './identity.js';
 import type { Redactor } from './redact.js';
+import { createShape, INTERRUPT_MARKER } from './session-shape.js';
 import {
   CAPTURE_VERSION,
   ERROR_LINE_CHARS,
@@ -339,6 +340,12 @@ interface PromptFrameParts {
 }
 
 const hasToolResult = (content: unknown): boolean => Array.isArray(content) && content.some((block: unknown) => isObj(block) && block.type === 'tool_result');
+
+const hasImage = (content: unknown): boolean => Array.isArray(content) && content.some((block: unknown) => isObj(block) && block.type === 'image');
+
+// The tags a local command (a slash command the harness ran itself) leaves as user lines. A model's answer to a command makes it a prompt, and that case never reaches
+// the run: a tag listed here that is still on a line there was not answered.
+const LOCAL_COMMAND_TAGS: ReadonlySet<string> = new Set(['command-name', 'command-message', 'local-command-stdout', 'local-command-stderr', 'local-command-caveat']);
 
 const firstTextBlock = (content: unknown): string => {
   if (typeof content === 'string') return content;
@@ -1398,6 +1405,8 @@ export const captureSession = (input: ExtractInput): Capture => {
   const seenResponses = new Set<string>();
   let promptFingerprint: string | null = null;
   let cur: Current | undefined;
+  // The setup, funnel, and trust shape (t815). A subagent's run is the parent's, so it has no run of its own alone.
+  const shape = createShape(harness, (tool) => storedToolName(tool, redact), { timing: origin === undefined });
 
   const finish = (): void => {
     if (cur === undefined) return;
@@ -1502,6 +1511,7 @@ export const captureSession = (input: ExtractInput): Capture => {
       costState: type === 'cost-state' ? sumModelUsage(o.modelUsage, o.startTime) : null,
     });
 
+    shape.read(o, { side, prompt: cur?.index ?? null });
     if (type === 'attachment') {
       const attachment = isObj(o.attachment) ? o.attachment : undefined;
       if (attachment?.type === 'prompt_snapshot' && attachment.systemPrompt !== undefined) promptFingerprint = sha256(JSON.stringify(attachment.systemPrompt)).slice(0, 12);
@@ -1526,6 +1536,16 @@ export const captureSession = (input: ExtractInput): Capture => {
 
     // prompt_graphs.py and cost_per_class.py: a prompt is a main-line user line with text and no tool result. They also dropped any leading "<", which lost
     // every turn a command or a skill opened (t768); that is now `promptOpening`'s call. A Cursor bubble keeps the old rule until its own brief.
+    // A `!` shell command the operator typed, or an image they pasted with no words: neither opens a prompt (the tag is injected, the image has no text), but
+    // both are the operator's turn. A line the agent did not write (a meta line, a local command, a synthetic reply) is neither the operator nor the agent.
+    let operatorTurn = false;
+    let harnessLine = type === 'assistant' && messageModel === '<synthetic>';
+    if (type === 'user' && role === 'user' && !side && !hasToolResult(content)) {
+      const leading = LEADING_TAG.exec(firstTextBlock(content).trimStart())?.[1];
+      harnessLine = o.isMeta === true || (leading !== undefined && LOCAL_COMMAND_TAGS.has(leading));
+      // `promptOpening` is Claude Code's alone: a Codex prompt that starts with `<` gets no opening below, yet it is still the operator typing.
+      operatorTurn = o.isMeta !== true && (leading === 'bash-input' || hasImage(content) || (harness === 'codex' && firstTextBlock(content).startsWith('<')));
+    }
     if (type === 'user' && role === 'user' && o.isMeta !== true && !side) {
       const text = firstTextBlock(content);
       const opening =
@@ -1537,6 +1557,9 @@ export const captureSession = (input: ExtractInput): Capture => {
               ? undefined
               : ({ opened: 'typed', request: text } satisfies PromptOpening);
       if (opening !== undefined) {
+        // The harness's interrupt marker is a line it wrote after the operator pressed Esc, not a turn the operator took.
+        // A compaction summary is the harness writing the session's history back, so the agent is still working through it.
+        shape.turn(text.startsWith(INTERRUPT_MARKER) ? 'none' : o.isCompactSummary === true ? 'agent' : 'human', toSeconds(ts), str(o.uuid));
         finish();
         cur = {
           index: prompts.length,
@@ -1559,6 +1582,9 @@ export const captureSession = (input: ExtractInput): Capture => {
       }
     }
 
+    // Anything else on the main line is the agent at work, an automated turn included: only the operator's own turn ends a run alone. A line the agent did not
+    // write is skipped, since it would stretch the run to a time the agent never worked until.
+    if (!side && (type === 'assistant' || type === 'user')) shape.turn(harnessLine ? 'none' : operatorTurn ? 'human' : 'agent', toSeconds(ts), str(o.uuid));
     if (cur !== undefined) {
       // cost_per_class.py reads wall time, turns, model, and tokens from main-line lines only.
       if (!side) {
@@ -1682,6 +1708,7 @@ export const captureSession = (input: ExtractInput): Capture => {
   }
   finish();
 
+  Object.assign(session, shape.finish());
   session.versions = [...versions].sort();
   session.branches = [...branches].sort();
   const kept = [...files].sort().slice(0, FILES_PER_SESSION_MAX);

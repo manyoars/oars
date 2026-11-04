@@ -1,4 +1,4 @@
-# The `oars sessions` store (version 11)
+# The `oars sessions` store (version 12)
 
 `oars sessions` keeps a local, deterministic memory of the operator's own Claude Code sessions: no model call, no network, nothing
 uploads. `gold arms` is the one exception: it sends redacted text through your own Claude subscription. This page is the store's format. The types are in `packages/cli/src/sessions/schema.ts`; the commands are in the CLI README.
@@ -85,13 +85,13 @@ moves to match, so `next` and `editFollowed` read the same calls as a current ca
 adds `frame` and `frameId` to the session and prompt records and `steps` to the tool record (see "Frames and steps"), and moves `tool`, `tools`, and a shell-form
 `target` from class P to class A; a version-8 store's next deposit captures every transcript again from the harness or `raw/`. Version 10 (CAPTURE 10, t768) gives a turn opened by a slash command or a
 skill a `user-prompt` record (see "What opens a prompt"), adds `opened` to that record, and moves `skills` from class P to class A, since a skill's name can be private. Prompt
-`index` values move in a session that had such a turn, so a version-9 store's next deposit captures every transcript again from the harness or `raw/`. Version 11 (CAPTURE 11) redacts the part of an MCP tool name after `mcp__` (or Cursor's `mcp_`) in `tool`, the session's `tools`, an error line's `tool`, and the skeleton's tool names; reads package-manager and shell forms more exactly, so `pulls`, `segments`, `commits`, and each tool's `steps` change; and opens a `typed` prompt from a hand-typed line that merely starts with an injected tag's name without closing it, where it opened none before. A version-10 store's next deposit captures every transcript again from the harness or `raw/`. EXTRACTOR 10 reads more command forms as a run or a verify; derived records regenerate and no transcript is read. What an open does with an older store:
+`index` values move in a session that had such a turn, so a version-9 store's next deposit captures every transcript again from the harness or `raw/`. Version 11 (CAPTURE 11) redacts the part of an MCP tool name after `mcp__` (or Cursor's `mcp_`) in `tool`, the session's `tools`, an error line's `tool`, and the skeleton's tool names; reads package-manager and shell forms more exactly, so `pulls`, `segments`, `commits`, and each tool's `steps` change; and opens a `typed` prompt from a hand-typed line that merely starts with an injected tag's name without closing it, where it opened none before. A version-10 store's next deposit captures every transcript again from the harness or `raw/`. EXTRACTOR 10 reads more command forms as a run or a verify; derived records regenerate and no transcript is read. Version 12 (CAPTURE 12, t815) adds the optional `setup`, `funnel`, and `trust` to the session record (see "Setup, funnel, and trust shape"); a Claude Code session's existing values do not change, and a Codex session's `lines` count and skeleton gain the neutral lines the reader writes for its tools and interrupts; a version-11 store's next deposit captures every transcript again, from the harness or `raw/`, because the new fields come only from the transcript. What an open does with an older store:
 
 | Log holds | Action on open | Action at the next deposit |
 |-----------|----------------|----------------------------|
-| `cv` 11, `v` current | read | skip unchanged files |
-| `cv` 5 to 10 and the transcript is on disk or in `raw/` | read; a replayed `tool` record is folded (see above); `verify` counts it `cv-behind`, and `verify --strict` exits 4 on it | capture again at `rev + 1` |
-| `cv` 5 to 10, neither the harness nor `raw/` has the transcript | read; a replayed `tool` record is folded (see above); `verify` counts it `cv-frozen` (not `cv-behind`), and `verify --strict` does not fail on it | none |
+| `cv` 12, `v` current | read | skip unchanged files |
+| `cv` 5 to 11 and the transcript is on disk or in `raw/` | read; a replayed `tool` record is folded (see above); `verify` counts it `cv-behind`, and `verify --strict` exits 4 on it | capture again at `rev + 1` |
+| `cv` 5 to 11, neither the harness nor `raw/` has the transcript | read; a replayed `tool` record is folded (see above); `verify` counts it `cv-frozen` (not `cv-behind`), and `verify --strict` does not fail on it | none |
 | `cv` 3 or 4 (or a version-2 session) and the transcript is on disk or in `raw/` | read through the compatibility reader (for `cv` 3, a field version 4 added reads as null, empty, or `unknown`; the prompt half of `contextFingerprint`, before its `.`, reads as `promptFingerprint`, and `-` reads as null; the environment half is dropped); `verify` counts it `cv-behind`, and `verify --strict` exits 4 on it | capture again at `rev + 1`; derived records regenerate under the current `EXTRACTOR_VERSION` on every open |
 | `cv` 3 or 4, neither the harness nor `raw/` has the transcript (for a Cursor session, Cursor no longer lists the composer) | read through the compatibility reader; `verify` counts it `cv-frozen` (not `cv-behind`), and `verify --strict` does not fail on it | none |
 | `derived.json` `v` older than `EXTRACTOR_VERSION` | read | rewritten at the next deposit (no reader depends on it today); derived records are regenerated from the log on every read |
@@ -115,6 +115,7 @@ pattern and entropy, emails, and the domains named with `--redact-domain`) befor
 | every capture record | `kind`, `cv`, `rev`, `sid` | P |
 | `session` (one per transcript) | `agentType` (set on a subagent transcript), `harness` (set on a Cursor session; absent reads as Claude Code), `bytes`, `lines`, `badLines`, `userTurns`, `assistantTurns`, `versions`, `models`, `bashCmds`, `compactSummaries`, `costUsd`, `usage`, `env` (below), `frame`, `frameId` | P |
 | | `session`, `parent`, `spawnedBy`, `spawnedIn` (join ids), `at`, `tsFirst`, `tsLast`, `promptFingerprint`, `repo`, `tools` (native names, which can hold a private MCP server's), `fileHashes`, `urls`, `searches`, `branches`, `tldrs` (400 chars), `confidences` (120 chars) | A |
+| | `setup`, `funnel`, `trust` (optional; absent on a record captured before version 12, and per field where the transcript holds none) | A |
 | | `project` (the folder slug, with the username and directory names), `files` (the paths as written, redacted) | L |
 | `user-prompt` (one per prompt) | `index`, `opened` (`typed` or `command`; absent before CAPTURE 10, when only a typed line opened a prompt), `wallSec`, `thinking`, `turns`, `model`, `efforts`, `usage`, `frame`, `frameId` | P |
 | | `session`, `ts`, `head` (the first 300 characters), `promptFingerprint`, `skills` (a skill's name can be private) | A |
@@ -275,6 +276,32 @@ Below `BOOKS_MIN_PROMPTS` (30) in its denominator a share prints as `too few`, a
 `of`. A settled commit counts toward that minimum the way a prompt does. `--by pull` has one row per `ecosystem:name` from the calls' `pulls`, a
 prompt counts once in each row it pulled, so the rows overlap, and a prompt that pulled nothing is in none. Every column reads the main line
 only: subagent work is left out.
+
+## Setup, funnel, and trust shape
+
+Version 12 records three optional objects on the `session` record, class A, from what the transcript recorded and nothing else: never today's config or instruction
+files, because a file read now is not that session's setup. A field the transcript does not hold is absent, never guessed or zero (a zero is stored only where the
+harness would have shown the event). Counts, names, and sizes only: no instruction text, hook command or output, or tool description is kept. Nothing here is bucketed or
+projected; the value is stored as read (an `unattendedRun` to two decimals). The collector is `session-shape.ts`.
+
+| Field | Meaning | Claude Code | Codex | Cursor | Copilot |
+|-------|---------|-------------|-------|--------|---------|
+| `setup.permissionMode` | the mode most of the session ran in; the harness's documented value, else `other` | recorded: `permission-mode` lines and the key on `user` lines | recorded: `turn_context.approval_policy` (`granular` for the object form) | absent | absent |
+| `setup.plugins` | plugins named by a tool (`mcp__plugin_<plugin>_<server>__<tool>`) offered, loaded, or called; read for Claude Code only, from the stored tool name, so a plugin named like a secret reads as none, and a name holding an `_` reads only up to it (`mcp__plugin_my_plugin_srv__t` stores `my`) | recorded (a floor: a plugin with no MCP tool shows nothing; a `plugin:skill` prefix on `attributionSkill` is not read, since a nested skill carries one too) | absent | absent | absent |
+| `setup.hookCount` | distinct hooks seen firing, by `hookName`, never the command | recorded (a floor): `hook_success`, `hook_additional_context`, and `hook_blocking_error` by `hookName`; a `stop_hook_summary.hookInfos[]` command counts only when no `Stop`-named hook line was seen, since that line and the summary are the same hooks | absent (hook events are not persisted) | absent | absent |
+| `setup.instructionBytes` | bytes of instruction files loaded mid-session, each path once | recorded (a floor): `nested_memory`'s `content.content`; the opening files are in the `api-request-blob` lines capture skips | absent | absent | absent |
+| `funnel.offered` | tool names offered and not since removed | recorded: `api-request-shape`'s `shape.tools[].name` plus `deferred_tools_delta.addedNames` | recorded: `session_meta.dynamic_tools` and `additional_tools` items (built-in tools only when Codex persists them) | absent | absent |
+| `funnel.loaded` | tool names pulled in by a tool search | recorded: `tool_reference.tool_name` in a result | recorded: `tool_search_output.tools` | absent | absent |
+| `funnel.removed` | tool names offered and then removed, and not offered again | recorded: `deferred_tools_delta.removedNames` | absent (the update payload is not read) | absent | absent |
+| `called`, `worked` | not new: the session's `tools` and each `tool` record's `status` | recorded | recorded | recorded | recorded |
+| `trust.interrupts` | the operator cut a turn short; the marker a rejection is followed by is not a second one | recorded | recorded: `turn_aborted` with reason `interrupted` | absent | absent |
+| `trust.rejections` | the operator declined a tool call (`The user doesn't want to ...`) | recorded | absent | absent | absent |
+| `trust.denials` | policy refused a call (permission rules, the classifier, or a hook); not the operator | recorded (the first line of a failed result) | absent | absent | absent |
+| `trust.trustEvent` | each stop as `{event, tool, prompt}`; `tool` is null when none was in flight | recorded | interrupts only | absent | absent |
+| `trust.unattendedRun` | minutes (rounded to two decimals) from each human turn to the agent's last line before the next human turn; one per turn | recorded; a turn the harness injects (a task notification, a scheduled task) is not a human turn; a `!` shell command and a prompt that is only an image are; a local command nobody answered and a line the harness wrote (a meta line, a synthetic reply) neither open nor extend a run; a rejection ends the run at the agent's last line before it | recorded | absent | recorded (a prompt marked as an autopilot continuation or an injected skill or agent prompt is not read, so it is not a human turn) |
+
+A subagent transcript has no `unattendedRun`: its run is its parent's. `unattendedRun` ends at the agent's last line, so a reply the next morning is not an overnight
+run. A wait on a permission prompt the operator approved counts toward the run: this reader sees no approval time, only the result's. A rejection ends the run at the agent's last line before it, and the agent's work after a rejection is not counted until the next human turn. The last turn of a file runs to the file's last line. A resume's replayed human line is one turn, and a line of a sidechain is not read. A compaction summary is the agent working, not a human turn. Tool names are stored as `tools` stores them (`storedToolName`: an MCP name's server part redacted).
 
 ## Motifs, cells, and reads
 
