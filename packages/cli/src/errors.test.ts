@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { ExitCode, exitCodeForProblem } from './errors.js';
+import { ExitCode, exitCodeForProblem, unreachableError } from './errors.js';
 
 // One row per line of design §3.2's exit-code table, keyed on the problem's code (or type), never on its text.
 const ROWS: Array<[string, number, string, number]> = [
@@ -42,5 +42,22 @@ describe('exitCodeForProblem', () => {
 
   it('maps a response that has no problem body by status alone', () => {
     expect(exitCodeForProblem(503, undefined)).toBe(ExitCode.UNREACHABLE);
+  });
+});
+
+describe('unreachableError', () => {
+  it('names the server and the reason the network gave, not just undici\'s "fetch failed"', () => {
+    const cause = Object.assign(new Error('getaddrinfo ENOTFOUND api.manyoars.com'), { code: 'ENOTFOUND' });
+    const failure = unreachableError('api', new TypeError('fetch failed', { cause }), 'https://api.manyoars.com');
+    expect(failure).toMatchObject({ exitCode: ExitCode.UNREACHABLE, step: 'api', message: 'Cannot reach the server at https://api.manyoars.com: getaddrinfo ENOTFOUND api.manyoars.com' });
+  });
+
+  it('keeps the error\'s own message when it has no cause, and a string as it is', () => {
+    expect(unreachableError('api', new Error('socket hang up'), 'http://localhost:1').message).toBe('Cannot reach the server at http://localhost:1: socket hang up');
+    expect(unreachableError('api', 'boom', 'http://localhost:1').message).toBe('Cannot reach the server at http://localhost:1: boom');
+  });
+
+  it('leaves the server out when the caller names none (the sign-in flow reports Keycloak\'s answer)', () => {
+    expect(unreachableError('login', new Error('Keycloak answered HTTP 503')).message).toBe('Cannot reach the server: Keycloak answered HTTP 503');
   });
 });
