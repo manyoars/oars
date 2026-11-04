@@ -100,7 +100,7 @@ describe('oars deploy: the sequence and its idempotency keys', () => {
       sdkKey: SDK_KEY,
       prices: ['calls-100', 'calls-1000'],
       started: true,
-      nextSteps: [`oars status ${WORKLOAD_ID}`, `oars test-charge ${WORKLOAD_ID} --price calls-100`],
+      nextSteps: [`oars status ${WORKLOAD_ID}`],
     });
   });
 
@@ -112,12 +112,12 @@ describe('oars deploy: the sequence and its idempotency keys', () => {
     expect(lastJson(h)).toMatchObject({ ok: true, started: false });
   });
 
-  it('without --price-file there are no prices, and the test-charge hint drops --price', async () => {
+  it('without --price-file there are no prices', async () => {
     const { h, manifest } = setup();
     const platform = fakePlatform();
     expect(await run(['deploy', '--manifest', manifest, '--json'], h.deps)).toBe(ExitCode.OK);
     expect(platform.plan()).toEqual([REGISTER, DEPLOY]);
-    expect(lastJson(h)).toMatchObject({ prices: [], nextSteps: [`oars status ${WORKLOAD_ID}`, `oars test-charge ${WORKLOAD_ID}`] });
+    expect(lastJson(h)).toMatchObject({ prices: [], nextSteps: [`oars status ${WORKLOAD_ID}`] });
   });
 });
 

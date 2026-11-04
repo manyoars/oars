@@ -5,13 +5,10 @@ import { deploy } from './commands/deploy.js';
 import { keysCreate, keysList, keysRevoke, SCOPED_AUTHORITIES } from './commands/keys.js';
 import { login } from './commands/login.js';
 import { logout } from './commands/logout.js';
-import { purchasingCap, purchasingCard, purchasingList, type BillingMode } from './commands/purchasing.js';
 import { status } from './commands/status.js';
 import { templates } from './commands/templates.js';
-import { testCharge } from './commands/test-charge.js';
 import type { CredentialStore } from './credentials.js';
 import { CliError, ExitCode } from './errors.js';
-import { requirePurchasingOpen } from './issuer.js';
 import type { JournalStore } from './journal.js';
 import type { BooksBy, RecallQuery } from './sessions/query.js';
 import { closedQueryOf, formsRefusal, RECALL_FAMILIES } from './sessions/recall-reads.js';
@@ -75,18 +72,6 @@ const collect = (value: string, previous: string[] | undefined): string[] => [..
 const positiveInteger = (value: string): number => {
   if (!/^[1-9]\d*$/.test(value)) throw new InvalidArgumentError('it must be a positive whole number.');
   return Number(value);
-};
-
-const billingMode = (value: string): BillingMode => {
-  const mode = value.toUpperCase();
-  if (mode !== 'TEST' && mode !== 'LIVE') throw new InvalidArgumentError('it must be TEST or LIVE.');
-  return mode;
-};
-
-/** Whole cents, as the platform parses them; the string goes on the wire as typed. */
-const usdAmount = (value: string): string => {
-  if (!/^\d+(\.\d{1,2})?$/.test(value)) throw new InvalidArgumentError('it must be a dollar amount in whole cents, such as 100 or 12.50 (0 turns purchasing off).');
-  return value;
 };
 
 /** An ISO time, normalized to the form session timestamps are stored in so the two compare as text. */
@@ -224,22 +209,6 @@ const buildProgram = (deps: RunDeps, argv: string[]): Command => {
       emit(deps, flag(options, 'json'), await status(deps, { apiUrl: resolveApiUrl(deps, text(options, 'apiUrl')), workloadId }));
     });
 
-  program
-    .command('test-charge')
-    .description("make a TEST-mode charge against one of a workload's prices")
-    .argument('<workloadId>', 'the workload id')
-    .option('--price <ref>', "the price to charge (default: the workload's only active price)")
-    .action(async (workloadId: string, _options: OptionValues, command: Command) => {
-      const options: OptionValues = command.optsWithGlobals();
-      const outcome = await testCharge(deps, {
-        apiUrl: resolveApiUrl(deps, text(options, 'apiUrl')),
-        workloadId,
-        priceRef: text(options, 'price'),
-        idempotencyKey: text(options, 'idempotencyKey') ?? randomUUID(),
-      });
-      emit(deps, flag(options, 'json'), outcome);
-    });
-
   const keys = program.command('keys').description('create, list, and revoke your API keys; a key made with --workload works on that one workload only');
 
   keys
@@ -278,58 +247,6 @@ const buildProgram = (deps: RunDeps, argv: string[]): Command => {
     .action(async (keyId: string, _options: OptionValues, command: Command) => {
       const options: OptionValues = command.optsWithGlobals();
       emit(deps, flag(options, 'json'), await keysRevoke(deps, { apiUrl: resolveApiUrl(deps, text(options, 'apiUrl')), keyId }));
-    });
-
-  // Hidden and refused until paid agents open (issuer.ts requirePurchasingOpen); the code stays for it.
-  const purchasing = program
-    .command('purchasing', { hidden: true })
-    .description("set up an agent's purchasing: the card, the monthly cap, and what it bought")
-    .hook('preAction', () => {
-      requirePurchasingOpen(deps);
-    })
-    // A command with subcommands and no action prints help before preAction runs; this makes bare `purchasing` hit the gate first.
-    .action(() => {
-      purchasing.help({ error: true });
-    });
-
-  purchasing
-    .command('card')
-    .description('start saving the purchasing card; prints the page a person saves it on (exit 6)')
-    .requiredOption('--mode <mode>', 'TEST or LIVE', billingMode)
-    .action(async (_options: OptionValues, command: Command) => {
-      const options: OptionValues = command.optsWithGlobals();
-      const outcome = await purchasingCard(deps, {
-        apiUrl: resolveApiUrl(deps, text(options, 'apiUrl')),
-        mode: billingMode(text(options, 'mode') ?? ''),
-      });
-      emit(deps, flag(options, 'json'), outcome);
-    });
-
-  purchasing
-    .command('cap')
-    .description("set an agent's monthly purchasing cap: a lower one applies at once; a higher one prints the page a person approves it on (exit 6)")
-    .argument('<workloadId>', "the buying agent's workload id")
-    .requiredOption('--mode <mode>', 'TEST or LIVE', billingMode)
-    .requiredOption('--usd <amount>', 'dollars a month, whole cents; 0 turns purchasing off', usdAmount)
-    .action(async (workloadId: string, _options: OptionValues, command: Command) => {
-      const options: OptionValues = command.optsWithGlobals();
-      const outcome = await purchasingCap(deps, {
-        apiUrl: resolveApiUrl(deps, text(options, 'apiUrl')),
-        workloadId,
-        mode: billingMode(text(options, 'mode') ?? ''),
-        monthlyCapUsd: text(options, 'usd') ?? '',
-        idempotencyKey: text(options, 'idempotencyKey') ?? randomUUID(),
-      });
-      emit(deps, flag(options, 'json'), outcome);
-    });
-
-  purchasing
-    .command('list')
-    .description('list what an agent has bought')
-    .argument('<workloadId>', "the buying agent's workload id")
-    .action(async (workloadId: string, _options: OptionValues, command: Command) => {
-      const options: OptionValues = command.optsWithGlobals();
-      emit(deps, flag(options, 'json'), await purchasingList(deps, { apiUrl: resolveApiUrl(deps, text(options, 'apiUrl')), workloadId }));
     });
 
   const sessions = program.command('sessions').description("deposit and recall your own Claude Code session logs, locally (no model calls, no network, except `gold arms`, which asks your own Claude subscription)");

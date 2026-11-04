@@ -130,7 +130,7 @@ export const deploy = async (deps: RunDeps, options: DeployOptions): Promise<Out
   await deps.journal.delete(base).catch(() => undefined);
 
   const prices = input.prices.map((price) => price.priceRef);
-  const nextSteps = [`oars status ${workload.id}`, `oars test-charge ${workload.id}${prices[0] === undefined ? '' : ` --price ${prices[0]}`}`];
+  const nextSteps = [`oars status ${workload.id}`];
   const lines = [
     `${options.start ? 'Deployed' : 'Registered'} ${workload.name} (workload ${workload.id})`,
     ...(workload.sdkKey === undefined ? [] : [`SDK key (shown once; save it now): ${workload.sdkKey}`]),

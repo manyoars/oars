@@ -33,10 +33,6 @@ export interface PlatformOptions {
   failPrice?: string;
   /** The first deploy call is refused once (402 COMPUTE_CAP_REACHED). */
   failDeploy?: boolean;
-  /** What `GET /billing/agents/{id}/prices` lists. */
-  prices?: Array<{ priceRef: string; active: boolean }>;
-  /** Whether that listing says there are more pages. */
-  morePrices?: boolean;
   billingMode?: 'TEST' | 'LIVE';
   /** What `GET /agents/templates` lists (a GET, so no deploy plan holds it). */
   templates?: AgentTemplate[];
@@ -79,7 +75,7 @@ const priceView = (input: object, active = true): object => ({
 const parse = (text: string): unknown => (text === '' ? null : JSON.parse(text));
 
 /**
- * msw handlers standing in for the platform's deploy, status and test-charge endpoints, with the idempotency the real
+ * msw handlers standing in for the platform's deploy and status endpoints, with the idempotency the real
  * interceptor has: the same `Idempotency-Key` and body replays the first answer as 200, the same key with another body is
  * 409 `IDEMPOTENCY_CONFLICT`. `calls` is every request in order; `plan()` is the mutating ones in plan form.
  */
@@ -141,11 +137,6 @@ export const fakePlatform = (options: PlatformOptions = {}) => {
       record(request, 200);
       return HttpResponse.json({ billingMode: options.billingMode ?? 'TEST', workloadId: WORKLOAD_ID });
     }),
-    http.get(`${API}/billing/agents/${WORKLOAD_ID}/prices`, ({ request }) => {
-      record(request, 200);
-      const content = (options.prices ?? []).map((price) => priceView({ priceRef: price.priceRef }, price.active));
-      return HttpResponse.json({ content, last: options.morePrices !== true });
-    }),
     http.get(`${API}/agents/templates`, ({ request }) => {
       record(request, 200);
       const catalog = options.templates ?? [];
@@ -154,12 +145,6 @@ export const fakePlatform = (options: PlatformOptions = {}) => {
       const page = Number(query.get('page') ?? 0);
       return HttpResponse.json({ content: catalog.slice(page * size, (page + 1) * size), last: (page + 1) * size >= catalog.length, number: page });
     }),
-    http.post(`${API}/billing/agents/${WORKLOAD_ID}/test-charges`, ({ request }) =>
-      answer(request, () => ({
-        status: 201,
-        body: { chargeId: 'cccccccc-dddd-4eee-8fff-000000000000', createdAt: '2026-10-24T00:00:00Z', grossUsd: '5.00', kind: 'CHARGE', livemode: false, mode: 'TEST', platformFeeUsd: '0.50', refundedUsd: '0.00', status: 'SUCCEEDED' },
-      })),
-    ),
   );
 
   return {
