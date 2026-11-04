@@ -163,6 +163,24 @@ describe('MCP server', () => {
       expect(listed).toContain('count all time and refuse both');
     });
 
+    it('states the refusal rule on the class and sinceDays properties a caller reads', async () => {
+      const staged = seeded();
+      const tools = field(field(await handleMessage(staged.runtime, now, { jsonrpc: '2.0', id: 1, method: 'tools/list' }), 'result'), 'tools');
+      const properties = Array.isArray(tools) ? field(field(tools[0], 'inputSchema'), 'properties') : undefined;
+      for (const name of ['class', 'sinceDays']) {
+        expect(String(field(field(properties, name), 'description'))).toContain('Recovery and fit questions and the error, path, and class inputs only; any other form refuses it.');
+      }
+    });
+
+    it('stores the asker query redacted in the call log, as the recall row is', async () => {
+      const staged = seeded();
+      const secret = ['gh', 'p_', 'a1B2c3D4e5F6g7H8i9J0k1L2'].join('');
+      await ask(staged, { text: `failed for ${secret}` });
+      const logged = readFileSync(paths(staged.storeDir).calls, 'utf8');
+      expect(logged).not.toContain(secret);
+      expect(logged).toContain('<secret>');
+    });
+
     it('keeps a poisoned model and version out of the reply and out of the stored evidence', async () => {
       const staged = seeded({ model: POISON, harnessVersion: POISON });
       const result = await ask(staged, { family: 'recovery' });
