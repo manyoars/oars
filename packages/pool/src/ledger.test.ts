@@ -97,17 +97,20 @@ describe('the pool has no path that deletes the ledger', () => {
     expect(offences(files)).toEqual([]);
   });
 
-  it('names a planted delete, replace, drop, scheduled handler, and cron', () => {
-    expect(offences({ a: 'await env.DB.prepare("DELETE FROM deposits WHERE account = ?")' })).toEqual(['a: DELETE FROM the ledger']);
-    expect(offences({ b: 'delete  from  Contributors' })).toEqual(['b: DELETE FROM the ledger']);
-    expect(offences({ c: 'INSERT OR REPLACE INTO deposits (id) VALUES (1)' })).toEqual(['c: a REPLACE that deletes a ledger row']);
-    expect(offences({ c2: 'REPLACE INTO deposits (id) VALUES (1)' })).toEqual(['c2: a REPLACE that deletes a ledger row']);
-    expect(offences({ c3: 'UPDATE OR REPLACE deposits SET id = 2' })).toEqual(['c3: a REPLACE that deletes a ledger row']);
-    expect(offences({ c4: 'CREATE TABLE t (a TEXT, PRIMARY KEY (a) ON CONFLICT REPLACE)' })).toEqual(['c4: a REPLACE that deletes a ledger row']);
-    expect(offences({ c5: 'DROP TABLE deposits' })).toEqual(['c5: a DROP TABLE that deletes ledger rows']);
-    expect(offences({ c6: 'drop table if exists Contributors;' })).toEqual(['c6: a DROP TABLE that deletes ledger rows']);
-    expect(offences({ d: 'export default { fetch, scheduled(event, env) {} }' })).toEqual(['d: a scheduled handler']);
-    expect(offences({ e: '{ "triggers": { "crons": ["0 3 * * *"] } }' })).toEqual(['e: a cron trigger']);
+  // One row per planted case, so each fails on its own when its regex is missing.
+  it.each([
+    ['DELETE FROM deposits', 'await env.DB.prepare("DELETE FROM deposits WHERE account = ?")', 'DELETE FROM the ledger'],
+    ['delete from Contributors', 'delete  from  Contributors', 'DELETE FROM the ledger'],
+    ['INSERT OR REPLACE INTO deposits', 'INSERT OR REPLACE INTO deposits (id) VALUES (1)', 'a REPLACE that deletes a ledger row'],
+    ['REPLACE INTO deposits', 'REPLACE INTO deposits (id) VALUES (1)', 'a REPLACE that deletes a ledger row'],
+    ['UPDATE OR REPLACE deposits', 'UPDATE OR REPLACE deposits SET id = 2', 'a REPLACE that deletes a ledger row'],
+    ['ON CONFLICT REPLACE', 'CREATE TABLE t (a TEXT, PRIMARY KEY (a) ON CONFLICT REPLACE)', 'a REPLACE that deletes a ledger row'],
+    ['DROP TABLE deposits', 'DROP TABLE deposits', 'a DROP TABLE that deletes ledger rows'],
+    ['drop table if exists Contributors', 'drop table if exists Contributors;', 'a DROP TABLE that deletes ledger rows'],
+    ['a scheduled method', 'export default { fetch, scheduled(event, env) {} }', 'a scheduled handler'],
+    ['a crons array', '{ "triggers": { "crons": ["0 3 * * *"] } }', 'a cron trigger'],
+  ])('names a planted %s', (_label, text, offence) => {
+    expect(offences({ planted: text })).toEqual([`planted: ${offence}`]);
   });
 
   it('lets the token sweep, a comment, and the refusing trigger pass', () => {
