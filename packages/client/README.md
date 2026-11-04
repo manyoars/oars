@@ -19,11 +19,9 @@ import { createOarsClient } from '@manyoars/oars-client';
 
 const client = createOarsClient({ version: 'my-agent', token: process.env.OARS_TOKEN });
 
-const { data, error } = await client.GET('/billing/credits/{customerRef}', {
-  params: { path: { customerRef: 'cus_123' }, header: { 'X-Agent-SDK-Key': process.env.AOR_SDK_KEY ?? '' } },
-});
-if (error) throw new Error('billing refused the call');
-console.log(data.creditsAvailable);
+const { data, error } = await client.GET('/me/api-keys', { params: { query: { page: 0, size: 20 } } });
+if (error) throw new Error('listing the keys failed');
+console.log(data.content?.length);
 ```
 
 `baseUrl` defaults to `https://api.manyoars.com` (exported as `DEFAULT_API_URL`). A caller that retries a mutation passes its own

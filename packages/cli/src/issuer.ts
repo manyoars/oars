@@ -54,16 +54,3 @@ export const resolveIssuerUrl = async (deps: RunDeps, flag?: string): Promise<st
   if (await hasLaunched(deps)) return PRODUCTION_ISSUER_URL;
   throw new CliError(NOT_LAUNCHED, ExitCode.USAGE, 'usage');
 };
-
-const PURCHASING_CLOSED = 'Paid agents are not open yet, so `oars purchasing` is off. Set OARS_ISSUER_URL to use a platform of your own.';
-
-/**
- * `oars purchasing` is closed to the public: the launch rule holds that nothing is sold before business verification, and the launch flag
- * is already true, so it cannot be the gate. Only `OARS_ISSUER_URL` (dev, staging, tests) opens it, with no network call.
- * Opening paid agents removes this gate.
- */
-export const requirePurchasingOpen = (deps: RunDeps): void => {
-  const fromEnv = deps.env.OARS_ISSUER_URL;
-  if (fromEnv !== undefined && fromEnv !== '') return;
-  throw new CliError(PURCHASING_CLOSED, ExitCode.USAGE, 'usage');
-};
