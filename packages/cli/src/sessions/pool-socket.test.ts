@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { run } from '../cli.js';
 import { ExitCode } from '../errors.js';
 import { harness } from '../test-support.js';
-import { networkSender, poolDeposit } from './pool-command.js';
+import { networkSender, poolDeposit, type Sender } from './pool-command.js';
 import { VOCAB_VERSION } from './pool-wire.js';
 import { deposit } from './store.js';
 import { cleanup, NOW, stage } from './test-support.js';
@@ -189,5 +189,61 @@ describe('what is printed is what goes over the socket', () => {
     const files = readdirSync(folder, { recursive: true, encoding: 'utf8' }).filter((name) => name.endsWith(`.${hash}.jsonl`));
     expect(files).toHaveLength(1);
     expect(post.body).toBe(readFileSync(join(folder, files[0] ?? ''), 'utf8'));
+  });
+
+  describe('a deposit the lock refuses sends no deposit over the socket', () => {
+    /** A batch in the outbox, the file that holds it, and its hash, with the pool listening on the loopback. */
+    const batchedOnLoopback = async (): Promise<{ h: ReturnType<typeof harness>; file: string; hash: string; cli: (...args: string[]) => Promise<ExitCode> }> => {
+      const staged = stage();
+      const termsFile = join(staged.root, 'terms.txt');
+      writeFileSync(termsFile, 'zorblax\n');
+      const h = harness({ OARS_GITHUB_CLIENT_ID: 'gh-client', OARS_EXCLUSION_TERMS: termsFile });
+      h.deps.sessions = staged.runtime;
+      loop = await listen([]);
+      const { x } = await signer();
+      loop.answers.set('POST /login/device/code', [json(200, { device_code: 'device-code-1', user_code: 'USER-1', verification_uri: 'https://provider.test/device', interval: 1, expires_in: 10 })]);
+      loop.answers.set('POST /login/oauth/access_token', [json(200, { access_token: PROVIDER_TOKEN })]);
+      loop.answers.set('POST /v1/login', [json(200, { token: POOL_TOKEN, account: 'acct_one', expiresAt: Date.parse('2099-01-01T00:00:00Z'), signingKey: { kty: 'OKP', crv: 'Ed25519', x } })]);
+      loop.answers.set('GET /v1/covenant', [json(200, { version: 'v1', accepted: true })]);
+      loop.answers.set('POST /v1/deposits', [json(201, { ok: true })]);
+      await deposit(staged.runtime, { allow: ['proj'], redactDomains: [], now: () => NOW });
+      const cli = (...args: string[]): Promise<ExitCode> => run(args, h.deps);
+      expect(await cli('pool', 'login', '--provider', 'github', '--server', loop.origin)).toBe(ExitCode.OK);
+      expect(await cli('pool', 'deposit', '--server', loop.origin)).toBe(ExitCode.OK);
+      const folder = join(staged.storeDir, 'pool-outbox');
+      const name = readdirSync(folder, { recursive: true, encoding: 'utf8' }).find((entry) => entry.endsWith('.jsonl')) ?? '';
+      return { h, file: join(folder, name), hash: /\.([0-9a-f]{64})\.jsonl$/.exec(name)?.[1] ?? '', cli };
+    };
+
+    const deposits = (): number => loop.arrivals.filter((arrival) => arrival.url === '/v1/deposits').length;
+    const edit = (file: string): void => {
+      writeFileSync(file, `${readFileSync(file, 'utf8').trimEnd()} \n`);
+    };
+
+    it('a batch never printed', async () => {
+      const { h, hash } = await batchedOnLoopback();
+      await expect(poolDeposit(h.deps, { server: loop.origin, send: hash, via: networkSender(h.deps, 'deposit') })).rejects.toMatchObject({ problem: { code: 'batch_not_shown' } });
+      expect(deposits()).toBe(0);
+    });
+
+    it('a batch edited after it was printed', async () => {
+      const { h, file, hash, cli } = await batchedOnLoopback();
+      expect(await cli('pool', 'outbox', '--server', loop.origin)).toBe(ExitCode.OK);
+      edit(file);
+      await expect(poolDeposit(h.deps, { server: loop.origin, send: hash, via: networkSender(h.deps, 'deposit') })).rejects.toMatchObject({ problem: { code: 'batch_changed' } });
+      expect(deposits()).toBe(0);
+    });
+
+    it('a batch edited between the check and the send, at the first request', async () => {
+      const { h, file, hash, cli } = await batchedOnLoopback();
+      expect(await cli('pool', 'outbox', '--server', loop.origin)).toBe(ExitCode.OK);
+      const real = networkSender(h.deps, 'deposit');
+      const via: Sender = async (request) => {
+        if (request.method === 'GET') edit(file);
+        return real(request);
+      };
+      await expect(poolDeposit(h.deps, { server: loop.origin, send: hash, via })).rejects.toMatchObject({ problem: { code: 'batch_changed' } });
+      expect(deposits()).toBe(0);
+    });
   });
 });

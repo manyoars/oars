@@ -6,19 +6,26 @@ import { join } from 'node:path';
 import { SKELETON_FORMAT, VOCAB_VERSION } from './pool-wire.js';
 import { contentHash } from './read.js';
 
-/** Keys sorted at every depth, so two writers of one batch write the same bytes. */
-const canonical = (value: unknown): unknown => {
-  if (Array.isArray(value)) return value.map(canonical);
-  if (typeof value !== 'object' || value === null) return value;
-  return Object.fromEntries(
-    Object.entries(value)
-      .sort(([a], [b]) => (a < b ? -1 : 1))
-      .map(([key, entry]) => [key, canonical(entry)]),
-  );
+/**
+ * JSON with keys sorted at every depth, so two writers of one batch write the same bytes. The sorted entries are written out directly: rebuilding an object would put an integer-like key such as `10` before `9` whatever the sort said.
+ * A value JSON cannot hold is left out of an object and written as null in an array, as `JSON.stringify` does.
+ */
+/** What `JSON.stringify` writes for a value, or undefined for one JSON cannot hold (the lib types call this a string always). */
+const encoded = (value: unknown): string | undefined => JSON.stringify(value);
+
+const canonical = (value: unknown): string => {
+  if (Array.isArray(value)) return `[${value.map(canonical).join(',')}]`;
+  if (typeof value === 'object' && value !== null) {
+    const entries = Object.entries(value)
+      .filter(([, entry]) => encoded(entry) !== undefined)
+      .sort(([a], [b]) => (a < b ? -1 : 1));
+    return `{${entries.map(([key, entry]) => `${JSON.stringify(key)}:${canonical(entry)}`).join(',')}}`;
+  }
+  return encoded(value) ?? 'null';
 };
 
 /** The batch as one canonical JSON line: sorted keys, no optional whitespace, UTF-8 when written, and a newline at the end. These are the bytes that are hashed, printed, and sent. */
-export const canonicalBytes = (batch: unknown): string => `${JSON.stringify(canonical(batch))}\n`;
+export const canonicalBytes = (batch: unknown): string => `${canonical(batch)}\n`;
 
 export const batchHash = (bytes: string): string => createHash('sha256').update(Buffer.from(bytes, 'utf8')).digest('hex');
 
@@ -115,12 +122,15 @@ export const writeBatch = async (outbox: string, key: string, batch: unknown, st
 
 const isMissing = (error: unknown): boolean => error instanceof Error && 'code' in error && error.code === 'ENOENT';
 
+/** A path that is missing, or has a file where a folder should be, holds nothing. */
+const isAbsent = (error: unknown): boolean => isMissing(error) || (error instanceof Error && 'code' in error && error.code === 'ENOTDIR');
+
 /** The names in a folder; a folder that does not exist yet holds none. */
 const namesIn = async (folder: string): Promise<string[]> => {
   try {
     return (await readdir(folder)).sort();
   } catch (error) {
-    if (isMissing(error)) return [];
+    if (isAbsent(error)) return [];
     throw error;
   }
 };
@@ -178,7 +188,7 @@ export const heldBatches = async (outbox: string, stamp: string = currentStamp()
 
 const shownFile = (outbox: string): string => join(outbox, 'shown.log');
 
-/** Records that this hash was printed, one line to a hash: the lock below sends only what appears here. */
+/** Records that this hash was printed, one line for each print: the lock below sends only a hash that appears here. */
 export const markShown = async (outbox: string, hash: string, at: number): Promise<void> => {
   await mkdir(outbox, { recursive: true });
   await appendFile(shownFile(outbox), `${hash} ${new Date(at).toISOString()}\n`, 'utf8');
