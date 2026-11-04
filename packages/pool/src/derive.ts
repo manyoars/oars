@@ -174,12 +174,14 @@ const readsOf = (pool: Pool, accountsOf: MergedCells['accountsOf']): Read[] => {
   const orderOf = orderResolver([]);
   const asOf = { pool: pool.version, day: pool.lastDay };
   const clustersOf = (inputs: readonly string[]): number => new Set(inputs.flatMap((input) => [...(accountsOf.get(input) ?? [])])).size;
+  // Once for every live read of a bundle: the shape-level units are the same for each.
+  const shapeUnits = unitCells(pool).filter(({ motif }) => motif.level === 'shape');
   // A live read's baseline is a second set of cells its inputs do not cite, so it takes the same floor on its own: under it, the baseline and the ratio against it are null.
   const baselined = (read: ReadBody): ReadBody => {
     if (read.family !== 'live') return read;
     const { motif, day } = read.slice;
     const days = new Set(baselineDaysOf(String(day)));
-    const held = unitCells(pool).filter(({ cell, motif: unit }) => unit.level === 'shape' && motifName(unit) === motif && days.has(cell.day));
+    const held = shapeUnits.filter(({ cell, motif: unit }) => motifName(unit) === motif && days.has(cell.day));
     return clustersOf(held.map(({ cell }) => cellIdOf(cell))) >= K_CELL ? read : { ...read, value: { ...read.value, baseline: null, ratio: null } };
   };
   return DERIVERS.flatMap((derive) => derive({ pool, store: NO_STORE }).map(baselined).map((read) => makeRead({ ...read, asOf, clusters: clustersOf(read.inputs) }, orderOf)));

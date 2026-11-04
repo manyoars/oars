@@ -32,7 +32,7 @@ describe('with no COVENANT_VERSION binding', () => {
     expect(await pool.db().then((db) => db.prepare('SELECT COUNT(*) AS count FROM accounts WHERE covenant IS NOT NULL').first('count'))).toBe(0);
   });
 
-  it('still serves a slice: reads and pull are not behind the covenant', async () => {
+  it('still serves a bundle: reads and pull are not behind the covenant', async () => {
     const { token } = await pool.signIn('github', stubUser('2003'));
     expect((await pool.get('/bundle/2.1.314/0', token)).status).toBe(200);
   });

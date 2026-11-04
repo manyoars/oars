@@ -51,13 +51,13 @@ describe('a bundle over five accounts', () => {
     expect(four.cells).toEqual([]);
 
     await depositor('1008');
-    const slice = await pulled(first);
-    expect(slice.reads.length).toBeGreaterThan(0);
-    for (const read of slice.reads) expect(read.clusters).toBe(5);
-    expect(new Set(slice.reads.map((read) => read.family)).has('fit')).toBe(true);
-    expect(slice.cells.length).toBeGreaterThan(0);
-    for (const cell of slice.cells) expect(cell.clusters).toBe(5);
-    const fit = slice.reads.find((read) => read.family === 'fit' && read.slice.level === 'shape');
+    const bundle = await pulled(first);
+    expect(bundle.reads.length).toBeGreaterThan(0);
+    for (const read of bundle.reads) expect(read.clusters).toBe(5);
+    expect(new Set(bundle.reads.map((read) => read.family)).has('fit')).toBe(true);
+    expect(bundle.cells.length).toBeGreaterThan(0);
+    for (const cell of bundle.cells) expect(cell.clusters).toBe(5);
+    const fit = bundle.reads.find((read) => read.family === 'fit' && read.slice.level === 'shape');
     expect(fit?.value).toMatchObject({ failed: 0 });
     // Six deposits of two steps each.
     expect(fit?.n).toBe(12);
@@ -98,9 +98,14 @@ describe('a bundle over five accounts', () => {
     const { json } = await pool.get(`/bundle/${VERSION}/0`, await depositor('1006'));
     const walk = (value: unknown, path: string): string[] => {
       if (typeof value !== 'object' || value === null) return [];
-      return Object.entries(value).flatMap(([key, held]) => [...(/stack/i.test(key) ? [`${path}.${key}`] : []), ...walk(held, `${path}.${key}`)]);
+      return Object.entries(value).flatMap(([key, held]) => [...(/stack|language|framework|repoFiles/i.test(key) ? [`${path}.${key}`] : []), ...walk(held, `${path}.${key}`)]);
     };
-    expect(walk(JSON.parse(textOf(json, 'payload')), 'bundle')).toEqual([]);
+    const payload: unknown = JSON.parse(textOf(json, 'payload'));
+    expect(walk(payload, 'bundle')).toEqual([]);
+    // A stack value may sit only in the strata cells (rule 3): everywhere else the bundle is the same for every stack.
+    const strata = fieldOf(payload, 'strata');
+    expect(JSON.stringify(strata)).toContain('typescript');
+    expect(JSON.stringify({ ...(typeof payload === 'object' && payload !== null ? payload : {}), strata: undefined })).not.toContain('typescript');
     expect(typeof json === 'object' && json !== null ? Object.keys(json).sort() : []).toEqual(['payload', 'signature']);
   });
 
@@ -163,12 +168,12 @@ describe('clusters over the cells of a read', () => {
       await depositOn(spread, '3003', ['2026-11-03']);
       expect((await readsIn(spread, await depositOn(spread, '3004', ['2026-11-04']))).reads).toEqual([]);
       const token = await depositOn(spread, '3005', ['2026-11-05']);
-      const slice = await readsIn(spread, token);
-      const fit = slice.reads.find((read) => read.family === 'fit' && read.slice.level === 'shape');
+      const bundle = await readsIn(spread, token);
+      const fit = bundle.reads.find((read) => read.family === 'fit' && read.slice.level === 'shape');
       expect(fit?.clusters).toBe(5);
       expect(fit?.inputs).toHaveLength(5);
-      for (const read of slice.reads) expect(read.clusters).toBe(5);
-      expect(slice.cells).toEqual([]);
+      for (const read of bundle.reads) expect(read.clusters).toBe(5);
+      expect(bundle.cells).toEqual([]);
     });
   }, 60_000);
 
