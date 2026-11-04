@@ -579,6 +579,53 @@ command with a matching error line, and usage is nonzero (it is written only at 
   A session that never shut down (a crash) has output tokens only. Subagent events (`agentId`, or the deprecated `parentToolCallId`) are skipped; the parent's `task` call is kept. Torn lines are counted as
   unparseable; a file with no parseable line is unreadable. Idempotent per session (`copilot/<id>` in `state.json`, size and mtime).
 
+## The Gemini source
+
+`oars sessions deposit --allow gemini` reads Gemini CLI chat files into the same store. The records carry `harness: "gemini"`, take the same field classes,
+redaction, and 1,000-character `line` cap as every other source, and `recall`, `measure`, `books`, and `verify` read them with no special case. It is one more
+entry in the source table (`sources.ts`); the reader is `gemini.ts`.
+
+**Fixture-derived, never run live.** This reader was written from the open-source Gemini CLI (google-gemini/gemini-cli @ 89e9d25d, Apache-2.0, v0.67.0-nightly.20261020;
+nothing was copied) and tested only on synthetic fixtures; no Gemini CLI store has ever been read by it. No vendor statement promises the on-disk format:
+`docs/cli/session-management.md:18` names only the folder, and the code itself migrates `.json` to `.jsonl` (`chatRecordingService.ts:732`) and marks `$set.messages`
+`@deprecated` (`chatRecordingTypes.ts:151`). Hook input exists (`docs/hooks/reference.md:50-57`: session id, transcript path, cwd, timestamp), but it carries no
+per-request input and cache split and sees only what runs after install, so, as for Codex and Copilot, the file is read. The one hand run that would settle it: on
+a machine with a Gemini account, run one `gemini -p "<task>"` with tool approval on (`--yolo`) that makes one prompt, runs one command that exits nonzero (for
+example `ls /nonexistent`), and edits one file, then `oars sessions deposit --allow gemini` and `oars sessions verify --strict`. It is settled only if the session
+count is nonzero, there are zero violations, the session holds an `error` tool record for that command with a matching error line, the edit is an `edit` action
+with the file, and usage is nonzero with `input_tokens` equal to the model's prompt count less its cached count. Run it with `APPDATA` and `HOME` set to a temp folder.
+
+- **Where.** `$GEMINI_CLI_HOME`, else the home, then `.gemini` (`%USERPROFILE%\.gemini` on Windows): `tmp/<slug>/chats/session-<time>-<id8>.jsonl`, one session per file.
+  A legacy single-object `*.json` is read too, and the newer of a `.json` and `.jsonl` with one session id wins. A subagent's file is
+  `chats/<parentSessionId>/<agentId>.jsonl`, deposited as a subagent of `gemini-<parentSessionId>` so session counts stay main sessions; the parent's `invoke_agent` call
+  stays. Opt-in like the other sources: discovered by default, opened only when `--allow gemini` names it, read-only, with its own cursor (`gemini/<id>` in
+  `state.json`, size and mtime); the nightly run repeats a saved allow. The prompt log `logs.json`, the `checkpoint-*.json` copies, and the opt-in telemetry file are
+  not read (a subset, copies, and off by default).
+- **Mapping.** The file is the vendor's journal, folded the way its loader does: a message `id` written again replaces the earlier record in its place, and
+  `$rewindTo`, `$patch`, and a deprecated `$set.messages` apply. A `user` message is a prompt, using `displayContent` (what the operator typed) when present; one
+  whose parts are all `functionResponse` is a tool result, and one starting `/`, `?`, `<session_context>`, or `<hook_context>` is not the operator's (the vendor's own resume filter,
+  `utils/sessionUtils.ts:97`). A `gemini` message is a response, with its `model` and `toolCalls`; `thought` parts are left out. A call's `args.file_path` gives the files
+  touched. Tool names have an `ACTION_TABLES.gemini` row (`run_shell_command`, `replace`, `write_file`, `read_file`, and the rest), so a shell call or an edit never reads as unknown.
+- **Outcome.** A failed shell call is read from the real exit code, not `status`: the vendor records `status: "success"` for a nonzero exit and appends an
+  `Exit Code: N` line (or `Signal:`) to the output (`tools/shell.ts:963-964`), wrapped in `<untrusted_context>`. The reader unwraps it, so the error line is the command's
+  own output and can join a Claude Code signature. A call with `status: "error"` or `"cancelled"`, or a `response.error`, is an error with that message
+  (the `Error: Tool call execution failed. Reason:` prefix is dropped).
+- **Usage.** Per message only (`tokens{input, output, cached, thoughts, tool, total}`); the vendor's session totals are in memory and never written, so nothing is cumulative across a
+  resume and each message is taken as it stands. `tokens.input` is the prompt count and includes the cache (`uiTelemetry.ts:317-320` computes the uncached part as
+  `input - cached`), so the stored `input_tokens` is `input - cached` with the cache read kept apart, as capture's fields are disjoint. `thoughts` is
+  `output_tokens_details.thinking_tokens`; `tool` (the tool-use prompt) is not mapped. A message with no `tokens` has no usage and is not an error.
+- **Absent.** Cost has no equivalent. The CLI version is not in the record and is left unset. A call's duration is not recorded.
+
+**Known gaps.**
+
+- *The working folder.* The only cwd is `tmp/<slug>/.project_root`, recorded as written: the vendor lower-cases it on Windows, so a Windows folder reads lower-case. A directory change
+  inside a session is not recorded, and `directories` in the head are `/dir add` workspaces, not the cwd. A pre-slug project folder (named for a hash of the path, no marker) gets no folder.
+- *Slash-prefixed prompts.* A prompt that starts `/` or `?` is not counted as the operator's, following the vendor's resume filter, so one like `/etc/hosts?` is lost.
+- *Shell output that ends in `Exit Code: N`.* The exit is read from the trailer lines in the vendor's order (`Exit Code`, `Signal`, `Background PIDs`, `Process Group PGID`), so
+  output that itself ends in an `Exit Code: N` line with a real exit of zero reads as a failure.
+- *Not read.* `SANDBOX=sandbox-exec` stores under `~/.cache/.gemini`; the opt-in telemetry outfile (`--telemetry-outfile`) carries per-request events but is off by default. A torn or unknown line is
+  counted as unparseable and skipped; a file with no parseable line is unreadable, named, and left at its old cursor.
+
 ## The outcome gold set
 
 `oars sessions gold sample` writes `outcome-gold-<date>.md` to `<claude config>/session-commons/review/`: about 200 prompts in batches of 50, each with the redacted request, the result (commit message and diff stat where found, the transcript's own edit calls, or the actions of a prompt that edited nothing), and a `Judgment: yes|no` line. The draw is seeded and weighted by the square root of each class and model cell, with at most two prompts a session, so its base rate is the sample's, not the store's. Every session passes the V15 rule (`checkSession`) first: one that holds a listed term, has no raw to scan, or cannot be read is left out, and a missing or empty term file (`OARS_EXCLUSION_TERMS`) refuses the draw. `--exclude-term` adds terms to the file's, never in place of it. A marker prompt, a `no-tools` prompt (its reply is the closing claim), and a session from any other harness (every `SOURCES` name: Cursor, Codex) are not drawn. The signals go to the `.arms.json` file beside it. `oars sessions gold score <file>` prints, per model and pooled, each signal's AUROC with a DeLong 95% interval and the base rate, from whatever is judged so far. Both are local, and neither is ever committed. A signal is an observation, not a label, and no signal is combined with another.
