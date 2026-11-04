@@ -8,7 +8,7 @@ import { ExitCode } from '../../cli/src/errors.js';
 import { networkSender, poolDeposit } from '../../cli/src/sessions/pool-command.js';
 import { verifyBundle } from '../../cli/src/sessions/pool-wire.js';
 import { deposit } from '../../cli/src/sessions/store.js';
-import { cleanup, NOW, stage, type Staged } from '../../cli/src/sessions/test-support.js';
+import { cleanup, NOW, settledClock, stage, type Staged } from '../../cli/src/sessions/test-support.js';
 import { harness, type Harness } from '../../cli/src/test-support.js';
 import { fieldOf, startPool, stubUser, textOf, type TestPool } from './test-pool.js';
 
@@ -42,6 +42,7 @@ const person = async (pool: TestPool, id: string): Promise<Person> => {
   writeFileSync(terms, `${TERM}\n`);
   const h = harness({ OARS_EXCLUSION_TERMS: terms, OARS_POOL_URL: await pool.url(), OARS_GITHUB_CLIENT_ID: 'github-client', OARS_GOOGLE_CLIENT_ID: 'google-client', OARS_GOOGLE_CLIENT_SECRET: 'google-secret' });
   h.deps.sessions = staged.runtime;
+  h.deps.now = settledClock;
   // The person approves the code the command just printed, at the provider, while it waits.
   h.deps.sleep = () => {
     const issued = /USER-(\d+)/.exec(h.err.join(''))?.[1];
@@ -99,7 +100,7 @@ describe('login, deposit, and fetch against a local server', () => {
       // The four invented sessions in the fixture folder are built into the outbox, and `deposit` itself sends nothing.
       expect(await one.cli('deposit')).toBe(ExitCode.OK);
       expect(one.last()).toMatchObject({ ok: true, sessions: 4, batched: 4, uncaptured: 0, refused: 0, excluded: { term: 0, noRaw: 0, noTerms: 0, unreadable: 0 } });
-      // V10 at the server's word: nothing goes up before the covenant is accepted.
+      // At the server's word: nothing goes up before the covenant is accepted.
       await expect(one.send(0)).rejects.toMatchObject({ exitCode: ExitCode.AUTH, problem: { code: 'covenant_not_accepted' } });
       expect(await one.send(0, 'v1')).toMatchObject({ document: { ok: true, sent: true } });
       for (const index of [1, 2, 3]) expect(await one.send(index)).toMatchObject({ document: { ok: true, sent: true } });

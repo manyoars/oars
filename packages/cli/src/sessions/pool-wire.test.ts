@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { frame, prompt, session, step, storedNames, store, tool } from './pool-fixture.js';
-import { parseSkeleton, sessionsOf, skeletonOf, type SessionSkeleton } from './pool-wire.js';
+import { frame, printOf, prompt, session, sessionsFrom, step, store, storedNames, tool } from './pool-fixture.js';
+import { parseSkeleton, skeletonOf, type SessionSkeleton } from './pool-wire.js';
 import type { Harness } from './schema.js';
 import { LITERAL, PRIVATE } from './public-vocabulary.js';
 
@@ -11,9 +11,9 @@ const framedPrompt = (id: string, index: number, over: Parameters<typeof prompt>
 const shell = step(0, 0, 'shell.exec', { native: 'Bash', identity: { program: 'git', sub: 'push', flags: ['--force'] } });
 
 const skeletonFrom = (from: ReturnType<typeof store>): SessionSkeleton | null => {
-  const [only] = sessionsOf(from);
+  const [only] = sessionsFrom(from);
   if (only === undefined) throw new Error('the store has no session');
-  return skeletonOf(only, '0123456789abcdef', storedNames);
+  return skeletonOf(only, '0123456789abcdef', storedNames, printOf);
 };
 
 const sample = (): SessionSkeleton => {
@@ -53,7 +53,7 @@ const refusedField = (value: unknown): string => {
 };
 
 const firstStep = ['transcripts', 0, 'tools', 0, 'steps', 0];
-const withStep = (over: object): unknown => sent(firstStep, JSON.parse(JSON.stringify({ ...shell, n: undefined, seg: undefined, frameId: undefined, edges: undefined, cost: undefined, tokens: null, ms: null, ...over })));
+const withStep = (over: object): unknown => sent(firstStep, JSON.parse(JSON.stringify({ ...shell, n: undefined, seg: undefined, frameId: undefined, edges: undefined, cost: undefined, tokens: null, ms: null, remainingTokens: 0, agentType: null, ...over })));
 const stepField = 'transcripts[0].tools[0].steps[0]';
 
 describe('skeletonOf', () => {
@@ -74,6 +74,23 @@ describe('skeletonOf', () => {
     for (const from of [noFrame, noSteps, noPromptFrame]) expect(skeletonFrom(from)).toBeNull();
   });
 
+  it('sends the literal for a stored tool its server no longer lists, so the parser takes the whole session', () => {
+    const dropped = step(0, 0, 'mcp.call', { native: 'mcp__github__acme_secret_deploy', identity: { server: 'github', tool: 'acme_secret_deploy' } });
+    const kept = step(1, 0, 'mcp.call', { native: 'mcp__github__get_issue', identity: { server: 'github', tool: 'get_issue' } });
+    const skeleton = skeletonFrom(
+      store({
+        sessions: [session('s1', { frame: framed })],
+        prompts: [framedPrompt('s1', 0)],
+        tools: [tool('s1', 0, 'mcp__github__acme_secret_deploy', { steps: [dropped] }), tool('s1', 1, 'mcp__github__get_issue', { steps: [kept] })],
+      }),
+    );
+    expect(skeleton?.transcripts[0]?.tools.map((entry) => entry.steps[0]?.identity)).toEqual([
+      { server: 'github', tool: LITERAL },
+      { server: 'github', tool: 'get_issue' },
+    ]);
+    expect(parseSkeleton(JSON.parse(JSON.stringify(skeleton)))).toEqual({ ok: true, skeleton });
+  });
+
   it('folds a subagent transcript under the session that spawned it', () => {
     const from = store({
       sessions: [session('s1', { frame: framed })],
@@ -81,7 +98,7 @@ describe('skeletonOf', () => {
       prompts: [framedPrompt('s1', 0)],
       tools: [tool('s1', 0, 'Bash', { steps: [shell] }), tool('s1~agent-x', 0, 'Bash', { parent: 's1', steps: [shell] })],
     });
-    expect(sessionsOf(from)).toHaveLength(1);
+    expect(sessionsFrom(from)).toHaveLength(1);
     const skeleton = skeletonFrom(from);
     expect(skeleton?.transcripts).toHaveLength(2);
     expect(skeleton?.transcripts[1]?.tools).toHaveLength(1);
@@ -177,9 +194,33 @@ describe('parseSkeleton refuses, and names the field', () => {
     { name: 'the exact index of a prompt', path: ['transcripts', 0, 'prompts', 0, 'index'], value: 3, field: 'transcripts[0].prompts[0].index' },
     { name: 'a spawner address', path: ['transcripts', 0, 'spawnedIn'], value: 0, field: 'transcripts[0].spawnedIn' },
     { name: 'a step edge', path: [...firstStep, 'edges'], value: [], field: `${stepField}.edges` },
+    { name: 'a private agent name as a subagent type', path: [...firstStep, 'agentType'], value: 'acme-private-agent', field: `${stepField}.agentType` },
+    { name: 'a subagent type on a main-run step', path: [...firstStep, 'agentType'], value: 'Explore', field: `${stepField}.agentType` },
+    { name: 'a root that is not a SHA-256', path: ['transcripts', 0, 'merkleRoot'], value: 'acme-root', field: 'transcripts[0].merkleRoot' },
+    { name: 'a timing print that is not a hash', path: ['timingPrint'], value: 'acme', field: 'timingPrint' },
+    { name: 'a timing print over too few timed calls', path: ['timingPrint'], value: '0123456789abcdef', field: 'timingPrint' },
+    { name: 'a remaining-token count that is no bucket', path: [...firstStep, 'remainingTokens'], value: 12, field: `${stepField}.remainingTokens` },
   ];
   it.each(cases)('$name', ({ path, value, field }) => {
     expect(refusedField(sent(path, value))).toBe(field);
+  });
+
+  it('refuses a subagent step that carries no type', () => {
+    const [main, other] = [session('s1', { frame: framed }), session('s1~a', { parent: 's1', spawnedIn: 's1', agentType: 'Explore', frame: framed })];
+    const skeleton = skeletonFrom(
+      store({
+        sessions: [main],
+        subagents: [other],
+        prompts: [framedPrompt('s1', 0), framedPrompt('s1~a', 0)],
+        tools: [tool('s1', 0, 'Bash', { steps: [shell] }), tool('s1~a', 0, 'Bash', { steps: [shell] })],
+      }),
+    );
+    const raw: unknown = JSON.parse(JSON.stringify(skeleton));
+    expect(refusedField(raw)).toBe('accepted');
+    const subStep = ['transcripts', 1, 'tools', 0, 'steps', 0].reduce<unknown>((at, key) => (isHolder(at) ? Reflect.get(at, key) : undefined), raw);
+    if (!isHolder(subStep)) throw new Error('the subagent has no step');
+    Reflect.set(subStep, 'agentType', null);
+    expect(refusedField(raw)).toBe('transcripts[1].tools[0].steps[0].agentType');
   });
 
   it('takes a bucket of wall time, and refuses an exact one: a fraction is no bucket', () => {
@@ -208,8 +249,9 @@ describe('parseSkeleton refuses, and names the field', () => {
   it('refuses the exact-count form (format 1) by name, and a deposit that carries deltas', () => {
     const old = parseSkeleton({ ...sample(), format: 1 });
     expect(old).toMatchObject({ ok: false, field: 'format', reason: 'the exact-count form (format 1) is no longer read; send format 2' });
-    expect(refusedField(sent(['deltas'], [{}]))).toBe('deltas');
+    expect(refusedField(sent(['deltas'], [{}]))).toBe('deltas[0].deltaKind');
     expect(refusedField(sent(['deltas'], undefined))).toBe('deltas');
+    expect(refusedField(sent(['deltas'], 'none'))).toBe('deltas');
   });
 
   it('refuses a skeleton holding no prompt and no tool, which would otherwise count as a deposit', () => {
@@ -309,7 +351,7 @@ describe('parseSkeleton refuses, and names the field', () => {
 
   // The harness list is the schema's `Harness` union: a skeleton from a harness missing from it is refused whole, so each name needs a pass here.
   it('accepts a skeleton from every harness the schema names', () => {
-    const natives: [Harness, string][] = [['claude-code', 'Bash'], ['cursor', 'run_terminal_cmd'], ['codex', 'exec_command'], ['copilot', 'bash'], ['gemini', 'run_shell_command'], ['grok', 'run_terminal_cmd']];
+    const natives: [Harness, string][] = [['claude-code', 'Bash'], ['cursor', 'run_terminal_cmd'], ['codex', 'exec_command'], ['copilot', 'bash'], ['gemini', 'run_shell_command'], ['grok', 'run_terminal_cmd'], ['vscode-copilot', 'run_in_terminal']];
     for (const [harness, native] of natives) {
       const raw = withStep({ native });
       if (!isHolder(raw)) throw new Error('the sample is not an object');

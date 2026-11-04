@@ -111,11 +111,11 @@ oars sessions read --family lead-lag         # order 3: a labeled experiment beh
 oars sessions read --family fit --slice model=claude-opus-5-5 --json
 oars sessions books --by class --since 30   # tokens, wall time, turns, errors, verify-after-edit rate, and the outcome signals
 oars sessions books --by pull               # the same per package, MCP server, plugin, or skill a prompt pulled
-oars sessions books --by harness            # the same, grouped by Claude Code, Cursor, Codex, Copilot, Gemini, and Grok Build (deposit the others with --allow cursor, --allow codex, --allow copilot, --allow gemini, or --allow grok)
+oars sessions books --by harness            # the same, grouped by Claude Code, Cursor, Codex, Copilot, Gemini, Grok Build, and VS Code Copilot Chat (deposit the others with --allow cursor, --allow codex, --allow copilot, --allow gemini, --allow grok, or --allow vscode-copilot)
 oars sessions measure --last 50             # recurring errors per 100 sessions, cache-write per session, recall calls per session
 oars sessions measure --last 50 --repo <root>  # the same, for one repository's sessions
 oars sessions verify                        # consistency invariants on the stored skeletons and capture records
-oars sessions exclusions                    # V15: list sessions excluded by the local term file (counts only; OARS_EXCLUSION_TERMS names the file)
+oars sessions exclusions                    # list sessions excluded by the local term file (counts only; OARS_EXCLUSION_TERMS names the file)
 oars sessions gold sample                   # about 200 prompts to judge blind; needs the term file (`OARS_EXCLUSION_TERMS`), and `--exclude-term <text>` adds to it; `gold arms <file>` adds the claim and fresh readers on your Claude subscription; `gold score <file>` reads each arm against the judgments
 ```
 

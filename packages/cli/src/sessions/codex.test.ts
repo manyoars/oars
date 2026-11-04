@@ -341,6 +341,16 @@ describe('shell, MCP, patch, and usage outcomes', () => {
     expect(out.errorLines.map((entry) => entry.line)).toEqual(['patch rejected by user']);
   });
 
+  it('reads a declined patch_apply_end whose stderr is the bare refusal text as the user rejecting it', () => {
+    const out = extractOf([
+      meta('/work/app'),
+      line(T(2), 'response_item', { type: 'custom_tool_call', name: 'apply_patch', call_id: 'p1', input: '*** Update File: src/a.ts' }),
+      line(T(3), 'event_msg', { type: 'patch_apply_end', call_id: 'p1', success: false, stderr: 'rejected by user', status: 'declined' }),
+    ]);
+    expect(out.tools).toMatchObject([{ tool: 'Edit', status: 'error', errorCode: 'user-rejected' }]);
+    expect(out.errorLines.map((entry) => entry.line)).toEqual(['patch rejected by user']);
+  });
+
   it('leaves a declined patch_apply_end unsettled when its stderr is a setup failure, not the user refusal text (events.rs:448-458)', () => {
     const out = extractOf([
       meta('/work/app'),

@@ -68,6 +68,9 @@ export const addProject = (staged: Staged, project: string, name: string, lines:
 
 export const NOW = Date.parse('2026-06-10T00:00:00Z');
 
+/** A clock past the ideal end of every file a test writes: the deposit command reads a session whose files are newer than six hours as still in progress. */
+export const settledClock = (): number => Date.now() + 7 * 60 * 60 * 1000;
+
 export interface FixtureBubble {
   type: 1 | 2;
   text?: string;
@@ -265,6 +268,8 @@ export interface CopilotFixture {
   id: string;
   /** Lines as objects, or raw text for a torn file. */
   lines: readonly unknown[] | string;
+  /** Rotated archives `events.<n>.jsonl` beside the live file; `lines` is then the live file that follows them. */
+  archives?: readonly { n: number; lines: readonly unknown[] | string }[];
 }
 
 /** A Copilot home holding the given sessions under `session-state/<id>/events.jsonl`; returns the home. */
@@ -273,9 +278,40 @@ export const stageCopilot = (root: string, files: readonly CopilotFixture[]): st
   for (const file of files) {
     const dir = join(home, 'session-state', file.id);
     mkdirSync(dir, { recursive: true });
-    writeFileSync(join(dir, 'events.jsonl'), typeof file.lines === 'string' ? file.lines : `${file.lines.map((line) => JSON.stringify(line)).join('\n')}\n`);
+    const text = (lines: readonly unknown[] | string): string => (typeof lines === 'string' ? lines : `${lines.map((line) => JSON.stringify(line)).join('\n')}\n`);
+    writeFileSync(join(dir, 'events.jsonl'), text(file.lines));
+    for (const archive of file.archives ?? []) writeFileSync(join(dir, `events.${String(archive.n)}.jsonl`), text(archive.lines));
   }
   return home;
+};
+
+export interface VscodeFixture {
+  /** The session id, which is the file's name without its extension. */
+  id: string;
+  /** The serialized chat data (`.json` form), or raw text for a torn file. */
+  data?: object | string;
+  /** The mutation-log entries (`.jsonl` form), or raw text. */
+  log?: readonly unknown[] | string;
+  /** The build's `nameShort` folder; `Code` when absent. */
+  channel?: string;
+  /** The workspace hash folder; absent writes the session under `globalStorage/emptyWindowChatSessions`. */
+  hash?: string;
+  /** What the hash's `workspace.json` holds, written once per hash; absent writes none. */
+  workspace?: object;
+}
+
+/** A VS Code app-data folder (what `%APPDATA%` is) holding the given chat sessions; returns the folder. */
+export const stageVscode = (root: string, files: readonly VscodeFixture[]): string => {
+  const appData = join(root, 'vscode-appdata');
+  for (const file of files) {
+    const user = join(appData, file.channel ?? 'Code', 'User');
+    const dir = file.hash === undefined ? join(user, 'globalStorage', 'emptyWindowChatSessions') : join(user, 'workspaceStorage', file.hash, 'chatSessions');
+    mkdirSync(dir, { recursive: true });
+    if (file.hash !== undefined && file.workspace !== undefined) writeFileSync(join(user, 'workspaceStorage', file.hash, 'workspace.json'), JSON.stringify(file.workspace));
+    if (file.data !== undefined) writeFileSync(join(dir, `${file.id}.json`), typeof file.data === 'string' ? file.data : JSON.stringify(file.data));
+    if (file.log !== undefined) writeFileSync(join(dir, `${file.id}.jsonl`), typeof file.log === 'string' ? file.log : `${file.log.map((entry) => JSON.stringify(entry)).join('\n')}\n`);
+  }
+  return appData;
 };
 
 /** A Gemini CLI chat-file line: the head metadata, a message, or a `$set`/`$patch`/`$rewindTo` record (google-gemini/gemini-cli @ 89e9d25d, packages/core/src/services/chatRecordingTypes.ts). */

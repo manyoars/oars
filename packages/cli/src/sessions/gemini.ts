@@ -6,8 +6,10 @@
 //
 // Where it reads from (`geminiRoot`): `$GEMINI_CLI_HOME`, else the home, then `.gemini` (`%USERPROFILE%\.gemini` on Windows; config/storage.ts, utils/paths.ts). Inside it,
 // `tmp/<slug>/chats/session-<time>-<id8>.jsonl` is one session (services/chatRecordingService.ts:801-823), a subagent's is `chats/<parentSessionId>/<agentId>.jsonl`
-// (:786-814), and a legacy `*.json` holds one pretty-printed object (:1647). `tmp/<slug>/.project_root` names the project folder (config/projectRegistry.ts); it is the
-// only place a working directory exists, so a session's cwd is that folder and a directory change inside a session is not recorded. The prompt log `logs.json`, the
+// (:786-814), and a legacy `*.json` holds one pretty-printed object (:1647). `tmp/<slug>/.project_root` names the project folder (config/projectRegistry.ts); with a path
+// that hashes to a pre-slug folder's name it is the only place a working directory exists, so a session's cwd is that folder and a directory change inside a session is not recorded. A folder from before the slug registry is named
+// for sha256 of the project root and has no marker: its cwd is a path that hashes to its name (its chats' workspace directories, other markers, `projects.json`), else none. Under
+// `SANDBOX=sandbox-exec` the same layout lives in `~/.cache/.gemini` (config/storage.ts:93-102), read beside the ordinary one. The prompt log `logs.json`, the
 // `checkpoint-*.json` copies, and the opt-in telemetry file are not read: the first is a subset of the chat file and the others are copies or off by default.
 // The file is the vendor's own journal, folded the way its loader does (services/chatRecordingService.ts:304-530): a line is
 //   {sessionId, projectHash, ...}      the head metadata (may carry legacy `messages`)
@@ -23,8 +25,9 @@
 // result text (tools/shell.ts:953-979, wrapped in `<untrusted_context>` by utils/textUtils.ts), and that line decides.
 
 import { readdir, readFile, stat } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
 import { homedir } from 'node:os';
-import { basename, extname, join } from 'node:path';
+import { basename, dirname, extname, join } from 'node:path';
 
 /** The Gemini folder for an environment; a test passes its own so it never reads the real one. */
 export const geminiRoot = (env: { [name: string]: string | undefined }, home: string = homedir()): string => {
@@ -48,7 +51,7 @@ const parse = (text: string): unknown => {
 export interface GeminiSession {
   /** The head's `sessionId` (else the file's name); a subagent's is `<parent>-<file name>`. It names the skeleton. */
   id: string;
-  /** What `.project_root` names; null when the project folder has none. */
+  /** What `.project_root` names, or for a hash-named folder a path that hashes to its name; null when neither gives one. */
   folder: string | null;
   file: string;
   size: number;
@@ -97,6 +100,36 @@ const textOf = (value: unknown): string => {
   if (Array.isArray(value)) return value.map(textOf).join('');
   return isObj(value) && value.thought !== true && typeof value.text === 'string' ? value.text : '';
 };
+
+/**
+ * What the CLI's own first turn says about the machine and the workspace: `My operating system is: <process.platform>` and the `- **Workspace Directories:**` list
+ * (utils/environmentContext.ts `getEnvironmentContext`, `getDirectoryContextString`). A chat records it as a user message, so the file names where it ran even when
+ * the project folder holds no `.project_root` (the marker, or for a hash-named folder a path that hashes to its name, is the cwd). A pass that removed the turn leaves the file without it, and both come back empty.
+ */
+const sessionContext = (text: string): { platform: string | undefined; directories: string[] } => {
+  const whole = wholeObject(text);
+  const messages: unknown[] = whole !== undefined && Array.isArray(whole.messages) ? whole.messages : [];
+  const records: unknown[] = whole === undefined ? lineTexts(text).map(parse) : [whole, ...messages];
+  let platform: string | undefined;
+  const directories: string[] = [];
+  for (const record of records) {
+    const body = isObj(record) && record.type === 'user' ? textOf(record.content) : '';
+    // Upstream's context turn opens with the tag; a typed prompt that merely quotes it must not frame the session.
+    if (!body.trimStart().startsWith('<session_context>')) continue;
+    platform ??= /^My operating system is: (\S+)$/m.exec(body)?.[1];
+    for (const line of /^- \*\*Workspace Directories:\*\*\n((?: {2}- .+\n?)+)/m.exec(body)?.[1]?.split('\n') ?? []) {
+      const listed = /^ {2}- (.+)$/.exec(line)?.[1];
+      if (listed !== undefined) directories.push(listed);
+    }
+  }
+  return { platform, directories };
+};
+
+/** A path written the Windows way: a drive letter or a UNC share. */
+const WINDOWS_PATH = /^(?:[A-Za-z]:[\\/]|\\\\)/;
+/** The sha256 hex of a project root, which names a project folder from before the slug registry (config/storage.ts:263-265; the chat head's `projectHash` is the same, utils/paths.ts:318). */
+const isHashName = (name: string): boolean => /^[0-9a-f]{64}$/.test(name);
+const hashOf = (path: string): string => createHash('sha256').update(path).digest('hex');
 
 /**
  * The text of a response the way the CLI stores it: zero-width characters and HTML comments (repeatedly, until none is left) stripped, then trimmed (core/geminiChat.ts:1710-1719).
@@ -242,7 +275,6 @@ const isCanned = (message: Obj): boolean => {
 
 /** Gemini tools the reader names in the Claude Code vocabulary, so the extractor classifies them; the Gemini name stays in `native` for the action table. */
 const RENAMED: ReadonlyMap<string, string> = new Map([
-  ['run_shell_command', 'Bash'],
   ['replace', 'Edit'],
   ['write_file', 'Write'],
   ['read_file', 'Read'],
@@ -302,11 +334,15 @@ const shellResult = (text: string): { output: string; exit: number | undefined; 
   return { output: body === '(empty)' ? '' : body, exit, signal };
 };
 
-/** The chat file as the lines `captureSession` reads; `cwd` is the project folder (`.project_root`), the only working directory Gemini CLI records. */
+/** The chat file as the lines `captureSession` reads; `cwd` is the project folder: the marker (`.project_root`), or for a hash-named folder a path that hashes to its name. Gemini CLI records no other working directory. */
 export const chatLines = (text: string, fallbackId: string, cwd: string | null): Obj[] => {
   const { meta, messages } = foldChat(text);
   const lines: Obj[] = [];
   const base: Obj = { sessionId: str(meta.sessionId) ?? fallbackId, ...(cwd === null ? {} : { cwd }) };
+  // The shell tool runs what `getShellConfiguration` picks for the machine it ran on: PowerShell on Windows, bash elsewhere (utils/shell-utils.ts:658-697). The context turn names
+  // the machine; a chat without it is Windows when its working directory is written the Windows way.
+  const { platform } = sessionContext(text);
+  const shellTool = (platform === undefined ? cwd !== null && WINDOWS_PATH.test(cwd) : platform === 'win32') ? 'PowerShell' : 'Bash';
   let at: string | undefined;
   let sequence = 0;
   const stamp = (value: unknown): string => {
@@ -362,10 +398,10 @@ export const chatLines = (text: string, fallbackId: string, cwd: string | null):
         const native = str(entry.name);
         if (id === undefined || native === undefined) continue;
         const args = isObj(entry.args) ? entry.args : {};
-        const name = RENAMED.get(native) ?? native;
+        const name = native === 'run_shell_command' ? shellTool : (RENAMED.get(native) ?? native);
         const path = str(args.file_path);
-        const input = name === 'Bash' ? (str(args.command) === undefined ? {} : { command: args.command }) : PATH_TOOLS.has(name) ? (path === undefined ? {} : { file_path: path }) : args;
-        content.push({ type: 'tool_use', id, name, ...(name === native ? {} : { native }), input });
+        const input = name === 'Bash' || name === 'PowerShell' ? (str(args.command) === undefined ? {} : { command: args.command }) : PATH_TOOLS.has(name) ? (path === undefined ? {} : { file_path: path }) : args;
+        content.push({ type: 'tool_use', id, name, ...(name === native || name === 'PowerShell' ? {} : { native }), input });
         held.push({ id, native, shell: native === 'run_shell_command', call: entry });
       }
       sequence += 1;
@@ -453,18 +489,40 @@ const holdsNothing = (text: string, id: string): boolean => {
   }
 };
 
+/** A chat file found in the store: `start` and `stem` order the files of one id, `dir` is its project folder, and `directories` the workspace its chat names. */
+interface Found {
+  session: GeminiSession;
+  start: string;
+  stem: string;
+  dir: string;
+  directories: string[];
+}
+
+/** The project roots a runtime folder's registry knows (`projects.json`, config/projectRegistry.ts:15-22): its keys. A missing or torn registry names none. */
+const registered = async (runtime: string): Promise<string[]> => {
+  const registry = parse(await readFile(join(runtime, 'projects.json'), 'utf8').catch(() => ''));
+  return isObj(registry) && isObj(registry.projects) ? Object.keys(registry.projects) : [];
+};
+
 export const openGeminiStore = async (root: string): Promise<GeminiStore | undefined> => {
-  const base = join(root, 'tmp');
+  // Under `SANDBOX=sandbox-exec` the CLI keeps its runtime state, chats included, in `~/.cache/.gemini` instead (config/storage.ts:93-102); the same layout.
+  const runtimes = [root, join(dirname(root), '.cache', '.gemini')];
   const unreadable: { file: string; reason: string }[] = [];
-  let slugs;
-  try {
-    slugs = await readdir(base, { withFileTypes: true });
-  } catch (error) {
-    if (missing(error)) return undefined;
-    return { sessions: [], transcript: () => Promise.reject(new Error('no sessions')), rejected: 0, unreadable: [{ file: base, reason: reasonOf(error, base) }] };
+  const bases: { runtime: string; slugs: { name: string; directory: boolean }[] }[] = [];
+  for (const runtime of runtimes) {
+    const base = join(runtime, 'tmp');
+    try {
+      bases.push({ runtime, slugs: (await readdir(base, { withFileTypes: true })).map((entry) => ({ name: entry.name, directory: entry.isDirectory() })) });
+    } catch (error) {
+      if (!missing(error)) unreadable.push({ file: base, reason: reasonOf(error, base) });
+    }
   }
-  // A file is a candidate under its session id; `start` and `stem` order the files of one id.
-  const found = new Map<string, { session: GeminiSession; start: string; stem: string }>();
+  if (bases.length === 0) {
+    if (unreadable.length === 0) return undefined;
+    return { sessions: [], transcript: () => Promise.reject(new Error('no sessions')), rejected: 0, unreadable };
+  }
+  // A file is a candidate under its session id.
+  const found = new Map<string, Found>();
   let rejected = 0;
   const list = async (dir: string): Promise<{ name: string; directory: boolean }[]> => {
     try {
@@ -475,7 +533,7 @@ export const openGeminiStore = async (root: string): Promise<GeminiStore | undef
       return [];
     }
   };
-  const add = async (file: string, folder: string | null, parent: string | null): Promise<void> => {
+  const add = async (file: string, dir: string, folder: string | null, parent: string | null): Promise<void> => {
     const name = basename(file, extname(file));
     try {
       const info = await stat(file);
@@ -496,36 +554,52 @@ export const openGeminiStore = async (root: string): Promise<GeminiStore | undef
       // A `.json` file migrated to `.jsonl` can leave both, with one name; the newer one is the session. Files of other names under one id are other chats (below).
       const key = `${id}/${name}`;
       const held = found.get(key);
-      if (held === undefined || held.session.mtimeMs < session.mtimeMs) found.set(key, { session, start: head.start, stem: name });
+      if (held === undefined || held.session.mtimeMs < session.mtimeMs) found.set(key, { session, start: head.start, stem: name, dir, directories: folder === null ? sessionContext(text).directories : [] });
     } catch (error) {
       unreadable.push({ file, reason: reasonOf(error, file) });
     }
   };
-  for (const slug of slugs.filter((entry) => entry.isDirectory()).sort((a, b) => a.name.localeCompare(b.name))) {
-    const dir = join(base, slug.name);
-    const folder = await projectRootOf(dir);
-    const chats = join(dir, 'chats');
-    for (const entry of await list(chats)) {
-      if (!entry.directory) {
-        if (['.json', '.jsonl'].includes(extname(entry.name))) await add(join(chats, entry.name), folder, null);
-      } else if (SAFE_ID.test(entry.name)) {
-        for (const inner of await list(join(chats, entry.name))) if (!inner.directory && extname(inner.name) === '.jsonl') await add(join(chats, entry.name, inner.name), folder, entry.name);
-      } else {
-        rejected += 1;
+  // Paths a hash-named folder can be matched against: every project root a marker or a registry names. The hash cannot be reversed, only checked.
+  const known = new Set<string>();
+  const hashed = new Map<string, string>();
+  for (const { runtime, slugs } of bases) {
+    for (const key of await registered(runtime)) known.add(key);
+    for (const slug of slugs.filter((entry) => entry.directory).sort((a, b) => a.name.localeCompare(b.name))) {
+      const dir = join(runtime, 'tmp', slug.name);
+      const folder = await projectRootOf(dir);
+      if (folder !== null) known.add(folder);
+      else if (isHashName(slug.name)) hashed.set(dir, slug.name);
+      const chats = join(dir, 'chats');
+      for (const entry of await list(chats)) {
+        if (!entry.directory) {
+          if (['.json', '.jsonl'].includes(extname(entry.name))) await add(join(chats, entry.name), dir, folder, null);
+        } else if (SAFE_ID.test(entry.name)) {
+          for (const inner of await list(join(chats, entry.name))) if (!inner.directory && extname(inner.name) === '.jsonl') await add(join(chats, entry.name, inner.name), dir, folder, entry.name);
+        } else {
+          rejected += 1;
+        }
       }
     }
+  }
+  // A folder from before the slug registry is named for sha256 of its project root and has no marker. A path counts only when it hashes to the folder's name: the registry's
+  // and the markers' roots, and the workspace directories its own chats name. A folder none of them match keeps no cwd.
+  const resolved = new Map<string, string>();
+  for (const [dir, name] of hashed) {
+    const own = [...found.values()].filter((entry) => entry.dir === dir).flatMap((entry) => entry.directories);
+    const match = [...own, ...known].find((candidate) => hashOf(candidate) === name);
+    if (match !== undefined) resolved.set(dir, match);
   }
   // An AfterAgent hook's `clearContext` resets the chat, and the reset starts a new file under the same id (core/client.ts:1032,1050; chatRecordingService.ts:780,811-818); `/clear`
   // changes the id first (cli clearCommand.ts:38). Each file is a chat of its own, so the earliest by its head's start time keeps the id (a file name does not order two files of one
   // minute) and a later one is `<id>-<file name>`, which keeps its cursor stable.
-  const byId = new Map<string, { session: GeminiSession; start: string; stem: string }[]>();
+  const byId = new Map<string, Found[]>();
   for (const entry of found.values()) byId.set(entry.session.id, [...(byId.get(entry.session.id) ?? []), entry]);
   const listed: GeminiSession[] = [];
   for (const [id, files] of byId) {
     files.sort((a, b) => a.start.localeCompare(b.start) || a.stem.localeCompare(b.stem));
     files.forEach((entry, position) => {
       const named = position === 0 ? id : `${id}-${entry.stem}`;
-      if (SAFE_ID.test(named)) listed.push({ ...entry.session, id: named });
+      if (SAFE_ID.test(named)) listed.push({ ...entry.session, id: named, folder: entry.session.folder ?? resolved.get(entry.dir) ?? null });
       else rejected += 1;
     });
   }

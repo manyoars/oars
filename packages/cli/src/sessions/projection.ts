@@ -7,7 +7,6 @@ import { SHELL, shellCommands } from './extract.js';
 import { isPositional, type WordOfCommand } from './identity.js';
 import {
   BUNDLING_PROGRAMS,
-  HARNESS_AGENT_TYPES,
   HARNESS_TOOLS,
   FRAMEWORKS,
   isPublicMcpTool,
@@ -19,6 +18,7 @@ import {
   PUBLIC_MCP_SERVERS,
   PUBLIC_PROGRAMS,
   PUBLIC_SKILLS,
+  projectedAgentType,
   PUBLIC_SUBCOMMANDS,
   TOOL_INPUT_KEYS,
 } from './public-vocabulary.js';
@@ -180,8 +180,7 @@ const admit = (names: readonly string[], admitted: (name: string) => boolean): P
 export const projectSkills = (skills: readonly string[]): ProjectedNames => admit(skills, (name) => PUBLIC_SKILLS.has(name));
 
 /** `agentType`: a built-in subagent type of a harness, else `custom`; null stays null (a main transcript). */
-export const projectAgentType = (agentType: string | null): string | null =>
-  agentType === null ? null : [...HARNESS_AGENT_TYPES.values()].some((types) => types.has(agentType)) ? agentType : CUSTOM;
+export const projectAgentType = (agentType: string | null): string | null => (agentType === null ? null : projectedAgentType(agentType));
 
 /** `keys` of a call to `tool`: only names its published input schema lists, the rest only counted. An MCP tool lists none. */
 export const projectKeys = (tool: string, keys: readonly string[]): ProjectedNames => {

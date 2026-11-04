@@ -18,8 +18,17 @@
 // `version =` is no longer stored as `crates:version`; and `packageVersion` keeps only a version of three or four dotted numbers, so a bare `@1` or `==2.31` stores null; and, since calls with a null `packageVersion` share one `first`, a later short pin of the same package now marks `false`. EXTRACTOR stays 11.
 // Version 16 (CAPTURE 16) stores a call the user refused as Claude Code does, `status` `error` and `errorCode` `user-rejected`: a Cursor call whose `toolFormerData.userDecision` is `rejected`; a Codex shell
 // call, patch, or command item that is `declined` with the user's refusal text (each `none` before; any other `declined` stays `none`); and a Gemini call the user cancelled or denied (`errorCode` `other` before). A call that was `none` or `ok` gains an `error-line` record whose `line` is
-// the refusal text and loses its `manifest`, and where a result line is new (every Codex refusal, a Cursor one whose status is neither `error` nor `completed`) its session's `lines` and skeleton move. Any other
+// the refusal text and loses its `manifest`, and where a result line is new (every Codex refusal, a Cursor one whose status is neither `error` nor `completed`, or one whose terminal result ended aborted) its session's `lines` and skeleton move. Any other
 // decision value, or none, changes nothing and is never stored; a Grok plan-mode refusal and a Codex `write_stdin rejected:` stay as they were. EXTRACTOR stays 11.
+//
+// Version 17 (CAPTURE 17) frames a Gemini CLI shell call as the shell that ran it. A session whose own `<session_context>` turn says `My operating system is: win32` (or,
+// with no such turn, whose working directory is written the Windows way) stores its shell calls as `PowerShell` where it stored `Bash`: the tool record's `tool`, an
+// error line's `tool`, the session's `tools` and the skeleton's tool names, each step's `native` (`run_shell_command` before), and the frame's `shell` (`bash` before), so every `frameId` of that
+// session moves. Upstream picks PowerShell on every Windows machine (`tools/shell-utils` `getShellConfiguration`). A Linux or macOS session is unchanged. It also gives a
+// session in a project folder named for a hash of its path (from before the slug registry) the cwd that hash matches when the path is known, which moves its `project`
+// (`gemini` before) and every value read from the cwd; a folder whose path is not known keeps none. Sessions under `~/.cache/.gemini` (`SANDBOX=sandbox-exec`) are new
+// reads, not moved ones. A Copilot CLI session with rotated `events.N.jsonl` archives is now read as one session, so its `prompts`, `tools`, `lines`, and skeleton move; one
+// with no archives is unchanged. EXTRACTOR stays 11. A version-16 store's next deposit captures every transcript again from the harness or `raw/`.
 //
 // Version 10 (CAPTURE 10) gives a turn opened by a slash command or a skill a `user-prompt` record, adds `opened` to that record, and moves `skills`
 // from class P to class A, since a skill's name can be private. It changed no derivation, so it leaves EXTRACTOR at 9.
@@ -71,7 +80,7 @@ import type { RepoSize } from './public-vocabulary.js';
 import type { SessionFunnel, SessionSetup, SessionTrust } from './session-shape.js';
 
 /** Stamped `cv` on every captured record. Bump it when the captured field list changes or a stored value of an existing captured record or skeleton changes: a bump re-reads every transcript. */
-export const CAPTURE_VERSION = '16';
+export const CAPTURE_VERSION = '17';
 
 /** Capture versions the reader derives from. A version-3 record is upgraded on read; a newer one is read for the fields this code knows. */
 export const OLDEST_READABLE_CAPTURE = 3;
@@ -108,7 +117,7 @@ export interface Usage {
   thinking: number;
 }
 
-export type Harness = 'claude-code' | 'cursor' | 'codex' | 'copilot' | 'gemini' | 'grok';
+export type Harness = 'claude-code' | 'cursor' | 'codex' | 'copilot' | 'gemini' | 'grok' | 'vscode-copilot';
 
 /** The harness a session record came from; a record that does not name one is Claude Code's. */
 export const harnessOf = (session: { harness?: Harness }): Harness => session.harness ?? 'claude-code';
