@@ -39,7 +39,7 @@ const PERMISSION_MODES: { readonly [harness in Harness]: ReadonlySet<string> } =
   // Cursor's and Copilot's readers record no permission mode, so no value is documented to keep.
   copilot: new Set(),
   cursor: new Set(),
-  // Grok Build's session files hold no permission mode (summary.json has none, and no update carries one).
+  // Grok Build's reader reads no mode (its `current_mode_update` carries one, but this reader does not read it), so no value is documented to keep.
   grok: new Set(),
 };
 

@@ -361,7 +361,7 @@ describe('the Grok Build reader', () => {
     expect(error?.line).not.toContain('sk-abcdefghijklmnopqrstuvwxyz0123');
     expect(error?.line).not.toContain('alice@example.com');
     expect(error?.line.length).toBeLessThanOrEqual(1000);
-    const failed = extractOf([prompt(1, 'x'), call(2, 'c1', 'read_file', {}), finish(3, 'c1', 'failed', { content: [{ type: 'content', content: { type: 'text', text: long } }] })]).errorLines[0];
+    const failed = extractOf([prompt(1, 'x'), call(2, 'c1', 'read_file', {}), finish(3, 'c1', 'failed', toolFailed('read_file', long))]).errorLines[0];
     expect(failed?.line.length).toBeLessThanOrEqual(1000);
     expect(failed?.line).not.toContain('alice@example.com');
   });
