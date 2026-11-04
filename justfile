@@ -32,6 +32,7 @@ keycloak_image := "quay.io/keycloak/keycloak:26.8.0"
 # audience the realm puts in the access token); OARS_LIVE_ISSUER_URL defaults to the local stack's http://localhost:8180/realms/aor.
 # Playwright's browser: `npx playwright install chromium` once.
 live-login:
+    npm run build -w packages/client
     npm run test:live -w packages/cli
 
 # A throwaway Keycloak on http://localhost:8180 importing the realm file (the platform's k8s/keycloak-realm.json), for live-login when the
