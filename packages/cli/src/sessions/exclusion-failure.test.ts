@@ -16,7 +16,7 @@ vi.mock('node:fs/promises', async (importOriginal) => {
   const actual = await importOriginal<typeof fsp>();
   const readdir = vi.fn(actual.readdir);
   readdir.mockImplementation((dir, options) =>
-    typeof dir === 'string' && (dir.endsWith(join('locked', 'subagents')) || dir.endsWith('lockedproj') || dir.endsWith('lockedroot') || dir.endsWith(join('lockedstore', 'raw')))
+    typeof dir === 'string' && (dir.endsWith(join('locked', 'subagents')) || dir.endsWith(join('subagents', 'a-locked')) || dir.endsWith('lockedproj') || dir.endsWith('lockedroot') || dir.endsWith(join('lockedstore', 'raw')))
       ? Promise.reject(Object.assign(new Error(`EACCES: permission denied, scandir '${dir}'`), { code: 'EACCES' }))
       : actual.readdir(dir, options),
   );
@@ -84,6 +84,17 @@ describe('an unreadable part of a session', () => {
     t.put('locked.jsonl', CLEAN);
     mkdirSync(join(t.staged.projectsRoot, 'p', 'locked', 'subagents'), { recursive: true });
     expect(await checkSession(t.staged.runtime, t.termsFile, 'p', 'locked')).toEqual({ excluded: true, reason: 'unreadable', hits: [] });
+  });
+
+  it('keeps a term hit listed after a nested folder that cannot be listed', async () => {
+    const t = setup();
+    t.put('s41.jsonl', CLEAN);
+    // `a-locked` sorts before `z.jsonl`, so a walk that stopped at the failure would lose the hit.
+    mkdirSync(join(t.staged.projectsRoot, 'p', 's41', 'subagents', 'a-locked'), { recursive: true });
+    t.put('s41/subagents/z.jsonl', DIRTY);
+    const verdict = await checkSession(t.staged.runtime, t.termsFile, 'p', 's41');
+    expect(verdict.reason).toBe('term');
+    expect(verdict.hits).toHaveLength(1);
   });
 
   it('excludes a session with a transcript that fails to open, and a hit in another file still gives term', async () => {
