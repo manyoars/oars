@@ -111,8 +111,7 @@ describe('version boundary', () => {
   });
 
   it('keys a read that lacks its level or motif by the UNKNOWN placeholder, not an empty string', () => {
-    const found = reads(twoBuckets([['Read', 800, 200], ['Edit', 200, 800]]));
-    const read = found[0];
+    const read = firstOrderOf(twoBuckets([['Read', 800, 200], ['Edit', 200, 800]])).at(0);
     if (read === undefined) throw new Error('expected a read');
     expect(toolKey({ ...read, slice: Object.fromEntries(Object.entries(read.slice).filter(([name]) => name !== 'level' && name !== 'motif')) })).toBe('unknown\nunknown');
   });
