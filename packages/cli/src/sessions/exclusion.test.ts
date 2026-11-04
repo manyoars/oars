@@ -154,6 +154,22 @@ describe('checkSession (A38)', () => {
     expect(verdict.hits).toHaveLength(1);
   });
 
+  it('finishes a walk over self-links, counting one transcript once', async (ctx) => {
+    const t = setup();
+    write(t.main('p', 's8g'), [CLEAN]);
+    write(t.agent('p', 's8g', 'z'), [DIRTY]);
+    const subagents = join(t.staged.projectsRoot, 'p', 's8g', 'subagents');
+    // One self-link, then two: each link re-enters the folder that holds it, so an unbounded walk fans out.
+    if (!makeLink(subagents, join(subagents, 'loop-a'), 'dir')) return ctx.skip();
+    const one = await checkSession(t.staged.runtime, t.termsFile, 'p', 's8g');
+    expect(one.reason).toBe('term');
+    expect(one.hits).toHaveLength(1);
+    makeLink(subagents, join(subagents, 'loop-b'), 'dir');
+    const two = await checkSession(t.staged.runtime, t.termsFile, 'p', 's8g');
+    expect(two.reason).toBe('term');
+    expect(two.hits).toHaveLength(1);
+  }, 20_000);
+
   it('counts a hit in a subagent file of a session with no main transcript as a term hit', async () => {
     const t = setup();
     write(t.agent('p', 's9', 'agent-a1'), [DIRTY]);
