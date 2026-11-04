@@ -309,6 +309,19 @@ describe('the Cursor reader: t731 outcomes', () => {
     store.close();
   });
 
+  it('reads toolFormerData.userDecision: a rejected call is a user-rejected failure, any other value is not', async () => {
+    const { store, session } = await only([
+      user,
+      shell({ decision: 'accepted', result: { exitCodeV2: 0, output: 'fine' } }),
+      shell({ decision: 'rejected', status: 'cancelled' }),
+      shell({ result: { exitCodeV2: 0, output: 'fine' } }),
+      shell({ decision: 'maybe', result: { exitCodeV2: 0, output: 'fine' } }),
+    ]);
+    const { tools } = capture(store.transcript(session), 'x');
+    expect(tools.map((t) => [t.status, t.errorCode ?? null])).toEqual([['ok', null], ['error', 'user-rejected'], ['ok', null], ['ok', null]]);
+    store.close();
+  });
+
   it('leaves durationMs null on a Cursor tool call, not a measured zero', async () => {
     const { store, session } = await only([user, shell({ result: { exitCodeV2: 0, output: 'fine' } })]);
     const { tools } = capture(store.transcript(session), 'x');
