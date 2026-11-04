@@ -49,6 +49,7 @@ describe('a bundle over five accounts', () => {
     const four = await pulled(first);
     expect(four.reads).toEqual([]);
     expect(four.cells).toEqual([]);
+    expect(four.motifs).toEqual([]);
 
     await depositor('1008');
     const bundle = await pulled(first);
@@ -57,6 +58,12 @@ describe('a bundle over five accounts', () => {
     expect(new Set(bundle.reads.map((read) => read.family)).has('fit')).toBe(true);
     expect(bundle.cells.length).toBeGreaterThan(0);
     for (const cell of bundle.cells) expect(cell.clusters).toBe(5);
+    expect(bundle.motifs.length).toBeGreaterThan(0);
+    // A bundle is one harness version's: the five accounts deposited on 2.1.314, so 2.2.0 holds none of their cells, motifs, or reads.
+    const other = await pulled(first, '2.2.0');
+    expect(other.cells).toEqual([]);
+    expect(other.motifs).toEqual([]);
+    expect(other.reads).toEqual([]);
     const fit = bundle.reads.find((read) => read.family === 'fit' && read.slice.level === 'shape');
     expect(fit?.value).toMatchObject({ failed: 0 });
     // Six deposits of two steps each.
@@ -89,6 +96,39 @@ describe('a bundle over five accounts', () => {
       const token = await sign('2004');
       expect(await strataOf(token)).toEqual([]);
       expect((await strataOf(await sign('2005'))).find((cell) => cell.value === 'rust')).toMatchObject({ clusters: 5 });
+    } finally {
+      await fresh.dispose();
+    }
+  }, 60_000);
+
+  // Rule 3's three dimensions are separate lines in the bundle: a framework and a repo size reach the floor the way a language does, and a session counts once per skeleton.
+  it('serves a framework and a repo size at five accounts and neither at four, and keeps both out of everything but the strata', async () => {
+    const fresh = await startPool();
+    try {
+      const stack = { languages: ['rust'], frameworks: ['astro'], size: 'xl' } as const;
+      const sign = async (id: string, twice = false): Promise<string> => {
+        const { token } = await fresh.signIn('github', stubUser(id));
+        await fresh.post('/v1/covenant/accept', { version: 'v1' }, token);
+        expect((await fresh.post('/v1/deposits', sampleSkeleton(id.padStart(16, '0'), stack), token)).status).toBe(201);
+        // A second session from the same account: a second session in the tally, still one cluster.
+        if (twice) expect((await fresh.post('/v1/deposits', sampleSkeleton(`a${id}`.padStart(16, '0'), stack), token)).status).toBe(201);
+        return token;
+      };
+      const payloadOf = async (token: string): Promise<{ strata: Bundle['strata']; outside: string }> => {
+        const { json } = await fresh.get(`/bundle/${VERSION}/0`, token);
+        const verified = await verifyBundle(json, fresh.signingKey(), VERSION);
+        if (!verified.ok) throw new Error(verified.reason);
+        return { strata: verified.bundle.strata, outside: JSON.stringify({ ...verified.bundle, strata: undefined }) };
+      };
+      await sign('6001', true);
+      for (const id of ['6002', '6003']) await sign(id);
+      const four = await payloadOf(await sign('6004'));
+      expect(four.strata).toEqual([]);
+      const five = await payloadOf(await sign('6005'));
+      expect(five.strata.filter((cell) => cell.value !== 'rust').map((cell) => `${cell.dimension}/${cell.value}`)).toEqual(['framework/astro', 'repoFiles/xl']);
+      // Six sessions from five accounts: the first account's second session counts toward sessions and not toward clusters.
+      for (const cell of five.strata) expect(cell).toMatchObject({ sessions: 6, clusters: 5 });
+      for (const value of ['"rust"', 'astro', '"xl"']) expect(five.outside).not.toContain(value);
     } finally {
       await fresh.dispose();
     }
@@ -174,6 +214,7 @@ describe('clusters over the cells of a read', () => {
       expect(fit?.inputs).toHaveLength(5);
       for (const read of bundle.reads) expect(read.clusters).toBe(5);
       expect(bundle.cells).toEqual([]);
+      expect(bundle.motifs).toEqual([]);
     });
   }, 60_000);
 
@@ -200,6 +241,17 @@ describe('clusters over the cells of a read', () => {
         expect(read.value).toMatchObject({ baseline: null, ratio: null });
         expect(fieldOf(read.value, 'share')).not.toBeNull();
       }
+    });
+  }, 60_000);
+
+  it('five accounts on D and four in the baseline serve D with a null baseline', async () => {
+    await inFreshPool(async (spread) => {
+      for (const id of ['3501', '3502', '3503', '3504']) await depositOn(spread, id, ['2026-11-02']);
+      for (const id of ['3506', '3507', '3508', '3509']) await depositOn(spread, id, ['2026-11-03']);
+      const token = await depositOn(spread, '3510', ['2026-11-03']);
+      const day = (await readsIn(spread, token)).reads.filter((read) => read.family === 'live' && fieldOf(read.slice, 'day') === '2026-11-03');
+      expect(day.length).toBeGreaterThan(0);
+      for (const read of day) expect(read.value).toMatchObject({ baseline: null, ratio: null });
     });
   }, 60_000);
 
@@ -279,6 +331,20 @@ describe('the client refuses', () => {
     expect(await verifyBundle({ ...good, signature: flipped }, pool.signingKey(), '2.1.314')).toMatchObject({ ok: false, reason: containing('signature') });
     expect(await verifyBundle(good, { ...pool.signingKey(), x: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA' }, '2.1.314')).toMatchObject({ ok: false, reason: containing('signature') });
     expect(await verifyBundle(good, pool.signingKey(), '2.2.0')).toMatchObject({ ok: false, reason: containing('harness version') });
+  });
+
+  // Signed by a key the client pins, so the signature holds: only the vocabulary version is wrong.
+  it('a correctly signed bundle of another vocabulary version', async () => {
+    const pair = await crypto.subtle.generateKey('Ed25519', true, ['sign', 'verify']);
+    const pinned = await crypto.subtle.exportKey('jwk', pair.publicKey);
+    const key = { kty: String(pinned.kty), crv: String(pinned.crv), x: String(pinned.x) };
+    const sign = async (vocabVersion: string): Promise<{ payload: string; signature: string }> => {
+      const payload = JSON.stringify({ format: 1, harnessVersion: '2.1.314', vocabVersion, asOf: { pool: 'p', day: '2026-11-04' }, cells: [], motifs: [], reads: [], strata: [] });
+      const signature = Buffer.from(await crypto.subtle.sign('Ed25519', pair.privateKey, new TextEncoder().encode(payload))).toString('base64');
+      return { payload, signature };
+    };
+    expect(await verifyBundle(await sign('0'), key, '2.1.314')).toMatchObject({ ok: true });
+    expect(await verifyBundle(await sign('9'), key, '2.1.314')).toMatchObject({ ok: false, reason: containing('vocabulary version') });
   });
 
   it('anything that is not a signed bundle', async () => {

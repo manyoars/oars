@@ -152,6 +152,13 @@ describe('across an ISO week boundary', () => {
     expect(await tally(pool, ahead.account)).toEqual({ week: '2999-W01', fetches: 1 });
   });
 
+  it('does not rewrite a later week\'s count when its own request holds the earlier week', async () => {
+    const ahead = await pool.signIn('github', stubUser('2209'));
+    await (await pool.db()).prepare('UPDATE accounts SET fetch_week = ?, fetches = 1 WHERE id = ?').bind('2999-W01', ahead.account).run();
+    expect((await pool.raw(PATH, ahead.token)).status).toBe(429);
+    expect(await tally(pool, ahead.account)).toEqual({ week: '2999-W01', fetches: 1 });
+  });
+
   it('drops every earlier week\'s count when a fetch is served, so only this week is kept per account', async () => {
     const stale = await pool.signIn('github', stubUser('2203'));
     const fresh = await pool.signIn('github', stubUser('2204'));

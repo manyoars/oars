@@ -439,6 +439,7 @@ export const verifyBundle = async (signed: unknown, key: PinnedKey, harnessVersi
   if (!(await signatureHolds(signed, key))) return { ok: false, reason: 'the signature does not match the key pinned at login' };
   const bundle: unknown = JSON.parse(signed.payload);
   if (!isBundle(bundle)) return { ok: false, reason: 'not a signed bundle this version reads' };
+  if (bundle.vocabVersion !== VOCAB_VERSION) return { ok: false, reason: `this bundle is for vocabulary version ${bundle.vocabVersion}, not ${VOCAB_VERSION}` };
   if (bundle.harnessVersion !== harnessVersion) return { ok: false, reason: `this bundle is for harness version ${bundle.harnessVersion}, not ${harnessVersion}` };
   return { ok: true, bundle };
 };

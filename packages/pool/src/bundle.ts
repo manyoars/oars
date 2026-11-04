@@ -52,10 +52,11 @@ const matches = (header: string | null, etag: string): boolean => (header ?? '')
 
 /**
  * Spends one of the account's fetches this ISO week; false when none is left. One statement, so two fetches at once cannot both take the last. A count from an earlier week is
- * replaced by this fetch's, and an account at its cap is not touched.
+ * replaced by this fetch's, and an account at its cap is not touched. A count from a later week (a request that computed its week just before Monday) is not touched either, or it
+ * would be rewritten to the old week's.
  */
 const spend = async (env: Env, account: string, week: string, cap: number): Promise<boolean> => {
-  const { meta } = await env.DB.prepare('UPDATE accounts SET fetches = CASE WHEN fetch_week = ? THEN fetches + 1 ELSE 1 END, fetch_week = ? WHERE id = ? AND (fetch_week IS NOT ? OR fetches < ?)').bind(week, week, account, week, cap).run();
+  const { meta } = await env.DB.prepare('UPDATE accounts SET fetches = CASE WHEN fetch_week = ? THEN fetches + 1 ELSE 1 END, fetch_week = ? WHERE id = ? AND (fetch_week IS NULL OR fetch_week < ? OR (fetch_week = ? AND fetches < ?))').bind(week, week, account, week, week, cap).run();
   return meta.changes === 1;
 };
 
