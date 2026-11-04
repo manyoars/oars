@@ -5,6 +5,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { verifyBundle, VOCAB_VERSION } from '../../cli/src/sessions/pool-wire.js';
 import { sampleSkeleton } from './sample.js';
 import { EARLIEST_COUNTED } from './access.js';
+import type { Harness } from '../../cli/src/sessions/schema.js';
 import { fetchBundle, WEEK_RESET } from './bundle.js';
 import type { PoolDb } from './http.js';
 import { fieldOf, startPool, stubUser, type TestPool } from './test-pool.js';
@@ -21,10 +22,10 @@ afterAll(async () => {
   await pool.dispose();
 });
 
-const depositor = async (target: TestPool, id: string, extra = 0): Promise<string> => {
+const depositor = async (target: TestPool, id: string, extra = 0, harness: Harness = 'claude-code'): Promise<string> => {
   const { token } = await target.signIn('github', stubUser(id));
   await target.post('/v1/covenant/accept', { version: 'v1' }, token);
-  for (let session = 0; session <= extra; session += 1) expect((await target.post('/v1/deposits', sampleSkeleton(`${session === 0 ? '' : String(session)}${id}`.padStart(16, '0')), token)).status).toBe(201);
+  for (let session = 0; session <= extra; session += 1) expect((await target.post('/v1/deposits', sampleSkeleton(`${session === 0 ? '' : String(session)}${id}`.padStart(16, '0'), undefined, '2026-11-01', harness), token)).status).toBe(201);
   return token;
 };
 
@@ -45,7 +46,7 @@ describe('the bundle reads the stored cells', () => {
       const db = await own.db();
       await db.prepare('DELETE FROM deposits').run();
       await db.prepare('DELETE FROM contributors').run();
-      // The account now holds no ledger row, so it has no access and its cap is spent: another account takes the second fetch.
+      // The account now holds no ledger row: another account takes the second fetch, so the read does not lean on the first account's rows.
       const reader = await own.signIn('github', stubUser('7006'));
       const after = await own.raw(PATH, reader.token);
       expect(after.status).toBe(200);
@@ -104,13 +105,20 @@ describe('the bundle reads the stored cells', () => {
       // One account with a ledger row (its access is read from it) and one with none (its cap is spent, and the week's reset runs).
       const holder = await depositor(own, '7105');
       const bare = (await own.signIn('github', stubUser('7106'))).token;
-      const small = { holder: await fetched(holder), bare: await fetched(bare) };
+      // A cursor account's batches count toward access, so its ledger rows carry a `counted_at` that the `deposits_counted` index holds; the first fetch writes its flag, so measure the second.
+      const counting = await depositor(own, '7122', 0, 'cursor');
+      await fetched(counting);
+      const small = { holder: await fetched(holder), bare: await fetched(bare), counting: await fetched(counting) };
       expect(small.holder.status).toBe(200);
       expect(small.bare.status).toBe(200);
+      expect(small.counting.status).toBe(200);
       expect(small.holder.rows).toBeGreaterThan(0);
       expect(small.bare.rows).toBeGreaterThan(0);
+      expect(small.counting.rows).toBeGreaterThan(0);
       // The fetching account's own ledger grows, and so do the other accounts and their rows: the same cells, many more ledger rows, contributor records, and accounts.
       for (let session = 1; session <= 6; session += 1) expect((await own.post('/v1/deposits', sampleSkeleton(`${String(session)}7105`.padStart(16, '0')), holder)).status).toBe(201);
+      for (let session = 1; session <= 6; session += 1) expect((await own.post('/v1/deposits', sampleSkeleton(`${String(session)}7122`.padStart(16, '0'), undefined, '2026-11-01', 'cursor'), counting)).status).toBe(201);
+      expect(await (await own.db()).prepare("SELECT COUNT(*) AS count FROM deposits WHERE counted_at IS NOT NULL").first('count')).toBe(7);
       for (const id of ['7107', '7108', '7109', '7110', '7111', '7112', '7113', '7114', '7115', '7116']) await depositor(own, id, 3);
       for (const id of ['7117', '7118', '7119', '7120']) await own.signIn('github', stubUser(id));
       expect(await (await own.db()).prepare('SELECT COUNT(*) AS count FROM deposits').first('count')).toBeGreaterThan(40);
@@ -118,6 +126,7 @@ describe('the bundle reads the stored cells', () => {
       const fresh = (await own.signIn('github', stubUser('7121'))).token;
       expect(await fetched(holder)).toEqual(small.holder);
       expect(await fetched(fresh)).toEqual(small.bare);
+      expect(await fetched(counting)).toEqual(small.counting);
     } finally {
       await own.dispose();
     }
