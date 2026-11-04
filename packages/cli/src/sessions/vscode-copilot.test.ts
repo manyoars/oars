@@ -108,10 +108,10 @@ describe('the VS Code Copilot Chat reader', () => {
     // toolNames.ts lists `edit_notebook_file`, `create_directory`, `send_to_terminal`, `run_notebook_cell`, and `skill`; the notebook edit part is `kind:'notebookEditGroup'` (model/chatModel.ts:1321,1331).
     const notebook = { kind: 'notebookEditGroup', uri: { scheme: 'file', path: '/work/app/n.ipynb' }, edits: [], done: true };
     const out = extractOf(
-      chat([request(1, 'x', [tool('c1', 'edit_notebook_file'), notebook, tool('c2', 'copilot_createDirectory'), tool('c3', 'send_to_terminal'), tool('c4', 'run_notebook_cell'), tool('c5', 'skill'), tool('c6', 'runTests')])]),
+      chat([request(1, 'x', [tool('c1', 'edit_notebook_file'), notebook, tool('c2', 'copilot_createDirectory'), tool('c3', 'send_to_terminal'), tool('c4', 'run_notebook_cell'), tool('c5', 'skill'), tool('c6', 'runTests'), tool('c7', 'mcp__demo__search')])]),
     );
-    expect(out.tools.map((entry) => entry.steps?.[0]?.action)).toEqual(['file.edit', 'file.write', 'other', 'other', 'skill.run', 'other']);
-    expect(out.tools.map((entry) => entry.steps?.[0]?.native)).toEqual(['edit_notebook_file', 'copilot_createDirectory', 'send_to_terminal', 'run_notebook_cell', 'skill', 'runTests']);
+    expect(out.tools.map((entry) => entry.steps?.[0]?.action)).toEqual(['file.edit', 'file.write', 'other', 'other', 'skill.run', 'other', 'other']);
+    expect(out.tools.map((entry) => entry.steps?.[0]?.native)).toEqual(['edit_notebook_file', 'copilot_createDirectory', 'send_to_terminal', 'run_notebook_cell', 'skill', 'runTests', '<literal>']);
     expect(out.session.files).toHaveLength(1);
   });
 
@@ -156,6 +156,20 @@ describe('the VS Code Copilot Chat reader', () => {
       ['mcp_demo_search', 'error'],
     ]);
     expect(out.errorLines.map((entry) => entry.line)).toEqual(['tool failed', 'patch did not apply', 'upstream returned 502', 'tool failed']);
+  });
+
+  it('runs the command the user last edited, then the tool-edited one, then the original, and stamps a failed call with its completedAt', () => {
+    // chatTerminalToolConfirmationSubPart.ts:118 prefers the edited command as the one that runs.
+    const commandOf = (commandLine: object): unknown => {
+      const call = chatLines(chat([request(1, 'x', [tool('c1', 'run_in_terminal', { toolSpecificData: { kind: 'terminal', commandLine } })])]), 's', null).find((line) => line.type === 'assistant');
+      const content = (call?.message as { content: { input?: { command?: string } }[] }).content;
+      return content[0]?.input?.command;
+    };
+    expect(commandOf({ original: 'a', toolEdited: 'b', userEdited: 'c' })).toBe('c');
+    expect(commandOf({ original: 'a', toolEdited: 'b' })).toBe('b');
+    expect(commandOf({ original: 'a' })).toBe('a');
+    const out = extractOf(chat([request(1, 'x', [tool('c1', 'copilot_readFile', { resultError: 'boom', completedAt: MS(9) })])]));
+    expect(out.errorLines[0]?.ts).toBe(iso(9));
   });
 
   it("reads a user's refusal as the harness's own wording, so it stores user-rejected, and a hook's or a risk assessment's as a permission denial", () => {
@@ -299,6 +313,8 @@ describe('the VS Code Copilot Chat store', () => {
     const appData = stageVscode(s.root, [
       { id: 'both', data: data('from json'), log: [{ kind: 0, v: data('from log') }] },
       { id: 'fallback', data: data('from json'), log: '{torn\nnot json\n' },
+      // An empty log is a read failure to VS Code ("Empty log file", objectMutationLog.ts:393), so the `.json` beside it is tried.
+      { id: 'empty-log', data: data('from json'), log: '' },
       { id: 'same-json', data: data('same') },
       { id: 'same-log', log: [{ kind: 0, v: data('same') }] },
     ]);
@@ -308,11 +324,12 @@ describe('the VS Code Copilot Chat store', () => {
       return found === undefined ? '' : (await store?.transcript(found)) ?? '';
     };
     expect(await text('both')).toContain('from log');
+    expect(await text('empty-log')).toContain('from json');
     expect(await text('fallback')).toContain('from json');
     expect((await text('same-json')).replaceAll('same-json', 'x')).toBe((await text('same-log')).replaceAll('same-log', 'x'));
   });
 
-  it('is undefined when no build has a User folder, names a store it cannot list, rejects an unsafe id, and throws for a wholly torn session', async () => {
+  it('is undefined when no build has a User folder, skips a User folder that is a file without naming it, rejects an unsafe id, and throws for a wholly torn session', async () => {
     const s = stage();
     expect(await openVscodeCopilotStore(join(s.root, 'nowhere'))).toBeUndefined();
     const appData = stageVscode(s.root, [{ id: 'torn', data: '{torn' }]);
@@ -325,12 +342,13 @@ describe('the VS Code Copilot Chat store', () => {
     expect(store?.rejected).toBe(1);
     const torn = store?.sessions.find((session) => session.id === 'torn');
     await expect(torn && store?.transcript(torn)).rejects.toThrow(/no parseable/);
-    // A User folder that is a file cannot be listed: it is named, never fatal.
+    // A User folder that is a file is ENOTDIR, which is the same as absent: skipped, never fatal, and nothing is named.
     const odd = join(s.root, 'odd');
     mkdirSync(join(odd, 'Code'), { recursive: true });
     writeFileSync(join(odd, 'Code', 'User'), 'x');
     const blocked = await openVscodeCopilotStore(odd);
     expect(blocked?.sessions).toEqual([]);
+    expect(blocked?.unreadable).toEqual([]);
   });
 });
 
