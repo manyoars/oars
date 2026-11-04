@@ -59,8 +59,9 @@ const call = (second: number, toolCallId: string, title: string, rawInput: objec
 // a not-executed reason carries a text part only (tool_calls.rs:2834-2838, :3325-3329).
 const finish = (second: number, toolCallId: string, status: string, extra: object = {}) => line(S(second), { sessionUpdate: 'tool_call_update', toolCallId, status, ...extra });
 const textPart = (text: string) => ({ type: 'content', content: { type: 'text', text } });
-// `read_file`: the file as a text part and `ReadFileOutput::FileContent` (acp_conversion.rs:123-131; types/output.rs:188-200).
-const readFileOk = (text: string, path: string) => ({ content: [textPart(text)], rawOutput: { type: 'ReadFile', FileContent: { content: text, absolute_path: path, offset: null } } });
+// `read_file`: its input is `target_file` (grok_build/read_file/mod.rs:133); the completion is the file as a text part and `ReadFileOutput::FileContent`, which always writes
+// `content`, `absolute_path`, `offset`, `raw_output`, and `total_lines` (acp_conversion.rs:123-131; types/output.rs:188-206).
+const readFileOk = (text: string, path: string) => ({ content: [textPart(text)], rawOutput: { type: 'ReadFile', FileContent: { content: text, absolute_path: path, offset: null, raw_output: text, total_lines: text.split('\n').length } } });
 // An MCP tool: no `content`, and `MCPOutput` with `OkayOutput` (acp_conversion.rs:325-338; types/output.rs:1112-1135). `use_tool` returns the delegate's `ToolOutput` (use_tool/mod.rs:377).
 const mcpOk = (server: string, tool: string, text: string) => ({ rawOutput: { type: 'MCP', tool_name: tool, server_name: server, output: { OkayOutput: text } } });
 // A failed MCP call (a server's `isError` too, use_tool/mod.rs:74, :176): status `failed`, still no `content`, and the text only in `output: {Error}` (acp_conversion.rs:325-338; `MCPOutput::errored` sets `is_error`, types/output.rs:1148-1158).
@@ -74,13 +75,27 @@ const toolFailed = (tool: string, message: string) => ({ content: [textPart(`Too
 // The not-executed reason for a call refused in plan mode (tool_calls.rs:3300-3312; a text part only, :3325-3329).
 const PLAN_REJECTED = 'Rejected: file edits are not allowed in plan mode - the only editable file is the plan file (/work/app/.grok/plan.md).';
 const bytes = (text: string): number[] => [...Buffer.from(text)];
-// The model-issued path overwrites `output_for_prompt` with the formatted prompt, `exit: N\n<output>` (grok_build/bash/mod.rs:2246, format_default_prompt :386-417), so a
-// fixture of that path writes the header; the `output` bytes stay the raw output (:2232).
-const bash = (exit: number, text: string, extra: object = {}) => ({ type: 'Bash', exit_code: exit, command: 'x', output: bytes(text), output_for_prompt: `exit: ${String(exit)}\n${text}`, signal: null, timed_out: false, truncated: false, description: null, output_file: '', total_bytes: Buffer.byteLength(text), current_dir: '/work/app', ...extra });
+// A shell call's input names `command` and `description`, both required: `BashToolInput` (grok_build/bash/mod.rs:225, :249) and `BashInput` (opencode/bash/mod.rs:195) fail the parse
+// without them, and then no `BashOutput` is ever written. `workdir` is the opencode tool's optional one (opencode/bash/mod.rs:185-189).
+const DESCRIBED = 'Run the command';
+const sh = (command: string, extra: object = {}) => ({ command, description: DESCRIBED, ...extra });
+// What the tool builds: the `output` bytes stay the raw output (grok_build/bash/mod.rs:2232), `command` and `description` echo the call's input (:2235, :2239), and the model-issued path
+// overwrites `output_for_prompt` with the formatted prompt (:2246; format_default_prompt :386-417): `exit: N`, or `exit: killed (<reason>)` for a signal that parses as a KillReason (:318-362).
+const KILLS = /^(?:timeout|max_runtime|cancelled|killed|signal \d+)$/;
+const bash = (command: string, exit: number, text: string, extra: Obj = {}): Obj => {
+  const signal = typeof extra.signal === 'string' ? extra.signal : null;
+  const header = signal !== null && KILLS.test(signal) ? `exit: killed (${signal})` : `exit: ${String(exit)}`;
+  return { type: 'Bash', exit_code: exit, command, output: bytes(text), output_for_prompt: `${header}\n${text}`, signal: null, timed_out: false, truncated: false, description: DESCRIBED, output_file: '', total_bytes: Buffer.byteLength(text), current_dir: '/work/app', ...extra };
+};
+// The agent path's completion: the output as a text part (acp_conversion.rs:251-258) beside the `BashOutput`.
+const bashDone = (command: string, exit: number, text: string, extra: Obj = {}) => ({ content: [textPart(text)], rawOutput: bash(command, exit, text, extra) });
 // The concise tool's form (grok_build_concise/bash.rs:37-58, :187): `Exit code: N`, then the output in a fence.
-const conciseBash = (exit: number, text: string, extra: object = {}) => bash(exit, text, { output_for_prompt: `Exit code: ${String(exit)}\n\nCommand output:\n\n\`\`\`\n${text}\n\`\`\`\n\nCommand completed.\n\nThe previous shell command ended, so on the next invocation of this tool, you will be using a new shell session.\n\nOn the next terminal tool call, the directory of the shell will be /work/app.`, ...extra });
-// The user's `!cmd` is the one path that keeps `output_for_prompt` plain, and writes `description: None` (tool_dispatch.rs:304-317).
-const bashMode = (exit: number, text: string, extra: object = {}) => bash(exit, text, { output_for_prompt: text, description: null, ...extra });
+const conciseDone = (command: string, exit: number, text: string) => ({
+  content: [textPart(text)],
+  rawOutput: bash(command, exit, text, { output_for_prompt: `Exit code: ${String(exit)}\n\nCommand output:\n\n\`\`\`\n${text}\n\`\`\`\n\nCommand completed.\n\nThe previous shell command ended, so on the next invocation of this tool, you will be using a new shell session.\n\nOn the next terminal tool call, the directory of the shell will be /work/app.` }),
+});
+// The user's `!cmd` is the one path that keeps `output_for_prompt` plain, writes `description: None`, and sends no `content` (tool_dispatch.rs:304-317, :323-330).
+const bashMode = (command: string, exit: number, text: string, extra: Obj = {}) => ({ rawOutput: bash(command, exit, text, { output_for_prompt: text, description: null, ...extra }) });
 const turn = (second: number, extra: Obj = {}): Obj => {
   const fields: Obj = { turnNumber: 1, endedAt: iso(second), inputTokens: 900, outputTokens: 60, cachedReadTokens: 400, cacheCreationTokens: 100, reasoningTokens: 7, modelCalls: 2, primaryModelId: 'grok-build', ...extra };
   // `totalTokens` is input + output (xai-chat-state usage.rs:65), and no token field is skipped when zero (usage_file.rs:27-41).
@@ -102,8 +117,8 @@ describe('the Grok Build reader', () => {
       prompt(1, 'build'),
       say(2, 'running '),
       say(2, 'it'),
-      call(3, 'c1', 'run_terminal_cmd', { command: 'npm test' }),
-      finish(4, 'c1', 'completed', { rawOutput: bash(0, 'ok') }),
+      call(3, 'c1', 'run_terminal_cmd', sh('npm test')),
+      finish(4, 'c1', 'completed', bashDone('npm test', 0, 'ok')),
       call(5, 'c2', 'search_replace', { file_path: 'src/a.ts', old_string: 'a', new_string: 'b' }),
       finish(6, 'c2', 'completed', { content: [{ type: 'diff', path: '/work/app/src/a.ts', oldText: 'a', newText: 'b' }], rawOutput: { type: 'SearchReplace', EditsApplied: { old_string: 'a', new_string: 'b', tool_output_for_prompt: 'edited', absolute_path: '/work/app/src/a.ts', edits: { details: [] } } } }),
       call(7, 'c3', 'apply_patch', { patch: '*** Begin Patch\n*** Update File: docs/b.md\n@@\n-x\n+y\n*** Add File: docs/c.md\n+z\n*** End Patch' }),
@@ -124,7 +139,7 @@ describe('the Grok Build reader', () => {
   });
 
   it('records a shell call whose exit code is nonzero as an error even though its status says completed', () => {
-    const out = extractOf([prompt(1, 'run it'), call(2, 'c1', 'run_terminal_cmd', { command: 'make' }), finish(3, 'c1', 'completed', { rawOutput: bash(2, 'make: *** No rule to make target\nsecond') })]);
+    const out = extractOf([prompt(1, 'run it'), call(2, 'c1', 'run_terminal_cmd', sh('make')), finish(3, 'c1', 'completed', bashDone('make', 2, 'make: *** No rule to make target\nsecond'))]);
     expect(out.tools).toMatchObject([{ tool: 'Bash', status: 'error' }]);
     expect(out.errorLines).toMatchObject([{ tool: 'Bash', line: 'make: *** No rule to make target' }]);
   });
@@ -132,10 +147,10 @@ describe('the Grok Build reader', () => {
   it('records a timed-out shell call as an error with its output, and one that exited zero but was cut by a signal as an error', () => {
     const out = extractOf([
       prompt(1, 'run them'),
-      call(2, 'c', 'bash', { command: 'sleep 9' }),
-      finish(3, 'c', 'failed', { rawOutput: bash(-1, 'timed out after 5s', { timed_out: true }) }),
-      call(4, 'd', 'bash', { command: 'true' }),
-      finish(5, 'd', 'failed', { rawOutput: bash(0, '', { signal: 'killed' }) }),
+      call(2, 'c', 'bash', sh('sleep 9')),
+      finish(3, 'c', 'failed', bashDone('sleep 9', -1, 'timed out after 5s', { timed_out: true })),
+      call(4, 'd', 'bash', sh('true')),
+      finish(5, 'd', 'failed', bashDone('true', 0, '', { signal: 'killed' })),
     ]);
     expect(out.tools.map((tool) => tool.status)).toEqual(['error', 'error']);
     expect(out.errorLines.map((error) => error.line)[0]).toBe('timed out after 5s');
@@ -144,30 +159,30 @@ describe('the Grok Build reader', () => {
   it('reads the output bytes, not the formatted prompt header or the concise tool’s fence, and says "Exit code" when there is no output at all', () => {
     const out = extractOf([
       prompt(1, 'x'),
-      call(2, 'c', 'bash', { command: 'a' }),
-      finish(3, 'c', 'completed', { rawOutput: bash(1, 'raw bytes only') }),
-      call(4, 'd', 'bash', { command: 'b' }),
-      finish(5, 'd', 'completed', { rawOutput: bash(3, '') }),
-      call(6, 'e', 'run_terminal_cmd', { command: 'c' }),
-      finish(7, 'e', 'completed', { rawOutput: conciseBash(2, 'concise output') }),
+      call(2, 'c', 'bash', sh('a')),
+      finish(3, 'c', 'completed', bashDone('a', 1, 'raw bytes only')),
+      call(4, 'd', 'bash', sh('b')),
+      finish(5, 'd', 'completed', bashDone('b', 3, '')),
+      call(6, 'e', 'run_terminal_cmd', sh('c')),
+      finish(7, 'e', 'completed', conciseDone('c', 2, 'concise output')),
     ]);
     expect(out.errorLines.map((error) => error.line)).toEqual(['raw bytes only', 'Exit code 3', 'concise output']);
   });
 
-  it('strips ANSI sequences from the output bytes, so a coloured error line still joins a plain one', () => {
+  it('strips ANSI sequences from the output bytes, so a colored error line still joins a plain one', () => {
     const esc = String.fromCharCode(27);
-    const out = extractOf([prompt(1, 'x'), call(2, 'c', 'bash', { command: 'a' }), finish(3, 'c', 'completed', { rawOutput: bash(1, `${esc}[31;1merror${esc}[0m: bad thing`) })]);
+    const out = extractOf([prompt(1, 'x'), call(2, 'c', 'bash', sh('a')), finish(3, 'c', 'completed', bashDone('a', 1, `${esc}[31;1merror${esc}[0m: bad thing`))]);
     expect(out.errorLines.map((error) => error.line)).toEqual(['error: bad thing']);
   });
 
   it('unwraps a failed tool to the text of its content, never the rawOutput wrapper, so the error line joins a Claude Code signature', () => {
     const out = extractOf([
       prompt(1, 'read it'),
-      call(2, 'c1', 'read_file', { path: '/nope' }),
+      call(2, 'c1', 'read_file', { target_file: '/nope' }),
       finish(3, 'c1', 'failed', { content: [{ type: 'content', content: { type: 'text', text: 'ENOENT: no such file or directory, open /nope' } }], rawOutput: { type: 'ReadFile', FileNotFound: 'ENOENT: no such file or directory, open <workspace>/nope' } }),
-      call(4, 'c2', 'list_dir', {}),
+      call(4, 'c2', 'list_dir', { target_directory: '/nope' }),
       finish(5, 'c2', 'failed', { rawOutput: { type: 'ListDir', NotFound: 'no such directory' } }),
-      call(6, 'c3', 'bash', { command: 'x' }),
+      call(6, 'c3', 'bash', sh('x')),
       finish(7, 'c3', 'failed', { content: [textPart(PLAN_REJECTED)] }),
     ]);
     expect(out.errorLines.map((error) => error.line)).toEqual(['ENOENT: no such file or directory, open /nope', 'tool failed', PLAN_REJECTED]);
@@ -183,7 +198,7 @@ describe('the Grok Build reader', () => {
   });
 
   it('captures a session from a folder that is not a repository', () => {
-    const out = extractOf([prompt(1, 'hi'), call(2, 'c1', 'read_file', { path: 'a.txt' }), finish(3, 'c1', 'completed', readFileOk('hello', '/tmp/notes/a.txt'))], summaryOf({ info: { id: 'sess', cwd: '/tmp/notes' } }));
+    const out = extractOf([prompt(1, 'hi'), call(2, 'c1', 'read_file', { target_file: 'a.txt' }), finish(3, 'c1', 'completed', readFileOk('hello', '/tmp/notes/a.txt'))], summaryOf({ info: { id: 'sess', cwd: '/tmp/notes' } }));
     expect(out.tools).toMatchObject([{ tool: 'read_file', status: 'ok' }]);
     expect(out.session.repo).toBeNull();
   });
@@ -236,9 +251,9 @@ describe('the Grok Build reader', () => {
   it('follows the shell’s current_dir when the session’s own folder has moved, but never reads a cd inside a command', () => {
     // `current_dir` is the Cwd the command RAN in, resolved before it ran (grok_build/bash/mod.rs:1876, written at :2240), and each call is a new shell
     // (grok_build_concise/bash.rs:53-54), so a `cd` inside a command never shows; a session whose Cwd moved does (`cwd_generation`, session/persistence.rs:1157-1159).
-    const moved = linesOf([prompt(1, 'go'), call(2, 'c1', 'bash', { command: 'ls' }), finish(3, 'c1', 'completed', { rawOutput: bash(0, '', { current_dir: '/other' }) }), prompt(4, 'next')]);
+    const moved = linesOf([prompt(1, 'go'), call(2, 'c1', 'bash', sh('ls')), finish(3, 'c1', 'completed', bashDone('ls', 0, '', { current_dir: '/other' })), prompt(4, 'next')]);
     expect(moved.filter((entry) => entry.type === 'user' && typeof entry.cwd === 'string').map((entry) => entry.cwd)).toEqual(['/work/app', '/other', '/other']);
-    const cd = linesOf([prompt(1, 'go'), call(2, 'c1', 'bash', { command: 'cd /other' }), finish(3, 'c1', 'completed', { rawOutput: bash(0, '') }), prompt(4, 'next')]);
+    const cd = linesOf([prompt(1, 'go'), call(2, 'c1', 'bash', sh('cd /other')), finish(3, 'c1', 'completed', bashDone('cd /other', 0, '')), prompt(4, 'next')]);
     expect(cd.filter((entry) => entry.type === 'user' && typeof entry.cwd === 'string').map((entry) => entry.cwd)).toEqual(['/work/app', '/work/app', '/work/app']);
   });
 
@@ -247,8 +262,8 @@ describe('the Grok Build reader', () => {
     // session Cwd"), and the next relative `write` or `edit` resolves against the session Cwd (opencode/write/mod.rs:117, opencode/edit/mod.rs:210).
     const out = linesOf([
       prompt(1, 'go'),
-      call(2, 'c1', 'bash', { command: 'ls', workdir: '/tmp', description: 'x' }),
-      finish(3, 'c1', 'completed', { rawOutput: bash(0, '', { current_dir: '/tmp' }) }),
+      call(2, 'c1', 'bash', sh('ls', { workdir: '/tmp' })),
+      finish(3, 'c1', 'completed', bashDone('ls', 0, '', { current_dir: '/tmp' })),
       call(4, 'c2', 'write', { file_path: 'src/new.ts', content: 'x' }),
       finish(5, 'c2', 'completed', { content: [{ type: 'diff', path: '/work/app/src/new.ts', newText: 'x' }], rawOutput: { type: 'SearchReplace', EditsApplied: { old_string: '', new_string: 'x', tool_output_for_prompt: 'created', absolute_path: '/work/app/src/new.ts', edits: { details: [] } } } }),
       prompt(6, 'next'),
@@ -264,7 +279,7 @@ describe('the Grok Build reader', () => {
       call(2, 'c1', 'oars__oars_recall', {}, 'other'),
       finish(3, 'c1', 'completed', mcpOk('oars', 'oars_recall', 'ok')),
       call(4, 'bash-mode-1', 'Execute `ls -a`', BANG, 'execute'),
-      finish(5, 'bash-mode-1', 'failed', { rawOutput: bashMode(2, 'ls: no such file') }),
+      finish(5, 'bash-mode-1', 'failed', bashMode('ls -a', 2, 'ls: no such file')),
       call(6, 'c3', 'grep', { pattern: 'x' }),
       // The progress update after a call carries its real kind and input, and no status (tool_calls.rs:2731-2742).
       line(S(7), { sessionUpdate: 'tool_call_update', toolCallId: 'c3', kind: 'search', rawInput: { pattern: 'x' } }),
@@ -379,18 +394,18 @@ describe('the Grok Build reader', () => {
   });
 
   it('settles a call once', () => {
-    const out = extractOf([prompt(1, 'x'), call(2, 'c1', 'bash', { command: 'a' }), finish(3, 'c1', 'completed', { rawOutput: bash(0, 'ok') }), finish(4, 'c1', 'failed', { rawOutput: bash(1, 'late') })]);
+    const out = extractOf([prompt(1, 'x'), call(2, 'c1', 'bash', sh('a')), finish(3, 'c1', 'completed', bashDone('a', 0, 'ok')), finish(4, 'c1', 'failed', bashDone('a', 1, 'late'))]);
     expect(out.tools.map((tool) => tool.status)).toEqual(['ok']);
   });
 
   it('redacts a secret and an email, and cuts a 1,500-character error at 1,000 characters', () => {
     const long = `fail: sk-abcdefghijklmnopqrstuvwxyz0123 for alice@example.com ${'x'.repeat(1500)}`;
-    const out = extractOf([prompt(1, 'x'), call(2, 'c1', 'bash', { command: 'run' }), finish(3, 'c1', 'completed', { rawOutput: bash(1, long) })]);
+    const out = extractOf([prompt(1, 'x'), call(2, 'c1', 'bash', sh('run')), finish(3, 'c1', 'completed', bashDone('run', 1, long))]);
     const error = out.errorLines[0];
     expect(error?.line).not.toContain('sk-abcdefghijklmnopqrstuvwxyz0123');
     expect(error?.line).not.toContain('alice@example.com');
     expect(error?.line.length).toBeLessThanOrEqual(1000);
-    const failed = extractOf([prompt(1, 'x'), call(2, 'c1', 'read_file', {}), finish(3, 'c1', 'failed', toolFailed('read_file', long))]).errorLines[0];
+    const failed = extractOf([prompt(1, 'x'), call(2, 'c1', 'read_file', { target_file: 'a.txt' }), finish(3, 'c1', 'failed', toolFailed('read_file', long))]).errorLines[0];
     expect(failed?.line.length).toBeLessThanOrEqual(1000);
     expect(failed?.line).not.toContain('alice@example.com');
   });
