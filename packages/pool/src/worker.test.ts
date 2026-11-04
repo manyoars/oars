@@ -159,7 +159,8 @@ describe('a frame day in the future', () => {
     // Outside the runtime, because workerd keeps its own clock and a test reading the real one could cross midnight between the two sides.
     const send = async (sent: SessionSkeleton): Promise<Response> => {
       const row = { account: 'acct-1', covenant: 'v1' };
-      const db = { prepare: () => ({ bind: () => ({ first: () => Promise.resolve(row), all: () => Promise.resolve({ results: [] }), run: () => Promise.resolve({ meta: { changes: 1 } }) }) }) };
+      const bound = { first: () => Promise.resolve(row), all: () => Promise.resolve({ results: [] }), run: () => Promise.resolve({ meta: { changes: 1 } }) };
+      const db = { prepare: () => ({ bind: () => bound }), batch: () => Promise.resolve([{ meta: { changes: 1 } }]) };
       const request = new Request('http://pool.test/v1/deposits', { method: 'POST', body: JSON.stringify(sent), headers: { authorization: `Bearer ${TOKEN}` } });
       return worker.fetch(request, { DB: db, COVENANT_VERSION: 'v1' });
     };
@@ -194,7 +195,8 @@ describe('stored bytes per account', () => {
   const sized = (id: string): number => {
     const parsed = parseSkeleton(sampleSkeleton(id));
     if (!parsed.ok) throw new Error('the sample does not parse');
-    return JSON.stringify(parsed.skeleton).length;
+    // The budget counts the batch's deltas too, which are `[]` until the wire carries them.
+    return JSON.stringify(parsed.skeleton).length + '[]'.length;
   };
   const signedIn = async (limited: TestPool, id: string): Promise<string> => {
     const { token } = await limited.signIn('github', stubUser(id));

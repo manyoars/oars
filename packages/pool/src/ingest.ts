@@ -1,0 +1,126 @@
+// Ingest (spec Section 2, "the deposit form"): a batch's skeleton becomes cell increments on the stored `index` cells, and a `contributor` record per (cell, account, UTC day) lets a
+// cell tell a new cluster from a returning one. Everything one deposit writes goes in one transaction, guarded by the deposit row that this write set, so a refused deposit writes none.
+import { bucketFields, deriveCells } from '../../cli/src/sessions/cells.js';
+import type { Motif } from '../../cli/src/sessions/motif.js';
+import { parseSkeleton, type SessionSkeleton } from '../../cli/src/sessions/pool-wire.js';
+import { storeOf } from './derive.js';
+import type { Bound, Env } from './http.js';
+
+export interface CellRow {
+  key: string;
+  harnessBucket: string;
+  motifId: string;
+  frameBucket: string;
+  day: string;
+  exposed: number;
+  sessions: number;
+  ok: number;
+  failed: number;
+  tokens: number;
+  durationMs: number;
+}
+
+export interface StratumRow {
+  key: string;
+  dimension: string;
+  value: string;
+  sessions: number;
+}
+
+/** What one batch adds to the index: its cells, the motifs they name, and rule 3's strata. */
+export interface Increments {
+  cells: Map<string, CellRow>;
+  motifs: Motif[];
+  strata: Map<string, StratumRow>;
+}
+
+/** Whole cells and strata, summed over a batch's own sessions: the same cells a store of that batch alone derives. */
+export const incrementsOf = (skeleton: SessionSkeleton): Increments => {
+  const derived = deriveCells(storeOf([skeleton]));
+  const cells = new Map<string, CellRow>();
+  for (const cell of derived.cells) {
+    const exposed = cell.exposed ? 1 : 0;
+    const key = `${cell.motifId}/${cell.frameBucket}/${cell.day}/${String(exposed)}`;
+    cells.set(key, { key, harnessBucket: bucketFields(cell.frameBucket).harnessBucket, motifId: cell.motifId, frameBucket: cell.frameBucket, day: cell.day, exposed, sessions: cell.sessions, ok: cell.ok, failed: cell.failed, tokens: cell.tokens, durationMs: cell.durationMs });
+  }
+  // A session counts once per value, so each value is one session of this batch.
+  const strata = new Map<string, StratumRow>();
+  const frames = skeleton.transcripts.flatMap(({ frame, prompts }) => [frame, ...prompts.map((prompt) => prompt.frame)]);
+  const named: [string, string][] = [
+    ...frames.flatMap(({ stack }) => stack.languages.map((value): [string, string] => ['language', value])),
+    ...frames.flatMap(({ stack }) => stack.frameworks.map((value): [string, string] => ['framework', value])),
+    ...frames.flatMap(({ stack }) => (stack.size === null ? [] : [['repoFiles', stack.size] satisfies [string, string]])),
+  ];
+  for (const [dimension, value] of named) strata.set(`${dimension}/${value}`, { key: `${dimension}/${value}`, dimension, value, sessions: 1 });
+  return { cells, motifs: derived.motifs, strata };
+};
+
+/** What replacing `previous` with `next` adds to each cell: next's counts less the replaced batch's, and only where something changes. */
+const netOf = <Row extends { key: string }>(next: ReadonlyMap<string, Row>, previous: ReadonlyMap<string, Row>, fields: readonly (keyof Row)[]): Row[] => {
+  const rows: Row[] = [];
+  for (const [key, row] of next) {
+    const old = previous.get(key);
+    rows.push(old === undefined ? row : { ...row, ...Object.fromEntries(fields.map((field) => [field, Number(row[field]) - Number(old[field])])) });
+  }
+  for (const [key, old] of previous) if (!next.has(key)) rows.push({ ...old, ...Object.fromEntries(fields.map((field) => [field, -Number(old[field])])) });
+  return rows.filter((row) => fields.some((field) => Number(row[field]) !== 0));
+};
+
+const CELL_FIELDS: readonly (keyof CellRow)[] = ['sessions', 'ok', 'failed', 'tokens', 'durationMs'];
+const STRATUM_FIELDS: readonly (keyof StratumRow)[] = ['sessions'];
+
+/** The batch an account sent under this id before, or none: a stored row that no longer parses is one that stopped counting, so there is nothing of it to take back. */
+export const previousOf = async (env: Env, account: string, id: string): Promise<Increments | undefined> => {
+  const held = await env.DB.prepare('SELECT skeleton FROM deposits WHERE account = ? AND id = ?').bind(account, id).first();
+  const text: unknown = typeof held === 'object' && held !== null ? Reflect.get(held, 'skeleton') : undefined;
+  if (typeof text !== 'string') return undefined;
+  try {
+    const parsed = parseSkeleton(JSON.parse(text));
+    return parsed.ok ? incrementsOf(parsed.skeleton) : undefined;
+  } catch {
+    return undefined;
+  }
+};
+
+const GUARD = 'EXISTS (SELECT 1 FROM deposits WHERE account = ? AND id = ? AND ingest = ?)';
+
+/**
+ * The statements that write one batch's increments, to run after the deposit's own row in the same transaction. Each carries the guard, so none takes effect unless that row did.
+ * A session sent again replaces its earlier batch: only the difference is added. A cell's cluster count rises only for an account with no record for it, on any day.
+ */
+export const incrementStatements = (env: Env, account: string, id: string, ingest: string, today: string, next: Increments, previous: Increments | undefined): Bound[] => {
+  const cells = netOf(next.cells, previous?.cells ?? new Map<string, CellRow>(), CELL_FIELDS);
+  const strata = netOf(next.strata, previous?.strata ?? new Map<string, StratumRow>(), STRATUM_FIELDS);
+  const guard = [account, id, ingest] as const;
+  const statements: Bound[] = [];
+  if (cells.length > 0) {
+    statements.push(
+      env.DB.prepare(
+        `INSERT INTO cells (key, harness_bucket, motif_id, frame_bucket, day, exposed, sessions, ok, failed, tokens, duration_ms) SELECT json_extract(value, '$.key'), json_extract(value, '$.harnessBucket'), json_extract(value, '$.motifId'), json_extract(value, '$.frameBucket'), json_extract(value, '$.day'), json_extract(value, '$.exposed'), json_extract(value, '$.sessions'), json_extract(value, '$.ok'), json_extract(value, '$.failed'), json_extract(value, '$.tokens'), json_extract(value, '$.durationMs') FROM json_each(?) WHERE ${GUARD} ON CONFLICT (key) DO UPDATE SET sessions = cells.sessions + excluded.sessions, ok = cells.ok + excluded.ok, failed = cells.failed + excluded.failed, tokens = cells.tokens + excluded.tokens, duration_ms = cells.duration_ms + excluded.duration_ms`,
+      ).bind(JSON.stringify(cells), ...guard),
+    );
+  }
+  if (next.motifs.length > 0) {
+    statements.push(env.DB.prepare(`INSERT OR IGNORE INTO motifs (motif_id, motif) SELECT json_extract(value, '$.motifId'), value FROM json_each(?) WHERE ${GUARD}`).bind(JSON.stringify(next.motifs), ...guard));
+  }
+  if (next.cells.size > 0) {
+    const keys = JSON.stringify([...next.cells.keys()]);
+    statements.push(
+      env.DB.prepare(`UPDATE cells SET clusters = clusters + 1 WHERE key IN (SELECT value FROM json_each(?)) AND NOT EXISTS (SELECT 1 FROM contributors WHERE contributors.kind = 'cell' AND contributors.key = cells.key AND contributors.account = ?) AND ${GUARD}`).bind(keys, account, ...guard),
+      env.DB.prepare(`INSERT OR IGNORE INTO contributors (kind, key, account, day) SELECT 'cell', value, ?, ? FROM json_each(?) WHERE ${GUARD}`).bind(account, today, keys, ...guard),
+    );
+  }
+  if (strata.length > 0) {
+    statements.push(
+      env.DB.prepare(`INSERT INTO strata (key, dimension, value, sessions) SELECT json_extract(value, '$.key'), json_extract(value, '$.dimension'), json_extract(value, '$.value'), json_extract(value, '$.sessions') FROM json_each(?) WHERE ${GUARD} ON CONFLICT (key) DO UPDATE SET sessions = strata.sessions + excluded.sessions`).bind(JSON.stringify(strata), ...guard),
+    );
+  }
+  if (next.strata.size > 0) {
+    const keys = JSON.stringify([...next.strata.keys()]);
+    statements.push(
+      env.DB.prepare(`UPDATE strata SET clusters = clusters + 1 WHERE key IN (SELECT value FROM json_each(?)) AND NOT EXISTS (SELECT 1 FROM contributors WHERE contributors.kind = 'stratum' AND contributors.key = strata.key AND contributors.account = ?) AND ${GUARD}`).bind(keys, account, ...guard),
+      env.DB.prepare(`INSERT OR IGNORE INTO contributors (kind, key, account, day) SELECT 'stratum', value, ?, ? FROM json_each(?) WHERE ${GUARD}`).bind(account, today, keys, ...guard),
+    );
+  }
+  return statements;
+};
