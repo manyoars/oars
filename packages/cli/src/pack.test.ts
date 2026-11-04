@@ -208,13 +208,23 @@ describe('the public text states facts only', () => {
   // reworded error text, so the generated files get a plain substring scan too. The allow-list is every remaining hit, named: a
   // workload restart setting and a compute-limit code the platform owns. A new hit fails until someone looks at it.
   const WIRE_NAMES_KEPT = ['autoRestartOnCredit', 'COMPUTE_CREDIT_EXHAUSTED'];
+  /** @returns every word of `text` that holds price, charge, credit, or usd, except the kept names */
+  const wireNamesIn = (text: string): string[] =>
+    WIRE_NAMES_KEPT.reduce((rest, name) => rest.replaceAll(name, ''), text).match(/\w*(?:price|charge|credit|usd)\w*/gi) ?? [];
   it.each([
     ['openapi/public.json', join(root, 'openapi/public.json')],
     ['openapi/public-operations.json', join(root, 'openapi/public-operations.json')],
     ['packages/client/src/generated/schema.d.ts', join(root, 'packages/client/src/generated/schema.d.ts')],
-  ])('%s has no price, charge, or credit name beyond the kept wire names', (_name, file) => {
-    const text = WIRE_NAMES_KEPT.reduce((rest, name) => rest.replaceAll(name, ''), readFileSync(file, 'utf8'));
-    expect(text.match(/\w*(?:price|charge|credit)\w*/gi) ?? []).toEqual([]);
+  ])('%s has no price, charge, credit, or usd name beyond the kept wire names', (_name, file) => {
+    expect(wireNamesIn(readFileSync(file, 'utf8'))).toEqual([]);
+  });
+
+  it('the wire-name scan sees a camelCase USD name and a reworded name, and skips only the kept ones', () => {
+    expect(wireNamesIn('"fooCostUsd": { "type": "string" }')).toEqual(['fooCostUsd']);
+    expect(wireNamesIn('"listAgentPrices", "ChargeView", "autoRestartOnCredit", "COMPUTE_CREDIT_EXHAUSTED"')).toEqual([
+      'listAgentPrices',
+      'ChargeView',
+    ]);
   });
 
   it('the package description names none of the withheld terms', () => {

@@ -119,7 +119,8 @@ const withoutWithheldStatus = (responses) =>
 
 /**
  * @param {JsonValue} node
- * @returns {JsonValue} a copy without a 402 response under any `responses` and with each phrase of TEXT_REWRITES replaced
+ * @returns {JsonValue} a copy without a 402 response under any `responses`, without a withheld name under `properties` or `required`,
+ *   and with each phrase of TEXT_REWRITES replaced
  */
 const neutralize = (node) => {
   if (typeof node === 'string') return TEXT_REWRITES.reduce((text, { phrase, plain }) => text.replaceAll(phrase, plain), node);
@@ -129,6 +130,7 @@ const neutralize = (node) => {
   const copy = {};
   for (const [key, value] of Object.entries(node)) {
     if (key === 'properties' && isObject(value)) copy[key] = neutralize(withoutWithheldProperties(value));
+    else if (key === 'required' && Array.isArray(value)) copy[key] = value.filter((name) => !WITHHELD_PROPERTIES.has(String(name)));
     else if (key === 'responses' && isObject(value)) copy[key] = neutralize(withoutWithheldStatus(value));
     else copy[key] = neutralize(value);
   }

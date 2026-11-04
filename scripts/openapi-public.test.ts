@@ -315,6 +315,30 @@ describe('openapi-public.mjs', () => {
       expect(JSON.stringify(out)).not.toMatch(/payment|stripe|add compute credit|credit-pack|usd|credit-driven/i);
     });
 
+    it('drops a withheld property from required as well as from properties', () => {
+      const withRequired = {
+        ...source,
+        components: {
+          ...source.components,
+          schemas: {
+            ...source.components.schemas,
+            Order: {
+              type: 'object',
+              required: ['id', 'paymentId', 'monthlyReservedCostUsd'],
+              properties: { id: { type: 'string' }, paymentId: { type: 'string' }, monthlyReservedCostUsd: { type: 'string' } },
+            },
+          },
+        },
+      };
+
+      const result = run(['getOrder'], withRequired);
+
+      expect(result.status).toBe(0);
+      const out = readOut();
+      expect(keysAt(out, 'components', 'schemas', 'Order', 'properties')).toEqual(['id']);
+      expect(at(out, 'components', 'schemas', 'Order', 'required')).toEqual(['id']);
+    });
+
     it('drops a 402 response whatever its description says', () => {
       const orderPath = source.paths['/orders/{orderId}'];
       const reworded = {
