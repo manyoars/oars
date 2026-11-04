@@ -163,7 +163,7 @@ describe('the hook process: the deadline', () => {
     expect(readFileSync(crossingsPath(store), 'utf8').trim().split('\n')).toHaveLength(1);
   });
 
-  it('keeps both rows when a longer row from another writer landed first and the hook's own append then stalled', async () => {
+  it('keeps both rows when a longer row from another writer landed first and the hook\'s own append then stalled', async () => {
     const store = folder();
     const exit = vi.fn();
     const otherWriterThenStall = async (file: string, text: string): Promise<void> => {
