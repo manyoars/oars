@@ -664,6 +664,55 @@ describe('oars pool deposit', () => {
       scene.h.deps.env.OARS_EXCLUSION_TERMS = join(scene.staged.root, 'no-such-terms.txt');
       await expectNothingBuilt(scene, { folder: 0, term: 0, noRaw: 0, noTerms: 1, unreadable: 0 });
     });
+
+    describe('a session that passed once and fails a gate later leaves the outbox', () => {
+      /** A built and printed batch, and its hash. */
+      const built = async (): Promise<{ scene: Scene; hash: string }> => {
+        const scene = await alone([line('a plain request')]);
+        expect(await scene.cli('pool', 'deposit', '--server', POOL)).toBe(ExitCode.OK);
+        expect(await scene.cli('pool', 'outbox', '--server', POOL)).toBe(ExitCode.OK);
+        const hash = printedHashes(scene)[0] ?? '';
+        expect(hash).toMatch(/^[0-9a-f]{64}$/);
+        scene.h.out.length = 0;
+        return { scene, hash };
+      };
+
+      const expectWithdrawn = async (scene: Scene, hash: string): Promise<void> => {
+        expect(await scene.cli('pool', 'deposit', '--server', POOL, '--json')).toBe(ExitCode.OK);
+        expect(scene.document()).toMatchObject({ batched: 0, withdrawn: 1 });
+        expect(outboxFiles(scene)).toEqual([]);
+        scene.h.out.length = 0;
+        expect(await scene.cli('pool', 'outbox', '--server', POOL)).toBe(ExitCode.OK);
+        expect(printedHashes(scene)).toEqual([]);
+        const pool = wire({ 'GET /v1/covenant': OPEN_COVENANT, 'POST /v1/deposits': answer(201) });
+        await expect(poolDeposit(scene.h.deps, sendOptions(hash, pool.via))).rejects.toMatchObject({ problem: { code: 'batch_unknown' } });
+        expect(pool.requests).toEqual([]);
+      };
+
+      it('a term added to the term file', async () => {
+        const { scene, hash } = await built();
+        writeFileSync(join(scene.staged.root, 'terms.txt'), `${TERM}\nplain\n`);
+        await expectWithdrawn(scene, hash);
+      });
+
+      it('a folder taken off the allowlist', async () => {
+        const { scene, hash } = await built();
+        const state = join(scene.staged.storeDir, 'state.json');
+        writeFileSync(state, JSON.stringify({ ...JSON.parse(readFileSync(state, 'utf8')), allow: ['some-other-folder'] }));
+        await expectWithdrawn(scene, hash);
+      });
+
+      it('a batch whose session the store no longer holds, such as one of another account', async () => {
+        const { scene } = await built();
+        const server = join(scene.staged.storeDir, 'pool-outbox', outboxFiles(scene)[0]?.split(/[\\/]/)[0] ?? '');
+        const current = readdirSync(server).filter((name) => name.startsWith('v'))[0] ?? '';
+        const orphan = `${'e'.repeat(16)}.${'f'.repeat(64)}.jsonl`;
+        writeFileSync(join(server, current, orphan), '{}\n');
+        expect(await scene.cli('pool', 'deposit', '--server', POOL, '--json')).toBe(ExitCode.OK);
+        expect(scene.document()).toMatchObject({ batched: 1, withdrawn: 1 });
+        expect(readdirSync(join(server, current))).toHaveLength(1);
+      });
+    });
   });
 
   it('counts a session captured before steps and frames, and one the vocabulary refuses, without building either', async () => {

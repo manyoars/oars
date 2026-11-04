@@ -6,7 +6,7 @@ import type { Outcome, RunDeps } from '../cli.js';
 import { CliError, exitCodeForProblem, ExitCode, unreachableError } from '../errors.js';
 import { compileAllow } from './allow.js';
 import { checkSession, exclusionPaths, type Reason } from './exclusion.js';
-import { discardStale, FIELD_ROWS, fieldsOf, heldBatches, lockedBatch, markShown, outboxFolder, staleBatches, unchangedBytes, writeBatch, type LockRefusal } from './pool-outbox.js';
+import { discardStale, FIELD_ROWS, fieldsOf, heldBatches, lockedBatch, markShown, outboxFolder, removeBatchesExcept, staleBatches, unchangedBytes, writeBatch, type LockRefusal } from './pool-outbox.js';
 import { isBundleVersion, parseSkeleton, sessionsOf, skeletonOf, VOCAB_VERSION, verifyBundle, type Bundle, type PinnedKey } from './pool-wire.js';
 import { Masker, printed, TRANSPORT_HEADERS, waitWords, type Outgoing } from './pool-print.js';
 import { isVocabularyExpired, REGISTRY_MAX_AGE_DAYS, VOCAB_SNAPSHOT_DATE } from './public-vocabulary.js';
@@ -337,6 +337,8 @@ interface DepositCounts {
   refusedFields: string[];
   /** Batches built under an older vocabulary or field list, removed from the outbox. */
   discarded: number;
+  /** Batches of an earlier pass whose session no longer passes (a gate, the allowlist, a refusal) or is gone from the store, removed so the outbox holds only what this pass built. */
+  withdrawn: number;
 }
 
 const excludedKey = (reason: Exclude<Reason, 'clean'>): keyof DepositCounts['excluded'] => (reason === 'no-raw' ? 'noRaw' : reason === 'no-terms' ? 'noTerms' : reason);
@@ -400,7 +402,8 @@ export const poolDeposit = async (deps: RunDeps, options: { server?: string | un
   const { terms } = exclusionPaths(runtime.projectsRoot, deps.env);
   const allow = compileAllow((await readSaved(runtime.storeDir)).allow);
   const discarded = await discardStale(outbox);
-  const counts: DepositCounts = { sessions: 0, batched: 0, excluded: { folder: 0, term: 0, noRaw: 0, noTerms: 0, unreadable: 0 }, uncaptured: 0, refused: 0, refusedFields: [], discarded };
+  const counts: DepositCounts = { sessions: 0, batched: 0, excluded: { folder: 0, term: 0, noRaw: 0, noTerms: 0, unreadable: 0 }, uncaptured: 0, refused: 0, refusedFields: [], discarded, withdrawn: 0 };
+  const built = new Set<string>();
   const refusedFields = new Set<string>();
   for (const records of sessionsOf(await loadStore(runtime.storeDir))) {
     counts.sessions += 1;
@@ -427,15 +430,19 @@ export const poolDeposit = async (deps: RunDeps, options: { server?: string | un
       continue;
     }
     await writeBatch(outbox, key, parsed.skeleton);
+    built.add(key);
     counts.batched += 1;
   }
+  // A session that fails a gate never enters the outbox, so a batch of it from an earlier pass goes too, and so does a batch of a session or account this store no longer holds.
+  counts.withdrawn = await removeBatchesExcept(outbox, built);
   counts.refusedFields = [...refusedFields].sort();
   const { folder, term, noRaw, noTerms, unreadable } = counts.excluded;
   const lines = [
     `Wrote ${String(counts.batched)} of ${String(counts.sessions)} sessions to the outbox for ${server}. Nothing was sent.`,
     `Kept out by the session gates, never built: ${String(folder)} in a folder not on the allowlist, ${String(term)} for a term, ${String(noRaw)} with no raw to scan, ${String(noTerms)} with no term file, ${String(unreadable)} unreadable.`,
     `Not built: ${String(counts.uncaptured)} captured before steps and frames, ${String(counts.refused)} refused by the vocabulary${counts.refusedFields.length === 0 ? '' : ` (${counts.refusedFields.join(', ')})`}.`,
-    ...(discarded === 0 ? [] : [`Discarded ${String(discarded)} batches built under an older vocabulary or field list.`]),
+    ...(counts.withdrawn === 0 ? [] : [`Removed ${String(counts.withdrawn)} ${counts.withdrawn === 1 ? 'batch' : 'batches'} of sessions that no longer pass the gates or are no longer in the store.`]),
+    ...(discarded === 0 ? [] : [`Discarded ${String(discarded)} ${discarded === 1 ? 'batch' : 'batches'} built under an older vocabulary or field list.`]),
     'Run oars pool outbox to print exactly what would be sent.',
   ];
   return { document: { ok: true, server, ...counts }, text: lines.join('\n') };
