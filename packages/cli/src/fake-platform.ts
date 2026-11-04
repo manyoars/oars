@@ -14,7 +14,7 @@ export interface PlatformCall {
   status: number;
 }
 
-/** A call as a deploy plan holds it: the workload id replaced, no key, no status (design §6, `parity/deploy-plans`). */
+/** A call as a deploy plan holds it: the workload id replaced, no key, no status. */
 export interface PlanCall {
   method: string;
   path: string;

@@ -83,14 +83,14 @@ describe('oars login', () => {
       return h;
     };
 
-    it('points ACCOUNT_NOT_READY at the Stripe onboarding link, then says to rerun', async () => {
-      const h = await needsYou({ title: 'Finish payout setup', code: 'ACCOUNT_NOT_READY', actionUrl: 'https://app.test/onboard' });
-      expect(h.err.slice(1).join('')).toBe('Finish payout setup\nNeeds you: finish Stripe onboarding at https://app.test/onboard, then rerun this command.\n');
+    it('points ACCOUNT_NOT_READY at the account setup link, then says to rerun', async () => {
+      const h = await needsYou({ title: 'Finish account setup', code: 'ACCOUNT_NOT_READY', actionUrl: 'https://app.test/onboard' });
+      expect(h.err.slice(1).join('')).toBe('Finish account setup\nNeeds you: finish account setup at https://app.test/onboard, then rerun this command.\n');
     });
 
-    it('says where to find Stripe onboarding when ACCOUNT_NOT_READY carries no link', async () => {
-      const h = await needsYou({ title: 'Finish payout setup', code: 'ACCOUNT_NOT_READY' });
-      expect(h.err.slice(1).join('')).toBe('Finish payout setup\nNeeds you: finish Stripe onboarding (Account, then Payout account, in the Many Oars web app), then rerun this command.\n');
+    it('says where to finish account setup when ACCOUNT_NOT_READY carries no link', async () => {
+      const h = await needsYou({ title: 'Finish account setup', code: 'ACCOUNT_NOT_READY' });
+      expect(h.err.slice(1).join('')).toBe('Finish account setup\nNeeds you: finish account setup in the Many Oars web app, then rerun this command.\n');
     });
 
     it('points any other exit 6 at its link', async () => {
@@ -98,13 +98,13 @@ describe('oars login', () => {
       expect(h.err.slice(1).join('')).toBe('Add a payment method\nNeeds you: open https://app.test/pay, then rerun this command.\n');
     });
 
-    it('says a person must act when an exit 6 carries no link and is not about Stripe', async () => {
+    it('says a person must act when an exit 6 carries no link and is not about account setup', async () => {
       const h = await needsYou({ title: 'The compute cap is reached', code: 'COMPUTE_CAP_REACHED' });
       expect(h.err.join('')).toContain('Needs you: a step only a person can do. Do it in the Many Oars web app, then rerun this command.');
     });
 
     it('leaves --json to the problem document and adds the line to no other exit code', async () => {
-      const json = await needsYou({ title: 'Finish payout setup', code: 'ACCOUNT_NOT_READY', actionUrl: 'https://app.test/onboard' }, ['login', '--no-browser', '--json']);
+      const json = await needsYou({ title: 'Finish account setup', code: 'ACCOUNT_NOT_READY', actionUrl: 'https://app.test/onboard' }, ['login', '--no-browser', '--json']);
       expect(json.err.join('')).not.toContain('Needs you');
       expect(single(json.out)).toMatchObject({ ok: false, problem: { actionUrl: 'https://app.test/onboard' } });
       const h = harness();

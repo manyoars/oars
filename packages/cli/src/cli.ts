@@ -85,14 +85,14 @@ const emit = (deps: RunDeps, json: boolean, outcome: Outcome): void => {
   deps.io.stdout(`${json ? JSON.stringify(outcome.document) : outcome.text}\n`);
 };
 
-/** The last line of an exit 6: the one thing a person must do, by link when the platform sent one, then to rerun. Stripe onboarding is the step most runs wait on. */
+/** The last line of an exit 6: the one thing a person must do, by link when the platform sent one, then to rerun. Finishing account setup is the step most runs wait on. */
 const needsYouLine = (code: string | undefined, actionUrl: string | undefined): string => {
-  const stripe = code === 'ACCOUNT_NOT_READY';
+  const setup = code === 'ACCOUNT_NOT_READY';
   if (actionUrl !== undefined && actionUrl !== '') {
-    return `Needs you: ${stripe ? 'finish Stripe onboarding at' : 'open'} ${actionUrl}, then rerun this command.`;
+    return `Needs you: ${setup ? 'finish account setup at' : 'open'} ${actionUrl}, then rerun this command.`;
   }
-  return stripe
-    ? 'Needs you: finish Stripe onboarding (Account, then Payout account, in the Many Oars web app), then rerun this command.'
+  return setup
+    ? 'Needs you: finish account setup in the Many Oars web app, then rerun this command.'
     : 'Needs you: a step only a person can do. Do it in the Many Oars web app, then rerun this command.';
 };
 

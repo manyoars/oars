@@ -68,6 +68,7 @@ describe('unreachableError', () => {
     expect(unreachableError('api', new TypeError('fetch failed', { cause: new AggregateError([], '') }), 'http://localhost:9').message).toBe('Cannot reach the server at http://localhost:9: fetch failed');
     expect(unreachableError('api', new TypeError('fetch failed', { cause: new Error('') }), 'http://localhost:9').message).toBe('Cannot reach the server at http://localhost:9: fetch failed');
     expect(unreachableError('api', new Error(''), 'http://localhost:9').message).toBe('Cannot reach the server at http://localhost:9: no reason given');
+    expect(unreachableError('api', new Error('', { cause: new Error('') }), 'http://localhost:9').message).toBe('Cannot reach the server at http://localhost:9: no reason given');
   });
 
   it('leaves the server out when the caller names none (the sign-in flow reports Keycloak\'s answer)', () => {
