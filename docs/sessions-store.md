@@ -85,7 +85,7 @@ moves to match, so `next` and `editFollowed` read the same calls as a current ca
 adds `frame` and `frameId` to the session and prompt records and `steps` to the tool record (see "Frames and steps"), and moves `tool`, `tools`, and a shell-form
 `target` from class P to class A; a version-8 store's next deposit captures every transcript again from the harness or `raw/`. Version 10 (CAPTURE 10, t768) gives a turn opened by a slash command or a
 skill a `user-prompt` record (see "What opens a prompt"), adds `opened` to that record, and moves `skills` from class P to class A, since a skill's name can be private. Prompt
-`index` values move in a session that had such a turn, so a version-9 store's next deposit captures every transcript again from the harness or `raw/`. Version 11 (CAPTURE 11, t815) adds the optional `setup`, `funnel`, and `trust` to the session record (see "Setup, funnel, and trust shape"); no existing value changes, but a version-10 store's next deposit captures every transcript again, from the harness or `raw/`, because the new fields come only from the transcript. What an open does with an older store:
+`index` values move in a session that had such a turn, so a version-9 store's next deposit captures every transcript again from the harness or `raw/`. Version 11 (CAPTURE 11, t815) adds the optional `setup`, `funnel`, and `trust` to the session record (see "Setup, funnel, and trust shape"); a Claude Code session's existing values do not change, and a Codex session's `lines` count and skeleton gain the neutral lines the reader writes for its tools and interrupts; a version-10 store's next deposit captures every transcript again, from the harness or `raw/`, because the new fields come only from the transcript. What an open does with an older store:
 
 | Log holds | Action on open | Action at the next deposit |
 |-----------|----------------|----------------------------|
@@ -282,26 +282,26 @@ only: subagent work is left out.
 Version 11 records three optional objects on the `session` record, class A, from what the transcript recorded and nothing else: never today's config or instruction
 files, because a file read now is not that session's setup. A field the transcript does not hold is absent, never guessed or zero (a zero is stored only where the
 harness would have shown the event). Counts and sizes only: no instruction text, hook command or output, or tool description is kept. Nothing here is bucketed or
-projected; the exact value is stored. The collector is `session-shape.ts`.
+projected; the value is stored as read (an `unattendedRun` to two decimals). The collector is `session-shape.ts`.
 
-| Field | Meaning | Claude Code | Codex | Cursor |
-|-------|---------|-------------|-------|--------|
-| `setup.permissionMode` | the mode most of the session ran in; the harness's documented value, else `other` | recorded: `permission-mode` lines and the key on `user` lines | recorded: `turn_context.approval_policy` (`granular` for the object form) | absent |
-| `setup.plugins` | plugins named by a tool (`mcp__plugin_<plugin>_<server>__<tool>`) offered, loaded, or called | recorded (a floor: a plugin with no MCP tool shows nothing; a `plugin:skill` prefix on `attributionSkill` is not read, since a nested skill carries one too) | absent | absent |
-| `setup.hookCount` | distinct hooks seen firing (event and command), never the command | recorded (a floor): `hook_success`, `hook_blocking_error`, `stop_hook_summary.hookInfos[]` | absent (hook events are not persisted) | absent |
-| `setup.instructionBytes` | bytes of instruction files loaded mid-session, each path once | recorded (a floor): `nested_memory`'s `content.content`; the opening files are in the `api-request-blob` lines capture skips | absent | absent |
-| `funnel.offered` | tool names offered and not since removed | recorded: `api-request-shape`'s `shape.tools[].name` plus `deferred_tools_delta.addedNames` | recorded: `session_meta.dynamic_tools` and `additional_tools` items (built-in tools only when Codex persists them) | absent |
-| `funnel.loaded` | tool names pulled in by a tool search | recorded: `tool_reference.tool_name` in a result | recorded: `tool_search_output.tools` | absent |
-| `funnel.removed` | tool names offered and then removed, and not offered again | recorded: `deferred_tools_delta.removedNames` | absent (the update payload is not read) | absent |
-| `called`, `worked` | not new: the session's `tools` and each `tool` record's `status` | recorded | recorded | recorded |
-| `trust.interrupts` | the operator cut a turn short; the marker a rejection is followed by is not a second one | recorded | recorded: `turn_aborted` with reason `interrupted` | absent |
-| `trust.rejections` | the operator declined a tool call (`The user doesn't want to ...`) | recorded | absent | absent |
-| `trust.denials` | policy refused a call (permission rules, the classifier, or a hook); not the operator | recorded (the first line of a failed result) | absent | absent |
-| `trust.trustEvent` | each stop as `{event, tool, prompt}`; `tool` is null when none was in flight | recorded | interrupts only | absent |
-| `trust.unattendedRun` | minutes (two decimals) from each human turn to the agent's last line before the next human turn; one per turn | recorded; a turn the harness injects (a task notification, a scheduled task) is not a human turn; a `!` shell command is | recorded | absent |
+| Field | Meaning | Claude Code | Codex | Cursor | Copilot |
+|-------|---------|-------------|-------|--------|---------|
+| `setup.permissionMode` | the mode most of the session ran in; the harness's documented value, else `other` | recorded: `permission-mode` lines and the key on `user` lines | recorded: `turn_context.approval_policy` (`granular` for the object form) | absent | absent |
+| `setup.plugins` | plugins named by a tool (`mcp__plugin_<plugin>_<server>__<tool>`) offered, loaded, or called; read for Claude Code only, and the name is redacted | recorded (a floor: a plugin with no MCP tool shows nothing; a `plugin:skill` prefix on `attributionSkill` is not read, since a nested skill carries one too) | absent | absent | absent |
+| `setup.hookCount` | distinct hooks seen firing, by `hookName`, never the command | recorded (a floor): `hook_success`, `hook_additional_context`, and `hook_blocking_error` by `hookName`; a `stop_hook_summary.hookInfos[]` command counts only when no `Stop`-named hook line was seen, since that line and the summary are the same hooks | absent (hook events are not persisted) | absent | absent |
+| `setup.instructionBytes` | bytes of instruction files loaded mid-session, each path once | recorded (a floor): `nested_memory`'s `content.content`; the opening files are in the `api-request-blob` lines capture skips | absent | absent | absent |
+| `funnel.offered` | tool names offered and not since removed | recorded: `api-request-shape`'s `shape.tools[].name` plus `deferred_tools_delta.addedNames` | recorded: `session_meta.dynamic_tools` and `additional_tools` items (built-in tools only when Codex persists them) | absent | absent |
+| `funnel.loaded` | tool names pulled in by a tool search | recorded: `tool_reference.tool_name` in a result | recorded: `tool_search_output.tools` | absent | absent |
+| `funnel.removed` | tool names offered and then removed, and not offered again | recorded: `deferred_tools_delta.removedNames` | absent (the update payload is not read) | absent | absent |
+| `called`, `worked` | not new: the session's `tools` and each `tool` record's `status` | recorded | recorded | recorded | recorded |
+| `trust.interrupts` | the operator cut a turn short; the marker a rejection is followed by is not a second one | recorded | recorded: `turn_aborted` with reason `interrupted` | absent | absent |
+| `trust.rejections` | the operator declined a tool call (`The user doesn't want to ...`) | recorded | absent | absent | absent |
+| `trust.denials` | policy refused a call (permission rules, the classifier, or a hook); not the operator | recorded (the first line of a failed result) | absent | absent | absent |
+| `trust.trustEvent` | each stop as `{event, tool, prompt}`; `tool` is null when none was in flight | recorded | interrupts only | absent | absent |
+| `trust.unattendedRun` | minutes (rounded to two decimals) from each human turn to the agent's last line before the next human turn; one per turn | recorded; a turn the harness injects (a task notification, a scheduled task) is not a human turn; a `!` shell command is | recorded | absent | recorded (a prompt marked as an autopilot continuation or an injected skill or agent prompt is not read, so it is not a human turn) |
 
 A subagent transcript has no `unattendedRun`: its run is its parent's. `unattendedRun` ends at the agent's last line, so a reply the next morning is not an overnight
-run; the last turn of a file runs to the file's last line. Tool names are stored as written (MCP server names included) and redacted, like `tools`.
+run; the last turn of a file runs to the file's last line. A resume's replayed human line is one turn, and a line of a sidechain is not read. A compaction summary is the agent working, not a human turn. Tool names are stored as written (MCP server names included) and redacted, like `tools`.
 
 ## Motifs, cells, and reads
 
