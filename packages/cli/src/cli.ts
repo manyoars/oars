@@ -605,7 +605,7 @@ const buildProgram = (deps: RunDeps, argv: string[]): Command => {
 
   pool
     .command('login')
-    .description('sign in by GitHub or Google device flow; the pool keeps a pseudonym, and no harness token is read')
+    .description('sign in by GitHub or Google device flow, run here against the provider; prints each request before sending it, and the pool keeps a pseudonym; no harness token is read')
     .requiredOption('--provider <name>', 'github or google')
     .option(serverOption, serverHelp)
     .action(async (_options: OptionValues, command: Command) => {

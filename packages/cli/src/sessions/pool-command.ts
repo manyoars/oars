@@ -166,6 +166,45 @@ const refusal = (step: string, { status, body }: Reply): CliError => {
   return new CliError(message, exitCodeForProblem(status, code === undefined ? undefined : { code }), step, { title: message, status, ...(code === undefined ? {} : { code }) });
 };
 
+/** What the client needs to run one provider's device flow itself. The client ID and Google's `client_secret` come from the environment, since the OAuth apps are the operator's to create. */
+interface Provider {
+  deviceUrl: string;
+  tokenUrl: string;
+  /** The least that names the account: Google's `openid` gives only `sub`, and GitHub's public profile needs no scope. */
+  scope: string;
+  clientIdVar: 'OARS_GITHUB_CLIENT_ID' | 'OARS_GOOGLE_CLIENT_ID';
+  /** Google's device flow requires its client secret at the token route, which is not secret for an installed app; GitHub's takes none. */
+  secretVar?: 'OARS_GOOGLE_CLIENT_SECRET';
+}
+
+const PROVIDER_FLOWS = new Map<string, Provider>([
+  ['github', { deviceUrl: 'https://github.com/login/device/code', tokenUrl: 'https://github.com/login/oauth/access_token', scope: '', clientIdVar: 'OARS_GITHUB_CLIENT_ID' }],
+  ['google', { deviceUrl: 'https://oauth2.googleapis.com/device/code', tokenUrl: 'https://oauth2.googleapis.com/token', scope: 'openid', clientIdVar: 'OARS_GOOGLE_CLIENT_ID', secretVar: 'OARS_GOOGLE_CLIENT_SECRET' }],
+]);
+
+const DEVICE_GRANT = 'urn:ietf:params:oauth:grant-type:device_code';
+
+interface ProviderConfig {
+  clientId: string;
+  clientSecret: string | undefined;
+}
+
+/** The provider's side of the flow, read from the environment. An unset value stops the command before anything is sent, and names what is missing. */
+const configOf = (env: NodeJS.ProcessEnv, provider: Provider): ProviderConfig => {
+  const set = (name: string): string | undefined => (env[name] === undefined || env[name] === '' ? undefined : env[name]);
+  const clientId = set(provider.clientIdVar);
+  if (clientId === undefined) throw usage(`Set ${provider.clientIdVar} to the client ID of the Many Oars OAuth app; it is not set.`, LOGIN);
+  const clientSecret = provider.secretVar === undefined ? undefined : set(provider.secretVar);
+  if (provider.secretVar !== undefined && clientSecret === undefined) throw usage(`Set ${provider.secretVar} to the client secret of the Many Oars OAuth app; it is not set.`, LOGIN);
+  return { clientId, clientSecret };
+};
+
+/** One form POST to a provider, printed before it is sent. The provider answers JSON on whatever status it chooses (Google's pending poll is a 428), so the caller reads the body and not the status. */
+const askProvider = (deps: RunDeps, url: string, form: Array<[string, string]>, masker: Masker): Promise<Reply> => {
+  const headers: Array<[string, string]> = [['user-agent', `oars/${deps.version}`], ['accept', 'application/json'], ['content-type', 'application/x-www-form-urlencoded'], ...TRANSPORT_HEADERS];
+  return send(deps, LOGIN, { method: 'POST', url: new URL(url), headers, body: new URLSearchParams(form).toString() }, masker);
+};
+
 interface Device {
   deviceCode: string;
   userCode: string;
@@ -174,48 +213,63 @@ interface Device {
   expiresMs: number;
 }
 
-const deviceOf = (reply: Reply): Device => {
-  if (reply.status !== 200) throw refusal(LOGIN, reply);
-  const { body } = reply;
-  const [deviceCode, userCode, verificationUri] = isObject(body) ? [textIn(body, 'deviceCode'), textIn(body, 'userCode'), textIn(body, 'verificationUri')] : [];
+const deviceOf = ({ body }: Reply): Device => {
+  // Google names the link `verification_url`, against the RFC's `verification_uri`.
+  const [deviceCode, userCode, verificationUri] = isObject(body) ? [textIn(body, 'device_code'), textIn(body, 'user_code'), textIn(body, 'verification_uri') ?? textIn(body, 'verification_url')] : [];
   // `openBrowser` parses the link before it returns its promise, so one that cannot parse has to stop here or it throws past the login's catch.
-  if (!isObject(body) || deviceCode === undefined || userCode === undefined || verificationUri === undefined || !URL.canParse(verificationUri)) throw new CliError('The pool did not start a sign-in.', ExitCode.UNEXPECTED, LOGIN);
-  return { deviceCode, userCode, verificationUri, intervalMs: (numberIn(body, 'interval') ?? DEFAULT_INTERVAL_SEC) * 1000, expiresMs: (numberIn(body, 'expiresIn') ?? DEFAULT_EXPIRY_SEC) * 1000 };
+  if (!isObject(body) || deviceCode === undefined || userCode === undefined || verificationUri === undefined || !URL.canParse(verificationUri)) throw new CliError('The provider did not start a sign-in.', ExitCode.UNEXPECTED, LOGIN);
+  return { deviceCode, userCode, verificationUri, intervalMs: (numberIn(body, 'interval') ?? DEFAULT_INTERVAL_SEC) * 1000, expiresMs: (numberIn(body, 'expires_in') ?? DEFAULT_EXPIRY_SEC) * 1000 };
 };
 
-/** Polls until the provider approves. Time is counted in the waits it asked for, so a machine that slept through the code still gets one poll that says it expired. */
-const awaitSignIn = async (deps: RunDeps, server: string, provider: string, device: Device): Promise<SignIn> => {
+/** Polls the provider's token route until the operator approves, and returns the provider's token. Time is counted in the waits asked for, so a machine that slept through the code still gets one poll that says it expired. */
+const awaitToken = async (deps: RunDeps, provider: Provider, config: ProviderConfig, device: Device, masker: Masker): Promise<string> => {
   let { intervalMs } = device;
+  const form: Array<[string, string]> = [['client_id', config.clientId], ['device_code', device.deviceCode], ['grant_type', DEVICE_GRANT]];
+  if (config.clientSecret !== undefined) form.push(['client_secret', config.clientSecret]);
   for (let waited = 0; waited < device.expiresMs; waited += intervalMs) {
     await deps.sleep(intervalMs);
-    const reply = await ask(deps, LOGIN, server, '/v1/login/poll', { body: { provider, deviceCode: device.deviceCode } });
-    if (reply.status !== 200) throw refusal(LOGIN, reply);
-    const { body } = reply;
-    if (!isObject(body)) throw new CliError('The pool answered a sign-in poll with no body.', ExitCode.UNEXPECTED, LOGIN);
-    if (textIn(body, 'status') === 'ok') {
-      const signIn = signInOf({ ...body, server });
-      if (signIn === undefined) throw new CliError('The pool answered a sign-in with no account, token, or signing key.', ExitCode.UNEXPECTED, LOGIN);
-      return signIn;
+    const { body } = await askProvider(deps, provider.tokenUrl, form, masker);
+    if (!isObject(body)) throw new CliError('The provider answered a sign-in poll with no body.', ExitCode.UNEXPECTED, LOGIN);
+    const accessToken = textIn(body, 'access_token');
+    if (accessToken !== undefined) return accessToken;
+    const error = textIn(body, 'error') ?? 'no_token';
+    if (error === 'slow_down') intervalMs += SLOW_DOWN_MS;
+    else if (error === 'expired_token') break;
+    else if (error !== 'authorization_pending') {
+      const title = `The provider refused the sign-in: ${error}.`;
+      throw new CliError(title, ExitCode.AUTH, LOGIN, { code: 'login_refused', title });
     }
-    if (Reflect.get(body, 'slowDown') === true) intervalMs += SLOW_DOWN_MS;
   }
   const title = 'The sign-in code expired. Run oars pool login again.';
   throw new CliError(title, ExitCode.AUTH, LOGIN, { code: 'EXPIRED_TOKEN', title });
 };
 
-/** `oars pool login`: the provider's device flow through the pool, which keeps the provider's token and hands back its own. */
+/**
+ * `oars pool login` (spec Section 3): the device flow runs here, against the provider, and the pool sees only the provider's token, once, and answers its own credential. Every request prints before it is sent, with the device code, the provider's token,
+ * and the credential masked as `<credential: n bytes>`. A client ID, scope, grant type, and Google's `client_secret` print as they are: none is secret.
+ */
 export const poolLogin = async (deps: RunDeps, options: { server?: string | undefined; provider?: string | undefined }): Promise<Outcome> => {
   const { storeDir } = runtimeOf(deps);
   const server = poolServer(deps.env, LOGIN, options.server);
   const { provider } = options;
-  if (provider === undefined || !POOL_PROVIDERS.some((name) => name === provider)) throw usage(`The provider is one of ${POOL_PROVIDERS.join(', ')}.`, LOGIN);
+  const flow = PROVIDER_FLOWS.get(provider ?? '');
+  if (provider === undefined || flow === undefined) throw usage(`The provider is one of ${POOL_PROVIDERS.join(', ')}.`, LOGIN);
+  const config = configOf(deps.env, flow);
   const saved = await loadSignIns(storeDir, LOGIN);
-  const device = deviceOf(await ask(deps, LOGIN, server, '/v1/login/start', { body: { provider } }));
+  const masker = new Masker();
+  const device = deviceOf(await askProvider(deps, flow.deviceUrl, [['client_id', config.clientId], ['scope', flow.scope]], masker));
+  masker.add(device.deviceCode);
   deps.io.stderr(`To sign in, open ${device.verificationUri}\nand confirm the code ${device.userCode}\n`);
   await deps.openBrowser(device.verificationUri).catch(() => {
     deps.io.stderr('Could not open a browser; open the link above yourself.\n');
   });
-  const signIn = await awaitSignIn(deps, server, provider, device);
+  const accessToken = await awaitToken(deps, flow, config, device, masker);
+  masker.add(accessToken);
+  const reply = await ask(deps, LOGIN, server, '/v1/login', { body: { provider, token: accessToken }, show: masker });
+  if (reply.status !== 200) throw refusal(LOGIN, reply);
+  const signIn = signInOf(isObject(reply.body) ? { ...reply.body, server } : undefined);
+  if (signIn === undefined) throw new CliError('The pool answered a sign-in with no account, token, or signing key.', ExitCode.UNEXPECTED, LOGIN);
+  masker.add(signIn.token);
   const known = saved.find((entry) => entry.server === server);
   // The key is trusted once, here, and never replaced by a later login: a server that swaps it could otherwise sign anything it likes.
   if (known !== undefined && known.signingKey.x !== signIn.signingKey.x) throw new CliError(`${server} now signs with a different key than the one pinned at your first login. Nothing was saved. If the pool really did change its key, remove ${server} from ${signInsFile(storeDir)} and sign in again.`, ExitCode.AUTH, LOGIN, { code: 'signing_key_changed', title: 'The pool signing key changed.' });
