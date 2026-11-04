@@ -3,7 +3,7 @@
 // the term file is missing or empty (fail closed). The term list is a local file and never lives in this repository; nothing here
 // prints, logs, or returns a term or a line of a transcript, only counts and session ids.
 import { createReadStream, type Dirent } from 'node:fs';
-import { chmod, lstat, mkdir, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { chmod, lstat, mkdir, readdir, readFile, realpath, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { createInterface } from 'node:readline';
 import type { Outcome } from '../cli.js';
@@ -91,10 +91,12 @@ const badLink = async (path: string, kind: Kind): Promise<boolean> => {
 };
 
 /**
- * A link is followed, as the main file's `stat` follows one; a link that leads nowhere or to the wrong kind is a bad entry, and so is a folder that cannot be listed.
- * The walk always finishes and `found` holds every transcript it reached, so the verdict does not depend on the listing order (V5); true when any entry was bad.
+ * A link is followed, as the main file's `stat` follows one; a link that leads nowhere or to the wrong kind is a bad entry, and so is a folder that cannot be listed
+ * and a folder reached a second time (a link back into a folder already walked, which would loop and count a transcript once per pass).
+ * The walk goes on past every bad entry and `found` holds every transcript it reached, so the verdict does not depend on the listing order (V5); true when any entry was bad.
+ * `seen` holds the real path of every folder entered.
  */
-const jsonlUnder = async (dir: string, found: string[]): Promise<boolean> => {
+const jsonlUnder = async (dir: string, found: string[], seen: Set<string>): Promise<boolean> => {
   let bad = false;
   for (const entry of await entriesOf(dir)) {
     const path = join(dir, entry.name);
@@ -106,7 +108,13 @@ const jsonlUnder = async (dir: string, found: string[]): Promise<boolean> => {
     const target = entry.isSymbolicLink() ? await stat(path) : entry;
     if (target.isDirectory()) {
       try {
-        if (await jsonlUnder(path, found)) bad = true;
+        const real = await realpath(path);
+        if (seen.has(real)) {
+          bad = true;
+          continue;
+        }
+        seen.add(real);
+        if (await jsonlUnder(path, found, seen)) bad = true;
       } catch {
         bad = true;
       }
@@ -140,7 +148,10 @@ const filesIn = async (root: string, source: Source, project: string, session: s
   const subagents = join(folder, session, 'subagents');
   const agents: string[] = [];
   try {
-    if (await jsonlUnder(subagents, agents)) unreadable = true;
+    // The folder itself is seen first, so a link back to it is a repeat; a folder that is not there has no real path and nothing to walk.
+    const seen = new Set<string>();
+    seen.add(await realpath(subagents).catch(() => subagents));
+    if (await jsonlUnder(subagents, agents, seen)) unreadable = true;
   } catch {
     unreadable = true;
   }
