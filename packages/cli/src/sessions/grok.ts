@@ -243,7 +243,16 @@ export const grokLines = (text: string, fallbackId: string, summary: Obj, usage:
       if (id === undefined || title === undefined) continue;
       const current = response(when);
       const input = isObj(update.rawInput) ? update.rawInput : {};
-      const block: Obj = { type: 'tool_use', id, name: title.includes('__') ? `mcp__${title}` : title, input };
+      // An MCP tool is reached two ways: titled `<server>__<tool>` itself, or through the `use_tool` wrapper, whose `rawInput.tool_name` is the qualified name
+      // (use_tool/input.rs:19-20, use_tool/mod.rs:308) and `tool_input` its arguments.
+      const target = title === 'use_tool' ? str(input.tool_name) : undefined;
+      const wrapped = target !== undefined && target.includes('__');
+      const block: Obj = {
+        type: 'tool_use',
+        id,
+        name: wrapped ? `mcp__${target}` : title.includes('__') ? `mcp__${title}` : title,
+        input: wrapped ? (isObj(input.tool_input) ? input.tool_input : {}) : input,
+      };
       const shell = SHELL_TOOLS.has(title) || update.kind === 'execute';
       const paths = EDIT_TOOLS.has(title) ? requestedPaths(input) : [];
       if (shell) {

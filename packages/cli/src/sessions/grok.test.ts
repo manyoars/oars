@@ -205,6 +205,22 @@ describe('the Grok Build reader', () => {
     expect(out.tools.map((tool) => [tool.tool, tool.status])).toEqual([['mcp__oars__oars_recall', 'ok'], ['Bash', 'error'], ['grep', 'none']]);
   });
 
+  it('attributes an MCP call made through the use_tool wrapper to its server, as mcp.call', () => {
+    // The model reaches an MCP tool through `use_tool` (17-sessions.md:42), so the call is titled `use_tool` (tool_calls.rs:1487, use_tool/mod.rs:15) and the target
+    // is `rawInput.tool_name`, qualified `server__tool` (use_tool/input.rs:19-20, use_tool/mod.rs:308), with its arguments in `tool_input`.
+    const out = extractOf([
+      prompt(1, 'go'),
+      call(2, 'c1', 'use_tool', { tool_name: 'linear__save_issue', tool_input: { title: 'x' } }, 'other'),
+      finish(3, 'c1', 'completed'),
+      call(4, 'c2', 'use_tool', { tool_name: 'nounderscores', tool_input: {} }, 'other'),
+      finish(5, 'c2', 'completed'),
+      call(6, 'c3', 'use_tool', { tool_name: 'linear__list', tool_input_file: '/tmp/in.json' }, 'other'),
+      finish(7, 'c3', 'completed'),
+    ]);
+    expect(out.tools.map((tool) => tool.tool)).toEqual(['mcp__linear__save_issue', 'use_tool', 'mcp__linear__list']);
+    expect(out.tools.map((tool) => tool.steps?.[0]?.action)).toEqual(['mcp.call', 'other', 'mcp.call']);
+  });
+
   it('skips torn lines, lines of an unknown shape, an update with no id, and a completion with no known call, and counts the torn ones', () => {
     const text = `${asText([prompt(1, 'hi'), line(S(2), { sessionUpdate: 'plan', entries: [] }), call(3, '', 'bash'), finish(4, 'ghost', 'completed')])}\n{torn\n[1]\n`;
     expect(grokBadLines(text)).toEqual(['{torn']);
