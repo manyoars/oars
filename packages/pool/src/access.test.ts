@@ -133,8 +133,8 @@ describe('the access flag over the routes', () => {
     await inPool(async (pool) => {
       const { token, account } = await depositor(pool, '3008', 'cursor');
       expect(await fetches(pool, token, 2)).toEqual([200, 200]);
-      // The same id again, now from a harness whose batch does not count at the ingest tier.
-      expect((await pool.post('/v1/deposits', sampleSkeleton('0000000000003008'), token)).status).toBe(201);
+      // The same id again on another day, now from a harness whose batch does not count at the ingest tier: it moves cells, so the date is judged again.
+      expect((await pool.post('/v1/deposits', sampleSkeleton('0000000000003008', undefined, '2026-11-02'), token)).status).toBe(201);
       const row = await (await pool.db()).prepare('SELECT counted_at AS counted FROM deposits WHERE account = ?').bind(account).first();
       expect(fieldOf(row, 'counted')).toBeNull();
       expect(await fetches(pool, token, 2)).toEqual([200, 429]);
@@ -144,14 +144,15 @@ describe('the access flag over the routes', () => {
 
   it('leaves the flag and the date alone when a resend writes no cell increment', async () => {
     await inPool(async (pool) => {
-      const { token, account } = await depositor(pool, '3009', 'cursor');
+      const { token, account } = await depositor(pool, '3009');
+      const sent = sampleSkeleton('0000000000003009');
+      // A claude-code batch does not count at the ingest tier, so its row is raised by hand, as the root check will (Brief 2).
+      await (await pool.db()).prepare("UPDATE deposits SET tier = 'committed', counted_at = ? WHERE account = ?").bind(Date.now() - DAY_MS, account).run();
       const before = await (await pool.db()).prepare('SELECT counted_at AS counted FROM deposits WHERE account = ?').bind(account).first();
       expect(typeof fieldOf(before, 'counted')).toBe('number');
       expect(await fetches(pool, token, 2)).toEqual([200, 200]);
-      // The same id with no prompt and every tool's steps emptied: the route takes it (it holds a tool), but it derives no cell, so there is no increment for the flag to read. A prompt would add a class cell.
-      const sent = sampleSkeleton('0000000000003009', undefined, undefined, 'cursor');
-      const bare: SessionSkeleton = { ...sent, transcripts: sent.transcripts.map((transcript) => ({ ...transcript, prompts: [], tools: transcript.tools.map((tool) => ({ ...tool, steps: [] })) })) };
-      expect((await pool.post('/v1/deposits', bare, token)).status).toBe(201);
+      // The identical batch again nets no increment: nothing was written, so the date it had stays and the account keeps its access.
+      expect((await pool.post('/v1/deposits', sent, token)).status).toBe(201);
       const after = await (await pool.db()).prepare('SELECT counted_at AS counted FROM deposits WHERE account = ?').bind(account).first();
       expect(fieldOf(after, 'counted')).toBe(fieldOf(before, 'counted'));
       expect(await fetches(pool, token, 2)).toEqual([200, 200]);

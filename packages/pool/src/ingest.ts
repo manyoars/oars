@@ -4,7 +4,7 @@ import { bucketFields, deriveCells } from '../../cli/src/sessions/cells.js';
 import type { Motif } from '../../cli/src/sessions/motif.js';
 import { parseSkeleton, type SessionSkeleton } from '../../cli/src/sessions/pool-wire.js';
 import { storeOf } from './derive.js';
-import type { Bound, Env } from './http.js';
+import { fieldOf, type Bound, type Env } from './http.js';
 
 export interface CellRow {
   key: string;
@@ -69,18 +69,31 @@ const netOf = <Row extends { key: string }>(next: ReadonlyMap<string, Row>, prev
 const CELL_FIELDS: readonly (keyof CellRow)[] = ['sessions', 'ok', 'failed', 'tokens', 'durationMs'];
 const STRATUM_FIELDS: readonly (keyof StratumRow)[] = ['sessions'];
 
-/** The batch an account sent under this id before, or none: a stored row that no longer parses is one that stopped counting, so there is nothing of it to take back. */
-export const previousOf = async (env: Env, account: string, id: string): Promise<Increments | undefined> => {
-  const held = await env.DB.prepare('SELECT skeleton FROM deposits WHERE account = ? AND id = ?').bind(account, id).first();
-  const text: unknown = typeof held === 'object' && held !== null ? Reflect.get(held, 'skeleton') : undefined;
-  if (typeof text !== 'string') return undefined;
+/** The row an account holds under this id: the mark of the write that set it, and the increments that write made, or none when the stored skeleton no longer parses (see `previousOf`). */
+export interface Previous {
+  ingest: string;
+  increments: Increments | undefined;
+}
+
+/**
+ * The batch an account sent under this id before, or none. A stored row that no longer parses gives no increments to take back, but its increments are still in the cells (they are
+ * not derived again on a read), so a resend over it adds the whole batch a second time: a limit the stored form has until the ledger is rebuilt by a later change.
+ */
+export const previousOf = async (env: Env, account: string, id: string): Promise<Previous | undefined> => {
+  const held = await env.DB.prepare('SELECT skeleton, ingest FROM deposits WHERE account = ? AND id = ?').bind(account, id).first();
+  const text = fieldOf(held, 'skeleton');
+  const ingest = fieldOf(held, 'ingest');
+  if (typeof text !== 'string' || typeof ingest !== 'string') return undefined;
   try {
     const parsed = parseSkeleton(JSON.parse(text));
-    return parsed.ok ? incrementsOf(parsed.skeleton) : undefined;
+    return { ingest, increments: parsed.ok ? incrementsOf(parsed.skeleton) : undefined };
   } catch {
-    return undefined;
+    return { ingest, increments: undefined };
   }
 };
+
+/** The cells a write of `next` over `previous` changes: how many increments ingest writes, which is none for a batch sent again unchanged. */
+export const netCellCount = (next: Increments, previous: Increments | undefined): number => netOf(next.cells, previous?.cells ?? new Map<string, CellRow>(), CELL_FIELDS).length;
 
 const GUARD = 'EXISTS (SELECT 1 FROM deposits WHERE account = ? AND id = ? AND ingest = ?)';
 
