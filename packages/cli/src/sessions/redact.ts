@@ -22,9 +22,10 @@ export const PATTERNS: ReadonlyArray<readonly [RegExp, string]> = [
 
 const EMAIL = /[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+/g;
 // A pinned alias, `foo@npm:bar@1.0.0` or `jsr:@scope/bar@1.0.0`, ends in `bar@1.0.0`, which EMAIL reads as an address. Digits and dots after
-// the `@` are a version, never a domain, so that one shape right after `npm:` or `jsr:` (and an optional scope) is kept; any other address stays masked.
+// the `@` are a version, never a domain, so that one shape right after `npm:` or `jsr:` (and an optional scope) is kept. An all-numeric four-part tail is an
+// IP address, a real host, so it stays masked (as in `extract.ts` `VERSIONED`); any other address stays masked too.
 const ALIAS_PREFIX = /(?<![A-Za-z0-9])(?:npm|jsr):(?:@[A-Za-z0-9._~-]+\/)?$/;
-const DOTTED_VERSION = /@\d+(?:\.\d+)+$/;
+const DOTTED_VERSION = /@(?!\d+\.\d+\.\d+\.\d+$)\d+(?:\.\d+)+$/;
 const TOKEN = /[A-Za-z0-9+_=-]{24,}/g;
 
 const escapeRegExp = (text: string): string => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');

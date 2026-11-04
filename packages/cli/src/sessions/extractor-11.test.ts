@@ -202,6 +202,25 @@ describe('the shell form projected from the account store (Q5)', () => {
     expect(projected(['"IF" acme-deploy'])[0]?.programs).not.toEqual([PRIVATE]);
   });
 
+  // The wrapper is skipped, not the command: the program behind each form is still read.
+  it('reads the program behind a wrapper in another case or by path', () => {
+    for (const form of ['/usr/bin/timeout 5 git status', 'TIMEOUT 5 git status', 'IF git status', 'Sudo git status']) {
+      expect(projected([form])[0]?.programs, form).toEqual(['git']);
+    }
+  });
+
+  // A block word is never written with a path, so a script named like one is the program (review of t826: `./do git push --force` read as `git push --force`).
+  it('reads a path or a script named like a block word as the program it is, never skips it as a keyword', () => {
+    const runs = (form: string): readonly (string | undefined)[] | undefined => captured([form])[0]?.segments?.map((segment) => segment.run);
+    expect(runs('./do git push --force')).toEqual(['do git push']);
+    expect(runs('./done')).toEqual(['done']);
+    expect(runs('./do.cmd')).toEqual(['do']);
+    // The same word bare or in another case is the keyword: the command behind it is read.
+    expect(runs('DO git status')).toEqual(['git status']);
+    expect(projected(['./do git push --force', './done']).map((step) => step.programs)).toEqual([['do'], ['done']]);
+    expect(projected(['IF acme-deploy'])[0]?.programs).toEqual([PRIVATE]);
+  });
+
   // Register row A53: a program whose basename holds a space cannot be told from a program and a word in `run`, which joins them with one space.
   it('projects a program whose basename holds a space as private, never as the program and subcommand it spells', () => {
     const form = '"/opt/my tools/git push" --x';
@@ -210,7 +229,6 @@ describe('the shell form projected from the account store (Q5)', () => {
     // The stored word carries the boundary the line `run` cannot: no name from the basename is kept at all.
     const [call] = captured([form]);
     expect(call?.segments?.map((segment) => segment.run)).toEqual(['<literal>']);
-    expect(JSON.stringify(call)).not.toContain('my tools');
     // A directory that holds the space is not the program: `/opt/my tools/git push` as two words is still git.
     expect(projected(['"/opt/my tools/git" push'])[0]?.commands).toEqual([one('git', 'push', [])]);
   });

@@ -198,6 +198,11 @@ describe('pulls: redaction', () => {
     expect(pullsOf('npm install alias@npm:foo@1.2.3 me@acme.io')).toEqual(['npm:foo@@1.2.3']);
     expect(pullsOf('npm install alias@npm:me@acme.io')).toEqual([]);
   });
+  // A prerelease after the alias is masked as an email, so the whole pull is lost (before the alias was stripped it was `npm:alias`): pooled less, never a wrong name.
+  it('drops the pull of an npm alias pinned to a prerelease, which the redactor masks', () => {
+    expect(pullsOf('npm install alias@npm:foo@1.0.0-beta.1')).toEqual([]);
+    expect(pullsOf('npm install alias@npm:foo@10.0.0.5')).toEqual([]);
+  });
   it('drops a name that is all mask, which says nothing', () => {
     expect(pullsOf('npm install ghp_abcdefghijklmnopqrstuvwxyz012345 foo')).toEqual(['npm:foo']);
   });

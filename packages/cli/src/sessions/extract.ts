@@ -769,8 +769,9 @@ const assignsCommand = (words: readonly ShellWord[], at: number): boolean => {
 };
 
 /**
- * The words from the command's real program on. A block word or wrapper is known by its program name, as `programOf` reads it: `IF`, `TIMEOUT 5`, and
- * `/usr/bin/timeout 5` are the wrapper they spell, so the private program behind them is the one read (register row A53).
+ * The words from the command's real program on. A block word is known by its word in any case (`IF`), and a wrapper by its program name as `programOf`
+ * reads it: `TIMEOUT 5` and `/usr/bin/timeout 5` are the wrapper they spell. A shell keyword is never written with a path, so `./do` and `./done` are
+ * programs. The private program behind a block word or wrapper is the one read (register row A53).
  */
 const afterPrelude = (words: readonly ShellWord[]): readonly ShellWord[] => {
   let at = 0;
@@ -779,7 +780,7 @@ const afterPrelude = (words: readonly ShellWord[]): readonly ShellWord[] => {
     if (word === undefined) return [];
     if (word.quoted) return words.slice(at);
     const name = programOf(word) ?? word.text;
-    if (BLOCK_WORDS.has(name) || ASSIGNMENT.test(word.text)) at += 1;
+    if (BLOCK_WORDS.has(word.text.toLowerCase()) || ASSIGNMENT.test(word.text)) at += 1;
     else if (assignsCommand(words, at)) at += 2;
     else if (WRAPPERS.has(name) || name === 'timeout') {
       const isTimeout = name === 'timeout';
@@ -935,7 +936,7 @@ const ARCHIVE = /\.(?:whl|tgz|zip|tar\.gz)$/;
 const isUrl = (text: string): boolean => text.includes('://');
 const namesNothing = (text: string): boolean => text === '' || text.includes('$') || /^%.*%$/.test(text) || ONLY_MASKS.test(text);
 const HOLDS_MASK = /<(?:secret|email|org-domain)>/;
-/** A version with a mask inside says only that something was masked: `alias@npm:foo@1.2.3` reads as `npm:<email>`. It is no version. */
+/** A version with a mask inside says only that something was masked: `alias@npm:foo@1.2.3-beta.1` reads as `npm:<email>`. It is no version. */
 const versionOf = (text: string): string | null => (text === '' || text.includes('$') || HOLDS_MASK.test(text) ? null : text);
 
 /** `name@version`, keeping a leading `@` with the name. */

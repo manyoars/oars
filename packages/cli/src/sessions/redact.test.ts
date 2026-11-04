@@ -9,7 +9,7 @@ describe('the email mask and a pinned package alias', () => {
     expect(mask('npm install foo@npm:bar@1.0.0')).toBe('npm install foo@npm:bar@1.0.0');
     expect(mask('npm install npm:@luca/cases@1.0.0')).toBe('npm install npm:@luca/cases@1.0.0');
     expect(mask('pnpm add jsr:@luca/cases@1.0.0')).toBe('pnpm add jsr:@luca/cases@1.0.0');
-    expect(mask('pnpm add jsr:cases@1.2.3.4')).toBe('pnpm add jsr:cases@1.2.3.4');
+    expect(mask('pnpm add jsr:cases@1.2.3')).toBe('pnpm add jsr:cases@1.2.3');
   });
 
   it('still masks a real address on the same line, before or after the alias', () => {
@@ -19,6 +19,7 @@ describe('the email mask and a pinned package alias', () => {
 
   it('still masks an address after npm: or jsr:, and a version that is not plain digits', () => {
     expect(mask('npm install npm:me@acme.io')).toBe('npm install npm:<email>');
+    expect(mask('npm install npm:me@10.0.0.5')).toBe('npm install npm:<email>');
     expect(mask('pnpm add jsr:@luca/me@acme.io')).toBe('pnpm add jsr:@luca/<email>');
     expect(mask('npm install foo@npm:bar@1.0.0-beta.1')).toBe('npm install foo@npm:<email>');
     expect(mask('npm install foo@npm:bar@1.0.0.acme.io')).toBe('npm install foo@npm:<email>');
