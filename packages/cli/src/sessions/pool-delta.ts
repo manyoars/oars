@@ -1,3 +1,7 @@
+import { appendFile, mkdir, readFile } from 'node:fs/promises';
+import { join } from 'node:path';
+import { isMissing } from './pool-outbox.js';
+import { contentHash } from './read.js';
 import { bucketOf, PACKAGE_REGISTRIES, type BucketKind, type DeltaEntry, type SessionRecords } from './pool-wire.js';
 import { PRIVATE, PUBLIC_PACKAGES, publicEffort } from './public-vocabulary.js';
 
@@ -160,4 +164,29 @@ export const deltasOf = (before: readonly SessionRecords[], after: readonly Sess
   }
   for (const { name, registry, move } of moves.values()) entries.push(entryOf(name, 'package', 'removed', 'callsPerSession', signed('count', move), registry));
   return entries.sort(order);
+};
+
+const MARKS_FILE = 'deltas-sent.log';
+
+/**
+ * The once-only mark of a delta: a hash of the account, the entry without the size of its move, and the session that filled its window. The move is left out so a recount of the same windows is the same
+ * delta, and the filler is in so a later pair that shows the same change is a new one.
+ */
+export const deltaMark = (account: string, { deltaKind, field, name, registry, metric }: DeltaEntry, filler: string): string => contentHash([account, deltaKind, field, name, registry, metric, filler]);
+
+/** The marks of the deltas this outbox has already carried in a written batch. A folder with no log holds none; a log that cannot be read is an error, not an empty one, so a delta is never built twice by mistake. */
+export const sentDeltas = async (outbox: string): Promise<Set<string>> => {
+  try {
+    return new Set((await readFile(join(outbox, MARKS_FILE), 'utf8')).split('\n').filter((line) => line !== ''));
+  } catch (error) {
+    if (isMissing(error)) return new Set();
+    throw error;
+  }
+};
+
+/** Marks deltas as sent, one line each. The caller writes this only after the batch that carries them is written, so a deposit that stopped before it builds them again. */
+export const markDeltasSent = async (outbox: string, marks: readonly string[]): Promise<void> => {
+  if (marks.length === 0) return;
+  await mkdir(outbox, { recursive: true });
+  await appendFile(join(outbox, MARKS_FILE), marks.map((mark) => `${mark}\n`).join(''), 'utf8');
 };

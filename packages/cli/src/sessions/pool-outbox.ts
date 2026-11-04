@@ -120,7 +120,7 @@ export const writeBatch = async (outbox: string, key: string, batch: unknown, st
   return { hash, folder };
 };
 
-const isMissing = (error: unknown): boolean => error instanceof Error && 'code' in error && error.code === 'ENOENT';
+export const isMissing = (error: unknown): boolean => error instanceof Error && 'code' in error && error.code === 'ENOENT';
 
 /** A path that is missing, or has a file where a folder should be, holds nothing. */
 const isAbsent = (error: unknown): boolean => isMissing(error) || (error instanceof Error && 'code' in error && error.code === 'ENOTDIR');
