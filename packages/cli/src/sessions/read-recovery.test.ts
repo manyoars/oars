@@ -65,6 +65,11 @@ describe('recovery', () => {
     // A failed week cell of the action exists, so the drop is named for the frame's missing day and not for a missing cell.
     const outcome = recoveryOf({ pool: poolFrom(undated), store: { ...undated, errors: [error('s1', SIG, { ts: null })] } });
     expect(outcome.dropped).toEqual({ 'no-cell-of-action': 0, 'no-failed-cell-of-action': 0, 'no-failed-cell-on-day': 0, 'frame-has-no-day': 1 });
+    // A step after the failure changes nothing: a week cell exists at the unknown week, but a frame of no day names no week to look in.
+    const stepped = { ...undated, tools: [...undated.tools, tool('s1', 1, 'Edit')] };
+    const withNext = recoveryOf({ pool: poolFrom(stepped), store: { ...stepped, errors: [error('s1', SIG, { ts: null, next: ['Edit'] })] } });
+    expect(withNext.reads).toEqual([]);
+    expect(withNext.dropped).toEqual({ 'no-cell-of-action': 0, 'no-failed-cell-of-action': 0, 'no-failed-cell-on-day': 0, 'frame-has-no-day': 1 });
   });
 
   it('finds the call of an error past midnight on its prompt frame day, and keeps the error its own day', () => {

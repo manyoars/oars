@@ -82,7 +82,8 @@ export const recoveryOf = ({ pool, store }: FamilyInput): RecoveryOutcome => {
       for (const day of new Set([utcDay(error.ts) ?? UNKNOWN, frameDayOf(error)])) {
         dated ||= day !== UNKNOWN;
         for (const cell of cellsAt.get(`${shapeOf([failedAction])}/${day}`) ?? []) if (cell.failed > 0) inputs.add(cell);
-        if (next !== undefined) for (const cell of weeksAt.get(`${shapeOf([failedAction, next])}/${weekStartOf(day)}`) ?? []) inputs.add(cell);
+        // A frame of no day names no week, though a week cell sits at the unknown week.
+        if (next !== undefined && day !== UNKNOWN) for (const cell of weeksAt.get(`${shapeOf([failedAction, next])}/${weekStartOf(day)}`) ?? []) inputs.add(cell);
       }
       for (const tool of error.next) {
         const action = actionIn(session(error), tool);
