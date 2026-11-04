@@ -272,7 +272,7 @@ const awaitToken = async (deps: RunDeps, provider: Provider, config: ProviderCon
 };
 
 /**
- * `oars pool login` (spec Section 3): the device flow runs here, against the provider, and the pool sees only the provider's token, once, and answers its own credential. Every request prints before it is sent, with the device code, the provider's token,
+ * `oars pool login` (spec Section 1.4): the device flow runs here, against the provider, and the pool sees only the provider's token, once, and answers its own credential. Every request prints before it is sent, with the device code, the provider's token,
  * and the credential masked as `<credential: n bytes>`. A client ID, scope, grant type, and Google's `client_secret` print as they are: none is secret.
  */
 export const poolLogin = async (deps: RunDeps, options: { server?: string | undefined; provider?: string | undefined }): Promise<Outcome> => {
@@ -296,7 +296,6 @@ export const poolLogin = async (deps: RunDeps, options: { server?: string | unde
   if (reply.status !== 200) throw refusal(LOGIN, reply);
   const signIn = signInOf(isObject(reply.body) ? { ...reply.body, server } : undefined);
   if (signIn === undefined) throw new CliError('The pool answered a sign-in with no account, token, or signing key.', ExitCode.UNEXPECTED, LOGIN);
-  masker.add(signIn.token);
   const known = saved.find((entry) => entry.server === server);
   // The key is trusted once, here, and never replaced by a later login: a server that swaps it could otherwise sign anything it likes.
   if (known !== undefined && known.signingKey.x !== signIn.signingKey.x) throw new CliError(`${server} now signs with a different key than the one pinned at your first login. Nothing was saved. If the pool really did change its key, remove ${server} from ${signInsFile(storeDir)} and sign in again.`, ExitCode.AUTH, LOGIN, { code: 'signing_key_changed', title: 'The pool signing key changed.' });
@@ -500,7 +499,7 @@ const cappedError = (deps: RunDeps, reply: Reply, kept: boolean): CliError => {
   const retryAfter = reply.headers.get('retry-after');
   const wait = retryAfter === null ? undefined : waitWords(retryAfter, deps.now());
   const when = wait === undefined ? 'The pool did not say when; it counts fetches per ISO week, so try again next week.' : `Try again ${wait}.`;
-  const title = `The pool's weekly fetch cap is used up. ${when} ${kept ? 'The bundle already on disk is untouched.' : 'No bundle is kept yet.'}`;
+  const title = `The pool's weekly fetch cap is used up. ${when} ${kept ? 'The bundle already on disk is untouched.' : 'No verified bundle is kept.'}`;
   return new CliError(title, ExitCode.CAPPED, FETCH, { code: 'fetch_cap', title, status: 429 }, undefined, { retryAfter });
 };
 

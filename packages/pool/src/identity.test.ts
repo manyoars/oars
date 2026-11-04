@@ -59,7 +59,9 @@ describe('the pseudonym', () => {
     for (const held of [user.id, user.login, user.email, accessToken, 'access-device', String(fieldOf(github.json, 'token'))]) expect(stored).not.toContain(held);
   });
 
-  it('sends the provider no client id and no secret: the pool holds none', () => {
+  it('sends the provider no client id and no secret: the pool holds none', async () => {
+    await pool.signIn('github', stubUser('555'));
+    expect(pool.stub.calls.length).toBeGreaterThan(0);
     for (const call of pool.stub.calls) expect(call.body).toBe('');
   });
 });
