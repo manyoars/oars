@@ -295,6 +295,30 @@ describe('clusters over the cells of a read', () => {
     });
   }, 60_000);
 
+  // The tool-day read is a day's cells, so its floor counts within its day like a live read's: five accounts on D serve D, and one account on D+1 beside them serves nothing for D+1.
+  it('five accounts on a day serve its tool-day reads at 5 clusters, and one account on the next day serves none for that day', async () => {
+    await inFreshPool(async (spread) => {
+      for (const id of ['3601', '3602', '3603', '3604', '3605']) await depositOn(spread, id, ['2026-11-02']);
+      const token = await depositOn(spread, '3606', ['2026-11-03']);
+      const toolDay = (await readsIn(spread, token)).reads.filter((read) => read.family === 'tool-day');
+      expect(toolDay.length).toBeGreaterThan(0);
+      expect([...new Set(toolDay.map((read) => fieldOf(read.slice, 'day')))]).toEqual(['2026-11-02']);
+      for (const read of toolDay) {
+        expect(read.clusters).toBe(5);
+        expect(read.inputs.length).toBeGreaterThan(0);
+        expect(fieldOf(read.value, 'steps')).toBeGreaterThan(0);
+      }
+    });
+  }, 60_000);
+
+  it('four accounts on a day serve no tool-day read', async () => {
+    await inFreshPool(async (spread) => {
+      for (const id of ['3701', '3702', '3703']) await depositOn(spread, id, ['2026-11-02']);
+      const token = await depositOn(spread, '3704', ['2026-11-02']);
+      expect((await readsIn(spread, token)).reads.filter((read) => read.family === 'tool-day')).toEqual([]);
+    });
+  }, 60_000);
+
   it('one account on several days stays one account', async () => {
     await inFreshPool(async (spread) => {
       // Four days, so a count per cell would reach 5 with the one account that follows.
