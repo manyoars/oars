@@ -235,7 +235,7 @@ describe('claudeEvaluator', () => {
 });
 
 describe('oars sessions gold arms', () => {
-  // Under V15 a draw needs a term file (none excludes every session): an invented term that no fixture holds.
+  // Under the exclusion rule a draw needs a term file (none excludes every session): an invented term that no fixture holds.
   const setup = () => {
     const staged = stage();
     const termsFile = join(staged.root, 'exclusion-terms.txt');

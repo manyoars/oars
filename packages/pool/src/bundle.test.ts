@@ -24,7 +24,7 @@ const depositor = async (id: string, stack: { languages: string[] } = { language
 
 const VERSION = '2.1.314';
 
-const pulled = async (token: string, version = VERSION): Promise<Bundle> => {
+const fetched = async (token: string, version = VERSION): Promise<Bundle> => {
   const { status, json } = await pool.get(`/bundle/claude-code/${version}/${VOCAB_VERSION}`, token);
   expect(status).toBe(200);
   const verified = await verifyBundle(json, pool.signingKey(), 'claude-code', version);
@@ -35,25 +35,25 @@ const pulled = async (token: string, version = VERSION): Promise<Bundle> => {
 describe('a bundle over five accounts', () => {
   it('serves nothing at four accounts and a read at the fifth, with clusters counted by account', async () => {
     const first = await depositor('1001');
-    expect((await pulled(first)).reads).toEqual([]);
-    expect((await pulled(first)).cells).toEqual([]);
+    expect((await fetched(first)).reads).toEqual([]);
+    expect((await fetched(first)).cells).toEqual([]);
 
     const second = await depositor('1002');
-    expect((await pulled(second)).reads).toEqual([]);
+    expect((await fetched(second)).reads).toEqual([]);
 
     // A second session from one account is still one cluster.
     expect((await pool.post('/v1/deposits', sampleSkeleton('00000000000a1002'), second)).status).toBe(201);
-    expect((await pulled(second)).reads).toEqual([]);
+    expect((await fetched(second)).reads).toEqual([]);
 
     await depositor('1003');
     await depositor('1004');
-    const four = await pulled(first);
+    const four = await fetched(first);
     expect(four.reads).toEqual([]);
     expect(four.cells).toEqual([]);
     expect(four.motifs).toEqual([]);
 
     await depositor('1008');
-    const bundle = await pulled(first);
+    const bundle = await fetched(first);
     expect(bundle.reads.length).toBeGreaterThan(0);
     for (const read of bundle.reads) expect(read.clusters).toBe(5);
     expect(new Set(bundle.reads.map((read) => read.family)).has('fit')).toBe(true);
@@ -61,7 +61,7 @@ describe('a bundle over five accounts', () => {
     for (const cell of bundle.cells) expect(cell.clusters).toBe(5);
     expect(bundle.motifs.length).toBeGreaterThan(0);
     // A bundle is one harness version's: the five accounts deposited on 2.1.314, so 2.2.0 holds none of their cells, motifs, or reads.
-    const other = await pulled(first, '2.2.0');
+    const other = await fetched(first, '2.2.0');
     expect(other.cells).toEqual([]);
     expect(other.motifs).toEqual([]);
     expect(other.reads).toEqual([]);
@@ -76,7 +76,7 @@ describe('a bundle over five accounts', () => {
 
   it('serves rule 3 strata pool-wide: a language over the floor is served, whatever the stack of the rest', async () => {
     for (const id of ['1011', '1012', '1013', '1014']) await depositor(id, { languages: ['python'] });
-    const bundle = await pulled(await depositor('1015', { languages: ['python'] }));
+    const bundle = await fetched(await depositor('1015', { languages: ['python'] }));
     expect(bundle.strata.find((cell) => cell.dimension === 'language' && cell.value === 'python')).toMatchObject({ clusters: 5 });
     expect(bundle.strata.find((cell) => cell.dimension === 'language' && cell.value === 'typescript')).toMatchObject({ clusters: 5 });
     expect(bundle.reads.length).toBeGreaterThan(0);
