@@ -144,13 +144,13 @@ export const projectKeys = (tool: string, keys: readonly string[]): ProjectedNam
 };
 
 /** The registry's own normalization (spec Section 1.3): npm lowercases, PyPI folds `-`, `_`, and `.`, crates.io folds `-` and `_`. */
-const NORMALIZE: { readonly [ecosystem: string]: (name: string) => string } = {
-  npm: (name) => name.toLowerCase(),
-  pypi: (name) => name.toLowerCase().replace(/[-_.]+/g, '-'),
-  crates: (name) => name.toLowerCase().replace(/_/g, '-'),
-  rubygems: (name) => name,
-  homebrew: (name) => name.toLowerCase(),
-};
+const NORMALIZE: ReadonlyMap<string, (name: string) => string> = new Map<string, (name: string) => string>([
+  ['npm', (name) => name.toLowerCase()],
+  ['pypi', (name) => name.toLowerCase().replace(/[-_.]+/g, '-')],
+  ['crates', (name) => name.toLowerCase().replace(/_/g, '-')],
+  ['rubygems', (name) => name],
+  ['homebrew', (name) => name.toLowerCase()],
+]);
 
 export interface ProjectedPackage {
   /** `<ecosystem>:<name>` for a seeded name, else `private`. */
@@ -164,7 +164,7 @@ export interface ProjectedPackage {
  * that merely resolves, further down the registry, projects to `private`. A version is admitted only when the snapshot lists it for that name.
  */
 export const projectPackage = (vocab: Vocabulary, ecosystem: string, name: string, version: string | null): ProjectedPackage => {
-  const normalize = NORMALIZE[ecosystem];
+  const normalize = NORMALIZE.get(ecosystem);
   const versions = normalize === undefined ? undefined : vocab.packages.get(ecosystem)?.seed.get(normalize(name));
   if (normalize === undefined || versions === undefined) return { package: PRIVATE, packageVersion: null };
   return { package: `${ecosystem}:${normalize(name)}`, packageVersion: version === null ? null : versions.has(version) ? version : PRIVATE };

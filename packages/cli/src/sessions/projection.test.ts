@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { PIPE_MAX, PRIVATE } from './public-vocabulary.js';
+import { PIPE_MAX, PRIVATE, SEED_TOP } from './public-vocabulary.js';
 import { projectHarnessVersion, projectModel, projectPackage, projectShell, projectTool } from './projection.js';
 import { makeRedactor } from './redact.js';
 import { readVocabulary } from './vocab-load.js';
@@ -59,13 +59,20 @@ describe('packages', () => {
   });
 
   it('projects any name to private where the registry publishes no download counts, and any unknown ecosystem', () => {
-    for (const ecosystem of ['go', 'maven', 'plugin', 'unknown']) expect(projectPackage(vocab, ecosystem, 'github.com/acme/widget', '1.0.0')).toEqual({ package: PRIVATE, packageVersion: null });
+    for (const ecosystem of ['go', 'maven', 'plugin', 'unknown', 'constructor', '__proto__']) expect(projectPackage(vocab, ecosystem, 'github.com/acme/widget', '1.0.0')).toEqual({ package: PRIVATE, packageVersion: null });
     expect(projectPackage(vocab, 'npm', PLANTED, '1.0.0')).toEqual({ package: PRIVATE, packageVersion: null });
   });
 
   it('seeds exactly seed_top names for a ranked ecosystem and none for the others', () => {
-    for (const ecosystem of ['npm', 'pypi', 'crates', 'rubygems', 'homebrew']) expect(vocab.packages.get(ecosystem)?.seed.size).toBe(1000);
-    for (const ecosystem of ['go', 'maven']) expect(vocab.packages.get(ecosystem)?.seed.size).toBe(0);
+    // The shipped files carry the parameter the code names, so SEED_TOP cannot drift from what the script wrote.
+    for (const ecosystem of ['npm', 'pypi', 'crates', 'rubygems', 'homebrew']) {
+      expect(vocab.packages.get(ecosystem)?.seedTop).toBe(SEED_TOP);
+      expect(vocab.packages.get(ecosystem)?.seed.size).toBe(SEED_TOP);
+    }
+    for (const ecosystem of ['go', 'maven']) {
+      expect(vocab.packages.get(ecosystem)?.seedTop).toBe(0);
+      expect(vocab.packages.get(ecosystem)?.seed.size).toBe(0);
+    }
   });
 });
 

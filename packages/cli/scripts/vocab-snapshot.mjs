@@ -276,10 +276,14 @@ const run = async () => {
     await build();
   }
   const files = readdirSync(OUT).filter((file) => file.endsWith('.json') && file !== 'manifest.json').sort();
+  // The snapshot is as old as its oldest file: an `--only` run rebuilds some files, and it must not mark the older ones fresh.
   const manifest = { snapshotDate: date, files: {} };
   for (const file of files) {
     const bytes = readFileSync(join(OUT, file));
     manifest.files[file] = { bytes: bytes.length, sha256: createHash('sha256').update(bytes).digest('hex') };
+    const fetchedAt = JSON.parse(bytes.toString('utf8')).fetchedAt;
+    if (typeof fetchedAt !== 'string') throw new Error(`${file} has no fetchedAt`);
+    if (fetchedAt < manifest.snapshotDate) manifest.snapshotDate = fetchedAt;
   }
   write('manifest.json', manifest);
 };
