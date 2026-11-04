@@ -45,18 +45,24 @@ describe('the fold and the envelope (Items 2 and 3)', () => {
     const sub = calls('m~a', 3, subDurations).map((call) => ({ ...call, steps: (call.steps ?? []).map((held) => ({ ...held, parent: MIN_TIMED_CALLS })) }));
     return store({
       sessions: [session('m', { frame: framed })],
-      subagents: [session('m~a', { parent: 'm', spawnedIn: 'm', agentType: 'Explore', frame: framed }), session('orphan~a', { parent: 'orphan', spawnedIn: 'orphan', agentType: 'Plan', frame: framed })],
-      prompts: [prompt('m', 0, { frame: framed }), prompt('m~a', 0, { frame: framed }), prompt('orphan~a', 0, { frame: framed })],
-      tools: [...main, ...sub, ...calls('orphan~a', 2, 1)],
+      subagents: [
+        session('m~a', { parent: 'm', spawnedIn: 'm', agentType: 'Explore', frame: framed }),
+        // A nested one: its file belongs to the main session, but the call that spawned it is in the first subagent's transcript.
+        session('m~b', { parent: 'm', spawnedIn: 'm~a', agentType: 'Plan', frame: framed }),
+        session('orphan~a', { parent: 'orphan', spawnedIn: 'orphan', agentType: 'Plan', frame: framed }),
+      ],
+      prompts: [prompt('m', 0, { frame: framed }), prompt('m~a', 0, { frame: framed }), prompt('m~b', 0, { frame: framed }), prompt('orphan~a', 0, { frame: framed })],
+      tools: [...main, ...sub, ...calls('m~b', 2, 3).map((call) => ({ ...call, steps: (call.steps ?? []).map((held) => ({ ...held, parent: 0 })) })), ...calls('orphan~a', 2, 1)],
     });
   };
 
-  it('is one batch of the main run then the subagent run, each step tagged, an orphan folded into nothing', () => {
+  it('is one batch of the main run then each subagent run, each step tagged, a nested run linked to nothing, an orphan folded into nothing', () => {
     const skeleton = built(withSubagent(9));
-    expect(skeleton.transcripts).toHaveLength(2);
+    expect(skeleton.transcripts).toHaveLength(3);
+    expect(skeleton.transcripts[2]?.tools.every(({ steps }) => steps.every(({ agentType, parent }) => agentType === 'Plan' && parent === null))).toBe(true);
     expect(skeleton.transcripts[0]?.tools.every(({ steps }) => steps.every(({ agentType }) => agentType === null))).toBe(true);
     expect(skeleton.transcripts[1]?.tools.every(({ steps }) => steps.every(({ agentType, parent }) => agentType === 'Explore' && parent === MIN_TIMED_CALLS))).toBe(true);
-    expect(skeleton.transcripts.map(({ merkleRoot }) => merkleRoot)).toHaveLength(2);
+    expect(new Set(skeleton.transcripts.map(({ merkleRoot }) => merkleRoot)).size).toBe(3);
     expect(parseSkeleton(JSON.parse(JSON.stringify(skeleton)))).toMatchObject({ ok: true });
   });
 
