@@ -7,7 +7,7 @@ import { ERROR_CODES, HTTP_STATUSES } from './schema.js';
 const line = (value: object): string => JSON.stringify(value);
 
 /** One prompt, one call, one failed result with the given text. `none` leaves the result out. */
-const failedCall = (name: string, result: string | 'none', isError = true) => {
+const failedCall = (name: string, result: string, isError = true) => {
   const text = [
     line({ type: 'user', timestamp: '2026-05-29T04:30:00Z', message: { role: 'user', content: 'p' } }),
     line({ type: 'assistant', timestamp: '2026-05-29T04:30:01Z', message: { role: 'assistant', content: [{ type: 'tool_use', id: 't0', name, input: { command: 'make' } }] } }),
