@@ -30,6 +30,8 @@ export const HOOK_REGISTRY_DAYS = 1;
 export const NOT_FOUND_MS = 600_000;
 /** The room a row's write is given after the registry ask has been cut off. */
 const WRITE_RESERVE_MS = 150;
+/** One call hands at most this many names to helpers; the rest wait for a later sight, so a call naming dozens cannot start dozens of processes. */
+const MAX_HELPERS = 3;
 /** An ask with less than this left is not started: it could not finish. */
 const MIN_ASK_MS = 100;
 
@@ -99,9 +101,9 @@ const keptAnswers = async (storeDir: string): Promise<Map<string, RegistryRow>> 
   return kept;
 };
 
-/** A kept answer is dated by its UTC day, so "a day" is that day and the next: at most 48 hours old. A not-found answer is trusted only for the folder that asked, since its config can name another registry. */
+/** A kept answer is dated by its UTC day, so "a day" is that day and the next: at most 48 hours old. Every kept answer is trusted only for the folder that asked, since its config can name another registry and a note says "the registry your package manager uses". A not-found answer is also cut short, since a name can be published any minute. */
 const fresh = (row: RegistryRow, now: number, folder: string): boolean =>
-  row.state === 'not-found' ? row.ts !== undefined && row.folder === folder && now - Date.parse(row.ts) < NOT_FOUND_MS : now - Date.parse(row.day) < (HOOK_REGISTRY_DAYS + 1) * DAY_MS;
+  row.folder === folder && (row.state === 'not-found' ? row.ts !== undefined && now - Date.parse(row.ts) < NOT_FOUND_MS : now - Date.parse(row.day) < (HOOK_REGISTRY_DAYS + 1) * DAY_MS);
 
 const within = <T>(promise: Promise<T>, ms: number): Promise<T | undefined> =>
   new Promise((resolve) => {
@@ -123,7 +125,7 @@ const within = <T>(promise: Promise<T>, ms: number): Promise<T | undefined> =>
 const asAnswer = (row: RegistryRow): RegistryAnswer => ({ state: row.state, latest: row.latest, created: row.created });
 
 /** The registry state at the moment: a kept answer first, else one bounded ask. `undefined` is "not read": not asked, not askable, or not answered in time. */
-const registryAnswer = async (deps: GateHookDeps, crossing: Crossing, cwd: string | null, kept: ReadonlyMap<string, RegistryRow>): Promise<{ answer: RegistryAnswer; asked: boolean } | undefined> => {
+const registryAnswer = async (deps: GateHookDeps, crossing: Crossing, cwd: string | null, kept: ReadonlyMap<string, RegistryRow>, helpers: { started: number }): Promise<{ answer: RegistryAnswer; asked: boolean } | undefined> => {
   if (!askedOf(crossing) || crossing.versionForm === 'url' || !askable(crossing.class, crossing.name)) return undefined;
   const held = kept.get(keyOf(crossing));
   if (held !== undefined && cwd !== null && fresh(held, deps.now(), folderKey(cwd))) return { answer: asAnswer(held), asked: false };
@@ -137,7 +139,10 @@ const registryAnswer = async (deps: GateHookDeps, crossing: Crossing, cwd: strin
   if (answer === undefined) {
     // Not answered in time: the row reads not-read, and a helper finishes the ask so the next sight reads it from the cache. This ask is stopped first, so the manager is never asked twice at once.
     stop.abort();
-    await deps.fill?.(ask).catch(() => undefined);
+    if (helpers.started < MAX_HELPERS) {
+      helpers.started += 1;
+      await deps.fill?.(ask).catch(() => undefined);
+    }
     return undefined;
   }
   return { answer, asked: true };
@@ -190,6 +195,10 @@ const appendText = async (file: string, body: string): Promise<void> => {
   await appendFile(file, body, { mode: 0o600 });
 };
 
+/** A row for a note that never reached the agent: no exposure, no arm. Used when a deny prints instead of the note. */
+const withoutExposure = (row: CrossingRecord): CrossingRecord =>
+  row.arm === 'none' ? row : { ...row, arm: 'none', lineShown: 'none', lineHeld: 'none' };
+
 /** A block is a deny whose reason is the label; else the notes are context for the agent. Never an allow, an ask, or a changed input: with neither, nothing is printed. */
 const outputOf = (blocks: readonly string[], notes: readonly string[]): string => {
   if (blocks.length > 0) return JSON.stringify({ hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: blocks.join('\n') } });
@@ -225,13 +234,19 @@ export const runGateHook = async (stdin: string, deps: GateHookDeps): Promise<st
   const lines = new Set<string>();
   const answered: RegistryRow[] = [];
   const binMemo: LocalBinMemo = new Map();
+  const inCall = new Set<string>();
+  const helpers = { started: 0 };
   for (const seen of check.crossings) {
     // A project's own bin is a stat walk, local and fast; it runs before the registry ask so a bin that is there is never asked about.
     const crossing = await withLocalBin(seen, cwd, binMemo);
     const scopes = scopesOf(keyOf(crossing), repository, session);
-    const { novelty, add, noted } = noveltyOf(index, scopes);
+    const { novelty, add, noted: indexed } = noveltyOf(index, scopes);
+    // One name twice in a call is one sight: the repeat reads as noted, so its note does not print again and its row is not a second draw.
+    const key = keyOf(crossing);
+    const noted = indexed || inCall.has(key);
+    inCall.add(key);
     for (const line of add) lines.add(line);
-    const read = await registryAnswer(deps, crossing, cwd, kept);
+    const read = await registryAnswer(deps, crossing, cwd, kept, helpers);
     const state = read?.answer.state;
     const answeredState = state === 'found' || state === 'not-found' ? state : undefined;
     // A sight with no answer (a cut ask, no time, a name not asked, an unreachable registry) spends nothing: the session's note waits for the first sight that has one.
@@ -245,7 +260,7 @@ export const runGateHook = async (stdin: string, deps: GateHookDeps): Promise<st
     rows.push(recordOf(common, crossing, novelty, read, source, decision));
   }
   // A call that holds a block prints only the deny, so a note row (shown or held) was never in front of the agent: it reads as no exposure, since a row cannot be backfilled.
-  const written = blocks.length > 0 ? rows.map((row) => (row.arm === 'none' ? row : { ...row, arm: 'none' as const, lineShown: 'none' as const, lineHeld: 'none' as const })) : rows;
+  const written = blocks.length > 0 ? rows.map(withoutExposure) : rows;
   // The record first: an index line for a row that was never written would call the next crossing of the name old.
   const record = { file: crossingsPath(deps.storeDir), text: written.map((row) => `${JSON.stringify(row)}\n`).join('') };
   deps.stage?.(record);
