@@ -121,7 +121,7 @@ A prompt is a main-line, non-meta user line with text and no tool result, read b
 | The operator's text, a leading `<` included | yes | `typed` | the line |
 | A `command-name` or `command-message` wrapper, when a model's turn comes next | yes | `command` | the command and its arguments with the wrapper tags removed, redacted and cut like any prompt |
 | The same wrapper with no model's turn next (`/clear`, a local command with output, a synthetic line alone) | no | | |
-| A line the harness injected: `local-command-caveat`, `local-command-stdout`, `local-command-stderr`, `system-reminder`, `task-notification`, `scheduled-task`, `bash-input`, `bash-stdout`, `bash-stderr` | no | | |
+| A line the harness injected: `local-command-caveat`, `local-command-stdout`, `local-command-stderr`, `system-reminder`, `task-notification`, `teammate-message`, `scheduled-task`, `bash-input`, `bash-stdout`, `bash-stderr` | no | | |
 
 A slash command and a skill write the same wrapper, so one value covers both; a skill's body is a meta line and stays out of `head`. The wrong-way risk is known: a tag the harness adds later reads as `typed` until it joins this list, and its row shows it in `head`. The interrupt marker reads as `typed`. A line that opens no prompt belongs to the prompt before it, or to none at the start of a session. The Cursor source keeps its old rule, no leading `<`, for now.
 

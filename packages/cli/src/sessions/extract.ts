@@ -347,8 +347,9 @@ const firstTextBlock = (content: unknown): string => {
   return '';
 };
 
-// What the harness writes as a user line and the operator did not ask: every such leading tag on the 15,710 transcripts read for t768 (harness and `raw/`), and
-// `local-command-stderr`, the sibling of `local-command-stdout`. The set is closed on purpose: anything else with a leading `<` was typed, or pasted.
+// What the harness writes as a user line and the operator did not ask. t768 checked this against a full re-capture: the only leading tag left on a `typed` row is
+// the paste wrapper. `local-command-stderr` is here as the sibling of `local-command-stdout`. The set is closed on purpose: anything else with a leading `<` was
+// typed, or pasted. A `teammate-message` is another agent speaking to a teammate, so a teammate's turns after one stay in its prompt before, or outside any.
 const INJECTED_TAGS: ReadonlySet<string> = new Set([
   'bash-input',
   'bash-stderr',
@@ -359,6 +360,7 @@ const INJECTED_TAGS: ReadonlySet<string> = new Set([
   'scheduled-task',
   'system-reminder',
   'task-notification',
+  'teammate-message',
 ]);
 const LEADING_TAG = /^<([a-zA-Z][\w:-]*)[\s>/]/;
 
