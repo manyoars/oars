@@ -95,18 +95,28 @@ describe('packages from manifests', () => {
     expect(manifestNames('Cargo.toml', toml.join('\n'), makeRedactor([]))).toEqual(['crates:real-crate', 'crates:serde']);
   });
 
-  it('reads a Cargo dependency written as its own table by the same source rules as the inline form', () => {
-    const names = (toml: readonly string[]): string[] => manifestNames('Cargo.toml', toml.join('\n'), makeRedactor([]));
-    expect(names(['[dependencies.local]', 'path = "../local"', 'version = "1"'])).toEqual([]);
-    expect(names(['[dependencies.remote]', 'git = "https://example.com/x.git"', 'version = "1"'])).toEqual([]);
-    expect(names(['[dependencies.alias]', 'package = "real-crate"', 'version = "1"'])).toEqual(['crates:real-crate']);
-    expect(names(['[dependencies.rand]', 'version = "0.8"'])).toEqual(['crates:rand']);
-    expect(names(['[dependencies.rand]', 'version = "0.8"', '[dependencies.local]', 'path = "../local"'])).toEqual(['crates:rand']);
+  it.each([
+    ['local: a path source', ['[dependencies.local]', 'path = "../local"', 'version = "1"'], []],
+    ['remote: a git source', ['[dependencies.remote]', 'git = "https://example.com/x.git"', 'version = "1"'], []],
+    ['alias: the real crate behind package =', ['[dependencies.alias]', 'package = "real-crate"', 'version = "1"'], ['crates:real-crate']],
+    ['rand: a version key', ['[dependencies.rand]', 'version = "0.8"'], ['crates:rand']],
+    ['mixed: a registry table, then a path table', ['[dependencies.rand]', 'version = "0.8"', '[dependencies.local]', 'path = "../local"'], ['crates:rand']],
+  ])('reads a Cargo dependency written as its own table by the same source rules as the inline form: %s', (_form, toml, expected) => {
+    expect(manifestNames('Cargo.toml', toml.join('\n'), makeRedactor([]))).toEqual(expected);
   });
 
   it('keeps the dependency state through an array-of-tables header no further than the header', () => {
     const toml = ['[dependencies]', 'serde = "1.0"', '[[bin]]', 'version = "1.0"', 'name = "tool"'];
     expect(manifestNames('Cargo.toml', toml.join('\n'), makeRedactor([]))).toEqual(['crates:serde']);
+  });
+
+  it.each([
+    ['a commented [dependencies.local] header', ['[dependencies.local] # note', 'path = "../local"', 'version = "1"'], []],
+    ['a commented [dependencies.rand] header', ['[dependencies.rand] # note', 'version = "0.8"'], ['crates:rand']],
+    ['a commented [package] header after [dependencies]', ['[dependencies]', 'serde = "1.0"', '[package] # x', 'version = "0.1.0"'], ['crates:serde']],
+    ['a commented [[bin]] header after [dependencies]', ['[dependencies]', 'serde = "1.0"', '[[bin]] # x', 'version = "0.1.0"'], ['crates:serde']],
+  ])('reads a Cargo table header that ends in a comment as a header: %s', (_form, toml, expected) => {
+    expect(manifestNames('Cargo.toml', toml.join('\n'), makeRedactor([]))).toEqual(expected);
   });
 
   it('reads a Cargo entry that ends in a comment', () => {

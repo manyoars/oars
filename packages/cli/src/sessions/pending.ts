@@ -28,7 +28,7 @@ const warn = (what: string, error: unknown): void => {
   process.stderr.write(`oars: ${what}: ${error instanceof Error ? error.message : String(error)}\n`);
 };
 
-export const pendingDir =(storeDir: string): string => join(storeDir, 'pending');
+export const pendingDir = (storeDir: string): string => join(storeDir, 'pending');
 
 export interface PendingEntry {
   /** The file names of this entry that were read (one per deferral of the same transcript); the files of an unreadable entry are not here. */
@@ -127,8 +127,8 @@ export const removePending = async (storeDir: string, entries: readonly PendingE
   }
 };
 
-/** Counts one more failed deposit of `entry`, in the name of its first file; returns the new count. The caller holds the store lock, so no one else renames or removes it. */
-export const failPending = async (storeDir: string, entry: PendingEntry): Promise<number> => {
+/** Counts one more failed deposit of `entry`, in the name of its first file. The caller holds the store lock, so no one else renames or removes it. */
+export const failPending = async (storeDir: string, entry: PendingEntry): Promise<void> => {
   const failures = entry.failures + 1;
   const first = entry.names[0];
   if (first !== undefined) {
@@ -139,7 +139,6 @@ export const failPending = async (storeDir: string, entry: PendingEntry): Promis
       warn(`a failed pending file could not be renamed and is left for the next run: ${first}`, error);
     }
   }
-  return failures;
 };
 
 /** Removes the `*.tmp` files a hook died before renaming, once they are older than `staleMs`: the age no live write reaches. */

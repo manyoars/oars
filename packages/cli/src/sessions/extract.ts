@@ -1756,7 +1756,7 @@ export const captureSession = (input: ExtractInput): Capture => {
           call.status = failed ? 'error' : 'ok';
           if (failed) {
             call.errorCode = errorCodeOf(text);
-            // An edit that did not apply changed no dependency: what its input showed is not what the file holds.
+            // An edit that did not apply changed no dependency: what its input showed is not what the file holds. A call with no result in the file (`status: 'none'`) keeps its manifest, since nothing shows it failed.
             delete call.manifest;
           }
           const read = manifestReads.get(str(block.tool_use_id) ?? '');
