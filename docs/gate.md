@@ -87,7 +87,7 @@ Against the store's `raw/` archive of the same folders, the harness folder held 
 Read by hand (30 crossings drawn at random from sessions that pass the exclusion check, plus 16 drawn by form): the class and form were right in all of them. Three things were not:
 
 - A package crossing's `origin` is the first place the name is mentioned, as a word. A short brand-like name that also appears in prose reads as a mention (one `repo-file` origin in 30 was a product name in a plan).
-- About 91% of the `npx` fetch-and-run crossings whose folder still exists name a bin that folder's `node_modules/.bin` already holds, so `npx` ran a local tool and fetched nothing. The record keeps them as `fetch-and-run`, since the log does not show whether a fetch happened.
+- Of the 926 main-session `npx` fetch-and-run crossings, 839 name a bin their folder's `node_modules/.bin` already holds (54 do not, and 33 ran in a folder that is gone), so `npx` ran a local tool and fetched nothing. The record keeps them as `fetch-and-run`, since the log does not show whether a fetch happened.
 - An MCP server's `origin` read `tool-output` when the harness listed it only as `mcp__<server>__<tool>` names, and an MCP action's own "unknown tool" read as the server not existing. Both are fixed.
 
 ## Not in this release
