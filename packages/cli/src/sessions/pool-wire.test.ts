@@ -267,6 +267,10 @@ describe('parseSkeleton refuses, and names the field', () => {
     expect(refusedField(pull({ name: LITERAL }))).toBe(`${stepField}.identity.pulls[0].name`);
     expect(refusedField(pull({ registry: 'acme' }))).toBe(`${stepField}.identity.pulls[0].registry`);
     expect(refusedField(pull({ version: 'latest-acme' }))).toBe(`${stepField}.identity.pulls[0].version`);
+    // A version beside a masked name identifies the name, so only a null version or the literal travels with `private`.
+    expect(refusedField(pull({ name: PRIVATE, version: null }))).toBe('accepted');
+    expect(refusedField(pull({ name: PRIVATE, version: LITERAL }))).toBe('accepted');
+    expect(refusedField(pull({ name: PRIVATE, version: '7.3.1' }))).toBe(`${stepField}.identity.pulls[0].version`);
   });
 
   it('holds a version suffix to digits and release words', () => {

@@ -1,5 +1,6 @@
 // The deposit's skeleton holds only values that pass their own row (pool vocabulary spec Section 1.2): the leak test runs a captured session through the real projection.
 import { describe, expect, it } from 'vitest';
+import { cellsOf, projectedStore } from './cell-increments.js';
 import { captureSession } from './extract.js';
 import { frame, prompt, session, step, storedNames, store, tool } from './pool-fixture.js';
 import { bucketOf, parseSkeleton, sessionsOf, skeletonOf, type SessionSkeleton } from './pool-wire.js';
@@ -111,6 +112,24 @@ describe('the leak test: a private name in a path, a program, a package, an argu
     expect(parseSkeleton(JSON.parse(JSON.stringify(skeleton))).ok).toBe(true);
   });
 
+  // A version beside a masked name identifies the name, so it is masked with it; an MCP tool beside a masked server and a native name the harness table has no row for go the same way.
+  it('sends a version beside a private pull name, a tool beside a private server, and an unlisted native as masked', () => {
+    const skeleton = batchOf([
+      step(0, 0, 'shell.exec', { native: 'Bash', identity: { program: 'npm', sub: 'install', flags: [], pulls: [{ registry: 'npm', name: 'acme-internal-sdk', version: '7.3.1' }, { registry: 'npm', name: 'acme-other', version: null }] } }),
+      step(1, 0, 'mcp.call', { native: '<literal>', identity: { server: 'acme', tool: 'get_issue' } }),
+      step(2, 0, 'mcp.call', { native: 'mcp__acme__get_issue', identity: { server: 'acme', tool: 'get_issue' } }),
+      step(3, 0, 'skill.run', { native: 'AcmeSecretTool', identity: { skill: 'commit' } }),
+    ]);
+    expect(stepsOf(skeleton).map(({ native, identity }) => [native, identity])).toEqual([
+      ['Bash', { program: 'npm', sub: 'install', flags: [], pulls: [{ registry: 'npm', name: PRIVATE, version: '<literal>' }, { registry: 'npm', name: PRIVATE, version: null }] }],
+      [PRIVATE, { server: PRIVATE, tool: '<literal>' }],
+      [PRIVATE, { server: PRIVATE, tool: '<literal>' }],
+      [PRIVATE, { skill: 'commit' }],
+    ]);
+    expect(JSON.stringify(skeleton)).not.toMatch(/acme|7\.3\.1|SecretTool/);
+    expect(parseSkeleton(JSON.parse(JSON.stringify(skeleton))).ok).toBe(true);
+  });
+
   it('keeps a listed MCP server, skill, host, and pull name as they are stored', () => {
     const skeleton = batchOf([
       step(0, 0, 'mcp.call', { native: 'mcp__github__get_issue', identity: { server: 'github', tool: 'get_issue' } }),
@@ -129,9 +148,15 @@ describe('the leak test: a private name in a path, a program, a package, an argu
 
   // The older-list case: capture wrote the pull while the program was listed, and the list has since dropped it. The program goes as private, and a private program holds no pull.
   it('sends a stored step whose public program has left the list as private alone, with no pull, and the parser takes the batch', () => {
-    const skeleton = batchOf([step(0, 0, 'shell.exec', { native: 'Bash', identity: { program: 'acme-deploy', sub: null, flags: [], pulls: [{ registry: 'npm', name: 'zod', version: null }] } })]);
+    const older = step(0, 0, 'shell.exec', { native: 'Bash', identity: { program: 'acme-deploy', sub: null, flags: [], pulls: [{ registry: 'npm', name: 'zod', version: null }] } });
+    const skeleton = batchOf([older]);
     expect(stepsOf(skeleton).map(({ identity }) => identity)).toEqual([{ program: PRIVATE, sub: null, flags: [] }]);
     expect(parseSkeleton(JSON.parse(JSON.stringify(skeleton))).ok).toBe(true);
+    // The local read takes the same steps, so it tallies no cell a deposit could not hold.
+    const local = store({ sessions: [session('s', { frame: framed })], prompts: [prompt('s', 0, { frame: framed })], tools: [tool('s', 0, 'Bash', { steps: [older] })] });
+    const held = cellsOf(projectedStore(local, shellReader(vocab))).motifs.flatMap((motif) => motif.steps);
+    expect(held.length).toBeGreaterThan(0);
+    expect(held.filter(({ identity }) => identity !== null && 'program' in identity && identity.program === PRIVATE && identity.pulls !== undefined)).toEqual([]);
   });
 
   it('holds a batch the parser accepts unchanged', () => {
