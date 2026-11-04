@@ -43,6 +43,52 @@ what a person must (signing in, and Stripe's identity and bank steps). Run every
    billing mode. Going live and the payout itself are the human's, in the web app; Stripe pays out on its own schedule,
    typically seven to fourteen days after the first live payment. Do not promise a date.
 
+## Let a per-task agent change its own schedule
+
+Only for a workload whose service is a cron job (`per-task-agent` runs on a schedule). Give the agent a key that can do
+this and nothing else, so it cannot spend, deploy, or reach any other workload.
+
+1. **Mint the key.** After `deploy`, run `npx @manyoars/oars keys create --name <name> --workload <workloadId> --json`.
+   The `secret` field is shown once; the platform keeps no copy. Treat it as you do the SDK key: never print it, log it,
+   or commit it. `keys list` shows the prefix and scope, and `npx @manyoars/oars keys revoke <keyId>` ends the key at
+   once. There is no `rotate` here: to replace a key, revoke it and create another.
+2. **Hand it to the agent.** Export the secret in the environment the agent runs in, as `OARS_API_KEY`. A secret that
+   rides along on a deploy is passed with `--secret-from-env <NAME>`, but the key needs the workload id, which exists only
+   after the deploy that registered it, so a new key cannot ride that deploy. Put it in the agent's environment yourself,
+   or ask the human to add it as a workload secret in the Many Oars web app.
+3. **Change the schedule.** The recipe below patches `scheduleCron` with that key. Run it as
+   `node reschedule.mjs "<cron>"` with `OARS_WORKLOAD_ID` and `OARS_API_KEY` set.
+
+```js
+const api = process.env.OARS_API_URL ?? 'https://api.manyoars.com';
+const id = process.env.OARS_WORKLOAD_ID;
+const headers = { Authorization: `Bearer ${process.env.OARS_API_KEY}`, 'Content-Type': 'application/json' };
+const view = await (await fetch(`${api}/agents/workloads/${id}`, { headers })).json();
+// The patch must resend each service's other fields unchanged; only a service that already has a schedule takes a new one.
+const services = view.services.map((s) => ({
+  name: s.name, imageRepository: s.imageRepository, port: s.port, healthPath: s.healthPath, public: s.public,
+  replicas: s.replicas, cpuMillicores: s.cpuMillicores, memoryMib: s.memoryMib, env: s.env,
+  scheduleCron: s.scheduleCron === undefined ? undefined : process.argv[2],
+}));
+const res = await fetch(`${api}/agents/workloads/${id}/config`, { method: 'PATCH', headers, body: JSON.stringify({ services }) });
+if (!res.ok) {
+  const problem = await res.json().catch(() => ({}));
+  console.error(`${res.status} ${problem.code ?? ''} ${problem.detail ?? problem.title ?? ''}`);
+  process.exitCode = 1;
+}
+```
+
+What the key can and cannot do, so the agent does not try more:
+
+- It can change `scheduleCron` on its own workload, and stop that workload. A schedule that fires more often than the
+  platform's minimum interval is refused with 400 `MANIFEST_INVALID`: read `detail` and choose a longer interval.
+- It cannot add a schedule to a service that has none or clear one (403 `WORKLOAD_NOT_OWNED`), and it cannot change
+  any other field, secrets included, or deploy, start, or delete (403 `WORKLOAD_NOT_OWNED`).
+- Every `/billing/agents/{workloadId}` route, including prices, is a 403 for it, its own workload too. A different
+  workload under `/agents/workloads` is a 404 `WORKLOAD_NOT_FOUND`.
+- Creating the key with more than `AGENT_OPERATE` and `AGENT_READ` for a workload is a 400
+  `API_KEY_WORKLOAD_SCOPE_EXCEEDS_CAP`; leave `--authority` off.
+
 ## Exit codes to handle
 
 Read the exit code of every command. With `--json` a failure is `{"ok": false, "step": ..., "problem": {...}}`.
