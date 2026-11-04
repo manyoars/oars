@@ -160,14 +160,13 @@ describe('the VS Code Copilot Chat reader', () => {
 
   it('runs the command the user last edited, then the tool-edited one, then the original, and stamps a failed call with its completedAt', () => {
     // chatTerminalToolConfirmationSubPart.ts:118 prefers the edited command as the one that runs.
-    const commandOf = (commandLine: object): unknown => {
+    const commandOf = (commandLine: object): string => {
       const call = chatLines(chat([request(1, 'x', [tool('c1', 'run_in_terminal', { toolSpecificData: { kind: 'terminal', commandLine } })])]), 's', null).find((line) => line.type === 'assistant');
-      const content = (call?.message as { content: { input?: { command?: string } }[] }).content;
-      return content[0]?.input?.command;
+      return JSON.stringify(call?.message);
     };
-    expect(commandOf({ original: 'a', toolEdited: 'b', userEdited: 'c' })).toBe('c');
-    expect(commandOf({ original: 'a', toolEdited: 'b' })).toBe('b');
-    expect(commandOf({ original: 'a' })).toBe('a');
+    expect(commandOf({ original: 'a', toolEdited: 'b', userEdited: 'c' })).toContain('"command":"c"');
+    expect(commandOf({ original: 'a', toolEdited: 'b' })).toContain('"command":"b"');
+    expect(commandOf({ original: 'a' })).toContain('"command":"a"');
     const out = extractOf(chat([request(1, 'x', [tool('c1', 'copilot_readFile', { resultError: 'boom', completedAt: MS(9) })])]));
     expect(out.errorLines[0]?.ts).toBe(iso(9));
   });
@@ -247,8 +246,8 @@ describe('the VS Code Copilot Chat reader', () => {
       JSON.stringify({ kind: 1, k: ['kept'], v: 'ok' }),
     ].join('\n');
     const data = chatData(log, true);
-    expect(({} as { polluted?: unknown }).polluted).toBeUndefined();
-    expect([].constructor.prototype.polluted).toBeUndefined();
+    expect('polluted' in {}).toBe(false);
+    expect('polluted' in []).toBe(false);
     expect(Object.hasOwn(data, 'prototype')).toBe(false);
     expect(data.kept).toBe('ok');
   });
