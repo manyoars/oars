@@ -60,6 +60,25 @@ replaces, so the log settles back to the size of the live records. A hook deposi
 - **A holder that hangs.** The holder refreshes the lock for at most six times the stale age (`holdMs`, one hour: the stale age is 10 minutes, and a whole-store re-capture is the work that outlasts it). Past that the refresh stops, the lock ages out like a dead holder's, and the next waiter breaks it and writes one line to stderr naming the holder's pid (`oars: broke the store lock held by pid <pid>, not refreshed for over <staleMs> ms`). A hung process cannot keep every later deposit and hook waiting for good; the run that outlives the cap loses its lock, says so on its own stderr (`oars: this run held the store lock past <holdMs> ms and may lose it; rerun it when it ends`), and should be rerun. The lock names its holder with a per-claim token, so a holder whose lock was broken never deletes the next holder's lock when it ends.
 - **When it gives up.** Compaction leaves the log as it was and writes one line to stderr, and the next deposit tries again, if the log's size changed during the rewrite (a waiter broke the lock) or if Windows keeps refusing the rename for 30 seconds because a reader holds the log open. A failed compaction does not fail the deposit: the records are safe and an uncompacted log still loads.
 
+## Memory
+
+`deposit` and `verify` hold the store as records, so their heap grows with the log (rows, not files or sessions). A reader keeps only each session's highest `rev`, read in two passes over the
+log, so the superseded copies a re-capture leaves behind are never in memory; `deposit` checks for newer captures with one pass that keeps a number per session; and `verify` reads each skeleton
+without its per-line content hashes, which no check reads. Measured on a synthetic store (`packages/cli/scripts/sessions-heap.mjs`, a log holding every record twice, as it does mid-recapture), node's default heap, peak RSS:
+
+| Sessions | Log | `deposit` | `verify` |
+|---|---|---|---|
+| 400 | 97 MB | 412 MB | 466 MB |
+| 800 | 195 MB | 490 MB | 614 MB |
+| 1,600 | 390 MB | 782 MB | 911 MB |
+
+That is about 1.3 MB (`deposit`) and 1.5 MB (`verify`) of RSS per MB of log above a base of 300 MB. Before the change, the same stores peaked at 619, 678, and 1,512 MB for `deposit` and 548, 808,
+and 1,276 MB for `verify`. The smallest `--max-old-space-size` that finished the 400-session store fell from 208 to 112 MB for `deposit` and from 224 to 152 MB for `verify`.
+
+The operator's store (a 580 MB log, 6,757 transcripts of 1.8 MB each) peaked at 6.9 GB before this change, and the synthetic store above does not reach that ratio: its records are the same size but
+its transcripts are not, so the real per-MB figure is higher than the table's and is not measured here. A heavy store that outgrows node's default heap (about 4 GB on a 64-bit machine) sets its own:
+`NODE_OPTIONS=--max-old-space-size=<MB> oars sessions deposit`, and the same for `verify`. `just sessions-heap` (in `oars/`) checks that both commands finish a generated store under a fixed small heap.
+
 ## Two versions
 
 - `CAPTURE_VERSION` (`cv` on every captured record) names the captured field list. Bump it when the captured field list changes or a

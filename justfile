@@ -27,6 +27,11 @@ openapi-refresh source:
 # The Keycloak the live login runs against: the image the platform pins (KeycloakVersionContractTest), so a bump there means a bump here.
 keycloak_image := "quay.io/keycloak/keycloak:26.8.0"
 
+# Memory check for `oars sessions deposit` and `verify` (t808): builds a generated store holding every record twice, then runs both under a fixed
+# 160 MB heap. About 40 s, so it is not in `check`. Needs the built CLI (`npm run build -w packages/cli`). Never touches the real store.
+sessions-heap:
+    node packages/cli/scripts/sessions-heap.mjs check
+
 # Opt-in live login (design §6): the real CLI's device flow against a running Keycloak holding T67's realm, with Playwright approving the
 # code on the verification page. Needs OARS_LIVE_USERNAME and OARS_LIVE_PASSWORD (a user of that realm) and OARS_LIVE_AUDIENCE (the
 # audience the realm puts in the access token); OARS_LIVE_ISSUER_URL defaults to the local stack's http://localhost:8180/realms/aor.
