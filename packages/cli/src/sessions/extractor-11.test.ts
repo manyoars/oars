@@ -136,6 +136,8 @@ describe('the shell form projected from the account store (Q5)', () => {
     const stored = projected(forms);
     expect(stored.map((shell) => shell.programs)).toEqual(raw.map((shell) => shell.programs));
     expect(stored.map(subcommandsOf)).toEqual(raw.map(subcommandsOf));
+    // The flags of the three wrapped forms are still lost where there were any (a segment holds none): 2 of 3.
+    expect(lossesOf(stored.slice(4, 7), raw.slice(4, 7), flagsOf)).toBe(2);
     // Not vacuous: the snapshot-only program is kept, and the private one is not.
     expect(stored.slice(4).flatMap((shell) => shell.programs)).toEqual(['ffmpeg', 'ffmpeg', 'ffmpeg', 'cd', 'ffmpeg']);
     expect(stored.slice(0, 2).map((shell) => shell.programs)).toEqual([[PRIVATE], [PRIVATE]]);
