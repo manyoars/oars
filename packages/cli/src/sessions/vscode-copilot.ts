@@ -136,12 +136,16 @@ const missing = (error: unknown): boolean => error instanceof Error && 'code' in
 export const chatBadLines = (text: string): string[] => text.split('\n').filter((raw) => raw.trim() !== '' && parse(raw) === undefined);
 
 /** One step down a mutation-log path: an object's key or an array's index; anything else leads nowhere. */
-const child = (node: unknown, key: string): unknown => (isObj(node) ? node[key] : Array.isArray(node) ? node[Number(key)] : undefined);
+const child = (node: unknown, key: string): unknown => (isObj(node) ? (Object.hasOwn(node, key) ? node[key] : undefined) : Array.isArray(node) ? node[Number(key)] : undefined);
+
+/** A path key that would reach `Object.prototype` or a constructor; file content must never write through one. */
+const UNSAFE_KEYS: ReadonlySet<string> = new Set(['__proto__', 'constructor', 'prototype']);
 
 /** Replays one mutation-log entry onto `state` (objectMutationLog.ts:345-390); an entry whose path does not lead anywhere is dropped. */
 const apply = (state: unknown, entry: Obj): unknown => {
   if (entry.kind === 0) return entry.v;
   const path: unknown[] = Array.isArray(entry.k) ? entry.k : [];
+  if (path.some((key) => UNSAFE_KEYS.has(String(key)))) return state;
   if (path.length === 0) return entry.kind === 1 ? entry.v : state;
   let holder: unknown = state;
   for (const key of path.slice(0, -1)) holder = child(holder, String(key));

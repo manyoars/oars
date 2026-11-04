@@ -211,6 +211,23 @@ describe('the VS Code Copilot Chat reader', () => {
     expect(lines[1]).toMatchObject({ message: { content: [{ text: 'old reply' }] } });
   });
 
+  it('never lets a log entry write through __proto__, constructor, or prototype, so file content cannot pollute Object.prototype', () => {
+    const log = [
+      JSON.stringify({ kind: 0, v: { version: 3, sessionId: 's1', requests: [] } }),
+      JSON.stringify({ kind: 1, k: ['__proto__', 'polluted'], v: 'yes' }),
+      JSON.stringify({ kind: 1, k: ['constructor', 'prototype', 'polluted'], v: 'yes' }),
+      JSON.stringify({ kind: 2, k: ['__proto__', 'polluted'], v: ['yes'] }),
+      JSON.stringify({ kind: 1, k: ['requests', '__proto__', 'polluted'], v: 'yes' }),
+      JSON.stringify({ kind: 1, k: ['prototype'], v: 'yes' }),
+      JSON.stringify({ kind: 1, k: ['kept'], v: 'ok' }),
+    ].join('\n');
+    const data = chatData(log, true);
+    expect(({} as { polluted?: unknown }).polluted).toBeUndefined();
+    expect([].constructor.prototype.polluted).toBeUndefined();
+    expect(Object.hasOwn(data, 'prototype')).toBe(false);
+    expect(data.kept).toBe('ok');
+  });
+
   it('reads the log form by replaying set, push (cut to its index), and delete entries, and counts a torn line', () => {
     const log = [
       JSON.stringify({ kind: 0, v: { version: 3, sessionId: 's1', creationDate: MS(0), requests: [] } }),
