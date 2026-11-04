@@ -30,6 +30,8 @@ export const HOOK_REGISTRY_DAYS = 1;
 export const NOT_FOUND_MS = 600_000;
 /** The room a row's write is given after the registry ask has been cut off. */
 const WRITE_RESERVE_MS = 150;
+/** One call hands at most this many names to helpers; the rest wait for a later sight, so a call naming dozens cannot start dozens of processes. */
+const MAX_HELPERS = 3;
 /** An ask with less than this left is not started: it could not finish. */
 const MIN_ASK_MS = 100;
 
@@ -123,7 +125,7 @@ const within = <T>(promise: Promise<T>, ms: number): Promise<T | undefined> =>
 const asAnswer = (row: RegistryRow): RegistryAnswer => ({ state: row.state, latest: row.latest, created: row.created });
 
 /** The registry state at the moment: a kept answer first, else one bounded ask. `undefined` is "not read": not asked, not askable, or not answered in time. */
-const registryAnswer = async (deps: GateHookDeps, crossing: Crossing, cwd: string | null, kept: ReadonlyMap<string, RegistryRow>): Promise<{ answer: RegistryAnswer; asked: boolean } | undefined> => {
+const registryAnswer = async (deps: GateHookDeps, crossing: Crossing, cwd: string | null, kept: ReadonlyMap<string, RegistryRow>, helpers: { started: number }): Promise<{ answer: RegistryAnswer; asked: boolean } | undefined> => {
   if (!askedOf(crossing) || crossing.versionForm === 'url' || !askable(crossing.class, crossing.name)) return undefined;
   const held = kept.get(keyOf(crossing));
   if (held !== undefined && cwd !== null && fresh(held, deps.now(), folderKey(cwd))) return { answer: asAnswer(held), asked: false };
@@ -137,7 +139,10 @@ const registryAnswer = async (deps: GateHookDeps, crossing: Crossing, cwd: strin
   if (answer === undefined) {
     // Not answered in time: the row reads not-read, and a helper finishes the ask so the next sight reads it from the cache. This ask is stopped first, so the manager is never asked twice at once.
     stop.abort();
-    await deps.fill?.(ask).catch(() => undefined);
+    if (helpers.started < MAX_HELPERS) {
+      helpers.started += 1;
+      await deps.fill?.(ask).catch(() => undefined);
+    }
     return undefined;
   }
   return { answer, asked: true };
@@ -230,6 +235,7 @@ export const runGateHook = async (stdin: string, deps: GateHookDeps): Promise<st
   const answered: RegistryRow[] = [];
   const binMemo: LocalBinMemo = new Map();
   const inCall = new Set<string>();
+  const helpers = { started: 0 };
   for (const seen of check.crossings) {
     // A project's own bin is a stat walk, local and fast; it runs before the registry ask so a bin that is there is never asked about.
     const crossing = await withLocalBin(seen, cwd, binMemo);
@@ -240,7 +246,7 @@ export const runGateHook = async (stdin: string, deps: GateHookDeps): Promise<st
     const noted = indexed || inCall.has(key);
     inCall.add(key);
     for (const line of add) lines.add(line);
-    const read = await registryAnswer(deps, crossing, cwd, kept);
+    const read = await registryAnswer(deps, crossing, cwd, kept, helpers);
     const state = read?.answer.state;
     const answeredState = state === 'found' || state === 'not-found' ? state : undefined;
     // A sight with no answer (a cut ask, no time, a name not asked, an unreachable registry) spends nothing: the session's note waits for the first sight that has one.
