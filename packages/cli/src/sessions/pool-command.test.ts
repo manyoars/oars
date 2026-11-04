@@ -976,7 +976,7 @@ describe('oars pool outbox --explain and older batches', () => {
   it('fails for a field with no row at any depth, not only at the top', async () => {
     const scene = await batched();
     const outbox = join(scene.staged.storeDir, 'pool-outbox', readdirSync(join(scene.staged.storeDir, 'pool-outbox'))[0] ?? '');
-    await writeBatch(outbox, 'cccccccccccccccc', { format: 1, id: 'x', transcripts: [{ frame: { stack: { surprise: 1 } }, tools: [{ steps: [{ cost: { surprise: 2 } }] }] }] });
+    await writeBatch(outbox, 'cccccccccccccccc', { format: 1, id: 'x', transcripts: [{ frame: { stack: { surprise: 1 } }, tools: [{ steps: [{ identity: { surprise: 2 } }] }] }] });
     expect(await scene.cli('pool', 'outbox', '--explain', '--server', POOL, '--json')).toBe(ExitCode.INVALID);
     expect(scene.document()).toMatchObject({ problem: { code: 'field_without_row' } });
     expect(JSON.stringify(scene.document())).toContain('surprise');

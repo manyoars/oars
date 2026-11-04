@@ -150,7 +150,8 @@ const EXIT_CODE_RE = /^Exit code:? (-?\d+)/;
 /** The harness's own refusals, most specific first: each names a class, and the match never leaves this table (the text is not kept). */
 const HARNESS_ERROR_PATTERNS: ReadonlyArray<readonly [RegExp, (typeof HARNESS_ERROR_CLASSES)[number]]> = [
   [/^\[Request interrupted by user/, 'interrupted'],
-  [/The user doesn't want to proceed with this tool use|The tool use was rejected/, 'user-rejected'],
+  // Claude Code's text, then the refusal sentences Codex (`rejected by user`, written by its adapter and by events.rs:456) and Gemini (an abort `User cancelled tool execution`; a confirmation-prompt denial `Reason: User denied execution.`, `User cancelled operation`, or `Operation cancelled by user`) write.
+  [/The user doesn't want to proceed with this tool use|The tool use was rejected|^(?:exec command|patch) rejected by user\s*$|^\[Operation Cancelled\] (?:Reason: )?(?:User (?:cancelled|denied)|Operation cancelled by user)/, 'user-rejected'],
   [/Permission to use [^\n]* has been denied/, 'permission-denied'],
   [/InputValidationError/, 'input-validation'],
   [/<tool_use_error>/, 'tool-use-error'],
@@ -402,7 +403,7 @@ const firstTextBlock = (content: unknown): string => {
   return '';
 };
 
-// What the harness writes as a user line and the operator did not ask. t768 checked this against a full re-capture: the only leading tag left on a `typed` row is
+// What the harness writes as a user line and the operator did not ask. A full re-capture checked this: the only leading tag left on a `typed` row is
 // the paste wrapper. `local-command-stderr` is here as the sibling of `local-command-stdout`. The set is closed on purpose: anything else with a leading `<` was
 // typed, or pasted. A `teammate-message` is another agent speaking to a teammate, so a teammate's turns after one stay in its prompt before, or outside any.
 export const INJECTED_TAGS: ReadonlySet<string> = new Set([
@@ -1470,7 +1471,7 @@ export const captureSession = (input: ExtractInput): Capture => {
   const seenResponses = new Set<string>();
   let promptFingerprint: string | null = null;
   let cur: Current | undefined;
-  // The setup, funnel, and trust shape (t815). A subagent's run is the parent's, so it has no run of its own alone.
+  // The setup, funnel, and trust shape. A subagent's run is the parent's, so it has no run of its own alone.
   const shape = createShape(harness, (tool) => storedToolName(tool, redact), { timing: origin === undefined });
 
   const finish = (): void => {
@@ -1583,7 +1584,7 @@ export const captureSession = (input: ExtractInput): Capture => {
       session.promptFingerprint = promptFingerprint;
       continue;
     }
-    // The harness's own copy of the request body (t762): assistant and user messages with no cwd, uuid, or timestamp, repeating blocks the real lines
+    // The harness's own copy of the request body: assistant and user messages with no cwd, uuid, or timestamp, repeating blocks the real lines
     // above already hold. Reading its tool_use, tool_result, thinking, and text blocks wrote a second row for 99.8% of calls, and a second error line,
     // thinking count, and TLDR for the same ones. The skeleton above still lists the line, so the counts and the root bind.
     if (message === undefined || type === 'api-request-blob') continue;
@@ -1600,7 +1601,7 @@ export const captureSession = (input: ExtractInput): Capture => {
     }
 
     // prompt_graphs.py and cost_per_class.py: a prompt is a main-line user line with text and no tool result. They also dropped any leading "<", which lost
-    // every turn a command or a skill opened (t768); that is now `promptOpening`'s call. A line from any other harness keeps the old rule until its own brief.
+    // every turn a command or a skill opened; that is now `promptOpening`'s call. A line from any other harness keeps the old rule.
     // A `!` shell command the operator typed, or an image they pasted with no words: neither opens a prompt (the tag is injected, the image has no text), but
     // both are the operator's turn. A line the agent did not write (a meta line, a local command, a synthetic reply) is neither the operator nor the agent.
     let operatorTurn = false;
@@ -1685,7 +1686,7 @@ export const captureSession = (input: ExtractInput): Capture => {
         const name = str(block.name) ?? '?';
         const id = str(block.id);
         // A resumed session replays earlier lines, so the same tool_use id comes again, often from another cwd (so a different path hash).
-        // The first copy is the call and already holds the result; a replay would be a second row with status none (t762). The skeleton
+        // The first copy is the call and already holds the result; a replay would be a second row with status none. The skeleton
         // still lists every line, and a replayed failure stays an error line, as derive.ts counts it.
         if (id !== undefined && callById.has(id)) continue;
         const stored = storedToolName(name, redact);

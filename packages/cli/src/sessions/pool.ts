@@ -1,12 +1,14 @@
-// The derive pass over cells (t756): motifs and cells from the store, each family's reads from those, and the files they are kept in. `cells.jsonl` and `motifs.jsonl` are
+// The derive pass over cells: motifs and cells from the store, each family's reads from those, and the files they are kept in. `cells.jsonl` and `motifs.jsonl` are
 // rewritten from the log and can be dropped at any time. Each pool version's reads go in a file of their own that is written once and never rewritten, so a read cited by
 // its ID stays what it was.
 
 import { readdir, readFile, stat } from 'node:fs/promises';
 import { basename, dirname, join } from 'node:path';
 import { CliError, ExitCode } from '../errors.js';
-import { deriveCells, poolOf, serializeCells, UNKNOWN, type Cell, type Pool } from './cells.js';
+import { cellsOf, projectedStore } from './cell-increments.js';
+import { poolOf, serializeCells, UNKNOWN, type Cell, type Pool } from './cells.js';
 import type { Motif } from './motif.js';
+import { shellReader } from './projection.js';
 import { contentHash, FIRST_ORDER_FAMILIES, frozenRead, makeRead, orderResolver, type FirstOrderFamily, type OrderResolver, type Read, type ReadAsOf } from './read.js';
 import { deriveConsequences, recallGraphOf } from './recall-consequence.js';
 import { readRecalls } from './recall-object.js';
@@ -22,6 +24,7 @@ import { deriveRecovery } from './read-recovery.js';
 import { deriveToolDay } from './read-tool-day.js';
 import type { DeriveRelation } from './read-order.js';
 import type { DeriveFamily, ReadBody } from './read-support.js';
+import { vocabulary } from './vocab-load.js';
 import { deriveDayMove } from './read-day-move.js';
 import { deriveInteraction } from './read-interaction.js';
 import { deriveLeadLag } from './read-lead-lag.js';
@@ -107,7 +110,7 @@ const readStored = async (file: string): Promise<Read[] | undefined> => (await s
 /** The current pool's reads: already written when this pool has been read before, else derived and written once. */
 export const refreshPool = async (storeDir: string, store: Store): Promise<{ pool: Pool; reads: Read[] }> => {
   const recalls = deriveConsequences(store, await readRecalls(storeDir));
-  const set = deriveCells(store, recallGraphOf(store, recalls));
+  const set = cellsOf(projectedStore(store, shellReader(vocabulary())), recallGraphOf(store, recalls));
   const pool = poolOf(set, store.errors);
   const files = poolFiles(storeDir);
   await writeAtomic(files.consequences, recalls.flatMap(({ id, n, consequence }) => (consequence === undefined ? [] : [`${JSON.stringify({ id, n, consequence })}\n`])).join(''));
@@ -163,7 +166,7 @@ const storedPool = async (storeDir: string): Promise<{ pool: Pool; reads: Read[]
 
 /**
  * The pool a pull answers from: the newest one already stored, with nothing derived or written. A pull used to refresh the pool, and a deposit that moved it left the next pull to
- * derive every read again (12 to 17 s on a real store, t756) and write a file nothing prunes. Only a store with no stored pool derives one, once, and a stored one is read after that.
+ * derive every read again (12 to 17 s on a real store) and write a file nothing prunes. Only a store with no stored pool derives one, once, and a stored one is read after that.
  */
 export const servedPool = async (storeDir: string, store: Store): Promise<{ pool: Pool; reads: Read[] } | undefined> => {
   try {

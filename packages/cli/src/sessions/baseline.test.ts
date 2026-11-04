@@ -1,4 +1,4 @@
-// Layer 2's self-baseline (spec 2.2, t744): a session against the operator's own other weeks.
+// Layer 2's self-baseline (spec 2.2): a session against the operator's own other weeks.
 import { describe, expect, it } from 'vitest';
 import { BASELINE_MIN_CALLS, BASELINE_MIN_WEEKS, fitOf, formatSelfBaseline, medianOf, selfBaseline, weekOf, type BaselinePrompt, type BaselineSession, type BaselineTool, type Fraction, type SelfBaselineResult } from './baseline.js';
 

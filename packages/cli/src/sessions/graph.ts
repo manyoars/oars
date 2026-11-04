@@ -1,4 +1,4 @@
-// The edges of the steps of one transcript (t755, recall spec Section 2.3). Every edge is held on the step it points to, naming the step it came
+// The edges of the steps of one transcript (recall spec Section 2.3). Every edge is held on the step it points to, naming the step it came
 // from, so one transcript's capture writes all of its own edges and no earlier record is rewritten, including a subagent's first step, whose
 // edge comes from a call in another transcript.
 

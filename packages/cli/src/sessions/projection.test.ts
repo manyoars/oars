@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { PIPE_MAX, PRIVATE, SEED_TOP } from './public-vocabulary.js';
-import { projectHarnessVersion, projectModel, projectPackage, projectShell, projectTool } from './projection.js';
+import { projectHarnessVersion, projectModel, projectPackage, projectShell, projectTool, shellReader } from './projection.js';
+import { step, tool as toolRecord } from './pool-fixture.js';
 import { makeRedactor } from './redact.js';
 import { readVocabulary } from './vocab-load.js';
 
@@ -37,6 +38,17 @@ describe('shell form to program, subcommand, and flags', () => {
 
   it('projects a command the parser cannot read to private, never to its text', () => {
     for (const unreadable of [`$${PLANTED} --flag`, '', '   ']) expect(shell(unreadable).programs).toEqual([PRIVATE]);
+  });
+});
+
+describe('a shell step of a harness whose shell tool is not Bash or PowerShell', () => {
+  it('reads as the program and subcommand it ran, through the shared reader', () => {
+    const call = toolRecord('s1', 0, 'run_terminal_cmd', { steps: [step(0, 0, 'shell.exec', { native: 'run_terminal_cmd', identity: { program: 'git', sub: 'push', flags: ['--force'] } })] });
+    expect(shellReader(vocab)(call)).toEqual([{ program: 'git', subcommand: 'push', flags: ['--force'] }]);
+  });
+
+  it('still projects a non-shell tool without a shell step to private', () => {
+    expect(shellReader(vocab)(toolRecord('s1', 0, 'Read', { steps: [step(0, 0, 'file.read')] }))).toEqual([{ program: PRIVATE, subcommand: null, flags: [] }]);
   });
 });
 

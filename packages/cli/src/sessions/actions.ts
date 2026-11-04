@@ -1,4 +1,4 @@
-// The canonical action of a tool call (t755, recall spec Section 2.2). Every harness names its tools differently, so one table per adapter
+// The canonical action of a tool call (recall spec Section 2.2). Every harness names its tools differently, so one table per adapter
 // maps its native names onto one closed list, and a step reads alike in any harness. A new adapter adds a table here and changes nothing in the
 // extractor. A native name no table lists becomes `other`, and its name stays out of class P (`LITERAL`): the tool record keeps it, class A.
 

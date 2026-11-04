@@ -74,21 +74,20 @@ describe('the outbox', () => {
   });
 });
 
-// A batch the vocabulary accepts, holding every field the format has: each identity form, a pull, an edge, and a nested stack.
+// A batch the vocabulary accepts, holding every field the format has: each identity form, a pull, and a nested stack.
 const FRAME = { harness: 'claude-code', harnessVersion: '2.1.314', model: 'claude-opus-5-5', effort: 'high', day: '2026-11-01', platform: 'linux', shell: 'bash', stack: { languages: [], frameworks: [], size: null } };
-const STEP = { seg: 0, status: 'ok', cost: { tokens: 3, durationMs: 4 }, parent: null, edges: [{ kind: 'next', n: 1, seg: 0 }] };
+const STEP = { status: 'ok', tokens: 3, ms: 4, parent: null };
 const REAL = {
   format: SKELETON_FORMAT,
   id: '0123456789abcdef',
+  deltas: [],
   transcripts: [
     {
-      spawnedIn: null,
       harness: 'claude-code',
       frame: FRAME,
-      prompts: [{ index: 0, cls: 'edit-verify', errors: 0, wallSec: 5, usage: { input: 1, cacheWrite: 2, cacheRead: 3, output: 4, thinking: 5 }, frame: FRAME }],
+      prompts: [{ cls: 'edit-verify', errors: 0, wallSec: 5, usage: { input: 1, cacheWrite: 2, cacheRead: 3, output: 4, thinking: 5 }, frame: FRAME }],
       tools: [
         {
-          n: 0,
           side: false,
           prompt: 0,
           status: 'ok',

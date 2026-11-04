@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'vitest';
+import { storeOf } from '../../cli/src/sessions/cell-increments.js';
 import { deriveCells } from '../../cli/src/sessions/cells.js';
-import { frame, prompt, session, step, store, tool } from '../../cli/src/sessions/pool-fixture.js';
+import { frame, prompt, session, step, storedNames, store, tool } from '../../cli/src/sessions/pool-fixture.js';
 import { sessionsOf, skeletonOf, type SessionSkeleton } from '../../cli/src/sessions/pool-wire.js';
 import type { CanonicalAction } from '../../cli/src/sessions/actions.js';
 import { PUBLIC_PROGRAMS, PUBLIC_SUBCOMMANDS } from '../../cli/src/sessions/public-vocabulary.js';
-import { storeOf } from './derive.js';
 import type { Bound, Env, PoolDb } from './http.js';
 import { chunksOf, incrementsOf } from './ingest.js';
 import { sampleSkeleton } from './sample.js';
@@ -334,7 +334,7 @@ describe('a large deposit', () => {
       return tool('s1', n, native, { steps: [step(n, 0, action, { native, identity })] });
     });
     const [only] = sessionsOf(store({ sessions: [session('s1', { frame: framed })], prompts: [prompt('s1', 0, { frame: framed })], tools: calls }));
-    const built = only === undefined ? null : skeletonOf(only, id);
+    const built = only === undefined ? null : skeletonOf(only, id, storedNames);
     if (built === null) throw new Error('no skeleton');
     return built;
   };

@@ -23,18 +23,26 @@ const NOW = Date.parse('2026-11-04T10:00:00.000Z');
 
 const depsFor = (storeDir: string, extra: Partial<GateHookDeps> = {}): GateHookDeps => ({ storeDir, now: () => NOW, clock: () => 0, deadlineMs: 800, ...extra });
 
-const payload = (command: string, extra: Record<string, unknown> = {}): string =>
+/** The fields of the harness's payload these tests set beside the command. */
+interface HookPayload {
+  session_id: string;
+  tool_use_id: string;
+  cwd: string;
+  agent_id: string;
+}
+
+const payload = (command: string, extra: Partial<HookPayload> = {}): string =>
   JSON.stringify({ session_id: 's1', tool_use_id: 'u1', tool_name: 'Bash', tool_input: { command }, cwd: tmpdir(), permission_mode: 'default', hook_event_name: 'PreToolUse', ...extra });
 
 const rowsOf = (storeDir: string): CrossingRecord[] =>
   parseRows(readFileSync(crossingsPath(storeDir), 'utf8')).filter((row): row is CrossingRecord => row.kind === 'crossing');
 
-const found = (latest: string, created: string | null = '2026-10-30T00:00:00.000Z'): RegistryReader => () => Promise.resolve({ state: 'found', latest, created });
+const found = (latest: string, created: string | null = '2020-01-01T00:00:00.000Z'): RegistryReader => () => Promise.resolve({ state: 'found', latest, created });
 
 describe('oars gate hook: one record per crossing', () => {
   it('writes the identity, the time, the registry state, and novelty, and reads the rest as not-read', async () => {
     const store = folder();
-    expect(await gateHook(payload('npm install left-pad@1.3.0'), depsFor(store, { registry: found('1.3.0') }))).toBe('');
+    expect(await gateHook(payload('npm install left-pad@1.3.0'), depsFor(store, { registry: found('1.3.0', '2026-10-30T00:00:00.000Z'), random: () => 0 }))).toBe('');
     const [row, ...rest] = rowsOf(store);
     expect(rest).toEqual([]);
     expect(row).toMatchObject({
@@ -57,8 +65,9 @@ describe('oars gate hook: one record per crossing', () => {
       registryState: 'found',
       againstLatest: 'latest',
       registryAge: 'under-7-days',
-      arm: 'none',
+      arm: 'held',
       lineShown: 'none',
+      lineHeld: 'young-name-note',
       origin: 'not-read',
       decidedBy: 'not-read',
       status: 'not-read',
@@ -155,6 +164,18 @@ describe('oars gate hook: one record per crossing', () => {
     writeFileSync(join(store, 'state.json'), JSON.stringify({ redactDomains: ['corp.example'] }));
     await gateHook(payload('npm install git+https://git.corp.example/team/lib.git'), depsFor(store));
     expect(rowsOf(store).map((row) => row.name)).toEqual(['https://<org-domain>/team/lib.git']);
+  });
+});
+
+describe('oars gate hook: the policy a row was written under', () => {
+  it('records default with no file, file for one that fits, and invalid for one that does not, and writes the row in each case', async () => {
+    const store = folder();
+    await gateHook(payload('npm install left-pad', { tool_use_id: 'a' }), depsFor(store));
+    writeFileSync(join(store, 'gate-policy.json'), '{"classes":{"not-found":"block"}}');
+    await gateHook(payload('npm install left-pad', { tool_use_id: 'b' }), depsFor(store));
+    writeFileSync(join(store, 'gate-policy.json'), '{"classes":{"not-found":"deny"}}');
+    expect(await gateHook(payload('npm install left-pad', { tool_use_id: 'c' }), depsFor(store))).toBe('');
+    expect(rowsOf(store).map((row) => row.policy)).toEqual(['default', 'file', 'invalid']);
   });
 });
 
@@ -342,6 +363,98 @@ describe('oars gate hook: the deadline', () => {
     const reader = vi.fn<RegistryReader>(found('1.0.0'));
     await gateHook(payload('npm install left-pad'), depsFor(store, { registry: reader, clock: () => 790 }));
     expect(reader).not.toHaveBeenCalled();
+    expect(rowsOf(store)).toHaveLength(1);
+  });
+});
+
+describe('oars gate hook: one ask per name', () => {
+  it('does not ask while the name is locked, and hands nothing over', async () => {
+    const store = folder();
+    const reader = vi.fn<RegistryReader>(found('1.0.0'));
+    const fill = vi.fn<NonNullable<GateHookDeps['fill']>>(() => Promise.resolve());
+    const locked = vi.fn<NonNullable<GateHookDeps['locked']>>(() => Promise.resolve(true));
+    await gateHook(payload('npm install left-pad'), depsFor(store, { registry: reader, fill, locked }));
+    expect(locked).toHaveBeenCalledWith({ class: 'npm-package', name: 'left-pad', cwd: tmpdir() });
+    expect(reader).not.toHaveBeenCalled();
+    expect(fill).not.toHaveBeenCalled();
+    expect(rowsOf(store).map((row) => row.registryState)).toEqual(['not-read']);
+  });
+
+  it('asks when the name is not locked, and a lock check that throws does not stop the ask', async () => {
+    const store = folder();
+    const reader = vi.fn<RegistryReader>(found('1.0.0'));
+    await gateHook(payload('npm install left-pad', { tool_use_id: 'a' }), depsFor(store, { registry: reader, locked: () => Promise.resolve(false) }));
+    await gateHook(payload('npm install other-lib', { tool_use_id: 'b' }), depsFor(store, { registry: reader, locked: () => Promise.reject(new Error('no store')) }));
+    expect(reader).toHaveBeenCalledTimes(2);
+  });
+
+  it('stops its own ask before it hands the name over, so the manager is never asked twice at once', async () => {
+    const store = folder();
+    let signal: AbortSignal | undefined;
+    const registry: RegistryReader = (ask) => {
+      signal = ask.signal;
+      return new Promise<RegistryAnswer>(() => undefined);
+    };
+    const aborted: boolean[] = [];
+    const fill = vi.fn<NonNullable<GateHookDeps['fill']>>(() => {
+      aborted.push(signal?.aborted ?? false);
+      return Promise.resolve();
+    });
+    await gateHook(payload('npm install left-pad'), depsFor(store, { registry, clock: () => 0, deadlineMs: 400, fill }));
+    expect(signal).toBeDefined();
+    expect(aborted).toEqual([true]);
+  });
+
+  it('leaves an ask that answered alone', async () => {
+    const store = folder();
+    let signal: AbortSignal | undefined;
+    const registry: RegistryReader = (ask) => {
+      signal = ask.signal;
+      return found('1.0.0')(ask);
+    };
+    await gateHook(payload('npm install left-pad'), depsFor(store, { registry }));
+    expect(signal?.aborted).toBe(false);
+  });
+});
+
+describe('oars gate hook: finishing a cut ask', () => {
+  const stalled: RegistryReader = () => new Promise<RegistryAnswer>(() => undefined);
+
+  it('hands the name to the fill when the ask is cut, and again when there was no time to start it', async () => {
+    const store = folder();
+    const fill = vi.fn<NonNullable<GateHookDeps['fill']>>(() => Promise.resolve());
+    await gateHook(payload('npm install left-pad'), depsFor(store, { registry: stalled, clock: () => 0, deadlineMs: 400, fill }));
+    await gateHook(payload('npm install left-pad', { tool_use_id: 'b' }), depsFor(store, { registry: stalled, clock: () => 790, fill }));
+    expect(fill).toHaveBeenCalledTimes(2);
+    expect(fill).toHaveBeenCalledWith({ class: 'npm-package', name: 'left-pad', cwd: tmpdir() });
+    expect(rowsOf(store).map((row) => row.registryState)).toEqual(['not-read', 'not-read']);
+  });
+
+  it('starts at most three helpers in one call, and leaves the other names to a later sight', async () => {
+    const store = folder();
+    const fill = vi.fn<NonNullable<GateHookDeps['fill']>>(() => Promise.resolve());
+    const names = Array.from({ length: 20 }, (_, at) => `lib-${String(at)}`);
+    await gateHook(payload(`npm install ${names.join(' ')}`), depsFor(store, { registry: stalled, clock: () => 790, fill }));
+    expect(fill.mock.calls.map(([ask]) => ask.name)).toEqual(['lib-0', 'lib-1', 'lib-2']);
+    expect(rowsOf(store)).toHaveLength(20);
+    await gateHook(payload('npm install lib-3', { tool_use_id: 'b' }), depsFor(store, { registry: stalled, clock: () => 790, fill }));
+    expect(fill).toHaveBeenCalledTimes(4);
+  });
+
+  it('does not hand over a name whose answer came, was kept, or could not be asked', async () => {
+    const store = folder();
+    const fill = vi.fn<NonNullable<GateHookDeps['fill']>>(() => Promise.resolve());
+    await gateHook(payload('npm install left-pad', { tool_use_id: 'a' }), depsFor(store, { registry: found('1.0.0'), fill }));
+    await gateHook(payload('npm install left-pad', { tool_use_id: 'b' }), depsFor(store, { registry: stalled, fill }));
+    await gateHook(payload('yarn add other-lib', { tool_use_id: 'c' }), depsFor(store, { registry: stalled, fill }));
+    await gateHook(payload('npm install third-lib', { tool_use_id: 'd' }), depsFor(store, { fill }));
+    expect(fill).not.toHaveBeenCalled();
+  });
+
+  it('keeps the row and its empty output when the fill throws', async () => {
+    const store = folder();
+    const fill = (): Promise<void> => Promise.reject(new Error('lock failed'));
+    expect(await gateHook(payload('npm install left-pad'), depsFor(store, { registry: stalled, clock: () => 0, deadlineMs: 400, fill }))).toBe('');
     expect(rowsOf(store)).toHaveLength(1);
   });
 });

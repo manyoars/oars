@@ -26,7 +26,7 @@ describe('batchCounts', () => {
   });
 
   it('holds a mixed batch to its strictest harness, subagents folded in', () => {
-    const mixed: SessionSkeleton = { ...cursor, transcripts: [...cursor.transcripts, ...claude.transcripts.map((transcript) => ({ ...transcript, spawnedIn: 0 }))] };
+    const mixed: SessionSkeleton = { ...cursor, transcripts: [...cursor.transcripts, ...claude.transcripts.map((transcript) => ({ ...transcript }))] };
     expect(batchCounts('skeleton', mixed, ONE)).toBe(false);
     expect(batchCounts('committed', mixed, ONE)).toBe(true);
   });
@@ -41,7 +41,7 @@ describe('batchCounts', () => {
   it('finds the prompt in one transcript and the step in another', () => {
     const [main] = claude.transcripts;
     if (main === undefined) throw new Error('no transcript');
-    const split: SessionSkeleton = { ...claude, transcripts: [{ ...main, tools: [] }, { ...main, spawnedIn: 0, prompts: [] }] };
+    const split: SessionSkeleton = { ...claude, transcripts: [{ ...main, tools: [] }, { ...main, prompts: [] }] };
     expect(batchCounts('committed', split, ONE)).toBe(true);
   });
 });
@@ -146,7 +146,7 @@ describe('the access flag over the routes', () => {
     await inPool(async (pool) => {
       const { token, account } = await depositor(pool, '3009');
       const sent = sampleSkeleton('0000000000003009');
-      // A claude-code batch does not count at the ingest tier, so its row is raised by hand, as the root check will (Brief 2).
+      // A claude-code batch does not count at the ingest tier, so its row is raised by hand, as the root check will.
       await (await pool.db()).prepare("UPDATE deposits SET tier = 'committed', counted_at = ? WHERE account = ?").bind(Date.now() - DAY_MS, account).run();
       const before = await (await pool.db()).prepare('SELECT counted_at AS counted FROM deposits WHERE account = ?').bind(account).first();
       expect(typeof fieldOf(before, 'counted')).toBe('number');

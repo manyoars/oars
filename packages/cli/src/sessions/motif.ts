@@ -1,4 +1,4 @@
-// The motif (t756, recall spec Section 2.4): a window of steps, hashed without its frame or its account. One motif ID read across frames is how the record
+// The motif (recall spec Section 2.4): a window of steps, hashed without its frame or its account. One motif ID read across frames is how the record
 // compares models, harnesses, versions, and dates, and the hash takes no salt, so the same shape from two accounts joins.
 
 import { ACTION_TABLES, actionOf, type CanonicalAction } from './actions.js';

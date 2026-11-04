@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { FIXTURES, NOW, addProject, cleanup, stage, type Staged } from './test-support.js';
 
 // The log's real limit is 536,870,888 characters, and a file that size is too slow for the suite. So a text read of the log fails here past
-// an injected size, the way Node fails past the real one; the proof over a real 540 MB log is in the t767 report.
+// an injected size, the way Node fails past the real one; the proof over a real 540 MB log was run separately.
 interface Seams {
   logChars: number;
   rename: ((to: string) => Promise<void>) | undefined;

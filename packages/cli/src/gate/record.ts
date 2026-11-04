@@ -1,5 +1,7 @@
 // The shape of `crossings.jsonl`, in closed vocabulary. Field classes are in `docs/gate.md` and `docs/sessions-store.md`: a name and a stated
 // version are class A because a private package's name can identify private work, and no path, working folder, or command text is kept at all.
+import { createHash } from 'node:crypto';
+import type { PolicySource } from './policy.js';
 import { CROSSING_CLASSES, CROSSING_FORMS, type CrossingClass, type CrossingForm, type UnreadShape, type VersionForm } from './checks.js';
 
 export const GATE_VERSION = 1;
@@ -48,8 +50,13 @@ export type RegistryAge = (typeof REGISTRY_AGES)[number];
 export const DEPTHS = ['main', 'subagent'] as const;
 export type Depth = (typeof DEPTHS)[number];
 
-/** Replay shows nothing to an agent, so these two read `none`; they stay in the shape so a hook's records and a replay's compare. */
-export type NotShown = 'none';
+/** Whether a note that would show did (`shown`), was held back by the policy's holdback (`held`), or there was none to show or the line was a block (`none`). A replay shows nothing, so it reads `none`. */
+export const ARMS = ['none', 'shown', 'held'] as const;
+export type Arm = (typeof ARMS)[number];
+
+/** The fixed ids of the lines the hook can show; the words are in `notes.ts`. `none` is no line shown, a held note included. */
+export const LINE_IDS = ['none', 'young-name-note', 'not-found-note', 'not-found-block'] as const;
+export type LineId = (typeof LINE_IDS)[number];
 
 export interface CrossingRecord {
   kind: 'crossing';
@@ -75,8 +82,12 @@ export interface CrossingRecord {
   againstLatest: AgainstLatest;
   registryState: RegistryState;
   registryAge: RegistryAge;
-  arm: NotShown;
-  lineShown: NotShown;
+  arm: Arm;
+  lineShown: LineId;
+  /** The line a held note would have shown. Recorded apart from `lineShown` (which stays `none` when held) so the arms can be compared line by line; a row cannot be backfilled. */
+  lineHeld: LineId;
+  /** Which policy stood when the hook wrote the row. Absent in a replay row and in a row an earlier build wrote: no policy was read. */
+  policy?: PolicySource;
   // Class A: join ids, a finer time, and what the command stated.
   session: string;
   agent: string | null;
@@ -105,6 +116,10 @@ export interface RegistryRow {
   kind: 'registry';
   v: number;
   day: string;
+  /** When the answer was read, to the millisecond; a row an earlier build wrote has none. A not-found answer is trusted for minutes, not days. */
+  ts?: string;
+  /** Which folder the answer came from (`folderKey`): a folder's own config can name another registry, so a kept answer answers only that folder. A row with none is not fresh. Class A. */
+  folder?: string;
   class: CrossingClass;
   state: 'found' | 'not-found';
   created: string | null;
@@ -113,6 +128,9 @@ export interface RegistryRow {
 }
 
 export type Row = CrossingRecord | RunRow | RegistryRow;
+
+/** A truncated SHA-256 of the folder an ask ran in, so a kept answer names its folder without storing the path. */
+export const folderKey = (cwd: string): string => createHash('sha256').update(cwd).digest('hex').slice(0, 16);
 
 /** The harness's permission mode, in the closed vocabulary: a mode this version does not know reads `other`. */
 export const permissionOf = (value: string): Permission => PERMISSIONS.find((known) => known === value) ?? 'other';
@@ -139,7 +157,7 @@ export { CROSSING_CLASSES, CROSSING_FORMS };
 const isLive = (row: CrossingRecord): boolean => row.via === 'hook' || row.via === 'both';
 
 /** A hook never saw these, so a hook row says them as `not-read`, `null`, or `unknown`: then the replay's value stands. */
-const unsaid = (value: unknown): boolean => value === NOT_READ || value === null || value === 'unknown';
+const unsaid = (value: unknown): boolean => value === undefined || value === NOT_READ || value === null || value === 'unknown';
 
 const pick = <K extends keyof CrossingRecord>(key: K, live: CrossingRecord, replayed: CrossingRecord): CrossingRecord[K] => (unsaid(live[key]) ? replayed[key] : live[key]);
 
@@ -166,8 +184,11 @@ const merged = (live: CrossingRecord, replayed: CrossingRecord): CrossingRecord 
     : live.form === 'local-bin-run'
       ? { againstLatest: NOT_READ, registryState: NOT_READ, registryAge: NOT_READ }
       : { againstLatest: live.againstLatest, registryState: live.registryState, registryAge: live.registryAge }),
+  ...(live.policy === undefined ? {} : { policy: live.policy }),
   arm: pick('arm', live, replayed),
   lineShown: pick('lineShown', live, replayed),
+  // A hook row from an earlier build has no `lineHeld`: `unsaid` reads it as nothing said, so the replay's `none` stands.
+  lineHeld: pick('lineHeld', live, replayed),
 });
 
 /** The key a call crossing is counted by: nothing counts twice when a row has a tool use id and another row has the same one. */
