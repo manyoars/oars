@@ -182,6 +182,8 @@ export const ACTION_TABLES: { readonly [harness in Harness]: ActionTable } = {
       tracker_update_task: 'plan.update',
       tracker_get_task: 'plan.update',
       tracker_list_tasks: 'plan.update',
+      tracker_add_dependency: 'plan.update',
+      tracker_visualize: 'plan.update',
       ask_user: 'ask.user',
       mcp_oars_oars_recall: 'recall.pull',
       'mcp_oars-sessions_oars_recall': 'recall.pull',
