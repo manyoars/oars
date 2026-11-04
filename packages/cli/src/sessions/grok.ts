@@ -262,7 +262,7 @@ export const grokLines = (text: string, fallbackId: string, summary: Obj, usage:
       const index = num(meta.promptIndex);
       if (pending !== undefined && index !== pending.index) flushPrompt();
       open = undefined;
-      pending = { text: (pending?.text ?? '') + part, when: pending?.when ?? when, index: pending === undefined ? index : pending.index };
+      pending = { text: (pending?.text ?? '') + part, when: pending?.when ?? when, index };
     } else if (kind === 'agent_message_chunk') {
       flushPrompt();
       if (meta.hostTurn === true) {
