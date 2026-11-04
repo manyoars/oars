@@ -1,4 +1,4 @@
-// What crosses the wire between `oars pool` and the pool server (t758, recall spec Sections 2.5, 4, and 5). A skeleton is one session in closed vocabulary: the records a cell is
+// What crosses the wire between `oars pool` and the pool server (the recall spec's Sections 2.5, 4, and 5). A skeleton is one session in closed vocabulary: the records a cell is
 // computed from, with every class A field left out, so any later derivation can run over old data while nothing private leaves. The client builds a skeleton and checks it before
 // sending, and the server parses it again, field by field, because a live URL takes anything from anyone. This file imports nothing from the file system: the Worker bundles it.
 
@@ -138,14 +138,32 @@ const wireCommand = ({ program, subcommand, flags }: ShellCommand): ShellIdentit
   return { program, sub: subcommand !== null && PUBLIC_SUBCOMMANDS.get(program)?.has(subcommand) === true ? subcommand : null, flags: flags.filter(isWireFlag) };
 };
 
-/** A stored tool's steps with each shell step's identity replaced by the projected, wire-held command; the other steps keep theirs. The one place a deposit and a local read take it from. */
+/** The wire's one spelling of "not admitted": a name the server's list does not hold goes as `private`, whatever the local store spells it. */
+const listed = (allowed: ReadonlySet<string>, name: string): string => (allowed.has(name) ? name : PRIVATE);
+
+/** A pull in the wire's spelling: its package name is a list member or `private`; the version keeps the registry's own `<literal>` for one it does not show. */
+const wirePull = (pull: PullIdentity): PullIdentity => ({ ...pull, name: listed(PUBLIC_PACKAGES, pull.name) });
+
+/** A non-shell step's identity in the wire's spelling; a shell step's comes from `wireCommand`. */
+const wireIdentity = (identity: StepIdentity): StepIdentity => {
+  if (identity === null || 'program' in identity) return identity;
+  if ('server' in identity) return { ...identity, server: listed(PUBLIC_MCP_SERVERS, identity.server) };
+  if ('skill' in identity) return { skill: listed(PUBLIC_SKILLS, identity.skill) };
+  return { host: identity.host === null ? null : listed(PUBLIC_HOSTS, identity.host) };
+};
+
+/**
+ * A stored tool's steps as the wire holds them: each shell step's identity is replaced by the projected command, and every name the server has no row for (a native name, MCP server,
+ * skill, host, or pull name) reads `private`. A `private` program holds no pull, so a stored step whose public program has since left the list carries none. The one place a deposit and a local read take it from.
+ */
 export const projectedSteps = (tool: ToolObservation, read: ShellReader): StepObservation[] => {
   const commands = read(tool);
   return (tool.steps ?? []).map((step, at) => {
-    if (step.action !== 'shell.exec') return step;
+    const native = step.native === LITERAL ? PRIVATE : step.native;
+    if (step.action !== 'shell.exec') return { ...step, native, identity: wireIdentity(step.identity) };
     const command = wireCommand(commands[at] ?? { program: PRIVATE, subcommand: null, flags: [] });
     const pulls = step.identity !== null && 'program' in step.identity ? step.identity.pulls : undefined;
-    return { ...step, identity: pulls === undefined ? command : { ...command, pulls } };
+    return { ...step, native, identity: pulls === undefined || command.program === PRIVATE ? command : { ...command, pulls: pulls.map(wirePull) } };
   });
 };
 
@@ -274,7 +292,7 @@ const oneOf = <T extends string>(list: readonly T[], value: unknown, at: string)
 
 const inSet = (allowed: ReadonlySet<string>, value: unknown, at: string): string => {
   const name = textOf(value, at);
-  if (name !== LITERAL && !allowed.has(name)) throw new Refused(at, 'outside the vocabulary');
+  if (name !== PRIVATE && !allowed.has(name)) throw new Refused(at, 'outside the vocabulary');
   return name;
 };
 
@@ -369,11 +387,11 @@ const parseIdentity = (harness: Harness, action: CanonicalAction, value: unknown
   if (value === null) return null;
   if (action === 'shell.exec') {
     const raw = fieldsOf(value, at, ['program', 'sub', 'flags'], ['pulls']);
-    // A program is a list member or `private`, and a `private` program holds no subcommand: the projection writes nothing else.
+    // A program is a list member or `private`, and a `private` program holds no subcommand, flag, or pull.
     const program = textOf(raw.program, under(at, 'program'));
     if (program !== PRIVATE && !PUBLIC_PROGRAMS.has(program)) throw new Refused(under(at, 'program'), 'outside the vocabulary');
     if (program === PRIVATE) {
-      if (raw.flags !== undefined && !(Array.isArray(raw.flags) && raw.flags.length === 0)) throw new Refused(under(at, 'flags'), 'a private program holds no flags');
+      if (!(Array.isArray(raw.flags) && raw.flags.length === 0)) throw new Refused(under(at, 'flags'), 'a private program holds no flags');
       if (raw.pulls !== undefined) throw new Refused(under(at, 'pulls'), 'a private program holds no pulls');
     }
     const subs = PUBLIC_SUBCOMMANDS.get(program) ?? new Set<string>();
@@ -399,7 +417,7 @@ const parseIdentity = (harness: Harness, action: CanonicalAction, value: unknown
 
 const parseNative = (harness: Harness, value: unknown, at: string): string => {
   const native = textOf(value, at);
-  if (native === LITERAL) return native;
+  if (native === PRIVATE) return native;
   const table = ACTION_TABLES[harness];
   if (Object.hasOwn(table.rows, native)) return native;
   const mcp = mcpOf(table, native);

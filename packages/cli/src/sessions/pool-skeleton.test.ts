@@ -82,18 +82,56 @@ describe('the leak test: a private name in a path, a program, a package, an argu
     ]);
   });
 
-  // `projectedSteps` copies a stored pull through, so it is the parser that keeps a private package name off the wire: a batch holding one is refused, never sent.
-  it('refuses a batch whose stored pull holds a private package name', () => {
+  const batchOf = (steps: ReturnType<typeof step>[]): SessionSkeleton | null => {
     const stored = store({
       sessions: [session('s', { frame: framed })],
       prompts: [prompt('s', 0, { frame: framed })],
-      tools: [tool('s', 0, 'Bash', { steps: [step(0, 0, 'shell.exec', { native: 'Bash', identity: { program: 'npm', sub: 'install', flags: [], pulls: [{ registry: 'npm', name: PLANTED, version: null }] } })] })],
+      tools: steps.map((one, at) => tool('s', at, 'Bash', { steps: [one] })),
     });
     const [only] = sessionsOf(stored);
-    const skeleton = only === undefined ? null : skeletonOf(only, '0123456789abcdef', shellReader(vocab));
-    const parsed = parseSkeleton(JSON.parse(JSON.stringify(skeleton)));
-    expect(parsed.ok).toBe(false);
-    expect(parsed.ok ? '' : parsed.field).toContain('pulls');
+    return only === undefined ? null : skeletonOf(only, '0123456789abcdef', shellReader(vocab));
+  };
+  const stepsOf = (skeleton: SessionSkeleton | null): SessionSkeleton['transcripts'][number]['tools'][number]['steps'] => (skeleton === null ? [] : skeleton.transcripts.flatMap((one) => one.tools.flatMap((each) => each.steps)));
+
+  // The stored step holds the private name itself, as an older list or a damaged store could; the wire has one spelling for every name it has no row for.
+  it('sends an unlisted MCP server, skill, host, pull name, and native name as private, and the parser takes the batch', () => {
+    const skeleton = batchOf([
+      step(0, 0, 'mcp.call', { native: '<literal>', identity: { server: PLANTED, tool: '<literal>' } }),
+      step(1, 0, 'skill.run', { native: 'Skill', identity: { skill: PLANTED } }),
+      step(2, 0, 'web.fetch', { native: 'WebFetch', identity: { host: `${PLANTED}.internal` } }),
+      step(3, 0, 'shell.exec', { native: 'Bash', identity: { program: 'npm', sub: 'install', flags: [], pulls: [{ registry: 'npm', name: PLANTED, version: null }] } }),
+    ]);
+    expect(stepsOf(skeleton).map(({ native, identity }) => [native, identity])).toEqual([
+      [PRIVATE, { server: PRIVATE, tool: '<literal>' }],
+      ['Skill', { skill: PRIVATE }],
+      ['WebFetch', { host: PRIVATE }],
+      ['Bash', { program: 'npm', sub: 'install', flags: [], pulls: [{ registry: 'npm', name: PRIVATE, version: null }] }],
+    ]);
+    expect(JSON.stringify(skeleton).toLowerCase()).not.toContain(PLANTED.toLowerCase());
+    expect(parseSkeleton(JSON.parse(JSON.stringify(skeleton))).ok).toBe(true);
+  });
+
+  it('keeps a listed MCP server, skill, host, and pull name as they are stored', () => {
+    const skeleton = batchOf([
+      step(0, 0, 'mcp.call', { native: 'mcp__github__get_issue', identity: { server: 'github', tool: 'get_issue' } }),
+      step(1, 0, 'web.fetch', { native: 'WebFetch', identity: { host: 'github.com' } }),
+      step(2, 0, 'web.search', { native: 'WebSearch', identity: { host: null } }),
+      step(3, 0, 'shell.exec', { native: 'Bash', identity: { program: 'npm', sub: 'install', flags: [], pulls: [{ registry: 'npm', name: 'zod', version: null }] } }),
+    ]);
+    expect(stepsOf(skeleton).map(({ identity }) => identity)).toEqual([
+      { server: 'github', tool: 'get_issue' },
+      { host: 'github.com' },
+      { host: null },
+      { program: 'npm', sub: 'install', flags: [], pulls: [{ registry: 'npm', name: 'zod', version: null }] },
+    ]);
+    expect(parseSkeleton(JSON.parse(JSON.stringify(skeleton))).ok).toBe(true);
+  });
+
+  // The older-list case: capture wrote the pull while the program was listed, and the list has since dropped it. The program goes as private, and a private program holds no pull.
+  it('sends a stored step whose public program has left the list as private alone, with no pull, and the parser takes the batch', () => {
+    const skeleton = batchOf([step(0, 0, 'shell.exec', { native: 'Bash', identity: { program: 'acme-deploy', sub: null, flags: [], pulls: [{ registry: 'npm', name: 'zod', version: null }] } })]);
+    expect(stepsOf(skeleton).map(({ identity }) => identity)).toEqual([{ program: PRIVATE, sub: null, flags: [] }]);
+    expect(parseSkeleton(JSON.parse(JSON.stringify(skeleton))).ok).toBe(true);
   });
 
   it('holds a batch the parser accepts unchanged', () => {

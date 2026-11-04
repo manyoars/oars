@@ -261,7 +261,7 @@ export interface VerifyReport {
   audit: { counts: T0Counts; sessions: SessionAudit[] };
   /** Layer 2 at T0, local (spec 2.2): each session's week against the operator's own other weeks on its harness; `not run` below 1,000 calls or 4 baseline weeks. */
   selfBaseline: SelfBaselineResult[];
-  /** Batches in any server's outbox built under an older vocabulary or field list: never printed, never sent, and removed by the next `pool deposit`. Counted from local folders; nothing is sent. */
+  /** Batches in any server's outbox built under an older vocabulary, field list, or skeleton format: never printed, never sent, and removed by the next `pool deposit`. Counted from local folders; nothing is sent. */
   staleBatches: number;
 }
 
@@ -304,7 +304,7 @@ export const sessionsVerify = async (deps: SessionsDeps, options: { session: str
       failed,
       report,
       document: { ok: true, ...report, newerCaptures: store.newerCaptures },
-      text: [formatVerify(results, skeletons.length), formatAudit(audits), formatSelfBaseline(selfBaseline), ...(resultLines === '' ? [] : [resultLines]), ...(frozen.size > 0 ? [`${String(frozen.size)} cv-frozen sessions: behind the current capture version, but the transcript is gone from the harness and raw/ (or, for a Cursor session, the composer is gone from Cursor), so they cannot be captured again`] : []), ...skippedNotice(scope), ...(staleBatches > 0 ? [`${String(staleBatches)} outbox batches were built under an older vocabulary or field list; they will never be sent, and oars pool deposit removes them`] : []), ...newerNotice(store), ...(unreadable > 0 ? [`FAIL  ${String(unreadable)} unreadable skeleton files (torn or corrupted); redeposit to rebuild them`] : []), ...stuckLines].join('\n'),
+      text: [formatVerify(results, skeletons.length), formatAudit(audits), formatSelfBaseline(selfBaseline), ...(resultLines === '' ? [] : [resultLines]), ...(frozen.size > 0 ? [`${String(frozen.size)} cv-frozen sessions: behind the current capture version, but the transcript is gone from the harness and raw/ (or, for a Cursor session, the composer is gone from Cursor), so they cannot be captured again`] : []), ...skippedNotice(scope), ...(staleBatches > 0 ? [`${String(staleBatches)} outbox batches were built under an older vocabulary, field list, or skeleton format; they will never be sent, and oars pool deposit removes them`] : []), ...newerNotice(store), ...(unreadable > 0 ? [`FAIL  ${String(unreadable)} unreadable skeleton files (torn or corrupted); redeposit to rebuild them`] : []), ...stuckLines].join('\n'),
     };
     const cvBehind = results.find((result) => result.name === CAPTURE_INVARIANTS[0])?.violations ?? 0;
     // The key is the sessions checked, each at its rev and cv, and the code's ev (spec 4.2).

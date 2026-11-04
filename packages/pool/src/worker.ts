@@ -1,11 +1,11 @@
-// The pool server (t758): a Workers fetch handler over one D1 database. Deposits take closed-vocabulary skeletons only, and a refusal names the field.
+// The pool server: a Workers fetch handler over one D1 database. Deposits take closed-vocabulary skeletons only, and a refusal names the field.
 import { parseSkeleton, type SessionSkeleton } from '../../cli/src/sessions/pool-wire.js';
 import type { Frame } from '../../cli/src/sessions/schema.js';
 import { batchCounts, INGEST_TIER } from './access.js';
 import { fetchBundle } from './bundle.js';
 import { covenantAccept, covenantNotAccepted, covenantStatus, depositsClosed, hasAccepted } from './covenant.js';
 import { answer, bound, refuse, wholeBinding, type Env } from './http.js';
-import { incrementsOf, incrementStatements, netCellCount, previousOf } from './ingest.js';
+import { incrementsOf, incrementStatements, markOf, netCellCount, previousOf } from './ingest.js';
 import { accountOf, login } from './identity.js';
 
 /** D1 holds at most 2 MB in one value. A body declaring more is refused unread, and one that declares nothing is measured before it is parsed. */
@@ -76,8 +76,8 @@ const deposit = async (request: Request, env: Env): Promise<Response> => {
   const [inserted] = await env.DB.batch([insert, ...incrementStatements(env, account, skeleton.id, ingest, new Date().toISOString().slice(0, 10), next, previous?.increments)]);
   if ((inserted?.meta.changes ?? 0) === 0) {
     // The upsert changes nothing in two cases: a limit refused the row, or another deposit of this session set the row after this one read it. Only the second leaves a row with another mark than the one read.
-    const held = await previousOf(env, account, skeleton.id);
-    if (held !== undefined && held.ingest !== (previous?.ingest ?? '')) return refuse(409, 'deposit_conflict', 'Another deposit of this session landed first. Send it again.');
+    const held = await markOf(env, account, skeleton.id);
+    if (held !== undefined && held !== (previous?.ingest ?? '')) return refuse(409, 'deposit_conflict', 'Another deposit of this session landed first. Send it again.');
     return refuse(403, 'deposit_limit', `An account holds at most ${String(limit)} deposits and ${String(budget)} stored bytes.`);
   }
   return answer(201, { ok: true, id: skeleton.id });
