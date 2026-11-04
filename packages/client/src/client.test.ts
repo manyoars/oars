@@ -2,8 +2,8 @@ import { describe, expect, it } from 'vitest';
 import { createOarsClient, DEFAULT_API_URL } from './client.js';
 
 const registerBody = {
-  name: 'Paid API',
-  services: [{ name: 'api', image: 'ghcr.io/manyoars/paid-api@sha256:0123', cpuMillicores: 250, memoryMib: 256 }],
+  name: 'Example API',
+  services: [{ name: 'api', image: 'ghcr.io/manyoars/example-api@sha256:0123', cpuMillicores: 250, memoryMib: 256 }],
 };
 
 // Records every request the client sends and answers each with an empty JSON object.
