@@ -20,7 +20,7 @@ const deposit = async (target: TestPool, id: string): Promise<string> => {
 /** An index row no ingest would write, one that breaks a parse: only a write past the routes puts it there, and a ledger row can no longer do the same. */
 const damageIndex = async (db: TestDb): Promise<void> => {
   await db.prepare("INSERT INTO motifs (motif_id, motif) VALUES ('damaged', 'not json')").run();
-  await db.prepare("INSERT INTO cells (key, harness_bucket, motif_id, frame_bucket, day, exposed, sessions, clusters, ok, failed, tokens, duration_ms) VALUES ('damaged', ?, 'damaged', 'f', '2026-11-01', 0, 1, 1, 0, 0, 0, 0)").bind(harnessBucket('2.1.314')).run();
+  await db.prepare("INSERT INTO cells (key, harness_bucket, motif_id, frame_bucket, day, exposed, sessions, clusters, ok, failed, tokens, duration_ms) VALUES ('damaged', ?, 'damaged', ?, '2026-11-01', 0, 1, 1, 0, 0, 0, 0)").bind(harnessBucket('2.1.314'), `claude-code/${harnessBucket('2.1.314')}/m/e`).run();
 };
 
 const tally = async (target: TestPool, account: string): Promise<{ week: unknown; fetches: unknown }> => {

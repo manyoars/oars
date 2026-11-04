@@ -3,7 +3,7 @@
 import { harnessBucket, type Cell } from '../../cli/src/sessions/cells.js';
 import type { Motif, MotifLevel, WindowStep } from '../../cli/src/sessions/motif.js';
 import type { StrataCell } from '../../cli/src/sessions/pool-wire.js';
-import { K_CELL } from './derive.js';
+import { bucketPrefix, K_CELL } from './derive.js';
 import { fieldOf, type Env } from './http.js';
 
 /** What a bundle is derived from: one version's cells, the motifs they name, and the strata that clear the floor. */
@@ -43,11 +43,12 @@ const motifOf = (row: unknown): Motif => {
   return { motifId: textField(motif, 'motifId'), level, steps, cls };
 };
 
-export const storedOf = async (env: Env, harnessVersion: string): Promise<StoredPool> => {
+export const storedOf = async (env: Env, harness: string, harnessVersion: string): Promise<StoredPool> => {
   const bucket = harnessBucket(harnessVersion);
+  const prefix = bucketPrefix(harness, harnessVersion);
   const [cells, motifs, strata] = await Promise.all([
-    env.DB.prepare('SELECT motif_id, frame_bucket, day, exposed, sessions, clusters, ok, failed, tokens, duration_ms FROM cells WHERE harness_bucket = ? AND sessions > 0').bind(bucket).all(),
-    env.DB.prepare('SELECT motif FROM motifs WHERE motif_id IN (SELECT motif_id FROM cells WHERE harness_bucket = ? AND sessions > 0)').bind(bucket).all(),
+    env.DB.prepare('SELECT motif_id, frame_bucket, day, exposed, sessions, clusters, ok, failed, tokens, duration_ms FROM cells WHERE harness_bucket = ? AND substr(frame_bucket, 1, ?) = ? AND sessions > 0').bind(bucket, prefix.length, prefix).all(),
+    env.DB.prepare('SELECT motif FROM motifs WHERE motif_id IN (SELECT motif_id FROM cells WHERE harness_bucket = ? AND substr(frame_bucket, 1, ?) = ? AND sessions > 0)').bind(bucket, prefix.length, prefix).all(),
     env.DB.prepare('SELECT dimension, value, sessions, clusters FROM strata WHERE clusters >= ? AND sessions > 0').bind(K_CELL).all(),
   ]);
   return {

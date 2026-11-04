@@ -1,6 +1,6 @@
 // Cells and reads (recall spec Sections 2.5 and 2.6), with the same code a local store runs. A deposit's skeleton becomes cells in `cell-increments.ts`, which ingest adds to the stored
 // ones; a bundle is derived from the stored cells, whose `clusters` is the held count of accounts. Recovery is left out: its signature is class A text, which a skeleton does not hold.
-import { cellIdOf, poolOf, type Pool } from '../../cli/src/sessions/cells.js';
+import { cellIdOf, harnessBucket, poolOf, type Pool } from '../../cli/src/sessions/cells.js';
 import { motifName } from '../../cli/src/sessions/motif.js';
 import { BUNDLE_FORMAT, type Bundle, VOCAB_VERSION } from '../../cli/src/sessions/pool-wire.js';
 import { makeRead, orderResolver, type Read } from '../../cli/src/sessions/read.js';
@@ -46,9 +46,13 @@ const readsOf = (pool: Pool): Read[] => {
 
 const compare = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
 
-/** What one harness version's bundle holds: the stored cells of its bucket, the only version a landed cell keys on. A share's denominator is the bundle's; only what clears the floor leaves. */
-export const bundleOf = (harnessVersion: string, stored: StoredPool): Bundle => {
-  const cells = [...stored.cells].sort((a, b) => compare(a.motifId, b.motifId) || compare(a.frameBucket, b.frameBucket) || compare(a.day, b.day));
+/** The frame buckets of one harness at one numbered bucket start with this: `frameBucket` is `harness/bucket/model/effort`, and two harnesses can share a numbered bucket. */
+export const bucketPrefix = (harness: string, harnessVersion: string): string => `${harness}/${harnessBucket(harnessVersion)}/`;
+
+/** What one harness's bundle at one version holds: the stored cells of its (harness, bucket), the only pair a landed cell keys on. A share's denominator is the bundle's; only what clears the floor leaves. */
+export const bundleOf = (harness: string, harnessVersion: string, stored: StoredPool): Bundle => {
+  const prefix = bucketPrefix(harness, harnessVersion);
+  const cells = stored.cells.filter((cell) => cell.frameBucket.startsWith(prefix)).sort((a, b) => compare(a.motifId, b.motifId) || compare(a.frameBucket, b.frameBucket) || compare(a.day, b.day));
   const motifs = [...stored.motifs].sort((a, b) => compare(a.motifId, b.motifId));
   // No error rows: a skeleton holds none, and recovery, the one family that reads them, is left out here.
   const pool = poolOf({ cells, motifs }, []);
