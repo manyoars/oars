@@ -35,7 +35,7 @@ const shell = (command: string): StepObservation[] => stepsOf([{ name: 'Bash', i
 const NOT_POOLED = {
   session: ['session', 'parent', 'spawnedBy', 'spawnedIn', 'at', 'tsFirst', 'tsLast', 'promptFingerprint', 'repo', 'tools', 'fileHashes', 'urls', 'searches', 'branches', 'tldrs', 'confidences', 'project', 'files'],
   prompt: ['session', 'ts', 'head', 'promptFingerprint', 'skills'],
-  tool: ['session', 'parent', 'toolUseId', 'ts', 'tool', 'target', 'segments', 'pulls', 'commits'],
+  tool: ['session', 'parent', 'toolUseId', 'ts', 'tool', 'target', 'segments', 'pulls', 'packages', 'commits'],
   errorLine: ['session', 'toolUseId', 'tool', 'ts', 'line'],
 } as const;
 
