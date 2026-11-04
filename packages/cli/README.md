@@ -97,6 +97,7 @@ oars sessions books --by harness            # the same, grouped by Claude Code a
 oars sessions measure --last 50             # recurring errors per 100 sessions, cache-write per session, recall calls per session
 oars sessions measure --last 50 --repo <root>  # the same, for one repository's sessions
 oars sessions verify                        # consistency invariants on the stored skeletons and capture records
+oars sessions exclusions                    # V15: list sessions excluded by the local term file (counts only; OARS_EXCLUSION_TERMS names the file)
 oars sessions gold sample --exclude-term <text>   # about 200 prompts to judge blind; `gold arms <file>` adds the claim and fresh readers on your Claude subscription; `gold score <file>` reads each arm against the judgments
 ```
 
