@@ -2,7 +2,7 @@
 // increments with `incrementsOf`, and a local read derives its cells with `cellsOf` over the store it holds, projected the way a deposit projects it (`projectedStore`). Both end in the
 // one `cellsOf`, so a session gives the same cells at the pool and on the machine. This file reads no file system: the pool's Worker bundles it.
 
-import { bucketFields, deriveCells, type CellSet, type Grain } from './cells.js';
+import { bucketFields, deriveCells, ENVIRONMENT_BUCKET, isEnvironmentCell, type CellSet, type Grain } from './cells.js';
 import type { Motif } from './motif.js';
 import { bucketOf, floorOf, projectedSteps, type SessionSkeleton, type ShellReader, type SkeletonTranscript } from './pool-wire.js';
 import { NO_RECALLS, type RecallGraph } from './recall-consequence.js';
@@ -239,7 +239,7 @@ export const incrementsOf = (skeleton: SessionSkeleton): Increments => {
   for (const cell of derived.cells) {
     const exposed = cell.exposed ? 1 : 0;
     const key = `${cell.motifId}/${cell.frameBucket}/${cell.grain}/${cell.day}/${String(exposed)}`;
-    cells.set(key, { key, harnessBucket: bucketFields(cell.frameBucket).harnessBucket, motifId: cell.motifId, frameBucket: cell.frameBucket, grain: cell.grain, day: cell.day, exposed, sessions: cell.sessions, ok: cell.ok, failed: cell.failed, tokens: cell.tokens, durationMs: cell.durationMs });
+    cells.set(key, { key, harnessBucket: isEnvironmentCell(cell) ? ENVIRONMENT_BUCKET : bucketFields(cell.frameBucket).harnessBucket, motifId: cell.motifId, frameBucket: cell.frameBucket, grain: cell.grain, day: cell.day, exposed, sessions: cell.sessions, ok: cell.ok, failed: cell.failed, tokens: cell.tokens, durationMs: cell.durationMs });
   }
   // A session counts once per value, so each value is one session of this batch.
   const strata = new Map<string, StratumRow>();
