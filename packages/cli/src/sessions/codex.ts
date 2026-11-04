@@ -267,7 +267,7 @@ const toolNames = (list: unknown): string[] =>
     .filter((name): name is string => name !== undefined && name !== '');
 
 /** The approval policy as the permission mode: a string, or the externally tagged `{granular: {...}}` form (protocol.rs:1181). */
-const approvalMode = (policy: unknown): string | undefined => (isObj(policy) && Object.hasOwn(policy, 'granular') ? 'granular' : str(policy));
+const approvalMode = (policy: unknown): string | undefined => (isObj(policy) ? Object.keys(policy)[0] : str(policy));
 
 /** One rollout as the lines `captureSession` reads. */
 export const rolloutLines = (text: string, fallbackId: string, parentText?: string): Obj[] => {

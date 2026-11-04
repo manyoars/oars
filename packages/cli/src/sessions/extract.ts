@@ -1206,12 +1206,12 @@ const CURSOR_TOKEN = /\b(?:sk-(?:ant-|[A-Za-z0-9-]{16}|(?=[\w-]*[A-Z])(?=[\w-]*\
  * or an accepted miss: a public name that starts like a pattern rule (`sk-ant-tools`, `github_pat_helper`) loses its server, since it cannot be
  * told from a token that holds `__` (`sk-learn__PCA2Transform` and `task-sk-tools__Get2Items` are masked, since a tool part supplies the capital
  * and the digit); an `sk-` key with neither that holds a `_` before 16 characters, `mcp_sk-abc_defghijklmnopqrstuvwxyz_find`, is stored raw, since it
- * cannot be told from `mcp_sk-learn_fit_transform`; a name that holds `:` or `=` (`mcp__ns:Context7__resolve-library-id`, `mcp__ns=Context7__resolve-library-id`)
- * opens a NAME=value slice, so its parts are read as one token and the server is lost (no harness is known to write such a name); a tool part
- * of 24 characters or more with a capital and a digit is masked, since it cannot be told from a token; a token right behind a Slack-shaped run
- * keeps what that run's match leaves (`mcp_xoxb-1234567890-ghp_...` stores `mcp_<secret>_...`, `mcp__xoxb-a-eyJ...` keeps the JWT's other segments),
- * since no earlier start exists to finish it; and a random token with no pattern rule whose every part is under 24 characters (`TOKEN`'s
- * minimum) cannot be told from two ordinary parts and is not found.
+ * cannot be told from `mcp_sk-learn_fit_transform`; a name that holds `:` or `=` (`mcp__ns:Context7__resolve-library-id`,
+ * `mcp__ns=Context7__resolve-library-id`) opens a NAME=value slice, so its parts are read as one token and the server is lost (no harness is known to
+ * write such a name); a tool part of 24 characters or more with a capital and a digit is masked, since it cannot be told from a token; a token right
+ * behind a Slack-shaped run keeps what that run's match leaves (`mcp_xoxb-1234567890-ghp_...` stores `mcp_<secret>_...`, `mcp__xoxb-a-eyJ...` keeps
+ * the JWT's other segments), since no earlier start exists to finish it; and a random token with no pattern rule whose every part is under 24
+ * characters (`TOKEN`'s minimum) cannot be told from two ordinary parts and is not found.
  */
 const redactedMcpTail = (tail: string, redact: Redactor, cursor: boolean): string => {
   if (tail.length > MCP_TAIL_MAX) return '<oversized>';
@@ -1543,8 +1543,8 @@ export const captureSession = (input: ExtractInput): Capture => {
     if (type === 'user' && role === 'user' && !side && !hasToolResult(content)) {
       const leading = LEADING_TAG.exec(firstTextBlock(content).trimStart())?.[1];
       harnessLine = o.isMeta === true || (leading !== undefined && LOCAL_COMMAND_TAGS.has(leading));
-      // `promptOpening` is Claude Code's alone: a Codex prompt that starts with `<` gets no opening below, yet it is still the operator typing.
-      operatorTurn = o.isMeta !== true && (leading === 'bash-input' || hasImage(content) || (harness === 'codex' && firstTextBlock(content).startsWith('<')));
+      // `promptOpening` is Claude Code's alone: a Codex or Copilot prompt that starts with `<` gets no opening below, yet it is still the operator typing.
+      operatorTurn = o.isMeta !== true && (leading === 'bash-input' || hasImage(content) || (harness !== 'claude-code' && firstTextBlock(content).startsWith('<')));
     }
     if (type === 'user' && role === 'user' && o.isMeta !== true && !side) {
       const text = firstTextBlock(content);
