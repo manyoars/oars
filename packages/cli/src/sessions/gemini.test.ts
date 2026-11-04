@@ -38,7 +38,8 @@ const T = (second: number): string => `2026-06-01T10:00:${String(second).padStar
 const head = geminiHead('sess-1');
 const prompt = (second: number, text: string, extra: object = {}) => ({ id: `u${String(second)}`, timestamp: T(second), type: 'user', content: [{ text }], ...extra });
 const say = (second: number, content: unknown, extra: object = {}) => ({ id: `g${String(second)}`, timestamp: T(second), type: 'gemini', content, model: 'gemini-2.5-pro', ...extra });
-const tokens = (input: number, output: number, cached = 0, extra: object = {}) => ({ input, output, cached, total: input + output, ...extra });
+// recordMessageTokens writes all six fields on every message (chatRecordingService.ts:1137-1146).
+const tokens = (input: number, output: number, cached = 0, extra: object = {}) => ({ input, output, cached, thoughts: 0, tool: 0, total: input + output, ...extra });
 // The shell tool's result text: `Output: ...` then optional trailer lines, wrapped in <untrusted_context> (shell.ts:953-979, textUtils.ts wrapUntrusted).
 const shellText = (output: string, trailer: readonly string[] = []): string => `<untrusted_context source="shell">\nOutput: ${output}${trailer.map((line) => `\n${line}`).join('')}\n</untrusted_context>`;
 // The executor stores the call's own id on its response (utils/generateContentResponseUtilities.ts:29-33).
@@ -175,6 +176,9 @@ describe('the Gemini CLI reader', () => {
   });
 
   it('does not read a tool result, a slash command, or injected context as a prompt, and prefers what the operator typed', () => {
+    // The tool result turn is a user message of `functionResponse` parts, recorded synthetically (core/geminiChat.ts:593-596); `info`, `warning`, and `error` are message types
+    // `recordMessage` writes (chatRecordingService.ts:1079-1112); the typed texts go through the prompt path (geminiChat.ts:560-565), and `displayContent` differs from the sent text only
+    // when an `@file` expansion or a command changed it (:553-557).
     const lines = linesOf([
       head,
       prompt(1, 'real'),
@@ -192,13 +196,16 @@ describe('the Gemini CLI reader', () => {
     expect(lines.filter((entry) => entry.type === 'user').map((entry) => JSON.stringify(entry.message))).toEqual([expect.stringContaining('real'), expect.stringContaining('what I typed')]);
   });
 
+  // Writable: upstream calls a user turn a tool response when SOME part is a function response (utils/messageInspectors.ts:9-15) and records it through the synthetic path (geminiChat.ts:593),
+  // so text beside a result (a hook's added context) can be in one. The reader treats such a turn as a prompt (an earlier review's choice); see the report.
   it('reads a user message with a tool result AND typed text as a prompt: only a message made wholly of tool results is not a prompt (geminiChat.ts:527,547)', () => {
     const mixed = { id: 'm', timestamp: T(2), type: 'user', content: [{ functionResponse: { id: 'x', name: 'read_file', response: { output: 'file text' } } }, { text: 'and also this' }] };
     expect(linesOf([head, mixed]).map((entry) => JSON.stringify(entry.message))).toEqual([expect.stringContaining('and also this')]);
   });
 
   it('applies the resume filter to the sent text (content), not to what was shown: a custom command is a prompt whose content is its expansion (chatRecordingService.ts:220-227, nonInteractiveCli.ts:289-300)', () => {
-    const lines = linesOf([head, prompt(1, 'expanded text', { displayContent: [{ text: '/cmd' }] }), say(2, 'ok'), prompt(3, '/clear', { displayContent: [{ text: '/clear' }] })]);
+    // `displayContent` is written only when it differs from the sent text (core/geminiChat.ts:553-557), so the `/clear` prompt carries none.
+    const lines = linesOf([head, prompt(1, 'expanded text', { displayContent: [{ text: '/cmd' }] }), say(2, 'ok'), prompt(3, '/clear')]);
     expect(lines.filter((entry) => entry.type === 'user').map((entry) => JSON.stringify(entry.message))).toEqual([expect.stringContaining('/cmd')]);
     expect(lines.map((entry) => entry.type)).toEqual(['user', 'assistant']);
   });
@@ -257,26 +264,111 @@ describe('the Gemini CLI reader', () => {
       expect(lines.map((entry) => entry.timestamp)).toEqual([T(1), T(2), T(3), T(5), T(30)]);
     });
 
-    it('keeps them through a masking pass, which re-records every turn under a fresh id, and through a second pass over those copies', () => {
-      const pass = (suffix: string, second: number): unknown[] => [
-        copy(`mu1${suffix}`, 'user', 'fix the build', second),
-        copy(`mg2${suffix}`, 'gemini', 'running it', second),
-        copy(`mu5${suffix}`, 'user', 'try again', second),
-      ];
-      const records = [
-        ...original(),
-        ...pass('a', 20),
-        { $patch: { removeIds: ['u1', 'g2', 'u5'], orderIds: ['mu1a', 'mg2a', 'mu5a'] } },
-        ...pass('b', 40),
-        { $patch: { removeIds: ['mu1a', 'mg2a', 'mu5a'], orderIds: ['mu1b', 'mg2b', 'mu5b'] } },
-      ];
+    // A masking pass (core/client.ts:1312-1322, context/toolOutputMaskingService.ts:215-231,361-366) fires only when a tool response was masked: the tool response turn is a user
+    // turn of `functionResponse` parts (geminiChat.ts:593), `setHistory` re-records every turn with the masked snippet in place of the output, and the sync writes
+    // `updates[{id: <gemini message>, toolCalls: [{id, result: <the turn's parts>}]}]` beside `removeIds` (chatRecordingService.ts:1495-1530,1577-1587).
+    const maskedText = '<tool_output_masked>\nboom\n\nOutput too large. Full output available at: /tmp/out.txt\n</tool_output_masked>';
+    const toolTurn = (id: string, second: number, callId: string, output: string) => ({ id, timestamp: T(second), type: 'user', content: reply(callId, 'run_shell_command', { output }) });
+    const withTurn = (text: string, held: unknown = reply('c1', 'run_shell_command', { output: text }), status = 'success'): unknown[] => [
+      head,
+      prompt(1, 'fix the build'),
+      say(2, 'running it', { tokens: tokens(1000, 20), toolCalls: [call('c1', 'run_shell_command', { command: 'make' }, status, 3, held)] }),
+      toolTurn('t4', 4, 'c1', text),
+      prompt(5, 'try again'),
+    ];
+    const maskedTurn = reply('c1', 'run_shell_command', { output: maskedText });
+    const maskingPass = (suffix: string, second: number): unknown[] => [
+      copy(`mu1${suffix}`, 'user', 'fix the build', second),
+      copy(`mg2${suffix}`, 'gemini', 'running it', second),
+      { id: `mt4${suffix}`, timestamp: T(second), type: 'user', content: maskedTurn },
+      copy(`mu5${suffix}`, 'user', 'try again', second),
+    ];
+    const passPatch = (suffix: string, removed: readonly string[], updates: readonly unknown[] = []) => ({
+      $patch: { ...(updates.length === 0 ? {} : { updates }), removeIds: removed, orderIds: [`mu1${suffix}`, `mg2${suffix}`, `mt4${suffix}`, `mu5${suffix}`] },
+    });
+    const maskedUpdate = [{ id: 'g2', toolCalls: [{ id: 'c1', result: maskedTurn }] }];
+    const firstPass = [...maskingPass('a', 20), passPatch('a', ['u1', 'g2', 't4', 'u5'], maskedUpdate)];
+    const failed = shellText('boom', ['Exit Code: 2']);
+
+    it('keeps them through a masking pass (a tool response turn, its masked copy, and updates on the removed message), and through a second pass over the copies', () => {
+      const records = [...withTurn(failed), ...firstPass, ...maskingPass('b', 40), passPatch('b', ['mu1a', 'mg2a', 'mt4a', 'mu5a'])];
       const out = extractOf(records);
       expect(out.session.userTurns).toBe(2);
       expect(out.session.assistantTurns).toBe(1);
       expect(out.session.usage).toMatchObject({ input: 1000, output: 20 });
       expect(out.tools).toMatchObject([{ tool: 'Bash', status: 'error' }]);
+      expect(out.errorLines).toMatchObject([{ tool: 'Bash', line: 'boom' }]);
       expect(out.session.tsFirst).toBe(T(1));
       expect(out.session.tsLast).toBe(T(5));
+    });
+
+    it('lets the result the call held decide when a pass masks it: a failed shell call stays an error with its own line, not the masked envelope, and a cut-short one stays none (chatRecordingService.ts:1500-1525; toolOutputMaskingService.ts:224-231)', () => {
+      const exit = extractOf([...withTurn(failed), ...firstPass]);
+      expect(exit.tools).toMatchObject([{ status: 'error' }]);
+      expect(exit.errorLines).toMatchObject([{ line: 'boom' }]);
+      // A `status: error` call: the masked response drops the `error` key (toolOutputMaskingService.ts:224-231), so only the held result still names the failure.
+      const errored = extractOf([...withTurn('', reply('c1', 'run_shell_command', { error: 'spawn failed' }), 'error'), ...firstPass]);
+      expect(errored.tools).toMatchObject([{ status: 'error' }]);
+      expect(errored.errorLines).toMatchObject([{ line: 'spawn failed' }]);
+      const long = `<untrusted_context source="shell">\nOutput: ${'x'.repeat(100)}\n... [Tool output truncated to conserve memory. For full output see: /tmp/full.txt]`;
+      expect(extractOf([...withTurn(long), ...firstPass]).tools).toMatchObject([{ status: 'none' }]);
+    });
+
+    it('applies an update no pass removed, and one on a removed message whose call held no result yet, but not one on a removed message whose call held its result', () => {
+      const update = (removed: string[]) => ({
+        $patch: { updates: [{ id: 'g2', toolCalls: [{ id: 'c1', result: reply('c1', 'run_shell_command', { output: shellText('no', ['Exit Code: 3']) }) }] }], removeIds: removed },
+      });
+      // Defensive for the second and third rows: a finished call always holds its result upstream, so one with none is a shape only the reader's guard meets.
+      const open = [head, prompt(1, 'a'), say(2, 'x', { toolCalls: [call('c1', 'run_shell_command', { command: 'make' }, 'success', 3)] })];
+      expect(extractOf([...open, update([])]).tools).toMatchObject([{ status: 'error' }]);
+      expect(extractOf([...open, update(['g2'])]).tools).toMatchObject([{ status: 'error' }]);
+      const held = [head, prompt(1, 'a'), say(2, 'x', { toolCalls: [shell('c1', 'make', 'success', 3, shellText('fine'))] })];
+      expect(extractOf([...held, update([])]).tools).toMatchObject([{ status: 'error' }]);
+      expect(extractOf([...held, update(['g2'])]).tools).toMatchObject([{ status: 'ok' }]);
+    });
+
+    it('hides a copy whose text upstream recorded stripped: the response is stored without zero-width characters and HTML comments, trimmed (geminiChat.ts:1710-1719,1811), and the history copy holds the raw parts (:1823)', () => {
+      for (const raw of ['answer\n', '<!-- note -->answer', '\u200Banswer', '<!<!-- x -->-- y -->answer ']) {
+        const records = [
+          head,
+          prompt(1, 'fix the build'),
+          say(2, 'answer', { tokens: tokens(1000, 20) }),
+          prompt(5, 'try again'),
+          copy('k1', 'user', 'fix the build', 20),
+          copy('k2', 'gemini', raw, 20),
+          copy('k3', 'user', 'try again', 20),
+          { $patch: { removeIds: ['u1', 'g2', 'u5'], orderIds: ['k1', 'k2', 'k3'] } },
+        ];
+        expect(extractOf(records).session.assistantTurns).toBe(1);
+      }
+    });
+
+    it('treats the text user turn before the canned reply as the summary whatever it opens with (a scratchpad, a code fence), and still skips a bare summary whose reply is gone (context/chatCompressionService.ts:588,603,665-673)', () => {
+      const userTurns = (text: string, withReply = true) =>
+        extractOf([...original(), copy('s1', 'user', text, 20), ...(withReply ? [gotIt('s2', 20)] : []), { $patch: { removeIds: ['u1', 'g2', 'u5'], orderIds: withReply ? ['s1', 's2'] : ['s1'] } }]).session.userTurns;
+      expect(userTurns('<state_snapshot>\n<overall_goal>g</overall_goal>\n</state_snapshot>')).toBe(2);
+      expect(userTurns('<scratchpad>thinking</scratchpad>\n<state_snapshot>x</state_snapshot>')).toBe(2);
+      expect(userTurns('```xml\n<state_snapshot>x</state_snapshot>\n```')).toBe(2);
+      expect(userTurns('<state_snapshot>x</state_snapshot>', false)).toBe(2);
+      // A typed prompt before a response that has usage is a prompt, even when the response reads like the canned one.
+      expect(extractOf([head, prompt(1, 'no reply yet'), say(2, 'Got it. Thanks for the additional context!', { tokens: tokens(5, 5) })]).session.userTurns).toBe(1);
+    });
+
+    it('applies a rewind to a copy as a rewind from its original: the rolled-back prompt and response are gone and earlier turns stay (chatRecordingService.ts:1380-1410)', () => {
+      const after = [prompt(30, 'rewound prompt'), say(31, 'rewound answer', { tokens: tokens(7, 7) })];
+      const text = (records: readonly unknown[]) =>
+        linesOf(records)
+          .filter((entry) => entry.type === 'user' && JSON.stringify(entry.message).includes('"type":"text"'))
+          .map((entry) => /"text":"([^"]*)"/.exec(JSON.stringify(entry.message))?.[1]);
+      const once = [...withTurn(failed), ...firstPass, ...after, { $rewindTo: 'mu5a' }, prompt(40, 'retyped')];
+      expect(text(once)).toEqual(['fix the build', 'retyped']);
+      expect(extractOf(once).session.assistantTurns).toBe(1);
+      // Through a second pass the new copy still rewinds from the original.
+      const twice = [...withTurn(failed), ...firstPass, ...maskingPass('b', 40), passPatch('b', ['mu1a', 'mg2a', 'mt4a', 'mu5a']), ...after, { $rewindTo: 'mu5b' }, prompt(50, 'retyped')];
+      expect(text(twice)).toEqual(['fix the build', 'retyped']);
+      expect(extractOf(twice).session.usage).toMatchObject({ input: 1000, output: 20 });
+      // A rewind to the first copy rolls the whole history back.
+      expect(text([...withTurn(failed), ...firstPass, { $rewindTo: 'mu1a' }, prompt(50, 'fresh')])).toEqual(['fresh']);
     });
 
     it('drops a copy once per removed message, so a prompt typed twice stays two and an identical later prompt is not mistaken for a copy', () => {
@@ -317,14 +409,20 @@ describe('the Gemini CLI reader', () => {
     const body = [head, prompt(1, 'one'), prompt(2, 'two'), prompt(3, 'three')];
     expect(prompts([...body, { $rewindTo: 'u2' }, prompt(4, 'four')])).toMatch(/one.*four/);
     expect(prompts([...body, { $rewindTo: 'u2' }, prompt(4, 'four')])).not.toMatch(/two|three/);
+    // Loader-only: an unknown id clears all (chatRecordingService.ts:333-337); the writer names only ids it holds (:1380-1385, :1570).
     expect(prompts([...body, { $rewindTo: 'nope' }])).toBe('');
-    expect(prompts([...body, { $patch: { id: 'u1', content: [{ text: 'edited' }] } }])).toContain('edited');
+    // A content update is written as `updates[{id, content}]` (chatRecordingService.ts:1441-1452, 1577-1587).
+    expect(prompts([...body, { $patch: { updates: [{ id: 'u1', content: [{ text: 'edited' }] }] } }])).toContain('edited');
     // A removed message stays (a history sync's $patch lists every old id, and the message is the only record of what was said); only a copy of it is hidden.
     // Defensive inputs upstream cannot write (the loader guards each, chatRecordingService.ts:362,394): a numeric id in `removeIds` and `orderIds`, a non-object entry in `$set.messages`, a non-string `$rewindTo`.
     expect(prompts([...body, { $patch: { updates: [{ id: 'u3', content: [{ text: 'bulk' }] }], removeIds: ['u2', 7] } }])).toMatch(/one.*two.*bulk/);
     // `orderIds` with a number and an unknown id: defensive, same guard.
     expect(prompts([...body, { $patch: { orderIds: ['u3', 'u1', 'ghost', 4] } }])).toMatch(/two.*three.*one/);
+    // Defensive: an update for an id the file does not hold (the writer patches only ids it indexed, chatRecordingService.ts:1437), and a top-level `$patch.id` (only the loader
+    // reads it, :343-345; the writer, :1577-1587, writes `updates`, `removeIds`, and `orderIds`).
+    expect(prompts([...body, { $patch: { updates: [{ id: 'ghost', content: [{ text: 'x' }] }] } }]).split('|')).toHaveLength(3);
     expect(prompts([...body, { $patch: { id: 'ghost', content: [{ text: 'x' }] } }]).split('|')).toHaveLength(3);
+    // Loader-only: `$set.messages` is deprecated (chatRecordingTypes.ts:151) and the writers at the pin write only metadata in `$set` (chatRecordingService.ts:751, 1034).
     // `'not a message'` in `$set.messages`: defensive, the loader keeps only objects with an id.
     expect(prompts([...body, { $set: { messages: [prompt(9, 'replaced'), 'not a message'] } }])).toMatch(/^[^|]*replaced[^|]*$/);
     // `$rewindTo: 1` (a number): defensive, upstream writes the message id string.
@@ -332,14 +430,22 @@ describe('the Gemini CLI reader', () => {
   });
 
   it('patches a tool call result in place, so a result recorded later by a $patch decides the outcome', () => {
-    const open = say(2, 'x', { toolCalls: [call('c1', 'run_shell_command', { command: 'make' }, 'success', 3, [])] });
-    // `{ id: 'zzz' }` below names a call the message does not hold, and the second expectation patches a user message: defensive, the loader only reaches a call it holds.
-    const patch = { $patch: { id: 'g2', toolCalls: [{ id: 'c1', result: reply('c1', 'run_shell_command', { output: shellText('no', ['Exit Code: 3']) }) }, { id: 'zzz', result: [] }] } };
-    expect(extractOf([head, prompt(1, 'a'), open, patch]).tools).toMatchObject([{ status: 'error' }]);
+    // Defensive: a finished call is recorded with its result (recordToolCalls, chatRecordingService.ts:1168-1230, from the executor's completed call), so a finished call with none, which
+    // the patch then fills, is one upstream does not write; the row proves the reader applies an update to a call that holds nothing.
+    const open = say(2, 'x', { toolCalls: [call('c1', 'run_shell_command', { command: 'make' }, 'success', 3)] });
+    const result = reply('c1', 'run_shell_command', { output: shellText('no', ['Exit Code: 3']) });
+    // The writer is `updates[{id, toolCalls: [{id, result}]}]` (chatRecordingService.ts:1495-1525, 1577-1587).
+    expect(extractOf([head, prompt(1, 'a'), open, { $patch: { updates: [{ id: 'g2', toolCalls: [{ id: 'c1', result }] }] } }]).tools).toMatchObject([{ status: 'error' }]);
+    // Defensive: a top-level `$patch.id` (only the loader reads it, :343-345), `{ id: 'zzz' }` (a call the message does not hold: the writer patches only calls in `toolCallMetaMap`),
+    // and a patch aimed at a user message.
+    const top = { $patch: { id: 'g2', toolCalls: [{ id: 'c1', result }, { id: 'zzz', result: [] }] } };
+    expect(extractOf([head, prompt(1, 'a'), open, top]).tools).toMatchObject([{ status: 'error' }]);
     expect(extractOf([head, prompt(1, 'a'), prompt(5, 'b'), { $patch: { id: 'u1', toolCalls: [{ id: 'c1', result: [] }] } }]).session.userTurns).toBe(2);
   });
 
   it('reads a legacy single-object file whose messages are in the object, and a head line that carries them', () => {
+    // The `.json` file is what releases before the `.jsonl` migration wrote (chatRecordingService.ts:735-747, loaded at :1647). A head LINE that carries `messages` is loader-only
+    // (the loader's partial-metadata branch, :500-530); the writer's head, :855-866, holds none.
     const whole = JSON.stringify({ ...head, messages: [prompt(1, 'legacy'), say(2, 'ok')] }, null, 2);
     expect(chatLines(whole, 'f', null).map((entry) => entry.type)).toEqual(['user', 'assistant']);
     expect(chatBadLines(whole)).toEqual([]);
@@ -348,6 +454,7 @@ describe('the Gemini CLI reader', () => {
 
   it('takes the session id from the head, else the fallback, and the model from each response', () => {
     expect(linesOf([head, prompt(1, 'x')])[0]).toMatchObject({ sessionId: 'sess-1' });
+    // Defensive: the writer's first line is the head (chatRecordingService.ts:855-866), so a file with none is one `openGeminiStore` has already refused; this proves the fallback id only.
     expect(chatLines(asText([prompt(1, 'x'), say(2, 'y')]), 'fallback', null)[0]).toMatchObject({ sessionId: 'fallback' });
     expect(linesOf([head, prompt(1, 'x'), say(2, 'y', { model: undefined })]).find((entry) => entry.type === 'assistant')).not.toHaveProperty('requestedModel');
   });
@@ -360,6 +467,7 @@ describe('the Gemini CLI reader', () => {
   });
 
   it('counts a torn line, throws when nothing parses, and returns nothing for an empty file', () => {
+    // A torn line is a crash or full disk mid-append (appendRecord, chatRecordingService.ts:942, ENOSPC at :1020); the file otherwise holds whole lines.
     const text = `${asText([head, prompt(1, 'x')])}\n{torn\n`;
     expect(chatBadLines(text)).toEqual(['{torn']);
     expect(chatLines(text, 's', null).filter((entry) => entry.type === 'user')).toHaveLength(1);

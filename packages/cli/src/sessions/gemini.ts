@@ -98,9 +98,23 @@ const textOf = (value: unknown): string => {
   return isObj(value) && value.thought !== true && typeof value.text === 'string' ? value.text : '';
 };
 
-/** A re-recorded copy (a history sync makes it with no usage, calls, or model) of `message`: the same kind of message with the same text. */
+/**
+ * The text of a response the way the CLI stores it: zero-width characters and HTML comments (repeatedly, until none is left) stripped, then trimmed (core/geminiChat.ts:1710-1719).
+ * The stored message holds this; the history copy a sync re-records holds the raw parts (geminiChat.ts:1823, setHistory at :1391), so a copy is compared on this form.
+ */
+const storedText = (value: unknown): string => {
+  let text = textOf(value).replace(/[\u200B-\u200D\uFEFF\u200E\u200F]/g, '');
+  let previous: string;
+  do {
+    previous = text;
+    text = text.replace(/<!--[^]*?-->/g, '');
+  } while (text !== previous);
+  return text.trim();
+};
+
+/** A re-recorded copy (a history sync makes it with no usage, calls, or model) of `message`: the same kind of message with the same stored text. */
 const isCopyOf = (candidate: Obj, message: Obj): boolean =>
-  candidate.type === message.type && !isObj(candidate.tokens) && !(Array.isArray(candidate.toolCalls) && candidate.toolCalls.length > 0) && candidate.model === undefined && textOf(candidate.content) === textOf(message.content);
+  candidate.type === message.type && !isObj(candidate.tokens) && !(Array.isArray(candidate.toolCalls) && candidate.toolCalls.length > 0) && candidate.model === undefined && storedText(candidate.content) === storedText(message.content);
 
 /** The messages a chat file holds once its records are folded the way the vendor's loader folds them (chatRecordingService.ts:304-530), and its metadata. */
 const foldChat = (text: string): { meta: Obj; messages: Obj[] } => {
@@ -115,7 +129,9 @@ const foldChat = (text: string): { meta: Obj; messages: Obj[] } => {
       if (isObj(message) && id !== undefined) messages.set(id, message);
     }
   };
-  const patchOne = (patch: unknown): void => {
+  // `masked`: the patch removes this message in the same record (a masking pass). Its `result` is then the masked turn (toolOutputMaskingService.ts:224-231), which drops the
+  // `error` key and rewrites the output, so a call that already holds its result keeps it and the pre-sync result decides (chatRecordingService.ts:1500-1525,1577-1587).
+  const patchOne = (patch: unknown, masked = false): void => {
     const existing = isObj(patch) ? messages.get(str(patch.id) ?? '') : undefined;
     if (!isObj(patch) || existing === undefined) return;
     if (patch.content !== undefined) existing.content = patch.content;
@@ -124,7 +140,7 @@ const foldChat = (text: string): { meta: Obj; messages: Obj[] } => {
       for (const raw of patch.toolCalls) {
         const change: unknown = raw;
         const target: unknown = isObj(change) ? held.find((candidate) => isObj(candidate) && candidate.id === change.id) : undefined;
-        if (isObj(change) && isObj(target) && 'result' in change) target.result = change.result;
+        if (isObj(change) && isObj(target) && 'result' in change && !(masked && partsOf(target.result).length > 0)) target.result = change.result;
       }
     }
   };
@@ -132,6 +148,8 @@ const foldChat = (text: string): { meta: Obj; messages: Obj[] } => {
   // (chatRecordingService.ts:1427-1590; geminiChat.ts:412-417,456,1386-1395). The vendor's loader drops those ids; this reader keeps the removed message, which is the
   // only record of its prompt, usage, calls, and errors, and hides the copy instead, so each is read once and with its own time.
   const echoes = new Set<string>();
+  // A copy's id to the id of the message it copies, followed through a second pass: upstream's rewind can only name a copy (chatRecordingService.ts:1380,1410), which here is the original.
+  const original = new Map<string, string>();
   const retire = (ids: readonly unknown[]): void => {
     const gone = new Set(ids.filter((id): id is string => typeof id === 'string'));
     for (const id of gone) {
@@ -139,21 +157,25 @@ const foldChat = (text: string): { meta: Obj; messages: Obj[] } => {
       if (removed === undefined) continue;
       // The newest match first: the copies are recorded last, after any older message that happens to read the same.
       const copy = [...messages.entries()].reverse().find(([other, message]) => !gone.has(other) && !echoes.has(other) && isCopyOf(message, removed));
-      if (copy !== undefined) echoes.add(copy[0]);
+      if (copy !== undefined) {
+        echoes.add(copy[0]);
+        original.set(copy[0], original.get(id) ?? id);
+      }
     }
   };
   for (const record of records) {
     if (!isObj(record)) continue;
     if (typeof record.$rewindTo === 'string') {
       const ids = [...messages.keys()];
-      const at = ids.indexOf(record.$rewindTo);
+      const at = ids.indexOf(original.get(record.$rewindTo) ?? record.$rewindTo);
       if (at === -1) messages.clear();
       else for (const id of ids.slice(at)) messages.delete(id);
     } else if (isObj(record.$patch)) {
       const patch = record.$patch;
       patchOne(patch);
-      for (const update of Array.isArray(patch.updates) ? patch.updates : []) patchOne(update);
-      retire(Array.isArray(patch.removeIds) ? patch.removeIds : []);
+      const removeIds = Array.isArray(patch.removeIds) ? patch.removeIds : [];
+      for (const update of Array.isArray(patch.updates) ? patch.updates : []) patchOne(update, isObj(update) && removeIds.includes(update.id));
+      retire(removeIds);
       if (Array.isArray(patch.orderIds)) {
         const ordered = patch.orderIds.flatMap((id) => (typeof id === 'string' && messages.has(id) ? [id] : []));
         // The messages the list does not name stay first, in their order; the named ones follow in the listed order.
@@ -184,6 +206,9 @@ const NOT_TYPED = ['/', '?', '<session_context>', '<hook_context>'];
 /** What a compression records in place of the history it replaced: the summary as a user turn, then this canned reply as the model's (context/chatCompressionService.ts:665-673). */
 const SUMMARY = '<state_snapshot>';
 const CANNED_REPLY = 'Got it. Thanks for the additional context!';
+/** The canned reply: a model message with that text and no usage, calls, or model, which only the CLI writes. */
+const isCanned = (message: Obj): boolean =>
+  message.type === 'gemini' && textOf(message.content).trim() === CANNED_REPLY && !(Array.isArray(message.toolCalls) && message.toolCalls.length > 0) && !isObj(message.tokens) && message.model === undefined;
 
 /** Gemini tools the reader names in the Claude Code vocabulary, so the extractor classifies them; the Gemini name stays in `native` for the action table. */
 const RENAMED: ReadonlyMap<string, string> = new Map([
@@ -273,6 +298,10 @@ export const chatLines = (text: string, fallbackId: string, cwd: string | null):
     });
   };
 
+  // The summary is the text user turn recorded just before the canned reply, whatever it opens with: the model is asked to reason in a scratchpad first and its text is stored as
+  // written (context/chatCompressionService.ts:603,614,643,668), and upstream itself tests for the tag with `includes` (:588). A summary whose reply is gone still opens with the tag.
+  const summaries = new Set<Obj>(messages.flatMap((message, at) => (isCanned(message) ? messages.slice(Math.max(at - 1, 0), at) : [])));
+
   for (const message of messages) {
     const when = stamp(message.timestamp);
     if (message.type === 'user') {
@@ -282,7 +311,7 @@ export const chatLines = (text: string, fallbackId: string, cwd: string | null):
       // The vendor's filter reads the text SENT (`content`, chatRecordingService.ts:220-227); a custom command sends its expansion and shows `/cmd` (nonInteractiveCli.ts:289-300),
       // so the shown text is only what is recorded.
       const sent = textOf(message.content).trim();
-      if (sent === '' || NOT_TYPED.some((prefix) => sent.startsWith(prefix)) || sent.startsWith(SUMMARY)) continue;
+      if (sent === '' || NOT_TYPED.some((prefix) => sent.startsWith(prefix)) || sent.startsWith(SUMMARY) || summaries.has(message)) continue;
       const shown = textOf(message.displayContent);
       const typed = shown.trim() === '' ? textOf(message.content) : shown;
       sequence += 1;
@@ -294,7 +323,7 @@ export const chatLines = (text: string, fallbackId: string, cwd: string | null):
       // A response of only a thought (the synthetic "binary content" note) says nothing.
       if (answer.trim() === '' && calls.length === 0 && tokens === undefined) continue;
       // The canned reply after a compression summary is the CLI's, not a response: it has no usage, calls, or model.
-      if (answer.trim() === CANNED_REPLY && calls.length === 0 && tokens === undefined && message.model === undefined) continue;
+      if (isCanned(message)) continue;
       const content: Obj[] = answer.trim() === '' ? [] : [{ type: 'text', text: answer }];
       const held: { id: string; native: string; shell: boolean; call: Obj }[] = [];
       for (const entry of calls) {
