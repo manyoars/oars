@@ -1,4 +1,4 @@
-// Sign-in (pool vocabulary spec, Section 3): the client runs the GitHub or Google device flow itself and sends the provider's access token here once, in one route. The token is used once, to learn
+// Sign-in (pool vocabulary spec, Section 1.4): the client runs the GitHub or Google device flow itself and sends the provider's access token here once, in one route. The token is used once, to learn
 // the stable user id, and dropped. That id is hashed under a key the database never holds, so a read of the database names nobody: no email, login, provider id, or provider token is kept.
 import { createHash, createHmac, randomBytes } from 'node:crypto';
 import { answer, bodyOf, bound, fieldOf, notConfigured, refuse, textField, type Env } from './http.js';
