@@ -608,8 +608,8 @@ that a deposit counts only the child's own prompts.
   `tool_call_update` with `completed` or `failed`. A shell call is a `run_terminal_cmd`, `run_terminal_command`, or `bash` call, or any call of `kind` `execute` (the
   user's `!cmd` is one). Its outcome is `rawOutput.exit_code`, not the status: the agent path marks a call `failed` only on a timeout or a signal, so exit 2 arrives
   `completed` (`acp_conversion.rs:241-250`); the `!` path marks nonzero `failed`. Any other tool's error text is its `content[]` text; its `rawOutput` is a tagged wrapper
-  and is never the error line. An edit is found by tool name (`search_replace`, `apply_patch`, `edit`, `write`, `hashline_edit`); its files are `file_path` (the tools'
-  input structs: `search_replace/mod.rs:74`, `opencode/edit/mod.rs:68`, `opencode/write/mod.rs:31`, `hashline_edit types.rs:12`), the `*** Add|Update|Delete File:` headers
+  and is never the error line. An edit is found by tool name (`search_replace`, `apply_patch`, `edit`, `write`, `hashline_edit`); its files are `file_path` (`filePath` for the opencode `edit`, which is camelCase; the tools'
+  input structs: `search_replace/mod.rs:74`, `opencode/edit/mod.rs:64`, `:138`, `:579`, `opencode/write/mod.rs:31`, `hashline_edit types.rs:12`), the `*** Add|Update|Delete File:` headers
   of an `apply_patch` `patch` (`codex/apply_patch/tool.rs:104`, `parser.rs:40-42`), and the `diff` parts of the completion's `content[]`; those key names are read from the
   structs, not from a recorded line, so they are inferred. An MCP call is titled `<server>__<tool>` and is recorded as `mcp__<server>__<tool>`. The cwd is `info.cwd`,
   then each shell call's `current_dir` ("the current working directory after the command completes", `types/output.rs:397`); a resume in another directory, or a

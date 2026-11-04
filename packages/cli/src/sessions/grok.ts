@@ -81,7 +81,7 @@ const USAGE = 'usage.json';
 const SUBAGENT_KINDS: ReadonlySet<string> = new Set(['subagent', 'subagent_fork']);
 /** The tools that run a command; a call of `kind` execute is one whatever its name. */
 const SHELL_TOOLS: ReadonlySet<string> = new Set(['run_terminal_cmd', 'run_terminal_command', 'bash']);
-/** The tools that change files, named so a failed edit is still an edit. Their path keys are `file_path` and, for `apply_patch`, the `*** <Add|Update|Delete> File:` headers of `patch`. */
+/** The tools that change files, named so a failed edit is still an edit. Their path keys are `file_path` (`filePath` for `edit`) and, for `apply_patch`, the `*** <Add|Update|Delete> File:` headers of `patch`. */
 const EDIT_TOOLS: ReadonlySet<string> = new Set(['search_replace', 'apply_patch', 'edit', 'write', 'hashline_edit']);
 const PATCH_HEADER = /^\*\*\* (?:Add|Update|Delete) File: (.+)$/gm;
 
@@ -130,9 +130,9 @@ const shellText = (raw: Obj, update: Obj): string => {
   return str(raw.output_for_prompt) ?? str(Buffer.from(bytes).toString('utf8')) ?? contentText(update) ?? '';
 };
 
-/** The files a request names: `file_path`, or the headers of an `apply_patch` patch. */
+/** The files a request names: `file_path`, or `filePath` for the opencode `edit` tool (camelCase, opencode/edit/mod.rs:64, :138), or the headers of an `apply_patch` patch. */
 const requestedPaths = (input: Obj): string[] => {
-  const path = str(input.file_path);
+  const path = str(input.file_path) ?? str(input.filePath);
   if (path !== undefined) return [path];
   const patch = str(input.patch);
   return patch === undefined ? [] : [...patch.matchAll(PATCH_HEADER)].map((match) => String(match[1]).trim());
