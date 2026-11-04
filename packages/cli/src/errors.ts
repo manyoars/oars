@@ -13,7 +13,6 @@ export const ExitCode = {
   HUMAN: 6,
   RATE_LIMITED: 7,
   UNREACHABLE: 8,
-  PARTIAL: 9,
   /** `pool fetch` hit the pool's weekly cap: nothing is wrong, and the bundle on disk is untouched. */
   CAPPED: 10,
 } as const;
@@ -24,18 +23,8 @@ const codes = (exit: ExitCode, ...names: string[]): Array<[string, ExitCode]> =>
 // Problem codes (or types) from spec 1 §13, T87 and T92. EXPIRED_TOKEN and ACCESS_DENIED are the device flow's own, raised locally.
 const BY_CODE: ReadonlyMap<string, ExitCode> = new Map([
   ...codes(ExitCode.AUTH, 'SDK_KEY_INVALID', 'EXPIRED_TOKEN', 'ACCESS_DENIED'),
-  ...codes(
-    ExitCode.INVALID,
-    'MANIFEST_INVALID',
-    'MULTI_SERVICE_DISABLED',
-    'PRICE_NOT_FOUND',
-    'PRICE_INACTIVE',
-    'FEE_POLICY_INVALID',
-    'LIVE_MODE_REQUIRED',
-    'TEST_MODE_ONLY',
-  ),
-  ...codes(ExitCode.CONFLICT, 'IDEMPOTENCY_CONFLICT', 'WORKLOAD_FINGERPRINT_EXISTS'),
-  ...codes(ExitCode.HUMAN, 'ACCOUNT_NOT_READY', 'PAYMENT_METHOD_REQUIRED', 'INSUFFICIENT_CREDITS', 'COMPUTE_CAP_REACHED'),
+  ...codes(ExitCode.CONFLICT, 'IDEMPOTENCY_CONFLICT'),
+  ...codes(ExitCode.HUMAN, 'ACCOUNT_NOT_READY'),
   ...codes(ExitCode.RATE_LIMITED, 'RATE_LIMITED'),
 ]);
 
@@ -51,14 +40,6 @@ export const exitCodeForProblem = (status: number, problem?: ProblemDetail): Exi
   return ExitCode.UNEXPECTED;
 };
 
-/** What a deploy that stopped after registering leaves behind: the workload, the key shown only once, and the command that resumes. */
-export interface PartialDeploy {
-  workloadId: string;
-  /** Only when the run that failed minted it: no rerun can show it again. */
-  sdkKey?: string;
-  rerun: string;
-}
-
 /** A failure the CLI reports and exits on. `step` names where it happened in `--json` documents. */
 export class CliError extends Error {
   constructor(
@@ -66,7 +47,6 @@ export class CliError extends Error {
     readonly exitCode: ExitCode,
     readonly step: string,
     readonly problem: ProblemDetail = { title: message },
-    readonly partial?: PartialDeploy,
     /** Extra fields for the `--json` failure document, such as the invariants a strict verify failed. */
     readonly details?: object,
   ) {

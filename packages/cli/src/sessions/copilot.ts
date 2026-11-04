@@ -157,7 +157,7 @@ export const eventLines = (text: string, fallbackId: string): Obj[] => {
   let at: string | undefined;
   let model: string | undefined;
   let sequence = 0;
-  // Each model's latest shutdown totals. Upstream's accounting is session-wide and kept for resume (usage-and-billing.md, session-events.ts:4450), so a later
+  // Each model's latest shutdown totals. Upstream's accounting is session-wide and kept for resume (the SDK usage doc, session-events.ts:4450), so a later
   // shutdown replaces an earlier one instead of adding to it (inferred, see the docs: no line states that a resumed count continues).
   const totals = new Map<string, Obj>();
   const responses: Response[] = [];
@@ -184,7 +184,7 @@ export const eventLines = (text: string, fallbackId: string): Obj[] => {
   const usageOf = (usage: Obj): Obj => {
     const reasoning = num(usage.reasoningTokens);
     return {
-      // `inputTokens` already includes the cache reads and writes (usage-and-billing.md:58), and capture's fields are disjoint, so only the uncached part is input.
+      // `inputTokens` already includes the cache reads and writes (the SDK usage doc, line 58), and capture's fields are disjoint, so only the uncached part is input.
       input_tokens: Math.max((num(usage.inputTokens) ?? 0) - (num(usage.cacheReadTokens) ?? 0) - (num(usage.cacheWriteTokens) ?? 0), 0),
       cache_read_input_tokens: num(usage.cacheReadTokens) ?? 0,
       cache_creation_input_tokens: num(usage.cacheWriteTokens) ?? 0,

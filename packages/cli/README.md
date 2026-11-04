@@ -1,6 +1,6 @@
 # @manyoars/oars
 
-The `oars` command line for Many Oars: sign in, deploy an agent, and keep a local memory of your own Claude Code sessions (`oars sessions`).
+The `oars` command line for Many Oars: sign in, manage API keys, and keep a local memory of your own Claude Code sessions (`oars sessions`).
 
 Accounts are not open yet; `oars login` says so until launch.
 
@@ -27,7 +27,7 @@ These flags work on every command:
 
 - `--json` prints one JSON document on stdout instead of text (see below).
 - `--api-url <url>` sets the platform API. The default is `OARS_API_URL`, else `https://api.manyoars.com`.
-- `--idempotency-key <key>` is the base of every step's idempotency key (default: a fresh UUID). Rerun a failed command with the same key to resume.
+- `--idempotency-key <key>` is the base of the idempotency key (default: a fresh UUID). Rerun a failed command with the same key to replay it.
 
 ### login
 
@@ -39,28 +39,6 @@ Signs in with your browser (RFC 8628 device flow) and stores the login.
 ### logout
 
 Revokes the stored login and deletes it.
-
-### templates
-
-`oars templates` lists the starter templates `oars deploy --template` takes: each id, name, description, and starter prices. Needs a login.
-
-### deploy
-
-Registers a workload, creates its prices, and deploys it. Pass exactly one of `--template`, `--image`, or `--manifest`. It stops at the first failed step and exits 9 (see below). A `--template` id the catalog lacks exits 2, and an unreachable catalog exits 8, before anything is registered.
-
-- `--image <ref>` deploys an image pinned by digest (`name@sha256:...`). Companions: `--name <name>`, `--port <n>` (default 8080), `--public`, `--cpu-millicores <n>` (default 250), `--memory-mib <n>` (default 256).
-- `--manifest <file>` deploys a JSON workload manifest.
-- `--always-on` keeps the public service running instead of idling. It works with every source.
-- `--template <id>` deploys a starter template from the catalog (`oars templates`): it registers the entry's manifest, creates every starter price, then deploys. `--price <ref>` (repeatable) creates only the named ones; `--no-prices` creates none. `--name`, `--port`, `--public`, `--cpu-millicores`, `--memory-mib`, and `--price-file` do not combine with it.
-- `--price-file <file>` is a JSON array of prices to create (with `--image` or `--manifest`).
-- `--secret <NAME=value>` and `--secret-from-env <NAME>` add a workload secret; both repeat. Prefer `--secret-from-env`, which keeps the value out of your shell history.
-- `--no-start` registers and prices the workload without deploying it.
-
-The SDK key is shown once, so save it when `deploy` prints it.
-
-### status
-
-`oars status <workloadId>` shows a workload and its billing mode.
 
 ### keys
 
@@ -197,8 +175,8 @@ Replay is local and read-only on your transcripts; it writes `crossings.jsonl` a
 
 With `--json`, stdout carries exactly one JSON document and a success exits 0.
 
-- Success: `{"ok": true, ...}`. The rest depends on the command: `login` adds `email`; `deploy` adds `workloadId`, `prices`, `started`, `nextSteps` and, when this run minted it, `sdkKey`; `templates` adds `templates`; `status` adds `workload` and `billingMode`; `keys create` adds `key` and `secret`, `keys list` adds `keys`, and `keys revoke` adds `keyId` and `revoked`; `sessions` commands add their own fields (`deposit` the counts, `recall` `matches`, `books` `rows`, `measure` `last` and `before`, `verify` `sessions`, `unreadable`, `invariants`, `sessionResults`, and `audit`).
-- Failure: `{"ok": false, "step": "...", "problem": {...}}`, where `problem` is the platform's problem document (`title`, `detail`, `code`, `actionUrl` when it sent them). A `deploy` that stopped after registering also carries `workloadId`, `rerun` and, if that run minted it, `sdkKey`.
+- Success: `{"ok": true, ...}`. The rest depends on the command: `login` adds `email`; `keys create` adds `key` and `secret`, `keys list` adds `keys`, and `keys revoke` adds `keyId` and `revoked`; `sessions` commands add their own fields (`deposit` the counts, `recall` `matches`, `books` `rows`, `measure` `last` and `before`, `verify` `sessions`, `unreadable`, `invariants`, `sessionResults`, and `audit`).
+- Failure: `{"ok": false, "step": "...", "problem": {...}}`, where `problem` is the platform's problem document (`title`, `detail`, `code`, `actionUrl` when it sent them).
 
 Without `--json`, a failure prints the problem to stderr instead.
 
@@ -211,11 +189,10 @@ Exit codes:
 | 2 | usage error |
 | 3 | authentication failed (login expired or denied, SDK key invalid, HTTP 401 or 403) |
 | 4 | the platform rejected the input, or `sessions verify --strict` found exceptions |
-| 5 | conflict (an idempotency key or workload already used) |
-| 6 | a person must act first (an account step or the compute cap); the last stderr line starts "Needs you:" and names the link |
+| 5 | conflict (an idempotency key already used) |
+| 6 | a person must act first (an account step); the last stderr line starts "Needs you:" and names the link |
 | 7 | rate limited |
 | 8 | the server could not be reached (the platform, the issuer, or a pool server) |
-| 9 | `deploy` stopped part way; rerun the printed command to resume |
 | 10 | `pool fetch` hit the pool's weekly fetch cap; the bundle on disk is untouched, and the message says when to try again |
 
 ## Source

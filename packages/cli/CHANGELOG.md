@@ -6,7 +6,9 @@ All notable changes to `@manyoars/oars`. Versions follow semver; a release is th
 
 ## 0.3.0
 
-Changes since 0.2.0. Four command groups are new (`keys`, `sessions`, `gate`, `pool`); `login`, `deploy`, `status`, and `templates` keep their flags.
+Changes since 0.2.0. Four command groups are new (`keys`, `sessions`, `gate`, `pool`); `login` and `logout` keep their flags.
+
+- The hosted-agent commands of 0.2.0 (`deploy`, `status`, and `templates`) are not in this release; a script that calls one gets the unknown-command exit (2).
 
 - `oars keys create|list|revoke` manages your API keys. `keys create --workload <id>` mints a key limited to one workload (authorities `AGENT_OPERATE` and `AGENT_READ` only), so a scheduled agent can change its own schedule without being able to reach another workload.
 - `oars sessions` keeps a local, deterministic memory of your own Claude Code sessions: `deposit`, `recall` (with `--mcp` to serve the same query to a running agent), `lineage`, `read`, `books`, `measure`, `verify`, `exclusions`, and `hook`, plus `gold sample`, `gold arms`, and `gold score`. It makes no model call and no network call, except `gold arms`, which sends redacted text through your own Claude subscription. `deposit --allow` also reads Cursor, Codex, Copilot CLI, Gemini CLI, Grok Build, and VS Code Copilot Chat sessions (Stable, Insiders, and OSS builds), each opt-in by name; the VS Code source is written from VS Code's public source and synthetic fixtures and has never run against a live store, and its sessions carry no per-model input figure, so `input` 0 there means not known.

@@ -1,15 +1,11 @@
 import { randomUUID } from 'node:crypto';
 import { Command, CommanderError, InvalidArgumentError, type OptionValues } from 'commander';
 import { resolveApiUrl } from './api.js';
-import { deploy } from './commands/deploy.js';
 import { keysCreate, keysList, keysRevoke, SCOPED_AUTHORITIES } from './commands/keys.js';
 import { login } from './commands/login.js';
 import { logout } from './commands/logout.js';
-import { status } from './commands/status.js';
-import { templates } from './commands/templates.js';
 import type { CredentialStore } from './credentials.js';
 import { CliError, ExitCode } from './errors.js';
-import type { JournalStore } from './journal.js';
 import type { BooksBy, RecallQuery } from './sessions/query.js';
 import { closedQueryOf, formsRefusal, RECALL_FAMILIES } from './sessions/recall-reads.js';
 import { FAMILIES } from './sessions/read.js';
@@ -27,8 +23,6 @@ export interface RunDeps {
   env: NodeJS.ProcessEnv;
   io: { stdout: (text: string) => void; stderr: (text: string) => void };
   store: CredentialStore;
-  /** Where `deploy` keeps its progress between a failed run and the rerun. */
-  journal: JournalStore;
   /** Sent as `User-Agent: oars/<version>` and printed by `--version`. */
   version: string;
   sleep: (ms: number) => Promise<void>;
@@ -85,46 +79,37 @@ const emit = (deps: RunDeps, json: boolean, outcome: Outcome): void => {
   deps.io.stdout(`${json ? JSON.stringify(outcome.document) : outcome.text}\n`);
 };
 
-/** The last line of an exit 6: the one thing a person must do, by link when the platform sent one, then to rerun. Finishing account setup is the step most runs wait on. */
-const needsYouLine = (code: string | undefined, actionUrl: string | undefined): string => {
-  const setup = code === 'ACCOUNT_NOT_READY';
-  if (actionUrl !== undefined && actionUrl !== '') {
-    return `Needs you: ${setup ? 'finish account setup at' : 'open'} ${actionUrl}, then rerun this command.`;
-  }
-  return setup
-    ? 'Needs you: finish account setup in the Many Oars web app, then rerun this command.'
-    : 'Needs you: a step only a person can do. Do it in the Many Oars web app, then rerun this command.';
-};
+/** The last line of an exit 6, which only unfinished account setup raises: the link when the platform sent one, then to rerun. */
+const needsYouLine = (actionUrl: string | undefined): string =>
+  actionUrl !== undefined && actionUrl !== ''
+    ? `Needs you: finish account setup at ${actionUrl}, then rerun this command.`
+    : 'Needs you: finish account setup in the Many Oars web app, then rerun this command.';
 
 /**
- * `--json` prints `{ok: false, step, problem}` on stdout, plus `workloadId`, `sdkKey` and `rerun` after a deploy that stopped;
- * otherwise the problem's title, detail, and URL go to stderr (on an exit 6 the URL moves into a last "Needs you:" line),
- * then the rerun line, and the one-time SDK key goes to stdout.
+ * `--json` prints `{ok: false, step, problem}` on stdout, plus the error's details; otherwise the problem's title, detail,
+ * and URL go to stderr (on an exit 6 the URL moves into a last "Needs you:" line).
  */
 const printFailure = (deps: RunDeps, json: boolean, error: CliError): void => {
-  const { partial } = error;
   if (json) {
-    deps.io.stdout(`${JSON.stringify({ ok: false, step: error.step, problem: error.problem, ...partial, ...error.details })}\n`);
+    deps.io.stdout(`${JSON.stringify({ ok: false, step: error.step, problem: error.problem, ...error.details })}\n`);
     return;
   }
   const { title, detail, actionUrl } = error.problem;
-  const resume = partial === undefined ? [] : [`Workload ${partial.workloadId} is registered; the deploy stopped at ${error.step}.`, `Rerun to resume: ${partial.rerun}`];
-  const needsYou = error.exitCode === ExitCode.HUMAN ? [needsYouLine(error.problem.code, actionUrl)] : [];
-  deps.io.stderr(`${[title ?? error.message, detail, ...(needsYou.length === 0 ? [actionUrl] : []), ...resume, ...needsYou].filter((line) => line !== undefined && line !== '').join('\n')}\n`);
-  if (partial?.sdkKey !== undefined) deps.io.stdout(`SDK key (shown once; save it now): ${partial.sdkKey}\n`);
+  const needsYou = error.exitCode === ExitCode.HUMAN ? [needsYouLine(actionUrl)] : [];
+  deps.io.stderr(`${[title ?? error.message, detail, ...(needsYou.length === 0 ? [actionUrl] : []), ...needsYou].filter((line) => line !== undefined && line !== '').join('\n')}\n`);
 };
 
 const sessionDeps = (deps: RunDeps): SessionsDeps => ({ sessions: deps.sessions, install: deps.install, now: deps.now });
 
-const buildProgram = (deps: RunDeps, argv: string[]): Command => {
+const buildProgram = (deps: RunDeps): Command => {
   const program = new Command('oars')
-    .description('Deploy an agent on Many Oars and set its prices')
+    .description('Many Oars: sign in, manage API keys, and keep a local, searchable record of your own Claude Code sessions')
     .version(deps.version)
     .exitOverride()
     .configureOutput({ writeOut: deps.io.stdout, writeErr: deps.io.stderr })
     .option('--json', 'print one JSON document on stdout instead of text')
     .option('--api-url <url>', 'the platform API (default: OARS_API_URL, else https://api.manyoars.com)')
-    .option('--idempotency-key <key>', "the base of every step's idempotency key (default: a fresh UUID); rerun a failed command with the same key to resume");
+    .option('--idempotency-key <key>', "the base of the idempotency key (default: a fresh UUID); rerun a failed command with the same key to replay it");
 
   program
     .command('login')
@@ -147,66 +132,6 @@ const buildProgram = (deps: RunDeps, argv: string[]): Command => {
     .action(async (_options: OptionValues, command: Command) => {
       const options: OptionValues = command.optsWithGlobals();
       emit(deps, flag(options, 'json'), await logout(deps));
-    });
-
-  program
-    .command('templates')
-    .description('list the starter templates `oars deploy --template` takes')
-    .action(async (_options: OptionValues, command: Command) => {
-      const options: OptionValues = command.optsWithGlobals();
-      emit(deps, flag(options, 'json'), await templates(deps, { apiUrl: resolveApiUrl(deps, text(options, 'apiUrl')) }));
-    });
-
-  program
-    .command('deploy')
-    .description('register a workload, create its prices and deploy it; stops at the first failed step (exit 9)')
-    .option('--template <id>', 'a starter template from the catalog (see: oars templates)')
-    .option('--image <ref>', 'an image pinned by digest (name@sha256:...)')
-    .option('--manifest <file>', 'a JSON workload manifest')
-    .option('--name <name>', 'the workload name (--image)')
-    .option('--port <n>', 'the service port (--image; default 8080)', positiveInteger)
-    .option('--public', 'expose the service publicly (--image)')
-    .option('--cpu-millicores <n>', 'CPU in millicores (--image; default 250)', positiveInteger)
-    .option('--memory-mib <n>', 'memory in MiB (--image; default 256)', positiveInteger)
-    .option('--always-on', 'keep the public service running instead of idling')
-    .option('--price <ref>', 'a starter price to create instead of all of them (--template; repeatable)', collect)
-    .option('--no-prices', "create none of the template's starter prices (--template)")
-    .option('--price-file <file>', 'a JSON array of prices to create (--image, --manifest)')
-    .option('--secret <NAME=value>', 'a secret for the workload (repeatable); prefer --secret-from-env', collect)
-    .option('--secret-from-env <NAME>', 'a secret read from the environment variable NAME (repeatable)', collect)
-    .option('--no-start', 'register and price the workload without deploying it')
-    .action(async (_options: OptionValues, command: Command) => {
-      const options: OptionValues = command.optsWithGlobals();
-      const outcome = await deploy(deps, {
-        apiUrl: resolveApiUrl(deps, text(options, 'apiUrl')),
-        argv,
-        start: options.start !== false,
-        idempotencyKey: text(options, 'idempotencyKey'),
-        template: text(options, 'template'),
-        image: text(options, 'image'),
-        manifestFile: text(options, 'manifest'),
-        name: text(options, 'name'),
-        port: count(options, 'port'),
-        public: flag(options, 'public') ? true : undefined,
-        cpuMillicores: count(options, 'cpuMillicores'),
-        memoryMib: count(options, 'memoryMib'),
-        alwaysOn: flag(options, 'alwaysOn') ? true : undefined,
-        prices: list(options, 'price'),
-        noPrices: options.prices === false,
-        priceFile: text(options, 'priceFile'),
-        secrets: list(options, 'secret'),
-        secretsFromEnv: list(options, 'secretFromEnv'),
-      });
-      emit(deps, flag(options, 'json'), outcome);
-    });
-
-  program
-    .command('status')
-    .description('show a workload and its billing mode')
-    .argument('<workloadId>', 'the workload id')
-    .action(async (workloadId: string, _options: OptionValues, command: Command) => {
-      const options: OptionValues = command.optsWithGlobals();
-      emit(deps, flag(options, 'json'), await status(deps, { apiUrl: resolveApiUrl(deps, text(options, 'apiUrl')), workloadId }));
     });
 
   const keys = program.command('keys').description('create, list, and revoke your API keys; a key made with --workload works on that one workload only');
@@ -384,7 +309,7 @@ const buildProgram = (deps: RunDeps, argv: string[]): Command => {
       if (flag(options, 'strict') && failed.length > 0) {
         // One document under --json: the failure carries the invariants, so the success document is not printed first.
         if (!json) emit(deps, json, outcome);
-        throw new CliError(`${String(failed.length)} ${failed.length === 1 ? 'check' : 'checks'} failed: ${failed.join('; ')}`, ExitCode.INVALID, 'verify', undefined, undefined, json ? report : undefined);
+        throw new CliError(`${String(failed.length)} ${failed.length === 1 ? 'check' : 'checks'} failed: ${failed.join('; ')}`, ExitCode.INVALID, 'verify', undefined, json ? report : undefined);
       }
       emit(deps, json, outcome);
     });
@@ -609,7 +534,7 @@ const asCliError = (error: unknown): CliError => {
 /** Runs one invocation (`argv` without the node and script entries) and returns the exit code. */
 export const run = async (argv: string[], deps: RunDeps): Promise<ExitCode> => {
   try {
-    await buildProgram(deps, argv).parseAsync(argv, { from: 'user' });
+    await buildProgram(deps).parseAsync(argv, { from: 'user' });
     return ExitCode.OK;
   } catch (error) {
     // --help and --version end the parse through exitOverride with exit code 0; commander has already printed them.

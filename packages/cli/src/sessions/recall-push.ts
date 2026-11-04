@@ -81,7 +81,7 @@ export interface PushInput {
 }
 
 /**
- * The recall a call about to run earns, written before anything is injected: an exposure with no record is the one failure the arms cannot survive. Undefined when no read
+ * The recall a call about to run gets, written before anything is injected: an exposure with no record is the one failure the arms cannot survive. Undefined when no read
  * covers the shape, which keeps no row (no one asked, so it is not a want, and it would be a row per call), and when this session has already been told about this shape.
  */
 export const pushRecall = async (input: PushInput): Promise<Recall | undefined> => {
