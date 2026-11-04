@@ -8,9 +8,10 @@ import type { Cell } from './cells.js';
 import type { Motif } from './motif.js';
 import type { Read, ReadAsOf } from './read.js';
 import { projectLanguage, projectLanguageShare } from './strata.js';
-import { LANGUAGE_SHARES, type Frame, type FrameStack, type Harness, type LanguageShare, type PromptClass, type PromptObservation, type PullIdentity, type SessionObservation, type ShellIdentity, type StepIdentity, type StepObservation, type Strata, type ToolObservation, type ToolStatus, type Usage } from './schema.js';
+import { ERROR_CODES, LANGUAGE_SHARES, type Frame, type FrameStack, type Harness, type LanguageShare, type PromptClass, type PromptObservation, type PullIdentity, type SessionObservation, type ShellIdentity, type StepIdentity, type StepObservation, type Strata, type ToolObservation, type ToolStatus, type Usage } from './schema.js';
 
-export const SKELETON_FORMAT = 2;
+// Format 3 (step 1 of the wire): a tool carries its `errorCode` and, for a failed call, what followed it (`recoveryCalls`). Formats 1 and 2 are refused by name; nothing is deployed, so nothing is migrated.
+export const SKELETON_FORMAT = 3;
 export const BUNDLE_FORMAT = 1;
 /** One constant: the pool serves only the vocabulary version the client holds. */
 export { VOCAB_VERSION };
@@ -61,6 +62,8 @@ export interface SkeletonTool {
   status: ToolStatus;
   /** Exact, per tool: the one exact time on the wire, which W reads on `ledger` (Section 1.2, `durationMs`). A cell never reads it. */
   durationMs: number | null;
+  /** The failed call's class, a member of `ERROR_CODES` (a user refusal, a policy denial, and a real failure are three codes); null on a call that did not fail and on one whose capture holds none. Never result text. */
+  errorCode: string | null;
   steps: SkeletonStep[];
 }
 
@@ -246,6 +249,9 @@ export const projectedSteps = (tool: ToolObservation, read: ShellReader, harness
   });
 };
 
+/** A failed call's stored `errorCode` as the wire holds it: a member of the closed list, else `other`; null for a call that did not fail and for one captured without a code (the wire does not guess one). */
+const wireErrorCode = ({ status, errorCode }: ToolObservation): string | null => (status !== 'error' || errorCode === undefined ? null : ERROR_CODES.has(errorCode) ? errorCode : 'other');
+
 /** A transcript's calls in the order they ran, which is the order a skeleton holds them in. */
 const byCall = (tools: readonly ToolObservation[]): ToolObservation[] => [...tools].sort((a, b) => a.n - b.n);
 
@@ -299,6 +305,7 @@ const transcriptOf = (
   for (const tool of byCall(tools)) {
     if (tool.steps === undefined) return null;
     const { side, prompt, status, durationMs } = tool;
+    const errorCode = wireErrorCode(tool);
     // A subagent's call names the prompt that spawned it, which its own transcript holds no record of: such a number takes the next position past the prompts, one per distinct number, so
     // the calls that shared a prompt still share one, and no position reads as a prompt.
     if (prompt !== null && !promptAt.has(prompt)) promptAt.set(prompt, framedPrompts.length + unrecorded++);
@@ -316,7 +323,7 @@ const transcriptOf = (
       agentType,
       parent: parent === null || spawners === null ? null : (spawners.get(parent) ?? null),
     }));
-    steppedTools.push({ side, prompt: promptPosition, status, durationMs, steps });
+    steppedTools.push({ side, prompt: promptPosition, status, durationMs, errorCode, steps });
   }
   // A step's remaining tokens are those of the steps after it in its own run; a main-run step also counts the subagent runs its later steps spawned (a run belongs to the spawning call's carrier step).
   let later = 0;
@@ -612,13 +619,23 @@ const parseStep = (harness: Harness, value: unknown, at: string): SkeletonStep =
   };
 };
 
+/** A call's `errorCode`: absent or null is none; otherwise a member of the closed list, and only on a call that failed. */
+const parseErrorCode = (status: ToolStatus, value: unknown, at: string): string | null => {
+  if (value === undefined || value === null) return null;
+  const code = exactlyIn(ERROR_CODES)(value, at);
+  if (status !== 'error') throw new Refused(at, 'only a failed call has one');
+  return code;
+};
+
 const parseTool = (harness: Harness, value: unknown, at: string): SkeletonTool => {
-  const raw = fieldsOf(value, at, ['side', 'prompt', 'status', 'durationMs', 'steps']);
+  const raw = fieldsOf(value, at, ['side', 'prompt', 'status', 'durationMs', 'steps'], ['errorCode']);
+  const status = oneOf(STATUSES, raw.status, under(at, 'status'));
   return {
     side: booleanOf(raw.side, under(at, 'side')),
     prompt: orNull(raw.prompt, under(at, 'prompt'), countOf),
-    status: oneOf(STATUSES, raw.status, under(at, 'status')),
+    status,
     durationMs: orNull(raw.durationMs, under(at, 'durationMs'), countOf),
+    errorCode: parseErrorCode(status, raw.errorCode, under(at, 'errorCode')),
     steps: listOf(raw.steps, under(at, 'steps'), (entry, entryAt) => parseStep(harness, entry, entryAt)),
   };
 };
@@ -690,7 +707,8 @@ const parseDelta = (value: unknown, at: string): DeltaEntry => {
 export const parseSkeleton = (value: unknown): { ok: true; skeleton: SessionSkeleton } | Refusal => {
   try {
     // The first form sent exact usage; it is named here, since its fields would otherwise read as a list of strangers.
-    if (isFields(value) && value.format === 1) throw new Refused('format', 'the exact-count form (format 1) is no longer read; send format 2');
+    if (isFields(value) && value.format === 1) throw new Refused('format', `the exact-count form (format 1) is no longer read; send format ${String(SKELETON_FORMAT)}`);
+    if (isFields(value) && value.format === 2) throw new Refused('format', `the form without \`errorCode\` and \`recoveryCalls\` (format 2) is no longer read; send format ${String(SKELETON_FORMAT)}`);
     const raw = fieldsOf(value, '', ['format', 'id', 'transcripts', 'timingPrint', 'deltas']);
     if (raw.format !== SKELETON_FORMAT) throw new Refused('format', 'not a format this version reads');
     const id = textOf(raw.id, 'id');
