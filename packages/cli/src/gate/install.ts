@@ -12,8 +12,8 @@ export const MATCHER = 'Bash|PowerShell|Skill|mcp__.*';
 export const EVENT = 'PreToolUse';
 /** Seconds the harness waits for the hook; the hook ends itself in under one, so this is only the ceiling for a cold node start. */
 export const TIMEOUT_SECONDS = 5;
-/** Run by the harness's shell (Git Bash on Windows). `command -v` is a shell builtin, so a missing `oars` costs a few milliseconds and no node start. */
-export const COMMAND = 'command -v oars >/dev/null 2>&1 || exit 0; oars gate hook';
+/** Run by the harness's shell (Git Bash on Windows). `command -v` is a shell builtin, so a missing `oars` costs a few milliseconds and no node start. The trailing `exit 0` matters: exit 2 from a PreToolUse hook blocks the tool call, and an `oars` with no `gate hook` exits 2. */
+export const COMMAND = 'command -v oars >/dev/null 2>&1 || exit 0; oars gate hook >/dev/null 2>&1; exit 0';
 
 interface Json {
   [key: string]: unknown;
