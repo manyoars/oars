@@ -194,6 +194,16 @@ describe('rules 1 to 3 and 6: what a cell and a stratum hold', () => {
     for (const stratum of strata.values()) expect(stratum.sessions).toBe(1);
   });
 
+  it('pools the two pair strata per value, each beside the single ones, and no pair for a language without a share or a prompt without a count', () => {
+    const strata = { languages: [{ language: 'rust', share: 'over-50' }, { language: 'go', share: 'nonsense' }], repoFiles: 'over-100k', frameworks: [], explore: 37 } as const;
+    const local = store({ sessions: [session('s1', { frame: framed })], prompts: [prompt('s1', 0, { frame: framed, strata }), prompt('s1', 1, { frame: framed })] });
+    const keys = [...incrementsOf(skeletonOfLocal(local)).strata.keys()];
+    // 37 explore steps is bucket 7; the second prompt held no count, and a share outside its list is dropped with its pair.
+    expect(keys.filter((key) => key.startsWith('languageShare/') || key.startsWith('repoFilesExplore/')).sort()).toEqual(['languageShare/rust/over-50', 'repoFilesExplore/xl/7']);
+    expect(keys).toContain('repoFiles/xl');
+    for (const stratum of incrementsOf(skeletonOfLocal(local)).strata.values()) expect(stratum.sessions).toBe(1);
+  });
+
   it('puts only the axes in a cell key, and never effort (rule 3)', () => {
     for (const cell of increments().cells.values()) expect(cell.frameBucket).toBe(cell.motifId === effortPairId ? NO_AXES : 'claude-code/2.1.31x/claude-opus-5-5');
   });

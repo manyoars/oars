@@ -248,6 +248,9 @@ export const incrementsOf = (skeleton: SessionSkeleton): Increments => {
     ...frames.flatMap(({ stack }) => stack.languages.map((value): [string, string] => ['language', value])),
     ...frames.flatMap(({ stack }) => stack.frameworks.map((value): [string, string] => ['framework', value])),
     ...frames.flatMap(({ stack }) => (stack.size === null ? [] : [['repoFiles', stack.size] satisfies [string, string]])),
+    // The two pairs (rule 3): each is a stratum of its own, never a cell and never keyed by the stack's other values. A language with no share, and a prompt with no count, make none.
+    ...frames.flatMap(({ stack }) => stack.languageShares.map(({ language, languageShare }): [string, string] => ['languageShare', `${language}/${languageShare}`])),
+    ...skeleton.transcripts.flatMap(({ prompts }) => prompts.flatMap(({ explore, frame }) => (explore === null || frame.stack.size === null ? [] : [['repoFilesExplore', `${frame.stack.size}/${String(explore)}`] satisfies [string, string]]))),
   ];
   for (const [dimension, value] of named) strata.set(`${dimension}/${value}`, { key: `${dimension}/${value}`, dimension, value, sessions: 1 });
   return { cells, motifs: derived.motifs, strata };

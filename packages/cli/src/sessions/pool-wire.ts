@@ -732,9 +732,12 @@ export const parseSkeleton = (value: unknown): { ok: true; skeleton: SessionSkel
   }
 };
 
-/** One count of a stack stratum (spec Section 4, rule 3), across every harness version, so it is never joined to one. */
+/**
+ * One count of a stack stratum (spec Section 4, rule 3), across every harness version, so it is never joined to one. The two pairs hold two values each, joined by a slash:
+ * `languageShare` is `<language>/<share bucket>` and `repoFilesExplore` is `<repoFiles bucket>/<explore calls bucket>`.
+ */
 export interface StrataCell {
-  dimension: 'language' | 'framework' | 'repoFiles';
+  dimension: 'language' | 'framework' | 'repoFiles' | 'languageShare' | 'repoFilesExplore';
   value: string;
   sessions: number;
   clusters: number;

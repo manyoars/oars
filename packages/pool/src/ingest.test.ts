@@ -7,7 +7,7 @@ import type { CanonicalAction } from '../../cli/src/sessions/actions.js';
 import { PUBLIC_PROGRAMS, PUBLIC_SUBCOMMANDS } from '../../cli/src/sessions/public-vocabulary.js';
 import type { Bound, Env, PoolDb } from './http.js';
 import { chunksOf, incrementsOf } from './ingest.js';
-import { sampleSkeleton } from './sample.js';
+import { sampleSkeleton, withPairs } from './sample.js';
 import { fieldOf, startPool, stubUser, type TestPool, textOf } from './test-pool.js';
 import worker from './worker.js';
 
@@ -47,6 +47,8 @@ const strataOracle = (byAccount: readonly (readonly SessionSkeleton[])[]): { key
         ...new Set(frames.flatMap(({ stack }) => stack.languages.map((value) => `language/${value}`))),
         ...new Set(frames.flatMap(({ stack }) => stack.frameworks.map((value) => `framework/${value}`))),
         ...new Set(frames.flatMap(({ stack }) => (stack.size === null ? [] : [`repoFiles/${stack.size}`]))),
+        ...new Set(frames.flatMap(({ stack }) => stack.languageShares.map(({ language, languageShare }) => `languageShare/${language}/${languageShare}`))),
+        ...new Set(transcripts.flatMap(({ prompts }) => prompts.flatMap(({ explore, frame: held }) => (explore === null || held.stack.size === null ? [] : [`repoFilesExplore/${held.stack.size}/${String(explore)}`])))),
       ];
       for (const key of keys) {
         const held = tallies.get(key) ?? { sessions: 0, accounts: new Set<number>() };
@@ -84,7 +86,10 @@ describe('ingest writes cell increments to stored cells', () => {
   it('holds exactly the cells and strata the landed derivation computes over the same batches', async () => {
     await inFreshPool({}, async (target) => {
       const batches: SessionSkeleton[][] = [
-        [sampleSkeleton('00000000000081a1', { languages: ['rust'], frameworks: ['astro'], size: 'xl' }, '2026-11-01'), sampleSkeleton('00000000000081a2', { languages: ['rust'] }, '2026-11-02')],
+        [
+          withPairs(sampleSkeleton('00000000000081a1', { languages: ['rust'], frameworks: ['astro'], size: 'xl' }, '2026-11-01'), [{ language: 'rust', languageShare: 'over-50' }], 7),
+          sampleSkeleton('00000000000081a2', { languages: ['rust'] }, '2026-11-02'),
+        ],
         [sampleSkeleton('00000000000081b1', { languages: ['rust', 'go'] }, '2026-11-01')],
         [sampleSkeleton('00000000000081c1', { languages: ['go'], size: 'xl' }, '2026-11-02'), sampleSkeleton('00000000000081c2', { languages: ['go'] }, '2026-11-02', 'cursor')],
       ];
