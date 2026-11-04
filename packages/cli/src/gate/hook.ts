@@ -190,6 +190,10 @@ const appendText = async (file: string, body: string): Promise<void> => {
   await appendFile(file, body, { mode: 0o600 });
 };
 
+/** A row for a note that never reached the agent: no exposure, no arm. Used when a deny prints instead, and when the deadline ends the process before anything is printed. */
+export const withoutExposure = (row: CrossingRecord): CrossingRecord =>
+  row.arm === 'none' ? row : { ...row, arm: 'none', lineShown: 'none', lineHeld: 'none' };
+
 /** A block is a deny whose reason is the label; else the notes are context for the agent. Never an allow, an ask, or a changed input: with neither, nothing is printed. */
 const outputOf = (blocks: readonly string[], notes: readonly string[]): string => {
   if (blocks.length > 0) return JSON.stringify({ hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: blocks.join('\n') } });
@@ -250,7 +254,7 @@ export const runGateHook = async (stdin: string, deps: GateHookDeps): Promise<st
     rows.push(recordOf(common, crossing, novelty, read, source, decision));
   }
   // A call that holds a block prints only the deny, so a note row (shown or held) was never in front of the agent: it reads as no exposure, since a row cannot be backfilled.
-  const written = blocks.length > 0 ? rows.map((row) => (row.arm === 'none' ? row : { ...row, arm: 'none' as const, lineShown: 'none' as const, lineHeld: 'none' as const })) : rows;
+  const written = blocks.length > 0 ? rows.map(withoutExposure) : rows;
   // The record first: an index line for a row that was never written would call the next crossing of the name old.
   const record = { file: crossingsPath(deps.storeDir), text: written.map((row) => `${JSON.stringify(row)}\n`).join('') };
   deps.stage?.(record);
