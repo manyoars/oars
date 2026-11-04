@@ -2,15 +2,18 @@ import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import {
+  HARNESS_AGENT_TYPES,
   HARNESS_TOOLS,
   isVocabularyExpired,
   PUBLIC_FLAGS,
   PUBLIC_MCP_SERVERS,
   PUBLIC_MCP_TOOLS,
   PUBLIC_PROGRAMS,
+  PUBLIC_SKILLS,
   PUBLIC_SUBCOMMANDS,
   REGISTRY_MAX_AGE_DAYS,
   VOCAB_SNAPSHOT_DATE,
+  TOOL_INPUT_KEYS,
   VOCAB_VERSION,
   vocabularyAgeDays,
 } from './public-vocabulary.js';
@@ -22,7 +25,7 @@ const tables = (map: ReadonlyMap<string, ReadonlySet<string>>): Array<[string, s
 
 /** The curated lists in public-vocabulary.ts that the pool reads, as one digest. */
 const curatedDigest = (): string =>
-  sha256(JSON.stringify([sorted(PUBLIC_PROGRAMS), tables(PUBLIC_SUBCOMMANDS), sorted(PUBLIC_FLAGS), sorted(PUBLIC_MCP_SERVERS), tables(PUBLIC_MCP_TOOLS), tables(HARNESS_TOOLS)]));
+  sha256(JSON.stringify([sorted(PUBLIC_PROGRAMS), tables(PUBLIC_SUBCOMMANDS), sorted(PUBLIC_FLAGS), sorted(PUBLIC_MCP_SERVERS), tables(PUBLIC_MCP_TOOLS), tables(HARNESS_TOOLS), sorted(PUBLIC_SKILLS), tables(HARNESS_AGENT_TYPES), tables(TOOL_INPUT_KEYS)]));
 
 interface Manifest {
   snapshotDate: string;
@@ -63,7 +66,7 @@ const PINNED: { readonly [version: string]: { readonly files: { readonly [file: 
       'pypi.json': '4fd0e73a16ec5abcee1c970f7e28cc84af68aaceb0197b8007a8be690878f442',
       'rubygems.json': '0cfec417beb17efdbd60634fe7e6c9252bebc6be5bab086446431099d939be33',
     },
-    curated: 'b10c78ce8106be037a26bb97d25ada760a73f93b50c5e7f3583794a37c3ba9b2',
+    curated: '45e55179bf49fabb7a5fb7738c6a86a64ccf764b0aa4cf151316ee2175ab7767',
   },
 };
 

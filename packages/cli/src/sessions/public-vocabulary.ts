@@ -301,3 +301,46 @@ export const HARNESS_TOOLS: ReadonlyMap<string, ReadonlySet<string>> = new Map(
       'Agent AskUserQuestion Bash BashOutput Edit EnterPlanMode ExitPlanMode Glob Grep KillBash KillShell MultiEdit NotebookEdit NotebookRead Read SlashCommand Skill Task TaskCreate TaskGet TaskList TaskOutput TaskStop TaskUpdate TodoRead TodoWrite ToolSearch WebFetch WebSearch Write',
   }).map(([harness, tools]) => [harness, words(tools)]),
 );
+
+/**
+ * The built-in subagent types of each harness, by the names a transcript records (`agentType`). Curated, since no registry publishes them. No plugin registry
+ * is pinned yet, so an admitted plugin agent is not on this list and pools as `custom` (spec Section 2).
+ */
+export const HARNESS_AGENT_TYPES: ReadonlyMap<string, ReadonlySet<string>> = new Map(
+  Object.entries({
+    'claude-code': 'general-purpose Explore Plan statusline-setup output-style-setup claude-code-guide',
+  }).map(([harness, types]) => [harness, words(types)]),
+);
+
+/**
+ * The input keys each built-in tool's published schema lists, by the tool's name. Curated from the harness's tool reference. A key outside the tool's list, and every
+ * key of an MCP tool (no pinned registry lists their schemas), is counted and never named (spec Section 1.3).
+ */
+export const TOOL_INPUT_KEYS: ReadonlyMap<string, ReadonlySet<string>> = new Map(
+  Object.entries({
+    Agent: 'description prompt subagent_type model run_in_background',
+    AskUserQuestion: 'questions answers',
+    Bash: 'command description timeout run_in_background dangerouslyDisableSandbox',
+    BashOutput: 'bash_id filter',
+    Edit: 'file_path old_string new_string replace_all',
+    ExitPlanMode: 'plan',
+    Glob: 'pattern path',
+    Grep: 'pattern path glob output_mode -B -A -C context -n -i type head_limit offset multiline',
+    KillBash: 'shell_id',
+    KillShell: 'shell_id',
+    MultiEdit: 'file_path edits',
+    NotebookEdit: 'notebook_path new_source cell_id cell_type edit_mode',
+    NotebookRead: 'notebook_path cell_id',
+    Read: 'file_path offset limit pages',
+    Skill: 'skill args',
+    SlashCommand: 'command',
+    Task: 'description prompt subagent_type model run_in_background resume',
+    TaskOutput: 'task_id block timeout',
+    TaskStop: 'task_id',
+    TodoWrite: 'todos',
+    ToolSearch: 'query max_results',
+    WebFetch: 'url prompt',
+    WebSearch: 'query allowed_domains blocked_domains',
+    Write: 'file_path content',
+  }).map(([tool, keys]) => [tool, words(keys)]),
+);
