@@ -13,7 +13,7 @@ const bin = fileURLToPath(new URL('../../dist/bin.js', import.meta.url));
 const helperBin = fileURLToPath(new URL('../../dist/gate/hook-fill-main.js', import.meta.url));
 const made: string[] = [];
 // A process the hook left behind (the cut ask's shell, a helper's manager) can still hold a folder for a moment on Windows, so a removal that fails with EPERM or EBUSY is tried
-// again: `rmSync` waits `retryDelay` longer after each failure, so four tries at 200 ms wait 0.2, 0.4, 0.6, and 0.8 s, two seconds in all. One that still fails throws: cleanup never
+// again: `rmSync` waits `retryDelay` longer after each failure, so four retries at 200 ms wait 0.2, 0.4, 0.6, and 0.8 s, two seconds in all. One that still fails throws: cleanup never
 // hides what the test itself found.
 afterEach(() => {
   for (const folder of made.splice(0)) rmSync(folder, { recursive: true, force: true, maxRetries: 4, retryDelay: 200 });
@@ -124,17 +124,17 @@ const sightsToHandOff = (payload: string, npm: { folder: string }, home: string,
   return expect.unreachable(`no sight of ${String(MAX_SIGHTS)} took the lock or started the helper`);
 };
 
-// One sight after the hand-off, run again if the box was so loaded that the hook was ended before it wrote its row: with the lock or the answer kept it asks nothing, so a repeat can start no
-// manager. At most MAX_SIGHTS, then the case fails.
-const sightWithRow = (payload: string, id: string, npm: { folder: string }, home: string): void => {
+// One sight after the hand-off, run again if the box was so loaded that the hook was ended before it wrote its row (or, when `printed` is set, before it printed): with the lock or the
+// answer kept it asks nothing, so a repeat can start no manager. At most MAX_SIGHTS, then the case fails. Returns the sight's stdout, so a case that expects a note or a deny reads it.
+const sightWithRow = (payload: string, id: string, npm: { folder: string }, home: string, printed = false): string => {
   for (let tries = 0; tries < MAX_SIGHTS; tries += 1) {
     const before = rowsOf(home).length;
     const result = runHook(payload.replace('"u1"', `"${id}"`), [], npm.folder, home);
     expect(result.status).toBe(0);
-    expect(result.stdout).toBe('');
-    if (rowsOf(home).length > before) return;
+    if (!printed) expect(result.stdout).toBe('');
+    if (rowsOf(home).length > before && (!printed || result.stdout !== '')) return result.stdout;
   }
-  expect.unreachable(`no row was written in ${String(MAX_SIGHTS)} sights`);
+  return expect.unreachable(`no row was written in ${String(MAX_SIGHTS)} sights`);
 };
 
 /** How many lines of the manager's log read `word`. */
@@ -174,20 +174,18 @@ describe.skipIf(!existsSync(bin))('the built oars gate hook', () => {
     // yarn is never asked of the registry (ASKED_PROGRAMS), so no `npm view` child outlives the test and writes into the temp home after its cleanup.
     const payload = JSON.stringify({ session_id: 's1', tool_use_id: 'u1', tool_name: 'Bash', tool_input: { command: 'yarn add left-pad' }, cwd: tmpdir(), permission_mode: 'default' });
     const npm = fakeNpm();
-    const result = runHook(payload, [], npm.folder);
-    expect(result.status).toBe(0);
-    expect(result.stdout).toBe('');
+    const home = mkdtempSync(join(tmpdir(), 'oars-gate-bin-'));
+    made.push(home);
+    // Run again when a loaded box ended the hook before it wrote: nothing here asks the manager, so a repeat can start none.
+    expect(sightWithRow(payload, 'u1', npm, home)).toBe('');
     expect(existsSync(npm.marker)).toBe(false);
-    const [file] = crossingFiles(result.home);
-    expect(file).toBeDefined();
-    const lines = readFileSync(join(result.home, file ?? ''), 'utf8').trim().split('\n');
-    expect(lines).toHaveLength(1);
-    expect(JSON.parse(lines[0] ?? '')).toMatchObject({ kind: 'crossing', via: 'hook', name: 'left-pad', registryState: 'not-read' });
+    const rows = rowsOf(home);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ kind: 'crossing', via: 'hook', name: 'left-pad', registryState: 'not-read' });
   });
 
-  // The built hook takes the sight and starts the helper itself, as the harness runs it. A sight is one of three things: it may skip its own ask (node's start used the budget), run it and
-  // cut it, or be ended by its deadline before it holds a lock (no lock, no helper, so the next sight asks). `sightsToHandOff` runs sights until one hands off, so the cases pin what follows
-  // exactly: at most two starts a sight, the helper's single finish, the lock or the cache it leaves, no start after the hand-off, and a row on every sight after it.
+  // The built hook takes the sight and starts the helper itself, as the harness runs it. `sightsToHandOff` (above) runs sights until one hands off and says what a sight can be, so the cases pin
+  // what follows exactly: at most two starts a sight, the helper's single finish, the lock or the cache it leaves, no start after the hand-off, and a row on every sight after it.
   it('fills the cache after a cut ask: the built hook starts the helper, and the sight after it reads found and asks nothing', async () => {
     const payload = JSON.stringify({ session_id: 's1', tool_use_id: 'u1', tool_name: 'Bash', tool_input: { command: 'npm install slow-lib' }, cwd: tmpdir(), permission_mode: 'default' });
     const npm = slowNpm();
@@ -255,13 +253,9 @@ describe.skipIf(!existsSync(bin))('the built oars gate hook', () => {
     expect(logged(npm.log, 'started')).toBe(1);
     expect(logged(npm.log, 'ended')).toBe(1);
     expect(lockFiles(store)).toEqual([]);
-    const sight = runHook(payload, [], npm.folder, home);
-    expect(sight.status).toBe(0);
-    expect(sight.stdout).toBe('');
+    sightWithRow(payload, 'u1', npm, home);
     expect(logged(npm.log, 'started')).toBe(1);
-    const [file] = crossingFiles(home);
-    const rows: unknown[] = readFileSync(join(home, file ?? ''), 'utf8').trim().split('\n').map((line): unknown => JSON.parse(line));
-    expect(rows).toMatchObject([{ registryState: 'found' }]);
+    expect(rowsOf(home)).toMatchObject([{ registryState: 'found' }]);
   }, 60_000);
 
   it('keeps the lock after a down manager answers the helper startFill started, so later sights start no ask', async () => {
@@ -276,13 +270,11 @@ describe.skipIf(!existsSync(bin))('the built oars gate hook', () => {
     expect(logged(npm.log, 'started')).toBe(1);
     expect(logged(npm.log, 'ended')).toBe(1);
     expect(lockFiles(store)).toHaveLength(1);
-    expect(runHook(payload.replace('"u1"', '"u2"'), [], npm.folder, home).status).toBe(0);
-    expect(runHook(payload.replace('"u1"', '"u3"'), [], npm.folder, home).status).toBe(0);
+    sightWithRow(payload, 'u2', npm, home);
+    sightWithRow(payload, 'u3', npm, home);
     expect(logged(npm.log, 'started')).toBe(1);
     expect(lockFiles(store)).toHaveLength(1);
-    const [file] = crossingFiles(home);
-    const rows: unknown[] = readFileSync(join(home, file ?? ''), 'utf8').trim().split('\n').map((line): unknown => JSON.parse(line));
-    expect(rows).toMatchObject([{ registryState: 'not-read' }, { registryState: 'not-read' }]);
+    expect(rowsOf(home)).toMatchObject([{ registryState: 'not-read' }, { registryState: 'not-read' }]);
   }, 60_000);
 
   it('prints a labeled deny on stdout and exits 0 when the policy says block and the manager answered not found', () => {
@@ -291,9 +283,8 @@ describe.skipIf(!existsSync(bin))('the built oars gate hook', () => {
     const store = seededStore(home);
     writeFileSync(join(store, 'gate-policy.json'), '{"classes":{"not-found":"block"}}');
     const payload = JSON.stringify({ session_id: 's1', tool_use_id: 'u1', tool_name: 'Bash', tool_input: { command: 'npm install ghost-lib' }, cwd: tmpdir(), permission_mode: 'default' });
-    const result = runHook(payload, [], missingNpm(), home);
-    expect(result.status).toBe(0);
-    const output: unknown = JSON.parse(result.stdout);
+    const stdout = sightWithRow(payload, 'u1', { folder: missingNpm() }, home, true);
+    const output: unknown = JSON.parse(stdout);
     expect(output).toEqual({
       hookSpecificOutput: {
         hookEventName: 'PreToolUse',
@@ -301,9 +292,7 @@ describe.skipIf(!existsSync(bin))('the built oars gate hook', () => {
         permissionDecisionReason: 'Blocked by your gate policy: ghost-lib was not found in the registry your package manager uses.',
       },
     });
-    const [file] = crossingFiles(home);
-    const lines = readFileSync(join(home, file ?? ''), 'utf8').trim().split('\n');
-    expect(JSON.parse(lines[0] ?? '')).toMatchObject({ name: 'ghost-lib', registryState: 'not-found', arm: 'none', lineShown: 'not-found-block', policy: 'file' });
+    expect(rowsOf(home).at(-1)).toMatchObject({ name: 'ghost-lib', registryState: 'not-found', arm: 'none', lineShown: 'not-found-block', policy: 'file' });
   });
 
   it('does not deny the same name under the default policy: it notes it, with the holdback off so the note always shows', () => {
@@ -311,10 +300,9 @@ describe.skipIf(!existsSync(bin))('the built oars gate hook', () => {
     const home = mkdtempSync(join(tmpdir(), 'oars-gate-bin-'));
     made.push(home);
     writeFileSync(join(seededStore(home), 'gate-policy.json'), '{"holdbackPercent":0}');
-    const result = runHook(payload, [], missingNpm(), home);
-    expect(result.status).toBe(0);
-    expect(result.stdout).not.toContain('deny');
-    expect(JSON.parse(result.stdout)).toEqual({
+    const stdout = sightWithRow(payload, 'u1', { folder: missingNpm() }, home, true);
+    expect(stdout).not.toContain('deny');
+    expect(JSON.parse(stdout)).toEqual({
       hookSpecificOutput: { hookEventName: 'PreToolUse', additionalContext: 'Registry note: ghost-lib was not found in the registry your package manager uses.' },
     });
   });
