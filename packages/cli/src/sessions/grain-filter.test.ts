@@ -5,6 +5,7 @@ import type { Cell, Pool } from './cells.js';
 import { tools } from './order-fixture.js';
 import { error, frame, poolFrom, prompt, session, store, tool } from './pool-fixture.js';
 import { deriveFirstOrder } from './pool.js';
+import { fitReads } from './recall-reads.js';
 import { deriveAdoption } from './read-adoption.js';
 import { deriveCallShape } from './read-call-shape.js';
 import { deriveChange } from './read-change.js';
@@ -41,6 +42,18 @@ const spanning: Store = {
   errors: [error('s1', SIG, { next: ['Edit'] })],
 };
 
+/** Three sessions on three days across a week boundary, each with twenty `Read` calls of the same input keys and three failures: above `FIT_FLOORS`, so call shape yields a read. */
+const shaped = (framed: boolean): Store => {
+  const rows = [['s1', '2026-11-01'], ['s2', '2026-11-02'], ['s3', '2026-11-03']] as const;
+  return store({
+    sessions: rows.map(([id]) => session(id)),
+    prompts: rows.map(([id, day]) => prompt(id, 0, { frame: frame({ day: framed ? day : null }) })),
+    tools: rows.flatMap(([id, day]) =>
+      Array.from({ length: 20 }, (_, n) => tool(id, n, 'Read', { prompt: 0, keys: ['path'], status: n < 3 ? 'error' : 'ok', ts: `${day}T10:00:00.000Z` })),
+    ),
+  });
+};
+
 const both = poolFrom(spanning);
 const only = (pool: Pool, grain: 'day' | 'week'): Pool => ({ ...pool, cells: pool.cells.filter((cell) => cell.grain === grain) });
 const days = only(both, 'day');
@@ -61,6 +74,24 @@ describe('a grain filter on every read', () => {
     ['call shape', deriveCallShape],
   ] as const)('answers the day read %s from day cells alone', (_name, derive) => {
     expect(answers(derive, both)).toEqual(answers(derive, days));
+  });
+
+  it('answers call shape from day cells alone, with a read that cites them', () => {
+    const dated = shaped(true);
+    const all = poolFrom(dated);
+    const dayCells = only(all, 'day');
+    const shape = (pool: Pool) => deriveCallShape({ pool, store: dated });
+    const [read] = shape(all);
+    expect(read).toMatchObject({ family: 'fit', n: 9, value: { failed: 9, calls: 60 } });
+    expect(read?.inputs.length).toBeGreaterThan(0);
+    expect(shape(all)).toEqual(shape(dayCells));
+    expect(shape(only(all, 'week'))).toEqual([]);
+  });
+
+  it('gives call shape nothing to cite when the frames of its failures have no day: a day cell exists for a known day only', () => {
+    const undated = shaped(false);
+    expect(fitReads(undated)).toHaveLength(1);
+    expect(deriveCallShape({ pool: poolFrom(undated), store: undated })).toEqual([]);
   });
 
   it('answers recovery from day cells for the failed call and week cells for the step after it', () => {
@@ -84,7 +115,7 @@ describe('a grain filter on every read', () => {
   });
 
   it('answers with something, so the comparison is not two empty lists', () => {
-    for (const derive of [deriveLive, deriveToolDay, deriveFit, deriveChange, deriveAdoption, deriveRecovery]) expect(answers(derive, both).length).toBeGreaterThan(0);
+    for (const derive of [deriveLive, deriveToolDay, deriveFit, deriveChange, deriveAdoption, deriveRecovery, deriveCost, deriveMethod, deriveNextStep]) expect(answers(derive, both).length).toBeGreaterThan(0);
   });
 
   it('gives the day move the answer it gives from day cells alone, over the first-order reads of each table', () => {
