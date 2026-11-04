@@ -4,7 +4,8 @@
 //   node scripts/openapi-public.mjs <source openapi.json> [--operations <file>] [--out <file>]
 //
 // Exit 0: written. Exit 1: the source or the list is unusable, a listed operationId is not in the source (each one is
-// named), or a $ref points at a component the source lacks. Exit 2: bad usage. The output is deterministic: object keys
+// named), or a $ref points at a component the source lacks. A listed operation on the platform's money side is dropped, not
+// written (see MONEY_PATH below). Exit 2: bad usage. The output is deterministic: object keys
 // sorted at every depth, two-space indent, one trailing newline, and no path of the machine that ran it. Its info.title
 // and info.description are fixed in this file; info.version is the source's.
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
@@ -20,7 +21,24 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 // The source's title and description name the platform's internal services, so the public spec states its own; only the
 // version is carried over. The public spec E32 produces replaces this file whole.
 const PUBLIC_TITLE = 'Many Oars API';
-const PUBLIC_DESCRIPTION = 'The AOR platform calls that Many Oars exposes to the CLI, starter templates, and coding agents: deploy a workload, read it, exchange a token, manage API keys and workload config, set prices and customers, reserve and settle credits, take a payment.';
+const PUBLIC_DESCRIPTION = 'The Many Oars calls the CLI, starter templates, and coding agents use: register, read, configure, and deploy a workload; exchange an OIDC token; and create, list, rotate, and revoke API keys.';
+
+// The platform's spec also carries a money side, and the public one states none of it. public-operations.json selects
+// operations, but this is the backstop that a regeneration cannot get past: a listed operation is dropped when its path
+// is under /billing, one of its tags starts with "Billing", or it reaches a component whose name is a money name. The
+// components only that operation reached go with it, because the closure below starts from the operations that are kept.
+const MONEY_PATH = /^\/billing(?:\/|$)/;
+const MONEY_TAG = /^billing/i;
+const MONEY_COMPONENT = /billing|price|purchas|charge|credit|payout|payment/i;
+// Kept operations still carry a 402 response and a few texts that name money; the status and the texts are the
+// platform's, so the public spec drops the one and rewrites the others here. Each phrase is the platform's exact wording:
+// wording that changes there stops matching, and the deny-list test over the generated files names what to add.
+const MONEY_STATUS = '402';
+const TEXT_REWRITES = [
+  [' (actionUrl: add compute credit)', ''],
+  [' (Stripe onboarding, a credit-pack checkout)', ''],
+  ["after a credit-driven stop once the creator's compute credit is replenished", 'after a stop at a usage limit once the limit clears'],
+];
 
 /**
  * @param {unknown} value
@@ -77,6 +95,52 @@ const collect = (node, refs, schemes) => {
 };
 
 /**
+ * @param {JsonValue} node
+ * @returns {JsonValue} a copy without a 402 response anywhere and with each phrase of TEXT_REWRITES replaced
+ */
+const neutralize = (node) => {
+  if (typeof node === 'string') return TEXT_REWRITES.reduce((text, [phrase, plain]) => text.replaceAll(phrase, plain), node);
+  if (Array.isArray(node)) return node.map(neutralize);
+  if (!isObject(node)) return node;
+  return Object.fromEntries(
+    Object.entries(node)
+      .filter(([key, value]) => !(key === MONEY_STATUS && isObject(value) && typeof value['description'] === 'string' && value['description'] === 'Payment Required'))
+      .map(([key, value]) => [key, neutralize(value)]),
+  );
+};
+
+/**
+ * @param {JsonValue} node an operation
+ * @param {JsonObject} sourceComponents
+ * @returns {string[]} the name of every component `node` reaches, directly or through other components
+ */
+const reachedNames = (node, sourceComponents) => {
+  const pending = new Set();
+  collect(node, pending, new Set());
+  const seen = new Set();
+  for (const ref of pending) {
+    if (seen.has(ref)) continue;
+    seen.add(ref);
+    const { section, name } = parseRef(ref);
+    const sourceSection = sourceComponents[section];
+    const component = isObject(sourceSection) ? sourceSection[name] : undefined;
+    if (component !== undefined) collect(component, pending, new Set());
+  }
+  return [...seen].map((ref) => parseRef(ref).name);
+};
+
+/**
+ * @param {string} path
+ * @param {JsonObject} operation
+ * @param {JsonObject} sourceComponents
+ * @returns {boolean} whether the operation is on the money side
+ */
+const isMoneyOperation = (path, operation, sourceComponents) =>
+  MONEY_PATH.test(path) ||
+  (Array.isArray(operation['tags']) && operation['tags'].some((tag) => typeof tag === 'string' && MONEY_TAG.test(tag))) ||
+  reachedNames(operation, sourceComponents).some((name) => MONEY_COMPONENT.test(name));
+
+/**
  * @param {JsonObject} source a parsed OpenAPI document
  * @param {string[]} operationIds the operations to keep
  * @returns {JsonObject} the filtered document, keys sorted
@@ -87,6 +151,7 @@ const filterSpec = (source, operationIds) => {
   /** @type {JsonObject} */
   const paths = {};
   const sourcePaths = source['paths'];
+  const sourceComponents = isObject(source['components']) ? source['components'] : {};
   for (const [path, item] of Object.entries(isObject(sourcePaths) ? sourcePaths : {})) {
     if (!isObject(item)) continue;
     /** @type {JsonObject} */
@@ -96,8 +161,9 @@ const filterSpec = (source, operationIds) => {
       if (!HTTP_METHODS.includes(key)) {
         kept[key] = value;
       } else if (isObject(value) && typeof value['operationId'] === 'string' && wanted.has(value['operationId'])) {
-        kept[key] = value;
         found.add(value['operationId']);
+        if (isMoneyOperation(path, value, sourceComponents)) continue;
+        kept[key] = value;
         keptOperation = true;
       }
     }
@@ -111,7 +177,6 @@ const filterSpec = (source, operationIds) => {
   collect(paths, refs, schemes);
   if (Array.isArray(source['security'])) collect({ security: source['security'] }, refs, schemes);
 
-  const sourceComponents = isObject(source['components']) ? source['components'] : {};
   /** @type {{ [section: string]: JsonObject }} */
   const components = {};
   /** @type {(section: string, name: string) => void} */
@@ -153,7 +218,7 @@ const filterSpec = (source, operationIds) => {
     components,
   };
   if (Array.isArray(source['security'])) result['security'] = source['security'];
-  return sortObject(result);
+  return sortObject(/** @type {JsonObject} */ (neutralize(result)));
 };
 
 /**

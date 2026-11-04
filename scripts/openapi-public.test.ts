@@ -16,7 +16,7 @@ const ok = (description: string, ref: string) => ({
 });
 
 // A small stand-in for the platform's combined spec: three paths, one of them with an unlisted method, a
-// schema chain (Order -> Line -> Money), a shared response component and schemas nothing listed uses.
+// schema chain (Order -> Line -> Quantity), a shared response component and schemas nothing listed uses.
 const source = {
   openapi: '3.1.0',
   info: { title: 'Combined', description: 'Internal title for every microservice', version: '1.0.0' },
@@ -64,8 +64,8 @@ const source = {
     schemas: {
       CreateOrder: { type: 'object', properties: { lines: { type: 'array', items: { $ref: '#/components/schemas/Line' } } } },
       Order: { type: 'object', properties: { id: { type: 'string' }, lines: { type: 'array', items: { $ref: '#/components/schemas/Line' } } } },
-      Line: { type: 'object', properties: { price: { $ref: '#/components/schemas/Money' } } },
-      Money: { type: 'object', properties: { amount: { type: 'string' } } },
+      Line: { type: 'object', properties: { size: { $ref: '#/components/schemas/Quantity' } } },
+      Quantity: { type: 'object', properties: { amount: { type: 'string' } } },
       Problem: { type: 'object', properties: { code: { type: 'string' } } },
       AuditEntry: { type: 'object', properties: { who: { type: 'string' } } },
       Orphan: { type: 'object' },
@@ -136,7 +136,7 @@ describe('openapi-public.mjs', () => {
     expect(keysAt(out, 'paths')).toEqual(['/orders', '/orders/{orderId}']);
     expect(keysAt(out, 'paths', '/orders')).toEqual(['post']);
     expect(keysAt(out, 'paths', '/orders/{orderId}')).toEqual(['get', 'parameters']);
-    expect(keysAt(out, 'components', 'schemas')).toEqual(['CreateOrder', 'Line', 'Money', 'Order', 'Problem']);
+    expect(keysAt(out, 'components', 'schemas')).toEqual(['CreateOrder', 'Line', 'Order', 'Problem', 'Quantity']);
     expect(keysAt(out, 'components', 'responses')).toEqual(['Problem']);
     expect(keysAt(out, 'components', 'parameters')).toEqual(['OrderId']);
     expect(keysAt(out, 'components')).not.toContain('securitySchemes');
@@ -152,7 +152,7 @@ describe('openapi-public.mjs', () => {
     expect(at(out, 'info', 'version')).toBe('7.8.9');
     const description = at(out, 'info', 'description');
     expect(description).toBe(
-      'The AOR platform calls that Many Oars exposes to the CLI, starter templates, and coding agents: deploy a workload, read it, exchange a token, manage API keys and workload config, set prices and customers, reserve and settle credits, take a payment.',
+      'The Many Oars calls the CLI, starter templates, and coding agents use: register, read, configure, and deploy a workload; exchange an OIDC token; and create, list, rotate, and revoke API keys.',
     );
     expect(description).not.toContain('Internal');
     expect(JSON.stringify(at(out, 'info'))).not.toContain('Combined');
@@ -167,7 +167,7 @@ describe('openapi-public.mjs', () => {
 
   it('exits non-zero naming a $ref that points at a component the source lacks', () => {
     const broken = structuredClone(source);
-    broken.components.schemas.Line = { type: 'object', properties: { price: { $ref: '#/components/schemas/Gone' } } };
+    broken.components.schemas.Line = { type: 'object', properties: { size: { $ref: '#/components/schemas/Gone' } } };
 
     const result = run(['createOrder'], broken);
 
@@ -193,5 +193,91 @@ describe('openapi-public.mjs', () => {
     expect(second).toBe(first);
     expect(first.endsWith('}\n')).toBe(true);
     expect(keysAt(readOut())).toEqual(['components', 'info', 'openapi', 'paths', 'tags']);
+  });
+
+  // The platform's spec also carries a money side. The list file selects operations, but the generator is the backstop: a
+  // listed operation on a money path, tag, or schema is dropped, so a regeneration cannot bring it back.
+  describe('the money side', () => {
+    const moneySource = structuredClone(source) as typeof source & {
+      paths: { [path: string]: unknown };
+      components: { schemas: { [name: string]: unknown } };
+    };
+    moneySource.paths['/billing/charges'] = {
+      post: {
+        tags: ['Billing charges'],
+        operationId: 'createCharge',
+        responses: { '200': ok('Charged', '#/components/schemas/ChargeView') },
+      },
+    };
+    moneySource.paths['/agents/templates'] = {
+      get: {
+        tags: ['Agent Templates'],
+        operationId: 'listTemplates',
+        responses: { '200': ok('Templates', '#/components/schemas/TemplateStarterPrice') },
+      },
+    };
+    moneySource.paths['/orders/{orderId}/tagged'] = {
+      get: {
+        tags: ['Billing mode'],
+        operationId: 'taggedOnly',
+        responses: { '200': { description: 'Tagged' } },
+      },
+    };
+    moneySource.components.schemas['ChargeView'] = { type: 'object', properties: { id: { type: 'string' } } };
+    moneySource.components.schemas['TemplateStarterPrice'] = { type: 'object', properties: { id: { type: 'string' } } };
+
+    it('drops a listed operation on a billing path, with a billing tag, or reaching a money-named schema', () => {
+      const result = run(['getOrder', 'createCharge', 'listTemplates', 'taggedOnly'], moneySource);
+
+      expect(result.status).toBe(0);
+      const out = readOut();
+      expect(keysAt(out, 'paths')).toEqual(['/orders/{orderId}']);
+      expect(keysAt(out, 'components', 'schemas')).toEqual(['Order', 'Line', 'Quantity'].sort());
+      expect(at(out, 'tags')).toEqual([{ name: 'Orders', description: 'Order lifecycle' }]);
+      expect(JSON.stringify(out)).not.toMatch(/charge|billing|price/i);
+    });
+
+    it('still names a listed operation the source lacks when the others are money operations', () => {
+      const result = run(['createCharge', 'noSuchOperation'], moneySource);
+
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toContain('noSuchOperation');
+      expect(result.stderr).not.toContain('createCharge');
+    });
+
+    it('drops the 402 response and rewrites the platform texts that name money', () => {
+      const withTexts = structuredClone(source) as typeof source & {
+        paths: { '/orders/{orderId}': { get: { responses: { [code: string]: unknown } } } };
+        components: { schemas: { [name: string]: unknown } };
+      };
+      withTexts.paths['/orders/{orderId}'].get.responses['402'] = { description: 'Payment Required' };
+      withTexts.paths['/orders/{orderId}'].get.responses['409'] = {
+        description:
+          'PLATFORM_STEWARDED, WORKLOAD_SUSPENDED, COMPUTE_CREDIT_EXHAUSTED (actionUrl: add compute credit)',
+      };
+      withTexts.components.schemas['Order'] = {
+        type: 'object',
+        properties: {
+          actionUrl: {
+            type: 'string',
+            description:
+              'A URL where a human completes the step that clears this rejection (Stripe onboarding, a credit-pack checkout). Present only when such a step exists.',
+          },
+        },
+      };
+
+      const result = run(['getOrder'], withTexts);
+
+      expect(result.status).toBe(0);
+      const out = readOut();
+      expect(keysAt(out, 'paths', '/orders/{orderId}', 'get', 'responses')).toEqual(['200', '409']);
+      expect(at(out, 'paths', '/orders/{orderId}', 'get', 'responses', '409', 'description')).toBe(
+        'PLATFORM_STEWARDED, WORKLOAD_SUSPENDED, COMPUTE_CREDIT_EXHAUSTED',
+      );
+      expect(at(out, 'components', 'schemas', 'Order', 'properties', 'actionUrl', 'description')).toBe(
+        'A URL where a human completes the step that clears this rejection. Present only when such a step exists.',
+      );
+      expect(JSON.stringify(out)).not.toMatch(/payment|stripe|add compute credit|credit-pack/i);
+    });
   });
 });
