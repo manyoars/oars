@@ -315,7 +315,7 @@ describe('the steps each hook logs', () => {
     expect(rows[0]?.out).toEqual({ session: 1, subagent: 1, 'user-prompt': 3, tool: 7, 'error-line': 2 });
   });
 
-  it('a stop for a transcript with no path logs nothing, and a held lock logs an error row', async () => {
+  it('a stop for a transcript with no path logs nothing, and a held lock logs a deferred row', async () => {
     const staged = await deposited();
     await runHook('stop', '{}', staged.runtime, () => NOW);
     expect(await readSteps(staged.storeDir)).toEqual([]);
@@ -325,9 +325,9 @@ describe('the steps each hook logs', () => {
     await runHook('stop', JSON.stringify({ session_id: 'blocked', transcript_path: transcript }), staged.runtime, () => NOW);
     const rows = await readSteps(staged.storeDir);
     expect(rows).toHaveLength(1);
-    expect(rows[0]).toMatchObject({ step: 'deposit', trigger: 'stop', status: 'error' });
+    expect(rows[0]).toMatchObject({ step: 'deposit', trigger: 'stop', status: 'deferred' });
     expect(rows[0]?.error).toContain('store is locked');
-    // The failed row carries the key built from that transcript, not the whole-store state, and the retry that succeeds carries the same one.
+    // The deferred row carries the key built from that transcript, not the whole-store state, and the retry that succeeds carries the same one.
     expect(rows[0]?.key).toMatch(/^[0-9a-f]{16}$/);
     rmSync(join(staged.storeDir, 'store.lock'));
     await runHook('stop', JSON.stringify({ session_id: 'blocked', transcript_path: transcript }), staged.runtime, () => NOW);
@@ -820,7 +820,7 @@ describe('the counters (spec 3.2)', () => {
 
   it('a step with only skipped runs has a mean of zero; a streak ended by an ok row is not stuck', () => {
     const skipped = row({ step: 'index', status: 'skipped', key: null, ms: 0, out: {} });
-    expect(stepCounters([skipped]).steps).toEqual([{ step: 'index', ev: EXTRACTOR_VERSION, runs: 1, ok: 0, error: 0, skipped: 1, meanMs: 0 }]);
+    expect(stepCounters([skipped]).steps).toEqual([{ step: 'index', ev: EXTRACTOR_VERSION, runs: 1, ok: 0, error: 0, skipped: 1, deferred: 0, meanMs: 0 }]);
     const streak = [failed('k', 'a'), failed('k', 'b'), row({ key: 'k' }), failed('k', 'c'), failed('k', 'd')];
     expect(stuckSteps(streak)).toEqual([]);
     expect(stuckSteps([...streak, skipped, failed('k', 'e')])).toEqual([{ step: 'deposit', key: 'k', runs: 3, error: 'e' }]);

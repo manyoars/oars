@@ -628,7 +628,8 @@ export type Step = (typeof STEPS)[number];
 export const TRIGGERS = ['session-start', 'pre-tool', 'post-tool', 'stop', 'nightly', 'manual', 'weekly', 'sync', 'cron', 'release', 'run-end', 'run-start'] as const;
 export type Trigger = (typeof TRIGGERS)[number];
 
-export const STEP_STATUSES = ['ok', 'error', 'skipped'] as const;
+/** `deferred` (t832): a Stop deposit that found the store locked and recorded its session in the pending list. It is neither a success nor a failed run. */
+export const STEP_STATUSES = ['ok', 'error', 'skipped', 'deferred'] as const;
 export type StepStatus = (typeof STEP_STATUSES)[number];
 
 /** Counts by record kind or type (`{"session": 1, "tool": 212}`). */
