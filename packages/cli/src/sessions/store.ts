@@ -358,7 +358,7 @@ interface Transcript {
 
 const mainTranscript = (folder: string, name: string): Transcript => ({ file: join(folder, name), session: name.slice(0, -'.jsonl'.length), relative: name });
 
-const listDir = async (dir: string) => {
+export const listDir = async (dir: string) => {
   try {
     return (await readdir(dir, { withFileTypes: true })).sort((a, b) => a.name.localeCompare(b.name));
   } catch (error) {
@@ -390,7 +390,7 @@ interface SubagentFile {
 
 // The subagent transcript files of the given sessions, from folder listings alone:
 // <session>/subagents/agent-*.jsonl and <session>/subagents/workflows/wf_*/agent-*.jsonl. No file is opened, so `skippedFolders` can use it on a folder no allow entry names.
-const subagentFiles = async (folder: string, sessions: readonly string[]): Promise<SubagentFile[]> => {
+export const subagentFiles = async (folder: string, sessions: readonly string[]): Promise<SubagentFile[]> => {
   const found: SubagentFile[] = [];
   for (const parent of sessions) {
     const root = join(folder, parent, 'subagents');
@@ -424,7 +424,7 @@ const subagentTranscripts = async (folder: string, sessions: readonly string[]):
 };
 
 /** The session folders under a project folder: each may hold subagent transcripts, even when its main transcript is gone. */
-const sessionFolders = async (folder: string): Promise<string[]> => (await listDir(folder)).filter((entry) => entry.isDirectory()).map((entry) => entry.name);
+export const sessionFolders = async (folder: string): Promise<string[]> => (await listDir(folder)).filter((entry) => entry.isDirectory()).map((entry) => entry.name);
 
 /** Refuses a state file recorded at a newer capture version before anything is appended, so a refused run leaves the log as it was. */
 const refuseNewer = (state: State): void => {
@@ -928,7 +928,7 @@ const readSource = async (context: DepositContext, source: Source, root: string,
  * It splits on the newline alone, not through `readline`, which also ends a line at U+2028 and U+2029: `JSON.stringify` leaves those raw inside a
  * value. A missing log has no lines, and a last line with no newline is yielded as it stands, for the reader to parse or skip.
  */
-const logLines = async function* (file: string): AsyncGenerator<string> {
+export const logLines = async function* (file: string): AsyncGenerator<string> {
   let rest = '';
   try {
     for await (const chunk of createReadStream(file, { encoding: 'utf8', highWaterMark: 1 << 20 })) {

@@ -22,6 +22,7 @@ Under `<config>/oars/sessions/` (`%APPDATA%` on Windows, `$XDG_CONFIG_HOME` or `
 | `reads/<pool>.jsonl` | One pool version's reads, written once and never rewritten, so a read cited by its ID stays what it was. |
 | `raw/<project>/<path>` | oars' own archive of every deposited transcript (below). |
 | `commit-survival.jsonl` | What became of each commit older than `SURVIVAL_DAYS`, appended on a change of state. See "Commit survival". |
+| `crossings.jsonl` | Written by `oars gate replay` only: one `run` row, `registry` rows, and one `crossing` row per package, MCP server, or skill pick found in raw transcripts. Closed-vocabulary fields are class P; `session`, `agent`, `toolUseId`, `ts`, `name`, and `version` are class A, and so are a `registry` row's `name`, `latest`, and `created`. See `docs/gate.md`. |
 
 ## Capture scope: the allowlist
 
@@ -385,10 +386,20 @@ local only and is never read by `derive`.
 
 ## The V15 exclusion list
 
-One rule decides which sessions may enter the pool (A38): a session is excluded if any line of its main or
-subagent transcript holds a listed term, scanned locally before anything is deposited. A session with no main transcript to scan
-is excluded, and so is every session when the term file is missing, empty, or undecodable (a NUL or U+FFFD in the file). A link is followed at every level: the projects root, the store folder, `raw/`, a project folder, a session folder, `subagents`, an entry under `subagents`, a main transcript, and the store log. A link that leads nowhere or to the wrong kind of entry (a file where a folder belongs, a folder where a transcript belongs, a file under `subagents` not named `.jsonl`) is never clean: the session is excluded as unreadable, or, when the link is a root, the store log, or a project folder, the command stops and writes no list. The same holds for a plain file (no link) where a folder belongs, or a folder where the main transcript belongs. Any other main transcript or `subagents` folder that cannot be read leaves its session excluded as unreadable too; a project folder that cannot be listed stops the command and writes no list (it names the folder by ordinal only, except for a root or a linked project folder, whose message names no folder). The scan reads both the harness's `projects/`
-folder and `raw/`, because either can be the only copy left.
+One rule decides which sessions may enter the pool (A38): a session is excluded if any line of its main or subagent
+transcript holds a listed term, scanned locally before anything is deposited. A session with no main transcript to scan
+is excluded, and so is every session when the term file is missing, empty, or undecodable (a NUL or U+FFFD in the file).
+A link is followed at every level: the projects root, the store folder, `raw/`, a project folder, a session folder,
+`subagents`, an entry under `subagents`, a main transcript, and the store log. A link that leads nowhere or to the wrong
+kind of entry (a file where a folder belongs, a folder where a transcript belongs, a file under `subagents` not named
+`.jsonl`) is never clean: the session is excluded as unreadable, or, when the link is a root, the store log, or a
+project folder, the command stops and writes no list. The same holds for a plain file (no link) where a folder belongs,
+or a folder or other non-file entry where a transcript belongs (the main, or a name ending in `.jsonl` under
+`subagents`). A link back into a folder already walked reads unreadable too, because following it would loop. Any other
+main transcript or `subagents` folder that cannot be read leaves its session excluded as unreadable too; a project
+folder that cannot be listed stops the command and writes no list (it names the folder by ordinal only, except for a
+root or a linked project folder, whose message names no folder). The scan reads both the harness's `projects/` folder
+and `raw/`, because either can be the only copy left.
 
 The term list is a local file, one term per line, matched without regard to case, never in this repository. The
 `OARS_EXCLUSION_TERMS` environment variable names it; the default is `session-commons/exclusion-terms.txt` beside the claude
@@ -396,7 +407,8 @@ The term list is a local file, one term per line, matched without regard to case
 object per line) to `session-commons/exclusion-list.jsonl` by default and prints counts only: sessions, excluded by reason,
 and the files and sessions that held a term, by main or subagent and by source. The list is written readable by its owner only, since a
 folder name can carry a term. It covers the harness's folders, `raw/`, and the sessions the store logged, so a logged session whose raw is gone
-everywhere is listed as no raw; a directory that is not a session (no main transcript, and a name that is not a session id) is counted apart.
+everywhere is listed as no raw; a directory that is not a session (no main transcript, and a name that neither is a session id nor ends in `.jsonl`) is counted apart;
+an entry named `<x>.jsonl` that is not a file, or a non-folder named like a session id, is listed as unreadable.
 The pool's deposit calls `checkSession` (`packages/cli/src/sessions/exclusion.ts`) first and never builds or sends an excluded session.
 
 ## The cost-state check
