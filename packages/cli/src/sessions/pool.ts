@@ -82,7 +82,7 @@ export const deriveReads = (pool: Pool, store: Store): Read[] => {
 export const serializeReads = (reads: readonly Read[]): string => reads.map((read) => `${JSON.stringify(read)}\n`).join('');
 
 const isRead = (value: unknown): value is Read => typeof value === 'object' && value !== null && 'readId' in value && 'family' in value;
-const isCell = (value: unknown): value is Cell => typeof value === 'object' && value !== null && 'motifId' in value && 'frameBucket' in value;
+const isCell = (value: unknown): value is Cell => typeof value === 'object' && value !== null && 'motifId' in value && 'frameBucket' in value && 'grain' in value;
 const isMotif = (value: unknown): value is Motif => typeof value === 'object' && value !== null && 'motifId' in value && 'level' in value;
 
 const parsedLine = (file: string, line: string): unknown => {

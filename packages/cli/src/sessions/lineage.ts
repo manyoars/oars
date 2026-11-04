@@ -4,7 +4,7 @@
 import { readdir, readFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { CliError, ExitCode } from '../errors.js';
-import { cellIdOf, UNKNOWN, type Cell } from './cells.js';
+import { cellIdOf, lastDayOfCell, UNKNOWN, type Cell } from './cells.js';
 import { poolFiles } from './pool.js';
 import type { Read } from './read.js';
 import { evidencePredates, readRecalls, type Recall, type RecallEvidence } from './recall-object.js';
@@ -85,7 +85,7 @@ export const walkLineage = (sources: LineageSources, start: string): LineageHop[
     }
     const cell = cells.get(ref);
     if (cell !== undefined) {
-      if (limit !== null && cell.day !== UNKNOWN && cell.day > limit) throw refuse(ref, cell.day, limit);
+      if (limit !== null && cell.day !== UNKNOWN && lastDayOfCell(cell) > limit) throw refuse(ref, lastDayOfCell(cell), limit);
       hops.push({ depth, kind: 'cell', ref, frames: [cell.frameBucket], day: cell.day, detail: `${String(cell.sessions)} sessions, ${String(cell.ok)} ok, ${String(cell.failed)} failed${cell.exposed ? ', exposed' : ''}` });
       return;
     }
@@ -119,7 +119,7 @@ const rowsOf = async <T>(file: string, isRow: (value: unknown) => value is T): P
 };
 
 const isRead = (value: unknown): value is Read => typeof value === 'object' && value !== null && 'readId' in value && 'inputs' in value;
-const isCell = (value: unknown): value is Cell => typeof value === 'object' && value !== null && 'motifId' in value && 'frameBucket' in value;
+const isCell = (value: unknown): value is Cell => typeof value === 'object' && value !== null && 'motifId' in value && 'frameBucket' in value && 'grain' in value;
 
 const readFiles = async (dir: string): Promise<string[]> => {
   try {

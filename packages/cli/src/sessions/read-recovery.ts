@@ -6,7 +6,7 @@ import { UNKNOWN, type Cell } from './cells.js';
 import { utcDay } from './frame.js';
 import { shapeMotif } from './motif.js';
 import { contentHash } from './read.js';
-import { body, groupBy, type DeriveFamily, type FamilyInput, type ReadBody } from './read-support.js';
+import { atGrain, body, groupBy, type DeriveFamily, type FamilyInput, type ReadBody } from './read-support.js';
 import { harnessOf, type ErrorObservation } from './schema.js';
 import { signatureRecord } from './store.js';
 
@@ -56,8 +56,8 @@ export const recoveryOf = ({ pool, store }: FamilyInput): RecoveryOutcome => {
   const sessions = new Map([...store.sessions, ...store.subagents].map((session) => [session.session, session]));
   const prompts = new Map(store.prompts.map((prompt) => [`${prompt.session}#${String(prompt.index)}`, prompt]));
   const actionIn = (session: string, tool: string): CanonicalAction => actionOf(ACTION_TABLES[harnessOf(sessions.get(session) ?? {})], tool).action;
-  const cellsAt = groupBy(pool.cells, (cell) => `${cell.motifId}/${cell.day}`);
-  const cellsOf = groupBy(pool.cells, (cell) => cell.motifId);
+  const cellsAt = groupBy(atGrain(pool, 'day'), (cell) => `${cell.motifId}/${cell.day}`);
+  const cellsOf = groupBy(atGrain(pool, 'day'), (cell) => cell.motifId);
   /** The day a cell files this error's call under: its frame's, which is its prompt's, or its session's for a subagent or a call before the first prompt. An error can run past that midnight. */
   const frameDayOf = (error: ErrorObservation): string => {
     const prompt = error.agent === undefined ? prompts.get(`${error.session}#${String(error.prompt)}`) : undefined;

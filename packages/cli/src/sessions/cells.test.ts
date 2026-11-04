@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { bucketFields, cellIdOf, deriveCells, frameBucketOf, harnessBucket, poolOf, serializeCells, UNKNOWN, type Cell } from './cells.js';
+import { bucketFields, cellIdOf, deriveCells, frameBucketOf, harnessBucket, poolOf, serializeCells, UNKNOWN, type Cell, type Grain } from './cells.js';
 import { classMotif, shapeId } from './motif.js';
 import { error, frame, prompt, session, store, tool } from './pool-fixture.js';
 import type * as ReadModule from './read.js';
@@ -8,7 +8,8 @@ import type { Store } from './store.js';
 const READ = { action: 'file.read', identity: null } as const;
 const EDIT = { action: 'file.edit', identity: null } as const;
 
-const cellsOf = (input: Store, motifId: string): Cell[] => deriveCells(input).cells.filter((cell) => cell.motifId === motifId);
+/** One motif's cells at one grain (the live day cells by default), or at both. */
+const cellsOf = (input: Store, motifId: string, grain: Grain | 'both' = 'day'): Cell[] => deriveCells(input).cells.filter((cell) => cell.motifId === motifId && (grain === 'both' || cell.grain === grain));
 
 describe('harnessBucket', () => {
   it('buckets a patch by tens, because an exact version is stale in days', () => {
@@ -30,16 +31,20 @@ describe('harnessBucket', () => {
 describe('frameBucketOf', () => {
   it('writes a bucket a reader can split back into its fields', () => {
     const bucket = frameBucketOf(frame());
-    expect(bucket).toBe('claude-code/2.1.31x/claude-opus-5-5/high');
-    expect(bucketFields(bucket)).toEqual({ harness: 'claude-code', harnessBucket: '2.1.31x', model: 'claude-opus-5-5', effort: 'high' });
+    expect(bucket).toBe('claude-code/2.1.31x/claude-opus-5-5');
+    expect(bucketFields(bucket)).toEqual({ harness: 'claude-code', harnessBucket: '2.1.31x', model: 'claude-opus-5-5' });
+  });
+
+  it('leaves effort out of the key (rule 3): two efforts share one bucket', () => {
+    expect(frameBucketOf(frame({ effort: 'low' }))).toBe(frameBucketOf(frame({ effort: 'max' })));
   });
 
   it('holds unknowns as a name', () => {
-    expect(bucketFields(frameBucketOf(frame({ model: null, effort: null, harnessVersion: null })))).toEqual({ harness: 'claude-code', harnessBucket: UNKNOWN, model: UNKNOWN, effort: UNKNOWN });
+    expect(bucketFields(frameBucketOf(frame({ model: null, effort: null, harnessVersion: null })))).toEqual({ harness: 'claude-code', harnessBucket: UNKNOWN, model: UNKNOWN });
   });
 
   it('reads an unknown from a bucket with fields missing', () => {
-    expect(bucketFields('')).toEqual({ harness: '', harnessBucket: UNKNOWN, model: UNKNOWN, effort: UNKNOWN });
+    expect(bucketFields('')).toEqual({ harness: '', harnessBucket: UNKNOWN, model: UNKNOWN });
   });
 });
 
@@ -52,7 +57,7 @@ describe('deriveCells', () => {
 
   it('counts a window by its last step, sums its cost, and counts sessions once', () => {
     expect(cellsOf(base, shapeId([READ, EDIT]))).toEqual([
-      { motifId: shapeId([READ, EDIT]), frameBucket: 'claude-code/2.1.31x/claude-opus-5-5/high', day: '2026-11-01', sessions: 2, clusters: 1, ok: 1, failed: 1, tokens: 0, durationMs: 70, exposed: false },
+      { motifId: shapeId([READ, EDIT]), frameBucket: 'claude-code/2.1.31x/claude-opus-5-5', grain: 'day', day: '2026-11-01', sessions: 2, clusters: 1, ok: 1, failed: 1, tokens: 0, durationMs: 70, exposed: false },
     ]);
   });
 
@@ -98,12 +103,12 @@ describe('deriveCells', () => {
       prompts: [prompt('s1', 0, { frame: undefined, ts: '2026-10-31T23:59:00+00:00', model: 'claude-haiku-5-5', efforts: [] })],
       tools: [tool('s1', 0, 'Read', { harnessVersion: '2.1.299' }), tool('s1', 1, 'Read')],
     });
-    expect(cellsOf(old, shapeId([READ]))[0]).toMatchObject({ frameBucket: 'claude-code/2.1.29x/claude-haiku-5-5/unknown', day: '2026-10-31' });
+    expect(cellsOf(old, shapeId([READ]))[0]).toMatchObject({ frameBucket: 'claude-code/2.1.29x/claude-haiku-5-5', day: '2026-10-31' });
   });
 
   it('reads an empty model on an old prompt as unknown', () => {
     const old = store({ sessions: [session('s1')], prompts: [prompt('s1', 0, { frame: undefined, model: '' })], tools: [tool('s1', 0, 'Read')] });
-    expect(cellsOf(old, shapeId([READ]))[0]?.frameBucket).toBe('claude-code/2.1.30x/unknown/high');
+    expect(cellsOf(old, shapeId([READ]), 'week')[0]?.frameBucket).toBe('claude-code/2.1.30x/unknown');
   });
 
   it('frames a subagent line by its own session and counts it under the main session', () => {
@@ -112,7 +117,7 @@ describe('deriveCells', () => {
       subagents: [session('s1~a', { parent: 's1', frame: frame({ model: 'claude-haiku-5-5', day: '2026-11-03' }) })],
       tools: [tool('s1~a', 0, 'Read', { parent: 's1', prompt: null }), tool('s1~a', 1, 'Read', { parent: 's1', prompt: null })],
     });
-    expect(cellsOf(agents, shapeId([READ]))).toMatchObject([{ sessions: 1, day: '2026-11-03', frameBucket: 'claude-code/2.1.31x/claude-haiku-5-5/high' }]);
+    expect(cellsOf(agents, shapeId([READ]))).toMatchObject([{ sessions: 1, day: '2026-11-03', frameBucket: 'claude-code/2.1.31x/claude-haiku-5-5' }]);
   });
 
   it('reads an old subagent session by its most used model and its first timestamp', () => {
@@ -120,29 +125,76 @@ describe('deriveCells', () => {
       subagents: [session('s1~a', { parent: 's1', models: { 'claude-opus-5-5': 1, 'claude-haiku-5-5': 2 }, tsFirst: '2026-11-04T01:00:00Z' })],
       tools: [tool('s1~a', 0, 'Read', { parent: 's1', prompt: null })],
     });
-    expect(cellsOf(agents, shapeId([READ]))).toMatchObject([{ day: '2026-11-04', frameBucket: 'claude-code/2.1.30x/claude-haiku-5-5/unknown' }]);
+    expect(cellsOf(agents, shapeId([READ]))).toMatchObject([{ day: '2026-11-04', frameBucket: 'claude-code/2.1.30x/claude-haiku-5-5' }]);
   });
 
   it('breaks a model tie by name and reads no model and no day as unknown', () => {
     const tied = store({ subagents: [session('a', { models: { b: 1, 'claude-a': 1, 'claude-c': 1 } })], tools: [tool('a', 0, 'Read', { prompt: null })] });
-    expect(cellsOf(tied, shapeId([READ]))[0]?.frameBucket).toBe('claude-code/2.1.30x/<literal>/unknown');
+    expect(cellsOf(tied, shapeId([READ]), 'week')[0]?.frameBucket).toBe('claude-code/2.1.30x/<literal>');
     const none = store({ subagents: [session('a')], tools: [tool('a', 0, 'Read', { prompt: null })] });
-    expect(cellsOf(none, shapeId([READ]))[0]).toMatchObject({ frameBucket: 'claude-code/2.1.30x/unknown/unknown', day: UNKNOWN });
+    expect(cellsOf(none, shapeId([READ]), 'week')[0]).toMatchObject({ frameBucket: 'claude-code/2.1.30x/unknown', day: UNKNOWN });
   });
 
   it('counts a prompt in its class motif, with its whole usage and wall time', () => {
     const usage = { input: 1, cacheWrite: 2, cacheRead: 3, output: 4, thinking: 99 };
     const classed = store({ sessions: [session('s1')], prompts: [prompt('s1', 0, { usage, wallSec: 2, errors: 1 }), prompt('s1', 1, { usage, wallSec: null })] });
-    expect(cellsOf(classed, classMotif('edit-verify').motifId)).toMatchObject([{ sessions: 1, ok: 1, failed: 1, tokens: 20, durationMs: 2000 }]);
+    expect(cellsOf(classed, classMotif('edit-verify').motifId, 'week')).toMatchObject([{ sessions: 1, ok: 1, failed: 1, tokens: 20, durationMs: 2000 }]);
   });
 
   it('frames a version-2 prompt, whose session has no capture record, as unknown harness version', () => {
     const old = store({ prompts: [prompt('gone', 0, { frame: undefined })] });
-    expect(cellsOf(old, classMotif('edit-verify').motifId)[0]?.frameBucket).toBe('claude-code/unknown/claude-opus-5-5/high');
+    expect(cellsOf(old, classMotif('edit-verify').motifId, 'week')[0]?.frameBucket).toBe('claude-code/unknown/claude-opus-5-5');
   });
 
   it('skips a call whose session the store does not hold', () => {
     expect(deriveCells(store({ tools: [tool('gone', 0, 'Read')] })).cells).toEqual([]);
+  });
+});
+
+describe('grain (rule 6)', () => {
+  // 2026-11-01 is a Sunday: it closes the week of Monday 2026-10-26, and Monday 2026-11-02 opens the next one, which holds Sunday 2026-11-08.
+  const spanning: Store = store({
+    sessions: [session('s1'), session('s2'), session('s3')],
+    prompts: [prompt('s1', 0, { frame: frame({ day: '2026-11-01' }) }), prompt('s2', 0, { frame: frame({ day: '2026-11-02' }) }), prompt('s3', 0, { frame: frame({ day: '2026-11-08' }) })],
+    tools: [tool('s1', 0, 'Read'), tool('s2', 0, 'Read'), tool('s3', 0, 'Read')],
+  });
+
+  it('keys a non-live cell on the UTC week, so Sunday and the next Monday are two cells and Monday through Sunday is one', () => {
+    const weekly = cellsOf(spanning, shapeId([READ]), 'week');
+    expect(weekly.map(({ day, sessions }) => [day, sessions])).toEqual([
+      ['2026-10-26', 1],
+      ['2026-11-02', 2],
+    ]);
+  });
+
+  it('keeps a live cell at the UTC day, for a shape motif only', () => {
+    const daily = cellsOf(spanning, shapeId([READ]), 'day');
+    expect(daily.map(({ day, sessions }) => [day, sessions])).toEqual([
+      ['2026-11-01', 1],
+      ['2026-11-02', 1],
+      ['2026-11-08', 1],
+    ]);
+    const finer = deriveCells(spanning).cells.filter((cell) => cell.grain === 'day');
+    expect(finer.every((cell) => cell.motifId === shapeId([READ]))).toBe(true);
+  });
+
+  it('puts a class motif in week cells alone', () => {
+    const classed = cellsOf(spanning, classMotif('edit-verify').motifId, 'both');
+    expect(classed.map(({ grain, day }) => [grain, day])).toEqual([
+      ['week', '2026-10-26'],
+      ['week', '2026-11-02'],
+    ]);
+  });
+
+  it('has no cell finer than the grain it names', () => {
+    const cells = deriveCells(spanning).cells;
+    for (const cell of cells.filter((one) => one.grain === 'week')) expect(new Date(`${cell.day}T00:00:00Z`).getUTCDay()).toBe(1);
+  });
+
+  it('leaves an unknown day as an unknown week and makes no day cell of it', () => {
+    const undated = store({ sessions: [session('s1', { tsFirst: null })], prompts: [prompt('s1', 0, { frame: frame({ day: null }) })], tools: [tool('s1', 0, 'Read', { ts: null })] });
+    expect(deriveCells(undated).cells.map(({ grain, day }) => [grain, day])).toEqual(expect.arrayContaining([['week', UNKNOWN]]));
+    expect(deriveCells(undated).cells.some((cell) => cell.grain === 'day')).toBe(false);
   });
 });
 

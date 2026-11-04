@@ -10,8 +10,8 @@ const scopeOf = (cell: Cell): string => {
 };
 
 export const deriveChange: DeriveFamily = ({ pool }) => {
-  const steps = new Map([...groupBy(shapeUnits(pool), scopeOf)].map(([scope, cells]) => [scope, total(cells, settled)]));
-  return [...groupBy(unitCells(pool), ({ cell }) => `${cell.motifId}/${scopeOf(cell)}`).values()].flatMap((group) => {
+  const steps = new Map([...groupBy(shapeUnits(pool, 'week'), scopeOf)].map(([scope, cells]) => [scope, total(cells, settled)]));
+  return [...groupBy(unitCells(pool, 'week'), ({ cell }) => `${cell.motifId}/${scopeOf(cell)}`).values()].flatMap((group) => {
     const [first] = group;
     const cells = group.map(({ cell }) => cell);
     const n = total(cells, settled);

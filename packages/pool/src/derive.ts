@@ -32,7 +32,7 @@ const readsOf = (pool: Pool): Read[] => {
   const held = new Map(pool.cells.map((cell) => [cellIdOf(cell), cell.clusters]));
   const clustersOf = (inputs: readonly string[]): number => inputs.reduce((most, input) => Math.max(most, held.get(input) ?? 0), 0);
   // Once for every live read of a bundle: the shape-level units are the same for each.
-  const shapeUnits = unitCells(pool).filter(({ motif }) => motif.level === 'shape');
+  const shapeUnits = unitCells(pool, 'day').filter(({ motif }) => motif.level === 'shape');
   // A live read's baseline is a second set of cells its inputs do not cite, so it takes the same floor on its own: under it, the baseline and the ratio against it are null.
   const baselined = (read: ReadBody): ReadBody => {
     if (read.family !== 'live') return read;
@@ -46,13 +46,13 @@ const readsOf = (pool: Pool): Read[] => {
 
 const compare = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
 
-/** The frame buckets of one harness at one numbered bucket start with this: `frameBucket` is `harness/bucket/model/effort`, and two harnesses can share a numbered bucket. */
+/** The frame buckets of one harness at one numbered bucket start with this: `frameBucket` is `harness/bucket/model`, and two harnesses can share a numbered bucket. */
 export const bucketPrefix = (harness: string, harnessVersion: string): string => `${harness}/${harnessBucket(harnessVersion)}/`;
 
 /** What one harness's bundle at one version holds: the stored cells of its (harness, bucket), the only pair a landed cell keys on. A share's denominator is the bundle's; only what clears the floor leaves. */
 export const bundleOf = (harness: string, harnessVersion: string, stored: StoredPool): Bundle => {
   const prefix = bucketPrefix(harness, harnessVersion);
-  const cells = stored.cells.filter((cell) => cell.frameBucket.startsWith(prefix)).sort((a, b) => compare(a.motifId, b.motifId) || compare(a.frameBucket, b.frameBucket) || compare(a.day, b.day));
+  const cells = stored.cells.filter((cell) => cell.frameBucket.startsWith(prefix)).sort((a, b) => compare(a.motifId, b.motifId) || compare(a.frameBucket, b.frameBucket) || compare(a.grain, b.grain) || compare(a.day, b.day));
   const motifs = [...stored.motifs].sort((a, b) => compare(a.motifId, b.motifId));
   // No error rows: a skeleton holds none, and recovery, the one family that reads them, is left out here.
   const pool = poolOf({ cells, motifs }, []);

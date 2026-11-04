@@ -1,6 +1,6 @@
 // Reading the pool for a bundle (t813): the stored `index` cells of one harness version and the strata, three statements whose rows grow with the cells and never with deposits. The
 // ledger plane (`deposits`) and the `contributor` records are not read here, so expiry on them cannot change what is served.
-import { harnessBucket, type Cell } from '../../cli/src/sessions/cells.js';
+import { harnessBucket, type Cell, type Grain } from '../../cli/src/sessions/cells.js';
 import type { Motif, MotifLevel, WindowStep } from '../../cli/src/sessions/motif.js';
 import type { StrataCell } from '../../cli/src/sessions/pool-wire.js';
 import { bucketPrefix, K_CELL } from './derive.js';
@@ -18,6 +18,7 @@ const DIMENSIONS: ReadonlySet<unknown> = new Set<StrataCell['dimension']>(['lang
 
 // Narrowing by what ingest wrote: the tables hold nothing a derivation did not produce, so these check the outer shape and trust the rest.
 const isLevel = (value: unknown): value is MotifLevel => LEVELS.has(value);
+const isGrain = (value: unknown): value is Grain => value === 'day' || value === 'week';
 const isDimension = (value: unknown): value is StrataCell['dimension'] => DIMENSIONS.has(value);
 const isSteps = (value: unknown): value is WindowStep[] => Array.isArray(value);
 
@@ -30,6 +31,12 @@ const numberField = (row: unknown, key: string): number => {
 const textField = (row: unknown, key: string): string => {
   const found = fieldOf(row, key);
   if (typeof found !== 'string') throw new Error(`no text at ${key} in a stored row`);
+  return found;
+};
+
+const grainField = (row: unknown): Grain => {
+  const found = fieldOf(row, 'grain');
+  if (!isGrain(found)) throw new Error('a stored cell names no grain');
   return found;
 };
 
@@ -47,7 +54,7 @@ export const storedOf = async (env: Env, harness: string, harnessVersion: string
   const bucket = harnessBucket(harnessVersion);
   const prefix = bucketPrefix(harness, harnessVersion);
   const [cells, motifs, strata] = await Promise.all([
-    env.DB.prepare('SELECT motif_id, frame_bucket, day, exposed, sessions, clusters, ok, failed, tokens, duration_ms FROM cells WHERE harness_bucket = ? AND substr(frame_bucket, 1, ?) = ? AND sessions > 0').bind(bucket, prefix.length, prefix).all(),
+    env.DB.prepare('SELECT motif_id, frame_bucket, grain, day, exposed, sessions, clusters, ok, failed, tokens, duration_ms FROM cells WHERE harness_bucket = ? AND substr(frame_bucket, 1, ?) = ? AND sessions > 0').bind(bucket, prefix.length, prefix).all(),
     env.DB.prepare('SELECT motif FROM motifs WHERE motif_id IN (SELECT motif_id FROM cells WHERE harness_bucket = ? AND substr(frame_bucket, 1, ?) = ? AND sessions > 0)').bind(bucket, prefix.length, prefix).all(),
     env.DB.prepare('SELECT dimension, value, sessions, clusters FROM strata WHERE clusters >= ? AND sessions > 0').bind(K_CELL).all(),
   ]);
@@ -55,6 +62,7 @@ export const storedOf = async (env: Env, harness: string, harnessVersion: string
     cells: cells.results.map((row) => ({
       motifId: textField(row, 'motif_id'),
       frameBucket: textField(row, 'frame_bucket'),
+      grain: grainField(row),
       day: textField(row, 'day'),
       sessions: numberField(row, 'sessions'),
       clusters: numberField(row, 'clusters'),

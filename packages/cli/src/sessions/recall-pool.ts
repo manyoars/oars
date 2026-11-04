@@ -1,6 +1,6 @@
 // What ties a recall's answer to the stored read of the current pool (t757, fix round). A store-wide count answers the asker, and the read it rests on is what `lineage` can
 // walk, so each answer carries that read's ID. Without a stored read for it, an answer keeps its stand-in hash, which `lineage` reports as evidence with no further hop.
-import { bucketFields, cellIdOf, UNKNOWN, type Cell, type Pool } from './cells.js';
+import { bucketFields, cellIdOf, lastDayOfCell, UNKNOWN, type Cell, type Pool } from './cells.js';
 import { motifName, type Motif } from './motif.js';
 import type { Read } from './read.js';
 import type { RecallRead } from './recall-reads.js';
@@ -46,6 +46,8 @@ const answerOfStored = (read: Read, cells: ReadonlyMap<string, Cell>): RecallRea
   const cited = read.inputs.flatMap((input) => cells.get(input) ?? []);
   const frames = cited.map((cell) => bucketFields(cell.frameBucket));
   const days = presentOf(cited.map((cell) => cell.day));
+  // A week cell may hold any of its seven days, so the last day the evidence can hold is the week's end, which is what a check that it predates a recall must read.
+  const lastDays = presentOf(cited.map(lastDayOfCell));
   const isRate = read.family === 'fit';
   const failed = countIn(read.value.failed);
   return {
@@ -58,7 +60,7 @@ const answerOfStored = (read: Read, cells: ReadonlyMap<string, Cell>): RecallRea
     calls: isRate ? failed + countIn(read.value.ok) : null,
     clusters: read.clusters,
     firstDay: days[0] ?? null,
-    lastDay: days[days.length - 1] ?? null,
+    lastDay: lastDays[lastDays.length - 1] ?? null,
     harnesses: presentOf(frames.map((frame) => frame.harness)),
     harnessVersions: [],
     models: presentOf(frames.map((frame) => frame.model)),

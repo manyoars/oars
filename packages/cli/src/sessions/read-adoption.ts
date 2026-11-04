@@ -9,8 +9,8 @@ const DAY_MS = 86_400_000;
 const daysBetween = (from: string | null, to: string | null): number | null => (from === null || to === null ? null : Math.round((Date.parse(to) - Date.parse(from)) / DAY_MS));
 
 export const deriveAdoption: DeriveFamily = ({ pool }) => {
-  const of = total(shapeUnits(pool), settled);
-  return [...groupBy(unitCells(pool), ({ cell }) => cell.motifId).values()].flatMap((group) => {
+  const of = total(shapeUnits(pool, 'week'), settled);
+  return [...groupBy(unitCells(pool, 'week'), ({ cell }) => cell.motifId).values()].flatMap((group) => {
     const [first] = group;
     const cells = group.map(({ cell }) => cell);
     const n = total(cells, settled);
