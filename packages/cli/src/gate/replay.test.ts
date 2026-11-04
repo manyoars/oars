@@ -7,6 +7,18 @@ import { parseRows, type CrossingRecord, type RegistryRow, type RunRow } from '.
 import { REGISTRY_MAX_DAYS, replay } from './replay.js';
 import type { RegistryAnswer, RegistryReader } from './registry.js';
 
+// A transcript the OS refuses to open cannot be made on every platform, so one file name fails here.
+vi.mock('../sessions/store.js', async (importOriginal) => {
+  const real = await importOriginal<typeof import('../sessions/store.js')>();
+  return {
+    ...real,
+    logLines: (file: string) => {
+      if (file.includes('refused-one')) throw new Error('EACCES');
+      return real.logLines(file);
+    },
+  };
+});
+
 const REPO = 'C--work-app';
 const WORKTREE = `${REPO}--claude-worktrees-one`;
 const OTHER_REPO = 'C--work-tool';
@@ -95,8 +107,10 @@ describe('the source of a replay', () => {
     await writeLog(projectsRoot, OFF_LIST, 'p.jsonl', [bash(5, 't3', 'npm install off-list')]);
     await writeLog(join(storeDir, 'raw'), 'cursor', 'c.jsonl', [bash(6, 't4', 'npm install from-cursor')]);
     await writeLog(projectsRoot, 'codex', 'x.jsonl', [bash(7, 't5', 'npm install from-codex')]);
+    await writeLog(join(storeDir, 'raw'), 'codex', 'r.jsonl', [bash(8, 't6', 'npm install from-raw-codex')]);
+    await writeLog(join(storeDir, 'raw'), 'copilot', 'p.jsonl', [bash(9, 't7', 'npm install from-copilot')]);
 
-    const done = await run([`${REPO}*`, 'cursor', 'codex']);
+    const done = await run([`${REPO}*`, 'cursor', 'codex', 'copilot']);
     const { crossings } = await written();
 
     expect(crossings.map((row) => row.name).sort()).toEqual(['archived', 'on-disk']);
@@ -129,11 +143,13 @@ describe('the source of a replay', () => {
 
   it('counts a torn line and an unreadable transcript instead of failing the run', async () => {
     await writeLog(projectsRoot, REPO, 'a.jsonl', ['{not json', bash(1, 't1', 'npm install one')]);
-    await mkdir(join(projectsRoot, REPO, 'folder.jsonl'), { recursive: true });
+    await writeLog(projectsRoot, REPO, 'refused-one.jsonl', [bash(3, 't3', 'npm install never-read')]);
     await writeLog(projectsRoot, REPO, 'b.jsonl', [bash(2, 't2', 'npm install two')]);
     const { run: head } = await run([REPO]);
     expect(head.badLines).toBe(1);
-    expect((await written()).crossings).toHaveLength(2);
+    expect(head.unreadable).toBe(1);
+    expect(head.transcripts).toBe(3);
+    expect((await written()).crossings.map((row) => row.name).sort()).toEqual(['one', 'two']);
   });
 
   it('does not read an api-request-blob line, a copy of the request body', async () => {
@@ -202,6 +218,13 @@ describe('a crossing record', () => {
     await writeLog(projectsRoot, REPO, 'b.jsonl', [bash(1, 't1', 'npm install one'), result(2, 't1', 'added'), bash(3, 't2', 'npm install two')]);
     await run([REPO]);
     expect((await written()).crossings.map((row) => row.name)).toEqual(['one', 'two']);
+  });
+
+  it('counts a call once when a resumed transcript replays it, whether or not it named anything', async () => {
+    await writeLog(projectsRoot, REPO, 'a.jsonl', [bash(1, 't1', 'ls'), bash(2, 't2', 'npm install one')]);
+    await writeLog(projectsRoot, REPO, 'b.jsonl', [bash(1, 't1', 'ls'), bash(2, 't2', 'npm install one'), bash(3, 't3', 'pwd')]);
+    const { run: head } = await run([REPO]);
+    expect(head.calls).toBe(3);
   });
 
   it.each([
@@ -330,7 +353,6 @@ describe('a crossing record', () => {
       bash(2, 't1', 'npm install shown-first'),
       bash(3, 't2', 'npm install never-named'),
     ]);
-    await writeLog(projectsRoot, REPO, 'agent-z.jsonl', [typed(0, 'add side-named'), bash(1, 't3', 'npm install side-named')]);
     await run([REPO]);
     const { crossings } = await written();
     expect(named(crossings, 'shown-first')).toMatchObject({ origin: 'repo-file', decidedBy: 'operator' });
@@ -528,8 +550,7 @@ describe('the registry option', () => {
     await mkdir(join(root, 'cwd'));
     await writeLog(projectsRoot, REPO, 'a.jsonl', [bash(1, 't1', 'npm install mixed'), bash(2, 't2', 'npm install --registry https://npm.private.example/ mixed')]);
     const kept = JSON.stringify({ kind: 'registry', v: 1, day: '2026-11-01', class: 'npm-package', state: 'found', created: null, name: 'mixed', latest: '0.0.1' });
-    await writeFile(join(storeDir, 'crossings.jsonl'), `${kept}
-`);
+    await writeFile(join(storeDir, 'crossings.jsonl'), `${kept}\n`);
     const reader = answering();
     await run([REPO], reader);
     expect(reader).not.toHaveBeenCalled();
