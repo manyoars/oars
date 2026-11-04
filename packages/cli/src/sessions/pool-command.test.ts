@@ -8,7 +8,7 @@ import { run } from '../cli.js';
 import { ExitCode } from '../errors.js';
 import { harness, server, useServer, type Harness } from '../test-support.js';
 import { poolDeposit, poolServer, type Reply, type Sender } from './pool-command.js';
-import { batchHash, BATCH_FIELDS, canonicalBytes, FIELD_ROWS, writeBatch } from './pool-outbox.js';
+import { batchHash, canonicalBytes, FIELD_ROWS, fieldsOf, writeBatch } from './pool-outbox.js';
 import type { Outgoing } from './pool-print.js';
 import { REGISTRY_MAX_AGE_DAYS, VOCAB_SNAPSHOT_DATE } from './public-vocabulary.js';
 import type * as PoolWire from './pool-wire.js';
@@ -952,13 +952,24 @@ describe('oars pool outbox --explain and older batches', () => {
     const scene = await batched();
     expect(await scene.cli('pool', 'outbox', '--explain', '--server', POOL)).toBe(ExitCode.OK);
     const shown = scene.h.out.join('');
-    for (const field of BATCH_FIELDS) expect(shown).toContain(`  ${field}: ${FIELD_ROWS[field] ?? 'no row'}`);
+    const fields = fieldsOf(batchBytes(scene)[0] ?? '');
+    expect(fields.length).toBeGreaterThan(3);
+    for (const field of fields) expect(shown).toContain(`  ${field}: ${FIELD_ROWS[field] ?? 'no row'}`);
   });
 
   it('fails, rather than printing a blank, for a field with no row', async () => {
     const scene = await batched();
     const outbox = join(scene.staged.storeDir, 'pool-outbox', readdirSync(join(scene.staged.storeDir, 'pool-outbox'))[0] ?? '');
     await writeBatch(outbox, 'cccccccccccccccc', { format: 1, id: 'x', transcripts: [], surprise: 1 });
+    expect(await scene.cli('pool', 'outbox', '--explain', '--server', POOL, '--json')).toBe(ExitCode.INVALID);
+    expect(scene.document()).toMatchObject({ problem: { code: 'field_without_row' } });
+    expect(JSON.stringify(scene.document())).toContain('surprise');
+  });
+
+  it('fails for a field with no row at any depth, not only at the top', async () => {
+    const scene = await batched();
+    const outbox = join(scene.staged.storeDir, 'pool-outbox', readdirSync(join(scene.staged.storeDir, 'pool-outbox'))[0] ?? '');
+    await writeBatch(outbox, 'cccccccccccccccc', { format: 1, id: 'x', transcripts: [{ frame: { stack: { surprise: 1 } }, tools: [{ steps: [{ cost: { surprise: 2 } }] }] }] });
     expect(await scene.cli('pool', 'outbox', '--explain', '--server', POOL, '--json')).toBe(ExitCode.INVALID);
     expect(scene.document()).toMatchObject({ problem: { code: 'field_without_row' } });
     expect(JSON.stringify(scene.document())).toContain('surprise');

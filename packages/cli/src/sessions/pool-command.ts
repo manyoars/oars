@@ -448,7 +448,7 @@ export const poolDeposit = async (deps: RunDeps, options: { server?: string | un
   return { document: { ok: true, server, ...counts }, text: lines.join('\n') };
 };
 
-/** Each top-level field of a batch with its row. A field with no row fails the command rather than printing blank. */
+/** Each field of a batch, at any depth, with its row. A field with no row fails the command rather than printing blank. */
 const explained = (bytes: string): { [field: string]: string } => {
   const rows: { [field: string]: string } = {};
   for (const field of fieldsOf(bytes)) {
