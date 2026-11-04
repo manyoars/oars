@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { cellsOf, storeOf } from '../../cli/src/sessions/cell-increments.js';
+import { storeOf } from '../../cli/src/sessions/cell-increments.js';
+import { deriveCells } from '../../cli/src/sessions/cells.js';
 import { frame, prompt, session, step, storedNames, store, tool } from '../../cli/src/sessions/pool-fixture.js';
 import { sessionsOf, skeletonOf, type SessionSkeleton } from '../../cli/src/sessions/pool-wire.js';
 import type { CanonicalAction } from '../../cli/src/sessions/actions.js';
@@ -27,7 +28,7 @@ const oracleOf = (byAccount: readonly (readonly SessionSkeleton[])[]): Held[] =>
   const merged = new Map<string, Held>();
   const accounts = new Map<string, Set<number>>();
   byAccount.forEach((skeletons, account) => {
-    for (const cell of cellsOf(storeOf(skeletons)).cells) {
+    for (const cell of deriveCells(storeOf(skeletons)).cells) {
       const key = `${cell.motifId}/${cell.frameBucket}/${cell.day}/${cell.exposed ? '1' : '0'}`;
       const held = merged.get(key) ?? { key, sessions: 0, clusters: 0, ok: 0, failed: 0, tokens: 0, durationMs: 0 };
       merged.set(key, { key, sessions: held.sessions + cell.sessions, clusters: 0, ok: held.ok + cell.ok, failed: held.failed + cell.failed, tokens: held.tokens + cell.tokens, durationMs: held.durationMs + cell.durationMs });
