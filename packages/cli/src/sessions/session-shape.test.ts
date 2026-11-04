@@ -290,11 +290,19 @@ describe('fix round 1', () => {
     expect(capture([typed(0, 'go'), summary]).setup).toEqual({ hookCount: 1 });
   });
 
-  it('redacts a plugin name that looks like a secret, as it does a tool name', () => {
+  it('stores no plugin whose name looks like a secret, as it redacts the tool name', () => {
     const token = 'sk-ant-api03Xk29fjQ81zLmPq7Rt';
     const session = capture([typed(0, 'go'), attach(1, { type: 'deferred_tools_delta', addedNames: [`mcp__plugin_${token}_srv__t`], removedNames: [] })]);
     expect(JSON.stringify(session)).not.toContain(token);
-    expect(session.setup?.plugins).toEqual(['<secret>']);
+    expect(session.setup).toBeUndefined();
+  });
+
+  it('stores a tool name the way a call is stored: an MCP server part that looks like a secret is redacted in the funnel and in a trust event', () => {
+    const token = 'sk-ant-api03Xk29fjQ81zLmPq7Rt';
+    const name = `mcp__${token}__run`;
+    const session = capture([typed(0, 'go'), attach(1, { type: 'deferred_tools_delta', addedNames: [name], removedNames: [] }), called(2, 'a', name), typed(3, '[Request interrupted by user]')]);
+    expect(JSON.stringify(session.funnel)).not.toContain(token);
+    expect(JSON.stringify(session.trust)).not.toContain(token);
   });
 
   it('forgets a call that never got a result once an interrupt is recorded and once the human speaks again', () => {
