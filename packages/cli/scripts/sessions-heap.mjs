@@ -5,8 +5,16 @@
 //   node scripts/sessions-heap.mjs table [--sizes 400,800] [--heap 4096] # peak RSS of each command by store size (the docs table)
 //   node scripts/sessions-heap.mjs minheap [--sizes 400,800]             # smallest --max-old-space-size at which each command passes
 //   node scripts/sessions-heap.mjs phases [--sessions 800]               # heap kept after each phase, in one process
+//   node scripts/sessions-heap.mjs keep [--sessions 5]                   # builds a store and leaves it, to look at the records
 //
-// Needs `npm run build -w packages/cli` first (it runs dist/bin.js). Nothing here touches the real store or ~/.claude: every run points
+// Flags every mode takes:
+//   --calls <n>         tool calls per prompt (default 14)
+//   --chatter <n>       skeleton-only lines per call: text, thinking, attachment (default 5)
+//   --bulk <n>          characters of a clean tool result (default 400)
+//   --superseded off    leave the log clean for a no-op run, with no older copy of any record (default on; a recapture run ignores it)
+//   --bin <file>        run another build of the CLI (a copy of dist/ from before a change) instead of dist/bin.js, to compare two builds on one store (`phases` ignores it: it always measures dist/)
+//
+// Needs `npm run build -w packages/cli` first (it runs dist/bin.js, and refuses one older than src/sessions/store.ts unless `--bin` names the build). Nothing here touches the real store or ~/.claude: every run points
 // APPDATA, XDG_CONFIG_HOME, HOME, USERPROFILE, and CLAUDE_CONFIG_DIR at a fresh folder under the OS temp folder, and refuses to go on
 // when a path the CLI will use is not inside it.
 import { spawnSync } from 'node:child_process';
@@ -16,15 +24,31 @@ import { join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const cliRoot = fileURLToPath(new URL('..', import.meta.url));
+
+/**
+ * @param {string} name
+ * @param {string} fallback
+ */
+const arg = (name, fallback) => {
+  const at = process.argv.indexOf(`--${name}`);
+  return at === -1 ? fallback : (process.argv[at + 1] ?? fallback);
+};
+
 // `--bin <file>` runs another build of the CLI (a copy of dist/ from before a change), to compare two builds on one store.
 const binArg = process.argv.indexOf('--bin');
 const bin = binArg === -1 ? join(cliRoot, 'dist', 'bin.js') : resolve(process.argv[binArg + 1] ?? '');
+// The default build must be newer than the store code it measures, or a stale `dist/` passes or fails for the wrong code. A named `--bin` is older on purpose.
+if (binArg === -1) {
+  if (!existsSync(bin)) throw new Error(`${bin} does not exist: run \`npm run build -w packages/cli\` first`);
+  if (statSync(bin).mtimeMs < statSync(join(cliRoot, 'src', 'sessions', 'store.ts')).mtimeMs) throw new Error(`${bin} is older than src/sessions/store.ts: run \`npm run build -w packages/cli\` first`);
+}
 const NL = String.fromCharCode(10);
 const PROJECT = 'bench-project';
 const PROMPTS = 8;
 // Characters of a clean tool result. The log keeps none of it, so it sizes the transcript on disk (the operator's: 1.8 MB each against 86 KB of log).
-const BULK = Number(process.argv[process.argv.indexOf('--bulk') + 1] ?? 400) || 400;
+const BULK = Number(arg('bulk', '400')) || 400;
 
+/** @typedef {{ file_path?: string, old_string?: string, new_string?: string, command?: string, pattern?: string }} ToolInput */
 /** @typedef {{ root: string, appdata: string, claude: string, projects: string, store: string, home: string }} Dirs */
 
 /**
@@ -64,15 +88,6 @@ const assertScratch = (dirs) => {
 };
 
 /**
- * @param {string} name
- * @param {string} fallback
- */
-const arg = (name, fallback) => {
-  const at = process.argv.indexOf(`--${name}`);
-  return at === -1 ? fallback : (process.argv[at + 1] ?? fallback);
-};
-
-/**
  * @param {number} base
  * @param {number} seconds
  */
@@ -106,7 +121,7 @@ const transcript = (index) => {
     for (let c = 0; c < calls; c += 1) {
       const toolId = `toolu_${id}_${String(p)}_${String(c)}`;
       const module = String((index + c) % 211);
-      /** @type {[string, Record<string, string>][]} */
+      /** @type {[string, ToolInput][]} */
       const inputs = [
         ['Read', { file_path: `/work/app/src/module-${module}/file-${String(p)}-${String(c)}.ts` }],
         ['Edit', { file_path: `/work/app/src/module-${module}/file-${String(c)}.ts`, old_string: `old ${id} ${String(c)}`, new_string: `new ${id} ${String(c)}` }],
@@ -215,8 +230,8 @@ const scratch = (label) => {
   return dirs;
 };
 
-/** A store of `sessions` transcripts: generated, then deposited once under a heap large enough for building it. */
 /**
+ * A store of `sessions` transcripts: generated, then deposited once under a heap large enough for building it.
  * @param {Dirs} dirs
  * @param {number} sessions
  */
@@ -403,6 +418,7 @@ log ${build(dirs, Number(arg('sessions', '5'))).toFixed(1)} MB`);
       const ran = spawnSync(process.execPath, ['--expose-gc', '--max-old-space-size=8192', join(cliRoot, 'scripts', 'sessions-heap-phases.mjs'), dirs.store, dirs.claude, shape], { env: envOf(dirs), encoding: 'utf8', cwd: dirs.root, maxBuffer: 64 << 20 });
       console.log(`${shape}:
 ${ran.stdout}${ran.stderr.slice(-800)}`);
+      if (ran.status !== 0) process.exitCode = 1;
     }
   } finally {
     rmSync(dirs.root, { recursive: true, force: true });

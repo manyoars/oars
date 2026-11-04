@@ -277,7 +277,7 @@ export const replay = async (runtime: Pick<SessionsRuntime, 'storeDir' | 'projec
     unread,
     registryRead: options.registry !== undefined,
   };
-  const registry = answers === undefined ? [...cached.values()] : registryRows(answers, held, cached, day);
+  const registry = registryRows(answers ?? new Map<string, RegistryAnswer>(), held, cached, day);
   // The file is read again here, as late as it can be, so a row the hook appended while the transcripts were read is kept, not overwritten.
   const live = liveCrossings(parseRows(await readFile(file, 'utf8').catch(() => '')));
   await writeAtomic(file, `${[run, ...registry, ...mergeCrossings(records, live)].map((row) => JSON.stringify(row)).join('\n')}\n`);

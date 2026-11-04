@@ -66,7 +66,8 @@ replaces, so the log settles back to the size of the live records. A hook deposi
 ## Memory
 
 `deposit` and `verify` hold the store as records, so their heap grows with the log's rows, and `verify` also with the skeletons (one entry per transcript line). A reader keeps only each session's highest `rev`, read in
-two passes over the log, so the superseded copies a re-capture leaves behind are never in memory, and it keeps one copy of the strings every tool row repeats (the session id, the tool name, the key names).
+two passes over one open file, so the superseded copies a re-capture leaves behind are never in memory, and a compaction between the passes cannot change what the second pass reads; it keeps one copy of the strings every tool row repeats (the session id, the tool name, the key names).
+The cost is time: every read parses the log twice, once for each session's highest `rev` and once for the records at it. No run compared the wall time of the two builds, so the added time is not measured. Two capped runs of the new build at 400 sessions (97 MB log for the no-op and `verify`, the 49 MB clean log for the recapture) took 9.9 and 9.4 s for a no-op `deposit`, 23.4 and 25.1 s for a recapture, and 8.0 and 12.0 s for `verify`.
 `deposit` checks for newer captures with one pass that keeps a number per session, and `verify` reads each skeleton without its per-line content hashes, which no check reads.
 
 Measured on a synthetic store (`packages/cli/scripts/sessions-heap.mjs`): peak RSS under `--max-old-space-size=4096`, 8 prompts of 14 tool calls per session, five transcript lines per call that make no log row (text, thinking,
@@ -80,9 +81,9 @@ deposit's compaction): twice the clean log. The recapture run starts from the cl
 | 800 | 195 MB | 480 MB | 501 MB | 833 MB |
 
 The same stores before the change: no-op 477 and 678 MB, recapture 451 and 731 MB, `verify` 673 and 1,048 MB. On a settled log (nothing superseded, 49 and 97 MB), the change gains little: no-op 501 against 483 MB (4 percent), `verify`
-896 against 828 MB (8 percent) at 800 sessions. Every deposit ends in a compaction, so a settled log is the usual state `verify` meets; the larger gains above are for a deposit that meets a log with superseded records. What was measured:
-one run per build at 800 sessions (a recapture went from 731 to 501 MB, which one run each cannot tell from noise), and the smallest `--max-old-space-size` that finished the 400-session store, before and after: no-op 168 and 104 MB,
-`verify` 336 and 248 MB; the recapture is 112 MB on the old build (one run) and 104 and 120 MB on the new (two runs), so no gain is shown for it at this bisect step. The full load that a deposit used to make first, to check for newer captures, is gone, so a recapture is not unchanged by construction; its measured difference is within the noise.
+896 against 828 MB (8 percent) at 800 sessions. Every whole-store deposit ends in a compaction, so a settled log is the usual state `verify` meets right after one; a store between nightly runs holds the superseded revs its hook deposits wrote, and the larger gains above are for a read that meets such a log. What was measured:
+two recapture runs per build at 800 sessions, one with superseded records and one on a settled log (`restore` ignores `--superseded` for a recapture, so the second run repeats the first's shape): old 731 and 551 MB, new 501 and 531 MB. The old build's two runs differ by 180 MB, so two runs per build cannot tell the change from noise. Also measured: the smallest `--max-old-space-size` that finished the 400-session store, before and after: no-op 168 and 104 MB,
+`verify` 336 and 248 MB; the recapture is 112 MB on the old build (one run) and 104 and 120 MB on the new (two runs), so no gain is shown for it at this bisect step. The full load that a deposit used to make first, to check for newer captures, is gone; the recapture's measured difference is within the noise.
 
 Where the heap is held (heap by phase, 800 sessions, `sessions-heap.mjs phases`): a no-op `deposit` keeps 150 MB after the load its refresh does, and `verify` keeps 294 MB of lean skeletons and then 439 MB with the store loaded. Which
 phase sets each command's peak is not established: the sampler is a timer that cannot fire during a synchronous phase (derive, the index, the verify checks), so those phases show their heap at the end, and the recapture is measured as
