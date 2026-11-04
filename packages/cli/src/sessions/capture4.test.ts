@@ -519,10 +519,8 @@ describe('a deposit over a version-9 store', () => {
     const staged = stage();
     await deposit(staged.runtime, options);
     const file = paths(staged.storeDir).observations;
-    const old = readFileSync(file, 'utf8').split('
-').filter((entry) => entry !== '').map((entry) => ({ ...parseObject(entry), cv: '9' }));
-    writeFileSync(file, old.map((record) => `${JSON.stringify(record)}
-`).join(''));
+    const old = readFileSync(file, 'utf8').split('\n').filter((entry) => entry !== '').map((entry) => ({ ...parseObject(entry), cv: '9' }));
+    writeFileSync(file, old.map((record) => `${JSON.stringify(record)}\n`).join(''));
     editState(staged.storeDir, (entry) => {
       Reflect.set(entry, 'v', '9');
     });
