@@ -245,7 +245,7 @@ describe('openapi-public.mjs', () => {
       expect(result.stderr).not.toContain('createCharge');
     });
 
-    it('drops the 402 response and rewrites the platform texts that name money', () => {
+    it('drops the 402 response and a payment property, and rewrites the platform texts that name money', () => {
       const withTexts = structuredClone(source) as typeof source & {
         paths: { '/orders/{orderId}': { get: { responses: { [code: string]: unknown } } } };
         components: { schemas: { [name: string]: unknown } };
@@ -258,6 +258,7 @@ describe('openapi-public.mjs', () => {
       withTexts.components.schemas['Order'] = {
         type: 'object',
         properties: {
+          paymentId: { type: 'string' },
           actionUrl: {
             type: 'string',
             description:
@@ -277,6 +278,7 @@ describe('openapi-public.mjs', () => {
       expect(at(out, 'components', 'schemas', 'Order', 'properties', 'actionUrl', 'description')).toBe(
         'A URL where a human completes the step that clears this rejection. Present only when such a step exists.',
       );
+      expect(keysAt(out, 'components', 'schemas', 'Order', 'properties')).toEqual(['actionUrl']);
       expect(JSON.stringify(out)).not.toMatch(/payment|stripe|add compute credit|credit-pack/i);
     });
   });

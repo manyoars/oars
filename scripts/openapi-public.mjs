@@ -34,6 +34,8 @@ const MONEY_COMPONENT = /billing|price|purchas|charge|credit|payout|payment/i;
 // platform's, so the public spec drops the one and rewrites the others here. Each phrase is the platform's exact wording:
 // wording that changes there stops matching, and the deny-list test over the generated files names what to add.
 const MONEY_STATUS = '402';
+// A schema property that only a payment fills in; ProblemDetail carries one.
+const MONEY_PROPERTIES = new Set(['paymentId']);
 const TEXT_REWRITES = [
   [' (actionUrl: add compute credit)', ''],
   [' (Stripe onboarding, a credit-pack checkout)', ''],
@@ -95,6 +97,13 @@ const collect = (node, refs, schemes) => {
 };
 
 /**
+ * @param {JsonObject} properties a schema's `properties`
+ * @returns {JsonObject} the same without the money properties
+ */
+const withoutMoneyProperties = (properties) =>
+  Object.fromEntries(Object.entries(properties).filter(([name]) => !MONEY_PROPERTIES.has(name)));
+
+/**
  * @param {JsonValue} node
  * @returns {JsonValue} a copy without a 402 response anywhere and with each phrase of TEXT_REWRITES replaced
  */
@@ -104,6 +113,7 @@ const neutralize = (node) => {
   if (!isObject(node)) return node;
   return Object.fromEntries(
     Object.entries(node)
+      .map(([key, value]) => [key, key === 'properties' && isObject(value) ? withoutMoneyProperties(value) : value])
       .filter(([key, value]) => !(key === MONEY_STATUS && isObject(value) && typeof value['description'] === 'string' && value['description'] === 'Payment Required'))
       .map(([key, value]) => [key, neutralize(value)]),
   );
