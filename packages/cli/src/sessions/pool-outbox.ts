@@ -1,9 +1,9 @@
 // The outbox (`oars pool deposit` and `oars pool outbox`): every batch that may leave this machine is first written here, as canonical JSON lines, and `deposit` stops. Nothing in this file
-// looks inside a batch except to name its top-level fields for `--explain`; what a batch holds is the projection's business.
+// looks inside a batch except to name its fields, at every depth, for `--explain`; what a batch holds is the projection's business.
 import { createHash } from 'node:crypto';
 import { appendFile, mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { VOCAB_VERSION } from './pool-wire.js';
+import { SKELETON_FORMAT, VOCAB_VERSION } from './pool-wire.js';
 import { contentHash } from './read.js';
 
 /** Keys sorted at every depth, so two writers of one batch write the same bytes. */
@@ -23,22 +23,76 @@ export const canonicalBytes = (batch: unknown): string => `${JSON.stringify(cano
 export const batchHash = (bytes: string): string => createHash('sha256').update(Buffer.from(bytes, 'utf8')).digest('hex');
 
 /**
- * The top-level fields a batch holds under this client. A batch is filed under this list and `VOCAB_VERSION`, so one built under an older list or vocabulary is never printed or sent (spec Section 1.4).
- * Every name here needs a row in `FIELD_ROWS`.
+ * `oars pool outbox --explain`: one row for each field name a batch holds, at any depth, saying what admits its values. A field with no row fails the command, so a field added to the batch adds its row here.
+ * A name that sits at more than one depth (`n`, `seg`, `status`, `harness`, `durationMs`, `frame`) has one row that reads true at each.
  */
-export const BATCH_FIELDS: readonly string[] = ['format', 'id', 'transcripts'];
-
-/** `--explain`: each top-level field of a batch and the rule that admits its values. A field with no row is a failure there, so a new field adds its row with the field. */
 export const FIELD_ROWS: { readonly [field: string]: string } = {
+  action: 'The canonical action of a step, one of a closed list this client holds; never the harness tool text.',
+  cacheRead: 'Tokens read from the cache in a prompt, a number.',
+  cacheWrite: 'Tokens written to the cache in a prompt, a number.',
+  cls: 'The class of a prompt, one of a closed list of eight, computed from the kinds of tools it used; never its words.',
+  cost: 'A step cost: a token count and a duration, each a number or null.',
+  day: 'The UTC calendar day of the session as YYYY-MM-DD, or null; never a time of day.',
+  durationMs: 'A duration in milliseconds, a number or null, of one tool call or one step.',
+  edges: 'The links from a step to other steps, each a kind from a closed list and two numbers.',
+  effort: 'The effort level the model ran at, only when it is a public one; else the literal placeholder.',
+  errors: 'How many tool calls failed in a prompt, a number.',
+  flags: 'The flags of a shell command, each a public flag, a short flag, or the literal placeholder; never an argument.',
   format: 'The skeleton format number: a constant of this client, never a value from a session.',
-  id: 'A hash the client computes per account from the account and the session, so a redeposit replaces and two accounts\' sessions cannot be joined. Never the session\'s own id.',
-  transcripts: 'The main transcript, then each subagent\'s: its frame, prompts, and tool steps, every value checked against the closed vocabulary before the batch is built (interim form, until the skeleton form replaces it).',
+  frame: 'Where a session ran: the harness and its version, the model, the effort, the day, the platform, the shell, and the stack, every value checked against the closed vocabulary.',
+  frameworks: 'The frameworks of the project, each from a closed public list; never a path or a name of yours.',
+  harness: 'Which harness wrote the session, one of a closed list.',
+  harnessVersion: 'The harness version, only when it is a public release; else the literal placeholder.',
+  host: 'The host of a web fetch or search, only when it is on the public list; else null.',
+  id: 'A hash the client computes per account from the account and the session, so a redeposit replaces and two accounts sessions cannot be joined. Never the session id.',
+  identity: 'What a step called, in closed vocabulary: a shell program with its subcommand and flags, an MCP server and tool, a skill, or a web host; null for an action with none.',
+  index: 'The position of a prompt in its transcript, a number; never its text.',
+  input: 'Input tokens in a prompt, a number.',
+  kind: 'The kind of link between two steps, one of a closed list.',
+  languages: 'The programming languages of the project, each from a closed public list.',
+  model: 'The model name, only when it is a public one; else the literal placeholder.',
+  n: 'A number: the position of a tool call in its transcript, or of the step a link points to.',
+  name: 'The name of a package a shell command pulled, only when it is on the public list.',
+  native: 'The name the harness gave the tool, only when it is in this client action table; else the literal placeholder.',
+  output: 'Output tokens in a prompt, a number.',
+  parent: 'The step that spawned this one, a number or null.',
+  platform: 'The operating system family, one of a closed list.',
+  program: 'The program a shell command ran, only when it is on the public list.',
+  prompt: 'Which prompt a tool call belongs to, a number or null.',
+  prompts: 'The prompts of a transcript: each a position, a class, counts, tokens, and a frame; never their words.',
+  pulls: 'The packages a shell command pulled from a registry: the registry, the public package name, and its version.',
+  registry: 'Which registry a pull came from, one of a closed list.',
+  seg: 'A number: the segment of a step, or of the step a link points to.',
+  server: 'The MCP server a call went to, only when it is on the public list.',
+  shell: 'The shell a command ran in, one of a closed list, or null.',
+  side: 'Whether a tool call ran as a side call, true or false.',
+  size: 'A size class of the repository, one of a closed list, or null; never a count of files.',
+  skill: 'The skill a step ran, only when it is on the public list.',
+  spawnedIn: 'The position, among this batch transcripts, of the transcript that spawned this one, or null for the main transcript.',
+  stack: 'The languages, frameworks, and size class of the project.',
+  status: 'Whether a tool call or a step succeeded: ok, error, or none.',
+  steps: 'The steps of a tool call, each an action in closed vocabulary with its cost and links.',
+  sub: 'The subcommand of a shell program, only when it is on the public list for that program; else null.',
+  thinking: 'Thinking tokens in a prompt, a number.',
+  tokens: 'A token count, a number or null.',
+  tool: 'The tool of an MCP call, only when it is on the public list for that server; else the literal placeholder.',
+  tools: 'The tool calls of a transcript, each a position, its status and duration, and its steps; never their targets or arguments.',
+  transcripts: 'The main transcript, then each subagent: its frame, prompts, and tool calls, every value checked against the closed vocabulary before the batch is built.',
+  usage: 'The token counts of a prompt: input, cache write, cache read, output, and thinking.',
+  version: 'The version of a pulled package, only when it is a registry version; else the literal placeholder or null.',
+  wallSec: 'The seconds a prompt took, rounded, or null.',
 };
 
-const fieldsStamp = (fields: readonly string[]): string => createHash('sha256').update(fields.join(',')).digest('hex').slice(0, 8);
+/**
+ * Every field name a batch holds, at any depth, sorted: the rows above. A batch is filed under this list, the skeleton format, and `VOCAB_VERSION`, so one built under an older list, form, or vocabulary is never printed or sent (spec Section 1.4).
+ * A test holds this list equal to the fields of a real batch, so a field added to the batch without its row fails there.
+ */
+export const BATCH_FIELDS: readonly string[] = Object.keys(FIELD_ROWS).sort();
 
-/** The folder name of the batches this client builds now. A folder of any other name holds batches built under an older vocabulary or field list. */
-export const currentStamp = (fields: readonly string[] = BATCH_FIELDS): string => `v${VOCAB_VERSION}-${fieldsStamp(fields)}`;
+const fieldsStamp = (fields: readonly string[], format: number): string => createHash('sha256').update(`${String(format)}:${fields.join(',')}`).digest('hex').slice(0, 8);
+
+/** The folder name of the batches this client builds now. A folder of any other name holds batches built under an older vocabulary, field list, or skeleton format. */
+export const currentStamp = (fields: readonly string[] = BATCH_FIELDS, format: number = SKELETON_FORMAT): string => `v${VOCAB_VERSION}-${fieldsStamp(fields, format)}`;
 
 /** One server's outbox: batches are per server, since a printed batch carries that server's credential. */
 export const outboxFolder = (storeDir: string, server: string): string => join(storeDir, 'pool-outbox', contentHash(server));
@@ -187,8 +241,20 @@ export const discardStale = async (outbox: string, stamp: string = currentStamp(
   return count;
 };
 
-/** The top-level field names of a batch. */
+const collect = (value: unknown, into: Set<string>): void => {
+  if (Array.isArray(value)) {
+    for (const entry of value) collect(entry, into);
+  } else if (typeof value === 'object' && value !== null) {
+    for (const [key, entry] of Object.entries(value)) {
+      into.add(key);
+      collect(entry, into);
+    }
+  }
+};
+
+/** Every field name in a batch, at any depth, each once and sorted. */
 export const fieldsOf = (batchBytes: string): string[] => {
-  const parsed: unknown = JSON.parse(batchBytes);
-  return typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed) ? Object.keys(parsed) : [];
+  const names = new Set<string>();
+  collect(JSON.parse(batchBytes), names);
+  return [...names].sort();
 };
