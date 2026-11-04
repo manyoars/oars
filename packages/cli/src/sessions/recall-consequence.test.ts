@@ -102,6 +102,20 @@ describe('recalls in the graph', () => {
     expect(cellsWith([recallAt(1, 'held')])).toEqual(deriveCells(line(tools)).cells);
   });
 
+  it('keeps the step of a shown miss but marks nothing exposed, since it showed no evidence', () => {
+    const miss: Recall = { ...recallAt(0), at: '2026-11-01T09:00:00.000Z', mode: 'pull', answer: { ...recallAt(0).answer, kind: 'miss' } };
+    const base = line(tools);
+    const graph = recallGraphOf(base, deriveConsequences(base, [miss]));
+    const cells = deriveCells(base, graph).cells;
+    const pullRead = cells.find((cell) => cell.motifId === shapeId([{ action: 'recall.pull', identity: null }, { action: 'file.read', identity: null }]));
+    expect(pullRead).toMatchObject({ sessions: 1 });
+    // The pull's own step stays, so only a motif holding it is exposed; the calls its window covers are not.
+    expect(cells.filter((cell) => cell.exposed).every((cell) => cell.motifId.length > 0 && cell === pullRead)).toBe(true);
+    expect(cells.find((cell) => cell.motifId === shapeId([{ action: 'file.read', identity: null }]))?.exposed).toBe(false);
+    expect(cells.find((cell) => cell.motifId === shapeId([{ action: 'file.edit', identity: null }]))?.exposed).toBe(false);
+    expect(graph.exposedPrompt('s', 0)).toBe(false);
+  });
+
   it('places a recall before a line with no earlier call, and enters a pull as recall.pull', () => {
     const pull: Recall = { ...recallAt(0), at: '2026-11-01T09:00:00.000Z', mode: 'pull' };
     expect(cellsWith([pull]).find((cell) => cell.motifId === shapeId([{ action: 'recall.pull', identity: null }, { action: 'file.read', identity: null }]))?.exposed).toBe(true);

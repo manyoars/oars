@@ -77,8 +77,20 @@ describe('MCP server', () => {
       expect(textOf(await ask(staged, { family: 'recovery', class: 'edit-verify', sinceDays: 30 }))).toContain('1 error');
       expect(textOf(await ask(staged, { family: 'recovery', class: 'mixed' }))).toBe(MISS_TEXT);
       expect(textOf(await ask(staged, { family: 'recovery', sinceDays: 1 }))).toBe(MISS_TEXT);
-      await ask(staged, { family: 'recovery', sinceDays: 1.5 });
-      expect((await readRecalls(staged.storeDir)).map((recall) => recall.query.slice)).toEqual([{ cls: 'edit-verify', sinceDays: 30 }, { cls: 'mixed' }, { sinceDays: 1 }, {}]);
+      expect((await readRecalls(staged.storeDir)).map((recall) => recall.query.slice)).toEqual([{ cls: 'edit-verify', sinceDays: 30 }, { cls: 'mixed' }, { sinceDays: 1 }]);
+    });
+
+    it('refuses a sinceDays that is not a positive integer and a class that is not a string, on any form, as invalid params with nothing recorded', async () => {
+      const staged = seeded();
+      const refuse = async (args: object): Promise<unknown> =>
+        field(field(await handleMessage(staged.runtime, now, { jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: TOOL_NAME, arguments: args } }), 'error'), 'code');
+      for (const sinceDays of [0, -1, 1.5, '3', null]) {
+        expect(await refuse({ family: 'recovery', sinceDays })).toBe(-32602);
+        expect(await refuse({ text: 'x', sinceDays })).toBe(-32602);
+        expect(await refuse({ error: 'x', sinceDays })).toBe(-32602);
+      }
+      for (const cls of [5, true, null, ['mixed']]) expect(await refuse({ family: 'recovery', class: cls })).toBe(-32602);
+      expect(await readRecalls(staged.storeDir)).toEqual([]);
     });
 
     it('states narrowed counts when the error, path, and class inputs and the days narrow a pull', async () => {
