@@ -89,6 +89,14 @@ describe('checkCall on a shell command', () => {
     ['npm install https://registry.npmjs.org/@scope/x/-/x-1.0.0.tgz', ['npm-package url-install https://registry.npmjs.org/@scope/x/-/x-1.0.0.tgz url']],
     ['pip install "foo @ https://host.example/x.whl"', ['python-package url-install https://host.example/x.whl url']],
     ['pip install git+https://github.com/org/repo@main', ['python-package url-install https://github.com/org/repo url']],
+    // A git URL's ref is what follows its first `@` past the host, so a ref that holds a slash is dropped and never part of the name.
+    ['pip install git+https://github.com/org/repo@feature/secret', ['python-package url-install https://github.com/org/repo url']],
+    ['pip install "git+https://host.example/org/repo@/secret/home/x"', ['python-package url-install https://host.example/org/repo url']],
+    ['npm install git+https://host.example/org/repo.git@/secret/home/x', ['npm-package url-install https://host.example/org/repo.git url']],
+    ['npm install git+ssh://host.example/org/repo@/secret/home/x', ['npm-package url-install ssh://host.example/org/repo url']],
+    ['npm install ssh://host.example:org/repo@/secret/home/x', ['npm-package url-install ssh://host.example:org/repo url']],
+    ['npx git+https://host.example/org/repo@/secret/home/x', ['npm-package url-fetch-and-run https://host.example/org/repo url']],
+    ['uv add git+https://host.example/org/repo@/secret/home/x', ['python-package url-install https://host.example/org/repo url']],
     ['pip install https://example.test/a-1.0.tar.gz', ['python-package url-install https://example.test/a-1.0.tar.gz url']],
     ['pip install -e git+https://github.com/org/repo#egg=repo', ['python-package url-install https://github.com/org/repo url']],
     ['npx github:org/repo', ['npm-package url-fetch-and-run github:org/repo url']],
@@ -198,6 +206,11 @@ describe('checkCall on a shell command', () => {
     // A path-shaped word that fits `org/repo` or `host:path` by its slashes and colon alone.
     ['npm install .secret/pkg', ['local-path']],
     ['npx .secret/tool', ['local-path']],
+    // A plain URL has no ref past its path: an `@` that ends a segment or sits inside one is a path, not a name.
+    ['npx skills add https://host.example/org/repo@/secret/home', ['local-path']],
+    ['npm install https://host.example/x.tgz@/secret/home/x', ['local-path']],
+    ['pip install https://host.example/org/repo@/secret/home/x', ['local-path']],
+    ['npm install https://github.com/org/repo@feature/secret', ['local-path']],
     ['npm install sub/..', ['local-path']],
     ['npm install C:secret/x', ['local-path']],
     ['npm install foo@C:secret/x', ['local-path']],
@@ -449,6 +462,10 @@ describe('admitName, the one point every recorded name passes', () => {
     // The widened URL grammar keeps its edges: a scp spelling after `ssh://`, an `@` in a path, and a host of its own.
     ['npm-package', 'url-install', 'ssh://<email>:npm/cli.git', named('ssh://<email>:npm/cli.git')],
     ['npm-package', 'url-install', 'https://registry.npmjs.org/@scope/x/-/x-1.0.0.tgz', named('https://registry.npmjs.org/@scope/x/-/x-1.0.0.tgz')],
+    ['npm-package', 'url-install', 'https://host.example/org/repo@/secret/home', unread('local-path')],
+    ['npm-package', 'url-install', 'https://host.example/org/repo@', unread('local-path')],
+    ['npm-package', 'url-install', 'https://host.example/org/repo@feature/secret', unread('local-path')],
+    ['npm-package', 'url-install', 'git+https://host.example/org/repo@/secret', unread('local-path')],
     ['npm-package', 'url-install', 'https://host.example:8080/x.tgz', named('https://host.example:8080/x.tgz')],
     ['npm-package', 'url-install', 'https://host.example:secret/x', unread('local-path')],
     // A mask and a variable keep the shapes they have.
@@ -470,19 +487,22 @@ describe('admitName, the one point every recorded name passes', () => {
     expect(bash('npm install foo@^1.2.0 bar@next').crossings.map((c) => c.version)).toEqual(['^1.2.0', 'next']);
   });
 
-  it.each<[string, string | null]>([
-    ['npm install "https://host.example/x.tgz#/secret/home/x"', null],
-    ['pip install "git+https://host.example/org/repo#subdirectory=secret/home&egg=x"', null],
-    ['npm install "https://host.example/x.tgz#token=secret"', null],
-    ['npm install "https://host.example/x.tgz#v1?token=secret"', null],
-    ['npm install "https://host.example/x.tgz#sha256=abc"', null],
-    ['npm install "https://host.example/x.tgz#semver:^1.2.0"', 'semver:^1.2.0'],
-    ['npm install git+https://github.com/org/repo.git#v1', 'v1'],
-    ['pip install git+https://github.com/org/repo@main', 'main'],
-    ['pip install git+https://github.com/org/repo@feature/x', null],
-  ])('keeps a URL ref only when it is a plain ref, and the crossing either way: %s', (command, version) => {
+  it.each<[string, string, string | null]>([
+    ['npm install "https://host.example/x.tgz#/secret/home/x"', 'https://host.example/x.tgz', null],
+    ['pip install "git+https://host.example/org/repo#subdirectory=secret/home&egg=x"', 'https://host.example/org/repo', null],
+    ['npm install "https://host.example/x.tgz#token=secret"', 'https://host.example/x.tgz', null],
+    ['npm install "https://host.example/x.tgz#v1?token=secret"', 'https://host.example/x.tgz', null],
+    ['npm install "https://host.example/x.tgz#sha256=abc"', 'https://host.example/x.tgz', null],
+    ['npm install "https://host.example/x.tgz#semver:^1.2.0"', 'https://host.example/x.tgz', 'semver:^1.2.0'],
+    ['npm install git+https://github.com/org/repo.git#v1', 'https://github.com/org/repo.git', 'v1'],
+    ['pip install git+https://github.com/org/repo@main', 'https://github.com/org/repo', 'main'],
+    ['pip install git+https://github.com/org/repo@feature/x', 'https://github.com/org/repo', null],
+    ['pip install git+https://github.com/org/repo@feature/secret', 'https://github.com/org/repo', null],
+    ['pip install "git+https://host.example/org/repo@/secret/home/x"', 'https://host.example/org/repo', null],
+  ])('keeps a URL ref only when it is a plain ref, and the crossing either way: %s', (command, name, version) => {
     const { crossings } = bash(command);
     expect(crossings).toHaveLength(1);
+    expect(crossings[0]?.name).toBe(name);
     expect(crossings[0]?.version).toBe(version);
   });
 

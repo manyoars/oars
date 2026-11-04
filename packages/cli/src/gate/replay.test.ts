@@ -180,6 +180,11 @@ describe('a crossing record', () => {
       bash(11, 't11', 'pip install "git+https://host.example/org/repo#subdirectory=secret/home&egg=x"'),
       bash(12, 't12', 'npm create /secret'),
       bash(13, 't13', 'npm install .secret/pkg'),
+      bash(14, 't14', 'pip install "git+https://host.example/org/repo@/secret/home/x"'),
+      bash(15, 't15', 'npm install git+https://host.example/org/repo.git@/secret/home/x'),
+      bash(16, 't16', 'pip install git+https://github.com/org/repo@feature/secret'),
+      bash(17, 't17', 'npx skills add https://host.example/org/repo@/secret/home'),
+      bash(18, 't18', 'npm install https://host.example/x.tgz@/secret/home/x'),
     ]);
     await run([REPO]);
     const text = await readFile(join(storeDir, 'crossings.jsonl'), 'utf8');

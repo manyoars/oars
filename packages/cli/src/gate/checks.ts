@@ -147,6 +147,14 @@ const versionFormOf = (version: string | null): VersionForm => {
   return 'tag';
 };
 
+const GIT_URL = /^(?:git\+|ssh:\/\/|git:\/\/)/i;
+/** The first `@` after a URL's host that does not directly follow a `/`, which would be a scope; -1 when there is none. */
+const firstRefAt = (stem: string): number => {
+  const ref = /(?<!\/)@/g;
+  ref.lastIndex = Math.max(stem.indexOf('/', stem.indexOf('://') + 3), 0);
+  return ref.exec(stem)?.index ?? -1;
+};
+
 /** A query can hold a signed token no pattern knows, and a ref after `#` is the version; neither belongs in a name. */
 const urlSpec = (text: string): Spec => {
   const bare = text.replace(/^git\+/, '');
@@ -155,10 +163,12 @@ const urlSpec = (text: string): Spec => {
   const ref = hash < 0 ? null : bare.slice(hash + 1);
   const query = end.indexOf('?');
   const stem = query < 0 ? end : end.slice(0, query);
-  // A git URL's `@ref` follows the path; an `@` in the host part is credentials, already masked.
-  const at = stem.lastIndexOf('@');
+  // A git URL's `@ref` follows the path and may hold a slash (`@feature/x`), so it starts at the first `@` past the host that is not a
+  // scope's (`/@scope`). Any other URL has a ref only after its last slash. An `@` in the host part is credentials, already masked.
+  const git = GIT_URL.test(text);
+  const at = git ? firstRefAt(stem) : stem.lastIndexOf('@');
   const slash = stem.lastIndexOf('/');
-  const hasRef = at > slash && slash > stem.indexOf('://') + 2;
+  const hasRef = git ? at >= 0 : at > slash && slash > stem.indexOf('://') + 2;
   const name = hasRef ? stem.slice(0, at) : stem;
   const stated = hasRef ? stem.slice(at + 1) : ref === null || ref.startsWith('egg=') ? null : ref;
   return { kind: 'named', name, version: stated, versionForm: 'url', url: true };
@@ -489,12 +499,14 @@ const PLAIN = String.raw`(?!\.{1,2}(?:/|$))`;
 const OWNER = '[A-Za-z0-9][A-Za-z0-9_-]*';
 const MASK = '<(?:secret|email|org-domain)>';
 const HOST = String.raw`(?:[A-Za-z0-9.-]|${MASK})+`;
-const URL_CHARS = String.raw`(?:[A-Za-z0-9._~%+@-]|${MASK})*`;
+const URL_CHARS = String.raw`(?:[A-Za-z0-9._~%+-]|${MASK})*`;
+/** An `@` in a path opens a segment (a scope, `/@scope`) and is followed by a name: one that ends a segment or sits inside one is a ref or a path. */
+const URL_SEGMENT = String.raw`/${PLAIN}(?:@(?![/@]|$))?${URL_CHARS}`;
 /**
  * A URL keeps a scheme, a host, and a path: no credentials, query, or fragment. `ssh://` and `git://` also take npm's scp spelling,
  * `host:owner/repo`, where an `https` URL takes only a port. No segment of the path is `.` or `..`.
  */
-const URL_NAME = new RegExp(String.raw`^(?:https?://${HOST}(?::\d+)?|(?:ssh|git)://${HOST}(?::${OWNER}(?:\.[A-Za-z0-9_-]+)*)?)(?:/${PLAIN}${URL_CHARS})*$`, 'i');
+const URL_NAME = new RegExp(String.raw`^(?:https?://${HOST}(?::\d+)?|(?:ssh|git)://${HOST}(?::${OWNER}(?:\.[A-Za-z0-9_-]+)*)?)(?:${URL_SEGMENT})*$`, 'i');
 /** `host:path`, with a host of at least two characters, so `C:secret/x` is a drive and never a host. */
 const SCP_NAME = new RegExp(String.raw`^(?=[^:]{2})${HOST}:${PLAIN}${SEGMENT}(?:/${PLAIN}${SEGMENT})*$`);
 const HOSTED_NAME = new RegExp(String.raw`^(?:github|gitlab|bitbucket|gist):${PLAIN}${SEGMENT}(?:/${PLAIN}${SEGMENT})?$`);
