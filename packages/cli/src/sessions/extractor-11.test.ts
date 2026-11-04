@@ -202,6 +202,33 @@ describe('the shell form projected from the account store (Q5)', () => {
     expect(projected(['"IF" acme-deploy'])[0]?.programs).not.toEqual([PRIVATE]);
   });
 
+  // Register row A53: a program whose basename holds a space cannot be told from a program and a word in `run`, which joins them with one space.
+  it('projects a program whose basename holds a space as private, never as the program and subcommand it spells', () => {
+    const form = '"/opt/my tools/git push" --x';
+    expect(projected([form])).toEqual([{ commands: [PRIVATE_PROGRAM], programs: [PRIVATE] }]);
+    expect(projectShell(vocab, form, makeRedactor()).programs).toEqual([PRIVATE]);
+    // The stored word carries the boundary the line `run` cannot: no name from the basename is kept at all.
+    const [call] = captured([form]);
+    expect(call?.segments?.map((segment) => segment.run)).toEqual(['<literal>']);
+    expect(JSON.stringify(call)).not.toContain('my tools');
+    // A directory that holds the space is not the program: `/opt/my tools/git push` as two words is still git.
+    expect(projected(['"/opt/my tools/git" push'])[0]?.commands).toEqual([one('git', 'push', [])]);
+  });
+
+  it('projects a program cut at the 30-character limit as private, because the stored word may be the front of a longer private one', () => {
+    const listed = 'systemd-tty-ask-password-agent';
+    expect(vocab.programs.has(listed) || PUBLIC_PROGRAMS.has(listed)).toBe(true);
+    expect(listed).toHaveLength(30);
+    for (const form of [`${listed}-acme`, `${listed}-acme --x`, `sudo ${listed}-acme`]) {
+      expect(projected([form]), form).toEqual([{ commands: [PRIVATE_PROGRAM], programs: [PRIVATE] }]);
+      expect(projectShell(vocab, form, makeRedactor()).programs, form).toEqual([PRIVATE]);
+    }
+    // The listed name itself, uncut and exactly as long as the limit, is also read as private: a stored word this long cannot be told from a cut one.
+    expect(projected([listed])).toEqual([{ commands: [PRIVATE_PROGRAM], programs: [PRIVATE] }]);
+    // A shorter listed name still pools.
+    expect(projected(['git status'])[0]?.programs).toEqual(['git']);
+  });
+
   it('projects a Bash step whose identity is null as private', () => {
     // Capture gives a shell call only a shell identity, so the step is rewritten to the one other shape a stored step can hold.
     const [call] = captured(['git status']);
