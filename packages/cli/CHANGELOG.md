@@ -4,6 +4,13 @@ All notable changes to `@manyoars/oars`. Versions follow semver; a release is th
 
 ## Unreleased
 
+- `oars gate hook` makes the lock for a fill helper in the same step that starts it, so a hook ended by its deadline can no longer leave a lock with no helper behind it, which kept the name unasked for five minutes.
+- `oars gate hook` writes the row the deadline keeps before it stops the ask, so a slow stop (a `taskkill` on Windows) cannot cost the row.
+- `oars gate hook`: the deadline writes nothing when the hook's own append has already put the record on disk and then stalled; another hook's row in the same file never makes it skip its own.
+- `oars gate hook` takes its lock back, before the process can end, when the helper it started cannot start (the start throws, or the child reports an error), so the next sight asks about the name again instead of waiting out the five-minute lock.
+- A language share on the wire may name `other`, the name a touched file with an extension off the pinned list gets, so a session that touched a `.md` file is no longer refused; the frame's `languages` list stays closed to the pinned names. The session store moves to extractor version 12: a derived prompt carries its strata, and a store at 11 re-derives from its log with no transcript read.
+- `oars pool deposit` sends each stack language with its share bucket (`languageShares`, one of `0`, `under-10`, `10-50`, `over-50`; a share outside the list is dropped and its language still goes) and each prompt's `explore` as a `calls` bucket (the `count` edges, then doubling to over 4,096) in place of the zero the deposit derived, and the exact count never leaves. The pool counts two strata of their own beside the single ones, (language, share) and (repo size, explore bucket), each held to five accounts and served only in the bundle's `strata`. Provider errors in `live` are not built yet: a skeleton step carries no `errorCode`.
+
 ## 0.3.0
 
 Changes since 0.2.0. Four command groups are new (`keys`, `sessions`, `gate`, `pool`); `login` and `logout` keep their flags.

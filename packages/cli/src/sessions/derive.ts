@@ -198,6 +198,7 @@ export const deriveSession = (capture: SessionCapture, redact: Redactor): Derive
       usage: prompt.usage,
       recovery,
       explore: sequence.filter((tool) => EXPLORE.has(tool)).length,
+      strata: prompt.strata,
       act: sequence.filter((tool) => ACT.has(tool)).length,
       bigrams,
       contextFingerprint: prompt.promptFingerprint,

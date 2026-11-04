@@ -36,8 +36,8 @@ const captured = (commands: readonly string[] = COMMANDS): ToolObservation[] =>
   captureSession({ text: shellSession(commands), session: 's', project: 'p', rev: 1, at: 'x', bytes: 1, redact: makeRedactor(), salt: 'salt', sid: null, repoRoot: () => null, runtime: { oars: '1.2.3', node: 'v99', os: 'plan9' } }).tools;
 
 describe('EXTRACTOR_VERSION 11', () => {
-  it('is 11, the version that moves agentType, keys, and frameId to class A', () => {
-    expect(EXTRACTOR_VERSION).toBe('11');
+  it('is at least 11, the version that moves agentType, keys, and frameId to class A', () => {
+    expect(Number(EXTRACTOR_VERSION)).toBeGreaterThanOrEqual(11);
   });
 
   it('re-derives a store written at 10 from its log alone, keeping every class A field it held', async () => {
