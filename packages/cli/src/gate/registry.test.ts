@@ -6,6 +6,8 @@ const ran = (code: number | null, stdout = '', stderr = ''): ManagerRun => ({ co
 describe('reading a manager answer', () => {
   it.each<[string, ManagerRun, object]>([
     ['found', ran(0, '{"dist-tags.latest":"5.1.0","time.created":"2012-11-30T00:00:00.000Z"}'), { state: 'found', latest: '5.1.0', created: '2012-11-30T00:00:00.000Z' }],
+    ['found, wrapped in a one-element array (npm 12 with two fields)', ran(0, '[\n  {\n    "dist-tags.latest": "7.0.2",\n    "time.created": "2012-10-01T15:35:39.553Z"\n  }\n]\n'), { state: 'found', latest: '7.0.2', created: '2012-10-01T15:35:39.553Z' }],
+    ['an empty array', ran(0, '[]'), { state: 'unreachable' }],
     ['not found on stdout', ran(1, '{"error":{"code":"E404"}}'), { state: 'not-found' }],
     ['not found on stderr', ran(1, '', 'npm error code E404'), { state: 'not-found' }],
     ['a failed run', ran(1, '', 'npm error network'), { state: 'unreachable' }],

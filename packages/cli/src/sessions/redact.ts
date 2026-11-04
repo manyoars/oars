@@ -2,7 +2,7 @@
 // long random-looking token than let a secret through. Pattern rules first, then emails, the organization domains the
 // operator names, and last an entropy rule for long mixed-case tokens no pattern knew.
 
-const PATTERNS: ReadonlyArray<readonly [RegExp, string]> = [
+export const PATTERNS: ReadonlyArray<readonly [RegExp, string]> = [
   [/-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z ]*PRIVATE KEY-----|$)/g, '<secret>'],
   [/\b(?:AKIA|ASIA)[A-Z0-9]{16}\b/g, '<secret>'],
   [/\bgh[pousr]_[A-Za-z0-9]{20,}\b/g, '<secret>'],

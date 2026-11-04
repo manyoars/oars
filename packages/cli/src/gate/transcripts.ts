@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import type { Allow } from '../sessions/allow.js';
 import { INJECTED_TAGS, isErrorResult, isObj, LEADING_TAG, resultText, type Obj } from '../sessions/extract.js';
 import type { Redactor } from '../sessions/redact.js';
+import { SOURCES } from '../sessions/sources.js';
 import { listDir, logLines, sessionFolders, subagentFiles } from '../sessions/store.js';
 import { checkCall, type Crossing, type Removal, type UnreadShape } from './checks.js';
 import { PERMISSIONS, type Miss, type Origin, type Permission, type Status } from './record.js';
@@ -15,9 +16,6 @@ export interface TranscriptFile {
   /** The subagent transcript's own name; null on a main transcript. */
   agent: string | null;
 }
-
-/** Cursor's history has no transcript files, and `raw/` holds none of it. */
-const CURSOR_SOURCE = 'cursor';
 
 const projectTranscripts = async (folder: string, project: string, seen: Set<string>): Promise<TranscriptFile[]> => {
   const found: TranscriptFile[] = [];
@@ -41,7 +39,8 @@ export const discover = async (roots: readonly string[], allow: Allow): Promise<
   const files: TranscriptFile[] = [];
   let unreadable = 0;
   for (const root of roots) {
-    const projects = (await listDir(root)).filter((entry) => entry.isDirectory() && entry.name !== CURSOR_SOURCE && allow.allows(entry.name));
+    // Replay reads only the harness's transcript format: a source-table folder (Cursor, Codex) is not that format, and a project folder is never named for one.
+    const projects = (await listDir(root)).filter((entry) => entry.isDirectory() && !SOURCES.some((source) => source.name === entry.name) && allow.allows(entry.name));
     for (const project of projects) {
       try {
         files.push(...(await projectTranscripts(join(root, project.name), project.name, seen)));
@@ -107,7 +106,8 @@ const REFUSED = /^The user doesn't want to (?:proceed|take)/;
 const NOT_FOUND: readonly RegExp[] = [
   /\bE404\b|404 Not Found|is not in this registry|could not determine executable/i,
   /No matching distribution|Could not find a version|404 Client Error|Package .{0,200} not found/i,
-  /No such tool|Unknown tool|server .{0,200} not (?:found|connected)/i,
+  // The harness says "No such tool available". A server's own "unknown tool" names one of its actions (a batch step), so the server exists.
+  /No such tool available|server .{0,200} not (?:found|connected)/i,
   /Unknown skill|skill .{0,200} not found/i,
 ];
 
@@ -235,7 +235,7 @@ export interface Origins {
   prompted: Set<string>;
 }
 
-export const readOrigins = async (file: string, firstLines: ReadonlyMap<string, number>): Promise<Origins> => {
+export const readOrigins = async (file: string, firstLines: ReadonlyMap<string, number>, servers: ReadonlySet<string>): Promise<Origins> => {
   const origins = new Map<string, Origin>();
   const prompted = new Set<string>();
   const byCanon = new Map<string, string[]>();
@@ -245,7 +245,15 @@ export const readOrigins = async (file: string, firstLines: ReadonlyMap<string, 
     .map(patternOf)
     .join('|');
   // Not inside a longer word or a path: `lib` is neither `lib-extra` nor `other/lib`, while `/lib` is how a skill is typed.
-  const words = new RegExp(`(?<![\\w@.-])(?<![\\w.-]/)(?:${alternatives})(?![\\w-]|\\.\\w)`, 'gi');
+  // An MCP server reaches the agent only as `mcp__<server>__<tool>`, which that rule refuses (`_` joins words), so that spelling is a mention too,
+  // but only of a name that crossed as a server: a package or skill sharing a listed server's name is not that server. With no server the branch is
+  // left out, since an empty alternation matches everywhere.
+  const serverNames = [...servers]
+    .sort((one, two) => two.length - one.length)
+    .map(patternOf)
+    .join('|');
+  const serverBranch = serverNames === '' ? '' : `|(?<=(?<!\\w)mcp__)(?:${serverNames})(?=__)`;
+  const words = new RegExp(`(?<![\\w@.-])(?<![\\w.-]/)(?:${alternatives})(?![\\w-]|\\.\\w)${serverBranch}`, 'gi');
   const last = Math.max(...firstLines.values());
   const tools = new Map<string, string>();
   let position = -1;

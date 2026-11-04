@@ -155,6 +155,27 @@ describe('the Codex table', () => {
   });
 });
 
+describe('the Copilot table', () => {
+  it.each([
+    ['powershell', 'shell.exec'],
+    ['local_shell', 'shell.exec'],
+    ['bash', 'shell.exec'],
+    ['apply_patch', 'file.edit'],
+    ['str_replace_editor', 'file.edit'],
+    ['edit', 'file.edit'],
+    ['task', 'agent.spawn'],
+    ['web_fetch', 'web.fetch'],
+  ] as const)('maps %s to %s and keeps the name', (native, action) => {
+    expect(actionOf(ACTION_TABLES.copilot, native)).toEqual({ action, native });
+  });
+
+  it('names the shell for bash and powershell only', () => {
+    expect(shellOf(ACTION_TABLES.copilot, 'bash')).toBe('bash');
+    expect(shellOf(ACTION_TABLES.copilot, 'powershell')).toBe('powershell');
+    expect(shellOf(ACTION_TABLES.copilot, 'shell')).toBeNull();
+  });
+});
+
 describe('every table', () => {
   it.each(Object.entries(ACTION_TABLES))('%s holds only canonical actions', (_harness, table) => {
     for (const action of Object.values(table.rows)) expect(CANONICAL_ACTIONS).toContain(action);
