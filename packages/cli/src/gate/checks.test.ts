@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { makeRedactor } from '../sessions/redact.js';
 import { shellCommands } from '../sessions/extract.js';
-import { checkCall, readWords, CROSSING_CLASSES, CROSSING_FORMS, UNREAD_SHAPES, type VersionForm } from './checks.js';
+import { admitName, checkCall, readWords, CROSSING_CLASSES, CROSSING_FORMS, UNREAD_SHAPES, type VersionForm } from './checks.js';
 
 const redact = makeRedactor();
 const bash = (command: string) => checkCall({ tool: 'Bash', input: { command } }, redact);
@@ -59,6 +59,7 @@ describe('checkCall on a shell command', () => {
     ['npx --package=typescript tsc --noEmit', ['npm-package fetch-and-run typescript unstated']],
     ['npx -p one -p two run-it', ['npm-package fetch-and-run one unstated', 'npm-package fetch-and-run two unstated']],
     ['npm exec -- prettier .', ['npm-package fetch-and-run prettier unstated']],
+    ['npm install --globalconfig sub/.npmrc x', ['npm-package install x unstated']],
     ['pnpm dlx create-next-app@latest', ['npm-package fetch-and-run create-next-app tag']],
     ['yarn dlx sort-package-json', ['npm-package fetch-and-run sort-package-json unstated']],
     ['bunx cowsay', ['npm-package fetch-and-run cowsay unstated']],
@@ -161,6 +162,23 @@ describe('checkCall on a shell command', () => {
     ['pip install file:///home/someone/private/x.whl', ['local-path']],
     ['pip install git+file:///home/someone/private/repo', ['local-path']],
     ['uvx --from file:///home/someone/private/x tool', ['local-path']],
+    // The same behind a package name, in every spelling the managers take: the word is not a name, and no path is kept.
+    ['npm install foo@file:///secret/home/x', ['local-path']],
+    ['npm install foo@file:../secret/x', ['local-path']],
+    ['npm install foo@git+file:///secret/home/x', ['local-path']],
+    ['yarn add foo@file:/secret/x', ['local-path']],
+    ['bun add foo@file:./secret/x', ['local-path']],
+    ['pnpm add foo@link:../secret/x', ['local-path']],
+    ['pnpm add foo@workspace:*', ['local-path']],
+    ['pip install foo@file:///secret/home/x', ['local-path']],
+    ['pip install "foo @ file:///secret/home/x.whl"', ['local-path']],
+    ['uv add "foo @ file:///secret/home/x"', ['local-path']],
+    ['uvx --from "foo @ file:///secret/home/x" tool', ['local-path']],
+    ['uv run --with "foo @ file:///secret/home/x" s.py', ['local-path']],
+    ['npm exec foo@file:///secret/home/x', ['local-path']],
+    ['npm create file:///secret/home/x', ['local-path']],
+    ['npx skills add git+file:///secret/home/x', ['local-path']],
+    ['npx skills add file:///secret/home/x', ['local-path']],
     // The redactor reads an alias's `name@1.2.3` as an email, as it does in capture: a mask is not a name.
     ['npm install alias@npm:real-name@2.0.0', ['masked-name']],
     ['pip install someone@example.test', ['masked-name']],
@@ -246,6 +264,7 @@ describe('checkCall on a shell command', () => {
     ['Push-Location sub; Pop-Location; npm install x', false],
     ['pushd sub && npm install x', false],
     ['npm install --globalconfig=sub/.npmrc x', false],
+    ['npm install --globalconfig sub/.npmrc x', false],
     ['UV_INDEX_URL=https://private.example/simple uvx tool', false],
   ])('marks whether the registry a command would contact is the default one: %s', (command, asked) => {
     expect(bash(command).crossings.map((crossing) => crossing.registryAsked)).toEqual([asked]);
@@ -279,10 +298,11 @@ describe('checkCall on a shell command', () => {
     expect(bash('npm uninstall').removals).toEqual([]);
   });
 
-  it('masks a secret in a URL before it can be a name', () => {
-    const [crossing] = bash('pip install git+https://user:hunter2hunter2@example.test/org/repo').crossings;
-    expect(crossing?.name).not.toContain('hunter2');
-    expect(crossing?.name).toContain('<secret>');
+  it('keeps no credentials of a URL in its name, masked or not', () => {
+    expect(bash('pip install git+https://user:hunter2hunter2@example.test/org/repo').crossings[0]?.name).toBe('https://example.test/org/repo');
+    expect(bash('npm install https://user:secret@host.example/x.tgz?token=secret').crossings[0]?.name).toBe('https://host.example/x.tgz');
+    expect(bash('npm install git+ssh://git@host.example/org/repo.git').crossings[0]?.name).toBe('ssh://<email>/org/repo.git');
+    expect(bash('npm install git@host.example:org/repo.git').crossings[0]?.name).toBe('<email>:org/repo.git');
   });
 
   it('drops the query from a URL name, since a token can sit there unlabeled', () => {
@@ -346,6 +366,73 @@ describe('the closed vocabulary', () => {
   it('holds exactly these classes, forms, and unread shapes', () => {
     expect(CROSSING_CLASSES).toEqual(['npm-package', 'python-package', 'mcp-server', 'skill']);
     expect(CROSSING_FORMS).toEqual(['install', 'url-install', 'fetch-and-run', 'url-fetch-and-run', 'mcp-call', 'skill-call']);
-    expect(UNREAD_SHAPES).toEqual(['manifest-install', 'local-path', 'variable-name', 'masked-name', 'pipe-to-shell', 'behind-xargs', 'harness-registration']);
+    expect(UNREAD_SHAPES).toEqual(['manifest-install', 'local-path', 'variable-name', 'masked-name', 'pipe-to-shell', 'behind-xargs', 'harness-registration', 'unreadable-name']);
+  });
+});
+
+describe('admitName, the one point every recorded name passes', () => {
+  type Held = Parameters<typeof admitName>;
+  const named = (name: string) => ({ kind: 'named', name });
+  const unread = (shape: string) => ({ kind: 'unread', shape });
+
+  it.each<[Held[0], Held[1], string, unknown]>([
+    // Names inside the grammar pass as they are.
+    ['npm-package', 'install', '@scope/name.js', named('@scope/name.js')],
+    ['npm-package', 'fetch-and-run', 'Legacy_Name', named('Legacy_Name')],
+    ['python-package', 'install', 'zope.interface', named('zope.interface')],
+    ['mcp-server', 'mcp-call', 'claude_ai_One-Server', named('claude_ai_One-Server')],
+    ['skill', 'skill-call', 'plugin:one-skill', named('plugin:one-skill')],
+    ['skill', 'install', 'owner/repo', named('owner/repo')],
+    ['npm-package', 'url-install', 'github:org/repo', named('github:org/repo')],
+    ['python-package', 'url-install', 'https://<org-domain>/x/y.git', named('https://<org-domain>/x/y.git')],
+    // A path separator, a scheme, or an `@` past the scope is a path whatever the family.
+    ['npm-package', 'install', 'pkg@https://evil.test/x', unread('local-path')],
+    ['npm-package', 'install', 'sub\\dir\\pkg', unread('local-path')],
+    ['npm-package', 'install', '@scope/name@1.2', unread('local-path')],
+    ['npm-package', 'install', 'C:secret', unread('local-path')],
+    ['npm-package', 'fetch-and-run', 'a/b/c', unread('local-path')],
+    ['python-package', 'install', 'wheelhouse/pkg', unread('local-path')],
+    ['python-package', 'install', 'pkg@host', unread('local-path')],
+    ['mcp-server', 'mcp-call', 'https://host.example', unread('local-path')],
+    ['mcp-server', 'mcp-call', 'a/b', unread('local-path')],
+    ['skill', 'skill-call', '../x', unread('local-path')],
+    ['npm-package', 'url-install', 'ftp://host.example/x', unread('local-path')],
+    // A word that is no name and no path is an unread shape of its own, and never a name.
+    ['npm-package', 'install', 'two words', unread('unreadable-name')],
+    ['npm-package', 'install', 'name?query=1', unread('unreadable-name')],
+    ['npm-package', 'install', '@scope', unread('unreadable-name')],
+    ['npm-package', 'install', '', unread('unreadable-name')],
+    ['python-package', 'install', 'numpy;python_version<3', unread('unreadable-name')],
+    ['python-package', 'install', '-bad', unread('unreadable-name')],
+    ['python-package', 'install', '.hidden', unread('unreadable-name')],
+    ['mcp-server', 'mcp-call', 'bad name', unread('unreadable-name')],
+    ['skill', 'skill-call', 'x'.repeat(300), unread('unreadable-name')],
+    ['npm-package', 'url-install', 'https://host.example/a b', unread('local-path')],
+    ['npm-package', 'url-install', 'a b', unread('unreadable-name')],
+    ['skill', 'install', 'one two', unread('unreadable-name')],
+    // A mask and a variable keep the shapes they have.
+    ['npm-package', 'install', '<secret>', unread('masked-name')],
+    ['mcp-server', 'mcp-call', '<secret>', unread('masked-name')],
+    ['skill', 'skill-call', '$NAME', unread('variable-name')],
+    // A URL keeps a scheme, a host, and a path, and loses what a credential or token could ride in.
+    ['npm-package', 'url-install', 'https://user:secret@host.example/x.tgz?token=secret', named('https://host.example/x.tgz')],
+    ['python-package', 'url-fetch-and-run', 'https://host.example/a/b#sig=1', named('https://host.example/a/b')],
+    ['npm-package', 'url-install', 'git@host.example:org/repo.git', named('host.example:org/repo.git')],
+    ['skill', 'install', 'https://user:pw@host.example/org/repo?x=1', named('https://host.example/org/repo')],
+  ])('%s %s %j', (cls, form, name, expected) => {
+    expect(admitName(cls, form, name)).toEqual(expected);
+  });
+
+  it('refuses a version that holds a path', () => {
+    expect(bash('npm install foo@../secret/dir').crossings).toEqual([]);
+    expect(bash('npm install foo@../secret/dir').unread).toEqual(['local-path']);
+    expect(bash('npm install foo@^1.2.0 bar@next').crossings.map((c) => c.version)).toEqual(['^1.2.0', 'next']);
+  });
+
+  it('reaches every crossing and removal a call yields', () => {
+    expect(checkCall({ tool: 'mcp__a/b__go', input: {} }, redact)).toEqual({ crossings: [], unread: ['local-path'], removals: [] });
+    expect(checkCall({ tool: 'Skill', input: { skill: '../x' } }, redact)).toEqual({ crossings: [], unread: ['local-path'], removals: [] });
+    expect(bash('npm install "two words"').unread).toEqual(['unreadable-name']);
+    expect(bash('npm uninstall "two words" real').removals).toEqual([{ class: 'npm-package', name: 'real' }]);
   });
 });

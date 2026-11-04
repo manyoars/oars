@@ -171,6 +171,9 @@ describe('a crossing record', () => {
       bash(2, 't2', 'npm install file:///secret/home/x'),
       bash(3, 't3', 'pip install git+file:///secret/home/repo'),
       bash(4, 't4', 'uvx --from file:///secret/home/x tool'),
+      bash(5, 't5', 'npm install foo@file:///secret/home/x'),
+      bash(6, 't6', 'pip install "foo @ file:///secret/home/x.whl"'),
+      bash(7, 't7', 'npm install https://user:secret@host.example/x.tgz?token=secret'),
     ]);
     await run([REPO]);
     const text = await readFile(join(storeDir, 'crossings.jsonl'), 'utf8');

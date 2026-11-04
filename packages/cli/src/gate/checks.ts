@@ -11,7 +11,7 @@ export const CROSSING_FORMS = ['install', 'url-install', 'fetch-and-run', 'url-f
 export type CrossingForm = (typeof CROSSING_FORMS)[number];
 
 /** A command that looks like a crossing and states no name to record. Counted, so a report can say what it could not read. */
-export const UNREAD_SHAPES = ['manifest-install', 'local-path', 'variable-name', 'masked-name', 'pipe-to-shell', 'behind-xargs', 'harness-registration'] as const;
+export const UNREAD_SHAPES = ['manifest-install', 'local-path', 'variable-name', 'masked-name', 'pipe-to-shell', 'behind-xargs', 'harness-registration', 'unreadable-name'] as const;
 export type UnreadShape = (typeof UNREAD_SHAPES)[number];
 
 export type VersionForm = 'pinned' | 'range' | 'tag' | 'url' | 'unstated';
@@ -119,7 +119,7 @@ const TOOLS: ReadonlyMap<string, Tool> = new Map<string, Tool>([
 
 /** A flag here owns the next word, which is therefore not a package name. */
 const VALUE_FLAGS: Readonly<Record<Family, ReadonlySet<string>>> = {
-  'npm-package': new Set(['-w', '--workspace', '--registry', '--prefix', '--filter', '-F', '-C', '--dir', '--cache', '--tag', '--cwd', '--loglevel', '--userconfig', '-p', '--package', '-c', '--call', '--omit', '--include', '--save-prefix']),
+  'npm-package': new Set(['-w', '--workspace', '--registry', '--prefix', '--filter', '-F', '-C', '--dir', '--cache', '--tag', '--cwd', '--loglevel', '--userconfig', '--globalconfig', '-p', '--package', '-c', '--call', '--omit', '--include', '--save-prefix']),
   'python-package': new Set(['-r', '--requirement', '-e', '--editable', '-c', '--constraint', '-i', '--index-url', '--extra-index-url', '--index', '--default-index', '-t', '--target', '-f', '--find-links', '--python', '-p', '--from', '--with', '--with-editable', '--with-requirements', '--prefix', '--root', '--group', '--extra', '--only-binary', '--no-binary', '--trusted-host', '--proxy', '--cache-dir', '--timeout', '--suffix', '--pip-args', '--spec', '--channel', '-n', '--name', '-G']),
 };
 
@@ -164,8 +164,11 @@ const urlSpec = (text: string): Spec => {
   return { kind: 'named', name, version: stated, versionForm: 'url', url: true };
 };
 
-/** A `file:` spec holds a path on this machine, which has slashes and `://` like a URL: it is read as a folder before any URL test, so no path becomes a name. */
-const FILE_SPEC = /^(?:git\+)?file:/i;
+/**
+ * A `file:` spec holds a path on this machine, which has slashes and `://` like a URL: it is read as a folder before any URL test, so no
+ * path becomes a name. A name may come before it (`foo@file:...`, `foo @ file:...`), and `link:`, `workspace:`, and `portal:` are folders too.
+ */
+const FILE_SPEC = /^(?:(?:@[^@/\s]+\/)?[^@/\s]+\s*@\s*)?(?:git\+)?(?:file|link|workspace|portal):/i;
 const isUrl = (text: string): boolean => text.includes('://') || text.startsWith('git+') || HOSTED.test(text) || SCP_URL.test(text);
 
 const atVersion = (text: string): { name: string; version: string | null } => {
@@ -325,6 +328,10 @@ const readRun = (reading: Reading, family: Family, words: Words, rest: readonly 
   const [first, sub] = rest;
   const source = sub === 'add' ? skillSource(rest.slice(2)) : undefined;
   if (first !== undefined && atVersion(first).name === 'skills' && source !== undefined) {
+    if (FILE_SPEC.test(source)) {
+      reading.unread.push('local-path');
+      return;
+    }
     const spec = namesNothing(source) ?? (isUrl(source) ? urlSpec(source) : null);
     if (spec?.kind === 'unread') reading.unread.push(spec.shape);
     else if (!LOCAL_SPEC.test(source)) reading.crossings.push({ class: 'skill', form: 'install', name: spec?.name ?? source, version: null, versionForm: 'unstated', program: command.program, statusReports: command.read, registryAsked: true });
@@ -378,7 +385,10 @@ const readTool = (reading: Reading, tool: Tool, command: ShellCommand): void => 
   else if (verb.action === 'remove') readRemoval(reading, family, verb.rest);
   else if (verb.action === 'install') readInstall(reading, family, words, verb.rest, command);
   else if (verb.action === 'run') readRun(reading, family, words, verb.rest, command);
-  else if (verb.rest[0] !== undefined) addSpecs(reading, family, [creatorSpec(verb.rest[0])], 'run', command.program, command.read);
+  else if (verb.rest[0] !== undefined) {
+    if (FILE_SPEC.test(verb.rest[0])) reading.unread.push('local-path');
+    else addSpecs(reading, family, [creatorSpec(verb.rest[0])], 'run', command.program, command.read);
+  }
   // uv's tool forms take extra packages with `--with`; they install beside the tool.
   if (toolForm && (verb.action === 'run' || verb.action === 'install')) addSpecs(reading, family, allFlags(words, '--with'), verb.action, command.program, command.read);
 };
@@ -452,11 +462,79 @@ const checkShell = (input: unknown, redact: Redactor): CallCheck => {
   return reading;
 };
 
+export type Admitted = { kind: 'named'; name: string } | { kind: 'unread'; shape: UnreadShape };
+
+// The grammar of a name, by family. The readers above recognize shapes; these decide what may be written, so a spelling no reader has
+// met yet cannot put a path into `crossings.jsonl` or a question to a registry.
+const NPM_NAME = /^(?:@[a-z0-9][a-z0-9._~-]*\/)?[a-z0-9][a-z0-9._~-]*$/i;
+const PEP508_NAME = /^[a-z0-9](?:[a-z0-9._-]*[a-z0-9])?$/i;
+const MCP_NAME = /^[a-z0-9_][a-z0-9._-]*$/i;
+const SKILL_NAME = /^[a-z0-9_][a-z0-9._:-]*$/i;
+const NAME_LENGTH = 214;
+/** The harness and a skill's author name these in a line or two; nothing near the length of a package's limit. */
+const LABEL_LENGTH = 128;
+const SEGMENT = '[A-Za-z0-9._-]+';
+/** A URL keeps a scheme, a host with an optional port, and a path: no credentials, query, or fragment. */
+const MASK = '<(?:secret|email|org-domain)>';
+const URL_NAME = new RegExp(String.raw`^(?:https?|ssh|git)://(?:[A-Za-z0-9.-]|${MASK})+(?::\d+)?(?:/(?:[A-Za-z0-9._~%+-]|${MASK})*)*$`, 'i');
+const SCP_NAME = new RegExp(`^(?:[A-Za-z0-9.-]|${MASK})+:${SEGMENT}(?:/${SEGMENT})*$`);
+const HOSTED_NAME = new RegExp(`^(?:github|gitlab|bitbucket|gist):${SEGMENT}(?:/${SEGMENT})?$`);
+const SHORTHAND_NAME = new RegExp(String.raw`^(?!\.{1,2}/)${SEGMENT}/${SEGMENT}$`);
+/** A skill source is a hosted `owner/repo`, optionally into a folder, or a URL. */
+const SKILL_SOURCE = new RegExp(String.raw`^(?!\.{1,2}/)${SEGMENT}(?:/${SEGMENT}){1,5}$`);
+/** A version that is not a URL's ref has none of a slash, a backslash, `:`, or `@`: those mark a path or a spec, not a version. */
+const VERSION = /^[^/\\:@]*$/;
+
+const withoutCredentials = (name: string): string =>
+  name
+    .replace(/[?#].*$/, '')
+    .replace(/^([a-z][a-z0-9+.-]*:\/\/)[^/]*@/i, '$1')
+    .replace(/^[^@/\s:]+@(?=[^:/\s]+:)/, '');
+
+/** What a word outside every grammar is: a path when it holds a separator, a scheme, or an `@` past the scope. */
+const shapeOfJunk = (name: string): UnreadShape => {
+  if (VARIABLE.test(name)) return 'variable-name';
+  if (MASKED.test(name)) return 'masked-name';
+  return /[\\/]|^[A-Za-z][A-Za-z0-9+.-]*:/.test(name) || name.slice(1).includes('@') ? 'local-path' : 'unreadable-name';
+};
+
+const grammarOf = (cls: CrossingClass, form: CrossingForm | 'removal', name: string): boolean => {
+  if (name.length > (cls === 'mcp-server' || (cls === 'skill' && form === 'skill-call') ? LABEL_LENGTH : NAME_LENGTH)) return false;
+  if (cls === 'mcp-server') return MCP_NAME.test(name);
+  if (cls === 'skill') return form === 'skill-call' ? SKILL_NAME.test(name) : SKILL_SOURCE.test(name) || URL_NAME.test(name);
+  if (form === 'url-install' || form === 'url-fetch-and-run') return URL_NAME.test(name) || SCP_NAME.test(name) || HOSTED_NAME.test(name) || SHORTHAND_NAME.test(name);
+  return (cls === 'npm-package' ? NPM_NAME : PEP508_NAME).test(name);
+};
+
+/**
+ * The one point every recorded name passes, before it reaches `crossings.jsonl`, a registry question, or a removal match. A name outside
+ * its family's grammar is never written and never asked: it is counted by the shape it has. A URL loses its credentials, query, and
+ * fragment first.
+ */
+export const admitName = (cls: CrossingClass, form: CrossingForm | 'removal', name: string): Admitted => {
+  const urlForm = form === 'url-install' || form === 'url-fetch-and-run' || (cls === 'skill' && form === 'install');
+  const kept = urlForm ? withoutCredentials(name) : name;
+  return grammarOf(cls, form, kept) ? { kind: 'named', name: kept } : { kind: 'unread', shape: shapeOfJunk(kept) };
+};
+
+const admitted = (check: CallCheck): CallCheck => {
+  const unread = [...check.unread];
+  const crossings: Crossing[] = [];
+  for (const crossing of check.crossings) {
+    const verdict = admitName(crossing.class, crossing.form, crossing.name);
+    if (verdict.kind === 'unread') unread.push(verdict.shape);
+    else if (crossing.versionForm !== 'url' && crossing.version !== null && !VERSION.test(crossing.version)) unread.push('local-path');
+    else crossings.push({ ...crossing, name: verdict.name });
+  }
+  const removals = check.removals.filter((removal) => admitName(removal.class, 'removal', removal.name).kind === 'named');
+  return { crossings, unread, removals };
+};
+
 /** The harness's own tool names: a shell call and the two tools that name a pick. */
 const SHELL_TOOLS: ReadonlySet<string> = new Set(['Bash', 'PowerShell']);
 
-/** Names the crossing a tool call makes, if any. The later hook calls this same function with the call it is handed. */
-export const checkCall = (call: ToolCall, redact: Redactor): CallCheck => {
+/** What each tool call states, before the grammar of `admitName`. */
+const readCall = (call: ToolCall, redact: Redactor): CallCheck => {
   if (SHELL_TOOLS.has(call.tool)) return checkShell(call.input, redact);
   if (call.tool.startsWith('mcp__')) {
     const server = call.tool.split('__')[1] ?? '';
@@ -467,3 +545,6 @@ export const checkCall = (call: ToolCall, redact: Redactor): CallCheck => {
   if (skill === undefined) return emptyReading();
   return { ...emptyReading(), crossings: [{ class: 'skill', form: 'skill-call', name: redact(skill), version: null, versionForm: 'unstated', program: 'skill', statusReports: true, registryAsked: true }] };
 };
+
+/** Names the crossing a tool call makes, if any. The later hook calls this same function with the call it is handed. */
+export const checkCall = (call: ToolCall, redact: Redactor): CallCheck => admitted(readCall(call, redact));
