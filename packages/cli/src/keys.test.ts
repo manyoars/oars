@@ -77,6 +77,8 @@ describe('oars keys create', () => {
 
     expect(await run(['keys', 'create', '--name', 'agent', '--idempotency-key', 'K'], h.deps)).toBe(ExitCode.CONFLICT);
     expect(h.err.join('')).toContain('Revoke it and create another');
+    // A lost response followed by a retry lands here: the id is the only way to tell which key it was.
+    expect(h.err.join('')).toContain(KEY_ID);
   });
 
   it('a key asking for more than a workload may carry is exit 4 with the platform code', async () => {
@@ -153,7 +155,8 @@ describe('oars keys revoke', () => {
 
     const gone = harness({ OARS_API_KEY: 'owner-key' });
     server.use(http.delete(`${API}/me/api-keys/${KEY_ID}`, () => HttpResponse.json({ code: 'API_KEY_NOT_FOUND', title: 'No such key' }, { status: 404, headers: problemJson })));
-    expect(await run(['keys', 'revoke', KEY_ID, '--json'], gone.deps)).not.toBe(ExitCode.OK);
-    expect(JSON.parse(gone.out[0] ?? '')).toMatchObject({ ok: false, step: 'keys-revoke' });
+    // A 404 has no exit code of its own, so exitCodeForProblem maps it to UNEXPECTED (1).
+    expect(await run(['keys', 'revoke', KEY_ID, '--json'], gone.deps)).toBe(ExitCode.UNEXPECTED);
+    expect(JSON.parse(gone.out[0] ?? '')).toMatchObject({ ok: false, step: 'keys-revoke', problem: { code: 'API_KEY_NOT_FOUND' } });
   });
 });

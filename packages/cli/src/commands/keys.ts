@@ -67,7 +67,11 @@ export const keysCreate = async (deps: RunDeps, options: KeysCreateOptions): Pro
     }),
   );
   if (issued.secret === undefined) {
-    throw new CliError('This key was already created and its secret was shown once; the platform keeps no copy. Revoke it and create another.', ExitCode.CONFLICT, CREATE_STEP);
+    throw new CliError(
+      `Key ${issued.key.keyId} was already created and its secret was shown once; the platform keeps no copy. Revoke it and create another.`,
+      ExitCode.CONFLICT,
+      CREATE_STEP,
+    );
   }
   return {
     document: { ok: true, key: issued.key, secret: issued.secret },
