@@ -474,7 +474,7 @@ describe('the version-3 capture records (Item 1, on errors-a.jsonl)', () => {
   });
 });
 
-describe('one tool call is one tool record (t762)', () => {
+describe('one tool call is one tool record', () => {
   const user = (text: string, cwd: string): string => JSON.stringify({ type: 'user', isSidechain: false, cwd, timestamp: '2026-06-01T00:00:00.000Z', message: { role: 'user', content: text } });
   const call = (id: string, name: string, input: object, cwd: string): string =>
     JSON.stringify({ type: 'assistant', isSidechain: false, cwd, requestId: `r-${id}`, timestamp: '2026-06-01T00:00:01.000Z', message: { role: 'assistant', model: 'm', content: [{ type: 'tool_use', id, name, input }] } });
@@ -522,7 +522,7 @@ describe('one tool call is one tool record (t762)', () => {
   });
 });
 
-describe('an api-request-blob line is a copy of the request, not a conversation line (t762)', () => {
+describe('an api-request-blob line is a copy of the request, not a conversation line', () => {
   // Claude Code writes the request body it sent: an assistant message with tool_use, thinking, and text blocks and a user message with tool_result blocks,
   // no cwd, uuid, or timestamp. 55,710 of 55,801 tool_use blocks on those lines repeat a call a real assistant line already holds.
   const user = JSON.stringify({ type: 'user', isSidechain: false, cwd: '/work/app', timestamp: '2026-06-01T00:00:00.000Z', message: { role: 'user', content: 'go' } });
@@ -549,7 +549,7 @@ describe('an api-request-blob line is a copy of the request, not a conversation 
     expect(plain.session.tldrs).toEqual(['done']);
   });
 
-  it('keeps the repository-based path hash of the real line when the blob copy comes first (the pairs t752 saw differ by base)', () => {
+  it('keeps the repository-based path hash of the real line when the blob copy comes first (the pairs seen differ by base)', () => {
     const absolute = '/work/app/src/a.ts';
     const real = JSON.stringify({ type: 'assistant', isSidechain: false, cwd: '/work/app', timestamp: '2026-06-01T00:00:01.000Z', message: { role: 'assistant', model: 'm', content: [{ type: 'tool_use', id: 't9', name: 'Read', input: { file_path: absolute } }] } });
     const copy = blob({ role: 'assistant', content: [{ type: 'tool_use', id: 't9', name: 'Read', input: { file_path: absolute } }] });

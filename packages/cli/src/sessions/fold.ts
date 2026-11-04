@@ -1,7 +1,7 @@
 import { SHELL } from './extract.js';
 import type { ErrorLineObservation, SessionObservation, ToolObservation } from './schema.js';
 
-// One tool call is one observation (t762). Capture version 8 writes a call once; a record set captured before it holds a second `tool` record, status
+// One tool call is one observation. Capture version 8 writes a call once; a record set captured before it holds a second `tool` record, status
 // `none`, for every call a resumed transcript replayed. The reader folds those so every count over `store.tools` agrees with the new capture until each
 // transcript is captured again.
 

@@ -221,7 +221,7 @@ describe('deposit', () => {
   });
 
   it('derives a prompt whose shell call after an edit holds a malformed key list or segment', async () => {
-    // The shapes a hand-edited or foreign log can hold; capture never writes them (t808 review). All but the text key list used to throw in derive.ts and abort every reader.
+    // The shapes a hand-edited or foreign log can hold; capture never writes them. All but the text key list used to throw in derive.ts and abort every reader.
     const shapes: Array<[string, { [key: string]: unknown }]> = [
       ['keys is null', { keys: null }],
       ['keys is text', { keys: 'run_in_background' }],
@@ -245,7 +245,7 @@ describe('deposit', () => {
 
   it('keeps a session a compaction between the two passes would have dropped', async () => {
     // A lock-free reader (`verify`, the MCP server) can meet a recapture and its compaction between the passes. Both passes read one open file, so the
-    // second pass sees the log the first one scanned and the session stays; a reopen would see the compacted log and fail the rev match (t808 review).
+    // second pass sees the log the first one scanned and the session stays; a reopen would see the compacted log and fail the rev match.
     const staged = stage();
     await deposit(staged.runtime, options(['proj']));
     const file = paths(staged.storeDir).observations;

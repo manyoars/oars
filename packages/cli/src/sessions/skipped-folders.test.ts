@@ -1,4 +1,4 @@
-// t776: a project folder that holds transcripts but is not on the allowlist is never read; `verify` says so instead of leaving it silent.
+// A project folder that holds transcripts but is not on the allowlist is never read; `verify` says so instead of leaving it silent.
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';

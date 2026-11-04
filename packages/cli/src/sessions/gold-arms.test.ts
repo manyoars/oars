@@ -473,7 +473,7 @@ describe('oars sessions gold arms', () => {
   });
 });
 
-describe('the display caps (t748 Item 1)', () => {
+describe('the display caps', () => {
   const editCall = (file: string): TurnCall => ({ name: 'Edit', input: { file_path: file, old_string: 'a', new_string: 'b' }, cwd: '/w', ok: true, result: 'ok' });
   const readCall = (file: string): TurnCall => ({ name: 'Read', input: { file_path: file }, cwd: '/w', ok: true, result: 'ok' });
 

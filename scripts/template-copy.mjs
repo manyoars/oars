@@ -1,4 +1,4 @@
-// The copy a developer makes of a starter template (lead 30/31). The monorepo-only tests, their vitest configs, the image's
+// The copy a developer makes of a starter template. The monorepo-only tests, their vitest configs, the image's
 // dockerignore and the dev dependencies only those tests use are left behind; everything else is the template as shipped.
 // scripts/check-template-copy.mjs installs and tests such a copy outside the monorepo.
 import { cpSync, readFileSync, writeFileSync } from 'node:fs';

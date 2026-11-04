@@ -162,7 +162,7 @@ export interface StepLine {
   ok: number;
   error: number;
   skipped: number;
-  /** Stop deposits that found the store locked and went to the pending list (t832): not failed runs, and not in `error`. */
+  /** Stop deposits that found the store locked and went to the pending list: not failed runs, and not in `error`. */
   deferred: number;
   /** Mean wall time of the runs that ran (not the skipped or deferred ones), in ms. */
   meanMs: number;
@@ -275,7 +275,7 @@ export const runDeposit = async <T>(context: StepContext, withDerive: boolean, k
   }
   // The pending sessions a deposit took first are inputs it was asked for beside its own transcripts.
   const counted = { ...done.in, ...trace.pending };
-  // A Stop deposit that found the store locked wrote nothing and went to the pending list: its own outcome, with the refusal's line (t832).
+  // A Stop deposit that found the store locked wrote nothing and went to the pending list: its own outcome, with the refusal's line.
   const refusal = trace.deferred;
   if (refusal !== undefined) {
     await tryLog(() => logStep(context, 'deposit', 'deferred', performance.now() - started, { in: counted, out: trace.kinds, key }, refusal));

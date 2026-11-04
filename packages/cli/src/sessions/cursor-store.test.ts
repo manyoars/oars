@@ -194,7 +194,7 @@ describe('an unreadable Cursor store fails open', () => {
   });
 });
 
-describe('the Cursor source: t731 safety', () => {
+describe('the Cursor source: safety', () => {
   const doc = (composerId: string) => ({ composerId, createdAt: 1, conversation: [{ type: 1, text: 'hi' }] });
 
   it('skips and counts a composer whose id is not a safe file name, and writes nothing outside skeletons', async () => {
