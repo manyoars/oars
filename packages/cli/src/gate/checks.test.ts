@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { makeRedactor } from '../sessions/redact.js';
 import { shellCommands } from '../sessions/extract.js';
 import { admitName, checkCall, readWords, CROSSING_CLASSES, CROSSING_FORMS, UNREAD_SHAPES, type VersionForm } from './checks.js';
+import { PROGRAMS } from './record.js';
 
 const redact = makeRedactor();
 const bash = (command: string) => checkCall({ tool: 'Bash', input: { command } }, redact);
@@ -453,6 +454,29 @@ describe('the closed vocabulary', () => {
     expect(CROSSING_CLASSES).toEqual(['npm-package', 'python-package', 'mcp-server', 'skill']);
     expect(CROSSING_FORMS).toEqual(['install', 'url-install', 'fetch-and-run', 'url-fetch-and-run', 'mcp-call', 'skill-call']);
     expect(UNREAD_SHAPES).toEqual(['manifest-install', 'local-path', 'variable-name', 'masked-name', 'pipe-to-shell', 'behind-xargs', 'harness-registration', 'unreadable-name']);
+  });
+});
+
+describe('the program of a crossing', () => {
+  const programs = (command: string): string[] => bash(command).crossings.map((crossing) => crossing.program);
+
+  it.each<[string, string]>([
+    ['npm install a', 'npm'], ['pnpm add a', 'pnpm'], ['yarn add a', 'yarn'], ['bun add a', 'bun'], ['npx a', 'npx'], ['pnpx a', 'pnpx'], ['bunx a', 'bunx'],
+    ['pip install a', 'pip'], ['pip3.12 install a', 'pip'], ['python -m pip install a', 'python -m pip'], ['python3 -m pipx install a', 'python -m pipx'], ['py -m uv pip install a', 'python -m uv'],
+    ['uv add a', 'uv'], ['uvx a', 'uvx'], ['pipx install a', 'pipx'], ['poetry add a', 'poetry'], ['pdm add a', 'pdm'], ['rye add a', 'rye'], ['pipenv install a', 'pipenv'],
+    ['conda install a', 'conda'], ['mamba install a', 'mamba'], ['micromamba install a', 'micromamba'],
+  ])('%s names %s', (command, program) => {
+    expect(programs(command)).toEqual([program]);
+    expect(PROGRAMS).toContain(program);
+  });
+
+  it('is a closed list, with the two tools', () => {
+    expect(PROGRAMS).toHaveLength(23);
+    expect(new Set(PROGRAMS).size).toBe(PROGRAMS.length);
+    expect(bash('x').crossings).toEqual([]);
+    expect(checkCall({ tool: 'mcp__one__search', input: {} }, redact).crossings.map((crossing) => crossing.program)).toEqual(['mcp']);
+    expect(checkCall({ tool: 'Skill', input: { skill: 'one' } }, redact).crossings.map((crossing) => crossing.program)).toEqual(['skill']);
+    expect(PROGRAMS).toEqual(expect.arrayContaining(['mcp', 'skill']));
   });
 });
 
