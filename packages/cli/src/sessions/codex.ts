@@ -266,8 +266,8 @@ const toolNames = (list: unknown): string[] =>
     .flatMap((entry: unknown) => (isObj(entry) ? [Array.isArray(entry.tools) ? undefined : str(entry.name), ...toolNames(entry.tools)] : []))
     .filter((name): name is string => name !== undefined && name !== '');
 
-/** The approval policy as the permission mode: a string, or the externally tagged `{granular: {...}}` form (protocol.rs:1181). */
-const approvalMode = (policy: unknown): string | undefined => (isObj(policy) && Object.hasOwn(policy, 'granular') ? 'granular' : str(policy));
+/** The approval policy as the permission mode: a string, or the tag of an externally tagged object (`{granular: {...}}`, protocol.rs:1181), which `mode()` keeps if documented and stores as `other` if not. */
+const approvalMode = (policy: unknown): string | undefined => (isObj(policy) ? Object.keys(policy)[0] : str(policy));
 
 /** One rollout as the lines `captureSession` reads. */
 export const rolloutLines = (text: string, fallbackId: string, parentText?: string): Obj[] => {
