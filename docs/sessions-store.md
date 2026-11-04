@@ -22,7 +22,7 @@ Under `<config>/oars/sessions/` (`%APPDATA%` on Windows, `$XDG_CONFIG_HOME` or `
 | `reads/<pool>.jsonl` | One pool version's reads, written once and never rewritten, so a read cited by its ID stays what it was. |
 | `raw/<project>/<path>` | oars' own archive of every deposited transcript (below). |
 | `commit-survival.jsonl` | What became of each commit older than `SURVIVAL_DAYS`, appended on a change of state. See "Commit survival". |
-| `crossings.jsonl` | Written by `oars gate replay` only: one `run` row, `registry` rows, and one `crossing` row per package, MCP server, or skill pick found in raw transcripts. Closed-vocabulary fields are class P; `session`, `agent`, `toolUseId`, `ts`, `name`, and `version` are class A. See `docs/gate.md`. |
+| `crossings.jsonl` | Written by `oars gate replay` only: one `run` row, `registry` rows, and one `crossing` row per package, MCP server, or skill pick found in raw transcripts. Closed-vocabulary fields are class P; `session`, `agent`, `toolUseId`, `ts`, `name`, and `version` are class A, and so are a `registry` row's `name`, `latest`, and `created`. See `docs/gate.md`. |
 
 ## Capture scope: the allowlist
 

@@ -87,7 +87,7 @@ export interface RunRow {
   registryRead: boolean;
 }
 
-/** One kept registry answer, the cache of the `--registry-state` option. Held here so a replay writes one file. `name` and `latest` are class A. */
+/** One kept registry answer, the cache of the `--registry-state` option. Held here so a replay writes one file. `name`, `latest`, and `created` are class A; `created` is a full timestamp, which class P cannot hold. */
 export interface RegistryRow {
   kind: 'registry';
   v: number;
