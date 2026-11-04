@@ -108,12 +108,24 @@ describe('the Copilot CLI reader', () => {
     expect(capture(lines.map((entry) => JSON.stringify(entry)).join('\n')).session.usage).toMatchObject({ input: 10, output: 40 });
   });
 
-  it('takes the totals of a model from its last shutdown, which is cumulative across a resume, and lands them once on its last response', () => {
+  it('takes the totals of a model from its last shutdown and lands them once on its last response', () => {
     const usage = (inputTokens: number, outputTokens: number) => ({ m1: { requests: {}, usage: { inputTokens, outputTokens, cacheReadTokens: 0, cacheWriteTokens: 0 } } });
     const lines = eventLines(asText([start(), prompt(1, 'a'), say(2, 'one', { model: 'm1', outputTokens: 4 }), shutdown(3, usage(10, 4)), prompt(4, 'b'), say(5, 'two', { model: 'm1', outputTokens: 6 }), shutdown(6, usage(25, 12))]), 's');
     const usages = lines.filter((entry) => entry.type === 'assistant').map((entry) => (typeof entry.message === 'object' && entry.message !== null && 'usage' in entry.message ? entry.message.usage : undefined));
     // The second shutdown replaces the first rather than adding to it; its output beyond the responses' own (12 - 10) lands on the last response.
     expect(usages).toEqual([{ output_tokens: 4 }, expect.objectContaining({ input_tokens: 25, output_tokens: 8 })]);
+  });
+
+  it('keeps the totals of a model that only an earlier shutdown holds', () => {
+    const usage = (model: string, inputTokens: number, outputTokens: number) => ({ [model]: { requests: {}, usage: { inputTokens, outputTokens, cacheReadTokens: 0, cacheWriteTokens: 0 } } });
+    const lines = eventLines(asText([start(), prompt(1, 'a'), say(2, 'one', { model: 'm1' }), shutdown(3, usage('m1', 10, 4)), prompt(4, 'b'), say(5, 'two', { model: 'm2' }), shutdown(6, usage('m2', 20, 6))]), 's');
+    const inputs = lines.filter((entry) => entry.type === 'assistant').map((entry) => (typeof entry.message === 'object' && entry.message !== null && 'usage' in entry.message && typeof entry.message.usage === 'object' && entry.message.usage !== null && 'input_tokens' in entry.message.usage ? entry.message.usage.input_tokens : undefined));
+    expect(inputs).toEqual([10, 20]);
+  });
+
+  it('floors input at 0 when the cache tokens exceed the input total', () => {
+    const lines = eventLines(asText([start(), prompt(1, 'a'), say(2, 'one', { model: 'm1' }), shutdown(3, { m1: { requests: {}, usage: { inputTokens: 10, outputTokens: 4, cacheReadTokens: 20, cacheWriteTokens: 0 } } })]), 's');
+    expect(capture(lines.map((entry) => JSON.stringify(entry)).join('\n')).session.usage).toMatchObject({ input: 0, cacheRead: 20 });
   });
 
   it('keeps the output as the error line when the exit code is -1, which is no exit status', () => {
