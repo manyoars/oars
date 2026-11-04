@@ -132,24 +132,32 @@ const missing = (error: unknown): boolean => error instanceof Error && 'code' in
 /** The non-blank log lines that are not JSON (a torn write), kept so `captureSession` counts them and the deposit line reports them. */
 export const chatBadLines = (text: string): string[] => text.split('\n').filter((raw) => raw.trim() !== '' && parse(raw) === undefined);
 
+/** One step down a mutation-log path: an object's key or an array's index; anything else leads nowhere. */
+const child = (node: unknown, key: string): unknown => (isObj(node) ? node[key] : Array.isArray(node) ? node[Number(key)] : undefined);
+
 /** Replays one mutation-log entry onto `state` (objectMutationLog.ts:345-390); an entry whose path does not lead anywhere is dropped. */
 const apply = (state: unknown, entry: Obj): unknown => {
   if (entry.kind === 0) return entry.v;
-  const path = Array.isArray(entry.k) ? entry.k : [];
+  const path: unknown[] = Array.isArray(entry.k) ? entry.k : [];
   if (path.length === 0) return entry.kind === 1 ? entry.v : state;
-  let parent: unknown = state;
-  for (const key of path.slice(0, -1)) parent = isObj(parent) || Array.isArray(parent) ? (parent as Obj)[String(key)] : undefined;
+  let holder: unknown = state;
+  for (const key of path.slice(0, -1)) holder = child(holder, String(key));
   const last = String(path[path.length - 1]);
-  if (!isObj(parent) && !Array.isArray(parent)) return state;
-  const holder = parent as Obj;
-  if (entry.kind === 1) holder[last] = entry.v;
-  else if (entry.kind === 3) delete holder[last];
+  if (!isObj(holder) && !Array.isArray(holder)) return state;
+  const write = (value: unknown): void => {
+    if (isObj(holder)) holder[last] = value;
+    else if (Array.isArray(holder)) holder[Number(last)] = value;
+  };
+  if (entry.kind === 1) write(entry.v);
+  else if (entry.kind === 3) Reflect.deleteProperty(holder, last);
   else if (entry.kind === 2) {
-    const target = Array.isArray(holder[last]) ? holder[last] : [];
+    const current = child(holder, last);
+    const target: unknown[] = Array.isArray(current) ? current : [];
     const cut = num(entry.i);
     if (cut !== undefined) target.length = Math.min(Math.max(cut, 0), target.length);
-    if (Array.isArray(entry.v)) target.push(...entry.v);
-    holder[last] = target;
+    const added: unknown[] = Array.isArray(entry.v) ? entry.v : [];
+    for (const item of added) target.push(item);
+    write(target);
   }
   return state;
 };

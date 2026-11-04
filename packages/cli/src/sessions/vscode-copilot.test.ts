@@ -201,7 +201,7 @@ describe('the VS Code Copilot Chat reader', () => {
     ].join('\n');
     const data = chatData(log, true);
     expect(data.requests).toMatchObject([{ message: { text: 'rewritten' }, response: [{ value: 'r' }] }]);
-    expect(data.requests).toEqual([expect.not.objectContaining({ modelId: expect.anything() })]);
+    expect(JSON.stringify(data.requests)).not.toContain('modelId');
     expect(chatBadLines(log)).toEqual(['{torn']);
     expect(chatData('', true)).toEqual({});
     expect(() => chatData('{torn\nnot json\n', true)).toThrow(/no parseable/);
