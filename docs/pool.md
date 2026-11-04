@@ -42,6 +42,19 @@ The OAuth apps are the operator's to create, so the client reads their values fr
 - **Deposits per account.** Past `MAX_DEPOSITS_PER_ACCOUNT` rows (default 20,000) a new session gets 403 `deposit_limit`, and so does any deposit that would take the account past `MAX_DEPOSIT_BYTES_PER_ACCOUNT` stored bytes (default 64 MB). A redeposit of a held session replaces it if the account still fits. They bound one account's ledger, not a fetch: a fetch reads the stored cells, never the ledger. On the test fixture (one session, one prompt, two shell steps) a batch stores 1,196 bytes of skeleton plus 2 of deltas, so the 64 MB default admits about 56,000 such batches and the 20,000-row limit binds first, at about 24 MB; its five cells are shared index rows, and its six `contributors` rows per UTC day of ingest (five cells and one stratum) sit on the ledger outside this budget; an account's distinct days and motifs add `cells` rows that every fetch then reads.
 - **A frame's day is real and not ahead of the server.** A day that is not a calendar date, or is later than tomorrow UTC, gets 422 `closed_vocabulary` naming the field, since the latest day sets a bundle's `asOf`.
 
+## What a bundle serves
+
+A bundle's reads are derived from the stored cells with the code a local store runs (`packages/pool/src/derive.ts`), and a read is served once the largest held cluster count among its cells reaches the floor. It serves eight of the nine order 1 families; recovery is out, and two pieces of `fit` are out, because a skeleton does not carry the fields they read.
+
+| Family | Served | Left out, and why |
+|---|---|---|
+| `fit` | per (shape or named motif, harness version bucket, model) | The call-shape method (a tool and its input key names): `keys` has no wire field. The (name, `platform`, `shell`) form: the wire carries both on every frame, but a stored cell keys on harness, version bucket, and model, so no stored cell holds them. |
+| `cost`, `change`, `live`, `adoption`, `method`, `next-step` | from their stored cells | Nothing beyond what each family's cells hold. |
+| `tool-day` | a tool's failure rate and share of the day's steps, from one-step shape day cells; its floor counts within its day, so a day with fewer than `k_cell` accounts on the tool serves none | The share's denominator is the day's steps in the bundle, as a live read's is. |
+| `recovery` | not served | A recovery read is a signature record: it reads error rows (a signature hash, an error class, the next calls, whether an edit followed), and a skeleton holds none, nor `errorCode`, `outcome`, or `recoveryCalls`. Signature text stays local. No cell of (`sigHash`, fix-shape field, `outcome`) or (`sigHash`, `errorCode`, `recoveryCalls`) exists to serve. |
+
+`served-families.test.ts` pins the limit at the wire: a skeleton whose tool carries `keys`, `errorCode`, `sigHash`, `outcome`, or `recoveryCalls`, or that carries error rows, is refused, and a five-account bundle holds a tool-day read and no recovery or call-shape read. A wire change that adds one of these fields must serve its family in the same change.
+
 ## Routes
 
 | Route | Answer |

@@ -45,6 +45,7 @@ All notable changes to `@manyoars/oars`. Versions follow semver; a release is th
 - `oars sessions exclusions` is new: it scans your sessions against a local term file (`OARS_EXCLUSION_TERMS`) and writes the excluded ones to a list, printing counts only. `oars sessions gold sample`, published in 0.3.0, now refuses a draw with no term file, and `--exclude-term` only adds to that file's terms instead of replacing it.
 - A store lock whose holder hangs is no longer kept for good: the holder refreshes it for at most an hour; once it has aged 10 more minutes, the next deposit breaks it and prints one line naming the holder's pid.
 - `oars keys create|list|revoke` manages your API keys. `keys create --workload <id>` mints a key limited to one workload (authorities `AGENT_OPERATE` and `AGENT_READ` only), so a scheduled agent can change its own schedule without being able to spend or reach another workload. The `make-me-money` skill shows the recipe.
+- The pool's bundle now serves the tool-day read (a tool's failure rate and share of a day's steps, from day cells, with its floor counted within the day). Recovery and fit's call-shape method stay unserved because a skeleton carries no error row or tool input keys; `docs/pool.md` lists what each family serves and leaves out.
 
 ## 0.3.0
 
