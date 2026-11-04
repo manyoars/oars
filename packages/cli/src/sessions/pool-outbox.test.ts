@@ -88,7 +88,7 @@ const REAL = {
       leaves: 12,
       harness: 'claude-code',
       frame: FRAME,
-      prompts: [{ cls: 'edit-verify', errors: 0, wallSec: 5, usage: { input: 1, cacheWrite: 2, cacheRead: 3, output: 4, thinking: 5 }, frame: FRAME }],
+      prompts: [{ cls: 'edit-verify', errors: 0, wallSec: 5, usage: { input: 1, cacheWrite: 2, cacheRead: 3, output: 4, thinking: 5 }, explore: 6, frame: FRAME }],
       tools: [
         {
           side: false,

@@ -48,6 +48,13 @@ describe('storeOf', () => {
 });
 
 describe('rule 5: a bucket and no exact number', () => {
+  it('counts the explore steps of a prompt as the lowest value of their bucket, and none when the record held none', () => {
+    const strata = { languages: [], repoFiles: null, frameworks: [], explore: 37 };
+    const local = store({ sessions: [session('s1', { frame: framed })], prompts: [prompt('s1', 0, { frame: framed, strata }), prompt('s1', 1, { frame: framed })] });
+    // 37 steps is bucket 7, whose lowest value is 33.
+    expect(storeOf([skeletonOfLocal(local)]).prompts.map(({ explore }) => explore)).toEqual([33, 0]);
+  });
+
   it('counts a prompt as the lowest value of each bucket, never the exact tokens or seconds', () => {
     const { cells } = incrementsOf(skeletonOfLocal(localStore()));
     const asked = classMotif('edit-verify').motifId;
