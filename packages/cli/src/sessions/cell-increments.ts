@@ -146,7 +146,7 @@ const sessionRecord = (id: string, parent: string | null, { harness, frame }: Sk
 });
 
 const promptRecords = (id: string, { prompts }: SkeletonTranscript): PromptObservation[] =>
-  prompts.map(({ cls, errors, wallSec, usage, frame }, index) => ({
+  prompts.map(({ cls, errors, wallSec, usage, explore, frame }, index) => ({
     kind: 'prompt',
     v: '',
     session: id,
@@ -173,7 +173,8 @@ const promptRecords = (id: string, { prompts }: SkeletonTranscript): PromptObser
       thinking: floorOf('tokens', usage.thinking),
     },
     recovery: [],
-    explore: 0,
+    // The lowest value of the bucket, as every other bucketed value counts; a prompt that sent none counts none.
+    explore: explore === null ? 0 : floorOf('calls', explore),
     act: 0,
     bigrams: {},
     contextFingerprint: null,

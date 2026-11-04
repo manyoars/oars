@@ -24,12 +24,17 @@ const EDGES = {
   ms: Array.from({ length: 17 }, (_, power) => 100 * 2 ** power),
   seconds: Array.from({ length: 17 }, (_, power) => 2 ** power),
   count: [1, 2, 3, 5, 9, 17, 33],
+  // A call count of a session: the `count` edges, then each edge doubling its width up to over 4,096 (spec Section 7), because a long session passes 32 routinely.
+  calls: [1, 2, 3, 5, 9, 17, 33, 65, 129, 257, 513, 1025, 2049, 4097],
 } as const satisfies { [kind: string]: readonly number[] };
 
 export type BucketKind = keyof typeof EDGES;
 
 /** The bucket a value falls in. */
 export const bucketOf = (kind: BucketKind, value: number): number => EDGES[kind].filter((edge) => value >= edge).length;
+
+/** A stored `explore` count as it pools: its `calls` bucket, or null for a value no count holds (a record captured before the strata has none). The exact count never leaves. */
+export const projectExplore = (stored: number | undefined): number | null => (stored !== undefined && Number.isSafeInteger(stored) && stored >= 0 ? bucketOf('calls', stored) : null);
 
 /** The lowest value of a bucket, which is what a derivation counts a bucketed value as: it never reads above what the sender held. */
 export const floorOf = (kind: BucketKind, bucket: number): number => EDGES[kind][bucket - 1] ?? 0;
@@ -78,6 +83,8 @@ export interface SkeletonPrompt {
   /** A `seconds` bucket. */
   wallSec: number | null;
   usage: SkeletonUsage;
+  /** A `calls` bucket of the prompt's steps that only look (`file.read`, `file.search`, `web.search`, `web.fetch`); null when the record holds no count. */
+  explore: number | null;
   frame: SkeletonFrame;
 }
 
@@ -281,6 +288,7 @@ const transcriptOf = (
       errors: bucketOf('count', errors),
       wallSec: wallSec === null ? null : bucketOf('seconds', wallSec),
       usage: { input: bucketOf('tokens', usage.input), cacheWrite: bucketOf('tokens', usage.cacheWrite), cacheRead: bucketOf('tokens', usage.cacheRead), output: bucketOf('tokens', usage.output), thinking: bucketOf('tokens', usage.thinking) },
+      explore: projectExplore(strata?.explore),
       frame: wireFrame(frame, strata),
     });
   }
@@ -613,12 +621,13 @@ const parseTool = (harness: Harness, value: unknown, at: string): SkeletonTool =
 };
 
 const parsePrompt = (value: unknown, at: string): SkeletonPrompt => {
-  const raw = fieldsOf(value, at, ['cls', 'errors', 'wallSec', 'usage', 'frame']);
+  const raw = fieldsOf(value, at, ['cls', 'errors', 'wallSec', 'usage', 'explore', 'frame']);
   return {
     cls: oneOf(PROMPT_CLASSES, raw.cls, under(at, 'cls')),
     errors: bucketIn('count', raw.errors, under(at, 'errors')),
     wallSec: orNull(raw.wallSec, under(at, 'wallSec'), (entry, entryAt) => bucketIn('seconds', entry, entryAt)),
     usage: parseUsage(raw.usage, under(at, 'usage')),
+    explore: orNull(raw.explore, under(at, 'explore'), (entry, entryAt) => bucketIn('calls', entry, entryAt)),
     frame: parseFrame(raw.frame, under(at, 'frame')),
   };
 };

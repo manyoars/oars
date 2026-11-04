@@ -46,6 +46,7 @@ export const FIELD_ROWS: { readonly [field: string]: string } = {
   durationMs: 'The time of one tool call in milliseconds, exact, a number or null.',
   effort: 'The effort level the model ran at, only when it is a public one; else the literal placeholder.',
   errors: 'A bucket of how many tool calls failed in a prompt, a number.',
+  explore: 'A bucket of how many steps of a prompt only looked (read a file, searched files, searched the web, or fetched a page), a number or null; never the exact count.',
   field: 'What a delta is about, one of plugin, package, permissionMode, and effort: the field alone, never its value.',
   flags: 'The flags of a shell command, each a public flag or a short flag; never an argument.',
   format: 'The skeleton format number: a constant of this client, never a value from a session.',

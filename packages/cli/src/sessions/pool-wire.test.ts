@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { frame, printOf, prompt, session, sessionsFrom, step, store, storedNames, tool } from './pool-fixture.js';
-import { parseSkeleton, skeletonOf, type SessionSkeleton } from './pool-wire.js';
-import type { Harness } from './schema.js';
+import { parseSkeleton, projectExplore, skeletonOf, type SessionSkeleton } from './pool-wire.js';
+import type { Harness, Strata } from './schema.js';
 import { LITERAL, PRIVATE } from './public-vocabulary.js';
 
 // Real capture writes the shell as `shellOf` names it; the shared fixture's frame predates that spelling.
@@ -366,9 +366,8 @@ describe('parseSkeleton refuses, and names the field', () => {
 describe('the language shares on the wire', () => {
   const stackFrame = frame({ shell: 'bash', stack: { languages: ['python', 'typescript'], frameworks: [], size: null } });
   const withStrata = (languages: { language: string; share: string }[]): SessionSkeleton => {
-    const strata = { languages, repoFiles: null, frameworks: [], explore: 0 };
-    // The stored share is text on a record, so a test can hold one the list does not.
-    const stored = JSON.parse(JSON.stringify(strata)) as NonNullable<ReturnType<typeof session>['strata']>;
+    // The stored share is text on a record, so a test can hold one the list does not: Object.assign types the result as the record while the input stays loose.
+    const stored: Strata = Object.assign({ languages: [], repoFiles: null, frameworks: [], explore: 0 }, { languages });
     const skeleton = skeletonFrom(store({ sessions: [session('s1', { frame: stackFrame, strata: stored })], prompts: [prompt('s1', 0, { frame: stackFrame, strata: stored })] }));
     if (skeleton === null) throw new Error('no skeleton');
     return skeleton;
@@ -434,5 +433,45 @@ describe('the language shares on the wire', () => {
     if (!isHolder(holder)) throw new Error('no stack');
     Reflect.deleteProperty(holder, 'languageShares');
     expect(refusedField(raw)).toBe(field);
+  });
+});
+
+describe('explore on the wire', () => {
+  const exploring = (explore: number | undefined): SessionSkeleton => {
+    const strata = explore === undefined ? undefined : { languages: [], repoFiles: null, frameworks: [], explore };
+    const skeleton = skeletonFrom(store({ sessions: [session('s1', { frame: framed })], prompts: [prompt('s1', 0, { frame: framed, strata }), prompt('s1', 1, { frame: framed, strata })] }));
+    if (skeleton === null) throw new Error('no skeleton');
+    return skeleton;
+  };
+
+  it('is the count bucket of the exact count, and the exact count is nowhere in the batch', () => {
+    const skeleton = exploring(37);
+    // 37 is past the edges 1, 2, 3, 5, 9, 17, and 33: bucket 7.
+    expect(skeleton.transcripts[0]?.prompts.map(({ explore }) => explore)).toEqual([7, 7]);
+    expect(JSON.stringify(skeleton)).not.toContain('"explore":37');
+    expect(parseSkeleton(JSON.parse(JSON.stringify(skeleton)))).toEqual({ ok: true, skeleton });
+  });
+
+  it('has buckets of doubling width past 32, so a long session still tells 100 from 3,000', () => {
+    expect([0, 1, 4, 32, 33, 64, 65, 3000, 4096, 4097, 1e9].map((count) => projectExplore(count))).toEqual([0, 1, 3, 6, 7, 7, 8, 13, 13, 14, 14]);
+  });
+
+  it('is null for a record captured before the strata, and for a count no bucket holds', () => {
+    expect(exploring(undefined).transcripts[0]?.prompts.map(({ explore }) => explore)).toEqual([null, null]);
+    for (const stored of [-1, 1.5, Number.NaN, Number.POSITIVE_INFINITY, undefined]) expect(projectExplore(stored)).toBeNull();
+  });
+
+  const field = 'transcripts[0].prompts[0].explore';
+  it.each([
+    { name: 'text for a bucket', value: 'many' },
+    { name: 'a bucket past the last', value: 15 },
+    { name: 'a fraction', value: 2.5 },
+    { name: 'a negative bucket', value: -1 },
+  ])('parseSkeleton refuses $name', ({ value }) => {
+    expect(refusedField(sent(['transcripts', 0, 'prompts', 0, 'explore'], value))).toBe(field);
+  });
+
+  it('parseSkeleton refuses a prompt with no explore field', () => {
+    expect(refusedField(sent(['transcripts', 0, 'prompts', 0, 'explore'], undefined))).toBe(field);
   });
 });
