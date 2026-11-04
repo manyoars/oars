@@ -2,7 +2,7 @@
 //
 //   node packages/cli/scripts/vocab-snapshot.mjs [--only npm,pypi,...] [--date YYYY-MM-DD]
 //
-// Standard library only, plus the `tar` on PATH (Git for Windows and every Unix ship one). It asks public, unauthenticated endpoints with a generic
+// Standard library only, plus a `tar` on PATH that reads a .tar.gz (GNU tar, or the bsdtar that Windows 10 and macOS ship). It asks public, unauthenticated endpoints with a generic
 // User-Agent and sends nothing about the operator. A run replaces the files it writes and then rewrites vocab/manifest.json with each file's byte
 // size and SHA-256. A changed snapshot is a new VOCAB_VERSION: bump VOCAB_VERSION in src/sessions/public-vocabulary.ts and the pin table in
 // src/sessions/vocab-pin.test.ts in the same commit, or that test fails.
@@ -201,7 +201,9 @@ const builders = {
       writeFileSync(archive, Buffer.from(await response.arrayBuffer()));
       const extracted = join(work, 'out');
       mkdirSync(extracted);
-      const untar = spawnSync('tar', ['-xzf', archive, '-C', extracted, '--force-local', '--wildcards', '*/pages/*'], { stdio: 'inherit' });
+      // Relative paths and no GNU-only flag: bsdtar (Windows, macOS) and GNU tar both read this, and a Windows drive letter in an argument is not taken for a remote host.
+      // The `pages.*` folders (translations, and the `pages.en` symlink that GNU tar cannot create on Windows) are skipped: only `pages/` is read.
+      const untar = spawnSync('tar', ['-xzf', 'tldr.tar.gz', '--exclude=*/pages.*', '-C', 'out'], { cwd: work, stdio: 'inherit' });
       if (untar.status !== 0) throw new Error('tar failed');
       const root = join(extracted, readdirSync(extracted)[0], 'pages');
       write('programs.json', { source: 'tldr-pages', commit, fetchedAt: date, programs: readTldr(root) });
