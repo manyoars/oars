@@ -179,7 +179,7 @@ describe('the setup, funnel, and trust shape in the store', () => {
     const session = store.sessions.find((candidate) => candidate.session === 'shaped');
     expect(session?.setup).toEqual({ permissionMode: 'plan' });
     expect(session?.funnel).toEqual({ offered: ['Read'], removed: ['Grep'] });
-    expect(session?.trust).toMatchObject({ interrupts: 0, rejections: 1, denials: 0, unattendedRun: [1.02], trustEvent: [{ event: 'rejection', tool: 'Read', prompt: 0 }] });
+    expect(session?.trust).toMatchObject({ interrupts: 0, rejections: 1, denials: 0, unattendedRun: [1], trustEvent: [{ event: 'rejection', tool: 'Read', prompt: 0 }] });
   });
 });
 

@@ -1536,7 +1536,8 @@ export const captureSession = (input: ExtractInput): Capture => {
     if (type === 'user' && role === 'user' && !side && !hasToolResult(content)) {
       const leading = LEADING_TAG.exec(firstTextBlock(content).trimStart())?.[1];
       harnessLine = o.isMeta === true || (leading !== undefined && LOCAL_COMMAND_TAGS.has(leading));
-      operatorTurn = o.isMeta !== true && (leading === 'bash-input' || hasImage(content));
+      // `promptOpening` is Claude Code's alone: a Codex prompt that starts with `<` gets no opening below, yet it is still the operator typing.
+      operatorTurn = o.isMeta !== true && (leading === 'bash-input' || hasImage(content) || (harness === 'codex' && firstTextBlock(content).startsWith('<')));
     }
     if (type === 'user' && role === 'user' && o.isMeta !== true && !side) {
       const text = firstTextBlock(content);
