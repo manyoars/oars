@@ -207,6 +207,9 @@ const nodeSpec = (whole: string): Spec => {
   // A leading `npm:` is the same protocol with no alias.
   const alias = /^(?:@?[^@]+@)?npm:(.+)$/.exec(text)?.[1];
   if (alias !== undefined) return nodeSpec(alias);
+  // pnpm's leading `jsr:@scope/name[@version]` is the JSR package itself.
+  const jsr = /^jsr:(.+)$/.exec(text)?.[1];
+  if (jsr !== undefined) return nodeSpec(jsr);
   // pnpm's `catalog:` takes its version from the workspace, and `jsr:` names a version or a JSR package; neither is a path or an scp URL.
   const protocol = /^(@?[^@]+)@(catalog|jsr):(.*)$/.exec(text);
   if (protocol !== null) {
@@ -242,7 +245,7 @@ const pythonSpec = (whole: string): Spec => {
   if (match === null) return { kind: 'unread', shape: 'local-path' };
   const [, raw = '', operator = '', stated = ''] = match;
   // Text after the name that no operator introduces is outside PEP 508: refused, never kept as a version.
-  if (operator === '' && stated !== '' && atStated === null) return { kind: 'unread', shape: 'unreadable-name' };
+  if (operator === '' && stated !== '') return { kind: 'unread', shape: 'unreadable-name' };
   // PEP 503: these spellings are one project, so novelty must not count them twice.
   const name = raw.toLowerCase().replace(/[-_.]+/g, '-');
   if (atStated !== null) return { kind: 'named', name, version: atStated, versionForm: versionFormOf(atStated), url: false };
@@ -325,8 +328,8 @@ const moduleCommand = (command: ShellCommand): { module: ModuleProgram; command:
   return { module, command: { ...command, program: module, args: command.args.slice(at + 2) } };
 };
 
-/** The listed program a word names, with its table row. `pip3.12` is `pip`. */
 const PIP_TOOL: Tool = { family: 'python-package', verbs: PIP_VERBS };
+/** The listed program a word names, with its table row. `pip3.12` is `pip`. */
 const toolOf = (program: string): { program: ToolProgram; tool: Tool } | undefined => {
   const named = PIP_NAME.test(program) ? 'pip' : program;
   for (const [key, tool] of TOOLS) if (key === named) return { program: key, tool };
@@ -424,12 +427,10 @@ const readTool = (reading: Reading, tool: Tool, command: ToolCommand): void => {
   // `uv run --with a` installs into a throwaway environment and runs: a fetch-and-run, whatever the script is.
   if (command.program === 'uv' && words.names[0] === 'run') {
     // `uv run pip install x` is the same pick as `pip install x`: read it as that. Any other program after `run` stays unread.
-    const pip = command.args.findIndex((word) => word.text === 'pip');
-    if (words.names[1] === 'pip' && words.names[2] === 'install' && pip >= 0) {
-      readTool(reading, PIP_TOOL, { ...command, program: 'pip', args: command.args.slice(pip + 1) });
-      return;
-    }
+    // It stays recorded under `uv`: uv's pip runs in the project venv and reads that venv's `pip.conf`, so the registry question must refuse it.
     addSpecs(reading, family, allFlags(words, '--with'), 'run', command.program, command.read);
+    const pip = command.args.findIndex((word, at) => word.text === 'pip' && command.args[at + 1]?.text === 'install');
+    if (words.names[1] === 'pip' && words.names[2] === 'install' && pip >= 0) readTool(reading, PIP_TOOL, { ...command, args: command.args.slice(pip + 1) });
     return;
   }
   // `yarn workspace <name> add x` is `yarn add x` run in that workspace: two words that are not the verb's.
@@ -502,7 +503,7 @@ const REGISTRY_ENVIRONMENT = /(?:^|[^A-Za-z0-9_])(?:(?:npm_config_|pip_|uv_)[A-Z
  * Other ways a call reads another config than the one the gate's question reads: `sudo` (root's), a venv's `activate` (its `pip.conf`), and
  * a manager run by path (`.venv/bin/pip`, which reads that venv's). Over-matching only leaves a name unasked.
  */
-const OTHER_CONFIG = /(?:^|[\s;&|(])sudo(?:\s|$)|(?:^|[\\/\s;&|(])activate(?:\.ps1|\.bat)?(?=[\s;&|)]|$)|[\\/](?:npm|npx|pnpm|pnpx|pip[\d.]*|python[\d.]*|py)(?:\.cmd|\.exe)?(?=\s|$)/i;
+const OTHER_CONFIG = /(?:^|[\s;&|(])sudo(?:\s|$)|(?:^|[\\/\s;&|(])activate(?:\.\w+)?(?=[\s;&|)]|$)|[\\/](?:npm|npx|pnpm|pnpx|pip[\d.]*|python[\d.]*|py)(?:\.cmd|\.exe)?(?=["']?(?:\s|$))/i;
 
 const choosesRegistry = (command: ShellCommand): boolean => command.args.some(({ text }) => REGISTRY_FLAGS.has(text.split('=')[0] ?? '') || SCOPE_REGISTRY.test(text) || CONFIG_REGISTRY.test(text) || ATTACHED_INDEX.test(text));
 
