@@ -235,7 +235,7 @@ export interface Origins {
   prompted: Set<string>;
 }
 
-export const readOrigins = async (file: string, firstLines: ReadonlyMap<string, number>): Promise<Origins> => {
+export const readOrigins = async (file: string, firstLines: ReadonlyMap<string, number>, servers: ReadonlySet<string>): Promise<Origins> => {
   const origins = new Map<string, Origin>();
   const prompted = new Set<string>();
   const byCanon = new Map<string, string[]>();
@@ -245,8 +245,15 @@ export const readOrigins = async (file: string, firstLines: ReadonlyMap<string, 
     .map(patternOf)
     .join('|');
   // Not inside a longer word or a path: `lib` is neither `lib-extra` nor `other/lib`, while `/lib` is how a skill is typed.
-  // An MCP server reaches the agent only as `mcp__<server>__<tool>`, which that rule refuses (`_` joins words), so that spelling is a mention too.
-  const words = new RegExp(`(?<![\\w@.-])(?<![\\w.-]/)(?:${alternatives})(?![\\w-]|\\.\\w)|(?<=(?<!\\w)mcp__)(?:${alternatives})(?=__)`, 'gi');
+  // An MCP server reaches the agent only as `mcp__<server>__<tool>`, which that rule refuses (`_` joins words), so that spelling is a mention too,
+  // but only of a name that crossed as a server: a package or skill sharing a listed server's name is not that server. With no server the branch is
+  // left out, since an empty alternation matches everywhere.
+  const serverNames = [...servers]
+    .sort((one, two) => two.length - one.length)
+    .map(patternOf)
+    .join('|');
+  const serverBranch = serverNames === '' ? '' : `|(?<=(?<!\\w)mcp__)(?:${serverNames})(?=__)`;
+  const words = new RegExp(`(?<![\\w@.-])(?<![\\w.-]/)(?:${alternatives})(?![\\w-]|\\.\\w)${serverBranch}`, 'gi');
   const last = Math.max(...firstLines.values());
   const tools = new Map<string, string>();
   let position = -1;
