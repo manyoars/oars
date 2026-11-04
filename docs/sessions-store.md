@@ -507,7 +507,7 @@ the raw outlives the harness's own cleanup (`cleanupPeriodDays`) at no extra dis
 file system without hard links, it copies instead. A rerun leaves a present link alone and replaces a stale copy. The archive is
 local only and is never read by `derive`.
 
-## The V15 exclusion list
+## The exclusion list
 
 One rule decides which sessions may enter the pool (A38): a session is excluded if any line of its main or subagent
 transcript holds a listed term, scanned locally before anything is deposited. A session with no main transcript to scan
@@ -831,7 +831,7 @@ that a deposit counts only the child's own prompts.
 
 ## The outcome gold set
 
-`oars sessions gold sample` writes `outcome-gold-<date>.md` to `<claude config>/session-commons/review/`: about 200 prompts in batches of 50, each with the redacted request, the result (commit message and diff stat where found, the transcript's own edit calls, or the actions of a prompt that edited nothing), and a `Judgment: yes|no` line. The draw is seeded and weighted by the square root of each class and model cell, with at most two prompts a session, so its base rate is the sample's, not the store's. Every session passes the V15 rule (`checkSession`) first: one that holds a listed term, has no raw to scan, or cannot be read is left out, and a missing or empty term file (`OARS_EXCLUSION_TERMS`) refuses the draw. `--exclude-term` adds terms to the file's, never in place of it. A marker prompt, a `no-tools` prompt (its reply is the closing claim), and a session from any other harness (every `SOURCES` name) are not drawn. The signals go to the `.arms.json` file beside it. `oars sessions gold score <file>` prints, per model and pooled, each signal's AUROC with a DeLong 95% interval and the base rate, from whatever is judged so far. Both are local, and neither is ever committed. A signal is an observation, not a label, and no signal is combined with another.
+`oars sessions gold sample` writes `outcome-gold-<date>.md` to `<claude config>/session-commons/review/`: about 200 prompts in batches of 50, each with the redacted request, the result (commit message and diff stat where found, the transcript's own edit calls, or the actions of a prompt that edited nothing), and a `Judgment: yes|no` line. The draw is seeded and weighted by the square root of each class and model cell, with at most two prompts a session, so its base rate is the sample's, not the store's. Every session passes the exclusion rule (`checkSession`) first: one that holds a listed term, has no raw to scan, or cannot be read is left out, and a missing or empty term file (`OARS_EXCLUSION_TERMS`) refuses the draw. `--exclude-term` adds terms to the file's, never in place of it. A marker prompt, a `no-tools` prompt (its reply is the closing claim), and a session from any other harness (every `SOURCES` name) are not drawn. The signals go to the `.arms.json` file beside it. `oars sessions gold score <file>` prints, per model and pooled, each signal's AUROC with a DeLong 95% interval and the base rate, from whatever is judged so far. Both are local, and neither is ever committed. A signal is an observation, not a label, and no signal is combined with another.
 
 `gold sample` and `gold arms` number turns by the capture's rule ("What opens a prompt"), so an entry drawn before CAPTURE 10 from a session with a command-opened turn no longer matches its view, and `gold arms` counts it as changed and reads nothing for it.
 
