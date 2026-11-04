@@ -100,7 +100,7 @@ describe('interaction', () => {
   });
 
   it('does not hold effort constant: effort is not in a cell (rule 3), so two tiers at different efforts are compared and the slice names no effort', () => {
-  const found = reads(
+    const found = reads(
       tiers(
         [
           { name: 'Edit', count: 200, failed: 120 },

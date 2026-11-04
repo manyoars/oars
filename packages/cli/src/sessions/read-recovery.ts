@@ -44,7 +44,9 @@ export type RecoveryDrop =
   /** Calls of this action in cells, none of them failed: the error line's call did not settle as an error. */
   | 'no-failed-cell-of-action'
   /** Failed calls of this action in cells, none on a day this signature occurred. */
-  | 'no-failed-cell-on-day';
+  | 'no-failed-cell-on-day'
+  /** Every day the signature's errors and their frames can name is unknown. A day cell exists for a known day only (rule 6), so there is no cell to cite however many failed calls the action has. */
+  | 'frame-has-no-day';
 
 export interface RecoveryOutcome {
   reads: ReadBody[];
@@ -67,16 +69,18 @@ export const recoveryOf = ({ pool, store }: FamilyInput): RecoveryOutcome => {
     const session = sessions.get(error.agent ?? error.session);
     return session?.frame?.day ?? utcDay(session?.tsFirst) ?? UNKNOWN;
   };
-  const dropped: RecoveryOutcome['dropped'] = { 'no-cell-of-action': 0, 'no-failed-cell-of-action': 0, 'no-failed-cell-on-day': 0 };
+  const dropped: RecoveryOutcome['dropped'] = { 'no-cell-of-action': 0, 'no-failed-cell-of-action': 0, 'no-failed-cell-on-day': 0, 'frame-has-no-day': 0 };
   const reads = [...groupBy(oneRowPerCall(store.errors), (error) => error.sig)].flatMap(([sig, list]) => {
     const inputs = new Set<Cell>();
     const following: { [action: string]: number } = {};
     let failedAction: CanonicalAction = 'other';
+    let dated = false;
     const session = (error: ErrorObservation): string => error.agent ?? error.session;
     for (const error of list) {
       failedAction = actionIn(session(error), error.tool);
       const next = error.next[0] === undefined ? undefined : actionIn(session(error), error.next[0]);
       for (const day of new Set([utcDay(error.ts) ?? UNKNOWN, frameDayOf(error)])) {
+        dated ||= day !== UNKNOWN;
         for (const cell of cellsAt.get(`${shapeOf([failedAction])}/${day}`) ?? []) if (cell.failed > 0) inputs.add(cell);
         if (next !== undefined) for (const cell of weeksAt.get(`${shapeOf([failedAction, next])}/${weekStartOf(day)}`) ?? []) inputs.add(cell);
       }
@@ -87,7 +91,7 @@ export const recoveryOf = ({ pool, store }: FamilyInput): RecoveryOutcome => {
     }
     if (inputs.size === 0) {
       const ofAction = cellsOf.get(shapeOf([failedAction])) ?? [];
-      const reason: RecoveryDrop = ofAction.length === 0 ? 'no-cell-of-action' : ofAction.some((cell) => cell.failed > 0) ? 'no-failed-cell-on-day' : 'no-failed-cell-of-action';
+      const reason: RecoveryDrop = !dated ? 'frame-has-no-day' : ofAction.length === 0 ? 'no-cell-of-action' : ofAction.some((cell) => cell.failed > 0) ? 'no-failed-cell-on-day' : 'no-failed-cell-of-action';
       dropped[reason] += 1;
       return [];
     }
