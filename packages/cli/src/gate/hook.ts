@@ -8,6 +8,7 @@ import { makeRedactor } from '../sessions/redact.js';
 import { checkCall, type Crossing } from './checks.js';
 import { withLocalBin, type LocalBinMemo } from './local-bin.js';
 import type { FillAsk } from './hook-fill.js';
+import { loadPolicy, type PolicySource } from './policy.js';
 import { loadIndex, keepIndex, noveltyOf, scopesOf } from './novelty.js';
 import { GATE_VERSION, parseRows, permissionOf, type CrossingRecord, type RegistryRow } from './record.js';
 import { askable, type RegistryAnswer, type RegistryReader } from './registry.js';
@@ -135,6 +136,7 @@ const recordOf = (
   crossing: Crossing,
   novelty: CrossingRecord['novelty'],
   read: { answer: RegistryAnswer } | undefined,
+  policy: PolicySource,
 ): CrossingRecord => ({
   kind: 'crossing',
   v: GATE_VERSION,
@@ -160,6 +162,7 @@ const recordOf = (
   registryAge: read === undefined ? 'not-read' : ageOf(read.answer, input.ts),
   arm: 'none',
   lineShown: 'none',
+  policy,
   session: input.session,
   agent: input.agent,
   toolUseId: input.toolUseId,
@@ -194,6 +197,7 @@ export const runGateHook = async (stdin: string, deps: GateHookDeps): Promise<vo
   const index = await loadIndex(deps.storeDir, crossingsPath(deps.storeDir));
   const repository = cwd === null ? '' : await repositoryOfCwd(cwd);
   const kept = await keptAnswers(deps.storeDir);
+  const { source } = await loadPolicy(deps.storeDir);
   const rows: CrossingRecord[] = [];
   const lines = new Set<string>();
   const answered: RegistryRow[] = [];
@@ -207,7 +211,7 @@ export const runGateHook = async (stdin: string, deps: GateHookDeps): Promise<vo
     if (read?.asked === true && read.answer.state !== 'unreachable') {
       answered.push({ kind: 'registry', v: GATE_VERSION, day: ts.slice(0, 10), ts, class: crossing.class, state: read.answer.state, created: read.answer.created, name: crossing.name, latest: read.answer.latest });
     }
-    rows.push(recordOf(common, crossing, novelty, read));
+    rows.push(recordOf(common, crossing, novelty, read, source));
   }
   // The record first: an index line for a row that was never written would call the next crossing of the name old.
   const record = { file: crossingsPath(deps.storeDir), text: rows.map((row) => `${JSON.stringify(row)}\n`).join('') };

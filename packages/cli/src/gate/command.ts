@@ -8,6 +8,7 @@ import type { SessionsRuntime } from '../sessions/store.js';
 import { crossingsPath } from './hook.js';
 import { COMMAND, EVENT, installGateHook, MATCHER, uninstallGateHook } from './install.js';
 import { loadIndex } from './novelty.js';
+import { formatPolicy, loadPolicy, policyPath } from './policy.js';
 import { parseRows } from './record.js';
 import type { RegistryReader } from './registry.js';
 import { formatReport, reportOf } from './report.js';
@@ -54,6 +55,13 @@ export const gateInstall = async (deps: SessionsDeps): Promise<Outcome> => {
     lines.push('Run `oars gate replay --allow <folder>` once to seed the novelty index; until then the hook records novelty as not-read.');
   }
   return { document: { ok: true, file, changed: result.changed, event: EVENT, matcher: MATCHER, command: COMMAND }, text: lines.join('\n') };
+};
+
+/** The policy in force for this store: the file's settings, or the defaults and why. Reads one file, writes none. */
+export const gatePolicy = async (deps: SessionsDeps): Promise<Outcome> => {
+  const storeDir = runtimeOf(deps).storeDir;
+  const read = await loadPolicy(storeDir);
+  return { document: { ok: true, file: policyPath(storeDir), source: read.source, policy: read.policy }, text: formatPolicy(read, policyPath(storeDir)) };
 };
 
 export const gateUninstall = async (deps: SessionsDeps): Promise<Outcome> => {

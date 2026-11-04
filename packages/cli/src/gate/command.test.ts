@@ -6,7 +6,7 @@ import { run } from '../cli.js';
 import { CliError, ExitCode } from '../errors.js';
 import { harness, removeTestDirs } from '../test-support.js';
 import { addProject, cleanup, stage } from '../sessions/test-support.js';
-import { gateReplay, gateReport } from './command.js';
+import { gatePolicy, gateReplay, gateReport } from './command.js';
 import { parseRows } from './record.js';
 import type { RegistryReader } from './registry.js';
 
@@ -103,6 +103,33 @@ describe('oars gate replay and report', () => {
     const { deps, err } = setup();
     expect(await run(['gate', 'replay'], deps)).toBe(ExitCode.USAGE);
     expect(err.join('')).toContain('--allow');
+  });
+});
+
+describe('oars gate policy', () => {
+  it('prints the defaults when no file is there, and the file when one fits', async () => {
+    const { deps, out, staged } = setup();
+    expect(await run(['gate', 'policy'], deps)).toBe(ExitCode.OK);
+    expect(out.join('')).toContain('Policy in force: defaults (no file at');
+    expect(out.join('')).toContain('not-found: warn');
+    mkdirSync(staged.storeDir, { recursive: true });
+    writeFileSync(join(staged.storeDir, 'gate-policy.json'), '{"classes":{"not-found":"block"},"holdbackPercent":25}');
+    out.length = 0;
+    expect(await run(['gate', 'policy'], deps)).toBe(ExitCode.OK);
+    expect(out.join('')).toContain('not-found: block');
+    expect(out.join('')).toContain('Holdback: 25% of notes are not shown');
+  });
+
+  it('prints one JSON document with --json, and says an invalid file was ignored', async () => {
+    const { deps, out, staged } = setup();
+    mkdirSync(staged.storeDir, { recursive: true });
+    writeFileSync(join(staged.storeDir, 'gate-policy.json'), 'not json');
+    await run(['--json', 'gate', 'policy'], deps);
+    expect(JSON.parse(out.join(''))).toMatchObject({ ok: true, source: 'invalid', policy: { classes: { 'young-name': 'warn', 'not-found': 'warn' }, youngDays: 30, holdbackPercent: 10 } });
+  });
+
+  it('says so when the store is not configured', async () => {
+    await expect(gatePolicy({ sessions: undefined, install: undefined, now: () => 0 })).rejects.toBeInstanceOf(CliError);
   });
 });
 
