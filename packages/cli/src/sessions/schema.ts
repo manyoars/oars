@@ -587,7 +587,7 @@ export interface RecallCall {
   cwd?: string;
 }
 
-/** One hook invocation, appended to `hook-calls.jsonl` by the hook itself; `measure` counts these per session. Class A: `session`, `at`, `error`; P: `event`, `hit`, `ms`. */
+/** One hook invocation, appended to `hook-calls.jsonl` by the hook itself; `measure` counts these per session. Class A: `session`, `at`, `error`; P: `event`, `hit`, `ms`, `startMs`. */
 export interface HookCall {
   at: string;
   event: 'session-start' | 'pre-tool' | 'post-tool' | 'stop' | 'nightly';
@@ -597,7 +597,7 @@ export interface HookCall {
   hit: boolean;
   /** In-process work: from the start of `runHook` to the row. */
   ms: number;
-  /** The process time before `runHook` began (node start and module load); `startMs + ms` is the field figure. Calls written before it existed have none. */
+  /** The process time before `runHook` began (node start, module load, and the stdin read); `startMs + ms` is the field figure. Calls written before it existed have none. */
   startMs?: number;
   /** The failure's first informative line, redacted and cut to 300 characters, when the hook failed (it still exits 0); null when it ran clean. */
   error: string | null;

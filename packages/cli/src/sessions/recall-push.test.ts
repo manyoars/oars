@@ -173,6 +173,13 @@ describe('the pre-tool push', () => {
     expect(rows.map((row) => row.hit)).toEqual([true, false]);
     expect(rows[0]).toMatchObject({ event: 'pre-tool', session: sid, error: null });
     expect(typeof rows[0]?.ms).toBe('number');
+    expect(rows[0]?.startMs).toBeGreaterThan(0);
+    // The reader keeps startMs; a row written before the field existed reads back without the key.
+    const written = await readHookCalls(staged.storeDir);
+    expect(written[0]?.startMs).toBe(rows[0]?.startMs);
+    writeFileSync(join(staged.storeDir, 'hook-calls.jsonl'), `${JSON.stringify({ at: 'a', event: 'stop', session: null, hit: false, ms: 1, error: null })}
+`);
+    expect(Object.keys((await readHookCalls(staged.storeDir))[0] ?? {})).not.toContain('startMs');
     expect(text).not.toMatch(/secret|Monitor|Bash|query/);
   });
 
