@@ -23,7 +23,15 @@ const NOW = Date.parse('2026-11-04T10:00:00.000Z');
 
 const depsFor = (storeDir: string, extra: Partial<GateHookDeps> = {}): GateHookDeps => ({ storeDir, now: () => NOW, clock: () => 0, deadlineMs: 800, ...extra });
 
-const payload = (command: string, extra: Record<string, unknown> = {}): string =>
+/** The fields of the harness's payload these tests set beside the command. */
+interface HookPayload {
+  session_id: string;
+  tool_use_id: string;
+  cwd: string;
+  agent_id: string;
+}
+
+const payload = (command: string, extra: Partial<HookPayload> = {}): string =>
   JSON.stringify({ session_id: 's1', tool_use_id: 'u1', tool_name: 'Bash', tool_input: { command }, cwd: tmpdir(), permission_mode: 'default', hook_event_name: 'PreToolUse', ...extra });
 
 const rowsOf = (storeDir: string): CrossingRecord[] =>

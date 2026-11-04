@@ -1,6 +1,6 @@
 # Gate: install, hook, replay, and report
 
-`oars gate replay` finds every package, MCP server, and skill your agents picked in session logs already on your disk, and `oars gate report` counts them. It records the pick. It is capture first and not a security product: it blocks nothing and calls nothing a verdict. `oars gate install` adds one hook that records each pick as it happens, into the same file.
+`oars gate replay` finds every package, MCP server, and skill your agents picked in session logs already on your disk, and `oars gate report` counts them. It records the pick. It is capture first, and it calls nothing a verdict. `oars gate install` adds one hook that records each pick as it happens, into the same file, and says something about a pick only when a policy you wrote asks it to (see "Notes, labels, and the policy file").
 
 ```
 oars gate replay --allow ~/work/app          # writes crossings.jsonl into the sessions store
@@ -8,12 +8,13 @@ oars gate replay                             # no --allow: the allowlist a depos
 oars gate replay --allow app --registry-state   # also ask the package manager what the registry holds
 oars gate report                             # counts over crossings.jsonl, and what replay cannot see
 oars gate install                            # wire the recording hook into Claude Code, user scope
+oars gate policy                             # print the policy in force and where it came from
 oars gate uninstall                          # remove that one entry
 ```
 
 ## What a crossing is
 
-A tool call that takes something from outside the repository into the agent's session, named by the closed vocabulary in `packages/cli/src/gate/checks.ts`. The same code is what a later hook calls on a live tool call, so replay and a hook agree.
+A tool call that takes something from outside the repository into the agent's session, named by the closed vocabulary in `packages/cli/src/gate/checks.ts`. The same code is what `oars gate hook` calls on a live tool call, so replay and a hook agree.
 
 | Matcher | Class | Forms |
 |---------|-------|-------|
@@ -54,11 +55,40 @@ A word that follows a Python name and is not an operator (`foo bar baz`, `a#secr
 
 ## `oars gate hook`
 
-What the harness runs before each matching tool call. It reads the call's JSON on stdin, runs the same `checkCall` replay runs, and appends one `crossing` row (`via: hook`) per crossing to `crossings.jsonl`. A call that crosses nothing writes nothing and touches no network. It only records: stdout is empty and the exit code is 0 on every path (malformed stdin, a missing or full store, a thrown error), and it never grants a permission or rewrites the call's input, so the call runs as it would have.
+What the harness runs before each matching tool call. It reads the call's JSON on stdin, runs the same `checkCall` replay runs, and appends one `crossing` row (`via: hook`) per crossing to `crossings.jsonl`. A call that crosses nothing writes nothing and touches no network. Its stdout is empty and its exit code is 0 on every path (malformed stdin, a missing or full store, a thrown error) unless a policy line applies (next section). It never grants a permission, asks the operator, or rewrites the call's input, so a call it does not block runs as it would have.
 
-It writes only what cannot be recovered later: the identity keys, the time, the version as stated, the permission mode, depth and agent, novelty, and the registry state at that moment. The registry state is the hook's own kept answer first (`gate-registry.jsonl`, one day), else one question through the same asker replay uses, for the same managers and under the same exclusions (a call that chose its registry or folder is not asked), cut at 650 ms. Where the name came from, who decided, what happened next, routing around, a later removal, and a `not-found` miss are not known to a hook and read `not-read` until a replay fills them in. The hook reads no transcript. `arm` and `lineShown` read `none`.
+It writes only what cannot be recovered later: the identity keys, the time, the version as stated, the permission mode, depth and agent, novelty, and the registry state at that moment. The registry state is the hook's own kept answer first (`gate-registry.jsonl`, kept until the end of the next UTC day; a not-found answer is trusted for 10 minutes), else one question through the same asker replay uses, for the same managers and under the same exclusions (a call that chose its registry or folder is not asked), cut at 650 ms of the process clock, node's own start included. A cut ask does not end there: the hook hands the name to a detached helper (`hook-fill-main.js`) that finishes the question with the installed manager, contacts nothing the manager would not, and writes a found or not-found answer to the cache, so the next sight of the name reads it inside the budget. At most one helper runs per name (an empty `gate-ask-*.lock` file in the store, honored for 5 minutes), and a failed ask writes nothing. The helper ends on its own timeouts (15 seconds), and the manager keeps its own cache outside the store, as it does for replay. Where the name came from, who decided, what happened next, routing around, a later removal, and a `not-found` miss are not known to a hook and read `not-read` until a replay fills them in. The hook reads no transcript. `arm`, `lineShown`, `lineHeld`, and `policy` are the hook's own and are described below.
 
-It is sub-second by construction: the entry (`bin.ts`) loads only the hook for `oars gate hook`, a registry ask that is not answered in time reads `not-read`, and the process ends by itself 900 ms after it starts, writing the row it has. Novelty (the first time a name is seen in the session, the repository, and the whole record) comes from a small kept index, `gate-index.txt`, of hashes, one line per name and scope; the log is never scanned. A damaged index reads `not-read` for novelty and is left as it is. Measured from the built CLI over 100 runs against a store holding 100,000 prior crossings and a 100,001-line index, half of them naming a different real package so the registry is asked: p50 245 ms, p95 722 ms, max 791 ms, every run exit 0 with empty stdout (free RAM 4.2 GB, Windows). On that machine `npm view` takes about 1.6 s, longer than the 650 ms cut, so none of the 50 asking rows came back with an answer (all `not-read`); a cut ask keeps nothing, so a slow box reads `not-read` on every sight. The registry fields fill in on a machine where `npm view` answers inside 650 ms, or from a replay with `--registry-state`. The tests run the installed command with `oars` off the `PATH`.
+It is sub-second by construction: the entry (`bin.ts`) loads only the hook for `oars gate hook`, a registry ask that is not answered in time reads `not-read` for that sight, and the process ends by itself 900 ms after it starts, writing the row it has. Novelty (the first time a name is seen in the session, the repository, and the whole record) comes from a small kept index, `gate-index.txt`, of hashes, one line per name and scope; the log is never scanned. A damaged index reads `not-read` for novelty and is left as it is. Measured from the built CLI over 100 runs against a store holding 100,000 prior crossings and a 100,001-line index, half of them naming a different real package so the registry is asked: p50 245 ms, p95 722 ms, max 791 ms, every run exit 0 with empty stdout (free RAM 4.2 GB, Windows). On that machine `npm view` takes about 1.6 s, longer than the 650 ms cut, so none of the 50 asking rows came back with an answer (all `not-read`); that run was made before the helper existed. With it, the first sight of a name on a slow box reads `not-read` and a later sight reads the answer the helper kept. The registry fields also fill in from a replay with `--registry-state`. The tests run the installed command with `oars` off the `PATH`.
+
+## Notes, labels, and the policy file
+
+The hook is silent by default. A policy file, `gate-policy.json` in the sessions store, sets one of `warn`, `block`, or `off` per class, plus a holdback share. It is written by the operator and by nothing else, in a closed vocabulary; `oars gate policy` prints the policy in force and whether it came from no file (`default`), a file (`file`), or a file that did not fit (`invalid`).
+
+```json
+{ "classes": { "young-name": "warn", "not-found": "block" }, "youngDays": 30, "holdbackPercent": 10 }
+```
+
+| Class | Fires when | Allowed | Default |
+|-------|-----------|---------|---------|
+| `young-name` | the registry's first publish of the name is fewer than `youngDays` (default 30) days old, read from the kept or asked answer | `warn`, `off` | `warn` |
+| `not-found` | the manager's own configuration answered that the registry does not hold the name (never on `not-read`, a cut ask, or an unreachable registry) | `warn`, `block`, `off` | `warn` |
+
+A missing file reads as the defaults. A file that cannot be read, is not JSON, has a key, class, or action outside the table (a `block` on `young-name` is outside it), or a day count outside 1 to 365 or a share that is not a whole number from 0 to 100, also reads as the defaults: the hook keeps its valid JSON and exit code, the row records `policy: invalid`, and `oars gate report` counts it. Nothing blocks until the operator writes `block`.
+
+What the hook says is one of three fixed lines, and each states a fact about the registry and nothing else:
+
+| Line id | Shown as |
+|---------|----------|
+| `young-name-note` | Registry note: `<name>` was first published `<age>` ago in the registry your package manager uses. |
+| `not-found-note` | Registry note: `<name>` was not found in the registry your package manager uses. |
+| `not-found-block` | Blocked by your gate policy: `<name>` was not found in the registry your package manager uses. |
+
+A note is added context for the agent (`additionalContext`); a name already seen in the session gets none. A block is a PreToolUse deny whose reason is the third line, a label stating the fact, and it can only follow a `not-found` answer with the policy on `block`. The hook never approves a call, never asks, and never rewrites its input. Any error on the path stays fail-open and inside the budget.
+
+**The holdback** applies to notes only. With the share at `holdbackPercent` (default 10), a note that would show is withheld on a random draw, and the row records `arm: held` and the line it withheld in `lineHeld`. A block is never held back. `oars gate report` counts `shown` apart from `held`, and the line ids apart, so the two arms can be compared line by line; a row cannot be backfilled, which is why `lineHeld` is written at the time.
+
+**Local exposure.** A crossing is a local record of its exposure (the arm, the line id, and what a replay later merges). It goes nowhere unless the operator opts in, and no opt-in exists yet. There is no prompt, no sign-in, no pool read, and no wire field for it.
 
 ## `crossings.jsonl`
 
@@ -78,7 +108,8 @@ One row stands for one crossing: its key is the session, the tool use id, the cl
 | `next` | P | `proceeded`, `retried`, `routed-around`, `changed-name`, `stopped`, `no-result` (ten calls after a failure); `not-read` on a hook row until a replay |
 | `removedLater`, `depth`, `miss` | P | a later removal in the same repository, `main` or `subagent`, and `not-found` when the result said the name did not exist; `removedLater` and `miss` are `not-read` on a hook row until a replay |
 | `againstLatest`, `registryState`, `registryAge` | P | one reading of the registry, read by a replay with `--registry-state`, or by the hook at the crossing; otherwise `not-read`. A merged row takes all three from the hook when it read them, else all three from the replay; a `local-bin-run` row keeps `not-read`, since it was never asked |
-| `arm`, `lineShown` | P | always `none`: nothing is shown to an agent |
+| `arm`, `lineShown`, `lineHeld` | P | `arm` is `shown` or `held` for a note that would show, else `none` (every block, and every row with nothing to say); `lineShown` and `lineHeld` are ids from a closed table (`none`, `young-name-note`, `not-found-note`, `not-found-block`); a held note records the line it withheld in `lineHeld` and `none` in `lineShown`; a replay row reads `none` in all three until it merges with a hook row |
+| `policy` | P | `default` (no policy file), `file` (one that fit), or `invalid` (one that was there and did not fit, so the defaults stood); absent on a replay row |
 | `session`, `agent`, `toolUseId`, `ts` | A | join ids and a finer time |
 | `name`, `version` | A | what the command stated. A package or server name can identify private work, as `pulls` already says |
 | `registry` row: `kind`, `v`, `day`, `class`, `state` | P | row kind, gate version, UTC day the answer was read, package class, `found` or `not-found` |
@@ -94,7 +125,7 @@ Off by default. With `--registry-state`, replay asks `npm view` or `pip index ve
 
 ## `oars gate report`
 
-Reads only `crossings.jsonl` and prints counts, in the closed vocabulary above, with no judgment words: who wrote the rows (`Recorded by`), crossings by class and form (with distinct names), where the name came from, novelty, who decided, what happened next, and the registry fields. Each crossing counts once, whether the hook, replay, or both saw it, and a field a hook row has not had filled in counts as `not-read`. With no replay run it prints hook-only counts and says the transcript-derived fields are not read yet.
+Reads only `crossings.jsonl` and prints counts, in the closed vocabulary above, with no judgment words: who wrote the rows (`Recorded by`), crossings by class and form (with distinct names), where the name came from, novelty, who decided, what happened next, the registry fields, the notes by arm (`Notes`), the line shown and the line held, and which policy stood for the rows the hook wrote (`Policy`: default, file, or invalid, so a policy file that did not fit is counted). Each crossing counts once, whether the hook, replay, or both saw it, and a field a hook row has not had filled in counts as `not-read`. With no replay run it prints hook-only counts and says the transcript-derived fields are not read yet.
 
 ## What replay cannot see
 
@@ -114,4 +145,4 @@ Read by hand (30 crossings drawn at random from sessions that pass the exclusion
 
 ## Not in this release
 
-Pool reads, sign-in, deposit prompts, blocking, warnings, notes, a policy file, a holdback, and any committed or managed-settings hook. The hook records and nothing else; policy comes in the next brief.
+Pool reads, sign-in, deposit prompts, any opt-in to send a crossing anywhere, and any committed or managed-settings hook. Installing the hook for real stays the operator's call.

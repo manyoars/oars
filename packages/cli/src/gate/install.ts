@@ -2,8 +2,8 @@
 // exactly `COMMAND`, so uninstall removes that entry and nothing else, and every other key and hook in the file is carried through as parsed JSON. The command calls the
 // installed `oars`, never `npx` (which would fetch a package on the hook's clock), and does nothing when `oars` is not on the PATH, so a settings file that outlives the
 // install cannot cost a session its tool calls.
-import { mkdir, realpath, rename, stat, writeFile } from 'node:fs/promises';
-import { dirname } from 'node:path';
+import { chmod, lstat, mkdir, readlink, realpath, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { dirname, resolve } from 'node:path';
 import { CliError, ExitCode } from '../errors.js';
 import { readSettings } from '../sessions/install.js';
 
@@ -47,25 +47,42 @@ const withOwn = (groups: unknown[]): unknown[] => {
 
 const withoutOwn = (groups: unknown[]): unknown[] => groups.flatMap((group) => (holdsOwn(group) ? remainder(group) : [group]));
 
-/** The file as it stands, followed through a symlink (a dotfile manager's), with its permission bits; `undefined` when there is none yet. */
-const existing = async (path: string): Promise<{ target: string; mode: number } | undefined> => {
+/** Where a symlink that points at nothing yet would land, so the rename writes the file it names and leaves the link a link. `undefined` when `path` is not a symlink. */
+const danglingTarget = async (path: string): Promise<string | undefined> => {
   try {
-    const target = await realpath(path);
-    return { target, mode: (await stat(target)).mode & 0o777 };
+    return (await lstat(path)).isSymbolicLink() ? resolve(dirname(path), await readlink(path)) : undefined;
   } catch {
     return undefined;
   }
 };
 
-/** Whole and atomic: a half-written settings file would take every other hook in it down too. The temp file sits beside the real target with the file's own mode (0600 when new: `env` can hold secrets), and the rename lands on the resolved path, so a symlinked settings file stays a symlink. */
+/** The file as it stands, followed through a symlink (a dotfile manager's), with its permission bits. `mode` is `undefined` when there is no file yet; `target` is then where it will land. */
+const existing = async (path: string): Promise<{ target: string; mode: number | undefined } | undefined> => {
+  try {
+    const target = await realpath(path);
+    return { target, mode: (await stat(target)).mode & 0o777 };
+  } catch {
+    const target = await danglingTarget(path);
+    return target === undefined ? undefined : { target, mode: undefined };
+  }
+};
+
+/** Whole and atomic: a half-written settings file would take every other hook in it down too. The temp file sits beside the real target with the file's own mode (0600 when new: `env` can hold secrets), and the rename lands on the resolved path, so a symlinked settings file stays a symlink. The mode is set after the write because the umask masks the one `writeFile` is given; a failed rename leaves no temp file behind. */
 const writeSettings = async (path: string, settings: Json): Promise<void> => {
   const found = await existing(path);
   const target = found?.target ?? path;
   await mkdir(dirname(target), { recursive: true });
   const temp = `${target}.${String(process.pid)}.oars-gate.tmp`;
-  await writeFile(temp, `${JSON.stringify(settings, null, 2)}
-`, { mode: found?.mode ?? 0o600 });
-  await rename(temp, target);
+  const mode = found?.mode ?? 0o600;
+  try {
+    await writeFile(temp, `${JSON.stringify(settings, null, 2)}
+`, { mode });
+    await chmod(temp, mode);
+    await rename(temp, target);
+  } catch (error) {
+    await rm(temp, { force: true });
+    throw error;
+  }
 };
 
 // A `hooks` key, or a PreToolUse key under it, of another shape is the operator's and this version cannot merge into it: refuse it, and write nothing.
