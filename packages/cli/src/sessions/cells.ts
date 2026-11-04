@@ -69,6 +69,26 @@ export const bucketFields = (bucket: string): { harness: string; harnessBucket: 
   return { harness, harnessBucket: version, model };
 };
 
+/** The frame bucket of a (name, `platform`, `shell`) cell: fit's third pool form. Rule 3 lets the two join each other and a name within `q_dims`, but not a version or a model beside them, so the cell is version-free and model-free. */
+export const ENVIRONMENT_BUCKET = 'env:';
+
+export const environmentBucketOf = (frame: Frame): string => `${ENVIRONMENT_BUCKET}${frame.platform}:${frame.shell ?? UNKNOWN}`;
+
+export const isEnvironmentCell = (cell: Pick<Cell, 'frameBucket'>): boolean => cell.frameBucket.startsWith(ENVIRONMENT_BUCKET);
+
+export const environmentFieldsOf = (bucket: string): { platform: string; shell: string } => {
+  const held = bucket.slice(ENVIRONMENT_BUCKET.length);
+  const at = held.indexOf(':');
+  return { platform: held.slice(0, at), shell: held.slice(at + 1) };
+};
+
+/** A one-step named call with no flag and no pull: the name that is one dimension. A call with no identity (a file read, an edit) is its action alone, so it counts. A flag or a pull is a second dimension of its own, so its cell would be four with the pair. */
+const isPlainCall = (motif: Motif): boolean => {
+  const [only] = motif.steps;
+  if (motif.level !== 'named' || motif.steps.length !== 1 || only === undefined) return false;
+  return only.identity === null || !('program' in only.identity) || (only.identity.flags.length === 0 && (only.identity.pulls?.length ?? 0) === 0);
+};
+
 const DAY_MS = 86_400_000;
 
 /** The Monday of the UTC week a UTC day falls in, as a day: the week's name in a cell. An unknown day is an unknown week. */
@@ -160,7 +180,9 @@ export const deriveCells = (store: Store, graph: RecallGraph = NO_RECALLS): Cell
     motifs.set(motif.motifId, motif);
     const day = frame.day ?? UNKNOWN;
     const weekly = tallyAt(motif, frameBucket, 'week', weekStartOf(day), exposed);
-    return motif.level === 'shape' && motif.steps.length === 1 && day !== UNKNOWN ? [weekly, tallyAt(motif, frameBucket, 'day', day, exposed)] : [weekly];
+    const tallies = motif.level === 'shape' && motif.steps.length === 1 && day !== UNKNOWN ? [weekly, tallyAt(motif, frameBucket, 'day', day, exposed)] : [weekly];
+    // Fit's (name, platform, shell) cell: a week cell beside the versioned one, counting the same call.
+    return isPlainCall(motif) ? [...tallies, tallyAt(motif, environmentBucketOf(frame), 'week', weekStartOf(day), exposed)] : tallies;
   };
 
   const sessions = new Map<string, SessionObservation>([...store.sessions, ...store.subagents].map((session) => [session.session, session]));
