@@ -412,7 +412,7 @@ The families at order 1, in the order they are listed. None adjusts for its conf
 | Family | Slice | Value | Not removed |
 |--------|-------|-------|-------------|
 | `recovery` | signature hash, failed action | sessions, errors, days, what followed | `editFollowed` is not success; refusals and hook denials are local policy |
-| `fit` | motif, frame bucket | failure rate | a failure is not a misfit; prompt class |
+| `fit` | motif, frame bucket | failure rate | a failure is not a misfit; prompt class; effort, which is no longer sliced |
 | `cost` | prompt class, model, ISO week | tokens and seconds per prompt, error share | class drift, subagent work, task size; a prompt with no wall time adds no seconds but still counts, so seconds per prompt understates |
 | `change` | motif, harness, version bucket | share and failure rate in that bucket; a move between buckets is order 2 | effort, rule commits, class drift, date |
 | `live` | motif, day | share of the day beside its share of the seven days before | the day's mix; no multiple-test control, so it flags nothing |
@@ -431,7 +431,7 @@ A read above order 1 takes its inputs from the orders below and its interval fro
 |--------|-------|-------|-------|-------------|
 | `version-boundary` | 2 | motif, harness, two neighboring version buckets, metric | before, after, and the move in share or failure rate | date, effort, rule commits, class drift |
 | `substitution` | 2 | rising tool, falling tool, the boundary | each share move, and the falling tool's move among the steps that are not the rising tool's | date, class drift, rule commits |
-| `interaction` | 2 | motif, frame, two tiers | each tier's failure rate, and the gap beyond how those tiers differ on every other tool, kept only when that beyond points the same way as the gap (a tool that resists a tier's main effect is not one that fails more on it) | task assignment by tier, prompt class |
+| `interaction` | 2 | motif, frame, two tiers | each tier's failure rate, and the gap beyond how those tiers differ on every other tool, kept only when that beyond points the same way as the gap (a tool that resists a tier's main effect is not one that fails more on it) | task assignment by tier, prompt class; effort, which is no longer sliced |
 | `day-move` | 2 | motif, metric, two adjacent days | before, after, and the move; a share move exists for a tool on either day, a failure move only for one with 30 calls on both | not screened, so a row is an input and not a finding |
 | `lead-lag` | 3 | lead, lag, level | slope, its check, and the score | see below |
 
