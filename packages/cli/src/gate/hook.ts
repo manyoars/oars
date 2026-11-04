@@ -48,6 +48,8 @@ export interface GateHookDeps {
   append?: (file: string, text: string) => Promise<void>;
   /** Called with the name whose ask was cut or had no time to start, so a helper can finish it and fill the cache for the next sight. Absent: nothing is finished. */
   fill?: (ask: FillAsk) => Promise<void>;
+  /** Whether a helper already holds the name, which keeps the hook from asking the manager a second time. Absent: never locked. */
+  locked?: (ask: FillAsk) => Promise<boolean>;
   /** Told what is about to be written (and `null` once it is), so a process that must stop at a hard deadline can write the record it has. */
   stage?: (pending: { file: string; text: string } | null) => void;
 }
@@ -127,10 +129,14 @@ const registryAnswer = async (deps: GateHookDeps, crossing: Crossing, cwd: strin
   if (held !== undefined && fresh(held, deps.now())) return { answer: asAnswer(held), asked: false };
   if (deps.registry === undefined || cwd === null || !(await isFolder(cwd))) return undefined;
   const ask: FillAsk = { class: crossing.class, name: crossing.name, cwd };
+  // A helper already asks for this name (or failed within the last five minutes): one ask per name, so this sight reads nothing.
+  if ((await deps.locked?.(ask).catch(() => false)) === true) return undefined;
   const left = deps.deadlineMs - WRITE_RESERVE_MS - deps.clock();
-  const answer = left < MIN_ASK_MS ? undefined : await within(deps.registry(ask), left);
+  const stop = new AbortController();
+  const answer = left < MIN_ASK_MS ? undefined : await within(deps.registry({ ...ask, signal: stop.signal }), left);
   if (answer === undefined) {
-    // Not answered in time: the row reads not-read, and a helper finishes the ask so the next sight reads it from the cache.
+    // Not answered in time: the row reads not-read, and a helper finishes the ask so the next sight reads it from the cache. This ask is stopped first, so the manager is never asked twice at once.
+    stop.abort();
     await deps.fill?.(ask).catch(() => undefined);
     return undefined;
   }
