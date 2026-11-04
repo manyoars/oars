@@ -442,8 +442,7 @@ describe('shell, MCP, patch, and usage outcomes', () => {
 
     it('folds a revert whose head has no timestamp, and still cuts the thread at its start', async () => {
       const s = stage();
-      const { timestamp: _written, ...untimed } = head;
-      const bare = { ...line(T(3), 'session_meta', { ...untimed, history_base: { thread_id: thread, end_ordinal_exclusive: 2, end_byte_offset: 1 } }), ordinal: 2 };
+      const bare = { ...line(T(3), 'session_meta', { ...head, timestamp: undefined, history_base: { thread_id: thread, end_ordinal_exclusive: 2, end_byte_offset: 1 } }), ordinal: 2 };
       const home = stageCodex(s.root, [origin(asked(1, 1, 'kept'), asked(2, 2, 'dropped')), { id: `${thread}_${first}`, lines: [bare, asked(3, 3, 'last')] }]);
       expect(await promptsOf(home)).toEqual(['kept', 'last']);
     });

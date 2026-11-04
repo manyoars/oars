@@ -14,9 +14,9 @@ vi.mock('node:fs/promises', () => {
     mkdir,
     readdir,
     // An antivirus share violation on Windows refuses a read of the holder's own lock for a moment.
-    readFile: (file: string, ...rest: [] | [object | string]) => {
+    readFile: (file: string, encoding: 'utf8') => {
       if (lockStat.unreadable && file.endsWith('store.lock')) return Promise.reject(Object.assign(new Error('EBUSY: resource busy or locked'), { code: 'EBUSY' }));
-      return promises.readFile(file, ...rest);
+      return promises.readFile(file, encoding);
     },
     rename,
     rm,
