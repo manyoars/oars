@@ -111,7 +111,10 @@ describe('the source of a replay', () => {
     await writeLog(join(storeDir, 'raw'), 'codex', 'r.jsonl', [bash(8, 't6', 'npm install from-raw-codex')]);
     await writeLog(join(storeDir, 'raw'), 'copilot', 'p.jsonl', [bash(9, 't7', 'npm install from-copilot')]);
 
-    const done = await run([`${REPO}*`, 'cursor', 'codex', 'copilot']);
+    await writeLog(join(storeDir, 'raw'), 'grok', 'g.jsonl', [bash(10, 't8', 'npm install from-grok')]);
+    await writeLog(projectsRoot, 'gemini', 'm.jsonl', [bash(11, 't9', 'npm install from-gemini')]);
+
+    const done = await run([`${REPO}*`, 'cursor', 'codex', 'copilot', 'grok', 'gemini']);
     const { crossings } = await written();
 
     expect(crossings.map((row) => row.name).sort()).toEqual(['archived', 'on-disk']);
