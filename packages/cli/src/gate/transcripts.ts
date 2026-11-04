@@ -106,7 +106,8 @@ const REFUSED = /^The user doesn't want to (?:proceed|take)/;
 const NOT_FOUND: readonly RegExp[] = [
   /\bE404\b|404 Not Found|is not in this registry|could not determine executable/i,
   /No matching distribution|Could not find a version|404 Client Error|Package .{0,200} not found/i,
-  /No such tool|Unknown tool|server .{0,200} not (?:found|connected)/i,
+  // The harness says "No such tool available". A server's own "unknown tool" names one of its actions (a batch step), so the server exists.
+  /No such tool|server .{0,200} not (?:found|connected)/i,
   /Unknown skill|skill .{0,200} not found/i,
 ];
 
@@ -244,7 +245,8 @@ export const readOrigins = async (file: string, firstLines: ReadonlyMap<string, 
     .map(patternOf)
     .join('|');
   // Not inside a longer word or a path: `lib` is neither `lib-extra` nor `other/lib`, while `/lib` is how a skill is typed.
-  const words = new RegExp(`(?<![\\w@.-])(?<![\\w.-]/)(?:${alternatives})(?![\\w-]|\\.\\w)`, 'gi');
+  // An MCP server reaches the agent only as `mcp__<server>__<tool>`, which that rule refuses (`_` joins words), so that spelling is a mention too.
+  const words = new RegExp(`(?<![\\w@.-])(?<![\\w.-]/)(?:${alternatives})(?![\\w-]|\\.\\w)|(?<=(?<!\\w)mcp__)(?:${alternatives})(?=__)`, 'gi');
   const last = Math.max(...firstLines.values());
   const tools = new Map<string, string>();
   let position = -1;
