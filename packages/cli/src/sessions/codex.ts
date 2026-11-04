@@ -5,7 +5,7 @@
 //
 // Where it reads from (`codexRoot`): `$CODEX_HOME`, else `~/.codex` (`%USERPROFILE%\.codex` on Windows); the same on every OS
 // (codex-rs/utils/home-dir/src/lib.rs:5-18). Inside it, `sessions/YYYY/MM/DD/rollout-YYYY-MM-DDThh-mm-ss-<uuid>.jsonl` and `archived_sessions/` hold one
-// file per session; Codex compresses an old one to `.jsonl.zst` and reads either (rollout/src/compression.rs), so this reader does too.
+// file per session (a reverted thread's session spans several); Codex compresses an old one to `.jsonl.zst` and reads either (rollout/src/compression.rs), so this reader does too.
 // A line is `{timestamp, type, payload}` (history/src/lib.rs `RolloutLine`, rollout_payload.rs). Like cursor.ts, the reader writes each session
 // out as the transcript lines `captureSession` already reads, so redaction, the 1,000-character line cap, the salted file hashes, and the
 // skeleton are the Claude Code path's own code:
@@ -15,7 +15,7 @@
 //                       (`fork_thread_from_history` is `ForkPersistence::Copied`, core/src/thread_manager.rs:1680; session.rs:1139; app-server takes it when no prepared fork exists, app-server/src/request_processors/thread_processor.rs:5724-5728). Ordinals exist
 //                       only in a Paginated rollout (ordinal.rs:37), the CLI's default (thread-store/src/local/mod.rs:512-515), which holds item_completed TurnItems
 //                       (UserMessage, AgentMessage, FileChange, McpToolCall) in place of the legacy events below (rollout/src/policy.rs:142-156, `persisted_item_completed_event` :232, its Paginated arm :253); both are read.
-//                       A Copied fork's history, in either mode, is dropped by matching the parent rollout record for record
+//                       A Copied fork's history, in either mode, is dropped by matching the parent's lineage as of the fork's start, record for record
 //   turn_context        {model, cwd}: the model, and the directory when it changes
 //   event_msg user_message {message}            a prompt (the `response_item` user messages also hold injected context, so they are not read)
 //   event_msg agent_message {message}           the assistant's text
@@ -37,7 +37,7 @@
 //                       patch with no end event stays unsettled (a rejected patch is only a `RespondToModel` output, tools/handlers/apply_patch.rs)
 //   event_msg exec_command_end                  never persisted at ac558e2 (policy.rs:165) nor at rust-v0.46.0, so it is not read: the CommandExecution item and the call's output are the two sources
 // Older shapes: the JSON `{output, metadata.exit_code}` wrapper of a shell output (rust-v0.46.0 core/src/tools/mod.rs:186-210).
-// What Codex has no equivalent of (cost, a message id) stays at the value capture gives an absent field.
+// What Codex has no equivalent of (cost) stays at the value capture gives an absent field; message ids and duration are persisted and not read.
 
 import { createReadStream } from 'node:fs';
 import { readdir, readFile, stat } from 'node:fs/promises';
@@ -265,7 +265,7 @@ export const rolloutLines = (text: string, fallbackId: string, parentText?: stri
   let open: Obj | undefined;
   let lastTotal: number | undefined;
   const calls = new Map<string, { kind: 'shell' | 'patch' | 'other'; ids: string[]; session?: string }>();
-  // A unified-exec process still running, by its session id, to the exec_command that started it: the `write_stdin` that sees it exit settles both.
+  // A unified-exec process still running, by its session id, to the exec_command that started it: in a Legacy rollout the `write_stdin` that sees it exit settles both.
   const running = new Map<string, string>();
   // Records below this ordinal are the parent prefix a subagent's rollout copied (ordinal.rs:86-89), not the session's own. Only a Paginated rollout
   // holds ordinals (rollout/src/ordinal.rs:29-30, :37).
@@ -324,8 +324,8 @@ export const rolloutLines = (text: string, fallbackId: string, parentText?: stri
     result(id, failure, when);
   };
   // A shell call settles on its exit code, or on a failure to spawn, whether that comes from its own output or from a CommandExecution item. A
-  // process still running was remembered by its session id, so the outcome that sees it exit (the `write_stdin` that polled it and read its exit
-  // code, or its item) settles both calls. A poll that failed instead (`write_stdin failed: ...`, `exited` false) says nothing about the process: a
+  // process still running was remembered by its session id, so in a Legacy rollout the `write_stdin` that polled it and read its exit
+  // code settles both calls (in a Paginated one an item settles only its own exec_command). A poll that failed instead (`write_stdin failed: ...`, `exited` false) says nothing about the process: a
   // non-empty write to one with no tty is `StdinClosed` (unified_exec/process_manager.rs:1021-1026) and it runs on, so only the poll is the error.
   const settleShell = (id: string, failure: string | undefined, output: string, when: string, exited = true): void => {
     const known = calls.get(id);
@@ -493,7 +493,7 @@ export const rolloutLines = (text: string, fallbackId: string, parentText?: stri
           const out = outcomeOf(payload.output);
           if (known.kind === 'shell') {
             // A shell call settles on its exit code, or on a failure to spawn. A process still running stays unsettled and is remembered by its
-            // session id, so the `write_stdin` that sees it exit settles it too. A declined call has neither, and stays unsettled.
+            // session id, so in a Legacy rollout the `write_stdin` that sees it exit settles it too. A declined call has neither, and stays unsettled.
             if (out.exit !== undefined || out.spawnError) settleShell(id, out.spawnError ? out.text : failureOf(out.exit, out.text), out.text, when, out.exit !== undefined);
             else if (out.running !== undefined && known.session === undefined) running.set(out.running, id);
           } else if (known.kind === 'other') {
@@ -536,7 +536,7 @@ const lineageText = async (session: CodexSession, before = Infinity): Promise<st
     textOf(file).catch((error: unknown) => {
       throw new Error(reasonOf(error, file));
     });
-  const revisions = session.revisions.filter((revision) => revision.at <= before).sort((a, b) => a.at - b.at || a.from - b.from);
+  const revisions = session.revisions.filter((revision) => revision.at <= before).sort((a, b) => a.at - b.at);
   if (revisions.length === 0) return read(session.file);
   const parts = [{ file: session.file, from: Infinity }, ...revisions];
   const texts: string[] = [];
@@ -576,7 +576,7 @@ export const openCodexStore = async (root: string): Promise<CodexStore | undefin
       const head = isObj(meta) && isObj(meta.payload) ? meta.payload : {};
       const base = isObj(head.history_base) ? head.history_base : {};
       const started = Date.parse(str(head.timestamp) ?? '') || 0;
-      if (thread !== null) reverts.set(id, { thread, from: num(base.end_ordinal_exclusive) ?? 0, at: started });
+      if (thread !== null && isObj(meta)) reverts.set(id, { thread, from: num(base.end_ordinal_exclusive) ?? 0, at: started });
       sessions.set(id, { id, folder: str(head.cwd) ?? null, parent: parentOf(head, id, thread), agentRole: str(head.agent_role) ?? null, forkedFrom: str(head.forked_from_id)?.toLowerCase() ?? null, revisions: [], started, file, size: info.size, mtimeMs: Math.floor(info.mtimeMs) });
     } catch (error) {
       unreadable.push({ file, reason: reasonOf(error, file) });
