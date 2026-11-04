@@ -9,6 +9,9 @@
 // class A, so a store written at 10 re-derives on its next deposit and only the pooled projection (computed at deposit, never written) changes.
 // Version 12 (CAPTURE 12, t815) adds the optional `setup`, `funnel`, and `trust` to the session record, read from the transcript only (`session-shape.ts`;
 // `docs/sessions-store.md`). It changed no derivation, so it leaves EXTRACTOR at 10.
+// Version 13 (CAPTURE 13, t826) changes three stored values: the email mask keeps a plain dotted version after `npm:` or `jsr:` (a pinned alias keeps its pick),
+// a block word in another case or a wrapper in another case or by path is skipped to reach the real program, and a `segments` `run` whose program basename holds
+// whitespace stores `<literal>`. It also settles the two stored forms of a `copilot` step at version 12. EXTRACTOR stays 11.
 //
 // Version 10 (CAPTURE 10, t768) gives a turn opened by a slash command or a skill a `user-prompt` record, adds `opened` to that record, and moves `skills`
 // from class P to class A, since a skill's name can be private. It changed no derivation, so it leaves EXTRACTOR at 9.
