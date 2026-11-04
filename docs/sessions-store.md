@@ -558,6 +558,54 @@ matching error line. A rollout whose shell outcomes were all lost would still sh
   with no assistant line before it (a reasoning-only response) has nothing to attach to, so its usage is not counted. Torn lines are counted as
   unparseable; a file with no parseable line is unreadable. Idempotent per thread (`codex/<uuid>` in `state.json`, the summed size and latest mtime of its files).
 
+## The Copilot source
+
+`oars sessions deposit --allow copilot` reads GitHub Copilot CLI session logs into the same store. The records carry `harness: "copilot"`, take the same
+field classes, redaction, and 1,000-character `line` cap as every other source, and `recall`, `measure`, `books`, and `verify` read them with no special case.
+It is one more entry in the source table (`sources.ts`). Only the CLI (the agent in a terminal, which the Copilot SDK also drives) is read; VS Code's Copilot Chat
+writes its own chat model under `workspaceStorage/<hash>/chatSessions/` and is not.
+
+**Fixture-derived, never run live.** This reader was written from the public Copilot SDK's generated event types (github/copilot-sdk @ d28a136, MIT,
+`nodejs/src/generated/session-events.ts`, "AUTO-GENERATED ... from session-events.schema.json") and its `docs/features/session-persistence.md`, and tested only on
+synthetic fixtures; no Copilot store has ever been read by it. The CLI itself (github/copilot-cli) is closed source, and no vendor statement promises the on-disk
+format: the changelog calls the 0.0.342 move "a new session logging format", and the schema marks both fields the outcome rests on `@experimental`:
+`shellExecution` is "Experimental shell completion facts" (session-events.ts:9976-9980) and `fileEdits` begins "Experimental. File mutations..." (:9929-9933). When
+`shellExecution` is absent a shell call falls back to `success` (false is an error, else ok) with an unknown exit; when `fileEdits` is absent an edit is still
+found by its tool name (`edit`, `str_replace_editor`, `apply_patch`, `write_file`), with the path from its request arguments, and a failed one is still an edit. The SDK has hook input (`docs/hooks/*.md`: tool name, arguments, error string), but it
+holds no usage and no transcript path, and it sees only what runs after install, so it is not used. A Copilot release can change the log; an unreadable
+session is warned about by name and skipped, never fatal. The one hand run that would settle it: on a machine with a Copilot account, run one `copilot -p "<task>" --allow-all-tools` task (the flag lets a non-interactive run execute the command and the edit) that
+makes one prompt, runs one command that exits nonzero (for example `ls /nonexistent`), and edits one file, then `oars sessions deposit --allow copilot` and
+`oars sessions verify --strict`. It is settled only if the session count is nonzero, there are zero violations, the session holds an `error` tool record for that
+command with a matching error line, and usage is nonzero (it is written only at a clean exit). To check the resume case, resume that session (`copilot --resume`), send one more prompt, and exit: it is cumulative only if the second `session.shutdown`'s `usage` is at least the first's, and the chunk case holds only if a multi-chunk response's summed `outputTokens` does not exceed the shutdown's.
+
+- **Where.** `$COPILOT_HOME`, else `~/.copilot` (`%USERPROFILE%\.copilot` on Windows): `session-state/<sessionId>/events.jsonl`, one JSON event per line:
+  `{id, parentId, timestamp, type, data}`. Rotated `events.N.jsonl` archives (when `COPILOT_SESSION_EVENT_LOG_ROTATION_BYTES` is set) and the pre-October-2025
+  `history-session-state` folder are not read. Opt-in like Cursor and Codex: discovered by default, opened only when `--allow copilot` names it; the nightly run
+  repeats a saved allow.
+- **Mapping.** `session.start` gives the cwd and `copilotVersion`; `assistant.message.model` the model; `user.message.content` a prompt; `assistant.message` a response.
+  A shell call is found by shape, not name (`shellToolInfo` on the start event, or `shellExecution` on the completion, which also marks one the start did not),
+  because the schema does not list tool names and the vendor's docs disagree on them; its outcome is the real `shellExecution.exitCode`, which decides whatever
+  `success` says, so a call that exited 2 with `success: true` is an error and one that exited 0 with `success: false` is not. The schema's `shell_exit` result
+  contents are not read: it says persisted result contents are stripped, and no source shows a persisted line holding them. An edit is found by `fileEdits`
+  (which also gives the files touched) or by its tool name. `session.resume` and `session.context_changed` move the cwd and model. A `user.message` whose `source`
+  starts `skill-` or `agent-` is the harness writing, not a prompt, and is skipped, as is an autopilot continuation. The error line is the unwrapped message or output, not the wrapper.
+- **Absent.** Cost has no equivalent. `assistant.usage` is `ephemeral` and never on disk, so per-response input and cache tokens do not exist: output tokens come
+  from each `assistant.message`, and the input, cache, and reasoning totals from `session.shutdown.modelMetrics` land once, on the first line of the model's last response (one model call may be several `assistant.message` chunks sharing a `requestId`/`apiCallId`; they are one
+  response). They are read from `agentMetrics.main` when the runtime writes it, because the session-wide `modelMetrics` include subagents, else from `modelMetrics`;
+  output the responses did not report is the total less what they did. A rotated head's `checkpoint: true` events are read like any other (the archives are not).
+  `inputTokens` already includes the cache reads and writes (github/copilot-sdk @ d28a136 `docs/features/usage-and-billing.md:58`: "`inputTokens` already includes `cacheReadTokens` and
+  `cacheWriteTokens`, so do not add them to it. The uncached part of the input is `inputTokens - cacheReadTokens - cacheWriteTokens`", the same at `:679` for `getMetrics`, and
+  `docs/features/streaming-events.md:717` makes the shutdown's `modelMetrics` the same `ModelMetric`), so the stored input is that uncached part and the cache fields are kept apart, as capture's are.
+  A model's totals are taken from its last `session.shutdown`, replacing earlier ones rather than adding to them. Cited: usage totals "belong to a session ... retains its usage and history for resume"
+  and are "running totals for the whole session" (`usage-and-billing.md:36`, `:671`), a "Durable session usage checkpoint for reconstructing aggregate accounting on resume" (`session-events.ts:4450`),
+  "Accumulated session usage metrics" (`:4042`), and the shutdown holds that same accounting state (`:3945-3949`). Inferred: no line says outright that a resumed session's `session.shutdown.modelMetrics`
+  continues the earlier count, but all of it points to cumulative, so the last shutdown is the right one. The totals go on the first line of the model's last response, and the output beyond what all of that model's responses reported is the residual.
+  The main conversation's metrics are `agentMetrics.main.modelMetrics` (the schema: "The main conversation uses the stable key `main`", `:3951`), each model's entry a `ShutdownModelMetric` with `usage` (`:4313-4332`). A chunk's `outputTokens`
+  is "completion_tokens" of the API response (`:7985`), which does not say whether chunks of one response split it or repeat it; the reader sums them. An `assistant.message` with empty content and no tool requests is dropped with its `outputTokens`
+  (the schema splits chunks one per reasoning boundary), so a session with no shutdown loses that output. The hand run checks two against a live store: that a resumed session's second shutdown continues the first, and chunk output sums against the shutdown total.
+  A session that never shut down (a crash) has output tokens only. Subagent events (`agentId`, or the deprecated `parentToolCallId`) are skipped; the parent's `task` call is kept. Torn lines are counted as
+  unparseable; a file with no parseable line is unreadable. Idempotent per session (`copilot/<id>` in `state.json`, size and mtime).
+
 ## The outcome gold set
 
 `oars sessions gold sample` writes `outcome-gold-<date>.md` to `<claude config>/session-commons/review/`: about 200 prompts in batches of 50, each with the redacted request, the result (commit message and diff stat where found, the transcript's own edit calls, or the actions of a prompt that edited nothing), and a `Judgment: yes|no` line. The draw is seeded and weighted by the square root of each class and model cell, with at most two prompts a session, so its base rate is the sample's, not the store's. Every session passes the V15 rule (`checkSession`) first: one that holds a listed term, has no raw to scan, or cannot be read is left out, and a missing or empty term file (`OARS_EXCLUSION_TERMS`) refuses the draw. `--exclude-term` adds terms to the file's, never in place of it. A marker prompt, a `no-tools` prompt (its reply is the closing claim), and a session from any other harness (every `SOURCES` name: Cursor, Codex) are not drawn. The signals go to the `.arms.json` file beside it. `oars sessions gold score <file>` prints, per model and pooled, each signal's AUROC with a DeLong 95% interval and the base rate, from whatever is judged so far. Both are local, and neither is ever committed. A signal is an observation, not a label, and no signal is combined with another.
