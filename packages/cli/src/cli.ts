@@ -487,7 +487,7 @@ const buildProgram = (deps: RunDeps, argv: string[]): Command => {
     .option('--size <n>', 'prompts to draw (default 200)', positiveInteger)
     .option('--batch <n>', 'prompts per batch (default 50)', positiveInteger)
     .option('--seed <text>', "the draw's seed (default today's date)")
-    .option('--exclude-term <text>', 'leave out any session that mentions this, in any case, in its transcript or a subagent transcript (repeatable)', collect)
+    .option('--exclude-term <text>', 'also leave out any session that mentions this, in any case, beyond the local term file (OARS_EXCLUSION_TERMS) that always applies (repeatable)', collect)
     .option('--out-dir <folder>', 'where to write (default <claude config>/session-commons/review)')
     .action(async (_options: OptionValues, command: Command) => {
       const options: OptionValues = command.optsWithGlobals();
@@ -495,6 +495,7 @@ const buildProgram = (deps: RunDeps, argv: string[]): Command => {
         deps,
         flag(options, 'json'),
         await sessionsGoldSample(sessionDeps(deps), {
+          termsFile: exclusionPaths(deps.sessions?.projectsRoot ?? '', deps.env).terms,
           size: count(options, 'size') ?? 200,
           batch: count(options, 'batch') ?? 50,
           seed: text(options, 'seed'),

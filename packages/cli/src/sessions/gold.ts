@@ -3,9 +3,10 @@
 // Every arm stays separate: no composite, no per-person score. The file shows the request and the result; the signals and the agent's closing
 // claim go to a sidecar beside it.
 import { createHash } from 'node:crypto';
-import { readdir, readFile } from 'node:fs/promises';
+import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { INTERRUPT_MARKER } from './derive.js';
+import { checkSession } from './exclusion.js';
 import { cut, EDITS, promptOpening, SHELL, shellTarget, shortName } from './extract.js';
 import type { Redactor } from './redact.js';
 import { PROMPT_HEAD_CHARS, type PromptObservation, type PromptStop, type PromptVerify } from './schema.js';
@@ -558,23 +559,6 @@ export const readTranscript = async (roots: readonly string[], project: string, 
   return undefined;
 };
 
-const subagentFiles = async (dir: string): Promise<string[]> => {
-  const entries = await readdir(dir, { withFileTypes: true }).catch(() => []);
-  const nested = await Promise.all(entries.map((entry) => (entry.isDirectory() ? subagentFiles(join(dir, entry.name)) : Promise.resolve(entry.name.endsWith('.jsonl') ? [join(dir, entry.name)] : []))));
-  return nested.flat();
-};
-
-/** A session is out when a term appears anywhere in it: its main transcript or a subagent's, in either the harness folder or the raw archive. */
-const mentionsTerm = async (roots: readonly string[], project: string, session: string, terms: readonly string[]): Promise<boolean> => {
-  if (terms.length === 0) return false;
-  const files = (await Promise.all(roots.map(async (root) => [join(root, project, `${session}.jsonl`), ...(await subagentFiles(join(root, project, session)))]))).flat();
-  for (const file of files) {
-    const text = (await readIfThere(file))?.toLowerCase();
-    if (text !== undefined && terms.some((term) => text.includes(term))) return true;
-  }
-  return false;
-};
-
 export interface GoldSample {
   document: GoldDocument;
   views: Array<{ id: string; view: GoldView }>;
@@ -582,9 +566,8 @@ export interface GoldSample {
   unreadable: number;
 }
 
-export const sampleGold = async (runtime: SessionsRuntime, store: Store, redact: Redactor, options: { size: number; batch: number; seed: string; date: string; excludeTerms: readonly string[] }): Promise<GoldSample> => {
+export const sampleGold = async (runtime: SessionsRuntime, store: Store, redact: Redactor, options: { size: number; batch: number; seed: string; date: string; termsFile: string; extraTerms: readonly string[] }): Promise<GoldSample> => {
   const roots = [runtime.projectsRoot, paths(runtime.storeDir).raw];
-  const terms = options.excludeTerms.map((term) => term.toLowerCase());
   const projectOf = new Map(store.sessions.map((session) => [session.session, session.project]));
   const excluded = new Set<string>();
   const checked = new Set<string>();
@@ -596,7 +579,8 @@ export const sampleGold = async (runtime: SessionsRuntime, store: Store, redact:
     if (excluded.has(prompt.session)) return false;
     if (!checked.has(prompt.session)) {
       checked.add(prompt.session);
-      if (await mentionsTerm(roots, project, prompt.session, terms)) {
+      // The one V15 rule (A38): a session that holds a term, has no raw to scan, or could not be read is out, and so is every session when the term file is empty.
+      if ((await checkSession(runtime, options.termsFile, project, prompt.session, options.extraTerms)).excluded) {
         excluded.add(prompt.session);
         return false;
       }
