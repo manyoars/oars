@@ -10,6 +10,7 @@ import type { RepoSize } from './public-vocabulary.js';
 import { linkSteps } from './graph.js';
 import { callIdentity, shellIdentity, UNREAD_SHELL, type WordOfCommand } from './identity.js';
 import type { Redactor } from './redact.js';
+import { createShape, INTERRUPT_MARKER } from './session-shape.js';
 import {
   CAPTURE_VERSION,
   ERROR_LINE_CHARS,
@@ -1225,6 +1226,8 @@ export const captureSession = (input: ExtractInput): Capture => {
   const seenResponses = new Set<string>();
   let promptFingerprint: string | null = null;
   let cur: Current | undefined;
+  // The setup, funnel, and trust shape (t815). A subagent's run is the parent's, so it has no run of its own alone.
+  const shape = createShape(harness, redact, { timing: origin === undefined });
 
   const finish = (): void => {
     if (cur === undefined) return;
@@ -1329,6 +1332,7 @@ export const captureSession = (input: ExtractInput): Capture => {
       costState: type === 'cost-state' ? sumModelUsage(o.modelUsage, o.startTime) : null,
     });
 
+    shape.read(o, { side, prompt: cur?.index ?? null });
     if (type === 'attachment') {
       const attachment = isObj(o.attachment) ? o.attachment : undefined;
       if (attachment?.type === 'prompt_snapshot' && attachment.systemPrompt !== undefined) promptFingerprint = sha256(JSON.stringify(attachment.systemPrompt)).slice(0, 12);
@@ -1353,8 +1357,11 @@ export const captureSession = (input: ExtractInput): Capture => {
 
     // prompt_graphs.py and cost_per_class.py: a prompt is a main-line user line with text and no tool result. They also dropped any leading "<", which lost
     // every turn a command or a skill opened (t768); that is now `promptOpening`'s call. A Cursor bubble keeps the old rule until its own brief.
+    // A `!` shell command the operator typed: its tag is injected, so it opens no prompt, but it is the operator's turn.
+    let typedShell = false;
     if (type === 'user' && role === 'user' && o.isMeta !== true && !side) {
       const text = firstTextBlock(content);
+      typedShell = !hasToolResult(content) && LEADING_TAG.exec(text.trimStart())?.[1] === 'bash-input';
       const opening =
         text === '' || hasToolResult(content)
           ? undefined
@@ -1364,6 +1371,8 @@ export const captureSession = (input: ExtractInput): Capture => {
               ? undefined
               : ({ opened: 'typed', request: text } satisfies PromptOpening);
       if (opening !== undefined) {
+        // The harness's interrupt marker is a line it wrote after the operator pressed Esc, not a turn the operator took.
+        shape.turn(text.startsWith(INTERRUPT_MARKER) ? 'none' : 'human', toSeconds(ts));
         finish();
         cur = {
           index: prompts.length,
@@ -1386,6 +1395,8 @@ export const captureSession = (input: ExtractInput): Capture => {
       }
     }
 
+    // Anything else on the main line is the agent at work, an automated turn included: only the operator's own turn ends a run alone.
+    if (!side && (type === 'assistant' || type === 'user')) shape.turn(typedShell ? 'human' : 'agent', toSeconds(ts));
     if (cur !== undefined) {
       // cost_per_class.py reads wall time, turns, model, and tokens from main-line lines only.
       if (!side) {
@@ -1508,6 +1519,7 @@ export const captureSession = (input: ExtractInput): Capture => {
   }
   finish();
 
+  Object.assign(session, shape.finish());
   session.versions = [...versions].sort();
   session.branches = [...branches].sort();
   const kept = [...files].sort().slice(0, FILES_PER_SESSION_MAX);

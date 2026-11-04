@@ -48,9 +48,10 @@
 
 import type { CanonicalAction } from './actions.js';
 import type { RepoSize } from './public-vocabulary.js';
+import type { SessionFunnel, SessionSetup, SessionTrust } from './session-shape.js';
 
 /** Stamped `cv` on every captured record. Bump it when the captured field list changes or a stored value of an existing captured record or skeleton changes: a bump re-reads every transcript. */
-export const CAPTURE_VERSION = '10';
+export const CAPTURE_VERSION = '11';
 
 /** Capture versions the reader derives from. A version-3 record is upgraded on read; a newer one is read for the fields this code knows. */
 export const OLDEST_READABLE_CAPTURE = 3;
@@ -193,6 +194,12 @@ export interface SessionObservation {
   costUsd: number | null;
   /** Summed assistant usage of the file's own line (a main transcript's sidechain lines are not counted; a subagent transcript is its own line). */
   usage: Usage;
+  /** What the transcript shows of the setup the session ran with (t815, class A); absent when it shows none, and on a record captured before version 11. */
+  setup?: SessionSetup;
+  /** The tool names at each funnel stage the transcript shows (class A); same absence rules. */
+  funnel?: SessionFunnel;
+  /** How often a human stopped the session and how long it ran alone (class A); same absence rules. */
+  trust?: SessionTrust;
 }
 
 /**

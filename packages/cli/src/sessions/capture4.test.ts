@@ -52,7 +52,7 @@ const capture = (text: string, sid: string | null, root: string | null) =>
 describe('the CAPTURE 4 fields', () => {
   it('stamps sid on every capture record and records env, repo, fileHashes, and promptFingerprint on the session', () => {
     const result = capture(transcript('/w/app/pkg', '/w/app/src/a.ts'), 'abcd1234', '/w/app');
-    expect(CAPTURE_VERSION).toBe('10');
+    expect(CAPTURE_VERSION).toBe('11');
     for (const record of [result.session, ...result.prompts, ...result.tools, ...result.errorLines]) expect(record).toMatchObject({ cv: CAPTURE_VERSION, sid: 'abcd1234' });
     expect(result.session.env).toEqual({ harness: '2.1.301', oars: '1.2.3', node: 'v99', os: 'plan9' });
     expect(result.session.repo).toMatch(/^[0-9a-f]{16}$/);
