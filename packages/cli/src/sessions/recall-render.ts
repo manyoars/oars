@@ -1,7 +1,7 @@
 // What an agent reads from a recall. Answers render from structured fields only (spec Section 3): every name passes a closed test and the rest is numbers, so
 // error text and other authored strings stay out of an agent's context, whatever a store's records hold.
 import { ACTION_TABLES, actionOf, CANONICAL_ACTIONS } from './actions.js';
-import { LITERAL, PUBLIC_MCP_SERVERS, publicModel, publicVersion } from './public-vocabulary.js';
+import { LITERAL, PUBLIC_MCP_SERVERS, PUBLIC_PACKAGES, publicModel, publicVersion } from './public-vocabulary.js';
 import type { RecallDelta, RecallEvidence } from './recall-object.js';
 import type { RecallRead } from './recall-reads.js';
 import { PROMPT_CLASSES, type Frame, type Harness } from './schema.js';
@@ -19,9 +19,9 @@ const READ_ID = /^(read:)?[0-9a-f]{16}$/;
  */
 const isKeyName = (key: string): boolean => KEY_NAME.test(key) && key.split(KEY_WORD_BREAK).filter((word) => word !== '').length <= MAX_KEY_WORDS;
 
-/** A public name as it stands: a model, a canonical action, a tool a harness's table lists, or a published MCP server. Anything else is what the asker or a record wrote. */
+/** A public name as it stands: a package, a model, a canonical action, a tool a harness's table lists, or a published MCP server. Anything else is what the asker or a record wrote. */
 export const closedName = (name: string): string => {
-  const isPublic = publicModel(name) === name || CANONICAL_ACTIONS.some((action) => action === name) || Object.values(ACTION_TABLES).some((table) => Object.hasOwn(table.rows, name)) || PUBLIC_MCP_SERVERS.has(name);
+  const isPublic = PUBLIC_PACKAGES.has(name) || publicModel(name) === name || CANONICAL_ACTIONS.some((action) => action === name) || Object.values(ACTION_TABLES).some((table) => Object.hasOwn(table.rows, name)) || PUBLIC_MCP_SERVERS.has(name);
   return isPublic ? name : LITERAL;
 };
 

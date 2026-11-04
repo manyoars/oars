@@ -27,7 +27,7 @@ const TOOL = {
       class: { type: 'string', description: 'A prompt class: edit-verify, edit-only, shell-only, research, orchestration, explore-only, mixed, no-tools.' },
       sinceDays: { type: 'integer', minimum: 1, description: 'Only errors from the last N days.' },
       prefix: { type: 'array', items: { type: 'string' }, description: 'Read IDs for your steps so far: what happened from here?' },
-      entity: { type: 'string', description: 'A public name: a tool, an MCP server, an action, or a model.' },
+      entity: { type: 'string', description: 'A public name: a package, a tool, an MCP server, an action, or a model.' },
       family: { type: 'string', description: `A read family to answer: ${RECALL_FAMILIES.join(', ')}. Only recovery and fit can be narrowed by class or sinceDays.` },
       text: { type: 'string', description: 'Text to look for in the local record.' },
     },

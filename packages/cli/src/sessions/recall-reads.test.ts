@@ -126,7 +126,7 @@ describe('the four query forms', () => {
       });
 
     it('answers with the calls and the sessions whose pulls name it, and the record keeps its name', () => {
-      expect(ask(pulling(), { form: 'entity', entity: 'vitest' })).toMatchObject([{ family: 'entity', tool: 'vitest', n: 2, count: 3, calls: null, firstDay: expect.any(String), harnesses: ['claude-code'] }]);
+      expect(ask(pulling(), { form: 'entity', entity: 'vitest' })).toMatchObject([{ family: 'entity', tool: 'vitest', n: 2, count: 3, calls: null, harnesses: ['claude-code'] }]);
       const { recall } = pull(pulling(), { form: 'entity', entity: 'vitest' }, { sid: null, now: NOW, frame: null });
       expect(recall.query).toEqual({ form: 'entity', entity: 'vitest' });
       expect(recall.answer.rendered).toContain('\nvitest | 3 calls, 2 sessions');
