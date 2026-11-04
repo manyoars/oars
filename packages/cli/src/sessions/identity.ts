@@ -46,7 +46,7 @@ const flagsOf = (program: string, args: readonly WordOfCommand[]): string[] => {
   return [...flags].sort();
 };
 
-const isPositional = ({ text, quoted }: WordOfCommand): boolean => !quoted && text !== '' && !text.startsWith('-') && !/[$\\/]/.test(text);
+export const isPositional = ({ text, quoted }: WordOfCommand): boolean => !quoted && text !== '' && !text.startsWith('-') && !/[$\\/]/.test(text);
 
 /** A subcommand from the program's own table, wherever a global flag's value left it; a positional word outside the table is the literal. */
 const subOf = (program: string, args: readonly WordOfCommand[]): string | null => {

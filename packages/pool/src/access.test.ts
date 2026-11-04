@@ -1,11 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import type { SessionSkeleton } from '../../cli/src/sessions/pool-wire.js';
+import { VOCAB_VERSION, type SessionSkeleton } from '../../cli/src/sessions/pool-wire.js';
 import { batchCounts, LEDGER_DAYS } from './access.js';
 import { incrementsOf } from './ingest.js';
 import { sampleSkeleton } from './sample.js';
 import { fieldOf, startPool, stubUser, type TestPool, textOf } from './test-pool.js';
 
-const PATH = '/bundle/2.1.314/0';
+const PATH = `/bundle/2.1.314/${VOCAB_VERSION}`;
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 const ONE = 1;

@@ -93,7 +93,7 @@ describe('the counts', () => {
   });
 
   it('names the sources replay does not read', () => {
-    expect(LIMITS.join(' ')).toMatch(/Codex or Cursor/);
+    expect(LIMITS.join(' ')).toMatch(/Codex, Cursor, or Copilot/);
   });
 
   it('shows the registry counts only when the registry was read', () => {
@@ -115,5 +115,6 @@ describe('the counts', () => {
     expect(empty.crossings).toBe(0);
     expect(empty.classes).toEqual([]);
     expect(formatReport(empty)).toContain('Crossings: 0');
+    expect(formatReport(empty)).toContain('Name came from: none\n');
   });
 });

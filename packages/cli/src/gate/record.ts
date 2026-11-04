@@ -4,6 +4,10 @@ import { CROSSING_CLASSES, CROSSING_FORMS, type CrossingClass, type CrossingForm
 
 export const GATE_VERSION = 1;
 
+/** Every program a crossing can name: the package managers and runners the gate reads, their `python -m` forms, and the `mcp` and `skill` tools. */
+export const PROGRAMS = ['npm', 'pnpm', 'yarn', 'bun', 'npx', 'pnpx', 'bunx', 'pip', 'python -m pip', 'python -m pipx', 'python -m uv', 'uv', 'uvx', 'pipx', 'poetry', 'pdm', 'rye', 'pipenv', 'conda', 'mamba', 'micromamba', 'mcp', 'skill'] as const;
+export type Program = (typeof PROGRAMS)[number];
+
 export const ORIGINS = ['prompt', 'repo-file', 'web', 'tool-output', 'skill', 'harness', 'none-seen'] as const;
 export type Origin = (typeof ORIGINS)[number];
 
@@ -47,7 +51,7 @@ export interface CrossingRecord {
   day: string | null;
   class: CrossingClass;
   form: CrossingForm;
-  program: string;
+  program: Program;
   versionForm: VersionForm;
   statusReports: boolean;
   origin: Origin;
