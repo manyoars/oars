@@ -109,6 +109,16 @@ describe('MCP server', () => {
       expect(await readRecalls(staged.storeDir)).toEqual([]);
     });
 
+    it('refuses a narrowing on the pattern, entity, and text forms, which count all time, as invalid params with nothing recorded', async () => {
+      const staged = seeded();
+      const refuse = async (args: object): Promise<unknown> =>
+        field(field(await handleMessage(staged.runtime, now, { jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: TOOL_NAME, arguments: args } }), 'error'), 'code');
+      expect(await refuse({ text: 'x', sinceDays: 1 })).toBe(-32602);
+      expect(await refuse({ entity: 'y', class: 'mixed' })).toBe(-32602);
+      expect(await refuse({ prefix: ['0123456789abcdef'], sinceDays: 2 })).toBe(-32602);
+      expect(await readRecalls(staged.storeDir)).toEqual([]);
+    });
+
     it('lists every family it answers in the tool schema', async () => {
       const staged = seeded();
       const listed = JSON.stringify(field(await handleMessage(staged.runtime, now, { jsonrpc: '2.0', id: 1, method: 'tools/list' }), 'result'));
