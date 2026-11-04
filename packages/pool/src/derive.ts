@@ -1,17 +1,17 @@
 // Cells and reads over deposits (recall spec Sections 2.5 and 2.6), with the same code a local store runs. Each account's skeletons become that account's store and its cells, and
 // the cells merge by key, so `clusters` counts accounts and nothing here can count one account twice. Recovery is left out: its signature is class A text, which a skeleton does not hold.
 import { bucketFields, cellIdOf, deriveCells, harnessBucket, poolOf, type Cell, type CellSet, type Pool } from '../../cli/src/sessions/cells.js';
-import type { Motif } from '../../cli/src/sessions/motif.js';
+import { motifName, type Motif } from '../../cli/src/sessions/motif.js';
 import { BUNDLE_FORMAT, type Bundle, type SessionSkeleton, type SkeletonTranscript, type StrataCell, VOCAB_VERSION } from '../../cli/src/sessions/pool-wire.js';
 import { makeRead, orderResolver, type Read } from '../../cli/src/sessions/read.js';
 import { deriveAdoption } from '../../cli/src/sessions/read-adoption.js';
 import { deriveChange } from '../../cli/src/sessions/read-change.js';
 import { deriveCost } from '../../cli/src/sessions/read-cost.js';
 import { deriveFit } from '../../cli/src/sessions/read-fit.js';
-import { deriveLive } from '../../cli/src/sessions/read-live.js';
+import { baselineDaysOf, deriveLive } from '../../cli/src/sessions/read-live.js';
 import { deriveMethod } from '../../cli/src/sessions/read-method.js';
 import { deriveNextStep } from '../../cli/src/sessions/read-next-step.js';
-import type { DeriveFamily } from '../../cli/src/sessions/read-support.js';
+import { unitCells, type DeriveFamily, type ReadBody } from '../../cli/src/sessions/read-support.js';
 import type { PromptObservation, SessionObservation, ToolObservation } from '../../cli/src/sessions/schema.js';
 import type { Store } from '../../cli/src/sessions/store.js';
 
@@ -174,7 +174,15 @@ const readsOf = (pool: Pool, accountsOf: MergedCells['accountsOf']): Read[] => {
   const orderOf = orderResolver([]);
   const asOf = { pool: pool.version, day: pool.lastDay };
   const clustersOf = (inputs: readonly string[]): number => new Set(inputs.flatMap((input) => [...(accountsOf.get(input) ?? [])])).size;
-  return DERIVERS.flatMap((derive) => derive({ pool, store: NO_STORE }).map((read) => makeRead({ ...read, asOf, clusters: clustersOf(read.inputs) }, orderOf)));
+  // A live read's baseline is a second set of cells its inputs do not cite, so it takes the same floor on its own: under it, the baseline and the ratio against it are null.
+  const baselined = (read: ReadBody): ReadBody => {
+    if (read.family !== 'live') return read;
+    const { motif, day } = read.slice;
+    const days = new Set(baselineDaysOf(String(day)));
+    const held = unitCells(pool).filter(({ cell, motif: unit }) => unit.level === 'shape' && motifName(unit) === motif && days.has(cell.day));
+    return clustersOf(held.map(({ cell }) => cellIdOf(cell))) >= K_CELL ? read : { ...read, value: { ...read.value, baseline: null, ratio: null } };
+  };
+  return DERIVERS.flatMap((derive) => derive({ pool, store: NO_STORE }).map(baselined).map((read) => makeRead({ ...read, asOf, clusters: clustersOf(read.inputs) }, orderOf)));
 };
 
 /** How many cells one batch derives, which is what a counting batch needs at least one of. */
