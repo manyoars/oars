@@ -10,7 +10,6 @@ export const ExitCode = {
   AUTH: 3,
   INVALID: 4,
   CONFLICT: 5,
-  HUMAN: 6,
   RATE_LIMITED: 7,
   UNREACHABLE: 8,
   /** `pool fetch` hit the pool's weekly cap: nothing is wrong, and the bundle on disk is untouched. */
@@ -22,9 +21,8 @@ const codes = (exit: ExitCode, ...names: string[]): Array<[string, ExitCode]> =>
 
 // Problem codes (or types) from spec 1 §13, T87 and T92. EXPIRED_TOKEN and ACCESS_DENIED are the device flow's own, raised locally.
 const BY_CODE: ReadonlyMap<string, ExitCode> = new Map([
-  ...codes(ExitCode.AUTH, 'SDK_KEY_INVALID', 'EXPIRED_TOKEN', 'ACCESS_DENIED'),
+  ...codes(ExitCode.AUTH, 'EXPIRED_TOKEN', 'ACCESS_DENIED'),
   ...codes(ExitCode.CONFLICT, 'IDEMPOTENCY_CONFLICT'),
-  ...codes(ExitCode.HUMAN, 'ACCOUNT_NOT_READY'),
   ...codes(ExitCode.RATE_LIMITED, 'RATE_LIMITED'),
 ]);
 

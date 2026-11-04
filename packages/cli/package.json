@@ -1,7 +1,7 @@
 {
   "name": "@manyoars/oars",
   "version": "0.3.0",
-  "description": "The oars CLI: deploy an agent to Many Oars, and keep a local memory of your own Claude Code sessions (on your machine; `oars sessions` uploads nothing except what `gold arms` sends through your own Claude subscription)",
+  "description": "The oars CLI: sign in, manage API keys, and keep a local memory of your own Claude Code sessions (on your machine; `oars sessions` uploads nothing except what `gold arms` sends through your own Claude subscription)",
   "license": "Apache-2.0",
   "repository": {
     "type": "git",

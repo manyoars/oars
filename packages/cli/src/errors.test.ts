@@ -5,11 +5,10 @@ import { ExitCode, exitCodeForProblem, unreachableError } from './errors.js';
 const ROWS: Array<[string, number, string, number]> = [
   ['401', 401, '', ExitCode.AUTH],
   ['403', 403, '', ExitCode.AUTH],
-  ['SDK_KEY_INVALID', 401, 'SDK_KEY_INVALID', ExitCode.AUTH],
   ['other 400', 400, '', ExitCode.INVALID],
   ['other 422', 422, '', ExitCode.INVALID],
   ['IDEMPOTENCY_CONFLICT', 409, 'IDEMPOTENCY_CONFLICT', ExitCode.CONFLICT],
-  ['ACCOUNT_NOT_READY', 409, 'ACCOUNT_NOT_READY', ExitCode.HUMAN],
+  ['a code the platform raises for another service', 409, 'ACCOUNT_NOT_READY', ExitCode.UNEXPECTED],
   ['RATE_LIMITED', 429, 'RATE_LIMITED', ExitCode.RATE_LIMITED],
   ['502', 502, '', ExitCode.UNREACHABLE],
   ['503', 503, '', ExitCode.UNREACHABLE],
@@ -26,7 +25,7 @@ describe('exitCodeForProblem', () => {
 
   it('reads the type when there is no code, and ignores the title and detail text', () => {
     expect(exitCodeForProblem(409, { type: 'IDEMPOTENCY_CONFLICT', title: 'Not a rate limit' })).toBe(ExitCode.CONFLICT);
-    expect(exitCodeForProblem(400, { detail: 'ACCOUNT_NOT_READY' })).toBe(ExitCode.INVALID);
+    expect(exitCodeForProblem(400, { detail: 'RATE_LIMITED' })).toBe(ExitCode.INVALID);
   });
 
   it('maps a response that has no problem body by status alone', () => {

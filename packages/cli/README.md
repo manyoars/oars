@@ -187,10 +187,9 @@ Exit codes:
 | 0 | success |
 | 1 | unexpected error |
 | 2 | usage error |
-| 3 | authentication failed (login expired or denied, SDK key invalid, HTTP 401 or 403) |
+| 3 | authentication failed (login expired or denied, HTTP 401 or 403) |
 | 4 | the platform rejected the input, or `sessions verify --strict` found exceptions |
 | 5 | conflict (an idempotency key already used) |
-| 6 | a person must act first (an account step); the last stderr line starts "Needs you:" and names the link |
 | 7 | rate limited |
 | 8 | the server could not be reached (the platform, the issuer, or a pool server) |
 | 10 | `pool fetch` hit the pool's weekly fetch cap; the bundle on disk is untouched, and the message says when to try again |
