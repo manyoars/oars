@@ -4,6 +4,7 @@ import { dirname, join } from 'node:path';
 import type { Outcome } from '../cli.js';
 import { parseAllowList } from './allow.js';
 import { CliError, ExitCode } from '../errors.js';
+import { loadTerms } from './exclusion.js';
 import { EVALUATOR_MODEL, fillArms, sidecarSaver } from './gold-arms.js';
 import { armsPath, coverageLines, formatScore, isGoldDocument, parseGold, renderGold, sampleGold, scoreGold, type GoldDocument } from './gold.js';
 import { makeRedactor } from './redact.js';
@@ -254,8 +255,10 @@ export const sessionsVerify = async (deps: SessionsDeps, options: { session: str
 const GOLD_MODE = 0o600;
 
 /** `gold sample`: writes the blind gold file and its hidden sidecar. It never overwrites one: the file may hold judgments. */
-export const sessionsGoldSample = async (deps: SessionsDeps, options: { size: number; batch: number; seed: string | undefined; excludeTerms: string[]; outDir: string | undefined }): Promise<Outcome> => {
+export const sessionsGoldSample = async (deps: SessionsDeps, options: { size: number; batch: number; seed: string | undefined; termsFile: string; excludeTerms: string[]; outDir: string | undefined }): Promise<Outcome> => {
   const runtime = runtimeOf(deps);
+  // With no terms every session is excluded under V15, so a draw would be empty: say so before anything is read or written.
+  if ((await loadTerms(options.termsFile)).length === 0) throw new CliError('The term file is missing or empty, so every session is excluded (V15). Set OARS_EXCLUSION_TERMS to a file of terms, one per line.', ExitCode.INVALID, 'unreadable');
   const date = new Date(deps.now()).toISOString().slice(0, 10);
   const dir = options.outDir ?? join(dirname(runtime.projectsRoot), 'session-commons', 'review');
   const file = join(dir, `outcome-gold-${date}.md`);
@@ -265,7 +268,7 @@ export const sessionsGoldSample = async (deps: SessionsDeps, options: { size: nu
   if (await taken(arms)) throw new CliError(`${arms} already exists, and it may hold readings. Move it, or pass another --out-dir.`, ExitCode.USAGE, 'usage');
   const store = await loadStore(runtime.storeDir);
   const redact = makeRedactor(await readRedactDomains(runtime.storeDir));
-  const { document, views, unreadable } = await sampleGold(runtime, store, redact, { size: options.size, batch: options.batch, seed: options.seed ?? date, date, excludeTerms: options.excludeTerms });
+  const { document, views, unreadable } = await sampleGold(runtime, store, redact, { size: options.size, batch: options.batch, seed: options.seed ?? date, date, termsFile: options.termsFile, extraTerms: options.excludeTerms });
   await mkdir(dir, { recursive: true });
   // The check above came before a long draw; `wx` holds the promise if another run wrote in between.
   await writeFile(arms, JSON.stringify(document), { mode: GOLD_MODE, flag: 'wx' });
@@ -273,7 +276,7 @@ export const sessionsGoldSample = async (deps: SessionsDeps, options: { size: nu
   const subagents = document.entries.filter((entry) => entry.subagents > 0).length;
   const lines = [
     `Wrote ${String(document.entries.length)} prompts, drawn from ${String(document.frame)}, to ${file}.`,
-    options.excludeTerms.length === 0 ? 'No --exclude-term given: no session was excluded.' : `Excluded ${String(document.excludedSessions)} sessions the draw reached that mention an excluded term.`,
+    `Excluded ${String(document.excludedSessions)} sessions the draw reached under the V15 rule (a listed term, no raw to scan, or unreadable).`,
     `Passed over ${String(unreadable)} prompts whose transcript is gone or no longer matches the store.`,
     `${String(subagents)} sampled prompts ran subagents, whose work is not read.`,
     `Score it after any batch: oars sessions gold score ${file}`,

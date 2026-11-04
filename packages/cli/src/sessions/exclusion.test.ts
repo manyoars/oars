@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { run } from '../cli.js';
 import { CliError, ExitCode } from '../errors.js';
 import { harness, removeTestDirs } from '../test-support.js';
-import { assertDepositable, checkSession, exclusionPaths, loadTerms, scanStore } from './exclusion.js';
+import { checkSession, exclusionPaths, loadTerms, scanStore } from './exclusion.js';
 import { deposit } from './store.js';
 import { cleanup, NOW, stage, type Staged } from './test-support.js';
 
@@ -234,8 +234,6 @@ describe('links to folders (a transcript that was not scanned never reads as cle
     write(raw, [CLEAN]);
     if (!link(gone, join(t.staged.projectsRoot, 'q'))) return ctx.skip();
     expect((await checkSession(t.staged.runtime, t.termsFile, 'q', 's17')).reason).toBe('unreadable');
-    // the assert gate refuses s14
-    await expect(assertDepositable(t.staged.runtime, t.termsFile, 'p', 's14')).rejects.toBeInstanceOf(CliError);
   });
 
   it('aborts naming the ordinal when a link that is not named like a session leads nowhere', async (ctx) => {
@@ -406,19 +404,6 @@ describe('loadTerms and exclusionPaths', () => {
     expect(fallback.terms.replaceAll('\\', '/')).toBe('/c/session-commons/exclusion-terms.txt');
     expect(fallback.list).toBe('/o/list');
     expect(exclusionPaths('/c/projects', {}).list.replaceAll('\\', '/')).toBe('/c/session-commons/exclusion-list.jsonl');
-  });
-});
-
-describe('assertDepositable (the pool deposit gate)', () => {
-  it('refuses an excluded session and lets a clean one through', async () => {
-    const t = setup();
-    write(t.main('p', 'bad'), [DIRTY]);
-    write(t.main('p', 'good'), [CLEAN]);
-    const refused = await assertDepositable(t.staged.runtime, t.termsFile, 'p', 'bad').catch((error: unknown) => error);
-    expect(refused).toBeInstanceOf(CliError);
-    expect(String(refused)).toContain('excluded');
-    expect(String(refused)).not.toContain(TERM);
-    await expect(assertDepositable(t.staged.runtime, t.termsFile, 'p', 'good')).resolves.toBeUndefined();
   });
 });
 

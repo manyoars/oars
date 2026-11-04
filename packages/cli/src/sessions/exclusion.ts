@@ -213,14 +213,10 @@ const judge = async (terms: readonly string[], session: SessionFiles): Promise<V
   return unreadable ? { excluded: true, reason: 'unreadable', hits } : { excluded: false, reason: 'clean', hits };
 };
 
-/** The A38 rule for one session. */
-export const checkSession = async (runtime: SessionsRuntime, termsFile: string, project: string, session: string): Promise<Verdict> =>
-  judge(await loadTerms(termsFile), await filesOf(runtime, project, session));
-
-/** The gate the pool's deposit calls before anything leaves: an excluded session is refused. */
-export const assertDepositable = async (runtime: SessionsRuntime, termsFile: string, project: string, session: string): Promise<void> => {
-  const verdict = await checkSession(runtime, termsFile, project, session);
-  if (verdict.excluded) throw new CliError(`Session ${session} is excluded from the pool by the V15 rule (${verdict.reason}).`, ExitCode.INVALID, 'excluded');
+/** The A38 rule for one session; `extra` adds terms to the file's, but never stands in for it, so a missing or empty term file still excludes everything. */
+export const checkSession = async (runtime: SessionsRuntime, termsFile: string, project: string, session: string, extra: readonly string[] = []): Promise<Verdict> => {
+  const fromFile = await loadTerms(termsFile);
+  return judge(fromFile.length === 0 ? [] : [...fromFile, ...extra.map((term) => term.toLowerCase())], await filesOf(runtime, project, session));
 };
 
 interface SourceHits {

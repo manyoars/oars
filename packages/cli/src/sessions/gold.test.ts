@@ -403,9 +403,12 @@ describe('scoreGold', () => {
 });
 
 describe('oars sessions gold', () => {
-  const setup = () => {
+  // Under V15 a draw needs a term file (none excludes every session): an invented term that no fixture holds, unless the test is about its absence.
+  const setup = (withTerms = true) => {
     const staged = stage();
-    const h = harness();
+    const termsFile = join(staged.root, 'exclusion-terms.txt');
+    if (withTerms) writeFileSync(termsFile, 'unrelated-invented-term\n');
+    const h = harness({ OARS_EXCLUSION_TERMS: termsFile });
     h.deps.sessions = staged.runtime;
     return { ...h, staged };
   };
@@ -504,7 +507,7 @@ describe('oars sessions gold', () => {
   });
 
   it('refuses to sample when no term file is configured, since every session is then excluded (V15)', async () => {
-    const h = setup();
+    const h = setup(false);
     await populate(h);
     const dir = join(h.staged.root, 'no-terms');
     expect(await run(['sessions', 'gold', 'sample', '--size', '1', '--batch', '1', '--out-dir', dir, '--seed', 's'], h.deps)).toBe(ExitCode.INVALID);
@@ -512,11 +515,11 @@ describe('oars sessions gold', () => {
     expect(existsSync(dir)).toBe(false);
   });
 
-  it('says no session was excluded when no term is named, and takes the default folder beside the projects root', async () => {
+  it('takes the default folder beside the projects root, and reports the excluded count when no extra term is named', async () => {
     const h = setup();
     await populate(h);
     expect(await run(['sessions', 'gold', 'sample', '--size', '1', '--batch', '1'], h.deps)).toBe(ExitCode.OK);
-    expect(h.out.join('')).toContain('No --exclude-term given');
+    expect(h.out.join('')).toContain('Excluded 0 sessions');
     expect(readdirSync(join(h.staged.root, 'session-commons', 'review')).filter((name) => name.endsWith('.md'))).toHaveLength(1);
   });
 
