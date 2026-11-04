@@ -601,9 +601,7 @@ const buildProgram = (deps: RunDeps, argv: string[]): Command => {
       // No store means no file: an empty store folder would put crossings.jsonl in the working folder.
       if (runtime === undefined) return;
       let stdin = '';
-      if (runtime.stdin !== undefined) {
-        for await (const chunk of runtime.stdin) stdin += String(chunk);
-      }
+      for await (const chunk of runtime.stdin) stdin += String(chunk);
       await gateHook(stdin, { storeDir: runtime.storeDir, now: deps.now, clock: () => performance.now(), deadlineMs: DEADLINE_MS });
     });
 
