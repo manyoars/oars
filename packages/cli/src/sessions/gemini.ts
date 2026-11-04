@@ -176,6 +176,7 @@ const RENAMED: ReadonlyMap<string, string> = new Map([
   ['google_web_search', 'WebSearch'],
   ['web_fetch', 'WebFetch'],
 ]);
+const TIMED_OUT = /^Command was automatically cancelled because it exceeded the timeout of [\d.]+ minutes without output\./;
 const PATH_TOOLS: ReadonlySet<string> = new Set(['Edit', 'Write', 'Read']);
 
 const CLOSE = '</untrusted_context>';
@@ -254,9 +255,12 @@ export const chatLines = (text: string, fallbackId: string, cwd: string | null):
     if (message.type === 'user') {
       // A user message made of tool results is the model's own turn (geminiChat.ts), not a prompt.
       if (partsOf(message.content).some((part) => isObj(part.functionResponse))) continue;
+      // The vendor's filter reads the text SENT (`content`, chatRecordingService.ts:220-227); a custom command sends its expansion and shows `/cmd` (nonInteractiveCli.ts:289-300),
+      // so the shown text is only what is recorded.
+      const sent = textOf(message.content).trim();
+      if (sent === '' || NOT_TYPED.some((prefix) => sent.startsWith(prefix))) continue;
       const shown = textOf(message.displayContent);
       const typed = shown.trim() === '' ? textOf(message.content) : shown;
-      if (typed.trim() === '' || NOT_TYPED.some((prefix) => typed.trim().startsWith(prefix))) continue;
       sequence += 1;
       lines.push({ ...base, type: 'user', uuid: `${fallbackId}-u${String(sequence)}`, timestamp: when, message: { role: 'user', content: [{ type: 'text', text: typed }] } });
     } else if (message.type === 'gemini') {
@@ -312,6 +316,8 @@ export const chatLines = (text: string, fallbackId: string, cwd: string | null):
         const { output: raw, error } = responseOf(call.result);
         const parsed = shell ? shellResult(raw) : undefined;
         const output = parsed?.output ?? '';
+        // On the inactivity timeout the tool writes one sentence and no trailer, and the executor still records `success` (tools/shell.ts:929-933, tool-executor.ts:144-154).
+        const timedOut = TIMED_OUT.exec(output);
         let failure: string | undefined;
         if (status !== 'success' || error !== undefined) {
           failure = error ?? unprefixed(unwrap(raw)).trim();
@@ -320,6 +326,8 @@ export const chatLines = (text: string, fallbackId: string, cwd: string | null):
           failure = failureOf(parsed.exit, output);
         } else if (parsed?.signal !== undefined) {
           failure = output === '' ? `Signal: ${parsed.signal}` : output;
+        } else if (timedOut !== null) {
+          failure = timedOut[0];
         }
         result(id, failure, finished, output);
       }
@@ -337,12 +345,19 @@ const projectRootOf = async (slug: string): Promise<string | null> => {
   }
 };
 
-/** The session id a chat file's head names, read from the first line of a `.jsonl` file or the object of a `.json` file. */
-const headId = async (file: string): Promise<string | undefined> => {
-  const text = await readFile(file, 'utf8');
-  if (extname(file) === '.json') return str(wholeObject(text)?.sessionId);
-  const first = parse(lineTexts(text)[0] ?? '');
-  return isObj(first) ? str(first.sessionId) : undefined;
+/** The session id and kind (`main` or `subagent`) a chat file's head names, read from the first line of a `.jsonl` file or the object of a `.json` file. */
+const headOf = (file: string, text: string): { id: string | undefined; kind: string | undefined } => {
+  const first = extname(file) === '.json' ? wholeObject(text) : parse(lineTexts(text)[0] ?? '');
+  return { id: isObj(first) ? str(first.sessionId) : undefined, kind: isObj(first) ? str(first.kind) : undefined };
+};
+
+/** True when the file holds no prompt or response: a head written at a chat's start and nothing after it (chatRecordingService.ts:855-865). A torn file is not empty; it is named when read. */
+const holdsNothing = (text: string, id: string): boolean => {
+  try {
+    return chatLines(text, id, null).length === 0;
+  } catch {
+    return false;
+  }
 };
 
 export const openGeminiStore = async (root: string): Promise<GeminiStore | undefined> => {
@@ -370,13 +385,19 @@ export const openGeminiStore = async (root: string): Promise<GeminiStore | undef
     const name = basename(file, extname(file));
     try {
       const info = await stat(file);
+      const text = await readFile(file, 'utf8');
+      const head = headOf(file, text);
+      // A subagent with no parent set is written at the root of `chats/` (chatRecordingService.ts:787,813-814), and the vendor's own listing skips it by `kind` (cli/src/utils/sessionUtils.ts:301).
+      if (parent === null && head.kind === 'subagent') return;
       // A subagent's file is named for the agent, which is unique under its parent; a main session's id is the head's.
-      const named = parent === null ? ((await headId(file)) ?? name) : name;
+      const named = parent === null ? (head.id ?? name) : name;
       const id = parent === null ? named : `${parent}-${named}`;
       if (!SAFE_ID.test(id)) {
         rejected += 1;
         return;
       }
+      // Every new chat appends a head (geminiChat.ts:453), so a launch and quit, or a /clear, leaves a file with nothing in it: no session, and not an unreadable one.
+      if (holdsNothing(text, named)) return;
       const session: GeminiSession = { id, folder, file, size: info.size, mtimeMs: Math.floor(info.mtimeMs), parent };
       // A `.json` file migrated to `.jsonl` can leave both; the newer one is the session.
       const held = found.get(id);

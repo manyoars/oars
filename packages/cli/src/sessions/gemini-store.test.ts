@@ -143,6 +143,21 @@ describe('depositing the Gemini source', () => {
     expect(result.badLines).toBe(1);
   });
 
+  it('does not deposit a head-only file (a launch and quit, or a /clear: chatRecordingService.ts:855-865) as an empty session, and deposits it once a prompt is appended', async () => {
+    const s = staged();
+    const home = stageGemini(s.root, [{ id: E, slug: 'quit', projectRoot: '/x', lines: [geminiHead(E)] }]);
+    const file = join(home, 'tmp', 'quit', 'chats', `session-2026-06-01T10-00-${E.slice(0, 8)}.jsonl`);
+    const first = await deposit(s.runtime, options(['gemini']));
+    expect(first.sessions).toBe(2);
+    expect(first.sources.gemini?.unreadable).toEqual([]);
+    expect(measure(await loadStore(s.storeDir), [], [], 5).last.sessions).toBe(2);
+    expect(trackedKeys(s.storeDir)).toEqual([`gemini/${A}`, `gemini/${B}`]);
+    writeFileSync(file,`${JSON.stringify(geminiHead(E))}\n${JSON.stringify(prompt(1, 'now a prompt'))}\n`);
+    const second = await deposit(s.runtime, options(['gemini']));
+    expect(second.sessions).toBe(1);
+    expect(trackedKeys(s.storeDir)).toEqual([`gemini/${A}`, `gemini/${B}`, `gemini/${E}`]);
+  });
+
   it('deposits a subagent under its parent, so session counts stay main sessions', async () => {
     const s = staged();
     stageGemini(s.root, [{ id: 'agent1', slug: 'app', projectRoot: join(s.root, 'not-a-repo'), parent: A, lines: [geminiHead('agent1', { kind: 'subagent' }), prompt(1, 'look it up'), say(2, 'found it')] }]);

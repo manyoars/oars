@@ -598,19 +598,23 @@ with the file, and usage is nonzero with `input_tokens` equal to the model's pro
 - **Where.** `$GEMINI_CLI_HOME`, else the home, then `.gemini` (`%USERPROFILE%\.gemini` on Windows): `tmp/<slug>/chats/session-<time>-<id8>.jsonl`, one session per file.
   A legacy single-object `*.json` is read too, and the newer of a `.json` and `.jsonl` with one session id wins. A subagent's file is
   `chats/<parentSessionId>/<agentId>.jsonl`, deposited as a subagent of `gemini-<parentSessionId>` so session counts stay main sessions; the parent's `invoke_agent` call
-  stays. Opt-in like the other sources: discovered by default, opened only when `--allow gemini` names it, read-only, with its own cursor (`gemini/<id>` in
+  stays. A file at the root of `chats/` whose head says `kind: "subagent"` (written there when no parent is set, `chatRecordingService.ts:787,813-814`) is skipped, as the vendor's own
+  listing does (`cli/src/utils/sessionUtils.ts:301`). A file holding only a head (every new chat appends one, `geminiChat.ts:453`, so a launch and quit or a `/clear` leaves it) is no session until
+  a prompt is appended; it is not reported as unreadable. Opt-in like the other sources: discovered by default, opened only when `--allow gemini` names it, read-only, with its own cursor (`gemini/<id>` in
   `state.json`, size and mtime); the nightly run repeats a saved allow. The prompt log `logs.json`, the `checkpoint-*.json` copies, and the opt-in telemetry file are
   not read (a subset, copies, and off by default).
 - **Mapping.** The file is the vendor's journal, folded the way its loader does: a message `id` written again replaces the earlier record in its place, and
-  `$rewindTo`, `$patch`, and a deprecated `$set.messages` apply. A `user` message is a prompt, using `displayContent` (what the operator typed) when present; one
+  `$rewindTo`, `$patch`, and a deprecated `$set.messages` apply. A `user` message is a prompt, recorded as `displayContent` (what the operator typed) when present; one
   whose parts are all `functionResponse` is a tool result, and one starting `/`, `?`, `<session_context>`, or `<hook_context>` is not the operator's (the vendor's own resume filter,
-  `utils/sessionUtils.ts:97`). A `gemini` message is a response, with its `model` and `toolCalls`; `thought` parts are left out. A call's `args.file_path` gives the files
+  `utils/sessionUtils.ts:97`), judged on the text sent (`content`), as the vendor does (`chatRecordingService.ts:220-227`), so a custom command whose `content` is its expansion and
+  whose `displayContent` is `/cmd` is a prompt recorded as `/cmd`. A `gemini` message is a response, with its `model` and `toolCalls`; `thought` parts are left out. A call's `args.file_path` gives the files
   touched. Tool names have an `ACTION_TABLES.gemini` row (`run_shell_command`, `replace`, `write_file`, `read_file`, and the rest), so a shell call or an edit never reads as unknown.
 - **Outcome.** A failed shell call is read from the real exit code, not `status`: the vendor records `status: "success"` for a nonzero exit and appends an
   `Exit Code: N` line (or `Signal:`) to the output (`tools/shell.ts:963-964`), wrapped in `<untrusted_context>`. The reader unwraps it, so the error line is the command's
   own output and can join a Claude Code signature. Output over the executor's threshold (default 40,000 characters, `config/config.ts:487`) is rewritten to a header line, the first
   20%, a marker, and the last 80% (`utils/fileUtils.ts:828-833`), and a hook-modified call gets a note after the closing tag (`scheduler/tool-executor.ts:131-133`); the trailer
-  is in the tail that survives, so the reader takes the text before the last closing tag, drops everything through the first opening tag, and still finds the exit code. A call with `status: "error"` or `"cancelled"`, or a `response.error`, is an error with that message
+  is in the tail that survives, so the reader takes the text before the last closing tag, drops everything through the first opening tag, and still finds the exit code. A shell call that hit the inactivity timeout is an error too: the tool writes one sentence (`Command was automatically cancelled because it exceeded the timeout...`) and no trailer
+  (`tools/shell.ts:929-933`), and the executor still records `success` (`scheduler/tool-executor.ts:144-154`), so that sentence is the error line. A call with `status: "error"` or `"cancelled"`, or a `response.error`, is an error with that message
   (the `Error: Tool call execution failed. Reason:` prefix is dropped).
 - **Usage.** Per message only (`tokens{input, output, cached, thoughts, tool, total}`); the vendor's session totals are in memory and never written, so nothing is cumulative across a
   resume and each message is taken as it stands. `tokens.input` is the prompt count and includes the cache (`uiTelemetry.ts:317-320` computes the uncached part as
