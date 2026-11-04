@@ -11,6 +11,7 @@ import { batchHash, canonicalBytes, FIELD_ROWS, fieldsOf, writeBatch } from './p
 import type { Outgoing } from './pool-print.js';
 import { REGISTRY_MAX_AGE_DAYS, VOCAB_SNAPSHOT_DATE } from './public-vocabulary.js';
 import type * as PoolWire from './pool-wire.js';
+import { session as sessionRow } from './pool-fixture.js';
 import { parseSkeleton, skeletonOf, VOCAB_VERSION, type PinnedKey } from './pool-wire.js';
 import { deposit } from './store.js';
 import { addProject, cleanup, NOW, stage, type Staged } from './test-support.js';
@@ -490,7 +491,7 @@ describe('no harness token is ever read', () => {
     expect(await scene.cli('pool', 'login', '--provider', 'github', '--server', POOL)).toBe(ExitCode.OK);
     expect(await scene.cli('pool', 'deposit', '--server', POOL)).toBe(ExitCode.OK);
     expect(await scene.cli('pool', 'outbox', '--server', POOL)).toBe(ExitCode.OK);
-    on(scene, 'get', `/bundle/2.1.314/${VOCAB_VERSION}`, () => HttpResponse.json({ error: 'fetch_cap', message: 'capped' }, { status: 429 }));
+    on(scene, 'get', `/bundle/claude-code/2.1.314/${VOCAB_VERSION}`, () => HttpResponse.json({ error: 'fetch_cap', message: 'capped' }, { status: 429 }));
     await scene.cli('pool', 'fetch', '--harness-version', '2.1.314', '--server', POOL);
     expect(scene.seen.length).toBeGreaterThan(3);
     expect(scene.sent()).not.toContain(HARNESS_SECRET);
@@ -1115,7 +1116,7 @@ describe('oars pool fetch', () => {
     expect(scene.seen).toEqual([]);
   });
 
-  const bundleBody = (version: string): string => JSON.stringify({ format: 1, harnessVersion: version, vocabVersion: VOCAB_VERSION, asOf: { pool: 'p' }, cells: [{}], motifs: [], reads: [{}, {}], strata: [] });
+  const bundleBody = (version: string, harness = 'claude-code'): string => JSON.stringify({ format: 1, harness, harnessVersion: version, vocabVersion: VOCAB_VERSION, asOf: { pool: 'p' }, cells: [{}], motifs: [], reads: [{}, {}], strata: [] });
 
   const signedScene = async (): Promise<{ scene: Scene; sign: (text: string) => Promise<string> }> => {
     const scene = setting();
@@ -1133,7 +1134,7 @@ describe('oars pool fetch', () => {
     const { scene, sign } = await signedScene();
     const payload = bundleBody('2.1.314');
     const signature = await sign(payload);
-    on(scene, 'get', `/bundle/2.1.314/${VOCAB_VERSION}`, () => HttpResponse.json({ payload, signature }));
+    on(scene, 'get', `/bundle/claude-code/2.1.314/${VOCAB_VERSION}`, () => HttpResponse.json({ payload, signature }));
     expect(await scene.cli('pool', 'fetch', '--harness-version', '2.1.314', '--server', POOL, '--json')).toBe(ExitCode.OK);
     const answer = scene.document();
     expect(answer).toMatchObject({ ok: true, harnessVersion: '2.1.314', reads: 2, cells: 1, motifs: 0 });
@@ -1145,21 +1146,21 @@ describe('oars pool fetch', () => {
     const { scene, sign } = await signedScene();
     const payload = bundleBody('2.1.9');
     const signature = await sign(payload);
-    on(scene, 'get', `/bundle/2.1.9/${VOCAB_VERSION}`, () => HttpResponse.json({ payload, signature }));
+    on(scene, 'get', `/bundle/claude-code/2.1.9/${VOCAB_VERSION}`, () => HttpResponse.json({ payload, signature }));
     expect(await scene.cli('pool', 'fetch', '--harness-version', '2.1.9', '--server', POOL)).toBe(ExitCode.OK);
-    expect(scene.h.out.join('')).toContain('Fetched 2.1.9: 2 reads');
+    expect(scene.h.out.join('')).toContain('Fetched claude-code 2.1.9: 2 reads');
   });
 
   it('refuses a tampered bundle and a bundle of another harness version, and keeps neither', async () => {
     const { scene, sign } = await signedScene();
     const payload = bundleBody('2.1.314');
     const signature = await sign(payload);
-    on(scene, 'get', `/bundle/2.1.314/${VOCAB_VERSION}`, () => HttpResponse.json({ payload: payload.replace('"cells":[{}]', '"cells":[{},{}]'), signature }));
+    on(scene, 'get', `/bundle/claude-code/2.1.314/${VOCAB_VERSION}`, () => HttpResponse.json({ payload: payload.replace('"cells":[{}]', '"cells":[{},{}]'), signature }));
     expect(await scene.cli('pool', 'fetch', '--harness-version', '2.1.314', '--server', POOL, '--json')).toBe(ExitCode.INVALID);
     expect(scene.document()).toMatchObject({ problem: { code: 'bundle_unverified' } });
     expect(replicas(scene)).toEqual([]);
 
-    on(scene, 'get', `/bundle/2.1.9/${VOCAB_VERSION}`, () => HttpResponse.json({ payload, signature }));
+    on(scene, 'get', `/bundle/claude-code/2.1.9/${VOCAB_VERSION}`, () => HttpResponse.json({ payload, signature }));
     expect(await scene.cli('pool', 'fetch', '--harness-version', '2.1.9', '--server', POOL)).toBe(ExitCode.INVALID);
     expect(replicas(scene)).toEqual([]);
   });
@@ -1176,7 +1177,7 @@ describe('oars pool fetch', () => {
     expect(scene.h.err.join('')).toContain('--harness-version');
     expect(scene.seen).toEqual([]);
 
-    on(scene, 'get', `/bundle/2.1.314/${VOCAB_VERSION}`, () => HttpResponse.json({ error: 'fetch_cap', message: 'An account without access may fetch 1 per ISO week.' }, { status: 429 }));
+    on(scene, 'get', `/bundle/claude-code/2.1.314/${VOCAB_VERSION}`, () => HttpResponse.json({ error: 'fetch_cap', message: 'An account without access may fetch 1 per ISO week.' }, { status: 429 }));
     expect(await scene.cli('pool', 'fetch', '--harness-version', '2.1.314', '--server', POOL, '--json')).toBe(ExitCode.CAPPED);
     expect(scene.document()).toMatchObject({ problem: { code: 'fetch_cap' } });
 
@@ -1185,10 +1186,10 @@ describe('oars pool fetch', () => {
   });
 
   /** One handler for the bundle route that records each request, snapshots what had been printed when it arrived, and answers from a queue. */
-  const bundleRoute = (scene: Scene, version: string, replies: Array<(request: Request) => Response>): Array<{ headers: Headers; printedBefore: string }> => {
+  const bundleRoute = (scene: Scene, version: string, replies: Array<(request: Request) => Response>, harness = 'claude-code'): Array<{ headers: Headers; printedBefore: string }> => {
     const arrivals: Array<{ headers: Headers; printedBefore: string }> = [];
     server.use(
-      http.get(`${POOL}/bundle/${version}/${VOCAB_VERSION}`, ({ request }) => {
+      http.get(`${POOL}/bundle/${harness}/${version}/${VOCAB_VERSION}`, ({ request }) => {
         arrivals.push({ headers: request.headers, printedBefore: scene.h.err.join('') });
         scene.seen.push({ url: request.url, headers: JSON.stringify([...request.headers.entries()]), body: '', err: scene.h.err.join('') });
         return (replies.shift() ?? (() => new HttpResponse(null, { status: 500 })))(request);
@@ -1197,13 +1198,117 @@ describe('oars pool fetch', () => {
     return arrivals;
   };
 
-  const signedReply = async (sign: (text: string) => Promise<string>, version: string, etag: string | null, reads = 2): Promise<() => Response> => {
-    const payload = JSON.stringify({ format: 1, harnessVersion: version, vocabVersion: VOCAB_VERSION, asOf: { pool: 'p' }, cells: [{}], motifs: [], reads: Array.from({ length: reads }, () => ({})), strata: [] });
+  const signedReply = async (sign: (text: string) => Promise<string>, version: string, etag: string | null, reads = 2, harness = 'claude-code'): Promise<() => Response> => {
+    const payload = JSON.stringify({ format: 1, harness, harnessVersion: version, vocabVersion: VOCAB_VERSION, asOf: { pool: 'p' }, cells: [{}], motifs: [], reads: Array.from({ length: reads }, () => ({})), strata: [] });
     const signature = await sign(payload);
     return () => HttpResponse.json({ payload, signature }, etag === null ? {} : { headers: { etag } });
   };
 
-  const keptFile = (scene: Scene): string => join(scene.staged.storeDir, 'pool-replica', readdirSync(join(scene.staged.storeDir, 'pool-replica'))[0] ?? '', '2.1.314.json');
+  const keptFile = (scene: Scene): string => join(scene.staged.storeDir, 'pool-replica', readdirSync(join(scene.staged.storeDir, 'pool-replica'))[0] ?? '', 'claude-code', '2.1.314.json');
+
+  describe('names its harness', () => {
+    const serve = async (scene: Scene, sign: (text: string) => Promise<string>, harness: string, version = '2.1.314', etag: string | null = null): Promise<Array<{ headers: Headers; printedBefore: string }>> => bundleRoute(scene, version, [await signedReply(sign, version, etag, 2, harness)], harness);
+
+    /** A store that holds `count` sessions of each harness, written as the capture log holds them (the fixture's rows, no transcripts). */
+    const holding = (scene: Scene, counts: ReadonlyArray<readonly ['claude-code' | 'cursor' | 'codex', number]>): void => {
+      const rows = counts.flatMap(([name, count]) => Array.from({ length: count }, (_, index) => JSON.stringify(sessionRow(`${name}-${String(index)}`, name === 'claude-code' ? {} : { harness: name }))));
+      writeFileSync(join(scene.staged.storeDir, 'observations.jsonl'), `${rows.join('\n')}\n`);
+    };
+
+    it('asks for the harness --harness names, keeps it under that harness, and prints no choice line', async () => {
+      const { scene, sign } = await signedScene();
+      const arrivals = await serve(scene, sign, 'cursor');
+      expect(await scene.cli('pool', 'fetch', '--harness', 'cursor', '--harness-version', '2.1.314', '--server', POOL, '--json')).toBe(ExitCode.OK);
+      expect(arrivals).toHaveLength(1);
+      expect(scene.seen[0]?.url).toBe(`${POOL}/bundle/cursor/2.1.314/${VOCAB_VERSION}`);
+      expect(scene.document()).toMatchObject({ ok: true, harness: 'cursor', harnessVersion: '2.1.314' });
+      expect(String(at(scene.document(), 'file'))).toContain(join('cursor', '2.1.314.json'));
+      expect(scene.h.err.join('')).not.toContain('No --harness given');
+    });
+
+    it('refuses a harness the pool does not serve before asking, and lists the ones it does', async () => {
+      const { scene } = await signedScene();
+      expect(await scene.cli('pool', 'fetch', '--harness', 'acme', '--harness-version', '2.1.314', '--server', POOL)).toBe(ExitCode.USAGE);
+      expect(scene.h.err.join('')).toContain('acme is not a harness the pool serves. Choose one of claude-code, cursor, codex, copilot, gemini, grok.');
+      expect(scene.seen).toEqual([]);
+    });
+
+    it('refuses a validly signed bundle of another harness, and keeps nothing', async () => {
+      const { scene, sign } = await signedScene();
+      // The pool signs a cursor bundle and a claude-code request is answered with it: the signature holds and the version is right, so only the harness is wrong.
+      bundleRoute(scene, '2.1.314', [await signedReply(sign, '2.1.314', null, 2, 'cursor')], 'claude-code');
+      expect(await scene.cli('pool', 'fetch', '--harness', 'claude-code', '--harness-version', '2.1.314', '--server', POOL, '--json')).toBe(ExitCode.INVALID);
+      expect(scene.document()).toMatchObject({ problem: { code: 'bundle_unverified', title: 'Refused the bundle: this bundle is for harness cursor, not claude-code.' } });
+      expect(replicas(scene)).toEqual([]);
+    });
+
+    it('defaults to the harness the local store holds the most sessions of, says so on stderr, and sends no count', async () => {
+      const { scene, sign } = await signedScene();
+      holding(scene, [['cursor', 3], ['claude-code', 1]]);
+      const arrivals = await serve(scene, sign, 'cursor');
+      expect(await scene.cli('pool', 'fetch', '--harness-version', '2.1.314', '--server', POOL, '--json')).toBe(ExitCode.OK);
+      // The choice is on stderr before the request goes out, not after it.
+      expect(arrivals[0]?.printedBefore).toContain('No --harness given: fetching cursor');
+      expect(scene.h.err.join('')).toContain('No --harness given: fetching cursor, the harness your local store holds the most sessions of (3 of 4). Pass --harness <name> to fetch another (claude-code, cursor, codex, copilot, gemini, grok).');
+      expect(scene.document()).toMatchObject({ ok: true, harness: 'cursor' });
+      // Counts stay here: the request names the harness and the versions, nothing else.
+      expect(scene.seen[0]?.url).toBe(`${POOL}/bundle/cursor/2.1.314/${VOCAB_VERSION}`);
+      expect(scene.seen[0]?.body).toBe('');
+    });
+
+    it('asks for claude-code and says so when the store is empty or two harnesses tie', async () => {
+      const empty = await signedScene();
+      await serve(empty.scene, empty.sign, 'claude-code');
+      expect(await empty.scene.cli('pool', 'fetch', '--harness-version', '2.1.314', '--server', POOL)).toBe(ExitCode.OK);
+      expect(empty.scene.seen[0]?.url).toBe(`${POOL}/bundle/claude-code/2.1.314/${VOCAB_VERSION}`);
+      expect(empty.scene.h.err.join('')).toContain('No --harness given: fetching claude-code, your local store is empty, so Claude Code is the default. Pass --harness <name> to fetch another (');
+
+      const tied = await signedScene();
+      holding(tied.scene, [['cursor', 2], ['codex', 2], ['claude-code', 1]]);
+      await serve(tied.scene, tied.sign, 'claude-code');
+      expect(await tied.scene.cli('pool', 'fetch', '--harness-version', '2.1.314', '--server', POOL)).toBe(ExitCode.OK);
+      expect(tied.scene.seen[0]?.url).toBe(`${POOL}/bundle/claude-code/2.1.314/${VOCAB_VERSION}`);
+      expect(tied.scene.h.err.join('')).toContain('No --harness given: fetching claude-code, no one harness leads your local store, so Claude Code is the default. Pass --harness <name> to fetch another (');
+    });
+
+    it('keeps one bundle per harness: two fetches of one version, then a read for each', async () => {
+      const { scene, sign } = await signedScene();
+      const claude = bundleRoute(scene, '2.1.314', [await signedReply(sign, '2.1.314', '"claude-tag"', 2, 'claude-code'), () => new HttpResponse(null, { status: 304 })], 'claude-code');
+      const cursor = bundleRoute(scene, '2.1.314', [await signedReply(sign, '2.1.314', '"cursor-tag"', 3, 'cursor'), () => new HttpResponse(null, { status: 304 })], 'cursor');
+      const fetchOf = (name: string): Promise<ExitCode> => scene.cli('pool', 'fetch', '--harness', name, '--harness-version', '2.1.314', '--server', POOL, '--json');
+      expect(await fetchOf('claude-code')).toBe(ExitCode.OK);
+      const claudeFile = String(at(scene.document(), 'file'));
+      expect(await fetchOf('cursor')).toBe(ExitCode.OK);
+      const cursorFile = String(at(scene.document(), 'file'));
+      // Two files; the second fetch did not overwrite the first.
+      expect(cursorFile).not.toBe(claudeFile);
+      expect(replicas(scene)).toHaveLength(2);
+      expect(String(at(JSON.parse(readFileSync(claudeFile, 'utf8')), 'payload'))).toContain('"harness":"claude-code"');
+      expect(String(at(JSON.parse(readFileSync(cursorFile, 'utf8')), 'payload'))).toContain('"harness":"cursor"');
+      // The read of each kept bundle is conditional on its own ETag and answers from its own counts.
+      expect(await fetchOf('claude-code')).toBe(ExitCode.OK);
+      expect(scene.document()).toMatchObject({ harness: 'claude-code', unchanged: true, reads: 2 });
+      expect(await fetchOf('cursor')).toBe(ExitCode.OK);
+      expect(scene.document()).toMatchObject({ harness: 'cursor', unchanged: true, reads: 3 });
+      expect(claude[1]?.headers.get('if-none-match')).toBe('"claude-tag"');
+      expect(cursor[1]?.headers.get('if-none-match')).toBe('"cursor-tag"');
+    });
+
+    it('does not read another harness bundle as the kept one, even when it sits at this harness path', async () => {
+      const { scene, sign } = await signedScene();
+      bundleRoute(scene, '2.1.314', [await signedReply(sign, '2.1.314', '"claude-tag"', 2, 'claude-code')], 'claude-code');
+      expect(await scene.cli('pool', 'fetch', '--harness', 'claude-code', '--harness-version', '2.1.314', '--server', POOL, '--json')).toBe(ExitCode.OK);
+      const claudeFile = String(at(scene.document(), 'file'));
+      const cursorFile = join(claudeFile, '..', '..', 'cursor', '2.1.314.json');
+      mkdirSync(join(cursorFile, '..'), { recursive: true });
+      writeFileSync(cursorFile, readFileSync(claudeFile));
+      const second = bundleRoute(scene, '2.1.314', [await signedReply(sign, '2.1.314', '"cursor-tag"', 2, 'cursor')], 'cursor');
+      expect(await scene.cli('pool', 'fetch', '--harness', 'cursor', '--harness-version', '2.1.314', '--server', POOL, '--json')).toBe(ExitCode.OK);
+      // The copy verifies under the key but names the wrong harness, so it is no kept bundle: no If-None-Match went out.
+      expect(second[0]?.headers.get('if-none-match')).toBeNull();
+      expect(scene.document()).toMatchObject({ harness: 'cursor', unchanged: false });
+    });
+  });
 
   describe('prints before it sends', () => {
     it('prints the request line and every header before the request arrives, with the credential as its size and nothing else masked', async () => {
@@ -1211,7 +1316,7 @@ describe('oars pool fetch', () => {
       const arrivals = bundleRoute(scene, '2.1.314', [await signedReply(sign, '2.1.314', '"e1"')]);
       expect(await scene.cli('pool', 'fetch', '--harness-version', '2.1.314', '--server', POOL)).toBe(ExitCode.OK);
       const before = arrivals[0]?.printedBefore ?? '';
-      expect(before).toContain(`GET /bundle/2.1.314/${VOCAB_VERSION} HTTP/1.1\nhost: pool.test\nconnection: keep-alive\n`);
+      expect(before).toContain(`GET /bundle/claude-code/2.1.314/${VOCAB_VERSION} HTTP/1.1\nhost: pool.test\nconnection: keep-alive\n`);
       expect(before).toContain('authorization: Bearer <credential: 12 bytes>');
       expect(before).toContain('user-agent: oars/');
       // Whatever header the request carried when it arrived is in the print, word for word, except the credential.
@@ -1227,7 +1332,7 @@ describe('oars pool fetch', () => {
       const { scene, sign } = await signedScene();
       bundleRoute(scene, '2.1.314', [await signedReply(sign, '2.1.314', null)]);
       expect(await scene.cli('pool', 'fetch', '--harness-version', '2.1.314', '--server', POOL, '--json')).toBe(ExitCode.OK);
-      expect(scene.h.err.join('')).toContain(`GET /bundle/2.1.314/${VOCAB_VERSION} HTTP/1.1`);
+      expect(scene.h.err.join('')).toContain(`GET /bundle/claude-code/2.1.314/${VOCAB_VERSION} HTTP/1.1`);
       expect(scene.document()).toMatchObject({ ok: true });
     });
 
@@ -1277,7 +1382,7 @@ describe('oars pool fetch', () => {
       scene.h.out.length = 0;
       expect(await scene.cli('pool', 'fetch', '--harness-version', '2.1.314', '--server', POOL)).toBe(ExitCode.OK);
       expect(readFileSync(keptFile(scene)).equals(before)).toBe(true);
-      expect(scene.h.out.join('')).toContain('2.1.314 is unchanged');
+      expect(scene.h.out.join('')).toContain('claude-code 2.1.314 is unchanged');
     });
 
     it('a 429 with a Retry-After keeps the bundle byte for byte, says when to try again in words, and exits with its own code', async () => {

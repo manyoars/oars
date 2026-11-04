@@ -319,7 +319,7 @@ const heldTo = (isHeld: (value: string | null) => string | null, value: unknown,
 
 // `satisfies` checks every entry is a `Harness` but not that every `Harness` is listed; this refuses a list that leaves one out at compile time.
 const allHarnesses = <const T extends readonly Harness[]>(list: [Exclude<Harness, T[number]>] extends [never] ? T : never): T => list;
-const HARNESSES = allHarnesses(['claude-code', 'cursor', 'codex', 'copilot', 'gemini', 'grok']);
+export const HARNESSES = allHarnesses(['claude-code', 'cursor', 'codex', 'copilot', 'gemini', 'grok']);
 const PROMPT_CLASSES = ['no-tools', 'orchestration', 'research', 'edit-verify', 'edit-only', 'explore-only', 'shell-only', 'mixed'] as const satisfies readonly PromptClass[];
 const STATUSES = ['ok', 'error', 'none'] as const satisfies readonly ToolStatus[];
 const PLATFORMS: ReadonlySet<string> = new Set(['aix', 'android', 'cygwin', 'darwin', 'freebsd', 'haiku', 'linux', 'netbsd', 'openbsd', 'sunos', 'win32']);
@@ -529,9 +529,10 @@ export interface StrataCell {
   clusters: number;
 }
 
-/** One harness version's replica, as the server signs it. Nothing in it is keyed by stack. */
+/** One harness version's replica, as the server signs it. It names its harness, which the signature covers, so a bundle for one harness cannot stand in for another's. Nothing in it is keyed by stack. */
 export interface Bundle {
   format: typeof BUNDLE_FORMAT;
+  harness: Harness;
   harnessVersion: string;
   vocabVersion: string;
   asOf: ReadAsOf;
@@ -558,7 +559,7 @@ export interface PinnedKey {
 const isSignedBundle = (value: unknown): value is SignedBundle => isFields(value) && typeof value.payload === 'string' && typeof value.signature === 'string';
 
 const isBundle = (value: unknown): value is Bundle =>
-  isFields(value) && value.format === BUNDLE_FORMAT && typeof value.harnessVersion === 'string' && typeof value.vocabVersion === 'string' && isFields(value.asOf) && Array.isArray(value.cells) && Array.isArray(value.motifs) && Array.isArray(value.reads) && Array.isArray(value.strata);
+  isFields(value) && value.format === BUNDLE_FORMAT && typeof value.harness === 'string' && isHarness(value.harness) && typeof value.harnessVersion === 'string' && typeof value.vocabVersion === 'string' && isFields(value.asOf) && Array.isArray(value.cells) && Array.isArray(value.motifs) && Array.isArray(value.reads) && Array.isArray(value.strata);
 
 const signatureHolds = async ({ payload, signature }: SignedBundle, key: PinnedKey): Promise<boolean> => {
   try {
@@ -569,13 +570,14 @@ const signatureHolds = async ({ payload, signature }: SignedBundle, key: PinnedK
   }
 };
 
-/** The bundle, only when the pinned key signed these bytes for the version that was asked for: another version's bundle, under a good signature, is still the wrong answer. */
-export const verifyBundle = async (signed: unknown, key: PinnedKey, harnessVersion: string): Promise<{ ok: true; bundle: Bundle } | { ok: false; reason: string }> => {
+/** The bundle, only when the pinned key signed these bytes for the harness and version that were asked for: another harness's or version's bundle, under a good signature, is still the wrong answer. */
+export const verifyBundle = async (signed: unknown, key: PinnedKey, harness: Harness, harnessVersion: string): Promise<{ ok: true; bundle: Bundle } | { ok: false; reason: string }> => {
   if (!isSignedBundle(signed)) return { ok: false, reason: 'not a signed bundle' };
   if (!(await signatureHolds(signed, key))) return { ok: false, reason: 'the signature does not match the key pinned at login' };
   const bundle: unknown = JSON.parse(signed.payload);
   if (!isBundle(bundle)) return { ok: false, reason: 'not a signed bundle this version reads' };
   if (bundle.vocabVersion !== VOCAB_VERSION) return { ok: false, reason: `this bundle is for vocabulary version ${bundle.vocabVersion}, not ${VOCAB_VERSION}` };
+  if (bundle.harness !== harness) return { ok: false, reason: `this bundle is for harness ${bundle.harness}, not ${harness}` };
   if (bundle.harnessVersion !== harnessVersion) return { ok: false, reason: `this bundle is for harness version ${bundle.harnessVersion}, not ${harnessVersion}` };
   return { ok: true, bundle };
 };
