@@ -29,7 +29,8 @@
 //                       keeps none, :238-251). `id` is the exec_command's call id (events.rs:571), written when the process exits (events.rs:561-590):
 //                       by the exit watcher for a process the model never polled (unified_exec/async_watcher.rs:158, :224), or by the call itself when it exits in
 //                       its first yield (process_manager.rs:827). It settles a known unresolved shell call from the real `exit_code` and the output; a
-//                       `declined` one (exit code -1, events.rs:552-554) settles nothing. So a backgrounded process keeps its failure and its commit sha
+//                       `declined` one (exit code -1, events.rs:552-554) settles nothing. A `failed` one with exit code -1 is a failure with no exit status (a tool
+//                       failure message, events.rs:538-542; a process with none, async_watcher.rs:213, :409), so its text is the error line. So a backgrounded process keeps its failure and its commit sha
 //                       even with no `write_stdin` poll; only a Legacy rollout leaves it unsettled until a poll
 //   event_msg mcp_tool_call_end {call_id, result}   an MCP call's outcome: `result.Err`, or `result.Ok.isError` (protocol.rs:3047, :3076); Legacy mode only
 //   event_msg patch_apply_end {call_id, success, stderr, status}   an apply_patch call's outcome (Legacy mode only); a declined one settles nothing, and a
@@ -200,7 +201,13 @@ const outcomeOf = (raw: unknown): { text: string; exit: number | undefined; spaw
   return { text: body.slice(mark.index + mark[0].length), exit: code === undefined ? undefined : Number(code), spawnError: false, running: RUNNING_LINE.exec(head)?.[1] };
 };
 
-const failureOf = (exit: number | undefined, text: string): string | undefined => (exit === undefined || exit === 0 ? undefined : `Exit code ${String(exit)}\n${text}`);
+/**
+ * A failed call's error text. A negative code is no exit status: upstream writes -1 for a tool failure message (core/src/tools/events.rs:538-542) and for a
+ * process with none (unified_exec/async_watcher.rs:213, :409; process_manager.rs:823), and capture's `Exit code (\d+)` (extract.ts, `EXIT_RE`) cannot read it, so
+ * an `Exit code -1` line would be the error line and the message lost. The message stands alone then, and a code is the line capture skips.
+ */
+const failureOf = (exit: number | undefined, text: string): string | undefined =>
+  exit === undefined || exit === 0 ? undefined : exit < 0 && text !== '' ? text : `Exit code ${String(exit)}\n${text}`;
 
 const usageOf = (info: unknown): Obj | undefined => {
   const last = isObj(info) && isObj(info.last_token_usage) ? info.last_token_usage : undefined;
