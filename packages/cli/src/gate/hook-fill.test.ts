@@ -42,6 +42,28 @@ describe('the fill: starting the helper', () => {
     expect(start).toHaveBeenCalledWith(dir, ASK);
   });
 
+  it('never shows the lock on disk before the helper has started, so no timer can end the hook between them', async () => {
+    const dir = store();
+    let started = false;
+    let early = 0;
+    let running = true;
+    const watch = (): void => {
+      if (!running) return;
+      if (!started && lockOf(dir) !== undefined) early += 1;
+      setImmediate(watch);
+    };
+    setImmediate(watch);
+    try {
+      await startFill(dir, ASK, NOW, () => {
+        started = true;
+      });
+    } finally {
+      running = false;
+    }
+    expect(started).toBe(true);
+    expect(early).toBe(0);
+  });
+
   it('starts a helper for another name beside the first', async () => {
     const dir = store();
     const start = vi.fn();

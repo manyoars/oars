@@ -72,10 +72,55 @@ describe('the hook process: the deadline', () => {
     expect(statSync(crossingsPath(store)).mode & 0o777).toBe(0o600);
   });
 
+  it('stops a registry ask still running at the deadline, and leaves one not-read row', async () => {
+    const store = folder();
+    const exit = vi.fn();
+    let signal: AbortSignal | undefined;
+    const registry = (ask: { signal?: AbortSignal }): Promise<RegistryAnswer> => {
+      signal = ask.signal;
+      return new Promise<RegistryAnswer>(() => undefined);
+    };
+    // The hook's own cut is 650 ms away and the process deadline 150 ms: the deadline is what ends the process, with the ask live.
+    void runHookProcess({ stdin: () => Promise.resolve(PAYLOAD), deps: depsFor(store, { registry }), exit, deadlineMs: 150 });
+    await vi.waitFor(() => { expect(exit).toHaveBeenCalledWith(0); }, { timeout: 2_000 });
+    expect(signal?.aborted).toBe(true);
+    const lines = readFileSync(crossingsPath(store), 'utf8').trim().split('\n');
+    expect(lines).toHaveLength(1);
+    expect(JSON.parse(lines[0] ?? '')).toMatchObject({ kind: 'crossing', name: 'left-pad', registryState: 'not-read', arm: 'none' });
+  });
+
+  it('leaves one not-read row on a store folder that does not exist yet', async () => {
+    const store = join(folder(), 'fresh', 'store');
+    const exit = vi.fn();
+    let signal: AbortSignal | undefined;
+    const registry = (ask: { signal?: AbortSignal }): Promise<RegistryAnswer> => {
+      signal = ask.signal;
+      return new Promise<RegistryAnswer>(() => undefined);
+    };
+    // The append that would make the folder stalls, so only the hook's own step before the ask can: without it the deadline's synchronous write has nowhere to go.
+    void runHookProcess({ stdin: () => Promise.resolve(PAYLOAD), deps: depsFor(store, { registry, append: () => new Promise<void>(() => undefined) }), exit, deadlineMs: 150 });
+    await vi.waitFor(() => { expect(exit).toHaveBeenCalledWith(0); }, { timeout: 2_000 });
+    expect(signal?.aborted).toBe(true);
+    const lines = readFileSync(crossingsPath(store), 'utf8').trim().split('\n');
+    expect(lines).toHaveLength(1);
+    expect(JSON.parse(lines[0] ?? '')).toMatchObject({ kind: 'crossing', name: 'left-pad', registryState: 'not-read', arm: 'none' });
+  });
+
+  it('still writes the row when stopping the ask throws', async () => {
+    const store = folder();
+    const exit = vi.fn();
+    const stage = (put: NonNullable<GateHookDeps['stage']>): void => {
+      put({ file: crossingsPath(store), text: `${JSON.stringify({ kind: 'crossing', name: 'left-pad' })}\n`, stop: () => { throw new Error('no such process'); } });
+    };
+    void runHookProcess({ stdin: () => new Promise<string>(() => undefined), deps: (put) => { stage(put); return depsFor(store)(put); }, exit, deadlineMs: 100 });
+    await vi.waitFor(() => { expect(exit).toHaveBeenCalledWith(0); }, { timeout: 2_000 });
+    expect(readFileSync(crossingsPath(store), 'utf8').trim().split('\n')).toHaveLength(1);
+  });
+
   it('drops a staged record whose write fails and still exits 0', async () => {
     const store = folder();
     const exit = vi.fn();
-    // The store folder is never made (the append that would make it stalls), so the synchronous write has nowhere to go.
+    // No registry ask is held here, so nothing makes the store folder (the append that would make it stalls) and the synchronous write has nowhere to go.
     void runHookProcess({ stdin: () => Promise.resolve(PAYLOAD), deps: depsFor(join(store, 'missing', 'deeper'), { append: () => new Promise<void>(() => undefined) }), exit, deadlineMs: 100 });
     await vi.waitFor(() => { expect(exit).toHaveBeenCalledWith(0); }, { timeout: 2_000 });
     expect(existsSync(join(store, 'missing'))).toBe(false);

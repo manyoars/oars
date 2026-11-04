@@ -5,7 +5,7 @@ import { performance } from 'node:perf_hooks';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { gateHook, registryCachePath, crossingsPath, type GateHookDeps } from './hook.js';
 import { indexFile } from './novelty.js';
-import { parseRows, type CrossingRecord } from './record.js';
+import { folderKey, parseRows, type CrossingRecord } from './record.js';
 import type { RegistryAnswer, RegistryReader } from './registry.js';
 
 const made: string[] = [];
@@ -403,6 +403,52 @@ describe('oars gate hook: one ask per name', () => {
     await gateHook(payload('npm install left-pad'), depsFor(store, { registry, clock: () => 0, deadlineMs: 400, fill }));
     expect(signal).toBeDefined();
     expect(aborted).toEqual([true]);
+  });
+
+  it('cuts an ask at once when starting it used up the budget, and stops it, hands the name over, and writes the row', async () => {
+    const store = folder();
+    let now = 0;
+    let signal: AbortSignal | undefined;
+    // The manager's start blocks: by the time the registry call returns, the clock is past the deadline. The budget was read before the call and was whole, so reading it there would wait out the whole of it.
+    const registry: RegistryReader = (ask) => {
+      signal = ask.signal;
+      now = 900;
+      return new Promise<RegistryAnswer>(() => undefined);
+    };
+    const fill = vi.fn<NonNullable<GateHookDeps['fill']>>(() => Promise.resolve());
+    const started = Date.now();
+    await gateHook(payload('npm install left-pad'), depsFor(store, { registry, clock: () => now, deadlineMs: 800, fill }));
+    expect(Date.now() - started).toBeLessThan(300);
+    expect(signal?.aborted).toBe(true);
+    expect(fill).toHaveBeenCalledTimes(1);
+    expect(rowsOf(store).map((row) => row.registryState)).toEqual(['not-read']);
+  });
+
+  it('stages the rows so far and a not-read row for the crossing asked about, with a stop for the ask, while the ask is live', async () => {
+    const store = folder();
+    const staged: ({ text: string; stop?: () => void } | null)[] = [];
+    let signal: AbortSignal | undefined;
+    const registry: RegistryReader = (ask) => {
+      signal = ask.signal;
+      // The record staged at this moment is what a process cut off here writes.
+      const live = staged.at(-1);
+      const held = parseRows(live?.text ?? '').filter((row): row is CrossingRecord => row.kind === 'crossing');
+      expect(held.map((row) => row.name)).toEqual(['first-lib', 'left-pad']);
+      expect(held[1]).toMatchObject({ registryState: 'not-read', arm: 'none', lineShown: 'none', lineHeld: 'none' });
+      live?.stop?.();
+      return Promise.resolve({ state: 'found', latest: '1.0.0', created: '2020-01-01T00:00:00.000Z' });
+    };
+    const stage: NonNullable<GateHookDeps['stage']> = (pending) => {
+      staged.push(pending);
+    };
+    // `first-lib` is kept in the cache, so it is read without an ask and the ask is for `left-pad` alone.
+    const kept = { kind: 'registry', v: 1, day: new Date(NOW).toISOString().slice(0, 10), ts: new Date(NOW).toISOString(), folder: folderKey(tmpdir()), class: 'npm-package', state: 'found', created: null, name: 'first-lib', latest: '1.0.0' };
+    writeFileSync(registryCachePath(store), `${JSON.stringify(kept)}\n`);
+    await gateHook(payload('npm install first-lib left-pad'), depsFor(store, { registry, stage }));
+    expect(signal?.aborted).toBe(true);
+    // Cleared after the cached name, staged for the ask, cleared when it ended, then the final record, then cleared once written.
+    expect(staged.map((pending) => (pending === null ? null : pending.text.trim().split('\n').length))).toEqual([null, 2, null, 2, null]);
+    expect(rowsOf(store).map((row) => [row.name, row.registryState])).toEqual([['first-lib', 'found'], ['left-pad', 'found']]);
   });
 
   it('leaves an ask that answered alone', async () => {
