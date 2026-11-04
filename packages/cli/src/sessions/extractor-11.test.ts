@@ -192,6 +192,16 @@ describe('the shell form projected from the account store (Q5)', () => {
     expect(projected(['fi', 'done', 'esac'])).toEqual(Array.from({ length: 3 }, () => ({ commands: [PRIVATE_PROGRAM], programs: [PRIVATE] })));
   });
 
+  // Register row A53: `afterPrelude` compared the raw word, so a wrapper in another case or by path was read as the program itself.
+  it('projects a private program behind a wrapper in another case or by path as private, never as the wrapper', () => {
+    for (const form of ['IF acme-deploy', 'TIMEOUT 5 acme-deploy', '/usr/bin/timeout 5 acme-deploy', 'Sudo acme-deploy --x', '/usr/bin/env X=1 acme-deploy', 'C:\\Windows\\Timeout.exe 5 acme-deploy']) {
+      expect(projected([form]), form).toEqual([{ commands: [PRIVATE_PROGRAM], programs: [PRIVATE] }]);
+      expect(projectShell(vocab, form, makeRedactor()).programs, form).toEqual([PRIVATE]);
+    }
+    // A quoted word is an argument, not a wrapper: `"IF"` is the program.
+    expect(projected(['"IF" acme-deploy'])[0]?.programs).not.toEqual([PRIVATE]);
+  });
+
   it('projects a Bash step whose identity is null as private', () => {
     // Capture gives a shell call only a shell identity, so the step is rewritten to the one other shape a stored step can hold.
     const [call] = captured(['git status']);

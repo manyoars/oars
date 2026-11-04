@@ -768,18 +768,22 @@ const assignsCommand = (words: readonly ShellWord[], at: number): boolean => {
   return name !== undefined && !name.quoted && POWERSHELL_VARIABLE.test(name.text) && equals?.text === '=' && !equals.quoted && value !== undefined && !value.quoted && COMMAND_START.test(value.text);
 };
 
-/** The words from the command's real program on. */
+/**
+ * The words from the command's real program on. A block word or wrapper is known by its program name, as `programOf` reads it: `IF`, `TIMEOUT 5`, and
+ * `/usr/bin/timeout 5` are the wrapper they spell, so the private program behind them is the one read (register row A53).
+ */
 const afterPrelude = (words: readonly ShellWord[]): readonly ShellWord[] => {
   let at = 0;
   for (;;) {
     const word = words[at];
     if (word === undefined) return [];
     if (word.quoted) return words.slice(at);
-    if (BLOCK_WORDS.has(word.text) || ASSIGNMENT.test(word.text)) at += 1;
+    const name = programOf(word) ?? word.text;
+    if (BLOCK_WORDS.has(name) || ASSIGNMENT.test(word.text)) at += 1;
     else if (assignsCommand(words, at)) at += 2;
-    else if (WRAPPERS.has(word.text) || word.text === 'timeout') {
-      const isTimeout = word.text === 'timeout';
-      const owning = WRAPPER_VALUE_FLAGS.get(word.text) ?? [];
+    else if (WRAPPERS.has(name) || name === 'timeout') {
+      const isTimeout = name === 'timeout';
+      const owning = WRAPPER_VALUE_FLAGS.get(name) ?? [];
       at += 1;
       while (words[at]?.text.startsWith('-') === true) at += owning.includes(words[at]?.text ?? '') ? 2 : 1;
       if (isTimeout && /^\d+(?:\.\d+)?[smhd]?$/.test(words[at]?.text ?? '')) at += 1;
