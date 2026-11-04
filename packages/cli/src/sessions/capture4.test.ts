@@ -412,7 +412,7 @@ describe('a version-3 store opened under version 4', () => {
     const second = await deposit({ ...staged.runtime, accountSalt: () => Promise.resolve({ salt: 'b', sid: sidOf('b') }) }, options);
     expect(second.sessions).toBe(4);
     editState(staged.storeDir, (entry) => {
-      Reflect.set(entry, 'v', String(Number(EXTRACTOR_VERSION) + 1));
+      Reflect.set(entry, 'v', String(Number(CAPTURE_VERSION) + 1));
     });
     await expect(deposit(staged.runtime, options)).rejects.toThrow(/upgrade oars/);
   });
@@ -421,7 +421,7 @@ describe('a version-3 store opened under version 4', () => {
     const staged = stage();
     await deposit(staged.runtime, options);
     editState(staged.storeDir, (entry, key) => {
-      if (key.endsWith('tldr.jsonl')) Reflect.set(entry, 'v', String(Number(EXTRACTOR_VERSION) + 1));
+      if (key.endsWith('tldr.jsonl')) Reflect.set(entry, 'v', String(Number(CAPTURE_VERSION) + 1));
     });
     const before = readFileSync(paths(staged.storeDir).observations);
     const stateBefore = readFileSync(paths(staged.storeDir).state);
@@ -435,7 +435,7 @@ describe('a version-3 store opened under version 4', () => {
     await deposit(staged.runtime, options);
     editState(staged.storeDir, (entry, key) => {
       if (key.endsWith('errors-a.jsonl')) Reflect.set(entry, 'v', '3');
-      if (key.endsWith('tldr.jsonl')) Reflect.set(entry, 'v', String(Number(EXTRACTOR_VERSION) + 1));
+      if (key.endsWith('tldr.jsonl')) Reflect.set(entry, 'v', String(Number(CAPTURE_VERSION) + 1));
     });
     const before = readFileSync(paths(staged.storeDir).observations);
     await expect(deposit(staged.runtime, options)).rejects.toThrow(/upgrade oars/);
