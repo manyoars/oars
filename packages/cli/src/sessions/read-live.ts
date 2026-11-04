@@ -11,8 +11,8 @@ const DAY_MS = 86_400_000;
 
 const dayBefore = (day: string, back: number): string => new Date(Date.parse(day) - back * DAY_MS).toISOString().slice(0, 10);
 
-/** The days a read of `day` takes its baseline from, so a pool that serves the baseline separately names the same cells. */
-export const baselineDaysOf = (day: string): string[] => Array.from({ length: LIVE_BASELINE_DAYS }, (_, index) => dayBefore(day, index + 1));
+/** The days a read of `day` takes its baseline from. */
+const baselineDaysOf = (day: string): string[] => Array.from({ length: LIVE_BASELINE_DAYS }, (_, index) => dayBefore(day, index + 1));
 
 export const deriveLive: DeriveFamily = ({ pool }) => {
   const units = unitCells(pool, 'day').filter(({ motif }) => motif.level === 'shape');
