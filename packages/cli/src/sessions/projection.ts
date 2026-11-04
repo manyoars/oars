@@ -7,6 +7,7 @@ import { SHELL, shellCommands } from './extract.js';
 import { isPositional, type WordOfCommand } from './identity.js';
 import {
   BUNDLING_PROGRAMS,
+  HARNESS_AGENT_TYPES,
   HARNESS_TOOLS,
   isPublicMcpTool,
   PIPE_MAX,
@@ -14,7 +15,9 @@ import {
   PUBLIC_FLAGS,
   PUBLIC_MCP_SERVERS,
   PUBLIC_PROGRAMS,
+  PUBLIC_SKILLS,
   PUBLIC_SUBCOMMANDS,
+  TOOL_INPUT_KEYS,
 } from './public-vocabulary.js';
 import type { Redactor } from './redact.js';
 import type { ToolObservation } from './schema.js';
@@ -32,6 +35,9 @@ export interface ProjectedShell {
   commands: ProjectedProgram[];
   programs: string[];
 }
+
+/** What `agentType` pools as when the agent is not a built-in. */
+export const CUSTOM = 'custom';
 
 export const PRIVATE_PROGRAM: ProjectedProgram = { program: PRIVATE, subcommand: null, flags: [] };
 
@@ -110,6 +116,31 @@ export const projectTool = (tool: string): string => {
     return PUBLIC_MCP_SERVERS.has(server) && isPublicMcpTool(server, name) ? `mcp:${server}:${name}` : 'mcp:private';
   }
   return [...HARNESS_TOOLS.values()].some((tools) => tools.has(tool)) ? tool : PRIVATE;
+};
+
+/** A field whose non-admitted members pool only as a count (spec Section 1.3): `privateCount` is exact here, and Section 1.2 buckets it at deposit. */
+export interface ProjectedNames {
+  names: string[];
+  privateCount: number;
+}
+
+const admit = (names: readonly string[], admitted: (name: string) => boolean): ProjectedNames => {
+  const unique = [...new Set(names)];
+  const kept = unique.filter(admitted);
+  return { names: kept.sort(), privateCount: unique.length - kept.length };
+};
+
+/** `skills`: the published skills among the names, the rest only counted. */
+export const projectSkills = (skills: readonly string[]): ProjectedNames => admit(skills, (name) => PUBLIC_SKILLS.has(name));
+
+/** `agentType`: a built-in subagent type of a harness, else `custom`; null stays null (a main transcript). */
+export const projectAgentType = (agentType: string | null): string | null =>
+  agentType === null ? null : [...HARNESS_AGENT_TYPES.values()].some((types) => types.has(agentType)) ? agentType : CUSTOM;
+
+/** `keys` of a call to `tool`: only names its published input schema lists, the rest only counted. An MCP tool lists none. */
+export const projectKeys = (tool: string, keys: readonly string[]): ProjectedNames => {
+  const listed = TOOL_INPUT_KEYS.get(tool);
+  return admit(keys, (name) => listed?.has(name) === true);
 };
 
 /** The registry's own normalization (spec Section 1.3): npm lowercases, PyPI folds `-`, `_`, and `.`, crates.io folds `-` and `_`. */
