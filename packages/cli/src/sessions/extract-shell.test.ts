@@ -268,6 +268,13 @@ describe('MCP tool names: a token behind an underscore or in a later part is red
     ['mcp__token=xoxb-short_hunter2hunter2__find', ['hunter2hunter2']],
     ['mcp__api_key=abc-xoxb-1_hunter2hunter2__find', ['hunter2hunter2']],
     ['mcp_token=xoxb-short_hunter2hunter2_find', ['hunter2hunter2']],
+    ['mcp__xoxb-a-ghp_abcdefghijklmnopqrstuvwxyz0123456789__find', ['abcdefghijklmnopqrstuvwxyz0123456789']],
+    ['mcp__xoxb-a-sk_live_abcdefghijklmnop__find', ['abcdefghijklmnop']],
+    ['mcp__xoxb-a-whsec_abcdefghijklmnop__find', ['abcdefghijklmnop']],
+    ['mcp__xoxb-a-api_key=abcd1234__find', ['abcd1234']],
+    ['mcp_xoxb-a-api_key=abcd1234_find', ['abcd1234']],
+    ['mcp__ns:xoxb-1234567890-abcdefghij_x__find', ['abcdefghij']],
+    ['mcp__eyJ-xoxb-1234567890-abcdefghij_x__find', ['abcdefghij']],
   ])('keeps no part of the token in any stored field for %s', (toolName, parts) => {
     const stored = JSON.stringify(capturedFor(toolName));
     for (const part of parts) expect(stored).not.toContain(part);
@@ -341,6 +348,13 @@ describe('MCP tool names: a token behind an underscore or in a later part is red
   });
   it('stores raw an sk- key with no capital and digit that holds a _ before 16 characters, an accepted limit', () => {
     for (const name of ['mcp_sk-abc_defghijklmnopqrstuvwxyz_find', 'mcp__sk-abc__defghijklmnopqrstuvwxyz__find']) expect(storedToolName(name, redact)).toBe(name);
+  });
+  it('masks a name that holds : or = as one NAME=value token and loses its server, an accepted limit', () => {
+    for (const name of ['mcp__ns:Context7__resolve-library-id', 'mcp__ns=Context7__resolve-library-id']) {
+      const stored = storedToolName(name, redact);
+      expect(stored).toMatch(/<secret>/);
+      expect(stored).not.toContain('Context7');
+    }
   });
   it('does not find a token with no pattern rule whose every part is under 24 characters, an accepted limit', () => {
     const name = 'mcp__aB3dE5gH7jK9mN1pQ3rS__tU5vW7xY9zA1bC3dE5fG__find';
