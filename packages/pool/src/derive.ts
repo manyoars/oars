@@ -58,7 +58,7 @@ export const bundleOf = (harness: Harness, harnessVersion: string, stored: Store
   const cells = stored.cells.filter((cell) => cell.frameBucket.startsWith(prefix)).sort((a, b) => compare(a.motifId, b.motifId) || compare(a.frameBucket, b.frameBucket) || compare(a.grain, b.grain) || compare(a.day, b.day));
   const motifs = [...stored.motifs].sort((a, b) => compare(a.motifId, b.motifId));
   // No error rows: a skeleton holds none, and recovery, the one family that reads them, is left out here.
-  // The version-free (name, platform, shell) cells sit beside the bucket's: a harness without a version, as Gemini, Cursor, and Pi are, still has them, and they name no version.
+  // The version-free (name, platform, shell) cells sit beside the bucket's: a session of a harness that records no version still has them, and they name no version.
   const environment = [...stored.environment].sort((a, b) => compare(a.motifId, b.motifId) || compare(a.frameBucket, b.frameBucket) || compare(a.grain, b.grain) || compare(a.day, b.day));
   // The environment cells are read with the bucket's, but the pool's last day is the bucket's own: a week held only by another version is not this bundle's, so it cannot age the reads that count weeks since. A bucket with no cell takes the whole pool's.
   const own = poolOf({ cells, motifs }, []);
