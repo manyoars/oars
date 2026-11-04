@@ -207,9 +207,19 @@ describe('from a deposit to a push', () => {
     ]).flat(),
   ];
 
+  /** A session whose ten calls of a tool no table lists all succeed: `Monitor` is also `other`, and a push must beat that action's base rate. */
+  const quiet = (name: string): string[] => [
+    line(name, 0, { type: 'user', message: { role: 'user', content: 'look at the quiet' } }),
+    ...Array.from({ length: 10 }, (_, call) => [
+      line(name, 1 + call * 2, { type: 'assistant', requestId: `${name}-r${String(call)}`, message: { role: 'assistant', model: 'claude-opus-5-5', content: [{ type: 'tool_use', id: `t${String(call)}`, name: 'Quiet', input: { query: 'a typed value' } }], usage: USAGE } }),
+      line(name, 2 + call * 2, { type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: `t${String(call)}`, is_error: false, content: 'fine' }] } }),
+    ]).flat(),
+  ];
+
   it('pushes a shape the deposit found over the floors', async () => {
     const staged = stage();
     for (const name of ['aaaa1111', 'bbbb2222', 'cccc3333']) addProject(staged, 'proj', name, failing(name));
+    for (const name of ['dddd4444', 'eeee5555', 'ffff6666', 'gggg7777']) addProject(staged, 'proj', name, quiet(name));
     await deposit(staged.runtime, { allow: ['proj'], redactDomains: [], now: () => NOW });
     const shape = toolShapeId('Monitor', ['query']);
     const index = await readIndex(staged.storeDir);

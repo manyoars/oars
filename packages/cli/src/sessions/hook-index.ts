@@ -5,7 +5,7 @@ import { readFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import type { Read } from './read.js';
 import { resolveReads } from './recall-pool.js';
-import { fitReads, toolShapeId, type RecallRead } from './recall-reads.js';
+import { aboveBaseRate, fitReads, toolShapeId, type RecallRead } from './recall-reads.js';
 import type { SessionObservation } from './schema.js';
 import { expandHome } from './allow.js';
 import { slugOf, type Store } from './store.js';
@@ -124,7 +124,7 @@ export const buildIndex = (store: Store, redactDomains: readonly string[], at: s
       .slice(0, PER_PROJECT);
     if (rows.length > 0) projects[project] = rows;
   }
-  return { at, redactDomains: [...redactDomains], projects, signatures, fit: Object.fromEntries(resolveReads(fitReads(store), reads).map((read) => [toolShapeId(read.tool, read.keys), read])) };
+  return { at, redactDomains: [...redactDomains], projects, signatures, fit: Object.fromEntries(resolveReads(aboveBaseRate(store, fitReads(store)), reads).map((read) => [toolShapeId(read.tool, read.keys), read])) };
 };
 
 export const indexPath = (storeDir: string): string => join(storeDir, INDEX_FILE);

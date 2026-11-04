@@ -2,7 +2,7 @@
 // pre-call half of recovery, and a public name a read in family `entity`. `recall-pool.ts` puts each under the ID of the stored read it rests on; a hash here is what stands in
 // where the pool holds none, and the only ID an `entity` read has, because no family stores a read per public name.
 import { createHash } from 'node:crypto';
-import { ACTION_TABLES, actionOf, mcpOf } from './actions.js';
+import { ACTION_TABLES, actionOf, mcpOf, type CanonicalAction } from './actions.js';
 import { utcDay } from './frame.js';
 import { LITERAL, PUBLIC_PACKAGES, publicModel, publicVersion } from './public-vocabulary.js';
 import { recall, recallRows, type RecallQuery, type RecallResult } from './query.js';
@@ -197,6 +197,42 @@ export const fitReads = (store: Store, floors: FitFloors = FIT_FLOORS, keep: (ca
     });
   }
   return reads.sort((a, b) => b.count - a.count || a.readId.localeCompare(b.readId));
+};
+
+/** The action of a tool under the first of its harnesses whose table lists it, else under the first harness (the default one when a read names none). */
+export const actionOfShape = (tool: string, harnesses: readonly string[]): CanonicalAction => {
+  const tables = Object.entries(ACTION_TABLES).flatMap(([name, table]) => (harnesses.includes(name) ? [table] : []));
+  return actionOf(tables.find((table) => Object.hasOwn(table.rows, tool)) ?? tables[0] ?? ACTION_TABLES[harnessOf({})], tool).action;
+};
+
+/**
+ * What a push must beat: a shape is pushed only when its failure share is at least this many times the share of all calls of its action (t785). The floors above keep
+ * a shape that fails often; this keeps one that fails more often than its action does, so the push is not the fleet's commonest call. On the replay of 2026-11-02, 79
+ * of 79 pushes were two broad PowerShell shapes while `Monitor [max_results, query]` at 174 of 174 stayed silent. Open parameter, like the floors.
+ */
+export const PUSH_MIN_LIFT = 2;
+
+/**
+ * The reads whose shape fails at `lift` times the share of its whole action or more, where the action's share counts every call of every shape of it, those under the floors too.
+ * A tool no table lists is the action `other` (or `mcp.call`), so it is held to that action's share like any other and can fire. Compared in integers, so a tie is exact.
+ */
+export const aboveBaseRate = (store: Store, reads: readonly RecallRead[], lift: number = PUSH_MIN_LIFT): RecallRead[] => {
+  const harnesses = harnessesOf(store);
+  const byAction = new Map<CanonicalAction, { calls: number; failed: number }>();
+  for (const calls of callsBySession(store).values()) {
+    for (const call of calls) {
+      const action = actionOfShape(call.tool, [harnesses.get(call.session) ?? harnessOf({})]);
+      const tally = byAction.get(action) ?? { calls: 0, failed: 0 };
+      byAction.set(action, tally);
+      tally.calls += 1;
+      if (call.status === 'error') tally.failed += 1;
+    }
+  }
+  return reads.filter((read) => {
+    const base = byAction.get(actionOfShape(read.tool, read.harnesses));
+    // A fit read always counts its calls (`calls` is null only for entity reads), and its own calls are in the tally, so `base` is there; the fallbacks keep the types honest.
+    return base !== undefined && read.calls !== null && read.count * base.calls >= lift * base.failed * read.calls;
+  });
 };
 
 /** The snapshot a store answers from: its latest deposit. A deposit time compares with a recall's `at`, which is what "older than the recall" needs. */
