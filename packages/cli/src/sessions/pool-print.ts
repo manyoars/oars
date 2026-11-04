@@ -64,8 +64,11 @@ export const waitWords = (retryAfter: string, now: number): string | undefined =
     ['hour', 3_600],
     ['minute', 60],
   ];
+  // Only two units are shown, so the last one shown is rounded up: an operator who retries at the time named must not get another 429.
+  const lead = units.findIndex(([, size]) => seconds >= size);
+  const step = lead < 0 ? 1 : (units[Math.min(lead + 1, units.length - 1)]?.[1] ?? 1);
   const parts: string[] = [];
-  let left = seconds;
+  let left = Math.ceil(seconds / step) * step;
   for (const [name, size] of units) {
     const count = Math.floor(left / size);
     left -= count * size;

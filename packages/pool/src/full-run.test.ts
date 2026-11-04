@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { run } from '../../cli/src/cli.js';
 import { ExitCode } from '../../cli/src/errors.js';
+import { networkSender, poolDeposit } from '../../cli/src/sessions/pool-command.js';
 import { verifyBundle } from '../../cli/src/sessions/pool-wire.js';
 import { deposit } from '../../cli/src/sessions/store.js';
 import { cleanup, NOW, stage, type Staged } from '../../cli/src/sessions/test-support.js';
@@ -30,9 +31,12 @@ interface Person {
   staged: Staged;
   cli: (...args: string[]) => Promise<ExitCode>;
   last: () => unknown;
+  /** The command line sends no batch yet. This builds the outbox, prints it, and sends one batch through the sender the lock is tested with, so the lock, the covenant, and the request run against the real server. */
+  send: (index: number, acceptCovenant?: string) => Promise<unknown>;
 }
 
 const person = async (pool: TestPool, id: string): Promise<Person> => {
+  const server = await pool.url();
   const staged = stage();
   const terms = join(staged.root, 'terms.txt');
   writeFileSync(terms, `${TERM}\n`);
@@ -45,13 +49,22 @@ const person = async (pool: TestPool, id: string): Promise<Person> => {
     return Promise.resolve();
   };
   await deposit(staged.runtime, { allow: ['proj'], redactDomains: [], now: () => NOW });
+  const cli = (...args: string[]): Promise<ExitCode> => run(['--json', 'pool', ...args], h.deps);
+  const last = (): unknown => {
+    const parsed: unknown = JSON.parse(h.out.at(-1) ?? 'null');
+    return parsed;
+  };
   return {
     h,
     staged,
-    cli: (...args) => run(['--json', 'pool', ...args], h.deps),
-    last: () => {
-      const parsed: unknown = JSON.parse(h.out.at(-1) ?? 'null');
-      return parsed;
+    cli,
+    last,
+    send: async (index, acceptCovenant) => {
+      expect(await cli('outbox')).toBe(ExitCode.OK);
+      const batches: unknown = fieldOf(last(), 'batches');
+      if (!Array.isArray(batches)) throw new Error('outbox listed no batches');
+      const entry: unknown = batches[index];
+      return poolDeposit(h.deps, { server, send: textOf(entry, 'hash'), via: networkSender(h.deps, 'deposit'), ...(acceptCovenant === undefined ? {} : { acceptCovenant }) });
     },
   };
 };
@@ -83,12 +96,13 @@ describe('login, deposit, and fetch against a local server', () => {
       expect(await one.cli('login', '--provider', 'github')).toBe(ExitCode.OK);
       expect(one.last()).toMatchObject({ ok: true, server: await pool.url() });
 
+      // The four invented sessions in the fixture folder are built into the outbox, and `deposit` itself sends nothing.
+      expect(await one.cli('deposit')).toBe(ExitCode.OK);
+      expect(one.last()).toMatchObject({ ok: true, sessions: 4, batched: 4, uncaptured: 0, refused: 0, excluded: { term: 0, noRaw: 0, noTerms: 0, unreadable: 0 } });
       // V10 at the server's word: nothing goes up before the covenant is accepted.
-      expect(await one.cli('deposit')).toBe(ExitCode.AUTH);
-      expect(JSON.stringify(one.last())).toContain('covenant_not_accepted');
-      expect(await one.cli('deposit', '--accept-covenant', 'v1')).toBe(ExitCode.OK);
-      // The four invented sessions in the fixture folder.
-      expect(one.last()).toMatchObject({ ok: true, sessions: 4, deposited: 4, uncaptured: 0, refused: 0, tooLarge: 0, excluded: { term: 0, noRaw: 0, noTerms: 0, unreadable: 0 } });
+      await expect(one.send(0)).rejects.toMatchObject({ exitCode: ExitCode.AUTH, problem: { code: 'covenant_not_accepted' } });
+      expect(await one.send(0, 'v1')).toMatchObject({ document: { ok: true, sent: true } });
+      for (const index of [1, 2, 3]) expect(await one.send(index)).toMatchObject({ document: { ok: true, sent: true } });
 
       expect(await one.cli('fetch', '--harness-version', '2.1.314')).toBe(ExitCode.OK);
       readsAfter.push(fieldOf(one.last(), 'reads'));
@@ -123,8 +137,8 @@ describe('a pool with no covenant published', () => {
       stubProviders(closed);
       const one = await person(closed, '4101');
       expect(await one.cli('login', '--provider', 'google')).toBe(ExitCode.OK);
-      expect(await one.cli('deposit', '--accept-covenant', 'v1')).toBe(ExitCode.AUTH);
-      expect(JSON.stringify(one.last())).toContain('deposits_closed');
+      expect(await one.cli('deposit')).toBe(ExitCode.OK);
+      await expect(one.send(0, 'v1')).rejects.toMatchObject({ exitCode: ExitCode.AUTH, problem: { code: 'deposits_closed' } });
       expect(await (await closed.db()).prepare('SELECT COUNT(*) AS count FROM deposits').first('count')).toBe(0);
       expect(await one.cli('fetch', '--harness-version', '2.1.314')).toBe(ExitCode.OK);
     } finally {

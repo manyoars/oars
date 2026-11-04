@@ -1,11 +1,19 @@
 // `oars sessions verify` with the per-session results and the T0 audit (t743).
 import { appendFileSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { sessionsVerify } from './command.js';
+import type * as Outbox from './pool-outbox.js';
+import { outboxFolder, staleBatchesAnywhere, writeBatch } from './pool-outbox.js';
 import { readSteps } from './steps.js';
 import { deposit, paths, readState } from './store.js';
 import { cleanup, NOW, stage } from './test-support.js';
+
+// Wraps the real count so one test can make it fail the way an unreadable folder does.
+vi.mock('./pool-outbox.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof Outbox>();
+  return { ...actual, staleBatchesAnywhere: vi.fn(actual.staleBatchesAnywhere) };
+});
 
 afterEach(cleanup);
 const options = { allow: ['proj'], redactDomains: [], now: () => NOW };
@@ -156,5 +164,47 @@ describe('sessionsVerify, per session', () => {
     const verified = await sessionsVerify({ sessions: staged.runtime, install: undefined, now: () => NOW }, { session: undefined });
     expect(verified.failed).toEqual([]);
     expect(verified.report.audit.counts['changed since deposit']).toBe(1);
+  });
+});
+
+describe('sessionsVerify, outbox batches', () => {
+  it('counts batches built under an older vocabulary or field list, on every server, and says they will never be sent', async () => {
+    const staged = stage();
+    await deposit(staged.runtime, options);
+    const deps = { sessions: staged.runtime, install: undefined, now: () => NOW };
+    const clean = await sessionsVerify(deps, { session: undefined });
+    expect(clean.report.staleBatches).toBe(0);
+    expect(clean.text).not.toContain('outbox batches');
+    await writeBatch(outboxFolder(staged.storeDir, 'https://one.test'), '0123456789abcdef', { format: 1 }, 'v0-00000000');
+    await writeBatch(outboxFolder(staged.storeDir, 'https://two.test'), 'fedcba9876543210', { format: 1 }, 'v0-00000000');
+    // A batch under the current stamp is not stale.
+    await writeBatch(outboxFolder(staged.storeDir, 'https://two.test'), '1111111111111111', { format: 1 });
+    const stale = await sessionsVerify(deps, { session: undefined });
+    expect(stale.report.staleBatches).toBe(2);
+    expect(stale.document).toMatchObject({ staleBatches: 2 });
+    expect(stale.text).toContain('2 outbox batches were built under an older vocabulary or field list');
+    expect(stale.failed).toEqual([]);
+  });
+
+  it('a stray file in the outbox folder is no batch and no failure', async () => {
+    const staged = stage();
+    await deposit(staged.runtime, options);
+    const deps = { sessions: staged.runtime, install: undefined, now: () => NOW };
+    const root = join(staged.storeDir, 'pool-outbox');
+    mkdirSync(root, { recursive: true });
+    writeFileSync(join(root, 'stray.txt'), 'not a folder');
+    writeFileSync(join(root, 'ab12cd34'), 'a file where a server folder belongs');
+    const report = await sessionsVerify(deps, { session: undefined });
+    expect(report.report.staleBatches).toBe(0);
+    expect(report.failed).toEqual([]);
+  });
+
+  it('an outbox that cannot be read counts as none, the way an unreadable scope does, and does not fail verify', async () => {
+    const staged = stage();
+    await deposit(staged.runtime, options);
+    vi.mocked(staleBatchesAnywhere).mockRejectedValueOnce(Object.assign(new Error('permission denied'), { code: 'EACCES' }));
+    const report = await sessionsVerify({ sessions: staged.runtime, install: undefined, now: () => NOW }, { session: undefined });
+    expect(report.report.staleBatches).toBe(0);
+    expect(report.failed).toEqual([]);
   });
 });
