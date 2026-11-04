@@ -147,6 +147,17 @@ interface WeekGroup {
   histograms: Histograms;
 }
 
+/** One pass, pushing into each session's list: a copy per row is quadratic in a session's rows. */
+const bySession = <T extends { session: string }>(records: readonly T[]): Map<string, T[]> => {
+  const grouped = new Map<string, T[]>();
+  for (const record of records) {
+    const list = grouped.get(record.session);
+    if (list === undefined) grouped.set(record.session, [record]);
+    else list.push(record);
+  }
+  return grouped;
+};
+
 const isoDay = (ms: number): string => new Date(ms).toISOString().slice(0, 10);
 
 /**
@@ -156,10 +167,8 @@ const isoDay = (ms: number): string => new Date(ms).toISOString().slice(0, 10);
  * rest. Mechanics only: no signature, no record content.
  */
 export const selfBaseline = (sessions: readonly BaselineSession[], tools: readonly BaselineTool[], prompts: readonly BaselinePrompt[], asOf: number): SelfBaselineResult[] => {
-  const toolsOf = new Map<string, BaselineTool[]>();
-  for (const tool of tools) toolsOf.set(tool.session, (toolsOf.get(tool.session) ?? []).concat(tool));
-  const promptsOf = new Map<string, BaselinePrompt[]>();
-  for (const prompt of prompts) promptsOf.set(prompt.session, (promptsOf.get(prompt.session) ?? []).concat(prompt));
+  const toolsOf = bySession(tools);
+  const promptsOf = bySession(prompts);
 
   const groups = new Map<string, WeekGroup>();
   const keyOf = new Map<string, string | null>();
@@ -226,7 +235,7 @@ export const formatSelfBaseline = (results: readonly SelfBaselineResult[]): stri
   const reasons = new Map<string, number>();
   for (const entry of results) if (entry.reason !== null) add(reasons, entry.reason);
   return [
-    `${String(results.length)} sessions against their own earlier weeks (layer 2, local; a low F lowers W and rejects nothing)`,
+    `${String(results.length)} sessions against their own other weeks (layer 2, local; a low F lowers W and rejects nothing)`,
     `      scored: ${String(results.filter((entry) => entry.status === 'scored').length)}`,
     ...[...reasons].sort().map(([reason, count]) => `      not run, ${reason}: ${String(count)}`),
   ].join('\n');
