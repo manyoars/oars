@@ -34,8 +34,8 @@ const NAME_SHAPE: ReadonlyMap<string, RegExp> = new Map<string, RegExp>([
   ['go', /^[a-z0-9.-]+\.[a-z0-9.-]+\/[\w.~/-]+$/i],
 ]);
 
-/** A published version: dotted numbers with an optional pre-release or build tail, and Go's leading `v`. A range (`^1.2`, `>=2`), a tag (`latest`), or a mask is no version. */
-const EXACT_VERSION = /^v?\d+(?:\.\d+){0,3}(?:[-+][0-9A-Za-z.+-]+)?$/;
+/** A published version: three or four dotted numbers with an optional pre-release or build tail, and Go's leading `v`. A bare `1` or `2.31` is a range to its registry, so like a range (`^1.2`, `>=2`), a tag (`latest`), or a mask it is no version. */
+const EXACT_VERSION = /^v?\d+(?:\.\d+){2,3}(?:[-+][0-9A-Za-z.+-]+)?$/;
 
 /** A name in an ecosystem of the vocabulary, spelled as the registry spells it; null when it is not shaped like one. */
 export const resolveName = (ecosystem: string, name: string): string | null => {
@@ -53,8 +53,8 @@ export const resolvePull = (pull: ToolPull): Omit<ToolPackage, 'first'> | null =
 };
 
 /**
- * The packages one call installs or runs, each marked `first` when no earlier call of the session named that package at that version. `seen` is the
- * session's running set, so the caller passes the same one for every call in order. A version that fails on first try still counts: the mark is made
+ * The packages one call installs or runs, each marked `first` when no earlier call of the transcript file named that package at that version. `seen` is the
+ * file's running set, so the caller passes the same one for every call in order. A version that fails on first try still counts: the mark is made
  * from the command, before its result is known.
  */
 export const packagesOf = (pulls: readonly ToolPull[], seen: Set<string>): ToolPackage[] => {
@@ -148,7 +148,7 @@ const cargoNames = (lines: readonly string[]): string[] => {
     pending = null;
   };
   for (const line of lines) {
-    const table = /^\s*\[\[?([^\]]+)\]\]?\s*$/.exec(line)?.[1]?.replace(/\s/g, '');
+    const table = /^\s*\[\[?([^\]]+)\]\]?\s*(?:#.*)?$/.exec(line)?.[1]?.replace(/\s/g, '');
     if (table !== undefined) {
       settle();
       pending = CARGO_DEPENDENCY_ENTRY.exec(table)?.[1] ?? null;
