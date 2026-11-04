@@ -1,8 +1,8 @@
 # @manyoars/oars
 
-The `oars` command line for Many Oars: sign in, deploy an agent, set its prices, make a test charge against it, and keep a local memory of your own Claude Code sessions (`oars sessions`).
+The `oars` command line for Many Oars: sign in, deploy an agent, and keep a local memory of your own Claude Code sessions (`oars sessions`).
 
-Accounts and paid agents are not open yet; `oars login` says so until launch.
+Accounts are not open yet; `oars login` says so until launch.
 
 Node 24 or later. ESM only.
 
@@ -61,12 +61,6 @@ The SDK key is shown once, so save it when `deploy` prints it.
 ### status
 
 `oars status <workloadId>` shows a workload and its billing mode.
-
-### test-charge
-
-`oars test-charge <workloadId>` makes a TEST-mode charge against one of the workload's prices.
-
-- `--price <ref>` picks the price. The default is the workload's only active price.
 
 ### keys
 
@@ -194,7 +188,8 @@ Replay is local and read-only on your transcripts; it writes `crossings.jsonl` a
 `oars pool` talks to a pool server that you name with `--server <url>` or `OARS_POOL_URL`; there is no default server. Every other command works without it.
 
 - `oars pool login --provider github|google` signs in by the provider's device flow, run here, and prints every request before it sends it. `OARS_GITHUB_CLIENT_ID` (or `OARS_GOOGLE_CLIENT_ID` and `OARS_GOOGLE_CLIENT_SECRET`) must be set; an unset one stops the command before anything is sent and names the variable.
-- `oars pool deposit` writes a batch of closed-vocabulary session skeletons to an outbox for each session that passes your folder allowlist and the exclusion check, and stops. Nothing is sent: `--send <hash>` stops with `sending_disabled` in this release.
+- `oars pool deposit` writes a batch of closed-vocabulary session skeletons to an outbox for each session that passes your folder allowlist and the exclusion check, and stops. Nothing is sent: `--send <hash>` sends no request. A batch that was shown and is unchanged stops with `sending_disabled` (exit 5), and any other hash stops with its own refusal.
+- `deposit`, `outbox`, and `fetch` need `oars pool login` first; without it they exit 3 and name the server.
 - `oars pool outbox` prints each batch exactly as it would be sent, with its SHA-256, and `--explain` adds each field's rule.
 - `oars pool fetch --harness-version <version>` fetches that version's signed bundle, verifies it against the key pinned at login, and keeps it locally.
 
@@ -202,7 +197,7 @@ Replay is local and read-only on your transcripts; it writes `crossings.jsonl` a
 
 With `--json`, stdout carries exactly one JSON document and a success exits 0.
 
-- Success: `{"ok": true, ...}`. The rest depends on the command: `login` adds `email`; `deploy` adds `workloadId`, `prices`, `started`, `nextSteps` and, when this run minted it, `sdkKey`; `templates` adds `templates`; `status` adds `workload` and `billingMode`; `test-charge` adds `chargeId` and `status`; `keys create` adds `key` and `secret`, `keys list` adds `keys`, and `keys revoke` adds `keyId` and `revoked`; `sessions` commands add their own fields (`deposit` the counts, `recall` `matches`, `books` `rows`, `measure` `last` and `before`, `verify` `sessions`, `unreadable`, `invariants`, `sessionResults`, and `audit`).
+- Success: `{"ok": true, ...}`. The rest depends on the command: `login` adds `email`; `deploy` adds `workloadId`, `prices`, `started`, `nextSteps` and, when this run minted it, `sdkKey`; `templates` adds `templates`; `status` adds `workload` and `billingMode`; `keys create` adds `key` and `secret`, `keys list` adds `keys`, and `keys revoke` adds `keyId` and `revoked`; `sessions` commands add their own fields (`deposit` the counts, `recall` `matches`, `books` `rows`, `measure` `last` and `before`, `verify` `sessions`, `unreadable`, `invariants`, `sessionResults`, and `audit`).
 - Failure: `{"ok": false, "step": "...", "problem": {...}}`, where `problem` is the platform's problem document (`title`, `detail`, `code`, `actionUrl` when it sent them). A `deploy` that stopped after registering also carries `workloadId`, `rerun` and, if that run minted it, `sdkKey`.
 
 Without `--json`, a failure prints the problem to stderr instead.
@@ -217,9 +212,9 @@ Exit codes:
 | 3 | authentication failed (login expired or denied, SDK key invalid, HTTP 401 or 403) |
 | 4 | the platform rejected the input, or `sessions verify --strict` found exceptions |
 | 5 | conflict (an idempotency key or workload already used) |
-| 6 | a person must act first (account, payment method, credits, or compute cap); the last stderr line starts "Needs you:" and names the link |
+| 6 | a person must act first (an account step or the compute cap); the last stderr line starts "Needs you:" and names the link |
 | 7 | rate limited |
-| 8 | the platform could not be reached |
+| 8 | the server could not be reached (the platform, the issuer, or a pool server) |
 | 9 | `deploy` stopped part way; rerun the printed command to resume |
 | 10 | `pool fetch` hit the pool's weekly fetch cap; the bundle on disk is untouched, and the message says when to try again |
 

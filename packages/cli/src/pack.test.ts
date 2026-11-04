@@ -1,7 +1,7 @@
 // What `npm publish -w packages/cli` would upload, read from `npm pack --dry-run --json`: the built CLI with the bin that
-// `oars` runs, the golden deploy plans the web app's parity check reads, and LICENSE; never the TypeScript source, a test or the
+// `oars` runs, the pinned vocabulary, and LICENSE; never the TypeScript source, a test or the
 // fake platform. `--ignore-scripts` keeps this test from rebuilding dist/ while the other tests run beside it; the root check
-// script builds first (the build also copies the plans in), and `prepack` rebuilds at publish.
+// script builds first, and `prepack` rebuilds at publish.
 import { spawnSync } from 'node:child_process';
 import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -32,9 +32,6 @@ const manifest = (): Record<string, unknown> => {
   return parsed;
 };
 
-// The repo's golden plans: the package must ship exactly these, whatever templates the catalog grows.
-const goldenPlans = (): string[] => readdirSync(`${root}parity/deploy-plans`).filter((name) => name.endsWith('.json')).sort();
-
 describe('the tarball npm pack would make', () => {
   let paths: string[] = [];
   beforeAll(() => {
@@ -53,19 +50,6 @@ describe('the tarball npm pack would make', () => {
 
     expect(target).toBe('dist/bin.js');
     expect(paths).toContain(target);
-  });
-
-  it('lists every golden deploy plan under parity/deploy-plans/, and no other plan', () => {
-    const golden = goldenPlans();
-
-    expect(golden.length).toBeGreaterThan(0);
-    expect(paths.filter((path) => path.startsWith('parity/deploy-plans/')).sort()).toEqual(golden.map((name) => `parity/deploy-plans/${name}`));
-  });
-
-  it('ships plans that equal the repo golden plans byte for byte', () => {
-    for (const name of goldenPlans()) {
-      expect(readFileSync(`${cliFolder}parity/deploy-plans/${name}`, 'utf8'), name).toBe(readFileSync(`${root}parity/deploy-plans/${name}`, 'utf8'));
-    }
   });
 
   it('lists every vocabulary snapshot and the manifest that pins them', () => {
@@ -88,11 +72,26 @@ describe('the tarball npm pack would make', () => {
     expect(unwanted).toEqual([]);
   });
 
-  it('lists nothing but dist/, the golden plans, the pinned vocabulary, and the three files npm always adds', () => {
+  it('lists nothing but dist/, the pinned vocabulary, and the three files npm always adds', () => {
     expect(
-      paths.filter((path) => !path.startsWith('dist/') && !path.startsWith('parity/deploy-plans/') && !path.startsWith('vocab/') && !['package.json', 'README.md', 'LICENSE'].includes(path)),
+      paths.filter((path) => !path.startsWith('dist/') && !path.startsWith('vocab/') && !['package.json', 'README.md', 'LICENSE'].includes(path)),
     ).toEqual([]);
   });
+});
+
+// dist/sessions/public-vocabulary.js is the pinned list of public tool and site names a session projects (`stripe` the CLI, docs.stripe.com):
+// ecosystem names, not the product's money side. `/payment/i` stays in dist for the exit-6 error codes `oars deploy` maps until the lead rules on
+// that command.
+const ECOSYSTEM_LIST = 'dist/sessions/public-vocabulary.js';
+const DEFERRED_IN_DIST = String(/payment/i);
+
+describe('the packed dist names nothing of the money side', () => {
+  it('has no money term in any packed dist file', () => {
+    const hits = packedPaths()
+      .filter((path) => path.startsWith('dist/') && /\.(?:js|json)$/.test(path) && path !== ECOSYSTEM_LIST)
+      .flatMap((path) => moneyIn(readFileSync(join(cliFolder, path), 'utf8')).filter((term) => term !== DEFERRED_IN_DIST).map((term) => `${path}: ${term}`));
+    expect(hits).toEqual([]);
+  }, 120_000);
 });
 
 describe('the publish fields', () => {
@@ -108,10 +107,10 @@ describe('the publish fields', () => {
     expect(manifest()).not.toHaveProperty('private');
   });
 
-  it('ship dist/, the plans, and the vocabulary snapshots, run oars from dist/bin.js and rebuild before every pack', () => {
+  it('ship dist/ and the vocabulary snapshots, run oars from dist/bin.js and rebuild before every pack', () => {
     expect(manifest()).toMatchObject({
       bin: { oars: './dist/bin.js' },
-      files: ['dist', 'parity/deploy-plans', 'vocab'],
+      files: ['dist', 'vocab'],
       scripts: { prepack: 'npm run build' },
     });
   });
@@ -147,7 +146,30 @@ const DENY_LIST = [
   'joins no cluster',
 ];
 
-const NOT_OPEN = 'Accounts and paid agents are not open yet; `oars login` says so until launch.';
+const NOT_OPEN = 'Accounts are not open yet; `oars login` says so until launch.';
+
+// The money side is not public yet (Matt, 2026-11-04, t858). `price`, `billing`, and `charge` are not listed: `oars deploy`, `status`, and
+// `templates` still carry them until the lead rules on those three commands (t858 report, Open questions).
+const MONEY_TERMS = [
+  /stripe/i,
+  /test-charge/i,
+  /purchas/i,
+  /payout/i,
+  /payment/i,
+  /revenue/i,
+  /1099/,
+  /take-home/i,
+  /make-me-money/i,
+  /paid[- ]agent/i,
+  /paid-api/i,
+  /per-task-agent/i,
+  /buyer/i,
+  /sell/i,
+  /earn/i,
+  /money/i,
+  /pay per/i,
+];
+const moneyIn = (text: string): string[] => MONEY_TERMS.filter((term) => term.test(text)).map(String);
 
 describe('the public text states facts only', () => {
   const description = String(manifest().description);
@@ -164,6 +186,20 @@ describe('the public text states facts only', () => {
     });
   }
 
+  it.each([
+    ['packages/cli/README.md', join(cliFolder, 'README.md')],
+    ['README.md', join(root, 'README.md')],
+    ['packages/cli/CHANGELOG.md', join(cliFolder, 'CHANGELOG.md')],
+    ['packages/client/README.md', join(root, 'packages/client/README.md')],
+    ['packages/client/CHANGELOG.md', join(root, 'packages/client/CHANGELOG.md')],
+  ])('%s names nothing of the money side', (_name, file) => {
+    expect(moneyIn(readFileSync(file, 'utf8'))).toEqual([]);
+  });
+
+  it('the package description names nothing of the money side', () => {
+    expect(moneyIn(description)).toEqual([]);
+  });
+
   it('the package description names sessions and claims nothing about what the harness sends', () => {
     expect(description).toMatch(/sessions/);
     expect(description).not.toMatch(/nothing (leaves|is sent)/i);
@@ -179,7 +215,7 @@ describe('the public text states facts only', () => {
     expect(entry).toContain('`gold sample`, `gold arms`, and `gold score`');
   });
 
-  it.each([['packages/cli/README.md', join(cliFolder, 'README.md')], ['README.md', join(root, 'README.md')]])('%s says raw/ is unredacted, what the harness sends, where <config> is, and that paid agents are not open', (_name, file) => {
+  it.each([['packages/cli/README.md', join(cliFolder, 'README.md')], ['README.md', join(root, 'README.md')]])('%s says raw/ is unredacted, what the harness sends, where <config> is, and that accounts are not open', (_name, file) => {
     const text = readFileSync(file, 'utf8');
     expect(text).toContain('raw transcripts');
     expect(text).toMatch(/unredacted/);
