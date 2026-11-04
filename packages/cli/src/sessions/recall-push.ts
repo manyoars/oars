@@ -8,7 +8,7 @@ import { toolShapeId } from './recall-reads.js';
 import { evidenceOf, renderAnswer } from './recall-render.js';
 import { harnessOf, type Frame } from './schema.js';
 
-/** How far back a hook looks in a growing file: enough for the session's latest lines, and a bound on what a hook on every matched call can cost. */
+/** How far back a hook looks in a growing file: enough for the session's latest lines, and a bound on what a hook on every call can cost. */
 const TAIL_BYTES = 64 * 1024;
 
 const isMissing = (error: unknown): boolean => error instanceof Error && 'code' in error && error.code === 'ENOENT';

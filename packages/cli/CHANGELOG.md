@@ -4,6 +4,7 @@ All notable changes to `@manyoars/oars`. Versions follow semver; a release is th
 
 ## Unreleased
 
+- A deposit whose read of its own `store.lock` is refused at the end (an antivirus share violation on Windows) now removes the lock (retrying a share violation, and never losing the deposit's result if the removal is refused too) instead of leaving it for the 10-minute stale window, and a revert file of a Codex thread that a crash tore no longer makes the whole thread unreadable.
 - `oars sessions exclusions` is new: it scans your sessions against a local term file (`OARS_EXCLUSION_TERMS`) and writes the excluded ones to a list, printing counts only. `oars sessions gold sample`, published in 0.3.0, now refuses a draw with no term file, and `--exclude-term` only adds to that file's terms instead of replacing it.
 - A store lock whose holder hangs is no longer kept for good: the holder refreshes it for at most an hour; once it has aged 10 more minutes, the next deposit breaks it and prints one line naming the holder's pid.
 - `oars keys create|list|revoke` manages your API keys. `keys create --workload <id>` mints a key limited to one workload (authorities `AGENT_OPERATE` and `AGENT_READ` only), so a scheduled agent can change its own schedule without being able to spend or reach another workload. The `make-me-money` skill shows the recipe.
