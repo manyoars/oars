@@ -128,7 +128,7 @@ describe('closedFrame', () => {
 describe('repoFilesFromIndex', () => {
   const dirs: string[] = [];
   afterEach(() => {
-    for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+    for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
   });
   const repo = (index: Buffer | undefined): string => {
     const root = mkdtempSync(join(tmpdir(), 'oars-frame-'));
