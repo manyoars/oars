@@ -1,2 +1,5 @@
 # Generated files are compared byte for byte (openapi/public.json, the client's types), so every checkout writes LF.
 * text=auto eol=lf
+
+# Parallel changes each add an Unreleased line; keep both sides instead of conflicting.
+packages/cli/CHANGELOG.md merge=union
