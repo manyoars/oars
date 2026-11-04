@@ -78,6 +78,18 @@ Off by default. With `--registry-state`, replay asks `npm view` or `pip index ve
 
 A command run from a script, alias, or Makefile; a manifest edit a later bare install picked up; what a person saw or approved; an MCP server started and never called; folders off the allowlist; logs the harness already cleaned up; a session in Codex or Cursor, which replay does not read. `oars gate report` ends with this list and the counts by shape.
 
+## Measured
+
+One run over a real harness folder on a Windows box (no `--registry-state`, an empty store): 9,139 transcripts across about a month (2026-10-01 to 2026-11-04), 534,097 calls, 25,167 crossings, in 160 seconds, peak resident memory 439 MB. By class and form: `mcp-server` 21,761, `npm-package` `fetch-and-run` 2,141, `skill` `skill-call` 1,062, `npm-package` `install` 120, `python-package` `install` 83; none of the URL forms, and no `npx skills add`, appeared. Commands counted under "replay cannot see": 1,033 pipes into a shell, 210 lockfile-only installs, 129 `local-path`, 19 `variable-name`, 1 `unreadable-name`.
+
+Against the store's `raw/` archive of the same folders, the harness folder held every transcript but one, so the 30-day window answers the same questions. About 200 workflow `journal.jsonl` files sit beside the transcripts and are not read.
+
+Read by hand (30 crossings drawn at random from sessions that pass the exclusion check, plus 16 drawn by form): the class and form were right in all of them. Three things were not:
+
+- A package crossing's `origin` is the first place the name is mentioned, as a word. A short brand-like name that also appears in prose reads as a mention (one `repo-file` origin in 30 was a product name in a plan).
+- About 91% of the `npx` fetch-and-run crossings whose folder still exists name a bin that folder's `node_modules/.bin` already holds, so `npx` ran a local tool and fetched nothing. The record keeps them as `fetch-and-run`, since the log does not show whether a fetch happened.
+- An MCP server's `origin` read `tool-output` when the harness listed it only as `mcp__<server>__<tool>` names, and an MCP action's own "unknown tool" read as the server not existing. Both are fixed.
+
 ## Not in this release
 
 Pool reads, sign-in, deposit prompts, blocking, and any hook. `install`, the policy file, and notes come in the next brief.

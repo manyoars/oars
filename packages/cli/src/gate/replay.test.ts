@@ -219,6 +219,32 @@ describe('a crossing record', () => {
     expect(named((await written()).crossings, 'handy-lib').origin).toBe(origin);
   });
 
+  it('does not read a server\'s own "unknown tool" for one of its actions as the server not existing', async () => {
+    await writeLog(projectsRoot, REPO, 'a.jsonl', [
+      use(1, 'b1', 'mcp__batcher__run', {}),
+      result(2, 'b1', 'actions[2] (shot) failed: unknown tool "shot" (2 completed, 0 remaining)', true),
+      use(3, 'b2', 'mcp__gone__run', {}),
+      result(4, 'b2', 'Error: No such tool available: mcp__gone__run', true),
+    ]);
+    await run([REPO]);
+    const { crossings } = await written();
+    expect(crossings.map((row) => `${row.name}: ${row.miss}`)).toEqual(['batcher: none', 'gone: not-found']);
+  });
+
+  it('reads an MCP server the harness listed only as tool names (mcp__server__tool) as harness, not as a later mention', async () => {
+    const listing = { type: 'attachment', timestamp: stamp(0), attachment: { type: 'deferred_tools_delta', addedNames: ['mcp__listed-only__search', 'mcp__listed-only__open'] } };
+    await writeLog(projectsRoot, REPO, 'a.jsonl', [listing, use(1, 'm1', 'mcp__listed-only__search', {}), result(2, 'm1', 'ok')]);
+    await run([REPO]);
+    expect(named((await written()).crossings, 'listed-only')).toMatchObject({ origin: 'harness' });
+  });
+
+  it('does not read a longer tool name as the server, nor a server name inside another word', async () => {
+    const listing = { type: 'attachment', timestamp: stamp(0), attachment: { type: 'deferred_tools_delta', addedNames: ['mcp__listed-only-extra__search', 'xmcp__listed-only__search'] } };
+    await writeLog(projectsRoot, REPO, 'a.jsonl', [listing, use(1, 'm1', 'mcp__listed-only__search', {}), result(2, 'm1', 'ok')]);
+    await run([REPO]);
+    expect(named((await written()).crossings, 'listed-only')).toMatchObject({ origin: 'none-seen' });
+  });
+
   it('reads none-seen when the name appears only after the call, inside a longer word, or in the agent\'s own text', async () => {
     await writeLog(projectsRoot, REPO, 'a.jsonl', [
       typed(0, 'look at handy-lib-extra and other/handy-lib'),
