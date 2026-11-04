@@ -32,7 +32,7 @@
 //   timestamp        epoch milliseconds, `responseTimestamp` for the response. A missing or implausible one is never made up: the time carries forward
 //   modelId          the model
 //   response[]       a markdown part is a bare `{value}` (a string in the old format); `kind:'thinking'` is skipped;
-//                    `kind:'toolInvocationSerialized'` is a tool call (service/chatService.ts:1246-1270); `kind:'textEditGroup'` or `'notebookEditGroup'` `{uri}` is a file edited
+//                    `kind:'toolInvocationSerialized'` is a tool call (chatService/chatService.ts:1246-1270); `kind:'textEditGroup'` or `'notebookEditGroup'` `{uri}` is a file edited
 //   usage            `completionTokens` the whole turn's output (model/chatModel.ts:1929-1934), `modelTotals[{model, inputTokens, cachedTokens, outputTokens}]`
 //                    (chatService.ts:176-188) the only per-model figure. `promptTokens` is the last model call alone, so it is not read as consumption. The source does not
 //                    say whether `inputTokens` includes `cachedTokens`, so it is not subtracted: that is a stated limit (a store that includes it counts the cache twice).
@@ -41,7 +41,7 @@
 //                    (contrib/chat/browser/agentSessions/agentHost/stateToProgressAdapter.ts:936). So on an extension-written session, which is the surface this reader exists
 //                    for, `input` 0 with a nonzero `output` means the input is NOT KNOWN, not that none was spent
 // A tool call's `toolId` is the bare name (`run_in_terminal`) or the contributed one (`copilot_applyPatch`), both in extensions/copilot/src/extension/tools/common/toolNames.ts.
-// A call with `subAgentInvocationId` is a subagent's own and is not read; the parent's `runSubagent` call is. Tool inputs are not persisted (model/chatToolInvocation.ts:504-533),
+// A call with `subAgentInvocationId` is a subagent's own and is not read; the parent's `runSubagent` call is. Tool inputs are not persisted (model/chatProgressTypes/chatToolInvocation.ts:504-533),
 // so only a terminal command (`toolSpecificData.commandLine`) and an edit's file (the `textEditGroup` after the call) are known. A shell call's outcome is its exit code
 // alone (`terminalCommandState.exitCode`, chatService.ts:803-807), never a status field; with none and no error, it is unknown and stays `none`.
 // A refusal is `isConfirmed` `{type:0}` (Denied) or `{type:5}` (Skipped) with a `source` (ToolConfirmKind, chatService.ts:901-913), or `false` (before VS Code 1.104). The Skip
@@ -278,7 +278,7 @@ export const chatLines = (data: Obj, fallbackId: string, folder: string | null):
         const block: Obj = { type: 'tool_use', id, name: toolId, input: {} };
         const isShell = terminal !== undefined || toolId === 'run_in_terminal';
         if (isShell) {
-          const command = terminal === undefined ? undefined : (str(terminal.userEdited) ?? str(terminal.original));
+          const command = terminal === undefined ? undefined : (str(terminal.userEdited) ?? str(terminal.toolEdited) ?? str(terminal.original));
           block.native = toolId;
           block.name = 'Bash';
           block.input = command === undefined ? {} : { command };
@@ -437,6 +437,8 @@ export const openVscodeCopilotStore = async (root: string): Promise<VscodeStore 
         try {
           const text = await readFile(file, 'utf8');
           const jsonl = file.endsWith('.jsonl');
+          // VS Code throws on an empty log ("Empty log file", objectMutationLog.ts:393) and falls back to the `.json`; the last file alone may read as an empty session.
+          if (jsonl && text.trim() === '' && file !== session.files[session.files.length - 1]) throw new Error('empty log file');
           const lines = [...chatLines(chatData(text, jsonl), session.id, session.folder).map((line) => JSON.stringify(line)), ...(jsonl ? chatBadLines(text) : [])];
           return lines.join('\n') + (lines.length === 0 ? '' : '\n');
         } catch (error) {

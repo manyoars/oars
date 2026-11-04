@@ -258,8 +258,9 @@ export const ACTION_TABLES: { readonly [harness in Harness]: ActionTable } = {
       handle_dialog: 'other',
       run_playwright_code: 'other',
     },
-    mcp: /^mcp__(?<server>.+?)__(?<tool>.+)$/,
-    toolDelimited: true,
+    // No pattern: VS Code's spelling of an MCP tool id has not been seen in a real file, so an MCP call reads as `other` with its name withheld until the hand run shows it.
+    mcp: null,
+    toolDelimited: false,
     shells: {},
   },
   // Gemini CLI's tool names (google-gemini/gemini-cli @ 89e9d25d, packages/core/src/tools/tool-names.ts). Its adapter names the shell, edit, read, and search
