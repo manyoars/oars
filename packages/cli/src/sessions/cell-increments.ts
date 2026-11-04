@@ -182,7 +182,7 @@ const promptRecords = (id: string, { prompts }: SkeletonTranscript): PromptObser
   }));
 
 const toolRecords = (id: string, main: string, { tools }: SkeletonTranscript): ToolObservation[] =>
-  tools.map(({ side, prompt, status, durationMs, steps }, n) => ({
+  tools.map(({ side, prompt, status, durationMs, errorCode, steps }, n) => ({
     kind: 'tool',
     cv: '',
     sid: '',
@@ -202,6 +202,7 @@ const toolRecords = (id: string, main: string, { tools }: SkeletonTranscript): T
     harnessVersion: null,
     side,
     prompt,
+    ...(errorCode === null || errorCode === undefined ? {} : { errorCode }),
     steps: steps.map(({ action, native, identity, status: reported, parent, tokens, ms }, seg) => ({
       action,
       native,

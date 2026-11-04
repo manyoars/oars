@@ -2,11 +2,11 @@
 // stay the primary record, so a cell file can be dropped and rebuilt and any later derivation can run over old data. Nothing here reads raw.
 
 import { closedFrame, utcDay } from './frame.js';
-import { classMotif, motifsOf, stepsOfCall, type Motif } from './motif.js';
+import { classMotif, motifName, motifsOf, stepsOfCall, type Motif } from './motif.js';
 import { bucketOf } from './pool-wire.js';
 import { CALL_SHAPE_METHOD, cellRef, contentHash, METHODS } from './read.js';
 import { NO_RECALLS, type RecallGraph } from './recall-consequence.js';
-import { EXTRACTOR_VERSION, harnessOf, type ErrorObservation, type Frame, type Harness, type PromptObservation, type SessionObservation, type ToolObservation } from './schema.js';
+import { ERROR_CODES, EXTRACTOR_VERSION, harnessOf, type ErrorObservation, type Frame, type Harness, type PromptObservation, type SessionObservation, type ToolObservation } from './schema.js';
 import type { Store } from './store.js';
 
 /** Rule 6: an `index` cell is weekly, except a live cell, which stays at the UTC day. */
@@ -46,6 +46,16 @@ export const EFFORT_CLASS = 'effort:';
  */
 export const effortClass = (effort: string, thinking: number): string => `${EFFORT_CLASS}${effort}/thinking:${String(bucketOf('tokens', thinking))}`;
 
+/**
+ * The two day-cell families of a failed call by its `errorCode` (t868): `error:<code>/<name>` keeps the cell's model beside the code, and `error-version:<code>/<name>` keeps the harness version bucket and no model
+ * (`versionBucketOf`), so no cell holds a version and a model at once beside a name and a code. A class motif with no prompt class in it, so a read of prompt classes skips both by prefix (`isPromptClass`).
+ */
+export const ERROR_CLASS = 'error:';
+export const ERROR_VERSION_CLASS = 'error-version:';
+
+/** Whether a class motif names a prompt class, as opposed to one of the side cells (effort, or a failed call's code). */
+export const isPromptClass = (cls: string | null): boolean => cls !== null && ![EFFORT_CLASS, ERROR_CLASS, ERROR_VERSION_CLASS].some((prefix) => cls.startsWith(prefix));
+
 /** The frame bucket of a cell that joins no axis. */
 export const NO_AXES = '-';
 
@@ -63,6 +73,9 @@ export const harnessBucket = (version: string | null): string => {
 
 /** Only what most comparisons cross: platform, shell, and stack are on the frame and in the records, so a later extractor can add them without new capture. */
 export const frameBucketOf = (frame: Frame): string => [frame.harness, harnessBucket(frame.harnessVersion), frame.model ?? UNKNOWN].join('/');
+
+/** The frame bucket of a cell that keeps the version and drops the model: `harness/versionBucket/-`. */
+export const versionBucketOf = (frame: Frame): string => [frame.harness, harnessBucket(frame.harnessVersion), NO_AXES].join('/');
 
 export const bucketFields = (bucket: string): { harness: string; harnessBucket: string; model: string } => {
   const [harness = UNKNOWN, version = UNKNOWN, model = UNKNOWN] = bucket.split('/');
@@ -211,6 +224,29 @@ export const deriveCells = (store: Store, graph: RecallGraph = NO_RECALLS): Cell
         for (const step of window) {
           tally.tokens += step.tokens;
           tally.durationMs += step.durationMs;
+        }
+      }
+    }
+    // The failed calls by their `errorCode` (t868). Rule 6: a day cell exists for a known day only.
+    const failedDay = frame.day ?? UNKNOWN;
+    for (const tool of failedDay === UNKNOWN ? [] : line) {
+      if (tool.status !== 'error' || tool.errorCode === undefined) continue;
+      const code = ERROR_CODES.has(tool.errorCode) ? tool.errorCode : 'other';
+      for (const counted of stepsOfCall(tool, harness)) {
+        if (counted.status !== 'error') continue;
+        // The call's name at both levels: its action alone, and a named call (a flag or a pull would be a second dimension, so those steps are named by program and subcommand alone upstream).
+        for (const { motif: named } of motifsOf([counted])) {
+          if (named.level === 'named' && counted.identity === null) continue;
+          const name = motifName(named);
+          for (const [prefix, bucket] of [[ERROR_CLASS, frameBucketOf(frame)], [ERROR_VERSION_CLASS, versionBucketOf(frame)]] as const) {
+            const motif = classMotif(`${prefix}${code}/${name}`);
+            motifs.set(motif.motifId, motif);
+            const tally = tallyAt(motif, bucket, 'day', failedDay, false);
+            tally.sessions.add(first.parent);
+            tally.failed += 1;
+            tally.tokens += counted.tokens;
+            tally.durationMs += counted.durationMs;
+          }
         }
       }
     }
