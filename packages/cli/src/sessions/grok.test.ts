@@ -259,14 +259,16 @@ describe('the Grok Build reader', () => {
     expect(extractOf(events).session.userTurns).toBe(1);
   });
 
-  it('keeps two prompts apart when no reply falls between them: a change of promptIndex opens a new prompt, the same index merges, an unmarked chunk joins', () => {
+  it('keeps two prompts apart when no reply falls between them: a change of promptIndex opens a new prompt, the same index merges, an unmarked chunk is kept and opens its own run', () => {
     // upstream writes _meta.promptIndex on each prompt (turn.rs:890-895) and a change of it opens a new run (storage/mod.rs:1009, replay.rs:427-432); a `!cmd`
-    // prompt carries only modelId (tool_dispatch.rs:185-187), so an unmarked chunk is kept.
+    // prompt carries only modelId (tool_dispatch.rs:185-187), so an unmarked chunk is kept and opens its own run ("including between unmarked and marked", storage/mod.rs:1038-1039); upstream never writes a marked and an unmarked chunk for one prompt (turn.rs:960-962).
     const texts = (events: readonly unknown[]) => linesOf(events).filter((entry) => entry.type === 'user').map((entry) => JSON.stringify(entry.message));
     const one = (text: string) => JSON.stringify({ role: 'user', content: [{ type: 'text', text }] });
     expect(texts([prompt(1, 'first try', { promptIndex: 0 }), prompt(2, 'retry', { promptIndex: 1 })])).toEqual([one('first try'), one('retry')]);
     expect(texts([prompt(1, 'in ', { promptIndex: 3 }), prompt(1, 'two', { promptIndex: 3 })])).toEqual([one('in two')]);
-    expect(texts([prompt(1, 'in ', { promptIndex: 3 }), prompt(1, 'parts')])).toEqual([one('in parts')]);
+    expect(texts([prompt(1, 'in ', { promptIndex: 3 }), prompt(1, 'parts')])).toEqual([one('in '), one('parts')]);
+    expect(texts([prompt(1, 'first try', { promptIndex: 0 }), prompt(2, '!ls')])).toEqual([one('first try'), one('!ls')]);
+    expect(texts([prompt(1, 'in '), prompt(1, 'parts')])).toEqual([one('in parts')]);
   });
 
   it('gives a session whose lines all lack a time one time: created_at, else the epoch', () => {

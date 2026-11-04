@@ -604,7 +604,7 @@ that a deposit counts only the child's own prompts.
   Copilot: discovered by default, opened only when `--allow grok` names it; the nightly run repeats a saved allow. A deposit only reads.
 - **Mapping.** Each `updates.jsonl` line is `{timestamp, method, params: {sessionId, update}}` with an ACP `update`. `user_message_chunk` text is a prompt (chunks
   merge into one prompt until the agent speaks or `_meta.promptIndex` changes, so a prompt cancelled before its first reply and then retried stays two prompts,
-  `turn.rs:890-895`, `storage/mod.rs:1009`; an unmarked chunk joins, since a `!cmd` prompt carries only a model id, `tool_dispatch.rs:185-187`). Three markers say the text is not the
+  `turn.rs:890-895`, `storage/mod.rs:1009`; a change between marked and unmarked opens a new prompt too, `storage/mod.rs:1038-1039`, since a `!cmd` prompt carries only a model id, `tool_dispatch.rs:185-187`, while two unmarked chunks merge). Three markers say the text is not the
   operator's: `_meta.hostTurn` (a slash command's turn), `_meta.hideFromScrollback` (a turn the harness started: a finished task, subagent, or workflow, a notification
   drain, or a goal summary or nudge, `turn.rs:328`, `:896-901`, `session/mod.rs:242-255`), and `_meta.interjection` (a mid-turn steer whose text is a model-facing frame). The first two
   end the turn too, so the next response is a new one. `hostTurn` also marks an `agent_message_chunk` (a slash command's output, `acp_session.rs:1353-1372`, `slash_exec.rs:64`),
