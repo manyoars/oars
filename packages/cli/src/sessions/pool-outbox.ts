@@ -45,6 +45,7 @@ export const FIELD_ROWS: { readonly [field: string]: string } = {
   deltas: 'The changes the client found between its own before and after windows, each sent once with the session that filled the after window: a kind, a field, a name, a registry, a metric, and a bucketed change; never a session id, a root, a date, or an exact value.',
   durationMs: 'The time of one tool call in milliseconds, exact, a number or null.',
   effort: 'The effort level the model ran at, only when it is a public one; else the literal placeholder.',
+  errorCode: 'Why a tool call failed, one class of a closed list: an exit class (0, 1, 2, 126, 127, signal), an HTTP status class, a harness class (user-rejected, interrupted, permission-denied, input-validation, tool-use-error, timeout), or other; null on a call that did not fail or whose harness records no class. Never result text.',
   errors: 'A bucket of how many tool calls failed in a prompt, a number.',
   explore: 'A bucket of how many steps of a prompt only looked (read a file, searched files, searched the web, or fetched a page), a number or null; never the exact count.',
   field: 'What a delta is about, one of plugin, package, permissionMode, and effort: the field alone, never its value.',
