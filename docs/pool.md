@@ -44,13 +44,13 @@ The OAuth apps are the operator's to create, so the client reads their values fr
 
 ## What a bundle serves
 
-A bundle's reads are derived from the stored cells with the code a local store runs (`packages/pool/src/derive.ts`), and a read is served once the largest held cluster count among its cells reaches the floor. It serves eight of the nine order 1 families; recovery is out, and one piece of `fit` is out, because a skeleton does not carry the fields it reads.
+A bundle's reads are derived from the stored cells with the code a local store runs (`packages/pool/src/derive.ts`), and a read is served once the largest held cluster count among its cells reaches the floor. It serves eight of the nine order 1 families. Recovery is out, and so is one piece of `fit` (the call-shape method), because a skeleton does not carry the fields they read: `keys` for call shape, and the error rows, `errorCode`, `outcome`, and `recoveryCalls` for recovery.
 
 | Family | Served | Left out, and why |
 |---|---|---|
 | `fit` | per (shape or named motif, harness version bucket, model), and per (named call, `platform`, `shell`) | The call-shape method (a tool and its input key names): `keys` has no wire field, and it stays local. The (name, `errorCode`, `harnessVersion`) and (`package`, `packageVersion`, `errorCode`) forms: `errorCode` is not on the wire. A flag or a pull has no (name, `platform`, `shell`) cell, since it would be four dimensions. |
-| `cost`, `change`, `live`, `adoption`, `method`, `next-step` | from their stored cells | Nothing beyond what each family's cells hold. |
-| `tool-day` | a tool's failure rate and share of the day's steps, from one-step shape day cells; its floor counts within its day, so a day with fewer than `k_cell` accounts on the tool serves none | The share's denominator is the day's steps in the bundle, as a live read's is. |
+| `cost`, `change`, `live`, `adoption`, `method`, `next-step` | from their stored cells | Nothing: each is served from the same cells the local read uses, and no field it reads is withheld. |
+| `tool-day` | a tool's failure rate and share of the day's steps, from one-step shape day cells; its floor counts within its day, so a day with fewer than `k_cell` accounts on the tool serves none | Nothing is withheld, but see the `steps` gap under Known gaps. |
 | `recovery` | not served | A recovery read is a signature record: it reads error rows (a signature hash, an error class, the next calls, whether an edit followed), and a skeleton holds none, nor `errorCode`, `outcome`, or `recoveryCalls`. Signature text stays local. No cell of (`sigHash`, fix-shape field, `outcome`) or (`sigHash`, `errorCode`, `recoveryCalls`) exists to serve. |
 
 The (name, `platform`, `shell`) cell is its own cell, `env:<platform>:<shell>`, a week cell that names no version and no model, so a bundle for any harness version holds it (a Gemini, Cursor, or Pi session has no version to key on). It counts the same calls as the version cells, so a total beside only some of its parts would show the rest by subtraction. The pool therefore serves it for a motif, week, and exposure only when no cell of that motif, week, and exposure, in any bucket or environment, is under `k_cell` accounts; one sub-floor part withholds the total (`stored.ts`, `ENVIRONMENT_CELLS`).
@@ -86,6 +86,8 @@ All of these are set at the deploy, never in `wrangler.jsonc`, which holds no ac
 `packages/pool` runs the bundled handler and its D1 store under the Workers runtime through Miniflare, in-process, with a stub sign-in provider (its profile route for the Worker, and its device and token routes for the CLI's own `fetch`), so it needs no Docker, account, or network. `full-run.test.ts` drives the real CLI commands against it over a local socket.
 
 ## Known gaps
+
+A tool-day read's `value.steps` is the day's settled steps over every cell, including cells under `k_cell` accounts, so a served read's `steps` less the `n` of the day's served reads shows the steps of the sub-floor cells (a `live` read's `of` has the same gap). It shows a count of steps and never an account or a name, and it stays until the denominator is taken from cells at or above the floor; that change belongs in the shared derivation beside `live`'s, so one rule covers both and the local read, which has no floor, is not changed for the pool's sake.
 
 A live read's baseline is not traceable through lineage: the floor counts only the sliced day's cells, so the read cites those and states `value.baseline` from cells it does not cite.
 
