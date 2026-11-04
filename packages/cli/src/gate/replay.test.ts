@@ -5,7 +5,20 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { CliError } from '../errors.js';
 import { parseRows, type CrossingRecord, type RegistryRow, type RunRow } from './record.js';
 import { REGISTRY_MAX_DAYS, replay } from './replay.js';
+import type * as StoreModule from '../sessions/store.js';
 import type { RegistryAnswer, RegistryReader } from './registry.js';
+
+// A transcript the OS refuses to open cannot be made on every platform, so one file name fails here.
+vi.mock('../sessions/store.js', async (importOriginal) => {
+  const real = await importOriginal<typeof StoreModule>();
+  return {
+    ...real,
+    logLines: (file: string) => {
+      if (file.includes('refused-one')) throw new Error('EACCES');
+      return real.logLines(file);
+    },
+  };
+});
 
 const REPO = 'C--work-app';
 const WORKTREE = `${REPO}--claude-worktrees-one`;
@@ -95,8 +108,10 @@ describe('the source of a replay', () => {
     await writeLog(projectsRoot, OFF_LIST, 'p.jsonl', [bash(5, 't3', 'npm install off-list')]);
     await writeLog(join(storeDir, 'raw'), 'cursor', 'c.jsonl', [bash(6, 't4', 'npm install from-cursor')]);
     await writeLog(projectsRoot, 'codex', 'x.jsonl', [bash(7, 't5', 'npm install from-codex')]);
+    await writeLog(join(storeDir, 'raw'), 'codex', 'r.jsonl', [bash(8, 't6', 'npm install from-raw-codex')]);
+    await writeLog(join(storeDir, 'raw'), 'copilot', 'p.jsonl', [bash(9, 't7', 'npm install from-copilot')]);
 
-    const done = await run([`${REPO}*`, 'cursor', 'codex']);
+    const done = await run([`${REPO}*`, 'cursor', 'codex', 'copilot']);
     const { crossings } = await written();
 
     expect(crossings.map((row) => row.name).sort()).toEqual(['archived', 'on-disk']);
@@ -132,11 +147,13 @@ describe('the source of a replay', () => {
 
   it('counts a torn line and an unreadable transcript instead of failing the run', async () => {
     await writeLog(projectsRoot, REPO, 'a.jsonl', ['{not json', bash(1, 't1', 'npm install one')]);
-    await mkdir(join(projectsRoot, REPO, 'folder.jsonl'), { recursive: true });
+    await writeLog(projectsRoot, REPO, 'refused-one.jsonl', [bash(3, 't3', 'npm install never-read')]);
     await writeLog(projectsRoot, REPO, 'b.jsonl', [bash(2, 't2', 'npm install two')]);
     const { run: head } = await run([REPO]);
     expect(head.badLines).toBe(1);
-    expect((await written()).crossings).toHaveLength(2);
+    expect(head.unreadable).toBe(1);
+    expect(head.transcripts).toBe(3);
+    expect((await written()).crossings.map((row) => row.name).sort()).toEqual(['one', 'two']);
   });
 
   it('does not read an api-request-blob line, a copy of the request body', async () => {
@@ -227,6 +244,7 @@ describe('a crossing record', () => {
       bash(19, 't19', 'pip install git+https://secret@gitserver'),
       bash(20, 't20', 'npm install ssh://secret@gitserver:repo.git'),
       bash(21, 't21', 'npx skills add ssh://secret@gitserver'),
+      bash(22, 't22', 'npm install "four@a#secret-token"'),
     ]);
     await run([REPO]);
     const text = await readFile(join(storeDir, 'crossings.jsonl'), 'utf8');
@@ -240,6 +258,13 @@ describe('a crossing record', () => {
     await writeLog(projectsRoot, REPO, 'b.jsonl', [bash(1, 't1', 'npm install one'), result(2, 't1', 'added'), bash(3, 't2', 'npm install two')]);
     await run([REPO]);
     expect((await written()).crossings.map((row) => row.name)).toEqual(['one', 'two']);
+  });
+
+  it('counts a call once when a resumed transcript replays it, whether or not it named anything', async () => {
+    await writeLog(projectsRoot, REPO, 'a.jsonl', [bash(1, 't1', 'ls'), bash(2, 't2', 'npm install one')]);
+    await writeLog(projectsRoot, REPO, 'b.jsonl', [bash(1, 't1', 'ls'), bash(2, 't2', 'npm install one'), bash(3, 't3', 'pwd')]);
+    const { run: head } = await run([REPO]);
+    expect(head.calls).toBe(3);
   });
 
   it.each([
@@ -368,7 +393,6 @@ describe('a crossing record', () => {
       bash(2, 't1', 'npm install shown-first'),
       bash(3, 't2', 'npm install never-named'),
     ]);
-    await writeLog(projectsRoot, REPO, 'agent-z.jsonl', [typed(0, 'add side-named'), bash(1, 't3', 'npm install side-named')]);
     await run([REPO]);
     const { crossings } = await written();
     expect(named(crossings, 'shown-first')).toMatchObject({ origin: 'repo-file', decidedBy: 'operator' });
@@ -417,6 +441,32 @@ describe('a crossing record', () => {
     ]));
     expect(crossings.filter((row) => row.name === 'blocked-one').map((row) => `${row.program} ${row.next}`)).toEqual(['pip routed-around', 'python -m pip proceeded']);
     expect(head.unread['pipe-to-shell']).toBe(1);
+  });
+
+  // Captured 2026-11-04 from npm 11 and pip 25.0.1 installing a name that is not registered: the whole failure text, not a fragment.
+  it.each([
+    ['npm', 'npm install no-such-pkg-1', [
+      "npm error code E404",
+      "npm error 404 Not Found - GET https://registry.npmjs.org/no-such-pkg-1 - Not found",
+      "npm error 404",
+      "npm error 404  The requested resource 'no-such-pkg-1@*' could not be found or you do not have permission to access it.",
+      "npm error 404",
+      "npm error 404 Note that you can also install from a",
+      "npm error 404 tarball, folder, http url, or git url.",
+      "npm error A complete log of this run can be found in: /home/user/.npm/_logs/run-debug-0.log",
+    ].join('\n')],
+    ['pip', 'pip install no-such-pkg-1', [
+      'ERROR: Could not find a version that satisfies the requirement no-such-pkg-1 (from versions: none)',
+      '',
+      '[notice] A new release of pip is available: 25.0.1 -> 26.3',
+      '[notice] To update, run: python.exe -m pip install --upgrade pip',
+      'ERROR: No matching distribution found for no-such-pkg-1',
+    ].join('\n')],
+  ])('reads %s’s real not-found wording as a miss', async (_manager, command, text) => {
+    await writeLog(projectsRoot, REPO, 'a.jsonl', [bash(1, 'nf1', command), result(1, 'nf1', text, true)]);
+    await run([REPO]);
+    const { crossings } = await written();
+    expect(named(crossings, 'no-such-pkg-1')).toMatchObject({ status: 'error', miss: 'not-found' });
   });
 
   it('marks a later removal, in any session of the repository, and not a failed one', async () => {
@@ -495,12 +545,13 @@ describe('the registry option', () => {
       bash(8, 't8', 'yarn add via-yarn'),
       bash(9, 't9', 'uv add via-uv'),
       bash(10, 't10', 'bun add via-bun'),
+      bash(11, 't11', 'uv run pip install via-uv-run'),
     ]);
     const reader = answering();
     await run([REPO], reader);
-    expect(reader.mock.calls.map(([ask]) => ask.name).sort()).toEqual(['via-module', 'via-npm', 'via-npx', 'via-pip', 'via-pnpm']);
+    expect(reader.mock.calls.map(([ask]) => ask.name).sort()).toEqual(['via-module', 'via-npm', 'via-npx', 'via-pip']);
     const { crossings } = await written();
-    expect(crossings.filter((row) => row.registryState === 'not-read').map((row) => row.name)).toEqual(['via-poetry', 'via-conda', 'via-yarn', 'via-uv', 'via-bun']);
+    expect(crossings.filter((row) => row.registryState === 'not-read').map((row) => row.name)).toEqual(['via-pnpm', 'via-poetry', 'via-conda', 'via-yarn', 'via-uv', 'via-bun', 'via-uv-run']);
   });
 
   it('counts a kept answer older than the age limit as absent, by the clock of the run, and asks again', async () => {
@@ -566,13 +617,14 @@ describe('the registry option', () => {
     await mkdir(join(root, 'cwd'));
     await writeLog(projectsRoot, REPO, 'a.jsonl', [bash(1, 't1', 'npm install mixed'), bash(2, 't2', 'npm install --registry https://npm.private.example/ mixed')]);
     const kept = JSON.stringify({ kind: 'registry', v: 1, day: '2026-11-01', class: 'npm-package', state: 'found', created: null, name: 'mixed', latest: '0.0.1' });
-    await writeFile(join(storeDir, 'crossings.jsonl'), `${kept}
-`);
+    await writeFile(join(storeDir, 'crossings.jsonl'), `${kept}\n`);
     const reader = answering();
     await run([REPO], reader);
     expect(reader).not.toHaveBeenCalled();
-    const { crossings } = await written();
+    const { crossings, registry } = await written();
     expect(crossings.map((row) => row.registryState)).toEqual(['not-read', 'not-read']);
+    // The kept answer is for a name now unasked: it must not be written back.
+    expect(registry).toEqual([]);
   });
 
   it('keeps not-found and unreachable apart, and a failed read stays out of the cache', async () => {

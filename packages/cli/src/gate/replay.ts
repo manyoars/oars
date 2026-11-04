@@ -119,10 +119,12 @@ const isFolder = (path: string): Promise<boolean> =>
     () => false,
   );
 
+/** A command, its environment, or an earlier `cd` chose that call's registry or config: the gate cannot read it from here, so the name is not asked, kept answers included. */
+const unaskedKeys = (rows: readonly Held[]): Set<string> => new Set(rows.filter(({ found }) => !found.crossing.registryAsked).map(({ found }) => keyOf(found.crossing)));
+
 /** One question per name, from the first call whose folder still exists: the manager reads its registry from there, and a guess at another folder could ask the wrong one. */
 const askRegistry = async (rows: readonly Held[], reader: RegistryReader, cached: ReadonlyMap<string, RegistryRow>): Promise<Map<string, RegistryAnswer>> => {
-  // A command, its environment, or an earlier `cd` chose that call's registry or config: the gate cannot read it from here, so the name is not asked, kept answers included.
-  const unasked = new Set(rows.filter(({ found }) => !found.crossing.registryAsked).map(({ found }) => keyOf(found.crossing)));
+  const unasked = unaskedKeys(rows);
   const answers = new Map<string, RegistryAnswer>([...cached].filter(([key]) => !unasked.has(key)).map(([key, row]) => [key, asAnswer(row)]));
   const folders = new Map<string, boolean>();
   const asks = new Map<string, RegistryAsk>();
@@ -195,6 +197,7 @@ const cachedAnswers = async (file: string, now: number): Promise<Map<string, Reg
 
 const registryRows = (answers: ReadonlyMap<string, RegistryAnswer>, rows: readonly Held[], cached: ReadonlyMap<string, RegistryRow>, day: string): RegistryRow[] => {
   const added = new Map<string, RegistryRow>();
+  const unasked = unaskedKeys(rows);
   for (const { found } of rows) {
     const key = keyOf(found.crossing);
     const answer = answers.get(key);
@@ -202,7 +205,7 @@ const registryRows = (answers: ReadonlyMap<string, RegistryAnswer>, rows: readon
     if (cached.has(key) || added.has(key) || answer === undefined || answer.state === 'unreachable') continue;
     added.set(key, { kind: 'registry', v: GATE_VERSION, day, class: found.crossing.class, state: answer.state, created: answer.created, name: found.crossing.name, latest: answer.latest });
   }
-  return [...cached.values(), ...added.values()];
+  return [...[...cached].filter(([key]) => !unasked.has(key)).map(([, row]) => row), ...added.values()];
 };
 
 const summaryText = (run: RunRow, file: string): string =>
@@ -269,7 +272,7 @@ export const replay = async (runtime: Pick<SessionsRuntime, 'storeDir' | 'projec
     transcripts,
     unreadable,
     badLines: reads.reduce((sum, { read }) => sum + read.badLines, 0),
-    calls: reads.reduce((sum, { read }) => sum + read.calls, 0),
+    calls: reads.reduce((sum, { read }) => sum + read.fresh, 0),
     crossings: records.length,
     unread,
     registryRead: options.registry !== undefined,

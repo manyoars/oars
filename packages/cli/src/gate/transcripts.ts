@@ -39,7 +39,7 @@ export const discover = async (roots: readonly string[], allow: Allow): Promise<
   const files: TranscriptFile[] = [];
   let unreadable = 0;
   for (const root of roots) {
-    // Replay reads only the harness's transcript format: a source-table folder (Cursor, Codex) is not that format, and a project folder is never named for one.
+    // Replay reads only the harness's transcript format: a source-table folder (Cursor, Codex, Copilot) is not that format, and a project folder is never named for one.
     const projects = (await listDir(root)).filter((entry) => entry.isDirectory() && !SOURCES.some((source) => source.name === entry.name) && allow.allows(entry.name));
     for (const project of projects) {
       try {
@@ -81,13 +81,19 @@ interface CallEntry {
 
 export type CallsSeen = Map<string, CallEntry>;
 
+/** What a call that named nothing leaves in `CallsSeen`: shared, since nothing is ever added to it. */
+const NO_ENTRY: CallEntry = { found: [], removals: [] };
+
 export interface TranscriptRead {
   found: Found[];
   removals: FoundRemoval[];
   unread: UnreadShape[];
   /** The positions of the calls that pipe a download into a shell: a way around a stopped install. */
   pipes: number[];
+  /** Every tool call line in this transcript, a replay of a resumed transcript's included: the position `Found.call` and `pipes` count in. */
   calls: number;
+  /** The calls this transcript added to the run: those a transcript read earlier had not already shown. The run row's `calls`. */
+  fresh: number;
   badLines: number;
 }
 
@@ -138,15 +144,20 @@ const parseLine = (raw: string): { line: Obj | null; bad: boolean } => {
 
 /** The first pass: every call and its answer. Text is read only to settle a status; nothing of it leaves this function. */
 export const readCalls = async (file: string, agent: string | null, redact: Redactor, seen: CallsSeen): Promise<TranscriptRead> => {
-  const read: TranscriptRead = { found: [], removals: [], unread: [], pipes: [], calls: 0, badLines: 0 };
+  const read: TranscriptRead = { found: [], removals: [], unread: [], pipes: [], calls: 0, fresh: 0, badLines: 0 };
   let position = -1;
   let permission: Permission = 'unknown';
   const readUse = (line: Obj, block: Obj): void => {
     read.calls += 1;
     const id = stringOf(block.id);
     if (id !== null && seen.has(id)) return;
+    read.fresh += 1;
     const check = checkCall({ tool: stringOf(block.name) ?? '', input: block.input }, redact);
-    if (check.crossings.length === 0 && check.unread.length === 0 && check.removals.length === 0) return;
+    if (check.crossings.length === 0 && check.unread.length === 0 && check.removals.length === 0) {
+      // Seen all the same, so a transcript that replays this call does not count it twice.
+      if (id !== null) seen.set(id, NO_ENTRY);
+      return;
+    }
     const ts = stringOf(line.timestamp);
     const side = agent !== null || line.isSidechain === true;
     const found = check.crossings.map((crossing): Found => ({ crossing, ts, cwd: stringOf(line.cwd), toolUseId: id, permission, call: read.calls, line: position, side, status: 'none', miss: 'none' }));
@@ -244,7 +255,7 @@ export const readOrigins = async (file: string, firstLines: ReadonlyMap<string, 
     .join('|');
   // Not inside a longer word or a path: `lib` is neither `lib-extra` nor `other/lib`, while `/lib` is how a skill is typed.
   // An MCP server reaches the agent only as `mcp__<server>__<tool>`, which that rule refuses (`_` joins words), so that spelling is a mention too,
-  // but only of a name that crossed as a server: a package or skill sharing a listed server's name is not that server. With no server the branch is
+  // but only of a name that crossed as a server, so a listed server that was never called lends its name to nothing; origins are keyed by name, so a package that also crossed as that server in the same transcript shares its origin. With no server the branch is
   // left out, since an empty alternation matches everywhere.
   const serverNames = [...servers]
     .sort((one, two) => two.length - one.length)
