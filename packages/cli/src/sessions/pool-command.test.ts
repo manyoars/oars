@@ -11,13 +11,14 @@ import { poolDeposit, poolServer, type Reply, type Sender } from './pool-command
 import { batchHash, BATCH_FIELDS, canonicalBytes, FIELD_ROWS, writeBatch } from './pool-outbox.js';
 import type { Outgoing } from './pool-print.js';
 import { REGISTRY_MAX_AGE_DAYS, VOCAB_SNAPSHOT_DATE } from './public-vocabulary.js';
+import type * as PoolWire from './pool-wire.js';
 import { parseSkeleton, skeletonOf, VOCAB_VERSION, type PinnedKey } from './pool-wire.js';
 import { deposit } from './store.js';
 import { addProject, cleanup, NOW, stage, type Staged } from './test-support.js';
 
 // The session gates must stop a session before the projection runs; the real projection is wrapped so a test can see whether it was called.
 vi.mock('./pool-wire.js', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('./pool-wire.js')>();
+  const actual = await importOriginal<typeof PoolWire>();
   return { ...actual, skeletonOf: vi.fn(actual.skeletonOf) };
 });
 

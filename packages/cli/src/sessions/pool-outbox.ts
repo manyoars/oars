@@ -147,7 +147,7 @@ const staleFolders = async (outbox: string, stamp: string): Promise<string[]> =>
   return names;
 };
 
-const STAMP_FOLDER = /^v[^.\/]+-[0-9a-f]{8}$/;
+const STAMP_FOLDER = /^v[^./]+-[0-9a-f]{8}$/;
 
 const batchesIn = async (folder: string): Promise<number> => (await namesIn(folder)).filter((name) => BATCH_FILE.test(name)).length;
 
