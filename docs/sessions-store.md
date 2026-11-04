@@ -1,4 +1,4 @@
-# The `oars sessions` store (version 8)
+# The `oars sessions` store (version 10)
 
 `oars sessions` keeps a local, deterministic memory of the operator's own Claude Code sessions: no model call, no network, nothing
 uploads. `gold arms` is the one exception: it sends redacted text through your own Claude subscription. This page is the store's format. The types are in `packages/cli/src/sessions/schema.ts`; the commands are in the CLI README.
@@ -78,13 +78,15 @@ folds an older store the same way (`fold.ts`): one `tool` record per session and
 `target`, `targetBase`, `ts`, and `harnessVersion` of the first copy that has one; the kept records are numbered from zero and each `error-line`'s `after`
 moves to match, so `next` and `editFollowed` read the same calls as a current capture; and the session's `tools` and `bashCmds` are less the dropped calls. A call with no result is still a record, status `none`. Version 9 (CAPTURE 9, t755)
 adds `frame` and `frameId` to the session and prompt records and `steps` to the tool record (see "Frames and steps"), and moves `tool`, `tools`, and a shell-form
-`target` from class P to class A; a version-8 store's next deposit captures every transcript again from the harness or `raw/`. What an open does with an older store:
+`target` from class P to class A; a version-8 store's next deposit captures every transcript again from the harness or `raw/`. Version 10 (CAPTURE 10, t768) gives a turn opened by a slash command or a
+skill a `user-prompt` record (see "What opens a prompt"), adds `opened` to that record, and moves `skills` from class P to class A, since a skill's name can be private. Prompt
+`index` values move in a session that had such a turn, so a version-9 store's next deposit captures every transcript again from the harness or `raw/`. What an open does with an older store:
 
 | Log holds | Action on open | Action at the next deposit |
 |-----------|----------------|----------------------------|
-| `cv` 9, `v` current | read | skip unchanged files |
-| `cv` 5 to 8 and the transcript is on disk or in `raw/` | read; a replayed `tool` record is folded (see above); `verify` counts it `cv-behind`, and `verify --strict` exits 4 on it | capture again at `rev + 1` |
-| `cv` 5 to 8, neither the harness nor `raw/` has the transcript | read; a replayed `tool` record is folded (see above); `verify` counts it `cv-frozen` (not `cv-behind`), and `verify --strict` does not fail on it | none |
+| `cv` 10, `v` current | read | skip unchanged files |
+| `cv` 5 to 9 and the transcript is on disk or in `raw/` | read; a replayed `tool` record is folded (see above); `verify` counts it `cv-behind`, and `verify --strict` exits 4 on it | capture again at `rev + 1` |
+| `cv` 5 to 9, neither the harness nor `raw/` has the transcript | read; a replayed `tool` record is folded (see above); `verify` counts it `cv-frozen` (not `cv-behind`), and `verify --strict` does not fail on it | none |
 | `cv` 3 or 4 (or a version-2 session) and the transcript is on disk or in `raw/` | read through the compatibility reader (for `cv` 3, a field version 4 added reads as null, empty, or `unknown`; the prompt half of `contextFingerprint`, before its `.`, reads as `promptFingerprint`, and `-` reads as null; the environment half is dropped); `verify` counts it `cv-behind`, and `verify --strict` exits 4 on it | capture again at `rev + 1`; derived records regenerate under the current `EXTRACTOR_VERSION` on every open |
 | `cv` 3 or 4, neither the harness nor `raw/` has the transcript (for a Cursor session, Cursor no longer lists the composer) | read through the compatibility reader; `verify` counts it `cv-frozen` (not `cv-behind`), and `verify --strict` does not fail on it | none |
 | `derived.json` `v` older than `EXTRACTOR_VERSION` | read | rewritten at the next deposit (no reader depends on it today); derived records are regenerated from the log on every read |
@@ -109,14 +111,14 @@ pattern and entropy, emails, and the domains named with `--redact-domain`) befor
 | `session` (one per transcript) | `agentType` (set on a subagent transcript), `harness` (set on a Cursor session; absent reads as Claude Code), `bytes`, `lines`, `badLines`, `userTurns`, `assistantTurns`, `versions`, `models`, `bashCmds`, `compactSummaries`, `costUsd`, `usage`, `env` (below), `frame`, `frameId` | P |
 | | `session`, `parent`, `spawnedBy`, `spawnedIn` (join ids), `at`, `tsFirst`, `tsLast`, `promptFingerprint`, `repo`, `tools` (native names, which can hold a private MCP server's), `fileHashes`, `urls`, `searches`, `branches`, `tldrs` (400 chars), `confidences` (120 chars) | A |
 | | `project` (the folder slug, with the username and directory names), `files` (the paths as written, redacted) | L |
-| `user-prompt` (one per prompt) | `index`, `wallSec`, `thinking`, `turns`, `model`, `efforts`, `skills`, `usage`, `frame`, `frameId` | P |
-| | `session`, `ts`, `head` (the first 300 characters), `promptFingerprint` | A |
+| `user-prompt` (one per prompt) | `index`, `opened` (`typed` or `command`; absent before CAPTURE 10, when only a typed line opened a prompt), `wallSec`, `thinking`, `turns`, `model`, `efforts`, `usage`, `frame`, `frameId` | P |
+| | `session`, `ts`, `head` (the first 300 characters), `promptFingerprint`, `skills` (a skill's name can be private) | A |
 | `tool` (one per tool call) | `n`, `status` (`ok`, `error`, or `none` when no result is in the file; one record per tool-use id), `keys` (the input's key names), `durationMs`, `harnessVersion`, `agentType`, `side`, `prompt`, `targetBase`, `steps` | P |
 | | `session`, `parent`, `toolUseId`, `ts`, `tool` (the native name, which can hold a private MCP server's), `target` in either form (a salted hash, or the first line's program and subcommand, where a word can be anything), and `segments`, `pulls`, and `commits` (a plain word, a private package name, and a sha can each identify private work) | A |
 | `error-line` (one per failed result) | `harnessVersion`, `side`, `prompt`, `after` | P |
 | | `session`, `toolUseId`, `tool` (the native name), `ts`, `line` (the first informative line, redacted, not normalized, cut to 1,000 characters) | A |
-| `prompt` (derived, one per prompt) | `kind`, `v`, `rev`, `index`, `wallSec`, class (`cls`), `tools`, `shape`, `errors`, `thinking`, `sideTools`, `turns`, `model`, `efforts`, `skills`, `usage`, `recovery`, `explore`, `act`, and `bigrams` (the motif vector) | P |
-| | `session`, `head` (the first 300 characters, redacted), `ts`, `promptFingerprint` (`contextFingerprint` on this derived record), and the outcome signals `verify`, `stopped`, `commits`, and `redo` (below) | A |
+| `prompt` (derived, one per prompt) | `kind`, `v`, `rev`, `index`, `wallSec`, class (`cls`), `tools`, `shape`, `errors`, `thinking`, `sideTools`, `turns`, `model`, `efforts`, `usage`, `recovery`, `explore`, `act`, and `bigrams` (the motif vector) | P |
+| | `session`, `head` (the first 300 characters, redacted), `ts`, `promptFingerprint` (`contextFingerprint` on this derived record), `skills`, and the outcome signals `verify`, `stopped`, `commits`, and `redo` (below) | A |
 | `error` (derived, one per error) | `kind`, `v`, `rev`, `tool`, `harnessVersion`, `editFollowed`, `cls`, `prompt`, `next` (tool names), episode `outcome` and `calls` | P |
 | | `session`, `agent` (the subagent transcript id, a join id), `toolUseId` (a join id), `ts`, `sig` (redacted at capture, normalized at derive), `example` (160 characters) | A |
 | store files | `salt`, `state.json`, `raw/`, `hook-index.json` `projects` keys (folder slugs), `mcp-calls.jsonl` `cwd` (the server's working directory, unhashed) | L |
@@ -130,6 +132,19 @@ fields) applies to `urls`, `searches`, `branches`, `tldrs`, `confidences`, `head
 Node.js version, and `process.platform`. A library version is recorded only when a transcript states it, and none is read today.
 `promptFingerprint` is the hash of the `prompt_snapshot` attachment (version 3's `contextFingerprint` also mixed in the `environment`
 snapshot, whose platform and shell now belong to `env`).
+
+### What opens a prompt
+
+A prompt is a main-line, non-meta user line with text and no tool result, read by `promptOpening` in `extract.ts`. `opened` says how it opened, and is closed so it can never name a command:
+
+| The line | Prompt | `opened` | `head` |
+|----------|--------|----------|--------|
+| The operator's text, a leading `<` included | yes | `typed` | the line |
+| A `command-name` or `command-message` wrapper, when a model's turn comes next | yes | `command` | the command and its arguments with the wrapper tags removed, redacted and cut like any prompt |
+| The same wrapper with no model's turn next (`/clear`, a local command with output, a synthetic line alone) | no | | |
+| A line the harness injected: `local-command-caveat`, `local-command-stdout`, `local-command-stderr`, `system-reminder`, `task-notification`, `teammate-message`, `scheduled-task`, `bash-input`, `bash-stdout`, `bash-stderr` | no | | |
+
+A slash command and a skill write the same wrapper, so one value covers both; a skill's body is a meta line and stays out of `head`. The wrong-way risk is known: a tag the harness adds later reads as `typed` until it joins this list, and its row shows it in `head`. The interrupt marker reads as `typed`. A line that opens no prompt belongs to the prompt before it, or to none at the start of a session. The Cursor source keeps its old rule, no leading `<`, for now.
 
 ### What a shell call captures
 
@@ -463,5 +478,7 @@ carry `harness: "cursor"`; a record with no `harness` is Claude Code's (`harness
 ## The outcome gold set
 
 `oars sessions gold sample` writes `outcome-gold-<date>.md` to `<claude config>/session-commons/review/`: about 200 prompts in batches of 50, each with the redacted request, the result (commit message and diff stat where found, the transcript's own edit calls, or the actions of a prompt that edited nothing), and a `Judgment: yes|no` line. The draw is seeded and weighted by the square root of each class and model cell, with at most two prompts a session, so its base rate is the sample's, not the store's. `--exclude-term` leaves out any session that mentions a term in its transcript or a subagent's. A marker prompt, a `no-tools` prompt (its reply is the closing claim), and a Cursor session are not drawn. The signals go to the `.arms.json` file beside it. `oars sessions gold score <file>` prints, per model and pooled, each signal's AUROC with a DeLong 95% interval and the base rate, from whatever is judged so far. Both are local, and neither is ever committed. A signal is an observation, not a label, and no signal is combined with another.
+
+`gold sample` and `gold arms` number turns by the capture's rule ("What opens a prompt"), so an entry drawn before CAPTURE 10 from a session with a command-opened turn no longer matches its view, and `gold arms` counts it as changed and reads nothing for it.
 
 `oars sessions gold arms <file>` fills the same sidecar and leaves the gold file alone, so judgments carry over. From the transcript it reads the closing reply, the turn's last `Confidence:` line, and the next prompt that is not a marker. Fresh single-turn readers then give three separate answers: `evaluator` reads what the judge reads and says whether the work did what was asked, `claim` reads the closing reply and says whether it claims success, and `later` reads the next prompt and says whether the person accepted the work, or that it cannot tell. Each runs through `claude -p` on your own subscription login, on one named model, with no tools, hooks, settings, or session file. Its fixed wording is hashed into the sidecar, and a rerun refuses a sidecar written under other words. The command checks the login first and refuses an API key or another provider. It saves after each answer and resumes, and it prints only how many prompts each arm covers; `gold score` reads each arm against the judgments. This is the one `sessions` command that calls a model. The text it sends is redacted and has no tools to act on.
