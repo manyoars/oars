@@ -16,6 +16,7 @@
 // record, all read from the transcript except `repoFiles`, which keeps its existing source. It changes no value captured before, so EXTRACTOR stays 11.
 // Version 15 (CAPTURE 15, t836) changes two stored values of version 14: a Cargo table header that ends in a comment (`[package] # x`) is seen as a header, so the next
 // `version =` is no longer stored as `crates:version`; and `packageVersion` keeps only a version of three or four dotted numbers, so a bare `@1` or `==2.31` stores null. EXTRACTOR stays 11.
+// Version 16 (CAPTURE 16) changes one stored value of a Cursor session: a tool call whose `toolFormerData.userDecision` is `rejected` is stored as a failed call with `errorCode` `user-rejected`, as a refusal on the other harnesses is. Any other value, or none, changes nothing. EXTRACTOR stays 11.
 //
 // Version 10 (CAPTURE 10, t768) gives a turn opened by a slash command or a skill a `user-prompt` record, adds `opened` to that record, and moves `skills`
 // from class P to class A, since a skill's name can be private. It changed no derivation, so it leaves EXTRACTOR at 9.
@@ -67,7 +68,7 @@ import type { RepoSize } from './public-vocabulary.js';
 import type { SessionFunnel, SessionSetup, SessionTrust } from './session-shape.js';
 
 /** Stamped `cv` on every captured record. Bump it when the captured field list changes or a stored value of an existing captured record or skeleton changes: a bump re-reads every transcript. */
-export const CAPTURE_VERSION = '15';
+export const CAPTURE_VERSION = '16';
 
 /** Capture versions the reader derives from. A version-3 record is upgraded on read; a newer one is read for the fields this code knows. */
 export const OLDEST_READABLE_CAPTURE = 3;
