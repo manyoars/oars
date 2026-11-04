@@ -799,7 +799,7 @@ plain
         const state = join(scene.staged.storeDir, 'state.json');
         writeFileSync(state, JSON.stringify({ ...JSON.parse(readFileSync(state, 'utf8')), allow: ['some-other-folder'] }));
         expect(await scene.cli('pool', 'deposit', '--server', POOL)).toBe(ExitCode.OK);
-        expect(scene.h.out.join('')).toContain('Removed 1 batch of sessions that no longer pass the gates or are no longer in the store.');
+        expect(scene.h.out.join('')).toContain('Removed 1 batch of sessions that no longer pass the gates, have not ended, or are no longer in the store.');
       });
 
       // Nothing is sent from an older spelling: a deposit builds the session's batch again and removes the older file under its key, so a batch written before the wire spelled "not admitted" one way is not left to send.
