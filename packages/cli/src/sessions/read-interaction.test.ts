@@ -79,6 +79,26 @@ describe('interaction', () => {
     ).toEqual([]);
   });
 
+  it('finds nothing for a tool that one tier resists: it still fails more on that tier, only less than the main effect says', () => {
+    // Opus fails far more on Read (0.9 against 0.02) and on Edit (0.4 against 0.05). Edit's gap is +0.35 and the rest's is +0.88, so its interaction is -0.53: a large move in the
+    // opposite direction from the gap. Only Read moves with the main effect, so only Read is a tool that fails more on the tier beyond how the tiers differ elsewhere.
+    const found = reads(
+      tiers(
+        [
+          { name: 'Edit', count: 200, failed: 80 },
+          { name: 'Read', count: 400, failed: 360 },
+        ],
+        [
+          { name: 'Edit', count: 200, failed: 10 },
+          { name: 'Read', count: 400, failed: 8 },
+        ],
+      ),
+    );
+    expect(found.map((read) => read.slice.motif)).toEqual(['file.read']);
+    expect(found[0]?.value.gap).toBeGreaterThan(0);
+    expect(found[0]?.value.interaction).toBeGreaterThan(0);
+  });
+
   it('holds effort constant: two tiers at different efforts are not compared', () => {
     expect(
       reads(

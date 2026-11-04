@@ -20,7 +20,8 @@ export const round = (value: number): number => Math.round(value * 10_000) / 10_
 /** A rate to four places, so a value reads alike wherever it is computed; null with nothing to divide by. */
 export const rate = (part: number, whole: number): number | null => (whole === 0 ? null : round(part / whole));
 
-const Z_95 = 1.96;
+/** The normal quantile for a 95 percent interval, which every read's interval and the screen's scaling share. */
+export const Z_95 = 1.96;
 
 /** The Wilson interval: it stays inside 0 and 1, and it is honest about the small cells one operator's store is mostly made of. */
 export const wilson = (part: number, whole: number): ReadInterval | null => {
@@ -68,10 +69,15 @@ export const unitCells = (pool: Pool): { cell: Cell; motif: Motif }[] => {
 /** Counts over every one-step `shape` cell, for shares: a named motif's share is of all steps, like its action's. */
 export const shapeUnits = (pool: Pool): Cell[] => unitCells(pool).filter(({ motif }) => motif.level === 'shape').map(({ cell }) => cell);
 
-export const body = (family: Family, cells: readonly Cell[], fields: { slice: ReadSlice; value: ReadValue; n: number; interval: ReadInterval | null }): ReadBody => ({
+export const body = (
+  family: Family,
+  cells: readonly Cell[],
+  fields: { slice: ReadSlice; value: ReadValue; n: number; interval: ReadInterval | null },
+  method: { readonly name: string; readonly version: string } = METHODS[family],
+): ReadBody => ({
   family,
-  method: METHODS[family].name,
-  methodVersion: METHODS[family].version,
+  method: method.name,
+  methodVersion: method.version,
   inputs: cells.map(cellIdOf),
   // Cell counts cannot give distinct accounts across cells, so this is the floor they do prove, which never overstates what a served floor may rely on.
   clusters: cells.reduce((highest, cell) => Math.max(highest, cell.clusters), 0),

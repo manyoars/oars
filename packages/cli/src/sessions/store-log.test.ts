@@ -363,13 +363,13 @@ describe('a store already past the limit', () => {
 describe('the store lock', () => {
   it('stays with a holder that outlives the stale age: a waiter does not break a lock in use', async () => {
     const staged = stage();
-    const lockOptions = { waitMs: 5000, staleMs: 200 };
+    const lockOptions = { waitMs: 5000, staleMs: 1000 };
     const events: string[] = [];
     const holder = withLock(
       staged.storeDir,
       async () => {
         events.push('holder in');
-        await new Promise((done) => setTimeout(done, 700));
+        await new Promise((done) => setTimeout(done, 1500));
         events.push('holder out');
       },
       lockOptions,

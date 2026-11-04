@@ -2,10 +2,13 @@ import { spawnSync } from 'node:child_process';
 import { mkdtempSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { installHooks } from './install-hooks.mjs';
 
 vi.setConfig({ testTimeout: 60_000, hookTimeout: 60_000 });
+
+const script = fileURLToPath(new URL('./install-hooks.mjs', import.meta.url));
 
 let root: string;
 const saved = { dir: process.env.GIT_DIR, tree: process.env.GIT_WORK_TREE, index: process.env.GIT_INDEX_FILE };
@@ -44,5 +47,21 @@ describe('installHooks', () => {
     expect(installHooks(join(root, 'wt'))).toBe(expected);
     expect(git(main, 'config', 'core.hooksPath')).toBe(expected);
     expect(git(join(root, 'wt'), 'config', 'core.hooksPath')).toBe(expected);
+  });
+
+  it('runs the way `just hooks` runs it: prints the path it wrote, for a folder argument and for the current directory', () => {
+    const main = join(root, 'main');
+    const expected = main.split(String.fromCharCode(92)).join('/') + '/.githooks';
+    git(main, 'worktree', 'add', '-q', join(root, 'wt'), '-b', 'topic');
+    // `root` is no repository, so only the argument can name the one to configure.
+    const withFolder = spawnSync('node', [script, join(root, 'wt')], { cwd: root, encoding: 'utf8' });
+    expect(withFolder.status, withFolder.stderr).toBe(0);
+    expect(withFolder.stdout).toBe(`core.hooksPath = ${expected}\n`);
+    expect(git(main, 'config', 'core.hooksPath')).toBe(expected);
+    git(main, 'config', '--unset', 'core.hooksPath');
+    const fromHere = spawnSync('node', [script], { cwd: join(root, 'wt'), encoding: 'utf8' });
+    expect(fromHere.status, fromHere.stderr).toBe(0);
+    expect(fromHere.stdout).toBe(`core.hooksPath = ${expected}\n`);
+    expect(git(main, 'config', 'core.hooksPath')).toBe(expected);
   });
 });

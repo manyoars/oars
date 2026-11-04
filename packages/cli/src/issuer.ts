@@ -32,15 +32,16 @@ const hasLaunched = async (deps: RunDeps): Promise<boolean> => {
 
 /**
  * The built-in issuer is in use only when neither `--issuer-url` nor `OARS_ISSUER_URL` named one. If the flag is on but that
- * issuer does not answer discovery, the platform is not really open yet, so say what `login` says before launch (exit 2).
- * An issuer the developer named keeps its own error.
+ * issuer does not answer discovery (no answer, an error status, or a body that is not discovery JSON), the platform is not
+ * really open yet, so say what `login` says before launch (exit 2). An issuer the developer named keeps its own error.
  */
 export const discoverIssuer = async <T>(deps: RunDeps, flag: string | undefined, discover: () => Promise<T>): Promise<T> => {
   try {
     return await discover();
   } catch (error) {
     const named = flag !== undefined || (deps.env.OARS_ISSUER_URL !== undefined && deps.env.OARS_ISSUER_URL !== '');
-    if (!named && error instanceof CliError && error.exitCode === ExitCode.UNREACHABLE) throw new CliError(NOT_LAUNCHED, ExitCode.USAGE, 'usage');
+    const unanswered = error instanceof CliError && (error.exitCode === ExitCode.UNREACHABLE || error.exitCode === ExitCode.UNEXPECTED);
+    if (!named && unanswered) throw new CliError(NOT_LAUNCHED, ExitCode.USAGE, 'usage');
     throw error;
   }
 };

@@ -1,11 +1,11 @@
 // Commit survival against real git repositories in a temp folder: the states are git's answers, so a fake git would prove nothing about them.
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { deposit, loadStore } from './store.js';
-import { addProject, cleanup, stage, type Staged } from './test-support.js';
+import { addProject, cleanup, removeHeld, stage, type Staged } from './test-support.js';
 import { readSurvival, recordSurvival, survivalFile, SURVIVAL_DAYS, type Git } from './survival.js';
 import { slugOf } from './allow.js';
 import { run } from '../cli.js';
@@ -20,7 +20,7 @@ const dirs: string[] = [];
 
 afterEach(() => {
   cleanup();
-  for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+  for (const dir of dirs.splice(0)) removeHeld(dir);
 });
 
 const IDENTITY = ['-c', 'user.name=t', '-c', 'user.email=t@example.com', '-c', 'commit.gpgsign=false'];
@@ -50,16 +50,19 @@ const pointOriginHead = (dir: string, branch = 'main'): void => {
   gitIn(dir, 'symbolic-ref', 'refs/remotes/origin/HEAD', `refs/remotes/origin/${branch}`);
 };
 
-const transcript = (cwd: string, commits: ReadonlyArray<{ sha: string; ts?: string }>, firstCwd = cwd): string[] => [
+/** `ts: null` leaves the timestamp off the assistant and result lines, as a transcript line the harness did not date. */
+type Commit = { sha: string; ts?: string | null };
+
+const transcript = (cwd: string, commits: readonly Commit[], firstCwd = cwd): string[] => [
   JSON.stringify({ type: 'user', timestamp: OLD, cwd: firstCwd, message: { role: 'user', content: 'do it' } }),
   ...commits.flatMap(({ sha, ts = OLD }, index) => [
-    JSON.stringify({ type: 'assistant', timestamp: ts, cwd, message: { role: 'assistant', model: 'm', content: [{ type: 'tool_use', id: `c${String(index)}`, name: 'Bash', input: { command: 'git commit -m x' } }], usage: { input_tokens: 1, output_tokens: 1 } } }),
-    JSON.stringify({ type: 'user', timestamp: ts, cwd, message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: `c${String(index)}`, is_error: false, content: `[main ${sha}] x\n 1 file changed` }] } }),
+    JSON.stringify({ type: 'assistant', timestamp: ts ?? undefined, cwd, message: { role: 'assistant', model: 'm', content: [{ type: 'tool_use', id: `c${String(index)}`, name: 'Bash', input: { command: 'git commit -m x' } }], usage: { input_tokens: 1, output_tokens: 1 } } }),
+    JSON.stringify({ type: 'user', timestamp: ts ?? undefined, cwd, message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: `c${String(index)}`, is_error: false, content: `[main ${sha}] x\n 1 file changed` }] } }),
   ]),
 ];
 
 /** A deposited store holding one session in `cwd`'s project folder, with the transcript where the harness would put it. */
-const staged = async (cwd: string, commits: ReadonlyArray<{ sha: string; ts?: string }>, name = 'one'): Promise<{ s: Staged; project: string }> => {
+const staged = async (cwd: string, commits: readonly Commit[], name = 'one'): Promise<{ s: Staged; project: string }> => {
   const s = stage('unused');
   const project = slugOf(cwd);
   addProject(s, project, name, transcript(cwd, commits));
@@ -71,6 +74,19 @@ const lines = (s: Staged): unknown[] =>
   existsSync(survivalFile(s.storeDir))
     ? readFileSync(survivalFile(s.storeDir), 'utf8').trim().split('\n').map((line): unknown => JSON.parse(line))
     : [];
+
+describe('cleanup', () => {
+  it('waits out a child that still holds a registered temp folder as its cwd, then removes the folder', async () => {
+    const s = stage();
+    const child = spawn(process.execPath, ['-e', 'console.log(1); setTimeout(() => {}, 1500)'], { cwd: s.root, stdio: ['ignore', 'pipe', 'ignore'] });
+    const exited = new Promise((resolve) => child.once('exit', resolve));
+    // Wait for the child to be running in the folder (its first output), not merely spawned: before that Windows holds no handle on it.
+    await new Promise((resolve) => child.stdout.once('data', resolve));
+    cleanup();
+    expect(existsSync(s.root)).toBe(false);
+    await exited;
+  });
+});
 
 describe('recordSurvival', () => {
   it('reads an ancestor of the default branch as survived, on a day-resolution date, in a file beside the store', async () => {
@@ -94,6 +110,29 @@ describe('recordSurvival', () => {
     expect(SURVIVAL_DAYS).toBe(7);
     expect(await recordSurvival(s.runtime, [project], () => NOW)).toEqual({ survived: 0, reverted: 0, unreachable: 0, unknown: 0 });
     expect(lines(s)).toEqual([]);
+  });
+
+  // The boundary is `>=` on a day-resolution promise ("more than" SURVIVAL_DAYS old): a call exactly at the cutoff is not due, and one a millisecond older is.
+  const countsFor = async (ts: string | null) => {
+    const repo = makeRepo();
+    const sha = commitIn(repo, 'kept');
+    publish(repo);
+    pointOriginHead(repo);
+    const { s, project } = await staged(repo, [{ sha, ts }]);
+    return recordSurvival(s.runtime, [project], () => NOW);
+  };
+  const CUTOFF = NOW - SURVIVAL_DAYS * 86_400_000;
+
+  it('names no commit exactly SURVIVAL_DAYS old: it has to be more than that', async () => {
+    expect(await countsFor(new Date(CUTOFF).toISOString())).toEqual({ survived: 0, reverted: 0, unreachable: 0, unknown: 0 });
+  });
+
+  it('names a commit a millisecond older than SURVIVAL_DAYS', async () => {
+    expect(await countsFor(new Date(CUTOFF - 1).toISOString())).toEqual({ survived: 1, reverted: 0, unreachable: 0, unknown: 0 });
+  });
+
+  it('names no commit with no timestamp: its age is unknown, not old', async () => {
+    expect(await countsFor(null)).toEqual({ survived: 0, reverted: 0, unreachable: 0, unknown: 0 });
   });
 
   it('reads a commit a later commit reverts as reverted, and one whose revert was itself reverted as survived', async () => {
@@ -173,23 +212,38 @@ describe('recordSurvival', () => {
     expect(await recordSurvival(s.runtime, [project], () => NOW)).toEqual({ survived: 0, reverted: 0, unreachable: 0, unknown: 1 });
   });
 
-  it('fetches nothing into a partial clone: a full sha only its remote holds reads as unknown, and the objects stay as they were', async () => {
+  /** A partial clone of a repository whose `side` branch holds a commit the clone lacks. Only a full sha can reach it: git resolves a short one from local objects alone. */
+  const partialCloneLacking = (): { clone: string; sha: string } => {
     const source = makeRepo();
     gitIn(source, 'config', 'uploadpack.allowFilter', 'true');
     gitIn(source, 'config', 'uploadpack.allowAnySHA1InWant', 'true');
     gitIn(source, 'checkout', '-q', '-b', 'side');
     commitIn(source, 'side');
-    // Only a full sha can reach the remote: git resolves a short one from local objects alone.
     const sha = gitIn(source, 'rev-parse', 'HEAD');
     gitIn(source, 'checkout', '-q', 'main');
     const clone = mkdtempSync(join(tmpdir(), 'oars-survival-'));
     dirs.push(clone);
     execFileSync('git', ['clone', '-q', '--filter=blob:none', '--single-branch', '--branch', 'main', `file://${source.replace(/\\/g, '/')}`, clone], { stdio: 'ignore' });
+    return { clone, sha };
+  };
+
+  const objectsOf = (clone: string): string[] => readdirSync(join(clone, '.git', 'objects'), { recursive: true, encoding: 'utf8' }).sort();
+
+  it('fetches nothing into a partial clone: a full sha only its remote holds reads as unknown, and the objects stay as they were', async () => {
+    const { clone, sha } = partialCloneLacking();
     const { s, project } = await staged(clone, [{ sha }]);
-    const objects = (): string[] => readdirSync(join(clone, '.git', 'objects'), { recursive: true, encoding: 'utf8' }).sort();
-    const before = objects();
+    const before = objectsOf(clone);
     expect(await recordSurvival(s.runtime, [project], () => NOW)).toEqual({ survived: 0, reverted: 0, unreachable: 0, unknown: 1 });
-    expect(objects()).toEqual(before);
+    expect(objectsOf(clone)).toEqual(before);
+  });
+
+  it('fetches nothing even where the clone allows its own protocol: a per-protocol key beats `protocol.allow`, so only the environment holds', async () => {
+    const { clone, sha } = partialCloneLacking();
+    gitIn(clone, 'config', 'protocol.file.allow', 'always');
+    const { s, project } = await staged(clone, [{ sha }]);
+    const before = objectsOf(clone);
+    expect(await recordSurvival(s.runtime, [project], () => NOW)).toEqual({ survived: 0, reverted: 0, unreachable: 0, unknown: 1 });
+    expect(objectsOf(clone)).toEqual(before);
   });
 
   it('reads an absent repository as unknown', async () => {

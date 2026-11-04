@@ -178,7 +178,7 @@ describe('the steps each command logs', () => {
     const verified = (await readSteps(staged.storeDir)).filter((entry) => entry.step === 'verify');
     expect(verified).toHaveLength(1);
     expect(verified[0]).toMatchObject({ trigger: 'manual', status: 'ok' });
-    const counts = { checked: outcome.report.invariants.length, passed: outcome.report.invariants.filter((entry) => entry.pass).length, cvBehind: 0, cvFrozen: 0, stuck: 0 };
+    const counts = { checked: outcome.report.invariants.length, passed: outcome.report.invariants.filter((entry) => entry.pass).length, cvBehind: 0, cvFrozen: 0, stuck: 0, merkle: 0 };
     expect(verified[0]?.out).toEqual(counts);
     expect(verified[0]?.in).toEqual({ session: 4, subagent: 0 });
     expect(outcome.document).toMatchObject({ stuck: [] });
@@ -925,6 +925,20 @@ describe('every ms term reads the clock (spec 3.2 mean ms)', () => {
     const second = newTrace();
     await clock([5, 15, 20, 45], () => refresh(staged.runtime, [], '2026-06-10T00:00:00.000Z', second));
     expect(second.indexFailure?.ms).toBe(25);
+  });
+
+  it('refresh still writes the hook index when the pool cannot be derived or written: the index step does not fail with it', async () => {
+    const staged = stage();
+    await deposit(staged.runtime, { allow: ['proj'], redactDomains: [], now: () => NOW });
+    rmSync(join(staged.storeDir, 'hook-index.json'));
+    // A directory where the cells file should be: refreshing the pool throws, and the index must not wait on it.
+    rmSync(join(staged.storeDir, 'cells.jsonl'), { force: true });
+    mkdirSync(join(staged.storeDir, 'cells.jsonl'));
+    const trace = newTrace();
+    await refresh(staged.runtime, [], '2026-06-10T00:00:00.000Z', trace);
+    expect(trace.indexFailure).toBeUndefined();
+    expect(trace.index?.out.signature).toBeGreaterThan(0);
+    expect(JSON.parse(readFileSync(join(staged.storeDir, 'hook-index.json'), 'utf8'))).toMatchObject({ at: '2026-06-10T00:00:00.000Z' });
   });
 
   it('a lookup hook logs its wall time on the recall row and the hook-calls line', async () => {

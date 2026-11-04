@@ -2,7 +2,7 @@
 // read here, which is how the floor stays a property of the read and not a filter on a listing. Order 1 has no floor, because a cell is the operator's own; a relation
 // between rates has one, because two thin rates differ by chance and read as news.
 import { METHODS, type Family, type Read, type ReadInterval, type ReadSlice, type ReadValue } from './read.js';
-import { round, type ReadBody } from './read-support.js';
+import { round, Z_95, type ReadBody } from './read-support.js';
 
 /** A family over reads: it reads every read of the stages before it. */
 export type DeriveRelation = (reads: readonly Read[]) => ReadBody[];
@@ -13,7 +13,6 @@ export const TRIALS_FLOOR = 30;
 /** The smallest move worth stating. Large samples clear zero on moves no one would act on, so a move has to be large as well as unlikely. */
 export const MIN_MOVE = 0.01;
 
-const Z_95 = 1.96;
 const FAMILYWISE_ERROR = 0.05;
 
 /** A number and its interval, as an input states them. */

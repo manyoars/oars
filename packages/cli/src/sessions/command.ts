@@ -6,20 +6,25 @@ import { parseAllowList } from './allow.js';
 import { CliError, ExitCode } from '../errors.js';
 import { loadTerms } from './exclusion.js';
 import { EVALUATOR_MODEL, fillArms, sidecarSaver } from './gold-arms.js';
-import { armsPath, coverageLines, formatScore, isGoldDocument, parseGold, renderGold, sampleGold, scoreGold, type GoldDocument } from './gold.js';
+import { armsPath, coverageLines, formatScore, isGoldDocument, parseGold, plural, renderGold, sampleGold, scoreGold, type GoldDocument } from './gold.js';
 import { makeRedactor } from './redact.js';
-import { books, BOOKS_CAVEAT, formatBooks, formatMeasure, formatRecall, measure, recall, type BooksBy, type RecallQuery } from './query.js';
+import { books, BOOKS_CAVEAT, formatBooks, formatMeasure, formatRecall, measure, type BooksBy } from './query.js';
+import { formatLineage, loadLineage, walkLineage } from './lineage.js';
+import { appendRecall, readRecalls } from './recall-object.js';
+import { deriveConsequences, formatRecallCounts, recallCounts } from './recall-consequence.js';
+import { pull, pullRefusal, type PullInput } from './recall-reads.js';
+import { MISS_TEXT } from './recall-render.js';
 import { readHookCalls } from './hook-calls.js';
 import { buildIndex, contextBlock, inRepository, readIndex, type ContextOptions } from './hook-index.js';
 import { hookStatus, installHooks, scheduleStatus, setSchedule, settingsPath, uninstallHooks, type InstallRuntime, type Scope } from './install.js';
 import { serve } from './mcp.js';
-import { refreshPool } from './pool.js';
+import { currentPool, refreshPool } from './pool.js';
 import { FAMILIES } from './read.js';
 import { formatNotReadable, notReadable } from './read-readable.js';
 import { formatReads, isFamily, parseSlice, selectReads } from './read-rows.js';
 import { CAPTURE_VERSION, OLDEST_READABLE_CAPTURE, type StepRow } from './schema.js';
-import { deposit, frozenSessions, loadStore, readCalls, readRedactDomains, readSkeletons, slugOf, type SessionsRuntime, type Store } from './store.js';
-import { formatStepCounters, inputKey, newContext, readSteps, stampKey, runDeposit, runStep, stepCounters, stuckSteps, type StuckStep } from './steps.js';
+import { deposit, frozenSessions, loadStore, readCalls, readRedactDomains, readSkeletons, skippedFolders, slugOf, type SessionsRuntime, type SkippedScope, type Store } from './store.js';
+import { formatStepCounters, inputKey, newContext, readSteps, stampKey, runDeposit, runStep, stepCounters, stuckSteps, tryLog, type StuckStep } from './steps.js';
 import { formatSelfBaseline, selfBaseline as selfBaselineOf, type SelfBaselineResult } from './baseline.js';
 import { auditCounts, auditStore, formatAudit, type SessionAudit, type T0Counts } from './audit.js';
 import { readSurvival, recordSurvival, SURVIVAL_DAYS } from './survival.js';
@@ -67,29 +72,54 @@ export const sessionsDeposit = async (deps: SessionsDeps, options: { allow: stri
   return { document: { ok: true, ...result, survival }, text: lines.join('\n') };
 };
 
-export const sessionsRecall = async (deps: SessionsDeps, query: RecallQuery): Promise<Outcome> => {
-  if (query.error === undefined && query.path === undefined && query.cls === undefined) {
-    throw new CliError('Pass --error "<text>", --path <file>, or --class <name>.', ExitCode.USAGE, 'usage');
+const isAnswerable = (query: PullInput): boolean => ('form' in query ? true : query.error !== undefined || query.path !== undefined || query.cls !== undefined);
+
+/**
+ * One pull: it writes its own recall record, a hit or a miss, because no harness writes one for it. A record that cannot be written costs the asker nothing, and
+ * this command answers an operator, so the `--error`, `--path`, and `--class` forms keep the signature text they have always printed; the MCP tool, which answers an agent, does not.
+ */
+export const sessionsRecall = async (deps: SessionsDeps, query: PullInput, sid: string | null = null): Promise<Outcome> => {
+  if (!isAnswerable(query)) {
+    throw new CliError('Pass --error "<text>", --path <file>, --class <name>, --pattern <id>, --entity <name>, --family <name>, or --text "<text>".', ExitCode.USAGE, 'usage');
   }
+  const refusal = pullRefusal(query);
+  if (refusal !== undefined) throw new CliError(refusal, ExitCode.USAGE, 'usage');
   const { storeDir } = runtimeOf(deps);
   // The key is the query and `ev`, known before the work, so a recall that keeps failing is the same key each time.
-  const key = stampKey(query.error ?? '', query.path ?? '', query.cls ?? '', String(query.sinceDays ?? ''));
+  const key = stampKey(JSON.stringify(query));
   const result = await runStep(
     newContext(storeDir, deps.now, 'manual'),
     'recall',
     async () => {
-      const found = recall(await loadStore(storeDir), query, deps.now(), undefined, await readRedactDomains(storeDir));
-      return { value: found, report: { in: { query: 1 }, out: { matches: found.matches.length }, key } };
+      const store = await loadStore(storeDir);
+      const found = pull(store, query, { sid, now: deps.now(), frame: null, redactDomains: await readRedactDomains(storeDir), current: await currentPool(storeDir, store) });
+      return { value: found, report: { in: { query: 1 }, out: { matches: found.legacy?.matches.length ?? found.reads.length }, key } };
     },
     key,
   );
-  return { document: { ok: true, ...result }, text: formatRecall(result) };
+  await tryLog(() => appendRecall(storeDir, result.recall));
+  if (result.legacy !== undefined) return { document: { ok: true, ...result.legacy, recall: result.recall }, text: formatRecall(result.legacy) };
+  // The document states the recall and not the raw reads: a read's tool, keys, and versions are store strings that can carry text, and `recall.evidence` already states them closed.
+  return { document: { ok: true, recall: result.recall }, text: result.recall.answer.rendered === '' ? MISS_TEXT : result.recall.answer.rendered };
+};
+
+/** `recall --counts`: push and pull, shown and held, as counts only. */
+export const sessionsRecallCounts = async (deps: SessionsDeps, day: string | undefined): Promise<Outcome> => {
+  const { storeDir } = runtimeOf(deps);
+  const rows = recallCounts(deriveConsequences(await loadStore(storeDir), await readRecalls(storeDir)), day);
+  return { document: { ok: true, day: day ?? null, rows }, text: formatRecallCounts(rows) };
+};
+
+/** `lineage`: a walk over files the derive already wrote. It computes nothing, so it logs no step. */
+export const sessionsLineage = async (deps: SessionsDeps, ref: string): Promise<Outcome> => {
+  const hops = walkLineage(await loadLineage(runtimeOf(deps).storeDir), ref);
+  return { document: { ok: true, hops }, text: formatLineage(hops) };
 };
 
 /**
  * `read`: rows from the current pool's reads. The step log holds it under its own step, because the `recall` counters answer how often a recall was asked for. Every row states
  * its clusters and order. No floor applies at order 1, because every cell here is the operator's own; above it a read below its floor does not exist, so this also says what the
- * store cannot read, which tells that apart from a read that found nothing. This verb is the one way out for reads: no agent path serves them.
+ * store cannot read, which tells that apart from a read that found nothing. A recall states a read as counts; this verb is the one way out for a read's whole value and for an experimental read.
  */
 export const sessionsRead = async (deps: SessionsDeps, options: { family: string | undefined; slices: readonly string[] }): Promise<Outcome> => {
   const { family } = options;
@@ -135,6 +165,24 @@ export const sessionsMcp = async (deps: SessionsDeps): Promise<void> => {
   await serve(runtimeOf(deps), deps.now);
 };
 
+/** Names shown in the `verify` text; the document carries them all. */
+const SKIPPED_NAMES_SHOWN = 10;
+
+/** One line for the folders the allowlist leaves out (t776): the store holds nothing from them, and it says so rather than looking complete. */
+const skippedNotice = (scope: SkippedScope): string[] => {
+  if (scope.folders === 0) return [];
+  const shown = scope.names.slice(0, SKIPPED_NAMES_SHOWN).join(', ');
+  const more = scope.names.length > SKIPPED_NAMES_SHOWN ? `, and ${String(scope.names.length - SKIPPED_NAMES_SHOWN)} more` : '';
+  const one = scope.folders === 1;
+  const folders = one ? '1 project folder holds' : `${String(scope.folders)} project folders hold`;
+  // Main transcripts only: a folder with none holds subagent transcripts only, or could not be listed.
+  const transcripts = scope.transcripts === 0 ? 'no main transcript' : scope.transcripts === 1 ? '1 main transcript' : `${String(scope.transcripts)} main transcripts`;
+  return [`${folders} ${transcripts}; ${one ? 'it is' : 'they are'} never read: not on the allowlist. Not captured: ${shown}${more}.`];
+};
+
+/** Scope is an extra, like the step log: a projects root this process cannot list reports an empty scope and fails neither `verify` nor `books`. */
+const scopeOf = (runtime: SessionsRuntime): Promise<SkippedScope> => skippedFolders(runtime).catch((): SkippedScope => ({ folders: 0, transcripts: 0, names: [] }));
+
 /** One line for a store a newer oars wrote into (spec state-on-open row for a newer `cv`: read known fields, warn). */
 const newerNotice = (store: Store): string[] => (store.newerCaptures > 0 ? [`captured by a newer oars; upgrade oars (${String(store.newerCaptures)} sessions)`] : []);
 
@@ -159,7 +207,8 @@ const inRepositoryStore = (store: Store, repo: string): Store => {
 };
 
 export const sessionsBooks = async (deps: SessionsDeps, options: { by: BooksBy; sinceDays: number | undefined; repo?: string }): Promise<Outcome> => {
-  const { storeDir } = runtimeOf(deps);
+  const runtime = runtimeOf(deps);
+  const { storeDir } = runtime;
   const loaded = await loadStore(storeDir);
   const store = options.repo === undefined ? loaded : inRepositoryStore(loaded, options.repo);
   const rows = books(store, options.by, deps.now(), options.sinceDays, await readSurvival(storeDir));
@@ -171,7 +220,7 @@ export const sessionsBooks = async (deps: SessionsDeps, options: { by: BooksBy; 
       : emptyWindow
         ? `No ${options.by === 'pull' ? 'pulls' : 'prompts'} in the --since window.`
         : formatBooks(rows, options.by);
-  return { document: { ok: true, by: options.by, rows, newerCaptures: store.newerCaptures }, text: [table, ...newerNotice(store), ...(rows.length === 0 ? [] : [BOOKS_CAVEAT])].join('\n') };
+  return { document: { ok: true, by: options.by, rows, newerCaptures: store.newerCaptures }, text: [table, ...skippedNotice(await scopeOf(runtime)), ...newerNotice(store), ...(rows.length === 0 ? [] : [BOOKS_CAVEAT])].join('\n') };
 };
 
 export const sessionsMeasure = async (deps: SessionsDeps, options: { last: number; since: string | undefined; repo?: string }): Promise<Outcome> => {
@@ -198,6 +247,8 @@ export interface VerifyReport {
   stuck: StuckStep[];
   /** Sessions behind the current capture version whose transcript is gone from the harness and `raw/` (or, for a Cursor session, whose composer is gone from Cursor): counted apart from `cv-behind`, never a strict failure. */
   cvFrozen: number;
+  /** Folders under the projects root that hold transcripts but are not on the allowlist, so are never read (t776): scope, not a failure. */
+  scope: SkippedScope;
   /** Every session's rows 1 to 10 with a status each (t743; spec 5.4 item 5): `pass`, `fail`, or `not run` when the row had nothing to check. */
   sessionResults: SessionVerification[];
   /** Layer 4 at T0, local (spec 2.4): each session's raw-file match, recomputed root, and count bindings, with the count of each row of the result table. */
@@ -233,7 +284,8 @@ export const sessionsVerify = async (deps: SessionsDeps, options: { session: str
     // A step log that cannot be read leaves the invariant check as it is: the stuck check is an extra, never a reason `verify` fails.
     // A verify that got here has succeeded, so a verify streak is the one this run ends and is not listed.
     const stuck = stuckSteps(await readSteps(storeDir).catch((): StepRow[] => [])).filter((entry) => entry.step !== 'verify');
-    const report: VerifyReport = { sessions: skeletons.length, unreadable, cvFrozen: frozen.size, invariants: results.map((result) => ({ ...result, pass: result.violations === 0 })), stuck, sessionResults, audit, selfBaseline };
+    const scope = await scopeOf(runtime);
+    const report: VerifyReport = { sessions: skeletons.length, unreadable, cvFrozen: frozen.size, scope, invariants: results.map((result) => ({ ...result, pass: result.violations === 0 })), stuck, sessionResults, audit, selfBaseline };
     const failed = [...results.filter((result) => result.violations > 0).map((result) => result.name), ...(unreadable > 0 ? ['unreadable skeletons'] : []), ...merkleFailed, ...stuck.map((entry) => `stuck: ${entry.step}`)];
     const stuckLines = stuck.map((entry) => `FAIL  ${entry.step} is stuck: key ${entry.key} failed ${String(entry.runs)} runs in a row: ${entry.error}`);
     const highWater = mine([...store.sessions, ...store.subagents]).map((session) => `${session.session}:${String(session.rev)}:${session.cv}`).sort();
@@ -242,17 +294,26 @@ export const sessionsVerify = async (deps: SessionsDeps, options: { session: str
       failed,
       report,
       document: { ok: true, ...report, newerCaptures: store.newerCaptures },
-      text: [formatVerify(results, skeletons.length), formatAudit(audits), formatSelfBaseline(selfBaseline), ...(resultLines === '' ? [] : [resultLines]), ...(frozen.size > 0 ? [`${String(frozen.size)} cv-frozen sessions: behind the current capture version, but the transcript is gone from the harness and raw/ (or, for a Cursor session, the composer is gone from Cursor), so they cannot be captured again`] : []), ...newerNotice(store), ...(unreadable > 0 ? [`FAIL  ${String(unreadable)} unreadable skeleton files (torn or corrupted); redeposit to rebuild them`] : []), ...stuckLines].join('\n'),
+      text: [formatVerify(results, skeletons.length), formatAudit(audits), formatSelfBaseline(selfBaseline), ...(resultLines === '' ? [] : [resultLines]), ...(frozen.size > 0 ? [`${String(frozen.size)} cv-frozen sessions: behind the current capture version, but the transcript is gone from the harness and raw/ (or, for a Cursor session, the composer is gone from Cursor), so they cannot be captured again`] : []), ...skippedNotice(scope), ...newerNotice(store), ...(unreadable > 0 ? [`FAIL  ${String(unreadable)} unreadable skeleton files (torn or corrupted); redeposit to rebuild them`] : []), ...stuckLines].join('\n'),
     };
     const cvBehind = results.find((result) => result.name === CAPTURE_INVARIANTS[0])?.violations ?? 0;
     // The key is the sessions checked, each at its rev and cv, and the code's ev (spec 4.2).
     const key = stampKey(...highWater);
-    const counts = { checked: results.length, passed: results.filter((result) => result.violations === 0).length, cvBehind, cvFrozen: frozen.size, stuck: stuck.length };
+    const counts = { checked: results.length, passed: results.filter((result) => result.violations === 0).length, cvBehind, cvFrozen: frozen.size, stuck: stuck.length, merkle: audit.counts['root mismatch'] + audit.counts['counts do not bind'] };
     return { value: outcome, report: { in: { session: mine(store.sessions).length, subagent: mine(store.subagents).length }, out: counts, key } };
   }, stampKey('verify', options.session ?? ''));
 };
 
 const GOLD_MODE = 0o600;
+
+/**
+ * The sidecar, then the gold file, each created with `wx`: the existence check in `gold sample` came before a long draw, so this is what holds the
+ * promise never to overwrite a file that may hold judgments if another run wrote in between.
+ */
+export const writeGoldFiles = async (file: string, arms: string, sidecar: string, rendered: string): Promise<void> => {
+  await writeFile(arms, sidecar, { mode: GOLD_MODE, flag: 'wx' });
+  await writeFile(file, rendered, { mode: GOLD_MODE, flag: 'wx' });
+};
 
 /** `gold sample`: writes the blind gold file and its hidden sidecar. It never overwrites one: the file may hold judgments. */
 export const sessionsGoldSample = async (deps: SessionsDeps, options: { size: number; batch: number; seed: string | undefined; termsFile: string; excludeTerms: string[]; outDir: string | undefined }): Promise<Outcome> => {
@@ -270,15 +331,13 @@ export const sessionsGoldSample = async (deps: SessionsDeps, options: { size: nu
   const redact = makeRedactor(await readRedactDomains(runtime.storeDir));
   const { document, views, unreadable } = await sampleGold(runtime, store, redact, { size: options.size, batch: options.batch, seed: options.seed ?? date, date, termsFile: options.termsFile, extraTerms: options.excludeTerms });
   await mkdir(dir, { recursive: true });
-  // The check above came before a long draw; `wx` holds the promise if another run wrote in between.
-  await writeFile(arms, JSON.stringify(document), { mode: GOLD_MODE, flag: 'wx' });
-  await writeFile(file, renderGold(views, { date, batch: options.batch }), { mode: GOLD_MODE, flag: 'wx' });
+  await writeGoldFiles(file, arms, JSON.stringify(document), renderGold(views, { date, batch: options.batch }));
   const subagents = document.entries.filter((entry) => entry.subagents > 0).length;
   const lines = [
-    `Wrote ${String(document.entries.length)} prompts, drawn from ${String(document.frame)}, to ${file}.`,
-    `Excluded ${String(document.excludedSessions)} sessions the draw reached under the V15 rule (a listed term, no raw to scan, or unreadable).`,
-    `Passed over ${String(unreadable)} prompts whose transcript is gone or no longer matches the store.`,
-    `${String(subagents)} sampled prompts ran subagents, whose work is not read.`,
+    `Wrote ${plural(document.entries.length, 'prompt')}, drawn from ${String(document.frame)}, to ${file}.`,
+    `Excluded ${plural(document.excludedSessions, 'session')} the draw reached under the V15 rule (a listed term, no raw to scan, or unreadable).`,
+    `Passed over ${plural(unreadable, 'prompt')} whose transcript is gone or no longer matches the store.`,
+    `${plural(subagents, 'sampled prompt')} ran subagents, whose work is not read.`,
     `Score it after any batch: oars sessions gold score ${file}`,
   ];
   return { document: { ok: true, file, prompts: document.entries.length, frame: document.frame, excludedSessions: document.excludedSessions, unreadable, subagentPrompts: subagents }, text: lines.join('\n') };
@@ -309,11 +368,13 @@ export const sessionsGoldArms = async (deps: SessionsDeps, options: { file: stri
   const { document } = await readGold(options.file);
   const redact = makeRedactor(await readRedactDomains(runtime.storeDir));
   const outcome = await fillArms(runtime, document, redact, runtime.evaluator, sidecarSaver(armsPath(options.file), document, GOLD_MODE));
-  if (outcome.failure !== undefined) throw new CliError(`${outcome.failure.message} ${String(outcome.left)} readings are left, and every answer so far is saved. Rerun this command to go on.`, ExitCode.UNEXPECTED, 'unexpected');
+  if (outcome.failure !== undefined) throw new CliError(`${outcome.failure.message} ${plural(outcome.left, 'reading')} left, and every answer so far is saved. Rerun this command to go on.`, ExitCode.UNEXPECTED, 'unexpected');
   const score = scoreGold(document.entries, new Map());
   const lines = [
-    `Asked ${String(outcome.asked)} readings on ${EVALUATOR_MODEL}, with ${String(outcome.left)} left. The gold file is unchanged.`,
-    `${String(outcome.changed)} prompts have a transcript that is gone or no longer matches what the judge sees, so their text arms are unread.`,
+    `Asked ${plural(outcome.asked, 'reading')} on ${EVALUATOR_MODEL}, with ${String(outcome.left)} left. The gold file is unchanged.`,
+    outcome.changed === 1
+      ? '1 prompt has a transcript that is gone or no longer matches what the judge sees, so its text arm is unread.'
+      : `${String(outcome.changed)} prompts have a transcript that is gone or no longer matches what the judge sees, so their text arms are unread.`,
     ...coverageLines(score),
   ];
   return { document: { ok: true, asked: outcome.asked, left: outcome.left, changed: outcome.changed, model: EVALUATOR_MODEL, coverage: score.coverage }, text: lines.join('\n') };
