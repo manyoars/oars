@@ -83,6 +83,8 @@ export interface CodexSession {
    * takes from `history_base.end_ordinal_exclusive`, and supersedes the records at or after it in every earlier file. Empty for a thread never reverted.
    */
   revisions: { file: string; from: number; at: number }[];
+  /** `session_meta.timestamp` in milliseconds (a fresh `started_at` for each new rollout, rollout/src/recorder.rs:953-966); 0 when absent. A fork is matched against the lineage as of this time. */
+  started: number;
   file: string;
   size: number;
   mtimeMs: number;
@@ -526,15 +528,16 @@ const parentOf = (head: Obj, id: string, thread: string | null): string | null =
 /**
  * A thread's records as one text: its own file, then each revert's file in the order they were written. A later file supersedes the records at or after
  * its `from` ordinal in every earlier one (the prefix a revert retains is below it), so the turns a revert dropped are not read. A record with no
- * ordinal (a line that is not a Paginated record) is kept, and so is a line that is not JSON, which `captureSession` counts.
+ * ordinal (a line that is not a Paginated record) is kept, and so is a line that is not JSON, which `captureSession` counts. Only the reverts written at
+ * or before `before` count: a fork copied the lineage as it stood when it started, so a revert written later has not dropped anything from its copy.
  */
-const lineageText = async (session: CodexSession): Promise<string> => {
+const lineageText = async (session: CodexSession, before = Infinity): Promise<string> => {
   const read = (file: string): Promise<string> =>
     textOf(file).catch((error: unknown) => {
       throw new Error(reasonOf(error, file));
     });
-  if (session.revisions.length === 0) return read(session.file);
-  const revisions = [...session.revisions].sort((a, b) => a.at - b.at || a.from - b.from);
+  const revisions = session.revisions.filter((revision) => revision.at <= before).sort((a, b) => a.at - b.at || a.from - b.from);
+  if (revisions.length === 0) return read(session.file);
   const parts = [{ file: session.file, from: Infinity }, ...revisions];
   const texts: string[] = [];
   for (const [index, part] of parts.entries()) {
@@ -572,8 +575,9 @@ export const openCodexStore = async (root: string): Promise<CodexStore | undefin
       const meta = parse(await firstLine(file));
       const head = isObj(meta) && isObj(meta.payload) ? meta.payload : {};
       const base = isObj(head.history_base) ? head.history_base : {};
-      if (thread !== null) reverts.set(id, { thread, from: num(base.end_ordinal_exclusive) ?? 0, at: Date.parse(str(head.timestamp) ?? '') || 0 });
-      sessions.set(id, { id, folder: str(head.cwd) ?? null, parent: parentOf(head, id, thread), agentRole: str(head.agent_role) ?? null, forkedFrom: str(head.forked_from_id)?.toLowerCase() ?? null, revisions: [], file, size: info.size, mtimeMs: Math.floor(info.mtimeMs) });
+      const started = Date.parse(str(head.timestamp) ?? '') || 0;
+      if (thread !== null) reverts.set(id, { thread, from: num(base.end_ordinal_exclusive) ?? 0, at: started });
+      sessions.set(id, { id, folder: str(head.cwd) ?? null, parent: parentOf(head, id, thread), agentRole: str(head.agent_role) ?? null, forkedFrom: str(head.forked_from_id)?.toLowerCase() ?? null, revisions: [], started, file, size: info.size, mtimeMs: Math.floor(info.mtimeMs) });
     } catch (error) {
       unreadable.push({ file, reason: reasonOf(error, file) });
     }
@@ -597,9 +601,9 @@ export const openCodexStore = async (root: string): Promise<CodexStore | undefin
     transcript: async (session) => {
       // A rollout that vanished after it was listed (Codex compresses an old one) fails with its reason, which names no path.
       const text = await lineageText(session);
-      // A Copied fork's history is found by matching it against the parent's rollout; a parent outside the store (or unreadable) leaves it whole.
+      // A Copied fork's history is found by matching it against the parent's lineage as of the fork's start; a parent outside the store (or unreadable) leaves it whole.
       const parent = session.forkedFrom === null ? undefined : sessions.get(session.forkedFrom);
-      const parentText = parent === undefined ? undefined : await textOf(parent.file).catch(() => undefined);
+      const parentText = parent === undefined ? undefined : await lineageText(parent, session.started).catch(() => undefined);
       const lines = [...rolloutLines(text, session.id, parentText).map((line) => JSON.stringify(line)), ...rolloutBadLines(text)];
       return lines.join('\n') + (lines.length === 0 ? '' : '\n');
     },

@@ -422,6 +422,48 @@ describe('shell, MCP, patch, and usage outcomes', () => {
     expect(prompts.map((text) => /kept|dropped by the first|dropped too|dropped by the second|last/.exec(text)?.[0])).toEqual(['kept', 'last']);
   });
 
+  // A Copied fork matches its copied records against the parent's lineage as it stood when the fork started: a fork after the revert copied the post-revert
+  // turn, and one before it copied a turn the revert later dropped.
+  describe('a Copied fork of a reverted thread', () => {
+    const thread = '66666666-6666-4666-8666-666666666666';
+    const revert = '77777777-7777-4777-8777-777777777777';
+    const early = '88888888-8888-4888-8888-888888888888';
+    const late = '99999999-9999-4999-8999-999999999999';
+    const asked = (at: number, ordinal: number, message: string) => ({
+      ...line(T(at), 'event_msg', { type: 'item_completed', thread_id: thread, turn_id: `t-${message}`, item: { type: 'UserMessage', id: `u-${message}`, content: [{ type: 'text', text: message, text_elements: [] }] } }),
+      ordinal,
+    });
+    const head = (id: string, at: number, extra: object = {}) => ({
+      ...line(T(at), 'session_meta', { id, session_id: id, originator: 'codex_cli_rs', timestamp: T(at), cwd: '/work/app', history_mode: 'paginated', ...extra }),
+      ordinal: 0,
+    });
+    const fork = (id: string, at: number, copies: readonly object[]) => ({ id, lines: [head(id, at, { forked_from_id: thread }), ...copies, asked(at + 5, copies.length + 1, `own ${id[0]}`)] });
+    const promptsOf = async (home: string, id: string): Promise<string[]> => {
+      const store = await openCodexStore(home);
+      const session = store?.sessions.find((candidate) => candidate.id === id);
+      if (store === undefined || session === undefined) throw new Error(`the store lists no ${id}`);
+      return (await store.transcript(session)).split('\n').flatMap((raw) => /"text":"([^"]*)"/.exec(raw)?.[1] ?? []);
+    };
+    const stageForks = (): string => {
+      const s = stage();
+      const base = { thread_id: thread, end_ordinal_exclusive: 2, end_byte_offset: 1 };
+      return stageCodex(s.root, [
+        { id: thread, lines: [head(thread, 0), asked(1, 1, 'kept'), asked(2, 2, 'dropped')] },
+        { id: `${thread}_${revert}`, lines: [{ ...head(thread, 10, { history_base: base }), ordinal: 2 }, asked(11, 3, 'post-revert')] },
+        fork(early, 5, [asked(6, 1, 'kept'), asked(7, 2, 'dropped')]),
+        fork(late, 20, [asked(21, 1, 'kept'), asked(22, 2, 'post-revert')]),
+      ]);
+    };
+
+    it('drops a fork taken after the revert against the reverted lineage, so the copied post-revert turn is not counted twice', async () => {
+      expect(await promptsOf(stageForks(), late)).toEqual(['own 9']);
+    });
+
+    it('drops a fork taken before the revert against the lineage as it stood then, so its copy of the later-dropped turn goes too', async () => {
+      expect(await promptsOf(stageForks(), early)).toEqual(['own 8']);
+    });
+  });
+
   it('reports a compressed rollout whose frame is corrupt as unreadable, without reading the whole file', async () => {
     const s = stage();
     const dir = join(s.root, 'codex-home', 'sessions', '2026', '06', '01');
