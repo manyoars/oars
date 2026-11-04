@@ -18,6 +18,7 @@ import { closedQueryOf, formsRefusal, RECALL_FAMILIES } from './sessions/recall-
 import { FAMILIES } from './sessions/read.js';
 import { sessionsBooks, sessionsContext, sessionsDeposit, sessionsGoldArms, sessionsGoldSample, sessionsGoldScore, sessionsHookInstall, sessionsHookStatus, sessionsHookUninstall, sessionsMcp, sessionsLineage, sessionsMeasure, sessionsRead, sessionsRecall, sessionsRecallCounts, sessionsVerify, type SessionsDeps } from './sessions/command.js';
 import { gateReplay, gateReport } from './gate/command.js';
+import { DEADLINE_MS, gateHook } from './gate/hook.js';
 import { managerReader } from './gate/registry.js';
 import { exclusionPaths, sessionsExclusions } from './sessions/exclusion.js';
 import { poolDeposit, poolLogin, poolPull } from './sessions/pool-command.js';
@@ -590,6 +591,18 @@ const buildProgram = (deps: RunDeps, argv: string[]): Command => {
     .action(async (_options: OptionValues, command: Command) => {
       const options: OptionValues = command.optsWithGlobals();
       emit(deps, flag(options, 'json'), await gateReplay(sessionDeps(deps), { allow: list(options, 'allow'), ...(flag(options, 'registryState') ? { registry: managerReader() } : {}) }));
+    });
+
+  gate
+    .command('hook')
+    .description('the PreToolUse hook: reads the tool call on stdin, records any crossing in crossings.jsonl, and prints nothing; it never allows, denies, or changes a call (bin.js answers this command itself, before the rest of the CLI loads)')
+    .action(async () => {
+      const runtime = sessionDeps(deps).sessions;
+      let stdin = '';
+      if (runtime?.stdin !== undefined) {
+        for await (const chunk of runtime.stdin) stdin += String(chunk);
+      }
+      await gateHook(stdin, { storeDir: runtime?.storeDir ?? '', now: deps.now, clock: () => performance.now(), deadlineMs: DEADLINE_MS });
     });
 
   gate

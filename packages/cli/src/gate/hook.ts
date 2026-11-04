@@ -17,6 +17,9 @@ export const crossingsPath = (storeDir: string): string => join(storeDir, 'cross
 /** The hook's kept registry answers, small and its own: reading the record for them would scan it. */
 export const registryCachePath = (storeDir: string): string => join(storeDir, 'gate-registry.jsonl');
 
+/** The registry ask is cut at this many ms on the process clock, less a write reserve; `hook-main.ts` ends the process a short grace after it, so the whole call is under a second. */
+export const DEADLINE_MS = 800;
+
 /** A registry answer the hook kept is used for this many days. A `latest` is read "as of the crossing", so an older one is asked again. */
 export const HOOK_REGISTRY_DAYS = 1;
 /** The room a row's write is given after the registry ask has been cut off. */
@@ -35,6 +38,8 @@ export interface GateHookDeps {
   registry?: RegistryReader;
   /** Appends text to a file. Replaceable so a full disk can be tried. */
   append?: (file: string, text: string) => Promise<void>;
+  /** Told what is about to be written (and `null` once it is), so a process that must stop at a hard deadline can write the record it has. */
+  stage?: (pending: { file: string; text: string } | null) => void;
 }
 
 interface Input {
@@ -193,7 +198,13 @@ export const runGateHook = async (stdin: string, deps: GateHookDeps): Promise<vo
     rows.push(recordOf(common, crossing, novelty, read));
   }
   // The record first: an index line for a row that was never written would call the next crossing of the name old.
-  await append(crossingsPath(deps.storeDir), rows.map((row) => `${JSON.stringify(row)}\n`).join(''));
+  const record = { file: crossingsPath(deps.storeDir), text: rows.map((row) => `${JSON.stringify(row)}\n`).join('') };
+  deps.stage?.(record);
+  try {
+    await append(record.file, record.text);
+  } finally {
+    deps.stage?.(null);
+  }
   await keepIndex(deps.storeDir, index, [...lines]).catch(() => undefined);
   if (answered.length > 0) await append(registryCachePath(deps.storeDir), answered.map((row) => `${JSON.stringify(row)}\n`).join('')).catch(() => undefined);
 };
