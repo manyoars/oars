@@ -260,7 +260,7 @@ Confidence: ${'c'.repeat(110)} ${key}` }] } }),
   });
 });
 
-describe('redact at the signature cut and on branch names (fix round 2)', () => {
+describe('redact at the signature cut and on branch names', () => {
   const key = 'AKIAIOSFODNN7EXAMPLE';
   it('masks a key that straddles the 110-character signature cut', () => {
     const lines = [

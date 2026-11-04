@@ -150,7 +150,7 @@ describe('measure', () => {
   });
 });
 
-describe('recall keys an error the way deposit does (fix round 2)', () => {
+describe('recall keys an error the way deposit does', () => {
   it('recalls a deposited error that carries an email with digits', async () => {
     const staged = stage();
     const lines = [
