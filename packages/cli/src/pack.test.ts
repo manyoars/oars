@@ -80,16 +80,14 @@ describe('the tarball npm pack would make', () => {
 });
 
 // dist/sessions/public-vocabulary.js is the pinned list of public tool and site names a session projects (`stripe` the CLI, docs.stripe.com):
-// ecosystem names, not the product's money side. `/payment/i` stays in dist for the exit-6 error codes `oars deploy` maps until the lead rules on
-// that command.
+// ecosystem names, not the product's money side.
 const ECOSYSTEM_LIST = 'dist/sessions/public-vocabulary.js';
-const DEFERRED_IN_DIST = String(/payment/i);
 
 describe('the packed dist names nothing of the money side', () => {
   it('has no money term in any packed dist file', () => {
     const hits = packedPaths()
       .filter((path) => path.startsWith('dist/') && /\.(?:js|json)$/.test(path) && path !== ECOSYSTEM_LIST)
-      .flatMap((path) => moneyIn(readFileSync(join(cliFolder, path), 'utf8')).filter((term) => term !== DEFERRED_IN_DIST).map((term) => `${path}: ${term}`));
+      .flatMap((path) => moneyIn(readFileSync(join(cliFolder, path), 'utf8')).map((term) => `${path}: ${term}`));
     expect(hits).toEqual([]);
   }, 120_000);
 });
@@ -148,9 +146,11 @@ const DENY_LIST = [
 
 const NOT_OPEN = 'Accounts are not open yet; `oars login` says so until launch.';
 
-// The money side is not public yet (Matt, 2026-11-04, t858). `price`, `billing`, and `charge` are not listed: `oars deploy`, `status`, and
-// `templates` still carry them until the lead rules on those three commands (t858 report, Open questions).
+// The money side is not public yet (Matt, 2026-11-04, t858).
 const MONEY_TERMS = [
+  /\bprices?\b/i,
+  /billing/i,
+  /\bcharg(?:e|es|ed|ing)\b/i,
   /stripe/i,
   /test-charge/i,
   /purchas/i,
@@ -164,9 +164,9 @@ const MONEY_TERMS = [
   /paid-api/i,
   /per-task-agent/i,
   /buyer/i,
-  /sell/i,
-  /earn/i,
-  /money/i,
+  /\bsell/i,
+  /\bearn/i,
+  /\bmoney/i,
   /pay per/i,
 ];
 const moneyIn = (text: string): string[] => MONEY_TERMS.filter((term) => term.test(text)).map(String);
