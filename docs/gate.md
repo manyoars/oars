@@ -36,7 +36,7 @@ Every name passes one function, `admitName` in `packages/cli/src/gate/checks.ts`
 | `mcp-server` | the harness's server segment: letters, digits, `_`, `.`, `-`, at most 128 characters |
 | `skill` (`skill-call`) | letters, digits, `_`, `.`, `-`, and `:` for a plugin's prefix, at most 128 characters |
 | `skill` (`install`) | `owner/repo`, optionally into a folder, or a URL. The owner starts with a letter or digit and no segment is `.` or `..` |
-| a URL form (`url-install`, `url-fetch-and-run`) | an `http`, `https`, `ssh`, or `git` URL (host, port, path; `ssh` and `git` also take npm's scp spelling `host:owner/repo`, and a path segment may start with `@`, a scope's, but an `@` that ends a segment or sits inside one is a ref or a path, so the word counts as `local-path`), a hosted shorthand (`github:org/repo`), `org/repo`, or `host:path` with a host of at least two characters. The owner of `org/repo` starts with a letter or digit, and no path segment is `.` or `..`. Credentials, query, and fragment are removed first (a user before the host is a credential even when the word has no path, never a ref); a mask the redactor placed stays. pip's `name @ url`, with spaces, is read as the URL |
+| a URL form (`url-install`, `url-fetch-and-run`) | an `http`, `https`, `ssh`, or `git` URL (host, port, path; `ssh` and `git` also take npm's scp spelling `host:owner/repo`, and a path segment may start with `@`, a scope's, but an `@` that ends a segment or sits inside one is a ref or a path, so the word counts as `local-path`), a hosted shorthand (`github:org/repo`), `org/repo`, or `host:path` with a host of at least two characters. The owner of `org/repo` starts with a letter or digit, and no path segment is `.` or `..`. A host starts with a letter, a digit, or a mask. Credentials, query, and fragment are removed first (a user before the host is a credential even when the word has no path, never a ref); a mask the redactor placed stays. pip's `name @ url`, with spaces, is read as the URL |
 
 A version that is not a URL's ref is also refused when it holds a slash, a backslash, `:`, or `@`; the whole crossing is then counted as `local-path`.
 
@@ -82,12 +82,12 @@ A command run from a script, alias, or Makefile; a manifest edit a later bare in
 
 One run over a real harness folder on a Windows box (no `--registry-state`, an empty store): 9,139 transcripts across about a month (2026-10-01 to 2026-11-04), 534,097 calls, 25,167 crossings, in 160 seconds, peak resident memory 439 MB. By class and form: `mcp-server` 21,761, `npm-package` `fetch-and-run` 2,141, `skill` `skill-call` 1,062, `npm-package` `install` 120, `python-package` `install` 83; none of the URL forms, and no `npx skills add`, appeared. Commands counted under "replay cannot see": 1,033 pipes into a shell, 210 lockfile-only installs, 129 `local-path`, 19 `variable-name`, 1 `unreadable-name`.
 
-Against the store's `raw/` archive of the same folders, the harness folder held every transcript but one, so the 30-day window answers the same questions. About 200 workflow `journal.jsonl` files sit beside the transcripts and are not read.
+Against the store's `raw/` archive of the same folders, the harness folder held every transcript but one, so the harness folder alone answers the same questions. About 200 workflow `journal.jsonl` files sit beside the transcripts and are not read.
 
 Read by hand (30 crossings drawn at random from sessions that pass the exclusion check, plus 16 drawn by form): the class and form were right in all of them. Three things were not:
 
 - A package crossing's `origin` is the first place the name is mentioned, as a word. A short brand-like name that also appears in prose reads as a mention (one `repo-file` origin in 30 was a product name in a plan).
-- Of the 926 main-session `npx` fetch-and-run crossings, 839 name a bin their folder's `node_modules/.bin` already holds (54 do not, and 33 ran in a folder that is gone), so `npx` ran a local tool and fetched nothing. The record keeps them as `fetch-and-run`, since the log does not show whether a fetch happened.
+- Of the 926 main-session `npx` fetch-and-run crossings, 839 name a bin their folder's `node_modules/.bin` held when this was measured (54 do not, and 33 ran in a folder that is gone): 94 percent of those whose folder still exists. Those most likely ran a local tool and fetched nothing. This is a known limit: the record keeps them as `fetch-and-run`, since the log does not show whether a fetch happened.
 - An MCP server's `origin` read `tool-output` when the harness listed it only as `mcp__<server>__<tool>` names, and an MCP action's own "unknown tool" read as the server not existing. Both are fixed.
 
 ## Not in this release

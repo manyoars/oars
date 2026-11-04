@@ -63,7 +63,7 @@ export const LIMITS: readonly string[] = [
   'what a person saw or approved on screen; the permission mode is what the log kept',
   'an MCP server that was started and never called',
   'folders off the allowlist, and logs the harness has already cleaned up',
-  'a session in Codex and Cursor, which replay does not read: their history is not raw transcripts',
+  'a session in Codex or Cursor, which replay does not read: their history is not raw transcripts',
   'pool reads, sign-in, and deposit prompts; this release reads none of them',
 ];
 

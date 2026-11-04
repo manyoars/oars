@@ -93,7 +93,7 @@ describe('the counts', () => {
   });
 
   it('names the sources replay does not read', () => {
-    expect(LIMITS.join(' ')).toMatch(/Codex and Cursor/);
+    expect(LIMITS.join(' ')).toMatch(/Codex or Cursor/);
   });
 
   it('shows the registry counts only when the registry was read', () => {
