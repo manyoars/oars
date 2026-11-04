@@ -2,7 +2,7 @@ import { http, HttpResponse } from 'msw';
 import { describe, expect, it } from 'vitest';
 import { run } from './cli.js';
 import { ExitCode } from './errors.js';
-import { API, harness, server, useServer } from './test-support.js';
+import { API, harness, ISSUER, server, useServer } from './test-support.js';
 
 useServer();
 
@@ -19,6 +19,15 @@ const keyView = (fields: object) => ({
   createdAt: '2026-11-03T00:00:00Z',
   ...fields,
 });
+
+// Creating and revoking a key need a signed-in person, so the happy paths run from a seeded login rather than OARS_API_KEY.
+const signedIn = async (env: NodeJS.ProcessEnv = {}) => {
+  const h = harness(env);
+  await h.deps.store.write({ issuerUrl: ISSUER, apiUrl: API, email: 'dev@example.com', refreshToken: 'r', accessToken: 'session-token', expiresAt: '2099-01-01T00:00:00Z' });
+  return h;
+};
+
+const humanSessionRequired = () => HttpResponse.json({ code: 'HUMAN_SESSION_REQUIRED', title: 'A signed-in person is required' }, { status: 403, headers: problemJson });
 
 interface Seen {
   body: unknown;
@@ -39,20 +48,20 @@ const create = (answer: () => Response) => {
 
 describe('oars keys create', () => {
   it('--workload scopes the key, sends the scoped authorities, and prints the secret once', async () => {
-    const h = harness({ OARS_API_KEY: 'owner-key' });
+    const h = await signedIn();
     const seen = create(() => HttpResponse.json({ key: keyView({ workloadId: WORKLOAD }), replayed: false, secret: 'oars_secret_1' }, { status: 201 }));
 
     expect(await run(['keys', 'create', '--name', 'agent', '--workload', WORKLOAD], h.deps)).toBe(ExitCode.OK);
 
     expect(seen[0]?.body).toEqual({ name: 'agent', authorities: ['AGENT_OPERATE', 'AGENT_READ'], workloadId: WORKLOAD });
     expect(seen[0]?.idempotencyKey).toMatch(/^[0-9a-f]{64}$/);
-    expect(seen[0]?.authorization).toBe('Bearer owner-key');
+    expect(seen[0]?.authorization).toBe('Bearer session-token');
     expect(h.out.join('')).toContain('Secret (shown once; save it now): oars_secret_1');
     expect(h.out.join('')).toContain(`workload ${WORKLOAD}`);
   });
 
   it('without --workload sends no workloadId, honors --authority and --expires-in-days, and --json prints key and secret', async () => {
-    const h = harness({ OARS_API_KEY: 'owner-key' });
+    const h = await signedIn();
     const seen = create(() => HttpResponse.json({ key: keyView({ authorities: ['AGENT_READ'] }), replayed: false, secret: 's3' }, { status: 201 }));
 
     expect(await run(['keys', 'create', '--name', 'agent', '--authority', 'AGENT_READ', '--expires-in-days', '30', '--json'], h.deps)).toBe(ExitCode.OK);
@@ -62,7 +71,7 @@ describe('oars keys create', () => {
   });
 
   it('prints "all workloads" and "no expiry" for an ordinary key with no expiry', async () => {
-    const h = harness({ OARS_API_KEY: 'owner-key' });
+    const h = await signedIn();
     create(() => HttpResponse.json({ key: keyView({}), replayed: false, secret: 's' }, { status: 201 }));
 
     await run(['keys', 'create', '--name', 'agent'], h.deps);
@@ -72,7 +81,7 @@ describe('oars keys create', () => {
   });
 
   it('a replay carries no secret: exit 5 and says to revoke and create another', async () => {
-    const h = harness({ OARS_API_KEY: 'owner-key' });
+    const h = await signedIn();
     create(() => HttpResponse.json({ key: keyView({}), replayed: true }));
 
     expect(await run(['keys', 'create', '--name', 'agent', '--idempotency-key', 'K'], h.deps)).toBe(ExitCode.CONFLICT);
@@ -82,7 +91,7 @@ describe('oars keys create', () => {
   });
 
   it('a key asking for more than a workload may carry is exit 4 with the platform code', async () => {
-    const h = harness({ OARS_API_KEY: 'owner-key' });
+    const h = await signedIn();
     create(() => HttpResponse.json({ code: 'API_KEY_WORKLOAD_SCOPE_EXCEEDS_CAP', title: 'Too many authorities' }, { status: 400, headers: problemJson }));
 
     expect(await run(['keys', 'create', '--name', 'agent', '--workload', WORKLOAD, '--authority', 'AGENT_DEPLOY', '--json'], h.deps)).toBe(ExitCode.INVALID);
@@ -90,14 +99,14 @@ describe('oars keys create', () => {
   });
 
   it('--name is required', async () => {
-    const h = harness({ OARS_API_KEY: 'owner-key' });
+    const h = await signedIn();
     expect(await run(['keys', 'create'], h.deps)).toBe(ExitCode.USAGE);
   });
 });
 
 describe('oars keys list', () => {
   it('prints each key, scoped or not', async () => {
-    const h = harness({ OARS_API_KEY: 'owner-key' });
+    const h = await signedIn();
     server.use(http.get(`${API}/me/api-keys`, () => HttpResponse.json({ content: [keyView({ workloadId: WORKLOAD }), keyView({ keyId: 'k2', expiresAt: '2027-01-01T00:00:00Z' })], last: true })));
 
     expect(await run(['keys', 'list'], h.deps)).toBe(ExitCode.OK);
@@ -110,7 +119,7 @@ describe('oars keys list', () => {
   });
 
   it('--json carries the keys and reads every page; no keys says so', async () => {
-    const h = harness({ OARS_API_KEY: 'owner-key' });
+    const h = await signedIn();
     const pages: string[] = [];
     server.use(
       http.get(`${API}/me/api-keys`, ({ request }) => {
@@ -124,7 +133,7 @@ describe('oars keys list', () => {
     expect(pages).toEqual(['0', '1']);
     expect(JSON.parse(h.out[0] ?? '')).toMatchObject({ ok: true, keys: [{ keyId: 'k0' }, { keyId: 'k1' }] });
 
-    const empty = harness({ OARS_API_KEY: 'owner-key' });
+    const empty = await signedIn();
     server.use(http.get(`${API}/me/api-keys`, () => HttpResponse.json({ content: [], last: true })));
     await run(['keys', 'list'], empty.deps);
     expect(empty.out.join('')).toBe('You have no API keys.\n');
@@ -133,7 +142,7 @@ describe('oars keys list', () => {
 
 describe('oars keys revoke', () => {
   it('DELETEs the key by id and says so', async () => {
-    const h = harness({ OARS_API_KEY: 'owner-key' });
+    const h = await signedIn();
     const urls: string[] = [];
     server.use(
       http.delete(`${API}/me/api-keys/${KEY_ID}`, ({ request }) => {
@@ -148,15 +157,35 @@ describe('oars keys revoke', () => {
   });
 
   it('--json prints the revoked id; a missing key is the platform problem', async () => {
-    const h = harness({ OARS_API_KEY: 'owner-key' });
+    const h = await signedIn();
     server.use(http.delete(`${API}/me/api-keys/${KEY_ID}`, () => new HttpResponse(null, { status: 204 })));
     expect(await run(['keys', 'revoke', KEY_ID, '--json'], h.deps)).toBe(ExitCode.OK);
     expect(JSON.parse(h.out[0] ?? '')).toEqual({ ok: true, keyId: KEY_ID, revoked: true });
 
-    const gone = harness({ OARS_API_KEY: 'owner-key' });
+    const gone = await signedIn();
     server.use(http.delete(`${API}/me/api-keys/${KEY_ID}`, () => HttpResponse.json({ code: 'API_KEY_NOT_FOUND', title: 'No such key' }, { status: 404, headers: problemJson })));
     // A 404 has no exit code of its own, so exitCodeForProblem maps it to UNEXPECTED (1).
     expect(await run(['keys', 'revoke', KEY_ID, '--json'], gone.deps)).toBe(ExitCode.UNEXPECTED);
     expect(JSON.parse(gone.out[0] ?? '')).toMatchObject({ ok: false, step: 'keys-revoke', problem: { code: 'API_KEY_NOT_FOUND' } });
+  });
+});
+
+describe('an API key cannot create or revoke keys', () => {
+  it('create with OARS_API_KEY set is exit 3 carrying HUMAN_SESSION_REQUIRED', async () => {
+    const h = harness({ OARS_API_KEY: 'agent-key' });
+    const seen = create(humanSessionRequired);
+
+    expect(await run(['keys', 'create', '--name', 'agent', '--json'], h.deps)).toBe(ExitCode.AUTH);
+
+    expect(seen[0]?.authorization).toBe('Bearer agent-key');
+    expect(JSON.parse(h.out[0] ?? '')).toMatchObject({ ok: false, step: 'keys-create', problem: { code: 'HUMAN_SESSION_REQUIRED' } });
+  });
+
+  it('revoke with OARS_API_KEY set is exit 3 carrying HUMAN_SESSION_REQUIRED', async () => {
+    const h = harness({ OARS_API_KEY: 'agent-key' });
+    server.use(http.delete(`${API}/me/api-keys/${KEY_ID}`, humanSessionRequired));
+
+    expect(await run(['keys', 'revoke', KEY_ID, '--json'], h.deps)).toBe(ExitCode.AUTH);
+    expect(JSON.parse(h.out[0] ?? '')).toMatchObject({ ok: false, step: 'keys-revoke', problem: { code: 'HUMAN_SESSION_REQUIRED' } });
   });
 });
