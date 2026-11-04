@@ -289,8 +289,6 @@ export const PIPE_MAX = 4;
 export const PRIVATE = 'private';
 
 const DAY_MS = 86_400_000;
-/** Whole days from the snapshot to `now`; a clock before the snapshot reads as 0. */
-export const vocabularyAgeDays = (now: Date, snapshotDate: string = VOCAB_SNAPSHOT_DATE): number => Math.max(0, Math.floor((now.getTime() - Date.parse(`${snapshotDate}T00:00:00Z`)) / DAY_MS));
 /** A client more than `registry_max_age` past its snapshot builds no batch (the exact elapsed time, not whole days): its sessions wait in `A` until it upgrades. */
 export const isVocabularyExpired = (now: Date, snapshotDate: string = VOCAB_SNAPSHOT_DATE): boolean =>
   now.getTime() - Date.parse(`${snapshotDate}T00:00:00Z`) > REGISTRY_MAX_AGE_DAYS * DAY_MS;

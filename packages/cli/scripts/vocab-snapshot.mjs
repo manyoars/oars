@@ -7,7 +7,7 @@
 // size and SHA-256. A changed snapshot is a new VOCAB_VERSION: bump VOCAB_VERSION in src/sessions/public-vocabulary.ts and the pin table in
 // src/sessions/vocab-pin.test.ts in the same commit, or that test fails.
 //
-// Sources, one per file (the shipped sizes are in the CHANGELOG and the report):
+// Sources, one per file (the shipped size of each is in vocab/manifest.json):
 //   npm.json       packages.ecosyste.ms (npm's own monthly download count, ranked), versions from registry.npmjs.org
 //   pypi.json      hugovk.github.io/top-pypi-packages (PyPI's own download log, 30 days), versions from pypi.org
 //   crates.json    crates.io /api/v1/crates?sort=downloads, versions from the sparse index at index.crates.io
