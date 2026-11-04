@@ -1185,7 +1185,8 @@ const internTool = (tool: ToolObservation, intern: (value: string) => string): T
   agentType: tool.agentType === null ? null : intern(tool.agentType),
   harnessVersion: tool.harnessVersion === null ? null : intern(tool.harnessVersion),
   target: tool.target === null ? null : intern(tool.target),
-  ...(tool.segments === undefined ? {} : { segments: tool.segments.map((segment) => ({ ...segment, run: intern(segment.run) })) }),
+  // Segments are interned only when they are a list of records with a text `run`; `isTool` admits any other value, which `...tool` already carries.
+  ...(Array.isArray(tool.segments) ? { segments: tool.segments.map((segment) => (isRecord(segment) && typeof segment.run === 'string' ? { ...segment, run: intern(segment.run) } : segment)) } : {}),
 });
 
 /**
