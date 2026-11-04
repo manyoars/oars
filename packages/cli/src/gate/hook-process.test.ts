@@ -40,6 +40,19 @@ describe('the hook process: the deadline', () => {
     expect(JSON.parse(lines[0] ?? '')).toMatchObject({ kind: 'crossing', via: 'hook', name: 'left-pad', session: 's1' });
   });
 
+  it.each([
+    ['shown', 0.5],
+    ['held', 0],
+  ])('writes a %s note row as no exposure at the deadline, since nothing was printed', async (_arm, draw) => {
+    const store = folder();
+    const exit = vi.fn();
+    const found = (): Promise<RegistryAnswer> => Promise.resolve({ state: 'found', latest: '1.0.0', created: '2026-10-30T00:00:00.000Z' });
+    void runHookProcess({ stdin: () => Promise.resolve(PAYLOAD), deps: depsFor(store, { append: () => new Promise<void>(() => undefined), registry: found, random: () => draw }), exit, deadlineMs: 300 });
+    await vi.waitFor(() => { expect(exit).toHaveBeenCalledWith(0); }, { timeout: 2_000 });
+    const lines = readFileSync(crossingsPath(store), 'utf8').trim().split('\n');
+    expect(JSON.parse(lines[0] ?? '')).toMatchObject({ name: 'left-pad', arm: 'none', lineShown: 'none', lineHeld: 'none' });
+  });
+
   it.skipIf(process.platform === 'win32')('creates the staged file private to the user', async () => {
     const store = folder();
     const exit = vi.fn();
