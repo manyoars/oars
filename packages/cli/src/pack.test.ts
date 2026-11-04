@@ -170,6 +170,7 @@ const WITHHELD_TERMS = [
   /\bmoney/i,
   /pay per/i,
   /\bcredits?\b/i,
+  /\bUSD\b/,
 ];
 const withheldIn = (text: string): string[] => WITHHELD_TERMS.filter((term) => term.test(text)).map(String);
 
@@ -201,6 +202,19 @@ describe('the public text states facts only', () => {
     ['packages/client/src/generated/schema.d.ts', join(root, 'packages/client/src/generated/schema.d.ts')],
   ])('%s names none of the withheld terms', (_name, file) => {
     expect(withheldIn(readFileSync(file, 'utf8'))).toEqual([]);
+  });
+
+  // The word-boundary terms above cannot see a camelCase wire name (createCharge, ChargeView, listAgentPrices, priceCents) or a
+  // reworded error text, so the generated files get a plain substring scan too. The allow-list is every remaining hit, named: a
+  // workload restart setting and a compute-limit code the platform owns. A new hit fails until someone looks at it.
+  const WIRE_NAMES_KEPT = ['autoRestartOnCredit', 'COMPUTE_CREDIT_EXHAUSTED'];
+  it.each([
+    ['openapi/public.json', join(root, 'openapi/public.json')],
+    ['openapi/public-operations.json', join(root, 'openapi/public-operations.json')],
+    ['packages/client/src/generated/schema.d.ts', join(root, 'packages/client/src/generated/schema.d.ts')],
+  ])('%s has no price, charge, or credit name beyond the kept wire names', (_name, file) => {
+    const text = WIRE_NAMES_KEPT.reduce((rest, name) => rest.replaceAll(name, ''), readFileSync(file, 'utf8'));
+    expect(text.match(/\w*(?:price|charge|credit)\w*/gi) ?? []).toEqual([]);
   });
 
   it('the package description names none of the withheld terms', () => {

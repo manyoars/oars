@@ -398,7 +398,7 @@ export interface components {
             services: components["schemas"]["WorkloadServiceSpec"][];
         };
         /**
-         * @description Platform role names. Matches the bare authority strings used in JWT 'roles' claims, DB role rows, and Spring Security GrantedAuthority — no ROLE_ prefix.
+         * @description Platform role names, as they appear in the JWT 'roles' claim, without a ROLE_ prefix.
          * @enum {string}
          */
         Role: "SYSTEM_ADMIN" | "ADMIN" | "INVESTOR" | "ISSUER" | "DEVELOPER" | "OPERATOR" | "USER_MANAGER" | "AI_AGENT_MANAGER" | "COMPLIANCE_OFFICER" | "AUDITOR" | "USER" | "SECURITY_ADMIN" | "SYSTEM" | "TRADING_MANAGER" | "FINANCE" | "SUPPORT";
@@ -535,11 +535,6 @@ export interface components {
             id: string;
             /** @description Bound instrument. Null until an instrument references the workload. */
             instrumentId?: string;
-            /**
-             * Format: decimal
-             * @description Estimated compute cost in USD of the configured replicas over a 730-hour month, at the current rate version for the size the agent host allocates (vCPU is normalized: one shared CPU = 0.0625); absent when no agent host is configured to size the services
-             */
-            monthlyReservedCostUsd?: string;
             name: string;
             /** @description Plaintext SDK key. Present only in the registration response. */
             sdkKey?: string;
