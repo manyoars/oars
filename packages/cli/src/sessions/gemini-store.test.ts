@@ -124,7 +124,7 @@ describe('depositing the Gemini source', () => {
           ...session(G),
           { id: 's1', timestamp: T(20), type: 'user', content: [{ text: '<state_snapshot>\n<overall_goal>fix the build</overall_goal>\n</state_snapshot>' }] },
           { id: 's2', timestamp: T(20), type: 'gemini', content: [{ text: 'Got it. Thanks for the additional context!' }] },
-          { $patch: { removeIds: ['u1', 'g2', 'g5'], orderIds: ['s1', 's2'] } },
+          { $patch: { removeIds: ['u1', 'g2', 'g5'] } },
         ],
       },
     ]);

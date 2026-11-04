@@ -229,10 +229,16 @@ const NEXT_SPEAKER = 'Please continue.';
 const SUMMARY = '<state_snapshot>';
 /** What upstream closes a turn with when a stream fails after a tool response (geminiChat.ts:118,921-934, patched onto the message; or a tokenless `gemini` message at the next sync, chatRecordingService.ts:1465-1480). No model wrote it. */
 const INTERRUPTED = '[The previous response was interrupted before it completed.]';
-const CANNED_REPLY = 'Got it. Thanks for the additional context!';
-/** The canned reply: a model message with that text and no usage, calls, or model, which only the CLI writes. */
-const isCanned = (message: Obj): boolean =>
-  message.type === 'gemini' && textOf(message.content).trim() === CANNED_REPLY && !(Array.isArray(message.toolCalls) && message.toolCalls.length > 0) && !isObj(message.tokens) && message.model === undefined;
+/**
+ * A reply the CLI wrote and no model did: a `gemini` message with text and no usage, calls, or model. A model's text always carries `model` (geminiChat.ts:1807-1812), while the
+ * synthetic writers set none: the canned reply after a compression summary (:1815), each turn of a saved chat loaded with `/resume resume <tag>` or `/chat resume`
+ * (chatCommand.ts:228, slashCommandProcessor.ts:553, geminiChat.ts:1386-1395), and the sync that records history (chatRecordingService.ts:1476-1481). The interrupted placeholder is
+ * a tokenless message too, but it is dropped as empty, not as a reply.
+ */
+const isCanned = (message: Obj): boolean => {
+  const text = textOf(message.content).trim();
+  return message.type === 'gemini' && text !== '' && text !== INTERRUPTED && !(Array.isArray(message.toolCalls) && message.toolCalls.length > 0) && !isObj(message.tokens) && message.model === undefined;
+};
 
 /** Gemini tools the reader names in the Claude Code vocabulary, so the extractor classifies them; the Gemini name stays in `native` for the action table. */
 const RENAMED: ReadonlyMap<string, string> = new Map([
@@ -322,9 +328,9 @@ export const chatLines = (text: string, fallbackId: string, cwd: string | null):
     });
   };
 
-  // The summary is the text user turn recorded just before the canned reply, whatever it opens with: the model is asked to reason in a scratchpad first and its text is stored as
+  // The CLI's reply (see `isCanned`) answers the text user turn recorded just before it, which is therefore the CLI's too: a compression's summary, whatever it opens with, or a loaded chat's turn. Of the summary: the model is asked to reason in a scratchpad first and its text is stored as
   // written (context/chatCompressionService.ts:603,614,643,668), and upstream itself tests for the tag with `includes` (:588). A summary whose reply is gone still opens with the tag.
-  const summaries = new Set<Obj>(messages.flatMap((message, index) => (isCanned(message) ? messages.slice(Math.max(index - 1, 0), index) : [])));
+  const summaries = new Set<Obj>(messages.flatMap((message, index) => (isCanned(message) ? messages.slice(Math.max(index - 1, 0), index).filter((before) => before.type === 'user') : [])));
 
   for (const message of messages) {
     const when = stamp(message.timestamp);
@@ -337,7 +343,8 @@ export const chatLines = (text: string, fallbackId: string, cwd: string | null):
       const sent = textOf(message.content).trim();
       if (sent === '' || sent === NEXT_SPEAKER || NOT_TYPED.some((prefix) => sent.startsWith(prefix)) || INJECTED.some((prefix) => sent.startsWith(prefix)) || sent.startsWith(SUMMARY) || summaries.has(message)) continue;
       const shown = textOf(message.displayContent);
-      const typed = shown.trim() === '' ? textOf(message.content) : shown;
+      // Without a displayContent the prompt is the sent text, less a BeforeAgent hook's part, which the client appends beside the typed one (core/client.ts:985-989; the ACP path sends no displayContent, acpSession.ts:434).
+      const typed = shown.trim() === '' ? textOf(Array.isArray(message.content) ? message.content.filter((part: unknown) => !(isObj(part) && typeof part.text === 'string' && part.text.startsWith('<hook_context>'))) : message.content) : shown;
       sequence += 1;
       lines.push({ ...base, type: 'user', uuid: `${fallbackId}-u${String(sequence)}`, timestamp: when, message: { role: 'user', content: [{ type: 'text', text: typed }] } });
     } else if (message.type === 'gemini') {
