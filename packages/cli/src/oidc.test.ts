@@ -1,10 +1,14 @@
 import { http, HttpResponse } from 'msw';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { CliError, ExitCode } from './errors.js';
 import { discover, refreshTokens, revokeRefreshToken, startDeviceAuthorization } from './oidc.js';
 import { deviceAuthorization, discovery, harness, ISSUER, server, useServer } from './test-support.js';
 
 useServer();
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 /** The context a command passes: the run's deps (version, sleep, random) plus the step; `sleeps` records each retry wait. */
 const contextOf = () => {
@@ -121,6 +125,13 @@ describe('Keycloak calls retry transient failures', () => {
     server.use(discovery, http.post(REVOKE, () => HttpResponse.json({}, { status: 503 }), { once: true }), http.post(REVOKE, () => new HttpResponse(null, { status: 200 })));
     await revokeRefreshToken(await discover(ISSUER, retrying), 'r1', 'logout');
     expect(sleeps).toHaveLength(1);
+  });
+
+  it('names the issuer and the reason the network gave when Keycloak cannot be reached at all', async () => {
+    const cause = new AggregateError([new Error('connect ECONNREFUSED ::1:8180')], '');
+    vi.spyOn(globalThis, 'fetch').mockRejectedValue(new TypeError('fetch failed', { cause }));
+    const failure = await discover(ISSUER, context).catch((error: unknown) => error);
+    expect(failure).toMatchObject({ exitCode: ExitCode.UNREACHABLE, step: 'login', message: 'Cannot reach the server at http://localhost:8180: connect ECONNREFUSED ::1:8180' });
   });
 
   it('never repeats a request to the token endpoint (refresh-token rotation)', async () => {

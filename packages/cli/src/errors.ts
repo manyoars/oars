@@ -93,6 +93,22 @@ export const problemError = (step: string, status: number, body: unknown): CliEr
   return new CliError(message, exitCodeForProblem(status, problem), step, { ...problem, title: message, status });
 };
 
-/** A request that never got an answer (after the retries). */
-export const unreachableError = (step: string, cause: unknown): CliError =>
-  new CliError(`Cannot reach the server: ${cause instanceof Error ? cause.message : String(cause)}`, ExitCode.UNREACHABLE, step);
+/** The network's own reason for a failed fetch: the first of these that is not blank. */
+const reasonOf = (error: Error): string => {
+  const inner = error.cause;
+  if (!(inner instanceof Error)) return error.message === '' ? 'no reason given' : error.message;
+  // Node 24 tries every address of a dual-stack host and reports an AggregateError whose own message is empty.
+  const first = inner instanceof AggregateError && inner.errors[0] instanceof Error ? inner.errors[0].message : '';
+  const code = 'code' in inner && typeof inner.code === 'string' ? inner.code : '';
+  return [first, inner.message, code, error.message].find((reason) => reason !== '') ?? 'no reason given';
+};
+
+/**
+ * A request that never got an answer (after the retries). Node's fetch reports every network failure as "fetch failed" and keeps
+ * the reason (`getaddrinfo ENOTFOUND host`, `connect ECONNREFUSED`) on its cause, so the message gives that reason, and names
+ * `server` when the caller knows it: a user whose server does not resolve yet can see which one.
+ */
+export const unreachableError = (step: string, cause: unknown, server?: string): CliError => {
+  const reason = cause instanceof Error ? reasonOf(cause) : String(cause);
+  return new CliError(`Cannot reach the server${server === undefined ? '' : ` at ${server}`}: ${reason}`, ExitCode.UNREACHABLE, step);
+};
