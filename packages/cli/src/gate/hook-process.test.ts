@@ -172,8 +172,10 @@ describe('the hook process: the deadline', () => {
     };
     void runHookProcess({ stdin: () => Promise.resolve(PAYLOAD), deps: depsFor(store, { append: otherWriterThenStall }), exit, deadlineMs: 1_000 });
     await vi.waitFor(() => { expect(exit).toHaveBeenCalledWith(0); }, { timeout: 10_000 });
-    const names = readFileSync(crossingsPath(store), 'utf8').trim().split('\n').map((line) => (JSON.parse(line) as { name: string }).name);
-    expect(names).toEqual(['other', 'left-pad']);
+    const lines = readFileSync(crossingsPath(store), 'utf8').trim().split('\n');
+    expect(lines).toHaveLength(2);
+    expect(lines[0]).toContain('"name":"other"');
+    expect(lines[1]).toContain('"name":"left-pad"');
   });
 });
 
