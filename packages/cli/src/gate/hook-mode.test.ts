@@ -1,30 +1,37 @@
 // The mode every hook write asks for, seen at the call so it holds on a platform where a file's mode cannot be read back. `hook.test.ts` and `hook-process.test.ts` stat the
 // created files where the platform keeps modes; this runs everywhere.
+import type * as fs from 'node:fs';
+import type * as fsPromises from 'node:fs/promises';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-const calls = vi.hoisted(() => ({ async: [] as Array<{ file: string; options: unknown }>, sync: [] as Array<{ file: string; options: unknown }> }));
+interface Call {
+  file: unknown;
+  options: unknown;
+}
 
-vi.mock('node:fs/promises', async (original) => {
-  const actual = await original<typeof import('node:fs/promises')>();
+const calls = vi.hoisted((): { async: Call[]; sync: Call[] } => ({ async: [], sync: [] }));
+
+vi.mock('node:fs/promises', async () => {
+  const actual = await vi.importActual<typeof fsPromises>('node:fs/promises');
   return {
     ...actual,
-    appendFile: (file: string, data: string, options?: unknown) => {
-      calls.async.push({ file: String(file), options });
-      return actual.appendFile(file, data, options as never);
+    appendFile: (...args: Parameters<typeof actual.appendFile>) => {
+      calls.async.push({ file: args[0], options: args[2] });
+      return actual.appendFile(...args);
     },
   };
 });
 
-vi.mock('node:fs', async (original) => {
-  const actual = await original<typeof import('node:fs')>();
+vi.mock('node:fs', async () => {
+  const actual = await vi.importActual<typeof fs>('node:fs');
   return {
     ...actual,
-    appendFileSync: (file: string, data: string, options?: unknown) => {
-      calls.sync.push({ file: String(file), options });
-      actual.appendFileSync(file, data, options as never);
+    appendFileSync: (...args: Parameters<typeof actual.appendFileSync>) => {
+      calls.sync.push({ file: args[0], options: args[2] });
+      actual.appendFileSync(...args);
     },
   };
 });
@@ -68,7 +75,12 @@ describe('every file the hook creates is asked for private to the user', () => {
       exit,
       deadlineMs: 100,
     });
-    await vi.waitFor(() => expect(exit).toHaveBeenCalledWith(0), { timeout: 2_000 });
+    await vi.waitFor(
+      () => {
+        expect(exit).toHaveBeenCalledWith(0);
+      },
+      { timeout: 2_000 },
+    );
     expect(calls.sync).toEqual([{ file: crossingsPath(store), options: { mode: 0o600 } }]);
   });
 });

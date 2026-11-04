@@ -94,7 +94,7 @@ const runnerWith = (timeout: number): ManagerRunner => (program, args, cwd) =>
  * With a deadline the child gets its own: the kill `execFile`'s timeout sends never comes when the caller's process exits first, and npm's default fetch retries run
  * for minutes against an unreachable registry. Without one (a replay) the manager keeps its defaults.
  */
-const npmLimits = (timeout: number | undefined): string[] => (timeout === undefined ? [] : [`--fetch-timeout=${timeout}`, '--fetch-retries=0']);
+const npmLimits = (timeout: number | undefined): string[] => (timeout === undefined ? [] : [`--fetch-timeout=${String(timeout)}`, '--fetch-retries=0']);
 /** pip counts its socket timeout in whole seconds. */
 const pipLimits = (timeout: number | undefined): string[] => (timeout === undefined ? [] : ['--timeout', '1', '--retries', '0']);
 
