@@ -393,6 +393,15 @@ describe('the Copilot home', () => {
     expect(text).toContain('{torn');
   });
 
+  it('leaves a session with no archives untouched: a lone events.jsonl keeps a line whose event id repeats, and a checkpoint line', async () => {
+    const s = stage();
+    const home = stageCopilot(s.root, [{ id: 'lone', lines: [start('/work/lone'), prompt(1, 'same'), prompt(1, 'same'), { ...prompt(2, 'replay'), checkpoint: true }] }]);
+    const store = await openCopilotStore(home);
+    const text = await store?.transcript(store.sessions[0] ?? never());
+    expect(text?.match(/"text":"same"/g)).toHaveLength(2);
+    expect(text).toContain('"text":"replay"');
+  });
+
   it('reports a store folder that cannot be listed by its base name, never fatal', async () => {
     const s = stage();
     const home = join(s.root, 'copilot-file');

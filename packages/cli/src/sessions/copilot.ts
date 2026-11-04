@@ -86,8 +86,7 @@ export interface CopilotStore {
 
 const SAFE_ID = /^(?!\.+$)[A-Za-z0-9._-]+$/;
 const EVENTS = 'events.jsonl';
-const NEWLINE = String.fromCharCode(10);
-/** A rotated archive's name; N counts up as the log rotates (docs/features/session-persistence.md, "Linked event journals"; the order is inferred from the head's `previousFile`). */
+/** A rotated archive's name; N counts up as the log rotates (docs/features/session-persistence.md, "Linked event journals"); the reader orders by N and does not follow each head's `previousFile`. */
 const ARCHIVE = /^events\.(\d+)\.jsonl$/;
 /** How many leading lines are searched for `session.start`; a rotated head may begin with a `session.journal_link` and checkpoint events. */
 const HEAD_LINES = 8;
@@ -342,7 +341,7 @@ const joinFiles = (texts: readonly string[]): string => {
   const seen = new Set<string>();
   const kept: string[] = [];
   texts.forEach((text, index) => {
-    for (const raw of text.split(NEWLINE)) {
+    for (const raw of text.split('\n')) {
       if (raw.trim() === '') continue;
       const entry = parse(raw);
       if (isObj(entry)) {
@@ -356,7 +355,7 @@ const joinFiles = (texts: readonly string[]): string => {
       kept.push(raw);
     }
   });
-  return kept.join(NEWLINE) + (kept.length === 0 ? '' : NEWLINE);
+  return kept.join('\n') + (kept.length === 0 ? '' : '\n');
 };
 
 export const openCopilotStore = async (root: string): Promise<CopilotStore | undefined> => {
@@ -411,7 +410,9 @@ export const openCopilotStore = async (root: string): Promise<CopilotStore | und
     rejected,
     unreadable,
     transcript: async (session) => {
-      const text = joinFiles(await Promise.all([...session.archives, session.file].map((path) => readFile(path, 'utf8'))));
+      const texts = await Promise.all([...session.archives, session.file].map((path) => readFile(path, 'utf8')));
+      // A session with no archives is read as it is; only a rotated one has replayed events to drop.
+      const text = session.archives.length === 0 ? (texts[0] ?? '') : joinFiles(texts);
       const lines = [...eventLines(text, session.id).map((line) => JSON.stringify(line)), ...eventBadLines(text)];
       return lines.join('\n') + (lines.length === 0 ? '' : '\n');
     },
