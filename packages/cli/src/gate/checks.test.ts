@@ -66,6 +66,7 @@ describe('checkCall on a shell command', () => {
     ['pip install "numpy;python_version<3"', ['python-package install numpy unstated']],
     ['pip install "numpy>=1;python_version<3"', ['python-package install numpy range']],
     ['pip install "foo >= 1"', ['python-package install foo range']],
+    ['npm install "foo@>=1 <2"', ['npm-package install foo range']],
     ['pip install "foo @ git+https://github.com/org/foo"', ['python-package url-install https://github.com/org/foo url']],
     ['pip install "foo@git+https://github.com/org/repo"', ['python-package url-install https://github.com/org/repo url']],
     ['uv add "foo@git+https://github.com/org/repo@main"', ['python-package url-install https://github.com/org/repo url']],
@@ -109,7 +110,7 @@ describe('checkCall on a shell command', () => {
     ['uvx --from httpie==3.2.0 http get', ['python-package fetch-and-run httpie pinned']],
     ['uv tool run black .', ['python-package fetch-and-run black unstated']],
     ['uv run pip install rich==1.0', ['python-package install rich pinned']],
-    // `-n` is `--no-interaction` for poetry and `--no-cache` for uv, and `-f` is `--force` for pipx: neither owns the next word there.
+    // `-n` is `--no-interaction` for poetry and `--no-cache` for uv and uvx, and `-f` is `--force` for pipx: neither owns the next word there.
     ['poetry add -n requests', ['python-package install requests unstated']],
     ['uv pip install -n rich', ['python-package install rich unstated']],
     ['pipx install -f black', ['python-package install black unstated']],
@@ -238,6 +239,9 @@ describe('checkCall on a shell command', () => {
     ['npm install "four@a#secret-token"', ['unreadable-name']],
     ['pip install "two@a&sig=hunter2value"', ['unreadable-name']],
     ['pip install "three@%2Fsecret%2Fhome"', ['unreadable-name']],
+    // A space is not a version: a word of prose (one opening with a letter other than `v` or `x`) after it is refused, a range's operators are kept.
+    ['npm install "four@a secret token"', ['unreadable-name']],
+    ['pip install "one>=1 secret token"', ['unreadable-name']],
     // The address inside the alias is still a mask, never a name.
     ['npm install foo@npm:me@acme.io', ['masked-name']],
     ['npm install ""', ['unreadable-name']],
@@ -409,6 +413,14 @@ describe('checkCall on a shell command', () => {
     ['npx jsr:@luca/cases', false],
     ['/usr/local/bin/npm install x', false],
     ['sudo npm install x', false],
+    // An environment set without an `=`, or by a sourced file or a config command, moves the registry as well.
+    ['Set-Item Env:NPM_CONFIG_REGISTRY https://npm.private.example/; npm install x', false],
+    ['Set-Item -Path Env:PIP_INDEX_URL https://pip.private.example/; pip install x', false],
+    ['[Environment]::SetEnvironmentVariable("NPM_CONFIG_REGISTRY", "https://npm.private.example/"); npm install x', false],
+    ['source ./private.env && npm install x', false],
+    ['. ./private.env && npm install x', false],
+    ['workon env && pip install x', false],
+    ['npm config set registry https://npm.private.example/ && npm install x', false],
   ])('marks whether the registry a command would contact is the default one: %s', (command, asked) => {
     expect(bash(command).crossings.map((crossing) => crossing.registryAsked)).toEqual([asked]);
   });
@@ -508,7 +520,7 @@ describe('checkCall on other tools', () => {
 describe('the closed vocabulary', () => {
   it('holds exactly these classes, forms, and unread shapes', () => {
     expect(CROSSING_CLASSES).toEqual(['npm-package', 'python-package', 'mcp-server', 'skill']);
-    expect(CROSSING_FORMS).toEqual(['install', 'url-install', 'fetch-and-run', 'url-fetch-and-run', 'mcp-call', 'skill-call']);
+    expect(CROSSING_FORMS).toEqual(['install', 'url-install', 'fetch-and-run', 'url-fetch-and-run', 'local-bin-run', 'mcp-call', 'skill-call']);
     expect(UNREAD_SHAPES).toEqual(['manifest-install', 'local-path', 'variable-name', 'masked-name', 'pipe-to-shell', 'behind-xargs', 'harness-registration', 'unreadable-name']);
   });
 });
