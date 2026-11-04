@@ -67,7 +67,14 @@ replaces, so the log settles back to the size of the live records. A hook deposi
   stored value of an existing captured record or skeleton changes: a bump re-reads every transcript. The skeleton is written at capture and
   carries `CAPTURE_VERSION` in its `v`.
 - `EXTRACTOR_VERSION` (`v` on every derived record) names the derivation rules (error normalization, prompt classes, tool-name sequences,
-  recovery episodes, prompt outcome signals). A bump re-derives from the log; no raw transcript is read.
+  recovery episodes, prompt outcome signals). A bump re-derives from the log; no raw transcript is read. Version 11 (t811, pool vocabulary spec Section 2) changes no stored value: it moves raw
+  `agentType`, `keys`, and `frameId` with the joined `frame` from class P to class A, so they stay in the account store and only their projections (`projectAgentType`, `projectKeys`) may pool; the joined frame pools only as its separate cells (the projection functions ship in this release; the deposit skeleton does not call them yet and keeps sending the joined `frame` until the next pool brief). A store written at 10 re-derives
+  on its next deposit with every captured record as it was. What the projection takes from the shell form is computed from the store and never written: `program`,
+  `subcommand`, and `flags` come from the record's `steps`, and from its `segments` for a program the curated list does not name. A step's own names are limited to the
+  curated lists, since capture narrowed them to those: a program only the snapshot lists, such as `ffmpeg -i in out`, keeps its program, first or later and behind any wrapper,
+  `timeout`, or block keyword, but loses `-i` stored, because a segment holds no flag; a program no list names projects `private`. A record captured before CAPTURE 9 has no
+  steps, so its flags are lost and it projects the program and subcommand alone from the A copy of `target` (a `target` cut at 30 characters or masked by redaction projects `program: private`).
+  No staged pooled file or outbox exists for the migration to delete.
 
 Version 4 (CAPTURE 4, t714) adds `sid`, `repo`, `fileHashes`, `env`, `promptFingerprint`, `targetBase`, the repository-root path base, and a
 1,000-character cap on an error line, and a cap of 100 on `files` and `fileHashes` per session (p99 was 61, max 209, on the 8,253-session
@@ -113,18 +120,18 @@ pattern and entropy, emails, and the domains named with `--redact-domain`) befor
 | Record | Fields | Class |
 |--------|--------|-------|
 | every capture record | `kind`, `cv`, `rev`, `sid` | P |
-| `session` (one per transcript) | `agentType` (set on a subagent transcript), `harness` (set on a Cursor session; absent reads as Claude Code), `bytes`, `lines`, `badLines`, `userTurns`, `assistantTurns`, `versions`, `models`, `bashCmds`, `compactSummaries`, `costUsd`, `usage`, `env` (below), `frame`, `frameId` | P |
-| | `session`, `parent`, `spawnedBy`, `spawnedIn` (join ids), `at`, `tsFirst`, `tsLast`, `promptFingerprint`, `repo`, `tools` (native names, which can hold a private MCP server's), `fileHashes`, `urls`, `searches`, `branches`, `tldrs` (400 chars), `confidences` (120 chars) | A |
+| `session` (one per transcript) | `harness` (set on a Cursor session; absent reads as Claude Code), `bytes`, `lines`, `badLines`, `userTurns`, `assistantTurns`, `versions`, `models`, `bashCmds`, `compactSummaries`, `costUsd`, `usage`, `env` (below) | P |
+| | `agentType` (set on a subagent transcript; a custom agent's name is private), `frame`, `frameId` (the joined frame is one value that links rows; its fields pool only as cells), `session`, `parent`, `spawnedBy`, `spawnedIn` (join ids), `at`, `tsFirst`, `tsLast`, `promptFingerprint`, `repo`, `tools` (native names, which can hold a private MCP server's), `fileHashes`, `urls`, `searches`, `branches`, `tldrs` (400 chars), `confidences` (120 chars) | A |
 | | `setup`, `funnel`, `trust` (optional; absent on a record captured before version 12, and per field where the transcript holds none) | A |
 | | `project` (the folder slug, with the username and directory names), `files` (the paths as written, redacted) | L |
-| `user-prompt` (one per prompt) | `index`, `opened` (`typed` or `command`; absent before CAPTURE 10, when only a typed line opened a prompt), `wallSec`, `thinking`, `turns`, `model`, `efforts`, `usage`, `frame`, `frameId` | P |
-| | `session`, `ts`, `head` (the first 300 characters), `promptFingerprint`, `skills` (a skill's name can be private) | A |
-| `tool` (one per tool call) | `n`, `status` (`ok`, `error`, or `none` when no result is in the file; one record per tool-use id), `keys` (the input's key names), `durationMs`, `harnessVersion`, `agentType`, `side`, `prompt`, `targetBase`, `steps` | P |
-| | `session`, `parent`, `toolUseId`, `ts`, `tool` (the native name, which can hold a private MCP server's), `target` in either form (a salted hash, or the first line's program and subcommand, where a word can be anything), and `segments`, `pulls`, and `commits` (a plain word, a private package name, and a sha can each identify private work) | A |
+| `user-prompt` (one per prompt) | `index`, `opened` (`typed` or `command`; absent before CAPTURE 10, when only a typed line opened a prompt), `wallSec`, `thinking`, `turns`, `model`, `efforts`, `usage` | P |
+| | `frame`, `frameId`, `session`, `ts`, `head` (the first 300 characters), `promptFingerprint`, `skills` (a skill's name can be private) | A |
+| `tool` (one per tool call) | `n`, `status` (`ok`, `error`, or `none` when no result is in the file; one record per tool-use id), `durationMs`, `harnessVersion`, `side`, `prompt`, `targetBase`, `steps` | P |
+| | `agentType` and `keys` (the input's key names; a private MCP tool's keys name private work), `session`, `parent`, `toolUseId`, `ts`, `tool` (the native name, which can hold a private MCP server's), `target` in either form (a salted hash, or the first line's program and subcommand, where a word can be anything), and `segments`, `pulls`, and `commits` (a plain word, a private package name, and a sha can each identify private work) | A |
 | `error-line` (one per failed result) | `harnessVersion`, `side`, `prompt`, `after` | P |
 | | `session`, `toolUseId`, `tool` (the native name), `ts`, `line` (the first informative line, redacted, not normalized, cut to 1,000 characters) | A |
 | `prompt` (derived, one per prompt) | `kind`, `v`, `rev`, `index`, `wallSec`, class (`cls`), `tools`, `shape`, `errors`, `thinking`, `sideTools`, `turns`, `model`, `efforts`, `usage`, `recovery`, `explore`, `act`, and `bigrams` (the motif vector) | P |
-| | `session`, `head` (the first 300 characters, redacted), `ts`, `promptFingerprint` (`contextFingerprint` on this derived record), `skills`, and the outcome signals `verify`, `stopped`, `commits`, and `redo` (below) | A |
+| | `session`, `frame` (the joined frame; its fields pool only as cells), `head` (the first 300 characters, redacted), `ts`, `promptFingerprint` (`contextFingerprint` on this derived record), `skills`, and the outcome signals `verify`, `stopped`, `commits`, and `redo` (below) | A |
 | `error` (derived, one per error) | `kind`, `v`, `rev`, `tool`, `harnessVersion`, `editFollowed`, `cls`, `prompt`, `next` (tool names), episode `outcome` and `calls` | P |
 | | `session`, `agent` (the subagent transcript id, a join id), `toolUseId` (a join id), `ts`, `sig` (redacted at capture, normalized at derive), `example` (160 characters) | A |
 | store files | `salt`, `state.json`, `raw/`, `hook-index.json` `projects` keys (folder slugs), `mcp-calls.jsonl` `cwd` (the server's working directory, unhashed) | L |
@@ -168,7 +175,7 @@ line and at every shell separator, after heredoc and here-string bodies are drop
 ### Frames and steps
 
 CAPTURE 9 gives every call a shared coordinate, so calls compare across harnesses, models, versions, and dates. Nothing here is asked of a
-network or a model: a value outside a closed list reads `<literal>` or is dropped, so these fields stay class P. The lists live in one file,
+network or a model: a value outside a closed list reads `<literal>` or is dropped. `frame` and `frameId` are class A (EXTRACTOR 11): one hash over harness, version, model, effort, day, platform, shell, and stack is an identifier that links rows, so only the frame's separate fields are to pool, each as a cell under its own rule (the projection functions ship now; the deposit skeleton keeps the joined frame until the next pool brief). The lists live in one file,
 `src/sessions/public-vocabulary.ts`, and default to `<literal>` when unsure.
 
 A `frame` sits on each prompt, and on the session for the calls before the first prompt: `{ harness, harnessVersion, model, effort, day, platform,
@@ -190,7 +197,7 @@ subshells, with quoted separators left alone, tied by `seg`). It is nested so `n
 | `cost` | `{ tokens, durationMs }` on the first segment; later segments hold nulls. `tokens` are the response's output tokens shared evenly among its calls. |
 | `parent` | On a subagent's step, the `n` of the call that spawned it, in the transcript its session record names as `spawnedIn` (the main session, or a sibling subagent, since a subagent can spawn another); null when that call is not known. |
 | `edges` | The edges arriving at this step, `{ kind, n, seg }` naming the source: `next` (order within a prompt's line of work), `spawned`, `retried` (same native name and same redacted command or target, after that one failed), and `after-error`. `spawned` needs the subagent's `.meta.json`; `raw/` does not hold that file, so a re-capture takes `spawnedBy` from the log, and a subagent first seen in `raw/` has no such edge. |
-| `frameId` | The frame of the call's prompt. |
+| `frameId` | The frame of the call's prompt. Class A, like the frame it hashes. |
 
 Comparing counts across capture versions misleads: a new version can re-read the same transcript into different rows. Compare within one `cv`.
 
@@ -286,7 +293,7 @@ projected; the value is stored as read (an `unattendedRun` to two decimals). The
 
 | Field | Meaning | Claude Code | Codex | Cursor | Copilot |
 |-------|---------|-------------|-------|--------|---------|
-| `setup.permissionMode` | the mode most of the session ran in; the harness's documented value, else `other` | recorded: `permission-mode` lines and the key on `user` lines | recorded: `turn_context.approval_policy` (`granular` for the object form) | absent | absent |
+| `setup.permissionMode` | the mode most of the session ran in; the harness's documented value, else `other` | recorded: `permission-mode` lines and the key on `user` lines | recorded: `turn_context.approval_policy` (an object form stores its tag: `granular`, or `other` for any other tag) | absent | absent |
 | `setup.plugins` | plugins named by a tool (`mcp__plugin_<plugin>_<server>__<tool>`) offered, loaded, or called; read for Claude Code only, from the stored tool name, so a plugin named like a secret reads as none, and a name holding an `_` reads only up to it (`mcp__plugin_my_plugin_srv__t` stores `my`) | recorded (a floor: a plugin with no MCP tool shows nothing; a `plugin:skill` prefix on `attributionSkill` is not read, since a nested skill carries one too) | absent | absent | absent |
 | `setup.hookCount` | distinct hooks seen firing, by `hookName`, never the command | recorded (a floor): `hook_success`, `hook_additional_context`, and `hook_blocking_error` by `hookName`; a `stop_hook_summary.hookInfos[]` command counts only when no `Stop`-named hook line was seen, since that line and the summary are the same hooks | absent (hook events are not persisted) | absent | absent |
 | `setup.instructionBytes` | bytes of instruction files loaded mid-session, each path once | recorded (a floor): `nested_memory`'s `content.content`; the opening files are in the `api-request-blob` lines capture skips | absent | absent | absent |
@@ -298,7 +305,7 @@ projected; the value is stored as read (an `unattendedRun` to two decimals). The
 | `trust.rejections` | the operator declined a tool call (`The user doesn't want to ...`) | recorded | absent | absent | absent |
 | `trust.denials` | policy refused a call (permission rules, the classifier, or a hook); not the operator | recorded (the first line of a failed result) | absent | absent | absent |
 | `trust.trustEvent` | each stop as `{event, tool, prompt}`; `tool` is null when none was in flight | recorded | interrupts only | absent | absent |
-| `trust.unattendedRun` | minutes (rounded to two decimals) from each human turn to the agent's last line before the next human turn; one per turn | recorded; a turn the harness injects (a task notification, a scheduled task) is not a human turn; a `!` shell command and a prompt that is only an image are; a local command nobody answered and a line the harness wrote (a meta line, a synthetic reply) neither open nor extend a run; a rejection ends the run at the agent's last line before it | recorded | absent | recorded (a prompt marked as an autopilot continuation or an injected skill or agent prompt is not read, so it is not a human turn) |
+| `trust.unattendedRun` | minutes (rounded to two decimals) from each human turn to the agent's last line before the next human turn; one per human turn that has a usable time | recorded; a turn the harness injects (a task notification, a scheduled task) is not a human turn; a `!` shell command and a prompt that is only an image are; a local command nobody answered and a line the harness wrote (a meta line, a synthetic reply) neither open nor extend a run; a rejection ends the run at the agent's last line before it | recorded | absent | recorded (a prompt marked as an autopilot continuation or an injected skill or agent prompt is not read, so it is not a human turn) |
 
 A subagent transcript has no `unattendedRun`: its run is its parent's. `unattendedRun` ends at the agent's last line, so a reply the next morning is not an overnight
 run. A wait on a permission prompt the operator approved counts toward the run: this reader sees no approval time, only the result's. A rejection ends the run at the agent's last line before it, and the agent's work after a rejection is not counted until the next human turn. The last turn of a file runs to the file's last line. A resume's replayed human line is one turn, and a line of a sidechain is not read. A compaction summary is the agent working, not a human turn. Tool names are stored as `tools` stores them (`storedToolName`: an MCP name's server part redacted).

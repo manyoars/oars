@@ -1,12 +1,13 @@
 // Item 4 of the stored form (t813): the bundle is read from the stored `index` cells, never from the ledger plane. These tests delete or ignore the ledger and the contributor records and
 // look for any change in what is served, and count the rows a read touches.
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { VOCAB_VERSION } from '../../cli/src/sessions/pool-wire.js';
 import { sampleSkeleton } from './sample.js';
 import { storedOf } from './stored.js';
 import type { PoolDb } from './http.js';
 import { fieldOf, startPool, stubUser, type TestPool } from './test-pool.js';
 
-const PATH = '/bundle/2.1.314/0';
+const PATH = `/bundle/2.1.314/${VOCAB_VERSION}`;
 
 let pool: TestPool;
 

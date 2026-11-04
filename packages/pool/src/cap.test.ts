@@ -1,12 +1,12 @@
 import { createHash } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { harnessBucket } from '../../cli/src/sessions/cells.js';
-import { verifyBundle } from '../../cli/src/sessions/pool-wire.js';
+import { verifyBundle, VOCAB_VERSION } from '../../cli/src/sessions/pool-wire.js';
 import { sampleSkeleton } from './sample.js';
 import { fieldOf, startPool, stubUser, type TestDb, type TestPool } from './test-pool.js';
 import { isoWeekOf } from './week.js';
 
-const PATH = '/bundle/2.1.314/0';
+const PATH = `/bundle/2.1.314/${VOCAB_VERSION}`;
 
 let pool: TestPool;
 
@@ -65,7 +65,7 @@ describe('fetch_cap: fetches per account per ISO week', () => {
   it('counts per account, not per harness version: a second version is the second fetch', async () => {
     const { token } = await pool.signIn('github', stubUser('2102'));
     expect((await pool.raw(PATH, token)).status).toBe(200);
-    expect((await pool.raw('/bundle/2.2.0/0', token)).status).toBe(429);
+    expect((await pool.raw(`/bundle/2.2.0/${VOCAB_VERSION}`, token)).status).toBe(429);
   });
 
   it('keeps the count per account: another account still has its own fetch', async () => {
@@ -98,7 +98,7 @@ describe('fetch_cap: fetches per account per ISO week', () => {
 
   it('spends nothing on a refusal before the spend: a bad version, a bad vocabulary, no signing key', async () => {
     const { token, account } = await pool.signIn('github', stubUser('2108'));
-    expect((await pool.raw('/bundle/acme/0', token)).status).toBe(400);
+    expect((await pool.raw(`/bundle/acme/${VOCAB_VERSION}`, token)).status).toBe(400);
     expect((await pool.raw('/bundle/2.1.314/9', token)).status).toBe(400);
     expect(await tally(pool, account)).toEqual({ week: null, fetches: 0 });
 
@@ -222,7 +222,7 @@ describe('a 304 spends none', () => {
     const { token } = await pool.signIn('github', stubUser('2304'));
     const etag = etagOf((await pool.raw(PATH, token)).headers);
     const other = await pool.signIn('github', stubUser('2306'));
-    expect((await pool.raw('/bundle/2.2.0/0', other.token, { 'if-none-match': etag })).status).toBe(200);
+    expect((await pool.raw(`/bundle/2.2.0/${VOCAB_VERSION}`, other.token, { 'if-none-match': etag })).status).toBe(200);
     expect((await tally(pool, other.account)).fetches).toBe(1);
   });
 
@@ -275,7 +275,7 @@ describe('the ETag follows the rows', () => {
     try {
       const { token } = await own.signIn('github', stubUser('2507'));
       const one = etagOf((await own.raw(PATH, token)).headers);
-      const two = etagOf((await own.raw('/bundle/2.2.0/0', token)).headers);
+      const two = etagOf((await own.raw(`/bundle/2.2.0/${VOCAB_VERSION}`, token)).headers);
       expect(one).not.toBe(two);
     } finally {
       await own.dispose();
