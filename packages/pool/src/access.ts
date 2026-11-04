@@ -33,6 +33,9 @@ export const batchCounts = (tier: Tier, skeleton: SessionSkeleton, written: numb
   return prompts >= 1 && steps >= 1 && written >= 1;
 };
 
+/** The earliest counting date of an account: one read of the `deposits_counted` index, not a walk over the account's ledger rows. Exported so a test can ask SQLite for its plan. */
+export const EARLIEST_COUNTED = "SELECT MIN(counted_at) AS first FROM deposits WHERE account = ? AND counted_at IS NOT NULL AND tier <> 'none'";
+
 /**
  * The account's access, written to its record when it changes. `standing` is latched: once a counting batch has stood `ledger_days`, nothing can audit it, so the flag stays while
  * the account exists. Before that it is `pending` while any counting batch is not `none`, and clears when none is left. A resend that still counts keeps a batch's first `counted_at`, so a
@@ -41,7 +44,7 @@ export const batchCounts = (tier: Tier, skeleton: SessionSkeleton, written: numb
 export const accessOf = async (env: Env, account: string, now: number): Promise<Access | null> => {
   const held = fieldOf(await env.DB.prepare('SELECT access FROM accounts WHERE id = ?').bind(account).first(), 'access');
   if (held === 'standing') return 'standing';
-  const first = fieldOf(await env.DB.prepare("SELECT MIN(counted_at) AS first FROM deposits WHERE account = ? AND counted_at IS NOT NULL AND tier <> 'none'").bind(account).first(), 'first');
+  const first = fieldOf(await env.DB.prepare(EARLIEST_COUNTED).bind(account).first(), 'first');
   const access: Access | null = typeof first !== 'number' ? null : first <= now - LEDGER_DAYS * DAY_MS ? 'standing' : 'pending';
   if (access !== (held ?? null)) await env.DB.prepare('UPDATE accounts SET access = ? WHERE id = ?').bind(access, account).run();
   return access;
