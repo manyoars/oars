@@ -1754,7 +1754,11 @@ export const captureSession = (input: ExtractInput): Capture => {
           const { call, at, plan } = answered;
           if (at !== undefined && lineSeconds !== undefined && o.noDuration !== true) call.durationMs = Math.round((lineSeconds - at) * 1000);
           call.status = failed ? 'error' : 'ok';
-          if (failed) call.errorCode = errorCodeOf(text);
+          if (failed) {
+            call.errorCode = errorCodeOf(text);
+            // An edit that did not apply changed no dependency: what its input showed is not what the file holds.
+            delete call.manifest;
+          }
           const read = manifestReads.get(str(block.tool_use_id) ?? '');
           const seen = read === undefined || failed ? [] : manifestNames(read, text, redact);
           if (read !== undefined && seen.length > 0) call.manifest = { file: read, seen, added: [], removed: [] };

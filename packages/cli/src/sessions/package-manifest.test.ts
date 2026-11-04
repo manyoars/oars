@@ -7,11 +7,11 @@ import type { ToolManifest } from './schema.js';
 const line = (value: object): string => JSON.stringify(value);
 
 /** One prompt, one call of `name` with `input`; `result` is the call's output. */
-const manifestOf = (name: string, input: object, result = 'ok'): ToolManifest | undefined => {
+const manifestOf = (name: string, input: object, result = 'ok', isError = false): ToolManifest | undefined => {
   const text = [
     line({ type: 'user', timestamp: '2026-05-29T04:30:00Z', message: { role: 'user', content: 'p' } }),
     line({ type: 'assistant', timestamp: '2026-05-29T04:30:01Z', message: { role: 'assistant', content: [{ type: 'tool_use', id: 't0', name, input }] } }),
-    line({ type: 'user', timestamp: '2026-05-29T04:30:02Z', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 't0', content: result }] } }),
+    line({ type: 'user', timestamp: '2026-05-29T04:30:02Z', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 't0', content: result, ...(isError ? { is_error: true } : {}) }] } }),
   ].join('\n');
   return captureSession({ text, session: 's', project: 'p', rev: 1, at: 'x', bytes: 1, redact: makeRedactor([]) }).tools[0]?.manifest;
 };
@@ -93,6 +93,44 @@ describe('packages from manifests', () => {
   it('reads the real crate behind a renamed Cargo entry, and no entry that holds a path or a git source', () => {
     const toml = ['[dependencies]', 'alias = { package = "real-crate", version = "1" }', 'local = { path = "../local", version = "1" }', 'remote = { git = "https://example.com/x.git", version = "1" }', 'serde = { version = "1" }'];
     expect(manifestNames('Cargo.toml', toml.join('\n'), makeRedactor([]))).toEqual(['crates:real-crate', 'crates:serde']);
+  });
+
+  it('reads a Cargo dependency written as its own table by the same source rules as the inline form', () => {
+    const names = (toml: readonly string[]): string[] => manifestNames('Cargo.toml', toml.join('\n'), makeRedactor([]));
+    expect(names(['[dependencies.local]', 'path = "../local"', 'version = "1"'])).toEqual([]);
+    expect(names(['[dependencies.remote]', 'git = "https://example.com/x.git"', 'version = "1"'])).toEqual([]);
+    expect(names(['[dependencies.alias]', 'package = "real-crate"', 'version = "1"'])).toEqual(['crates:real-crate']);
+    expect(names(['[dependencies.rand]', 'version = "0.8"'])).toEqual(['crates:rand']);
+    expect(names(['[dependencies.rand]', 'version = "0.8"', '[dependencies.local]', 'path = "../local"'])).toEqual(['crates:rand']);
+  });
+
+  it('keeps the dependency state through an array-of-tables header no further than the header', () => {
+    const toml = ['[dependencies]', 'serde = "1.0"', '[[bin]]', 'version = "1.0"', 'name = "tool"'];
+    expect(manifestNames('Cargo.toml', toml.join('\n'), makeRedactor([]))).toEqual(['crates:serde']);
+  });
+
+  it('reads a Cargo entry that ends in a comment', () => {
+    expect(manifestNames('Cargo.toml', ['[dependencies]', 'serde = "1.0" # pinned', 'tokio = { version = "1" } # async'].join('\n'), makeRedactor([]))).toEqual(['crates:serde', 'crates:tokio']);
+  });
+
+  it('reads no bare archive that carries an environment marker', () => {
+    expect(manifestNames('requirements.txt', ['dist.tar.gz ; python_version<"3"', 'a.whl;x', 'requests ; python_version>"3"'].join('\n'), makeRedactor([]))).toEqual(['pypi:requests']);
+  });
+
+  it('reads no top-level name, description, or main of a package.json as a dependency', () => {
+    const fragment = ['"name": "3d-viewer",', '"description": "3 ways",', '"main": "1.js",'].join('\n');
+    expect(manifestOf('Edit', { file_path: '/w/package.json', old_string: '', new_string: fragment })).toBeUndefined();
+  });
+
+  it('does not count a manifest under a cargo registry, venv, or bower folder, in any case', () => {
+    const paths = ['/h/.cargo/registry/src/x/Cargo.toml', '/w/venv/lib/x/requirements.txt', '/w/bower_components/x/package.json', 'C:\\w\\Vendor\\x\\package.json', '/w/Node_Modules/x/package.json'];
+    expect(paths.map(manifestFileOf)).toEqual([null, null, null, null, null]);
+  });
+
+  it('stores no manifest for a call that failed', () => {
+    const edit = { file_path: '/w/package.json', old_string: '"left-pad": "^1.3.0",', new_string: '"is-odd": "^3.0.1",' };
+    expect(manifestOf('Edit', edit)).toEqual({ file: 'package.json', seen: [], added: ['npm:is-odd'], removed: ['npm:left-pad'] });
+    expect(manifestOf('Edit', edit, 'String to replace not found in file', true)).toBeUndefined();
   });
 
   it('reads no config key of a headerless fragment as a dependency', () => {
