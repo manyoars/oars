@@ -1180,12 +1180,12 @@ const MCP_TAIL_MAX = 192;
 /**
  * The pattern rules of the redactor that can match across a `_`, and so across half of a separator: a class that allows `_` (`sk-`, `AIza`,
  * `github_pat_`, `eyJ`), and a NAME=value rule, whose value takes anything. `sk-` is the shape the rule is for (`sk-ant-`, 16 characters of the
- * class before any `_`, or a capital and a digit in the first run), so `sk-learn` and `task-sk-tools` are not taken for a key.
+ * class before any `_`, or a capital and a digit anywhere in the slice), so `sk-learn` and `task-sk-tools` are not taken for a key.
  */
 const UNDERSCORE_TOKEN = /\b(?:sk-(?:ant-|[A-Za-z0-9-]{16}|(?=[\w-]*[A-Z])(?=[\w-]*\d))|AIza|github_pat_|eyJ)|[=:]/;
 
 /** The pattern rules a Cursor name can hold across a `_`: a prefix that ends in `_`, plus the `UNDERSCORE_TOKEN` rules, since it has no `__` to cut at. */
-const CURSOR_TOKEN = /\b(?:sk-(?:ant-|[A-Za-z0-9-]{16}|(?=[\w-]*[A-Z])(?=[\w-]*\d))|[srp]k_|AIza|github_pat_|gh[pousr]_|whsec_|eyJ)|[=:]/;
+const CURSOR_TOKEN = /\b(?:sk-(?:ant-|[A-Za-z0-9-]{16}|(?=[\w-]*[A-Z])(?=[\w-]*\d))|[srp]k_(?:live|test)_|AIza|github_pat_|gh[pousr]_|whsec_|eyJ)|[=:]/;
 
 /**
  * What follows `mcp__` (or the Cursor `mcp_`) with every secret masked. A token is matched only at a word boundary and `_` is a word character, so
@@ -1197,7 +1197,9 @@ const CURSOR_TOKEN = /\b(?:sk-(?:ant-|[A-Za-z0-9-]{16}|(?=[\w-]*[A-Z])(?=[\w-]*\
  * harmless parts (`Context7__resolve-library-id`) as one random token, or eats the separator, and the server loses its name. A Cursor name has
  * no `__` to tell server from tool, so any slice that holds a `_` is run only for a `CURSOR_TOKEN` rule. Limits, each on the side of the secret
  * or an accepted miss: a public name that starts like a pattern rule (`sk-ant-tools`, `github_pat_helper`) loses its server, since it cannot be
- * told from a token that holds `__`; a tool part of 24 characters or more with a capital and a digit is masked, since it cannot be told from a
+ * told from a token that holds `__` (`sk-learn__PCA2Transform` and `task-sk-tools__Get2Items` are masked, since a tool part supplies the capital
+ * and the digit; an `sk-` key with neither that holds a `_` before 16 characters, `mcp_sk-abc_defghijklmnopqrstuvwxyz_find`, is stored raw, since it
+ * cannot be told from `mcp_sk-learn_fit_transform`); a tool part of 24 characters or more with a capital and a digit is masked, since it cannot be told from a
  * token; and a random token with no pattern rule whose every part is under 24 characters (`TOKEN`'s minimum) cannot be told from two ordinary
  * parts and is not found.
  */
@@ -1214,6 +1216,8 @@ const redactedMcpTail = (tail: string, redact: Redactor, cursor: boolean): strin
       const slice = out.slice(start, end);
       if (/__|^_|_$/.test(slice) && !UNDERSCORE_TOKEN.test(slice)) continue;
       if (cursor && slice.includes('_') && !CURSOR_TOKEN.test(slice)) continue;
+      // A Slack token stops at a `_`, but the redactor backtracks to its `-`, so a slice that runs past the `_` would keep the tail.
+      if (/\bxox[abprs]-[A-Za-z0-9-]*_/.test(slice)) continue;
       const masked = redact(slice);
       if (masked === slice) continue;
       out = out.slice(0, start) + masked + out.slice(end);

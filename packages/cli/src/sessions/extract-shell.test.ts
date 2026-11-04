@@ -265,6 +265,9 @@ describe('MCP tool names: a token behind an underscore or in a later part is red
     const stored = JSON.stringify(capturedFor(toolName));
     for (const part of parts) expect(stored).not.toContain(part);
   });
+  it('reads a name-and-value secret as the name and a masked value', () => {
+    expect(storedToolName('mcp__api_key=abcd1234__find', redact)).toBe('mcp__api_key=<secret>');
+  });
   it('reads a name past the cap as one masked value rather than slicing it', () => {
     const long = `mcp__${'a_'.repeat(100)}find`;
     expect(storedToolName(long, redact)).toBe('mcp__<oversized>');
@@ -298,6 +301,9 @@ describe('MCP tool names: a token behind an underscore or in a later part is red
     ['mcp_x_Server2_listItemsByWorkspaceId', 'mcp_x_Server2_listItemsByWorkspaceId', ''],
     ['mcp_aws_s3_ListObjectsV2CommandFoo', 'mcp_aws_s3_ListObjectsV2CommandFoo', ''],
     ['mcp_sk-learn_fit_transform', 'mcp_sk-learn_fit_transform', ''],
+    ['mcp_pk_Context7_resolve-library-id', 'mcp_pk_Context7_resolve-library-id', ''],
+    ['mcp_rk_tools_ListObjectsV2Command', 'mcp_rk_tools_ListObjectsV2Command', ''],
+    ['mcp_x_sk_Context7_resolve-library-id', 'mcp_x_sk_Context7_resolve-library-id', ''],
     ['mcp_task-sk-tools_resolve-library-id', 'mcp_task-sk-tools_resolve-library-id', ''],
   ])('reads %s as main reads it: a lone underscore beside a separator does not join two harmless parts', (toolName, stored, server) => {
     expect(storedToolName(toolName, redact)).toBe(stored);
@@ -322,6 +328,8 @@ describe('MCP tool names: a token behind an underscore or in a later part is red
       expect(storedToolName(name, redact)).toMatch(/^mcp__<secret>/);
       expect(pullsOfTool(name, redact)).toEqual([]);
     }
+    for (const name of ['mcp__sk-learn__PCA2Transform', 'mcp__task-sk-tools__Get2Items']) expect(storedToolName(name, redact)).toMatch(/<secret>/);
+    for (const name of ['mcp_sk-abc_defghijklmnopqrstuvwxyz_find', 'mcp__sk-abc__defghijklmnopqrstuvwxyz__find']) expect(storedToolName(name, redact)).toBe(name);
     expect(storedToolName('mcp__aws__ListObjectsV2CommandFooBar', redact)).toBe('mcp__aws__<secret>');
     expect(pullsOfTool('mcp__aws__ListObjectsV2CommandFooBar', redact)).toEqual([{ ecosystem: 'mcp', name: 'aws', version: null }]);
   });

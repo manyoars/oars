@@ -47,7 +47,7 @@
 // to 1,000 characters in the `error-line` record, 160 characters in a derived example), TLDR lines (400), Confidence lines (120), and,
 // with no length limit, WebSearch queries, fetched URLs, file paths, and git branch names. Also kept as written, not redacted: the
 // project folder slug (it holds the username and directory names; the log stays local), skill names, effort values, model names,
-// harness versions, and tool names (including MCP server names). `redact` masks secrets by pattern and entropy, emails, and the
+// harness versions, and tool names (an MCP name's part after its prefix is redacted). `redact` masks secrets by pattern and entropy, emails, and the
 // organization domains the operator names. The skeleton holds hashes only.
 
 import type { CanonicalAction } from './actions.js';
