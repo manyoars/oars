@@ -80,7 +80,7 @@ const STEP = { status: 'ok', tokens: 3, ms: 4, remainingTokens: 2, agentType: nu
 const REAL = {
   format: SKELETON_FORMAT,
   id: '0123456789abcdef',
-  deltas: [],
+  deltas: [{ deltaKind: 'removed', field: 'package', name: 'typescript', registry: 'npm', metric: 'callsPerSession', change: -2 }],
   timingPrint: null,
   transcripts: [
     {

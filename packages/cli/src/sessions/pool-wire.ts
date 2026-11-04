@@ -108,8 +108,8 @@ export interface SessionSkeleton {
   transcripts: SkeletonTranscript[];
   /** One for the batch: a hash of the main transcript's non-null call durations in call order, only with `MIN_TIMED_CALLS` of them; a subagent's calls never join it. */
   timingPrint: string | null;
-  /** The batch's client-built delta entries (Section 2, "Deltas"). Empty until the client builds them; a non-empty list is refused. */
-  deltas: never[];
+  /** The batch's client-built delta entries (Section 2, "Deltas"): changes between the client's own before and after windows, each carried once, by the batch of the session that filled the after window. */
+  deltas: DeltaEntry[];
 }
 
 /** One main session and the subagents it spawned, as the local store holds them. */
@@ -306,7 +306,7 @@ export type Print = (durations: readonly number[]) => string;
  * The skeleton of a session; null when any record of it was captured before steps and frames, or a transcript of it has no root, which holds no closed reading to send. The batch holds the main
  * transcript's run first, then each subagent's as its own run; its `id` is the main session's, and its one `timingPrint` is over the main transcript's calls alone.
  */
-export const skeletonOf = (records: SessionRecords, id: string, read: ShellReader, print: Print): SessionSkeleton | null => {
+export const skeletonOf = (records: SessionRecords, id: string, read: ShellReader, print: Print, deltas: readonly DeltaEntry[] = []): SessionSkeleton | null => {
   const mainTools = byCall(records.transcripts[0]?.tools ?? []);
   // A subagent's step names the call that spawned it by that call's `n` in the main run, which the skeleton holds as the call's position.
   const spawners = new Map(mainTools.map(({ n }, position) => [n, position]));
@@ -330,7 +330,7 @@ export const skeletonOf = (records: SessionRecords, id: string, read: ShellReade
     transcripts.push(transcript);
   }
   const durations = mainTools.flatMap(({ durationMs }) => (durationMs === null ? [] : [durationMs]));
-  return { format: SKELETON_FORMAT, id, transcripts, timingPrint: durations.length < MIN_TIMED_CALLS ? null : print(durations), deltas: [] };
+  return { format: SKELETON_FORMAT, id, transcripts, timingPrint: durations.length < MIN_TIMED_CALLS ? null : print(durations), deltas: [...deltas] };
 };
 
 /** A harness version a bundle can be asked for: public, so the request carries nothing private. The admitted list replaces this shape rule when it ships. */
@@ -613,6 +613,35 @@ const parseTranscript = (value: unknown, at: string): SkeletonTranscript => {
   };
 };
 
+const DELTA_FIELDS = ['plugin', 'package', 'permissionMode', 'effort'] as const satisfies readonly DeltaField[];
+/** The kinds each field can take: a plugin comes or goes, a package only goes (an addition is adoption, which `pool` reads from the calls), and a mode or an effort changes. */
+const KINDS_OF = { plugin: ['added', 'removed'], package: ['removed'], permissionMode: ['changed'], effort: ['changed'] } as const satisfies { readonly [field in DeltaField]: readonly DeltaKind[] };
+/** The one metric each field's change is measured in, and the bucket edges that metric is held to. */
+const METRIC_OF = { plugin: 'callsPerSession', package: 'callsPerSession', permissionMode: 'callsPerSession', effort: 'thinking' } as const satisfies { readonly [field in DeltaField]: DeltaMetric };
+const METRIC_EDGES = { callsPerSession: 'count', thinking: 'tokens' } as const satisfies { readonly [metric in DeltaMetric]: BucketKind };
+const NO_NAME: ReadonlySet<string> = new Set();
+
+const nullOnly = (value: unknown, at: string): null => {
+  if (value !== null) throw new Refused(at, 'outside the vocabulary');
+  return null;
+};
+
+/**
+ * The entry of a delta, held to its field's own row. A plugin has no registry to pass, so only the word `private` stands for one; a package is a public name with its registry, or `private` with none; a mode
+ * and an effort are named by their field and carry no name. The change is a signed bucket of the field's metric.
+ */
+const parseDelta = (value: unknown, at: string): DeltaEntry => {
+  const raw = fieldsOf(value, at, ['deltaKind', 'field', 'name', 'registry', 'metric', 'change']);
+  const field = oneOf(DELTA_FIELDS, raw.field, under(at, 'field'));
+  const deltaKind = oneOf(KINDS_OF[field], raw.deltaKind, under(at, 'deltaKind'));
+  const metric = oneOf([METRIC_OF[field]], raw.metric, under(at, 'metric'));
+  const name = field === 'plugin' || field === 'package' ? inSet(field === 'package' ? PUBLIC_PACKAGES : NO_NAME, raw.name, under(at, 'name')) : nullOnly(raw.name, under(at, 'name'));
+  const registry = field === 'package' && name !== PRIVATE ? oneOf(PACKAGE_REGISTRIES, raw.registry, under(at, 'registry')) : nullOnly(raw.registry, under(at, 'registry'));
+  const change = raw.change;
+  if (typeof change !== 'number' || !Number.isInteger(change) || Math.abs(change) > EDGES[METRIC_EDGES[metric]].length) throw new Refused(under(at, 'change'), 'not a signed bucket');
+  return { deltaKind, field, name, registry, metric, change };
+};
+
 /** The skeleton in `value`, rebuilt from the fields read; else the first field that is not closed vocabulary, and why. */
 export const parseSkeleton = (value: unknown): { ok: true; skeleton: SessionSkeleton } | Refusal => {
   try {
@@ -622,7 +651,7 @@ export const parseSkeleton = (value: unknown): { ok: true; skeleton: SessionSkel
     if (raw.format !== SKELETON_FORMAT) throw new Refused('format', 'not a format this version reads');
     const id = textOf(raw.id, 'id');
     if (!ID.test(id)) throw new Refused('id', 'not a hash');
-    if (!Array.isArray(raw.deltas) || raw.deltas.length > 0) throw new Refused('deltas', 'not empty: a delta entry is not read yet');
+    const deltas = listOf(raw.deltas, 'deltas', parseDelta);
     const transcripts = listOf(raw.transcripts, 'transcripts', parseTranscript);
     if (transcripts.length === 0) throw new Refused('transcripts', 'empty');
     // A counting batch is what lifts the fetch cap, so a deposit has to hold something to derive from.
@@ -655,7 +684,7 @@ export const parseSkeleton = (value: unknown): { ok: true; skeleton: SessionSkel
         });
       });
     });
-    return { ok: true, skeleton: { format: SKELETON_FORMAT, id, transcripts, timingPrint, deltas: [] } };
+    return { ok: true, skeleton: { format: SKELETON_FORMAT, id, transcripts, timingPrint, deltas } };
   } catch (error) {
     if (error instanceof Refused) return { ok: false, field: error.field, reason: error.reason };
     throw error;
