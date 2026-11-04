@@ -46,7 +46,6 @@ interface StubProvider {
   approve: (deviceCode: string, user: StubUser) => void;
   /** An access token the provider would hand this user, with no device flow in front of it: what the CLI sends the pool at login. */
   issue: (user: StubUser) => string;
-  deny: (deviceCode: string) => void;
   calls: StubCall[];
   /** URLs answered with an HTML 502, the way a provider's outage looks. */
   html: Set<string>;
@@ -55,9 +54,9 @@ interface StubProvider {
   outbound: (request: StubRequest) => Promise<StubResponse>;
 }
 
-/** GitHub and Google as the Worker sees them. Google answers a pending poll with 428 and names its URL differently, which is why both are stubbed apart. */
+/** GitHub and Google as the Worker and the CLI's login see them: the Worker reaches only the profile routes, and the device and token routes serve the full-run test, which plays the client. Google answers a pending poll with 428 and names its URL differently, which is why both are stubbed apart. */
 const stubProvider = (): StubProvider => {
-  const users = new Map<string, StubUser | 'denied' | null>();
+  const users = new Map<string, StubUser | null>();
   const calls: StubCall[] = [];
   const html = new Set<string>();
   const forbidden = new Set<string>();
@@ -72,7 +71,6 @@ const stubProvider = (): StubProvider => {
     const code = form.get('device_code') ?? '';
     const user = users.get(code);
     if (user === undefined) return json({ error: 'expired_token' }, 400);
-    if (user === 'denied') return json({ error: 'access_denied' }, 403);
     if (user === null) return json({ error: 'authorization_pending' }, pendingStatus);
     return json({ access_token: `access-${code}`, token_type: 'bearer' });
   };
@@ -99,7 +97,7 @@ const stubProvider = (): StubProvider => {
     users.set(code, user);
     return `access-${code}`;
   };
-  return { approve: (code, user) => users.set(code, user), issue, deny: (code) => users.set(code, 'denied'), calls, html, forbidden, outbound };
+  return { approve: (code, user) => users.set(code, user), issue, calls, html, forbidden, outbound };
 };
 
 export interface Answer {

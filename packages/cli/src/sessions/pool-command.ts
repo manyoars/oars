@@ -1,5 +1,4 @@
-// `oars pool` (t758): the only part of the sessions code that talks to a remote. The server is always named, by flag or environment, so nothing leaves on a default. Sign-in is the
-// pool's own device flow and reads no harness token; a session leaves only as a closed-vocabulary skeleton, and only after the V15 check found it clean. Local capture, recall,
+// `oars pool` (t758): the only part of the sessions code that talks to a remote. The server is always named, by flag or environment, so nothing leaves on a default. Sign-in runs the provider's device flow here and reads no harness token; a session leaves only as a closed-vocabulary skeleton, and only after the V15 check found it clean. Local capture, recall,
 // and reads never come through here.
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
@@ -218,6 +217,12 @@ interface Device {
 const deviceOf = ({ body }: Reply): Device => {
   // Google names the link `verification_url`, against the RFC's `verification_uri`.
   const [deviceCode, userCode, verificationUri] = isObject(body) ? [textIn(body, 'device_code'), textIn(body, 'user_code'), textIn(body, 'verification_uri') ?? textIn(body, 'verification_url')] : [];
+  // A provider that refuses here (GitHub's `device_flow_disabled`, Google's `invalid_client`) is how an unfinished OAuth app shows, so its word goes to the operator.
+  const refusal = isObject(body) ? textIn(body, 'error') : undefined;
+  if (refusal !== undefined) {
+    const title = `The provider refused the sign-in: ${refusal}.`;
+    throw new CliError(title, ExitCode.AUTH, LOGIN, { code: 'login_refused', title });
+  }
   // `openBrowser` parses the link before it returns its promise, so one that cannot parse has to stop here or it throws past the login's catch.
   if (!isObject(body) || deviceCode === undefined || userCode === undefined || verificationUri === undefined || !URL.canParse(verificationUri)) throw new CliError('The provider did not start a sign-in.', ExitCode.UNEXPECTED, LOGIN);
   // An interval of 0 or below would poll with no wait and never run out the clock, so it takes the default like a missing one.

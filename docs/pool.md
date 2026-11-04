@@ -68,7 +68,7 @@ A live read's baseline is not traceable through lineage: the floor counts only t
 
 `POST /v1/login` is unauthenticated and, in the Worker, unlimited: the rate-limit rule in deploy step 6 is what bounds it, so the pool must not be deployed without that rule.
 
-The pool does not check that the provider token it is sent was issued to the Many Oars client ID. A token any other app holds for a person would sign in as that person. This is not acceptable once the pool opens, and it closes before deposits do (register A54).
+The pool does not check that the provider token it is sent was issued to the Many Oars client ID, so a token any other app holds for a person would sign in as that person; that is not acceptable once the pool opens, and it closes before deposits open.
 
 ## Deploy steps
 
