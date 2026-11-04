@@ -2,6 +2,10 @@
 
 All notable changes to `@manyoars/oars`. Versions follow semver; a release is the tag `cli-v<version>`.
 
+## Unreleased
+
+- `oars keys create|list|revoke` manages your API keys. `keys create --workload <id>` mints a key limited to one workload (authorities `AGENT_OPERATE` and `AGENT_READ` only), so a scheduled agent can change its own schedule without being able to spend or reach another workload. The `make-me-money` skill shows the recipe.
+
 ## 0.3.0
 
 - `oars sessions` keeps a local, deterministic memory of your own Claude Code sessions (and, with `--allow cursor`, Cursor sessions): `deposit`, `recall`, `books`, `measure`, `verify`, and an MCP server (`recall --mcp`), plus `gold sample`, `gold arms`, and `gold score`. oars makes no model call and no network call, except `gold arms`, which sends redacted text through your own Claude subscription.

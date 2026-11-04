@@ -56,7 +56,7 @@ describe('skills/make-me-money/SKILL.md', () => {
     const named = namedCommands(skill);
     const registered = registeredCommands(cli);
     for (const command of named) expect(registered, `cli.ts has no command "${command}"`).toContain(command);
-    expect(new Set(named)).toEqual(new Set(['login', 'templates', 'deploy', 'status', 'test-charge']));
+    expect(new Set(named)).toEqual(new Set(['login', 'templates', 'deploy', 'status', 'test-charge', 'keys']));
   });
 
   it('catches a command name the CLI does not have', () => {
@@ -67,7 +67,7 @@ describe('skills/make-me-money/SKILL.md', () => {
 
   it('names only flags the CLI declares', () => {
     const flags = namedFlags(skill);
-    expect(flags).toEqual(expect.arrayContaining(['--no-browser', '--template', '--no-start', '--secret-from-env', '--price', '--json', '--idempotency-key']));
+    expect(flags).toEqual(expect.arrayContaining(['--no-browser', '--template', '--no-start', '--secret-from-env', '--price', '--json', '--idempotency-key', '--workload']));
     for (const flag of flags) expect(declares(cli, flag), `cli.ts declares no ${flag}`).toBe(true);
   });
 

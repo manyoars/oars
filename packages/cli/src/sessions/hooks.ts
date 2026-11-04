@@ -9,6 +9,8 @@ import { SOURCES, sourceLabel } from './sources.js';
 import { signatureOf } from './extract.js';
 import { appendHookCall } from './hook-calls.js';
 import { contextBlock, readIndex } from './hook-index.js';
+import { pushRecall } from './recall-push.js';
+import { toolShapeId } from './recall-reads.js';
 import { makeRedactor } from './redact.js';
 import type { HookCall } from './schema.js';
 import { errorLine, inputKey, logStep, newContext, runDeposit, stampKey, tryLog, type StepReport } from './steps.js';
@@ -17,7 +19,7 @@ import { recordSurvival } from './survival.js';
 
 export type HookEvent = HookCall['event'];
 
-export const HOOK_EVENTS: readonly HookEvent[] = ['session-start', 'post-tool', 'stop', 'nightly'];
+export const HOOK_EVENTS: readonly HookEvent[] = ['session-start', 'pre-tool', 'post-tool', 'stop', 'nightly'];
 
 const TOP = 5;
 const MAX_CHARS = 1200;
@@ -56,6 +58,23 @@ const sessionStart = async (runtime: SessionsRuntime, input: Input): Promise<Out
   const index = cwd === undefined ? undefined : await readIndex(runtime.storeDir);
   const block = index === undefined || cwd === undefined ? undefined : contextBlock(index, { cwd, top: TOP, maxChars: MAX_CHARS });
   return block === undefined ? { hit: false, queried: index !== undefined } : { output: additional('SessionStart', block), hit: true, queried: true };
+};
+
+const inputKeys = (input: Input): string[] => (isRecord(input.tool_input) ? Object.keys(input.tool_input) : []);
+
+/**
+ * The fit push. The only output this hook writes is `additionalContext`: it holds no permission decision and changes no input, so whatever it does, the call runs as asked.
+ * A call with no read says nothing and logs no recall step: that is nearly every call, and nobody asked. A held push is a hit, for what it would have shown, with no output.
+ */
+const preTool = async (runtime: SessionsRuntime, input: Input, now: () => number): Promise<Outcome> => {
+  const sid = str(input.session_id);
+  const tool = str(input.tool_name);
+  if (sid === undefined || tool === undefined) return { hit: false, queried: false };
+  const index = await readIndex(runtime.storeDir);
+  if (index === undefined) return { hit: false, queried: false };
+  const recall = await pushRecall({ storeDir: runtime.storeDir, sid, tool, keys: inputKeys(input), transcript: str(input.transcript_path), platform: process.platform, at: new Date(now()).toISOString(), index });
+  if (recall === undefined) return { hit: false, queried: false };
+  return recall.arm === 'shown' ? { output: additional('PreToolUse', recall.answer.rendered), hit: true, queried: true } : { hit: true, queried: true };
 };
 
 /** A failed tool arrives as PostToolUseFailure with the text in `error` (Bash and PowerShell start it with `Exit code N`); a PostToolUse response that starts that way is read too. */
@@ -107,13 +126,14 @@ const nightly = async (runtime: SessionsRuntime, now: () => number): Promise<Out
   return survival === null ? { hit: true, queried: false, error: await errorLine(runtime.storeDir, 'Commit survival not read this run.') } : { hit: true, queried: false };
 };
 
-/** What a lookup hook looks up, as its recall key (spec 4.2 names none for a lookup): the cwd for session-start, the failure's signature for post-tool; null when it had nothing to look up. */
+/** What a lookup hook looks up, as its recall key (spec 4.2 names none for a lookup): the cwd for session-start, the failure's signature for post-tool, the call's shape for pre-tool; null when it had nothing to look up. */
 const lookupKey = (event: HookEvent, input: Input): string | null => {
   if (event === 'session-start') {
     const cwd = str(input.cwd);
     return cwd === undefined ? null : stampKey(event, cwd);
   }
   const tool = str(input.tool_name);
+  if (event === 'pre-tool') return tool === undefined ? null : stampKey(event, toolShapeId(tool, inputKeys(input)));
   const text = failureText(input);
   return event === 'post-tool' && tool !== undefined && text !== undefined ? stampKey(event, signatureOf(tool, text, makeRedactor([]))) : null;
 };
@@ -148,6 +168,7 @@ export const runHook = async (event: HookEvent, stdin: string, runtime: Sessions
     key = lookupKey(event, input);
     session = str(input.session_id) ?? null;
     if (event === 'session-start') outcome = await sessionStart(runtime, input);
+    else if (event === 'pre-tool') outcome = await preTool(runtime, input, now);
     else if (event === 'post-tool') outcome = await postTool(runtime, input);
     else if (event === 'stop') outcome = await stop(runtime, input, now);
     else outcome = await nightly(runtime, now);

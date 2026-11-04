@@ -2,8 +2,9 @@
 // stay the primary record, so a cell file can be dropped and rebuilt and any later derivation can run over old data. Nothing here reads raw.
 
 import { closedFrame, utcDay } from './frame.js';
-import { classMotif, motifsOf, stepsOfCall, type CountedStep, type Motif } from './motif.js';
-import { cellRef, contentHash, METHODS } from './read.js';
+import { classMotif, motifsOf, stepsOfCall, type Motif } from './motif.js';
+import { CALL_SHAPE_METHOD, cellRef, contentHash, METHODS } from './read.js';
+import { NO_RECALLS, type RecallGraph } from './recall-consequence.js';
 import { EXTRACTOR_VERSION, harnessOf, type ErrorObservation, type Frame, type Harness, type PromptObservation, type SessionObservation, type ToolObservation } from './schema.js';
 import type { Store } from './store.js';
 
@@ -24,7 +25,7 @@ export interface Cell {
   /** Summed over each window's steps; a `class` cell: the prompts' whole usage. */
   tokens: number;
   durationMs: number;
-  /** Whether these counts sit inside a recall's consequence window. False everywhere and not in the key here: t757 writes consequence windows and adds it to the key, so one motif, bucket, and day then splits in two. */
+  /** Whether these counts sit inside a shown recall's consequence window, wholly or in part. It is part of the cell's key, so a motif's exposed and unexposed counts stay apart. */
   exposed: boolean;
 }
 
@@ -75,9 +76,10 @@ interface Tally {
   failed: number;
   tokens: number;
   durationMs: number;
+  exposed: boolean;
 }
 
-const newTally = (motifId: string, frameBucket: string, day: string): Tally => ({ motifId, frameBucket, day, sessions: new Set(), ok: 0, failed: 0, tokens: 0, durationMs: 0 });
+const newTally = (motifId: string, frameBucket: string, day: string, exposed: boolean): Tally => ({ motifId, frameBucket, day, sessions: new Set(), ok: 0, failed: 0, tokens: 0, durationMs: 0, exposed });
 
 const compare = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
 
@@ -111,17 +113,17 @@ const linesOf = (tools: readonly ToolObservation[]): ToolObservation[][] => {
   return [...lines.values()].map((line) => line.sort((a, b) => a.n - b.n));
 };
 
-export const deriveCells = (store: Store): CellSet => {
+export const deriveCells = (store: Store, graph: RecallGraph = NO_RECALLS): CellSet => {
   const tallies = new Map<string, Tally>();
   const motifs = new Map<string, Motif>();
-  const tallyOf = (motif: Motif, frame: Frame): Tally => {
+  const tallyOf = (motif: Motif, frame: Frame, exposed: boolean): Tally => {
     motifs.set(motif.motifId, motif);
     const frameBucket = frameBucketOf(frame);
     const day = frame.day ?? UNKNOWN;
-    const key = `${motif.motifId}/${frameBucket}/${day}`;
+    const key = `${motif.motifId}/${frameBucket}/${day}/${String(exposed)}`;
     const found = tallies.get(key);
     if (found !== undefined) return found;
-    const fresh = newTally(motif.motifId, frameBucket, day);
+    const fresh = newTally(motif.motifId, frameBucket, day, exposed);
     tallies.set(key, fresh);
     return fresh;
   };
@@ -140,10 +142,11 @@ export const deriveCells = (store: Store): CellSet => {
       prompt === undefined
         ? (session.frame ?? oldFrame({ harness, version, model: mostUsedModel(session.models), effort: null, ts: first.ts ?? session.tsFirst, platform: session.env.os }))
         : framedPrompt(prompt, harness, version, first.ts, session.env.os);
-    const steps: CountedStep[] = line.flatMap((tool) => stepsOfCall(tool, harness));
+    const placed = line.flatMap((tool) => graph.place(tool, stepsOfCall(tool, harness)));
+    const steps = placed.map(({ step }) => step);
     for (const { motif, start } of motifsOf(steps)) {
       const window = steps.slice(start, start + motif.steps.length);
-      const tally = tallyOf(motif, frame);
+      const tally = tallyOf(motif, frame, placed.slice(start, start + motif.steps.length).some(({ exposed }) => exposed));
       tally.sessions.add(first.parent);
       const status = window.at(-1)?.status;
       if (status === 'ok') tally.ok += 1;
@@ -158,7 +161,7 @@ export const deriveCells = (store: Store): CellSet => {
   for (const prompt of store.prompts) {
     const session = sessions.get(prompt.session);
     const frame = framedPrompt(prompt, harnessOf(session ?? {}), session?.env.harness ?? null, null, session?.env.os ?? UNKNOWN);
-    const tally = tallyOf(classMotif(prompt.cls), frame);
+    const tally = tallyOf(classMotif(prompt.cls), frame, graph.exposedPrompt(prompt.session, prompt.index));
     tally.sessions.add(prompt.session);
     if (prompt.errors > 0) tally.failed += 1;
     else tally.ok += 1;
@@ -168,8 +171,8 @@ export const deriveCells = (store: Store): CellSet => {
   }
 
   const cells = [...tallies.values()]
-    .sort((a, b) => compare(a.motifId, b.motifId) || compare(a.frameBucket, b.frameBucket) || compare(a.day, b.day))
-    .map((tally): Cell => ({ motifId: tally.motifId, frameBucket: tally.frameBucket, day: tally.day, sessions: tally.sessions.size, clusters: ONE_OPERATOR, ok: tally.ok, failed: tally.failed, tokens: tally.tokens, durationMs: tally.durationMs, exposed: false }));
+    .sort((a, b) => compare(a.motifId, b.motifId) || compare(a.frameBucket, b.frameBucket) || compare(a.day, b.day) || Number(a.exposed) - Number(b.exposed))
+    .map((tally): Cell => ({ motifId: tally.motifId, frameBucket: tally.frameBucket, day: tally.day, sessions: tally.sessions.size, clusters: ONE_OPERATOR, ok: tally.ok, failed: tally.failed, tokens: tally.tokens, durationMs: tally.durationMs, exposed: tally.exposed }));
   return { cells, motifs: [...motifs.values()].sort((a, b) => compare(a.motifId, b.motifId)) };
 };
 
@@ -191,6 +194,6 @@ const errorRowsRead = (errors: readonly ErrorObservation[]): string[] =>
 export const poolOf = (set: CellSet, errors: readonly ErrorObservation[]): Pool => ({
   cells: set.cells,
   motifs: new Map(set.motifs.map((motif) => [motif.motifId, motif])),
-  version: contentHash([EXTRACTOR_VERSION, METHODS, set.cells.map(cellIdOf), errorRowsRead(errors)]),
+  version: contentHash([EXTRACTOR_VERSION, METHODS, CALL_SHAPE_METHOD, set.cells.map(cellIdOf), errorRowsRead(errors)]),
   lastDay: set.cells.reduce<string | null>((last, cell) => (cell.day !== UNKNOWN && (last === null || cell.day > last) ? cell.day : last), null),
 });
