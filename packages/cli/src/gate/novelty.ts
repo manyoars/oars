@@ -70,7 +70,8 @@ export const loadIndex = async (storeDir: string, record: string): Promise<KeptI
 };
 
 export const noveltyOf = (index: KeptIndex, scopes: Scopes): { novelty: Novelty; add: string[]; noted: boolean } => {
-  if (index.state === 'damaged' || index.state === 'unseeded') return { novelty: 'not-read', add: [], noted: false };
+  // With no readable index there is no telling whether the name was noted, and no line can be kept to say so: it counts as noted, so no note shows until a replay seeds the index. A block does not read `noted`.
+  if (index.state === 'damaged' || index.state === 'unseeded') return { novelty: 'not-read', add: [], noted: true };
   const held: ReadonlySet<string> = index.state === 'ready' ? index.lines : new Set<string>();
   const add = [scopes.fleet, scopes.repository, scopes.session].filter((line) => !held.has(line));
   const noted = held.has(scopes.read);

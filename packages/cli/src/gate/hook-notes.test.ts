@@ -97,6 +97,22 @@ describe('oars gate hook: a note, and the arm it is shown in', () => {
     ]);
   });
 
+  it('keeps the note through an unreachable sight: a failed reading is not a reading, so the next sight that has one shows it', async () => {
+    const store = folder();
+    expect(await gateHook(payload('npm install left-pad', 'a'), depsFor(store, { registry: unreachable, random: () => 0.5 }))).toBe('');
+    expect(await gateHook(payload('npm install left-pad', 'b'), depsFor(store, { registry: found(), random: () => 0.5 }))).toBe(additional(NOTE));
+  });
+
+  it.each([
+    ['a record with no index, as a hook killed between its row and its index leaves', (store: string) => writeFileSync(crossingsPath(store), '{"kind":"run"}\n')],
+    ['a damaged index', (store: string) => writeFileSync(join(store, 'gate-index.txt'), 'oars-gate-index 1\nfabc\n')],
+  ])('shows no note for %s, on any sight', async (_name, seed) => {
+    const store = folder();
+    seed(store);
+    for (const id of ['a', 'b', 'c']) expect(await gateHook(payload('npm install left-pad', id), depsFor(store, { registry: found(), random: () => 0.5 }))).toBe('');
+    expect(rowsOf(store).map((row) => [row.arm, row.lineShown])).toEqual([['none', 'none'], ['none', 'none'], ['none', 'none']]);
+  });
+
   it('keeps a held note held for the rest of the session, since the draw was made on a reading', async () => {
     const store = folder();
     expect(await gateHook(payload('npm install left-pad', 'a'), depsFor(store, { registry: found(), random: () => 0 }))).toBe('');
