@@ -326,9 +326,9 @@ describe('capture of a shell call (CAPTURE 6)', () => {
     expect(read).not.toHaveProperty('pulls');
     expect(mcp?.pulls).toEqual([{ ecosystem: 'mcp', name: 'some-long-server-name', version: null }]);
   });
-  it('a repeated call in a resumed session keeps no commits', () => {
-    const [first, repeat] = capture([prompt, use('a', 'Bash', { command: 'git commit -m x' }), result('a', '[main abc1234] x'), use('a', 'Bash', { command: 'git commit -m x' }), result('a', '[main abc1234] x')]);
-    expect(first?.commits).toEqual(['abc1234']);
-    expect(repeat?.commits).toBeUndefined();
+  it('a repeated call in a resumed session is written once, so its commits are counted once', () => {
+    const calls = capture([prompt, use('a', 'Bash', { command: 'git commit -m x' }), result('a', '[main abc1234] x'), use('a', 'Bash', { command: 'git commit -m x' }), result('a', '[main abc1234] x')]);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.commits).toEqual(['abc1234']);
   });
 });
