@@ -195,6 +195,10 @@ describe('pull', () => {
     expect(byError.recall.query).toEqual({ form: 'text', text: 'unexpected EOF while looking for matching quote' });
     expect(byError.recall.answer.kind).toBe('hit');
     expect(byError.recall.answer.reads).toEqual([readIdOf(byError.legacy?.matches[0]?.sig ?? '')]);
+    // An error with a path is one question, so the record holds both texts and the narrowing that applied.
+    const both = pull(store, { error: 'wrong input', path: 'a.ts', cls: 'edit-verify', sinceDays: 30 }, context);
+    expect(both.recall.query).toEqual({ form: 'text', text: 'wrong input a.ts', slice: { cls: 'edit-verify', sinceDays: 30 } });
+    expect(pull(store, { path: 'a.ts', cls: 'edit-only' }, context).recall.query).toEqual({ form: 'text', text: 'a.ts', slice: { cls: 'edit-only' } });
     const byPath = pull(store, { path: 'never-touched.ts' }, context);
     expect(byPath.recall.query).toEqual({ form: 'text', text: 'never-touched.ts' });
     expect(byPath.recall.answer.kind).toBe('miss');
@@ -214,6 +218,27 @@ describe('pull', () => {
     expect(asked({ error: 'wrong input', cls: 'edit-only' })).toEqual({ n: 1, count: 1, stated: 1 });
     expect(asked({ cls: 'edit-only' })).toEqual({ n: 1, count: 1, stated: 1 });
     expect(asked({ path: 'target.ts' })).toEqual({ n: 1, count: 1, stated: 1 });
+  });
+});
+
+describe('the text a recall records is redacted before it is stored', () => {
+  const SECRET = `gh${'p'}_${'a1B2c3D4e5F6g7H8i9J0k1L2'}`;
+  const context = { sid: null, now: NOW, frame: null, redactDomains: ['example.com'] } as const;
+
+  it('masks a secret pattern and an organization domain in every form that carries text', () => {
+    const typed = `failed for ${SECRET} at api.example.com`;
+    const store = synthetic();
+    for (const input of [{ error: typed }, { path: typed }, { form: 'text', text: typed }, { form: 'entity', entity: typed }] as const) {
+      const { text } = pull(store, input, context).recall.query;
+      expect(text).toBe('failed for <secret> at <org-domain>');
+    }
+  });
+
+  it('leaves a query with no text, and text with nothing to mask, as typed', () => {
+    const store = synthetic();
+    expect(pull(store, { form: 'question', family: 'fit' }, context).recall.query).toEqual({ form: 'question', family: 'fit' });
+    expect(pull(store, { error: 'wrong input' }, context).recall.query.text).toBe('wrong input');
+    expect(pull(store, { error: SECRET }, { sid: null, now: NOW, frame: null }).recall.query.text).toBe('<secret>');
   });
 });
 
