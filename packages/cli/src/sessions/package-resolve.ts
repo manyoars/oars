@@ -34,7 +34,7 @@ const NAME_SHAPE: ReadonlyMap<string, RegExp> = new Map<string, RegExp>([
   ['go', /^[a-z0-9.-]+\.[a-z0-9.-]+\/[\w.~/-]+$/i],
 ]);
 
-/** A published version: three or four dotted numbers with an optional pre-release or build tail, and Go's leading `v`. A bare `1` or `2.31` is a range to its registry, so like a range (`^1.2`, `>=2`), a tag (`latest`), or a mask it is no version. */
+/** A published version: three or four dotted numbers with an optional pre-release or build tail, and Go's leading `v`. A bare `1` is a range to its registry, and capture does not tell a two-part `2.31` (a short exact pin or a short range) apart, so like a range (`^1.2`, `>=2`), a tag (`latest`), or a mask neither is a version. */
 const EXACT_VERSION = /^v?\d+(?:\.\d+){2,3}(?:[-+][0-9A-Za-z.+-]+)?$/;
 
 /** A name in an ecosystem of the vocabulary, spelled as the registry spells it; null when it is not shaped like one. */
