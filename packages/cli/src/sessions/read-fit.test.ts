@@ -15,7 +15,7 @@ describe('fit', () => {
       }),
     );
     expect(rest).toEqual([]);
-    expect(read?.slice).toEqual({ motif: 'file.read', level: 'shape', harness: 'claude-code', harnessBucket: '2.1.31x', model: 'claude-opus-5-5', effort: 'high' });
+    expect(read?.slice).toEqual({ motif: 'file.read', level: 'shape', harness: 'claude-code', harnessBucket: '2.1.31x', model: 'claude-opus-5-5' });
     expect(read?.value).toEqual({ failureRate: 0.3333, failed: 1, ok: 2 });
     expect(read?.n).toBe(3);
     expect(read?.interval?.low).toBeLessThan(0.3333);

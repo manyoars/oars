@@ -42,9 +42,12 @@ export const EFFORT_CLASS = 'effort:';
 
 /**
  * Rule 3: effort is not in a cell's key. The one cell that holds it pairs it with the bucket of the prompt's thinking tokens, which is the fact an effort level explains, and it
- * carries `week`, `exposure`, and the frame's axes like any other.
+ * carries `week` and `exposure` but no frame axis: rule 3 bars joining `effort` to `model` or `harnessVersion`, and the pair would be four dimensions over `q_dims`.
  */
 export const effortClass = (effort: string, thinking: number): string => `${EFFORT_CLASS}${effort}/thinking:${String(bucketOf('tokens', thinking))}`;
+
+/** The frame bucket of a cell that joins no axis. */
+export const NO_AXES = '-';
 
 const ONE_OPERATOR = 1;
 
@@ -153,9 +156,8 @@ export const deriveCells = (store: Store, graph: RecallGraph = NO_RECALLS): Cell
     return fresh;
   };
   /** The tallies one occurrence counts into: its week cell, and for a shape motif with a known day its live cell too (rule 6). A named or class motif has no day cell. */
-  const talliesOf = (motif: Motif, frame: Frame, exposed: boolean): Tally[] => {
+  const talliesOf = (motif: Motif, frame: Frame, exposed: boolean, frameBucket = frameBucketOf(frame)): Tally[] => {
     motifs.set(motif.motifId, motif);
-    const frameBucket = frameBucketOf(frame);
     const day = frame.day ?? UNKNOWN;
     const weekly = tallyAt(motif, frameBucket, 'week', weekStartOf(day), exposed);
     return motif.level === 'shape' && day !== UNKNOWN ? [weekly, tallyAt(motif, frameBucket, 'day', day, exposed)] : [weekly];
@@ -196,8 +198,8 @@ export const deriveCells = (store: Store, graph: RecallGraph = NO_RECALLS): Cell
     const session = sessions.get(prompt.session);
     const frame = framedPrompt(prompt, harnessOf(session ?? {}), session?.env.harness ?? null, null, session?.env.os ?? UNKNOWN);
     const exposed = graph.exposedPrompt(prompt.session, prompt.index);
-    const classes = [prompt.cls, ...(frame.effort === null ? [] : [effortClass(frame.effort, prompt.usage.thinking)])];
-    for (const tally of classes.flatMap((cls) => talliesOf(classMotif(cls), frame, exposed))) {
+    const effort = frame.effort === null ? [] : talliesOf(classMotif(effortClass(frame.effort, prompt.usage.thinking)), frame, exposed, NO_AXES);
+    for (const tally of [...talliesOf(classMotif(prompt.cls), frame, exposed), ...effort]) {
       tally.sessions.add(prompt.session);
       if (prompt.errors > 0) tally.failed += 1;
       else tally.ok += 1;
