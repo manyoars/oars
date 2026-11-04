@@ -172,6 +172,43 @@ describe('clusters over the cells of a read', () => {
     });
   }, 60_000);
 
+  // Section 4 rule 1: a live read's floor counts the sliced day's cells and never its baseline's, or one account on a day would ride on the week before it.
+  it('one account on day D with five on D-1 serves D-1 and not D', async () => {
+    await inFreshPool(async (spread) => {
+      for (const id of ['3201', '3202', '3203', '3204', '3205']) await depositOn(spread, id, ['2026-11-02']);
+      const token = await depositOn(spread, '3206', ['2026-11-03']);
+      const live = (await readsIn(spread, token)).reads.filter((read) => read.family === 'live');
+      expect([...new Set(live.map((read) => fieldOf(read.slice, 'day')))]).toEqual(['2026-11-02']);
+      for (const read of live) expect(read.clusters).toBe(5);
+    });
+  }, 60_000);
+
+  it('five accounts on D and one in the baseline serve D with a null baseline', async () => {
+    await inFreshPool(async (spread) => {
+      await depositOn(spread, '3301', ['2026-11-02']);
+      for (const id of ['3302', '3303', '3304', '3305']) await depositOn(spread, id, ['2026-11-03']);
+      const token = await depositOn(spread, '3306', ['2026-11-03']);
+      const day = (await readsIn(spread, token)).reads.filter((read) => read.family === 'live' && fieldOf(read.slice, 'day') === '2026-11-03');
+      expect(day.length).toBeGreaterThan(0);
+      for (const read of day) {
+        expect(read.clusters).toBe(5);
+        expect(read.value).toMatchObject({ baseline: null, ratio: null });
+        expect(fieldOf(read.value, 'share')).not.toBeNull();
+      }
+    });
+  }, 60_000);
+
+  it('five accounts on D and five in the baseline serve D with the baseline', async () => {
+    await inFreshPool(async (spread) => {
+      for (const id of ['3401', '3402', '3403', '3404', '3405']) await depositOn(spread, id, ['2026-11-02']);
+      for (const id of ['3406', '3407', '3408', '3409']) await depositOn(spread, id, ['2026-11-03']);
+      const token = await depositOn(spread, '3410', ['2026-11-03']);
+      const day = (await readsIn(spread, token)).reads.filter((read) => read.family === 'live' && fieldOf(read.slice, 'day') === '2026-11-03');
+      expect(day.length).toBeGreaterThan(0);
+      for (const read of day) expect(fieldOf(read.value, 'baseline')).not.toBeNull();
+    });
+  }, 60_000);
+
   it('one account on several days stays one account', async () => {
     await inFreshPool(async (spread) => {
       await depositOn(spread, '3101', ['2026-11-01', '2026-11-02', '2026-11-03']);
