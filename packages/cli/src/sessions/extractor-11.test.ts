@@ -3,7 +3,7 @@
 import { readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { captureSession } from './extract.js';
+import { BLOCK_WORDS, captureSession, WRAPPERS } from './extract.js';
 import { PRIVATE_PROGRAM, projectShell, projectStoredShell, type ProjectedShell } from './projection.js';
 import { PRIVATE, PUBLIC_PROGRAMS } from './public-vocabulary.js';
 import { makeRedactor } from './redact.js';
@@ -118,6 +118,16 @@ describe('the shell form projected from the account store (Q5)', () => {
     expect(JSON.stringify(stored)).not.toContain('acme-deploy');
   });
 
+  it('loses a snapshot-only program behind a wrapper: it projects private where the raw command reads it (3 of 3 program lists)', () => {
+    // The step reads `<literal>` and the stored target names the wrapper, which cannot tell `bash -c ffmpeg` from `bash -c acme-deploy`: the wrapper rule wins.
+    const forms = ['bash -c "ffmpeg -i a"', 'timeout 5 ffmpeg a', 'nohup ffmpeg -i a'];
+    const raw = forms.map((command) => projectShell(vocab, command, makeRedactor()));
+    const stored = projected(forms);
+    expect(raw.map((shell) => shell.programs)).toEqual([['ffmpeg'], ['ffmpeg'], ['ffmpeg']]);
+    expect(stored.map((shell) => shell.programs)).toEqual([[PRIVATE], [PRIVATE], [PRIVATE]]);
+    expect(lossesOf(stored, raw, (shell) => shell.programs)).toBe(3);
+  });
+
   it('caps the program list of a long pipeline at pipe_max and keeps every command', () => {
     const [shell] = projected(['cat a | sort | uniq | head | wc | tr x y']);
     expect(shell?.commands).toHaveLength(6);
@@ -139,6 +149,21 @@ describe('the shell form projected from the account store (Q5)', () => {
     expect(projected(['bash -c "acme-deploy --x"', 'timeout 5 acme-deploy', 'sudo acme-deploy --x', 'env X=1 acme-deploy'])).toEqual(Array.from({ length: 4 }, () => ({ commands: [PRIVATE_PROGRAM], programs: [PRIVATE] })));
     expect(projectShell(vocab, 'bash -c "acme-deploy --x"', makeRedactor()).programs).toEqual([PRIVATE]);
     expect(projectShell(vocab, 'timeout 5 acme-deploy', makeRedactor()).programs).toEqual([PRIVATE]);
+  });
+
+  it('projects a private program behind a block word as private, never as the keyword', () => {
+    // Capture skips every BLOCK_WORDS entry to reach the real program (extract.ts afterPrelude), so the stored target names the keyword.
+    expect(projected(['if acme-deploy; then ls; fi'])).toEqual([{ commands: [PRIVATE_PROGRAM, one('ls', null, [])], programs: [PRIVATE, 'ls'] }]);
+    expect(projectShell(vocab, 'if acme-deploy; then ls; fi', makeRedactor()).programs).toEqual([PRIVATE, 'ls']);
+    for (const word of [...BLOCK_WORDS].filter((keyword) => keyword !== '!')) {
+      expect(projected([`${word} acme-deploy`]), word).toEqual([{ commands: [PRIVATE_PROGRAM], programs: [PRIVATE] }]);
+    }
+    // The rest of what capture's afterPrelude walks past to reach the real program: every wrapper, `timeout`, an assignment, and a shell that runs its argument.
+    for (const word of [...WRAPPERS, 'timeout', 'X=1', 'bash -c', 'sh -c', 'zsh -c', 'pwsh -Command', 'cmd /c']) {
+      expect(projected([`${word} acme-deploy --x`]), word).toEqual([{ commands: [PRIVATE_PROGRAM], programs: [PRIVATE] }]);
+    }
+    // A lone closing keyword names nothing, so it is not a program either.
+    expect(projected(['fi', 'done', 'esac'])).toEqual(Array.from({ length: 3 }, () => ({ commands: [PRIVATE_PROGRAM], programs: [PRIVATE] })));
   });
 
   it('projects a Bash step whose identity is null as private', () => {
