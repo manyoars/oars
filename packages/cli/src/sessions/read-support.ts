@@ -20,7 +20,8 @@ export const round = (value: number): number => Math.round(value * 10_000) / 10_
 /** A rate to four places, so a value reads alike wherever it is computed; null with nothing to divide by. */
 export const rate = (part: number, whole: number): number | null => (whole === 0 ? null : round(part / whole));
 
-const Z_95 = 1.96;
+/** The normal quantile for a 95 percent interval, which every read's interval and the screen's scaling share. */
+export const Z_95 = 1.96;
 
 /** The Wilson interval: it stays inside 0 and 1, and it is honest about the small cells one operator's store is mostly made of. */
 export const wilson = (part: number, whole: number): ReadInterval | null => {

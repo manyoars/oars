@@ -401,7 +401,7 @@ describe('oars sessions gold arms', () => {
     const evaluator = answering(() => 'yes');
     h.staged.runtime.evaluator = evaluator;
     expect(await run(['sessions', 'gold', 'arms', file], h.deps)).toBe(ExitCode.OK);
-    expect(h.out.join('')).toContain('1 prompts');
+    expect(h.out.join('')).toContain('1 prompt has a transcript that is gone or no longer matches what the judge sees, so its text arm is unread.');
     const first = sidecarOf(sidecar).entries.find((entry) => entry.shown.includes('one ask'));
     expect(first?.reads).toBeUndefined();
     expect(first?.answers).toEqual({ evaluator: 'yes' });

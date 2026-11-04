@@ -229,9 +229,12 @@ describe('formatAudit', () => {
     await deposit(staged.runtime, options);
     asCopy(staged, 'errors-a');
     appendFileSync(rawOf(staged, 'errors-a'), '{"type":"summary"}\n');
-    const text = formatAudit(await audits(staged));
+    const audited = await audits(staged);
+    const text = formatAudit(audited);
+    const small = audited.filter((entry) => entry.belowMinLeaves).map((entry) => entry.session);
     expect(text).toContain('possible tampering (a copy of a different size): 1');
-    expect(text).toContain('under 10 leaves, so joined to no cluster and counted toward no n: ');
+    expect(small).toContain('errors-b');
+    expect(text.split('\n')).toContain(`      under 10 leaves, so joined to no cluster and counted toward no n: ${String(small.length)}`);
     expect(text).toContain('errors-a: changed since deposit (copy, possible tampering)');
   });
 

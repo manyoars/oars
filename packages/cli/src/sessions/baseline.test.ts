@@ -1,6 +1,6 @@
 // Layer 2's self-baseline (spec 2.2, t744): a session against the operator's own other weeks.
 import { describe, expect, it } from 'vitest';
-import { BASELINE_MIN_CALLS, BASELINE_MIN_WEEKS, fitOf, medianOf, selfBaseline, weekOf, type BaselinePrompt, type BaselineSession, type BaselineTool, type Fraction } from './baseline.js';
+import { BASELINE_MIN_CALLS, BASELINE_MIN_WEEKS, fitOf, formatSelfBaseline, medianOf, selfBaseline, weekOf, type BaselinePrompt, type BaselineSession, type BaselineTool, type Fraction, type SelfBaselineResult } from './baseline.js';
 
 const ASOF = Date.parse('2026-06-10T00:00:00Z');
 const usage = { input: 100, cacheWrite: 100, cacheRead: 800, output: 400, thinking: 0 };
@@ -41,6 +41,27 @@ const run = (weeks: readonly Week[]) => {
 const last = (weeks: readonly Week[]) => run(weeks).find((entry) => entry.session === `s${String(weeks.length - 1)}`);
 const cursor = (start: string, overrides: Partial<Week> = {}): Week => ({ start, calls: 1000, harness: 'cursor', durationMs: null, ...overrides });
 const CURSOR_BASE = BASE.map((week) => cursor(week.start));
+
+describe('formatSelfBaseline', () => {
+  const result = (session: string, overrides: Partial<SelfBaselineResult>): SelfBaselineResult => ({ session, harness: 'claude-code', week: '2026-06-01', status: 'not run', reason: null, calls: 0, baselineWeeks: 0, distances: [], m: null, f: null, ...overrides });
+
+  it('prints the count line, the scored count, and one line per reason sorted, with each reason counted', () => {
+    const text = formatSelfBaseline([
+      result('a', { status: 'scored' }),
+      result('b', { reason: 'week under 1000 tool calls' }),
+      result('c', { reason: 'week under 1000 tool calls' }),
+      result('d', { reason: 'no first timestamp' }),
+    ]);
+    expect(text).toBe(
+      [
+        '4 sessions against their own other weeks (layer 2, local; a low F lowers W and rejects nothing)',
+        '      scored: 1',
+        '      not run, no first timestamp: 1',
+        '      not run, week under 1000 tool calls: 2',
+      ].join('\n'),
+    );
+  });
+});
 
 describe('selfBaseline', () => {
   it('names the constants', () => {
@@ -139,6 +160,15 @@ describe('selfBaseline', () => {
     // 06-08 ends 06-14, after asOf 06-10: only 05-11, 05-18, and 05-25 qualify for 06-01.
     const weeks: Week[] = [...BASE.slice(1), { start: '2026-06-08', calls: 1000 }, { start: '2026-06-01', calls: 1000 }];
     expect(last(weeks)).toMatchObject({ status: 'not run', baselineWeeks: 3 });
+  });
+
+  it('counts a week from its last UTC day: asOf on that day takes it, the second before leaves it out', () => {
+    // The week of 06-01 ends on 06-07; it is the fourth baseline week of the week of 05-04.
+    const data = fixture([...BASE.slice(1), { start: '2026-06-01', calls: 1000 }, { start: '2026-05-04', calls: 1000 }]);
+    const target = (asOf: string) => selfBaseline(data.sessions, data.tools, data.prompts, Date.parse(asOf)).find((entry) => entry.session === 's4');
+    expect(target('2026-06-07T00:00:00Z')).toMatchObject({ status: 'scored', baselineWeeks: 4 });
+    expect(target('2026-06-07T23:59:59Z')).toMatchObject({ status: 'scored', baselineWeeks: 4 });
+    expect(target('2026-06-06T23:59:59Z')).toMatchObject({ status: 'not run', baselineWeeks: 3 });
   });
 
   it('drops every dimension a side has no counts for, leaving the tool mix, which every qualifying week has', () => {

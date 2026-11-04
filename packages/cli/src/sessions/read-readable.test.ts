@@ -67,6 +67,7 @@ describe('what a store cannot read', () => {
 
   it('says how many pairs lead-lag had when it does not exist, and nothing once it does', () => {
     const [row] = notReadable([]).filter((one) => one.family === 'lead-lag');
+    expect(row?.what).toBe('a failure move leading a share move (experimental)');
     expect(row?.why).toBe('0 pairs, and it needs 30 on each side of the cut');
     expect(whatOf(notReadable([leadLag]), 'lead-lag')).toEqual([]);
   });
