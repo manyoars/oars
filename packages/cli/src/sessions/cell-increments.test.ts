@@ -40,6 +40,7 @@ describe('storeOf', () => {
     const rebuilt = storeOf([{ ...skeleton, transcripts: [main, main] }]);
     expect(rebuilt.tools.map((held) => [held.session, held.n])).toEqual([[`${ID}#0`, 0], [`${ID}#0`, 1], [`${ID}#1`, 0], [`${ID}#1`, 1]]);
     expect(rebuilt.prompts.map((held) => [held.session, held.index])).toEqual([[`${ID}#0`, 0], [`${ID}#1`, 0]]);
+    expect(rebuilt.tools.flatMap((held) => (held.steps ?? []).map((held_) => held_.seg))).toEqual([0, 0, 0, 0]);
     expect(rebuilt.subagents.map((agent) => [agent.session, agent.parent])).toEqual([[`${ID}#1`, `${ID}#0`]]);
   });
 });

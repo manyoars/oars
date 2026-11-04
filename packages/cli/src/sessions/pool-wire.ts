@@ -34,10 +34,10 @@ export const bucketOf = (kind: BucketKind, value: number): number => EDGES[kind]
 export const floorOf = (kind: BucketKind, bucket: number): number => EDGES[kind][bucket - 1] ?? 0;
 
 /**
- * A step without what a server can compute or no derivation reads: `n` is its call's position, `frameId` hashes a frame the skeleton holds, and `edges` are read by no cell. Its cost is
+ * A step without what a server can compute or no derivation reads: `n` is its call's position, `seg` its place in the call (the array position), `frameId` hashes a frame the skeleton holds, and `edges` are read by no cell. Its cost is
  * two buckets, never the exact counts. `parent` is the position of the spawning call in the main run's `tools` (Section 1.2's `parent` ordinal).
  */
-export type SkeletonStep = Omit<StepObservation, 'n' | 'frameId' | 'cost' | 'edges'> & {
+export type SkeletonStep = Omit<StepObservation, 'n' | 'seg' | 'frameId' | 'cost' | 'edges'> & {
   /** A `tokens` bucket of the step's tokens. */
   tokens: number | null;
   /** An `ms` bucket of the step's time. */
@@ -176,8 +176,7 @@ const transcriptOf = ({ session, prompts, tools }: SessionRecords['transcripts']
     // the calls that shared a prompt still share one, and no position reads as a prompt.
     if (prompt !== null && !promptAt.has(prompt)) promptAt.set(prompt, framedPrompts.length + unrecorded++);
     const promptPosition = prompt === null ? null : (promptAt.get(prompt) ?? null);
-    const steps = projectedSteps(tool, read).map(({ seg, action, native, identity, status: reported, cost, parent }): SkeletonStep => ({
-      seg,
+    const steps = projectedSteps(tool, read).map(({ action, native, identity, status: reported, cost, parent }): SkeletonStep => ({
       action,
       native,
       identity,
@@ -405,10 +404,9 @@ const parseNative = (harness: Harness, value: unknown, at: string): string => {
 };
 
 const parseStep = (harness: Harness, value: unknown, at: string): SkeletonStep => {
-  const raw = fieldsOf(value, at, ['seg', 'action', 'native', 'identity', 'status', 'tokens', 'ms', 'parent']);
+  const raw = fieldsOf(value, at, ['action', 'native', 'identity', 'status', 'tokens', 'ms', 'parent']);
   const action = oneOf(CANONICAL_ACTIONS, raw.action, under(at, 'action'));
   return {
-    seg: countOf(raw.seg, under(at, 'seg')),
     action,
     native: parseNative(harness, raw.native, under(at, 'native')),
     identity: parseIdentity(harness, action, raw.identity, under(at, 'identity')),

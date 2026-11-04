@@ -53,7 +53,7 @@ const refusedField = (value: unknown): string => {
 };
 
 const firstStep = ['transcripts', 0, 'tools', 0, 'steps', 0];
-const withStep = (over: object): unknown => sent(firstStep, JSON.parse(JSON.stringify({ ...shell, n: undefined, frameId: undefined, edges: undefined, cost: undefined, tokens: null, ms: null, ...over })));
+const withStep = (over: object): unknown => sent(firstStep, JSON.parse(JSON.stringify({ ...shell, n: undefined, seg: undefined, frameId: undefined, edges: undefined, cost: undefined, tokens: null, ms: null, ...over })));
 const stepField = 'transcripts[0].tools[0].steps[0]';
 
 describe('skeletonOf', () => {
@@ -106,7 +106,7 @@ describe('ordinals', () => {
     expect(skeleton?.transcripts[0]?.tools.map((held) => held.prompt)).toEqual([1, 0, 0]);
     expect(skeleton?.transcripts[1]?.tools[0]?.steps[0]?.parent).toBe(1);
     const text = JSON.stringify(skeleton);
-    for (const field of ['"spawnedIn"', '"edges"', '"index"', '"n"']) expect(text).not.toContain(field);
+    for (const field of ['"spawnedIn"', '"edges"', '"index"', '"n"', '"seg"']) expect(text).not.toContain(field);
     expect(parseSkeleton(JSON.parse(text))).toEqual({ ok: true, skeleton });
   });
 
@@ -168,7 +168,7 @@ describe('parseSkeleton refuses, and names the field', () => {
     { name: 'a harness outside the list', path: ['transcripts', 0, 'harness'], value: 'acme', field: 'transcripts[0].harness' },
     { name: 'a fraction in a count', path: ['transcripts', 0, 'prompts', 0, 'errors'], value: 1.5, field: 'transcripts[0].prompts[0].errors' },
     { name: 'a count no whole number holds', path: ['transcripts', 0, 'prompts', 0, 'usage', 'input'], value: 1e308, field: 'transcripts[0].prompts[0].usage.input' },
-    { name: 'a fraction in a step number', path: [...firstStep, 'seg'], value: 1.5, field: `${stepField}.seg` },
+    { name: 'the number of a step in its call', path: [...firstStep, 'seg'], value: 0, field: `${stepField}.seg` },
     { name: 'a wall time past any real prompt', path: ['transcripts', 0, 'prompts', 0, 'wallSec'], value: 1e308, field: 'transcripts[0].prompts[0].wallSec' },
     { name: 'a prompt position past anything the transcript could number', path: ['transcripts', 0, 'tools', 0, 'prompt'], value: 99, field: 'transcripts[0].tools[0].prompt' },
     { name: 'a spawning call the main run does not hold', path: [...firstStep, 'parent'], value: 99, field: `${stepField}.parent` },
