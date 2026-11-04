@@ -197,6 +197,26 @@ describe('deposit', () => {
     expect(kept?.keys).toBeUndefined();
   });
 
+  it('keeps a tool row whose segments are not a list of records instead of failing every reader', async () => {
+    const staged = stage();
+    await deposit(staged.runtime, options(['proj']));
+    const [tool] = (await loadStore(staged.storeDir)).tools;
+    if (tool === undefined) throw new Error('the fixture deposits no tool row');
+    const odd: Array<[string, unknown]> = [
+      ['toolu_text_segments', 'not a list'],
+      ['toolu_null_segment', [null, { run: 'git status', read: true }]],
+      ['toolu_runless_segment', [{ read: true }]],
+    ];
+    for (const [toolUseId, segments] of odd) {
+      appendFileSync(paths(staged.storeDir).observations, `${JSON.stringify({ ...tool, n: 999, toolUseId, segments })}
+`);
+    }
+    const rows = (await loadStore(staged.storeDir)).tools;
+    expect(rows.find((row) => row.toolUseId === 'toolu_text_segments')?.segments).toBe('not a list');
+    expect(rows.find((row) => row.toolUseId === 'toolu_null_segment')?.segments).toEqual([null, { run: 'git status', read: true }]);
+    expect(rows.find((row) => row.toolUseId === 'toolu_runless_segment')?.segments).toEqual([{ read: true }]);
+  });
+
   it('reads an empty or missing store as empty', async () => {
     const staged = stage();
     expect(await loadStore(staged.storeDir)).toEqual({ sessions: [], prompts: [], errors: [], subagents: [], tools: [], newerCaptures: 0 });
