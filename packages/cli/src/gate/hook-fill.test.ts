@@ -34,7 +34,7 @@ describe('the fill: is the name locked', () => {
   });
 });
 
-describe('the fill: the helper's spawn', () => {
+describe('the fill: starting the helper', () => {
   it('starts one helper per name, however many sights come while it asks', async () => {
     const dir = store();
     const start = vi.fn();
@@ -103,7 +103,7 @@ describe('the fill: the helper's spawn', () => {
   });
 });
 
-describe('the fill: starting the helper', () => {
+describe('the fill: the helper\'s spawn', () => {
   const spawnOf = (child: EventEmitter): { spawn: HelperSpawn; calls: { command: string; args: string[]; options: unknown }[]; unref: ReturnType<typeof vi.fn> } => {
     const calls: { command: string; args: string[]; options: unknown }[] = [];
     const unref = vi.fn();
