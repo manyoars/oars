@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import type { Allow } from '../sessions/allow.js';
 import { INJECTED_TAGS, isErrorResult, isObj, LEADING_TAG, resultText, type Obj } from '../sessions/extract.js';
 import type { Redactor } from '../sessions/redact.js';
+import { SOURCES } from '../sessions/sources.js';
 import { listDir, logLines, sessionFolders, subagentFiles } from '../sessions/store.js';
 import { checkCall, type Crossing, type Removal, type UnreadShape } from './checks.js';
 import { PERMISSIONS, type Miss, type Origin, type Permission, type Status } from './record.js';
@@ -15,9 +16,6 @@ export interface TranscriptFile {
   /** The subagent transcript's own name; null on a main transcript. */
   agent: string | null;
 }
-
-/** Cursor's history has no transcript files, and `raw/` holds none of it. */
-const CURSOR_SOURCE = 'cursor';
 
 const projectTranscripts = async (folder: string, project: string, seen: Set<string>): Promise<TranscriptFile[]> => {
   const found: TranscriptFile[] = [];
@@ -41,7 +39,8 @@ export const discover = async (roots: readonly string[], allow: Allow): Promise<
   const files: TranscriptFile[] = [];
   let unreadable = 0;
   for (const root of roots) {
-    const projects = (await listDir(root)).filter((entry) => entry.isDirectory() && entry.name !== CURSOR_SOURCE && allow.allows(entry.name));
+    // The source table's folders (Cursor, Codex) hold no transcript files: replay does not read them, and a project folder is never named for one.
+    const projects = (await listDir(root)).filter((entry) => entry.isDirectory() && !SOURCES.some((source) => source.name === entry.name) && allow.allows(entry.name));
     for (const project of projects) {
       try {
         files.push(...(await projectTranscripts(join(root, project.name), project.name, seen)));

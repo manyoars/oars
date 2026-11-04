@@ -92,6 +92,10 @@ describe('the counts', () => {
     expect(lines.at(-1)).toMatch(/^- /);
   });
 
+  it('names the sources replay does not read', () => {
+    expect(LIMITS.join(' ')).toMatch(/Codex and Cursor/);
+  });
+
   it('shows the registry counts only when the registry was read', () => {
     const read = reportOf([run({ registryRead: true }), crossing({ againstLatest: 'latest', registryState: 'found', registryAge: 'older' }), crossing({ againstLatest: 'not-latest', registryState: 'not-found', registryAge: 'under-7-days' })]);
     const text = formatReport(read);
