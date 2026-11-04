@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import { BATCH_FIELDS } from './pool-outbox.js';
 import { frame, printOf, prompt, session, sessionsFrom, step, storedNames, store, tool } from './pool-fixture.js';
+import { FRAMEWORKS } from './public-vocabulary.js';
 import { FIELD_LIST_VERSION, parseSkeleton, skeletonOf, SKELETON_FORMAT, VOCAB_VERSION, type SessionSkeleton } from './pool-wire.js';
 
 const framed = frame({ shell: 'bash' });
@@ -62,7 +63,7 @@ describe('versions on every batch', () => {
 });
 
 // The pin: the field names a batch holds, hashed, filed under the field-list version. Adding a field changes the hash, so the test fails until the version moves and the new pin is added beside the old.
-const FIELDS_PINNED: { readonly [version: number]: string } = { 1: 'PIN' };
+const FIELDS_PINNED: { readonly [version: number]: string } = { 1: '3bf238006c97c800' };
 const fieldsHash = (): string => createHash('sha256').update(BATCH_FIELDS.join(',')).digest('hex').slice(0, 16);
 
 describe('the field-list version', () => {
@@ -160,7 +161,7 @@ describe('other for an unknown value', () => {
     const sent = wire();
     // A frame the fixture leaves empty gets one entry each, so every list and nullable field above has a value to replace.
     set(sent, ['transcripts', 0, 'frame', 'stack', 'languages'], ['typescript']);
-    set(sent, ['transcripts', 0, 'frame', 'stack', 'frameworks'], ['react']);
+    set(sent, ['transcripts', 0, 'frame', 'stack', 'frameworks'], [[...FRAMEWORKS][0] ?? '']);
     set(sent, ['transcripts', 0, 'frame', 'stack', 'size'], 'm');
     set(sent, ['transcripts', 0, 'tools', 0, 'steps', 0, 'identity', 'flags'], ['--force']);
     return sent;
