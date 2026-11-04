@@ -742,7 +742,7 @@ const tokenize = (text: string): ShellToken[] => {
 };
 
 /** A block keyword names no program, and its condition or body is the command. `for` stays: its words say what it walks. */
-const BLOCK_WORDS = new Set(['if', 'then', 'elif', 'else', 'elseif', 'do', 'while', 'until', 'fi', 'done', 'esac', 'try', 'finally', '!']);
+export const BLOCK_WORDS = new Set(['if', 'then', 'elif', 'else', 'elseif', 'do', 'while', 'until', 'fi', 'done', 'esac', 'try', 'finally', '!']);
 export const WRAPPERS = new Set(['sudo', 'env', '.', 'command', 'exec', 'nohup', 'nice', 'time', 'call']);
 const ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*=/;
 /** The flags of a wrapper that own the next word: `sudo -u root npm i`, `env -u X`, `nice -n 5`, `timeout -k 5 60`. */
