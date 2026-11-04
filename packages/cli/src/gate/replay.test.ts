@@ -5,11 +5,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { CliError } from '../errors.js';
 import { parseRows, type CrossingRecord, type RegistryRow, type RunRow } from './record.js';
 import { REGISTRY_MAX_DAYS, replay } from './replay.js';
+import type * as StoreModule from '../sessions/store.js';
 import type { RegistryAnswer, RegistryReader } from './registry.js';
 
 // A transcript the OS refuses to open cannot be made on every platform, so one file name fails here.
 vi.mock('../sessions/store.js', async (importOriginal) => {
-  const real = await importOriginal<typeof import('../sessions/store.js')>();
+  const real = await importOriginal<typeof StoreModule>();
   return {
     ...real,
     logLines: (file: string) => {
