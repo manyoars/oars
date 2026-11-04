@@ -36,6 +36,8 @@ describe('packages from install commands', () => {
     ['uv add', 'uv add httpx', [{ package: 'pypi:httpx', packageVersion: null, first: true }]],
     ['cargo add with a version', 'cargo add serde@1.0.200', [{ package: 'crates:serde', packageVersion: '1.0.200', first: true }]],
     ['cargo add with a caret range', 'cargo add serde@^1', [{ package: 'crates:serde', packageVersion: null, first: true }]],
+    ['cargo add with a bare major, which is a range', 'cargo add serde@1', [{ package: 'crates:serde', packageVersion: null, first: true }]],
+    ['pip install with a two-part pin, which capture cannot tell from a short range', 'pip install requests==2.31', [{ package: 'pypi:requests', packageVersion: null, first: true }]],
     ['cargo install folding the name', 'cargo install cargo_edit', [{ package: 'crates:cargo-edit', packageVersion: null, first: true }]],
     ['go get a module', 'go get github.com/spf13/cobra@v1.8.0', [{ package: 'go:github.com/spf13/cobra', packageVersion: 'v1.8.0', first: true }]],
     ['gem install with a version flag', 'gem install rails -v 7.1.0', [{ package: 'rubygems:rails', packageVersion: '7.1.0', first: true }]],
@@ -72,6 +74,11 @@ describe('packages from install commands', () => {
   it('marks the first call of each version in a session, and the later calls of it not', () => {
     const calls = session(['npm install left-pad@1.3.0', 'npm install left-pad@1.3.0', 'npm install left-pad@1.2.0', 'npm install left-pad', 'cd x && npm install left-pad@1.3.0 left-pad@1.3.0']);
     expect(calls.map((call) => call.packages?.map(({ first }) => first))).toEqual([[true], [false], [true], [true], [false]]);
+  });
+
+  it('shares one first mark between calls whose version is null, as a two-part pin stores none', () => {
+    const calls = session(['pip install x==2.31', 'pip install x==2.30', 'pip install x==2.31.0']);
+    expect(calls.map((call) => call.packages?.map(({ first }) => first))).toEqual([[true], [false], [true]]);
   });
 
   it('marks a version that failed on its first try, since the mark is made from the command', () => {
