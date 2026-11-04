@@ -23,7 +23,12 @@ export const PENDING_HOOK_CAP = 5;
 /** How many failed deposits a pending entry survives: at this many it is removed and counted as dropped, since a whole-store walk still reaches any transcript on the allowlist. */
 export const PENDING_MAX_FAILURES = 5;
 
-export const pendingDir = (storeDir: string): string => join(storeDir, 'pending');
+/** One line on stderr for a pending-list file operation that failed and was skipped: the deposit that met it goes on. */
+const warn = (what: string, error: unknown): void => {
+  process.stderr.write(`oars: ${what}: ${error instanceof Error ? error.message : String(error)}\n`);
+};
+
+export const pendingDir =(storeDir: string): string => join(storeDir, 'pending');
 
 export interface PendingEntry {
   /** The file names of this entry that were read (one per deferral of the same transcript); the files of an unreadable entry are not here. */
@@ -81,8 +86,10 @@ const entryOf = async (storeDir: string, names: readonly string[]): Promise<Pend
 };
 
 /**
- * The first `limit` pending entries, read: fewest failures first, then name order. A store with no pending folder has none, and a pending
- * folder that cannot be listed is an empty list with one line on stderr, so it never fails the deposit it was read for.
+ * The first `limit` readable pending entries, read: fewest failures first, then name order, and then any unreadable entries met on the way (they
+ * never count toward `limit` and never go first, so a file that cannot be read cannot fill the hook's cap or be retried ahead of a real session).
+ * A store with no pending folder has none, and a pending folder that cannot be listed is an empty list with one line on stderr, so it never
+ * fails the deposit it was read for.
  */
 export const listPending = async (storeDir: string, limit: number): Promise<PendingEntry[]> => {
   let names: string[];
@@ -90,18 +97,34 @@ export const listPending = async (storeDir: string, limit: number): Promise<Pend
     names = (await readdir(pendingDir(storeDir))).filter((name) => name.endsWith('.json'));
   } catch (error) {
     if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return [];
-    process.stderr.write(`oars: the pending list could not be read and is skipped: ${error instanceof Error ? error.message : String(error)}\n`);
+    warn('the pending list could not be read and is skipped', error);
     return [];
   }
   const groups = new Map<string, string[]>();
   for (const name of names.sort()) groups.set(keyOf(name), [...(groups.get(keyOf(name)) ?? []), name]);
   const ordered = [...groups.values()].map((group) => ({ group, failures: Math.max(...group.map(failuresOf)) })).sort((a, b) => a.failures - b.failures);
-  return Promise.all(ordered.slice(0, limit).map((entry) => entryOf(storeDir, entry.group)));
+  const readable: PendingEntry[] = [];
+  const unreadable: PendingEntry[] = [];
+  // Read in batches of as many entries as are still wanted, so an unreadable one is read past rather than counted.
+  for (let next = 0; next < ordered.length && readable.length < limit; ) {
+    const batch = ordered.slice(next, next + Math.max(1, limit - readable.length));
+    next += batch.length;
+    for (const entry of await Promise.all(batch.map((item) => entryOf(storeDir, item.group)))) (entry.unreadable ? unreadable : readable).push(entry);
+  }
+  return [...readable, ...unreadable];
 };
 
 /** Removes the files of the entries a deposit settled, after its `state.json` was written, so a crash before that leaves them for the next run. */
 export const removePending = async (storeDir: string, entries: readonly PendingEntry[]): Promise<void> => {
-  for (const entry of entries) for (const name of entry.names) await rm(join(pendingDir(storeDir), name), { force: true });
+  for (const entry of entries) {
+    for (const name of entry.names) {
+      try {
+        await rm(join(pendingDir(storeDir), name), { force: true });
+      } catch (error) {
+        warn(`a settled pending file could not be removed and is left for the next run: ${name}`, error);
+      }
+    }
+  }
 };
 
 /** Counts one more failed deposit of `entry`, in the name of its first file; returns the new count. The caller holds the store lock, so no one else renames or removes it. */
@@ -110,7 +133,11 @@ export const failPending = async (storeDir: string, entry: PendingEntry): Promis
   const first = entry.names[0];
   if (first !== undefined) {
     const base = first.replace(FAILED, '.json').replace(/\.json$/, `.f${String(failures)}.json`);
-    await rename(join(pendingDir(storeDir), first), join(pendingDir(storeDir), base));
+    try {
+      await rename(join(pendingDir(storeDir), first), join(pendingDir(storeDir), base));
+    } catch (error) {
+      warn(`a failed pending file could not be renamed and is left for the next run: ${first}`, error);
+    }
   }
   return failures;
 };
@@ -121,6 +148,12 @@ export const sweepPendingTemps = async (storeDir: string, staleMs: number): Prom
   const names = await readdir(dir).catch(() => []);
   for (const name of names.filter((entry) => entry.endsWith('.tmp'))) {
     const age = await stat(join(dir, name)).then((info) => Date.now() - info.mtimeMs, () => 0);
-    if (age > staleMs) await rm(join(dir, name), { force: true });
+    if (age <= staleMs) continue;
+    try {
+      await rm(join(dir, name), { force: true });
+    } catch (error) {
+      // Housekeeping: a leftover this sweep cannot remove (a folder named like one, or a file Windows refuses) costs a line, never the deposit.
+      warn(`a stale pending temp file could not be removed and is left in place: ${name}`, error);
+    }
   }
 };
