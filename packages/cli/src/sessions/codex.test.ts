@@ -522,10 +522,91 @@ describe('Paginated rollouts', () => {
     expect(out.errorLines.map((entry) => entry.line)).toEqual(['server unavailable', 'no such note']);
   });
 
-  it('ignores item_completed items it has no use for (a Plan, a CommandExecution) without failing', () => {
+  it('ignores an item_completed item it has no use for (a Plan) without failing', () => {
     begin();
-    const lines = rolloutLines(asText([pmeta(), done(2, { type: 'Plan', id: 'x', text: 'steps' }), done(3, { type: 'CommandExecution', id: 'y', status: 'completed' })]), 's');
+    const lines = rolloutLines(asText([pmeta(), done(2, { type: 'Plan', id: 'x', text: 'steps' })]), 's');
     expect(lines).toEqual([]);
+  });
+
+  // A CommandExecution TurnItem is persisted in a Paginated rollout (policy.rs:253 arm, kept by `_ =>` at :285; a Legacy one keeps only
+  // FunctionCallOutput, Plan, Sleep, and a completed SubAgentActivity, :238-251). Its `id` is the exec_command's call id (core/src/tools/events.rs:572),
+  // with `exit_code` and `aggregated_output` (protocol/src/items.rs:252-290), written when the process exits (events.rs:570-585): by the exit watcher for
+  // a process the model never polls (core/src/unified_exec/async_watcher.rs:158, :224), or by the call itself when it exits in its first yield
+  // (process_manager.rs:827). `status` is Completed on exit code 0 and Failed otherwise (events.rs:527-536); a rejected call is Declined with exit code -1
+  // (:552-556).
+  describe('a CommandExecution item (items.rs:252-290)', () => {
+    const running = 'Chunk ID: ab12\nWall time: 0.0100 seconds\nProcess running with session ID 9\nOriginal token count: 3\nOutput:\n';
+    const execCall = (second: number, id: string, cmd: string) => call(second, id, 'exec_command', { arguments: JSON.stringify({ cmd }) });
+    const backgrounded = (second: number, id: string) => ord(shellOut(second, id, running));
+    // The fields upstream's struct has no default for: command, cwd, parsed_cmd, source, and status (items.rs:263-280).
+    const exited = (second: number, id: string, rest: object) =>
+      done(second, { type: 'CommandExecution', id, command: ['bash', '-lc', 'x'], cwd: '/work/app', parsed_cmd: [], source: 'unified_exec_startup', ...rest });
+
+    it('settles an exec_command the model never polled with the failure its exit watcher wrote', () => {
+      begin();
+      const out = extractOf([
+        pmeta(),
+        execCall(2, 'u1', 'npm test'),
+        backgrounded(3, 'u1'),
+        exited(4, 'u1', { status: 'failed', exit_code: 1, aggregated_output: '1 test failed\nsecond line' }),
+      ]);
+      expect(out.tools).toMatchObject([{ tool: 'Bash', status: 'error' }]);
+      expect(out.errorLines).toMatchObject([{ tool: 'Bash', line: '1 test failed' }]);
+    });
+
+    it('settles a completed exec_command nothing polled with its output, so a git commit records its sha', () => {
+      begin();
+      const out = extractOf([
+        pmeta(),
+        execCall(2, 'u1', 'git commit -m x'),
+        backgrounded(3, 'u1'),
+        exited(4, 'u1', { status: 'completed', exit_code: 0, aggregated_output: '[main abc1234] x\n 1 file changed, 1 insertion(+)' }),
+      ]);
+      expect(out.tools[0]).toMatchObject({ tool: 'Bash', status: 'ok', commits: ['abc1234'] });
+      expect(out.errorLines).toEqual([]);
+    });
+
+    it('settles an exec_command that exited in its first yield once, whichever of the item and the output comes first', () => {
+      begin();
+      const finished = 'Chunk ID: ab12\nWall time: 0.0100 seconds\nProcess exited with code 2\nOriginal token count: 3\nOutput:\nboom';
+      const itemFirst = extractOf([pmeta(), execCall(2, 'u1', 'make'), exited(3, 'u1', { status: 'failed', exit_code: 2, aggregated_output: 'boom' }), ord(shellOut(4, 'u1', finished))]);
+      expect(itemFirst.tools).toMatchObject([{ tool: 'Bash', status: 'error' }]);
+      expect(itemFirst.errorLines.map((entry) => entry.line)).toEqual(['boom']);
+      begin();
+      const outputFirst = extractOf([pmeta(), execCall(2, 'u1', 'make'), ord(shellOut(3, 'u1', finished)), exited(4, 'u1', { status: 'failed', exit_code: 2, aggregated_output: 'boom' })]);
+      expect(outputFirst.tools).toMatchObject([{ tool: 'Bash', status: 'error' }]);
+      expect(outputFirst.errorLines.map((entry) => entry.line)).toEqual(['boom']);
+    });
+
+    it('leaves a Declined item unsettled (exit code -1, events.rs:552-556), an item with no exit_code (an Option, skipped when None, items.rs:284-286), and an item for a call it never saw', () => {
+      begin();
+      const out = extractOf([
+        pmeta(),
+        execCall(2, 'u1', 'rm -rf x'),
+        backgrounded(3, 'u1'),
+        exited(4, 'u1', { status: 'declined', exit_code: -1, aggregated_output: 'exec command rejected by user' }),
+        execCall(5, 'u2', 'sleep 100'),
+        backgrounded(6, 'u2'),
+        exited(7, 'u2', { status: 'failed' }),
+        exited(8, 'nope', { status: 'failed', exit_code: 1, aggregated_output: 'x' }),
+      ]);
+      expect(out.tools.map((tool) => tool.status)).toEqual(['none', 'none']);
+      expect(out.errorLines).toEqual([]);
+    });
+
+    it('settles a polled exec_command once: the write_stdin that saw it exit and then the item', () => {
+      begin();
+      const out = extractOf([
+        pmeta(),
+        execCall(2, 'u1', 'npm test'),
+        backgrounded(3, 'u1'),
+        call(4, 'u2', 'write_stdin', { arguments: JSON.stringify({ session_id: 9, chars: '' }) }),
+        ord(shellOut(5, 'u2', 'Chunk ID: ab12\nWall time: 0.0100 seconds\nProcess exited with code 1\nOriginal token count: 3\nOutput:\nfailed')),
+        exited(6, 'u1', { status: 'failed', exit_code: 1, aggregated_output: 'failed' }),
+      ]);
+      expect(out.tools.map((tool) => [tool.tool, tool.status])).toEqual([['Bash', 'error'], ['Bash', 'error']]);
+      expect(out.errorLines.map((entry) => entry.line)).toEqual(['failed', 'failed']);
+    });
   });
 
   it('applies only the first session_meta: a copy from fork history keeps the fork id and cwd (recorder.rs:1157-1158, :1173), in a Legacy rollout, which has no ordinals (ordinal.rs:37)', () => {
@@ -680,6 +761,36 @@ describe('a unified-exec shell call (core/src/tools/handlers/unified_exec)', () 
       shellOut(5, 'u2', `${head('Process exited with code 0')}[main def5678] x`),
     ]);
     expect(out.tools[0]).toMatchObject({ status: 'ok', commits: ['def5678'] });
+  });
+
+  // The exit code is the header's (context.rs:556), never the output's: `cat ci.log` exits 0 and may print a line that reads like a failure header.
+  it('records a call that exited 0 as ok, though its output starts with Exit code 2', () => {
+    const out = extractOf([
+      meta('/work/app'),
+      unified(2, 'u1', 'exec_command', { cmd: 'cat ci.log' }),
+      shellOut(3, 'u1', `${head('Process exited with code 0')}Exit code 2\nlog line`),
+    ]);
+    expect(out.tools).toMatchObject([{ tool: 'Bash', status: 'ok' }]);
+    expect(out.errorLines).toEqual([]);
+  });
+
+  it('records a polled exec_command that exited 0 as ok, though its output starts with Exit code 2', () => {
+    const out = extractOf([
+      meta('/work/app'),
+      unified(2, 'u1', 'exec_command', { cmd: 'cat ci.log' }),
+      shellOut(3, 'u1', head('Process running with session ID 9')),
+      unified(4, 'u2', 'write_stdin', { session_id: 9, chars: '' }),
+      shellOut(5, 'u2', `${head('Process exited with code 0')}Exit code 2\nlog line`),
+    ]);
+    expect(out.tools.map((tool) => [tool.tool, tool.status])).toEqual([['Bash', 'ok'], ['Bash', 'ok']]);
+    expect(out.errorLines).toEqual([]);
+  });
+
+  it('records a call that exited 0 with no output as ok, and still finds a commit sha past a first line that is not one', () => {
+    const quiet = extractOf([meta('/work/app'), unified(2, 'u1', 'exec_command', { cmd: 'true' }), shellOut(3, 'u1', head('Process exited with code 0'))]);
+    expect(quiet.tools).toMatchObject([{ status: 'ok' }]);
+    const commit = extractOf([meta('/work/app'), unified(2, 'u1', 'exec_command', { cmd: 'git commit -m x' }), shellOut(3, 'u1', `${head('Process exited with code 0')}hint: waiting\n[main abc1234] x`)]);
+    expect(commit.tools[0]).toMatchObject({ status: 'ok', commits: ['abc1234'] });
   });
 
   it('records exec_command failed: <err> (exec_command.rs:270) as an error, with its text as the error line', () => {
