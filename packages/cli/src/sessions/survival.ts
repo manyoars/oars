@@ -1,4 +1,4 @@
-// Commit survival (t746 Item 3, V7): what became of a commit is an observation made later, not a fact of the transcript, so it never
+// Commit survival: what became of a commit is an observation made later, not a fact of the transcript, so it never
 // runs at derive time and never from a hook a session waits on. A manual deposit and the nightly run read the repository of each
 // allowlisted folder and append to `commit-survival.jsonl` beside the store, so the log `verify` checks stays untouched.
 import { execFile } from 'node:child_process';
@@ -43,14 +43,15 @@ const runGit: Git = (root, args, stdin) =>
   new Promise((resolve, reject) => {
     const child = execFile(
       'git',
-      ['-c', 'protocol.allow=never', '-C', root, ...args],
+      ['-C', root, ...args],
       {
         encoding: 'utf8',
         timeout: GIT_TIMEOUT_MS,
         maxBuffer: GIT_MAX_BUFFER,
         windowsHide: true,
-        // A partial clone would fetch a missing object from its remote, and this reads no network: `protocol.allow` refuses it on any git, while `GIT_NO_LAZY_FETCH` needs about 2.45 or later. A `GIT_DIR` inherited from a caller's hook would read some other repository than the one named.
-        env: { ...process.env, GIT_NO_LAZY_FETCH: '1', GIT_OPTIONAL_LOCKS: '0', GIT_DIR: undefined, GIT_WORK_TREE: undefined },
+        // A partial clone would fetch a missing object from its remote, and this reads no network. `GIT_NO_LAZY_FETCH` needs about 2.45 or later, and a `protocol.allow` key loses to a `protocol.<name>.allow` key in the
+        // repository's own config. `GIT_ALLOW_PROTOCOL` is checked first on any git and beats every config key, and setting it here replaces one inherited from the caller. A `GIT_DIR` inherited from a caller's hook would read some other repository than the one named.
+        env: { ...process.env, GIT_ALLOW_PROTOCOL: 'none', GIT_NO_LAZY_FETCH: '1', GIT_OPTIONAL_LOCKS: '0', GIT_DIR: undefined, GIT_WORK_TREE: undefined },
       },
       (error, stdout) => {
         if (error === null) resolve(stdout);
@@ -138,7 +139,7 @@ const topLevelCwd = (line: string): string | undefined => {
   }
 };
 
-/** The transcript's first `cwd` whose slug is the project. A later `cd` moves `cwd`, and a path a transcript merely names must not choose what gets read (V8). */
+/** The transcript's first `cwd` whose slug is the project. A later `cd` moves `cwd`, and a path a transcript merely names must not choose what gets read. */
 const cwdIn = async (file: string, project: string): Promise<string | undefined> => {
   const stream = createReadStream(file, { encoding: 'utf8' });
   // An absent file errors here, not in the loop.

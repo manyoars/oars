@@ -110,7 +110,13 @@ describe('the issuer oars login uses', () => {
 
   const PRODUCTION_DISCOVERY = `${PRODUCTION_ISSUER_URL}/.well-known/openid-configuration`;
 
-  it.each([['the request fails', () => HttpResponse.error()], ['the answer is 503', () => new HttpResponse(null, { status: 503 })]])(
+  it.each([
+    ['the request fails', () => HttpResponse.error()],
+    ['the answer is 503', () => new HttpResponse(null, { status: 503 })],
+    ['the answer is 404', () => new HttpResponse(null, { status: 404 })],
+    ['the answer is 500', () => new HttpResponse(null, { status: 500 })],
+    ['the answer is not JSON', () => new HttpResponse('<html>maintenance</html>', { status: 200, headers: { 'Content-Type': 'text/html' } })],
+  ])(
     'says Many Oars has not launched yet and exits 2 when the flag is true but the built-in issuer does not answer discovery (%s)',
     async (_name, answer) => {
       const h = harness({ OARS_ISSUER_URL: '' });
@@ -127,6 +133,14 @@ describe('the issuer oars login uses', () => {
     expect(await run(['login', '--no-browser'], fromEnv.deps)).toBe(ExitCode.UNREACHABLE);
     const fromFlag = harness({ OARS_ISSUER_URL: '' });
     expect(await run(['login', '--no-browser', '--issuer-url', ISSUER], fromFlag.deps)).toBe(ExitCode.UNREACHABLE);
+  });
+
+  it('keeps the library error when an issuer the developer named answers discovery with 404', async () => {
+    server.use(http.get(`${ISSUER}/.well-known/openid-configuration`, () => new HttpResponse(null, { status: 404 })));
+    const fromEnv = harness({ OARS_ISSUER_URL: ISSUER });
+    expect(await run(['login', '--no-browser'], fromEnv.deps)).toBe(ExitCode.UNEXPECTED);
+    const fromFlag = harness({ OARS_ISSUER_URL: '' });
+    expect(await run(['login', '--no-browser', '--issuer-url', ISSUER], fromFlag.deps)).toBe(ExitCode.UNEXPECTED);
   });
 
   it('gives up on a launch flag that never answers after 5 seconds, and says Many Oars has not launched yet', async () => {

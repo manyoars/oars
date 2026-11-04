@@ -1,5 +1,5 @@
-// `oars sessions hook install|uninstall|status`: writes the three Claude Code hook entries into one settings file, merging with what is
-// there. An entry is ours when its command ends with `hook-bin.js" <session-start|post-tool|stop>`, so uninstall removes those entries and nothing else. Also the retention floor
+// `oars sessions hook install|uninstall|status`: writes the four Claude Code hook entries into one settings file, merging with what is
+// there. An entry is ours when its command ends with `hook-bin.js" <session-start|pre-tool|post-tool|stop>`, so uninstall removes those entries and nothing else. Also the retention floor
 // (the harness deletes raw transcripts after `cleanupPeriodDays`, 30 when unset) and the Windows nightly task.
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
@@ -9,7 +9,7 @@ export const RETENTION_FLOOR = 365;
 export const DEFAULT_RETENTION = 30;
 export const TASK_NAME = 'OarsSessionsNightly';
 // The tail of a command this module wrote; anything else in a settings file is the operator's, whatever it is called.
-const OWN_COMMAND = /hook-bin\.js" (?:session-start|post-tool|stop)$/;
+const OWN_COMMAND = /hook-bin\.js" (?:session-start|pre-tool|post-tool|stop)$/;
 
 /** What the install needs from the machine, so a test can stand in for each. */
 export interface InstallRuntime {
@@ -26,8 +26,8 @@ export interface InstallRuntime {
 export type Scope = 'user' | 'project' | 'file';
 
 interface HookSpec {
-  event: 'SessionStart' | 'PostToolUseFailure' | 'SessionEnd';
-  arg: 'session-start' | 'post-tool' | 'stop';
+  event: 'SessionStart' | 'PreToolUse' | 'PostToolUseFailure' | 'SessionEnd';
+  arg: 'session-start' | 'pre-tool' | 'post-tool' | 'stop';
   /** Tools the group applies to; unset means every one. */
   matcher?: string;
   /** Seconds the harness waits; the hooks' own budgets are far lower, this is the ceiling. */
@@ -36,6 +36,8 @@ interface HookSpec {
 
 const SPECS: readonly HookSpec[] = [
   { event: 'SessionStart', arg: 'session-start', timeout: 5 },
+  // The tools whose calls fail by shape on the operator's store. Bash stays out: its failures do not depend on its shape, and it is the most frequent call, each of which would start node.
+  { event: 'PreToolUse', arg: 'pre-tool', timeout: 5, matcher: 'PowerShell|Monitor|Edit|Agent' },
   // A failed Bash call arrives as PostToolUseFailure with `error` = "Exit code N ...": PostToolUse itself fires on success only.
   { event: 'PostToolUseFailure', arg: 'post-tool', timeout: 5, matcher: 'Bash|PowerShell' },
   // SessionEnd fires once per session; Stop fires after every assistant turn and would re-extract the growing transcript each time.

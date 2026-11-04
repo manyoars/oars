@@ -68,6 +68,17 @@ The SDK key is shown once, so save it when `deploy` prints it.
 
 - `--price <ref>` picks the price. The default is the workload's only active price.
 
+### keys
+
+`oars keys` manages the API keys of your account.
+
+- `oars keys create --name <name>` creates a key and prints its secret once; the platform keeps no copy. The default authorities are `AGENT_OPERATE` and `AGENT_READ`; `--authority <name>` (repeatable) sets others, and `--expires-in-days <n>` sets an expiry. A key expires after 90 days unless `--expires-in-days <n>` (at most 365) says otherwise; replace it before then.
+- `--workload <id>` limits the key to one workload you created. Such a key may carry only `AGENT_OPERATE` and `AGENT_READ` (more is a 400, `API_KEY_WORKLOAD_SCOPE_EXCEEDS_CAP`), and it works on that workload only.
+- A retry with the same `--idempotency-key` returns no secret: the command exits 5 and names the key, and you revoke it and create another.
+- Creating or revoking a key needs a signed-in person. With `OARS_API_KEY` set, any API key gets 403 `HUMAN_SESSION_REQUIRED` (exit 3) and logging in again does not help: unset it and use the `oars login` session.
+- `oars keys list` lists the keys with their prefix, scope, and expiry. A secret never comes back.
+- `oars keys revoke <keyId>` ends a key at once. There is no `rotate`: revoke the key and create another.
+
 ### sessions
 
 `oars sessions` keeps a local, deterministic memory of your own Claude Code sessions. oars makes no model call and no network call, except `gold arms`, which sends redacted text through your own Claude subscription.
@@ -87,6 +98,8 @@ oars sessions recall --path src/main.ts --since 30   # sees the first 100 sorted
 # Serve the same query to a running agent as one MCP tool, oars_recall (stdio):
 oars sessions recall --mcp
 
+oars sessions recall --counts --day 2026-11-03   # push and pull, shown and held, as counts
+oars sessions lineage <recallId or readId>       # walk back through the evidence, one line per hop
 oars sessions read                          # derived reads of your own sessions, largest sample first in each family, with what the store cannot read
 oars sessions read --family version-boundary # order 2: what moved between two harness version buckets; also substitution, interaction, and day-move
 oars sessions read --family lead-lag         # order 3: a labeled experiment behind an out-of-time check
@@ -115,7 +128,7 @@ shows their tokens as the `delegated` column, and their errors are in the signat
 spawned them, so per-session counts still count main sessions. Every deposited transcript is also
 hard-linked (copied across volumes) into `<config>/oars/sessions/raw/`, so it outlives the harness's own cleanup. For each session it also writes a skeleton (ids, timestamps, tool linkage, token counts, a SHA-256 in place of every content
 field, and a Merkle root over the raw lines) that `verify` checks; the skeleton holds hashes only, never content.
-`verify` exits 0 even when an invariant has exceptions; add `--strict` to exit 4 instead. `verify` also reports every session on its own (`--json`: `sessionResults`, each session's ten rows with a status of `pass`, `fail`, or `not run`) and audits each session against its raw file (`audit`): the raw-file match for a hard link and for a copy (a copy of a different size counts as possible tampering), the Merkle root recomputed over the first `leaves` lines, and the count bindings (`leaves`, `session.lines`, and the skeleton's lines plus `badLines` must agree). Each session lands on one of five results: `root matches and the counts bind`, `changed since deposit`, `root mismatch`, `counts do not bind`, or `not run` (no raw file, no skeleton, no capture record, or a raw file that cannot be read). `root mismatch` and `counts do not bind` fail `--strict`; sessions under 10 `leaves` are flagged. `verify` also scores each session against the operator's own other weeks on its harness (`--json`: `selfBaseline`, layer 2 at T0, local): the session's UTC week is the week of its `tsFirst`; a baseline is that harness's other weeks with at least 1,000 tool calls that ended by now, combined by calls; the result is `F` from the median distance over seven histograms (a dimension with no counts on a side is dropped). It is `not run`, scoring nothing, for a null `tsFirst`, a week under 1,000 calls, or fewer than 4 baseline weeks. A low `F` lowers a weight and rejects nothing. `measure` prints the recurring-error count
+`verify` exits 0 even when an invariant has exceptions; add `--strict` to exit 4 instead. `verify` also reports every session on its own (`--json`: `sessionResults`, each session's ten rows with a status of `pass`, `fail`, or `not run`) and audits each session against its raw file (`audit`): the raw-file match for a hard link and for a copy (a copy of a different size counts as possible tampering), the Merkle root recomputed over the first `leaves` lines, and the count bindings (`leaves`, `session.lines`, and the skeleton's lines plus `badLines` must agree). Each session lands on one of five results: `root matches and the counts bind`, `changed since deposit`, `root mismatch`, `counts do not bind`, or `not run` (no raw file, no skeleton, no capture record, or a raw file that cannot be read). `root mismatch` and `counts do not bind` fail `--strict`; sessions under 10 `leaves` are flagged. `verify` also scores each session against the operator's own other weeks on its harness (`--json`: `selfBaseline`, layer 2 at T0, local): the session's UTC week is the week of its `tsFirst`; a baseline is that harness's other weeks with at least 1,000 tool calls that ended by now, combined by calls; the result is `F` from the median distance over seven histograms (a dimension with no counts on a side is dropped). It is `not run`, scoring nothing, for a null `tsFirst`, a week under 1,000 calls, or fewer than 4 baseline weeks. A low `F` lowers a weight and rejects nothing. `verify` also names the project folders that hold transcripts but are not on the saved allowlist, so are never read (`--json`: `scope`, with `folders`, `transcripts`, and `names`); it is scope, not a failure, and never fails `--strict`. `books` prints the same line. `measure` prints the recurring-error count
 per hundred sessions and, on a second line, the distinct recurring signatures in the window.
 #### Many folders: `--allow` prefixes, globs, and `--allow-file`
 
@@ -123,11 +136,12 @@ An `--allow` entry is a folder (or its slug), a folder prefix with a trailing sl
 
 #### Recall in a running session: hooks
 
-`oars sessions hook install` writes three entries into one Claude Code settings file. Each is a deterministic, local, fail-open call into the store (no model, no network); an error inside a hook exits 0 with no output, so a hook never blocks or fails a session.
+`oars sessions hook install` writes four entries into one Claude Code settings file. Each is a deterministic, local, fail-open call into the store (no model, no network); an error inside a hook exits 0 with no output, so a hook never blocks or fails a session.
 
 | Event | Does | Budget |
 |---|---|---|
 | `SessionStart` | injects `oars sessions recall --context` for the session's cwd as additional context: the top 5 errors by sessions within the latest 300 sessions of the repository (the `measure --last 300 --repo` window) and what usually followed | under 500 ms |
+| `PreToolUse` (matcher `PowerShell\|Monitor\|Edit\|Agent`) | for a call whose tool and input key names match a shape the store has seen fail often enough, injects its counts as additional context, once per session and shape, and records the recall. 10 percent of those sessions and shapes are held back: a held arm records what it would have shown and injects nothing. Starts node per matched call | under 500 ms |
 | `PostToolUseFailure` (matcher `Bash\|PowerShell`) | for a failed tool call whose error starts with `Exit code N` normalizes the first informative line as `deposit` does and, on a hit, adds "seen in N sessions; what followed: X". A shell pre-filter in the registered command reads the event first and starts node only when it carries `Exit code` | pre-filter: shell builtins only, no node start; whole path under 1 s |
 | `SessionEnd` | deposits that one transcript (idempotent by size and mtime), only from a folder an earlier `--allow` named. Once per session: `Stop` fires after every turn and would append a new revision of the growing transcript each time. A session the harness ends without `SessionEnd` is picked up by the nightly deposit | under 5 s |
 
@@ -155,13 +169,13 @@ Install merges: existing hooks (a Stop hook that rotates sessions, say) stay, ev
 
 #### Remove everything
 
-`oars sessions hook uninstall --scope user` (or the scope you installed); `oars sessions hook install --schedule off`; delete the store folder `<config>/oars/sessions/` (observations, skeletons, state, the hook index, `hook-calls.jsonl`, and `raw/`, which holds the unredacted transcripts). `gold sample` also writes its prompt file and sidecar to `~/.claude/session-commons/review/` (or `$CLAUDE_CONFIG_DIR`, or your `--out-dir`); delete those too. Nothing else is created. `cleanupPeriodDays` stays at the value install set unless you change it.
+`oars sessions hook uninstall --scope user` (or the scope you installed); `oars sessions hook install --schedule off`; delete the store folder `<config>/oars/sessions/` (observations, skeletons, state, the hook index, `hook-calls.jsonl`, and `raw/`, which holds the unredacted transcripts). `gold sample` also writes its prompt file and sidecar to `~/.claude/session-commons/review/` (or `$CLAUDE_CONFIG_DIR/session-commons/review/`, or your `--out-dir`); delete those too. Nothing else is created. `cleanupPeriodDays` stays at the value install set unless you change it.
 
 ## The `--json` contract
 
 With `--json`, stdout carries exactly one JSON document and a success exits 0.
 
-- Success: `{"ok": true, ...}`. The rest depends on the command: `login` adds `email`; `deploy` adds `workloadId`, `prices`, `started`, `nextSteps` and, when this run minted it, `sdkKey`; `templates` adds `templates`; `status` adds `workload` and `billingMode`; `test-charge` adds `chargeId` and `status`; `sessions` commands add their own fields (`deposit` the counts, `recall` `matches`, `books` `rows`, `measure` `last` and `before`, `verify` `sessions`, `unreadable`, `invariants`, `sessionResults`, and `audit`).
+- Success: `{"ok": true, ...}`. The rest depends on the command: `login` adds `email`; `deploy` adds `workloadId`, `prices`, `started`, `nextSteps` and, when this run minted it, `sdkKey`; `templates` adds `templates`; `status` adds `workload` and `billingMode`; `test-charge` adds `chargeId` and `status`; `keys create` adds `key` and `secret`, `keys list` adds `keys`, and `keys revoke` adds `keyId` and `revoked`; `sessions` commands add their own fields (`deposit` the counts, `recall` `matches`, `books` `rows`, `measure` `last` and `before`, `verify` `sessions`, `unreadable`, `invariants`, `sessionResults`, and `audit`).
 - Failure: `{"ok": false, "step": "...", "problem": {...}}`, where `problem` is the platform's problem document (`title`, `detail`, `code`, `actionUrl` when it sent them). A `deploy` that stopped after registering also carries `workloadId`, `rerun` and, if that run minted it, `sdkKey`.
 
 Without `--json`, a failure prints the problem to stderr instead.
