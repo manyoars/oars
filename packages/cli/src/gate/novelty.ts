@@ -29,7 +29,7 @@ export const scopesOf = (key: string, repository: string, session: string): Scop
 
 /**
  * `ready`: read cleanly. `fresh`: no index and no record, so an empty one is right. `unseeded`: no index but a record exists, so what is new cannot be told without a
- * scan; `oars gate install` or `replay` seeds it. `damaged`: it did not read cleanly, and nothing is written to it.
+ * scan; `oars gate replay` seeds it. `damaged`: it did not read cleanly, and nothing is written to it.
  */
 export type KeptIndex = { state: 'ready'; lines: ReadonlySet<string> } | { state: 'fresh' | 'unseeded' | 'damaged' };
 
@@ -77,10 +77,10 @@ export const noveltyOf = (index: KeptIndex, scopes: Scopes): { novelty: Novelty;
 export const keepIndex = async (storeDir: string, index: KeptIndex, add: readonly string[]): Promise<void> => {
   if (add.length === 0 || (index.state !== 'ready' && index.state !== 'fresh')) return;
   await mkdir(storeDir, { recursive: true });
-  await appendFile(indexFile(storeDir), `${index.state === 'fresh' ? `${INDEX_HEADER}\n` : ''}${add.join('\n')}\n`);
+  await appendFile(indexFile(storeDir), `${index.state === 'fresh' ? `${INDEX_HEADER}\n` : ''}${add.join('\n')}\n`, { mode: 0o600 });
 };
 
-/** Writes the index from every line given plus the ones already kept, whole and atomic. Used by `install` and `replay`, which are not in a hurry. */
+/** Writes the index from every line given plus the ones already kept, whole and atomic. Used by `replay`, which is not in a hurry. */
 export const seedIndex = async (storeDir: string, record: string, lines: Iterable<string>): Promise<void> => {
   const kept = await loadIndex(storeDir, record);
   const all = new Set<string>(kept.state === 'ready' ? kept.lines : []);

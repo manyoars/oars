@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -37,6 +37,14 @@ describe('the hook process: the deadline', () => {
     const lines = readFileSync(crossingsPath(store), 'utf8').trim().split('\n');
     expect(lines).toHaveLength(1);
     expect(JSON.parse(lines[0] ?? '')).toMatchObject({ kind: 'crossing', via: 'hook', name: 'left-pad', session: 's1' });
+  });
+
+  it.skipIf(process.platform === 'win32')('creates the staged file private to the user', async () => {
+    const store = folder();
+    const exit = vi.fn();
+    void runHookProcess({ stdin: () => Promise.resolve(PAYLOAD), deps: depsFor(store, { append: () => new Promise<void>(() => undefined) }), exit, deadlineMs: 100 });
+    await vi.waitFor(() => expect(exit).toHaveBeenCalled(), { timeout: 2_000 });
+    expect(statSync(crossingsPath(store)).mode & 0o777).toBe(0o600);
   });
 
   it('drops a staged record whose write fails and still exits 0', async () => {
