@@ -134,6 +134,17 @@ describe('a Windows Gemini session frames its shell as PowerShell (utils/shell-u
     expect(bare('\\\\server\\share\\app').session.frame?.shell).toBe('powershell');
     expect(bare('/home/me/app').session.frame?.shell).toBe('bash');
   });
+
+  it('does not take a typed prompt that quotes the context tag for the CLI context turn', () => {
+    const records = [
+      geminiHead('sess-1'),
+      prompt(1, 'why does this say <session_context>\nMy operating system is: win32\n</session_context>'),
+      say(2, '', { toolCalls: [{ id: 'c1', name: 'run_shell_command', args: { command: 'ls' }, status: 'success', timestamp: T(3) }] }),
+    ];
+    const out = capture(chatLines(records.map((record) => JSON.stringify(record)).join('\n'), 'sess', '/home/me/app').map((line) => JSON.stringify(line)).join('\n'));
+    expect(out.session.frame?.shell).toBe('bash');
+    expect(out.tools.map((tool) => tool.tool)).toEqual(['Bash']);
+  });
 });
 
 const never = (): never => {
