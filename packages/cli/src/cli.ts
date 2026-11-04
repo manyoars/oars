@@ -17,7 +17,7 @@ import type { BooksBy, RecallQuery } from './sessions/query.js';
 import { closedQueryOf, formsRefusal, RECALL_FAMILIES } from './sessions/recall-reads.js';
 import { FAMILIES } from './sessions/read.js';
 import { sessionsBooks, sessionsContext, sessionsDeposit, sessionsGoldArms, sessionsGoldSample, sessionsGoldScore, sessionsHookInstall, sessionsHookStatus, sessionsHookUninstall, sessionsMcp, sessionsLineage, sessionsMeasure, sessionsRead, sessionsRecall, sessionsRecallCounts, sessionsVerify, type SessionsDeps } from './sessions/command.js';
-import { gateInstall, gateReplay, gateReport, gateUninstall } from './gate/command.js';
+import { gateInstall, gatePolicy, gateReplay, gateReport, gateUninstall } from './gate/command.js';
 import { DEADLINE_MS, gateHook } from './gate/hook.js';
 import { managerReader } from './gate/registry.js';
 import { exclusionPaths, sessionsExclusions } from './sessions/exclusion.js';
@@ -595,14 +595,15 @@ const buildProgram = (deps: RunDeps, argv: string[]): Command => {
 
   gate
     .command('hook')
-    .description('the PreToolUse hook: reads the tool call on stdin, records any crossing in crossings.jsonl, and prints nothing; it never allows, denies, or changes a call (bin.js answers this command itself, before the rest of the CLI loads)')
+    .description('the PreToolUse hook: reads the tool call on stdin, records any crossing in crossings.jsonl, and prints nothing unless the gate policy says to: a note as context, or a deny labeled with the fact for a name the registry does not hold; it never allows or changes a call (bin.js answers this command itself, before the rest of the CLI loads)')
     .action(async () => {
       const runtime = sessionDeps(deps).sessions;
       // No store means no file: an empty store folder would put crossings.jsonl in the working folder.
       if (runtime === undefined) return;
       let stdin = '';
       for await (const chunk of runtime.stdin) stdin += String(chunk);
-      await gateHook(stdin, { storeDir: runtime.storeDir, now: deps.now, clock: () => performance.now(), deadlineMs: DEADLINE_MS });
+      const output = await gateHook(stdin, { storeDir: runtime.storeDir, now: deps.now, clock: () => performance.now(), deadlineMs: DEADLINE_MS });
+      if (output !== '') deps.io.stdout(output);
     });
 
   gate
@@ -617,6 +618,13 @@ const buildProgram = (deps: RunDeps, argv: string[]): Command => {
     .description('remove only the gate hook `install` wrote from the user settings; crossings.jsonl stays')
     .action(async (_options: OptionValues, command: Command) => {
       emit(deps, flag(command.optsWithGlobals(), 'json'), await gateUninstall(sessionDeps(deps)));
+    });
+
+  gate
+    .command('policy')
+    .description('print the gate policy in force: per class warn, block, or off, the day count for a young name, and the holdback share; read from gate-policy.json in the sessions store, whose absence or damage means the defaults')
+    .action(async (_options: OptionValues, command: Command) => {
+      emit(deps, flag(command.optsWithGlobals(), 'json'), await gatePolicy(sessionDeps(deps)));
     });
 
   gate
