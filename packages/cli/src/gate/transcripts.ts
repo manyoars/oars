@@ -229,8 +229,15 @@ const patternOf = (name: string): string =>
  * its first crossing in this transcript, because after that the crossing's own output names it. Nothing shown, and it is `none-seen`, which says the
  * transcript shows no source; the agent's own words do not count, since they are the thing being asked about.
  */
-export const readOrigins = async (file: string, firstLines: ReadonlyMap<string, number>): Promise<Map<string, Origin>> => {
+export interface Origins {
+  origins: Map<string, Origin>;
+  /** Names a main-line or subagent prompt showed before their first crossing, whatever showed them first: the operator typing a name is a decision whoever saw it first. */
+  prompted: Set<string>;
+}
+
+export const readOrigins = async (file: string, firstLines: ReadonlyMap<string, number>): Promise<Origins> => {
   const origins = new Map<string, Origin>();
+  const prompted = new Set<string>();
   const byCanon = new Map<string, string[]>();
   for (const name of firstLines.keys()) byCanon.set(canon(name), [...(byCanon.get(canon(name)) ?? []), name]);
   const alternatives = [...firstLines.keys()]
@@ -250,11 +257,13 @@ export const readOrigins = async (file: string, firstLines: ReadonlyMap<string, 
     for (const [source, text] of sourcedTexts(line, tools)) {
       for (const match of text.matchAll(words)) {
         for (const name of byCanon.get(canon(match[0])) ?? []) {
-          if (!origins.has(name) && position < (firstLines.get(name) ?? 0)) origins.set(name, source);
+          if (position >= (firstLines.get(name) ?? 0)) continue;
+          if (!origins.has(name)) origins.set(name, source);
+          if (source === 'prompt') prompted.add(name);
         }
       }
     }
   }
-  return origins;
+  return { origins, prompted };
 };
 

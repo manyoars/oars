@@ -9,7 +9,7 @@ import { paths, readState, writeAtomic, type SessionsRuntime } from '../sessions
 import type { Crossing, UnreadShape } from './checks.js';
 import { GATE_VERSION, parseRows, type AgainstLatest, type CrossingRecord, type Next, type Novelty, type Origin, type RegistryAge, type RegistryRow, type RunRow } from './record.js';
 import { askable, type RegistryAnswer, type RegistryAsk, type RegistryReader } from './registry.js';
-import { discover, readCalls, readOrigins, type CallsSeen, type Found, type FoundRemoval, type TranscriptFile, type TranscriptRead } from './transcripts.js';
+import { discover, readCalls, readOrigins, type CallsSeen, type Origins, type Found, type FoundRemoval, type TranscriptFile, type TranscriptRead } from './transcripts.js';
 
 export const crossingsFile = (storeDir: string): string => join(storeDir, 'crossings.jsonl');
 
@@ -33,6 +33,10 @@ export interface ReplayResult {
 const NEXT_WINDOW = 10;
 const DAY_MS = 86_400_000;
 const REGISTRY_WORKERS = 4;
+/** A kept registry answer older than this many days is asked again: a `latest` goes stale, and a row would otherwise read "as of this run" forever. */
+export const REGISTRY_MAX_DAYS = 30;
+/** Only these managers read the registry the `npm view` and `pip index` asks reach. A `poetry`, `uv`, `yarn`, or `conda` install may use one they do not. */
+const ASKED_PROGRAMS: ReadonlySet<string> = new Set(['npm', 'npx', 'pnpm', 'pip', 'python -m pip']);
 
 const keyOf = (crossing: Pick<Crossing, 'class' | 'name'>): string => `${crossing.class}\0${crossing.name}`;
 
@@ -57,15 +61,17 @@ interface Held {
   found: Found;
   transcript: TranscriptFile;
   origin: Origin;
+  /** The operator's own prompt named the package before this transcript's first crossing of it. */
+  prompted: boolean;
   next: Next;
 }
 
-const originsOf = async (transcript: TranscriptFile, read: TranscriptRead): Promise<Map<string, Origin>> => {
+const originsOf = async (transcript: TranscriptFile, read: TranscriptRead): Promise<Origins> => {
   const firstLines = new Map<string, number>();
   for (const { crossing, line } of read.found) {
     if (!firstLines.has(crossing.name)) firstLines.set(crossing.name, line);
   }
-  return firstLines.size === 0 ? new Map<string, Origin>() : readOrigins(transcript.file, firstLines);
+  return firstLines.size === 0 ? { origins: new Map<string, Origin>(), prompted: new Set<string>() } : readOrigins(transcript.file, firstLines);
 };
 
 const byTime = (one: { ts: string | null }, two: { ts: string | null }): number => {
@@ -139,7 +145,7 @@ const askRegistry = async (rows: readonly Held[], reader: RegistryReader, cached
   for (const { found } of rows) {
     const { crossing, cwd } = found;
     const key = keyOf(crossing);
-    if (cwd === null || answers.has(key) || asks.has(key) || crossing.versionForm === 'url' || !askable(crossing.class, crossing.name)) continue;
+    if (cwd === null || answers.has(key) || asks.has(key) || crossing.versionForm === 'url' || !ASKED_PROGRAMS.has(crossing.program) || !askable(crossing.class, crossing.name)) continue;
     const exists = folders.get(cwd) ?? (await isFolder(cwd));
     folders.set(cwd, exists);
     if (exists) asks.set(key, { class: crossing.class, name: crossing.name, cwd });
@@ -156,7 +162,7 @@ const askRegistry = async (rows: readonly Held[], reader: RegistryReader, cached
 };
 
 const recordOf = (held: Held, novelty: Novelty, removedAt: string | undefined, answer: RegistryAnswer | undefined): CrossingRecord => {
-  const { found, transcript, origin, next } = held;
+  const { found, transcript, origin, prompted, next } = held;
   const { crossing, ts, side } = found;
   return {
     kind: 'crossing',
@@ -170,7 +176,7 @@ const recordOf = (held: Held, novelty: Novelty, removedAt: string | undefined, a
     origin,
     novelty,
     // The operator named it only on the main line: a subagent's prompt is another model's words.
-    decidedBy: origin === 'prompt' && !side ? 'operator' : 'agent',
+    decidedBy: prompted && !side ? 'operator' : 'agent',
     permission: found.permission,
     status: found.status,
     next,
@@ -191,11 +197,11 @@ const recordOf = (held: Held, novelty: Novelty, removedAt: string | undefined, a
   };
 };
 
-const cachedAnswers = async (file: string): Promise<Map<string, RegistryRow>> => {
+const cachedAnswers = async (file: string, now: number): Promise<Map<string, RegistryRow>> => {
   const text = await readFile(file, 'utf8').catch(() => '');
   return new Map(
     parseRows(text)
-      .filter((row): row is RegistryRow => row.kind === 'registry')
+      .filter((row): row is RegistryRow => row.kind === 'registry' && (now - Date.parse(row.day)) / DAY_MS <= REGISTRY_MAX_DAYS)
       .map((row) => [keyOf(row), row]),
   );
 };
@@ -249,13 +255,13 @@ export const replay = async (runtime: Pick<SessionsRuntime, 'storeDir' | 'projec
   const { reads, transcripts, unreadable } = await readAll(runtime, entries, state.redactDomains);
   const held: Held[] = [];
   for (const { transcript, read } of reads) {
-    const origins = await originsOf(transcript, read).catch(() => new Map<string, Origin>());
-    for (const found of read.found) held.push({ found, transcript, origin: origins.get(found.crossing.name) ?? 'none-seen', next: nextOf(found, read) });
+    const { origins, prompted } = await originsOf(transcript, read).catch((): Origins => ({ origins: new Map<string, Origin>(), prompted: new Set<string>() }));
+    for (const found of read.found) held.push({ found, transcript, origin: origins.get(found.crossing.name) ?? 'none-seen', prompted: prompted.has(found.crossing.name), next: nextOf(found, read) });
   }
   held.sort((one, two) => byTime(one.found, two.found));
   const removedAt = lastRemovals(reads.flatMap(({ transcript, read }) => read.removals.map((removal) => ({ removal, transcript }))));
   const file = crossingsFile(runtime.storeDir);
-  const cached = await cachedAnswers(file);
+  const cached = await cachedAnswers(file, options.now());
   const answers = options.registry === undefined ? undefined : await askRegistry(held, options.registry, cached);
   const novelty = noveltyWalker();
   const records = held.map((one) => recordOf(one, novelty(one), removedAt.get(`${repositoryOf(one.transcript.project)}\0${keyOf(one.found.crossing)}`), answers?.get(keyOf(one.found.crossing))));

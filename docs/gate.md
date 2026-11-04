@@ -35,7 +35,7 @@ Written beside `observations.jsonl`, atomically, and the only file replay writes
 | `class`, `form`, `program`, `versionForm`, `statusReports` | P | closed vocabulary; `program` is `npm`, `pnpm`, `yarn`, `bun`, `npx`, `pip`, `python -m pip`, `uv`, `uvx`, `pipx`; `versionForm` is `pinned`, `range`, `tag`, `url`, `unstated` |
 | `origin` | P | where the name came from: `prompt`, `repo-file`, `web`, `tool-output`, `skill`, `harness`, or `none-seen` |
 | `novelty` | P | `fleet` (first time anywhere in the replay), `repository`, `session`, `none` |
-| `decidedBy` | P | `operator` when the name appears in a main-line prompt, else `agent` |
+| `decidedBy` | P | `operator` when a main-line prompt named the package before its first crossing in that transcript, whatever source showed it first; else `agent` |
 | `permission` | P | the harness's permission mode, or `other` or `unknown` |
 | `status` | P | `ok`, `error`, `refused`, `none` |
 | `next` | P | `proceeded`, `retried`, `routed-around`, `changed-name`, `stopped`, `no-result` (ten calls after a failure) |
@@ -44,6 +44,8 @@ Written beside `observations.jsonl`, atomically, and the only file replay writes
 | `arm`, `lineShown` | P | always `none` under replay: nothing is shown to an agent |
 | `session`, `agent`, `toolUseId`, `ts` | A | join ids and a finer time |
 | `name`, `version` | A | what the command stated. A package or server name can identify private work, as `pulls` already says |
+| `registry` row: `kind`, `v`, `day`, `class`, `state` | P | row kind, gate version, UTC day the answer was read, package class, `found` or `not-found` |
+| `registry` row: `name`, `latest`, `created` | A | the name asked, the registry's latest version, and the name's creation time. `created` is a full timestamp, so it is not class P |
 
 `run` row: counts of transcripts, unreadable files, torn lines, calls, and crossings, the commands it could not name by shape, and whether the registry was read (class P).
 
@@ -51,7 +53,7 @@ There is no repository key in the record. Repository novelty is computed in memo
 
 ## Registry state
 
-Off by default. With `--registry-state`, replay asks the package manager the operator already has (`npm view`, `pip index versions`), in the call's own folder, so the answer comes through the registry that manager would contact. Answers are cached in the file. This is the one option that goes beyond local reads: the managers keep their own caches, so it writes outside `crossings.jsonl`, and it answers as of the run, not as of each crossing. A replay without it prints "registry state not read" and every registry field reads `not-read`; it never guesses.
+Off by default. With `--registry-state`, replay asks `npm view` or `pip index versions`, in the call's own folder, and only for a crossing made with `npm`, `npx`, `pnpm`, `pip`, or `python -m pip`: those read the config `npm` and `pip` read, so the answer comes through the registry that manager would contact. A crossing made with `yarn`, `bun`, `uv`, `uvx`, `pipx`, `poetry`, `pdm`, `rye`, `pipenv`, `conda`, `mamba`, or `micromamba` is never asked, since its registry config may differ and a private name must not reach a public registry; it reads `not-read`. Answers are cached in the file for 30 days (`REGISTRY_MAX_DAYS` in `replay.ts`): a row older than that, by the run's clock, counts as absent, is asked again, and is replaced. This is the one option that goes beyond local reads: the managers keep their own caches, so it writes outside `crossings.jsonl`, and it answers as of the run, not as of each crossing. A replay without it prints "registry state not read" and every registry field reads `not-read`; it never guesses.
 
 ## What replay cannot see
 

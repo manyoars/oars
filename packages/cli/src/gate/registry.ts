@@ -1,6 +1,7 @@
-// The `--registry-state` option: what a registry says about a name, asked through the package manager itself, in the folder the call ran in. That
-// is the one way to reach exactly the registry the manager would contact, private scopes and project config included, so a private name never
-// goes to a public registry on the gate's account. Off by default; nothing here runs unless the operator asks.
+// The `--registry-state` option: what a registry says about a name, asked through `npm` or `pip` in the folder the call ran in. For a crossing made
+// with npm, npx, pnpm, or pip (the replay asks for no other program), that is the registry the manager would contact, because those read the same
+// project and user config; so a private name does not go to a public registry on the gate's account. Off by default; nothing here runs unless
+// the operator asks.
 import { execFile } from 'node:child_process';
 import type { CrossingClass } from './checks.js';
 
@@ -66,9 +67,22 @@ export const readPipIndex = (run: ManagerRun): RegistryAnswer => {
   return latest === undefined ? UNREACHABLE : { state: 'found', latest, created: null };
 };
 
+/**
+ * How a manager is started. `cwd` comes from a transcript, and `cmd.exe` searches the current directory before PATH, so `NoDefaultCurrentDirectoryInExePath`
+ * keeps an `npm.cmd` left there from running: nothing here runs package code.
+ */
+export const managerOptions = (cwd: string, platform: NodeJS.Platform = process.platform) => ({
+  cwd,
+  timeout: TIMEOUT_MS,
+  shell: platform === 'win32',
+  windowsHide: true,
+  encoding: 'utf8' as const,
+  env: { ...process.env, NoDefaultCurrentDirectoryInExePath: '1' },
+});
+
 const runManager: ManagerRunner = (program, args, cwd) =>
   new Promise((resolve) => {
-    execFile(program, [...args], { cwd, timeout: TIMEOUT_MS, shell: process.platform === 'win32', windowsHide: true, encoding: 'utf8' }, (error, stdout, stderr) => {
+    execFile(program, [...args], managerOptions(cwd), (error, stdout, stderr) => {
       const code = error === null ? 0 : typeof error.code === 'number' ? error.code : null;
       resolve({ code, stdout, stderr });
     });

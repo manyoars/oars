@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { askable, managerReader, readNpmView, readPipIndex, type ManagerRun, type ManagerRunner } from './registry.js';
+import { askable, managerOptions, managerReader, readNpmView, readPipIndex, type ManagerRun, type ManagerRunner } from './registry.js';
 
 const ran = (code: number | null, stdout = '', stderr = ''): ManagerRun => ({ code, stdout, stderr });
 
@@ -41,6 +41,19 @@ describe('what may be asked', () => {
     ['skill', 'one', false],
   ])('%s %s: %s', (cls, name, expected) => {
     expect(askable(cls, name)).toBe(expected);
+  });
+});
+
+describe('how a manager is started', () => {
+  it('keeps the folder of the call out of the executable search, so a shim a transcript left there does not run', () => {
+    const options = managerOptions('here', 'win32');
+    expect(options).toMatchObject({ cwd: 'here', shell: true, windowsHide: true, encoding: 'utf8', env: expect.objectContaining({ NoDefaultCurrentDirectoryInExePath: '1' }) });
+    expect(options.timeout).toBeGreaterThan(0);
+  });
+
+  it('runs through a shell on Windows only, where the managers are .cmd shims', () => {
+    expect(managerOptions('here', 'linux').shell).toBe(false);
+    expect(managerOptions('here', 'linux').env).toMatchObject({ NoDefaultCurrentDirectoryInExePath: '1' });
   });
 });
 

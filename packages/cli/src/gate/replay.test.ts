@@ -4,7 +4,7 @@ import { join, relative } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { CliError } from '../errors.js';
 import { parseRows, type CrossingRecord, type RegistryRow, type RunRow } from './record.js';
-import { replay } from './replay.js';
+import { REGISTRY_MAX_DAYS, replay } from './replay.js';
 import type { RegistryAnswer, RegistryReader } from './registry.js';
 
 const REPO = 'C--work-app';
@@ -253,6 +253,21 @@ describe('a crossing record', () => {
     expect(named(crossings, 'no-mode').permission).toBe('unknown');
   });
 
+  it('reads the operator as the decider when a main-line prompt named the package before its first crossing, whatever showed it first', async () => {
+    await writeLog(projectsRoot, REPO, 'a.jsonl', [
+      use(0, 'r1', 'Read', { file_path: 'notes.md' }),
+      result(0, 'r1', 'we could use shown-first'),
+      typed(1, 'yes, add shown-first'),
+      bash(2, 't1', 'npm install shown-first'),
+      bash(3, 't2', 'npm install never-named'),
+    ]);
+    await writeLog(projectsRoot, REPO, 'agent-z.jsonl', [typed(0, 'add side-named'), bash(1, 't3', 'npm install side-named')]);
+    await run([REPO]);
+    const { crossings } = await written();
+    expect(named(crossings, 'shown-first')).toMatchObject({ origin: 'repo-file', decidedBy: 'operator' });
+    expect(named(crossings, 'never-named')).toMatchObject({ origin: 'none-seen', decidedBy: 'agent' });
+  });
+
   it('reads what happened next, routing around included', async () => {
     await writeLog(projectsRoot, REPO, 'a.jsonl', [
       bash(1, 'ok1', 'npm install fine-one'),
@@ -358,6 +373,44 @@ describe('the registry option', () => {
     await run([REPO], second);
     expect(second).not.toHaveBeenCalled();
     expect((await written()).crossings[0]?.registryState).toBe('found');
+  });
+
+  it('asks only through the managers whose registry config it reads, and leaves the crossings of every other program not-read', async () => {
+    await mkdir(join(root, 'cwd'));
+    await writeLog(projectsRoot, REPO, 'a.jsonl', [
+      bash(1, 't1', 'npm install via-npm'),
+      bash(2, 't2', 'pnpm add via-pnpm'),
+      bash(3, 't3', 'npx via-npx'),
+      bash(4, 't4', 'pip install via-pip'),
+      bash(5, 't5', 'python -m pip install via-module'),
+      bash(6, 't6', 'poetry add via-poetry'),
+      bash(7, 't7', 'conda install via-conda'),
+      bash(8, 't8', 'yarn add via-yarn'),
+      bash(9, 't9', 'uv add via-uv'),
+      bash(10, 't10', 'bun add via-bun'),
+    ]);
+    const reader = answering();
+    await run([REPO], reader);
+    expect(reader.mock.calls.map(([ask]) => ask.name).sort()).toEqual(['via-module', 'via-npm', 'via-npx', 'via-pip', 'via-pnpm']);
+    const { crossings } = await written();
+    expect(crossings.filter((row) => row.registryState === 'not-read').map((row) => row.name)).toEqual(['via-poetry', 'via-conda', 'via-yarn', 'via-uv', 'via-bun']);
+  });
+
+  it('counts a kept answer older than the age limit as absent, by the clock of the run, and asks again', async () => {
+    await mkdir(join(root, 'cwd'));
+    await writeLog(projectsRoot, REPO, 'a.jsonl', [bash(1, 't1', 'npm install old-row'), bash(2, 't2', 'npm install edge-row'), bash(3, 't3', 'npm install fresh-row')]);
+    const kept = (name: string, day: string): string => JSON.stringify({ kind: 'registry', v: 1, day, class: 'npm-package', state: 'found', created: null, name, latest: '0.0.1' });
+    await writeFile(join(storeDir, 'crossings.jsonl'), `${[kept('old-row', '2026-10-04'), kept('edge-row', '2026-10-05'), kept('fresh-row', '2026-11-01')].join('\n')}\n`);
+    const reader = answering();
+    await run([REPO], reader);
+    expect(REGISTRY_MAX_DAYS).toBe(30);
+    expect(reader.mock.calls.map(([ask]) => ask.name)).toEqual(['old-row']);
+    const { registry } = await written();
+    expect(registry.map((row) => [row.name, row.day, row.latest])).toEqual([
+      ['edge-row', '2026-10-05', '0.0.1'],
+      ['fresh-row', '2026-11-01', '0.0.1'],
+      ['old-row', '2026-11-04', '2.0.0'],
+    ]);
   });
 
   it('asks nothing for a URL, an MCP server, a skill, or a folder that is gone, and says not-read rather than guess', async () => {
