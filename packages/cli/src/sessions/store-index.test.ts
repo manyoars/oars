@@ -47,7 +47,7 @@ const staticClosure = (entry: string): string[] => {
 };
 
 describe('the hook entry', () => {
-  it('reaches neither the pool nor a read family through its static imports (t785: it loads them only in the nightly index step)', () => {
+  it('reaches neither the pool nor a read family through its static imports (it loads them only in the nightly index step)', () => {
     const modules = staticClosure(fileURLToPath(new URL('../hook-bin.ts', import.meta.url))).map((file) => basename(file));
     expect(modules).toContain('store.ts');
     expect(modules).not.toContain('pool.ts');

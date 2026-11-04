@@ -1,4 +1,4 @@
-// The Cursor source (t728): a Cursor user's chat and composer history becomes the same capture records a Claude Code transcript does.
+// The Cursor source: a Cursor user's chat and composer history becomes the same capture records a Claude Code transcript does.
 //
 // Cursor keeps history in SQLite, not in one JSON event per line. The reader opens the store read-only and writes each composer
 // session out as the transcript lines `captureSession` already reads (user and assistant lines, `tool_use` and `tool_result` blocks, one
@@ -196,17 +196,22 @@ const errorText = (raw: unknown): string => {
   return message ?? str(raw) ?? 'error';
 };
 
-/** An aborted terminal call (the user stopped it) has no outcome: it reads `none`, as a cancelled edit does, so it never counts as a fix. */
+/** An aborted terminal call (the user stopped it) has no outcome: it reads `none`, as a cancelled edit does, so it never counts as a fix. A call the user rejected is settled before this is asked. */
 const aborted = (call: Obj, name: string): boolean => {
   const result = name === 'run_terminal_cmd' ? parse(call.result) : undefined;
   return isObj(result) && (str(result.endedReason) ?? '').endsWith('_ABORTED');
 };
+
+const REJECTED_TEXT = "The user doesn't want to proceed with this tool use";
 
 /**
  * Why a call failed, undefined when it did not. Cursor writes a failed shell command as `completed` with a nonzero `exitCodeV2` in the JSON
  * `result` (the shape Claude Code's `Exit code N` text takes), so the exit code is read, not only `status`.
  */
 const failureOf = (call: Obj, name: string): string | undefined => {
+  // `userDecision` is `accepted` or `rejected` (any other string reads as no decision). A rejected call is the user's refusal, so it takes the
+  // text Claude Code writes for one and the extractor classes it `user-rejected`, as it does for Claude Code, Codex, and Gemini.
+  if (call.userDecision === 'rejected') return REJECTED_TEXT;
   if (call.status === 'error') return errorText(call.error ?? call.result);
   const result = name === 'run_terminal_cmd' ? parse(call.result) : undefined;
   const exit = isObj(result) ? num(result.exitCodeV2) : undefined;
@@ -235,7 +240,7 @@ const linesOf = (bubble: Bubble, base: Obj, at: string, model: string | undefine
   // A zero count means Cursor did not record one, so no usage is written rather than a measured zero.
   if (input > 0 || output > 0) message.usage = { input_tokens: input, output_tokens: output };
   const lines: Obj[] = [{ ...base, type: 'assistant', uuid: bubble.id, requestId: bubble.id, timestamp: at, ...(model === undefined ? {} : { requestedModel: model }), message }];
-  if (call !== undefined && name !== undefined && (call.status === 'error' || call.status === 'completed') && !aborted(call, name)) {
+  if (call !== undefined && name !== undefined && (call.userDecision === 'rejected' || ((call.status === 'error' || call.status === 'completed') && !aborted(call, name)))) {
     const failure = failureOf(call, name);
     lines.push({
       ...base,

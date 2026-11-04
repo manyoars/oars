@@ -1,4 +1,4 @@
-// Loads the pinned vocabulary snapshots shipped in packages/cli/vocab/ (pool vocabulary spec Section 1.3, t811). The only file here that reads the disk:
+// Loads the pinned vocabulary snapshots shipped in packages/cli/vocab/ (pool vocabulary spec Section 1.3). The only file here that reads the disk:
 // public-vocabulary.ts stays free of the filesystem so the pool's Worker can bundle it, and projection.ts takes the loaded `Vocabulary` as an argument.
 // A snapshot that does not parse is an error and never an empty list: an empty list would quietly project every name as `private`.
 

@@ -38,6 +38,8 @@ describe('packages from install commands', () => {
     ['cargo add with a caret range', 'cargo add serde@^1', [{ package: 'crates:serde', packageVersion: null, first: true }]],
     ['cargo add with a bare major, which is a range', 'cargo add serde@1', [{ package: 'crates:serde', packageVersion: null, first: true }]],
     ['pip install with a two-part pin, which capture cannot tell from a short range', 'pip install requests==2.31', [{ package: 'pypi:requests', packageVersion: null, first: true }]],
+    ['pip install with a four-part pin, the upper edge of a version', 'pip install x==1.2.3.4', [{ package: 'pypi:x', packageVersion: '1.2.3.4', first: true }]],
+    ['pip install with a five-part pin, past the upper edge', 'pip install x==1.2.3.4.5', [{ package: 'pypi:x', packageVersion: null, first: true }]],
     ['cargo install folding the name', 'cargo install cargo_edit', [{ package: 'crates:cargo-edit', packageVersion: null, first: true }]],
     ['go get a module', 'go get github.com/spf13/cobra@v1.8.0', [{ package: 'go:github.com/spf13/cobra', packageVersion: 'v1.8.0', first: true }]],
     ['gem install with a version flag', 'gem install rails -v 7.1.0', [{ package: 'rubygems:rails', packageVersion: '7.1.0', first: true }]],

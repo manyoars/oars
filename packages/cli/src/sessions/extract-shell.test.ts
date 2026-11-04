@@ -1,4 +1,4 @@
-// The captured `pulls`, `commits`, and `segments` of a shell call (t746 Item 2): one table row per form.
+// The captured `pulls`, `commits`, and `segments` of a shell call: one table row per form.
 import { describe, expect, it } from 'vitest';
 import { commitsRead, captureSession, pullsOfTool, readShell, storedToolName } from './extract.js';
 import { makeRedactor } from './redact.js';

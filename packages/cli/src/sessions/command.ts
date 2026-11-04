@@ -173,7 +173,7 @@ export const sessionsMcp = async (deps: SessionsDeps): Promise<void> => {
 /** Names shown in the `verify` and `books` text; each `--json` document carries them all. */
 const SKIPPED_NAMES_SHOWN = 10;
 
-/** One line for the folders the allowlist leaves out (t776): the store holds nothing from them, and it says so rather than looking complete. */
+/** One line for the folders the allowlist leaves out: the store holds nothing from them, and it says so rather than looking complete. */
 const skippedNotice = (scope: SkippedScope): string[] => {
   if (scope.folders === 0) return [];
   const shown = scope.names.slice(0, SKIPPED_NAMES_SHOWN).join(', ');
@@ -253,9 +253,9 @@ export interface VerifyReport {
   stuck: StuckStep[];
   /** Sessions behind the current capture version whose transcript is gone from the harness and `raw/` (or, for a Cursor session, whose composer is gone from Cursor): counted apart from `cv-behind`, never a strict failure. */
   cvFrozen: number;
-  /** Folders under the projects root that hold transcripts but are not on the allowlist, so are never read (t776): scope, not a failure. */
+  /** Folders under the projects root that hold transcripts but are not on the allowlist, so are never read: scope, not a failure. */
   scope: SkippedScope;
-  /** Every session's rows 1 to 10 with a status each (t743; spec 5.4 item 5): `pass`, `fail`, or `not run` when the row had nothing to check. */
+  /** Every session's rows 1 to 10 with a status each (spec 5.4 item 5): `pass`, `fail`, or `not run` when the row had nothing to check. */
   sessionResults: SessionVerification[];
   /** Layer 4 at T0, local (spec 2.4): each session's raw-file match, recomputed root, and count bindings, with the count of each row of the result table. */
   audit: { counts: T0Counts; sessions: SessionAudit[] };

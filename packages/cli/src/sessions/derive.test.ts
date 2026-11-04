@@ -160,7 +160,7 @@ describe('subagent transcripts (A24)', () => {
   });
 });
 
-describe('recovery episodes (recovery_episodes.py, t693)', () => {
+describe('recovery episodes (recovery_episodes.py)', () => {
   const redact = makeRedactor();
   const fromFixture = (name: string): SessionCapture => {
     const text = readFileSync(join(FIXTURES, 'proj', `${name}.jsonl`), 'utf8');
@@ -244,7 +244,7 @@ describe('recovery episodes (recovery_episodes.py, t693)', () => {
   });
 });
 
-describe('prompt outcome signals (t747)', () => {
+describe('prompt outcome signals', () => {
   const redact = makeRedactor();
   const head = captureSession({ text: readFileSync(join(FIXTURES, 'proj', 'errors-a.jsonl'), 'utf8'), session: 's', project: 'proj', rev: 1, at: '', bytes: 0, redact }).session;
   interface Call {
@@ -450,7 +450,7 @@ describe('prompt outcome signals (t747)', () => {
       expect(one([commit(0, 'error'), commit(0, 'none'), { ...commit(0), side: true }, shell(0, 'ok', 'git push'), { prompt: 0, tool: 'Read', target: 'git commit' }])?.commits).toBe(0);
     });
 
-    // The target is the first line's program and subcommand, so this form is out of reach until the captured commits field lands (t746).
+    // The target is the first line's program and subcommand, so this form is out of reach until the captured commits field lands.
     it('is a floor: a commit behind another command on the line is not seen', () => {
       // The target is what `shellTarget` reads from the real command, so the form runs through it.
       const target = shellTarget('git add . && git commit -m x');

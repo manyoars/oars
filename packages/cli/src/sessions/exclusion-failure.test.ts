@@ -1,4 +1,4 @@
-// A transcript or folder that cannot be read is never read as clean (t763 fix round): the session is excluded as `unreadable`.
+// A transcript or folder that cannot be read is never read as clean: the session is excluded as `unreadable`.
 import type * as fs from 'node:fs';
 import type * as fsp from 'node:fs/promises';
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';

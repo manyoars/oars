@@ -1,4 +1,4 @@
-// Adoption (t752, rank 6): when a tool was first and last seen, on how many days, and its share of all steps. Confounders: the operator's own rules move these, and
+// Adoption (rank 6): when a tool was first and last seen, on how many days, and its share of all steps. Confounders: the operator's own rules move these, and
 // a program name can be noise.
 import { UNKNOWN } from './cells.js';
 import { motifName } from './motif.js';

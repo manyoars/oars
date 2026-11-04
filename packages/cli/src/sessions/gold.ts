@@ -1,4 +1,4 @@
-// The outcome gold set (t748): a random sample of prompts an operator judges blind, and a scorer that reads every signal against those
+// The outcome gold set: a random sample of prompts an operator judges blind, and a scorer that reads every signal against those
 // judgments. It answers one question agreement among the signals cannot: does a local proxy predict human-judged success within an operator?
 // Every arm stays separate: no composite, no per-person score. The file shows the request and the result; the signals and the agent's closing
 // claim go to a sidecar beside it.
@@ -140,7 +140,7 @@ const FILES_SHOWN = 12;
 const PROSE = /\.(?:md|mdx|txt|rst)$/i;
 const SUBAGENT_TOOLS = new Set(['Agent', 'Task']);
 
-// `commits` sees only a first-line `git commit` (t747: 10% recall), so every segment of the command is read here.
+// `commits` sees only a first-line `git commit` (10% recall), so every segment of the command is read here.
 const COMMIT_SEGMENT = /^(?:\S+=\S*\s+)*git(?:\s+-[cC]\s+(?:"[^"]*"|'[^']*'|\S+))*\s+commit\b/;
 const RESULT_SUBJECT = /^\[[^\]\n]*\s[0-9a-f]{7,40}\]\s*(.*)$/m;
 const RESULT_STAT = /^\s*(\d+ files? changed.*)$/m;

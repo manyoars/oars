@@ -1,5 +1,5 @@
-// Next step (t752, rank 8): from a prefix of one to three actions, which action came next, by count. Confounders: no outcome label, so the most common next step is
-// not the right one; t752 scored this barely above repeating the last tool. Remaining cost is not read here, because a window's cost stops at the window.
+// Next step (rank 8): from a prefix of one to three actions, which action came next, by count. Confounders: no outcome label, so the most common next step is
+// not the right one; a scoring found this barely above repeating the last tool. Remaining cost is not read here, because a window's cost stops at the window.
 import { type Cell } from './cells.js';
 import { motifName, shapeMotif, type WindowStep } from './motif.js';
 import { body, groupBy, rate, settled, total, wilson, type DeriveFamily } from './read-support.js';

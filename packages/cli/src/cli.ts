@@ -280,7 +280,7 @@ const buildProgram = (deps: RunDeps, argv: string[]): Command => {
       emit(deps, flag(options, 'json'), await keysRevoke(deps, { apiUrl: resolveApiUrl(deps, text(options, 'apiUrl')), keyId }));
     });
 
-  // Hidden and refused until t465 opens paid agents (issuer.ts requirePurchasingOpen); the code stays for it.
+  // Hidden and refused until paid agents open (issuer.ts requirePurchasingOpen); the code stays for it.
   const purchasing = program
     .command('purchasing', { hidden: true })
     .description("set up an agent's purchasing: the card, the monthly cap, and what it bought")

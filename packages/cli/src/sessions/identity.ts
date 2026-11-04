@@ -1,4 +1,4 @@
-// A step's `identity` (t755, recall spec Section 2.2): what the step acted on, by action, in public names only. Every name passes through
+// A step's `identity` (recall spec Section 2.2): what the step acted on, by action, in public names only. Every name passes through
 // `public-vocabulary.ts`, so what may leave the machine is decided in that one file; anything it does not list becomes `<literal>`.
 
 import { mcpOf, type ActionTable, type CanonicalAction } from './actions.js';
