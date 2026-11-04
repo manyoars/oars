@@ -827,6 +827,8 @@ const readCommands = (tokens: readonly ShellToken[], depth = 0): ShellCommand[] 
   let words: ShellWord[] = [];
   // The index of the first command of each group still open.
   const opened: number[] = [];
+  // Where an `open` in `pending` follows a command's own words (`pytest $(a)`), the group's first command is that command, not the next one.
+  const owned = new Map<number, number>();
   const close = (): void => {
     const real = afterPrelude(words);
     words = [];
@@ -835,25 +837,30 @@ const readCommands = (tokens: readonly ShellToken[], depth = 0): ShellCommand[] 
     if (program === null) return;
     const previous = commands.at(-1);
     if (previous !== undefined) previous.link = linkOf(pending);
-    // The tokens say which way each group goes, so a group opened behind a word (`echo $(a && b)`) is pushed and a pipe after its close hides it.
-    const closing = pending.filter((op) => op === 'close').length;
-    const opening = pending.filter((op) => op === 'open').length;
-    for (let group = 0; group < closing; group += 1) {
-      const start = opened.pop();
-      if (start !== undefined && pending.includes('|')) for (const held of commands.slice(start)) held.hidden = true;
-    }
-    for (let group = 0; group < opening; group += 1) opened.push(commands.length);
+    // The tokens say which way each group goes, so they are walked in order: an open pushes, a close pops, and a pipe after that close hides the group.
+    // A group that holds no program (`{ echo $f }` after `if ($y)`) therefore pops its own open, never an outer one.
+    pending.forEach((op, at) => {
+      if (op === 'open') opened.push(owned.get(at) ?? commands.length);
+      else if (op === 'close') {
+        const start = opened.pop();
+        if (start !== undefined && pending.includes('|', at + 1)) for (const held of commands.slice(start)) held.hidden = true;
+      }
+    });
+    owned.clear();
     pending = [];
     commands.push({ program, args, read: true, link: 'end', hidden: false });
   };
   for (const token of tokens) {
     if (typeof token === 'string') {
+      const behindWords = token === 'open' && words.length > 0;
+      const before = commands.length;
       close();
+      if (behindWords && commands.length > before) owned.set(pending.length, before);
       pending.push(token);
     } else words.push(token);
   }
   close();
-  // Walking back, a later `;`, `&`, newline, or `||` means the status is no longer this command's; a pipe hides only the command it follows.
+  // Walking back, a later `;`, `&`, newline, or `||` means the status is no longer this command's; a pipe hides the command it follows and every command of a group closed before it.
   let overridden = pending.includes('&');
   for (const command of commands.toReversed()) {
     if (command.link === 'break') overridden = true;

@@ -4,7 +4,7 @@ All notable changes to `@manyoars/oars`. Versions follow semver; a release is th
 
 ## Unreleased
 
-- `oars sessions` capture version 11: an MCP tool name's server part is redacted wherever it is stored, package-manager and shell command forms are read more exactly (`pulls`, `segments`, `commits`), and a typed line that only starts with an injected tag's name now opens a prompt. The next `deposit` captures every transcript again.
+- `oars sessions` capture version 11: the part of an MCP tool name after `mcp__` (Cursor: `mcp_`) is redacted wherever it is stored, package-manager and shell command forms are read more exactly (`pulls`, `segments`, `commits`, `steps`), and a typed line that only starts with an injected tag's name now opens a prompt. The next `deposit` captures every transcript again.
 - `oars keys create|list|revoke` manages your API keys. `keys create --workload <id>` mints a key limited to one workload (authorities `AGENT_OPERATE` and `AGENT_READ` only), so a scheduled agent can change its own schedule without being able to spend or reach another workload. The `make-me-money` skill shows the recipe.
 
 ## 0.3.0
