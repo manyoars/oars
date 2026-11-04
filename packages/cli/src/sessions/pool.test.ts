@@ -3,8 +3,11 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { CliError } from '../errors.js';
+import type * as ReadModuleNamespace from './read.js';
 import { currentPool, poolFiles, refreshPool, servedPool } from './pool.js';
 import { error, prompt, session, step, store, tool } from './pool-fixture.js';
+
+type ReadModule = typeof ReadModuleNamespace;
 
 const dirs: string[] = [];
 const storeDir = (): string => {
@@ -95,7 +98,7 @@ describe('refreshPool', () => {
     const dir = storeDir();
     vi.resetModules();
     vi.doMock('./read.js', async (importOriginal) => {
-      const actual = await importOriginal<typeof import('./read.js')>();
+      const actual = await importOriginal<ReadModule>();
       return { ...actual, METHODS: { ...actual.METHODS, live: { ...actual.METHODS.live, version: '1' } } };
     });
     let old: Awaited<ReturnType<typeof refreshPool>>;

@@ -3,7 +3,7 @@ import type { SessionSkeleton } from '../../cli/src/sessions/pool-wire.js';
 import { batchCounts, LEDGER_DAYS } from './access.js';
 import { cellCountOf } from './derive.js';
 import { sampleSkeleton } from './sample.js';
-import { fieldOf, startPool, stubUser, type TestPool } from './test-pool.js';
+import { fieldOf, startPool, stubUser, type TestPool, textOf } from './test-pool.js';
 
 const PATH = '/bundle/2.1.314/0';
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -116,13 +116,14 @@ describe('the access flag over the routes', () => {
     await inPool(async (pool) => {
       const { token, account } = await depositor(pool, '3007', 'cursor');
       expect((await pool.post('/v1/deposits', sampleSkeleton('00000000000a3007', undefined, undefined, 'cursor'), token)).status).toBe(201);
-      const ids = (await (await pool.db()).prepare('SELECT id FROM deposits WHERE account = ? ORDER BY id').bind(account).all()).results.map((row) => fieldOf(row, 'id'));
-      expect(ids).toHaveLength(2);
+      const ids = (await (await pool.db()).prepare('SELECT id FROM deposits WHERE account = ? ORDER BY id').bind(account).all()).results.map((row) => textOf(row, 'id'));
+      const [first, second] = ids;
+      if (first === undefined || second === undefined) throw new Error('two batches were not stored');
       expect(await fetches(pool, token, 2)).toEqual([200, 200]);
-      await (await pool.db()).prepare("UPDATE deposits SET tier = 'none' WHERE account = ? AND id = ?").bind(account, ids[0]).run();
+      await (await pool.db()).prepare("UPDATE deposits SET tier = 'none' WHERE account = ? AND id = ?").bind(account, first).run();
       expect(await fetches(pool, token, 2)).toEqual([200, 200]);
       expect(await accessOfAccount(pool, account)).toBe('pending');
-      await (await pool.db()).prepare("UPDATE deposits SET tier = 'none' WHERE account = ? AND id = ?").bind(account, ids[1]).run();
+      await (await pool.db()).prepare("UPDATE deposits SET tier = 'none' WHERE account = ? AND id = ?").bind(account, second).run();
       expect(await fetches(pool, token, 2)).toEqual([200, 429]);
       expect(await accessOfAccount(pool, account)).toBeNull();
     });
