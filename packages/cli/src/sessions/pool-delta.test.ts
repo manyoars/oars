@@ -1,7 +1,10 @@
-import { describe, expect, it } from 'vitest';
-import { DELTA_DAYS, DELTA_MIN_SESSIONS, deltasOf, windowsOf } from './pool-delta.js';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterEach, describe, expect, it } from 'vitest';
+import { DELTA_DAYS, DELTA_MIN_SESSIONS, deltaMark, deltasOf, markDeltasSent, sentDeltas, windowsOf } from './pool-delta.js';
 import { prompt, session, sessionsFrom, store, tool } from './pool-fixture.js';
-import type { SessionRecords } from './pool-wire.js';
+import type { DeltaEntry, SessionRecords } from './pool-wire.js';
 import type { ToolManifest, ToolStatus } from './schema.js';
 
 const DAY = 24 * 60 * 60 * 1000;
@@ -216,5 +219,54 @@ describe('what an entry holds', () => {
       else expect(leaf === null || typeof leaf === 'string').toBe(true);
     }
     expect(Object.keys(entries[0] ?? {}).sort()).toEqual(['change', 'deltaKind', 'field', 'metric', 'name', 'registry']);
+  });
+});
+
+const folders: string[] = [];
+afterEach(() => {
+  for (const folder of folders.splice(0)) rmSync(folder, { recursive: true, force: true });
+});
+const outbox = (): string => {
+  const folder = mkdtempSync(join(tmpdir(), 'oars-delta-mark-'));
+  folders.push(folder);
+  return join(folder, 'outbox');
+};
+
+const ENTRY: DeltaEntry = { deltaKind: 'removed', field: 'package', name: 'typescript', registry: 'npm', metric: 'callsPerSession', change: -3 };
+
+describe('the once-only mark of a delta', () => {
+  it('names a delta by its account, kind, field, name, registry, metric, and the session that filled its window', () => {
+    const mark = deltaMark('acct', ENTRY, 'a4');
+    expect(mark).toMatch(/^[0-9a-f]{16}$/);
+    expect(deltaMark('acct', { ...ENTRY }, 'a4')).toBe(mark);
+    for (const other of [deltaMark('acct2', ENTRY, 'a4'), deltaMark('acct', ENTRY, 'a5'), deltaMark('acct', { ...ENTRY, name: 'react' }, 'a4'), deltaMark('acct', { ...ENTRY, registry: 'pypi' }, 'a4'), deltaMark('acct', { ...ENTRY, field: 'plugin' }, 'a4'), deltaMark('acct', { ...ENTRY, deltaKind: 'added' }, 'a4'), deltaMark('acct', { ...ENTRY, metric: 'thinking' }, 'a4')]) expect(other).not.toBe(mark);
+  });
+
+  it('ignores the size of the move, so a recount of the same windows never builds the delta again', () => {
+    expect(deltaMark('acct', { ...ENTRY, change: 4 }, 'a4')).toBe(deltaMark('acct', ENTRY, 'a4'));
+  });
+
+  it('holds no mark before one is written, and an outbox folder that does not exist yet holds none', async () => {
+    expect([...(await sentDeltas(outbox()))]).toEqual([]);
+  });
+
+  it('writes each mark on a line of deltas-sent.log in the outbox folder, and reads them back', async () => {
+    const folder = outbox();
+    await markDeltasSent(folder, ['1111111111111111', '2222222222222222']);
+    await markDeltasSent(folder, ['3333333333333333']);
+    expect(readFileSync(join(folder, 'deltas-sent.log'), 'utf8')).toBe('1111111111111111\n2222222222222222\n3333333333333333\n');
+    expect([...(await sentDeltas(folder))].sort()).toEqual(['1111111111111111', '2222222222222222', '3333333333333333']);
+  });
+
+  it('writes nothing for no marks, so a deposit with no delta leaves no file', async () => {
+    const folder = outbox();
+    await markDeltasSent(folder, []);
+    expect(() => readFileSync(join(folder, 'deltas-sent.log'), 'utf8')).toThrow();
+  });
+
+  it('reads past a blank line, and fails on a log it cannot read rather than read it as empty', async () => {
+    const folder = outbox();
+    mkdirSync(join(folder, 'deltas-sent.log'), { recursive: true });
+    await expect(sentDeltas(folder)).rejects.toThrow();
   });
 });
