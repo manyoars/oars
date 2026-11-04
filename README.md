@@ -8,10 +8,10 @@ installs or imports to do that:
 | Path | What it is | State |
 |------|------------|-------|
 | `packages/client` | `@manyoars/oars-client`: TypeScript types generated from `openapi/public.json` and a thin `openapi-fetch` wrapper that adds the bearer token, `Idempotency-Key` and `User-Agent` | published on npm as [`@manyoars/oars-client`](https://www.npmjs.com/package/@manyoars/oars-client) at 0.1.x |
-| `openapi/public.json` | The slice of the platform API that the CLI and the templates call, generated from the platform's OpenAPI by `scripts/openapi-public.mjs` and the operation list in `openapi/public-operations.json` | here |
+| `openapi/public.json` | The slice of the platform API that the CLI and the templates call (including the API key operations), generated from the platform's OpenAPI by `scripts/openapi-public.mjs` and the operation list in `openapi/public-operations.json` | here |
 | `templates/paid-api` | Starter template: an HTTP API that charges per call | here |
 | `templates/per-task-agent` | Starter template: a job that charges per finished task | here |
-| `packages/cli` | `@manyoars/oars`, the `oars` command: `login`, `templates`, `deploy`, `status`, `test-charge`, and `sessions` (a local memory of your own Claude Code sessions) | published on npm as [`@manyoars/oars`](https://www.npmjs.com/package/@manyoars/oars) |
+| `packages/cli` | `@manyoars/oars`, the `oars` command: `login`, `templates`, `deploy`, `status`, `test-charge`, `keys` (`create`, `list`, `revoke`), and `sessions` (a local memory of your own Claude Code sessions) | published on npm as [`@manyoars/oars`](https://www.npmjs.com/package/@manyoars/oars) |
 
 ## Let your coding agent do it
 
