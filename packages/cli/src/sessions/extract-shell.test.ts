@@ -261,6 +261,13 @@ describe('MCP tool names: a token behind an underscore or in a later part is red
     ['mcp__me-sk-AbC1__DeFgHiJkLmNoPqRsTuVw__find', ['AbC1', 'DeFgHiJkLmNoPqRsTuVw']],
     ['mcp_sk-AbC1__DeFgHiJkLmNoPqRsTuVw_find', ['AbC1', 'DeFgHiJkLmNoPqRsTuVw']],
     ['mcp_sk-AbC1_DeFgHiJkLmNoPqRsTuVw_find', ['AbC1', 'DeFgHiJkLmNoPqRsTuVw']],
+    ['mcp__sk-proj-xoxa-Ab1_DeFgHiJkLmNoPqRsTuVw__find', ['DeFgHiJkLmNoPqRsTuVw']],
+    ['mcp_sk-proj-xoxa-Ab1_DeFgHiJkLmNoPqRsTuVw_find', ['DeFgHiJkLmNoPqRsTuVw']],
+    ['mcp__AIzaSyA-xoxb-abc_defghijklmnopqrstuvwxyz0123__find', ['defghijklmnopqrstuvwxyz0123']],
+    ['mcp__eyJhbGciOi-xoxb-a_JIUzI1NiJ9.eyJzdWIiOiIx.c2lnbmF0dXJl__find', ['JIUzI1NiJ9', 'eyJzdWIiOiIx', 'c2lnbmF0dXJl']],
+    ['mcp__token=xoxb-short_hunter2hunter2__find', ['hunter2hunter2']],
+    ['mcp__api_key=abc-xoxb-1_hunter2hunter2__find', ['hunter2hunter2']],
+    ['mcp_token=xoxb-short_hunter2hunter2_find', ['hunter2hunter2']],
   ])('keeps no part of the token in any stored field for %s', (toolName, parts) => {
     const stored = JSON.stringify(capturedFor(toolName));
     for (const part of parts) expect(stored).not.toContain(part);
@@ -329,9 +336,11 @@ describe('MCP tool names: a token behind an underscore or in a later part is red
       expect(pullsOfTool(name, redact)).toEqual([]);
     }
     for (const name of ['mcp__sk-learn__PCA2Transform', 'mcp__task-sk-tools__Get2Items']) expect(storedToolName(name, redact)).toMatch(/<secret>/);
-    for (const name of ['mcp_sk-abc_defghijklmnopqrstuvwxyz_find', 'mcp__sk-abc__defghijklmnopqrstuvwxyz__find']) expect(storedToolName(name, redact)).toBe(name);
     expect(storedToolName('mcp__aws__ListObjectsV2CommandFooBar', redact)).toBe('mcp__aws__<secret>');
     expect(pullsOfTool('mcp__aws__ListObjectsV2CommandFooBar', redact)).toEqual([{ ecosystem: 'mcp', name: 'aws', version: null }]);
+  });
+  it('stores raw an sk- key with no capital and digit that holds a _ before 16 characters, an accepted limit', () => {
+    for (const name of ['mcp_sk-abc_defghijklmnopqrstuvwxyz_find', 'mcp__sk-abc__defghijklmnopqrstuvwxyz__find']) expect(storedToolName(name, redact)).toBe(name);
   });
   it('does not find a token with no pattern rule whose every part is under 24 characters, an accepted limit', () => {
     const name = 'mcp__aB3dE5gH7jK9mN1pQ3rS__tU5vW7xY9zA1bC3dE5fG__find';
