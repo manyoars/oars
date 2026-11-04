@@ -12,7 +12,7 @@ afterEach(cleanup);
 
 // Every fixture below is written from google-gemini/gemini-cli @ 89e9d25d (Apache-2.0), packages/core/src: the chat file's line kinds (services/chatRecordingTypes.ts:
 // the head metadata, MessageRecord, ToolCallRecord, `$set`, `$patch`, `$rewindTo`) and how the loader folds them (services/chatRecordingService.ts:304-530); the shell
-// tool's result text (tools/shell.ts:943-975, wrapped by utils/textUtils.ts `wrapUntrusted`); the usage fields (chatRecordingTypes.ts TokensSummary). No live store was read.
+// tool's result text (tools/shell.ts:953-979, wrapped by utils/textUtils.ts `wrapUntrusted`); the usage fields (chatRecordingTypes.ts TokensSummary). No live store was read.
 
 const capture = (text: string) =>
   captureSession({
@@ -39,7 +39,7 @@ const head = geminiHead('sess-1');
 const prompt = (second: number, text: string, extra: object = {}) => ({ id: `u${String(second)}`, timestamp: T(second), type: 'user', content: [{ text }], ...extra });
 const say = (second: number, content: unknown, extra: object = {}) => ({ id: `g${String(second)}`, timestamp: T(second), type: 'gemini', content, model: 'gemini-2.5-pro', ...extra });
 const tokens = (input: number, output: number, cached = 0, extra: object = {}) => ({ input, output, cached, total: input + output, ...extra });
-// The shell tool's result text: `Output: ...` then optional trailer lines, wrapped in <untrusted_context> (shell.ts:943-975, textUtils.ts wrapUntrusted).
+// The shell tool's result text: `Output: ...` then optional trailer lines, wrapped in <untrusted_context> (shell.ts:953-979, textUtils.ts wrapUntrusted).
 const shellText = (output: string, trailer: readonly string[] = []): string => `<untrusted_context source="shell">\nOutput: ${output}${trailer.map((line) => `\n${line}`).join('')}\n</untrusted_context>`;
 const reply = (name: string, response: object) => [{ functionResponse: { id: 'x', name, response } }];
 const call = (id: string, name: string, args: object, status: string, second: number, result?: unknown) => ({ id, name, args, status, timestamp: T(second), ...(result === undefined ? {} : { result }) });
@@ -75,6 +75,29 @@ describe('the Gemini CLI reader', () => {
     const out = extractOf([head, prompt(1, 'run it'), say(2, '', { toolCalls: [shell('c1', 'make', 'success', 3, text)] })]);
     expect(out.tools).toMatchObject([{ tool: 'Bash', status: 'error' }]);
     expect(out.errorLines).toMatchObject([{ tool: 'Bash', line: 'make: *** No rule to make target' }]);
+  });
+
+  it('keeps the failure of a shell call whose output the executor truncated (utils/fileUtils.ts:828-833, scheduler/tool-executor.ts:219-236) or hook-modified (tool-executor.ts:131-133)', () => {
+    // Over the threshold (config/config.ts:487) the executor rewrites the WRAPPED text: a header line, the first 20%, a marker, the last 80% (the trailer and closing tag survive).
+    const truncated = [
+      'Output too large. Showing first 4,000 and last 16,000 characters. For full output see: /home/u/.gemini/tmp/app/tool-outputs/session-x/shell_c1.txt',
+      '<untrusted_context source="shell">',
+      'Output: make: *** No rule to make target',
+      'head line two',
+      '',
+      '... [30,000 characters omitted] ...',
+      '',
+      'tail line',
+      'Exit Code: 2',
+      'Process Group PGID: 4242',
+      '</untrusted_context>',
+    ].join('\n');
+    // The hook note is appended to the llmContent after the wrapper (tool-executor.ts:131-133).
+    const hooked = `${shellText('boom', ['Exit Code: 2'])}\n\n[System] Tool input parameters were modified by a hook before execution.`;
+    const fine = `${shellText('all good')}\n\n[System] Tool input parameters were modified by a hook before execution.`;
+    const out = extractOf([head, prompt(1, 'x'), say(2, '', { toolCalls: [shell('a', 'big', 'success', 3, truncated), shell('b', 'hooked', 'success', 4, hooked), shell('c', 'fine', 'success', 5, fine)] })]);
+    expect(out.tools.map((tool) => tool.status)).toEqual(['error', 'error', 'ok']);
+    expect(out.errorLines.map((error) => error.line)).toEqual(['make: *** No rule to make target', 'boom']);
   });
 
   it('takes the last Exit Code line, so output that mentions one does not decide, and reads exit 0 as ok', () => {

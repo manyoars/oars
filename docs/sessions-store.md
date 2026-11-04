@@ -608,7 +608,9 @@ with the file, and usage is nonzero with `input_tokens` equal to the model's pro
   touched. Tool names have an `ACTION_TABLES.gemini` row (`run_shell_command`, `replace`, `write_file`, `read_file`, and the rest), so a shell call or an edit never reads as unknown.
 - **Outcome.** A failed shell call is read from the real exit code, not `status`: the vendor records `status: "success"` for a nonzero exit and appends an
   `Exit Code: N` line (or `Signal:`) to the output (`tools/shell.ts:963-964`), wrapped in `<untrusted_context>`. The reader unwraps it, so the error line is the command's
-  own output and can join a Claude Code signature. A call with `status: "error"` or `"cancelled"`, or a `response.error`, is an error with that message
+  own output and can join a Claude Code signature. Output over the executor's threshold (default 40,000 characters, `config/config.ts:487`) is rewritten to a header line, the first
+  20%, a marker, and the last 80% (`utils/fileUtils.ts:828-833`), and a hook-modified call gets a note after the closing tag (`scheduler/tool-executor.ts:131-133`); the trailer
+  is in the tail that survives, so the reader takes the text before the last closing tag, drops everything through the first opening tag, and still finds the exit code. A call with `status: "error"` or `"cancelled"`, or a `response.error`, is an error with that message
   (the `Error: Tool call execution failed. Reason:` prefix is dropped).
 - **Usage.** Per message only (`tokens{input, output, cached, thoughts, tool, total}`); the vendor's session totals are in memory and never written, so nothing is cumulative across a
   resume and each message is taken as it stands. `tokens.input` is the prompt count and includes the cache (`uiTelemetry.ts:317-320` computes the uncached part as

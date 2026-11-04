@@ -20,7 +20,7 @@
 // its text (`thought` parts left out), its `toolCalls[{id, name, args, result, status, timestamp}]`, and `tokens{input, output, cached, thoughts, tool, total}`
 // (chatRecordingTypes.ts), one per request, never cumulative. `tokens.input` is the prompt count, which includes the cache (telemetry/uiTelemetry.ts:317-320),
 // and capture's fields are disjoint, so the cache is subtracted. A shell call's `status` is `success` for a nonzero exit; the exit code is a trailer line of its
-// result text (tools/shell.ts:943-975, wrapped in `<untrusted_context>` by utils/textUtils.ts), and that line decides.
+// result text (tools/shell.ts:953-979, wrapped in `<untrusted_context>` by utils/textUtils.ts), and that line decides.
 
 import { readdir, readFile, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
@@ -178,9 +178,21 @@ const RENAMED: ReadonlyMap<string, string> = new Map([
 ]);
 const PATH_TOOLS: ReadonlySet<string> = new Set(['Edit', 'Write', 'Read']);
 
-const WRAPPER = /^<untrusted_context(?: [^>]*)?>\n([^]*)\n<\/untrusted_context>$/;
-const unwrap = (text: string): string => WRAPPER.exec(text.trim())?.[1] ?? text;
-/** The vendor's `Error: Tool call execution failed. Reason: ` prefix on a failed call's text (scheduler/tool-executor.ts). */
+const CLOSE = '</untrusted_context>';
+const THROUGH_OPEN = /^[^]*?<untrusted_context(?: [^>]*)?>\n/;
+/**
+ * The text inside the `<untrusted_context>` wrapper. Two things the executor does to a long or hook-modified shell result leave the closing tag short of the end of
+ * the text, so the LAST closing tag decides (the wrapper escapes any inside the output, utils/textUtils.ts:182): a hook note appended after the wrapper
+ * (scheduler/tool-executor.ts:131-133), and a truncation that rewrites the wrapped text to a header line, the first 20%, a marker, and the last 80%
+ * (utils/fileUtils.ts:828-833, tool-executor.ts:219-236). The header and anything before the opening tag go; the tail, which holds the trailer, stays.
+ */
+const unwrap = (text: string): string => {
+  const trimmed = text.trim();
+  const end = trimmed.lastIndexOf(CLOSE);
+  if (end === -1) return text;
+  return trimmed.slice(0, end).replace(/\n$/, '').replace(THROUGH_OPEN, '');
+};
+/** The vendor's `Error: Tool call execution failed. Reason: ` prefix on a failed call's text (tools/tools.ts:670). */
 const unprefixed = (text: string): string => text.replace(/^Error: Tool call execution failed\. Reason: /, '');
 
 /** What a call's result holds: the `functionResponse` output and error, else any plain text. */
@@ -190,7 +202,7 @@ const responseOf = (result: unknown): { output: string; error: string | undefine
   return { output: output ?? (responses.length === 0 ? textOf(result) : ''), error: responses.map((response) => str(response.error)).find((text) => text !== undefined) };
 };
 
-/** A shell result's trailer, in the order the tool writes it (tools/shell.ts:943-975): `Exit Code`, `Signal`, `Background PIDs`, `Process Group PGID`. */
+/** A shell result's trailer, in the order the tool writes it (tools/shell.ts:953-979): `Exit Code`, `Signal`, `Background PIDs`, `Process Group PGID`. */
 const shellResult = (text: string): { output: string; exit: number | undefined; signal: string | undefined } => {
   const lines = unwrap(text).split('\n');
   const pop = (prefix: string): string | undefined => {
