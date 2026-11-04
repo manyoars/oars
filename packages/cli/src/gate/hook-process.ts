@@ -1,7 +1,7 @@
 // The process behind `oars gate hook`, with every side effect handed in so a test can drive it: stdin in, at most one JSON document out, `exit(0)` whatever happens. A hard deadline ends
 // the process before the harness's own, writing the record it has staged if the write had not finished. Nothing here may throw past `runHookProcess`: exit 1 from a
 // PreToolUse hook is a visible error and exit 2 blocks the tool call, and the hook must never cost a session either.
-import { appendFileSync } from 'node:fs';
+import { appendFileSync, statSync } from 'node:fs';
 import { gateHook, type GateHookDeps } from './hook.js';
 import { parseRows } from './record.js';
 
@@ -23,20 +23,30 @@ const unprinted = (text: string): string =>
     .map((row) => `${JSON.stringify(row.kind === 'crossing' ? { ...row, arm: 'none', lineShown: 'none', lineHeld: 'none' } : row)}\n`)
     .join('');
 
+const sizeOf = (file: string): number => {
+  try {
+    return statSync(file).size;
+  } catch {
+    return 0;
+  }
+};
+
 /** Resolves once `exit(0)` has been called, or never when the deadline timer is what ended the process. */
 export const runHookProcess = async ({ stdin, deps, exit, write, deadlineMs }: HookProcess): Promise<void> => {
-  let staged: { file: string; text: string; stop?: () => void } | null = null;
+  // `size` is the file's length when the record was staged: an append that wrote and then stalled has grown it by the record's length, and the deadline must not write it again.
+  let staged: { file: string; text: string; size: number; stop?: () => void } | null = null;
   // The last resort when the process is stuck past its grace: keep the staged record, then go. A write that fails here has nowhere to report, so it is dropped.
   setTimeout(
     () => {
-      // A registry ask still running is stopped first, so the manager the hook started does not outlive it; a stop that throws must not cost the row.
+      // The row first: it is the record this timer exists to keep, and the stop can be slow (on Windows it is a `taskkill` spawn at a moment already past the deadline).
       try {
-        staged?.stop?.();
+        if (staged !== null && sizeOf(staged.file) < staged.size + Buffer.byteLength(staged.text)) appendFileSync(staged.file, unprinted(staged.text), { mode: 0o600 });
       } catch {
         // Fail-open.
       }
+      // A registry ask still running is then stopped, so the manager the hook started does not outlive it; a stop that throws must not cost the exit.
       try {
-        if (staged !== null) appendFileSync(staged.file, unprinted(staged.text), { mode: 0o600 });
+        staged?.stop?.();
       } catch {
         // Fail-open.
       }
@@ -46,7 +56,7 @@ export const runHookProcess = async ({ stdin, deps, exit, write, deadlineMs }: H
   ).unref();
   try {
     const built = deps((pending) => {
-      staged = pending;
+      staged = pending === null ? null : { ...pending, size: sizeOf(pending.file) };
     });
     const output = await gateHook(await stdin(), built);
     if (output !== '') await write?.(output);
