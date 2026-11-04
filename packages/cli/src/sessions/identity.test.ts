@@ -174,7 +174,7 @@ describe('identity holds public names only', () => {
     expect(shell('')[0]?.identity).toEqual({ program: '<literal>', sub: null, flags: [] });
   });
 
-  it('reads an MCP call in full when its server is public, past the cut the tool sequence takes', () => {
+  it('reads an MCP call in full when its server and tool are public, past the cut the tool sequence takes', () => {
     const [step] = stepsOf([{ name: 'mcp__claude-in-chrome__navigate', input: {} }]);
     expect(step).toMatchObject({ action: 'mcp.call', native: 'mcp__claude-in-chrome__navigate', identity: { server: 'claude-in-chrome', tool: 'navigate' } });
   });

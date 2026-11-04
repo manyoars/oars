@@ -1,5 +1,5 @@
-// What `oars sessions read` serves: reads filtered by family and slice, largest sample first, one row each. A row states its clusters and no floor is applied, because
-// these are the operator's own cells: a floor protects other people's data, and there is none here.
+// What `oars sessions read` serves: reads filtered by family and slice, largest sample first, one row each. A row states its clusters. This file adds no floor: an order 1 read is
+// the operator's own cell, so a floor on it would protect no one. Reads above order 1 that fall below their floor do not exist, so there is none of them to list.
 
 import { FAMILIES, type Family, type Read, type ReadSlice, type ReadValue } from './read.js';
 

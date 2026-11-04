@@ -279,7 +279,8 @@ export const drawSample = async (frame: readonly PromptObservation[], size: numb
 
 const quoted = (text: string): string[] => text.split(/\r?\n/).map((line) => `> ${line}`.trimEnd());
 const indented = (text: string): string[] => text.split(/\r?\n/).map((line) => `    ${line}`.trimEnd());
-const plural = (count: number, one: string): string => `${String(count)} ${one}${count === 1 ? '' : 's'}`;
+/** `1 edit`, `2 edits`: a count agrees with its noun in every line the commands print. */
+export const plural = (count: number, one: string): string => `${String(count)} ${one}${count === 1 ? '' : 's'}`;
 
 /** The request and the result as lines, every one prefixed: no text from a transcript can begin a line the parser reads. */
 const shownLines = (view: GoldView): string[] => {
