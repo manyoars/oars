@@ -12,8 +12,14 @@ export const MATCHER = 'Bash|PowerShell|Skill|mcp__.*';
 export const EVENT = 'PreToolUse';
 /** Seconds the harness waits for the hook; the hook ends itself in under one, so this is only the ceiling for a cold node start. */
 export const TIMEOUT_SECONDS = 5;
-/** Run by the harness's shell (Git Bash on Windows). `command -v` is a shell builtin, so a missing `oars` costs a few milliseconds and no node start. The trailing `exit 0` matters: exit 2 from a PreToolUse hook blocks the tool call, and an `oars` with no `gate hook` exits 2. */
-export const COMMAND = 'command -v oars >/dev/null 2>&1 || exit 0; oars gate hook >/dev/null 2>&1; exit 0';
+/**
+ * Run by the harness's shell (Git Bash on Windows). `command -v` is a shell builtin, so a missing `oars` costs a few milliseconds and no node start. The harness reads this command's stdout, so what
+ * `oars gate hook` prints (a note or a deny) is passed through, and only when it exits 0: an `oars` with no `gate hook` prints and exits 2, which would block the tool call, so that output is dropped.
+ * The trailing `exit 0` matters for the same reason.
+ */
+export const COMMAND = `command -v oars >/dev/null 2>&1 || exit 0; out=$(oars gate hook 2>/dev/null) && printf '%s' "$out"; exit 0`;
+/** The command an earlier build wrote, which discarded the hook's output. Still ours, so a rerun replaces it and an uninstall removes it. */
+export const PREVIOUS_COMMAND = 'command -v oars >/dev/null 2>&1 || exit 0; oars gate hook >/dev/null 2>&1; exit 0';
 
 interface Json {
   [key: string]: unknown;
@@ -21,7 +27,7 @@ interface Json {
 
 const isObject = (value: unknown): value is Json => typeof value === 'object' && value !== null && !Array.isArray(value);
 
-const isOwnHook = (hook: unknown): boolean => isObject(hook) && hook.command === COMMAND;
+const isOwnHook = (hook: unknown): boolean => isObject(hook) && (hook.command === COMMAND || hook.command === PREVIOUS_COMMAND);
 
 const holdsOwn = (group: unknown): group is Json & { hooks: unknown[] } => isObject(group) && Array.isArray(group.hooks) && group.hooks.some(isOwnHook);
 
