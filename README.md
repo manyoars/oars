@@ -13,11 +13,7 @@ installs or imports to do that:
 | `templates/per-task-agent` | Starter template: a job that charges per finished task | here |
 | `packages/cli` | `@manyoars/oars`, the `oars` command: `login`, `templates`, `deploy`, `status`, `test-charge`, `keys` (`create`, `list`, `revoke`), `sessions` (a local memory of your own Claude Code sessions), `gate` (a record of the install, MCP, and skill picks your agents make), and `pool` (outbox and fetch commands for a pool server you name) | published on npm as [`@manyoars/oars`](https://www.npmjs.com/package/@manyoars/oars) |
 
-## The make-me-money skill
-
 Accounts and paid agents are not open yet; `oars login` says so until launch.
-
-`skills/make-me-money` in this repository teaches Claude Code to ship a paid agent on Many Oars and to hand you the steps only a person can do, such as Stripe onboarding.
 
 ## Session memory
 
