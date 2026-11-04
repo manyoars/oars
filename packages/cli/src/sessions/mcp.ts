@@ -9,6 +9,7 @@ import { appendRecall } from './recall-object.js';
 import { pull, pullRefusal, RECALL_FAMILIES, type PullInput } from './recall-reads.js';
 import { MISS_TEXT } from './recall-render.js';
 import type { RecallCall } from './schema.js';
+import { tryLog } from './steps.js';
 import { loadStore, paths, readRedactDomains, type SessionsRuntime } from './store.js';
 
 const PROTOCOL = '2025-06-18';
@@ -80,14 +81,17 @@ export const handleMessage = async (runtime: SessionsRuntime, now: () => number,
       const store = await loadStore(runtime.storeDir);
       const result = pull(store, query, { sid: null, now: now(), frame: null, redactDomains: await readRedactDomains(runtime.storeDir), current: await currentPool(runtime.storeDir, store) });
       const call: RecallCall = { at: new Date(now()).toISOString(), query: JSON.stringify(query), matches: result.legacy?.matches.length ?? result.reads.length, cwd: process.cwd() };
-      await mkdir(runtime.storeDir, { recursive: true });
-      await appendFile(paths(runtime.storeDir).calls, `${JSON.stringify(call)}\n`, { mode: 0o600 });
-      await appendRecall(runtime.storeDir, result.recall);
+      // A pull always answers: a log or recall row that cannot be written costs the record, never the agent's answer.
+      await tryLog(async () => {
+        await mkdir(runtime.storeDir, { recursive: true });
+        await appendFile(paths(runtime.storeDir).calls, `${JSON.stringify(call)}\n`, { mode: 0o600 });
+      });
+      await tryLog(() => appendRecall(runtime.storeDir, result.recall));
       // An agent reads this, so it gets the rendered counts and the structured recall, and no signature text.
       const { answer, id: recallId, evidence } = result.recall;
       return reply(id, { content: [{ type: 'text', text: answer.rendered === '' ? MISS_TEXT : answer.rendered }], structuredContent: { recallId, kind: answer.kind, reads: answer.reads, evidence } });
     } catch (error) {
-      // A store or log failure must not end the server mid-session: the agent gets an error for this call and can carry on.
+      // A store read failure must not end the server mid-session: the agent gets an error for this call and can carry on.
       return failure(id, -32603, `Internal error: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
