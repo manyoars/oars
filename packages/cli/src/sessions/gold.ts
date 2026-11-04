@@ -6,7 +6,7 @@ import { createHash } from 'node:crypto';
 import { readdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { INTERRUPT_MARKER } from './derive.js';
-import { cut, EDITS, SHELL, shellTarget, shortName } from './extract.js';
+import { cut, EDITS, promptOpening, SHELL, shellTarget, shortName } from './extract.js';
 import type { Redactor } from './redact.js';
 import { PROMPT_HEAD_CHARS, type PromptObservation, type PromptStop, type PromptVerify } from './schema.js';
 import { SOURCES } from './sources.js';
@@ -63,7 +63,8 @@ export const readTurns = (text: string): Turn[] => {
   const turns: Turn[] = [];
   // A resumed session repeats earlier lines: the first copy of a call carries its result, and a repeat is not fresh work.
   const calls = new Map<string, TurnCall>();
-  for (const raw of text.split('\n')) {
+  const lines = text.split('\n');
+  for (const [position, raw] of lines.entries()) {
     let line: unknown;
     try {
       line = JSON.parse(raw);
@@ -74,9 +75,10 @@ export const readTurns = (text: string): Turn[] => {
     const { content, role } = line.message;
     const blocks = Array.isArray(content) ? content.filter(isObj) : [];
     if (line.type === 'user' && role === 'user' && line.isMeta !== true) {
-      const request = firstTextBlock(content);
-      if (request !== '' && !blocks.some((block) => block.type === 'tool_result') && !request.startsWith('<')) {
-        turns.push({ index: turns.length, request, calls: [], replies: [] });
+      const written = firstTextBlock(content);
+      const opening = written === '' || blocks.some((block) => block.type === 'tool_result') ? undefined : promptOpening(written, lines, position);
+      if (opening !== undefined) {
+        turns.push({ index: turns.length, request: opening.request, calls: [], replies: [] });
         continue;
       }
     }

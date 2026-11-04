@@ -206,6 +206,22 @@ describe('poolOf', () => {
     }
   });
 
+  it('gives a new call-shape version a new pool, since that method has no row of its own in the table', async () => {
+    const before = poolOf(deriveCells(one), []).version;
+    vi.resetModules();
+    vi.doMock('./read.js', async (importActual) => {
+      const actual = await importActual<typeof ReadModule>();
+      return { ...actual, CALL_SHAPE_METHOD: { ...actual.CALL_SHAPE_METHOD, version: '2' } };
+    });
+    try {
+      const fresh = await import('./cells.js');
+      expect(fresh.poolOf(fresh.deriveCells(one), []).version).not.toBe(before);
+    } finally {
+      vi.doUnmock('./read.js');
+      vi.resetModules();
+    }
+  });
+
   it('finds every cell its motif', () => {
     const pool = poolOf(deriveCells(one), []);
     expect(pool.cells.every((cell) => pool.motifs.has(cell.motifId))).toBe(true);

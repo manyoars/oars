@@ -927,6 +927,20 @@ describe('every ms term reads the clock (spec 3.2 mean ms)', () => {
     expect(second.indexFailure?.ms).toBe(25);
   });
 
+  it('refresh still writes the hook index when the pool cannot be derived or written: the index step does not fail with it', async () => {
+    const staged = stage();
+    await deposit(staged.runtime, { allow: ['proj'], redactDomains: [], now: () => NOW });
+    rmSync(join(staged.storeDir, 'hook-index.json'));
+    // A directory where the cells file should be: refreshing the pool throws, and the index must not wait on it.
+    rmSync(join(staged.storeDir, 'cells.jsonl'), { force: true });
+    mkdirSync(join(staged.storeDir, 'cells.jsonl'));
+    const trace = newTrace();
+    await refresh(staged.runtime, [], '2026-06-10T00:00:00.000Z', trace);
+    expect(trace.indexFailure).toBeUndefined();
+    expect(trace.index?.out.signature).toBeGreaterThan(0);
+    expect(JSON.parse(readFileSync(join(staged.storeDir, 'hook-index.json'), 'utf8'))).toMatchObject({ at: '2026-06-10T00:00:00.000Z' });
+  });
+
   it('a lookup hook logs its wall time on the recall row and the hook-calls line', async () => {
     const staged = stage();
     await sessionsDeposit(depsOf(staged), good);

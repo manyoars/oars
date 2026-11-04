@@ -68,10 +68,15 @@ export const unitCells = (pool: Pool): { cell: Cell; motif: Motif }[] => {
 /** Counts over every one-step `shape` cell, for shares: a named motif's share is of all steps, like its action's. */
 export const shapeUnits = (pool: Pool): Cell[] => unitCells(pool).filter(({ motif }) => motif.level === 'shape').map(({ cell }) => cell);
 
-export const body = (family: Family, cells: readonly Cell[], fields: { slice: ReadSlice; value: ReadValue; n: number; interval: ReadInterval | null }): ReadBody => ({
+export const body = (
+  family: Family,
+  cells: readonly Cell[],
+  fields: { slice: ReadSlice; value: ReadValue; n: number; interval: ReadInterval | null },
+  method: { readonly name: string; readonly version: string } = METHODS[family],
+): ReadBody => ({
   family,
-  method: METHODS[family].name,
-  methodVersion: METHODS[family].version,
+  method: method.name,
+  methodVersion: method.version,
   inputs: cells.map(cellIdOf),
   // Cell counts cannot give distinct accounts across cells, so this is the floor they do prove, which never overstates what a served floor may rely on.
   clusters: cells.reduce((highest, cell) => Math.max(highest, cell.clusters), 0),
