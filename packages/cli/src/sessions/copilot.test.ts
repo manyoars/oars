@@ -233,7 +233,7 @@ describe('the Copilot CLI reader', () => {
   });
 });
 
-describe('the Copilot CLI reader, fix round 1', () => {
+describe('the Copilot CLI reader', () => {
   it('decides a shell call by the completion alone: no shellToolInfo on the start, success true, exit 2 is an error', () => {
     const out = extractOf([start(), prompt(1, 'run'), say(2, '', {}, [ask('c1', 'bash', { command: 'make' })]), begin(3, 'c1', 'bash', { arguments: { command: 'make' } }), done(4, 'c1', { success: true, shellExecution: { exitCode: 2 }, result: { content: 'make: *** No rule' } })]);
     expect(out.tools).toMatchObject([{ tool: 'Bash', status: 'error' }]);

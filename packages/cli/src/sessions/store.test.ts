@@ -28,7 +28,7 @@ const rewriteState = (storeDir: string, change: (state: StateFile) => void): voi
   writeFileSync(paths(storeDir).state, JSON.stringify(state));
 };
 
-describe('re-deposit on a new extractor version or a wider redaction set (fix round 2)', () => {
+describe('re-deposit on a new extractor version or a wider redaction set', () => {
   it('re-deposits an unchanged file whose recorded version differs, and records the current one', async () => {
     const staged = stage();
     await deposit(staged.runtime, options(['proj']));
@@ -50,7 +50,7 @@ describe('re-deposit on a new extractor version or a wider redaction set (fix ro
   });
 });
 
-describe('the domain set is recorded per file (fix round 3)', () => {
+describe('the domain set is recorded per file', () => {
   it('deposits B again when a later run widened the set while only A was allowed', async () => {
     const staged = stage();
     const line = JSON.stringify({ type: 'user', timestamp: '2026-06-01T00:00:00Z', message: { role: 'user', content: 'deploy to build.x.com now' } });
@@ -279,7 +279,7 @@ describe('deposit', () => {
   });
 });
 
-describe('concurrent hook deposits (fix round 1)', () => {
+describe('concurrent hook deposits', () => {
   it('two interleaved session deposits both keep their entry in state.json', async () => {
     const staged = stage();
     const line = JSON.stringify({ type: 'user', timestamp: '2026-06-01T00:00:00Z', message: { role: 'user', content: 'hello' } });
