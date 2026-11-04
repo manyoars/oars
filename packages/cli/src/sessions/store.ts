@@ -259,7 +259,7 @@ export interface SkippedScope {
 /**
  * The scan rule is the allowlist (`depositLocked`, `depositSessionLocked`): a folder no entry names is not opened, by design, so
  * a worktree folder of an allowed repository is skipped when only the repository's own folder is named. This reads folder listings
- * only, never a transcript, so `verify` can say what the store does not hold.
+ * only, never a transcript, so `verify` and `books` can say what the store does not hold.
  */
 export const skippedFolders = async (runtime: SessionsRuntime): Promise<SkippedScope> => {
   const allow = compileAllow((await readState(runtime.storeDir)).allow);

@@ -32,7 +32,7 @@ vi.mock('node:fs', async (importOriginal) => {
 });
 
 const { deposit, skippedFolders } = await import('./store.js');
-const { sessionsVerify } = await import('./command.js');
+const { sessionsBooks, sessionsVerify } = await import('./command.js');
 const { cleanup, NOW, stage } = await import('./test-support.js');
 
 afterEach(cleanup);
@@ -50,6 +50,11 @@ describe('the scope listing of a folder off the allowlist', () => {
     expect(opened.filter((path) => path.includes('omega-app'))).toEqual([]);
     // `verify` is the command that calls it: the same folder, still unopened.
     await sessionsVerify({ sessions: staged.runtime, install: undefined, now: () => NOW }, { session: undefined });
+    expect(opened.filter((path) => path.includes('omega-app'))).toEqual([]);
+    // Positive control: the spies see a read when one happens, so an empty list above means no read.
+    expect(opened.some((path) => path.endsWith('state.json'))).toBe(true);
+    opened.length = 0;
+    await sessionsBooks({ sessions: staged.runtime, install: undefined, now: () => NOW }, { by: 'class', sinceDays: undefined });
     expect(opened.filter((path) => path.includes('omega-app'))).toEqual([]);
   });
 });
