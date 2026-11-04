@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { askable, managerOptions, managerReader, readNpmView, readPipIndex, type ManagerRun, type ManagerRunner } from './registry.js';
+import { askable, managerOptions, managerReader, readNpmView, readPipIndex, stopTree, type ManagerRun, type ManagerRunner, type StartProcess } from './registry.js';
 
 const ran = (code: number | null, stdout = '', stderr = ''): ManagerRun => ({ code, stdout, stderr });
 
@@ -20,7 +20,7 @@ describe('reading a manager answer', () => {
 
   it.each<[string, ManagerRun, object]>([
     ['found', ran(0, 'requests (2.32.3)\nAvailable versions: 2.32.3, 2.32.2\n'), { state: 'found', latest: '2.32.3', created: null }],
-    ['not found', ran(1, '', 'ERROR: No matching distribution found for nothing-here'), { state: 'not-found' }],
+    ['a missing name, which reads the same as a down index', ran(1, '', 'ERROR: No matching distribution found for nothing-here'), { state: 'unreachable' }],
     ['a failed run', ran(1, '', 'ERROR: unknown command'), { state: 'unreachable' }],
     ['no first line', ran(0, 'WARNING: nothing'), { state: 'unreachable' }],
   ])('pip: %s', (_label, run, expected) => {
@@ -60,12 +60,47 @@ describe('how a manager is started', () => {
   });
 });
 
+describe('stopping a manager', () => {
+  const spawned = () => {
+    const calls: { program: string; args: readonly string[] }[] = [];
+    const start: StartProcess = (program, args) => {
+      calls.push({ program, args });
+      return { on: () => undefined };
+    };
+    return { calls, start };
+  };
+
+  it('kills the tree through taskkill on Windows, where the shell stands first', () => {
+    const { calls, start } = spawned();
+    const kill = vi.fn();
+    stopTree({ pid: 4242, kill }, 'win32', start);
+    expect(calls).toEqual([{ program: 'taskkill', args: ['/pid', '4242', '/T', '/F'] }]);
+    expect(kill).not.toHaveBeenCalled();
+  });
+
+  it('kills the child itself elsewhere, and when it never got a pid', () => {
+    const { calls, start } = spawned();
+    const kill = vi.fn();
+    stopTree({ pid: 4242, kill }, 'linux', start);
+    stopTree({ pid: undefined, kill }, 'win32', start);
+    expect(kill).toHaveBeenCalledTimes(2);
+    expect(calls).toEqual([]);
+  });
+});
+
 describe('the reader', () => {
+  it('hands the abort signal of the ask to the manager', async () => {
+    const runner = vi.fn<ManagerRunner>(async () => Promise.resolve(ran(0, '{"dist-tags.latest":"1.0.0"}')));
+    const signal = new AbortController().signal;
+    await managerReader(runner)({ class: 'npm-package', name: 'one', cwd: 'here', signal });
+    expect(runner.mock.calls[0]?.[3]).toBe(signal);
+  });
+
   it('asks the manager in the folder of the call, and never starts one for a name it cannot ask', async () => {
     const runner = vi.fn<ManagerRunner>(async () => Promise.resolve(ran(0, '{"dist-tags.latest":"1.0.0"}')));
     const read = managerReader(runner);
     await expect(read({ class: 'npm-package', name: 'one', cwd: 'here' })).resolves.toMatchObject({ state: 'found', latest: '1.0.0' });
-    expect(runner).toHaveBeenCalledWith('npm', expect.arrayContaining(['view', 'one']), 'here');
+    expect(runner).toHaveBeenCalledWith('npm', expect.arrayContaining(['view', 'one']), 'here', undefined);
     await expect(read({ class: 'npm-package', name: 'a&calc', cwd: 'here' })).resolves.toMatchObject({ state: 'unreachable' });
     expect(runner).toHaveBeenCalledTimes(1);
   });
@@ -77,6 +112,12 @@ describe('the reader', () => {
     const pip = vi.fn<ManagerRunner>(async () => Promise.resolve(ran(0, 'one (1.0.0)\n')));
     await managerReader(pip, 650)({ class: 'python-package', name: 'one', cwd: 'here' });
     expect(pip.mock.calls[0]?.[1]).toEqual(expect.arrayContaining(['--timeout', '1', '--retries', '0']));
+  });
+
+  it('gives pip a longer budget in whole seconds', async () => {
+    const pip = vi.fn<ManagerRunner>(async () => Promise.resolve(ran(0, 'one (1.0.0)\n')));
+    await managerReader(pip, 15_000)({ class: 'python-package', name: 'one', cwd: 'here' });
+    expect(pip.mock.calls[0]?.[1]).toEqual(expect.arrayContaining(['--timeout', '15']));
   });
 
   it('adds no timeout flags when none is given, so a replay keeps the manager defaults', async () => {
@@ -91,6 +132,6 @@ describe('the reader', () => {
   it('asks pip for a Python name', async () => {
     const runner = vi.fn<ManagerRunner>(async () => Promise.resolve(ran(0, 'one (1.0.0)\n')));
     await expect(managerReader(runner)({ class: 'python-package', name: 'one', cwd: 'here' })).resolves.toMatchObject({ state: 'found', latest: '1.0.0' });
-    expect(runner).toHaveBeenCalledWith('pip', expect.arrayContaining(['index', 'versions', 'one']), 'here');
+    expect(runner).toHaveBeenCalledWith('pip', expect.arrayContaining(['index', 'versions', 'one']), 'here', undefined);
   });
 });

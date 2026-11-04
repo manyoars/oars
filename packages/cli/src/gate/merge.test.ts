@@ -33,6 +33,7 @@ const crossing = (extra: Partial<CrossingRecord> = {}): CrossingRecord => ({
   registryAge: 'not-read',
   arm: 'none',
   lineShown: 'none',
+  lineHeld: 'none',
   session: 's1',
   agent: null,
   toolUseId: 't1',
@@ -67,6 +68,18 @@ describe('one row per crossing', () => {
     expect(rest).toEqual([]);
     expect(one).toMatchObject({ via: 'both', permission: 'default', novelty: 'repository', registryState: 'found', againstLatest: 'latest', registryAge: 'older', ts: '2026-10-01T10:00:00.500Z' });
     expect(one).toMatchObject({ origin: 'prompt', decidedBy: 'operator', status: 'ok', next: 'proceeded', removedLater: false, miss: 'none' });
+  });
+
+  it('keeps the policy the hook wrote under, which a replay row never carries', () => {
+    const [one] = mergeCrossings([crossing()], [hookRow({ policy: 'invalid' })]);
+    expect(one).toMatchObject({ via: 'both', policy: 'invalid' });
+    expect(mergeCrossings([crossing()], [hookRow()])[0]).not.toHaveProperty('policy');
+  });
+
+  it('reads a hook row from an earlier build, which has no lineHeld, as the replay says', () => {
+    const early: Partial<CrossingRecord> = { lineHeld: undefined };
+    expect(mergeCrossings([crossing()], [hookRow(early)])[0]).toMatchObject({ lineHeld: 'none' });
+    expect(mergeCrossings([crossing()], [hookRow({ lineHeld: 'young-name-note' })])[0]).toMatchObject({ lineHeld: 'young-name-note' });
   });
 
   it("falls back to the replay's value where the hook read nothing", () => {

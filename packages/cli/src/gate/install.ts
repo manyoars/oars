@@ -1,9 +1,9 @@
 // `oars gate install` and `oars gate uninstall`: one PreToolUse entry in Claude Code's user settings that runs `oars gate hook`. The entry is ours when its command is
-// exactly `COMMAND`, so uninstall removes that entry and nothing else, and every other key and hook in the file is carried through as parsed JSON. The command calls the
+// exactly `COMMAND` or `PREVIOUS_COMMAND`, so uninstall removes that entry and nothing else, and every other key and hook in the file is carried through as parsed JSON. The command calls the
 // installed `oars`, never `npx` (which would fetch a package on the hook's clock), and does nothing when `oars` is not on the PATH, so a settings file that outlives the
 // install cannot cost a session its tool calls.
-import { mkdir, realpath, rename, stat, writeFile } from 'node:fs/promises';
-import { dirname } from 'node:path';
+import { chmod, lstat, mkdir, readlink, realpath, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { dirname, resolve } from 'node:path';
 import { CliError, ExitCode } from '../errors.js';
 import { readSettings } from '../sessions/install.js';
 
@@ -12,8 +12,14 @@ export const MATCHER = 'Bash|PowerShell|Skill|mcp__.*';
 export const EVENT = 'PreToolUse';
 /** Seconds the harness waits for the hook; the hook ends itself in under one, so this is only the ceiling for a cold node start. */
 export const TIMEOUT_SECONDS = 5;
-/** Run by the harness's shell (Git Bash on Windows). `command -v` is a shell builtin, so a missing `oars` costs a few milliseconds and no node start. The trailing `exit 0` matters: exit 2 from a PreToolUse hook blocks the tool call, and an `oars` with no `gate hook` exits 2. */
-export const COMMAND = 'command -v oars >/dev/null 2>&1 || exit 0; oars gate hook >/dev/null 2>&1; exit 0';
+/**
+ * Run by the harness's shell (Git Bash on Windows). `command -v` is a shell builtin, so a missing `oars` costs a few milliseconds and no node start. The harness reads this command's stdout, so what
+ * `oars gate hook` prints (a note or a deny) is passed through, and only when it exits 0: an `oars` with no `gate hook` prints and exits 2, which would block the tool call, so that output is dropped.
+ * The trailing `exit 0` matters for the same reason.
+ */
+export const COMMAND = `command -v oars >/dev/null 2>&1 || exit 0; out=$(oars gate hook 2>/dev/null) && printf '%s' "$out"; exit 0`;
+/** The command an earlier build wrote, which discarded the hook's output. Still ours, so a rerun replaces it and an uninstall removes it. */
+export const PREVIOUS_COMMAND = 'command -v oars >/dev/null 2>&1 || exit 0; oars gate hook >/dev/null 2>&1; exit 0';
 
 interface Json {
   [key: string]: unknown;
@@ -21,7 +27,7 @@ interface Json {
 
 const isObject = (value: unknown): value is Json => typeof value === 'object' && value !== null && !Array.isArray(value);
 
-const isOwnHook = (hook: unknown): boolean => isObject(hook) && hook.command === COMMAND;
+const isOwnHook = (hook: unknown): boolean => isObject(hook) && (hook.command === COMMAND || hook.command === PREVIOUS_COMMAND);
 
 const holdsOwn = (group: unknown): group is Json & { hooks: unknown[] } => isObject(group) && Array.isArray(group.hooks) && group.hooks.some(isOwnHook);
 
@@ -47,25 +53,42 @@ const withOwn = (groups: unknown[]): unknown[] => {
 
 const withoutOwn = (groups: unknown[]): unknown[] => groups.flatMap((group) => (holdsOwn(group) ? remainder(group) : [group]));
 
-/** The file as it stands, followed through a symlink (a dotfile manager's), with its permission bits; `undefined` when there is none yet. */
-const existing = async (path: string): Promise<{ target: string; mode: number } | undefined> => {
+/** Where a symlink that points at nothing yet would land, so the rename writes the file it names and leaves the link a link. `undefined` when `path` is not a symlink. */
+const danglingTarget = async (path: string): Promise<string | undefined> => {
   try {
-    const target = await realpath(path);
-    return { target, mode: (await stat(target)).mode & 0o777 };
+    return (await lstat(path)).isSymbolicLink() ? resolve(dirname(path), await readlink(path)) : undefined;
   } catch {
     return undefined;
   }
 };
 
-/** Whole and atomic: a half-written settings file would take every other hook in it down too. The temp file sits beside the real target with the file's own mode (0600 when new: `env` can hold secrets), and the rename lands on the resolved path, so a symlinked settings file stays a symlink. */
+/** The file as it stands, followed through a symlink (a dotfile manager's), with its permission bits. `mode` is `undefined` when there is no file yet; `target` is then where it will land. */
+const existing = async (path: string): Promise<{ target: string; mode: number | undefined } | undefined> => {
+  try {
+    const target = await realpath(path);
+    return { target, mode: (await stat(target)).mode & 0o777 };
+  } catch {
+    const target = await danglingTarget(path);
+    return target === undefined ? undefined : { target, mode: undefined };
+  }
+};
+
+/** Whole and atomic: a half-written settings file would take every other hook in it down too. The temp file sits beside the real target with the file's own mode (0600 when new: `env` can hold secrets), and the rename lands on the resolved path, so a symlinked settings file stays a symlink. The mode is set after the write because the umask masks the one `writeFile` is given; a failed rename leaves no temp file behind. */
 const writeSettings = async (path: string, settings: Json): Promise<void> => {
   const found = await existing(path);
   const target = found?.target ?? path;
   await mkdir(dirname(target), { recursive: true });
   const temp = `${target}.${String(process.pid)}.oars-gate.tmp`;
-  await writeFile(temp, `${JSON.stringify(settings, null, 2)}
-`, { mode: found?.mode ?? 0o600 });
-  await rename(temp, target);
+  const mode = found?.mode ?? 0o600;
+  try {
+    await writeFile(temp, `${JSON.stringify(settings, null, 2)}
+`, { mode });
+    await chmod(temp, mode);
+    await rename(temp, target);
+  } catch (error) {
+    await rm(temp, { force: true });
+    throw error;
+  }
 };
 
 // A `hooks` key, or a PreToolUse key under it, of another shape is the operator's and this version cannot merge into it: refuse it, and write nothing.

@@ -177,6 +177,7 @@ const recordOf = (held: Held, novelty: Novelty, removedAt: string | undefined, a
     registryAge: answer === undefined ? 'not-read' : ageOf(answer, ts),
     arm: 'none',
     lineShown: 'none',
+    lineHeld: 'none',
     session: transcript.session,
     agent: transcript.agent,
     toolUseId: found.toolUseId,
