@@ -115,6 +115,32 @@ describe('the leak test: a private name in a path, a program, a package, an argu
   });
 });
 
+describe('the leak test: the name of a custom subagent', () => {
+  const PRIVATE_AGENT = 'acme-release-captain';
+
+  it('leaves as custom on every step of its run, and nowhere else in the batch', () => {
+    const [only] = sessionsFrom(
+      store({
+        sessions: [session('s1', { frame: framed })],
+        subagents: [session('s1~a', { parent: 's1', spawnedIn: 's1', agentType: PRIVATE_AGENT, frame: framed })],
+        prompts: [prompt('s1', 0, { frame: framed }), prompt('s1~a', 0, { frame: framed })],
+        tools: [
+          tool('s1', 0, 'Bash', { steps: [step(0, 0, 'shell.exec', { native: 'Bash' })] }),
+          tool('s1~a', 0, 'Bash', { steps: [step(0, 0, 'shell.exec', { native: 'Bash' }), step(0, 1, 'shell.exec', { native: 'Bash' })] }),
+          tool('s1~a', 1, 'Bash', { steps: [step(1, 0, 'shell.exec', { native: 'Bash' })] }),
+        ],
+      }),
+    );
+    if (only === undefined) throw new Error('the store has no session');
+    const skeleton = skeletonOf(only, '0123456789abcdef', storedNames, printOf);
+    if (skeleton === null) throw new Error('no skeleton');
+    const types = (skeleton.transcripts[1]?.tools ?? []).flatMap(({ steps }) => steps.map(({ agentType }) => agentType));
+    expect(types).toEqual(['custom', 'custom', 'custom']);
+    expect(JSON.stringify(skeleton).toLowerCase()).not.toContain('acme');
+    expect(parseSkeleton(JSON.parse(JSON.stringify(skeleton)))).toEqual({ ok: true, skeleton });
+  });
+});
+
 describe('what a batch sends in place of a count', () => {
   const sample = (): SessionSkeleton => {
     const from = store({
