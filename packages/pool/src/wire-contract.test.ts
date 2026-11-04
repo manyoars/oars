@@ -1,0 +1,206 @@
+// The deposit wire's forward-compatibility contract under the Workers runtime (conclusion section 17, rules 1 to 4 and 7): the versions a batch carries are stored with it, a field this server does not know lands in the
+// extensions bag and changes nothing that is served, a value it does not know is read as `other`, and a batch with every optional field absent is served from what remains.
+import { createHash } from 'node:crypto';
+import { readdirSync, readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { frame, printOf, prompt, session, sessionsFrom, step, storedNames, store, tool } from '../../cli/src/sessions/pool-fixture.js';
+import { FIELD_LIST_VERSION, OPTIONAL, skeletonOf, SKELETON_FORMAT } from '../../cli/src/sessions/pool-wire.js';
+import { VOCAB_VERSION } from '../../cli/src/sessions/public-vocabulary.js';
+import { startPool, type Answer, type TestPool } from './test-pool.js';
+
+const TOKEN = 'a-contract-token';
+const ID = '0123456789abcdef';
+const framed = frame({ shell: 'bash' });
+let pool: TestPool;
+
+/** A batch as plain JSON: a client's own newer or sparser form is this with something added or taken away. */
+type Wire = { [key: string]: unknown };
+
+const baseline = (): Wire => {
+  const shell = step(0, 0, 'shell.exec', { native: 'Bash', identity: { program: 'git', sub: 'push', flags: ['-f'] } });
+  const [only] = sessionsFrom(store({ sessions: [session('s1', { frame: framed })], prompts: [prompt('s1', 0, { frame: framed })], tools: [tool('s1', 0, 'Bash', { steps: [shell] })] }));
+  const built = only === undefined ? null : skeletonOf(only, ID, storedNames, printOf);
+  if (built === null) throw new Error('no skeleton');
+  return JSON.parse(JSON.stringify(built)) as Wire;
+};
+
+const holder = (value: unknown, ...path: (string | number)[]): Wire => path.reduce<unknown>((held, key) => (held as Wire)[String(key)], value) as Wire;
+
+const post = (body: Wire): Promise<Answer> => pool.post('/v1/deposits', JSON.stringify(body), TOKEN);
+
+interface Row {
+  skeleton: string;
+  format: number;
+  vocab_version: string;
+  fields_version: number;
+  extensions: string;
+  other_values: number;
+}
+
+const rowOf = async (): Promise<Row> => {
+  const row = await (await pool.db()).prepare('SELECT skeleton, format, vocab_version, fields_version, extensions, other_values FROM deposits WHERE account = ? AND id = ?').bind('acct-1', ID).first();
+  return row as unknown as Row;
+};
+
+/** Everything a bundle is derived from: the cells, the motifs, and the strata. */
+const servedPlane = async (): Promise<unknown[]> => {
+  const db = await pool.db();
+  const tables = ['cells ORDER BY key', 'motifs ORDER BY motif_id', 'strata ORDER BY key'];
+  return Promise.all(tables.map(async (table) => (await db.prepare(`SELECT * FROM ${table}`).all()).results));
+};
+
+beforeAll(async () => {
+  pool = await startPool();
+  const db = await pool.db();
+  await db.prepare("INSERT INTO accounts (id, covenant) VALUES ('acct-1', 'v1')").run();
+  await db.prepare("INSERT INTO tokens (hash, account, expires_at) VALUES (?, 'acct-1', ?)").bind(createHash('sha256').update(TOKEN).digest('hex'), Date.now() + 600_000).run();
+}, 60_000);
+
+afterAll(async () => {
+  await pool.dispose();
+});
+
+describe('the versions a deposit carries', () => {
+  it('are stored with the batch', async () => {
+    expect(await post(baseline())).toEqual({ status: 201, json: { ok: true, id: ID } });
+    expect(await rowOf()).toMatchObject({ format: SKELETON_FORMAT, vocab_version: VOCAB_VERSION, fields_version: FIELD_LIST_VERSION, extensions: '[]', other_values: 0 });
+  });
+
+  it('refuse format 2 by name, the way format 1 is refused, and a batch with no versions', async () => {
+    for (const format of [1, 2]) expect(await post({ ...baseline(), format })).toMatchObject({ status: 422, json: { error: 'closed_vocabulary', field: 'format' } });
+    const { vocabVersion: _vocab, ...noVocab } = baseline();
+    expect(await post(noVocab)).toMatchObject({ status: 422, json: { field: 'vocabVersion' } });
+    const { fieldsVersion: _fields, ...noFields } = baseline();
+    expect(await post(noFields)).toMatchObject({ status: 422, json: { field: 'fieldsVersion' } });
+  });
+
+  it('store the versions a newer client names, so an older server reads a newer client', async () => {
+    expect((await post({ ...baseline(), fieldsVersion: FIELD_LIST_VERSION + 3, vocabVersion: '99' })).status).toBe(201);
+    expect(await rowOf()).toMatchObject({ format: SKELETON_FORMAT, vocab_version: '99', fields_version: FIELD_LIST_VERSION + 3 });
+  });
+});
+
+describe('a field this server does not know', () => {
+  const LEVELS: { level: string; at: string; path: (string | number)[] }[] = [
+    { level: 'batch', at: 'futureBatchField', path: [] },
+    { level: 'transcript', at: 'transcripts[0].futureTranscriptField', path: ['transcripts', 0] },
+    { level: 'frame', at: 'transcripts[0].frame.futureFrameField', path: ['transcripts', 0, 'frame'] },
+    { level: 'step', at: 'transcripts[0].tools[0].steps[0].futureStepField', path: ['transcripts', 0, 'tools', 0, 'steps', 0] },
+  ];
+
+  it('answers 201 at every level, lands in the bag, and leaves every cell, motif, stratum, and the stored skeleton as the same batch without it', async () => {
+    expect((await post(baseline())).status).toBe(201);
+    const before = { plane: await servedPlane(), row: await rowOf() };
+    expect(before.row.extensions).toBe('[]');
+    const generation = await (await pool.db()).prepare('SELECT generation FROM pool_generation').first('generation');
+
+    const extended = baseline();
+    for (const { path, at } of LEVELS) holder(extended, ...path)[at.split('.').at(-1) ?? ''] = { nested: [1, 2, 3], note: `kept at ${at}` };
+    expect((await post(extended)).status).toBe(201);
+
+    const after = { plane: await servedPlane(), row: await rowOf() };
+    expect(after.plane).toEqual(before.plane);
+    expect(after.row.skeleton).toBe(before.row.skeleton);
+    expect(await (await pool.db()).prepare('SELECT generation FROM pool_generation').first('generation')).toBe(generation);
+    const bag = JSON.parse(after.row.extensions) as { at: string; kind: string; value: unknown }[];
+    expect(bag.map(({ at }) => at).sort()).toEqual(LEVELS.map(({ at }) => at).sort());
+    expect(bag.every(({ kind }) => kind === 'field')).toBe(true);
+    // The stored skeleton is the parsed one: nothing of the bag is in it.
+    expect(after.row.skeleton).not.toContain('kept at');
+  });
+
+  it('is refused when it breaks a shape rule: a name that is no field name, a value too large for the request, and a body that is not JSON', async () => {
+    expect(await post({ ...baseline(), 'a field with spaces': 1 })).toMatchObject({ status: 422, json: { field: 'a field with spaces' } });
+    expect((await post({ ...baseline(), padding: 'x'.repeat(1024 * 1024) })).status).toBe(413);
+    expect((await pool.post('/v1/deposits', 'not json', TOKEN)).status).toBe(400);
+  });
+});
+
+describe('a value this server does not know', () => {
+  it('is read as other and counted, stored as other, and kept out of the bag', async () => {
+    const sent = baseline();
+    holder(sent, 'transcripts', 0, 'frame').model = 'a-model-from-the-future';
+    holder(sent, 'transcripts', 0, 'prompts', 0).cls = 'a-class-from-the-future';
+    expect((await post(sent)).status).toBe(201);
+    const row = await rowOf();
+    expect(row.other_values).toBe(2);
+    expect(row.skeleton).not.toContain('from-the-future');
+    expect(row.extensions).not.toContain('from-the-future');
+    expect(JSON.parse(row.extensions)).toEqual([
+      { at: 'transcripts[0].frame.model', kind: 'value', value: null },
+      { at: 'transcripts[0].prompts[0].cls', kind: 'value', value: null },
+    ]);
+    expect(JSON.parse(row.skeleton)).toMatchObject({ transcripts: [{ frame: { model: 'other' }, prompts: [{ cls: 'other' }] }] });
+  });
+
+  it('keeps the literal a client sends beside other, and only that', async () => {
+    const sent = baseline();
+    holder(sent, 'transcripts', 0, 'tools', 0).status = 'other';
+    holder(sent, 'transcripts', 0, 'tools', 0).statusLiteral = 'paused';
+    expect((await post(sent)).status).toBe(201);
+    expect(JSON.parse((await rowOf()).extensions)).toEqual([{ at: 'transcripts[0].tools[0].statusLiteral', kind: 'literal', value: 'paused' }]);
+  });
+});
+
+describe('a format 3 batch with every optional field absent', () => {
+  /** What an absent optional field reads as, which is what a sent null is. */
+  const EMPTY: { [name: string]: unknown } = { deltas: [], timingPrint: null, languageShares: [] };
+
+  const LEVEL_PATHS: { [level in keyof typeof OPTIONAL]: (string | number)[] } = {
+    batch: [],
+    frame: ['transcripts', 0, 'frame'],
+    stack: ['transcripts', 0, 'frame', 'stack'],
+    prompt: ['transcripts', 0, 'prompts', 0],
+    tool: ['transcripts', 0, 'tools', 0],
+    step: ['transcripts', 0, 'tools', 0, 'steps', 0],
+  };
+
+  it('is served from what remains, as the same batch with each of them sent as null', async () => {
+    const nulled = baseline();
+    const sparse = baseline();
+    for (const level of Object.keys(OPTIONAL) as (keyof typeof OPTIONAL)[]) {
+      for (const name of OPTIONAL[level]) {
+        holder(nulled, ...LEVEL_PATHS[level])[name] = name in EMPTY ? EMPTY[name] : null;
+        delete holder(sparse, ...LEVEL_PATHS[level])[name];
+      }
+    }
+    expect((await post(nulled)).status).toBe(201);
+    const withNulls = { plane: await servedPlane(), row: await rowOf() };
+    expect((await post(sparse)).status).toBe(201);
+    const withNone = { plane: await servedPlane(), row: await rowOf() };
+    expect(withNone.row.skeleton).toBe(withNulls.row.skeleton);
+    expect(withNone.plane).toEqual(withNulls.plane);
+    expect(withNone.row.extensions).toBe('[]');
+  });
+
+  it('is refused for a field the cells need to be sound: a harness, a status, a bucket of tokens', async () => {
+    for (const [path, name] of [
+      [['transcripts', 0], 'harness'],
+      [['transcripts', 0, 'tools', 0], 'status'],
+      [['transcripts', 0, 'prompts', 0, 'usage'], 'input'],
+    ] as const) {
+      const sent = baseline();
+      delete holder(sent, ...path)[name];
+      expect(await post(sent)).toMatchObject({ status: 422, json: { error: 'closed_vocabulary' } });
+    }
+  });
+});
+
+describe('the bag', () => {
+  it('is read by nothing that serves: no source file outside the deposit route names the column', () => {
+    const dir = fileURLToPath(new URL('.', import.meta.url));
+    const readers = readdirSync(dir)
+      .filter((file) => file.endsWith('.ts') && !file.endsWith('.test.ts'))
+      .filter((file) => /\bextensions\b|\bother_values\b/.test(readFileSync(`${dir}${file}`, 'utf8')));
+    expect(readers).toEqual(['worker.ts']);
+  });
+
+  it('is left out of a bundle: a stored bag changes no cell a bundle is derived from', async () => {
+    const sent = baseline();
+    holder(sent, 'transcripts', 0).secretLookingField = 'a-string-no-bundle-may-carry';
+    expect((await post(sent)).status).toBe(201);
+    const plane = JSON.stringify(await servedPlane());
+    expect(plane).not.toContain('a-string-no-bundle-may-carry');
+  });
+});
