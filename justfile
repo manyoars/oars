@@ -27,7 +27,7 @@ openapi-refresh source:
 # The Keycloak the live login runs against: the image the platform pins (KeycloakVersionContractTest), so a bump there means a bump here.
 keycloak_image := "quay.io/keycloak/keycloak:26.8.0"
 
-# Memory check for `oars sessions deposit` and `verify` (t808): builds a generated store (400 sessions, superseded records in the log), then runs a no-op deposit,
+# Memory check for `oars sessions deposit` and `verify`: builds a generated store (400 sessions, superseded records in the log), then runs a no-op deposit,
 # a recapturing deposit, and verify under fixed small heaps (136, 136, and 288 MB). About 70 s, so it is not in `check`. Needs the built CLI
 # (`npm run build -w packages/cli`): the script refuses a dist/bin.js older than src/sessions/store.ts. Never touches the real store.
 sessions-heap:

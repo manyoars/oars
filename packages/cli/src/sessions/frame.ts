@@ -1,4 +1,4 @@
-// The frame (t755, recall spec Section 2.1): where and when a prompt ran, as public names only, and its hash. A step takes its prompt's frame,
+// The frame (recall spec Section 2.1): where and when a prompt ran, as public names only, and its hash. A step takes its prompt's frame,
 // and reading one motif across frames is how the record compares models, harnesses, versions, and dates.
 
 import { createHash } from 'node:crypto';

@@ -1,4 +1,4 @@
-// Memory check for `oars sessions deposit` and `oars sessions verify` (t808). Builds a synthetic store in a temp folder, then runs both
+// Memory check for `oars sessions deposit` and `oars sessions verify`. Builds a synthetic store in a temp folder, then runs both
 // commands from the built CLI under a fixed `--max-old-space-size`, with no NODE_OPTIONS.
 //
 //   node scripts/sessions-heap.mjs check [--sessions 400] [--heap <MB>]   # the pass/fail check: `just sessions-heap`
@@ -214,7 +214,7 @@ const runCli = (dirs, heapMb, args, preload, recapture = false) => {
 
 const depositArgs = ['sessions', 'deposit', '--allow', PROJECT, '--json'];
 const verifyArgs = ['sessions', 'verify'];
-// The three measured runs: a deposit that skips every file (the t784 run: 12 captured, 6,757 unchanged), a deposit that captures every transcript
+// The three measured runs: a deposit that skips every file (the operator's run: 12 captured, 6,757 unchanged), a deposit that captures every transcript
 // (a CAPTURE_VERSION bump), and verify. The fourth element is the heap `check` gives each, in MB. At 400 sessions the new build's least heap is 104 and
 // 120 MB in two runs for the recapture (the no-op 104, verify 248), and the old build's is 112 MB (one run; the no-op 168, verify 336). So the cap
 // goes red on the old build for the no-op (168 against 136) and verify (336 against 288) only; the recapture passes on both builds, with a margin of 16 MB at the 120 MB figure.
@@ -248,7 +248,7 @@ const build = (dirs, sessions) => {
 };
 
 /**
- * A recapture appends each session's records at a new rev and leaves the old ones in the log until the deposit's compaction, so t784's store held
+ * A recapture appends each session's records at a new rev and leaves the old ones in the log until the deposit's compaction, so the operator's store held
  * every record twice while its commands ran. This appends a copy of the whole log one rev lower, which is the same log with the old revs
  * superseded (the highest rev of each session is unchanged, so the store a reader sees is too). Turn it off with `--superseded off`.
  * @param {Dirs} dirs
@@ -273,7 +273,7 @@ const supersede = (dirs) => {
  * Puts the store back to the form a measured run starts from. A no-op run (recapture false) sees the log with every record's older copy
  * appended and `state.json` as deposited, so a deposit skips every file. A recapture run sees the clean log and a `state.json` whose
  * files all carry the previous capture version, so a deposit reads every transcript and appends a new rev of each (the log then holds
- * every record twice until the compaction, as in t784's recapture).
+ * every record twice until the compaction, as in the operator's recapture).
  * @param {Dirs} dirs
  * @param {boolean} recapture
  */

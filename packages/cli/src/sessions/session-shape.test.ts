@@ -1,4 +1,4 @@
-// The setup snapshot, tool funnel, and trust shape (t815). Every fixture is synthetic; the Claude Code line shapes are the ones t816's census of 2.1.312 to
+// The setup snapshot, tool funnel, and trust shape. Every fixture is synthetic; the Claude Code line shapes are the ones a census of 2.1.312 to
 // 2.1.318 names (deferred_tools_delta.addedNames and removedNames, api-request-shape.shape.tools[].name, tool_reference.tool_name, stop_hook_summary.hookInfos[],
 // hook_success.command, nested_memory.content.content, permission-mode lines and the user line's permissionMode), the Codex ones are the payloads
 // codex.test.ts already cites (openai/codex @ ac558e2: TurnAbortReason protocol.rs:4580, AskForApproval :1163, SessionMeta.dynamic_tools, ResponseItem::AdditionalTools

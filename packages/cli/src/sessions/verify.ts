@@ -239,7 +239,7 @@ export const CAPTURE_INVARIANTS = [
 const HASH = /^[0-9a-f]{16}$/;
 
 /**
- * The CAPTURE 4 fields, checked over the store's capture records (t714): cv-behind sessions (a session captured at an older readable
+ * The CAPTURE 4 fields, checked over the store's capture records: cv-behind sessions (a session captured at an older readable
  * version, not yet captured again, unless `frozen` names it: its transcript is gone from the harness and `raw/` (or, for a Cursor
  * session, its composer is gone from Cursor), so it is counted apart, never a violation), a mixed `sid` (two salts in one store, so
  * path joins hold only within each), `fileHashes` that no tool call explains, and `targetBase` set on, or missing from, the wrong
@@ -273,7 +273,7 @@ export const verifyCaptured = (sessions: readonly SessionObservation[], tools: r
 /** `not run` when a row had nothing to check (a session behind the current capture version for rows 8 to 10, a transcript with no stamped lines for row 3, and so on). */
 export type RowStatus = 'pass' | 'fail' | 'not run';
 
-/** One session's result: the ten rows of {@link INVARIANTS} then {@link CAPTURE_INVARIANTS}, each with its status (t743; spec 5.4 item 5). */
+/** One session's result: the ten rows of {@link INVARIANTS} then {@link CAPTURE_INVARIANTS}, each with its status (spec 5.4 item 5). */
 export interface SessionVerification {
   session: string;
   invariants: Array<InvariantResult & { status: RowStatus }>;

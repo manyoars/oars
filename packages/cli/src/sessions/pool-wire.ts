@@ -1,4 +1,4 @@
-// What crosses the wire between `oars pool` and the pool server (the recall spec's Sections 2.5, 4, and 5). A skeleton is one session in closed vocabulary: the records a cell is
+// What crosses the wire between `oars pool` and the pool server (recall spec Sections 2.5, 4, and 5). A skeleton is one session in closed vocabulary: the records a cell is
 // computed from, with every class A field left out, so any later derivation can run over old data while nothing private leaves. The client builds a skeleton and checks it before
 // sending, and the server parses it again, field by field, because a live URL takes anything from anyone. This file imports nothing from the file system: the Worker bundles it.
 

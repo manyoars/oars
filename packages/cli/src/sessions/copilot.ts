@@ -1,4 +1,4 @@
-// The GitHub Copilot CLI source (t802): a Copilot CLI session log becomes the same capture records a Claude Code transcript does.
+// The GitHub Copilot CLI source: a Copilot CLI session log becomes the same capture records a Claude Code transcript does.
 //
 // FIXTURE-DERIVED: written from the public SDK's generated event types (github.com/github/copilot-sdk @ d28a136, MIT,
 // nodejs/src/generated/session-events.ts, "generated from session-events.schema.json") and its docs, not from a live store. Nothing was copied; the
