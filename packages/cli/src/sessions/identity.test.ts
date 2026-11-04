@@ -55,6 +55,10 @@ describe('identity holds public names only', () => {
     expect(shell('git push --force origin main')[0]?.identity).toEqual({ program: 'git', sub: 'push', flags: ['--force'] });
   });
 
+  it('keeps copilot as a public program name', () => {
+    expect(shell('copilot --resume')[0]?.identity).toMatchObject({ program: 'copilot' });
+  });
+
   it('finds the subcommand behind a global flag and its value', () => {
     expect(shell('git -C /home/alice/repo status')[0]?.identity).toMatchObject({ program: 'git', sub: 'status' });
     expect(shell('git -c user.name=alice commit -m "hello"')[0]?.identity).toMatchObject({ program: 'git', sub: 'commit' });
