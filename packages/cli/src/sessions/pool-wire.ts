@@ -152,7 +152,7 @@ export const projectedSteps = (tool: ToolObservation, read: ShellReader): StepOb
 /** A transcript's calls in the order they ran, which is the order a skeleton holds them in. */
 const byCall = (tools: readonly ToolObservation[]): ToolObservation[] => [...tools].sort((a, b) => a.n - b.n);
 
-const transcriptOf = ({ session, prompts, tools }: SessionRecords['transcripts'][number], spawners: ReadonlyMap<number, number>, read: ShellReader): SkeletonTranscript | null => {
+const transcriptOf = ({ session, prompts, tools }: SessionRecords['transcripts'][number], spawners: ReadonlyMap<number, number> | null, read: ShellReader): SkeletonTranscript | null => {
   if (session.frame === undefined) return null;
   const framedPrompts: SkeletonPrompt[] = [];
   const promptAt = new Map<number, number>();
@@ -184,7 +184,7 @@ const transcriptOf = ({ session, prompts, tools }: SessionRecords['transcripts']
       status: reported,
       tokens: cost.tokens === null ? null : bucketOf('tokens', cost.tokens),
       ms: cost.durationMs === null ? null : bucketOf('ms', cost.durationMs),
-      parent: parent === null ? null : (spawners.get(parent) ?? null),
+      parent: parent === null || spawners === null ? null : (spawners.get(parent) ?? null),
     }));
     steppedTools.push({ side, prompt: promptPosition, status, durationMs, steps });
   }
@@ -197,7 +197,8 @@ export const skeletonOf = (records: SessionRecords, id: string, read: ShellReade
   const spawners = new Map(byCall(records.transcripts[0]?.tools ?? []).map(({ n }, position) => [n, position]));
   const transcripts: SkeletonTranscript[] = [];
   for (const entry of records.transcripts) {
-    const transcript = transcriptOf(entry, spawners, read);
+    // Only a call of the main run has a position here: a step of a subagent a subagent spawned names a call of that other transcript, so it sends no link rather than a false one.
+    const transcript = transcriptOf(entry, entry.session.spawnedIn === records.main.session ? spawners : null, read);
     if (transcript === null) return null;
     transcripts.push(transcript);
   }
