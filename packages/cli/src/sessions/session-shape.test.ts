@@ -241,6 +241,18 @@ describe('unattendedRun', () => {
     expect(session.trust?.unattendedRun).toEqual([0.13, 0.5]);
   });
 
+  it('counts a Copilot prompt that starts with a tag as a human turn, so it ends the run before it', () => {
+    const events = [
+      copilotEvent(at(0), 'session.start', { sessionId: 'k1', copilotVersion: '1.0.105', selectedModel: 'm', context: { cwd: '/w' } }),
+      copilotEvent(at(2), 'user.message', { content: 'go' }),
+      copilotEvent(at(10), 'assistant.message', { content: 'done', model: 'm', messageId: 'm1' }),
+      copilotEvent(at(36000), 'user.message', { content: '<div> broken' }),
+      copilotEvent(at(36030), 'assistant.message', { content: 'done', model: 'm', messageId: 'm2' }),
+    ];
+    const session = capture(eventLines(events.map((entry) => JSON.stringify(entry)).join('\n'), 'k1').map((entry) => JSON.stringify(entry)), { harness: 'copilot' });
+    expect(session.trust?.unattendedRun).toEqual([0.13, 0.5]);
+  });
+
   it('counts a compaction summary as the agent working, not a human turn', () => {
     const summary = typed(600, 'This session is being continued from a previous conversation', { isCompactSummary: true });
     const session = capture([typed(0, 'start'), said(60), summary, said(660), typed(36000, 'next morning'), said(36030)]);
@@ -322,6 +334,16 @@ describe('unattendedRun', () => {
 
 describe("the shape's edge cases", () => {
   const codex = (rollout: readonly object[]) => capture(rolloutLines(rollout.map((entry) => JSON.stringify(entry)).join('\n'), 'c1').map((entry) => JSON.stringify(entry)), { harness: 'codex' });
+
+  it('stores a Codex approval policy object other than granular as other', () => {
+    const rollout = [
+      rolloutLine(at(0), 'session_meta', { id: 'c1', cwd: '/w', cli_version: '0.50.0' }),
+      rolloutLine(at(1), 'turn_context', { model: 'gpt', cwd: '/w', approval_policy: { reject: {} } }),
+      rolloutLine(at(2), 'event_msg', { type: 'user_message', message: 'go' }),
+    ];
+    const session = capture(rolloutLines(rollout.map((entry) => JSON.stringify(entry)).join('\n'), 'c1').map((entry) => JSON.stringify(entry)), { harness: 'codex' });
+    expect(session.setup).toEqual({ permissionMode: 'other' });
+  });
 
   it('stores a Copilot session as absent for everything its reader does not record, and its prompts as runs', () => {
     const events = [

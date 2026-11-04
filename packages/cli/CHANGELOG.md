@@ -4,7 +4,7 @@ All notable changes to `@manyoars/oars`. Versions follow semver; a release is th
 
 ## Unreleased
 
-- `oars sessions`: a Slack token in an MCP name that is followed by a lone `_` is now masked whole, and a server named `pk`, `rk`, or `sk` keeps its name; the sessions docs now say that a crashed session's checkpoint may hold per-model totals that are not read.
+- `oars sessions`: the sessions docs now say that a crashed session's checkpoint may hold per-model totals that are not read.
 - `oars sessions` capture version 11: the part of an MCP tool name after `mcp__` (Cursor: `mcp_`) is redacted wherever it is stored, package-manager and shell command forms are read more exactly (`pulls`, `segments`, `commits`, `steps`), and a typed line that only starts with an injected tag's name now opens a prompt. The next `deposit` captures every transcript again.
 - `oars sessions` now records, per session and from the transcript only, the setup it ran with (permission mode, plugins, hook count, and instruction bytes), the tool funnel (tools offered, loaded, and removed), and the trust shape (interrupts, rejections, policy denials, and minutes the agent ran between human turns), as counts, names, and sizes; Codex and Copilot record the fields their transcripts hold, and Cursor none. The capture version moves to 12, so the next `oars sessions deposit` reads every transcript again.
 - A deposit whose read of its own `store.lock` is refused at the end (an antivirus share violation on Windows) now removes the lock (retrying a share violation, and never losing the deposit's result if the removal is refused too) instead of leaving it for the 10-minute stale window, and a revert file of a Codex thread that a crash tore no longer makes the whole thread unreadable.
