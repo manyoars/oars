@@ -46,6 +46,7 @@ import {
   type PromptObservation,
   type RecallCall,
   type SessionObservation,
+  type ShellSegment,
   type SessionSummary,
   type SignatureRecord,
   type StepCounts,
@@ -1179,14 +1180,12 @@ const internTool = (tool: ToolObservation, intern: (value: string) => string): T
   session: intern(tool.session),
   parent: intern(tool.parent),
   tool: intern(tool.tool),
-  // A row with no key list is kept as read: `isTool` admits it, and one such row must not abort every reader.
-  keys: Array.isArray(tool.keys) ? tool.keys.map(intern) : tool.keys,
+  keys: tool.keys.map(intern),
   sid: tool.sid === null ? null : intern(tool.sid),
   agentType: tool.agentType === null ? null : intern(tool.agentType),
   harnessVersion: tool.harnessVersion === null ? null : intern(tool.harnessVersion),
   target: tool.target === null ? null : intern(tool.target),
-  // Segments are interned only when they are a list of records with a text `run`; `isTool` admits any other value, which `...tool` already carries.
-  ...(Array.isArray(tool.segments) ? { segments: tool.segments.map((segment) => (isRecord(segment) && typeof segment.run === 'string' ? { ...segment, run: intern(segment.run) } : segment)) } : {}),
+  ...(tool.segments === undefined ? {} : { segments: tool.segments.map((segment) => ({ ...segment, run: intern(segment.run) })) }),
 });
 
 /**
@@ -1371,7 +1370,23 @@ const upgradeUserPrompt = (value: UserPromptObservation & { contextFingerprint?:
   const { contextFingerprint, ...rest } = value;
   return { ...rest, sid: orNull(value.sid), promptFingerprint: value.promptFingerprint ?? promptHalf(contextFingerprint) };
 };
-const upgradeTool = (value: ToolObservation): ToolObservation => ({ ...value, sid: orNull(value.sid), targetBase: value.targetBase ?? null });
+/**
+ * `isTool` admits a row by its tool name and position alone, and derive reads `keys` and `segments` as lists: a row whose `keys` is not a list reads
+ * as having none, a `segments` that is not a list reads as a record captured before `segments`, and a segment without a text `run` is dropped.
+ * Capture never writes these shapes; one hand-edited or foreign row must not abort every reader.
+ */
+const upgradeTool = (value: ToolObservation): ToolObservation => {
+  const { segments, ...rest } = value;
+  const readable: unknown = segments;
+  return {
+    ...rest,
+    sid: orNull(value.sid),
+    targetBase: value.targetBase ?? null,
+    keys: Array.isArray(value.keys) ? value.keys : [],
+    ...(Array.isArray(readable) ? { segments: readable.filter(isSegment) } : {}),
+  };
+};
+const isSegment = (value: unknown): value is ShellSegment => isRecord(value) && typeof value.run === 'string';
 const upgradeErrorLine = (value: ErrorLineObservation): ErrorLineObservation => ({ ...value, sid: orNull(value.sid) });
 
 /** A version-2 session line has `v` and no `cv`, `parent`, or agent fields: it reads as a main transcript of that version. */
