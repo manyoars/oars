@@ -1174,30 +1174,40 @@ export const commitsRead = (plan: readonly PlannedCommit[], result: string): Arr
 /** The longest MCP name tail masked slice by slice. A tool name is capped near 64 characters and a server name near that, so a longer tail is not a name. */
 const MCP_TAIL_MAX = 192;
 
-/** The pattern rules of the redactor whose class allows `_`, so a token holding `__` is still one token. */
-const UNDERSCORE_TOKEN = /\b(?:sk-|AIza|github_pat_)/;
+/**
+ * The pattern rules of the redactor whose class allows `_`, so a token holding `__` is still one token. `sk-` is narrowed to the shapes the
+ * rule is for (`sk-ant-` or 16 characters of the class before any `_`), so `sk-learn` and `task-sk-tools` are not taken for a key.
+ */
+const UNDERSCORE_TOKEN = /\b(?:sk-(?:ant-|[A-Za-z0-9-]{16})|AIza|github_pat_|eyJ)/;
+
+/** The pattern rules a Cursor server name can start with, which are the only ones allowed to hold the first `_` of its `mcp_<server>_<tool>` tail. */
+const CURSOR_TOKEN = /\b(?:sk[-_]|[rp]k_|AIza|github_pat_|gh[pousr]_|whsec_)/;
 
 /**
  * What follows `mcp__` (or the Cursor `mcp_`) with every secret masked. A token is matched only at a word boundary and `_` is a word character, so
  * the redactor is run over every slice of the tail that starts at 0 or right after a `_` and ends at the end or right before a `_`. That
- * finds a token behind a `_`, in front of one, and one that holds `__` (`sk-` and `AIza` allow it). The slices are quadratic in the number
- * of underscores, so a tail past `MCP_TAIL_MAX` characters (which bounds that number) is stored as `<oversized>` instead of sliced.
- * The tool part comes from the operator's config as much as the server part does. A slice that holds `__` is run through the redactor only when
- * it holds a pattern rule whose class allows `_` (`sk-`, `AIza`, `github_pat_`): otherwise the entropy rule reads two harmless parts
- * (`Context7__resolve-library-id`) as one random token and the server loses its name.
+ * finds a token behind a `_`, in front of one, and one that holds `__` (`sk-`, `AIza`, `github_pat_`, and `eyJ` allow it). The slices are
+ * quadratic in the number of underscores, so a tail past `MCP_TAIL_MAX` characters (which bounds that number) is stored as `<oversized>`.
+ * The tool part comes from the operator's config as much as the server part does. A slice that holds `__`, or starts or ends at a `_` (it holds
+ * half of a separator), is run through the redactor only when it holds one of the `UNDERSCORE_TOKEN` rules: otherwise the entropy rule reads two
+ * harmless parts (`Context7__resolve-library-id`) as one random token, or eats the separator, and the server loses its name. A Cursor name has
+ * no `__` to tell server from tool, so the slice that holds its first `_` is run only for a `CURSOR_TOKEN` rule. The limit: a random token with no
+ * pattern rule whose every part is under 24 characters (`TOKEN`'s minimum) cannot be told from two ordinary parts and is not found.
  */
-const redactedMcpTail = (tail: string, redact: Redactor): string => {
+const redactedMcpTail = (tail: string, redact: Redactor, cursor: boolean): string => {
   if (tail.length > MCP_TAIL_MAX) return '<oversized>';
   let out = tail;
+  const first = tail.indexOf('_');
   const starts = [0];
-  for (let at = tail.indexOf('_'); at !== -1; at = tail.indexOf('_', at + 1)) starts.push(at + 1);
+  for (let at = first; at !== -1; at = tail.indexOf('_', at + 1)) starts.push(at + 1);
   // Last start first, so an edit never moves a start still to come; the longest slice first, so a token that holds a `_` is cut whole.
   for (const start of starts.toReversed()) {
     const ends = [out.length];
     for (let at = out.indexOf('_', start); at !== -1; at = out.indexOf('_', at + 1)) ends.push(at);
     for (const end of ends.toSorted((left, right) => right - left)) {
       const slice = out.slice(start, end);
-      if (slice.includes('__') && !UNDERSCORE_TOKEN.test(slice)) continue;
+      if (/__|^_|_$/.test(slice) && !UNDERSCORE_TOKEN.test(slice)) continue;
+      if (cursor && start === 0 && end > first && first !== -1 && !CURSOR_TOKEN.test(slice)) continue;
       const masked = redact(slice);
       if (masked === slice) continue;
       out = out.slice(0, start) + masked + out.slice(end);
@@ -1215,13 +1225,13 @@ const redactedMcpTail = (tail: string, redact: Redactor): string => {
 export const storedToolName = (name: string, redact: Redactor): string => {
   const prefix = name.startsWith('mcp__') ? 'mcp__' : name.startsWith('mcp_') ? 'mcp_' : null;
   if (prefix === null || name.length === prefix.length) return name;
-  return `${prefix}${redactedMcpTail(name.slice(prefix.length), redact)}`;
+  return `${prefix}${redactedMcpTail(name.slice(prefix.length), redact, prefix === 'mcp_')}`;
 };
 
 /** An MCP call's full server name, which `shortName` cuts for the tool sequence, redacted because a harness takes it from the operator's config. */
 export const pullsOfTool = (name: string, redact: Redactor): ToolPull[] => {
   if (!name.startsWith('mcp__')) return [];
-  const pull = wholeName('mcp', redactedMcpTail(name.slice('mcp__'.length), redact).split('__')[0] ?? '');
+  const pull = wholeName('mcp', redactedMcpTail(name.slice('mcp__'.length), redact, false).split('__')[0] ?? '');
   return pull === null ? [] : [pull];
 };
 

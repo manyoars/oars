@@ -248,6 +248,8 @@ describe('MCP tool names: a token behind an underscore or in a later part is red
     [`mcp__${sk}__${tail32}__find`, [sk, tail32]],
     [`mcp__me-${aiza}__${tail28}__find`, [aiza, tail28]],
     [`mcp_me-${gh}_find`, [gh, hex36]],
+    ['mcp__github_pat_AAAAAAAAAA__BBBBBBBBBBBBBBBBBBBB__find', ['AAAAAAAAAA', 'BBBBBBBBBBBBBBBBBBBB']],
+    ['mcp__eyJhbGciOiJ__IUzI1NiJ9.eyJzdWIiOiIx.c2lnbmF0dXJl__find', ['eyJhbGciOiJ', 'IUzI1NiJ9', 'eyJzdWIiOiIx', 'c2lnbmF0dXJl']],
   ])('keeps no part of the token in any stored field for %s', (toolName, parts) => {
     const stored = JSON.stringify(capturedFor(toolName));
     for (const part of parts) expect(stored).not.toContain(part);
@@ -260,7 +262,8 @@ describe('MCP tool names: a token behind an underscore or in a later part is red
   it('leaves an ordinary name alone', () => {
     expect(storedToolName('mcp__github__create_issue', redact)).toBe('mcp__github__create_issue');
     expect(storedToolName('mcp_oars_oars_recall', redact)).toBe('mcp_oars_oars_recall');
-    expect(storedToolName('mcp__Server2__listItems', redact)).toBe('mcp__Server2__listItems');
+    expect(storedToolName('mcp__Server2__listItemsByWorkspaceId', redact)).toBe('mcp__Server2__listItemsByWorkspaceId');
+    expect(storedToolName('mcp_Server2_listItems', redact)).toBe('mcp_Server2_listItems');
     expect(storedToolName('Bash', redact)).toBe('Bash');
   });
   it.each<readonly [string, string]>([
@@ -270,6 +273,35 @@ describe('MCP tool names: a token behind an underscore or in a later part is red
   ])('keeps the server name of %s, a name with a capital and a digit', (toolName, server) => {
     expect(storedToolName(toolName, redact)).toBe(toolName);
     expect(pullsOfTool(toolName, redact)).toEqual([{ ecosystem: 'mcp', name: server, version: null }]);
+  });
+  it.each<readonly [string, string, string]>([
+    ['mcp__ListObjectsV2CommandFoo__find', 'mcp__ListObjectsV2CommandFoo__find', 'ListObjectsV2CommandFoo'],
+    ['mcp__aws__ListObjectsV2CommandFoo', 'mcp__aws__ListObjectsV2CommandFoo', 'aws'],
+    ['mcp__sk-learn__fit_transform', 'mcp__sk-learn__fit_transform', 'sk-learn'],
+    ['mcp__task-sk-tools__resolve-library-id', 'mcp__task-sk-tools__resolve-library-id', 'task-sk-tools'],
+    ['mcp_Context7_resolve-library-id', 'mcp_Context7_resolve-library-id', ''],
+    ['mcp_aws_s3_ListObjectsV2Command', 'mcp_aws_s3_ListObjectsV2Command', ''],
+  ])('reads %s as main reads it: a lone underscore beside a separator does not join two harmless parts', (toolName, stored, server) => {
+    expect(storedToolName(toolName, redact)).toBe(stored);
+    expect(pullsOfTool(toolName, redact)).toEqual(server === '' ? [] : [{ ecosystem: 'mcp', name: server, version: null }]);
+  });
+  it('masks a random server name that has no pattern rule and keeps no pull for a name that is all mask', () => {
+    const random = 'aB3dE5gH7jK9mN1pQ3rS5tU7vW9x';
+    expect(storedToolName(`mcp__${random}__find`, redact)).toBe('mcp__<secret>__find');
+    expect(pullsOfTool(`mcp__${random}__find`, redact)).toEqual([]);
+    expect(storedToolName(`mcp_${random}_find`, redact)).toBe('mcp_<secret>_find');
+  });
+  it.each(['ghp_abcdefghijklmnopqrstuvwxyz0123456789', 'sk-ant-api03-AAAAAAAAAAAA', 'whsec_abcdefghijklmnop', 'pk_live_abcdefghijklmnop'])(
+    'masks the Cursor form of a server named %s',
+    (server) => {
+      const stored = storedToolName(`mcp_${server}_find`, redact);
+      expect(stored).toMatch(/^mcp_<secret>/);
+      expect(stored).not.toContain(server);
+    },
+  );
+  it('does not find a token with no pattern rule whose every part is under 24 characters, an accepted limit', () => {
+    const name = 'mcp__aB3dE5gH7jK9mN1pQ3rS__tU5vW7xY9zA1bC3dE5fG__find';
+    expect(storedToolName(name, redact)).toBe(name);
   });
   it('masks the token in the stored name and the pull for both forms', () => {
     expect(storedToolName(`mcp__me_${token}__find`, redact)).toBe('mcp__me_<secret>__find');
