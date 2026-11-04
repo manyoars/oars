@@ -156,6 +156,11 @@ describe('checkCall on a shell command', () => {
     ['npm install ./packages/one', ['local-path']],
     ['npm install ../one.tgz', ['local-path']],
     ['pip install ./dist/a-1.0-py3-none-any.whl', ['local-path']],
+    // A `file:` spec is a folder or a file on this machine, whatever its slashes: nothing crossed, and no path is kept.
+    ['npm install file:///home/someone/private/x', ['local-path']],
+    ['pip install file:///home/someone/private/x.whl', ['local-path']],
+    ['pip install git+file:///home/someone/private/repo', ['local-path']],
+    ['uvx --from file:///home/someone/private/x tool', ['local-path']],
     // The redactor reads an alias's `name@1.2.3` as an email, as it does in capture: a mask is not a name.
     ['npm install alias@npm:real-name@2.0.0', ['masked-name']],
     ['pip install someone@example.test', ['masked-name']],
@@ -233,6 +238,15 @@ describe('checkCall on a shell command', () => {
     ['pnpm -C sub add x', false],
     ['pnpm --dir sub add x', false],
     ['python -m pip install --index-url https://private.example/simple x', false],
+    ['pip install --no-index --find-links ./wheels x', false],
+    ['pip install -f ./wheels x', false],
+    ['pnpm add --config.registry=https://npm.private.example/ x', false],
+    ['pip install -ihttps://private.example/simple x', false],
+    ['Push-Location sub; npm install x', false],
+    ['Push-Location sub; Pop-Location; npm install x', false],
+    ['pushd sub && npm install x', false],
+    ['npm install --globalconfig=sub/.npmrc x', false],
+    ['UV_INDEX_URL=https://private.example/simple uvx tool', false],
   ])('marks whether the registry a command would contact is the default one: %s', (command, asked) => {
     expect(bash(command).crossings.map((crossing) => crossing.registryAsked)).toEqual([asked]);
   });

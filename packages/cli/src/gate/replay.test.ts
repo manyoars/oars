@@ -166,7 +166,12 @@ describe('a crossing record', () => {
   });
 
   it('keeps no path, cwd, or command text', async () => {
-    await writeLog(projectsRoot, REPO, 'a.jsonl', [bash(1, 't1', 'cd /secret/place && npm install one --prefix /secret/other')]);
+    await writeLog(projectsRoot, REPO, 'a.jsonl', [
+      bash(1, 't1', 'cd /secret/place && npm install one --prefix /secret/other'),
+      bash(2, 't2', 'npm install file:///secret/home/x'),
+      bash(3, 't3', 'pip install git+file:///secret/home/repo'),
+      bash(4, 't4', 'uvx --from file:///secret/home/x tool'),
+    ]);
     await run([REPO]);
     const text = await readFile(join(storeDir, 'crossings.jsonl'), 'utf8');
     expect(text).not.toContain('secret');
@@ -464,6 +469,19 @@ describe('the registry option', () => {
     const { crossings } = await written();
     expect(crossings).toHaveLength(7);
     expect(new Set(crossings.map((row) => row.registryState))).toEqual(new Set(['not-read']));
+  });
+
+  it('leaves every row of a name not-read when one command chose the registry, though a kept answer exists for the name', async () => {
+    await mkdir(join(root, 'cwd'));
+    await writeLog(projectsRoot, REPO, 'a.jsonl', [bash(1, 't1', 'npm install mixed'), bash(2, 't2', 'npm install --registry https://npm.private.example/ mixed')]);
+    const kept = JSON.stringify({ kind: 'registry', v: 1, day: '2026-11-01', class: 'npm-package', state: 'found', created: null, name: 'mixed', latest: '0.0.1' });
+    await writeFile(join(storeDir, 'crossings.jsonl'), `${kept}
+`);
+    const reader = answering();
+    await run([REPO], reader);
+    expect(reader).not.toHaveBeenCalled();
+    const { crossings } = await written();
+    expect(crossings.map((row) => row.registryState)).toEqual(['not-read', 'not-read']);
   });
 
   it('keeps not-found and unreachable apart, and a failed read stays out of the cache', async () => {

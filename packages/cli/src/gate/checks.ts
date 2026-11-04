@@ -164,6 +164,8 @@ const urlSpec = (text: string): Spec => {
   return { kind: 'named', name, version: stated, versionForm: 'url', url: true };
 };
 
+/** A `file:` spec holds a path on this machine, which has slashes and `://` like a URL: it is read as a folder before any URL test, so no path becomes a name. */
+const FILE_SPEC = /^(?:git\+)?file:/i;
 const isUrl = (text: string): boolean => text.includes('://') || text.startsWith('git+') || HOSTED.test(text) || SCP_URL.test(text);
 
 const atVersion = (text: string): { name: string; version: string | null } => {
@@ -178,6 +180,7 @@ const nodeSpec = (text: string): Spec => {
   // `alias@npm:real@1` installs `real`; the alias is only what the code imports it as. It reads like an scp URL, so it goes first.
   const alias = /^@?[^@]+@npm:(.+)$/.exec(text)?.[1];
   if (alias !== undefined) return nodeSpec(alias);
+  if (FILE_SPEC.test(text)) return { kind: 'unread', shape: 'local-path' };
   if (isUrl(text)) return urlSpec(text);
   if (LOCAL_SPEC.test(text) || ARCHIVE.test(text)) return { kind: 'unread', shape: 'local-path' };
   // One slash with no leading `@` is a GitHub shorthand; more than one is a folder.
@@ -193,6 +196,7 @@ const PYTHON_SPEC = /^([A-Za-z0-9][A-Za-z0-9._-]*)(?:\[[^\]]*\])?(===?|~=|!=|>=|
 const pythonSpec = (text: string): Spec => {
   const nothing = namesNothing(text);
   if (nothing !== null) return nothing;
+  if (FILE_SPEC.test(text)) return { kind: 'unread', shape: 'local-path' };
   if (isUrl(text)) return urlSpec(text);
   if (LOCAL_SPEC.test(text) || ARCHIVE.test(text) || /[\\/]/.test(text)) return { kind: 'unread', shape: 'local-path' };
   // uv writes `name@version`, where the `@` is not a PEP 508 direct reference (a URL, handled above).
@@ -417,13 +421,18 @@ const stringField = (input: unknown, key: string): string | undefined => {
 };
 
 /** A flag that points a manager at another registry, config, or folder, so its config is not the one the gate's question would read. */
-const REGISTRY_FLAGS: ReadonlySet<string> = new Set(['--registry', '-i', '--index-url', '--extra-index-url', '--index', '--default-index', '--userconfig', '--globalconfig', '--prefix', '-C', '--dir']);
+const REGISTRY_FLAGS: ReadonlySet<string> = new Set(['--registry', '-i', '--index-url', '--extra-index-url', '--index', '--default-index', '--userconfig', '--globalconfig', '--prefix', '-C', '--dir', '-f', '--find-links', '--no-index']);
 /** `--@scope:registry=url` sends one scope elsewhere. */
 const SCOPE_REGISTRY = /^--@[^=\s]*:registry(?:=|$)/;
+/** `--config.registry=url` (pnpm) and `--config.@scope:registry=url`, and `-ihttps://...` with the value attached. */
+const CONFIG_REGISTRY = /^--config\.[^=\s]*registry(?:=|$)/;
+const ATTACHED_INDEX = /^-i./;
+/** PowerShell's own folder stack. Local to the gate: `CHANGES_FOLDER` also drives capture's read-back of the working folder. */
+const FOLDER_STACK = new Set(['push-location', 'pop-location']);
 /** An assignment of a manager's own variable, in any shell's spelling, which can name a registry or a config file. Over-matching only leaves a name unasked. */
 const REGISTRY_ENVIRONMENT = /(?:^|[^A-Za-z0-9_])(?:npm_config_|pip_|uv_)[A-Za-z0-9_]*\s*=/i;
 
-const choosesRegistry = (command: ShellCommand): boolean => command.args.some(({ text }) => REGISTRY_FLAGS.has(text.split('=')[0] ?? '') || SCOPE_REGISTRY.test(text));
+const choosesRegistry = (command: ShellCommand): boolean => command.args.some(({ text }) => REGISTRY_FLAGS.has(text.split('=')[0] ?? '') || SCOPE_REGISTRY.test(text) || CONFIG_REGISTRY.test(text) || ATTACHED_INDEX.test(text));
 
 const checkShell = (input: unknown, redact: Redactor): CallCheck => {
   const command = stringField(input, 'command');
@@ -438,7 +447,7 @@ const checkShell = (input: unknown, redact: Redactor): CallCheck => {
     if (environment || moved || choosesRegistry(held)) {
       for (const crossing of reading.crossings.slice(from)) crossing.registryAsked = false;
     }
-    moved ||= CHANGES_FOLDER.has(held.program);
+    moved ||= CHANGES_FOLDER.has(held.program) || FOLDER_STACK.has(held.program);
   });
   return reading;
 };
