@@ -1,22 +1,21 @@
-// Serving a slice: the deposits of one stack, derived and signed. The signature covers the exact payload bytes and the client pinned the public half at login, so a replica can be
+// Serving a bundle: one harness version's cells, derived and signed. The signature covers the exact payload bytes and the client pinned the public half at login, so a replica can be
 // kept and checked again anywhere.
-import { ALL_STACKS, isStack, parseSkeleton, type SessionSkeleton, type SignedSlice, type Slice } from '../../cli/src/sessions/pool-wire.js';
-import { sliceOf } from './derive.js';
+import { type Bundle, isBundleVersion, parseSkeleton, type SessionSkeleton, type SignedBundle, VOCAB_VERSION } from '../../cli/src/sessions/pool-wire.js';
+import { bundleOf } from './derive.js';
 import { answer, bound, fieldOf, notConfigured, refuse, textField, wholeBinding, type Env } from './http.js';
 import { accountOf } from './identity.js';
 
-const signed = async (slice: Slice, privateJwk: string): Promise<SignedSlice> => {
+const signed = async (bundle: Bundle, privateJwk: string): Promise<SignedBundle> => {
   const parsed: unknown = JSON.parse(privateJwk);
   const key = await crypto.subtle.importKey('jwk', { kty: textField(parsed, 'kty') ?? '', crv: textField(parsed, 'crv') ?? '', x: textField(parsed, 'x') ?? '', d: textField(parsed, 'd') ?? '' }, 'Ed25519', false, ['sign']);
-  const payload = JSON.stringify(slice);
+  const payload = JSON.stringify(bundle);
   const signature = await crypto.subtle.sign('Ed25519', key, new TextEncoder().encode(payload));
   return { payload, signature: btoa(String.fromCharCode(...new Uint8Array(signature))) };
 };
 
 /** A stored skeleton is parsed again on the way out, so one that a narrower vocabulary no longer admits stops counting instead of being served. */
-const depositsOf = async (env: Env, stack: string): Promise<SessionSkeleton[][]> => {
-  const statement = stack === ALL_STACKS ? env.DB.prepare('SELECT account, skeleton FROM deposits').bind() : env.DB.prepare('SELECT account, skeleton FROM deposits WHERE EXISTS (SELECT 1 FROM json_each(deposits.stacks) WHERE value = ?)').bind(stack);
-  const { results } = await statement.all();
+const depositsOf = async (env: Env): Promise<SessionSkeleton[][]> => {
+  const { results } = await env.DB.prepare('SELECT account, skeleton FROM deposits').bind().all();
   const accounts = new Map<string, SessionSkeleton[]>();
   for (const row of results) {
     const account = textField(row, 'account');
@@ -54,10 +53,11 @@ const reserve = async (env: Env, account: string, limit: number, wanted: number)
   return undefined;
 };
 
-export const pullSlice = async (request: Request, env: Env, stack: string): Promise<Response> => {
+export const fetchBundle = async (request: Request, env: Env, harnessVersion: string, vocabVersion: string): Promise<Response> => {
   const account = await accountOf(request, env);
   if (account === undefined) return refuse(401, 'unauthorized', 'Sign in with oars pool login first.');
-  if (!isStack(stack)) return refuse(400, 'unknown_stack', `No stack is named ${stack}.`, 'stack');
+  if (!isBundleVersion(harnessVersion)) return refuse(400, 'unknown_harness_version', 'That is not a public harness version.', 'harnessVersion');
+  if (vocabVersion !== VOCAB_VERSION) return refuse(400, 'unknown_vocab_version', `This pool holds vocabulary version ${VOCAB_VERSION}.`, 'vocabVersion');
   const key = bound(env.SLICE_SIGNING_KEY);
   if (key === undefined) return notConfigured('SLICE_SIGNING_KEY');
   const deposited = await hasDeposited(env, account);
@@ -65,7 +65,7 @@ export const pullSlice = async (request: Request, env: Env, stack: string): Prom
   const capReached = (): Response => refuse(403, 'read_cap', `An account with no deposit is served ${String(limit)} reads. Run oars pool deposit for the whole pool.`);
   // Answered before the pool is read: a spent account must not be able to force a parse of every deposit on each request.
   if (!deposited && (await servedSoFar(env, account, limit)) >= limit) return capReached();
-  const whole = sliceOf(stack, await depositsOf(env, stack));
+  const whole = bundleOf(harnessVersion, await depositsOf(env));
   if (deposited) return answer(200, await signed(whole, key));
   const served = await reserve(env, account, limit, whole.reads.length);
   if (served === undefined) return capReached();

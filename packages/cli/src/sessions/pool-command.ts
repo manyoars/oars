@@ -6,7 +6,7 @@ import { dirname, join } from 'node:path';
 import type { Outcome, RunDeps } from '../cli.js';
 import { CliError, exitCodeForProblem, ExitCode, unreachableError } from '../errors.js';
 import { checkSession, exclusionPaths, type Reason } from './exclusion.js';
-import { isStack, parseSkeleton, sessionsOf, skeletonOf, verifySlice, type PinnedKey } from './pool-wire.js';
+import { isBundleVersion, parseSkeleton, sessionsOf, skeletonOf, VOCAB_VERSION, verifyBundle, type PinnedKey } from './pool-wire.js';
 import { contentHash } from './read.js';
 import { loadStore, type SessionsRuntime } from './store.js';
 
@@ -286,29 +286,29 @@ export const poolDeposit = async (deps: RunDeps, options: { server?: string | un
   return { document: { ok: true, server, ...counts }, text: lines.join('\n') };
 };
 
-const replicaFile = (storeDir: string, server: string, stack: string): string => join(storeDir, 'pool-replica', contentHash(server), `${encodeURIComponent(stack)}.json`);
+const replicaFile = (storeDir: string, server: string, harnessVersion: string): string => join(storeDir, 'pool-replica', contentHash(server), `${encodeURIComponent(harnessVersion)}.json`);
 
-/** `oars pool pull`: one stack's signed slice, kept only once the key pinned at login has verified it. It keeps the signed form, so the replica can be checked again later. */
-export const poolPull = async (deps: RunDeps, options: { server?: string | undefined; stack: string }): Promise<Outcome> => {
+/** `oars pool pull`: one harness version's signed bundle, kept only once the key pinned at login has verified it. It keeps the signed form, so the replica can be checked again later. */
+export const poolPull = async (deps: RunDeps, options: { server?: string | undefined; harnessVersion: string }): Promise<Outcome> => {
   const { storeDir } = runtimeOf(deps);
   const server = poolServer(deps.env, PULL, options.server);
-  const { stack } = options;
-  if (!isStack(stack)) throw usage(`No stack is named ${stack}.`, PULL);
+  const { harnessVersion } = options;
+  if (!isBundleVersion(harnessVersion)) throw usage(`${harnessVersion} is not a public harness version.`, PULL);
   const { token, signingKey } = await signedIn(deps, storeDir, server, PULL);
-  const reply = await ask(deps, PULL, server, `/v1/slices/${encodeURIComponent(stack)}`, { token });
+  const reply = await ask(deps, PULL, server, `/bundle/${encodeURIComponent(harnessVersion)}/${encodeURIComponent(VOCAB_VERSION)}`, { token });
   if (reply.status !== 200) throw refusal(PULL, reply);
-  const verified = await verifySlice(reply.body, signingKey, stack);
+  const verified = await verifyBundle(reply.body, signingKey, harnessVersion);
   if (!verified.ok) {
-    const title = `Refused the slice: ${verified.reason}.`;
-    throw new CliError(title, ExitCode.INVALID, PULL, { code: 'slice_unverified', title });
+    const title = `Refused the bundle: ${verified.reason}.`;
+    throw new CliError(title, ExitCode.INVALID, PULL, { code: 'bundle_unverified', title });
   }
-  const file = replicaFile(storeDir, server, stack);
+  const file = replicaFile(storeDir, server, harnessVersion);
   await mkdir(dirname(file), { recursive: true });
   await writeFile(file, `${JSON.stringify(reply.body)}\n`);
-  const { cells, motifs, reads, capped, asOf } = verified.slice;
+  const { cells, motifs, reads, capped, asOf } = verified.bundle;
   const cappedLine = capped === null ? '' : ` Capped: ${String(capped.served)} of ${String(capped.limit)} reads served to this account; a deposit lifts the cap.`;
   return {
-    document: { ok: true, server, stack, file, cells: cells.length, motifs: motifs.length, reads: reads.length, capped, asOf },
-    text: `Pulled ${stack}: ${String(reads.length)} reads, ${String(cells.length)} cells, and ${String(motifs.length)} motifs, verified against the pinned key and kept at ${file}.${cappedLine}`,
+    document: { ok: true, server, harnessVersion, file, cells: cells.length, motifs: motifs.length, reads: reads.length, capped, asOf },
+    text: `Pulled ${harnessVersion}: ${String(reads.length)} reads, ${String(cells.length)} cells, and ${String(motifs.length)} motifs, verified against the pinned key and kept at ${file}.${cappedLine}`,
   };
 };

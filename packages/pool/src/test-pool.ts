@@ -1,6 +1,6 @@
 // One pool under the Workers runtime for a test file: the bundled handler and its D1 store in Miniflare's workerd, with a stub device-flow provider behind the Worker's outbound fetch. No account, no Docker, no network.
 import { webcrypto } from 'node:crypto';
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { build } from 'esbuild';
 import { Miniflare, Response as StubResponse, type Request as StubRequest } from 'miniflare';
@@ -143,8 +143,9 @@ export const startPool = async (bindings: { [name: string]: string } = {}): Prom
   await miniflare.ready;
   const db = async (): Promise<TestDb> => (await miniflare.getBindings<{ DB: TestDb }>()).DB;
   const database = await db();
-  const migration = readFileSync(fileIn('../migrations/0001_init.sql'), 'utf8');
-  for (const line of migration.split('\n')) if (line.startsWith('CREATE')) await database.prepare(line).run();
+  for (const file of readdirSync(fileIn('../migrations')).sort()) {
+    for (const line of readFileSync(fileIn(`../migrations/${file}`), 'utf8').split('\n')) if (line.trim() !== '' && !line.startsWith('--')) await database.prepare(line).run();
+  }
 
   const call = async (path: string, init: { method: string; body?: string }, token?: string): Promise<Answer> => {
     const response = await miniflare.dispatchFetch(`http://pool.test${path}`, { ...init, headers: token === undefined ? {} : { authorization: `Bearer ${token}` } });

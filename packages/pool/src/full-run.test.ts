@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { run } from '../../cli/src/cli.js';
 import { ExitCode } from '../../cli/src/errors.js';
-import { verifySlice } from '../../cli/src/sessions/pool-wire.js';
+import { verifyBundle } from '../../cli/src/sessions/pool-wire.js';
 import { deposit } from '../../cli/src/sessions/store.js';
 import { cleanup, NOW, stage, type Staged } from '../../cli/src/sessions/test-support.js';
 import { harness, type Harness } from '../../cli/src/test-support.js';
@@ -71,7 +71,7 @@ describe('login, deposit, and pull against a local server', () => {
       // The four invented sessions in the fixture folder.
       expect(one.last()).toMatchObject({ ok: true, sessions: 4, deposited: 4, uncaptured: 0, refused: 0, tooLarge: 0, excluded: { term: 0, noRaw: 0, noTerms: 0, unreadable: 0 } });
 
-      expect(await one.cli('pull', '--stack', 'all')).toBe(ExitCode.OK);
+      expect(await one.cli('pull', '--harness-version', '2.1.314')).toBe(ExitCode.OK);
       readsAfter.push(fieldOf(one.last(), 'reads'));
     }
     expect(readsAfter.slice(0, 2)).toEqual([0, 0]);
@@ -80,9 +80,9 @@ describe('login, deposit, and pull against a local server', () => {
     const [third] = people.slice(-1);
     if (third === undefined) throw new Error('no third person');
     const kept: unknown = JSON.parse(readFileSync(textOf(third.last(), 'file'), 'utf8'));
-    const verified = await verifySlice(kept, pool.signingKey(), 'all');
+    const verified = await verifyBundle(kept, pool.signingKey(), '2.1.314');
     if (!verified.ok) throw new Error(verified.reason);
-    for (const read of verified.slice.reads) expect(read.clusters).toBe(3);
+    for (const read of verified.bundle.reads) expect(read.clusters).toBe(3);
 
     const db = await pool.db();
     expect(await db.prepare('SELECT COUNT(DISTINCT account) AS count FROM deposits').first('count')).toBe(3);
@@ -91,7 +91,7 @@ describe('login, deposit, and pull against a local server', () => {
 
   it('refuses a pull with no sign-in, and sends nothing for a deposit with none', async () => {
     const one = await person(pool, '4004');
-    expect(await one.cli('pull', '--stack', 'all')).toBe(ExitCode.AUTH);
+    expect(await one.cli('pull', '--harness-version', '2.1.314')).toBe(ExitCode.AUTH);
     expect(await one.cli('deposit')).toBe(ExitCode.AUTH);
     expect(existsSync(join(one.staged.storeDir, 'pool-replica'))).toBe(false);
   }, 60_000);
@@ -106,7 +106,7 @@ describe('a pool with no covenant published', () => {
       expect(await one.cli('deposit', '--accept-covenant', 'v1')).toBe(ExitCode.AUTH);
       expect(JSON.stringify(one.last())).toContain('deposits_closed');
       expect(await (await closed.db()).prepare('SELECT COUNT(*) AS count FROM deposits').first('count')).toBe(0);
-      expect(await one.cli('pull', '--stack', 'all')).toBe(ExitCode.OK);
+      expect(await one.cli('pull', '--harness-version', '2.1.314')).toBe(ExitCode.OK);
     } finally {
       await closed.dispose();
     }

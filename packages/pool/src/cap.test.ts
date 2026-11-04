@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { verifySlice, type Slice } from '../../cli/src/sessions/pool-wire.js';
+import { verifyBundle, type Bundle } from '../../cli/src/sessions/pool-wire.js';
 import { sampleSkeleton } from './sample.js';
 import { containing, startPool, stubUser, type TestPool } from './test-pool.js';
 
@@ -17,12 +17,12 @@ const deposit = async (id: string): Promise<string> => {
   return token;
 };
 
-const slice = async (token: string): Promise<Slice> => {
-  const { status, json } = await pool.get('/v1/slices/all', token);
+const slice = async (token: string): Promise<Bundle> => {
+  const { status, json } = await pool.get('/bundle/2.1.314/0', token);
   expect(status).toBe(200);
-  const verified = await verifySlice(json, pool.signingKey(), 'all');
+  const verified = await verifyBundle(json, pool.signingKey(), '2.1.314');
   if (!verified.ok) throw new Error(verified.reason);
-  return verified.slice;
+  return verified.bundle;
 };
 
 beforeAll(async () => {
@@ -55,7 +55,7 @@ describe('deposit or capped access (V12)', () => {
     expect(first.cells).toEqual([]);
     expect(first.motifs).toEqual([]);
     expect(first.capped).toEqual({ limit: CAP, served: CAP });
-    expect(await pool.get('/v1/slices/all', token)).toMatchObject({ status: 403, json: { error: 'read_cap', message: containing('oars pool deposit') } });
+    expect(await pool.get('/bundle/2.1.314/0', token)).toMatchObject({ status: 403, json: { error: 'read_cap', message: containing('oars pool deposit') } });
   });
 
   it('counts across pulls below the cap: a stack with fewer reads than the cap leaves the rest', async () => {
@@ -70,7 +70,7 @@ describe('deposit or capped access (V12)', () => {
   it('opens up once the capped account deposits', async () => {
     const { token } = await pool.signIn('github', stubUser('2006'));
     await slice(token);
-    expect((await pool.get('/v1/slices/all', token)).status).toBe(403);
+    expect((await pool.get('/bundle/2.1.314/0', token)).status).toBe(403);
     await pool.post('/v1/covenant/accept', { version: 'v1' }, token);
     expect((await pool.post('/v1/deposits', sampleSkeleton('0000000000002006'), token)).status).toBe(201);
     const opened = await slice(token);
@@ -80,12 +80,12 @@ describe('deposit or capped access (V12)', () => {
 
   it('does not double-serve under two pulls at once: together they stay within the cap', async () => {
     const { token } = await pool.signIn('github', stubUser('2007'));
-    const answers = await Promise.all([pool.get('/v1/slices/all', token), pool.get('/v1/slices/all', token)]);
+    const answers = await Promise.all([pool.get('/bundle/2.1.314/0', token), pool.get('/bundle/2.1.314/0', token)]);
     const served = await Promise.all(
       answers.map(async ({ status, json }) => {
         if (status !== 200) return 0;
-        const verified = await verifySlice(json, pool.signingKey(), 'all');
-        return verified.ok ? verified.slice.reads.length : 0;
+        const verified = await verifyBundle(json, pool.signingKey(), '2.1.314');
+        return verified.ok ? verified.bundle.reads.length : 0;
       }),
     );
     expect(served[0] ?? 0).toBeLessThanOrEqual(CAP);
@@ -95,10 +95,10 @@ describe('deposit or capped access (V12)', () => {
   it('spends what is left of the cap across pulls: every read first, then exactly the one left', async () => {
     const limit = everyRead + 1;
     const bare = await startPool({ READ_CAP: String(limit) });
-    const sliceIn = async (token: string): Promise<Slice> => {
-      const verified = await verifySlice((await bare.get('/v1/slices/all', token)).json, bare.signingKey(), 'all');
+    const sliceIn = async (token: string): Promise<Bundle> => {
+      const verified = await verifyBundle((await bare.get('/bundle/2.1.314/0', token)).json, bare.signingKey(), '2.1.314');
       if (!verified.ok) throw new Error(verified.reason);
-      return verified.slice;
+      return verified.bundle;
     };
     try {
       for (const id of ['2101', '2102', '2103']) {
@@ -113,7 +113,7 @@ describe('deposit or capped access (V12)', () => {
       const second = await sliceIn(token);
       expect(second.reads).toHaveLength(1);
       expect(second.capped).toEqual({ limit, served: limit });
-      expect(await bare.get('/v1/slices/all', token)).toMatchObject({ status: 403, json: { error: 'read_cap' } });
+      expect(await bare.get('/bundle/2.1.314/0', token)).toMatchObject({ status: 403, json: { error: 'read_cap' } });
     } finally {
       await bare.dispose();
     }
@@ -128,7 +128,7 @@ describe('deposit or capped access (V12)', () => {
       const db = await bare.db();
       await db.prepare('UPDATE accounts SET reads_served = 1 WHERE id = ?').bind(account).run();
       await db.prepare("INSERT INTO deposits (account, id, stacks, skeleton) VALUES (?, 'damaged', '[]', 'not json')").bind(other.account).run();
-      expect(await bare.get('/v1/slices/all', token)).toMatchObject({ status: 403, json: { error: 'read_cap' } });
+      expect(await bare.get('/bundle/2.1.314/0', token)).toMatchObject({ status: 403, json: { error: 'read_cap' } });
     } finally {
       await bare.dispose();
     }
@@ -138,11 +138,11 @@ describe('deposit or capped access (V12)', () => {
     const bare = await startPool({ READ_CAP: 'many' });
     try {
       const { token } = await bare.signIn('github', stubUser('2008'));
-      const { status, json } = await bare.get('/v1/slices/all', token);
+      const { status, json } = await bare.get('/bundle/2.1.314/0', token);
       expect(status).toBe(200);
-      const verified = await verifySlice(json, bare.signingKey(), 'all');
+      const verified = await verifyBundle(json, bare.signingKey(), '2.1.314');
       if (!verified.ok) throw new Error(verified.reason);
-      expect(verified.slice.capped).toEqual({ limit: 50, served: 0 });
+      expect(verified.bundle.capped).toEqual({ limit: 50, served: 0 });
     } finally {
       await bare.dispose();
     }
