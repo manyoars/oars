@@ -1,6 +1,6 @@
 // The captured `pulls`, `commits`, and `segments` of a shell call (t746 Item 2): one table row per form.
 import { describe, expect, it } from 'vitest';
-import { commitsRead, captureSession, pullsOfTool, readShell } from './extract.js';
+import { commitsRead, captureSession, pullsOfTool, readShell, storedToolName } from './extract.js';
 import { makeRedactor } from './redact.js';
 import { CAPTURE_VERSION } from './schema.js';
 
@@ -62,6 +62,27 @@ describe('pulls: one row per form', () => {
     ['skills installer', 'npx skills add owner/repo', ['skill:owner/repo']],
     ['skills installer with a yes flag and version', 'npx -y skills@latest add owner/repo --skill one', ['skill:owner/repo']],
     ['skills, not an install, is the npm package', 'npx skills list', ['npm:skills']],
+    ['yarn install with a name', 'yarn install foo', ['npm:foo']],
+    ['yarn i with a name', 'yarn i foo', ['npm:foo']],
+    ['npm dlx', 'npm dlx foo', ['npm:foo']],
+    ['pnpm add with the workspace-root flag', 'pnpm add -w foo', ['npm:foo']],
+    ['pnpm with the workspace-root flag first', 'pnpm -w add foo', ['npm:foo']],
+    ['npm silent flag takes no value', 'npm install -s foo', ['npm:foo']],
+    ['npm silent flag after the name', 'npm install foo -s', ['npm:foo']],
+    ['npx skills add -s takes the skill name', 'npx skills add -s one owner/repo', ['skill:owner/repo']],
+    ['yarn workspace names the folder, not the pull', 'yarn workspace web add foo', ['npm:foo']],
+    ['yarn workspace with a version', 'yarn workspace @scope/web add foo@2', ['npm:foo@@2']],
+    ['cargo with a toolchain word', 'cargo +nightly install foo', ['cargo:foo']],
+    ['cargo add with a toolchain word', 'cargo +stable add foo@1', ['cargo:foo@@1']],
+    ['cargo install from a git URL', 'cargo install --git https://github.com/a/b', ['cargo:https://github.com/a/b']],
+    ['cargo install from a git URL, named', 'cargo install --git https://github.com/a/b foo', ['cargo:foo']],
+    ['sudo -u takes a user', 'sudo -u root npm i foo', ['npm:foo']],
+    ['sudo -g takes a group', 'sudo -g wheel pip install foo', ['pypi:foo']],
+    ['env -u takes a variable', 'env -u X npm i foo', ['npm:foo']],
+    ['nice -n takes a level', 'nice -n 5 npm i foo', ['npm:foo']],
+    ['timeout -k takes a duration', 'timeout -k 5 60 npm i foo', ['npm:foo']],
+    ['timeout -s takes a signal', 'timeout -s KILL 60 npm i foo', ['npm:foo']],
+    ['sudo with a flag that takes no value', 'sudo -E npm i foo', ['npm:foo']],
     ['claude plugin', 'claude plugin install foo@market', ['plugin:foo@market']],
     ['codex plugin', 'codex plugin add foo', ['plugin:foo']],
     ['a Windows wrapper', '& "C:\\Program Files\\nodejs\\npm.cmd" install foo', ['npm:foo']],
@@ -91,6 +112,7 @@ describe('pulls: what names nothing', () => {
     ['go with no module path', 'go install cmd/x'],
     ['go test', 'go test ./...'],
     ['npm local folder', 'npm install ../pkg'],
+    ['an scp-style git spec, whose name reads as a mask', 'npm install git@github.com:org/repo.git'],
     ['npm file spec', 'npm install file:../pkg'],
     ['npm variable', 'npm install $PKG'],
     ['PowerShell variable', 'npm install $env:PKG'],
@@ -158,8 +180,13 @@ describe('pulls: redaction', () => {
   });
   it('keeps a token out of a name and out of a version', () => {
     const token = 'ghp_abcdefghijklmnopqrstuvwxyz012345';
-    expect(pullsOf(`npm install foo@${token}`)).toEqual(['npm:foo@@<secret>']);
+    // A version that holds a mask says only that something was masked, so it is dropped rather than kept as noise.
+    expect(pullsOf(`npm install foo@${token}`)).toEqual(['npm:foo']);
+    expect(pullsOf(`pip install foo==${token}`)).toEqual(['pypi:foo']);
     expect(JSON.stringify(readShell(`npm install foo@${token}`, redact))).not.toContain(token);
+  });
+  it('keeps a mask out of the version of an npm alias, which the redactor reads as an email', () => {
+    expect(pullsOf('npm install alias@npm:foo@1.2.3')).toEqual(['npm:alias']);
   });
   it('drops a name that is all mask, which says nothing', () => {
     expect(pullsOf('npm install ghp_abcdefghijklmnopqrstuvwxyz012345 foo')).toEqual(['npm:foo']);
@@ -183,6 +210,75 @@ describe('MCP pulls', () => {
     const token = 'ghp_abcdefghijklmnopqrstuvwxyz012345';
     expect(pullsOfTool(`mcp__${token}__x`, redact)).toEqual([]);
     expect(pullsOfTool(`mcp__me-${token}__x`, redact)).toEqual([{ ecosystem: 'mcp', name: 'me-<secret>', version: null }]);
+  });
+});
+
+describe('MCP tool names: a server name that holds a token is stored redacted', () => {
+  const token = 'ghp_abcdefghijklmnopqrstuvwxyz012345';
+  const line = (message: object, extra: object = {}): string => JSON.stringify({ timestamp: '2026-06-10T00:00:00.000Z', cwd: '/w', ...extra, message });
+  const lines = [
+    line({ role: 'user', content: 'go' }, { type: 'user' }),
+    line({ role: 'assistant', content: [{ type: 'tool_use', id: 'a', name: `mcp__me-${token}__find`, input: {} }] }, { type: 'assistant' }),
+    line({ role: 'user', content: [{ type: 'tool_result', tool_use_id: 'a', content: 'Exit code 1\nboom', is_error: true }] }, { type: 'user' }),
+  ];
+  const captured = captureSession({ text: lines.join('\n'), session: 's', project: 'p', rev: 1, at: '', bytes: 0, redact });
+  it('keeps the token out of the tool record, the per-session count, and the error line', () => {
+    expect(captured.tools[0]?.tool).toBe('mcp__me-<secret>__find');
+    expect(captured.session.tools).toEqual({ 'mcp__me-<secret>__find': 1 });
+    expect(captured.errorLines[0]?.tool).toBe('mcp__me-<secret>__find');
+    expect(JSON.stringify(captured)).not.toContain(token);
+  });
+  it('leaves a name with no secret as it was', () => {
+    expect(storedToolName('mcp__claude-in-chrome__navigate', redact)).toBe('mcp__claude-in-chrome__navigate');
+    expect(storedToolName('Read', redact)).toBe('Read');
+    expect(storedToolName('mcp__', redact)).toBe('mcp__');
+  });
+});
+
+describe('shell structure: forms that must not hide the commands after them', () => {
+  const runs = (command: string): Array<readonly [string, boolean]> => readShell(command, redact).segments.map((segment) => [segment.run, segment.read]);
+  it('opens no here-string for a line that merely ends in @ and a quote', () => {
+    expect(pullsOf('echo "me@"\nnpm install foo')).toEqual(['npm:foo']);
+    expect(pullsOf("echo 'me@'\nnpm install foo")).toEqual(['npm:foo']);
+  });
+  it('still opens a here-string at the start of a line, after a space, an equals sign, or a parenthesis', () => {
+    for (const opening of ["@'", "git commit -m @'", "$x=@'", "$x = @'", "f(@'"]) expect(pullsOf(`${opening}\nnpm install hidden\n'@\nnpm install shown`)).toEqual(['npm:shown']);
+  });
+  it('opens no heredoc for a << inside quotes', () => {
+    expect(pullsOf('echo "a << b"\nnpm install foo')).toEqual(['npm:foo']);
+    expect(pullsOf('git commit -m "x << y"\nnpm install foo')).toEqual(['npm:foo']);
+    expect(pullsOf("echo 'a <<EOF'\nnpm install foo")).toEqual(['npm:foo']);
+  });
+  it('still opens a heredoc outside quotes and inside a command substitution', () => {
+    expect(pullsOf("cat <<'EOF'\nnpm install hidden\nEOF\nnpm install shown")).toEqual(['npm:shown']);
+    expect(pullsOf('echo "$(cat <<EOF\nnpm install hidden\nEOF\n)"\nnpm install shown')).toEqual(['npm:shown']);
+  });
+  it('reads a command behind a PowerShell assignment', () => {
+    expect(runs('$x = npm test')).toEqual([['npm test', true]]);
+    expect(readShell('$sha = git commit -m x', redact).commitPlan).toHaveLength(1);
+    expect(runs('$out = & npm test')).toEqual([['npm test', true]]);
+  });
+  it('reads a quoted or numeric assignment value as no command, as before', () => {
+    expect(runs('$x = "1"')).toEqual([]);
+    expect(runs('$x = 5')).toEqual([]);
+    expect(runs('$env:CI = "1"; npm test')).toEqual([['npm test', true]]);
+  });
+  it('reads only -c and a prefix of -command as the command flag of PowerShell', () => {
+    expect(runs('powershell -Exec Bypass -Command "npm test"')).toEqual([['npm test', true]]);
+    expect(runs('pwsh -NoProfile -c "npm test"')).toEqual([['npm test', true]]);
+    expect(runs('pwsh -Com "npm test"')).toEqual([['npm test', true]]);
+    expect(runs('powershell -Exec Bypass')).toEqual([['powershell Bypass', true]]);
+    expect(runs('bash -lc "npm test"')).toEqual([['npm test', true]]);
+    expect(runs('cmd /c npm test')).toEqual([['npm test', true]]);
+  });
+  it('hides every command of a group a pipe follows', () => {
+    expect(runs('(npm test && echo ok) | tail')).toEqual([['npm test', false], ['echo ok', false], ['tail', true]]);
+    expect(runs('(npm test) | tail')).toEqual([['npm test', false], ['tail', true]]);
+  });
+  it('hides only the command before the pipe when no group closes before it', () => {
+    expect(runs('a && b | c')).toEqual([['a', true], ['b', false], ['c', true]]);
+    expect(runs('a | (b && c)')).toEqual([['a', false], ['b', true], ['c', true]]);
+    expect(runs('(a && b) && c')).toEqual([['a', true], ['b', true], ['c', true]]);
   });
 });
 
@@ -237,6 +333,12 @@ describe('segments: what the status of the call says about each', () => {
   it('never throws on a torn command', () => {
     for (const torn of ['"unclosed', "'unclosed", 'a \\', '$(', '"$(', '<<EOF', "@'", ') (', '&& ||', '> ']) expect(() => readShell(torn, redact)).not.toThrow();
   });
+  it('never throws on a long chain of joining shells, and reads the command beneath the cap', () => {
+    for (const count of [10, 1000, 5000]) expect(() => readShell(`${'pwsh -c '.repeat(count)}ls`, redact)).not.toThrow();
+    expect(readShell('pwsh -c pwsh -c pwsh -c npm test', redact).segments.map((segment) => segment.run)).toEqual(['npm test']);
+    // Past the cap a shell is a plain command, so the call still reads as a command and never as a crash.
+    expect(readShell(`${'pwsh -c '.repeat(5000)}ls`, redact).segments.length).toBeGreaterThan(0);
+  });
 });
 
 describe('commits: a successful `git commit` and the sha its result names', () => {
@@ -258,6 +360,14 @@ describe('commits: a successful `git commit` and the sha its result names', () =
     ['a pipe between them', 'git commit -qm x 2>&1 | tail -1 && git log --oneline -1', 'abc1234 x', ['abc1234']],
     ['same repository flag', 'git -C /a commit -qm x && git -C /a log --oneline -1', 'abc1234 x', ['abc1234']],
     ['a read of another repository is not this commit', 'git -C /a commit -qm x && git -C /b log --oneline -1', 'abc1234 x', [null]],
+    ['a read of another --git-dir is not this commit', 'git --git-dir=/a commit -qm x && git --git-dir=/b log --oneline -1', 'abc1234 x', [null]],
+    ['a read of the same --git-dir is this commit', 'git --git-dir=/a commit -qm x && git --git-dir=/a log --oneline -1', 'abc1234 x', ['abc1234']],
+    ['a read of another --work-tree is not this commit', 'git --work-tree=/a commit -qm x && git --work-tree=/b rev-parse --short HEAD', 'abc1234', [null]],
+    ['a quoted -h is a message, not help', 'git commit -m "-h"', '[main abc1234] x', ['abc1234']],
+    ['a quoted --dry-run is a message', 'git commit -m "--dry-run"', '[main abc1234] x', ['abc1234']],
+    ['an unquoted -h is help', 'git commit -h', '[main abc1234] x', []],
+    ['rev-parse --abbrev-ref prints a branch, not a sha', 'git log --oneline -1 && git commit -qm x && git rev-parse --abbrev-ref HEAD', 'abc1234 prior\nmain', [null]],
+    ['rev-parse --symbolic-full-name prints a ref, not a sha', 'git commit -qm x && git rev-parse --symbolic-full-name HEAD', 'refs/heads/main', [null]],
     ['a read of another ref is not this commit', 'git commit -qm x && git log --oneline -1 origin/main', 'abc1234 x', [null]],
     ['rev-parse of another ref', 'git commit -qm x && git rev-parse origin/main', 'abc1234', [null]],
     ['behind a semicolon, the log may read an older commit', 'git commit -qm x; git log --oneline -1', 'abc1234 x', [null]],
