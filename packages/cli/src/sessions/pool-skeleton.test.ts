@@ -161,7 +161,7 @@ describe('the leak test: a private name in a path, a program, a package, an argu
 
   it('holds a batch the parser accepts unchanged', () => {
     const skeleton = capturedSkeleton();
-    expect(parseSkeleton(JSON.parse(JSON.stringify(skeleton)))).toEqual({ ok: true, skeleton });
+    expect(parseSkeleton(JSON.parse(JSON.stringify(skeleton)))).toEqual({ ok: true, skeleton, extensions: [], others: 0 });
   });
 
   it('projects `grep <private pattern>` to the program alone, and `acme-deploy` to private', () => {
@@ -200,7 +200,7 @@ describe('the leak test: the name of a custom subagent', () => {
     const types = (skeleton.transcripts[1]?.tools ?? []).flatMap(({ steps }) => steps.map(({ agentType }) => agentType));
     expect(types).toEqual(['custom', 'custom', 'custom']);
     expect(JSON.stringify(skeleton).toLowerCase()).not.toContain('acme');
-    expect(parseSkeleton(JSON.parse(JSON.stringify(skeleton)))).toEqual({ ok: true, skeleton });
+    expect(parseSkeleton(JSON.parse(JSON.stringify(skeleton)))).toEqual({ ok: true, skeleton, extensions: [], others: 0 });
   });
 });
 
@@ -250,8 +250,8 @@ describe('what a batch sends in place of a count', () => {
 
   it('puts an empty `deltas` on the form, and refuses an entry that is not one', () => {
     const whole = sample();
-    expect(whole).toMatchObject({ format: 2, deltas: [] });
+    expect(whole).toMatchObject({ format: 3, deltas: [] });
     expect(parseSkeleton({ ...whole, deltas: [{}] })).toMatchObject({ ok: false, field: 'deltas[0].deltaKind' });
-    expect(parseSkeleton({ ...whole, format: 1 })).toMatchObject({ ok: false, field: 'format', reason: 'the exact-count form (format 1) is no longer read; send format 2' });
+    expect(parseSkeleton({ ...whole, format: 1 })).toMatchObject({ ok: false, field: 'format', reason: 'the format 1 form is no longer read; send format 3' });
   });
 });

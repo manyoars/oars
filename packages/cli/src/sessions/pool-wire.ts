@@ -414,7 +414,7 @@ export const OTHER = 'other';
 export type WireHarness = Harness | typeof OTHER;
 
 /**
- * What one parse sets aside: a field the reader does not know, a value it does not know, and a literal a client sent beside `other`. The bag is the stored form of these (the `extensions` column), kept as sent and
+ * What one parse sets aside: a field the reader does not know, a value it does not know, and a literal a client sent beside `other`. The bag is the stored form of these (the `extensions` column), the fields kept as sent and
  * read by nothing that serves: no cell, read, or bundle is derived from it. `at` is the field's path, as a refusal names it.
  */
 export interface Extension {
@@ -436,11 +436,14 @@ const collecting = (): Collected => {
   return collected;
 };
 
-/** A value no vocabulary of this reader holds: counted, kept as sent in the bag, and read as `other`. */
-const unknownValue = (at: string, value: unknown): typeof OTHER => {
+/**
+ * A value no vocabulary of this reader holds: counted, its place noted in the bag, and read as `other`. The value itself is not kept: the bag is never deleted, and a client that sent a flag with a secret
+ * in it, or a private name, must not have it stored. A client that wants a value carried sends it as `<field>Literal`, which is kept.
+ */
+const unknownValue = (at: string): typeof OTHER => {
   const held = collecting();
   held.others += 1;
-  held.extensions.push({ at, kind: 'value', value });
+  held.extensions.push({ at, kind: 'value', value: null });
   return OTHER;
 };
 
@@ -512,24 +515,24 @@ const booleanOf = (value: unknown, at: string): boolean => {
 /** A value from a closed list, or `other` for a text the list does not hold; the list narrows the type, so no caller needs a cast. A value that is no text is a shape error. */
 const oneOf = <T extends string>(list: readonly T[], value: unknown, at: string): T | typeof OTHER => {
   const name = textOf(value, at);
-  return list.find((entry) => entry === name) ?? (name === OTHER ? OTHER : unknownValue(at, name));
+  return list.find((entry) => entry === name) ?? (name === OTHER ? OTHER : unknownValue(at));
 };
 
 const inSet = (allowed: ReadonlySet<string>, value: unknown, at: string): string => {
   const name = textOf(value, at);
-  return name === PRIVATE || name === OTHER || allowed.has(name) ? name : unknownValue(at, name);
+  return name === PRIVATE || name === OTHER || allowed.has(name) ? name : unknownValue(at);
 };
 
 const exactlyIn = (allowed: ReadonlySet<string>) => (value: unknown, at: string): string => {
   const name = textOf(value, at);
-  return allowed.has(name) || name === OTHER ? name : unknownValue(at, name);
+  return allowed.has(name) || name === OTHER ? name : unknownValue(at);
 };
 
 /** `publicModel` and its like hand back what is public and the literal for what is not, so only a value they return unchanged is in the vocabulary. */
 const heldTo = (isHeld: (value: string | null) => string | null, value: unknown, at: string): string | null => {
   if (value === null || value === undefined) return null;
   const name = textOf(value, at);
-  return name === OTHER || isHeld(name) === name ? name : unknownValue(at, name);
+  return name === OTHER || isHeld(name) === name ? name : unknownValue(at);
 };
 
 // `satisfies` checks every entry is a `Harness` but not that every `Harness` is listed; this refuses a list that leaves one out at compile time.
@@ -608,26 +611,26 @@ const parsePull = (value: unknown, at: string): PullIdentity => {
     const text = textOf(entry, entryAt);
     // A version beside a masked name could identify it: capture masks the two together.
     if (name === PRIVATE && text !== LITERAL) throw new Refused(entryAt, 'a private name holds no version');
-    return text === LITERAL || text === OTHER || isRegistryVersion(text) ? text : unknownValue(entryAt, text);
+    return text === LITERAL || text === OTHER || isRegistryVersion(text) ? text : unknownValue(entryAt);
   });
   return { registry: oneOf(REGISTRIES, raw.registry, under(at, 'registry')), name, version };
 };
 
 const parseFlag = (value: unknown, at: string): string => {
   const flag = textOf(value, at);
-  return flag === OTHER || isWireFlag(flag) ? flag : unknownValue(at, flag);
+  return flag === OTHER || isWireFlag(flag) ? flag : unknownValue(at);
 };
 
-/** What a reader sets aside whole: a part of a step it cannot read against a vocabulary, kept as sent. */
-const setAside = (at: string, value: unknown): void => {
-  collecting().extensions.push({ at, kind: 'field', value });
+/** What a reader sets aside whole: a part of a step it cannot read against a vocabulary. Its place is noted and not its content, as for any value it does not know (see `unknownValue`). */
+const setAside = (at: string): void => {
+  collecting().extensions.push({ at, kind: 'value', value: null });
 };
 
 const parseIdentity = (harness: WireHarness, action: CanonicalAction, value: unknown, at: string): StepIdentity => {
   if (value === null) return null;
-  // An action this reader does not know holds an identity it cannot read: the step goes without one and the identity is kept.
+  // An action this reader does not know holds an identity it cannot read: the step goes without one and the place of what it held is noted.
   if (action === OTHER) {
-    setAside(at, value);
+    setAside(at);
     return null;
   }
   if (action === 'shell.exec') {
@@ -635,10 +638,10 @@ const parseIdentity = (harness: WireHarness, action: CanonicalAction, value: unk
     // A program is a list member or `private`, and a `private` program holds no subcommand, flag, or pull.
     const program = textOf(raw.program, under(at, 'program'));
     const known = program === PRIVATE || PUBLIC_PROGRAMS.has(program);
-    if (!known && program !== OTHER) unknownValue(under(at, 'program'), program);
-    // The subcommands, flags, and pulls of a program this reader does not know cannot be read against its lists: it takes none, and keeps what was sent.
+    if (!known && program !== OTHER) unknownValue(under(at, 'program'));
+    // The subcommands, flags, and pulls of a program this reader does not know cannot be read against its lists: it takes none, and notes what it left.
     if (!known) {
-      for (const key of ['sub', 'flags', 'pulls']) if (raw[key] !== undefined && !(raw[key] === null || (Array.isArray(raw[key]) && raw[key].length === 0))) setAside(under(at, key), raw[key]);
+      for (const key of ['sub', 'flags', 'pulls']) if (raw[key] !== undefined && !(raw[key] === null || (Array.isArray(raw[key]) && raw[key].length === 0))) setAside(under(at, key));
       return { program: OTHER, sub: null, flags: [] };
     }
     if (program === PRIVATE) {
@@ -657,7 +660,7 @@ const parseIdentity = (harness: WireHarness, action: CanonicalAction, value: unk
     // The same rule capture applies (`callIdentity`), so a name it would have masked is refused here rather than stored.
     if (harness === OTHER) return { server, tool: tool === OTHER ? tool : LITERAL };
     const admitted = tool === LITERAL || tool === OTHER || (ACTION_TABLES[harness].toolDelimited && isPublicMcpTool(server, tool));
-    return { server, tool: admitted ? tool : unknownValue(under(at, 'tool'), tool) };
+    return { server, tool: admitted ? tool : unknownValue(under(at, 'tool')) };
   }
   if (action === 'skill.run') return { skill: inSet(PUBLIC_SKILLS, fieldsOf(value, at, ['skill']).skill, under(at, 'skill')) };
   if (action === 'web.fetch' || action === 'web.search') {
@@ -681,13 +684,13 @@ const parseNative = (harness: WireHarness, value: unknown, at: string): string =
   const native = textOf(value, at);
   // The tools of a harness this reader does not know are off any table it holds, so they cross as `private`, the way capture masks a name its table lacks.
   if (harness === OTHER) return native === OTHER ? native : PRIVATE;
-  return native === OTHER || admittedNative(harness, native) ? native : unknownValue(at, native);
+  return native === OTHER || admittedNative(harness, native) ? native : unknownValue(at);
 };
 
 /** A subagent type as the projection leaves it: a built-in of a harness, or `custom`; a custom agent's own name is private and never admitted. */
 const parseAgentType = (value: unknown, at: string): string => {
   const name = textOf(value, at);
-  return name === OTHER || projectedAgentType(name) === name ? name : unknownValue(at, name);
+  return name === OTHER || projectedAgentType(name) === name ? name : unknownValue(at);
 };
 
 const parseStep = (harness: WireHarness, value: unknown, at: string): SkeletonStep => {
@@ -779,7 +782,7 @@ const parseDelta = (value: unknown, at: string): DeltaEntry => {
   const metric = oneOf(field === OTHER ? ALL_METRICS : [METRIC_OF[field]], raw.metric, under(at, 'metric'));
   const named = field === 'plugin' || field === 'package';
   if (field === OTHER) {
-    for (const key of ['name', 'registry']) if (raw[key] !== null) setAside(under(at, key), raw[key]);
+    for (const key of ['name', 'registry']) if (raw[key] !== null) setAside(under(at, key));
   }
   const name = named ? inSet(field === 'package' ? PUBLIC_PACKAGES : NO_NAME, raw.name, under(at, 'name')) : field === OTHER ? null : nullOnly(raw.name, under(at, 'name'));
   const registry = field === 'package' && name !== PRIVATE ? oneOf(PACKAGE_REGISTRIES, raw.registry, under(at, 'registry')) : field === OTHER ? null : nullOnly(raw.registry, under(at, 'registry'));
