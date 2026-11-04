@@ -601,7 +601,7 @@
         ]
       },
       "Role": {
-        "description": "Platform role names. Matches the bare authority strings used in JWT 'roles' claims, DB role rows, and Spring Security GrantedAuthority — no ROLE_ prefix.",
+        "description": "Platform role names, as they appear in the JWT 'roles' claim, without a ROLE_ prefix.",
         "enum": [
           "SYSTEM_ADMIN",
           "ADMIN",
@@ -940,11 +940,6 @@
             "description": "Bound instrument. Null until an instrument references the workload.",
             "type": "string"
           },
-          "monthlyReservedCostUsd": {
-            "description": "Estimated compute cost in USD of the configured replicas over a 730-hour month, at the current rate version for the size the agent host allocates (vCPU is normalized: one shared CPU = 0.0625); absent when no agent host is configured to size the services",
-            "format": "decimal",
-            "type": "string"
-          },
           "name": {
             "type": "string"
           },
@@ -1182,7 +1177,7 @@
     }
   },
   "info": {
-    "description": "The Many Oars calls the CLI, starter templates, and coding agents use: register, read, configure, and deploy a workload; exchange an OIDC token; and create, list, rotate, and revoke API keys.",
+    "description": "The Many Oars API: register, read, configure, and deploy a workload; exchange an OIDC token; and create, list, rotate, and revoke API keys.",
     "title": "Many Oars API",
     "version": "1.0.0"
   },
