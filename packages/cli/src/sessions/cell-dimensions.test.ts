@@ -1,7 +1,7 @@
 // Rules 1 and 3: a cell holds at most `q_dims` = 3 dimensions beside `week`, `day`, and `exposure`, and `effort` is in no cell but its own pair with a thinking bucket.
 import { describe, expect, it } from 'vitest';
 import { cellsOf, projectedStore } from './cell-increments.js';
-import { EFFORT_CLASS, NO_AXES, bucketFields, deriveCells, type Cell, type CellSet } from './cells.js';
+import { EFFORT_CLASS, NO_AXES, bucketFields, deriveCells, isEnvironmentCell, type Cell, type CellSet } from './cells.js';
 import type { Motif } from './motif.js';
 import { frame, prompt, session, step, storedNames, store, tool } from './pool-fixture.js';
 
@@ -29,7 +29,8 @@ const fixture = () =>
 /** A cell's dimensions: the axes it joins (a model, and a version, which names its harness) and what its motif names. */
 const dimensionsOf = (cell: Cell, motif: Motif): number => {
   const fields = bucketFields(cell.frameBucket);
-  const axes = cell.frameBucket === NO_AXES ? 0 : Number(fields.model !== 'unknown') + Number(fields.harnessBucket !== 'unknown');
+  // An environment cell joins a platform and a shell and neither a version nor a model.
+  const axes = isEnvironmentCell(cell) ? 2 : cell.frameBucket === NO_AXES ? 0 : Number(fields.model !== 'unknown') + Number(fields.harnessBucket !== 'unknown');
   if (motif.level === 'class') return axes + (motif.cls?.startsWith(EFFORT_CLASS) ? 2 : 1);
   const [only] = motif.steps;
   if (motif.steps.length !== 1 || only === undefined || only.identity === null || !('program' in only.identity)) return axes + 1;

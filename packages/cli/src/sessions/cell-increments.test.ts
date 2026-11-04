@@ -1,7 +1,7 @@
 // One cell computation for a deposit and a local read (pool vocabulary spec Section 4, rules 1 to 6).
 import { describe, expect, it } from 'vitest';
 import { cellsOf, incrementsOf, projectedStore, storeOf, type Increments } from './cell-increments.js';
-import { deriveCells, effortClass, NO_AXES } from './cells.js';
+import { deriveCells, effortClass, ENVIRONMENT_BUCKET, isEnvironmentCell, NO_AXES } from './cells.js';
 import { classMotif } from './motif.js';
 import { frame, printOf, prompt, session, sessionsFrom, step, store, storedNames, tool } from './pool-fixture.js';
 import { floorOf, skeletonOf, type SessionSkeleton } from './pool-wire.js';
@@ -76,7 +76,8 @@ describe('rule 5: a bucket and no exact number', () => {
     const unnamed = new Set(exactCells.filter(({ motifId }) => flooredCells.some((cell) => cell.motifId === motifId)).map(({ motifId }) => motifId));
     expect(unnamed.size).toBe(4);
     expect(keyed(flooredCells.filter(({ motifId }) => unnamed.has(motifId)))).toEqual(keyed(exactCells.filter(({ motifId }) => unnamed.has(motifId))));
-    expect(flooredCells).toHaveLength(exactCells.length + 1);
+    // And one more: a deposit holds the program and subcommand alone, so the flagged call is a plain call there and has its (name, platform, shell) cell, which the exact store's flagged call does not.
+    expect(flooredCells).toHaveLength(exactCells.length + 2);
   });
 });
 
@@ -126,7 +127,8 @@ describe('rules 1 to 3 and 6: what a cell and a stratum hold', () => {
       expect(key).toBe(`${cell.motifId}/${cell.frameBucket}/${cell.grain}/${cell.day}/${String(cell.exposed)}`);
       expect(known.has(cell.motifId)).toBe(true);
       // The effort pair joins no axis (rule 3); every other cell holds a harness, a version bucket, and a model.
-      if (cell.frameBucket !== NO_AXES) expect(cell.frameBucket.split('/')).toHaveLength(3);
+      // A (name, platform, shell) cell joins those two and neither a version nor a model.
+      if (cell.frameBucket !== NO_AXES && !cell.frameBucket.startsWith(ENVIRONMENT_BUCKET)) expect(cell.frameBucket.split('/')).toHaveLength(3);
     }
   });
 
@@ -188,7 +190,7 @@ describe('rules 1 to 3 and 6: what a cell and a stratum hold', () => {
   });
 
   it('puts only the axes in a cell key, and never effort (rule 3)', () => {
-    for (const cell of increments().cells.values()) expect(cell.frameBucket).toBe(cell.motifId === effortPairId ? NO_AXES : 'claude-code/2.1.31x/claude-opus-5-5');
+    for (const cell of increments().cells.values()) expect(cell.frameBucket).toBe(cell.motifId === effortPairId ? NO_AXES : isEnvironmentCell({ frameBucket: cell.frameBucket }) ? 'env:linux:bash' : 'claude-code/2.1.31x/claude-opus-5-5');
   });
 
   // Rule 6: a cell is weekly except `live`. 2026-11-01 is a Sunday, so its UTC week starts on Monday 2026-10-26.
