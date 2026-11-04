@@ -217,7 +217,7 @@ export const createShape = (harness: Harness, stored: (tool: string) => string, 
     if (block.is_error !== true) return;
     const line = firstLine(block.content);
     if (REJECTED_RE.test(line)) {
-      rejectedLast = true;
+      if (complete.rejections) rejectedLast = true;
       event('rejection', tool, at.prompt);
     } else if (DENIED_RE.test(line)) event('denial', tool, at.prompt);
   };

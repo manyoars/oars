@@ -16,7 +16,11 @@
 //                       only in a Paginated rollout (ordinal.rs:37), the CLI's default (thread-store/src/local/mod.rs:512-515), which holds item_completed TurnItems
 //                       (UserMessage, AgentMessage, FileChange, McpToolCall) in place of the legacy events below (rollout/src/policy.rs:142-156, `persisted_item_completed_event` :232, its Paginated arm :253); both are read.
 //                       A Copied fork's history, in either mode, is dropped by matching the parent's lineage as of the fork's start, record for record
-//   turn_context        {model, cwd}: the model, and the directory when it changes
+//   turn_context        {model, cwd, approval_policy}: the model, the directory when it changes, and the approval policy, which rides later lines as `permissionMode`
+//   session_meta also holds `dynamic_tools`, the tools the session declared (a `DynamicToolSpec`, dynamic_tools.rs), read as the offered list
+//   event_msg turn_aborted {reason}             `interrupted` is the operator cutting a turn short (TurnAbortReason, protocol.rs:4580-4585); the others are the harness's own
+//   response_item additional_tools {tools} / tool_search_output {tools}   tools offered later, and tools a search loaded (models.rs:1076, :1257)
+//                       That these records are persisted into the rollout is rollout/src/policy.rs:83, :91, and :137 at ac558e2.
 //   event_msg user_message {message}            a prompt (the `response_item` user messages also hold injected context, so they are not read)
 //   event_msg agent_message {message}           the assistant's text
 //   event_msg token_count {info.last_token_usage}  one model response's usage, closing the lines since the last one
