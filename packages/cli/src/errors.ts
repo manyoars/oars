@@ -14,6 +14,8 @@ export const ExitCode = {
   RATE_LIMITED: 7,
   UNREACHABLE: 8,
   PARTIAL: 9,
+  /** `pool fetch` hit the pool's weekly cap: nothing is wrong, and the bundle on disk is untouched. */
+  CAPPED: 10,
 } as const;
 export type ExitCode = (typeof ExitCode)[keyof typeof ExitCode];
 

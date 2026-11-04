@@ -3,7 +3,7 @@ import { webcrypto } from 'node:crypto';
 import { readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { build } from 'esbuild';
-import { Miniflare, Response as StubResponse, type Request as StubRequest } from 'miniflare';
+import { Miniflare, Request as StubRequest, Response as StubResponse } from 'miniflare';
 import { expect } from 'vitest';
 
 interface Statement {
@@ -44,18 +44,22 @@ const json = (body: object, status = 200): StubResponse => new StubResponse(JSON
 
 interface StubProvider {
   approve: (deviceCode: string, user: StubUser) => void;
-  deny: (deviceCode: string) => void;
+  /** An access token the provider would hand this user, with no device flow in front of it: what the CLI sends the pool at login. */
+  issue: (user: StubUser) => string;
   calls: StubCall[];
   /** URLs answered with an HTML 502, the way a provider's outage looks. */
   html: Set<string>;
+  /** URLs answered 403, the way GitHub answers a call over its rate limit. */
+  forbidden: Set<string>;
   outbound: (request: StubRequest) => Promise<StubResponse>;
 }
 
-/** GitHub and Google as the Worker sees them. Google answers a pending poll with 428 and names its URL differently, which is why both are stubbed apart. */
+/** GitHub and Google as the Worker and the CLI's login see them: the Worker reaches only the profile routes, and the device and token routes serve the full-run test, which plays the client. Google answers a pending poll with 428 and names its URL differently, which is why both are stubbed apart. */
 const stubProvider = (): StubProvider => {
-  const users = new Map<string, StubUser | 'denied' | null>();
+  const users = new Map<string, StubUser | null>();
   const calls: StubCall[] = [];
   const html = new Set<string>();
+  const forbidden = new Set<string>();
   let issued = 0;
   const device = (): { device_code: string; user_code: string; expires_in: number; interval: number } => {
     issued += 1;
@@ -67,7 +71,6 @@ const stubProvider = (): StubProvider => {
     const code = form.get('device_code') ?? '';
     const user = users.get(code);
     if (user === undefined) return json({ error: 'expired_token' }, 400);
-    if (user === 'denied') return json({ error: 'access_denied' }, 403);
     if (user === null) return json({ error: 'authorization_pending' }, pendingStatus);
     return json({ access_token: `access-${code}`, token_type: 'bearer' });
   };
@@ -77,6 +80,7 @@ const stubProvider = (): StubProvider => {
     const body = await request.text();
     calls.push({ url: at, body });
     if (html.has(at)) return new StubResponse('<html>Bad Gateway</html>', { status: 502, headers: { 'content-type': 'text/html' } });
+    if (forbidden.has(at)) return json({ message: 'API rate limit exceeded' }, 403);
     const form = new URLSearchParams(body);
     if (at === 'https://github.com/login/device/code') return json({ ...device(), verification_uri: 'https://github.com/login/device' });
     if (at === 'https://oauth2.googleapis.com/device/code') return json({ ...device(), verification_url: 'https://www.google.com/device' });
@@ -88,7 +92,12 @@ const stubProvider = (): StubProvider => {
     if (at === 'https://openidconnect.googleapis.com/v1/userinfo') return json({ sub: found.id, email: found.email, name: found.login });
     return json({ error: `no stub for ${at}` }, 500);
   };
-  return { approve: (code, user) => users.set(code, user), deny: (code) => users.set(code, 'denied'), calls, html, outbound };
+  const issue = (user: StubUser): string => {
+    const { device_code: code } = device();
+    users.set(code, user);
+    return `access-${code}`;
+  };
+  return { approve: (code, user) => users.set(code, user), issue, calls, html, forbidden, outbound };
 };
 
 export interface Answer {
@@ -109,7 +118,9 @@ export interface TestPool {
   post: (path: string, body: unknown, token?: string) => Promise<Answer>;
   get: (path: string, token?: string) => Promise<Answer>;
   raw: (path: string, token?: string, headers?: { [name: string]: string }) => Promise<RawAnswer>;
-  /** The whole device flow through the routes, approved at the stub. */
+  /** What the CLI's own `fetch` reaches when it asks a provider for a device code or a token: the same stub the Worker's outbound calls reach, so one approval serves both. */
+  providerFetch: (input: string | URL, init?: RequestInit) => Promise<Response>;
+  /** The sign-in the CLI performs, with the provider's approval already given at the stub. */
   signIn: (provider: string, user: StubUser) => Promise<{ token: string; account: string; signingKey: unknown }>;
   stub: StubProvider;
   signingKey: () => { kty: string; crv: string; x: string };
@@ -144,7 +155,7 @@ export const startPool = async (bindings: { [name: string]: string } = {}): Prom
     compatibilityDate: config.compatibilityDate,
     compatibilityFlags: config.compatibilityFlags,
     d1Databases: { DB: 'pool-test' },
-    bindings: { PSEUDONYM_KEY: 'a-test-pseudonym-key', GITHUB_CLIENT_ID: 'github-client', GOOGLE_CLIENT_ID: 'google-client', GOOGLE_CLIENT_SECRET: 'google-secret', BUNDLE_SIGNING_KEY: key.jwk, COVENANT_VERSION: 'v1', FETCH_CAP: '1000', ...bindings },
+    bindings: { PSEUDONYM_KEY: 'a-test-pseudonym-key', BUNDLE_SIGNING_KEY: key.jwk, COVENANT_VERSION: 'v1', FETCH_CAP: '1000', ...bindings },
     outboundService: stub.outbound,
   });
   await miniflare.ready;
@@ -176,12 +187,14 @@ export const startPool = async (bindings: { [name: string]: string } = {}): Prom
     get,
     raw,
     stub,
+    providerFetch: async (input, init) => {
+      const headers = new Headers(init?.headers);
+      const stubbed = await stub.outbound(new StubRequest(String(input), { method: init?.method ?? 'GET', headers: [...headers.entries()], ...(typeof init?.body === 'string' ? { body: init.body } : {}) }));
+      return new Response(await stubbed.text(), { status: stubbed.status, headers: { 'content-type': 'application/json' } });
+    },
     signIn: async (provider, user) => {
-      const started = await post('/v1/login/start', { provider });
-      const deviceCode = textOf(started.json, 'deviceCode');
-      stub.approve(deviceCode, user);
-      const polled = await post('/v1/login/poll', { provider, deviceCode });
-      return { token: textOf(polled.json, 'token'), account: textOf(polled.json, 'account'), signingKey: fieldOf(polled.json, 'signingKey') };
+      const signedIn = await post('/v1/login', { provider, token: stub.issue(user) });
+      return { token: textOf(signedIn.json, 'token'), account: textOf(signedIn.json, 'account'), signingKey: fieldOf(signedIn.json, 'signingKey') };
     },
     signingKey: () => ({ kty: 'OKP', crv: 'Ed25519', x: key.x }),
     dispose: () => miniflare.dispose(),
