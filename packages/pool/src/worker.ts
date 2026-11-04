@@ -1,9 +1,11 @@
 // The pool server (t758): a Workers fetch handler over one D1 database. Deposits take closed-vocabulary skeletons only, and a refusal names the field.
 import { parseSkeleton, type SessionSkeleton } from '../../cli/src/sessions/pool-wire.js';
 import type { Frame } from '../../cli/src/sessions/schema.js';
+import { batchCounts, INGEST_TIER } from './access.js';
 import { fetchBundle } from './bundle.js';
 import { covenantAccept, covenantNotAccepted, covenantStatus, depositsClosed, hasAccepted } from './covenant.js';
 import { answer, bound, refuse, wholeBinding, type Env } from './http.js';
+import { cellCountOf } from './derive.js';
 import { accountOf, loginPoll, loginStart } from './identity.js';
 
 /** D1 holds at most 2 MB in one value. A body declaring more is refused unread, and one that declares nothing is measured before it is parsed. */
@@ -55,11 +57,13 @@ const deposit = async (request: Request, env: Env): Promise<Response> => {
   const limit = wholeBinding(env.MAX_DEPOSITS_PER_ACCOUNT, DEFAULT_MAX_DEPOSITS);
   const budget = wholeBinding(env.MAX_DEPOSIT_BYTES_PER_ACCOUNT, DEFAULT_MAX_ACCOUNT_BYTES);
   const stored = JSON.stringify(skeleton);
+  // Whether this batch counts toward access is decided here, from the batch alone; the tier is the ingest tier, and a later tier change (Brief 2) is a row edit that leaves this alone.
+  const countedAt = batchCounts(INGEST_TIER, skeleton, cellCountOf) ? Date.now() : null;
   // One statement, so two deposits at once cannot both take the last of either limit. A redeposit replaces its own row: it adds no row, so it passes the count at the limit, and only its new size counts against the budget.
   const { meta } = await env.DB.prepare(
-    'INSERT INTO deposits (account, id, skeleton) SELECT ?, ?, ? WHERE ((SELECT COUNT(*) FROM deposits WHERE account = ?) < ? OR EXISTS (SELECT 1 FROM deposits WHERE account = ? AND id = ?)) AND (SELECT COALESCE(SUM(LENGTH(CAST(skeleton AS BLOB))), 0) FROM deposits WHERE account = ? AND id <> ?) + ? <= ? ON CONFLICT (account, id) DO UPDATE SET skeleton = excluded.skeleton',
+    'INSERT INTO deposits (account, id, skeleton, tier, counted_at) SELECT ?, ?, ?, ?, ? WHERE ((SELECT COUNT(*) FROM deposits WHERE account = ?) < ? OR EXISTS (SELECT 1 FROM deposits WHERE account = ? AND id = ?)) AND (SELECT COALESCE(SUM(LENGTH(CAST(skeleton AS BLOB))), 0) FROM deposits WHERE account = ? AND id <> ?) + ? <= ? ON CONFLICT (account, id) DO UPDATE SET skeleton = excluded.skeleton, counted_at = CASE WHEN excluded.counted_at IS NULL THEN NULL ELSE COALESCE(deposits.counted_at, excluded.counted_at) END',
   )
-    .bind(account, skeleton.id, stored, account, limit, account, skeleton.id, account, skeleton.id, new TextEncoder().encode(stored).length, budget)
+    .bind(account, skeleton.id, stored, INGEST_TIER, countedAt, account, limit, account, skeleton.id, account, skeleton.id, new TextEncoder().encode(stored).length, budget)
     .run();
   if (meta.changes === 0) return refuse(403, 'deposit_limit', `An account holds at most ${String(limit)} deposits and ${String(budget)} stored bytes.`);
   return answer(201, { ok: true, id: skeleton.id });

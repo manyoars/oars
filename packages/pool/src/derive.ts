@@ -177,6 +177,9 @@ const readsOf = (pool: Pool, accountsOf: MergedCells['accountsOf']): Read[] => {
   return DERIVERS.flatMap((derive) => derive({ pool, store: NO_STORE }).map((read) => makeRead({ ...read, asOf, clusters: clustersOf(read.inputs) }, orderOf)));
 };
 
+/** How many cells one batch derives, which is what a counting batch needs at least one of. */
+export const cellCountOf = (skeleton: SessionSkeleton): number => deriveCells(storeOf([skeleton])).cells.length;
+
 /** Rule 3's strata cells the frame holds: which accounts and sessions name each value, over every harness version, so a bound field is never joined to one. */
 export const strataOf = (byAccount: readonly (readonly SessionSkeleton[])[]): StrataCell[] => {
   const tallies = new Map<string, { dimension: StrataCell['dimension']; value: string; sessions: number; accounts: Set<number> }>();
