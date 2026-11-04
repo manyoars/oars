@@ -1,7 +1,7 @@
+import { createHash } from 'node:crypto';
 import type { components } from '@manyoars/oars-client';
 import { apiClient, unwrap } from '../api.js';
 import { CliError, ExitCode } from '../errors.js';
-import { createHash } from 'node:crypto';
 import { resolveAuthToken } from '../session.js';
 import type { Outcome, RunDeps } from '../cli.js';
 

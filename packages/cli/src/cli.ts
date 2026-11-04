@@ -79,15 +79,9 @@ const emit = (deps: RunDeps, json: boolean, outcome: Outcome): void => {
   deps.io.stdout(`${json ? JSON.stringify(outcome.document) : outcome.text}\n`);
 };
 
-/** The last line of an exit 6, which only unfinished account setup raises: the link when the platform sent one, then to rerun. */
-const needsYouLine = (actionUrl: string | undefined): string =>
-  actionUrl !== undefined && actionUrl !== ''
-    ? `Needs you: finish account setup at ${actionUrl}, then rerun this command.`
-    : 'Needs you: finish account setup in the Many Oars web app, then rerun this command.';
-
 /**
  * `--json` prints `{ok: false, step, problem}` on stdout, plus the error's details; otherwise the problem's title, detail,
- * and URL go to stderr (on an exit 6 the URL moves into a last "Needs you:" line).
+ * and URL go to stderr.
  */
 const printFailure = (deps: RunDeps, json: boolean, error: CliError): void => {
   if (json) {
@@ -95,8 +89,7 @@ const printFailure = (deps: RunDeps, json: boolean, error: CliError): void => {
     return;
   }
   const { title, detail, actionUrl } = error.problem;
-  const needsYou = error.exitCode === ExitCode.HUMAN ? [needsYouLine(actionUrl)] : [];
-  deps.io.stderr(`${[title ?? error.message, detail, ...(needsYou.length === 0 ? [actionUrl] : []), ...needsYou].filter((line) => line !== undefined && line !== '').join('\n')}\n`);
+  deps.io.stderr(`${[title ?? error.message, detail, actionUrl].filter((line) => line !== undefined && line !== '').join('\n')}\n`);
 };
 
 const sessionDeps = (deps: RunDeps): SessionsDeps => ({ sessions: deps.sessions, install: deps.install, now: deps.now });

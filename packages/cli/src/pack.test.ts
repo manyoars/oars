@@ -1,6 +1,5 @@
 // What `npm publish -w packages/cli` would upload, read from `npm pack --dry-run --json`: the built CLI with the bin that
-// `oars` runs, the pinned vocabulary, and LICENSE; never the TypeScript source, a test or the
-// fake platform. `--ignore-scripts` keeps this test from rebuilding dist/ while the other tests run beside it; the root check
+// `oars` runs, the pinned vocabulary, and LICENSE; never the TypeScript source or a test. `--ignore-scripts` keeps this test from rebuilding dist/ while the other tests run beside it; the root check
 // script builds first, and `prepack` rebuilds at publish.
 import { spawnSync } from 'node:child_process';
 import { readdirSync, readFileSync } from 'node:fs';
@@ -58,13 +57,13 @@ describe('the tarball npm pack would make', () => {
     );
   });
 
-  it('lists no TypeScript source, no test file, no fake platform and no live test', () => {
+  it('lists no TypeScript source, no test file, no test support and no live test', () => {
     const unwanted = paths.filter(
       (path) =>
         path.startsWith('src/') ||
         path.startsWith('scripts/') ||
         /\.test\.[cm]?[jt]s$/.test(path) ||
-        /(^|\/)(fake-platform|test-support)\.[cm]?[jt]s$/.test(path) ||
+        /(^|\/)test-support\.[cm]?[jt]s$/.test(path) ||
         /\.live\.[cm]?[jt]s$/.test(path) ||
         (/\.[cm]?ts$/.test(path) && !path.endsWith('.d.ts')),
     );
@@ -79,15 +78,15 @@ describe('the tarball npm pack would make', () => {
   });
 });
 
-// dist/sessions/public-vocabulary.js is the pinned list of public tool and site names a session projects (`stripe` the CLI, docs.stripe.com):
-// ecosystem names, not the product's money side.
-const ECOSYSTEM_LIST = 'dist/sessions/public-vocabulary.js';
+// dist/sessions/public-vocabulary.js and its .d.ts are the pinned list of public tool and site names a session projects (`stripe` the CLI,
+// docs.stripe.com): ecosystem names, not terms of this product.
+const ECOSYSTEM_LISTS = ['dist/sessions/public-vocabulary.js', 'dist/sessions/public-vocabulary.d.ts'];
 
-describe('the packed dist names nothing of the money side', () => {
-  it('has no money term in any packed dist file', () => {
+describe('the packed dist names none of the withheld terms', () => {
+  it('has no withheld term in any packed dist file, declarations included', () => {
     const hits = packedPaths()
-      .filter((path) => path.startsWith('dist/') && /\.(?:js|json)$/.test(path) && path !== ECOSYSTEM_LIST)
-      .flatMap((path) => moneyIn(readFileSync(join(cliFolder, path), 'utf8')).map((term) => `${path}: ${term}`));
+      .filter((path) => path.startsWith('dist/') && !ECOSYSTEM_LISTS.includes(path))
+      .flatMap((path) => withheldIn(readFileSync(join(cliFolder, path), 'utf8')).map((term) => `${path}: ${term}`));
     expect(hits).toEqual([]);
   }, 120_000);
 });
@@ -146,9 +145,11 @@ const DENY_LIST = [
 
 const NOT_OPEN = 'Accounts are not open yet; `oars login` says so until launch.';
 
-// The money side is not public yet (Matt, 2026-11-04, t858).
-const MONEY_TERMS = [
+const WITHHELD_TERMS = [
   /\bprices?\b/i,
+  /pricing/i,
+  /\bfees?\b/i,
+  /get paid/i,
   /billing/i,
   /\bcharg(?:e|es|ed|ing)\b/i,
   /stripe/i,
@@ -169,7 +170,7 @@ const MONEY_TERMS = [
   /\bmoney/i,
   /pay per/i,
 ];
-const moneyIn = (text: string): string[] => MONEY_TERMS.filter((term) => term.test(text)).map(String);
+const withheldIn = (text: string): string[] => WITHHELD_TERMS.filter((term) => term.test(text)).map(String);
 
 describe('the public text states facts only', () => {
   const description = String(manifest().description);
@@ -192,12 +193,16 @@ describe('the public text states facts only', () => {
     ['packages/cli/CHANGELOG.md', join(cliFolder, 'CHANGELOG.md')],
     ['packages/client/README.md', join(root, 'packages/client/README.md')],
     ['packages/client/CHANGELOG.md', join(root, 'packages/client/CHANGELOG.md')],
-  ])('%s names nothing of the money side', (_name, file) => {
-    expect(moneyIn(readFileSync(file, 'utf8'))).toEqual([]);
+  ])('%s names none of the withheld terms', (_name, file) => {
+    expect(withheldIn(readFileSync(file, 'utf8'))).toEqual([]);
   });
 
-  it('the package description names nothing of the money side', () => {
-    expect(moneyIn(description)).toEqual([]);
+  it('the package description names none of the withheld terms', () => {
+    expect(withheldIn(description)).toEqual([]);
+  });
+
+  it('the package description names no command that is not in the CLI', () => {
+    expect(description).not.toMatch(/deploy/i);
   });
 
   it('the package description names sessions and claims nothing about what the harness sends', () => {

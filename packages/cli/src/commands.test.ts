@@ -73,41 +73,19 @@ describe('oars login', () => {
     expect(h.err.join('')).toContain(`unknown command '${name}'`);
   });
 
-  it('prints the actionUrl of a problem that carries one and exits 6', async () => {
+  it('prints the actionUrl of a problem that carries one', async () => {
     const h = harness();
     const problem = { title: 'Finish account setup', code: 'ACCOUNT_NOT_READY', actionUrl: 'https://app.test/pay', status: 402 };
     server.use(discovery, deviceAuthorization(), tokenEndpoint([tokens('1')]).handler, http.post(`${API}/auth/oidc/exchange`, () => HttpResponse.json(problem, { status: 402 })));
-    expect(await run(['login', '--no-browser'], h.deps)).toBe(ExitCode.HUMAN);
-    expect(h.err.join('')).toContain('https://app.test/pay');
+    expect(await run(['login', '--no-browser'], h.deps)).toBe(ExitCode.UNEXPECTED);
+    expect(h.err.slice(1).join('')).toBe('Finish account setup\nhttps://app.test/pay\n');
   });
 
-  describe('the "Needs you" line of an exit 6', () => {
-    const needsYou = async (problem: object, argv: string[] = ['login', '--no-browser']) => {
-      const h = harness();
-      server.use(discovery, deviceAuthorization(), tokenEndpoint([tokens('1')]).handler, http.post(`${API}/auth/oidc/exchange`, () => HttpResponse.json(problem, { status: 409 })));
-      expect(await run(argv, h.deps)).toBe(ExitCode.HUMAN);
-      return h;
-    };
-
-    it('points ACCOUNT_NOT_READY at the account setup link, then says to rerun', async () => {
-      const h = await needsYou({ title: 'Finish account setup', code: 'ACCOUNT_NOT_READY', actionUrl: 'https://app.test/onboard' });
-      expect(h.err.slice(1).join('')).toBe('Finish account setup\nNeeds you: finish account setup at https://app.test/onboard, then rerun this command.\n');
-    });
-
-    it('says where to finish account setup when ACCOUNT_NOT_READY carries no link', async () => {
-      const h = await needsYou({ title: 'Finish account setup', code: 'ACCOUNT_NOT_READY' });
-      expect(h.err.slice(1).join('')).toBe('Finish account setup\nNeeds you: finish account setup in the Many Oars web app, then rerun this command.\n');
-    });
-
-    it('leaves --json to the problem document and adds the line to no other exit code', async () => {
-      const json = await needsYou({ title: 'Finish account setup', code: 'ACCOUNT_NOT_READY', actionUrl: 'https://app.test/onboard' }, ['login', '--no-browser', '--json']);
-      expect(json.err.join('')).not.toContain('Needs you');
-      expect(single(json.out)).toMatchObject({ ok: false, problem: { actionUrl: 'https://app.test/onboard' } });
-      const h = harness();
-      server.use(discovery, deviceAuthorization(), tokenEndpoint([tokens('1')]).handler, http.post(`${API}/auth/oidc/exchange`, () => HttpResponse.json({ title: 'Email not verified' }, { status: 401 })));
-      expect(await run(['login', '--no-browser'], h.deps)).toBe(ExitCode.AUTH);
-      expect(h.err.join('')).not.toContain('Needs you');
-    });
+  it('exits 1 on a 409 whose code no surviving command maps, and prints no "Needs you" line', async () => {
+    const h = harness();
+    server.use(discovery, deviceAuthorization(), tokenEndpoint([tokens('1')]).handler, http.post(`${API}/auth/oidc/exchange`, () => HttpResponse.json({ title: 'Finish account setup', code: 'ACCOUNT_NOT_READY' }, { status: 409 })));
+    expect(await run(['login', '--no-browser'], h.deps)).toBe(ExitCode.UNEXPECTED);
+    expect(h.err.join('')).not.toContain('Needs you');
   });
 
   it('retries the exchange on a 429 with Retry-After, then succeeds', async () => {
