@@ -222,6 +222,27 @@ describe('the Grok Build reader', () => {
     expect(out.tools.map((tool) => tool.steps?.[0]?.action)).toEqual(['mcp.call', 'other', 'mcp.call']);
   });
 
+  it('reads a skill call as skill.run with the skill’s name, and a todowrite call as a plan update', () => {
+    // The opencode `skill` tool's input is `{name}` (opencode/skill/mod.rs:50) and `todowrite` is its plan tool (opencode/todowrite/mod.rs, ToolId "todowrite").
+    const out = extractOf([prompt(1, 'go'), call(2, 'c1', 'skill', { name: 'pdf' }), finish(3, 'c1', 'completed'), call(4, 'c2', 'todowrite', { todos: [] }), finish(5, 'c2', 'completed')]);
+    expect(out.tools.map((tool) => tool.steps?.[0]?.action)).toEqual(['skill.run', 'plan.update']);
+    expect(linesOf([prompt(1, 'go'), call(2, 'c1', 'skill', { name: 'pdf' })]).flatMap((entry) => JSON.stringify(entry))).toEqual(expect.arrayContaining([expect.stringContaining('"input":{"skill":"pdf"}')]));
+  });
+
+  it('starts a new response after a host-turn marker, so a say, a marker, and a say are two assistant lines', () => {
+    const lines = linesOf([prompt(1, 'go'), say(2, 'first'), prompt(3, 'boundary', { hostTurn: true }), say(4, 'second')]);
+    expect(lines.filter((entry) => entry.type === 'assistant')).toHaveLength(2);
+  });
+
+  it('gives a session whose lines all lack a time one time: created_at, else the epoch', () => {
+    const untimed = (sessionUpdate: string, text: string) => ({ method: 'session/update', params: { update: { sessionUpdate, content: { type: 'text', text } } } });
+    const events = [untimed('user_message_chunk', 'one'), untimed('agent_message_chunk', 'x'), untimed('user_message_chunk', 'two')];
+    const stamps = (summary: Obj) => grokLines(asText(events), 'sess', summary, undefined).filter((entry) => entry.type === 'user').map((entry) => entry.timestamp);
+    expect(stamps(summaryOf())).toEqual([iso(0), iso(0)]);
+    // With no created_at either there is no time to give; the epoch stands (documented in docs/sessions-store.md, Timestamps).
+    expect(stamps({ info: { id: 'sess', cwd: '/work/app' } })).toEqual(['1970-01-01T00:00:00.000Z', '1970-01-01T00:00:00.000Z']);
+  });
+
   it('skips torn lines, lines of an unknown shape, an update with no id, and a completion with no known call, and counts the torn ones', () => {
     const text = `${asText([prompt(1, 'hi'), line(S(2), { sessionUpdate: 'plan', entries: [] }), call(3, '', 'bash'), finish(4, 'ghost', 'completed')])}\n{torn\n[1]\n`;
     expect(grokBadLines(text)).toEqual(['{torn']);

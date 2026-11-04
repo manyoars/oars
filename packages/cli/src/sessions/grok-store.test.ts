@@ -113,6 +113,16 @@ describe('depositing the Grok Build source', () => {
     expect((await deposit(s.runtime, options(['grk']))).missing).toEqual(['grk']);
   });
 
+  it('does not read a discovered Grok Build store that is not allowed: another allowed source reads, grok stays unread and untracked', async () => {
+    const s = staged();
+    const project = join(s.projectsRoot, 'mine');
+    mkdirSync(project, { recursive: true });
+    writeFileSync(join(project, 'one.jsonl'), `${JSON.stringify({ type: 'user', timestamp: '2026-06-02T00:00:00Z', message: { role: 'user', content: 'hello' } })}\n`);
+    const result = await deposit(s.runtime, options(['mine']));
+    expect(result.sources.grok).toBeUndefined();
+    expect(trackedKeys(s.storeDir)).toEqual(['mine/one.jsonl']);
+  });
+
   it('changes nothing in the Grok home: a deposit only reads', async () => {
     const s = staged();
     const before = readFileSync(join(s.home, 'sessions', encodeURIComponent(join(s.root, 'other')), B, 'updates.jsonl'), 'utf8');

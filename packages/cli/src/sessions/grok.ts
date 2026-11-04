@@ -226,7 +226,11 @@ export const grokLines = (text: string, fallbackId: string, summary: Obj, usage:
     const meta = isObj(update._meta) ? update._meta : {};
     const part = isObj(update.content) ? str(update.content.text) : undefined;
     if (kind === 'user_message_chunk') {
-      if (meta.hostTurn === true) flushPrompt();
+      if (meta.hostTurn === true) {
+        // The marker ends the turn: whatever the agent says next is a new response, not more of the last one.
+        flushPrompt();
+        open = undefined;
+      }
       if (meta.hostTurn === true || meta.interjection === true || part === undefined) continue;
       open = undefined;
       pending = { text: (pending?.text ?? '') + part, when: pending?.when ?? when };
@@ -263,6 +267,10 @@ export const grokLines = (text: string, fallbackId: string, summary: Obj, usage:
         block.native = SHELL_TOOLS.has(title) ? title : 'bash';
         block.name = 'Bash';
         block.input = command === undefined ? {} : { command };
+      } else if (title === 'skill') {
+        // The opencode `skill` tool's input is `{name}` (opencode/skill/mod.rs:50); the table's skill.run reads `input.skill`.
+        const skill = str(input.name);
+        block.input = skill === undefined ? {} : { skill };
       } else if (EDIT_TOOLS.has(title)) {
         const path = paths[0];
         block.native = title;

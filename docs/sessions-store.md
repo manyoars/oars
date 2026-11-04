@@ -615,20 +615,22 @@ that a deposit counts only the child's own prompts.
   then each shell call's `current_dir` ("the current working directory after the command completes", `types/output.rs:397`); a resume in another directory, or a
   `cd` outside a shell call, is not seen until the next shell call (`summary.json` holds `cwd_generation` and `previous_cwd`, which are not used).
 - **Timestamps.** The envelope's `timestamp` is epoch seconds with a serde default of 0. A zero, missing, or earlier time takes the latest time so far, starting from
-  `summary.created_at`, so many prompts never share one time and none goes backward.
+  `summary.created_at`, so no time goes backward. A session whose lines all lack a time has one time: `created_at`, and when the summary has no `created_at` either, the epoch
+  (1970-01-01), which is a known gap (pinned by a test, not repaired).
 - **Absent.** There is no cost field in the skeleton (`usage.json` has `costUsdTicks`, 1e10 per USD, which is not read), no reasoning text, no per-call model, and no
   per-response usage: usage is per turn. Each turn's totals land on the last response before its `endedAt`, else the first (turn numbers are not used, since a rewind
   renumbers them), and that turn's `primaryModelId` becomes the response's model; other responses carry `summary.current_model_id`, the model the session ended on. No
   file records the Grok Build version, so the skeleton's harness version is empty. `inputTokens` is the full prompt, cache reads and writes included
   (`xai-grok-sampling-types/src/conversation.rs:771-773`: "`prompt_tokens` is always the FULL prompt size (uncached + cache reads + cache writes)", mapped to `inputTokens` at
-  `usage_file.rs:100-110`), so the stored input is `inputTokens - cachedReadTokens - cacheCreationTokens` (never below 0) and the cache fields are kept apart, as capture's are.
+  `xai-chat-state/src/usage.rs:53` and `usage_file.rs:80`), so the stored input is `inputTokens - cachedReadTokens - cacheCreationTokens` (never below 0) and the cache fields are kept apart, as capture's are.
 - **Totals.** `usage.json` `turns[]` are per-turn deltas and `session` is their sum (`usage_file.rs:230-300`), so every turn is added once; there is no cumulative first
   summary to avoid. A resumed session continues the same file. A fork copies its parent's `usage.json` and `updates.jsonl` (`persistence.rs:2608`, `copy.rs:229`): lines older
   than `summary.forked_at` and turns that ended at or before it are not the fork's own and are skipped.
 - **Subagents.** A subagent is a separate session in the same tree with `summary.session_kind` `subagent` or `subagent_fork` (`persistence.rs:3016`); it is not listed, and
-  the parent's `task` call is the record. A session with `num_messages` 0 holds nothing and is not listed.
+  the parent's `task` call is the record. A skill call (`skill`, input `{name}`, `opencode/skill/mod.rs:50`) is recorded as `skill.run` with the skill's name, and a `todowrite` call as `plan.update`; no
+  separate log marker for the turns a skill runs was found at the pin (not traced further), so they are read as the session's own. A session with `num_messages` 0 holds nothing and is not listed.
 - **Known gaps.** `forked_at` is read as the parent reference, as the user guide describes it (`17-sessions.md:42`: "parent session reference for forked or restored
-  sessions"); only forks and subagent forks were traced, so a restore that sets it would read as a fork and lose the lines before it. Torn lines are counted as unparseable; a
+  sessions"); only forks and subagent forks were traced, so a restore that sets it would read as a fork and lose the lines before it. A mid-turn interjection (`_meta.interjection`) is dropped whole: its text block is the model-facing frame and the operator's typed text is kept apart in `displayText` (`storage/mod.rs:972-973`), which is not read, so a real steer is lost from the prompts. A restore that reads as a fork is the case above. Torn lines are counted as unparseable; a
   file with no parseable line is unreadable. Idempotent per session (`grok/<id>` in `state.json`, the size and latest mtime of `updates.jsonl` and `usage.json`).
 
 ## The outcome gold set
