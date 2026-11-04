@@ -181,6 +181,9 @@ export const ACTION_TABLES: { readonly [harness in Harness]: ActionTable } = {
       web_search: 'web.search',
       web_fetch: 'web.fetch',
       task: 'agent.spawn',
+      // The spawn tool also arrives under these wire names (grok_build/task/mod.rs:193-196).
+      Task: 'agent.spawn',
+      spawn_subagent: 'agent.spawn',
       todo_write: 'plan.update',
       todowrite: 'plan.update',
       skill: 'skill.run',

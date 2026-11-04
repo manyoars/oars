@@ -11,8 +11,11 @@
 //                 long path), the model the session ended on, and what kind of session it is
 //   updates.jsonl "the authoritative conversation log" (17-sessions.md:42): one `{timestamp, method, params: {sessionId, update}}` per line, `timestamp` epoch
 //                 SECONDS (serde default 0), `update` an ACP SessionUpdate tagged by `sessionUpdate`:
-//     user_message_chunk   content {type: "text", text}: the operator's prompt; chunks merge until the agent speaks. `_meta.hostTurn` (a turn boundary marker) ends a
-//                          prompt and `_meta.interjection` (a mid-turn steer whose text is a model-facing frame) is not one (storage/mod.rs:966, :974)
+//     user_message_chunk   content {type: "text", text}: the operator's prompt; chunks merge into one prompt until the agent speaks or `_meta.promptIndex`
+//                          changes (turn.rs:890-895, storage/mod.rs:1009). `_meta.hostTurn` (a slash command's turn), `_meta.hideFromScrollback` (a turn the harness started:
+//                          a finished task, subagent, workflow, notification, or goal check, turn.rs:328, :896-901) and `_meta.interjection` (a mid-turn steer whose text is a
+//                          model-facing frame) are not prompts (storage/mod.rs:966, :974); the first two end the turn, and `hostTurn` marks an agent chunk as well
+//                          (acp_session.rs:1353-1372), whose text is dropped as upstream's own rebuilders do (storage/mod.rs:429-432)
 //     agent_message_chunk  content {type: "text", text}: the response, chunks merged
 //     tool_call            {toolCallId, title, kind, rawInput}: `title` IS the tool's name (tool_calls.rs:1487). A model-issued call always has `kind` other here (tool_calls.rs:1488); its real kind
 //                          arrives only on a later tool_call_update (tool_calls.rs:2734). A shell call is therefore a name in SHELL_TOOLS, or the user's `!cmd`, the one path that
@@ -170,7 +173,8 @@ export const grokLines = (text: string, fallbackId: string, summary: Obj, usage:
   const base: Obj = { sessionId: str(info.id) ?? fallbackId, ...(str(info.cwd) === undefined ? {} : { cwd: str(info.cwd) }) };
   let at = timeOf(summary.created_at) ?? 0;
   let sequence = 0;
-  let pending: { text: string; when: number } | undefined;
+  // The prompt being read; `index` is its `_meta.promptIndex` when the chunks carry one.
+  let pending: { text: string; when: number; index: number | undefined } | undefined;
   let open: Response | undefined;
   const responses: Response[] = [];
   const calls = new Map<string, Call>();
@@ -226,16 +230,27 @@ export const grokLines = (text: string, fallbackId: string, summary: Obj, usage:
     const meta = isObj(update._meta) ? update._meta : {};
     const part = isObj(update.content) ? str(update.content.text) : undefined;
     if (kind === 'user_message_chunk') {
-      if (meta.hostTurn === true) {
-        // The marker ends the turn: whatever the agent says next is a new response, not more of the last one.
+      if (meta.hostTurn === true || meta.hideFromScrollback === true) {
+        // The harness started this turn (a slash command, or a finished task, subagent, workflow, notification, or goal check): it is not the operator's prompt,
+        // and it ends the turn, so whatever the agent says next is a new response, not more of the last one.
         flushPrompt();
         open = undefined;
+        continue;
       }
-      if (meta.hostTurn === true || meta.interjection === true || part === undefined) continue;
+      if (meta.interjection === true || part === undefined) continue;
+      // A change of `promptIndex` is a new prompt even when no reply fell between them (a prompt cancelled before its first reply, then a retry); an unmarked chunk
+      // (the user's `!cmd` carries only a model id) joins the prompt being read.
+      const index = num(meta.promptIndex);
+      if (pending !== undefined && index !== undefined && pending.index !== undefined && index !== pending.index) flushPrompt();
       open = undefined;
-      pending = { text: (pending?.text ?? '') + part, when: pending?.when ?? when };
+      pending = { text: (pending?.text ?? '') + part, when: pending?.when ?? when, index: pending?.index ?? index };
     } else if (kind === 'agent_message_chunk') {
       flushPrompt();
+      if (meta.hostTurn === true) {
+        // A slash command's output is persisted as an agent chunk with the marker; upstream's own rebuilders drop it and treat it as a boundary.
+        open = undefined;
+        continue;
+      }
       if (part === undefined) continue;
       const current = response(when);
       const last = current.content[current.content.length - 1];
@@ -261,8 +276,7 @@ export const grokLines = (text: string, fallbackId: string, summary: Obj, usage:
       const shell = SHELL_TOOLS.has(title) || update.kind === 'execute';
       const paths = EDIT_TOOLS.has(title) ? requestedPaths(input) : [];
       if (shell) {
-        // The user's `!cmd` carries its command only in the title: "Execute `cmd`".
-        const command = str(input.command) ?? /`([^`]+)`/.exec(title)?.[1];
+        const command = str(input.command);
         // The user's `!cmd` is titled "Execute `cmd`", which has no table row: it is the `bash` row's call.
         block.native = SHELL_TOOLS.has(title) ? title : 'bash';
         block.name = 'Bash';

@@ -603,17 +603,22 @@ that a deposit counts only the child's own prompts.
   prints it). `events.jsonl` is telemetry with no prompt text or cwd, and `chat_history.jsonl` is the model-facing copy; neither is read. Opt-in like Cursor, Codex, and
   Copilot: discovered by default, opened only when `--allow grok` names it; the nightly run repeats a saved allow. A deposit only reads.
 - **Mapping.** Each `updates.jsonl` line is `{timestamp, method, params: {sessionId, update}}` with an ACP `update`. `user_message_chunk` text is a prompt (chunks
-  merge until the agent speaks; a chunk with `_meta.hostTurn` ends a prompt and one with `_meta.interjection` is a mid-turn steer whose text is a model-facing frame,
-  so neither is a prompt); `agent_message_chunk` text is a response; a `tool_call`'s `title` is the tool's name, its arguments are `rawInput`, and its outcome is the
+  merge into one prompt until the agent speaks or `_meta.promptIndex` changes, so a prompt cancelled before its first reply and then retried stays two prompts,
+  `turn.rs:890-895`, `storage/mod.rs:1009`; an unmarked chunk joins, since a `!cmd` prompt carries only a model id, `tool_dispatch.rs:185-187`). Three markers say the text is not the
+  operator's: `_meta.hostTurn` (a slash command's turn), `_meta.hideFromScrollback` (a turn the harness started: a finished task, subagent, or workflow, a notification
+  drain, or a goal summary or nudge, `turn.rs:328`, `:896-901`, `session/mod.rs:242-255`), and `_meta.interjection` (a mid-turn steer whose text is a model-facing frame). The first two
+  end the turn too, so the next response is a new one. `hostTurn` also marks an `agent_message_chunk` (a slash command's output, `acp_session.rs:1353-1372`, `slash_exec.rs:64`),
+  which is dropped and ends the turn, as upstream's own rebuilders do (`storage/mod.rs:429-432`, `replay.rs:448-452`); other `agent_message_chunk` text is a response; a `tool_call`'s `title` is the tool's name, its arguments are `rawInput`, and its outcome is the
   `tool_call_update` with `completed` or `failed`. A shell call is a `run_terminal_cmd`, `run_terminal_command`, or `bash` call, or any call of `kind` `execute` (the
-  user's `!cmd` is one). Its outcome is `rawOutput.exit_code`, not the status: the agent path marks a call `failed` only on a timeout or a signal, so exit 2 arrives
+  user's `!cmd` is one; its `rawInput` is the tagged `Bash` input with the full `command`, `tool_dispatch.rs:223-229`, `:250`). Its outcome is `rawOutput.exit_code`, not the status: the agent path marks a call `failed` only on a timeout or a signal, so exit 2 arrives
   `completed` (`acp_conversion.rs:241-250`); the `!` path marks nonzero `failed`. Any other tool's error text is its `content[]` text; its `rawOutput` is a tagged wrapper
   and is never the error line. An edit is found by tool name (`search_replace`, `apply_patch`, `edit`, `write`, `hashline_edit`); its files are `file_path` (`filePath` for the opencode `edit`, which is camelCase; the tools'
   input structs: `search_replace/mod.rs:74`, `opencode/edit/mod.rs:64`, `:138`, `:579`, `opencode/write/mod.rs:31`, `hashline_edit types.rs:12`), the `*** Add|Update|Delete File:` headers
   of an `apply_patch` `patch` (`codex/apply_patch/tool.rs:104`, `parser.rs:40-42`), and the `diff` parts of the completion's `content[]`; those key names are read from the
   structs, not from a recorded line, so they are inferred. An MCP call arrives two ways, and both are recorded as `mcp__<server>__<tool>` with step `mcp.call`: titled `<server>__<tool>` itself, or through the `use_tool` wrapper (the model reaches MCP tools through `search_tool` and `use_tool`, `17-sessions.md:42`), which is titled `use_tool` (`tool_calls.rs:1487`, `use_tool/mod.rs:15`) and holds the qualified name in `rawInput.tool_name` (`use_tool/input.rs:19-20`, `use_tool/mod.rs:308`) with its arguments in `tool_input`; a `use_tool` call whose name holds no `__` stays `use_tool`. The cwd is `info.cwd`,
-  then each shell call's `current_dir` ("the current working directory after the command completes", `types/output.rs:397`); a resume in another directory, or a
-  `cd` outside a shell call, is not seen until the next shell call (`summary.json` holds `cwd_generation` and `previous_cwd`, which are not used).
+  then each shell call's `current_dir` ("the current working directory after the command completes", `types/output.rs:397`). `info.cwd` is the latest generation
+  (`persistence.rs:1157-1159`), so a session that was moved to another directory carries the new cwd on its earlier lines too, until its first `current_dir`; a `cd` outside a shell call
+  is not seen until the next shell call (`summary.json` holds `cwd_generation` and `previous_cwd`, which are not used).
 - **Timestamps.** The envelope's `timestamp` is epoch seconds with a serde default of 0. A zero, missing, or earlier time takes the latest time so far, starting from
   `summary.created_at`, so no time goes backward. A session whose lines all lack a time has one time: `created_at`, and when the summary has no `created_at` either, the epoch
   (1970-01-01), which is a known gap (pinned by a test, not repaired).
@@ -630,7 +635,7 @@ that a deposit counts only the child's own prompts.
   the parent's `task` call is the record. A skill call (`skill`, input `{name}`, `opencode/skill/mod.rs:50`) is recorded as `skill.run` with the skill's name, and a `todowrite` call as `plan.update`; no
   separate log marker for the turns a skill runs was found at the pin (not traced further), so they are read as the session's own. A session with `num_messages` 0 holds nothing and is not listed.
 - **Known gaps.** `forked_at` is read as the parent reference, as the user guide describes it (`17-sessions.md:42`: "parent session reference for forked or restored
-  sessions"); only forks and subagent forks were traced, so a restore that sets it would read as a fork and lose the lines before it. A mid-turn interjection (`_meta.interjection`) is dropped whole: its text block is the model-facing frame and the operator's typed text is kept apart in `displayText` (`storage/mod.rs:972-973`), which is not read, so a real steer is lost from the prompts. A restore that reads as a fork is the case above. Torn lines are counted as unparseable; a
+  sessions"); only forks and subagent forks were traced, so a restore that sets it would read as a fork and lose the lines before it. A mid-turn interjection (`_meta.interjection`) is dropped whole: its text block is the model-facing frame and the operator's typed text is kept apart in `displayText` (`storage/mod.rs:972-973`), which is not read, so a real steer is lost from the prompts. A restore that reads as a fork is the case above. `updates.jsonl` keeps rewind markers and the dead branches they cut (`session/storage/jsonl/copy.rs:227`), and the reader counts a rewound branch's prompts and calls as the session's. A failed `list_dir` carries no `content[]`, only `rawOutput` (`acp_conversion.rs:186-197`), so its error line is `tool failed`, not text. Torn lines are counted as unparseable; a
   file with no parseable line is unreadable. Idempotent per session (`grok/<id>` in `state.json`, the size and latest mtime of `updates.jsonl` and `usage.json`).
 
 ## The outcome gold set
