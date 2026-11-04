@@ -94,8 +94,9 @@ describe('the source of a replay', () => {
     await writeLog(join(storeDir, 'raw'), REPO, 'gone.jsonl', [bash(3, 't2', 'npm install archived'), result(4, 't2', 'added')]);
     await writeLog(projectsRoot, OFF_LIST, 'p.jsonl', [bash(5, 't3', 'npm install off-list')]);
     await writeLog(join(storeDir, 'raw'), 'cursor', 'c.jsonl', [bash(6, 't4', 'npm install from-cursor')]);
+    await writeLog(projectsRoot, 'codex', 'x.jsonl', [bash(7, 't5', 'npm install from-codex')]);
 
-    const done = await run([`${REPO}*`, 'cursor']);
+    const done = await run([`${REPO}*`, 'cursor', 'codex']);
     const { crossings } = await written();
 
     expect(crossings.map((row) => row.name).sort()).toEqual(['archived', 'on-disk']);
@@ -216,6 +217,41 @@ describe('a crossing record', () => {
     await writeLog(projectsRoot, REPO, 'a.jsonl', [...calls, line, bash(1, 't1', 'npm install handy-lib'), result(2, 't1', 'handy-lib added')]);
     await run([REPO]);
     expect(named((await written()).crossings, 'handy-lib').origin).toBe(origin);
+  });
+
+  it('does not read a server\'s own "unknown tool" for one of its actions as the server not existing', async () => {
+    await writeLog(projectsRoot, REPO, 'a.jsonl', [
+      use(1, 'b1', 'mcp__batcher__run', {}),
+      result(2, 'b1', 'actions[2] (shot) failed: unknown tool "shot" (2 completed, 0 remaining)', true),
+      use(3, 'b2', 'mcp__gone__run', {}),
+      result(4, 'b2', 'Error: No such tool available: mcp__gone__run', true),
+      use(5, 'b3', 'mcp__stepper__run', {}),
+      result(6, 'b3', 'step 3 failed: no such tool "snap"', true),
+    ]);
+    await run([REPO]);
+    const { crossings } = await written();
+    expect(crossings.map((row) => `${row.name}: ${row.miss}`)).toEqual(['batcher: none', 'gone: not-found', 'stepper: none']);
+  });
+
+  it('reads an MCP server the harness listed only as tool names (mcp__server__tool) as harness, not as a later mention', async () => {
+    const listing = { type: 'attachment', timestamp: stamp(0), attachment: { type: 'deferred_tools_delta', addedNames: ['mcp__listed-only__search', 'mcp__listed-only__open'] } };
+    await writeLog(projectsRoot, REPO, 'a.jsonl', [listing, use(1, 'm1', 'mcp__listed-only__search', {}), result(2, 'm1', 'ok')]);
+    await run([REPO]);
+    expect(named((await written()).crossings, 'listed-only')).toMatchObject({ origin: 'harness' });
+  });
+
+  it('does not read a package that shares a listed server\'s name as that server\'s mention', async () => {
+    const listing = { type: 'attachment', timestamp: stamp(0), attachment: { type: 'deferred_tools_delta', addedNames: ['mcp__handy-lib__search'] } };
+    await writeLog(projectsRoot, REPO, 'a.jsonl', [listing, bash(1, 't1', 'npm install handy-lib'), result(2, 't1', 'added')]);
+    await run([REPO]);
+    expect(named((await written()).crossings, 'handy-lib')).toMatchObject({ origin: 'none-seen', decidedBy: 'agent' });
+  });
+
+  it('does not read a longer tool name as the server, nor a server name inside another word', async () => {
+    const listing = { type: 'attachment', timestamp: stamp(0), attachment: { type: 'deferred_tools_delta', addedNames: ['mcp__listed-only-extra__search', 'xmcp__listed-only__search'] } };
+    await writeLog(projectsRoot, REPO, 'a.jsonl', [listing, use(1, 'm1', 'mcp__listed-only__search', {}), result(2, 'm1', 'ok')]);
+    await run([REPO]);
+    expect(named((await written()).crossings, 'listed-only')).toMatchObject({ origin: 'none-seen' });
   });
 
   it('reads none-seen when the name appears only after the call, inside a longer word, or in the agent\'s own text', async () => {
