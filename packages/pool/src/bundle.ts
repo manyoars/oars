@@ -28,7 +28,7 @@ const generationOf = async (env: Env): Promise<number> => {
 };
 
 /**
- * What names this bundle: the code that derives it, the floor, the version asked for, and the generation of the rows. It is known without reading a row, so a conditional request
+ * What names this bundle: the code that derives it, the floor, the harness and version asked for, and the generation of the rows. It is known without reading a row, so a conditional request
  * costs no parse and an account cannot force one by sending it. Read before the rows, so a bundle is never older than the ETag it carries.
  */
 const etagOf = (harness: string, harnessVersion: string, generation: number): string => `"${contentHash([BUNDLE_FORMAT, EXTRACTOR_VERSION, METHODS, CALL_SHAPE_METHOD, K_CELL, harness, harnessVersion, VOCAB_VERSION, generation])}"`;
