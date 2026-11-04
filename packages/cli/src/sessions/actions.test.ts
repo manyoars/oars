@@ -192,6 +192,8 @@ describe('the Grok Build table', () => {
     ['glob', 'file.search'],
     ['task', 'agent.spawn'],
     ['todo_write', 'plan.update'],
+    ['todowrite', 'plan.update'],
+    ['skill', 'skill.run'],
     ['web_fetch', 'web.fetch'],
   ] as const)('maps %s to %s and keeps the name', (native, action) => {
     expect(actionOf(ACTION_TABLES.grok, native)).toEqual({ action, native });
