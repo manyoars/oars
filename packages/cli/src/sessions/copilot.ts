@@ -30,7 +30,7 @@
 //                        `success` says; `success` decides only a call with no exit code. `fileEdits` makes a call an edit and overrides the path
 //   session.shutdown     data {agentMetrics.main.modelMetrics, else modelMetrics: [model].usage{inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens, reasoningTokens}}:
 //                        per-model totals (the main conversation's when the runtime writes them, since the session-wide ones include subagents), the only
-//                        place input and cache tokens persist; they land once on the first line of the model's last response
+//                        place this reader takes them from (a `session.usage_checkpoint` may hold per-model totals; see the docs); they land once on the first line of the model's last response
 // Events that carry an `agentId` (or the deprecated `parentToolCallId`) are a subagent's own and are not read; the parent's call that spawned it is. `session.error` and `abort` are not read:
 // a call they cut short has no completion event and stays `none`.
 
@@ -151,7 +151,7 @@ export const eventLines = (text: string, fallbackId: string): Obj[] => {
   let model: string | undefined;
   let sequence = 0;
   // Each model's latest shutdown totals. Upstream's accounting is session-wide and kept for resume (usage-and-billing.md, session-events.ts:4450), so a later
-  // shutdown replaces an earlier one instead of adding to it.
+  // shutdown replaces an earlier one instead of adding to it (inferred, see the docs: no line states that a resumed count continues).
   const totals = new Map<string, Obj>();
   const responses: Response[] = [];
   const calls = new Map<string, { block: Obj; shell: boolean }>();
