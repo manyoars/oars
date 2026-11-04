@@ -625,6 +625,43 @@ describe('Paginated rollouts', () => {
       expect(out.tools[0]).toMatchObject({ commits: ['abc1234'] });
       expect(out.errorLines.map((entry) => entry.line)).toEqual([closed]);
     });
+
+    // A tool failure message is written as an item with exit_code -1 (tools/events.rs:538-542, the `execution error: ...` of :438), and the item is emitted before
+    // the output is returned (events.rs:471-472), so in a Paginated rollout it settles the call first and the output that holds the same text is ignored. -1 is no
+    // exit status, and capture's `Exit code (\d+)` cannot read it, so the message itself must be the error line. The tail of the message is `{err:?}` (:438); the
+    // test depends only on its prefix.
+    it('records the message of a failed item with exit code -1 as the error line, not "Exit code -1" (events.rs:538-542, :471-472)', () => {
+      begin();
+      const message = 'execution error: sandbox setup failed';
+      const out = extractOf([
+        pmeta(),
+        execCall(2, 'u1', 'make'),
+        exited(3, 'u1', { status: 'failed', exit_code: -1, aggregated_output: message }),
+        ord(shellOut(4, 'u1', message)),
+      ]);
+      expect(out.tools).toMatchObject([{ tool: 'Bash', status: 'error' }]);
+      expect(out.errorLines.map((entry) => entry.line)).toEqual([message]);
+    });
+
+    // The exit watcher writes -1 for a process with no exit status (unified_exec/async_watcher.rs:213) and for a failure message (:409), here for an exec_command
+    // the model never polled.
+    it('records the text of a backgrounded process\'s failed item with exit code -1 as the error line (async_watcher.rs:213, :409)', () => {
+      begin();
+      const out = extractOf([
+        pmeta(),
+        execCall(2, 'u1', 'make'),
+        backgrounded(3, 'u1'),
+        exited(4, 'u1', { status: 'failed', exit_code: -1, aggregated_output: 'fatal: lost connection\nsecond line' }),
+      ]);
+      expect(out.errorLines.map((entry) => entry.line)).toEqual(['fatal: lost connection']);
+    });
+
+    it('keeps "Exit code -1" for a failed item with exit code -1 and no text, since nothing better exists', () => {
+      begin();
+      const out = extractOf([pmeta(), execCall(2, 'u1', 'make'), backgrounded(3, 'u1'), exited(4, 'u1', { status: 'failed', exit_code: -1, aggregated_output: '' })]);
+      expect(out.tools).toMatchObject([{ tool: 'Bash', status: 'error' }]);
+      expect(out.errorLines.map((entry) => entry.line)).toEqual(['Exit code -1']);
+    });
   });
 
   it('applies only the first session_meta: a copy from fork history keeps the fork id and cwd (recorder.rs:1157-1158, :1173), in a Legacy rollout, which has no ordinals (ordinal.rs:37)', () => {
@@ -802,6 +839,27 @@ describe('a unified-exec shell call (core/src/tools/handlers/unified_exec)', () 
     ]);
     expect(out.tools.map((tool) => [tool.tool, tool.status])).toEqual([['Bash', 'ok'], ['Bash', 'ok']]);
     expect(out.errorLines).toEqual([]);
+  });
+
+  // A process with no exit status is reported as -1 (process_manager.rs:823, `exit_code.unwrap_or(-1)`; async_watcher.rs:213) and written as `Process exited with
+  // code -1` (context.rs:556). -1 is no exit status and capture's `Exit code (\d+)` cannot read it, so the output's text must be the error line, as it is for code 1.
+  it('records the output of a call that exited with code -1 as the error line, not "Exit code -1" (process_manager.rs:823, async_watcher.rs:213)', () => {
+    const out = extractOf([
+      meta('/work/app'),
+      unified(2, 'u1', 'exec_command', { cmd: 'git push' }),
+      shellOut(3, 'u1', `${head('Process exited with code -1')}fatal: lost connection`),
+    ]);
+    expect(out.tools).toMatchObject([{ tool: 'Bash', status: 'error' }]);
+    expect(out.errorLines.map((entry) => entry.line)).toEqual(['fatal: lost connection']);
+  });
+
+  it('records a call that exited with code 1 the same way, as the contrast to code -1', () => {
+    const out = extractOf([
+      meta('/work/app'),
+      unified(2, 'u1', 'exec_command', { cmd: 'git push' }),
+      shellOut(3, 'u1', `${head('Process exited with code 1')}fatal: lost connection`),
+    ]);
+    expect(out.errorLines.map((entry) => entry.line)).toEqual(['fatal: lost connection']);
   });
 
   it('records a call that exited 0 with no output as ok, and still finds a commit sha past a first line that is not one', () => {
