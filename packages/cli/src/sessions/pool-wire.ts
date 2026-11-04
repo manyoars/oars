@@ -3,7 +3,7 @@
 // sending, and the server parses it again, field by field, because a live URL takes anything from anyone. This file imports nothing from the file system: the Worker bundles it.
 
 import { ACTION_TABLES, CANONICAL_ACTIONS, mcpOf, type CanonicalAction } from './actions.js';
-import { FRAMEWORKS, isPublicMcpTool, isRegistryVersion, LANGUAGES, LITERAL, publicEffort, publicModel, publicVersion, PUBLIC_FLAGS, PUBLIC_HOSTS, PUBLIC_MCP_SERVERS, PUBLIC_PACKAGES, PUBLIC_PROGRAMS, PUBLIC_SKILLS, PUBLIC_SUBCOMMANDS, REPO_SIZES } from './public-vocabulary.js';
+import { FRAMEWORKS, isPublicMcpTool, isRegistryVersion, LANGUAGES, LITERAL, publicEffort, publicModel, publicVersion, PUBLIC_FLAGS, PUBLIC_HOSTS, PUBLIC_MCP_SERVERS, PUBLIC_PACKAGES, PUBLIC_PROGRAMS, PUBLIC_SKILLS, PUBLIC_SUBCOMMANDS, REPO_SIZES, VOCAB_VERSION } from './public-vocabulary.js';
 import type { Cell } from './cells.js';
 import type { Motif } from './motif.js';
 import type { Read, ReadAsOf } from './read.js';
@@ -11,8 +11,8 @@ import type { Frame, Harness, PromptClass, PromptObservation, PullIdentity, Sess
 
 export const SKELETON_FORMAT = 1;
 export const BUNDLE_FORMAT = 1;
-/** Stands in until the vocabulary brief ships the real one: the pool serves only the version it holds. */
-export const VOCAB_VERSION = '0';
+/** One constant: the pool serves only the vocabulary version the client holds. */
+export { VOCAB_VERSION };
 
 /** A step without what a server can compute: `n` is its call's, and `frameId` hashes a frame the skeleton holds. */
 export type SkeletonStep = Omit<StepObservation, 'n' | 'frameId'>;
