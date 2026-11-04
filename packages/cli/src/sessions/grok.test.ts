@@ -13,6 +13,7 @@ afterEach(cleanup);
 // (agentclientprotocol/agent-client-protocol @ 0e486bc, schema/v1/schema.json):
 //   updates.jsonl line `{timestamp: u64 seconds, method, params: {sessionId, update}}`  xai-grok-shell storage/mod.rs:721-725
 //   update kinds `user_message_chunk`, `agent_message_chunk` (content {type:"text", text}, _meta), `tool_call` (toolCallId, title, kind, status, rawInput),
+//     a model-issued `tool_call` has kind `other` (tool_calls.rs:1488; the real kind comes on a later update, :2734), so only the `bash-mode-` call (tool_dispatch.rs:246) is `execute`;
 //     `tool_call_update` (toolCallId, status, content[], rawOutput)                                         ACP schema.json SessionUpdate
 //   `_meta.hostTurn` and `_meta.interjection` mark text the harness wrote                                   storage/mod.rs:966, :974
 //   `title` is the tool's name                                                                              xai-grok-shell tool_calls.rs:1487
@@ -65,11 +66,11 @@ describe('the Grok Build reader', () => {
       prompt(1, 'build'),
       say(2, 'running '),
       say(2, 'it'),
-      call(3, 'c1', 'run_terminal_cmd', { command: 'npm test' }, 'execute'),
+      call(3, 'c1', 'run_terminal_cmd', { command: 'npm test' }),
       finish(4, 'c1', 'completed', { rawOutput: bash(0, 'ok') }),
-      call(5, 'c2', 'search_replace', { file_path: 'src/a.ts', old_string: 'a', new_string: 'b' }, 'edit'),
+      call(5, 'c2', 'search_replace', { file_path: 'src/a.ts', old_string: 'a', new_string: 'b' }),
       finish(6, 'c2', 'completed', { content: [{ type: 'diff', path: 'src/a.ts', oldText: 'a', newText: 'b' }] }),
-      call(7, 'c3', 'apply_patch', { patch: '*** Begin Patch\n*** Update File: docs/b.md\n@@\n-x\n+y\n*** Add File: docs/c.md\n+z\n*** End Patch' }, 'edit'),
+      call(7, 'c3', 'apply_patch', { patch: '*** Begin Patch\n*** Update File: docs/b.md\n@@\n-x\n+y\n*** Add File: docs/c.md\n+z\n*** End Patch' }),
       finish(8, 'c3', 'completed'),
       say(9, 'done'),
     ];
@@ -86,7 +87,7 @@ describe('the Grok Build reader', () => {
   });
 
   it('records a shell call whose exit code is nonzero as an error even though its status says completed', () => {
-    const out = extractOf([prompt(1, 'run it'), call(2, 'c1', 'run_terminal_cmd', { command: 'make' }, 'execute'), finish(3, 'c1', 'completed', { rawOutput: bash(2, 'make: *** No rule to make target\nsecond') })]);
+    const out = extractOf([prompt(1, 'run it'), call(2, 'c1', 'run_terminal_cmd', { command: 'make' }), finish(3, 'c1', 'completed', { rawOutput: bash(2, 'make: *** No rule to make target\nsecond') })]);
     expect(out.tools).toMatchObject([{ tool: 'Bash', status: 'error' }]);
     expect(out.errorLines).toMatchObject([{ tool: 'Bash', line: 'make: *** No rule to make target' }]);
   });
@@ -94,9 +95,9 @@ describe('the Grok Build reader', () => {
   it('records a shell call that exited zero with status failed as an error, and one cut by a signal with its output', () => {
     const out = extractOf([
       prompt(1, 'run them'),
-      call(2, 'c', 'bash', { command: 'sleep 9' }, 'execute'),
+      call(2, 'c', 'bash', { command: 'sleep 9' }),
       finish(3, 'c', 'failed', { rawOutput: bash(-1, 'timed out after 5s', { timed_out: true }) }),
-      call(4, 'd', 'bash', { command: 'true' }, 'execute'),
+      call(4, 'd', 'bash', { command: 'true' }),
       finish(5, 'd', 'failed', { rawOutput: bash(0, '') }),
     ]);
     expect(out.tools.map((tool) => tool.status)).toEqual(['error', 'error']);
@@ -106,9 +107,9 @@ describe('the Grok Build reader', () => {
   it('reads the output bytes when output_for_prompt is empty, and says "Exit code" when there is no output at all', () => {
     const out = extractOf([
       prompt(1, 'x'),
-      call(2, 'c', 'bash', { command: 'a' }, 'execute'),
+      call(2, 'c', 'bash', { command: 'a' }),
       finish(3, 'c', 'completed', { rawOutput: bash(1, 'raw bytes only', { output_for_prompt: '' }) }),
-      call(4, 'd', 'bash', { command: 'b' }, 'execute'),
+      call(4, 'd', 'bash', { command: 'b' }),
       finish(5, 'd', 'completed', { rawOutput: bash(3, '') }),
     ]);
     expect(out.errorLines.map((error) => error.line)).toEqual(['raw bytes only', 'Exit code 3']);
@@ -117,11 +118,11 @@ describe('the Grok Build reader', () => {
   it('unwraps a failed tool to the text of its content, never the rawOutput wrapper, so the error line joins a Claude Code signature', () => {
     const out = extractOf([
       prompt(1, 'read it'),
-      call(2, 'c1', 'read_file', { path: '/nope' }, 'read'),
+      call(2, 'c1', 'read_file', { path: '/nope' }),
       finish(3, 'c1', 'failed', { content: [{ type: 'content', content: { type: 'text', text: 'ENOENT: no such file or directory, open /nope' } }], rawOutput: { type: 'ReadFile', FileNotFound: 'wrapped' } }),
-      call(4, 'c2', 'read_file', {}, 'read'),
+      call(4, 'c2', 'read_file', {}),
       finish(5, 'c2', 'failed', { rawOutput: { type: 'ReadFile' } }),
-      call(6, 'c3', 'bash', { command: 'x' }, 'execute'),
+      call(6, 'c3', 'bash', { command: 'x' }),
       finish(7, 'c3', 'failed', { content: [{ type: 'content', content: { type: 'text', text: 'killed' } }] }),
     ]);
     expect(out.errorLines.map((error) => error.line)).toEqual(['ENOENT: no such file or directory, open /nope', 'tool failed', 'killed']);
@@ -137,7 +138,7 @@ describe('the Grok Build reader', () => {
   });
 
   it('captures a session from a folder that is not a repository', () => {
-    const out = extractOf([prompt(1, 'hi'), call(2, 'c1', 'read_file', { path: 'a.txt' }, 'read'), finish(3, 'c1', 'completed')], summaryOf({ info: { id: 'sess', cwd: '/tmp/notes' } }));
+    const out = extractOf([prompt(1, 'hi'), call(2, 'c1', 'read_file', { path: 'a.txt' }), finish(3, 'c1', 'completed')], summaryOf({ info: { id: 'sess', cwd: '/tmp/notes' } }));
     expect(out.tools).toMatchObject([{ tool: 'read_file', status: 'ok' }]);
     expect(out.session.repo).toBeNull();
   });
@@ -188,7 +189,7 @@ describe('the Grok Build reader', () => {
   });
 
   it('follows the shell’s current_dir for the cwd after a directory change', () => {
-    const lines = linesOf([prompt(1, 'cd'), call(2, 'c1', 'bash', { command: 'cd /other' }, 'execute'), finish(3, 'c1', 'completed', { rawOutput: bash(0, '', { current_dir: '/other' }) }), prompt(4, 'next')]);
+    const lines = linesOf([prompt(1, 'cd'), call(2, 'c1', 'bash', { command: 'cd /other' }), finish(3, 'c1', 'completed', { rawOutput: bash(0, '', { current_dir: '/other' }) }), prompt(4, 'next')]);
     expect(lines.filter((entry) => entry.type === 'user' && typeof entry.cwd === 'string').map((entry) => entry.cwd)).toEqual(['/work/app', '/other', '/other']);
   });
 
@@ -199,7 +200,7 @@ describe('the Grok Build reader', () => {
       finish(3, 'c1', 'completed'),
       call(4, 'bash-mode-1', 'Execute `ls -a`', {}, 'execute'),
       finish(5, 'bash-mode-1', 'failed', { rawOutput: bash(2, 'ls: no such file') }),
-      call(6, 'c3', 'grep', { pattern: 'x' }, 'search'),
+      call(6, 'c3', 'grep', { pattern: 'x' }),
       finish(7, 'c3', 'in_progress'),
     ]);
     expect(out.tools.map((tool) => [tool.tool, tool.status])).toEqual([['mcp__oars__oars_recall', 'ok'], ['Bash', 'error'], ['grep', 'none']]);
@@ -230,26 +231,26 @@ describe('the Grok Build reader', () => {
   });
 
   it('settles a call once', () => {
-    const out = extractOf([prompt(1, 'x'), call(2, 'c1', 'bash', { command: 'a' }, 'execute'), finish(3, 'c1', 'completed', { rawOutput: bash(0, 'ok') }), finish(4, 'c1', 'failed', { rawOutput: bash(1, 'late') })]);
+    const out = extractOf([prompt(1, 'x'), call(2, 'c1', 'bash', { command: 'a' }), finish(3, 'c1', 'completed', { rawOutput: bash(0, 'ok') }), finish(4, 'c1', 'failed', { rawOutput: bash(1, 'late') })]);
     expect(out.tools.map((tool) => tool.status)).toEqual(['ok']);
   });
 
   it('redacts a secret and an email, and cuts a 1,500-character error at 1,000 characters', () => {
     const long = `fail: sk-abcdefghijklmnopqrstuvwxyz0123 for alice@example.com ${'x'.repeat(1500)}`;
-    const out = extractOf([prompt(1, 'x'), call(2, 'c1', 'bash', { command: 'run' }, 'execute'), finish(3, 'c1', 'completed', { rawOutput: bash(1, long) })]);
+    const out = extractOf([prompt(1, 'x'), call(2, 'c1', 'bash', { command: 'run' }), finish(3, 'c1', 'completed', { rawOutput: bash(1, long) })]);
     const error = out.errorLines[0];
     expect(error?.line).not.toContain('sk-abcdefghijklmnopqrstuvwxyz0123');
     expect(error?.line).not.toContain('alice@example.com');
     expect(error?.line.length).toBeLessThanOrEqual(1000);
-    const failed = extractOf([prompt(1, 'x'), call(2, 'c1', 'read_file', {}, 'read'), finish(3, 'c1', 'failed', { content: [{ type: 'content', content: { type: 'text', text: long } }] })]).errorLines[0];
+    const failed = extractOf([prompt(1, 'x'), call(2, 'c1', 'read_file', {}), finish(3, 'c1', 'failed', { content: [{ type: 'content', content: { type: 'text', text: long } }] })]).errorLines[0];
     expect(failed?.line.length).toBeLessThanOrEqual(1000);
     expect(failed?.line).not.toContain('alice@example.com');
   });
 
   it('records an edit by its name even when it fails or the tool reports no path, with the original name kept for the table', () => {
     const out = extractOf([
-      prompt(1, 'edit'),
-      call(2, 'c1', 'write', { file_path: 'src/new.ts', content: 'x' }, 'edit'),
+      prompt(1),
+      call(2, 'c1', 'write', { file_path: 'src/new.ts', content: 'x' }),
       finish(3, 'c1', 'failed', { content: [{ type: 'content', content: { type: 'text', text: 'denied' } }] }),
       call(4, 'c2', 'edit', {}, 'other'),
       finish(5, 'c2', 'completed'),
