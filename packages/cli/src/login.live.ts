@@ -138,9 +138,13 @@ const loginThenLogout = async ({ api, configDir, username, password, audience }:
     io: {
       stdout: (chunk) => out.push(chunk),
       stderr: (chunk) => {
-        err.push(chunk);
         const url = /open (\S+)/.exec(chunk)?.[1];
-        if (url !== undefined) announce(url);
+        // The link chunk also holds the user code, and a failure prints `err` in a public job log: announce it, never keep it.
+        if (url !== undefined) {
+          announce(url);
+          return;
+        }
+        err.push(chunk);
       },
     },
     store: fileCredentialStore(configDir),
