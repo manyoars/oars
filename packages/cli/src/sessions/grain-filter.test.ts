@@ -1,7 +1,7 @@
 // Rule 6: weekly cells and day cells share one table. A read of days answers from day cells alone and a read of weeks from week cells alone, so a table holding both grains gives each read
 // the answer it gives holding only its own grain.
 import { describe, expect, it } from 'vitest';
-import type { Pool } from './cells.js';
+import type { Cell, Pool } from './cells.js';
 import { error, frame, poolFrom, prompt, session, store, tool } from './pool-fixture.js';
 import { deriveFirstOrder } from './pool.js';
 import { deriveAdoption } from './read-adoption.js';
@@ -57,9 +57,17 @@ describe('a grain filter on every read', () => {
     ['live', deriveLive],
     ['tool-day', deriveToolDay],
     ['call shape', deriveCallShape],
-    ['recovery', deriveRecovery],
   ] as const)('answers the day read %s from day cells alone', (_name, derive) => {
     expect(answers(derive, both)).toEqual(answers(derive, days));
+  });
+
+  it('answers recovery from day cells for the failed call and week cells for the step after it', () => {
+    const oneStep = (cell: Cell): boolean => both.motifs.get(cell.motifId)?.steps.length === 1;
+    const own: Pool = { ...both, cells: both.cells.filter((cell) => (cell.grain === 'day' ? true : !oneStep(cell))) };
+    const dayOnly: Pool = { ...both, cells: days.cells };
+    expect(answers(deriveRecovery, both)).toEqual(answers(deriveRecovery, own));
+    expect(answers(deriveRecovery, both).length).toBeGreaterThan(0);
+    expect(answers(deriveRecovery, own)).not.toEqual(answers(deriveRecovery, dayOnly));
   });
 
   it.each([

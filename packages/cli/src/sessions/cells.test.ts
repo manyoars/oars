@@ -56,8 +56,8 @@ describe('deriveCells', () => {
   });
 
   it('counts a window by its last step, sums its cost, and counts sessions once', () => {
-    expect(cellsOf(base, shapeId([READ, EDIT]))).toEqual([
-      { motifId: shapeId([READ, EDIT]), frameBucket: 'claude-code/2.1.31x/claude-opus-5-5', grain: 'day', day: '2026-11-01', sessions: 2, clusters: 1, ok: 1, failed: 1, tokens: 0, durationMs: 70, exposed: false },
+    expect(cellsOf(base, shapeId([READ, EDIT]), 'week')).toEqual([
+      { motifId: shapeId([READ, EDIT]), frameBucket: 'claude-code/2.1.31x/claude-opus-5-5', grain: 'week', day: '2026-10-26', sessions: 2, clusters: 1, ok: 1, failed: 1, tokens: 0, durationMs: 70, exposed: false },
     ]);
   });
 
@@ -80,9 +80,9 @@ describe('deriveCells', () => {
       prompts: [prompt('s1', 0), prompt('s1', 1)],
       tools: [tool('s1', 0, 'Read'), tool('s1', 1, 'Edit', { prompt: 1 }), tool('s1', 2, 'Read', { prompt: 1, side: true }), tool('s1', 3, 'Edit', { prompt: 1 })],
     });
-    const cells = cellsOf(split, shapeId([READ, EDIT]));
+    const cells = cellsOf(split, shapeId([READ, EDIT]), 'both');
     expect(cells).toEqual([]);
-    expect(cellsOf(split, shapeId([EDIT, EDIT]))).toMatchObject([{ ok: 1 }]);
+    expect(cellsOf(split, shapeId([EDIT, EDIT]), 'week')).toMatchObject([{ ok: 1 }]);
   });
 
   it('puts one motif in two frames in two cells', () => {
@@ -176,6 +176,20 @@ describe('grain (rule 6)', () => {
     ]);
     const finer = deriveCells(spanning).cells.filter((cell) => cell.grain === 'day');
     expect(finer.every((cell) => cell.motifId === shapeId([READ]))).toBe(true);
+  });
+
+  it('keeps a window of two or more steps in week cells alone: only a one-step motif has a live cell', () => {
+    const windows = [shapeId([READ, EDIT]), shapeId([READ, EDIT, READ]), shapeId([READ, EDIT, READ, EDIT])];
+    const longer = store({
+      sessions: [session('s1')],
+      prompts: [prompt('s1', 0, { frame: frame({ day: '2026-11-03' }) })],
+      tools: [tool('s1', 0, 'Read'), tool('s1', 1, 'Edit'), tool('s1', 2, 'Read'), tool('s1', 3, 'Edit')],
+    });
+    for (const motifId of windows) {
+      expect(cellsOf(longer, motifId, 'week').length).toBeGreaterThan(0);
+      expect(cellsOf(longer, motifId, 'day')).toEqual([]);
+    }
+    expect(cellsOf(longer, shapeId([READ]), 'day')).toHaveLength(1);
   });
 
   it('puts a class motif in week cells alone', () => {

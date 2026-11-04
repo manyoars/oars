@@ -82,7 +82,7 @@ export const incrementStatements = (env: Env, account: string, id: string, inges
   const strata = netOf(next.strata, previous?.strata ?? new Map<string, StratumRow>(), STRATUM_FIELDS);
   const guard = [account, id, ingest] as const;
   const statements: Bound[] = [];
-  // One statement per chunk, all in the one batch under the one guard: a batch's cells run about four times its skeleton, and D1 refuses a bound value over 2 MB.
+  // One statement per chunk, all in the one batch under the one guard: a batch's cells run about five times its skeleton, and D1 refuses a bound value over 2 MB.
   for (const chunk of chunksOf(cells)) {
     statements.push(
       env.DB.prepare(
