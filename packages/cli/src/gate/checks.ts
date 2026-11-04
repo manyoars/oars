@@ -351,9 +351,17 @@ const readShape = (reading: Reading, command: ShellCommand, previous: ShellComma
 
 const readCommand = (reading: Reading, command: ShellCommand, previous: ShellCommand | undefined): void => {
   readShape(reading, command, previous);
-  const direct = moduleCommand(command) ?? command;
+  const viaModule = moduleCommand(command);
+  const direct = viaModule ?? command;
   const tool = toolOf(direct.program);
-  if (tool !== undefined) readTool(reading, tool, direct.program === command.program ? command : direct);
+  if (tool === undefined) return;
+  const from = reading.crossings.length;
+  readTool(reading, tool, direct);
+  // `python -m pip` is how a call goes around a stopped `pip`, so a record has to keep the two apart. `pip3.12` is one program with `pip`.
+  for (const crossing of reading.crossings.slice(from)) {
+    if (viaModule !== null) crossing.program = 'python -m pip';
+    else if (PIP_NAME.test(crossing.program)) crossing.program = 'pip';
+  }
 };
 
 const stringField = (input: unknown, key: string): string | undefined => {

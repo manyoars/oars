@@ -37,11 +37,11 @@ import {
   type UserPromptObservation,
 } from './schema.js';
 
-interface Obj {
+export interface Obj {
   [key: string]: unknown;
 }
 
-const isObj = (value: unknown): value is Obj => typeof value === 'object' && value !== null && !Array.isArray(value);
+export const isObj = (value: unknown): value is Obj => typeof value === 'object' && value !== null && !Array.isArray(value);
 const str = (value: unknown): string | undefined => (typeof value === 'string' ? value : undefined);
 const num = (value: unknown): number | undefined => (typeof value === 'number' && Number.isFinite(value) ? value : undefined);
 
@@ -111,7 +111,7 @@ export const errorKey = (text: string, redact: Redactor): string => redact(norma
 /** The signature of an error: `<tool> | <errorKey>`. */
 export const signatureOf = (tool: string, text: string, redact: Redactor): string => `${tool} | ${errorKey(text, redact)}`;
 
-const resultText = (block: Obj): string => {
+export const resultText = (block: Obj): string => {
   const content = block.content;
   if (typeof content === 'string') return content;
   if (Array.isArray(content)) {
@@ -123,7 +123,7 @@ const resultText = (block: Obj): string => {
   return '';
 };
 
-const isErrorResult = (block: Obj, text: string): boolean => {
+export const isErrorResult = (block: Obj, text: string): boolean => {
   if (truthy(block.is_error)) return true;
   const exit = EXIT_RE.exec(text.trim());
   return exit !== null && exit[1] !== '0';
@@ -350,7 +350,7 @@ const firstTextBlock = (content: unknown): string => {
 // What the harness writes as a user line and the operator did not ask. t768 checked this against a full re-capture: the only leading tag left on a `typed` row is
 // the paste wrapper. `local-command-stderr` is here as the sibling of `local-command-stdout`. The set is closed on purpose: anything else with a leading `<` was
 // typed, or pasted. A `teammate-message` is another agent speaking to a teammate, so a teammate's turns after one stay in its prompt before, or outside any.
-const INJECTED_TAGS: ReadonlySet<string> = new Set([
+export const INJECTED_TAGS: ReadonlySet<string> = new Set([
   'bash-input',
   'bash-stderr',
   'bash-stdout',
@@ -362,7 +362,7 @@ const INJECTED_TAGS: ReadonlySet<string> = new Set([
   'task-notification',
   'teammate-message',
 ]);
-const LEADING_TAG = /^<([a-zA-Z][\w:-]*)[\s>/]/;
+export const LEADING_TAG = /^<([a-zA-Z][\w:-]*)[\s>/]/;
 
 /** What the operator asked, with the wrapper removed: the command's name and its arguments, as they typed them. Either element can come first. */
 const commandAsked = (text: string): string => {

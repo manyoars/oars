@@ -1,0 +1,82 @@
+// The `--registry-state` option: what a registry says about a name, asked through the package manager itself, in the folder the call ran in. That
+// is the one way to reach exactly the registry the manager would contact, private scopes and project config included, so a private name never
+// goes to a public registry on the gate's account. Off by default; nothing here runs unless the operator asks.
+import { execFile } from 'node:child_process';
+import type { CrossingClass } from './checks.js';
+
+export interface RegistryAsk {
+  class: CrossingClass;
+  name: string;
+  cwd: string;
+}
+
+export interface RegistryAnswer {
+  state: 'found' | 'not-found' | 'unreachable';
+  latest: string | null;
+  created: string | null;
+}
+
+export type RegistryReader = (ask: RegistryAsk) => Promise<RegistryAnswer>;
+
+/** What a manager's run came back with: the exit code, null when it could not be started or ran out of time. */
+export interface ManagerRun {
+  code: number | null;
+  stdout: string;
+  stderr: string;
+}
+
+export type ManagerRunner = (program: string, args: readonly string[], cwd: string) => Promise<ManagerRun>;
+
+const TIMEOUT_MS = 20_000;
+
+const UNREACHABLE: RegistryAnswer = { state: 'unreachable', latest: null, created: null };
+const NOT_FOUND: RegistryAnswer = { state: 'not-found', latest: null, created: null };
+
+// On Windows the managers are `.cmd` shims, which run only through a shell, so a name reaches a command line. These accept only what a registry
+// can hold, which has no shell character, and nothing that a manager would read as a flag.
+const NPM_NAME = /^(?:@[a-z0-9~][a-z0-9._~-]*\/)?[a-z0-9~][a-z0-9._~-]*$/i;
+const PYTHON_NAME = /^[a-z0-9][a-z0-9._-]*$/i;
+
+/** Whether a name can be asked about: a package class, spelled as a registry could hold it. */
+export const askable = (cls: CrossingClass, name: string): boolean => (cls === 'npm-package' ? NPM_NAME.test(name) : cls === 'python-package' && PYTHON_NAME.test(name));
+
+const textField = (value: unknown, key: string): string | null => {
+  const field: unknown = typeof value === 'object' && value !== null ? Reflect.get(value, key) : undefined;
+  return typeof field === 'string' && field !== '' ? field : null;
+};
+
+/** `npm view <name> dist-tags.latest time.created --json`. A not-found answer is an `E404` on either stream. */
+export const readNpmView = (run: ManagerRun): RegistryAnswer => {
+  if (/\bE404\b/.test(run.stdout) || /\bE404\b/.test(run.stderr)) return NOT_FOUND;
+  if (run.code !== 0) return UNREACHABLE;
+  try {
+    const parsed: unknown = JSON.parse(run.stdout);
+    const latest = textField(parsed, 'dist-tags.latest');
+    return latest === null ? UNREACHABLE : { state: 'found', latest, created: textField(parsed, 'time.created') };
+  } catch {
+    return UNREACHABLE;
+  }
+};
+
+/** `pip index versions <name>` prints `name (latest)` first. It states no dates, so a Python name's age stays unknown. */
+export const readPipIndex = (run: ManagerRun): RegistryAnswer => {
+  if (/No matching distribution/i.test(run.stdout) || /No matching distribution/i.test(run.stderr)) return NOT_FOUND;
+  if (run.code !== 0) return UNREACHABLE;
+  const latest = /^\S+ \(([^)]+)\)/m.exec(run.stdout)?.[1];
+  return latest === undefined ? UNREACHABLE : { state: 'found', latest, created: null };
+};
+
+const runManager: ManagerRunner = (program, args, cwd) =>
+  new Promise((resolve) => {
+    execFile(program, [...args], { cwd, timeout: TIMEOUT_MS, shell: process.platform === 'win32', windowsHide: true, encoding: 'utf8' }, (error, stdout, stderr) => {
+      const code = error === null ? 0 : typeof error.code === 'number' ? error.code : null;
+      resolve({ code, stdout, stderr });
+    });
+  });
+
+/** The reader the option uses. `npm view` and `pip index` run no package code; the manager's own cache is the manager's. */
+export const managerReader = (run: ManagerRunner = runManager): RegistryReader => async ({ class: cls, name, cwd }) => {
+  if (!askable(cls, name)) return UNREACHABLE;
+  if (cls === 'npm-package') return readNpmView(await run('npm', ['view', name, 'dist-tags.latest', 'time.created', '--json', '--logs-max=0'], cwd));
+  return readPipIndex(await run('pip', ['index', 'versions', name, '--disable-pip-version-check'], cwd));
+};
