@@ -57,8 +57,8 @@ describe('login, deposit, and pull against a local server', () => {
     await pool.dispose();
   });
 
-  it('three accounts: a covenant to accept, and a read only at the third, verified and kept', async () => {
-    const people = await Promise.all(['4001', '4002', '4003'].map((id) => person(pool, id)));
+  it('five accounts: a covenant to accept, and a read only at the fifth, verified and kept', async () => {
+    const people = await Promise.all(['4001', '4002', '4003', '4004', '4005'].map((id) => person(pool, id)));
     const readsAfter: unknown[] = [];
     for (const one of people) {
       expect(await one.cli('login', '--provider', 'github')).toBe(ExitCode.OK);
@@ -74,23 +74,23 @@ describe('login, deposit, and pull against a local server', () => {
       expect(await one.cli('pull', '--harness-version', '2.1.314')).toBe(ExitCode.OK);
       readsAfter.push(fieldOf(one.last(), 'reads'));
     }
-    expect(readsAfter.slice(0, 2)).toEqual([0, 0]);
-    expect(readsAfter[2]).toBeGreaterThan(0);
+    expect(readsAfter.slice(0, 4)).toEqual([0, 0, 0, 0]);
+    expect(readsAfter[4]).toBeGreaterThan(0);
 
-    const [third] = people.slice(-1);
-    if (third === undefined) throw new Error('no third person');
-    const kept: unknown = JSON.parse(readFileSync(textOf(third.last(), 'file'), 'utf8'));
+    const [fifth] = people.slice(-1);
+    if (fifth === undefined) throw new Error('no fifth person');
+    const kept: unknown = JSON.parse(readFileSync(textOf(fifth.last(), 'file'), 'utf8'));
     const verified = await verifyBundle(kept, pool.signingKey(), '2.1.314');
     if (!verified.ok) throw new Error(verified.reason);
-    for (const read of verified.bundle.reads) expect(read.clusters).toBe(3);
+    for (const read of verified.bundle.reads) expect(read.clusters).toBe(5);
 
     const db = await pool.db();
-    expect(await db.prepare('SELECT COUNT(DISTINCT account) AS count FROM deposits').first('count')).toBe(3);
-    expect(await db.prepare('SELECT COUNT(*) AS count FROM deposits').first('count')).toBe(12);
+    expect(await db.prepare('SELECT COUNT(DISTINCT account) AS count FROM deposits').first('count')).toBe(5);
+    expect(await db.prepare('SELECT COUNT(*) AS count FROM deposits').first('count')).toBe(20);
   }, 60_000);
 
   it('refuses a pull with no sign-in, and sends nothing for a deposit with none', async () => {
-    const one = await person(pool, '4004');
+    const one = await person(pool, '4009');
     expect(await one.cli('pull', '--harness-version', '2.1.314')).toBe(ExitCode.AUTH);
     expect(await one.cli('deposit')).toBe(ExitCode.AUTH);
     expect(existsSync(join(one.staged.storeDir, 'pool-replica'))).toBe(false);

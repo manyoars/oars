@@ -31,8 +31,8 @@ const pulled = async (token: string, version = VERSION): Promise<Bundle> => {
   return verified.bundle;
 };
 
-describe('a bundle over three accounts', () => {
-  it('serves a read only at the third account, with clusters counted by account', async () => {
+describe('a bundle over five accounts', () => {
+  it('serves nothing at four accounts and a read at the fifth, with clusters counted by account', async () => {
     const first = await depositor('1001');
     expect((await pulled(first)).reads).toEqual([]);
     expect((await pulled(first)).cells).toEqual([]);
@@ -45,25 +45,54 @@ describe('a bundle over three accounts', () => {
     expect((await pulled(second)).reads).toEqual([]);
 
     await depositor('1003');
+    await depositor('1004');
+    const four = await pulled(first);
+    expect(four.reads).toEqual([]);
+    expect(four.cells).toEqual([]);
+
+    await depositor('1008');
     const slice = await pulled(first);
     expect(slice.reads.length).toBeGreaterThan(0);
-    for (const read of slice.reads) expect(read.clusters).toBe(3);
+    for (const read of slice.reads) expect(read.clusters).toBe(5);
     expect(new Set(slice.reads.map((read) => read.family)).has('fit')).toBe(true);
     expect(slice.cells.length).toBeGreaterThan(0);
-    for (const cell of slice.cells) expect(cell.clusters).toBe(3);
+    for (const cell of slice.cells) expect(cell.clusters).toBe(5);
     const fit = slice.reads.find((read) => read.family === 'fit' && read.slice.level === 'shape');
     expect(fit?.value).toMatchObject({ failed: 0 });
-    // Four deposits of two steps each.
-    expect(fit?.n).toBe(8);
+    // Six deposits of two steps each.
+    expect(fit?.n).toBe(12);
   });
 
-  it('serves rule 3 strata pool-wide: a language under the floor is withheld, one over it is served', async () => {
-    const token = await depositor('1004', { languages: ['python'] });
-    const bundle = await pulled(token);
-    expect(bundle.strata.find((cell) => cell.dimension === 'language' && cell.value === 'python')).toBeUndefined();
-    expect(bundle.strata.find((cell) => cell.dimension === 'language' && cell.value === 'typescript')).toMatchObject({ clusters: 3 });
+  it('serves rule 3 strata pool-wide: a language over the floor is served, whatever the stack of the rest', async () => {
+    for (const id of ['1011', '1012', '1013', '1014']) await depositor(id, { languages: ['python'] });
+    const bundle = await pulled(await depositor('1015', { languages: ['python'] }));
+    expect(bundle.strata.find((cell) => cell.dimension === 'language' && cell.value === 'python')).toMatchObject({ clusters: 5 });
+    expect(bundle.strata.find((cell) => cell.dimension === 'language' && cell.value === 'typescript')).toMatchObject({ clusters: 5 });
     expect(bundle.reads.length).toBeGreaterThan(0);
   });
+
+  it('withholds a language held by four accounts', async () => {
+    const fresh = await startPool();
+    try {
+      const sign = async (id: string): Promise<string> => {
+        const { token } = await fresh.signIn('github', stubUser(id));
+        await fresh.post('/v1/covenant/accept', { version: 'v1' }, token);
+        expect((await fresh.post('/v1/deposits', sampleSkeleton(id.padStart(16, '0'), { languages: ['rust'] }), token)).status).toBe(201);
+        return token;
+      };
+      const strataOf = async (token: string): Promise<Bundle['strata']> => {
+        const verified = await verifyBundle((await fresh.get(`/bundle/${VERSION}/0`, token)).json, fresh.signingKey(), VERSION);
+        if (!verified.ok) throw new Error(verified.reason);
+        return verified.bundle.strata;
+      };
+      for (const id of ['2001', '2002', '2003']) await sign(id);
+      const token = await sign('2004');
+      expect(await strataOf(token)).toEqual([]);
+      expect((await strataOf(await sign('2005'))).find((cell) => cell.value === 'rust')).toMatchObject({ clusters: 5 });
+    } finally {
+      await fresh.dispose();
+    }
+  }, 60_000);
 
   it('names no stack in any key of a response', async () => {
     const { json } = await pool.get(`/bundle/${VERSION}/0`, await depositor('1006'));
@@ -127,16 +156,18 @@ describe('clusters over the cells of a read', () => {
   };
 
   // Cells split by day, so no single cell here holds more than one account: only the union over a read's cells can reach the floor.
-  it('three accounts on three different days serve a read with clusters 3, while their cells stay under the floor', async () => {
+  it('five accounts on five different days serve a read with clusters 5, while their cells stay under the floor', async () => {
     await inFreshPool(async (spread) => {
       await depositOn(spread, '3001', ['2026-11-01']);
       await depositOn(spread, '3002', ['2026-11-02']);
-      const token = await depositOn(spread, '3003', ['2026-11-03']);
+      await depositOn(spread, '3003', ['2026-11-03']);
+      expect((await readsIn(spread, await depositOn(spread, '3004', ['2026-11-04']))).reads).toEqual([]);
+      const token = await depositOn(spread, '3005', ['2026-11-05']);
       const slice = await readsIn(spread, token);
       const fit = slice.reads.find((read) => read.family === 'fit' && read.slice.level === 'shape');
-      expect(fit?.clusters).toBe(3);
-      expect(fit?.inputs).toHaveLength(3);
-      for (const read of slice.reads) expect(read.clusters).toBe(3);
+      expect(fit?.clusters).toBe(5);
+      expect(fit?.inputs).toHaveLength(5);
+      for (const read of slice.reads) expect(read.clusters).toBe(5);
       expect(slice.cells).toEqual([]);
     });
   }, 60_000);
@@ -168,7 +199,9 @@ describe('a stored row whose day no calendar holds', () => {
       };
       await deposited('5001');
       await deposited('5002');
-      const token = await deposited('5003');
+      await deposited('5003');
+      await deposited('5004');
+      const token = await deposited('5005');
 
       await stored(bad, 'acct_bad_one', '00000000000b0001', day);
       await stored(bad, 'acct_bad_two', '00000000000b0002', day);
@@ -177,9 +210,9 @@ describe('a stored row whose day no calendar holds', () => {
       expect(status).toBe(200);
       const verified = await verifyBundle(json, bad.signingKey(), VERSION);
       if (!verified.ok) throw new Error(verified.reason);
-      // The three good accounts still reach the floor, and the two bad rows add nothing to it.
+      // The five good accounts still reach the floor, and the two bad rows add nothing to it.
       expect(verified.bundle.reads.length).toBeGreaterThan(0);
-      for (const read of verified.bundle.reads) expect(read.clusters).toBe(3);
+      for (const read of verified.bundle.reads) expect(read.clusters).toBe(5);
     } finally {
       await bad.dispose();
     }
