@@ -243,8 +243,10 @@ export const runGateHook = async (stdin: string, deps: GateHookDeps): Promise<st
     if (decision.kind === 'note' && decision.text !== null) notes.push(decision.text);
     rows.push(recordOf(common, crossing, novelty, read, source, decision));
   }
+  // A call that holds a block prints only the deny, so a note row (shown or held) was never in front of the agent: it reads as no exposure, since a row cannot be backfilled.
+  const written = blocks.length > 0 ? rows.map((row) => (row.arm === 'none' ? row : { ...row, arm: 'none' as const, lineShown: 'none' as const, lineHeld: 'none' as const })) : rows;
   // The record first: an index line for a row that was never written would call the next crossing of the name old.
-  const record = { file: crossingsPath(deps.storeDir), text: rows.map((row) => `${JSON.stringify(row)}\n`).join('') };
+  const record = { file: crossingsPath(deps.storeDir), text: written.map((row) => `${JSON.stringify(row)}\n`).join('') };
   deps.stage?.(record);
   try {
     await append(record.file, record.text);

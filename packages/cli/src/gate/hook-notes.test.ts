@@ -128,8 +128,7 @@ describe('oars gate hook: a block, as a label', () => {
     ]);
   });
 
-  // Item 12, red until `runGateHook` rewrites the rows of a blocked call; skipped so the commit stays green.
-  it.skip('records no exposure for a note that was never printed: a call that holds a block prints only the deny', async () => {
+  it('records no exposure for a note that was never printed: a call that holds a block prints only the deny', async () => {
     const store = folder();
     withPolicy(store, '{"classes":{"not-found":"block"}}');
     const mixed: RegistryReader = (ask) => (ask.name === 'ghost-lib' ? missing(ask) : found()(ask));
@@ -140,7 +139,7 @@ describe('oars gate hook: a block, as a label', () => {
     ]);
   });
 
-  it.skip('records no held arm either for a note a block would have swallowed anyway', async () => {
+  it('records no held arm either for a note a block would have swallowed anyway', async () => {
     const store = folder();
     withPolicy(store, '{"classes":{"not-found":"block"},"holdbackPercent":100}');
     const mixed: RegistryReader = (ask) => (ask.name === 'ghost-lib' ? missing(ask) : found()(ask));
