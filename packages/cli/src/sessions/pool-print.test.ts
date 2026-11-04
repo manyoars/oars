@@ -59,8 +59,12 @@ describe('waitWords', () => {
   it.each([
     ['345600', 'in 4 days'],
     ['93600', 'in 1 day and 2 hours'],
+    ['93660', 'in 1 day and 3 hours'],
+    ['172740', 'in 2 days'],
     ['3660', 'in 1 hour and 1 minute'],
-    ['90', 'in 1 minute'],
+    ['3601', 'in 1 hour and 1 minute'],
+    ['3599', 'in 1 hour'],
+    ['90', 'in 2 minutes'],
     ['45', 'in 45 seconds'],
     ['1', 'in 1 second'],
     ['0', 'now'],

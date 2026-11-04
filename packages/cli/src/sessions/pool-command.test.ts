@@ -1161,7 +1161,7 @@ describe('oars pool fetch', () => {
       bundleRoute(scene, '2.1.314', [() => HttpResponse.json({ error: 'fetch_cap' }, { status: 429, headers: { 'retry-after': date } }), () => HttpResponse.json({ error: 'fetch_cap' }, { status: 429, headers: { 'retry-after': 'soon' } })]);
       expect(await scene.cli('pool', 'fetch', '--harness-version', '2.1.314', '--server', POOL)).toBe(ExitCode.CAPPED);
       expect(scene.h.err.join('')).toContain('Try again in 3 hours.');
-      expect(scene.h.err.join('')).toContain('No bundle is kept yet.');
+      expect(scene.h.err.join('')).toContain('No verified bundle is kept.');
       expect(await scene.cli('pool', 'fetch', '--harness-version', '2.1.314', '--server', POOL)).toBe(ExitCode.CAPPED);
       expect(existsSync(join(scene.staged.storeDir, 'pool-replica'))).toBe(false);
     });
