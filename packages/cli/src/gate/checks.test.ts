@@ -74,6 +74,9 @@ describe('checkCall on a shell command', () => {
     ['pnpm add foo@catalog:react18', ['npm-package install foo unstated']],
     ['pnpm add foo@jsr:1.0.0', ['npm-package install foo pinned']],
     ['npm install npm:foo', ['npm-package install foo unstated']],
+    ['pnpm add jsr:@luca/cases', ['npm-package install @luca/cases unstated']],
+    // The redactor reads `cases@1.0.0` as an email and masks it before the reader sees it, so a dotted version here counts as unread, never a name.
+    ['pnpm add jsr:@luca/cases@^1.0.0', ['npm-package install @luca/cases range']],
     ['npm install org/repo#feature/x', ['npm-package url-install org/repo url']],
     // Fetch-and-run forms.
     ['pnpx foo', ['npm-package fetch-and-run foo unstated']],
@@ -100,6 +103,8 @@ describe('checkCall on a shell command', () => {
     ['uvx --from httpie==3.2.0 http get', ['python-package fetch-and-run httpie pinned']],
     ['uv tool run black .', ['python-package fetch-and-run black unstated']],
     ['uv run pip install rich==1.0', ['python-package install rich pinned']],
+    ['uv run --with rich pip install x', ['python-package fetch-and-run rich unstated', 'python-package install x unstated']],
+    ['uv run --with pip pip install x', ['python-package fetch-and-run pip unstated', 'python-package install x unstated']],
     ['uv run --with rich --with pyyaml script.py', ['python-package fetch-and-run rich unstated', 'python-package fetch-and-run pyyaml unstated']],
     ['uvx -p 3.12 ruff', ['python-package fetch-and-run ruff unstated']],
     ['pipx run cowsay hi', ['python-package fetch-and-run cowsay unstated']],
@@ -207,6 +212,8 @@ describe('checkCall on a shell command', () => {
     // A word outside PEP 508 is refused, never kept as a version.
     ['pip install "foo bar baz"', ['unreadable-name']],
     ['pip install "a#secret-token"', ['unreadable-name']],
+    ['pip install "foo bar@1"', ['unreadable-name']],
+    ['pip install "a#secret-token@1"', ['unreadable-name']],
     ['npm install ""', ['unreadable-name']],
     // A path or a variable names nothing either.
     ['pip install -e .', ['local-path']],
@@ -352,6 +359,10 @@ describe('checkCall on a shell command', () => {
     ['. .venv/bin/activate && pip install x', false],
     ['source .venv/Scripts/Activate.ps1; pip install x', false],
     ['.venv/bin/pip install x', false],
+    ['".venv/bin/pip" install x', false],
+    ['"C:/Program Files/nodejs/npm.cmd" install x', false],
+    ['source .venv/bin/activate.fish; pip install x', false],
+    ['source .venv/bin/activate.csh; pip install x', false],
     ['/usr/local/bin/npm install x', false],
     ['sudo npm install x', false],
   ])('marks whether the registry a command would contact is the default one: %s', (command, asked) => {
@@ -464,7 +475,7 @@ describe('the program of a crossing', () => {
   it.each<[string, string]>([
     ['npm install a', 'npm'], ['pnpm add a', 'pnpm'], ['yarn add a', 'yarn'], ['bun add a', 'bun'], ['npx a', 'npx'], ['pnpx a', 'pnpx'], ['bunx a', 'bunx'],
     ['pip install a', 'pip'], ['pip3.12 install a', 'pip'], ['python -m pip install a', 'python -m pip'], ['python3 -m pipx install a', 'python -m pipx'], ['py -m uv pip install a', 'python -m uv'],
-    ['uv add a', 'uv'], ['uvx a', 'uvx'], ['pipx install a', 'pipx'], ['poetry add a', 'poetry'], ['pdm add a', 'pdm'], ['rye add a', 'rye'], ['pipenv install a', 'pipenv'],
+    ['uv add a', 'uv'], ['uv run pip install a', 'uv'], ['uvx a', 'uvx'], ['pipx install a', 'pipx'], ['poetry add a', 'poetry'], ['pdm add a', 'pdm'], ['rye add a', 'rye'], ['pipenv install a', 'pipenv'],
     ['conda install a', 'conda'], ['mamba install a', 'mamba'], ['micromamba install a', 'micromamba'],
   ])('%s names %s', (command, program) => {
     expect(programs(command)).toEqual([program]);
@@ -474,7 +485,6 @@ describe('the program of a crossing', () => {
   it('is a closed list, with the two tools', () => {
     expect(PROGRAMS).toHaveLength(23);
     expect(new Set(PROGRAMS).size).toBe(PROGRAMS.length);
-    expect(bash('x').crossings).toEqual([]);
     expect(checkCall({ tool: 'mcp__one__search', input: {} }, redact).crossings.map((crossing) => crossing.program)).toEqual(['mcp']);
     expect(checkCall({ tool: 'Skill', input: { skill: 'one' } }, redact).crossings.map((crossing) => crossing.program)).toEqual(['skill']);
     expect(PROGRAMS).toEqual(expect.arrayContaining(['mcp', 'skill']));

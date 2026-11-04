@@ -505,12 +505,13 @@ describe('the registry option', () => {
       bash(8, 't8', 'yarn add via-yarn'),
       bash(9, 't9', 'uv add via-uv'),
       bash(10, 't10', 'bun add via-bun'),
+      bash(11, 't11', 'uv run pip install via-uv-run'),
     ]);
     const reader = answering();
     await run([REPO], reader);
     expect(reader.mock.calls.map(([ask]) => ask.name).sort()).toEqual(['via-module', 'via-npm', 'via-npx', 'via-pip']);
     const { crossings } = await written();
-    expect(crossings.filter((row) => row.registryState === 'not-read').map((row) => row.name)).toEqual(['via-pnpm', 'via-poetry', 'via-conda', 'via-yarn', 'via-uv', 'via-bun']);
+    expect(crossings.filter((row) => row.registryState === 'not-read').map((row) => row.name)).toEqual(['via-pnpm', 'via-poetry', 'via-conda', 'via-yarn', 'via-uv', 'via-bun', 'via-uv-run']);
   });
 
   it('counts a kept answer older than the age limit as absent, by the clock of the run, and asks again', async () => {
