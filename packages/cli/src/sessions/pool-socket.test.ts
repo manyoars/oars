@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { run } from '../cli.js';
 import { ExitCode } from '../errors.js';
 import { harness } from '../test-support.js';
+import { VOCAB_VERSION } from './pool-wire.js';
 import { cleanup, stage } from './test-support.js';
 
 // These tests send over a real loopback socket, not through msw: msw answers above the HTTP layer, so it cannot see a header that Node's own `fetch` adds. What the server reads off the wire
@@ -110,11 +111,11 @@ describe('what is printed is what goes over the socket', () => {
     h.deps.sessions = staged.runtime;
     loop = await listen(h.err);
     const { x, sign } = await signer();
-    const payload = JSON.stringify({ format: 1, harnessVersion: '2.1.314', vocabVersion: '0', asOf: { pool: 'p' }, cells: [{}], motifs: [], reads: [{}], strata: [] });
+    const payload = JSON.stringify({ format: 1, harnessVersion: '2.1.314', vocabVersion: VOCAB_VERSION, asOf: { pool: 'p' }, cells: [{}], motifs: [], reads: [{}], strata: [] });
     loop.answers.set('POST /login/device/code', [json(200, { device_code: 'device-code-1', user_code: 'USER-1', verification_uri: 'https://provider.test/device', interval: 1, expires_in: 10 })]);
     loop.answers.set('POST /login/oauth/access_token', [json(200, { access_token: PROVIDER_TOKEN })]);
     loop.answers.set('POST /v1/login', [json(200, { token: POOL_TOKEN, account: 'acct_one', expiresAt: Date.parse('2099-01-01T00:00:00Z'), signingKey: { kty: 'OKP', crv: 'Ed25519', x } })]);
-    loop.answers.set('GET /bundle/2.1.314/0', [json(200, { payload, signature: await sign(payload) }, { etag: '"e1"' }), (response) => { response.writeHead(304, { etag: '"e1"' }); response.end(); }]);
+    loop.answers.set(`GET /bundle/2.1.314/${VOCAB_VERSION}`, [json(200, { payload, signature: await sign(payload) }, { etag: '"e1"' }), (response) => { response.writeHead(304, { etag: '"e1"' }); response.end(); }]);
     const cli = (...args: string[]): Promise<ExitCode> => run(args, h.deps);
 
     expect(await cli('pool', 'login', '--provider', 'github', '--server', loop.origin)).toBe(ExitCode.OK);
