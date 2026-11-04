@@ -1,4 +1,6 @@
 import { mkdirSync, statSync, utimesSync, writeFileSync } from 'node:fs';
+import type * as FsPromises from 'node:fs/promises';
+import { readdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -8,21 +10,13 @@ import { makeRepoIdentity, makeRepoRoot } from './repo-root.js';
 import { cleanup, stage, stageVscode } from './test-support.js';
 import { chatBadLines, chatData, chatLines, openVscodeCopilotStore, vscodeAppData } from './vscode-copilot.js';
 
-// A folder named here fails to list with EACCES, since a real denied folder cannot be made on every platform the suite runs on.
-const denied = vi.hoisted(() => new Set<string>());
+// `readdir` is wrapped so a test can make one listing fail with EACCES, which a real denied folder cannot do on every platform the suite runs on.
 vi.mock('node:fs/promises', async (importOriginal) => {
-  const real = await importOriginal<typeof import('node:fs/promises')>();
-  const readdir = (async (path: string, options: { withFileTypes: true }) => {
-    if (denied.has(path)) throw Object.assign(new Error(`EACCES: permission denied, scandir '${path}'`), { code: 'EACCES' });
-    return real.readdir(path, options);
-  }) as typeof real.readdir;
-  return { ...real, readdir };
+  const real = await importOriginal<typeof FsPromises>();
+  return { ...real, readdir: vi.fn(real.readdir) };
 });
 
-afterEach(() => {
-  denied.clear();
-  cleanup();
-});
+afterEach(cleanup);
 
 // Every fixture is written from the public source of microsoft/vscode @ f92b8f3adcd9bc034e6b9ade05c093dd59b99c5f (MIT), paths under src/vs/workbench/contrib/chat/common/:
 // the request `ISerializableChatRequestData` (model/chatModel.ts:2230-2259: requestId, message, response, timestamp, modelId, isSystemInitiated, hiddenFromTranscript) and the
@@ -379,7 +373,7 @@ describe('the VS Code Copilot Chat store', () => {
     expect(found?.files.map((file) => file.slice(file.lastIndexOf('.')))).toEqual(['.json', '.jsonl']);
     expect(found?.mtimeMs).toBe(Math.floor(statSync(join(dir, 'stale.json')).mtimeMs));
     expect(found?.size).toBe(statSync(join(dir, 'stale.json')).size);
-    expect(found && (await store?.transcript(found))).toContain('from json');
+    expect(found && (await store.transcript(found))).toContain('from json');
   });
 
   it('lists a folder it may not read once, with a reason that names no parent path, and reads the rest', async () => {
@@ -389,14 +383,16 @@ describe('the VS Code Copilot Chat store', () => {
       { id: 'hidden', data: data('hidden') },
     ]);
     const empty = join(appData, 'Code', 'User', 'globalStorage', 'emptyWindowChatSessions');
-    denied.add(empty);
+    vi.mocked(readdir).mockRejectedValueOnce(Object.assign(new Error(`EACCES: permission denied, scandir '${empty}'`), { code: 'EACCES' }));
     const store = await openVscodeCopilotStore(appData);
     expect(store?.sessions.map((session) => session.id)).toEqual(['kept']);
     expect(store?.unreadable).toEqual([{ file: empty, reason: "EACCES: permission denied, scandir 'emptyWindowChatSessions'" }]);
-    denied.clear();
-    denied.add(join(appData, 'Code', 'User', 'workspaceStorage'));
+    // The listing of the empty-window folder comes first, then the workspace storage.
+    const storage = join(appData, 'Code', 'User', 'workspaceStorage');
+    vi.mocked(readdir).mockRejectedValueOnce(Object.assign(new Error(`ENOENT: no such file, scandir '${empty}'`), { code: 'ENOENT' }));
+    vi.mocked(readdir).mockRejectedValueOnce(Object.assign(new Error(`EACCES: permission denied, scandir '${storage}'`), { code: 'EACCES' }));
     const blocked = await openVscodeCopilotStore(appData);
-    expect(blocked?.sessions.map((session) => session.id)).toEqual(['hidden']);
+    expect(blocked?.sessions).toEqual([]);
     expect(blocked?.unreadable.map((entry) => entry.reason)).toEqual(["EACCES: permission denied, scandir 'workspaceStorage'"]);
   });
 
