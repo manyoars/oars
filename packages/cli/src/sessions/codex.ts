@@ -24,6 +24,12 @@
 //   response_item function_call_output {call_id, output}   a shell call's outcome: the text `Exit code: N` / `Process exited with code N` then `Output:`
 //                       (core/src/tools/mod.rs:107-113, context.rs:556), the real exit code; `execution error: ...` (core/src/tools/events.rs:438) is a
 //                       call that failed to spawn. `write_stdin` (handlers/shell_spec.rs:113) is a shell call too: the process it polls ends there
+//   event_msg item_completed CommandExecution {id, exit_code, status, aggregated_output}   Paginated mode only (policy.rs:253 arm, kept by `_ =>` :284; Legacy
+//                       keeps none, :238-251). `id` is the exec_command's call id (events.rs:571), written when the process exits (events.rs:561-590):
+//                       by the exit watcher for a process the model never polled (unified_exec/async_watcher.rs:158, :224), or by the call itself when it exits in
+//                       its first yield (process_manager.rs:827). It settles a known unresolved shell call from the real `exit_code` and the output; a
+//                       `declined` one (exit code -1, events.rs:552-554) settles nothing. So a backgrounded process keeps its failure and its commit sha
+//                       even with no `write_stdin` poll; only a Legacy rollout leaves it unsettled until a poll
 //   event_msg mcp_tool_call_end {call_id, result}   an MCP call's outcome: `result.Err`, or `result.Ok.isError` (protocol.rs:3047, :3076); Legacy mode only
 //   event_msg patch_apply_end {call_id, success, stderr, status}   an apply_patch call's outcome (Legacy mode only); a declined one settles nothing, and a
 //                       patch with no end event stays unsettled (a rejected patch is only a `RespondToModel` output, tools/handlers/apply_patch.rs)
@@ -259,7 +265,9 @@ export const rolloutLines = (text: string, fallbackId: string, parentText?: stri
     open ??= line;
   };
   // A failure is the error text; a success carries the call's own output when it has one, which capture reads transiently, as on the Claude Code
-  // path: a shell call's `[branch sha]` line is how a commit's sha is found.
+  // path: a shell call's `[branch sha]` line is how a commit's sha is found. The output follows an `Exit code 0` line, the shape a Claude Code Bash
+  // result has (fixtures/proj/errors-a.jsonl:15): capture marks a result whose text starts `Exit code <nonzero>` as failed (extract.ts:125-129), and a
+  // call that exited 0 may print such a line (`cat ci.log`). The commit patterns read every line (`gm`, extract.ts:978, :980), so the sha is still found.
   const result = (id: string, failure: string | undefined, when: string, output = ''): void => {
     sequence += 1;
     lines.push({
@@ -269,7 +277,8 @@ export const rolloutLines = (text: string, fallbackId: string, parentText?: stri
       timestamp: when,
       // Codex stamps a result with its own time, but the call's start is not paired to it, so no duration is claimed.
       noDuration: true,
-      message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: id, is_error: failure !== undefined, content: failure ?? output }] },
+      message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: id, is_error: failure !== undefined, content: failure ?? (output === '' ? '' : `Exit code 0
+${output}`) }] },
     });
   };
   const prompted = (message: string, when: string): void => {
@@ -287,6 +296,20 @@ export const rolloutLines = (text: string, fallbackId: string, parentText?: stri
     resolved.add(id);
     result(id, failure, when);
   };
+  // A shell call settles on its exit code, or on a failure to spawn, whether that comes from its own output or from a CommandExecution item. A
+  // process still running was remembered by its session id, so the one outcome that sees it exit (the `write_stdin` that polled it, or its item)
+  // settles both calls.
+  const settleShell = (id: string, failure: string | undefined, output: string, when: string): void => {
+    const known = calls.get(id);
+    if (known?.kind !== 'shell' || resolved.has(id)) return;
+    resolved.add(id);
+    result(id, failure, when, output);
+    const pending = known.session === undefined ? undefined : running.get(known.session);
+    if (pending !== undefined && !resolved.has(pending)) {
+      resolved.add(pending);
+      result(pending, failure, when, output);
+    }
+  };
   // The text of a TurnItem's content array. Each variant tags its own parts: a UserMessage's `UserInput` is snake_case, `text` (user_input.rs:16), but an
   // AgentMessage's `AgentMessageContent` has no rename_all, so it is `Text` (items.rs:131-135).
   const contentText = (content: unknown, tag: string): string => (Array.isArray(content) ? content.map((part) => (isObj(part) && part.type === tag ? (str(part.text) ?? '') : '')).filter((part) => part !== '').join('\n') : '');
@@ -302,6 +325,12 @@ export const rolloutLines = (text: string, fallbackId: string, parentText?: stri
       if (message !== '') assistant([{ type: 'text', text: message }], when);
     } else if (kind === 'FileChange' && id !== undefined && (item.status === 'completed' || item.status === 'failed')) {
       settlePatch(id, item.status === 'failed' ? (str(item.stderr) ?? 'patch failed') : undefined, when);
+    } else if (kind === 'CommandExecution' && id !== undefined && (item.status === 'completed' || item.status === 'failed')) {
+      // The exec_command's own item: `id` is its call id, written when the process exits, even one the model never polled (header). It carries the
+      // real exit code and the output. A `declined` one has exit code -1 and no outcome, so it stays unsettled, as a declined output does.
+      const exit = num(item.exit_code);
+      const output = str(item.aggregated_output) ?? '';
+      if (exit !== undefined) settleShell(id, failureOf(exit, output), output, when);
     } else if (kind === 'McpToolCall' && id !== undefined && (item.status === 'completed' || item.status === 'failed')) {
       const refused = isObj(item.result) && item.result.isError === true;
       const failed = item.status === 'failed' || refused;
@@ -446,16 +475,8 @@ export const rolloutLines = (text: string, fallbackId: string, parentText?: stri
           if (known.kind === 'shell') {
             // A shell call settles on its exit code, or on a failure to spawn. A process still running stays unsettled and is remembered by its
             // session id, so the `write_stdin` that sees it exit settles it too. A declined call has neither, and stays unsettled.
-            if (out.exit !== undefined || out.spawnError) {
-              resolved.add(id);
-              const failure = out.spawnError ? out.text : failureOf(out.exit, out.text);
-              result(id, failure, when, out.text);
-              const pending = known.session === undefined ? undefined : running.get(known.session);
-              if (pending !== undefined && !resolved.has(pending)) {
-                resolved.add(pending);
-                result(pending, failure, when, out.text);
-              }
-            } else if (out.running !== undefined && known.session === undefined) running.set(out.running, id);
+            if (out.exit !== undefined || out.spawnError) settleShell(id, out.spawnError ? out.text : failureOf(out.exit, out.text), out.text, when);
+            else if (out.running !== undefined && known.session === undefined) running.set(out.running, id);
           } else if (known.kind === 'other') {
             // Another call's output carries no failure signal (an MCP call's comes from its mcp_tool_call_end), and a patch settles only from its
             // patch_apply_end, because a rejected patch comes back as plain output text (tools/handlers/apply_patch.rs).

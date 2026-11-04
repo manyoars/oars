@@ -528,12 +528,12 @@ describe('Paginated rollouts', () => {
     expect(lines).toEqual([]);
   });
 
-  // A CommandExecution TurnItem is persisted in a Paginated rollout (policy.rs:253 arm, kept by `_ =>` at :285; a Legacy one keeps only
-  // FunctionCallOutput, Plan, Sleep, and a completed SubAgentActivity, :238-251). Its `id` is the exec_command's call id (core/src/tools/events.rs:572),
-  // with `exit_code` and `aggregated_output` (protocol/src/items.rs:252-290), written when the process exits (events.rs:570-585): by the exit watcher for
+  // A CommandExecution TurnItem is persisted in a Paginated rollout (policy.rs:253 arm, kept by `_ =>` at :284; a Legacy one keeps only
+  // FunctionCallOutput, Plan, Sleep, and a completed SubAgentActivity, :238-251). Its `id` is the exec_command's call id (core/src/tools/events.rs:571),
+  // with `exit_code` and `aggregated_output` (protocol/src/items.rs:252-290), written when the process exits (events.rs:561-590): by the exit watcher for
   // a process the model never polls (core/src/unified_exec/async_watcher.rs:158, :224), or by the call itself when it exits in its first yield
-  // (process_manager.rs:827). `status` is Completed on exit code 0 and Failed otherwise (events.rs:527-536); a rejected call is Declined with exit code -1
-  // (:552-556).
+  // (process_manager.rs:827). `status` is Completed on exit code 0 and Failed otherwise (events.rs:530-534); a rejected call is Declined with exit code -1
+  // (:552-554).
   describe('a CommandExecution item (items.rs:252-290)', () => {
     const running = 'Chunk ID: ab12\nWall time: 0.0100 seconds\nProcess running with session ID 9\nOriginal token count: 3\nOutput:\n';
     const execCall = (second: number, id: string, cmd: string) => call(second, id, 'exec_command', { arguments: JSON.stringify({ cmd }) });
@@ -578,7 +578,7 @@ describe('Paginated rollouts', () => {
       expect(outputFirst.errorLines.map((entry) => entry.line)).toEqual(['boom']);
     });
 
-    it('leaves a Declined item unsettled (exit code -1, events.rs:552-556), an item with no exit_code (an Option, skipped when None, items.rs:284-286), and an item for a call it never saw', () => {
+    it('leaves a Declined item unsettled (exit code -1, events.rs:552-554), an item with no exit_code (an Option, skipped when None, items.rs:284-286), and an item for a call it never saw', () => {
       begin();
       const out = extractOf([
         pmeta(),
