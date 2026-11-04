@@ -39,7 +39,7 @@ export const discover = async (roots: readonly string[], allow: Allow): Promise<
   const files: TranscriptFile[] = [];
   let unreadable = 0;
   for (const root of roots) {
-    // The source table's folders (Cursor, Codex) hold no transcript files: replay does not read them, and a project folder is never named for one.
+    // Replay reads only the harness's transcript format: a source-table folder (Cursor, Codex) is not that format, and a project folder is never named for one.
     const projects = (await listDir(root)).filter((entry) => entry.isDirectory() && !SOURCES.some((source) => source.name === entry.name) && allow.allows(entry.name));
     for (const project of projects) {
       try {
@@ -107,7 +107,7 @@ const NOT_FOUND: readonly RegExp[] = [
   /\bE404\b|404 Not Found|is not in this registry|could not determine executable/i,
   /No matching distribution|Could not find a version|404 Client Error|Package .{0,200} not found/i,
   // The harness says "No such tool available". A server's own "unknown tool" names one of its actions (a batch step), so the server exists.
-  /No such tool|server .{0,200} not (?:found|connected)/i,
+  /No such tool available|server .{0,200} not (?:found|connected)/i,
   /Unknown skill|skill .{0,200} not found/i,
 ];
 

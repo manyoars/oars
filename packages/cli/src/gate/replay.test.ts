@@ -225,10 +225,12 @@ describe('a crossing record', () => {
       result(2, 'b1', 'actions[2] (shot) failed: unknown tool "shot" (2 completed, 0 remaining)', true),
       use(3, 'b2', 'mcp__gone__run', {}),
       result(4, 'b2', 'Error: No such tool available: mcp__gone__run', true),
+      use(5, 'b3', 'mcp__stepper__run', {}),
+      result(6, 'b3', 'step 3 failed: no such tool "snap"', true),
     ]);
     await run([REPO]);
     const { crossings } = await written();
-    expect(crossings.map((row) => `${row.name}: ${row.miss}`)).toEqual(['batcher: none', 'gone: not-found']);
+    expect(crossings.map((row) => `${row.name}: ${row.miss}`)).toEqual(['batcher: none', 'gone: not-found', 'stepper: none']);
   });
 
   it('reads an MCP server the harness listed only as tool names (mcp__server__tool) as harness, not as a later mention', async () => {
