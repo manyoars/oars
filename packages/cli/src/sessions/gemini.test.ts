@@ -120,6 +120,16 @@ describe('the Gemini CLI reader', () => {
     expect(out.errorLines.map((error) => error.line)).toEqual(['partial', '[Operation Cancelled] User cancelled tool execution.']);
   });
 
+  it('records a call the user denied at the confirmation prompt as user-rejected, and a cancellation that names no user as other', () => {
+    const refusal = (id: string, error: string) => call(id, 'run_shell_command', { command: 'x' }, 'cancelled', 3, reply(id, 'run_shell_command', { error }));
+    const out = extractOf([
+      head,
+      prompt(1, 'x'),
+      say(2, '', { toolCalls: [refusal('a', '[Operation Cancelled] Reason: User denied execution.'), refusal('b', '[Operation Cancelled] Reason: Operation cancelled.')] }),
+    ]);
+    expect(out.tools.map((tool) => [tool.status, tool.errorCode ?? null])).toEqual([['error', 'user-rejected'], ['error', 'other']]);
+  });
+
   it('unwraps an error result to its message, never the wrapper, so the error line joins a Claude Code signature', () => {
     const out = extractOf([
       head,
