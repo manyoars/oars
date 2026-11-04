@@ -40,6 +40,15 @@ const takeLock = async (path: string, now: number): Promise<boolean> => {
   return create(path);
 };
 
+/** Whether a helper holds the name now: the lock is there and younger than `FILL_LOCK_MS`. The hook asks nothing of the manager itself while it is, so one name has one ask. */
+export const isLocked = async (storeDir: string, ask: Pick<FillAsk, 'class' | 'name'>, now: number): Promise<boolean> => {
+  const held = await stat(lockPath(storeDir, ask)).then(
+    (found) => found.mtimeMs,
+    () => undefined,
+  );
+  return held !== undefined && now - held < FILL_LOCK_MS;
+};
+
 /**
  * Called by the hook after a cut ask: takes the lock and starts the helper. Nothing here throws into the hook: a store that cannot be written, or a helper that cannot
  * start, is an answer that does not come, which the next sight asks about again.

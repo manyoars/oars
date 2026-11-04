@@ -7,7 +7,7 @@ import { performance } from 'node:perf_hooks';
 import { fileURLToPath } from 'node:url';
 import { defaultConfigDir } from '../credentials.js';
 import { DEADLINE_MS, type GateHookDeps } from './hook.js';
-import { startFill, type FillAsk } from './hook-fill.js';
+import { isLocked, startFill, type FillAsk } from './hook-fill.js';
 import { runHookProcess } from './hook-process.js';
 import { managerReader } from './registry.js';
 
@@ -38,6 +38,7 @@ const depsFor = (stage: NonNullable<GateHookDeps['stage']>): GateHookDeps => {
     deadlineMs: DEADLINE_MS,
     registry: managerReader(undefined, DEADLINE_MS),
     fill: (ask) => startFill(storeDir, ask, Date.now(), startHelper),
+    locked: (ask) => isLocked(storeDir, ask, Date.now()),
     stage,
   };
 };

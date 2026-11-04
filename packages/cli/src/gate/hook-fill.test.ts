@@ -2,7 +2,7 @@ import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, utimesSync 
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { FILL_LOCK_MS, runFill, startFill, type FillAsk } from './hook-fill.js';
+import { FILL_LOCK_MS, isLocked, runFill, startFill, type FillAsk } from './hook-fill.js';
 import { parseRows } from './record.js';
 import type { RegistryAnswer, RegistryReader } from './registry.js';
 
@@ -21,6 +21,17 @@ const NOW = Date.parse('2026-11-04T10:00:00.000Z');
 const ASK: FillAsk = { class: 'npm-package', name: 'slow-lib', cwd: tmpdir() };
 const lockOf = (dir: string): string | undefined => readdirSync(dir).find((name) => name.endsWith('.lock'));
 const cacheOf = (dir: string) => parseRows(readFileSync(join(dir, 'gate-registry.jsonl'), 'utf8'));
+
+describe('the fill: is the name locked', () => {
+  it('is true while a lock younger than the window is held, false with none, an old one, or an unreadable store', async () => {
+    const dir = store();
+    expect(await isLocked(dir, ASK, NOW)).toBe(false);
+    await startFill(dir, ASK, NOW, vi.fn());
+    expect(await isLocked(dir, ASK, NOW + 1000)).toBe(true);
+    expect(await isLocked(dir, { ...ASK, name: 'other-lib' }, NOW + 1000)).toBe(false);
+    expect(await isLocked(dir, ASK, Date.now() + FILL_LOCK_MS + 1000)).toBe(false);
+  });
+});
 
 describe('the fill: starting the helper', () => {
   it('starts one helper per name, however many sights come while it asks', async () => {

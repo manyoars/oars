@@ -37,17 +37,36 @@ const fakeNpm = (): { folder: string; marker: string } => {
   return { folder, marker };
 };
 
-// A manager that answers 2 s late, past the hook's 650 ms cut: a script that sleeps, then prints what `npm view` prints. It logs each start, one line apiece.
+// A manager that answers 2 s late, past the hook's 650 ms cut: a script that sleeps, then prints what `npm view` prints. It logs each start and each finish, one line apiece, so a
+// run that was killed leaves a start and no finish.
 const slowNpm = (): { folder: string; log: string } => {
   const folder = mkdtempSync(join(tmpdir(), 'oars-gate-slownpm-'));
   made.push(folder);
   const log = join(folder, 'npm-starts');
   const answer = '{"dist-tags.latest":"1.0.0","time.created":"2020-01-01T00:00:00.000Z"}';
-  writeFileSync(join(folder, 'npm'), `#!/bin/sh\necho started >> "${log}"\nsleep 2\necho '${answer}'\n`);
+  writeFileSync(join(folder, 'npm'), `#!/bin/sh\necho started >> "${log}"\nsleep 2\necho ended >> "${log}"\necho '${answer}'\n`);
   chmodSync(join(folder, 'npm'), 0o755);
-  writeFileSync(join(folder, 'npm.cmd'), `@echo off\r\necho started>> "${log}"\r\nping -n 3 127.0.0.1 >nul\r\necho ${answer}\r\n`);
+  writeFileSync(join(folder, 'npm.cmd'), `@echo off\r\necho started>> "${log}"\r\nping -n 3 127.0.0.1 >nul\r\necho ended>> "${log}"\r\necho ${answer}\r\n`);
   return { folder, log };
 };
+
+// A manager that is down: it takes 2 s, then fails the way `npm view` does against an unreachable registry. Same log as `slowNpm`.
+const downNpm = (): { folder: string; log: string } => {
+  const folder = mkdtempSync(join(tmpdir(), 'oars-gate-downnpm-'));
+  made.push(folder);
+  const log = join(folder, 'npm-starts');
+  writeFileSync(join(folder, 'npm'), `#!/bin/sh\necho started >> "${log}"\nsleep 2\necho ended >> "${log}"\necho 'npm error code ECONNREFUSED' >&2\nexit 1\n`);
+  chmodSync(join(folder, 'npm'), 0o755);
+  writeFileSync(join(folder, 'npm.cmd'), `@echo off\r\necho started>> "${log}"\r\nping -n 3 127.0.0.1 >nul\r\necho ended>> "${log}"\r\necho npm error code ECONNREFUSED 1>&2\r\nexit /b 1\r\n`);
+  return { folder, log };
+};
+
+const pause = (ms: number): void => {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+};
+
+/** How many lines of the manager's log read `word`. */
+const logged = (log: string, word: 'started' | 'ended'): number => (existsSync(log) ? readFileSync(log, 'utf8').split(/\r?\n/).filter((line) => line.trim() === word).length : 0);
 
 // A manager that answers an `E404` at once, as `npm view` does for a name the registry it is configured for does not have.
 const missingNpm = (): string => {
@@ -101,8 +120,11 @@ describe.skipIf(!existsSync(bin))('the built oars gate hook', () => {
     expect(first.status).toBe(0);
     const cache = join(first.home, 'oars', 'sessions', 'gate-registry.jsonl');
     // The helper outlives the hook: wait for its answer to land before the next sight, and before cleanup removes the home under it.
-    for (let waited = 0; waited < 30_000 && !existsSync(cache); waited += 250) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 250);
+    for (let waited = 0; waited < 30_000 && !existsSync(cache); waited += 250) pause(250);
     expect(existsSync(cache)).toBe(true);
+    // One ask at a time per name: the hook's own ask was stopped before the helper began, so it never finished. Two starts, one finish.
+    expect(logged(npm.log, 'started')).toBe(2);
+    expect(logged(npm.log, 'ended')).toBe(1);
     const second = runHook(payload.replace('"u1"', '"u2"'), [], npm.folder, first.home);
     expect(second.status).toBe(0);
     expect(second.stdout).toBe('');
@@ -110,6 +132,23 @@ describe.skipIf(!existsSync(bin))('the built oars gate hook', () => {
     const rows: unknown[] = readFileSync(join(first.home, file ?? ''), 'utf8').trim().split('\n').map((line): unknown => JSON.parse(line));
     expect(rows).toMatchObject([{ registryState: 'not-read' }, { registryState: 'found' }]);
   });
+
+  it('asks a down manager once, not once per sight, while the lock is held', () => {
+    const payload = JSON.stringify({ session_id: 's1', tool_use_id: 'u1', tool_name: 'Bash', tool_input: { command: 'npm install down-lib' }, cwd: tmpdir(), permission_mode: 'default' });
+    const npm = downNpm();
+    const first = runHook(payload, [], npm.folder);
+    expect(first.status).toBe(0);
+    // The helper's ask fails after its 2 s; wait for that finish (the hook's own, stopped ask never finishes), then let its process end.
+    for (let waited = 0; waited < 30_000 && logged(npm.log, 'ended') < 1; waited += 250) pause(250);
+    pause(1000);
+    expect(runHook(payload.replace('"u1"', '"u2"'), [], npm.folder, first.home).status).toBe(0);
+    expect(runHook(payload.replace('"u1"', '"u3"'), [], npm.folder, first.home).status).toBe(0);
+    pause(1500);
+    expect(logged(npm.log, 'started')).toBe(2);
+    const [file] = crossingFiles(first.home);
+    const rows: unknown[] = readFileSync(join(first.home, file ?? ''), 'utf8').trim().split('\n').map((line): unknown => JSON.parse(line));
+    expect(rows).toMatchObject([{ registryState: 'not-read' }, { registryState: 'not-read' }, { registryState: 'not-read' }]);
+  }, 60_000);
 
   it('prints a labeled deny on stdout and exits 0 when the policy says block and the manager answered not found', () => {
     const home = mkdtempSync(join(tmpdir(), 'oars-gate-bin-'));

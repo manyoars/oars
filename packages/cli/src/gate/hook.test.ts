@@ -367,6 +367,56 @@ describe('oars gate hook: the deadline', () => {
   });
 });
 
+describe('oars gate hook: one ask per name', () => {
+  it('does not ask while the name is locked, and hands nothing over', async () => {
+    const store = folder();
+    const reader = vi.fn<RegistryReader>(found('1.0.0'));
+    const fill = vi.fn<NonNullable<GateHookDeps['fill']>>(() => Promise.resolve());
+    const locked = vi.fn<NonNullable<GateHookDeps['locked']>>(() => Promise.resolve(true));
+    await gateHook(payload('npm install left-pad'), depsFor(store, { registry: reader, fill, locked }));
+    expect(locked).toHaveBeenCalledWith({ class: 'npm-package', name: 'left-pad', cwd: tmpdir() });
+    expect(reader).not.toHaveBeenCalled();
+    expect(fill).not.toHaveBeenCalled();
+    expect(rowsOf(store).map((row) => row.registryState)).toEqual(['not-read']);
+  });
+
+  it('asks when the name is not locked, and a lock check that throws does not stop the ask', async () => {
+    const store = folder();
+    const reader = vi.fn<RegistryReader>(found('1.0.0'));
+    await gateHook(payload('npm install left-pad', { tool_use_id: 'a' }), depsFor(store, { registry: reader, locked: () => Promise.resolve(false) }));
+    await gateHook(payload('npm install other-lib', { tool_use_id: 'b' }), depsFor(store, { registry: reader, locked: () => Promise.reject(new Error('no store')) }));
+    expect(reader).toHaveBeenCalledTimes(2);
+  });
+
+  it('stops its own ask before it hands the name over, so the manager is never asked twice at once', async () => {
+    const store = folder();
+    let signal: AbortSignal | undefined;
+    const registry: RegistryReader = (ask) => {
+      signal = ask.signal;
+      return new Promise<RegistryAnswer>(() => undefined);
+    };
+    const aborted: boolean[] = [];
+    const fill = vi.fn<NonNullable<GateHookDeps['fill']>>(() => {
+      aborted.push(signal?.aborted ?? false);
+      return Promise.resolve();
+    });
+    await gateHook(payload('npm install left-pad'), depsFor(store, { registry, clock: () => 0, deadlineMs: 400, fill }));
+    expect(signal).toBeDefined();
+    expect(aborted).toEqual([true]);
+  });
+
+  it('leaves an ask that answered alone', async () => {
+    const store = folder();
+    let signal: AbortSignal | undefined;
+    const registry: RegistryReader = (ask) => {
+      signal = ask.signal;
+      return found('1.0.0')(ask);
+    };
+    await gateHook(payload('npm install left-pad'), depsFor(store, { registry }));
+    expect(signal?.aborted).toBe(false);
+  });
+});
+
 describe('oars gate hook: finishing a cut ask', () => {
   const stalled: RegistryReader = () => new Promise<RegistryAnswer>(() => undefined);
 
