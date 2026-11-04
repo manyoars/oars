@@ -249,7 +249,7 @@ export const chatLines = (data: Obj, fallbackId: string, folder: string | null):
     // Each call's result, in call order, written after the response line: a tool call has its result in the next transcript line.
     const results: { id: string; failure: string | undefined; output: string; when: string }[] = [];
     let pending = '';
-    let current: { block: Obj; id: string; failure: string | undefined; edits: number; when: string } | undefined;
+    let current: { block: Obj; id: string; failure: string | undefined; known: boolean; edits: number; when: string } | undefined;
     const flush = (): void => {
       if (pending !== '') content.push({ type: 'text', text: pending });
       pending = '';
@@ -265,7 +265,7 @@ export const chatLines = (data: Obj, fallbackId: string, folder: string | null):
         else {
           const id = `${current.id}:${String(current.edits + 1)}`;
           content.push({ type: 'tool_use', id, name: current.block.name, native: current.block.native, input: { file_path: path } });
-          results.push({ id, failure: current.failure, output: '', when: current.when });
+          if (current.known) results.push({ id, failure: current.failure, output: '', when: current.when });
         }
         current.edits += 1;
       } else if (part.kind === 'toolInvocationSerialized') {
@@ -312,7 +312,7 @@ export const chatLines = (data: Obj, fallbackId: string, folder: string | null):
         // (model/chatProgressTypes/chatToolInvocation.ts:508,516-517). Neither says it succeeded.
         else if (isShell || confirmed === undefined || (isObj(part.summary) && part.summary.kind === 'incomplete')) known = false;
         if (known) results.push({ id, failure, output: isShell ? output : '', when: callWhen });
-        if (block.name === 'Edit' || block.name === 'Write') current = { block, id, failure, edits: 0, when: callWhen };
+        if (block.name === 'Edit' || block.name === 'Write') current = { block, id, failure, known, edits: 0, when: callWhen };
       }
     }
     flush();

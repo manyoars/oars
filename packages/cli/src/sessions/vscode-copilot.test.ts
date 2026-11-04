@@ -132,6 +132,31 @@ describe('the VS Code Copilot Chat reader', () => {
     expect(out.errorLines.map((entry) => entry.line)).toEqual(['spawn failed']);
   });
 
+  it('stores no file of an unfinished or post-approval-skipped edit as a success, and a finished edit keeps every file', () => {
+    // The edit's files are `textEditGroup` parts after the call (model/chatModel.ts:1316); the call carries one outcome for all of them (chatToolInvocation.ts:508,516).
+    const files = (id: string, extra: object) => [tool(id, 'multi_replace_string_in_file', extra), edited('/work/app/a.ts'), edited('/work/app/b.ts')];
+    const out = extractOf(
+      chat([
+        request(1, 'x', [
+          ...files('c1', { isConfirmed: undefined, summary: { kind: 'incomplete' } }),
+          ...files('c2', { isConfirmed: { type: 5 } }),
+          ...files('c3', { isConfirmed: { type: 5, source: 'user' } }),
+          ...files('c4', {}),
+        ]),
+      ]),
+    );
+    expect(out.tools.map((entry) => [entry.steps?.[0]?.action, entry.status])).toEqual([
+      ['file.edit', 'none'],
+      ['file.edit', 'none'],
+      ['file.edit', 'none'],
+      ['file.edit', 'none'],
+      ['file.edit', 'error'],
+      ['file.edit', 'error'],
+      ['file.edit', 'ok'],
+      ['file.edit', 'ok'],
+    ]);
+  });
+
   it('records a failed non-shell call and an edit that failed, which is still an edit by name, as errors, and reads an MCP tool failure message from its embed array', () => {
     // `IToolResultInputOutputDetails.output` is an array of `{type:'embed', value, isText}` (common/tools/languageModelToolsService.ts:290-296, written as an array at
     // contrib/mcp/common/mcpLanguageModelToolContribution.ts:279-280); a plain string output is the older spelling (`isToolResultInputOutputDetails`, :305).
