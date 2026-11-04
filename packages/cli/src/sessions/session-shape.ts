@@ -127,7 +127,8 @@ const firstLine = (content: unknown): string => firstText(content).trimStart().s
 
 const pluginOf = (tool: string): string | undefined => PLUGIN_TOOL_RE.exec(tool)?.[1];
 
-export const createShape = (harness: Harness, redact: (text: string) => string, options: { timing: boolean }): ShapeCollector => {
+/** `stored` is the stored form of a tool name (`storedToolName`): every name this keeps is a tool name, an MCP server's part redacted. */
+export const createShape = (harness: Harness, stored: (tool: string) => string, options: { timing: boolean }): ShapeCollector => {
   const complete = COMPLETE[harness];
   const modes = new Map<string, number>();
   /** Hooks seen to fire, by the name the harness gives them (`PreToolUse:Bash`, `Stop`). */
@@ -162,7 +163,8 @@ export const createShape = (harness: Harness, redact: (text: string) => string, 
   };
   const noted = (tool: string): void => {
     // The `mcp__plugin_<plugin>_` naming is Claude Code's; another harness's tool of that shape is not evidence of a plugin.
-    const plugin = harness === 'claude-code' ? pluginOf(tool) : undefined;
+    // Read from the stored form, so a plugin named with a token reads as none rather than as the token.
+    const plugin = harness === 'claude-code' && tool.startsWith('mcp__plugin_') ? pluginOf(stored(tool)) : undefined;
     if (plugin !== undefined) plugins.add(plugin);
   };
   const offer = (list: string[]): void => {
@@ -312,18 +314,18 @@ export const createShape = (harness: Harness, redact: (text: string) => string, 
           setup.permissionMode = value;
         }
       }
-      if (plugins.size > 0) setup.plugins = [...plugins].map(redact).sort();
+      if (plugins.size > 0) setup.plugins = [...plugins].sort();
       const hookTotal = hooks.size + (stopSeen ? 0 : stopCommands.size);
       if (hookTotal > 0) setup.hookCount = hookTotal;
       if (memory.size > 0) setup.instructionBytes = [...memory.values()].reduce((sum, bytes) => sum + bytes, 0);
       if (Object.keys(setup).length > 0) out.setup = setup;
 
       const funnel: SessionFunnel = {};
-      const sideOf = (which: 'offered' | 'removed'): string[] => [...standing].filter(([, side]) => side === which).map(([name]) => redact(name)).sort();
+      const sideOf = (which: 'offered' | 'removed'): string[] => [...standing].filter(([, side]) => side === which).map(([name]) => stored(name)).sort();
       const offered = sideOf('offered');
       const removed = sideOf('removed');
       if (offered.length > 0) funnel.offered = offered;
-      if (loaded.size > 0) funnel.loaded = [...loaded].map(redact).sort();
+      if (loaded.size > 0) funnel.loaded = [...loaded].map(stored).sort();
       if (removed.length > 0) funnel.removed = removed;
       if (Object.keys(funnel).length > 0) out.funnel = funnel;
 
@@ -332,7 +334,7 @@ export const createShape = (harness: Harness, redact: (text: string) => string, 
       if (complete.rejections) trust.rejections = counts.rejections;
       if (complete.denials) trust.denials = counts.denials;
       const kept = events.filter((item) => (item.event === 'interrupt' ? complete.interrupts : item.event === 'rejection' ? complete.rejections : complete.denials));
-      if (kept.length > 0) trust.trustEvent = kept.map((item) => ({ ...item, tool: item.tool === null ? null : redact(item.tool) }));
+      if (kept.length > 0) trust.trustEvent = kept.map((item) => ({ ...item, tool: item.tool === null ? null : stored(item.tool) }));
       if (runs.length > 0) trust.unattendedRun = runs;
       if (Object.keys(trust).length > 0) out.trust = trust;
       return out;
