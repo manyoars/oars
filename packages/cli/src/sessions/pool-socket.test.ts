@@ -9,7 +9,7 @@ import { harness } from '../test-support.js';
 import { networkSender, poolDeposit, type Sender } from './pool-command.js';
 import { VOCAB_VERSION } from './pool-wire.js';
 import { deposit } from './store.js';
-import { cleanup, NOW, stage } from './test-support.js';
+import { cleanup, NOW, settledClock, stage } from './test-support.js';
 
 // These tests send over a real loopback socket, not through msw: msw answers above the HTTP layer, so it cannot see a header that Node's own `fetch` adds. What the server reads off the wire
 // (`rawHeaders`) is compared with what the command had printed when the request arrived. The two are pinned to the engine this repository declares (Node >= 24); a header another version adds shows up here.
@@ -151,6 +151,7 @@ describe('what is printed is what goes over the socket', () => {
     writeFileSync(termsFile, 'zorblax\n');
     const h = harness({ OARS_GITHUB_CLIENT_ID: 'gh-client', OARS_EXCLUSION_TERMS: termsFile });
     h.deps.sessions = staged.runtime;
+    h.deps.now = settledClock;
     // `outbox` prints to stdout, so what counts as printed before the request is what stdout held when it arrived.
     const shown: string[] = [];
     loop = await listen(shown);
@@ -199,6 +200,7 @@ describe('what is printed is what goes over the socket', () => {
       writeFileSync(termsFile, 'zorblax\n');
       const h = harness({ OARS_GITHUB_CLIENT_ID: 'gh-client', OARS_EXCLUSION_TERMS: termsFile });
       h.deps.sessions = staged.runtime;
+      h.deps.now = settledClock;
       loop = await listen([]);
       const { x } = await signer();
       loop.answers.set('POST /login/device/code', [json(200, { device_code: 'device-code-1', user_code: 'USER-1', verification_uri: 'https://provider.test/device', interval: 1, expires_in: 10 })]);

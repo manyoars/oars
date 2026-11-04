@@ -214,6 +214,16 @@ const judge = async (terms: readonly string[], session: SessionFiles): Promise<V
   return unreadable ? { excluded: true, reason: 'unreadable', hits } : { excluded: false, reason: 'clean', hits };
 };
 
+/**
+ * When the newest file of a session was last written, in epoch milliseconds, over the same files the gate scans (the main transcript, its subagents, and oars' raw copies), or 0 when it has none.
+ * A transcript that kept growing since the last capture is newer here than in the store, so the deposit command reads it to tell a session still in progress from one that has ended.
+ */
+export const lastWritten = async (runtime: SessionsRuntime, project: string, session: string): Promise<number> => {
+  const { files } = await filesOf(runtime, project, session);
+  const times = await Promise.all(files.map(async ({ path }) => (await stat(path)).mtimeMs));
+  return Math.max(0, ...times);
+};
+
 /** The A38 rule for one session; `extra` adds terms to the file's, but never stands in for it, so a missing or empty term file still excludes everything. */
 export const checkSession = async (runtime: SessionsRuntime, termsFile: string, project: string, session: string, extra: readonly string[] = []): Promise<Verdict> => {
   const fromFile = await loadTerms(termsFile);

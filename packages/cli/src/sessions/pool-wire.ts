@@ -115,9 +115,10 @@ const HOUR_MS = 60 * 60 * 1000;
 
 /**
  * Whether a session's batch may be built at `now`: no transcript of it, main or subagent, has gained a line for `SESSION_IDLE_HOURS`. A transcript gains a line when capture sees it change, which
- * stamps a new `rev` in epoch milliseconds, so the quietest a session can be is how long ago its newest transcript changed. A subagent that died without an end marker holds its session back at most that long.
+ * stamps a new `rev` in epoch milliseconds, but a transcript can grow after the last capture, so `written` (the newest write to any raw file of the session, 0 when none is known) counts too: the
+ * session was last active at the later of the two. A subagent that died without an end marker holds its session back at most that long.
  */
-export const hasEnded = (records: SessionRecords, now: number): boolean => records.transcripts.every(({ session }) => now - session.rev >= SESSION_IDLE_HOURS * HOUR_MS);
+export const hasEnded = (records: SessionRecords, now: number, written: number): boolean => now - Math.max(written, ...records.transcripts.map(({ session }) => session.rev)) >= SESSION_IDLE_HOURS * HOUR_MS;
 
 const groupBy = <T, K>(items: readonly T[], keyOf: (item: T) => K): Map<K, T[]> => {
   const groups = new Map<K, T[]>();

@@ -68,6 +68,9 @@ export const addProject = (staged: Staged, project: string, name: string, lines:
 
 export const NOW = Date.parse('2026-06-10T00:00:00Z');
 
+/** A clock past the ideal end of every file a test writes: the deposit command reads a session whose files are newer than six hours as still in progress. */
+export const settledClock = (): number => Date.now() + 7 * 60 * 60 * 1000;
+
 export interface FixtureBubble {
   type: 1 | 2;
   text?: string;

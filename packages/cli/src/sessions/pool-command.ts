@@ -5,7 +5,7 @@ import { dirname, join } from 'node:path';
 import type { Outcome, RunDeps } from '../cli.js';
 import { CliError, exitCodeForProblem, ExitCode, unreachableError } from '../errors.js';
 import { compileAllow } from './allow.js';
-import { checkSession, exclusionPaths, type Reason } from './exclusion.js';
+import { checkSession, exclusionPaths, lastWritten, type Reason } from './exclusion.js';
 import { discardStale, FIELD_ROWS, fieldsOf, heldBatches, lockedBatch, markShown, outboxFolder, removeBatchesExcept, staleBatches, unchangedBytes, writeBatch, type LockRefusal } from './pool-outbox.js';
 import { hasEnded, SESSION_IDLE_HOURS, isBundleVersion, parseSkeleton, sessionsOf, skeletonOf, VOCAB_VERSION, verifyBundle, type Bundle, type PinnedKey, type TranscriptRoot } from './pool-wire.js';
 import { Masker, printed, TRANSPORT_HEADERS, waitWords, type Outgoing } from './pool-print.js';
@@ -424,7 +424,7 @@ export const poolDeposit = async (deps: RunDeps, options: { server?: string | un
       continue;
     }
     // The batch of a session is built once the session and its subagents have ended; a session still in progress waits, and an earlier batch of it is withdrawn below.
-    if (!hasEnded(records, deps.now())) {
+    if (!hasEnded(records, deps.now(), await lastWritten(runtime, records.main.project, records.main.session))) {
       counts.notEnded += 1;
       continue;
     }

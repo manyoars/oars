@@ -25,15 +25,22 @@ describe('a session has ended (Item 1)', () => {
     const [one] = sessionsFrom(from(5, 7));
     const [other] = sessionsFrom(from(7, 5));
     const [both] = sessionsFrom(from(7, 7));
-    expect(one === undefined || hasEnded(one, NOW)).toBe(false);
-    expect(other === undefined || hasEnded(other, NOW)).toBe(false);
-    expect(both !== undefined && hasEnded(both, NOW)).toBe(true);
+    expect(one === undefined || hasEnded(one, NOW, 0)).toBe(false);
+    expect(other === undefined || hasEnded(other, NOW, 0)).toBe(false);
+    expect(both !== undefined && hasEnded(both, NOW, 0)).toBe(true);
+  });
+
+  it('counts a write to a raw file after the last capture as activity', () => {
+    const [both] = sessionsFrom(from(7, 7));
+    expect(both !== undefined && hasEnded(both, NOW, NOW - 5 * HOUR)).toBe(false);
+    expect(both !== undefined && hasEnded(both, NOW, NOW - 6 * HOUR)).toBe(true);
+    expect(both !== undefined && hasEnded(both, NOW, NOW - 8 * HOUR)).toBe(true);
   });
 
   it('holds a dead subagent back no longer than the bound', () => {
     const [dead] = sessionsFrom(from(30, 6));
-    expect(dead !== undefined && hasEnded(dead, NOW)).toBe(true);
-    expect(dead !== undefined && hasEnded(dead, NOW - 1)).toBe(false);
+    expect(dead !== undefined && hasEnded(dead, NOW, 0)).toBe(true);
+    expect(dead !== undefined && hasEnded(dead, NOW - 1, 0)).toBe(false);
   });
 });
 
