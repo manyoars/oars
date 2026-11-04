@@ -9,6 +9,7 @@ import { MISS_TEXT } from './recall-render.js';
 import { tools } from './order-fixture.js';
 import { error as errorRow, frame, prompt, session } from './pool-fixture.js';
 import { nextDay } from './read-day-move.js';
+import { paths } from './store.js';
 import { addProject, cleanup, composers, FIXTURES, folders, stage, stageCursor, stageRawCursor } from './test-support.js';
 
 afterEach(() => {
@@ -374,7 +375,7 @@ describe('oars sessions', () => {
     const readsDir = join(staged.storeDir, 'reads');
     expect(await run(['sessions', 'recall', '--family', 'recovery'], deps)).toBe(ExitCode.OK);
     const stored = readdirSync(readsDir);
-    appendFileSync(join(staged.storeDir, 'observations.jsonl'), `${JSON.stringify(errorRow('a', 'Monitor | second shape', { tool: 'Monitor', example: 'text', ts: '2026-06-02T00:00:00.000Z' }))}
+    appendFileSync(paths(staged.storeDir).observations, `${JSON.stringify(errorRow('a', 'Monitor | second shape', { tool: 'Monitor', example: 'text', ts: '2026-06-02T00:00:00.000Z' }))}
 `);
     out.length = 0;
     expect(await run(['sessions', 'recall', '--family', 'recovery'], deps)).toBe(ExitCode.OK);

@@ -36,7 +36,7 @@ export interface HookIndex {
   projects: { [project: string]: IndexedSignature[] };
   /** Every signature seen in at least two sessions. */
   signatures: { [sig: string]: { sessions: number; followed: Array<[string, number]> } };
-  /** The call shapes over the fit floors, by read ID. An index a version before this wrote has none, and a pre-tool hook then pushes nothing. */
+  /** The call shapes over the fit floors and `PUSH_MIN_LIFT`, by read ID. An index a version before this wrote has none, and a pre-tool hook then pushes nothing. */
   fit?: { [readId: string]: RecallRead };
 }
 

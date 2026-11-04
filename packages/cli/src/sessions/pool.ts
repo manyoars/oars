@@ -29,7 +29,7 @@ import { deriveSubstitution } from './read-substitution.js';
 import { deriveVersionBoundary } from './read-version-boundary.js';
 import { writeAtomic, type Store } from './store.js';
 
-// Built on call: `store.ts` imports this file for its refresh and `read-recovery.ts` imports `store.ts`, so these names may not be initialized yet when this module's top level runs.
+// Built on call.
 const derivers = (): { readonly [family in FirstOrderFamily]: DeriveFamily } => ({
   recovery: deriveRecovery,
   fit: (input) => [...deriveFit(input), ...deriveCallShape(input)],
@@ -42,7 +42,7 @@ const derivers = (): { readonly [family in FirstOrderFamily]: DeriveFamily } => 
   'tool-day': deriveToolDay,
 });
 
-/** Families over reads, one stage per order: a stage reads what the stages before it wrote. Built on call, for the same reason as `derivers`. */
+/** Families over reads, one stage per order: a stage reads what the stages before it wrote. Built on call. */
 const relations = (): readonly (readonly DeriveRelation[])[] => [[deriveVersionBoundary, deriveSubstitution, deriveInteraction, deriveDayMove], [deriveLeadLag]];
 
 export const poolFiles = (storeDir: string): { cells: string; motifs: string; consequences: string; reads: (version: string) => string } => ({
