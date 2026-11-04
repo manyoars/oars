@@ -72,7 +72,7 @@ type Kind = 'directory' | 'file';
 
 /**
  * The one rule for a path at any level (V15): a link that leads nowhere, or an entry of the wrong kind (a plain file where a folder belongs, a folder where
- * a transcript belongs), means what is under it was not scanned. Windows reports a listing of a plain file as ENOENT, so the kind is checked here and not left to the listing.
+ * a transcript belongs), means what is under it was not scanned. Windows reports a listing of a path under a plain file as ENOENT, so the kind is checked here and not left to the listing.
  * An absent path is not one.
  */
 const badLink = async (path: string, kind: Kind): Promise<boolean> => {
@@ -101,7 +101,8 @@ const jsonlUnder = async (dir: string, found: string[], seen: Set<string>): Prom
   for (const entry of await entriesOf(dir)) {
     const path = join(dir, entry.name);
     const named = entry.name.endsWith('.jsonl');
-    if (entry.isSymbolicLink() && (await badLink(path, named ? 'file' : 'directory'))) {
+    // A plain entry named like a transcript goes through the helper too: a folder or a FIFO there is not a file, and what is under it was not scanned.
+    if ((entry.isSymbolicLink() || named) && (await badLink(path, named ? 'file' : 'directory'))) {
       bad = true;
       continue;
     }
@@ -257,9 +258,10 @@ const sessionIds = async (root: string, project: string): Promise<{ ids: string[
   const ids: string[] = [];
   const dirs: string[] = [];
   for (const entry of await entriesOf(join(root, project))) {
-    // A link is a session too, whatever it leads to: `filesIn` follows it, and one that leads nowhere or to the wrong kind reads unreadable.
-    if ((entry.isFile() || entry.isSymbolicLink()) && entry.name.endsWith('.jsonl')) ids.push(entry.name.slice(0, -'.jsonl'.length));
-    else if (entry.isSymbolicLink() && SESSION_ID.test(entry.name)) ids.push(entry.name);
+    // An entry named like a main file or a session folder is a session whatever it is: `filesIn` reads one of the wrong kind (a link that leads nowhere,
+    // a folder named `<id>.jsonl`, a plain file named `<id>`) as unreadable, so the scan lists it as the gate does.
+    if (entry.name.endsWith('.jsonl')) ids.push(entry.name.slice(0, -'.jsonl'.length));
+    else if (SESSION_ID.test(entry.name) && !entry.isDirectory()) ids.push(entry.name);
     else if (await leadsToDirectory(join(root, project, entry.name), entry)) dirs.push(entry.name);
   }
   return { ids: [...ids, ...dirs.filter((name) => SESSION_ID.test(name))], others: dirs.filter((name) => !SESSION_ID.test(name)) };
