@@ -169,6 +169,7 @@ const WITHHELD_TERMS = [
   /\bearn/i,
   /\bmoney/i,
   /pay per/i,
+  /credits?/i,
 ];
 const withheldIn = (text: string): string[] => WITHHELD_TERMS.filter((term) => term.test(text)).map(String);
 
@@ -193,6 +194,11 @@ describe('the public text states facts only', () => {
     ['packages/cli/CHANGELOG.md', join(cliFolder, 'CHANGELOG.md')],
     ['packages/client/README.md', join(root, 'packages/client/README.md')],
     ['packages/client/CHANGELOG.md', join(root, 'packages/client/CHANGELOG.md')],
+    // The generated surface: the public spec, the operations it lists, and the types made from it. A code or field name such as
+    // COMPUTE_CREDIT_EXHAUSTED or autoRestartOnCredit is a wire name the platform owns and has no word boundary, so it does not match.
+    ['openapi/public.json', join(root, 'openapi/public.json')],
+    ['openapi/public-operations.json', join(root, 'openapi/public-operations.json')],
+    ['packages/client/src/generated/schema.d.ts', join(root, 'packages/client/src/generated/schema.d.ts')],
   ])('%s names none of the withheld terms', (_name, file) => {
     expect(withheldIn(readFileSync(file, 'utf8'))).toEqual([]);
   });
