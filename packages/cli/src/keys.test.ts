@@ -1,10 +1,19 @@
 import { http, HttpResponse } from 'msw';
 import { describe, expect, it } from 'vitest';
 import { run } from './cli.js';
+import { stepKey } from './commands/keys.js';
 import { ExitCode } from './errors.js';
 import { API, harness, ISSUER, server, useServer } from './test-support.js';
 
 useServer();
+
+describe('stepKey', () => {
+  it('maps one step to one fixed lowercase 64-hex value', () => {
+    expect(stepKey('K', 'keys-create')).toMatch(/^[0-9a-f]{64}$/);
+    expect(stepKey('K', 'register')).toBe('6b18a43fe3ae4d0f343321e01ab154b26fdd0b32f7aacf4f1c9d3f197974b59c');
+    expect(stepKey('K', 'keys-create')).not.toBe(stepKey('other', 'keys-create'));
+  });
+});
 
 const WORKLOAD = '3f1c2a9e-5b7d-4e8a-9c01-6d2b7a8e4f10';
 const KEY_ID = '7d0c1f52-9a4e-4c3b-8e21-5f6a9b0c1d2e';

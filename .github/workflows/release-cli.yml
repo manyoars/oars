@@ -1,8 +1,7 @@
 name: release-cli
 
 # Publishes @manyoars/oars (the `oars` command) to npm on a tag cli-v<semver>: the same `just check` as ci, a guard that the tag's
-# version is packages/cli/package.json's, then `npm publish` with provenance. The package's prepack rebuilds dist/ and copies in
-# the golden deploy plans (parity/deploy-plans/), so the upload is never a stale build. No such tag exists until the first release.
+# version is packages/cli/package.json's, then `npm publish` with provenance. The package's prepack rebuilds dist/, so the upload is never a stale build. No such tag exists until the first release.
 #
 # Auth: npm trusted publishing (OIDC), no stored secret. The package's trusted publisher on npmjs.com names the GitHub
 # Actions repository manyoars/oars and the workflow file release-cli.yml (both case-sensitive, no environment), so do

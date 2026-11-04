@@ -1,5 +1,5 @@
 // What the family modules share: their input, a read's common fields, and the arithmetic of a rate over cells.
-import { cellIdOf, type Cell, type Grain, type Pool } from './cells.js';
+import { cellIdOf, isEnvironmentCell, type Cell, type Grain, type Pool } from './cells.js';
 import type { Motif } from './motif.js';
 import { METHODS, type Family, type ReadDraft, type ReadInterval, type ReadSlice, type ReadValue } from './read.js';
 import type { Store } from './store.js';
@@ -58,7 +58,10 @@ export const groupBy = <K, T>(items: Iterable<T>, keyOf: (item: T) => K): Map<K,
  * The pool's cells at one grain (rule 6). Weekly and day cells share a table and count the same steps, so a read that sums over both counts a step twice and a read that
  * names a day from a week answers from the wrong grain: every read takes the grain it answers from here, and no read iterates `pool.cells` itself.
  */
-export const atGrain = (pool: Pool, grain: Grain): Cell[] => pool.cells.filter((cell) => cell.grain === grain);
+export const atGrain = (pool: Pool, grain: Grain): Cell[] => pool.cells.filter((cell) => cell.grain === grain && !isEnvironmentCell(cell));
+
+/** The (name, `platform`, `shell`) cells, which sit beside the version cells and count the same calls: a read that summed them with the version cells would count each call twice, so only the read of these asks. */
+export const environmentCells = (pool: Pool): Cell[] => pool.cells.filter(isEnvironmentCell);
 
 /** The cells of one-step motifs at one grain: every action, and every identity capture has named. */
 export const unitCells = (pool: Pool, grain: Grain): { cell: Cell; motif: Motif }[] => {

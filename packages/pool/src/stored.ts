@@ -1,14 +1,15 @@
-// Reading the pool for a bundle: the stored `index` cells of one harness version and the strata, three statements whose rows grow with the cells and never with deposits. The
+// Reading the pool for a bundle: the stored `index` cells of one harness version, the version-free environment cells, the motifs, and the strata, four statements whose rows grow with the cells and never with deposits. The
 // ledger plane (`deposits`) and the `contributor` records are not read here, so a write to them cannot change what is served.
-import { harnessBucket, type Cell, type Grain } from '../../cli/src/sessions/cells.js';
+import { ENVIRONMENT_BUCKET, harnessBucket, type Cell, type Grain } from '../../cli/src/sessions/cells.js';
 import type { Motif, MotifLevel, WindowStep } from '../../cli/src/sessions/motif.js';
 import type { StrataCell } from '../../cli/src/sessions/pool-wire.js';
 import { bucketPrefix, K_CELL } from './derive.js';
 import { fieldOf, type Env } from './http.js';
 
-/** What a bundle is derived from: one version's cells, the motifs they name, and the strata that clear the floor. */
+/** What a bundle is derived from: one version's cells, the version-free cells that are safe beside them, the motifs they name, and the strata that clear the floor. */
 export interface StoredPool {
   cells: Cell[];
+  environment: Cell[];
   motifs: Motif[];
   strata: StrataCell[];
 }
@@ -50,28 +51,41 @@ const motifOf = (row: unknown): Motif => {
   return { motifId: textField(motif, 'motifId'), level, steps, cls };
 };
 
+/**
+ * The version-free (name, platform, shell) cells that clear the floor, for a motif only when no cell of that motif, grain, day, and exposure is under it, in any bucket or environment.
+ * They count the same calls as the version cells, so a total beside only some of its parts shows the rest by subtraction: five accounts on one version and three on another make an
+ * environment total of eight, and the total less the served five is the three. Every part is served or the total is not, so the difference is nothing. A cell's key starts with its
+ * motif, so the subquery reads the motif's rows through the key's index.
+ */
+export const ENVIRONMENT_CELLS =
+  "SELECT motif_id, frame_bucket, grain, day, exposed, sessions, clusters, ok, failed, tokens, duration_ms FROM cells WHERE harness_bucket = ? AND sessions > 0 AND clusters >= ? AND NOT EXISTS (SELECT 1 FROM cells AS other WHERE other.key >= cells.motif_id || '/' AND other.key < cells.motif_id || '0' AND other.grain = cells.grain AND other.day = cells.day AND other.exposed = cells.exposed AND other.sessions > 0 AND other.clusters < ?)";
+
+const cellOf = (row: unknown): Cell => ({
+  motifId: textField(row, 'motif_id'),
+  frameBucket: textField(row, 'frame_bucket'),
+  grain: grainField(row),
+  day: textField(row, 'day'),
+  sessions: numberField(row, 'sessions'),
+  clusters: numberField(row, 'clusters'),
+  ok: numberField(row, 'ok'),
+  failed: numberField(row, 'failed'),
+  tokens: numberField(row, 'tokens'),
+  durationMs: numberField(row, 'duration_ms'),
+  exposed: numberField(row, 'exposed') === 1,
+});
+
 export const storedOf = async (env: Env, harness: string, harnessVersion: string): Promise<StoredPool> => {
   const bucket = harnessBucket(harnessVersion);
   const prefix = bucketPrefix(harness, harnessVersion);
-  const [cells, motifs, strata] = await Promise.all([
+  const [cells, environment, motifs, strata] = await Promise.all([
     env.DB.prepare('SELECT motif_id, frame_bucket, grain, day, exposed, sessions, clusters, ok, failed, tokens, duration_ms FROM cells WHERE harness_bucket = ? AND substr(frame_bucket, 1, ?) = ? AND sessions > 0').bind(bucket, prefix.length, prefix).all(),
-    env.DB.prepare('SELECT motif FROM motifs WHERE motif_id IN (SELECT motif_id FROM cells WHERE harness_bucket = ? AND substr(frame_bucket, 1, ?) = ? AND sessions > 0)').bind(bucket, prefix.length, prefix).all(),
+    env.DB.prepare(ENVIRONMENT_CELLS).bind(ENVIRONMENT_BUCKET, K_CELL, K_CELL).all(),
+    env.DB.prepare('SELECT motif FROM motifs WHERE motif_id IN (SELECT motif_id FROM cells WHERE harness_bucket = ? AND substr(frame_bucket, 1, ?) = ? AND sessions > 0) OR motif_id IN (SELECT motif_id FROM cells WHERE harness_bucket = ? AND sessions > 0 AND clusters >= ?)').bind(bucket, prefix.length, prefix, ENVIRONMENT_BUCKET, K_CELL).all(),
     env.DB.prepare('SELECT dimension, value, sessions, clusters FROM strata WHERE clusters >= ? AND sessions > 0').bind(K_CELL).all(),
   ]);
   return {
-    cells: cells.results.map((row) => ({
-      motifId: textField(row, 'motif_id'),
-      frameBucket: textField(row, 'frame_bucket'),
-      grain: grainField(row),
-      day: textField(row, 'day'),
-      sessions: numberField(row, 'sessions'),
-      clusters: numberField(row, 'clusters'),
-      ok: numberField(row, 'ok'),
-      failed: numberField(row, 'failed'),
-      tokens: numberField(row, 'tokens'),
-      durationMs: numberField(row, 'duration_ms'),
-      exposed: numberField(row, 'exposed') === 1,
-    })),
+    cells: cells.results.map(cellOf),
+    environment: environment.results.map(cellOf),
     motifs: motifs.results.map(motifOf),
     strata: strata.results.map((row) => {
       const dimension = fieldOf(row, 'dimension');

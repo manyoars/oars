@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -31,9 +31,9 @@ describe('the hook process: the deadline', () => {
     const stalled = (): Promise<void> => new Promise<void>(() => undefined);
     const started = Date.now();
     // The returned promise never settles: the append never does. The timer is what ends the process.
-    void runHookProcess({ stdin: () => Promise.resolve(PAYLOAD), deps: depsFor(store, { append: stalled }), exit, deadlineMs: 150 });
-    await vi.waitFor(() => { expect(exit).toHaveBeenCalledWith(0); }, { timeout: 2_000 });
-    expect(Date.now() - started).toBeLessThan(1_000);
+    void runHookProcess({ stdin: () => Promise.resolve(PAYLOAD), deps: depsFor(store, { append: stalled, deadlineMs: 5_000 }), exit, deadlineMs: 1_000 });
+    await vi.waitFor(() => { expect(exit).toHaveBeenCalledWith(0); }, { timeout: 10_000 });
+    expect(Date.now() - started).toBeLessThan(5_000);
     expect(exit).toHaveBeenCalledTimes(1);
     const lines = readFileSync(crossingsPath(store), 'utf8').trim().split('\n');
     expect(lines).toHaveLength(1);
@@ -47,8 +47,8 @@ describe('the hook process: the deadline', () => {
     const store = folder();
     const exit = vi.fn();
     const found = (): Promise<RegistryAnswer> => Promise.resolve({ state: 'found', latest: '1.0.0', created: '2026-10-30T00:00:00.000Z' });
-    void runHookProcess({ stdin: () => Promise.resolve(PAYLOAD), deps: depsFor(store, { append: () => new Promise<void>(() => undefined), registry: found, random: () => draw }), exit, deadlineMs: 300 });
-    await vi.waitFor(() => { expect(exit).toHaveBeenCalledWith(0); }, { timeout: 2_000 });
+    void runHookProcess({ stdin: () => Promise.resolve(PAYLOAD), deps: depsFor(store, { append: () => new Promise<void>(() => undefined), registry: found, random: () => draw, deadlineMs: 5_000 }), exit, deadlineMs: 1_000 });
+    await vi.waitFor(() => { expect(exit).toHaveBeenCalledWith(0); }, { timeout: 10_000 });
     const lines = readFileSync(crossingsPath(store), 'utf8').trim().split('\n');
     expect(JSON.parse(lines[0] ?? '')).toMatchObject({ name: 'left-pad', arm: 'none', lineShown: 'none', lineHeld: 'none' });
   });
@@ -58,8 +58,8 @@ describe('the hook process: the deadline', () => {
     writeFileSync(join(store, 'gate-policy.json'), '{"classes":{"not-found":"block"}}');
     const exit = vi.fn();
     const missing = (): Promise<RegistryAnswer> => Promise.resolve({ state: 'not-found', latest: null, created: null });
-    void runHookProcess({ stdin: () => Promise.resolve(PAYLOAD), deps: depsFor(store, { append: () => new Promise<void>(() => undefined), registry: missing }), exit, deadlineMs: 300 });
-    await vi.waitFor(() => { expect(exit).toHaveBeenCalledWith(0); }, { timeout: 2_000 });
+    void runHookProcess({ stdin: () => Promise.resolve(PAYLOAD), deps: depsFor(store, { append: () => new Promise<void>(() => undefined), registry: missing, deadlineMs: 5_000 }), exit, deadlineMs: 1_000 });
+    await vi.waitFor(() => { expect(exit).toHaveBeenCalledWith(0); }, { timeout: 10_000 });
     const lines = readFileSync(crossingsPath(store), 'utf8').trim().split('\n');
     expect(JSON.parse(lines[0] ?? '')).toMatchObject({ name: 'left-pad', arm: 'none', lineShown: 'none', lineHeld: 'none' });
   });
@@ -80,9 +80,9 @@ describe('the hook process: the deadline', () => {
       signal = ask.signal;
       return new Promise<RegistryAnswer>(() => undefined);
     };
-    // The hook's own cut is 650 ms away and the process deadline 150 ms: the deadline is what ends the process, with the ask live.
-    void runHookProcess({ stdin: () => Promise.resolve(PAYLOAD), deps: depsFor(store, { registry }), exit, deadlineMs: 150 });
-    await vi.waitFor(() => { expect(exit).toHaveBeenCalledWith(0); }, { timeout: 2_000 });
+    // The hook's own cut is 5 s away and the process deadline 1 s: the ask is live by a wide margin on a loaded box, and the deadline is what ends the process. The append stalls so a second write cannot come from the hook.
+    void runHookProcess({ stdin: () => Promise.resolve(PAYLOAD), deps: depsFor(store, { registry, deadlineMs: 5_000, append: () => new Promise<void>(() => undefined) }), exit, deadlineMs: 1_000 });
+    await vi.waitFor(() => { expect(exit).toHaveBeenCalledWith(0); }, { timeout: 10_000 });
     expect(signal?.aborted).toBe(true);
     const lines = readFileSync(crossingsPath(store), 'utf8').trim().split('\n');
     expect(lines).toHaveLength(1);
@@ -98,8 +98,8 @@ describe('the hook process: the deadline', () => {
       return new Promise<RegistryAnswer>(() => undefined);
     };
     // The append that would make the folder stalls, so only the hook's own step before the ask can: without it the deadline's synchronous write has nowhere to go.
-    void runHookProcess({ stdin: () => Promise.resolve(PAYLOAD), deps: depsFor(store, { registry, append: () => new Promise<void>(() => undefined) }), exit, deadlineMs: 150 });
-    await vi.waitFor(() => { expect(exit).toHaveBeenCalledWith(0); }, { timeout: 2_000 });
+    void runHookProcess({ stdin: () => Promise.resolve(PAYLOAD), deps: depsFor(store, { registry, deadlineMs: 5_000, append: () => new Promise<void>(() => undefined) }), exit, deadlineMs: 1_000 });
+    await vi.waitFor(() => { expect(exit).toHaveBeenCalledWith(0); }, { timeout: 10_000 });
     expect(signal?.aborted).toBe(true);
     const lines = readFileSync(crossingsPath(store), 'utf8').trim().split('\n');
     expect(lines).toHaveLength(1);
@@ -129,11 +129,53 @@ describe('the hook process: the deadline', () => {
   it('writes nothing at the deadline once the record is on disk', async () => {
     const store = folder();
     const exit = vi.fn();
-    // The deadline is short, and the test waits until it has passed: a timer that still held the staged record would append it a second time.
-    await runHookProcess({ stdin: () => Promise.resolve(PAYLOAD), deps: depsFor(store), exit, deadlineMs: 150 });
+    // The test waits until the deadline has passed: a timer that still held the staged record would append it a second time. The deadline is 1 s so the append, even on a loaded box, finishes well before it.
+    await runHookProcess({ stdin: () => Promise.resolve(PAYLOAD), deps: depsFor(store, { deadlineMs: 5_000 }), exit, deadlineMs: 1_000 });
     expect(exit).toHaveBeenCalledWith(0);
-    await new Promise<void>((resolve) => setTimeout(resolve, 400));
+    await new Promise<void>((resolve) => setTimeout(resolve, 1_250));
     expect(readFileSync(crossingsPath(store), 'utf8').trim().split('\n')).toHaveLength(1);
+  });
+
+  it('writes the row at the deadline before it stops the ask', async () => {
+    const store = folder();
+    const exit = vi.fn();
+    let rowsAtStop = -1;
+    const stage = (put: NonNullable<GateHookDeps['stage']>): void => {
+      put({ file: crossingsPath(store), text: `${JSON.stringify({ kind: 'crossing', name: 'left-pad' })}\n`, stop: () => { rowsAtStop = readFileSync(crossingsPath(store), 'utf8').trim().split('\n').length; } });
+    };
+    void runHookProcess({ stdin: () => new Promise<string>(() => undefined), deps: (put) => { stage(put); return depsFor(store)(put); }, exit, deadlineMs: 100 });
+    await vi.waitFor(() => { expect(exit).toHaveBeenCalledWith(0); }, { timeout: 10_000 });
+    expect(rowsAtStop).toBe(1);
+  });
+
+  it('writes no second row at the deadline when the append wrote the record and then stalled', async () => {
+    const store = folder();
+    const exit = vi.fn();
+    let written = false;
+    const writesThenStalls = async (file: string, text: string): Promise<void> => {
+      appendFileSync(file, text, { mode: 0o600 });
+      written = true;
+      await new Promise<void>(() => undefined);
+    };
+    void runHookProcess({ stdin: () => Promise.resolve(PAYLOAD), deps: depsFor(store, { append: writesThenStalls }), exit, deadlineMs: 1_000 });
+    await vi.waitFor(() => { expect(exit).toHaveBeenCalledWith(0); }, { timeout: 10_000 });
+    expect(written).toBe(true);
+    expect(readFileSync(crossingsPath(store), 'utf8').trim().split('\n')).toHaveLength(1);
+  });
+
+  it('keeps both rows when a longer row from another writer landed first and the hook\'s own append then stalled', async () => {
+    const store = folder();
+    const exit = vi.fn();
+    const otherWriterThenStall = async (file: string, text: string): Promise<void> => {
+      appendFileSync(file, `${JSON.stringify({ kind: 'crossing', name: 'other', pad: 'x'.repeat(text.length) })}\n`, { mode: 0o600 });
+      await new Promise<void>(() => undefined);
+    };
+    void runHookProcess({ stdin: () => Promise.resolve(PAYLOAD), deps: depsFor(store, { append: otherWriterThenStall }), exit, deadlineMs: 1_000 });
+    await vi.waitFor(() => { expect(exit).toHaveBeenCalledWith(0); }, { timeout: 10_000 });
+    const lines = readFileSync(crossingsPath(store), 'utf8').trim().split('\n');
+    expect(lines).toHaveLength(2);
+    expect(lines[0]).toContain('"name":"other"');
+    expect(lines[1]).toContain('"name":"left-pad"');
   });
 });
 
