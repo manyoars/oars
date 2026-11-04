@@ -7,12 +7,12 @@ import { CliError, exitCodeForProblem, ExitCode, unreachableError } from '../err
 import { compileAllow } from './allow.js';
 import { checkSession, exclusionPaths, type Reason } from './exclusion.js';
 import { discardStale, FIELD_ROWS, fieldsOf, heldBatches, lockedBatch, markShown, outboxFolder, removeBatchesExcept, staleBatches, unchangedBytes, writeBatch, type LockRefusal } from './pool-outbox.js';
-import { isBundleVersion, parseSkeleton, sessionsOf, skeletonOf, VOCAB_VERSION, verifyBundle, type Bundle, type PinnedKey } from './pool-wire.js';
+import { hasEnded, SESSION_IDLE_HOURS, isBundleVersion, parseSkeleton, sessionsOf, skeletonOf, VOCAB_VERSION, verifyBundle, type Bundle, type PinnedKey, type TranscriptRoot } from './pool-wire.js';
 import { Masker, printed, TRANSPORT_HEADERS, waitWords, type Outgoing } from './pool-print.js';
 import { shellReader } from './projection.js';
 import { isVocabularyExpired, REGISTRY_MAX_AGE_DAYS, VOCAB_SNAPSHOT_DATE } from './public-vocabulary.js';
 import { contentHash } from './read.js';
-import { loadStore, readSaved, type SessionsRuntime } from './store.js';
+import { loadStore, readSaved, readSkeletons, type SessionsRuntime } from './store.js';
 import { vocabulary } from './vocab-load.js';
 
 const LOGIN = 'pool-login';
@@ -332,8 +332,10 @@ interface DepositCounts {
   batched: number;
   /** Sessions kept out by a session gate, by reason and by count only: never a folder name or a term. */
   excluded: { folder: number; term: number; noRaw: number; noTerms: number; unreadable: number };
-  /** Captured before steps and frames, so it holds no closed reading to build. Re-capture would give it one. */
+  /** Captured before steps and frames, or with a transcript that has no root, so it holds no closed reading to build. Re-capture would give it one. */
   uncaptured: number;
+  /** Passed the gates but has a transcript, main or subagent, that gained a line within `session_idle_hours`: its batch waits until the session has ended. */
+  notEnded: number;
   /** Refused by the vocabulary here; the count of those and which fields, never a value. */
   refused: number;
   refusedFields: string[];
@@ -406,10 +408,11 @@ export const poolDeposit = async (deps: RunDeps, options: { server?: string | un
   const { terms } = exclusionPaths(runtime.projectsRoot, deps.env);
   const allow = compileAllow((await readSaved(runtime.storeDir)).allow);
   const discarded = await discardStale(outbox);
-  const counts: DepositCounts = { sessions: 0, batched: 0, excluded: { folder: 0, term: 0, noRaw: 0, noTerms: 0, unreadable: 0 }, uncaptured: 0, refused: 0, refusedFields: [], discarded, withdrawn: 0 };
+  const counts: DepositCounts = { sessions: 0, batched: 0, excluded: { folder: 0, term: 0, noRaw: 0, noTerms: 0, unreadable: 0 }, uncaptured: 0, notEnded: 0, refused: 0, refusedFields: [], discarded, withdrawn: 0 };
   const built = new Set<string>();
   const refusedFields = new Set<string>();
-  for (const records of sessionsOf(await loadStore(runtime.storeDir))) {
+  const roots = new Map<string, TranscriptRoot>((await readSkeletons(runtime.storeDir, undefined, true)).skeletons.map(({ session, merkleRoot, leaves }) => [session, { merkleRoot, leaves }]));
+  for (const records of sessionsOf(await loadStore(runtime.storeDir), roots)) {
     counts.sessions += 1;
     if (!allow.allows(records.main.project)) {
       counts.excluded.folder += 1;
@@ -420,9 +423,14 @@ export const poolDeposit = async (deps: RunDeps, options: { server?: string | un
       counts.excluded[excludedKey(verdict.reason)] += 1;
       continue;
     }
+    // The batch of a session is built once the session and its subagents have ended; a session still in progress waits, and an earlier batch of it is withdrawn below.
+    if (!hasEnded(records, deps.now())) {
+      counts.notEnded += 1;
+      continue;
+    }
     // Hashed with the account, so a redeposit replaces its own batch and two accounts' copies of one session cannot be joined.
     const key = contentHash([account, records.main.session]);
-    const skeleton = skeletonOf(records, key, shellReader(vocabulary()));
+    const skeleton = skeletonOf(records, key, shellReader(vocabulary()), contentHash);
     if (skeleton === null) {
       counts.uncaptured += 1;
       continue;
@@ -444,7 +452,7 @@ export const poolDeposit = async (deps: RunDeps, options: { server?: string | un
   const lines = [
     `Wrote ${String(counts.batched)} of ${String(counts.sessions)} sessions to the outbox for ${server}. Nothing was sent.`,
     `Kept out by the session gates, never built: ${String(folder)} in a folder not on the allowlist, ${String(term)} for a term, ${String(noRaw)} with no raw to scan, ${String(noTerms)} with no term file, ${String(unreadable)} unreadable.`,
-    `Not built: ${String(counts.uncaptured)} captured before steps and frames, ${String(counts.refused)} refused by the vocabulary${counts.refusedFields.length === 0 ? '' : ` (${counts.refusedFields.join(', ')})`}.`,
+    `Not built: ${String(counts.uncaptured)} captured before steps and frames or with no root, ${String(counts.notEnded)} not ended (a transcript gained a line within ${String(SESSION_IDLE_HOURS)} hours), ${String(counts.refused)} refused by the vocabulary${counts.refusedFields.length === 0 ? '' : ` (${counts.refusedFields.join(', ')})`}.`,
     ...(counts.withdrawn === 0 ? [] : [`Removed ${String(counts.withdrawn)} ${counts.withdrawn === 1 ? 'batch' : 'batches'} of sessions that no longer pass the gates or are no longer in the store.`]),
     ...(discarded === 0 ? [] : [`Discarded ${String(discarded)} ${discarded === 1 ? 'batch' : 'batches'} built under an older vocabulary or field list.`]),
     'Run oars pool outbox to print exactly what would be sent.',

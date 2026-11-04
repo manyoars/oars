@@ -311,6 +311,12 @@ export const HARNESS_AGENT_TYPES: ReadonlyMap<string, ReadonlySet<string>> = new
   }).map(([harness, types]) => [harness, words(types)]),
 );
 
+/** What a subagent type pools as when it is not a built-in: a custom agent's name is private. */
+export const CUSTOM_AGENT = 'custom';
+
+/** A subagent type as it pools: a built-in of a harness as itself, anything else as `custom`. */
+export const projectedAgentType = (agentType: string): string => ([...HARNESS_AGENT_TYPES.values()].some((types) => types.has(agentType)) ? agentType : CUSTOM_AGENT);
+
 /**
  * The input keys each built-in tool's published schema lists, by the tool's name. Curated from the harness's tool reference. A key outside the tool's list, and every
  * key of an MCP tool (no pinned registry lists their schemas), is counted and never named (spec Section 1.3).

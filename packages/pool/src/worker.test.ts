@@ -1,8 +1,8 @@
 // Runs the bundled handler and its D1 store under the Workers runtime (Miniflare's workerd), with no account, no Docker, and no network.
 import { createHash } from 'node:crypto';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
-import { frame, prompt, session, step, storedNames, store, tool } from '../../cli/src/sessions/pool-fixture.js';
-import { parseSkeleton, sessionsOf, skeletonOf, type SessionSkeleton } from '../../cli/src/sessions/pool-wire.js';
+import { frame, printOf, prompt, session, sessionsFrom, step, storedNames, store, tool } from '../../cli/src/sessions/pool-fixture.js';
+import { parseSkeleton, skeletonOf, type SessionSkeleton } from '../../cli/src/sessions/pool-wire.js';
 import { sampleSkeleton } from './sample.js';
 import { startPool, stubUser, type Answer, type TestPool } from './test-pool.js';
 import worker from './worker.js';
@@ -13,8 +13,8 @@ let pool: TestPool;
 
 const skeleton = (): SessionSkeleton => {
   const shell = step(0, 0, 'shell.exec', { native: 'Bash', identity: { program: 'git', sub: 'push', flags: [] } });
-  const [only] = sessionsOf(store({ sessions: [session('s1', { frame: framed })], prompts: [prompt('s1', 0, { frame: framed })], tools: [tool('s1', 0, 'Bash', { steps: [shell] })] }));
-  const built = only === undefined ? null : skeletonOf(only, '0123456789abcdef', storedNames);
+  const [only] = sessionsFrom(store({ sessions: [session('s1', { frame: framed })], prompts: [prompt('s1', 0, { frame: framed })], tools: [tool('s1', 0, 'Bash', { steps: [shell] })] }));
+  const built = only === undefined ? null : skeletonOf(only, '0123456789abcdef', storedNames, printOf);
   if (built === null) throw new Error('no skeleton');
   return built;
 };

@@ -3,8 +3,8 @@ import { describe, expect, it } from 'vitest';
 import { cellsOf, incrementsOf, projectedStore, storeOf, type Increments } from './cell-increments.js';
 import { deriveCells } from './cells.js';
 import { classMotif } from './motif.js';
-import { frame, prompt, session, step, storedNames, store, tool } from './pool-fixture.js';
-import { floorOf, sessionsOf, skeletonOf, type SessionSkeleton } from './pool-wire.js';
+import { frame, printOf, prompt, session, sessionsFrom, step, store, storedNames, tool } from './pool-fixture.js';
+import { floorOf, skeletonOf, type SessionSkeleton } from './pool-wire.js';
 import { deriveConsequences, recallGraphOf } from './recall-consequence.js';
 import { makeRecall } from './recall-object.js';
 import type { Store } from './store.js';
@@ -23,8 +23,8 @@ const localStore = (): Store =>
   });
 
 const skeletonOfLocal = (local: Store): SessionSkeleton => {
-  const [only] = sessionsOf(local);
-  const skeleton = only === undefined ? null : skeletonOf(only, ID, storedNames);
+  const [only] = sessionsFrom(local);
+  const skeleton = only === undefined ? null : skeletonOf(only, ID, storedNames, printOf);
   if (skeleton === null) throw new Error('the local store has no skeleton');
   return skeleton;
 };

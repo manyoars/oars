@@ -76,13 +76,16 @@ describe('the outbox', () => {
 
 // A batch the vocabulary accepts, holding every field the format has: each identity form, a pull, and a nested stack.
 const FRAME = { harness: 'claude-code', harnessVersion: '2.1.314', model: 'claude-opus-5-5', effort: 'high', day: '2026-11-01', platform: 'linux', shell: 'bash', stack: { languages: [], frameworks: [], size: null } };
-const STEP = { status: 'ok', tokens: 3, ms: 4, parent: null };
+const STEP = { status: 'ok', tokens: 3, ms: 4, remainingTokens: 2, agentType: null, parent: null };
 const REAL = {
   format: SKELETON_FORMAT,
   id: '0123456789abcdef',
   deltas: [],
+  timingPrint: null,
   transcripts: [
     {
+      merkleRoot: 'a'.repeat(64),
+      leaves: 12,
       harness: 'claude-code',
       frame: FRAME,
       prompts: [{ cls: 'edit-verify', errors: 0, wallSec: 5, usage: { input: 1, cacheWrite: 2, cacheRead: 3, output: 4, thinking: 5 }, frame: FRAME }],
