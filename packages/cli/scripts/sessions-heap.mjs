@@ -1,7 +1,7 @@
 // Memory check for `oars sessions deposit` and `oars sessions verify` (t808). Builds a synthetic store in a temp folder, then runs both
 // commands from the built CLI under a fixed `--max-old-space-size`, with no NODE_OPTIONS.
 //
-//   node scripts/sessions-heap.mjs check [--sessions 400] [--heap 160]    # the pass/fail check: `just sessions-heap`
+//   node scripts/sessions-heap.mjs check [--sessions 400] [--heap <MB>]   # the pass/fail check: `just sessions-heap`
 //   node scripts/sessions-heap.mjs table [--sizes 400,800] [--heap 4096] # peak RSS of each command by store size (the docs table)
 //   node scripts/sessions-heap.mjs minheap [--sizes 400,800]             # smallest --max-old-space-size at which each command passes
 //   node scripts/sessions-heap.mjs phases [--sessions 800]               # heap kept after each phase, in one process
@@ -22,7 +22,6 @@ const bin = binArg === -1 ? join(cliRoot, 'dist', 'bin.js') : resolve(process.ar
 const NL = String.fromCharCode(10);
 const PROJECT = 'bench-project';
 const PROMPTS = 8;
-const CALLS = 14;
 // Characters of a clean tool result. The log keeps none of it, so it sizes the transcript on disk (the operator's: 1.8 MB each against 52 KB of log).
 const BULK = Number(process.argv[process.argv.indexOf('--bulk') + 1] ?? 400) || 400;
 
@@ -83,12 +82,13 @@ const iso = (base, seconds) => new Date(base + seconds * 1000).toISOString();
  * @param {number} index
  * @returns {{ id: string, text: string }}
  *
- * One transcript: PROMPTS prompts, each followed by CALLS tool calls (every sixth fails). Every line is distinct, so nothing dedupes, and
+ * One transcript: PROMPTS prompts, each followed by `--calls` (default 14) tool calls (every sixth fails). Every line is distinct, so nothing dedupes, and
  * a session is tens of KB of log, like the operator's (6,757 files made a 349 MB log: about 52 KB each).
  */
 const transcript = (index) => {
   const id = `bench-${String(index).padStart(6, '0')}`;
   const chatter = Number(arg('chatter', '5'));
+  const calls = Number(arg('calls', '14'));
   const base = Date.parse('2026-01-05T08:00:00Z') + (index % 140) * 86_400_000;
   /** @type {string[]} */
   const lines = [];
@@ -103,7 +103,7 @@ const transcript = (index) => {
     const prompt = `${id}-${String(n++)}`;
     line({ type: 'user', uuid: prompt, parentUuid: parent, isSidechain: false, timestamp: iso(base, clock), version: '2.1.300', cwd: '/work/app', gitBranch: 'main', message: { role: 'user', content: `step ${String(p)} of ${id}: fix the failing build in /work/app/src/module-${String(index % 97)}.ts and explain what you changed` } });
     parent = prompt;
-    for (let c = 0; c < CALLS; c += 1) {
+    for (let c = 0; c < calls; c += 1) {
       const toolId = `toolu_${id}_${String(p)}_${String(c)}`;
       const module = String((index + c) % 211);
       /** @type {[string, Record<string, string>][]} */
@@ -188,6 +188,8 @@ const runCli = (dirs, heapMb, args, preload, recapture = false) => {
   assertScratch(dirs);
   // Each measured run starts from the stored form: a deposit compacts the log and moves the state, and a later run would see a clean one.
   if (existsSync(join(dirs.root, 'clean.jsonl'))) restore(dirs, recapture);
+  // A run that died of memory leaves its lock behind (the next deposit would wait ten minutes for it to age out).
+  rmSync(join(dirs.store, 'store.lock'), { force: true });
   const started = Date.now();
   const flags = [...(heapMb === 0 ? [] : [`--max-old-space-size=${String(heapMb)}`]), ...(preload === undefined ? [] : ['--require', preload])];
   const child = spawnSync(process.execPath, [...flags, bin, ...args], { env: envOf(dirs), encoding: 'utf8', maxBuffer: 64 << 20, cwd: dirs.root });
@@ -198,9 +200,10 @@ const runCli = (dirs, heapMb, args, preload, recapture = false) => {
 const depositArgs = ['sessions', 'deposit', '--allow', PROJECT];
 const verifyArgs = ['sessions', 'verify'];
 // The three measured runs: a deposit that skips every file (the t784 run: 12 captured, 6,757 unchanged), a deposit that captures every transcript
-// (a CAPTURE_VERSION bump), and verify.
-/** @type {[string, string[], boolean][]} */
-const runs = [['deposit no-op', depositArgs, false], ['deposit recapture', depositArgs, true], ['verify', verifyArgs, false]];
+// (a CAPTURE_VERSION bump), and verify. The last element is the heap `check` gives each, in MB: the least that passes the new build (400 sessions:
+// 104, 104, and 248) and the least that passes the build before t808 (168, 112, and 336) sit either side of it, 32 to 40 MB away where they differ.
+/** @type {[string, string[], boolean, number][]} */
+const runs = [['deposit no-op', depositArgs, false, 136], ['deposit recapture', depositArgs, true, 136], ['verify', verifyArgs, false, 288]];
 
 /** @param {string} label */
 const scratch = (label) => {
@@ -277,14 +280,14 @@ const command = process.argv[2];
 
 if (command === 'check') {
   const sessions = Number(arg('sessions', '400'));
-  const heap = Number(arg('heap', '160'));
   const dirs = scratch('check');
   console.log(`store: ${dirs.store}`);
   try {
     console.log(`built ${String(sessions)} sessions: log ${build(dirs, sessions).toFixed(1)} MB`);
     let failed = false;
     // `verify` may exit 4 under --strict only; plain verify exits 0, so any non-zero exit or out-of-memory is a failure.
-    for (const [name, args, recapture] of runs) {
+    for (const [name, args, recapture, cap] of runs) {
+      const heap = Number(arg('heap', String(cap)));
       const ran = runCli(dirs, heap, args, undefined, recapture);
       const ok = ran.code === 0 && !ran.oom;
       console.log(`${ok ? 'PASS' : 'FAIL'}  ${name} under --max-old-space-size=${String(heap)}: exit ${String(ran.code)}, ${ran.seconds.toFixed(1)} s${ok ? '' : `\n${ran.stderr.slice(0, 300)}`}`);

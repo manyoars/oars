@@ -62,22 +62,41 @@ replaces, so the log settles back to the size of the live records. A hook deposi
 
 ## Memory
 
-`deposit` and `verify` hold the store as records, so their heap grows with the log (rows, not files or sessions). A reader keeps only each session's highest `rev`, read in two passes over the
-log, so the superseded copies a re-capture leaves behind are never in memory; `deposit` checks for newer captures with one pass that keeps a number per session; and `verify` reads each skeleton
-without its per-line content hashes, which no check reads. Measured on a synthetic store (`packages/cli/scripts/sessions-heap.mjs`, a log holding every record twice, as it does mid-recapture), node's default heap, peak RSS:
+`deposit` and `verify` hold the store as records, so their heap grows with the log's rows, and `verify` also with the skeletons (one entry per transcript line). A reader keeps only each session's highest `rev`, read in
+two passes over the log, so the superseded copies a re-capture leaves behind are never in memory, and it keeps one copy of the strings every tool row repeats (the session id, the tool name, the key names).
+`deposit` checks for newer captures with one pass that keeps a number per session, and `verify` reads each skeleton without its per-line content hashes, which no check reads.
 
-| Sessions | Log | `deposit` | `verify` |
+Measured on a synthetic store (`packages/cli/scripts/sessions-heap.mjs`): peak RSS under `--max-old-space-size=4096`, 8 prompts of 14 tool calls per session, five transcript lines per call that make no log row (text, thinking,
+and attachments), so the skeletons hold 2.55 bytes per byte of clean log (the operator's store holds at most 2.8: 1.6 GB beyond a 580 MB log). "No-op" is a deposit that skips every file, the run t784 made (12 captured, 6,757 unchanged);
+"recapture" is a deposit that reads every transcript, as after a `CAPTURE_VERSION` bump. The log is shown as it stands at the start of a run, with every record's older copy still in it (a re-capture leaves them until the deposit's compaction).
+
+| Sessions | Log | `deposit` no-op | `deposit` recapture | `verify` |
+|---|---|---|---|---|
+| 400 | 97 MB | 409 MB | 419 MB | 567 MB |
+| 800 | 195 MB | 480 MB | 501 MB | 833 MB |
+
+The same stores before the change: no-op 477 and 678 MB, recapture 451 and 731 MB, `verify` 673 and 1,048 MB. On a settled log (nothing superseded, 49 and 97 MB), the change gains little: no-op 501 against 483 MB (4 percent), `verify`
+896 against 828 MB (8 percent) at 800 sessions. Every deposit ends in a compaction, so a settled log is the usual state `verify` meets; the larger gains above are for a deposit that meets a log with superseded records. The smallest
+`--max-old-space-size` that finished the 400-session store, before and after: no-op 168 and 104 MB, recapture 112 and 104 MB (a recapture reads a settled log, so it gains nothing), `verify` 336 and 248 MB.
+
+What the peak is made of (heap by phase, 800 sessions, `sessions-heap.mjs phases`): a no-op `deposit` peaks in the load that refresh does (240 MB, 150 MB kept) and `verify` in its store load (527 MB) after the lean skeletons
+(294 MB kept), which is why `verify` grows with the skeletons and the transcript lines they list. Interning the repeated strings took the kept load from 82 to 78 MB at 400 sessions (5 percent); it is not the main holder.
+
+Growth: rows, not files or sessions. One row count (about 45,000 tool rows, and the same skeleton lines) at three session counts gave the same peaks within 6 percent (`--calls` sets the calls per session):
+
+| Sessions x calls | `deposit` no-op | `deposit` recapture | `verify` |
 |---|---|---|---|
-| 400 | 97 MB | 412 MB | 466 MB |
-| 800 | 195 MB | 490 MB | 614 MB |
-| 1,600 | 390 MB | 782 MB | 911 MB |
+| 200 x 28 | 403 MB | 415 MB | 602 MB |
+| 400 x 14 | 414 MB | 420 MB | 569 MB |
+| 800 x 7 | 423 MB | 430 MB | 576 MB |
 
-That is about 1.3 MB (`deposit`) and 1.5 MB (`verify`) of RSS per MB of log above a base of 300 MB. Before the change, the same stores peaked at 619, 678, and 1,512 MB for `deposit` and 548, 808,
-and 1,276 MB for `verify`. The smallest `--max-old-space-size` that finished the 400-session store fell from 208 to 112 MB for `deposit` and from 224 to 152 MB for `verify`.
+A session is one file here, so files and sessions were not separated from each other, and tool rows and skeleton lines scale together (the generator makes the same number of non-row lines per call), so those two were not separated either.
+From the two sizes above, `verify` grows about 5.5 MB of RSS per MB of clean log from a base of about 300 MB, and `deposit` about 1.5 MB.
 
-The operator's store (a 580 MB log, 6,757 transcripts of 1.8 MB each) peaked at 6.9 GB before this change, and the synthetic store above does not reach that ratio: its records are the same size but
-its transcripts are not, so the real per-MB figure is higher than the table's and is not measured here. A heavy store that outgrows node's default heap (about 4 GB on a 64-bit machine) sets its own:
-`NODE_OPTIONS=--max-old-space-size=<MB> oars sessions deposit`, and the same for `verify`. `just sessions-heap` (in `oars/`) checks that both commands finish a generated store under a fixed small heap.
+**The limit.** The operator's store (a 580 MB log, 6,757 transcripts of 1.8 MB each) peaked at 6.9 GB for `deposit` and 6.1 GB for `verify` before this change, 12.0 and 10.6 times its log. The synthetic store reaches 8.6 times for `verify`
+(833 MB at a 97 MB clean log) and 4.9 times for `deposit` (480 MB), so extrapolated to 580 MB it needs about 3.5 GB for `verify` and 1.2 GB for `deposit`. The real figures are higher and are not measured after the change: `verify` is not
+expected to finish a store of that size under node's default heap (about 4 GB on a 64-bit machine), and `deposit` is unmeasured for that shape. A store that outgrows the heap sets its own, as the 580 MB log did: t784's deposit needed
+`NODE_OPTIONS=--max-old-space-size=10240`, and the same works for `verify`. `just sessions-heap` checks that both commands finish a generated store under a fixed small heap.
 
 ## Two versions
 
