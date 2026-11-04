@@ -15,6 +15,9 @@ const MAX_DEPOSIT_BYTES = 1024 * 1024;
 const DEFAULT_MAX_DEPOSITS = 20_000;
 const DEFAULT_MAX_ACCOUNT_BYTES = 64 * 1024 * 1024;
 
+/** What a batch's `deltas` hold until the wire carries them (spec Section 2, "Deltas"): the client builds them, so ingest has none to take. */
+const DELTAS = '[]';
+
 const BUNDLE = /^\/bundle\/([^/]*)\/([^/]*)$/;
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -61,9 +64,9 @@ const deposit = async (request: Request, env: Env): Promise<Response> => {
   const countedAt = batchCounts(INGEST_TIER, skeleton, cellCountOf) ? Date.now() : null;
   // One statement, so two deposits at once cannot both take the last of either limit. A redeposit replaces its own row: it adds no row, so it passes the count at the limit, and only its new size counts against the budget.
   const { meta } = await env.DB.prepare(
-    'INSERT INTO deposits (account, id, skeleton, tier, counted_at) SELECT ?, ?, ?, ?, ? WHERE ((SELECT COUNT(*) FROM deposits WHERE account = ?) < ? OR EXISTS (SELECT 1 FROM deposits WHERE account = ? AND id = ?)) AND (SELECT COALESCE(SUM(LENGTH(CAST(skeleton AS BLOB))), 0) FROM deposits WHERE account = ? AND id <> ?) + ? <= ? ON CONFLICT (account, id) DO UPDATE SET skeleton = excluded.skeleton, counted_at = CASE WHEN excluded.counted_at IS NULL THEN NULL ELSE COALESCE(deposits.counted_at, excluded.counted_at) END',
+    'INSERT INTO deposits (account, id, skeleton, deltas, tier, counted_at) SELECT ?, ?, ?, ?, ?, ? WHERE ((SELECT COUNT(*) FROM deposits WHERE account = ?) < ? OR EXISTS (SELECT 1 FROM deposits WHERE account = ? AND id = ?)) AND (SELECT COALESCE(SUM(LENGTH(CAST(skeleton AS BLOB)) + LENGTH(CAST(deltas AS BLOB))), 0) FROM deposits WHERE account = ? AND id <> ?) + ? <= ? ON CONFLICT (account, id) DO UPDATE SET skeleton = excluded.skeleton, deltas = excluded.deltas, counted_at = CASE WHEN excluded.counted_at IS NULL THEN NULL ELSE COALESCE(deposits.counted_at, excluded.counted_at) END',
   )
-    .bind(account, skeleton.id, stored, INGEST_TIER, countedAt, account, limit, account, skeleton.id, account, skeleton.id, new TextEncoder().encode(stored).length, budget)
+    .bind(account, skeleton.id, stored, DELTAS, INGEST_TIER, countedAt, account, limit, account, skeleton.id, account, skeleton.id, new TextEncoder().encode(stored).length + new TextEncoder().encode(DELTAS).length, budget)
     .run();
   if (meta.changes === 0) return refuse(403, 'deposit_limit', `An account holds at most ${String(limit)} deposits and ${String(budget)} stored bytes.`);
   return answer(201, { ok: true, id: skeleton.id });
