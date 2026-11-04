@@ -129,20 +129,25 @@ describe('the VS Code Copilot Chat reader', () => {
     expect(out.errorLines.map((entry) => entry.line)).toEqual(['tool failed', 'patch did not apply']);
   });
 
-  it("reads a user's refusal as the harness's own wording, so it stores user-rejected, and a hook's as a permission denial", () => {
+  it("reads a user's refusal as the harness's own wording, so it stores user-rejected, and a hook's or a risk assessment's as a permission denial", () => {
+    // The Skip button of a tool confirmation writes `{type:5, source:'user'}` (the decline path), a risk assessment's denial `{type:5, source:'riskAssessment'}`; an explicit
+    // cancel (the extensions-install prompt) writes `{type:0, source:'user'}`; a skip after approval (chatToolInvocation.ts:516) names no source.
     const out = extractOf(
       chat([
         request(1, 'x', [
-          tool('c1', 'run_in_terminal', { isConfirmed: { type: 0, source: 'user' } }),
-          tool('c2', 'run_in_terminal', { isConfirmed: false }),
-          tool('c3', 'run_in_terminal', { isConfirmed: { type: 0, source: 'hook' } }),
-          tool('c4', 'run_in_terminal', { isConfirmed: { type: 0 } }),
-          tool('c5', 'run_in_terminal', { isConfirmed: { type: 5 } }),
+          tool('c1', 'run_in_terminal', { isConfirmed: { type: 5, source: 'user' } }),
+          tool('c2', 'run_in_terminal', { isConfirmed: { type: 0, source: 'user' } }),
+          tool('c3', 'run_in_terminal', { isConfirmed: false }),
+          tool('c4', 'run_in_terminal', { isConfirmed: { type: 5, source: 'hook' } }),
+          tool('c5', 'run_in_terminal', { isConfirmed: { type: 5, source: 'riskAssessment' } }),
+          tool('c6', 'run_in_terminal', { isConfirmed: { type: 0, source: 'hook' } }),
+          tool('c7', 'run_in_terminal', { isConfirmed: { type: 0 } }),
+          tool('c8', 'run_in_terminal', { isConfirmed: { type: 5 } }),
         ]),
       ]),
     );
-    expect(out.tools.map((entry) => entry.status)).toEqual(['error', 'error', 'error', 'error', 'none']);
-    expect(out.tools.map((entry) => entry.errorCode)).toEqual(['user-rejected', 'user-rejected', 'permission-denied', 'other', undefined]);
+    expect(out.tools.map((entry) => entry.status)).toEqual(['error', 'error', 'error', 'error', 'error', 'error', 'error', 'none']);
+    expect(out.tools.map((entry) => entry.errorCode)).toEqual(['user-rejected', 'user-rejected', 'user-rejected', 'permission-denied', 'permission-denied', 'permission-denied', 'other', undefined]);
   });
 
   it('redacts a secret and an email, and cuts a 1,500-character error at 1,000 characters, on a tool error and on a shell error', () => {

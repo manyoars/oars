@@ -1,4 +1,4 @@
-// The VS Code Copilot Chat source (t841): the chat sessions VS Code itself writes become the same capture records a Claude Code transcript does. This is
+// The VS Code Copilot Chat source: the chat sessions VS Code itself writes become the same capture records a Claude Code transcript does. This is
 // the editor's own serialized chat model, not the Copilot CLI's event log (`copilot.ts`): a different surface with a different shape.
 //
 // FIXTURE-DERIVED: written from the public source of microsoft/vscode @ f92b8f3adcd9bc034e6b9ade05c093dd59b99c5f (MIT; the Copilot Chat extension lives
@@ -38,8 +38,11 @@
 // A call with `subAgentInvocationId` is a subagent's own and is not read; the parent's `runSubagent` call is. Tool inputs are not persisted (model/chatToolInvocation.ts:504-533),
 // so only a terminal command (`toolSpecificData.commandLine`) and an edit's file (the `textEditGroup` after the call) are known. A shell call's outcome is its exit code
 // alone (`terminalCommandState.exitCode`, chatService.ts:803-807), never a status field; with none and no error, it is unknown and stays `none`.
-// A refusal is `isConfirmed` `{type:0}` (ToolConfirmKind, chatService.ts:901-913) or `false` (before VS Code 1.104): a user's reads as Claude Code's refusal text, a hook's or
-// a risk assessment's as a permission denial. `{type:5}` (skipped) has no outcome. The file holds no harness version and no working-directory change.
+// A refusal is `isConfirmed` `{type:0}` (Denied) or `{type:5}` (Skipped) with a `source` (ToolConfirmKind, chatService.ts:901-913), or `false` (before VS Code 1.104). The Skip
+// button of a confirmation is the decline button and writes `{type:5, source:'user'}` (browser/widget/chatContentParts/toolInvocationParts/abstractToolConfirmationSubPart.ts:225,
+// chatTerminalToolConfirmationSubPart.ts:380,507; browser/tools/languageModelToolsService.ts:711), so a user's refusal (`source` `user`) reads as Claude Code's refusal text and
+// stores `user-rejected`; a hook's or a risk assessment's (languageModelToolsService.ts:683,1051) reads as a permission denial. A `{type:5}` with no `source` is the skip after
+// approval (model/chatProgressTypes/chatToolInvocation.ts:516) and has no outcome. The file holds no harness version and no working-directory change.
 
 import { readdir, readFile, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
@@ -271,8 +274,11 @@ export const chatLines = (data: Obj, fallbackId: string, folder: string | null):
         flush();
         content.push(block);
         const confirmed = part.isConfirmed;
-        const denied = confirmed === false || (isObj(confirmed) && confirmed.type === 0);
-        const skipped = isObj(confirmed) && confirmed.type === 5;
+        // `Denied` (0) is a refusal; `Skipped` (5) with a `source` is one too, since the Skip button of a confirmation writes `{type:5, source:'user'}` and a risk assessment's
+        // denial `{type:5, source:'riskAssessment'}`; a `Skipped` with no source is the skip after approval (chatToolInvocation.ts:516), which names no outcome.
+        const refusedBy = isObj(confirmed) && (confirmed.type === 0 || confirmed.type === 5) ? str(confirmed.source) : undefined;
+        const denied = confirmed === false || (isObj(confirmed) && (confirmed.type === 0 || (confirmed.type === 5 && refusedBy !== undefined)));
+        const skipped = isObj(confirmed) && confirmed.type === 5 && refusedBy === undefined;
         const callWhen = stamp(part.completedAt);
         const output = isObj(specific.terminalCommandOutput) ? (str(specific.terminalCommandOutput.text) ?? '') : '';
         const exit = isObj(specific.terminalCommandState) ? num(specific.terminalCommandState.exitCode) : undefined;
@@ -282,8 +288,7 @@ export const chatLines = (data: Obj, fallbackId: string, folder: string | null):
         if (denied) {
           // A user's refusal (`source` `user`, or the boolean `false` of VS Code before 1.104) is Claude Code's own wording; a hook's or a risk assessment's is a
           // permission denial. A denial with no `source` names no actor (chatService.ts:910), so it claims neither.
-          const source = isObj(confirmed) ? str(confirmed.source) : 'user';
-          failure = source === 'user' ? USER_REFUSAL : source === undefined ? 'The tool call was denied' : `Permission to use ${toolId} has been denied`;
+          failure = confirmed === false || refusedBy === 'user' ? USER_REFUSAL : refusedBy === undefined ? 'The tool call was denied' : `Permission to use ${toolId} has been denied`;
         } else if (skipped) known = false;
         else if (isShell && exit !== undefined) failure = exit === 0 ? undefined : failureOf(exit, output === '' ? (error ?? '') : output);
         else if (error !== undefined) failure = error;
