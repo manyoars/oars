@@ -5,6 +5,8 @@ import { deriveCells } from './cells.js';
 import { classMotif } from './motif.js';
 import { frame, prompt, session, step, storedNames, store, tool } from './pool-fixture.js';
 import { floorOf, sessionsOf, skeletonOf, type SessionSkeleton } from './pool-wire.js';
+import { deriveConsequences, recallGraphOf } from './recall-consequence.js';
+import { makeRecall } from './recall-object.js';
 import type { Store } from './store.js';
 
 const framed = frame({ shell: 'bash', stack: { languages: ['rust'], frameworks: ['astro'], size: 'xl' } });
@@ -140,6 +142,21 @@ describe('rules 1 to 3 and 6: what a cell and a stratum hold', () => {
     expect(single(null, 'is-odd')).toBe(1);
     expect(single(null, null)).toBe(1);
     expect([...strata.keys()].sort()).toEqual(['framework/astro', 'framework/vite', 'language/go', 'language/rust', 'repoFiles/xl']);
+  });
+
+  it('keeps one row per cell key when a shown recall follows a call with two flags', () => {
+    const flagged = store({
+      sessions: [session('s1', { frame: manyFramed })],
+      prompts: [prompt('s1', 0, { frame: manyFramed })],
+      tools: [
+        tool('s1', 0, 'Bash', { ts: '2026-11-01T10:00:00.000Z', prompt: 0, steps: [step(0, 0, 'shell.exec', { native: 'Bash', identity: { program: 'git', sub: 'push', flags: ['--force', '--tags'] }, cost: { tokens: 1000, durationMs: 100 } })] }),
+        tool('s1', 1, 'Read', { ts: '2026-11-01T10:00:02.000Z', prompt: 0 }),
+      ],
+    });
+    const recall = makeRecall({ sid: 's1', at: '2026-11-01T10:00:01.000Z', frame: null, mode: 'push', query: { form: 'pattern', prefix: ['shape'] }, poolVersion: '2026-10-01T00:00:00.000Z', arm: 'shown', reads: ['r'], rendered: 'x'.repeat(40), names: ['file.edit'], evidence: [] });
+    const { cells } = cellsOf(projectedStore(flagged, storedNames), recallGraphOf(flagged, deriveConsequences(flagged, [recall])));
+    const keys = cells.map(({ motifId, frameBucket, day, exposed }) => `${motifId}/${frameBucket}/${day}/${String(exposed)}`);
+    expect(new Set(keys).size).toBe(keys.length);
   });
 
   it('pools a stack stratum alone, per value, and no other bound field', () => {
