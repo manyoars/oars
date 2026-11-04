@@ -335,6 +335,16 @@ describe('oars sessions', () => {
     expect(await readRecalls(staged.storeDir)).toEqual([]);
   });
 
+  it('refuses a pull naming more than one form as a usage error with nothing recorded, and keeps --error with --path as one form', async () => {
+    const { deps, err, staged } = setup();
+    expect(await run(['sessions', 'recall', '--path', 'a.ts', '--family', 'recovery'], deps)).toBe(ExitCode.USAGE);
+    expect(await run(['sessions', 'recall', '--entity', 'y', '--text', 'x'], deps)).toBe(ExitCode.USAGE);
+    expect(await run(['sessions', 'recall', '--error', 'x', '--pattern', '0123456789abcdef'], deps)).toBe(ExitCode.USAGE);
+    expect(err.join('')).toContain('one form');
+    expect(await readRecalls(staged.storeDir)).toEqual([]);
+    expect(await run(['sessions', 'recall', '--error', 'x', '--path', 'a.ts'], deps)).toBe(ExitCode.OK);
+  });
+
   it('answers a family only the pool holds, as `read` does, and refuses a slice its reads cannot apply with nothing recorded', async () => {
     const { deps, err, out, staged } = setup();
     expect(await run(['sessions', 'deposit', '--allow', 'proj'], deps)).toBe(ExitCode.OK);
