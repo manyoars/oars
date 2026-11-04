@@ -1,5 +1,5 @@
 // The public vocabulary (t755, recall spec Sections 2.1, 2.2, and 7): the one file that says which names may stand in a class P field of a
-// captured step or frame. Anything else becomes `<literal>`, so a private script, host, package, or server name never reaches a pooled field.
+// captured step (the frame's fields pool only as cells). Anything else becomes `<literal>`, so a private script, host, package, or server name never reaches a pooled field.
 //
 // A simple list on purpose, and it fails closed: a missing public name costs a `<literal>`, while a wrongly listed one costs a leak. The D11 and
 // D13 vocabulary spec owns the final list and wins on what may leave the machine. This repository is public, so nothing private is ever added here.
@@ -273,8 +273,8 @@ export const isPublicMcpTool = (server: string, tool: string): boolean => PUBLIC
 // and the pool's Worker can bundle it.
 
 /**
- * The version of every pinned snapshot and curated list below, as one number. Change a snapshot file, or `PUBLIC_PROGRAMS`, `PUBLIC_SUBCOMMANDS`,
- * `PUBLIC_FLAGS`, `PUBLIC_MCP_TOOLS`, or `HARNESS_TOOLS`, and bump it: vocab-pin.test.ts fails otherwise.
+ * The version of every pinned snapshot and curated list below, as one number. Change a snapshot file or any curated list in vocab-pin.test.ts's
+ * `curatedDigest`, and bump it: that test fails otherwise.
  */
 export const VOCAB_VERSION = '1';
 /** The day the snapshots were taken. It must equal `snapshotDate` in vocab/manifest.json, which the loader checks. */
@@ -291,8 +291,9 @@ export const PRIVATE = 'private';
 const DAY_MS = 86_400_000;
 /** Whole days from the snapshot to `now`; a clock before the snapshot reads as 0. */
 export const vocabularyAgeDays = (now: Date, snapshotDate: string = VOCAB_SNAPSHOT_DATE): number => Math.max(0, Math.floor((now.getTime() - Date.parse(`${snapshotDate}T00:00:00Z`)) / DAY_MS));
-/** A client past `registry_max_age` builds no batch: its sessions wait in `A` until it upgrades. */
-export const isVocabularyExpired = (now: Date, snapshotDate: string = VOCAB_SNAPSHOT_DATE): boolean => vocabularyAgeDays(now, snapshotDate) > REGISTRY_MAX_AGE_DAYS;
+/** A client more than `registry_max_age` past its snapshot builds no batch (the exact elapsed time, not whole days): its sessions wait in `A` until it upgrades. */
+export const isVocabularyExpired = (now: Date, snapshotDate: string = VOCAB_SNAPSHOT_DATE): boolean =>
+  now.getTime() - Date.parse(`${snapshotDate}T00:00:00Z`) > REGISTRY_MAX_AGE_DAYS * DAY_MS;
 
 /** The built-in tools of Claude Code, by the names a transcript records. Curated, since no registry publishes them (spec Section 1.3, the name seed). */
 export const HARNESS_TOOLS: ReadonlyMap<string, ReadonlySet<string>> = new Map(

@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import {
+  BUNDLING_PROGRAMS,
   HARNESS_AGENT_TYPES,
   HARNESS_TOOLS,
   isVocabularyExpired,
@@ -25,7 +26,7 @@ const tables = (map: ReadonlyMap<string, ReadonlySet<string>>): Array<[string, s
 
 /** The curated lists in public-vocabulary.ts that the pool reads, as one digest. */
 const curatedDigest = (): string =>
-  sha256(JSON.stringify([sorted(PUBLIC_PROGRAMS), tables(PUBLIC_SUBCOMMANDS), sorted(PUBLIC_FLAGS), sorted(PUBLIC_MCP_SERVERS), tables(PUBLIC_MCP_TOOLS), tables(HARNESS_TOOLS), sorted(PUBLIC_SKILLS), tables(HARNESS_AGENT_TYPES), tables(TOOL_INPUT_KEYS)]));
+  sha256(JSON.stringify([sorted(PUBLIC_PROGRAMS), sorted(BUNDLING_PROGRAMS), tables(PUBLIC_SUBCOMMANDS), sorted(PUBLIC_FLAGS), sorted(PUBLIC_MCP_SERVERS), tables(PUBLIC_MCP_TOOLS), tables(HARNESS_TOOLS), sorted(PUBLIC_SKILLS), tables(HARNESS_AGENT_TYPES), tables(TOOL_INPUT_KEYS)]));
 
 interface Manifest {
   snapshotDate: string;
@@ -66,7 +67,7 @@ const PINNED: { readonly [version: string]: { readonly files: { readonly [file: 
       'pypi.json': '4fd0e73a16ec5abcee1c970f7e28cc84af68aaceb0197b8007a8be690878f442',
       'rubygems.json': '0cfec417beb17efdbd60634fe7e6c9252bebc6be5bab086446431099d939be33',
     },
-    curated: '45e55179bf49fabb7a5fb7738c6a86a64ccf764b0aa4cf151316ee2175ab7767',
+    curated: '6cddd7cfc0602f288ace775d63ca9ee81ead5bccd35e979e7632b8de81e8738b',
   },
 };
 
@@ -89,10 +90,13 @@ describe('registry_max_age', () => {
   const day = 86_400_000;
   const taken = Date.parse(`${VOCAB_SNAPSHOT_DATE}T00:00:00Z`);
 
-  it('reads a snapshot as fresh through its last allowed day and expired the day after', () => {
+  it('reads a snapshot as fresh through exactly registry_max_age and expired a millisecond after', () => {
     expect(vocabularyAgeDays(new Date(taken - day))).toBe(0);
     expect(isVocabularyExpired(new Date(taken))).toBe(false);
-    expect(isVocabularyExpired(new Date(taken + REGISTRY_MAX_AGE_DAYS * day + day - 1))).toBe(false);
+    // At most `registry_max_age` old (spec Section 1.3): exactly 30 days still builds a batch, 30 days and a millisecond does not, and the clock is not floored to a day.
+    expect(isVocabularyExpired(new Date(taken + REGISTRY_MAX_AGE_DAYS * day))).toBe(false);
+    expect(isVocabularyExpired(new Date(taken + REGISTRY_MAX_AGE_DAYS * day + 1))).toBe(true);
+    expect(isVocabularyExpired(new Date(taken + REGISTRY_MAX_AGE_DAYS * day + day - 1))).toBe(true);
     expect(isVocabularyExpired(new Date(taken + (REGISTRY_MAX_AGE_DAYS + 1) * day))).toBe(true);
   });
 });
