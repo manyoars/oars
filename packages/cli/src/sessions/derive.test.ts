@@ -339,6 +339,7 @@ describe('prompt outcome signals (t747)', () => {
       ['playwright install', false], ['npx playwright install', false], ['yarn playwright install', false], ['pre-commit install', false], ['cypress open', false],
       ['pnpm web add test-utils', false], ['npm web install test-utils', false], ['npm run test-utils', true],
       ['npm install lint-staged', false], ['pnpm add test-utils', false], ['npm uninstall jest-check', false], ['cargo add check', false], ['go get test', false], ['npm view test', false], ['go run check', false],
+      ['cargo test add', true], ['npm test install', true], ['pnpm test view', true], ['yarn workspace web add test-utils', false], ['yarn workspace web test', true],
     ])('%s is a runner: %s', (run, expected) => {
       expect(isRunner({ run, read: true })).toBe(expected);
     });
