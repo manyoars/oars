@@ -244,7 +244,7 @@ describe('the Gemini CLI reader', () => {
         prompt(30, 'and now'),
       ];
       const lines = linesOf(records);
-      const prompts = lines.filter((entry) => entry.type === 'user' && JSON.stringify(entry.message).includes('"type":"text"')).map((entry) => (entry.message as { content: { text: string }[] }).content[0]?.text);
+      const prompts = lines.filter((entry) => entry.type === 'user' && JSON.stringify(entry.message).includes('"type":"text"')).map((entry) => /"text":"([^"]*)"/.exec(JSON.stringify(entry.message))?.[1]);
       expect(prompts).toEqual(['fix the build', 'try again', 'and now']);
       const out = extractOf(records);
       expect(out.session.userTurns).toBe(3);
