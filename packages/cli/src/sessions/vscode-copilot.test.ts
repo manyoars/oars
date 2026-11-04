@@ -115,8 +115,9 @@ describe('the VS Code Copilot Chat reader', () => {
   });
 
   it('leaves a shell call with no exit code and no error as none (a background run), and one with an error and no exit code as an error', () => {
-    const out = extractOf(chat([request(1, 'x', [shell('c1', 'watch', undefined, 'tick'), shell('c2', 'oops', undefined, '', { resultError: 'spawn failed' }), tool('c3', 'read_file', { isComplete: false })])]));
-    expect(out.tools.map((entry) => entry.status)).toEqual(['none', 'error', 'none']);
+    const out = extractOf(chat([request(1, 'x', [shell('c1', 'watch', undefined, 'tick'), shell('c2', 'oops', undefined, '', { resultError: 'spawn failed' }), tool('c3', 'read_file', { isConfirmed: undefined, summary: { kind: 'incomplete' } }), tool('c4', 'read_file', { summary: { kind: 'incomplete' } })])]));
+    // An unfinished call is written with `summary.kind` `incomplete` and, before confirmation, no `isConfirmed` (chatToolInvocation.ts:508,516-517); `isComplete` is always true.
+    expect(out.tools.map((entry) => entry.status)).toEqual(['none', 'error', 'none', 'none']);
     expect(out.errorLines.map((entry) => entry.line)).toEqual(['spawn failed']);
   });
 

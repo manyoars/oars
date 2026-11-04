@@ -292,7 +292,9 @@ export const chatLines = (data: Obj, fallbackId: string, folder: string | null):
         } else if (skipped) known = false;
         else if (isShell && exit !== undefined) failure = exit === 0 ? undefined : failureOf(exit, output === '' ? (error ?? '') : output);
         else if (error !== undefined) failure = error;
-        else if (isShell || part.isComplete === false) known = false;
+        // `toJSON` always writes `isComplete: true`; a call that never finished carries `summary.kind` `incomplete` and, before confirmation, no `isConfirmed`
+        // (model/chatProgressTypes/chatToolInvocation.ts:508,516-517). Neither says it succeeded.
+        else if (isShell || confirmed === undefined || (isObj(part.summary) && part.summary.kind === 'incomplete')) known = false;
         if (known) results.push({ id, failure, output: isShell ? output : '', when: callWhen });
         if (block.name === 'Edit' || block.name === 'Write') current = { block, id, failure, edits: 0, when: callWhen };
       }
