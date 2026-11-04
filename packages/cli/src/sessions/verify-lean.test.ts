@@ -1,5 +1,6 @@
 // `readSkeletons(..., lean)` and the verify that uses it (t808): verify holds every skeleton at once and no check reads a line's content hashes.
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import type * as Store from './store.js';
 import { cleanup, NOW, stage } from './test-support.js';
 
 /** Whether each `readSkeletons` call verify made asked for the lean read, and a switch that makes it ask for the full one. */
@@ -7,7 +8,7 @@ const asked: Array<boolean | undefined> = [];
 const forced = { full: false };
 
 vi.mock('./store.js', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('./store.js')>();
+  const actual = await importOriginal<typeof Store>();
   return {
     ...actual,
     readSkeletons: (storeDir: string, only?: string, lean?: boolean) => {
