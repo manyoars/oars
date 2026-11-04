@@ -61,7 +61,82 @@ A bundle's reads are derived from the stored cells with the code a local store r
 
 The (name, `platform`, `shell`) cell is its own cell, `env:<platform>:<shell>`, a week cell that names no version and no model, so a bundle for any harness version holds it (a Gemini, Cursor, or Pi session has no version to key on). It counts the same calls as the version cells, so a total beside only some of its parts would show the rest by subtraction. The pool therefore serves it for a motif, week, and exposure only when no cell of that motif, week, and exposure, in any bucket or environment, is under `k_cell` accounts; one sub-floor part withholds the total (`stored.ts`, `ENVIRONMENT_CELLS`). **Known limit of that rule:** a motif with a long tail of versions, models, or shells has a sub-floor part in any week one of them is under the floor, so on a live pool this read is likely to serve rarely (no real pool exists to measure it), and one new version's first account withholds every motif it calls that week. Sending less is the side the rule is on; a later decision about this cell should weigh how often it serves.
 
-`served-families.test.ts` pins the limit at the wire: a skeleton whose tool carries `keys`, `errorCode`, `sigHash`, `outcome`, or `recoveryCalls`, or that carries error rows, is refused, and a five-account bundle holds a tool-day read and no recovery or call-shape read.
+`served-families.test.ts` pins the limit at the wire: a skeleton whose tool carries `keys`, `errorCode`, `sigHash`, `outcome`, or `recoveryCalls`, or that carries error rows, keeps that field in the extensions bag and nowhere a read can reach, and a five-account bundle holds a tool-day read and no recovery or call-shape read.
+
+## Wire field register
+
+One row per field a format 3 batch carries (section 17 of the direction conclusion, rules 2 to 4): no row, no field. `consumer` is the read family that reads the field today, or the future read that is stated for it. The class is the field's projection class at format 3: `clear` (a closed or public list), `thresholded` (served once `PUBLIC_FLOOR` clusters report the same value), `hashed` (by the client, or by the pool at ingest under `INGEST_HASH_KEY`), or `raw tier` (stored, never served); no skeleton field is `raw tier`. A long-tail name is `private` on the wire until `t881` moves the client's projection to the server, so its thresholded class is the stated one. `Re-derives` says whether a deposit of the field can be built again from the local store (`raw/`) while the store exists, with new consent. A field marked `no` is a constant of the client build.
+
+`Bytes` is measured, not estimated: the canonical bytes of one invented session (`REGISTER_FIXTURE` in `packages/cli/src/sessions/pool-wire-register.test.ts`: one transcript, one prompt, one call, four steps, one delta), summed over every place the field occurs. A container's bytes are its braces, brackets, and commas, and its members' bytes are theirs, so the column adds up to the batch less 9 bytes of top-level braces, commas, and newline (1,963 bytes in all). A real session holds more steps, so read the column as the shape of the cost, not its size. `pool-wire-register.test.ts` parses this table and fails on a field the client emits with no row, a row for a field it does not emit, and a bytes figure that no longer matches the fixture.
+
+An unknown field name a client sends lands in the `extensions` bag of the deposit, not in a row. The bag is ledger class, kept and never served, joined to no read, and left out of every bundle (`wire-contract.test.ts`).
+
+| Field | Consumer | Class | Re-derives | Bytes |
+|---|---|---|---|---|
+| `action` | every order 1 read (`fit`, `change`, `live`, `adoption`, `method`, `next-step`, `tool-day`): the step's kind | clear | yes | 80 |
+| `agentType` | future `change` agentType shares (named under What a bundle serves, served by nothing yet) | clear | yes | 64 |
+| `cacheRead` | `cost`: tokens per prompt class, model, and week | clear (bucket) | yes | 13 |
+| `cacheWrite` | `cost`: tokens per prompt class, model, and week | clear (bucket) | yes | 14 |
+| `change` | future change-effect read: how a config change moved calls per session or thinking tokens (stored in the ledger, served by nothing) | clear (bucket) | yes | 11 |
+| `cls` | `cost`: tokens and wall time per prompt class | clear | yes | 19 |
+| `day` | every cell's week or day: `live`, `tool-day`, `adoption`, `cost` | clear | yes | 36 |
+| `deltaKind` | future change-effect read (added, removed, or changed) | clear | yes | 21 |
+| `deltas` | future change-effect read: the container of a local before and after comparison | clear | yes | 18 |
+| `durationMs` | `cost`: wall time of a call, as a cell's `durationMs` | clear (exact ms today) | yes | 14 |
+| `effort` | the (effort, thinking) cell and the frame of every cell | clear (public values) | yes | 30 |
+| `errors` | `cost`: failed calls per prompt in a class cell | clear (bucket) | yes | 10 |
+| `explore` | the `repoFilesExplore` stratum: how much of a prompt only looked, by repository size | clear (bucket) | yes | 11 |
+| `field` | future change-effect read: which setting a delta is about | clear | yes | 17 |
+| `fieldsVersion` | the deposit route: stored with each batch so a read can tell the field list it came from | clear | no | 17 |
+| `flags` | `fit` and `adoption` per flag of a program | clear (public list); thresholded (long tail, `t881`) | yes | 10 |
+| `format` | the deposit route: refuses a format it does not read; stored with each batch | clear | no | 10 |
+| `frame` | container for where a session ran: every cell key reads its members | clear | yes | 34 |
+| `frameworks` | the `framework` stratum | clear (public list) | yes | 30 |
+| `harness` | every bundle is per harness; the action table a step is checked against | clear | yes | 69 |
+| `harnessVersion` | `fit` and `change` per harness version bucket | clear (public releases) | yes | 52 |
+| `host` | `adoption` and `fit` per web host | clear (public list); thresholded (long tail, `t881`); hashed at ingest once `t881` moves it | yes | 19 |
+| `id` | the ledger's replace-on-redeposit key; no read | hashed (by the client, per account) | yes | 23 |
+| `identity` | container for what a step called: `fit` and `adoption` read its members | clear | yes | 56 |
+| `input` | `cost`: tokens per prompt class, model, and week | clear (bucket) | yes | 9 |
+| `language` | the `language` stratum and the `languageShare` pair stratum | clear (public list) | yes | 74 |
+| `languageShare` | the `languageShare` pair stratum | clear (bucket) | yes | 96 |
+| `languageShares` | container for the share of each language: the `languageShare` pair stratum | clear | yes | 52 |
+| `languages` | the `language` stratum | clear (public list) | yes | 44 |
+| `leaves` | the ingest tier check (`access.ts`): a root over no lines is not a real one; no read | clear | partly (while the raw file stays) | 11 |
+| `merkleRoot` | the ingest tier check (`access.ts`) and the future raw-file audit; no read | hashed (by the client) | partly (while the raw file stays) | 79 |
+| `metric` | future change-effect read (calls per session or thinking tokens) | clear | yes | 26 |
+| `model` | every cell key; `fit` and `cost` per model | clear (public values) | yes | 50 |
+| `ms` | `cost`: the time of a step, as a cell's `durationMs` | clear (bucket) | yes | 24 |
+| `name` | `adoption` and `fit` per named package; the future change-effect read for a package delta | clear (public list); thresholded (long tail, `t881`) | yes | 31 |
+| `native` | the action check at ingest and `fit` per native tool name | clear (public list); thresholded (long tail, `t881`) | yes | 83 |
+| `output` | `cost`: tokens per prompt class, model, and week | clear (bucket) | yes | 10 |
+| `parent` | `next-step` and `method`: the link from a subagent step to the main-run call that spawned it | clear | yes | 52 |
+| `platform` | the `env:<platform>:<shell>` cell of `fit` | clear | yes | 36 |
+| `program` | `fit` and `adoption` per shell program | clear (public list); thresholded (long tail, `t881`) | yes | 15 |
+| `prompt` | ties a call to its prompt, so `cost` reads the prompt's class for it | clear | yes | 10 |
+| `prompts` | container for a transcript's prompts: `cost` reads their class, tokens, and wall time | clear | yes | 19 |
+| `pulls` | `adoption` of a pulled package | clear | yes | 14 |
+| `registry` | `adoption` of a pulled package per registry; the future change-effect read for a package delta | clear | yes | 32 |
+| `remainingTokens` | future remaining-work read (the `next-step` form named under What a bundle serves) | clear (bucket) | yes | 76 |
+| `server` | `adoption` and `fit` per MCP server | clear (public list); thresholded (long tail, `t881`) | yes | 17 |
+| `shell` | the `env:<platform>:<shell>` cell of `fit` | clear | yes | 28 |
+| `side` | keeps a side call out of the main run: the (session, side, prompt) grouping in `cells.ts` | clear | yes | 12 |
+| `size` | the `repoFiles` stratum and the `repoFilesExplore` pair | clear (class) | yes | 22 |
+| `skill` | `adoption` and `fit` per skill | clear (public list); thresholded (long tail, `t881`) | yes | 16 |
+| `stack` | container for the languages, frameworks, and size class: the strata read its members | clear | yes | 26 |
+| `status` | `tool-day` and `fit` failure rates | clear | yes | 65 |
+| `steps` | container for the steps of a call: every step read | clear | yes | 53 |
+| `sub` | `fit` and `adoption` per subcommand | clear (public list); thresholded (long tail, `t881`) | yes | 10 |
+| `thinking` | `cost`: tokens per prompt class; the (effort, thinking) cell | clear (bucket) | yes | 12 |
+| `timingPrint` | none stated: no read, check, or later brief names it (see the t873 report) | hashed (by the client) | yes | 18 |
+| `tokens` | `cost`: tokens per step in a class cell | clear (bucket) | yes | 40 |
+| `tool` | `fit` and `adoption` per public MCP tool | clear (public list); thresholded (long tail, `t881`) | yes | 18 |
+| `tools` | container for the calls of a transcript: `tool-day`, `fit`, and `method` read their members | clear | yes | 16 |
+| `transcripts` | container for the main run and each subagent: every read | clear | yes | 23 |
+| `usage` | container for a prompt's token buckets: `cost` | clear | yes | 14 |
+| `version` | `adoption` of a pulled package at a version | clear (public list); thresholded (long tail, `t881`) | yes | 14 |
+| `vocabVersion` | the deposit route: stored with each batch so a read can tell the vocabulary it came from | clear | no | 18 |
+| `wallSec` | `cost`: wall time per prompt class | clear (bucket) | yes | 11 |
 
 ## Routes
 
