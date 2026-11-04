@@ -2,7 +2,7 @@
 // with npm, npx, or pip whose command left the registry, the config, and the folder to their defaults (the replay asks for no other crossing),
 // that is the registry the manager would contact, because those read the same project and user config; so a private name does not go to a public
 // registry on the gate's account. Off by default; nothing here runs unless the operator asks.
-import { execFile, spawn, type ChildProcess } from 'node:child_process';
+import { execFile, spawn, type ChildProcess, type SpawnOptions } from 'node:child_process';
 import type { CrossingClass } from './checks.js';
 
 export interface RegistryAsk {
@@ -84,11 +84,14 @@ export const managerOptions = (cwd: string, platform: NodeJS.Platform = process.
   env: { ...process.env, NoDefaultCurrentDirectoryInExePath: '1' },
 });
 
+/** What `stopTree` needs of `spawn`: a program, its arguments, and a child to hear an error from. */
+export type StartProcess = (program: string, args: readonly string[], options: SpawnOptions) => { on: (event: 'error', listener: () => void) => unknown };
+
 /**
  * Stops a manager and what it started. On Windows `shell: true` puts `cmd.exe` first, and killing it leaves the manager running, so the whole tree goes (`taskkill /T`); elsewhere
  * the manager is the child itself.
  */
-export const stopTree = (child: Pick<ChildProcess, 'pid' | 'kill'>, platform: NodeJS.Platform = process.platform, start: typeof spawn = spawn): void => {
+export const stopTree = (child: Pick<ChildProcess, 'pid' | 'kill'>, platform: NodeJS.Platform = process.platform, start: StartProcess = spawn): void => {
   if (platform === 'win32' && child.pid !== undefined) {
     start('taskkill', ['/pid', String(child.pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true }).on('error', () => undefined);
     return;

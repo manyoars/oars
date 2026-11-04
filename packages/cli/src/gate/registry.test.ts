@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { askable, managerOptions, managerReader, readNpmView, readPipIndex, stopTree, type ManagerRun, type ManagerRunner } from './registry.js';
+import { askable, managerOptions, managerReader, readNpmView, readPipIndex, stopTree, type ManagerRun, type ManagerRunner, type StartProcess } from './registry.js';
 
 const ran = (code: number | null, stdout = '', stderr = ''): ManagerRun => ({ code, stdout, stderr });
 
@@ -63,10 +63,10 @@ describe('how a manager is started', () => {
 describe('stopping a manager', () => {
   const spawned = () => {
     const calls: { program: string; args: readonly string[] }[] = [];
-    const start = ((program: string, args: readonly string[]) => {
+    const start: StartProcess = (program, args) => {
       calls.push({ program, args });
       return { on: () => undefined };
-    }) as unknown as Parameters<typeof stopTree>[2];
+    };
     return { calls, start };
   };
 
