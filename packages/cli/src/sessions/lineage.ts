@@ -4,7 +4,7 @@
 import { readdir, readFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { CliError, ExitCode } from '../errors.js';
-import { cellIdOf, lastDayOfCell, UNKNOWN, type Cell } from './cells.js';
+import { cellIdOf, UNKNOWN, type Cell } from './cells.js';
 import { poolFiles } from './pool.js';
 import type { Read } from './read.js';
 import { evidencePredates, readRecalls, type Recall, type RecallEvidence } from './recall-object.js';
@@ -85,7 +85,8 @@ export const walkLineage = (sources: LineageSources, start: string): LineageHop[
     }
     const cell = cells.get(ref);
     if (cell !== undefined) {
-      if (limit !== null && cell.day !== UNKNOWN && lastDayOfCell(cell) > limit) throw refuse(ref, lastDayOfCell(cell), limit);
+      // A week cell is named by its Monday, so only a week that opens after the recall is newer than it; a week that straddles the recall is checked by the read's own day, above.
+      if (limit !== null && cell.day !== UNKNOWN && cell.day > limit) throw refuse(ref, cell.day, limit);
       hops.push({ depth, kind: 'cell', ref, frames: [cell.frameBucket], day: cell.day, detail: `${String(cell.sessions)} sessions, ${String(cell.ok)} ok, ${String(cell.failed)} failed${cell.exposed ? ', exposed' : ''}` });
       return;
     }

@@ -101,6 +101,15 @@ describe('walkLineage', () => {
     expect(refusal(() => walkLineage(sources({ recalls: [notTighter, earlier] }), 'recall-one')).message).toContain('earlier');
   });
 
+  it('compares a week cell by the Monday that opens it: a recall on the Wednesday of its evidence week passes, and a later week is refused', () => {
+    const wednesday = { at: '2026-11-04T10:00:00.000Z' };
+    const sameWeek = cell('2026-11-02', { grain: 'week' });
+    const hops = walkLineage(sources({ recalls: [recall([evidence('read:a', '2026-11-04')], wednesday)], reads: [read('read:a', [cellIdOf(sameWeek)], '2026-11-04')], cells: [sameWeek] }), 'recall-one');
+    expect(hops.map(({ kind }) => kind)).toEqual(['recall', 'read', 'cell']);
+    const laterWeek = cell('2026-11-09', { grain: 'week' });
+    expect(refusal(() => walkLineage(sources({ recalls: [recall([evidence('read:a', '2026-11-04')], wednesday)], reads: [read('read:a', [cellIdOf(laterWeek)], null)], cells: [laterWeek] }), 'recall-one')).message).toContain(cellIdOf(laterWeek));
+  });
+
   it('says so for an ID nothing holds', () => {
     expect(refusal(() => walkLineage(sources({}), 'nope')).message).toContain('nope');
   });
@@ -125,6 +134,18 @@ describe('oars sessions lineage', () => {
     expect(await run(['--json', 'sessions', 'lineage', 'read:a'], h.deps)).toBe(ExitCode.OK);
     expect(h.out.join('')).toContain('"kind":"cell"');
     expect(await run(['sessions', 'lineage', 'no-such-id'], h.deps)).toBe(ExitCode.INVALID);
+  });
+
+  it('skips a cell row written before the grain existed, so a read citing it walks to a missing hop', async () => {
+    const staged = stage();
+    mkdirSync(staged.storeDir, { recursive: true });
+    const old: Partial<Cell> = { ...cell('2026-11-01') };
+    delete old.grain;
+    writeFileSync(poolFiles(staged.storeDir).cells, `${JSON.stringify(old)}
+`);
+    expect((await loadLineage(staged.storeDir)).cells).toEqual([]);
+    const hops = walkLineage(sources({ reads: [read('read:a', [cellIdOf(cell('2026-11-01'))])] }), 'read:a');
+    expect(hops.map(({ kind }) => kind)).toEqual(['read', 'missing']);
   });
 
   it('counts recalls from the command line, within a day', async () => {
