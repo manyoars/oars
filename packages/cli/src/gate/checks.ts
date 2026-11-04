@@ -150,8 +150,10 @@ const versionFormOf = (version: string | null): VersionForm => {
 const GIT_URL = /^(?:git\+|ssh:\/\/|git:\/\/)/i;
 /** The first `@` after a URL's host that does not directly follow a `/`, which would be a scope; -1 when there is none. */
 const firstRefAt = (stem: string): number => {
+  const from = stem.indexOf('/', stem.indexOf('://') + 3);
+  if (from < 0) return -1;
   const ref = /(?<!\/)@/g;
-  ref.lastIndex = Math.max(stem.indexOf('/', stem.indexOf('://') + 3), 0);
+  ref.lastIndex = from;
   return ref.exec(stem)?.index ?? -1;
 };
 
@@ -164,7 +166,8 @@ const urlSpec = (text: string): Spec => {
   const query = end.indexOf('?');
   const stem = query < 0 ? end : end.slice(0, query);
   // A git URL's `@ref` follows the path and may hold a slash (`@feature/x`), so it starts at the first `@` past the host that is not a
-  // scope's (`/@scope`). Any other URL has a ref only after its last slash. An `@` in the host part is credentials, already masked.
+  // scope's (`/@scope`). Any other URL has a ref only after its last slash. An `@` before the path is a credential, never a ref: a word with no path has no ref,
+  // and `withoutCredentials` strips its user later.
   const git = GIT_URL.test(text);
   const at = git ? firstRefAt(stem) : stem.lastIndexOf('@');
   const slash = stem.lastIndexOf('/');

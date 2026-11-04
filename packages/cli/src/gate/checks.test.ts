@@ -98,6 +98,11 @@ describe('checkCall on a shell command', () => {
     ['npx git+https://host.example/org/repo@/secret/home/x', ['npm-package url-fetch-and-run https://host.example/org/repo url']],
     ['uv add git+https://host.example/org/repo@/secret/home/x', ['python-package url-install https://host.example/org/repo url']],
     ['pip install https://example.test/a-1.0.tar.gz', ['python-package url-install https://example.test/a-1.0.tar.gz url']],
+    // A credential before the host is not a ref: a word with no path has no ref, and the user is stripped.
+    ['pip install git+https://hunter2@gitserver', ['python-package url-install https://gitserver url']],
+    ['npm install ssh://deploy@gitserver', ['npm-package url-install ssh://gitserver url']],
+    ['npm install ssh://git@gitserver:repo.git', ['npm-package url-install ssh://gitserver:repo.git url']],
+    ['npx skills add ssh://deploy@gitserver', ['skill install ssh://gitserver unstated']],
     ['pip install -e git+https://github.com/org/repo#egg=repo', ['python-package url-install https://github.com/org/repo url']],
     ['npx github:org/repo', ['npm-package url-fetch-and-run github:org/repo url']],
     ['uvx --from git+https://github.com/org/repo tool', ['python-package url-fetch-and-run https://github.com/org/repo url']],
@@ -466,6 +471,10 @@ describe('admitName, the one point every recorded name passes', () => {
     ['npm-package', 'url-install', 'https://host.example/org/repo@', unread('local-path')],
     ['npm-package', 'url-install', 'https://host.example/org/repo@feature/secret', unread('local-path')],
     ['npm-package', 'url-install', 'git+https://host.example/org/repo@/secret', unread('local-path')],
+    // `/@` opens a segment only when a name follows, and an `@` inside or ending a segment is refused.
+    ['npm-package', 'url-install', 'https://host.example/@/secret', unread('local-path')],
+    ['npm-package', 'url-install', 'https://host.example/x/@', unread('local-path')],
+    ['npm-package', 'url-install', 'https://host.example/@@x', unread('local-path')],
     ['npm-package', 'url-install', 'https://host.example:8080/x.tgz', named('https://host.example:8080/x.tgz')],
     ['npm-package', 'url-install', 'https://host.example:secret/x', unread('local-path')],
     // A mask and a variable keep the shapes they have.
@@ -497,6 +506,8 @@ describe('admitName, the one point every recorded name passes', () => {
     ['npm install git+https://github.com/org/repo.git#v1', 'https://github.com/org/repo.git', 'v1'],
     ['pip install git+https://github.com/org/repo@main', 'https://github.com/org/repo', 'main'],
     ['pip install git+https://github.com/org/repo@feature/x', 'https://github.com/org/repo', null],
+    // A scope's `/@` is not a ref: the first `@` after it is.
+    ['npm install git+https://github.com/@scope/repo@v1', 'https://github.com/@scope/repo', 'v1'],
     ['pip install git+https://github.com/org/repo@feature/secret', 'https://github.com/org/repo', null],
     ['pip install "git+https://host.example/org/repo@/secret/home/x"', 'https://host.example/org/repo', null],
   ])('keeps a URL ref only when it is a plain ref, and the crossing either way: %s', (command, name, version) => {
