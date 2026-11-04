@@ -13,8 +13,9 @@ afterEach(cleanup);
 // the envelope `{id, parentId, timestamp, type, data, agentId?}` on every event; `session.start` data (StartData: sessionId, copilotVersion, selectedModel,
 // startTime, context.cwd); `user.message` (UserMessageData.content, isAutopilotContinuation); `assistant.message` (AssistantMessageData: content, model,
 // outputTokens, requestId, messageId, toolRequests[AssistantMessageToolRequest]); `tool.execution_start` (shellToolInfo, toolCallId, toolName);
-// `tool.execution_complete` (ToolExecutionCompleteData: success, error.message, result.content, shellExecution.exitCode, fileEdits, and the `shell_exit`
-// and `terminal` contents); `session.shutdown` (ShutdownData.modelMetrics[model].usage). `assistant.usage` is `ephemeral: true`, which that file defines
+// `tool.execution_complete` (ToolExecutionCompleteData: success, error.message, result.content, shellExecution.exitCode, fileEdits; the schema's
+// `shell_exit` contents are not used, since it says persisted result contents are stripped); `session.shutdown` (ShutdownData.modelMetrics[model].usage,
+// agentMetrics.main); `session.resume` and `session.context_changed` (cwd, selectedModel); `user.message.source`; `assistant.message` apiCallId and chunks. `assistant.usage` is `ephemeral: true`, which that file defines
 // as "not persisted to the session event log on disk", so no fixture holds one. No live store was read.
 
 const capture = (text: string) =>
@@ -80,22 +81,31 @@ describe('the Copilot CLI reader', () => {
     expect(out.errorLines).toMatchObject([{ tool: 'Bash', line: 'make: *** No rule to make target' }]);
   });
 
-  it('reads the exit code from a shell_exit or terminal content when there is no shellExecution, and a failure with no code from its error', () => {
+  it('records a shell call with no exit code and success false as an error with its message, and one with neither as ok', () => {
     const out = extractOf([
       start(),
       prompt(1, 'run them'),
-      say(2, '', {}, [ask('a', 'bash'), ask('b', 'bash'), ask('c', 'bash'), ask('d', 'bash')]),
-      shellStart(3, 'a', 'one'),
-      done(4, 'a', { result: { content: 'bad one', contents: [{ type: 'shell_exit', exitCode: 3, shellId: 's' }] } }),
-      shellStart(5, 'b', 'two'),
-      done(6, 'b', { result: { content: 'bad two', contents: [{ type: 'text', text: 'x' }, { type: 'terminal', exitCode: 4, text: 'y' }] } }),
-      shellStart(7, 'c', 'three'),
-      done(8, 'c', { success: false, error: { message: 'spawn failed' }, result: { content: '' } }),
-      shellStart(9, 'd', 'four'),
-      done(10, 'd', { result: { content: 'fine', contents: [{ type: 'shell_exit', exitCode: 0, shellId: 's' }] } }),
+      say(2, '', {}, [ask('c', 'bash'), ask('d', 'bash')]),
+      shellStart(3, 'c', 'three'),
+      done(4, 'c', { success: false, error: { message: 'spawn failed' }, result: { content: '' } }),
+      shellStart(5, 'd', 'four'),
+      done(6, 'd', { result: { content: 'fine' } }),
     ]);
-    expect(out.tools.map((tool) => tool.status)).toEqual(['error', 'error', 'error', 'ok']);
-    expect(out.errorLines.map((error) => error.line)).toEqual(['bad one', 'bad two', 'spawn failed']);
+    expect(out.tools.map((tool) => tool.status)).toEqual(['error', 'ok']);
+    expect(out.errorLines.map((error) => error.line)).toEqual(['spawn failed']);
+  });
+
+  it('reads a rotated head: a journal link and checkpoint events are the only record of the earlier part, and are read once', () => {
+    const lines = eventLines(
+      asText([event(T(0), 'session.journal_link', { path: 'events.1.jsonl' }), event(T(0), 'user.message', { content: 'earlier prompt' }, { checkpoint: true }), start(), prompt(1, 'later prompt')]),
+      's',
+    );
+    expect(lines.filter((entry) => entry.type === 'user')).toHaveLength(2);
+  });
+
+  it('puts the output the responses did not report on the first line of the last response', () => {
+    const lines = eventLines(asText([start(), prompt(1, 'a'), say(2, 'one', { model: 'm1' }), shutdown(3, { m1: { requests: {}, usage: { inputTokens: 10, outputTokens: 40, cacheReadTokens: 0, cacheWriteTokens: 0 } } })]), 's');
+    expect(capture(lines.map((entry) => JSON.stringify(entry)).join('\n')).session.usage).toMatchObject({ input: 10, output: 40 });
   });
 
   it('keeps the output as the error line when the exit code is -1, which is no exit status', () => {
@@ -199,6 +209,113 @@ describe('the Copilot CLI reader', () => {
     const tool = extractOf([start(), prompt(1, 'go'), say(2, '', {}, [ask('c1', 'view')]), begin(3, 'c1', 'view'), done(4, 'c1', { success: false, error: { message: long } })]).errorLines[0];
     expect(tool?.line.length).toBeLessThanOrEqual(1000);
     expect(tool?.line).not.toContain('alice@example.com');
+  });
+});
+
+describe('the Copilot CLI reader, fix round 1', () => {
+  it('decides a shell call by the completion alone: no shellToolInfo on the start, success true, exit 2 is an error', () => {
+    const out = extractOf([start(), prompt(1, 'run'), say(2, '', {}, [ask('c1', 'bash', { command: 'make' })]), begin(3, 'c1', 'bash', { arguments: { command: 'make' } }), done(4, 'c1', { success: true, shellExecution: { exitCode: 2 }, result: { content: 'make: *** No rule' } })]);
+    expect(out.tools).toMatchObject([{ tool: 'Bash', status: 'error' }]);
+    expect(out.errorLines).toMatchObject([{ tool: 'Bash', line: 'make: *** No rule' }]);
+  });
+
+  it('lets the exit code decide whatever success says: exit 0 with success false is ok', () => {
+    const out = extractOf([start(), prompt(1, 'run'), say(2, '', {}, [ask('a', 'bash')]), shellStart(3, 'a', 'x'), done(4, 'a', { success: false, shellExecution: { exitCode: 0 }, result: { content: 'fine' } })]);
+    expect(out.tools.map((tool) => tool.status)).toEqual(['ok']);
+  });
+
+  it('keeps the error message when a nonzero exit has no output', () => {
+    const lines = eventLines(asText([start(), prompt(1, 'x'), say(2, '', {}, [ask('b', 'bash')]), shellStart(3, 'b', 'y'), done(4, 'b', { success: false, shellExecution: { exitCode: 3 }, error: { message: 'permission denied' }, result: { content: '' } })]), 's');
+    expect(JSON.stringify(lines)).toContain('permission denied');
+  });
+
+  it('keys a response on requestId, else apiCallId, else messageId, so chunks of one call get the shutdown totals once', () => {
+    const lines = eventLines(
+      asText([
+        start(),
+        prompt(1, 'a'),
+        say(2, 'one', { model: 'm1', requestId: 'r1', apiCallId: 'api1', outputTokens: 3 }),
+        say(3, 'two', { model: 'm1', requestId: 'r1', apiCallId: 'api1', outputTokens: 4 }),
+        shutdown(4, { m1: { requests: {}, usage: { inputTokens: 100, outputTokens: 7, cacheReadTokens: 20, cacheWriteTokens: 0 } } }),
+      ]),
+      's',
+    );
+    expect(lines.filter((entry) => entry.type === 'assistant').map((entry) => entry.requestId)).toEqual(['r1', 'r1']);
+    expect(capture(lines.map((entry) => JSON.stringify(entry)).join('\n')).session.usage).toMatchObject({ input: 100, cacheRead: 20, output: 7 });
+    expect(eventLines(asText([start(), say(2, 'x', { apiCallId: 'api9', messageId: 'mm' })]), 's').find((entry) => entry.type === 'assistant')?.requestId).toBe('api9');
+  });
+
+  it('reads powershell as a shell call whose step is shell.exec, and an edit by its name with no fileEdits', () => {
+    const lines = eventLines(
+      asText([
+        start(),
+        prompt(1, 'x'),
+        say(2, '', {}, [ask('p', 'powershell', { command: 'dir' }), ask('e', 'edit', { path: 'src/a.ts' }), ask('f', 'str_replace_editor', { path: 'src/b.ts' })]),
+        begin(3, 'p', 'powershell', { arguments: { command: 'dir' }, shellToolInfo: {} }),
+        done(4, 'p', { shellExecution: { exitCode: 0 }, result: { content: 'x' } }),
+        begin(5, 'e', 'edit'),
+        done(6, 'e', { success: false, error: { message: 'no match' } }),
+        begin(7, 'f', 'str_replace_editor'),
+        done(8, 'f', {}),
+      ]),
+      's',
+    );
+    const text = lines.map((entry) => JSON.stringify(entry)).join('\n');
+    const out = capture(text);
+    expect(out.tools.map((tool) => [tool.tool, tool.status])).toEqual([['Bash', 'ok'], ['Edit', 'error'], ['Edit', 'ok']]);
+    expect(out.session.files).toEqual(expect.arrayContaining(['src/b.ts']));
+    expect(out.tools.map((tool) => tool.steps?.[0]?.action)).toEqual(['shell.exec', 'file.edit', 'file.edit']);
+  });
+
+  it('skips events that carry only the deprecated parentToolCallId, and user messages from skills and other agents', () => {
+    const lines = eventLines(
+      asText([
+        start(),
+        prompt(1, 'real'),
+        event(T(2), 'assistant.message', { messageId: 'x', content: 'inner', parentToolCallId: 'task1' }),
+        event(T(3), 'user.message', { content: 'skill body', source: 'skill-pdf' }),
+        event(T(4), 'user.message', { content: 'from a peer', source: 'agent-7' }),
+        event(T(5), 'user.message', { content: 'typed', source: 'user' }),
+      ]),
+      's',
+    );
+    expect(lines.filter((entry) => entry.type === 'assistant')).toHaveLength(0);
+    expect(lines.filter((entry) => entry.type === 'user')).toHaveLength(2);
+  });
+
+  it('follows a resume or a directory change for the cwd and the model', () => {
+    const lines = eventLines(
+      asText([
+        start('/work/a'),
+        prompt(1, 'one'),
+        event(T(2), 'session.context_changed', { cwd: '/work/b' }),
+        prompt(3, 'two'),
+        event(T(4), 'session.resume', { resumeTime: T(4), eventCount: 1, selectedModel: 'gpt-5', context: { cwd: '/work/c' } }),
+        say(5, 'three'),
+      ]),
+      's',
+    );
+    expect(lines.map((entry) => entry.cwd)).toEqual(['/work/a', '/work/b', '/work/c']);
+    expect(lines.find((entry) => entry.type === 'assistant')).toMatchObject({ requestedModel: 'gpt-5' });
+  });
+
+  it('takes the totals from agentMetrics.main when present, else from modelMetrics', () => {
+    const usage = (n: number) => ({ requests: {}, usage: { inputTokens: n, outputTokens: 1, cacheReadTokens: 0, cacheWriteTokens: 0 } });
+    const run = (data: object) =>
+      capture(
+        eventLines(asText([start(), prompt(1, 'a'), say(2, 'one', { model: 'm1' }), event(T(3), 'session.shutdown', { shutdownType: 'routine', totalApiDurationMs: 5, sessionStartTime: 0, codeChanges: {}, ...data })]), 's')
+          .map((entry) => JSON.stringify(entry))
+          .join('\n'),
+      ).session.usage;
+    expect(run({ modelMetrics: { m1: usage(500) }, agentMetrics: { main: { modelMetrics: { m1: usage(40) } } } })).toMatchObject({ input: 40 });
+    expect(run({ modelMetrics: { m1: usage(500) }, agentMetrics: { other: {} } })).toMatchObject({ input: 500 });
+    expect(run({ modelMetrics: { m1: usage(500) } })).toMatchObject({ input: 500 });
+  });
+
+  it('captures a session from a folder that is not a repository', () => {
+    const out = extractOf([start('/tmp/notes'), prompt(1, 'hi'), say(2, '', {}, [ask('c1', 'view', { path: 'a.txt' })]), begin(3, 'c1', 'view'), done(4, 'c1', { result: { content: 'text' } })]);
+    expect(out.tools).toMatchObject([{ tool: 'view', status: 'ok' }]);
+    expect(out.session.repo).toBeNull();
   });
 });
 

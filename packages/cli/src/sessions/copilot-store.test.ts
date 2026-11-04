@@ -123,6 +123,15 @@ describe('depositing the Copilot source', () => {
     expect(result.sources.copilot?.unreadable.join('\n')).toContain(C);
   });
 
+  it('names a wholly torn events file and leaves its cursor alone, so a fixed file is read next time', async () => {
+    const s = staged();
+    stageCopilot(s.root, [{ id: E, lines: '{torn\nnot json\n' }]);
+    const result = await deposit(s.runtime, options(['copilot']));
+    expect(result.sources.copilot?.unreadable.join('\n')).toContain(E);
+    expect(trackedKeys(s.storeDir)).toEqual([`copilot/${A}`, `copilot/${B}`]);
+    expect(result.sessions).toBe(2);
+  });
+
   it('counts a torn line in the events file as a bad line, so the deposit line does not under-report', async () => {
     const s = staged();
     stageCopilot(s.root, [{ id: E, lines: `${JSON.stringify(start(E, '/x'))}\n{torn\n${JSON.stringify(prompt(2, 'hi'))}\n` }]);
