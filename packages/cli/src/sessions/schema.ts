@@ -595,7 +595,10 @@ export interface HookCall {
   session: string | null;
   /** Whether the hook had something to say (an injected block, a recall hit, or a session deposited). */
   hit: boolean;
+  /** In-process work: from the start of `runHook` to the row. */
   ms: number;
+  /** The process time before `runHook` began (node start and module load); `startMs + ms` is the field figure. Calls written before it existed have none. */
+  startMs?: number;
   /** The failure's first informative line, redacted and cut to 300 characters, when the hook failed (it still exits 0); null when it ran clean. */
   error: string | null;
 }

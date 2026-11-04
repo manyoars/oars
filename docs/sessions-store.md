@@ -126,8 +126,8 @@ pattern and entropy, emails, and the domains named with `--redact-domain`) befor
 | | `session`, `agent` (the subagent transcript id, a join id), `toolUseId` (a join id), `ts`, `sig` (redacted at capture, normalized at derive), `example` (160 characters) | A |
 | store files | `salt`, `state.json`, `raw/`, `hook-index.json` `projects` keys (folder slugs), `mcp-calls.jsonl` `cwd` (the server's working directory, unhashed) | L |
 | | skeleton lines (`skeletons/<session>.json`: ids, usage, block hashes, each cost-state model's usage keys), `hook-calls.jsonl` `session`, `at`, and `error` (first line, redacted), `mcp-calls.jsonl` `query` and `at` (each `at` is finer than a UTC day) | A |
-| | `hook-calls.jsonl` `event`, `hit`, `ms`; `mcp-calls.jsonl` `matches` | P |
-| | a `pre-tool` row in `hook-calls.jsonl` is one per hook call on any tool (the installed entry has no matcher): `at`, `event`, `session`, `hit`, `ms`, `error`, and nothing of the tool, its input, or a query, so its classes are the A and P ones above and no class L field exists on it | A, P |
+| | `hook-calls.jsonl` `event`, `hit`, `ms`, `startMs`; `mcp-calls.jsonl` `matches` | P |
+| | a `pre-tool` row in `hook-calls.jsonl` is one per hook call on any tool (the installed entry has no matcher): `at`, `event`, `session`, `hit`, `ms`, `startMs`, `error` (`ms` is in-process work; `startMs` is the process time before the hook began, so `startMs + ms` is the field figure), and nothing of the tool, its input, or a query, so its classes are the A and P ones above and no class L field exists on it | A, P |
 
 A `P` date is at day resolution only: the finer timestamps above are all class `A`. `sw` (the per-field local-only switch for text
 fields) applies to `urls`, `searches`, `branches`, `tldrs`, `confidences`, `head`, `line`, `sig`, `example`, and `mcp-calls.jsonl` `query`.

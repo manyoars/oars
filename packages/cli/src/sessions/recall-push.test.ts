@@ -169,7 +169,7 @@ describe('the pre-tool push', () => {
       return typeof parsed === 'object' && parsed !== null ? Object.fromEntries(Object.entries(parsed)) : {};
     });
     expect(rows).toHaveLength(2);
-    for (const row of rows) expect(Object.keys(row).sort()).toEqual(['at', 'error', 'event', 'hit', 'ms', 'session']);
+    for (const row of rows) expect(Object.keys(row).sort()).toEqual(['at', 'error', 'event', 'hit', 'ms', 'session', 'startMs']);
     expect(rows.map((row) => row.hit)).toEqual([true, false]);
     expect(rows[0]).toMatchObject({ event: 'pre-tool', session: sid, error: null });
     expect(typeof rows[0]?.ms).toBe('number');
