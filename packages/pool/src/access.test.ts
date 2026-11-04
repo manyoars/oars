@@ -129,6 +129,19 @@ describe('the access flag over the routes', () => {
     });
   }, 60_000);
 
+  it('clears the date when a resend no longer counts, so the cap comes back', async () => {
+    await inPool(async (pool) => {
+      const { token, account } = await depositor(pool, '3008', 'cursor');
+      expect(await fetches(pool, token, 2)).toEqual([200, 200]);
+      // The same id again, now from a harness whose batch does not count at the ingest tier.
+      expect((await pool.post('/v1/deposits', sampleSkeleton('0000000000003008'), token)).status).toBe(201);
+      const row = await (await pool.db()).prepare('SELECT counted_at AS counted FROM deposits WHERE account = ?').bind(account).first();
+      expect(fieldOf(row, 'counted')).toBeNull();
+      expect(await fetches(pool, token, 2)).toEqual([200, 429]);
+      expect(await accessOfAccount(pool, account)).toBeNull();
+    });
+  }, 60_000);
+
   it('stands once a counting batch has stood the ledger days, and stays when that batch later falls to none', async () => {
     await inPool(async (pool) => {
       const { token, account } = await depositor(pool, '3005', 'cursor');
