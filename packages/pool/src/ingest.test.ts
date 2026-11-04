@@ -182,7 +182,10 @@ describe('two deposits of one session at once', () => {
   /** An env whose first read of a held batch waits for a second: both deposits then read the same earlier row, as two requests at the same moment do. */
   const gated = async (target: TestPool): Promise<Env> => {
     const { DB } = await target.miniflare.getBindings<{ DB: PoolDb }>();
-    const opened = Promise.withResolvers<undefined>();
+    let open: () => void = () => undefined;
+    const opened = new Promise<void>((resolve) => {
+      open = resolve;
+    });
     let arrived = 0;
     return {
       COVENANT_VERSION: 'v1',
@@ -196,8 +199,8 @@ describe('two deposits of one session at once', () => {
               first: async () => {
                 const row = await bound.first();
                 arrived += 1;
-                if (arrived === 2) opened.resolve(undefined);
-                await opened.promise;
+                if (arrived === 2) open();
+                await opened;
                 return row;
               },
               all: () => bound.all(),
@@ -276,7 +279,7 @@ describe('what stored cells cannot take back', () => {
       for (const id of ['8811', '8812', '8813', '8814', '8815']) {
         const token = await accountOn(target, id);
         tokens.push(token);
-        await send(target, token, sampleSkeleton(`${id.padStart(16, '0')}`, undefined, '2026-11-01'));
+        await send(target, token, sampleSkeleton(id.padStart(16, '0'), undefined, '2026-11-01'));
       }
       const held = async (): Promise<{ sessions: number; clusters: number }[]> =>
         (await db.prepare("SELECT sessions, clusters FROM cells WHERE day = '2026-11-01' AND sessions > 0").all()).results.map((row) => ({ sessions: Number(fieldOf(row, 'sessions')), clusters: Number(fieldOf(row, 'clusters')) }));
