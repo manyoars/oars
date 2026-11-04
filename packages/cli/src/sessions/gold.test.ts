@@ -423,7 +423,7 @@ describe('writeGoldFiles', () => {
 });
 
 describe('oars sessions gold', () => {
-  // Under V15 a draw needs a term file (none excludes every session): an invented term that no fixture holds, unless the test is about its absence.
+  // Under the exclusion rule a draw needs a term file (none excludes every session): an invented term that no fixture holds, unless the test is about its absence.
   const setup = (withTerms = true) => {
     const staged = stage();
     const termsFile = join(staged.root, 'exclusion-terms.txt');
@@ -541,7 +541,7 @@ describe('oars sessions gold', () => {
     expect(h.err.join('')).toContain('EEXIST');
   });
 
-  it('refuses to sample when no term file is configured, since every session is then excluded (V15)', async () => {
+  it('refuses to sample when no term file is configured, since every session is then excluded', async () => {
     const h = setup(false);
     await populate(h);
     const dir = join(h.staged.root, 'no-terms');

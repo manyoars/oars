@@ -18,7 +18,7 @@ const signed = async (bundle: Bundle, privateJwk: string): Promise<SignedBundle>
   return { payload, signature: btoa(String.fromCharCode(...new Uint8Array(signature))) };
 };
 
-/** One fetch a week unless the deploy sets more (V12). */
+/** One fetch a week unless the deploy sets more. */
 const DEFAULT_FETCH_CAP = 1;
 
 /** The count of changes to the stored cells and strata, kept by triggers on them so it moves in the same write as the change. Rows of the ledger plane expire without moving it. */
