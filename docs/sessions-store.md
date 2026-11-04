@@ -592,7 +592,7 @@ nothing was copied) and tested only on synthetic fixtures; no Gemini CLI store h
 per-request input and cache split and sees only what runs after install, so, as for Codex and Copilot, the file is read. The one hand run that would settle it: on
 a machine with a Gemini account, run one `gemini -p "<task>"` with tool approval on (`--yolo`) that makes one prompt, runs one command that exits nonzero (for
 example `ls /nonexistent`), and edits one file, then `oars sessions deposit --allow gemini` and `oars sessions verify --strict`. It is settled only if the session
-count is nonzero, there are zero violations, the session holds an `error` tool record for that command with a matching error line, the edit is an `edit` action
+count is nonzero, there are zero violations, the session holds an `error` tool record for that command with a matching error line, the edit is a `file.edit` action
 with the file, and usage is nonzero with `input_tokens` equal to the model's prompt count less its cached count. Run it with `APPDATA` and `HOME` set to a temp folder.
 
 - **Where.** `$GEMINI_CLI_HOME`, else the home, then `.gemini` (`%USERPROFILE%\.gemini` on Windows): `tmp/<slug>/chats/session-<time>-<id8>.jsonl`, one session per file.
