@@ -491,11 +491,12 @@ const buildProgram = (deps: RunDeps, argv: string[]): Command => {
     .option('--out-dir <folder>', 'where to write (default <claude config>/session-commons/review)')
     .action(async (_options: OptionValues, command: Command) => {
       const options: OptionValues = command.optsWithGlobals();
+      if (deps.sessions === undefined) throw new CliError('The session store is not configured in this run.', ExitCode.UNEXPECTED, 'unexpected');
       emit(
         deps,
         flag(options, 'json'),
         await sessionsGoldSample(sessionDeps(deps), {
-          termsFile: exclusionPaths(deps.sessions?.projectsRoot ?? '', deps.env).terms,
+          termsFile: exclusionPaths(deps.sessions.projectsRoot, deps.env).terms,
           size: count(options, 'size') ?? 200,
           batch: count(options, 'batch') ?? 50,
           seed: text(options, 'seed'),

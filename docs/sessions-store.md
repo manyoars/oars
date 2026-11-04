@@ -381,10 +381,20 @@ local only and is never read by `derive`.
 
 ## The V15 exclusion list
 
-One rule decides which sessions may enter the pool (A38): a session is excluded if any line of its main or
-subagent transcript holds a listed term, scanned locally before anything is deposited. A session with no main transcript to scan
-is excluded, and so is every session when the term file is missing, empty, or undecodable (a NUL or U+FFFD in the file). A link is followed at every level: the projects root, the store folder, `raw/`, a project folder, a session folder, `subagents`, an entry under `subagents`, a main transcript, and the store log. A link that leads nowhere or to the wrong kind of entry (a file where a folder belongs, a folder where a transcript belongs, a file under `subagents` not named `.jsonl`) is never clean: the session is excluded as unreadable, or, when the link is a root, the store log, or a project folder, the command stops and writes no list. The same holds for a plain file (no link) where a folder belongs, or a folder where the main transcript belongs. Any other main transcript or `subagents` folder that cannot be read leaves its session excluded as unreadable too; a project folder that cannot be listed stops the command and writes no list (it names the folder by ordinal only, except for a root or a linked project folder, whose message names no folder). The scan reads both the harness's `projects/`
-folder and `raw/`, because either can be the only copy left.
+One rule decides which sessions may enter the pool (A38): a session is excluded if any line of its main or subagent
+transcript holds a listed term, scanned locally before anything is deposited. A session with no main transcript to scan
+is excluded, and so is every session when the term file is missing, empty, or undecodable (a NUL or U+FFFD in the file).
+A link is followed at every level: the projects root, the store folder, `raw/`, a project folder, a session folder,
+`subagents`, an entry under `subagents`, a main transcript, and the store log. A link that leads nowhere or to the wrong
+kind of entry (a file where a folder belongs, a folder where a transcript belongs, a file under `subagents` not named
+`.jsonl`) is never clean: the session is excluded as unreadable, or, when the link is a root, the store log, or a
+project folder, the command stops and writes no list. The same holds for a plain file (no link) where a folder belongs,
+or a folder or other non-file entry where a transcript belongs (the main, or a name ending in `.jsonl` under
+`subagents`). A link back into a folder already walked reads unreadable too, because following it would loop. Any other
+main transcript or `subagents` folder that cannot be read leaves its session excluded as unreadable too; a project
+folder that cannot be listed stops the command and writes no list (it names the folder by ordinal only, except for a
+root or a linked project folder, whose message names no folder). The scan reads both the harness's `projects/` folder
+and `raw/`, because either can be the only copy left.
 
 The term list is a local file, one term per line, matched without regard to case, never in this repository. The
 `OARS_EXCLUSION_TERMS` environment variable names it; the default is `session-commons/exclusion-terms.txt` beside the claude
