@@ -69,7 +69,7 @@ describe('EXTRACTOR_VERSION 11', () => {
     addProject(staged, 'proj', 'shell', shellSession().split('\n'));
     await deposit(staged.runtime, { allow: ['proj'], redactDomains: [], now: () => NOW });
     // The store on disk, not the table of paths the code knows: a deposit writes no file or folder named for a pool, an outbox, or a staged batch.
-    // (`pool-replica/` is the signed slice `oars pool pull` keeps; a deposit never writes it.)
+    // (`pool-replica/` is the signed slice `oars pool fetch` keeps; a deposit never writes it.)
     const walk = (dir: string): string[] => readdirSync(dir, { withFileTypes: true }).flatMap((entry) => [join(dir, entry.name), ...(entry.isDirectory() ? walk(join(dir, entry.name)) : [])]);
     const written = walk(staged.storeDir);
     expect(written.length).toBeGreaterThan(0);
