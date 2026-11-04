@@ -82,11 +82,11 @@ export const environmentFieldsOf = (bucket: string): { platform: string; shell: 
   return { platform: held.slice(0, at), shell: held.slice(at + 1) };
 };
 
-/** A one-step named call with no flag and no pull: the name that is one dimension. A flag or a pull is a second dimension of its own, so its cell would be four with the pair. */
+/** A one-step named call with no flag and no pull: the name that is one dimension. A call with no identity (a file read, an edit) is its action alone, so it counts. A flag or a pull is a second dimension of its own, so its cell would be four with the pair. */
 const isPlainCall = (motif: Motif): boolean => {
   const [only] = motif.steps;
-  if (motif.level !== 'named' || motif.steps.length !== 1 || only === undefined || only.identity === null) return false;
-  return !('program' in only.identity) || (only.identity.flags.length === 0 && (only.identity.pulls?.length ?? 0) === 0);
+  if (motif.level !== 'named' || motif.steps.length !== 1 || only === undefined) return false;
+  return only.identity === null || !('program' in only.identity) || (only.identity.flags.length === 0 && (only.identity.pulls?.length ?? 0) === 0);
 };
 
 const DAY_MS = 86_400_000;

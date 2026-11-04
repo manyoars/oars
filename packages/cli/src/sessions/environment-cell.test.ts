@@ -8,7 +8,7 @@ import { frame, prompt, session, step, storedNames, store, tool } from './pool-f
 import { atGrain, unitCells } from './read-support.js';
 
 const framed = frame({ platform: 'linux', shell: 'bash' });
-const windows = frame({ platform: 'win32', shell: 'PowerShell', day: '2026-11-02' });
+const windows = frame({ platform: 'win32', shell: 'powershell', day: '2026-11-02' });
 
 const fixture = () =>
   store({
@@ -29,7 +29,7 @@ describe('the (name, platform, shell) cell', () => {
   it('names the platform and the shell and no version, model, or harness', () => {
     expect(environmentBucketOf(framed)).toBe(`${ENVIRONMENT_BUCKET}linux:bash`);
     expect(environmentBucketOf(frame({ platform: 'darwin', shell: null }))).toBe(`${ENVIRONMENT_BUCKET}darwin:${UNKNOWN}`);
-    expect(environmentFieldsOf(environmentBucketOf(windows))).toEqual({ platform: 'win32', shell: 'PowerShell' });
+    expect(environmentFieldsOf(environmentBucketOf(windows))).toEqual({ platform: 'win32', shell: 'powershell' });
   });
 
   it('counts a one-step named shell call once per (platform, shell) at the week grain', () => {
@@ -46,8 +46,15 @@ describe('the (name, platform, shell) cell', () => {
     const push = cells.filter((cell) => motifName(names.get(cell.motifId) ?? { motifId: '', level: 'named', steps: [], cls: null }) === 'shell.exec[program=git sub=push]');
     expect(push.map((cell) => [cell.frameBucket, cell.ok, cell.failed]).sort()).toEqual([
       [`${ENVIRONMENT_BUCKET}linux:bash`, 1, 1],
-      [`${ENVIRONMENT_BUCKET}win32:PowerShell`, 1, 0],
+      [`${ENVIRONMENT_BUCKET}win32:powershell`, 1, 0],
     ]);
+  });
+
+  it('counts a call with no identity by its name, such as a file read, in its (platform, shell) cell', () => {
+    const set = derived();
+    const names = new Map(set.motifs.map((motif) => [motif.motifId, motif]));
+    const reads = environmentCells().filter((cell) => names.get(cell.motifId)?.steps[0]?.identity === null);
+    expect(reads.map((cell) => [cell.frameBucket, cell.grain, cell.ok, cell.failed])).toEqual([[`${ENVIRONMENT_BUCKET}linux:bash`, 'week', 1, 0]]);
   });
 
   it('holds no flag cell and no pull cell, which would be four dimensions with the pair', () => {

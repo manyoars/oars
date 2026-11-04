@@ -364,8 +364,8 @@ describe('a large deposit', () => {
     expect(JSON.stringify(skeleton).length).toBeLessThan(1024 * 1024);
     // The sizes docs/pool.md states, so they cannot drift unseen: the skeleton as the worker stores it, the cells, and their JSON.
     expect(JSON.stringify(skeleton).length).toBe(784_599);
-    expect(wanted.cells.size).toBe(11_139);
-    expect(JSON.stringify([...wanted.cells.values()]).length).toBe(3_241_663);
+    expect(wanted.cells.size).toBe(11_548);
+    expect(JSON.stringify([...wanted.cells.values()]).length).toBe(3_342_305);
     await inFreshPool({}, async (target) => {
       const token = await accountOn(target, '9101');
       const response = await target.post('/v1/deposits', skeleton, token);
