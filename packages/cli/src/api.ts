@@ -20,7 +20,7 @@ export const apiClient = (deps: RunDeps, options: { apiUrl: string; step: string
       try {
         return await send(request);
       } catch (error) {
-        throw unreachableError(options.step, error);
+        throw unreachableError(options.step, error, options.apiUrl);
       }
     },
   });

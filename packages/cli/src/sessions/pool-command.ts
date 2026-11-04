@@ -167,7 +167,7 @@ const send = async (deps: RunDeps, step: string, request: Outgoing, show: Masker
   try {
     response = await fetch(request.url, { method: request.method, headers: request.headers, redirect: 'error', ...(request.body === undefined ? {} : { body: request.body }) });
   } catch (error) {
-    throw unreachableError(step, error);
+    throw unreachableError(step, error, request.url.origin);
   }
   let body: unknown;
   try {
