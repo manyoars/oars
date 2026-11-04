@@ -361,7 +361,7 @@ describe('the call shapes in the index', () => {
   const SHAPE = toolShapeId('Monitor', ['query']);
   const calls = (name: string) =>
     Array.from({ length: 10 }, (_, n) => toolRow(name, n, 'Monitor', { ts: '2026-11-01T00:00:00.000Z', status: n < 2 ? 'error' : 'ok', keys: ['query'], durationMs: 5, toolUseId: `${name}-${String(n)}`, harnessVersion: '2.1.300', prompt: 0 }));
-  // Calls of a tool no action table lists that never fail, so `Monitor` (also `other`) has a base rate to beat.
+  // Calls of a tool no action table lists that never fail, so `Monitor` (action `other`) has a base rate to beat.
   const quiet = Array.from({ length: 100 }, (_, n) => toolRow('q', n, 'Quiet', { ts: '2026-11-01T00:00:00.000Z', status: 'ok', keys: ['x'], durationMs: 5, toolUseId: `q-${String(n)}`, harnessVersion: '2.1.300', prompt: 0 }));
   const indexOver = (names: readonly string[]) => buildIndex({ sessions: [], prompts: [], errors: [], subagents: [], tools: [...names.flatMap(calls), ...quiet], newerCaptures: 0 }, [], '2026-11-02T00:00:00.000Z');
 
@@ -394,10 +394,21 @@ describe('the call shapes in the index', () => {
       expect(Object.keys(fit)).toEqual([toolShapeId('PowerShell', ['pattern'])]);
     });
 
-    it('lets a shape of a tool no action table lists fire against the base rate of other', () => {
+    it('holds Monitor, whose action is other, to the share of other, unlisted tools included', () => {
       const quiet = shaped('d', 'Quiet', ['x'], 200, 0);
       const sharp = sessions.flatMap((name) => shaped(name, 'Monitor', ['query'], 10, 2));
       expect(Object.keys(over([...quiet, ...sharp]))).toEqual([SHAPE]);
+    });
+
+    it('holds a failing tool no action table lists to the same share of other', () => {
+      const quiet = shaped('d', 'Quiet', ['x'], 200, 0);
+      const unlisted = toolShapeId('Mystery', ['x']);
+      const sharp = sessions.flatMap((name) => shaped(name, 'Mystery', ['x'], 10, 2));
+      // 6 of 230 other calls fail, so 20 percent is far over twice the action's share.
+      expect(Object.keys(over([...quiet, ...sharp]))).toEqual([unlisted]);
+      // With Monitor failing as often, the action's share is 20 percent too, and neither shape is twice it.
+      const alike = sessions.flatMap((name) => shaped(name, 'Monitor', ['query'], 10, 2));
+      expect(over([...sharp, ...alike])).toEqual({});
     });
 
     it('requires exactly twice the share: a tie fires, one failure fewer does not', () => {

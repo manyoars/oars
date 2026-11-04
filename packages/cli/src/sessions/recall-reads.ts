@@ -215,7 +215,7 @@ export const PUSH_MIN_LIFT = 2;
 
 /**
  * The reads whose shape fails at `lift` times the share of its whole action or more, where the action's share counts every call of every shape of it, those under the floors too.
- * A tool no table lists is the action `other` (or `mcp.call`), so it is held to that action's share like any other and can fire. Compared in integers, so a tie is exact.
+ * A tool no table lists is the action `other` (or `mcp.call`), so it is held to that action's share like any other and can enter the index; the hook matcher decides whether it fires. Compared in integers, so a tie is exact.
  */
 export const aboveBaseRate = (store: Store, reads: readonly RecallRead[], lift: number = PUSH_MIN_LIFT): RecallRead[] => {
   const harnesses = harnessesOf(store);
