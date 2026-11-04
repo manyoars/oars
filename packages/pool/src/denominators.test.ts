@@ -2,7 +2,7 @@
 // count, show how large that cell is. Each test holds one served cell and one sub-floor cell and asks what the served number counts.
 import { describe, expect, it } from 'vitest';
 import type { Cell } from '../../cli/src/sessions/cells.js';
-import { shapeMotif } from '../../cli/src/sessions/motif.js';
+import { namedId, shapeMotif, type Motif, type WindowStep } from '../../cli/src/sessions/motif.js';
 import type { Read } from '../../cli/src/sessions/read.js';
 import type { Harness } from '../../cli/src/sessions/schema.js';
 import { bundleOf, K_CELL } from './derive.js';
@@ -116,15 +116,92 @@ describe('a live baseline that is sub-floor is null, not zero', () => {
   });
 });
 
-// A KNOWN GAP, pinned so a later change that closes it fails here and moves `docs/pool.md` Known gaps with it: a week cell and the day cells of its days count the same steps, and both leave,
-// so a served week less its served days is the sub-floor days' steps. Withholding the days of such a week was tried and withholds a day whenever any other day of its week is sub-floor (the bundle.test.ts
-// "one account on the next day" cases), which is a ruling for the lead and not this task's.
-describe('a week and its days: the cross-grain gap', () => {
-  it('still shows a sub-floor day by a served week less its served days', () => {
-    const bundle = bundleOver([cellOf(READ.motifId, 6, 20, { grain: 'week' }), cellOf(READ.motifId, 5, 18), cellOf(READ.motifId, 1, 2, { day: '2026-11-03' })]);
+// A week cell and the day cells of its days count the same steps, and both leave. A served week less all of its served days would then be the sub-floor days' steps, so a week with a sub-floor day
+// also withholds its smallest served day (fewest accounts, ties to the earliest day): the difference is then a sum over at least two days, one of them at or above the floor, which no reader can split.
+describe('a week and its days: complementary withholding', () => {
+  const week = (clusters: number, ok: number): Cell => cellOf(READ.motifId, clusters, ok, { grain: 'week', day: '2026-11-02' });
+  const dayOf = (clusters: number, ok: number, day: string): Cell => cellOf(READ.motifId, clusters, ok, { day });
+  const servedDays = (bundle: ReturnType<typeof bundleOf>): string[] => bundle.cells.filter((cell) => cell.grain === 'day').map((cell) => cell.day);
+  const dayReads = (bundle: ReturnType<typeof bundleOf>, family: Read['family']): string[] => bundle.reads.filter((read) => read.family === family).map((read) => String(read.slice.day));
+
+  it('serves the week and not the one served day beside a sub-floor day', () => {
+    const bundle = bundleOver([week(6, 20), dayOf(5, 18, '2026-11-02'), dayOf(1, 2, '2026-11-03')]);
     const fit = bundle.reads.find((read) => read.family === 'fit');
-    const monday = bundle.reads.find((read) => read.family === 'tool-day');
-    expect((fit?.n ?? 0) - (monday?.n ?? 0)).toBe(2);
+    expect(fit?.n).toBe(20);
+    expect(servedDays(bundle)).toEqual([]);
+    expect(bundle.cells.map((cell) => cell.grain)).toEqual(['week']);
+    expect(bundle.reads.filter((read) => read.family === 'tool-day' || read.family === 'live')).toEqual([]);
+  });
+
+  it('withholds the smallest served day of three, so the week less the served days covers two days', () => {
+    const bundle = bundleOver([week(8, 26), dayOf(7, 10, '2026-11-02'), dayOf(6, 8, '2026-11-03'), dayOf(5, 6, '2026-11-04'), dayOf(1, 2, '2026-11-05')]);
+    expect(servedDays(bundle)).toEqual(['2026-11-02', '2026-11-03']);
+    expect(dayReads(bundle, 'tool-day').sort()).toEqual(['2026-11-02', '2026-11-03']);
+    const fit = bundle.reads.find((read) => read.family === 'fit');
+    const rest = (fit?.n ?? 0) - bundle.reads.filter((read) => read.family === 'tool-day').reduce((sum, read) => sum + read.n, 0);
+    // 26 less 10 and 8 is 8: the held day at 5 accounts (6 steps) and the sub-floor day (2 steps), which no one number separates.
+    expect(rest).toBe(8);
+    expect(rest).toBeGreaterThan(2);
+  });
+
+  it('breaks a tie between served days toward the earlier day', () => {
+    const bundle = bundleOver([week(7, 20), dayOf(5, 8, '2026-11-02'), dayOf(5, 9, '2026-11-03'), dayOf(1, 3, '2026-11-04')]);
+    expect(servedDays(bundle)).toEqual(['2026-11-03']);
+  });
+
+  it('keeps every day of a week with no sub-floor day', () => {
+    const bundle = bundleOver([week(7, 17), dayOf(5, 8, '2026-11-02'), dayOf(6, 9, '2026-11-03')]);
+    expect(servedDays(bundle)).toEqual(['2026-11-02', '2026-11-03']);
+  });
+
+  it('serves only the week when every day is sub-floor, as there is no served day to withhold', () => {
+    const bundle = bundleOver([week(6, 20), dayOf(3, 10, '2026-11-02'), dayOf(2, 10, '2026-11-03')]);
+    expect(bundle.cells.map((cell) => cell.grain)).toEqual(['week']);
+  });
+
+  it('keeps the days of a week that is itself sub-floor', () => {
+    const bundle = bundleOver([week(4, 12), dayOf(5, 8, '2026-11-02'), dayOf(1, 4, '2026-11-03')]);
+    expect(bundle.cells.map((cell) => cell.grain)).toEqual(['day']);
+  });
+
+  it('is the same for another frame: a sub-floor day in one model does not withhold another model\'s day', () => {
+    const sonnet = (clusters: number, ok: number, day: string, grain: Cell['grain']): Cell => cellOf(READ.motifId, clusters, ok, { day, grain, frameBucket: `${BUCKET}/sonnet` });
+    const bundle = bundleOver([week(6, 20), dayOf(5, 18, '2026-11-02'), dayOf(1, 2, '2026-11-03'), sonnet(6, 9, '2026-11-02', 'week'), sonnet(5, 9, '2026-11-02', 'day')]);
+    expect(bundle.cells.filter((cell) => cell.grain === 'day').map((cell) => cell.frameBucket)).toEqual([`${BUCKET}/sonnet`]);
+  });
+
+  it('leaves the pool version, and so `asOf.pool`, where it was when a sub-floor cell is added', () => {
+    const served = [week(6, 20), dayOf(5, 18, '2026-11-02')];
+    expect(bundleOver([...served, dayOf(1, 2, '2026-11-03')]).asOf.pool).toBe(bundleOver([...served, dayOf(3, 5, '2026-11-03')]).asOf.pool);
+  });
+});
+
+describe('a shape and its named cells: complementary withholding', () => {
+  const named = (tool: string): Motif => {
+    const steps: WindowStep[] = [{ action: 'mcp.call', identity: { server: 'a', tool } }];
+    return { motifId: namedId(steps), level: 'named', steps, cls: null };
+  };
+  const shape = shapeMotif([{ action: 'mcp.call', identity: null }]);
+  const [one, two, three] = [named('one'), named('two'), named('three')];
+  const over = (cells: Cell[]): ReturnType<typeof bundleOf> => bundleOf(HARNESS, VERSION, { cells, environment: [], motifs: [shape, one, two, three], strata: [] });
+  const ids = (bundle: ReturnType<typeof bundleOf>): string[] => bundle.cells.map((cell) => cell.motifId);
+
+  it('also withholds the smallest served name beside a sub-floor name, and keeps the shape and the other names', () => {
+    const bundle = over([cellOf(shape.motifId, 12, 30), cellOf(one.motifId, 7, 12), cellOf(two.motifId, 5, 10), cellOf(three.motifId, 1, 8)]);
+    expect(ids(bundle).sort()).toEqual([shape.motifId, one.motifId].sort());
+  });
+
+  it('withholds no name for a shape day that is itself withheld', () => {
+    // Monday's shape is the smallest served day of a week with a sub-floor day, so it goes; its names are then no pair to difference against it, and both served names stay.
+    const day = (motifId: string, clusters: number, ok: number, when: string): Cell => cellOf(motifId, clusters, ok, { day: when });
+    const week = cellOf(shape.motifId, 12, 33, { grain: 'week', day: '2026-11-02' });
+    const bundle = over([week, day(shape.motifId, 12, 31, '2026-11-02'), day(one.motifId, 7, 20, '2026-11-02'), day(two.motifId, 5, 10, '2026-11-02'), day(three.motifId, 1, 1, '2026-11-02'), day(shape.motifId, 1, 2, '2026-11-03')]);
+    expect(bundle.cells.map((cell) => `${cell.grain}:${cell.motifId}`).sort()).toEqual([`week:${shape.motifId}`, `day:${one.motifId}`, `day:${two.motifId}`].sort());
+  });
+
+  it('keeps every name of a shape with no sub-floor name', () => {
+    const bundle = over([cellOf(shape.motifId, 12, 30), cellOf(one.motifId, 7, 12), cellOf(two.motifId, 5, 10)]);
+    expect(ids(bundle).sort()).toEqual([shape.motifId, one.motifId, two.motifId].sort());
   });
 });
 

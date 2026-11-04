@@ -15,6 +15,7 @@ import { deriveToolDay } from '../../cli/src/sessions/read-tool-day.js';
 import { unitCells, type DeriveFamily, type ReadBody } from '../../cli/src/sessions/read-support.js';
 import type { Harness } from '../../cli/src/sessions/schema.js';
 import type { Store } from '../../cli/src/sessions/store.js';
+import { withheldOf } from './complement.js';
 import type { StoredPool } from './stored.js';
 
 /** A served cell needs this many accounts, and a served read counts only such cells (spec Section 8; D4 may move this proposal, so it stays one constant). */
@@ -36,25 +37,26 @@ export const SERVED: readonly { name: string; derive: DeriveFamily }[] = [
 const NO_STORE: Store = { sessions: [], prompts: [], errors: [], subagents: [], tools: [], newerCaptures: 0 };
 
 /**
- * A served read counts only cells at or above `K_CELL`, so every count, sum, and denominator it holds (its `n`, a share's denominator, a sum across models or weeks, a live baseline) is a sum of served cells: no
- * two numbers of one family's reads at one grain show the size of a sub-floor cell (a week cell and the day cells of its days count the same steps and both leave, so across grains the difference can: `docs/pool.md`, Known gaps), and a sub-floor cell's id is in no `inputs`. A live baseline with no served cell of its motif is `null`, as a tool that is sub-floor is not absent.
+ * A served read counts only cells at or above `K_CELL` that the bundle serves, so every count, sum, and denominator it holds (its `n`, a share's denominator, a sum across models or weeks, a live baseline) is a sum of served cells,
+ * and a sub-floor cell's id is in no `inputs`. Two numbers of one family's reads at one grain, set against each other, show nothing of a sub-floor cell. Across grains, a week and its days count the same steps, as do a shape and
+ * its names, so a week with a sub-floor day also withholds its smallest served day, and a shape with a sub-floor name its smallest served name (`complement.ts`): the week less the served days is then a sum over at least two days,
+ * one of them at or above the floor. A live baseline with no served cell of its motif is `null`, as a tool that is sub-floor is not absent.
  * A read's `clusters` is the largest held count among its input cells, the most one store can prove: the fetch path reads no per-account record, so five accounts in five different weeks are five cells of one cluster each and
  * serve nothing until a later change brings held counts for a key's `n` and `c`. Five accounts on five days of one week share each week cell and serve the week reads; a `live` cell is a day, so they serve no live read.
- * `asOf.pool` still hashes every held cell; `asOf.day` and `weeksSinceLast` take the last day of the served cells (`bundleOf`).
+ * `asOf.pool`, `asOf.day`, and `weeksSinceLast` come from the served cells alone (`bundleOf`), so a sub-floor deposit moves nothing a reader sees.
  */
 const readsOf = (pool: Pool): Read[] => {
   const orderOf = orderResolver([]);
   const asOf = { pool: pool.version, day: pool.lastDay };
-  const floored: Pool = { ...pool, cells: pool.cells.filter((cell) => cell.clusters >= K_CELL) };
-  // A live read's baseline is a second set of cells its inputs do not cite: when the motif has none of its own at the floor in the trailing days, the baseline and the ratio against it are null and not 0.
-  const shapeUnits = unitCells(floored, 'day').filter(({ motif }) => motif.level === 'shape');
+  // A live read's baseline is a second set of cells its inputs do not cite: when the motif has none of its own in the trailing days, the baseline and the ratio against it are null and not 0.
+  const shapeUnits = unitCells(pool, 'day').filter(({ motif }) => motif.level === 'shape');
   const baselined = (read: ReadBody): ReadBody => {
     if (read.family !== 'live') return read;
     const { motif, day } = read.slice;
     const days = new Set(baselineDaysOf(String(day)));
     return shapeUnits.some(({ cell, motif: unit }) => motifName(unit) === motif && days.has(cell.day)) ? read : { ...read, value: { ...read.value, baseline: null, ratio: null } };
   };
-  return SERVED.flatMap(({ derive }) => derive({ pool: floored, store: NO_STORE }).map(baselined).map((read) => makeRead({ ...read, asOf }, orderOf)));
+  return SERVED.flatMap(({ derive }) => derive({ pool, store: NO_STORE }).map(baselined).map((read) => makeRead({ ...read, asOf }, orderOf)));
 };
 
 const compare = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
@@ -71,11 +73,14 @@ export const bundleOf = (harness: Harness, harnessVersion: string, stored: Store
   // The version-free (name, platform, shell) cells sit beside the bucket's: a session of a harness that records no version still has them, and they name no version.
   const environment = [...stored.environment].sort((a, b) => compare(a.motifId, b.motifId) || compare(a.frameBucket, b.frameBucket) || compare(a.grain, b.grain) || compare(a.day, b.day));
   // The environment cells are read with the bucket's, but the pool's last day is the bucket's own: a week held only by another version is not this bundle's, so it cannot age the reads that count weeks since. A bucket with no served cell takes the whole pool's.
-  // The last day is that of the served cells: a later sub-floor cell would otherwise move `asOf.day` and `weeksSinceLast`, which would show that the week holds data.
-  const served = [...cells, ...environment].filter((cell) => cell.clusters >= K_CELL);
-  const own = poolOf({ cells: cells.filter((cell) => cell.clusters >= K_CELL), motifs }, []);
-  const whole = poolOf({ cells: [...cells, ...environment], motifs }, []);
-  const pool = { ...whole, lastDay: own.lastDay ?? poolOf({ cells: served, motifs }, []).lastDay };
+  // Everything the bundle states, its version and its last day included, is that of the served cells: a sub-floor cell, or a served one held back (`withheldOf`), would otherwise move `asOf` and `weeksSinceLast`, which would show that it exists.
+  const held = [...cells, ...environment];
+  const withheld = withheldOf(held, motifs, K_CELL);
+  const served = held.filter((cell) => cell.clusters >= K_CELL && !withheld.has(cell));
+  const kept = new Set(served);
+  const own = poolOf({ cells: cells.filter((cell) => kept.has(cell)), motifs }, []);
+  const whole = poolOf({ cells: served, motifs }, []);
+  const pool = { ...whole, lastDay: own.lastDay ?? whole.lastDay };
   const named = new Set(served.map((cell) => cell.motifId));
   return {
     format: BUNDLE_FORMAT,
