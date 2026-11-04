@@ -2,6 +2,7 @@ import { createHash, webcrypto } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { HARNESSES, verifyBundle, VOCAB_VERSION, type Bundle } from '../../cli/src/sessions/pool-wire.js';
 import type { Harness } from '../../cli/src/sessions/schema.js';
+import { etagOf } from './bundle.js';
 import { sampleSkeleton } from './sample.js';
 import { containing, fieldOf, startPool, stubUser, type TestPool, textOf } from './test-pool.js';
 
@@ -60,11 +61,13 @@ describe('a bundle over five accounts', () => {
     expect(bundle.cells.length).toBeGreaterThan(0);
     for (const cell of bundle.cells) expect(cell.clusters).toBe(5);
     expect(bundle.motifs.length).toBeGreaterThan(0);
-    // A bundle is one harness version's: the five accounts deposited on 2.1.314, so 2.2.0 holds none of their cells, motifs, or reads.
+    // A bundle is one harness version's: the five accounts deposited on 2.1.314, so 2.2.0 holds none of their version cells. The (name, platform, shell) cells name no version, so it holds those and the reads over them.
     const other = await fetched(first, '2.2.0');
-    expect(other.cells).toEqual([]);
-    expect(other.motifs).toEqual([]);
-    expect(other.reads).toEqual([]);
+    expect(other.cells.every((cell) => cell.frameBucket.startsWith('env:'))).toBe(true);
+    expect(other.cells.length).toBeGreaterThan(0);
+    expect(other.reads.every((read) => read.family === 'fit' && read.slice.platform !== undefined)).toBe(true);
+    expect(other.reads.length).toBeGreaterThan(0);
+    expect(other.motifs.map(({ motifId }) => motifId).sort()).toEqual([...new Set(other.cells.map(({ motifId }) => motifId))].sort());
     // Strata run over every harness version (rule 3), so the bundle for a version with no cells of its own holds the same ones.
     expect(bundle.strata.length).toBeGreaterThan(0);
     expect(other.strata).toEqual(bundle.strata);
@@ -435,7 +438,8 @@ describe('a bundle is one harness at one numbered bucket', () => {
         if (!verified.ok) throw new Error(verified.reason);
         return verified.bundle;
       };
-      const harnessesOf = (bundle: Bundle): string[] => [...new Set(bundle.cells.map((cell) => cell.frameBucket.split('/')[0] ?? ''))];
+      // The (name, platform, shell) cells name no harness, so they are in both bundles and the harness is read from the version cells.
+      const harnessesOf = (bundle: Bundle): string[] => [...new Set(bundle.cells.filter((cell) => !cell.frameBucket.startsWith('env:')).map((cell) => cell.frameBucket.split('/')[0] ?? ''))];
       const claude = await bundleOf('claude-code');
       const cursor = await bundleOf('cursor');
       // The payload names its harness, signed with the rest.
@@ -444,8 +448,9 @@ describe('a bundle is one harness at one numbered bucket', () => {
       expect(cursor.cells.length).toBeGreaterThan(0);
       expect(harnessesOf(claude)).toEqual(['claude-code']);
       expect(harnessesOf(cursor)).toEqual(['cursor']);
-      // Each bundle holds the motifs its own cells name and no other harness's: git push is claude-code's, and ls is cursor's.
-      const programsOf = (bundle: Bundle): string[] => [...new Set(bundle.motifs.flatMap(({ steps }) => steps.flatMap(({ identity }) => (identity !== null && 'program' in identity ? [identity.program] : []))))].sort();
+      // Each bundle holds the version motifs of its own harness and no other's: git push is claude-code's, and ls is cursor's.
+      const versioned = (bundle: Bundle): Set<string> => new Set(bundle.cells.filter((cell) => !cell.frameBucket.startsWith('env:')).map(({ motifId }) => motifId));
+      const programsOf = (bundle: Bundle): string[] => [...new Set(bundle.motifs.filter(({ motifId }) => versioned(bundle).has(motifId)).flatMap(({ steps }) => steps.flatMap(({ identity }) => (identity !== null && 'program' in identity ? [identity.program] : []))))].sort();
       for (const bundle of [claude, cursor]) expect(bundle.motifs.map(({ motifId }) => motifId).sort()).toEqual([...new Set(bundle.cells.map(({ motifId }) => motifId))].sort());
       expect(programsOf(claude)).toEqual(['git']);
       expect(programsOf(cursor)).toEqual(['ls']);
@@ -462,4 +467,92 @@ describe('a bundle is one harness at one numbered bucket', () => {
       await fresh.dispose();
     }
   }, 60_000);
+});
+
+describe('the ETag', () => {
+  // A bundle is derived by the families it lists, so a client holding a tag from before a family was added must not be told its bundle is current.
+  it('names the families a bundle derives, so a changed list is a changed tag', () => {
+    const served = ['fit', 'cost'];
+    expect(etagOf('claude-code', VERSION, 1, served)).toBe(etagOf('claude-code', VERSION, 1, [...served]));
+    expect(etagOf('claude-code', VERSION, 1, [...served, 'tool-day'])).not.toBe(etagOf('claude-code', VERSION, 1, served));
+    expect(etagOf('claude-code', VERSION, 1, ['cost', 'fit'])).not.toBe(etagOf('claude-code', VERSION, 1, served));
+  });
+});
+
+describe('fit by platform and shell', () => {
+  // The cell is version-free, so it joins every version of a motif in a week: a total that is the sum of the version cells it sits beside. Served beside only some of them, its difference
+  // from the served ones would be the others, so it is served only when no cell of its motif, week, and exposure is under the floor.
+  const inFreshPool = async (run: (spread: TestPool) => Promise<void>): Promise<void> => {
+    const spread = await startPool();
+    try {
+      await run(spread);
+    } finally {
+      await spread.dispose();
+    }
+  };
+
+  const depositFrom = async (spread: TestPool, id: string, harnessVersion: string): Promise<string> => {
+    const { token } = await spread.signIn('github', stubUser(id));
+    await spread.post('/v1/covenant/accept', { version: 'v1' }, token);
+    expect((await spread.post('/v1/deposits', sampleSkeleton(id.padStart(16, '0'), undefined, '2026-11-02', 'claude-code', undefined, harnessVersion), token)).status).toBe(201);
+    return token;
+  };
+
+  const bundleFrom = async (spread: TestPool, token: string, version = VERSION): Promise<Bundle> => {
+    const verified = await verifyBundle((await spread.get(`/bundle/claude-code/${version}/${VOCAB_VERSION}`, token)).json, spread.signingKey(), 'claude-code', version);
+    if (!verified.ok) throw new Error(verified.reason);
+    return verified.bundle;
+  };
+
+  const environmentReads = (bundle: Bundle) => bundle.reads.filter((read) => read.family === 'fit' && read.slice.platform !== undefined);
+  const environmentCells = (bundle: Bundle) => bundle.cells.filter((cell) => cell.frameBucket.startsWith('env:'));
+
+  it('serves a read per (name, platform, shell) at five accounts and none at four', async () => {
+    await inFreshPool(async (spread) => {
+      for (const id of ['5001', '5002', '5003']) await depositFrom(spread, id, VERSION);
+      const four = await bundleFrom(spread, await depositFrom(spread, '5004', VERSION));
+      expect(environmentReads(four)).toEqual([]);
+      expect(environmentCells(four)).toEqual([]);
+
+      const five = await bundleFrom(spread, await depositFrom(spread, '5005', VERSION));
+      const reads = environmentReads(five);
+      expect(reads.map((read) => read.slice)).toEqual([{ motif: 'shell.exec[program=git sub=push]', level: 'named', platform: 'linux', shell: 'bash' }]);
+      const [read] = reads;
+      expect(read?.clusters).toBe(5);
+      expect(read?.value).toEqual({ failureRate: 0, failed: 0, ok: 10 });
+      expect(read?.n).toBe(10);
+      // The read's one input is the env cell the bundle holds.
+      expect(read?.inputs).toHaveLength(1);
+      expect(environmentCells(five).map((cell) => cell.frameBucket)).toEqual(['env:linux:bash']);
+    });
+  }, 60_000);
+
+  it('does not serve the version-free total beside a version cell under the floor, so no difference exposes it', async () => {
+    await inFreshPool(async (spread) => {
+      for (const id of ['5101', '5102', '5103', '5104']) await depositFrom(spread, id, VERSION);
+      // Three accounts on another version bucket: under the floor in that bucket, though the version-free total is eight accounts.
+      for (const id of ['5111', '5112', '5113']) await depositFrom(spread, id, '2.1.400');
+      const token = await depositFrom(spread, '5105', VERSION);
+      const bundle = await bundleFrom(spread, token);
+      // The asked version has five accounts and is served; the total is not, because it would differ from the served cell by the other version's three.
+      expect(bundle.cells.some((cell) => cell.frameBucket.startsWith('claude-code/'))).toBe(true);
+      expect(environmentCells(bundle)).toEqual([]);
+      expect(environmentReads(bundle)).toEqual([]);
+      // The other version's own bundle serves neither its three accounts nor the total.
+      const other = await bundleFrom(spread, token, '2.1.400');
+      expect(other.cells).toEqual([]);
+
+      // Two more accounts lift the other version to the floor: every cell of the motif clears it, and the total is served.
+      for (const id of ['5114', '5115']) await depositFrom(spread, id, '2.1.400');
+      const whole = await bundleFrom(spread, token);
+      expect(environmentCells(whole).map((cell) => cell.sessions)).toEqual([10]);
+      expect(environmentReads(whole)).toHaveLength(1);
+      const [total] = environmentCells(whole);
+      const partsOf = (bundle: Bundle): number => bundle.cells.filter((cell) => cell.motifId === total?.motifId && cell.grain === 'week' && cell.frameBucket.startsWith('claude-code/')).reduce((sum, cell) => sum + cell.sessions, 0);
+      const versionSessions = partsOf(await bundleFrom(spread, token, '2.1.400'));
+      const askedSessions = partsOf(whole);
+      // With every version cell served, the difference of the total and the served cells is nothing: there is no sub-floor remainder to read.
+      expect(10 - askedSessions - versionSessions).toBe(0);
+    });
+  }, 120_000);
 });

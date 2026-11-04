@@ -1,6 +1,5 @@
 // The families a bundle does not serve, pinned at the boundary that keeps them out: the wire. Recovery reads error rows (a signature, an error class, an outcome), and fit's call-shape
-// method reads a tool's input key names; no skeleton field carries any of them, so neither can be derived from stored cells. If a later wire gains one of these fields, the first
-// test here fails and the family is to be served in the same change, with its limit lines in `docs/pool.md` removed.
+// method reads a tool's input key names; no skeleton field carries any of them, so neither can be derived from stored cells. The refusing tests below fail if a later wire gains one of these fields.
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { parseSkeleton, verifyBundle, VOCAB_VERSION } from '../../cli/src/sessions/pool-wire.js';
 import { sampleSkeleton } from './sample.js';

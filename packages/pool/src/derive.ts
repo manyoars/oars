@@ -7,7 +7,7 @@ import { makeRead, orderResolver, type Read } from '../../cli/src/sessions/read.
 import { deriveAdoption } from '../../cli/src/sessions/read-adoption.js';
 import { deriveChange } from '../../cli/src/sessions/read-change.js';
 import { deriveCost } from '../../cli/src/sessions/read-cost.js';
-import { deriveFit } from '../../cli/src/sessions/read-fit.js';
+import { deriveFit, deriveFitEnvironment } from '../../cli/src/sessions/read-fit.js';
 import { baselineDaysOf, deriveLive } from '../../cli/src/sessions/read-live.js';
 import { deriveMethod } from '../../cli/src/sessions/read-method.js';
 import { deriveNextStep } from '../../cli/src/sessions/read-next-step.js';
@@ -20,7 +20,18 @@ import type { StoredPool } from './stored.js';
 /** A served cell needs this many accounts, and a served read this many in at least one of its cells (spec Section 8; D4 may move this proposal, so it stays one constant). */
 export const K_CELL = 5;
 
-const DERIVERS: readonly DeriveFamily[] = [deriveFit, deriveCost, deriveChange, deriveLive, deriveAdoption, deriveMethod, deriveNextStep, deriveToolDay];
+/** What a bundle derives, by name: the names are hashed into its ETag, so a change to this list moves the tag of a bundle whose cells did not change. */
+export const SERVED: readonly { name: string; derive: DeriveFamily }[] = [
+  { name: 'fit', derive: deriveFit },
+  { name: 'fit-environment', derive: deriveFitEnvironment },
+  { name: 'cost', derive: deriveCost },
+  { name: 'change', derive: deriveChange },
+  { name: 'live', derive: deriveLive },
+  { name: 'adoption', derive: deriveAdoption },
+  { name: 'method', derive: deriveMethod },
+  { name: 'next-step', derive: deriveNextStep },
+  { name: 'tool-day', derive: deriveToolDay },
+];
 
 const NO_STORE: Store = { sessions: [], prompts: [], errors: [], subagents: [], tools: [], newerCaptures: 0 };
 
@@ -43,7 +54,7 @@ const readsOf = (pool: Pool): Read[] => {
     const inBaseline = shapeUnits.filter(({ cell, motif: unit }) => motifName(unit) === motif && days.has(cell.day));
     return clustersOf(inBaseline.map(({ cell }) => cellIdOf(cell))) >= K_CELL ? read : { ...read, value: { ...read.value, baseline: null, ratio: null } };
   };
-  return DERIVERS.flatMap((derive) => derive({ pool, store: NO_STORE }).map(baselined).map((read) => makeRead({ ...read, asOf, clusters: clustersOf(read.inputs) }, orderOf)));
+  return SERVED.flatMap(({ derive }) => derive({ pool, store: NO_STORE }).map(baselined).map((read) => makeRead({ ...read, asOf, clusters: clustersOf(read.inputs) }, orderOf)));
 };
 
 const compare = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
@@ -57,8 +68,10 @@ export const bundleOf = (harness: Harness, harnessVersion: string, stored: Store
   const cells = stored.cells.filter((cell) => cell.frameBucket.startsWith(prefix)).sort((a, b) => compare(a.motifId, b.motifId) || compare(a.frameBucket, b.frameBucket) || compare(a.grain, b.grain) || compare(a.day, b.day));
   const motifs = [...stored.motifs].sort((a, b) => compare(a.motifId, b.motifId));
   // No error rows: a skeleton holds none, and recovery, the one family that reads them, is left out here.
-  const pool = poolOf({ cells, motifs }, []);
-  const served = cells.filter((cell) => cell.clusters >= K_CELL);
+  // The version-free (name, platform, shell) cells sit beside the bucket's: a harness without a version, as Gemini, Cursor, and Pi are, still has them, and they name no version.
+  const environment = [...stored.environment].sort((a, b) => compare(a.motifId, b.motifId) || compare(a.frameBucket, b.frameBucket) || compare(a.grain, b.grain) || compare(a.day, b.day));
+  const pool = poolOf({ cells: [...cells, ...environment], motifs }, []);
+  const served = [...cells, ...environment].filter((cell) => cell.clusters >= K_CELL);
   const named = new Set(served.map((cell) => cell.motifId));
   return {
     format: BUNDLE_FORMAT,
