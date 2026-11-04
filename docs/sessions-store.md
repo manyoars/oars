@@ -69,7 +69,14 @@ replaces, so the log settles back to the size of the live records. A hook deposi
   stored value of an existing captured record or skeleton changes: a bump re-reads every transcript. The skeleton is written at capture and
   carries `CAPTURE_VERSION` in its `v`.
 - `EXTRACTOR_VERSION` (`v` on every derived record) names the derivation rules (error normalization, prompt classes, tool-name sequences,
-  recovery episodes, prompt outcome signals). A bump re-derives from the log; no raw transcript is read.
+  recovery episodes, prompt outcome signals). A bump re-derives from the log; no raw transcript is read. Version 11 (t811, pool vocabulary spec Section 2) changes no stored value: it moves raw
+  `agentType`, `keys`, and `frameId` with the joined `frame` from class P to class A, so they stay in the account store and only their projections (`projectAgentType`, `projectKeys`) may pool; the joined frame pools only as its separate cells (the projection functions ship in this release; the deposit skeleton does not call them yet and keeps sending the joined `frame` until the next pool brief). A store written at 10 re-derives
+  on its next deposit with every captured record as it was. What the projection takes from the shell form is computed from the store and never written: `program`,
+  `subcommand`, and `flags` come from the record's `steps`, and from its `segments` for a program the curated list does not name. A step's own names are limited to the
+  curated lists, since capture narrowed them to those: a program only the snapshot lists, such as `ffmpeg -i in out`, keeps its program, first or later and behind any wrapper,
+  `timeout`, or block keyword, but loses `-i` stored, because a segment holds no flag; a program no list names projects `private`. A record captured before CAPTURE 9 has no
+  steps, so its flags are lost and it projects the program and subcommand alone from the A copy of `target` (a `target` cut at 30 characters or masked by redaction projects `program: private`).
+  No staged pooled file or outbox exists for the migration to delete.
 
 Version 4 (CAPTURE 4, t714) adds `sid`, `repo`, `fileHashes`, `env`, `promptFingerprint`, `targetBase`, the repository-root path base, and a
 1,000-character cap on an error line, and a cap of 100 on `files` and `fileHashes` per session (p99 was 61, max 209, on the 8,253-session
@@ -115,18 +122,18 @@ pattern and entropy, emails, and the domains named with `--redact-domain`) befor
 | Record | Fields | Class |
 |--------|--------|-------|
 | every capture record | `kind`, `cv`, `rev`, `sid` | P |
-| `session` (one per transcript) | `agentType` (set on a subagent transcript), `harness` (set on a Cursor session; absent reads as Claude Code), `bytes`, `lines`, `badLines`, `userTurns`, `assistantTurns`, `versions`, `models`, `bashCmds`, `compactSummaries`, `costUsd`, `usage`, `env` (below), `frame`, `frameId` | P |
-| | `session`, `parent`, `spawnedBy`, `spawnedIn` (join ids), `at`, `tsFirst`, `tsLast`, `promptFingerprint`, `repo`, `tools` (native names, which can hold a private MCP server's), `fileHashes`, `urls`, `searches`, `branches`, `tldrs` (400 chars), `confidences` (120 chars) | A |
+| `session` (one per transcript) | `harness` (set on a Cursor session; absent reads as Claude Code), `bytes`, `lines`, `badLines`, `userTurns`, `assistantTurns`, `versions`, `models`, `bashCmds`, `compactSummaries`, `costUsd`, `usage`, `env` (below) | P |
+| | `agentType` (set on a subagent transcript; a custom agent's name is private), `frame`, `frameId` (the joined frame is one value that links rows; its fields pool only as cells), `session`, `parent`, `spawnedBy`, `spawnedIn` (join ids), `at`, `tsFirst`, `tsLast`, `promptFingerprint`, `repo`, `tools` (native names, which can hold a private MCP server's), `fileHashes`, `urls`, `searches`, `branches`, `tldrs` (400 chars), `confidences` (120 chars) | A |
 | | `setup`, `funnel`, `trust` (optional; absent on a record captured before version 12, and per field where the transcript holds none) | A |
 | | `project` (the folder slug, with the username and directory names), `files` (the paths as written, redacted) | L |
-| `user-prompt` (one per prompt) | `index`, `opened` (`typed` or `command`; absent before CAPTURE 10, when only a typed line opened a prompt), `wallSec`, `thinking`, `turns`, `model`, `efforts`, `usage`, `frame`, `frameId` | P |
-| | `session`, `ts`, `head` (the first 300 characters), `promptFingerprint`, `skills` (a skill's name can be private) | A |
-| `tool` (one per tool call) | `n`, `status` (`ok`, `error`, or `none` when no result is in the file; one record per tool-use id), `keys` (the input's key names), `durationMs`, `harnessVersion`, `agentType`, `side`, `prompt`, `targetBase`, `steps` | P |
-| | `session`, `parent`, `toolUseId`, `ts`, `tool` (the native name, which can hold a private MCP server's), `target` in either form (a salted hash, or the first line's program and subcommand, where a word can be anything), and `segments`, `pulls`, and `commits` (a plain word, a private package name, and a sha can each identify private work) | A |
+| `user-prompt` (one per prompt) | `index`, `opened` (`typed` or `command`; absent before CAPTURE 10, when only a typed line opened a prompt), `wallSec`, `thinking`, `turns`, `model`, `efforts`, `usage` | P |
+| | `frame`, `frameId`, `session`, `ts`, `head` (the first 300 characters), `promptFingerprint`, `skills` (a skill's name can be private) | A |
+| `tool` (one per tool call) | `n`, `status` (`ok`, `error`, or `none` when no result is in the file; one record per tool-use id), `durationMs`, `harnessVersion`, `side`, `prompt`, `targetBase`, `steps` | P |
+| | `agentType` and `keys` (the input's key names; a private MCP tool's keys name private work), `session`, `parent`, `toolUseId`, `ts`, `tool` (the native name, which can hold a private MCP server's), `target` in either form (a salted hash, or the first line's program and subcommand, where a word can be anything), and `segments`, `pulls`, and `commits` (a plain word, a private package name, and a sha can each identify private work) | A |
 | `error-line` (one per failed result) | `harnessVersion`, `side`, `prompt`, `after` | P |
 | | `session`, `toolUseId`, `tool` (the native name), `ts`, `line` (the first informative line, redacted, not normalized, cut to 1,000 characters) | A |
 | `prompt` (derived, one per prompt) | `kind`, `v`, `rev`, `index`, `wallSec`, class (`cls`), `tools`, `shape`, `errors`, `thinking`, `sideTools`, `turns`, `model`, `efforts`, `usage`, `recovery`, `explore`, `act`, and `bigrams` (the motif vector) | P |
-| | `session`, `head` (the first 300 characters, redacted), `ts`, `promptFingerprint` (`contextFingerprint` on this derived record), `skills`, and the outcome signals `verify`, `stopped`, `commits`, and `redo` (below) | A |
+| | `session`, `frame` (the joined frame; its fields pool only as cells), `head` (the first 300 characters, redacted), `ts`, `promptFingerprint` (`contextFingerprint` on this derived record), `skills`, and the outcome signals `verify`, `stopped`, `commits`, and `redo` (below) | A |
 | `error` (derived, one per error) | `kind`, `v`, `rev`, `tool`, `harnessVersion`, `editFollowed`, `cls`, `prompt`, `next` (tool names), episode `outcome` and `calls` | P |
 | | `session`, `agent` (the subagent transcript id, a join id), `toolUseId` (a join id), `ts`, `sig` (redacted at capture, normalized at derive), `example` (160 characters) | A |
 | store files | `salt`, `state.json`, `raw/`, `hook-index.json` `projects` keys (folder slugs), `mcp-calls.jsonl` `cwd` (the server's working directory, unhashed) | L |
@@ -170,7 +177,7 @@ line and at every shell separator, after heredoc and here-string bodies are drop
 ### Frames and steps
 
 CAPTURE 9 gives every call a shared coordinate, so calls compare across harnesses, models, versions, and dates. Nothing here is asked of a
-network or a model: a value outside a closed list reads `<literal>` or is dropped, so these fields stay class P. The lists live in one file,
+network or a model: a value outside a closed list reads `<literal>` or is dropped. `frame` and `frameId` are class A (EXTRACTOR 11): one hash over harness, version, model, effort, day, platform, shell, and stack is an identifier that links rows, so only the frame's separate fields are to pool, each as a cell under its own rule (the projection functions ship now; the deposit skeleton keeps the joined frame until the next pool brief). The lists live in one file,
 `src/sessions/public-vocabulary.ts`, and default to `<literal>` when unsure.
 
 A `frame` sits on each prompt, and on the session for the calls before the first prompt: `{ harness, harnessVersion, model, effort, day, platform,
@@ -192,7 +199,7 @@ subshells, with quoted separators left alone, tied by `seg`). It is nested so `n
 | `cost` | `{ tokens, durationMs }` on the first segment; later segments hold nulls. `tokens` are the response's output tokens shared evenly among its calls. |
 | `parent` | On a subagent's step, the `n` of the call that spawned it, in the transcript its session record names as `spawnedIn` (the main session, or a sibling subagent, since a subagent can spawn another); null when that call is not known. |
 | `edges` | The edges arriving at this step, `{ kind, n, seg }` naming the source: `next` (order within a prompt's line of work), `spawned`, `retried` (same native name and same redacted command or target, after that one failed), and `after-error`. `spawned` needs the subagent's `.meta.json`; `raw/` does not hold that file, so a re-capture takes `spawnedBy` from the log, and a subagent first seen in `raw/` has no such edge. |
-| `frameId` | The frame of the call's prompt. |
+| `frameId` | The frame of the call's prompt. Class A, like the frame it hashes. |
 
 Comparing counts across capture versions misleads: a new version can re-read the same transcript into different rows. Compare within one `cv`.
 
