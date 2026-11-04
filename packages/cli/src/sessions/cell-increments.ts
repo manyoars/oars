@@ -6,7 +6,7 @@ import { bucketFields, deriveCells, type CellSet } from './cells.js';
 import type { Motif } from './motif.js';
 import { bucketOf, floorOf, projectedSteps, type SessionSkeleton, type ShellReader, type SkeletonTranscript } from './pool-wire.js';
 import { NO_RECALLS, type RecallGraph } from './recall-consequence.js';
-import type { PromptObservation, SessionObservation, ToolObservation, Usage } from './schema.js';
+import type { PromptObservation, SessionObservation, StepObservation, ToolObservation, Usage } from './schema.js';
 import type { Store } from './store.js';
 
 export interface CellRow {
@@ -63,11 +63,37 @@ const floorTool = (tool: ToolObservation): ToolObservation => ({
   })),
 });
 
+const flooredStore = (store: Store): Store => ({ ...store, prompts: store.prompts.map(floorPrompt), tools: store.tools.map(floorTool) });
+
+/** A step's shell identity without the two lists it carries: a named motif keys on the program and its subcommand, and each flag and each pull is a cell of its own (rule 1). */
+const withoutLists = (step: StepObservation): StepObservation => (step.identity !== null && 'program' in step.identity ? { ...step, identity: { program: step.identity.program, sub: step.identity.sub, flags: [] } } : step);
+
+/** One step per flag and one per pull of each shell step, each holding that one name and nothing else (rule 2: no cell has two set-valued dimensions). */
+const marginalSteps = (step: StepObservation): StepObservation[] => {
+  if (step.identity === null || !('program' in step.identity)) return [];
+  const { program, sub, flags, pulls } = step.identity;
+  return [...flags.map((flag) => ({ ...step, identity: { program, sub, flags: [flag] } })), ...(pulls ?? []).map((pull) => ({ ...step, identity: { program, sub, flags: [], pulls: [pull] } }))];
+};
+
+/** The tools of a store as one-step calls, one per flag and per pull: read at window length 1, each is one marginal cell. */
+const marginalStore = (store: Store): Store => ({ ...store, tools: store.tools.flatMap((tool) => (tool.steps ?? []).flatMap(marginalSteps).map((marginal) => ({ ...tool, steps: [marginal] }))) });
+
 /**
  * Rule 5: exact tokens and durations never reach `index`. A cell counts a bucketed value as the bucket's lowest value, so a derivation reads only what a deposit carries, and a
  * summed window is a sum of those. A value already at a bucket's floor stays there, which is why a skeleton's store and a local store of the same session derive the same cells.
+ * Rules 1 and 2: a window names a shell step by its program and subcommand alone, and each flag and each pull of it adds a one-step cell of its own.
  */
-export const cellsOf = (store: Store, graph: RecallGraph = NO_RECALLS): CellSet => deriveCells({ ...store, prompts: store.prompts.map(floorPrompt), tools: store.tools.map(floorTool) }, graph);
+export const cellsOf = (store: Store, graph: RecallGraph = NO_RECALLS): CellSet => {
+  const floored = flooredStore(store);
+  const whole = deriveCells({ ...floored, tools: floored.tools.map((tool) => (tool.steps === undefined ? tool : { ...tool, steps: tool.steps.map(withoutLists) })) }, graph);
+  // Only the one-step named motifs of the marginal pass: its prompts, its shape motifs, and its longer windows repeat or splice what `whole` holds.
+  const marginal = deriveCells(marginalStore(floored), graph);
+  const named = new Set(marginal.motifs.filter(({ level, steps }) => level === 'named' && steps.length === 1).map(({ motifId }) => motifId));
+  const motifs = new Map([...whole.motifs, ...marginal.motifs.filter(({ motifId }) => named.has(motifId))].map((motif) => [motif.motifId, motif]));
+  const order = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
+  const cells = [...whole.cells, ...marginal.cells.filter(({ motifId }) => named.has(motifId))].sort((a, b) => order(a.motifId, b.motifId) || order(a.frameBucket, b.frameBucket) || order(a.day, b.day) || Number(a.exposed) - Number(b.exposed));
+  return { cells, motifs: [...motifs.values()].sort((a, b) => order(a.motifId, b.motifId)) };
+};
 
 /** A local store with each shell step read as a deposit reads it (`projectedSteps`), so its named motifs are the ones the pool holds. */
 export const projectedStore = (store: Store, read: ShellReader): Store => ({ ...store, tools: store.tools.map((tool) => (tool.steps === undefined ? tool : { ...tool, steps: projectedSteps(tool, read) })) });
