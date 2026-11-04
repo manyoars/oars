@@ -18,6 +18,7 @@ const B = 'bbbb2222-2222-4222-8222-222222222222';
 const C = 'cccc3333-3333-4333-8333-333333333333';
 const D = 'dddd4444-4444-4444-8444-444444444444';
 const E = 'eeee5555-5555-4555-8555-555555555555';
+const F = 'ffff6666-6666-4666-8666-666666666666';
 
 const T = (second: number): string => `2026-06-01T10:00:${String(second).padStart(2, '0')}.000Z`;
 const prompt = (second: number, text: string) => ({ id: `u${String(second)}`, timestamp: T(second), type: 'user', content: [{ text }] });
@@ -97,10 +98,12 @@ describe('depositing the Gemini source', () => {
     stageGemini(s.root, [
       { id: C, slug: 'plain', projectRoot: '/x', lines: [geminiHead(C), prompt(1, 'hi'), say(2, 'hello'), say(3, 'more')] },
       { id: D, slug: 'ended', projectRoot: '/x', lines: [...session(D), say(8, 'aborted turn')] },
+      // A short tool-call response of a thinking model: thoughts above candidates (chatRecordingTypes.ts:21-25 keeps them apart), so the stored output must hold both.
+      { id: F, slug: 'thinking', projectRoot: '/x', lines: [geminiHead(F), prompt(1, 'plan it'), say(2, '', { tokens: { input: 50, output: 3, cached: 0, thoughts: 40, total: 93 } })] },
     ]);
     await deposit(s.runtime, options(['gemini']));
     const { skeletons } = await readSkeletons(s.storeDir);
-    expect(skeletons).toHaveLength(4);
+    expect(skeletons).toHaveLength(5);
     const store = await loadStore(s.storeDir);
     expect([...verifyAll(skeletons), ...verifyCaptured(store.sessions, store.tools)].filter((result) => result.violations > 0)).toEqual([]);
   });

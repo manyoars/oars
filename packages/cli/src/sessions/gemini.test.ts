@@ -61,8 +61,8 @@ describe('the Gemini CLI reader', () => {
     expect(out.session.userTurns).toBe(1);
     expect(out.session.assistantTurns).toBe(3);
     expect(out.session.models).toEqual({ 'gemini-2.5-pro': 3 });
-    // `tokens.input` is promptTokenCount, which includes the cache (uiTelemetry.ts:317-320), so only the uncached part is input.
-    expect(out.session.usage).toMatchObject({ input: 600 + 200 + 0, cacheRead: 400 + 1000 + 1300, cacheWrite: 0, output: 60, thinking: 7 });
+    // `tokens.input` is promptTokenCount, which includes the cache (uiTelemetry.ts:317-320), so only the uncached part is input. `output` is candidatesTokenCount and `thoughts` is kept apart from it (chatRecordingTypes.ts:21-25), so the stored output is both and thinking never exceeds it.
+    expect(out.session.usage).toMatchObject({ input: 600 + 200 + 0, cacheRead: 400 + 1000 + 1300, cacheWrite: 0, output: 60 + 7, thinking: 7 });
     expect(out.tools.map((tool) => [tool.tool, tool.status])).toEqual([['Bash', 'ok'], ['Edit', 'ok'], ['Write', 'ok']]);
     expect(out.session.files).toEqual(expect.arrayContaining(['src/a.ts', 'docs/b.md']));
     expect(out.errorLines).toEqual([]);

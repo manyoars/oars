@@ -614,8 +614,8 @@ with the file, and usage is nonzero with `input_tokens` equal to the model's pro
   (the `Error: Tool call execution failed. Reason:` prefix is dropped).
 - **Usage.** Per message only (`tokens{input, output, cached, thoughts, tool, total}`); the vendor's session totals are in memory and never written, so nothing is cumulative across a
   resume and each message is taken as it stands. `tokens.input` is the prompt count and includes the cache (`uiTelemetry.ts:317-320` computes the uncached part as
-  `input - cached`), so the stored `input_tokens` is `input - cached` with the cache read kept apart, as capture's fields are disjoint. `thoughts` is
-  `output_tokens_details.thinking_tokens`; `tool` (the tool-use prompt) is not mapped. A message with no `tokens` has no usage and is not an error.
+  `input - cached`), so the stored `input_tokens` is `input - cached` with the cache read kept apart, as capture's fields are disjoint. The vendor counts `thoughts` apart from `output` (candidates; `chatRecordingTypes.ts:21-25`), so `output_tokens` is `output + thoughts` and `thoughts` is also
+  `output_tokens_details.thinking_tokens`, which keeps thinking within output as `verify` holds; `tool` (the tool-use prompt) is not mapped. A message with no `tokens` has no usage and is not an error.
 - **Absent.** Cost has no equivalent. The CLI version is not in the record and is left unset. A call's duration is not recorded.
 
 **Known gaps.**
