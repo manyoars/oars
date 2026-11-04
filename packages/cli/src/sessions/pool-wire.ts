@@ -453,8 +453,8 @@ const parseTranscript = (value: unknown, at: string): SkeletonTranscript => {
 /** The skeleton in `value`, rebuilt from the fields read; else the first field that is not closed vocabulary, and why. */
 export const parseSkeleton = (value: unknown): { ok: true; skeleton: SessionSkeleton } | Refusal => {
   try {
-    // The first form sent a frame beside exact usage; it is named here, since its fields would otherwise read as a list of strangers.
-    if (isFields(value) && value.format === 1) throw new Refused('format', 'the frame form (format 1) is no longer read; send format 2');
+    // The first form sent exact usage; it is named here, since its fields would otherwise read as a list of strangers.
+    if (isFields(value) && value.format === 1) throw new Refused('format', 'the exact-count form (format 1) is no longer read; send format 2');
     const raw = fieldsOf(value, '', ['format', 'id', 'transcripts', 'deltas']);
     if (raw.format !== SKELETON_FORMAT) throw new Refused('format', 'not a format this version reads');
     const id = textOf(raw.id, 'id');
