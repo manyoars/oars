@@ -221,9 +221,6 @@ const shellResult = (text: string): { output: string; exit: number | undefined; 
   return { output: body === '(empty)' ? '' : body, exit, signal };
 };
 
-/** A nonzero exit code is a failure whatever `status` says; a negative one is no exit status, so the output stands as the error line. */
-const failureOf = (exit: number, text: string): string => (exit < 0 && text.trim() !== '' ? text : `Exit code ${String(exit)}\n${text}`);
-
 /** The chat file as the lines `captureSession` reads; `cwd` is the project folder (`.project_root`), the only working directory Gemini CLI records. */
 export const chatLines = (text: string, fallbackId: string, cwd: string | null): Obj[] => {
   const { meta, messages } = foldChat(text);
@@ -323,7 +320,8 @@ export const chatLines = (text: string, fallbackId: string, cwd: string | null):
           failure = error ?? unprefixed(unwrap(raw)).trim();
           if (failure === '') failure = 'tool failed';
         } else if (parsed?.exit !== undefined && parsed.exit !== 0) {
-          failure = failureOf(parsed.exit, output);
+          // A nonzero exit code is a failure whatever `status` says. Upstream writes only `result.exitCode` here (tools/shell.ts:953-979) and no negative code is handled apart.
+          failure = `Exit code ${String(parsed.exit)}\n${output}`;
         } else if (parsed?.signal !== undefined) {
           failure = output === '' ? `Signal: ${parsed.signal}` : output;
         } else if (timedOut !== null) {
