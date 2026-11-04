@@ -17,7 +17,7 @@ afterEach(cleanup);
 //     `tool_call_update` (toolCallId, status, content[], rawOutput)                                         ACP schema.json SessionUpdate
 //   `_meta.hostTurn` (either chunk kind), `_meta.hideFromScrollback`, and `_meta.interjection` mark text the harness wrote; `_meta.promptIndex` numbers a prompt
 //     storage/mod.rs:966, :974, :1009; acp_session.rs:1353-1372; turn.rs:328, :890-901
-//   `title` is the tool's name                                                                              xai-grok-shell tool_calls.rs:1487
+//   `title` is the tool's name (a backend-hosted search is titled "Web search:" or "X search:" and named by `rawInput.variant`)   xai-grok-shell tool_calls.rs:1487; tool_dispatch.rs:94-105
 //   rawOutput of a shell call: `{type:"Bash", output: bytes, output_for_prompt, exit_code, command, truncated, signal, timed_out, description, current_dir, output_file, total_bytes}`   xai-grok-tools types/output.rs:384-403
 //   a call is `failed` only on a timeout or a signal, so exit 2 arrives `completed`                         acp_conversion.rs:241-250
 //   edit keys: `file_path` (search_replace, write, hashline_edit), `filePath` (edit, camelCase), `patch` (apply_patch)   xai-grok-tools implementations/{grok_build/search_replace/mod.rs:74,
@@ -63,6 +63,8 @@ const textPart = (text: string) => ({ type: 'content', content: { type: 'text', 
 const readFileOk = (text: string, path: string) => ({ content: [textPart(text)], rawOutput: { type: 'ReadFile', FileContent: { content: text, absolute_path: path, offset: null } } });
 // An MCP tool: no `content`, and `MCPOutput` with `OkayOutput` (acp_conversion.rs:325-338; types/output.rs:1112-1135). `use_tool` returns the delegate's `ToolOutput` (use_tool/mod.rs:377).
 const mcpOk = (server: string, tool: string, text: string) => ({ rawOutput: { type: 'MCP', tool_name: tool, server_name: server, output: { OkayOutput: text } } });
+// A failed MCP call (a server's `isError` too, use_tool/mod.rs:74, :176): status `failed`, still no `content`, and the text only in `output: {Error}` (acp_conversion.rs:325-338; `MCPOutput::errored` sets `is_error`, types/output.rs:1148-1158).
+const mcpFailed = (server: string, tool: string, text: string) => ({ rawOutput: { type: 'MCP', tool_name: tool, server_name: server, output: { Error: text }, is_error: true } });
 // `skill`: its `tool_result` as a text part and `SkillOutput` (acp_conversion.rs:409-432; opencode/skill/mod.rs:224; types/output.rs `SkillOutput`).
 const skillOk = (name: string) => ({ content: [textPart(`Loaded skill: ${name}`)], rawOutput: { type: 'Skill', success: true, tool_result: `Loaded skill: ${name}`, skill_name: name, skill_message: null, error: null } });
 // `todowrite`: a completed update with no `content` and `TodoWriteOutput::TodosUpdated` (acp_conversion.rs:306-323; types/output.rs:956-962; grok_build/todo/mod.rs:153 for `state`).
@@ -286,6 +288,33 @@ describe('the Grok Build reader', () => {
     ]);
     expect(out.tools.map((tool) => tool.tool)).toEqual(['mcp__linear__save_issue', 'use_tool', 'mcp__linear__list']);
     expect(out.tools.map((tool) => tool.steps?.[0]?.action)).toEqual(['mcp.call', 'other', 'mcp.call']);
+  });
+
+  it('keeps the error text of a failed MCP call, called directly or through use_tool, since the conversion writes it only in rawOutput', () => {
+    const out = extractOf([
+      prompt(1, 'go'),
+      call(2, 'c1', 'linear__save_issue', {}),
+      finish(3, 'c1', 'failed', mcpFailed('linear', 'save_issue', 'issue not found')),
+      call(4, 'c2', 'use_tool', { tool_name: 'linear__save_issue', tool_input: {} }),
+      finish(5, 'c2', 'failed', mcpFailed('linear', 'save_issue', 'issue not found')),
+    ]);
+    expect(out.tools.map((tool) => tool.status)).toEqual(['error', 'error']);
+    expect(out.errorLines.map((error) => error.line)).toEqual(['issue not found', 'issue not found']);
+  });
+
+  it('names a backend-hosted search by its variant, since upstream titles the call "Web search:" or "X search:"', () => {
+    // backend_tool_display titles the call and puts `{variant, backend: true}` in rawInput (acp_session_impl/tool_dispatch.rs:94-105); the completion carries no rawOutput (sampling_events.rs:559-585).
+    const out = extractOf([
+      prompt(1, 'search'),
+      call(2, 'w1', 'Web search:', { variant: 'WebSearch', backend: true }, 'search'),
+      line(S(3), { sessionUpdate: 'tool_call_update', toolCallId: 'w1', status: 'completed' }),
+      call(4, 'x1', 'X search:', { variant: 'XSearch', backend: true }, 'search'),
+      line(S(5), { sessionUpdate: 'tool_call_update', toolCallId: 'x1', status: 'completed' }),
+      call(6, 'o1', 'code_execution', { backend: true }),
+      line(S(7), { sessionUpdate: 'tool_call_update', toolCallId: 'o1', status: 'completed' }),
+    ]);
+    expect(out.tools.map((tool) => tool.tool)).toEqual(['web_search', 'x_search', 'code_execution']);
+    expect(out.tools.map((tool) => tool.steps?.[0]?.action)).toEqual(['web.search', 'web.search', 'other']);
   });
 
   it('reads a skill call as skill.run with the skill’s name, and a todowrite call as a plan update', () => {
