@@ -247,6 +247,43 @@ const projectFolders = async (projectsRoot: string): Promise<string[]> => {
   }
 };
 
+/** What a deposit never reads: project folders that hold transcripts but that no `--allow` entry names (t776). */
+export interface SkippedScope {
+  folders: number;
+  /** Main transcripts in those folders; subagent transcripts are not counted, as everywhere else. */
+  transcripts: number;
+  /** The folder names, sorted. */
+  names: string[];
+}
+
+/**
+ * The scan rule is the allowlist (`depositLocked`, `depositSessionLocked`): a folder no entry names is not opened, by design, so
+ * a worktree folder of an allowed repository is skipped when only the repository's own folder is named. This reads folder listings
+ * only, never a transcript, so `verify` can say what the store does not hold.
+ */
+export const skippedFolders = async (runtime: SessionsRuntime): Promise<SkippedScope> => {
+  const allow = compileAllow((await readState(runtime.storeDir)).allow);
+  const names: string[] = [];
+  let transcripts = 0;
+  for (const name of (await projectFolders(runtime.projectsRoot)).filter((folder) => !allow.allows(folder))) {
+    const folder = join(runtime.projectsRoot, name);
+    let held = 0;
+    let anyTranscript: boolean;
+    try {
+      held = (await listDir(folder)).filter((entry) => entry.isFile() && entry.name.endsWith('.jsonl')).length;
+      // A deposit would also take the subagent transcripts of a session folder whose main transcript is gone (`depositLocked`).
+      anyTranscript = held > 0 || (await subagentFiles(folder, await sessionFolders(folder))).length > 0;
+    } catch {
+      // Scope is not a failure: a folder this process cannot list is named with no count rather than failing `verify`.
+      anyTranscript = true;
+    }
+    if (!anyTranscript) continue;
+    names.push(name);
+    transcripts += held;
+  }
+  return { folders: names.length, transcripts, names };
+};
+
 interface DepositContext {
   runtime: SessionsRuntime;
   state: State;
@@ -343,9 +380,18 @@ const readMeta = async (file: string): Promise<{ agentType: string | null; toolU
   return { agentType: null, toolUseId: null };
 };
 
-// The subagent transcripts of the given sessions: <session>/subagents/agent-*.jsonl and <session>/subagents/workflows/wf_*/agent-*.jsonl.
-const subagentTranscripts = async (folder: string, sessions: readonly string[]): Promise<Transcript[]> => {
-  const found: Transcript[] = [];
+// The subagent transcript files of the given sessions, from folder listings alone:
+// <session>/subagents/agent-*.jsonl and <session>/subagents/workflows/wf_*/agent-*.jsonl. No file is opened, so `skippedFolders` can use it on a folder no allow entry names.
+interface SubagentFile {
+  dir: string;
+  /** The folders between `subagents` and the file, for example `['workflows', 'wf_x']`. */
+  path: string[];
+  parent: string;
+  name: string;
+}
+
+const subagentFiles = async (folder: string, sessions: readonly string[]): Promise<SubagentFile[]> => {
+  const found: SubagentFile[] = [];
   for (const parent of sessions) {
     const root = join(folder, parent, 'subagents');
     const dirs: { dir: string; path: string[] }[] = [{ dir: root, path: [] }];
@@ -354,17 +400,25 @@ const subagentTranscripts = async (folder: string, sessions: readonly string[]):
     }
     for (const { dir, path } of dirs) {
       for (const entry of await listDir(dir)) {
-        if (!entry.isFile() || !entry.name.startsWith('agent-') || !entry.name.endsWith('.jsonl')) continue;
-        const agent = entry.name.slice(0, -'.jsonl'.length);
-        const meta = await readMeta(join(dir, `${agent}.meta.json`));
-        found.push({
-          file: join(dir, entry.name),
-          session: [parent, ...path.filter((part) => part !== 'workflows'), agent].join('~'),
-          relative: [parent, 'subagents', ...path, entry.name].join('/'),
-          subagent: { parent, agentType: meta.agentType, spawnedBy: meta.toolUseId },
-        });
+        if (entry.isFile() && entry.name.startsWith('agent-') && entry.name.endsWith('.jsonl')) found.push({ dir, path, parent, name: entry.name });
       }
     }
+  }
+  return found;
+};
+
+// The subagent transcripts of the given sessions, each with its `.meta.json` read.
+const subagentTranscripts = async (folder: string, sessions: readonly string[]): Promise<Transcript[]> => {
+  const found: Transcript[] = [];
+  for (const { dir, path, parent, name } of await subagentFiles(folder, sessions)) {
+    const agent = name.slice(0, -'.jsonl'.length);
+    const meta = await readMeta(join(dir, `${agent}.meta.json`));
+    found.push({
+      file: join(dir, name),
+      session: [parent, ...path.filter((part) => part !== 'workflows'), agent].join('~'),
+      relative: [parent, 'subagents', ...path, name].join('/'),
+      subagent: { parent, agentType: meta.agentType, spawnedBy: meta.toolUseId },
+    });
   }
   return found;
 };
