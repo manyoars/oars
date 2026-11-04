@@ -581,8 +581,10 @@ describe('the registry option', () => {
     const reader = answering();
     await run([REPO], reader);
     expect(reader).not.toHaveBeenCalled();
-    const { crossings } = await written();
+    const { crossings, registry } = await written();
     expect(crossings.map((row) => row.registryState)).toEqual(['not-read', 'not-read']);
+    // The kept answer is for a name now unasked: it must not be written back.
+    expect(registry).toEqual([]);
   });
 
   it('keeps not-found and unreachable apart, and a failed read stays out of the cache', async () => {
