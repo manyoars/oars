@@ -6,8 +6,8 @@
 //
 // Where it reads from (`geminiRoot`): `$GEMINI_CLI_HOME`, else the home, then `.gemini` (`%USERPROFILE%\.gemini` on Windows; config/storage.ts, utils/paths.ts). Inside it,
 // `tmp/<slug>/chats/session-<time>-<id8>.jsonl` is one session (services/chatRecordingService.ts:801-823), a subagent's is `chats/<parentSessionId>/<agentId>.jsonl`
-// (:786-814), and a legacy `*.json` holds one pretty-printed object (:1647). `tmp/<slug>/.project_root` names the project folder (config/projectRegistry.ts); it is the
-// only place a working directory exists, so a session's cwd is that folder and a directory change inside a session is not recorded. A folder from before the slug registry is named
+// (:786-814), and a legacy `*.json` holds one pretty-printed object (:1647). `tmp/<slug>/.project_root` names the project folder (config/projectRegistry.ts); with a path
+// that hashes to a pre-slug folder's name it is the only place a working directory exists, so a session's cwd is that folder and a directory change inside a session is not recorded. A folder from before the slug registry is named
 // for sha256 of the project root and has no marker: its cwd is a path that hashes to its name (its chats' workspace directories, other markers, `projects.json`), else none. Under
 // `SANDBOX=sandbox-exec` the same layout lives in `~/.cache/.gemini` (config/storage.ts:93-102), read beside the ordinary one. The prompt log `logs.json`, the
 // `checkpoint-*.json` copies, and the opt-in telemetry file are not read: the first is a subset of the chat file and the others are copies or off by default.
@@ -51,7 +51,7 @@ const parse = (text: string): unknown => {
 export interface GeminiSession {
   /** The head's `sessionId` (else the file's name); a subagent's is `<parent>-<file name>`. It names the skeleton. */
   id: string;
-  /** What `.project_root` names; null when the project folder has none. */
+  /** What `.project_root` names, or for a hash-named folder a path that hashes to its name; null when neither gives one. */
   folder: string | null;
   file: string;
   size: number;
@@ -104,7 +104,7 @@ const textOf = (value: unknown): string => {
 /**
  * What the CLI's own first turn says about the machine and the workspace: `My operating system is: <process.platform>` and the `- **Workspace Directories:**` list
  * (utils/environmentContext.ts `getEnvironmentContext`, `getDirectoryContextString`). A chat records it as a user message, so the file names where it ran even when
- * the project folder holds no `.project_root`. A pass that removed the turn leaves the file without it, and both come back empty.
+ * the project folder holds no `.project_root` (the marker, or for a hash-named folder a path that hashes to its name, is the cwd). A pass that removed the turn leaves the file without it, and both come back empty.
  */
 const sessionContext = (text: string): { platform: string | undefined; directories: string[] } => {
   const whole = wholeObject(text);
@@ -114,7 +114,8 @@ const sessionContext = (text: string): { platform: string | undefined; directori
   const directories: string[] = [];
   for (const record of records) {
     const body = isObj(record) && record.type === 'user' ? textOf(record.content) : '';
-    if (!body.includes('<session_context>')) continue;
+    // Upstream's context turn opens with the tag; a typed prompt that merely quotes it must not frame the session.
+    if (!body.trimStart().startsWith('<session_context>')) continue;
     platform ??= /^My operating system is: (\S+)$/m.exec(body)?.[1];
     for (const line of /^- \*\*Workspace Directories:\*\*\n((?: {2}- .+\n?)+)/m.exec(body)?.[1]?.split('\n') ?? []) {
       const listed = /^ {2}- (.+)$/.exec(line)?.[1];
@@ -333,7 +334,7 @@ const shellResult = (text: string): { output: string; exit: number | undefined; 
   return { output: body === '(empty)' ? '' : body, exit, signal };
 };
 
-/** The chat file as the lines `captureSession` reads; `cwd` is the project folder (`.project_root`), the only working directory Gemini CLI records. */
+/** The chat file as the lines `captureSession` reads; `cwd` is the project folder: the marker (`.project_root`), or for a hash-named folder a path that hashes to its name. Gemini CLI records no other working directory. */
 export const chatLines = (text: string, fallbackId: string, cwd: string | null): Obj[] => {
   const { meta, messages } = foldChat(text);
   const lines: Obj[] = [];
