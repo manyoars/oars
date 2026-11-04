@@ -4,6 +4,9 @@
 
 import type { PullEcosystem, ToolManifest, ToolPackage, ToolPull } from './schema.js';
 
+/** The capture's redactor, as far as a manifest reader needs it: a name it changes is a secret or a mask, never a package. */
+export type NameRedactor = (text: string) => string;
+
 /** The registry's own normalization (spec Section 1.3): npm lowercases, PyPI folds `-`, `_`, and `.`, crates.io folds `-` and `_`. */
 export const NORMALIZE: ReadonlyMap<string, (name: string) => string> = new Map<string, (name: string) => string>([
   ['npm', (name) => name.toLowerCase()],
