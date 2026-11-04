@@ -260,7 +260,16 @@ describe('MCP tool names: a token behind an underscore or in a later part is red
   it('leaves an ordinary name alone', () => {
     expect(storedToolName('mcp__github__create_issue', redact)).toBe('mcp__github__create_issue');
     expect(storedToolName('mcp_oars_oars_recall', redact)).toBe('mcp_oars_oars_recall');
+    expect(storedToolName('mcp__Server2__listItems', redact)).toBe('mcp__Server2__listItems');
     expect(storedToolName('Bash', redact)).toBe('Bash');
+  });
+  it.each<readonly [string, string]>([
+    ['mcp__Context7__resolve-library-id', 'Context7'],
+    ['mcp__n8n__createWorkflowFromTemplate', 'n8n'],
+    ['mcp__aws_s3__ListObjectsV2Command', 'aws_s3'],
+  ])('keeps the server name of %s, a name with a capital and a digit', (toolName, server) => {
+    expect(storedToolName(toolName, redact)).toBe(toolName);
+    expect(pullsOfTool(toolName, redact)).toEqual([{ ecosystem: 'mcp', name: server, version: null }]);
   });
   it('masks the token in the stored name and the pull for both forms', () => {
     expect(storedToolName(`mcp__me_${token}__find`, redact)).toBe('mcp__me_<secret>__find');
