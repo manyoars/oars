@@ -1,6 +1,6 @@
 // Capture: turns one transcript's text into its capture records and a skeleton in a single pass (derivation is `derive.ts`). The
 // parsing rules are ported from the reference scripts in docs/research/2026-11-01-session-commons/ (parse_sessions.py, error_signatures.py, prompt_graphs.py,
-// cost_per_class.py) so the counts agree: same normalization, same prompt boundaries, same class rule. Where two scripts
+// cost_per_class.py) so the counts agree: same normalization and class rule (prompt boundaries differ from the scripts: see `promptOpening`). Where two scripts
 // read a thing differently the comment says which rule is used.
 import { createHash } from 'node:crypto';
 import { posix } from 'node:path';
@@ -404,7 +404,9 @@ export interface PromptOpening {
  * prompts by this, so a gold entry's index is a capture index. `lines` is the whole transcript and `position` this line's place in it.
  */
 export const promptOpening = (text: string, lines: readonly string[], position: number, subagent = false): PromptOpening | undefined => {
-  const tag = LEADING_TAG.exec(text.trimStart())?.[1];
+  const leading = LEADING_TAG.exec(text.trimStart())?.[1];
+  // A tag name with no closing tag is the operator's own words ("<system-reminder> keeps showing, why?"), not the harness's wrapper.
+  const tag = leading !== undefined && text.includes(`</${leading}>`) ? leading : undefined;
   if (tag === 'command-name' || tag === 'command-message') {
     const request = commandAsked(text);
     return request !== '' && answeredByModel(lines, position + 1, subagent) ? { opened: 'command', request } : undefined;
