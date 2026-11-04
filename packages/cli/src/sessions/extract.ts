@@ -522,7 +522,7 @@ const RUN_WORDS_MAX = 12;
 const RUN_WORD_CHARS = 30;
 
 type ShellWord = WordOfCommand;
-type ShellOp = '&&' | '||' | '|' | ';' | '&' | '\n' | 'group';
+type ShellOp = '&&' | '||' | '|' | ';' | '&' | '\n' | 'open' | 'close';
 type ShellToken = ShellWord | ShellOp;
 type ShellLink = 'and' | 'pipe' | 'break' | 'end';
 
@@ -643,7 +643,7 @@ const tokenize = (text: string): ShellToken[] => {
   let redirected = false;
   const flush = (): void => {
     if (started && redirected) redirected = false;
-    else if (started && !quoted && (word === '{' || word === '}')) tokens.push('group');
+    else if (started && !quoted && (word === '{' || word === '}')) tokens.push(word === '{' ? 'open' : 'close');
     else if (started) tokens.push({ text: word, quoted });
     word = '';
     quoted = false;
@@ -729,7 +729,7 @@ const tokenize = (text: string): ShellToken[] => {
       op('&');
       at += 1;
     } else if (char === '(' || char === ')') {
-      op('group');
+      op(char === '(' ? 'open' : 'close');
       at += 1;
     } else {
       word += char;
@@ -835,10 +835,9 @@ const readCommands = (tokens: readonly ShellToken[], depth = 0): ShellCommand[] 
     if (program === null) return;
     const previous = commands.at(-1);
     if (previous !== undefined) previous.link = linkOf(pending);
-    // Between two commands a group that closes comes first, right after a command; one that opens follows another operator.
-    let closing = 0;
-    if (previous !== undefined) while (pending[closing] === 'group') closing += 1;
-    const opening = pending.filter((op) => op === 'group').length - closing;
+    // The tokens say which way each group goes, so a group opened behind a word (`echo $(a && b)`) is pushed and a pipe after its close hides it.
+    const closing = pending.filter((op) => op === 'close').length;
+    const opening = pending.filter((op) => op === 'open').length;
     for (let group = 0; group < closing; group += 1) {
       const start = opened.pop();
       if (start !== undefined && pending.includes('|')) for (const held of commands.slice(start)) held.hidden = true;
