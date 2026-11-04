@@ -1,5 +1,5 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
-import { anyNumber, anyText, containing, fieldOf, matching, startPool, stubUser, type TestPool, textOf } from './test-pool.js';
+import { anyNumber, anyText, containing, fieldOf, matching, startPool, stubUser, type TestPool } from './test-pool.js';
 import worker from './worker.js';
 
 let pool: TestPool;
@@ -20,28 +20,21 @@ const everyRow = async (): Promise<string> => {
 };
 
 describe.each([
-  ['github', 'github-client', 'https://github.com/login/oauth/access_token'],
-  ['google', 'google-client', 'https://oauth2.googleapis.com/token'],
-])('the %s device flow', (provider, clientId, tokenUrl) => {
-  it('asks the provider with the client id from the environment, is pending until approved, then signs in', async () => {
-    const started = await pool.post('/v1/login/start', { provider });
-    expect(started.status).toBe(200);
-    expect(started.json).toMatchObject({ userCode: matching(/^USER-/), verificationUri: matching(/^https:/), interval: 1, expiresIn: 900 });
-    expect(pool.stub.calls.at(-1)?.body).toContain(`client_id=${clientId}`);
-    const deviceCode = textOf(started.json, 'deviceCode');
-
-    expect(await pool.post('/v1/login/poll', { provider, deviceCode })).toEqual({ status: 200, json: { status: 'pending' } });
-    expect(pool.stub.calls.at(-1)?.url).toBe(tokenUrl);
-
-    pool.stub.approve(deviceCode, stubUser('101'));
-    const polled = await pool.post('/v1/login/poll', { provider, deviceCode });
-    expect(polled.status).toBe(200);
-    expect(polled.json).toMatchObject({ status: 'ok', token: anyText(), account: matching(/^acct_[0-9a-f]{32}$/), expiresAt: anyNumber() });
+  ['github', 'https://api.github.com/user'],
+  ['google', 'https://openidconnect.googleapis.com/v1/userinfo'],
+])('the %s sign-in', (provider, userUrl) => {
+  it("reads the subject with the provider's token, and answers the pool's credential and the public half of the signing key", async () => {
+    const token = pool.stub.issue(stubUser('101'));
+    const signedIn = await pool.post('/v1/login', { provider, token });
+    expect(signedIn.status).toBe(200);
+    expect(signedIn.json).toMatchObject({ token: anyText(), account: matching(/^acct_[0-9a-f]{32}$/), expiresAt: anyNumber() });
+    expect(fieldOf(signedIn.json, 'token')).not.toBe(token);
     // Exactly the public half: a matcher on the whole answer would still pass if the private `d` came along.
-    expect(fieldOf(polled.json, 'signingKey')).toEqual(pool.signingKey());
+    expect(fieldOf(signedIn.json, 'signingKey')).toEqual(pool.signingKey());
+    expect(pool.stub.calls.at(-1)?.url).toBe(userUrl);
   });
 
-  it('keeps one pseudonym across sign-ins, and a new token each time', async () => {
+  it('keeps one pseudonym across sign-ins, and a new credential each time', async () => {
     const first = await pool.signIn(provider, stubUser('202'));
     const second = await pool.signIn(provider, stubUser('202'));
     expect(second.account).toBe(first.account);
@@ -49,46 +42,58 @@ describe.each([
     expect((await pool.signIn(provider, stubUser('203'))).account).not.toBe(first.account);
   });
 
-  it('turns away a denied sign-in and an expired one', async () => {
-    const started = await pool.post('/v1/login/start', { provider });
-    const deviceCode = textOf(started.json, 'deviceCode');
-    pool.stub.deny(deviceCode);
-    expect(await pool.post('/v1/login/poll', { provider, deviceCode })).toMatchObject({ status: 401, json: { error: 'login_refused', message: containing('access_denied') } });
-    expect(await pool.post('/v1/login/poll', { provider, deviceCode: 'gone' })).toMatchObject({ status: 401, json: { error: 'login_refused', message: containing('expired_token') } });
+  it('turns away a token the provider does not know', async () => {
+    expect(await pool.post('/v1/login', { provider, token: 'access-never-issued' })).toMatchObject({ status: 401, json: { error: 'login_refused' } });
   });
 });
 
 describe('the pseudonym', () => {
-  it('differs across providers for one provider id, and no row holds an email, a login, a provider id, or a token', async () => {
+  it('differs across providers for one provider id, and no row holds an email, a login, a provider id, or the provider token', async () => {
     const user = stubUser('987654321');
-    const github = await pool.signIn('github', user);
+    const accessToken = pool.stub.issue(user);
+    const github = await pool.post('/v1/login', { provider: 'github', token: accessToken });
     const google = await pool.signIn('google', user);
-    expect(github.account).not.toBe(google.account);
+    expect(fieldOf(github.json, 'account')).not.toBe(google.account);
     const stored = await everyRow();
-    expect(stored).toContain(github.account);
-    for (const held of [user.id, user.login, user.email, 'access-device', github.token]) expect(stored).not.toContain(held);
+    expect(stored).toContain(String(fieldOf(github.json, 'account')));
+    for (const held of [user.id, user.login, user.email, accessToken, 'access-device', String(fieldOf(github.json, 'token'))]) expect(stored).not.toContain(held);
   });
 
-  it('sends a client secret to Google alone', () => {
-    const google = pool.stub.calls.filter((call) => call.url === 'https://oauth2.googleapis.com/token');
-    expect(google.at(-1)?.body).toContain('client_secret=google-secret');
-    const github = pool.stub.calls.filter((call) => call.url === 'https://github.com/login/oauth/access_token');
-    expect(github.at(-1)?.body).not.toContain('client_secret');
-    expect(github.at(-1)?.body).toContain('grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Adevice_code');
+  it('sends the provider no client id and no secret: the pool holds none', () => {
+    for (const call of pool.stub.calls) expect(call.body).toBe('');
+  });
+});
+
+describe('sign-in rows', () => {
+  it('sheds the credentials past their expiry at a login, and keeps the live ones', async () => {
+    const db = await pool.db();
+    await db.prepare('INSERT INTO accounts (id) VALUES (?) ON CONFLICT (id) DO NOTHING').bind('acct_old').run();
+    await db.prepare('INSERT INTO tokens (hash, account, expires_at) VALUES (?, ?, ?)').bind('stale-hash', 'acct_old', 1).run();
+    await db.prepare('INSERT INTO tokens (hash, account, expires_at) VALUES (?, ?, ?)').bind('live-hash', 'acct_old', Date.now() + 60_000).run();
+    await pool.signIn('github', stubUser('404'));
+    expect(await db.prepare("SELECT COUNT(*) AS count FROM tokens WHERE hash = 'stale-hash'").first('count')).toBe(0);
+    expect(await db.prepare("SELECT COUNT(*) AS count FROM tokens WHERE hash = 'live-hash'").first('count')).toBe(1);
   });
 });
 
 describe('a login request that cannot go on', () => {
-  it('names an unknown provider, a body that is not JSON, and a missing device code', async () => {
-    expect(await pool.post('/v1/login/start', { provider: 'acme' })).toMatchObject({ status: 400, json: { error: 'unknown_provider', field: 'provider' } });
-    expect(await pool.post('/v1/login/start', 'not json')).toMatchObject({ status: 400, json: { error: 'unknown_provider', field: 'provider' } });
-    expect(await pool.post('/v1/login/poll', { provider: 'github' })).toMatchObject({ status: 400, json: { error: 'missing_field', field: 'deviceCode' } });
+  it('names an unknown provider, a body that is not JSON, and a missing token', async () => {
+    expect(await pool.post('/v1/login', { provider: 'acme', token: 't' })).toMatchObject({ status: 400, json: { error: 'unknown_provider', field: 'provider' } });
+    expect(await pool.post('/v1/login', 'not json')).toMatchObject({ status: 400, json: { error: 'unknown_provider', field: 'provider' } });
+    expect(await pool.post('/v1/login', { provider: 'github' })).toMatchObject({ status: 400, json: { error: 'missing_field', field: 'token' } });
   });
 
-  it('says so when the provider is not configured', async () => {
-    const bare = await startPool({ GITHUB_CLIENT_ID: '' });
+  it('has no device-flow routes: the pool never calls a provider to start one', async () => {
+    for (const path of ['/v1/login/start', '/v1/login/poll']) expect(await pool.post(path, { provider: 'github' })).toMatchObject({ status: 404, json: { error: 'not_found' } });
+  });
+
+  it.each([
+    ['PSEUDONYM_KEY', { PSEUDONYM_KEY: '' }],
+    ['BUNDLE_SIGNING_KEY', { BUNDLE_SIGNING_KEY: '' }],
+  ])('says so when %s is not bound', async (binding, bindings) => {
+    const bare = await startPool(bindings);
     try {
-      expect(await bare.post('/v1/login/start', { provider: 'github' })).toMatchObject({ status: 503, json: { error: 'not_configured', message: containing('GITHUB_CLIENT_ID') } });
+      expect(await bare.post('/v1/login', { provider: 'github', token: bare.stub.issue(stubUser('1')) })).toMatchObject({ status: 503, json: { error: 'not_configured', message: containing(binding) } });
     } finally {
       await bare.dispose();
     }
@@ -96,65 +101,48 @@ describe('a login request that cannot go on', () => {
 });
 
 describe.each([
-  { provider: 'github', deviceUrl: 'https://github.com/login/device/code', tokenUrl: 'https://github.com/login/oauth/access_token', userUrl: 'https://api.github.com/user' },
-  { provider: 'google', deviceUrl: 'https://oauth2.googleapis.com/device/code', tokenUrl: 'https://oauth2.googleapis.com/token', userUrl: 'https://openidconnect.googleapis.com/v1/userinfo' },
-])('$provider answering HTML', ({ provider, deviceUrl, tokenUrl, userUrl }) => {
-  const providerError = { status: 502, json: { error: 'provider_error' } };
-
-  const withHtmlAt = async (url: string, run: () => Promise<void>): Promise<void> => {
-    pool.stub.html.add(url);
+  { provider: 'github', userUrl: 'https://api.github.com/user' },
+  { provider: 'google', userUrl: 'https://openidconnect.googleapis.com/v1/userinfo' },
+])('$provider answering HTML', ({ provider, userUrl }) => {
+  it('is a named provider_error when reading the profile', async () => {
+    const token = pool.stub.issue(stubUser('301'));
+    pool.stub.html.add(userUrl);
     try {
-      await run();
+      expect(await pool.post('/v1/login', { provider, token })).toMatchObject({ status: 502, json: { error: 'provider_error' } });
     } finally {
       pool.stub.html.clear();
     }
-  };
-
-  it('is a named provider_error when starting a device flow', async () => {
-    await withHtmlAt(deviceUrl, async () => {
-      expect(await pool.post('/v1/login/start', { provider })).toMatchObject(providerError);
-    });
-  });
-
-  it('is a named provider_error when polling for the token', async () => {
-    const deviceCode = textOf((await pool.post('/v1/login/start', { provider })).json, 'deviceCode');
-    await withHtmlAt(tokenUrl, async () => {
-      expect(await pool.post('/v1/login/poll', { provider, deviceCode })).toMatchObject(providerError);
-    });
-  });
-
-  it('is a named provider_error when reading the profile', async () => {
-    const deviceCode = textOf((await pool.post('/v1/login/start', { provider })).json, 'deviceCode');
-    pool.stub.approve(deviceCode, stubUser('301'));
-    await withHtmlAt(userUrl, async () => {
-      expect(await pool.post('/v1/login/poll', { provider, deviceCode })).toMatchObject(providerError);
-    });
   });
 });
 
 describe.each([
-  { provider: 'github', deviceUrl: 'https://github.com/login/device/code', tokenUrl: 'https://github.com/login/oauth/access_token', userUrl: 'https://api.github.com/user' },
-  { provider: 'google', deviceUrl: 'https://oauth2.googleapis.com/device/code', tokenUrl: 'https://oauth2.googleapis.com/token', userUrl: 'https://openidconnect.googleapis.com/v1/userinfo' },
-])('$provider out of reach', ({ provider, deviceUrl, tokenUrl, userUrl }) => {
+  { provider: 'github', userUrl: 'https://api.github.com/user' },
+  { provider: 'google', userUrl: 'https://openidconnect.googleapis.com/v1/userinfo' },
+])('$provider answering 403', ({ provider, userUrl }) => {
+  // GitHub answers a call over its rate limit with 403, so the token may be fine: this is the provider's trouble, not a refused token.
+  it('is a named provider_error, not a refused token', async () => {
+    const token = pool.stub.issue(stubUser('302'));
+    pool.stub.forbidden.add(userUrl);
+    try {
+      expect(await pool.post('/v1/login', { provider, token })).toMatchObject({ status: 502, json: { error: 'provider_error' } });
+    } finally {
+      pool.stub.forbidden.clear();
+    }
+  });
+});
+
+describe.each(['github', 'google'])('%s out of reach', (provider) => {
   // Outside the runtime, where a stand-in fetch can reject the way a network failure does.
-  const db = { prepare: () => ({ bind: () => ({ first: () => Promise.resolve(null), all: () => Promise.resolve({ results: [] }), run: () => Promise.resolve({ meta: { changes: 1 } }) }) }) };
-  const env = { DB: db, PSEUDONYM_KEY: 'k', SLICE_SIGNING_KEY: '{}', GITHUB_CLIENT_ID: 'c', GOOGLE_CLIENT_ID: 'c', GOOGLE_CLIENT_SECRET: 's' };
-  const post = (path: string, body: object): Promise<Response> => worker.fetch(new Request(`http://pool.test${path}`, { method: 'POST', body: JSON.stringify(body) }), env);
-  const failingAt = (url: string): void => {
-    vi.stubGlobal('fetch', (input: string) => (input === url ? Promise.reject(new TypeError('network down')) : Promise.resolve(new Response(JSON.stringify({ access_token: 'an-access-token' })))));
-  };
+  const db = { prepare: () => ({ bind: () => ({ first: () => Promise.resolve(null), all: () => Promise.resolve({ results: [] }), run: () => Promise.resolve({ meta: { changes: 1 } }) }) }), batch: () => Promise.resolve([]) };
+  const env = { DB: db, PSEUDONYM_KEY: 'k', BUNDLE_SIGNING_KEY: '{}' };
 
   afterEach(() => {
     vi.unstubAllGlobals();
   });
 
-  it.each([
-    ['starting a device flow', '/v1/login/start', deviceUrl],
-    ['polling for the token', '/v1/login/poll', tokenUrl],
-    ['reading the profile', '/v1/login/poll', userUrl],
-  ])('is a named provider_error when %s', async (_step, path, url) => {
-    failingAt(url);
-    const response = await post(path, { provider, deviceCode: 'a-device-code' });
+  it('is a named provider_error when reading the profile', async () => {
+    vi.stubGlobal('fetch', () => Promise.reject(new TypeError('network down')));
+    const response = await worker.fetch(new Request('http://pool.test/v1/login', { method: 'POST', body: JSON.stringify({ provider, token: 'a-provider-token' }) }), env);
     expect(response.status).toBe(502);
     expect(await response.json()).toMatchObject({ error: 'provider_error' });
   });

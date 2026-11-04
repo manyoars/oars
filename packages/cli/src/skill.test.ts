@@ -85,7 +85,7 @@ describe('skills/make-me-money/SKILL.md', () => {
       expect(skill).toContain(line);
       expect(`${cli}\n${source('./commands/deploy.ts')}`).toContain(line);
     }
-    const rows = [...skill.matchAll(/^\| (\d) \|/gm)].flatMap((match) => (match[1] === undefined ? [] : [Number(match[1])]));
+    const rows = [...skill.matchAll(/^\| (\d+) \|/gm)].flatMap((match) => (match[1] === undefined ? [] : [Number(match[1])]));
     expect(new Set(rows)).toEqual(new Set(Object.values(ExitCode)));
   });
 
