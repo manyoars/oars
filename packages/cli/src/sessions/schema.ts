@@ -423,6 +423,8 @@ export interface ToolObservation {
   pulls?: ToolPull[];
   /** The packages the call installs or runs, resolved; absent when it names none (CAPTURE 13). Class A. */
   packages?: ToolPackage[];
+  /** The dependency names a call read, wrote, or edited in a manifest (CAPTURE 13). Class A. */
+  manifest?: ToolManifest;
   /** One entry per commit a clean shell call made, in order: the sha its result names, or null when it names none (CAPTURE 6). Absent when it made none. */
   commits?: Array<string | null>;
 }
@@ -441,6 +443,14 @@ export interface ToolPackage {
   packageVersion: string | null;
   /** True on the first call of the session that names this package at this version (D13 counts only that call). */
   first: boolean;
+}
+
+/** What a call showed of a dependency manifest (class A, CAPTURE 13): names as `<ecosystem>:<name>`. A Read's result and a Write's content list `seen`; an Edit's text gives the names it `added` and `removed`. Absent when none is shown. */
+export interface ToolManifest {
+  file: 'package.json' | 'requirements.txt' | 'Cargo.toml';
+  seen: string[];
+  added: string[];
+  removed: string[];
 }
 
 export type PullEcosystem = 'npm' | 'pypi' | 'cargo' | 'go' | 'gem' | 'brew' | 'skill' | 'plugin' | 'mcp';

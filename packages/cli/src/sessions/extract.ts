@@ -10,7 +10,7 @@ import type { RepoSize } from './public-vocabulary.js';
 import { linkSteps } from './graph.js';
 import { callIdentity, shellIdentity, UNREAD_SHELL, type WordOfCommand } from './identity.js';
 import type { Redactor } from './redact.js';
-import { packagesOf } from './package-resolve.js';
+import { manifestDelta, manifestFileOf, manifestNames, packagesOf, type ManifestFile } from './package-resolve.js';
 import { createShape, INTERRUPT_MARKER } from './session-shape.js';
 import {
   CAPTURE_VERSION,
@@ -34,6 +34,7 @@ import {
   type SkeletonLine,
   type StepIdentity,
   type TargetBase,
+  type ToolManifest,
   type ToolObservation,
   type ToolPull,
   type Usage,
@@ -131,6 +132,22 @@ export const isErrorResult = (block: Obj, text: string): boolean => {
   if (truthy(block.is_error)) return true;
   const exit = EXIT_RE.exec(text.trim());
   return exit !== null && exit[1] !== '0';
+};
+
+/** A name stays only when redaction leaves it as it is: a masked word is no package name. */
+const namesKept = (names: readonly string[], redact: Redactor): string[] => names.filter((name) => redact(name) === name);
+
+/** What an Edit, MultiEdit, or Write shows of a manifest: the names it adds and removes (an edit), or lists (a write). Undefined when it shows none. */
+const manifestOfInput = (file: ManifestFile, tool: string, input: Obj, redact: Redactor): ToolManifest | undefined => {
+  if (tool === 'Write') {
+    const seen = namesKept(manifestNames(file, str(input.content) ?? ''), redact);
+    return seen.length === 0 ? undefined : { file, seen, added: [], removed: [] };
+  }
+  const edits = tool === 'MultiEdit' && Array.isArray(input.edits) ? input.edits.filter(isObj) : tool === 'Edit' ? [input] : [];
+  const delta = manifestDelta(file, edits.map((edit) => str(edit.old_string) ?? '').join('\n'), edits.map((edit) => str(edit.new_string) ?? '').join('\n'));
+  const added = namesKept(delta.added, redact);
+  const removed = namesKept(delta.removed, redact);
+  return added.length === 0 && removed.length === 0 ? undefined : { file, seen: [], added, removed };
 };
 
 const EXIT_CODE_RE = /^Exit code:? (-?\d+)/;
@@ -1425,6 +1442,8 @@ export const captureSession = (input: ExtractInput): Capture => {
   const callById = new Map<string, { call: ToolObservation; at: number | undefined; plan: readonly PlannedCommit[] }>();
   // Packages named so far in this file, by package and version, so a call's `first` mark is true once per version.
   const seenPackages = new Set<string>();
+  // A Read of a manifest shows its names in the result, so the call waits here for it, by tool_use id.
+  const manifestReads = new Map<string, ManifestFile>();
   // The evidence for the frame: read across the whole file, so one session's prompts share a stack and a shell, and held only until the frame is built.
   const framePaths: string[] = [];
   const framePrograms = new Set<string>();
@@ -1685,6 +1704,9 @@ export const captureSession = (input: ExtractInput): Capture => {
         drafts.push(draftsOf(actions, named, native, shell, aimed.target, toolInput));
         responseOfCall.push(response);
         callsPerResponse.set(response, (callsPerResponse.get(response) ?? 0) + 1);
+        const manifestFile = PATH_TOOLS.has(name) && filePath !== undefined ? manifestFileOf(filePath) : null;
+        const manifest = manifestFile === null ? undefined : manifestOfInput(manifestFile, name, toolInput, redact);
+        if (manifestFile !== null && name === 'Read' && id !== undefined) manifestReads.set(id, manifestFile);
         const pulls = shell?.pulls ?? pullsOfTool(name, redact);
         const packages = packagesOf(pulls, seenPackages);
         const call: ToolObservation = {
@@ -1710,6 +1732,7 @@ export const captureSession = (input: ExtractInput): Capture => {
           ...(shell === undefined ? {} : { segments: shell.segments }),
           ...(pulls.length === 0 ? {} : { pulls }),
           ...(packages.length === 0 ? {} : { packages }),
+          ...(manifest === undefined ? {} : { manifest }),
         };
         tools.push(call);
         if (id !== undefined) callById.set(id, { call, at: lineSeconds, plan: shell?.commitPlan ?? [] });
@@ -1722,6 +1745,9 @@ export const captureSession = (input: ExtractInput): Capture => {
           if (at !== undefined && lineSeconds !== undefined && o.noDuration !== true) call.durationMs = Math.round((lineSeconds - at) * 1000);
           call.status = failed ? 'error' : 'ok';
           if (failed) call.errorCode = errorCodeOf(text);
+          const read = manifestReads.get(str(block.tool_use_id) ?? '');
+          const seen = read === undefined || failed ? [] : namesKept(manifestNames(read, text), redact);
+          if (read !== undefined && seen.length > 0) call.manifest = { file: read, seen, added: [], removed: [] };
           const commits = failed ? [] : commitsRead(plan, text);
           if (commits.length > 0) call.commits = commits;
         }
