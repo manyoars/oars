@@ -88,7 +88,7 @@ describe('a typed prompt', () => {
   });
 
   it('keeps a leading < the operator typed by hand', () => {
-    for (const text of ['<div> breaks the widget', '<3 this, now fix it', '< 5 widgets remain', '<command>not the wrapper</command>']) {
+    for (const text of ['<div> breaks the widget', '<3 this, now fix it', '< 5 widgets remain', '<command>not the wrapper</command>', '<system-reminder> keeps showing, why?', '<command-name> is what, exactly?']) {
       expect(capture([user(text), answer()]).prompts.map(({ head, opened }) => ({ head, opened }))).toEqual([{ head: text, opened: 'typed' }]);
     }
   });
@@ -185,6 +185,13 @@ describe('a teammate transcript', () => {
   it('keeps the plain first line a subagent is given, so its turns stay in a prompt', () => {
     const { prompts } = capture([user('polish the widget', { isSidechain: true }), answer('x', { isSidechain: true }), user(TEAMMATE, { isSidechain: true }), answer('y', { isSidechain: true })], { subagent: { parent: 'p', agentType: 'worker', spawnedBy: null, spawnedIn: null } });
     expect(prompts.map(({ head, opened, turns }) => ({ head, opened, turns }))).toEqual([{ head: 'polish the widget', opened: 'typed', turns: 2 }]);
+  });
+});
+
+describe('a command in a teammate transcript', () => {
+  it('opens a prompt when a model answers it', () => {
+    const { prompts } = capture([user(command('frobnicate', 'go'), { isSidechain: true }), answer('x', { isSidechain: true })], { subagent: { parent: 'p', agentType: 'worker', spawnedBy: null, spawnedIn: null } });
+    expect(prompts.map(({ head, opened }) => ({ head, opened }))).toEqual([{ head: '/frobnicate go', opened: 'command' }]);
   });
 });
 
