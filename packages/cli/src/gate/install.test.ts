@@ -249,7 +249,7 @@ describe('oars gate install and uninstall', () => {
     mkdirSync(storeDir, { recursive: true });
     writeFileSync(join(storeDir, 'crossings.jsonl'), '{"kind":"run"}\n');
     await run(['gate', 'install'], deps);
-    expect(out.join('')).toContain('oars gate replay');
+    expect(out.join('')).toContain('oars gate replay --allow <folder>');
   });
 
   it('uninstalls, then reports there is nothing to remove', async () => {
