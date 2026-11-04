@@ -7,6 +7,7 @@ import { frame, printOf, prompt, session, sessionsFrom, step, store, storedNames
 import { floorOf, skeletonOf, type SessionSkeleton } from './pool-wire.js';
 import { deriveConsequences, recallGraphOf } from './recall-consequence.js';
 import { makeRecall } from './recall-object.js';
+import type { Strata } from './schema.js';
 import type { Store } from './store.js';
 
 const framed = frame({ shell: 'bash', stack: { languages: ['rust'], frameworks: ['astro'], size: 'xl' } });
@@ -195,7 +196,8 @@ describe('rules 1 to 3 and 6: what a cell and a stratum hold', () => {
   });
 
   it('pools the two pair strata per value, each beside the single ones, and no pair for a language without a share or a prompt without a count', () => {
-    const strata = { languages: [{ language: 'rust', share: 'over-50' }, { language: 'go', share: 'nonsense' }], repoFiles: 'over-100k', frameworks: [], explore: 37 } as const;
+    // A stored share is text on a record, so a test can hold one the list does not: Object.assign types the result as the record while the input stays loose.
+    const strata: Strata = Object.assign({ languages: [], repoFiles: null, frameworks: [], explore: 37 }, { languages: [{ language: 'rust', share: 'over-50' }, { language: 'go', share: 'nonsense' }], repoFiles: 'over-100k' });
     const local = store({ sessions: [session('s1', { frame: framed })], prompts: [prompt('s1', 0, { frame: framed, strata }), prompt('s1', 1, { frame: framed })] });
     const keys = [...incrementsOf(skeletonOfLocal(local)).strata.keys()];
     // 37 explore steps is bucket 7; the second prompt held no count, and a share outside its list is dropped with its pair.
