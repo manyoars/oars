@@ -131,3 +131,79 @@ export const parseRows = (text: string): Row[] =>
   });
 
 export { CROSSING_CLASSES, CROSSING_FORMS };
+
+const isLive = (row: CrossingRecord): boolean => row.via === 'hook' || row.via === 'both';
+
+/** A hook never saw these, so a hook row says them as `not-read`, `null`, or `unknown`: then the replay's value stands. */
+const unsaid = (value: unknown): boolean => value === NOT_READ || value === null || value === 'unknown';
+
+const pick = <K extends keyof CrossingRecord>(key: K, live: CrossingRecord, replayed: CrossingRecord): CrossingRecord[K] => (unsaid(live[key]) ? replayed[key] : live[key]);
+
+/**
+ * One crossing seen twice. The hook's fields from the time of the crossing win: its clock, its permission mode, the registry as it stood, and what was new. A replay's
+ * fields from the transcript fill in what the hook could not read. A row that came out of an earlier merge is a hook row again here, so a second replay refreshes
+ * only the transcript fields and keeps what the hook saw.
+ */
+const merged = (live: CrossingRecord, replayed: CrossingRecord): CrossingRecord => ({
+  ...replayed,
+  via: 'both',
+  day: pick('day', live, replayed),
+  ts: pick('ts', live, replayed),
+  version: pick('version', live, replayed),
+  permission: pick('permission', live, replayed),
+  novelty: pick('novelty', live, replayed),
+  againstLatest: pick('againstLatest', live, replayed),
+  registryState: pick('registryState', live, replayed),
+  registryAge: pick('registryAge', live, replayed),
+  arm: pick('arm', live, replayed),
+  lineShown: pick('lineShown', live, replayed),
+});
+
+/** The key a call crossing is counted by: nothing counts twice when a row has a tool use id and another row has the same one. */
+const crossingKey = (row: CrossingRecord): string | null => (row.toolUseId === null ? null : [row.session, row.toolUseId, row.class, row.name].join('\0'));
+
+/** The first row of each key; a row with no key cannot repeat, so it stays. */
+const once = (rows: readonly CrossingRecord[]): CrossingRecord[] => {
+  const seen = new Set<string>();
+  return rows.filter((row) => {
+    const key = crossingKey(row);
+    if (key === null) return true;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+};
+
+/**
+ * Every crossing once. The rows of `replayed` are replay rows and the rows of `live` are hook rows (or merged ones); rows with the same session, tool use id, class, and
+ * name are one row, whether two sources saw it or one wrote it twice, so the same name twice in one call counts once. A row with no tool use id cannot be paired and stays.
+ */
+export const mergeCrossings = (replayed: readonly CrossingRecord[], live: readonly CrossingRecord[]): CrossingRecord[] => {
+  const hooked = once(live);
+  const waiting = new Map<string, CrossingRecord>();
+  for (const row of hooked) {
+    const key = crossingKey(row);
+    if (key !== null) waiting.set(key, row);
+  }
+  const paired = new Set<CrossingRecord>();
+  const result = once(replayed).map((row) => {
+    const key = crossingKey(row);
+    const mate = key === null ? undefined : waiting.get(key);
+    if (mate === undefined) return row;
+    paired.add(mate);
+    return merged(mate, row);
+  });
+  return [...result, ...hooked.filter((row) => !paired.has(row))];
+};
+
+/** The crossings of a file's rows with each counted once: replay rows and hook rows of the same call become one. */
+export const crossingsOf = (rows: readonly Row[]): CrossingRecord[] => {
+  const crossings = rows.filter((row): row is CrossingRecord => row.kind === 'crossing');
+  return mergeCrossings(
+    crossings.filter((row) => !isLive(row)),
+    crossings.filter(isLive),
+  );
+};
+
+/** The hook-written rows (and merged ones) of a file, which a replay keeps when it rewrites the rest. */
+export const liveCrossings = (rows: readonly Row[]): CrossingRecord[] => rows.filter((row): row is CrossingRecord => row.kind === 'crossing' && isLive(row));

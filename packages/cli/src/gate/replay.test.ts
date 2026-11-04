@@ -115,7 +115,7 @@ describe('the source of a replay', () => {
     await expect(run([])).rejects.toBeInstanceOf(CliError);
   });
 
-  it('writes nothing outside crossings.jsonl and leaves no temp file', async () => {
+  it('writes nothing outside crossings.jsonl and the novelty index beside it, and leaves no temp file', async () => {
     await writeFile(join(storeDir, 'state.json'), JSON.stringify({ files: {}, redactDomains: [], allow: [REPO] }));
     await writeLog(projectsRoot, REPO, 'a.jsonl', [bash(1, 't1', 'npm install one')]);
     const before = await snapshot(root);
@@ -124,6 +124,9 @@ describe('the source of a replay', () => {
     const crossingFile = join('store', 'crossings.jsonl');
     expect(after.has(crossingFile)).toBe(true);
     after.delete(crossingFile);
+    // The index is what lets the hook say what is new without scanning the record; a replay seeds it.
+    expect(after.has(join('store', 'gate-index.txt'))).toBe(true);
+    after.delete(join('store', 'gate-index.txt'));
     expect(after).toEqual(before);
   });
 

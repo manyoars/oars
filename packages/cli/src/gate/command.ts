@@ -27,7 +27,9 @@ export const gateReplay = async (deps: SessionsDeps, options: { allow: string[];
 export const gateReport = async (deps: SessionsDeps): Promise<Outcome> => {
   const text = await readFile(crossingsFile(runtimeOf(deps).storeDir), 'utf8').catch(() => '');
   const rows = parseRows(text);
-  if (!rows.some((row) => row.kind === 'run')) throw new CliError('No replay has been written yet: run `oars gate replay --allow <folder>` first.', ExitCode.USAGE, 'usage');
+  if (!rows.some((row) => row.kind === 'run' || row.kind === 'crossing')) {
+    throw new CliError('No crossings have been recorded yet: run `oars gate install` to record them as they happen, or `oars gate replay --allow <folder>` to find the ones already in your logs.', ExitCode.USAGE, 'usage');
+  }
   const report = reportOf(rows);
   return { document: report, text: formatReport(report) };
 };
