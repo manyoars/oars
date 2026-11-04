@@ -246,7 +246,7 @@ export const ACTION_TABLES: { readonly [harness in Harness]: ActionTable } = {
       vscode_get_confirmation_with_options: 'other',
       vscode_reviewPlan: 'other',
       vscode_get_terminal_confirmation: 'other',
-      vscode_askQuestions: 'other',
+      vscode_askQuestions: 'ask.user',
       open_browser_page: 'other',
       click_element: 'other',
       screenshot_page: 'other',

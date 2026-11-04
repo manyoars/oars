@@ -33,8 +33,8 @@
 //   modelId          the model
 //   response[]       a markdown part is a bare `{value}` (a string in the old format); `kind:'thinking'` is skipped;
 //                    `kind:'toolInvocationSerialized'` is a tool call (chatService/chatService.ts:1246-1270); `kind:'textEditGroup'` or `'notebookEditGroup'` `{uri}` is a file edited
-//   usage            `completionTokens` the whole turn's output (model/chatModel.ts:1929-1934), `modelTotals[{model, inputTokens, cachedTokens, outputTokens}]`
-//                    (chatService.ts:176-188) the only per-model figure. `promptTokens` is the last model call alone, so it is not read as consumption. The source does not
+//   usage            `completionTokens` on the request, the whole turn's output (model/chatModel.ts:1929-1934, 2086), and `modelTotals[{model, inputTokens, cachedTokens, outputTokens}]`
+//                    on the request too (chatService.ts:176-188; chatModel.ts:2093), the only per-model figure. Neither is under a `usage` key. `promptTokens` is the last model call alone, so it is not read as consumption. The source does not
 //                    say whether `inputTokens` includes `cachedTokens`, so it is not subtracted: that is a stated limit (a store that includes it counts the cache twice).
 //                    `modelTotals` is rare: the extension API bridge hands the editor only promptTokens, completionTokens, outputBuffer, copilotCredits, and promptTokenDetails
 //                    (api/common/extHostChatAgents2.ts:463-468), and a public code search found `modelTotals` written only by the agent-host adapter
@@ -59,12 +59,13 @@ import { fileURLToPath } from 'node:url';
 export const vscodeAppData = (platform: NodeJS.Platform, env: { [name: string]: string | undefined }, home: string = homedir()): string => {
   const set = env.VSCODE_APPDATA;
   if (set !== undefined && set !== '') return set;
-  if (platform === 'win32') return env.APPDATA ?? join(home, 'AppData', 'Roaming');
+  if (platform === 'win32') return env.APPDATA || join(home, 'AppData', 'Roaming');
   if (platform === 'darwin') return join(home, 'Library', 'Application Support');
-  return env.XDG_CONFIG_HOME ?? join(home, '.config');
+  return env.XDG_CONFIG_HOME || join(home, '.config');
 };
 
 /** The `nameShort` of each build read. */
+const SHELL_TOOLS: ReadonlySet<string> = new Set(['run_in_terminal', 'run_task', 'create_and_run_task']);
 const CHANNELS = ['Code', 'Code - Insiders', 'Code - OSS'] as const;
 
 type Obj = { [key: string]: unknown };
@@ -117,7 +118,7 @@ export interface VscodeSession {
   id: string;
   /** The workspace's folder; null for an empty window or a remote workspace. */
   folder: string | null;
-  /** The files that hold it, in the order VS Code tries them: the `.jsonl`, then the `.json`. */
+  /** The files that hold it, newest first (the `.jsonl` ahead of the `.json` on a tie); the first that reads is the session. */
   files: string[];
   size: number;
   mtimeMs: number;
@@ -217,7 +218,7 @@ const errorText = (part: Obj): string | undefined => {
   const output: unknown = part.resultDetails.output;
   const embeds: unknown[] = Array.isArray(output) ? output : [];
   // `output` is an array of `{type:'embed', value, isText}` (common/tools/languageModelToolsService.ts:290-296, written as an array at contrib/mcp/common/
-  // mcpLanguageModelToolContribution.ts:279-280): the first text embed is the message. A plain string is the older spelling (`isToolResultInputOutputDetails`, :305).
+  // mcpLanguageModelToolContribution.ts:279-280): the first text embed is the message. The guard also accepts a string (`isToolResultInputOutputDetails`, :305), though the declared type allows only the array.
   const embed = embeds.find((entry) => isObj(entry) && entry.isText === true && str(entry.value) !== undefined);
   return (isObj(embed) ? str(embed.value) : str(output)) ?? 'tool failed';
 };
@@ -277,7 +278,7 @@ export const chatLines = (data: Obj, fallbackId: string, folder: string | null):
         const specific = isObj(part.toolSpecificData) ? part.toolSpecificData : {};
         const terminal = specific.kind === 'terminal' && isObj(specific.commandLine) ? specific.commandLine : undefined;
         const block: Obj = { type: 'tool_use', id, name: toolId, input: {} };
-        const isShell = terminal !== undefined || toolId === 'run_in_terminal';
+        const isShell = terminal !== undefined || SHELL_TOOLS.has(toolId);
         if (isShell) {
           const command = terminal === undefined ? undefined : (str(terminal.userEdited) ?? str(terminal.toolEdited) ?? str(terminal.original));
           block.native = toolId;
@@ -386,16 +387,24 @@ export const openVscodeCopilotStore = async (root: string): Promise<VscodeStore 
       files[ext === '.jsonl' ? 'unshift' : 'push'](join(dir, name));
       byId.set(id, files);
     }
-    for (const [id, files] of byId) {
-      const first = files[0] ?? '';
-      try {
-        const info = await stat(first);
-        const mtimeMs = Math.floor(info.mtimeMs);
-        const earlier = found.get(id);
-        if (earlier === undefined || mtimeMs > earlier.mtimeMs) found.set(id, { id, folder, files, size: info.size, mtimeMs });
-      } catch (error) {
-        note(first, error);
+    for (const [id, listed] of byId) {
+      // Every file of the session is stat'ed: with `chat.useLogSessionStorage` off VS Code writes only the `.json` (chatSessionStore.ts:353,394), so a log left from an
+      // earlier run is the older file. The newest is read first and sets the cursor, and a change to either file moves it.
+      const seen: { file: string; size: number; mtimeMs: number }[] = [];
+      for (const file of listed) {
+        try {
+          const info = await stat(file);
+          seen.push({ file, size: info.size, mtimeMs: Math.floor(info.mtimeMs) });
+        } catch (error) {
+          note(file, error);
+        }
       }
+      // A stable sort keeps the `.jsonl` ahead of the `.json` when their times tie.
+      seen.sort((a, b) => b.mtimeMs - a.mtimeMs);
+      const newest = seen[0];
+      if (newest === undefined) continue;
+      const earlier = found.get(id);
+      if (earlier === undefined || newest.mtimeMs > earlier.mtimeMs) found.set(id, { id, folder, files: seen.map((entry) => entry.file), size: newest.size, mtimeMs: newest.mtimeMs });
     }
   };
   for (const channel of CHANNELS) {

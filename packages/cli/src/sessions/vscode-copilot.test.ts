@@ -1,14 +1,28 @@
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, statSync, utimesSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { captureSession } from './extract.js';
 import { makeRedactor } from './redact.js';
 import { makeRepoIdentity, makeRepoRoot } from './repo-root.js';
 import { cleanup, stage, stageVscode } from './test-support.js';
 import { chatBadLines, chatData, chatLines, openVscodeCopilotStore, vscodeAppData } from './vscode-copilot.js';
 
-afterEach(cleanup);
+// A folder named here fails to list with EACCES, since a real denied folder cannot be made on every platform the suite runs on.
+const denied = vi.hoisted(() => new Set<string>());
+vi.mock('node:fs/promises', async (importOriginal) => {
+  const real = await importOriginal<typeof import('node:fs/promises')>();
+  const readdir = (async (path: string, options: { withFileTypes: true }) => {
+    if (denied.has(path)) throw Object.assign(new Error(`EACCES: permission denied, scandir '${path}'`), { code: 'EACCES' });
+    return real.readdir(path, options);
+  }) as typeof real.readdir;
+  return { ...real, readdir };
+});
+
+afterEach(() => {
+  denied.clear();
+  cleanup();
+});
 
 // Every fixture is written from the public source of microsoft/vscode @ f92b8f3adcd9bc034e6b9ade05c093dd59b99c5f (MIT), paths under src/vs/workbench/contrib/chat/common/:
 // the request `ISerializableChatRequestData` (model/chatModel.ts:2230-2259: requestId, message, response, timestamp, modelId, isSystemInitiated, hiddenFromTranscript) and the
@@ -108,10 +122,10 @@ describe('the VS Code Copilot Chat reader', () => {
     // toolNames.ts lists `edit_notebook_file`, `create_directory`, `send_to_terminal`, `run_notebook_cell`, and `skill`; the notebook edit part is `kind:'notebookEditGroup'` (model/chatModel.ts:1321,1331).
     const notebook = { kind: 'notebookEditGroup', uri: { scheme: 'file', path: '/work/app/n.ipynb' }, edits: [], done: true };
     const out = extractOf(
-      chat([request(1, 'x', [tool('c1', 'edit_notebook_file'), notebook, tool('c2', 'copilot_createDirectory'), tool('c3', 'send_to_terminal'), tool('c4', 'run_notebook_cell'), tool('c5', 'skill'), tool('c6', 'runTests'), tool('c7', 'mcp__demo__search')])]),
+      chat([request(1, 'x', [tool('c1', 'edit_notebook_file'), notebook, tool('c2', 'copilot_createDirectory'), tool('c3', 'send_to_terminal'), tool('c4', 'run_notebook_cell'), tool('c5', 'skill'), tool('c6', 'runTests'), tool('c7', 'mcp__demo__search'), tool('c8', 'vscode_askQuestions')])]),
     );
-    expect(out.tools.map((entry) => entry.steps?.[0]?.action)).toEqual(['file.edit', 'file.write', 'other', 'other', 'skill.run', 'other', 'other']);
-    expect(out.tools.map((entry) => entry.steps?.[0]?.native)).toEqual(['edit_notebook_file', 'copilot_createDirectory', 'send_to_terminal', 'run_notebook_cell', 'skill', 'runTests', '<literal>']);
+    expect(out.tools.map((entry) => entry.steps?.[0]?.action)).toEqual(['file.edit', 'file.write', 'other', 'other', 'skill.run', 'other', 'other', 'ask.user']);
+    expect(out.tools.map((entry) => entry.steps?.[0]?.native)).toEqual(['edit_notebook_file', 'copilot_createDirectory', 'send_to_terminal', 'run_notebook_cell', 'skill', 'runTests', '<literal>', 'vscode_askQuestions']);
     expect(out.session.files).toHaveLength(1);
   });
 
@@ -126,10 +140,10 @@ describe('the VS Code Copilot Chat reader', () => {
   });
 
   it('leaves a shell call with no exit code and no error as none (a background run), and one with an error and no exit code as an error', () => {
-    const out = extractOf(chat([request(1, 'x', [shell('c1', 'watch', undefined, 'tick'), shell('c2', 'oops', undefined, '', { resultError: 'spawn failed' }), tool('c3', 'read_file', { isConfirmed: undefined, summary: { kind: 'incomplete' } }), tool('c4', 'read_file', { summary: { kind: 'incomplete' } })])]));
+    const out = extractOf(chat([request(1, 'x', [shell('c1', 'watch', undefined, 'tick'), shell('c2', 'oops', undefined, '', { resultError: 'spawn failed' }), tool('c3', 'read_file', { isConfirmed: undefined, summary: { kind: 'incomplete' } }), tool('c4', 'read_file', { summary: { kind: 'incomplete' } }), tool('c5', 'read_file', { isConfirmed: undefined }), tool('c6', 'run_task'), tool('c7', 'create_and_run_task'), tool('c8', 'run_task', { resultError: 'no such task' })])]));
     // An unfinished call is written with `summary.kind` `incomplete` and, before confirmation, no `isConfirmed` (chatToolInvocation.ts:508,516-517); `isComplete` is always true.
-    expect(out.tools.map((entry) => entry.status)).toEqual(['none', 'error', 'none', 'none']);
-    expect(out.errorLines.map((entry) => entry.line)).toEqual(['spawn failed']);
+    expect(out.tools.map((entry) => entry.status)).toEqual(['none', 'error', 'none', 'none', 'none', 'none', 'none', 'error']);
+    expect(out.errorLines.map((entry) => entry.line)).toEqual(['spawn failed', 'no such task']);
   });
 
   it('stores no file of an unfinished or post-approval-skipped edit as a success, and a finished edit keeps every file', () => {
@@ -159,7 +173,7 @@ describe('the VS Code Copilot Chat reader', () => {
 
   it('records a failed non-shell call and an edit that failed, which is still an edit by name, as errors, and reads an MCP tool failure message from its embed array', () => {
     // `IToolResultInputOutputDetails.output` is an array of `{type:'embed', value, isText}` (common/tools/languageModelToolsService.ts:290-296, written as an array at
-    // contrib/mcp/common/mcpLanguageModelToolContribution.ts:279-280); a plain string output is the older spelling (`isToolResultInputOutputDetails`, :305).
+    // contrib/mcp/common/mcpLanguageModelToolContribution.ts:279-280); the guard also accepts a string output (`isToolResultInputOutputDetails`, :305).
     const embeds = [
       { type: 'embed', value: 'AAAA', isText: false },
       { type: 'embed', value: 'upstream returned 502', isText: true },
@@ -353,6 +367,39 @@ describe('the VS Code Copilot Chat store', () => {
     expect((await text('same-json')).replaceAll('same-json', 'x')).toBe((await text('same-log')).replaceAll('same-log', 'x'));
   });
 
+  it('reads the newest file of a session first and moves the cursor when either file changes, so a changed json beside a stale log is re-read', async () => {
+    const s = stage();
+    const appData = stageVscode(s.root, [{ id: 'stale', data: data('from json'), log: [{ kind: 0, v: data('from log') }], hash: 'h1' }]);
+    const dir = join(appData, 'Code', 'User', 'workspaceStorage', 'h1', 'chatSessions');
+    // With the log form off VS Code writes only the `.json` (chatSessionStore.ts:353,394), so a log left from an earlier run is the older file.
+    utimesSync(join(dir, 'stale.jsonl'), 1_700_000_000, 1_700_000_000);
+    utimesSync(join(dir, 'stale.json'), 1_700_000_100, 1_700_000_100);
+    const store = await openVscodeCopilotStore(appData);
+    const found = store?.sessions[0];
+    expect(found?.files.map((file) => file.slice(file.lastIndexOf('.')))).toEqual(['.json', '.jsonl']);
+    expect(found?.mtimeMs).toBe(Math.floor(statSync(join(dir, 'stale.json')).mtimeMs));
+    expect(found?.size).toBe(statSync(join(dir, 'stale.json')).size);
+    expect(found && (await store?.transcript(found))).toContain('from json');
+  });
+
+  it('lists a folder it may not read once, with a reason that names no parent path, and reads the rest', async () => {
+    const s = stage();
+    const appData = stageVscode(s.root, [
+      { id: 'kept', data: data('kept'), hash: 'h1' },
+      { id: 'hidden', data: data('hidden') },
+    ]);
+    const empty = join(appData, 'Code', 'User', 'globalStorage', 'emptyWindowChatSessions');
+    denied.add(empty);
+    const store = await openVscodeCopilotStore(appData);
+    expect(store?.sessions.map((session) => session.id)).toEqual(['kept']);
+    expect(store?.unreadable).toEqual([{ file: empty, reason: "EACCES: permission denied, scandir 'emptyWindowChatSessions'" }]);
+    denied.clear();
+    denied.add(join(appData, 'Code', 'User', 'workspaceStorage'));
+    const blocked = await openVscodeCopilotStore(appData);
+    expect(blocked?.sessions.map((session) => session.id)).toEqual(['hidden']);
+    expect(blocked?.unreadable.map((entry) => entry.reason)).toEqual(["EACCES: permission denied, scandir 'workspaceStorage'"]);
+  });
+
   it('is undefined when no build has a User folder, skips a User folder that is a file without naming it, rejects an unsafe id, and throws for a wholly torn session', async () => {
     const s = stage();
     expect(await openVscodeCopilotStore(join(s.root, 'nowhere'))).toBeUndefined();
@@ -385,5 +432,8 @@ describe('where VS Code keeps its data', () => {
     expect(vscodeAppData('linux', {}, 'H')).toBe(join('H', '.config'));
     expect(vscodeAppData('linux', { VSCODE_APPDATA: '/data', XDG_CONFIG_HOME: '/cfg' }, 'H')).toBe('/data');
     expect(vscodeAppData('linux', { VSCODE_APPDATA: '' }, 'H')).toBe(join('H', '.config'));
+    // An empty variable is unset to VS Code (platform/environment/node/userDataPath.ts uses `||`), never a root of '' that would read the working directory.
+    expect(vscodeAppData('linux', { XDG_CONFIG_HOME: '' }, 'H')).toBe(join('H', '.config'));
+    expect(vscodeAppData('win32', { APPDATA: '' }, 'H')).toBe(join('H', 'AppData', 'Roaming'));
   });
 });
