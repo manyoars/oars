@@ -108,8 +108,8 @@ export const loginPoll = async (request: Request, env: Env): Promise<Response> =
   if (clientId === undefined) return notConfigured(provider.clientBinding);
   const pseudonymKey = bound(env.PSEUDONYM_KEY);
   if (pseudonymKey === undefined) return notConfigured('PSEUDONYM_KEY');
-  const signingKey = bound(env.SLICE_SIGNING_KEY);
-  if (signingKey === undefined) return notConfigured('SLICE_SIGNING_KEY');
+  const signingKey = bound(env.BUNDLE_SIGNING_KEY);
+  if (signingKey === undefined) return notConfigured('BUNDLE_SIGNING_KEY');
   const secret = provider.secretBinding === undefined ? undefined : bound(env[provider.secretBinding]);
   if (provider.secretBinding !== undefined && secret === undefined) return notConfigured(provider.secretBinding);
 
