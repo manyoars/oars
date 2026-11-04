@@ -6,7 +6,8 @@ import { dirname, join } from 'node:path';
 import type { Outcome, RunDeps } from '../cli.js';
 import { CliError, exitCodeForProblem, ExitCode, unreachableError } from '../errors.js';
 import { checkSession, exclusionPaths, type Reason } from './exclusion.js';
-import { isBundleVersion, parseSkeleton, sessionsOf, skeletonOf, VOCAB_VERSION, verifyBundle, type PinnedKey } from './pool-wire.js';
+import { isBundleVersion, parseSkeleton, sessionsOf, skeletonOf, VOCAB_VERSION, verifyBundle, type Bundle, type PinnedKey } from './pool-wire.js';
+import { Masker, printed, TRANSPORT_HEADERS, waitWords, type Outgoing } from './pool-print.js';
 import { contentHash } from './read.js';
 import { loadStore, type SessionsRuntime } from './store.js';
 
@@ -116,14 +117,36 @@ const signedIn = async (deps: RunDeps, storeDir: string, server: string, step: s
 interface Reply {
   status: number;
   body: unknown;
+  headers: Headers;
+}
+
+interface Call {
+  body?: unknown;
+  token?: string;
+  /** The ETag of the bundle already kept, so the pool can answer 304 with no bundle. */
+  ifNoneMatch?: string;
+  /** Set for a command that prints what it sends: the print comes first, with these secrets masked. */
+  show?: Masker;
 }
 
 /** One call to the pool. A redirect is an error: it could carry a skeleton or a token somewhere the checks on the named server never saw. */
-const ask = async (deps: RunDeps, step: string, server: string, path: string, init: { body?: unknown; token?: string }): Promise<Reply> => {
-  const headers = { 'user-agent': `oars/${deps.version}`, ...(init.token === undefined ? {} : { authorization: `Bearer ${init.token}` }) };
+const ask = async (deps: RunDeps, step: string, server: string, path: string, init: Call): Promise<Reply> => {
+  const headers: Array<[string, string]> = [['user-agent', `oars/${deps.version}`], ['accept', 'application/json']];
+  if (init.token !== undefined) headers.push(['authorization', `Bearer ${init.token}`]);
+  if (init.ifNoneMatch !== undefined) headers.push(['if-none-match', init.ifNoneMatch]);
+  if (init.body !== undefined) headers.push(['content-type', 'application/json']);
+  headers.push(...TRANSPORT_HEADERS);
+  const request: Outgoing = { method: init.body === undefined ? 'GET' : 'POST', url: new URL(path, server), headers, ...(init.body === undefined ? {} : { body: JSON.stringify(init.body) }) };
+  return send(deps, step, request, init.show);
+};
+
+/** Prints the request when asked to, then sends exactly those headers and that body. */
+const send = async (deps: RunDeps, step: string, request: Outgoing, show: Masker | undefined): Promise<Reply> => {
+  if (show !== undefined) deps.io.stderr(`${printed(request, show)}
+`);
   let response: Response;
   try {
-    response = await fetch(new URL(path, server), init.body === undefined ? { headers, redirect: 'error' } : { method: 'POST', headers: { ...headers, 'content-type': 'application/json' }, body: JSON.stringify(init.body), redirect: 'error' });
+    response = await fetch(request.url, { method: request.method, headers: request.headers, redirect: 'error', ...(request.body === undefined ? {} : { body: request.body }) });
   } catch (error) {
     throw unreachableError(step, error);
   }
@@ -133,7 +156,7 @@ const ask = async (deps: RunDeps, step: string, server: string, path: string, in
   } catch {
     body = undefined;
   }
-  return { status: response.status, body };
+  return { status: response.status, body, headers: response.headers };
 };
 
 /** The server's named refusal, as a failure: its `error` is the problem's code in `--json`. */
@@ -288,26 +311,62 @@ export const poolDeposit = async (deps: RunDeps, options: { server?: string | un
 
 const replicaFile = (storeDir: string, server: string, harnessVersion: string): string => join(storeDir, 'pool-replica', contentHash(server), `${encodeURIComponent(harnessVersion)}.json`);
 
-/** `oars pool fetch`: one harness version's signed bundle, kept only once the key pinned at login has verified it. It keeps the signed form, so the replica can be checked again later. */
+/** What an earlier fetch kept: the bundle, checked again against the pinned key, and the ETag the pool sent with it. Nothing readable and verified is nothing kept, and the next fetch is then an ordinary one. */
+const keptReplica = async (file: string, key: PinnedKey, harnessVersion: string): Promise<{ etag: string | undefined; bundle: Bundle } | undefined> => {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(await readFile(file, 'utf8'));
+  } catch {
+    return undefined;
+  }
+  const verified = await verifyBundle(parsed, key, harnessVersion);
+  return verified.ok ? { etag: isObject(parsed) ? textIn(parsed, 'etag') : undefined, bundle: verified.bundle } : undefined;
+};
+
+/** The weekly cap, as a failure of its own code: the bundle on disk is untouched, and the words say when the pool will answer again. */
+const cappedError = (deps: RunDeps, reply: Reply, kept: boolean): CliError => {
+  const retryAfter = reply.headers.get('retry-after');
+  const wait = retryAfter === null ? undefined : waitWords(retryAfter, deps.now());
+  const when = wait === undefined ? 'The pool did not say when; it counts fetches per ISO week, so try again next week.' : `Try again ${wait}.`;
+  const title = `The pool's weekly fetch cap is used up. ${when} ${kept ? 'The bundle already on disk is untouched, and recall keeps reading it.' : 'No bundle is kept yet.'}`;
+  return new CliError(title, ExitCode.CAPPED, FETCH, { code: 'fetch_cap', title, status: 429 }, undefined, { retryAfter });
+};
+
+/** `oars pool fetch`: one harness version's signed bundle, kept only once the key pinned at login has verified it. It keeps the signed form, so the replica can be checked again later, and the ETag, so the next fetch asks only whether it changed. The request prints before it is sent. */
 export const poolFetch = async (deps: RunDeps, options: { server?: string | undefined; harnessVersion: string }): Promise<Outcome> => {
   const { storeDir } = runtimeOf(deps);
   const server = poolServer(deps.env, FETCH, options.server);
   const { harnessVersion } = options;
   if (!isBundleVersion(harnessVersion)) throw usage(`${harnessVersion} is not a public harness version.`, FETCH);
   const { token, signingKey } = await signedIn(deps, storeDir, server, FETCH);
-  const reply = await ask(deps, FETCH, server, `/bundle/${encodeURIComponent(harnessVersion)}/${encodeURIComponent(VOCAB_VERSION)}`, { token });
+  const file = replicaFile(storeDir, server, harnessVersion);
+  const kept = await keptReplica(file, signingKey, harnessVersion);
+  const credential = new Masker();
+  credential.add(token);
+  const reply = await ask(deps, FETCH, server, `/bundle/${encodeURIComponent(harnessVersion)}/${encodeURIComponent(VOCAB_VERSION)}`, { token, show: credential, ...(kept?.etag === undefined ? {} : { ifNoneMatch: kept.etag }) });
+  if (reply.status === 429) throw cappedError(deps, reply, kept !== undefined);
+  if (reply.status === 304) {
+    // A 304 answers an If-None-Match, so one to a fetch that sent none is a pool that has lost track of what it was asked.
+    if (kept?.etag === undefined) throw new CliError('The pool answered 304 to a fetch that named no kept bundle.', ExitCode.UNEXPECTED, FETCH);
+    const { cells, motifs, reads, asOf } = kept.bundle;
+    return {
+      document: { ok: true, server, harnessVersion, file, unchanged: true, cells: cells.length, motifs: motifs.length, reads: reads.length, asOf },
+      text: `${harnessVersion} is unchanged: the bundle at ${file} is still current (${String(reads.length)} reads, ${String(cells.length)} cells, and ${String(motifs.length)} motifs).`,
+    };
+  }
   if (reply.status !== 200) throw refusal(FETCH, reply);
   const verified = await verifyBundle(reply.body, signingKey, harnessVersion);
   if (!verified.ok) {
     const title = `Refused the bundle: ${verified.reason}.`;
     throw new CliError(title, ExitCode.INVALID, FETCH, { code: 'bundle_unverified', title });
   }
-  const file = replicaFile(storeDir, server, harnessVersion);
+  const etag = reply.headers.get('etag');
   await mkdir(dirname(file), { recursive: true });
-  await writeFile(file, `${JSON.stringify(reply.body)}\n`);
+  await writeFile(file, `${JSON.stringify({ ...(isObject(reply.body) ? reply.body : {}), ...(etag === null ? {} : { etag }) })}
+`);
   const { cells, motifs, reads, asOf } = verified.bundle;
   return {
-    document: { ok: true, server, harnessVersion, file, cells: cells.length, motifs: motifs.length, reads: reads.length, asOf },
+    document: { ok: true, server, harnessVersion, file, unchanged: false, cells: cells.length, motifs: motifs.length, reads: reads.length, asOf },
     text: `Fetched ${harnessVersion}: ${String(reads.length)} reads, ${String(cells.length)} cells, and ${String(motifs.length)} motifs, verified against the pinned key and kept at ${file}.`,
   };
 };

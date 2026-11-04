@@ -4,6 +4,7 @@ All notable changes to `@manyoars/oars`. Versions follow semver; a release is th
 
 ## Unreleased
 
+- `oars pool fetch` prints the request line and every header before it sends (credential shown only as `<credential: n bytes>`), keeps the bundle's `ETag` and sends `If-None-Match` so an unchanged bundle is a 304 that keeps the file, and on the weekly cap (429) keeps the bundle, says when to try again, and exits 10 (new: `CAPPED`).
 - `oars pool fetch` now takes `--harness-version <version>` in place of `--stack` and fetches that version's signed bundle from `/bundle/<version>/<vocab>`. Nothing the pool serves is keyed by stack any more. The option is required (there is no default version), `--json` carries `harnessVersion` in place of `stack`, the problem code `slice_unverified` is now `bundle_unverified`, and a bundle of another vocabulary version is refused even when its signature holds.
 - The pool counts fetches per account per ISO week (`fetch_cap`, 429 with `Retry-After`) in place of a capped read count, and a bundle carries an `ETag`: a conditional request that still matches gets a 304 and spends no fetch. A bundle no longer has a `capped` field, and `oars pool fetch` no longer prints one. A deposit lifts the cap only when its batch counts toward access; until a wire carries a root, a claude-code batch does not.
 - The pool serves a cell or read only at 5 accounts (`K_CELL`, up from 3), and a `live` read's floor counts only the sliced day's accounts: its `inputs` no longer cite the baseline cells, and a baseline under the floor on its own is `null`.

@@ -209,6 +209,7 @@ Exit codes:
 | 7 | rate limited |
 | 8 | the platform could not be reached |
 | 9 | `deploy` stopped part way; rerun the printed command to resume |
+| 10 | `pool fetch` hit the pool's weekly fetch cap; the bundle on disk is untouched, and the message says when to try again |
 
 ## Source
 

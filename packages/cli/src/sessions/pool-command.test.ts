@@ -566,11 +566,169 @@ describe('oars pool fetch', () => {
     expect(scene.seen).toEqual([]);
 
     on(scene, 'get', '/bundle/2.1.314/0', () => HttpResponse.json({ error: 'fetch_cap', message: 'An account without access may fetch 1 per ISO week.' }, { status: 429 }));
-    expect(await scene.cli('pool', 'fetch', '--harness-version', '2.1.314', '--server', POOL, '--json')).toBe(ExitCode.RATE_LIMITED);
+    expect(await scene.cli('pool', 'fetch', '--harness-version', '2.1.314', '--server', POOL, '--json')).toBe(ExitCode.CAPPED);
     expect(scene.document()).toMatchObject({ problem: { code: 'fetch_cap' } });
 
     const anon = setting();
     expect(await anon.cli('pool', 'fetch', '--harness-version', '2.1.314', '--server', POOL)).toBe(ExitCode.AUTH);
+  });
+
+  /** One handler for the bundle route that records each request, snapshots what had been printed when it arrived, and answers from a queue. */
+  const bundleRoute = (scene: Scene, version: string, replies: Array<(request: Request) => Response>): Array<{ headers: Headers; printedBefore: string }> => {
+    const arrivals: Array<{ headers: Headers; printedBefore: string }> = [];
+    server.use(
+      http.get(`${POOL}/bundle/${version}/0`, ({ request }) => {
+        arrivals.push({ headers: request.headers, printedBefore: scene.h.err.join('') });
+        scene.seen.push({ url: request.url, headers: JSON.stringify([...request.headers.entries()]), body: '' });
+        return (replies.shift() ?? (() => new HttpResponse(null, { status: 500 })))(request);
+      }),
+    );
+    return arrivals;
+  };
+
+  const signedReply = async (sign: (text: string) => Promise<string>, version: string, etag: string | null, reads = 2): Promise<() => Response> => {
+    const payload = JSON.stringify({ format: 1, harnessVersion: version, vocabVersion: '0', asOf: { pool: 'p' }, cells: [{}], motifs: [], reads: Array.from({ length: reads }, () => ({})), strata: [] });
+    const signature = await sign(payload);
+    return () => HttpResponse.json({ payload, signature }, etag === null ? {} : { headers: { etag } });
+  };
+
+  const keptFile = (scene: Scene): string => join(scene.staged.storeDir, 'pool-replica', readdirSync(join(scene.staged.storeDir, 'pool-replica'))[0] ?? '', '2.1.314.json');
+
+  describe('prints before it sends', () => {
+    it('prints the request line and every header before the request arrives, with the credential as its size and nothing else masked', async () => {
+      const { scene, sign } = await signedScene();
+      const arrivals = bundleRoute(scene, '2.1.314', [await signedReply(sign, '2.1.314', '"e1"')]);
+      expect(await scene.cli('pool', 'fetch', '--harness-version', '2.1.314', '--server', POOL)).toBe(ExitCode.OK);
+      const before = arrivals[0]?.printedBefore ?? '';
+      expect(before).toContain('GET /bundle/2.1.314/0 HTTP/1.1\nhost: pool.test\nconnection: keep-alive\n');
+      expect(before).toContain('authorization: Bearer <credential: 12 bytes>');
+      expect(before).toContain('user-agent: oars/');
+      // Whatever header the request carried when it arrived is in the print, word for word, except the credential.
+      for (const [name, value] of arrivals[0]?.headers.entries() ?? []) {
+        if (name !== 'authorization') expect(before).toContain(`${name}: ${value}`);
+      }
+      expect(before).toContain('accept-encoding: identity');
+      expect(scene.h.out.join('') + scene.h.err.join('')).not.toContain('a-pool-token');
+      expect(scene.h.out.join('')).not.toContain('HTTP/1.1');
+    });
+
+    it('prints to stderr, so --json keeps its one document on stdout', async () => {
+      const { scene, sign } = await signedScene();
+      bundleRoute(scene, '2.1.314', [await signedReply(sign, '2.1.314', null)]);
+      expect(await scene.cli('pool', 'fetch', '--harness-version', '2.1.314', '--server', POOL, '--json')).toBe(ExitCode.OK);
+      expect(scene.h.err.join('')).toContain('GET /bundle/2.1.314/0 HTTP/1.1');
+      expect(scene.document()).toMatchObject({ ok: true });
+    });
+
+    it('prints the If-None-Match it sends', async () => {
+      const { scene, sign } = await signedScene();
+      const arrivals = bundleRoute(scene, '2.1.314', [await signedReply(sign, '2.1.314', '"e1"'), () => new HttpResponse(null, { status: 304 })]);
+      await scene.cli('pool', 'fetch', '--harness-version', '2.1.314', '--server', POOL);
+      await scene.cli('pool', 'fetch', '--harness-version', '2.1.314', '--server', POOL);
+      expect(arrivals[0]?.headers.get('if-none-match')).toBeNull();
+      expect(arrivals[1]?.printedBefore).toContain('if-none-match: "e1"');
+    });
+
+    it('a recall and a read never come to the fetch send path', async () => {
+      const { scene } = await signedScene();
+      const arrivals = bundleRoute(scene, '2.1.314', []);
+      await capture(scene);
+      expect(await scene.cli('sessions', 'recall', '--path', 'a.ts', '--json')).toBe(ExitCode.OK);
+      expect(await scene.cli('sessions', 'read', '--json')).toBe(ExitCode.OK);
+      expect(arrivals).toEqual([]);
+      expect(scene.seen).toEqual([]);
+      expect(scene.h.err.join('')).not.toContain('HTTP/1.1');
+    });
+  });
+
+  describe('fetches only what changed', () => {
+    it('a 200 keeps the bundle with its ETag, and the next fetch sends If-None-Match', async () => {
+      const { scene, sign } = await signedScene();
+      const arrivals = bundleRoute(scene, '2.1.314', [await signedReply(sign, '2.1.314', '"e1"'), await signedReply(sign, '2.1.314', '"e2"', 3)]);
+      expect(await scene.cli('pool', 'fetch', '--harness-version', '2.1.314', '--server', POOL, '--json')).toBe(ExitCode.OK);
+      expect(scene.document()).toMatchObject({ unchanged: false, reads: 2 });
+      const first = readFileSync(keptFile(scene), 'utf8');
+      expect(JSON.parse(first)).toMatchObject({ etag: '"e1"' });
+      expect(await scene.cli('pool', 'fetch', '--harness-version', '2.1.314', '--server', POOL, '--json')).toBe(ExitCode.OK);
+      expect(arrivals[1]?.headers.get('if-none-match')).toBe('"e1"');
+      // A changed bundle replaces the kept one, and its ETag.
+      expect(scene.document()).toMatchObject({ unchanged: false, reads: 3 });
+      const second = readFileSync(keptFile(scene), 'utf8');
+      expect(second).not.toBe(first);
+      expect(JSON.parse(second)).toMatchObject({ etag: '"e2"' });
+    });
+
+    it('a 304 keeps the bundle byte for byte, says it is unchanged, and exits 0', async () => {
+      const { scene, sign } = await signedScene();
+      bundleRoute(scene, '2.1.314', [await signedReply(sign, '2.1.314', '"e1"'), () => new HttpResponse(null, { status: 304, headers: { etag: '"e1"' } })]);
+      await scene.cli('pool', 'fetch', '--harness-version', '2.1.314', '--server', POOL);
+      const before = readFileSync(keptFile(scene));
+      scene.h.out.length = 0;
+      expect(await scene.cli('pool', 'fetch', '--harness-version', '2.1.314', '--server', POOL)).toBe(ExitCode.OK);
+      expect(readFileSync(keptFile(scene)).equals(before)).toBe(true);
+      expect(scene.h.out.join('')).toContain('2.1.314 is unchanged');
+    });
+
+    it('a 429 with a Retry-After keeps the bundle byte for byte, says when to try again in words, and exits with its own code', async () => {
+      const { scene, sign } = await signedScene();
+      const capped = (): Response => HttpResponse.json({ error: 'fetch_cap', message: 'An account without access may fetch 1 per ISO week.' }, { status: 429, headers: { 'retry-after': '345600' } });
+      bundleRoute(scene, '2.1.314', [await signedReply(sign, '2.1.314', '"e1"'), capped]);
+      await scene.cli('pool', 'fetch', '--harness-version', '2.1.314', '--server', POOL);
+      const before = readFileSync(keptFile(scene));
+      scene.h.err.length = 0;
+      expect(ExitCode.CAPPED).toBe(10);
+      expect(await scene.cli('pool', 'fetch', '--harness-version', '2.1.314', '--server', POOL, '--json')).toBe(ExitCode.CAPPED);
+      expect(readFileSync(keptFile(scene)).equals(before)).toBe(true);
+      expect(scene.document()).toMatchObject({ ok: false, step: 'pool-fetch', retryAfter: '345600', problem: { code: 'fetch_cap', status: 429 } });
+      expect(String(at(at(scene.document(), 'problem'), 'title'))).toContain('Try again in 4 days.');
+    });
+
+    it('a 429 with no Retry-After still keeps the bundle, and says so rather than guessing a time', async () => {
+      const { scene, sign } = await signedScene();
+      const capped = (): Response => HttpResponse.json({ error: 'fetch_cap', message: 'capped' }, { status: 429 });
+      bundleRoute(scene, '2.1.314', [await signedReply(sign, '2.1.314', '"e1"'), capped, capped]);
+      await scene.cli('pool', 'fetch', '--harness-version', '2.1.314', '--server', POOL);
+      const before = readFileSync(keptFile(scene));
+      expect(await scene.cli('pool', 'fetch', '--harness-version', '2.1.314', '--server', POOL, '--json')).toBe(ExitCode.CAPPED);
+      expect(readFileSync(keptFile(scene)).equals(before)).toBe(true);
+      expect(scene.document()).toMatchObject({ retryAfter: null });
+      expect(String(at(at(scene.document(), 'problem'), 'title'))).toContain('did not say when');
+      expect(await scene.cli('pool', 'fetch', '--harness-version', '2.1.314', '--server', POOL)).toBe(ExitCode.CAPPED);
+      expect(scene.h.err.join('')).toContain('already on disk is untouched');
+    });
+
+    it('a 429 as a date, and one with nothing kept yet, are read the same way', async () => {
+      const { scene } = await signedScene();
+      const date = new Date(scene.h.deps.now() + 3 * 3_600_000).toUTCString();
+      bundleRoute(scene, '2.1.314', [() => HttpResponse.json({ error: 'fetch_cap' }, { status: 429, headers: { 'retry-after': date } }), () => HttpResponse.json({ error: 'fetch_cap' }, { status: 429, headers: { 'retry-after': 'soon' } })]);
+      expect(await scene.cli('pool', 'fetch', '--harness-version', '2.1.314', '--server', POOL)).toBe(ExitCode.CAPPED);
+      expect(scene.h.err.join('')).toContain('Try again in 3 hours.');
+      expect(scene.h.err.join('')).toContain('No bundle is kept yet.');
+      expect(await scene.cli('pool', 'fetch', '--harness-version', '2.1.314', '--server', POOL)).toBe(ExitCode.CAPPED);
+      expect(existsSync(join(scene.staged.storeDir, 'pool-replica'))).toBe(false);
+    });
+
+    it('sends no If-None-Match for a bundle that cannot be verified any more, or that came with no ETag', async () => {
+      const { scene, sign } = await signedScene();
+      const arrivals = bundleRoute(scene, '2.1.314', [await signedReply(sign, '2.1.314', null), await signedReply(sign, '2.1.314', '"e1"'), await signedReply(sign, '2.1.314', '"e2"'), await signedReply(sign, '2.1.314', '"e3"')]);
+      await scene.cli('pool', 'fetch', '--harness-version', '2.1.314', '--server', POOL);
+      await scene.cli('pool', 'fetch', '--harness-version', '2.1.314', '--server', POOL);
+      expect(arrivals[1]?.headers.get('if-none-match')).toBeNull();
+      writeFileSync(keptFile(scene), readFileSync(keptFile(scene), 'utf8').replace('"signature":"', '"signature":"AAAA'));
+      await scene.cli('pool', 'fetch', '--harness-version', '2.1.314', '--server', POOL);
+      expect(arrivals[2]?.headers.get('if-none-match')).toBeNull();
+      writeFileSync(keptFile(scene), 'not json');
+      expect(await scene.cli('pool', 'fetch', '--harness-version', '2.1.314', '--server', POOL)).toBe(ExitCode.OK);
+      expect(arrivals[3]?.headers.get('if-none-match')).toBeNull();
+      expect(JSON.parse(readFileSync(keptFile(scene), 'utf8'))).toMatchObject({ etag: '"e3"' });
+    });
+
+    it('refuses a 304 to a fetch that named nothing kept', async () => {
+      const { scene } = await signedScene();
+      bundleRoute(scene, '2.1.314', [() => new HttpResponse(null, { status: 304 })]);
+      expect(await scene.cli('pool', 'fetch', '--harness-version', '2.1.314', '--server', POOL)).toBe(ExitCode.UNEXPECTED);
+      expect(scene.h.err.join('')).toContain('304');
+    });
   });
 });
 
