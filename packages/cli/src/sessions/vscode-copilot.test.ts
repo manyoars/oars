@@ -121,13 +121,30 @@ describe('the VS Code Copilot Chat reader', () => {
     expect(out.errorLines.map((entry) => entry.line)).toEqual(['spawn failed']);
   });
 
-  it('records a failed non-shell call and an edit that failed, which is still an edit by name, as errors', () => {
-    const out = extractOf(chat([request(1, 'x', [tool('c1', 'copilot_readFile', { resultError: true }), tool('c2', 'copilot_applyPatch', { resultDetails: { input: 'p', output: 'patch did not apply', isError: true } })])]));
+  it('records a failed non-shell call and an edit that failed, which is still an edit by name, as errors, and reads an MCP tool failure message from its embed array', () => {
+    // `IToolResultInputOutputDetails.output` is an array of `{type:'embed', value, isText}` (common/tools/languageModelToolsService.ts:290-296, written as an array at
+    // contrib/mcp/common/mcpLanguageModelToolContribution.ts:279-280); a plain string output is the older spelling (`isToolResultInputOutputDetails`, :305).
+    const embeds = [
+      { type: 'embed', value: 'AAAA', isText: false },
+      { type: 'embed', value: 'upstream returned 502', isText: true },
+    ];
+    const out = extractOf(
+      chat([
+        request(1, 'x', [
+          tool('c1', 'copilot_readFile', { resultError: true }),
+          tool('c2', 'copilot_applyPatch', { resultDetails: { input: 'p', output: 'patch did not apply', isError: true } }),
+          tool('c3', 'mcp_demo_search', { resultDetails: { input: '{}', output: embeds, isError: true } }),
+          tool('c4', 'mcp_demo_search', { resultDetails: { input: '{}', output: [{ type: 'embed', value: 'AAAA', isText: false }], isError: true } }),
+        ]),
+      ]),
+    );
     expect(out.tools.map((entry) => [entry.tool, entry.status])).toEqual([
       ['copilot_readFile', 'error'],
       ['Edit', 'error'],
+      ['mcp_demo_search', 'error'],
+      ['mcp_demo_search', 'error'],
     ]);
-    expect(out.errorLines.map((entry) => entry.line)).toEqual(['tool failed', 'patch did not apply']);
+    expect(out.errorLines.map((entry) => entry.line)).toEqual(['tool failed', 'patch did not apply', 'upstream returned 502', 'tool failed']);
   });
 
   it("reads a user's refusal as the harness's own wording, so it stores user-rejected, and a hook's or a risk assessment's as a permission denial", () => {
