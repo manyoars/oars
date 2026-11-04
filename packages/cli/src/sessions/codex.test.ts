@@ -391,7 +391,7 @@ describe('shell, MCP, patch, and usage outcomes', () => {
     const base = { thread_id: thread, end_ordinal_exclusive: 3, end_byte_offset: 512 };
     const paginated = { id: thread, session_id: thread, timestamp: T(0), cwd: '/work/app', history_mode: 'paginated' };
     const home = stageCodex(s.root, [
-      { id: thread, session_id: thread, lines: [{ ...line(T(0), 'session_meta', paginated), ordinal: 0 }] },
+      { id: thread, lines: [{ ...line(T(0), 'session_meta', paginated), ordinal: 0 }] },
       { id: `${thread}_${reverted}`, lines: [{ ...line(T(0), 'session_meta', { ...paginated, history_base: base }), ordinal: 3 }] },
     ]);
     const store = await openCodexStore(home);
@@ -410,7 +410,7 @@ describe('shell, MCP, patch, and usage outcomes', () => {
     const head = { id: thread, session_id: thread, timestamp: T(0), cwd: '/work/app', history_mode: 'paginated' };
     const start = (at: number, from: number) => ({ ...line(T(at), 'session_meta', { ...head, originator: 'codex_cli_rs', timestamp: T(at), history_base: { thread_id: thread, end_ordinal_exclusive: from, end_byte_offset: 1 } }), ordinal: from });
     const home = stageCodex(s.root, [
-      { id: thread, session_id: thread, lines: [{ ...line(T(0), 'session_meta', head), ordinal: 0 }, prompt('a', 1, 1, 'kept'), prompt('b', 2, 2, 'dropped by the first revert'), prompt('c', 3, 3, 'dropped too')] },
+      { id: thread, lines: [{ ...line(T(0), 'session_meta', head), ordinal: 0 }, prompt('a', 1, 1, 'kept'), prompt('b', 2, 2, 'dropped by the first revert'), prompt('c', 3, 3, 'dropped too')] },
       { id: `${thread}_${first}`, lines: [start(4, 2), prompt('d', 5, 3, 'dropped by the second revert')] },
       { id: `${thread}_${second}`, lines: [start(6, 3), prompt('e', 7, 4, 'last')] },
     ]);

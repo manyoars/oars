@@ -235,9 +235,9 @@ describe('parseSkeleton refuses, and names the field', () => {
 
   // The harness list is the schema's `Harness` union: a skeleton from a harness missing from it is refused whole, so each name needs a pass here.
   it('accepts a skeleton from every harness the schema names', () => {
-    const natives: Readonly<Record<Harness, string>> = { 'claude-code': 'Bash', cursor: 'run_terminal_cmd', codex: 'exec_command' };
-    for (const harness of Object.keys(natives) as Harness[]) {
-      const raw = withStep({ native: natives[harness] });
+    const natives: [Harness, string][] = [['claude-code', 'Bash'], ['cursor', 'run_terminal_cmd'], ['codex', 'exec_command']];
+    for (const [harness, native] of natives) {
+      const raw = withStep({ native });
       if (!isHolder(raw)) throw new Error('the sample is not an object');
       const transcripts: unknown = Reflect.get(raw, 'transcripts');
       if (!Array.isArray(transcripts) || !isHolder(transcripts[0])) throw new Error('the sample has no transcript');
