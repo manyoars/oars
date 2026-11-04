@@ -6,11 +6,12 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { run } from '../cli.js';
 import { CliError, ExitCode } from '../errors.js';
 import type { InstallRuntime } from '../sessions/install.js';
-import type { SessionsRuntime } from '../sessions/store.js';
+import { cleanup, stage } from '../sessions/test-support.js';
 import { harness, removeTestDirs } from '../test-support.js';
 import { COMMAND, EVENT, installGateHook, MATCHER, uninstallGateHook } from './install.js';
 
 afterEach(() => {
+  cleanup();
   removeTestDirs();
 });
 
@@ -174,11 +175,11 @@ describe('oars gate install and uninstall', () => {
     const dir = scratch();
     const h = harness();
     const userSettings = join(dir, 'claude', 'settings.json');
-    const storeDir = join(dir, 'store');
+    const staged = stage();
+    const storeDir = staged.storeDir;
     const install: InstallRuntime = { nodePath: 'node', hookBin: 'hook-bin.js', userSettings, cwd: dir, schtasks: () => Promise.resolve({ code: 0, output: '' }) };
     h.deps.install = install;
-    const sessions: Pick<SessionsRuntime, 'storeDir'> = { storeDir };
-    h.deps.sessions = sessions as SessionsRuntime;
+    h.deps.sessions = staged.runtime;
     return { ...h, userSettings, storeDir };
   };
 

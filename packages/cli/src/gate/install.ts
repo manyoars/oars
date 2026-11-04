@@ -36,15 +36,13 @@ const remainder = (group: Json & { hooks: unknown[] }): unknown[] => {
 
 /** Our group put in the place our entry already holds, or at the end. Placing it where it is keeps a rerun from moving it past a group someone added after it. */
 const withOwn = (groups: unknown[]): unknown[] => {
-  let placed = false;
-  const result = groups.flatMap((group) => {
+  const first = groups.findIndex(holdsOwn);
+  if (first === -1) return [...groups, ownGroup()];
+  return groups.flatMap((group, at) => {
     if (!holdsOwn(group)) return [group];
     const kept = remainder(group);
-    if (placed) return kept;
-    placed = true;
-    return [...kept, ownGroup()];
+    return at === first ? [...kept, ownGroup()] : kept;
   });
-  return placed ? result : [...result, ownGroup()];
 };
 
 const withoutOwn = (groups: unknown[]): unknown[] => groups.flatMap((group) => (holdsOwn(group) ? remainder(group) : [group]));
