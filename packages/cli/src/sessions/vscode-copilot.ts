@@ -30,7 +30,7 @@
 //   timestamp        epoch milliseconds, `responseTimestamp` for the response. A missing or implausible one is never made up: the time carries forward
 //   modelId          the model
 //   response[]       a markdown part is a bare `{value}` (a string in the old format); `kind:'thinking'` is skipped;
-//                    `kind:'toolInvocationSerialized'` is a tool call (service/chatService.ts:1246-1270); `kind:'textEditGroup'` `{uri}` is a file edited
+//                    `kind:'toolInvocationSerialized'` is a tool call (service/chatService.ts:1246-1270); `kind:'textEditGroup'` or `'notebookEditGroup'` `{uri}` is a file edited
 //   usage            `completionTokens` the whole turn's output (model/chatModel.ts:1929-1934), `modelTotals[{model, inputTokens, cachedTokens, outputTokens}]`
 //                    (chatService.ts:176-188) the only per-model figure. `promptTokens` is the last model call alone, so it is not read as consumption. The source does not
 //                    say whether `inputTokens` includes `cachedTokens`, so it is not subtracted: that is a stated limit (a store that includes it counts the cache twice)
@@ -195,8 +195,8 @@ const isoOf = (value: unknown): string | undefined => {
 };
 
 /** Tools that edit a file, under both spellings (toolNames.ts: `ToolName` and `ContributedToolName`). */
-const EDIT_TOOLS: ReadonlySet<string> = new Set(['apply_patch', 'copilot_applyPatch', 'replace_string_in_file', 'copilot_replaceString', 'multi_replace_string_in_file', 'copilot_multiReplaceString', 'insert_edit_into_file', 'copilot_insertEdit']);
-const WRITE_TOOLS: ReadonlySet<string> = new Set(['create_file', 'copilot_createFile']);
+const EDIT_TOOLS: ReadonlySet<string> = new Set(['apply_patch', 'copilot_applyPatch', 'replace_string_in_file', 'copilot_replaceString', 'multi_replace_string_in_file', 'copilot_multiReplaceString', 'insert_edit_into_file', 'copilot_insertEdit', 'edit_notebook_file', 'copilot_editNotebook']);
+const WRITE_TOOLS: ReadonlySet<string> = new Set(['create_file', 'copilot_createFile', 'create_new_jupyter_notebook', 'copilot_createNewJupyterNotebook']);
 
 /** A failed shell call's error: the exit code leads, as a Claude Code Bash result's does, so its `error-line` joins the same signature. A negative code is no exit status. */
 const failureOf = (exit: number, text: string): string => (exit < 0 && text.trim() !== '' ? text : `Exit code ${String(exit)}\n${text}`);
@@ -251,7 +251,7 @@ export const chatLines = (data: Obj, fallbackId: string, folder: string | null):
       if (typeof part === 'string') pending += part;
       else if (!isObj(part)) continue;
       else if (part.kind === undefined && typeof part.value === 'string') pending += part.value;
-      else if (part.kind === 'textEditGroup') {
+      else if (part.kind === 'textEditGroup' || part.kind === 'notebookEditGroup') {
         const path = editPath(part.uri);
         if (current === undefined || path === undefined) continue;
         if (current.edits === 0) current.block.input = { file_path: path };
