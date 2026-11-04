@@ -91,7 +91,7 @@ const badLink = async (path: string, kind: Kind): Promise<boolean> => {
 };
 
 /**
- * A link is followed, as the main file's `stat` follows one; a link that leads nowhere or to the wrong kind is a bad entry, and so is a folder that cannot be listed
+ * A link is followed, as the main file's `stat` follows one; a link that leads nowhere or to the wrong kind, or a plain entry named like a transcript that is not a file, is a bad entry, and so is a folder that cannot be listed
  * and a folder reached a second time (a link back into a folder already walked, which would loop and count a transcript once per pass).
  * The walk goes on past every bad entry and `found` holds every transcript it reached, so the verdict does not depend on the listing order (V5); true when any entry was bad.
  * `seen` holds the real path of every folder entered.
@@ -119,7 +119,7 @@ const jsonlUnder = async (dir: string, found: string[], seen: Set<string>): Prom
       } catch {
         bad = true;
       }
-    } else if (named && target.isFile()) found.push(path);
+    } else if (named) found.push(path);
   }
   return bad;
 };
@@ -238,7 +238,7 @@ export interface ExclusionCounts {
   excluded: number;
   kept: number;
   reasons: { term: number; noRaw: number; noTerms: number; unreadable: number };
-  /** Directories in a project folder that are not sessions (no main transcript, and a name that is not a session id); in neither the list nor the sessions. */
+  /** Directories in a project folder that are not sessions (no main transcript, and a name that neither is a session id nor ends in `.jsonl`); in neither the list nor the sessions. */
   notSessions: number;
   /** Distinct transcript files that held a term, across both sources. */
   hitFiles: SourceHits;
@@ -253,7 +253,7 @@ const SESSION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12
 /** A directory, or a link to one; a link that leads nowhere throws, so a folder that was not scanned never reads as clean. */
 const leadsToDirectory = async (path: string, entry: Dirent): Promise<boolean> => (entry.isSymbolicLink() ? (await stat(path)).isDirectory() : entry.isDirectory());
 
-/** The sessions of one project folder: every main file, and every directory named like a session. Other directories are returned apart. */
+/** The sessions of one project folder: every entry named like a main file, and every entry named like a session folder. Other directories are returned apart. */
 const sessionIds = async (root: string, project: string): Promise<{ ids: string[]; others: string[] }> => {
   const ids: string[] = [];
   const dirs: string[] = [];
