@@ -21,7 +21,7 @@ A tool call that takes something from outside the repository into the agent's se
 | `mcp__.*` | `mcp-server` | `mcp-call` |
 | `Skill`, and `Bash` for `npx skills add <source>` | `skill` | `skill-call`, `install` (the source is the first word after `add` that is not a flag or the value of `-s`, `--skill`, `-a`, or `--agent`, as written minus any query; a variable or a path names nothing; a `file:`, `git+file:`, `link:`, `workspace:`, or `portal:` spec is a path, with or without a package name before it (`foo@file:...`, `foo @ file:...`), so it is counted under "replay cannot see" as `local-path` and no part of it is kept) |
 
-An `npx <name>` with no version, whose folder (or a parent's, up to 12 levels) holds `node_modules/.bin/<name>` (or its `.cmd` or `.ps1` shim; a scoped name is read by its last segment), runs the project's own copy and fetches nothing. It is recorded as `local-bin-run`, not `fetch-and-run`, and is never asked of the registry. A pinned or tagged version, a call that chose its folder or registry (an earlier `cd`, a `--registry`), and a row with no known folder stay `fetch-and-run`, because the bin cannot say what the command would have fetched. Replay and the hook apply the one rule (`gate/local-bin.ts`), each against the folder as it is when it runs.
+An `npx <name>` with no version, whose folder (or a parent's, up to 12 levels) holds `node_modules/.bin/<name>` (or its `.cmd` or `.ps1` shim; a scoped name is read by its last segment), runs the project's own copy and fetches nothing. It is recorded as `local-bin-run`, not `fetch-and-run`, and is never asked of the registry. A pinned or tagged version, a call that chose its folder or registry (an earlier `cd`, a `--registry`), and a row with no known folder stay `fetch-and-run`, because the bin cannot say what the command would have fetched. Replay and the hook apply the one rule (`gate/local-bin.ts`), each against the folder as it is when it runs. A crossing seen by both keeps the hook's reading, so a bin installed or removed since does not change what the row says.
 
 A lockfile-only install (`npm ci`, `pip install -r`, a bare `npm install`) names nothing and crosses nothing; it is counted under "replay cannot see" by shape. So is a pipe into a shell and a command behind `xargs`.
 
@@ -70,14 +70,14 @@ One row stands for one crossing: its key is the session, the tool use id, the cl
 |-------|-------|--------|
 | `kind`, `v`, `day`, `via` | P | row kind, gate version, UTC day, and what wrote the row: `hook`, `replay`, or `both` |
 | `class`, `form`, `program`, `versionForm`, `statusReports` | P | closed vocabulary (`form` is `install`, `url-install`, `fetch-and-run`, `url-fetch-and-run`, `local-bin-run`, `mcp-call`, or `skill-call`); `program` is `npm`, `pnpm`, `yarn`, `bun`, `npx`, `pip`, `python -m pip`, `uv`, `uvx`, `pipx`; `versionForm` is `pinned`, `range`, `tag`, `url`, `unstated` |
-| `origin` | P | where the name came from: `prompt`, `repo-file`, `web`, `tool-output`, `skill`, `harness`, or `none-seen` |
+| `origin` | P | where the name came from: `prompt`, `repo-file`, `web`, `tool-output`, `skill`, `harness`, `none-seen`, or `not-read` on a hook row until a replay reads the transcript |
 | `novelty` | P | `fleet` (first time anywhere in the record), `repository`, `session`, `none`, or `not-read` when a hook found the index damaged or unseeded |
-| `decidedBy` | P | `operator` when a main-line prompt named the package before its first crossing in that transcript, whatever source showed it first; else `agent` |
+| `decidedBy` | P | `operator` when a main-line prompt named the package before its first crossing in that transcript, whatever source showed it first; else `agent`; `not-read` on a hook row until a replay |
 | `permission` | P | the harness's permission mode, or `other` or `unknown` |
-| `status` | P | `ok`, `error`, `refused`, `none` |
-| `next` | P | `proceeded`, `retried`, `routed-around`, `changed-name`, `stopped`, `no-result` (ten calls after a failure) |
-| `removedLater`, `depth`, `miss` | P | a later removal in the same repository, `main` or `subagent`, and `not-found` when the result said the name did not exist |
-| `againstLatest`, `registryState`, `registryAge` | P | read only with `--registry-state`; otherwise `not-read` |
+| `status` | P | `ok`, `error`, `refused`, `none`; `not-read` on a hook row until a replay |
+| `next` | P | `proceeded`, `retried`, `routed-around`, `changed-name`, `stopped`, `no-result` (ten calls after a failure); `not-read` on a hook row until a replay |
+| `removedLater`, `depth`, `miss` | P | a later removal in the same repository, `main` or `subagent`, and `not-found` when the result said the name did not exist; `removedLater` and `miss` are `not-read` on a hook row until a replay |
+| `againstLatest`, `registryState`, `registryAge` | P | one reading of the registry, read by a replay with `--registry-state`, or by the hook at the crossing; otherwise `not-read`. A merged row takes all three from the hook when it read them, else all three from the replay |
 | `arm`, `lineShown` | P | always `none`: nothing is shown to an agent |
 | `session`, `agent`, `toolUseId`, `ts` | A | join ids and a finer time |
 | `name`, `version` | A | what the command stated. A package or server name can identify private work, as `pulls` already says |

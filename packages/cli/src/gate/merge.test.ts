@@ -73,6 +73,29 @@ describe('one row per crossing', () => {
     expect(one).toMatchObject({ permission: 'plan', novelty: 'session', via: 'both' });
   });
 
+  it("keeps the hook's reading of the folder, whichever way the folder changed since", () => {
+    // The bin was there at the crossing and is gone at the replay: the hook's read stands.
+    const [ran] = mergeCrossings([crossing({ form: 'fetch-and-run' })], [hookRow({ form: 'local-bin-run' })]);
+    expect(ran).toMatchObject({ via: 'both', form: 'local-bin-run' });
+    // The bin was absent at the crossing and installed since: still a fetch.
+    const [fetched] = mergeCrossings([crossing({ form: 'local-bin-run' })], [hookRow({ form: 'fetch-and-run' })]);
+    expect(fetched).toMatchObject({ via: 'both', form: 'fetch-and-run' });
+  });
+
+  it('takes the three registry fields from one reading, so a mixed row cannot occur', () => {
+    // The hook asked and could not reach the registry; a later replay with --registry-state did reach it.
+    const hooked = hookRow({ registryState: 'unreachable', againstLatest: 'unknown', registryAge: 'unknown' });
+    const replayed = crossing({ registryState: 'found', againstLatest: 'not-latest', registryAge: 'under-7-days' });
+    const [one] = mergeCrossings([replayed], [hooked]);
+    expect(one).toMatchObject({ registryState: 'unreachable', againstLatest: 'unknown', registryAge: 'unknown' });
+    // The hook read nothing: all three come from the replay.
+    const [filled] = mergeCrossings([replayed], [hookRow()]);
+    expect(filled).toMatchObject({ registryState: 'found', againstLatest: 'not-latest', registryAge: 'under-7-days' });
+    // An answer with a field the registry cannot state (no date) still keeps its own reading whole.
+    const [partial] = mergeCrossings([replayed], [hookRow({ registryState: 'found', againstLatest: 'latest', registryAge: 'unknown' })]);
+    expect(partial).toMatchObject({ registryState: 'found', againstLatest: 'latest', registryAge: 'unknown' });
+  });
+
   it('leaves a second replay refreshing the transcript fields only', () => {
     const first = mergeCrossings([crossing({ origin: 'web' })], [hookRow({ registryState: 'found' })]);
     const second = mergeCrossings([crossing({ origin: 'prompt', registryState: 'not-read' })], first);
