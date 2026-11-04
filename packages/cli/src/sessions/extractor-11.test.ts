@@ -4,7 +4,8 @@ import { readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { captureSession } from './extract.js';
-import { PRIVATE_PROGRAM, projectShell, projectStoredShell } from './projection.js';
+import { PRIVATE_PROGRAM, projectShell, projectStoredShell, type ProjectedShell } from './projection.js';
+import { PRIVATE, PUBLIC_PROGRAMS } from './public-vocabulary.js';
 import { makeRedactor } from './redact.js';
 import { EXTRACTOR_VERSION, type ToolObservation } from './schema.js';
 import { deposit, derive, loadStore, paths, refresh } from './store.js';
@@ -18,12 +19,12 @@ const PLANTED = 'AcmeWidgetMerger';
 const vocab = readVocabulary();
 const line = (value: object): string => JSON.stringify(value);
 
-const COMMANDS = [`git commit --amend --message=${PLANTED}`, 'ls -a -l', `grep ${PLANTED}`, 'acme-deploy --prod', 'git push --force', `git ${PLANTED} --acme-flag`, 'git -C repo status'];
+const COMMANDS = [`git commit --amend --message=${PLANTED}`, 'ls -a -l', `grep ${PLANTED}`, 'acme-deploy --prod', 'git push --force', `git ${PLANTED} --acme-flag`, 'git -C repo status', 'cd /w && git commit --amend', 'cat f | grep x | sort', 'bash -c "git push --force"'];
 
-const shellSession = (): string =>
+const shellSession = (commands: readonly string[] = COMMANDS): string =>
   [
     line({ type: 'user', uuid: 'u0', timestamp: '2026-06-01T00:00:01.000Z', version: '2.1.300', cwd: '/w', message: { role: 'user', content: 'run them' } }),
-    ...COMMANDS.map((command, i) =>
+    ...commands.map((command, i) =>
       line({
         type: 'assistant', uuid: `m${String(i)}`, timestamp: '2026-06-01T00:00:02.000Z', version: '2.1.300', cwd: '/w',
         message: { role: 'assistant', model: 'm', content: [{ type: 'tool_use', id: `t${String(i)}`, name: 'Bash', input: { command } }], usage: { input_tokens: 1, output_tokens: 1 } },
@@ -31,8 +32,8 @@ const shellSession = (): string =>
     ),
   ].join('\n');
 
-const captured = (): ToolObservation[] =>
-  captureSession({ text: shellSession(), session: 's', project: 'p', rev: 1, at: 'x', bytes: 1, redact: makeRedactor(), salt: 'salt', sid: null, repoRoot: () => null, runtime: { oars: '1.2.3', node: 'v99', os: 'plan9' } }).tools;
+const captured = (commands: readonly string[] = COMMANDS): ToolObservation[] =>
+  captureSession({ text: shellSession(commands), session: 's', project: 'p', rev: 1, at: 'x', bytes: 1, redact: makeRedactor(), salt: 'salt', sid: null, repoRoot: () => null, runtime: { oars: '1.2.3', node: 'v99', os: 'plan9' } }).tools;
 
 describe('EXTRACTOR_VERSION 11', () => {
   it('is 11, the version that moves agentType, keys, and frameId to class A', () => {
@@ -71,46 +72,74 @@ describe('EXTRACTOR_VERSION 11', () => {
 });
 
 describe('the shell form projected from the account store (Q5)', () => {
-  it('projects program and subcommand from the A copy of target, and flags from the steps CAPTURE 9 and later hold', () => {
-    const tools = captured();
-    expect(tools.map((tool) => projectStoredShell(vocab, tool))).toEqual([
-      { program: 'git', subcommand: 'commit', flags: ['--amend', '--message'] },
-      { program: 'ls', subcommand: null, flags: ['-a', '-l'] },
-      { program: 'grep', subcommand: null, flags: [] },
-      PRIVATE_PROGRAM,
-      { program: 'git', subcommand: 'push', flags: ['--force'] },
-      { program: 'git', subcommand: null, flags: [] },
-      { program: 'git', subcommand: null, flags: ['-C'] },
+  const one = (program: string, subcommand: string | null, flags: string[]) => ({ program, subcommand, flags });
+  const projected = (commands: readonly string[]) => captured(commands).map((tool) => projectStoredShell(vocab, tool));
+  // The same calls as a CAPTURE 8 store holds them: the A copy of `target` and no `steps`.
+  const withoutSteps = (commands: readonly string[]) => captured(commands).map((tool) => projectStoredShell(vocab, { tool: tool.tool, target: tool.target }));
+  const lossesOf = (kept: readonly ProjectedShell[], raw: readonly ProjectedShell[], pick: (shell: ProjectedShell) => unknown): number => kept.filter((shell, i) => JSON.stringify(pick(shell)) !== JSON.stringify(pick(raw[i]))).length;
+  const subcommandsOf = (shell: ProjectedShell) => shell.commands.flatMap(({ subcommand }) => subcommand ?? []);
+  const flagsOf = (shell: ProjectedShell) => shell.commands.map(({ flags }) => flags);
+
+  it('projects every command of a call from its steps: a pipeline, an && chain, a cd hop, a bash -c body, and a git -C call keep their programs, subcommands, and flags', () => {
+    const forms = ['cat f | grep x | sort', 'npm test && git push --force', 'cd /w && git commit --amend', 'bash -c "git push --force"', 'git -C repo status'];
+    expect(projected(forms)).toEqual([
+      { commands: [one('cat', null, []), one('grep', null, []), one('sort', null, [])], programs: ['cat', 'grep', 'sort'] },
+      { commands: [one('npm', 'test', []), one('git', 'push', ['--force'])], programs: ['npm', 'git'] },
+      { commands: [one('cd', null, []), one('git', 'commit', ['--amend'])], programs: ['cd', 'git'] },
+      { commands: [one('git', 'push', ['--force'])], programs: ['git'] },
+      { commands: [one('git', 'status', ['-C'])], programs: ['git'] },
     ]);
   });
 
-  it('loses the subcommand of a call whose first plain word is not the subcommand and states the loss by count: 1 of 7 fixture calls', () => {
-    // `shellTarget` stores the first plain token after the program, so `git -C repo status` is stored as `git repo`.
-    const stored = captured().map((tool) => projectStoredShell(vocab, tool));
-    const fromRaw = COMMANDS.map((command) => projectShell(vocab, command, makeRedactor()).commands[0]);
-    const lost = fromRaw.filter((read, i) => read?.subcommand !== null && stored[i]?.subcommand === null);
-    expect(lost).toEqual([{ program: 'git', subcommand: 'status', flags: ['-C'] }]);
-    expect(stored[COMMANDS.length - 1]).toEqual({ program: 'git', subcommand: null, flags: ['-C'] });
+  it('projects every fixture call from its steps exactly as the raw command reads: no loss for a record with steps', () => {
+    const raw = COMMANDS.map((command) => projectShell(vocab, command, makeRedactor()));
+    expect(projected(COMMANDS)).toEqual(raw);
+    expect(JSON.stringify(projected(COMMANDS))).not.toContain(PLANTED);
   });
 
-  it('loses the flags of a record captured before CAPTURE 9 and states the loss by count: 4 of 7 fixture calls lose their flags', () => {
-    const tools = captured();
-    const withSteps = tools.map((tool) => projectStoredShell(vocab, tool).flags.length > 0);
-    // The same calls as a CAPTURE 8 store holds them: the A copy of `target` and no `steps`.
-    const before9 = tools.map((tool) => projectStoredShell(vocab, { tool: tool.tool, target: tool.target }));
-    expect(withSteps.filter(Boolean)).toHaveLength(4);
-    expect(before9.filter((projected) => projected.flags.length > 0)).toHaveLength(0);
-    expect(JSON.stringify(before9)).not.toContain(PLANTED);
+  it('caps the program list of a long pipeline at pipe_max and keeps every command', () => {
+    const [shell] = projected(['cat a | sort | uniq | head | wc | tr x y']);
+    expect(shell?.commands).toHaveLength(6);
+    expect(shell?.programs).toEqual(['cat', 'sort', 'uniq', 'head']);
+  });
+
+  it('projects a first step the curated list does not name from the target, so a program only the snapshot lists stays admitted', () => {
+    const snapshotOnly = [...vocab.programs.keys()].find((name) => !PUBLIC_PROGRAMS.has(name) && /^[a-z]+$/.test(name));
+    expect(snapshotOnly).toBeDefined();
+    const name = snapshotOnly ?? '';
+    expect(projected([`${name} --version`])).toEqual([{ commands: [one(name, null, [])], programs: [name] }]);
+    expect(projected(['acme-deploy --prod'])).toEqual([{ commands: [PRIVATE_PROGRAM], programs: [PRIVATE] }]);
+    // A later step it does not name is private: only the first step has a target to read back.
+    expect(projected([`cd /w && ${name}`])[0]?.programs).toEqual(['cd', PRIVATE]);
+  });
+
+  it('loses the subcommands of a record without steps and states the loss by count: 2 of 10 fixture calls', () => {
+    // `shellTarget` stores the first plain token after the program, so `git -C repo status` is stored as `git repo`, and `bash -c "..."` as `bash`.
+    const raw = COMMANDS.map((command) => projectShell(vocab, command, makeRedactor()));
+    expect(lossesOf(withoutSteps(COMMANDS), raw, subcommandsOf)).toBe(2);
+  });
+
+  it('loses the flags of a record without steps and states the loss by count: 7 of 10 fixture calls', () => {
+    const raw = COMMANDS.map((command) => projectShell(vocab, command, makeRedactor()));
+    expect(lossesOf(withoutSteps(COMMANDS), raw, flagsOf)).toBe(7);
+    expect(withoutSteps(COMMANDS).every((shell) => shell.commands.every(({ flags }) => flags.length === 0))).toBe(true);
+  });
+
+  it('loses the program list of a record without steps and states the loss by count: 3 of 10 fixture calls', () => {
+    const raw = COMMANDS.map((command) => projectShell(vocab, command, makeRedactor()));
+    expect(lossesOf(withoutSteps(COMMANDS), raw, (shell) => shell.programs)).toBe(3);
+    expect(JSON.stringify(withoutSteps(COMMANDS))).not.toContain(PLANTED);
   });
 
   it('projects a target it cannot read back to private: cut at the subcommand limit, masked by redaction, or not a shell call', () => {
     const shell = (target: string | null, tool = 'Bash') => projectStoredShell(vocab, { tool, target });
-    expect(shell(`git ${'x'.repeat(30)}`)).toEqual(PRIVATE_PROGRAM);
-    expect(shell('git <secret>')).toEqual(PRIVATE_PROGRAM);
-    expect(shell('a b c')).toEqual(PRIVATE_PROGRAM);
-    expect(shell(null)).toEqual(PRIVATE_PROGRAM);
-    expect(shell('')).toEqual(PRIVATE_PROGRAM);
-    expect(shell('0123456789abcdef', 'Read')).toEqual(PRIVATE_PROGRAM);
-    expect(shell('git')).toEqual({ program: 'git', subcommand: null, flags: [] });
+    const unread = { commands: [PRIVATE_PROGRAM], programs: [PRIVATE] };
+    expect(shell(`git ${'x'.repeat(30)}`)).toEqual(unread);
+    expect(shell('git <secret>')).toEqual(unread);
+    expect(shell('a b c')).toEqual(unread);
+    expect(shell(null)).toEqual(unread);
+    expect(shell('')).toEqual(unread);
+    expect(shell('0123456789abcdef', 'Read')).toEqual(unread);
+    expect(shell('git')).toEqual({ commands: [one('git', null, [])], programs: ['git'] });
   });
 });

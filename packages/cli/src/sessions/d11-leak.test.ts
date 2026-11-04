@@ -11,6 +11,7 @@ import { readVocabulary } from './vocab-load.js';
 const PLANTED = 'AcmeWidgetMerger';
 const vocab = readVocabulary();
 const redact = makeRedactor();
+const UNREAD = { commands: [PRIVATE_PROGRAM], programs: [PRIVATE] };
 
 // The capture parser lowercases every program (extract.ts), so a projection that copied the name through would emit it in lowercase: compare without case.
 const leaks = (projected: unknown): boolean => JSON.stringify(projected).toLowerCase().includes(PLANTED.toLowerCase());
@@ -100,10 +101,10 @@ describe('D11: a planted identifier never reaches a pooled field', () => {
 
   it('projects a stored record whose target the store cut, masked, or could not read to private', () => {
     for (const target of [null, '', `git ${PLANTED.repeat(3)}`, `${PLANTED} a b`, `git <${PLANTED}>`]) {
-      expect(projectStoredShell(vocab, { tool: 'Bash', target })).toEqual(PRIVATE_PROGRAM);
+      expect(projectStoredShell(vocab, { tool: 'Bash', target })).toEqual(UNREAD);
     }
-    expect(projectStoredShell(vocab, { tool: 'Bash', target: PLANTED })).toEqual(PRIVATE_PROGRAM);
-    expect(projectStoredShell(vocab, { tool: 'Bash', target: `${PLANTED.toLowerCase()} --flag` })).toEqual(PRIVATE_PROGRAM);
+    expect(projectStoredShell(vocab, { tool: 'Bash', target: PLANTED })).toEqual(UNREAD);
+    expect(projectStoredShell(vocab, { tool: 'Bash', target: `${PLANTED.toLowerCase()} --flag` })).toEqual(UNREAD);
   });
 
   it('keeps an admitted program of a compound command and drops the rest to private', () => {
