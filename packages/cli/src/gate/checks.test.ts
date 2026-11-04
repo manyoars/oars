@@ -103,6 +103,13 @@ describe('checkCall on a shell command', () => {
     ['uvx --from httpie==3.2.0 http get', ['python-package fetch-and-run httpie pinned']],
     ['uv tool run black .', ['python-package fetch-and-run black unstated']],
     ['uv run pip install rich==1.0', ['python-package install rich pinned']],
+    // `-n` is `--no-interaction` for poetry and `--no-cache` for uv, and `-f` is `--force` for pipx: neither owns the next word there.
+    ['poetry add -n requests', ['python-package install requests unstated']],
+    ['uv pip install -n rich', ['python-package install rich unstated']],
+    ['pipx install -f black', ['python-package install black unstated']],
+    ['python -m pipx install -f black', ['python-package install black unstated']],
+    ['pip install -f https://example.org/wheels rich', ['python-package install rich unstated']],
+    ['conda install -n env numpy', ['python-package install numpy unstated']],
     ['uv run --with rich pip install x', ['python-package fetch-and-run rich unstated', 'python-package install x unstated']],
     ['uv run --with pip pip install x', ['python-package fetch-and-run pip unstated', 'python-package install x unstated']],
     ['uv run --with rich --with pyyaml script.py', ['python-package fetch-and-run rich unstated', 'python-package fetch-and-run pyyaml unstated']],
