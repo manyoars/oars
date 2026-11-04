@@ -326,6 +326,7 @@ const moduleCommand = (command: ShellCommand): { module: ModuleProgram; command:
 };
 
 /** The listed program a word names, with its table row. `pip3.12` is `pip`. */
+const PIP_TOOL: Tool = { family: 'python-package', verbs: PIP_VERBS };
 const toolOf = (program: string): { program: ToolProgram; tool: Tool } | undefined => {
   const named = PIP_NAME.test(program) ? 'pip' : program;
   for (const [key, tool] of TOOLS) if (key === named) return { program: key, tool };
@@ -422,6 +423,12 @@ const readTool = (reading: Reading, tool: Tool, command: ToolCommand): void => {
   }
   // `uv run --with a` installs into a throwaway environment and runs: a fetch-and-run, whatever the script is.
   if (command.program === 'uv' && words.names[0] === 'run') {
+    // `uv run pip install x` is the same pick as `pip install x`: read it as that. Any other program after `run` stays unread.
+    const pip = command.args.findIndex((word) => word.text === 'pip');
+    if (words.names[1] === 'pip' && words.names[2] === 'install' && pip >= 0) {
+      readTool(reading, PIP_TOOL, { ...command, program: 'pip', args: command.args.slice(pip + 1) });
+      return;
+    }
     addSpecs(reading, family, allFlags(words, '--with'), 'run', command.program, command.read);
     return;
   }

@@ -99,6 +99,7 @@ describe('checkCall on a shell command', () => {
     ['uvx ruff check .', ['python-package fetch-and-run ruff unstated']],
     ['uvx --from httpie==3.2.0 http get', ['python-package fetch-and-run httpie pinned']],
     ['uv tool run black .', ['python-package fetch-and-run black unstated']],
+    ['uv run pip install rich==1.0', ['python-package install rich pinned']],
     ['uv run --with rich --with pyyaml script.py', ['python-package fetch-and-run rich unstated', 'python-package fetch-and-run pyyaml unstated']],
     ['uvx -p 3.12 ruff', ['python-package fetch-and-run ruff unstated']],
     ['pipx run cowsay hi', ['python-package fetch-and-run cowsay unstated']],
@@ -299,8 +300,8 @@ describe('checkCall on a shell command', () => {
     'npx --no-install tsc',
     'npx --no tsc',
     'npx --offline tsc',
-    // Known limit: a manager run through `uv run` is not read (docs/gate.md).
-    'uv run pip install rich',
+    // Any other program run through `uv run` stays unread (docs/gate.md).
+    'uv run pip list',
     'echo "npm install axios"',
     'grep -rn "pip install" docs',
     "git commit -m 'npm install axios'",
