@@ -27,4 +27,4 @@ export const againstLatestOf = (crossing: Crossing, answer: RegistryAnswer): Aga
 };
 
 /** An answer reaches a row only when that row's own program was asked and its command left the registry to the default: the same name can cross twice. */
-export const askedOf = (crossing: Crossing): boolean => crossing.registryAsked && ASKED_PROGRAMS.has(crossing.program);
+export const askedOf = (crossing: Crossing): boolean => crossing.registryAsked && crossing.form !== 'local-bin-run' && ASKED_PROGRAMS.has(crossing.program);

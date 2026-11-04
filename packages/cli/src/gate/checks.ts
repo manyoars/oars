@@ -7,7 +7,7 @@ import { CHANGES_FOLDER, shellCommands, type ShellCommand } from '../sessions/ex
 export const CROSSING_CLASSES = ['npm-package', 'python-package', 'mcp-server', 'skill'] as const;
 export type CrossingClass = (typeof CROSSING_CLASSES)[number];
 
-export const CROSSING_FORMS = ['install', 'url-install', 'fetch-and-run', 'url-fetch-and-run', 'mcp-call', 'skill-call'] as const;
+export const CROSSING_FORMS = ['install', 'url-install', 'fetch-and-run', 'url-fetch-and-run', 'local-bin-run', 'mcp-call', 'skill-call'] as const;
 export type CrossingForm = (typeof CROSSING_FORMS)[number];
 
 /** A command that looks like a crossing and states no name to record. Counted, so a report can say what it could not read. */

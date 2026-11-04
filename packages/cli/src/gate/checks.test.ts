@@ -409,7 +409,7 @@ describe('checkCall on other tools', () => {
 describe('the closed vocabulary', () => {
   it('holds exactly these classes, forms, and unread shapes', () => {
     expect(CROSSING_CLASSES).toEqual(['npm-package', 'python-package', 'mcp-server', 'skill']);
-    expect(CROSSING_FORMS).toEqual(['install', 'url-install', 'fetch-and-run', 'url-fetch-and-run', 'mcp-call', 'skill-call']);
+    expect(CROSSING_FORMS).toEqual(['install', 'url-install', 'fetch-and-run', 'url-fetch-and-run', 'local-bin-run', 'mcp-call', 'skill-call']);
     expect(UNREAD_SHAPES).toEqual(['manifest-install', 'local-path', 'variable-name', 'masked-name', 'pipe-to-shell', 'behind-xargs', 'harness-registration', 'unreadable-name']);
   });
 });

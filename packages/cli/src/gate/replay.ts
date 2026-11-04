@@ -9,7 +9,8 @@ import { paths, readState, writeAtomic, type SessionsRuntime } from '../sessions
 import type { Crossing, UnreadShape } from './checks.js';
 import { GATE_VERSION, liveCrossings, mergeCrossings, parseRows, type CrossingRecord, type Next, type Novelty, type Origin, type RegistryRow, type RunRow } from './record.js';
 import { askable, type RegistryAnswer, type RegistryAsk, type RegistryReader } from './registry.js';
-import { ageOf, againstLatestOf, ASKED_PROGRAMS, askedOf, DAY_MS } from './registry-state.js';
+import { withLocalBin, type LocalBinMemo } from './local-bin.js';
+import { ageOf, againstLatestOf, askedOf, DAY_MS } from './registry-state.js';
 import { scopesOf, seedIndex } from './novelty.js';
 import { repositoryOf } from './scope.js';
 import { discover, readCalls, readOrigins, type CallsSeen, type Origins, type Found, type FoundRemoval, type TranscriptFile, type TranscriptRead } from './transcripts.js';
@@ -128,7 +129,7 @@ const askRegistry = async (rows: readonly Held[], reader: RegistryReader, cached
   for (const { found } of rows) {
     const { crossing, cwd } = found;
     const key = keyOf(crossing);
-    if (cwd === null || unasked.has(key) || answers.has(key) || asks.has(key) || crossing.versionForm === 'url' || !ASKED_PROGRAMS.has(crossing.program) || !askable(crossing.class, crossing.name)) continue;
+    if (cwd === null || unasked.has(key) || answers.has(key) || asks.has(key) || crossing.versionForm === 'url' || !askedOf(crossing) || !askable(crossing.class, crossing.name)) continue;
     const exists = folders.get(cwd) ?? (await isFolder(cwd));
     folders.set(cwd, exists);
     if (exists) asks.set(key, { class: crossing.class, name: crossing.name, cwd });
@@ -230,6 +231,11 @@ const readAll = async (runtime: Pick<SessionsRuntime, 'storeDir' | 'projectsRoot
     } catch {
       unreadable += 1;
     }
+  }
+  // A folder's own bin is read once the whole record is in, so `nextOf` below sees the form the row will carry.
+  const memo: LocalBinMemo = new Map();
+  for (const { read } of reads) {
+    for (const [at, found] of read.found.entries()) read.found[at] = { ...found, crossing: await withLocalBin(found.crossing, found.cwd, memo) };
   }
   return { reads, transcripts: files.length, unreadable };
 };
