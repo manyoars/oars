@@ -114,8 +114,8 @@ const TOOLS: ReadonlyMap<string, Tool> = new Map<string, Tool>([
 
 /** A flag here owns the next word, which is therefore not a package name. */
 const VALUE_FLAGS: Readonly<Record<Family, ReadonlySet<string>>> = {
-  'npm-package': new Set(['-w', '--workspace', '--registry', '--prefix', '--filter', '-F', '-C', '--dir', '--cache', '--tag', '--cwd', '--loglevel', '--userconfig', '-p', '--package', '-c', '--call', '--omit', '--include', '--save-prefix', '--skill', '-s']),
-  'python-package': new Set(['-r', '--requirement', '-e', '--editable', '-c', '--constraint', '-i', '--index-url', '--extra-index-url', '--index', '--default-index', '-t', '--target', '-f', '--find-links', '--python', '-p', '--from', '--with', '--with-editable', '--with-requirements', '--prefix', '--root', '--group', '--extra', '--only-binary', '--no-binary', '--trusted-host', '--proxy', '--cache-dir', '--timeout', '--suffix', '--pip-args', '--spec', '--channel', '-n', '--name', '-G', '-d']),
+  'npm-package': new Set(['-w', '--workspace', '--registry', '--prefix', '--filter', '-F', '-C', '--dir', '--cache', '--tag', '--cwd', '--loglevel', '--userconfig', '-p', '--package', '-c', '--call', '--omit', '--include', '--save-prefix', '--skill']),
+  'python-package': new Set(['-r', '--requirement', '-e', '--editable', '-c', '--constraint', '-i', '--index-url', '--extra-index-url', '--index', '--default-index', '-t', '--target', '-f', '--find-links', '--python', '-p', '--from', '--with', '--with-editable', '--with-requirements', '--prefix', '--root', '--group', '--extra', '--only-binary', '--no-binary', '--trusted-host', '--proxy', '--cache-dir', '--timeout', '--suffix', '--pip-args', '--spec', '--channel', '-n', '--name', '-G']),
 };
 
 /** These tell a runner to use only what is already local, so nothing crosses. */
@@ -190,11 +190,14 @@ const pythonSpec = (text: string): Spec => {
   if (nothing !== null) return nothing;
   if (isUrl(text)) return urlSpec(text);
   if (LOCAL_SPEC.test(text) || ARCHIVE.test(text) || /[\\/]/.test(text)) return { kind: 'unread', shape: 'local-path' };
-  const match = PYTHON_SPEC.exec(text);
+  // uv writes `name@version`, where the `@` is not a PEP 508 direct reference (a URL, handled above).
+  const { name: head, version: atStated } = atVersion(text);
+  const match = PYTHON_SPEC.exec(head);
   if (match === null) return { kind: 'unread', shape: 'local-path' };
   const [, raw = '', operator = '', stated = ''] = match;
   // PEP 503: these spellings are one project, so novelty must not count them twice.
   const name = raw.toLowerCase().replace(/[-_.]+/g, '-');
+  if (atStated !== null) return { kind: 'named', name, version: atStated, versionForm: versionFormOf(atStated), url: false };
   if (stated === '') return { kind: 'named', name, version: null, versionForm: 'unstated', url: false };
   const exact = operator === '==' || operator === '===';
   return { kind: 'named', name, version: exact ? stated : `${operator}${stated}`, versionForm: exact ? 'pinned' : 'range', url: false };
@@ -217,7 +220,8 @@ interface Words {
   bare: Set<string>;
 }
 
-const readWords = (command: ShellCommand, family: Family): Words => {
+/** `positionals`, when given, is how many names a runner's own words take; everything after the last is the fetched program's, flags included. */
+const readWords = (command: ShellCommand, family: Family, positionals?: number): Words => {
   const names: string[] = [];
   const flags = new Map<string, string[]>();
   const bare = new Set<string>();
@@ -226,7 +230,7 @@ const readWords = (command: ShellCommand, family: Family): Words => {
   };
   for (let at = 0; at < command.args.length; at += 1) {
     const { text, quoted } = command.args[at] ?? { text: '', quoted: false };
-    if (quoted || !text.startsWith('-')) names.push(text);
+    if (quoted || !text.startsWith('-') || names.length === positionals) names.push(text);
     else if (text.includes('=')) put(text.slice(0, text.indexOf('=')), text.slice(text.indexOf('=') + 1));
     // pnpm's `-w` is `--workspace-root`, where npm's takes a workspace name.
     else if (VALUE_FLAGS[family].has(text) && !(command.program === 'pnpm' && text === '-w')) {
@@ -237,10 +241,17 @@ const readWords = (command: ShellCommand, family: Family): Words => {
   return { names, flags, bare };
 };
 
-const verbOf = (verbs: Verbs, names: readonly string[]): { action: Action; rest: string[] } | null => {
-  let best: { action: Action; rest: string[]; length: number } | null = null;
+interface VerbRead {
+  action: Action;
+  rest: string[];
+  length: number;
+  path: readonly string[];
+}
+
+const verbOf = (verbs: Verbs, names: readonly string[]): VerbRead | null => {
+  let best: VerbRead | null = null;
   for (const [path, action] of verbs) {
-    if ((best === null || path.length > best.length) && path.every((word, at) => names[at] === word)) best = { action, rest: names.slice(path.length), length: path.length };
+    if ((best === null || path.length > best.length) && path.every((word, at) => names[at] === word)) best = { action, rest: names.slice(path.length), length: path.length, path };
   }
   return best;
 };
@@ -288,7 +299,9 @@ const readRun = (reading: Reading, family: Family, words: Words, rest: readonly 
   if ([...NO_FETCH_FLAGS].some((flag) => words.bare.has(flag))) return;
   const [first, sub, source] = rest;
   if (first !== undefined && atVersion(first).name === 'skills' && sub === 'add' && source !== undefined) {
-    if (!LOCAL_SPEC.test(source)) reading.crossings.push({ class: 'skill', form: 'install', name: source, version: null, versionForm: 'unstated', program: command.program, statusReports: command.read });
+    const spec = namesNothing(source) ?? (isUrl(source) ? urlSpec(source) : null);
+    if (spec?.kind === 'unread') reading.unread.push(spec.shape);
+    else if (!LOCAL_SPEC.test(source)) reading.crossings.push({ class: 'skill', form: 'install', name: spec?.name ?? source, version: null, versionForm: 'unstated', program: command.program, statusReports: command.read });
     return;
   }
   const packaged = family === 'npm-package' ? allFlags(words, '-p', '--package') : allFlags(words, '--from', '--spec');
@@ -312,7 +325,7 @@ const readInstall = (reading: Reading, family: Family, words: Words, rest: reado
 
 const readTool = (reading: Reading, tool: Tool, command: ShellCommand): void => {
   const { family } = tool;
-  const words = readWords(command, family);
+  let words = readWords(command, family);
   // A bare `yarn` is its install; `yarn foo` runs a script.
   if (command.program === 'yarn' && words.names.length === 0) {
     reading.unread.push('manifest-install');
@@ -323,13 +336,23 @@ const readTool = (reading: Reading, tool: Tool, command: ShellCommand): void => 
     addSpecs(reading, family, allFlags(words, '--with'), 'run', command.program, command.read);
     return;
   }
-  const verb = verbOf(tool.verbs, words.names);
+  // `yarn workspace <name> add x` is `yarn add x` run in that workspace.
+  if (command.program === 'yarn' && words.names[0] === 'workspace') words = { ...words, names: words.names.slice(2) };
+  let verb = verbOf(tool.verbs, words.names);
   if (verb === null) return;
+  // Past the runner's own word, the flags are the fetched program's: read again, with the rest left as names.
+  if (verb.action === 'run') {
+    words = readWords(command, family, verb.length + 1);
+    verb = verbOf(tool.verbs, words.names) ?? verb;
+  }
+  const toolForm = command.program === 'uvx' || (command.program === 'uv' && verb.path[0] === 'tool');
   if (verb.action === 'manifest') reading.unread.push('manifest-install');
   else if (verb.action === 'remove') readRemoval(reading, family, verb.rest);
   else if (verb.action === 'install') readInstall(reading, family, words, verb.rest, command);
   else if (verb.action === 'run') readRun(reading, family, words, verb.rest, command);
   else if (verb.rest[0] !== undefined) addSpecs(reading, family, [creatorSpec(verb.rest[0])], 'run', command.program, command.read);
+  // uv's tool forms take extra packages with `--with`; they install beside the tool.
+  if (toolForm && (verb.action === 'run' || verb.action === 'install')) addSpecs(reading, family, allFlags(words, '--with'), verb.action, command.program, command.read);
 };
 
 const namesOf = (command: ShellCommand): string[] => command.args.filter((word) => !word.text.startsWith('-')).map((word) => word.text);
