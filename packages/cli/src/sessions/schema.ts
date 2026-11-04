@@ -18,7 +18,7 @@
 // `version =` is no longer stored as `crates:version`; and `packageVersion` keeps only a version of three or four dotted numbers, so a bare `@1` or `==2.31` stores null; and, since calls with a null `packageVersion` share one `first`, a later short pin of the same package now marks `false`. EXTRACTOR stays 11.
 // Version 16 (CAPTURE 16) stores a call the user refused as Claude Code does, `status` `error` and `errorCode` `user-rejected`: a Cursor call whose `toolFormerData.userDecision` is `rejected`; a Codex shell
 // call, patch, or command item that is `declined` with the user's refusal text (each `none` before; any other `declined` stays `none`); and a Gemini call the user cancelled or denied (`errorCode` `other` before). A call that was `none` or `ok` gains an `error-line` record whose `line` is
-// the refusal text and loses its `manifest`, and where a result line is new (every Codex refusal, a Cursor one whose status is neither `error` nor `completed`) its session's `lines` and skeleton move. Any other
+// the refusal text and loses its `manifest`, and where a result line is new (every Codex refusal, a Cursor one whose status is neither `error` nor `completed`, or one whose terminal result ended aborted) its session's `lines` and skeleton move. Any other
 // decision value, or none, changes nothing and is never stored; a Grok plan-mode refusal and a Codex `write_stdin rejected:` stay as they were. EXTRACTOR stays 11.
 //
 // Version 17 (CAPTURE 17) frames a Gemini CLI shell call as the shell that ran it. A session whose own `<session_context>` turn says `My operating system is: win32` (or,
@@ -117,7 +117,7 @@ export interface Usage {
   thinking: number;
 }
 
-export type Harness = 'claude-code' | 'cursor' | 'codex' | 'copilot' | 'gemini' | 'grok';
+export type Harness = 'claude-code' | 'cursor' | 'codex' | 'copilot' | 'gemini' | 'grok' | 'vscode-copilot';
 
 /** The harness a session record came from; a record that does not name one is Claude Code's. */
 export const harnessOf = (session: { harness?: Harness }): Harness => session.harness ?? 'claude-code';

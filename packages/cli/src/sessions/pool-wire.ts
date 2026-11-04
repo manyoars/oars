@@ -81,6 +81,25 @@ export interface SkeletonTranscript {
   tools: SkeletonTool[];
 }
 
+/** What a delta entry may change (spec Section 4, rule 4): `permissionMode` and `effort` by name only, a `plugin` as added or removed, and a `package` as removed. */
+export type DeltaField = 'plugin' | 'package' | 'permissionMode' | 'effort';
+export type DeltaKind = 'added' | 'removed' | 'changed';
+/** The one metric an entry's change is in: `callsPerSession` (tool calls in a session, or calls naming the package) in `count` buckets, `thinking` (thinking tokens in a prompt) in `tokens` buckets. */
+export type DeltaMetric = 'callsPerSession' | 'thinking';
+
+/**
+ * One change between a client's own before and after windows. It holds no `sid`, root, window date, or exact value: `name` is the public package or the word `private` (a plugin has no pinned registry, so
+ * always `private`), null when the field is named alone; `registry` is the package's registry and is null for a `private` name; `change` is the signed bucket of the metric's move, never the metric.
+ */
+export interface DeltaEntry {
+  deltaKind: DeltaKind;
+  field: DeltaField;
+  name: string | null;
+  registry: string | null;
+  metric: DeltaMetric;
+  change: number;
+}
+
 export interface SessionSkeleton {
   format: typeof SKELETON_FORMAT;
   /** A hash the client computes per account, so a redeposit replaces and two accounts' sessions cannot be joined. Never the session's own id. */
@@ -89,8 +108,8 @@ export interface SessionSkeleton {
   transcripts: SkeletonTranscript[];
   /** One for the batch: a hash of the main transcript's non-null call durations in call order, only with `MIN_TIMED_CALLS` of them; a subagent's calls never join it. */
   timingPrint: string | null;
-  /** The batch's client-built delta entries (Section 2, "Deltas"). Empty until the client builds them; a non-empty list is refused. */
-  deltas: never[];
+  /** The batch's client-built delta entries (Section 2, "Deltas"): changes between the client's own before and after windows, each carried once, by the batch of the session that filled the after window. */
+  deltas: DeltaEntry[];
 }
 
 /** One main session and the subagents it spawned, as the local store holds them. */
@@ -182,12 +201,14 @@ const wirePull = (pull: PullIdentity): PullIdentity => {
 };
 
 /** A non-shell step's identity in the wire's spelling; a shell step's comes from `wireCommand`. */
-const wireIdentity = (identity: StepIdentity): StepIdentity => {
+const wireIdentity = (identity: StepIdentity, harness: Harness): StepIdentity => {
   if (identity === null || 'program' in identity) return identity;
   if ('server' in identity) {
     const server = listed(PUBLIC_MCP_SERVERS, identity.server);
-    // A tool beside a masked server has no list to be checked against, so it goes as the literal.
-    return server === PRIVATE ? { server, tool: LITERAL } : { ...identity, server };
+    // A tool beside a masked server has no list to be checked against, so it goes as the literal. Beside a listed one it goes as itself only where the server's list still holds it
+    // and the harness's spelling delimits the server (the parser's rule); a tool an older list held, or one stored before that rule, goes as the literal rather than refusing the session.
+    const named = server !== PRIVATE && ACTION_TABLES[harness].toolDelimited && isPublicMcpTool(server, identity.tool);
+    return { server, tool: named ? identity.tool : LITERAL };
   }
   if ('skill' in identity) return { skill: listed(PUBLIC_SKILLS, identity.skill) };
   return { host: identity.host === null ? null : listed(PUBLIC_HOSTS, identity.host) };
@@ -201,7 +222,7 @@ export const projectedSteps = (tool: ToolObservation, read: ShellReader, harness
   const commands = read(tool);
   return (tool.steps ?? []).map((step, at) => {
     const native = admittedNative(harness, step.native) ? step.native : PRIVATE;
-    if (step.action !== 'shell.exec') return { ...step, native, identity: wireIdentity(step.identity) };
+    if (step.action !== 'shell.exec') return { ...step, native, identity: wireIdentity(step.identity, harness) };
     const command = wireCommand(commands[at] ?? { program: PRIVATE, subcommand: null, flags: [] });
     const pulls = step.identity !== null && 'program' in step.identity ? step.identity.pulls : undefined;
     return { ...step, native, identity: pulls === undefined || command.program === PRIVATE ? command : { ...command, pulls: pulls.map(wirePull) } };
@@ -287,7 +308,7 @@ export type Print = (durations: readonly number[]) => string;
  * The skeleton of a session; null when any record of it was captured before steps and frames, or a transcript of it has no root, which holds no closed reading to send. The batch holds the main
  * transcript's run first, then each subagent's as its own run; its `id` is the main session's, and its one `timingPrint` is over the main transcript's calls alone.
  */
-export const skeletonOf = (records: SessionRecords, id: string, read: ShellReader, print: Print): SessionSkeleton | null => {
+export const skeletonOf = (records: SessionRecords, id: string, read: ShellReader, print: Print, deltas: readonly DeltaEntry[] = []): SessionSkeleton | null => {
   const mainTools = byCall(records.transcripts[0]?.tools ?? []);
   // A subagent's step names the call that spawned it by that call's `n` in the main run, which the skeleton holds as the call's position.
   const spawners = new Map(mainTools.map(({ n }, position) => [n, position]));
@@ -311,7 +332,7 @@ export const skeletonOf = (records: SessionRecords, id: string, read: ShellReade
     transcripts.push(transcript);
   }
   const durations = mainTools.flatMap(({ durationMs }) => (durationMs === null ? [] : [durationMs]));
-  return { format: SKELETON_FORMAT, id, transcripts, timingPrint: durations.length < MIN_TIMED_CALLS ? null : print(durations), deltas: [] };
+  return { format: SKELETON_FORMAT, id, transcripts, timingPrint: durations.length < MIN_TIMED_CALLS ? null : print(durations), deltas: [...deltas] };
 };
 
 /** A harness version a bundle can be asked for: public, so the request carries nothing private. The admitted list replaces this shape rule when it ships. */
@@ -403,12 +424,14 @@ const heldTo = (isHeld: (value: string | null) => string | null, value: unknown,
 
 // `satisfies` checks every entry is a `Harness` but not that every `Harness` is listed; this refuses a list that leaves one out at compile time.
 const allHarnesses = <const T extends readonly Harness[]>(list: [Exclude<Harness, T[number]>] extends [never] ? T : never): T => list;
-export const HARNESSES = allHarnesses(['claude-code', 'cursor', 'codex', 'copilot', 'gemini', 'grok']);
+export const HARNESSES = allHarnesses(['claude-code', 'cursor', 'codex', 'copilot', 'gemini', 'grok', 'vscode-copilot']);
 const PROMPT_CLASSES = ['no-tools', 'orchestration', 'research', 'edit-verify', 'edit-only', 'explore-only', 'shell-only', 'mixed'] as const satisfies readonly PromptClass[];
 const STATUSES = ['ok', 'error', 'none'] as const satisfies readonly ToolStatus[];
 const PLATFORMS: ReadonlySet<string> = new Set(['aix', 'android', 'cygwin', 'darwin', 'freebsd', 'haiku', 'linux', 'netbsd', 'openbsd', 'sunos', 'win32']);
 const SHELLS: ReadonlySet<string> = new Set(Object.values(ACTION_TABLES).flatMap((table) => Object.values(table.shells)));
-const REGISTRIES = ['npm', 'pypi', 'crates', 'go', 'rubygems', 'homebrew', 'skill', 'plugin', 'mcp'] as const;
+/** The registries a package comes from; a pull may also come from a skill, plugin, or MCP registry. */
+export const PACKAGE_REGISTRIES = ['npm', 'pypi', 'crates', 'go', 'rubygems', 'homebrew'] as const;
+const REGISTRIES = [...PACKAGE_REGISTRIES, 'skill', 'plugin', 'mcp'] as const;
 const DAY = /^\d{4}-\d{2}-\d{2}$/;
 const ID = /^[0-9a-f]{16}$/;
 /** A real date, not just its shape. `Date.parse` rolls 2026-02-31 over to March instead of failing, so the day must also survive the trip back to text. */
@@ -592,6 +615,35 @@ const parseTranscript = (value: unknown, at: string): SkeletonTranscript => {
   };
 };
 
+const DELTA_FIELDS = ['plugin', 'package', 'permissionMode', 'effort'] as const satisfies readonly DeltaField[];
+/** The kinds each field can take: a plugin comes or goes, a package only goes (an addition is adoption, which `pool` reads from the calls), and a mode or an effort changes. */
+const KINDS_OF = { plugin: ['added', 'removed'], package: ['removed'], permissionMode: ['changed'], effort: ['changed'] } as const satisfies { readonly [field in DeltaField]: readonly DeltaKind[] };
+/** The one metric each field's change is measured in, and the bucket edges that metric is held to. */
+const METRIC_OF = { plugin: 'callsPerSession', package: 'callsPerSession', permissionMode: 'callsPerSession', effort: 'thinking' } as const satisfies { readonly [field in DeltaField]: DeltaMetric };
+const METRIC_EDGES = { callsPerSession: 'count', thinking: 'tokens' } as const satisfies { readonly [metric in DeltaMetric]: BucketKind };
+const NO_NAME: ReadonlySet<string> = new Set();
+
+const nullOnly = (value: unknown, at: string): null => {
+  if (value !== null) throw new Refused(at, 'outside the vocabulary');
+  return null;
+};
+
+/**
+ * The entry of a delta, held to its field's own row. A plugin has no registry to pass, so only the word `private` stands for one; a package is a public name with its registry, or `private` with none; a mode
+ * and an effort are named by their field and carry no name. The change is a signed bucket of the field's metric.
+ */
+const parseDelta = (value: unknown, at: string): DeltaEntry => {
+  const raw = fieldsOf(value, at, ['deltaKind', 'field', 'name', 'registry', 'metric', 'change']);
+  const field = oneOf(DELTA_FIELDS, raw.field, under(at, 'field'));
+  const deltaKind = oneOf(KINDS_OF[field], raw.deltaKind, under(at, 'deltaKind'));
+  const metric = oneOf([METRIC_OF[field]], raw.metric, under(at, 'metric'));
+  const name = field === 'plugin' || field === 'package' ? inSet(field === 'package' ? PUBLIC_PACKAGES : NO_NAME, raw.name, under(at, 'name')) : nullOnly(raw.name, under(at, 'name'));
+  const registry = field === 'package' && name !== PRIVATE ? oneOf(PACKAGE_REGISTRIES, raw.registry, under(at, 'registry')) : nullOnly(raw.registry, under(at, 'registry'));
+  const change = raw.change;
+  if (typeof change !== 'number' || !Number.isInteger(change) || Math.abs(change) > EDGES[METRIC_EDGES[metric]].length) throw new Refused(under(at, 'change'), 'not a signed bucket');
+  return { deltaKind, field, name, registry, metric, change };
+};
+
 /** The skeleton in `value`, rebuilt from the fields read; else the first field that is not closed vocabulary, and why. */
 export const parseSkeleton = (value: unknown): { ok: true; skeleton: SessionSkeleton } | Refusal => {
   try {
@@ -601,7 +653,7 @@ export const parseSkeleton = (value: unknown): { ok: true; skeleton: SessionSkel
     if (raw.format !== SKELETON_FORMAT) throw new Refused('format', 'not a format this version reads');
     const id = textOf(raw.id, 'id');
     if (!ID.test(id)) throw new Refused('id', 'not a hash');
-    if (!Array.isArray(raw.deltas) || raw.deltas.length > 0) throw new Refused('deltas', 'not empty: a delta entry is not read yet');
+    const deltas = listOf(raw.deltas, 'deltas', parseDelta);
     const transcripts = listOf(raw.transcripts, 'transcripts', parseTranscript);
     if (transcripts.length === 0) throw new Refused('transcripts', 'empty');
     // A counting batch is what lifts the fetch cap, so a deposit has to hold something to derive from.
@@ -634,7 +686,7 @@ export const parseSkeleton = (value: unknown): { ok: true; skeleton: SessionSkel
         });
       });
     });
-    return { ok: true, skeleton: { format: SKELETON_FORMAT, id, transcripts, timingPrint, deltas: [] } };
+    return { ok: true, skeleton: { format: SKELETON_FORMAT, id, transcripts, timingPrint, deltas } };
   } catch (error) {
     if (error instanceof Refused) return { ok: false, field: error.field, reason: error.reason };
     throw error;

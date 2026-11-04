@@ -19,7 +19,7 @@ export interface Env {
   PSEUDONYM_KEY?: string;
   /** An Ed25519 private key as a JWK. */
   BUNDLE_SIGNING_KEY?: string;
-  /** Unset keeps deposits closed (V10). */
+  /** Unset keeps deposits closed. */
   COVENANT_VERSION?: string;
   /** How many bundles an account without access may fetch in one ISO week. */
   FETCH_CAP?: string;

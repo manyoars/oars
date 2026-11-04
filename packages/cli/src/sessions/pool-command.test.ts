@@ -13,6 +13,7 @@ import { REGISTRY_MAX_AGE_DAYS, VOCAB_SNAPSHOT_DATE } from './public-vocabulary.
 import type * as PoolWire from './pool-wire.js';
 import { session as sessionRow } from './pool-fixture.js';
 import { parseSkeleton, skeletonOf, VOCAB_VERSION, type PinnedKey } from './pool-wire.js';
+import { contentHash } from './read.js';
 import { deposit } from './store.js';
 import { addProject, cleanup, NOW, settledClock, stage, type Staged } from './test-support.js';
 
@@ -1321,7 +1322,7 @@ describe('oars pool fetch', () => {
     it('refuses a harness the pool does not serve before asking, and lists the ones it does', async () => {
       const { scene } = await signedScene();
       expect(await scene.cli('pool', 'fetch', '--harness', 'acme', '--harness-version', '2.1.314', '--server', POOL)).toBe(ExitCode.USAGE);
-      expect(scene.h.err.join('')).toContain('acme is not a harness the pool serves. Choose one of claude-code, cursor, codex, copilot, gemini, grok.');
+      expect(scene.h.err.join('')).toContain('acme is not a harness the pool serves. Choose one of claude-code, cursor, codex, copilot, gemini, grok, vscode-copilot.');
       expect(scene.seen).toEqual([]);
     });
 
@@ -1341,11 +1342,21 @@ describe('oars pool fetch', () => {
       expect(await scene.cli('pool', 'fetch', '--harness-version', '2.1.314', '--server', POOL, '--json')).toBe(ExitCode.OK);
       // The choice is on stderr before the request goes out, not after it.
       expect(arrivals[0]?.printedBefore).toContain('No --harness given: fetching cursor');
-      expect(scene.h.err.join('')).toContain('No --harness given: fetching cursor, the harness your local store holds the most sessions of (3 of 4). Pass --harness <name> to fetch another (claude-code, cursor, codex, copilot, gemini, grok).');
+      expect(scene.h.err.join('')).toContain('No --harness given: fetching cursor, the harness your local store holds the most sessions of (3 of 4). Pass --harness <name> to fetch another (claude-code, cursor, codex, copilot, gemini, grok, vscode-copilot).');
       expect(scene.document()).toMatchObject({ ok: true, harness: 'cursor' });
       // Counts stay here: the request names the harness and the versions, nothing else.
       expect(scene.seen[0]?.url).toBe(`${POOL}/bundle/cursor/2.1.314/${VOCAB_VERSION}`);
       expect(scene.seen[0]?.body).toBe('');
+    });
+
+    it('reads no store and prints no choice line for a signed-out fetch with no --harness', async () => {
+      const scene = setting();
+      mkdirSync(scene.staged.storeDir, { recursive: true });
+      holding(scene, [['cursor', 3]]);
+      expect(await scene.cli('pool', 'fetch', '--harness-version', '2.1.314', '--server', POOL)).toBe(ExitCode.AUTH);
+      expect(scene.h.err.join('')).toContain('oars pool login');
+      expect(scene.h.err.join('')).not.toContain('No --harness given');
+      expect(scene.seen).toEqual([]);
     });
 
     it('asks for claude-code and says so when the store is empty or two harnesses tie', async () => {
@@ -1562,5 +1573,111 @@ describe('with no sign-in and no server', () => {
     expect(await scene.cli('sessions', 'read', '--json')).toBe(ExitCode.OK);
     expect(scene.seen).toEqual([]);
     expect(existsSync(join(scene.staged.storeDir, 'pool-accounts.json'))).toBe(false);
+  });
+});
+
+describe('oars pool deposit: local deltas', () => {
+  const FOLDER = 'zz-delta-repo';
+  const sid = (n: number): string => `66666666-6666-4666-8666-${String(n).padStart(12, '0')}`;
+  const lineOf = (n: number, day: string, mode: string): string => JSON.stringify({ type: 'user', sessionId: sid(n), cwd: '/w', timestamp: `2026-05-${day}T0${String(n % 10)}:00:00Z`, permissionMode: mode, message: { role: 'user', content: 'a plain request' } });
+
+  /** Five sessions in a first week in `default` mode, and `later` in the next week in `plan` mode, all ended: the 5th of the later ones fills the after window. */
+  const weeks = async (later: number): Promise<Scene> => {
+    const scene = setting();
+    rmSync(join(scene.staged.projectsRoot, 'proj'), { recursive: true, force: true });
+    for (let n = 0; n < 5; n += 1) addProject(scene.staged, FOLDER, sid(n), [lineOf(n, '01', 'default')]);
+    for (let n = 0; n < later; n += 1) addProject(scene.staged, FOLDER, sid(10 + n), [lineOf(10 + n, '09', 'plan')]);
+    await deposit(scene.staged.runtime, { allow: [FOLDER], redactDomains: [], now: () => NOW });
+    await signIn(scene);
+    return scene;
+  };
+
+  const deposited = async (scene: Scene): Promise<ExitCode> => {
+    scene.h.out.length = 0;
+    return scene.cli('pool', 'deposit', '--server', POOL, '--json');
+  };
+
+  /** The deltas of every batch in the outbox, each with the batch it rode in. */
+  const carriedBy = (scene: Scene): { batch: number; entry: unknown }[] =>
+    batchBytes(scene).flatMap((bytes, batch) => {
+      const deltas: unknown = at(JSON.parse(bytes), 'deltas');
+      return Array.isArray(deltas) ? deltas.map((entry: unknown) => ({ batch, entry })) : [];
+    });
+
+  const logOf = (scene: Scene): string[] => {
+    const root = join(scene.staged.storeDir, 'pool-outbox');
+    const found = existsSync(root) ? readdirSync(root, { recursive: true, encoding: 'utf8' }).filter((name) => name.endsWith('deltas-sent.log')) : [];
+    return found.flatMap((name) => readFileSync(join(root, name), 'utf8').split('\n').filter((line) => line !== ''));
+  };
+
+  const MODE_DELTA = { deltaKind: 'changed', field: 'permissionMode', name: null, registry: null, metric: 'callsPerSession', change: 0 };
+
+  beforeEach(() => {
+    vi.mocked(skeletonOf).mockClear();
+  });
+
+  it('carries no delta while the after window holds 4 sessions', async () => {
+    const scene = await weeks(4);
+    expect(await deposited(scene)).toBe(ExitCode.OK);
+    expect(scene.document()).toMatchObject({ batched: 9 });
+    expect(carriedBy(scene)).toEqual([]);
+    expect(logOf(scene)).toEqual([]);
+  });
+
+  it('carries the delta in one batch once the after window fills, and marks it sent', async () => {
+    const scene = await weeks(5);
+    expect(await deposited(scene)).toBe(ExitCode.OK);
+    expect(scene.document()).toMatchObject({ batched: 10, refused: 0 });
+    const carried = carriedBy(scene);
+    expect(carried.map(({ entry }) => entry)).toEqual([MODE_DELTA]);
+    expect(logOf(scene)).toHaveLength(1);
+    // The batch that carries it is the 5th session of the after window, the filler.
+    const [only] = carried;
+    expect(at(JSON.parse(batchBytes(scene)[only?.batch ?? -1] ?? 'null'), 'id')).toBe(contentHash(['acct_one', sid(14)]));
+    // The entry names no session, no root, no date, and neither mode.
+    const text = JSON.stringify(carried);
+    expect(text).not.toMatch(/66666666|merkle|2026|default|plan/);
+  });
+
+  it('shows the delta under --explain, with a row for each of its fields', async () => {
+    const scene = await weeks(5);
+    expect(await deposited(scene)).toBe(ExitCode.OK);
+    scene.h.out.length = 0;
+    expect(await scene.cli('pool', 'outbox', '--explain', '--server', POOL)).toBe(ExitCode.OK);
+    const shown = scene.h.out.join('');
+    expect(scene.h.err.join('')).not.toContain('field_without_row');
+    for (const field of ['deltas', 'deltaKind', 'field', 'name', 'registry', 'metric', 'change']) expect(shown).toContain(`  ${field}: ${FIELD_ROWS[field] ?? 'no row'}`);
+  });
+
+  it('builds a delta once: a second deposit rebuilds every batch without it, and the mark stays', async () => {
+    const scene = await weeks(5);
+    expect(await deposited(scene)).toBe(ExitCode.OK);
+    const marks = logOf(scene);
+    expect(carriedBy(scene)).toHaveLength(1);
+    expect(await deposited(scene)).toBe(ExitCode.OK);
+    expect(scene.document()).toMatchObject({ batched: 10 });
+    // The limit: the batch that carried the delta is replaced by one without it, sent or not, since the mark was written with the batch.
+    expect(carriedBy(scene)).toEqual([]);
+    expect(logOf(scene)).toEqual(marks);
+  });
+
+  it('marks nothing when the deposit stops before the batch is written, and builds the delta again', async () => {
+    const scene = await weeks(5);
+    const real = vi.mocked(skeletonOf).getMockImplementation();
+    if (real === undefined) throw new Error('no projection to wrap');
+    vi.mocked(skeletonOf).mockImplementation((records, ...rest) => {
+      if (records.main.session === sid(14)) throw new Error('the deposit stopped');
+      return real(records, ...rest);
+    });
+    try {
+      expect(await deposited(scene)).not.toBe(ExitCode.OK);
+      expect(logOf(scene)).toEqual([]);
+      expect(carriedBy(scene)).toEqual([]);
+    } finally {
+      vi.mocked(skeletonOf).mockImplementation(real);
+    }
+    expect(await deposited(scene)).toBe(ExitCode.OK);
+    expect(carriedBy(scene).map(({ entry }) => entry)).toEqual([MODE_DELTA]);
+    expect(logOf(scene)).toHaveLength(1);
   });
 });

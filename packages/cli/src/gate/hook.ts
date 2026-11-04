@@ -255,7 +255,7 @@ export const runGateHook = async (stdin: string, deps: GateHookDeps): Promise<st
       answered.push({ kind: 'registry', v: GATE_VERSION, day: ts.slice(0, 10), ts, folder: folderKey(cwd ?? ''), class: crossing.class, state: read.answer.state, created: read.answer.created, name: crossing.name, latest: read.answer.latest });
     }
     const decision = decide(policy, answeredState === undefined ? undefined : { state: answeredState, created: read?.answer.created ?? null, noted }, deps.now(), random, crossing.name);
-    if (decision.kind === 'block' && decision.text !== null) blocks.push(decision.text);
+    if (decision.kind === 'block' && decision.text !== null && !blocks.includes(decision.text)) blocks.push(decision.text);
     if (decision.kind === 'note' && decision.text !== null) notes.push(decision.text);
     rows.push(recordOf(common, crossing, novelty, read, source, decision));
   }
