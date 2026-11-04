@@ -277,3 +277,42 @@ export const stageCopilot = (root: string, files: readonly CopilotFixture[]): st
   }
   return home;
 };
+
+/**
+ * One Grok Build `updates.jsonl` line: `{timestamp, method, params: {sessionId, update}}` (xai-org/grok-build @ 2bdd1d6, crates/codegen/xai-grok-shell
+ * storage/mod.rs:721-725; `timestamp` is epoch seconds). `update` is an ACP `SessionUpdate`, tagged by `sessionUpdate`.
+ */
+export const grokUpdate = (timestamp: number, update: object, sessionId = 'sess'): { timestamp: number; method: string; params: { sessionId: string; update: object } } => ({
+  timestamp,
+  method: 'session/update',
+  params: { sessionId, update },
+});
+
+export interface GrokFixture {
+  /** The session folder's name, which is the session id. */
+  id: string;
+  /** The working directory: `summary.json` `info.cwd`, and the percent-encoded name of the folder above the session. */
+  cwd: string;
+  /** Lines as objects, or raw text for a torn file; null writes no `updates.jsonl`. */
+  updates: readonly unknown[] | string | null;
+  /** `usage.json`; absent writes none (a session that never finished a turn has no such file). */
+  usage?: object;
+  /** Merged over the `summary.json` this helper writes. */
+  summary?: object;
+}
+
+/** A Grok home holding the given sessions under `sessions/<encoded-cwd>/<id>/` (docs/user-guide/17-sessions.md:22-40); returns the home, which is always under `root`. */
+export const stageGrok = (root: string, files: readonly GrokFixture[]): string => {
+  const home = join(root, 'grok-home');
+  for (const file of files) {
+    const dir = join(home, 'sessions', encodeURIComponent(file.cwd), file.id);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      join(dir, 'summary.json'),
+      JSON.stringify({ info: { id: file.id, cwd: file.cwd }, created_at: '2026-06-01T10:00:00Z', num_messages: 2, current_model_id: 'grok-build', ...file.summary }),
+    );
+    if (file.updates !== null) writeFileSync(join(dir, 'updates.jsonl'), typeof file.updates === 'string' ? file.updates : `${file.updates.map((line) => JSON.stringify(line)).join('\n')}\n`);
+    if (file.usage !== undefined) writeFileSync(join(dir, 'usage.json'), JSON.stringify(file.usage));
+  }
+  return home;
+};

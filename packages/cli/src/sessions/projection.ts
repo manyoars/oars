@@ -70,9 +70,13 @@ const flagWords = (program: string, args: readonly WordOfCommand[]): string[] =>
 
 export const isAdmittedProgram = (vocab: Vocabulary, program: string): boolean => vocab.programs.has(program) || PUBLIC_PROGRAMS.has(program);
 
+/** `shellTarget` cuts a subcommand at this many characters, and so does a `run` word (`RUN_WORD_CHARS`, extract.ts), so a stored word this long (a program too, `programOf`) may be a prefix of a longer private one. */
+const STORED_SUBCOMMAND_CUT = 30;
+
 /** One simple command to `program`, `subcommand`, and `flags`. An unlisted subcommand or flag is dropped and not counted: its program already pools. */
 export const projectProgram = (vocab: Vocabulary, program: string, args: readonly WordOfCommand[]): ProjectedProgram => {
-  if (!isAdmittedProgram(vocab, program)) return PRIVATE_PROGRAM;
+  // A program cut at the limit may be the front of a longer private name (`<30 characters>-acme`), so it is never a list member (register row A53).
+  if (program.length >= STORED_SUBCOMMAND_CUT || !isAdmittedProgram(vocab, program)) return PRIVATE_PROGRAM;
   const subs = subcommandsOf(vocab, program);
   const subcommand = args.filter(isPositional).find(({ text }) => subs.has(text))?.text ?? null;
   const listed = flagsOf(vocab, program);
@@ -88,9 +92,6 @@ export const projectShell = (vocab: Vocabulary, command: string, redact: Redacto
   const read = shellCommands(command, redact);
   return projectedShell(read.length === 0 ? [PRIVATE_PROGRAM] : read.map(({ program, args }) => projectProgram(vocab, program, args)));
 };
-
-/** `shellTarget` cuts a subcommand at this many characters, and so does a `run` word (`RUN_WORD_CHARS`, extract.ts), so a stored word this long may be a prefix of a longer private one. */
-const STORED_SUBCOMMAND_CUT = 30;
 
 /** The first command of a stored call as its class A `target` reads: the program and the first plain word after it. A target cut at the subcommand limit, masked by redaction, or not a program and one word projects `private`. */
 const projectTarget = (vocab: Vocabulary, target: string | null): ProjectedProgram => {
