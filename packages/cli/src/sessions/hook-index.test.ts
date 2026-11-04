@@ -361,7 +361,9 @@ describe('the call shapes in the index', () => {
   const SHAPE = toolShapeId('Monitor', ['query']);
   const calls = (name: string) =>
     Array.from({ length: 10 }, (_, n) => toolRow(name, n, 'Monitor', { ts: '2026-11-01T00:00:00.000Z', status: n < 2 ? 'error' : 'ok', keys: ['query'], durationMs: 5, toolUseId: `${name}-${String(n)}`, harnessVersion: '2.1.300', prompt: 0 }));
-  const indexOver = (names: readonly string[]) => buildIndex({ sessions: [], prompts: [], errors: [], subagents: [], tools: names.flatMap(calls), newerCaptures: 0 }, [], '2026-11-02T00:00:00.000Z');
+  // Calls of a tool no action table lists that never fail, so `Monitor` (also `other`) has a base rate to beat.
+  const quiet = Array.from({ length: 100 }, (_, n) => toolRow('q', n, 'Quiet', { ts: '2026-11-01T00:00:00.000Z', status: 'ok', keys: ['x'], durationMs: 5, toolUseId: `q-${String(n)}`, harnessVersion: '2.1.300', prompt: 0 }));
+  const indexOver = (names: readonly string[]) => buildIndex({ sessions: [], prompts: [], errors: [], subagents: [], tools: [...names.flatMap(calls), ...quiet], newerCaptures: 0 }, [], '2026-11-02T00:00:00.000Z');
 
   it('holds a shape over the fit floors by its shape ID', () => {
     expect(indexOver(['a', 'b', 'c']).fit?.[SHAPE]).toMatchObject({ family: 'fit', tool: 'Monitor', keys: ['query'], n: 3, count: 6, calls: 30 });
