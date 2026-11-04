@@ -131,14 +131,17 @@ const sightsToHandOff = (payload: string, npm: { folder: string }, home: string,
 // One sight after the hand-off, run again if the box was so loaded that the hook was ended before it wrote its row (or, when `printed` is set, before it printed): with the lock or the
 // answer kept it asks nothing, so a repeat can start no manager. At most MAX_SIGHTS, then the case fails. Returns the sight's stdout, so a case that expects a note or a deny reads it.
 const sightWithRow = (payload: string, id: string, npm: { folder: string }, home: string, printed = false): string => {
+  const seen: string[] = [];
   for (let tries = 0; tries < MAX_SIGHTS; tries += 1) {
     const before = rowsOf(home).length;
+    const began = Date.now();
     const result = runHook(payload.replace('"u1"', `"${id}"`), [], npm.folder, home);
+    seen.push(`#${String(tries + 1)} ${String(Date.now() - began)} ms, stdout ${String(result.stdout.length)} bytes`);
     expect(result.status).toBe(0);
     if (!printed) expect(result.stdout).toBe('');
     if (rowsOf(home).length > before && (!printed || result.stdout !== '')) return result.stdout;
   }
-  return expect.unreachable(`no row or no output in ${String(MAX_SIGHTS)} sights`);
+  return expect.unreachable(`no row or no output in ${String(MAX_SIGHTS)} sights: ${seen.join('; ')}`);
 };
 
 /** How many lines of the manager's log read `word`. */
