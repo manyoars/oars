@@ -2,12 +2,12 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { run } from '../cli.js';
 import { ExitCode } from '../errors.js';
 import { harness, removeTestDirs } from '../test-support.js';
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { appendFileSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { readRecalls, recallsPath } from './recall-object.js';
 import { MISS_TEXT } from './recall-render.js';
 import { tools } from './order-fixture.js';
-import { frame, prompt, session } from './pool-fixture.js';
+import { error as errorRow, frame, prompt, session } from './pool-fixture.js';
 import { nextDay } from './read-day-move.js';
 import { addProject, cleanup, composers, FIXTURES, folders, stage, stageCursor, stageRawCursor } from './test-support.js';
 
@@ -366,6 +366,19 @@ describe('oars sessions', () => {
     expect(await run(['sessions', 'recall', '--family', 'tool-day', '--since', '3'], deps)).toBe(ExitCode.USAGE);
     expect(err.join('')).toContain('oars sessions read --family tool-day');
     expect((await readRecalls(staged.storeDir)).map((recall) => recall.answer.kind)).toEqual(['hit']);
+  });
+
+  it('answers a pull from the stored pool after the store moves, deriving and writing no new reads file', async () => {
+    const { deps, out, staged } = setup();
+    expect(await run(['sessions', 'deposit', '--allow', 'proj'], deps)).toBe(ExitCode.OK);
+    const readsDir = join(staged.storeDir, 'reads');
+    expect(await run(['sessions', 'recall', '--family', 'recovery'], deps)).toBe(ExitCode.OK);
+    const stored = readdirSync(readsDir);
+    appendFileSync(join(staged.storeDir, 'observations.jsonl'), `${JSON.stringify(errorRow('a', 'Monitor | second shape', { tool: 'Monitor', example: 'text', ts: '2026-06-02T00:00:00.000Z' }))}
+`);
+    out.length = 0;
+    expect(await run(['sessions', 'recall', '--family', 'recovery'], deps)).toBe(ExitCode.OK);
+    expect(readdirSync(readsDir)).toEqual(stored);
   });
 
   it('records a recall through the --error form under its signature text, and the answer is still the signature result', async () => {
