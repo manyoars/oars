@@ -27,6 +27,7 @@ import { CAPTURE_VERSION, OLDEST_READABLE_CAPTURE, type StepRow } from './schema
 import { deposit, frozenSessions, loadStore, readCalls, readRedactDomains, readSkeletons, skippedFolders, slugOf, type SessionsRuntime, type SkippedScope, type Store } from './store.js';
 import { formatStepCounters, inputKey, newContext, readSteps, stampKey, runDeposit, runStep, stepCounters, stuckSteps, tryLog, type StuckStep } from './steps.js';
 import { formatSelfBaseline, selfBaseline as selfBaselineOf, type SelfBaselineResult } from './baseline.js';
+import { staleBatchesAnywhere } from './pool-outbox.js';
 import { auditCounts, auditStore, formatAudit, type SessionAudit, type T0Counts } from './audit.js';
 import { readSurvival, recordSurvival, SURVIVAL_DAYS } from './survival.js';
 import { CAPTURE_INVARIANTS, formatSessionResults, formatVerify, verifyAll, verifyCaptured, verifySessions, type InvariantResult, type SessionVerification } from './verify.js';
@@ -260,6 +261,8 @@ export interface VerifyReport {
   audit: { counts: T0Counts; sessions: SessionAudit[] };
   /** Layer 2 at T0, local (spec 2.2): each session's week against the operator's own other weeks on its harness; `not run` below 1,000 calls or 4 baseline weeks. */
   selfBaseline: SelfBaselineResult[];
+  /** Batches in any server's outbox built under an older vocabulary or field list: never printed, never sent, and removed by the next `pool deposit`. Counted from local folders; nothing is sent. */
+  staleBatches: number;
 }
 
 /** With `strict`, any violated invariant, stuck step, `merkle: root mismatch`, or `merkle: counts do not bind` also fails the command (exit 4) after the full report is printed; the report is built first so callers can emit it. */
@@ -290,7 +293,8 @@ export const sessionsVerify = async (deps: SessionsDeps, options: { session: str
     // A verify that got here has succeeded, so a verify streak is the one this run ends and is not listed.
     const stuck = stuckSteps(await readSteps(storeDir).catch((): StepRow[] => [])).filter((entry) => entry.step !== 'verify');
     const scope = await scopeOf(runtime);
-    const report: VerifyReport = { sessions: skeletons.length, unreadable, cvFrozen: frozen.size, scope, invariants: results.map((result) => ({ ...result, pass: result.violations === 0 })), stuck, sessionResults, audit, selfBaseline };
+    const staleBatches = await staleBatchesAnywhere(storeDir);
+    const report: VerifyReport = { sessions: skeletons.length, unreadable, cvFrozen: frozen.size, scope, invariants: results.map((result) => ({ ...result, pass: result.violations === 0 })), stuck, sessionResults, audit, selfBaseline, staleBatches };
     const failed = [...results.filter((result) => result.violations > 0).map((result) => result.name), ...(unreadable > 0 ? ['unreadable skeletons'] : []), ...merkleFailed, ...stuck.map((entry) => `stuck: ${entry.step}`)];
     const stuckLines = stuck.map((entry) => `FAIL  ${entry.step} is stuck: key ${entry.key} failed ${String(entry.runs)} runs in a row: ${entry.error}`);
     const highWater = mine([...store.sessions, ...store.subagents]).map((session) => `${session.session}:${String(session.rev)}:${session.cv}`).sort();
@@ -299,7 +303,7 @@ export const sessionsVerify = async (deps: SessionsDeps, options: { session: str
       failed,
       report,
       document: { ok: true, ...report, newerCaptures: store.newerCaptures },
-      text: [formatVerify(results, skeletons.length), formatAudit(audits), formatSelfBaseline(selfBaseline), ...(resultLines === '' ? [] : [resultLines]), ...(frozen.size > 0 ? [`${String(frozen.size)} cv-frozen sessions: behind the current capture version, but the transcript is gone from the harness and raw/ (or, for a Cursor session, the composer is gone from Cursor), so they cannot be captured again`] : []), ...skippedNotice(scope), ...newerNotice(store), ...(unreadable > 0 ? [`FAIL  ${String(unreadable)} unreadable skeleton files (torn or corrupted); redeposit to rebuild them`] : []), ...stuckLines].join('\n'),
+      text: [formatVerify(results, skeletons.length), formatAudit(audits), formatSelfBaseline(selfBaseline), ...(resultLines === '' ? [] : [resultLines]), ...(frozen.size > 0 ? [`${String(frozen.size)} cv-frozen sessions: behind the current capture version, but the transcript is gone from the harness and raw/ (or, for a Cursor session, the composer is gone from Cursor), so they cannot be captured again`] : []), ...skippedNotice(scope), ...(staleBatches > 0 ? [`${String(staleBatches)} outbox batches were built under an older vocabulary or field list; they will never be sent, and oars pool deposit removes them`] : []), ...newerNotice(store), ...(unreadable > 0 ? [`FAIL  ${String(unreadable)} unreadable skeleton files (torn or corrupted); redeposit to rebuild them`] : []), ...stuckLines].join('\n'),
     };
     const cvBehind = results.find((result) => result.name === CAPTURE_INVARIANTS[0])?.violations ?? 0;
     // The key is the sessions checked, each at its rev and cv, and the code's ev (spec 4.2).
