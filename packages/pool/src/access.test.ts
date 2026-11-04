@@ -26,7 +26,7 @@ describe('batchCounts', () => {
   });
 
   it('holds a mixed batch to its strictest harness, subagents folded in', () => {
-    const mixed: SessionSkeleton = { ...cursor, transcripts: [...cursor.transcripts, ...claude.transcripts.map((transcript) => ({ ...transcript, spawnedIn: 0 }))] };
+    const mixed: SessionSkeleton = { ...cursor, transcripts: [...cursor.transcripts, ...claude.transcripts.map((transcript) => ({ ...transcript }))] };
     expect(batchCounts('skeleton', mixed, ONE)).toBe(false);
     expect(batchCounts('committed', mixed, ONE)).toBe(true);
   });
@@ -41,7 +41,7 @@ describe('batchCounts', () => {
   it('finds the prompt in one transcript and the step in another', () => {
     const [main] = claude.transcripts;
     if (main === undefined) throw new Error('no transcript');
-    const split: SessionSkeleton = { ...claude, transcripts: [{ ...main, tools: [] }, { ...main, spawnedIn: 0, prompts: [] }] };
+    const split: SessionSkeleton = { ...claude, transcripts: [{ ...main, tools: [] }, { ...main, prompts: [] }] };
     expect(batchCounts('committed', split, ONE)).toBe(true);
   });
 });

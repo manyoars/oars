@@ -7,7 +7,7 @@ import { FRAMEWORKS, isPublicMcpTool, isRegistryVersion, LANGUAGES, LITERAL, PRI
 import type { Cell } from './cells.js';
 import type { Motif } from './motif.js';
 import type { Read, ReadAsOf } from './read.js';
-import type { Frame, Harness, PromptClass, PromptObservation, PullIdentity, SessionObservation, ShellIdentity, StepEdge, StepIdentity, StepObservation, ToolObservation, ToolStatus, Usage } from './schema.js';
+import type { Frame, Harness, PromptClass, PromptObservation, PullIdentity, SessionObservation, ShellIdentity, StepIdentity, StepObservation, ToolObservation, ToolStatus, Usage } from './schema.js';
 
 export const SKELETON_FORMAT = 2;
 export const BUNDLE_FORMAT = 1;
@@ -33,16 +33,19 @@ export const bucketOf = (kind: BucketKind, value: number): number => EDGES[kind]
 /** The lowest value of a bucket, which is what a derivation counts a bucketed value as: it never reads above what the sender held. */
 export const floorOf = (kind: BucketKind, bucket: number): number => EDGES[kind][bucket - 1] ?? 0;
 
-/** A step without what a server can compute: `n` is its call's, and `frameId` hashes a frame the skeleton holds. Its cost is two buckets, never the exact counts (Section 1.2). */
-export type SkeletonStep = Omit<StepObservation, 'n' | 'frameId' | 'cost'> & {
+/**
+ * A step without what a server can compute or no derivation reads: `n` is its call's position, `frameId` hashes a frame the skeleton holds, and `edges` are read by no cell. Its cost is
+ * two buckets, never the exact counts. `parent` is the position of the spawning call in the main run's `tools` (Section 1.2's `parent` ordinal).
+ */
+export type SkeletonStep = Omit<StepObservation, 'n' | 'frameId' | 'cost' | 'edges'> & {
   /** A `tokens` bucket of the step's tokens. */
   tokens: number | null;
   /** An `ms` bucket of the step's time. */
   ms: number | null;
 };
 
+/** A call's order is its position in `tools`, and its `prompt` is a position in the same transcript's `prompts`: ordinals inside the batch, never the session's own numbers. */
 export interface SkeletonTool {
-  n: number;
   side: boolean;
   prompt: number | null;
   status: ToolStatus;
@@ -55,7 +58,6 @@ export interface SkeletonTool {
 export type SkeletonUsage = { [field in keyof Usage]: number };
 
 export interface SkeletonPrompt {
-  index: number;
   cls: PromptClass;
   /** A `count` bucket. */
   errors: number;
@@ -66,8 +68,6 @@ export interface SkeletonPrompt {
 }
 
 export interface SkeletonTranscript {
-  /** Which entry of `transcripts` spawned this one, the address a subagent's `parent` and `spawned` edge resolve against. A position, because a skeleton holds no session id. */
-  spawnedIn: number | null;
   harness: Harness;
   frame: Frame;
   prompts: SkeletonPrompt[];
@@ -149,13 +149,17 @@ export const projectedSteps = (tool: ToolObservation, read: ShellReader): StepOb
   });
 };
 
-const transcriptOf = ({ session, prompts, tools }: SessionRecords['transcripts'][number], spawnedIn: number | null, read: ShellReader): SkeletonTranscript | null => {
+/** A transcript's calls in the order they ran, which is the order a skeleton holds them in. */
+const byCall = (tools: readonly ToolObservation[]): ToolObservation[] => [...tools].sort((a, b) => a.n - b.n);
+
+const transcriptOf = ({ session, prompts, tools }: SessionRecords['transcripts'][number], spawners: ReadonlyMap<number, number>, read: ShellReader): SkeletonTranscript | null => {
   if (session.frame === undefined) return null;
   const framedPrompts: SkeletonPrompt[] = [];
-  for (const { index, cls, errors, wallSec, usage, frame } of prompts) {
+  const promptAt = new Map<number, number>();
+  for (const { index, cls, errors, wallSec, usage, frame } of [...prompts].sort((a, b) => a.index - b.index)) {
     if (frame === undefined) return null;
+    promptAt.set(index, framedPrompts.length);
     framedPrompts.push({
-      index,
       cls,
       errors: bucketOf('count', errors),
       wallSec: wallSec === null ? null : bucketOf('seconds', wallSec),
@@ -164,10 +168,15 @@ const transcriptOf = ({ session, prompts, tools }: SessionRecords['transcripts']
     });
   }
   const steppedTools: SkeletonTool[] = [];
-  for (const tool of tools) {
+  let unrecorded = 0;
+  for (const tool of byCall(tools)) {
     if (tool.steps === undefined) return null;
-    const { n, side, prompt, status, durationMs } = tool;
-    const steps = projectedSteps(tool, read).map(({ seg, action, native, identity, status: reported, cost, parent, edges }): SkeletonStep => ({
+    const { side, prompt, status, durationMs } = tool;
+    // A subagent's call names the prompt that spawned it, which its own transcript holds no record of: such a number takes the next position past the prompts, one per distinct number, so
+    // the calls that shared a prompt still share one, and no position reads as a prompt.
+    if (prompt !== null && !promptAt.has(prompt)) promptAt.set(prompt, framedPrompts.length + unrecorded++);
+    const promptPosition = prompt === null ? null : (promptAt.get(prompt) ?? null);
+    const steps = projectedSteps(tool, read).map(({ seg, action, native, identity, status: reported, cost, parent }): SkeletonStep => ({
       seg,
       action,
       native,
@@ -175,20 +184,20 @@ const transcriptOf = ({ session, prompts, tools }: SessionRecords['transcripts']
       status: reported,
       tokens: cost.tokens === null ? null : bucketOf('tokens', cost.tokens),
       ms: cost.durationMs === null ? null : bucketOf('ms', cost.durationMs),
-      parent,
-      edges,
+      parent: parent === null ? null : (spawners.get(parent) ?? null),
     }));
-    steppedTools.push({ n, side, prompt, status, durationMs, steps });
+    steppedTools.push({ side, prompt: promptPosition, status, durationMs, steps });
   }
-  return { spawnedIn, harness: session.harness ?? 'claude-code', frame: session.frame, prompts: framedPrompts, tools: steppedTools };
+  return { harness: session.harness ?? 'claude-code', frame: session.frame, prompts: framedPrompts, tools: steppedTools };
 };
 
 /** The skeleton of a session; null when any record of it was captured before steps and frames, which holds no closed reading to send. */
 export const skeletonOf = (records: SessionRecords, id: string, read: ShellReader): SessionSkeleton | null => {
-  const positions = new Map<string | null, number>(records.transcripts.map(({ session }, index) => [session.session, index]));
+  // A subagent's step names the call that spawned it by that call's `n` in the main run, which the skeleton holds as the call's position.
+  const spawners = new Map(byCall(records.transcripts[0]?.tools ?? []).map(({ n }, position) => [n, position]));
   const transcripts: SkeletonTranscript[] = [];
   for (const entry of records.transcripts) {
-    const transcript = transcriptOf(entry, positions.get(entry.session.spawnedIn) ?? null, read);
+    const transcript = transcriptOf(entry, spawners, read);
     if (transcript === null) return null;
     transcripts.push(transcript);
   }
@@ -287,7 +296,6 @@ const allHarnesses = <const T extends readonly Harness[]>(list: [Exclude<Harness
 const HARNESSES = allHarnesses(['claude-code', 'cursor', 'codex', 'copilot', 'gemini', 'grok']);
 const PROMPT_CLASSES = ['no-tools', 'orchestration', 'research', 'edit-verify', 'edit-only', 'explore-only', 'shell-only', 'mixed'] as const satisfies readonly PromptClass[];
 const STATUSES = ['ok', 'error', 'none'] as const satisfies readonly ToolStatus[];
-const EDGE_KINDS = ['next', 'spawned', 'retried', 'after-error'] as const satisfies readonly StepEdge['kind'][];
 const PLATFORMS: ReadonlySet<string> = new Set(['aix', 'android', 'cygwin', 'darwin', 'freebsd', 'haiku', 'linux', 'netbsd', 'openbsd', 'sunos', 'win32']);
 const SHELLS: ReadonlySet<string> = new Set(Object.values(ACTION_TABLES).flatMap((table) => Object.values(table.shells)));
 const REGISTRIES = ['npm', 'pypi', 'crates', 'go', 'rubygems', 'homebrew', 'skill', 'plugin', 'mcp'] as const;
@@ -395,13 +403,8 @@ const parseNative = (harness: Harness, value: unknown, at: string): string => {
   throw new Refused(at, 'outside the vocabulary');
 };
 
-const parseEdge = (value: unknown, at: string): StepEdge => {
-  const raw = fieldsOf(value, at, ['kind', 'n', 'seg']);
-  return { kind: oneOf(EDGE_KINDS, raw.kind, under(at, 'kind')), n: countOf(raw.n, under(at, 'n')), seg: countOf(raw.seg, under(at, 'seg')) };
-};
-
 const parseStep = (harness: Harness, value: unknown, at: string): SkeletonStep => {
-  const raw = fieldsOf(value, at, ['seg', 'action', 'native', 'identity', 'status', 'tokens', 'ms', 'parent', 'edges']);
+  const raw = fieldsOf(value, at, ['seg', 'action', 'native', 'identity', 'status', 'tokens', 'ms', 'parent']);
   const action = oneOf(CANONICAL_ACTIONS, raw.action, under(at, 'action'));
   return {
     seg: countOf(raw.seg, under(at, 'seg')),
@@ -412,14 +415,12 @@ const parseStep = (harness: Harness, value: unknown, at: string): SkeletonStep =
     tokens: orNull(raw.tokens, under(at, 'tokens'), (entry, entryAt) => bucketIn('tokens', entry, entryAt)),
     ms: orNull(raw.ms, under(at, 'ms'), (entry, entryAt) => bucketIn('ms', entry, entryAt)),
     parent: orNull(raw.parent, under(at, 'parent'), countOf),
-    edges: listOf(raw.edges, under(at, 'edges'), parseEdge),
   };
 };
 
 const parseTool = (harness: Harness, value: unknown, at: string): SkeletonTool => {
-  const raw = fieldsOf(value, at, ['n', 'side', 'prompt', 'status', 'durationMs', 'steps']);
+  const raw = fieldsOf(value, at, ['side', 'prompt', 'status', 'durationMs', 'steps']);
   return {
-    n: countOf(raw.n, under(at, 'n')),
     side: booleanOf(raw.side, under(at, 'side')),
     prompt: orNull(raw.prompt, under(at, 'prompt'), countOf),
     status: oneOf(STATUSES, raw.status, under(at, 'status')),
@@ -429,9 +430,8 @@ const parseTool = (harness: Harness, value: unknown, at: string): SkeletonTool =
 };
 
 const parsePrompt = (value: unknown, at: string): SkeletonPrompt => {
-  const raw = fieldsOf(value, at, ['index', 'cls', 'errors', 'wallSec', 'usage', 'frame']);
+  const raw = fieldsOf(value, at, ['cls', 'errors', 'wallSec', 'usage', 'frame']);
   return {
-    index: countOf(raw.index, under(at, 'index')),
     cls: oneOf(PROMPT_CLASSES, raw.cls, under(at, 'cls')),
     errors: bucketIn('count', raw.errors, under(at, 'errors')),
     wallSec: orNull(raw.wallSec, under(at, 'wallSec'), (entry, entryAt) => bucketIn('seconds', entry, entryAt)),
@@ -441,10 +441,9 @@ const parsePrompt = (value: unknown, at: string): SkeletonPrompt => {
 };
 
 const parseTranscript = (value: unknown, at: string): SkeletonTranscript => {
-  const raw = fieldsOf(value, at, ['spawnedIn', 'harness', 'frame', 'prompts', 'tools']);
+  const raw = fieldsOf(value, at, ['harness', 'frame', 'prompts', 'tools']);
   const harness = oneOf(HARNESSES, raw.harness, under(at, 'harness'));
   return {
-    spawnedIn: orNull(raw.spawnedIn, under(at, 'spawnedIn'), countOf),
     harness,
     frame: parseFrame(raw.frame, under(at, 'frame')),
     prompts: listOf(raw.prompts, under(at, 'prompts'), parsePrompt),
@@ -466,9 +465,18 @@ export const parseSkeleton = (value: unknown): { ok: true; skeleton: SessionSkel
     if (transcripts.length === 0) throw new Refused('transcripts', 'empty');
     // A counting batch is what lifts the fetch cap, so a deposit has to hold something to derive from.
     if (transcripts.every(({ prompts, tools }) => prompts.length === 0 && tools.length === 0)) throw new Refused('transcripts', 'holds no prompt and no tool');
-    transcripts.forEach(({ spawnedIn }, index) => {
-      if (spawnedIn !== null && spawnedIn >= transcripts.length) throw new Refused(`transcripts[${String(index)}].spawnedIn`, 'no such transcript');
-    });
+    // Positions are the only ordinals on the wire, so each must name something the batch holds.
+    const mainCalls = transcripts[0]?.tools.length ?? 0;
+    transcripts.forEach(({ prompts, tools }, index) =>
+      tools.forEach(({ prompt, steps }, call) => {
+        const callAt = `transcripts[${String(index)}].tools[${String(call)}]`;
+        // Past the prompts it names a prompt with no record, numbered in order of appearance: no more of those than calls.
+        if (prompt !== null && prompt >= prompts.length + tools.length) throw new Refused(`${callAt}.prompt`, 'no such prompt position');
+        steps.forEach(({ parent }, position) => {
+          if (parent !== null && parent >= mainCalls) throw new Refused(`${callAt}.steps[${String(position)}].parent`, 'no such call in the main run');
+        });
+      }),
+    );
     return { ok: true, skeleton: { format: SKELETON_FORMAT, id, transcripts, deltas: [] } };
   } catch (error) {
     if (error instanceof Refused) return { ok: false, field: error.field, reason: error.reason };

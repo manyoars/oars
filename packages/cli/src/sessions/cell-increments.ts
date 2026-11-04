@@ -101,7 +101,7 @@ export const projectedStore = (store: Store, read: ShellReader): Store => ({ ...
 const NO_USAGE: Usage = { input: 0, cacheWrite: 0, cacheRead: 0, output: 0, thinking: 0 };
 
 /** A skeleton's transcript as the record `deriveCells` reads. Everything a skeleton leaves out stays empty, so no derivation here can come to depend on it unnoticed. */
-const sessionRecord = (id: string, parent: string | null, spawnedIn: string | null, { harness, frame }: SkeletonTranscript): SessionObservation => ({
+const sessionRecord = (id: string, parent: string | null, { harness, frame }: SkeletonTranscript): SessionObservation => ({
   kind: 'session',
   cv: '',
   sid: '',
@@ -110,7 +110,7 @@ const sessionRecord = (id: string, parent: string | null, spawnedIn: string | nu
   parent,
   agentType: null,
   spawnedBy: null,
-  spawnedIn,
+  spawnedIn: null,
   rev: 1,
   at: '',
   bytes: 0,
@@ -142,7 +142,7 @@ const sessionRecord = (id: string, parent: string | null, spawnedIn: string | nu
 });
 
 const promptRecords = (id: string, { prompts }: SkeletonTranscript): PromptObservation[] =>
-  prompts.map(({ index, cls, errors, wallSec, usage, frame }) => ({
+  prompts.map(({ cls, errors, wallSec, usage, frame }, index) => ({
     kind: 'prompt',
     v: '',
     session: id,
@@ -177,7 +177,7 @@ const promptRecords = (id: string, { prompts }: SkeletonTranscript): PromptObser
   }));
 
 const toolRecords = (id: string, main: string, { tools }: SkeletonTranscript): ToolObservation[] =>
-  tools.map(({ n, side, prompt, status, durationMs, steps }) => ({
+  tools.map(({ side, prompt, status, durationMs, steps }, n) => ({
     kind: 'tool',
     cv: '',
     sid: '',
@@ -199,6 +199,7 @@ const toolRecords = (id: string, main: string, { tools }: SkeletonTranscript): T
     prompt,
     steps: steps.map(({ tokens, ms, ...step }) => ({
       ...step,
+      edges: [],
       cost: { tokens: tokens === null ? null : floorOf('tokens', tokens), durationMs: ms === null ? null : floorOf('ms', ms) },
       n,
       frameId: '',
@@ -213,7 +214,7 @@ export const storeOf = (skeletons: readonly SessionSkeleton[]): Store => {
     const main = nameOf(0);
     transcripts.forEach((transcript, index) => {
       const session = nameOf(index);
-      (index === 0 ? store.sessions : store.subagents).push(sessionRecord(session, index === 0 ? null : main, transcript.spawnedIn === null ? null : nameOf(transcript.spawnedIn), transcript));
+      (index === 0 ? store.sessions : store.subagents).push(sessionRecord(session, index === 0 ? null : main, transcript));
       store.prompts.push(...promptRecords(session, transcript));
       store.tools.push(...toolRecords(session, main, transcript));
     });
