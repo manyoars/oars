@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { frame, prompt, session, step, storedNames, store, tool } from './pool-fixture.js';
-import { parseSkeleton, sessionsOf, skeletonOf, type SessionSkeleton } from './pool-wire.js';
+import { frame, printOf, prompt, session, sessionsFrom, step, store, storedNames, tool } from './pool-fixture.js';
+import { parseSkeleton, skeletonOf, type SessionSkeleton } from './pool-wire.js';
 import type { Harness } from './schema.js';
 import { LITERAL, PRIVATE } from './public-vocabulary.js';
 
@@ -11,9 +11,9 @@ const framedPrompt = (id: string, index: number, over: Parameters<typeof prompt>
 const shell = step(0, 0, 'shell.exec', { native: 'Bash', identity: { program: 'git', sub: 'push', flags: ['--force'] } });
 
 const skeletonFrom = (from: ReturnType<typeof store>): SessionSkeleton | null => {
-  const [only] = sessionsOf(from);
+  const [only] = sessionsFrom(from);
   if (only === undefined) throw new Error('the store has no session');
-  return skeletonOf(only, '0123456789abcdef', storedNames);
+  return skeletonOf(only, '0123456789abcdef', storedNames, printOf);
 };
 
 const sample = (): SessionSkeleton => {
@@ -53,7 +53,7 @@ const refusedField = (value: unknown): string => {
 };
 
 const firstStep = ['transcripts', 0, 'tools', 0, 'steps', 0];
-const withStep = (over: object): unknown => sent(firstStep, JSON.parse(JSON.stringify({ ...shell, n: undefined, seg: undefined, frameId: undefined, edges: undefined, cost: undefined, tokens: null, ms: null, ...over })));
+const withStep = (over: object): unknown => sent(firstStep, JSON.parse(JSON.stringify({ ...shell, n: undefined, seg: undefined, frameId: undefined, edges: undefined, cost: undefined, tokens: null, ms: null, remainingTokens: 0, agentType: null, ...over })));
 const stepField = 'transcripts[0].tools[0].steps[0]';
 
 describe('skeletonOf', () => {
@@ -81,7 +81,7 @@ describe('skeletonOf', () => {
       prompts: [framedPrompt('s1', 0)],
       tools: [tool('s1', 0, 'Bash', { steps: [shell] }), tool('s1~agent-x', 0, 'Bash', { parent: 's1', steps: [shell] })],
     });
-    expect(sessionsOf(from)).toHaveLength(1);
+    expect(sessionsFrom(from)).toHaveLength(1);
     const skeleton = skeletonFrom(from);
     expect(skeleton?.transcripts).toHaveLength(2);
     expect(skeleton?.transcripts[1]?.tools).toHaveLength(1);

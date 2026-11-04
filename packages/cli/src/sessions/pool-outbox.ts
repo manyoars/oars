@@ -35,6 +35,7 @@ export const batchHash = (bytes: string): string => createHash('sha256').update(
  */
 export const FIELD_ROWS: { readonly [field: string]: string } = {
   action: 'The canonical action of a step, one of a closed list this client holds; never the harness tool text.',
+  agentType: 'The type of the subagent whose run holds a step: a built-in type of the harness, else the word custom; null on a step of the main run.',
   cacheRead: 'A bucket of the tokens read from the cache in a prompt, a number.',
   cacheWrite: 'A bucket of the tokens written to the cache in a prompt, a number.',
   cls: 'The class of a prompt, one of a closed list of eight, computed from the kinds of tools it used; never its words.',
@@ -53,7 +54,9 @@ export const FIELD_ROWS: { readonly [field: string]: string } = {
   id: 'A hash the client computes per account from the account and the session, so a redeposit replaces and two accounts sessions cannot be joined. Never the session id.',
   identity: 'What a step called, in closed vocabulary: a shell program with its subcommand and flags, an MCP server and tool, a skill, or a web host; null for an action with none.',
   input: 'A bucket of the input tokens in a prompt, a number.',
+  leaves: 'How many lines of a transcript its root covers, a count.',
   languages: 'The programming languages of the project, each from a closed public list.',
+  merkleRoot: 'The Merkle root of a transcript: a SHA-256 over the hashes of its lines, one root for each transcript, the main one first; never a line.',
   model: 'The model name, only when it is a public one; else the literal placeholder.',
   ms: 'A bucket of the milliseconds a step took (a lower bound), a number or null; never the exact time.',
   name: 'The name of a package a shell command pulled, only when it is on the public list.',
@@ -66,6 +69,7 @@ export const FIELD_ROWS: { readonly [field: string]: string } = {
   prompts: 'The prompts of a transcript: each a class, bucketed counts and tokens, and a frame; never their words.',
   pulls: 'The packages a shell command pulled from a registry: the registry, the public package name, and its version.',
   registry: 'Which registry a pull came from, one of a closed list.',
+  remainingTokens: 'A bucket of the tokens the run spent after a step (a lower bound), a number: the bucket of the exact sum, with the subagent runs a main-run step spawned later in the session.',
   server: 'The MCP server a call went to, only when it is on the public list.',
   shell: 'The shell a command ran in, one of a closed list, or null.',
   side: 'Whether a tool call ran as a side call, true or false.',
@@ -76,6 +80,7 @@ export const FIELD_ROWS: { readonly [field: string]: string } = {
   steps: 'The steps of a tool call, each an action in closed vocabulary with its bucketed cost and spawner.',
   sub: 'The subcommand of a shell program, only when it is on the public list for that program; else null.',
   thinking: 'A bucket of the thinking tokens in a prompt, a number.',
+  timingPrint: 'A hash of the call durations of the main transcript in the order they ran, or null under 50 timed calls; the calls of a subagent are not in it.',
   tokens: 'A bucket of tokens (a lower bound of the count), a number or null; a step holds one, never the exact count.',
   tool: 'The tool of an MCP call, only when it is on the public list for that server; else the literal placeholder.',
   tools: 'The tool calls of a transcript, each a status and duration and its steps, in the order they ran; never their targets or arguments.',
