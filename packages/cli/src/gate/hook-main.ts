@@ -1,51 +1,31 @@
-// The process behind `oars gate hook`: stdin in, nothing out, exit 0 whatever happens. It imports the hook and the little it needs, never the CLI. A hard deadline in this
-// process ends it before the harness's own, writing the record it has staged if the write had not finished.
-import { appendFileSync } from 'node:fs';
+// The entry for `oars gate hook`: it imports the hook and the little it needs, never the CLI. Everything it does is in `hook-process.ts`, which a test can drive; this file
+// only wires the real process into it, and every line of the wiring sits inside the guard that exits 0.
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { performance } from 'node:perf_hooks';
 import { defaultConfigDir } from '../credentials.js';
-import { DEADLINE_MS, gateHook, type GateHookDeps } from './hook.js';
+import { DEADLINE_MS, type GateHookDeps } from './hook.js';
+import { runHookProcess } from './hook-process.js';
 import { managerReader } from './registry.js';
 
 /** The process itself ends this long after `DEADLINE_MS`. */
 const GRACE_MS = 100;
 
-const readStdin = async (stream: AsyncIterable<unknown>): Promise<string> => {
+const readStdin = async (): Promise<string> => {
+  process.stdin.setEncoding('utf8');
   let text = '';
-  for await (const chunk of stream) text += String(chunk);
+  for await (const chunk of process.stdin) text += String(chunk);
   return text;
 };
 
-let staged: { file: string; text: string } | null = null;
-
-const deps: GateHookDeps = {
+const depsFor = (stage: NonNullable<GateHookDeps['stage']>): GateHookDeps => ({
   storeDir: join(defaultConfigDir(process.env, process.platform, homedir()), 'oars', 'sessions'),
   now: Date.now,
   // `performance.now()` counts from the start of the process, so node's own start is inside the budget.
   clock: () => performance.now(),
   deadlineMs: DEADLINE_MS,
   registry: managerReader(undefined, DEADLINE_MS),
-  stage: (pending) => {
-    staged = pending;
-  },
-};
+  stage,
+});
 
-// The last resort when the process is stuck past its grace: keep the staged record, then go. A write that fails here has nowhere to report, so it is dropped.
-setTimeout(
-  () => {
-    try {
-      if (staged !== null) appendFileSync(staged.file, staged.text);
-    } catch {
-      // Fail-open.
-    }
-    process.exit(0);
-  },
-  Math.max(DEADLINE_MS + GRACE_MS - performance.now(), 0),
-).unref();
-
-process.stdin.setEncoding('utf8');
-const stdin = await readStdin(process.stdin).catch(() => '');
-await gateHook(stdin, deps);
-// A manager the registry ask started can outlive the ask; leaving by `exit` rather than waiting for it is what keeps the call under a second.
-process.exit(0);
+await runHookProcess({ stdin: readStdin, deps: depsFor, exit: (code) => process.exit(code), deadlineMs: DEADLINE_MS + GRACE_MS - performance.now() });
