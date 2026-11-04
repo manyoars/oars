@@ -1,11 +1,11 @@
 // Commit survival against real git repositories in a temp folder: the states are git's answers, so a fake git would prove nothing about them.
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { deposit, loadStore } from './store.js';
-import { addProject, cleanup, stage, type Staged } from './test-support.js';
+import { addProject, cleanup, removeHeld, stage, type Staged } from './test-support.js';
 import { readSurvival, recordSurvival, survivalFile, SURVIVAL_DAYS, type Git } from './survival.js';
 import { slugOf } from './allow.js';
 import { run } from '../cli.js';
@@ -20,7 +20,7 @@ const dirs: string[] = [];
 
 afterEach(() => {
   cleanup();
-  for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+  for (const dir of dirs.splice(0)) removeHeld(dir);
 });
 
 const IDENTITY = ['-c', 'user.name=t', '-c', 'user.email=t@example.com', '-c', 'commit.gpgsign=false'];
@@ -74,6 +74,19 @@ const lines = (s: Staged): unknown[] =>
   existsSync(survivalFile(s.storeDir))
     ? readFileSync(survivalFile(s.storeDir), 'utf8').trim().split('\n').map((line): unknown => JSON.parse(line))
     : [];
+
+describe('cleanup', () => {
+  it('waits out a child that still holds a registered temp folder as its cwd, then removes the folder', async () => {
+    const s = stage();
+    const child = spawn(process.execPath, ['-e', 'console.log(1); setTimeout(() => {}, 1500)'], { cwd: s.root, stdio: ['ignore', 'pipe', 'ignore'] });
+    const exited = new Promise((resolve) => child.once('exit', resolve));
+    // Wait for the child to be running in the folder (its first output), not merely spawned: before that Windows holds no handle on it.
+    await new Promise((resolve) => child.stdout.once('data', resolve));
+    cleanup();
+    expect(existsSync(s.root)).toBe(false);
+    await exited;
+  });
+});
 
 describe('recordSurvival', () => {
   it('reads an ancestor of the default branch as survived, on a day-resolution date, in a file beside the store', async () => {

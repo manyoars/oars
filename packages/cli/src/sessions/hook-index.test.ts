@@ -7,6 +7,8 @@ import { CAPTURE_VERSION, type ErrorObservation, type SessionObservation } from 
 import { buildIndex, contextBlock, inRepository, readIndex, repositoryRoot } from './hook-index.js';
 import { sessionsBooks, sessionsMeasure } from './command.js';
 import { readHookCalls } from './hook-calls.js';
+import { tool as toolRow } from './pool-fixture.js';
+import { toolShapeId } from './recall-reads.js';
 import { books, BOOKS_CAVEAT, formatBooks, formatMeasure, measure } from './query.js';
 import { formatStepCounters, readSteps, stepCounters } from './steps.js';
 import { deposit, loadStore, paths, readCalls } from './store.js';
@@ -353,5 +355,20 @@ ${formatStepCounters(stepCounters(await readSteps(staged.storeDir)))}`);
     expect(rows([])).toBeDefined();
     // One allow-listed session from the parent folder: `/zz` is a prefix of both slugs, so the 300 newer sessions now crowd this repository out.
     expect(rows([base(parent, 'p-1', 0)])).toBeUndefined();
+  });
+});
+
+describe('the call shapes in the index', () => {
+  const SHAPE = toolShapeId('Monitor', ['query']);
+  const calls = (name: string) =>
+    Array.from({ length: 10 }, (_, n) => toolRow(name, n, 'Monitor', { ts: '2026-11-01T00:00:00.000Z', status: n < 2 ? 'error' : 'ok', keys: ['query'], durationMs: 5, toolUseId: `${name}-${String(n)}`, harnessVersion: '2.1.300', prompt: 0 }));
+  const indexOver = (names: readonly string[]) => buildIndex({ sessions: [], prompts: [], errors: [], subagents: [], tools: names.flatMap(calls), newerCaptures: 0 }, [], '2026-11-02T00:00:00.000Z');
+
+  it('holds a shape over the fit floors by its shape ID', () => {
+    expect(indexOver(['a', 'b', 'c']).fit?.[SHAPE]).toMatchObject({ family: 'fit', tool: 'Monitor', keys: ['query'], n: 3, count: 6, calls: 30 });
+  });
+
+  it('leaves out a shape under them', () => {
+    expect(indexOver(['a', 'b']).fit).toEqual({});
   });
 });
