@@ -1,4 +1,4 @@
-// One raw file that cannot be read reports that session `not run`, and the audit goes on (t743 fix round).
+// One raw file that cannot be read reports that session `not run`, and the audit goes on.
 import type * as fsp from 'node:fs/promises';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';

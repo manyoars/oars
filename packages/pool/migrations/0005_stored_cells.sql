@@ -1,4 +1,4 @@
--- The stored form (t813). `deposits` is the ledger plane: a batch's projected skeleton, its deltas (the wire carries none yet, so `[]`), and `ingest`, the mark of the write that last set the row, which guards that write's cell increments. Rows here expire; the tables below do not.
+-- The stored form. `deposits` is the ledger plane: a batch's projected skeleton, its deltas (the wire carries none yet, so `[]`), and `ingest`, the mark of the write that last set the row, which guards that write's cell increments. Rows here expire; the tables below do not.
 ALTER TABLE deposits ADD COLUMN deltas TEXT NOT NULL DEFAULT '[]';
 ALTER TABLE deposits ADD COLUMN ingest TEXT NOT NULL DEFAULT '';
 -- The index plane: aggregate cells only, each `clusters` a held count that expiry never lowers. `key` is `motifId/frameBucket/day/exposed`; `harness_bucket` is its frame bucket's second field, so one version's read touches only its own rows.

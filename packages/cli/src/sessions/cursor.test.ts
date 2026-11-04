@@ -293,7 +293,7 @@ describe('the Cursor reader: times', () => {
   });
 });
 
-describe('the Cursor reader: t731 outcomes', () => {
+describe('the Cursor reader: outcomes', () => {
   const shell = (extra: Partial<NonNullable<FixtureBubble['tool']>>): FixtureBubble => ({
     type: 2,
     createdAt: '2025-06-01T00:00:02.000Z',

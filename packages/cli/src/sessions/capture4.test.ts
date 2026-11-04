@@ -1,4 +1,4 @@
-// CAPTURE 4 (t714): sid, repo, fileHashes, env, promptFingerprint, the line cap, the salt seam, and a version-3 store opened under version 4.
+// CAPTURE 4: sid, repo, fileHashes, env, promptFingerprint, the line cap, the salt seam, and a version-3 store opened under version 4.
 import { appendFileSync, cpSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';

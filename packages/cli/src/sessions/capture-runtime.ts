@@ -1,5 +1,5 @@
 // What a capture records about the machine it ran on (`env` on the session record, class P): the oars package version, Node.js, and OS.
-// Names and versions only; a library version is recorded only when a transcript states it (t711 ruling L6), and none is read here.
+// Names and versions only; a library version is recorded only when a transcript states it, and none is read here.
 import { readFileSync } from 'node:fs';
 
 /** The `version` in a package.json text, or `0.0.0` when it has none. */

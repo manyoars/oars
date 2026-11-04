@@ -9,7 +9,7 @@ export type Tier = 'none' | 'skeleton' | 'committed' | 'audited' | 'attested';
 /** What every ingest writes until a wire carries a root (Brief 2): so no claude-code batch can count yet. */
 export const INGEST_TIER: Tier = 'skeleton';
 
-/** The harnesses that write no raw file, so a batch of theirs can never reach `committed` and counts at `skeleton`. t811 moves this into the vocabulary. */
+/** The harnesses that write no raw file, so a batch of theirs can never reach `committed` and counts at `skeleton`. */
 const WRITES_NO_RAW: ReadonlySet<Harness> = new Set<Harness>(['cursor']);
 
 const ROOTED: ReadonlySet<Tier> = new Set<Tier>(['committed', 'audited', 'attested']);

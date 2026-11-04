@@ -1,4 +1,4 @@
-// How a turn opens (t768): a slash command or a skill opens a prompt like a typed line, and a line the harness injected opens nothing.
+// How a turn opens: a slash command or a skill opens a prompt like a typed line, and a line the harness injected opens nothing.
 // Every name here is invented.
 import { describe, expect, it } from 'vitest';
 import { captureSession, type Capture } from './extract.js';

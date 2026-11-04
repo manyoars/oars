@@ -1,4 +1,4 @@
--- The fetch cap (t812): fetches per account per ISO week replace the capped read count. A 304 spends none.
+-- The fetch cap: fetches per account per ISO week replace the capped read count. A 304 spends none.
 ALTER TABLE accounts DROP COLUMN reads_served;
 ALTER TABLE accounts ADD COLUMN fetch_week TEXT;
 ALTER TABLE accounts ADD COLUMN fetches INTEGER NOT NULL DEFAULT 0;

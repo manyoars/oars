@@ -1,4 +1,4 @@
-// t776: `verify` lists a folder no allow entry names and never opens a file in it, not even a subagent's `.meta.json`.
+// `verify` lists a folder no allow entry names and never opens a file in it, not even a subagent's `.meta.json`.
 import type * as fs from 'node:fs';
 import type * as fsp from 'node:fs/promises';
 import { mkdirSync, writeFileSync } from 'node:fs';
