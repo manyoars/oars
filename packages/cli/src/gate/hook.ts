@@ -197,7 +197,7 @@ const outputOf = (blocks: readonly string[], notes: readonly string[]): string =
 };
 
 /**
- * Records the crossings of one tool call. Resolves with nothing in every case: the caller writes no output, so the harness never reads a decision from this hook.
+ * Records the crossings of one tool call. Resolves with the JSON to print: a note as context, or a deny labeled with the fact; never an allow or a changed call.
  * Nothing is written, and no network is touched, for a call that crosses nothing.
  */
 export const runGateHook = async (stdin: string, deps: GateHookDeps): Promise<string> => {
@@ -258,7 +258,7 @@ export const runGateHook = async (stdin: string, deps: GateHookDeps): Promise<st
   return outputOf(blocks, notes);
 };
 
-/** What the hook writes to stdout: nothing, whatever happened. The harness reads no decision and no changed input from it, so the call runs as asked. */
+/** What the hook writes to stdout: the JSON of a note or a deny, or '' when silent and on any failure, so the call runs as asked. */
 export const gateHook = async (stdin: string, deps: GateHookDeps): Promise<string> => {
   try {
     return await runGateHook(stdin, deps);

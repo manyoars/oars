@@ -112,7 +112,7 @@ const runnerWith = (timeout: number): ManagerRunner => (program, args, cwd, sign
  */
 const npmLimits = (timeout: number | undefined): string[] => (timeout === undefined ? [] : [`--fetch-timeout=${String(timeout)}`, '--fetch-retries=0']);
 /** pip counts its socket timeout in whole seconds. */
-const pipLimits = (timeout: number | undefined): string[] => (timeout === undefined ? [] : ['--timeout', '1', '--retries', '0']);
+const pipLimits = (timeout: number | undefined): string[] => (timeout === undefined ? [] : ['--timeout', String(Math.ceil(timeout / 1000)), '--retries', '0']);
 
 /** The reader the option uses. `npm view` and `pip index` run no package code; the manager's own cache is the manager's. */
 export const managerReader = (given?: ManagerRunner, timeout?: number): RegistryReader => async ({ class: cls, name, cwd, signal }) => {

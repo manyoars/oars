@@ -1,4 +1,4 @@
-// The process behind `oars gate hook`, with every side effect handed in so a test can drive it: stdin in, nothing out, `exit(0)` whatever happens. A hard deadline ends
+// The process behind `oars gate hook`, with every side effect handed in so a test can drive it: stdin in, at most one JSON document out, `exit(0)` whatever happens. A hard deadline ends
 // the process before the harness's own, writing the record it has staged if the write had not finished. Nothing here may throw past `runHookProcess`: exit 1 from a
 // PreToolUse hook is a visible error and exit 2 blocks the tool call, and the hook must never cost a session either.
 import { appendFileSync } from 'node:fs';

@@ -170,6 +170,19 @@ describe('oars gate hook, through the command', () => {
     expect(rows[0]).toMatchObject({ kind: 'crossing', via: 'hook', name: 'left-pad', session: 's1', toolUseId: 'u1' });
   });
 
+  it('prints the deny the hook returns, since this path is reached by any extra argument too', async () => {
+    const { deps, out, staged } = setup();
+    mkdirSync(staged.storeDir, { recursive: true });
+    writeFileSync(join(staged.storeDir, 'gate-policy.json'), '{"classes":{"not-found":"block"}}');
+    const now = deps.now();
+    const answer = { kind: 'registry', v: 1, day: new Date(now).toISOString().slice(0, 10), ts: new Date(now).toISOString(), class: 'npm-package', state: 'not-found', created: null, name: 'left-pad', latest: null };
+    writeFileSync(join(staged.storeDir, 'gate-registry.jsonl'), `${JSON.stringify(answer)}
+`);
+    staged.stdin.end(payload);
+    expect(await run(['gate', 'hook'], deps)).toBe(ExitCode.OK);
+    expect(out.join('')).toContain('"permissionDecision":"deny"');
+  });
+
   it('writes no crossings.jsonl or gate-index.txt in the working folder when no store is configured', async () => {
     const work = mkdtempSync(join(tmpdir(), 'oars-gate-nostore-'));
     const before = process.cwd();

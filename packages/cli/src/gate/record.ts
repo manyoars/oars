@@ -181,7 +181,8 @@ const merged = (live: CrossingRecord, replayed: CrossingRecord): CrossingRecord 
   ...(live.policy === undefined ? {} : { policy: live.policy }),
   arm: pick('arm', live, replayed),
   lineShown: pick('lineShown', live, replayed),
-  lineHeld: pick('lineHeld', live, replayed),
+  // A hook row from an earlier build has no `lineHeld`; `pick` would write `undefined` over the replay's `none`.
+  lineHeld: live.lineHeld ?? replayed.lineHeld,
 });
 
 /** The key a call crossing is counted by: nothing counts twice when a row has a tool use id and another row has the same one. */

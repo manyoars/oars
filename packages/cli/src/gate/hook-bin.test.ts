@@ -172,7 +172,7 @@ describe.skipIf(!existsSync(bin))('the built oars gate hook', () => {
     expect(JSON.parse(lines[0] ?? '')).toMatchObject({ name: 'ghost-lib', registryState: 'not-found', arm: 'none', lineShown: 'not-found-block', policy: 'file' });
   });
 
-  it('stays silent on stdout for the same name under the default policy', () => {
+  it('does not deny the same name under the default policy', () => {
     const payload = JSON.stringify({ session_id: 's1', tool_use_id: 'u1', tool_name: 'Bash', tool_input: { command: 'npm install ghost-lib' }, cwd: tmpdir(), permission_mode: 'default' });
     const result = runHook(payload, [], missingNpm());
     expect(result.status).toBe(0);

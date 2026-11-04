@@ -602,7 +602,8 @@ const buildProgram = (deps: RunDeps, argv: string[]): Command => {
       if (runtime === undefined) return;
       let stdin = '';
       for await (const chunk of runtime.stdin) stdin += String(chunk);
-      await gateHook(stdin, { storeDir: runtime.storeDir, now: deps.now, clock: () => performance.now(), deadlineMs: DEADLINE_MS });
+      const output = await gateHook(stdin, { storeDir: runtime.storeDir, now: deps.now, clock: () => performance.now(), deadlineMs: DEADLINE_MS });
+      if (output !== '') deps.io.stdout(output);
     });
 
   gate

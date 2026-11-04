@@ -76,6 +76,12 @@ describe('one row per crossing', () => {
     expect(mergeCrossings([crossing()], [hookRow()])[0]).not.toHaveProperty('policy');
   });
 
+  it('reads a hook row from an earlier build, which has no lineHeld, as the replay says', () => {
+    const early: Partial<CrossingRecord> = { lineHeld: undefined };
+    expect(mergeCrossings([crossing()], [hookRow(early)])[0]).toMatchObject({ lineHeld: 'none' });
+    expect(mergeCrossings([crossing()], [hookRow({ lineHeld: 'young-name-note' })])[0]).toMatchObject({ lineHeld: 'young-name-note' });
+  });
+
   it("falls back to the replay's value where the hook read nothing", () => {
     const [one] = mergeCrossings([crossing({ permission: 'plan', novelty: 'session' })], [hookRow({ permission: 'unknown', novelty: 'not-read' })]);
     expect(one).toMatchObject({ permission: 'plan', novelty: 'session', via: 'both' });
