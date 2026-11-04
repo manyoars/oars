@@ -88,8 +88,8 @@ describe('a delta entry on the wire', () => {
   it('refuses a field outside the four, and a key the entry does not hold: a session id, a root, a date', () => {
     expect(refusedField(sentWith([{ ...ENTRY, field: 'model' }]))).toBe('deltas[0].field');
     for (const stray of ['sid', 'session', 'merkleRoot', 'day', 'value']) expect(refusedField(sentWith([{ ...ENTRY, [stray]: 'x' }]))).toBe(`deltas[0].${stray}`);
-    const { change: _change, ...without } = ENTRY;
-    expect(refusedField(sentWith([without]))).toBe('deltas[0].change');
+    const { deltaKind, field, name, registry, metric } = ENTRY;
+    expect(refusedField(sentWith([{ deltaKind, field, name, registry, metric }]))).toBe('deltas[0].change');
   });
 
   it('holds a change to its own metric edges, signed: 7 for a count and 11 for tokens', () => {
