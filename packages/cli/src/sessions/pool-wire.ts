@@ -372,6 +372,10 @@ const parseIdentity = (harness: Harness, action: CanonicalAction, value: unknown
     // A program is a list member or `private`, and a `private` program holds no subcommand: the projection writes nothing else.
     const program = textOf(raw.program, under(at, 'program'));
     if (program !== PRIVATE && !PUBLIC_PROGRAMS.has(program)) throw new Refused(under(at, 'program'), 'outside the vocabulary');
+    if (program === PRIVATE) {
+      if (raw.flags !== undefined && !(Array.isArray(raw.flags) && raw.flags.length === 0)) throw new Refused(under(at, 'flags'), 'a private program holds no flags');
+      if (raw.pulls !== undefined) throw new Refused(under(at, 'pulls'), 'a private program holds no pulls');
+    }
     const subs = PUBLIC_SUBCOMMANDS.get(program) ?? new Set<string>();
     const sub = orNull(raw.sub, under(at, 'sub'), exactlyIn(subs));
     const flags = listOf(raw.flags, under(at, 'flags'), parseFlag);

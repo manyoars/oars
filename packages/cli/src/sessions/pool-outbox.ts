@@ -31,7 +31,7 @@ export const batchHash = (bytes: string): string => createHash('sha256').update(
 
 /**
  * `oars pool outbox --explain`: one row for each field name a batch holds, at any depth, saying what admits its values. A field with no row fails the command, so a field added to the batch adds its row here.
- * A name that sits at more than one depth (`status`, `harness`, `frame`, `tokens`) has one row that reads true at each.
+ * A name that sits at more than one depth (`status`, `harness`, `frame`) has one row that reads true at each.
  */
 export const FIELD_ROWS: { readonly [field: string]: string } = {
   action: 'The canonical action of a step, one of a closed list this client holds; never the harness tool text.',
@@ -43,7 +43,7 @@ export const FIELD_ROWS: { readonly [field: string]: string } = {
   durationMs: 'The time of one tool call in milliseconds, exact, a number or null.',
   effort: 'The effort level the model ran at, only when it is a public one; else the literal placeholder.',
   errors: 'A bucket of how many tool calls failed in a prompt, a number.',
-  flags: 'The flags of a shell command, each a public flag, a short flag, or the literal placeholder; never an argument.',
+  flags: 'The flags of a shell command, each a public flag or a short flag; never an argument.',
   format: 'The skeleton format number: a constant of this client, never a value from a session.',
   frame: 'Where a session ran: the harness and its version, the model, the effort, the day, the platform, the shell, and the stack, every value checked against the closed vocabulary.',
   frameworks: 'The frameworks of the project, each from a closed public list; never a path or a name of yours.',
@@ -61,7 +61,7 @@ export const FIELD_ROWS: { readonly [field: string]: string } = {
   output: 'A bucket of the output tokens in a prompt, a number.',
   parent: 'The position of the main-run call that spawned this step, a number, or null (also null for a subagent a subagent spawned).',
   platform: 'The operating system family, one of a closed list.',
-  program: 'The program a shell command ran, only when it is on the public list.',
+  program: 'The program a shell command ran, when it is on the public list; else the word private.',
   prompt: 'Which prompt of the batch a tool call follows, a position in this batch, or null.',
   prompts: 'The prompts of a transcript: each a class, bucketed counts and tokens, and a frame; never their words.',
   pulls: 'The packages a shell command pulled from a registry: the registry, the public package name, and its version.',

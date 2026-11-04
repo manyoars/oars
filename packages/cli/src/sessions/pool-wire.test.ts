@@ -234,6 +234,8 @@ describe('parseSkeleton refuses, and names the field', () => {
     expect(refusedField(withStep({ identity: { program: PRIVATE, sub: null, flags: [] } }))).toBe('accepted');
     expect(refusedField(withStep({ identity: { program: LITERAL, sub: null, flags: [] } }))).toBe(`${stepField}.identity.program`);
     expect(refusedField(withStep({ identity: { program: PRIVATE, sub: 'push', flags: [] } }))).toBe(`${stepField}.identity.sub`);
+    expect(refusedField(withStep({ identity: { program: PRIVATE, sub: null, flags: ['--force'] } }))).toBe(`${stepField}.identity.flags`);
+    expect(refusedField(withStep({ identity: { program: PRIVATE, sub: null, flags: [], pulls: [] } }))).toBe(`${stepField}.identity.pulls`);
     expect(refusedField(withStep({ identity: { program: 'git', sub: 'push', flags: ['-f', '--force'] } }))).toBe('accepted');
     expect(refusedField(withStep({ identity: { program: 'git', sub: 'push', flags: ['-force'] } }))).toBe(`${stepField}.identity.flags[0]`);
   });
