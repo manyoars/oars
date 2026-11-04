@@ -1,5 +1,5 @@
 // The `--registry-state` option: what a registry says about a name, asked through `npm` or `pip` in the folder the call ran in. For a crossing made
-// with npm, npx, pnpm, or pip whose command left the registry, the config, and the folder to their defaults (the replay asks for no other crossing),
+// with npm, npx, or pip whose command left the registry, the config, and the folder to their defaults (the replay asks for no other crossing),
 // that is the registry the manager would contact, because those read the same project and user config; so a private name does not go to a public
 // registry on the gate's account. Off by default; nothing here runs unless the operator asks.
 import { execFile } from 'node:child_process';

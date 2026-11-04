@@ -184,7 +184,7 @@ oars gate replay --registry-state      # also ask npm or pip what the registry h
 oars gate report                       # counts from the last replay, and what replay cannot see
 ```
 
-Replay is local and read-only; it writes `crossings.jsonl` into the sessions store and nothing else. It records picks and does not judge them. See `docs/gate.md` in the repository.
+Replay is local and read-only; it writes `crossings.jsonl` into the sessions store and nothing else (with `--registry-state`, npm and pip also keep their own caches). It records picks and does not judge them. See `docs/gate.md` in the repository.
 
 ## The `--json` contract
 

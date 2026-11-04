@@ -7,7 +7,8 @@ import { run } from '../cli.js';
 import { ExitCode } from '../errors.js';
 import { harness, server, useServer, type Harness } from '../test-support.js';
 import { poolServer } from './pool-command.js';
-import { parseSkeleton, type PinnedKey, VOCAB_VERSION } from './pool-wire.js';
+import { REGISTRY_MAX_AGE_DAYS, VOCAB_SNAPSHOT_DATE } from './public-vocabulary.js';
+import { parseSkeleton, VOCAB_VERSION, type PinnedKey } from './pool-wire.js';
 import { deposit } from './store.js';
 import { addProject, cleanup, NOW, stage, type Staged } from './test-support.js';
 
@@ -499,6 +500,16 @@ describe('oars pool deposit', () => {
     scene.h.deps.now = () => LATER + 1;
     expect(await scene.cli('pool', 'deposit', '--server', POOL)).toBe(ExitCode.AUTH);
     expect(scene.seen).toEqual([]);
+  });
+
+  it('builds no batch once its vocabulary is past registry_max_age, and names the upgrade', async () => {
+    const scene = setting();
+    await signIn(scene);
+    const before = scene.seen.length;
+    scene.h.deps.now = () => Date.parse(`${VOCAB_SNAPSHOT_DATE}T00:00:00Z`) + (REGISTRY_MAX_AGE_DAYS + 1) * 86_400_000;
+    expect(await scene.cli('pool', 'deposit', '--server', POOL)).toBe(ExitCode.CONFLICT);
+    expect(scene.h.err.join('')).toContain('Upgrade with npm install -g @manyoars/oars');
+    expect(scene.seen).toHaveLength(before);
   });
 
   it('sends a closed skeleton for each clean session, under an id that is not the session id', async () => {
