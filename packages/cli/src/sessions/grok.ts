@@ -24,8 +24,8 @@
 //                          output_for_prompt, signal, timed_out, current_dir}` (types/output.rs:384-405); the reader takes the `output` bytes, because on the model-issued
 //                          path `output_for_prompt` is the formatted prompt (`exit: N` header or the concise tool's `Exit code: N` fence, bash/mod.rs:2246). The agent path marks a shell call `failed` only on a timeout
 //                          or a signal, so exit 2 arrives `completed` (acp_conversion.rs:241-250): the exit code decides, not the status. Any other tool's error text is its
-//                          `content[]` text; its `rawOutput` is a tagged wrapper that is never the error line. `current_dir` is the cwd after the command, the only
-//                          place a directory change shows
+//                          `content[]` text; its `rawOutput` is a tagged wrapper that is never the error line. `current_dir` is the cwd the writer resolved BEFORE the command ran
+//                          (grok_build/bash/mod.rs:1876, stored at :2240), so a `cd` inside a command never shows; it moves only when the session's own folder moved
 //   usage.json    {turns: [{endedAt, inputTokens, outputTokens, cachedReadTokens, cacheCreationTokens, reasoningTokens, primaryModelId}]} (usage_file.rs:10-80): per-TURN
 //                 deltas (`session` is their sum, :230-300), so every turn is added once. `inputTokens` is the FULL prompt, cache reads and writes included (xai-grok-sampling-types
 //                 conversation.rs:771-773: `prompt_tokens` "is always the FULL prompt size"), and capture's fields are disjoint, so the uncached part is
