@@ -169,7 +169,7 @@ const WITHHELD_TERMS = [
   /\bearn/i,
   /\bmoney/i,
   /pay per/i,
-  /credits?/i,
+  /\bcredits?\b/i,
 ];
 const withheldIn = (text: string): string[] => WITHHELD_TERMS.filter((term) => term.test(text)).map(String);
 

@@ -36,10 +36,11 @@ const MONEY_COMPONENT = /billing|price|purchas|charge|credit|payout|payment/i;
 const MONEY_STATUS = '402';
 // A schema property that only a payment fills in; ProblemDetail carries one.
 const MONEY_PROPERTIES = new Set(['paymentId']);
+/** @type {{ phrase: string, plain: string }[]} */
 const TEXT_REWRITES = [
-  [' (actionUrl: add compute credit)', ''],
-  [' (Stripe onboarding, a credit-pack checkout)', ''],
-  ["after a credit-driven stop once the creator's compute credit is replenished", 'after a stop at a usage limit once the limit clears'],
+  { phrase: ' (actionUrl: add compute credit)', plain: '' },
+  { phrase: ' (Stripe onboarding, a credit-pack checkout)', plain: '' },
+  { phrase: "after a credit-driven stop once the creator's compute credit is replenished", plain: 'after a stop at a usage limit once the limit clears' },
 ];
 
 /**
@@ -108,15 +109,16 @@ const withoutMoneyProperties = (properties) =>
  * @returns {JsonValue} a copy without a 402 response anywhere and with each phrase of TEXT_REWRITES replaced
  */
 const neutralize = (node) => {
-  if (typeof node === 'string') return TEXT_REWRITES.reduce((text, [phrase, plain]) => text.replaceAll(phrase, plain), node);
+  if (typeof node === 'string') return TEXT_REWRITES.reduce((text, { phrase, plain }) => text.replaceAll(phrase, plain), node);
   if (Array.isArray(node)) return node.map(neutralize);
   if (!isObject(node)) return node;
-  return Object.fromEntries(
-    Object.entries(node)
-      .map(([key, value]) => [key, key === 'properties' && isObject(value) ? withoutMoneyProperties(value) : value])
-      .filter(([key, value]) => !(key === MONEY_STATUS && isObject(value) && typeof value['description'] === 'string' && value['description'] === 'Payment Required'))
-      .map(([key, value]) => [key, neutralize(value)]),
-  );
+  /** @type {JsonObject} */
+  const copy = {};
+  for (const [key, value] of Object.entries(node)) {
+    if (key === MONEY_STATUS && isObject(value) && value['description'] === 'Payment Required') continue;
+    copy[key] = neutralize(key === 'properties' && isObject(value) ? withoutMoneyProperties(value) : value);
+  }
+  return copy;
 };
 
 /**
