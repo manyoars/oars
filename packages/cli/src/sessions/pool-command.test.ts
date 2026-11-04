@@ -2,15 +2,24 @@ import { webcrypto } from 'node:crypto';
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { http, HttpResponse } from 'msw';
-import { afterEach, describe, expect, it } from 'vitest';
+import { createHash } from 'node:crypto';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { run } from '../cli.js';
 import { ExitCode } from '../errors.js';
 import { harness, server, useServer, type Harness } from '../test-support.js';
-import { poolServer } from './pool-command.js';
+import { poolDeposit, poolServer, type Reply, type Sender } from './pool-command.js';
+import { batchHash, BATCH_FIELDS, canonicalBytes, FIELD_ROWS, writeBatch } from './pool-outbox.js';
+import type { Outgoing } from './pool-print.js';
 import { REGISTRY_MAX_AGE_DAYS, VOCAB_SNAPSHOT_DATE } from './public-vocabulary.js';
-import { parseSkeleton, VOCAB_VERSION, type PinnedKey } from './pool-wire.js';
+import { parseSkeleton, skeletonOf, VOCAB_VERSION, type PinnedKey } from './pool-wire.js';
 import { deposit } from './store.js';
 import { addProject, cleanup, NOW, stage, type Staged } from './test-support.js';
+
+// The session gates must stop a session before the projection runs; the real projection is wrapped so a test can see whether it was called.
+vi.mock('./pool-wire.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./pool-wire.js')>();
+  return { ...actual, skeletonOf: vi.fn(actual.skeletonOf) };
+});
 
 useServer();
 afterEach(cleanup);
@@ -138,20 +147,6 @@ const signIn = async (scene: Scene, signingKey: PinnedKey = FIXED_KEY): Promise<
 };
 
 const capture = (scene: Scene): Promise<unknown> => deposit(scene.staged.runtime, { allow: ['proj'], redactDomains: [], now: () => NOW });
-
-/** An open pool whose covenant this account has accepted, recording what it was sent. */
-const openPool = (scene: Scene): void => {
-  on(scene, 'get', '/v1/covenant', () => HttpResponse.json({ version: 'v1', accepted: true }));
-  on(scene, 'post', '/v1/deposits', () => HttpResponse.json({ ok: true }, { status: 201 }));
-};
-
-const depositBodies = (scene: Scene): unknown[] =>
-  scene.seen
-    .filter((entry) => entry.url.endsWith('/v1/deposits'))
-    .map((entry) => {
-      const parsed: unknown = JSON.parse(entry.body);
-      return parsed;
-    });
 
 const at = (value: unknown, name: string): unknown => (typeof value === 'object' && value !== null ? Reflect.get(value, name) : undefined);
 
@@ -493,8 +488,8 @@ describe('no harness token is ever read', () => {
     providerAt(scene, 'github');
     on(scene, 'post', '/v1/login', () => HttpResponse.json(okLogin()));
     expect(await scene.cli('pool', 'login', '--provider', 'github', '--server', POOL)).toBe(ExitCode.OK);
-    openPool(scene);
     expect(await scene.cli('pool', 'deposit', '--server', POOL)).toBe(ExitCode.OK);
+    expect(await scene.cli('pool', 'outbox', '--server', POOL)).toBe(ExitCode.OK);
     on(scene, 'get', `/bundle/2.1.314/${VOCAB_VERSION}`, () => HttpResponse.json({ error: 'fetch_cap', message: 'capped' }, { status: 429 }));
     await scene.cli('pool', 'fetch', '--harness-version', '2.1.314', '--server', POOL);
     expect(scene.seen.length).toBeGreaterThan(3);
@@ -503,7 +498,53 @@ describe('no harness token is ever read', () => {
   });
 });
 
+/** Every batch file in the outbox, by path relative to the store. */
+const outboxFiles = (scene: Scene): string[] => {
+  const root = join(scene.staged.storeDir, 'pool-outbox');
+  return existsSync(root) ? readdirSync(root, { recursive: true, encoding: 'utf8' }).filter((name) => name.endsWith('.jsonl')).sort() : [];
+};
+
+const batchBytes = (scene: Scene): string[] => outboxFiles(scene).map((name) => readFileSync(join(scene.staged.storeDir, 'pool-outbox', name), 'utf8'));
+
+/** The hash `oars pool outbox` printed for each batch, in the order printed. */
+const printedHashes = (scene: Scene): string[] => [...scene.h.out.join('').matchAll(/^sha256: ([0-9a-f]{64})$/gm)].map((found) => found[1] ?? '');
+
+/** Stands in for the pool: the command line passes no sender, so these tests hand `poolDeposit` one that records each request and answers from `routes`. */
+const wire = (routes: { [route: string]: Reply | Reply[] }): { requests: Outgoing[]; via: Sender } => {
+  const requests: Outgoing[] = [];
+  return {
+    requests,
+    via: (request) => {
+      requests.push(request);
+      const route = routes[`${request.method} ${request.url.pathname}`];
+      const reply = Array.isArray(route) ? (route.length > 1 ? route.shift() : route[0]) : route;
+      return Promise.resolve(reply ?? answer(404, { error: 'not_found', message: 'No such route.' }));
+    },
+  };
+};
+
+const answer = (status: number, body: unknown = {}): Reply => ({ status, body, headers: new Headers() });
+const OPEN_COVENANT = answer(200, { version: 'v1', accepted: true });
+
+/** A scene with one clean session captured, signed in, and its batch written to the outbox. */
+const batched = async (): Promise<Scene> => {
+  const scene = setting();
+  await capture(scene);
+  await signIn(scene);
+  expect(await scene.cli('pool', 'deposit', '--server', POOL)).toBe(ExitCode.OK);
+  scene.seen.length = 0;
+  scene.h.out.length = 0;
+  scene.h.err.length = 0;
+  return scene;
+};
+
+const sendOptions = (hash: string, via: Sender | undefined): { server: string; send: string; via?: Sender } => ({ server: POOL, send: hash, ...(via === undefined ? {} : { via }) });
+
 describe('oars pool deposit', () => {
+  beforeEach(() => {
+    vi.mocked(skeletonOf).mockClear();
+  });
+
   it('asks for a sign-in first, and an expired one is no sign-in', async () => {
     const scene = setting();
     expect(await scene.cli('pool', 'deposit', '--server', POOL)).toBe(ExitCode.AUTH);
@@ -518,68 +559,116 @@ describe('oars pool deposit', () => {
 
   it('builds no batch once its vocabulary is past registry_max_age, and names the upgrade', async () => {
     const scene = setting();
+    await capture(scene);
     await signIn(scene);
     const before = scene.seen.length;
     scene.h.deps.now = () => Date.parse(`${VOCAB_SNAPSHOT_DATE}T00:00:00Z`) + (REGISTRY_MAX_AGE_DAYS + 1) * 86_400_000;
     expect(await scene.cli('pool', 'deposit', '--server', POOL)).toBe(ExitCode.CONFLICT);
     expect(scene.h.err.join('')).toContain('Upgrade with npm install -g @manyoars/oars');
     expect(scene.seen).toHaveLength(before);
+    expect(outboxFiles(scene)).toEqual([]);
+    expect(skeletonOf).not.toHaveBeenCalled();
   });
 
-  it('sends a closed skeleton for each clean session, under an id that is not the session id', async () => {
+  it('writes one canonical batch for each clean session, under an id that is not the session id, and sends nothing', async () => {
     const scene = setting();
     await capture(scene);
     await signIn(scene);
-    openPool(scene);
     expect(await scene.cli('pool', 'deposit', '--server', POOL, '--json')).toBe(ExitCode.OK);
-    const bodies = depositBodies(scene);
-    expect(bodies.length).toBeGreaterThan(0);
-    expect(scene.document()).toMatchObject({ ok: true, server: POOL, deposited: bodies.length, refused: 0, refusedFields: [] });
-    for (const body of bodies) expect(parseSkeleton(body).ok).toBe(true);
+    expect(scene.seen).toEqual([]);
+    const files = outboxFiles(scene);
+    expect(files.length).toBeGreaterThan(0);
+    expect(scene.document()).toMatchObject({ ok: true, server: POOL, batched: files.length, refused: 0, refusedFields: [], discarded: 0 });
     const observations = readFileSync(join(scene.staged.storeDir, 'observations.jsonl'), 'utf8');
-    for (const body of bodies) expect(observations).not.toContain(String(at(body, 'id')));
-    for (const entry of scene.seen) expect(entry.headers).toContain('oars/9.9.9');
+    for (const [index, bytes] of batchBytes(scene).entries()) {
+      const parsed: unknown = JSON.parse(bytes);
+      expect(parseSkeleton(parsed).ok).toBe(true);
+      expect(bytes).toBe(canonicalBytes(parsed));
+      expect(files[index]).toContain(batchHash(bytes));
+      expect(observations).not.toContain(String(at(parsed, 'id')));
+    }
   });
 
-  it('never builds or sends a session the V15 check excludes, for a term or a missing term file', async () => {
-    const dirty = setting();
-    const id = '44444444-4444-4444-8444-444444444444';
-    addProject(dirty.staged, 'proj', id, [JSON.stringify({ type: 'user', sessionId: id, cwd: '/w', timestamp: '2026-06-01T00:00:00Z', message: { role: 'user', content: `working at ${TERM}` } })]);
-    await capture(dirty);
-    await signIn(dirty);
-    openPool(dirty);
-    expect(await dirty.cli('pool', 'deposit', '--server', POOL, '--json')).toBe(ExitCode.OK);
-    expect(dirty.document()).toMatchObject({ excluded: { term: 1, noRaw: 0, noTerms: 0, unreadable: 0 } });
-    expect(dirty.sent()).not.toContain(TERM);
-
-    const noTerms = setting({ OARS_EXCLUSION_TERMS: join(dirty.staged.root, 'no-such-terms.txt') });
-    await capture(noTerms);
-    await signIn(noTerms);
-    openPool(noTerms);
-    expect(await noTerms.cli('pool', 'deposit', '--server', POOL, '--json')).toBe(ExitCode.OK);
-    const counted = noTerms.document();
-    expect(depositBodies(noTerms)).toEqual([]);
-    expect(counted).toMatchObject({ deposited: 0, excluded: { noTerms: at(counted, 'sessions') } });
-  });
-
-  it('a session whose raw is gone never deposits', async () => {
+  it('writes a changed session over its old batch, and the same bytes again as the same file', async () => {
     const scene = setting();
     await capture(scene);
     await signIn(scene);
-    rmSync(scene.staged.projectsRoot, { recursive: true, force: true });
-    rmSync(join(scene.staged.storeDir, 'raw'), { recursive: true, force: true });
-    openPool(scene);
-    expect(await scene.cli('pool', 'deposit', '--server', POOL, '--json')).toBe(ExitCode.OK);
-    const counted = scene.document();
-    expect(depositBodies(scene)).toEqual([]);
-    expect(counted).toMatchObject({ deposited: 0, excluded: { noRaw: at(counted, 'sessions') } });
+    expect(await scene.cli('pool', 'deposit', '--server', POOL)).toBe(ExitCode.OK);
+    const first = outboxFiles(scene);
+    expect(await scene.cli('pool', 'deposit', '--server', POOL)).toBe(ExitCode.OK);
+    expect(outboxFiles(scene)).toEqual(first);
   });
 
-  it('counts a session captured before steps and frames, and one the vocabulary refuses, without sending either', async () => {
+  describe('the session gates run before any projection', () => {
+    const OTHER_FOLDER = 'zz-private-repo';
+    const SESSION = '55555555-5555-4555-8555-555555555555';
+    const line = (text: string): string => JSON.stringify({ type: 'user', sessionId: SESSION, cwd: '/w', timestamp: '2026-06-01T00:00:00Z', message: { role: 'user', content: text } });
+
+    /** A store holding only this one session, so an empty outbox and an uncalled projection can only be the gate's doing. */
+    const alone = async (lines: string[]): Promise<Scene> => {
+      const scene = setting();
+      rmSync(join(scene.staged.projectsRoot, 'proj'), { recursive: true, force: true });
+      addProject(scene.staged, OTHER_FOLDER, SESSION, lines);
+      await deposit(scene.staged.runtime, { allow: [OTHER_FOLDER], redactDomains: [], now: () => NOW });
+      await signIn(scene);
+      return scene;
+    };
+
+    const expectNothingBuilt = async (scene: Scene, counted: object): Promise<void> => {
+      expect(await scene.cli('pool', 'deposit', '--server', POOL, '--json')).toBe(ExitCode.OK);
+      expect(outboxFiles(scene)).toEqual([]);
+      expect(skeletonOf).not.toHaveBeenCalled();
+      expect(scene.document()).toMatchObject({ sessions: 1, batched: 0, excluded: counted });
+      // The reason is a count: neither the term nor the folder is named anywhere the command wrote.
+      const written = [...scene.h.out, ...scene.h.err].join('');
+      expect(written).not.toContain(TERM);
+      expect(written).not.toContain(OTHER_FOLDER);
+    };
+
+    it('a clean session in an allowed folder is built, so the checks below can tell a gate from an empty store', async () => {
+      const scene = await alone([line('a plain request')]);
+      expect(await scene.cli('pool', 'deposit', '--server', POOL)).toBe(ExitCode.OK);
+      expect(outboxFiles(scene)).toHaveLength(1);
+      expect(skeletonOf).toHaveBeenCalledTimes(1);
+    });
+
+    it('a folder the operator has not allowed', async () => {
+      const scene = await alone([line('a plain request')]);
+      const state = join(scene.staged.storeDir, 'state.json');
+      writeFileSync(state, JSON.stringify({ ...JSON.parse(readFileSync(state, 'utf8')), allow: ['some-other-folder'] }));
+      await expectNothingBuilt(scene, { folder: 1, term: 0, noRaw: 0, noTerms: 0, unreadable: 0 });
+    });
+
+    it('a term hit in the main transcript', async () => {
+      await expectNothingBuilt(await alone([line(`working at ${TERM}`)]), { folder: 0, term: 1, noRaw: 0, noTerms: 0, unreadable: 0 });
+    });
+
+    it('a term hit in a subagent transcript', async () => {
+      const scene = await alone([line('a plain request')]);
+      const agents = join(scene.staged.projectsRoot, OTHER_FOLDER, SESSION, 'subagents');
+      mkdirSync(agents, { recursive: true });
+      writeFileSync(join(agents, 'agent-a.jsonl'), `${line(`the subagent saw ${TERM}`)}\n`);
+      await expectNothingBuilt(scene, { folder: 0, term: 1, noRaw: 0, noTerms: 0, unreadable: 0 });
+    });
+
+    it('a session with no raw to scan', async () => {
+      const scene = await alone([line('a plain request')]);
+      rmSync(scene.staged.projectsRoot, { recursive: true, force: true });
+      rmSync(join(scene.staged.storeDir, 'raw'), { recursive: true, force: true });
+      await expectNothingBuilt(scene, { folder: 0, term: 0, noRaw: 1, noTerms: 0, unreadable: 0 });
+    });
+
+    it('a missing term file excludes everything', async () => {
+      const scene = await alone([line('a plain request')]);
+      scene.h.deps.env.OARS_EXCLUSION_TERMS = join(scene.staged.root, 'no-such-terms.txt');
+      await expectNothingBuilt(scene, { folder: 0, term: 0, noRaw: 0, noTerms: 1, unreadable: 0 });
+    });
+  });
+
+  it('counts a session captured before steps and frames, and one the vocabulary refuses, without building either', async () => {
     const scene = setting();
     await capture(scene);
     await signIn(scene);
-    openPool(scene);
     const file = join(scene.staged.storeDir, 'observations.jsonl');
     const original = readFileSync(file, 'utf8');
     const isSession = (record: unknown): record is { kind: 'session'; frame?: { model?: unknown } } => at(record, 'kind') === 'session';
@@ -596,80 +685,258 @@ describe('oars pool deposit', () => {
     });
     expect(await scene.cli('pool', 'deposit', '--server', POOL, '--json')).toBe(ExitCode.OK);
     const counted = scene.document();
-    expect(depositBodies(scene)).toEqual([]);
-    expect(counted).toMatchObject({ deposited: 0, uncaptured: at(counted, 'sessions') });
+    expect(outboxFiles(scene)).toEqual([]);
+    expect(counted).toMatchObject({ batched: 0, uncaptured: at(counted, 'sessions') });
 
     rewrite((session) => {
       if (session.frame !== undefined) session.frame.model = 'acme-private-llm';
     });
     scene.h.out.length = 0;
     expect(await scene.cli('pool', 'deposit', '--server', POOL)).toBe(ExitCode.OK);
-    expect(depositBodies(scene)).toEqual([]);
+    expect(outboxFiles(scene)).toEqual([]);
     expect(scene.h.out.join('')).toContain('refused by the vocabulary (transcripts[0].frame.model)');
     expect(scene.h.out.join('')).not.toContain('acme-private-llm');
+    expect(scene.seen).toEqual([]);
+  });
+});
+
+describe('oars pool outbox', () => {
+  it('asks for a sign-in, and names the server', async () => {
+    const scene = setting();
+    expect(await scene.cli('pool', 'outbox')).toBe(ExitCode.USAGE);
+    expect(await scene.cli('pool', 'outbox', '--server', POOL)).toBe(ExitCode.AUTH);
   });
 
-  it('counts a server refusal for one session and goes on; anything else stops the run', async () => {
+  it('says so when there is nothing to print', async () => {
     const scene = setting();
-    await capture(scene);
     await signIn(scene);
-    on(scene, 'get', '/v1/covenant', () => HttpResponse.json({ version: 'v1', accepted: true }));
-    const answers = [HttpResponse.json({ error: 'closed_vocabulary', field: 'transcripts[0].harness' }, { status: 422 }), HttpResponse.json({ error: 'closed_vocabulary' }, { status: 422 }), HttpResponse.json({ error: 'too_large' }, { status: 413 })];
-    on(scene, 'post', '/v1/deposits', () => answers.shift() ?? HttpResponse.json({ ok: true }, { status: 201 }));
+    expect(await scene.cli('pool', 'outbox', '--server', POOL)).toBe(ExitCode.OK);
+    expect(scene.h.out.join('')).toContain('The outbox is empty');
+  });
+
+  it('prints each batch as it would be sent, with the credential as its size and nothing else masked, then its hash, and the body hashes to that hash', async () => {
+    const scene = await batched();
+    expect(await scene.cli('pool', 'outbox', '--server', POOL)).toBe(ExitCode.OK);
+    const shown = scene.h.out.join('');
+    const [hash] = printedHashes(scene);
+    const bytes = batchBytes(scene)[0] ?? '';
+    expect(hash).toBe(batchHash(bytes));
+    const block = shown.slice(0, shown.indexOf('\nsha256:'));
+    expect(block.startsWith('POST /v1/deposits HTTP/1.1\nhost: pool.test\nconnection: keep-alive\n')).toBe(true);
+    for (const line of ['user-agent: oars/9.9.9', 'accept: application/json', `authorization: Bearer <credential: ${String(Buffer.byteLength(POOL_TOKEN))} bytes>`, 'content-type: application/json', `content-length: ${String(Buffer.byteLength(bytes))}`, 'accept-encoding: identity']) {
+      expect(block.split('\n')).toContain(line);
+    }
+    // The body is everything after the blank line that ends the headers, less the one newline `printed` adds after it.
+    const body = block.slice(block.indexOf('\n\n') + 2).replace(/\n$/, '');
+    expect(body).toBe(bytes);
+    expect(createHash('sha256').update(Buffer.from(body, 'utf8')).digest('hex')).toBe(hash);
+    expect([...scene.h.out, ...scene.h.err].join('')).not.toContain(POOL_TOKEN);
+    expect(scene.seen).toEqual([]);
+  });
+
+  it('records that each batch was shown, one line for each print, and only for what printed', async () => {
+    const scene = await batched();
+    const outbox = join(scene.staged.storeDir, 'pool-outbox');
+    expect(existsSync(join(outbox, readdirSync(outbox)[0] ?? '', 'shown.log'))).toBe(false);
+    expect(await scene.cli('pool', 'outbox', '--server', POOL)).toBe(ExitCode.OK);
+    const hashes = printedHashes(scene);
+    expect(hashes.length).toBeGreaterThan(0);
+    const log = readFileSync(join(outbox, readdirSync(outbox)[0] ?? '', 'shown.log'), 'utf8');
+    expect(log.split('\n').filter((entry) => entry !== '').map((entry) => entry.split(' ')[0])).toEqual(hashes);
+  });
+});
+
+describe('oars pool deposit --send', () => {
+  const printedAndHash = async (scene: Scene): Promise<string> => {
+    expect(await scene.cli('pool', 'outbox', '--server', POOL)).toBe(ExitCode.OK);
+    return printedHashes(scene)[0] ?? '';
+  };
+  const only = (scene: Scene): string => join(scene.staged.storeDir, 'pool-outbox', ...[readdirSync(join(scene.staged.storeDir, 'pool-outbox'))[0] ?? ''], ...outboxFilePath(scene));
+  const outboxFilePath = (scene: Scene): string[] => (outboxFiles(scene)[0] ?? '').split(/[\\/]/).slice(1);
+  const edit = (scene: Scene): void => {
+    const file = join(scene.staged.storeDir, 'pool-outbox', outboxFiles(scene)[0] ?? '');
+    writeFileSync(file, `${readFileSync(file, 'utf8').trimEnd()} \n`);
+  };
+
+  it('sends a batch that was shown and is unchanged, once, as the bytes that were printed', async () => {
+    const scene = await batched();
+    const hash = await printedAndHash(scene);
+    const pool = wire({ 'GET /v1/covenant': OPEN_COVENANT, 'POST /v1/deposits': answer(201, { ok: true }) });
+    const outcome = await poolDeposit(scene.h.deps, sendOptions(hash, pool.via));
+    expect(outcome.document).toMatchObject({ ok: true, hash, sent: true });
+    const posts = pool.requests.filter((request) => request.method === 'POST');
+    expect(posts).toHaveLength(1);
+    expect(posts[0]?.body).toBe(batchBytes(scene)[0]);
+    expect(batchHash(posts[0]?.body ?? '')).toBe(hash);
+  });
+
+  it('refuses a batch that was never printed, and sends nothing', async () => {
+    const scene = await batched();
+    const hash = batchHash(batchBytes(scene)[0] ?? '');
+    const pool = wire({ 'GET /v1/covenant': OPEN_COVENANT, 'POST /v1/deposits': answer(201) });
+    await expect(poolDeposit(scene.h.deps, sendOptions(hash, pool.via))).rejects.toMatchObject({ exitCode: ExitCode.CONFLICT, problem: { code: 'batch_not_shown' } });
+    expect(pool.requests).toEqual([]);
+  });
+
+  it('refuses a batch edited after it was printed, and sends nothing', async () => {
+    const scene = await batched();
+    const hash = await printedAndHash(scene);
+    edit(scene);
+    const pool = wire({ 'GET /v1/covenant': OPEN_COVENANT, 'POST /v1/deposits': answer(201) });
+    await expect(poolDeposit(scene.h.deps, sendOptions(hash, pool.via))).rejects.toMatchObject({ exitCode: ExitCode.CONFLICT, problem: { code: 'batch_changed' } });
+    expect(pool.requests).toEqual([]);
+  });
+
+  it('refuses a batch edited between the check and the send, and sends no deposit', async () => {
+    const scene = await batched();
+    const hash = await printedAndHash(scene);
+    const pool = wire({ 'GET /v1/covenant': OPEN_COVENANT, 'POST /v1/deposits': answer(201) });
+    const seam: Sender = (request) => {
+      // The covenant is the last thing asked before the body is read for the final time.
+      if (request.url.pathname === '/v1/covenant') edit(scene);
+      return pool.via(request);
+    };
+    await expect(poolDeposit(scene.h.deps, sendOptions(hash, seam))).rejects.toMatchObject({ exitCode: ExitCode.CONFLICT, problem: { code: 'batch_changed' } });
+    expect(pool.requests.map((request) => request.url.pathname)).toEqual(['/v1/covenant']);
+  });
+
+  it('refuses a batch whose file was removed between the check and the send', async () => {
+    const scene = await batched();
+    const hash = await printedAndHash(scene);
+    const pool = wire({ 'GET /v1/covenant': OPEN_COVENANT, 'POST /v1/deposits': answer(201) });
+    const seam: Sender = (request) => {
+      if (request.url.pathname === '/v1/covenant') rmSync(only(scene));
+      return pool.via(request);
+    };
+    await expect(poolDeposit(scene.h.deps, sendOptions(hash, seam))).rejects.toMatchObject({ problem: { code: 'batch_changed' } });
+    expect(pool.requests.map((request) => request.method)).toEqual(['GET']);
+  });
+
+  it('refuses a hash that names no batch, and one that is not a SHA-256', async () => {
+    const scene = await batched();
+    const pool = wire({});
+    await expect(poolDeposit(scene.h.deps, sendOptions('0'.repeat(64), pool.via))).rejects.toMatchObject({ problem: { code: 'batch_unknown' } });
+    await expect(poolDeposit(scene.h.deps, sendOptions('not-a-hash', pool.via))).rejects.toMatchObject({ exitCode: ExitCode.USAGE });
+    expect(pool.requests).toEqual([]);
+  });
+
+  it('is disabled from the command line: every check runs, and then it refuses with no request made', async () => {
+    const scene = await batched();
+    const hash = await printedAndHash(scene);
+    scene.h.err.length = 0;
+    expect(await scene.cli('pool', 'deposit', '--server', POOL, '--send', hash, '--json')).toBe(ExitCode.CONFLICT);
+    expect(scene.document()).toMatchObject({ problem: { code: 'sending_disabled' } });
+    expect(scene.seen).toEqual([]);
+    // The checks do run first: a hash that was never printed is refused for that, not for the disabled send.
+    expect(await scene.cli('pool', 'deposit', '--server', POOL, '--send', '1'.repeat(64), '--json')).toBe(ExitCode.CONFLICT);
+    expect(scene.document()).toMatchObject({ problem: { code: 'batch_unknown' } });
+    expect(await scene.cli('pool', 'deposit', '--server', POOL, '--send', hash)).toBe(ExitCode.CONFLICT);
+    expect(scene.h.err.join('')).toContain('waits on the pool covenant');
+  });
+
+  it('sends a deposit again when the pool answers deposit_conflict, and does not count it as a refusal', async () => {
+    const scene = await batched();
+    const hash = await printedAndHash(scene);
+    const conflict = answer(409, { error: 'deposit_conflict', message: 'Another deposit of this session landed first.' });
+    const pool = wire({ 'GET /v1/covenant': OPEN_COVENANT, 'POST /v1/deposits': [conflict, conflict, answer(201, { ok: true })] });
+    const outcome = await poolDeposit(scene.h.deps, sendOptions(hash, pool.via));
+    expect(outcome.document).toMatchObject({ ok: true, sent: true });
+    const posts = pool.requests.filter((request) => request.method === 'POST');
+    expect(posts).toHaveLength(3);
+    expect(new Set(posts.map((request) => request.body)).size).toBe(1);
+  });
+
+  it('gives up on a deposit that keeps conflicting, and says what the pool said', async () => {
+    const scene = await batched();
+    const hash = await printedAndHash(scene);
+    const pool = wire({ 'GET /v1/covenant': OPEN_COVENANT, 'POST /v1/deposits': answer(409, { error: 'deposit_conflict', message: 'Another deposit of this session landed first.' }) });
+    await expect(poolDeposit(scene.h.deps, sendOptions(hash, pool.via))).rejects.toThrow('Another deposit of this session landed first.');
+    expect(pool.requests.filter((request) => request.method === 'POST')).toHaveLength(3);
+  });
+
+  it('passes on a refusal the pool names, such as a revoked credential', async () => {
+    const scene = await batched();
+    const hash = await printedAndHash(scene);
+    const pool = wire({ 'GET /v1/covenant': OPEN_COVENANT, 'POST /v1/deposits': answer(401, { error: 'unauthorized', message: 'Sign in with oars pool login first.' }) });
+    await expect(poolDeposit(scene.h.deps, sendOptions(hash, pool.via))).rejects.toMatchObject({ exitCode: ExitCode.AUTH });
+  });
+
+  it('stops before the request when the pool is closed, and when the covenant is not accepted', async () => {
+    const scene = await batched();
+    const hash = await printedAndHash(scene);
+    const closed = wire({ 'GET /v1/covenant': answer(200, { version: null }) });
+    await expect(poolDeposit(scene.h.deps, sendOptions(hash, closed.via))).rejects.toMatchObject({ problem: { code: 'deposits_closed' } });
+    const unaccepted = wire({ 'GET /v1/covenant': answer(200, { version: 'v1', accepted: false }) });
+    await expect(poolDeposit(scene.h.deps, sendOptions(hash, unaccepted.via))).rejects.toMatchObject({ problem: { code: 'covenant_not_accepted' } });
+    const broken = wire({ 'GET /v1/covenant': answer(404, { error: 'not_found', message: 'No such route.' }) });
+    await expect(poolDeposit(scene.h.deps, sendOptions(hash, broken.via))).rejects.toMatchObject({ exitCode: ExitCode.UNEXPECTED });
+    for (const pool of [closed, unaccepted, broken]) expect(pool.requests.filter((request) => request.method === 'POST')).toEqual([]);
+  });
+
+  it('accepts the covenant version it was told to, and stops if the pool refuses that', async () => {
+    const scene = await batched();
+    const hash = await printedAndHash(scene);
+    const accepting = wire({ 'GET /v1/covenant': answer(200, { version: 'v1', accepted: false }), 'POST /v1/covenant/accept': answer(200, { ok: true, version: 'v1' }), 'POST /v1/deposits': answer(201) });
+    await poolDeposit(scene.h.deps, { ...sendOptions(hash, accepting.via), acceptCovenant: 'v1' });
+    expect(accepting.requests.find((request) => request.url.pathname === '/v1/covenant/accept')?.body).toBe(JSON.stringify({ version: 'v1' }));
+    expect(accepting.requests.at(-1)?.url.pathname).toBe('/v1/deposits');
+
+    const stale = wire({ 'GET /v1/covenant': answer(200, { version: 'v2', accepted: false }), 'POST /v1/covenant/accept': answer(409, { error: 'covenant_version', message: 'The current covenant is v2.' }) });
+    await expect(poolDeposit(scene.h.deps, { ...sendOptions(hash, stale.via), acceptCovenant: 'v1' })).rejects.toMatchObject({ exitCode: ExitCode.UNEXPECTED });
+    expect(stale.requests.map((request) => request.url.pathname)).toEqual(['/v1/covenant', '/v1/covenant/accept']);
+  });
+
+  it('builds the request the print showed, with the credential in the header and nothing in the URL', async () => {
+    const scene = await batched();
+    const hash = await printedAndHash(scene);
+    const pool = wire({ 'GET /v1/covenant': OPEN_COVENANT, 'POST /v1/deposits': answer(201) });
+    await poolDeposit(scene.h.deps, sendOptions(hash, pool.via));
+    const post = pool.requests.find((request) => request.method === 'POST');
+    expect(post?.headers).toContainEqual(['authorization', `Bearer ${POOL_TOKEN}`]);
+    expect(post?.url.toString()).toBe(`${POOL}/v1/deposits`);
+  });
+});
+
+describe('oars pool outbox --explain and older batches', () => {
+  it('prints each field of the batch with its row', async () => {
+    const scene = await batched();
+    expect(await scene.cli('pool', 'outbox', '--explain', '--server', POOL)).toBe(ExitCode.OK);
+    const shown = scene.h.out.join('');
+    for (const field of BATCH_FIELDS) expect(shown).toContain(`  ${field}: ${FIELD_ROWS[field] ?? 'no row'}`);
+  });
+
+  it('fails, rather than printing a blank, for a field with no row', async () => {
+    const scene = await batched();
+    const outbox = join(scene.staged.storeDir, 'pool-outbox', readdirSync(join(scene.staged.storeDir, 'pool-outbox'))[0] ?? '');
+    await writeBatch(outbox, 'cccccccccccccccc', { format: 1, id: 'x', transcripts: [], surprise: 1 });
+    expect(await scene.cli('pool', 'outbox', '--explain', '--server', POOL, '--json')).toBe(ExitCode.INVALID);
+    expect(scene.document()).toMatchObject({ problem: { code: 'field_without_row' } });
+    expect(JSON.stringify(scene.document())).toContain('surprise');
+  });
+
+  it('discards a batch built under an older vocabulary or field list: never printed, never sent, counted by deposit', async () => {
+    const scene = await batched();
+    const outbox = join(scene.staged.storeDir, 'pool-outbox', readdirSync(join(scene.staged.storeDir, 'pool-outbox'))[0] ?? '');
+    const old = await writeBatch(outbox, 'dddddddddddddddd', { format: 1, id: 'old', transcripts: [] }, 'v0-00000000');
+    expect(await scene.cli('pool', 'outbox', '--server', POOL)).toBe(ExitCode.OK);
+    expect(printedHashes(scene)).not.toContain(old.hash);
+    expect(scene.h.out.join('')).toContain('1 batches were built under an older vocabulary or field list and will never be sent.');
+    await expect(poolDeposit(scene.h.deps, sendOptions(old.hash, wire({}).via))).rejects.toMatchObject({ problem: { code: 'batch_unknown' } });
+    scene.h.out.length = 0;
     expect(await scene.cli('pool', 'deposit', '--server', POOL, '--json')).toBe(ExitCode.OK);
-    expect(scene.document()).toMatchObject({ refusedFields: ['transcripts[0].harness'] });
-    expect(at(scene.document(), 'refused')).toBeGreaterThan(0);
-
-    const stopped = setting();
-    await capture(stopped);
-    await signIn(stopped);
-    on(stopped, 'get', '/v1/covenant', () => HttpResponse.json({ version: 'v1', accepted: true }));
-    on(stopped, 'post', '/v1/deposits', () => HttpResponse.json({ error: 'unauthorized', message: 'Sign in with oars pool login first.' }, { status: 401 }));
-    expect(await stopped.cli('pool', 'deposit', '--server', POOL)).toBe(ExitCode.AUTH);
-    expect(depositBodies(stopped)).toHaveLength(1);
+    expect(scene.document()).toMatchObject({ discarded: 1 });
+    expect(existsSync(old.folder)).toBe(false);
   });
 
-  it('stops before building anything when the pool is closed, and when the covenant is not accepted', async () => {
-    const closed = setting();
-    await capture(closed);
-    await signIn(closed);
-    on(closed, 'get', '/v1/covenant', () => HttpResponse.json({ version: null }));
-    expect(await closed.cli('pool', 'deposit', '--server', POOL, '--json')).toBe(ExitCode.AUTH);
-    expect(closed.document()).toMatchObject({ problem: { code: 'deposits_closed' } });
-    expect(depositBodies(closed)).toEqual([]);
-
-    const unaccepted = setting();
-    await capture(unaccepted);
-    await signIn(unaccepted);
-    on(unaccepted, 'get', '/v1/covenant', () => HttpResponse.json({ version: 'v1', accepted: false }));
-    expect(await unaccepted.cli('pool', 'deposit', '--server', POOL, '--json')).toBe(ExitCode.AUTH);
-    expect(unaccepted.document()).toMatchObject({ problem: { code: 'covenant_not_accepted' } });
-    expect(depositBodies(unaccepted)).toEqual([]);
-
-    const broken = setting();
-    await signIn(broken);
-    on(broken, 'get', '/v1/covenant', () => HttpResponse.json({ error: 'not_found', message: 'No such route.' }, { status: 404 }));
-    expect(await broken.cli('pool', 'deposit', '--server', POOL)).toBe(ExitCode.UNEXPECTED);
-  });
-
-  it('accepts the version it was told to, and stops if the pool refuses that', async () => {
-    const scene = setting();
-    await capture(scene);
-    await signIn(scene);
-    on(scene, 'get', '/v1/covenant', () => HttpResponse.json({ version: 'v1', accepted: false }));
-    on(scene, 'post', '/v1/covenant/accept', () => HttpResponse.json({ ok: true, version: 'v1' }));
-    on(scene, 'post', '/v1/deposits', () => HttpResponse.json({ ok: true }, { status: 201 }));
-    expect(await scene.cli('pool', 'deposit', '--server', POOL, '--accept-covenant', 'v1')).toBe(ExitCode.OK);
-    expect(scene.seen.find((entry) => entry.url.endsWith('/accept'))?.body).toBe(JSON.stringify({ version: 'v1' }));
-    expect(depositBodies(scene).length).toBeGreaterThan(0);
-
-    const stale = setting();
-    await capture(stale);
-    await signIn(stale);
-    on(stale, 'get', '/v1/covenant', () => HttpResponse.json({ version: 'v2', accepted: false }));
-    on(stale, 'post', '/v1/covenant/accept', () => HttpResponse.json({ error: 'covenant_version', message: 'The current covenant is v2.' }, { status: 409 }));
-    expect(await stale.cli('pool', 'deposit', '--server', POOL, '--accept-covenant', 'v1')).toBe(ExitCode.UNEXPECTED);
-    expect(depositBodies(stale)).toEqual([]);
+  it('does not print a batch whose file was edited since it was written, and says how many', async () => {
+    const scene = await batched();
+    const file = join(scene.staged.storeDir, 'pool-outbox', outboxFiles(scene)[0] ?? '');
+    const edited = batchHash(readFileSync(file, 'utf8'));
+    writeFileSync(file, `${readFileSync(file, 'utf8')}\n`);
+    expect(await scene.cli('pool', 'outbox', '--server', POOL)).toBe(ExitCode.OK);
+    expect(printedHashes(scene)).not.toContain(edited);
+    expect(printedHashes(scene)).toHaveLength(outboxFiles(scene).length - 1);
+    expect(scene.h.out.join('')).toContain('1 batches were edited on disk');
   });
 });
 

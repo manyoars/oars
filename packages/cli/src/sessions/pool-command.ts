@@ -4,15 +4,19 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import type { Outcome, RunDeps } from '../cli.js';
 import { CliError, exitCodeForProblem, ExitCode, unreachableError } from '../errors.js';
+import { compileAllow } from './allow.js';
 import { checkSession, exclusionPaths, type Reason } from './exclusion.js';
+import { discardStale, FIELD_ROWS, fieldsOf, heldBatches, lockedBatch, markShown, outboxFolder, staleBatches, unchangedBytes, writeBatch, type LockRefusal } from './pool-outbox.js';
 import { isBundleVersion, parseSkeleton, sessionsOf, skeletonOf, VOCAB_VERSION, verifyBundle, type Bundle, type PinnedKey } from './pool-wire.js';
 import { Masker, printed, TRANSPORT_HEADERS, waitWords, type Outgoing } from './pool-print.js';
 import { isVocabularyExpired, REGISTRY_MAX_AGE_DAYS, VOCAB_SNAPSHOT_DATE } from './public-vocabulary.js';
 import { contentHash } from './read.js';
-import { loadStore, type SessionsRuntime } from './store.js';
+import { loadStore, readSaved, type SessionsRuntime } from './store.js';
 
 const LOGIN = 'pool-login';
 const DEPOSIT = 'pool-deposit';
+const OUTBOX = 'pool-outbox';
+const POOL_DEPOSITS = '/v1/deposits';
 const FETCH = 'pool-fetch';
 const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]']);
 export const POOL_PROVIDERS = ['github', 'google'] as const;
@@ -114,7 +118,7 @@ const signedIn = async (deps: RunDeps, storeDir: string, server: string, step: s
   return found;
 };
 
-interface Reply {
+export interface Reply {
   status: number;
   body: unknown;
   headers: Headers;
@@ -122,6 +126,8 @@ interface Reply {
 
 interface Call {
   body?: unknown;
+  /** A body already serialized, sent as it is: a batch from the outbox, whose bytes were hashed and printed. */
+  bytes?: string;
   token?: string;
   /** The ETag of the bundle already kept, so the pool can answer 304 with no bundle. */
   ifNoneMatch?: string;
@@ -129,16 +135,25 @@ interface Call {
   show?: Masker;
 }
 
-/** One call to the pool. A redirect is an error: it could carry a skeleton or a token somewhere the checks on the named server never saw. */
-const ask = async (deps: RunDeps, step: string, server: string, path: string, init: Call): Promise<Reply> => {
+/** How a request leaves this machine. The command line passes none and so sends no batch; the lock in `deposit --send` is tested with one. */
+export type Sender = (request: Outgoing) => Promise<Reply>;
+
+/** The request exactly as it will be sent: `outbox` prints it, and `ask` hands the same value to `fetch`. */
+const outgoing = (deps: RunDeps, server: string, path: string, init: Call): Outgoing => {
   const headers: Array<[string, string]> = [['user-agent', `oars/${deps.version}`], ['accept', 'application/json']];
   if (init.token !== undefined) headers.push(['authorization', `Bearer ${init.token}`]);
   // Node's `fetch` writes `cache-control` and `pragma` itself whenever `if-none-match` is set, so they are named here to be printed.
   if (init.ifNoneMatch !== undefined) headers.push(['if-none-match', init.ifNoneMatch], ['cache-control', 'no-cache'], ['pragma', 'no-cache']);
-  if (init.body !== undefined) headers.push(['content-type', 'application/json']);
+  const body = init.bytes ?? (init.body === undefined ? undefined : JSON.stringify(init.body));
+  if (body !== undefined) headers.push(['content-type', 'application/json']);
   headers.push(...TRANSPORT_HEADERS);
-  const request: Outgoing = { method: init.body === undefined ? 'GET' : 'POST', url: new URL(path, server), headers, ...(init.body === undefined ? {} : { body: JSON.stringify(init.body) }) };
-  return send(deps, step, request, init.show);
+  return { method: body === undefined ? 'GET' : 'POST', url: new URL(path, server), headers, ...(body === undefined ? {} : { body }) };
+};
+
+/** One call to the pool. A redirect is an error: it could carry a batch or a token somewhere the checks on the named server never saw. */
+const ask = (deps: RunDeps, step: string, server: string, path: string, init: Call, via?: Sender): Promise<Reply> => {
+  const request = outgoing(deps, server, path, init);
+  return via === undefined ? send(deps, step, request, init.show) : via(request);
 };
 
 /** Prints the request when asked to, then sends exactly those headers and that body. */
@@ -287,9 +302,9 @@ export const poolLogin = async (deps: RunDeps, options: { server?: string | unde
   return { document: { ok: true, server, account: signIn.account, expiresAt: signIn.expiresAt }, text: `Signed in to ${server} as ${signIn.account}.` };
 };
 
-/** Deposits stop here before a skeleton is built when the server is closed or wants a covenant accepted, so nothing crosses the wire for it to refuse. */
-const openCovenant = async (deps: RunDeps, server: string, token: string, accept: string | undefined): Promise<void> => {
-  const reply = await ask(deps, DEPOSIT, server, '/v1/covenant', { token });
+/** A send stops here when the server is closed or wants a covenant accepted, before the batch is read for the last time. */
+const openCovenant = async (deps: RunDeps, server: string, token: string, accept: string | undefined, via: Sender): Promise<void> => {
+  const reply = await ask(deps, DEPOSIT, server, '/v1/covenant', { token }, via);
   if (reply.status !== 200 || !isObject(reply.body)) throw refusal(DEPOSIT, reply);
   const version = textIn(reply.body, 'version');
   if (version === undefined) {
@@ -297,7 +312,7 @@ const openCovenant = async (deps: RunDeps, server: string, token: string, accept
     throw new CliError(title, ExitCode.AUTH, DEPOSIT, { code: 'deposits_closed', title, status: 403 });
   }
   if (accept !== undefined) {
-    const accepted = await ask(deps, DEPOSIT, server, '/v1/covenant/accept', { token, body: { version: accept } });
+    const accepted = await ask(deps, DEPOSIT, server, '/v1/covenant/accept', { token, body: { version: accept } }, via);
     if (accepted.status !== 200) throw refusal(DEPOSIT, accepted);
     return;
   }
@@ -309,42 +324,96 @@ const openCovenant = async (deps: RunDeps, server: string, token: string, accept
 
 interface DepositCounts {
   sessions: number;
-  deposited: number;
-  excluded: { term: number; noRaw: number; noTerms: number; unreadable: number };
-  /** Captured before steps and frames, so it holds no closed reading to send. Re-capture would give it one. */
+  /** Batches written to the outbox. Nothing has been sent. */
+  batched: number;
+  /** Sessions kept out by a session gate, by reason and by count only: never a folder name or a term. */
+  excluded: { folder: number; term: number; noRaw: number; noTerms: number; unreadable: number };
+  /** Captured before steps and frames, so it holds no closed reading to build. Re-capture would give it one. */
   uncaptured: number;
-  /** Refused by the vocabulary, here or at the server; the count of those and which fields, never a value. */
+  /** Refused by the vocabulary here; the count of those and which fields, never a value. */
   refused: number;
   refusedFields: string[];
-  tooLarge: number;
+  /** Batches built under an older vocabulary or field list, removed from the outbox. */
+  discarded: number;
 }
 
 const excludedKey = (reason: Exclude<Reason, 'clean'>): keyof DepositCounts['excluded'] => (reason === 'no-raw' ? 'noRaw' : reason === 'no-terms' ? 'noTerms' : reason);
 
-/** `oars pool deposit`: every session in the store that passes the V15 check goes up as a skeleton. An excluded one is never built or sent, and only counts are printed. */
-export const poolDeposit = async (deps: RunDeps, options: { server?: string | undefined; acceptCovenant?: string | undefined }): Promise<Outcome> => {
+/** A deposit answered with this code is sent again: another deposit of the same session landed between the pool's read and its write, and the next one nets against the winner. */
+const DEPOSIT_CONFLICT = 'deposit_conflict';
+const SEND_ATTEMPTS = 3;
+
+const vocabularyExpired = (deps: RunDeps): CliError | undefined => {
+  if (!isVocabularyExpired(new Date(deps.now()))) return undefined;
+  const title = `This oars is out of date: its vocabulary ${VOCAB_VERSION} was taken on ${VOCAB_SNAPSHOT_DATE}, over ${String(REGISTRY_MAX_AGE_DAYS)} days ago. Upgrade with npm install -g @manyoars/oars, then run oars pool deposit again. Your sessions stay on this machine.`;
+  return new CliError(title, ExitCode.CONFLICT, DEPOSIT, { code: 'vocabulary_expired', title, status: 409 });
+};
+
+const lockMessages: { [code in LockRefusal]: string } = {
+  batch_unknown: 'No batch with that hash is in the outbox. Run oars pool outbox to list them.',
+  batch_not_shown: 'That batch was never printed. Run oars pool outbox, read it, then send it.',
+  batch_changed: 'That batch changed on disk after it was printed, or since it was written, so it was not sent. Run oars pool deposit to build it again, then oars pool outbox to print it.',
+};
+
+/** `deposit --send <hash>`: the lock, then (only when a sender is given) the covenant and the request. The body is read and hashed again just before the request. */
+const sendBatch = async (deps: RunDeps, options: { outbox: string; server: string; token: string; hash: string; acceptCovenant: string | undefined; via: Sender | undefined }): Promise<Outcome> => {
+  const { outbox, server, token, hash, via } = options;
+  if (!/^[0-9a-f]{64}$/.test(hash)) throw usage('--send takes the SHA-256 that oars pool outbox printed: 64 hexadecimal characters.', DEPOSIT);
+  const locked = await lockedBatch(outbox, hash);
+  if (!locked.ok) {
+    const title = lockMessages[locked.code];
+    throw new CliError(title, ExitCode.CONFLICT, DEPOSIT, { code: locked.code, title, status: 409 });
+  }
+  if (via === undefined) {
+    const title = 'Sending a batch waits on the pool covenant: this oars does not send one yet. Nothing was sent.';
+    throw new CliError(title, ExitCode.CONFLICT, DEPOSIT, { code: 'sending_disabled', title, status: 409 });
+  }
+  await openCovenant(deps, server, token, options.acceptCovenant, via);
+  const bytes = await unchangedBytes(locked.file, hash);
+  if (bytes === undefined) {
+    const title = lockMessages.batch_changed;
+    throw new CliError(title, ExitCode.CONFLICT, DEPOSIT, { code: 'batch_changed', title, status: 409 });
+  }
+  let reply = await ask(deps, DEPOSIT, server, POOL_DEPOSITS, { token, bytes }, via);
+  for (let attempt = 1; attempt < SEND_ATTEMPTS && reply.status === 409 && isObject(reply.body) && textIn(reply.body, 'error') === DEPOSIT_CONFLICT; attempt += 1) {
+    reply = await ask(deps, DEPOSIT, server, POOL_DEPOSITS, { token, bytes }, via);
+  }
+  if (reply.status !== 201) throw refusal(DEPOSIT, reply);
+  return { document: { ok: true, server, hash, sent: true }, text: `Sent batch ${hash} to ${server}.` };
+};
+
+/**
+ * `oars pool deposit`: every session in the store that passes both session gates is built into a canonical batch in the outbox, and the command stops: nothing is sent. The gates run before any projection does: the folder
+ * allowlist, then the V15 check. A session that fails either, or has no raw to scan, is counted and never built. `--send <hash>` is the lock in `sendBatch`.
+ */
+export const poolDeposit = async (deps: RunDeps, options: { server?: string | undefined; acceptCovenant?: string | undefined; send?: string | undefined; via?: Sender | undefined }): Promise<Outcome> => {
   const runtime = runtimeOf(deps);
   const server = poolServer(deps.env, DEPOSIT, options.server);
   const { account, token } = await signedIn(deps, runtime.storeDir, server, DEPOSIT);
-  // A client past `registry_max_age` builds no batch (spec Section 1.3): the projection functions will run here once the deposit calls them (the skeleton below still sends the joined frame), so its sessions wait in `A` and nothing
-  // is lost. This comes before the first request, so nothing leaves the machine.
-  if (isVocabularyExpired(new Date(deps.now()))) {
-    const title = `This oars is out of date: its vocabulary ${VOCAB_VERSION} was taken on ${VOCAB_SNAPSHOT_DATE}, over ${String(REGISTRY_MAX_AGE_DAYS)} days ago. Upgrade with npm install -g @manyoars/oars, then run oars pool deposit again. Your sessions stay on this machine.`;
-    throw new CliError(title, ExitCode.CONFLICT, DEPOSIT, { code: 'vocabulary_expired', title, status: 409 });
-  }
-  await openCovenant(deps, server, token, options.acceptCovenant);
+  // A client past `registry_max_age` builds no batch (spec Section 1.3): its sessions wait in `A` and nothing is lost. This comes before anything is written or sent.
+  const expired = vocabularyExpired(deps);
+  if (expired !== undefined) throw expired;
+  const outbox = outboxFolder(runtime.storeDir, server);
+  if (options.send !== undefined) return sendBatch(deps, { outbox, server, token, hash: options.send, acceptCovenant: options.acceptCovenant, via: options.via });
   const { terms } = exclusionPaths(runtime.projectsRoot, deps.env);
-  const counts: DepositCounts = { sessions: 0, deposited: 0, excluded: { term: 0, noRaw: 0, noTerms: 0, unreadable: 0 }, uncaptured: 0, refused: 0, refusedFields: [], tooLarge: 0 };
+  const allow = compileAllow((await readSaved(runtime.storeDir)).allow);
+  const discarded = await discardStale(outbox);
+  const counts: DepositCounts = { sessions: 0, batched: 0, excluded: { folder: 0, term: 0, noRaw: 0, noTerms: 0, unreadable: 0 }, uncaptured: 0, refused: 0, refusedFields: [], discarded };
   const refusedFields = new Set<string>();
   for (const records of sessionsOf(await loadStore(runtime.storeDir))) {
     counts.sessions += 1;
+    if (!allow.allows(records.main.project)) {
+      counts.excluded.folder += 1;
+      continue;
+    }
     const verdict = await checkSession(runtime, terms, records.main.project, records.main.session);
     if (verdict.reason !== 'clean') {
       counts.excluded[excludedKey(verdict.reason)] += 1;
       continue;
     }
-    // Hashed with the account, so a redeposit replaces its own row and two accounts' copies of one session cannot be joined.
-    const skeleton = skeletonOf(records, contentHash([account, records.main.session]));
+    // Hashed with the account, so a redeposit replaces its own batch and two accounts' copies of one session cannot be joined.
+    const key = contentHash([account, records.main.session]);
+    const skeleton = skeletonOf(records, key);
     if (skeleton === null) {
       counts.uncaptured += 1;
       continue;
@@ -355,27 +424,58 @@ export const poolDeposit = async (deps: RunDeps, options: { server?: string | un
       refusedFields.add(parsed.field);
       continue;
     }
-    const reply = await ask(deps, DEPOSIT, server, '/v1/deposits', { token, body: parsed.skeleton });
-    if (reply.status === 201) {
-      counts.deposited += 1;
-    } else if (reply.status === 413) {
-      counts.tooLarge += 1;
-    } else if (reply.status === 422) {
-      counts.refused += 1;
-      const field = isObject(reply.body) ? textIn(reply.body, 'field') : undefined;
-      if (field !== undefined) refusedFields.add(field);
-    } else {
-      throw refusal(DEPOSIT, reply);
-    }
+    await writeBatch(outbox, key, parsed.skeleton);
+    counts.batched += 1;
   }
   counts.refusedFields = [...refusedFields].sort();
-  const { term, noRaw, noTerms, unreadable } = counts.excluded;
+  const { folder, term, noRaw, noTerms, unreadable } = counts.excluded;
   const lines = [
-    `Deposited ${String(counts.deposited)} of ${String(counts.sessions)} sessions to ${server}.`,
-    `Excluded by the V15 check, never sent: ${String(term)} for a term, ${String(noRaw)} with no raw to scan, ${String(noTerms)} with no term file, ${String(unreadable)} unreadable.`,
-    `Not sent: ${String(counts.uncaptured)} captured before steps and frames, ${String(counts.tooLarge)} too large, ${String(counts.refused)} refused by the vocabulary${counts.refusedFields.length === 0 ? '' : ` (${counts.refusedFields.join(', ')})`}.`,
+    `Wrote ${String(counts.batched)} of ${String(counts.sessions)} sessions to the outbox for ${server}. Nothing was sent.`,
+    `Kept out by the session gates, never built: ${String(folder)} in a folder not on the allowlist, ${String(term)} for a term, ${String(noRaw)} with no raw to scan, ${String(noTerms)} with no term file, ${String(unreadable)} unreadable.`,
+    `Not built: ${String(counts.uncaptured)} captured before steps and frames, ${String(counts.refused)} refused by the vocabulary${counts.refusedFields.length === 0 ? '' : ` (${counts.refusedFields.join(', ')})`}.`,
+    ...(discarded === 0 ? [] : [`Discarded ${String(discarded)} batches built under an older vocabulary or field list.`]),
+    'Run oars pool outbox to print exactly what would be sent.',
   ];
   return { document: { ok: true, server, ...counts }, text: lines.join('\n') };
+};
+
+/** Each top-level field of a batch with its row. A field with no row fails the command rather than printing blank. */
+const explained = (bytes: string): { [field: string]: string } => {
+  const rows: { [field: string]: string } = {};
+  for (const field of fieldsOf(bytes)) {
+    const row = Object.hasOwn(FIELD_ROWS, field) ? FIELD_ROWS[field] : undefined;
+    if (row === undefined) {
+      const title = `The batch holds a field, ${field}, with no row to explain it. Nothing was printed for it.`;
+      throw new CliError(title, ExitCode.INVALID, OUTBOX, { code: 'field_without_row', title });
+    }
+    rows[field] = row;
+  }
+  return rows;
+};
+
+/** `oars pool outbox`: prints each batch as it would be sent, the request line and every header included, with the bearer credential as its size and nothing else masked, then its SHA-256, and records that it was shown. `--explain` adds each field's rule. */
+export const poolOutbox = async (deps: RunDeps, options: { server?: string | undefined; explain?: boolean | undefined }): Promise<Outcome> => {
+  const runtime = runtimeOf(deps);
+  const server = poolServer(deps.env, OUTBOX, options.server);
+  const { token } = await signedIn(deps, runtime.storeDir, server, OUTBOX);
+  const outbox = outboxFolder(runtime.storeDir, server);
+  const { batches, edited } = await heldBatches(outbox);
+  const masker = new Masker();
+  masker.add(token);
+  const shown: Array<{ hash: string; request: string; fields?: { [field: string]: string } }> = [];
+  for (const batch of batches) {
+    const fields = options.explain === true ? explained(batch.bytes) : undefined;
+    shown.push({ hash: batch.hash, request: printed(outgoing(deps, server, POOL_DEPOSITS, { token, bytes: batch.bytes }), masker), ...(fields === undefined ? {} : { fields }) });
+  }
+  for (const { hash } of shown) await markShown(outbox, hash, deps.now());
+  const stale = await staleBatches(outbox);
+  const blocks = shown.map(({ hash, request, fields }) => [request, `sha256: ${hash}`, ...Object.entries(fields ?? {}).map(([field, row]) => `  ${field}: ${row}`)].join('\n'));
+  const notes = [
+    ...(edited === 0 ? [] : [`${String(edited)} batches were edited on disk since they were written and are not printed or sent. Run oars pool deposit to build them again.`]),
+    ...(stale === 0 ? [] : [`${String(stale)} batches were built under an older vocabulary or field list and will never be sent.`]),
+  ];
+  const text = shown.length === 0 ? ['The outbox is empty. Run oars pool deposit first.', ...notes].join('\n') : [...blocks, ...notes].join('\n\n');
+  return { document: { ok: true, server, batches: shown, edited, stale }, text };
 };
 
 const replicaFile = (storeDir: string, server: string, harnessVersion: string): string => join(storeDir, 'pool-replica', contentHash(server), `${encodeURIComponent(harnessVersion)}.json`);
