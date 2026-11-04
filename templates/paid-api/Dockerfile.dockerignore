@@ -1,5 +1,0 @@
-# Read by BuildKit for templates/paid-api/Dockerfile (build context: the repository root).
-**/node_modules
-**/dist
-.git
-.claude
