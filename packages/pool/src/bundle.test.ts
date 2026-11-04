@@ -490,9 +490,9 @@ describe('the ETag of a fetch', () => {
     const token = await depositor('5401');
     const answer = await pool.raw(`/bundle/claude-code/${VERSION}/${VOCAB_VERSION}`, token);
     const db = await pool.db();
-    const held = await db.prepare('SELECT generation FROM pool_generation WHERE id = 1').first<{ generation: number }>();
-    expect(held?.generation).toBeGreaterThan(0);
-    expect(answer.headers.get('etag')).toBe(etagOf('claude-code', VERSION, held?.generation ?? 0, SERVED.map(({ name }) => name)));
+    const generation = Number(await db.prepare('SELECT generation FROM pool_generation WHERE id = 1').first('generation'));
+    expect(generation).toBeGreaterThan(0);
+    expect(answer.headers.get('etag')).toBe(etagOf('claude-code', VERSION, generation, SERVED.map(({ name }) => name)));
   });
 });
 
