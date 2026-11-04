@@ -47,7 +47,6 @@ const get = async (url, options = {}) => {
     try {
       const response = await fetch(url, { headers: { 'user-agent': AGENT, accept: options.accept ?? 'application/json' }, redirect: 'follow' });
       if (response.status === 404) return null;
-      if (response.status === 429 || response.status >= 500) throw new Error(`${response.status} ${url}`);
       if (!response.ok) throw new Error(`${response.status} ${url}`);
       return options.text === true ? await response.text() : await response.json();
     } catch (error) {

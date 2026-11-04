@@ -290,8 +290,8 @@ export const PRIVATE = 'private';
 
 const DAY_MS = 86_400_000;
 /** A client more than `registry_max_age` past its snapshot builds no batch (the exact elapsed time, not whole days): its sessions wait in `A` until it upgrades. */
-export const isVocabularyExpired = (now: Date, snapshotDate: string = VOCAB_SNAPSHOT_DATE): boolean =>
-  now.getTime() - Date.parse(`${snapshotDate}T00:00:00Z`) > REGISTRY_MAX_AGE_DAYS * DAY_MS;
+export const isVocabularyExpired = (now: Date): boolean =>
+  now.getTime() - Date.parse(`${VOCAB_SNAPSHOT_DATE}T00:00:00Z`) > REGISTRY_MAX_AGE_DAYS * DAY_MS;
 
 /** The built-in tools of Claude Code, by the names a transcript records. Curated, since no registry publishes them (spec Section 1.3, the name seed). */
 export const HARNESS_TOOLS: ReadonlyMap<string, ReadonlySet<string>> = new Map(

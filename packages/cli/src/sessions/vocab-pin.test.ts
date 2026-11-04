@@ -6,7 +6,9 @@ import {
   HARNESS_AGENT_TYPES,
   HARNESS_TOOLS,
   isVocabularyExpired,
+  LANGUAGES,
   PUBLIC_FLAGS,
+  PUBLIC_HOSTS,
   PUBLIC_MCP_SERVERS,
   PUBLIC_MCP_TOOLS,
   PUBLIC_PROGRAMS,
@@ -25,7 +27,7 @@ const tables = (map: ReadonlyMap<string, ReadonlySet<string>>): Array<[string, s
 
 /** The curated lists in public-vocabulary.ts that the pool reads, as one digest. */
 const curatedDigest = (): string =>
-  sha256(JSON.stringify([sorted(PUBLIC_PROGRAMS), sorted(BUNDLING_PROGRAMS), tables(PUBLIC_SUBCOMMANDS), sorted(PUBLIC_FLAGS), sorted(PUBLIC_MCP_SERVERS), tables(PUBLIC_MCP_TOOLS), tables(HARNESS_TOOLS), sorted(PUBLIC_SKILLS), tables(HARNESS_AGENT_TYPES), tables(TOOL_INPUT_KEYS)]));
+  sha256(JSON.stringify([sorted(PUBLIC_PROGRAMS), sorted(BUNDLING_PROGRAMS), tables(PUBLIC_SUBCOMMANDS), sorted(PUBLIC_FLAGS), sorted(PUBLIC_MCP_SERVERS), tables(PUBLIC_MCP_TOOLS), tables(HARNESS_TOOLS), sorted(PUBLIC_SKILLS), tables(HARNESS_AGENT_TYPES), tables(TOOL_INPUT_KEYS), sorted(LANGUAGES), sorted(PUBLIC_HOSTS)]));
 
 interface Manifest {
   snapshotDate: string;
@@ -66,7 +68,7 @@ const PINNED: { readonly [version: string]: { readonly files: { readonly [file: 
       'pypi.json': '4fd0e73a16ec5abcee1c970f7e28cc84af68aaceb0197b8007a8be690878f442',
       'rubygems.json': '0cfec417beb17efdbd60634fe7e6c9252bebc6be5bab086446431099d939be33',
     },
-    curated: '6cddd7cfc0602f288ace775d63ca9ee81ead5bccd35e979e7632b8de81e8738b',
+    curated: '45aaa0e278efbb5c3b7b9c264881a03b066b97c6a50e5ff8ae4a7793b4943d50',
   },
 };
 
