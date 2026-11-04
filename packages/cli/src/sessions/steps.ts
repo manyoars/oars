@@ -228,7 +228,7 @@ export const formatStepCounters = (counters: StepCounters): string => {
     ...by('records deposited,', counters.deposited),
     ...by('records derived,', counters.derived),
     ...by('index holds,', counters.indexed),
-    ...(verify === null ? [] : [row('invariants passed of checked', `${String(verify.passed ?? 0)}/${String(verify.checked ?? 0)}`), row('cv-behind sessions', String(verify.cvBehind ?? 0))]),
+    ...(verify === null ? [] : [row('invariants passed of checked', `${String(verify.passed ?? 0)}/${String(verify.checked ?? 0)}`), row('cv-behind sessions', String(verify.cvBehind ?? 0)), row('sessions failing the raw audit', String(verify.merkle ?? 0))]),
     ...(counters.recall.queries === 0 ? [] : [row('recall queries', String(counters.recall.queries)), row('recall matches', String(counters.recall.matches))]),
     ...by('failed runs,', counters.failures),
     row('stuck steps', String(counters.stuck.length)),
