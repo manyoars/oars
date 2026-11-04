@@ -29,12 +29,12 @@ const payload = (command: string, extra: Record<string, unknown> = {}): string =
 const rowsOf = (storeDir: string): CrossingRecord[] =>
   parseRows(readFileSync(crossingsPath(storeDir), 'utf8')).filter((row): row is CrossingRecord => row.kind === 'crossing');
 
-const found = (latest: string, created: string | null = '2026-10-30T00:00:00.000Z'): RegistryReader => () => Promise.resolve({ state: 'found', latest, created });
+const found = (latest: string, created: string | null = '2020-01-01T00:00:00.000Z'): RegistryReader => () => Promise.resolve({ state: 'found', latest, created });
 
 describe('oars gate hook: one record per crossing', () => {
   it('writes the identity, the time, the registry state, and novelty, and reads the rest as not-read', async () => {
     const store = folder();
-    expect(await gateHook(payload('npm install left-pad@1.3.0'), depsFor(store, { registry: found('1.3.0') }))).toBe('');
+    expect(await gateHook(payload('npm install left-pad@1.3.0'), depsFor(store, { registry: found('1.3.0', '2026-10-30T00:00:00.000Z'), random: () => 0 }))).toBe('');
     const [row, ...rest] = rowsOf(store);
     expect(rest).toEqual([]);
     expect(row).toMatchObject({
@@ -57,7 +57,7 @@ describe('oars gate hook: one record per crossing', () => {
       registryState: 'found',
       againstLatest: 'latest',
       registryAge: 'under-7-days',
-      arm: 'none',
+      arm: 'held',
       lineShown: 'none',
       origin: 'not-read',
       decidedBy: 'not-read',

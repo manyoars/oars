@@ -42,4 +42,4 @@ const depsFor = (stage: NonNullable<GateHookDeps['stage']>): GateHookDeps => {
   };
 };
 
-await runHookProcess({ stdin: readStdin, deps: depsFor, exit: (code) => process.exit(code), deadlineMs: DEADLINE_MS + GRACE_MS - performance.now() });
+await runHookProcess({ stdin: readStdin, deps: depsFor, exit: (code) => process.exit(code), write: (text) => new Promise<void>((done) => process.stdout.write(text, () => { done(); })), deadlineMs: DEADLINE_MS + GRACE_MS - performance.now() });

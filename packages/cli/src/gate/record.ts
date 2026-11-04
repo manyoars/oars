@@ -49,8 +49,13 @@ export type RegistryAge = (typeof REGISTRY_AGES)[number];
 export const DEPTHS = ['main', 'subagent'] as const;
 export type Depth = (typeof DEPTHS)[number];
 
-/** Replay shows nothing to an agent, so these two read `none`; they stay in the shape so a hook's records and a replay's compare. */
-export type NotShown = 'none';
+/** Whether a note that would show did (`shown`), was held back by the policy's holdback (`held`), or there was none to show or the line was a block (`none`). A replay shows nothing, so it reads `none`. */
+export const ARMS = ['none', 'shown', 'held'] as const;
+export type Arm = (typeof ARMS)[number];
+
+/** The fixed ids of the lines the hook can show; the words are in `notes.ts`. `none` is no line shown, a held note included. */
+export const LINE_IDS = ['none', 'young-name-note', 'not-found-note', 'not-found-block'] as const;
+export type LineId = (typeof LINE_IDS)[number];
 
 export interface CrossingRecord {
   kind: 'crossing';
@@ -76,8 +81,8 @@ export interface CrossingRecord {
   againstLatest: AgainstLatest;
   registryState: RegistryState;
   registryAge: RegistryAge;
-  arm: NotShown;
-  lineShown: NotShown;
+  arm: Arm;
+  lineShown: LineId;
   /** Which policy stood when the hook wrote the row. Absent in a replay row and in a row an earlier build wrote: no policy was read. */
   policy?: PolicySource;
   // Class A: join ids, a finer time, and what the command stated.
