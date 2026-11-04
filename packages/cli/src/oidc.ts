@@ -36,7 +36,7 @@ const keycloakFetch = ({ version, step, sleep, random }: OidcContext, isTokenEnd
     try {
       response = await (isTokenEndpoint(url) ? fetch(request) : retrying(request));
     } catch (error) {
-      throw unreachableError(step, error);
+      throw unreachableError(step, error, new URL(url).origin);
     }
     const { status } = response;
     if (status === 429 || status === 502 || status === 503 || status === 504) {

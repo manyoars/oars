@@ -57,6 +57,19 @@ describe('unreachableError', () => {
     expect(unreachableError('api', 'boom', 'http://localhost:1').message).toBe('Cannot reach the server at http://localhost:1: boom');
   });
 
+  it('reads the failure of the first address when every address of a dual-stack host failed (Node 24: an AggregateError with an empty message)', () => {
+    const cause = new AggregateError([new Error('connect ECONNREFUSED ::1:9'), new Error('connect ECONNREFUSED 127.0.0.1:9')], '');
+    expect(unreachableError('api', new TypeError('fetch failed', { cause }), 'http://localhost:9').message).toBe('Cannot reach the server at http://localhost:9: connect ECONNREFUSED ::1:9');
+  });
+
+  it('falls back to the cause code, then the error message, whenever a message is empty', () => {
+    const coded = Object.assign(new Error(''), { code: 'ECONNREFUSED' });
+    expect(unreachableError('api', new TypeError('fetch failed', { cause: coded }), 'http://localhost:9').message).toBe('Cannot reach the server at http://localhost:9: ECONNREFUSED');
+    expect(unreachableError('api', new TypeError('fetch failed', { cause: new AggregateError([], '') }), 'http://localhost:9').message).toBe('Cannot reach the server at http://localhost:9: fetch failed');
+    expect(unreachableError('api', new TypeError('fetch failed', { cause: new Error('') }), 'http://localhost:9').message).toBe('Cannot reach the server at http://localhost:9: fetch failed');
+    expect(unreachableError('api', new Error(''), 'http://localhost:9').message).toBe('Cannot reach the server at http://localhost:9: no reason given');
+  });
+
   it('leaves the server out when the caller names none (the sign-in flow reports Keycloak\'s answer)', () => {
     expect(unreachableError('login', new Error('Keycloak answered HTTP 503')).message).toBe('Cannot reach the server: Keycloak answered HTTP 503');
   });
