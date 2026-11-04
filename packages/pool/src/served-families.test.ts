@@ -1,6 +1,6 @@
 // The families a bundle does not serve, pinned at the boundary that keeps them out: the wire. Recovery reads error rows (a signature, an error class, an outcome), and fit's call-shape
-// method reads a tool's input key names; no skeleton field carries any of them, so neither can be derived from stored cells. The refusing tests below (a tool, a step, a transcript, and the
-// skeleton's top level) fail if a later wire gains one of these fields.
+// method reads a tool's input key names; no skeleton field carries any of them, so neither can be derived from stored cells. The tests below (a tool, a step, a transcript, and the
+// skeleton's top level) fail if a later wire gains one of these fields: the name would stop landing in the bag.
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { parseSkeleton, verifyBundle, VOCAB_VERSION } from '../../cli/src/sessions/pool-wire.js';
 import { CALL_SHAPE_METHOD } from '../../cli/src/sessions/read.js';
@@ -50,25 +50,32 @@ describe('the wire holds no field a withheld family needs', () => {
     expect(parseSkeleton(withTranscript({})).ok).toBe(true);
   });
 
-  it.each(WITHHELD)('refuses a tool that carries `%s`', (field, value) => {
-    expect(parseSkeleton(withTool({ [field]: value })).ok).toBe(false);
+  // The wire no longer refuses a name it does not know: the field lands in the extensions bag, which nothing serves, and the stored skeleton and every cell stay as without it.
+  const keptInBag = (parsed: ReturnType<typeof parseSkeleton>, field: string, value: unknown): void => {
+    if (!parsed.ok) throw new Error(`refused: ${parsed.field} ${parsed.reason}`);
+    expect(parsed.extensions.some(({ at, kind }) => kind === 'field' && at.endsWith(field))).toBe(true);
+    expect(JSON.stringify(parsed.skeleton)).not.toContain(`"${field}":${JSON.stringify(value)}`);
+  };
+
+  it.each(WITHHELD)('keeps a tool that carries `%s` in the bag, out of the skeleton', (field, value) => {
+    keptInBag(parseSkeleton(withTool({ [field]: value })), field, value);
   });
 
-  it.each(WITHHELD)('refuses a step that carries `%s`', (field, value) => {
-    expect(parseSkeleton(withStep({ [field]: value })).ok).toBe(false);
+  it.each(WITHHELD)('keeps a step that carries `%s` in the bag, out of the skeleton', (field, value) => {
+    keptInBag(parseSkeleton(withStep({ [field]: value })), field, value);
   });
 
-  it.each(WITHHELD)('refuses a transcript that carries `%s`', (field, value) => {
-    expect(parseSkeleton(withTranscript({ [field]: value })).ok).toBe(false);
+  it.each(WITHHELD)('keeps a transcript that carries `%s` in the bag, out of the skeleton', (field, value) => {
+    keptInBag(parseSkeleton(withTranscript({ [field]: value })), field, value);
   });
 
-  it('refuses a transcript that carries error rows', () => {
+  it('keeps a transcript that carries error rows in the bag', () => {
     const { first } = firstOf('0000000000000005');
-    expect(parseSkeleton({ ...sampleSkeleton('0000000000000005'), transcripts: [{ ...first, errors: [] }] }).ok).toBe(false);
+    keptInBag(parseSkeleton({ ...sampleSkeleton('0000000000000005'), transcripts: [{ ...first, errors: [] }] }), 'errors', []);
   });
 
-  it('refuses a skeleton that carries error rows at its top level', () => {
-    expect(parseSkeleton({ ...sampleSkeleton('0000000000000002'), errors: [] }).ok).toBe(false);
+  it('keeps a skeleton that carries error rows at its top level in the bag', () => {
+    keptInBag(parseSkeleton({ ...sampleSkeleton('0000000000000002'), errors: [] }), 'errors', []);
   });
 });
 

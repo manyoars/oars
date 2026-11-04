@@ -1,6 +1,5 @@
 // The pool server: a Workers fetch handler over one D1 database. Deposits take closed-vocabulary skeletons only, and a refusal names the field.
 import { parseSkeleton, type SessionSkeleton } from '../../cli/src/sessions/pool-wire.js';
-import type { Frame } from '../../cli/src/sessions/schema.js';
 import { batchCounts, batchTier } from './access.js';
 import { fetchBundle, harnessRequired } from './bundle.js';
 import { covenantAccept, covenantNotAccepted, covenantStatus, depositsClosed, hasAccepted } from './covenant.js';
@@ -27,7 +26,7 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 /** The field of a frame dated after tomorrow UTC. A forged day would set the pool's `lastDay`, so `asOf` and every adoption read would follow it. Tomorrow passes because a client's clock can run a little ahead. Here and not in `parseSkeleton`, which has no clock. */
 const futureDayField = ({ transcripts }: SessionSkeleton, now: number): string | undefined => {
   const tomorrow = new Date(now + DAY_MS).toISOString().slice(0, 10);
-  const late = ({ day }: Frame): boolean => day !== null && day > tomorrow;
+  const late = ({ day }: { readonly day: string | null }): boolean => day !== null && day > tomorrow;
   for (const [at, { frame, prompts }] of transcripts.entries()) {
     if (late(frame)) return `transcripts[${String(at)}].frame.day`;
     const index = prompts.findIndex((entry) => late(entry.frame));

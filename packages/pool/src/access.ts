@@ -1,5 +1,4 @@
 // The access flag (spec Section 1.4): only a counting batch sets it. An account with access is fetched without the cap; one without has `fetch_cap`.
-import type { Harness } from '../../cli/src/sessions/schema.js';
 import type { SessionSkeleton } from '../../cli/src/sessions/pool-wire.js';
 import { fieldOf, type Env } from './http.js';
 
@@ -7,7 +6,7 @@ import { fieldOf, type Env } from './http.js';
 export type Tier = 'none' | 'skeleton' | 'committed' | 'audited' | 'attested';
 
 /** The harnesses that write no raw file, so a batch of theirs can never reach `committed` and counts at `skeleton`. */
-const WRITES_NO_RAW: ReadonlySet<Harness> = new Set<Harness>(['cursor']);
+const WRITES_NO_RAW: ReadonlySet<string> = new Set<string>(['cursor']);
 
 const ROOTED: ReadonlySet<Tier> = new Set<Tier>(['committed', 'audited', 'attested']);
 
