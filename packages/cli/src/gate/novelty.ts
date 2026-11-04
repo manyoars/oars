@@ -10,7 +10,7 @@ export const INDEX_HEADER = 'oars-gate-index 1';
 export const indexFile = (storeDir: string): string => join(storeDir, 'gate-index.txt');
 
 const LINE = /^[frs][0-9a-f]{12}$/;
-const TORN = /^[frs][0-9a-f]{0,11}$/;
+const TORN = /^(?:[frs][0-9a-f]{0,11})?$/;
 
 const digest = (...parts: string[]): string => createHash('sha256').update(parts.join('\0')).digest('hex').slice(0, 12);
 
@@ -50,7 +50,7 @@ const parseIndex = (text: string): KeptIndex => {
   const lines = new Set<string>();
   for (const [at, line] of parts.entries()) {
     if (line === INDEX_HEADER) continue;
-    // A torn line that the next append closed with a line break: it is a cut-off hash, skipped, and only ever sits before a later line.
+    // A torn line that the next append closed with a line break: a cut-off hash, or an empty line when two appends raced on the same torn tail. Skipped, and only ever before a later line.
     if (at < parts.length - 1 && TORN.test(line)) continue;
     if (!LINE.test(line)) return { state: 'damaged' };
     lines.add(line);
