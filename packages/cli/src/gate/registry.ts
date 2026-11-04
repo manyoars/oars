@@ -73,25 +73,26 @@ export const readPipIndex = (run: ManagerRun): RegistryAnswer => {
  * How a manager is started. `cwd` comes from a transcript, and `cmd.exe` searches the current directory before PATH, so `NoDefaultCurrentDirectoryInExePath`
  * keeps an `npm.cmd` left there from running: nothing here runs package code.
  */
-export const managerOptions = (cwd: string, platform: NodeJS.Platform = process.platform) => ({
+export const managerOptions = (cwd: string, platform: NodeJS.Platform = process.platform, timeout: number = TIMEOUT_MS) => ({
   cwd,
-  timeout: TIMEOUT_MS,
+  timeout,
   shell: platform === 'win32',
   windowsHide: true,
   encoding: 'utf8' as const,
   env: { ...process.env, NoDefaultCurrentDirectoryInExePath: '1' },
 });
 
-const runManager: ManagerRunner = (program, args, cwd) =>
+const runnerWith = (timeout: number): ManagerRunner => (program, args, cwd) =>
   new Promise((resolve) => {
-    execFile(program, [...args], managerOptions(cwd), (error, stdout, stderr) => {
+    execFile(program, [...args], managerOptions(cwd, process.platform, timeout), (error, stdout, stderr) => {
       const code = error === null ? 0 : typeof error.code === 'number' ? error.code : null;
       resolve({ code, stdout, stderr });
     });
   });
 
 /** The reader the option uses. `npm view` and `pip index` run no package code; the manager's own cache is the manager's. */
-export const managerReader = (run: ManagerRunner = runManager): RegistryReader => async ({ class: cls, name, cwd }) => {
+export const managerReader = (given?: ManagerRunner, timeout: number = TIMEOUT_MS): RegistryReader => async ({ class: cls, name, cwd }) => {
+  const run = given ?? runnerWith(timeout);
   if (!askable(cls, name)) return UNREACHABLE;
   if (cls === 'npm-package') return readNpmView(await run('npm', ['view', name, 'dist-tags.latest', 'time.created', '--json', '--logs-max=0'], cwd));
   return readPipIndex(await run('pip', ['index', 'versions', name, '--disable-pip-version-check'], cwd));
