@@ -176,6 +176,46 @@ describe('the Copilot table', () => {
   });
 });
 
+describe('the Grok Build table', () => {
+  it.each([
+    ['run_terminal_cmd', 'shell.exec'],
+    ['run_terminal_command', 'shell.exec'],
+    ['bash', 'shell.exec'],
+    ['search_replace', 'file.edit'],
+    ['apply_patch', 'file.edit'],
+    ['edit', 'file.edit'],
+    ['hashline_edit', 'file.edit'],
+    ['write', 'file.write'],
+    ['read_file', 'file.read'],
+    ['hashline_read', 'file.read'],
+    ['grep', 'file.search'],
+    ['glob', 'file.search'],
+    ['task', 'agent.spawn'],
+    // The spawn tool's other wire names (grok_build/task/mod.rs:193-196: "names arrive over the wire from arbitrary toolsets").
+    ['Task', 'agent.spawn'],
+    ['spawn_subagent', 'agent.spawn'],
+    ['todo_write', 'plan.update'],
+    ['todowrite', 'plan.update'],
+    ['skill', 'skill.run'],
+    ['web_fetch', 'web.fetch'],
+    ['web_search', 'web.search'],
+    // The backend-hosted X search (acp_session_impl/tool_dispatch.rs:94-105).
+    ['x_search', 'web.search'],
+    // The three tools that talk to the operator or switch plan mode (grok_build/ask_user_question/mod.rs:300, enter_plan_mode/mod.rs:76, exit_plan_mode/mod.rs:83).
+    ['ask_user_question', 'ask.user'],
+    ['enter_plan_mode', 'plan.update'],
+    ['exit_plan_mode', 'plan.update'],
+  ] as const)('maps %s to %s and keeps the name', (native, action) => {
+    expect(actionOf(ACTION_TABLES.grok, native)).toEqual({ action, native });
+  });
+
+  it('names the shell for the three shell tools only', () => {
+    expect(shellOf(ACTION_TABLES.grok, 'run_terminal_cmd')).toBe('bash');
+    expect(shellOf(ACTION_TABLES.grok, 'bash')).toBe('bash');
+    expect(shellOf(ACTION_TABLES.grok, 'read_file')).toBeNull();
+  });
+});
+
 describe('every table', () => {
   it.each(Object.entries(ACTION_TABLES))('%s holds only canonical actions', (_harness, table) => {
     for (const action of Object.values(table.rows)) expect(CANONICAL_ACTIONS).toContain(action);

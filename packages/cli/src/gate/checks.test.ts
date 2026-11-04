@@ -76,8 +76,14 @@ describe('checkCall on a shell command', () => {
     ['pnpm add foo@jsr:1.0.0', ['npm-package install foo pinned']],
     ['npm install npm:foo', ['npm-package install foo unstated']],
     ['pnpm add jsr:@luca/cases', ['npm-package install @luca/cases unstated']],
-    // The redactor reads `cases@1.0.0` as an email and masks it before the reader sees it, so a dotted version here counts as unread, never a name.
     ['pnpm add jsr:@luca/cases@^1.0.0', ['npm-package install @luca/cases range']],
+    // Register row A52: the redactor keeps a dotted version after `jsr:` or `npm:`, so a pinned alias keeps its pick (these rows read masked-name before).
+    ['pnpm add jsr:@luca/cases@1.0.0', ['npm-package install @luca/cases pinned']],
+    ['npm install npm:@luca/cases@1.0.0', ['npm-package install @luca/cases pinned']],
+    ['npm install foo@npm:bar@1.0.0', ['npm-package install bar pinned']],
+    ['npm install alias@npm:real-name@2.0.0', ['npm-package install real-name pinned']],
+    // A real address after the alias is still masked: only the alias is a crossing.
+    ['npm install foo@npm:bar@1.0.0 me@acme.io', ['npm-package install bar pinned']],
     ['npm install org/repo#feature/x', ['npm-package url-install org/repo url']],
     // Fetch-and-run forms.
     ['pnpx foo', ['npm-package fetch-and-run foo unstated']],
@@ -240,6 +246,8 @@ describe('checkCall on a shell command', () => {
     ['pnpm add jsr:@luca/cases@1.0.0', ['local-path']],
     ['npm install npm:@luca/cases@1.0.0', ['local-path']],
     ['npm install foo@npm:bar@1.0.0', ['masked-name']],
+    // The address inside the alias is still a mask, never a name.
+    ['npm install foo@npm:me@acme.io', ['masked-name']],
     ['npm install ""', ['unreadable-name']],
     // A path or a variable names nothing either.
     ['pip install -e .', ['local-path']],
@@ -288,8 +296,7 @@ describe('checkCall on a shell command', () => {
     ['npx skills add owner/../../secret', ['local-path']],
     ['npx skills add git+file:///secret/home/x', ['local-path']],
     ['npx skills add file:///secret/home/x', ['local-path']],
-    // The redactor reads an alias's `name@1.2.3` as an email, as it does in capture: a mask is not a name.
-    ['npm install alias@npm:real-name@2.0.0', ['masked-name']],
+    // A mask is not a name, whatever it sits beside.
     ['pip install someone@example.test', ['masked-name']],
     ['npm install $PKG', ['variable-name']],
     ['npx skills add $SRC', ['variable-name']],
@@ -307,6 +314,11 @@ describe('checkCall on a shell command', () => {
     const check = bash(command);
     expect(check.crossings).toEqual([]);
     expect(check.unread).toEqual(unread);
+  });
+  it('crosses the alias and reads the address beside it as masked (register row A52)', () => {
+    const check = bash('npm install foo@npm:bar@1.0.0 me@acme.io');
+    expect(check.crossings.map((c) => `${c.name} ${c.versionForm}`)).toEqual(['bar pinned']);
+    expect(check.unread).toEqual(['masked-name']);
   });
 
   it.each([
@@ -512,7 +524,7 @@ describe('checkCall on other tools', () => {
 describe('the closed vocabulary', () => {
   it('holds exactly these classes, forms, and unread shapes', () => {
     expect(CROSSING_CLASSES).toEqual(['npm-package', 'python-package', 'mcp-server', 'skill']);
-    expect(CROSSING_FORMS).toEqual(['install', 'url-install', 'fetch-and-run', 'url-fetch-and-run', 'mcp-call', 'skill-call']);
+    expect(CROSSING_FORMS).toEqual(['install', 'url-install', 'fetch-and-run', 'url-fetch-and-run', 'local-bin-run', 'mcp-call', 'skill-call']);
     expect(UNREAD_SHAPES).toEqual(['manifest-install', 'local-path', 'variable-name', 'masked-name', 'pipe-to-shell', 'behind-xargs', 'harness-registration', 'unreadable-name']);
   });
 });

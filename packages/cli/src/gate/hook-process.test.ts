@@ -1,0 +1,97 @@
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { crossingsPath, type GateHookDeps } from './hook.js';
+import { runHookProcess } from './hook-process.js';
+
+const made: string[] = [];
+afterEach(() => {
+  for (const folder of made.splice(0)) rmSync(folder, { recursive: true, force: true });
+});
+
+const folder = (): string => {
+  const one = mkdtempSync(join(tmpdir(), 'oars-gate-process-'));
+  made.push(one);
+  return one;
+};
+
+const NOW = Date.parse('2026-11-04T10:00:00.000Z');
+const PAYLOAD = JSON.stringify({ session_id: 's1', tool_use_id: 'u1', tool_name: 'Bash', tool_input: { command: 'npm install left-pad' }, cwd: tmpdir(), permission_mode: 'default' });
+
+const depsFor =
+  (storeDir: string, extra: Partial<GateHookDeps> = {}) =>
+  (stage: NonNullable<GateHookDeps['stage']>): GateHookDeps => ({ storeDir, now: () => NOW, clock: () => 0, deadlineMs: 800, stage, ...extra });
+
+describe('the hook process: the deadline', () => {
+  it('writes the staged record and exits 0 inside the deadline when the append stalls', async () => {
+    const store = folder();
+    const exit = vi.fn();
+    const stalled = (): Promise<void> => new Promise<void>(() => undefined);
+    const started = Date.now();
+    // The returned promise never settles: the append never does. The timer is what ends the process.
+    void runHookProcess({ stdin: () => Promise.resolve(PAYLOAD), deps: depsFor(store, { append: stalled }), exit, deadlineMs: 150 });
+    await vi.waitFor(() => { expect(exit).toHaveBeenCalledWith(0); }, { timeout: 2_000 });
+    expect(Date.now() - started).toBeLessThan(1_000);
+    expect(exit).toHaveBeenCalledTimes(1);
+    const lines = readFileSync(crossingsPath(store), 'utf8').trim().split('\n');
+    expect(lines).toHaveLength(1);
+    expect(JSON.parse(lines[0] ?? '')).toMatchObject({ kind: 'crossing', via: 'hook', name: 'left-pad', session: 's1' });
+  });
+
+  it.skipIf(process.platform === 'win32')('creates the staged file private to the user', async () => {
+    const store = folder();
+    const exit = vi.fn();
+    void runHookProcess({ stdin: () => Promise.resolve(PAYLOAD), deps: depsFor(store, { append: () => new Promise<void>(() => undefined) }), exit, deadlineMs: 100 });
+    await vi.waitFor(() => { expect(exit).toHaveBeenCalled(); }, { timeout: 2_000 });
+    expect(statSync(crossingsPath(store)).mode & 0o777).toBe(0o600);
+  });
+
+  it('drops a staged record whose write fails and still exits 0', async () => {
+    const store = folder();
+    const exit = vi.fn();
+    // The store folder is never made (the append that would make it stalls), so the synchronous write has nowhere to go.
+    void runHookProcess({ stdin: () => Promise.resolve(PAYLOAD), deps: depsFor(join(store, 'missing', 'deeper'), { append: () => new Promise<void>(() => undefined) }), exit, deadlineMs: 100 });
+    await vi.waitFor(() => { expect(exit).toHaveBeenCalledWith(0); }, { timeout: 2_000 });
+    expect(existsSync(join(store, 'missing'))).toBe(false);
+  });
+
+  it('writes nothing at the deadline once the record is on disk', async () => {
+    const store = folder();
+    const exit = vi.fn();
+    // The deadline is short, and the test waits until it has passed: a timer that still held the staged record would append it a second time.
+    await runHookProcess({ stdin: () => Promise.resolve(PAYLOAD), deps: depsFor(store), exit, deadlineMs: 150 });
+    expect(exit).toHaveBeenCalledWith(0);
+    await new Promise<void>((resolve) => setTimeout(resolve, 400));
+    expect(readFileSync(crossingsPath(store), 'utf8').trim().split('\n')).toHaveLength(1);
+  });
+});
+
+describe('the hook process: every failure exits 0', () => {
+  it('exits 0 when building the deps throws', async () => {
+    const exit = vi.fn();
+    const broken = (): GateHookDeps => {
+      throw new Error('no home folder');
+    };
+    await runHookProcess({ stdin: () => Promise.resolve(PAYLOAD), deps: broken, exit, deadlineMs: 5_000 });
+    expect(exit).toHaveBeenCalledTimes(1);
+    expect(exit).toHaveBeenCalledWith(0);
+  });
+
+  it('exits 0 when reading stdin rejects', async () => {
+    const store = folder();
+    const exit = vi.fn();
+    await runHookProcess({ stdin: () => Promise.reject(new Error('closed')), deps: depsFor(store), exit, deadlineMs: 5_000 });
+    expect(exit).toHaveBeenCalledWith(0);
+    expect(existsSync(crossingsPath(store))).toBe(false);
+  });
+
+  it('exits 0 when stdin throws before it returns a promise', async () => {
+    const exit = vi.fn();
+    const sync = (): Promise<string> => {
+      throw new Error('setEncoding is not a function');
+    };
+    await runHookProcess({ stdin: sync, deps: depsFor(folder()), exit, deadlineMs: 5_000 });
+    expect(exit).toHaveBeenCalledWith(0);
+  });
+});

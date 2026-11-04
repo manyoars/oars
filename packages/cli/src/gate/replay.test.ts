@@ -130,7 +130,7 @@ describe('the source of a replay', () => {
     await expect(run([])).rejects.toBeInstanceOf(CliError);
   });
 
-  it('writes nothing outside crossings.jsonl and leaves no temp file', async () => {
+  it('writes nothing outside crossings.jsonl and the novelty index beside it, and leaves no temp file', async () => {
     await writeFile(join(storeDir, 'state.json'), JSON.stringify({ files: {}, redactDomains: [], allow: [REPO] }));
     await writeLog(projectsRoot, REPO, 'a.jsonl', [bash(1, 't1', 'npm install one')]);
     const before = await snapshot(root);
@@ -139,6 +139,9 @@ describe('the source of a replay', () => {
     const crossingFile = join('store', 'crossings.jsonl');
     expect(after.has(crossingFile)).toBe(true);
     after.delete(crossingFile);
+    // The index is what lets the hook say what is new without scanning the record; a replay seeds it.
+    expect(after.has(join('store', 'gate-index.txt'))).toBe(true);
+    after.delete(join('store', 'gate-index.txt'));
     expect(after).toEqual(before);
   });
 
@@ -169,6 +172,41 @@ describe('the source of a replay', () => {
     expect(row).toMatchObject({ registryState: 'not-read', registryAge: 'not-read', againstLatest: 'not-read' });
     expect(done.run.registryRead).toBe(false);
     expect(done.text).toContain('registry state not read');
+  });
+});
+
+describe('npx of a bin the folder has', () => {
+  const cwdWith = async (): Promise<string> => {
+    const cwd = join(root, 'cwd');
+    await mkdir(join(cwd, 'node_modules', '.bin'), { recursive: true });
+    await writeFile(join(cwd, 'node_modules', '.bin', 'tsc'), '');
+    await mkdir(join(cwd, 'src'), { recursive: true });
+    return cwd;
+  };
+
+  it('reads local-bin-run for a present bin and the bin of a parent folder, a fetch-and-run for an absent one, and asks the registry only about the absent one', async () => {
+    const cwd = await cwdWith();
+    await writeLog(projectsRoot, REPO, 'a.jsonl', [
+      bash(1, 't1', 'npx tsc --noEmit'),
+      bash(2, 't2', 'npx tsc', { cwd: join(cwd, 'src') }),
+      bash(3, 't3', 'npx eslint .'),
+      bash(4, 't4', 'npx tsc@5.0.0'),
+      bash(5, 't5', 'cd other && npx vite'),
+    ]);
+    const asked: string[] = [];
+    await run([REPO], (ask) => {
+      asked.push(ask.name);
+      return Promise.resolve<RegistryAnswer>({ state: 'found', latest: '9.9.9', created: null });
+    });
+    const { crossings } = await written();
+    expect(crossings.map((row) => [row.name, row.form, row.registryState])).toEqual([
+      ['tsc', 'local-bin-run', 'not-read'],
+      ['tsc', 'local-bin-run', 'not-read'],
+      ['eslint', 'fetch-and-run', 'found'],
+      ['tsc', 'fetch-and-run', 'found'],
+      ['vite', 'fetch-and-run', 'not-read'],
+    ]);
+    expect(asked.sort()).toEqual(['eslint', 'tsc']);
   });
 });
 
