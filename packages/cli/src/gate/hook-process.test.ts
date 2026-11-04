@@ -162,6 +162,19 @@ describe('the hook process: the deadline', () => {
     expect(written).toBe(true);
     expect(readFileSync(crossingsPath(store), 'utf8').trim().split('\n')).toHaveLength(1);
   });
+
+  it('keeps both rows when a longer row from another writer landed first and the hook own append then stalled', async () => {
+    const store = folder();
+    const exit = vi.fn();
+    const otherWriterThenStall = async (file: string, text: string): Promise<void> => {
+      appendFileSync(file, `${JSON.stringify({ kind: 'crossing', name: 'other', pad: 'x'.repeat(text.length) })}\n`, { mode: 0o600 });
+      await new Promise<void>(() => undefined);
+    };
+    void runHookProcess({ stdin: () => Promise.resolve(PAYLOAD), deps: depsFor(store, { append: otherWriterThenStall }), exit, deadlineMs: 1_000 });
+    await vi.waitFor(() => { expect(exit).toHaveBeenCalledWith(0); }, { timeout: 10_000 });
+    const names = readFileSync(crossingsPath(store), 'utf8').trim().split('\n').map((line) => (JSON.parse(line) as { name: string }).name);
+    expect(names).toEqual(['other', 'left-pad']);
+  });
 });
 
 describe('the hook process: every failure exits 0', () => {
