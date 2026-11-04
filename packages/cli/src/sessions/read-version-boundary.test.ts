@@ -114,6 +114,6 @@ describe('version boundary', () => {
     const found = reads(twoBuckets([['Read', 800, 200], ['Edit', 200, 800]]));
     const read = found[0];
     if (read === undefined) throw new Error('expected a read');
-    expect(toolKey({ ...read, slice: { ...read.slice, level: undefined, motif: undefined } })).toBe('unknown\nunknown');
+    expect(toolKey({ ...read, slice: Object.fromEntries(Object.entries(read.slice).filter(([name]) => name !== 'level' && name !== 'motif')) })).toBe('unknown\nunknown');
   });
 });
