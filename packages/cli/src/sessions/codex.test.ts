@@ -18,9 +18,10 @@ afterEach(cleanup);
 // Two shapes are older versions' and say so where used: the JSON `{output, metadata.exit_code}` wrapper (rust-v0.46.0 core/src/tools/mod.rs:186-210)
 // and a persisted exec_command_end (read only if a rollout carries one). No live store was read.
 
-const capture = (text: string) =>
+const capture = (text: string, harness?: 'codex') =>
   captureSession({
     text,
+    ...(harness === undefined ? {} : { harness }),
     session: 'codex-x',
     project: 'p',
     rev: 1,
@@ -35,9 +36,9 @@ const capture = (text: string) =>
 
 const asText = (lines: readonly unknown[]): string => lines.map((entry) => rolloutText(entry)).join('\n');
 const rolloutText = (entry: unknown): string => JSON.stringify(entry);
-const extractOf = (lines: readonly unknown[]) => {
+const extractOf = (lines: readonly unknown[], harness?: 'codex') => {
   const transcript = rolloutLines(asText(lines), 'sess').map((entry) => JSON.stringify(entry)).join('\n');
-  return capture(transcript);
+  return capture(transcript, harness);
 };
 
 const T = (second: number): string => `2026-06-01T10:00:${String(second).padStart(2, '0')}.000Z`;
@@ -703,5 +704,56 @@ describe('a unified-exec shell call (core/src/tools/handlers/unified_exec)', () 
     const out = extractOf([meta('/work/app'), unified(2, 'u1', 'write_stdin', { session_id: 5, chars: 'y' }), shellOut(3, 'u1', 'write_stdin rejected: not allowed')]);
     expect(out.tools).toMatchObject([{ tool: 'Bash', status: 'none' }]);
     expect(out.errorLines).toEqual([]);
+  });
+});
+
+// A step keeps the tool's own name in `native` (the contract at extract.ts, as cursor.ts does), so Codex's action-table rows are reached: the reader names a
+// shell or patch call in the Claude Code vocabulary for the extractor, and the step still says which Codex tool it was.
+describe('a Codex step', () => {
+  const fn = (second: number, id: string, name: string, args: unknown) => line(T(second), 'response_item', { type: 'function_call', name, arguments: JSON.stringify(args), call_id: id });
+  const patch = line(T(6), 'response_item', { type: 'custom_tool_call', name: 'apply_patch', call_id: 'p1', input: '*** Begin Patch\n*** Update File: src/a.ts\n*** End Patch' });
+  const stepsOf = (out: ReturnType<typeof extractOf>): Array<[string, string, string]> =>
+    out.tools.flatMap((tool) => (tool.steps ?? []).map((step): [string, string, string] => [tool.tool, step.action, step.native]));
+
+  it('keeps the Codex tool name and reaches its action row, for a shell, a local shell, a patch, and a write_stdin', () => {
+    const out = extractOf(
+      [
+        meta('/work/app'),
+        fn(2, 'c1', 'exec_command', { cmd: 'ls' }),
+        fn(3, 'c2', 'shell', { command: ['ls'] }),
+        line(T(4), 'response_item', { type: 'local_shell_call', call_id: 'c3', status: 'completed', action: { type: 'exec', command: ['ls'] } }),
+        fn(5, 'c4', 'write_stdin', { session_id: 7, chars: '' }),
+        patch,
+      ],
+      'codex',
+    );
+    expect(stepsOf(out)).toEqual([
+      ['Bash', 'shell.exec', 'exec_command'],
+      ['Bash', 'shell.exec', 'shell'],
+      ['Bash', 'shell.exec', 'local_shell'],
+      ['Bash', 'other', 'write_stdin'],
+      ['Edit', 'file.edit', 'apply_patch'],
+    ]);
+  });
+});
+
+// A web search is persisted as its own response item, not a function_call: `ResponseItem::WebSearchCall {id?, status?, action?}` (protocol/src/models.rs:1270),
+// kept by should_persist_response_item (rollout/src/policy.rs:94). The example payload is the Responses API's `response.output_item.done` (models.rs:1262-1269) with
+// `action: {type: search, query}`; `WebSearchAction` is tagged by `type` in snake_case with `query`, `queries`, `url`, and `pattern` optional (:2123-2150), and
+// upstream's own serialization cases are a search with `queries` (:4030-4040) and an `open_page` with status `open` (:4050-4056).
+describe('a web_search_call', () => {
+  const search = (second: number, extra: object) => line(T(second), 'response_item', { type: 'web_search_call', status: 'completed', ...extra });
+
+  it('is a WebSearch call with the query, a web.search step, and no failure signal (recorded ok)', () => {
+    const out = extractOf([meta('/work/app'), search(2, { id: 'ws_1', action: { type: 'search', query: 'weather: San Francisco, CA' } })], 'codex');
+    expect(out.tools).toMatchObject([{ tool: 'WebSearch', status: 'ok', steps: [{ action: 'web.search', native: 'web_search' }] }]);
+    expect(out.session.searches).toEqual(['weather: San Francisco, CA']);
+    expect(out.errorLines).toEqual([]);
+  });
+
+  it('takes the first of queries when there is no query, and no query for an action that is not a search, and works without an id', () => {
+    const out = extractOf([meta('/work/app'), search(2, { action: { type: 'search', queries: ['weather seattle', 'seattle weather now'] } }), search(3, { status: 'open', action: { type: 'open_page', url: 'https://example.com' } })], 'codex');
+    expect(out.tools.map((tool) => [tool.tool, tool.status])).toEqual([['WebSearch', 'ok'], ['WebSearch', 'ok']]);
+    expect(out.session.searches).toEqual(['weather seattle']);
   });
 });
