@@ -162,8 +162,13 @@ const patchFiles = (input: string): string[] => [...input.matchAll(/^\*\*\* (?:A
 const EXIT_LINE = /^(?:Exit code: |Process exited with code )(-?\d+)\s*$/m;
 const OUTPUT_MARK = /(?:^|\n)Output:\n?/;
 const RUNNING_LINE = /^Process running with session ID (\S+)\s*$/m;
-/** core/src/tools/events.rs:438: the message of a call that failed before it produced an exit code. */
-const SPAWN_ERROR = /^execution error: /;
+/**
+ * The message of a call that failed before it produced an exit code, written as the whole output (no `Output:` header): `execution error: ` for a
+ * shell call (core/src/tools/events.rs:438), and for the default unified-exec tool (ConfigShellToolType is only `UnifiedExec | Disabled`,
+ * protocol/src/openai_models.rs:330-333) `exec_command failed: ` (core/src/tools/handlers/unified_exec/exec_command.rs:270), `write_stdin failed: `
+ * (write_stdin.rs:121), and `write_stdin approval failed: ` (:123). `write_stdin rejected: ` (:118) is a declined call and stays unsettled.
+ */
+const SPAWN_ERROR = /^(?:execution error|exec_command failed|write_stdin(?: approval)? failed): /;
 
 /** The text of a `function_call_output` body: a bare string, or an array of `{type: input_text, text}` items (protocol/src/models.rs:2376). */
 const bodyText = (raw: unknown): string => {
@@ -174,7 +179,7 @@ const bodyText = (raw: unknown): string => {
 /**
  * What a shell output says: the real exit code and the text after the `Output:` line, which is what an error line is cut from. The two header
  * forms are core/src/tools/mod.rs:107-113 (`Exit code: N`) and core/src/tools/context.rs:556 (`Process exited with code N`); no code and no
- * `Process running with session ID N` line means the call failed to spawn (`execution error: ...`, events.rs:438) or was declined (`... rejected by user`, :456). An older Codex wrote JSON `{output, metadata.exit_code}` (rust-v0.46.0 core/src/tools/mod.rs:186-210).
+ * `Process running with session ID N` line means the call failed before it ran (`SPAWN_ERROR` above) or was declined (`... rejected by user`, events.rs:456). An older Codex wrote JSON `{output, metadata.exit_code}` (rust-v0.46.0 core/src/tools/mod.rs:186-210).
  */
 const outcomeOf = (raw: unknown): { text: string; exit: number | undefined; spawnError: boolean; running: string | undefined } => {
   const body = bodyText(raw);
@@ -251,7 +256,9 @@ export const rolloutLines = (text: string, fallbackId: string, parentText?: stri
     lines.push(line);
     open ??= line;
   };
-  const result = (id: string, failure: string | undefined, when: string): void => {
+  // A failure is the error text; a success carries the call's own output when it has one, which capture reads transiently, as on the Claude Code
+  // path: a shell call's `[branch sha]` line is how a commit's sha is found.
+  const result = (id: string, failure: string | undefined, when: string, output = ''): void => {
     sequence += 1;
     lines.push({
       ...base,
@@ -260,7 +267,7 @@ export const rolloutLines = (text: string, fallbackId: string, parentText?: stri
       timestamp: when,
       // Codex stamps a result with its own time, but the call's start is not paired to it, so no duration is claimed.
       noDuration: true,
-      message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: id, is_error: failure !== undefined, content: failure ?? '' }] },
+      message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: id, is_error: failure !== undefined, content: failure ?? output }] },
     });
   };
   const prompted = (message: string, when: string): void => {
@@ -429,11 +436,11 @@ export const rolloutLines = (text: string, fallbackId: string, parentText?: stri
             if (out.exit !== undefined || out.spawnError) {
               resolved.add(id);
               const failure = out.spawnError ? out.text : failureOf(out.exit, out.text);
-              result(id, failure, when);
+              result(id, failure, when, out.text);
               const pending = known.session === undefined ? undefined : running.get(known.session);
               if (pending !== undefined && !resolved.has(pending)) {
                 resolved.add(pending);
-                result(pending, failure, when);
+                result(pending, failure, when, out.text);
               }
             } else if (out.running !== undefined && known.session === undefined) running.set(out.running, id);
           } else if (known.kind === 'other') {
