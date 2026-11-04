@@ -1,4 +1,6 @@
 [
+  "UserManagement_create",
+  "UserManagement_list",
   "balance",
   "commit",
   "createAgentPrice",
@@ -21,6 +23,7 @@
   "release",
   "requestBuyerRecovery",
   "reserve",
+  "revoke_1",
   "set",
   "start",
   "upsertBillingCustomer"
