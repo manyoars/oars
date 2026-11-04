@@ -67,7 +67,13 @@ describe('rule 5: a bucket and no exact number', () => {
       prompts: [prompt('s1', 0, { frame: framed, wallSec: 32, usage: { input: 64000, cacheWrite: 1000, cacheRead: 512000, output: 4000, thinking: 4 } })],
       tools: [tool('s1', 0, 'Bash', { steps: [pushStep(0, { tokens: 64000, durationMs: 3200 })] })],
     });
-    expect(keyed([...incrementsOf(skeletonOfLocal(onFloors)).cells.values()])).toEqual(keyed(deriveCells(onFloors).cells));
+    // The named cell keys on the program and subcommand alone now (rule 1), so a one-flag step's old named cell is now its flag cell (same id, same counts) and the program-and-subcommand cell is new.
+    const exactCells = deriveCells(onFloors).cells;
+    const flooredCells = [...incrementsOf(skeletonOfLocal(onFloors)).cells.values()];
+    const unnamed = new Set(exactCells.filter(({ motifId }) => flooredCells.some((cell) => cell.motifId === motifId)).map(({ motifId }) => motifId));
+    expect(unnamed.size).toBe(3);
+    expect(keyed(flooredCells.filter(({ motifId }) => unnamed.has(motifId)))).toEqual(keyed(exactCells.filter(({ motifId }) => unnamed.has(motifId))));
+    expect(flooredCells).toHaveLength(exactCells.length + 1);
   });
 });
 
@@ -100,7 +106,42 @@ describe('rules 1 to 3 and 6: what a cell and a stratum hold', () => {
       expect(known.has(cell.motifId)).toBe(true);
       expect(cell.frameBucket.split('/')).toHaveLength(4);
     }
-    expect(new Set([...cells.values()].map(({ key }) => key)).size).toBe(cells.size);
+  });
+
+  // A step with two flags and a pull, and a stack with two languages: each must reach a cell one at a time.
+  const manyFramed = frame({ shell: 'bash', stack: { languages: ['rust', 'go'], frameworks: ['astro', 'vite'], size: 'xl' } });
+  const many = (): Increments =>
+    incrementsOf(
+      skeletonOfLocal(
+        store({
+          sessions: [session('s1', { frame: manyFramed })],
+          prompts: [prompt('s1', 0, { frame: manyFramed })],
+          tools: [
+            tool('s1', 0, 'Bash', {
+              steps: [step(0, 0, 'shell.exec', { native: 'Bash', identity: { program: 'git', sub: 'push', flags: ['--force', '--tags'], pulls: [{ registry: 'npm', name: 'left-pad', version: null }, { registry: 'npm', name: 'is-odd', version: '1.0.0' }] } })],
+            }),
+          ],
+        }),
+      ),
+    );
+
+  it('puts no list longer than one in a cell or a motif: each flag and each pull is its own cell', () => {
+    const { motifs, strata } = many();
+    for (const { steps } of motifs) {
+      for (const { identity } of steps) {
+        if (identity === null || !('program' in identity)) continue;
+        expect(identity.flags.length).toBeLessThanOrEqual(1);
+        expect(identity.pulls?.length ?? 0).toBeLessThanOrEqual(1);
+      }
+    }
+    const single = (flag: string | null, pull: string | null): number =>
+      motifs.filter(({ level, steps }) => level === 'named' && steps.length === 1 && steps.some(({ identity }) => identity !== null && 'program' in identity && identity.flags.join() === (flag ?? '') && (identity.pulls ?? []).map(({ name }) => name).join() === (pull ?? ''))).length;
+    expect(single('--force', null)).toBe(1);
+    expect(single('--tags', null)).toBe(1);
+    expect(single(null, 'left-pad')).toBe(1);
+    expect(single(null, 'is-odd')).toBe(1);
+    expect(single(null, null)).toBe(1);
+    expect([...strata.keys()].sort()).toEqual(['framework/astro', 'framework/vite', 'language/go', 'language/rust', 'repoFiles/xl']);
   });
 
   it('pools a stack stratum alone, per value, and no other bound field', () => {
