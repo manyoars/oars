@@ -79,10 +79,10 @@ const CODEX_ROWS = {
   exec_command: 'shell.exec',
   local_shell: 'shell.exec',
   'container.exec': 'shell.exec',
-  Bash: 'shell.exec',
+  write_stdin: 'other',
   apply_patch: 'file.edit',
-  Edit: 'file.edit',
   read_file: 'file.read',
+  web_search: 'web.search',
   update_plan: 'plan.update',
 };
 

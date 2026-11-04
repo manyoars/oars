@@ -2,10 +2,11 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { run } from '../cli.js';
+import { writeGoldFiles } from './command.js';
 import { ExitCode } from '../errors.js';
 import { harness, removeTestDirs } from '../test-support.js';
 import { captureSession } from './extract.js';
-import { auroc, drawSample, formatScore, frameOf, parseGold, readTurns, renderGold, scoreGold, viewOf, type GoldEntry, type GoldView } from './gold.js';
+import { armsPath, auroc, drawSample, formatScore, frameOf, parseGold, readTurns, renderGold, scoreGold, viewOf, type GoldEntry, type GoldView } from './gold.js';
 import { makeRedactor } from './redact.js';
 import type { PromptObservation } from './schema.js';
 import { addProject, cleanup, FIXTURES, stage } from './test-support.js';
@@ -62,9 +63,10 @@ describe('frameOf', () => {
     const interrupted = prompt('a', 1, 'edit-only', 'm-a', { head: '[Request interrupted by user]' });
     const silent = prompt('b', 0, 'no-tools', 'm-a');
     const cursor = prompt('cursor-1', 0, 'edit-only', 'm-a');
+    const codex = prompt('codex-1', 0, 'edit-only', 'm-a');
     const noSignals = prompt('c', 0, 'edit-only', 'm-a', { verify: undefined });
     const noModel = prompt('d', 0, 'edit-only', '');
-    expect(frameOf([kept, interrupted, silent, cursor, noSignals, noModel])).toEqual([kept]);
+    expect(frameOf([kept, interrupted, silent, cursor, codex, noSignals, noModel])).toEqual([kept]);
   });
 });
 
@@ -402,10 +404,31 @@ describe('scoreGold', () => {
   });
 });
 
-describe('oars sessions gold', () => {
-  const setup = () => {
+describe('writeGoldFiles', () => {
+  it('refuses a gold file that is already there, keeps it as it was, and refuses a sidecar that is already there too', async () => {
     const staged = stage();
-    const h = harness();
+    const file = join(staged.root, 'outcome-gold-x.md');
+    const arms = armsPath(file);
+    writeFileSync(file, 'judged');
+    // The existence check in `gold sample` came earlier: only `wx` on the gold file itself stops this write.
+    await expect(writeGoldFiles(file, arms, '{}', 'blank')).rejects.toMatchObject({ code: 'EEXIST' });
+    expect(readFileSync(file, 'utf8')).toBe('judged');
+    rmSync(file);
+    await expect(writeGoldFiles(file, arms, '{}', 'blank')).rejects.toMatchObject({ code: 'EEXIST' });
+    expect(existsSync(file)).toBe(false);
+    rmSync(arms);
+    await writeGoldFiles(file, arms, '{"a":1}', 'blank');
+    expect([readFileSync(file, 'utf8'), readFileSync(arms, 'utf8')]).toEqual(['blank', '{"a":1}']);
+  });
+});
+
+describe('oars sessions gold', () => {
+  // Under V15 a draw needs a term file (none excludes every session): an invented term that no fixture holds, unless the test is about its absence.
+  const setup = (withTerms = true) => {
+    const staged = stage();
+    const termsFile = join(staged.root, 'exclusion-terms.txt');
+    if (withTerms) writeFileSync(termsFile, 'unrelated-invented-term\n');
+    const h = harness({ OARS_EXCLUSION_TERMS: termsFile });
     h.deps.sessions = staged.runtime;
     return { ...h, staged };
   };
@@ -486,7 +509,7 @@ describe('oars sessions gold', () => {
     addProject(h.staged, 'gold', 'keep-1', work('rewritten'));
     const dir = join(h.staged.root, 'stale');
     expect(await run(['sessions', 'gold', 'sample', '--out-dir', dir, '--seed', 's'], h.deps)).toBe(ExitCode.OK);
-    expect(h.out.join('')).toContain('Passed over 1 prompts');
+    expect(h.out.join('')).toContain('Passed over 1 prompt whose transcript');
     const date = new Date(h.deps.now()).toISOString().slice(0, 10);
     const text = readFileSync(join(dir, `outcome-gold-${date}.md`), 'utf8');
     expect(text).not.toContain('first ask');
@@ -503,11 +526,46 @@ describe('oars sessions gold', () => {
     expect(h.err.join('')).toContain('EEXIST');
   });
 
-  it('says no session was excluded when no term is named, and takes the default folder beside the projects root', async () => {
+  it('refuses to sample when no term file is configured, since every session is then excluded (V15)', async () => {
+    const h = setup(false);
+    await populate(h);
+    const dir = join(h.staged.root, 'no-terms');
+    expect(await run(['sessions', 'gold', 'sample', '--size', '1', '--batch', '1', '--out-dir', dir, '--seed', 's'], h.deps)).toBe(ExitCode.INVALID);
+    expect(h.err.join('')).toContain('term file');
+    expect(existsSync(dir)).toBe(false);
+  });
+
+  it('says how many sampled prompts ran subagents, in the text and under --json, and uses the singular for one', async () => {
+    const h = setup();
+    addProject(h.staged, 'gold', 'keep-1', [...work('first ask'), call('agent-1', 'Agent', { prompt: 'x' }), result('agent-1', 'ok')]);
+    addProject(h.staged, 'gold', 'keep-2', work('second ask'));
+    expect(await run(['sessions', 'deposit', '--allow', 'gold'], h.deps)).toBe(ExitCode.OK);
+    h.out.length = 0;
+    expect(await run(['sessions', 'gold', 'sample', '--size', '10', '--out-dir', join(h.staged.root, 'text'), '--seed', 's'], h.deps)).toBe(ExitCode.OK);
+    const text = h.out.join('');
+    expect(text).toContain('Wrote 2 prompts, ');
+    expect(text).toContain('1 sampled prompt ran subagents, whose work is not read.');
+    h.out.length = 0;
+    expect(await run(['--json', 'sessions', 'gold', 'sample', '--size', '10', '--out-dir', join(h.staged.root, 'json'), '--seed', 's'], h.deps)).toBe(ExitCode.OK);
+    expect(JSON.parse(h.out.join(''))).toMatchObject({ ok: true, prompts: 2, subagentPrompts: 1 });
+  });
+
+  it('says one prompt and one session in the singular', async () => {
+    const h = setup();
+    addProject(h.staged, 'gold', 'keep-1', work('first ask'));
+    addProject(h.staged, 'gold', 'named', [...work('third ask'), said('a note about Acme-Term here')]);
+    expect(await run(['sessions', 'deposit', '--allow', 'gold'], h.deps)).toBe(ExitCode.OK);
+    h.out.length = 0;
+    expect(await run(['sessions', 'gold', 'sample', '--exclude-term', 'acme-term', '--out-dir', join(h.staged.root, 'one'), '--seed', 's'], h.deps)).toBe(ExitCode.OK);
+    expect(h.out.join('')).toContain('Wrote 1 prompt, ');
+    expect(h.out.join('')).toContain('Excluded 1 session the draw reached');
+  });
+
+  it('takes the default folder beside the projects root, and reports the excluded count when no extra term is named', async () => {
     const h = setup();
     await populate(h);
     expect(await run(['sessions', 'gold', 'sample', '--size', '1', '--batch', '1'], h.deps)).toBe(ExitCode.OK);
-    expect(h.out.join('')).toContain('No --exclude-term given');
+    expect(h.out.join('')).toContain('Excluded 0 sessions');
     expect(readdirSync(join(h.staged.root, 'session-commons', 'review')).filter((name) => name.endsWith('.md'))).toHaveLength(1);
   });
 

@@ -3,9 +3,11 @@ import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import type { Outcome } from '../cli.js';
 import { parseAllowList } from './allow.js';
+import { SOURCES, sourceLabel } from './sources.js';
 import { CliError, ExitCode } from '../errors.js';
+import { loadTerms } from './exclusion.js';
 import { EVALUATOR_MODEL, fillArms, sidecarSaver } from './gold-arms.js';
-import { armsPath, coverageLines, formatScore, isGoldDocument, parseGold, renderGold, sampleGold, scoreGold, type GoldDocument } from './gold.js';
+import { armsPath, coverageLines, formatScore, isGoldDocument, parseGold, plural, renderGold, sampleGold, scoreGold, type GoldDocument } from './gold.js';
 import { makeRedactor } from './redact.js';
 import { books, BOOKS_CAVEAT, formatBooks, formatMeasure, formatRecall, measure, type BooksBy } from './query.js';
 import { formatLineage, loadLineage, walkLineage } from './lineage.js';
@@ -51,6 +53,7 @@ const readAllowFile = async (file: string): Promise<string[]> => {
 export const sessionsDeposit = async (deps: SessionsDeps, options: { allow: string[]; allowFiles: string[]; redactDomains: string[] }): Promise<Outcome> => {
   const fromFiles = await Promise.all(options.allowFiles.map((file) => readAllowFile(file)));
   const runtime = runtimeOf(deps);
+  const table = runtime.sources ?? SOURCES;
   const allow = [...options.allow, ...fromFiles.flat()];
   const result = await runDeposit(newContext(runtime.storeDir, deps.now, 'manual'), true, inputKey('manual', allow, options.redactDomains), async (trace) => {
     const done = await deposit(runtime, { allow, redactDomains: options.redactDomains, now: deps.now }, trace);
@@ -60,9 +63,11 @@ export const sessionsDeposit = async (deps: SessionsDeps, options: { allow: stri
   const lines = [
     `Deposited ${String(result.sessions)} sessions and ${String(result.subagents)} subagent transcripts (${String(result.lines)} lines, ${String(result.badLines)} unparseable) as ${String(result.observations)} observations; ${String(result.unchanged)} files unchanged.`,
     `Read ${String(result.folders.length)} folders; skipped ${String(result.skippedFolders)} not on the allowlist.`,
-    ...(result.cursor === 0 ? [] : [`Read ${String(result.cursor)} Cursor sessions.`]),
-    ...result.cursorUnreadable.map((reason) => `Cursor store not read: ${reason}`),
-    ...(result.cursorRejected === 0 ? [] : [`Skipped ${String(result.cursorRejected)} Cursor sessions whose id is not a safe file name.`]),
+    ...Object.entries(result.sources).flatMap(([name, counts]) => [
+      ...(counts.read === 0 ? [] : [`Read ${String(counts.read)} ${sourceLabel(name, table)} sessions.`]),
+      ...counts.unreadable.map((reason) => `${sourceLabel(name, table)} store not read: ${reason}`),
+      ...(counts.rejected === 0 ? [] : [`Skipped ${String(counts.rejected)} ${sourceLabel(name, table)} sessions whose id is not a safe file name.`]),
+    ]),
     ...(result.missing.length === 0 ? [] : [`No project folder matched: ${result.missing.join(', ')}.`]),
     survival === null
       ? 'Commit survival not read this run.'
@@ -179,6 +184,9 @@ const skippedNotice = (scope: SkippedScope): string[] => {
   return [`${folders} ${transcripts}; ${one ? 'it is' : 'they are'} never read: not on the allowlist. Not captured: ${shown}${more}.`];
 };
 
+/** Scope is an extra, like the step log: a projects root this process cannot list reports an empty scope and fails neither `verify` nor `books`. */
+const scopeOf = (runtime: SessionsRuntime): Promise<SkippedScope> => skippedFolders(runtime).catch((): SkippedScope => ({ folders: 0, transcripts: 0, names: [] }));
+
 /** One line for a store a newer oars wrote into (spec state-on-open row for a newer `cv`: read known fields, warn). */
 const newerNotice = (store: Store): string[] => (store.newerCaptures > 0 ? [`captured by a newer oars; upgrade oars (${String(store.newerCaptures)} sessions)`] : []);
 
@@ -203,7 +211,8 @@ const inRepositoryStore = (store: Store, repo: string): Store => {
 };
 
 export const sessionsBooks = async (deps: SessionsDeps, options: { by: BooksBy; sinceDays: number | undefined; repo?: string }): Promise<Outcome> => {
-  const { storeDir } = runtimeOf(deps);
+  const runtime = runtimeOf(deps);
+  const { storeDir } = runtime;
   const loaded = await loadStore(storeDir);
   const store = options.repo === undefined ? loaded : inRepositoryStore(loaded, options.repo);
   const rows = books(store, options.by, deps.now(), options.sinceDays, await readSurvival(storeDir));
@@ -215,7 +224,7 @@ export const sessionsBooks = async (deps: SessionsDeps, options: { by: BooksBy; 
       : emptyWindow
         ? `No ${options.by === 'pull' ? 'pulls' : 'prompts'} in the --since window.`
         : formatBooks(rows, options.by);
-  return { document: { ok: true, by: options.by, rows, newerCaptures: store.newerCaptures }, text: [table, ...newerNotice(store), ...(rows.length === 0 ? [] : [BOOKS_CAVEAT])].join('\n') };
+  return { document: { ok: true, by: options.by, rows, newerCaptures: store.newerCaptures }, text: [table, ...skippedNotice(await scopeOf(runtime)), ...newerNotice(store), ...(rows.length === 0 ? [] : [BOOKS_CAVEAT])].join('\n') };
 };
 
 export const sessionsMeasure = async (deps: SessionsDeps, options: { last: number; since: string | undefined; repo?: string }): Promise<Outcome> => {
@@ -279,8 +288,7 @@ export const sessionsVerify = async (deps: SessionsDeps, options: { session: str
     // A step log that cannot be read leaves the invariant check as it is: the stuck check is an extra, never a reason `verify` fails.
     // A verify that got here has succeeded, so a verify streak is the one this run ends and is not listed.
     const stuck = stuckSteps(await readSteps(storeDir).catch((): StepRow[] => [])).filter((entry) => entry.step !== 'verify');
-    // Scope is an extra, like the step log: a projects root this process cannot list reports an empty scope and does not fail `verify`.
-    const scope = await skippedFolders(runtime).catch((): SkippedScope => ({ folders: 0, transcripts: 0, names: [] }));
+    const scope = await scopeOf(runtime);
     const report: VerifyReport = { sessions: skeletons.length, unreadable, cvFrozen: frozen.size, scope, invariants: results.map((result) => ({ ...result, pass: result.violations === 0 })), stuck, sessionResults, audit, selfBaseline };
     const failed = [...results.filter((result) => result.violations > 0).map((result) => result.name), ...(unreadable > 0 ? ['unreadable skeletons'] : []), ...merkleFailed, ...stuck.map((entry) => `stuck: ${entry.step}`)];
     const stuckLines = stuck.map((entry) => `FAIL  ${entry.step} is stuck: key ${entry.key} failed ${String(entry.runs)} runs in a row: ${entry.error}`);
@@ -295,16 +303,27 @@ export const sessionsVerify = async (deps: SessionsDeps, options: { session: str
     const cvBehind = results.find((result) => result.name === CAPTURE_INVARIANTS[0])?.violations ?? 0;
     // The key is the sessions checked, each at its rev and cv, and the code's ev (spec 4.2).
     const key = stampKey(...highWater);
-    const counts = { checked: results.length, passed: results.filter((result) => result.violations === 0).length, cvBehind, cvFrozen: frozen.size, stuck: stuck.length };
+    const counts = { checked: results.length, passed: results.filter((result) => result.violations === 0).length, cvBehind, cvFrozen: frozen.size, stuck: stuck.length, merkle: audit.counts['root mismatch'] + audit.counts['counts do not bind'] };
     return { value: outcome, report: { in: { session: mine(store.sessions).length, subagent: mine(store.subagents).length }, out: counts, key } };
   }, stampKey('verify', options.session ?? ''));
 };
 
 const GOLD_MODE = 0o600;
 
+/**
+ * The sidecar, then the gold file, each created with `wx`: the existence check in `gold sample` came before a long draw, so this is what holds the
+ * promise never to overwrite a file that may hold judgments if another run wrote in between.
+ */
+export const writeGoldFiles = async (file: string, arms: string, sidecar: string, rendered: string): Promise<void> => {
+  await writeFile(arms, sidecar, { mode: GOLD_MODE, flag: 'wx' });
+  await writeFile(file, rendered, { mode: GOLD_MODE, flag: 'wx' });
+};
+
 /** `gold sample`: writes the blind gold file and its hidden sidecar. It never overwrites one: the file may hold judgments. */
-export const sessionsGoldSample = async (deps: SessionsDeps, options: { size: number; batch: number; seed: string | undefined; excludeTerms: string[]; outDir: string | undefined }): Promise<Outcome> => {
+export const sessionsGoldSample = async (deps: SessionsDeps, options: { size: number; batch: number; seed: string | undefined; termsFile: string; excludeTerms: string[]; outDir: string | undefined }): Promise<Outcome> => {
   const runtime = runtimeOf(deps);
+  // With no terms every session is excluded under V15, so a draw would be empty: say so before anything is read or written.
+  if ((await loadTerms(options.termsFile)).length === 0) throw new CliError('The term file is missing or empty, so every session is excluded (V15). Set OARS_EXCLUSION_TERMS to a file of terms, one per line.', ExitCode.INVALID, 'unreadable');
   const date = new Date(deps.now()).toISOString().slice(0, 10);
   const dir = options.outDir ?? join(dirname(runtime.projectsRoot), 'session-commons', 'review');
   const file = join(dir, `outcome-gold-${date}.md`);
@@ -314,17 +333,15 @@ export const sessionsGoldSample = async (deps: SessionsDeps, options: { size: nu
   if (await taken(arms)) throw new CliError(`${arms} already exists, and it may hold readings. Move it, or pass another --out-dir.`, ExitCode.USAGE, 'usage');
   const store = await loadStore(runtime.storeDir);
   const redact = makeRedactor(await readRedactDomains(runtime.storeDir));
-  const { document, views, unreadable } = await sampleGold(runtime, store, redact, { size: options.size, batch: options.batch, seed: options.seed ?? date, date, excludeTerms: options.excludeTerms });
+  const { document, views, unreadable } = await sampleGold(runtime, store, redact, { size: options.size, batch: options.batch, seed: options.seed ?? date, date, termsFile: options.termsFile, extraTerms: options.excludeTerms });
   await mkdir(dir, { recursive: true });
-  // The check above came before a long draw; `wx` holds the promise if another run wrote in between.
-  await writeFile(arms, JSON.stringify(document), { mode: GOLD_MODE, flag: 'wx' });
-  await writeFile(file, renderGold(views, { date, batch: options.batch }), { mode: GOLD_MODE, flag: 'wx' });
+  await writeGoldFiles(file, arms, JSON.stringify(document), renderGold(views, { date, batch: options.batch }));
   const subagents = document.entries.filter((entry) => entry.subagents > 0).length;
   const lines = [
-    `Wrote ${String(document.entries.length)} prompts, drawn from ${String(document.frame)}, to ${file}.`,
-    options.excludeTerms.length === 0 ? 'No --exclude-term given: no session was excluded.' : `Excluded ${String(document.excludedSessions)} sessions the draw reached that mention an excluded term.`,
-    `Passed over ${String(unreadable)} prompts whose transcript is gone or no longer matches the store.`,
-    `${String(subagents)} sampled prompts ran subagents, whose work is not read.`,
+    `Wrote ${plural(document.entries.length, 'prompt')}, drawn from ${String(document.frame)}, to ${file}.`,
+    `Excluded ${plural(document.excludedSessions, 'session')} the draw reached under the V15 rule (a listed term, no raw to scan, or unreadable).`,
+    `Passed over ${plural(unreadable, 'prompt')} whose transcript is gone or no longer matches the store.`,
+    `${plural(subagents, 'sampled prompt')} ran subagents, whose work is not read.`,
     `Score it after any batch: oars sessions gold score ${file}`,
   ];
   return { document: { ok: true, file, prompts: document.entries.length, frame: document.frame, excludedSessions: document.excludedSessions, unreadable, subagentPrompts: subagents }, text: lines.join('\n') };
@@ -355,11 +372,13 @@ export const sessionsGoldArms = async (deps: SessionsDeps, options: { file: stri
   const { document } = await readGold(options.file);
   const redact = makeRedactor(await readRedactDomains(runtime.storeDir));
   const outcome = await fillArms(runtime, document, redact, runtime.evaluator, sidecarSaver(armsPath(options.file), document, GOLD_MODE));
-  if (outcome.failure !== undefined) throw new CliError(`${outcome.failure.message} ${String(outcome.left)} readings are left, and every answer so far is saved. Rerun this command to go on.`, ExitCode.UNEXPECTED, 'unexpected');
+  if (outcome.failure !== undefined) throw new CliError(`${outcome.failure.message} ${plural(outcome.left, 'reading')} left, and every answer so far is saved. Rerun this command to go on.`, ExitCode.UNEXPECTED, 'unexpected');
   const score = scoreGold(document.entries, new Map());
   const lines = [
-    `Asked ${String(outcome.asked)} readings on ${EVALUATOR_MODEL}, with ${String(outcome.left)} left. The gold file is unchanged.`,
-    `${String(outcome.changed)} prompts have a transcript that is gone or no longer matches what the judge sees, so their text arms are unread.`,
+    `Asked ${plural(outcome.asked, 'reading')} on ${EVALUATOR_MODEL}, with ${String(outcome.left)} left. The gold file is unchanged.`,
+    outcome.changed === 1
+      ? '1 prompt has a transcript that is gone or no longer matches what the judge sees, so its text arm is unread.'
+      : `${String(outcome.changed)} prompts have a transcript that is gone or no longer matches what the judge sees, so their text arms are unread.`,
     ...coverageLines(score),
   ];
   return { document: { ok: true, asked: outcome.asked, left: outcome.left, changed: outcome.changed, model: EVALUATOR_MODEL, coverage: score.coverage }, text: lines.join('\n') };

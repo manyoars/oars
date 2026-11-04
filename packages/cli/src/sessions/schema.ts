@@ -2,7 +2,7 @@
 //
 // Everything here is deterministic and local: no model call, no network. `oars sessions deposit` reads the operator's own Claude Code
 // logs (`~/.claude/projects/<path-slug>/*.jsonl` and each session's `subagents/` transcripts, one JSON event per line) and appends
-// captured records to `<config>/oars/sessions/observations.jsonl`. The log is append-only: a session whose file changed is deposited
+// captured records to `<config>/oars/sessions/observations.jsonl`. The log is appended to, and a whole-store deposit drops superseded revs (`compactLog` in `store.ts`): a session whose file changed is deposited
 // again under a higher `rev`, and a reader keeps only the highest `rev` of each session.
 //
 // Version 10 (CAPTURE 10, t768) gives a turn opened by a slash command or a skill a `user-prompt` record, adds `opened` to that record, and moves `skills`
@@ -78,7 +78,7 @@ export interface Usage {
   thinking: number;
 }
 
-export type Harness = 'claude-code' | 'cursor';
+export type Harness = 'claude-code' | 'cursor' | 'codex';
 
 /** The harness a session record came from; a record that does not name one is Claude Code's. */
 export const harnessOf = (session: { harness?: Harness }): Harness => session.harness ?? 'claude-code';
