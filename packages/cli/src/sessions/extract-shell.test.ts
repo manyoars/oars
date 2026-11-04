@@ -305,6 +305,10 @@ describe('shell structure: forms that must not hide the commands after them', ()
     expect(runs('(npm test && echo ok) | tail')).toEqual([['npm test', false], ['echo ok', false], ['tail', true]]);
     expect(runs('(npm test) | tail')).toEqual([['npm test', false], ['tail', true]]);
   });
+  it('hides the commands of a group opened behind a word when a pipe follows its close', () => {
+    expect(runs('echo $(npm test && echo ok) | tail').filter(([run]) => run.startsWith('npm') || run.startsWith('echo ok'))).toEqual([['npm test', false], ['echo ok', false]]);
+    expect(runs('foreach ($f in $x) { npm test && echo ok } | tail').filter(([run]) => run.startsWith('npm') || run.startsWith('echo ok'))).toEqual([['npm test', false], ['echo ok', false]]);
+  });
   it('hides only the command before the pipe when no group closes before it', () => {
     expect(runs('a && b | c')).toEqual([['a', true], ['b', false], ['c', true]]);
     expect(runs('a | (b && c)')).toEqual([['a', false], ['b', true], ['c', true]]);
