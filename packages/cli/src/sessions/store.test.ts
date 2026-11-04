@@ -191,8 +191,7 @@ describe('deposit', () => {
     if (tool === undefined) throw new Error('the fixture deposits no tool row');
     const { keys, ...without } = { ...tool, n: 999, toolUseId: 'toolu_without_keys' };
     expect(Array.isArray(keys)).toBe(true);
-    appendFileSync(paths(staged.storeDir).observations, `${JSON.stringify(without)}
-`);
+    appendFileSync(paths(staged.storeDir).observations, `${JSON.stringify(without)}\n`);
     const kept = (await loadStore(staged.storeDir)).tools.find((row) => row.toolUseId === 'toolu_without_keys');
     expect(kept).toMatchObject({ session: tool.session, tool: tool.tool });
     expect(kept?.keys).toEqual([]);
@@ -210,8 +209,7 @@ describe('deposit', () => {
       ['toolu_numeric_run', [{ run: 5, read: true }], []],
     ];
     for (const [toolUseId, segments] of odd) {
-      appendFileSync(paths(staged.storeDir).observations, `${JSON.stringify({ ...tool, n: 999, toolUseId, segments })}
-`);
+      appendFileSync(paths(staged.storeDir).observations, `${JSON.stringify({ ...tool, n: 999, toolUseId, segments })}\n`);
     }
     const rows = (await loadStore(staged.storeDir)).tools;
     for (const [toolUseId, , expected] of odd) {
@@ -223,7 +221,7 @@ describe('deposit', () => {
   });
 
   it('derives a prompt whose shell call after an edit holds a malformed key list or segment', async () => {
-    // The shapes a hand-edited or foreign log can hold; capture never writes them (t808 review). Each used to throw in derive.ts and abort every reader.
+    // The shapes a hand-edited or foreign log can hold; capture never writes them (t808 review). All but the text key list used to throw in derive.ts and abort every reader.
     const shapes: Array<[string, { [key: string]: unknown }]> = [
       ['keys is null', { keys: null }],
       ['keys is text', { keys: 'run_in_background' }],
@@ -239,9 +237,7 @@ describe('deposit', () => {
       if (tool === undefined) throw new Error('the fixture deposits no tool row');
       const edit = { ...tool, tool: 'Edit', status: 'ok', n: 998, toolUseId: 'toolu_edit' };
       const shell = { ...tool, tool: 'Bash', status: 'ok', n: 999, toolUseId: 'toolu_shell', ...fields };
-      appendFileSync(paths(staged.storeDir).observations, `${JSON.stringify(edit)}
-${JSON.stringify(shell)}
-`);
+      appendFileSync(paths(staged.storeDir).observations, `${JSON.stringify(edit)}\n${JSON.stringify(shell)}\n`);
       await expect(loadStore(staged.storeDir), shape).resolves.toHaveProperty('tools');
       cleanup();
     }
@@ -263,7 +259,9 @@ ${JSON.stringify(shell)}
     const compact = async (): Promise<void> => {
       appendFileSync(file, `${recapture.join('\n')}\n`);
       // Windows refuses to rename over a file a reader holds open, so there the compaction fails and the log is as it was: the reader is safe either way.
-      await compactLog(staged.storeDir, 0).catch(() => undefined);
+      await compactLog(staged.storeDir, 0).catch((error: unknown) => {
+        if (process.platform !== 'win32') throw error;
+      });
     };
     const during = await loadStore(staged.storeDir, compact);
     expect(during.sessions.map((session) => session.session)).toContain(target.session);

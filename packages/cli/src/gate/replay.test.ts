@@ -593,8 +593,7 @@ describe('the registry option', () => {
     await mkdir(join(root, 'cwd'));
     await writeLog(projectsRoot, REPO, 'a.jsonl', [bash(1, 't1', 'npm install mixed'), bash(2, 't2', 'npm install --registry https://npm.private.example/ mixed')]);
     const kept = JSON.stringify({ kind: 'registry', v: 1, day: '2026-11-01', class: 'npm-package', state: 'found', created: null, name: 'mixed', latest: '0.0.1' });
-    await writeFile(join(storeDir, 'crossings.jsonl'), `${kept}
-`);
+    await writeFile(join(storeDir, 'crossings.jsonl'), `${kept}\n`);
     await run([REPO]);
     const { crossings, registry } = await written();
     expect(crossings.map((row) => row.registryState)).toEqual(['not-read', 'not-read']);
