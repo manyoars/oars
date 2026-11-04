@@ -176,6 +176,34 @@ describe('the Copilot table', () => {
   });
 });
 
+describe('the Grok Build table', () => {
+  it.each([
+    ['run_terminal_cmd', 'shell.exec'],
+    ['run_terminal_command', 'shell.exec'],
+    ['bash', 'shell.exec'],
+    ['search_replace', 'file.edit'],
+    ['apply_patch', 'file.edit'],
+    ['edit', 'file.edit'],
+    ['hashline_edit', 'file.edit'],
+    ['write', 'file.write'],
+    ['read_file', 'file.read'],
+    ['hashline_read', 'file.read'],
+    ['grep', 'file.search'],
+    ['glob', 'file.search'],
+    ['task', 'agent.spawn'],
+    ['todo_write', 'plan.update'],
+    ['web_fetch', 'web.fetch'],
+  ] as const)('maps %s to %s and keeps the name', (native, action) => {
+    expect(actionOf(ACTION_TABLES.grok, native)).toEqual({ action, native });
+  });
+
+  it('names the shell for the three shell tools only', () => {
+    expect(shellOf(ACTION_TABLES.grok, 'run_terminal_cmd')).toBe('bash');
+    expect(shellOf(ACTION_TABLES.grok, 'bash')).toBe('bash');
+    expect(shellOf(ACTION_TABLES.grok, 'read_file')).toBeNull();
+  });
+});
+
 describe('every table', () => {
   it.each(Object.entries(ACTION_TABLES))('%s holds only canonical actions', (_harness, table) => {
     for (const action of Object.values(table.rows)) expect(CANONICAL_ACTIONS).toContain(action);
