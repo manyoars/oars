@@ -108,8 +108,10 @@ export const handleMessage = async (runtime: SessionsRuntime, now: () => number,
       const store = await loadStore(runtime.storeDir);
       const redactDomains = await readRedactDomains(runtime.storeDir);
       const result = pull(store, query, { sid: null, now: now(), frame: null, redactDomains, current: await servedPool(runtime.storeDir, store) });
-      // What an asker typed is class A: the call log masks it with the redactor `pull` applies to the recall row.
-      const call: RecallCall = { at: new Date(now()).toISOString(), query: makeRedactor(redactDomains)(JSON.stringify(query)), matches: result.legacy?.matches.length ?? result.reads.length, cwd: process.cwd() };
+      // What an asker typed is class A: the call log masks each string with the redactor `pull` applies to the recall row, before it is serialized, because JSON escaping of a quote or newline hides a secret from the rules.
+      const redact = makeRedactor(redactDomains);
+      const masked = JSON.stringify(query, (_key, value: unknown) => (typeof value === 'string' ? redact(value) : value));
+      const call: RecallCall = { at: new Date(now()).toISOString(), query: masked, matches: result.legacy?.matches.length ?? result.reads.length, cwd: process.cwd() };
       // A pull always answers: a log or recall row that cannot be written costs the record, never the agent's answer.
       await tryLog(async () => {
         await mkdir(runtime.storeDir, { recursive: true });
