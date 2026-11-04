@@ -108,7 +108,7 @@ const rowsOf = (home: string): unknown[] => {
 };
 
 /** How many built-hook sights a case runs before it says no hand-off happened. */
-const MAX_SIGHTS = 5;
+const MAX_SIGHTS = 10;
 
 // Runs the built hook's sights of one name until one hands the name off. A sight ends one of three ways: it takes the name's lock and starts the helper (the lock, or the answer the helper
 // kept, is on disk when the hook exits); it ends at its own deadline with the ask stopped (no lock, no helper, no answer: node's start or the blocking spawn used the budget); or it is
