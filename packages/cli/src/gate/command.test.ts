@@ -6,8 +6,8 @@ import { run } from '../cli.js';
 import { CliError, ExitCode } from '../errors.js';
 import { harness, removeTestDirs } from '../test-support.js';
 import { addProject, cleanup, stage } from '../sessions/test-support.js';
-import { gateReplay, gateReport } from './command.js';
-import { parseRows } from './record.js';
+import { gateInstall, gatePolicy, gateReplay, gateReport } from './command.js';
+import { folderKey, parseRows } from './record.js';
 import type { RegistryReader } from './registry.js';
 
 afterEach(() => {
@@ -106,6 +106,46 @@ describe('oars gate replay and report', () => {
   });
 });
 
+describe('oars gate policy', () => {
+  it('prints the defaults when no file is there, and the file when one fits', async () => {
+    const { deps, out, staged } = setup();
+    expect(await run(['gate', 'policy'], deps)).toBe(ExitCode.OK);
+    expect(out.join('')).toContain('Policy in force: defaults (no file at');
+    expect(out.join('')).toContain('not-found: warn');
+    mkdirSync(staged.storeDir, { recursive: true });
+    writeFileSync(join(staged.storeDir, 'gate-policy.json'), '{"classes":{"not-found":"block"},"holdbackPercent":25}');
+    out.length = 0;
+    expect(await run(['gate', 'policy'], deps)).toBe(ExitCode.OK);
+    expect(out.join('')).toContain('not-found: block');
+    expect(out.join('')).toContain('Holdback: 25% of notes are not shown');
+  });
+
+  it('prints one JSON document with --json, and says an invalid file was ignored', async () => {
+    const { deps, out, staged } = setup();
+    mkdirSync(staged.storeDir, { recursive: true });
+    writeFileSync(join(staged.storeDir, 'gate-policy.json'), 'not json');
+    await run(['--json', 'gate', 'policy'], deps);
+    expect(JSON.parse(out.join(''))).toMatchObject({ ok: true, source: 'invalid', policy: { classes: { 'young-name': 'warn', 'not-found': 'warn' }, youngDays: 30, holdbackPercent: 10 } });
+  });
+
+  it('says so when the store is not configured', async () => {
+    await expect(gatePolicy({ sessions: undefined, install: undefined, now: () => 0 })).rejects.toBeInstanceOf(CliError);
+  });
+});
+
+describe('oars gate install, at the moment of opting in', () => {
+  it('tells the operator what the hook does: records, notes by default, denies only on block, never allows or changes', async () => {
+    const staged = stage();
+    const userSettings = join(staged.storeDir, '..', 'claude', 'settings.json');
+    const install = { nodePath: 'node', hookBin: 'hook-bin.js', userSettings, cwd: tmpdir(), schtasks: () => Promise.resolve({ code: 0, output: '' }) };
+    const outcome = await gateInstall({ sessions: staged.runtime, install, now: () => 0 });
+    expect(outcome.text).toContain(
+      'It records each crossing in crossings.jsonl, adds a note about a young or missing name by default, and denies a call only if you write `block` in gate-policy.json; it never allows or changes a call.',
+    );
+    expect(outcome.text).not.toContain('prints nothing');
+  });
+});
+
 describe('the file the command reads', () => {
   it('is a CliError that says to run replay when it is missing or holds no run', async () => {
     const staged = stage();
@@ -130,7 +170,20 @@ describe('oars gate hook, through the command', () => {
     expect(rows[0]).toMatchObject({ kind: 'crossing', via: 'hook', name: 'left-pad', session: 's1', toolUseId: 'u1' });
   });
 
-  it('writes no file, in the working folder or anywhere, when no store is configured', async () => {
+  it('prints the deny the hook returns, since this path is reached by any extra argument too', async () => {
+    const { deps, out, staged } = setup();
+    mkdirSync(staged.storeDir, { recursive: true });
+    writeFileSync(join(staged.storeDir, 'gate-policy.json'), '{"classes":{"not-found":"block"}}');
+    const now = deps.now();
+    const answer = { kind: 'registry', v: 1, day: new Date(now).toISOString().slice(0, 10), ts: new Date(now).toISOString(), folder: folderKey(tmpdir()), class: 'npm-package', state: 'not-found', created: null, name: 'left-pad', latest: null };
+    writeFileSync(join(staged.storeDir, 'gate-registry.jsonl'), `${JSON.stringify(answer)}
+`);
+    staged.stdin.end(payload);
+    expect(await run(['gate', 'hook'], deps)).toBe(ExitCode.OK);
+    expect(out.join('')).toContain('"permissionDecision":"deny"');
+  });
+
+  it('writes no crossings.jsonl or gate-index.txt in the working folder when no store is configured', async () => {
     const work = mkdtempSync(join(tmpdir(), 'oars-gate-nostore-'));
     const before = process.cwd();
     process.chdir(work);

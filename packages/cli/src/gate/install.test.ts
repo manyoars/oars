@@ -8,7 +8,7 @@ import { CliError, ExitCode } from '../errors.js';
 import type { InstallRuntime } from '../sessions/install.js';
 import { cleanup, stage } from '../sessions/test-support.js';
 import { harness, removeTestDirs } from '../test-support.js';
-import { COMMAND, EVENT, installGateHook, MATCHER, uninstallGateHook } from './install.js';
+import { COMMAND, EVENT, installGateHook, MATCHER, PREVIOUS_COMMAND, uninstallGateHook } from './install.js';
 
 afterEach(() => {
   cleanup();
@@ -34,7 +34,7 @@ describe('gate install', () => {
   });
 
   it('calls the installed binary, never npx', () => {
-    expect(COMMAND).toBe('command -v oars >/dev/null 2>&1 || exit 0; oars gate hook >/dev/null 2>&1; exit 0');
+    expect(COMMAND).toBe(`command -v oars >/dev/null 2>&1 || exit 0; out=$(oars gate hook 2>/dev/null) && printf '%s' "$out"; exit 0`);
     expect(COMMAND).not.toContain('npx');
   });
 
@@ -62,6 +62,11 @@ describe('gate install', () => {
     {
       name: 'our entry already in place, with a group after it',
       settings: { hooks: { [EVENT]: [ours, vendor] } },
+      expected: { hooks: { [EVENT]: [ours, vendor] } },
+    },
+    {
+      name: 'our entry written by the earlier command, which discarded the hook output',
+      settings: { hooks: { [EVENT]: [{ matcher: MATCHER, hooks: [{ type: 'command', command: PREVIOUS_COMMAND, timeout: 5 }] }, vendor] } },
       expected: { hooks: { [EVENT]: [ours, vendor] } },
     },
     {
@@ -160,6 +165,13 @@ describe('gate uninstall', () => {
     expect(read(file)).toEqual({ hooks: { [EVENT]: [{ matcher: 'Bash', hooks: [vendorHook] }] } });
   });
 
+  it('removes an entry written by the earlier command', async () => {
+    const file = join(scratch(), 'settings.json');
+    writeFileSync(file, JSON.stringify({ hooks: { [EVENT]: [{ matcher: 'Bash', hooks: [vendorHook, { type: 'command', command: PREVIOUS_COMMAND }] }] } }));
+    expect(await uninstallGateHook(file)).toEqual({ file, removed: true });
+    expect(read(file)).toEqual({ hooks: { [EVENT]: [{ matcher: 'Bash', hooks: [vendorHook] }] } });
+  });
+
   it('is a no-op, writing nothing, when the file is missing or holds no entry of ours', async () => {
     const dir = scratch();
     const missing = join(dir, 'none.json');
@@ -178,7 +190,8 @@ describe('the installed command', () => {
   const findShell = (): string | undefined => {
     const names = process.platform === 'win32' ? ['sh.exe', 'bash.exe'] : ['sh'];
     const extra = process.platform === 'win32' ? [join(process.env.ProgramFiles ?? 'C:/Program Files', 'Git', 'usr', 'bin')] : [];
-    for (const root of (process.env.PATH ?? '').split(delimiter).concat(extra)) {
+    // Git's shell first on Windows: the harness runs this command in it, and System32's bash.exe is WSL, which cannot run a fake `oars` written to a Windows temp folder.
+    for (const root of extra.concat((process.env.PATH ?? '').split(delimiter))) {
       for (const name of names) {
         if (root !== '' && existsSync(join(root, name))) return join(root, name);
       }
@@ -203,6 +216,20 @@ describe('the installed command', () => {
     const result = spawnSync(shell ?? '', ['-c', COMMAND], { encoding: 'utf8', timeout: 30_000, env: { PATH: `${bin}${delimiter}${dirname(shell ?? '')}`, MARK: mark } });
     expect(result.status).toBe(0);
     expect(readFileSync(mark, 'utf8')).toBe('ran gate hook\n');
+  }, 60_000);
+
+  // The harness reads the hook's stdout, so the installed command has to pass a deny through: a command that discards it would make a `block` policy block nothing.
+  it.skipIf(shell === undefined)('passes the deny that oars gate hook prints through to stdout', () => {
+    const bin = scratch();
+    const script = join(bin, 'oars');
+    const deny = '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"Blocked by your gate policy"}}';
+    writeFileSync(script, `#!/bin/sh
+printf '%s' '${deny}'
+`);
+    chmodSync(script, 0o755);
+    const result = spawnSync(shell ?? '', ['-c', COMMAND], { encoding: 'utf8', timeout: 30_000, env: { PATH: `${bin}${delimiter}${dirname(shell ?? '')}` } });
+    expect(result.status).toBe(0);
+    expect(result.stdout).toBe(deny);
   }, 60_000);
 
   // Exit 2 from a PreToolUse hook blocks the tool call, and an `oars` without `gate hook` (a rollback, an older install) exits 2 with output.

@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { frame, prompt, session, step, store, tool } from './pool-fixture.js';
+import { frame, prompt, session, step, storedNames, store, tool } from './pool-fixture.js';
 import { parseSkeleton, sessionsOf, skeletonOf, type SessionSkeleton } from './pool-wire.js';
 import type { Harness } from './schema.js';
-import { LITERAL } from './public-vocabulary.js';
+import { LITERAL, PRIVATE } from './public-vocabulary.js';
 
 // Real capture writes the shell as `shellOf` names it; the shared fixture's frame predates that spelling.
 const framed = frame({ shell: 'bash' });
@@ -13,7 +13,7 @@ const shell = step(0, 0, 'shell.exec', { native: 'Bash', identity: { program: 'g
 const skeletonFrom = (from: ReturnType<typeof store>): SessionSkeleton | null => {
   const [only] = sessionsOf(from);
   if (only === undefined) throw new Error('the store has no session');
-  return skeletonOf(only, '0123456789abcdef');
+  return skeletonOf(only, '0123456789abcdef', storedNames);
 };
 
 const sample = (): SessionSkeleton => {
@@ -53,7 +53,7 @@ const refusedField = (value: unknown): string => {
 };
 
 const firstStep = ['transcripts', 0, 'tools', 0, 'steps', 0];
-const withStep = (over: object): unknown => sent(firstStep, JSON.parse(JSON.stringify({ ...shell, n: undefined, frameId: undefined, ...over })));
+const withStep = (over: object): unknown => sent(firstStep, JSON.parse(JSON.stringify({ ...shell, n: undefined, seg: undefined, frameId: undefined, edges: undefined, cost: undefined, tokens: null, ms: null, ...over })));
 const stepField = 'transcripts[0].tools[0].steps[0]';
 
 describe('skeletonOf', () => {
@@ -88,22 +88,55 @@ describe('skeletonOf', () => {
   });
 });
 
-describe('a nested spawn', () => {
-  it('names the transcript that spawned each subagent by its position, since a skeleton holds no session id', () => {
-    const skeleton = skeletonFrom(
-      store({
-        sessions: [session('s1', { frame: framed })],
-        subagents: [
-          session('s1~agent-x', { parent: 's1', spawnedIn: 's1', frame: framed }),
-          session('s1~agent-y', { parent: 's1', spawnedIn: 's1~agent-x', frame: framed }),
-          session('s1~agent-z', { parent: 's1', spawnedIn: 's1~not-held', frame: framed }),
-        ],
-        prompts: [framedPrompt('s1', 0)],
-      }),
-    );
-    expect(skeleton?.transcripts.map((transcript) => transcript.spawnedIn)).toEqual([null, 0, 1, null]);
+describe('ordinals', () => {
+  it('sends a call and a prompt as positions, never the numbers the session gave them, and no spawner or edge', () => {
+    const from = store({
+      sessions: [session('s1', { frame: framed })],
+      subagents: [session('s1~agent-x', { parent: 's1', spawnedIn: 's1', frame: framed })],
+      prompts: [framedPrompt('s1', 4), framedPrompt('s1', 2)],
+      tools: [
+        tool('s1', 9, 'Bash', { prompt: 2, steps: [shell] }),
+        tool('s1', 3, 'Bash', { prompt: 4, steps: [shell] }),
+        tool('s1', 7, 'Bash', { prompt: 2, steps: [shell] }),
+        tool('s1~agent-x', 21, 'Bash', { parent: 's1', prompt: null, steps: [{ ...shell, parent: 7, edges: [{ kind: 'spawned', n: 7, seg: 0 }] }] }),
+      ],
+    });
+    const skeleton = skeletonFrom(from);
+    // Calls 3, 7, and 9 are positions 0, 1, and 2; prompts 2 and 4 are positions 0 and 1.
+    expect(skeleton?.transcripts[0]?.tools.map((held) => held.prompt)).toEqual([1, 0, 0]);
+    expect(skeleton?.transcripts[1]?.tools[0]?.steps[0]?.parent).toBe(1);
+    const text = JSON.stringify(skeleton);
+    for (const field of ['"spawnedIn"', '"edges"', '"index"', '"n"', '"seg"']) expect(text).not.toContain(field);
+    expect(parseSkeleton(JSON.parse(text))).toEqual({ ok: true, skeleton });
+  });
+
+  it('sends no link for a subagent a subagent spawned, whose parent number is not a call of the main run', () => {
+    const from = store({
+      sessions: [session('s1', { frame: framed })],
+      subagents: [session('s1~agent-x', { parent: 's1', spawnedIn: 's1', frame: framed }), session('s1~agent-y', { parent: 's1', spawnedIn: 's1~agent-x', frame: framed })],
+      prompts: [framedPrompt('s1', 0)],
+      tools: [
+        tool('s1', 1, 'Bash', { steps: [shell] }),
+        tool('s1', 2, 'Bash', { steps: [shell] }),
+        tool('s1~agent-x', 2, 'Bash', { parent: 's1', steps: [shell] }),
+        tool('s1~agent-y', 0, 'Bash', { parent: 's1', steps: [{ ...shell, parent: 2 }] }),
+      ],
+    });
+    const parents = skeletonFrom(from)?.transcripts.map((held) => held.tools[0]?.steps[0]?.parent);
+    // Call 2 of agent-x spawned agent-y, which the main run's own call 2 (position 1) did not.
+    expect(parents?.[2]).toBeNull();
+  });
+
+  it('numbers the prompts a subagent names but does not hold after the ones it holds, one position per number', () => {
+    const from = store({
+      sessions: [session('s1', { frame: framed })],
+      subagents: [session('s1~agent-x', { parent: 's1', frame: framed })],
+      prompts: [framedPrompt('s1', 0)],
+      tools: [tool('s1', 0, 'Bash', { prompt: 0, steps: [shell] }), tool('s1~agent-x', 0, 'Bash', { parent: 's1', prompt: 5, steps: [shell] }), tool('s1~agent-x', 1, 'Bash', { parent: 's1', prompt: 8, steps: [shell] }), tool('s1~agent-x', 2, 'Bash', { parent: 's1', prompt: 5, steps: [shell] })],
+    });
+    const skeleton = skeletonFrom(from);
+    expect(skeleton?.transcripts[1]?.tools.map((held) => held.prompt)).toEqual([0, 1, 0]);
     expect(parseSkeleton(JSON.parse(JSON.stringify(skeleton)))).toEqual({ ok: true, skeleton });
-    expect(JSON.stringify(skeleton)).not.toContain('agent-x');
   });
 });
 
@@ -135,17 +168,48 @@ describe('parseSkeleton refuses, and names the field', () => {
     { name: 'a harness outside the list', path: ['transcripts', 0, 'harness'], value: 'acme', field: 'transcripts[0].harness' },
     { name: 'a fraction in a count', path: ['transcripts', 0, 'prompts', 0, 'errors'], value: 1.5, field: 'transcripts[0].prompts[0].errors' },
     { name: 'a count no whole number holds', path: ['transcripts', 0, 'prompts', 0, 'usage', 'input'], value: 1e308, field: 'transcripts[0].prompts[0].usage.input' },
-    { name: 'a fraction in a step number', path: [...firstStep, 'seg'], value: 1.5, field: `${stepField}.seg` },
+    { name: 'the number of a step in its call', path: [...firstStep, 'seg'], value: 0, field: `${stepField}.seg` },
     { name: 'a wall time past any real prompt', path: ['transcripts', 0, 'prompts', 0, 'wallSec'], value: 1e308, field: 'transcripts[0].prompts[0].wallSec' },
-    { name: 'a spawner no transcript holds', path: ['transcripts', 0, 'spawnedIn'], value: 5, field: 'transcripts[0].spawnedIn' },
-    { name: 'a fraction for a spawner', path: ['transcripts', 0, 'spawnedIn'], value: 0.5, field: 'transcripts[0].spawnedIn' },
+    { name: 'a prompt position past anything the transcript could number', path: ['transcripts', 0, 'tools', 0, 'prompt'], value: 99, field: 'transcripts[0].tools[0].prompt' },
+    { name: 'a spawning call the main run does not hold', path: [...firstStep, 'parent'], value: 99, field: `${stepField}.parent` },
+    { name: 'a fraction for a parent', path: [...firstStep, 'parent'], value: 0.5, field: `${stepField}.parent` },
+    { name: 'the exact number of a call', path: ['transcripts', 0, 'tools', 0, 'n'], value: 3, field: 'transcripts[0].tools[0].n' },
+    { name: 'the exact index of a prompt', path: ['transcripts', 0, 'prompts', 0, 'index'], value: 3, field: 'transcripts[0].prompts[0].index' },
+    { name: 'a spawner address', path: ['transcripts', 0, 'spawnedIn'], value: 0, field: 'transcripts[0].spawnedIn' },
+    { name: 'a step edge', path: [...firstStep, 'edges'], value: [], field: `${stepField}.edges` },
   ];
   it.each(cases)('$name', ({ path, value, field }) => {
     expect(refusedField(sent(path, value))).toBe(field);
   });
 
-  it('takes a fraction of a second as wall time', () => {
-    expect(refusedField(sent(['transcripts', 0, 'prompts', 0, 'wallSec'], 1.5))).toBe('accepted');
+  it('takes a bucket of wall time, and refuses an exact one: a fraction is no bucket', () => {
+    expect(refusedField(sent(['transcripts', 0, 'prompts', 0, 'wallSec'], 6))).toBe('accepted');
+    expect(refusedField(sent(['transcripts', 0, 'prompts', 0, 'wallSec'], null))).toBe('accepted');
+    expect(refusedField(sent(['transcripts', 0, 'prompts', 0, 'wallSec'], 1.5))).toBe('transcripts[0].prompts[0].wallSec');
+  });
+
+  it('holds every bucketed field to its own edges', () => {
+    const prompt = ['transcripts', 0, 'prompts', 0];
+    expect(refusedField(sent([...prompt, 'usage', 'input'], 11))).toBe('accepted');
+    expect(refusedField(sent([...prompt, 'usage', 'input'], 12))).toBe('transcripts[0].prompts[0].usage.input');
+    expect(refusedField(sent([...prompt, 'usage', 'thinking'], 12))).toBe('transcripts[0].prompts[0].usage.thinking');
+    expect(refusedField(sent([...prompt, 'errors'], -1))).toBe('transcripts[0].prompts[0].errors');
+    expect(refusedField(sent([...prompt, 'wallSec'], 18))).toBe('transcripts[0].prompts[0].wallSec');
+    expect(refusedField(sent([...firstStep, 'tokens'], 12))).toBe(`${stepField}.tokens`);
+    expect(refusedField(sent([...firstStep, 'ms'], 18))).toBe(`${stepField}.ms`);
+    expect(refusedField(sent([...firstStep, 'ms'], 17))).toBe('accepted');
+  });
+
+  it('refuses an exact count where the form holds a bucket: the old step cost and a stray exact field', () => {
+    expect(refusedField(withStep({ cost: { tokens: 1500, durationMs: 40 } }))).toBe(`${stepField}.cost`);
+    expect(refusedField(sent(['transcripts', 0, 'prompts', 0, 'usage', 'total'], 1500))).toBe('transcripts[0].prompts[0].usage.total');
+  });
+
+  it('refuses the exact-count form (format 1) by name, and a deposit that carries deltas', () => {
+    const old = parseSkeleton({ ...sample(), format: 1 });
+    expect(old).toMatchObject({ ok: false, field: 'format', reason: 'the exact-count form (format 1) is no longer read; send format 2' });
+    expect(refusedField(sent(['deltas'], [{}]))).toBe('deltas');
+    expect(refusedField(sent(['deltas'], undefined))).toBe('deltas');
   });
 
   it('refuses a skeleton holding no prompt and no tool, which would otherwise count as a deposit', () => {
@@ -162,8 +226,18 @@ describe('parseSkeleton refuses, and names the field', () => {
     expect(refusedField([])).toBe('skeleton');
   });
 
-  it('keeps the literal, which is the vocabulary saying it does not know a name', () => {
-    expect(refusedField(withStep({ native: LITERAL, identity: { program: LITERAL, sub: null, flags: [] } }))).toBe('accepted');
+  it('keeps the literal for a native name, which is the vocabulary saying it does not know one', () => {
+    expect(refusedField(withStep({ native: LITERAL }))).toBe('accepted');
+  });
+
+  it('reads a shell program as a list member or private, never the literal, and a private program holds no subcommand', () => {
+    expect(refusedField(withStep({ identity: { program: PRIVATE, sub: null, flags: [] } }))).toBe('accepted');
+    expect(refusedField(withStep({ identity: { program: LITERAL, sub: null, flags: [] } }))).toBe(`${stepField}.identity.program`);
+    expect(refusedField(withStep({ identity: { program: PRIVATE, sub: 'push', flags: [] } }))).toBe(`${stepField}.identity.sub`);
+    expect(refusedField(withStep({ identity: { program: PRIVATE, sub: null, flags: ['--force'] } }))).toBe(`${stepField}.identity.flags`);
+    expect(refusedField(withStep({ identity: { program: PRIVATE, sub: null, flags: [], pulls: [] } }))).toBe(`${stepField}.identity.pulls`);
+    expect(refusedField(withStep({ identity: { program: 'git', sub: 'push', flags: ['-f', '--force'] } }))).toBe('accepted');
+    expect(refusedField(withStep({ identity: { program: 'git', sub: 'push', flags: ['-force'] } }))).toBe(`${stepField}.identity.flags[0]`);
   });
 
   it('holds MCP, skill, and web identities to their own lists', () => {
@@ -231,10 +305,5 @@ describe('parseSkeleton refuses, and names the field', () => {
       Reflect.set(transcripts[0], 'harness', harness);
       expect(refusedField(raw), harness).toBe('accepted');
     }
-  });
-
-  it('holds an edge to its kinds', () => {
-    expect(refusedField(withStep({ edges: [{ kind: 'acme', n: 0, seg: 0 }] }))).toBe(`${stepField}.edges[0].kind`);
-    expect(refusedField(withStep({ edges: [{ kind: 'next', n: 0, seg: 0 }] }))).toBe('accepted');
   });
 });

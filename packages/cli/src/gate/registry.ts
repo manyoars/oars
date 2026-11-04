@@ -2,13 +2,15 @@
 // with npm, npx, or pip whose command left the registry, the config, and the folder to their defaults (the replay asks for no other crossing),
 // that is the registry the manager would contact, because those read the same project and user config; so a private name does not go to a public
 // registry on the gate's account. Off by default; nothing here runs unless the operator asks.
-import { execFile } from 'node:child_process';
+import { execFile, spawn, type ChildProcess, type SpawnOptions } from 'node:child_process';
 import type { CrossingClass } from './checks.js';
 
 export interface RegistryAsk {
   class: CrossingClass;
   name: string;
   cwd: string;
+  /** Aborting it stops the manager the ask started, and the processes that manager started (the hook does so before it hands the name to a helper). */
+  signal?: AbortSignal;
 }
 
 export interface RegistryAnswer {
@@ -26,7 +28,7 @@ export interface ManagerRun {
   stderr: string;
 }
 
-export type ManagerRunner = (program: string, args: readonly string[], cwd: string) => Promise<ManagerRun>;
+export type ManagerRunner = (program: string, args: readonly string[], cwd: string, signal?: AbortSignal) => Promise<ManagerRun>;
 
 const TIMEOUT_MS = 20_000;
 
@@ -61,9 +63,11 @@ export const readNpmView = (run: ManagerRun): RegistryAnswer => {
   }
 };
 
-/** `pip index versions <name>` prints `name (latest)` first. It states no dates, so a Python name's age stays unknown. */
+/**
+ * `pip index versions <name>` prints `name (latest)` first. It states no dates, so a Python name's age stays unknown. A Python name never reads
+ * `not-found`: pip prints "No matching distribution" for a missing name and for a down index alike, so the line cannot tell them apart.
+ */
 export const readPipIndex = (run: ManagerRun): RegistryAnswer => {
-  if (/No matching distribution/i.test(run.stdout) || /No matching distribution/i.test(run.stderr)) return NOT_FOUND;
   if (run.code !== 0) return UNREACHABLE;
   const latest = /^\S+ \(([^)]+)\)/m.exec(run.stdout)?.[1];
   return latest === undefined ? UNREACHABLE : { state: 'found', latest, created: null };
@@ -82,12 +86,29 @@ export const managerOptions = (cwd: string, platform: NodeJS.Platform = process.
   env: { ...process.env, NoDefaultCurrentDirectoryInExePath: '1' },
 });
 
-const runnerWith = (timeout: number): ManagerRunner => (program, args, cwd) =>
+/** What `stopTree` needs of `spawn`: a program, its arguments, and a child to hear an error from. */
+export type StartProcess = (program: string, args: readonly string[], options: SpawnOptions) => { on: (event: 'error', listener: () => void) => unknown };
+
+/**
+ * Stops a manager and what it started. On Windows `shell: true` puts `cmd.exe` first, and killing it leaves the manager running, so the whole tree goes (`taskkill /T`); elsewhere
+ * the manager is the child itself.
+ */
+export const stopTree = (child: Pick<ChildProcess, 'pid' | 'kill'>, platform: NodeJS.Platform = process.platform, start: StartProcess = spawn): void => {
+  if (platform === 'win32' && child.pid !== undefined) {
+    start('taskkill', ['/pid', String(child.pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true }).on('error', () => undefined);
+    return;
+  }
+  child.kill();
+};
+
+const runnerWith = (timeout: number): ManagerRunner => (program, args, cwd, signal) =>
   new Promise((resolve) => {
-    execFile(program, [...args], managerOptions(cwd, process.platform, timeout), (error, stdout, stderr) => {
+    const child = execFile(program, [...args], managerOptions(cwd, process.platform, timeout), (error, stdout, stderr) => {
       const code = error === null ? 0 : typeof error.code === 'number' ? error.code : null;
       resolve({ code, stdout, stderr });
     });
+    if (signal?.aborted === true) stopTree(child);
+    else signal?.addEventListener('abort', () => { stopTree(child); }, { once: true });
   });
 
 /**
@@ -96,12 +117,12 @@ const runnerWith = (timeout: number): ManagerRunner => (program, args, cwd) =>
  */
 const npmLimits = (timeout: number | undefined): string[] => (timeout === undefined ? [] : [`--fetch-timeout=${String(timeout)}`, '--fetch-retries=0']);
 /** pip counts its socket timeout in whole seconds. */
-const pipLimits = (timeout: number | undefined): string[] => (timeout === undefined ? [] : ['--timeout', '1', '--retries', '0']);
+const pipLimits = (timeout: number | undefined): string[] => (timeout === undefined ? [] : ['--timeout', String(Math.ceil(timeout / 1000)), '--retries', '0']);
 
 /** The reader the option uses. `npm view` and `pip index` run no package code; the manager's own cache is the manager's. */
-export const managerReader = (given?: ManagerRunner, timeout?: number): RegistryReader => async ({ class: cls, name, cwd }) => {
+export const managerReader = (given?: ManagerRunner, timeout?: number): RegistryReader => async ({ class: cls, name, cwd, signal }) => {
   const run = given ?? runnerWith(timeout ?? TIMEOUT_MS);
   if (!askable(cls, name)) return UNREACHABLE;
-  if (cls === 'npm-package') return readNpmView(await run('npm', ['view', name, 'dist-tags.latest', 'time.created', '--json', '--logs-max=0', ...npmLimits(timeout)], cwd));
-  return readPipIndex(await run('pip', ['index', 'versions', name, '--disable-pip-version-check', ...pipLimits(timeout)], cwd));
+  if (cls === 'npm-package') return readNpmView(await run('npm', ['view', name, 'dist-tags.latest', 'time.created', '--json', '--logs-max=0', ...npmLimits(timeout)], cwd, signal));
+  return readPipIndex(await run('pip', ['index', 'versions', name, '--disable-pip-version-check', ...pipLimits(timeout)], cwd, signal));
 };

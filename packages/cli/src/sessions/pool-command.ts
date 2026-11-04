@@ -9,9 +9,11 @@ import { checkSession, exclusionPaths, type Reason } from './exclusion.js';
 import { discardStale, FIELD_ROWS, fieldsOf, heldBatches, lockedBatch, markShown, outboxFolder, removeBatchesExcept, staleBatches, unchangedBytes, writeBatch, type LockRefusal } from './pool-outbox.js';
 import { isBundleVersion, parseSkeleton, sessionsOf, skeletonOf, VOCAB_VERSION, verifyBundle, type Bundle, type PinnedKey } from './pool-wire.js';
 import { Masker, printed, TRANSPORT_HEADERS, waitWords, type Outgoing } from './pool-print.js';
+import { shellReader } from './projection.js';
 import { isVocabularyExpired, REGISTRY_MAX_AGE_DAYS, VOCAB_SNAPSHOT_DATE } from './public-vocabulary.js';
 import { contentHash } from './read.js';
 import { loadStore, readSaved, type SessionsRuntime } from './store.js';
+import { vocabulary } from './vocab-load.js';
 
 const LOGIN = 'pool-login';
 const DEPOSIT = 'pool-deposit';
@@ -420,7 +422,7 @@ export const poolDeposit = async (deps: RunDeps, options: { server?: string | un
     }
     // Hashed with the account, so a redeposit replaces its own batch and two accounts' copies of one session cannot be joined.
     const key = contentHash([account, records.main.session]);
-    const skeleton = skeletonOf(records, key);
+    const skeleton = skeletonOf(records, key, shellReader(vocabulary()));
     if (skeleton === null) {
       counts.uncaptured += 1;
       continue;
