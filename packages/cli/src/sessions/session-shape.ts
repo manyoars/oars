@@ -40,6 +40,8 @@ const PERMISSION_MODES: { readonly [harness in Harness]: ReadonlySet<string> } =
   copilot: new Set(),
   gemini: new Set(),
   cursor: new Set(),
+  // Grok Build's reader reads no mode (its `current_mode_update` carries one, but this reader does not read it), so no value is documented to keep.
+  grok: new Set(),
 };
 
 /**
@@ -54,6 +56,8 @@ const COMPLETE: { readonly [harness in Harness]: { readonly interrupts: boolean;
   // Gemini CLI's reader writes each message with its own time (so the runs are real), and reads no interrupt, refusal, or denial: the chat file holds a cancelled call as an error and no more.
   gemini: { interrupts: false, rejections: false, denials: false, timing: true },
   cursor: { interrupts: false, rejections: false, denials: false, timing: false },
+  // Grok Build's reader writes the prompts and replies with their line times (seconds), and reads no cancel, tool refusal, or hook denial.
+  grok: { interrupts: false, rejections: false, denials: false, timing: true },
 };
 
 export type TrustEventKind = 'interrupt' | 'rejection' | 'denial';
