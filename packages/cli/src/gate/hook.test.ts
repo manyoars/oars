@@ -158,6 +158,18 @@ describe('oars gate hook: one record per crossing', () => {
   });
 });
 
+describe('oars gate hook: the policy a row was written under', () => {
+  it('records default with no file, file for one that fits, and invalid for one that does not, and writes the row in each case', async () => {
+    const store = folder();
+    await gateHook(payload('npm install left-pad', { tool_use_id: 'a' }), depsFor(store));
+    writeFileSync(join(store, 'gate-policy.json'), '{"classes":{"not-found":"block"}}');
+    await gateHook(payload('npm install left-pad', { tool_use_id: 'b' }), depsFor(store));
+    writeFileSync(join(store, 'gate-policy.json'), '{"classes":{"not-found":"deny"}}');
+    expect(await gateHook(payload('npm install left-pad', { tool_use_id: 'c' }), depsFor(store))).toBe('');
+    expect(rowsOf(store).map((row) => row.policy)).toEqual(['default', 'file', 'invalid']);
+  });
+});
+
 describe('oars gate hook: npx of a bin the folder has', () => {
   const project = (): string => {
     const one = folder();

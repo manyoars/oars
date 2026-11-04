@@ -76,6 +76,17 @@ describe('the counts', () => {
     expect(text).toContain('Removed later: 1');
   });
 
+  it('counts the policy the hook rows were written under, and leaves a replay row out of it', () => {
+    const counted = reportOf([crossing({ policy: 'default' }), crossing({ toolUseId: 't2', policy: 'default' }), crossing({ toolUseId: 't3', policy: 'invalid' }), crossing({ toolUseId: 't4' })]);
+    expect(counted.policy).toEqual([
+      { value: 'default', count: 2 },
+      { value: 'file', count: 0 },
+      { value: 'invalid', count: 1 },
+    ]);
+    expect(formatReport(counted)).toContain('Policy: default 2, invalid 1');
+    expect(formatReport(report)).not.toContain('Policy:');
+  });
+
   it('says the registry state was not read, and never guesses', () => {
     expect(formatReport(report)).toContain('registry state not read');
     expect(formatReport(report)).not.toContain('Against latest');

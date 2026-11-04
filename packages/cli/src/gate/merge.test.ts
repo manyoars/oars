@@ -69,6 +69,12 @@ describe('one row per crossing', () => {
     expect(one).toMatchObject({ origin: 'prompt', decidedBy: 'operator', status: 'ok', next: 'proceeded', removedLater: false, miss: 'none' });
   });
 
+  it('keeps the policy the hook wrote under, which a replay row never carries', () => {
+    const [one] = mergeCrossings([crossing()], [hookRow({ policy: 'invalid' })]);
+    expect(one).toMatchObject({ via: 'both', policy: 'invalid' });
+    expect(mergeCrossings([crossing()], [hookRow()])[0]).not.toHaveProperty('policy');
+  });
+
   it("falls back to the replay's value where the hook read nothing", () => {
     const [one] = mergeCrossings([crossing({ permission: 'plan', novelty: 'session' })], [hookRow({ permission: 'unknown', novelty: 'not-read' })]);
     expect(one).toMatchObject({ permission: 'plan', novelty: 'session', via: 'both' });

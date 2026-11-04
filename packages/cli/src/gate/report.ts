@@ -19,6 +19,7 @@ import {
   type Row,
   type RunRow,
 } from './record.js';
+import { POLICY_SOURCES } from './policy.js';
 import { REGISTRY_NOT_READ } from './replay.js';
 
 export interface Tally {
@@ -56,6 +57,8 @@ export interface Report {
   againstLatest: Tally[];
   registryState: Tally[];
   registryAge: Tally[];
+  /** Which policy stood for the rows the hook wrote: no file, a file that fit, or one that did not (the defaults stood). Rows with no policy read (replay) are not counted. */
+  policy: Tally[];
   removedLater: number;
   unseen: Tally[];
   limits: string[];
@@ -109,6 +112,7 @@ export const reportOf = (rows: readonly Row[]): Report => {
     againstLatest: tally(AGAINST_LATEST, crossings, (row) => row.againstLatest),
     registryState: tally(REGISTRY_STATES, crossings, (row) => row.registryState),
     registryAge: tally(REGISTRY_AGES, crossings, (row) => row.registryAge),
+    policy: tally(POLICY_SOURCES, crossings.filter((row) => row.policy !== undefined), (row) => row.policy ?? 'default'),
     removedLater: crossings.filter((row) => row.removedLater === true).length,
     unseen: Object.entries(run?.unread ?? {}).map(([value, count]) => ({ value, count })),
     limits: [...LIMITS],
@@ -141,6 +145,7 @@ export const formatReport = (report: Report): string => {
     line('Name not found', report.miss),
     line('Line', report.depth),
     `Removed later: ${String(report.removedLater)}`,
+    ...(report.policy.some((one) => one.count > 0) ? [line('Policy', report.policy)] : []),
     ...registry,
     'Replay cannot see:',
     ...report.unseen.map((one) => `- ${String(one.count)} ${one.value} commands that state no name to record`),

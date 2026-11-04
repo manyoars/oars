@@ -17,7 +17,7 @@ import type { BooksBy, RecallQuery } from './sessions/query.js';
 import { closedQueryOf, formsRefusal, RECALL_FAMILIES } from './sessions/recall-reads.js';
 import { FAMILIES } from './sessions/read.js';
 import { sessionsBooks, sessionsContext, sessionsDeposit, sessionsGoldArms, sessionsGoldSample, sessionsGoldScore, sessionsHookInstall, sessionsHookStatus, sessionsHookUninstall, sessionsMcp, sessionsLineage, sessionsMeasure, sessionsRead, sessionsRecall, sessionsRecallCounts, sessionsVerify, type SessionsDeps } from './sessions/command.js';
-import { gateInstall, gateReplay, gateReport, gateUninstall } from './gate/command.js';
+import { gateInstall, gatePolicy, gateReplay, gateReport, gateUninstall } from './gate/command.js';
 import { DEADLINE_MS, gateHook } from './gate/hook.js';
 import { managerReader } from './gate/registry.js';
 import { exclusionPaths, sessionsExclusions } from './sessions/exclusion.js';
@@ -617,6 +617,13 @@ const buildProgram = (deps: RunDeps, argv: string[]): Command => {
     .description('remove only the gate hook `install` wrote from the user settings; crossings.jsonl stays')
     .action(async (_options: OptionValues, command: Command) => {
       emit(deps, flag(command.optsWithGlobals(), 'json'), await gateUninstall(sessionDeps(deps)));
+    });
+
+  gate
+    .command('policy')
+    .description('print the gate policy in force: per class warn, block, or off, the day count for a young name, and the holdback share; read from gate-policy.json in the sessions store, whose absence or damage means the defaults')
+    .action(async (_options: OptionValues, command: Command) => {
+      emit(deps, flag(command.optsWithGlobals(), 'json'), await gatePolicy(sessionDeps(deps)));
     });
 
   gate

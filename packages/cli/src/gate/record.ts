@@ -1,5 +1,6 @@
 // The shape of `crossings.jsonl`, in closed vocabulary. Field classes are in `docs/gate.md` and `docs/sessions-store.md`: a name and a stated
 // version are class A because a private package's name can identify private work, and no path, working folder, or command text is kept at all.
+import type { PolicySource } from './policy.js';
 import { CROSSING_CLASSES, CROSSING_FORMS, type CrossingClass, type CrossingForm, type UnreadShape, type VersionForm } from './checks.js';
 
 export const GATE_VERSION = 1;
@@ -77,6 +78,8 @@ export interface CrossingRecord {
   registryAge: RegistryAge;
   arm: NotShown;
   lineShown: NotShown;
+  /** Which policy stood when the hook wrote the row. Absent in a replay row and in a row an earlier build wrote: no policy was read. */
+  policy?: PolicySource;
   // Class A: join ids, a finer time, and what the command stated.
   session: string;
   agent: string | null;
@@ -168,6 +171,7 @@ const merged = (live: CrossingRecord, replayed: CrossingRecord): CrossingRecord 
     : live.form === 'local-bin-run'
       ? { againstLatest: NOT_READ, registryState: NOT_READ, registryAge: NOT_READ }
       : { againstLatest: live.againstLatest, registryState: live.registryState, registryAge: live.registryAge }),
+  ...(live.policy === undefined ? {} : { policy: live.policy }),
   arm: pick('arm', live, replayed),
   lineShown: pick('lineShown', live, replayed),
 });
