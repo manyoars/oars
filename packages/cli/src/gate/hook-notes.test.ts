@@ -85,6 +85,17 @@ describe('oars gate hook: a note, and the arm it is shown in', () => {
     );
   });
 
+  it('notes one name once in a call: a repeat reads as noted, so a held first draw is the only counted row', async () => {
+    const store = folder();
+    const draws = [0, 0.5];
+    const random = (): number => draws.shift() ?? 0.5;
+    expect(await gateHook(payload('npm install left-pad left-pad'), depsFor(store, { registry: found(), random }))).toBe('');
+    expect(rowsOf(store).map((row) => [row.arm, row.lineShown, row.lineHeld])).toEqual([
+      ['held', 'none', 'young-name-note'],
+      ['none', 'none', 'none'],
+    ]);
+  });
+
   it('keeps the note through a cut first sight: a stalled sight reads nothing, and the next sight that reads the name shows it', async () => {
     const store = folder();
     expect(await gateHook(payload('npm install left-pad', 'a'), depsFor(store, { registry: stalled, clock: () => 0, deadlineMs: 400, random: () => 0.5 }))).toBe('');
@@ -214,6 +225,48 @@ describe('oars gate hook: a block, as a label', () => {
     expect(await gateHook(payload('npm install ghost-lib', 'a', first), depsFor(store, { registry: missing }))).toBe(deny(REASON));
     const reader = vi.fn<RegistryReader>(found(OLD));
     expect(await gateHook(payload('npm install ghost-lib', 'b', second), depsFor(store, { registry: reader }))).toBe('');
+    expect(reader).toHaveBeenCalledTimes(1);
+  });
+
+  const keptFound = (extra: { ts: string; folder: string }): string =>
+    `${JSON.stringify({ kind: 'registry', v: 1, day: '2026-11-04', class: 'npm-package', state: 'found', created: '2026-10-30T00:00:00.000Z', name: 'left-pad', latest: '1.0.0', ...extra })}
+`;
+
+  it('answers a kept found only for the folder it was asked in: another folder asks again', async () => {
+    const store = folder();
+    writeFileSync(registryCachePath(store), keptFound({ ts: new Date(NOW - 60_000).toISOString(), folder: folderKey(folder()) }));
+    const reader = vi.fn<RegistryReader>(found(OLD));
+    expect(await gateHook(payload('npm install left-pad'), depsFor(store, { registry: reader, random: () => 0.5 }))).toBe('');
+    expect(reader).toHaveBeenCalledTimes(1);
+  });
+
+  it('answers a kept found in the folder that asked, with no question', async () => {
+    const store = folder();
+    const here = folder();
+    writeFileSync(registryCachePath(store), keptFound({ ts: new Date(NOW - 60_000).toISOString(), folder: folderKey(here) }));
+    const reader = vi.fn<RegistryReader>(found(OLD));
+    expect(await gateHook(payload('npm install left-pad', 'a', here), depsFor(store, { registry: reader, random: () => 0.5 }))).toBe(additional(NOTE));
+    expect(reader).not.toHaveBeenCalled();
+  });
+
+  it('reads no kept answer for a call with no cwd', async () => {
+    const store = folder();
+    writeFileSync(registryCachePath(store), keptFound({ ts: new Date(NOW - 60_000).toISOString(), folder: folderKey('') }));
+    const reader = vi.fn<RegistryReader>(found(OLD));
+    const bare = JSON.stringify({ session_id: 's1', tool_use_id: 'u1', tool_name: 'Bash', tool_input: { command: 'npm install left-pad' }, permission_mode: 'default' });
+    expect(await gateHook(bare, depsFor(store, { registry: reader, random: () => 0.5 }))).toBe('');
+    expect(reader).not.toHaveBeenCalled();
+    expect(rowsOf(store)).toMatchObject([{ registryState: 'not-read' }]);
+  });
+
+  it('asks once for a kept row with a current time and no folder, and is not a deny', async () => {
+    const store = folder();
+    withPolicy(store, '{"classes":{"not-found":"block"}}');
+    const kept = { kind: 'registry', v: 1, day: '2026-11-04', ts: new Date(NOW - 60_000).toISOString(), class: 'npm-package', state: 'not-found', created: null, name: 'ghost-lib', latest: null };
+    writeFileSync(registryCachePath(store), `${JSON.stringify(kept)}
+`);
+    const reader = vi.fn<RegistryReader>(found(OLD));
+    expect(await gateHook(payload('npm install ghost-lib'), depsFor(store, { registry: reader }))).toBe('');
     expect(reader).toHaveBeenCalledTimes(1);
   });
 

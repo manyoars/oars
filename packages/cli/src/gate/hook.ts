@@ -99,9 +99,9 @@ const keptAnswers = async (storeDir: string): Promise<Map<string, RegistryRow>> 
   return kept;
 };
 
-/** A kept answer is dated by its UTC day, so "a day" is that day and the next: at most 48 hours old. A not-found answer is trusted only for the folder that asked, since its config can name another registry. */
+/** A kept answer is dated by its UTC day, so "a day" is that day and the next: at most 48 hours old. Every kept answer is trusted only for the folder that asked, since its config can name another registry and a note says "the registry your package manager uses". A not-found answer is also cut short, since a name can be published any minute. */
 const fresh = (row: RegistryRow, now: number, folder: string): boolean =>
-  row.state === 'not-found' ? row.ts !== undefined && row.folder === folder && now - Date.parse(row.ts) < NOT_FOUND_MS : now - Date.parse(row.day) < (HOOK_REGISTRY_DAYS + 1) * DAY_MS;
+  row.folder === folder && (row.state === 'not-found' ? row.ts !== undefined && now - Date.parse(row.ts) < NOT_FOUND_MS : now - Date.parse(row.day) < (HOOK_REGISTRY_DAYS + 1) * DAY_MS);
 
 const within = <T>(promise: Promise<T>, ms: number): Promise<T | undefined> =>
   new Promise((resolve) => {
@@ -225,11 +225,16 @@ export const runGateHook = async (stdin: string, deps: GateHookDeps): Promise<st
   const lines = new Set<string>();
   const answered: RegistryRow[] = [];
   const binMemo: LocalBinMemo = new Map();
+  const inCall = new Set<string>();
   for (const seen of check.crossings) {
     // A project's own bin is a stat walk, local and fast; it runs before the registry ask so a bin that is there is never asked about.
     const crossing = await withLocalBin(seen, cwd, binMemo);
     const scopes = scopesOf(keyOf(crossing), repository, session);
-    const { novelty, add, noted } = noveltyOf(index, scopes);
+    const { novelty, add, noted: indexed } = noveltyOf(index, scopes);
+    // One name twice in a call is one sight: the repeat reads as noted, so its note does not print again and its row is not a second draw.
+    const key = keyOf(crossing);
+    const noted = indexed || inCall.has(key);
+    inCall.add(key);
     for (const line of add) lines.add(line);
     const read = await registryAnswer(deps, crossing, cwd, kept);
     const state = read?.answer.state;
