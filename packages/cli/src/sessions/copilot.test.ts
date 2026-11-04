@@ -39,7 +39,7 @@ const extractOf = (events: readonly unknown[]) => capture(eventLines(asText(even
 const T = (second: number): string => `2026-06-01T10:00:${String(second).padStart(2, '0')}.000Z`;
 const start = (cwd = '/work/app') => event(T(0), 'session.start', { sessionId: 'sess-1', copilotVersion: '1.0.105', producer: 'copilot-agent', selectedModel: 'claude-sonnet-4.5', startTime: T(0), version: 1, context: { cwd } });
 const prompt = (second: number, content: string) => event(T(second), 'user.message', { content });
-const say = (second: number, content: string, extra: object = {}, toolRequests: object[] = []) =>
+const say = (second: number, content: string, extra: object = {}, toolRequests: readonly unknown[] = []) =>
   event(T(second), 'assistant.message', { messageId: `m${String(second)}`, content, ...(toolRequests.length === 0 ? {} : { toolRequests }), ...extra });
 const ask = (id: string, name: string, args: object = {}) => ({ toolCallId: id, name, arguments: args });
 const begin = (second: number, id: string, name: string, extra: object = {}) => event(T(second), 'tool.execution_start', { toolCallId: id, toolName: name, ...extra });
