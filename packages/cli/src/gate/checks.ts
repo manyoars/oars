@@ -130,6 +130,12 @@ const VALUE_FLAGS: Readonly<Record<Family, ReadonlySet<string>>> = {
   'python-package': new Set(['-r', '--requirement', '-e', '--editable', '-c', '--constraint', '-i', '--index-url', '--extra-index-url', '--index', '--default-index', '-t', '--target', '-f', '--find-links', '--python', '-p', '--from', '--with', '--with-editable', '--with-requirements', '--prefix', '--root', '--group', '--extra', '--only-binary', '--no-binary', '--trusted-host', '--proxy', '--cache-dir', '--timeout', '--retries', '--upgrade-strategy', '--log', '--file', '--suffix', '--pip-args', '--spec', '--channel', '-n', '--name', '-G']),
 };
 
+/**
+ * Flags that own the next word for the family but are a switch for one program: pnpm's `-w` is `--workspace-root`, `-n` is `--no-interaction`
+ * for poetry and `--no-cache` for uv, and `-f` is `--force` for pipx.
+ */
+const FLAG_WITHOUT_VALUE: ReadonlySet<string> = new Set(['pnpm -w', 'poetry -n', 'uv -n', 'python -m uv -n', 'pipx -f', 'python -m pipx -f']);
+
 /** These tell a runner to use only what is already local, so nothing crosses. */
 const NO_FETCH_FLAGS: ReadonlySet<string> = new Set(['--no-install', '--no', '--offline']);
 
@@ -286,8 +292,7 @@ export const readWords = (command: ShellCommand, family: Family, limit: number =
     const { text, quoted } = command.args[at] ?? { text: '', quoted: false };
     if (quoted || !text.startsWith('-') || names.length >= limit) names.push(text);
     else if (text.includes('=')) put(text.slice(0, text.indexOf('=')), text.slice(text.indexOf('=') + 1));
-    // pnpm's `-w` is `--workspace-root`, where npm's takes a workspace name.
-    else if (VALUE_FLAGS[family].has(text) && !(command.program === 'pnpm' && text === '-w')) {
+    else if (VALUE_FLAGS[family].has(text) && !FLAG_WITHOUT_VALUE.has(`${command.program} ${text}`)) {
       put(text, command.args[at + 1]?.text ?? '');
       at += 1;
     } else bare.add(text);

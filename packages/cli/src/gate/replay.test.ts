@@ -410,10 +410,11 @@ describe('a crossing record', () => {
       "npm error code E404",
       "npm error 404 Not Found - GET https://registry.npmjs.org/no-such-pkg-1 - Not found",
       "npm error 404",
-      "npm error 404  The requested resource 'no-such-pkg-1@*' could not be found or you do not have permission to access.",
+      "npm error 404  The requested resource 'no-such-pkg-1@*' could not be found or you do not have permission to access it.",
       "npm error 404",
       "npm error 404 Note that you can also install from a",
       "npm error 404 tarball, folder, http url, or git url.",
+      "npm error A complete log of this run can be found in: /home/user/.npm/_logs/run-debug-0.log",
     ].join('\n')],
     ['pip', 'pip install no-such-pkg-1', [
       'ERROR: Could not find a version that satisfies the requirement no-such-pkg-1 (from versions: none)',
