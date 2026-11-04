@@ -94,8 +94,9 @@ describe('the source of a replay', () => {
     await writeLog(join(storeDir, 'raw'), REPO, 'gone.jsonl', [bash(3, 't2', 'npm install archived'), result(4, 't2', 'added')]);
     await writeLog(projectsRoot, OFF_LIST, 'p.jsonl', [bash(5, 't3', 'npm install off-list')]);
     await writeLog(join(storeDir, 'raw'), 'cursor', 'c.jsonl', [bash(6, 't4', 'npm install from-cursor')]);
+    await writeLog(projectsRoot, 'codex', 'x.jsonl', [bash(7, 't5', 'npm install from-codex')]);
 
-    const done = await run([`${REPO}*`, 'cursor']);
+    const done = await run([`${REPO}*`, 'cursor', 'codex']);
     const { crossings } = await written();
 
     expect(crossings.map((row) => row.name).sort()).toEqual(['archived', 'on-disk']);

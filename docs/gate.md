@@ -23,7 +23,7 @@ A lockfile-only install (`npm ci`, `pip install -r`, a bare `npm install`) names
 
 ## The source: raw transcripts, not the store
 
-Replay reads raw transcripts under the allowlist, from the harness's folder and the store's `raw/` archive, one copy per relative path, skipping Cursor. The store loses what the checks need: form (`pulls` has no install or fetch-and-run, and is per call, not per command), flags and quoted words, permission mode, Skill input, and the earlier text "where the name came from" needs. Reading raw costs parse time, and raw is class `L`, so nothing of class `L` goes in the record: no path, working directory, or command text.
+Replay reads raw transcripts under the allowlist, from the harness's folder and the store's `raw/` archive, one copy per relative path. It does not read Codex or Cursor: their history is not raw transcripts. The store loses what the checks need: form (`pulls` has no install or fetch-and-run, and is per call, not per command), flags and quoted words, permission mode, Skill input, and the earlier text "where the name came from" needs. Reading raw costs parse time, and raw is class `L`, so nothing of class `L` goes in the record: no path, working directory, or command text.
 
 ## What a name may be
 
@@ -76,7 +76,7 @@ Off by default. With `--registry-state`, replay asks `npm view` or `pip index ve
 
 ## What replay cannot see
 
-A command run from a script, alias, or Makefile; a manifest edit a later bare install picked up; what a person saw or approved; an MCP server started and never called; folders off the allowlist; logs the harness already cleaned up. `oars gate report` ends with this list and the counts by shape.
+A command run from a script, alias, or Makefile; a manifest edit a later bare install picked up; what a person saw or approved; an MCP server started and never called; folders off the allowlist; logs the harness already cleaned up; a session in Codex or Cursor, which replay does not read. `oars gate report` ends with this list and the counts by shape.
 
 ## Not in this release
 

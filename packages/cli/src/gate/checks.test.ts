@@ -475,6 +475,10 @@ describe('admitName, the one point every recorded name passes', () => {
     ['npm-package', 'url-install', 'https://host.example/@/secret', unread('local-path')],
     ['npm-package', 'url-install', 'https://host.example/x/@', unread('local-path')],
     ['npm-package', 'url-install', 'https://host.example/@@x', unread('local-path')],
+    // A host starts with a letter, a digit, or a mask: dots alone name the parent folder, not a host.
+    ['npm-package', 'url-install', 'https://../secret/home/x', unread('local-path')],
+    ['npm-package', 'url-install', 'ssh://./x', unread('local-path')],
+    ['npm-package', 'url-install', 'https://-x/y', unread('local-path')],
     ['npm-package', 'url-install', 'https://host.example:8080/x.tgz', named('https://host.example:8080/x.tgz')],
     ['npm-package', 'url-install', 'https://host.example:secret/x', unread('local-path')],
     // A mask and a variable keep the shapes they have.
