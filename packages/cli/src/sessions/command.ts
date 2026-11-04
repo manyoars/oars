@@ -19,7 +19,7 @@ import { readHookCalls } from './hook-calls.js';
 import { buildIndex, contextBlock, inRepository, readIndex, type ContextOptions } from './hook-index.js';
 import { hookStatus, installHooks, scheduleStatus, setSchedule, settingsPath, uninstallHooks, type InstallRuntime, type Scope } from './install.js';
 import { serve } from './mcp.js';
-import { currentPool, refreshPool } from './pool.js';
+import { refreshPool, servedPool } from './pool.js';
 import { FAMILIES } from './read.js';
 import { formatNotReadable, notReadable } from './read-readable.js';
 import { formatReads, isFamily, parseSlice, selectReads } from './read-rows.js';
@@ -96,7 +96,7 @@ export const sessionsRecall = async (deps: SessionsDeps, query: PullInput, sid: 
     'recall',
     async () => {
       const store = await loadStore(storeDir);
-      const found = pull(store, query, { sid, now: deps.now(), frame: null, redactDomains: await readRedactDomains(storeDir), current: await currentPool(storeDir, store) });
+      const found = pull(store, query, { sid, now: deps.now(), frame: null, redactDomains: await readRedactDomains(storeDir), current: await servedPool(storeDir, store) });
       return { value: found, report: { in: { query: 1 }, out: { matches: found.legacy?.matches.length ?? found.reads.length }, key } };
     },
     key,
@@ -169,7 +169,7 @@ export const sessionsMcp = async (deps: SessionsDeps): Promise<void> => {
   await serve(runtimeOf(deps), deps.now);
 };
 
-/** Names shown in the `verify` text; the document carries them all. */
+/** Names shown in the `verify` and `books` text; each `--json` document carries them all. */
 const SKIPPED_NAMES_SHOWN = 10;
 
 /** One line for the folders the allowlist leaves out (t776): the store holds nothing from them, and it says so rather than looking complete. */
@@ -224,7 +224,8 @@ export const sessionsBooks = async (deps: SessionsDeps, options: { by: BooksBy; 
       : emptyWindow
         ? `No ${options.by === 'pull' ? 'pulls' : 'prompts'} in the --since window.`
         : formatBooks(rows, options.by);
-  return { document: { ok: true, by: options.by, rows, newerCaptures: store.newerCaptures }, text: [table, ...skippedNotice(await scopeOf(runtime)), ...newerNotice(store), ...(rows.length === 0 ? [] : [BOOKS_CAVEAT])].join('\n') };
+  const scope = await scopeOf(runtime);
+  return { document: { ok: true, by: options.by, rows, newerCaptures: store.newerCaptures, scope }, text: [table, ...skippedNotice(scope), ...newerNotice(store), ...(rows.length === 0 ? [] : [BOOKS_CAVEAT])].join('\n') };
 };
 
 export const sessionsMeasure = async (deps: SessionsDeps, options: { last: number; since: string | undefined; repo?: string }): Promise<Outcome> => {
@@ -340,7 +341,7 @@ export const sessionsGoldSample = async (deps: SessionsDeps, options: { size: nu
   const lines = [
     `Wrote ${plural(document.entries.length, 'prompt')}, drawn from ${String(document.frame)}, to ${file}.`,
     `Excluded ${plural(document.excludedSessions, 'session')} the draw reached under the V15 rule (a listed term, no raw to scan, or unreadable).`,
-    `Passed over ${plural(unreadable, 'prompt')} whose transcript is gone or no longer matches the store.`,
+    `Passed over ${plural(unreadable, 'prompt')} whose transcript no longer matches the store.`,
     `${plural(subagents, 'sampled prompt')} ran subagents, whose work is not read.`,
     `Score it after any batch: oars sessions gold score ${file}`,
   ];

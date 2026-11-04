@@ -17,7 +17,7 @@
 //   hook-index.json         the recurring signatures per project and overall, for the hooks
 //   pipeline-runs.jsonl     the step log: one line per run of a pipeline step, appended when the step ends (steps.ts)
 import type { GoldEvaluator } from './gold-arms.js';
-import { createHash, randomBytes } from 'node:crypto';
+import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { createReadStream } from 'node:fs';
 import { performance } from 'node:perf_hooks';
 import { appendFile, mkdir, open, readdir, readFile, rename, rm, stat, utimes, writeFile } from 'node:fs/promises';
@@ -26,7 +26,6 @@ import { CliError, ExitCode } from '../errors.js';
 import { compileAllow, requireEntries, slugOf } from './allow.js';
 import { SOURCES, type Source, type SourceStore } from './sources.js';
 import { buildIndex, indexPath } from './hook-index.js';
-import { currentPool } from './pool.js';
 import { archiveRaw } from './archive.js';
 import { deriveSession, type SessionCapture } from './derive.js';
 import { captureRuntime, type CaptureRuntime } from './capture-runtime.js';
@@ -260,7 +259,7 @@ export interface SkippedScope {
 /**
  * The scan rule is the allowlist (`depositLocked`, `depositSessionLocked`): a folder no entry names is not opened, by design, so
  * a worktree folder of an allowed repository is skipped when only the repository's own folder is named. This reads folder listings
- * only, never a transcript, so `verify` can say what the store does not hold.
+ * only, never a transcript, so `verify` and `books` can say what the store does not hold.
  */
 export const skippedFolders = async (runtime: SessionsRuntime): Promise<SkippedScope> => {
   const allow = compileAllow((await readState(runtime.storeDir)).allow);
@@ -359,7 +358,7 @@ interface Transcript {
 
 const mainTranscript = (folder: string, name: string): Transcript => ({ file: join(folder, name), session: name.slice(0, -'.jsonl'.length), relative: name });
 
-const listDir = async (dir: string) => {
+export const listDir = async (dir: string) => {
   try {
     return (await readdir(dir, { withFileTypes: true })).sort((a, b) => a.name.localeCompare(b.name));
   } catch (error) {
@@ -391,7 +390,7 @@ interface SubagentFile {
 
 // The subagent transcript files of the given sessions, from folder listings alone:
 // <session>/subagents/agent-*.jsonl and <session>/subagents/workflows/wf_*/agent-*.jsonl. No file is opened, so `skippedFolders` can use it on a folder no allow entry names.
-const subagentFiles = async (folder: string, sessions: readonly string[]): Promise<SubagentFile[]> => {
+export const subagentFiles = async (folder: string, sessions: readonly string[]): Promise<SubagentFile[]> => {
   const found: SubagentFile[] = [];
   for (const parent of sessions) {
     const root = join(folder, parent, 'subagents');
@@ -425,7 +424,7 @@ const subagentTranscripts = async (folder: string, sessions: readonly string[]):
 };
 
 /** The session folders under a project folder: each may hold subagent transcripts, even when its main transcript is gone. */
-const sessionFolders = async (folder: string): Promise<string[]> => (await listDir(folder)).filter((entry) => entry.isDirectory()).map((entry) => entry.name);
+export const sessionFolders = async (folder: string): Promise<string[]> => (await listDir(folder)).filter((entry) => entry.isDirectory()).map((entry) => entry.name);
 
 /** Refuses a state file recorded at a newer capture version before anything is appended, so a refused run leaves the log as it was. */
 const refuseNewer = (state: State): void => {
@@ -607,10 +606,18 @@ export const refresh = async (runtime: SessionsRuntime, redactDomains: readonly 
     trace.deriveFailure = { error, key, ms: Math.round(performance.now() - started) };
     return;
   }
+  // The pool is derived for the index's fit reads only: one that cannot be read or written costs the index those, never the index itself (`currentPool` says so on stderr). Loaded here, not at the top: the pool imports every read family, and a lookup hook never reaches this step. It runs before the clock starts, so the index's `ms` is the index and not the derive (t756: the first pool run takes 12 to 17 s on a store copy).
+  // A module that will not load costs the index the same fit reads, with one line on stderr, as `currentPool` does when the pool cannot be built.
+  const reads = await import('./pool.js').then(
+    async ({ currentPool }) => (await currentPool(runtime.storeDir, store))?.reads ?? [],
+    (error: unknown) => {
+      process.stderr.write(`oars: the read pool module could not be loaded, and the index keeps no fit reads: ${error instanceof Error ? error.message : String(error)}
+`);
+      return [];
+    },
+  );
   const indexStarted = performance.now();
   try {
-    // The pool is derived for the index's fit reads only: one that cannot be read or written costs the index those, never the index itself.
-    const reads = (await currentPool(runtime.storeDir, store))?.reads ?? [];
     const index = buildIndex(store, redactDomains, at, reads);
     await writeAtomic(indexPath(runtime.storeDir), JSON.stringify(index));
     if (trace !== undefined) {
@@ -640,8 +647,13 @@ const commitCapture = async (context: DepositContext, key: string, extract: Capt
 interface LockOptions {
   /** How long to wait for a holder before giving up. */
   waitMs: number;
-  /** A lock file older than this belongs to a process that died; it is broken. */
+  /** A lock file older than this belongs to a process that died or passed `holdMs`; it is broken. */
   staleMs: number;
+  /**
+   * The longest a holder keeps its lock refreshed; default six times `staleMs` (an hour). Past it the heartbeat stops, so a holder that
+   * hangs while its process lives ages out like a dead one and the next waiter breaks it, rather than every deposit waiting on it for good.
+   */
+  holdMs?: number;
 }
 
 const sleep = (ms: number): Promise<void> => new Promise((done) => setTimeout(done, ms));
@@ -652,9 +664,9 @@ const isCode = (error: unknown, ...codes: string[]): boolean => error instanceof
  * Creates `file` only if absent. False when it exists; EPERM or EACCES is Windows saying the previous holder's delete has not
  * finished, so it is returned (not thrown) and `withLock` rethrows it when the wait runs out with no lock file standing.
  */
-const claim = async (file: string): Promise<boolean | Error> => {
+const claim = async (file: string, token: string = String(process.pid)): Promise<boolean | Error> => {
   try {
-    await writeFile(file, String(process.pid), { flag: 'wx', mode: 0o600 });
+    await writeFile(file, token, { flag: 'wx', mode: 0o600 });
     return true;
   } catch (error) {
     if (isCode(error, 'EEXIST')) return false;
@@ -676,7 +688,11 @@ const breakStale = async (lock: string, staleMs: number): Promise<void> => {
   }
   try {
     const age = await stat(lock).then((info) => Date.now() - info.mtimeMs, () => 0);
-    if (age > staleMs) await rm(lock, { force: true });
+    if (age > staleMs) {
+      const holder = ((await readFile(lock, 'utf8').catch(() => '')).trim().split(' ')[0]) ?? '';
+      await rm(lock, { force: true });
+      process.stderr.write(`oars: broke the store lock held by pid ${holder === '' ? 'unknown' : holder}, not refreshed for over ${String(staleMs)} ms\n`);
+    }
   } finally {
     await rm(guard, { force: true });
   }
@@ -690,7 +706,9 @@ export const withLock = async <T>(storeDir: string, work: () => Promise<T>, opti
   const lock = join(storeDir, 'store.lock');
   await mkdir(storeDir, { recursive: true });
   const started = Date.now();
-  let claimed = await claim(lock);
+  // The token names this claim, so a holder whose lock was broken cannot delete the next holder's lock when it ends.
+  const token = `${String(process.pid)} ${randomUUID()}`;
+  let claimed = await claim(lock, token);
   while (claimed !== true) {
     await breakStale(lock, options.staleMs);
     if (Date.now() - started >= options.waitMs) {
@@ -698,11 +716,19 @@ export const withLock = async <T>(storeDir: string, work: () => Promise<T>, opti
       throw new CliError('The store is locked by another deposit; try again shortly.', ExitCode.UNEXPECTED, 'unexpected');
     }
     await sleep(25);
-    claimed = await claim(lock);
+    claimed = await claim(lock, token);
   }
   // A waiter breaks a lock older than `staleMs`, and a full re-capture runs longer than that: the holder keeps its lock young, or a hook
   // would break it and append during the compaction that ends the run.
+  const holdMs = options.holdMs ?? options.staleMs * 6;
+  // Beats are counted, not timed: a suspended machine fires one tick on wake, and elapsed time would read that as a hung holder.
+  let beats = 0;
   const heartbeat = setInterval(() => {
+    if (++beats * (options.staleMs / 4) >= holdMs) {
+      clearInterval(heartbeat);
+      process.stderr.write(`oars: this run held the store lock past ${String(holdMs)} ms and may lose it; rerun it when it ends\n`);
+      return;
+    }
     const now = new Date();
     void utimes(lock, now, now).catch(() => undefined);
   }, options.staleMs / 4);
@@ -711,7 +737,8 @@ export const withLock = async <T>(storeDir: string, work: () => Promise<T>, opti
     return await work();
   } finally {
     clearInterval(heartbeat);
-    await rm(lock, { force: true });
+    // A refused read (an antivirus share violation) counts as ours, so the lock is not left standing for the stale window; `rm` retries a share violation, and a refusal that outlasts the retries is swallowed so the finished work's result is not lost (the stale window then clears the lock).
+    if ((await readFile(lock, 'utf8').catch(() => token)) === token) await rm(lock, { force: true, recursive: true, maxRetries: 3, retryDelay: 50 }).catch(() => undefined);
   }
 };
 
@@ -901,7 +928,7 @@ const readSource = async (context: DepositContext, source: Source, root: string,
  * It splits on the newline alone, not through `readline`, which also ends a line at U+2028 and U+2029: `JSON.stringify` leaves those raw inside a
  * value. A missing log has no lines, and a last line with no newline is yielded as it stands, for the reader to parse or skip.
  */
-const logLines = async function* (file: string): AsyncGenerator<string> {
+export const logLines = async function* (file: string): AsyncGenerator<string> {
   let rest = '';
   try {
     for await (const chunk of createReadStream(file, { encoding: 'utf8', highWaterMark: 1 << 20 })) {

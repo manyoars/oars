@@ -37,11 +37,11 @@ import {
   type UserPromptObservation,
 } from './schema.js';
 
-interface Obj {
+export interface Obj {
   [key: string]: unknown;
 }
 
-const isObj = (value: unknown): value is Obj => typeof value === 'object' && value !== null && !Array.isArray(value);
+export const isObj = (value: unknown): value is Obj => typeof value === 'object' && value !== null && !Array.isArray(value);
 const str = (value: unknown): string | undefined => (typeof value === 'string' ? value : undefined);
 const num = (value: unknown): number | undefined => (typeof value === 'number' && Number.isFinite(value) ? value : undefined);
 
@@ -111,7 +111,7 @@ export const errorKey = (text: string, redact: Redactor): string => redact(norma
 /** The signature of an error: `<tool> | <errorKey>`. */
 export const signatureOf = (tool: string, text: string, redact: Redactor): string => `${tool} | ${errorKey(text, redact)}`;
 
-const resultText = (block: Obj): string => {
+export const resultText = (block: Obj): string => {
   const content = block.content;
   if (typeof content === 'string') return content;
   if (Array.isArray(content)) {
@@ -123,7 +123,7 @@ const resultText = (block: Obj): string => {
   return '';
 };
 
-const isErrorResult = (block: Obj, text: string): boolean => {
+export const isErrorResult = (block: Obj, text: string): boolean => {
   if (truthy(block.is_error)) return true;
   const exit = EXIT_RE.exec(text.trim());
   return exit !== null && exit[1] !== '0';
@@ -350,7 +350,7 @@ const firstTextBlock = (content: unknown): string => {
 // What the harness writes as a user line and the operator did not ask. t768 checked this against a full re-capture: the only leading tag left on a `typed` row is
 // the paste wrapper. `local-command-stderr` is here as the sibling of `local-command-stdout`. The set is closed on purpose: anything else with a leading `<` was
 // typed, or pasted. A `teammate-message` is another agent speaking to a teammate, so a teammate's turns after one stay in its prompt before, or outside any.
-const INJECTED_TAGS: ReadonlySet<string> = new Set([
+export const INJECTED_TAGS: ReadonlySet<string> = new Set([
   'bash-input',
   'bash-stderr',
   'bash-stdout',
@@ -362,7 +362,7 @@ const INJECTED_TAGS: ReadonlySet<string> = new Set([
   'task-notification',
   'teammate-message',
 ]);
-const LEADING_TAG = /^<([a-zA-Z][\w:-]*)[\s>/]/;
+export const LEADING_TAG = /^<([a-zA-Z][\w:-]*)[\s>/]/;
 
 /** What the operator asked, with the wrapper removed: the command's name and its arguments, as they typed them. Either element can come first. */
 const commandAsked = (text: string): string => {
@@ -527,7 +527,7 @@ type ShellToken = ShellWord | ShellOp;
 type ShellLink = 'and' | 'pipe' | 'break' | 'end';
 
 /** One simple command, after its prelude. */
-interface ShellCommand {
+export interface ShellCommand {
   program: string;
   args: ShellWord[];
   read: boolean;
@@ -1089,7 +1089,7 @@ const gitCall = (command: ShellCommand): GitCall | null => {
 const NOT_A_COMMIT = /^(?:--dry-run|-h|--help|--porcelain|--short|--long)$/;
 const QUIET = /^(?:--quiet|-[a-zA-Z]*q[a-zA-Z]*)$/;
 const MOVES_HEAD = new Set(['checkout', 'switch', 'pull', 'merge', 'rebase', 'reset', 'cherry-pick', 'revert', 'am', 'commit']);
-const CHANGES_FOLDER = new Set(['cd', 'pushd', 'popd', 'set-location', 'sl', 'chdir']);
+export const CHANGES_FOLDER: ReadonlySet<string> = new Set(['cd', 'pushd', 'popd', 'set-location', 'sl', 'chdir']);
 const LOG_ONE = /^(?:-1|-n1|--max-count=1)$/;
 const LOG_FILTER = /^--(?:grep|author|committer|since|until|after|before|all|branches|remotes|tags|skip|reverse)(?:=|$)/;
 const LOG_FORMAT = /^--(?:format|pretty)=/;
@@ -1133,9 +1133,12 @@ const commitPlanOf = (commands: readonly ShellCommand[]): PlannedCommit[] =>
     return [{ quiet: git.args.some((word) => !word.quoted && QUIET.test(word.text)), readBack: isReadBack(commands, at, git.scope) }];
   });
 
+/** Every simple command of a shell call, in order, after the bodies are dropped and the command is redacted. `oars gate` reads the same commands as capture. */
+export const shellCommands = (command: string, redact: Redactor): ShellCommand[] => readCommands(tokenize(redactCommand(dropBodies(command.replace(/\r\n/g, '\n')), redact)));
+
 /** A shell call's segments, pulls, and the commits it holds, from the command alone. The command is redacted before anything is kept. */
 export const readShell = (command: string, redact: Redactor): ShellRead => {
-  const commands = readCommands(tokenize(redactCommand(dropBodies(command.replace(/\r\n/g, '\n')), redact)));
+  const commands = shellCommands(command, redact);
   const kept = commands.slice(-SEGMENTS_PER_CALL_MAX);
   const pulls = new Map<string, ToolPull>();
   for (const { program, args } of commands) {

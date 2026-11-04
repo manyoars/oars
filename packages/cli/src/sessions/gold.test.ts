@@ -447,6 +447,21 @@ describe('oars sessions gold', () => {
     h.out.length = 0;
   };
 
+  it('draws without the sessions the term file alone excludes, and prints the count', async () => {
+    const h = setup();
+    await populate(h);
+    // No `--exclude-term`: the file's own term is the only exclusion, and it matches the main of one session and the subagent of another.
+    writeFileSync(join(h.staged.root, 'exclusion-terms.txt'), 'acme-term\n');
+    const dir = join(h.staged.root, 'from-file');
+    expect(await run(['sessions', 'gold', 'sample', '--size', '10', '--out-dir', dir, '--seed', 's'], h.deps)).toBe(ExitCode.OK);
+    expect(h.out.join('')).toContain('Excluded 2 sessions');
+    const date = new Date(h.deps.now()).toISOString().slice(0, 10);
+    const text = readFileSync(join(dir, `outcome-gold-${date}.md`), 'utf8');
+    expect(text.match(/^Judgment: yes\|no$/gm)).toHaveLength(2);
+    expect(text).not.toContain('third ask');
+    expect(text).not.toContain('fourth ask');
+  });
+
   it('samples without the excluded sessions, hides the signals in a sidecar, refuses to overwrite, and scores a partial file', async () => {
     const h = setup();
     await populate(h);

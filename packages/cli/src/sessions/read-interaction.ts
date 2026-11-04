@@ -72,7 +72,7 @@ export const interactionCandidates = (reads: readonly Read[]): Candidate[] => {
 };
 
 /**
- * The tool fails more on the tier that fails more elsewhere, or less on the tier that fails less: `moved` asks only that each gate is large, not its sign. A gap and an interaction
+ * The gap and the interaction point the same way, so the tool moves toward that tier whatever the other tools do: `moved` asks only that each gate is large, not its sign. A gap and an interaction
  * of opposite signs mean the tool resists the main effect (it still fails more on that tier, only by less than the other tools do), which is not a tool that works on one tier and not the other.
  */
 const sameSign = ({ gates }: Candidate): boolean => gates.every((gate) => gate.value > 0) || gates.every((gate) => gate.value < 0);

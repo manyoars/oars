@@ -337,7 +337,7 @@ describe('the steps each hook logs', () => {
     appendFileSync(join(staged.storeDir, 'store.lock'), 'a holder that never frees');
     await runHook('stop', JSON.stringify({ session_id: 'other', transcript_path: other }), staged.runtime, () => NOW);
     expect((await readSteps(staged.storeDir))[2]?.key).not.toBe(rows[0]?.key);
-  }, 20_000);
+  }, 20_000); // waits out the 3 s hook lock wait twice by design: 6.4 s measured alone, so about 3x
 
   it('a stop for a folder off the allowlist, or a transcript that is gone, logs an ok deposit row with nothing written and a key', async () => {
     const staged = await deposited();
@@ -764,7 +764,7 @@ describe('the counters (spec 3.2)', () => {
       row({ step: 'derive', status: 'skipped', key: null, ms: 0, out: {} }),
       row({ step: 'index', out: { signature: 7, project: 1 } }),
       row({ step: 'index', out: { signature: 9, project: 2 } }),
-      row({ step: 'verify', out: { checked: 6, passed: 5, cvBehind: 2, stuck: 0 } }),
+      row({ step: 'verify', out: { checked: 6, passed: 5, cvBehind: 2, stuck: 0, merkle: 3 } }),
       row({ step: 'recall', trigger: 'session-start', out: { matches: 1 } }),
       row({ step: 'recall', out: { matches: 0 } }),
       failed('k9', 'boom'),
@@ -773,7 +773,7 @@ describe('the counters (spec 3.2)', () => {
     expect(counters.deposited).toEqual({ session: 3, subagent: 1, tool: 15 });
     expect(counters.derived).toEqual({ signature: 4, summary: 4 });
     expect(counters.indexed).toEqual({ signature: 9, project: 2 });
-    expect(counters.verify).toEqual({ checked: 6, passed: 5, cvBehind: 2, stuck: 0 });
+    expect(counters.verify).toEqual({ checked: 6, passed: 5, cvBehind: 2, stuck: 0, merkle: 3 });
     expect(counters.recall).toEqual({ queries: 2, matches: 1 });
     expect(counters.failures).toEqual({ [`deposit@${EXTRACTOR_VERSION}`]: 1 });
     expect(counters.steps.find((line) => line.step === 'deposit')).toMatchObject({ runs: 3, ok: 2, error: 1, skipped: 0, meanMs: 8 });
@@ -788,6 +788,7 @@ describe('the counters (spec 3.2)', () => {
     expect(text).toMatch(/records derived, signature\s+4/);
     expect(text).toMatch(/records derived, summary\s+4/);
     expect(text).toMatch(/cv-behind sessions\s+2/);
+    expect(text).toMatch(/sessions failing the raw audit\s+3/);
     expect(text).toMatch(/recall matches\s+1/);
     expect(text).toMatch(/failed runs, deposit@\S+\s+1/);
     expect(text).toMatch(/invariants passed of checked\s+5\/6/);

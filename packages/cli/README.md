@@ -94,6 +94,11 @@ oars sessions deposit --allow ~/work/app --allow ~/work/tools --redact-domain co
 # Look up an error as printed, a file, or a prompt class.
 oars sessions recall --error "unexpected EOF while looking for matching \`''"
 oars sessions recall --path src/main.ts --since 30   # sees the first 100 sorted paths of a session
+oars sessions recall --family recovery --class edit-verify --since 30  # a read family; only recovery and fit take --class and --since
+oars sessions recall --entity Monitor                # what is known about a public name: a package, a tool, an MCP server, an action, or a model
+oars sessions recall --text "wrong input"            # look for text in the local record (counts all time)
+oars sessions recall --pattern <readId> --pattern <readId>  # what happened from here, from the read IDs of your steps so far (repeatable; counts all time)
+oars sessions recall --error "..." --session <id>    # name the asking session, so what it did next can be read for this recall
 
 # Serve the same query to a running agent as one MCP tool, oars_recall (stdio):
 oars sessions recall --mcp
@@ -106,12 +111,12 @@ oars sessions read --family lead-lag         # order 3: a labeled experiment beh
 oars sessions read --family fit --slice model=claude-opus-5-5 --json
 oars sessions books --by class --since 30   # tokens, wall time, turns, errors, verify-after-edit rate, and the outcome signals
 oars sessions books --by pull               # the same per package, MCP server, plugin, or skill a prompt pulled
-oars sessions books --by harness            # the same, grouped by Claude Code, Cursor, and Codex (deposit Cursor or Codex with --allow cursor or --allow codex)
+oars sessions books --by harness            # the same, grouped by Claude Code, Cursor, Codex, and Copilot (deposit the others with --allow cursor, --allow codex, or --allow copilot)
 oars sessions measure --last 50             # recurring errors per 100 sessions, cache-write per session, recall calls per session
 oars sessions measure --last 50 --repo <root>  # the same, for one repository's sessions
 oars sessions verify                        # consistency invariants on the stored skeletons and capture records
 oars sessions exclusions                    # V15: list sessions excluded by the local term file (counts only; OARS_EXCLUSION_TERMS names the file)
-oars sessions gold sample --exclude-term <text>   # about 200 prompts to judge blind; `gold arms <file>` adds the claim and fresh readers on your Claude subscription; `gold score <file>` reads each arm against the judgments
+oars sessions gold sample                   # about 200 prompts to judge blind; needs the term file (`OARS_EXCLUSION_TERMS`), and `--exclude-term <text>` adds to it; `gold arms <file>` adds the claim and fresh readers on your Claude subscription; `gold score <file>` reads each arm against the judgments
 ```
 
 `deposit` is idempotent (a file is skipped only when its size, mtime, capture version, salt, and `--redact-domain` set are all unchanged; a store written by an older capture version is captured again from the harness's transcript or from `raw/`, and one written by a newer oars is refused) and appends to `<config>/oars/sessions/observations.jsonl`:
@@ -141,7 +146,7 @@ An `--allow` entry is a folder (or its slug), a folder prefix with a trailing sl
 | Event | Does | Budget |
 |---|---|---|
 | `SessionStart` | injects `oars sessions recall --context` for the session's cwd as additional context: the top 5 errors by sessions within the latest 300 sessions of the repository (the `measure --last 300 --repo` window) and what usually followed | under 500 ms |
-| `PreToolUse` (matcher `PowerShell\|Monitor\|Edit\|Agent`) | for a call whose tool and input key names match a shape the store has seen fail often enough, injects its counts as additional context, once per session and shape, and records the recall. 10 percent of those sessions and shapes are held back: a held arm records what it would have shown and injects nothing. Starts node per matched call | under 500 ms |
+| `PreToolUse` (no matcher: every tool) | for a call whose tool and input key names match a shape the store has seen fail often enough, and at least twice as often as its action does, injects its counts as additional context, once per session and shape (the check reads the last 64 KB of the recall log, about 44 rows, so a very long session can be told again, and the arm redraws when the nightly index moves), and records the recall. 10 percent of those sessions and shapes are held back: a held arm records what it would have shown and injects nothing. Starts node per call | under 500 ms |
 | `PostToolUseFailure` (matcher `Bash\|PowerShell`) | for a failed tool call whose error starts with `Exit code N` normalizes the first informative line as `deposit` does and, on a hit, adds "seen in N sessions; what followed: X". A shell pre-filter in the registered command reads the event first and starts node only when it carries `Exit code` | pre-filter: shell builtins only, no node start; whole path under 1 s |
 | `SessionEnd` | deposits that one transcript (idempotent by size and mtime), only from a folder an earlier `--allow` named. Once per session: `Stop` fires after every turn and would append a new revision of the growing transcript each time. A session the harness ends without `SessionEnd` is picked up by the nightly deposit | under 5 s |
 
@@ -170,6 +175,16 @@ Install merges: existing hooks (a Stop hook that rotates sessions, say) stay, ev
 #### Remove everything
 
 `oars sessions hook uninstall --scope user` (or the scope you installed); `oars sessions hook install --schedule off`; delete the store folder `<config>/oars/sessions/` (observations, skeletons, state, the hook index, `hook-calls.jsonl`, and `raw/`, which holds the unredacted transcripts). `gold sample` also writes its prompt file and sidecar to `~/.claude/session-commons/review/` (or `$CLAUDE_CONFIG_DIR/session-commons/review/`, or your `--out-dir`); delete those too. Nothing else is created. `cleanupPeriodDays` stays at the value install set unless you change it.
+
+### Gate: what your agents picked
+
+```
+oars gate replay --allow ~/work/app    # find installs, fetch-and-runs, MCP servers, and skills in logs on disk
+oars gate replay --registry-state      # also ask npm or pip what the registry holds (off by default)
+oars gate report                       # counts from the last replay, and what replay cannot see
+```
+
+Replay is local and read-only; it writes `crossings.jsonl` into the sessions store and nothing else. It records picks and does not judge them. See `docs/gate.md` in the repository.
 
 ## The `--json` contract
 

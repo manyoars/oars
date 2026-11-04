@@ -35,6 +35,20 @@ describe('openapi/public.json', () => {
     expect(present.sort()).toEqual(ids.sort());
   });
 
+  it('lists the API key and workload config operations and not the generated revoke_1 name', () => {
+    const present: string[] = [];
+    walk(spec, (key, child) => {
+      if (key === 'operationId' && typeof child === 'string') present.push(child);
+    });
+
+    const ids = Array.isArray(listed) ? listed : [];
+    for (const id of ['revokeApiKey', 'rotate', 'patchWorkloadConfig']) {
+      expect(ids, `public-operations.json lists ${id}`).toContain(id);
+      expect(present, `public.json holds ${id}`).toContain(id);
+    }
+    expect(present).not.toContain('revoke_1');
+  });
+
   it('resolves every $ref inside itself', () => {
     const dangling: string[] = [];
     walk(spec, (key, child) => {
