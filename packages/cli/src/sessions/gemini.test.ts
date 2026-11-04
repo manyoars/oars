@@ -112,10 +112,10 @@ describe('the Gemini CLI reader', () => {
     const out = extractOf([
       head,
       prompt(1, 'x'),
-      say(2, '', { toolCalls: [shell('a', 'sleep 9', 'success', 3, signalled), call('b', 'run_shell_command', { command: 'x' }, 'cancelled', 4, reply('run_shell_command', { error: '[Operation Cancelled] Reason: User cancelled' }))] }),
+      say(2, '', { toolCalls: [shell('a', 'sleep 9', 'success', 3, signalled), call('b', 'run_shell_command', { command: 'x' }, 'cancelled', 4, reply('run_shell_command', { error: '[Operation Cancelled] User cancelled tool execution.' }))] }),
     ]);
     expect(out.tools.map((tool) => tool.status)).toEqual(['error', 'error']);
-    expect(out.errorLines.map((error) => error.line)).toEqual(['partial', '[Operation Cancelled] Reason: User cancelled']);
+    expect(out.errorLines.map((error) => error.line)).toEqual(['partial', '[Operation Cancelled] User cancelled tool execution.']);
   });
 
   it('unwraps an error result to its message, never the wrapper, so the error line joins a Claude Code signature', () => {
@@ -174,8 +174,15 @@ describe('the Gemini CLI reader', () => {
       prompt(7, '   '),
       prompt(8, 'expanded with @file text', { displayContent: [{ text: 'what I typed' }] }),
       { id: 'i', timestamp: T(9), type: 'info', content: 'Request cancelled.' },
+      { id: 'w', timestamp: T(10), type: 'warning', content: 'Heads up.' },
+      { id: 'e', timestamp: T(11), type: 'error', content: 'Something broke.' },
     ]);
     expect(lines.filter((entry) => entry.type === 'user').map((entry) => JSON.stringify(entry.message))).toEqual([expect.stringContaining('real'), expect.stringContaining('what I typed')]);
+  });
+
+  it('reads a user message with a tool result AND typed text as a prompt: only a message made wholly of tool results is not a prompt (geminiChat.ts:527,547)', () => {
+    const mixed = { id: 'm', timestamp: T(2), type: 'user', content: [{ functionResponse: { id: 'x', name: 'read_file', response: { output: 'file text' } } }, { text: 'and also this' }] };
+    expect(linesOf([head, mixed]).map((entry) => JSON.stringify(entry.message))).toEqual([expect.stringContaining('and also this')]);
   });
 
   it('applies the resume filter to the sent text (content), not to what was shown: a custom command is a prompt whose content is its expansion (chatRecordingService.ts:220-227, nonInteractiveCli.ts:289-300)', () => {
@@ -213,10 +220,14 @@ describe('the Gemini CLI reader', () => {
     expect(prompts([...body, { $rewindTo: 'u2' }, prompt(4, 'four')])).not.toMatch(/two|three/);
     expect(prompts([...body, { $rewindTo: 'nope' }])).toBe('');
     expect(prompts([...body, { $patch: { id: 'u1', content: [{ text: 'edited' }] } }])).toContain('edited');
+    // Defensive inputs upstream cannot write (the loader guards each, chatRecordingService.ts:362,394): a numeric id in `removeIds` and `orderIds`, a non-object entry in `$set.messages`, a non-string `$rewindTo`.
     expect(prompts([...body, { $patch: { updates: [{ id: 'u3', content: [{ text: 'bulk' }] }], removeIds: ['u2', 7] } }])).toMatch(/one.*bulk/);
+    // `orderIds` with a number and an unknown id: defensive, same guard.
     expect(prompts([...body, { $patch: { orderIds: ['u3', 'u1', 'ghost', 4] } }])).toMatch(/two.*three.*one/);
     expect(prompts([...body, { $patch: { id: 'ghost', content: [{ text: 'x' }] } }]).split('|')).toHaveLength(3);
+    // `'not a message'` in `$set.messages`: defensive, the loader keeps only objects with an id.
     expect(prompts([...body, { $set: { messages: [prompt(9, 'replaced'), 'not a message'] } }])).toMatch(/^[^|]*replaced[^|]*$/);
+    // `$rewindTo: 1` (a number): defensive, upstream writes the message id string.
     expect(prompts([head, { $set: { summary: 's' } }, { $patch: { content: 'no id' } }, { $rewindTo: 1 }])).toBe('');
   });
 
@@ -240,7 +251,8 @@ describe('the Gemini CLI reader', () => {
     expect(linesOf([head, prompt(1, 'x'), say(2, 'y', { model: undefined })]).find((entry) => entry.type === 'assistant')).not.toHaveProperty('requestedModel');
   });
 
-  it('gives each prompt its own time, never earlier than the one before, and falls back to the last good time for a missing or relative one', () => {
+  it('never steps a prompt back before the one before it, and gives one whose time is missing or relative the last good time (upstream always writes an ISO time, so this is defensive)', () => {
+    // The relative time `'2 minutes ago'` is a defensive input (the brief's missing-or-relative-timestamp bullet); upstream writes an ISO `timestamp` on every message.
     const times = linesOf([head, prompt(5, 'a'), { ...prompt(6, 'b'), timestamp: undefined }, { ...prompt(7, 'c'), timestamp: '2 minutes ago' }, prompt(2, 'd'), prompt(9, 'e')]).map((entry) => entry.timestamp);
     expect(times).toEqual([T(5), T(5), T(5), T(5), T(9)]);
     expect(linesOf([{ ...prompt(1, 'a'), timestamp: undefined }])[0]?.timestamp).toBe(new Date(0).toISOString());

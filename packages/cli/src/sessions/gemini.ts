@@ -250,8 +250,9 @@ export const chatLines = (text: string, fallbackId: string, cwd: string | null):
   for (const message of messages) {
     const when = stamp(message.timestamp);
     if (message.type === 'user') {
-      // A user message made of tool results is the model's own turn (geminiChat.ts), not a prompt.
-      if (partsOf(message.content).some((part) => isObj(part.functionResponse))) continue;
+      // A user message made wholly of tool results is the model's own turn, not a prompt (geminiChat.ts:527,547); one that also holds typed text is a prompt.
+      const parts = partsOf(message.content);
+      if (parts.length > 0 && parts.every((part) => isObj(part.functionResponse))) continue;
       // The vendor's filter reads the text SENT (`content`, chatRecordingService.ts:220-227); a custom command sends its expansion and shows `/cmd` (nonInteractiveCli.ts:289-300),
       // so the shown text is only what is recorded.
       const sent = textOf(message.content).trim();
