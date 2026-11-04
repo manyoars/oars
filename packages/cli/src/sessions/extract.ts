@@ -150,7 +150,8 @@ const EXIT_CODE_RE = /^Exit code:? (-?\d+)/;
 /** The harness's own refusals, most specific first: each names a class, and the match never leaves this table (the text is not kept). */
 const HARNESS_ERROR_PATTERNS: ReadonlyArray<readonly [RegExp, (typeof HARNESS_ERROR_CLASSES)[number]]> = [
   [/^\[Request interrupted by user/, 'interrupted'],
-  [/The user doesn't want to proceed with this tool use|The tool use was rejected/, 'user-rejected'],
+  // Claude Code's text, then the refusal sentences Codex (`rejected by user`, written by its adapter and by events.rs:456) and Gemini (`User cancelled tool execution`) write.
+  [/The user doesn't want to proceed with this tool use|The tool use was rejected|^(?:exec command|patch) rejected by user\s*$|^\[Operation Cancelled\] User cancelled tool execution/, 'user-rejected'],
   [/Permission to use [^\n]* has been denied/, 'permission-denied'],
   [/InputValidationError/, 'input-validation'],
   [/<tool_use_error>/, 'tool-use-error'],

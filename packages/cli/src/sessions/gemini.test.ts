@@ -109,14 +109,14 @@ describe('the Gemini CLI reader', () => {
     expect(out.tools.map((tool) => tool.status)).toEqual(['ok', 'error']);
   });
 
-  it('records a signal-terminated call as an error, and a cancelled call as an error with its message', () => {
+  it('records a signal-terminated call as an error, and a call the user cancelled as a user-rejected error with its message', () => {
     const signalled = shellText('partial', ['Signal: SIGTERM']);
     const out = extractOf([
       head,
       prompt(1, 'x'),
       say(2, '', { toolCalls: [shell('a', 'sleep 9', 'success', 3, signalled), call('b', 'run_shell_command', { command: 'x' }, 'cancelled', 4, reply('b', 'run_shell_command', { error: '[Operation Cancelled] User cancelled tool execution.' }))] }),
     ]);
-    expect(out.tools.map((tool) => tool.status)).toEqual(['error', 'error']);
+    expect(out.tools.map((tool) => [tool.status, tool.errorCode ?? null])).toEqual([['error', 'other'], ['error', 'user-rejected']]);
     expect(out.errorLines.map((error) => error.line)).toEqual(['partial', '[Operation Cancelled] User cancelled tool execution.']);
   });
 

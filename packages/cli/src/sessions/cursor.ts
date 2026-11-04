@@ -210,7 +210,7 @@ const REJECTED_TEXT = "The user doesn't want to proceed with this tool use";
  */
 const failureOf = (call: Obj, name: string): string | undefined => {
   // `userDecision` is `accepted` or `rejected` (any other string reads as no decision). A rejected call is the user's refusal, so it takes the
-  // text Claude Code writes for one and the extractor classes it `user-rejected`, as it does on the other harnesses.
+  // text Claude Code writes for one and the extractor classes it `user-rejected`, as it does for Claude Code, Codex, and Gemini.
   if (call.userDecision === 'rejected') return REJECTED_TEXT;
   if (call.status === 'error') return errorText(call.error ?? call.result);
   const result = name === 'run_terminal_cmd' ? parse(call.result) : undefined;

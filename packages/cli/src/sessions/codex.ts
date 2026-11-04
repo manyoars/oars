@@ -199,6 +199,14 @@ const RUNNING_LINE = /^Process running with session ID (\S+)\s*$/m;
  * (write_stdin.rs:123), and `write_stdin approval failed: ` (:121). `write_stdin rejected: ` (:118) is a declined call and stays unsettled.
  */
 const SPAWN_ERROR = /^(?:execution error|exec_command failed|write_stdin(?: approval)? failed): /;
+/**
+ * A declined call is the user's refusal: Codex writes `exec command rejected by user` as a shell call's whole output (events.rs:456), and a `declined` status on a
+ * patch or a CommandExecution item (protocol.rs:4072; events.rs:552-554) is the same decision with no text. Both settle as these two sentences, which `errorCodeOf`
+ * classes `user-rejected`. `write_stdin rejected: <reason>` (:118) is not read this way: its reason is the approval policy's, which the user may not have given.
+ */
+const DECLINED_SHELL = 'exec command rejected by user';
+const DECLINED_OUTPUT = /^exec command rejected by user\s*$/;
+const DECLINED_PATCH = 'patch rejected by user';
 
 /** The text of a `function_call_output` body: a bare string, or an array of `{type: input_text, text}` items (protocol/src/models.rs:2376). */
 const bodyText = (raw: unknown): string => {
@@ -374,11 +382,14 @@ export const rolloutLines = (text: string, fallbackId: string, parentText?: stri
     } else if (kind === 'AgentMessage') {
       const message = contentText(item.content, 'Text');
       if (message !== '') assistant([{ type: 'text', text: message }], when);
-    } else if (kind === 'FileChange' && id !== undefined && (item.status === 'completed' || item.status === 'failed')) {
-      settlePatch(id, item.status === 'failed' ? (str(item.stderr) ?? 'patch failed') : undefined, when);
+    } else if (kind === 'FileChange' && id !== undefined && (item.status === 'completed' || item.status === 'failed' || item.status === 'declined')) {
+      settlePatch(id, item.status === 'declined' ? DECLINED_PATCH : item.status === 'failed' ? (str(item.stderr) ?? 'patch failed') : undefined, when);
+    } else if (kind === 'CommandExecution' && id !== undefined && item.status === 'declined') {
+      // A `declined` one has exit code -1 and no outcome (events.rs:552-554): the user refused it, so it settles as a refusal.
+      settleShell(id, DECLINED_SHELL, '', when);
     } else if (kind === 'CommandExecution' && id !== undefined && (item.status === 'completed' || item.status === 'failed')) {
       // The exec_command's own item: `id` is its call id, written when the process exits, even one the model never polled (header). It carries the
-      // real exit code and the output. A `declined` one has exit code -1 and no outcome, so it stays unsettled, as a declined output does.
+      // real exit code and the output.
       const exit = num(item.exit_code);
       const output = str(item.aggregated_output) ?? '';
       if (exit !== undefined) settleShell(id, failureOf(exit, output), output, when);
@@ -469,7 +480,7 @@ export const rolloutLines = (text: string, fallbackId: string, parentText?: stri
         if (id !== undefined) settleMcp(id, typeof outcome.Err === 'string' || refused ? (text === '' ? 'mcp tool call failed' : text) : undefined, when);
       } else if (kind === 'patch_apply_end') {
         const id = str(payload.call_id);
-        if (id !== undefined && payload.status !== 'declined') settlePatch(id, payload.success === false ? (str(payload.stderr) ?? 'patch failed') : undefined, when);
+        if (id !== undefined) settlePatch(id, payload.status === 'declined' ? DECLINED_PATCH : payload.success === false ? (str(payload.stderr) ?? 'patch failed') : undefined, when);
       }
     } else if (type === 'response_item') {
       const kind = str(payload.type);
@@ -533,8 +544,9 @@ export const rolloutLines = (text: string, fallbackId: string, parentText?: stri
           const out = outcomeOf(payload.output);
           if (known.kind === 'shell') {
             // A shell call settles on its exit code, or on a failure to spawn. A process still running stays unsettled and is remembered by its
-            // session id, so in a Legacy rollout the `write_stdin` that sees it exit settles it too. A declined call has neither, and stays unsettled.
-            if (out.exit !== undefined || out.spawnError) settleShell(id, out.spawnError ? out.text : failureOf(out.exit, out.text), out.text, when, out.exit !== undefined);
+            // session id, so in a Legacy rollout the `write_stdin` that sees it exit settles it too. A declined call has neither and settles as the user's refusal.
+            if (out.exit === undefined && DECLINED_OUTPUT.test(out.text)) settleShell(id, DECLINED_SHELL, '', when, false);
+            else if (out.exit !== undefined || out.spawnError) settleShell(id, out.spawnError ? out.text : failureOf(out.exit, out.text), out.text, when, out.exit !== undefined);
             else if (out.running !== undefined && known.session === undefined) running.set(out.running, id);
           } else if (known.kind === 'other') {
             // Another call's output carries no failure signal (an MCP call's comes from its mcp_tool_call_end), and a patch settles only from its
