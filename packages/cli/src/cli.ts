@@ -16,6 +16,8 @@ import type { BooksBy, RecallQuery } from './sessions/query.js';
 import { closedQueryOf, RECALL_FAMILIES } from './sessions/recall-reads.js';
 import { FAMILIES } from './sessions/read.js';
 import { sessionsBooks, sessionsContext, sessionsDeposit, sessionsGoldArms, sessionsGoldSample, sessionsGoldScore, sessionsHookInstall, sessionsHookStatus, sessionsHookUninstall, sessionsMcp, sessionsLineage, sessionsMeasure, sessionsRead, sessionsRecall, sessionsRecallCounts, sessionsVerify, type SessionsDeps } from './sessions/command.js';
+import { exclusionPaths, sessionsExclusions } from './sessions/exclusion.js';
+import { poolDeposit, poolLogin, poolPull } from './sessions/pool-command.js';
 import type { InstallRuntime, Scope } from './sessions/install.js';
 import type { SessionsRuntime } from './sessions/store.js';
 
@@ -418,6 +420,16 @@ const buildProgram = (deps: RunDeps, argv: string[]): Command => {
       emit(deps, json, outcome);
     });
 
+  sessions
+    .command('exclusions')
+    .description('scan the local store and transcripts under the V15 rule, write the excluded sessions to a local file, and print counts only (the term file is named by OARS_EXCLUSION_TERMS)')
+    .option('--out <file>', 'where to write the excluded sessions (default: session-commons/exclusion-list.jsonl beside the claude projects folder)')
+    .action(async (_options: OptionValues, command: Command) => {
+      const options: OptionValues = command.optsWithGlobals();
+      if (deps.sessions === undefined) throw new CliError('The session store is not configured in this run.', ExitCode.UNEXPECTED, 'unexpected');
+      emit(deps, flag(options, 'json'), await sessionsExclusions(deps.sessions, exclusionPaths(deps.sessions.projectsRoot, deps.env, text(options, 'out'))));
+    });
+
   const gold = sessions.command('gold').description('a blind, human-judged sample of prompts, and every signal scored against those judgments');
 
   gold
@@ -513,6 +525,40 @@ const buildProgram = (deps: RunDeps, argv: string[]): Command => {
     .action(async (_options: OptionValues, command: Command) => {
       const options: OptionValues = command.optsWithGlobals();
       emit(deps, flag(options, 'json'), await sessionsHookStatus(sessionDeps(deps), { file: text(options, 'file') }));
+    });
+
+  const pool = program.command('pool').description('sign in to a pool server, deposit closed-vocabulary session skeletons, and pull signed reads; local capture, recall, and reads need none of it');
+  const serverOption = '--server <url>';
+  const serverHelp = 'the pool server, https or plain http to localhost (or OARS_POOL_URL; there is no default)';
+
+  pool
+    .command('login')
+    .description('sign in by GitHub or Google device flow; the pool keeps a pseudonym, and no harness token is read')
+    .requiredOption('--provider <name>', 'github or google')
+    .option(serverOption, serverHelp)
+    .action(async (_options: OptionValues, command: Command) => {
+      const options: OptionValues = command.optsWithGlobals();
+      emit(deps, flag(options, 'json'), await poolLogin(deps, { server: text(options, 'server'), provider: text(options, 'provider') }));
+    });
+
+  pool
+    .command('deposit')
+    .description('send every session that passes the V15 check as a closed-vocabulary skeleton, and print counts only')
+    .option('--accept-covenant <version>', 'accept this version of the pool covenant before depositing')
+    .option(serverOption, serverHelp)
+    .action(async (_options: OptionValues, command: Command) => {
+      const options: OptionValues = command.optsWithGlobals();
+      emit(deps, flag(options, 'json'), await poolDeposit(deps, { server: text(options, 'server'), acceptCovenant: text(options, 'acceptCovenant') }));
+    });
+
+  pool
+    .command('pull')
+    .description('fetch one signed slice of the pool, verify it against the key pinned at login, and keep it locally')
+    .option('--stack <name>', 'a language or framework, or all', 'all')
+    .option(serverOption, serverHelp)
+    .action(async (_options: OptionValues, command: Command) => {
+      const options: OptionValues = command.optsWithGlobals();
+      emit(deps, flag(options, 'json'), await poolPull(deps, { server: text(options, 'server'), stack: text(options, 'stack') ?? 'all' }));
     });
 
   return program;
