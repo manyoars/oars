@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { handleMessage, serve, TOOL_NAME } from './mcp.js';
 import { error as errorRow, prompt as promptRow, session as sessionRow } from './pool-fixture.js';
-import { readRecalls } from './recall-object.js';
+import { readRecalls, recallsPath } from './recall-object.js';
 import { readIdOf } from './recall-reads.js';
 import { MISS_TEXT } from './recall-render.js';
 import { deposit, paths, readCalls } from './store.js';
@@ -155,6 +155,27 @@ describe('MCP server', () => {
     const runtime = { ...staged.runtime, storeDir: join(staged.root, 'blocker') };
     const reply = await handleMessage(runtime, now, { jsonrpc: '2.0', id: 8, method: 'tools/call', params: { name: TOOL_NAME, arguments: { class: 'edit-verify' } } });
     expect(field(field(reply, 'error'), 'code')).toBe(-32603);
+  });
+
+  it('still answers a pull when the recall row cannot be written: a pull always answers', async () => {
+    const staged = stage();
+    await deposit(staged.runtime, { allow: ['proj'], redactDomains: [], now });
+    mkdirSync(recallsPath(staged.storeDir));
+    const reply = await handleMessage(staged.runtime, now, { jsonrpc: '2.0', id: 9, method: 'tools/call', params: { name: TOOL_NAME, arguments: { error: 'unexpected EOF while looking for matching quote' } } });
+    expect(field(reply, 'error')).toBeUndefined();
+    const content = field(field(reply, 'result'), 'content');
+    expect(Array.isArray(content) && String(field(content[0], 'text'))).toContain('2 sessions');
+  });
+
+  it('still answers a pull when the call log cannot be written', async () => {
+    const staged = stage();
+    await deposit(staged.runtime, { allow: ['proj'], redactDomains: [], now });
+    mkdirSync(paths(staged.storeDir).calls);
+    const reply = await handleMessage(staged.runtime, now, { jsonrpc: '2.0', id: 10, method: 'tools/call', params: { name: TOOL_NAME, arguments: { error: 'unexpected EOF while looking for matching quote' } } });
+    expect(field(reply, 'error')).toBeUndefined();
+    const content = field(field(reply, 'result'), 'content');
+    expect(Array.isArray(content) && String(field(content[0], 'text'))).toContain('2 sessions');
+    expect(await readRecalls(staged.storeDir)).toHaveLength(1);
   });
 
   it('serves newline-delimited requests on stdio until stdin ends, answering garbage with a parse error', async () => {
