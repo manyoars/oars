@@ -205,7 +205,7 @@ export interface SessionObservation {
   setup?: SessionSetup;
   /** The tool names at each funnel stage the transcript shows (class A); same absence rules. */
   funnel?: SessionFunnel;
-  /** How often a human stopped the session and how long it ran alone (class A); same absence rules. */
+  /** How often a human or a policy stopped the session and how long it ran alone (class A); same absence rules. */
   trust?: SessionTrust;
 }
 

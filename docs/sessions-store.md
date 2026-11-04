@@ -281,13 +281,13 @@ only: subagent work is left out.
 
 Version 12 records three optional objects on the `session` record, class A, from what the transcript recorded and nothing else: never today's config or instruction
 files, because a file read now is not that session's setup. A field the transcript does not hold is absent, never guessed or zero (a zero is stored only where the
-harness would have shown the event). Counts and sizes only: no instruction text, hook command or output, or tool description is kept. Nothing here is bucketed or
+harness would have shown the event). Counts, names, and sizes only: no instruction text, hook command or output, or tool description is kept. Nothing here is bucketed or
 projected; the value is stored as read (an `unattendedRun` to two decimals). The collector is `session-shape.ts`.
 
 | Field | Meaning | Claude Code | Codex | Cursor | Copilot |
 |-------|---------|-------------|-------|--------|---------|
 | `setup.permissionMode` | the mode most of the session ran in; the harness's documented value, else `other` | recorded: `permission-mode` lines and the key on `user` lines | recorded: `turn_context.approval_policy` (`granular` for the object form) | absent | absent |
-| `setup.plugins` | plugins named by a tool (`mcp__plugin_<plugin>_<server>__<tool>`) offered, loaded, or called; read for Claude Code only, from the stored tool name, so a plugin named like a secret reads as none | recorded (a floor: a plugin with no MCP tool shows nothing; a `plugin:skill` prefix on `attributionSkill` is not read, since a nested skill carries one too) | absent | absent | absent |
+| `setup.plugins` | plugins named by a tool (`mcp__plugin_<plugin>_<server>__<tool>`) offered, loaded, or called; read for Claude Code only, from the stored tool name, so a plugin named like a secret reads as none, and a name holding an `_` reads only up to it (`mcp__plugin_my_plugin_srv__t` stores `my`) | recorded (a floor: a plugin with no MCP tool shows nothing; a `plugin:skill` prefix on `attributionSkill` is not read, since a nested skill carries one too) | absent | absent | absent |
 | `setup.hookCount` | distinct hooks seen firing, by `hookName`, never the command | recorded (a floor): `hook_success`, `hook_additional_context`, and `hook_blocking_error` by `hookName`; a `stop_hook_summary.hookInfos[]` command counts only when no `Stop`-named hook line was seen, since that line and the summary are the same hooks | absent (hook events are not persisted) | absent | absent |
 | `setup.instructionBytes` | bytes of instruction files loaded mid-session, each path once | recorded (a floor): `nested_memory`'s `content.content`; the opening files are in the `api-request-blob` lines capture skips | absent | absent | absent |
 | `funnel.offered` | tool names offered and not since removed | recorded: `api-request-shape`'s `shape.tools[].name` plus `deferred_tools_delta.addedNames` | recorded: `session_meta.dynamic_tools` and `additional_tools` items (built-in tools only when Codex persists them) | absent | absent |

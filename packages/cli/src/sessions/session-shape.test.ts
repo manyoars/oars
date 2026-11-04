@@ -228,9 +228,28 @@ describe('unattendedRun', () => {
     const session = capture(rolloutLines(rollout.map((entry) => JSON.stringify(entry)).join('\n'), 'c1').map((entry) => JSON.stringify(entry)), { harness: 'codex' });
     expect(session.trust?.unattendedRun).toEqual([0.13, 0.5]);
   });
+
+  it('counts a compaction summary as the agent working, not a human turn', () => {
+    const summary = typed(600, 'This session is being continued from a previous conversation', { isCompactSummary: true });
+    const session = capture([typed(0, 'start'), said(60), summary, said(660), typed(36000, 'next morning'), said(36030)]);
+    expect(session.trust?.unattendedRun).toEqual([11, 0.5]);
+  });
+
+  it('counts a replayed human line once: a resume replays the lines it resumed from', () => {
+    const first = typed(0, 'a', { uuid: 'h1' });
+    const second = typed(120, 'b', { uuid: 'h2' });
+    const session = capture([first, said(60), second, said(180), first, said(60), second, said(180), typed(240, 'c'), said(270)]);
+    expect(session.trust?.unattendedRun).toEqual([1, 1, 0.5]);
+  });
+
+
+  it('closes the run of a human line with no usable time, and lets the agent lines after it extend nothing', () => {
+    const session = capture([typed(0, 'a'), said(60), typed(100, 'b', { timestamp: undefined }), said(1000)]);
+    expect(session.trust?.unattendedRun).toEqual([1]);
+  });
 });
 
-describe('fix round 1', () => {
+describe("the shape's edge cases", () => {
   const codex = (rollout: readonly object[]) => capture(rolloutLines(rollout.map((entry) => JSON.stringify(entry)).join('\n'), 'c1').map((entry) => JSON.stringify(entry)), { harness: 'codex' });
 
   it('stores a Copilot session as absent for everything its reader does not record, and its prompts as runs', () => {
@@ -245,19 +264,6 @@ describe('fix round 1', () => {
     expect(session.setup).toBeUndefined();
     expect(session.funnel).toBeUndefined();
     expect(session.trust).toEqual({ unattendedRun: [0.02, 0.17] });
-  });
-
-  it('counts a compaction summary as the agent working, not a human turn', () => {
-    const summary = typed(600, 'This session is being continued from a previous conversation', { isCompactSummary: true });
-    const session = capture([typed(0, 'start'), said(60), summary, said(660), typed(36000, 'next morning'), said(36030)]);
-    expect(session.trust?.unattendedRun).toEqual([11, 0.5]);
-  });
-
-  it('counts a replayed human line once: a resume replays the lines it resumed from', () => {
-    const first = typed(0, 'a', { uuid: 'h1' });
-    const second = typed(120, 'b', { uuid: 'h2' });
-    const session = capture([first, said(60), second, said(180), first, said(60), second, said(180), typed(240, 'c'), said(270)]);
-    expect(session.trust?.unattendedRun).toEqual([1, 1, 0.5]);
   });
 
   it('reads nothing from a sidechain line: a subagent setup is not the main session', () => {
@@ -295,6 +301,26 @@ describe('fix round 1', () => {
     const session = capture([typed(0, 'go'), attach(1, { type: 'deferred_tools_delta', addedNames: [`mcp__plugin_${token}_srv__t`], removedNames: [] })]);
     expect(JSON.stringify(session)).not.toContain(token);
     expect(session.setup).toBeUndefined();
+  });
+
+  it('stores two server names that redact to one form once in each funnel list', () => {
+    const one = 'mcp__sk-ant-api03Xk29fjQ81zLmPq7Rt__run';
+    const two = 'mcp__sk-ant-api03Yk29fjQ81zLmPq7Rt__run';
+    const session = capture([
+      typed(0, 'go'),
+      attach(1, { type: 'deferred_tools_delta', addedNames: [one, two], removedNames: [] }),
+      called(2, 's', 'ToolSearch'),
+      answered(3, 's', [{ type: 'tool_reference', tool_name: one }, { type: 'tool_reference', tool_name: two }]),
+    ]);
+    expect(session.funnel?.offered).toHaveLength(1);
+    expect(session.funnel?.loaded).toEqual(session.funnel?.offered);
+    const swapped = capture([typed(0, 'go'), attach(1, { type: 'deferred_tools_delta', addedNames: [one, two], removedNames: [] }), attach(2, { type: 'deferred_tools_delta', addedNames: [], removedNames: [two] })]);
+    expect(swapped.funnel?.removed).toHaveLength(1);
+  });
+
+  it('reads a plugin name only up to its first underscore, since the tool name cannot say where the plugin ends', () => {
+    const session = capture([typed(0, 'go'), attach(1, { type: 'deferred_tools_delta', addedNames: ['mcp__plugin_my_plugin_srv__t'], removedNames: [] })]);
+    expect(session.setup).toEqual({ plugins: ['my'] });
   });
 
   it('stores a tool name the way a call is stored: an MCP server part that looks like a secret is redacted in the funnel and in a trust event', () => {
