@@ -60,12 +60,13 @@ const deposit = async (request: Request, env: Env): Promise<Response> => {
   const limit = wholeBinding(env.MAX_DEPOSITS_PER_ACCOUNT, DEFAULT_MAX_DEPOSITS);
   const budget = wholeBinding(env.MAX_DEPOSIT_BYTES_PER_ACCOUNT, DEFAULT_MAX_ACCOUNT_BYTES);
   const stored = JSON.stringify(skeleton);
-  // Whether this batch counts toward access is decided here, from the batch and the row it replaces; it is judged at the batch's own tier, which the upsert writes again on a resend, so a resend whose root no longer holds clears its date.
+  // Whether this batch counts toward access is decided here, from the batch and the row it replaces; it is judged at the batch's own tier, which the upsert writes again on a resend: the tier falls on any resend whose root no longer holds, and the date clears only when that resend also writes a cell.
   // `written` is what ingest will write over the row held now, not what the batch derives: a batch sent again unchanged writes nothing and leaves the row's date alone.
   const next = incrementsOf(skeleton);
   const previous = await previousOf(env, account, skeleton.id);
-  const written = netCellCount(next, previous?.increments);
   const tier = batchTier(skeleton);
+  // A row held at `none` that now counts is a write too, though its cells are unchanged: its date was never set, and this resend is what sets it.
+  const written = netCellCount(next, previous?.increments) + (previous?.none === true && tier !== 'none' ? 1 : 0);
   const countedAt = batchCounts(tier, skeleton, written) ? Date.now() : null;
   const ingest = crypto.randomUUID();
   // One statement, so two deposits at once cannot both take the last of either limit. A redeposit replaces its own row: it adds no row, so it passes the count at the limit, and only its new size counts against the budget.

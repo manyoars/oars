@@ -20,9 +20,10 @@ const netOf = <Row extends { key: string }>(next: ReadonlyMap<string, Row>, prev
 const CELL_FIELDS: readonly (keyof CellRow)[] = ['sessions', 'ok', 'failed', 'tokens', 'durationMs'];
 const STRATUM_FIELDS: readonly (keyof StratumRow)[] = ['sessions'];
 
-/** The row an account holds under this id: the mark of the write that set it, and the increments that write made, or none when the stored skeleton no longer parses (see `previousOf`). */
+/** The row an account holds under this id: the mark of the write that set it, whether its tier is `none`, and the increments that write made, or none when the stored skeleton no longer parses (see `previousOf`). */
 export interface Previous {
   ingest: string;
+  none: boolean;
   increments: Increments | undefined;
 }
 
@@ -31,15 +32,16 @@ export interface Previous {
  * not derived again on a read), so a resend over it adds the whole batch a second time: a limit the stored form has until the ledger is rebuilt by a later change.
  */
 export const previousOf = async (env: Env, account: string, id: string): Promise<Previous | undefined> => {
-  const held = await env.DB.prepare('SELECT skeleton, ingest FROM deposits WHERE account = ? AND id = ?').bind(account, id).first();
+  const held = await env.DB.prepare('SELECT skeleton, ingest, tier FROM deposits WHERE account = ? AND id = ?').bind(account, id).first();
   const text = fieldOf(held, 'skeleton');
   const ingest = fieldOf(held, 'ingest');
   if (typeof text !== 'string' || typeof ingest !== 'string') return undefined;
+  const none = fieldOf(held, 'tier') === 'none';
   try {
     const parsed = parseSkeleton(JSON.parse(text));
-    return { ingest, increments: parsed.ok ? incrementsOf(parsed.skeleton) : undefined };
+    return { ingest, none, increments: parsed.ok ? incrementsOf(parsed.skeleton) : undefined };
   } catch {
-    return { ingest, increments: undefined };
+    return { ingest, none, increments: undefined };
   }
 };
 

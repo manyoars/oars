@@ -151,6 +151,20 @@ describe('the access flag over the routes', () => {
     });
   }, 60_000);
 
+  it('counts a batch first ingested at none once a resend fixes its root, though its cells are unchanged', async () => {
+    await inPool(async (pool) => {
+      const signed = await pool.signIn('github', stubUser('3014'));
+      await pool.post('/v1/covenant/accept', { version: 'v1' }, signed.token);
+      const failed = withRoot(sampleSkeleton('0000000000003014'), { merkleRoot: createHash('sha256').update('x').digest('hex'), leaves: 0 });
+      expect((await pool.post('/v1/deposits', failed, signed.token)).status).toBe(201);
+      expect(await tierOf(pool, signed.account)).toBe('none');
+      expect((await pool.post('/v1/deposits', sampleSkeleton('0000000000003014'), signed.token)).status).toBe(201);
+      expect(await tierOf(pool, signed.account)).toBe('committed');
+      expect(await fetches(pool, signed.token, 2)).toEqual([200, 200]);
+      expect(await accessOfAccount(pool, signed.account)).toBe('pending');
+    });
+  }, 60_000);
+
   it('lifts it, pending, for a counting batch: a cursor batch with a prompt, a tool step, and a cell', async () => {
     await inPool(async (pool) => {
       const { token, account } = await depositor(pool, '3002', 'cursor');
