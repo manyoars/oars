@@ -21,7 +21,7 @@ import {
   TOOL_INPUT_KEYS,
 } from './public-vocabulary.js';
 import type { Redactor } from './redact.js';
-import type { ShellIdentity, ShellSegment, StepIdentity, ToolObservation } from './schema.js';
+import { ERROR_CODES, type ShellIdentity, type ShellSegment, type StepIdentity, type ToolObservation } from './schema.js';
 import type { Vocabulary } from './vocab-load.js';
 
 /** One program of a shell call, as `index` carries it. */
@@ -212,3 +212,6 @@ export const projectModel = (vocab: Vocabulary, model: string): string => (vocab
 
 /** A harness release up to the snapshot; one published after it pools as `private` until the next VOCAB_VERSION (spec R3). */
 export const projectHarnessVersion = (vocab: Vocabulary, harness: string, version: string): string => (vocab.harnessVersions.get(harness)?.has(version) === true ? version : PRIVATE);
+
+/** An `errorCode` as it pools: a stored class that is still a member of the closed list, else `other`. A record captured before CAPTURE 13 holds none and projects `other`. */
+export const projectErrorCode = (stored: string | undefined): string => (stored !== undefined && ERROR_CODES.has(stored) ? stored : 'other');

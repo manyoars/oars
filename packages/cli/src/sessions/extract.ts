@@ -15,6 +15,8 @@ import {
   CAPTURE_VERSION,
   ERROR_LINE_CHARS,
   FILES_PER_SESSION_MAX,
+  HARNESS_ERROR_CLASSES,
+  HTTP_STATUSES,
   PROMPT_HEAD_CHARS,
   SIGNATURE_CHARS,
   type CostState,
@@ -128,6 +130,37 @@ export const isErrorResult = (block: Obj, text: string): boolean => {
   if (truthy(block.is_error)) return true;
   const exit = EXIT_RE.exec(text.trim());
   return exit !== null && exit[1] !== '0';
+};
+
+const EXIT_CODE_RE = /^Exit code:? (-?\d+)/;
+/** The harness's own refusals, most specific first: each names a class, and the match never leaves this table (the text is not kept). */
+const HARNESS_ERROR_PATTERNS: ReadonlyArray<readonly [RegExp, (typeof HARNESS_ERROR_CLASSES)[number]]> = [
+  [/^\[Request interrupted by user/, 'interrupted'],
+  [/The user doesn't want to proceed with this tool use|The tool use was rejected/, 'user-rejected'],
+  [/Permission to use [^\n]* has been denied/, 'permission-denied'],
+  [/InputValidationError/, 'input-validation'],
+  [/<tool_use_error>/, 'tool-use-error'],
+  [/\btimed out\b/i, 'timeout'],
+];
+const HTTP_STATUS_RE = /(?:status(?: code)?|HTTP\/?[\d.]*|returned error:?)\s*:?\s*([1-5]\d\d)\b/i;
+
+const exitClass = (code: number): string => {
+  if (code === 0 || code === 1 || code === 2 || code === 126 || code === 127) return String(code);
+  return code > 128 && code <= 255 ? 'signal' : 'other';
+};
+
+/**
+ * The `errorCode` of a failed result (spec Section 1.2): an exit-code class from a leading `Exit code N` line, else the harness error class its text
+ * names, else an HTTP status, else `other`. The result is always a member of `ERROR_CODES`, picked by a table, so no word of the error text is kept. A
+ * harness that reports no exit code (Cursor, a Codex call with no status) reaches `other` unless its text names a class.
+ */
+export const errorCodeOf = (text: string): string => {
+  const exit = EXIT_CODE_RE.exec(text.trim());
+  if (exit !== null) return exitClass(Number(exit[1]));
+  const harness = HARNESS_ERROR_PATTERNS.find(([pattern]) => pattern.test(text));
+  if (harness !== undefined) return harness[1];
+  const status = HTTP_STATUS_RE.exec(text)?.[1];
+  return HTTP_STATUSES.find((listed) => listed === status) ?? 'other';
 };
 
 export const shortName = (name: string): string => {
@@ -1683,6 +1716,7 @@ export const captureSession = (input: ExtractInput): Capture => {
           const { call, at, plan } = answered;
           if (at !== undefined && lineSeconds !== undefined && o.noDuration !== true) call.durationMs = Math.round((lineSeconds - at) * 1000);
           call.status = failed ? 'error' : 'ok';
+          if (failed) call.errorCode = errorCodeOf(text);
           const commits = failed ? [] : commitsRead(plan, text);
           if (commits.length > 0) call.commits = commits;
         }
