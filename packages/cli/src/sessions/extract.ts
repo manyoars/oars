@@ -1372,7 +1372,8 @@ export const captureSession = (input: ExtractInput): Capture => {
               : ({ opened: 'typed', request: text } satisfies PromptOpening);
       if (opening !== undefined) {
         // The harness's interrupt marker is a line it wrote after the operator pressed Esc, not a turn the operator took.
-        shape.turn(text.startsWith(INTERRUPT_MARKER) ? 'none' : 'human', toSeconds(ts));
+        // A compaction summary is the harness writing the session's history back, so the agent is still working through it.
+        shape.turn(text.startsWith(INTERRUPT_MARKER) ? 'none' : o.isCompactSummary === true ? 'agent' : 'human', toSeconds(ts), str(o.uuid));
         finish();
         cur = {
           index: prompts.length,
@@ -1396,7 +1397,7 @@ export const captureSession = (input: ExtractInput): Capture => {
     }
 
     // Anything else on the main line is the agent at work, an automated turn included: only the operator's own turn ends a run alone.
-    if (!side && (type === 'assistant' || type === 'user')) shape.turn(typedShell ? 'human' : 'agent', toSeconds(ts));
+    if (!side && (type === 'assistant' || type === 'user')) shape.turn(typedShell ? 'human' : 'agent', toSeconds(ts), str(o.uuid));
     if (cur !== undefined) {
       // cost_per_class.py reads wall time, turns, model, and tokens from main-line lines only.
       if (!side) {

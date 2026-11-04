@@ -253,12 +253,14 @@ const usageOf = (info: unknown): Obj | undefined => {
 export const rolloutBadLines = (text: string): string[] => text.split('\n').filter((raw) => raw.trim() !== '' && parse(raw) === undefined);
 
 /**
- * The names in a list of tool declarations: each entry's `name` (a `DynamicToolSpec` function or namespace, dynamic_tools.rs; an `additional_tools` or
- * `tool_search_output` entry is an untyped value, models.rs:1076, :1257), and the names of a namespace's own `tools`. Nothing else is read: a
+ * The names in a list of tool declarations: each entry's `name` (a `DynamicToolSpec` function, dynamic_tools.rs; an `additional_tools` or
+ * `tool_search_output` entry is an untyped value, models.rs:1076, :1257), and the names of a namespace's own `tools`; a namespace's own name is a grouping, not a tool. Nothing else is read: a
  * declaration's description and schema stay where they are.
  */
 const toolNames = (list: unknown): string[] =>
-  (Array.isArray(list) ? list : []).flatMap((entry: unknown) => (isObj(entry) ? [str(entry.name), ...toolNames(entry.tools)] : [])).filter((name): name is string => name !== undefined && name !== '');
+  (Array.isArray(list) ? list : [])
+    .flatMap((entry: unknown) => (isObj(entry) ? [Array.isArray(entry.tools) ? undefined : str(entry.name), ...toolNames(entry.tools)] : []))
+    .filter((name): name is string => name !== undefined && name !== '');
 
 /** The approval policy as the permission mode: a string, or the externally tagged `{granular: {...}}` form (protocol.rs:1181). */
 const approvalMode = (policy: unknown): string | undefined => (isObj(policy) && Object.hasOwn(policy, 'granular') ? 'granular' : str(policy));
@@ -321,9 +323,9 @@ export const rolloutLines = (text: string, fallbackId: string, parentText?: stri
     });
   };
   // A neutral line for the setup, funnel, and trust shape (session-shape.ts): none of it is a Claude-shaped line, and none carries a message.
-  const tools = (fields: Obj, when: string): void => {
+  const tools = (fields: Obj): void => {
     sequence += 1;
-    lines.push({ ...base, type: SHAPE_TOOLS_LINE, uuid: `${fallbackId}-t${String(sequence)}`, timestamp: when, ...fields });
+    lines.push({ ...base, type: SHAPE_TOOLS_LINE, uuid: `${fallbackId}-t${String(sequence)}`, ...fields });
   };
   const prompted = (message: string, when: string): void => {
     sequence += 1;
@@ -415,7 +417,7 @@ export const rolloutLines = (text: string, fallbackId: string, parentText?: stri
       if (version !== undefined) base.version = version;
       stamp(payload.timestamp);
       const declared = toolNames(payload.dynamic_tools);
-      if (declared.length > 0) tools({ offered: declared }, when);
+      if (declared.length > 0) tools({ offered: declared });
       inherited = num(payload.subagent_history_start_ordinal);
       paginated = payload.history_mode === 'paginated';
       if (inherited === undefined && parentText !== undefined && str(payload.forked_from_id) !== undefined && !isObj(payload.history_base)) copied = { keys: parentKeys(parentText), at: 0 };
@@ -437,7 +439,7 @@ export const rolloutLines = (text: string, fallbackId: string, parentText?: stri
         // Only `interrupted` is the operator cutting a turn short: `replaced`, `review_ended`, and `budget_limited` are the harness's own (protocol.rs:4580-4585).
         if (payload.reason === 'interrupted') {
           sequence += 1;
-          lines.push({ ...base, type: SHAPE_INTERRUPT_LINE, uuid: `${fallbackId}-i${String(sequence)}`, timestamp: when });
+          lines.push({ ...base, type: SHAPE_INTERRUPT_LINE, uuid: `${fallbackId}-i${String(sequence)}` });
         }
       } else if (kind === 'agent_message') {
         const message = str(payload.message);
@@ -469,10 +471,10 @@ export const rolloutLines = (text: string, fallbackId: string, parentText?: stri
       const kind = str(payload.type);
       if (kind === 'additional_tools') {
         const declared = toolNames(payload.tools);
-        if (declared.length > 0) tools({ offered: declared }, when);
+        if (declared.length > 0) tools({ offered: declared });
       } else if (kind === 'tool_search_output') {
         const found = toolNames(payload.tools);
-        if (found.length > 0) tools({ loaded: found }, when);
+        if (found.length > 0) tools({ loaded: found });
       } else if (kind === 'web_search_call') {
         // A search is its own response item (protocol/src/models.rs:1270; persisted, rollout/src/policy.rs:94), with no call_id and no output item: the item
         // is the finished call (`response.output_item.done`, models.rs:1262-1269), so it carries no failure signal and is recorded ok, as another non-shell call is.
