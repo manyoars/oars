@@ -162,7 +162,7 @@ const recordOf = (
 
 const appendText = async (file: string, body: string): Promise<void> => {
   await mkdir(join(file, '..'), { recursive: true });
-  await appendFile(file, body);
+  await appendFile(file, body, { mode: 0o600 });
 };
 
 /**

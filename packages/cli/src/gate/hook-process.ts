@@ -21,7 +21,7 @@ export const runHookProcess = async ({ stdin, deps, exit, deadlineMs }: HookProc
   setTimeout(
     () => {
       try {
-        if (staged !== null) appendFileSync(staged.file, staged.text);
+        if (staged !== null) appendFileSync(staged.file, staged.text, { mode: 0o600 });
       } catch {
         // Fail-open.
       }

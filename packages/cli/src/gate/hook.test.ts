@@ -1,4 +1,4 @@
-import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { performance } from 'node:perf_hooks';
@@ -327,5 +327,17 @@ describe('oars gate hook: the deadline', () => {
     await gateHook(payload('npm install left-pad'), depsFor(store, { registry: reader, clock: () => 790 }));
     expect(reader).not.toHaveBeenCalled();
     expect(rowsOf(store)).toHaveLength(1);
+  });
+});
+
+// Class A names, versions, and session ids: the store is the user's, and every other write in it is 0600.
+describe('oars gate hook: the files it creates', () => {
+  it.skipIf(process.platform === 'win32')('creates the record, the registry answers, and the index private to the user', async () => {
+    const store = folder();
+    await gateHook(payload('npm install left-pad@1.3.0'), depsFor(store, { registry: found('1.3.0') }));
+    for (const file of [crossingsPath(store), registryCachePath(store), indexFile(store)]) {
+      expect(existsSync(file), file).toBe(true);
+      expect(statSync(file).mode & 0o777, file).toBe(0o600);
+    }
   });
 });
