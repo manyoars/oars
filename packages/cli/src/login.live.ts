@@ -10,7 +10,7 @@ import { run, type RunDeps } from './cli.js';
 import { fileCredentialStore } from './credentials.js';
 import { fileJournalStore } from './journal.js';
 import { ExitCode } from './errors.js';
-import { step } from './live-page.js';
+import { step, stderrSink } from './live-page.js';
 import { discover, refreshTokens } from './oidc.js';
 
 // Design §6 *CLI*, live login: the real CLI against a running Keycloak holding T67's realm (the local stack's, or the throwaway
@@ -137,15 +137,9 @@ const loginThenLogout = async ({ api, configDir, username, password, audience }:
     env: {},
     io: {
       stdout: (chunk) => out.push(chunk),
-      stderr: (chunk) => {
-        const url = /open (\S+)/.exec(chunk)?.[1];
-        // The link chunk also holds the user code, and a failure prints `err` in a public job log: announce it, never keep it.
-        if (url !== undefined) {
-          announce(url);
-          return;
-        }
-        err.push(chunk);
-      },
+      stderr: stderrSink((url) => {
+        announce(url);
+      }, err),
     },
     store: fileCredentialStore(configDir),
     journal: fileJournalStore(configDir),

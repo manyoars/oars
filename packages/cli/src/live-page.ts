@@ -28,3 +28,18 @@ export const step = async (page: Pick<Page, 'title' | 'url'>, what: string, acti
   const title = await page.title().catch(() => '');
   throw new Error(`The device approval stopped at "${what}" on ${describePage(title, page.url())} (${kind}).`);
 };
+
+/**
+ * The stderr callback for `oars login --no-browser`: the chunk with the verification link also holds the user code, so it is announced
+ * and never kept, because a failure prints `kept` in the CI job's public log.
+ */
+export const stderrSink =
+  (announce: (url: string) => void, kept: string[]) =>
+  (chunk: string): void => {
+    const url = /open (\S+)/.exec(chunk)?.[1];
+    if (url !== undefined) {
+      announce(url);
+      return;
+    }
+    kept.push(chunk);
+  };

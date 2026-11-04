@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { describePage, step } from './live-page.js';
+import { describePage, step, stderrSink } from './live-page.js';
 
 describe('describePage', () => {
   it('names the title and the URL path only', () => {
@@ -53,5 +53,17 @@ describe('step', () => {
     const closed = { title: () => Promise.reject(new Error('closed')), url: () => 'http://x/a' };
     const thrown = await failureOf(step(closed, 'x', () => Promise.reject(new Error('e'))));
     expect(thrown.message).toContain('page "" at /a');
+  });
+});
+
+describe('stderrSink', () => {
+  it('announces the link once and keeps only the other chunks, so the user code never reaches the failure message', () => {
+    const announced: string[] = [];
+    const kept: string[] = [];
+    const sink = stderrSink((url) => announced.push(url), kept);
+    sink('To sign in, open http://x/device?user_code=ABCD\nand confirm the code ABCD\n');
+    sink('boom\n');
+    expect(announced).toEqual(['http://x/device?user_code=ABCD']);
+    expect(kept).toEqual(['boom\n']);
   });
 });
