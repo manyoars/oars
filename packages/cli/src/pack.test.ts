@@ -68,6 +68,12 @@ describe('the tarball npm pack would make', () => {
     }
   });
 
+  it('lists every vocabulary snapshot and the manifest that pins them', () => {
+    expect(paths.filter((path) => path.startsWith('vocab/')).sort()).toEqual(
+      readdirSync(`${cliFolder}vocab`).sort().map((name) => `vocab/${name}`),
+    );
+  });
+
   it('lists no TypeScript source, no test file, no fake platform and no live test', () => {
     const unwanted = paths.filter(
       (path) =>
@@ -82,9 +88,9 @@ describe('the tarball npm pack would make', () => {
     expect(unwanted).toEqual([]);
   });
 
-  it('lists nothing but dist/, the golden plans and the three files npm always adds', () => {
+  it('lists nothing but dist/, the golden plans, the pinned vocabulary, and the three files npm always adds', () => {
     expect(
-      paths.filter((path) => !path.startsWith('dist/') && !path.startsWith('parity/deploy-plans/') && !['package.json', 'README.md', 'LICENSE'].includes(path)),
+      paths.filter((path) => !path.startsWith('dist/') && !path.startsWith('parity/deploy-plans/') && !path.startsWith('vocab/') && !['package.json', 'README.md', 'LICENSE'].includes(path)),
     ).toEqual([]);
   });
 });
@@ -102,10 +108,10 @@ describe('the publish fields', () => {
     expect(manifest()).not.toHaveProperty('private');
   });
 
-  it('ship dist/ and the plans, run oars from dist/bin.js and rebuild before every pack', () => {
+  it('ship dist/, the plans, and the vocabulary snapshots, run oars from dist/bin.js and rebuild before every pack', () => {
     expect(manifest()).toMatchObject({
       bin: { oars: './dist/bin.js' },
-      files: ['dist', 'parity/deploy-plans'],
+      files: ['dist', 'parity/deploy-plans', 'vocab'],
       scripts: { prepack: 'npm run build' },
     });
   });
