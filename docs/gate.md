@@ -86,7 +86,7 @@ One row stands for one crossing: its key is the session, the tool use id, the cl
 
 `run` row: counts of transcripts, unreadable files, torn lines, calls, and crossings, the commands it could not name by shape, and whether the registry was read (class P).
 
-There is no repository key in the record. Repository novelty is kept as hashes in `gate-index.txt`, which replay seeds from every transcript it reads and the hook then extends; the file holds no name, path, or command text.
+There is no repository key in the record. Repository novelty is kept as hashes in `gate-index.txt`, which replay seeds from every transcript it reads and the hook then extends; the file holds no name, path, or command text. Replay and the hook name a repository the same way (the slug Claude Code gives its project folder, a worktree counted as its repository) when a session starts at the repository root. A session started in a subfolder does not agree: replay can only see that subfolder's project folder, while the hook walks up to the folder holding `.git`. A name replay saw in such a session reads `repository` to the hook, not `session` or `none`, until the hook has itself seen it in that repository. Making them agree would need replay to resolve each call's working directory, which can be gone by then.
 
 ## Registry state
 

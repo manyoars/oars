@@ -2,6 +2,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { slugOf } from '../sessions/allow.js';
 import { gateHook } from './hook.js';
 import { loadIndex } from './novelty.js';
 import { crossingsOf, GATE_VERSION, liveCrossings, mergeCrossings, parseRows, type CrossingRecord, type Row, type RunRow } from './record.js';
@@ -249,5 +250,46 @@ describe('replay beside the hook', () => {
     const last = (await fileRows()).filter((row): row is CrossingRecord => row.kind === 'crossing' && row.via === 'hook').at(-1);
     // The hook's working folder is not the transcript's project here, so the repository is new; the name and the session are not.
     expect(last?.novelty).toBe('repository');
+  });
+
+  describe('when the hook and the project folder name the same repository', () => {
+    // A repository root holding `.git`, a session started at the root, and a project folder named as Claude Code names it.
+    const repoWithSession = async (startedIn: string): Promise<string> => {
+      const repo = join(root, 'repo');
+      await mkdir(join(repo, '.git'), { recursive: true });
+      await mkdir(join(repo, 'packages', 'app'), { recursive: true });
+      const project = slugOf(join(repo, startedIn));
+      await mkdir(join(projectsRoot, project), { recursive: true });
+      const lines = [
+        { type: 'user', timestamp: '2026-10-01T10:00:00.000Z', permissionMode: 'default', message: { role: 'user', content: 'please install left-pad' } },
+        { type: 'assistant', timestamp: '2026-10-01T10:00:01.000Z', cwd: join(repo, startedIn), message: { role: 'assistant', content: [{ type: 'tool_use', id: 't1', name: 'Bash', input: { command: COMMAND_LINE } }] } },
+        { type: 'user', timestamp: '2026-10-01T10:00:02.000Z', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 't1', content: 'added 1 package' }] } },
+      ];
+      await writeFile(join(projectsRoot, project, 'sess1.jsonl'), `${lines.map((line) => JSON.stringify(line)).join('\n')}\n`);
+      await replay({ storeDir, projectsRoot }, { allow: [project], now: () => NOW });
+      return repo;
+    };
+
+    const hookIn = async (cwd: string, session: string): Promise<CrossingRecord | undefined> => {
+      await gateHook(JSON.stringify({ session_id: session, tool_use_id: 't9', tool_name: 'Bash', tool_input: { command: COMMAND_LINE }, cwd, permission_mode: 'default' }), {
+        storeDir,
+        now: () => Date.parse('2026-10-02T10:00:00.000Z'),
+        clock: () => 0,
+        deadlineMs: 800,
+      });
+      return (await fileRows()).filter((row): row is CrossingRecord => row.kind === 'crossing' && row.via === 'hook').at(-1);
+    };
+
+    it('reads a session started at the repository root as no newer than the session the replay saw', async () => {
+      const repo = await repoWithSession('');
+      expect((await hookIn(repo, 'sess1'))?.novelty).toBe('none');
+      // Another session in the same repository: new to the session, not to the repository.
+      expect((await hookIn(repo, 'sess2'))?.novelty).toBe('session');
+    });
+
+    it('reads the repository as new when the replayed session started in a subfolder of it (the limit gate.md states)', async () => {
+      const repo = await repoWithSession(join('packages', 'app'));
+      expect((await hookIn(repo, 'sess2'))?.novelty).toBe('repository');
+    });
   });
 });
