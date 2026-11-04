@@ -5,7 +5,7 @@ import { createHash } from 'node:crypto';
 import { ACTION_TABLES, actionOf, mcpOf } from './actions.js';
 import { utcDay } from './frame.js';
 import { LITERAL, publicModel, publicVersion } from './public-vocabulary.js';
-import { recall, type RecallQuery, type RecallResult } from './query.js';
+import { recall, recallRows, type RecallQuery, type RecallResult } from './query.js';
 import { contentHash, FAMILIES, type Family } from './read.js';
 import { namedByPrefix, resolveReads, type CurrentPool } from './recall-pool.js';
 import { makeRecall, type Recall, type RecallForm, type RecallQueryObject, type RecallSlice } from './recall-object.js';
@@ -392,16 +392,15 @@ const frameOfSession = (store: Store, sid: string | null, day: string | null): F
 export const pull = (store: Store, input: PullInput, context: PullContext): PullResult => {
   const at = new Date(context.now).toISOString();
   const legacy = isClosed(input) ? undefined : recall(store, input, context.now, undefined, context.redactDomains);
-  const sigs = new Set(legacy?.matches.map((match) => match.sig));
   const { current } = context;
   const day = utcDay(at);
   const frame = context.frame ?? frameOfSession(store, context.sid, day);
   const asker: RecallAsker = frame ?? { harness: null, harnessVersion: null, model: null, day };
-  const legacyReads = (): RecallRead[] => {
-    const found = recoveryReads(store, (error) => sigs.has(error.sig)).slice(0, ANSWER_LIMIT);
+  const legacyReads = (query: RecallQuery): RecallRead[] => {
+    const found = recoveryReads(store, recallRows(store, query, context.now, context.redactDomains).keep).slice(0, ANSWER_LIMIT);
     return current === undefined ? found : resolveReads(found, current.reads);
   };
-  const reads = isClosed(input) ? answerQuery(store, input, context.now, current) : legacyReads();
+  const reads = isClosed(input) ? answerQuery(store, input, context.now, current) : legacyReads(input);
   const { rendered, names } = renderAnswer(reads, asker);
   const made = makeRecall({
     sid: context.sid,
