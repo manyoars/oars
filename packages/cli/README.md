@@ -170,6 +170,16 @@ Install merges: existing hooks (a Stop hook that rotates sessions, say) stay, ev
 
 `oars sessions hook uninstall --scope user` (or the scope you installed); `oars sessions hook install --schedule off`; delete the store folder `<config>/oars/sessions/` (observations, skeletons, state, the hook index, `hook-calls.jsonl`, and `raw/`, which holds the unredacted transcripts). `gold sample` also writes its prompt file and sidecar to `~/.claude/session-commons/review/` (or `$CLAUDE_CONFIG_DIR`, or your `--out-dir`); delete those too. Nothing else is created. `cleanupPeriodDays` stays at the value install set unless you change it.
 
+### Gate: what your agents picked
+
+```
+oars gate replay --allow ~/work/app    # find installs, fetch-and-runs, MCP servers, and skills in logs on disk
+oars gate replay --registry-state      # also ask npm or pip what the registry holds (off by default)
+oars gate report                       # counts from the last replay, and what replay cannot see
+```
+
+Replay is local and read-only; it writes `crossings.jsonl` into the sessions store and nothing else. It records picks and does not judge them. See `docs/gate.md` in the repository.
+
 ## The `--json` contract
 
 With `--json`, stdout carries exactly one JSON document and a success exits 0.

@@ -1,0 +1,62 @@
+# Gate: replay and report
+
+`oars gate replay` finds every package, MCP server, and skill your agents picked in session logs already on your disk, and `oars gate report` counts them. It records the pick. It is capture first and not a security product: it blocks nothing, installs nothing into your hooks, and calls nothing a verdict.
+
+```
+oars gate replay --allow ~/work/app          # writes crossings.jsonl into the sessions store
+oars gate replay                             # no --allow: the allowlist a deposit saved
+oars gate replay --allow app --registry-state   # also ask the package manager what the registry holds
+oars gate report                             # counts from the last replay, and what replay cannot see
+```
+
+## What a crossing is
+
+A tool call that takes something from outside the repository into the agent's session, named by the closed vocabulary in `packages/cli/src/gate/checks.ts`. The same code is what a later hook calls on a live tool call, so replay and a hook agree.
+
+| Matcher | Class | Forms |
+|---------|-------|-------|
+| `Bash` (and `PowerShell`, since the corpus this was built on runs on Windows) | `npm-package`, `python-package` | `install`, `url-install` (a git or tarball URL), `fetch-and-run` (`npx`, `bunx`, `pnpm dlx`, `uvx`, `pipx run`), `url-fetch-and-run` |
+| `mcp__.*` | `mcp-server` | `mcp-call` |
+| `Skill` | `skill` | `skill-call` |
+
+A lockfile-only install (`npm ci`, `pip install -r`, a bare `npm install`) names nothing and crosses nothing; it is counted under "replay cannot see" by shape. So is a pipe into a shell and a command behind `xargs`.
+
+## The source: raw transcripts, not the store
+
+Replay reads raw transcripts under the allowlist, from the harness's folder and the store's `raw/` archive, one copy per relative path, skipping Cursor. The store loses what the checks need: form (`pulls` has no install or fetch-and-run, and is per call, not per command), flags and quoted words, permission mode, Skill input, and the earlier text "where the name came from" needs. Reading raw costs parse time, and raw is class `L`, so nothing of class `L` goes in the record: no path, working directory, or command text.
+
+## `crossings.jsonl`
+
+Written beside `observations.jsonl`, atomically, and the only file replay writes. One `run` row (the books), then `registry` rows (the cache of `--registry-state`), then one `crossing` row per crossing in time order. Classes are those of `docs/sessions-store.md`.
+
+| Field | Class | Values |
+|-------|-------|--------|
+| `kind`, `v`, `day` | P | row kind, gate version, UTC day |
+| `class`, `form`, `program`, `versionForm`, `statusReports` | P | closed vocabulary; `program` is `npm`, `pnpm`, `yarn`, `bun`, `npx`, `pip`, `python -m pip`, `uv`, `uvx`, `pipx`; `versionForm` is `pinned`, `range`, `tag`, `url`, `unstated` |
+| `origin` | P | where the name came from: `prompt`, `repo-file`, `web`, `tool-output`, `skill`, `harness`, or `none-seen` |
+| `novelty` | P | `fleet` (first time anywhere in the replay), `repository`, `session`, `none` |
+| `decidedBy` | P | `operator` when the name appears in a main-line prompt, else `agent` |
+| `permission` | P | the harness's permission mode, or `other` or `unknown` |
+| `status` | P | `ok`, `error`, `refused`, `none` |
+| `next` | P | `proceeded`, `retried`, `routed-around`, `changed-name`, `stopped`, `no-result` (ten calls after a failure) |
+| `removedLater`, `depth`, `miss` | P | a later removal in the same repository, `main` or `subagent`, and `not-found` when the result said the name did not exist |
+| `againstLatest`, `registryState`, `registryAge` | P | read only with `--registry-state`; otherwise `not-read` |
+| `arm`, `lineShown` | P | always `none` under replay: nothing is shown to an agent |
+| `session`, `agent`, `toolUseId`, `ts` | A | join ids and a finer time |
+| `name`, `version` | A | what the command stated. A package or server name can identify private work, as `pulls` already says |
+
+`run` row: counts of transcripts, unreadable files, torn lines, calls, and crossings, the commands it could not name by shape, and whether the registry was read (class P).
+
+There is no repository key in the record. Repository novelty is computed in memory during replay; a hook that wants it from this file will need a salted key.
+
+## Registry state
+
+Off by default. With `--registry-state`, replay asks the package manager the operator already has (`npm view`, `pip index versions`), in the call's own folder, so the answer comes through the registry that manager would contact. Answers are cached in the file. This is the one option that goes beyond local reads: the managers keep their own caches, so it writes outside `crossings.jsonl`, and it answers as of the run, not as of each crossing. A replay without it prints "registry state not read" and every registry field reads `not-read`; it never guesses.
+
+## What replay cannot see
+
+A command run from a script, alias, or Makefile; a manifest edit a later bare install picked up; what a person saw or approved; an MCP server started and never called; folders off the allowlist; logs the harness already cleaned up. `oars gate report` ends with this list and the counts by shape.
+
+## Not in this release
+
+Pool reads, sign-in, deposit prompts, blocking, and any hook. `install`, the policy file, and notes come in the next brief.
