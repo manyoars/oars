@@ -160,9 +160,12 @@ const merged = (live: CrossingRecord, replayed: CrossingRecord): CrossingRecord 
   novelty: pick('novelty', live, replayed),
   // One reading, so all three come from one side: the registry as it stood at the crossing when the hook read it, else the replay's. Picked field by field, a hook's
   // `unreachable` (with `unknown` beside it) would take a later replay's `not-latest`, a row that contradicts itself.
-  ...(live.registryState === NOT_READ
+  // A local bin run was never asked of the registry (docs/gate.md), so a replay that saw no bin and asked cannot give it a reading.
+  ...(live.registryState === NOT_READ && live.form !== 'local-bin-run'
     ? { againstLatest: replayed.againstLatest, registryState: replayed.registryState, registryAge: replayed.registryAge }
-    : { againstLatest: live.againstLatest, registryState: live.registryState, registryAge: live.registryAge }),
+    : live.form === 'local-bin-run'
+      ? { againstLatest: NOT_READ, registryState: NOT_READ, registryAge: NOT_READ }
+      : { againstLatest: live.againstLatest, registryState: live.registryState, registryAge: live.registryAge }),
   arm: pick('arm', live, replayed),
   lineShown: pick('lineShown', live, replayed),
 });

@@ -97,6 +97,16 @@ describe('one row per crossing', () => {
     expect(partial).toMatchObject({ registryState: 'found', againstLatest: 'latest', registryAge: 'unknown' });
   });
 
+  it('keeps a local bin run unasked, even when the replay saw no bin and asked the registry', () => {
+    // The hook saw the bin and asked nothing; a later replay, with the bin gone, read a fetch and asked. The row says what the hook read, so it was never asked of the registry.
+    const replayed = crossing({ form: 'fetch-and-run', registryState: 'found', againstLatest: 'not-latest', registryAge: 'under-7-days' });
+    const [one] = mergeCrossings([replayed], [hookRow({ form: 'local-bin-run' })]);
+    expect(one).toMatchObject({ form: 'local-bin-run', registryState: 'not-read', againstLatest: 'not-read', registryAge: 'not-read' });
+    // A fetch the hook read keeps taking the replay's reading when the hook asked nothing.
+    const [fetched] = mergeCrossings([replayed], [hookRow({ form: 'fetch-and-run' })]);
+    expect(fetched).toMatchObject({ form: 'fetch-and-run', registryState: 'found' });
+  });
+
   it('leaves a second replay refreshing the transcript fields only', () => {
     const first = mergeCrossings([crossing({ origin: 'web' })], [hookRow({ registryState: 'found' })]);
     const second = mergeCrossings([crossing({ origin: 'prompt', registryState: 'not-read' })], first);

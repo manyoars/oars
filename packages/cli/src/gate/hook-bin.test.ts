@@ -13,10 +13,10 @@ afterEach(() => {
   for (const folder of made.splice(0)) rmSync(folder, { recursive: true, force: true });
 });
 
-const runHook = (input: string): { status: number | null; stdout: string; home: string } => {
+const runHook = (input: string, extra: readonly string[] = []): { status: number | null; stdout: string; home: string } => {
   const home = mkdtempSync(join(tmpdir(), 'oars-gate-bin-'));
   made.push(home);
-  const result = spawnSync(process.execPath, [bin, 'gate', 'hook'], {
+  const result = spawnSync(process.execPath, [bin, 'gate', 'hook', ...extra], {
     input,
     encoding: 'utf8',
     timeout: 30_000,
@@ -36,6 +36,14 @@ describe.skipIf(!existsSync(bin))('the built oars gate hook', () => {
       expect(result.stdout).toBe('');
       expect(crossingFiles(result.home)).toEqual([]);
     }
+  });
+
+  it('shows the command description for `gate hook --help`, as it does for any other command', () => {
+    // Only the bare `oars gate hook` goes to the hook entry; an argument sends it to the full CLI, whose help names the hook.
+    const result = runHook('', ['--help']);
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain('PreToolUse hook');
+    expect(crossingFiles(result.home)).toEqual([]);
   });
 
   it('records one row for a crossing, still with empty stdout and exit 0', () => {
