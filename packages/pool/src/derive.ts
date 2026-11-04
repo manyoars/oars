@@ -215,7 +215,6 @@ export const bundleOf = (harnessVersion: string, byAccount: readonly (readonly S
     format: BUNDLE_FORMAT,
     harnessVersion,
     vocabVersion: VOCAB_VERSION,
-    capped: null,
     asOf: { pool: pool.version, day: pool.lastDay },
     cells,
     motifs: set.motifs.filter((motif) => held.has(motif.motifId)),

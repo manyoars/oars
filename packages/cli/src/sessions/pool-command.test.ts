@@ -328,7 +328,7 @@ describe('no harness token is ever read', () => {
     expect(await scene.cli('pool', 'login', '--provider', 'github', '--server', POOL)).toBe(ExitCode.OK);
     openPool(scene);
     expect(await scene.cli('pool', 'deposit', '--server', POOL)).toBe(ExitCode.OK);
-    on(scene, 'get', '/bundle/2.1.314/0', () => HttpResponse.json({ error: 'read_cap', message: 'capped' }, { status: 403 }));
+    on(scene, 'get', '/bundle/2.1.314/0', () => HttpResponse.json({ error: 'fetch_cap', message: 'capped' }, { status: 429 }));
     await scene.cli('pool', 'pull', '--harness-version', '2.1.314', '--server', POOL);
     expect(scene.seen.length).toBeGreaterThan(3);
     expect(scene.sent()).not.toContain(HARNESS_SECRET);
@@ -497,7 +497,7 @@ describe('oars pool deposit', () => {
 });
 
 describe('oars pool pull', () => {
-  const sliceBody = (stack: string, capped: object | null = null): string => JSON.stringify({ format: 1, harnessVersion: stack, vocabVersion: '0', capped, asOf: { pool: 'p' }, cells: [{}], motifs: [], reads: [{}, {}], strata: [] });
+  const bundleBody = (version: string): string => JSON.stringify({ format: 1, harnessVersion: version, vocabVersion: '0', asOf: { pool: 'p' }, cells: [{}], motifs: [], reads: [{}, {}], strata: [] });
 
   const signedScene = async (): Promise<{ scene: Scene; sign: (text: string) => Promise<string> }> => {
     const scene = setting();
@@ -513,29 +513,28 @@ describe('oars pool pull', () => {
 
   it('verifies the bundle against the pinned key and keeps it in its signed form', async () => {
     const { scene, sign } = await signedScene();
-    const payload = sliceBody('2.1.314');
+    const payload = bundleBody('2.1.314');
     const signature = await sign(payload);
     on(scene, 'get', '/bundle/2.1.314/0', () => HttpResponse.json({ payload, signature }));
     expect(await scene.cli('pool', 'pull', '--harness-version', '2.1.314', '--server', POOL, '--json')).toBe(ExitCode.OK);
     const answer = scene.document();
-    expect(answer).toMatchObject({ ok: true, harnessVersion: '2.1.314', reads: 2, cells: 1, motifs: 0, capped: null });
+    expect(answer).toMatchObject({ ok: true, harnessVersion: '2.1.314', reads: 2, cells: 1, motifs: 0 });
     expect(scene.seen[0]?.headers).toContain('a-pool-token');
     expect(JSON.parse(readFileSync(String(at(answer, 'file')), 'utf8'))).toEqual({ payload, signature });
   });
 
-  it('names the version, and says when an account was capped', async () => {
+  it('names the version it pulled', async () => {
     const { scene, sign } = await signedScene();
-    const payload = sliceBody('2.1.9', { limit: 50, served: 2 });
+    const payload = bundleBody('2.1.9');
     const signature = await sign(payload);
     on(scene, 'get', '/bundle/2.1.9/0', () => HttpResponse.json({ payload, signature }));
     expect(await scene.cli('pool', 'pull', '--harness-version', '2.1.9', '--server', POOL)).toBe(ExitCode.OK);
     expect(scene.h.out.join('')).toContain('Pulled 2.1.9: 2 reads');
-    expect(scene.h.out.join('')).toContain('Capped: 2 of 50 reads');
   });
 
   it('refuses a tampered bundle and a bundle of another harness version, and keeps neither', async () => {
     const { scene, sign } = await signedScene();
-    const payload = sliceBody('2.1.314');
+    const payload = bundleBody('2.1.314');
     const signature = await sign(payload);
     on(scene, 'get', '/bundle/2.1.314/0', () => HttpResponse.json({ payload: payload.replace('"cells":[{}]', '"cells":[{},{}]'), signature }));
     expect(await scene.cli('pool', 'pull', '--harness-version', '2.1.314', '--server', POOL, '--json')).toBe(ExitCode.INVALID);
@@ -552,9 +551,9 @@ describe('oars pool pull', () => {
     expect(await scene.cli('pool', 'pull', '--harness-version', '../secret', '--server', POOL)).toBe(ExitCode.USAGE);
     expect(scene.seen).toEqual([]);
 
-    on(scene, 'get', '/bundle/2.1.314/0', () => HttpResponse.json({ error: 'read_cap', message: 'An account with no deposit is served 50 reads.' }, { status: 403 }));
-    expect(await scene.cli('pool', 'pull', '--harness-version', '2.1.314', '--server', POOL, '--json')).toBe(ExitCode.AUTH);
-    expect(scene.document()).toMatchObject({ problem: { code: 'read_cap' } });
+    on(scene, 'get', '/bundle/2.1.314/0', () => HttpResponse.json({ error: 'fetch_cap', message: 'An account without access may fetch 1 per ISO week.' }, { status: 429 }));
+    expect(await scene.cli('pool', 'pull', '--harness-version', '2.1.314', '--server', POOL, '--json')).toBe(ExitCode.RATE_LIMITED);
+    expect(scene.document()).toMatchObject({ problem: { code: 'fetch_cap' } });
 
     const anon = setting();
     expect(await anon.cli('pool', 'pull', '--harness-version', '2.1.314', '--server', POOL)).toBe(ExitCode.AUTH);

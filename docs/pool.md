@@ -18,8 +18,9 @@ Every command takes the server from `--server <url>` or `OARS_POOL_URL`. There i
 - **Closed vocabulary.** A skeleton holding an unknown field or a value outside the vocabulary gets 422 `closed_vocabulary` with the field named, and nothing is stored. What is stored is the parsed skeleton, not the text that came in.
 - **Pseudonymous accounts.** The provider's user id is hashed under `PSEUDONYM_KEY`, which the database never holds. No email, login, or provider id is stored.
 - **Three accounts to a read.** A read is served only at 3 or more clusters, and a cluster is an account, so one account's many sessions count once. The floor applies to the read's aggregate: its `clusters` is the distinct accounts across all the cells it cites, so three accounts on three different days serve a read even though each day's cell holds one. A cell served on its own needs 3 accounts in that cell.
-- **Deposit or capped access.** An account with a deposit pulls on an ongoing basis. One without is served up to `READ_CAP` reads (default 50), and past that gets 403 `read_cap` before the pool is read.
-- **A deposit holds something.** A skeleton with no prompt and no tool gets 422 `closed_vocabulary` naming `transcripts`, since a deposit is what lifts the read cap. A forged skeleton that holds invented prompts still counts.
+- **A fetch cap.** Every account may fetch `FETCH_CAP` bundles (default 1) per ISO week, counted per account and not per harness version. Past it the pool answers 429 `fetch_cap` with `Retry-After` in seconds to the next Monday 00:00 UTC, before it reads the pool. The count is one atomic statement, and a count from an earlier week is dropped. Access that lifts the cap for an account that has deposited is the next change.
+- **A 304 spends nothing.** A 200 carries an `ETag` that names the code, the floor, the version asked for, and a generation of the pool's rows (a trigger on `deposits` moves it in the same write as a change). An `If-None-Match` that holds it gets 304 with no body, before the spend and without reading the pool, so a conditional request can neither use up a fetch nor force a parse. A weakened `W/` tag matches.
+- **A deposit holds something.** A skeleton with no prompt and no tool gets 422 `closed_vocabulary` naming `transcripts`, since a deposit is what lifts the fetch cap. A forged skeleton that holds invented prompts still counts.
 - **Deposits per account.** Past `MAX_DEPOSITS_PER_ACCOUNT` rows (default 20,000) a new session gets 403 `deposit_limit`, and so does any deposit that would take the account past `MAX_DEPOSIT_BYTES_PER_ACCOUNT` stored bytes (default 64 MB). A redeposit of a held session replaces it if the account still fits. Every pull parses every row, so these bound one account's share of a pull's cost. They do not bound the pool: a pull still loads every matching row across all accounts at once.
 - **A frame's day is real and not ahead of the server.** A day that is not a calendar date, or is later than tomorrow UTC, gets 422 `closed_vocabulary` naming the field, since the latest day sets a bundle's `asOf`.
 
@@ -44,7 +45,7 @@ All of these are set at the deploy, never in `wrangler.jsonc`, which holds no ac
 | `SLICE_SIGNING_KEY` | An Ed25519 private key as a JWK. Clients pin the public half, so changing it fails their next login. |
 | `GITHUB_CLIENT_ID`, `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | The OAuth values. |
 | `COVENANT_VERSION` | The covenant in force. Leave it unset until the covenant is published. |
-| `READ_CAP` | Optional. Reads served to an account with no deposit. |
+| `FETCH_CAP` | Optional. Bundles one account may fetch per ISO week; a value that is not a positive whole number is 1. |
 | `MAX_DEPOSITS_PER_ACCOUNT` | Optional. Rows one account may hold. |
 | `MAX_DEPOSIT_BYTES_PER_ACCOUNT` | Optional. Stored bytes one account may hold. |
 
