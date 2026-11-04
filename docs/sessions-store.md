@@ -83,13 +83,13 @@ moves to match, so `next` and `editFollowed` read the same calls as a current ca
 adds `frame` and `frameId` to the session and prompt records and `steps` to the tool record (see "Frames and steps"), and moves `tool`, `tools`, and a shell-form
 `target` from class P to class A; a version-8 store's next deposit captures every transcript again from the harness or `raw/`. Version 10 (CAPTURE 10, t768) gives a turn opened by a slash command or a
 skill a `user-prompt` record (see "What opens a prompt"), adds `opened` to that record, and moves `skills` from class P to class A, since a skill's name can be private. Prompt
-`index` values move in a session that had such a turn, so a version-9 store's next deposit captures every transcript again from the harness or `raw/`. What an open does with an older store:
+`index` values move in a session that had such a turn, so a version-9 store's next deposit captures every transcript again from the harness or `raw/`. Version 11 (CAPTURE 11) redacts the server part of an MCP tool name in `tool`, the session's `tools`, an error line's `tool`, and the skeleton's tool names; reads package-manager and shell forms more exactly, so `pulls`, `segments`, and `commits` change; and opens no prompt from a hand-typed line that merely starts with an injected tag's name without closing it (it reads as typed). A version-10 store's next deposit captures every transcript again from the harness or `raw/`. What an open does with an older store:
 
 | Log holds | Action on open | Action at the next deposit |
 |-----------|----------------|----------------------------|
-| `cv` 10, `v` current | read | skip unchanged files |
-| `cv` 5 to 9 and the transcript is on disk or in `raw/` | read; a replayed `tool` record is folded (see above); `verify` counts it `cv-behind`, and `verify --strict` exits 4 on it | capture again at `rev + 1` |
-| `cv` 5 to 9, neither the harness nor `raw/` has the transcript | read; a replayed `tool` record is folded (see above); `verify` counts it `cv-frozen` (not `cv-behind`), and `verify --strict` does not fail on it | none |
+| `cv` 11, `v` current | read | skip unchanged files |
+| `cv` 5 to 10 and the transcript is on disk or in `raw/` | read; a replayed `tool` record is folded (see above); `verify` counts it `cv-behind`, and `verify --strict` exits 4 on it | capture again at `rev + 1` |
+| `cv` 5 to 10, neither the harness nor `raw/` has the transcript | read; a replayed `tool` record is folded (see above); `verify` counts it `cv-frozen` (not `cv-behind`), and `verify --strict` does not fail on it | none |
 | `cv` 3 or 4 (or a version-2 session) and the transcript is on disk or in `raw/` | read through the compatibility reader (for `cv` 3, a field version 4 added reads as null, empty, or `unknown`; the prompt half of `contextFingerprint`, before its `.`, reads as `promptFingerprint`, and `-` reads as null; the environment half is dropped); `verify` counts it `cv-behind`, and `verify --strict` exits 4 on it | capture again at `rev + 1`; derived records regenerate under the current `EXTRACTOR_VERSION` on every open |
 | `cv` 3 or 4, neither the harness nor `raw/` has the transcript (for a Cursor session, Cursor no longer lists the composer) | read through the compatibility reader; `verify` counts it `cv-frozen` (not `cv-behind`), and `verify --strict` does not fail on it | none |
 | `derived.json` `v` older than `EXTRACTOR_VERSION` | read | rewritten at the next deposit (no reader depends on it today); derived records are regenerated from the log on every read |
