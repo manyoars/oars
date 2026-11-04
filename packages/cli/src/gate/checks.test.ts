@@ -1,11 +1,31 @@
 import { describe, expect, it } from 'vitest';
 import { makeRedactor } from '../sessions/redact.js';
-import { checkCall, CROSSING_CLASSES, CROSSING_FORMS, UNREAD_SHAPES, type VersionForm } from './checks.js';
+import { shellCommands } from '../sessions/extract.js';
+import { checkCall, readWords, CROSSING_CLASSES, CROSSING_FORMS, UNREAD_SHAPES, type VersionForm } from './checks.js';
 
 const redact = makeRedactor();
 const bash = (command: string) => checkCall({ tool: 'Bash', input: { command } }, redact);
 /** `class form name version-form`, the part of a crossing the table reads. */
 const short = (command: string): string[] => bash(command).crossings.map((c) => `${c.class} ${c.form} ${c.name} ${c.versionForm}`);
+
+const words = (command: string, limit?: number) => {
+  const [held] = shellCommands(command, redact);
+  if (held === undefined) throw new Error('no command');
+  const read = readWords(held, 'npm-package', limit);
+  return { names: read.names, flags: Object.fromEntries(read.flags), bare: [...read.bare] };
+};
+
+describe('readWords', () => {
+  it.each<[string, number | undefined, string[], Record<string, string[]>, string[]]>([
+    ['npx tsc --noEmit -p tsconfig.json', 1, ['tsc', '--noEmit', '-p', 'tsconfig.json'], {}, []],
+    ['npx -y -p a tsc -p b --x', 1, ['tsc', '-p', 'b', '--x'], { '-p': ['a'] }, ['-y']],
+    ['npm exec -w web foo bar --no', 2, ['exec', 'foo', 'bar', '--no'], { '-w': ['web'] }, []],
+    ['npm install -D a --save-prefix x b', undefined, ['install', 'a', 'b'], { '--save-prefix': ['x'] }, ['-D']],
+    ['npx foo', 0, ['foo'], {}, []],
+  ])('%s, stopping after %s names', (command, limit, names, flags, bare) => {
+    expect(words(command, limit)).toEqual({ names, flags, bare });
+  });
+});
 
 describe('checkCall on a shell command', () => {
   it.each<[string, string[]]>([
@@ -65,6 +85,27 @@ describe('checkCall on a shell command', () => {
     ['npx tsc -p tsconfig.json --noEmit', ['npm-package fetch-and-run tsc unstated']],
     ['npx tsc -p .', ['npm-package fetch-and-run tsc unstated']],
     ['npx vite --offline', ['npm-package fetch-and-run vite unstated']],
+    // In any order: no word after the first positional is the runner's flag.
+    ['npx tsc --noEmit -p tsconfig.json', ['npm-package fetch-and-run tsc unstated']],
+    ['npx tsc --noEmit -p .', ['npm-package fetch-and-run tsc unstated']],
+    ['npx eslint src --package x', ['npm-package fetch-and-run eslint unstated']],
+    ['uvx ruff check --from other', ['python-package fetch-and-run ruff unstated']],
+    ['pipx run foo bar --spec other', ['python-package fetch-and-run foo unstated']],
+    ['pnpm dlx foo bar -p x', ['npm-package fetch-and-run foo unstated']],
+    ['npx vite build --offline', ['npm-package fetch-and-run vite unstated']],
+    ['npm exec foo bar --no', ['npm-package fetch-and-run foo unstated']],
+    ['uvx ruff check . --with extra', ['python-package fetch-and-run ruff unstated']],
+    // The runner's own flags before the first positional still count.
+    ['npx -y --package=typescript tsc --noEmit', ['npm-package fetch-and-run typescript unstated']],
+    // `yarn workspace <name>` is two words the count does not spend on the runner.
+    ['yarn workspace web dlx foo -p tsconfig.json', ['npm-package fetch-and-run foo unstated']],
+    ['yarn workspace web dlx -p a b', ['npm-package fetch-and-run a unstated']],
+    // The source of `npx skills add` is the first word after `add` that is not a flag or a flag's value.
+    ['npx skills add -s one owner/repo', ['skill install owner/repo unstated']],
+    ['npx skills add -a claude owner/repo', ['skill install owner/repo unstated']],
+    ['npx skills add -g owner/repo', ['skill install owner/repo unstated']],
+    ['npx skills add --skill one --agent claude owner/repo', ['skill install owner/repo unstated']],
+    ['npx skills add owner/repo -s one', ['skill install owner/repo unstated']],
     // `-s` is silent for the npm family and `-d` is dev for pdm and pipenv: neither takes a value.
     ['npm install -s axios', ['npm-package install axios unstated']],
     ['pnpm add -s zod', ['npm-package install zod unstated']],

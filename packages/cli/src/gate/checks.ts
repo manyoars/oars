@@ -114,7 +114,7 @@ const TOOLS: ReadonlyMap<string, Tool> = new Map<string, Tool>([
 
 /** A flag here owns the next word, which is therefore not a package name. */
 const VALUE_FLAGS: Readonly<Record<Family, ReadonlySet<string>>> = {
-  'npm-package': new Set(['-w', '--workspace', '--registry', '--prefix', '--filter', '-F', '-C', '--dir', '--cache', '--tag', '--cwd', '--loglevel', '--userconfig', '-p', '--package', '-c', '--call', '--omit', '--include', '--save-prefix', '--skill']),
+  'npm-package': new Set(['-w', '--workspace', '--registry', '--prefix', '--filter', '-F', '-C', '--dir', '--cache', '--tag', '--cwd', '--loglevel', '--userconfig', '-p', '--package', '-c', '--call', '--omit', '--include', '--save-prefix']),
   'python-package': new Set(['-r', '--requirement', '-e', '--editable', '-c', '--constraint', '-i', '--index-url', '--extra-index-url', '--index', '--default-index', '-t', '--target', '-f', '--find-links', '--python', '-p', '--from', '--with', '--with-editable', '--with-requirements', '--prefix', '--root', '--group', '--extra', '--only-binary', '--no-binary', '--trusted-host', '--proxy', '--cache-dir', '--timeout', '--suffix', '--pip-args', '--spec', '--channel', '-n', '--name', '-G']),
 };
 
@@ -214,14 +214,17 @@ const creatorSpec = (text: string): string => {
   return `${scope}/${rest === undefined ? 'create' : `create-${rest}`}${suffix}`;
 };
 
-interface Words {
+export interface Words {
   names: string[];
   flags: Map<string, string[]>;
   bare: Set<string>;
 }
 
-/** `positionals`, when given, is how many names a runner's own words take; everything after the last is the fetched program's, flags included. */
-const readWords = (command: ShellCommand, family: Family, positionals?: number): Words => {
+/**
+ * `limit` is how many names a runner's own words take. Once that many are read, every later word is a name, whatever it looks like: it
+ * belongs to the fetched program, which may take `-p` or `--package` for its own. Flags before the limit are the runner's.
+ */
+export const readWords = (command: ShellCommand, family: Family, limit: number = Number.POSITIVE_INFINITY): Words => {
   const names: string[] = [];
   const flags = new Map<string, string[]>();
   const bare = new Set<string>();
@@ -230,7 +233,7 @@ const readWords = (command: ShellCommand, family: Family, positionals?: number):
   };
   for (let at = 0; at < command.args.length; at += 1) {
     const { text, quoted } = command.args[at] ?? { text: '', quoted: false };
-    if (quoted || !text.startsWith('-') || names.length === positionals) names.push(text);
+    if (quoted || !text.startsWith('-') || names.length >= limit) names.push(text);
     else if (text.includes('=')) put(text.slice(0, text.indexOf('=')), text.slice(text.indexOf('=') + 1));
     // pnpm's `-w` is `--workspace-root`, where npm's takes a workspace name.
     else if (VALUE_FLAGS[family].has(text) && !(command.program === 'pnpm' && text === '-w')) {
@@ -295,10 +298,24 @@ const addSpecs = (reading: Reading, family: Family, texts: readonly string[], ac
   }
 };
 
+/** `npx skills add` flags that take a value, so the word after one is not the source. */
+const SKILL_VALUE_FLAGS: ReadonlySet<string> = new Set(['-s', '--skill', '-a', '--agent']);
+
+/** The first word after `add` that is neither a flag nor a flag's value. */
+const skillSource = (words: readonly string[]): string | undefined => {
+  for (let at = 0; at < words.length; at += 1) {
+    const word = words[at] ?? '';
+    if (SKILL_VALUE_FLAGS.has(word)) at += 1;
+    else if (!word.startsWith('-')) return word;
+  }
+  return undefined;
+};
+
 const readRun = (reading: Reading, family: Family, words: Words, rest: readonly string[], command: ShellCommand): void => {
   if ([...NO_FETCH_FLAGS].some((flag) => words.bare.has(flag))) return;
-  const [first, sub, source] = rest;
-  if (first !== undefined && atVersion(first).name === 'skills' && sub === 'add' && source !== undefined) {
+  const [first, sub] = rest;
+  const source = sub === 'add' ? skillSource(rest.slice(2)) : undefined;
+  if (first !== undefined && atVersion(first).name === 'skills' && source !== undefined) {
     const spec = namesNothing(source) ?? (isUrl(source) ? urlSpec(source) : null);
     if (spec?.kind === 'unread') reading.unread.push(spec.shape);
     else if (!LOCAL_SPEC.test(source)) reading.crossings.push({ class: 'skill', form: 'install', name: spec?.name ?? source, version: null, versionForm: 'unstated', program: command.program, statusReports: command.read });
@@ -336,13 +353,15 @@ const readTool = (reading: Reading, tool: Tool, command: ShellCommand): void => 
     addSpecs(reading, family, allFlags(words, '--with'), 'run', command.program, command.read);
     return;
   }
-  // `yarn workspace <name> add x` is `yarn add x` run in that workspace.
-  if (command.program === 'yarn' && words.names[0] === 'workspace') words = { ...words, names: words.names.slice(2) };
+  // `yarn workspace <name> add x` is `yarn add x` run in that workspace: two words that are not the verb's.
+  const stripped = command.program === 'yarn' && words.names[0] === 'workspace' ? 2 : 0;
+  if (stripped > 0) words = { ...words, names: words.names.slice(stripped) };
   let verb = verbOf(tool.verbs, words.names);
   if (verb === null) return;
   // Past the runner's own word, the flags are the fetched program's: read again, with the rest left as names.
   if (verb.action === 'run') {
-    words = readWords(command, family, verb.length + 1);
+    const again = readWords(command, family, stripped + verb.length + 1);
+    words = { ...again, names: again.names.slice(stripped) };
     verb = verbOf(tool.verbs, words.names) ?? verb;
   }
   const toolForm = command.program === 'uvx' || (command.program === 'uv' && verb.path[0] === 'tool');
