@@ -176,7 +176,7 @@ export interface StepCounters {
   derived: StepCounts;
   /** The newest ok index's output: the recurring signatures and projects it holds. */
   indexed: StepCounts;
-  /** The newest ok verify's `out`: invariants checked and passed, `cv-behind` sessions, and stuck steps. */
+  /** The newest ok verify's `out`: invariants checked and passed, `cv-behind` sessions, sessions failing the raw audit (`merkle`), and stuck steps. */
   verify: StepCounts | null;
   recall: { queries: number; matches: number };
   /** Failed runs by `<step>@<ev>`. */

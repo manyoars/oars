@@ -169,7 +169,7 @@ export const sessionsMcp = async (deps: SessionsDeps): Promise<void> => {
   await serve(runtimeOf(deps), deps.now);
 };
 
-/** Names shown in the `verify` and `books` text; the `verify` document carries them all. */
+/** Names shown in the `verify` and `books` text; each `--json` document carries them all. */
 const SKIPPED_NAMES_SHOWN = 10;
 
 /** One line for the folders the allowlist leaves out (t776): the store holds nothing from them, and it says so rather than looking complete. */

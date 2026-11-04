@@ -57,5 +57,8 @@ describe('the scope listing of a folder off the allowlist', () => {
     const booked = await sessionsBooks({ sessions: staged.runtime, install: undefined, now: () => NOW }, { by: 'class', sinceDays: undefined });
     expect(opened.filter((path) => path.includes('omega-app'))).toEqual([]);
     expect(booked.document).toMatchObject({ scope: { folders: 1, transcripts: 0, names: ['omega-app'] } });
+    // The rows are filtered by --repo; the scope is not.
+    const scoped = await sessionsBooks({ sessions: staged.runtime, install: undefined, now: () => NOW }, { by: 'class', sinceDays: undefined, repo: 'proj' });
+    expect(scoped.document).toMatchObject({ scope: { folders: 1, transcripts: 0, names: ['omega-app'] } });
   });
 });
