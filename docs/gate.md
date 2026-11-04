@@ -17,13 +17,28 @@ A tool call that takes something from outside the repository into the agent's se
 |---------|-------|-------|
 | `Bash` (and `PowerShell`, since the corpus this was built on runs on Windows) | `npm-package`, `python-package` | `install`, `url-install` (a git or tarball URL), `fetch-and-run` (`npx`, `bunx`, `pnpm dlx`, `uvx`, `pipx run`), `url-fetch-and-run` |
 | `mcp__.*` | `mcp-server` | `mcp-call` |
-| `Skill`, and `Bash` for `npx skills add <source>` | `skill` | `skill-call`, `install` (the source is the first word after `add` that is not a flag or the value of `-s`, `--skill`, `-a`, or `--agent`, as written minus any query; a variable or a path names nothing; a `file:` or `git+file:` spec is a path, so it is counted under "replay cannot see" as `local-path` and no part of it is kept) |
+| `Skill`, and `Bash` for `npx skills add <source>` | `skill` | `skill-call`, `install` (the source is the first word after `add` that is not a flag or the value of `-s`, `--skill`, `-a`, or `--agent`, as written minus any query; a variable or a path names nothing; a `file:`, `git+file:`, `link:`, `workspace:`, or `portal:` spec is a path, with or without a package name before it (`foo@file:...`, `foo @ file:...`), so it is counted under "replay cannot see" as `local-path` and no part of it is kept) |
 
 A lockfile-only install (`npm ci`, `pip install -r`, a bare `npm install`) names nothing and crosses nothing; it is counted under "replay cannot see" by shape. So is a pipe into a shell and a command behind `xargs`.
 
 ## The source: raw transcripts, not the store
 
 Replay reads raw transcripts under the allowlist, from the harness's folder and the store's `raw/` archive, one copy per relative path, skipping Cursor. The store loses what the checks need: form (`pulls` has no install or fetch-and-run, and is per call, not per command), flags and quoted words, permission mode, Skill input, and the earlier text "where the name came from" needs. Reading raw costs parse time, and raw is class `L`, so nothing of class `L` goes in the record: no path, working directory, or command text.
+
+## What a name may be
+
+Every name passes one function, `admitName` in `packages/cli/src/gate/checks.ts`, before it can reach `crossings.jsonl`, a registry question, or a removal match. A name outside its family's grammar is never written and never asked; it is counted under "replay cannot see" by the shape it has: `local-path` when it holds a path separator, a scheme, or an `@` past the scope; `masked-name` or `variable-name` when it is one; `unreadable-name` otherwise (a space, a `?`, a leading dot or dash, an empty word, or a length over the limit).
+
+| Class | Grammar |
+|-------|---------|
+| `npm-package` | npm's: `name` or `@scope/name`, letters, digits, `.`, `_`, `~`, `-`, at most 214 characters |
+| `python-package` | PEP 508's project name: letters, digits, `.`, `_`, `-`, starting and ending with a letter or digit |
+| `mcp-server` | the harness's server segment: letters, digits, `_`, `.`, `-`, at most 128 characters |
+| `skill` (`skill-call`) | letters, digits, `_`, `.`, `-`, and `:` for a plugin's prefix, at most 128 characters |
+| `skill` (`install`) | `owner/repo`, optionally into a folder, or a URL |
+| a URL form (`url-install`, `url-fetch-and-run`) | an `http`, `https`, `ssh`, or `git` URL (host, port, path), a hosted shorthand (`github:org/repo`), `org/repo`, or `host:path`. Credentials, query, and fragment are removed first; a mask the redactor placed stays |
+
+A version that is not a URL's ref is also refused when it holds a slash, a backslash, `:`, or `@`; the whole crossing is then counted as `local-path`.
 
 ## `crossings.jsonl`
 
