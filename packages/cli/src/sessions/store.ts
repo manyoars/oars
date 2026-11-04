@@ -671,6 +671,17 @@ interface LockOptions {
   holdMs?: number;
 }
 
+/** What `withLock` gives its work: whether this run's lock file is still the one standing. */
+export type LockHold = () => Promise<boolean>;
+
+/** The store lock was broken and taken by another run while this one worked: it writes nothing more. */
+export class StoreLockLostError extends CliError {
+  constructor() {
+    super('This run lost the store lock to another deposit while it worked, so it wrote no more; its captures are redone by the next deposit. Rerun it.', ExitCode.UNEXPECTED, 'unexpected');
+    this.name = 'StoreLockLostError';
+  }
+}
+
 const sleep = (ms: number): Promise<void> => new Promise((done) => setTimeout(done, ms));
 
 const isCode = (error: unknown, ...codes: string[]): boolean => error instanceof Error && 'code' in error && typeof error.code === 'string' && codes.includes(error.code);
@@ -717,7 +728,7 @@ const breakStale = async (lock: string, staleMs: number): Promise<void> => {
  * Runs `work` as the only writer of `state.json` and the observations file. The SessionEnd hooks of parallel sessions and the nightly
  * run each read, extract, and rewrite `state.json`; without this one's `files` and `allow` entries are lost to another's write.
  */
-export const withLock = async <T>(storeDir: string, work: () => Promise<T>, options: LockOptions = { waitMs: 10_000, staleMs: 600_000 }): Promise<T> => {
+export const withLock = async <T>(storeDir: string, work: (held: LockHold) => Promise<T>, options: LockOptions = { waitMs: 10_000, staleMs: 600_000 }): Promise<T> => {
   const lock = join(storeDir, 'store.lock');
   await mkdir(storeDir, { recursive: true });
   const started = Date.now();
@@ -748,8 +759,12 @@ export const withLock = async <T>(storeDir: string, work: () => Promise<T>, opti
     void utimes(lock, now, now).catch(() => undefined);
   }, options.staleMs / 4);
   heartbeat.unref();
+  // The heartbeat stops at the hold cap but the work does not, so a waiter can break the lock and a second run take it while this one is still
+  // going. This run then must not write what it read at the start (`state.json`'s `allow` and `redactDomains`, the log's rename) over the second
+  // run's. A refused read counts as ours, as it does in the release below.
+  const held: LockHold = async () => (await readFile(lock, 'utf8').catch((error: unknown) => (isCode(error, 'ENOENT') ? '' : token))) === token;
   try {
-    return await work();
+    return await work(held);
   } finally {
     clearInterval(heartbeat);
     // A refused read (an antivirus share violation) counts as ours, so the lock is not left standing for the stale window; `rm` retries a share violation, and a refusal that outlasts the retries is swallowed so the finished work's result is not lost (the stale window then clears the lock).
@@ -757,9 +772,15 @@ export const withLock = async <T>(storeDir: string, work: () => Promise<T>, opti
   }
 };
 
-export const deposit = (runtime: SessionsRuntime, options: DepositOptions, trace?: DepositTrace): Promise<DepositResult> => withLock(runtime.storeDir, () => depositLocked(runtime, options, trace));
+export const deposit = (runtime: SessionsRuntime, options: DepositOptions, trace?: DepositTrace): Promise<DepositResult> => withLock(runtime.storeDir, (holds) => depositLocked(runtime, options, holds, trace));
 
-const depositLocked = async (runtime: SessionsRuntime, options: DepositOptions, trace?: DepositTrace): Promise<DepositResult> => {
+/** Writes `state.json` only while this run holds the lock; a run that lost it throws before the write, so the holder that took over keeps its entries. */
+const writeStateHeld = async (runtime: SessionsRuntime, state: State, held: LockHold): Promise<void> => {
+  if (!(await held())) throw new StoreLockLostError();
+  await writeAtomic(paths(runtime.storeDir).state, JSON.stringify(state));
+};
+
+const depositLocked = async (runtime: SessionsRuntime, options: DepositOptions, holds: LockHold, trace?: DepositTrace): Promise<DepositResult> => {
   requireEntries(options.allow);
   const allow = compileAllow(options.allow);
   const folders = await projectFolders(runtime.projectsRoot);
@@ -836,11 +857,11 @@ const depositLocked = async (runtime: SessionsRuntime, options: DepositOptions, 
     result.cursorUnreadableLogged = cursor.unreadableLogged;
     result.cursorRejected = cursor.rejected;
   }
-  await writeAtomic(paths(runtime.storeDir).state, JSON.stringify(state));
+  await writeStateHeld(runtime, state, holds);
   await removePending(runtime.storeDir, drained.settled);
   // Decided by what the log holds, not by what this run captured: a run that died after its re-capture left the copies for this one. The hook
   // path never compacts, since it has seconds. The records are safe by now and an uncompacted log still loads, so a failure here does not fail the deposit.
-  await compactLog(runtime.storeDir).catch((error: unknown) => {
+  await compactLog(runtime.storeDir, LOG_RENAME_WAIT_MS, holds).catch((error: unknown) => {
     process.stderr.write(`oars: the session log was not compacted, and the next deposit tries again: ${error instanceof Error ? error.message : String(error)}\n`);
   });
   await refresh(runtime, state.redactDomains, context.at, trace);
@@ -1122,7 +1143,7 @@ export type SessionDeposit = 'deposited' | 'unchanged' | 'not-allowed' | 'missin
 export const depositSession = async (runtime: SessionsRuntime, transcript: string, now: () => number, trace?: DepositTrace): Promise<SessionDeposit> => {
   try {
     // The hook path waits 3 s for the lock, well under the harness's 30 s ceiling on the hook (install.ts), so a SessionEnd behind the nightly deposit cannot hold session exit.
-    return await withLock(runtime.storeDir, () => depositSessionLocked(runtime, transcript, now, trace), HOOK_LOCK);
+    return await withLock(runtime.storeDir, (held) => depositSessionLocked(runtime, transcript, now, held, trace), HOOK_LOCK);
   } catch (error) {
     if (!(error instanceof StoreLockedError)) throw error;
     try {
@@ -1225,7 +1246,7 @@ const drainPending = async (context: DepositContext, state: State, storeDir: str
   return drained;
 };
 
-const depositSessionLocked = async (runtime: SessionsRuntime, transcript: string, now: () => number, trace?: DepositTrace): Promise<SessionDeposit> => {
+const depositSessionLocked = async (runtime: SessionsRuntime, transcript: string, now: () => number, held: LockHold, trace?: DepositTrace): Promise<SessionDeposit> => {
   const state = await readState(runtime.storeDir);
   refuseNewer(state);
   // A session no `--allow` names costs nothing when nothing is pending: no salt, no skeletons folder, no context.
@@ -1233,7 +1254,7 @@ const depositSessionLocked = async (runtime: SessionsRuntime, transcript: string
   const context = await contextFor(runtime, state, now);
   const drained = await drainPending(context, state, runtime.storeDir, PENDING_HOOK_CAP, trace);
   const own = await depositSessionInto(context, state, transcript, trace);
-  if (drained.wrote || own.wrote) await writeAtomic(paths(runtime.storeDir).state, JSON.stringify(state));
+  if (drained.wrote || own.wrote) await writeStateHeld(runtime, state, held);
   await removePending(runtime.storeDir, drained.settled);
   return own.result;
 };
@@ -1439,7 +1460,7 @@ const writeLive = async (file: string, temp: string, latest: ReadonlyMap<string,
  * oars may read it, and a kept line is written back byte for byte. A crash before the rename leaves the old log whole and a temp file that no
  * reader opens and the next compaction removes. Throws, with the log as it was, when the rewrite cannot finish.
  */
-export const compactLog = async (storeDir: string, renameWaitMs = LOG_RENAME_WAIT_MS): Promise<void> => {
+export const compactLog = async (storeDir: string, renameWaitMs = LOG_RENAME_WAIT_MS, held: LockHold = () => Promise.resolve(true)): Promise<void> => {
   const file = paths(storeDir).observations;
   // Under the lock no other compaction is running, so any temp file here is one a crash left.
   for (const entry of await listDir(storeDir)) {
@@ -1453,6 +1474,8 @@ export const compactLog = async (storeDir: string, renameWaitMs = LOG_RENAME_WAI
     await writeLive(file, temp, latest);
     // The lock holds appends off, so this fires only when a waiter broke the lock (say across a sleeping laptop): the temp file lacks what it wrote.
     if ((await stat(file)).size !== size) throw new Error('the log changed while it was being rewritten');
+    // The size check cannot see a run that took a broken lock and has not appended yet; its token can.
+    if (!(await held())) throw new StoreLockLostError();
     await renameWhenFree(temp, file, renameWaitMs);
   } finally {
     await rm(temp, { force: true });
