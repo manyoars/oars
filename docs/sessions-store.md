@@ -402,7 +402,7 @@ The term list is a local file, one term per line, matched without regard to case
 object per line) to `session-commons/exclusion-list.jsonl` by default and prints counts only: sessions, excluded by reason,
 and the files and sessions that held a term, by main or subagent and by source. The list is written readable by its owner only, since a
 folder name can carry a term. It covers the harness's folders, `raw/`, and the sessions the store logged, so a logged session whose raw is gone
-everywhere is listed as no raw; a directory that is not a session (no main transcript, and a name that is not a session id) is counted apart.
+everywhere is listed as no raw; a directory that is not a session (no main transcript, and a name that neither is a session id nor ends in `.jsonl`) is counted apart; an entry named `<x>.jsonl` that is not a file, or a non-folder named like a session id, is listed as unreadable.
 The pool's deposit calls `checkSession` (`packages/cli/src/sessions/exclusion.ts`) first and never builds or sends an excluded session.
 
 ## The cost-state check
