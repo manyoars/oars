@@ -11,7 +11,7 @@
 //                 long path), the model the session ended on, and what kind of session it is
 //   updates.jsonl "the authoritative conversation log" (17-sessions.md:42): one `{timestamp, method, params: {sessionId, update}}` per line, `timestamp` epoch
 //                 SECONDS (serde default 0), `update` an ACP SessionUpdate tagged by `sessionUpdate`:
-//     user_message_chunk   content {type: "text", text}: the operator's prompt; chunks merge into one prompt until the agent speaks or `_meta.promptIndex`
+//     user_message_chunk   content {type: "text", text}: the operator's prompt (a block that is an image counts as the turn and is written as an image block with no data, turn.rs:960-962, storage/mod.rs:416); chunks merge into one prompt until the agent speaks or `_meta.promptIndex`
 //                          changes, including between marked and unmarked (turn.rs:890-895, storage/mod.rs:1009, :1038-1039). `_meta.hostTurn` (a slash command's turn), `_meta.hideFromScrollback` (a turn the harness started:
 //                          a finished task, subagent, workflow, notification, or goal check, turn.rs:328, :896-901) and `_meta.interjection` (a mid-turn steer whose text is a
 //                          model-facing frame) are not prompts (storage/mod.rs:966, :974); the first two end the turn, and `hostTurn` marks an agent chunk as well
@@ -212,7 +212,7 @@ export const grokLines = (text: string, fallbackId: string, summary: Obj, usage:
   const flushPrompt = (): void => {
     if (pending === undefined) return;
     sequence += 1;
-    lines.push({ ...base, type: 'user', uuid: `${fallbackId}-u${String(sequence)}`, timestamp: iso(pending.when), message: { role: 'user', content: [{ type: 'text', text: pending.text }] } });
+    lines.push({ ...base, type: 'user', uuid: `${fallbackId}-u${String(sequence)}`, timestamp: iso(pending.when), message: { role: 'user', content: [pending.text === '' ? { type: 'image' } : { type: 'text', text: pending.text }] } });
     pending = undefined;
   };
   const response = (when: number): Response => {
@@ -260,13 +260,16 @@ export const grokLines = (text: string, fallbackId: string, summary: Obj, usage:
         open = undefined;
         continue;
       }
-      if (meta.interjection === true || part === undefined) continue;
+      // A prompt block that is an image has no text but is still the operator's turn (storage/mod.rs:416 rebuilds it; summary.rs:51 names an "image-only message"):
+      // it takes part in the prompt boundary below, and is written as an image block with no data. Any other block type is skipped.
+      const image = isObj(update.content) && update.content.type === 'image';
+      if (meta.interjection === true || (part === undefined && !image)) continue;
       // A change of `promptIndex` is a new prompt even when no reply fell between them (a prompt cancelled before its first reply, then a retry), and so is a change
       // between marked and unmarked (the user's `!cmd` carries only a model id): upstream opens a new run on either (storage/mod.rs:1038-1039). Two unmarked chunks merge.
       const index = num(meta.promptIndex);
       if (pending !== undefined && index !== pending.index) flushPrompt();
       open = undefined;
-      pending = { text: (pending?.text ?? '') + part, when: pending?.when ?? when, index };
+      pending = { text: (pending?.text ?? '') + (part ?? ''), when: pending?.when ?? when, index };
     } else if (kind === 'agent_message_chunk') {
       flushPrompt();
       if (meta.hostTurn === true) {

@@ -376,6 +376,26 @@ describe('the Grok Build reader', () => {
     expect(texts([prompt(1, 'in '), prompt(1, 'parts')])).toEqual([one('in parts')]);
   });
 
+  it('reads a prompt that is only an image as the operator’s turn: it ends the last response, writes an image block with no data, and counts as a human turn', () => {
+    // upstream writes one user_message_chunk per prompt block, with the image rebuilt from its data (turn.rs:960-962, storage/mod.rs:416); "image-only message" is named at session/summary.rs:51.
+    const image = (second: number, index: number) => line(S(second), { sessionUpdate: 'user_message_chunk', content: { type: 'image', data: 'AA==', mimeType: 'image/png' }, _meta: { promptIndex: index } });
+    const events = [prompt(1, 'go', { promptIndex: 0 }), say(2, 'first'), image(3, 1), say(4, 'second')];
+    const lines = linesOf(events);
+    expect(lines.filter((entry) => entry.type === 'assistant')).toHaveLength(2);
+    expect(lines.filter((entry) => entry.type === 'user').map((entry) => JSON.stringify(entry.message))).toEqual([
+      JSON.stringify({ role: 'user', content: [{ type: 'text', text: 'go' }] }),
+      JSON.stringify({ role: 'user', content: [{ type: 'image' }] }),
+    ]);
+    expect(JSON.stringify(lines)).not.toContain('AA==');
+    expect(extractOf(events).session.trust).toEqual({ unattendedRun: [0.02, 0.02] });
+  });
+
+  it('keeps text and an image at one promptIndex as one text prompt, and skips a block that is neither', () => {
+    const block = (content: object) => line(S(1), { sessionUpdate: 'user_message_chunk', content, _meta: { promptIndex: 0 } });
+    const lines = linesOf([prompt(1, 'look ', { promptIndex: 0 }), block({ type: 'image', data: 'AA==', mimeType: 'image/png' }), prompt(1, 'here', { promptIndex: 0 }), block({ type: 'resource_link', uri: 'file:///x', name: 'x' }), say(2, 'ok')]);
+    expect(lines.filter((entry) => entry.type === 'user').map((entry) => JSON.stringify(entry.message))).toEqual([JSON.stringify({ role: 'user', content: [{ type: 'text', text: 'look here' }] })]);
+  });
+
   it('gives a session whose lines all lack a time one time: created_at, else the epoch', () => {
     const untimed = (sessionUpdate: string, text: string) => ({ method: 'session/update', params: { update: { sessionUpdate, content: { type: 'text', text } } } });
     const events = [untimed('user_message_chunk', 'one'), untimed('agent_message_chunk', 'x'), untimed('user_message_chunk', 'two')];
