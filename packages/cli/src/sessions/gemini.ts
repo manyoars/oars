@@ -109,8 +109,10 @@ const foldChat = (text: string): { meta: Obj; messages: Obj[] } => {
     if (!isObj(patch) || existing === undefined) return;
     if (patch.content !== undefined) existing.content = patch.content;
     if (Array.isArray(patch.toolCalls) && existing.type === 'gemini' && Array.isArray(existing.toolCalls)) {
-      for (const change of patch.toolCalls) {
-        const target = isObj(change) ? existing.toolCalls.find((candidate) => isObj(candidate) && candidate.id === change.id) : undefined;
+      const held: unknown[] = existing.toolCalls;
+      for (const raw of patch.toolCalls) {
+        const change: unknown = raw;
+        const target: unknown = isObj(change) ? held.find((candidate) => isObj(candidate) && candidate.id === change.id) : undefined;
         if (isObj(change) && isObj(target) && 'result' in change) target.result = change.result;
       }
     }
