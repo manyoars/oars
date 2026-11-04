@@ -111,7 +111,7 @@ oars sessions read --family lead-lag         # order 3: a labeled experiment beh
 oars sessions read --family fit --slice model=claude-opus-5-5 --json
 oars sessions books --by class --since 30   # tokens, wall time, turns, errors, verify-after-edit rate, and the outcome signals
 oars sessions books --by pull               # the same per package, MCP server, plugin, or skill a prompt pulled
-oars sessions books --by harness            # the same, grouped by Claude Code, Cursor, Codex, and Copilot (deposit the others with --allow cursor, --allow codex, or --allow copilot)
+oars sessions books --by harness            # the same, grouped by Claude Code, Cursor, Codex, Copilot, and Grok Build (deposit the others with --allow cursor, --allow codex, --allow copilot, or --allow grok)
 oars sessions measure --last 50             # recurring errors per 100 sessions, cache-write per session, recall calls per session
 oars sessions measure --last 50 --repo <root>  # the same, for one repository's sessions
 oars sessions verify                        # consistency invariants on the stored skeletons and capture records
@@ -181,10 +181,12 @@ Install merges: existing hooks (a Stop hook that rotates sessions, say) stay, ev
 ```
 oars gate replay --allow ~/work/app    # find installs, fetch-and-runs, MCP servers, and skills in logs on disk
 oars gate replay --registry-state      # also ask npm or pip what the registry holds (off by default)
-oars gate report                       # counts from the last replay, and what replay cannot see
+oars gate report                       # counts over crossings.jsonl, by who recorded each, and what replay cannot see
+oars gate install                      # add the hook to Claude Code at user scope, so crossings are recorded as they happen
+oars gate uninstall                    # remove only that hook entry
 ```
 
-Replay is local and read-only; it writes `crossings.jsonl` into the sessions store and nothing else (with `--registry-state`, npm and pip also keep their own caches). It records picks and does not judge them. See `docs/gate.md` in the repository.
+Replay is local and read-only on your transcripts; it writes `crossings.jsonl` and the novelty index `gate-index.txt` into the sessions store and nothing else (with `--registry-state`, npm and pip also keep their own caches). The hook (`oars gate hook`, run by Claude Code, not by you) appends to `crossings.jsonl` as each crossing happens, plus `gate-index.txt` and `gate-registry.jsonl` in the same store, and always exits 0 with no output. `report` reads only `crossings.jsonl`. Both record picks and neither judges them. See `docs/gate.md` in the repository.
 
 ## The `--json` contract
 

@@ -9,6 +9,9 @@
 // class A, so a store written at 10 re-derives on its next deposit and only the pooled projection (computed at deposit, never written) changes.
 // Version 12 (CAPTURE 12, t815) adds the optional `setup`, `funnel`, and `trust` to the session record, read from the transcript only (`session-shape.ts`;
 // `docs/sessions-store.md`). It changed no derivation, so it leaves EXTRACTOR at 10.
+// Version 13 (CAPTURE 13, t826) changes three stored values: the email mask keeps a plain dotted version after `npm:` or `jsr:` (a pinned alias keeps its pick),
+// a block word in another case or a wrapper in another case or by path is skipped to reach the real program, and a `segments` `run` whose program basename holds
+// whitespace stores `<literal>`. It also settles the two stored forms of a `copilot` step at version 12. EXTRACTOR stays 11.
 //
 // Version 10 (CAPTURE 10, t768) gives a turn opened by a slash command or a skill a `user-prompt` record, adds `opened` to that record, and moves `skills`
 // from class P to class A, since a skill's name can be private. It changed no derivation, so it leaves EXTRACTOR at 9.
@@ -60,7 +63,7 @@ import type { RepoSize } from './public-vocabulary.js';
 import type { SessionFunnel, SessionSetup, SessionTrust } from './session-shape.js';
 
 /** Stamped `cv` on every captured record. Bump it when the captured field list changes or a stored value of an existing captured record or skeleton changes: a bump re-reads every transcript. */
-export const CAPTURE_VERSION = '13';
+export const CAPTURE_VERSION = '14';
 
 /** Capture versions the reader derives from. A version-3 record is upgraded on read; a newer one is read for the fields this code knows. */
 export const OLDEST_READABLE_CAPTURE = 3;
@@ -97,7 +100,7 @@ export interface Usage {
   thinking: number;
 }
 
-export type Harness = 'claude-code' | 'cursor' | 'codex' | 'copilot';
+export type Harness = 'claude-code' | 'cursor' | 'codex' | 'copilot' | 'grok';
 
 /** The harness a session record came from; a record that does not name one is Claude Code's. */
 export const harnessOf = (session: { harness?: Harness }): Harness => session.harness ?? 'claude-code';

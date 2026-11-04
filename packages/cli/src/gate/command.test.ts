@@ -1,4 +1,5 @@
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { run } from '../cli.js';
@@ -58,6 +59,17 @@ describe('oars gate replay and report', () => {
     expect(err.join('')).toContain('oars gate replay');
   });
 
+  it('reports a store holding only hook rows, with no replay run', async () => {
+    const { deps, out, staged } = setup();
+    const row = { kind: 'crossing', v: 1, via: 'hook', class: 'npm-package', form: 'install', name: 'left-pad', session: 's', toolUseId: 't', novelty: 'fleet', registryState: 'not-read', origin: 'not-read' };
+    mkdirSync(staged.storeDir, { recursive: true });
+    writeFileSync(join(staged.storeDir, 'crossings.jsonl'), `${JSON.stringify(row)}\n`);
+    expect(await run(['gate', 'report'], deps)).toBe(ExitCode.OK);
+    expect(out.join('')).toContain('No replay has run');
+    expect(out.join('')).toContain('Crossings: 1');
+    expect(out.join('')).toContain('Recorded by: hook 1');
+  });
+
   it('says so when the store is not configured', async () => {
     const { deps, err } = setup();
     delete deps.sessions;
@@ -102,5 +114,36 @@ describe('the file the command reads', () => {
     mkdirSync(staged.storeDir, { recursive: true });
     writeFileSync(join(staged.storeDir, 'crossings.jsonl'), 'not json\n');
     await expect(gateReport(sessionDeps)).rejects.toThrow(/oars gate replay/);
+  });
+});
+
+describe('oars gate hook, through the command', () => {
+  const payload = JSON.stringify({ session_id: 's1', tool_use_id: 'u1', tool_name: 'Bash', tool_input: { command: 'npm install left-pad' }, cwd: tmpdir(), permission_mode: 'default' });
+
+  it('records one row from staged stdin, prints nothing, and exits 0', async () => {
+    const { deps, out, staged } = setup();
+    staged.stdin.end(payload);
+    expect(await run(['gate', 'hook'], deps)).toBe(ExitCode.OK);
+    expect(out.join('')).toBe('');
+    const rows = parseRows(readFileSync(join(staged.storeDir, 'crossings.jsonl'), 'utf8'));
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ kind: 'crossing', via: 'hook', name: 'left-pad', session: 's1', toolUseId: 'u1' });
+  });
+
+  it('writes no file, in the working folder or anywhere, when no store is configured', async () => {
+    const work = mkdtempSync(join(tmpdir(), 'oars-gate-nostore-'));
+    const before = process.cwd();
+    process.chdir(work);
+    try {
+      const { deps, out } = harness();
+      delete deps.sessions;
+      expect(await run(['gate', 'hook'], deps)).toBe(ExitCode.OK);
+      expect(out.join('')).toBe('');
+      expect(existsSync(join(work, 'crossings.jsonl'))).toBe(false);
+      expect(existsSync(join(work, 'gate-index.txt'))).toBe(false);
+    } finally {
+      process.chdir(before);
+      rmSync(work, { recursive: true, force: true });
+    }
   });
 });

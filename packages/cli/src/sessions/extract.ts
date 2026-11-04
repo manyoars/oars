@@ -7,7 +7,7 @@ import { posix } from 'node:path';
 import { ACTION_TABLES, actionOf, shellOf, type ActionTable, type CanonicalAction } from './actions.js';
 import { exploreCount, strataOf } from './strata.js';
 import { closedFrame, frameIdOf, repoFilesFromIndex, repoSizeOf, stackOf, utcDay } from './frame.js';
-import type { RepoSize } from './public-vocabulary.js';
+import { LITERAL, type RepoSize } from './public-vocabulary.js';
 import { linkSteps } from './graph.js';
 import { callIdentity, shellIdentity, UNREAD_SHELL, type WordOfCommand } from './identity.js';
 import type { Redactor } from './redact.js';
@@ -816,18 +816,23 @@ const assignsCommand = (words: readonly ShellWord[], at: number): boolean => {
   return name !== undefined && !name.quoted && POWERSHELL_VARIABLE.test(name.text) && equals?.text === '=' && !equals.quoted && value !== undefined && !value.quoted && COMMAND_START.test(value.text);
 };
 
-/** The words from the command's real program on. */
+/**
+ * The words from the command's real program on. A block word is known by its word in any case (`IF`), and a wrapper by its program name as `programOf`
+ * reads it: `TIMEOUT 5` and `/usr/bin/timeout 5` are the wrapper they spell. A shell keyword is never written with a path, so `./do` and `./done` are
+ * programs. The private program behind a block word or wrapper is the one read (register row A53).
+ */
 const afterPrelude = (words: readonly ShellWord[]): readonly ShellWord[] => {
   let at = 0;
   for (;;) {
     const word = words[at];
     if (word === undefined) return [];
     if (word.quoted) return words.slice(at);
-    if (BLOCK_WORDS.has(word.text) || ASSIGNMENT.test(word.text)) at += 1;
+    const name = programOf(word) ?? word.text;
+    if (BLOCK_WORDS.has(word.text.toLowerCase()) || ASSIGNMENT.test(word.text)) at += 1;
     else if (assignsCommand(words, at)) at += 2;
-    else if (WRAPPERS.has(word.text) || word.text === 'timeout') {
-      const isTimeout = word.text === 'timeout';
-      const owning = WRAPPER_VALUE_FLAGS.get(word.text) ?? [];
+    else if (WRAPPERS.has(name) || name === 'timeout') {
+      const isTimeout = name === 'timeout';
+      const owning = WRAPPER_VALUE_FLAGS.get(name) ?? [];
       at += 1;
       while (words[at]?.text.startsWith('-') === true) at += owning.includes(words[at]?.text ?? '') ? 2 : 1;
       if (isTimeout && /^\d+(?:\.\d+)?[smhd]?$/.test(words[at]?.text ?? '')) at += 1;
@@ -936,8 +941,12 @@ const readCommands = (tokens: readonly ShellToken[], depth = 0): ShellCommand[] 
 
 const isPlainWord = (word: ShellWord): boolean => !word.quoted && word.text !== '' && !/^-|\$|[\\/]/.test(word.text);
 
+/**
+ * The program and its plain words, joined by one space. A basename that holds whitespace (`"/opt/my tools/git push"`) would read back as a program and a
+ * word, so capture stores `<literal>` in its place: the boundary a `run` cannot carry, and no part of that name is kept (register row A53).
+ */
 const runOf = (command: ShellCommand): string =>
-  [command.program, ...command.args.filter(isPlainWord).map((word) => cut(word.text, RUN_WORD_CHARS))].slice(0, RUN_WORDS_MAX).join(' ');
+  [/\s/.test(command.program) ? LITERAL : command.program, ...command.args.filter(isPlainWord).map((word) => cut(word.text, RUN_WORD_CHARS))].slice(0, RUN_WORDS_MAX).join(' ');
 
 /** Positional words and flag values. A flag in `takesValue` owns the next word, which is therefore not a name. */
 const parseArgs = (args: readonly ShellWord[], takesValue: ReadonlySet<string>): { names: string[]; flags: Map<string, string>; nameAt: number[] } => {
@@ -975,7 +984,7 @@ const ARCHIVE = /\.(?:whl|tgz|zip|tar\.gz)$/;
 const isUrl = (text: string): boolean => text.includes('://');
 const namesNothing = (text: string): boolean => text === '' || text.includes('$') || /^%.*%$/.test(text) || ONLY_MASKS.test(text);
 const HOLDS_MASK = /<(?:secret|email|org-domain)>/;
-/** A version with a mask inside says only that something was masked: `alias@npm:foo@1.2.3` reads as `npm:<email>`. It is no version. */
+/** A version with a mask inside says only that something was masked: `alias@npm:foo@1.2.3-beta.1` reads as `npm:<email>`. It is no version. */
 const versionOf = (text: string): string | null => (text === '' || text.includes('$') || HOLDS_MASK.test(text) ? null : text);
 
 /** `name@version`, keeping a leading `@` with the name. */
@@ -990,7 +999,11 @@ const atVersion = (ecosystem: PullEcosystem, text: string): ToolPull | null => {
 
 const wholeName = (ecosystem: PullEcosystem, text: string): ToolPull | null => (namesNothing(text) ? null : { ecosystem, name: text, version: null });
 
-const nodeSpec = (text: string): ToolPull | null => {
+// `alias@npm:real@1.0.0` and a leading `npm:real` install the package `real`: the pick is the real name, never the alias spelling.
+const NPM_ALIAS = /^(?:(?:@[^@/\s]+\/)?[^@/\s]+@)?npm:(.+)$/;
+
+const nodeSpec = (spec: string): ToolPull | null => {
+  const text = NPM_ALIAS.exec(spec)?.[1] ?? spec;
   if (isUrl(text)) return wholeName('npm', text);
   if (LOCAL_SPEC.test(text) || ARCHIVE.test(text)) return null;
   // One slash is a scoped name or a GitHub shorthand; more is a folder.
@@ -1587,7 +1600,7 @@ export const captureSession = (input: ExtractInput): Capture => {
     }
 
     // prompt_graphs.py and cost_per_class.py: a prompt is a main-line user line with text and no tool result. They also dropped any leading "<", which lost
-    // every turn a command or a skill opened (t768); that is now `promptOpening`'s call. A Cursor bubble keeps the old rule until its own brief.
+    // every turn a command or a skill opened (t768); that is now `promptOpening`'s call. A line from any other harness keeps the old rule until its own brief.
     // A `!` shell command the operator typed, or an image they pasted with no words: neither opens a prompt (the tag is injected, the image has no text), but
     // both are the operator's turn. A line the agent did not write (a meta line, a local command, a synthetic reply) is neither the operator nor the agent.
     let operatorTurn = false;

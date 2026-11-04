@@ -1,4 +1,4 @@
-// `oars gate report`: counts over the rows a replay wrote. No judgment word appears here; a count says what was seen, and `LIMITS` says what was not.
+// `oars gate report`: counts over the rows the hook and a replay wrote, each crossing once. No judgment word appears here; a count says what was seen, and `LIMITS` says what was not.
 import {
   AGAINST_LATEST,
   CROSSING_CLASSES,
@@ -13,6 +13,8 @@ import {
   REGISTRY_AGES,
   REGISTRY_STATES,
   STATUSES,
+  VIAS,
+  crossingsOf,
   type CrossingRecord,
   type Row,
   type RunRow,
@@ -38,7 +40,10 @@ export interface Report {
   badLines: number;
   calls: number;
   crossings: number;
+  /** Whether a replay has run: when it has not, only the hook's rows are here and the transcript fields read `not-read`. */
+  replayed: boolean;
   registryRead: boolean;
+  via: Tally[];
   classes: ClassCount[];
   origin: Tally[];
   novelty: Tally[];
@@ -80,7 +85,7 @@ const classCounts = (rows: readonly CrossingRecord[]): ClassCount[] =>
 
 export const reportOf = (rows: readonly Row[]): Report => {
   const run = rows.find((row): row is RunRow => row.kind === 'run');
-  const crossings = rows.filter((row): row is CrossingRecord => row.kind === 'crossing');
+  const crossings = crossingsOf(rows);
   return {
     ok: true,
     transcripts: run?.transcripts ?? 0,
@@ -88,7 +93,10 @@ export const reportOf = (rows: readonly Row[]): Report => {
     badLines: run?.badLines ?? 0,
     calls: run?.calls ?? 0,
     crossings: crossings.length,
-    registryRead: run?.registryRead ?? false,
+    replayed: run !== undefined,
+    // A hook row carries the registry as it stood at its crossing, so a file with such a row has registry state to show even when no replay asked for it.
+    registryRead: (run?.registryRead ?? false) || crossings.some((row) => row.registryState !== 'not-read'),
+    via: tally(VIAS, crossings, (row) => row.via ?? 'replay'),
     classes: classCounts(crossings),
     origin: tally(ORIGINS, crossings, (row) => row.origin),
     novelty: tally(NOVELTIES, crossings, (row) => row.novelty),
@@ -101,7 +109,7 @@ export const reportOf = (rows: readonly Row[]): Report => {
     againstLatest: tally(AGAINST_LATEST, crossings, (row) => row.againstLatest),
     registryState: tally(REGISTRY_STATES, crossings, (row) => row.registryState),
     registryAge: tally(REGISTRY_AGES, crossings, (row) => row.registryAge),
-    removedLater: crossings.filter((row) => row.removedLater).length,
+    removedLater: crossings.filter((row) => row.removedLater === true).length,
     unseen: Object.entries(run?.unread ?? {}).map(([value, count]) => ({ value, count })),
     limits: [...LIMITS],
   };
@@ -116,9 +124,13 @@ export const formatReport = (report: Report): string => {
   const registry = report.registryRead
     ? [line('Against latest', report.againstLatest), line('Registry state', report.registryState), line('Registry age', report.registryAge)]
     : [REGISTRY_NOT_READ];
+  const books = report.replayed
+    ? [`Read ${String(report.transcripts)} transcripts (${String(report.unreadable)} unreadable, ${String(report.badLines)} torn lines) and ${String(report.calls)} tool calls.`]
+    : ['No replay has run: these rows come from the hook, and what a transcript gives reads not-read until `oars gate replay` fills it in.'];
   return [
-    `Read ${String(report.transcripts)} transcripts (${String(report.unreadable)} unreadable, ${String(report.badLines)} torn lines) and ${String(report.calls)} tool calls.`,
+    ...books,
     `Crossings: ${String(report.crossings)}`,
+    line('Recorded by', report.via),
     ...report.classes.map((one) => `  ${one.class} ${one.form}: ${String(one.count)} (${String(one.distinct)} distinct)`),
     line('Name came from', report.origin),
     line('New to', report.novelty),
