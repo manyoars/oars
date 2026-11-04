@@ -49,15 +49,15 @@ const spend = async (env: Env, account: string, week: string, cap: number): Prom
 /** Drops the counts of an earlier week, through the `accounts_by_fetch_week` index, so it reads no row of an account that has a current count. Exported so a test can ask SQLite for its plan. */
 export const WEEK_RESET = 'UPDATE accounts SET fetch_week = NULL, fetches = 0 WHERE fetch_week < ?';
 
-/** The harness a bundle is asked for. A version number does not name its harness, so the route takes it as `?harness=`; the one harness whose numbering the route served before is the default until the admitted list names each version's harness. */
-const DEFAULT_HARNESS = 'claude-code';
+/** A request that names no harness: a version number does not name its harness, so the route has no default and says what to send. */
+export const harnessRequired = (): Response => refuse(400, 'harness_required', 'Name the harness: /bundle/<harness>/<harnessVersion>/<vocabVersion>.', 'harness');
 
-export const fetchBundle = async (request: Request, env: Env, harnessVersion: string, vocabVersion: string): Promise<Response> => {
+/** The harness is a path segment of its own: a number does not name it, and two harnesses can share a numbered bucket, so a request that leaves it out is refused rather than answered with one. */
+export const fetchBundle = async (request: Request, env: Env, harness: string, harnessVersion: string, vocabVersion: string): Promise<Response> => {
   const account = await accountOf(request, env);
   if (account === undefined) return refuse(401, 'unauthorized', 'Sign in with oars pool login first.');
-  if (!isBundleVersion(harnessVersion)) return refuse(400, 'unknown_harness_version', 'That is not a public harness version.', 'harnessVersion');
-  const harness = new URL(request.url).searchParams.get('harness') ?? DEFAULT_HARNESS;
   if (!isHarness(harness)) return refuse(400, 'unknown_harness', 'That is not a harness this pool serves.', 'harness');
+  if (!isBundleVersion(harnessVersion)) return refuse(400, 'unknown_harness_version', 'That is not a public harness version.', 'harnessVersion');
   if (vocabVersion !== VOCAB_VERSION) return refuse(400, 'unknown_vocab_version', `This pool holds vocabulary version ${VOCAB_VERSION}.`, 'vocabVersion');
   const key = bound(env.BUNDLE_SIGNING_KEY);
   if (key === undefined) return notConfigured('BUNDLE_SIGNING_KEY');
