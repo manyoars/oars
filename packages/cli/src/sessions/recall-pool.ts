@@ -51,7 +51,7 @@ const answerOfStored = (read: Read, cells: ReadonlyMap<string, Cell>): RecallRea
   return {
     readId: read.readId,
     family: read.family,
-    tool: read.slice.motif ?? read.slice.prefix ?? read.slice.action ?? read.family,
+    tool: read.slice.motif ?? read.slice.prefix ?? read.slice.class ?? read.slice.action ?? read.family,
     keys: [],
     n: cited.reduce((highest, cell) => Math.max(highest, cell.sessions), 0),
     count: isRate ? failed : read.n,
@@ -66,6 +66,19 @@ const answerOfStored = (read: Read, cells: ReadonlyMap<string, Cell>): RecallRea
   };
 };
 
+/** A pull can answer an agent, and an experimental read goes to no agent (`docs/sessions-store.md`), so a recall never serves one; `oars sessions read` still prints it. */
+const isServed = (read: Read): boolean => read.value.label !== 'experimental';
+
+const cellsOf = (pool: Pool): Map<string, Cell> => new Map(pool.cells.map((cell) => [cellIdOf(cell), cell]));
+
+const ranked = (reads: readonly RecallRead[]): RecallRead[] => [...reads].sort((a, b) => b.n - a.n || b.count - a.count || a.readId.localeCompare(b.readId));
+
+/** The answers to a question about a family only the pool holds, best first. */
+export const readsOfFamily = (family: string, current: CurrentPool): RecallRead[] => {
+  const cells = cellsOf(current.pool);
+  return ranked(current.reads.filter((read) => read.family === family && isServed(read)).map((read) => answerOfStored(read, cells)));
+};
+
 const ofMotif = (motif: Motif, reads: readonly Read[]): Read[] => {
   const name = motifName(motif);
   return reads.filter((read) => (read.family === 'fit' && read.slice.motif === name && read.slice.level === motif.level) || (read.family === 'next-step' && motif.level === 'shape' && read.slice.prefix === name));
@@ -78,11 +91,11 @@ const ofMotif = (motif: Motif, reads: readonly Read[]): Read[] => {
 export const namedByPrefix = (prefix: readonly string[], current: CurrentPool): { standIns: string[]; reads: RecallRead[] } => {
   const named = new Set<Read>();
   for (const id of prefix) {
-    for (const read of current.reads) if (read.readId === id) named.add(read);
+    for (const read of current.reads) if (read.readId === id && isServed(read)) named.add(read);
     const motif = current.pool.motifs.get(id);
     if (motif !== undefined) for (const read of ofMotif(motif, current.reads)) named.add(read);
   }
-  const cells = new Map(current.pool.cells.map((cell) => [cellIdOf(cell), cell]));
+  const cells = cellsOf(current.pool);
   const standIns: string[] = [];
   const reads: RecallRead[] = [];
   for (const read of named) {
@@ -90,5 +103,5 @@ export const namedByPrefix = (prefix: readonly string[], current: CurrentPool): 
     if (standIn === undefined) reads.push(answerOfStored(read, cells));
     else standIns.push(standIn);
   }
-  return { standIns, reads: reads.sort((a, b) => b.n - a.n || b.count - a.count || a.readId.localeCompare(b.readId)) };
+  return { standIns, reads: ranked(reads) };
 };

@@ -7,7 +7,7 @@ import { utcDay } from './frame.js';
 import { LITERAL, publicModel, publicVersion } from './public-vocabulary.js';
 import { recall, recallRows, type RecallQuery, type RecallResult } from './query.js';
 import { contentHash, FAMILIES, type Family } from './read.js';
-import { namedByPrefix, resolveReads, type CurrentPool } from './recall-pool.js';
+import { namedByPrefix, readsOfFamily, resolveReads, type CurrentPool } from './recall-pool.js';
 import { makeRecall, type Recall, type RecallForm, type RecallQueryObject, type RecallSlice } from './recall-object.js';
 import { closedName, evidenceOf, renderAnswer, type RecallAsker } from './recall-render.js';
 import { harnessOf, PROMPT_CLASSES, type ErrorObservation, type Frame, type Harness, type SessionObservation, type ToolObservation } from './schema.js';
@@ -257,9 +257,11 @@ const sliceKeeps = <Row extends { session: string; prompt: number | null; harnes
     (cutoff === undefined || (row.ts !== null && row.ts >= cutoff));
 };
 
-const questionReads = (store: Store, family: string | undefined, slice: RecallSlice, now: number): RecallRead[] => {
+/** `current` answers every family the store's own rows do not: its reads are already cut, so `pullRefusal` turns away a slice they cannot apply. With no pool, there is nothing to answer from. */
+const questionReads = (store: Store, family: string | undefined, slice: RecallSlice, now: number, current: CurrentPool | undefined): RecallRead[] => {
+  if (family === undefined) return [];
   if (family === 'recovery') return recoveryReads(store, sliceKeeps<ErrorObservation>(store, slice, now, (error) => error.cls));
-  if (family !== 'fit') return [];
+  if (family !== 'fit') return current === undefined ? [] : readsOfFamily(family, current);
   const classes = new Map(store.prompts.map((prompt) => [`${prompt.session}#${String(prompt.index)}`, prompt.cls]));
   return fitReads(store, FIT_FLOORS, sliceKeeps<ToolObservation>(store, slice, now, (call) => classes.get(promptKey(call))));
 };
@@ -309,7 +311,7 @@ export const answerQuery = (store: Store, input: ClosedQuery, now: number, curre
       case 'entity':
         return input.entity === undefined ? [] : entityReads(store, input.entity);
       case 'question':
-        return questionReads(store, input.family, input.slice ?? {}, now);
+        return questionReads(store, input.family, input.slice ?? {}, now, current);
       case 'text':
         return input.text === undefined ? [] : textReads(store, input.text);
     }
@@ -322,6 +324,21 @@ const ID_SHAPE = /^(read:)?[0-9a-f]{16}$/;
 const isIdShape = (value: string): boolean => ID_SHAPE.test(value);
 const isPublicName = (value: string): boolean => closedName(value) === value;
 const isFamily = (value: string): boolean => FAMILIES.some((family) => family === value);
+
+/** The families a question can answer. `lead-lag` is experimental, so it stays with `oars sessions read`. */
+export const RECALL_FAMILIES: readonly Family[] = FAMILIES.filter((family) => family !== 'lead-lag');
+
+/**
+ * Why this question cannot be asked; undefined when it can. Only `recovery` and `fit` count their answers from the store's own rows, so any other family's reads cannot apply a
+ * slice, and answering them anyway would state counts the slice did not narrow. The family named here has passed `isFamily`, so the text holds nothing an asker typed.
+ */
+export const pullRefusal = (input: PullInput): string | undefined => {
+  if (!isClosed(input) || input.form !== 'question' || input.family === undefined) return undefined;
+  const { family, slice } = input;
+  if (family === 'recovery' || family === 'fit' || !isFamily(family) || Object.keys(slice ?? {}).length === 0) return undefined;
+  return `Family ${family} answers from stored reads, which a class or a number of days cannot narrow. Ask without them, or slice its rows with oars sessions read --family ${family} --slice <axis>=<value>.`;
+};
+
 const isPromptClass = (value: string): boolean => PROMPT_CLASSES.some((cls) => cls === value);
 const isPublicModel = (value: string): boolean => publicModel(value) === value;
 const isPublicVersion = (value: string): boolean => publicVersion(value) === value;
