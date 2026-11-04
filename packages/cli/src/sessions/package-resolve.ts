@@ -2,10 +2,8 @@
 // registry's own spelling. Resolving is a check of shape only, since capture asks no registry: a name that cannot be told from a path, a flag, a URL, or a
 // masked word is not a package and stores nothing. Whether the name is public is the projection's question (`projectPackage`), asked at deposit.
 
+import type { Redactor } from './redact.js';
 import type { PullEcosystem, ToolManifest, ToolPackage, ToolPull } from './schema.js';
-
-/** The capture's redactor, as far as a manifest reader needs it: a name it changes is a secret or a mask, never a package. */
-export type NameRedactor = (text: string) => string;
 
 /** The registry's own normalization (spec Section 1.3): npm lowercases, PyPI folds `-`, `_`, and `.`, crates.io folds `-` and `_`. */
 export const NORMALIZE: ReadonlyMap<string, (name: string) => string> = new Map<string, (name: string) => string>([
@@ -84,15 +82,15 @@ const MANIFEST_ECOSYSTEM: ReadonlyMap<ManifestFile, string> = new Map<ManifestFi
 ]);
 
 /** A folder that holds code a project installed: a manifest inside it belongs to a dependency, and the session did not choose it. */
-const DEPENDENCY_FOLDERS: ReadonlySet<string> = new Set(['node_modules', 'vendor', 'site-packages', '.venv']);
+const DEPENDENCY_FOLDERS: ReadonlySet<string> = new Set(['node_modules', 'vendor', 'site-packages', '.venv', 'venv', '.cargo', 'bower_components']);
 
 /**
- * The manifest a path names, by its basename: `requirements-dev.txt` is a requirements file, `Cargo.toml` is exact. A path with a `node_modules`, `vendor`,
- * `site-packages`, or `.venv` folder names none, since that manifest is a dependency's own. Not covered: pyproject.toml, go.mod, Gemfile, pom.xml.
+ * The manifest a path names, by its basename: `requirements-dev.txt` is a requirements file, `Cargo.toml` is exact. A path with a `node_modules`, `vendor`, `site-packages`,
+ * `.venv`, `venv`, `.cargo`, or `bower_components` folder (in any case) names none, since that manifest is a dependency's own. Not covered: pyproject.toml, go.mod, Gemfile, pom.xml.
  */
 export const manifestFileOf = (path: string): ManifestFile | null => {
   const parts = path.replace(/\\/g, '/').split('/');
-  if (parts.some((part) => DEPENDENCY_FOLDERS.has(part))) return null;
+  if (parts.some((part) => DEPENDENCY_FOLDERS.has(part.toLowerCase()))) return null;
   const base = parts.pop() ?? '';
   if (base === 'package.json' || base === 'Cargo.toml') return base;
   return /^requirements(?:[-_.][\w.-]+)?\.txt$/.test(base) ? 'requirements.txt' : null;
@@ -105,7 +103,7 @@ const NODE_DEPENDENCY_KEYS: ReadonlySet<string> = new Set(['dependencies', 'devD
 /** A range, a pin, or a tag. A `file:`, `workspace:`, `npm:` alias, URL, or git value names no registry package. */
 const NODE_VERSION = /^(?:[~^<>=]*\s*v?\d[\w.*+-]*|\*|latest|next)(?:\s.*)?$/i;
 /** Keys that hold a version-shaped value and are not dependencies, for text that shows no section header. */
-const NOT_NODE_DEPENDENCIES: ReadonlySet<string> = new Set(['version', 'node', 'npm', 'yarn', 'pnpm', 'tag']);
+const NOT_NODE_DEPENDENCIES: ReadonlySet<string> = new Set(['name', 'description', 'main', 'version', 'node', 'npm', 'yarn', 'pnpm', 'tag']);
 
 const nodeNames = (lines: readonly string[]): string[] => {
   // A whole file opens with `{`, so its top-level values are no dependencies. A fragment stays null until a section header is seen: an edit may hold dependency lines alone.
@@ -123,13 +121,13 @@ const nodeNames = (lines: readonly string[]): string[] => {
   return names;
 };
 
-/** A line that ends in an archive names a file, as a path does. */
+/** A line that ends in an archive, before any environment marker, names a file, as a path does. */
 const ARCHIVE = /\.(?:whl|tar\.gz|tgz|tar\.bz2|zip|egg)$/i;
 
 const pythonNames = (lines: readonly string[]): string[] =>
   lines.flatMap((line) => {
     const text = line.replace(/(?:^|\s)#.*$/, '').trim();
-    if (text === '' || text.startsWith('-') || text.includes('://') || ARCHIVE.test(text)) return [];
+    if (text === '' || text.startsWith('-') || text.includes('://') || ARCHIVE.test(text.split(';')[0]?.trim() ?? '')) return [];
     const name = /^([A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?)\s*(?:\[[^\]]*\])?\s*(?:$|[=<>!~;@,])/.exec(text)?.[1];
     return name === undefined ? [] : [name];
   });
@@ -142,17 +140,28 @@ const NOT_CARGO_DEPENDENCIES: ReadonlySet<string> = new Set(['version', 'name', 
 const cargoNames = (lines: readonly string[]): string[] => {
   // null until a table header is seen, as for package.json.
   let inDependencies: boolean | null = null;
+  // A dependency written as its own table is known by its keys, which follow the header: it waits here until the next header or the end of the text.
+  let pending: string | null = null;
   const names: string[] = [];
+  const settle = (): void => {
+    if (pending !== null) names.push(pending);
+    pending = null;
+  };
   for (const line of lines) {
-    const table = /^\s*\[([^\]]+)\]\s*$/.exec(line)?.[1]?.replace(/\s/g, '');
+    const table = /^\s*\[\[?([^\]]+)\]\]?\s*$/.exec(line)?.[1]?.replace(/\s/g, '');
     if (table !== undefined) {
-      const own = CARGO_DEPENDENCY_ENTRY.exec(table)?.[1];
-      if (own !== undefined) names.push(own);
+      settle();
+      pending = CARGO_DEPENDENCY_ENTRY.exec(table)?.[1] ?? null;
       inDependencies = CARGO_DEPENDENCY_TABLE.test(table);
+    } else if (pending !== null) {
+      // A `path` or `git` key makes the table a source and no registry crate; `package` names the real crate behind an alias.
+      if (/^\s*(?:path|git)\s*=/.test(line)) pending = null;
+      else pending = /^\s*package\s*=\s*"([^"]+)"/.exec(line)?.[1] ?? pending;
     } else if (inDependencies !== false) {
       const shared = /^\s*([A-Za-z][\w-]*)\.workspace\s*=\s*true\b/.exec(line)?.[1];
       const entry = /^\s*([A-Za-z][\w-]*)\s*=\s*(.+?)\s*$/.exec(line);
-      const value = entry?.[2] ?? '';
+      // A comment after the closing quote or brace is not part of the value.
+      const value = (entry?.[2] ?? '').replace(/(?<=["}])\s+#.*$/, '');
       const text = /^"([^"]*)"$/.exec(value)?.[1];
       // An inline table holding `path` or `git` is a source and no registry crate; `package` names the real crate behind an alias.
       const named = text !== undefined ? CARGO_VERSION.test(text) : /^\{.*\b(?:version|workspace)\s*=/.test(value) && !/\b(?:path|git)\s*=/.test(value);
@@ -161,6 +170,7 @@ const cargoNames = (lines: readonly string[]): string[] => {
       else if (entry !== null && named && (inDependencies === true || !NOT_CARGO_DEPENDENCIES.has(entry[1] ?? ''))) names.push(real ?? entry[1] ?? '');
     }
   }
+  settle();
   return names;
 };
 
@@ -168,7 +178,7 @@ const cargoNames = (lines: readonly string[]): string[] => {
  * The packages a manifest text names, as `<ecosystem>:<name>`, each once, sorted. A name the redactor changes is a secret or a mask and is dropped as it was
  * written, before resolving folds its case: the redactor's rules are case-sensitive, so a folded key would pass them.
  */
-export const manifestNames = (file: ManifestFile, text: string, redact: NameRedactor): string[] => {
+export const manifestNames = (file: ManifestFile, text: string, redact: Redactor): string[] => {
   const lines = text.split(/\r?\n/).map(withoutLineNumbers);
   const found = file === 'package.json' ? nodeNames(lines) : file === 'requirements.txt' ? pythonNames(lines) : cargoNames(lines);
   const ecosystem = MANIFEST_ECOSYSTEM.get(file) ?? '';
@@ -176,7 +186,7 @@ export const manifestNames = (file: ManifestFile, text: string, redact: NameReda
 };
 
 /** The names an edit adds and removes: those only in the new text, and those only in the old. A version change moves neither. */
-export const manifestDelta = (file: ManifestFile, before: string, after: string, redact: NameRedactor): { added: string[]; removed: string[] } => {
+export const manifestDelta = (file: ManifestFile, before: string, after: string, redact: Redactor): { added: string[]; removed: string[] } => {
   const was = manifestNames(file, before, redact);
   const now = manifestNames(file, after, redact);
   return { added: now.filter((name) => !was.includes(name)), removed: was.filter((name) => !now.includes(name)) };

@@ -214,7 +214,7 @@ export const projectModel = (vocab: Vocabulary, model: string): string => (vocab
 /** A harness release up to the snapshot; one published after it pools as `private` until the next VOCAB_VERSION (spec R3). */
 export const projectHarnessVersion = (vocab: Vocabulary, harness: string, version: string): string => (vocab.harnessVersions.get(harness)?.has(version) === true ? version : PRIVATE);
 
-/** An `errorCode` as it pools: a stored class that is still a member of the closed list, else `other`. A record captured before CAPTURE 13 holds none and projects `other`. */
+/** An `errorCode` as it pools: a stored class that is still a member of the closed list, else `other`. A record captured before CAPTURE 14 holds none and projects `other`. */
 export const projectErrorCode = (stored: string | undefined): string => (stored !== undefined && ERROR_CODES.has(stored) ? stored : 'other');
 
 /** A stored language as it pools: a member of the pinned list, else `other`. */

@@ -12,6 +12,8 @@
 // Version 13 (CAPTURE 13, t826) changes three stored values: the email mask keeps a plain dotted version after `npm:` or `jsr:` (a pinned alias keeps its pick),
 // a block word in another case or a wrapper in another case or by path is skipped to reach the real program, and a `segments` `run` whose program basename holds
 // whitespace stores `<literal>`. It also settles the two stored forms of a `copilot` step at version 12. EXTRACTOR stays 11.
+// Version 14 (CAPTURE 14) adds the optional `errorCode`, `packages`, and `manifest` to a tool call and the optional `stack` strata to the file record and the prompt
+// record, all read from the transcript. It changes no value captured before, so EXTRACTOR stays 11.
 //
 // Version 10 (CAPTURE 10, t768) gives a turn opened by a slash command or a skill a `user-prompt` record, adds `opened` to that record, and moves `skills`
 // from class P to class A, since a skill's name can be private. It changed no derivation, so it leaves EXTRACTOR at 9.
@@ -85,7 +87,7 @@ export type PromptClass = (typeof PROMPT_CLASSES)[number];
 
 /** The statuses agents recover from differently (pool vocabulary spec Section 7); any other status is `other`. */
 export const HTTP_STATUSES = ['400', '401', '403', '404', '408', '409', '413', '429', '500', '502', '503', '504', '529'] as const;
-/** A shell exit status by what the agent does next: success flagged as failure, the two common failures, not executable, not found, a signal (129 to 255), and the rest. */
+/** A shell exit status by what the agent does next: success flagged as failure, the two common failures, not executable, not found, a signal (129 to 192), and the rest. */
 export const EXIT_CLASSES = ['0', '1', '2', '126', '127', 'signal'] as const;
 /** What a harness says when a call fails before or without a shell: it names the harness's own refusal, never the tool's input or output. */
 export const HARNESS_ERROR_CLASSES = ['user-rejected', 'interrupted', 'permission-denied', 'input-validation', 'tool-use-error', 'timeout'] as const;
@@ -114,7 +116,7 @@ export const REPO_FILE_BUCKETS = ['under-100', '100-1k', '1k-10k', '10k-100k', '
 export type RepoFilesBucket = (typeof REPO_FILE_BUCKETS)[number];
 
 /**
- * The stack strata of a session or a prompt (CAPTURE 13, class A): kept beside `frame`, not inside `frame.stack`, because the wire refuses any extra key
+ * The stack strata of a session or a prompt (CAPTURE 14, class A): kept beside `frame`, not inside `frame.stack`, because the wire refuses any extra key
  * in a stack. `languages` lists each touched language of the pinned list (else `other`) with its share bucket, `repoFiles` is the git index's count
  * bucketed (null when there is no index), `frameworks` are the vocabulary's frameworks that a resolved package shows, and `explore` counts the steps that
  * only look: `file.read`, `file.search`, `web.search`, and `web.fetch`. A prompt's `explore` is its own; the rest is the file's.
@@ -233,7 +235,7 @@ export interface SessionObservation {
   frame?: Frame;
   /** The hash of `frame`. Class A: one value over the whole frame links rows. */
   frameId?: string;
-  /** The stack strata of the file (CAPTURE 13). Class A; absent on a record captured earlier. */
+  /** The stack strata of the file (CAPTURE 14). Class A; absent on a record captured earlier. */
   strata?: Strata;
   /** The harness's own `cost-state` totals when the file has one. */
   costUsd: number | null;
@@ -431,7 +433,7 @@ export interface ToolObservation {
   targetBase: TargetBase | null;
   /** The input's key names, sorted. Class A (EXTRACTOR 11). */
   keys: string[];
-  /** The class of a failed call (`errorCodeOf`): a member of `ERROR_CODES`, never result text. Absent on a call that did not fail and on a record captured before CAPTURE 13. Class P. */
+  /** The class of a failed call (`errorCodeOf`): a member of `ERROR_CODES`, never result text. Absent on a call that did not fail and on a record captured before CAPTURE 14. Class P. */
   errorCode?: string;
   /** From the call's line to its first result's line; null when either timestamp is missing or no result is in the file. */
   durationMs: number | null;
@@ -447,9 +449,9 @@ export interface ToolObservation {
   segments?: ShellSegment[];
   /** What the call pulled (CAPTURE 6). Absent when it pulled nothing. */
   pulls?: ToolPull[];
-  /** The packages the call installs or runs, resolved; absent when it names none (CAPTURE 13). Class A. */
+  /** The packages the call installs or runs, resolved; absent when it names none (CAPTURE 14). Class A. */
   packages?: ToolPackage[];
-  /** The dependency names a call read, wrote, or edited in a manifest (CAPTURE 13). Class A. */
+  /** The dependency names a call read, wrote, or edited in a manifest (CAPTURE 14). Class A. */
   manifest?: ToolManifest;
   /** One entry per commit a clean shell call made, in order: the sha its result names, or null when it names none (CAPTURE 6). Absent when it made none. */
   commits?: Array<string | null>;
@@ -471,7 +473,7 @@ export interface ToolPackage {
   first: boolean;
 }
 
-/** What a call showed of a dependency manifest (class A, CAPTURE 13): names as `<ecosystem>:<name>`. A Read's result and a Write's content list `seen`; an Edit's text gives the names it `added` and `removed`. Absent when none is shown. */
+/** What a call showed of a dependency manifest (class A, CAPTURE 14): names as `<ecosystem>:<name>`. A Read's result and a Write's content list `seen`; an Edit's text gives the names it `added` and `removed`. Absent when none is shown. */
 export interface ToolManifest {
   file: 'package.json' | 'requirements.txt' | 'Cargo.toml';
   seen: string[];
@@ -541,7 +543,7 @@ export interface UserPromptObservation {
   frame?: Frame;
   /** The hash of `frame` (`frameIdOf`). Class A (EXTRACTOR 11). */
   frameId?: string;
-  /** The stack strata of the file with this prompt's own `explore` count (CAPTURE 13). Class A; absent on a record captured earlier. */
+  /** The stack strata of the file with this prompt's own `explore` count (CAPTURE 14). Class A; absent on a record captured earlier. */
   strata?: Strata;
 }
 
