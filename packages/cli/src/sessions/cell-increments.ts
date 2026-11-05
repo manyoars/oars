@@ -202,7 +202,7 @@ const toolRecords = (id: string, main: string, { tools }: SkeletonTranscript): T
     harnessVersion: null,
     side,
     prompt,
-    ...(errorCode === null || errorCode === undefined ? {} : { errorCode }),
+    ...(errorCode === null ? {} : { errorCode }),
     steps: steps.map(({ action, native, identity, status: reported, parent, tokens, ms }, seg) => ({
       action,
       native,

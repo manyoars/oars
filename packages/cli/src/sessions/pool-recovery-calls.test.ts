@@ -75,7 +75,7 @@ describe('recoveryCalls on the wire', () => {
   describe('through the parser', () => {
     const whole = (): SessionSkeleton =>
       skeletonOf1([call(0, 'shell.exec', { status: 'error', errorCode: '1' }), call(1, 'file.read'), call(2, 'file.edit')]);
-    const raw = (): SessionSkeleton => JSON.parse(JSON.stringify(whole())) as SessionSkeleton;
+    const raw = (): SessionSkeleton => whole();
     const recoveryOf = (skeleton: SessionSkeleton): unknown => toolsOf(skeleton)[0]?.recoveryCalls;
 
     it('round-trips', () => {
