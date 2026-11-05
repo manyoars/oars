@@ -288,6 +288,7 @@ export const skippedFolders = async (runtime: SessionsRuntime): Promise<SkippedS
 };
 
 interface DepositContext {
+  held: LockHold;
   runtime: SessionsRuntime;
   state: State;
   /** The sorted redact-domain set in force. */
@@ -310,7 +311,7 @@ interface DepositContext {
   now: () => number;
 }
 
-const contextFor = async (runtime: SessionsRuntime, state: State, now: () => number): Promise<DepositContext> => {
+const contextFor = async (runtime: SessionsRuntime, state: State, now: () => number, held: LockHold): Promise<DepositContext> => {
   // Each file records the set it was deposited under. A file whose set differs from the current one is read again, so a domain
   // added while other folders were allowed still masks those folders later. Lines already written stay in the observations file
   // until it is compacted; readers use only the highest rev of each session.
@@ -318,6 +319,7 @@ const contextFor = async (runtime: SessionsRuntime, state: State, now: () => num
   const salt = await (runtime.accountSalt ?? localSalt)(runtime.storeDir);
   let logged: Promise<LoggedSessions> | undefined;
   return {
+    held,
     runtime,
     state,
     domains: [...state.redactDomains].sort(),
@@ -506,7 +508,10 @@ const depositFile = async (context: DepositContext, project: string, transcript:
   const { file, session } = transcript;
   const info = await stat(file);
   // Archived before the unchanged check, so a store deposited before the archive existed fills it on its next run.
-  if (transcript.fromRaw !== true) await archiveRaw(file, join(paths(runtime.storeDir).raw, project, ...transcript.relative.split('/')));
+  if (transcript.fromRaw !== true) {
+    await requireHold(context.held);
+    await archiveRaw(file, join(paths(runtime.storeDir).raw, project, ...transcript.relative.split('/')));
+  }
   const key = `${project}/${transcript.relative}`;
   const previous = state.files[key];
   if (
@@ -588,7 +593,7 @@ export const digest = (parts: readonly string[]): string => createHash('sha256')
  * either is recorded on it instead of thrown, so the caller can log the deposit that already wrote its records, then the failed step
  * (spec 3.1: one row per step, a failed derive leaving the index skipped), and rethrow.
  */
-export const refresh = async (runtime: SessionsRuntime, redactDomains: readonly string[], at: string, trace?: DepositTrace): Promise<void> => {
+export const refresh = async (runtime: SessionsRuntime, redactDomains: readonly string[], at: string, trace?: DepositTrace, held: LockHold = () => Promise.resolve(true)): Promise<void> => {
   const started = performance.now();
   // The extractor version alone until the store is read: a derive that fails before the high-water mark is known still has a key (spec 4.4).
   let key = digest([EXTRACTOR_VERSION]);
@@ -599,6 +604,7 @@ export const refresh = async (runtime: SessionsRuntime, redactDomains: readonly 
     const highWater = [...store.sessions, ...store.subagents].map((session) => `${session.session}:${String(session.rev)}`).sort();
     key = digest([EXTRACTOR_VERSION, ...highWater]);
     const derived = derive(store, at);
+    await requireHold(held);
     await writeAtomic(paths(runtime.storeDir).derived, JSON.stringify(derived));
     if (trace !== undefined) {
       trace.derive = {
@@ -609,7 +615,7 @@ export const refresh = async (runtime: SessionsRuntime, redactDomains: readonly 
       };
     }
   } catch (error) {
-    if (trace === undefined) throw error;
+    if (error instanceof StoreLockLostError || trace === undefined) throw error;
     trace.deriveFailure = { error, key, ms: Math.round(performance.now() - started) };
     return;
   }
@@ -626,6 +632,7 @@ export const refresh = async (runtime: SessionsRuntime, redactDomains: readonly 
   const indexStarted = performance.now();
   try {
     const index = buildIndex(store, redactDomains, at, reads);
+    await requireHold(held);
     await writeAtomic(indexPath(runtime.storeDir), JSON.stringify(index));
     if (trace !== undefined) {
       trace.index = {
@@ -636,7 +643,7 @@ export const refresh = async (runtime: SessionsRuntime, redactDomains: readonly 
       };
     }
   } catch (error) {
-    if (trace === undefined) throw error;
+    if (error instanceof StoreLockLostError || trace === undefined) throw error;
     trace.indexFailure = { error, key, ms: Math.round(performance.now() - indexStarted) };
   }
 };
@@ -646,7 +653,9 @@ const commitCapture = async (context: DepositContext, key: string, extract: Capt
   const files = paths(context.runtime.storeDir);
   const batch: Observation[] = [extract.session, ...extract.prompts, ...extract.tools, ...extract.errorLines];
   await mkdir(context.runtime.storeDir, { recursive: true });
+  await requireHold(context.held);
   await appendFile(files.observations, batch.map((observation) => `${JSON.stringify(observation)}\n`).join(''), { mode: 0o600 });
+  await requireHold(context.held);
   await writeAtomic(join(files.skeletons, `${extract.session.session}.json`), JSON.stringify(extract.skeleton));
   context.state.files[key] = { ...cursor, v: CAPTURE_VERSION, s: context.salt.sid, d: context.domains, repoSize: extract.session.frame?.stack.size ?? null };
 };
@@ -775,6 +784,10 @@ export const withLock = async <T>(storeDir: string, work: (held: LockHold) => Pr
 export const deposit = (runtime: SessionsRuntime, options: DepositOptions, trace?: DepositTrace): Promise<DepositResult> => withLock(runtime.storeDir, (holds) => depositLocked(runtime, options, holds, trace));
 
 /** Writes `state.json` only while this run holds the lock; a run that lost it throws before the write, so the holder that took over keeps its entries. */
+const requireHold = async (held: LockHold): Promise<void> => {
+  if (!(await held())) throw new StoreLockLostError();
+};
+
 const writeStateHeld = async (runtime: SessionsRuntime, state: State, held: LockHold): Promise<void> => {
   if (!(await held())) throw new StoreLockLostError();
   await writeAtomic(paths(runtime.storeDir).state, JSON.stringify(state));
@@ -795,7 +808,7 @@ const depositLocked = async (runtime: SessionsRuntime, options: DepositOptions, 
   if (held > 0) throw new CliError(`The log holds captures by a newer oars (sessions: ${String(held)}); upgrade oars.`, ExitCode.UNEXPECTED, 'unexpected');
   state.redactDomains = [...new Set([...state.redactDomains, ...options.redactDomains])];
   state.allow = [...new Set([...state.allow, ...options.allow])];
-  const context = await contextFor(runtime, state, options.now);
+  const context = await contextFor(runtime, state, options.now, holds);
   const result: DepositResult = {
     sessions: 0,
     unchanged: 0,
@@ -826,6 +839,7 @@ const depositLocked = async (runtime: SessionsRuntime, options: DepositOptions, 
     drainedKeys.add(key);
     record(extract, subagent);
   });
+  await requireHold(context.held);
   await sweepPendingTemps(runtime.storeDir, HOOK_LOCK.staleMs);
   // A project the harness cleaned up entirely is still visited when the state names it, so its archived transcripts are captured again.
   const stateProjects = Object.keys(state.files).map((key) => key.slice(0, key.indexOf('/'))).filter((name) => !isSource(table, name) && allow.allows(name));
@@ -858,13 +872,15 @@ const depositLocked = async (runtime: SessionsRuntime, options: DepositOptions, 
     result.cursorRejected = cursor.rejected;
   }
   await writeStateHeld(runtime, state, holds);
+  await requireHold(context.held);
   await removePending(runtime.storeDir, drained.settled);
   // Decided by what the log holds, not by what this run captured: a run that died after its re-capture left the copies for this one. The hook
   // path never compacts, since it has seconds. The records are safe by now and an uncompacted log still loads, so a failure here does not fail the deposit.
   await compactLog(runtime.storeDir, LOG_RENAME_WAIT_MS, holds).catch((error: unknown) => {
+    if (error instanceof StoreLockLostError) throw error;
     process.stderr.write(`oars: the session log was not compacted, and the next deposit tries again: ${error instanceof Error ? error.message : String(error)}\n`);
   });
-  await refresh(runtime, state.redactDomains, context.at, trace);
+  await refresh(runtime, state.redactDomains, context.at, trace, holds);
   return result;
 };
 
@@ -1230,6 +1246,7 @@ const drainPending = async (context: DepositContext, state: State, storeDir: str
       drained.settled.push(entry);
       if (into === undefined || into.result === 'missing' || into.result === 'not-allowed') bump(trace, 'pendingDropped');
     } catch (error) {
+      if (error instanceof StoreLockLostError) throw error;
       const message = error instanceof Error ? error.message : String(error);
       // An entry that keeps failing is not retried forever: a whole-store walk still reaches any transcript on the allowlist, so dropping it loses nothing.
       if (entry.failures + 1 >= PENDING_MAX_FAILURES) {
@@ -1237,6 +1254,7 @@ const drainPending = async (context: DepositContext, state: State, storeDir: str
         bump(trace, 'pendingDropped');
         process.stderr.write(`oars: a pending session failed ${String(PENDING_MAX_FAILURES)} times and was dropped: ${message}\n`);
       } else {
+        await requireHold(context.held);
         await failPending(storeDir, entry);
         bump(trace, 'pendingKept');
         process.stderr.write(`oars: a pending session was not deposited and stays pending: ${message}\n`);
@@ -1251,10 +1269,11 @@ const depositSessionLocked = async (runtime: SessionsRuntime, transcript: string
   refuseNewer(state);
   // A session no `--allow` names costs nothing when nothing is pending: no salt, no skeletons folder, no context.
   if (!compileAllow(state.allow).allows(basename(dirname(transcript))) && (await listPending(runtime.storeDir, 1)).length === 0) return 'not-allowed';
-  const context = await contextFor(runtime, state, now);
+  const context = await contextFor(runtime, state, now, held);
   const drained = await drainPending(context, state, runtime.storeDir, PENDING_HOOK_CAP, trace);
   const own = await depositSessionInto(context, state, transcript, trace);
   if (drained.wrote || own.wrote) await writeStateHeld(runtime, state, held);
+  await requireHold(context.held);
   await removePending(runtime.storeDir, drained.settled);
   return own.result;
 };
