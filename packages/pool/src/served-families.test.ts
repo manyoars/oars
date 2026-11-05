@@ -8,21 +8,17 @@ import { frame, printOf, prompt, session, sessionsFrom, step, store, storedNames
 import { sampleSkeleton } from './sample.js';
 import { startPool, stubUser, type TestPool } from './test-pool.js';
 
-// The fields a withheld family would read, none of them on the wire today. A value off the closed list for `errorCode` and `recoveryCalls` is refused too.
+// The fields a withheld family would read, none of them on the wire today.
 interface WithheldFields {
   keys?: string[];
-  errorCode?: string;
   sigHash?: string;
   outcome?: string;
-  recoveryCalls?: string;
 }
 
 const WITHHELD: readonly (readonly [keyof WithheldFields, string[] | string])[] = [
   ['keys', ['command']],
-  ['errorCode', 'x'],
   ['sigHash', 'x'],
   ['outcome', 'x'],
-  ['recoveryCalls', 'x'],
 ];
 
 describe('the wire holds no field a withheld family needs', () => {
@@ -132,6 +128,18 @@ describe('the recovery family in a bundle', () => {
     await pool.dispose();
   });
 
+  it('refuses an off-list errorCode at the deposit route', async () => {
+    const { token } = await pool.signIn('github', stubUser('5099'));
+    await pool.post('/v1/covenant/accept', { version: 'v1' }, token);
+    const skeleton = failingSkeleton('0000000000005099');
+    const response = await pool.post('/v1/deposits', {
+      ...skeleton,
+      transcripts: skeleton.transcripts.map((transcript) => ({ ...transcript, tools: transcript.tools.map((entry) => ({ ...entry, errorCode: 'off-list' })) })),
+    }, token);
+    expect(response.status).toBe(422);
+    expect(response.json).toMatchObject({ error: 'closed_vocabulary', field: 'transcripts[0].tools[0].errorCode' });
+  });
+
   const bundleAfter = async (ids: readonly string[]) => {
     let last = '';
     for (const id of ids) {
@@ -150,6 +158,8 @@ describe('the recovery family in a bundle', () => {
     expect(four.reads.some((read) => read.family === 'recovery')).toBe(false);
     expect(four.cells.some((cell) => cell.failed > 0 && cell.grain === 'week' && cell.frameBucket.endsWith('/-'))).toBe(false);
     const five = await bundleAfter(['5005']);
+    const modelMotifs = new Set(five.motifs.filter((motif) => motif.cls?.startsWith('error:')).map((motif) => motif.motifId));
+    expect(five.cells.filter((cell) => modelMotifs.has(cell.motifId)).map((cell) => cell.frameBucket)).toEqual(['claude-code/-/claude-opus-5-5', 'claude-code/-/claude-opus-5-5']);
     const recovery = five.reads.filter((read) => read.family === 'recovery');
     expect(recovery.map(({ slice, value }) => [slice.action, slice.errorCode, slice.next, value.followed, value.of])).toEqual([['shell.exec', '429', 'file.read', 5, 5]]);
     expect(JSON.stringify(recovery)).not.toMatch(/fix|outcome|sig/i);
