@@ -7,12 +7,17 @@ import { NOW, cleanup, stage, type Staged } from './test-support.js';
 // options are an hour of heartbeat, so the takeover is staged by hand, at the moment the first deposit opens a transcript.
 interface Seams {
   open: ((file: string) => void) | undefined;
+  renamed: ((file: string) => void) | undefined;
 }
-const seams = vi.hoisted((): Seams => ({ open: undefined }));
+const seams = vi.hoisted((): Seams => ({ open: undefined, renamed: undefined }));
 
 // A transcript is read whole, so the takeover fires when the first deposit reads one.
 vi.mock('node:fs/promises', () => ({
   ...promises,
+  rename: async (from: string, to: string) => {
+    await promises.rename(from, to);
+    seams.renamed?.(to);
+  },
   readFile: (file: string, encoding: 'utf8') => {
     seams.open?.(file);
     return promises.readFile(file, encoding);
@@ -23,6 +28,7 @@ const { compactLog, deposit, depositSession, paths, withLock } = await import('.
 
 beforeEach(() => {
   seams.open = undefined;
+  seams.renamed = undefined;
 });
 afterEach(cleanup);
 
@@ -61,6 +67,7 @@ describe('a holder that lost the store lock', () => {
     const staged = stage();
     await deposit(staged.runtime, options);
     touchTranscript(staged, 5);
+    const logBeforeTakeover = readFileSync(paths(staged.storeDir).observations, 'utf8');
     let taken = false;
     seams.open = (file) => {
       if (taken || !file.endsWith('tldr.jsonl')) return;
@@ -69,6 +76,7 @@ describe('a holder that lost the store lock', () => {
     };
     await expect(deposit(staged.runtime, options)).rejects.toThrow('lost the store lock');
     expect(taken).toBe(true);
+    expect(readFileSync(paths(staged.storeDir).observations, 'utf8')).toBe(logBeforeTakeover);
     expect(stateOf(staged)).toEqual({ allow: ['proj', 'newer'], redactDomains: ['b.example'] });
     // The first deposit's cleanup leaves the second holder's lock alone.
     expect(readFileSync(join(staged.storeDir, 'store.lock'), 'utf8')).toBe(`${String(process.pid + 1)} second-holder-token`);
@@ -83,6 +91,36 @@ describe('a holder that lost the store lock', () => {
     };
     await expect(depositSession(staged.runtime, join(staged.projectsRoot, 'proj', 'tldr.jsonl'), () => NOW)).rejects.toThrow('lost the store lock');
     expect(stateOf(staged)).toEqual({ allow: ['proj', 'newer'], redactDomains: ['b.example'] });
+  });
+
+  it.each(['state.json', 'derived.json'])('keeps the later holder\'s index after takeover at %s', async (boundary) => {
+    const staged = stage();
+    await deposit(staged.runtime, options);
+    touchTranscript(staged, 5);
+    const index = join(staged.storeDir, 'hook-index.json');
+    const laterIndex = JSON.stringify({ redactDomains: ['b.example'] });
+    let taken = false;
+    let stateWritten = false;
+    let checksAfterState = 0;
+    seams.open = (file) => {
+      if (boundary !== 'state.json' || !stateWritten || !file.endsWith('store.lock')) return;
+      checksAfterState++;
+      // The first check protects pending cleanup; the second is compaction's rename fence.
+      if (checksAfterState !== 2) return;
+      taken = true;
+      secondHolder(staged);
+      writeFileSync(index, laterIndex);
+    };
+    seams.renamed = (file) => {
+      if (file.endsWith('state.json')) stateWritten = true;
+      if (boundary === 'state.json' || taken || !file.endsWith(boundary)) return;
+      taken = true;
+      secondHolder(staged);
+      writeFileSync(index, laterIndex);
+    };
+    await expect(deposit(staged.runtime, options)).rejects.toThrow('lost the store lock');
+    expect(taken).toBe(true);
+    expect(readFileSync(index, 'utf8')).toBe(laterIndex);
   });
 
   it('does not replace the log when it no longer holds the lock', async () => {
