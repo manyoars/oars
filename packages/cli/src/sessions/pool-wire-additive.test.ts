@@ -16,13 +16,32 @@ const baseSkeleton = (): SessionSkeleton => {
   return built;
 };
 
-/** A deep copy of a batch as plain JSON, which a test then edits as a client's own newer form would differ from this one. */
-const wire = (): { [key: string]: unknown } => JSON.parse(JSON.stringify(baseSkeleton())) as { [key: string]: unknown };
+interface Holder {
+  [key: string]: unknown;
+}
+const isHolder = (value: unknown): value is Holder => typeof value === 'object' && value !== null;
 
-const at = (value: unknown, ...path: (string | number)[]): unknown => path.reduce<unknown>((held, key) => (held as { [key: string]: unknown })[String(key)], value);
+/** A deep copy of a batch as plain JSON, which a test then edits as a client's own newer form would differ from this one. */
+const wire = (): Holder => {
+  const copy: unknown = JSON.parse(JSON.stringify(baseSkeleton()));
+  if (!isHolder(copy)) throw new Error('a batch is an object');
+  return copy;
+};
+/** A batch with one top-level field left off, as an older client would send it. */
+const without = (name: string): Holder => {
+  const sent = wire();
+  Reflect.deleteProperty(sent, name);
+  return sent;
+};
+
+const at = (value: unknown, ...path: (string | number)[]): unknown => path.reduce<unknown>((held, key) => (isHolder(held) ? held[String(key)] : undefined), value);
+const holderAt = (value: unknown, ...path: (string | number)[]): Holder => {
+  const found = at(value, ...path);
+  if (!isHolder(found)) throw new Error(`no object at ${path.join('.')}`);
+  return found;
+};
 const set = (value: unknown, path: (string | number)[], next: unknown): void => {
-  const holder = at(value, ...path.slice(0, -1)) as { [key: string]: unknown };
-  holder[String(path.at(-1))] = next;
+  holderAt(value, ...path.slice(0, -1))[String(path.at(-1))] = next;
 };
 
 const parsed = (value: unknown) => {
@@ -42,16 +61,15 @@ describe('versions on every batch', () => {
   it('refuses format 2 by name, the way it refuses format 1', () => {
     for (const format of [1, 2]) {
       const sent = { ...wire(), format };
-      expect(parseSkeleton(sent)).toMatchObject({ ok: false, field: 'format', reason: expect.stringContaining(`format ${String(format)}`) as unknown });
+      const named: unknown = expect.stringContaining(`format ${String(format)}`);
+      expect(parseSkeleton(sent)).toMatchObject({ ok: false, field: 'format', reason: named });
     }
     expect(parseSkeleton({ ...wire(), format: 4 })).toMatchObject({ ok: false, field: 'format' });
   });
 
   it('refuses a batch whose versions are missing or of the wrong shape', () => {
-    const { vocabVersion: _vocab, ...noVocab } = wire();
-    expect(parseSkeleton(noVocab)).toMatchObject({ ok: false, field: 'vocabVersion', reason: 'missing' });
-    const { fieldsVersion: _fields, ...noFields } = wire();
-    expect(parseSkeleton(noFields)).toMatchObject({ ok: false, field: 'fieldsVersion', reason: 'missing' });
+    expect(parseSkeleton(without('vocabVersion'))).toMatchObject({ ok: false, field: 'vocabVersion', reason: 'missing' });
+    expect(parseSkeleton(without('fieldsVersion'))).toMatchObject({ ok: false, field: 'fieldsVersion', reason: 'missing' });
     expect(parseSkeleton({ ...wire(), fieldsVersion: 'one' })).toMatchObject({ ok: false, field: 'fieldsVersion', reason: 'not a count' });
     expect(parseSkeleton({ ...wire(), vocabVersion: 'a version with spaces and a very long tail that no vocabulary would ever carry' })).toMatchObject({ ok: false, field: 'vocabVersion' });
   });
@@ -122,8 +140,7 @@ describe('the extensions bag', () => {
     const spaced = wire();
     set(spaced, ['a field'], 1);
     expect(parseSkeleton(spaced)).toMatchObject({ ok: false, reason: 'not a field name' });
-    const { id: _id, ...missing } = wire();
-    expect(parseSkeleton(missing)).toMatchObject({ ok: false, field: 'id', reason: 'missing' });
+    expect(parseSkeleton(without('id'))).toMatchObject({ ok: false, field: 'id', reason: 'missing' });
     expect(parseSkeleton([])).toMatchObject({ ok: false, field: 'skeleton' });
     const oversized = wire();
     set(oversized, ['transcripts', 0, 'tools', 0, 'durationMs'], Number.MAX_SAFE_INTEGER + 2);
@@ -157,7 +174,7 @@ describe('other for an unknown value', () => {
     { name: 'pull version', path: ['transcripts', 0, 'tools', 0, 'steps', 0, 'identity', 'pulls', 0, 'version'] },
   ];
 
-  const withEnough = (): { [key: string]: unknown } => {
+  const withEnough = (): Holder => {
     const sent = wire();
     // A frame the fixture leaves empty gets one entry each, so every list and nullable field above has a value to replace.
     set(sent, ['transcripts', 0, 'frame', 'stack', 'languages'], ['typescript']);
@@ -174,7 +191,7 @@ describe('other for an unknown value', () => {
     expect(at(result.skeleton, ...path)).toBe('other');
     expect(result.others).toBe(1);
     // The place of the unknown value comes first; a part of the step it leaves unread (the identity of an unknown action, the flags of an unknown program) is noted after it, also as sent.
-    expect(result.extensions[0]).toEqual({ at: path.reduce((place, key) => (typeof key === 'number' ? `${place}[${String(key)}]` : place === '' ? key : `${place}.${key}`), ''), kind: 'value', value: 'a-value-no-vocabulary-holds' });
+    expect(result.extensions[0]).toEqual({ at: path.reduce<string>((place, key) => (typeof key === 'number' ? `${place}[${String(key)}]` : place === '' ? key : `${place}.${key}`), ''), kind: 'value', value: 'a-value-no-vocabulary-holds' });
     expect(result.extensions.every(({ kind }) => kind === 'value')).toBe(true);
   });
 
@@ -220,7 +237,12 @@ describe('the client emits no literal', () => {
     const names = new Set<string>();
     const walk = (value: unknown): void => {
       if (Array.isArray(value)) value.forEach(walk);
-      else if (typeof value === 'object' && value !== null) for (const [key, entry] of Object.entries(value)) (names.add(key), walk(entry));
+      else if (isHolder(value)) {
+        for (const [key, entry] of Object.entries(value)) {
+          names.add(key);
+          walk(entry);
+        }
+      }
     };
     walk(built);
     expect([...names].filter((name) => name.endsWith('Literal'))).toEqual([]);
@@ -232,9 +254,9 @@ describe('the client emits no literal', () => {
 describe('every optional field may be absent', () => {
   it('reads an absent nullable field as null and an absent list as empty', () => {
     const sent = wire();
-    delete (at(sent, 'transcripts', 0, 'frame') as { [key: string]: unknown }).model;
-    delete (at(sent, 'transcripts', 0, 'frame', 'stack') as { [key: string]: unknown }).languageShares;
-    delete (at(sent, 'transcripts', 0, 'tools', 0, 'steps', 0) as { [key: string]: unknown }).parent;
+    Reflect.deleteProperty(holderAt(sent, 'transcripts', 0, 'frame'), 'model');
+    Reflect.deleteProperty(holderAt(sent, 'transcripts', 0, 'frame', 'stack'), 'languageShares');
+    Reflect.deleteProperty(holderAt(sent, 'transcripts', 0, 'tools', 0, 'steps', 0), 'parent');
     delete sent.timingPrint;
     delete sent.deltas;
     const result = parsed(sent);

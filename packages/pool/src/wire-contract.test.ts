@@ -15,17 +15,32 @@ const framed = frame({ shell: 'bash' });
 let pool: TestPool;
 
 /** A batch as plain JSON: a client's own newer or sparser form is this with something added or taken away. */
-type Wire = { [key: string]: unknown };
+interface Wire {
+  [key: string]: unknown;
+}
+const isWire = (value: unknown): value is Wire => typeof value === 'object' && value !== null;
 
 const baseline = (): Wire => {
   const shell = step(0, 0, 'shell.exec', { native: 'Bash', identity: { program: 'git', sub: 'push', flags: ['-f'] } });
   const [only] = sessionsFrom(store({ sessions: [session('s1', { frame: framed })], prompts: [prompt('s1', 0, { frame: framed })], tools: [tool('s1', 0, 'Bash', { steps: [shell] })] }));
   const built = only === undefined ? null : skeletonOf(only, ID, storedNames, printOf);
   if (built === null) throw new Error('no skeleton');
-  return JSON.parse(JSON.stringify(built)) as Wire;
+  const copy: unknown = JSON.parse(JSON.stringify(built));
+  if (!isWire(copy)) throw new Error('a batch is an object');
+  return copy;
 };
 
-const holder = (value: unknown, ...path: (string | number)[]): Wire => path.reduce<unknown>((held, key) => (held as Wire)[String(key)], value) as Wire;
+const holder = (value: unknown, ...path: (string | number)[]): Wire => {
+  const found = path.reduce<unknown>((held, key) => (isWire(held) ? held[String(key)] : undefined), value);
+  if (!isWire(found)) throw new Error(`no object at ${path.join('.')}`);
+  return found;
+};
+/** A batch with one top-level field left off, as an older client would send it. */
+const without = (name: string): Wire => {
+  const sent = baseline();
+  Reflect.deleteProperty(sent, name);
+  return sent;
+};
 
 const post = (body: Wire): Promise<Answer> => pool.post('/v1/deposits', JSON.stringify(body), TOKEN);
 
@@ -39,8 +54,9 @@ interface Row {
 }
 
 const rowOf = async (): Promise<Row> => {
-  const row = await (await pool.db()).prepare('SELECT skeleton, format, vocab_version, fields_version, extensions, other_values FROM deposits WHERE account = ? AND id = ?').bind('acct-1', ID).first();
-  return row as unknown as Row;
+  const row = await (await pool.db()).prepare('SELECT skeleton, format, vocab_version, fields_version, extensions, other_values FROM deposits WHERE account = ? AND id = ?').bind('acct-1', ID).first<Row>();
+  if (row === null) throw new Error('no deposit row');
+  return row;
 };
 
 /** Everything a bundle is derived from: the cells, the motifs, and the strata. */
@@ -69,10 +85,8 @@ describe('the versions a deposit carries', () => {
 
   it('refuse format 2 by name, the way format 1 is refused, and a batch with no versions', async () => {
     for (const format of [1, 2]) expect(await post({ ...baseline(), format })).toMatchObject({ status: 422, json: { error: 'closed_vocabulary', field: 'format' } });
-    const { vocabVersion: _vocab, ...noVocab } = baseline();
-    expect(await post(noVocab)).toMatchObject({ status: 422, json: { field: 'vocabVersion' } });
-    const { fieldsVersion: _fields, ...noFields } = baseline();
-    expect(await post(noFields)).toMatchObject({ status: 422, json: { field: 'fieldsVersion' } });
+    expect(await post(without('vocabVersion'))).toMatchObject({ status: 422, json: { field: 'vocabVersion' } });
+    expect(await post(without('fieldsVersion'))).toMatchObject({ status: 422, json: { field: 'fieldsVersion' } });
   });
 
   it('store the versions a newer client names, so an older server reads a newer client', async () => {
@@ -103,9 +117,12 @@ describe('a field this server does not know', () => {
     expect(after.plane).toEqual(before.plane);
     expect(after.row.skeleton).toBe(before.row.skeleton);
     expect(await (await pool.db()).prepare('SELECT generation FROM pool_generation').first('generation')).toBe(generation);
-    const bag = JSON.parse(after.row.extensions) as { at: string; kind: string; value: unknown }[];
+    const stored: unknown = JSON.parse(after.row.extensions);
+    if (!Array.isArray(stored)) throw new Error('the bag is a list');
+    const bag = stored.filter(isWire);
     expect(bag.map(({ at }) => at).sort()).toEqual(LEVELS.map(({ at }) => at).sort());
     expect(bag.every(({ kind }) => kind === 'field')).toBe(true);
+    expect(bag).toHaveLength(LEVELS.length);
     // The stored skeleton is the parsed one: nothing of the bag is in it.
     expect(after.row.skeleton).not.toContain('kept at');
   });
@@ -146,22 +163,24 @@ describe('a format 3 batch with every optional field absent', () => {
   /** What an absent optional field reads as, which is what a sent null is. */
   const EMPTY: { [name: string]: unknown } = { deltas: [], timingPrint: null, languageShares: [] };
 
-  const LEVEL_PATHS: { [level in keyof typeof OPTIONAL]: (string | number)[] } = {
-    batch: [],
-    frame: ['transcripts', 0, 'frame'],
-    stack: ['transcripts', 0, 'frame', 'stack'],
-    prompt: ['transcripts', 0, 'prompts', 0],
-    tool: ['transcripts', 0, 'tools', 0],
-    step: ['transcripts', 0, 'tools', 0, 'steps', 0],
-  };
+  // Each level of the wire with its optional names and where it sits; a level added to OPTIONAL fails the length check below until it is listed here.
+  const LEVELS_OPTIONAL: readonly (readonly [readonly string[], (string | number)[]])[] = [
+    [OPTIONAL.batch, []],
+    [OPTIONAL.frame, ['transcripts', 0, 'frame']],
+    [OPTIONAL.stack, ['transcripts', 0, 'frame', 'stack']],
+    [OPTIONAL.prompt, ['transcripts', 0, 'prompts', 0]],
+    [OPTIONAL.tool, ['transcripts', 0, 'tools', 0]],
+    [OPTIONAL.step, ['transcripts', 0, 'tools', 0, 'steps', 0]],
+  ];
 
   it('is served from what remains, as the same batch with each of them sent as null', async () => {
     const nulled = baseline();
     const sparse = baseline();
-    for (const level of Object.keys(OPTIONAL) as (keyof typeof OPTIONAL)[]) {
-      for (const name of OPTIONAL[level]) {
-        holder(nulled, ...LEVEL_PATHS[level])[name] = name in EMPTY ? EMPTY[name] : null;
-        delete holder(sparse, ...LEVEL_PATHS[level])[name];
+    expect(LEVELS_OPTIONAL).toHaveLength(Object.keys(OPTIONAL).length);
+    for (const [names, path] of LEVELS_OPTIONAL) {
+      for (const name of names) {
+        holder(nulled, ...path)[name] = name in EMPTY ? EMPTY[name] : null;
+        Reflect.deleteProperty(holder(sparse, ...path), name);
       }
     }
     expect((await post(nulled)).status).toBe(201);
@@ -180,7 +199,7 @@ describe('a format 3 batch with every optional field absent', () => {
       [['transcripts', 0, 'prompts', 0, 'usage'], 'input'],
     ] as const) {
       const sent = baseline();
-      delete holder(sent, ...path)[name];
+      Reflect.deleteProperty(holder(sent, ...path), name);
       expect(await post(sent)).toMatchObject({ status: 422, json: { error: 'closed_vocabulary' } });
     }
   });
