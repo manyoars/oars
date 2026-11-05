@@ -16,7 +16,7 @@ const ok = (description: string, ref: string) => ({
 });
 
 // A small stand-in for the platform's combined spec: three paths, one of them with an unlisted method, a
-// schema chain (Order -> Line -> Money), a shared response component and schemas nothing listed uses.
+// schema chain (Order -> Line -> Quantity), a shared response component and schemas nothing listed uses.
 const source = {
   openapi: '3.1.0',
   info: { title: 'Combined', description: 'Internal title for every microservice', version: '1.0.0' },
@@ -64,8 +64,8 @@ const source = {
     schemas: {
       CreateOrder: { type: 'object', properties: { lines: { type: 'array', items: { $ref: '#/components/schemas/Line' } } } },
       Order: { type: 'object', properties: { id: { type: 'string' }, lines: { type: 'array', items: { $ref: '#/components/schemas/Line' } } } },
-      Line: { type: 'object', properties: { price: { $ref: '#/components/schemas/Money' } } },
-      Money: { type: 'object', properties: { amount: { type: 'string' } } },
+      Line: { type: 'object', properties: { size: { $ref: '#/components/schemas/Quantity' } } },
+      Quantity: { type: 'object', properties: { amount: { type: 'string' } } },
       Problem: { type: 'object', properties: { code: { type: 'string' } } },
       AuditEntry: { type: 'object', properties: { who: { type: 'string' } } },
       Orphan: { type: 'object' },
@@ -136,7 +136,7 @@ describe('openapi-public.mjs', () => {
     expect(keysAt(out, 'paths')).toEqual(['/orders', '/orders/{orderId}']);
     expect(keysAt(out, 'paths', '/orders')).toEqual(['post']);
     expect(keysAt(out, 'paths', '/orders/{orderId}')).toEqual(['get', 'parameters']);
-    expect(keysAt(out, 'components', 'schemas')).toEqual(['CreateOrder', 'Line', 'Money', 'Order', 'Problem']);
+    expect(keysAt(out, 'components', 'schemas')).toEqual(['CreateOrder', 'Line', 'Order', 'Problem', 'Quantity']);
     expect(keysAt(out, 'components', 'responses')).toEqual(['Problem']);
     expect(keysAt(out, 'components', 'parameters')).toEqual(['OrderId']);
     expect(keysAt(out, 'components')).not.toContain('securitySchemes');
@@ -152,7 +152,7 @@ describe('openapi-public.mjs', () => {
     expect(at(out, 'info', 'version')).toBe('7.8.9');
     const description = at(out, 'info', 'description');
     expect(description).toBe(
-      'The AOR platform calls that Many Oars exposes to the CLI, starter templates, and coding agents: deploy a workload, read it, exchange a token, manage API keys and workload config, set prices and customers, reserve and settle credits, take a payment.',
+      'The Many Oars API: register, read, configure, and deploy a workload; exchange an OIDC token; and create, list, rotate, and revoke API keys.',
     );
     expect(description).not.toContain('Internal');
     expect(JSON.stringify(at(out, 'info'))).not.toContain('Combined');
@@ -167,7 +167,7 @@ describe('openapi-public.mjs', () => {
 
   it('exits non-zero naming a $ref that points at a component the source lacks', () => {
     const broken = structuredClone(source);
-    broken.components.schemas.Line = { type: 'object', properties: { price: { $ref: '#/components/schemas/Gone' } } };
+    broken.components.schemas.Line = { type: 'object', properties: { size: { $ref: '#/components/schemas/Gone' } } };
 
     const result = run(['createOrder'], broken);
 
@@ -193,5 +193,201 @@ describe('openapi-public.mjs', () => {
     expect(second).toBe(first);
     expect(first.endsWith('}\n')).toBe(true);
     expect(keysAt(readOut())).toEqual(['components', 'info', 'openapi', 'paths', 'tags']);
+  });
+
+  // The platform's spec carries operations and texts the public spec withholds. The list file selects operations, but the
+  // generator is the backstop: a listed operation on a withheld path, tag, or schema is dropped, so a regeneration cannot bring it back.
+  describe('the withheld side', () => {
+    const withheldSource = {
+      ...source,
+      paths: {
+        ...source.paths,
+        '/billing/charges': {
+          post: {
+            tags: ['Billing charges'],
+            operationId: 'createCharge',
+            responses: { '200': ok('Charged', '#/components/schemas/ChargeView') },
+          },
+        },
+        '/agents/templates': {
+          get: {
+            tags: ['Agent Templates'],
+            operationId: 'listTemplates',
+            responses: { '200': ok('Templates', '#/components/schemas/TemplatePage') },
+          },
+        },
+        '/orders/{orderId}/tagged': {
+          get: { tags: ['Billing mode'], operationId: 'taggedOnly', responses: { '200': { description: 'Tagged' } } },
+        },
+      },
+      components: {
+        ...source.components,
+        schemas: {
+          ...source.components.schemas,
+          ChargeView: { type: 'object', properties: { id: { type: 'string' } } },
+          // The real path is transitive: PageAgentTemplateResponse -> AgentTemplateResponse -> TemplateStarterPrice.
+          TemplatePage: { type: 'object', properties: { items: { type: 'array', items: { $ref: '#/components/schemas/TemplateStarterPrice' } } } },
+          TemplateStarterPrice: { type: 'object', properties: { id: { type: 'string' } } },
+        },
+      },
+    };
+
+    it('drops a listed operation on a billing path, with a billing tag, or reaching a withheld schema through another schema', () => {
+      const result = run(['getOrder', 'createCharge', 'listTemplates', 'taggedOnly'], withheldSource);
+
+      expect(result.status).toBe(0);
+      const out = readOut();
+      expect(keysAt(out, 'paths')).toEqual(['/orders/{orderId}']);
+      expect(keysAt(out, 'components', 'schemas')).toEqual(['Order', 'Line', 'Quantity'].sort());
+      expect(at(out, 'tags')).toEqual([{ name: 'Orders', description: 'Order lifecycle' }]);
+      expect(JSON.stringify(out)).not.toMatch(/charge|billing|price|TemplatePage/i);
+    });
+
+    it('still names a listed operation the source lacks when the others are withheld operations', () => {
+      const result = run(['createCharge', 'noSuchOperation'], withheldSource);
+
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toContain('noSuchOperation');
+      expect(result.stderr).not.toContain('createCharge');
+    });
+
+    it('drops the 402 response, the payment and USD estimate properties, and rewrites the platform texts', () => {
+      const orderPath = source.paths['/orders/{orderId}'];
+      const withTexts = {
+        ...source,
+        paths: {
+          ...source.paths,
+          '/orders/{orderId}': {
+            ...orderPath,
+            get: {
+              ...orderPath.get,
+              responses: {
+                ...orderPath.get.responses,
+                '402': { description: 'Payment Required' },
+                '409': {
+                  description:
+                    'PLATFORM_STEWARDED, WORKLOAD_SUSPENDED, COMPUTE_CREDIT_EXHAUSTED (actionUrl: add compute credit)',
+                },
+              },
+            },
+          },
+        },
+        components: {
+          ...source.components,
+          schemas: {
+            ...source.components.schemas,
+            Order: {
+              type: 'object',
+              properties: {
+                paymentId: { type: 'string' },
+                monthlyReservedCostUsd: { type: 'string', description: 'Estimated compute cost in USD of the replicas' },
+                autoRestartOnCredit: {
+                  type: 'boolean',
+                  description:
+                    "Whether the workload restarts automatically after a credit-driven stop once the creator's compute credit is replenished. Null means true.",
+                },
+                actionUrl: {
+                  type: 'string',
+                  description:
+                    'A URL where a human completes the step that clears this rejection (Stripe onboarding, a credit-pack checkout). Present only when such a step exists.',
+                },
+              },
+            },
+          },
+        },
+      };
+
+      const result = run(['getOrder'], withTexts);
+
+      expect(result.status).toBe(0);
+      const out = readOut();
+      expect(keysAt(out, 'paths', '/orders/{orderId}', 'get', 'responses')).toEqual(['200', '409']);
+      expect(at(out, 'paths', '/orders/{orderId}', 'get', 'responses', '409', 'description')).toBe(
+        'PLATFORM_STEWARDED, WORKLOAD_SUSPENDED, COMPUTE_CREDIT_EXHAUSTED',
+      );
+      expect(at(out, 'components', 'schemas', 'Order', 'properties', 'actionUrl', 'description')).toBe(
+        'A URL where a human completes the step that clears this rejection. Present only when such a step exists.',
+      );
+      expect(keysAt(out, 'components', 'schemas', 'Order', 'properties')).toEqual(['actionUrl', 'autoRestartOnCredit']);
+      expect(at(out, 'components', 'schemas', 'Order', 'properties', 'autoRestartOnCredit', 'description')).toBe(
+        'Whether the workload restarts automatically after a stop at a usage limit once the limit clears. Null means true.',
+      );
+      expect(JSON.stringify(out)).not.toMatch(/payment|stripe|add compute credit|credit-pack|usd|credit-driven/i);
+    });
+
+    it('drops a withheld property from required as well as from properties', () => {
+      const withRequired = {
+        ...source,
+        components: {
+          ...source.components,
+          schemas: {
+            ...source.components.schemas,
+            Order: {
+              type: 'object',
+              required: ['id', 'paymentId', 'monthlyReservedCostUsd'],
+              properties: { id: { type: 'string' }, paymentId: { type: 'string' }, monthlyReservedCostUsd: { type: 'string' } },
+            },
+          },
+        },
+      };
+
+      const result = run(['getOrder'], withRequired);
+
+      expect(result.status).toBe(0);
+      const out = readOut();
+      expect(keysAt(out, 'components', 'schemas', 'Order', 'properties')).toEqual(['id']);
+      expect(at(out, 'components', 'schemas', 'Order', 'required')).toEqual(['id']);
+    });
+
+    it('drops a 402 response whatever its description says', () => {
+      const orderPath = source.paths['/orders/{orderId}'];
+      const reworded = {
+        ...source,
+        paths: {
+          ...source.paths,
+          '/orders/{orderId}': {
+            ...orderPath,
+            get: { ...orderPath.get, responses: { ...orderPath.get.responses, '402': { description: 'The account must be topped up' } } },
+          },
+        },
+      };
+
+      const result = run(['getOrder'], reworded);
+
+      expect(result.status).toBe(0);
+      const out = readOut();
+      expect(keysAt(out, 'paths', '/orders/{orderId}', 'get', 'responses')).toEqual(['200']);
+      expect(JSON.stringify(out)).not.toContain('topped up');
+    });
+
+    it('rewrites the Role description without an em dash or the platform security class', () => {
+      const orderPath = source.paths['/orders/{orderId}'];
+      const withRole = {
+        ...source,
+        paths: {
+          ...source.paths,
+          '/orders/{orderId}': { ...orderPath, get: { ...orderPath.get, responses: { '200': ok('One', '#/components/schemas/Role') } } },
+        },
+        components: {
+          ...source.components,
+          schemas: {
+            ...source.components.schemas,
+            Role: {
+              type: 'string',
+              enum: ['USER'],
+              description:
+                "Platform role names. Matches the bare authority strings used in JWT 'roles' claims, DB role rows, and Spring Security GrantedAuthority — no ROLE_ prefix.",
+            },
+          },
+        },
+      };
+
+      const result = run(['getOrder'], withRole);
+
+      expect(result.status).toBe(0);
+      expect(at(readOut(), 'components', 'schemas', 'Role', 'description')).toBe(
+        "Platform role names, as they appear in the JWT 'roles' claim, without a ROLE_ prefix.",
+      );
+    });
   });
 });
