@@ -170,7 +170,12 @@ describe('a week and its days: complementary withholding', () => {
     expect(bundle.cells.filter((cell) => cell.grain === 'day').map((cell) => cell.frameBucket)).toEqual([`${BUCKET}/sonnet`]);
   });
 
-  it('leaves the pool version, and so `asOf.pool`, where it was when a sub-floor cell is added', () => {
+  it('moves asOf.pool when the first sub-floor day withholds a served day', () => {
+    const served = [week(6, 20), dayOf(5, 18, '2026-11-02')];
+    expect(bundleOver([...served, dayOf(1, 2, '2026-11-03')]).asOf.pool).not.toBe(bundleOver(served).asOf.pool);
+  });
+
+  it('does not move with the size of a sub-floor cell', () => {
     const served = [week(6, 20), dayOf(5, 18, '2026-11-02')];
     expect(bundleOver([...served, dayOf(1, 2, '2026-11-03')]).asOf.pool).toBe(bundleOver([...served, dayOf(3, 5, '2026-11-03')]).asOf.pool);
   });
@@ -189,6 +194,15 @@ describe('a shape and its named cells: complementary withholding', () => {
   it('also withholds the smallest served name beside a sub-floor name, and keeps the shape and the other names', () => {
     const bundle = over([cellOf(shape.motifId, 12, 30), cellOf(one.motifId, 7, 12), cellOf(two.motifId, 5, 10), cellOf(three.motifId, 1, 8)]);
     expect(ids(bundle).sort()).toEqual([shape.motifId, one.motifId].sort());
+  });
+
+  it('drops the environment counterpart of a withheld name and its fit read', () => {
+    const week = (motifId: string, clusters: number, ok: number): Cell => cellOf(motifId, clusters, ok, { grain: 'week' });
+    const environment = [week(one.motifId, 7, 12), week(two.motifId, 5, 10)].map((cell) => ({ ...cell, frameBucket: 'env:linux:bash' }));
+    const bundle = bundleOf(HARNESS, VERSION, { cells: [week(shape.motifId, 12, 30), week(one.motifId, 7, 12), week(two.motifId, 5, 10), week(three.motifId, 1, 8)], environment, motifs: [shape, one, two, three], strata: [] });
+    expect(bundle.cells).not.toContainEqual(environment[1]);
+    expect(bundle.cells).toContainEqual(environment[0]);
+    expect(bundle.reads.filter((read) => read.family === 'fit' && read.slice.platform === 'linux').map((read) => read.n)).toEqual([12]);
   });
 
   it('withholds no name for a shape day that is itself withheld', () => {
@@ -211,5 +225,23 @@ describe('the last day a bundle states', () => {
     const bundle = bundleOver([week(K_CELL, '2026-10-12'), week(1, '2026-11-02')]);
     expect(bundle.asOf.day).toBe('2026-10-12');
     expect(slicedTo(bundle.reads.filter((read) => read.family === 'adoption'), READ.motifId, 'week').value.weeksSinceLast).toBe(0);
+  });
+});
+
+
+describe('overlapping named cells', () => {
+  const program = (name: string, flags: string[] = [], pulls: NonNullable<Extract<NonNullable<WindowStep['identity']>, { program: string }>['pulls']> = []): Motif => {
+    const steps: WindowStep[] = [{ action: 'shell.exec', identity: { program: name, sub: null, flags, pulls } }];
+    return { motifId: namedId(steps), level: 'named', steps, cls: null };
+  };
+
+  it.each(['flag', 'pull'])('withholds git rather than its overlapping %s cell', (kind) => {
+    const git = program('git');
+    const rare = program('rare');
+    const overlap = kind === 'flag' ? program('git', ['--x']) : program('git', [], [{ registry: 'npm', name: 'x', version: null }]);
+    const bundle = bundleOf(HARNESS, VERSION, { cells: [cellOf(SHELL.motifId, 20, 100), cellOf(git.motifId, 15, 90), cellOf(rare.motifId, 1, 10), cellOf(overlap.motifId, 5, 40)], environment: [], motifs: [SHELL, git, rare, overlap], strata: [] });
+    expect(bundle.cells.some((cell) => cell.motifId === git.motifId)).toBe(false);
+    const servedPrograms = bundle.cells.filter((cell) => cell.motifId === git.motifId || cell.motifId === rare.motifId);
+    expect(100 - servedPrograms.reduce((sum, cell) => sum + cell.ok, 0)).toBe(100);
   });
 });

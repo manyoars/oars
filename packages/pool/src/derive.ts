@@ -43,7 +43,7 @@ const NO_STORE: Store = { sessions: [], prompts: [], errors: [], subagents: [], 
  * one of them at or above the floor. A live baseline with no served cell of its motif is `null`, as a tool that is sub-floor is not absent.
  * A read's `clusters` is the largest held count among its input cells, the most one store can prove: the fetch path reads no per-account record, so five accounts in five different weeks are five cells of one cluster each and
  * serve nothing until a later change brings held counts for a key's `n` and `c`. Five accounts on five days of one week share each week cell and serve the week reads; a `live` cell is a day, so they serve no live read.
- * `asOf.pool`, `asOf.day`, and `weeksSinceLast` come from the served cells alone (`bundleOf`), so a sub-floor deposit moves nothing a reader sees.
+ * `asOf.pool`, `asOf.day`, and `weeksSinceLast` come from the served cells alone (`bundleOf`), so a sub-floor cell's size moves none of them. The first sub-floor part of a family withholds one more part, which a reader sees.
  */
 const readsOf = (pool: Pool): Read[] => {
   const orderOf = orderResolver([]);
@@ -76,6 +76,12 @@ export const bundleOf = (harness: Harness, harnessVersion: string, stored: Store
   // Everything the bundle states, its version and its last day included, is that of the served cells: a sub-floor cell, or a served one held back (`withheldOf`), would otherwise move `asOf` and `weeksSinceLast`, which would show that it exists.
   const held = [...cells, ...environment];
   const withheld = withheldOf(held, motifs, K_CELL);
+  // A version-free counterpart would otherwise reveal the name withheld in this bucket.
+  const counterpart = (cell: (typeof held)[number]): string => JSON.stringify([cell.motifId, cell.grain, cell.day, cell.exposed]);
+  const withheldBuckets = new Set(cells.filter((cell) => withheld.has(cell)).map(counterpart));
+  for (const cell of environment) {
+    if (withheldBuckets.has(counterpart(cell))) withheld.add(cell);
+  }
   const served = held.filter((cell) => cell.clusters >= K_CELL && !withheld.has(cell));
   const kept = new Set(served);
   const own = poolOf({ cells: cells.filter((cell) => kept.has(cell)), motifs }, []);
