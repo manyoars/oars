@@ -1,7 +1,7 @@
 // Complementary withholding. A whole and its parts count the same steps: a week cell and the day cells of its days, and a shape cell and the named cells that share its actions. Serving the whole beside
 // all of its served parts would show the parts that are not served by subtraction, a sub-floor day or name among them. So where a served whole has a sub-floor part, one more part is withheld, the
 // smallest served one: the whole less the served parts is then a sum over at least two parts, one of them at or above the floor, which no reader can split. The whole and the other parts stay, so a thin
-// pool still serves what it can. The environment cells (`ENVIRONMENT_CELLS`, `stored.ts`) keep their own rule, every part served or the total is not, and are not touched here.
+// pool still serves what it can. The environment cells (`ENVIRONMENT_CELLS`, `stored.ts`) keep their own rule, every part served or the total is not, and their counterparts are also dropped when a bucket cell is withheld (`bundleOf`).
 import { weekStartOf, type Cell } from '../../cli/src/sessions/cells.js';
 import type { Motif } from '../../cli/src/sessions/motif.js';
 
@@ -37,6 +37,7 @@ export const withheldOf = (held: readonly Cell[], motifs: readonly Motif[], floo
     else week.parts.push(cell);
     const motif = levels.get(cell.motifId);
     if (motif === undefined || motif.level === 'class') continue;
+    if (motif.steps.some(({ identity }) => identity !== null && 'program' in identity && (identity.flags.length > 0 || (identity.pulls?.length ?? 0) > 0))) continue;
     const shape = familyOf(shapes, JSON.stringify([motif.steps.map((step) => step.action), cell.frameBucket, cell.grain, cell.day, cell.exposed]));
     if (motif.level === 'shape') shape.whole = cell;
     else shape.parts.push(cell);
