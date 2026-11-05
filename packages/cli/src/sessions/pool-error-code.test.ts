@@ -48,8 +48,8 @@ describe('errorCode on the wire', () => {
   });
 
   it('refuses a value outside the closed list with the field named', () => {
-    const raw: unknown = JSON.parse(JSON.stringify(skeletonOf1([call(0, { status: 'error', errorCode: '1' })])));
-    const tools = (raw as SessionSkeleton).transcripts[0]?.tools ?? [];
+    const raw = skeletonOf1([call(0, { status: 'error', errorCode: '1' })]);
+    const tools = raw.transcripts[0]?.tools ?? [];
     for (const bad of ['ENOENT', '', 'Exit code 1', 7]) {
       Reflect.set(tools[0] ?? {}, 'errorCode', bad);
       expect(parseSkeleton(raw)).toMatchObject({ ok: false, field: 'transcripts[0].tools[0].errorCode' });
@@ -57,14 +57,14 @@ describe('errorCode on the wire', () => {
   });
 
   it('refuses a code on a call that did not fail', () => {
-    const raw: unknown = JSON.parse(JSON.stringify(skeletonOf1([call(0, { status: 'ok' })])));
-    Reflect.set((raw as SessionSkeleton).transcripts[0]?.tools[0] ?? {}, 'errorCode', '1');
+    const raw = skeletonOf1([call(0, { status: 'ok' })]);
+    Reflect.set(raw.transcripts[0]?.tools[0] ?? {}, 'errorCode', '1');
     expect(parseSkeleton(raw)).toMatchObject({ ok: false, field: 'transcripts[0].tools[0].errorCode', reason: 'only a failed call has one' });
   });
 
   it('reads a call that sends no errorCode as one with none', () => {
-    const raw: unknown = JSON.parse(JSON.stringify(skeletonOf1([call(0, { status: 'error', errorCode: '1' })])));
-    Reflect.deleteProperty((raw as SessionSkeleton).transcripts[0]?.tools[0] ?? {}, 'errorCode');
+    const raw = skeletonOf1([call(0, { status: 'error', errorCode: '1' })]);
+    Reflect.deleteProperty(raw.transcripts[0]?.tools[0] ?? {}, 'errorCode');
     const parsed = parseSkeleton(raw);
     if (!parsed.ok) throw new Error(`refused ${parsed.field}`);
     expect(codes(parsed.skeleton)).toEqual([null]);
