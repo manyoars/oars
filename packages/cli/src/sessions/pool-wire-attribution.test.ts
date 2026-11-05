@@ -123,7 +123,7 @@ describe('the reach on the frame', () => {
     expect(skeleton.transcripts[0]?.frame.reach).toEqual({ filled: false, mcp: [], skills: [], plugins: [] });
   });
 
-  it('refuses a name outside the lists, and a filled reach that is empty only by being unfilled', () => {
+  it('refuses a name outside the lists', () => {
     const bad: SessionSkeleton = clone(midPrompt({ setup: { plugins: ['x'] } }));
     const reach = bad.transcripts[0]?.frame.reach;
     if (reach === undefined) throw new Error('no reach');

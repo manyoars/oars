@@ -12,6 +12,16 @@ const read = (id: string, extra: object = {}, model = 'model-a'): string => call
 const capture = (lines: readonly string[]): Capture => captureSession({ text: lines.join('\n'), session: 's', project: 'p', rev: 1, at: '', bytes: 0, redact });
 
 describe('the model of a call', () => {
+  it('prefers requestedModel over the message model', () => {
+    const { tools } = capture([user('go'), read('t1', { requestedModel: 'model-r' }, 'model-a')]);
+    expect(tools[0]?.model).toBe('model-r');
+  });
+
+  it('falls back to the message model when requestedModel is empty', () => {
+    const { tools } = capture([user('go'), read('t1', { requestedModel: '' }, 'model-a')]);
+    expect(tools[0]?.model).toBe('model-a');
+  });
+
   it('is the model of the line the call sits on, so a change in the middle of a prompt shows on the calls', () => {
     const { tools } = capture([user('go'), read('t1', {}, 'model-a'), read('t2', {}, 'model-b'), read('t3', {}, 'model-b')]);
     expect(tools.map((tool) => tool.model)).toEqual(['model-a', 'model-b', 'model-b']);
