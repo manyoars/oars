@@ -41,7 +41,7 @@ export const fieldsWithoutRow = (emitted: readonly string[], rows: readonly Regi
  * The bytes each field name holds in a batch's canonical JSON, summed over every place it occurs: a field's own `"name":` and a leaf value in full, and for an object or an array its braces and the commas
  * between its members, never the members themselves. The parts and `envelopeBytes` add up to the batch's canonical bytes.
  */
-export const fieldBytes = (batch: unknown): Map<string, number> => {
+export const fieldBytes = (batch: object): Map<string, number> => {
   const held = new Map<string, number>();
   const add = (name: string, bytes: number): void => {
     held.set(name, (held.get(name) ?? 0) + bytes);
@@ -60,7 +60,7 @@ export const fieldBytes = (batch: unknown): Map<string, number> => {
       }
     } else add(owner, Buffer.byteLength(JSON.stringify(value), 'utf8'));
   };
-  for (const [key, entry] of Object.entries(batch as object).filter(([, held]) => held !== undefined)) {
+  for (const [key, entry] of Object.entries(batch).filter(([, held]) => held !== undefined)) {
     add(key, Buffer.byteLength(`${JSON.stringify(key)}:`, 'utf8'));
     walk(entry, key);
   }
@@ -68,7 +68,7 @@ export const fieldBytes = (batch: unknown): Map<string, number> => {
 };
 
 /** The braces, the commas between top-level fields, and the newline: what no field row holds. */
-export const envelopeBytes = (batch: unknown): number => 2 + Math.max(0, Object.values(batch as object).filter((held) => held !== undefined).length - 1) + 1;
+export const envelopeBytes = (batch: object): number => 2 + Math.max(0, Object.values(batch).filter((held) => held !== undefined).length - 1) + 1;
 
 const FRAME = { harness: 'claude-code', harnessVersion: '2.1.314', model: 'claude-opus-5-5', effort: 'high', day: '2026-11-01', platform: 'linux', shell: 'bash', stack: { languages: ['python'], frameworks: [], size: null, languageShares: [{ language: 'python', languageShare: 'over-50' }, { language: 'other', languageShare: '10-50' }] } };
 const STEP = { status: 'ok', tokens: 3, ms: 4, remainingTokens: 2, agentType: null, parent: null };

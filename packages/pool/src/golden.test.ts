@@ -86,15 +86,20 @@ describe.each(HARNESSES)('the %s golden', (harness) => {
   });
 
   it('names its own harness at the transcript and the frame', () => {
-    const parsed = JSON.parse(bytes()) as { transcripts: { harness: string; frame: { harness: string } }[] };
-    expect(parsed.transcripts.map((held) => [held.harness, held.frame.harness])).toEqual([[harness, harness]]);
+    const parsed = parseSkeleton(JSON.parse(bytes()));
+    if (!parsed.ok) throw new Error(`${parsed.field}: ${parsed.reason}`);
+    expect(parsed.skeleton.transcripts.map((held) => [held.harness, held.frame.harness])).toEqual([[harness, harness]]);
   });
 });
 
 describe('the goldens together', () => {
   it('cover the seven adapted harnesses, one batch each, with ids that differ', () => {
     expect(new Set(HARNESSES).size).toBe(7);
-    const ids = HARNESSES.map((harness) => (JSON.parse(readFileSync(goldenPath(harness), 'utf8')) as { id: string }).id);
+    const ids = HARNESSES.map((harness) => {
+      const parsed = parseSkeleton(JSON.parse(readFileSync(goldenPath(harness), 'utf8')));
+      if (!parsed.ok) throw new Error(`${parsed.field}: ${parsed.reason}`);
+      return parsed.skeleton.id;
+    });
     expect(new Set(ids).size).toBe(7);
   });
 });
