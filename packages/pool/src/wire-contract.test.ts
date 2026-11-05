@@ -53,9 +53,11 @@ interface Row {
   other_values: number;
 }
 
+const isRow = (value: object): value is Row => 'skeleton' in value && 'extensions' in value && 'format' in value && 'vocab_version' in value && 'fields_version' in value && 'other_values' in value;
+
 const rowOf = async (): Promise<Row> => {
-  const row = await (await pool.db()).prepare('SELECT skeleton, format, vocab_version, fields_version, extensions, other_values FROM deposits WHERE account = ? AND id = ?').bind('acct-1', ID).first<Row>();
-  if (row === null) throw new Error('no deposit row');
+  const row = await (await pool.db()).prepare('SELECT skeleton, format, vocab_version, fields_version, extensions, other_values FROM deposits WHERE account = ? AND id = ?').bind('acct-1', ID).first();
+  if (row === undefined || row === null || !isRow(row)) throw new Error('no deposit row');
   return row;
 };
 
