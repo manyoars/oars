@@ -32,7 +32,7 @@ describe('error-code cells', () => {
   const set = cellsOf(projectedStore(fixture(), storedNames));
 
   it('are day cells per (name, model, code) and per (name, version, code), counting the failed calls of that code', () => {
-    const model = 'claude-code/2.1.31x/claude-opus-5-5';
+    const model = 'claude-code/-/claude-opus-5-5';
     const version = `claude-code/2.1.31x/${NO_AXES}`;
     const cells = errorCells(set);
     expect(cells.every(({ grain, day }) => grain === 'day' && day === '2026-11-01')).toBe(true);

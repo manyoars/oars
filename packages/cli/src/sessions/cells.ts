@@ -48,15 +48,15 @@ export const EFFORT_CLASS = 'effort:';
 export const effortClass = (effort: string, thinking: number): string => `${EFFORT_CLASS}${effort}/thinking:${String(bucketOf('tokens', thinking))}`;
 
 /**
- * The two day-cell families of a failed call by its `errorCode` (t868): `error:<code>/<name>` keeps the cell's model beside the code, and `error-version:<code>/<name>` keeps the harness version bucket and no model
- * (`versionBucketOf`), so no cell holds a version and a model at once beside a name and a code. A class motif with no prompt class in it, so a read of prompt classes skips both by prefix (`isPromptClass`).
+ * The two day-cell families of a failed call by its `errorCode` (t868): `error:<code>/<name>` keeps the model and no version beside the code, and `error-version:<code>/<name>` keeps the harness version bucket and no model
+ * (`versionBucketOf`). Each joins three dimensions: name, code, and either model or version. A class motif with no prompt class in it, so a read of prompt classes skips both by prefix (`isPromptClass`).
  */
 export const ERROR_CLASS = 'error:';
 export const ERROR_VERSION_CLASS = 'error-version:';
 
 /**
  * The week cell of what followed a failed call (t868): `recovery:<code>/<failed action>><next action>`, where the next action is that of the call right after it in the same prompt, or `none` when nothing
- * followed. It keeps the harness version bucket and no model, so it joins no more dimensions than the error cells do. A class motif with no prompt class in it, like the others.
+ * followed. It keeps the harness version bucket and no model, so it joins three dimensions: the failed-to-next edge, code, and version. A class motif with no prompt class in it, like the others.
  */
 export const RECOVERY_CLASS = 'recovery:';
 export const NO_NEXT = 'none';
@@ -266,7 +266,7 @@ export const deriveCells = (store: Store, graph: RecallGraph = NO_RECALLS): Cell
         for (const { motif: named } of motifsOf([counted])) {
           if (named.level === 'named' && counted.identity === null) continue;
           const name = motifName(named);
-          for (const [prefix, bucket] of [[ERROR_CLASS, frameBucketOf(frame)], [ERROR_VERSION_CLASS, versionBucketOf(frame)]] as const) {
+          for (const [prefix, bucket] of [[ERROR_CLASS, `${frame.harness}/${NO_AXES}/${frame.model ?? UNKNOWN}`], [ERROR_VERSION_CLASS, versionBucketOf(frame)]] as const) {
             const motif = classMotif(`${prefix}${code}/${name}`);
             motifs.set(motif.motifId, motif);
             const tally = tallyAt(motif, bucket, 'day', failedDay, false);
