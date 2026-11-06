@@ -14,7 +14,7 @@ export type Grain = 'day' | 'week';
 
 export interface Cell {
   motifId: string;
-  /** `harness/versionBucket/model`, public names (`frameBucketOf`). Effort is not in it (rule 3). */
+  /** `harness/versionBucket/model`, public names (`frameBucketOf`), or `env:<platform>:<shell>` for a (name, `platform`, `shell`) cell, which names no harness, version, or model (`ENVIRONMENT_BUCKET`). Effort is not in it (rule 3). */
   frameBucket: string;
   /** What `day` names: a UTC day, or a UTC week. A read takes the grain it answers from and never the other. */
   grain: Grain;

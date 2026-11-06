@@ -52,7 +52,7 @@ const capture = (text: string, sid: string | null, root: string | null) =>
 describe('the CAPTURE 4 fields', () => {
   it('stamps sid on every capture record and records env, repo, fileHashes, and promptFingerprint on the session', () => {
     const result = capture(transcript('/w/app/pkg', '/w/app/src/a.ts'), 'abcd1234', '/w/app');
-    expect(CAPTURE_VERSION).toBe('17');
+    expect(CAPTURE_VERSION).toBe('18');
     for (const record of [result.session, ...result.prompts, ...result.tools, ...result.errorLines]) expect(record).toMatchObject({ cv: CAPTURE_VERSION, sid: 'abcd1234' });
     expect(result.session.env).toEqual({ harness: '2.1.301', oars: '1.2.3', node: 'v99', os: 'plan9' });
     expect(result.session.repo).toMatch(/^[0-9a-f]{16}$/);
@@ -309,6 +309,30 @@ describe('the salt seam', () => {
   });
 });
 
+describe('a version-17 store gaining call attribution', () => {
+  it('re-captures unchanged transcripts so calls carry model and skill', async () => {
+    const staged = stage();
+    const options = { allow: ['proj'], redactDomains: [], now: () => NOW };
+    await deposit(staged.runtime, options);
+    const file = paths(staged.storeDir).observations;
+    const old = readFileSync(file, 'utf8').split('\n').filter((entry) => entry !== '').map((entry) => {
+      const record = parseObject(entry);
+      record.cv = '17';
+      if (record.kind === 'tool') {
+        Reflect.deleteProperty(record, 'model');
+        Reflect.deleteProperty(record, 'skill');
+      }
+      return JSON.stringify(record);
+    });
+    writeFileSync(file, `${old.join('\n')}\n`);
+    editState(staged.storeDir, (entry) => Reflect.set(entry, 'v', '17'));
+    expect((await loadStore(staged.storeDir)).tools.every((tool) => tool.model === undefined)).toBe(true);
+    expect(await deposit(staged.runtime, options)).toMatchObject({ sessions: 4, unchanged: 0 });
+    const after = await loadStore(staged.storeDir);
+    expect(after.tools.find((tool) => tool.session === 'tldr')).toMatchObject({ cv: CAPTURE_VERSION, model: 'claude-opus-5-5', skill: 'deep-dive' });
+  });
+});
+
 describe('a version-3 store opened under version 4', () => {
   const options = { allow: ['proj'], redactDomains: [], now: () => NOW };
 
@@ -363,7 +387,7 @@ describe('a version-3 store opened under version 4', () => {
     await deposit(staged.runtime, options);
     const after = await loadStore(staged.storeDir);
     const key = (record: { session: string; n: number }): string => `${record.session}#${String(record.n)}`;
-    const expectedToChange = new Set(['steps', 'target', 'targetBase', 'sid', 'cv', 'rev', 'segments', 'pulls', 'commits', 'errorCode']);
+    const expectedToChange = new Set(['steps', 'target', 'targetBase', 'sid', 'cv', 'rev', 'segments', 'pulls', 'commits', 'errorCode', 'model', 'skill']);
     const changed = new Set<string>();
     expect(after.tools.length).toBe(before.tools.length);
     for (const tool of after.tools) {

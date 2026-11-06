@@ -45,6 +45,9 @@ describe('the bundle reads the stored cells', () => {
       expect(verified.bundle.reads.length).toBeGreaterThan(0);
 
       const db = await own.db();
+      // The pool refuses a ledger delete (migration 0009), so this private pool drops the two triggers to stand in for rows that are gone.
+      await db.prepare('DROP TRIGGER deposits_no_delete').run();
+      await db.prepare('DROP TRIGGER contributors_no_delete').run();
       await db.prepare('DELETE FROM deposits').run();
       await db.prepare('DELETE FROM contributors').run();
       // The account now holds no ledger row: another account takes the second fetch, so the read does not lean on the first account's rows.
