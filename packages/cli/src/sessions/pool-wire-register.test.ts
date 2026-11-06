@@ -17,7 +17,7 @@ export interface RegisterRow {
   bytes: number;
 }
 
-export const PROJECTION_CLASSES = ['clear', 'thresholded', 'hashed', 'raw tier'] as const;
+export const PROJECTION_CLASSES = ['clear', 'thresholded', 'hashed at ingest', 'raw tier'] as const;
 export const REDERIVES = ['yes', 'partly', 'no'] as const;
 
 /** The register's table: the rows between the "Wire field register" heading and the next heading, each `| \`field\` | consumer | class | re-derives | bytes |`. */
@@ -30,7 +30,7 @@ export const registerRows = (doc: string): RegisterRow[] => {
   const section = end === -1 ? rest : rest.slice(0, end);
   return section
     .split('\n')
-    .map((line) => /^\| `([A-Za-z]+)` \| (.+) \| (clear|thresholded|hashed|raw tier)(?:[^|]*) \| (yes|partly|no)(?:[^|]*) \| ([\d,]+) \|$/.exec(line))
+    .map((line) => /^\| `([A-Za-z]+)` \| (.+) \| (clear|thresholded|hashed at ingest|raw tier)(?:[^|]*) \| (yes|partly|no)(?:[^|]*) \| ([\d,]+) \|$/.exec(line))
     .flatMap((match) => (match === null ? [] : [{ field: match[1] ?? '', consumer: match[2] ?? '', projection: match[3] ?? '', rederives: match[4] ?? '', bytes: Number((match[5] ?? '').replaceAll(',', '')) }]));
 };
 
@@ -126,6 +126,13 @@ describe('the wire field register', () => {
     expect(fieldsWithoutRow(['day'], registerRows('# The pool\n\nno register here\n'))).toEqual(['day']);
     expect(registerRows('## Wire field register\n\n| `a` | b | clear | yes | 1 |\n\n## Next\n\n| `c` | d | clear | yes | 2 |\n').map(({ field }) => field)).toEqual(['a']);
     expect(registerRows('## Wire field register\n| `a` | b | clear | yes | 1 |').map(({ field }) => field)).toEqual(['a']);
+  });
+
+  it('holds a field to one of four classes: a bare hashed is no class, and a host reads hashed at ingest', () => {
+    expect(registerRows('## Wire field register\n\n| `a` | b | hashed (by the client) | yes | 1 |\n')).toEqual([]);
+    expect(registerRows('## Wire field register\n\n| `a` | b | hashed at ingest | yes | 1 |\n').map(({ projection }) => projection)).toEqual(['hashed at ingest']);
+    expect(REGISTER.find(({ field }) => field === 'host')?.projection).toBe('hashed at ingest');
+    for (const field of ['id', 'merkleRoot', 'timingPrint']) expect(REGISTER.find((row) => row.field === field)?.projection, field).toBe('clear');
   });
 
   it('names a consumer, a class, and whether it re-derives for every field', () => {
