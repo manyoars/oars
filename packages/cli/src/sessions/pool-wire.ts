@@ -462,6 +462,9 @@ export const OPTIONAL = {
   step: ['tokens', 'ms', 'parent'],
 } as const satisfies { readonly [level: string]: readonly string[] };
 
+/** The most bytes (as JSON) one field this reader does not know, or one literal, may hold: an enumerated value or a literal never needs more, and a newer client's larger structure belongs in a new format version. The deposit's own cap is no part of this. */
+export const MAX_EXTENSION_BYTES = 8 * 1024;
+
 const LITERAL_SUFFIX = 'Literal';
 const FIELD_NAME = /^[A-Za-z][A-Za-z0-9_]{0,63}$/;
 
@@ -477,8 +480,10 @@ const fieldsOf = (value: unknown, at: string, known: readonly string[], optional
     if (!FIELD_NAME.test(key)) throw new Refused(under(at, key), 'not a field name');
     const entry = value[key];
     const stem = key.endsWith(LITERAL_SUFFIX) ? key.slice(0, -LITERAL_SUFFIX.length) : undefined;
-    const literal = stem !== undefined && ENUMERATED_FIELDS.has(stem) && (known.includes(stem) || optional.includes(stem));
+    // A literal sits beside an `other` and nowhere else; beside a value this reader knows it is a field it does not know.
+    const literal = stem !== undefined && ENUMERATED_FIELDS.has(stem) && (known.includes(stem) || optional.includes(stem)) && value[stem] === OTHER;
     if (literal) textOf(entry, under(at, key));
+    if (new TextEncoder().encode(JSON.stringify(entry)).length > MAX_EXTENSION_BYTES) throw new Refused(under(at, key), 'too large');
     collecting().extensions.push({ at: under(at, key), kind: literal ? 'literal' : 'field', value: entry });
   }
   return value;
@@ -658,7 +663,11 @@ const parseIdentity = (harness: WireHarness, action: CanonicalAction, value: unk
     const server = inSet(PUBLIC_MCP_SERVERS, raw.server, under(at, 'server'));
     const tool = textOf(raw.tool, under(at, 'tool'));
     // The same rule capture applies (`callIdentity`), so a name it would have masked is refused here rather than stored.
-    if (harness === OTHER) return { server, tool: tool === OTHER ? tool : LITERAL };
+    if (harness === OTHER) {
+      // The name crosses as the literal, and what the client sent is kept in the bag.
+      if (tool !== OTHER && tool !== LITERAL) setAside(under(at, 'tool'), tool);
+      return { server, tool: tool === OTHER ? tool : LITERAL };
+    }
     const admitted = tool === LITERAL || tool === OTHER || (ACTION_TABLES[harness].toolDelimited && isPublicMcpTool(server, tool));
     return { server, tool: admitted ? tool : unknownValue(under(at, 'tool'), tool) };
   }
@@ -683,7 +692,11 @@ const admittedNative = (harness: WireHarness, native: string): boolean => {
 const parseNative = (harness: WireHarness, value: unknown, at: string): string => {
   const native = textOf(value, at);
   // The tools of a harness this reader does not know are off any table it holds, so they cross as `private`, the way capture masks a name its table lacks.
-  if (harness === OTHER) return native === OTHER ? native : PRIVATE;
+  if (harness === OTHER) {
+    if (native === OTHER) return native;
+    if (native !== PRIVATE) setAside(at, native);
+    return PRIVATE;
+  }
   return native === OTHER || admittedNative(harness, native) ? native : unknownValue(at, native);
 };
 
