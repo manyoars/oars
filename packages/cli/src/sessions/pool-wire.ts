@@ -428,13 +428,19 @@ interface Collected {
   others: number;
 }
 
+/** The one way into the bag: an entry over `MAX_EXTENSION_BYTES` (as JSON, in UTF-8) is refused as too large at its path, whatever kind it is and whatever the deposit's own cap is. */
+const bagged = (held: Collected, entry: Extension): void => {
+  if (new TextEncoder().encode(JSON.stringify(entry.value)).length > MAX_EXTENSION_BYTES) throw new Refused(entry.at, 'too large');
+  held.extensions.push(entry);
+};
+
 /**
  * A value no vocabulary of this reader holds: counted, kept as sent in the bag, and read as `other`. The bag is the stored form of what the reader does not serve; the client's projection is the gate on what it
  * sends (lead 194), so the pool keeps the value and serves nothing from it.
  */
 const unknownValue = (held: Collected, at: string, sent: string): typeof OTHER => {
   held.others += 1;
-  held.extensions.push({ at, kind: 'value', value: sent });
+  bagged(held, { at, kind: 'value', value: sent });
   return OTHER;
 };
 
@@ -474,8 +480,7 @@ const fieldsOf = (held: Collected, value: unknown, at: string, known: readonly s
     // A literal sits beside an `other` and nowhere else; beside a value this reader knows it is a field it does not know.
     const literal = stem !== undefined && ENUMERATED_FIELDS.has(stem) && (known.includes(stem) || optional.includes(stem)) && value[stem] === OTHER;
     if (literal) textOf(entry, under(at, key));
-    if (new TextEncoder().encode(JSON.stringify(entry)).length > MAX_EXTENSION_BYTES) throw new Refused(under(at, key), 'too large');
-    held.extensions.push({ at: under(at, key), kind: literal ? 'literal' : 'field', value: entry });
+    bagged(held, { at: under(at, key), kind: literal ? 'literal' : 'field', value: entry });
   }
   return value;
 };
@@ -619,7 +624,7 @@ const parseFlag = (held: Collected, value: unknown, at: string): string => {
 
 /** What a reader sets aside whole: a part of a step it cannot read against a vocabulary. Its place is noted and its content kept as sent, as for any value it does not know (see `unknownValue`). */
 const setAside = (held: Collected, at: string, sent: unknown): void => {
-  held.extensions.push({ at, kind: 'value', value: sent });
+  bagged(held, { at, kind: 'value', value: sent });
 };
 
 const parseIdentity = (held: Collected, harness: WireHarness, action: CanonicalAction, value: unknown, at: string): StepIdentity => {
