@@ -1,7 +1,7 @@
 # The `oars sessions` store (version 15)
 
 `oars sessions` keeps a local, deterministic memory of the operator's own Claude Code sessions: no model call, no network, and no session data
-uploaded. Telemetry (`docs/telemetry.md`) is separate: it records command names, flag names, durations, and exit codes in its own folder, and sends them only to a pool server you configure. `gold arms` is the one exception: it sends redacted text through your own Claude subscription. This page is the store's format. The types are in `packages/cli/src/sessions/schema.ts`; the commands are in the CLI README.
+uploaded. `gold arms` is the one exception: it sends redacted text through your own Claude subscription. Telemetry (`docs/telemetry.md`) is separate: it records one event per command (its path, flag names, duration, exit code, and error class, with a random install id, the oars version, the OS, and the time) in its own folder, and will send those events, in a later release, only to a pool server you configure. This page is the store's format. The types are in `packages/cli/src/sessions/schema.ts`; the commands are in the CLI README.
 
 ## Layout
 
