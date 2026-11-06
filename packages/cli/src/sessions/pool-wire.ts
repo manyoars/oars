@@ -428,20 +428,11 @@ interface Collected {
   others: number;
 }
 
-/** The parse in progress. `parseSkeleton` is synchronous from its first line to its last, so one parse owns this whole time, which keeps the dozen field readers below free of a context argument. */
-let collected: Collected | undefined;
-
-const collecting = (): Collected => {
-  if (collected === undefined) throw new Error('a skeleton field is read outside parseSkeleton');
-  return collected;
-};
-
 /**
  * A value no vocabulary of this reader holds: counted, kept as sent in the bag, and read as `other`. The bag is the stored form of what the reader does not serve; the client's projection is the gate on what it
  * sends (lead 194), so the pool keeps the value and serves nothing from it.
  */
-const unknownValue = (at: string, sent: string): typeof OTHER => {
-  const held = collecting();
+const unknownValue = (held: Collected, at: string, sent: string): typeof OTHER => {
   held.others += 1;
   held.extensions.push({ at, kind: 'value', value: sent });
   return OTHER;
@@ -472,7 +463,7 @@ const FIELD_NAME = /^[A-Za-z][A-Za-z0-9_]{0,63}$/;
  * The object at `at`, holding every field of `known` and, of the rest, any of `optional`. A name that is neither is not refused: it goes to the bag as it came (rule 3), so a newer client loses nothing
  * against this reader. The emitter is what keeps a class A field out of a batch, not this check. A shape error still refuses: a name that is no field name, a missing field, a literal that is not text.
  */
-const fieldsOf = (value: unknown, at: string, known: readonly string[], optional: readonly string[] = []): Fields => {
+const fieldsOf = (held: Collected, value: unknown, at: string, known: readonly string[], optional: readonly string[] = []): Fields => {
   if (!isFields(value)) throw new Refused(at === '' ? 'skeleton' : at, 'not an object');
   for (const key of known) if (!Object.hasOwn(value, key)) throw new Refused(under(at, key), 'missing');
   for (const key of Object.keys(value)) {
@@ -484,7 +475,7 @@ const fieldsOf = (value: unknown, at: string, known: readonly string[], optional
     const literal = stem !== undefined && ENUMERATED_FIELDS.has(stem) && (known.includes(stem) || optional.includes(stem)) && value[stem] === OTHER;
     if (literal) textOf(entry, under(at, key));
     if (new TextEncoder().encode(JSON.stringify(entry)).length > MAX_EXTENSION_BYTES) throw new Refused(under(at, key), 'too large');
-    collecting().extensions.push({ at: under(at, key), kind: literal ? 'literal' : 'field', value: entry });
+    held.extensions.push({ at: under(at, key), kind: literal ? 'literal' : 'field', value: entry });
   }
   return value;
 };
@@ -518,26 +509,26 @@ const booleanOf = (value: unknown, at: string): boolean => {
 };
 
 /** A value from a closed list, or `other` for a text the list does not hold; the list narrows the type, so no caller needs a cast. A value that is no text is a shape error. */
-const oneOf = <T extends string>(list: readonly T[], value: unknown, at: string): T | typeof OTHER => {
+const oneOf = <T extends string>(held: Collected, list: readonly T[], value: unknown, at: string): T | typeof OTHER => {
   const name = textOf(value, at);
-  return list.find((entry) => entry === name) ?? (name === OTHER ? OTHER : unknownValue(at, name));
+  return list.find((entry) => entry === name) ?? (name === OTHER ? OTHER : unknownValue(held, at, name));
 };
 
-const inSet = (allowed: ReadonlySet<string>, value: unknown, at: string): string => {
+const inSet = (held: Collected, allowed: ReadonlySet<string>, value: unknown, at: string): string => {
   const name = textOf(value, at);
-  return name === PRIVATE || name === OTHER || allowed.has(name) ? name : unknownValue(at, name);
+  return name === PRIVATE || name === OTHER || allowed.has(name) ? name : unknownValue(held, at, name);
 };
 
-const exactlyIn = (allowed: ReadonlySet<string>) => (value: unknown, at: string): string => {
+const exactlyIn = (held: Collected, allowed: ReadonlySet<string>) => (value: unknown, at: string): string => {
   const name = textOf(value, at);
-  return allowed.has(name) || name === OTHER ? name : unknownValue(at, name);
+  return allowed.has(name) || name === OTHER ? name : unknownValue(held, at, name);
 };
 
 /** `publicModel` and its like hand back what is public and the literal for what is not, so only a value they return unchanged is in the vocabulary. */
-const heldTo = (isHeld: (value: string | null) => string | null, value: unknown, at: string): string | null => {
+const heldTo = (held: Collected, isHeld: (value: string | null) => string | null, value: unknown, at: string): string | null => {
   if (value === null || value === undefined) return null;
   const name = textOf(value, at);
-  return name === OTHER || isHeld(name) === name ? name : unknownValue(at, name);
+  return name === OTHER || isHeld(name) === name ? name : unknownValue(held, at, name);
 };
 
 // `satisfies` checks every entry is a `Harness` but not that every `Harness` is listed; this refuses a list that leaves one out at compile time.
@@ -562,33 +553,33 @@ const isCalendarDay = (text: string): boolean => {
 /** The languages a share can name: the pinned list and `other`, which `projectLanguage` gives any language off the list. The frame's own `languages` stay closed to the list. */
 const SHARE_LANGUAGES: ReadonlySet<string> = new Set([...LANGUAGES, 'other']);
 
-const parseLanguageShare = (value: unknown, at: string): LanguageShareEntry => {
-  const raw = fieldsOf(value, at, ['language', 'languageShare']);
-  return { language: exactlyIn(SHARE_LANGUAGES)(raw.language, under(at, 'language')), languageShare: oneOf(LANGUAGE_SHARES, raw.languageShare, under(at, 'languageShare')) };
+const parseLanguageShare = (held: Collected, value: unknown, at: string): LanguageShareEntry => {
+  const raw = fieldsOf(held, value, at, ['language', 'languageShare']);
+  return { language: exactlyIn(held, SHARE_LANGUAGES)(raw.language, under(at, 'language')), languageShare: oneOf(held, LANGUAGE_SHARES, raw.languageShare, under(at, 'languageShare')) };
 };
 
-const parseFrame = (value: unknown, at: string): SkeletonFrame => {
-  const raw = fieldsOf(value, at, ['harness', 'platform', 'stack'], OPTIONAL.frame);
+const parseFrame = (held: Collected, value: unknown, at: string): SkeletonFrame => {
+  const raw = fieldsOf(held, value, at, ['harness', 'platform', 'stack'], OPTIONAL.frame);
   const stackAt = under(at, 'stack');
-  const stack = fieldsOf(raw.stack, stackAt, ['languages', 'frameworks'], OPTIONAL.stack);
+  const stack = fieldsOf(held, raw.stack, stackAt, ['languages', 'frameworks'], OPTIONAL.stack);
   const day = orNull(raw.day, under(at, 'day'), (entry, entryAt) => {
     const text = textOf(entry, entryAt);
     if (!isCalendarDay(text)) throw new Refused(entryAt, 'not a UTC day');
     return text;
   });
   return {
-    harness: oneOf(HARNESSES, raw.harness, under(at, 'harness')),
-    harnessVersion: heldTo(publicVersion, raw.harnessVersion, under(at, 'harnessVersion')),
-    model: heldTo(publicModel, raw.model, under(at, 'model')),
-    effort: heldTo(publicEffort, raw.effort, under(at, 'effort')),
+    harness: oneOf(held, HARNESSES, raw.harness, under(at, 'harness')),
+    harnessVersion: heldTo(held, publicVersion, raw.harnessVersion, under(at, 'harnessVersion')),
+    model: heldTo(held, publicModel, raw.model, under(at, 'model')),
+    effort: heldTo(held, publicEffort, raw.effort, under(at, 'effort')),
     day,
-    platform: exactlyIn(PLATFORMS)(raw.platform, under(at, 'platform')),
-    shell: orNull(raw.shell, under(at, 'shell'), exactlyIn(SHELLS)),
+    platform: exactlyIn(held, PLATFORMS)(raw.platform, under(at, 'platform')),
+    shell: orNull(raw.shell, under(at, 'shell'), exactlyIn(held, SHELLS)),
     stack: {
-      languages: listOf(stack.languages, under(stackAt, 'languages'), exactlyIn(LANGUAGES)),
-      frameworks: listOf(stack.frameworks, under(stackAt, 'frameworks'), exactlyIn(FRAMEWORKS)),
-      size: orNull(stack.size, under(stackAt, 'size'), (entry, entryAt) => oneOf(REPO_SIZES, entry, entryAt)),
-      languageShares: listOrEmpty(stack.languageShares, under(stackAt, 'languageShares'), parseLanguageShare),
+      languages: listOf(stack.languages, under(stackAt, 'languages'), exactlyIn(held, LANGUAGES)),
+      frameworks: listOf(stack.frameworks, under(stackAt, 'frameworks'), exactlyIn(held, FRAMEWORKS)),
+      size: orNull(stack.size, under(stackAt, 'size'), (entry, entryAt) => oneOf(held, REPO_SIZES, entry, entryAt)),
+      languageShares: listOrEmpty(stack.languageShares, under(stackAt, 'languageShares'), (entry, entryAt) => parseLanguageShare(held, entry, entryAt)),
     },
   };
 };
@@ -598,8 +589,8 @@ const bucketIn = (kind: BucketKind, value: unknown, at: string): number => {
   return value;
 };
 
-const parseUsage = (value: unknown, at: string): SkeletonUsage => {
-  const raw = fieldsOf(value, at, ['input', 'cacheWrite', 'cacheRead', 'output', 'thinking']);
+const parseUsage = (held: Collected, value: unknown, at: string): SkeletonUsage => {
+  const raw = fieldsOf(held, value, at, ['input', 'cacheWrite', 'cacheRead', 'output', 'thinking']);
   return {
     input: bucketIn('tokens', raw.input, under(at, 'input')),
     cacheWrite: bucketIn('tokens', raw.cacheWrite, under(at, 'cacheWrite')),
@@ -609,44 +600,44 @@ const parseUsage = (value: unknown, at: string): SkeletonUsage => {
   };
 };
 
-const parsePull = (value: unknown, at: string): PullIdentity => {
-  const raw = fieldsOf(value, at, ['registry', 'name', 'version']);
-  const name = inSet(PUBLIC_PACKAGES, raw.name, under(at, 'name'));
+const parsePull = (held: Collected, value: unknown, at: string): PullIdentity => {
+  const raw = fieldsOf(held, value, at, ['registry', 'name', 'version']);
+  const name = inSet(held, PUBLIC_PACKAGES, raw.name, under(at, 'name'));
   const version = orNull(raw.version, under(at, 'version'), (entry, entryAt) => {
     const text = textOf(entry, entryAt);
     // A version beside a masked name could identify it: capture masks the two together.
     if (name === PRIVATE && text !== LITERAL) throw new Refused(entryAt, 'a private name holds no version');
-    return text === LITERAL || text === OTHER || isRegistryVersion(text) ? text : unknownValue(entryAt, text);
+    return text === LITERAL || text === OTHER || isRegistryVersion(text) ? text : unknownValue(held, entryAt, text);
   });
-  return { registry: oneOf(REGISTRIES, raw.registry, under(at, 'registry')), name, version };
+  return { registry: oneOf(held, REGISTRIES, raw.registry, under(at, 'registry')), name, version };
 };
 
-const parseFlag = (value: unknown, at: string): string => {
+const parseFlag = (held: Collected, value: unknown, at: string): string => {
   const flag = textOf(value, at);
-  return flag === OTHER || isWireFlag(flag) ? flag : unknownValue(at, flag);
+  return flag === OTHER || isWireFlag(flag) ? flag : unknownValue(held, at, flag);
 };
 
 /** What a reader sets aside whole: a part of a step it cannot read against a vocabulary. Its place is noted and its content kept as sent, as for any value it does not know (see `unknownValue`). */
-const setAside = (at: string, sent: unknown): void => {
-  collecting().extensions.push({ at, kind: 'value', value: sent });
+const setAside = (held: Collected, at: string, sent: unknown): void => {
+  held.extensions.push({ at, kind: 'value', value: sent });
 };
 
-const parseIdentity = (harness: WireHarness, action: CanonicalAction, value: unknown, at: string): StepIdentity => {
+const parseIdentity = (held: Collected, harness: WireHarness, action: CanonicalAction, value: unknown, at: string): StepIdentity => {
   if (value === null) return null;
   // An action this reader does not know holds an identity it cannot read: the step goes without one and the place of what it held is noted.
   if (action === OTHER) {
-    setAside(at, value);
+    setAside(held, at, value);
     return null;
   }
   if (action === 'shell.exec') {
-    const raw = fieldsOf(value, at, ['program', 'sub', 'flags'], ['pulls']);
+    const raw = fieldsOf(held, value, at, ['program', 'sub', 'flags'], ['pulls']);
     // A program is a list member or `private`, and a `private` program holds no subcommand, flag, or pull.
     const program = textOf(raw.program, under(at, 'program'));
     const known = program === PRIVATE || PUBLIC_PROGRAMS.has(program);
-    if (!known && program !== OTHER) unknownValue(under(at, 'program'), program);
+    if (!known && program !== OTHER) unknownValue(held, under(at, 'program'), program);
     // The subcommands, flags, and pulls of a program this reader does not know cannot be read against its lists: it takes none, and notes what it left.
     if (!known) {
-      for (const key of ['sub', 'flags', 'pulls']) if (raw[key] !== undefined && !(raw[key] === null || (Array.isArray(raw[key]) && raw[key].length === 0))) setAside(under(at, key), raw[key]);
+      for (const key of ['sub', 'flags', 'pulls']) if (raw[key] !== undefined && !(raw[key] === null || (Array.isArray(raw[key]) && raw[key].length === 0))) setAside(held, under(at, key), raw[key]);
       return { program: OTHER, sub: null, flags: [] };
     }
     if (program === PRIVATE) {
@@ -654,27 +645,27 @@ const parseIdentity = (harness: WireHarness, action: CanonicalAction, value: unk
       if (raw.pulls !== undefined) throw new Refused(under(at, 'pulls'), 'a private program holds no pulls');
     }
     const subs = PUBLIC_SUBCOMMANDS.get(program) ?? new Set<string>();
-    const sub = orNull(raw.sub, under(at, 'sub'), exactlyIn(subs));
-    const flags = listOf(raw.flags, under(at, 'flags'), parseFlag);
-    return raw.pulls === undefined ? { program, sub, flags } : { program, sub, flags, pulls: listOf(raw.pulls, under(at, 'pulls'), parsePull) };
+    const sub = orNull(raw.sub, under(at, 'sub'), exactlyIn(held, subs));
+    const flags = listOf(raw.flags, under(at, 'flags'), (entry, entryAt) => parseFlag(held, entry, entryAt));
+    return raw.pulls === undefined ? { program, sub, flags } : { program, sub, flags, pulls: listOf(raw.pulls, under(at, 'pulls'), (entry, entryAt) => parsePull(held, entry, entryAt)) };
   }
   if (action === 'mcp.call') {
-    const raw = fieldsOf(value, at, ['server', 'tool']);
-    const server = inSet(PUBLIC_MCP_SERVERS, raw.server, under(at, 'server'));
+    const raw = fieldsOf(held, value, at, ['server', 'tool']);
+    const server = inSet(held, PUBLIC_MCP_SERVERS, raw.server, under(at, 'server'));
     const tool = textOf(raw.tool, under(at, 'tool'));
     // The same rule capture applies (`callIdentity`), so a name it would have masked is refused here rather than stored.
     if (harness === OTHER) {
       // The name crosses as the literal, and what the client sent is kept in the bag.
-      if (tool !== OTHER && tool !== LITERAL) setAside(under(at, 'tool'), tool);
+      if (tool !== OTHER && tool !== LITERAL) setAside(held, under(at, 'tool'), tool);
       return { server, tool: tool === OTHER ? tool : LITERAL };
     }
     const admitted = tool === LITERAL || tool === OTHER || (ACTION_TABLES[harness].toolDelimited && isPublicMcpTool(server, tool));
-    return { server, tool: admitted ? tool : unknownValue(under(at, 'tool'), tool) };
+    return { server, tool: admitted ? tool : unknownValue(held, under(at, 'tool'), tool) };
   }
-  if (action === 'skill.run') return { skill: inSet(PUBLIC_SKILLS, fieldsOf(value, at, ['skill']).skill, under(at, 'skill')) };
+  if (action === 'skill.run') return { skill: inSet(held, PUBLIC_SKILLS, fieldsOf(held, value, at, ['skill']).skill, under(at, 'skill')) };
   if (action === 'web.fetch' || action === 'web.search') {
-    const { host } = fieldsOf(value, at, ['host']);
-    return { host: orNull(host, under(at, 'host'), (entry, entryAt) => inSet(PUBLIC_HOSTS, entry, entryAt)) };
+    const { host } = fieldsOf(held, value, at, ['host']);
+    return { host: orNull(host, under(at, 'host'), (entry, entryAt) => inSet(held, PUBLIC_HOSTS, entry, entryAt)) };
   }
   throw new Refused(at, 'this action has no identity');
 };
@@ -689,59 +680,59 @@ const admittedNative = (harness: WireHarness, native: string): boolean => {
   return mcp !== undefined && table.toolDelimited && isPublicMcpTool(mcp.server, mcp.tool);
 };
 
-const parseNative = (harness: WireHarness, value: unknown, at: string): string => {
+const parseNative = (held: Collected, harness: WireHarness, value: unknown, at: string): string => {
   const native = textOf(value, at);
   // The tools of a harness this reader does not know are off any table it holds, so they cross as `private`, the way capture masks a name its table lacks.
   if (harness === OTHER) {
     if (native === OTHER) return native;
-    if (native !== PRIVATE) setAside(at, native);
+    if (native !== PRIVATE) setAside(held, at, native);
     return PRIVATE;
   }
-  return native === OTHER || admittedNative(harness, native) ? native : unknownValue(at, native);
+  return native === OTHER || admittedNative(harness, native) ? native : unknownValue(held, at, native);
 };
 
 /** A subagent type as the projection leaves it: a built-in of a harness, or `custom`; a custom agent's own name is private and never admitted. */
-const parseAgentType = (value: unknown, at: string): string => {
+const parseAgentType = (held: Collected, value: unknown, at: string): string => {
   const name = textOf(value, at);
-  return name === OTHER || projectedAgentType(name) === name ? name : unknownValue(at, name);
+  return name === OTHER || projectedAgentType(name) === name ? name : unknownValue(held, at, name);
 };
 
-const parseStep = (harness: WireHarness, value: unknown, at: string): SkeletonStep => {
-  const raw = fieldsOf(value, at, ['action', 'native', 'identity', 'status', 'remainingTokens', 'agentType'], OPTIONAL.step);
-  const action = oneOf(CANONICAL_ACTIONS, raw.action, under(at, 'action'));
+const parseStep = (held: Collected, harness: WireHarness, value: unknown, at: string): SkeletonStep => {
+  const raw = fieldsOf(held, value, at, ['action', 'native', 'identity', 'status', 'remainingTokens', 'agentType'], OPTIONAL.step);
+  const action = oneOf(held, CANONICAL_ACTIONS, raw.action, under(at, 'action'));
   return {
     action,
-    native: parseNative(harness, raw.native, under(at, 'native')),
-    identity: parseIdentity(harness, action, raw.identity, under(at, 'identity')),
-    status: oneOf(STATUSES, raw.status, under(at, 'status')),
+    native: parseNative(held, harness, raw.native, under(at, 'native')),
+    identity: parseIdentity(held, harness, action, raw.identity, under(at, 'identity')),
+    status: oneOf(held, STATUSES, raw.status, under(at, 'status')),
     tokens: orNull(raw.tokens, under(at, 'tokens'), (entry, entryAt) => bucketIn('tokens', entry, entryAt)),
     ms: orNull(raw.ms, under(at, 'ms'), (entry, entryAt) => bucketIn('ms', entry, entryAt)),
     remainingTokens: bucketIn('tokens', raw.remainingTokens, under(at, 'remainingTokens')),
-    agentType: orNull(raw.agentType, under(at, 'agentType'), parseAgentType),
+    agentType: orNull(raw.agentType, under(at, 'agentType'), (entry, entryAt) => parseAgentType(held, entry, entryAt)),
     parent: orNull(raw.parent, under(at, 'parent'), countOf),
   };
 };
 
-const parseTool = (harness: WireHarness, value: unknown, at: string): SkeletonTool => {
-  const raw = fieldsOf(value, at, ['side', 'status', 'steps'], OPTIONAL.tool);
+const parseTool = (held: Collected, harness: WireHarness, value: unknown, at: string): SkeletonTool => {
+  const raw = fieldsOf(held, value, at, ['side', 'status', 'steps'], OPTIONAL.tool);
   return {
     side: booleanOf(raw.side, under(at, 'side')),
     prompt: orNull(raw.prompt, under(at, 'prompt'), countOf),
-    status: oneOf(STATUSES, raw.status, under(at, 'status')),
+    status: oneOf(held, STATUSES, raw.status, under(at, 'status')),
     durationMs: orNull(raw.durationMs, under(at, 'durationMs'), countOf),
-    steps: listOf(raw.steps, under(at, 'steps'), (entry, entryAt) => parseStep(harness, entry, entryAt)),
+    steps: listOf(raw.steps, under(at, 'steps'), (entry, entryAt) => parseStep(held, harness, entry, entryAt)),
   };
 };
 
-const parsePrompt = (value: unknown, at: string): SkeletonPrompt => {
-  const raw = fieldsOf(value, at, ['cls', 'errors', 'usage', 'frame'], OPTIONAL.prompt);
+const parsePrompt = (held: Collected, value: unknown, at: string): SkeletonPrompt => {
+  const raw = fieldsOf(held, value, at, ['cls', 'errors', 'usage', 'frame'], OPTIONAL.prompt);
   return {
-    cls: oneOf(PROMPT_CLASSES, raw.cls, under(at, 'cls')),
+    cls: oneOf(held, PROMPT_CLASSES, raw.cls, under(at, 'cls')),
     errors: bucketIn('count', raw.errors, under(at, 'errors')),
     wallSec: orNull(raw.wallSec, under(at, 'wallSec'), (entry, entryAt) => bucketIn('seconds', entry, entryAt)),
-    usage: parseUsage(raw.usage, under(at, 'usage')),
+    usage: parseUsage(held, raw.usage, under(at, 'usage')),
     explore: orNull(raw.explore, under(at, 'explore'), (entry, entryAt) => bucketIn('calls', entry, entryAt)),
-    frame: parseFrame(raw.frame, under(at, 'frame')),
+    frame: parseFrame(held, raw.frame, under(at, 'frame')),
   };
 };
 
@@ -754,16 +745,16 @@ const parseRoot = (value: unknown, at: string): string => {
   return root;
 };
 
-const parseTranscript = (value: unknown, at: string): SkeletonTranscript => {
-  const raw = fieldsOf(value, at, ['merkleRoot', 'leaves', 'harness', 'frame', 'prompts', 'tools']);
-  const harness = oneOf(HARNESSES, raw.harness, under(at, 'harness'));
+const parseTranscript = (held: Collected, value: unknown, at: string): SkeletonTranscript => {
+  const raw = fieldsOf(held, value, at, ['merkleRoot', 'leaves', 'harness', 'frame', 'prompts', 'tools']);
+  const harness = oneOf(held, HARNESSES, raw.harness, under(at, 'harness'));
   return {
     merkleRoot: parseRoot(raw.merkleRoot, under(at, 'merkleRoot')),
     leaves: countOf(raw.leaves, under(at, 'leaves')),
     harness,
-    frame: parseFrame(raw.frame, under(at, 'frame')),
-    prompts: listOf(raw.prompts, under(at, 'prompts'), parsePrompt),
-    tools: listOf(raw.tools, under(at, 'tools'), (entry, entryAt) => parseTool(harness, entry, entryAt)),
+    frame: parseFrame(held, raw.frame, under(at, 'frame')),
+    prompts: listOf(raw.prompts, under(at, 'prompts'), (entry, entryAt) => parsePrompt(held, entry, entryAt)),
+    tools: listOf(raw.tools, under(at, 'tools'), (entry, entryAt) => parseTool(held, harness, entry, entryAt)),
   };
 };
 
@@ -786,19 +777,19 @@ const nullOnly = (value: unknown, at: string): null => {
  * The entry of a delta, held to its field's own row. A plugin has no registry to pass, so only the word `private` stands for one; a package is a public name with its registry, or `private` with none; a mode
  * and an effort are named by their field and carry no name. The change is a signed bucket of the field's metric.
  */
-const parseDelta = (value: unknown, at: string): DeltaEntry => {
-  const raw = fieldsOf(value, at, ['deltaKind', 'field', 'name', 'registry', 'metric', 'change']);
-  const field = oneOf(DELTA_FIELDS, raw.field, under(at, 'field'));
+const parseDelta = (held: Collected, value: unknown, at: string): DeltaEntry => {
+  const raw = fieldsOf(held, value, at, ['deltaKind', 'field', 'name', 'registry', 'metric', 'change']);
+  const field = oneOf(held, DELTA_FIELDS, raw.field, under(at, 'field'));
   // A field this reader does not know has no row to hold its kind, metric, name, or registry to: the first two read against every kind and metric, and the last two are kept as sent.
   const kinds = field === OTHER ? ALL_KINDS : KINDS_OF[field];
-  const deltaKind = oneOf(kinds, raw.deltaKind, under(at, 'deltaKind'));
-  const metric = oneOf(field === OTHER ? ALL_METRICS : [METRIC_OF[field]], raw.metric, under(at, 'metric'));
+  const deltaKind = oneOf(held, kinds, raw.deltaKind, under(at, 'deltaKind'));
+  const metric = oneOf(held, field === OTHER ? ALL_METRICS : [METRIC_OF[field]], raw.metric, under(at, 'metric'));
   const named = field === 'plugin' || field === 'package';
   if (field === OTHER) {
-    for (const key of ['name', 'registry']) if (raw[key] !== null) setAside(under(at, key), raw[key]);
+    for (const key of ['name', 'registry']) if (raw[key] !== null) setAside(held, under(at, key), raw[key]);
   }
-  const name = named ? inSet(field === 'package' ? PUBLIC_PACKAGES : NO_NAME, raw.name, under(at, 'name')) : field === OTHER ? null : nullOnly(raw.name, under(at, 'name'));
-  const registry = field === 'package' && name !== PRIVATE ? oneOf(PACKAGE_REGISTRIES, raw.registry, under(at, 'registry')) : field === OTHER ? null : nullOnly(raw.registry, under(at, 'registry'));
+  const name = named ? inSet(held, field === 'package' ? PUBLIC_PACKAGES : NO_NAME, raw.name, under(at, 'name')) : field === OTHER ? null : nullOnly(raw.name, under(at, 'name'));
+  const registry = field === 'package' && name !== PRIVATE ? oneOf(held, PACKAGE_REGISTRIES, raw.registry, under(at, 'registry')) : field === OTHER ? null : nullOnly(raw.registry, under(at, 'registry'));
   const change = raw.change;
   const limit = metric === OTHER ? Math.max(...ALL_METRICS.map((kind) => EDGES[METRIC_EDGES[kind]].length)) : EDGES[METRIC_EDGES[metric]].length;
   if (typeof change !== 'number' || !Number.isInteger(change) || Math.abs(change) > limit) throw new Refused(under(at, 'change'), 'not a signed bucket');
@@ -818,19 +809,18 @@ const VOCAB_TEXT = /^[0-9A-Za-z._-]{1,32}$/;
 /** The skeleton in `value`, rebuilt from the fields read, with the bag of what was set aside; else the first field that is a shape error, and why. */
 export const parseSkeleton = (value: unknown): ParsedSkeleton | Refusal => {
   const held: Collected = { extensions: [], others: 0 };
-  collected = held;
   try {
     // The earlier forms are named, since their fields would otherwise read as a list of strangers; any other format is a form this reader does not know.
     if (isFields(value) && typeof value.format === 'number' && value.format < SKELETON_FORMAT) throw new Refused('format', `the format ${String(value.format)} form is no longer read; send format ${String(SKELETON_FORMAT)}`);
-    const raw = fieldsOf(value, '', ['format', 'vocabVersion', 'fieldsVersion', 'id', 'transcripts'], OPTIONAL.batch);
+    const raw = fieldsOf(held, value, '', ['format', 'vocabVersion', 'fieldsVersion', 'id', 'transcripts'], OPTIONAL.batch);
     if (raw.format !== SKELETON_FORMAT) throw new Refused('format', 'not a format this version reads');
     const vocabVersion = textOf(raw.vocabVersion, 'vocabVersion');
     if (!VOCAB_TEXT.test(vocabVersion)) throw new Refused('vocabVersion', 'not a version');
     const fieldsVersion = countOf(raw.fieldsVersion, 'fieldsVersion');
     const id = textOf(raw.id, 'id');
     if (!ID.test(id)) throw new Refused('id', 'not a hash');
-    const deltas = listOrEmpty(raw.deltas, 'deltas', parseDelta);
-    const transcripts = listOf(raw.transcripts, 'transcripts', parseTranscript);
+    const deltas = listOrEmpty(raw.deltas, 'deltas', (entry, entryAt) => parseDelta(held, entry, entryAt));
+    const transcripts = listOf(raw.transcripts, 'transcripts', (entry, entryAt) => parseTranscript(held, entry, entryAt));
     if (transcripts.length === 0) throw new Refused('transcripts', 'empty');
     // A counting batch is what lifts the fetch cap, so a deposit has to hold something to derive from.
     if (transcripts.every(({ prompts, tools }) => prompts.length === 0 && tools.length === 0)) throw new Refused('transcripts', 'holds no prompt and no tool');
@@ -866,8 +856,6 @@ export const parseSkeleton = (value: unknown): ParsedSkeleton | Refusal => {
   } catch (error) {
     if (error instanceof Refused) return { ok: false, field: error.field, reason: error.reason };
     throw error;
-  } finally {
-    collected = undefined;
   }
 };
 

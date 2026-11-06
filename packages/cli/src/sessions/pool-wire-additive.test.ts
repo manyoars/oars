@@ -274,6 +274,27 @@ describe('other for an unknown value', () => {
   });
 });
 
+describe('one parse owns its own bag', () => {
+  it('keeps a parse begun inside another (a getter on the input) from touching the outer bag', () => {
+    const sent = wire();
+    set(sent, ['outerField'], 1);
+    let inner: ReturnType<typeof parseSkeleton> | undefined;
+    // Reading `statusNote` runs a whole parse of another batch while the outer one is between two of its fields.
+    Object.defineProperty(holderAt(sent, 'transcripts', 0, 'tools', 0), 'statusNote', {
+      enumerable: true,
+      get: () => {
+        const other = wire();
+        set(other, ['innerField'], 2);
+        inner = parseSkeleton(other);
+        return 'noted';
+      },
+    });
+    const outer = parsed(sent);
+    expect(outer.extensions.map(({ at: found }) => found)).toEqual(['outerField', 'transcripts[0].tools[0].statusNote']);
+    expect(inner).toMatchObject({ ok: true, extensions: [{ at: 'innerField', kind: 'field', value: 2 }] });
+  });
+});
+
 describe('a transcript whose harness reads other', () => {
   it('keeps each tool name as sent in the bag, and the skeleton reads private and the literal as before', () => {
     const sent = wire();
