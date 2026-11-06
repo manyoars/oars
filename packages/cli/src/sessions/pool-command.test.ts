@@ -1,17 +1,19 @@
 import { createHash, webcrypto } from 'node:crypto';
-import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { http, HttpResponse } from 'msw';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { run } from '../cli.js';
 import { ExitCode } from '../errors.js';
 import { harness, server, useServer, type Harness } from '../test-support.js';
-import { networkSender, poolDeposit, poolServer, type Reply, type Sender } from './pool-command.js';
+import { networkSender, poolCoverage, poolDeposit, poolServer, type Reply, type Sender } from './pool-command.js';
 import { batchHash, canonicalBytes, FIELD_ROWS, fieldsOf, writeBatch } from './pool-outbox.js';
 import type { Outgoing } from './pool-print.js';
 import { REGISTRY_MAX_AGE_DAYS, VOCAB_SNAPSHOT_DATE } from './public-vocabulary.js';
 import type * as PoolWire from './pool-wire.js';
 import { session as sessionRow } from './pool-fixture.js';
+import { slugOf } from './allow.js';
 import { parseSkeleton, skeletonOf, VOCAB_VERSION, type PinnedKey } from './pool-wire.js';
 import { contentHash } from './read.js';
 import { deposit } from './store.js';
@@ -1692,5 +1694,87 @@ describe('oars pool deposit: local deltas', () => {
     expect(await deposited(scene)).toBe(ExitCode.OK);
     expect(carriedBy(scene).map(({ entry }) => entry)).toEqual([MODE_DELTA]);
     expect(logOf(scene)).toHaveLength(1);
+  });
+});
+
+describe('coverage on the wire (t871)', () => {
+  /** A transcript whose every line names `cwd`, in a project folder named for it, so the deposit can find the repository the session sat in. */
+  const inRepo = async (): Promise<{ scene: Scene; repo: string }> => {
+    const repo = mkdtempSync(join(tmpdir(), 'oars-coverage-repo-'));
+    mkdirSync(join(repo, '.git'));
+    const scene = setting();
+    const project = slugOf(repo);
+    const line = (value: object): string => JSON.stringify(value);
+    addProject(scene.staged, project, 'sess1', [
+      line({ type: 'user', uuid: 'u1', timestamp: '2026-06-01T05:00:01.000Z', version: '2.1.300', cwd: repo, message: { role: 'user', content: 'read it' } }),
+      line({ type: 'assistant', uuid: 'u2', timestamp: '2026-06-01T05:00:02.000Z', version: '2.1.301', cwd: repo, message: { role: 'assistant', model: 'claude-opus-5-5', content: [{ type: 'text', text: 'ok' }], usage: { input_tokens: 1, output_tokens: 1 } } }),
+    ]);
+    await deposit(scene.staged.runtime, { allow: [project], redactDomains: [], now: () => NOW });
+    await signIn(scene);
+    return { scene, repo };
+  };
+
+  const frameOfBatch = (scene: Scene, project?: string): { [field: string]: unknown } => {
+    const frames = batchBytes(scene).flatMap((bytes) => {
+      const parsed: unknown = JSON.parse(bytes);
+      const transcripts: unknown = typeof parsed === 'object' && parsed !== null ? Reflect.get(parsed, 'transcripts') : undefined;
+      return Array.isArray(transcripts) ? transcripts.map((transcript: unknown) => (typeof transcript === 'object' && transcript !== null ? Reflect.get(transcript, 'frame') : undefined)) : [];
+    });
+    const found = frames.find((frame: unknown) => typeof frame === 'object' && frame !== null && (project === undefined || Reflect.get(frame, 'model') === project));
+    return typeof found === 'object' && found !== null ? Object.fromEntries(Object.entries(found)) : {};
+  };
+
+  it('prints the setting with no flag, and saves each flag on its own', async () => {
+    const scene = setting();
+    expect(await scene.cli('pool', 'coverage', '--json')).toBe(ExitCode.OK);
+    expect(scene.document()).toEqual({ ok: true, saved: false, orgSize: 'unknown', repoVisibility: 'unknown' });
+    expect(await scene.cli('pool', 'coverage', '--org-size', '11-100', '--json')).toBe(ExitCode.OK);
+    expect(scene.document()).toEqual({ ok: true, saved: true, orgSize: '11-100', repoVisibility: 'unknown' });
+    expect(await scene.cli('pool', 'coverage', '--repo-visibility', 'private')).toBe(ExitCode.OK);
+    expect(scene.h.out.join('')).toContain('Organization size: 11-100');
+    expect(scene.h.out.join('')).toContain('Repository visibility: private');
+    expect(JSON.parse(readFileSync(join(scene.staged.storeDir, 'pool-coverage.json'), 'utf8'))).toEqual({ orgSize: '11-100', repoVisibility: 'private' });
+  });
+
+  it('refuses a value outside the lists and saves nothing', async () => {
+    const scene = setting();
+    expect(await scene.cli('pool', 'coverage', '--org-size', '5000')).toBe(ExitCode.USAGE);
+    expect(await scene.cli('pool', 'coverage', '--repo-visibility', 'internal')).toBe(ExitCode.USAGE);
+    expect(existsSync(join(scene.staged.storeDir, 'pool-coverage.json'))).toBe(false);
+  });
+
+  it('needs the session store', async () => {
+    const scene = setting();
+    scene.h.deps.sessions = undefined;
+    await expect(poolCoverage(scene.h.deps, {})).rejects.toThrow(/not configured/);
+  });
+
+  it('states unknown for all three bands when nothing was set and nothing could be read', async () => {
+    const scene = setting();
+    await capture(scene);
+    await signIn(scene);
+    expect(await scene.cli('pool', 'deposit', '--server', POOL)).toBe(ExitCode.OK);
+    expect(frameOfBatch(scene)).toMatchObject({ orgSize: 'unknown', team: 'unknown', repoVisibility: 'unknown' });
+  });
+
+  it('states the operator setting and the team band counted from the local log, and sends no author', async () => {
+    const { scene, repo } = await inRepo();
+    expect(await scene.cli('pool', 'coverage', '--org-size', '2-10', '--repo-visibility', 'public')).toBe(ExitCode.OK);
+    const git = vi.fn((_root: string, args: readonly string[]) => Promise.resolve(args.includes('log') ? 'ada@example.com\ngrace@example.com\n' : ''));
+    expect(await poolDeposit(scene.h.deps, { server: POOL, git })).toMatchObject({ document: { ok: true, batched: 1 } });
+    expect(git).toHaveBeenCalledTimes(1);
+    expect(frameOfBatch(scene, 'claude-opus-5-5')).toMatchObject({ orgSize: '2-10', team: 'team', repoVisibility: 'public' });
+    const text = batchBytes(scene).join('');
+    for (const forbidden of ['ada', 'grace', 'example.com', repo, slugOf(repo)]) expect(text).not.toContain(forbidden);
+    rmSync(repo, { recursive: true, force: true });
+  });
+
+  it('states solo for one author, and unknown when git cannot be read', async () => {
+    const { scene, repo } = await inRepo();
+    expect(await poolDeposit(scene.h.deps, { server: POOL, git: () => Promise.resolve('ada@example.com\n') })).toMatchObject({ document: { batched: 1 } });
+    expect(frameOfBatch(scene, 'claude-opus-5-5')).toMatchObject({ team: 'solo' });
+    expect(await poolDeposit(scene.h.deps, { server: POOL, git: () => Promise.reject(new Error('no git')) })).toMatchObject({ document: { batched: 1 } });
+    expect(frameOfBatch(scene, 'claude-opus-5-5')).toMatchObject({ team: 'unknown' });
+    rmSync(repo, { recursive: true, force: true });
   });
 });
