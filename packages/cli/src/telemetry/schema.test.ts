@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
+import { defaultConfigDir } from '../credentials.js';
 import { recordEvent } from './record.js';
 import { ERROR_CLASSES, EVENT_TYPES, errorClassOf, fieldNamesOf, sanitize } from './schema.js';
 import { readSpool } from './spool.js';
@@ -23,9 +24,12 @@ const POISON = [HOME_PATH, POSIX_HOME, COMMAND_TEXT, PROMPT, URL_TEXT];
 const FRAGMENTS = ['someone', 'secret-project', 'acme-billing', '.env', 'force', 'internal.example.com', 'refactor', 'payment', 'sk-live', 'abc123', 'tenants'];
 
 const spoolOf = (feed: (record: (type: string, fields: object) => void) => void): string => {
-  const root = mkdtempSync(join(tmpdir(), 'oars-schema-'));
-  roots.push(root);
-  const dir = join(root, 'telemetry');
+  const appData = mkdtempSync(join(tmpdir(), 'oars-schema-'));
+  roots.push(appData);
+  // The store follows APPDATA (t754): confirm the config folder is the temp one before the telemetry folder goes under it.
+  const configDir = defaultConfigDir({ APPDATA: appData }, 'win32', 'C:\\unused-home');
+  expect(configDir).toBe(appData);
+  const dir = join(configDir, 'oars', 'telemetry');
   feed((type, fields) => {
     recordEvent({ dir, platform: 'linux', version: '1.2.3', now: () => Date.parse('2026-11-06T10:00:00Z') }, type, fields);
   });

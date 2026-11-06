@@ -31,12 +31,20 @@ const readIfPresent = (path: string): string | undefined => {
  */
 export const installId = (dir: string): string => {
   const { idFile } = spoolPaths(dir);
-  const kept = readIfPresent(idFile)?.trim();
+  const existing = readIfPresent(idFile);
+  const kept = existing?.trim();
   if (kept !== undefined && UUID.test(kept)) return kept;
   mkdirSync(dir, { recursive: true });
   const fresh = randomUUID();
-  writeFileSync(idFile, `${fresh}\n`);
-  return fresh;
+  try {
+    // Exclusive when no file stood there, so two first runs at once cannot each keep their own id; a file that is not an id is replaced.
+    writeFileSync(idFile, `${fresh}\n`, { flag: existing === undefined ? 'wx' : 'w' });
+    return fresh;
+  } catch (error) {
+    const winner = readIfPresent(idFile)?.trim();
+    if (winner !== undefined && UUID.test(winner)) return winner;
+    throw error;
+  }
 };
 
 /** Appends one line, rotating first when it would pass `capBytes`; a line larger than the cap on its own is not written. */

@@ -2,14 +2,18 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
+import { defaultConfigDir } from '../credentials.js';
 import { consentOf, markNoticeShown, NOTICE, setEnabled, telemetrySendAllowed } from './consent.js';
 import { spoolPaths } from './spool.js';
 
 const roots: string[] = [];
 const folder = (): string => {
-  const root = mkdtempSync(join(tmpdir(), 'oars-consent-'));
-  roots.push(root);
-  return join(root, 'telemetry');
+  const appData = mkdtempSync(join(tmpdir(), 'oars-consent-'));
+  roots.push(appData);
+  // The store follows APPDATA (t754): confirm the config folder is the temp one before the telemetry folder goes under it.
+  const configDir = defaultConfigDir({ APPDATA: appData }, 'win32', 'C:\\unused-home');
+  expect(configDir).toBe(appData);
+  return join(configDir, 'oars', 'telemetry');
 };
 afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
@@ -77,7 +81,7 @@ describe('the notice', () => {
   });
 
   it('says what is recorded, what is never recorded, what is sent and where, and every switch', () => {
-    for (const phrase of ['flag names', 'never', 'pool server you configure', 'oars telemetry show', 'oars telemetry off', 'OARS_TELEMETRY=0', 'DO_NOT_TRACK=1']) expect(NOTICE).toContain(phrase);
+    for (const phrase of ['flag names', 'install id', 'oars version', 'never', 'pool server you configure', 'oars telemetry show', 'oars telemetry off', 'OARS_TELEMETRY=0', 'DO_NOT_TRACK=1']) expect(NOTICE).toContain(phrase);
   });
 });
 

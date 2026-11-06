@@ -2,14 +2,18 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync }
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
+import { defaultConfigDir } from '../credentials.js';
 import { recordEvent, type RecordContext } from './record.js';
 import { appendLine, installId, readSpool, spoolPaths } from './spool.js';
 
 const roots: string[] = [];
 const folder = (): string => {
-  const root = mkdtempSync(join(tmpdir(), 'oars-telemetry-'));
-  roots.push(root);
-  return join(root, 'telemetry');
+  const appData = mkdtempSync(join(tmpdir(), 'oars-telemetry-'));
+  roots.push(appData);
+  // The store follows APPDATA (t754): confirm the config folder is the temp one before the telemetry folder goes under it.
+  const configDir = defaultConfigDir({ APPDATA: appData }, 'win32', 'C:\\unused-home');
+  expect(configDir).toBe(appData);
+  return join(configDir, 'oars', 'telemetry');
 };
 afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
