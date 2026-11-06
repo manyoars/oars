@@ -179,8 +179,8 @@ describe('stored bytes per account', () => {
   const sized = (id: string): number => {
     const parsed = parseSkeleton(sampleSkeleton(id));
     if (!parsed.ok) throw new Error('the sample does not parse');
-    // The budget counts the batch's deltas too, which are `[]` until the wire carries them.
-    return JSON.stringify(parsed.skeleton).length + '[]'.length;
+    // The budget counts the batch's deltas too, which are `[]` until the wire carries them, and its extensions bag, which is `[]` for a batch with no unknown field.
+    return JSON.stringify(parsed.skeleton).length + '[]'.length + '[]'.length;
   };
   const signedIn = async (limited: TestPool, id: string): Promise<string> => {
     const { token } = await limited.signIn('github', stubUser(id));
@@ -220,6 +220,33 @@ describe('stored bytes per account', () => {
       await db.prepare("UPDATE deposits SET skeleton = skeleton || ' ' WHERE id = '0000000000000001'").run();
       expect(await sent('0000000000000002')).toMatchObject({ status: 403, json: { error: 'deposit_limit' } });
       expect(await db.prepare('SELECT COUNT(*) AS count FROM deposits').first('count')).toBe(2);
+    } finally {
+      await limited.dispose();
+    }
+  }, 60_000);
+
+  it('counts the extensions bag of a deposit in the budget, so unknown fields cannot grow the ledger past it', async () => {
+    const budget = sized('0000000000000001') + 1000;
+    const limited = await startPool({ MAX_DEPOSIT_BYTES_PER_ACCOUNT: String(budget) });
+    try {
+      const token = await signedIn(limited, '5005');
+      expect((await limited.post('/v1/deposits', sampleSkeleton('0000000000000001'), token)).status).toBe(201);
+      // The same batch with 2,000 bytes of an unknown field: its skeleton and deltas are the same size, and the bag takes it over the budget.
+      expect(await limited.post('/v1/deposits', { ...sampleSkeleton('0000000000000001'), newerField: 'x'.repeat(2000) }, token)).toMatchObject({ status: 403, json: { error: 'deposit_limit' } });
+      expect(await (await limited.db()).prepare('SELECT extensions FROM deposits').first('extensions')).toBe('[]');
+    } finally {
+      await limited.dispose();
+    }
+  }, 60_000);
+
+  it('counts the bag of a held row against the next deposit', async () => {
+    const budget = sized('0000000000000001') + sized('0000000000000002') + 1000;
+    const limited = await startPool({ MAX_DEPOSIT_BYTES_PER_ACCOUNT: String(budget) });
+    try {
+      const token = await signedIn(limited, '5006');
+      expect((await limited.post('/v1/deposits', sampleSkeleton('0000000000000001'), token)).status).toBe(201);
+      await (await limited.db()).prepare("UPDATE deposits SET extensions = ? WHERE id = '0000000000000001'").bind(JSON.stringify([{ at: 'a', kind: 'field', value: 'x'.repeat(2000) }])).run();
+      expect(await limited.post('/v1/deposits', sampleSkeleton('0000000000000002'), token)).toMatchObject({ status: 403, json: { error: 'deposit_limit' } });
     } finally {
       await limited.dispose();
     }
