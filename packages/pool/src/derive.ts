@@ -73,7 +73,8 @@ export const bundleOf = (harness: Harness, harnessVersion: string, stored: Store
   // The version-free (name, platform, shell) cells sit beside the bucket's: a harness without a version, as Gemini, Cursor, and Pi are, still has them, and they name no version.
   const environment = [...stored.environment].sort((a, b) => compare(a.motifId, b.motifId) || compare(a.frameBucket, b.frameBucket) || compare(a.grain, b.grain) || compare(a.day, b.day));
   // The environment cells are read with the bucket's, but the pool's last day is the bucket's own: a week held only by another version is not this bundle's, so it cannot age the reads that count weeks since. A bucket with no cell takes the whole pool's.
-  const own = poolOf({ cells, motifs }, []);
+  // `cells` holds the version-free model cells of every version too, so the bucket's own are taken by its prefix: another version's failure on a later day must not move the day.
+  const own = poolOf({ cells: cells.filter((cell) => cell.frameBucket.startsWith(prefix)), motifs }, []);
   const whole = poolOf({ cells: [...cells, ...environment], motifs }, []);
   const pool = { ...whole, lastDay: own.lastDay ?? whole.lastDay };
   const served = [...cells, ...environment].filter((cell) => cell.clusters >= K_CELL);
