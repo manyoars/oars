@@ -1,5 +1,6 @@
 // Two first runs at once must share one install id. The race is made deterministic: the id this process minted is not yet on disk when the other
 // process (here, the mock) writes its own, so the exclusive create must lose and the loser must adopt the winner's id.
+import type * as NodeCrypto from 'node:crypto';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -10,7 +11,7 @@ import { installId, spoolPaths } from './spool.js';
 const rival = vi.hoisted(() => ({ beforeReturn: (): void => undefined }));
 
 vi.mock('node:crypto', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('node:crypto')>();
+  const actual = await importOriginal<typeof NodeCrypto>();
   return {
     ...actual,
     randomUUID: (): `${string}-${string}-${string}-${string}-${string}` => {
