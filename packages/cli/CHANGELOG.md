@@ -5,6 +5,7 @@ All notable changes to `@manyoars/oars`. Versions follow semver; a release is th
 ## Unreleased
 
 - The skeleton is format 3: a step names its frame (`frame`, a position in the transcript's new `frames` list, which the server refuses when out of range) and the skill whose run it sits in (`skill`, a list member or `private`), and a frame carries `reach` (the MCP servers, skills, and plugins in reach, and `filled`, which says whether the harness recorded any). A call's model and harness version come from its own line, so a model that changes in the middle of a prompt reaches the steps that ran on it. Cells are unchanged. A tool record gains `model` and `skill`. Format 2 batches are refused; nothing is migrated.
+- Telemetry, on by default, with a notice on the first run that is not a hook (stderr, once) and a one-command off switch. Each CLI command leaves one event in a local, capped spool under `<config>/oars/telemetry/`: the command path, flag names (never values), duration, exit code, and a closed error class, with a random per-install id and a schema version. Nothing else is recorded: no session content, prompts, paths, URLs, or arguments. Events are sent only to a pool server you configure; this release only records. `oars telemetry status|on|off|show` manages it, and `OARS_TELEMETRY=0` or `DO_NOT_TRACK=1` turns it off. See `docs/telemetry.md`.
 
 ## 0.3.0
 

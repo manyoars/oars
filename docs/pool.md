@@ -1,6 +1,6 @@
 # The pool
 
-The pool is an optional server that accounts sign in to, deposit closed-vocabulary session skeletons to, and fetch cells and reads from. Local capture, recall, and reads need none of it: nothing leaves your machine unless you sign in and run `oars pool fetch`, and `oars pool deposit` only writes a batch to a local outbox (sending a batch is disabled in this release). The code is in `packages/pool`, a Cloudflare Worker over one D1 database.
+The pool is an optional server that accounts sign in to, deposit closed-vocabulary session skeletons to, and fetch cells and reads from. Local capture, recall, and reads need none of it: no session data leaves your machine unless you sign in and run `oars pool fetch`, and `oars pool deposit` only writes a batch to a local outbox (sending a batch is disabled in this release). Telemetry (`docs/telemetry.md`) is separate: it is on by default, records only command names, flag names, durations, and exit codes, and sends those events only to a pool server you configure. The code is in `packages/pool`, a Cloudflare Worker over one D1 database.
 
 ## Commands
 
