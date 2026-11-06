@@ -36,7 +36,7 @@ describe('the install id', () => {
   it('is replaced when the file holds something that is not an id', () => {
     const dir = folder();
     mkdirSync(dir, { recursive: true });
-    writeFileSync(spoolPaths(dir).idFile, 'C:\Users\someone\project');
+    writeFileSync(spoolPaths(dir).idFile, '/home/someone/project');
     expect(installId(dir)).toMatch(/^[0-9a-f-]{36}$/);
   });
 });
@@ -89,13 +89,17 @@ describe('recording never throws', () => {
     const dir = folder();
     mkdirSync(join(dir, '..'), { recursive: true });
     writeFileSync(dir, 'a file where the folder should be');
-    expect(() => recordEvent(contextOf(dir), 'command', { path: ['login'], exitCode: 0 })).not.toThrow();
+    expect(() => {
+      recordEvent(contextOf(dir), 'command', { path: ['login'], exitCode: 0 });
+    }).not.toThrow();
   });
 
   it('swallows a spool it cannot append to', () => {
     const dir = folder();
     mkdirSync(spoolPaths(dir).current, { recursive: true });
-    expect(() => recordEvent(contextOf(dir), 'command', { path: ['login'], exitCode: 0 })).not.toThrow();
+    expect(() => {
+      recordEvent(contextOf(dir), 'command', { path: ['login'], exitCode: 0 });
+    }).not.toThrow();
   });
 
   it('writes nothing for an event type the schema does not know', () => {

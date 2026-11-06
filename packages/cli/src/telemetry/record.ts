@@ -2,10 +2,14 @@
 import { SCHEMA_VERSION, sanitize } from './schema.js';
 import { appendLine, installId } from './spool.js';
 
-export interface RecordContext {
+/** Where telemetry keeps its folder; absent from a run, nothing is recorded. */
+export interface TelemetryRuntime {
   /** `<config>/oars/telemetry`. */
   dir: string;
   platform: NodeJS.Platform;
+}
+
+export interface RecordContext extends TelemetryRuntime {
   /** The CLI's version. */
   version: string;
   /** Epoch milliseconds. */
