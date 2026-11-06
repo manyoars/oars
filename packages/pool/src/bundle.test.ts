@@ -68,6 +68,8 @@ describe('a bundle over five accounts', () => {
     expect(other.cells.length).toBeGreaterThan(0);
     expect(other.reads.every((read) => read.family === 'fit' && read.slice.platform !== undefined)).toBe(true);
     expect(other.reads.length).toBeGreaterThan(0);
+    // No cell of its own: the bucket takes the whole pool's last day, the Monday of the fixture's week.
+    expect(other.asOf.day).toBe('2026-10-26');
     expect(other.motifs.map(({ motifId }) => motifId).sort()).toEqual([...new Set(other.cells.map(({ motifId }) => motifId))].sort());
     // Strata run over every harness version (rule 3), so the bundle for a version with no cells of its own holds the same ones.
     expect(bundle.strata.length).toBeGreaterThan(0);
@@ -279,20 +281,24 @@ describe('clusters over the cells of a read', () => {
     });
   }, 60_000);
 
-  // Section 4 rule 1: a live read's floor counts the sliced day's cells and never its baseline's, or one account on a day would ride on the week before it.
-  it('one account on day D with five on D-1 serves D-1 and not D', async () => {
+  // Section 4 rule 1: a live read's floor counts the sliced day's cells and never its baseline's, or one account on a day would ride on the week before it. Two days of one week are not a baseline but the
+  // week's own parts: the week at 6 accounts is served, and with a sub-floor day beside it the smallest served day (D-1, at 5) is withheld too, so the week less its served days is a sum over two days.
+  it('one account on day D with five on D-1 serves the week and neither day', async () => {
     await inFreshPool(async (spread) => {
       for (const id of ['3201', '3202', '3203', '3204', '3205']) await depositOn(spread, id, ['2026-11-02']);
       const token = await depositOn(spread, '3206', ['2026-11-03']);
-      const live = (await readsIn(spread, token)).reads.filter((read) => read.family === 'live');
-      expect([...new Set(live.map((read) => fieldOf(read.slice, 'day')))]).toEqual(['2026-11-02']);
-      for (const read of live) expect(read.clusters).toBe(5);
+      const bundle = await readsIn(spread, token);
+      expect(bundle.reads.filter((read) => read.family === 'live' || read.family === 'tool-day')).toEqual([]);
+      expect(bundle.cells.length).toBeGreaterThan(0);
+      expect(bundle.cells.every((cell) => cell.grain === 'week')).toBe(true);
+      for (const read of bundle.reads.filter((read) => read.family === 'fit')) expect(read.clusters).toBe(6);
     });
   }, 60_000);
 
+  // The baseline is the days before D, here a Sunday of the week before, so it is not a part of D's own week.
   it('five accounts on D and one in the baseline serve D with a null baseline', async () => {
     await inFreshPool(async (spread) => {
-      await depositOn(spread, '3301', ['2026-11-02']);
+      await depositOn(spread, '3301', ['2026-11-01']);
       for (const id of ['3302', '3303', '3304', '3305']) await depositOn(spread, id, ['2026-11-03']);
       const token = await depositOn(spread, '3306', ['2026-11-03']);
       const day = (await readsIn(spread, token)).reads.filter((read) => read.family === 'live' && fieldOf(read.slice, 'day') === '2026-11-03');
@@ -307,7 +313,7 @@ describe('clusters over the cells of a read', () => {
 
   it('five accounts on D and four in the baseline serve D with a null baseline', async () => {
     await inFreshPool(async (spread) => {
-      for (const id of ['3501', '3502', '3503', '3504']) await depositOn(spread, id, ['2026-11-02']);
+      for (const id of ['3501', '3502', '3503', '3504']) await depositOn(spread, id, ['2026-11-01']);
       for (const id of ['3506', '3507', '3508', '3509']) await depositOn(spread, id, ['2026-11-03']);
       const token = await depositOn(spread, '3510', ['2026-11-03']);
       const day = (await readsIn(spread, token)).reads.filter((read) => read.family === 'live' && fieldOf(read.slice, 'day') === '2026-11-03');
@@ -327,11 +333,11 @@ describe('clusters over the cells of a read', () => {
     });
   }, 60_000);
 
-  // The tool-day read is a day's cells, so its floor counts within its day like a live read's: five accounts on D serve D, and one account on D+1 beside them serves nothing for D+1.
-  it('five accounts on a day serve its tool-day reads at 5 clusters, and one account on the next day serves none for that day', async () => {
+  // The tool-day read is a day's cells, so its floor counts within its day like a live read's: five accounts on D serve D, and one account on a day of the week before serves nothing for that day.
+  it('five accounts on a day serve its tool-day reads at 5 clusters, and one account on a day of the week before serves none for that day', async () => {
     await inFreshPool(async (spread) => {
       for (const id of ['3601', '3602', '3603', '3604', '3605']) await depositOn(spread, id, ['2026-11-02']);
-      const token = await depositOn(spread, '3606', ['2026-11-03']);
+      const token = await depositOn(spread, '3606', ['2026-10-28']);
       const toolDay = (await readsIn(spread, token)).reads.filter((read) => read.family === 'tool-day');
       expect(toolDay.length).toBeGreaterThan(0);
       expect([...new Set(toolDay.map((read) => fieldOf(read.slice, 'day')))]).toEqual(['2026-11-02']);

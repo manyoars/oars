@@ -103,6 +103,31 @@ describe('the Copilot CLI reader', () => {
     expect(lines.filter((entry) => entry.type === 'user')).toHaveLength(2);
   });
 
+  const isObj = (value: unknown): value is { [key: string]: unknown } => typeof value === 'object' && value !== null && !Array.isArray(value);
+  it('shares the reasoning of a model over its responses by their output, never above the output of a line', () => {
+    const thinkingOf = (outputs: number[], reasoningTokens: number): number[] => {
+      const lines = eventLines(
+        asText([
+          start(),
+          prompt(1, 'a'),
+          ...outputs.map((outputTokens, index) => say(2 + index, `r${String(index)}`, { model: 'm1', outputTokens })),
+          shutdown(9, { m1: { requests: {}, usage: { inputTokens: 10, outputTokens: outputs.reduce((sum, own) => sum + own, 0), cacheReadTokens: 0, cacheWriteTokens: 0, reasoningTokens } } }),
+        ]),
+        's',
+      );
+      return lines.flatMap((entry) => {
+        const usage = isObj(entry.message) ? entry.message.usage : undefined;
+        const details = isObj(usage) ? usage.output_tokens_details : undefined;
+        return isObj(details) && typeof details.thinking_tokens === 'number' ? [details.thinking_tokens] : [];
+      });
+    };
+    expect(thinkingOf([100, 100, 10], 50)).toEqual([25, 23, 2]);
+    // A total above what the responses wrote is capped at it; responses that wrote nothing take nothing.
+    expect(thinkingOf([30, 10], 500)).toEqual([30, 10]);
+    expect(thinkingOf([0, 0], 5)).toEqual([0, 0]);
+    expect(thinkingOf([4, 3], 0)).toEqual([0, 0]);
+  });
+
   it('puts the output the responses did not report on the first line of the last response', () => {
     const lines = eventLines(asText([start(), prompt(1, 'a'), say(2, 'one', { model: 'm1' }), shutdown(3, { m1: { requests: {}, usage: { inputTokens: 10, outputTokens: 40, cacheReadTokens: 0, cacheWriteTokens: 0 } } })]), 's');
     expect(capture(lines.map((entry) => JSON.stringify(entry)).join('\n')).session.usage).toMatchObject({ input: 10, output: 40 });
