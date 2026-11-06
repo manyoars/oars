@@ -1720,6 +1720,9 @@ export const captureSession = (input: ExtractInput): Capture => {
         if (manifestFile !== null && name === 'Read' && id !== undefined) manifestReads.set(id, manifestFile);
         const pulls = shell?.pulls ?? pullsOfTool(name, redact);
         const packages = packagesOf(pulls, seenPackages);
+        // Who made the call, from its own line: the model is not the prompt's majority, and a line inside a skill's run names the skill (the first line after the run does not).
+        const callModel = requested !== undefined && requested !== '' ? requested : realMessageModel;
+        const callSkill = truthy(o.attributionSkill) ? String(o.attributionSkill) : undefined;
         const call: ToolObservation = {
           kind: 'tool',
           cv: CAPTURE_VERSION,
@@ -1738,6 +1741,8 @@ export const captureSession = (input: ExtractInput): Capture => {
           durationMs: null,
           toolUseId: id ?? null,
           harnessVersion: version ?? null,
+          ...(callModel === undefined ? {} : { model: callModel }),
+          ...(callSkill === undefined ? {} : { skill: callSkill }),
           side,
           prompt: cur?.index ?? null,
           ...(shell === undefined ? {} : { segments: shell.segments }),

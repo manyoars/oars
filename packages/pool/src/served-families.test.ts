@@ -77,6 +77,10 @@ describe('the wire holds no field a withheld family needs', () => {
   it('keeps a skeleton that carries error rows at its top level in the bag', () => {
     keptInBag(parseSkeleton({ ...sampleSkeleton('0000000000000002'), errors: [] }), 'errors', []);
   });
+
+  it.each(WITHHELD)('keeps a skeleton that carries `%s` at its top level in the bag', (field, value) => {
+    keptInBag(parseSkeleton({ ...sampleSkeleton('0000000000000006'), [field]: value }), field, value);
+  });
 });
 
 describe('a bundle over five accounts', () => {

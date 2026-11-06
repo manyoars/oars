@@ -71,7 +71,8 @@ export const fieldBytes = (batch: object): Map<string, number> => {
 export const envelopeBytes = (batch: object): number => 2 + Math.max(0, Object.values(batch).filter((held) => held !== undefined).length - 1) + 1;
 
 const FRAME = { harness: 'claude-code', harnessVersion: '2.1.314', model: 'claude-opus-5-5', effort: 'high', day: '2026-11-01', platform: 'linux', shell: 'bash', stack: { languages: ['python'], frameworks: [], size: null, languageShares: [{ language: 'python', languageShare: 'over-50' }, { language: 'other', languageShare: '10-50' }] } };
-const STEP = { status: 'ok', tokens: 3, ms: 4, remainingTokens: 2, agentType: null, parent: null };
+const REACH = { filled: true, mcp: ['github'], skills: ['commit'], plugins: ['private'] };
+const STEP = { status: 'ok', tokens: 3, ms: 4, remainingTokens: 2, agentType: null, parent: null, frame: 0 };
 
 /** One session at format 3 that holds every field the register names, each once or twice: the register's bytes are measured on this, and say so. */
 export const REGISTER_FIXTURE = {
@@ -86,7 +87,8 @@ export const REGISTER_FIXTURE = {
       merkleRoot: 'a'.repeat(64),
       leaves: 12,
       harness: 'claude-code',
-      frame: FRAME,
+      frame: { ...FRAME, reach: REACH },
+      frames: [{ ...FRAME, reach: REACH }],
       prompts: [{ cls: 'edit-verify', errors: 0, wallSec: 5, usage: { input: 1, cacheWrite: 2, cacheRead: 3, output: 4, thinking: 5 }, explore: 6, frame: FRAME }],
       tools: [
         {
@@ -95,7 +97,7 @@ export const REGISTER_FIXTURE = {
           status: 'ok',
           durationMs: 7,
           steps: [
-            { ...STEP, action: 'shell.exec', native: 'Bash', identity: { program: 'npm', sub: null, flags: [], pulls: [{ registry: 'npm', name: 'zod', version: null }] } },
+            { ...STEP, skill: 'commit', action: 'shell.exec', native: 'Bash', identity: { program: 'npm', sub: null, flags: [], pulls: [{ registry: 'npm', name: 'zod', version: null }] } },
             { ...STEP, action: 'mcp.call', native: 'mcp__github__get_issue', identity: { server: 'github', tool: 'get_issue' } },
             { ...STEP, action: 'skill.run', native: 'Skill', identity: { skill: 'commit' } },
             { ...STEP, action: 'web.fetch', native: 'WebFetch', identity: { host: 'github.com' } },

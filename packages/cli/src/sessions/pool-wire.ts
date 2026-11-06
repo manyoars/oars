@@ -15,7 +15,7 @@ export const SKELETON_FORMAT = 3;
  * The version of the field list: every field name a batch can hold (`BATCH_FIELDS` in `pool-outbox.ts`). It moves with any field added, so a server told the version knows which names a batch may carry,
  * and a test pins the list to it (`pool-wire-additive.test.ts`). A field is deprecated and left on the list, never removed (conclusion section 17, rule 3).
  */
-export const FIELD_LIST_VERSION = 1;
+export const FIELD_LIST_VERSION = 2;
 export const BUNDLE_FORMAT = 1;
 /** One constant: the pool serves only the vocabulary version the client holds. */
 export { VOCAB_VERSION };
@@ -59,6 +59,10 @@ export type SkeletonStep = Omit<StepObservation, 'n' | 'seg' | 'frameId' | 'cost
   remainingTokens: number;
   /** The projected type of the subagent whose run holds the step, a built-in or `custom`; null on a main-run step. */
   agentType: string | null;
+  /** The step's frame: a position in its transcript's `frames`, the frame of the call that made it, with that call's own model and harness version (t867). The parser refuses a position outside the list. */
+  frame: number;
+  /** The skill whose run the step's call sits in, a list member or `private`; absent outside a run. The harness marks no end to a run but stops naming the skill on the next line, and a step carries the skill its call's line named. */
+  skill?: string;
 };
 
 /** A call's order is its position in `tools`, and its `prompt` is a position in the same transcript's `prompts`: ordinals inside the batch, never the session's own numbers. */
@@ -80,8 +84,19 @@ export interface LanguageShareEntry {
   languageShare: LanguageShare | typeof OTHER;
 }
 
-/** The frame a skeleton holds: the stored frame, with the stack's shares beside its languages. A language whose share is not known is in `languages` and has no entry here. */
-export type SkeletonFrame = Omit<Frame, 'stack' | 'harness'> & { harness: WireHarness; stack: Omit<FrameStack, 'size'> & { size: RepoSize | typeof OTHER | null; languageShares: LanguageShareEntry[] } };
+/**
+ * The MCP servers, skills, and plugins in reach of a session, each a list member or `private` (a plugin has no pinned list, so it is always `private`). `filled` says whether the harness recorded a
+ * `setup` or a `funnel` at all: an unfilled reach lists nothing and must not be read as a session with no tools.
+ */
+export interface Reach {
+  filled: boolean;
+  mcp: string[];
+  skills: string[];
+  plugins: string[];
+}
+
+/** The frame a skeleton holds: the stored frame, with the stack's shares beside its languages. A language whose share is not known is in `languages` and has no entry here. `reach` is on the transcript's frame and the frames of its list, not on a prompt's. */
+export type SkeletonFrame = Omit<Frame, 'stack' | 'harness'> & { harness: WireHarness; stack: Omit<FrameStack, 'size'> & { size: RepoSize | typeof OTHER | null; languageShares: LanguageShareEntry[] }; reach?: Reach };
 
 export interface SkeletonPrompt {
   cls: PromptClass | typeof OTHER;
@@ -101,6 +116,8 @@ export interface SkeletonTranscript {
   leaves: number;
   harness: WireHarness;
   frame: SkeletonFrame;
+  /** The distinct frames the transcript's steps ran in, the transcript's own first; a step's `frame` is a position in it. */
+  frames: SkeletonFrame[];
   prompts: SkeletonPrompt[];
   tools: SkeletonTool[];
 }
@@ -280,6 +297,32 @@ const wireFrame = (frame: Frame, strata: Strata | undefined): SkeletonFrame => {
   return { ...frame, stack: { ...frame.stack, languageShares: [...shares].map(([language, languageShare]) => ({ language, languageShare })) } };
 };
 
+/** The listed members of `names` and a `private` for each other name, sorted, so a list says how many unlisted ones there are and nothing of what they are. */
+const listedAll = (allowed: ReadonlySet<string>, names: Iterable<string>): string[] => [...new Set(names)].map((name) => listed(allowed, name)).sort();
+
+/**
+ * The reach a session's record shows (t867): the servers of the tools its `funnel` offered or loaded and of the MCP tools it called, the skills it called, and the plugins its `setup` names. A record
+ * with neither `setup` nor `funnel` is unfilled (a harness that records none, or a capture before version 12) and lists nothing, so the absence is not read as no tools.
+ */
+const reachOf = (session: SessionObservation, tools: readonly ToolObservation[], harness: Harness): Reach => {
+  if (session.setup === undefined && session.funnel === undefined) return { filled: false, mcp: [], skills: [], plugins: [] };
+  const table = ACTION_TABLES[harness];
+  const servers = new Set<string>();
+  const skills = new Set<string>();
+  for (const name of [...(session.funnel?.offered ?? []), ...(session.funnel?.loaded ?? [])]) {
+    const server = mcpOf(table, name)?.server;
+    if (server !== undefined) servers.add(server);
+  }
+  for (const { steps, skill } of tools) {
+    if (skill !== undefined) skills.add(skill);
+    for (const { identity } of steps ?? []) {
+      if (identity !== null && 'server' in identity) servers.add(identity.server);
+      if (identity !== null && 'skill' in identity) skills.add(identity.skill);
+    }
+  }
+  return { filled: true, mcp: listedAll(PUBLIC_MCP_SERVERS, servers), skills: listedAll(PUBLIC_SKILLS, skills), plugins: (session.setup?.plugins ?? []).map(() => PRIVATE) };
+};
+
 const transcriptOf = (
   { session, prompts, tools, root }: SessionRecords['transcripts'][number],
   spawners: ReadonlyMap<number, number> | null,
@@ -303,6 +346,27 @@ const transcriptOf = (
       frame: wireFrame(frame, strata),
     });
   }
+  // The frames the steps ran in: the transcript's own first, then one for each distinct (prompt frame, call model, call harness version) a call shows, so a model that changes in the middle of a prompt
+  // reaches the steps that ran on it. A call that recorded neither takes its prompt's frame, or the transcript's before the first prompt.
+  const reach = reachOf(session, tools, harness);
+  const transcriptFrame: SkeletonFrame = { ...wireFrame(session.frame, session.strata), reach };
+  const frames: SkeletonFrame[] = [transcriptFrame];
+  const frameAtKey = new Map<string, number>([[JSON.stringify(transcriptFrame), 0]]);
+  const frameOfCall = ({ model, harnessVersion }: ToolObservation, promptPosition: number | null): number => {
+    const base = promptPosition === null ? undefined : framedPrompts[promptPosition]?.frame;
+    const held: SkeletonFrame = {
+      ...(base ?? transcriptFrame),
+      ...(model === undefined ? {} : { model: publicModel(model) }),
+      ...(harnessVersion === null ? {} : { harnessVersion: publicVersion(harnessVersion) }),
+      reach,
+    };
+    const key = JSON.stringify(held);
+    const found = frameAtKey.get(key);
+    if (found !== undefined) return found;
+    frames.push(held);
+    frameAtKey.set(key, frames.length - 1);
+    return frames.length - 1;
+  };
   const steppedTools: SkeletonTool[] = [];
   // The exact tokens of every step, by call and step, which the `remainingTokens` buckets below are computed from: a bucket of a sum is not a sum of buckets.
   const exact: number[][] = [];
@@ -316,6 +380,7 @@ const transcriptOf = (
     const promptPosition = prompt === null ? null : (promptAt.get(prompt) ?? null);
     const projected = projectedSteps(tool, read, harness);
     exact.push(projected.map(({ cost }) => cost.tokens ?? 0));
+    const frame = frameOfCall(tool, promptPosition);
     const steps = projected.map(({ action, native, identity, status: reported, cost, parent }): SkeletonStep => ({
       action,
       native,
@@ -326,6 +391,8 @@ const transcriptOf = (
       remainingTokens: 0,
       agentType,
       parent: parent === null || spawners === null ? null : (spawners.get(parent) ?? null),
+      frame,
+      ...(tool.skill === undefined ? {} : { skill: listed(PUBLIC_SKILLS, tool.skill) }),
     }));
     steppedTools.push({ side, prompt: promptPosition, status, durationMs, steps });
   }
@@ -341,7 +408,7 @@ const transcriptOf = (
       later += (exact[call]?.[at] ?? 0) + (at === held ? (spawned.get(call) ?? 0) : 0);
     }
   }
-  return { merkleRoot: root.merkleRoot, leaves: root.leaves, harness, frame: wireFrame(session.frame, session.strata), prompts: framedPrompts, tools: steppedTools };
+  return { merkleRoot: root.merkleRoot, leaves: root.leaves, harness, frame: transcriptFrame, frames, prompts: framedPrompts, tools: steppedTools };
 };
 
 /** The hash a batch's timing print is made with, over the durations in call order: the client's `contentHash` (D1's `hP`). */
@@ -452,11 +519,11 @@ export const ENUMERATED_FIELDS: ReadonlySet<string> = new Set(['harness', 'harne
  */
 export const OPTIONAL = {
   batch: ['timingPrint', 'deltas'],
-  frame: ['harnessVersion', 'model', 'effort', 'day', 'shell'],
+  frame: ['harnessVersion', 'model', 'effort', 'day', 'shell', 'reach'],
   stack: ['size', 'languageShares'],
   prompt: ['wallSec', 'explore'],
   tool: ['prompt', 'durationMs'],
-  step: ['tokens', 'ms', 'parent'],
+  step: ['tokens', 'ms', 'parent', 'skill'],
 } as const satisfies { readonly [level: string]: readonly string[] };
 
 /** The most bytes (as JSON) one field this reader does not know, or one literal, may hold: an enumerated value or a literal never needs more, and a newer client's larger structure belongs in a new format version. The deposit's own cap is no part of this. */
@@ -545,6 +612,7 @@ const PLATFORMS: ReadonlySet<string> = new Set(['aix', 'android', 'cygwin', 'dar
 const SHELLS: ReadonlySet<string> = new Set(Object.values(ACTION_TABLES).flatMap((table) => Object.values(table.shells)));
 /** The registries a package comes from; a pull may also come from a skill, plugin, or MCP registry. */
 export const PACKAGE_REGISTRIES = ['npm', 'pypi', 'crates', 'go', 'rubygems', 'homebrew'] as const;
+const NO_NAME: ReadonlySet<string> = new Set();
 const REGISTRIES = [...PACKAGE_REGISTRIES, 'skill', 'plugin', 'mcp'] as const;
 const DAY = /^\d{4}-\d{2}-\d{2}$/;
 const ID = /^[0-9a-f]{16}$/;
@@ -561,6 +629,20 @@ const SHARE_LANGUAGES: ReadonlySet<string> = new Set([...LANGUAGES, 'other']);
 const parseLanguageShare = (held: Collected, value: unknown, at: string): LanguageShareEntry => {
   const raw = fieldsOf(held, value, at, ['language', 'languageShare']);
   return { language: exactlyIn(held, SHARE_LANGUAGES)(raw.language, under(at, 'language')), languageShare: oneOf(held, LANGUAGE_SHARES, raw.languageShare, under(at, 'languageShare')) };
+};
+
+/** A reach, each list held to its own row; an unfilled reach lists nothing. A plugin has no pinned list, so only the word `private` stands for one. */
+const parseReach = (held: Collected, value: unknown, at: string): Reach => {
+  const raw = fieldsOf(held, value, at, ['filled', 'mcp', 'skills', 'plugins']);
+  const filled = booleanOf(raw.filled, under(at, 'filled'));
+  const reach = {
+    filled,
+    mcp: listOf(raw.mcp, under(at, 'mcp'), (entry, entryAt) => inSet(held, PUBLIC_MCP_SERVERS, entry, entryAt)),
+    skills: listOf(raw.skills, under(at, 'skills'), (entry, entryAt) => inSet(held, PUBLIC_SKILLS, entry, entryAt)),
+    plugins: listOf(raw.plugins, under(at, 'plugins'), (entry, entryAt) => inSet(held, NO_NAME, entry, entryAt)),
+  };
+  if (!filled && reach.mcp.length + reach.skills.length + reach.plugins.length > 0) throw new Refused(at, 'an unfilled reach lists nothing');
+  return reach;
 };
 
 const parseFrame = (held: Collected, value: unknown, at: string): SkeletonFrame => {
@@ -586,6 +668,7 @@ const parseFrame = (held: Collected, value: unknown, at: string): SkeletonFrame 
       size: orNull(stack.size, under(stackAt, 'size'), (entry, entryAt) => oneOf(held, REPO_SIZES, entry, entryAt)),
       languageShares: listOrEmpty(stack.languageShares, under(stackAt, 'languageShares'), (entry, entryAt) => parseLanguageShare(held, entry, entryAt)),
     },
+    ...(raw.reach === undefined ? {} : { reach: parseReach(held, raw.reach, under(at, 'reach')) }),
   };
 };
 
@@ -703,7 +786,7 @@ const parseAgentType = (held: Collected, value: unknown, at: string): string => 
 };
 
 const parseStep = (held: Collected, harness: WireHarness, value: unknown, at: string): SkeletonStep => {
-  const raw = fieldsOf(held, value, at, ['action', 'native', 'identity', 'status', 'remainingTokens', 'agentType'], OPTIONAL.step);
+  const raw = fieldsOf(held, value, at, ['action', 'native', 'identity', 'status', 'remainingTokens', 'agentType', 'frame'], OPTIONAL.step);
   const action = oneOf(held, CANONICAL_ACTIONS, raw.action, under(at, 'action'));
   return {
     action,
@@ -715,6 +798,8 @@ const parseStep = (held: Collected, harness: WireHarness, value: unknown, at: st
     remainingTokens: bucketIn('tokens', raw.remainingTokens, under(at, 'remainingTokens')),
     agentType: orNull(raw.agentType, under(at, 'agentType'), (entry, entryAt) => parseAgentType(held, entry, entryAt)),
     parent: orNull(raw.parent, under(at, 'parent'), countOf),
+    frame: countOf(raw.frame, under(at, 'frame')),
+    ...(raw.skill === undefined ? {} : { skill: inSet(held, PUBLIC_SKILLS, raw.skill, under(at, 'skill')) }),
   };
 };
 
@@ -751,13 +836,14 @@ const parseRoot = (value: unknown, at: string): string => {
 };
 
 const parseTranscript = (held: Collected, value: unknown, at: string): SkeletonTranscript => {
-  const raw = fieldsOf(held, value, at, ['merkleRoot', 'leaves', 'harness', 'frame', 'prompts', 'tools']);
+  const raw = fieldsOf(held, value, at, ['merkleRoot', 'leaves', 'harness', 'frame', 'frames', 'prompts', 'tools']);
   const harness = oneOf(held, HARNESSES, raw.harness, under(at, 'harness'));
   return {
     merkleRoot: parseRoot(raw.merkleRoot, under(at, 'merkleRoot')),
     leaves: countOf(raw.leaves, under(at, 'leaves')),
     harness,
     frame: parseFrame(held, raw.frame, under(at, 'frame')),
+    frames: listOf(raw.frames, under(at, 'frames'), (entry, entryAt) => parseFrame(held, entry, entryAt)),
     prompts: listOf(raw.prompts, under(at, 'prompts'), (entry, entryAt) => parsePrompt(held, entry, entryAt)),
     tools: listOf(raw.tools, under(at, 'tools'), (entry, entryAt) => parseTool(held, harness, entry, entryAt)),
   };
@@ -769,7 +855,6 @@ const KINDS_OF = { plugin: ['added', 'removed'], package: ['removed'], permissio
 /** The one metric each field's change is measured in, and the bucket edges that metric is held to. */
 const METRIC_OF = { plugin: 'callsPerSession', package: 'callsPerSession', permissionMode: 'callsPerSession', effort: 'thinking' } as const satisfies { readonly [field in DeltaField]: DeltaMetric };
 const METRIC_EDGES = { callsPerSession: 'count', thinking: 'tokens' } as const satisfies { readonly [metric in DeltaMetric]: BucketKind };
-const NO_NAME: ReadonlySet<string> = new Set();
 const ALL_KINDS = ['added', 'removed', 'changed'] as const satisfies readonly DeltaKind[];
 const ALL_METRICS = ['callsPerSession', 'thinking'] as const satisfies readonly DeltaMetric[];
 
@@ -847,13 +932,15 @@ export const parseSkeleton = (value: unknown): ParsedSkeleton | Refusal => {
     });
     // Positions are the only ordinals on the wire, so each must name something the batch holds.
     const mainCalls = transcripts[0]?.tools.length ?? 0;
-    transcripts.forEach(({ prompts, tools }, index) => {
+    transcripts.forEach(({ prompts, tools, frames }, index) => {
+      if (frames.length === 0) throw new Refused(`transcripts[${String(index)}].frames`, 'empty');
       tools.forEach(({ prompt, steps }, call) => {
         const callAt = `transcripts[${String(index)}].tools[${String(call)}]`;
         // Past the prompts it names a prompt with no record, numbered in order of appearance: no more of those than calls.
         if (prompt !== null && prompt >= prompts.length + tools.length) throw new Refused(`${callAt}.prompt`, 'no such prompt position');
-        steps.forEach(({ parent }, position) => {
+        steps.forEach(({ parent, frame }, position) => {
           if (parent !== null && parent >= mainCalls) throw new Refused(`${callAt}.steps[${String(position)}].parent`, 'no such call in the main run');
+          if (frame >= frames.length) throw new Refused(`${callAt}.steps[${String(position)}].frame`, 'no such frame position');
         });
       });
     });
