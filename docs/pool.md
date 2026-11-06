@@ -65,7 +65,7 @@ The (name, `platform`, `shell`) cell is its own cell, `env:<platform>:<shell>`, 
 
 ## Wire field register
 
-One row per field a format 3 batch carries (section 17 of the direction conclusion, rules 2 to 4): no row, no field. `consumer` is the read family that reads the field today, or the future read that is stated for it. The class is the field's projection class at format 3: `clear` (a closed or public list), `thresholded` (served once `PUBLIC_FLOOR` clusters report the same value), `hashed` (by the client, or by the pool at ingest under `INGEST_HASH_KEY`), or `raw tier` (stored, never served); no skeleton field is `raw tier`. A long-tail name is `private` on the wire until `t881` moves the client's projection to the server, so its thresholded class is the stated one. `Re-derives` says whether a deposit of the field can be built again from the local store (`raw/`) while the store exists, with new consent. A field marked `no` is a constant of the client build.
+One row per field a format 3 batch carries (section 17 of the direction conclusion, rules 2 to 4): no row, no field. `consumer` is the read family that reads the field today, or the future read that is stated for it. The class is the field's projection class at format 3: `clear` (a closed or public list, or a hash the client made that the pool uses only as an opaque key), `thresholded` (served once a public floor of clusters report the same value; `PUBLIC_FLOOR` is planned, `t888`), `hashed at ingest` (the pool hashes the value on arrival under a key it holds; `INGEST_HASH_KEY` is planned, `t881`), or `raw tier` (stored, never served); no skeleton field is `raw tier`. Neither constant exists in code yet. A long-tail name is `private` on the wire until `t881` moves the client's projection to the server, so its thresholded class is the stated one. `Re-derives` says whether a deposit of the field can be built again from the local store (`raw/`) while the store exists, with new consent. A field marked `no` is a constant of the client build.
 
 `Bytes` is measured, not estimated: the canonical bytes of one invented session (`REGISTER_FIXTURE` in `packages/cli/src/sessions/pool-wire-register.test.ts`: one transcript, one prompt, one call, four steps, one delta), summed over every place the field occurs. A container's bytes are its braces, brackets, and commas, and its members' bytes are theirs, so the column adds up to the batch less 9 bytes of top-level braces, commas, and newline (1,963 bytes in all). A real session holds more steps, so read the column as the shape of the cost, not its size. `pool-wire-register.test.ts` parses this table and fails on a field the client emits with no row, a row for a field it does not emit, and a bytes figure that no longer matches the fixture.
 
@@ -94,8 +94,8 @@ An unknown field name a client sends lands in the `extensions` bag of the deposi
 | `frameworks` | the `framework` stratum | clear (public list) | yes | 30 |
 | `harness` | every bundle is per harness; the action table a step is checked against | clear | yes | 69 |
 | `harnessVersion` | `fit` and `change` per harness version bucket | clear (public releases) | yes | 52 |
-| `host` | `adoption` and `fit` per web host | clear (public list); thresholded (long tail, `t881`); hashed at ingest once `t881` moves it | yes | 19 |
-| `id` | the ledger's replace-on-redeposit key; no read | hashed (by the client, per account) | yes | 23 |
+| `host` | `adoption` and `fit` per web host | hashed at ingest (a public host reads clear and a long-tail host thresholded until `t881` moves the hashing to the pool) | yes | 19 |
+| `id` | the ledger's replace-on-redeposit key; no read | clear (an opaque client hash, per account) | yes | 23 |
 | `identity` | container for what a step called: `fit` and `adoption` read its members | clear | yes | 56 |
 | `input` | `cost`: tokens per prompt class, model, and week | clear (bucket) | yes | 9 |
 | `language` | the `language` stratum and the `languageShare` pair stratum | clear (public list) | yes | 74 |
@@ -103,7 +103,7 @@ An unknown field name a client sends lands in the `extensions` bag of the deposi
 | `languageShares` | container for the share of each language: the `languageShare` pair stratum | clear | yes | 52 |
 | `languages` | the `language` stratum | clear (public list) | yes | 44 |
 | `leaves` | the ingest tier check (`access.ts`): a root over no lines is not a real one; no read | clear | partly (while the raw file stays) | 11 |
-| `merkleRoot` | the ingest tier check (`access.ts`) and the future raw-file audit; no read | hashed (by the client) | partly (while the raw file stays) | 79 |
+| `merkleRoot` | the ingest tier check (`access.ts`) and the future raw-file audit; no read | clear (an opaque client hash) | partly (while the raw file stays) | 79 |
 | `metric` | future change-effect read (calls per session or thinking tokens) | clear | yes | 26 |
 | `model` | every cell key; `fit` and `cost` per model | clear (public values) | yes | 50 |
 | `ms` | `cost`: the time of a step, as a cell's `durationMs` | clear (bucket) | yes | 24 |
@@ -128,7 +128,7 @@ An unknown field name a client sends lands in the `extensions` bag of the deposi
 | `steps` | container for the steps of a call: every step read | clear | yes | 53 |
 | `sub` | `fit` and `adoption` per subcommand | clear (public list); thresholded (long tail, `t881`) | yes | 10 |
 | `thinking` | `cost`: tokens per prompt class; the (effort, thinking) cell | clear (bucket) | yes | 12 |
-| `timingPrint` | none stated: no read, check, or later brief names it (see the t873 report) | hashed (by the client) | yes | 18 |
+| `timingPrint` | none stated: no read, check, or later brief names it (see the t873 report) | clear (an opaque client hash) | yes | 18 |
 | `tokens` | `cost`: tokens per step in a class cell | clear (bucket) | yes | 40 |
 | `tool` | `fit` and `adoption` per public MCP tool | clear (public list); thresholded (long tail, `t881`) | yes | 18 |
 | `tools` | container for the calls of a transcript: `tool-day`, `fit`, and `method` read their members | clear | yes | 16 |
