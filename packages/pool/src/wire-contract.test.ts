@@ -68,6 +68,12 @@ const servedPlane = async (): Promise<unknown[]> => {
   return Promise.all(tables.map(async (table) => (await db.prepare(`SELECT * FROM ${table}`).all()).results));
 };
 
+/** The bundle a fetch is served, body and ETag: what a deposit may not change by carrying a field the server does not know. */
+const bundleOf = async (): Promise<{ status: number; json: unknown; etag: string | null }> => {
+  const served = await pool.raw(`/bundle/claude-code/2.1.314/${VOCAB_VERSION}`, TOKEN);
+  return { status: served.status, json: served.json, etag: served.headers.get('etag') };
+};
+
 beforeAll(async () => {
   pool = await startPool();
   const db = await pool.db();
@@ -107,7 +113,9 @@ describe('a field this server does not know', () => {
 
   it('answers 201 at every level, lands in the bag, and leaves every cell, motif, stratum, and the stored skeleton as the same batch without it', async () => {
     expect((await post(baseline())).status).toBe(201);
-    const before = { plane: await servedPlane(), row: await rowOf() };
+    const before = { plane: await servedPlane(), row: await rowOf(), bundle: await bundleOf() };
+    expect(before.bundle).toMatchObject({ status: 200 });
+    expect(before.bundle.etag).not.toBeNull();
     expect(before.row.extensions).toBe('[]');
     const generation = await (await pool.db()).prepare('SELECT generation FROM pool_generation').first('generation');
 
@@ -115,8 +123,10 @@ describe('a field this server does not know', () => {
     for (const { path, at } of LEVELS) holder(extended, ...path)[at.split('.').at(-1) ?? ''] = { nested: [1, 2, 3], note: `kept at ${at}` };
     expect((await post(extended)).status).toBe(201);
 
-    const after = { plane: await servedPlane(), row: await rowOf() };
+    const after = { plane: await servedPlane(), row: await rowOf(), bundle: await bundleOf() };
     expect(after.plane).toEqual(before.plane);
+    // What a client is served: the bundle's body and its ETag are the same.
+    expect(after.bundle).toEqual(before.bundle);
     expect(after.row.skeleton).toBe(before.row.skeleton);
     expect(await (await pool.db()).prepare('SELECT generation FROM pool_generation').first('generation')).toBe(generation);
     const stored: unknown = JSON.parse(after.row.extensions);
@@ -131,6 +141,8 @@ describe('a field this server does not know', () => {
 
   it('is refused when it breaks a shape rule: a name that is no field name, a value too large for the request, and a body that is not JSON', async () => {
     expect(await post({ ...baseline(), 'a field with spaces': 1 })).toMatchObject({ status: 422, json: { field: 'a field with spaces' } });
+    // Over the limit of one unknown field, whatever the deposit's own cap is.
+    expect(await post({ ...baseline(), padding: 'x'.repeat(9 * 1024) })).toMatchObject({ status: 422, json: { field: 'padding', message: 'padding: too large' } });
     expect((await post({ ...baseline(), padding: 'x'.repeat(1024 * 1024) })).status).toBe(413);
     expect((await pool.post('/v1/deposits', 'not json', TOKEN)).status).toBe(400);
   });
