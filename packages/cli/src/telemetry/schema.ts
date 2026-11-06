@@ -44,7 +44,8 @@ const EVENTS: ReadonlyMap<string, FieldRules> = new Map([
 
 export const EVENT_TYPES: readonly string[] = [...EVENTS.keys()];
 
-export const isEventType = (type: string): boolean => EVENTS.has(type);
+/** The field names a type admits, so a test can feed every one. */
+export const fieldNamesOf = (type: string): string[] => [...(EVENTS.get(type)?.keys() ?? [])];
 
 /** The error class for an exit code: closed words only. */
 export const errorClassOf = (exit: ExitCode): ErrorClass | undefined => {
