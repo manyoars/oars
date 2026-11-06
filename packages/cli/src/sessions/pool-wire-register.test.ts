@@ -30,7 +30,7 @@ export const registerRows = (doc: string): RegisterRow[] => {
   const section = end === -1 ? rest : rest.slice(0, end);
   return section
     .split('\n')
-    .map((line) => /^\| `([A-Za-z]+)` \| (.+) \| (clear|thresholded|hashed at ingest|raw tier)(?:[^|]*) \| (yes|partly|no)(?:[^|]*) \| ([\d,]+) \|$/.exec(line))
+    .map((line) => /^\| `([A-Za-z]+)` \| (.+) \| (clear|thresholded|hashed at ingest|raw tier)(?: \([^|]*\))?(?:; [^|]*)? \| (yes|partly|no)(?:[^|]*) \| ([\d,]+) \|$/.exec(line))
     .flatMap((match) => (match === null ? [] : [{ field: match[1] ?? '', consumer: match[2] ?? '', projection: match[3] ?? '', rederives: match[4] ?? '', bytes: Number((match[5] ?? '').replaceAll(',', '')) }]));
 };
 
@@ -130,6 +130,8 @@ describe('the wire field register', () => {
 
   it('holds a field to one of four classes: a bare hashed is no class, and a host reads hashed at ingest', () => {
     expect(registerRows('## Wire field register\n\n| `a` | b | hashed (by the client) | yes | 1 |\n')).toEqual([]);
+    expect(registerRows('## Wire field register\n\n| `a` | b | clear-ish | yes | 1 |\n| `b` | b | clearly hashed | yes | 1 |\n| `c` | b | thresholdedX | yes | 1 |\n')).toEqual([]);
+    expect(registerRows('## Wire field register\n\n| `a` | b | clear (bucket); thresholded (long tail) | yes | 1 |\n').map(({ projection }) => projection)).toEqual(['clear']);
     expect(registerRows('## Wire field register\n\n| `a` | b | hashed at ingest | yes | 1 |\n').map(({ projection }) => projection)).toEqual(['hashed at ingest']);
     expect(REGISTER.find(({ field }) => field === 'host')?.projection).toBe('hashed at ingest');
     for (const field of ['id', 'merkleRoot', 'timingPrint']) expect(REGISTER.find((row) => row.field === field)?.projection, field).toBe('clear');

@@ -322,6 +322,53 @@ describe('a transcript whose harness reads other', () => {
     set(sent, ['transcripts', 0, 'tools', 0, 'steps', 0, 'native'], 'private');
     expect(parsed(sent).extensions.map(({ at: found }) => found)).toEqual(['transcripts[0].harness']);
   });
+
+  it('keeps nothing for a native name that reads other', () => {
+    const sent = wire();
+    set(sent, ['transcripts', 0, 'harness'], 'a-harness-no-table-holds');
+    set(sent, ['transcripts', 0, 'tools', 0, 'steps', 0, 'native'], 'other');
+    expect(parsed(sent).extensions.map(({ at: found }) => found)).toEqual(['transcripts[0].harness']);
+  });
+});
+
+describe('every push to the bag is bounded', () => {
+  const big = 'x'.repeat(9 * 1024);
+  it.each([
+    ['an unknown harness', ['transcripts', 0, 'harness'], 'transcripts[0].harness'],
+    ['an unknown model', ['transcripts', 0, 'frame', 'model'], 'transcripts[0].frame.model'],
+    ['an unknown platform', ['transcripts', 0, 'frame', 'platform'], 'transcripts[0].frame.platform'],
+  ])('refuses %s over 8 KiB as too large at its path', (_name, path, field) => {
+    const sent = wire();
+    set(sent, path, big);
+    expect(parseSkeleton(sent)).toMatchObject({ ok: false, field, reason: 'too large' });
+  });
+
+  it('refuses the identity of an unknown action over 8 KiB as too large at its path', () => {
+    const sent = wire();
+    set(sent, ['transcripts', 0, 'tools', 0, 'steps', 0, 'action'], 'browser.drive');
+    set(sent, ['transcripts', 0, 'tools', 0, 'steps', 0, 'identity'], { program: big });
+    expect(parseSkeleton(sent)).toMatchObject({ ok: false, field: 'transcripts[0].tools[0].steps[0].identity', reason: 'too large' });
+  });
+
+  it('refuses the flags of an unknown program over 8 KiB as too large at its path', () => {
+    const sent = wire();
+    set(sent, ['transcripts', 0, 'tools', 0, 'steps', 0, 'identity', 'program'], 'a-program-no-table-holds');
+    set(sent, ['transcripts', 0, 'tools', 0, 'steps', 0, 'identity', 'flags'], [big]);
+    expect(parseSkeleton(sent)).toMatchObject({ ok: false, field: 'transcripts[0].tools[0].steps[0].identity.flags', reason: 'too large' });
+  });
+
+  it('refuses a native name over 8 KiB under an unknown harness', () => {
+    const sent = wire();
+    set(sent, ['transcripts', 0, 'harness'], 'a-harness-no-table-holds');
+    set(sent, ['transcripts', 0, 'tools', 0, 'steps', 0, 'native'], big);
+    expect(parseSkeleton(sent)).toMatchObject({ ok: false, field: 'transcripts[0].tools[0].steps[0].native', reason: 'too large' });
+  });
+
+  it('takes an unknown value at the limit', () => {
+    const sent = wire();
+    set(sent, ['transcripts', 0, 'harness'], 'x'.repeat(8 * 1024 - 2));
+    expect(parsed(sent).others).toBe(1);
+  });
 });
 
 describe('the client emits no literal', () => {

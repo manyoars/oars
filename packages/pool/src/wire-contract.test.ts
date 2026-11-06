@@ -20,10 +20,10 @@ interface Wire {
 }
 const isWire = (value: unknown): value is Wire => typeof value === 'object' && value !== null;
 
-const baseline = (): Wire => {
+const baseline = (id = ID): Wire => {
   const shell = step(0, 0, 'shell.exec', { native: 'Bash', identity: { program: 'git', sub: 'push', flags: ['-f'] } });
   const [only] = sessionsFrom(store({ sessions: [session('s1', { frame: framed })], prompts: [prompt('s1', 0, { frame: framed })], tools: [tool('s1', 0, 'Bash', { steps: [shell] })] }));
-  const built = only === undefined ? null : skeletonOf(only, ID, storedNames, printOf);
+  const built = only === undefined ? null : skeletonOf(only, id, storedNames, printOf);
   if (built === null) throw new Error('no skeleton');
   const copy: unknown = JSON.parse(JSON.stringify(built));
   if (!isWire(copy)) throw new Error('a batch is an object');
@@ -43,6 +43,19 @@ const without = (name: string): Wire => {
 };
 
 const post = (body: Wire): Promise<Answer> => pool.post('/v1/deposits', JSON.stringify(body), TOKEN);
+
+/** The accounts that, beside `acct-1`, reach the floor of five: each deposits the baseline batch under an id of its own. */
+const PEERS = 4;
+const seedPeers = async (): Promise<void> => {
+  const db = await pool.db();
+  for (let peer = 1; peer <= PEERS; peer += 1) {
+    const account = `acct-peer-${String(peer)}`;
+    const token = `${TOKEN}-peer-${String(peer)}`;
+    await db.prepare('INSERT INTO accounts (id, covenant) VALUES (?, ?)').bind(account, 'v1').run();
+    await db.prepare('INSERT INTO tokens (hash, account, expires_at) VALUES (?, ?, ?)').bind(createHash('sha256').update(token).digest('hex'), account, Date.now() + 600_000).run();
+    expect((await pool.post('/v1/deposits', JSON.stringify(baseline(`00000000000000a${String(peer)}`)), token)).status).toBe(201);
+  }
+};
 
 interface Row {
   skeleton: string;
@@ -72,6 +85,14 @@ const servedPlane = async (): Promise<unknown[]> => {
 const bundleOf = async (): Promise<{ status: number; json: unknown; etag: string | null }> => {
   const served = await pool.raw(`/bundle/claude-code/2.1.314/${VOCAB_VERSION}`, TOKEN);
   return { status: served.status, json: served.json, etag: served.headers.get('etag') };
+};
+
+/** How many cells a signed bundle serves: its payload is the bundle as JSON text. */
+const servedCells = (json: unknown): number => {
+  const payload = isWire(json) ? json.payload : undefined;
+  const bundle: unknown = typeof payload === 'string' ? JSON.parse(payload) : undefined;
+  const cells = isWire(bundle) ? bundle.cells : undefined;
+  return Array.isArray(cells) ? cells.length : 0;
 };
 
 beforeAll(async () => {
@@ -113,8 +134,11 @@ describe('a field this server does not know', () => {
 
   it('answers 201 at every level, lands in the bag, and leaves every cell, motif, stratum, and the stored skeleton as the same batch without it', async () => {
     expect((await post(baseline())).status).toBe(201);
+    // Five accounts, so that a cell clears the floor and the comparison below is over served rows, not an empty bundle.
+    await seedPeers();
     const before = { plane: await servedPlane(), row: await rowOf(), bundle: await bundleOf() };
     expect(before.bundle).toMatchObject({ status: 200 });
+    expect(servedCells(before.bundle.json)).toBeGreaterThan(0);
     expect(before.bundle.etag).not.toBeNull();
     expect(before.row.extensions).toBe('[]');
     const generation = await (await pool.db()).prepare('SELECT generation FROM pool_generation').first('generation');
