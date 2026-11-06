@@ -28,6 +28,7 @@ process.exitCode = await run(process.argv.slice(2), {
     stderr: (text) => process.stderr.write(text),
   },
   store: fileCredentialStore(configDir),
+  telemetry: { dir: join(configDir, 'oars', 'telemetry'), platform: process.platform },
   version: readVersion(),
   sleep: (ms) => sleep(ms),
   random: Math.random,
