@@ -169,6 +169,8 @@ const WITHHELD_TERMS = [
   /\bearn/i,
   /\bmoney/i,
   /pay per/i,
+  /\bcredits?\b/i,
+  /\bUSD\b/,
 ];
 const withheldIn = (text: string): string[] => WITHHELD_TERMS.filter((term) => term.test(text)).map(String);
 
@@ -193,8 +195,36 @@ describe('the public text states facts only', () => {
     ['packages/cli/CHANGELOG.md', join(cliFolder, 'CHANGELOG.md')],
     ['packages/client/README.md', join(root, 'packages/client/README.md')],
     ['packages/client/CHANGELOG.md', join(root, 'packages/client/CHANGELOG.md')],
+    // The generated surface: the public spec, the operations it lists, and the types made from it. A code or field name such as
+    // COMPUTE_CREDIT_EXHAUSTED or autoRestartOnCredit is a wire name the platform owns and has no word boundary, so it does not match.
+    ['openapi/public.json', join(root, 'openapi/public.json')],
+    ['openapi/public-operations.json', join(root, 'openapi/public-operations.json')],
+    ['packages/client/src/generated/schema.d.ts', join(root, 'packages/client/src/generated/schema.d.ts')],
   ])('%s names none of the withheld terms', (_name, file) => {
     expect(withheldIn(readFileSync(file, 'utf8'))).toEqual([]);
+  });
+
+  // The word-boundary terms above cannot see a camelCase wire name (createCharge, ChargeView, listAgentPrices, priceCents) or a
+  // reworded error text, so the generated files get a plain substring scan too. The allow-list is every remaining hit, named: a
+  // workload restart setting and a compute-limit code the platform owns. A new hit fails until someone looks at it.
+  const WIRE_NAMES_KEPT = ['autoRestartOnCredit', 'COMPUTE_CREDIT_EXHAUSTED'];
+  /** @returns every word of `text` that holds price, charge, credit, or usd, except the kept names */
+  const wireNamesIn = (text: string): string[] =>
+    WIRE_NAMES_KEPT.reduce((rest, name) => rest.replaceAll(name, ''), text).match(/\w*(?:price|charge|credit|usd)\w*/gi) ?? [];
+  it.each([
+    ['openapi/public.json', join(root, 'openapi/public.json')],
+    ['openapi/public-operations.json', join(root, 'openapi/public-operations.json')],
+    ['packages/client/src/generated/schema.d.ts', join(root, 'packages/client/src/generated/schema.d.ts')],
+  ])('%s has no price, charge, credit, or usd name beyond the kept wire names', (_name, file) => {
+    expect(wireNamesIn(readFileSync(file, 'utf8'))).toEqual([]);
+  });
+
+  it('the wire-name scan sees a camelCase USD name and a reworded name, and skips only the kept ones', () => {
+    expect(wireNamesIn('"fooCostUsd": { "type": "string" }')).toEqual(['fooCostUsd']);
+    expect(wireNamesIn('"listAgentPrices", "ChargeView", "autoRestartOnCredit", "COMPUTE_CREDIT_EXHAUSTED"')).toEqual([
+      'listAgentPrices',
+      'ChargeView',
+    ]);
   });
 
   it('the package description names none of the withheld terms', () => {

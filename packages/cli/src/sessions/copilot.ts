@@ -145,6 +145,23 @@ interface Response {
   residual: number;
 }
 
+/**
+ * Splits `total` over lines in proportion to their `capacities`, whole tokens, none above its capacity; what the capacities cannot hold
+ * (a total above their sum) is dropped. The remainder after rounding down goes to the first lines with room, so the split is stable.
+ */
+const shareOut = (total: number, capacities: readonly number[]): number[] => {
+  const room = capacities.reduce((sum, capacity) => sum + capacity, 0);
+  const wanted = Math.min(total, room);
+  const shares = capacities.map((capacity) => (room === 0 ? 0 : Math.floor((wanted * capacity) / room)));
+  let rest = wanted - shares.reduce((sum, share) => sum + share, 0);
+  for (let index = 0; index < shares.length && rest > 0; index += 1) {
+    const add = Math.min(rest, (capacities[index] ?? 0) - (shares[index] ?? 0));
+    shares[index] = (shares[index] ?? 0) + add;
+    rest -= add;
+  }
+  return shares;
+};
+
 /** Tools that are edits by name, for when the runtime writes no `fileEdits` or the edit failed. */
 const EDIT_TOOLS: ReadonlySet<string> = new Set(['edit', 'str_replace_editor', 'apply_patch', 'write_file']);
 
@@ -182,13 +199,11 @@ export const eventLines = (text: string, fallbackId: string): Obj[] => {
     });
   };
   const usageOf = (usage: Obj): Obj => {
-    const reasoning = num(usage.reasoningTokens);
     return {
       // `inputTokens` already includes the cache reads and writes (the SDK usage doc, line 58), and capture's fields are disjoint, so only the uncached part is input.
       input_tokens: Math.max((num(usage.inputTokens) ?? 0) - (num(usage.cacheReadTokens) ?? 0) - (num(usage.cacheWriteTokens) ?? 0), 0),
       cache_read_input_tokens: num(usage.cacheReadTokens) ?? 0,
       cache_creation_input_tokens: num(usage.cacheWriteTokens) ?? 0,
-      ...(reasoning === undefined ? {} : { output_tokens_details: { thinking_tokens: reasoning } }),
     };
   };
   // The tool's own words say it is a shell call: a start with `shellToolInfo`, or a completion with `shellExecution`.
@@ -316,11 +331,14 @@ export const eventLines = (text: string, fallbackId: string): Obj[] => {
     }
   }
   // Each model's last totals go on the first line of that model's last response; output beyond what all of its responses reported is the residual.
+  const reasoning = new Map<string, number>();
   for (const [name, usage] of totals) {
     const last = responses.findLast((candidate) => candidate.model === name);
     const first = last === undefined ? undefined : responses.find((candidate) => candidate.key === last.key);
     if (first === undefined) continue;
     first.message.usage = { ...usageOf(usage), output_tokens: 0 };
+    const thinking = num(usage.reasoningTokens);
+    if (thinking !== undefined) reasoning.set(name, thinking);
     first.residual = Math.max(0, (num(usage.outputTokens) ?? 0) - responses.filter((candidate) => candidate.model === name).reduce((sum, candidate) => sum + candidate.own, 0));
   }
   // Extract counts a response's usage once, from its first line, so that line carries the output of every chunk of the response.
@@ -328,6 +346,17 @@ export const eventLines = (text: string, fallbackId: string): Obj[] => {
     if (responses.find((candidate) => candidate.key === first.key) !== first) continue;
     const output = responses.filter((candidate) => candidate.key === first.key).reduce((sum, candidate) => sum + candidate.own, 0) + first.residual;
     if (output > 0 || isObj(first.message.usage)) first.message.usage = { ...(isObj(first.message.usage) ? first.message.usage : {}), output_tokens: output };
+  }
+  // The shutdown totals hold one reasoning figure per model, not one per response, and verify holds each line's thinking to its own output. So the
+  // figure is shared out over the model's responses by their output (the model cannot think more than it wrote, so the total fits), and no line
+  // reads thinking above output.
+  for (const [name, total] of reasoning) {
+    const firsts = responses.filter((candidate) => candidate.model === name && responses.find((other) => other.key === candidate.key) === candidate && isObj(candidate.message.usage));
+    const outputs = firsts.map((candidate) => (isObj(candidate.message.usage) ? (num(candidate.message.usage.output_tokens) ?? 0) : 0));
+    shareOut(total, outputs).forEach((thinking, index) => {
+      const usage = firsts[index]?.message.usage;
+      if (isObj(usage)) usage.output_tokens_details = { thinking_tokens: thinking };
+    });
   }
   return lines;
 };
