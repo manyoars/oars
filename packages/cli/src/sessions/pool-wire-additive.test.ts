@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import { BATCH_FIELDS } from './pool-outbox.js';
 import { frame, printOf, prompt, session, sessionsFrom, step, storedNames, store, tool } from './pool-fixture.js';
-import { FRAMEWORKS } from './public-vocabulary.js';
+import { FRAMEWORKS, LITERAL } from './public-vocabulary.js';
 import { FIELD_LIST_VERSION, parseSkeleton, skeletonOf, SKELETON_FORMAT, VOCAB_VERSION, type SessionSkeleton } from './pool-wire.js';
 
 const framed = frame({ shell: 'bash' });
@@ -126,6 +126,41 @@ describe('the extensions bag', () => {
     expect(parsed(sent).extensions.map(({ at: found }) => found)).toEqual(['topLevel', 'transcripts[0].frame.region', 'transcripts[0].tools[0].steps[0].retry']);
   });
 
+  it('refuses an unknown field whose value is over 8 KiB as too large at its path, and takes one at the limit', () => {
+    // The limit is on the field's own bytes as JSON, so it holds whatever the deposit's own cap is.
+    const atLimit = wire();
+    set(atLimit, ['transcripts', 0, 'tools', 0, 'steps', 0, 'newerField'], 'x'.repeat(8 * 1024 - 2));
+    expect(parsed(atLimit).extensions).toHaveLength(1);
+    const over = wire();
+    set(over, ['transcripts', 0, 'tools', 0, 'steps', 0, 'newerField'], 'x'.repeat(8 * 1024 - 1));
+    expect(parseSkeleton(over)).toMatchObject({ ok: false, field: 'transcripts[0].tools[0].steps[0].newerField', reason: 'too large' });
+    const nested = wire();
+    set(nested, ['newerList'], Array.from({ length: 3000 }, (_, index) => index * 1000));
+    expect(parseSkeleton(nested)).toMatchObject({ ok: false, field: 'newerList', reason: 'too large' });
+  });
+
+  it('refuses a literal over 8 KiB the same way', () => {
+    const sent = wire();
+    set(sent, ['transcripts', 0, 'tools', 0, 'status'], 'other');
+    set(sent, ['transcripts', 0, 'tools', 0, 'statusLiteral'], 'x'.repeat(8 * 1024));
+    expect(parseSkeleton(sent)).toMatchObject({ ok: false, field: 'transcripts[0].tools[0].statusLiteral', reason: 'too large' });
+  });
+
+  it('takes a <field>Literal as a literal only beside an other; beside a known value it is an unknown field of its own', () => {
+    const beside = wire();
+    set(beside, ['transcripts', 0, 'tools', 0, 'statusLiteral'], 'paused');
+    expect(parsed(beside).extensions).toEqual([{ at: 'transcripts[0].tools[0].statusLiteral', kind: 'field', value: 'paused' }]);
+    // Not a literal, so it need not be text.
+    const numeric = wire();
+    set(numeric, ['transcripts', 0, 'tools', 0, 'statusLiteral'], 7);
+    expect(parsed(numeric).extensions).toEqual([{ at: 'transcripts[0].tools[0].statusLiteral', kind: 'field', value: 7 }]);
+    // The stem is an absent optional field: nothing says other, so it is a field too.
+    const absent = wire();
+    Reflect.deleteProperty(holderAt(absent, 'transcripts', 0, 'frame'), 'model');
+    set(absent, ['transcripts', 0, 'frame', 'modelLiteral'], 'gpt-9');
+    expect(parsed(absent).extensions).toEqual([{ at: 'transcripts[0].frame.modelLiteral', kind: 'field', value: 'gpt-9' }]);
+  });
+
   it('holds nothing for a batch with no unknown field', () => {
     expect(parsed(wire())).toMatchObject({ extensions: [], others: 0 });
   });
@@ -161,6 +196,8 @@ describe('other for an unknown value', () => {
     { name: 'stack size', path: ['transcripts', 0, 'frame', 'stack', 'size'] },
     { name: 'stack languages', path: ['transcripts', 0, 'frame', 'stack', 'languages', 0] },
     { name: 'stack frameworks', path: ['transcripts', 0, 'frame', 'stack', 'frameworks', 0] },
+    { name: 'language share language', path: ['transcripts', 0, 'frame', 'stack', 'languageShares', 0, 'language'] },
+    { name: 'subagent agentType', path: ['transcripts', 1, 'tools', 0, 'steps', 0, 'agentType'] },
     { name: 'prompt cls', path: ['transcripts', 0, 'prompts', 0, 'cls'] },
     { name: 'tool status', path: ['transcripts', 0, 'tools', 0, 'status'] },
     { name: 'step action', path: ['transcripts', 0, 'tools', 0, 'steps', 0, 'action'] },
@@ -180,6 +217,11 @@ describe('other for an unknown value', () => {
     set(sent, ['transcripts', 0, 'frame', 'stack', 'languages'], ['typescript']);
     set(sent, ['transcripts', 0, 'frame', 'stack', 'frameworks'], [[...FRAMEWORKS][0] ?? '']);
     set(sent, ['transcripts', 0, 'frame', 'stack', 'size'], 'm');
+    set(sent, ['transcripts', 0, 'frame', 'stack', 'languageShares'], [{ language: 'typescript', languageShare: '10-50' }]);
+    const subagent: unknown = JSON.parse(JSON.stringify(holderAt(sent, 'transcripts', 0)));
+    if (!isHolder(subagent)) throw new Error('a transcript is an object');
+    set(subagent, ['tools', 0, 'steps', 0, 'agentType'], 'custom');
+    set(sent, ['transcripts', 1], subagent);
     set(sent, ['transcripts', 0, 'tools', 0, 'steps', 0, 'identity', 'flags'], ['--force']);
     return sent;
   };
@@ -218,6 +260,7 @@ describe('other for an unknown value', () => {
     set(sent, ['transcripts', 0, 'tools', 0, 'statusLiteral'], 'paused');
     expect(parsed(sent).extensions).toEqual([{ at: 'transcripts[0].tools[0].statusLiteral', kind: 'literal', value: 'paused' }]);
     const wrong = wire();
+    set(wrong, ['transcripts', 0, 'tools', 0, 'status'], 'other');
     set(wrong, ['transcripts', 0, 'tools', 0, 'statusLiteral'], 7);
     expect(parseSkeleton(wrong)).toMatchObject({ ok: false, field: 'transcripts[0].tools[0].statusLiteral', reason: 'not text' });
   });
@@ -228,6 +271,35 @@ describe('other for an unknown value', () => {
     const result = parsed(sent);
     expect(at(result.skeleton, 'transcripts', 0, 'tools', 0, 'steps', 0)).toMatchObject({ action: 'other', identity: null });
     expect(result.extensions.map(({ at: found, kind }) => `${kind}:${found}`)).toEqual(['value:transcripts[0].tools[0].steps[0].action', 'value:transcripts[0].tools[0].steps[0].identity']);
+  });
+});
+
+describe('a transcript whose harness reads other', () => {
+  it('keeps each tool name as sent in the bag, and the skeleton reads private and the literal as before', () => {
+    const sent = wire();
+    set(sent, ['transcripts', 0, 'harness'], 'a-harness-no-table-holds');
+    const result = parsed(sent);
+    expect(at(result.skeleton, 'transcripts', 0, 'tools', 0, 'steps', 0, 'native')).toBe('private');
+    expect(result.extensions).toContainEqual({ at: 'transcripts[0].tools[0].steps[0].native', kind: 'value', value: 'Bash' });
+  });
+
+  it('keeps an MCP tool name as sent in the bag, and reads the tool as the literal', () => {
+    const sent = wire();
+    set(sent, ['transcripts', 0, 'harness'], 'a-harness-no-table-holds');
+    set(sent, ['transcripts', 0, 'tools', 0, 'steps', 0, 'action'], 'mcp.call');
+    set(sent, ['transcripts', 0, 'tools', 0, 'steps', 0, 'native'], 'mcp__acme__create_issue');
+    set(sent, ['transcripts', 0, 'tools', 0, 'steps', 0, 'identity'], { server: 'private', tool: 'create_issue' });
+    const result = parsed(sent);
+    expect(at(result.skeleton, 'transcripts', 0, 'tools', 0, 'steps', 0, 'identity')).toEqual({ server: 'private', tool: LITERAL });
+    expect(result.extensions).toContainEqual({ at: 'transcripts[0].tools[0].steps[0].identity.tool', kind: 'value', value: 'create_issue' });
+    expect(result.extensions).toContainEqual({ at: 'transcripts[0].tools[0].steps[0].native', kind: 'value', value: 'mcp__acme__create_issue' });
+  });
+
+  it('keeps nothing for a name that is already other or private', () => {
+    const sent = wire();
+    set(sent, ['transcripts', 0, 'harness'], 'a-harness-no-table-holds');
+    set(sent, ['transcripts', 0, 'tools', 0, 'steps', 0, 'native'], 'private');
+    expect(parsed(sent).extensions.map(({ at: found }) => found)).toEqual(['transcripts[0].harness']);
   });
 });
 
