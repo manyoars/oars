@@ -69,7 +69,9 @@ describe('a deposit past the request cap', () => {
       expect(answers.at(-1)).toMatchObject({ status: 201, json: { ok: true, id: '0000000000000001' } });
       const db = await pool.db();
       expect(await rows(pool, 'SELECT COUNT(*) AS count FROM deposits')).toBe(1);
-      expect(await db.prepare('SELECT skeleton FROM deposits').first('skeleton')).toBe(JSON.stringify(parseSkeleton(JSON.parse(big)).ok ? (parseSkeleton(JSON.parse(big)) as { skeleton: unknown }).skeleton : null));
+      const parsed = parseSkeleton(JSON.parse(big));
+      if (!parsed.ok) throw new Error('the fixture does not parse');
+      expect(await db.prepare('SELECT skeleton FROM deposits').first('skeleton')).toBe(JSON.stringify(parsed.skeleton));
       const counted = (): Promise<unknown> => db.prepare('SELECT COALESCE(SUM(sessions), 0) AS count FROM cells').first('count');
       const once = await counted();
       expect(once).toBeGreaterThan(0);
