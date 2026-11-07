@@ -18,6 +18,7 @@ import { poolDeposit, poolFetch, poolLogin, poolOutbox } from './sessions/pool-c
 import type { InstallRuntime, Scope } from './sessions/install.js';
 import type { SessionsRuntime } from './sessions/store.js';
 import { telemetryOff, telemetryOn, telemetryShow, telemetryStatus } from './telemetry/command.js';
+import { emitFor, type Emit } from './telemetry/emit.js';
 import { finishTelemetry, observeCommand, type Observed } from './telemetry/observe.js';
 import type { TelemetryRuntime } from './telemetry/record.js';
 
@@ -97,7 +98,9 @@ const printFailure = (deps: RunDeps, json: boolean, error: CliError): void => {
   deps.io.stderr(`${[title ?? error.message, detail, actionUrl].filter((line) => line !== undefined && line !== '').join('\n')}\n`);
 };
 
-const sessionDeps = (deps: RunDeps): SessionsDeps => ({ sessions: deps.sessions, install: deps.install, now: deps.now });
+const emitterOf = (deps: RunDeps): Emit => emitFor({ env: deps.env, telemetry: deps.telemetry, version: () => deps.version, now: deps.now });
+
+const sessionDeps = (deps: RunDeps): SessionsDeps => ({ sessions: deps.sessions, install: deps.install, now: deps.now, telemetry: emitterOf(deps) });
 
 const buildProgram = (deps: RunDeps, observed: Observed): Command => {
   const program = new Command('oars')
