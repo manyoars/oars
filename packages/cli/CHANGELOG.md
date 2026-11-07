@@ -1,6 +1,7 @@
 # Changelog
 
 All notable changes to `@manyoars/oars`. Versions follow semver; a release is the tag `cli-v<version>`.
+- The serve floors are the pool's configuration, not constants (t888). `K_CELL` is `PUBLIC_FLOOR` and `k_sig` is `DISCLOSURE_FLOOR`, Worker bindings with the defaults 5 and 2 in `wrangler.jsonc`, and `PUBLIC_FLOOR_FAMILIES` (`live=3,tool-day=8`) gives single read families a floor of their own. An unset binding, and one that is not a whole number of at least 1, is the default, with one line logged. A floor is applied when a bundle is served, to cells that keep their held counts, so changing one is a deploy with no client release and no redeposit. The signed bundle states both floors (`floors`, additive and optional), every served read states the floor it cleared (`floor`, additive and optional, and part of the read's ID), and the bundle's `ETag` changes with the floors. `oars pool fetch` prints the floors the bundle states and holds none of its own; a signed bundle whose `floors` is not whole numbers of at least 1 is refused. Earlier entries above that say five accounts describe the default.
 
 ## Unreleased
 
