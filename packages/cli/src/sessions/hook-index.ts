@@ -6,7 +6,7 @@ import { join, resolve } from 'node:path';
 import type { Read } from './read.js';
 import { resolveReads } from './recall-pool.js';
 import { RECOVERY_FLOOR, positionsOf, recoveryEdgesOf, type Position, type RecoveryEdges } from './recall-next.js';
-import { aboveBaseRate, fitReads, toolShapeId, type RecallRead } from './recall-reads.js';
+import { aboveBaseRate, fitReads, PUSH_FLOORS, toolShapeId, type RecallRead } from './recall-reads.js';
 import type { SessionObservation } from './schema.js';
 import { expandHome } from './allow.js';
 import { slugOf, type Store } from './store.js';
@@ -137,7 +137,7 @@ export const buildIndex = (store: Store, redactDomains: readonly string[], at: s
     redactDomains: [...redactDomains],
     projects,
     signatures,
-    fit: Object.fromEntries(resolveReads(aboveBaseRate(store, fitReads(store)), reads).map((read) => [toolShapeId(read.tool, read.keys), read])),
+    fit: Object.fromEntries(resolveReads(aboveBaseRate(store, fitReads(store, PUSH_FLOORS)), reads).map((read) => [toolShapeId(read.tool, read.keys), read])),
     recovery: recoveryEdgesOf(reads, (followed) => followed >= RECOVERY_FLOOR),
     positions: positionsOf(reads),
   };
