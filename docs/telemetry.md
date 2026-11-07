@@ -5,7 +5,7 @@
 ## What happens
 
 - On the first run that is not a hook, `oars` prints a notice on stderr, once, and records that it did. A hook (`oars gate hook`, `hook-bin.js`) never prints it, and a hook's stdout is the same with telemetry as without.
-- Each CLI command except the bare `oars gate hook` (which skips the full CLI to stay inside its time budget) then leaves one event in a spool: `<config>/oars/telemetry/events.jsonl` (`<config>` is `%APPDATA%` on Windows, `$XDG_CONFIG_HOME` or `~/.config` elsewhere). The spool is append-only and capped at 1 MiB; at the cap the file becomes `events.1.jsonl`, replacing the one before, so the folder never holds more than 2 MiB. Rotation is best-effort: two oars processes that rotate at the same moment can drop the events of one rotated file. Two first runs at the same moment share one install id.
+- Each CLI command, and each fire of a hook (the bare `oars gate hook` included), then leaves an event in a spool: `<config>/oars/telemetry/events.jsonl` (`<config>` is `%APPDATA%` on Windows, `$XDG_CONFIG_HOME` or `~/.config` elsewhere). The spool is append-only and capped at 1 MiB; at the cap the file becomes `events.1.jsonl`, replacing the one before, so the folder never holds more than 2 MiB. Rotation is best-effort: two oars processes that rotate at the same moment can drop the events of one rotated file. Two first runs at the same moment share one install id.
 - The nightly task (`hook-bin.js nightly`) leaves a `store-health` and a `run-cost` event, `oars pool deposit` leaves a `wire` event for each harness it built batches for and `--send` a `wire-send` event for each send, and a failure oars did not plan for leaves a `crash` event. Each is described below.
 - Recording never throws and never changes a command's exit code or output. A spool that cannot be written costs nothing but the event.
 - Each event carries the install id: a random UUID made on the first run and kept in `<config>/oars/telemetry/install-id`. It comes from the system's random source, not from your machine, your account, or a path. Delete the file and the next run makes an unrelated one.
@@ -40,6 +40,56 @@ An invented example:
 ```json
 {"v":1,"id":"3f2b8c1e-5d4a-4b7e-9c10-2a6f8e1d7b43","at":"2026-11-06T14:03:22.418Z","type":"command","cli":"0.4.0","os":"win32","data":{"path":["pool","fetch"],"flags":["server","harnessVersion"],"durationMs":412,"exitCode":10,"errorClass":"capped"}}
 ```
+
+### `hook`
+
+One per fire of a hook: the bare `oars gate hook` (recorded by its own process, written after its answer is printed), and the five hooks `hook-bin.js` runs. A hook's stdout and exit code are the same with telemetry on, off, or unwritable.
+
+| Field | What it holds |
+|---|---|
+| `name` | Which hook: `session-start`, `pre-tool`, `post-tool`, `stop`, `nightly`, or `gate` (the bare `oars gate hook`). |
+| `latencyMs` | How long the hook's handler took, in milliseconds, not counting node's own start. |
+| `outcome` | `hit` (it printed context or a deny, or deposited), `miss` (it found nothing), `held` (it had something and the holdback arm kept it from the agent), or `error` (it failed open, or the process deadline ended it before it finished; that fire is written once, with no bytes and no harness version or model; a fire whose answer was settled before the deadline keeps its outcome and bytes). |
+| `bytes` | The size of what the hook printed to stdout; 0 when nothing. |
+| `harnessVersion`, `model` | When the hook saw them (the hook input's `model`, or the last 64 KB of the transcript the input names, the same bounded read a push makes; the path is never recorded): a public version or model name as the pool's vocabulary lists it, else `other`. Absent when the hook did not see one: a `nightly` run (it has no hook input) and a deadline-ended fire carry neither. |
+
+### `recall`
+
+One per recall: `oars sessions recall` (every form), the `oars_recall` MCP tool an agent calls, and the push a `pre-tool` hook makes. Counts and closed words only: the query's text, an entity or pattern it named, and the answer it rendered are never recorded.
+
+| Field | What it holds |
+|---|---|
+| `form` | How it was asked: `pattern`, `entity`, `question`, `text`, or `legacy` (`--error`, `--path`, `--class`). |
+| `mode` | `pull` (someone asked) or `push` (a hook offered it). |
+| `families` | The read families the answer served, from the closed list (`recovery`, `fit`, `cost`, `change`, `live`, `adoption`, `method`, `next-step`, `tool-day`, `version-boundary`, `substitution`, `interaction`, `day-move`, `entity`). |
+| `kind` | `hit` or `miss`. |
+| `reads`, `evidence`, `tokens` | How many reads and evidence rows the answer cites, and its size in tokens (a count for comparing arms, not a bill). |
+| `arm` | The exposure record the recall also keeps on this machine: `shown`, or `held` (a push the holdback arm kept from the agent). A pull is always `shown`. |
+
+### `deposit`
+
+One per `oars pool deposit` pass (`step` is `build`), and one per batch sent (`step` is `send`). Counts only: no folder, term, session id, name, or batch content.
+
+| Field | What it holds |
+|---|---|
+| `step` | `build` (a pass that wrote batches to the outbox) or `send` (one batch sent with `--send`). |
+| `sessions` | Sessions in the store the pass counted. |
+| `batched`, `bytes` | Batches the pass wrote and their total size in bytes; on a `send`, the size of the batch sent. |
+| `sent` | On a `send`: 1. |
+| `excludedFolder`, `excludedTerm`, `excludedNoRaw`, `excludedNoTerms`, `excludedUnreadable` | How many sessions each session gate kept out: a folder not on the allowlist, an exclusion term, no raw to scan, no term file, and unreadable. A count each, never which folder or which term. |
+| `notEnded`, `uncaptured`, `refused`, `withdrawn`, `discarded` | Sessions that had not ended, sessions with nothing to build, sessions the vocabulary refused, batches removed because their session no longer passes, and batches built under an older format. |
+
+### `fetch`
+
+One per `oars pool fetch` that reached the pool, whatever the pool answered: a refused fetch and a bundle that fails verification count as fetches, with no `reads`.
+
+| Field | What it holds |
+|---|---|
+| `harness` | The harness fetched, from the pool's list (`claude-code`, `cursor`, `codex`, `copilot`, `gemini`, `grok`, `vscode-copilot`, or `other`). |
+| `fetches` | 1. |
+| `etagHits` | 1 when the pool answered 304 (the kept bundle is current). |
+| `capHits` | 1 when the pool's weekly fetch cap refused it. |
+| `reads` | The reads in the bundle fetched or kept. |
 
 ### `store-health`
 
