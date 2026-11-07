@@ -274,7 +274,8 @@ export const incrementsOf = (skeleton: SessionSkeleton): Increments => {
   for (const cell of derived.cells) {
     const exposed = cell.exposed ? 1 : 0;
     const key = `${cell.motifId}/${cell.frameBucket}/${cell.grain}/${cell.day}/${String(exposed)}`;
-    cells.set(key, { key, harnessBucket: isEnvironmentCell(cell) ? ENVIRONMENT_BUCKET : bucketFields(cell.frameBucket).harnessBucket, motifId: cell.motifId, frameBucket: cell.frameBucket, grain: cell.grain, day: cell.day, exposed, sessions: cell.sessions, ok: cell.ok, failed: cell.failed, tokens: cell.tokens, durationMs: cell.durationMs });
+    // The served column is a running sum, so a cell no session of this batch recorded tokens for adds nothing to it; the sum itself holds only what was observed.
+    cells.set(key, { key, harnessBucket: isEnvironmentCell(cell) ? ENVIRONMENT_BUCKET : bucketFields(cell.frameBucket).harnessBucket, motifId: cell.motifId, frameBucket: cell.frameBucket, grain: cell.grain, day: cell.day, exposed, sessions: cell.sessions, ok: cell.ok, failed: cell.failed, tokens: cell.tokens ?? 0, durationMs: cell.durationMs });
   }
   // A session counts once per value, so each value is one session of this batch.
   const strata = new Map<string, StratumRow>();
