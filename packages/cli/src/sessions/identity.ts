@@ -1,6 +1,6 @@
 // A step's `identity` (recall spec Section 2.2): what the step acted on, by action. A program, subcommand, flag, MCP server and tool pass through
 // `public-vocabulary.ts` and become `<literal>` when it does not list them; a skill-run name, a host, and a pull name are kept as they are after the
-// operator's redaction (CAPTURE 23), and what leaves the machine is decided at the deposit's one gate and by the pool.
+// operator's redaction (CAPTURE 24), and what leaves the machine is decided at the deposit's one gate and by the pool.
 
 import { mcpOf, type ActionTable, type CanonicalAction } from './actions.js';
 import { isWireName, isWirePullName, wireName } from './pool-wire.js';
