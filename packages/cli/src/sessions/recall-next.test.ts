@@ -104,11 +104,12 @@ describe('renderPositions', () => {
 });
 
 describe('mergePositions', () => {
-  it("lists a prefix once, the bundle's first, ordered by observations", () => {
-    const merged = mergePositions([position('file.edit', 30)], [position('file.edit', 99), position('file.read', 40)]);
+  it("lists a prefix once, the bundle's positions first, each group ordered by observations", () => {
+    const merged = mergePositions([position('file.edit', 30)], [position('file.edit', 99), position('file.read', 40), position('file.search', 60)]);
     expect(merged.map((p) => [p.prefix, p.n])).toEqual([
-      ['file.read', 40],
       ['file.edit', 30],
+      ['file.search', 60],
+      ['file.read', 40],
     ]);
   });
 });

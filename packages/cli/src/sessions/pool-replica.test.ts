@@ -52,8 +52,9 @@ describe('sessionBundle', () => {
     expect(await sessionBundle(dir, setup)).toBeUndefined();
     const other = fresh();
     const kept = await keep(other, bundleOf(undefined, '2.1.314'), await pair());
-    await keep(fresh(), bundleOf(undefined, '2.1.314'), await pair());
-    writeFileSync(kept, JSON.stringify({ payload: JSON.stringify(bundleOf(undefined, '2.1.314')), signature: 'AAAA' }));
+    const intruder = await pair();
+    const payload = JSON.stringify(bundleOf(undefined, '2.1.314'));
+    writeFileSync(kept, JSON.stringify({ payload, signature: await intruder.sign(payload) }));
     expect(await sessionBundle(other, setup)).toBeUndefined();
     writeFileSync(join(dir, 'pool-accounts.json'), 'not json');
     expect(await sessionBundle(dir, setup)).toBeUndefined();
