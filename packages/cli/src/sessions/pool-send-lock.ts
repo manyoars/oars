@@ -1,7 +1,7 @@
 // One sender at a time per outbox (t884): the nightly task and `deposit --send` both take this lock, so a batch is never posted twice by two runs that overlap. The lock is a file created
-// with `wx` beside `sent.log`, so it holds across processes as well as inside one. A run that finds it held waits; a lock older than `staleMs` belongs to a run that died, and is taken over by one waiter only. The holder touches the file while it runs, so a long send (a first night of raw parts) is never mistaken for a dead run, and it removes the file only if the file still names its own run.
+// with `wx` beside `sent.log`, so it holds across processes as well as inside one. A run that finds it held waits; a lock older than `staleMs` belongs to a run that died, and is taken over by one waiter only, under a guard file. The holder touches the file while it runs, so a long send (a first night of raw parts) is never mistaken for a dead run, and it removes the file only if the file still names its own run.
 import { randomUUID } from 'node:crypto';
-import { link, mkdir, open, readFile, rename, rm, stat, utimes } from 'node:fs/promises';
+import { mkdir, open, readFile, rm, stat, utimes } from 'node:fs/promises';
 import { join } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 
@@ -29,20 +29,27 @@ export class SendLockBusy extends Error {
 const exists = (error: unknown): boolean => error instanceof Error && Reflect.get(error, 'code') === 'EEXIST';
 
 /**
- * A stale lock is moved to a name only this waiter knows, then removed: of several waiters that read it as stale, the rename succeeds for one. A waiter whose rename moved a lock that had meanwhile been
- * taken over and refreshed (it looked, then another run took over before it renamed) puts that lock back with `link`, which fails if the path is taken again, and counts as not having taken over.
+ * A stale lock is removed under a takeover guard (`send.lock.takeover`, created with `wx`), so one waiter at a time reads the lock again and removes it only if it is still stale. A live lock is never moved
+ * or removed: a waiter that read a lock as stale, but meets a lock another run took over and refreshed in the meantime, finds it fresh under the guard and leaves it. A guard left by a taker that died is
+ * removed once it is older than `staleMs`.
  */
-const takeOver = async (file: string, staleMs: number, fs: LockFs): Promise<void> => {
-  const aside = `${file}.${randomUUID()}.stale`;
+const takeOver = async (file: string, staleMs: number, fs: LockFs): Promise<boolean> => {
+  const guard = `${file}.takeover`;
   try {
-    await rename(file, aside);
+    await (await open(guard, 'wx')).close();
   } catch {
-    return;
+    const left = await stat(guard).catch(() => undefined);
+    if (left !== undefined && Date.now() - left.mtimeMs > staleMs) await rm(guard, { force: true });
+    return false;
   }
-  const moved = await fs.stat(aside).catch(() => undefined);
-  // Only this waiter has the moved file, so its age is read once more and decides: fresh means the holder is alive.
-  if (moved !== undefined && Date.now() - moved.mtimeMs <= staleMs) await link(aside, file).catch(() => undefined);
-  await rm(aside, { force: true });
+  try {
+    const held = await fs.stat(file).catch(() => undefined);
+    if (held === undefined || Date.now() - held.mtimeMs <= staleMs) return false;
+    await rm(file, { force: true });
+    return true;
+  } finally {
+    await rm(guard, { force: true });
+  }
 };
 
 export const withSendLock = async <T>(outbox: string, run: () => Promise<T>, times: Partial<LockTimes> = {}, fs: LockFs = { stat }): Promise<T> => {
@@ -61,9 +68,10 @@ export const withSendLock = async <T>(outbox: string, run: () => Promise<T>, tim
       if (!exists(error)) throw error;
     }
     const held = await fs.stat(file).catch(() => undefined);
-    if (held !== undefined && Date.now() - held.mtimeMs > staleMs) await takeOver(file, staleMs, fs);
-    else if (Date.now() >= giveUp) throw new SendLockBusy();
-    else await sleep(pollMs);
+    // A takeover that cleared the lock goes straight back to taking it; any other outcome waits, and gives up once waitMs has passed.
+    if (held !== undefined && Date.now() - held.mtimeMs > staleMs && (await takeOver(file, staleMs, fs))) continue;
+    if (Date.now() >= giveUp) throw new SendLockBusy();
+    await sleep(pollMs);
   }
   const beat = setInterval(() => {
     const now = new Date();

@@ -377,6 +377,61 @@ describe('withSendLock', () => {
     expect(readdirSync(outbox)).toEqual([]);
   });
 
+  it('never lets a second sender in beside a live holder when a waiter reads its lock as stale and a third takes the path', async () => {
+    const outbox = folder();
+    const lock = join(outbox, 'send.lock');
+    const times = { staleMs: 1000, waitMs: 3000, pollMs: 5 };
+    let inside = 0;
+    let overlapped = false;
+    const body = async (ms: number): Promise<void> => {
+      inside += 1;
+      overlapped ||= inside > 1;
+      await new Promise((resolve) => setTimeout(resolve, ms));
+      inside -= 1;
+    };
+    // A is a live holder. B reads A's lock as stale (a stale clock for B's first look only). A takeover that moved the lock aside would be held at its next look until C has taken the free path and is running, so two senders would overlap; the guard takeover never moves it.
+    const live = withSendLock(outbox, () => body(300), times);
+    while (inside === 0) await new Promise((resolve) => setTimeout(resolve, 2));
+    const real = await import('node:fs/promises');
+    let lookedAtLock = 0;
+    const second: LockFs = {
+      stat: async (path) => {
+        const { mtimeMs } = await real.stat(path);
+        if (path === lock && lookedAtLock === 0) {
+          lookedAtLock += 1;
+          return { mtimeMs: mtimeMs - 60_000 };
+        }
+        if (path !== lock) while (inside < 2) await new Promise((resolve) => setTimeout(resolve, 2));
+        return { mtimeMs };
+      },
+    };
+    const third = (async () => {
+      while (lookedAtLock === 0) await new Promise((resolve) => setTimeout(resolve, 1));
+      while (existsSync(lock)) await new Promise((resolve) => setTimeout(resolve, 1));
+      await withSendLock(outbox, () => body(100), times);
+    })();
+    await Promise.all([live, withSendLock(outbox, () => body(1), times, second).catch(() => undefined), third]);
+    expect(overlapped).toBe(false);
+  });
+
+  it('waits while another waiter holds the takeover guard, and removes a guard a dead taker left', async () => {
+    const outbox = folder();
+    mkdirSync(outbox, { recursive: true });
+    const lock = join(outbox, 'send.lock');
+    const guard = join(outbox, 'send.lock.takeover');
+    writeFileSync(lock, 'dead-run');
+    writeFileSync(guard, 'dead-taker');
+    const old = new Date(Date.now() - 60_000);
+    utimesSync(lock, old, old);
+    // A fresh guard is another waiter mid-takeover: this run waits and gives up, leaving both files.
+    await expect(withSendLock(outbox, () => Promise.resolve(1), { staleMs: 1000, waitMs: 30, pollMs: 5 })).rejects.toBeInstanceOf(SendLockBusy);
+    expect(existsSync(guard)).toBe(true);
+    // A guard older than staleMs was left by a taker that died: it is removed, then the stale lock is taken over.
+    utimesSync(guard, old, old);
+    await expect(withSendLock(outbox, () => Promise.resolve('ran'), { staleMs: 1000, waitMs: 2000, pollMs: 5 })).resolves.toBe('ran');
+    expect(readdirSync(outbox)).toEqual([]);
+  });
+
   it('removes only its own lock: a lock another run took over is left alone', async () => {
     const outbox = folder();
     const lock = join(outbox, 'send.lock');
@@ -387,7 +442,7 @@ describe('withSendLock', () => {
     expect(readFileSync(lock, 'utf8')).toBe('another-run');
   });
 
-  it('puts back a lock it moved aside that was fresh after all', async () => {
+  it('leaves a lock that reads fresh when it is looked at again under the guard', async () => {
     const outbox = folder();
     mkdirSync(outbox, { recursive: true });
     const lock = join(outbox, 'send.lock');
