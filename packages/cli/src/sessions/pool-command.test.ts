@@ -1925,7 +1925,7 @@ describe('pool telemetry: deposit batches and fetches leave counts', () => {
     expect(eventsOf(dir, 'deposit')).toEqual([{ step: 'send', sent: 1, bytes: Buffer.byteLength(batchBytes(scene)[0] ?? '') }]);
   });
 
-  const bundleBody = (version: string): string => JSON.stringify({ format: 1, harness: 'claude-code', harnessVersion: version, vocabVersion: VOCAB_VERSION, asOf: { pool: 'p' }, cells: [{}], motifs: [], reads: [{}, {}], strata: [] });
+  const bundleBody = (version: string): string => JSON.stringify({ format: 1, harness: 'claude-code', harnessVersion: version, vocabVersion: VOCAB_VERSION, floor: 5, asOf: { pool: 'p' }, cells: [{}], motifs: [], reads: [{}, {}], strata: [] });
   const BUNDLE = `/bundle/claude-code/2.1.314/${VOCAB_VERSION}`;
 
   const signed = async (): Promise<{ scene: Scene; reply: () => Promise<Response> }> => {
