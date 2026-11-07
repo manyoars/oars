@@ -48,21 +48,31 @@ export const wranglerConfig = (): { compatibilityDate: string; compatibilityFlag
   return { compatibilityDate: parsed.compatibility_date, compatibilityFlags: entries.filter((flag): flag is string => typeof flag === 'string'), text, parsed };
 };
 
+/** The payload header's text, or nothing when it is absent or not valid percent-encoding (a bare `URIError` would hide the Worker's failure). */
+const decodedPayload = (encoded: string | null): string => {
+  if (encoded === null) return '';
+  try {
+    return decodeURIComponent(encoded);
+  } catch {
+    return '';
+  }
+};
+
 /**
  * What Miniflare's `dispatchFetch` throws for a Worker exception: the Worker's own message and stack, so a failing test points at the Worker's line. The error rides in the body or, when that is empty, in the payload header.
  */
 export const workerError = async (response: Response): Promise<Error> => {
   const encoded = response.headers.get('MF-Experimental-Error-Stack-Payload');
-  const serialised = (await response.text()) || (encoded === null ? '' : decodeURIComponent(encoded));
+  const serialized = (await response.text()) || decodedPayload(encoded);
   let caught: unknown;
   try {
-    caught = JSON.parse(serialised);
+    caught = JSON.parse(serialized);
   } catch {
-    return new Error(`the Worker threw a non-JSON error: ${serialised === '' ? '(empty)' : serialised}`);
+    return new Error(`the Worker threw a non-JSON error: ${serialized === '' ? '(empty)' : serialized}`);
   }
   const message = fieldOf(caught, 'message');
   const stack = fieldOf(caught, 'stack');
-  const error = new Error(typeof message === 'string' ? message : serialised);
+  const error = new Error(typeof message === 'string' ? message : serialized);
   if (typeof stack === 'string') error.stack = stack;
   return error;
 };
