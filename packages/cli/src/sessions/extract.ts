@@ -7,6 +7,7 @@ import { posix } from 'node:path';
 import { ACTION_TABLES, actionOf, shellOf, type ActionTable, type CanonicalAction } from './actions.js';
 import { exploreCount, strataOf } from './strata.js';
 import { closedFrame, frameIdOf, repoFilesFromIndex, repoSizeOf, stackOf, utcDay } from './frame.js';
+import { argClassOf, targetClassOf } from './call-shape.js';
 import { LITERAL, type RepoSize } from './public-vocabulary.js';
 import { linkSteps } from './graph.js';
 import { callIdentity, shellIdentity, UNREAD_SHELL, type WordOfCommand } from './identity.js';
@@ -1339,6 +1340,9 @@ const draftsOf = (table: ActionTable, named: { action: CanonicalAction; native: 
   return [{ action, ...callIdentity(table, action, native, named.native, { skill, url }), read: true, rawKey: `${native}\n${target ?? url ?? skill ?? ''}` }];
 };
 
+/** The path `targetOf` hashes: the first of `PATH_KEYS` that holds text. Read for its class and gone, never stored. */
+const pathOf = (input: Obj): string | undefined => PATH_KEYS.map((key) => str(input[key])).find((value) => value !== undefined && value !== '');
+
 /** The `target` of a tool call (see {@link ToolObservation.target}). */
 export const targetOf = (
   tool: string,
@@ -1738,6 +1742,8 @@ export const captureSession = (input: ExtractInput): Capture => {
           target: aimed.target,
           targetBase: aimed.base,
           keys: Object.keys(toolInput).sort(),
+          targetClass: targetClassOf(pathOf(toolInput), aimed.base),
+          argClass: argClassOf(toolInput),
           durationMs: null,
           toolUseId: id ?? null,
           harnessVersion: version ?? null,
