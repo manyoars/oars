@@ -80,6 +80,24 @@ describe('rule 5: a bucket and no exact number', () => {
     expect(rebuilt?.usageResponses).toBe(floorOf('count', 3));
   });
 
+  it('derives a served class cell from the categories the prompt recorded: a wire null adds nothing to tokens, and an unrecorded input adds the prompt to none', () => {
+    const skeleton = skeletonOfLocal(localStore());
+    const [main] = skeleton.transcripts;
+    const first = main?.prompts[0];
+    if (main === undefined || first === undefined) throw new Error('the skeleton has no prompt');
+    const classTokens = (usage: typeof first.usage): number | undefined => {
+      const sent = { ...first, usage, usageResponses: 1 };
+      const motifId = classMotif(first.cls).motifId;
+      return [...incrementsOf({ ...skeleton, transcripts: [{ ...main, prompts: [sent] }] }).cells.values()].find((cell) => cell.motifId === motifId && cell.grain === 'week')?.tokens;
+    };
+    const whole = floorOf('tokens', first.usage.input ?? 0) + floorOf('tokens', first.usage.cacheWrite ?? 0) + floorOf('tokens', first.usage.cacheRead ?? 0) + floorOf('tokens', first.usage.output ?? 0);
+    expect(classTokens(first.usage)).toBe(whole);
+    // cacheRead was never recorded: its floor is a placeholder and stays out of the sum.
+    expect(classTokens({ ...first.usage, cacheRead: null })).toBe(whole - floorOf('tokens', first.usage.cacheRead ?? 0));
+    // No input recorded: the prompt has no whole usage, so the served sum gains nothing from it (the column is a running sum, so 0 adds nothing).
+    expect(classTokens({ ...first.usage, input: null })).toBe(0);
+  });
+
   it('reads a lower bound of what the local store derives exactly, and equal when every value sits on a floor', () => {
     const exact = deriveCells(localStore());
     const floored = incrementsOf(skeletonOfLocal(localStore()));
