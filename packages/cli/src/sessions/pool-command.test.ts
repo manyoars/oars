@@ -103,8 +103,6 @@ const on = (scene: Scene, method: 'get' | 'post', path: string, reply: () => Res
   );
 };
 
-type Flavor = 'github' | 'google';
-
 // Invented values: none is a real handle or token.
 const HANDLE = 'a-sealed-login-handle';
 const POOL_TOKEN = 'a-pool-token';
