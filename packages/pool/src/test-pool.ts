@@ -155,7 +155,7 @@ export const startPool = async (bindings: { [name: string]: string } = {}): Prom
     compatibilityDate: config.compatibilityDate,
     compatibilityFlags: config.compatibilityFlags,
     d1Databases: { DB: 'pool-test' },
-    bindings: { PSEUDONYM_KEY: 'a-test-pseudonym-key', BUNDLE_SIGNING_KEY: key.jwk, COVENANT_VERSION: 'v1', FETCH_CAP: '1000', ...bindings },
+    bindings: { PSEUDONYM_KEY: 'a-test-pseudonym-key', INGEST_HASH_KEY: 'a-test-ingest-hash-key', BUNDLE_SIGNING_KEY: key.jwk, COVENANT_VERSION: 'v1', FETCH_CAP: '1000', ...bindings },
     outboundService: stub.outbound,
   });
   await miniflare.ready;

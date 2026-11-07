@@ -172,6 +172,7 @@ All of these are set at the deploy, never in `wrangler.jsonc`, which holds no ac
 | `DB` | The D1 database. |
 | `PSEUDONYM_KEY` | The key accounts are hashed under. Changing it makes every account new. |
 | `BUNDLE_SIGNING_KEY` | An Ed25519 private key as a JWK. Clients pin the public half, so changing it fails their next login. |
+| `INGEST_HASH_KEY` | The one pool-wide key a host is hashed under (HMAC-SHA-256, `h:` and 64 hex digits) before anything is written. One key and not one per account, because the floor counts the same host across accounts. Unset refuses every deposit with `503 not_configured`, so a host is never stored in clear. Changing it makes every stored host new. |
 | `COVENANT_VERSION` | The covenant in force. Leave it unset until the covenant is published. |
 | `FETCH_CAP` | Optional. Bundles one account may fetch per ISO week; a value that is not a positive whole number is 1. |
 | `MAX_DEPOSITS_PER_ACCOUNT` | Optional. Rows one account may hold. |
@@ -193,13 +194,13 @@ The pool does not check that the provider token it is sent was issued to the Man
 
 ## Deploy steps
 
-Nothing has been deployed or provisioned. Each step is owed once, by the account holder, in this order:
+Nothing has been deployed. Step 5 is done, and steps 1 to 4, 6, 7, and 8 are open. Each step is owed once, by the account holder, in this order:
 
 1. Create a GitHub OAuth app with device flow enabled, and note its client id. The CLI reads it from `OARS_GITHUB_CLIENT_ID`; the pool holds none of it.
 2. Create a Google OAuth client of type "TVs and Limited Input devices", and note its id and secret, which the CLI reads from `OARS_GOOGLE_CLIENT_ID` and `OARS_GOOGLE_CLIENT_SECRET`.
 3. Run `wrangler d1 create oars-pool` in `packages/pool`. The config binds it by name, so commit no `database_id`.
 4. Run `wrangler d1 migrations apply oars-pool --remote` in `packages/pool`.
-5. Run `wrangler secret put` for `PSEUDONYM_KEY` (32 random bytes) and `BUNDLE_SIGNING_KEY`, and leave `COVENANT_VERSION` unset.
+5. Done (2026-11-04, confirmed with `wrangler secret list`): `PSEUDONYM_KEY` (32 random bytes), `BUNDLE_SIGNING_KEY`, and `INGEST_HASH_KEY` (32 random bytes) are set on a draft `oars-pool` Worker with no code and no route, and `COVENANT_VERSION` is left unset. The D1 database from step 3 does not exist yet.
 6. Before `wrangler deploy`, add a Cloudflare rate-limiting rule on `/v1/login` (in the dashboard, or with the rulesets API). The route takes no credential and each call spends one read of the provider's profile route from the Worker's address, so without a rule anyone can drive that spend. The Worker holds no limiter of its own.
 7. Run `wrangler deploy` in `packages/pool`, confirm it bound the database from step 3 rather than creating another, and attach the custom domain in the dashboard or with `--domain`. Only `--dry-run` has been exercised.
 8. Publish the covenant, and only then run `wrangler secret put COVENANT_VERSION`, which opens deposits.

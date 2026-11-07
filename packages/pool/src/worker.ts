@@ -3,9 +3,10 @@ import { parseSkeleton, type SessionSkeleton } from '../../cli/src/sessions/pool
 import { batchCounts, batchTier } from './access.js';
 import { fetchBundle, harnessRequired } from './bundle.js';
 import { covenantAccept, covenantNotAccepted, covenantStatus, depositsClosed, hasAccepted } from './covenant.js';
-import { answer, bound, refuse, wholeBinding, type Env } from './http.js';
+import { answer, bound, notConfigured, refuse, wholeBinding, type Env } from './http.js';
 import { incrementsOf, incrementStatements, markOf, netCellCount, previousOf } from './ingest.js';
 import { accountOf, login } from './identity.js';
+import { hashHosts, hashKey } from './ingest-hash.js';
 
 /** D1 holds at most 2 MB in one value. A body declaring more is refused unread, and one that declares nothing is measured before it is parsed. */
 const MAX_DEPOSIT_BYTES = 1024 * 1024;
@@ -42,6 +43,9 @@ const deposit = async (request: Request, env: Env): Promise<Response> => {
   const account = await accountOf(request, env);
   if (account === undefined) return refuse(401, 'unauthorized', 'Sign in with oars pool login first.');
   if (!(await hasAccepted(env, account, version))) return covenantNotAccepted(version);
+  // A host is hashed before any write, so a pool with no key refuses here, before the body is read, rather than store one in clear.
+  const secret = bound(env.INGEST_HASH_KEY);
+  if (secret === undefined) return notConfigured('INGEST_HASH_KEY');
   const tooLarge = (): Response => refuse(413, 'too_large', `A skeleton holds at most ${String(MAX_DEPOSIT_BYTES)} bytes.`);
   if (Number(request.headers.get('content-length')) > MAX_DEPOSIT_BYTES) return tooLarge();
   const text = await request.text();
@@ -52,7 +56,11 @@ const deposit = async (request: Request, env: Env): Promise<Response> => {
   } catch {
     return refuse(400, 'closed_vocabulary', 'The body is not JSON.', 'skeleton');
   }
-  const parsed = parseSkeleton(body);
+  // The body is read once as it came, so a refusal is judged on what the client sent (a host that is not a name is still refused).
+  const sent = parseSkeleton(body);
+  if (!sent.ok) return refuse(422, 'closed_vocabulary', `${sent.field}: ${sent.reason}`, sent.field);
+  // Then the hosts are hashed and the body is read again: the row, the bag, the literals, the cells, and the motifs all come from the hashed form, so a clear host never reaches a write.
+  const parsed = parseSkeleton(await hashHosts(await hashKey(secret), body));
   if (!parsed.ok) return refuse(422, 'closed_vocabulary', `${parsed.field}: ${parsed.reason}`, parsed.field);
   // The parsed skeleton is what is stored, not the text that came in: it holds only the fields that were read.
   const { skeleton, extensions, others } = parsed;
