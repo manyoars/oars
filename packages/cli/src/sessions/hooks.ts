@@ -4,11 +4,14 @@
 import { join } from 'node:path';
 import { performance } from 'node:perf_hooks';
 import { defaultConfigDir } from '../credentials.js';
+import { noEmit, type Emit } from '../telemetry/emit.js';
+import { frameWords, recallFields } from '../telemetry/fields.js';
 import { cursorRoot } from './cursor.js';
 import { SOURCES, sourceLabel } from './sources.js';
 import { signatureOf } from './extract.js';
 import { appendHookCall } from './hook-calls.js';
 import { contextBlock, readIndex } from './hook-index.js';
+import type { Recall } from './recall-object.js';
 import { pushRecall } from './recall-push.js';
 import { toolShapeId } from './recall-reads.js';
 import { makeRedactor } from './redact.js';
@@ -51,13 +54,18 @@ interface Outcome {
   queried: boolean;
   /** A failure the hook survived (fail-open), recorded as the hook-call `error`. */
   error?: string;
+  /** The recall a pre-tool push made, for telemetry: held when the arm kept it from the agent. */
+  recall?: Recall;
+  /** The model the harness told this hook it runs, when its input says. */
+  model?: string;
 }
 
 const sessionStart = async (runtime: SessionsRuntime, input: Input): Promise<Outcome> => {
   const cwd = str(input.cwd);
   const index = cwd === undefined ? undefined : await readIndex(runtime.storeDir);
   const block = index === undefined || cwd === undefined ? undefined : contextBlock(index, { cwd, top: TOP, maxChars: MAX_CHARS });
-  return block === undefined ? { hit: false, queried: index !== undefined } : { output: additional('SessionStart', block), hit: true, queried: true };
+  const model = str(input.model);
+  return block === undefined ? { hit: false, queried: index !== undefined, ...(model === undefined ? {} : { model }) } : { output: additional('SessionStart', block), hit: true, queried: true, ...(model === undefined ? {} : { model }) };
 };
 
 const inputKeys = (input: Input): string[] => (isRecord(input.tool_input) ? Object.keys(input.tool_input) : []);
@@ -74,7 +82,7 @@ const preTool = async (runtime: SessionsRuntime, input: Input, now: () => number
   if (index === undefined) return { hit: false, queried: false };
   const recall = await pushRecall({ storeDir: runtime.storeDir, sid, tool, keys: inputKeys(input), transcript: str(input.transcript_path), platform: process.platform, at: new Date(now()).toISOString(), index });
   if (recall === undefined) return { hit: false, queried: false };
-  return recall.arm === 'shown' ? { output: additional('PreToolUse', recall.answer.rendered), hit: true, queried: true } : { hit: true, queried: true };
+  return recall.arm === 'shown' ? { output: additional('PreToolUse', recall.answer.rendered), hit: true, queried: true, recall } : { hit: true, queried: true, recall };
 };
 
 /** A failed tool arrives as PostToolUseFailure with the text in `error` (Bash and PowerShell start it with `Exit code N`); a PostToolUse response that starts that way is read too. */
@@ -156,7 +164,7 @@ export const hookRuntime = (
  * Runs one hook. It never fails or blocks the session it runs in: whatever happens, it resolves (the process exits 0), and the
  * hook-call line records the outcome, with the failure's first line when there was one, so the record is evidence, not a claim.
  */
-export const runHook = async (event: HookEvent, stdin: string, runtime: SessionsRuntime, now: () => number): Promise<string | undefined> => {
+export const runHook = async (event: HookEvent, stdin: string, runtime: SessionsRuntime, now: () => number, emit: Emit = noEmit): Promise<string | undefined> => {
   const started = performance.now();
   let session: string | null = null;
   let outcome: Outcome = { hit: false, queried: false };
@@ -186,5 +194,16 @@ export const runHook = async (event: HookEvent, stdin: string, runtime: Sessions
     const report: StepReport = { in: { query: 1 }, out: failed ? {} : { matches: outcome.hit ? 1 : 0 }, key };
     await tryLog(() => logStep(newContext(runtime.storeDir, now, event), 'recall', failed ? 'error' : 'ok', ms, report, line));
   }
+  // After the answer is settled and the local rows are written, so telemetry is never in front of the context the session gets; `emit` never throws.
+  const { recall } = outcome;
+  emit('hook', {
+    name: event,
+    latencyMs: ms,
+    outcome: failed ? 'error' : recall?.arm === 'held' ? 'held' : outcome.hit ? 'hit' : 'miss',
+    bytes: Buffer.byteLength(outcome.output ?? ''),
+    ...frameWords(recall?.frame?.harnessVersion, recall?.frame?.model ?? outcome.model),
+  });
+  // A push is a recall: its read is the `fit` family, and its arm is the exposure record, as a count of one.
+  if (recall !== undefined) emit('recall', recallFields(recall, ['fit']));
   return outcome.output;
 };
