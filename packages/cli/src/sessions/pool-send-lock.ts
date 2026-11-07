@@ -1,7 +1,7 @@
 // One sender at a time per outbox (t884): the nightly task and `deposit --send` both take this lock, so a batch is never posted twice by two runs that overlap. The lock is a file created
 // with `wx` beside `sent.log`, so it holds across processes as well as inside one. A run that finds it held waits; a lock older than `staleMs` belongs to a run that died, and is taken over by one waiter only, under a guard file. The holder touches the file while it runs, so a long send (a first night of raw parts) is never mistaken for a dead run, and it removes the file only if the file still names its own run.
 import { randomUUID } from 'node:crypto';
-import { mkdir, open, readFile, rm, stat, utimes } from 'node:fs/promises';
+import { mkdir, open, readFile, rm, stat, utimes, type FileHandle } from 'node:fs/promises';
 import { join } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 
@@ -13,9 +13,11 @@ export interface LockTimes {
   pollMs: number;
 }
 
-/** The one file operation a test replaces, to read a lock as stale at the moment a waiter looks. */
+/** What a test replaces: `stat` to read a lock as stale at the moment a waiter looks, `open` to make the create fail the way Windows does, `platform` to pick the platform's rules. */
 export interface LockFs {
   stat: (path: string) => Promise<{ mtimeMs: number }>;
+  open?: (path: string, flags: 'wx') => Promise<FileHandle>;
+  platform?: NodeJS.Platform;
 }
 
 const DEFAULT_TIMES: LockTimes = { staleMs: 10 * 60 * 1000, waitMs: 2 * 60 * 1000, pollMs: 50 };
@@ -26,7 +28,12 @@ export class SendLockBusy extends Error {
   }
 }
 
-const exists = (error: unknown): boolean => error instanceof Error && Reflect.get(error, 'code') === 'EEXIST';
+// EEXIST means another run holds the file. On Windows an open of a file whose delete is still pending (the holder just released it) answers EPERM or EACCES instead: the same contention, so retry within waitMs.
+const contended = (error: unknown, platform: NodeJS.Platform): boolean => {
+  if (!(error instanceof Error)) return false;
+  const code = Reflect.get(error, 'code');
+  return code === 'EEXIST' || (platform === 'win32' && (code === 'EPERM' || code === 'EACCES'));
+};
 
 /**
  * A stale lock is removed under a takeover guard (`send.lock.takeover`, created with `wx`), so one waiter at a time reads the lock again and removes it only if it is still stale. A live lock is never moved
@@ -56,16 +63,18 @@ export const withSendLock = async <T>(outbox: string, run: () => Promise<T>, tim
   const { staleMs, waitMs, pollMs } = { ...DEFAULT_TIMES, ...times };
   const file = join(outbox, 'send.lock');
   const runId = randomUUID();
+  const create = fs.open ?? open;
+  const platform = fs.platform ?? process.platform;
   await mkdir(outbox, { recursive: true });
   const giveUp = Date.now() + waitMs;
   for (;;) {
     try {
-      const handle = await open(file, 'wx');
+      const handle = await create(file, 'wx');
       await handle.writeFile(runId);
       await handle.close();
       break;
     } catch (error) {
-      if (!exists(error)) throw error;
+      if (!contended(error, platform)) throw error;
     }
     const held = await fs.stat(file).catch(() => undefined);
     // A takeover that cleared the lock goes straight back to taking it; any other outcome waits, and gives up once waitMs has passed.
