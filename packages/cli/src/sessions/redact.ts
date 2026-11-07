@@ -84,9 +84,20 @@ const PLACEHOLDER = /<(?:secret|email|org-domain|host|user|env)>/g;
 /** How many values of a redacted text were masked: each placeholder is one. */
 export const placeholders = (text: string): number => text.match(PLACEHOLDER)?.length ?? 0;
 
+/** The account name; `userInfo()` throws when the uid has no passwd entry (a container run with `--user <uid>`), so the environment stands in. */
+const accountName = (): string => userInfo().username;
+
 /** The names this machine's person goes by in a transcript: the account's and the home folder's. A name under three characters would mask ordinary words, so it is left to the path rules. */
-export const localNames = (home: string = homedir(), account: string = userInfo().username): string[] =>
-  [...new Set([account, basename(home)].filter((name) => name.length >= MIN_NAME))];
+export const localNames = (home: string = homedir(), account: () => string = accountName): string[] => {
+  const read = (): string => {
+    try {
+      return account();
+    } catch {
+      return process.env['USER'] ?? process.env['USERNAME'] ?? '';
+    }
+  };
+  return [...new Set([read(), basename(home)].filter((name) => name.length >= MIN_NAME))];
+};
 
 // Each name also stands in its encoded-folder form (`John Smith` is `John-Smith` in `C--Users-John-Smith-repo`), and the longest goes first so `mary-jane` is never cut to `mary`.
 const nameRule = (names: readonly string[]): RegExp | undefined => {
@@ -114,4 +125,4 @@ export const redactTranscript = (body: string, domains: readonly string[] = [], 
 };
 
 /** The version of the rules above, stated to the pool with every raw part; a change to any rule of `redactTranscript` raises it. */
-export const REDACTION_VERSION = '2';
+export const REDACTION_VERSION = '1';

@@ -1,5 +1,5 @@
 // The redactor over a whole transcript body (t884 Item 1): one canary per class, none surviving, and the count of what was masked.
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { localNames, redactTranscript } from './redact.js';
 
 const CANARIES: ReadonlyArray<readonly [string, string]> = [
@@ -103,6 +103,20 @@ describe('redactTranscript', () => {
     const names = localNames('/home/someone-else');
     expect(names).toContain('someone-else');
     expect(names.every((name) => name.length >= 3)).toBe(true);
+  });
+
+  it('falls back to the environment when the uid has no passwd entry', () => {
+    const throwing = (): string => {
+      throw new Error('ERR_SYSTEM_ERROR: no passwd entry');
+    };
+    expect(localNames('/home/xavier', throwing)).toEqual(['xavier']);
+    vi.stubEnv('USER', 'envuser');
+    expect(localNames('/home/xavier', throwing)).toEqual(['envuser', 'xavier']);
+    vi.unstubAllEnvs();
+    vi.stubEnv('USER', '');
+    vi.stubEnv('USERNAME', 'winuser');
+    expect(localNames('/home/xavier', throwing)).toEqual(['xavier']);
+    vi.unstubAllEnvs();
   });
 
   it('keeps clock times and compressed words that are not addresses', () => {
