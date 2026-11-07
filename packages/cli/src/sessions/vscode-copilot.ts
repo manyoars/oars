@@ -49,7 +49,7 @@
 // button of a confirmation is the decline button and writes `{type:5, source:'user'}` (browser/widget/chatContentParts/toolInvocationParts/abstractToolConfirmationSubPart.ts:225,
 // chatTerminalToolConfirmationSubPart.ts:380,507; browser/tools/languageModelToolsService.ts:711), so a user's refusal (`source` `user`) reads as Claude Code's refusal text and
 // stores `user-rejected`; a hook's or a risk assessment's (languageModelToolsService.ts:683,1051) reads as a permission denial. A `{type:5}` with no `source` is the skip after
-// approval (model/chatProgressTypes/chatToolInvocation.ts:516) and has no outcome. The file holds no harness version and no working-directory change.
+// approval (model/chatProgressTypes/chatToolInvocation.ts:516) and has no outcome. The file holds no working-directory change; its one harness version is the Copilot Chat agent's `extensionVersion` (see `agent` above).
 
 import { readdir, readFile, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
