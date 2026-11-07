@@ -11,7 +11,7 @@ import { chatLines } from './gemini.js';
 import { grokLines } from './grok.js';
 import { makeRedactor } from './redact.js';
 import { makeRepoIdentity, makeRepoRoot } from './repo-root.js';
-import type { Harness, PromptIntervention } from './schema.js';
+import type { Harness, PromptIntervention, PromptObservation, PromptStop } from './schema.js';
 import { chatData, chatLines as vscodeChatLines } from './vscode-copilot.js';
 import { cleanup, copilotEvent, geminiHead, grokUpdate, rolloutLine, stage, stageCursor, type FixtureBubble } from './test-support.js';
 
@@ -158,7 +158,7 @@ const cursor = async (stop: Stop, before: Before): Promise<string> => {
 type Build = (stop: Stop, before: Before) => string | Promise<string>;
 
 /** The derived prompts of a staged transcript, the interrupt marker prompts left in. */
-const promptsOf = async (harness: Harness, build: Build, stop: Stop, before: Before): Promise<DerivedPrompt[]> => {
+const promptsOf = async (harness: Harness, build: Build, stop: Stop, before: Before): Promise<PromptObservation[]> => {
   const text = await build(stop, before);
   const capture = captureSession({
     text,
