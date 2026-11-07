@@ -17,7 +17,7 @@ import type * as PoolWire from './pool-wire.js';
 import { session as sessionRow } from './pool-fixture.js';
 import { parseSkeleton, skeletonOf, VOCAB_VERSION, type PinnedKey } from './pool-wire.js';
 import { contentHash } from './read.js';
-import { deposit } from './store.js';
+import { deposit, updatePoolChoices } from './store.js';
 import { spoolEvents } from '../telemetry/read-events.js';
 import { addProject, cleanup, NOW, settledClock, stage, type Staged } from './test-support.js';
 
@@ -2032,5 +2032,82 @@ describe('wire policing in telemetry', () => {
     const hash = await printedAndHash(scene);
     const refused = wire({ 'GET /v1/covenant': OPEN_COVENANT, 'POST /v1/deposits': answer(500, {}) });
     await expect(poolDeposit(scene.h.deps, sendOptions(hash, refused.via))).rejects.toMatchObject({ problem: { status: 500 } });
+  });
+});
+
+describe('oars pool deposit: the raw copy (t884)', () => {
+  const rawFiles = (scene: Scene): string[] => {
+    const root = join(scene.staged.storeDir, 'pool-outbox');
+    return existsSync(root) ? readdirSync(root, { recursive: true, encoding: 'utf8' }).filter((name) => name.endsWith('.redacted')).sort() : [];
+  };
+  const ready = async (consent: 'granted' | 'declined' | null, folders: { [entry: string]: 'skeleton' | 'off' } = {}): Promise<Scene> => {
+    const scene = setting();
+    await capture(scene);
+    await signIn(scene);
+    await updatePoolChoices(scene.staged.storeDir, (choices) => {
+      choices.rawConsent = consent;
+      Object.assign(choices.folders, folders);
+    });
+    return scene;
+  };
+
+  it('writes a redacted copy of each transcript beside each skeleton once raw consent is granted', async () => {
+    const scene = await ready('granted');
+    expect(await scene.cli('pool', 'deposit', '--server', POOL)).toBe(ExitCode.OK);
+    const copies = rawFiles(scene);
+    expect(copies.length).toBeGreaterThanOrEqual(outboxFiles(scene).length);
+    for (const name of copies) {
+      const body = readFileSync(join(scene.staged.storeDir, 'pool-outbox', name), 'utf8');
+      expect(createHash('sha256').update(body).digest('hex')).toBe(name.split('.').at(-2));
+    }
+  });
+
+  it('writes no raw copy before an answer, after a no, or with the folder at skeleton only or off, and still writes the skeletons unless the folder is off', async () => {
+    for (const [consent, folders, skeletons] of [
+      [null, {}, true],
+      ['declined', {}, true],
+      ['granted', { proj: 'skeleton' }, true],
+      ['granted', { proj: 'off' }, false],
+    ] as const) {
+      const scene = await ready(consent, folders);
+      expect(await scene.cli('pool', 'deposit', '--server', POOL)).toBe(ExitCode.OK);
+      expect(rawFiles(scene)).toEqual([]);
+      expect(outboxFiles(scene).length > 0).toBe(skeletons);
+    }
+  });
+
+  it('turning a folder off removes what was queued and sends nothing more of it', async () => {
+    const scene = await ready('granted');
+    await scene.cli('pool', 'deposit', '--server', POOL);
+    expect(rawFiles(scene).length).toBeGreaterThan(0);
+    await updatePoolChoices(scene.staged.storeDir, (choices) => {
+      choices.folders.proj = 'off';
+    });
+    await scene.cli('pool', 'deposit', '--server', POOL);
+    expect(rawFiles(scene)).toEqual([]);
+    expect(outboxFiles(scene)).toEqual([]);
+  });
+
+  it('writes no raw copy for a session the exclusion gate stops', async () => {
+    const scene = await ready('granted');
+    writeFileSync(join(scene.staged.projectsRoot, 'proj', 'tldr.jsonl'), `${TERM} appears here\n`, { flag: 'a' });
+    await scene.cli('pool', 'deposit', '--server', POOL);
+    expect(rawFiles(scene).filter((name) => name.includes('tldr'))).toEqual([]);
+    expect(scene.sent()).not.toContain(TERM);
+  });
+
+  it('lists each raw copy in the outbox with its hash and bytes, and prints the body only with --explain', async () => {
+    const scene = await ready('granted');
+    await scene.cli('pool', 'deposit', '--server', POOL);
+    scene.h.out.length = 0;
+    await scene.cli('pool', 'outbox', '--server', POOL);
+    const listing = scene.h.out.join('');
+    expect(listing).toMatch(/raw part 1\/1 sha256: [0-9a-f]{64} bytes: \d+/);
+    const name = rawFiles(scene)[0] ?? '';
+    const body = readFileSync(join(scene.staged.storeDir, 'pool-outbox', name), 'utf8');
+    expect(listing).not.toContain(body.slice(0, 200));
+    scene.h.out.length = 0;
+    await scene.cli('pool', 'outbox', '--explain', '--server', POOL);
+    expect(scene.h.out.join('')).toContain(body.slice(0, 200));
   });
 });

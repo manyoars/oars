@@ -6,17 +6,20 @@ import type { Outcome, RunDeps } from '../cli.js';
 import { emitOf } from '../telemetry/emit.js';
 import { CliError, exitCodeForProblem, ExitCode, unreachableError } from '../errors.js';
 import { compileAllow } from './allow.js';
-import { checkSession, exclusionPaths, lastWritten, type Reason } from './exclusion.js';
+import { checkSession, exclusionPaths, lastWritten, transcriptFilesOf, type Reason } from './exclusion.js';
 import { recordSend, recordWire, newTally, tallyBatch } from '../telemetry/wire.js';
 import { discardStale, FIELD_ROWS, fieldsOf, heldBatches, isMissing, lockedBatch, markShown, outboxFolder, partsOf, removeBatchesExcept, removeBatchOf, staleBatches, unchangedBytes, writeBatch, type LockRefusal } from './pool-outbox.js';
 import { HARNESSES, hasEnded, SESSION_IDLE_HOURS, isBundleVersion, isHarness, parseSkeleton, sessionsOf, skeletonOf, VOCAB_VERSION, verifyBundle, type Bundle, type PinnedKey, type SessionRecords, type TranscriptRoot } from './pool-wire.js';
 import { carriedDeltas, markDeltasSent, placedOf, sentDeltas } from './pool-delta.js';
 import { Masker, printed, TRANSPORT_HEADERS, waitWords, type Outgoing } from './pool-print.js';
+import { rawAllowed, sendsOf } from './pool-choices.js';
+import { heldRaw, rawParts, removeRawExcept, writeRaw } from './pool-raw.js';
 import { shellReader } from './projection.js';
 import { isVocabularyExpired, REGISTRY_MAX_AGE_DAYS, VOCAB_SNAPSHOT_DATE } from './public-vocabulary.js';
 import { contentHash } from './read.js';
 import { harnessOf as sessionHarness, type Harness } from './schema.js';
-import { loadStore, readSaved, readSkeletons, type SessionsRuntime } from './store.js';
+import { redactTranscript } from './redact.js';
+import { loadStore, readSkeletons, readState, type SessionsRuntime } from './store.js';
 import { vocabulary } from './vocab-load.js';
 
 const LOGIN = 'pool-login';
@@ -338,6 +341,10 @@ interface DepositCounts {
   batched: number;
   /** Sessions kept out by a session gate, by reason and by count only: never a folder name or a term. */
   excluded: { folder: number; term: number; noRaw: number; noTerms: number; unreadable: number };
+  /** Sessions in a folder switched off (`oars pool raw folder ... off`): nothing of them is built or queued. */
+  off: number;
+  /** The redacted raw copies queued (one per transcript), their bytes, and how many values the redactor masked in them. Counts only. */
+  raw: { copies: number; bytes: number; masked: number };
   /** Captured before steps and frames, or with a transcript that has no root, so it holds no closed reading to build. Re-capture would give it one. */
   uncaptured: number;
   /** Passed the gates but has a transcript, main or subagent, that gained a line within `session_idle_hours`: its batch waits until the session has ended. */
@@ -429,10 +436,12 @@ export const poolDeposit = async (deps: RunDeps, options: { server?: string | un
   const outbox = outboxFolder(runtime.storeDir, server);
   if (options.send !== undefined) return sendBatch(deps, { outbox, server, token, hash: options.send, acceptCovenant: options.acceptCovenant, via: options.via });
   const { terms } = exclusionPaths(runtime.projectsRoot, deps.env);
-  const allow = compileAllow((await readSaved(runtime.storeDir)).allow);
+  const saved = await readState(runtime.storeDir);
+  const allow = compileAllow(saved.allow);
   const discarded = await discardStale(outbox);
-  const counts: DepositCounts = { sessions: 0, batched: 0, excluded: { folder: 0, term: 0, noRaw: 0, noTerms: 0, unreadable: 0 }, uncaptured: 0, notEnded: 0, refused: 0, refusedFields: [], discarded, withdrawn: 0 };
+  const counts: DepositCounts = { sessions: 0, batched: 0, excluded: { folder: 0, term: 0, noRaw: 0, noTerms: 0, unreadable: 0 }, off: 0, raw: { copies: 0, bytes: 0, masked: 0 }, uncaptured: 0, notEnded: 0, refused: 0, refusedFields: [], discarded, withdrawn: 0 };
   const built = new Set<string>();
+  const rawKept = new Set<string>();
   // The bytes of the batches written in this pass: telemetry counts them, and the command's own document does not carry them.
   let builtBytes = 0;
   const wireTally = newTally();
@@ -443,6 +452,7 @@ export const poolDeposit = async (deps: RunDeps, options: { server?: string | un
   // A session that fails a gate loses its earlier batch at once, so a later throw in this pass cannot leave one in the outbox.
   const withdraw = async (key: string): Promise<void> => {
     counts.withdrawn += await removeBatchOf(outbox, key);
+    await removeRawExcept(outbox, new Set(), key);
   };
   for (const records of sessionsOf(await loadStore(runtime.storeDir), roots)) {
     counts.sessions += 1;
@@ -450,6 +460,12 @@ export const poolDeposit = async (deps: RunDeps, options: { server?: string | un
     const key = contentHash([account, records.main.session]);
     if (!allow.allows(records.main.project)) {
       counts.excluded.folder += 1;
+      await withdraw(key);
+      continue;
+    }
+    // A folder switched off sends nothing from now on; what it sent before stays where it went.
+    if (sendsOf(saved.pool, records.main.project) === 'off') {
+      counts.off += 1;
       await withdraw(key);
       continue;
     }
@@ -488,6 +504,18 @@ export const poolDeposit = async (deps: RunDeps, options: { server?: string | un
       continue;
     }
     builtBytes += (await writeBatch(outbox, key, parsed.skeleton)).bytes;
+    // The raw copy comes only after both gates and only with a yes to the raw prompt and a folder not at skeleton only: each transcript of the session, redacted here, before it is queued.
+    if (rawAllowed(saved.pool, records.main.project)) {
+      let place = 0;
+      for (const file of await transcriptFilesOf(runtime, records.main.project, records.main.session)) {
+        const redacted = redactTranscript(await readFile(file.path, 'utf8'), saved.redactDomains);
+        counts.raw.bytes += (await writeRaw(outbox, key, place, redacted.text)).bytes;
+        counts.raw.copies += 1;
+        counts.raw.masked += redacted.masked;
+        place += 1;
+      }
+      rawKept.add(key);
+    }
     tallyBatch(wireTally, parsed.skeleton);
     await markDeltasSent(outbox, delta?.marks ?? []);
     built.add(key);
@@ -495,6 +523,7 @@ export const poolDeposit = async (deps: RunDeps, options: { server?: string | un
   }
   // The batch of a session or account this store no longer holds goes too.
   counts.withdrawn += await removeBatchesExcept(outbox, built);
+  await removeRawExcept(outbox, rawKept);
   counts.refusedFields = [...refusedFields].sort();
   recordWire(deps, wireTally);
   const { folder, term, noRaw, noTerms, unreadable } = counts.excluded;
@@ -506,6 +535,8 @@ export const poolDeposit = async (deps: RunDeps, options: { server?: string | un
     `Not built: ${String(counts.uncaptured)} captured before steps and frames or with no root, ${String(counts.notEnded)} not ended (a transcript gained a line within ${String(SESSION_IDLE_HOURS)} hours), ${String(counts.refused)} refused by the vocabulary${counts.refusedFields.length === 0 ? '' : ` (${counts.refusedFields.join(', ')})`}.`,
     ...(counts.withdrawn === 0 ? [] : [`Removed ${String(counts.withdrawn)} ${counts.withdrawn === 1 ? 'batch' : 'batches'} of sessions that no longer pass the gates, have not ended, or are no longer in the store.`]),
     ...(discarded === 0 ? [] : [`Discarded ${String(discarded)} ${discarded === 1 ? 'batch' : 'batches'} built under an older vocabulary, field list, or skeleton format.`]),
+    `Raw copies queued: ${String(counts.raw.copies)} (${String(counts.raw.bytes)} bytes, ${String(counts.raw.masked)} values masked). ${saved.pool.rawConsent === 'granted' ? '' : 'None is queued until you answer the raw prompt with oars pool raw consent yes.'}`.trim(),
+    ...(counts.off === 0 ? [] : [`${String(counts.off)} ${counts.off === 1 ? 'session' : 'sessions'} in a folder switched off: nothing of them is queued.`]),
     'Run oars pool outbox to print exactly what would be sent.',
   ];
   return { document: { ok: true, server, ...counts }, text: lines.join('\n') };
@@ -541,6 +572,10 @@ export const poolOutbox = async (deps: RunDeps, options: { server?: string | und
     const request = callsOf(token, batch.bytes, batch.hash).map((call) => printed(outgoing(deps, server, POOL_DEPOSITS, call), masker)).join('\n');
     shown.push({ hash: batch.hash, request, ...(fields === undefined ? {} : { fields }) });
   }
+  const { copies } = await heldRaw(outbox);
+  const rawBlocks = copies.flatMap((copy) =>
+    rawParts(copy.body).map((part, at, all) => [`raw part ${String(at + 1)}/${String(all.length)} sha256: ${copy.hash} bytes: ${String(Buffer.byteLength(part))}`, ...(options.explain === true ? [part] : [])].join('\n')),
+  );
   for (const { hash } of shown) await markShown(outbox, hash, deps.now());
   const stale = await staleBatches(outbox);
   const blocks = shown.map(({ hash, request, fields }) => [request, `sha256: ${hash}`, ...Object.entries(fields ?? {}).map(([field, row]) => `  ${field}: ${row}`)].join('\n'));
@@ -548,8 +583,8 @@ export const poolOutbox = async (deps: RunDeps, options: { server?: string | und
     ...(edited === 0 ? [] : [`${String(edited)} ${edited === 1 ? 'batch was' : 'batches were'} edited on disk since ${edited === 1 ? 'it was' : 'they were'} written and ${edited === 1 ? 'is' : 'are'} not printed or sent. Run oars pool deposit to build ${edited === 1 ? 'it' : 'them'} again.`]),
     ...(stale === 0 ? [] : [`${String(stale)} ${stale === 1 ? 'batch was' : 'batches were'} built under an older vocabulary, field list, or skeleton format and will never be sent.`]),
   ];
-  const text = shown.length === 0 ? ['The outbox is empty. Run oars pool deposit first.', ...notes].join('\n') : [...blocks, ...notes].join('\n\n');
-  return { document: { ok: true, server, batches: shown, edited, stale }, text };
+  const text = shown.length === 0 && rawBlocks.length === 0 ? ['The outbox is empty. Run oars pool deposit first.', ...notes].join('\n') : [...blocks, ...rawBlocks, ...notes].join('\n\n');
+  return { document: { ok: true, server, batches: shown, raw: copies.map(({ hash, bytes }) => ({ hash, bytes })), edited, stale }, text };
 };
 
 /** One folder per harness under the server's, so a fetch for one harness never overwrites another's bundle of the same version. */
