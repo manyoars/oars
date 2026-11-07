@@ -70,7 +70,8 @@ const WINDOWS_HOME = /([A-Za-z]:[\\/]+Users[\\/]+)(?![<.])[^\\/\s"']+/gi;
 const ENVIRONMENT = /\b((?:export\s+)?[A-Z][A-Z0-9_]{2,}=)(?!<)(?:\\?["'][^"'\\]*\\?["']|[^\s"'\\]+)/g;
 const PLACEHOLDER = /<(?:secret|email|org-domain|host|user|env)>/g;
 
-const placeholders = (text: string): number => text.match(PLACEHOLDER)?.length ?? 0;
+/** How many values of a redacted text were masked: each placeholder is one. */
+export const placeholders = (text: string): number => text.match(PLACEHOLDER)?.length ?? 0;
 
 /** A whole transcript body redacted for upload, and how many values were masked (placeholders added, a count and nothing else). */
 export const redactTranscript = (body: string, domains: readonly string[] = []): { text: string; masked: number } => {

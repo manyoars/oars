@@ -5,6 +5,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { sessionsVerify } from './command.js';
 import type * as Outbox from './pool-outbox.js';
 import { outboxFolder, staleBatchesAnywhere, writeBatch } from './pool-outbox.js';
+import { writeRaw } from './pool-raw.js';
+import { markSent } from './pool-sent.js';
 import { readSteps } from './steps.js';
 import { deposit, paths, readState } from './store.js';
 import { cleanup, NOW, stage } from './test-support.js';
@@ -205,6 +207,58 @@ describe('sessionsVerify, outbox batches', () => {
     vi.mocked(staleBatchesAnywhere).mockRejectedValueOnce(Object.assign(new Error('permission denied'), { code: 'EACCES' }));
     const report = await sessionsVerify({ sessions: staged.runtime, install: undefined, now: () => NOW }, { session: undefined });
     expect(report.report.staleBatches).toBe(0);
+    expect(report.failed).toEqual([]);
+  });
+});
+
+describe('sessionsVerify, what was sent and what was masked (t884)', () => {
+  it('counts the batches and raw copies the nightly task or --send already sent beside the stale ones, on every server', async () => {
+    const staged = stage();
+    await deposit(staged.runtime, options);
+    const deps = { sessions: staged.runtime, install: undefined, now: () => NOW };
+    const none = await sessionsVerify(deps, { session: undefined });
+    expect(none.report).toMatchObject({ sentBatches: 0, sentRaw: 0 });
+    expect(none.text).not.toContain('already sent');
+    const one = outboxFolder(staged.storeDir, 'https://one.test');
+    const two = outboxFolder(staged.storeDir, 'https://two.test');
+    const sentBatch = await writeBatch(one, '0123456789abcdef', { format: 1 });
+    await writeBatch(one, 'fedcba9876543210', { format: 1, other: true });
+    const sentCopy = await writeRaw(two, '0123456789abcdef', 0, 'one <secret> line');
+    await writeRaw(two, '0123456789abcdef', 1, 'unsent line');
+    await markSent(one, sentBatch.hash, NOW);
+    await markSent(two, sentCopy.hash, NOW);
+    // A hash in the log with no file under the current stamp (an older stamp, or a removed copy) counts for nothing.
+    await markSent(two, 'f'.repeat(64), NOW);
+    const sent = await sessionsVerify(deps, { session: undefined });
+    expect(sent.report).toMatchObject({ sentBatches: 1, sentRaw: 1 });
+    expect(sent.document).toMatchObject({ sentBatches: 1, sentRaw: 1 });
+    expect(sent.text).toContain('1 outbox batch and 1 raw copy were already sent');
+    expect(sent.failed).toEqual([]);
+  });
+
+  it('counts the values masked in the queued raw copies (the placeholders in their bodies), on every server', async () => {
+    const staged = stage();
+    await deposit(staged.runtime, options);
+    const deps = { sessions: staged.runtime, install: undefined, now: () => NOW };
+    const clean = await sessionsVerify(deps, { session: undefined });
+    expect(clean.report).toMatchObject({ rawCopies: 0, rawMasked: 0 });
+    expect(clean.text).not.toContain('masked');
+    await writeRaw(outboxFolder(staged.storeDir, 'https://one.test'), '0123456789abcdef', 0, 'a <secret> and <email> then <host>/x\n');
+    await writeRaw(outboxFolder(staged.storeDir, 'https://two.test'), 'fedcba9876543210', 0, 'at <user> and <env> and <org-domain>\n');
+    const masked = await sessionsVerify(deps, { session: undefined });
+    expect(masked.report).toMatchObject({ rawCopies: 2, rawMasked: 6 });
+    expect(masked.document).toMatchObject({ rawCopies: 2, rawMasked: 6 });
+    expect(masked.text).toContain('2 queued raw copies hold 6 masked values');
+    expect(masked.failed).toEqual([]);
+  });
+
+  it('a raw or sent log that cannot be read counts as none and does not fail verify', async () => {
+    const staged = stage();
+    await deposit(staged.runtime, options);
+    const root = join(staged.storeDir, 'pool-outbox');
+    mkdirSync(join(root, 'abcd1234', 'sent.log'), { recursive: true });
+    const report = await sessionsVerify({ sessions: staged.runtime, install: undefined, now: () => NOW }, { session: undefined });
+    expect(report.report).toMatchObject({ sentBatches: 0, sentRaw: 0, rawCopies: 0, rawMasked: 0 });
     expect(report.failed).toEqual([]);
   });
 });
