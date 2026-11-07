@@ -954,6 +954,51 @@ that a deposit counts only the child's own prompts.
   sessions"); only forks and subagent forks were traced, so a restore that sets it would read as a fork and lose the lines before it. A mid-turn interjection (`_meta.interjection`) is dropped whole: its text block is the model-facing frame and the operator's typed text is kept apart in `displayText` (`storage/mod.rs:972-973`), which is not read, so a real steer is lost from the prompts. A restore that reads as a fork is the case above. `updates.jsonl` keeps rewind markers and the dead branches they cut (`session/storage/jsonl/copy.rs:227`), and the reader counts a rewound branch's prompts and calls as the session's. A failed `list_dir`, `grep_files`, `get_task_output`, or `kill_task` carries no `content[]` and no text in its `rawOutput` that the reader takes (`acp_conversion.rs:186-197`, `:357-400`, `:478-490`), so its error line is `tool failed`, not text; so does a failed backend-hosted search, whose `rawOutput` is only `{action, id, status}` (`sampling_events.rs:581-582`, `tool_dispatch.rs:117-127`, `:403-412`). A session's tools can be renamed: wire names are client-renameable (`xai-grok-tools/src/tool_taxonomy.rs:145`, session `tool_overrides` at `acp_session.rs:804`) and `title` is the wire name (`tool_calls.rs:1487`), so a renamed shell or edit tool reads as unknown. `_meta["x.ai/tool"]` on the `tool_call` carries the kind (`tool_calls.rs:1478`, `normalization.rs:28-37`, `tool_taxonomy.rs:187-196`) and is not read; when renaming is active by default was not traced. No reader change until a live store shows it. A `cd` inside a command is never seen (the `current_dir` the writer stores is the cwd before the command, `bash/mod.rs:1876`, `:2240`), so a session that changes folder only through `cd` keeps its starting cwd. Torn lines are counted as unparseable; a
   file with no parseable line is unreadable. Idempotent per session (`grok/<id>` in `state.json`, the size and latest mtime of `updates.jsonl` and `usage.json`).
 
+## The OpenTelemetry GenAI source
+
+`oars sessions deposit --allow otel` reads agent traces written in the OpenTelemetry GenAI semantic conventions (OTLP JSON, as the OpenTelemetry file exporter or a Collector
+`file` exporter writes them) into the same store as the coding harnesses. The records carry `harness: "otel"`, take the same field classes, redaction, and 1,000-character
+`line` cap as every other source, and `recall`, `measure`, `books`, and `verify` read them with no special case. It is one more entry in the source table (`sources.ts`).
+It is how an agent that is not a coding harness (a support, research, data, or workflow agent built on any framework that emits GenAI spans, which LangSmith and Langfuse
+both ingest and export) becomes a graph of tool calls in the record.
+
+**Convention-derived, never run on a real trace.** The reader was written from the public conventions and tested only on synthetic fixtures; it has never read a trace a real
+agent wrote. The GenAI conventions moved out of `open-telemetry/semantic-conventions` (v1.45.0 holds only "Moved" stubs) into `open-telemetry/semantic-conventions-genai`,
+which has no release, so the pin is its main @ e6658f1 (2026-11-06); the OTLP JSON encoding is `opentelemetry-proto` v1.11.1 (`docs/specification.md:453-484`,
+`trace.proto:96-327`) and the file format `opentelemetry-specification` @ 616bb3a (`protocol/file-exporter.md:64-75`). Every GenAI attribute read is marked Development in
+the registry (`error.type` and `server.*` are Stable; `process.exit.code` is a Release Candidate), so each one is optional here: a missing or renamed attribute means less is
+read, never a throw. The one hand run that would settle it: run an OTel-instrumented sample agent (for example one using a GenAI instrumentation library) with its spans
+written to a file exporter, with one tool call that succeeds and one that fails, point `OARS_OTEL_TRACES` at the output folder, then `oars sessions deposit --allow otel` and
+`oars sessions verify --strict`. It is settled only if the session count is nonzero, there are zero violations, the failed call is an `error` record with a matching error
+line, and usage is nonzero where the library reports it.
+
+- **Where.** `$OARS_OTEL_TRACES` if set and non-empty, else `<config>/oars/otel-traces` (`<config>` as for the store). A configured folder rather than an `import` command, so
+  the cursor, the allowlist, `--deny otel`, the nightly run's saved allow, and the fail-open reads are the ones every other source has. No folder, no read: it is opt-in by
+  pointing it at traces. Every `*.jsonl` and `*.json` file in it is read, and the spans of all files are joined by `traceId` first, because a collector may split one trace
+  across files. A file that does not parse is named once as unreadable and skipped; the other files and sources deposit. A deposit only reads. Idempotent per session
+  (`otel/<id>` in `state.json`; the size is the span count and the mtime the latest span time, so a file that gains spans is read again).
+- **Mapping.** A session is one `traceId`; traces that share `gen_ai.conversation.id` are one session, each trace a prompt in start-time order, and a trace with no
+  conversation id is its own session. A prompt is one per root agent span (`invoke_agent` or any `invoke_*` operation), else per trace root; its text is the last user message
+  of `gen_ai.input.messages`, which is Opt-In, so by default the turn is written content-less (as an image-only prompt is). A model call is a `chat`, `generate_content`, or
+  `text_completion` span: one assistant line, with the span id as `requestId`. A tool call is an `execute_tool` span, placed in the model call whose output names its
+  `gen_ai.tool.call.id`, else the latest model call that ended before it began. It failed iff the span status is ERROR or `error.type` is set; the error line is
+  `error.type: status.message` (an exception event fills in a missing message), never the result. `process.exit.code` makes a shell call fail on a nonzero exit, `gen_ai.skill.*`
+  reads as `skill.run` or `file.read`, `gen_ai.transfer.*` or a child agent as `agent.spawn`, and `mcp.method.name` `tools/call` as `mcp__unnamed__<tool>`: the conventions carry
+  no MCP server name.
+- **Timestamps.** Spans carry Unix nanoseconds as decimal strings; each is converted once, to milliseconds, through `BigInt`. A span with no start time takes the latest time so far
+  in its session.
+- **Usage.** `gen_ai.usage.input_tokens` includes cache reads and writes (the registry says it SHOULD), so the stored input is `input - cache_read.input_tokens - cache_write.input_tokens`
+  (never below 0), with the cache figures kept apart as capture does, and `reasoning.output_tokens` is thinking. A figure a span did not report is not written, and a trace with no
+  usage writes no `usage` and observes none (the `usageObserved` rule), not zero.
+- **Subagents.** An agent span nested inside another agent, directly or through an agent-as-tool `execute_tool` span, is its own session `<traceId>-<spanId>` linked to the parent
+  session and the call that spawned it, so its turns never land in the parent. A directly nested one also appears in the parent as an `invoke_agent` call.
+- **Harness version.** No cwd or repository exists in a trace: `folder` is null and the project is `otel`. The harness-version slot holds the emitting framework, taken from the
+  instrumentation scope name against a closed list (else `other`). A framework name in that slot is accepted by this adapter: local reads work, public frames show `<literal>`, and
+  no bundle is fetched for `otel`. A separate framework field is a later change, only if a pooled read needs it.
+- **Content.** Prompts, completions, tool arguments, and tool results are Opt-In attributes. When present they pass only through capture's field classes and redaction; `_ref`
+  URIs are never fetched.
+- **Known gaps.** No provider is stored. A LangSmith or Langfuse native reader is a later change, only if a field they hold is lost in the OTel form.
+
 ## The outcome gold set
 
 `oars sessions gold sample` writes `outcome-gold-<date>.md` to `<claude config>/session-commons/review/`: about 200 prompts in batches of 50, each with the redacted request, the result (commit message and diff stat where found, the transcript's own edit calls, or the actions of a prompt that edited nothing), and a `Judgment: yes|no` line. The draw is seeded and weighted by the square root of each class and model cell, with at most two prompts a session, so its base rate is the sample's, not the store's. Every session passes the exclusion rule (`checkSession`) first: one that holds a listed term, has no raw to scan, or cannot be read is left out, and a missing or empty term file (`OARS_EXCLUSION_TERMS`) refuses the draw. `--exclude-term` adds terms to the file's, never in place of it. A marker prompt, a `no-tools` prompt (its reply is the closing claim), and a session from any other harness (every `SOURCES` name) are not drawn. The signals go to the `.arms.json` file beside it. `oars sessions gold score <file>` prints, per model and pooled, each signal's AUROC with a DeLong 95% interval and the base rate, from whatever is judged so far. Both are local, and neither is ever committed. A signal is an observation, not a label, and no signal is combined with another.
