@@ -5,6 +5,7 @@ All notable changes to `@manyoars/oars`. Versions follow semver; a release is th
 ## Unreleased
 
 - OpenCode joins the per-harness proofs (t935): the pool carries a golden batch for `--harness opencode`, and `intervention-harness.test.ts` and `intervention-stop.test.ts` read OpenCode scenarios through its adapter. `docs/sessions-store.md` states what it shows: every bucket but `user-stop` (a refused call is an error state, so it reads `after-error`; no interrupt record), no per-call duration, and the `session-shape` column. No reader change: the data folder already follows `XDG_DATA_HOME`.
+
 ## 0.4.0 (2026-11-07)
 
 Changes since 0.3.0. The next-node read (`hook install` adds `UserPromptSubmit`, and recall reads the kept pool bundle for the session's own harness), the raw-log consent prompt, the nightly send, Pi coding agent sessions (`--allow pi`), and quoting of a Codex argv word that holds a space.
