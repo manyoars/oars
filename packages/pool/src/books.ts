@@ -40,14 +40,14 @@ export const booksOf = ({ held, served, panel, panelDay, lineage }: BooksInput):
     }
     total += 1;
     tally(byWeek, cell.day);
-    tally(byTuple, `${cell.motifId}|${cell.frameBucket}`);
+    tally(byTuple, cell.frameBucket);
   }
   return {
     ...lineage,
     served: {
       total,
       byWeek: [...byWeek].sort(([a], [b]) => compare(a, b)).map(([week, cells]) => ({ week, cells })),
-      byTuple: [...byTuple].sort(([a], [b]) => compare(a, b)).map(([tuple, weeks]) => ({ tuple, weeks })),
+      byTuple: [...byTuple].sort(([a], [b]) => compare(a, b)).map(([tuple, cells]) => ({ tuple, cells })),
     },
     backlog,
     panelDay: panelDay ?? null,

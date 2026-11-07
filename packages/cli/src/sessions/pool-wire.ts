@@ -1104,7 +1104,7 @@ export interface Books {
   format: typeof BUNDLE_FORMAT;
   vocabVersion: string;
   asOf: ReadAsOf;
-  served: { total: number; byWeek: { week: string; cells: number }[]; byTuple: { tuple: string; weeks: number }[] };
+  served: { total: number; byWeek: { week: string; cells: number }[]; byTuple: { tuple: string; cells: number }[] };
   backlog: number;
   panel: Sourced;
   /** The UTC day the panel was counted: the pool reads its deposits once a day. */

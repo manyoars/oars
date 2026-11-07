@@ -35,10 +35,16 @@ describe('books: served cells and the below-floor backlog', () => {
     const next = '2026-11-09';
     const books = booksOver([weekCell(READ.motifId, 9), weekCell(READ.motifId, K_CELL, { day: next }), weekCell(SHELL.motifId, 7), weekCell(SEARCH.motifId, 2)]);
     expect(books.served.byWeek).toEqual([{ week: WEEK, cells: 2 }, { week: next, cells: 1 }]);
-    expect(books.served.byTuple).toEqual([{ tuple: `${READ.motifId}|${BUCKET}/opus`, weeks: 2 }, { tuple: `${SHELL.motifId}|${BUCKET}/opus`, weeks: 1 }]);
+    expect(books.served.byTuple).toEqual([{ tuple: `${BUCKET}/opus`, cells: 3 }]);
     const text = JSON.stringify(books);
     expect(text).not.toContain(SEARCH.motifId);
     expect(books.backlog).toBe(1);
+  });
+
+  it('keys the tuple on the constructor (harness, version bucket, model), one row per frame bucket and not per motif', () => {
+    const sonnet = `${BUCKET}/sonnet`;
+    const books = booksOver([weekCell(READ.motifId, 6), weekCell(SHELL.motifId, 7), weekCell(SEARCH.motifId, 8, { frameBucket: sonnet }), weekCell(READ.motifId, 2, { frameBucket: sonnet })]);
+    expect(books.served.byTuple).toEqual([{ tuple: `${BUCKET}/opus`, cells: 2 }, { tuple: sonnet, cells: 1 }]);
   });
 
   it('counts a served cell that complementary withholding drops as backlog, so the total never overstates what a reader sees', () => {
