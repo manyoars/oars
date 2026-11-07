@@ -2208,7 +2208,9 @@ describe('oars pool deposit --send holds the send lock (t884 fix round)', () => 
       const clock = setInterval(() => {
         vi.setSystemTime(Date.now() + 60_000);
       }, 10);
-      const failed = await sending.catch((error: unknown) => error).finally(() => clearInterval(clock));
+      const failed = await sending.catch((error: unknown) => error).finally(() => {
+        clearInterval(clock);
+      });
       expect(failed).toMatchObject({ exitCode: ExitCode.CONFLICT, problem: { code: 'send_locked' } });
       expect(pool.requests).toEqual([]);
     } finally {
