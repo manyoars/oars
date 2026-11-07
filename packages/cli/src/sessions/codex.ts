@@ -36,12 +36,16 @@
 //                       `declined` one (exit code -1, events.rs:552-554) settles as a refusal only where its output is the user's refusal text (`exec command rejected by user`), and nothing otherwise. A `failed` one with exit code -1 is a failure with no exit status (a tool
 //                       failure message, events.rs:538-542; a process with none, async_watcher.rs:213, :409), so its text is the error line. So a backgrounded process keeps its failure and its commit sha
 //                       even with no `write_stdin` poll; only a Legacy rollout leaves it unsettled until a poll, and there the poll settles it
+//   response_item custom_tool_call `exec` / function_call `wait`   Codex 0.166+ code mode (rust-v0.167.0 code-mode host): `exec`'s input is a JavaScript cell, not a command; its
+//                       output opens `Script completed`, `Script failed` (+ a `Script error:` part), or `Script running with cell ID <id>`, which is the cell's outcome and never its
+//                       commands'. `wait {cell_id}` polls a cell with the same three headers and settles it, in Paginated mode too
+//   event_msg item_completed CommandExecution, id `exec-<uuid>` (no call owns it, 0.166+)   the command a cell ran, as its own Bash call: exit_code, aggregated_output, duration
 //   event_msg mcp_tool_call_end {call_id, result}   an MCP call's outcome: `result.Err`, or `result.Ok.isError` (protocol.rs:3047, :3076); Legacy mode only
 //   event_msg patch_apply_end {call_id, success, stderr, status}   an apply_patch call's outcome (Legacy mode only); a declined one settles as a refusal only where its stderr is the user's refusal text (`patch rejected by user`), and nothing otherwise, and a
 //                       patch with no end event stays unsettled (a rejected patch is only a `RespondToModel` output, tools/handlers/apply_patch.rs)
 //   event_msg exec_command_end                  never persisted at ac558e2 (policy.rs:165) nor at rust-v0.46.0, so it is not read: the CommandExecution item and the call's output are the two sources
 // Older shapes: the JSON `{output, metadata.exit_code}` wrapper of a shell output (rust-v0.46.0 core/src/tools/mod.rs:186-210).
-// What Codex has no equivalent of (cost) stays at the value capture gives an absent field; message ids and duration are persisted and not read.
+// What Codex has no equivalent of (cost) stays at the value capture gives an absent field; message ids and a call reply's wall time are persisted and not read (a code-mode command item's `duration` is).
 
 import { createReadStream } from 'node:fs';
 import { readdir, readFile, stat } from 'node:fs/promises';
