@@ -9,7 +9,7 @@ import type { Motif } from './motif.js';
 import type { Read, ReadAsOf } from './read.js';
 import { recoveryCallsOf, RECOVERY_CALLS, type RecoveryCalls } from './recovery-calls.js';
 import { projectLanguage, projectLanguageShare } from './strata.js';
-import { ERROR_CODES, LANGUAGE_SHARES, type Frame, type FrameStack, type Harness, type LanguageShare, type PromptClass, type PromptObservation, type PullIdentity, type SessionObservation, type ShellIdentity, type StepIdentity, type StepObservation, type Strata, type ToolObservation, type ToolStatus, type Usage } from './schema.js';
+import { ERROR_CODES, LANGUAGE_SHARES, type Frame, type FrameStack, type Harness, type LanguageShare, type PromptClass, type PromptObservation, type PullIdentity, type SessionObservation, type ShellIdentity, type StepIdentity, type StepEdge, type StepObservation, type Strata, type ToolObservation, type ToolStatus, type Usage } from './schema.js';
 
 // Format 3 (step 1 of the wire): a tool carries its `errorCode` and, for a failed call, what followed it (`recoveryCalls`). Formats 1 and 2 are refused by name; nothing is deployed, so nothing is migrated.
 export const SKELETON_FORMAT = 3;
@@ -46,11 +46,23 @@ export const projectExplore = (stored: number | undefined): number | null => (st
 /** The lowest value of a bucket, which is what a derivation counts a bucketed value as: it never reads above what the sender held. */
 export const floorOf = (kind: BucketKind, bucket: number): number => EDGES[kind][bucket - 1] ?? 0;
 
+/** The closed list of how a step came about (`schema.ts` `StepEdge`). */
+export const EDGE_KINDS = ['next', 'spawned', 'retried', 'after-error'] as const satisfies readonly StepEdge['kind'][];
+
+/** One edge arriving at a step: its kind, and the position of the step it names, counted over the steps of one transcript in call order (the batch's own ordinal, never a call number). A `spawned` edge names a step of the spawning transcript. */
+export interface SkeletonEdge {
+  /** `other` for a kind the reader does not know (see `OTHER`); it names no step the parser can check, so only its shape is held. */
+  kind: StepEdge['kind'] | typeof OTHER;
+  target: number;
+}
+
 /**
- * A step without what a server can compute or no derivation reads: `n` is its call's position, `seg` its place in the call (the array position), `frameId` hashes a frame the skeleton holds, and `edges` are read by no cell. Its cost is
- * two buckets, never the exact counts. `parent` is the position of the spawning call in the main run's `tools` (Section 1.2's `parent` ordinal).
+ * A step without what a server can compute: `n` is its call's position, `seg` its place in the call (the array position), and `frameId` hashes a frame the skeleton holds. Its cost is
+ * two buckets, never the exact counts. `parent` is the position of the spawning call in the `tools` of the transcript its transcript's `spawnedIn` names (Section 1.2's `parent` ordinal).
  */
 export type SkeletonStep = Omit<StepObservation, 'n' | 'seg' | 'frameId' | 'cost' | 'edges' | 'status'> & {
+  /** The edges that arrive at this step, `retried` already decided by the client (the pool holds no raw key to compare); absent when none arrive. */
+  edges?: SkeletonEdge[];
   /** `other` for a status the reader does not know (see `OTHER`). */
   status: ToolStatus | typeof OTHER;
   /** A `tokens` bucket of the step's tokens. */
@@ -124,6 +136,8 @@ export interface SkeletonTranscript {
   frame: SkeletonFrame;
   /** The distinct frames the transcript's steps ran in, the transcript's own first; a step's `frame` is a position in it. */
   frames: SkeletonFrame[];
+  /** The position, in the batch's `transcripts`, of the transcript that spawned this one; null for the main run, and for a subagent whose spawner the batch does not hold or the harness does not name. */
+  spawnedIn: number | null;
   prompts: SkeletonPrompt[];
   tools: SkeletonTool[];
 }
@@ -286,6 +300,22 @@ const wireErrorCode = ({ status, errorCode }: ToolObservation): string | null =>
 /** A transcript's calls in the order they ran, which is the order a skeleton holds them in. */
 const byCall = (tools: readonly ToolObservation[]): ToolObservation[] => [...tools].sort((a, b) => a.n - b.n);
 
+/** Where a transcript's calls and steps sit on the wire: a call's position by its number, and a step's position over the transcript's steps in call order by `<call number>/<segment>`. */
+interface Places {
+  calls: ReadonlyMap<number, number>;
+  steps: ReadonlyMap<string, number>;
+}
+
+const placesOf = (tools: readonly ToolObservation[]): Places => {
+  const calls = new Map<number, number>();
+  const steps = new Map<string, number>();
+  for (const [position, { n, steps: held }] of byCall(tools).entries()) {
+    calls.set(n, position);
+    for (const step of held ?? []) steps.set(`${String(n)}/${String(step.seg)}`, steps.size);
+  }
+  return { calls, steps };
+};
+
 /** The step of a call that carries the runs it spawned: its first spawn step, else its first step. A call with no step carries none. */
 const carrier = (steps: readonly { action: string }[]): number => Math.max(0, steps.findIndex(({ action }) => action === 'agent.spawn'));
 
@@ -334,7 +364,7 @@ const reachOf = (session: SessionObservation, tools: readonly ToolObservation[],
 
 const transcriptOf = (
   { session, prompts, tools, root }: SessionRecords['transcripts'][number],
-  spawners: ReadonlyMap<number, number> | null,
+  spawner: { index: number; places: Places } | null,
   spawned: Spawned,
   agentType: string | null,
   read: ShellReader,
@@ -377,6 +407,7 @@ const transcriptOf = (
     return frames.length - 1;
   };
   const steppedTools: SkeletonTool[] = [];
+  const own = placesOf(tools);
   // The exact tokens of every step, by call and step, which the `remainingTokens` buckets below are computed from: a bucket of a sum is not a sum of buckets.
   const exact: number[][] = [];
   let unrecorded = 0;
@@ -393,7 +424,13 @@ const transcriptOf = (
     const projected = projectedSteps(tool, read, harness);
     exact.push(projected.map(({ cost }) => cost.tokens ?? 0));
     const frame = frameOfCall(tool, promptPosition);
-    const steps = projected.map(({ action, native, identity, status: reported, cost, parent }): SkeletonStep => ({
+    const steps = projected.map(({ action, native, identity, status: reported, cost, parent, edges }): SkeletonStep => {
+      // An edge names a step by its position in the transcript it sits in; a `spawned` edge sits in the spawner, and one with no spawner in the batch goes unsent, since it names nothing here.
+      const arriving = edges.flatMap(({ kind, n: from, seg: fromSeg }): SkeletonEdge[] => {
+        const target = (kind === 'spawned' ? spawner?.places : own)?.steps.get(`${String(from)}/${String(fromSeg)}`);
+        return target === undefined ? [] : [{ kind, target }];
+      });
+      return {
       action,
       native,
       identity,
@@ -402,10 +439,12 @@ const transcriptOf = (
       ms: cost.durationMs === null ? null : bucketOf('ms', cost.durationMs),
       remainingTokens: 0,
       agentType,
-      parent: parent === null || spawners === null ? null : (spawners.get(parent) ?? null),
+      parent: parent === null || spawner === null ? null : (spawner.places.calls.get(parent) ?? null),
       frame,
+      ...(arriving.length === 0 ? {} : { edges: arriving }),
       ...(tool.skill === undefined ? {} : { skill: listed(PUBLIC_SKILLS, tool.skill) }),
-    }));
+      };
+    });
     steppedTools.push({ side, prompt: promptPosition, status, durationMs, errorCode, ...(recoveryCalls === null ? {} : { recoveryCalls }), steps });
   }
   // A step's remaining tokens are those of the steps after it in its own run; a main-run step also counts the subagent runs its later steps spawned (a run belongs to the spawning call's carrier step).
@@ -420,7 +459,7 @@ const transcriptOf = (
       later += (exact[call]?.[at] ?? 0) + (at === held ? (spawned.get(call) ?? 0) : 0);
     }
   }
-  return { merkleRoot: root.merkleRoot, leaves: root.leaves, harness, frame: transcriptFrame, frames, prompts: framedPrompts, tools: steppedTools };
+  return { merkleRoot: root.merkleRoot, leaves: root.leaves, harness, frame: transcriptFrame, frames, spawnedIn: spawner?.index ?? null, prompts: framedPrompts, tools: steppedTools };
 };
 
 /** The hash a batch's timing print is made with, over the durations in call order: the client's `contentHash` (D1's `hP`). */
@@ -432,13 +471,23 @@ export type Print = (durations: readonly number[]) => string;
  */
 export const skeletonOf = (records: SessionRecords, id: string, read: ShellReader, print: Print, deltas: readonly DeltaEntry[] = []): SessionSkeleton | null => {
   const mainTools = byCall(records.transcripts[0]?.tools ?? []);
-  // A subagent's step names the call that spawned it by that call's `n` in the main run, which the skeleton holds as the call's position.
-  const spawners = new Map(mainTools.map(({ n }, position) => [n, position]));
-  const spawnedBy = (entry: SessionRecords['transcripts'][number]): boolean => entry.session.spawnedIn === records.main.session;
+  const places = records.transcripts.map(({ tools }) => placesOf(tools));
+  const spawners = places[0]?.calls ?? new Map<number, number>();
+  // A subagent's step names the call that spawned it by that call's `n` in the transcript its session record names as `spawnedIn`, which the skeleton holds as a position in the batch: that transcript's, and the call's within it.
+  // A record that names none the batch holds, or itself, or a spawner whose own chain comes back to it, sends no link.
+  const spawnerOf = records.transcripts.map(({ session }, index): number | null => {
+    const at = index === 0 || session.spawnedIn === null ? -1 : records.transcripts.findIndex((held) => held.session.session === session.spawnedIn);
+    return at === -1 ? null : at;
+  });
+  const cyclic = (index: number): boolean => {
+    let at: number | null = index;
+    for (let hop = 0; hop < spawnerOf.length && at !== null; hop += 1) at = spawnerOf[at] ?? null;
+    return at !== null;
+  };
   // The exact tokens of the runs each main-run call spawned. A run a subagent spawned names a call of that other transcript, so it joins no main-run step.
   const spawned = new Map<number, number>();
-  for (const entry of records.transcripts.slice(1)) {
-    if (!spawnedBy(entry)) continue;
+  for (const [index, entry] of records.transcripts.entries()) {
+    if (spawnerOf[index] !== 0) continue;
     for (const tool of entry.tools) {
       for (const { cost, parent } of tool.steps ?? []) {
         const position = parent === null ? undefined : spawners.get(parent);
@@ -448,8 +497,9 @@ export const skeletonOf = (records: SessionRecords, id: string, read: ShellReade
   }
   const transcripts: SkeletonTranscript[] = [];
   for (const [index, entry] of records.transcripts.entries()) {
-    // Only a call of the main run has a position here: a step of a subagent a subagent spawned names a call of that other transcript, so it sends no link rather than a false one.
-    const transcript = transcriptOf(entry, index > 0 && spawnedBy(entry) ? spawners : null, index === 0 ? spawned : new Map(), index === 0 ? null : projectedAgentType(entry.session.agentType ?? CUSTOM_AGENT), read);
+    const at = spawnerOf[index] ?? null;
+    const spawnerPlaces = at === null || cyclic(index) ? undefined : places[at];
+    const transcript = transcriptOf(entry, at === null || spawnerPlaces === undefined ? null : { index: at, places: spawnerPlaces }, index === 0 ? spawned : new Map(), index === 0 ? null : projectedAgentType(entry.session.agentType ?? CUSTOM_AGENT), read);
     if (transcript === null) return null;
     transcripts.push(transcript);
   }
@@ -457,8 +507,14 @@ export const skeletonOf = (records: SessionRecords, id: string, read: ShellReade
   return { format: SKELETON_FORMAT, vocabVersion: VOCAB_VERSION, fieldsVersion: FIELD_LIST_VERSION, id, transcripts, timingPrint: durations.length < MIN_TIMED_CALLS ? null : print(durations), deltas: [...deltas] };
 };
 
-/** A harness version a bundle can be asked for: public, so the request carries nothing private. The admitted list replaces this shape rule when it ships. */
-export const isBundleVersion = (version: string): boolean => version !== LITERAL && publicVersion(version) === version;
+/**
+ * The version bucket of a session that recorded none: Cursor, Gemini, and Grok Build keep no harness version in their local files, and neither does a VS Code Copilot Chat session whose requests carry no `agent.extensionVersion`, so their cells are
+ * `<harness>/unknown/<model>`. It is the one non-numeric word a bundle can be asked for, so those harnesses are served the cells they have.
+ */
+export const UNKNOWN_VERSION = 'unknown';
+
+/** A harness version a bundle can be asked for: public, so the request carries nothing private, or `unknown` for a harness with none on record. The admitted list replaces this shape rule when it ships. */
+export const isBundleVersion = (version: string): boolean => version === UNKNOWN_VERSION || (version !== LITERAL && publicVersion(version) === version);
 
 /** Whether `name` is a harness the schema names. */
 export const isHarness = (name: string): name is Harness => HARNESSES.some((harness) => harness === name);
@@ -535,7 +591,8 @@ export const OPTIONAL = {
   stack: ['size', 'languageShares'],
   prompt: ['wallSec', 'explore'],
   tool: ['prompt', 'durationMs', 'errorCode', 'recoveryCalls'],
-  step: ['tokens', 'ms', 'parent', 'skill'],
+  step: ['tokens', 'ms', 'parent', 'skill', 'edges'],
+  transcript: ['spawnedIn'],
 } as const satisfies { readonly [level: string]: readonly string[] };
 
 /** The most bytes (as JSON) one field this reader does not know, or one literal, may hold: an enumerated value or a literal never needs more, and a newer client's larger structure belongs in a new format version. The deposit's own cap is no part of this. */
@@ -797,6 +854,11 @@ const parseAgentType = (held: Collected, value: unknown, at: string): string => 
   return name === OTHER || projectedAgentType(name) === name ? name : unknownValue(held, at, name);
 };
 
+const parseEdge = (held: Collected, value: unknown, at: string): SkeletonEdge => {
+  const raw = fieldsOf(held, value, at, ['kind', 'target']);
+  return { kind: oneOf(held, EDGE_KINDS, raw.kind, under(at, 'kind')), target: countOf(raw.target, under(at, 'target')) };
+};
+
 const parseStep = (held: Collected, harness: WireHarness, value: unknown, at: string): SkeletonStep => {
   const raw = fieldsOf(held, value, at, ['action', 'native', 'identity', 'status', 'remainingTokens', 'agentType', 'frame'], OPTIONAL.step);
   const action = oneOf(held, CANONICAL_ACTIONS, raw.action, under(at, 'action'));
@@ -811,6 +873,7 @@ const parseStep = (held: Collected, harness: WireHarness, value: unknown, at: st
     agentType: orNull(raw.agentType, under(at, 'agentType'), (entry, entryAt) => parseAgentType(held, entry, entryAt)),
     parent: orNull(raw.parent, under(at, 'parent'), countOf),
     frame: countOf(raw.frame, under(at, 'frame')),
+    ...(raw.edges === undefined ? {} : { edges: listOf(raw.edges, under(at, 'edges'), (entry, entryAt) => parseEdge(held, entry, entryAt)) }),
     ...(raw.skill === undefined ? {} : { skill: inSet(held, PUBLIC_SKILLS, raw.skill, under(at, 'skill')) }),
   };
 };
@@ -870,20 +933,22 @@ const parseRoot = (value: unknown, at: string): string => {
 };
 
 const parseTranscript = (held: Collected, value: unknown, at: string): SkeletonTranscript => {
-  const raw = fieldsOf(held, value, at, ['merkleRoot', 'leaves', 'harness', 'frame', 'frames', 'prompts', 'tools']);
+  const raw = fieldsOf(held, value, at, ['merkleRoot', 'leaves', 'harness', 'frame', 'frames', 'prompts', 'tools'], OPTIONAL.transcript);
   const harness = oneOf(held, HARNESSES, raw.harness, under(at, 'harness'));
   const merkleRoot = parseRoot(raw.merkleRoot, under(at, 'merkleRoot'));
   const leaves = countOf(raw.leaves, under(at, 'leaves'));
   // Read in the order the fields are met, so the bag holds what was set aside in that order.
   const frame = parseFrame(held, raw.frame, under(at, 'frame'));
   const frames = listOf(raw.frames, under(at, 'frames'), (entry, entryAt) => parseFrame(held, entry, entryAt));
+  // Absent reads as null: a client that names no spawner sends none.
+  const spawnedIn = orNull(raw.spawnedIn, under(at, 'spawnedIn'), countOf);
   const prompts = listOf(raw.prompts, under(at, 'prompts'), (entry, entryAt) => parsePrompt(held, entry, entryAt));
   const tools = listOf(raw.tools, under(at, 'tools'), (entry, entryAt) => parseTool(held, harness, entry, entryAt));
   // What followed a call is read off the calls themselves, so a list that disagrees with them is a wrong deposit, not a new reading.
   tools.forEach((tool, index) => {
     if (tool.recoveryCalls !== undefined && JSON.stringify(tool.recoveryCalls) !== JSON.stringify(recoveryCallsOf(tools, index))) throw new Refused(`${at}.tools[${String(index)}].recoveryCalls`, 'not what followed the call');
   });
-  return { merkleRoot, leaves, harness, frame, frames, prompts, tools };
+  return { merkleRoot, leaves, harness, frame, frames, spawnedIn, prompts, tools };
 };
 
 const DELTA_FIELDS = ['plugin', 'package', 'permissionMode', 'effort'] as const satisfies readonly DeltaField[];
@@ -968,17 +1033,45 @@ export const parseSkeleton = (value: unknown): ParsedSkeleton | Refusal => {
       });
     });
     // Positions are the only ordinals on the wire, so each must name something the batch holds.
-    const mainCalls = transcripts[0]?.tools.length ?? 0;
-    transcripts.forEach(({ prompts, tools, frames }, index) => {
+    // A spawner is another transcript of the batch whose own spawners lead to a run with none, so the batch is a forest and the main run is its first root.
+    transcripts.forEach(({ spawnedIn }, index) => {
+      if (spawnedIn === null) return;
+      const spawnedAt = `transcripts[${String(index)}].spawnedIn`;
+      if (index === 0) throw new Refused(spawnedAt, 'the main run has no spawner');
+      if (spawnedIn >= transcripts.length || spawnedIn === index) throw new Refused(spawnedAt, 'no such transcript');
+      let above: number | null = spawnedIn;
+      for (let hop = 0; hop < transcripts.length && above !== null; hop += 1) above = transcripts[above]?.spawnedIn ?? null;
+      if (above !== null) throw new Refused(spawnedAt, 'a spawner cycle');
+    });
+    const stepsOf = transcripts.map(({ tools }) => tools.reduce((all, { steps }) => all + steps.length, 0));
+    transcripts.forEach(({ prompts, tools, frames, spawnedIn }, index) => {
       if (frames.length === 0) throw new Refused(`transcripts[${String(index)}].frames`, 'empty');
+      // The call and prompt of every step in the transcript's order, which an edge's target is a position in.
+      const placed = tools.flatMap(({ prompt, steps }) => steps.map(() => ({ prompt })));
+      let before = 0;
       tools.forEach(({ prompt, steps }, call) => {
         const callAt = `transcripts[${String(index)}].tools[${String(call)}]`;
         // Past the prompts it names a prompt with no record, numbered in order of appearance: no more of those than calls.
         if (prompt !== null && prompt >= prompts.length + tools.length) throw new Refused(`${callAt}.prompt`, 'no such prompt position');
-        steps.forEach(({ parent, frame }, position) => {
-          if (parent !== null && parent >= mainCalls) throw new Refused(`${callAt}.steps[${String(position)}].parent`, 'no such call in the main run');
-          if (frame >= frames.length) throw new Refused(`${callAt}.steps[${String(position)}].frame`, 'no such frame position');
+        steps.forEach(({ parent, frame, edges }, position) => {
+          const stepAt = `${callAt}.steps[${String(position)}]`;
+          if (parent !== null && (spawnedIn === null || parent >= (transcripts[spawnedIn]?.tools.length ?? 0))) throw new Refused(`${stepAt}.parent`, 'no such call in the spawning transcript');
+          if (frame >= frames.length) throw new Refused(`${stepAt}.frame`, 'no such frame position');
+          const here = before + position;
+          (edges ?? []).forEach(({ kind, target }, edge) => {
+            const edgeAt = `${stepAt}.edges[${String(edge)}]`;
+            if (kind === OTHER) return;
+            if (kind === 'spawned') {
+              if (spawnedIn === null) throw new Refused(`${edgeAt}.kind`, 'a spawned edge needs a spawning transcript');
+              if (target >= (stepsOf[spawnedIn] ?? 0)) throw new Refused(`${edgeAt}.target`, 'no such step in the spawning transcript');
+              return;
+            }
+            // The other kinds name an earlier step of the same transcript; a next stays inside one prompt.
+            if (target >= here) throw new Refused(`${edgeAt}.target`, 'not an earlier step of this transcript');
+            if (kind === 'next' && placed[target]?.prompt !== prompt) throw new Refused(`${edgeAt}.target`, 'a next edge crosses a prompt');
+          });
         });
+        before += steps.length;
       });
     });
     return { ok: true, skeleton: { format: SKELETON_FORMAT, vocabVersion, fieldsVersion, id, transcripts, timingPrint, deltas }, extensions: held.extensions, others: held.others };
