@@ -12,7 +12,7 @@ import { carriedDeltas, markDeltasSent, placedOf, sentDeltas } from './pool-delt
 import { Masker, printed, TRANSPORT_HEADERS, waitWords, type Outgoing } from './pool-print.js';
 import { shellReader } from './projection.js';
 import { isVocabularyExpired, REGISTRY_MAX_AGE_DAYS, VOCAB_SNAPSHOT_DATE } from './public-vocabulary.js';
-import { contentHash } from './read.js';
+import { contentHash, FIRST_ORDER_FAMILIES } from './read.js';
 import { harnessOf as sessionHarness, type Harness } from './schema.js';
 import { loadStore, readSaved, readSkeletons, type SessionsRuntime } from './store.js';
 import { vocabulary } from './vocab-load.js';
@@ -527,11 +527,13 @@ const replicaFile = (storeDir: string, server: string, harness: Harness, harness
 
 /**
  * What the pool says it served a bundle at, printed as the bundle states it: the client holds no floor of its own and applies none (a floor is the pool's deploy setting), so a bundle that states none prints nothing.
- * A family on a floor of its own is named with it.
+ * A family on a floor of its own is named with it, but only a family this client knows: a key the pool adds later parses and travels in `--json`, and no pool-supplied string reaches the terminal.
  */
 const floorSentence = (floors: BundleFloors | undefined): string => {
   if (floors === undefined) return '';
-  const own = Object.entries(floors.families ?? {}).map(([family, floor]) => `${family} at ${String(floor)}`);
+  const own = Object.entries(floors.families ?? {})
+    .filter(([family]) => FIRST_ORDER_FAMILIES.some((known) => known === family))
+    .map(([family, floor]) => `${family} at ${String(floor)}`);
   return ` The pool served it at a public floor of ${String(floors.public)} clusters and a disclosure floor of ${String(floors.disclosure)}${own.length === 0 ? '' : `, with ${own.join(' and ')}`}.`;
 };
 
