@@ -71,14 +71,22 @@ export const runHookProcess = async ({ stdin, deps, exit, write, deadlineMs, rec
   let transcript: string | undefined;
   // Telemetry hears of a fire once: the deadline timer records the fire it cuts short (the slowest ones), and the main path skips a fire the timer has already told.
   let recorded = false;
-  const tell = async (result: Pick<HookFire, 'outcome' | 'bytes'>, transcript?: string): Promise<void> => {
-    if (recorded) return;
-    recorded = true;
+  // Set once the main path's `record` has resolved. While it is false after `recorded`, the main path is still reading the transcript, and a stalled read would otherwise lose the fire at the deadline.
+  let settled = false;
+  let told: Pick<HookFire, 'outcome' | 'bytes'> | undefined;
+  const send = async (result: Pick<HookFire, 'outcome' | 'bytes'>, transcript?: string): Promise<void> => {
     try {
       await record?.({ latencyMs: Math.max(0, Math.round(clock() - started)), ...result }, transcript);
     } catch {
       // Telemetry never changes what the hook did.
     }
+  };
+  const tell = async (result: Pick<HookFire, 'outcome' | 'bytes'>, transcript?: string): Promise<void> => {
+    if (recorded) return;
+    recorded = true;
+    told = result;
+    await send(result, transcript);
+    settled = true;
   };
   // `size` is the file's length when the record was staged: an append that wrote and then stalled has put the record's own bytes past it, and the deadline must not write it again.
   let staged: { file: string; text: string; size: number; stop?: () => void } | null = null;
@@ -92,7 +100,9 @@ export const runHookProcess = async ({ stdin, deps, exit, write, deadlineMs, rec
         // Fail-open.
       }
       // The fire the deadline cut short is still a fire: recorded as an error with nothing printed, after the row and before the stop so a slow stop cannot lose it.
-      void tell({ outcome: 'error', bytes: 0 });
+      // When the main path had told it first and its transcript read is still going, the fire it settled on goes now, with no transcript, so the read cannot cost the event.
+      if (!recorded) void tell({ outcome: 'error', bytes: 0 });
+      else if (!settled && told !== undefined) void send(told);
       // A registry ask still running is then stopped, so the manager the hook started does not outlive it; a stop that throws must not cost the exit.
       try {
         staged?.stop?.();
