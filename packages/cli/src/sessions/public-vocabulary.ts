@@ -319,7 +319,8 @@ export const projectedAgentType = (agentType: string): string => ([...HARNESS_AG
 
 /**
  * The input keys each built-in tool's published schema lists, by the tool's name. Curated from the harness's tool reference. A key outside the tool's list, and every
- * key of an MCP tool (no pinned registry lists their schemas), is counted and never named (spec Section 1.3).
+ * key of an MCP tool (no pinned registry lists their schemas), is counted and never named (spec Section 1.3). That is the local projection; the wire (t870) sends the names that pass
+ * the name gate and counts the rest in `keysDropped`.
  */
 export const TOOL_INPUT_KEYS: ReadonlyMap<string, ReadonlySet<string>> = new Map(
   Object.entries({
