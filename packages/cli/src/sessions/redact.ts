@@ -80,6 +80,93 @@ const IPV6 =
   /(?<![0-9A-Za-z:])(?:(?:[0-9a-f]{1,4}:){7}[0-9a-f]{1,4}|(?:[0-9a-f]{1,4}:){1,7}:(?:[0-9a-f]{1,4}(?::[0-9a-f]{1,4}){0,6})?|::[0-9a-f]{1,4}(?::[0-9a-f]{1,4}){0,6})(?![0-9A-Za-z:])/gi;
 const MIN_NAME = 3;
 const PLACEHOLDER = /<(?:secret|email|org-domain|host|user|env)>/g;
+// A `.env` line whose name is lower case (`mapbox=q8z7...`): only a whole line of that shape, so `--flag=value` and `?page=2` are left alone.
+const LOWER_ENVIRONMENT = /^([ \t]*(?:export[ \t]+)?[a-z][a-z0-9_]{2,}=)(?!<)(?:(["'])[^"'\n]*\2|[^\s"']+)[ \t]*$/gm;
+
+// Shapes `makeRedactor` does not know (t955, census S3). They run only on a raw copy, and before the shared rules, because the entropy rule would
+// split a key at its `/` first. A bare 40-character secret key needs a `/` or `+` and a random look, so a git sha (hex) and the front of a
+// base64 image (longer than 40) stay. A password flag is masked only when the value looks like one: four characters with a digit or a symbol, and not a
+// port, so `-p 8080` and `-p3000:3000` stay and `-pthread` is not read as a password.
+const AWS_SECRET_KEY = /(?<![A-Za-z0-9/+=_-])[A-Za-z0-9/+]{40}(?![A-Za-z0-9/+=_-])/g;
+const PORT = /^[\d.:]+(?:\/[a-z]+)?$/i;
+const passwordLike = (value: string): boolean => value.length >= 4 && /[\d!@#$%^&*]/.test(value) && !PORT.test(value);
+const rawRules: Redactor = (text) =>
+  text
+    .replace(/-----BEGIN PGP PRIVATE KEY BLOCK-----[\s\S]*?(?:-----END PGP PRIVATE KEY BLOCK-----|$)/g, '<secret>')
+    .replace(/PuTTY-User-Key-File-\d+:[\s\S]*?(?:Private-MAC:[ \t]*\w*|$)/g, '<secret>')
+    .replace(AWS_SECRET_KEY, (key) => (/[/+]/.test(key) && looksRandom(key) ? '<secret>' : key))
+    .replace(/((?<!\S)(?:-u|--user)\s+["']?(?!\d+:)[^\s:"']+:)[^\s"']{4,}/g, '$1<secret>')
+    .replace(/(?<!\S)-p([^\s"'-][^\s"']{3,})/g, (flag, value: string) => (passwordLike(value) ? '-p<secret>' : flag))
+    .replace(/(\bsshpass\s+-p\s*)(?:"[^"]*"|'[^']*'|[^\s"']+)/g, '$1<secret>')
+    .replace(/((?<!\S)-W\s+)(?:(["'])[^"']+\2|([^\s"'/:-][^\s"'/:]{3,}))/g, (flag, lead: string, quote: string | undefined, bare: string | undefined) =>
+      quote !== undefined || passwordLike(bare ?? '') ? `${lead}<secret>` : flag)
+    .replace(/(--(?:password|passwd|pwd)\s+)(?:(["'])[^"']*\2|[^\s"'-][^\s"']*)/g, '$1<secret>');
+
+// A raw copy is JSONL, so a tool's output sits inside a JSON string where a newline is `\n` and a quote is `\"`: a rule written for plain text
+// misses `\nAKIA...` (no word boundary), cannot cross `\"`, and can eat the `n` of `\n` (t955, census S1, S2, S22). So a line that parses is
+// walked and every string in it redacted decoded (a string that itself holds JSON, in turn); the line is written again only if a value changed,
+// and any other text keeps the plain-text path with its bytes as they were.
+type Json = string | number | boolean | null | Json[] | JsonObject;
+interface JsonObject {
+  [key: string]: Json;
+}
+const SECRET_NAME = /password|passwd|secret|token|api[_-]?key|private[_-]?key|credential/i;
+// A count of tokens is a number under a `token` name, so a number is masked only under the names that are always a secret.
+const SECRET_NUMBER_NAME = /password|passwd|secret|api[_-]?key|private[_-]?key|credential/i;
+const CONTAINER = /^\s*[{[]/;
+
+const parseContainer = (text: string): Json[] | JsonObject | undefined => {
+  if (!CONTAINER.test(text)) return undefined;
+  try {
+    const parsed = JSON.parse(text) as Json;
+    return typeof parsed === 'object' && parsed !== null ? parsed : undefined;
+  } catch {
+    return undefined;
+  }
+};
+
+const redactDecoded = (body: string, redactText: Redactor): string => {
+  // A name reaches the strings of an array under it (`"tokens": ["..."]`); an object's own keys name their values.
+  const walk = (value: Json, name: string): Json => {
+    if (typeof value === 'string') return SECRET_NAME.test(name) && value.length >= 4 ? '<secret>' : redactBlock(value);
+    if (typeof value === 'number') return SECRET_NUMBER_NAME.test(name) && String(value).length >= 4 ? '<secret>' : value;
+    if (Array.isArray(value)) {
+      const items = value.map((item) => walk(item, name));
+      return items.some((item, at) => item !== value[at]) ? items : value;
+    }
+    if (typeof value === 'object' && value !== null) {
+      const before = Object.entries(value);
+      const after = before.map(([key, item]): [string, Json] => [redactBlock(key), walk(item, key)]);
+      return after.some(([key, item], at) => key !== before[at]?.[0] || item !== before[at][1]) ? Object.fromEntries(after) : value;
+    }
+    return value;
+  };
+  // The text as it was when nothing in it changed; otherwise the value written again, inside the whitespace (a `\r`, a newline) it had around it.
+  const rewrite = (text: string, parsed: Json[] | JsonObject): string => {
+    const next = walk(parsed, '');
+    return next === parsed ? text : `${text.slice(0, text.length - text.trimStart().length)}${JSON.stringify(next)}${text.slice(text.trimEnd().length)}`;
+  };
+  // `text` is a whole document, or lines of which some are JSON: the JSON ones are walked, the runs between them take the plain-text path.
+  const redactBlock = (text: string): string => {
+    const whole = parseContainer(text);
+    if (whole !== undefined) return rewrite(text, whole);
+    const out: string[] = [];
+    let run: string[] = [];
+    for (const line of text.split('\n')) {
+      const parsed = parseContainer(line);
+      if (parsed === undefined) {
+        run.push(line);
+        continue;
+      }
+      if (run.length > 0) out.push(redactText(run.join('\n')));
+      run = [];
+      out.push(rewrite(line, parsed));
+    }
+    if (run.length > 0) out.push(redactText(run.join('\n')));
+    return out.join('\n');
+  };
+  return redactBlock(body);
+};
 
 /** How many values of a redacted text were masked: each placeholder is one. */
 export const placeholders = (text: string): number => text.match(PLACEHOLDER)?.length ?? 0;
@@ -109,18 +196,23 @@ const nameRule = (names: readonly string[]): RegExp | undefined => {
 /** A whole transcript body redacted for upload, and how many values were masked (placeholders added, a count and nothing else). `names` are the local usernames to mask wherever they stand as a whole word. */
 export const redactTranscript = (body: string, domains: readonly string[] = [], names: readonly string[] = []): { text: string; masked: number } => {
   const named = nameRule(names);
-  // The names go first: a hyphenated or spaced name must be masked whole before the path rules take its first word.
-  const known = makeRedactor(domains)(body);
-  const redacted = (named === undefined ? known : known.replace(named, '<user>'))
-    .replace(URL_HOST, '$1<host>')
-    .replace(INTERNAL_NAME, '<host>')
-    .replace(IPV4, '<host>')
-    .replace(IPV6, '<host>')
-    .replace(UNIX_HOME, '$1<user>')
-    .replace(WINDOWS_HOME, '$1<user>')
-    .replace(ENCODED_HOME, '$1<user>')
-    .replace(PROMPT, '<user>@<host>')
-    .replace(ENVIRONMENT, '$1<env>');
+  const known = makeRedactor(domains);
+  const redactText: Redactor = (text) => {
+    // The names go first: a hyphenated or spaced name must be masked whole before the path rules take its first word.
+    const masked = known(rawRules(text));
+    return (named === undefined ? masked : masked.replace(named, '<user>'))
+      .replace(URL_HOST, '$1<host>')
+      .replace(INTERNAL_NAME, '<host>')
+      .replace(IPV4, '<host>')
+      .replace(IPV6, '<host>')
+      .replace(UNIX_HOME, '$1<user>')
+      .replace(WINDOWS_HOME, '$1<user>')
+      .replace(ENCODED_HOME, '$1<user>')
+      .replace(PROMPT, '<user>@<host>')
+      .replace(ENVIRONMENT, '$1<env>')
+      .replace(LOWER_ENVIRONMENT, '$1<env>');
+  };
+  const redacted = redactDecoded(body, redactText);
   return { text: redacted, masked: Math.max(0, placeholders(redacted) - placeholders(body)) };
 };
 

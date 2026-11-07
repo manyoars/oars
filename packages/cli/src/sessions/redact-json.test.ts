@@ -82,3 +82,88 @@ describe('the raw copy over the census shape table', () => {
     });
   });
 });
+
+describe('the decoded-value rule', () => {
+  it('keeps the exact bytes of a line it does not change, escapes and spacing included', () => {
+    const bs = String.fromCharCode(92);
+    const line = `{ "a" : "caf${bs}u00e9 ${bs}/ <b>${bs}n", "usage":{"input_tokens":12345,"max_tokens":4096},  "n": 1.0 }`;
+    const body = `${line}\n\n${line}\r\n`;
+    expect(redactTranscript(body, [])).toEqual({ text: body, masked: 0 });
+  });
+
+  it('changes only the line that holds a secret and keeps the lines around it as they were', () => {
+    const quiet = '{ "a" : "plain \u00e9" }';
+    const loud = JSON.stringify({ text: `ok\nAKIA${B32(16, 40)}` });
+    const { text } = redactTranscript(`${quiet}\n${loud}\n${quiet}\n`, []);
+    const lines = text.split('\n');
+    expect([lines[0], lines[2], lines[3]]).toEqual([quiet, quiet, '']);
+    expect(JSON.parse(lines[1] ?? '')).toEqual({ text: 'ok\n<secret>' });
+  });
+
+  it('keeps a line ending with a carriage return when it re-serializes', () => {
+    const body = `${JSON.stringify({ text: `x\nAKIA${B32(16, 41)}` })}\r\n`;
+    expect(redactTranscript(body, []).text).toBe(`${JSON.stringify({ text: 'x\n<secret>' })}\r\n`);
+  });
+
+  it('walks a string that holds a JSON object or array, however deep', () => {
+    const inner = JSON.stringify({ SecretAccessKey: AWS_SECRET, nested: JSON.stringify([{ password: 'hunter2pass' }]) });
+    const { text } = redactTranscript(`${JSON.stringify({ content: inner })}\n`, []);
+    expect(text).not.toContain('hunter2pass');
+    expect(text).not.toContain(AWS_SECRET);
+    const content = (JSON.parse(text.trim()) as { content: string }).content;
+    expect(JSON.parse(content)).toEqual({ SecretAccessKey: '<secret>', nested: '[{"password":"<secret>"}]' });
+  });
+
+  it('masks a secret-named value in an array and a number under a password name, but not a count of tokens', () => {
+    const line = JSON.stringify({ api_keys: ['abcd1234', 'x'], password: 12345678, input_tokens: 4096, tokens: 99999 });
+    expect(JSON.parse(redactTranscript(`${line}\n`, []).text)).toEqual({ api_keys: ['<secret>', 'x'], password: '<secret>', input_tokens: 4096, tokens: 99999 });
+  });
+
+  it('masks a secret that is a key, and a pair inside prose that holds JSON', () => {
+    const line = JSON.stringify({ [`ops@acme${B32(3, 42)}.io`]: 1, out: 'Result: {"SessionToken": "abc/def+ghi1234="} done' });
+    const { text } = redactTranscript(`${line}\n`, []);
+    expect(text).not.toContain('ops@acme');
+    expect(text).not.toContain('abc/def');
+  });
+
+  it('is valid JSON afterward when a rule used to eat the n of a newline', () => {
+    const token = `${B62(10, 43)}${'q8z7x6c5v4b3n2m1'}`;
+    const line = JSON.stringify({ out: `first\nMAPBOX_SK=${token}\nlast` });
+    const { text } = redactTranscript(`${line}\n`, []);
+    expect(JSON.parse(text.trim())).toEqual({ out: 'first\n<secret>\nlast' });
+  });
+
+  it('keeps today\'s text path for a line that does not parse, and for plain lines between JSON lines', () => {
+    const body = `plain one\n{"a": truncated\nSMTP_PASS=Summer2026!\n${JSON.stringify({ t: 'x' })}\nmapbox=q8z7x6c5v4b3n2m1\n`;
+    expect(redactTranscript(body, []).text).toBe(`plain one\n{"a": truncated\nSMTP_PASS=<env>\n${JSON.stringify({ t: 'x' })}\nmapbox=<env>\n`);
+  });
+
+  it('reads one pretty-printed document as a document', () => {
+    const body = JSON.stringify({ messages: [{ text: `AKIA${B32(16, 44)}` }] }, null, 2);
+    expect(JSON.parse(redactTranscript(body, []).text)).toEqual({ messages: [{ text: '<secret>' }] });
+  });
+
+  it('masks the local name inside a decoded value and a Windows path with single backslashes', () => {
+    const line = JSON.stringify({ cwd: String.raw`C:\Users\canaryuser\work`, text: 'ask canaryuser' });
+    expect(JSON.parse(redactTranscript(`${line}\n`, [], ['canaryuser']).text)).toEqual({ cwd: String.raw`C:\Users\<user>\work`, text: 'ask <user>' });
+  });
+});
+
+describe('what the new rules leave alone', () => {
+  const kept = [
+    ['a git sha', `commit ${HEX(40, 50)} Merge`],
+    ['the cut front of a base64 image', 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAf...'],
+    ['a repetitive base64 run', 'AAAAAAAAAAAAAAAA+AAAAAAAAAAAAAAAA/AAAAAAA'],
+    ['a 40-character path with no digit', 'src/sessions/pool-command/helpers/some-folder/x'],
+    ['a port flag', 'docker run -p 8080:80 nginx and mkdir -p build2024 and ssh -W host:22 jump'],
+    ['an attached port flag', 'docker run -p3000:3000/tcp -p127.0.0.1:80:80 nginx'],
+    ['a compiler flag', 'gcc -pthread -pedantic -Wall -Werror main.c'],
+    ['a uid:gid user', 'docker run -u 1000:1000 alpine'],
+    ['a flag', 'curl --user-agent x --password-stdin -s url, make --pass-through=1'],
+    ['a lower-case assignment inside a line', 'run --out=build2024 then ?page=2&sort=name'],
+  ] as const;
+  it.each(kept)('keeps %s unmasked', (_name, text) => {
+    expect(redactTranscript(`${text}\n`, []).text).toBe(`${text}\n`);
+    expect(redactTranscript(jsonl(text), []).text).toBe(jsonl(text));
+  });
+});
