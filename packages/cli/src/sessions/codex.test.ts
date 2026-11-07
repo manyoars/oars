@@ -721,7 +721,7 @@ describe('Paginated rollouts', () => {
       expect(outputFirst.errorLines.map((entry) => entry.line)).toEqual(['boom']);
     });
 
-    it('reads a Declined item (exit code -1, events.rs:552-554) as the user rejecting the call, and leaves an item with no exit_code (an Option, skipped when None, items.rs:284-286) and an item for a call it never saw unsettled', () => {
+    it('reads a Declined item (exit code -1, events.rs:552-554) as the user rejecting the call, and leaves an item with no exit_code (an Option, skipped when None, items.rs:284-286) and, with an item no call owns, a third Bash record of its own (a code-mode cell\'s command)', () => {
       begin();
       const out = extractOf([
         pmeta(),
@@ -778,10 +778,11 @@ describe('Paginated rollouts', () => {
 
       it('records each command a cell ran as its own Bash record, with its exit code, output, and duration', () => {
         const out = extractOf(fixture(), 'codex');
-        const blocks = (entry: Record<string, unknown>): Array<Record<string, unknown>> => {
+        type Block = { type?: unknown; native?: unknown; input?: unknown };
+        const blocks = (entry: { message?: unknown }): Block[] => {
           const message = entry.message;
           const content = typeof message === 'object' && message !== null && 'content' in message ? message.content : [];
-          return Array.isArray(content) ? content.filter((block): block is Record<string, unknown> => typeof block === 'object' && block !== null) : [];
+          return Array.isArray(content) ? content.filter((block): block is Block => typeof block === 'object' && block !== null) : [];
         };
         const uses = rolloutLines(asText(fixture()), 's').flatMap((entry) => (entry.type === 'assistant' ? blocks(entry) : [])).filter((block) => block.type === 'tool_use');
         expect(uses.filter((block) => block.native === 'exec_command').map((block) => block.input)).toEqual([{ command: 'echo hi' }, { command: 'ls /nonexistent' }, { command: 'sleep 30' }]);
@@ -797,6 +798,35 @@ describe('Paginated rollouts', () => {
         const cells = out.tools.filter((tool) => tool.steps?.[0]?.native !== 'exec_command');
         expect(cells.map((tool) => tool.status)).toEqual(['ok', 'ok', 'ok', 'error']);
         expect(out.errorLines.map((entry) => entry.line)).toContain('exec_command failed: no such tool');
+      });
+
+      it('settles a failed wait only itself: the cell it polled stays unsettled', () => {
+        begin();
+        const out = extractOf(
+          [
+            pmeta({ cli_version: '0.167.0' }),
+            cell(2, 'c1', 'text(await tools.exec_command({cmd:"sleep 30"}));\n'),
+            cellOut(3, 'c1', ['Script running with cell ID 14\nWall time 1 seconds\nOutput:\n']),
+            call(4, 'w1', 'wait', { arguments: JSON.stringify({ cell_id: 14, max_tokens: 1000, yield_time_ms: 1000 }) }),
+            ord(shellOut(5, 'w1', [{ type: 'input_text', text: 'wait failed: no such cell' }])),
+          ],
+          'codex',
+        );
+        expect(out.tools.map((tool) => tool.status)).toEqual(['none', 'error']);
+      });
+
+      it('starts an item no earlier than the line before it: a duration longer than the gap reads as the gap', () => {
+        begin();
+        const out = extractOf(
+          [
+            pmeta({ cli_version: '0.167.0' }),
+            cell(2, 'c1', 'text(await tools.exec_command({cmd:"echo hi"}));\n'),
+            item(3, 'exec-1', 'echo hi', { status: 'completed', exit_code: 0, aggregated_output: 'hi', duration: { secs: 5, nanos: 0 } }),
+            cellOut(4, 'c1', ['Script completed\nWall time 0.4 seconds\nOutput:\nhi']),
+          ],
+          'codex',
+        );
+        expect(out.tools.find((tool) => tool.steps?.[0]?.native === 'exec_command')?.durationMs).toBe(1000);
       });
 
       it('holds every verify invariant, including --strict, for the deposited fixture', async () => {
