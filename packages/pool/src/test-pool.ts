@@ -259,7 +259,8 @@ export const startPool = async (bindings: { [name: string]: string } = {}, optio
     return { status: response.status, json: text === '' ? null : JSON.parse(text), headers: response.headers };
   };
   const post: TestPool['post'] = async (path, body, token, headers) => {
-    const { status, json } = await call(path, { method: 'POST', body: typeof body === 'string' ? body : JSON.stringify(body) }, token, headers);
+    // A client posts JSON as `application/json`; a test that wants another type, or none, names it in `headers`.
+    const { status, json } = await call(path, { method: 'POST', body: typeof body === 'string' ? body : JSON.stringify(body) }, token, { 'content-type': 'application/json', ...headers });
     return { status, json };
   };
   const raw: TestPool['raw'] = (path, token, headers) => call(path, { method: 'GET' }, token, headers);

@@ -7,6 +7,7 @@ import type { Env, PoolDb } from './http.js';
 import { anomaliesOf, fleetCells, measurablesOf, operator, OUTLIER_SCORE, type InstallDay } from './telemetry-fleet.js';
 import { dayOf, MAX_BATCHES_PER_RUN, rollupDay, rollupRecent, shiftDay, type Entry, type KeptBucket } from './telemetry-rollup.js';
 import { fieldOf, startPool, type TestPool } from './test-pool.js';
+import { type SweepBucket } from './retention.js';
 import worker from './worker.js';
 
 const DAY_MS = 86_400_000;
@@ -32,7 +33,7 @@ const keep = async (pool: TestPool, day: string, install: string, events: object
 
 interface Bindings {
   DB: Env['DB'];
-  TELEMETRY: KeptBucket;
+  TELEMETRY: KeptBucket & SweepBucket;
 }
 
 /** The nightly handler the Worker exports, run on the pool's own bindings. */

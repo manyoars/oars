@@ -6,6 +6,9 @@ import { answer, bodyOf, bound, fieldOf, notConfigured, refuse, textField, type 
 
 const TOKEN_LIFETIME_MS = 90 * 24 * 60 * 60 * 1000;
 
+/** The hour a client's device-code requests are counted over (`login_starts.slot` is the epoch ms divided by this). */
+export const LOGIN_START_WINDOW_MS = 60 * 60 * 1000;
+
 /** What a provider that names no interval or expiry gets: RFC 8628's 5 seconds, and the 900 both providers use. */
 const DEFAULT_INTERVAL_SEC = 5;
 const DEFAULT_EXPIRY_SEC = 900;
