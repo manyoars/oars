@@ -4,7 +4,7 @@
 // here is projected or uploaded.
 //
 // One collector per transcript, fed line by line by `captureSession`. It reads the Claude Code line shapes (a census of 2.1.312 to 2.1.318) and
-// two neutral lines an adapter may write for a harness whose records are not Claude-shaped (`oars-tools`, `oars-interrupt`).
+// one neutral line an adapter may write for a harness whose records are not Claude-shaped (`oars-tools`).
 
 import type { Harness } from './schema.js';
 
@@ -16,8 +16,13 @@ const names = (value: unknown): string[] => (Array.isArray(value) ? value.filter
 
 /** The harness's tool-rejection results, both worded for the operator declining: a classifier or hook denial is policy, and the model carries on. */
 export const REJECTED_RE = /^The user doesn't want to (?:proceed with this tool use|take this action)/;
-/** The harness writes this as a user line when the operator cut a turn short; a rejection is followed by it too, so it is not a second interrupt. */
+/** The harness writes this as a user line when the operator cut a turn short; a rejection is followed by it too, so it is not a second interrupt. The Codex reader writes it for a `turn_aborted` with reason `interrupted` (CAPTURE 23). */
 export const INTERRUPT_MARKER = '[Request interrupted by user';
+/**
+ * A decline in the fixed text Codex or Gemini CLI writes for a call the operator refused: Codex's `exec command rejected by user` and `patch rejected by user` (events.rs:456-457), and Gemini's `[Operation Cancelled]`
+ * followed by a user cancel or denial. The text is the whole match, never a guess from other wording; `errorCodeOf` classes the same lines `user-rejected`, and the `user-stop` bucket reads them (EXTRACTOR 15).
+ */
+export const DECLINED_RE = /^(?:(?:exec command|patch) rejected by user\s*$|\[Operation Cancelled\] (?:Reason: )?(?:User (?:cancelled|denied)|Operation cancelled by user))/;
 /** A policy refusal: the permission rules or the auto-mode classifier (`Permission ... has been denied`), or a hook (`PreToolUse:Bash hook error`). Not the human's. */
 const DENIED_RE = /^(?:Permission (?:to use .{1,200}?|for this action) has been denied|[A-Za-z]+:[^\s]+ hook error|Hook [A-Za-z]+:[^\s]+ denied)/;
 /** A plugin's MCP server names its tools `mcp__plugin_<plugin>_<server>__<tool>`; that is the only evidence of an installed plugin read here.
@@ -29,8 +34,6 @@ const STOP_HOOK_RE = /^Stop(?::|$)/;
 
 /** An adapter's neutral line naming tools: `offered` and `loaded` are arrays of tool names. */
 export const SHAPE_TOOLS_LINE = 'oars-tools';
-/** An adapter's neutral line for a turn the operator cut short, for a harness whose record is not a Claude marker line. */
-export const SHAPE_INTERRUPT_LINE = 'oars-interrupt';
 
 /** The permission modes each harness documents; any other value is stored as `other` (spec row `permissionMode`). Keyed by harness so a new one must add its entry. */
 const PERMISSION_MODES: { readonly [harness in Harness]: ReadonlySet<string> } = {
@@ -283,8 +286,7 @@ export const createShape = (harness: Harness, stored: (tool: string) => string, 
       } else if (type === SHAPE_TOOLS_LINE) {
         offer(names(line.offered));
         load(names(line.loaded));
-      } else if (type === SHAPE_INTERRUPT_LINE) interrupt(inFlight(), at.prompt);
-      else if (type === 'attachment') {
+      } else if (type === 'attachment') {
         if (isObj(line.attachment)) attachment(line.attachment);
       } else if (type === 'system' && line.subtype === 'stop_hook_summary') {
         if (Array.isArray(line.hookInfos)) for (const info of line.hookInfos) if (isObj(info) && str(info.command) !== undefined) stopCommands.add(str(info.command) ?? '');
