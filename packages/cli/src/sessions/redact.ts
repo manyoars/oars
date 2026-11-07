@@ -71,10 +71,10 @@ const INTERNAL_NAME = /\b(?:[a-z0-9-]+\.)+(?:internal|local|lan|corp|intranet|ho
 const UNIX_HOME = /(\/(?:home|Users)\/)(?![<.])[^/\s"'\\]+/g;
 const WINDOWS_HOME = /([A-Za-z]:[\\/]+Users[\\/]+)(?![<.])[^\\/\s"']+/gi;
 const ENVIRONMENT = /\b((?:export\s+)?[A-Z][A-Z0-9_]{2,}=)(?!<)(?:\\?["'][^"'\\]*\\?["']|[^\s"'\\]+)/g;
-// The harness names a project folder after its path: `/Users/name/work` becomes `-Users-name-work`, and `C:\\Users\\name\\work` becomes `C--Users-name-work`. The name runs to the next hyphen, so a hyphenated name is finished by `localNames`.
+// The harness names a project folder after its path: `/Users/name/work` becomes `-Users-name-work`, and `C:\\Users\\name\\work` becomes `C--Users-name-work`. The name runs to the next hyphen, so a hyphenated name is masked whole earlier, by the local-name rule (which also matches each name in this encoded form).
 const ENCODED_HOME = /(?<![A-Za-z0-9])((?:[A-Za-z]-)?-(?:Users|home)-)(?!<)[^-\s"'\\/]+/g;
 // A shell prompt, `name@box:~/dir$`: a box name with no dot is not an address, so the email rule leaves it.
-const PROMPT = /\b[A-Za-z0-9._-]+@[A-Za-z0-9-]+(?=:[~/.])/g;
+const PROMPT = /(?:<user>|\b[A-Za-z0-9._-]+)@[A-Za-z0-9-]+(?=:[~/.])/g;
 // Full, compressed, and loopback forms. A clock time (`10:20:30`) has no `::`, so it is never one.
 const IPV6 =
   /(?<![0-9A-Za-z:])(?:(?:[0-9a-f]{1,4}:){7}[0-9a-f]{1,4}|(?:[0-9a-f]{1,4}:){1,7}:(?:[0-9a-f]{1,4}(?::[0-9a-f]{1,4}){0,6})?|::[0-9a-f]{1,4}(?::[0-9a-f]{1,4}){0,6})(?![0-9A-Za-z:])/gi;
@@ -88,15 +88,19 @@ export const placeholders = (text: string): number => text.match(PLACEHOLDER)?.l
 export const localNames = (home: string = homedir(), account: string = userInfo().username): string[] =>
   [...new Set([account, basename(home)].filter((name) => name.length >= MIN_NAME))];
 
+// Each name also stands in its encoded-folder form (`John Smith` is `John-Smith` in `C--Users-John-Smith-repo`), and the longest goes first so `mary-jane` is never cut to `mary`.
 const nameRule = (names: readonly string[]): RegExp | undefined => {
   const usable = names.filter((name) => name.length >= MIN_NAME);
-  return usable.length === 0 ? undefined : new RegExp(`(?<![A-Za-z0-9<])(?:${usable.map(escapeRegExp).join('|')})(?![A-Za-z0-9>])`, 'gi');
+  const forms = [...new Set(usable.flatMap((name) => [name, name.replace(/[^A-Za-z0-9]/g, '-')]))].sort((a, b) => b.length - a.length);
+  return forms.length === 0 ? undefined : new RegExp(`(?<![A-Za-z0-9<])(?:${forms.map(escapeRegExp).join('|')})(?![A-Za-z0-9>])`, 'gi');
 };
 
 /** A whole transcript body redacted for upload, and how many values were masked (placeholders added, a count and nothing else). `names` are the local usernames to mask wherever they stand as a whole word. */
 export const redactTranscript = (body: string, domains: readonly string[] = [], names: readonly string[] = []): { text: string; masked: number } => {
   const named = nameRule(names);
-  const redacted = makeRedactor(domains)(body)
+  // The names go first: a hyphenated or spaced name must be masked whole before the path rules take its first word.
+  const known = makeRedactor(domains)(body);
+  const redacted = (named === undefined ? known : known.replace(named, '<user>'))
     .replace(URL_HOST, '$1<host>')
     .replace(INTERNAL_NAME, '<host>')
     .replace(IPV4, '<host>')
@@ -106,8 +110,7 @@ export const redactTranscript = (body: string, domains: readonly string[] = [], 
     .replace(ENCODED_HOME, '$1<user>')
     .replace(PROMPT, '<user>@<host>')
     .replace(ENVIRONMENT, '$1<env>');
-  const text = named === undefined ? redacted : redacted.replace(named, '<user>');
-  return { text, masked: Math.max(0, placeholders(text) - placeholders(body)) };
+  return { text: redacted, masked: Math.max(0, placeholders(redacted) - placeholders(body)) };
 };
 
 /** The version of the rules above, stated to the pool with every raw part; a change to any rule of `redactTranscript` raises it. */
