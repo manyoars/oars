@@ -316,7 +316,7 @@ describe('the OpenCode reader', () => {
     store.close();
   });
 
-  it('records a user-run shell command (`!cmd`) as a shell call, read by its exit', async () => {
+  it('records a user-run shell command (`!cmd`) as an operator turn with a <bash-input> line, as Claude Code does: no agent turn, no shell call, no error line', async () => {
     const { store, read } = await opened((dir) => [
       {
         id: 'ses_sh',
@@ -326,12 +326,20 @@ describe('the OpenCode reader', () => {
         messages: [
           ocUser('msg_1', 1, at(1), 'hello'),
           { id: 'msg_2', type: 'shell', seq: 2, created: at(2), data: { time: { created: at(2), completed: at(3) }, shellID: 'sh1', command: 'git status', status: 'exited', exit: 128, output: { output: 'fatal: not a git repository', cursor: 28, size: 28, truncated: false } } },
+          ocAssistant('msg_3', 3, at(62), [{ type: 'text', text: 'not a repository' }]),
         ],
       },
     ]);
-    const { tools, errorLines } = capture(read('ses_sh').text, 'sh');
-    expect(tools.map((t) => [t.tool, t.status])).toEqual([['Bash', 'error']]);
-    expect(errorLines.map((e) => e.line)).toEqual(['fatal: not a git repository']);
+    const text = read('ses_sh').text;
+    expect(text).toContain('<bash-input>git status</bash-input>');
+    expect(text).not.toContain('tool_use');
+    const { session, prompts, tools, errorLines } = capture(text, 'sh');
+    expect(tools).toEqual([]);
+    expect(errorLines).toEqual([]);
+    expect([session.assistantTurns, session.bashCmds]).toEqual([1, 0]);
+    // The prompt is the operator's typed text; the `!cmd` is a human turn but not a prompt, and its output is not one: the agent's run is timed from the command (62 s - 2 s).
+    expect(prompts.map((p) => p.head)).toEqual(['hello']);
+    expect(session.trust?.unattendedRun).toEqual([0, 1]);
     store.close();
   });
 
