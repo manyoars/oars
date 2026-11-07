@@ -67,6 +67,10 @@ describe('the wire holds no field a withheld family needs', () => {
   it('refuses a skeleton that carries error rows at its top level', () => {
     expect(parseSkeleton({ ...sampleSkeleton('0000000000000002'), errors: [] }).ok).toBe(false);
   });
+
+  it.each(WITHHELD)('refuses a skeleton that carries %s at its top level', (field, value) => {
+    expect(parseSkeleton({ ...sampleSkeleton('0000000000000006'), [field]: value }).ok).toBe(false);
+  });
 });
 
 describe('a bundle over five accounts', () => {

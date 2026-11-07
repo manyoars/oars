@@ -32,8 +32,8 @@ export const batchTier = (skeleton: SessionSkeleton): Tier =>
     return TIER_ORDER.indexOf(held) < TIER_ORDER.indexOf(lowest) ? held : lowest;
   }, 'attested');
 
-/** How long a counting batch rests on the ledger before nothing can audit it and the flag stands (`ledger_days`). */
-export const LEDGER_DAYS = 90;
+/** How many days a counting batch must stand before the account's `pending` flag becomes `standing`. The batch stays on the ledger; no row is ever deleted. */
+export const STANDING_AFTER_DAYS = 90;
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 export type Access = 'pending' | 'standing';
@@ -55,7 +55,7 @@ export const batchCounts = (tier: Tier, skeleton: SessionSkeleton, written: numb
 export const EARLIEST_COUNTED = "SELECT MIN(counted_at) AS first FROM deposits WHERE account = ? AND counted_at IS NOT NULL AND tier <> 'none'";
 
 /**
- * The account's access, written to its record when it changes. `standing` is latched: once a counting batch has stood `ledger_days`, nothing can audit it, so the flag stays while
+ * The account's access, written to its record when it changes. `standing` is latched: once a counting batch has stood `STANDING_AFTER_DAYS`, the flag stays while
  * the account exists. Before that it is `pending` while any counting batch is not `none`, and clears when none is left. A resend that still counts keeps a batch's first `counted_at`, so a
  * client resending every session does not push a batch back toward pending; one that no longer counts clears it, and the flag falls if no counting batch is left; an ingest that writes no cell increment leaves it alone.
  */
@@ -63,7 +63,7 @@ export const accessOf = async (env: Env, account: string, now: number): Promise<
   const held = fieldOf(await env.DB.prepare('SELECT access FROM accounts WHERE id = ?').bind(account).first(), 'access');
   if (held === 'standing') return 'standing';
   const first = fieldOf(await env.DB.prepare(EARLIEST_COUNTED).bind(account).first(), 'first');
-  const access: Access | null = typeof first !== 'number' ? null : first <= now - LEDGER_DAYS * DAY_MS ? 'standing' : 'pending';
+  const access: Access | null = typeof first !== 'number' ? null : first <= now - STANDING_AFTER_DAYS * DAY_MS ? 'standing' : 'pending';
   if (access !== (held ?? null)) await env.DB.prepare('UPDATE accounts SET access = ? WHERE id = ?').bind(access, account).run();
   return access;
 };

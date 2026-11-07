@@ -83,7 +83,7 @@ import type { RepoSize } from './public-vocabulary.js';
 import type { SessionFunnel, SessionSetup, SessionTrust } from './session-shape.js';
 
 /** Stamped `cv` on every captured record. Bump it when the captured field list changes or a stored value of an existing captured record or skeleton changes: a bump re-reads every transcript. */
-export const CAPTURE_VERSION = '17';
+export const CAPTURE_VERSION = '18';
 
 /** Capture versions the reader derives from. A version-3 record is upgraded on read; a newer one is read for the fields this code knows. */
 export const OLDEST_READABLE_CAPTURE = 3;
@@ -459,6 +459,10 @@ export interface ToolObservation {
   durationMs: number | null;
   toolUseId: string | null;
   harnessVersion: string | null;
+  /** The model the call's own line names (`requestedModel`, else the message's model), so a step is attributed to the model that made it and not only to its prompt's majority (t867). Absent when the line names none and on a record captured before it. Class P, like the prompt's. */
+  model?: string;
+  /** The skill whose run the call's line sits in (`attributionSkill`): the harness stops naming it on the first line after the run, so that is where a run ends. Absent outside a run and on an earlier record. Class A, since a skill's name can be private. */
+  skill?: string;
   /** A sidechain line inside a main transcript. */
   side: boolean;
   /** The prompt index the call ran under; null before the first prompt. */

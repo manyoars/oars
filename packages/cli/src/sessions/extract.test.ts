@@ -442,7 +442,7 @@ describe('the version-3 capture records (Item 1, on errors-a.jsonl)', () => {
   };
   const text = `${readFileSync(join(FIXTURES, 'proj', 'errors-a.jsonl'), 'utf8')}${JSON.stringify(unanswered)}\n`;
   const capture = captureSession({ text, session: 'errors-a', project: 'proj', rev: 1, at: '2026-06-10T00:00:00.000Z', bytes: text.length, redact, salt: 'salt' });
-  const base = { kind: 'tool', cv: CAPTURE_VERSION, sid: null, session: 'errors-a', rev: 1, parent: 'errors-a', agentType: null, harnessVersion: '2.1.300', side: false };
+  const base = { kind: 'tool', cv: CAPTURE_VERSION, sid: null, session: 'errors-a', rev: 1, parent: 'errors-a', agentType: null, harnessVersion: '2.1.300', model: 'claude-opus-5-5', side: false };
 
   it('writes one tool record per call with every field, one call per status', () => {
     expect(capture.tools.map((tool) => [tool.n, tool.tool, tool.status])).toEqual([
