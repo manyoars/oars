@@ -1,7 +1,7 @@
 # The `oars sessions` store (version 15)
 
-`oars sessions` keeps a local, deterministic memory of the operator's own Claude Code sessions: no model call, no network, nothing
-uploads. `gold arms` is the one exception: it sends redacted text through your own Claude subscription. This page is the store's format. The types are in `packages/cli/src/sessions/schema.ts`; the commands are in the CLI README.
+`oars sessions` keeps a local, deterministic memory of the operator's own Claude Code sessions: no model call, no network, and no session data
+uploaded. `gold arms` is the one exception: it sends redacted text through your own Claude subscription. Telemetry (`docs/telemetry.md`) is separate: it records one event per command (its path, flag names, duration, exit code, and error class, with a random install id, the oars version, the OS, and the time) in its own folder, and will send those events, in a later release, only to a pool server you configure. This page is the store's format. The types are in `packages/cli/src/sessions/schema.ts`; the commands are in the CLI README.
 
 ## Layout
 
@@ -21,7 +21,7 @@ Under `<config>/oars/sessions/` (`%APPDATA%` on Windows, `$XDG_CONFIG_HOME` or `
 | `recalls.jsonl` | One row per recall, pull or push, shown or held, hit or miss. Append-only, written when the recall happens. `sid`, `at`, and `query.text` are class A; the rest is class P. See "Recalls". |
 | `consequences.jsonl` | What each recall led to, by recall ID. Computed from `recalls.jsonl` and the log, rewritten by `oars sessions read` and by every whole-store deposit, and safe to delete. A pull neither reads nor writes it, except on a store with no stored pool. |
 | `reads/<pool>.jsonl` | One pool version's reads, written once and never rewritten, so a read cited by its ID stays what it was. |
-| `pool-outbox/<hash of server>/v<vocab>-<fields and format>/<key>.<sha256>.jsonl`, `pool-outbox/<hash of server>/shown.log`, `pool-outbox/<hash of server>/deltas-sent.log` | Batches `oars pool deposit` built, one per session, as canonical JSON: sorted keys, no optional whitespace, UTF-8, and named for the SHA-256 of exactly those bytes. `shown.log` records which hashes `oars pool outbox` printed, and when. `deltas-sent.log` is the once-only mark of the local deltas a batch carried, one 16-hex hash a line (the account, the entry without its `change`, and the index of its after window on a fixed grid from the epoch), appended only after the batch that carries the delta is written. `deltas-sent.log` is class A and never leaves the machine. A batch is sent only if its hash is in `shown.log` and the file still hashes to its name. A folder from another vocabulary version, field list, or skeleton format is stale: it is never printed or sent, `pool deposit` removes it, and `oars sessions verify` reports the count (`staleBatches`). Class `L`: nothing here leaves the machine until a send, and sending is disabled. See `docs/pool.md`. |
+| `pool-outbox/<hash of server>/v<vocab>-<fields and format>/<key>.<sha256>.jsonl`, `pool-outbox/<hash of server>/shown.log`, `pool-outbox/<hash of server>/deltas-sent.log` | Batches `oars pool deposit` built, one per session, as canonical JSON: sorted keys, no optional whitespace, UTF-8, and named for the SHA-256 of exactly those bytes. `shown.log` records which hashes `oars pool outbox` printed, and when. `deltas-sent.log` is the once-only mark of the local deltas a batch carried, one 16-hex hash a line (the account, the entry without its `change`, and the index of its after window on a fixed grid from the epoch), appended only after the batch that carries the delta is written. `deltas-sent.log` is class A and never leaves the machine. A batch is sent only if its hash is in `shown.log` and the file still hashes to its name. A folder from another vocabulary version, field list, or skeleton format is stale: it is never printed or sent, `pool deposit` removes it, and `oars sessions verify` reports the count (`staleBatches`). Class `L`: nothing here leaves the machine until a send, and sending is disabled (telemetry events never come from this folder). See `docs/pool.md`. |
 | `raw/<project>/<path>` | oars' own archive of every deposited transcript (below). |
 | `commit-survival.jsonl` | What became of each commit older than `SURVIVAL_DAYS`, appended on a change of state. See "Commit survival". |
 | `crossings.jsonl` | Written by `oars gate replay` and appended to by the `oars gate hook` as each crossing happens (a `via` field says which): one `run` row, `registry` rows, and one `crossing` row per package, MCP server, or skill pick found in raw transcripts. Closed-vocabulary fields are class P, among them `policy` (`default`, `file`, or `invalid`), `arm` (`shown`, `held`, or `none`), and `lineShown` and `lineHeld` (ids from a closed table, never free text); `session`, `agent`, `toolUseId`, `ts`, `name`, and `version` are class A, and so are a `registry` row's `name`, `latest`, and `created`. See `docs/gate.md`. |
@@ -181,7 +181,7 @@ A version-2 session (no `cv`) is still read: its already-derived `prompt` and `e
 
 Every record carries `kind`, `cv`, `sid`, `session`, and `rev` (a version-3 record reads with `sid` null). Text is redacted (secrets by
 pattern and entropy, emails, and the domains named with `--redact-domain`) before it is cut or written. Each field has one class
-(the umbrella repository's D1 spec, Section 1.1). The store uploads nothing, so a class says what a field may hold, not where it goes:
+(the umbrella repository's D1 spec, Section 1.1). The store uploads nothing (telemetry, `docs/telemetry.md`, has its own folder and carries nothing from the store), so a class says what a field may hold, not where it goes:
 
 - `L` the most sensitive: raw transcripts, the unhashed paths, the project folder slug, the salt, `state.json`.
 - `A` redacted text (cut to its limit), join ids, and every salted hash.
@@ -458,7 +458,7 @@ The consequence is computed at derive and never captured, so `recalls.jsonl` sta
 
 `pipeline-runs.jsonl` is the pipeline's own books of work (runtime-commons pipeline spec, Sections 3.1 and 4): a store-level file beside
 `hook-calls.jsonl` (that file counts hook behavior, this one counts pipeline work), append-only, one JSON line per run of a step,
-written when the step ends. It carries no `cv` of its own, so it needs no capture bump. It is local: nothing uploads it.
+written when the step ends. It carries no `cv` of its own, so it needs no capture bump. It is local: no session command uploads it, and telemetry does not carry it.
 
 | Key | Class | Meaning |
 |-----|-------|---------|
