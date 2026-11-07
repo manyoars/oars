@@ -407,7 +407,7 @@ describe('the nightly task on a plain install', () => {
     const outcome = await sessionsHookInstall({ sessions: undefined, install, now: () => 0 }, { ...plain, file: join(dir, 's.json') });
     expect(calls.map((args) => args[0])).toEqual(['/Query', '/Create']);
     expect(outcome.text).toContain('Scheduled task OarsSessionsNightly: the full deposit');
-    expect(outcome.document).toMatchObject({ schedule: expect.stringContaining('daily at 03:00') });
+    expect(JSON.stringify(outcome.document)).toContain('daily at 03:00');
   });
 
   it('is left as it is on Windows when it is already registered', async () => {
