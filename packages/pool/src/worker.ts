@@ -7,6 +7,7 @@ import { answer, bound, brake, refuse, type Env } from './http.js';
 import { receivePart } from './parts.js';
 import { incrementsOf, incrementStatements, markOf, netCellCount, previousOf } from './ingest.js';
 import { accountOf, login } from './identity.js';
+import { rawRoute } from './raw.js';
 import { telemetry, type TelemetryEnv } from './telemetry.js';
 
 /** D1 holds at most 2 MB in one value. A body declaring more is refused unread, and one that declares nothing is measured before it is parsed. */
@@ -109,6 +110,8 @@ const decoded = (name: string): string => {
 export default {
   fetch: async (request: Request, env: Env & TelemetryEnv): Promise<Response> => {
     const { pathname } = new URL(request.url);
+    const raw = rawRoute(request, env);
+    if (raw !== undefined) return raw;
     if (request.method === 'POST') {
       if (pathname === '/v1/deposits') return deposit(request, env);
       // Not a deposit: it needs no covenant, and it is answered with deposits closed.
