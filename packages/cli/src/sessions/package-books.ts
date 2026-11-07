@@ -40,7 +40,7 @@ export interface PackageRow {
 
 export interface PackageBooks {
   rows: PackageRow[];
-  /** Pulled names outside the public list: how many names and calls, never the names. */
+  /** Pulled names outside the public list: how many names, and how many calls pulled any of them, never the names. */
   notPublic: { names: number; calls: number };
   /** What the A38 exclusion removed before any count. */
   excluded: { transcripts: number; calls: number };
@@ -77,14 +77,16 @@ export const packageBooks = (store: Store, excluded: ReadonlySet<string>, vocab:
   for (const record of [...store.sessions, ...store.subagents]) if (excluded.has(record.session) || excluded.has(record.parent ?? record.session)) transcripts.add(record.session);
   const removed = { transcripts: 0, calls: 0 };
   const public_ = new Map<string, Tally>();
-  const otherNames = new Map<string, number>();
+  const otherNames = new Set<string>();
+  const otherCalls = new Set<string>();
   for (const tool of store.tools) {
+    // The window applies first, so the exclusion counts cover the same calls as the rows.
+    if (cutoff !== undefined && (tool.ts === null || tool.ts < cutoff)) continue;
     if (excluded.has(tool.session) || excluded.has(tool.parent)) {
       transcripts.add(tool.session);
       removed.calls += 1;
       continue;
     }
-    if (cutoff !== undefined && (tool.ts === null || tool.ts < cutoff)) continue;
     const keys = new Set<string>();
     for (const pull of tool.pulls ?? []) {
       const resolved = resolvePull(pull);
@@ -97,7 +99,8 @@ export const packageBooks = (store: Store, excluded: ReadonlySet<string>, vocab:
     const failed = tool.status === 'error';
     for (const key of keys) {
       if (!isPublic(vocab, key)) {
-        otherNames.set(key, (otherNames.get(key) ?? 0) + 1);
+        otherNames.add(key);
+        otherCalls.add(`${tool.session}#${String(tool.n)}`);
         continue;
       }
       const row = public_.get(key) ?? tally();
@@ -132,7 +135,7 @@ export const packageBooks = (store: Store, excluded: ReadonlySet<string>, vocab:
       };
     })
     .sort((a, b) => a.package.localeCompare(b.package));
-  return { rows, notPublic: { names: otherNames.size, calls: [...otherNames.values()].reduce((sum, calls) => sum + calls, 0) }, excluded: removed };
+  return { rows, notPublic: { names: otherNames.size, calls: otherCalls.size }, excluded: removed };
 };
 
 const plural = (count: number, one: string): string => `${String(count)} ${one}${count === 1 ? '' : 's'}`;
