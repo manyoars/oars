@@ -40,9 +40,9 @@ rather than read row by row.
 | C26 | `packages/cli/README.md:182` | `oars pool deposit` sends nothing itself; with no sign-in, no acceptance, or an unreachable server the nightly sends nothing | `pool-command.ts:469` (deposit makes no request without `--send`), `pool-nightly.ts:38-50` | true |
 | C27 | `packages/cli/README.md:186` | a floor change is a pool deploy, never a new oars release | `pool/src/floors.ts` reads `PUBLIC_FLOOR` and `DISCLOSURE_FLOOR` bindings; `pool fetch` prints the bundle's floors | true |
 | C28 | `packages/client/README.md:4-5` | the client adds Authorization, User-Agent, and a fresh Idempotency-Key on a mutation | `packages/client/src/client.ts:12`: no Authorization header when no token is given | false ("every call") |
-| C29 | `docs/flags.md:3`, `:7` | "Since 0.4.0" / "as of 0.4.0" nothing waits behind a flag except the consent prompts | `packages/cli/package.json` version 0.3.0; 0.4.0 is not released | false (names an unreleased version as current) |
+| C29 | `docs/flags.md:3`, `:5` | "Since 0.4.0" / "as of 0.4.0" nothing waits behind a flag except the consent prompts | `packages/cli/package.json` version 0.3.0; 0.4.0 is not released | false (names an unreleased version as current) |
 | C30 | `docs/flags.md:12` | the pool commands reach `https://pool.manyoars.com` | as C1 | false (implies a live service) |
-| C31 | `docs/flags.md:27` | outbox before send, no automatic send: a batch is sent only by the hash `outbox` printed | `pool-nightly.ts:61` sends with `requireShown: false`: the nightly sends without a print | false |
+| C31 | `docs/flags.md:28` | outbox before send, no automatic send: a batch is sent only by the hash `outbox` printed | `pool-nightly.ts:61` sends with `requireShown: false`: the nightly sends without a print | false |
 | C32 | `docs/flags.md:30` | the fetch cap is how a deposit buys access | `pool/src/bundle.ts:77-79`: an account with access has no cap; "A deposit that counts lifts the cap"; no money changes hands | false wording (no buying exists) |
 | C33 | `docs/flags.md:32` | nothing in this repository charges, buys, or sells | no payment, price, or checkout code in `packages/` (grep: none) | true |
 | C34 | `docs/telemetry.md:9` | the spool folder never holds more than 2 MiB | `spool.ts:9`, `:62`: each spool file stays under 1 MiB, but the folder also holds `install-id`, `settings.json`, and `last-send` | false (the cap is on the two spool files) |
@@ -63,3 +63,30 @@ rather than read row by row.
 | C49 | `CHANGELOG.md:13` | one send lock per outbox, so two runs never post one batch twice | t884 report residual: two waiters that clear a dead guard at once can both take over | cannot back ("never") |
 | C50 | `CHANGELOG.md:51` | telemetry is sent now, to the Many Oars pool | as C4 | false (pool not deployed) |
 | C51 | `CHANGELOG.md:26-28` | the t902 `usageObserved` bullet appears three times | `CHANGELOG.md:26-28`: each line is a prefix of the next (a union-merge leftover) | false (duplicate entry) |
+
+## Changes
+
+Every claim marked false, misleading, or cannot back above was rewritten to what the code does, or cut. "Not deployed yet" is
+stated wherever the default pool or `login.manyoars.com` is named as a destination (lead 208).
+
+| Claims | Change |
+|--------|--------|
+| C1, C25, C30 | the pool is named as the default destination, "which is not deployed yet", with the exit code a request gets |
+| C4, C15, C35, C50 | telemetry "sends to the pool server in `OARS_POOL_URL`, else to the Many Oars pool ... not deployed yet, so a send fails and the events stay in the spool" |
+| C5 | "the nightly task (registered on Windows only)" |
+| C6, C31, C48 | the outbox prints what is queued; the nightly task builds and sends new batches in the same run without printing them first |
+| C7, C17 | the unredacted `raw/` files stay; after a yes to the raw prompt the nightly task uploads a redacted copy of each |
+| C8 | the uninstall steps add `<config>/oars/telemetry/` and `<config>/oars/credentials.json`; "Nothing else is created" is cut |
+| C12 | the 90-day default is cut: `--expires-in-days` takes 1 to 365, else the platform sets the expiry, shown by `keys list` |
+| C18 | scoped to `oars sessions` commands, and names the fields that leave in pool skeletons |
+| C20 | the "Budget" column is now the timeout install writes (5 s, 5 s, 5 s, 30 s) |
+| C21 | the 250 ms figure is cut |
+| C28 | "up to three headers": Authorization only when a token is given |
+| C29 | "on `main` after 0.3.0 (not yet in a release)" |
+| C32 | "a deposit that counts gives the account access, and an account with access has no fetch cap" |
+| C34 | "the two spool files together hold at most 2 MiB" |
+| C40 | the store makes no network call; `oars pool` and the nightly task send what is built from it; telemetry carries counts and sizes |
+| C41 | the one-machine figures are cut; the three code behaviors the reading led to stay |
+| C42 | the section is "What the gate does not do": no pool read, no sign-in, no way to send a crossing |
+| C49 | "wait for each other instead of posting one batch twice", with the one case t884 left open |
+| C51 | the two shorter copies of the t902 bullet are removed |

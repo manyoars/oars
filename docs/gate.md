@@ -133,16 +133,12 @@ A command run from a script, alias, or Makefile; a manifest edit a later bare in
 
 ## Measured
 
-One run over a real harness folder on a Windows box (with `--no-registry-state`, an empty store): 9,139 transcripts across about a month (2026-10-01 to 2026-11-04), 534,097 calls, 25,167 crossings, in 160 seconds, peak resident memory 439 MB. By class and form: `mcp-server` 21,761, `npm-package` `fetch-and-run` 2,141, `skill` `skill-call` 1,062, `npm-package` `install` 120, `python-package` `install` 83; none of the URL forms, and no `npx skills add`, appeared. Commands counted under "replay cannot see": 1,033 pipes into a shell, 210 lockfile-only installs, 129 `local-path`, 19 `variable-name`, 1 `unreadable-name`.
+The figures once quoted here came from one run over one machine's harness folder and cannot be reproduced from this repository, so they are removed. What reading that run changed in the code stands:
 
-Against the store's `raw/` archive of the same folders, the harness folder held every transcript but one, so the harness folder alone answers the same questions. About 200 workflow `journal.jsonl` files sit beside the transcripts and are not read.
+- A package crossing's `origin` is the first place the name is mentioned, as a word, so a short brand-like name that also appears in prose reads as a mention.
+- An `npx` fetch-and-run whose bin its folder's `node_modules/.bin` holds is recorded as `local-bin-run`. A replay reads the folder as it is on the day it runs: a bin removed since reads as a fetch, and a folder that is gone reads as a fetch.
+- An MCP server the harness listed only as `mcp__<server>__<tool>` names no longer reads `tool-output` as its `origin`, and an MCP action's own "unknown tool" no longer reads as the server not existing.
 
-Read by hand (30 crossings drawn at random from sessions that pass the exclusion check, plus 16 drawn by form): the class and form matched what the command said in all of them. Three other readings did not hold:
+## What the gate does not do
 
-- A package crossing's `origin` is the first place the name is mentioned, as a word. A short brand-like name that also appears in prose reads as a mention (one `repo-file` origin in 30 was a product name in a plan).
-- Of the 926 main-session `npx` fetch-and-run crossings, 839 name a bin their folder's `node_modules/.bin` held when this was measured (54 do not, and 33 ran in a folder that is gone): 94 percent of those whose folder still exists. Those most likely ran a local tool and fetched nothing, so they are now recorded as `local-bin-run`. A replay reads the folder as it is on the day it runs: a bin removed since reads as a fetch, and a folder that is gone reads as a fetch.
-- An MCP server's `origin` read `tool-output` when the harness listed it only as `mcp__<server>__<tool>` names, and an MCP action's own "unknown tool" read as the server not existing. Both are fixed.
-
-## Not in this release
-
-Pool reads, sign-in, deposit prompts, any opt-in to send a crossing anywhere, and any committed or managed-settings hook. Installing the hook for real stays the operator's call.
+The gate reads nothing from a pool, needs no sign-in, and has no way to send a crossing anywhere; it installs no committed or managed-settings hook. Installing the hook stays the operator's call.
