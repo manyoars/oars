@@ -3,11 +3,12 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import type { Outcome, RunDeps } from '../cli.js';
+import { emitOf } from '../telemetry/emit.js';
 import { CliError, exitCodeForProblem, ExitCode, unreachableError } from '../errors.js';
 import { compileAllow } from './allow.js';
 import { checkSession, exclusionPaths, lastWritten, type Reason } from './exclusion.js';
 import { recordSend, recordWire, newTally, tallyBatch } from '../telemetry/wire.js';
-import { discardStale, FIELD_ROWS, fieldsOf, heldBatches, isMissing, lockedBatch, markShown, outboxFolder, removeBatchesExcept, removeBatchOf, staleBatches, unchangedBytes, writeBatch, type LockRefusal } from './pool-outbox.js';
+import { discardStale, FIELD_ROWS, fieldsOf, heldBatches, isMissing, lockedBatch, markShown, outboxFolder, partsOf, removeBatchesExcept, removeBatchOf, staleBatches, unchangedBytes, writeBatch, type LockRefusal } from './pool-outbox.js';
 import { HARNESSES, hasEnded, SESSION_IDLE_HOURS, isBundleVersion, isHarness, parseSkeleton, sessionsOf, skeletonOf, VOCAB_VERSION, verifyBundle, type Bundle, type BundleFloors, type PinnedKey, type SessionRecords, type TranscriptRoot } from './pool-wire.js';
 import { carriedDeltas, markDeltasSent, placedOf, sentDeltas } from './pool-delta.js';
 import { Masker, printed, TRANSPORT_HEADERS, waitWords, type Outgoing } from './pool-print.js';
@@ -133,6 +134,8 @@ interface Call {
   /** A body already serialized, sent as it is: a batch from the outbox, whose bytes were hashed and printed. */
   bytes?: string;
   token?: string;
+  /** One part of a batch sent in several: its position (from 1), how many there are, and the SHA-256 of the whole batch, which is what keeps the parts one deposit. */
+  part?: { index: number; count: number; batch: string };
   /** The ETag of the bundle already kept, so the pool can answer 304 with no bundle. */
   ifNoneMatch?: string;
   /** Set for a command that prints what it sends: the print comes first, with these secrets masked. */
@@ -147,6 +150,7 @@ const outgoing = (deps: RunDeps, server: string, path: string, init: Call): Outg
   const headers: Array<[string, string]> = [['user-agent', `oars/${deps.version}`], ['accept', 'application/json']];
   if (init.token !== undefined) headers.push(['authorization', `Bearer ${init.token}`]);
   // Node's `fetch` writes `cache-control` and `pragma` itself whenever `if-none-match` is set, so they are named here to be printed.
+  if (init.part !== undefined) headers.push(['oars-part', `${String(init.part.index)}/${String(init.part.count)}`], ['oars-batch', init.part.batch]);
   if (init.ifNoneMatch !== undefined) headers.push(['if-none-match', init.ifNoneMatch], ['cache-control', 'no-cache'], ['pragma', 'no-cache']);
   const body = init.bytes ?? (init.body === undefined ? undefined : JSON.stringify(init.body));
   if (body !== undefined) headers.push(['content-type', 'application/json']);
@@ -365,6 +369,12 @@ const lockMessages: { [code in LockRefusal]: string } = {
   batch_changed: 'That batch changed on disk after it was printed, or since it was written, so it was not sent. Run oars pool deposit to build it again, then oars pool outbox to print it.',
 };
 
+/** The calls one batch takes, in order: one, or one per part when it is past a request's bytes. `outbox` prints these and `deposit --send` sends these, so what is printed is what is sent. */
+const callsOf = (token: string, bytes: string, hash: string): Call[] => {
+  const parts = partsOf(bytes);
+  return parts.map((piece, at) => ({ token, bytes: piece, ...(parts.length === 1 ? {} : { part: { index: at + 1, count: parts.length, batch: hash } }) }));
+};
+
 /** `deposit --send <hash>`: the lock, then (only when a sender is given) the covenant and the request. The body is read and hashed again just before the request. */
 const sendBatch = async (deps: RunDeps, options: { outbox: string; server: string; token: string; hash: string; acceptCovenant: string | undefined; via: Sender | undefined }): Promise<Outcome> => {
   const { outbox, server, token, hash, via } = options;
@@ -384,12 +394,21 @@ const sendBatch = async (deps: RunDeps, options: { outbox: string; server: strin
     const title = lockMessages.batch_changed;
     throw new CliError(title, ExitCode.CONFLICT, DEPOSIT, { code: 'batch_changed', title, status: 409 });
   }
-  let reply = await ask(deps, DEPOSIT, server, POOL_DEPOSITS, { token, bytes }, via);
-  for (let attempt = 1; attempt < SEND_ATTEMPTS && reply.status === 409 && isObject(reply.body) && textIn(reply.body, 'error') === DEPOSIT_CONFLICT; attempt += 1) {
-    reply = await ask(deps, DEPOSIT, server, POOL_DEPOSITS, { token, bytes }, via);
+  // A batch past one request's bytes goes in parts, in order, each answered 202 until the last completes the deposit with 201. A part sent again is harmless, so the retry below covers every part alike.
+  const calls = callsOf(token, bytes, hash);
+  for (const [at, call] of calls.entries()) {
+    let reply = await ask(deps, DEPOSIT, server, POOL_DEPOSITS, call, via);
+    for (let attempt = 1; attempt < SEND_ATTEMPTS && reply.status === 409 && isObject(reply.body) && textIn(reply.body, 'error') === DEPOSIT_CONFLICT; attempt += 1) {
+      reply = await ask(deps, DEPOSIT, server, POOL_DEPOSITS, call, via);
+    }
+    // 201 on any part means the deposit already finished (this part is a retry), so the rest need not be sent.
+    const ended = reply.status !== 202 || at === calls.length - 1;
+    // One send event per batch, on the reply that ends it, whatever number of parts it took.
+    if (ended) recordSend(deps, { status: reply.status, code: isObject(reply.body) ? textIn(reply.body, 'error') : undefined, bytes: Buffer.byteLength(bytes) });
+    if (reply.status === 201) break;
+    if (ended) throw refusal(DEPOSIT, reply);
   }
-  recordSend(deps, { status: reply.status, code: isObject(reply.body) ? textIn(reply.body, 'error') : undefined, bytes: Buffer.byteLength(bytes) });
-  if (reply.status !== 201) throw refusal(DEPOSIT, reply);
+  emitOf(deps)('deposit', { step: 'send', sent: 1, bytes: Buffer.byteLength(bytes) });
   return { document: { ok: true, server, hash, sent: true }, text: `Sent batch ${hash} to ${server}.` };
 };
 
@@ -414,6 +433,8 @@ export const poolDeposit = async (deps: RunDeps, options: { server?: string | un
   const discarded = await discardStale(outbox);
   const counts: DepositCounts = { sessions: 0, batched: 0, excluded: { folder: 0, term: 0, noRaw: 0, noTerms: 0, unreadable: 0 }, uncaptured: 0, notEnded: 0, refused: 0, refusedFields: [], discarded, withdrawn: 0 };
   const built = new Set<string>();
+  // The bytes of the batches written in this pass: telemetry counts them, and the command's own document does not carry them.
+  let builtBytes = 0;
   const wireTally = newTally();
   const refusedFields = new Set<string>();
   const roots = new Map<string, TranscriptRoot>((await readSkeletons(runtime.storeDir, undefined, true)).skeletons.map(({ session, merkleRoot, leaves }) => [session, { merkleRoot, leaves }]));
@@ -466,7 +487,7 @@ export const poolDeposit = async (deps: RunDeps, options: { server?: string | un
       await withdraw(key);
       continue;
     }
-    await writeBatch(outbox, key, parsed.skeleton);
+    builtBytes += (await writeBatch(outbox, key, parsed.skeleton)).bytes;
     tallyBatch(wireTally, parsed.skeleton);
     await markDeltasSent(outbox, delta?.marks ?? []);
     built.add(key);
@@ -477,6 +498,8 @@ export const poolDeposit = async (deps: RunDeps, options: { server?: string | un
   counts.refusedFields = [...refusedFields].sort();
   recordWire(deps, wireTally);
   const { folder, term, noRaw, noTerms, unreadable } = counts.excluded;
+  // Counts only: how many sessions each gate kept out, never a folder, a term, or a name.
+  emitOf(deps)('deposit', { step: 'build', sessions: counts.sessions, batched: counts.batched, bytes: builtBytes, excludedFolder: folder, excludedTerm: term, excludedNoRaw: noRaw, excludedNoTerms: noTerms, excludedUnreadable: unreadable, notEnded: counts.notEnded, uncaptured: counts.uncaptured, refused: counts.refused, withdrawn: counts.withdrawn, discarded });
   const lines = [
     `Wrote ${String(counts.batched)} of ${String(counts.sessions)} sessions to the outbox for ${server}. Nothing was sent.`,
     `Kept out by the session gates, never built: ${String(folder)} in a folder not on the allowlist, ${String(term)} for a term, ${String(noRaw)} with no raw to scan, ${String(noTerms)} with no term file, ${String(unreadable)} unreadable.`,
@@ -502,7 +525,7 @@ const explained = (bytes: string): { [field: string]: string } => {
   return rows;
 };
 
-/** `oars pool outbox`: prints each batch as it would be sent, the request line and every header included, with the bearer credential as its size and nothing else masked, then its SHA-256, and records that it was shown. `--explain` adds each field's rule. */
+/** `oars pool outbox`: prints each batch as it would be sent (a batch past one request prints each part's request, in order), the request line and every header included, with the bearer credential as its size and nothing else masked, then its SHA-256, and records that it was shown. `--explain` adds each field's rule. */
 export const poolOutbox = async (deps: RunDeps, options: { server?: string | undefined; explain?: boolean | undefined }): Promise<Outcome> => {
   const runtime = runtimeOf(deps);
   const server = poolServer(deps.env, OUTBOX, options.server);
@@ -514,7 +537,9 @@ export const poolOutbox = async (deps: RunDeps, options: { server?: string | und
   const shown: Array<{ hash: string; request: string; fields?: { [field: string]: string } }> = [];
   for (const batch of batches) {
     const fields = options.explain === true ? explained(batch.bytes) : undefined;
-    shown.push({ hash: batch.hash, request: printed(outgoing(deps, server, POOL_DEPOSITS, { token, bytes: batch.bytes }), masker), ...(fields === undefined ? {} : { fields }) });
+    // A batch past one request prints every part's request, in the order they are sent.
+    const request = callsOf(token, batch.bytes, batch.hash).map((call) => printed(outgoing(deps, server, POOL_DEPOSITS, call), masker)).join('\n');
+    shown.push({ hash: batch.hash, request, ...(fields === undefined ? {} : { fields }) });
   }
   for (const { hash } of shown) await markShown(outbox, hash, deps.now());
   const stale = await staleBatches(outbox);
@@ -600,20 +625,33 @@ export const poolFetch = async (deps: RunDeps, options: { server?: string | unde
   const credential = new Masker();
   credential.add(token);
   const reply = await ask(deps, FETCH, server, `/bundle/${harness}/${encodeURIComponent(harnessVersion)}/${encodeURIComponent(VOCAB_VERSION)}`, { token, show: credential, ...(kept?.etag === undefined ? {} : { ifNoneMatch: kept.etag }) });
-  if (reply.status === 429) throw cappedError(deps, reply, kept !== undefined);
+  const emit = emitOf(deps);
+  if (reply.status === 429) {
+    emit('fetch', { harness, fetches: 1, capHits: 1 });
+    throw cappedError(deps, reply, kept !== undefined);
+  }
   if (reply.status === 304) {
     // A 304 answers an If-None-Match, so one to a fetch that sent none is a pool that has lost track of what it was asked.
-    if (kept?.etag === undefined) throw new CliError('The pool answered 304 to a fetch that named no kept bundle.', ExitCode.UNEXPECTED, FETCH);
+    if (kept?.etag === undefined) {
+      emit('fetch', { harness, fetches: 1 });
+      throw new CliError('The pool answered 304 to a fetch that named no kept bundle.', ExitCode.UNEXPECTED, FETCH);
+    }
     const { cells, motifs, reads, asOf, floors } = kept.bundle;
+    emit('fetch', { harness, fetches: 1, etagHits: 1, reads: reads.length });
     return {
       document: { ok: true, server, harness, harnessVersion, file, unchanged: true, cells: cells.length, motifs: motifs.length, reads: reads.length, asOf, ...(floors === undefined ? {} : { floors }) },
       text: `${harness} ${harnessVersion} is unchanged: the bundle at ${file} is still current (${String(reads.length)} reads, ${String(cells.length)} cells, and ${String(motifs.length)} motifs).${floorSentence(floors)}`,
     };
   }
-  if (reply.status !== 200) throw refusal(FETCH, reply);
+  // A refused fetch and a bundle that fails verification both reached the pool, so each is a fetch; only the success adds reads.
+  if (reply.status !== 200) {
+    emit('fetch', { harness, fetches: 1 });
+    throw refusal(FETCH, reply);
+  }
   const verified = await verifyBundle(reply.body, signingKey, harness, harnessVersion);
   if (!verified.ok) {
     const title = `Refused the bundle: ${verified.reason}.`;
+    emit('fetch', { harness, fetches: 1 });
     throw new CliError(title, ExitCode.INVALID, FETCH, { code: 'bundle_unverified', title });
   }
   const etag = reply.headers.get('etag');
@@ -621,6 +659,7 @@ export const poolFetch = async (deps: RunDeps, options: { server?: string | unde
   await writeFile(file, `${JSON.stringify({ ...(isObject(reply.body) ? reply.body : {}), ...(etag === null ? {} : { etag }) })}
 `);
   const { cells, motifs, reads, asOf, floors } = verified.bundle;
+  emit('fetch', { harness, fetches: 1, reads: reads.length });
   return {
     document: { ok: true, server, harness, harnessVersion, file, unchanged: false, cells: cells.length, motifs: motifs.length, reads: reads.length, asOf, ...(floors === undefined ? {} : { floors }) },
     text: `Fetched ${harness} ${harnessVersion}: ${String(reads.length)} reads, ${String(cells.length)} cells, and ${String(motifs.length)} motifs, verified against the pinned key and kept at ${file}.${floorSentence(floors)}`,

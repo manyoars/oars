@@ -5,6 +5,8 @@
 import { appendFile, mkdir } from 'node:fs/promises';
 import { createInterface } from 'node:readline';
 import { servedPool } from './pool.js';
+import { noEmit, type Emit } from '../telemetry/emit.js';
+import { recallFields } from '../telemetry/fields.js';
 import { appendRecall } from './recall-object.js';
 import { formsRefusal, pull, pullRefusal, RECALL_FAMILIES, type PullInput } from './recall-reads.js';
 import { MISS_TEXT } from './recall-render.js';
@@ -84,7 +86,7 @@ const reply = (id: unknown, result: object): object => ({ jsonrpc: '2.0', id, re
 const failure = (id: unknown, code: number, message: string): object => ({ jsonrpc: '2.0', id, error: { code, message } });
 
 /** Answers one JSON-RPC message; a notification (no `id`) gets no answer. */
-export const handleMessage = async (runtime: SessionsRuntime, now: () => number, message: unknown): Promise<object | undefined> => {
+export const handleMessage = async (runtime: SessionsRuntime, now: () => number, message: unknown, emit: Emit = noEmit): Promise<object | undefined> => {
   if (!isObj(message) || typeof message.method !== 'string') return failure(isObj(message) ? message.id : null, -32600, 'Invalid request');
   const { id, method } = message;
   if (id === undefined) return undefined;
@@ -118,6 +120,7 @@ export const handleMessage = async (runtime: SessionsRuntime, now: () => number,
         await appendFile(paths(runtime.storeDir).calls, `${JSON.stringify(call)}\n`, { mode: 0o600 });
       });
       await tryLog(() => appendRecall(runtime.storeDir, result.recall));
+      emit('recall', recallFields(result.recall, result.reads.map((read) => read.family), result.legacy !== undefined));
       // An agent reads this, so it gets the rendered counts and the structured recall, and no signature text.
       const { answer, id: recallId, evidence } = result.recall;
       return reply(id, { content: [{ type: 'text', text: answer.rendered === '' ? MISS_TEXT : answer.rendered }], structuredContent: { recallId, kind: answer.kind, reads: answer.reads, evidence } });
@@ -130,7 +133,7 @@ export const handleMessage = async (runtime: SessionsRuntime, now: () => number,
 };
 
 /** Reads requests from `runtime.stdin` until it ends, writing one response line per request to `runtime.stdout`. */
-export const serve = async (runtime: SessionsRuntime, now: () => number): Promise<void> => {
+export const serve = async (runtime: SessionsRuntime, now: () => number, emit: Emit = noEmit): Promise<void> => {
   const lines = createInterface({ input: runtime.stdin, crlfDelay: Infinity });
   for await (const line of lines) {
     if (line.trim() === '') continue;
@@ -141,7 +144,7 @@ export const serve = async (runtime: SessionsRuntime, now: () => number): Promis
       runtime.stdout.write(`${JSON.stringify(failure(null, -32700, 'Parse error'))}\n`);
       continue;
     }
-    const answer = await handleMessage(runtime, now, parsed);
+    const answer = await handleMessage(runtime, now, parsed, emit);
     if (answer !== undefined) runtime.stdout.write(`${JSON.stringify(answer)}\n`);
   }
 };
