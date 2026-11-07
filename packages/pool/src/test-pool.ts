@@ -152,7 +152,8 @@ const generatedKey = async (): Promise<{ jwk: string; x: string }> => {
   return { jwk: JSON.stringify(jwk), x: jwk.x ?? '' };
 };
 
-export const startPool = async (bindings: { [name: string]: string } = {}): Promise<TestPool> => {
+/** `raw: false` leaves the R2 binding out, the way a pool deployed before its bucket exists looks. */
+export const startPool = async (bindings: { [name: string]: string } = {}, options: { raw?: boolean } = {}): Promise<TestPool> => {
   const bundled = await build({ entryPoints: [fileIn('./worker.ts')], bundle: true, write: false, format: 'esm', platform: 'node', conditions: ['workerd', 'worker'], external: ['node:*'] });
   const contents = bundled.outputFiles[0]?.text;
   if (contents === undefined) throw new Error('the bundle is empty');
@@ -165,7 +166,7 @@ export const startPool = async (bindings: { [name: string]: string } = {}): Prom
     compatibilityDate: config.compatibilityDate,
     compatibilityFlags: config.compatibilityFlags,
     d1Databases: { DB: 'pool-test' },
-    r2Buckets: { RAW: 'oars-pool-raw' },
+    ...(options.raw === false ? {} : { r2Buckets: { RAW: 'oars-pool-raw' } }),
     bindings: { PSEUDONYM_KEY: 'a-test-pseudonym-key', BUNDLE_SIGNING_KEY: key.jwk, COVENANT_VERSION: 'v1', FETCH_CAP: '1000', ...bindings },
     outboundService: stub.outbound,
   });

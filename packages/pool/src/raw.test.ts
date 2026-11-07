@@ -6,17 +6,21 @@ const MEGABYTE = 1024 * 1024;
 
 let pool: TestPool;
 let closed: TestPool;
+let unbound: TestPool;
 let next = 9000;
 
 beforeAll(async () => {
   pool = await startPool();
   // An empty COVENANT_VERSION counts as unset: this pool keeps deposits closed.
   closed = await startPool({ COVENANT_VERSION: '' });
+  // A pool deployed before its bucket exists: everything else is configured, RAW is not.
+  unbound = await startPool({}, { raw: false });
 }, 60_000);
 
 afterAll(async () => {
   await pool.dispose();
   await closed.dispose();
+  await unbound.dispose();
 });
 
 /** Bytes that hit every value, so a part cut at the wrong place or a text round trip shows. */
@@ -114,6 +118,19 @@ describe('what the raw tier refuses', () => {
     const done = await closed.send(`/v1/raw/${hash}/complete`, { method: 'POST', body: JSON.stringify({ parts: 1, bytes: 100 }) }, token, grant);
     expect(fieldOf(done.json, 'error')).toBe('deposits_closed');
     expect(await keysIn('', closed)).toEqual([]);
+  });
+
+  it('answers 503 not_configured, naming RAW, while the pool has no RAW binding', async () => {
+    const { token, account } = await member(unbound);
+    const part = await unbound.send(partPath(hash, 1), { method: 'PUT', body }, token, grant);
+    expect(part.status).toBe(503);
+    expect(fieldOf(part.json, 'error')).toBe('not_configured');
+    expect(textOf(part.json, 'message')).toContain('RAW');
+    const done = await unbound.send(`/v1/raw/${hash}/complete`, { method: 'POST', body: JSON.stringify({ parts: 1, bytes: 100 }) }, token, grant);
+    expect(done.status).toBe(503);
+    expect(fieldOf(done.json, 'error')).toBe('not_configured');
+    expect(textOf(done.json, 'message')).toContain('RAW');
+    expect(((await (await unbound.db()).prepare('SELECT * FROM raw_objects WHERE account = ?').bind(account).all()).results)).toEqual([]);
   });
 
   it('refuses a request with no sign-in', async () => {
