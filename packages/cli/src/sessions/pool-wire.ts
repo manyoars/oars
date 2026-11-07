@@ -1394,14 +1394,18 @@ const isSourced = (value: unknown): value is Sourced =>
 
 const isCount = (value: unknown): value is number => typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
 
-/** The set of four a bundle may carry: every field the `books` read prints is present and of its type, so a signed bundle with a malformed block reads as not a bundle, not as a crash in the printer. */
+/** The set of four a bundle may carry: every field the `books` read prints is present and of its type, with its format, vocabulary version, and the two served lists checked as well, so a signed bundle with a malformed block reads as not a bundle, not as a crash in the printer. */
 const isBooks = (value: unknown): value is Books =>
   isFields(value) &&
   isFloor(value.floor) &&
+  value.format === BUNDLE_FORMAT &&
+  typeof value.vocabVersion === 'string' &&
   isFields(value.asOf) &&
   (value.asOf.day === null || typeof value.asOf.day === 'string') &&
   isFields(value.served) &&
   isCount(value.served.total) &&
+  Array.isArray(value.served.byWeek) &&
+  Array.isArray(value.served.byTuple) &&
   isCount(value.backlog) &&
   isSourced(value.panel) &&
   (value.panelDay === null || typeof value.panelDay === 'string') &&
