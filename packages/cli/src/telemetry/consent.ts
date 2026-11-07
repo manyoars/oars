@@ -6,7 +6,7 @@ import { spoolPaths } from './spool.js';
 /** Printed once on stderr, on the first run that is not a hook; also what `oars telemetry on` prints. */
 export const NOTICE = [
   'oars records how it is used, on this machine: one event per command with its path, flag names (never their values), how long it took, the exit code, and the class of any error, each with a random install id, the oars version, the OS, and the time.',
-  'It never records session content, prompts, file paths, URLs, arguments, or anything you typed. The events will be sent in batches by a later release, to the Many Oars pool or the pool server you name; until then they stay in the spool.',
+  'It never records session content, prompts, file paths, URLs, arguments, or anything you typed. The events are sent in batches to the Many Oars pool or the pool server in OARS_POOL_URL, and only there.',
   'See exactly what is kept: oars telemetry show. Turn it off: oars telemetry off, or set OARS_TELEMETRY=0 or DO_NOT_TRACK=1. More: docs/telemetry.md.',
 ].join('\n');
 

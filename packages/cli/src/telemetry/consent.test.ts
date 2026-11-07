@@ -81,7 +81,7 @@ describe('the notice', () => {
   });
 
   it('says what is recorded, what is never recorded, what is sent and where, and every switch', () => {
-    for (const phrase of ['flag names', 'install id', 'oars version', 'never', 'Many Oars pool', 'pool server you name', 'oars telemetry show', 'oars telemetry off', 'OARS_TELEMETRY=0', 'DO_NOT_TRACK=1']) expect(NOTICE).toContain(phrase);
+    for (const phrase of ['flag names', 'install id', 'oars version', 'never', 'Many Oars pool', 'pool server in OARS_POOL_URL', 'oars telemetry show', 'oars telemetry off', 'OARS_TELEMETRY=0', 'DO_NOT_TRACK=1']) expect(NOTICE).toContain(phrase);
   });
 });
 
