@@ -665,6 +665,22 @@ describe('Paginated rollouts', () => {
     expect(out.errorLines.map((entry) => entry.line)).toEqual(['server unavailable', 'no such note']);
   });
 
+  it('settles a declared dynamic tool from its DynamicToolCall item (items.rs:301-322, dynamic.rs:246-262), and leaves one with no item unsettled', () => {
+    begin();
+    const dynamic = (second: number, id: string, rest: object) => done(second, { type: 'DynamicToolCall', id, tool: 'lookup', arguments: {}, ...rest });
+    const out = extractOf([
+      pmeta({ dynamic_tools: [{ name: 'lookup' }] }),
+      call(2, 'd1', 'lookup'),
+      dynamic(3, 'd1', { status: 'failed', success: false, error: { message: 'lookup backend down' } }),
+      call(4, 'd2', 'lookup'),
+      dynamic(5, 'd2', { status: 'completed', success: true }),
+      call(6, 'd3', 'lookup'),
+      ord(line(T(7), 'response_item', { type: 'function_call_output', call_id: 'd3', output: 'text' })),
+    ]);
+    expect(out.tools.map((tool) => tool.status)).toEqual(['error', 'ok', 'none']);
+    expect(out.errorLines.map((entry) => entry.line)).toEqual(['lookup backend down']);
+  });
+
   it('ignores an item_completed item it has no use for (a Plan) without failing', () => {
     begin();
     const lines = rolloutLines(asText([pmeta(), done(2, { type: 'Plan', id: 'x', text: 'steps' })]), 's');
@@ -827,6 +843,66 @@ describe('Paginated rollouts', () => {
           'codex',
         );
         expect(out.tools.find((tool) => tool.steps?.[0]?.native === 'exec_command')?.durationMs).toBe(1000);
+      });
+
+      it('settles the cell as an error when its wait reads Script failed', () => {
+        begin();
+        const out = extractOf(
+          [
+            pmeta({ cli_version: '0.167.0' }),
+            cell(2, 'c1', 'text(await tools.exec_command({cmd:"boom"}));\n'),
+            cellOut(3, 'c1', ['Script running with cell ID 14\nWall time 1 seconds\nOutput:\n']),
+            call(4, 'w1', 'wait', { arguments: JSON.stringify({ cell_id: 14, max_tokens: 1000, yield_time_ms: 1000 }) }),
+            ord(shellOut(5, 'w1', [{ type: 'input_text', text: 'Script failed\nWall time 1 seconds\nOutput:\n' }, { type: 'input_text', text: 'Script error:\nexec_command failed: boom' }])),
+          ],
+          'codex',
+        );
+        expect(out.tools.map((tool) => tool.status)).toEqual(['error', 'error']);
+        expect(out.errorLines.map((entry) => entry.line)).toEqual(expect.arrayContaining(['exec_command failed: boom']));
+      });
+
+      it('reads a Script failed output with no Script error part as the literal Script failed', () => {
+        begin();
+        const out = extractOf([pmeta({ cli_version: '0.167.0' }), cell(2, 'c1', 'oops();\n'), cellOut(3, 'c1', ['Script failed\nWall time 0.1 seconds\nOutput:\n'])], 'codex');
+        expect(out.tools.map((tool) => tool.status)).toEqual(['error']);
+        expect(out.errorLines.map((entry) => entry.line)).toEqual(['Script failed']);
+      });
+
+      it('keeps an item no call owns that has no exit_code as a Bash call with no outcome', () => {
+        begin();
+        const out = extractOf([pmeta({ cli_version: '0.167.0' }), item(2, 'exec-9', 'sleep 100', { status: 'completed' })], 'codex');
+        expect(out.tools.map((tool) => [tool.status, tool.steps?.[0]?.native])).toEqual([['none', 'exec_command']]);
+      });
+
+      it('keeps cell ids and unified-exec session ids apart: a wait on cell 9 does not settle exec_command session 9', () => {
+        begin();
+        const out = extractOf(
+          [
+            pmeta({ cli_version: '0.167.0' }),
+            cell(2, 'c1', 'text(await tools.exec_command({cmd:"sleep 30"}));\n'),
+            cellOut(3, 'c1', ['Script running with cell ID 9\nWall time 1 seconds\nOutput:\n']),
+            call(4, 'u1', 'exec_command', { arguments: JSON.stringify({ cmd: 'sleep 100' }) }),
+            ord(shellOut(5, 'u1', 'Chunk ID: ab12\nWall time: 0.0100 seconds\nProcess running with session ID 9\nOriginal token count: 3\nOutput:\n')),
+            call(6, 'w1', 'wait', { arguments: JSON.stringify({ cell_id: 9, max_tokens: 1000, yield_time_ms: 1000 }) }),
+            ord(shellOut(7, 'w1', [{ type: 'input_text', text: 'Script completed\nWall time 1 seconds\nOutput:\ndone' }])),
+          ],
+          'codex',
+        );
+        expect(out.tools.map((tool) => tool.status)).toEqual(['ok', 'none', 'ok']);
+      });
+
+      it('reads a Script line below the first as ordinary shell output, not a cell outcome', () => {
+        begin();
+        const out = extractOf(
+          [
+            pmeta({ cli_version: '0.167.0' }),
+            call(2, 'u1', 'exec_command', { arguments: JSON.stringify({ cmd: 'x' }) }),
+            ord(shellOut(3, 'u1', 'Chunk ID: ab12\nScript completed\nProcess exited with code 1\nOutput:\nboom')),
+          ],
+          'codex',
+        );
+        expect(out.tools.map((tool) => tool.status)).toEqual(['error']);
+        expect(out.errorLines.map((entry) => entry.line)).toEqual(['boom']);
       });
 
       it('holds every verify invariant, including --strict, for the deposited fixture', async () => {
