@@ -252,6 +252,8 @@ describe('sign-in rows', () => {
 
 describe('logout and the live-credential cap (S8)', () => {
   const LIVE_CAP = 5;
+  /** Whether the pool knows the credential: a bundle route answers 401 to a stranger before it looks at anything else, and 400 (a harness it does not serve) to a person it knows. */
+  const accepted = async (token: string): Promise<boolean> => (await pool.get('/bundle/none/0/0', token)).status !== 401;
 
   it('revokes the presented credential: 204, and the same credential is then unknown', async () => {
     const { token, account } = await pool.signIn('github', stubUser('501'));
@@ -259,12 +261,12 @@ describe('logout and the live-credential cap (S8)', () => {
     expect(await pool.send('/v1/login', { method: 'DELETE' }, token)).toMatchObject({ status: 204, json: null });
     expect(await pool.send('/v1/login', { method: 'DELETE' }, token)).toMatchObject({ status: 401, json: { error: 'unauthorized' } });
     // The credential signs nobody in anywhere else: a read that needs an account answers the same 401.
-    expect((await pool.get('/v1/covenant', token)).status).toBe(401);
+    expect(await accepted(token)).toBe(false);
     // Only that credential went: the account's next one, and another account's, still work.
     const again = await pool.signIn('github', stubUser('501'));
     expect(again.account).toBe(account);
-    expect((await pool.get('/v1/covenant', again.token)).status).toBe(200);
-    expect((await pool.get('/v1/covenant', other.token)).status).toBe(200);
+    expect(await accepted(again.token)).toBe(true);
+    expect(await accepted(other.token)).toBe(true);
   });
 
   it('answers the usual 401 JSON for a credential the pool never issued, and for none', async () => {
@@ -276,12 +278,11 @@ describe('logout and the live-credential cap (S8)', () => {
     const bystander = await pool.signIn('github', stubUser('601'));
     const minted: string[] = [];
     for (let index = 0; index < LIVE_CAP + 2; index += 1) minted.push((await pool.signIn('github', stubUser('602'))).token);
-    const [first, second, ...live] = minted;
-    expect(live).toHaveLength(LIVE_CAP);
-    expect((await pool.get('/v1/covenant', first)).status).toBe(401);
-    expect((await pool.get('/v1/covenant', second)).status).toBe(401);
-    for (const token of live) expect((await pool.get('/v1/covenant', token)).status).toBe(200);
-    expect((await pool.get('/v1/covenant', bystander.token)).status).toBe(200);
+    const [stale, kept] = [minted.slice(0, 2), minted.slice(2)];
+    expect(kept).toHaveLength(LIVE_CAP);
+    for (const token of stale) expect(await accepted(token)).toBe(false);
+    for (const token of kept) expect(await accepted(token)).toBe(true);
+    expect(await accepted(bystander.token)).toBe(true);
   });
 });
 

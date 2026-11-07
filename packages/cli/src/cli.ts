@@ -491,7 +491,7 @@ const buildProgram = (deps: RunDeps, observed: Observed): Command => {
 
   pool
     .command('logout')
-    .description('revoke this machine's credential at the pool and remove it here; if the pool cannot be reached the local entry is still removed')
+    .description('revoke the credential held for this pool and remove it here; if the pool cannot be reached the local entry is still removed')
     .option(serverOption, serverHelp)
     .action(async (_options: OptionValues, command: Command) => {
       const options: OptionValues = command.optsWithGlobals();
