@@ -34,7 +34,7 @@ export type Family = (typeof FAMILIES)[number];
 export const METHODS: { readonly [family in Family]: { readonly name: string; readonly version: string } } = {
   recovery: { name: 'signature-record', version: '2' },
   fit: { name: 'failure-rate', version: '2' },
-  cost: { name: 'per-prompt-by-class', version: '1' },
+  cost: { name: 'per-prompt-by-class', version: '2' },
   change: { name: 'share-in-version-bucket', version: '2' },
   live: { name: 'day-against-trailing-week', version: '2' },
   adoption: { name: 'share-and-span', version: '2' },
@@ -62,7 +62,7 @@ export interface ReadSlice {
   [axis: string]: string;
 }
 
-/** What a read says. Closed vocabulary and numbers only: a read never holds a path, a prompt, or an error's text. */
+/** What a read says. Names and numbers only: a read never holds a path, a prompt, or an error's text. A local read can name a long-tail program or native tool name (taken from the call's segments, through the open gate, which keeps the name shape but not your redaction or exclusion terms), and a pool read can also name a long-tail server or skill, which the pool serves only at the floor. */
 export interface ReadValue {
   [metric: string]: number | string | null | { [name: string]: number };
 }

@@ -1,4 +1,4 @@
-// The pool server: a Workers fetch handler over one D1 database. Deposits take closed-vocabulary skeletons only, and a refusal names the field.
+// The pool server: a Workers fetch handler over one D1 database. A deposit is a skeleton of a closed list of fields, whose names the pool classes (`field-classes.ts`); a shape error is refused, naming the field.
 import { parseSkeleton, type SessionSkeleton } from '../../cli/src/sessions/pool-wire.js';
 import { batchCounts, batchTier } from './access.js';
 import { fetchBundle, harnessRequired } from './bundle.js';

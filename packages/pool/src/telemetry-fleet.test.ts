@@ -11,14 +11,16 @@ import worker from './worker.js';
 
 const DAY_MS = 86_400_000;
 const uuid = (n: number): string => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
-const today = (): string => dayOf(Date.now());
+// One clock for the whole run, so a run that crosses 00:00 UTC still reads the days it kept its batches under.
+const NOW = Date.now();
+const today = (): string => dayOf(NOW);
 const daysAgo = (n: number): string => shiftDay(today(), -n);
 
 let tick = 0;
 /** A hook event with its own time: the rollup counts an event once, and two with the same install, time, and data are one event sent twice. */
-const hook = (latencyMs: number, outcome = 'hit', harnessVersion = '2.1.5', name = 'pre-tool'): object => {
+const hook = (latencyMs: number, outcome = 'hit', harnessVersion = '2.1.5', name = 'pre-tool', harness = 'claude-code'): object => {
   tick += 1;
-  return { v: 1, id: 'x', at: new Date(Date.parse('2026-11-06T12:00:00.000Z') + tick).toISOString(), type: 'hook', cli: '0.4.0', os: 'linux', data: { name, latencyMs, outcome, harnessVersion } };
+  return { v: 1, id: 'x', at: new Date(Date.parse('2026-11-06T12:00:00.000Z') + tick).toISOString(), type: 'hook', cli: '0.4.0', os: 'linux', data: { name, latencyMs, outcome, harness, harnessVersion } };
 };
 
 let kept = 0;
@@ -35,7 +37,7 @@ interface Bindings {
 
 /** The nightly handler the Worker exports, run on the pool's own bindings. */
 const nightly = async (pool: TestPool): Promise<void> => {
-  await worker.scheduled({ scheduledTime: Date.now() }, await pool.miniflare.getBindings<Bindings>());
+  await worker.scheduled({ scheduledTime: NOW }, await pool.miniflare.getBindings<Bindings>());
 };
 
 const keysOf = (value: unknown): string[] => (typeof value === 'object' && value !== null ? Object.keys(value) : []);
@@ -90,8 +92,16 @@ describe('the fleet read, from the nightly rollup, on the Worker', () => {
     const at = await pool.get('/v1/telemetry/fleet');
     // 100 ms falls in the bucket whose upper edge is 130 (edges grow by 1.5 times each).
     expect(LATENCY_EDGES.find((edge) => edge >= 100)).toBe(130);
-    expect(cellsOf(at.json, 7)).toContainEqual({ metric: 'hook.pre-tool.latency', dimension: 'harnessVersion', value: '2.1.5', kind: 'latency', p50: 130, p95: 130 });
-    expect(cellsOf(at.json, 7)).toContainEqual({ metric: 'hook.pre-tool.hit', dimension: 'harnessVersion', value: '2.1.5', kind: 'rate', p50: 1 });
+    expect(cellsOf(at.json, 7)).toContainEqual({ metric: 'hook.pre-tool.latency', dimension: 'harnessVersion', value: 'claude-code/2.1.5', kind: 'latency', p50: 130, p95: 130 });
+    expect(cellsOf(at.json, 7)).toContainEqual({ metric: 'hook.pre-tool.hit', dimension: 'harnessVersion', value: 'claude-code/2.1.5', kind: 'rate', p50: 1 });
+  }, 60_000);
+
+  it('keys a hook cell by harness and harness version: one version under two harnesses is two served cells', async () => {
+    for (let at = 1; at <= DEFAULT_PUBLIC_FLOOR; at += 1) await keep(pool, daysAgo(1), uuid(at), [hook(100, 'hit', '2.1.5', 'pre-tool', 'claude-code'), hook(400, 'hit', '2.1.5', 'pre-tool', 'codex')]);
+    await nightly(pool);
+    const latency = cellsOf((await pool.get('/v1/telemetry/fleet')).json, 7).filter((cell) => cell['metric'] === 'hook.pre-tool.latency');
+    expect(latency.map((cell) => cell['value']).sort()).toEqual(['claude-code/2.1.5', 'codex/2.1.5']);
+    expect(latency.find((cell) => cell['value'] === 'codex/2.1.5')?.['p50']).toBe(LATENCY_EDGES.find((edge) => edge >= 400));
   }, 60_000);
 
   it('serves a latency cell equal to the user’s own numbers over the same events: DEFAULT_PUBLIC_FLOOR installs that each hold the fixture’s ten pre-tool latencies', async () => {
@@ -121,10 +131,10 @@ describe('the fleet read, from the nightly rollup, on the Worker', () => {
     for (const cell of [...seven, ...thirty]) expect(keysOf(cell).every((key) => ['metric', 'dimension', 'value', 'kind', 'p50', 'p95'].includes(key))).toBe(true);
     // 2.1.6 has four installs: never served, in either window, and no cell totals it with 2.1.5.
     expect([...seven, ...thirty].some((cell) => cell.value === '2.1.6')).toBe(false);
-    expect([...seven, ...thirty].some((cell) => cell.value !== '2.1.5')).toBe(false);
+    expect([...seven, ...thirty].some((cell) => cell.value !== 'claude-code/2.1.5')).toBe(false);
     // 2.1.5 has five installs in 30 days and four in 7: the 30 day cell is served and the 7 day cell is not, and nothing served differs by the fifth.
-    expect(thirty.some((cell) => cell.value === '2.1.5')).toBe(true);
-    expect(seven.some((cell) => cell.value === '2.1.5')).toBe(false);
+    expect(thirty.some((cell) => cell.value === 'claude-code/2.1.5')).toBe(true);
+    expect(seven.some((cell) => cell.value === 'claude-code/2.1.5')).toBe(false);
     expect(JSON.stringify(answered.json)).not.toMatch(/install|events|batches|"n"|count|total/i);
   }, 60_000);
 
@@ -196,7 +206,7 @@ describe('the fleet read, from the nightly rollup, on the Worker', () => {
     it('refuses without the secret, and is not configured with none set', async () => {
       expect((await operatorGet()).status).toBe(401);
       expect((await operatorGet('guess')).status).toBe(401);
-      const response = await operator(new Request('http://pool.test/v1/telemetry/operator', { headers: { authorization: 'Bearer anything' } }), { DB: unusedDb }, Date.now());
+      const response = await operator(new Request('http://pool.test/v1/telemetry/operator', { headers: { authorization: 'Bearer anything' } }), { DB: unusedDb }, NOW);
       expect(response.status).toBe(503);
       expect(await response.json()).toMatchObject({ error: 'not_configured' });
     });
@@ -232,7 +242,7 @@ describe('the fleet read, from the nightly rollup, on the Worker', () => {
         }),
         batch: (statements) => real.batch(statements),
       };
-      const answered = await operator(new Request('http://pool.test/v1/telemetry/operator', { headers: { authorization: 'Bearer operator-secret' } }), { DB: recording, OPERATOR_TOKEN: 'operator-secret' }, Date.now());
+      const answered = await operator(new Request('http://pool.test/v1/telemetry/operator', { headers: { authorization: 'Bearer operator-secret' } }), { DB: recording, OPERATOR_TOKEN: 'operator-secret' }, NOW);
       const json: unknown = await answered.json();
       expect(answered.status).toBe(200);
       expect(fieldOf(json, 'outliers')).toEqual([]);
@@ -270,7 +280,7 @@ describe('the fleet read follows the PUBLIC_FLOOR binding', () => {
       const answered = await low.get('/v1/telemetry/fleet');
       expect(answered.status).toBe(200);
       expect(fieldOf(answered.json, 'floor')).toBe(3);
-      expect(cellsOf(answered.json, 7)).toContainEqual({ metric: 'hook.pre-tool.hit', dimension: 'harnessVersion', value: '2.1.5', kind: 'rate', p50: 1 });
+      expect(cellsOf(answered.json, 7)).toContainEqual({ metric: 'hook.pre-tool.hit', dimension: 'harnessVersion', value: 'claude-code/2.1.5', kind: 'rate', p50: 1 });
     } finally {
       await low.dispose();
     }
@@ -407,7 +417,7 @@ describe('the rollup', () => {
     expect(await rollupDay({ DB: db }, daysAgo(1))).toBeUndefined();
     const bucket: KeptBucket = { list: () => Promise.reject(new Error('unreachable')), get: () => Promise.reject(new Error('unreachable')) };
     expect(await rollupDay({ DB: db, TELEMETRY: bucket }, 'yesterday')).toBeUndefined();
-    expect(await rollupRecent({ DB: db }, Date.now())).toEqual([]);
+    expect(await rollupRecent({ DB: db }, NOW)).toEqual([]);
     expect(statements).toEqual([]);
   });
 
@@ -468,6 +478,15 @@ describe('the rollup', () => {
       const rolled = await rollupRecent({ DB: db, TELEMETRY: bucket }, Date.parse('2026-11-07T03:17:00Z'));
       expect(gets()).toBeLessThanOrEqual(MAX_BATCHES_PER_RUN);
       expect(rolled.map((one) => [one.day, one.gets, one.truncated])).toEqual([['2026-11-06', MAX_BATCHES_PER_RUN, true], ['2026-11-05', 0, true]]);
+    });
+
+    it('lists nothing for a kept day once the budget is spent', async () => {
+      const { db } = fakeDb();
+      const listed: string[] = [];
+      const { bucket } = overCap();
+      const rolled = await rollupRecent({ DB: db, TELEMETRY: { list: (options) => (listed.push(options.prefix), bucket.list(options)), get: bucket.get } }, Date.parse('2026-11-07T03:17:00Z'));
+      expect(listed).toEqual(['telemetry/2026-11-06/']);
+      expect(rolled[1]).toEqual({ day: '2026-11-05', batches: 0, installs: 0, truncated: true, gets: 0, kept: true });
     });
 
     it('keeps the rows an earlier night wrote for the day it could not read whole, and writes the day it counts for the first time', async () => {

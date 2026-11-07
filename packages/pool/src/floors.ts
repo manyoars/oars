@@ -4,6 +4,7 @@
 import { FIRST_ORDER_FAMILIES, type FirstOrderFamily } from '../../cli/src/sessions/read.js';
 import type { BundleFloors } from '../../cli/src/sessions/pool-wire.js';
 import type { Cell } from '../../cli/src/sessions/cells.js';
+import type { CellClass } from './cell-class.js';
 import { bound, type Env } from './http.js';
 
 /** What a deploy that sets nothing serves at. `wrangler.jsonc` states the same two numbers, and a test holds the two together. */
@@ -13,11 +14,16 @@ export const DEFAULT_DISCLOSURE_FLOOR = 2;
 export interface Floors {
   public: number;
   disclosure: number;
+  /**
+   * The floor a `clear` cell (`cell-class.ts`) is served at when a read is at the public floor. It is the public floor today, because a cell below the floor shows how few accounts did a thing, so serving a clear cell lower is the owner's decision and a change
+   * to this field with no client release. It has no binding of its own: `floorsOf` sets it to `public`. The gap below `public` carries to every read family's floor (`cellFloor`), and the bundle states `public`, which a clear cell's floor is never above.
+   */
+  clear: number;
   /** The read families that have a floor of their own. A family not named here is served at `public`. */
   families: Partial<Record<FirstOrderFamily, number>>;
 }
 
-export const DEFAULT_FLOORS: Floors = { public: DEFAULT_PUBLIC_FLOOR, disclosure: DEFAULT_DISCLOSURE_FLOOR, families: {} };
+export const DEFAULT_FLOORS: Floors = { public: DEFAULT_PUBLIC_FLOOR, disclosure: DEFAULT_DISCLOSURE_FLOOR, clear: DEFAULT_PUBLIC_FLOOR, families: {} };
 
 const WHOLE = /^[1-9]\d*$/;
 
@@ -68,14 +74,16 @@ const familiesOf = (value: string | undefined, warn: (line: string) => void): Fl
 };
 
 /** The floors the Worker's bindings state, with the default wherever a binding is unset or bad. `warn` gets one line per binding that is bad. */
-export const floorsOf = (env: Pick<Env, 'PUBLIC_FLOOR' | 'DISCLOSURE_FLOOR' | 'PUBLIC_FLOOR_FAMILIES'>, warn: (line: string) => void): Floors => ({
-  public: floorBinding('PUBLIC_FLOOR', env.PUBLIC_FLOOR, DEFAULT_PUBLIC_FLOOR, warn),
-  disclosure: floorBinding('DISCLOSURE_FLOOR', env.DISCLOSURE_FLOOR, DEFAULT_DISCLOSURE_FLOOR, warn),
-  families: familiesOf(env.PUBLIC_FLOOR_FAMILIES, warn),
-});
+export const floorsOf = (env: Pick<Env, 'PUBLIC_FLOOR' | 'DISCLOSURE_FLOOR' | 'PUBLIC_FLOOR_FAMILIES'>, warn: (line: string) => void): Floors => {
+  const floor = floorBinding('PUBLIC_FLOOR', env.PUBLIC_FLOOR, DEFAULT_PUBLIC_FLOOR, warn);
+  return { public: floor, disclosure: floorBinding('DISCLOSURE_FLOOR', env.DISCLOSURE_FLOOR, DEFAULT_DISCLOSURE_FLOOR, warn), clear: floor, families: familiesOf(env.PUBLIC_FLOOR_FAMILIES, warn) };
+};
 
 /** The floor a read family is served at. */
 export const floorFor = (floors: Floors, family: FirstOrderFamily): number => floors.families[family] ?? floors.public;
+
+/** The floor a cell of this class is served at in a pool whose floor is `floor` (a family's, or the public floor): a thresholded cell at `floor`, a clear one at `floor` less the gap `floors.clear` sits below `floors.public`, and never under 1. No gap today. */
+export const cellFloor = (floors: Floors, floor: number, cellClass: CellClass): number => (cellClass === 'clear' ? Math.max(1, floor - (floors.public - floors.clear)) : floor);
 
 /** The floors as the signed bundle states them, in the order of the families so the same bindings sign the same bytes. A family on the public floor is not listed. */
 export const wireFloors = (floors: Floors): BundleFloors => {

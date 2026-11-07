@@ -20,7 +20,7 @@ const SEARCH = shapeMotif([{ action: 'file.search', identity: null }]);
 
 const cellOf = (motifId: string, clusters: number, ok: number, over: Partial<Cell> = {}): Cell => ({ motifId, frameBucket: `${BUCKET}/opus`, grain: 'day', day: DAY, sessions: clusters, clusters, ok, failed: 0, tokens: 0, durationMs: 0, exposed: false, ...over });
 
-const at = (publicFloor: number, families: Floors['families'] = {}): Floors => ({ public: publicFloor, disclosure: 2, families });
+const at = (publicFloor: number, families: Floors['families'] = {}): Floors => ({ public: publicFloor, disclosure: 2, clear: publicFloor, families });
 const bundleOver = (cells: Cell[], floors: Floors, motifs: Motif[] = [READ, SHELL, SEARCH]): ReturnType<typeof bundleOf> => bundleOf(HARNESS, VERSION, { cells, environment: [], motifs, strata: [] }, floors);
 const motifsOf = (bundle: ReturnType<typeof bundleOf>, family: Read['family']): string[] => bundle.reads.filter((read) => read.family === family).map((read) => String(read.slice.motif)).sort();
 

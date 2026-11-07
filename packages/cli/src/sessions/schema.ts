@@ -83,7 +83,7 @@ import type { RepoSize } from './public-vocabulary.js';
 import type { SessionFunnel, SessionSetup, SessionTrust } from './session-shape.js';
 
 /** Stamped `cv` on every captured record. Bump it when the captured field list changes or a stored value of an existing captured record or skeleton changes: a bump re-reads every transcript. */
-export const CAPTURE_VERSION = '20';
+export const CAPTURE_VERSION = '21';
 
 /** Capture versions the reader derives from. A version-3 record is upgraded on read; a newer one is read for the fields this code knows. */
 export const OLDEST_READABLE_CAPTURE = 3;
@@ -130,6 +130,9 @@ export interface Usage {
 /** The five usage categories, in the order a record lists the ones it observed. */
 export const USAGE_FIELDS = ['input', 'cacheWrite', 'cacheRead', 'output', 'thinking'] as const;
 export type UsageField = (typeof USAGE_FIELDS)[number];
+
+/** Whether a stored session or prompt recorded `field`. A record with no `usageObserved` was captured before version 20, when every category read as observed. */
+export const observesUsage = (record: { usageObserved?: readonly UsageField[] }, field: UsageField): boolean => record.usageObserved === undefined || record.usageObserved.includes(field);
 
 export type Harness = 'claude-code' | 'cursor' | 'codex' | 'copilot' | 'gemini' | 'grok' | 'vscode-copilot';
 

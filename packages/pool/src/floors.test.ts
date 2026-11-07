@@ -2,7 +2,7 @@
 import { describe, expect, it } from 'vitest';
 import { FIRST_ORDER_FAMILIES } from '../../cli/src/sessions/read.js';
 import type { Cell } from '../../cli/src/sessions/cells.js';
-import { clears, clustersOf, DEFAULT_DISCLOSURE_FLOOR, DEFAULT_FLOORS, DEFAULT_PUBLIC_FLOOR, floorFor, floorsOf, wireFloors } from './floors.js';
+import { cellFloor, clears, clustersOf, DEFAULT_DISCLOSURE_FLOOR, DEFAULT_FLOORS, DEFAULT_PUBLIC_FLOOR, floorFor, floorsOf, wireFloors } from './floors.js';
 import { wranglerConfig, fieldOf } from './test-pool.js';
 
 const parse = (env: Parameters<typeof floorsOf>[0]): { floors: ReturnType<typeof floorsOf>; lines: string[] } => {
@@ -101,7 +101,7 @@ describe('PUBLIC_FLOOR_FAMILIES', () => {
 describe('what the bundle states', () => {
   it('names both floors and only the families on a floor of their own', () => {
     expect(wireFloors(DEFAULT_FLOORS)).toEqual({ public: 5, disclosure: 2 });
-    expect(wireFloors({ public: 3, disclosure: 2, families: { 'tool-day': 8, live: 3, cost: 6 } })).toEqual({ public: 3, disclosure: 2, families: { cost: 6, 'tool-day': 8 } });
+    expect(wireFloors({ public: 3, disclosure: 2, clear: 3, families: { 'tool-day': 8, live: 3, cost: 6 } })).toEqual({ public: 3, disclosure: 2, families: { cost: 6, 'tool-day': 8 } });
   });
 
   it('is the same bytes for the same bindings, whatever order the families were written in', () => {
@@ -120,5 +120,20 @@ describe('the one place a cell\'s count is taken', () => {
 
   it('clears a floor at the count and above', () => {
     expect([clears(cell(2, 9), 3), clears(cell(3, 9), 3), clears(cell(4, 9), 3)]).toEqual([false, true, true]);
+  });
+});
+
+describe('the floor of a cell\'s class', () => {
+  it('is the read\'s floor for both classes while the clear floor is the public floor', () => {
+    expect([cellFloor(DEFAULT_FLOORS, 5, 'clear'), cellFloor(DEFAULT_FLOORS, 5, 'thresholded'), cellFloor(DEFAULT_FLOORS, 8, 'clear')]).toEqual([5, 5, 8]);
+  });
+
+  it('follows the public floor with the clear floor, which has no binding of its own', () => {
+    expect(floorsOf({ PUBLIC_FLOOR: '3' }, () => undefined).clear).toBe(3);
+  });
+
+  it('takes the gap below the public floor to every read\'s floor, and never goes under 1', () => {
+    const lowered = { ...DEFAULT_FLOORS, clear: 3 };
+    expect([cellFloor(lowered, 5, 'clear'), cellFloor(lowered, 8, 'clear'), cellFloor(lowered, 2, 'clear'), cellFloor(lowered, 8, 'thresholded')]).toEqual([3, 6, 1, 8]);
   });
 });
