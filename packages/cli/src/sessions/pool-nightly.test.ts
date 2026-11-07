@@ -1,5 +1,6 @@
 // The nightly send (t884 Item 4): after the covenant is accepted the nightly task builds the outbox and sends new batches and, with its own yes, the redacted raw parts. Acceptance is the consent, so with none (or no server, or no sign-in) it sends nothing.
 import { existsSync, readdirSync, readFileSync, statSync, utimesSync, writeFileSync } from 'node:fs';
+import { open, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { mkdirSync } from 'node:fs';
@@ -278,9 +279,10 @@ describe('withSendLock', () => {
       order.push(`${name} out`);
     };
     await Promise.all([withSendLock(outbox, holder('first', 60)), withSendLock(outbox, holder('second', 1))]);
-    expect(order).toHaveLength(4);
-    expect(order.map((entry) => entry.split(" ")[0])).toEqual([order[0]?.split(" ")[0], order[0]?.split(" ")[0], order[2]?.split(" ")[0], order[2]?.split(" ")[0]]);
-    expect(order.map((entry) => entry.split(" ")[1])).toEqual(["in", "out", "in", "out"]);
+    const a = order[0]?.split(' ')[0];
+    const b = order[2]?.split(' ')[0];
+    expect(a).not.toBe(b);
+    expect(order).toEqual([`${String(a)} in`, `${String(a)} out`, `${String(b)} in`, `${String(b)} out`]);
     await expect(withSendLock(outbox, () => Promise.reject(new Error('boom')))).rejects.toThrow('boom');
     expect(existsSync(join(outbox, 'send.lock'))).toBe(false);
   });
@@ -439,6 +441,37 @@ describe('withSendLock', () => {
       return Promise.resolve();
     });
     expect(readFileSync(lock, 'utf8')).toBe('another-run');
+  });
+
+  // Windows answers EPERM (or EACCES) to an open while another handle's delete of the same file is pending; that is contention, like EEXIST, not a failure.
+  const refusing = (code: string, platform: NodeJS.Platform, times: { refuse: number }): LockFs => ({
+    stat,
+    platform,
+    open: async (path, flags) => {
+      if (times.refuse > 0) {
+        times.refuse -= 1;
+        throw Object.assign(new Error(`${code}: operation not permitted, open '${path}'`), { code });
+      }
+      return open(path, flags);
+    },
+  });
+
+  it.each(['EPERM', 'EACCES'])('retries an open that Windows refuses with %s while a delete is pending', async (code) => {
+    const outbox = folder();
+    const refuse = { refuse: 1 };
+    expect(await withSendLock(outbox, () => Promise.resolve('ran'), { waitMs: 2000, pollMs: 5 }, refusing(code, 'win32', refuse))).toBe('ran');
+    expect(refuse.refuse).toBe(0);
+    expect(existsSync(join(outbox, 'send.lock'))).toBe(false);
+  });
+
+  it('gives up with SendLockBusy when Windows keeps refusing the open past waitMs', async () => {
+    const outbox = folder();
+    await expect(withSendLock(outbox, () => Promise.resolve('ran'), { waitMs: 30, pollMs: 5 }, refusing('EPERM', 'win32', { refuse: Infinity }))).rejects.toBeInstanceOf(SendLockBusy);
+  });
+
+  it('still throws EPERM off Windows, where it means a real permission problem', async () => {
+    const outbox = folder();
+    await expect(withSendLock(outbox, () => Promise.resolve('ran'), { waitMs: 2000, pollMs: 5 }, refusing('EPERM', 'linux', { refuse: 1 }))).rejects.toThrow('EPERM');
   });
 
   it('leaves a lock that reads fresh when it is looked at again under the guard', async () => {
