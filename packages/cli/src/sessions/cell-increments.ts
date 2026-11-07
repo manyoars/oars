@@ -130,7 +130,7 @@ const sessionRecord = (id: string, parent: string | null, { harness, frame }: Sk
   tools: {},
   files: [],
   fileHashes: [],
-  // The account's salted key, so a read that groups by repo works on pooled data within one account. It joins no cell.
+  // The store's salted key, so a read that groups by repo works on pooled data from one store (one machine). It joins no cell.
   repo: frame.repoKey ?? null,
   urls: [],
   searches: [],

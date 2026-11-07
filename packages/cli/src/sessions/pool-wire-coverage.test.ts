@@ -1,11 +1,11 @@
-// What the wire says about whose work it is and who it covers (t871): a salted per-account repo key, three coverage bands, and the UTC hour. Every value here is invented.
+// What the wire says about whose work it is and who it covers (t871): a store-salted repo key, three coverage bands, and the UTC hour. Every value here is invented.
 import { describe, expect, it } from 'vitest';
 import { incrementsOf, storeOf } from './cell-increments.js';
 import { captureSession } from './extract.js';
 import { rolloutLines } from './codex.js';
 import { makeRedactor } from './redact.js';
 import { rolloutLine } from './test-support.js';
-import { hourOf, NO_COVERAGE, ORG_SIZES, parseSkeleton, REPO_VISIBILITIES, skeletonOf, TEAMS, type Coverage, type SessionSkeleton } from './pool-wire.js';
+import { hourOf, NO_COVERAGE, ORG_SIZES, parseSkeleton, REPO_VISIBILITIES, skeletonOf, TEAMS, type Coverage, type SessionSkeleton, type SkeletonFrame } from './pool-wire.js';
 import { frame, printOf, prompt, session, sessionsFrom, step, store, storedNames, tool } from './pool-fixture.js';
 
 const KEY_A = '0123456789abcdef';
@@ -226,28 +226,33 @@ describe('the hour', () => {
 // What the two fields that carry data cost on a skeleton that holds them. The large-deposit fixture has `repo`, `tsFirst`, and every prompt's `ts` null, so it measures only the three `unknown` bands.
 describe('bytes on a fixture that carries a repo key and timestamps', () => {
   const HOURS = ['2026-11-01T09:10:00.000Z', '2026-11-01T14:20:00.000Z', '2026-11-01T22:30:00.000Z'];
-  const bytesOf = (repo: string | null, timed: boolean): number => {
+  const bytesSkeleton = (repo: string | null, timed: boolean): ReturnType<typeof skeletonFrom> => {
     const framed = frame({ day: '2026-11-01', shell: 'bash' });
     const from = store({
       sessions: [session('s1', { frame: framed, repo, tsFirst: timed ? HOURS[0] ?? null : null })],
       prompts: HOURS.map((ts, index) => prompt('s1', index, { frame: framed, ts: timed ? ts : null })),
       tools: HOURS.flatMap((_, index) => [0, 1].map((call) => tool('s1', index * 2 + call, 'Read', { steps: [step(index * 2 + call, 0, 'file.read', { native: 'Read' })], prompt: index }))),
     });
-    return JSON.stringify(skeletonFrom(from)).length;
+    return skeletonFrom(from);
   };
+  const bytesOf = (repo: string | null, timed: boolean): number => JSON.stringify(bytesSkeleton(repo, timed)).length;
 
   it('puts the hour on one frame per distinct prompt hour, and the key on every frame', () => {
-    const skeleton = skeletonFrom(stored(KEY_A));
-    const timed = skeletonFrom(
-      store({
-        sessions: [session('s1', { frame: frame({ day: '2026-11-01' }), repo: KEY_A, tsFirst: HOURS[0] ?? null })],
-        prompts: HOURS.map((ts, index) => prompt('s1', index, { frame: frame({ day: '2026-11-01' }), ts })),
-        tools: HOURS.flatMap((_, index) => [0, 1].map((call) => tool('s1', index * 2 + call, 'Read', { steps: [step(index * 2 + call, 0, 'file.read', { native: 'Read' })], prompt: index }))),
-      }),
-    );
-    expect(skeleton.transcripts[0]?.frames.length).toBe(2);
-    // The transcript's own frame (hour 9) is shared by the first prompt; two more distinct hours add two more frames.
-    expect(timed.transcripts[0]?.frames.map(({ hour }) => hour)).toEqual([9, 14, 22]);
+    // A transcript holds its own `frame` and the `frames` its steps ran in (the transcript's own first), so the key is counted on each of those serialized frames.
+    const framesOf = (timed: boolean): SkeletonFrame[] => {
+      const transcript = bytesSkeleton(KEY_A, timed).transcripts[0];
+      if (transcript === undefined) throw new Error('no transcript');
+      return [transcript.frame, ...transcript.frames];
+    };
+    const bare = framesOf(false);
+    const timed = framesOf(true);
+    // The pinned figures rest on these counts: 2 frames with no timestamp (the transcript's and the one call frame), 4 with three prompt hours (the transcript's and one call frame per hour).
+    expect(bare).toHaveLength(2);
+    expect(timed).toHaveLength(4);
+    expect(bare.every((entry) => entry.repoKey === KEY_A)).toBe(true);
+    expect(timed.every((entry) => entry.repoKey === KEY_A)).toBe(true);
+    expect(bare.every((entry) => entry.hour === undefined)).toBe(true);
+    expect(new Set(timed.map((entry) => entry.hour))).toEqual(new Set([9, 14, 22]));
   });
 
   it('costs the pinned bytes: the key, and the hour with the frames it splits off', () => {

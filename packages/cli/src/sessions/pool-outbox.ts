@@ -89,7 +89,7 @@ export const FIELD_ROWS: { readonly [field: string]: string } = {
   orgSize: 'How many people the operator\'s organization has, one of a closed list of bands or unknown; set by the operator on this machine, never looked up.',
   plugins: 'The plugins in reach of a session, each the word private, since no plugin list is pinned; their number, never their names.',
   reach: 'The MCP servers, skills, and plugins in reach of a session, and whether the harness recorded them; every name is on a public list or the word private.',
-  repoKey: 'A salted per-account hash of the repository, 16 hex characters: one account\'s sessions in one repository share it, and no other account\'s do; never a path, a remote, or a name.',
+  repoKey: "A hash of the repository salted with this store's salt: one store's sessions in one repository share it; one account on two machines gets two keys until the account salt lands. 16 hex characters; never a path, a remote, or a name.",
   repoVisibility: 'Whether the repository is public or private, or unknown; set by the operator on this machine, never looked up.',
   skill: 'The skill a step ran, or the skill whose run the step\'s call sat in, only when it is on the public list; else private. Absent on a step outside a skill\'s run.',
   skills: 'The skills in reach of a session (called in it), each only when on the public list, else private, sorted.',
