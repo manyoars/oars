@@ -1023,8 +1023,10 @@ and the fork holds only its own prompt.
 - **Where.** `$PI_CODING_AGENT_DIR` if set and non-empty (a leading `~` is expanded), else `~/.pi/agent` (`%USERPROFILE%\.pi\agent` on Windows) (`src/config.ts:610, :613-614, :630-636`;
   `docs/environment-variables.md:81`): `sessions/--<cwd with its leading separator removed and / \ : turned into ->--/<ISO time with : . turned into ->_<session id>.jsonl`
   (`docs/session-format.md:10-14`, `session-manager.ts:590-593`). The id is the part of the file name after the first `_`; the cwd is the header's, not the folder name's. The
-  sessions folder can be moved with `--session-dir`, `PI_CODING_AGENT_SESSION_DIR`, or the `sessionDir` setting (`docs/sessions.md:60`); this reader does not follow those, so a session
-  kept there is not found. A file is written only once a conversation exists and is appended to afterward (`session-manager.ts:1176-1190`). Like Cursor, Codex, and Copilot: read by
+  sessions folder can be moved with `--session-dir`, `PI_CODING_AGENT_SESSION_DIR`, or the `sessionDir` setting (`docs/sessions.md:60`). **`PI_CODING_AGENT_SESSION_DIR` is followed:** when it is set and
+  non-empty (a leading `~` is expanded), that folder is read in place of `<agent folder>/sessions`, because Pi writes its session files straight into it, with no `--<cwd>--` subfolder
+  (`session-manager.ts:1766-1768`, `main.ts:749-753`); a `.jsonl` file directly in it and one in any subfolder of it are both read, and it takes precedence over `PI_CODING_AGENT_DIR`. It is the
+  user's own setting, not a guess. `--session-dir` (a flag of one run) and the `sessionDir` setting are not followed, so a session kept there is not found. A file is written only once a conversation exists and is appended to afterward (`session-manager.ts:1176-1190`). Like Cursor, Codex, and Copilot: read by
   default; `--allow` narrows and `--deny pi` keeps it out; the nightly run repeats the saved list. A deposit only reads.
 - **Mapping.** Line 1 is the header `{type: "session", version, id, timestamp, cwd, parentSession?}`; every other line is an entry `{type, id, parentId, timestamp}`. Only `message`
   entries are read. A `user` message is a prompt (its content is a string or text and image blocks; text blocks are joined by line ends, and a prompt that is only an image is kept as a line
