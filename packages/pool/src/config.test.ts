@@ -15,6 +15,10 @@ describe('wrangler.jsonc', () => {
     expect(databases).toEqual([{ binding: 'DB', database_name: 'oars-pool', migrations_dir: 'migrations' }]);
   });
 
+  it('binds the raw tier\'s bucket by name, with no account or resource id', () => {
+    expect(fieldOf(parsed, 'r2_buckets')).toEqual([{ binding: 'RAW', bucket_name: 'oars-pool-raw' }]);
+  });
+
   it('holds nothing shaped like an id or a key', () => {
     expect(text).not.toMatch(/[0-9a-f]{32}/i);
     expect(text).not.toMatch(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}/i);
