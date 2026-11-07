@@ -34,6 +34,7 @@ interface Fake {
   received: Received[];
 }
 
+// Keeps its socket: the sender's own transport (status handling, redirects, hangs) is what these tests cover.
 /** A pool server on loopback. `answer` picks the status of request number `at` (from 0); `onRequest` runs before it answers. */
 const serve = async (answer: (at: number) => number | 'hang' = () => 201, onRequest: () => void = () => undefined): Promise<Fake> => {
   const received: Received[] = [];
