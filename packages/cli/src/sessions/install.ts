@@ -1,7 +1,7 @@
 // `oars sessions hook install|uninstall|status`: writes the four Claude Code hook entries into one settings file, merging with what is
 // there. An entry is ours when its command ends with `hook-bin.js" <session-start|pre-tool|post-tool|stop>`, so uninstall removes those entries and nothing else. Also the retention floor
 // (the harness deletes raw transcripts after `cleanupPeriodDays`, 30 when unset) and the Windows nightly task.
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { CliError, ExitCode } from '../errors.js';
 
@@ -246,10 +246,38 @@ export const setSchedule = async (runtime: InstallRuntime, mode: 'nightly' | 'of
   return deleted.code === 0 ? `Removed the scheduled task ${TASK_NAME}.` : `No scheduled task ${TASK_NAME} to remove.`;
 };
 
+/** Where `--schedule off` is remembered: a file of its own in the sessions store, because `state.json` is rewritten whole by every deposit. */
+const scheduleRecord = (storeDir: string): string => join(storeDir, 'schedule.json');
+
+/** True once the operator ran `--schedule off` and has not run `--schedule nightly` since. A record that cannot be read or parsed counts as no opt-out. */
+export const scheduleOptedOut = async (storeDir: string): Promise<boolean> => {
+  try {
+    const parsed: unknown = JSON.parse(await readFile(scheduleRecord(storeDir), 'utf8'));
+    return typeof parsed === 'object' && parsed !== null && 'schedule' in parsed && parsed.schedule === 'off';
+  } catch {
+    return false;
+  }
+};
+
+/** Records the choice of `--schedule`: `off` writes the opt-out; `nightly` clears it. Without a store the choice has nowhere to live and is not recorded. */
+export const recordSchedule = async (storeDir: string | undefined, mode: 'nightly' | 'off'): Promise<void> => {
+  if (storeDir === undefined) return;
+  if (mode === 'nightly') {
+    await rm(scheduleRecord(storeDir), { force: true });
+    return;
+  }
+  await mkdir(storeDir, { recursive: true });
+  await writeFile(scheduleRecord(storeDir), `${JSON.stringify({ schedule: 'off' })}\n`, { mode: 0o600 });
+};
+
+/** What a plain `hook install` says when the operator turned the nightly task off: it is left alone. */
+export const SCHEDULE_LEFT_OFF = `Scheduled task ${TASK_NAME}: left off, as you chose with --schedule off. Turn it back on with: oars sessions hook install --schedule nightly`;
+
 /**
  * What a plain `hook install` does about the nightly task on Windows: register it unless it is already there. Registration is
  * best effort: the hooks are installed by then, so a machine that refuses the task (policy, no Task Scheduler) is told how to retry
- * and is not failed. `install --schedule off` removes the task; the next plain install registers it again.
+ * and is not failed. `install --schedule off` removes the task and records the opt-out (`recordSchedule`), which the caller checks
+ * (`scheduleOptedOut`) before calling this; `--schedule nightly` clears it.
  */
 export const ensureSchedule = async (runtime: InstallRuntime): Promise<string> => {
   const queried = await runtime.schtasks(['/Query', '/TN', TASK_NAME]);

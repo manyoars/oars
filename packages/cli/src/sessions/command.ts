@@ -17,7 +17,7 @@ import { pull, pullRefusal, type PullInput } from './recall-reads.js';
 import { MISS_TEXT } from './recall-render.js';
 import { readHookCalls } from './hook-calls.js';
 import { buildIndex, contextBlock, inRepository, readIndex, type ContextOptions } from './hook-index.js';
-import { ensureSchedule, hookStatus, installHooks, scheduleStatus, setSchedule, settingsPath, uninstallHooks, type InstallRuntime, type Scope } from './install.js';
+import { ensureSchedule, hookStatus, installHooks, recordSchedule, SCHEDULE_LEFT_OFF, scheduleOptedOut, scheduleStatus, setSchedule, settingsPath, uninstallHooks, type InstallRuntime, type Scope } from './install.js';
 import { serve } from './mcp.js';
 import { refreshPool, servedPool } from './pool.js';
 import { FAMILIES } from './read.js';
@@ -420,9 +420,17 @@ export const sessionsHookInstall = async (deps: SessionsDeps, options: HookTarge
     document.install = result;
     lines.push(`Installed ${result.installed.join(', ')} hooks in ${file}.`, result.retention);
   }
-  // Without `--schedule`, Windows gets the nightly task too; `--schedule off` is the opt-out.
+  // Without `--schedule`, Windows gets the nightly task too; `--schedule off` is the opt-out, and it sticks until `--schedule nightly`.
   if (options.schedule !== undefined || runtime.platform === 'win32') {
-    const line = options.schedule === undefined ? await ensureSchedule(runtime) : await setSchedule(runtime, options.schedule);
+    const storeDir = deps.sessions?.storeDir;
+    const optedOut = options.schedule === undefined && storeDir !== undefined && (await scheduleOptedOut(storeDir));
+    let line = SCHEDULE_LEFT_OFF;
+    if (options.schedule !== undefined) {
+      line = await setSchedule(runtime, options.schedule);
+      await recordSchedule(storeDir, options.schedule);
+    } else if (!optedOut) {
+      line = await ensureSchedule(runtime);
+    }
     document.schedule = line;
     lines.push(line);
   }
