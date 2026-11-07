@@ -1,5 +1,5 @@
 // The `user-stop` bucket through each harness's own adapter (t912, Item 2): a prompt the human stopped, written in each harness's native transcript form, captured, and derived. A harness reads a stop as
-// far as its adapter writes the rejection sentence or the interrupt marker; the ones that write neither keep their current bucket, and this file pins which is which (docs/sessions-store.md, "Harness support").
+// far as its adapter writes the rejection sentence or the interrupt marker; the ones that write neither keep their current bucket, and this file pins which is which (docs/sessions-store.md, "`user-stop` by harness").
 // The shapes follow the ones intervention-harness.test.ts, codex.test.ts, cursor.test.ts, and vscode-copilot.test.ts cite; no live store was read.
 import { afterEach, describe, expect, it } from 'vitest';
 import { rolloutLines } from './codex.js';
@@ -116,7 +116,7 @@ const grok = (_stop: Stop, before: Before): string => {
   return grokLines(asText(events), 'sess', summary, undefined).map((entry) => JSON.stringify(entry)).join('\n');
 };
 
-/** VS Code Copilot Chat: a refusal is `isConfirmed` `{type:0}` (Denied) or `{type:5, source:'user'}`, or `false`; the reader writes the harness's rejection sentence for it. It writes no interrupt. */
+/** VS Code Copilot Chat: a refusal is `isConfirmed` `{type:0}` (Denied) or `{type:5, source:'user'}`, or `false`; the reader writes the harness's rejection sentence for it. The reader has no cancel record to read and writes no interrupt marker, so the "interrupt" case is a normal confirmed turn: it pins that the prompt keeps reading `none`. */
 const vscode = (stop: Stop, before: Before): string => {
   const base = Date.parse('2026-06-01T10:00:00Z');
   const response: object[] = [];
@@ -136,7 +136,9 @@ const cursor = async (stop: Stop, before: Before): Promise<string> => {
   const at = (second: number): string => T(second);
   const bubbles: FixtureBubble[] = [{ type: 1, text: 'change the field', createdAt: at(1) }];
   if (before === 'failed-run') bubbles.push({ type: 2, tool: { name: 'run_terminal_cmd', params: { command: 'npm test' }, status: 'completed', result: { exitCodeV2: 1, output: 'out' } }, createdAt: at(2) });
-  bubbles.push({ type: 2, tool: { name: 'edit_file', params: { relativeWorkspacePath: 'src/a.ts', contents: 'x' }, status: stop === 'rejected' ? 'error' : 'completed', ...(stop === 'rejected' ? { decision: 'rejected' } : {}) }, createdAt: at(3) });
+  // An interrupt is the terminal call the user stopped: `endedReason` ends `_ABORTED`, which the adapter records as no outcome (cursor.test.ts), so the prompt keeps reading `none`.
+  if (stop === 'rejected') bubbles.push({ type: 2, tool: { name: 'edit_file', params: { relativeWorkspacePath: 'src/a.ts', contents: 'x' }, status: 'error', decision: 'rejected' }, createdAt: at(3) });
+  else bubbles.push({ type: 2, tool: { name: 'run_terminal_cmd', params: { command: 'make' }, status: 'completed', result: { exitCodeV2: 0, output: '', endedReason: 'RUN_TERMINAL_COMMAND_ENDED_REASON_EXECUTION_ABORTED' } }, createdAt: at(3) });
   bubbles.push({ type: 1, text: 'go on', createdAt: at(5) });
   const staged = stage();
   const store = await openCursorStore(await stageCursor(staged.root, [{ id: 'chat', createdAt: Date.parse('2026-06-01T10:00:00Z'), lastUpdatedAt: Date.parse('2026-06-01T10:30:00Z'), bubbles }]));
