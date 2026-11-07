@@ -63,7 +63,7 @@ const setting = (env: NodeJS.ProcessEnv = {}): Scene => {
   const staged = stage();
   const termsFile = join(staged.root, 'terms.txt');
   writeFileSync(termsFile, `${TERM}\n`);
-  const h = harness({ OARS_EXCLUSION_TERMS: termsFile, OARS_GITHUB_CLIENT_ID: 'gh-client', OARS_GOOGLE_CLIENT_ID: 'google-client', OARS_GOOGLE_CLIENT_SECRET: 'google-secret', ...env });
+  const h = harness({ OARS_EXCLUSION_TERMS: termsFile, ...env });
   h.deps.sessions = staged.runtime;
   h.deps.now = settledClock;
   const seen: Seen[] = [];
@@ -105,53 +105,43 @@ const on = (scene: Scene, method: 'get' | 'post', path: string, reply: () => Res
 
 type Flavor = 'github' | 'google';
 
-const PROVIDER_URLS: { [flavor in Flavor]: { device: string; token: string } } = {
-  github: { device: 'https://github.com/login/device/code', token: 'https://github.com/login/oauth/access_token' },
-  google: { device: 'https://oauth2.googleapis.com/device/code', token: 'https://oauth2.googleapis.com/token' },
-};
-
-// Invented values: none is a real client, device code, or token.
-const DEVICE_CODE = 'device-code-1';
-const PROVIDER_TOKEN = 'provider-access-token';
+// Invented values: none is a real handle or token.
+const HANDLE = 'a-sealed-login-handle';
 const POOL_TOKEN = 'a-pool-token';
 
-/** What each provider answers while the operator has not yet approved: GitHub's 200, and Google's 428. */
-const pending = (flavor: Flavor): Response => HttpResponse.json({ error: 'authorization_pending' }, { status: flavor === 'github' ? 200 : 428 });
-const slowDown = (flavor: Flavor): Response => HttpResponse.json({ error: 'slow_down' }, { status: flavor === 'github' ? 200 : 400 });
-const granted = (): Response => HttpResponse.json({ access_token: PROVIDER_TOKEN, token_type: 'bearer' });
+/** The pool's answer to the poll that finds the person approved. */
+const okLogin = (signingKey: PinnedKey = FIXED_KEY): object => ({ status: 'authorized', token: POOL_TOKEN, account: 'acct_one', expiresAt: LATER, signingKey });
+const authorized = (signingKey: PinnedKey = FIXED_KEY): Response => HttpResponse.json(okLogin(signingKey));
+/** What the pool answers while the person has not approved, or tells the client to slow down. */
+const state = (status: string): Response => HttpResponse.json({ status });
 
-interface ProviderOptions {
-  /** Fields of the device answer to change; an undefined one is dropped. */
-  device?: object;
+interface PoolOptions {
+  /** Fields of the start answer to change; an undefined one is dropped. */
+  start?: object;
   /** The answers to successive polls; the last stands once the list is spent. */
   polls?: Response[];
 }
 
-/** A fake provider: the device route and the token route, each recording what arrived. */
-const providerAt = (scene: Scene, flavor: Flavor, { device = {}, polls = [granted()] }: ProviderOptions = {}): void => {
-  const urls = PROVIDER_URLS[flavor];
+/** A fake pool: the start route and the poll route, each recording what arrived. */
+const poolAt = (scene: Scene, { start = {}, polls = [authorized()] }: PoolOptions = {}, base: string = POOL): void => {
   const record = async (request: Request): Promise<void> => {
     scene.seen.push({ url: request.url, headers: JSON.stringify([...request.headers.entries()]), body: await request.text(), err: scene.h.err.join('') });
   };
-  const link = flavor === 'github' ? { verification_uri: 'https://provider.test/device' } : { verification_url: 'https://provider.test/device' };
   server.use(
-    http.post(urls.device, async ({ request }) => {
+    http.post(`${base}/v1/login/start`, async ({ request }) => {
       await record(request);
-      return HttpResponse.json({ device_code: DEVICE_CODE, user_code: 'USER-1', ...link, interval: 2, expires_in: 10, ...device });
+      return HttpResponse.json({ handle: HANDLE, userCode: 'USER-1', verificationUrl: 'https://provider.test/device', interval: 2, expiresIn: 10, ...start });
     }),
-    http.post(urls.token, async ({ request }) => {
+    http.post(`${base}/v1/login/poll`, async ({ request }) => {
       await record(request);
-      return polls.length > 1 ? (polls.shift() ?? granted()) : (polls[0]?.clone() ?? granted());
+      return polls.length > 1 ? (polls.shift() ?? authorized()) : (polls[0]?.clone() ?? authorized());
     }),
   );
 };
 
-const okLogin = (signingKey: PinnedKey = FIXED_KEY): object => ({ token: POOL_TOKEN, account: 'acct_one', expiresAt: LATER, signingKey });
-
-/** One sign-in at once: the fake provider approves on the first poll and the pool answers a credential. */
+/** One sign-in at once: the pool answers a credential on the first poll. */
 const signIn = async (scene: Scene, signingKey: PinnedKey = FIXED_KEY): Promise<void> => {
-  providerAt(scene, 'github');
-  on(scene, 'post', '/v1/login', () => HttpResponse.json(okLogin(signingKey)));
+  poolAt(scene, { polls: [authorized(signingKey)] });
   expect(await scene.cli('pool', 'login', '--provider', 'github', '--server', POOL)).toBe(ExitCode.OK);
   scene.seen.length = 0;
   scene.h.out.length = 0;
@@ -207,10 +197,9 @@ describe('the pool server', () => {
 });
 
 describe('oars pool login', () => {
-  it.each(['github', 'google'] as const)('signs in by %s: the provider flow runs here, the pool gets the provider token once, and the key is pinned', async (flavor) => {
+  it.each(['github', 'google'] as const)('signs in by %s through the pool alone: it starts, shows the code, polls at the interval, and pins the key', async (flavor) => {
     const scene = setting();
-    providerAt(scene, flavor, { polls: [pending(flavor), slowDown(flavor), granted()] });
-    on(scene, 'post', '/v1/login', () => HttpResponse.json(okLogin()));
+    poolAt(scene, { polls: [state('pending'), state('slow_down'), authorized()] });
     expect(await scene.cli('pool', 'login', '--provider', flavor, '--server', POOL, '--json')).toBe(ExitCode.OK);
     expect(scene.document()).toEqual({ ok: true, server: POOL, account: 'acct_one', expiresAt: LATER });
     expect(scene.h.err.join('')).toContain('https://provider.test/device');
@@ -219,39 +208,20 @@ describe('oars pool login', () => {
     // The interval it was told, then five more seconds from the slow_down.
     expect(scene.h.sleeps).toEqual([2000, 2000, 7000]);
 
-    const [device, ...rest] = scene.seen;
-    const clientId = flavor === 'github' ? 'gh-client' : 'google-client';
-    expect(device?.url).toBe(PROVIDER_URLS[flavor].device);
-    expect(new URLSearchParams(device?.body).get('client_id')).toBe(clientId);
-    expect(new URLSearchParams(device?.body).get('scope')).toBe(flavor === 'github' ? '' : 'openid');
-    const polls = rest.slice(0, 3);
-    for (const poll of polls) {
-      expect(poll.url).toBe(PROVIDER_URLS[flavor].token);
-      const form = new URLSearchParams(poll.body);
-      expect([form.get('client_id'), form.get('device_code'), form.get('grant_type')]).toEqual([clientId, DEVICE_CODE, 'urn:ietf:params:oauth:grant-type:device_code']);
-      // Google's token route takes the client secret; GitHub's takes none.
-      expect(form.get('client_secret')).toBe(flavor === 'github' ? null : 'google-secret');
-    }
-    // GitHub answers form-encoded unless it is asked for JSON, so the device and token requests both ask.
-    for (const request of [device, ...polls]) expect(JSON.parse(request?.headers ?? '[]')).toContainEqual(['accept', 'application/json']);
-    // The pool sees the provider's token once, in one request, and nothing of the device flow.
-    const pool = rest.slice(3);
-    expect(pool).toHaveLength(1);
-    expect(pool[0]?.url).toBe(`${POOL}/v1/login`);
-    expect(JSON.parse(pool[0]?.body ?? '')).toEqual({ provider: flavor, token: PROVIDER_TOKEN });
-    expect(pool[0]?.body).not.toContain(DEVICE_CODE);
-    expect(scene.seen.filter((entry) => entry.url.startsWith(POOL) && entry.body.includes('client_secret'))).toEqual([]);
+    // Every request goes to the pool: the provider is never reached from here.
+    expect(scene.seen.map((entry) => entry.url)).toEqual([`${POOL}/v1/login/start`, `${POOL}/v1/login/poll`, `${POOL}/v1/login/poll`, `${POOL}/v1/login/poll`]);
+    expect(JSON.parse(scene.seen[0]?.body ?? '')).toEqual({ provider: flavor });
+    for (const poll of scene.seen.slice(1)) expect(JSON.parse(poll.body)).toEqual({ handle: HANDLE });
 
     const saved = join(scene.staged.storeDir, 'pool-accounts.json');
     expect(readFileSync(saved, 'utf8')).toContain(POOL_TOKEN);
-    expect(readFileSync(saved, 'utf8')).not.toContain(PROVIDER_TOKEN);
+    expect(readFileSync(saved, 'utf8')).not.toContain(HANDLE);
     if (process.platform !== 'win32') expect(statSync(saved).mode & 0o777).toBe(0o600);
   });
 
   it('says signed in, in words, without --json', async () => {
     const scene = setting();
-    providerAt(scene, 'google');
-    on(scene, 'post', '/v1/login', () => HttpResponse.json(okLogin()));
+    poolAt(scene);
     expect(await scene.cli('pool', 'login', '--provider', 'google', '--server', POOL)).toBe(ExitCode.OK);
     expect(scene.h.out.join('')).toBe(`Signed in to ${POOL} as acct_one.\n`);
   });
@@ -259,8 +229,7 @@ describe('oars pool login', () => {
   it('goes on with a printed link when no browser opens', async () => {
     const scene = setting();
     scene.h.deps.openBrowser = () => Promise.reject(new Error('no browser'));
-    providerAt(scene, 'github');
-    on(scene, 'post', '/v1/login', () => HttpResponse.json(okLogin()));
+    poolAt(scene);
     expect(await scene.cli('pool', 'login', '--provider', 'github', '--server', POOL)).toBe(ExitCode.OK);
     expect(scene.h.err.join('')).toContain('open the link above yourself');
   });
@@ -272,39 +241,36 @@ describe('oars pool login', () => {
       opened = true;
       return Promise.resolve();
     };
-    providerAt(scene, 'github', { device: { verification_uri: 'not a url' } });
+    poolAt(scene, { start: { verificationUrl: 'not a url' } });
     expect(await scene.cli('pool', 'login', '--provider', 'github', '--server', POOL)).toBe(ExitCode.UNEXPECTED);
-    expect(scene.h.err.join('')).toContain('The provider did not start a sign-in.');
+    expect(scene.h.err.join('')).toContain('The pool did not start a sign-in.');
     expect(opened).toBe(false);
     expect(scene.seen).toHaveLength(1);
   });
 
-  it.each([['github', 'device_flow_disabled', 200], ['google', 'invalid_client', 401]] as const)('names what the %s device route refused (%s), as a refused sign-in and not an unexpected one', async (flavor, error, status) => {
+  it.each([
+    ['a pool with no client ID', 503, 'not_configured'],
+    ['a provider that would not start', 502, 'provider_error'],
+  ])('names what %s answered at the start, and polls nothing', async (_name, status, code) => {
     const scene = setting();
-    const hits: string[] = [];
-    server.use(http.post(PROVIDER_URLS[flavor].device, () => {
-      hits.push('device');
-      return HttpResponse.json({ error, error_description: 'set up the app first' }, { status });
-    }));
-    expect(await scene.cli('pool', 'login', '--provider', flavor, '--server', POOL, '--json')).toBe(ExitCode.AUTH);
-    expect(scene.document()).toMatchObject({ problem: { code: 'login_refused', title: `The provider refused the sign-in: ${error}.` } });
-    expect(hits).toEqual(['device']);
+    server.use(http.post(`${POOL}/v1/login/start`, () => HttpResponse.json({ error: code, message: 'The pool says no.' }, { status })));
+    const exit = await scene.cli('pool', 'login', '--provider', 'github', '--server', POOL, '--json');
+    expect(exit).not.toBe(ExitCode.OK);
+    expect(scene.document()).toMatchObject({ problem: { code, status } });
     expect(scene.h.sleeps).toEqual([]);
-    expect(scene.seen.filter((entry) => entry.url.startsWith(POOL))).toEqual([]);
+    expect(existsSync(join(scene.staged.storeDir, 'pool-accounts.json'))).toBe(false);
   });
 
-  it('polls on the defaults when the provider names no interval', async () => {
+  it('polls on the defaults when the pool names no interval', async () => {
     const scene = setting();
-    providerAt(scene, 'github', { device: { interval: undefined, expires_in: undefined } });
-    on(scene, 'post', '/v1/login', () => HttpResponse.json(okLogin()));
+    poolAt(scene, { start: { interval: undefined, expiresIn: undefined } });
     expect(await scene.cli('pool', 'login', '--provider', 'github', '--server', POOL)).toBe(ExitCode.OK);
     expect(scene.h.sleeps).toEqual([5000]);
   });
 
   it.each([0, -3])('takes the default wait for an interval of %i, rather than polling with none', async (interval) => {
     const scene = setting();
-    providerAt(scene, 'github', { device: { interval }, polls: [pending('github'), granted()] });
-    on(scene, 'post', '/v1/login', () => HttpResponse.json(okLogin()));
+    poolAt(scene, { start: { interval }, polls: [state('pending'), authorized()] });
     expect(await scene.cli('pool', 'login', '--provider', 'github', '--server', POOL)).toBe(ExitCode.OK);
     expect(scene.h.sleeps).toEqual([5000, 5000]);
   });
@@ -316,26 +282,18 @@ describe('oars pool login', () => {
     expect(scene.seen).toEqual([]);
   });
 
-  it.each([
-    ['github', 'OARS_GITHUB_CLIENT_ID', { OARS_GITHUB_CLIENT_ID: '' }],
-    ['google', 'OARS_GOOGLE_CLIENT_ID', { OARS_GOOGLE_CLIENT_ID: '' }],
-    ['google', 'OARS_GOOGLE_CLIENT_SECRET', { OARS_GOOGLE_CLIENT_SECRET: '' }],
-  ] as const)('refuses %s with %s unset, naming it, before sending anything', async (flavor, variable, unset) => {
-    const scene = setting(unset);
-    providerAt(scene, flavor);
-    expect(await scene.cli('pool', 'login', '--provider', flavor, '--server', POOL)).toBe(ExitCode.USAGE);
-    expect(scene.h.err.join('')).toContain(variable);
-    expect(scene.seen).toEqual([]);
+  it('needs no provider setting of its own: no client ID or secret is read from the environment', async () => {
+    const scene = setting({ OARS_GITHUB_CLIENT_ID: '', OARS_GOOGLE_CLIENT_ID: '', OARS_GOOGLE_CLIENT_SECRET: '' });
+    poolAt(scene);
+    expect(await scene.cli('pool', 'login', '--provider', 'google', '--server', POOL)).toBe(ExitCode.OK);
   });
 
   it('a second login to the same server keeps one entry and the same pin; another server gets its own', async () => {
     const scene = setting();
     await signIn(scene);
     await signIn(scene);
-    const other = 'https://other.test';
-    providerAt(scene, 'github');
-    server.use(http.post(`${other}/v1/login`, () => HttpResponse.json(okLogin())));
-    expect(await scene.cli('pool', 'login', '--provider', 'github', '--server', other)).toBe(ExitCode.OK);
+    poolAt(scene, {}, 'https://other.test');
+    expect(await scene.cli('pool', 'login', '--provider', 'github', '--server', 'https://other.test')).toBe(ExitCode.OK);
     const saved: unknown = JSON.parse(readFileSync(join(scene.staged.storeDir, 'pool-accounts.json'), 'utf8'));
     expect(saved).toHaveLength(2);
   });
@@ -345,8 +303,7 @@ describe('oars pool login', () => {
     await signIn(scene);
     const file = join(scene.staged.storeDir, 'pool-accounts.json');
     const before = readFileSync(file, 'utf8');
-    providerAt(scene, 'github');
-    on(scene, 'post', '/v1/login', () => HttpResponse.json({ ...okLogin(), token: 'a-swapped-token', signingKey: { ...FIXED_KEY, x: 'another-key' } }));
+    poolAt(scene, { polls: [HttpResponse.json({ ...okLogin(), token: 'a-swapped-token', signingKey: { ...FIXED_KEY, x: 'another-key' } })] });
     expect(await scene.cli('pool', 'login', '--provider', 'github', '--server', POOL, '--json')).toBe(ExitCode.AUTH);
     expect(scene.document()).toMatchObject({ ok: false, problem: { code: 'signing_key_changed' } });
     expect(readFileSync(file, 'utf8')).toBe(before);
@@ -369,90 +326,78 @@ describe('oars pool login', () => {
     expect(await scene.cli('pool', 'fetch', '--harness-version', '2.1.314', '--server', POOL)).toBe(ExitCode.UNEXPECTED);
   });
 
-  it.each(['access_denied', 'unsupported_grant_type', undefined])('names the refusal when the provider answers %s, and never reaches the pool', async (error) => {
+  it('stops, naming the refusal, when the person denies the sign-in', async () => {
     const scene = setting();
-    providerAt(scene, 'github', { polls: [HttpResponse.json(error === undefined ? {} : { error }, { status: 400 })] });
+    poolAt(scene, { polls: [state('pending'), state('denied')] });
     expect(await scene.cli('pool', 'login', '--provider', 'github', '--server', POOL, '--json')).toBe(ExitCode.AUTH);
-    expect(scene.document()).toMatchObject({ problem: { code: 'login_refused', title: `The provider refused the sign-in: ${error ?? 'no_token'}.` } });
-    expect(scene.seen.filter((entry) => entry.url.startsWith(POOL))).toEqual([]);
-  });
-
-  it('names the refusal when the pool will not take the token', async () => {
-    const scene = setting();
-    providerAt(scene, 'github');
-    on(scene, 'post', '/v1/login', () => HttpResponse.json({ error: 'login_refused', message: 'The provider did not accept the token.' }, { status: 401 }));
-    expect(await scene.cli('pool', 'login', '--provider', 'github', '--server', POOL, '--json')).toBe(ExitCode.AUTH);
-    expect(scene.document()).toMatchObject({ problem: { code: 'login_refused', status: 401 } });
+    expect(scene.document()).toMatchObject({ problem: { code: 'login_refused', title: 'The provider refused the sign-in: access_denied.' } });
     expect(existsSync(join(scene.staged.storeDir, 'pool-accounts.json'))).toBe(false);
   });
 
-  it.each(['github', 'google'] as const)('stops when the %s code expires: at the provider\'s word, and at the clock', async (flavor) => {
+  it('stops when the code expires: at the pool\'s word, and at the clock', async () => {
     const told = setting();
-    providerAt(told, flavor, { polls: [pending(flavor), HttpResponse.json({ error: 'expired_token' }, { status: 400 })] });
-    expect(await told.cli('pool', 'login', '--provider', flavor, '--server', POOL, '--json')).toBe(ExitCode.AUTH);
+    poolAt(told, { polls: [state('pending'), state('expired')] });
+    expect(await told.cli('pool', 'login', '--provider', 'github', '--server', POOL, '--json')).toBe(ExitCode.AUTH);
     expect(told.document()).toMatchObject({ problem: { code: 'EXPIRED_TOKEN' } });
-    expect(told.seen.filter((entry) => entry.url.startsWith(POOL))).toEqual([]);
 
     const counted = setting();
-    providerAt(counted, flavor, { device: { interval: 4, expires_in: 8 }, polls: [pending(flavor)] });
-    expect(await counted.cli('pool', 'login', '--provider', flavor, '--server', POOL, '--json')).toBe(ExitCode.AUTH);
+    poolAt(counted, { start: { interval: 4, expiresIn: 8 }, polls: [state('pending')] });
+    expect(await counted.cli('pool', 'login', '--provider', 'github', '--server', POOL, '--json')).toBe(ExitCode.AUTH);
     expect(counted.document()).toMatchObject({ problem: { code: 'EXPIRED_TOKEN' } });
     expect(counted.h.sleeps).toEqual([4000, 4000]);
   });
 
+  it('names the pool\'s refusal of a poll, such as a handle it did not issue', async () => {
+    const scene = setting();
+    poolAt(scene, { polls: [HttpResponse.json({ error: 'invalid_handle', message: 'This pool did not issue that login handle.' }, { status: 401 })] });
+    expect(await scene.cli('pool', 'login', '--provider', 'github', '--server', POOL, '--json')).toBe(ExitCode.AUTH);
+    expect(scene.document()).toMatchObject({ problem: { code: 'invalid_handle', status: 401 } });
+    expect(existsSync(join(scene.staged.storeDir, 'pool-accounts.json'))).toBe(false);
+  });
+
   it('treats a malformed answer as a failure, not a sign-in', async () => {
-    const noStart = setting();
-    providerAt(noStart, 'github', { device: { user_code: undefined } });
-    expect(await noStart.cli('pool', 'login', '--provider', 'github', '--server', POOL)).toBe(ExitCode.UNEXPECTED);
+    const noCode = setting();
+    poolAt(noCode, { start: { userCode: undefined } });
+    expect(await noCode.cli('pool', 'login', '--provider', 'github', '--server', POOL)).toBe(ExitCode.UNEXPECTED);
 
     const notObject = setting();
-    server.use(http.post(PROVIDER_URLS.github.device, () => HttpResponse.json('nope')));
+    server.use(http.post(`${POOL}/v1/login/start`, () => HttpResponse.json('nope')));
     expect(await notObject.cli('pool', 'login', '--provider', 'github', '--server', POOL)).toBe(ExitCode.UNEXPECTED);
 
-    const emptyPoll = setting();
-    providerAt(emptyPoll, 'github', { polls: [new HttpResponse('not json', { status: 200 })] });
-    expect(await emptyPoll.cli('pool', 'login', '--provider', 'github', '--server', POOL)).toBe(ExitCode.UNEXPECTED);
+    for (const poll of [new HttpResponse('not json', { status: 200 }), state('something-new')]) {
+      const odd = setting();
+      poolAt(odd, { polls: [poll] });
+      expect(await odd.cli('pool', 'login', '--provider', 'github', '--server', POOL)).toBe(ExitCode.UNEXPECTED);
+    }
 
     for (const signingKey of [{ kty: 'RSA', crv: 'Ed25519', x: 'x' }, 'text', null]) {
       const badKey = setting();
-      providerAt(badKey, 'github');
-      on(badKey, 'post', '/v1/login', () => HttpResponse.json({ ...okLogin(), signingKey }));
+      poolAt(badKey, { polls: [HttpResponse.json({ ...okLogin(), signingKey })] });
       expect(await badKey.cli('pool', 'login', '--provider', 'github', '--server', POOL)).toBe(ExitCode.UNEXPECTED);
       expect(existsSync(join(badKey.staged.storeDir, 'pool-accounts.json'))).toBe(false);
     }
-
-    const noBody = setting();
-    providerAt(noBody, 'github');
-    on(noBody, 'post', '/v1/login', () => new HttpResponse('not json', { status: 200 }));
-    expect(await noBody.cli('pool', 'login', '--provider', 'github', '--server', POOL)).toBe(ExitCode.UNEXPECTED);
   });
 
-  it('a provider or pool that cannot be reached, or answers with no message, still gets a plain failure', async () => {
+  it('a pool that cannot be reached, or answers with no message, still gets a plain failure', async () => {
     const scene = setting();
-    server.use(http.post(PROVIDER_URLS.github.device, () => HttpResponse.error()));
+    server.use(http.post(`${POOL}/v1/login/start`, () => HttpResponse.error()));
     expect(await scene.cli('pool', 'login', '--provider', 'github', '--server', POOL)).toBe(ExitCode.UNREACHABLE);
 
-    const poolDown = setting();
-    providerAt(poolDown, 'github');
-    server.use(http.post(`${POOL}/v1/login`, () => HttpResponse.error()));
-    expect(await poolDown.cli('pool', 'login', '--provider', 'github', '--server', POOL)).toBe(ExitCode.UNREACHABLE);
-
     const bare = setting();
-    providerAt(bare, 'github');
-    on(bare, 'post', '/v1/login', () => new HttpResponse('oops', { status: 500 }));
+    server.use(http.post(`${POOL}/v1/login/start`, () => new HttpResponse('oops', { status: 500 })));
     expect(await bare.cli('pool', 'login', '--provider', 'github', '--server', POOL)).toBe(ExitCode.UNEXPECTED);
     expect(bare.h.err.join('')).toContain('HTTP 500');
   });
 
-  it('will not follow a redirect with a token, from the provider or the pool', async () => {
-    const fromProvider = setting();
-    server.use(http.post(PROVIDER_URLS.github.device, () => new HttpResponse(null, { status: 307, headers: { location: 'https://elsewhere.test/device' } })));
-    expect(await fromProvider.cli('pool', 'login', '--provider', 'github', '--server', POOL)).toBe(ExitCode.UNREACHABLE);
+  it('will not follow a redirect, at the start or at a poll', async () => {
+    const atStart = setting();
+    server.use(http.post(`${POOL}/v1/login/start`, () => new HttpResponse(null, { status: 307, headers: { location: 'https://elsewhere.test/v1/login/start' } })));
+    expect(await atStart.cli('pool', 'login', '--provider', 'github', '--server', POOL)).toBe(ExitCode.UNREACHABLE);
 
-    const fromPool = setting();
-    providerAt(fromPool, 'github');
-    server.use(http.post(`${POOL}/v1/login`, () => new HttpResponse(null, { status: 307, headers: { location: 'https://elsewhere.test/v1/login' } })));
-    expect(await fromPool.cli('pool', 'login', '--provider', 'github', '--server', POOL)).toBe(ExitCode.UNREACHABLE);
+    const atPoll = setting();
+    poolAt(atPoll);
+    server.use(http.post(`${POOL}/v1/login/poll`, () => new HttpResponse(null, { status: 307, headers: { location: 'https://elsewhere.test/v1/login/poll' } })));
+    expect(await atPoll.cli('pool', 'login', '--provider', 'github', '--server', POOL)).toBe(ExitCode.UNREACHABLE);
   });
 });
 
@@ -460,14 +405,13 @@ describe('oars pool login prints what it sends', () => {
   /** The request lines in a stderr snapshot, in the order they were printed. */
   const requestLines = (text: string): string[] => text.split('\n').filter((line) => /^(GET|POST) \S+ HTTP\/1\.1$/.test(line));
 
-  it.each(['github', 'google'] as const)('prints every %s request, headers and body, before sending it, with the secrets masked', async (flavor) => {
+  it.each(['github', 'google'] as const)('prints every %s request, headers and body, before sending it, with the handle masked', async (flavor) => {
     const scene = setting();
-    providerAt(scene, flavor, { polls: [pending(flavor), granted()] });
-    on(scene, 'post', '/v1/login', () => HttpResponse.json(okLogin()));
+    poolAt(scene, { polls: [state('pending'), authorized()] });
     expect(await scene.cli('pool', 'login', '--provider', flavor, '--server', POOL)).toBe(ExitCode.OK);
 
     // Each request found its own request line already printed, and no later one.
-    expect(scene.seen).toHaveLength(4);
+    expect(scene.seen).toHaveLength(3);
     scene.seen.forEach((entry, index) => {
       const lines = requestLines(entry.err);
       expect(lines).toHaveLength(index + 1);
@@ -475,29 +419,16 @@ describe('oars pool login prints what it sends', () => {
     });
 
     const printed = scene.h.err.join('');
-    expect(requestLines(printed)).toEqual([
-      `POST ${new URL(PROVIDER_URLS[flavor].device).pathname} HTTP/1.1`,
-      `POST ${new URL(PROVIDER_URLS[flavor].token).pathname} HTTP/1.1`,
-      `POST ${new URL(PROVIDER_URLS[flavor].token).pathname} HTTP/1.1`,
-      'POST /v1/login HTTP/1.1',
-    ]);
+    expect(requestLines(printed)).toEqual(['POST /v1/login/start HTTP/1.1', 'POST /v1/login/poll HTTP/1.1', 'POST /v1/login/poll HTTP/1.1']);
     // Every header goes out as printed: host, user-agent, content-type, and the length of the body.
-    expect(printed).toContain(`host: ${new URL(PROVIDER_URLS[flavor].device).host}`);
-    expect(printed).toContain('content-type: application/x-www-form-urlencoded');
+    expect(printed).toContain(`host: ${new URL(POOL).host}`);
     expect(printed).toContain('content-type: application/json');
     expect(printed).toMatch(/content-length: \d+/);
+    expect(printed).toContain(`{"provider":"${flavor}"}`);
 
-    // The client ID, scope, grant type, and Google's client secret print as they are.
-    expect(printed).toContain(`client_id=${flavor === 'github' ? 'gh-client' : 'google-client'}`);
-    expect(printed).toContain(flavor === 'github' ? 'scope=\n' : 'scope=openid');
-    expect(printed).toContain('grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Adevice_code');
-    if (flavor === 'google') expect(printed).toContain('client_secret=google-secret');
-    else expect(printed).not.toContain('client_secret');
-
-    // The device code and the provider's token print as their size alone, wherever they sit; the pool's credential is never in a request, and never printed.
-    expect(printed).toContain(`device_code=<credential: ${String(DEVICE_CODE.length)} bytes>`);
-    expect(printed).toContain(`{"provider":"${flavor}","token":"<credential: ${String(PROVIDER_TOKEN.length)} bytes>"}`);
-    for (const secret of [DEVICE_CODE, PROVIDER_TOKEN, POOL_TOKEN]) expect(scene.h.out.join('') + printed).not.toContain(secret);
+    // The handle prints as its size alone, wherever it sits (the start request carries none); the pool's credential is in no request and is never printed.
+    expect(printed).toContain(`{"handle":"<credential: ${String(HANDLE.length)} bytes>"}`);
+    for (const secret of [HANDLE, POOL_TOKEN]) expect(scene.h.out.join('') + printed).not.toContain(secret);
   });
 });
 
@@ -506,8 +437,7 @@ describe('no harness token is ever read', () => {
     const scene = setting({ ANTHROPIC_API_KEY: HARNESS_SECRET, CLAUDE_CODE_OAUTH_TOKEN: HARNESS_SECRET });
     writeFileSync(join(scene.staged.projectsRoot, '..', '.credentials.json'), JSON.stringify({ claudeAiOauth: { accessToken: HARNESS_SECRET } }));
     await capture(scene);
-    providerAt(scene, 'github');
-    on(scene, 'post', '/v1/login', () => HttpResponse.json(okLogin()));
+    poolAt(scene);
     expect(await scene.cli('pool', 'login', '--provider', 'github', '--server', POOL)).toBe(ExitCode.OK);
     expect(await scene.cli('pool', 'deposit', '--server', POOL)).toBe(ExitCode.OK);
     expect(await scene.cli('pool', 'outbox', '--server', POOL)).toBe(ExitCode.OK);
@@ -837,7 +767,7 @@ describe('oars pool deposit', () => {
 
       it('the same sessions under another account', async () => {
         const { scene, hash } = await built();
-        on(scene, 'post', '/v1/login', () => HttpResponse.json({ ...okLogin(), account: 'acct_two' }));
+        poolAt(scene, { polls: [HttpResponse.json({ ...okLogin(), account: 'acct_two' })] });
         expect(await scene.cli('pool', 'login', '--provider', 'github', '--server', POOL)).toBe(ExitCode.OK);
         scene.h.out.length = 0;
         expect(await scene.cli('pool', 'deposit', '--server', POOL, '--json')).toBe(ExitCode.OK);
