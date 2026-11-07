@@ -191,12 +191,12 @@ pattern and entropy, emails, and the domains named with `--redact-domain`) befor
 | Record | Fields | Class |
 |--------|--------|-------|
 | every capture record | `kind`, `cv`, `rev`, `sid` | P |
-| `session` (one per transcript) | `harness` (set on a Cursor session; absent reads as Claude Code), `bytes`, `lines`, `badLines`, `userTurns`, `assistantTurns`, `versions`, `models`, `bashCmds`, `compactSummaries`, `costUsd`, `usage`, `env` (below) | P |
+| `session` (one per transcript) | `harness` (set on a Cursor session; absent reads as Claude Code), `bytes`, `lines`, `badLines`, `userTurns`, `assistantTurns`, `versions`, `models`, `bashCmds`, `compactSummaries`, `costUsd`, `usage`, `usageObserved`, `usageResponses`, `env` (below) | P |
 | | `agentType` (set on a subagent transcript; a custom agent's name is private), `frame`, `frameId` (the joined frame is one value that links rows; its fields pool only as cells), `session`, `parent`, `spawnedBy`, `spawnedIn` (join ids), `at`, `tsFirst`, `tsLast`, `promptFingerprint`, `repo`, `tools` (native names, which can hold a private MCP server's), `fileHashes`, `urls`, `searches`, `branches`, `tldrs` (400 chars), `confidences` (120 chars) | A |
 | | `setup`, `funnel`, `trust` (optional; absent on a record captured before version 12, and per field where the transcript holds none) | A |
 | | `strata` (optional; absent on a record captured before version 14: `languages` with each language's share bucket, `repoFiles` bucket, `frameworks`, `explore`; see "Errors, packages, and stack strata") | A |
 | | `project` (the folder slug, with the username and directory names), `files` (the paths as written, redacted) | L |
-| `user-prompt` (one per prompt) | `index`, `opened` (`typed` or `command`; absent before CAPTURE 10, when only a typed line opened a prompt), `wallSec`, `thinking`, `turns`, `model`, `efforts`, `usage` | P |
+| `user-prompt` (one per prompt) | `index`, `opened` (`typed` or `command`; absent before CAPTURE 10, when only a typed line opened a prompt), `wallSec`, `thinking`, `turns`, `model`, `efforts`, `usage`, `usageObserved`, `usageResponses` | P |
 | | `frame`, `frameId`, `session`, `ts`, `head` (the first 300 characters), `promptFingerprint`, `skills` (a skill's name can be private) | A |
 | | `strata` (the file's strata with this prompt's own `explore`; absent before version 14) | A |
 | `tool` (one per tool call) | `n`, `status` (`ok`, `error`, or `none` when no result is in the file; one record per tool-use id), `durationMs`, `harnessVersion`, `side`, `prompt`, `targetBase`, `steps`, `errorCode` (a member of a closed list on a failed call; absent on a call that did not fail and on a record captured before version 14) | P |
@@ -204,7 +204,7 @@ pattern and entropy, emails, and the domains named with `--redact-domain`) befor
 | | `packages` (each package an install or runner call resolves: `<ecosystem>:<name>`, `packageVersion`, and `first`), `manifest` (the dependency names a call read, wrote, or edited in a manifest) | A |
 | `error-line` (one per failed result) | `harnessVersion`, `side`, `prompt`, `after` | P |
 | | `session`, `toolUseId`, `tool` (the native name), `ts`, `line` (the first informative line, redacted, not normalized, cut to 1,000 characters) | A |
-| `prompt` (derived, one per prompt) | `kind`, `v`, `rev`, `index`, `wallSec`, class (`cls`), `tools`, `shape`, `errors`, `thinking`, `sideTools`, `turns`, `model`, `efforts`, `usage`, `recovery`, `explore`, `act`, and `bigrams` (the motif vector) | P |
+| `prompt` (derived, one per prompt) | `kind`, `v`, `rev`, `index`, `wallSec`, class (`cls`), `tools`, `shape`, `errors`, `thinking`, `sideTools`, `turns`, `model`, `efforts`, `usage`, `recovery`, `explore`, `act`, `bigrams` (the motif vector), and `intervention` (below) | P |
 | | `session`, `frame` (the joined frame; its fields pool only as cells), `head` (the first 300 characters, redacted), `ts`, `promptFingerprint` (`contextFingerprint` on this derived record), `skills`, and the outcome signals `verify`, `stopped`, `commits`, and `redo` (below) | A |
 | | `strata` (the prompt's own `explore` and the session's languages, `repoFiles`, and `frameworks`; absent before version 14) | A |
 | `error` (derived, one per error) | `kind`, `v`, `rev`, `tool`, `harnessVersion`, `editFollowed`, `cls`, `prompt`, `next` (tool names), episode `outcome` and `calls`. Only `next` (at most five canonical actions) and `editFollowed` reach the wire, as a failed call's `recoveryCalls`; the rest stays local | P |
@@ -213,6 +213,12 @@ pattern and entropy, emails, and the domains named with `--redact-domain`) befor
 | | skeleton lines (`skeletons/<session>.json`: ids, usage, block hashes, each cost-state model's usage keys), `hook-calls.jsonl` `session`, `at`, and `error` (first line, redacted), `mcp-calls.jsonl` `query` and `at` (each `at` is finer than a UTC day) | A |
 | | `hook-calls.jsonl` `event`, `hit`, `ms`, `startMs`; `mcp-calls.jsonl` `matches` | P |
 | | a `pre-tool` row in `hook-calls.jsonl` is one per hook call on any tool (the installed entry has no matcher): `at`, `event`, `session`, `hit`, `ms`, `startMs`, `error` (`ms` is in-process work; `startMs` is the process time before the hook began, so `startMs + ms` is the field figure, a lower bound: the spawn, the row append, and process exit are outside it), and nothing of the tool, its input, or a query, so its classes are the A and P ones above and no class L field exists on it | A, P |
+
+**Usage totals say what they cover.** A session's and a prompt's `usage` is a sum over the responses that reported usage, and `usageObserved` lists the categories (`input`, `cacheWrite`, `cacheRead`, `output`, `thinking`) at least one of them reported, while `usageResponses` counts those responses (compare it with `assistantTurns` or `turns`). A category not listed was never recorded by the source: its number in `usage` is a placeholder zero, not a measurement, and the skeleton and the pool wire send it as null. A Cursor bubble with a zero token count, a VS Code Copilot request with no `modelTotals` or a zero `inputTokens`, a `modelTotals` entry that names no `cachedTokens` or `outputTokens`, and any line without a `usage` object therefore leave their category unobserved; a `cachedTokens` or `outputTokens` of 0 that a `modelTotals` entry carried is a value and stays observed, since a request with no cache hit really cost nothing there. A record captured before version 20 has neither field and reads as fully observed.
+
+**Local totals read the same labels.** Every local reader that sums or averages usage skips a category the source never recorded, never counting its placeholder zero. A `books` column sums only the prompts that recorded the category and prints `n/a` (`null` in `--json`) when none did; a partial column is named under the table (`<key> cache read: 2 of 3 prompts recorded`), and `--json` carries the counts as `usageRecorded`. `measure`'s cache-write mean is over the sessions that recorded cache writes, prints `n/a` when none did and `-` for an empty window, and names a partial window in a line under the table (`cache-write tokens per session, last: 1 of 2 sessions recorded`; `cacheWriteSessions` in `--json`). A derived class cell's `tokens` adds only the categories each prompt recorded and only the prompts that recorded input; it is `null` when no session did, and `tokenSessions` says how many of its `sessions` it covers. Step cells do not honor this yet (they read a null step cost as 0); t921 carries them over. The self-baseline's cache-read share needs `input` and `cacheRead`, and its output per turn needs `output`, so a prompt that did not record them adds no count to that dimension. The same cell derivation serves the pool server's cells, so a served `tokens` sum holds only what was observed; the served column is a running sum, so a cell no batch session recorded adds 0 to it and carries no coverage count. The cost read's `tokensPerPrompt` divides by the prompts that recorded input (`tokenPrompts` on a local cell), not by every settled prompt, and is `null` when none did; a cell with no `tokenPrompts` (read back from the pool's stored sums) falls back to every settled prompt. Its method version is 2 for that reason.
+
+Of the class A fields above, two have a form that leaves on a pooled skeleton: `repo` leaves only as the frame's `repoKey` (the same salted hash, 16 hex characters, never the identity), and `tsFirst` and a prompt's `ts` leave only as the UTC `hour` (0 to 23) beside the frame's `day`. The fields themselves stay local.
 
 A `P` date is at day resolution only: the finer timestamps above are all class `A`. `sw` (the per-field local-only switch for text
 fields) applies to `urls`, `searches`, `branches`, `tldrs`, `confidences`, `head`, `line`, `sig`, `example`, and `mcp-calls.jsonl` `query`.
@@ -296,7 +302,7 @@ The strata sit beside `frame`, not inside `frame.stack`: the wire refuses any ex
 
 ### Prompt outcome signals
 
-Each derived `prompt` record (`EXTRACTOR_VERSION` 6) carries four deterministic signals, kept separate: no composite, no score. A version-2
+Each derived `prompt` record (`EXTRACTOR_VERSION` 6) carries four deterministic signals, kept separate: no composite, no score (a fifth, `intervention`, is described after the table). A version-2
 line, read as written, has none of them. They read the main line only, with a resumed session's repeated calls dropped; a subagent
 transcript's calls are not read.
 
@@ -309,6 +315,49 @@ transcript's calls are not read.
 
 The interrupt marker is a user line, so capture keeps it as a prompt record of its own, with no tools. It counts toward `REDO_WINDOW`'s
 distance and in a share of prompts; its own `stopped` is null and its `verify` is `na`.
+
+### Prompt intervention
+
+A fifth signal, `intervention` (`EXTRACTOR_VERSION` 13; `user-stop` joined the list at `EXTRACTOR_VERSION` 14), says whether a human stepped in after the prompt's work and how. It is one member of a closed list, computed on the machine from the records
+the other four signals read, so a transcript re-derives to the same value. It is a record of what the next human prompt did, **not a grade**: `none` does not say the work was good, and a bucket
+other than `none` does not say it was bad. Prompt text never reaches the wire; the local rule below reads a prompt's `head` (the first 300 characters, redacted) for one case, and only the bucket leaves.
+
+"The next prompt" is the next prompt record of the same transcript, `Q`, for a prompt `P`. A prompt derived before `EXTRACTOR_VERSION` 13 has no `intervention`; a wire batch carries the field only
+for a prompt that holds it, so **absent means not computed** and `unknown` means computed and not sayable.
+
+| Value | Rule (first match, in this order) | Limit |
+|-------|-----------------------------------|-------|
+| `unknown` | `P` is the interrupt marker's own record, or `P` has no `Q` (the last prompt of its transcript). | The last prompt of every transcript reads `unknown`, so a transcript never reads fully known, and that holds for a last prompt that has `stopped` set (a rejection in the final prompt reads `unknown`, not `user-stop`). `unknown` is not a failure of the work. |
+| `user-stop` | `P` has `stopped` set: `rejected` (a main-line error line starts `The user doesn't want to proceed with this tool use` or `The user doesn't want to take this action`) or `interrupt` (`Q` is the interrupt marker, a prompt record that starts `[Request interrupted by user`). It is read from the same records as `stopped` and nothing else, so the two never disagree. | A stop is the human halting the agent mid-turn; it says nothing about why or whether the work was good. It wins over `revert`, `redo`, and `after-error`: a rejected call is settled as an error, so without this row every rejection would read `after-error`. A harness reads a stop only as far as its adapter writes the rejection text or the interrupt marker (see "`user-stop` by harness" below); a harness that records neither reads as it did before. The rule does not see a decline whose text is not the two sentences above (Codex's `exec command rejected by user` and Gemini's `[Operation Cancelled] ...` are classed `user-rejected` in the error code, not `stopped`), so those prompts read as their other rules say. |
+| `revert` | `P` made an edit that did not fail (status `ok`, or `none` when no result was recorded), and either (a) `Q` has a clean (`ok`) shell call that undoes work in git: a segment that reads `git revert <commit>` (a bare `git revert` is `--abort`, `--continue`, or `--quit`, which undo no work, and reads `none`), `git restore`, `git checkout .`, or a bare `git checkout` whose step holds none of the flags `<literal>` (a `-`, or any flag off the public list), `-b`, `-B`, `--orphan`, and `--detach` (what `git checkout -- <path>` and `git checkout -f` leave, since a segment drops flags and paths), or a step that reads `git reset` with the `--hard` flag; or (b) `Q`'s `head` begins with `revert`, `undo`, `roll back`, or `rollback` (case-insensitive, after an optional `please`). | A git undo `Q` ran for other work (a branch cleanup) reads the same, and an undo the person does by hand outside the harness is not seen. Rule (b) reads English only. `git stash`, `git clean`, `git reset` without `--hard`, a checkout of a branch or a revision that is a plain word (the segment keeps its name, so `git checkout main` and `git checkout abc1234 -- <path>` are not seen), a `Write` of the old text, and an undo in a prompt later than `Q` are not read. `git restore --staged` reads as an undo, since a segment drops the flag. **A checkout that switches branches reads as an undo when its target is a word the segment drops**: the segment drops a word that holds `/` or `\`, or is quoted, and leaves no flag, so `git checkout feature/x`, `git checkout origin/main`, and `git checkout "main"` leave the same bare `git checkout` as `git checkout -- <path>`. `git checkout -b feature/x` and `git checkout -` read `none`, since the step keeps their flag. **A checkout with a flag off the public list, such as `--theirs` or `--patch`, also reads `none`** (the step turns an unlisted flag into `<literal>`, so `git checkout --theirs -- src/a.ts` is not seen as an undo, while `-p` is); a plain switch to `feature/x` leaves no flag, the stored records cannot tell it from a path restore, and a narrower rule would lose the path restore (`intervention.test.ts` pins both). |
+| `redo` | `Q` makes an edit that did not fail (status `ok`, or `none` when no result was recorded) to a path hash `P` also edited that way, with no commit that `commits` can see between the two edits. This is the `redo` signal above narrowed to the very next prompt, so it is a reply to the work and not a later task. | A planned second edit of one file reads the same as rework, and a commit a script made does not end the window. The edit is matched by path hash, so a rename is not seen. |
+| `after-error` | The last main-line call of `P` failed (`status` `error`). | The next prompt need not be about the failure: it may open an unrelated task. A prompt whose last call failed and whose agent then answered in words reads the same as one left broken. |
+| `unknown` (second case) | Nothing above matched, and `Q` made a shell call captured before `segments` (CAPTURE 6): it could have been a git undo. | An older capture leaves the value `unknown` until the transcript is captured again. |
+| `none` | Everything else: `Q` exists and none of the above matched. | `none` is silence in the records, not approval. A person who fixed the work in their editor, or who steered with a prompt that edits another file, reads `none`. |
+
+The precedence is `unknown` (first case), `user-stop`, `revert`, `redo`, `after-error`, `unknown` (second case), `none`: a positive record stands even where a later record is unreadable. A prompt with both a stop and an error reads `user-stop`. The rule reads
+the normalized records every harness writes (`Bash`, `PowerShell`, `Edit`, `Write`, `MultiEdit`, the call's `status`, its `target` hash, and its `segments`), so a harness supports a bucket as far as its
+adapter fills those records. Commit survival stays in "Commit survival" and no bucket here reads it.
+
+**Harness support.** `intervention-harness.test.ts` writes the same six scenarios (a next prompt that touches other work, a last call that failed, a repeated edit, a git undo, a request to undo, and a
+single prompt) in each harness's own form and runs it through the adapter. Claude Code, Cursor, Codex, Copilot CLI, VS Code Copilot Chat, Gemini CLI, and Grok Build all read every bucket but `user-stop` (see "`user-stop` by harness" below), with
+one exception that the test pins: **Codex's `revert` by a git command is not seen when the command is the `bash -lc <command>` form its CLI sends**, because the adapter joins the argv with spaces
+and the shell reader then takes `bash -lc git` as the command, so the segment is `git` and not `git revert`. A Codex session reads `none` there; its `revert` by a request in the next prompt, and
+by an unwrapped argv, is read. No harness is guessed at: a bucket that needs a record the adapter does not fill reads `none` or `unknown` by the table above.
+
+**`user-stop` by harness.** `intervention-stop.test.ts` writes a rejected call and an interrupted turn in each harness's own form, with and without an earlier failed call in the prompt. A harness reads a stop only as far as its adapter fills `stopped`'s two records:
+
+| Harness | Rejected call | Interrupted turn | Why |
+|---------|---------------|------------------|-----|
+| Claude Code | `user-stop` | `user-stop` | Writes the rejection sentence and the `[Request interrupted by user` user line. |
+| Cursor | `user-stop` | `none` | `userDecision` `rejected` becomes the rejection sentence. An aborted terminal call has no outcome and no marker. |
+| VS Code Copilot Chat | `user-stop` | `none` | A `Denied` or user-sourced `Skipped` confirmation becomes the rejection sentence. It reads no interrupt. |
+| Codex | `after-error` | `none` | A declined call is `exec command rejected by user` (or `patch rejected by user`), classed `user-rejected` but not the sentence `stopped` reads. A `turn_aborted` with reason `interrupted` is counted as a trust event and writes no marker prompt. |
+| Gemini CLI | `after-error` | `none` | A cancelled call is `[Operation Cancelled] ...`, not the sentence; the interrupted-reply placeholder is dropped. |
+| Copilot CLI | `none` | `none` | `session.error` and `abort` are not read. |
+| Grok Build | `none` | `none` | No event names a stop. |
+
+A harness that cannot show a stop reads its prompts as the table above says, as before `user-stop` existed. **The limit:** `user-stop` is only as wide as `stopped`. Widening it to Codex's and Gemini's declines (a rule over the `user-rejected` error code) would move `stopped`, which the books and the gold arms read, and is a separate change.
 
 ### Hashing
 
@@ -323,6 +372,8 @@ the normalized `origin` remote URL read from the repository's `config` (scheme, 
 lower-cased; a linked worktree's `.git` file is followed to the common `config`), so two clones share it; with no `config` or no `origin`
 it is the lower-cased absolute root path of the first `cwd` a repository holds. It is salted; `fileHashes` is the salted hash of each file
 path a tool touched, sorted.
+
+On a pooled skeleton the session's `repo` is the frame's `repoKey` (`docs/pool.md`, "Repo key, coverage bands, and hour"): the same salted hash, so a read that groups by repo works on pooled data from one store. A skeleton-derived store sets `repo` to it rather than `null`. The salt is this store's own (`localSalt`, below), not yet the account's (`accountSalt`, the open M4 seam), so the key joins one operator's harnesses on one repository on one machine, not a second machine and not two accounts; a salt rotation or a new machine starts new keys. No cell key reads it.
 
 The **salt** is this machine's, created on first use (`localSalt` in `store.ts`). The one seam for the account's salt is
 `SessionsRuntime.accountSalt`: a provider returning `{ salt, sid }`. When it returns another `sid`, each file recorded under the old one is
@@ -357,6 +408,18 @@ The repository is the first `cwd` in the session's transcript whose slug is the 
 `cd` is never followed, and a folder outside this run's allowlist is never read. Git is read-only and asks no network, so the default
 branch (`origin/HEAD`, else `origin/main`, `origin/master`, `main`, `master`) is as of the last fetch. A failed read never fails the deposit,
 and an `unknown` never replaces a known state, so a passing failure does not undo an observation.
+
+### `books --by package`
+
+`oars sessions books --by package` prints the counts a package field report is built from, from the local store only (it reads the store and the transcripts, writes nothing, and sends nothing). It counts tool calls that pulled a package (installed or ran it by name) on the public list: the pinned registry snapshots plus the curated list, for the ecosystems the snapshots cover. Per package, in name order and with no rank, share, or comparison:
+
+- calls, failed calls (`status` `error`), main sessions (a subagent's call counts toward its main session), and the first and last UTC day a counted call ran;
+- per harness and model, calls and failed calls. The model is the call's own, else its prompt's, else `no model`; a model outside the pinned model list reads `another model`;
+- failed calls by `errorCode` class, for calls captured at version 14 or later (a failed call at such a version with no class reads `no class recorded`).
+
+A failed call captured before version 14 has no class to count. It is reported as `not measured` and never as a zero or as a class, so a store captured before version 14 shows `not measured`, not an empty list. Names off the public list are never printed: one line gives how many names and calls they hold.
+
+The A38 exclusion applies on every run: the same scan `oars sessions exclusions` runs (a missing or empty term file excludes everything). A transcript is dropped when it or its main session is excluded, so a subagent goes with its parent, and the output states how many transcripts and calls were removed. `--since <days>` narrows by call time; `--repo` is refused. `--json` carries the same data (`rows`, `notPublic`, `excluded`).
 
 ### What `books` adds
 
@@ -425,7 +488,7 @@ The families at order 1, in the order they are listed. None adjusts for its conf
 | `next-step` | prefix of one to three actions | counts of the next action | no outcome label, so the most common step is not the right one |
 | `tool-day` | motif, day | failure rate, and share of the day's steps | the day's mix of work, effort, rule commits |
 
-A read's slice and value hold closed vocabulary and numbers only: never a path, a prompt, or an error's text. A signature appears as its hash, computed the same way on any account. `clusters` is 1 on every row of one operator's store, and `oars sessions read` applies no floor at order 1, because every cell is the operator's own.
+A read's slice and value hold names and numbers only; a local read can name a long-tail program or native tool name (taken from the call's segments, through the open gate, which keeps the name shape but not your redaction or exclusion terms), and a pool read can also name a long-tail server or skill, which the pool serves only at the floor: never a path, a prompt, or an error's text. A signature appears as its hash, computed the same way on any account. `clusters` is 1 on every row of one operator's store, and `oars sessions read` applies no floor at order 1, because every cell is the operator's own.
 
 ### Reads over reads
 

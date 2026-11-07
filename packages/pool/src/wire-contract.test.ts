@@ -175,14 +175,14 @@ describe('a field this server does not know', () => {
 describe('a value this server does not know', () => {
   it('is read as other and counted, stored as other, and kept as sent in the bag', async () => {
     const sent = baseline();
-    holder(sent, 'transcripts', 0, 'frame').model = 'a-model-from-the-future';
+    holder(sent, 'transcripts', 0, 'frame').model = 'a model from the future';
     holder(sent, 'transcripts', 0, 'prompts', 0).cls = 'a-class-from-the-future';
     expect((await post(sent)).status).toBe(201);
     const row = await rowOf();
     expect(row.other_values).toBe(2);
     expect(row.skeleton).not.toContain('from-the-future');
     expect(JSON.parse(row.extensions)).toEqual([
-      { at: 'transcripts[0].frame.model', kind: 'value', value: 'a-model-from-the-future' },
+      { at: 'transcripts[0].frame.model', kind: 'value', value: 'a model from the future' },
       { at: 'transcripts[0].prompts[0].cls', kind: 'value', value: 'a-class-from-the-future' },
     ]);
     expect(JSON.parse(row.skeleton)).toMatchObject({ transcripts: [{ frame: { model: 'other' }, prompts: [{ cls: 'other' }] }] });
@@ -200,7 +200,7 @@ describe('a value this server does not know', () => {
 describe('a format 3 batch with every optional field absent', () => {
   /** What an absent optional field reads as, which is what a sent null is. */
   const EMPTY: { [name: string]: unknown } = { deltas: [], timingPrint: null, languageShares: [] };
-  const ABSENT_ONLY: ReadonlySet<string> = new Set(['reach', 'skill', 'edges', 'recoveryCalls', 'allocated']);
+  const ABSENT_ONLY: ReadonlySet<string> = new Set(['reach', 'skill', 'edges', 'recoveryCalls', 'usageResponses', 'allocated', 'repoKey', 'orgSize', 'team', 'repoVisibility', 'hour']);
 
   // Each level of the wire with its optional names and where it sits; a level added to OPTIONAL fails the length check below until it is listed here.
   const LEVELS_OPTIONAL: readonly (readonly [readonly string[], (string | number)[]])[] = [
@@ -219,7 +219,7 @@ describe('a format 3 batch with every optional field absent', () => {
     expect(LEVELS_OPTIONAL).toHaveLength(Object.keys(OPTIONAL).length);
     for (const [names, path] of LEVELS_OPTIONAL) {
       for (const name of names) {
-        // A reach, a skill, an edge list, a recoveryCalls, or an allocated has no null form: it is an object, a list member, a list left out when empty, or a true-only flag, so sending nothing is the one way to leave it out.
+        // A reach, a skill, an edge list, a recoveryCalls, an allocated, a usageResponses, a repoKey, a coverage band, or an hour has no null form: it is an object, a list member, a list left out when empty, a true-only flag, a count left out on a record that predates the coverage, or a value the parser refuses as null, so sending nothing is the one way to leave it out.
         if (ABSENT_ONLY.has(name)) Reflect.deleteProperty(holder(nulled, ...path), name);
         else holder(nulled, ...path)[name] = name in EMPTY ? EMPTY[name] : null;
         Reflect.deleteProperty(holder(sparse, ...path), name);

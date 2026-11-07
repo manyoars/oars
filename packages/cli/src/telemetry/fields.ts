@@ -1,10 +1,21 @@
 // Turns what a working path knows into event fields: counts and closed words only, built here so the path carries one line and the rule for each field is in one place.
 // The schema still checks every value; these functions are what make a value fit it (a private model name becomes `other`, not a dropped field).
 import type { Recall } from '../sessions/recall-object.js';
+import { HARNESSES, OTHER } from '../sessions/pool-wire.js';
 import { modelWord, versionWord } from './schema.js';
 
-/** The harness version and model a hook saw, as the public vocabulary knows them or `other`; a field the hook did not see is absent. */
-export const frameWords = (harnessVersion: string | null | undefined, model: string | null | undefined): { harnessVersion?: string; model?: string } => ({
+/** The harness every hook oars installs runs under (Claude Code); one spelling for the session hooks and the gate hook, so the two emitters cannot drift. */
+export const HOOK_HARNESS = 'claude-code';
+
+/** The harness a hook ran under, as the closed list names it, else `other`. */
+export const harnessWord = (harness: string): string => (HARNESSES.some((known) => known === harness) ? harness : OTHER);
+
+/**
+ * The harness, harness version, and model a hook saw, as the public vocabulary knows them or `other`; a version or model the hook did not see is absent. A hook fire names its harness (the
+ * recall's frame when a push made one); the nightly task runs under none, so its caller passes `undefined` and the event carries no harness (it reads as `unrecorded`).
+ */
+export const frameWords = (harness: string | undefined, harnessVersion: string | null | undefined, model: string | null | undefined): { harness?: string; harnessVersion?: string; model?: string } => ({
+  ...(harness === undefined ? {} : { harness: harnessWord(harness) }),
   ...(harnessVersion === undefined || harnessVersion === null ? {} : { harnessVersion: versionWord(harnessVersion) }),
   ...(model === undefined || model === null ? {} : { model: modelWord(model) }),
 });

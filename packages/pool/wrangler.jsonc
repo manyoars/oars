@@ -10,5 +10,7 @@
     { "binding": "RAW", "bucket_name": "oars-pool-raw" },
     { "binding": "TELEMETRY", "bucket_name": "oars-telemetry" }
   ],
-  "analytics_engine_datasets": [{ "binding": "TELEMETRY_EVENTS", "dataset": "oars_telemetry" }]
+  "analytics_engine_datasets": [{ "binding": "TELEMETRY_EVENTS", "dataset": "oars_telemetry" }],
+  // Once a night: roll the telemetry record up into the table the fleet read comes from (docs/pool.md, "Telemetry rollup").
+  "triggers": { "crons": ["17 3 * * *"] }
 }

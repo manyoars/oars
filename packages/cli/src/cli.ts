@@ -14,10 +14,10 @@ import { gateInstall, gatePolicy, gateReplay, gateReport, gateUninstall } from '
 import { DEADLINE_MS, gateHook } from './gate/hook.js';
 import { managerReader } from './gate/registry.js';
 import { exclusionPaths, sessionsExclusions } from './sessions/exclusion.js';
-import { poolDeposit, poolFetch, poolLogin, poolOutbox } from './sessions/pool-command.js';
+import { poolCoverage, poolDeposit, poolFetch, poolLogin, poolOutbox } from './sessions/pool-command.js';
 import type { InstallRuntime, Scope } from './sessions/install.js';
 import type { SessionsRuntime } from './sessions/store.js';
-import { telemetryOff, telemetryOn, telemetryShow, telemetryStatus } from './telemetry/command.js';
+import { telemetryOff, telemetryOn, telemetryReport, telemetryShow, telemetryStatus } from './telemetry/command.js';
 import { recordCrash } from './telemetry/crash.js';
 import { emitOf } from './telemetry/emit.js';
 import { finishTelemetry, observeCommand, type Observed } from './telemetry/observe.js';
@@ -280,9 +280,9 @@ const buildProgram = (deps: RunDeps, observed: Observed): Command => {
 
   sessions
     .command('books')
-    .description('tokens, wall time, turns, errors, verify-after-edit rate, and the outcome signals (verify passed, stops, redos, commits, and commit survival) per prompt class, model, harness, or pull')
-    .option('--by <key>', 'class, model, harness, or pull (default class)', (value: string): BooksBy => {
-      if (value !== 'class' && value !== 'model' && value !== 'harness' && value !== 'pull') throw new InvalidArgumentError('it must be class, model, harness, or pull.');
+    .description('tokens, wall time, turns, errors, verify-after-edit rate, and the outcome signals (verify passed, stops, redos, commits, and commit survival) per prompt class, model, harness, or pull; with --by package, the public-package counts a field report prints, exclusions applied')
+    .option('--by <key>', 'class, model, harness, pull, or package (default class)', (value: string): BooksBy | 'package' => {
+      if (value !== 'class' && value !== 'model' && value !== 'harness' && value !== 'pull' && value !== 'package') throw new InvalidArgumentError('it must be class, model, harness, pull, or package.');
       return value;
     })
     .option('--since <days>', 'only the last N days', positiveInteger)
@@ -290,8 +290,9 @@ const buildProgram = (deps: RunDeps, observed: Observed): Command => {
     .action(async (_options: OptionValues, command: Command) => {
       const options: OptionValues = command.optsWithGlobals();
       const picked = text(options, 'by');
-      const by: BooksBy = picked === 'model' || picked === 'harness' || picked === 'pull' ? picked : 'class';
-      emit(deps, flag(options, 'json'), await sessionsBooks(sessionDeps(deps), { by, sinceDays: count(options, 'since'), repo: text(options, 'repo') }));
+      const by: BooksBy | 'package' = picked === 'model' || picked === 'harness' || picked === 'pull' || picked === 'package' ? picked : 'class';
+      const termsFile = deps.sessions === undefined ? undefined : exclusionPaths(deps.sessions.projectsRoot, deps.env).terms;
+      emit(deps, flag(options, 'json'), await sessionsBooks(sessionDeps(deps), { by, sinceDays: count(options, 'since'), repo: text(options, 'repo'), termsFile }));
     });
 
   sessions
@@ -510,6 +511,16 @@ const buildProgram = (deps: RunDeps, observed: Observed): Command => {
     });
 
   pool
+    .command('coverage')
+    .description('state whom your deposits cover, kept on this machine and never looked up: --org-size solo, 2-10, 11-100, 101-1000, over-1000, or unknown; --repo-visibility public, private, or unknown. With no flag it prints what is set')
+    .option('--org-size <band>', 'how many people your organization has')
+    .option('--repo-visibility <visibility>', 'whether your repositories are public or private')
+    .action(async (_options: OptionValues, command: Command) => {
+      const options: OptionValues = command.optsWithGlobals();
+      emit(deps, flag(options, 'json'), await poolCoverage(deps, { orgSize: text(options, 'orgSize'), repoVisibility: text(options, 'repoVisibility') }));
+    });
+
+  pool
     .command('outbox')
     .description('print every batch exactly as it would be sent, request line and headers included, with the credential as its size; prints each batch SHA-256 and records that it was shown')
     .option('--explain', 'print each field of a batch with the rule that admits its values')
@@ -530,7 +541,7 @@ const buildProgram = (deps: RunDeps, observed: Observed): Command => {
       emit(deps, flag(options, 'json'), await poolFetch(deps, { server: text(options, 'server'), harness: text(options, 'harness'), harnessVersion: text(options, 'harnessVersion') ?? '' }));
     });
 
-  const telemetry = program.command('telemetry').description('what oars records about its own use, on this machine (docs/telemetry.md): status, on, off, and show');
+  const telemetry = program.command('telemetry').description('what oars records about its own use, on this machine (docs/telemetry.md): status, on, off, show, and report');
   const telemetryJson = (command: Command): boolean => flag(command.optsWithGlobals(), 'json');
 
   telemetry
@@ -559,6 +570,13 @@ const buildProgram = (deps: RunDeps, observed: Observed): Command => {
     .description('print the spool exactly as stored: every event telemetry has kept, oldest first')
     .action((_options: OptionValues, command: Command) => {
       emit(deps, telemetryJson(command), telemetryShow(deps));
+    });
+
+  telemetry
+    .command('report')
+    .description('your own hook latency, hit rates, and store health over the last 7 and 30 days, from the spool, beside the fleet\'s when OARS_POOL_URL names a pool server that answers')
+    .action(async (_options: OptionValues, command: Command) => {
+      emit(deps, telemetryJson(command), await telemetryReport(deps));
     });
 
   return program;

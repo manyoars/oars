@@ -3,7 +3,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { HARNESSES, verifyBundle, VOCAB_VERSION, type Bundle } from '../../cli/src/sessions/pool-wire.js';
 import type { Harness } from '../../cli/src/sessions/schema.js';
 import { etagOf } from './bundle.js';
-import { SERVED } from './derive.js';
+import { K_CELL, SERVED } from './derive.js';
 import { sampleSkeleton, withPairs } from './sample.js';
 import { containing, fieldOf, startPool, stubUser, type TestPool, textOf } from './test-pool.js';
 
@@ -433,7 +433,7 @@ describe('the client refuses', () => {
     const pinned = await webcrypto.subtle.exportKey('jwk', pair.publicKey);
     const key = { kty: String(pinned.kty), crv: String(pinned.crv), x: String(pinned.x) };
     const sign = async (vocabVersion: string, withStrata = true, harness: string | null = 'claude-code'): Promise<{ payload: string; signature: string }> => {
-      const payload = JSON.stringify({ format: 1, ...(harness === null ? {} : { harness }), harnessVersion: '2.1.314', vocabVersion, floor: 5, asOf: { pool: 'p', day: '2026-11-04' }, cells: [], motifs: [], reads: [], ...(withStrata ? { strata: [] } : {}) });
+      const payload = JSON.stringify({ format: 1, ...(harness === null ? {} : { harness }), harnessVersion: '2.1.314', vocabVersion, floor: K_CELL, asOf: { pool: 'p', day: '2026-11-04' }, cells: [], motifs: [], reads: [], ...(withStrata ? { strata: [] } : {}) });
       const signature = Buffer.from(await webcrypto.subtle.sign('Ed25519', pair.privateKey, new TextEncoder().encode(payload))).toString('base64');
       return { payload, signature };
     };
@@ -604,7 +604,7 @@ describe('the ETag of a fetch', () => {
     const db = await pool.db();
     const generation = Number(await db.prepare('SELECT generation FROM pool_generation WHERE id = 1').first('generation'));
     expect(generation).toBeGreaterThan(0);
-    expect(answer.headers.get('etag')).toBe(etagOf('claude-code', VERSION, generation, SERVED.map(({ name }) => name)));
+    expect(answer.headers.get('etag')).toBe(etagOf('claude-code', VERSION, generation, [...SERVED.map(({ name }) => name), 'books']));
   });
 });
 

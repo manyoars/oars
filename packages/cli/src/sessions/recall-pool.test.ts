@@ -3,7 +3,7 @@ import { cellIdOf, type Cell, type Pool } from './cells.js';
 import type { Read } from './read.js';
 import { readsOfFamily } from './recall-pool.js';
 
-const cell = (grain: Cell['grain'], day: string): Cell => ({ motifId: 'm', frameBucket: 'claude-code/2.1.31x/claude-opus-5-5', grain, day, sessions: 2, clusters: 1, ok: 1, failed: 1, tokens: 0, durationMs: 0, exposed: false });
+const cell = (grain: Cell['grain'], day: string): Cell => ({ motifId: 'm', frameBucket: 'claude-code/2.1.31x/claude-opus-5-5', grain, day, sessions: 2, clusters: 1, ok: 1, failed: 1, tokens: 0, tokenSessions: 2, durationMs: 0, exposed: false });
 
 const readOver = (cells: Cell[], day: string | null): Read => ({
   readId: 'read:a',
