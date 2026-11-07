@@ -6,6 +6,7 @@
 
 - On the first run that is not a hook, `oars` prints a notice on stderr, once, and records that it did. A hook (`oars gate hook`, `hook-bin.js`) never prints it, and a hook's stdout is the same with telemetry as without.
 - Each CLI command, and each fire of a hook (the bare `oars gate hook` included), then leaves an event in a spool: `<config>/oars/telemetry/events.jsonl` (`<config>` is `%APPDATA%` on Windows, `$XDG_CONFIG_HOME` or `~/.config` elsewhere). The spool is append-only and capped at 1 MiB; at the cap the file becomes `events.1.jsonl`, replacing the one before, so the folder never holds more than 2 MiB. Rotation is best-effort: two oars processes that rotate at the same moment can drop the events of one rotated file. Two first runs at the same moment share one install id.
+- The nightly task (`hook-bin.js nightly`) leaves a `store-health` and a `run-cost` event, `oars pool deposit` leaves a `wire` event for each harness it built batches for and `--send` a `wire-send` event for each send, and a failure oars did not plan for leaves a `crash` event. Each is described below.
 - Recording never throws and never changes a command's exit code or output. A spool that cannot be written costs nothing but the event.
 - Each event carries the install id: a random UUID made on the first run and kept in `<config>/oars/telemetry/install-id`. It comes from the system's random source, not from your machine, your account, or a path. Delete the file and the next run makes an unrelated one.
 
@@ -48,7 +49,7 @@ One per fire of a hook: the bare `oars gate hook` (recorded by its own process, 
 |---|---|
 | `name` | Which hook: `session-start`, `pre-tool`, `post-tool`, `stop`, `nightly`, or `gate` (the bare `oars gate hook`). |
 | `latencyMs` | How long the hook's handler took, in milliseconds, not counting node's own start. |
-| `outcome` | `hit` (it printed context or a deny, or deposited), `miss` (it found nothing), `held` (it had something and the holdback arm kept it from the agent), or `error` (it failed open, or the process deadline ended it before it finished; that fire is written once, with no bytes and no harness version or model). |
+| `outcome` | `hit` (it printed context or a deny, or deposited), `miss` (it found nothing), `held` (it had something and the holdback arm kept it from the agent), or `error` (it failed open, or the process deadline ended it before it finished; that fire is written once, with no bytes and no harness version or model; a fire whose answer was settled before the deadline keeps its outcome and bytes). |
 | `bytes` | The size of what the hook printed to stdout; 0 when nothing. |
 | `harnessVersion`, `model` | When the hook saw them (the hook input's `model`, or the last 64 KB of the transcript the input names, the same bounded read a push makes; the path is never recorded): a public version or model name as the pool's vocabulary lists it, else `other`. Absent when the hook did not see one: a `nightly` run (it has no hook input) and a deadline-ended fire carry neither. |
 
@@ -73,7 +74,7 @@ One per `oars pool deposit` pass (`step` is `build`), and one per batch sent (`s
 |---|---|
 | `step` | `build` (a pass that wrote batches to the outbox) or `send` (one batch sent with `--send`). |
 | `sessions` | Sessions in the store the pass counted. |
-| `batched`, `bytes` | Batches the pass wrote, and their total size in bytes. |
+| `batched`, `bytes` | Batches the pass wrote and their total size in bytes; on a `send`, the size of the batch sent. |
 | `sent` | On a `send`: 1. |
 | `excludedFolder`, `excludedTerm`, `excludedNoRaw`, `excludedNoTerms`, `excludedUnreadable` | How many sessions each session gate kept out: a folder not on the allowlist, an exclusion term, no raw to scan, no term file, and unreadable. A count each, never which folder or which term. |
 | `notEnded`, `uncaptured`, `refused`, `withdrawn`, `discarded` | Sessions that had not ended, sessions with nothing to build, sessions the vocabulary refused, batches removed because their session no longer passes, and batches built under an older format. |
@@ -89,6 +90,83 @@ One per `oars pool fetch` that reached the pool, whatever the pool answered: a r
 | `etagHits` | 1 when the pool answered 304 (the kept bundle is current). |
 | `capHits` | 1 when the pool's weekly fetch cap refused it. |
 | `reads` | The reads in the bundle fetched or kept. |
+
+### `store-health`
+
+One per nightly run: a snapshot of the session store, counts and sizes only. If the store cannot be read, the event holds `readFailed: 1` and nothing else, and the nightly run goes on.
+
+| Field | What it holds |
+|---|---|
+| `readFailed` | `1` when the store could not be read. |
+| `sessions`, `subagents`, `skeletons` | How many main sessions, subagent transcripts, and skeleton files the store holds. |
+| `unparseable` | Transcript lines that did not parse, plus skeleton files that could not be read. |
+| `rawBytes` | The size of the store's `raw/` folder, in bytes. |
+| `verifyChecked`, `verifyFailed` | How many of `oars sessions verify`'s checks ran, and how many found a violation. |
+| `captureVersions`, `extractorVersions` | What the store holds, not what this build writes: the distinct capture versions (`cv`) of its captured sessions, and the distinct extractor versions (`ev`), each sorted ascending. The extractor version is the one each pipeline step last ran at, so an upgrade leaves only the new version once every step has run again. A store with a session behind this build lists two capture versions. |
+| `harnessVersions`, `models` | The harness versions and model names the store holds, each only if it is on the public list the pool wire uses, else the word `other`. |
+| `outboxBytes`, `egressBytes` | The bytes the pool outbox holds, and the bytes of batches sent in the last seven days (summed from the `wire-send` events below, which the spool keeps only up to its cap, so a very busy week can read low). |
+
+```json
+{"v":1,"id":"3f2b8c1e-5d4a-4b7e-9c10-2a6f8e1d7b43","at":"2026-11-07T03:00:41.210Z","type":"store-health","cli":"0.4.0","os":"win32","data":{"sessions":212,"subagents":96,"skeletons":308,"unparseable":2,"rawBytes":48211904,"verifyChecked":14,"verifyFailed":0,"captureVersions":[17,18],"extractorVersions":[12],"harnessVersions":["2.1.30","2.1.37","other"],"models":["claude-opus-4-5","claude-sonnet-4-5"],"outboxBytes":1204331,"egressBytes":0}}
+```
+
+### `run-cost`
+
+One per nightly run: what it cost.
+
+| Field | What it holds |
+|---|---|
+| `totalMs`, `parseMs` | The whole run's time, and the part spent reading and parsing transcripts, in milliseconds. |
+| `peakRssMb` | The process's peak memory, in megabytes. |
+| `failed` | `1` when the run failed or reported an error, else `0`. A count of these events and of those with `failed: 1` is the count of nightly runs and failures. |
+
+```json
+{"v":1,"id":"3f2b8c1e-5d4a-4b7e-9c10-2a6f8e1d7b43","at":"2026-11-07T03:00:44.002Z","type":"run-cost","cli":"0.4.0","os":"win32","data":{"totalMs":3790,"parseMs":2410,"peakRssMb":412,"failed":0}}
+```
+
+### `crash`
+
+One per failure oars did not plan for (anything that is not one of its own errors or commander's usage errors). The failure is handled as before: the same message on stderr, the same exit code.
+
+| Field | What it holds |
+|---|---|
+| `errorClass` | `Error`, `TypeError`, `RangeError`, `SyntaxError`, `ReferenceError`, `EvalError`, `URIError`, `AggregateError`, or `other`, chosen from the error's built-in base class. |
+| `stackHash` | 16 hex characters: a hash of the stack's frames with every file path reduced to a hash of its place inside the package (or of the whole path when it is not inside one). The error's message is never read, because it can hold a path. |
+
+```json
+{"v":1,"id":"3f2b8c1e-5d4a-4b7e-9c10-2a6f8e1d7b43","at":"2026-11-07T14:22:09.771Z","type":"crash","cli":"0.4.0","os":"linux","data":{"errorClass":"TypeError","stackHash":"9be41c07a2d5f630"}}
+```
+
+### `wire`
+
+One per harness, per `oars pool deposit` pass: which fields of the pool wire's field register the batches carried, and what they cost. The names are only those of the register (`oars pool outbox --explain` lists it); a value is never recorded, only its size. The three lists run side by side: entry *n* of each is about the same field.
+
+| Field | What it holds |
+|---|---|
+| `harness` | The harness that wrote the batches, or `other`. |
+| `batches`, `bytes` | How many batches the pass wrote for it, and their total size in bytes. |
+| `fields` | The register's field names the batches held, sorted. |
+| `present` | For each field, in how many of the batches it appeared (a narrow field is rare here). |
+| `fieldBytes` | For each field, the bytes of its values across the batches. A field that holds others counts them too, so a parent is never smaller than its children. |
+
+```json
+{"v":1,"id":"3f2b8c1e-5d4a-4b7e-9c10-2a6f8e1d7b43","at":"2026-11-07T03:05:12.004Z","type":"wire","cli":"0.4.0","os":"win32","data":{"harness":"claude-code","batches":4,"bytes":83120,"fields":["action","harness","steps"],"present":[4,4,4],"fieldBytes":[912,52,61402]}}
+```
+
+### `wire-send`
+
+One per send of one batch (`oars pool deposit --send`). Refusals are counted by the pool's own code.
+
+| Field | What it holds |
+|---|---|
+| `sent` | `1` when the pool took the batch (HTTP 201), else `0`. |
+| `status` | The HTTP status. |
+| `code` | The pool's problem code on a refusal, as lowercase words joined with underscores. Anything that is not shaped like a code is dropped. |
+| `bytes` | The size of the batch that was sent. |
+
+```json
+{"v":1,"id":"3f2b8c1e-5d4a-4b7e-9c10-2a6f8e1d7b43","at":"2026-11-07T03:06:30.915Z","type":"wire-send","cli":"0.4.0","os":"win32","data":{"sent":0,"status":429,"code":"rate_limited","bytes":20780}}
+```
 
 Later releases add event types here, one section each.
 

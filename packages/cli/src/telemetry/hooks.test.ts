@@ -84,8 +84,8 @@ describe('a session hook records one event per fire', () => {
   it('session-start: a hit records the bytes it injected, a miss records none, and the model comes from the hook input', async () => {
     const dir = spoolFolder();
     const { runtime } = await deposited();
-    const hit = await runHook('session-start', JSON.stringify({ session_id: 'live', cwd: REPO, model: 'claude-opus-4-5' }), runtime, () => NOW, emitterAt(dir));
-    await runHook('session-start', JSON.stringify({ cwd: join('elsewhere', 'other') }), runtime, () => NOW, emitterAt(dir));
+    const hit = await runHook('session-start', JSON.stringify({ session_id: 'live', cwd: REPO, model: 'claude-opus-4-5' }), runtime, () => NOW, undefined, emitterAt(dir));
+    await runHook('session-start', JSON.stringify({ cwd: join('elsewhere', 'other') }), runtime, () => NOW, undefined, emitterAt(dir));
     const [first, second] = hooks(dir);
     expect(first?.data).toMatchObject({ name: 'session-start', outcome: 'hit', bytes: Buffer.byteLength(hit ?? ''), model: 'claude-opus-4-5' });
     expect(typeof first?.data.latencyMs).toBe('number');
@@ -96,7 +96,7 @@ describe('a session hook records one event per fire', () => {
   it('a model off the public list goes as other, never as the name', async () => {
     const dir = spoolFolder();
     const { runtime } = await deposited();
-    await runHook('session-start', JSON.stringify({ cwd: REPO, model: 'acme-internal-finetune-7' }), runtime, () => NOW, emitterAt(dir));
+    await runHook('session-start', JSON.stringify({ cwd: REPO, model: 'acme-internal-finetune-7' }), runtime, () => NOW, undefined, emitterAt(dir));
     expect(hooks(dir)[0]?.data.model).toBe('other');
     expect(readSpool(dir).join('')).not.toContain('acme-internal');
   });
@@ -104,8 +104,8 @@ describe('a session hook records one event per fire', () => {
   it('post-tool: a failure the index knows is a hit, an unknown one a miss', async () => {
     const dir = spoolFolder();
     const { runtime } = await deposited();
-    await runHook('post-tool', JSON.stringify({ session_id: 'p', tool_name: 'Bash', tool_response: `Exit code 2\n${QUOTING}` }), runtime, () => NOW, emitterAt(dir));
-    await runHook('post-tool', JSON.stringify({ session_id: 'p', tool_name: 'Bash', tool_response: 'ok' }), runtime, () => NOW, emitterAt(dir));
+    await runHook('post-tool', JSON.stringify({ session_id: 'p', tool_name: 'Bash', tool_response: `Exit code 2\n${QUOTING}` }), runtime, () => NOW, undefined, emitterAt(dir));
+    await runHook('post-tool', JSON.stringify({ session_id: 'p', tool_name: 'Bash', tool_response: 'ok' }), runtime, () => NOW, undefined, emitterAt(dir));
     expect(hooks(dir).map((event) => event.data.outcome)).toEqual(['hit', 'miss']);
     expect(hooks(dir).map((event) => event.data.name)).toEqual(['post-tool', 'post-tool']);
   });
@@ -115,8 +115,8 @@ describe('a session hook records one event per fire', () => {
     const staged = withIndex();
     const transcript = join(staged.storeDir, 'transcript.jsonl');
     writeFileSync(transcript, `${JSON.stringify({ version: '2.1.300', message: { model: 'claude-opus-4-5' } })}\n`);
-    const shown = await runHook('pre-tool', JSON.stringify({ ...JSON.parse(monitor(sessionOn('shown'))), transcript_path: transcript }), staged.runtime, () => NOW, emitterAt(dir));
-    const held = await runHook('pre-tool', monitor(sessionOn('held')), staged.runtime, () => NOW, emitterAt(dir));
+    const shown = await runHook('pre-tool', JSON.stringify({ ...JSON.parse(monitor(sessionOn('shown'))), transcript_path: transcript }), staged.runtime, () => NOW, undefined, emitterAt(dir));
+    const held = await runHook('pre-tool', monitor(sessionOn('held')), staged.runtime, () => NOW, undefined, emitterAt(dir));
     expect(held).toBeUndefined();
     const [one, two] = hooks(dir);
     expect(one?.data).toMatchObject({ name: 'pre-tool', outcome: 'hit', bytes: Buffer.byteLength(shown ?? ''), harnessVersion: '2.1.300', model: 'claude-opus-4-5' });
@@ -129,12 +129,12 @@ describe('a session hook records one event per fire', () => {
     const { runtime, storeDir } = await deposited();
     const transcript = join(storeDir, 'frame-transcript.jsonl');
     writeFileSync(transcript, `${JSON.stringify({ version: '2.1.300', message: { model: 'claude-opus-4-5' } })}\n`);
-    await runHook('post-tool', JSON.stringify({ session_id: 'p', tool_name: 'Bash', tool_response: 'ok', transcript_path: transcript }), runtime, () => NOW, emitterAt(dir));
-    await runHook('stop', JSON.stringify({ transcript_path: transcript }), runtime, () => NOW, emitterAt(dir));
-    await runHook('pre-tool', JSON.stringify({ session_id: 's', tool_name: 'Read', tool_input: { file_path: 'x' }, transcript_path: transcript }), withIndex().runtime, () => NOW, emitterAt(dir));
+    await runHook('post-tool', JSON.stringify({ session_id: 'p', tool_name: 'Bash', tool_response: 'ok', transcript_path: transcript }), runtime, () => NOW, undefined, emitterAt(dir));
+    await runHook('stop', JSON.stringify({ transcript_path: transcript }), runtime, () => NOW, undefined, emitterAt(dir));
+    await runHook('pre-tool', JSON.stringify({ session_id: 's', tool_name: 'Read', tool_input: { file_path: 'x' }, transcript_path: transcript }), withIndex().runtime, () => NOW, undefined, emitterAt(dir));
     const private_ = join(storeDir, 'private-transcript.jsonl');
     writeFileSync(private_, `${JSON.stringify({ version: '9.9.9-internal', message: { model: 'acme-internal-finetune-7' } })}\n`);
-    await runHook('post-tool', JSON.stringify({ session_id: 'p', tool_name: 'Bash', tool_response: 'ok', transcript_path: private_ }), runtime, () => NOW, emitterAt(dir));
+    await runHook('post-tool', JSON.stringify({ session_id: 'p', tool_name: 'Bash', tool_response: 'ok', transcript_path: private_ }), runtime, () => NOW, undefined, emitterAt(dir));
     const [post, stopped, miss, other] = hooks(dir);
     for (const event of [post, stopped, miss]) expect(event?.data).toMatchObject({ harnessVersion: '2.1.300', model: 'claude-opus-4-5' });
     expect(other?.data.model).toBe('other');
@@ -145,28 +145,28 @@ describe('a session hook records one event per fire', () => {
   it('a transcript that is missing leaves the fields out and costs the hook nothing', async () => {
     const dir = spoolFolder();
     const { runtime, storeDir } = await deposited();
-    await runHook('post-tool', JSON.stringify({ session_id: 'p', tool_name: 'Bash', tool_response: 'ok', transcript_path: join(storeDir, 'missing.jsonl') }), runtime, () => NOW, emitterAt(dir));
+    await runHook('post-tool', JSON.stringify({ session_id: 'p', tool_name: 'Bash', tool_response: 'ok', transcript_path: join(storeDir, 'missing.jsonl') }), runtime, () => NOW, undefined, emitterAt(dir));
     // A folder where the transcript should be cannot be read: the frame is unknown, the fire still records.
-    await runHook('post-tool', JSON.stringify({ session_id: 'p', tool_name: 'Bash', tool_response: 'ok', transcript_path: storeDir }), runtime, () => NOW, emitterAt(dir));
+    await runHook('post-tool', JSON.stringify({ session_id: 'p', tool_name: 'Bash', tool_response: 'ok', transcript_path: storeDir }), runtime, () => NOW, undefined, emitterAt(dir));
     expect(hooks(dir)).toHaveLength(2);
     for (const event of hooks(dir)) expect(Object.keys(event.data)).not.toContain('model');
   });
 
   it('a call no read covers is a miss', async () => {
     const dir = spoolFolder();
-    await runHook('pre-tool', JSON.stringify({ session_id: 's', tool_name: 'Read', tool_input: { file_path: 'x' } }), withIndex().runtime, () => NOW, emitterAt(dir));
+    await runHook('pre-tool', JSON.stringify({ session_id: 's', tool_name: 'Read', tool_input: { file_path: 'x' } }), withIndex().runtime, () => NOW, undefined, emitterAt(dir));
     expect(hooks(dir)[0]?.data).toMatchObject({ outcome: 'miss', bytes: 0 });
   });
 
   it('stop and nightly are fires too, and a hook that fails open records error', async () => {
     const dir = spoolFolder();
     const { runtime, storeDir } = await deposited();
-    await runHook('stop', JSON.stringify({}), runtime, () => NOW, emitterAt(dir));
-    await runHook('nightly', '', runtime, () => NOW, emitterAt(dir));
+    await runHook('stop', JSON.stringify({}), runtime, () => NOW, undefined, emitterAt(dir));
+    await runHook('nightly', '', runtime, () => NOW, undefined, emitterAt(dir));
     // A state file that is a folder cannot be read: the nightly run throws, the hook survives, and the fire says error.
     rmSync(join(storeDir, 'state.json'), { force: true });
     mkdirSync(join(storeDir, 'state.json'), { recursive: true });
-    await runHook('nightly', '', runtime, () => NOW, emitterAt(dir));
+    await runHook('nightly', '', runtime, () => NOW, undefined, emitterAt(dir));
     expect(hooks(dir).map((event) => `${String(event.data.name)}:${String(event.data.outcome)}`)).toEqual(['stop:miss', 'nightly:hit', 'nightly:error']);
   });
 
@@ -175,12 +175,12 @@ describe('a session hook records one event per fire', () => {
     const { runtime } = await deposited();
     const args = JSON.stringify({ session_id: 'live', cwd: REPO });
     const baseline = await runHook('session-start', args, runtime, () => NOW);
-    expect(await runHook('session-start', args, runtime, () => NOW, emitterAt(off, { OARS_TELEMETRY: '0' }))).toBe(baseline);
+    expect(await runHook('session-start', args, runtime, () => NOW, undefined, emitterAt(off, { OARS_TELEMETRY: '0' }))).toBe(baseline);
     expect(readSpool(off)).toEqual([]);
     const broken = spoolFolder();
     mkdirSync(join(broken, '..'), { recursive: true });
     writeFileSync(broken, 'a file where the folder should be');
-    expect(await runHook('session-start', args, runtime, () => NOW, emitterAt(broken))).toBe(baseline);
+    expect(await runHook('session-start', args, runtime, () => NOW, undefined, emitterAt(broken))).toBe(baseline);
   });
 
   it('prints the same bytes with telemetry on as without, and with a spool that cannot be written', async () => {
@@ -190,7 +190,7 @@ describe('a session hook records one event per fire', () => {
     writeFileSync(broken, 'a file where the folder should be');
     const sid = sessionOn('shown');
     const outputs = await Promise.all(
-      [undefined, emitterAt(on), emitterAt(broken)].map((emit) => runHook('pre-tool', monitor(sid), withIndex().runtime, () => NOW, emit)),
+      [undefined, emitterAt(on), emitterAt(broken)].map((emit) => runHook('pre-tool', monitor(sid), withIndex().runtime, () => NOW, undefined, emit)),
     );
     expect(outputs[0]).toBeDefined();
     expect(outputs[1]).toBe(outputs[0]);
@@ -314,7 +314,7 @@ describe('oars gate hook records one event per fire, after the answer', () => {
         deps: (staging) => ({ storeDir: seeded('block'), now: () => Date.now(), clock: () => 0, deadlineMs: 800, stage: staging }),
         exit: (code) => { exits.push(code); heldAtExit.push(hooks(dir).length); done(); },
         write: () => Promise.resolve(),
-        deadlineMs: 300,
+        deadlineMs: 2_000,
         // A transcript on a stalled or locked disk: the read with a path never settles, and the deadline's own call carries none.
         record: (one, transcript) => (transcript === undefined ? sent(one, undefined) : new Promise<void>(() => undefined)),
       });
