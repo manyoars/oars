@@ -36,7 +36,7 @@ describe('the class table', () => {
 
   it('hashes a host at ingest and thresholds every long-tail name', () => {
     expect(classOf('host')).toEqual({ class: 'hashed at ingest' });
-    for (const field of ['program', 'native', 'server', 'tool', 'skill', 'skills', 'mcp', 'name', 'sub', 'flags', 'version']) expect(classOf(field)?.longTail).toBe('thresholded');
+    for (const field of ['model', 'harnessVersion', 'program', 'native', 'server', 'tool', 'skill', 'skills', 'mcp', 'name', 'sub', 'flags', 'version']) expect(classOf(field)?.longTail).toBe('thresholded');
   });
 
   it('equals the class column of the register in docs/pool.md', () => {

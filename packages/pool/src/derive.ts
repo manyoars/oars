@@ -16,12 +16,24 @@ import { deriveToolDay } from '../../cli/src/sessions/read-tool-day.js';
 import { unitCells, type DeriveFamily, type ReadBody } from '../../cli/src/sessions/read-support.js';
 import type { Harness } from '../../cli/src/sessions/schema.js';
 import type { Store } from '../../cli/src/sessions/store.js';
+import { cellClassOf } from './cell-class.js';
 import { booksOf } from './books.js';
 import { withheldOf } from './complement.js';
 import type { StoredPool } from './stored.js';
 
 /** A served cell needs this many accounts, and a served read counts only such cells (spec Section 8; D4 may move this proposal, so it stays one constant). */
 export const K_CELL = 5;
+
+/**
+ * The floor a cell is served at, by its class (`cell-class.ts`): a `clear` cell names only values on a public list, a `thresholded` one names a value off it (or a hash). Both are `K_CELL` today, because the cell floor is spec Section 8's account count
+ * and a cell below it shows how few accounts did a thing; serving a clear cell below `K_CELL` is a decision for the owner and a change to `CLEAR_FLOOR` here, with no client release, for the version cells. The version-free environment cells stay at `K_CELL` whatever `CLEAR_FLOOR` is: `stored.ts` reads them (and their motifs) only at `K_CELL`, because the rule that withholds an environment total beside a sub-floor part (`ENVIRONMENT_CELLS`) is written for the thresholded floor, so lowering the clear floor below `K_CELL` does not serve a clear environment cell without a change there too. The complement and denominator rules are written for the thresholded floor.
+ */
+export interface Floors {
+  readonly clear: number;
+  readonly thresholded: number;
+}
+export const CLEAR_FLOOR = K_CELL;
+export const FLOORS: Floors = { clear: CLEAR_FLOOR, thresholded: K_CELL };
 
 /** What a bundle derives, by name: the names are hashed into its ETag, so a change to this list moves the tag of a bundle whose cells did not change. */
 export const SERVED: readonly { name: string; derive: DeriveFamily }[] = [
@@ -68,7 +80,7 @@ const compare = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
 export const bucketPrefix = (harness: string, harnessVersion: string): string => `${harness}/${harnessBucket(harnessVersion)}/`;
 
 /** What one harness's bundle at one version holds: the stored cells of its (harness, bucket), and beside them its version-free model cells and the environment cells, which key on neither. A share's denominator is the sum of the bundle's served cells (`readsOf`); only what clears the floor leaves. */
-export const bundleOf = (harness: Harness, harnessVersion: string, stored: StoredPool): Bundle => {
+export const bundleOf = (harness: Harness, harnessVersion: string, stored: StoredPool, floors: Floors = FLOORS): Bundle => {
   const prefix = bucketPrefix(harness, harnessVersion);
   const cells = stored.cells.filter((cell) => cell.frameBucket.startsWith(prefix) || cell.frameBucket.startsWith(`${harness}/${NO_AXES}/`)).sort((a, b) => compare(a.motifId, b.motifId) || compare(a.frameBucket, b.frameBucket) || compare(a.grain, b.grain) || compare(a.day, b.day));
   const motifs = [...stored.motifs].sort((a, b) => compare(a.motifId, b.motifId));
@@ -78,14 +90,15 @@ export const bundleOf = (harness: Harness, harnessVersion: string, stored: Store
   // The environment cells are read with the bucket's, but the pool's last day is the bucket's own: a week held only by another version is not this bundle's, so it cannot age the reads that count weeks since. A bucket with no served cell takes the whole pool's.
   // Everything the bundle states, its version and its last day included, is that of the served cells: a sub-floor cell, or a served one held back (`withheldOf`), would otherwise move `asOf` and `weeksSinceLast`, which would show that it exists.
   const held = [...cells, ...environment];
-  const withheld = withheldOf(held, motifs, K_CELL);
+  const withheld = withheldOf(held, motifs, floors.thresholded);
+  const motifOf = new Map(motifs.map((motif) => [motif.motifId, motif]));
   // A version-free counterpart would otherwise reveal the name withheld in this bucket.
   const counterpart = (cell: (typeof held)[number]): string => JSON.stringify([cell.motifId, cell.grain, cell.day, cell.exposed]);
   const withheldBuckets = new Set(cells.filter((cell) => withheld.has(cell)).map(counterpart));
   for (const cell of environment) {
     if (withheldBuckets.has(counterpart(cell))) withheld.add(cell);
   }
-  const served = held.filter((cell) => cell.clusters >= K_CELL && !withheld.has(cell));
+  const served = held.filter((cell) => cell.clusters >= floors[cellClassOf(cell, motifOf.get(cell.motifId))] && !withheld.has(cell));
   const kept = new Set(served);
   // `cells` holds the version-free model cells of every version too, so the bucket's own are taken by its prefix: another version's failure on a later day must not move the day.
   const own = poolOf({ cells: cells.filter((cell) => kept.has(cell) && cell.frameBucket.startsWith(prefix)), motifs }, []);
@@ -97,7 +110,7 @@ export const bundleOf = (harness: Harness, harnessVersion: string, stored: Store
     harness,
     harnessVersion,
     vocabVersion: VOCAB_VERSION,
-    floor: K_CELL,
+    floor: floors.thresholded,
     asOf: { pool: pool.version, day: pool.lastDay },
     cells: served,
     motifs: motifs.filter((motif) => named.has(motif.motifId)),
