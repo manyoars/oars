@@ -604,7 +604,7 @@ describe('the ETag of a fetch', () => {
     const db = await pool.db();
     const generation = Number(await db.prepare('SELECT generation FROM pool_generation WHERE id = 1').first('generation'));
     expect(generation).toBeGreaterThan(0);
-    expect(answer.headers.get('etag')).toBe(etagOf('claude-code', VERSION, generation, SERVED.map(({ name }) => name)));
+    expect(answer.headers.get('etag')).toBe(etagOf('claude-code', VERSION, generation, [...SERVED.map(({ name }) => name), 'books']));
   });
 });
 

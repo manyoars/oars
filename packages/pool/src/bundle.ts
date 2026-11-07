@@ -62,7 +62,7 @@ export const fetchBundle = async (request: Request, env: Env, harness: string, h
   const key = bound(env.BUNDLE_SIGNING_KEY);
   if (key === undefined) return notConfigured('BUNDLE_SIGNING_KEY');
   const generation = await generationOf(env);
-  const etag = etagOf(harness, harnessVersion, generation, SERVED.map(({ name }) => name));
+  const etag = etagOf(harness, harnessVersion, generation, [...SERVED.map(({ name }) => name), 'books']);
   // Before the spend and before the pool is read: a bundle that has not changed is not sent, so it costs the account nothing.
   if (matches(request.headers.get('if-none-match'), etag)) return new Response(null, { status: 304, headers: { etag } });
   const now = Date.now();
@@ -76,7 +76,7 @@ export const fetchBundle = async (request: Request, env: Env, harness: string, h
   try {
     // The count is dropped when its week ends, so what stays per account is only this week's. Earlier only (`<`, and `YYYY-Www` orders): a request that computed its week just before Monday must not wipe a count already spent in the new week.
     await env.DB.prepare(WEEK_RESET).bind(week).run();
-    return answer(200, await signed(bundleOf(harness, harnessVersion, await storedOf(env, harness, harnessVersion)), key), { etag });
+    return answer(200, await signed(bundleOf(harness, harnessVersion, await storedOf(env, harness, harnessVersion, now)), key), { etag });
   } catch (error) {
     // The spend came first so two fetches at once cannot both take the last, but a 304 spends nothing because it sends no bundle, and neither does a fetch that throws.
     if (capped) await env.DB.prepare('UPDATE accounts SET fetches = fetches - 1 WHERE id = ? AND fetch_week = ? AND fetches > 0').bind(account, week).run();
