@@ -57,32 +57,43 @@ export const rowsBetween = async (env: Env, from: string, to: string): Promise<I
   });
 };
 
+/** What each install's histogram weighs once merged: every install the same, so one install that fires 2,000 times does not become the fleet's percentile (the rate cell takes the median install for the same reason). Whole numbers, so the percentile's sums carry no rounding. */
+const INSTALL_WEIGHT = 1_000_000;
+const equalWeight = (histograms: readonly Map<number, number>[]): Map<number, number> => {
+  const merged = new Map<number, number>();
+  for (const histogram of histograms) {
+    const total = [...histogram.values()].reduce((sum, count) => sum + count, 0);
+    if (total <= 0) continue;
+    for (const [index, count] of histogram) merged.set(index, (merged.get(index) ?? 0) + Math.round((count * INSTALL_WEIGHT) / total));
+  }
+  return merged;
+};
+
 /** The cells the fleet read serves for these rows: every cell reported by at least `K_CELL` distinct installs. */
 export const fleetCells = (rows: readonly InstallDay[]): FleetCell[] => {
   interface Collected {
     head: Entry;
-    installs: Map<string, { n: number; hits: number }>;
-    histogram: Map<number, number>;
+    installs: Map<string, { n: number; hits: number; histogram: Map<number, number> }>;
   }
   const cells = new Map<string, Collected>();
   for (const row of rows) {
     for (const entry of row.entries) {
       const key = cellKey(entry);
-      const cell = cells.get(key) ?? { head: entry, installs: new Map<string, { n: number; hits: number }>(), histogram: new Map<number, number>() };
-      const mine = cell.installs.get(row.install) ?? { n: 0, hits: 0 };
+      const cell = cells.get(key) ?? { head: entry, installs: new Map<string, { n: number; hits: number; histogram: Map<number, number> }>() };
+      const mine = cell.installs.get(row.install) ?? { n: 0, hits: 0, histogram: new Map<number, number>() };
       mine.n += entry.n;
       mine.hits += entry.hits;
       cell.installs.set(row.install, mine);
-      for (const [index, count] of entry.buckets) cell.histogram.set(index, (cell.histogram.get(index) ?? 0) + count);
+      for (const [index, count] of entry.buckets) mine.histogram.set(index, (mine.histogram.get(index) ?? 0) + count);
       cells.set(key, cell);
     }
   }
   return [...cells.values()]
     .filter(({ installs }) => installs.size >= K_CELL)
-    .map(({ head, installs, histogram }): FleetCell => {
+    .map(({ head, installs }): FleetCell => {
       const { metric, dimension, value, kind } = head;
       if (kind === 'rate') return { metric, dimension, value, kind, p50: Math.round(percentile([...installs.values()].map(({ n, hits }) => hits / n), 0.5) * 1000) / 1000 };
-      const buckets = [...histogram.entries()];
+      const buckets = [...equalWeight([...installs.values()].map(({ histogram }) => histogram)).entries()];
       return { metric, dimension, value, kind, p50: histogramPercentile(buckets, 0.5), p95: histogramPercentile(buckets, 0.95) };
     })
     .sort((a, b) => a.metric.localeCompare(b.metric) || a.value.localeCompare(b.value));
