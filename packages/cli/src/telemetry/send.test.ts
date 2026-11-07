@@ -141,7 +141,7 @@ describe('sendSpool', () => {
     const dir = spooled(2);
     const urls: string[] = [];
     const fake: typeof fetch = (input) => {
-      urls.push(String(input));
+      urls.push(typeof input === 'string' ? input : input instanceof URL ? input.href : input.url);
       return Promise.resolve(new Response(null, { status: 204 }));
     };
     expect(await sendSpool({ env, dir, now: () => 1_800_000_100_000, fetch: fake })).toEqual({ outcome: 'sent', sent: 2, requests: 1 });
