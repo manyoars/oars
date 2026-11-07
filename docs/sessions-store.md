@@ -405,6 +405,18 @@ The repository is the first `cwd` in the session's transcript whose slug is the 
 branch (`origin/HEAD`, else `origin/main`, `origin/master`, `main`, `master`) is as of the last fetch. A failed read never fails the deposit,
 and an `unknown` never replaces a known state, so a passing failure does not undo an observation.
 
+### `books --by package`
+
+`oars sessions books --by package` prints the counts a package field report is built from, from the local store only (it reads the store and the transcripts, writes nothing, and sends nothing). It counts tool calls that pulled a package (installed or ran it by name) on the public list: the pinned registry snapshots plus the curated list, for the ecosystems the snapshots cover. Per package, in name order and with no rank, share, or comparison:
+
+- calls, failed calls (`status` `error`), main sessions (a subagent's call counts toward its main session), and the first and last UTC day a counted call ran;
+- per harness and model, calls and failed calls. The model is the call's own, else its prompt's, else `no model`; a model outside the pinned model list reads `another model`;
+- failed calls by `errorCode` class, for calls captured at version 14 or later (a failed call at such a version with no class reads `no class recorded`).
+
+A failed call captured before version 14 has no class to count. It is reported as `not measured` and never as a zero or as a class, so a store captured before version 14 shows `not measured`, not an empty list. Names off the public list are never printed: one line gives how many names and calls they hold.
+
+The A38 exclusion applies on every run: the same scan `oars sessions exclusions` runs (a missing or empty term file excludes everything). A transcript is dropped when it or its main session is excluded, so a subagent goes with its parent, and the output states how many transcripts and calls were removed. `--since <days>` narrows by call time; `--repo` is refused. `--json` carries the same data (`rows`, `notPublic`, `excluded`).
+
 ### What `books` adds
 
 `oars sessions books --by class|model|harness|pull` adds these columns, in text and `--json`. `--json` also carries `scope`, the same folders-not-read list `verify --json` carries. It covers the whole projects root, also under `--repo`. The signals stay separate, and the text ends
