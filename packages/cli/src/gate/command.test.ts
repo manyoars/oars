@@ -99,10 +99,10 @@ describe('oars gate replay and report', () => {
     expect(h.out.join('')).toContain('Registry state read');
   });
 
-  it('refuses a replay that names no folder and has no saved allowlist', async () => {
-    const { deps, err } = setup();
-    expect(await run(['gate', 'replay'], deps)).toBe(ExitCode.USAGE);
-    expect(err.join('')).toContain('--allow');
+  it('replays every folder when none is named and no deposit saved an allowlist', async () => {
+    const { deps, out } = setup();
+    expect(await run(['gate', 'replay', '--no-registry-state'], deps)).toBe(ExitCode.OK);
+    expect(out.join('')).toContain('Crossings: 2');
   });
 });
 
