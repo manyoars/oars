@@ -35,13 +35,13 @@ const shell = (command: string, domains: readonly string[] = []): StepObservatio
 const NOT_POOLED = {
   session: ['session', 'parent', 'spawnedBy', 'spawnedIn', 'at', 'tsFirst', 'tsLast', 'promptFingerprint', 'repo', 'strata', 'tools', 'fileHashes', 'urls', 'searches', 'branches', 'tldrs', 'confidences', 'project', 'files'],
   prompt: ['session', 'ts', 'head', 'promptFingerprint', 'skills', 'strata'],
-  tool: ['session', 'parent', 'toolUseId', 'ts', 'tool', 'target', 'segments', 'pulls', 'packages', 'manifest', 'commits'],
+  tool: ['session', 'parent', 'toolUseId', 'ts', 'tool', 'target', 'steps', 'segments', 'pulls', 'packages', 'manifest', 'commits'],
   errorLine: ['session', 'toolUseId', 'tool', 'ts', 'line'],
 } as const;
 
 const withoutFields = (record: object, fields: readonly string[]): object => Object.fromEntries(Object.entries(record).filter(([field]) => !fields.includes(field)));
 
-/** Every class P field of the four capture records. */
+/** Every class P field of the four capture records. `steps` is class A since CAPTURE 22 (a skill-run name, a host, and a pull name can be private), so `stepsText` checks it beside this. */
 const pooled = (capture: Capture): string =>
   JSON.stringify([
     withoutFields(capture.session, NOT_POOLED.session),
@@ -50,7 +50,10 @@ const pooled = (capture: Capture): string =>
     capture.errorLines.map((errorLine) => withoutFields(errorLine, NOT_POOLED.errorLine)),
   ]);
 
-describe('identity holds public names only', () => {
+/** The tool records' steps, which hold a skill-run name, a host, and a pull name as they are after redaction (class A), and every other name public. */
+const stepsText = (capture: Capture): string => JSON.stringify(capture.tools.map((tool) => tool.steps));
+
+describe('identity holds public names, and a skill-run, host, and pull name after redaction', () => {
   it('reads a shell step as its program, subcommand, and flag names', () => {
     expect(shell('git push --force origin main')[0]?.identity).toEqual({ program: 'git', sub: 'push', flags: ['--force'] });
   });
@@ -88,6 +91,7 @@ describe('identity holds public names only', () => {
     const failed = captured([{ name: 'Bash', input: { command }, failure: `boom: ${command}` }]);
     expect(failed.errorLines).toHaveLength(1);
     expect(pooled(failed)).not.toContain(value);
+    expect(stepsText(failed)).not.toContain(value);
   });
 
   it('masks a private program and takes no flags from it', () => {
@@ -190,6 +194,7 @@ describe('identity holds public names only', () => {
     expect(stepsOf([call])[0]).toMatchObject({ action: 'mcp.call', native: '<literal>', identity: { server: '<literal>', tool: '<literal>' } });
     expect(pooled(captured([call]))).not.toContain('acme');
     expect(pooled(captured([call]))).not.toContain('ledger');
+    expect(stepsText(captured([call]))).not.toContain('ledger');
   });
 
   it('masks a tool name on a public server that is not shaped like one', () => {
@@ -202,6 +207,7 @@ describe('identity holds public names only', () => {
       const masked = { native: '<literal>', identity: { server, tool: '<literal>' } };
       expect(stepsOf([call])[0]).toMatchObject({ action: 'mcp.call', ...masked });
       expect(pooled(captured([call]))).not.toContain('acme');
+      expect(stepsText(captured([call]))).not.toContain('acme');
       // Codex spells a call the same way, and the capture path reaches it through this function once its adapter lands.
       expect(callIdentity(ACTION_TABLES.codex, 'mcp.call', name, '<literal>', { skill: undefined, url: undefined, redact: makeRedactor([]) })).toEqual(masked);
     }
@@ -241,6 +247,7 @@ describe('identity holds public names only', () => {
     const call = { name: 'WebFetch', input: { url: 'https://alice:s3cretpw@corp.example/acme?token=abc' } };
     expect(stepsOf([call])[0]?.identity).toEqual({ host: 'corp.example' });
     expect(JSON.stringify(captured([call]).tools.map((tool) => tool.steps))).not.toMatch(/s3cretpw|alice|acme\//);
+    expect(pooled(captured([call]))).not.toContain('s3cretpw');
     expect(stepsOf([{ name: 'WebFetch', input: { url: 'https://git.acme.internal/x' } }], ['acme.internal'])[0]?.identity).toEqual({ host: '<literal>' });
     expect(stepsOf([{ name: 'WebFetch', input: { url: `https://${'a'.repeat(130)}.example/x` } }])[0]?.identity).toEqual({ host: '<literal>' });
   });
@@ -271,5 +278,6 @@ describe('identity holds public names only', () => {
     const [tool] = capture([call], 'cursor');
     expect(tool?.steps?.[0]).toMatchObject({ action: 'mcp.call', native: '<literal>', identity: { server: 'postgres', tool: '<literal>' } });
     expect(pooled(captured([call], 'cursor'))).not.toContain('acme');
+    expect(stepsText(captured([call], 'cursor'))).not.toContain('acme');
   });
 });
