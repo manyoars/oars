@@ -120,7 +120,7 @@ describe('a planted value is on the wire nowhere', () => {
   const line = (type: string, content: unknown): string =>
     JSON.stringify({ type, timestamp: '2026-06-10T00:00:00.000Z', cwd: '/w', message: { role: type, model: 'claude-opus-5-5', content } });
   const call = (id: string, name: string, input: object): string => line('assistant', [{ type: 'tool_use', id, name, input }]);
-  const PLANTED = ['quokka-ledger', 'marmalade-secret', 'octopus-pattern', 'walrus --flag', '/a'];
+  const PLANTED = ['quokka-ledger', 'marmalade-secret', 'octopus-pattern', 'walrus --flag', 'walrus-urlpath'];
   // A fetched URL's host is a long-tail name since CAPTURE 24 (t903): it crosses as `identity.host` and the pool hashes it on arrival. The URL's path and the prompt never do.
   const HOST = 'zephyr.example.org';
 
@@ -129,7 +129,7 @@ describe('a planted value is on the wire nowhere', () => {
       line('user', 'go'),
       call('t1', 'Read', { file_path: 'src/quokka-ledger.ts', offset: 5 }),
       call('t2', 'Grep', { pattern: 'octopus-pattern', path: 'src', glob: '*.marmalade-secret' }),
-      call('t3', 'WebFetch', { url: 'https://zephyr.example.org/a', prompt: 'marmalade-secret' }),
+      call('t3', 'WebFetch', { url: 'https://zephyr.example.org/walrus-urlpath', prompt: 'marmalade-secret' }),
       call('t4', 'Bash', { command: 'walrus --flag', description: 'quokka-ledger' }),
       call('t5', 'WorkspaceHelper', { quokka_key: 1, query: 'marmalade-secret' }),
     ].join('\n');
