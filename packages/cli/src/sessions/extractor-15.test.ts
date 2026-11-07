@@ -24,7 +24,7 @@ const checkout = (command: string): string[] =>
     JSON.stringify(entry),
   );
 
-/** [session name, command, the bucket at main's versions (EXTRACTOR 14, CAPTURE 21), the bucket now]. */
+/** [session name, command, the bucket at main's versions (EXTRACTOR 14, CAPTURE 22), the bucket now]. */
 const CHECKOUTS: readonly (readonly [string, string, PromptIntervention, PromptIntervention])[] = [
   ['branch-slashed', 'git checkout feature/x', 'revert', 'none'],
   ['branch-quoted', 'git checkout "fix-1"', 'revert', 'none'],
@@ -90,7 +90,7 @@ interface LogRecord {
 }
 const isLogRecord = (value: unknown): value is LogRecord => typeof value === 'object' && value !== null && 'kind' in value && typeof value.kind === 'string';
 /**
- * The store totals (20 prompts) over the staged store with the capture log as main left it (CAPTURE 21), read by EXTRACTOR 15: measured by running this test.
+ * The store totals (20 prompts) over the staged store with the capture log as main left it (CAPTURE 22), read by EXTRACTOR 15: measured by running this test.
  * The two declines read `user-stop` here; main's own EXTRACTOR 14 reading of them was not run, because the old extractor is not in this tree.
  */
 const MAIN_ERA: { [bucket in PromptIntervention]: number } = { none: 5, 'after-error': 0, redo: 0, revert: 3, 'user-stop': 2, unknown: 10 };
@@ -103,12 +103,12 @@ describe('EXTRACTOR_VERSION 15 and CAPTURE_VERSION 23', () => {
     expect(Number(CAPTURE_VERSION)).toBeGreaterThanOrEqual(23);
   });
 
-  it('refreshes a store as main left it (CAPTURE 21, EXTRACTOR 14), puts every session on the wire with none refused and extensions empty, and holds a listed intervention on every prompt', async () => {
+  it('refreshes a store as main left it (CAPTURE 22, EXTRACTOR 14), puts every session on the wire with none refused and extensions empty, and holds a listed intervention on every prompt', async () => {
     const s = staged();
     await deposit(s.runtime, options);
     const derived = paths(s.storeDir).derived;
-    // The store as main left it: the stamp is '14' (derived prompts are not stored, so it is all that moves there), and the capture log is rewritten as CAPTURE 21 wrote it:
-    // every record is `cv` '21', a `git checkout` step has no `target` key, and a Codex `turn_aborted` has no marker prompt record.
+    // The store as main left it: the stamp is '14' (derived prompts are not stored, so it is all that moves there), and the capture log is rewritten as CAPTURE 22 wrote it:
+    // every record is `cv` '22', a `git checkout` step has no `target` key, and a Codex `turn_aborted` has no marker prompt record.
     writeFileSync(derived, readFileSync(derived, 'utf8').replaceAll(`"v":"${EXTRACTOR_VERSION}"`, '"v":"14"'));
     const log = paths(s.storeDir).observations;
     const dropped = { markers: 0, targets: 0, rewritten: 0 };
@@ -130,7 +130,7 @@ describe('EXTRACTOR_VERSION 15 and CAPTURE_VERSION 23', () => {
         }
       }
       if (record.cv === CAPTURE_VERSION) {
-        record.cv = '21';
+        record.cv = '22';
         dropped.rewritten += 1;
       }
       kept.push(JSON.stringify(record));
@@ -141,7 +141,7 @@ describe('EXTRACTOR_VERSION 15 and CAPTURE_VERSION 23', () => {
     expect(dropped.targets).toBe(4);
     expect(dropped.rewritten).toBeGreaterThan(0);
     const before = await loadStore(s.storeDir);
-    expect(before.tools.every((tool) => Number(tool.cv) <= 21)).toBe(true);
+    expect(before.tools.every((tool) => Number(tool.cv) <= 22)).toBe(true);
     expect(countOf(before)).toEqual(MAIN_ERA);
 
     await refresh(s.runtime, [], '2026-06-10T00:00:00.000Z');
