@@ -1,7 +1,7 @@
 // A session past the request cap deposits in parts that the server keeps as one deposit (t880).
 import { createHash } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
-import { bigSkeleton } from '../../cli/src/sessions/pool-fixture.js';
+import { BIG_CALLS, bigSkeleton } from '../../cli/src/sessions/pool-fixture.js';
 import { canonicalBytes, partsOf } from '../../cli/src/sessions/pool-outbox.js';
 import { parseSkeleton } from '../../cli/src/sessions/pool-wire.js';
 import { receivePart } from './parts.js';
@@ -26,7 +26,7 @@ const bodyText = (row: unknown): string => (typeof row === 'object' && row !== n
 const rows = async (pool: TestPool, sql: string): Promise<unknown> => (await pool.db()).prepare(sql).first('count');
 
 describe('a deposit past the request cap', () => {
-  const big = canonicalBytes(bigSkeleton('0000000000000001', 5000));
+  const big = canonicalBytes(bigSkeleton('0000000000000001', BIG_CALLS));
   const hash = sha(big);
 
   const sendParts = async (pool: TestPool, token: string, parts: readonly string[], order: readonly number[]): Promise<Answer[]> => {
