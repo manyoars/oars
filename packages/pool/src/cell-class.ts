@@ -16,7 +16,7 @@ const frameClear = (frameBucket: string): boolean => {
   if (isEnvironmentCell({ frameBucket })) return true;
   const [, bucket = UNKNOWN, ...model] = frameBucket.split('/');
   const name = model.join('/');
-  return (bucket === UNKNOWN || bucket === NO_AXES || BUCKET.test(bucket) || clearOf('harnessVersion', bucket)) && (name === UNKNOWN || clearOf('model', name));
+  return (bucket === UNKNOWN || bucket === NO_AXES || BUCKET.test(bucket) || clearOf('harnessVersion', bucket)) && (name === UNKNOWN || name === NO_AXES || clearOf('model', name));
 };
 
 const identityClear = (identity: StepIdentity): boolean => {
