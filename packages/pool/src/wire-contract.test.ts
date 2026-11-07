@@ -219,7 +219,7 @@ describe('a format 3 batch with every optional field absent', () => {
     expect(LEVELS_OPTIONAL).toHaveLength(Object.keys(OPTIONAL).length);
     for (const [names, path] of LEVELS_OPTIONAL) {
       for (const name of names) {
-        // A reach, a skill, an edge list, a recoveryCalls, an allocated, or a usageResponses has no null form: it is an object, a list member, a list left out when empty, a true-only flag, or a count whose absence means every response reported, so sending nothing is the one way to leave it out.
+        // A reach, a skill, an edge list, a recoveryCalls, an allocated, or a usageResponses has no null form: it is an object, a list member, a list left out when empty, a true-only flag, or a count left out on a record that predates the coverage, so sending nothing is the one way to leave it out.
         if (ABSENT_ONLY.has(name)) Reflect.deleteProperty(holder(nulled, ...path), name);
         else holder(nulled, ...path)[name] = name in EMPTY ? EMPTY[name] : null;
         Reflect.deleteProperty(holder(sparse, ...path), name);

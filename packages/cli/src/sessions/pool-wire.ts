@@ -130,7 +130,7 @@ export interface SkeletonPrompt {
   usage: SkeletonUsage;
   /** A `calls` bucket of the prompt's steps that only look (`file.read`, `file.search`, `web.search`, `web.fetch`); null when the record holds no count. */
   explore: number | null;
-  /** A `count` bucket of the responses that reported usage: what a partial `usage` sum covers. Absent when every response of the prompt reported all five categories, or the record predates the coverage. */
+  /** A `count` bucket of the responses that reported usage: what a partial `usage` sum covers. Absent only when the record predates the coverage (capture version 20). */
   usageResponses?: number;
   frame: SkeletonFrame;
 }

@@ -110,7 +110,7 @@ export const FIELD_ROWS: { readonly [field: string]: string } = {
   tools: 'The tool calls of a transcript, each a status and duration and its steps, in the order they ran; never their targets or arguments.',
   transcripts: 'The main transcript, then each subagent: its frame, prompts, and tool calls, every value checked against the closed vocabulary before the batch is built.',
   usage: 'The tokens of a prompt as buckets (lower bounds): input, cache write, cache read, output, and thinking.',
-  usageResponses: 'A bucket of the responses of a prompt that reported usage, what a partial usage sum covers; left out when every response reported all five categories.',
+  usageResponses: 'A bucket of the responses of a prompt that reported usage, what a partial usage sum covers; left out only for a record captured before the coverage existed (capture version 20).',
   version: 'The version of a pulled package, only when it is a registry version; else the literal placeholder or null.',
   vocabVersion: 'The version of the closed vocabulary this client built the batch under: a constant of this client, never a value from a session.',
   wallSec: 'A bucket of the seconds a prompt took, or null.',
