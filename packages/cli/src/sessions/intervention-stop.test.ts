@@ -48,7 +48,7 @@ const claudeCode = (stop: Stop, before: Before): string => {
   return asText(lines);
 };
 
-/** Codex: an interrupt is a `turn_aborted` with reason `interrupted`, which the reader counts as a trust event and writes no marker prompt for; a declined call carries `exec command rejected by user`, which is not the harness's rejection sentence. */
+/** Codex: an interrupt is a `turn_aborted` with reason `interrupted`, which the reader writes as the interrupt marker prompt (and counts as a trust event); a declined call carries `exec command rejected by user`, a decline in the harness's fixed text. */
 const codexWith = (stop: Stop, before: Before): string => {
   const lines: object[] = [
     rolloutLine(T(0), 'session_meta', { id: 'sess-1', session_id: 'sess-1', timestamp: T(0), cwd: '/work/app', originator: 'codex_cli_rs', cli_version: '0.50.0' }),
@@ -80,7 +80,7 @@ const copilot = (_stop: Stop, before: Before): string => {
   return eventLines(asText(lines), 'sess').map((entry) => JSON.stringify(entry)).join('\n');
 };
 
-/** Gemini CLI: a call the user cancelled is `cancelled` with `[Operation Cancelled] User cancelled tool execution.`, and an interrupted reply is a placeholder the reader drops. */
+/** Gemini CLI: a call the user cancelled is `cancelled` with `[Operation Cancelled] User cancelled tool execution.`, a decline in the harness's fixed text; an interrupted reply is a placeholder the reader drops and no rule reads (a failed stream writes it too). */
 const gemini = (stop: Stop, before: Before): string => {
   const records: object[] = [geminiHead('sess-1'), { id: 'u1', timestamp: T(1), type: 'user', content: [{ text: 'change the field' }] }];
   const shell = (id: string, status: string, response: object): object => ({ id, name: 'run_shell_command', args: { command: id === 'a' ? 'npm test' : 'rm x' }, status, timestamp: T(3), result: [{ functionResponse: { id, name: 'run_shell_command', response } }] });
@@ -177,15 +177,15 @@ const interventions = async (harness: Harness, build: Build, stop: Stop, before:
   return prompts.filter((prompt) => !prompt.head.startsWith('[Request interrupted by user')).map((prompt) => prompt.intervention);
 };
 
-// Where the harness writes the stop, the stopped prompt reads `user-stop`; where it writes no stop, it keeps the bucket it had. The last prompt ('go on') is `unknown` on every harness.
+// Where the harness writes the stop (the rejection sentence, the interrupt marker, or Codex's and Gemini's fixed decline text), the stopped prompt reads `user-stop`; where it writes no stop, it keeps the bucket it had. The last prompt ('go on') is `unknown` on every harness.
 const READS: readonly (readonly [Harness, Build, PromptIntervention, PromptIntervention])[] = [
   // [harness, builder, bucket after a rejection, bucket after an interrupt]
   ['claude-code', claudeCode, 'user-stop', 'user-stop'],
   ['cursor', cursor, 'user-stop', 'none'],
   ['vscode-copilot', vscode, 'user-stop', 'none'],
-  ['codex', codexWith, 'after-error', 'none'],
+  ['codex', codexWith, 'user-stop', 'user-stop'],
   ['copilot', copilot, 'none', 'none'],
-  ['gemini', gemini, 'after-error', 'none'],
+  ['gemini', gemini, 'user-stop', 'none'],
   ['grok', grok, 'none', 'none'],
 ];
 
@@ -207,5 +207,64 @@ describe('a stop and an error in one prompt', () => {
 
   it('keeps after-error where no stop is recorded: the same failed call without the stop', async () => {
     expect(await interventions('copilot', copilot, 'interrupt', 'failed-run')).toEqual(['after-error', 'unknown']);
+  });
+});
+
+describe('a Codex or Gemini decline is read by its fixed text and nothing else', () => {
+  const codexOutput = (output: string): string => {
+    const lines: object[] = [
+      rolloutLine(T(0), 'session_meta', { id: 'sess-1', session_id: 'sess-1', timestamp: T(0), cwd: '/work/app', originator: 'codex_cli_rs', cli_version: '0.50.0' }),
+      rolloutLine(T(1), 'turn_context', { model: 'gpt-5-codex', cwd: '/work/app' }),
+      rolloutLine(T(2), 'event_msg', { type: 'user_message', message: 'change the field' }),
+      rolloutLine(T(3), 'response_item', { type: 'function_call', name: 'shell', arguments: JSON.stringify({ command: ['rm', 'x'] }), call_id: 'c1' }),
+      rolloutLine(T(4), 'response_item', { type: 'function_call_output', call_id: 'c1', output }),
+      rolloutLine(T(5), 'event_msg', { type: 'user_message', message: 'go on' }),
+    ];
+    return rolloutLines(asText(lines), 'sess').map((entry) => JSON.stringify(entry)).join('\n');
+  };
+
+  it('reads a Codex patch decline: user-stop, with `stopped` left null for the books', async () => {
+    const lines = [
+      rolloutLine(T(0), 'session_meta', { id: 'sess-1', session_id: 'sess-1', timestamp: T(0), cwd: '/work/app', originator: 'codex_cli_rs', cli_version: '0.50.0' }),
+      rolloutLine(T(1), 'turn_context', { model: 'gpt-5-codex', cwd: '/work/app' }),
+      rolloutLine(T(2), 'event_msg', { type: 'user_message', message: 'change the field' }),
+      rolloutLine(T(3), 'response_item', { type: 'custom_tool_call', name: 'apply_patch', input: '*** Begin Patch\n*** Update File: src/a.ts\n@@\n-a\n+b\n*** End Patch', call_id: 'p1' }),
+      rolloutLine(T(4), 'event_msg', { type: 'patch_apply_end', call_id: 'p1', success: false, stderr: 'patch rejected by user', status: 'declined' }),
+      rolloutLine(T(5), 'event_msg', { type: 'user_message', message: 'go on' }),
+    ];
+    const text = rolloutLines(asText(lines), 'sess').map((entry) => JSON.stringify(entry)).join('\n');
+    expect(await interventions('codex', () => text, 'rejected', 'edit')).toEqual(['user-stop', 'unknown']);
+  });
+
+  it('does not read Codex text that is not the decline: a policy rejection', async () => {
+    expect(await interventions('codex', () => codexOutput('write_stdin rejected: policy'), 'rejected', 'edit')).not.toContain('user-stop');
+  });
+
+  it('reads a decline in the last prompt as unknown: the last-prompt rule stays first', async () => {
+    const lines = rolloutLines(
+      asText([
+        rolloutLine(T(0), 'session_meta', { id: 'sess-1', session_id: 'sess-1', timestamp: T(0), cwd: '/work/app', originator: 'codex_cli_rs', cli_version: '0.50.0' }),
+        rolloutLine(T(1), 'turn_context', { model: 'gpt-5-codex', cwd: '/work/app' }),
+        rolloutLine(T(2), 'event_msg', { type: 'user_message', message: 'change the field' }),
+        rolloutLine(T(3), 'response_item', { type: 'function_call', name: 'shell', arguments: JSON.stringify({ command: ['rm', 'x'] }), call_id: 'c1' }),
+        rolloutLine(T(4), 'response_item', { type: 'function_call_output', call_id: 'c1', output: 'exec command rejected by user' }),
+      ]),
+      'sess',
+    )
+      .map((entry) => JSON.stringify(entry))
+      .join('\n');
+    expect(await interventions('codex', () => lines, 'rejected', 'edit')).toEqual(['unknown']);
+  });
+
+  it('does not read a Codex turn_aborted whose reason is the harness own', async () => {
+    const lines = [
+      rolloutLine(T(0), 'session_meta', { id: 'sess-1', session_id: 'sess-1', timestamp: T(0), cwd: '/work/app', originator: 'codex_cli_rs', cli_version: '0.50.0' }),
+      rolloutLine(T(1), 'turn_context', { model: 'gpt-5-codex', cwd: '/work/app' }),
+      rolloutLine(T(2), 'event_msg', { type: 'user_message', message: 'change the field' }),
+      rolloutLine(T(3), 'event_msg', { type: 'turn_aborted', reason: 'replaced' }),
+      rolloutLine(T(4), 'event_msg', { type: 'user_message', message: 'go on' }),
+    ];
+    const text = rolloutLines(asText(lines), 'sess').map((entry) => JSON.stringify(entry)).join('\n');
+    expect(await interventions('codex', () => text, 'interrupt', 'edit')).toEqual(['none', 'unknown']);
   });
 });

@@ -54,7 +54,7 @@ import { basename, join } from 'node:path';
 import { createInterface } from 'node:readline';
 import { PassThrough, pipeline } from 'node:stream';
 import { createZstdDecompress, zstdDecompressSync } from 'node:zlib';
-import { SHAPE_INTERRUPT_LINE, SHAPE_TOOLS_LINE } from './session-shape.js';
+import { INTERRUPT_MARKER, SHAPE_TOOLS_LINE } from './session-shape.js';
 
 /** The Codex home for an environment; a test passes its own so it never reads the real one. */
 export const codexRoot = (env: { [name: string]: string | undefined }, home: string = homedir()): string => {
@@ -508,10 +508,8 @@ export const rolloutLines = (text: string, fallbackId: string, parentText?: stri
         if (isObj(payload.item)) completed(payload.item, when);
       } else if (kind === 'turn_aborted') {
         // Only `interrupted` is the operator cutting a turn short: `replaced`, `review_ended`, and `budget_limited` are the harness's own (protocol.rs:4580-4585).
-        if (payload.reason === 'interrupted') {
-          sequence += 1;
-          lines.push({ ...base, type: SHAPE_INTERRUPT_LINE, uuid: `${fallbackId}-i${String(sequence)}` });
-        }
+        // It is written as the marker line Claude Code writes, so capture keeps it as a prompt record and the shape counts one interrupt (CAPTURE 21).
+        if (payload.reason === 'interrupted') prompted(`${INTERRUPT_MARKER}]`, when);
       } else if (kind === 'agent_message') {
         const message = str(payload.message);
         if (message !== undefined) assistant([{ type: 'text', text: message }], when);

@@ -458,7 +458,8 @@ describe("the shape's edge cases", () => {
     const plain = codex(rollout(null));
     const declared = codex(rollout([{ type: 'function', name: 'lookup' }]));
     expect(declared.tsFirst).toBe(plain.tsFirst);
-    expect(plain.tsLast).toBe(at(500));
+    // The interrupt is a marker user line since CAPTURE 21, so it is the last line time.
+    expect(plain.tsLast).toBe(at(600));
     expect(declared.tsLast).toBe(plain.tsLast);
     expect(declared.funnel).toEqual({ offered: ['lookup'] });
   });
@@ -486,7 +487,7 @@ describe("the shape's edge cases", () => {
         typed(0, 'go'),
         called(1, 'a', 'shell'),
         answered(2, 'a', "The user doesn't want to proceed with this tool use. The tool use was rejected.", true),
-        line({ ...base(3), type: 'oars-interrupt' }),
+        typed(3, '[Request interrupted by user]'),
       ],
       { harness: 'codex' },
     );
