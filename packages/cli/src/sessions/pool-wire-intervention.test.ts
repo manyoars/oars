@@ -1,6 +1,6 @@
 // The wire carries what the next human prompt did to a prompt's work (t882, Item 3): one member of a closed list per prompt, or nothing when the stored prompt predates the signal. It is an outcome row,
-// not a grade; no prompt text, head, or path crosses. The proof is the round trip of docs/pool.md "Wire field register": built from the store, written as the canonical bytes the outbox hashes, parsed as the
-// server parses them, and equal.
+// not a grade; no prompt text, head, or path crosses. The proof is a canonical-bytes round trip of the built skeleton (written as the bytes the outbox hashes, parsed as the server parses them, and equal);
+// section 17 rule 7 of the direction conclusion (local store re-derived under the new wire, zero unparseable) is extractor-13.test.ts.
 import { describe, expect, it } from 'vitest';
 import { canonicalBytes } from './pool-outbox.js';
 import { frame, printOf, prompt, session, sessionsFrom, store, storedNames } from './pool-fixture.js';
