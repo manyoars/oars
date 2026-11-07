@@ -17,6 +17,12 @@ export interface TestDb {
   prepare: (sql: string) => Statement & { bind: (...values: (string | number | null)[]) => Statement };
 }
 
+/** The R2 calls these tests make, named here for the same reason as `TestDb`. */
+export interface TestBucket {
+  list: (options?: { prefix?: string }) => Promise<{ objects: readonly { key: string }[] }>;
+  get: (key: string) => Promise<{ arrayBuffer: () => Promise<ArrayBuffer> } | null>;
+}
+
 export interface StubUser {
   id: string;
   login: string;
@@ -115,6 +121,10 @@ export interface TestPool {
   miniflare: Miniflare;
   url: () => Promise<string>;
   db: () => Promise<TestDb>;
+  /** The raw tier's bucket, read straight from the binding: what the Worker wrote, never through a route. */
+  bucket: () => Promise<TestBucket>;
+  /** A request with any method and a text or byte body, for the raw tier's PUT and POST. */
+  send: (path: string, init: { method: string; body?: string | Uint8Array }, token?: string, headers?: { [name: string]: string }) => Promise<RawAnswer>;
   post: (path: string, body: unknown, token?: string) => Promise<Answer>;
   get: (path: string, token?: string) => Promise<Answer>;
   raw: (path: string, token?: string, headers?: { [name: string]: string }) => Promise<RawAnswer>;
@@ -155,6 +165,7 @@ export const startPool = async (bindings: { [name: string]: string } = {}): Prom
     compatibilityDate: config.compatibilityDate,
     compatibilityFlags: config.compatibilityFlags,
     d1Databases: { DB: 'pool-test' },
+    r2Buckets: { RAW: 'oars-pool-raw' },
     bindings: { PSEUDONYM_KEY: 'a-test-pseudonym-key', BUNDLE_SIGNING_KEY: key.jwk, COVENANT_VERSION: 'v1', FETCH_CAP: '1000', ...bindings },
     outboundService: stub.outbound,
   });
@@ -165,7 +176,9 @@ export const startPool = async (bindings: { [name: string]: string } = {}): Prom
     for (const line of readFileSync(fileIn(`../migrations/${file}`), 'utf8').split('\n')) if (line.trim() !== '' && !line.startsWith('--')) await database.prepare(line).run();
   }
 
-  const call = async (path: string, init: { method: string; body?: string }, token?: string, headers: { [name: string]: string } = {}): Promise<RawAnswer> => {
+  const bucket = async (): Promise<TestBucket> => (await miniflare.getBindings<{ RAW: TestBucket }>()).RAW;
+
+  const call = async (path: string, init: { method: string; body?: string | Uint8Array }, token?: string, headers: { [name: string]: string } = {}): Promise<RawAnswer> => {
     const response = await miniflare.dispatchFetch(`http://pool.test${path}`, { ...init, headers: { ...(token === undefined ? {} : { authorization: `Bearer ${token}` }), ...headers } });
     const text = await response.text();
     return { status: response.status, json: text === '' ? null : JSON.parse(text), headers: response.headers };
@@ -183,6 +196,8 @@ export const startPool = async (bindings: { [name: string]: string } = {}): Prom
     miniflare,
     url: async () => (await miniflare.ready).origin,
     db,
+    bucket,
+    send: call,
     post,
     get,
     raw,
