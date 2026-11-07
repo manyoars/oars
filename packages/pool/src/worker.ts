@@ -105,7 +105,7 @@ const deposit = async (request: Request, env: Env): Promise<Response> => {
   if (Number(request.headers.get('content-length')) > MAX_DEPOSIT_BYTES) return tooLarge();
   const text = await request.text();
   if (new TextEncoder().encode(text).length > MAX_DEPOSIT_BYTES) return tooLarge();
-  return request.headers.has('oars-part') ? receivePart(request, env, account, text, (whole) => storeDeposit(env, account, secret, whole)) : storeDeposit(env, account, secret, text);
+  return request.headers.has('oars-part') ? receivePart(request, env, account, secret, text, (whole) => storeDeposit(env, account, secret, whole)) : storeDeposit(env, account, secret, text);
 };
 
 /** A name that does not decode stays as it came: no vocabulary holds it, so the route refuses it by name. */
