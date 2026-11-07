@@ -28,7 +28,10 @@ export interface Entry {
   buckets: [number, number][];
 }
 
-/** A Worker invocation may make about a thousand subrequests, and each batch read is one; a day with more is rolled up to this many and the rest wait for the next run. */
+/**
+ * A Worker invocation may make about a thousand subrequests, and each batch read is one, so one invocation reads at most this many batches across every day it rolls.
+ * Batches past it go uncounted: a run deletes the day's rows and lists the same keys in the same order, so the next run reads the same first ones again. A fleet that outgrows it needs a Queue.
+ */
 export const MAX_BATCHES_PER_RUN = 800;
 /** An install-day holds at most this many cells, so a crafted batch cannot grow a row without bound. */
 export const MAX_CELLS_PER_INSTALL_DAY = 64;
@@ -92,25 +95,39 @@ export interface Rolled {
   day: string;
   batches: number;
   installs: number;
-  /** True when the day held more batches than one run reads. */
+  /** True when the day held more batches than the run had left to read; the rest are uncounted. */
   truncated: boolean;
+  /** Batch reads this day cost, parsed or not: what comes off the run's budget. */
+  gets: number;
+  /** True when the day's rows were left as they were because the run could not read the day whole. */
+  kept: boolean;
+}
+
+export interface RollupOptions {
+  /** Batch reads this call may make. Defaults to `MAX_BATCHES_PER_RUN`. */
+  budget?: number;
+  /** Leave the day's rows alone when the day is cut short: a smaller sample must not replace a whole one counted on an earlier night. */
+  keepWhenCut?: boolean;
 }
 
 /** Rolls the day's batches (by the day they arrived) into its rows, replacing whatever rows the day had. */
-export const rollupDay = async (env: Env & RollupEnv, day: string): Promise<Rolled | undefined> => {
+export const rollupDay = async (env: Env & RollupEnv, day: string, options: RollupOptions = {}): Promise<Rolled | undefined> => {
   const bucket = env.TELEMETRY;
   if (bucket === undefined || !DAY.test(day)) return undefined;
   const byInstall = new Map<string, Accumulated>();
+  const budget = options.budget ?? MAX_BATCHES_PER_RUN;
   let batches = 0;
+  let gets = 0;
   let truncated = false;
   let cursor: string | undefined;
   do {
     const page = await bucket.list({ prefix: `telemetry/${day}/`, ...(cursor === undefined ? {} : { cursor }) });
     for (const { key } of page.objects) {
-      if (batches >= MAX_BATCHES_PER_RUN) {
+      if (gets >= budget) {
         truncated = true;
         break;
       }
+      gets += 1;
       const text = await (await bucket.get(key))?.text();
       const batch = text === undefined ? undefined : batchOf(text);
       if (batch === undefined) continue;
@@ -123,21 +140,30 @@ export const rollupDay = async (env: Env & RollupEnv, day: string): Promise<Roll
     }
     cursor = truncated || !page.truncated ? undefined : page.cursor;
   } while (cursor !== undefined);
+  const installs = new Set([...byInstall.values()].map((one) => one.install)).size;
+  if (truncated && options.keepWhenCut === true) return { day, batches, installs, truncated, gets, kept: true };
   const insert = [...byInstall.values()].map((one) =>
     env.DB.prepare('INSERT INTO telemetry_install_days (day, install, account, batches, events, measures) VALUES (?, ?, ?, ?, ?, ?)').bind(day, one.install, one.account, one.batches, one.seen.size, JSON.stringify(entriesOf(one))),
   );
   // One transaction, so a reader sees the day before or after the run, never half of it.
   await env.DB.batch([env.DB.prepare('DELETE FROM telemetry_install_days WHERE day = ?').bind(day), ...insert]);
-  return { day, batches, installs: new Set([...byInstall.values()].map((one) => one.install)).size, truncated };
+  return { day, batches, installs, truncated, gets, kept: false };
 };
 
-/** What the nightly run does: the day before and the day before that, since a batch whose first answer was lost arrives a day late. */
+/**
+ * What the nightly run does: yesterday, then the day before, since a batch whose first answer was lost arrives a day late. The two share one budget of batch reads, yesterday first because
+ * it is the day no earlier run has counted; the day before gets what is left and, if that cannot read it whole, keeps the rows an earlier night wrote.
+ */
 export const rollupRecent = async (env: Env & RollupEnv, now: number): Promise<Rolled[]> => {
   const today = dayOf(now);
   const rolled: Rolled[] = [];
-  for (const day of [shiftDay(today, -2), shiftDay(today, -1)]) {
-    const one = await rollupDay(env, day);
-    if (one !== undefined) rolled.push(one);
+  let budget = MAX_BATCHES_PER_RUN;
+  for (const [day, keepWhenCut] of [[shiftDay(today, -1), false], [shiftDay(today, -2), true]] as const) {
+    const one = await rollupDay(env, day, { budget, keepWhenCut });
+    if (one !== undefined) {
+      budget -= one.gets;
+      rolled.push(one);
+    }
   }
   return rolled;
 };
