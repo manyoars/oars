@@ -131,9 +131,7 @@ Reads only `crossings.jsonl` and prints counts, in the closed vocabulary above, 
 
 A command run from a script, alias, or Makefile; a manifest edit a later bare install picked up; what a person saw or approved; an MCP server started and never called; folders off the allowlist; logs the harness already cleaned up; a session in Codex, Cursor, Copilot, Gemini CLI, Grok Build, OpenCode, or VS Code Copilot Chat, which replay does not read. `oars gate report` ends with this list and the counts by shape.
 
-## Measured
-
-The figures once quoted here came from one run over one machine's harness folder and cannot be reproduced from this repository, so they are removed. What reading that run changed in the code stands:
+## What a reading of real transcripts changed
 
 - A package crossing's `origin` is the first place the name is mentioned, as a word, so a short brand-like name that also appears in prose reads as a mention.
 - An `npx` fetch-and-run whose bin its folder's `node_modules/.bin` holds is recorded as `local-bin-run`. A replay reads the folder as it is on the day it runs: a bin removed since reads as a fetch, and a folder that is gone reads as a fetch.
