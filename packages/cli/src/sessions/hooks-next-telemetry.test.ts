@@ -23,7 +23,7 @@ const staged = async (recovery: { [key: string]: RecoveryEdge[] }, positions: Po
   const made = stage(slugOf(REPO));
   await deposit(made.runtime, { allow: [REPO], redactDomains: [], now: () => NOW });
   const index = await readIndex(made.storeDir);
-  writeFileSync(indexPath(made.storeDir), JSON.stringify({ ...index, recovery, positions }));
+  writeFileSync(indexPath(made.storeDir), JSON.stringify({ ...index, recoveryByFrame: { 'claude-code/*': recovery }, positionsByFrame: { 'claude-code/*': positions } }));
   return made;
 };
 
@@ -88,7 +88,7 @@ describe('the hook telemetry of the next-node reads', () => {
     const session = sessionOn(made, 'shown', 'positions');
     await run(made, 'session-start', startOf(session));
     const index = await readIndex(made.storeDir);
-    writeFileSync(indexPath(made.storeDir), JSON.stringify({ ...index, positions: [position, { ...position, prefix: 'file.read', n: 30 }] }));
+    writeFileSync(indexPath(made.storeDir), JSON.stringify({ ...index, positionsByFrame: { 'claude-code/*': [position, { ...position, prefix: 'file.read', n: 30 }] } }));
     const changed = await run(made, 'prompt', promptOf(session));
     expect(hook(changed.events)?.fields).toMatchObject({ name: 'prompt', outcome: 'hit' });
     expect(Number(hook(changed.events)?.fields.bytes)).toBe(Buffer.byteLength(changed.output ?? ''));

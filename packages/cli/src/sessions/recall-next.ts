@@ -2,13 +2,14 @@
 // failure, for this action and error class) and the split positions (the places in a repo's earlier work where the next step is not settled). A read is built from the kept
 // bundle for the session's setup first and the local pool's reads second, and every shown or held one is a `Recall` row, so the holdback arms are real.
 import { CANONICAL_ACTIONS } from './actions.js';
+import { harnessBucket } from './cells.js';
 import type { Read } from './read.js';
 import { appendRecall, armOf, makeRecall, parseRecalls, recallsPath, type Recall } from './recall-object.js';
 import { frameOfTail, tailOf } from './recall-push.js';
 import { sessionBundle } from './pool-replica.js';
 import { readIdOf, type RecallRead } from './recall-reads.js';
 import { closedName, count, evidenceOf } from './recall-render.js';
-import type { Frame } from './schema.js';
+import type { Frame, Harness } from './schema.js';
 import { LITERAL } from './public-vocabulary.js';
 
 /**
@@ -31,7 +32,7 @@ const MAX_FOLLOWED = 3;
 export interface RecoveryEdge {
   next: string;
   followed: number;
-  /** The failures of this action and code over the weeks summed, the denominator of the share. */
+  /** The failures of this action and code over every week, the one denominator of every edge's share. */
   of: number;
   clusters: number;
   /** The heaviest week's read, the one the row cites. */
@@ -76,12 +77,17 @@ export const recoveryEdgesOf = (reads: readonly Read[], keep: (followed: number)
     heaviest: number;
   }
   const grouped = new Map<string, Map<string, Weighted>>();
+  // The failures of one action and error class, once: every week's reads of its next steps share a week's failures, so a next step seen in fewer weeks must not get a smaller denominator.
+  // A week's failures are the sum of what followed them, so the total over every next step is that sum over all its weeks.
+  const failures = new Map<string, number>();
   for (const read of reads) {
     if (read.family !== 'recovery') continue;
     const { action, errorCode, next } = read.slice;
     const { followed, of } = read.value;
-    if (action === undefined || errorCode === undefined || next === undefined || !isCount(followed) || !isCount(of) || followed === 0 || !(next === 'none' || isAction(next))) continue;
+    if (action === undefined || errorCode === undefined || next === undefined || !isCount(followed) || !isCount(of) || followed === 0) continue;
     const key = `${action}/${errorCode}`;
+    failures.set(key, (failures.get(key) ?? 0) + followed);
+    if (!(next === 'none' || isAction(next))) continue;
     const edges = grouped.get(key) ?? new Map<string, Weighted>();
     grouped.set(key, edges);
     const have = edges.get(next);
@@ -90,7 +96,6 @@ export const recoveryEdgesOf = (reads: readonly Read[], keep: (followed: number)
       continue;
     }
     have.edge.followed += followed;
-    have.edge.of += of;
     have.edge.clusters = Math.max(have.edge.clusters, read.clusters);
     if (followed > have.heaviest) {
       have.heaviest = followed;
@@ -100,7 +105,7 @@ export const recoveryEdgesOf = (reads: readonly Read[], keep: (followed: number)
   }
   const edges: RecoveryEdges = {};
   for (const [key, byNext] of grouped) {
-    const sorted = [...byNext.values()].map((weighted) => weighted.edge).sort(byWeight);
+    const sorted = [...byNext.values()].map((weighted) => ({ ...weighted.edge, of: failures.get(key) ?? weighted.edge.of })).sort(byWeight);
     if (sorted[0] !== undefined && keep(sorted[0].followed)) edges[key] = sorted.slice(0, MAX_FOLLOWED);
   }
   return edges;
@@ -185,6 +190,12 @@ export const renderPositions = (positions: readonly Position[]): { rendered: str
   return { rendered: listed.length === 0 ? '' : [header, ...lines].join('\n'), listed, names: [...new Set(listed.flatMap((position) => position.next.map(([action]) => action)))] };
 };
 
+/**
+ * The key a hook index files the local pool's reads under for a session: its harness and the bucket of the version it runs (`recall-frames.ts`). A session whose version is not
+ * stated is read across every version of its harness, which is the filter that can be applied honestly.
+ */
+export const frameKeyOf = (asker: Asker): string => `${asker.harness}/${asker.harnessVersion === null ? '*' : harnessBucket(asker.harnessVersion)}`;
+
 /** The bundle's and the local pool's positions as one list, a prefix once and the bundle's first. */
 export const mergePositions = (bundle: readonly Position[], local: readonly Position[]): Position[] => {
   const seen = new Set(bundle.map((position) => position.prefix));
@@ -192,7 +203,7 @@ export const mergePositions = (bundle: readonly Position[], local: readonly Posi
 };
 
 export interface Asker {
-  harness: string;
+  harness: Harness;
   harnessVersion: string | null;
 }
 
@@ -228,7 +239,7 @@ export const frameFor = (input: Pick<NextInput, 'tail' | 'platform' | 'at'>): Fr
 
 /** The reads of the kept bundle for the asker's harness and version; undefined with no version stated, no bundle, or a bundle that does not verify (never an error). */
 export const bundleNext = async (storeDir: string, asker: Asker): Promise<NextReads | undefined> => {
-  const bundle = asker.harnessVersion === null ? undefined : await sessionBundle(storeDir, { harness: 'claude-code', harnessVersion: asker.harnessVersion });
+  const bundle = asker.harnessVersion === null ? undefined : await sessionBundle(storeDir, { harness: asker.harness, harnessVersion: asker.harnessVersion });
   return bundle === undefined ? undefined : { poolVersion: bundle.asOf.pool, recovery: recoveryEdgesOf(bundle.reads), positions: positionsOf(bundle.reads) };
 };
 

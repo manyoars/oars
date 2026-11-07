@@ -621,17 +621,20 @@ export const refresh = async (runtime: SessionsRuntime, redactDomains: readonly 
   }
   // The pool is derived for the index's fit reads only: one that cannot be read or written costs the index those, never the index itself (`currentPool` says so on stderr). Loaded here, not at the top: the pool imports every read family, and a lookup hook never reaches this step. It runs before the clock starts, so the index's `ms` is the index and not the derive (the first pool run takes 12 to 17 s on a store copy).
   // A module that will not load costs the index the same fit reads, with one line on stderr, as `currentPool` does when the pool cannot be built.
-  const reads = await import('./pool.js').then(
-    async ({ currentPool }) => (await currentPool(runtime.storeDir, store))?.reads ?? [],
+  const current = await import('./pool.js').then(
+    async ({ currentPool }) => currentPool(runtime.storeDir, store),
     (error: unknown) => {
       process.stderr.write(`oars: the read pool module could not be loaded, and the index keeps no fit reads: ${error instanceof Error ? error.message : String(error)}
 `);
-      return [];
+      return undefined;
     },
   );
+  const reads = current?.reads ?? [];
   const indexStarted = performance.now();
   try {
-    const index = buildIndex(store, redactDomains, at, reads);
+    // The next-node reads for each harness and version, derived over the same pool; a deposit that has no pool leaves the index without them.
+    const next = current === undefined ? undefined : (await import('./recall-frames.js')).nextByFrame(current.pool, store);
+    const index = buildIndex(store, redactDomains, at, reads, next);
     await requireHold(held);
     await writeAtomic(indexPath(runtime.storeDir), JSON.stringify(index));
     if (trace !== undefined) {

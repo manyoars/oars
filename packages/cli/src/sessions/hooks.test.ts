@@ -7,6 +7,7 @@ import { slugOf } from './allow.js';
 import { readHookCalls } from './hook-calls.js';
 import { hookRuntime, HOOK_EVENTS, nightlyTelemetry, runHook } from './hooks.js';
 import { deposit, depositSession, loadStore } from './store.js';
+import { withoutCells } from './next-fixtures.js';
 import { cleanup, composers, FIXTURES, folders, NOW, stage, stageCursor, stageRawCursor, type Staged } from './test-support.js';
 
 afterEach(cleanup);
@@ -67,7 +68,8 @@ describe('PostToolUseFailure hook', () => {
   const failure = (error: string, tool = 'Bash') => JSON.stringify({ hook_event_name: 'PostToolUseFailure', session_id: 'live', tool_name: tool, tool_input: {}, error });
 
   it('names the sessions that saw the bash-quoting error and what followed', async () => {
-    const { runtime } = await deposited();
+    const { runtime, storeDir } = await deposited();
+    await withoutCells(storeDir);
     const output = await runHook('post-tool', failure(`Exit code 2\n${QUOTING}\n`), runtime, () => NOW);
     expect(specific(output).hookEventName).toBe('PostToolUseFailure');
     expect(context(output)).toMatch(/^oars recall: seen in 2 sessions; what followed: \S+/);
@@ -83,7 +85,8 @@ describe('PostToolUseFailure hook', () => {
   });
 
   it('reads a PostToolUse response that starts with Exit code, and says nothing without an index', async () => {
-    const { runtime } = await deposited();
+    const { runtime, storeDir } = await deposited();
+    await withoutCells(storeDir);
     const input = JSON.stringify({ hook_event_name: 'PostToolUse', session_id: 'live', tool_name: 'Bash', tool_response: `Exit code 2\n${QUOTING}` });
     expect(specific(await runHook('post-tool', input, runtime, () => NOW)).hookEventName).toBe('PostToolUse');
     expect(await runHook('post-tool', input, stage().runtime, () => NOW)).toBeUndefined();

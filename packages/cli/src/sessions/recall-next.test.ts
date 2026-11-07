@@ -5,7 +5,7 @@ import { slugOf } from './allow.js';
 import { indexPath, readIndex } from './hook-index.js';
 import { runHook } from './hooks.js';
 import { armOf, readRecalls } from './recall-object.js';
-import { lastTable, mergePositions, positionsOf, positionsRecall, renderPositions, POSITION_MIN_N, TABLE_CAP_BYTES, type Position } from './recall-next.js';
+import { lastTable, mergePositions, positionsOf, positionsRecall, renderPositions, POSITION_MIN_N, TABLE_CAP_BYTES, type Asker, type Position } from './recall-next.js';
 import type { Read } from './read.js';
 import { deposit } from './store.js';
 import { contextOf, indexAtOf, readOf } from './next-fixtures.js';
@@ -114,7 +114,7 @@ describe('mergePositions', () => {
 });
 
 describe('positionsRecall and lastTable', () => {
-  const asker = { harness: 'claude-code', harnessVersion: null };
+  const asker: Asker = { harness: 'claude-code', harnessVersion: null };
 
   it('is undefined with nothing to list, and when the table is the one already sent', async () => {
     const made = stage();
@@ -142,7 +142,7 @@ const staged = async (positions: Position[]): Promise<Staged> => {
   const made = stage(slugOf(REPO));
   await deposit(made.runtime, { allow: [REPO], redactDomains: [], now: () => NOW });
   const index = await readIndex(made.storeDir);
-  writeFileSync(indexPath(made.storeDir), JSON.stringify({ ...index, positions }));
+  writeFileSync(indexPath(made.storeDir), JSON.stringify({ ...index, positionsByFrame: { 'claude-code/*': positions } }));
   return made;
 };
 
@@ -180,7 +180,7 @@ describe('the table at SessionStart and UserPromptSubmit', () => {
     expect(await runHook('prompt', submit(session), made.runtime, () => NOW)).toBeUndefined();
     expect(await readRecalls(made.storeDir)).toHaveLength(1);
     const index = await readIndex(made.storeDir);
-    writeFileSync(indexPath(made.storeDir), JSON.stringify({ ...index, positions: [position('file.edit', 20), position('file.read', 30)] }));
+    writeFileSync(indexPath(made.storeDir), JSON.stringify({ ...index, positionsByFrame: { 'claude-code/*': [position('file.edit', 20), position('file.read', 30)] } }));
     expect(text(await runHook('prompt', submit(session), made.runtime, () => NOW))).toContain('- after file.read');
     expect(await readRecalls(made.storeDir)).toHaveLength(2);
   });

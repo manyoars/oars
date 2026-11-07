@@ -7,6 +7,9 @@ import { runHook } from './hooks.js';
 import { armOf, readRecalls } from './recall-object.js';
 import { recoveryDecision, recoveryEdgesOf, RECOVERY_FLOOR, type RecoveryEdge } from './recall-next.js';
 import type { Read } from './read.js';
+import { signatureOf } from './extract.js';
+import { readIdOf } from './recall-reads.js';
+import { makeRedactor } from './redact.js';
 import { deposit } from './store.js';
 import { contextOf, indexAtOf, readOf } from './next-fixtures.js';
 import { cleanup, NOW, stage, type Staged } from './test-support.js';
@@ -21,7 +24,7 @@ const staged = async (recovery: { [key: string]: RecoveryEdge[] }): Promise<Stag
   const made = stage(slugOf(REPO));
   await deposit(made.runtime, { allow: [REPO], redactDomains: [], now: () => NOW });
   const index = await readIndex(made.storeDir);
-  writeFileSync(indexPath(made.storeDir), JSON.stringify({ ...index, recovery }));
+  writeFileSync(indexPath(made.storeDir), JSON.stringify({ ...index, recoveryByFrame: { 'claude-code/*': recovery } }));
   return made;
 };
 
@@ -71,6 +74,24 @@ describe('the recovery edge at PostToolUseFailure', () => {
     expect(await readRecalls(made.storeDir)).toEqual([]);
   });
 
+  it('stays silent on a below-floor cell even when a recurring signature matches the error', async () => {
+    const made = await staged({ [KEY]: [edge('file.read', RECOVERY_FLOOR - 1)] });
+    const index = await readIndex(made.storeDir);
+    const sig = signatureOf('Bash', 'Exit code 1\nnothing seen before', makeRedactor([]));
+    writeFileSync(indexPath(made.storeDir), JSON.stringify({ ...index, signatures: { [sig]: { sessions: 4, followed: [['file.read', 3]] } } }));
+    expect(await runHook('post-tool', fail(sessionOn(made, 'shown', KEY)), made.runtime, () => NOW)).toBeUndefined();
+    expect(await readRecalls(made.storeDir)).toEqual([]);
+  });
+
+  it('lets the signature line answer a failure no cell covers', async () => {
+    const made = await staged({});
+    const index = await readIndex(made.storeDir);
+    const sig = signatureOf('Bash', 'Exit code 1\nnothing seen before', makeRedactor([]));
+    writeFileSync(indexPath(made.storeDir), JSON.stringify({ ...index, signatures: { [sig]: { sessions: 4, followed: [['file.read', 3]] } } }));
+    const session = sessionOn(made, 'shown', readIdOf(sig));
+    expect(text(await runHook('post-tool', fail(session), made.runtime, () => NOW))).toContain('seen in 4 sessions');
+  });
+
   it('says nothing for a failure with no session, since the arm is the session', async () => {
     const made = await staged({ [KEY]: [edge('file.read', 12)] });
     expect(await runHook('post-tool', JSON.stringify({ tool_name: 'Bash', error: 'Exit code 1\nx' }), made.runtime, () => NOW)).toBeUndefined();
@@ -107,7 +128,17 @@ describe('recoveryEdgesOf', () => {
 
   it('sums weeks per next step, cites the heaviest week, ignores other families and names that are not actions, and applies the keep rule to the top', () => {
     const reads: Read[] = [read('file.read', 3, '2026-10-26', 'read:a'), read('file.read', 5, '2026-11-02', 'read:b'), read('not an action', 9, '2026-11-02', 'read:c'), { ...read('file.edit', 1, '2026-11-02', 'read:d'), family: 'fit' }];
-    expect(recoveryEdgesOf(reads)['shell.exec/1']).toEqual([{ next: 'file.read', followed: 8, of: 20, clusters: 1, readId: 'read:b', day: '2026-11-02' }]);
+    // The failures are what followed them over every week (3 + 5 + 9), the same for the one edge that survives the name filter.
+    expect(recoveryEdgesOf(reads)['shell.exec/1']).toEqual([{ next: 'file.read', followed: 8, of: 17, clusters: 1, readId: 'read:b', day: '2026-11-02' }]);
     expect(recoveryEdgesOf(reads, (followed) => followed >= 9)).toEqual({});
+  });
+
+  it('gives every edge of an action and code one denominator, however many weeks each next step appeared in', () => {
+    // file.read followed 4 failures in the first week and 2 in the second; file.edit followed 8 in the second only. 14 failures in all.
+    const edges = recoveryEdgesOf([read('file.read', 4, '2026-10-26', 'read:a'), read('file.read', 2, '2026-11-02', 'read:b'), read('file.edit', 8, '2026-11-02', 'read:c')])['shell.exec/1'];
+    expect(edges?.map((edge) => [edge.next, edge.followed, edge.of])).toEqual([
+      ['file.edit', 8, 14],
+      ['file.read', 6, 14],
+    ]);
   });
 });
