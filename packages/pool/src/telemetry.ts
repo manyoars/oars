@@ -108,7 +108,8 @@ export const telemetry = async (request: Request, env: Env & TelemetryEnv, now: 
   const checked = eventsOf(body);
   if (checked instanceof Response) return checked;
   // A credential names the account; one the pool does not know is no credential, and the batch is kept without it.
-  const account = request.headers.has('authorization') ? await accountOf(request, env) : undefined;
+  // The same holds when the database fails while the credential is read: usage data is never refused for want of an account.
+  const account = request.headers.has('authorization') ? await accountOf(request, env).catch(() => undefined) : undefined;
   const received = new Date(now()).toISOString();
   const key = `telemetry/${received.slice(0, 10)}/${crypto.randomUUID()}.json`;
   try {

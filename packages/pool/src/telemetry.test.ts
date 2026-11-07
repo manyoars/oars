@@ -148,8 +148,8 @@ const fakes = (options: { failR2?: boolean; failIndex?: boolean; bare?: 'TELEMET
   return { env, objects, points };
 };
 
-const send = (stores: FakeStores, body: unknown, now: () => number = () => Date.parse('2026-11-07T08:00:00Z')): Promise<Response> =>
-  telemetry(new Request('http://pool.test/v1/telemetry', { method: 'POST', body: JSON.stringify(body) }), stores.env, now);
+const send = (stores: FakeStores, body: unknown, now: () => number = () => Date.parse('2026-11-07T08:00:00Z'), headers: { authorization?: string } = {}): Promise<Response> =>
+  telemetry(new Request('http://pool.test/v1/telemetry', { method: 'POST', body: JSON.stringify(body), headers }), stores.env, now);
 
 describe('the telemetry handler against fake stores', () => {
   it('writes a batch to R2 under its day and to Analytics Engine, one data point per event', async () => {
@@ -175,6 +175,16 @@ describe('the telemetry handler against fake stores', () => {
     expect(answered.status).toBe(201);
     expect(await answered.json()).toEqual({ ok: true, kept: 1, indexed: false });
     expect(stores.objects.size).toBe(1);
+  });
+
+  it('keeps the batch without an account when the database fails while the credential is read', async () => {
+    const stores = fakes();
+    // The fake database throws on every call (`refused`): a credential the pool cannot resolve is no credential, so the batch is kept and answered 201.
+    const answered = await send(stores, { install: INSTALL, events: [command()] }, undefined, { authorization: 'Bearer some-token' });
+    expect(answered.status).toBe(201);
+    expect(stores.objects.size).toBe(1);
+    expect(fieldOf(JSON.parse([...stores.objects.values()][0] ?? ''), 'account')).toBeUndefined();
+    expect(stores.points[0]?.blobs[5]).toBe('');
   });
 
   it('keeps the object and skips the index when no dataset is bound', async () => {

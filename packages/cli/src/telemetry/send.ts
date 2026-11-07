@@ -9,6 +9,7 @@ import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { defaultConfigDir } from '../credentials.js';
+import type { HelperSpawn } from '../gate/hook-fill.js';
 import { telemetrySendAllowed } from './consent.js';
 import type { TelemetryRuntime } from './record.js';
 import { installId, readSpool, spoolPaths } from './spool.js';
@@ -51,10 +52,13 @@ const serverOf = async (env: NodeJS.ProcessEnv): Promise<string | undefined> => 
   }
 };
 
+/** The route answers 400 to an event whose `type` is not a string of 1 to 64 characters, and a failed batch blocks every later send, so such an object is junk here (the pool's `telemetry.ts` holds the rule). */
 const eventOf = (line: string): object | undefined => {
   try {
     const parsed: unknown = JSON.parse(line);
-    return typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed) ? parsed : undefined;
+    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return undefined;
+    const type: unknown = Reflect.get(parsed, 'type');
+    return typeof type === 'string' && type.length >= 1 && type.length <= 64 ? parsed : undefined;
   } catch {
     return undefined;
   }
@@ -175,8 +179,8 @@ export const startDailySend = (runtime: TelemetryRuntime, env: NodeJS.ProcessEnv
 };
 
 /** Starts `send-main.js` detached with no stdio and never waits for it, as the gate's helper is started. */
-export const spawnDetachedSend = (dir: string): void => {
-  const child = spawn(process.execPath, [fileURLToPath(new URL('./send-main.js', import.meta.url)), dir], { detached: true, stdio: 'ignore', windowsHide: true });
+export const spawnDetachedSend = (dir: string, start: HelperSpawn = spawn): void => {
+  const child = start(process.execPath, [fileURLToPath(new URL('./send-main.js', import.meta.url)), dir], { detached: true, stdio: 'ignore', windowsHide: true });
   child.on('error', () => undefined);
   child.unref();
 };
