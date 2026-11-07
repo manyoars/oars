@@ -101,6 +101,19 @@ describe('depositing the VS Code Copilot Chat source', () => {
     expect(found?.frame).toMatchObject({ harness: 'vscode-copilot' });
   });
 
+  it('deposits a request with no modelTotals and no completionTokens as unobserved usage, not a measured zero, and reads it back on the session and its prompt', async () => {
+    const s = staged();
+    stageVscode(s.root, [{ id: C, data: { version: 3, sessionId: C, creationDate: MS(0), requests: [turn(1, 'hi', [md('hello')])] } }]);
+    await deposit(s.runtime, options(['vscode-copilot']));
+    const store = await loadStore(s.storeDir);
+    const found = store.sessions.find((held) => held.session === `vscode-copilot-${C}`);
+    expect(found?.usageObserved).toEqual([]);
+    expect(found?.usageResponses).toBe(0);
+    const prompt = store.prompts.find((held) => held.session === `vscode-copilot-${C}`);
+    expect(prompt?.usageObserved).toEqual([]);
+    expect(prompt?.usageResponses).toBe(0);
+  });
+
   it('is read only when allowed, and an allowed name reports nothing missing while a typo does', async () => {
     const s = staged();
     await expect(deposit(s.runtime, options([]))).rejects.toThrow(/Nothing to read/);
