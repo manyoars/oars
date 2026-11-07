@@ -57,6 +57,17 @@ export const runHookProcess = async ({ stdin, deps, exit, write, deadlineMs, rec
   // `held` and `error` are what the output cannot say; the callback reaches the hook through `deps`.
   const how: { ended: HookFire['outcome'] | null } = { ended: null };
   let fired: Pick<HookFire, 'outcome' | 'bytes'>;
+  // Telemetry hears of a fire once: the deadline timer records the fire it cuts short (the slowest ones), and the main path skips a fire the timer has already told.
+  let recorded = false;
+  const tell = (result: Pick<HookFire, 'outcome' | 'bytes'>): void => {
+    if (recorded) return;
+    recorded = true;
+    try {
+      record?.({ latencyMs: Math.max(0, Math.round(clock() - started)), ...result });
+    } catch {
+      // Telemetry never changes what the hook did.
+    }
+  };
   // `size` is the file's length when the record was staged: an append that wrote and then stalled has put the record's own bytes past it, and the deadline must not write it again.
   let staged: { file: string; text: string; size: number; stop?: () => void } | null = null;
   // The last resort when the process is stuck past its grace: keep the staged record, then go. A write that fails here has nowhere to report, so it is dropped.
@@ -68,6 +79,8 @@ export const runHookProcess = async ({ stdin, deps, exit, write, deadlineMs, rec
       } catch {
         // Fail-open.
       }
+      // The fire the deadline cut short is still a fire: recorded as an error with nothing printed, after the row and before the stop so a slow stop cannot lose it.
+      tell({ outcome: 'error', bytes: 0 });
       // A registry ask still running is then stopped, so the manager the hook started does not outlive it; a stop that throws must not cost the exit.
       try {
         staged?.stop?.();
@@ -89,11 +102,7 @@ export const runHookProcess = async ({ stdin, deps, exit, write, deadlineMs, rec
     // Fail-open: a throw anywhere above is a record not written, never an exit code.
     fired = { outcome: 'error', bytes: 0 };
   }
-  try {
-    record?.({ latencyMs: Math.max(0, Math.round(clock() - started)), ...fired });
-  } catch {
-    // Telemetry never changes what the hook did.
-  }
+  tell(fired);
   // A manager the registry ask started can outlive the ask; leaving by `exit` rather than waiting for it is what keeps the call under a second.
   exit(0);
 };
