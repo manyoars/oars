@@ -57,6 +57,29 @@ describe('the per-account limits', () => {
   }, 120_000);
 });
 
+describe('a redeposit', () => {
+  it('replaces the row in place, adds nothing to the count, and never deletes: the ledger triggers still refuse a delete', async () => {
+    const pool = await startPool({ COVENANT_VERSION: 'v1', MAX_DEPOSITS_PER_ACCOUNT: '1' });
+    try {
+      const token = await signedIn(pool, '8004');
+      const db = await pool.db();
+      const first = sampleSkeleton('0000000000000001', { languages: ['typescript'] }, '2026-11-01');
+      expect((await pool.post('/v1/deposits', first, token)).status).toBe(201);
+      const before = await db.prepare('SELECT skeleton FROM deposits').first('skeleton');
+      // At a one-row brake, the same session again is a replacement, not a second row.
+      expect((await pool.post('/v1/deposits', sampleSkeleton('0000000000000001', { languages: ['python'] }, '2026-11-02'), token)).status).toBe(201);
+      expect(await db.prepare('SELECT COUNT(*) AS count FROM deposits').first('count')).toBe(1);
+      expect(await db.prepare('SELECT skeleton FROM deposits').first('skeleton')).not.toBe(before);
+      // The replacement was an UPDATE: the ledger's delete triggers hold, and the earlier cells stay as contributors.
+      await expect(db.prepare('DELETE FROM deposits').run()).rejects.toThrow('ledger rows are never deleted');
+      await expect(db.prepare('DELETE FROM contributors').run()).rejects.toThrow('ledger rows are never deleted');
+      expect(Number(await db.prepare('SELECT COUNT(*) AS count FROM contributors').first('count'))).toBeGreaterThan(0);
+    } finally {
+      await pool.dispose();
+    }
+  }, 60_000);
+});
+
 describe('brake', () => {
   it('is a positive whole number, and anything else is no limit', () => {
     expect(brake('3')).toBe(3);

@@ -1026,6 +1026,37 @@ describe('oars pool deposit --send', () => {
     expect(batchHash(posts[0]?.body ?? '')).toBe(hash);
   });
 
+  it('sends a batch past one request in ordered parts under the cap, each naming the whole batch, and stops at a finished deposit', async () => {
+    const scene = await batched();
+    const file = join(scene.staged.storeDir, 'pool-outbox', outboxFiles(scene)[0] ?? '');
+    const bytes = canonicalBytes({ ...JSON.parse(readFileSync(file, 'utf8')), pad: 'é'.repeat(700_000) });
+    const hash = batchHash(bytes);
+    const folder = join(file, '..');
+    rmSync(file);
+    writeFileSync(join(folder, `${outboxFiles(scene)[0]?.split(/[\\/]/).at(-1)?.split('.')[0] ?? ''}.${hash}.jsonl`), bytes);
+    expect(await scene.cli('pool', 'outbox', '--server', POOL)).toBe(ExitCode.OK);
+    const parts = [answer(202, { ok: true, pending: 2 }), answer(202, { ok: true, pending: 1 }), answer(201, { ok: true })];
+    const pool = wire({ 'GET /v1/covenant': OPEN_COVENANT, 'POST /v1/deposits': parts });
+    await poolDeposit(scene.h.deps, sendOptions(hash, pool.via));
+    const posts = pool.requests.filter((request) => request.method === 'POST');
+    expect(posts).toHaveLength(3);
+    expect(posts.map((request) => request.headers.find(([name]) => name === 'oars-part')?.[1])).toEqual(['1/3', '2/3', '3/3']);
+    for (const request of posts) {
+      expect(request.headers.find(([name]) => name === 'oars-batch')?.[1]).toBe(hash);
+      expect(Buffer.byteLength(request.body ?? '', 'utf8')).toBeLessThan(1024 * 1024);
+    }
+    expect(posts.map((request) => request.body).join('')).toBe(bytes);
+    // A part answered 201 means the deposit finished already, so the parts after it are not sent.
+    const finished = wire({ 'GET /v1/covenant': OPEN_COVENANT, 'POST /v1/deposits': answer(201, { ok: true }) });
+    await poolDeposit(scene.h.deps, sendOptions(hash, finished.via));
+    expect(finished.requests.filter((request) => request.method === 'POST')).toHaveLength(1);
+    // A last part that is not 201, and a middle part that is neither 202 nor 201, are refusals.
+    const refused = wire({ 'GET /v1/covenant': OPEN_COVENANT, 'POST /v1/deposits': [answer(202, { ok: true }), answer(202, { ok: true }), answer(400, { error: 'part_mismatch', message: 'no' })] });
+    await expect(poolDeposit(scene.h.deps, sendOptions(hash, refused.via))).rejects.toMatchObject({ problem: { status: 400 } });
+    const early = wire({ 'GET /v1/covenant': OPEN_COVENANT, 'POST /v1/deposits': answer(500, { error: 'boom', message: 'no' }) });
+    await expect(poolDeposit(scene.h.deps, sendOptions(hash, early.via))).rejects.toMatchObject({ problem: { status: 500 } });
+  });
+
   it('refuses a batch that was never printed, and sends nothing', async () => {
     const scene = await batched();
     const hash = batchHash(batchBytes(scene)[0] ?? '');

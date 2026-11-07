@@ -115,7 +115,7 @@ export interface TestPool {
   miniflare: Miniflare;
   url: () => Promise<string>;
   db: () => Promise<TestDb>;
-  post: (path: string, body: unknown, token?: string) => Promise<Answer>;
+  post: (path: string, body: unknown, token?: string, headers?: { [name: string]: string }) => Promise<Answer>;
   get: (path: string, token?: string) => Promise<Answer>;
   raw: (path: string, token?: string, headers?: { [name: string]: string }) => Promise<RawAnswer>;
   /** What the CLI's own `fetch` reaches when it asks a provider for a device code or a token: the same stub the Worker's outbound calls reach, so one approval serves both. */
@@ -170,8 +170,8 @@ export const startPool = async (bindings: { [name: string]: string } = {}): Prom
     const text = await response.text();
     return { status: response.status, json: text === '' ? null : JSON.parse(text), headers: response.headers };
   };
-  const post: TestPool['post'] = async (path, body, token) => {
-    const { status, json } = await call(path, { method: 'POST', body: typeof body === 'string' ? body : JSON.stringify(body) }, token);
+  const post: TestPool['post'] = async (path, body, token, headers) => {
+    const { status, json } = await call(path, { method: 'POST', body: typeof body === 'string' ? body : JSON.stringify(body) }, token, headers);
     return { status, json };
   };
   const raw: TestPool['raw'] = (path, token, headers) => call(path, { method: 'GET' }, token, headers);

@@ -4,6 +4,7 @@ import { batchCounts, batchTier } from './access.js';
 import { fetchBundle, harnessRequired } from './bundle.js';
 import { covenantAccept, covenantNotAccepted, covenantStatus, depositsClosed, hasAccepted } from './covenant.js';
 import { answer, bound, brake, refuse, type Env } from './http.js';
+import { receivePart } from './parts.js';
 import { incrementsOf, incrementStatements, markOf, netCellCount, previousOf } from './ingest.js';
 import { accountOf, login } from './identity.js';
 
@@ -34,17 +35,8 @@ const futureDayField = ({ transcripts }: SessionSkeleton, now: number): string |
   return undefined;
 };
 
-const deposit = async (request: Request, env: Env): Promise<Response> => {
-  // The gate comes before the sign-in and the body, so a closed pool reads neither.
-  const version = bound(env.COVENANT_VERSION);
-  if (version === undefined) return depositsClosed();
-  const account = await accountOf(request, env);
-  if (account === undefined) return refuse(401, 'unauthorized', 'Sign in with oars pool login first.');
-  if (!(await hasAccepted(env, account, version))) return covenantNotAccepted(version);
-  const tooLarge = (): Response => refuse(413, 'too_large', `A skeleton holds at most ${String(MAX_DEPOSIT_BYTES)} bytes.`);
-  if (Number(request.headers.get('content-length')) > MAX_DEPOSIT_BYTES) return tooLarge();
-  const text = await request.text();
-  if (new TextEncoder().encode(text).length > MAX_DEPOSIT_BYTES) return tooLarge();
+/** A whole batch, from the request or joined from its parts: parsed, projected, and written as one deposit. */
+const storeDeposit = async (env: Env, account: string, text: string): Promise<Response> => {
   let body: unknown;
   try {
     body = JSON.parse(text);
@@ -86,6 +78,20 @@ const deposit = async (request: Request, env: Env): Promise<Response> => {
     return refuse(403, 'deposit_limit', `An operator's brake holds this account at ${limit === undefined ? 'no limit' : String(limit)} deposits and ${budget === undefined ? 'no limit' : String(budget)} stored bytes.`);
   }
   return answer(201, { ok: true, id: skeleton.id });
+};
+
+const deposit = async (request: Request, env: Env): Promise<Response> => {
+  // The gate comes before the sign-in and the body, so a closed pool reads neither.
+  const version = bound(env.COVENANT_VERSION);
+  if (version === undefined) return depositsClosed();
+  const account = await accountOf(request, env);
+  if (account === undefined) return refuse(401, 'unauthorized', 'Sign in with oars pool login first.');
+  if (!(await hasAccepted(env, account, version))) return covenantNotAccepted(version);
+  const tooLarge = (): Response => refuse(413, 'too_large', `A skeleton holds at most ${String(MAX_DEPOSIT_BYTES)} bytes.`);
+  if (Number(request.headers.get('content-length')) > MAX_DEPOSIT_BYTES) return tooLarge();
+  const text = await request.text();
+  if (new TextEncoder().encode(text).length > MAX_DEPOSIT_BYTES) return tooLarge();
+  return request.headers.has('oars-part') ? receivePart(request, env, account, text, (whole) => storeDeposit(env, account, whole)) : storeDeposit(env, account, text);
 };
 
 /** A name that does not decode stays as it came: no vocabulary holds it, so the route refuses it by name. */
