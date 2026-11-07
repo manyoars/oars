@@ -177,7 +177,7 @@ Replay is local and read-only on your transcripts; it writes `crossings.jsonl` a
 `oars pool` talks to a pool server that you name with `--server <url>` or `OARS_POOL_URL`; there is no default server. Every other command works without it.
 
 - `oars pool login --provider github|google` signs in by the provider's device flow, run here, and prints every request before it sends it. `OARS_GITHUB_CLIENT_ID` (or `OARS_GOOGLE_CLIENT_ID` and `OARS_GOOGLE_CLIENT_SECRET`) must be set; an unset one stops the command before anything is sent and names the variable.
-- `oars pool deposit` writes a batch of closed-vocabulary session skeletons to an outbox for each session that passes your folder allowlist and the exclusion check, and stops. Nothing is sent: `--send <hash>` sends no request. A batch that was shown and is unchanged stops with `sending_disabled` (exit 5), and any other hash stops with its own refusal.
+- `oars pool deposit` writes a batch of session skeletons (a closed list of fields, each value redacted first; a host is hashed by the pool on arrival) to an outbox for each session that passes your folder allowlist and the exclusion check, and stops. Nothing is sent: `--send <hash>` sends no request. A batch that was shown and is unchanged stops with `sending_disabled` (exit 5), and any other hash stops with its own refusal.
 - `deposit`, `outbox`, and `fetch` need `oars pool login` first; without it they exit 3 and name the server.
 - `oars pool outbox` prints each batch exactly as it would be sent, with its SHA-256, and `--explain` adds each field's rule.
 - `oars pool fetch --harness-version <version>` fetches that version's signed bundle, verifies it against the key pinned at login, and keeps it locally.
