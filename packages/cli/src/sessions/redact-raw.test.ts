@@ -110,14 +110,19 @@ describe('redactTranscript', () => {
     const throwing = (): string => {
       throw new Error('ERR_SYSTEM_ERROR: no passwd entry');
     };
-    expect(localNames('/home/xavier', throwing)).toEqual(['xavier']);
-    vi.stubEnv('USER', 'envuser');
-    expect(localNames('/home/xavier', throwing)).toEqual(['envuser', 'xavier']);
-    vi.unstubAllEnvs();
-    vi.stubEnv('USER', '');
-    vi.stubEnv('USERNAME', 'winuser');
-    expect(localNames('/home/xavier', throwing)).toEqual(['xavier']);
-    vi.unstubAllEnvs();
+    // The runner's own USER or USERNAME must not leak in: start from neither set.
+    try {
+      vi.stubEnv('USER', undefined);
+      vi.stubEnv('USERNAME', undefined);
+      expect(localNames('/home/xavier', throwing)).toEqual(['xavier']);
+      vi.stubEnv('USER', 'envuser');
+      expect(localNames('/home/xavier', throwing)).toEqual(['envuser', 'xavier']);
+      vi.stubEnv('USER', '');
+      vi.stubEnv('USERNAME', 'winuser');
+      expect(localNames('/home/xavier', throwing)).toEqual(['xavier']);
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 
   it('keeps clock times and compressed words that are not addresses', () => {
