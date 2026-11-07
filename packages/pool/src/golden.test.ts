@@ -31,7 +31,7 @@ const skeletonFor = (harness: Harness, id: string): SessionSkeleton => {
   const [only] = sessionsFrom(
     store({
       sessions: [session('s1', { frame: framed, harness })],
-      prompts: [prompt('s1', 0, { frame: framed })],
+      prompts: [prompt('s1', 0, { frame: framed, intervention: 'unknown' })],
       tools: [
         tool('s1', 0, shell, { steps: [step(0, 0, 'shell.exec', { native: shell, identity: { program: 'git', sub: 'push', flags: ['-f'] } })] }),
         tool('s1', 1, read, { steps: [step(1, 0, 'file.read', { native: read })] }),
