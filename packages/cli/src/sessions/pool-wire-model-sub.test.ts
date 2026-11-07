@@ -2,7 +2,7 @@
 import { describe, expect, it } from 'vitest';
 import { frame, printOf, prompt, session, sessionsFrom, step, store, tool } from './pool-fixture.js';
 import { parseSkeleton, skeletonOf, type SessionSkeleton, type ShellReader, type WireGate } from './pool-wire.js';
-import { PRIVATE } from './public-vocabulary.js';
+import { LITERAL, PRIVATE } from './public-vocabulary.js';
 import { makeRedactor } from './redact.js';
 
 const gate: WireGate = { redact: makeRedactor(), terms: ['acmecorp'] };
@@ -40,6 +40,14 @@ describe('model and version strings', () => {
     }
   });
 
+  it('sends capture\'s closed frame model and version as the literal, the form the client before t900 sent, so one closed frame keys one pool cell', () => {
+    const framed = frame({ shell: 'bash', model: LITERAL, harnessVersion: LITERAL });
+    const skeleton = skeletonFor(framed, readAs(null, []), gate, [{ model: LITERAL, harnessVersion: LITERAL }]);
+    const frames = skeleton?.transcripts[0]?.frames ?? [];
+    expect(frames.map((one) => [one.model, one.harnessVersion])).toEqual([[LITERAL, LITERAL]]);
+    expect(parseSkeleton(JSON.parse(JSON.stringify(skeleton))).ok).toBe(true);
+  });
+
   it('keeps a missing model and version null', () => {
     const sent = skeletonFor(frame({ shell: 'bash', model: null, harnessVersion: null }), readAs(null, []))?.transcripts[0]?.frames[0];
     expect([sent?.model, sent?.harnessVersion]).toEqual([null, null]);
@@ -59,15 +67,20 @@ describe('subcommands and flags of every program', () => {
   it('never sends a flag value, and sends private for a subcommand or flag that counts as redacted', () => {
     const skeleton = skeletonFor(frame({ shell: 'bash' }), readAs('acmecorp-plan', ['--token=abc', '--ok', '/x/y', 'a b', '-psecret123', '-uuser:pass', '--password:hunter2', '--user:alice', '-v']));
     const identity = skeleton?.transcripts[0]?.tools[0]?.steps[0]?.identity;
-    // A single-dash flag is one letter; a longer single-dash token is a short flag with its value attached, which is never read. A long flag holds no `:` either: `--password:hunter2` is a value joined to its flag.
-    expect(identity).toEqual({ program: 'acme-deploy', sub: PRIVATE, flags: [PRIVATE, '--ok', PRIVATE, PRIVATE, PRIVATE, PRIVATE, PRIVATE, PRIVATE, '-v'] });
+    // A single-dash flag is one letter unless the public flag list holds it (`-NoProfile`); a longer single-dash token no list holds is a short flag with its value attached, which is never read, and it is dropped, as the client before t900 dropped it. A long flag holds no `:` either: `--password:hunter2` is a value joined to its flag.
+    expect(identity).toEqual({ program: 'acme-deploy', sub: PRIVATE, flags: [PRIVATE, '--ok', PRIVATE, PRIVATE, PRIVATE, PRIVATE, '-v'] });
     expect(JSON.stringify(identity)).not.toMatch(/abc|acmecorp|token|secret123|user:pass|hunter2|password|alice/);
   });
 
   it('sends a public multi-letter single-dash flag as it is, because the public flag list holds it', () => {
     const read: ShellReader = () => [{ program: 'pwsh', subcommand: null, flags: ['-NoProfile', '-Command', '-psecret123'] }];
     const identity = skeletonFor(frame({ shell: 'bash' }), read)?.transcripts[0]?.tools[0]?.steps[0]?.identity;
-    expect(identity).toEqual({ program: 'pwsh', sub: null, flags: ['-NoProfile', '-Command', PRIVATE] });
+    expect(identity).toEqual({ program: 'pwsh', sub: null, flags: ['-NoProfile', '-Command'] });
+  });
+
+  it('drops a multi-letter single-dash flag no public list holds, as the client before t900 did, so an old and a new client key one motif', () => {
+    const read: ShellReader = () => [{ program: 'acme-deploy', subcommand: 'test', flags: ['-race', '--ok'] }];
+    expect(skeletonFor(frame({ shell: 'bash' }), read)?.transcripts[0]?.tools[0]?.steps[0]?.identity).toEqual({ program: 'acme-deploy', sub: 'test', flags: ['--ok'] });
   });
 
   it('sends a private program with no subcommand or flag, because the parser refuses a private program that holds one', () => {

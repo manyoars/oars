@@ -321,6 +321,9 @@ const LONG_FLAG = /^--[A-Za-z0-9][A-Za-z0-9_.+-]*$/;
  */
 const isWireFlag = (flag: string): boolean => SHORT_FLAG.test(flag) || PUBLIC_FLAGS.has(flag) || (flag.length <= NAME_MAX && LONG_FLAG.test(flag));
 
+/** A multi-letter single-dash flag no public list holds (`go test -race`, `-psecret123`): the client before t900 dropped it, so this one does too, and an old and a new client key one motif for one command. */
+const isDroppedFlag = (flag: string): boolean => flag.length > 2 && flag.startsWith('-') && !flag.startsWith('--') && !PUBLIC_FLAGS.has(flag);
+
 /** A flag name as the wire holds it: the name after the one gate, or `private` when it counts as redacted. Only the name is ever read, never a value. */
 const wireFlag = (gate: WireGate, flag: string): string => (isWireFlag(flag) && wireName(gate, flag.replace(FLAG_DASHES, '')) !== PRIVATE ? flag : PRIVATE);
 
@@ -337,7 +340,7 @@ const wireCommand = ({ program, subcommand, flags }: ShellCommand, raw: string |
   const sent = wireName(gate, basenameOf(named));
   // A private program holds no subcommand or flag: the parser refuses one that does.
   if (sent === PRIVATE) return { program: PRIVATE, sub: null, flags: [] };
-  return { program: sent, sub: subcommand === null ? null : wireName(gate, subcommand), flags: flags.map((flag) => wireFlag(gate, flag)) };
+  return { program: sent, sub: subcommand === null ? null : wireName(gate, subcommand), flags: flags.filter((flag) => !isDroppedFlag(flag)).map((flag) => wireFlag(gate, flag)) };
 };
 
 /** A pull in the wire's spelling: its package name after the gate. A version beside a name that is not on the public list could identify it, so it goes as `<literal>` (null stays null), the rule capture applies. */
@@ -409,12 +412,15 @@ const carrier = (steps: readonly { action: string }[]): number => Math.max(0, st
 type Spawned = ReadonlyMap<number, number>;
 
 /**
+ * A model or harness version string as the wire holds it: the string after the gate (`wireName`), null staying null. The pool assigns its class. Capture's closed value (`<literal>`) goes as it is, the form a client before
+ * t900 sent, so an old and a new client key one closed frame to one pool cell; the parser accepts it.
+ */
+const wireString = (gate: WireGate, value: string | null): string | null => (value === null || value === LITERAL ? value : wireName(gate, value));
+
+/**
  * A stored frame with the UTC hour of `ts` beside its day, and its stack's language shares: each stored share is read through its projection, so a share outside the list is dropped and its language stays in `languages`. A stored
  * language outside the pinned list is `other`, and `other` holds the first share a record gives it. A record captured before the strata holds none.
  */
-/** A model or harness version string as the wire holds it: the string after the gate (`wireName`), null staying null. The pool assigns its class. */
-const wireString = (gate: WireGate, value: string | null): string | null => (value === null ? null : wireName(gate, value));
-
 const wireFrame = (frame: Frame, strata: Strata | undefined, gate: WireGate, ts: string | null | undefined): SkeletonFrame => {
   const shares = new Map<string, LanguageShare>();
   for (const { language, share } of strata?.languages ?? []) {
@@ -490,8 +496,8 @@ const transcriptOf = (
     const base = promptPosition === null ? undefined : framedPrompts[promptPosition]?.frame;
     const held: SkeletonFrame = {
       ...(base ?? transcriptFrame),
-      ...(model === undefined ? {} : { model: wireName(gate, model) }),
-      ...(harnessVersion === null ? {} : { harnessVersion: wireName(gate, harnessVersion) }),
+      ...(model === undefined ? {} : { model: wireString(gate, model) }),
+      ...(harnessVersion === null ? {} : { harnessVersion: wireString(gate, harnessVersion) }),
       ...where,
     };
     const key = JSON.stringify(held);
