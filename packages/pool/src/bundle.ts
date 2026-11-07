@@ -4,7 +4,8 @@ import { type Bundle, isBundleVersion, isHarness, type SignedBundle, VOCAB_VERSI
 import { CALL_SHAPE_METHOD, contentHash, METHODS } from '../../cli/src/sessions/read.js';
 import { EXTRACTOR_VERSION } from '../../cli/src/sessions/schema.js';
 import { accessOf } from './access.js';
-import { bundleOf, K_CELL, SERVED } from './derive.js';
+import { bundleOf, SERVED } from './derive.js';
+import { floorsOf, wireFloors, type Floors } from './floors.js';
 import { answer, bound, fieldOf, notConfigured, refuse, textField, wholeBinding, type Env } from './http.js';
 import { accountOf } from './identity.js';
 import { storedOf } from './stored.js';
@@ -28,10 +29,10 @@ const generationOf = async (env: Env): Promise<number> => {
 };
 
 /**
- * What names this bundle: the code that derives it (the methods and the list of families it derives), the floor, the harness and version asked for, and the generation of the rows. It is known without reading a row, so a conditional request
+ * What names this bundle: the code that derives it (the methods and the list of families it derives), the floors (both, and any a family has of its own), the harness and version asked for, and the generation of the rows. It is known without reading a row, so a conditional request
  * costs no parse and an account cannot force one by sending it. Read before the rows, so a bundle is never older than the ETag it carries.
  */
-export const etagOf = (harness: string, harnessVersion: string, generation: number, families: readonly string[]): string => `"${contentHash([BUNDLE_FORMAT, EXTRACTOR_VERSION, METHODS, CALL_SHAPE_METHOD, families, K_CELL, harness, harnessVersion, VOCAB_VERSION, generation])}"`;
+export const etagOf = (harness: string, harnessVersion: string, generation: number, families: readonly string[], floors: Floors): string => `"${contentHash([BUNDLE_FORMAT, EXTRACTOR_VERSION, METHODS, CALL_SHAPE_METHOD, families, wireFloors(floors), harness, harnessVersion, VOCAB_VERSION, generation])}"`;
 
 /** Whether an If-None-Match names this ETag. A proxy that compresses may weaken it to `W/"..."`, so the prefix is not compared. */
 const matches = (header: string | null, etag: string): boolean => (header ?? '').split(',').some((token) => token.trim().replace(/^W\//, '') === etag);
@@ -62,7 +63,11 @@ export const fetchBundle = async (request: Request, env: Env, harness: string, h
   const key = bound(env.BUNDLE_SIGNING_KEY);
   if (key === undefined) return notConfigured('BUNDLE_SIGNING_KEY');
   const generation = await generationOf(env);
-  const etag = etagOf(harness, harnessVersion, generation, SERVED.map(({ name }) => name));
+  // Read from the bindings on each request, so a deploy that moves a floor moves the ETag with it and a cached bundle is not reused across the change.
+  const floors = floorsOf(env, (line) => {
+    console.warn(line);
+  });
+  const etag = etagOf(harness, harnessVersion, generation, SERVED.map(({ name }) => name), floors);
   // Before the spend and before the pool is read: a bundle that has not changed is not sent, so it costs the account nothing.
   if (matches(request.headers.get('if-none-match'), etag)) return new Response(null, { status: 304, headers: { etag } });
   const now = Date.now();
@@ -76,7 +81,7 @@ export const fetchBundle = async (request: Request, env: Env, harness: string, h
   try {
     // The count is dropped when its week ends, so what stays per account is only this week's. Earlier only (`<`, and `YYYY-Www` orders): a request that computed its week just before Monday must not wipe a count already spent in the new week.
     await env.DB.prepare(WEEK_RESET).bind(week).run();
-    return answer(200, await signed(bundleOf(harness, harnessVersion, await storedOf(env, harness, harnessVersion)), key), { etag });
+    return answer(200, await signed(bundleOf(harness, harnessVersion, await storedOf(env, harness, harnessVersion, floors), floors), key), { etag });
   } catch (error) {
     // The spend came first so two fetches at once cannot both take the last, but a 304 spends nothing because it sends no bundle, and neither does a fetch that throws.
     if (capped) await env.DB.prepare('UPDATE accounts SET fetches = fetches - 1 WHERE id = ? AND fetch_week = ? AND fetches > 0').bind(account, week).run();

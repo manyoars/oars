@@ -5,7 +5,8 @@ import type { Cell } from '../../cli/src/sessions/cells.js';
 import { namedId, shapeMotif, type Motif, type WindowStep } from '../../cli/src/sessions/motif.js';
 import type { Read } from '../../cli/src/sessions/read.js';
 import type { Harness } from '../../cli/src/sessions/schema.js';
-import { bundleOf, K_CELL } from './derive.js';
+import { bundleOf } from './derive.js';
+import { DEFAULT_FLOORS, DEFAULT_PUBLIC_FLOOR as K_CELL } from './floors.js';
 import type { StoredPool } from './stored.js';
 
 const HARNESS: Harness = 'claude-code';
@@ -34,7 +35,7 @@ const cellOf = (motifId: string, clusters: number, ok: number, over: Partial<Cel
 
 const bundleOver = (cells: Cell[]): ReturnType<typeof bundleOf> => {
   const stored: StoredPool = { cells, environment: [], motifs: [READ, SHELL, SEARCH], strata: [] };
-  return bundleOf(HARNESS, VERSION, stored);
+  return bundleOf(HARNESS, VERSION, stored, DEFAULT_FLOORS);
 };
 
 const readsOf = (cells: Cell[], family: Read['family']): Read[] => bundleOver(cells).reads.filter((read) => read.family === family);
@@ -188,7 +189,7 @@ describe('a shape and its named cells: complementary withholding', () => {
   };
   const shape = shapeMotif([{ action: 'mcp.call', identity: null }]);
   const [one, two, three] = [named('one'), named('two'), named('three')];
-  const over = (cells: Cell[]): ReturnType<typeof bundleOf> => bundleOf(HARNESS, VERSION, { cells, environment: [], motifs: [shape, one, two, three], strata: [] });
+  const over = (cells: Cell[]): ReturnType<typeof bundleOf> => bundleOf(HARNESS, VERSION, { cells, environment: [], motifs: [shape, one, two, three], strata: [] }, DEFAULT_FLOORS);
   const ids = (bundle: ReturnType<typeof bundleOf>): string[] => bundle.cells.map((cell) => cell.motifId);
 
   it('also withholds the smallest served name beside a sub-floor name, and keeps the shape and the other names', () => {
@@ -199,7 +200,7 @@ describe('a shape and its named cells: complementary withholding', () => {
   it('drops the environment counterpart of a withheld name and its fit read', () => {
     const week = (motifId: string, clusters: number, ok: number): Cell => cellOf(motifId, clusters, ok, { grain: 'week' });
     const environment = [week(one.motifId, 7, 12), week(two.motifId, 5, 10)].map((cell) => ({ ...cell, frameBucket: 'env:linux:bash' }));
-    const bundle = bundleOf(HARNESS, VERSION, { cells: [week(shape.motifId, 12, 30), week(one.motifId, 7, 12), week(two.motifId, 5, 10), week(three.motifId, 1, 8)], environment, motifs: [shape, one, two, three], strata: [] });
+    const bundle = bundleOf(HARNESS, VERSION, { cells: [week(shape.motifId, 12, 30), week(one.motifId, 7, 12), week(two.motifId, 5, 10), week(three.motifId, 1, 8)], environment, motifs: [shape, one, two, three], strata: [] }, DEFAULT_FLOORS);
     expect(bundle.cells).not.toContainEqual(environment[1]);
     expect(bundle.cells).toContainEqual(environment[0]);
     expect(bundle.reads.filter((read) => read.family === 'fit' && read.slice.platform === 'linux').map((read) => read.n)).toEqual([12]);
@@ -239,7 +240,7 @@ describe('overlapping named cells', () => {
     const git = program('git');
     const rare = program('rare');
     const overlap = kind === 'flag' ? program('git', ['--x']) : program('git', [], [{ registry: 'npm', name: 'x', version: null }]);
-    const bundle = bundleOf(HARNESS, VERSION, { cells: [cellOf(SHELL.motifId, 20, 100), cellOf(git.motifId, 15, 90), cellOf(rare.motifId, 1, 10), cellOf(overlap.motifId, 5, 40)], environment: [], motifs: [SHELL, git, rare, overlap], strata: [] });
+    const bundle = bundleOf(HARNESS, VERSION, { cells: [cellOf(SHELL.motifId, 20, 100), cellOf(git.motifId, 15, 90), cellOf(rare.motifId, 1, 10), cellOf(overlap.motifId, 5, 40)], environment: [], motifs: [SHELL, git, rare, overlap], strata: [] }, DEFAULT_FLOORS);
     expect(bundle.cells.some((cell) => cell.motifId === git.motifId)).toBe(false);
     const servedPrograms = bundle.cells.filter((cell) => cell.motifId === git.motifId || cell.motifId === rare.motifId);
     expect(100 - servedPrograms.reduce((sum, cell) => sum + cell.ok, 0)).toBe(100);

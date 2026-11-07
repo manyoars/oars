@@ -6,7 +6,7 @@ import { ACTION_TABLES, CANONICAL_ACTIONS, mcpOf, type CanonicalAction } from '.
 import { CUSTOM_AGENT, FRAMEWORKS, isPublicMcpTool, isRegistryVersion, LANGUAGES, LITERAL, PRIVATE, publicEffort, publicModel, publicVersion, PUBLIC_FLAGS, PUBLIC_HOSTS, PUBLIC_MCP_SERVERS, PUBLIC_PACKAGES, PUBLIC_PROGRAMS, PUBLIC_SKILLS, projectedAgentType, PUBLIC_SUBCOMMANDS, REPO_SIZES, VOCAB_VERSION, type RepoSize } from './public-vocabulary.js';
 import type { Cell } from './cells.js';
 import type { Motif } from './motif.js';
-import type { Read, ReadAsOf } from './read.js';
+import { FIRST_ORDER_FAMILIES, type FirstOrderFamily, type Read, type ReadAsOf } from './read.js';
 import { recoveryCallsOf, RECOVERY_CALLS, type RecoveryCalls } from './recovery-calls.js';
 import { projectLanguage, projectLanguageShare } from './strata.js';
 import { ERROR_CODES, LANGUAGE_SHARES, type Frame, type FrameStack, type Harness, type LanguageShare, type PromptClass, type PromptObservation, type PullIdentity, type SessionObservation, type ShellIdentity, type StepIdentity, type StepObservation, type Strata, type ToolObservation, type ToolStatus, type Usage } from './schema.js';
@@ -999,6 +999,16 @@ export interface StrataCell {
   clusters: number;
 }
 
+/**
+ * The floors a pool served the bundle at, stated so a client can print them and holds none of its own. `public` is the clusters a cell needs to be served and a read to count it, `disclosure` the clusters that must hold a signature's hash
+ * before its text may be requested, and `families` the read families that have a public floor of their own (a family not listed is at `public`). Both are the deploy's to set, so a client reads them here and never applies one.
+ */
+export interface BundleFloors {
+  public: number;
+  disclosure: number;
+  families?: Partial<Record<FirstOrderFamily, number>>;
+}
+
 /** One harness version's replica, as the server signs it. It names its harness, which the signature covers, so a bundle for one harness cannot stand in for another's. Nothing in it is keyed by stack. */
 export interface Bundle {
   format: typeof BUNDLE_FORMAT;
@@ -1010,6 +1020,8 @@ export interface Bundle {
   motifs: Motif[];
   reads: Read[];
   strata: StrataCell[];
+  /** Additive: a bundle from a pool before the floors were bindings holds none, and a client that does not know the field ignores it. */
+  floors?: BundleFloors;
 }
 
 /** The signature covers these exact bytes, so nothing has to be canonicalized on either side. */
@@ -1028,8 +1040,14 @@ export interface PinnedKey {
 
 const isSignedBundle = (value: unknown): value is SignedBundle => isFields(value) && typeof value.payload === 'string' && typeof value.signature === 'string';
 
+const isFloor = (value: unknown): value is number => typeof value === 'number' && Number.isSafeInteger(value) && value >= 1;
+
+/** The floors a bundle states, or none: a client prints what is here, so a value that is not a whole number of at least 1, or a family it does not know, is refused and not shown. */
+const isFloors = (value: unknown): value is BundleFloors =>
+  isFields(value) && isFloor(value.public) && isFloor(value.disclosure) && (value.families === undefined || (isFields(value.families) && Object.entries(value.families).every(([family, floor]) => FIRST_ORDER_FAMILIES.some((name) => name === family) && isFloor(floor))));
+
 const isBundle = (value: unknown): value is Bundle =>
-  isFields(value) && value.format === BUNDLE_FORMAT && typeof value.harness === 'string' && isHarness(value.harness) && typeof value.harnessVersion === 'string' && typeof value.vocabVersion === 'string' && isFields(value.asOf) && Array.isArray(value.cells) && Array.isArray(value.motifs) && Array.isArray(value.reads) && Array.isArray(value.strata);
+  isFields(value) && value.format === BUNDLE_FORMAT && typeof value.harness === 'string' && isHarness(value.harness) && typeof value.harnessVersion === 'string' && typeof value.vocabVersion === 'string' && isFields(value.asOf) && Array.isArray(value.cells) && Array.isArray(value.motifs) && Array.isArray(value.reads) && Array.isArray(value.strata) && (value.floors === undefined || isFloors(value.floors));
 
 const signatureHolds = async ({ payload, signature }: SignedBundle, key: PinnedKey): Promise<boolean> => {
   try {
