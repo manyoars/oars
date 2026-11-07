@@ -15,6 +15,9 @@ export interface Measure {
   x: number;
 }
 
+/** The windows the report shows and the pool serves, in days. */
+export const WINDOWS: readonly number[] = [7, 30];
+
 const DAY_MS = 86_400_000;
 
 /** The hooks that exist; any other name in a batch is not measured. */

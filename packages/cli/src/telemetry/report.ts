@@ -1,10 +1,7 @@
 // `oars telemetry report`: what telemetry measured about the user's own use, from the spool on this machine, beside the fleet's number for the same cell when a pool server is configured and answers.
 // The own numbers need no server and no account. The fleet read is a plain GET that carries nothing of the user's: no credential, no install id, no event. Nothing here writes the spool.
 import { CliError } from '../errors.js';
-import { cellKey, measuresOf, percentile, type Kind, type Measure } from './measures.js';
-
-/** The windows the report shows, in days. The pool serves the same two. */
-export const WINDOWS: readonly number[] = [7, 30];
+import { cellKey, measuresOf, percentile, WINDOWS, type Kind, type Measure } from './measures.js';
 
 const DAY_MS = 86_400_000;
 const FLEET_TIMEOUT_MS = 10_000;

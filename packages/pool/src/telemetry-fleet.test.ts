@@ -1,0 +1,318 @@
+// The telemetry rollup, the fleet read, and the operator's anomaly read. The routes and the nightly handler run under Miniflare's workerd (real R2 and D1); the counting rules run on rows built in memory.
+import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
+import { LATENCY_EDGES } from '../../cli/src/telemetry/measures.js';
+import { K_CELL } from './derive.js';
+import type { Env, PoolDb } from './http.js';
+import { anomaliesOf, fleetCells, measurablesOf, operator, OUTLIER_SCORE, type InstallDay } from './telemetry-fleet.js';
+import { dayOf, MAX_BATCHES_PER_RUN, rollupDay, rollupRecent, shiftDay, type Entry, type KeptBucket } from './telemetry-rollup.js';
+import { fieldOf, startPool, type TestPool } from './test-pool.js';
+import worker from './worker.js';
+
+const DAY_MS = 86_400_000;
+const uuid = (n: number): string => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
+const today = (): string => dayOf(Date.now());
+const daysAgo = (n: number): string => shiftDay(today(), -n);
+
+let tick = 0;
+/** A hook event with its own time: the rollup counts an event once, and two with the same install, time, and data are one event sent twice. */
+const hook = (latencyMs: number, outcome = 'hit', harnessVersion = '2.1.5', name = 'pre-tool'): object => {
+  tick += 1;
+  return { v: 1, id: 'x', at: new Date(Date.parse('2026-11-06T12:00:00.000Z') + tick).toISOString(), type: 'hook', cli: '0.4.0', os: 'linux', data: { name, latencyMs, outcome, harnessVersion } };
+};
+
+let kept = 0;
+/** A batch as the telemetry route keeps it, under the day it arrived. */
+const keep = async (pool: TestPool, day: string, install: string, events: object[], account?: string): Promise<void> => {
+  kept += 1;
+  await (await pool.bucket()).put(`telemetry/${day}/${String(kept).padStart(8, '0')}.json`, JSON.stringify({ received: `${day}T10:00:00.000Z`, ...(account === undefined ? {} : { account }), batch: { install, events } }));
+};
+
+interface Bindings {
+  DB: Env['DB'];
+  TELEMETRY: KeptBucket;
+}
+
+/** The nightly handler the Worker exports, run on the pool's own bindings. */
+const nightly = async (pool: TestPool): Promise<void> => {
+  await worker.scheduled({ scheduledTime: Date.now() }, await pool.miniflare.getBindings<Bindings>());
+};
+
+const keysOf = (value: unknown): string[] => (typeof value === 'object' && value !== null ? Object.keys(value) : []);
+
+const cellsOf = (json: unknown, days: number): { [name: string]: unknown }[] => {
+  const windows: unknown = fieldOf(json, 'windows');
+  const window: unknown = Array.isArray(windows) ? windows.find((one: unknown) => fieldOf(one, 'days') === days) : undefined;
+  const cells: unknown = fieldOf(window, 'cells');
+  return Array.isArray(cells) ? cells.filter((one: unknown): one is { [name: string]: unknown } => typeof one === 'object' && one !== null) : [];
+};
+
+const rowCount = async (pool: TestPool): Promise<number> => {
+  const row = await (await pool.db()).prepare('SELECT COUNT(*) AS held FROM telemetry_install_days').first();
+  const held = fieldOf(row, 'held');
+  if (typeof held !== 'number') throw new Error('no count');
+  return held;
+};
+
+describe('the fleet read, from the nightly rollup, on the Worker', () => {
+  let pool: TestPool;
+
+  beforeAll(async () => {
+    pool = await startPool({ COVENANT_VERSION: '', OPERATOR_TOKEN: 'operator-secret' });
+  }, 60_000);
+
+  afterEach(async () => {
+    const bucket = await pool.bucket();
+    const { objects } = await bucket.list({ prefix: 'telemetry/' });
+    if (objects.length > 0) await bucket.delete(objects.map(({ key }) => key));
+    await (await pool.db()).prepare('DELETE FROM telemetry_install_days').run();
+  });
+
+  afterAll(async () => {
+    await pool.dispose();
+  });
+
+  /** `count` installs each report the same ten pre-tool fires of `latency` ms on `day`. */
+  const report = async (count: number, day: string, latency = 100, version = '2.1.5', first = 1): Promise<void> => {
+    for (let at = 0; at < count; at += 1) await keep(pool, day, uuid(first + at), Array.from({ length: 10 }, () => hook(latency, 'hit', version)));
+  };
+
+  it('serves nothing for a cell fewer than K_CELL installs report, and serves it at K_CELL', async () => {
+    await report(K_CELL - 1, daysAgo(1));
+    await nightly(pool);
+    const below = await pool.get('/v1/telemetry/fleet');
+    expect(below.status).toBe(200);
+    expect(cellsOf(below.json, 7)).toEqual([]);
+    expect(cellsOf(below.json, 30)).toEqual([]);
+
+    await keep(pool, daysAgo(1), uuid(K_CELL), [hook(100)]);
+    await nightly(pool);
+    const at = await pool.get('/v1/telemetry/fleet');
+    // 100 ms falls in the bucket whose upper edge is 130 (edges grow by 1.5 times each).
+    expect(LATENCY_EDGES.find((edge) => edge >= 100)).toBe(130);
+    expect(cellsOf(at.json, 7)).toContainEqual({ metric: 'hook.pre-tool.latency', dimension: 'harnessVersion', value: '2.1.5', kind: 'latency', p50: 130, p95: 130 });
+    expect(cellsOf(at.json, 7)).toContainEqual({ metric: 'hook.pre-tool.hit', dimension: 'harnessVersion', value: '2.1.5', kind: 'rate', p50: 1 });
+  }, 60_000);
+
+  it('serves no count, no total, and no install, so no two served numbers differ by an install under the floor', async () => {
+    // Five installs on 2.1.5 and four on 2.1.6; one of the five reported only 20 days ago.
+    await report(K_CELL - 1, daysAgo(2), 100, '2.1.5', 1);
+    await keep(pool, daysAgo(20), uuid(K_CELL), [hook(100)]);
+    await report(K_CELL - 1, daysAgo(2), 100, '2.1.6', 50);
+    await nightly(pool);
+    // Day 20 is not in the nightly's two days: roll it as the operator's backfill would.
+    await rollupDayFor(pool, daysAgo(20));
+    const answered = await pool.get('/v1/telemetry/fleet');
+    expect(keysOf(answered.json).sort()).toEqual(['asOf', 'floor', 'windows']);
+    const seven = cellsOf(answered.json, 7);
+    const thirty = cellsOf(answered.json, 30);
+    for (const cell of [...seven, ...thirty]) expect(keysOf(cell).every((key) => ['metric', 'dimension', 'value', 'kind', 'p50', 'p95'].includes(key))).toBe(true);
+    // 2.1.6 has four installs: never served, in either window, and no cell totals it with 2.1.5.
+    expect([...seven, ...thirty].some((cell) => cell.value === '2.1.6')).toBe(false);
+    expect([...seven, ...thirty].some((cell) => cell.value !== '2.1.5')).toBe(false);
+    // 2.1.5 has five installs in 30 days and four in 7: the 30 day cell is served and the 7 day cell is not, and nothing served differs by the fifth.
+    expect(thirty.some((cell) => cell.value === '2.1.5')).toBe(true);
+    expect(seven.some((cell) => cell.value === '2.1.5')).toBe(false);
+    expect(JSON.stringify(answered.json)).not.toMatch(/install|events|batches|"n"|count|total/i);
+  }, 60_000);
+
+  it('serves the median install’s rate and the fleet’s latency percentiles, over the installs and the window', async () => {
+    const rates = [0, 0.25, 0.5, 0.75, 1];
+    for (const [at, share] of rates.entries()) await keep(pool, daysAgo(1), uuid(at + 1), Array.from({ length: 4 }, (_, one) => hook(one < share * 4 ? 10 : 1000, one < share * 4 ? 'hit' : 'miss')));
+    await nightly(pool);
+    const cells = cellsOf((await pool.get('/v1/telemetry/fleet')).json, 7);
+    expect(cells.find((cell) => cell.metric === 'hook.pre-tool.hit')).toMatchObject({ kind: 'rate', p50: 0.5 });
+    // Ten of twenty fires took 10 ms (bucket edge 12) and ten took 1000 (edge 1,098 or the next edge up).
+    const latency = cells.find((cell) => cell.metric === 'hook.pre-tool.latency');
+    expect(latency).toMatchObject({ kind: 'latency', p50: LATENCY_EDGES.find((edge) => edge >= 10) });
+    expect(latency?.p95).toBe(LATENCY_EDGES.find((edge) => edge >= 1000));
+  }, 60_000);
+
+  it('counts a batch that arrives twice once, and rolls a day again to the same rows', async () => {
+    const events = [hook(100), hook(200), hook(100)];
+    await keep(pool, daysAgo(1), uuid(1), events);
+    await keep(pool, daysAgo(1), uuid(1), events);
+    await nightly(pool);
+    const rows = await (await pool.db()).prepare('SELECT batches, events FROM telemetry_install_days').all();
+    expect(rows.results).toEqual([{ batches: 2, events: 3 }]);
+    await nightly(pool);
+    expect(await rowCount(pool)).toBe(1);
+    expect((await (await pool.db()).prepare('SELECT batches, events FROM telemetry_install_days').all()).results).toEqual(rows.results);
+  }, 60_000);
+
+  it('skips an object that is not a batch and an install id that is not an install, and keeps a cell cap on a row', async () => {
+    const bucket = await pool.bucket();
+    await bucket.put(`telemetry/${daysAgo(1)}/junk.json`, 'not json');
+    await bucket.put(`telemetry/${daysAgo(1)}/shape.json`, JSON.stringify({ batch: { install: 'not-a-uuid', events: [hook(1)] } }));
+    await bucket.put(`telemetry/${daysAgo(1)}/events.json`, JSON.stringify({ batch: { install: uuid(1), events: 'no' } }));
+    const many = Array.from({ length: 80 }, (_, at) => ({ v: 1, id: 'x', at: '2026-11-06T12:00:00.000Z', type: 'command', cli: `0.${String(at)}.0`, os: 'linux', data: { path: ['pool'], durationMs: 5, exitCode: 0 } }));
+    await keep(pool, daysAgo(1), uuid(2), many);
+    await nightly(pool);
+    const rows = (await (await pool.db()).prepare('SELECT install, measures FROM telemetry_install_days').all()).results;
+    expect(rows).toHaveLength(1);
+    const measures: unknown = JSON.parse(String(fieldOf(rows[0], 'measures')));
+    expect(Array.isArray(measures) && measures.length).toBe(64);
+  }, 60_000);
+
+  it('reads no query and no credential: the same answer with or without them', async () => {
+    await report(K_CELL, daysAgo(1));
+    await nightly(pool);
+    const plain = await pool.get('/v1/telemetry/fleet');
+    const asked = await pool.get('/v1/telemetry/fleet?install=x&window=1', 'a-token');
+    expect(asked.json).toEqual(plain.json);
+  }, 60_000);
+
+  describe('the operator’s read', () => {
+    const operatorGet = (token?: string): Promise<{ status: number; json: unknown }> => pool.get('/v1/telemetry/operator', token);
+
+    it('refuses without the secret, and is not configured with none set', async () => {
+      expect((await operatorGet()).status).toBe(401);
+      expect((await operatorGet('guess')).status).toBe(401);
+      const response = await operator(new Request('http://pool.test/v1/telemetry/operator', { headers: { authorization: 'Bearer anything' } }), { DB: unusedDb }, Date.now());
+      expect(response.status).toBe(503);
+      expect(await response.json()).toMatchObject({ error: 'not_configured' });
+    });
+
+    it('lists the one install that sits far from the fleet, and changes nothing', async () => {
+      for (let at = 1; at <= 9; at += 1) await keep(pool, daysAgo(1), uuid(at), Array.from({ length: 18 + (at % 3) }, () => hook(50)));
+      await keep(pool, daysAgo(1), uuid(10), Array.from({ length: 2000 }, () => hook(50)));
+      await nightly(pool);
+      const before = (await (await pool.db()).prepare('SELECT * FROM telemetry_install_days ORDER BY install').all()).results;
+      const answered = await operatorGet('operator-secret');
+      expect(answered.status).toBe(200);
+      const outliers: unknown = fieldOf(answered.json, 'outliers');
+      expect(outliers).toEqual([{ entity: 'install', id: uuid(10), basis: 'events', count: 2000, median: 19, direction: 'high' }]);
+      expect(String(fieldOf(answered.json, 'note'))).toContain('Nothing here is flagged, limited, or acted on automatically');
+      expect((await (await pool.db()).prepare('SELECT * FROM telemetry_install_days ORDER BY install').all()).results).toEqual(before);
+    }, 60_000);
+  });
+});
+
+/** The operator's backfill of one past day: the nightly run reaches only the last two. */
+const rollupDayFor = async (pool: TestPool, day: string): Promise<void> => {
+  await rollupDay(await pool.miniflare.getBindings<Bindings>(), day);
+};
+
+const unusedDb: PoolDb = {
+  prepare: () => {
+    throw new Error('this read must not reach the database');
+  },
+  batch: () => Promise.reject(new Error('this read must not reach the database')),
+};
+
+const entry = (value: string, n: number, hits: number, kind: Entry['kind'] = 'rate', metric = 'hook.pre-tool.hit'): Entry => ({
+  metric,
+  dimension: 'harnessVersion',
+  value,
+  kind,
+  n,
+  hits,
+  buckets: kind === 'latency' ? [[LATENCY_EDGES.findIndex((edge) => edge >= 100), n]] : [],
+});
+const row = (day: string, install: string, more: Partial<InstallDay> = {}): InstallDay => ({ day, install, account: '', batches: 1, events: 20, entries: [], ...more });
+
+describe('the counting rules', () => {
+  it('serves a cell by distinct installs, not by rows: one install over many days is one install', () => {
+    const rows = Array.from({ length: 30 }, (_, at) => row(daysAgo(at), uuid(1), { entries: [entry('2.1.5', 5, 5)] }));
+    expect(fleetCells(rows)).toEqual([]);
+    const five = [...rows, ...[2, 3, 4, 5].map((at) => row(daysAgo(1), uuid(at), { entries: [entry('2.1.5', 5, 5)] }))];
+    expect(fleetCells(five)).toHaveLength(1);
+  });
+
+  it('measures the share of installs still reporting, and the first day the fleet read was served', () => {
+    const entries = [entry('2.1.5', 3, 3)];
+    // Five installs report from day 30 to day 20 ago; two go on to report in the last week; one more joins.
+    const rows = [
+      ...[1, 2, 3, 4, 5].flatMap((at) => [30, 20].map((ago) => row(daysAgo(ago), uuid(at), { entries }))),
+      row(daysAgo(2), uuid(1), { entries }),
+      row(daysAgo(2), uuid(2), { entries }),
+      row(daysAgo(1), uuid(6), { entries }),
+    ];
+    const measured = measurablesOf(rows, daysAgo(1));
+    expect(measured.reporting).toEqual({ installsEver: 6, installsLast7Days: 3, share: 0.5 });
+    expect(measured.firstFleetRead).toBe(daysAgo(30));
+    expect(measurablesOf([], daysAgo(1))).toEqual({ reporting: { installsEver: 0, installsLast7Days: 0, share: 0 }, firstFleetRead: null });
+    expect(measurablesOf(rows.filter((one) => one.install !== uuid(5)), daysAgo(1)).firstFleetRead).toBeNull();
+  });
+
+  it('lists a far count among installs and among accounts, and lists none without a baseline of K_CELL', () => {
+    const counts = [18, 19, 20, 20, 21, 22, 19, 20, 5000];
+    const rows = counts.map((events, at) => row(daysAgo(1), uuid(at + 1), { events, batches: 1, account: `acct-${String(at % 5)}` }));
+    const found = anomaliesOf(rows);
+    expect(found.installs).toBe(9);
+    expect(found.outliers.filter((one) => one.entity === 'install' && one.basis === 'events').map((one) => one.id)).toEqual([uuid(9)]);
+    // Five accounts; the 5000-event install sits in acct-3 with the 4th install's 20.
+    expect(found.outliers.filter((one) => one.entity === 'account').map((one) => [one.id, one.direction])).toEqual([['acct-3', 'high']]);
+    expect(anomaliesOf(rows.slice(0, K_CELL - 2).concat(rows.slice(-1))).outliers).toEqual([]);
+    expect(OUTLIER_SCORE).toBe(5);
+  });
+
+  it('lists a far low count, and not a fleet whose counts are all alike', () => {
+    const alike = Array.from({ length: 6 }, (_, at) => row(daysAgo(1), uuid(at + 1), { events: 100, batches: 2 }));
+    expect(anomaliesOf(alike).outliers).toEqual([]);
+    expect(anomaliesOf([...alike.slice(0, 5), row(daysAgo(1), uuid(7), { events: 1, batches: 2 })]).outliers).toEqual([{ entity: 'install', id: uuid(7), basis: 'events', count: 1, median: 100, direction: 'low' }]);
+    // One event off in a fleet of identical counts is not far.
+    expect(anomaliesOf([...alike, row(daysAgo(1), uuid(8), { events: 101, batches: 2 })]).outliers).toEqual([]);
+  });
+});
+
+describe('the rollup', () => {
+  const fakeDb = (): { db: PoolDb; statements: string[] } => {
+    const statements: string[] = [];
+    const bound = { first: () => Promise.resolve(undefined), all: () => Promise.resolve({ results: [] }), run: () => Promise.resolve({ meta: { changes: 0 } }) };
+    return {
+      statements,
+      db: {
+        prepare: (sql) => {
+          statements.push(sql);
+          return { bind: () => bound };
+        },
+        batch: () => Promise.resolve([]),
+      },
+    };
+  };
+
+  it('does nothing without the bucket, and refuses a day that is not a day', async () => {
+    const { db, statements } = fakeDb();
+    expect(await rollupDay({ DB: db }, daysAgo(1))).toBeUndefined();
+    const bucket: KeptBucket = { list: () => Promise.reject(new Error('unreachable')), get: () => Promise.reject(new Error('unreachable')) };
+    expect(await rollupDay({ DB: db, TELEMETRY: bucket }, 'yesterday')).toBeUndefined();
+    expect(await rollupRecent({ DB: db }, Date.now())).toEqual([]);
+    expect(statements).toEqual([]);
+  });
+
+  it('follows the list’s cursor, and reads no more than one run’s batches of a day', async () => {
+    const { db } = fakeDb();
+    let gets = 0;
+    const batch = (at: number): string => JSON.stringify({ batch: { install: uuid(at), events: [hook(10)] } });
+    const bucket: KeptBucket = {
+      list: ({ cursor }) => {
+        const start = cursor === undefined ? 0 : Number(cursor);
+        const objects = Array.from({ length: 500 }, (_, at) => ({ key: `telemetry/${daysAgo(1)}/${String(start + at)}.json` }));
+        return Promise.resolve({ objects, truncated: true, cursor: String(start + 500) });
+      },
+      get: () => {
+        gets += 1;
+        return Promise.resolve({ text: () => Promise.resolve(batch(gets)) });
+      },
+    };
+    const rolled = await rollupDay({ DB: db, TELEMETRY: bucket }, daysAgo(1));
+    expect(rolled).toMatchObject({ batches: MAX_BATCHES_PER_RUN, truncated: true });
+    expect(gets).toBe(MAX_BATCHES_PER_RUN);
+  });
+
+  it('rolls the two days before today, oldest first', async () => {
+    const { db } = fakeDb();
+    const listed: string[] = [];
+    const bucket: KeptBucket = {
+      list: ({ prefix }) => {
+        listed.push(prefix);
+        return Promise.resolve({ objects: [], truncated: false });
+      },
+      get: () => Promise.resolve(null),
+    };
+    const now = Date.parse('2026-11-07T03:17:00Z');
+    expect((await rollupRecent({ DB: db, TELEMETRY: bucket }, now)).map((one) => one.day)).toEqual(['2026-11-05', '2026-11-06']);
+    expect(listed).toEqual(['telemetry/2026-11-05/', 'telemetry/2026-11-06/']);
+    expect(now - Date.parse('2026-11-05T00:00:00Z')).toBeLessThan(3 * DAY_MS);
+  });
+});

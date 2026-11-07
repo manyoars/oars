@@ -7,6 +7,8 @@ import { answer, bound, refuse, wholeBinding, type Env } from './http.js';
 import { incrementsOf, incrementStatements, markOf, netCellCount, previousOf } from './ingest.js';
 import { accountOf, login } from './identity.js';
 import { telemetry, type TelemetryEnv } from './telemetry.js';
+import { fleet, operator, type OperatorEnv } from './telemetry-fleet.js';
+import { rollupRecent, type RollupEnv } from './telemetry-rollup.js';
 
 /** D1 holds at most 2 MB in one value. A body declaring more is refused unread, and one that declares nothing is measured before it is parsed. */
 const MAX_DEPOSIT_BYTES = 1024 * 1024;
@@ -99,7 +101,11 @@ const decoded = (name: string): string => {
 };
 
 export default {
-  fetch: async (request: Request, env: Env & TelemetryEnv): Promise<Response> => {
+  /** The nightly cron (wrangler.jsonc): the telemetry rollup the fleet read comes from. It reads the telemetry record and writes the rollup table, nothing else. */
+  scheduled: async (controller: { scheduledTime: number }, env: Env & RollupEnv): Promise<void> => {
+    await rollupRecent(env, controller.scheduledTime);
+  },
+  fetch: async (request: Request, env: Env & TelemetryEnv & RollupEnv & OperatorEnv): Promise<Response> => {
     const { pathname } = new URL(request.url);
     if (request.method === 'POST') {
       if (pathname === '/v1/deposits') return deposit(request, env);
@@ -110,6 +116,10 @@ export default {
     }
     if (request.method === 'GET') {
       if (pathname === '/v1/covenant') return covenantStatus(request, env);
+      // Not a deposit and not signed in: percentiles over installs, served only where at least K_CELL report. No query is read.
+      if (pathname === '/v1/telemetry/fleet') return fleet(env, Date.now());
+      // The operator's anomaly read, behind a secret the deploy sets: never served to users.
+      if (pathname === '/v1/telemetry/operator') return operator(request, env, Date.now());
       const route = BUNDLE.exec(pathname);
       if (route !== null) return fetchBundle(request, env, decoded(route[1] ?? ''), decoded(route[2] ?? ''), decoded(route[3] ?? ''));
       if (BUNDLE_WITHOUT_HARNESS.test(pathname)) return harnessRequired();
