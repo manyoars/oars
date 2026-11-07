@@ -11,7 +11,7 @@
 
 ## What is sent, and when
 
-The events in the spool are what telemetry sends, unchanged: `oars telemetry show` prints them exactly as stored. They will be sent in batches by a later release, only while telemetry is on and the notice has been shown, and only to a pool server you configure (`--server` or `OARS_POOL_URL`). There is no default server: with none configured, the events stay in the spool and nothing leaves your machine. This version records; the sender is a later release (the check it must call first is `telemetrySendAllowed` in `consent.ts`: off, or notice not yet shown, means nothing sends).
+The events in the spool are what telemetry sends, unchanged: `oars telemetry show` prints them exactly as stored. They will be sent in batches by a later release, only while telemetry is on and the notice has been shown, to the Many Oars pool (`https://pool.manyoars.com`) or the pool server you name (`--server` or `OARS_POOL_URL`). This version records; the sender is a later release (the check it must call first is `telemetrySendAllowed` in `consent.ts`: off, or notice not yet shown, means nothing sends).
 
 ## Event types
 

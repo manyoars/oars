@@ -49,7 +49,7 @@ The scope is not silent. `oars sessions deposit` prints the number of folders it
 opens no file in those folders, not even a subagent's `.meta.json`), the folders that hold transcripts and are not on the saved allowlist, with the total of their main transcripts: a text line (names capped at ten) and `scope`
 (`folders`, `transcripts`, and every name) in the `--json` document. It is scope, not a failure, so it never fails `--strict`, a folder that cannot be listed is named with no count, and a projects root that cannot be listed reports an empty scope, rather than failing `verify`; the text line says "no main transcript" at a count of 0. A folder that holds only subagent transcripts (`<session>/subagents/agent-*.jsonl`, no main transcript) is named too, since a deposit would capture them; the count is of main transcripts, so it can read 0 for such a folder.
 `deposit`'s number also counts folders with no transcript, and uses that run's `--allow`, so it can differ from `verify`'s. The scope covers the whole projects root, also under `--session`.
-It reads the saved allowlist, so after a state loss (`state.json` missing or torn) it names every folder that holds transcripts until a `deposit --allow` saves the list again.
+It reads the saved allowlist, where no entry that names a folder means every folder, so after a state loss (`state.json` missing or torn) it names none until a deposit saves a list again; a saved `!` entry (`--deny`) is off the list.
 `oars sessions books` prints the same line (it lists folders only, so it adds no read), so a total over the stored sessions does not read as complete.
 
 ## The log's growth and compaction
