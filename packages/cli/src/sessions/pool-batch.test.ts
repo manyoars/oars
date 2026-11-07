@@ -63,10 +63,12 @@ describe('the fold and the envelope', () => {
     });
   };
 
-  it('is one batch of the main run then each subagent run, each step tagged, a nested run linked to nothing, an orphan folded into nothing', () => {
+  it('is one batch of the main run then each subagent run, each step tagged, a nested run linked to the subagent that spawned it, an orphan folded into nothing', () => {
     const skeleton = built(withSubagent(9));
     expect(skeleton.transcripts).toHaveLength(3);
-    expect(skeleton.transcripts[2]?.tools.every(({ steps }) => steps.every(({ agentType, parent }) => agentType === 'Plan' && parent === null))).toBe(true);
+    expect(skeleton.transcripts[2]?.tools.every(({ steps }) => steps.every(({ agentType, parent }) => agentType === 'Plan' && parent === 0))).toBe(true);
+    // The nested run names the first subagent's call 0, not the main run's.
+    expect(skeleton.transcripts.map(({ spawnedIn }) => spawnedIn)).toEqual([null, 0, 1]);
     expect(skeleton.transcripts[0]?.tools.every(({ steps }) => steps.every(({ agentType }) => agentType === null))).toBe(true);
     expect(skeleton.transcripts[1]?.tools.every(({ steps }) => steps.every(({ agentType, parent }) => agentType === 'Explore' && parent === MIN_TIMED_CALLS))).toBe(true);
     expect(parseSkeleton(JSON.parse(JSON.stringify(skeleton)))).toMatchObject({ ok: true });
