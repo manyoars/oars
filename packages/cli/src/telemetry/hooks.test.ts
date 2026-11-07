@@ -168,6 +168,8 @@ describe('a session hook records one event per fire', () => {
     mkdirSync(join(storeDir, 'state.json'), { recursive: true });
     await runHook('nightly', '', runtime, () => NOW, undefined, emitterAt(dir));
     expect(hooks(dir).map((event) => `${String(event.data.name)}:${String(event.data.outcome)}`)).toEqual(['stop:miss', 'nightly:hit', 'nightly:error']);
+    // The nightly is the scheduled task: it runs under no harness, so it carries none and reads as unrecorded; the stop hook runs under Claude Code.
+    expect(hooks(dir).map((event) => event.data.harness)).toEqual(['claude-code', undefined, undefined]);
   });
 
   it('records nothing when telemetry is off, and a spool that cannot be written costs nothing', async () => {

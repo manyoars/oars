@@ -8,11 +8,11 @@ import { modelWord, versionWord } from './schema.js';
 export const harnessWord = (harness: string): string => (HARNESSES.some((known) => known === harness) ? harness : OTHER);
 
 /**
- * The harness, harness version, and model a hook saw, as the public vocabulary knows them or `other`; a version or model the hook did not see is absent. The harness is always known: the hook
- * is installed into one, so the caller names it (the recall's frame when a push made one).
+ * The harness, harness version, and model a hook saw, as the public vocabulary knows them or `other`; a version or model the hook did not see is absent. A hook fire names its harness (the
+ * recall's frame when a push made one); the nightly task runs under none, so its caller passes `undefined` and the event carries no harness (it reads as `unrecorded`).
  */
-export const frameWords = (harness: string, harnessVersion: string | null | undefined, model: string | null | undefined): { harness: string; harnessVersion?: string; model?: string } => ({
-  harness: harnessWord(harness),
+export const frameWords = (harness: string | undefined, harnessVersion: string | null | undefined, model: string | null | undefined): { harness?: string; harnessVersion?: string; model?: string } => ({
+  ...(harness === undefined ? {} : { harness: harnessWord(harness) }),
   ...(harnessVersion === undefined || harnessVersion === null ? {} : { harnessVersion: versionWord(harnessVersion) }),
   ...(model === undefined || model === null ? {} : { model: modelWord(model) }),
 });

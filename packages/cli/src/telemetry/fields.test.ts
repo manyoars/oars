@@ -7,6 +7,10 @@ describe('frameWords', () => {
     expect(harnessWord('acme-private')).toBe('other');
   });
 
+  it('carries the harness a caller names, and none for the scheduled nightly, which runs under no harness', () => {
+    expect(frameWords(undefined, '2.1.300', null)).toEqual({ harnessVersion: '2.1.300' });
+  });
+
   it('always carries the harness, and the version and model only when seen', () => {
     expect(frameWords('claude-code', undefined, null)).toEqual({
       harness: 'claude-code',
