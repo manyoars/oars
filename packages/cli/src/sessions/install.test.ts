@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { run } from '../cli.js';
 import { ExitCode } from '../errors.js';
 import { harness, removeTestDirs } from '../test-support.js';
+import { sessionsHookInstall } from './command.js';
 import { commandOf, effectiveRetention, hookStatus, installHooks, readSettings, scheduleArgs, setSchedule, settingsPath, uninstallHooks, type InstallRuntime } from './install.js';
 
 afterEach(() => {
@@ -19,7 +20,8 @@ const SCRATCH = resolve(tmpdir(), 'oars-scratch');
 const NODE = resolve(SCRATCH, 'node', 'node.exe');
 const HOOK_BIN = resolve(SCRATCH, 'dist', 'hook-bin.js');
 
-const runtimeIn = (dir: string, schtasksCode = 0): InstallRuntime => ({
+const runtimeIn = (dir: string, schtasksCode = 0, platform: NodeJS.Platform = 'linux'): InstallRuntime => ({
+  platform,
   nodePath: NODE,
   hookBin: HOOK_BIN,
   userSettings: join(dir, 'user', 'settings.json'),
@@ -385,6 +387,64 @@ describe('nightly schedule', () => {
     expect(calls.map((args) => args[0])).toEqual(['/Create', '/Delete']);
     await expect(setSchedule(runtimeIn(SCRATCH, 1), 'nightly')).rejects.toThrow('Access is denied');
     expect(await setSchedule(runtimeIn(SCRATCH, 1), 'off')).toContain('No scheduled task');
+  });
+});
+
+describe('the nightly task on a plain install', () => {
+  const plain = { scope: 'file' as const, keepRetention: false, schedule: undefined };
+
+  it('is registered on Windows when it is not, with no flag', async () => {
+    calls.length = 0;
+    const dir = scratch();
+    // The query fails (nothing registered), then the create succeeds.
+    const install: InstallRuntime = {
+      ...runtimeIn(dir, 0, 'win32'),
+      schtasks: (args) => {
+        calls.push(args);
+        return Promise.resolve({ code: args[0] === '/Query' ? 1 : 0, output: '' });
+      },
+    };
+    const outcome = await sessionsHookInstall({ sessions: undefined, install, now: () => 0 }, { ...plain, file: join(dir, 's.json') });
+    expect(calls.map((args) => args[0])).toEqual(['/Query', '/Create']);
+    expect(outcome.text).toContain('Scheduled task OarsSessionsNightly: the full deposit');
+    expect(outcome.document).toMatchObject({ schedule: expect.stringContaining('daily at 03:00') });
+  });
+
+  it('is left as it is on Windows when it is already registered', async () => {
+    calls.length = 0;
+    const dir = scratch();
+    const install = runtimeIn(dir, 0, 'win32');
+    const outcome = await sessionsHookInstall({ sessions: undefined, install, now: () => 0 }, { ...plain, file: join(dir, 's.json') });
+    expect(calls.map((args) => args[0])).toEqual(['/Query']);
+    expect(outcome.text).toContain('Scheduled task OarsSessionsNightly: already registered.');
+  });
+
+  it('does not fail the hook install when Windows refuses the task, and says what to run', async () => {
+    calls.length = 0;
+    const dir = scratch();
+    const install = runtimeIn(dir, 1, 'win32');
+    const outcome = await sessionsHookInstall({ sessions: undefined, install, now: () => 0 }, { ...plain, file: join(dir, 's.json') });
+    expect(calls.map((args) => args[0])).toEqual(['/Query', '/Create']);
+    expect(outcome.text).toContain('Installed SessionStart');
+    expect(outcome.text).toContain('Could not register the scheduled task OarsSessionsNightly');
+    expect(outcome.text).toContain('--schedule nightly');
+  });
+
+  it('is not touched off Windows', async () => {
+    calls.length = 0;
+    const dir = scratch();
+    const install = runtimeIn(dir, 0, 'linux');
+    const outcome = await sessionsHookInstall({ sessions: undefined, install, now: () => 0 }, { ...plain, file: join(dir, 's.json') });
+    expect(calls).toEqual([]);
+    expect(outcome.document).not.toHaveProperty('schedule');
+  });
+
+  it('is not registered again by an explicit --schedule off in the same run', async () => {
+    calls.length = 0;
+    const dir = scratch();
+    const install = runtimeIn(dir, 0, 'win32');
+    await sessionsHookInstall({ sessions: undefined, install, now: () => 0 }, { ...plain, file: join(dir, 's.json'), schedule: 'off' });
+    expect(calls.map((args) => args[0])).toEqual(['/Delete']);
   });
 });
 

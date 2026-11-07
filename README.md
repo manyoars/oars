@@ -10,7 +10,7 @@ Many Oars is the open-source `oars` command line and its generated client. This 
 | `openapi/public.json` | The slice of the platform API that Many Oars exposes to the CLI and coding agents (including the API key operations), generated from the platform's OpenAPI by `scripts/openapi-public.mjs` and the operation list in `openapi/public-operations.json` | here |
 | `packages/cli` | `@manyoars/oars`, the `oars` command: `login`, `keys` (`create`, `list`, `revoke`), `sessions` (a local memory of your own Claude Code sessions), `gate` (a record of the install, MCP, and skill picks your agents make), and `pool` (outbox and fetch commands for a pool server you name) | published on npm as [`@manyoars/oars`](https://www.npmjs.com/package/@manyoars/oars) |
 
-Accounts are not open yet; `oars login` says so until launch.
+Accounts are not open yet: `oars login` uses the Many Oars issuer by default, and until the pool at `pool.manyoars.com` deploys it exits 2 with an error that names it.
 
 ## Session memory
 
@@ -19,7 +19,7 @@ Accounts are not open yet; `oars login` says so until launch.
 - **Captured:** the sessions of every project folder and harness store by default; `--allow` narrows it to the folders you name and `--deny` keeps a folder out (a denial wins). Secrets, emails, and the domains you name are masked in the log.
 - **Stored:** under `<config>/oars/sessions/` on your machine (`<config>` is `%APPDATA%` on Windows, `$XDG_CONFIG_HOME` or `~/.config` elsewhere), including `raw/`, a hard link or copy of each deposited transcript. `raw/` is on by default and holds raw transcripts, unredacted: they keep whatever the transcript held, secrets included, and stay on your machine.
 - **Commands:** `oars sessions deposit` (or `--allow <folder>`, `--deny <folder>`), `oars sessions recall --error "<text>"`, `oars sessions hook install --scope user`.
-- **Uninstall:** `oars sessions hook uninstall --scope user`, `oars sessions hook install --schedule off` if you registered the nightly task, then delete the `<config>/oars/sessions/` folder. If you ran `gold sample`, also delete `~/.claude/session-commons/review/` (or `$CLAUDE_CONFIG_DIR/session-commons/review/`, or your `--out-dir`). Install raises `cleanupPeriodDays` in your settings to at least 365, and uninstall leaves it raised.
+- **Uninstall:** `oars sessions hook uninstall --scope user`, `oars sessions hook install --schedule off` on Windows, where install registers the nightly task, then delete the `<config>/oars/sessions/` folder. If you ran `gold sample`, also delete `~/.claude/session-commons/review/` (or `$CLAUDE_CONFIG_DIR/session-commons/review/`, or your `--out-dir`). Install raises `cleanupPeriodDays` in your settings to at least 365, and uninstall leaves it raised.
 
 The full reference is in [`packages/cli/README.md`](packages/cli/README.md).
 

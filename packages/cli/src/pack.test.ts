@@ -143,7 +143,7 @@ const DENY_LIST = [
   'joins no cluster',
 ];
 
-const NOT_OPEN = 'Accounts are not open yet; `oars login` says so until launch.';
+const NOT_OPEN = 'Accounts are not open yet: `oars login` uses the Many Oars issuer by default, and until the pool at `pool.manyoars.com` deploys it exits 2 with an error that names it.';
 
 const WITHHELD_TERMS = [
   /\bprices?\b/i,

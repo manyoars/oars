@@ -32,7 +32,7 @@ describe('one command installs and removes the hooks', () => {
       hookBin: resolve(dir, 'dist', 'hook-bin.js'),
       userSettings: file,
       cwd: dir,
-      schtasks: () => Promise.resolve({ code: 0, output: '' }),
+      platform: 'linux', schtasks: () => Promise.resolve({ code: 0, output: '' }),
     };
     // The command wiring, as `oars sessions hook install --scope user` reaches it.
     const deps = { sessions: undefined, install: runtime, now: () => NOW };
@@ -49,7 +49,7 @@ describe('one command installs and removes the hooks', () => {
   it('takes the bare forms as the user settings', async () => {
     const dir = stage().root;
     const file = join(dir, 'settings.json');
-    const runtime: InstallRuntime = { nodePath: resolve(dir, 'node'), hookBin: resolve(dir, 'dist', 'hook-bin.js'), userSettings: file, cwd: dir, schtasks: () => Promise.resolve({ code: 0, output: '' }) };
+    const runtime: InstallRuntime = { nodePath: resolve(dir, 'node'), hookBin: resolve(dir, 'dist', 'hook-bin.js'), userSettings: file, cwd: dir, platform: 'linux', schtasks: () => Promise.resolve({ code: 0, output: '' }) };
     const deps = { sessions: undefined, install: runtime, now: () => NOW };
     await sessionsHookInstall(deps, { scope: undefined, file: undefined, keepRetention: false, schedule: undefined });
     for (const event of EVENTS) expect(commandsOf(await readSettings(file), event)).toHaveLength(1);

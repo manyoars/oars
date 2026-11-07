@@ -41,7 +41,7 @@ export interface SendResult {
   requests: number;
 }
 
-/** The pool server, validated the way `oars pool` does it, or undefined. The pool command's code is loaded only here, so the nightly and the hooks do not pay for it when nothing is to be sent. */
+/** The pool server, validated the way `oars pool` does it, or undefined. The pool command's code is loaded only after sending is allowed, so a run with telemetry off or the notice unshown does not pay for it. */
 const serverOf = async (env: NodeJS.ProcessEnv): Promise<string | undefined> => {
   try {
     const { poolServer } = await import('../sessions/pool-command.js');

@@ -13,6 +13,8 @@ const OWN_COMMAND = /hook-bin\.js" (?:session-start|pre-tool|post-tool|stop)$/;
 
 /** What the install needs from the machine, so a test can stand in for each. */
 export interface InstallRuntime {
+  /** `process.platform`: only `win32` has the nightly task. */
+  platform: NodeJS.Platform;
   nodePath: string;
   /** Absolute path of the built `hook-bin.js`. */
   hookBin: string;
@@ -232,14 +234,29 @@ export const scheduleArgs = (runtime: InstallRuntime, hour: number): string[] =>
 
 export const SCHEDULE_HOUR = 3;
 
+const registered = (): string => `Scheduled task ${TASK_NAME}: the full deposit and the recurrence refresh run daily at ${String(SCHEDULE_HOUR).padStart(2, '0')}:00.`;
+
 export const setSchedule = async (runtime: InstallRuntime, mode: 'nightly' | 'off'): Promise<string> => {
   if (mode === 'nightly') {
     const created = await runtime.schtasks(scheduleArgs(runtime, SCHEDULE_HOUR));
     if (created.code !== 0) throw new CliError(`Could not register the scheduled task: ${created.output.trim()}`, ExitCode.UNEXPECTED, 'unexpected');
-    return `Scheduled task ${TASK_NAME}: the full deposit and the recurrence refresh run daily at ${String(SCHEDULE_HOUR).padStart(2, '0')}:00.`;
+    return registered();
   }
   const deleted = await runtime.schtasks(['/Delete', '/TN', TASK_NAME, '/F']);
   return deleted.code === 0 ? `Removed the scheduled task ${TASK_NAME}.` : `No scheduled task ${TASK_NAME} to remove.`;
+};
+
+/**
+ * What a plain `hook install` does about the nightly task on Windows: register it unless it is already there. Registration is
+ * best effort: the hooks are installed by then, so a machine that refuses the task (policy, no Task Scheduler) is told how to retry
+ * and is not failed. `install --schedule off` removes the task; the next plain install registers it again.
+ */
+export const ensureSchedule = async (runtime: InstallRuntime): Promise<string> => {
+  const queried = await runtime.schtasks(['/Query', '/TN', TASK_NAME]);
+  if (queried.code === 0) return `Scheduled task ${TASK_NAME}: already registered.`;
+  const created = await runtime.schtasks(scheduleArgs(runtime, SCHEDULE_HOUR));
+  if (created.code !== 0) return `Could not register the scheduled task ${TASK_NAME} (${created.output.trim()}); the hooks are installed. Retry with: oars sessions hook install --schedule nightly`;
+  return registered();
 };
 
 export const scheduleStatus = async (runtime: InstallRuntime): Promise<string> => {

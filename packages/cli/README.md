@@ -2,7 +2,7 @@
 
 The `oars` command line for Many Oars: sign in, manage API keys, and keep a local memory of your own Claude Code sessions (`oars sessions`).
 
-Accounts are not open yet; `oars login` says so until launch.
+Accounts are not open yet: `oars login` uses the Many Oars issuer by default, and until the pool at `pool.manyoars.com` deploys it exits 2 with an error that names it.
 
 Node 24 or later. ESM only.
 
@@ -34,7 +34,7 @@ These flags work on every command:
 Signs in with your browser (RFC 8628 device flow) and stores the login.
 
 - `--no-browser` prints the link and code without opening a browser.
-- `--issuer-url <url>` is the Keycloak realm URL. The default is `OARS_ISSUER_URL`. With neither, `login` uses the built-in Many Oars issuer once Many Oars has launched, which it learns from `https://manyoars.com/.well-known/oars.json` (`{"launched": true}`). The flag only switches the built-in issuer on; it never supplies a URL. Before launch, or when the built-in issuer does not answer discovery, with no `--issuer-url` or `OARS_ISSUER_URL`, the command prints "Many Oars has not launched yet: pass --issuer-url or set OARS_ISSUER_URL." and exits 2.
+- `--issuer-url <url>` is the Keycloak realm URL. The default is `OARS_ISSUER_URL`. With neither, `login` uses the built-in Many Oars issuer, `https://login.manyoars.com/realms/aor`; nothing has to be switched on first. When the built-in issuer does not answer discovery (the pool at `pool.manyoars.com` may not be deployed yet), with no `--issuer-url` or `OARS_ISSUER_URL`, the command prints "Cannot reach Many Oars sign-in for the pool at pool.manyoars.com (it may not be deployed yet). Pass --issuer-url or set OARS_ISSUER_URL to use another issuer." and exits 2.
 
 ### logout
 
@@ -150,7 +150,7 @@ Install merges: existing hooks (a Stop hook that rotates sessions, say) stay, ev
 
 #### Nightly schedule (Windows)
 
-`oars sessions hook install --schedule nightly` registers the Task Scheduler task `OarsSessionsNightly` (daily, 03:00) that runs the full deposit over the saved `--allow` and `--redact-domain` entries and refreshes the recurrence index the hooks read. `--schedule off` removes it; `hook status` shows whether it is registered. Alone, `--schedule` writes no settings file.
+On Windows, `oars sessions hook install` registers the Task Scheduler task `OarsSessionsNightly` (daily, 03:00) unless it is already there; `--schedule nightly` registers it by itself, with no settings file. The task runs the full deposit over the saved `--allow` and `--redact-domain` entries and refreshes the recurrence index the hooks read. `--schedule off` removes it (the next plain install registers it again); `hook status` shows whether it is registered. A machine that refuses the task still gets the hooks, and the install says how to retry. Alone, `--schedule` writes no settings file.
 
 #### Reading `measure` before and after
 
