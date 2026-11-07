@@ -162,7 +162,7 @@ const redonePrompts = (calls: readonly ToolObservation[], nextOf: ReadonlyMap<nu
  */
 const GIT_UNDO = /^git (?:revert .|restore(?: |$))|^git checkout(?: \.)?$/;
 const BARE_CHECKOUT = /^git checkout$/;
-/** Flags of a `git checkout` that move to or create a branch, or leave one with a literal `-`: none of them undoes work. */
+/** Flags of a `git checkout` that move to or create a branch, or leave one with a literal `-`: none of them undoes work. `<literal>` is also what the step makes of any flag off the public list (`--theirs`, `--patch`), so those read as no undo too: a limit, pinned in `intervention.test.ts`. */
 const CHECKOUT_MOVES = new Set(['<literal>', '-b', '-B', '--orphan', '--detach']);
 /** A prompt that begins by asking for the undo, in English: `revert that`, `please undo`, `rollback`. */
 const ASKS_UNDO = /^(?:please )?(?:revert|undo|roll ?back)\b/i;

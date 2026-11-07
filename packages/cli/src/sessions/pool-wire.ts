@@ -18,7 +18,7 @@ export const SKELETON_FORMAT = 3;
  * The version of the field list: every field name a batch can hold (`BATCH_FIELDS` in `pool-outbox.ts`). It moves with any field added, so a server told the version knows which names a batch may carry,
  * and a test pins the list to it (`pool-wire-additive.test.ts`). A field is deprecated and left on the list, never removed (conclusion section 17, rule 3).
  */
-export const FIELD_LIST_VERSION = 5;
+export const FIELD_LIST_VERSION = 6;
 export const BUNDLE_FORMAT = 1;
 /** One constant: the pool serves only the vocabulary version the client holds. */
 export { VOCAB_VERSION };
@@ -116,8 +116,40 @@ export interface Reach {
   plugins: string[];
 }
 
-/** The frame a skeleton holds: the stored frame, with the stack's shares beside its languages. A language whose share is not known is in `languages` and has no entry here. `reach` is on the transcript's frame and the frames of its list, not on a prompt's. */
-export type SkeletonFrame = Omit<Frame, 'stack' | 'harness'> & { harness: WireHarness; stack: Omit<FrameStack, 'size'> & { size: RepoSize | typeof OTHER | null; languageShares: LanguageShareEntry[] }; reach?: Reach };
+/** How many people the operator's organization has (an operator's setting, read locally, never looked up). */
+export const ORG_SIZES = ['solo', '2-10', '11-100', '101-1000', 'over-1000', 'unknown'] as const;
+export type OrgSize = (typeof ORG_SIZES)[number];
+/** Whether the repository's local git log shows one commit author or several (distinct authors, counted and then dropped). */
+export const TEAMS = ['solo', 'team', 'unknown'] as const;
+export type Team = (typeof TEAMS)[number];
+/** Whether the repository is public or private (an operator's setting, read locally, never looked up). */
+export const REPO_VISIBILITIES = ['public', 'private', 'unknown'] as const;
+export type RepoVisibility = (typeof REPO_VISIBILITIES)[number];
+
+/** What the pool can state about whom a deposit covers. It is not a filter: no read uses it. Anything not read locally is `unknown`. */
+export interface Coverage {
+  orgSize: OrgSize;
+  team: Team;
+  repoVisibility: RepoVisibility;
+}
+
+export const NO_COVERAGE: Coverage = { orgSize: 'unknown', team: 'unknown', repoVisibility: 'unknown' };
+
+/** A repo key is the store-salted hash a session record holds of its repository's identity: sixteen lowercase hex characters. */
+const REPO_KEY = /^[0-9a-f]{16}$/;
+
+/** The UTC hour of day, 0 to 23, of a timestamp, whatever offset it was written in; null when there is none or it does not parse. */
+export const hourOf = (ts: string | null | undefined): number | null => {
+  if (ts === null || ts === undefined || ts === '') return null;
+  const millis = Date.parse(ts);
+  return Number.isNaN(millis) ? null : new Date(millis).getUTCHours();
+};
+
+/**
+ * The frame a skeleton holds: the stored frame, with the stack's shares beside its languages. A language whose share is not known is in `languages` and has no entry here. `reach`, `repoKey`, and the coverage bands
+ * are on the transcript's frame and the frames of its list, not on a prompt's. `hour` is the UTC hour beside `day` and joins no cell. Every one is optional: an absent field was not sent.
+ */
+export type SkeletonFrame = Omit<Frame, 'stack' | 'harness'> & { harness: WireHarness; stack: Omit<FrameStack, 'size'> & { size: RepoSize | typeof OTHER | null; languageShares: LanguageShareEntry[] }; reach?: Reach; repoKey?: string; orgSize?: OrgSize | typeof OTHER; team?: Team | typeof OTHER; repoVisibility?: RepoVisibility | typeof OTHER; hour?: number };
 
 export interface SkeletonPrompt {
   cls: PromptClass | typeof OTHER;
@@ -361,17 +393,18 @@ const carrier = (steps: readonly { action: string }[]): number => Math.max(0, st
 type Spawned = ReadonlyMap<number, number>;
 
 /**
- * A stored frame with its stack's language shares: each stored share is read through its projection, so a share outside the list is dropped and its language stays in `languages`. A stored
+ * A stored frame with the UTC hour of `ts` beside its day, and its stack's language shares: each stored share is read through its projection, so a share outside the list is dropped and its language stays in `languages`. A stored
  * language outside the pinned list is `other`, and `other` holds the first share a record gives it. A record captured before the strata holds none.
  */
-const wireFrame = (frame: Frame, strata: Strata | undefined): SkeletonFrame => {
+const wireFrame = (frame: Frame, strata: Strata | undefined, ts: string | null | undefined): SkeletonFrame => {
   const shares = new Map<string, LanguageShare>();
   for (const { language, share } of strata?.languages ?? []) {
     const held = projectLanguageShare(share);
     const name = projectLanguage(language);
     if (held !== null && !shares.has(name)) shares.set(name, held);
   }
-  return { ...frame, stack: { ...frame.stack, languageShares: [...shares].map(([language, languageShare]) => ({ language, languageShare })) } };
+  const hour = hourOf(ts);
+  return { ...frame, stack: { ...frame.stack, languageShares: [...shares].map(([language, languageShare]) => ({ language, languageShare })) }, ...(hour === null ? {} : { hour }) };
 };
 
 /** Each of `names` after the gate (a name that counts as redacted reads `private`), sorted. */
@@ -407,12 +440,13 @@ const transcriptOf = (
   agentType: string | null,
   read: ShellReader,
   gate: WireGate,
+  coverage: Coverage,
 ): SkeletonTranscript | null => {
   if (session.frame === undefined || root === null) return null;
   const harness = session.harness ?? 'claude-code';
   const framedPrompts: SkeletonPrompt[] = [];
   const promptAt = new Map<number, number>();
-  for (const { index, cls, errors, wallSec, usage, frame, strata, intervention } of [...prompts].sort((a, b) => a.index - b.index)) {
+  for (const { index, cls, errors, wallSec, usage, frame, strata, ts, intervention } of [...prompts].sort((a, b) => a.index - b.index)) {
     if (frame === undefined) return null;
     promptAt.set(index, framedPrompts.length);
     framedPrompts.push({
@@ -422,13 +456,15 @@ const transcriptOf = (
       usage: { input: bucketOf('tokens', usage.input), cacheWrite: bucketOf('tokens', usage.cacheWrite), cacheRead: bucketOf('tokens', usage.cacheRead), output: bucketOf('tokens', usage.output), thinking: bucketOf('tokens', usage.thinking) },
       explore: projectExplore(strata?.explore),
       ...(intervention === undefined ? {} : { intervention }),
-      frame: wireFrame(frame, strata),
+      frame: wireFrame(frame, strata, ts),
     });
   }
   // The frames the steps ran in: the transcript's own first, then one for each distinct (prompt frame, call model, call harness version) a call shows, so a model that changes in the middle of a prompt
   // reaches the steps that ran on it. A call that recorded neither takes its prompt's frame, or the transcript's before the first prompt.
   const reach = reachOf(session, tools, harness, gate);
-  const transcriptFrame: SkeletonFrame = { ...wireFrame(session.frame, session.strata), reach };
+  // The repo key and the bands describe the session, not a prompt, so they sit where the reach does. A session in no repository sends no key, and so does one whose record holds anything but a key's shape: the emitter is the privacy control.
+  const where = { reach, ...(session.repo !== null && REPO_KEY.test(session.repo) ? { repoKey: session.repo } : {}), ...coverage };
+  const transcriptFrame: SkeletonFrame = { ...wireFrame(session.frame, session.strata, session.tsFirst), ...where };
   const frames: SkeletonFrame[] = [transcriptFrame];
   const frameAtKey = new Map<string, number>([[JSON.stringify(transcriptFrame), 0]]);
   const frameOfCall = ({ model, harnessVersion }: ToolObservation, promptPosition: number | null): number => {
@@ -437,7 +473,7 @@ const transcriptOf = (
       ...(base ?? transcriptFrame),
       ...(model === undefined ? {} : { model: publicModel(model) }),
       ...(harnessVersion === null ? {} : { harnessVersion: publicVersion(harnessVersion) }),
-      reach,
+      ...where,
     };
     const key = JSON.stringify(held);
     const found = frameAtKey.get(key);
@@ -510,7 +546,7 @@ export type Print = (durations: readonly number[]) => string;
  * The skeleton of a session; null when any record of it was captured before steps and frames, or a transcript of it has no root, which holds no closed reading to send. The batch holds the main
  * transcript's run first, then each subagent's as its own run; its `id` is the main session's, and its one `timingPrint` is over the main transcript's calls alone.
  */
-export const skeletonOf = (records: SessionRecords, id: string, read: ShellReader, print: Print, deltas: readonly DeltaEntry[] = [], gate: WireGate = OPEN_GATE): SessionSkeleton | null => {
+export const skeletonOf = (records: SessionRecords, id: string, read: ShellReader, print: Print, deltas: readonly DeltaEntry[] = [], gate: WireGate = OPEN_GATE, coverage: Coverage = NO_COVERAGE): SessionSkeleton | null => {
   const mainTools = byCall(records.transcripts[0]?.tools ?? []);
   const places = records.transcripts.map(({ tools }) => placesOf(tools));
   const spawners = places[0]?.calls ?? new Map<number, number>();
@@ -540,7 +576,7 @@ export const skeletonOf = (records: SessionRecords, id: string, read: ShellReade
   for (const [index, entry] of records.transcripts.entries()) {
     const at = spawnerOf[index] ?? null;
     const spawnerPlaces = at === null || cyclic(index) ? undefined : places[at];
-    const transcript = transcriptOf(entry, at === null || spawnerPlaces === undefined ? null : { index: at, places: spawnerPlaces }, index === 0 ? spawned : new Map(), index === 0 ? null : projectedAgentType(entry.session.agentType ?? CUSTOM_AGENT), read, gate);
+    const transcript = transcriptOf(entry, at === null || spawnerPlaces === undefined ? null : { index: at, places: spawnerPlaces }, index === 0 ? spawned : new Map(), index === 0 ? null : projectedAgentType(entry.session.agentType ?? CUSTOM_AGENT), read, gate, coverage);
     if (transcript === null) return null;
     transcripts.push(transcript);
   }
@@ -628,7 +664,7 @@ export const ENUMERATED_FIELDS: ReadonlySet<string> = new Set(['harness', 'harne
  */
 export const OPTIONAL = {
   batch: ['timingPrint', 'deltas'],
-  frame: ['harnessVersion', 'model', 'effort', 'day', 'shell', 'reach'],
+  frame: ['harnessVersion', 'model', 'effort', 'day', 'shell', 'reach', 'repoKey', 'orgSize', 'team', 'repoVisibility', 'hour'],
   stack: ['size', 'languageShares'],
   prompt: ['wallSec', 'explore', 'intervention'],
   tool: ['prompt', 'durationMs', 'errorCode', 'recoveryCalls'],
@@ -768,6 +804,18 @@ const parseReach = (held: Collected, value: unknown, at: string): Reach => {
   return reach;
 };
 
+/** Sixteen lowercase hex characters and nothing else, so no path or remote text can ride in a repo key. */
+const parseRepoKey = (value: unknown, at: string): string => {
+  const text = textOf(value, at);
+  if (!REPO_KEY.test(text)) throw new Refused(at, 'outside the vocabulary');
+  return text;
+};
+
+const parseHour = (value: unknown, at: string): number => {
+  if (typeof value !== 'number' || !Number.isInteger(value) || value < 0 || value > 23) throw new Refused(at, 'not an hour');
+  return value;
+};
+
 const parseFrame = (held: Collected, value: unknown, at: string): SkeletonFrame => {
   const raw = fieldsOf(held, value, at, ['harness', 'platform', 'stack'], OPTIONAL.frame);
   const stackAt = under(at, 'stack');
@@ -792,6 +840,11 @@ const parseFrame = (held: Collected, value: unknown, at: string): SkeletonFrame 
       languageShares: listOrEmpty(stack.languageShares, under(stackAt, 'languageShares'), (entry, entryAt) => parseLanguageShare(held, entry, entryAt)),
     },
     ...(raw.reach === undefined ? {} : { reach: parseReach(held, raw.reach, under(at, 'reach')) }),
+    ...(raw.repoKey === undefined ? {} : { repoKey: parseRepoKey(raw.repoKey, under(at, 'repoKey')) }),
+    ...(raw.orgSize === undefined ? {} : { orgSize: oneOf(held, ORG_SIZES, raw.orgSize, under(at, 'orgSize')) }),
+    ...(raw.team === undefined ? {} : { team: oneOf(held, TEAMS, raw.team, under(at, 'team')) }),
+    ...(raw.repoVisibility === undefined ? {} : { repoVisibility: oneOf(held, REPO_VISIBILITIES, raw.repoVisibility, under(at, 'repoVisibility')) }),
+    ...(raw.hour === undefined ? {} : { hour: parseHour(raw.hour, under(at, 'hour')) }),
   };
 };
 
@@ -1144,6 +1197,27 @@ export interface StrataCell {
   clusters: number;
 }
 
+/** A number the pool can state, or the plain statement that nothing measures it yet. `no source yet` is never a zero: a measured nothing and an unmeasured one must not read alike. */
+export type Sourced = { state: 'value'; value: number } | { state: 'no source yet'; reason: string };
+
+/**
+ * The set of four (direction conclusion, section 20 rule 1), as totals. Served cells and the below-floor backlog are totals over the cells this bundle derived from; the backlog is one number and names no
+ * tuple, week, or value. The panel is one account count and names no account. `demand` and `goal` hold a place each for a source a later brief adds. `floor`, the versions, and `asOf` are its lineage (section 17 rule 6).
+ */
+export interface Books {
+  floor: number;
+  format: typeof BUNDLE_FORMAT;
+  vocabVersion: string;
+  asOf: ReadAsOf;
+  served: { total: number; byWeek: { week: string; cells: number }[]; byTuple: { tuple: string; cells: number }[] };
+  backlog: number;
+  panel: Sourced;
+  /** The UTC day the panel was counted: the pool reads its deposits once a day. */
+  panelDay: string | null;
+  demand: { comparisonReadOwners: Sourced; followOnReads: Sourced };
+  goal: { readYield: Sourced; costPerServedCell: Sourced; yieldPerServedCell: Sourced };
+}
+
 /** One harness version's replica, as the server signs it. It names its harness, which the signature covers, so a bundle for one harness cannot stand in for another's. Nothing in it is keyed by stack. */
 export interface Bundle {
   format: typeof BUNDLE_FORMAT;
@@ -1157,6 +1231,8 @@ export interface Bundle {
   motifs: Motif[];
   reads: Read[];
   strata: StrataCell[];
+  /** Absent in a bundle signed before the set of four existed, which `oars sessions books` reads as no pool books. */
+  books?: Books;
 }
 
 /** The signature covers these exact bytes, so nothing has to be canonicalized on either side. */

@@ -79,6 +79,9 @@ describe('the outbox', () => {
 const FRAME = { harness: 'claude-code', harnessVersion: '2.1.314', model: 'claude-opus-5-5', effort: 'high', day: '2026-11-01', platform: 'linux', shell: 'bash', stack: { languages: ['python'], frameworks: [], size: null, languageShares: [{ language: 'python', languageShare: 'over-50' }, { language: 'other', languageShare: '10-50' }] } };
 const STEP = { status: 'ok', tokens: 3, ms: 4, remainingTokens: 2, agentType: null, parent: null, frame: 1 };
 const REACH = { filled: true, mcp: ['github', 'private'], skills: ['commit'], plugins: ['private'] };
+/** The repo key, the three coverage bands, and the hour (t871): invented values. */
+const WHERE = { repoKey: '0123456789abcdef', orgSize: '2-10', team: 'team', repoVisibility: 'private', hour: 13 };
+
 const REAL = {
   format: SKELETON_FORMAT,
   vocabVersion: VOCAB_VERSION,
@@ -92,8 +95,8 @@ const REAL = {
       leaves: 12,
       harness: 'claude-code',
       spawnedIn: null,
-      frame: { ...FRAME, reach: REACH },
-      frames: [{ ...FRAME, reach: REACH }, { ...FRAME, model: 'claude-sonnet-5-5', reach: REACH }],
+      frame: { ...FRAME, reach: REACH, ...WHERE },
+      frames: [{ ...FRAME, reach: REACH, ...WHERE }, { ...FRAME, model: 'claude-sonnet-5-5', reach: REACH, ...WHERE }],
       prompts: [{ cls: 'edit-verify', errors: 0, wallSec: 5, usage: { input: 1, cacheWrite: 2, cacheRead: 3, output: 4, thinking: 5 }, explore: 6, intervention: 'redo', frame: FRAME }],
       tools: [
         {

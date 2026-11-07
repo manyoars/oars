@@ -20,8 +20,8 @@ const skeletonWith = (values: readonly (PromptIntervention | undefined)[]): Sess
 const promptsOf = (skeleton: SessionSkeleton): SessionSkeleton['transcripts'][number]['prompts'] => skeleton.transcripts[0]?.prompts ?? [];
 
 describe('intervention on the wire', () => {
-  it('moves the field list to 5, and names the field as optional on a prompt', () => {
-    expect(FIELD_LIST_VERSION).toBe(5);
+  it('moves the field list to 6, and names the field as optional on a prompt', () => {
+    expect(FIELD_LIST_VERSION).toBe(6);
     expect(OPTIONAL.prompt).toContain('intervention');
   });
 
