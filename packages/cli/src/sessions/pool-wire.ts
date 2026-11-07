@@ -1311,6 +1311,21 @@ export interface StrataCell {
   clusters: number;
 }
 
+/**
+ * The floors a pool served the bundle at, stated so a client can print them and holds none of its own. `public` is the clusters a cell needs to be served and a read to count it, `disclosure` the clusters that must hold a signature's hash
+ * before its text may be requested, and `families` the read families that have a public floor of their own (a family not listed is at `public`). Both are the deploy's to set, so a client reads them here and never applies one.
+ */
+export interface BundleFloors {
+  public: number;
+  disclosure: number;
+  families?: FamilyFloors;
+}
+
+/** A floor per read family, keyed by the family's name as the pool states it. A client applies none and prints only the families it knows, so a name this version has never heard of (a family a later pool adds) is carried as stated and not refused. */
+export interface FamilyFloors {
+  [family: string]: number;
+}
+
 /** A number the pool can state, or the plain statement that nothing measures it yet. `no source yet` is never a zero: a measured nothing and an unmeasured one must not read alike. */
 export type Sourced = { state: 'value'; value: number } | { state: 'no source yet'; reason: string };
 
@@ -1338,13 +1353,15 @@ export interface Bundle {
   harness: Harness;
   harnessVersion: string;
   vocabVersion: string;
-  /** The floor the pool applied: it serves a cell, a name, or a count only once this many distinct accounts report it, so every count and denominator here is of values at or above it. */
+  /** The public floor the pool applied (`floors.public`): every cell and read is at or above it except a family on a lower floor of its own, which states its floor on each read and in `floors.families`. */
   floor: number;
   asOf: ReadAsOf;
   cells: Cell[];
   motifs: Motif[];
   reads: Read[];
   strata: StrataCell[];
+  /** Additive: a bundle from a pool before the floors were bindings holds none, and a client that does not know the field ignores it. */
+  floors?: BundleFloors;
   /** Absent in a bundle signed before the set of four existed, which `oars sessions books` reads as no pool books. */
   books?: Books;
 }
@@ -1365,9 +1382,15 @@ export interface PinnedKey {
 
 const isSignedBundle = (value: unknown): value is SignedBundle => isFields(value) && typeof value.payload === 'string' && typeof value.signature === 'string';
 
+const isFloor = (value: unknown): value is number => typeof value === 'number' && Number.isSafeInteger(value) && value >= 1;
+
+/** The floors a bundle states, or none: a client prints what is here, so a value that is not a whole number of at least 1 is refused and not shown, while a family this client does not know is carried (in `--json`) and not printed, since `floorSentence` prints only the families this client knows (additive, section 17 rule 3). */
+const isFloors = (value: unknown): value is BundleFloors =>
+  isFields(value) && isFloor(value.public) && isFloor(value.disclosure) && (value.families === undefined || (isFields(value.families) && Object.values(value.families).every(isFloor)));
+
 // A bundle states the floor it applied (`floor`, t881), and a client cannot tell which floor a bundle without one applied, so a format 1 bundle with no `floor` is refused as not a bundle this version reads.
 const isBundle = (value: unknown): value is Bundle =>
-  isFields(value) && value.format === BUNDLE_FORMAT && typeof value.harness === 'string' && isHarness(value.harness) && typeof value.harnessVersion === 'string' && typeof value.vocabVersion === 'string' && typeof value.floor === 'number' && isFields(value.asOf) && Array.isArray(value.cells) && Array.isArray(value.motifs) && Array.isArray(value.reads) && Array.isArray(value.strata);
+  isFields(value) && value.format === BUNDLE_FORMAT && typeof value.harness === 'string' && isHarness(value.harness) && typeof value.harnessVersion === 'string' && typeof value.vocabVersion === 'string' && typeof value.floor === 'number' && isFields(value.asOf) && Array.isArray(value.cells) && Array.isArray(value.motifs) && Array.isArray(value.reads) && Array.isArray(value.strata) && (value.floors === undefined || isFloors(value.floors));
 
 const signatureHolds = async ({ payload, signature }: SignedBundle, key: PinnedKey): Promise<boolean> => {
   try {
