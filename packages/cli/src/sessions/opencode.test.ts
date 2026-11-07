@@ -350,7 +350,7 @@ describe('the OpenCode reader', () => {
       type: 'shell',
       seq,
       created: at(seq),
-      data: { time: { created: at(seq), completed: at(seq + 1) }, shellID: `sh${seq}`, command, status: 'exited', exit: 0, output: { output, cursor: output.length, size: output.length, truncated: false } },
+      data: { time: { created: at(seq), completed: at(seq + 1) }, shellID: `sh${String(seq)}`, command, status: 'exited', exit: 0, output: { output, cursor: output.length, size: output.length, truncated: false } },
     });
     const { store, read } = await opened((dir) => [
       {
