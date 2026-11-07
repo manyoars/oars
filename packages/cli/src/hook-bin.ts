@@ -2,6 +2,7 @@
 // hook event JSON on stdin. It imports only the store modules (not the CLI), so a call costs little more than the node start, and it
 // always exits 0 with no output on any failure: a hook must never fail or block a session.
 import { homedir } from 'node:os';
+import { hookEmitter } from './telemetry/hook-emit.js';
 import { HOOK_EVENTS, hookRuntime, runHook, type HookEvent } from './sessions/hooks.js';
 
 const readStdin = async (): Promise<string> => {
@@ -21,6 +22,7 @@ try {
       event === 'nightly' ? '' : await readStdin(),
       hookRuntime(event, process.env, process.platform, homedir(), { stdin: process.stdin, stdout: process.stdout }),
       Date.now,
+      hookEmitter(process.env, process.platform, homedir(), new URL('../package.json', import.meta.url), Date.now),
     );
     if (output !== undefined) process.stdout.write(output);
   }
