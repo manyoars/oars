@@ -6,6 +6,9 @@ import { answer, bodyOf, bound, fieldOf, notConfigured, refuse, textField, type 
 
 const TOKEN_LIFETIME_MS = 90 * 24 * 60 * 60 * 1000;
 
+/** Live credentials one account may hold (S8): a person signs in on a few machines (laptop, desktop, a build runner, a spare), so five is room for them, while a copied credential cannot ride beside an unbounded pile of others. A login past it revokes the oldest. */
+const LIVE_TOKEN_CAP = 5;
+
 /** What a provider that names no interval or expiry gets: RFC 8628's 5 seconds, and the 900 both providers use. */
 const DEFAULT_INTERVAL_SEC = 5;
 const DEFAULT_EXPIRY_SEC = 900;
@@ -100,6 +103,13 @@ export const accountOf = async (request: Request, env: Env): Promise<string | un
   if (token === undefined) return undefined;
   const row = await env.DB.prepare('SELECT account FROM tokens WHERE hash = ? AND expires_at > ?').bind(hashToken(token), Date.now()).first();
   return hasAccount(row) ? row.account : undefined;
+};
+
+/** `DELETE /v1/login`: revokes the credential the request presents, so a copy of it signs nobody in. 204 when it was live; a revoked, expired, or unknown credential gets the usual 401. */
+export const logout = async (request: Request, env: Env): Promise<Response> => {
+  const token = /^Bearer (.+)$/.exec(request.headers.get('authorization') ?? '')?.[1];
+  const revoked = token === undefined ? undefined : await env.DB.prepare('DELETE FROM tokens WHERE hash = ? AND expires_at > ?').bind(hashToken(token), Date.now()).run();
+  return revoked?.meta.changes === 1 ? new Response(null, { status: 204 }) : refuse(401, 'unauthorized', 'Sign in with oars pool login first.');
 };
 
 /** The half of the signing key a client pins at login. */
@@ -198,6 +208,8 @@ const credentialFor = async (env: Env, signingKey: string, account: string, prov
     .run();
   await env.DB.prepare('DELETE FROM tokens WHERE expires_at <= ?').bind(now).run();
   await env.DB.prepare('INSERT INTO tokens (hash, account, expires_at) VALUES (?, ?, ?)').bind(hashToken(token), account, expiresAt).run();
+  // Newest first by rowid (the table is a rowid table, so a later credential has a later one); everything past the cap is the oldest and is revoked.
+  await env.DB.prepare('DELETE FROM tokens WHERE account = ? AND rowid NOT IN (SELECT rowid FROM tokens WHERE account = ? ORDER BY rowid DESC LIMIT ?)').bind(account, account, LIVE_TOKEN_CAP).run();
   return answer(200, { status: 'authorized', token, account, expiresAt, signingKey: publicKeyOf(signingKey) });
 };
 

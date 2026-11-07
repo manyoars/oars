@@ -2525,3 +2525,74 @@ describe('oars pool raw (t884)', () => {
     expect(await scene.cli('pool', 'raw', '--folder', 'proj', '--mode', 'some')).toBe(ExitCode.USAGE);
   });
 });
+
+describe('oars pool logout (S8)', () => {
+  const OTHER = 'https://other-pool.test';
+  const entries = (scene: Scene): unknown => {
+    const parsed: unknown = JSON.parse(readFileSync(join(scene.staged.storeDir, 'pool-accounts.json'), 'utf8'));
+    return parsed;
+  };
+  const serversOf = (scene: Scene): string[] => {
+    const held = entries(scene);
+    return Array.isArray(held) ? held.map((entry) => String(at(entry, 'server'))) : [];
+  };
+  /** The pool's answer to `DELETE /v1/login`, recording the credential it was shown. */
+  const revoking = (scene: Scene, reply: () => Response): void => {
+    server.use(
+      http.delete(`${POOL}/v1/login`, ({ request }) => {
+        scene.seen.push({ url: request.url, headers: request.headers.get('authorization') ?? '', body: '', err: '' });
+        return reply();
+      }),
+    );
+  };
+
+  it('revokes the credential at the pool with it, then removes the local entry and keeps the other servers', async () => {
+    const scene = setting();
+    await signIn(scene);
+    const file = join(scene.staged.storeDir, 'pool-accounts.json');
+    const saved: unknown = JSON.parse(readFileSync(file, 'utf8'));
+    writeFileSync(file, `${JSON.stringify([...(Array.isArray(saved) ? saved : []), { server: OTHER, account: 'acct_two', token: 'other-token', expiresAt: LATER, signingKey: FIXED_KEY }])}\n`);
+    revoking(scene, () => new HttpResponse(null, { status: 204 }));
+    expect(await scene.cli('pool', 'logout', '--server', POOL, '--json')).toBe(ExitCode.OK);
+    expect(scene.seen).toEqual([{ url: `${POOL}/v1/login`, headers: `Bearer ${POOL_TOKEN}`, body: '', err: '' }]);
+    expect(scene.document()).toEqual({ ok: true, server: POOL, revoked: true, removed: true });
+    expect(serversOf(scene)).toEqual([OTHER]);
+  });
+
+  it('still removes the entry when the pool is out of reach, and says the credential was not revoked there', async () => {
+    const scene = setting();
+    await signIn(scene);
+    revoking(scene, () => HttpResponse.error());
+    expect(await scene.cli('pool', 'logout', '--server', POOL)).toBe(ExitCode.OK);
+    expect(scene.h.out.join('')).toContain('could not be reached');
+    expect(scene.h.out.join('')).toContain('not revoked');
+    expect(serversOf(scene)).toEqual([]);
+    scene.h.out.length = 0;
+    await signIn(scene);
+    revoking(scene, () => new HttpResponse(null, { status: 503 }));
+    expect(await scene.cli('pool', 'logout', '--server', POOL, '--json')).toBe(ExitCode.OK);
+    expect(scene.document()).toEqual({ ok: true, server: POOL, revoked: false, removed: true });
+    expect(serversOf(scene)).toEqual([]);
+  });
+
+  it('removes an entry the pool no longer knows (401), and keeps one when the pool refuses for another reason', async () => {
+    const scene = setting();
+    await signIn(scene);
+    revoking(scene, () => HttpResponse.json({ error: 'unauthorized', message: 'Sign in with oars pool login first.' }, { status: 401 }));
+    expect(await scene.cli('pool', 'logout', '--server', POOL)).toBe(ExitCode.OK);
+    expect(scene.h.out.join('')).toContain('already revoked');
+    expect(serversOf(scene)).toEqual([]);
+    await signIn(scene);
+    revoking(scene, () => HttpResponse.json({ error: 'internal', message: 'boom' }, { status: 500 }));
+    expect(await scene.cli('pool', 'logout', '--server', POOL)).not.toBe(ExitCode.OK);
+    expect(serversOf(scene)).toEqual([POOL]);
+  });
+
+  it('says so, and sends nothing, when there is no sign-in to that server', async () => {
+    const scene = setting();
+    revoking(scene, () => new HttpResponse(null, { status: 204 }));
+    expect(await scene.cli('pool', 'logout', '--server', POOL, '--json')).toBe(ExitCode.OK);
+    expect(scene.document()).toEqual({ ok: true, server: POOL, revoked: false, removed: false });
+    expect(scene.seen).toEqual([]);
+  });
+});

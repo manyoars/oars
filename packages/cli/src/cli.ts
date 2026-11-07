@@ -14,7 +14,7 @@ import { gateInstall, gatePolicy, gateReplay, gateReport, gateUninstall } from '
 import { DEADLINE_MS, gateHook } from './gate/hook.js';
 import { managerReader } from './gate/registry.js';
 import { exclusionPaths, sessionsExclusions } from './sessions/exclusion.js';
-import { poolCoverage, poolDeposit, poolFetch, poolLogin, poolOutbox, poolRaw } from './sessions/pool-command.js';
+import { poolCoverage, poolDeposit, poolFetch, poolLogin, poolLogout, poolOutbox, poolRaw } from './sessions/pool-command.js';
 import type { InstallRuntime, Scope } from './sessions/install.js';
 import type { SessionsRuntime } from './sessions/store.js';
 import { telemetryOff, telemetryOn, telemetryReport, telemetryShow, telemetryStatus } from './telemetry/command.js';
@@ -488,6 +488,15 @@ const buildProgram = (deps: RunDeps, observed: Observed): Command => {
   const pool = program.command('pool').description('sign in to a pool server, deposit session skeletons (a closed list of fields, each value redacted first) and, after a yes to the raw prompt, redacted raw copies, and fetch signed reads; local capture, recall, and reads need none of it');
   const serverOption = '--server <url>';
   const serverHelp = 'the pool server, https or plain http to localhost (default: OARS_POOL_URL, else https://pool.manyoars.com)';
+
+  pool
+    .command('logout')
+    .description('revoke this machine's credential at the pool and remove it here; if the pool cannot be reached the local entry is still removed')
+    .option(serverOption, serverHelp)
+    .action(async (_options: OptionValues, command: Command) => {
+      const options: OptionValues = command.optsWithGlobals();
+      emit(deps, flag(options, 'json'), await poolLogout(deps, { server: text(options, 'server') }));
+    });
 
   pool
     .command('login')

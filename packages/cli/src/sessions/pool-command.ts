@@ -28,6 +28,7 @@ import { runGit, type Git } from './survival.js';
 import { vocabulary } from './vocab-load.js';
 
 const LOGIN = 'pool-login';
+const LOGOUT = 'pool-logout';
 export const DEPOSIT = 'pool-deposit';
 const OUTBOX = 'pool-outbox';
 const POOL_DEPOSITS = '/v1/deposits';
@@ -89,7 +90,7 @@ interface Call {
   /** Set for a command that prints what it sends: the print comes first, with these secrets masked. */
   show?: Masker;
   /** A raw part is a PUT of bytes that are not JSON; every other call is a GET, or a POST when it has a body. */
-  method?: 'PUT';
+  method?: 'PUT' | 'DELETE';
   type?: string;
   /** Headers beyond the usual ones (the raw routes state their redaction and capture versions, and the raw consent). */
   extra?: Array<[string, string]>;
@@ -213,6 +214,37 @@ export const poolLogin = async (deps: RunDeps, options: { server?: string | unde
   await mkdir(storeDir, { recursive: true });
   await writeFile(signInsFile(storeDir), `${JSON.stringify([...saved.filter((entry) => entry !== known), signIn])}\n`, { mode: 0o600 });
   return { document: { ok: true, server, account: signIn.account, expiresAt: signIn.expiresAt }, text: `Signed in to ${server} as ${signIn.account}.` };
+};
+
+/** The pool is not answering: it could not be reached, or a gateway in front of it says so. */
+const poolDown = (status: number): boolean => status === 502 || status === 503 || status === 504;
+
+/**
+ * `oars pool logout` (S8): revokes this machine's credential at the pool (`DELETE /v1/login`), then removes the local entry. A pool that cannot be reached does not keep the entry: the person asked to be signed out here, so the entry
+ * goes and the output says the credential was not revoked there (it lapses on its own, and a login past the pool's cap revokes the oldest). A refusal for any other reason keeps the entry, so the command can be run again.
+ */
+export const poolLogout = async (deps: RunDeps, options: { server?: string | undefined }): Promise<Outcome> => {
+  const { storeDir } = runtimeOf(deps);
+  const server = poolServer(deps.env, LOGOUT, options.server);
+  const saved = await loadSignIns(storeDir, LOGOUT);
+  const known = saved.find((entry) => entry.server === server);
+  if (known === undefined) return { document: { ok: true, server, revoked: false, removed: false }, text: `Not signed in to ${server}.` };
+  let reply: Reply | undefined;
+  try {
+    reply = await ask(deps, LOGOUT, server, '/v1/login', { method: 'DELETE', token: known.token });
+  } catch (error) {
+    if (!(error instanceof CliError) || error.exitCode !== ExitCode.UNREACHABLE) throw error;
+  }
+  if (reply !== undefined && reply.status !== 204 && reply.status !== 401 && !poolDown(reply.status)) throw refusal(LOGOUT, reply);
+  await writeFile(signInsFile(storeDir), `${JSON.stringify(saved.filter((entry) => entry !== known))}
+`, { mode: 0o600 });
+  const revoked = reply?.status === 204;
+  const text = revoked
+    ? `Signed out of ${server}: the credential is revoked there and removed here.`
+    : reply?.status === 401
+      ? `Signed out of ${server}: the pool had already revoked the credential, and it is removed here.`
+      : `Signed out of ${server} here, but the pool could not be reached, so the credential was not revoked there. It lapses on its own.`;
+  return { document: { ok: true, server, revoked, removed: true }, text };
 };
 
 /** A send stops here when the server is closed or wants a covenant accepted, before the batch is read for the last time. */
