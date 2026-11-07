@@ -365,7 +365,7 @@ describe('the steps each hook logs', () => {
     expect(rows[0]?.key).toBe(digest([CAPTURE_VERSION, EXTRACTOR_VERSION, 'nightly', REPO, '--', 'corp.example']));
   });
 
-  it('the nightly run appends a deposit, a derive, and an index row, trigger nightly; with nothing saved it logs nothing', async () => {
+  it('the nightly run appends a deposit, a derive, and an index row, trigger nightly; with nothing saved it reads every folder', async () => {
     const staged = await deposited();
     await runHook('nightly', '{}', staged.runtime, () => NOW);
     const rows = await readSteps(staged.storeDir);
@@ -376,7 +376,7 @@ describe('the steps each hook logs', () => {
     expect(rows[0]?.out).toEqual({});
     const empty = stage();
     await runHook('nightly', '{}', empty.runtime, () => NOW);
-    expect(await readSteps(empty.storeDir)).toEqual([]);
+    expect((await readSteps(empty.storeDir)).map((entry) => [entry.step, entry.status])).toEqual([['deposit', 'ok'], ['derive', 'ok'], ['index', 'ok']]);
   });
 
   it('a deposit that reads Cursor sessions tallies their records by kind in the step row', async () => {
@@ -505,7 +505,9 @@ describe('a failed step and its key', () => {
 
   it('a usage error is no failed step: it leaves no row, so three of them are never stuck', async () => {
     const staged = stage();
-    for (let attempt = 0; attempt < 3; attempt += 1) await expect(sessionsDeposit(depsOf(staged), nothing)).rejects.toThrow('Nothing to read');
+    const empty = join(staged.root, 'empty.txt');
+    writeFileSync(empty, '# names nothing\n');
+    for (let attempt = 0; attempt < 3; attempt += 1) await expect(sessionsDeposit(depsOf(staged), { ...nothing, allowFiles: [empty] })).rejects.toThrow('names no folder');
     expect(await readSteps(staged.storeDir)).toEqual([]);
     const context = newContext(staged.storeDir, () => NOW, 'manual');
     await expect(runDeposit(context, true, 'k', () => Promise.reject(new CliError('bad flag', ExitCode.USAGE, 'usage')))).rejects.toThrow('bad flag');

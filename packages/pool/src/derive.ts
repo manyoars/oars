@@ -97,6 +97,7 @@ export const bundleOf = (harness: Harness, harnessVersion: string, stored: Store
     harness,
     harnessVersion,
     vocabVersion: VOCAB_VERSION,
+    floor: K_CELL,
     asOf: { pool: pool.version, day: pool.lastDay },
     cells: served,
     motifs: motifs.filter((motif) => named.has(motif.motifId)),
