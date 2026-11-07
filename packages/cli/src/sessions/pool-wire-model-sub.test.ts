@@ -45,3 +45,37 @@ describe('model and version strings', () => {
     expect([sent?.model, sent?.harnessVersion]).toEqual([null, null]);
   });
 });
+
+describe('subcommands and flags of every program', () => {
+  it('sends an off-list program subcommand and flag name, and parses them', () => {
+    const skeleton = skeletonFor(frame({ shell: 'bash' }), readAs('rollout', ['--prod', '-v']));
+    const identity = skeleton?.transcripts[0]?.tools[0]?.steps[0]?.identity;
+    expect(identity).toEqual({ program: 'acme-deploy', sub: 'rollout', flags: ['--prod', '-v'] });
+    const parsed = parseSkeleton(JSON.parse(JSON.stringify(skeleton)));
+    expect(parsed.ok).toBe(true);
+    expect(parsed.ok && parsed.extensions).toEqual([]);
+  });
+
+  it('never sends a flag value, and sends private for a subcommand or flag that counts as redacted', () => {
+    const skeleton = skeletonFor(frame({ shell: 'bash' }), readAs('acmecorp-plan', ['--token=abc', '--ok', '/x/y', 'a b']));
+    const identity = skeleton?.transcripts[0]?.tools[0]?.steps[0]?.identity;
+    expect(identity).toEqual({ program: 'acme-deploy', sub: PRIVATE, flags: [PRIVATE, '--ok', PRIVATE, PRIVATE] });
+    expect(JSON.stringify(identity)).not.toMatch(/abc|acmecorp|token/);
+  });
+
+  it('sends a private program with no subcommand or flag, because the parser refuses a private program that holds one', () => {
+    const skeleton = skeletonFor(frame({ shell: 'bash' }), () => [{ program: 'acmecorp-tool', subcommand: 'rollout', flags: ['--prod'] }]);
+    expect(skeleton?.transcripts[0]?.tools[0]?.steps[0]?.identity).toEqual({ program: PRIVATE, sub: null, flags: [] });
+    expect(parseSkeleton(JSON.parse(JSON.stringify(skeleton))).ok).toBe(true);
+  });
+
+  it('sets aside a subcommand or flag that is no name, with a flag value never read', () => {
+    const skeleton = skeletonFor(frame({ shell: 'bash' }), readAs('rollout', ['--prod']));
+    const identity = skeleton?.transcripts[0]?.tools[0]?.steps[0]?.identity;
+    if (identity === null || identity === undefined || !('flags' in identity)) throw new Error('the sample has no shell identity');
+    identity.flags = ['--token=abc'];
+    identity.sub = 'two words';
+    const parsed = parseSkeleton(JSON.parse(JSON.stringify(skeleton)));
+    expect(parsed.ok && parsed.skeleton.transcripts[0]?.tools[0]?.steps[0]?.identity).toEqual({ program: 'acme-deploy', sub: 'other', flags: ['other'] });
+  });
+});
