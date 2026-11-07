@@ -84,9 +84,9 @@ describe('the repo key as capture makes it', () => {
   };
 
   it('is one key for one repository under one store salt, from two clones, and two keys under two salts', () => {
-    const here = keyOf('/w/app', 'account-one', 'github.com/org/app');
-    const clone = keyOf('/elsewhere/app-copy', 'account-one', 'github.com/org/app');
-    const other = keyOf('/w/app', 'account-two', 'github.com/org/app');
+    const here = keyOf('/w/app', 'store-one', 'github.com/org/app');
+    const clone = keyOf('/elsewhere/app-copy', 'store-one', 'github.com/org/app');
+    const other = keyOf('/w/app', 'store-two', 'github.com/org/app');
     expect(here).toMatch(/^[0-9a-f]{16}$/);
     expect(clone).toBe(here);
     expect(other).toMatch(/^[0-9a-f]{16}$/);
@@ -96,7 +96,7 @@ describe('the repo key as capture makes it', () => {
   it('is one key for one repository under one store salt across two harnesses, Claude Code and Codex', () => {
     const repoRoot = (): string => '/w/app';
     const repoIdentity = (): string => 'origin:github.com/org/app';
-    const common = { session: 's', project: 'p', rev: 1, at: 'x', redact: makeRedactor(), salt: 'account-one', sid: null, repoRoot, repoIdentity } as const;
+    const common = { session: 's', project: 'p', rev: 1, at: 'x', redact: makeRedactor(), salt: 'store-one', sid: null, repoRoot, repoIdentity } as const;
     const claudeText = lines('/w/app');
     const rollout = [
       rolloutLine('2026-06-01T10:00:00.000Z', 'session_meta', { id: 'sess-1', session_id: 'sess-1', timestamp: '2026-06-01T10:00:00.000Z', cwd: '/w/app', originator: 'codex_cli_rs', cli_version: '0.50.0' }),
@@ -118,7 +118,7 @@ describe('the repo key as capture makes it', () => {
   });
 
   it('does not hold the identity: the key of a repository is not a prefix, suffix, or substring of its remote', () => {
-    const key = keyOf('/w/app', 'account-one', 'github.com/org/app') ?? '';
+    const key = keyOf('/w/app', 'store-one', 'github.com/org/app') ?? '';
     expect('github.com/org/app').not.toContain(key);
   });
 });
