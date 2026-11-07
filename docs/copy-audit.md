@@ -50,6 +50,8 @@ rather than read row by row.
 | C36 | `docs/telemetry.md:18` | batches of at most 250, a 10 second timeout, no redirects followed; the server stores no IP address or user agent | `send.ts:18`, `:21`, `:73`; `pool/src/telemetry.ts:118` keeps `{received, account?, batch}` only | true |
 | C37 | `docs/telemetry.md:16` | a command sends at most once a day from a detached process; a session hook never sends | `send.ts:1`, `:122`, `:166` | true |
 | C38 | `docs/pool.md:3` | no session data leaves until sign-in, covenant acceptance, and a send by you or by the nightly task | `pool-nightly.ts`, `pool-command.ts:435-446` | true |
+| C53 | `docs/pool.md:3` | `oars pool outbox` prints everything queued whenever you run it, before the next nightly send | as C6: the nightly run builds and sends in one pass with `requireShown: false` (`pool-nightly.ts:56-61`) | false (fixed) |
+| C54 | `docs/pool.md:3` | telemetry events are sent to the Many Oars pool, or `OARS_POOL_URL` | as C4: the default pool is not deployed | false (fixed) |
 | C39 | `docs/pool.md:7` | the default pool is not deployed yet; a command that reaches it exits 8; a redirect is refused | `errors.ts:91` (unreachable is exit 8), `pool-command.ts:188` `redirect: 'error'` | true |
 | C40 | `docs/sessions-store.md:186` | the store uploads nothing, and telemetry carries nothing from the store | `store-health` carries counts and sizes of the store (`docs/telemetry.md` "store-health"); the pool commands and the nightly send skeletons built from it | false |
 | C41 | `docs/gate.md:134-144` | "Measured": figures from one run over one Windows machine's harness folder | figures from one person's machine; not reproducible from the repository | cannot back |
@@ -96,3 +98,5 @@ stated wherever the default pool or `login.manyoars.com` is named as a destinati
 | C43 | `cli.ts:180`: "these commands make no model call and no network call, except `gold arms` ...; telemetry is separate" |
 | C46 | raw prompt: the nightly task uploads, after covenant acceptance, except a folder at skeleton only or off |
 | C52 | "nothing sent to the pool"; `pool-command.test.ts` updated |
+| C53 | `docs/pool.md:3`: "`oars pool outbox` prints what is queued when you run it, but the nightly task builds new batches and sends them in the same run without printing them first" |
+| C54 | `docs/pool.md:3`: telemetry "sends those events to the pool server in `OARS_POOL_URL`, else to the Many Oars pool, which is not deployed yet ..." |
