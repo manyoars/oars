@@ -1,7 +1,7 @@
 // Rules 1 and 3: a cell holds at most `q_dims` = 3 dimensions beside `week`, `day`, and `exposure`, and `effort` is in no cell but its own pair with a thinking bucket.
 import { describe, expect, it } from 'vitest';
 import { cellsOf, projectedStore } from './cell-increments.js';
-import { EFFORT_CLASS, NO_AXES, bucketFields, deriveCells, isEnvironmentCell, type Cell, type CellSet } from './cells.js';
+import { EFFORT_CLASS, ERROR_CLASS, ERROR_VERSION_CLASS, RECOVERY_CLASS, NO_AXES, bucketFields, deriveCells, isEnvironmentCell, type Cell, type CellSet } from './cells.js';
 import type { Motif } from './motif.js';
 import type { Strata } from './schema.js';
 import { frame, prompt, session, step, storedNames, store, tool } from './pool-fixture.js';
@@ -26,7 +26,8 @@ const fixture = () =>
         steps: [step(0, 0, 'shell.exec', { native: 'Bash', identity: { program: 'git', sub: 'push', flags: ['--force', '--tags'], pulls: [{ registry: 'npm', name: 'left-pad', version: null }] } })],
       }),
       tool('s1', 1, 'Read'),
-      tool('s2', 0, 'Edit', { status: 'error' }),
+      tool('s2', 0, 'Edit', { status: 'error', errorCode: '429' }),
+      tool('s2', 1, 'Read'),
     ],
   });
 
@@ -34,8 +35,8 @@ const fixture = () =>
 const dimensionsOf = (cell: Cell, motif: Motif): number => {
   const fields = bucketFields(cell.frameBucket);
   // An environment cell joins a platform and a shell and neither a version nor a model.
-  const axes = isEnvironmentCell(cell) ? 2 : cell.frameBucket === NO_AXES ? 0 : Number(fields.model !== 'unknown') + Number(fields.harnessBucket !== 'unknown');
-  if (motif.level === 'class') return axes + (motif.cls?.startsWith(EFFORT_CLASS) ? 2 : 1);
+  const axes = isEnvironmentCell(cell) ? 2 : cell.frameBucket === NO_AXES ? 0 : Number(fields.model !== 'unknown' && fields.model !== NO_AXES) + Number(fields.harnessBucket !== 'unknown' && fields.harnessBucket !== NO_AXES);
+  if (motif.level === 'class') return axes + ([EFFORT_CLASS, ERROR_CLASS, ERROR_VERSION_CLASS, RECOVERY_CLASS].some((prefix) => motif.cls?.startsWith(prefix)) ? 2 : 1);
   const [only] = motif.steps;
   if (motif.steps.length !== 1 || only === undefined || only.identity === null || !('program' in only.identity)) return axes + 1;
   // A program with its subcommand is one dimension; a flag or a pull is a second, in a cell of its own.
@@ -63,6 +64,7 @@ describe('q_dims over every derived cell (rule 3)', () => {
     const lists = new Set(set.motifs.filter(carriesList).map(({ motifId }) => motifId));
     const counts = walk({ ...set, cells: set.cells.filter(({ motifId }) => !lists.has(motifId)) });
     expect(counts.length).toBeGreaterThan(10);
+    for (const prefix of [ERROR_CLASS, ERROR_VERSION_CLASS, RECOVERY_CLASS]) expect(set.motifs.some((motif) => motif.cls?.startsWith(prefix))).toBe(true);
     expect(Math.max(...counts)).toBeLessThanOrEqual(Q_DIMS);
   });
 
