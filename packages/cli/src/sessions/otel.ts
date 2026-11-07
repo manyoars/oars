@@ -252,9 +252,10 @@ export const otelSessions = (spans: readonly Span[]): OtelSession[] => {
     const conversation = str(span.attrs['gen_ai.conversation.id']);
     if (conversation !== undefined && !conversationOf.has(span.trace)) conversationOf.set(span.trace, conversation);
   }
+  const tracePart = (trace: string): string => (/^[A-Za-z0-9]{1,64}$/.test(trace) ? trace : digest(trace));
   const sessionOfTrace = (trace: string): string => {
     const conversation = conversationOf.get(trace);
-    return conversation === undefined ? (/^[A-Za-z0-9]{1,64}$/.test(trace) ? trace : digest(trace)) : `conv-${digest(conversation)}`;
+    return conversation === undefined ? tracePart(trace) : `conv-${digest(conversation)}`;
   };
 
   // A unit is an agent span, or a trace root that is not one: whatever owns the model calls and tools beneath it.
@@ -277,14 +278,19 @@ export const otelSessions = (spans: readonly Span[]): OtelSession[] => {
     const parentUnit = above === undefined ? undefined : unitOf.get(above);
     if (parentUnit === undefined) continue;
     const between = ancestors(span).slice(0, ancestors(span).indexOf(above ?? span)).find(isTool);
-    unitOf.set(span, { span, session: `${span.trace}-${span.id}`, spawn: { parent: parentUnit.session, callId: between === undefined ? span.id : (str(between.attrs['gen_ai.tool.call.id']) ?? between.id), tool: between } });
+    unitOf.set(span, { span, session: `${tracePart(span.trace)}-${span.id}`, spawn: { parent: parentUnit.session, callId: between === undefined ? span.id : (str(between.attrs['gen_ai.tool.call.id']) ?? between.id), tool: between } });
   }
-  // A trace with no agent span: each root is a unit; a stray span whose parent is missing from the data is a root too.
+  // A trace with no agent span: its earliest root is the one unit. The other roots are spans whose parent never reached the data (the root span ends last, so a batch exporter writes it last),
+  // and they fall through to that unit like any call outside an agent, instead of each opening a prompt of its own.
+  const earliestRoot = new Map<string, Span>();
   for (const root of roots) {
-    if (!isAgent(root) && !agentTraces.has(root.trace)) {
-      unitOf.set(root, { span: root, session: sessionOfTrace(root.trace), spawn: undefined });
-      rootUnits.add(root);
-    }
+    if (isAgent(root) || agentTraces.has(root.trace)) continue;
+    const held = earliestRoot.get(root.trace);
+    if (held === undefined || startOf(root) < startOf(held) || (startOf(root) === startOf(held) && root.order < held.order)) earliestRoot.set(root.trace, root);
+  }
+  for (const root of earliestRoot.values()) {
+    unitOf.set(root, { span: root, session: sessionOfTrace(root.trace), spawn: undefined });
+    rootUnits.add(root);
   }
   // A call outside every agent span (a sibling of it under a custom root) belongs to the trace's first root unit instead of being dropped.
   const firstRootUnit = new Map<string, Unit>();
