@@ -160,6 +160,19 @@ export interface Sanitized {
   dropped: number;
 }
 
+/** The lists of a `wire` event that are read index by index, so one refused (or a different length) would leave the others misaligned. */
+const PARALLEL_LISTS = ['fields', 'present', 'fieldBytes'];
+
+/** Keeps the parallel lists only when every one sent came through and they are the same length; otherwise none of them, each kept one counted as dropped. */
+const alignParallel = (sent: object, data: Sanitized['data'], dropped: number): Sanitized => {
+  const given = PARALLEL_LISTS.filter((name) => name in sent);
+  const kept = given.filter((name) => data[name] !== undefined);
+  const lengths = new Set(kept.map((name) => (Array.isArray(data[name]) ? data[name].length : -1)));
+  if (kept.length === given.length && lengths.size <= 1) return { data, dropped };
+  for (const name of kept) Reflect.deleteProperty(data, name);
+  return { data, dropped: dropped + kept.length };
+};
+
 /** Passes `fields` through the rules of `type`; `undefined` for a type the schema does not know. */
 export const sanitize = (type: string, fields: object): Sanitized | undefined => {
   const known = EVENTS.get(type);
@@ -171,5 +184,5 @@ export const sanitize = (type: string, fields: object): Sanitized | undefined =>
     if (accepted === undefined) dropped += 1;
     else data[name] = accepted;
   }
-  return { data, dropped };
+  return type === 'wire' ? alignParallel(fields, data, dropped) : { data, dropped };
 };
