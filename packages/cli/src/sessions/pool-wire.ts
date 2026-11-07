@@ -1039,6 +1039,8 @@ export interface Bundle {
   harness: Harness;
   harnessVersion: string;
   vocabVersion: string;
+  /** The floor the pool applied: it serves a cell, a name, or a count only once this many distinct accounts report it, so every count and denominator here is of values at or above it. */
+  floor: number;
   asOf: ReadAsOf;
   cells: Cell[];
   motifs: Motif[];
@@ -1063,7 +1065,7 @@ export interface PinnedKey {
 const isSignedBundle = (value: unknown): value is SignedBundle => isFields(value) && typeof value.payload === 'string' && typeof value.signature === 'string';
 
 const isBundle = (value: unknown): value is Bundle =>
-  isFields(value) && value.format === BUNDLE_FORMAT && typeof value.harness === 'string' && isHarness(value.harness) && typeof value.harnessVersion === 'string' && typeof value.vocabVersion === 'string' && isFields(value.asOf) && Array.isArray(value.cells) && Array.isArray(value.motifs) && Array.isArray(value.reads) && Array.isArray(value.strata);
+  isFields(value) && value.format === BUNDLE_FORMAT && typeof value.harness === 'string' && isHarness(value.harness) && typeof value.harnessVersion === 'string' && typeof value.vocabVersion === 'string' && typeof value.floor === 'number' && isFields(value.asOf) && Array.isArray(value.cells) && Array.isArray(value.motifs) && Array.isArray(value.reads) && Array.isArray(value.strata);
 
 const signatureHolds = async ({ payload, signature }: SignedBundle, key: PinnedKey): Promise<boolean> => {
   try {
