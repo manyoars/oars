@@ -168,8 +168,8 @@ skill a `user-prompt` record (see "What opens a prompt"), adds `opened` to that 
 
 | Log holds | Action on open | Action at the next deposit |
 |-----------|----------------|----------------------------|
-| `cv` 24, `v` current | read | skip unchanged files |
-| `cv` 5 to 23 and the transcript is on disk or in `raw/` | read; a replayed `tool` record is folded (see above); `verify` counts it `cv-behind`, and `verify --strict` exits 4 on it | capture again at `rev + 1` |
+| `cv` 26, `v` current | read | skip unchanged files |
+| `cv` 5 to 25 and the transcript is on disk or in `raw/` | read; a replayed `tool` record is folded (see above); `verify` counts it `cv-behind`, and `verify --strict` exits 4 on it | capture again at `rev + 1` |
 | `cv` 5 to 23, neither the harness nor `raw/` has the transcript | read; a replayed `tool` record is folded (see above); `verify` counts it `cv-frozen` (not `cv-behind`), and `verify --strict` does not fail on it | none |
 | `cv` 3 or 4 (or a version-2 session) and the transcript is on disk or in `raw/` | read through the compatibility reader (for `cv` 3, a field version 4 added reads as null, empty, or `unknown`; the prompt half of `contextFingerprint`, before its `.`, reads as `promptFingerprint`, and `-` reads as null; the environment half is dropped); `verify` counts it `cv-behind`, and `verify --strict` exits 4 on it | capture again at `rev + 1`; derived records regenerate under the current `EXTRACTOR_VERSION` on every open |
 | `cv` 3 or 4, neither the harness nor `raw/` has the transcript (for a Cursor session, Cursor no longer lists the composer) | read through the compatibility reader; `verify` counts it `cv-frozen` (not `cv-behind`), and `verify --strict` does not fail on it | none |
@@ -1083,11 +1083,10 @@ whose lookup raises. The trace is `packages/cli/src/sessions/fixtures/otel-pydan
 imports: two sessions, the prompt (Pydantic AI puts the messages on the chat spans, so it is read from the first one when the agent span has none), one `ok` call with its
 result content and one `error` call whose error line holds the exception event's type and message, each call's duration (1 ms and 4 ms), nonzero usage, and zero `verify`
 violations; it is one framework, so any other stays convention-derived. The GenAI conventions moved out of `open-telemetry/semantic-conventions` (v1.45.0 holds only "Moved"
-stubs) into
-`open-telemetry/semantic-conventions-genai`, which has no release, so the pin is its main @ e6658f1 (2026-11-06); the OTLP JSON encoding is `opentelemetry-proto` v1.11.1
-(`docs/specification.md:453-484`, `trace.proto:96-327`) and the file format `opentelemetry-specification` @ 616bb3a (`protocol/file-exporter.md:64-75`). Every GenAI attribute
-read is marked Development in the registry (`error.type` and `server.*` are Stable; `process.exit.code` is a Release Candidate), so each one is optional here: a missing or
-renamed attribute means less is read, never a throw.
+stubs) into `open-telemetry/semantic-conventions-genai`, which has no release, so the pin is its main @ e6658f1 (2026-11-06); the OTLP JSON encoding is `opentelemetry-proto`
+v1.11.1 (`docs/specification.md:453-484`, `trace.proto:96-327`) and the file format `opentelemetry-specification` @ 616bb3a (`protocol/file-exporter.md:64-75`). Every GenAI
+attribute read is marked Development in the registry (`error.type` and `server.*` are Stable; `process.exit.code` is a Release Candidate), so each one is optional here: a
+missing or renamed attribute means less is read, never a throw.
 
 - **Where.** `$OARS_OTEL_TRACES` if set and non-empty, else `<config>/oars/otel-traces` (`<config>` as for the store). A configured folder rather than an `import` command, so
   the cursor, the allowlist, `--deny otel`, the nightly run's saved allow, and the fail-open reads are the ones every other source has. No folder, no read: it is opt-in by

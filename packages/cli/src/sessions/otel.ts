@@ -4,8 +4,8 @@
 // conventions moved there from open-telemetry/semantic-conventions, which has a release but only "Moved" stubs for GenAI, and the new repository has no release)
 // and the OTLP JSON encoding (opentelemetry-proto v1.11.1, docs/specification.md:453-484, trace.proto:96-327; the file exporter,
 // opentelemetry-specification specification/protocol/file-exporter.md:64-75, writes one `ExportTraceServiceRequest` a line with no order guarantee). Nothing was
-// copied; a real Pydantic AI trace is pinned in `otel-real-trace.test.ts`. Every GenAI attribute below is marked Development
-// in the registry, so each one is optional here: a missing or renamed attribute means less is read, never a throw.
+// copied; a real Pydantic AI trace is pinned in `otel-real-trace.test.ts`. Every GenAI attribute below is marked Development in the registry, so each one is
+// optional here: a missing or renamed attribute means less is read, never a throw.
 //
 // Where it reads from (`otelRoot`): `$OARS_OTEL_TRACES`, else `<config>/oars/otel-traces` (a configured folder, so the nightly run is deterministic). Every `*.jsonl` and
 // `*.json` file in it is read; the traces of all files are joined by `traceId` first, because a collector may split one trace across files.
@@ -14,10 +14,14 @@
 //   session      one `traceId`; traces that share `gen_ai.conversation.id` are one session, each trace a turn in start-time order. An agent span nested inside another
 //                agent's (directly or through an agent-as-tool `execute_tool` span) is its own session `<traceId>-<spanId>`, a subagent of the span's session.
 //   prompt       one per root agent span (`invoke_agent`, `invoke_workflow`, any `invoke_*` operation), else per trace root; its text is the last user message of
-//                `gen_ai.input.messages`, else of the earliest chat child span that has them (Opt-In: absent by default, and then the turn is written content-less, as an image-only prompt is).
+//                `gen_ai.input.messages`, else of the earliest chat child span that has them (Opt-In: absent by default, and then the turn is written content-less,
+//                as an image-only prompt is).
 //   model call   a span whose `gen_ai.operation.name` is `chat`, `generate_content`, or `text_completion`: one assistant line, its `requestId` the span id.
-//   tool call    an `execute_tool` span, put under the model call that ended before it began (or whose output messages name its `gen_ai.tool.call.id`): a block in that call's line, or, with both times and end not before start (a directly nested agent span too), its own assistant line at the span's start under the call's `requestId`, so its duration is the span's length. It failed iff the
-//                span's status code is ERROR (2) or `error.type` is set (stable, recording-errors.md): the error line is `error.type: status.message`, never the result; a call that did not fail keeps `gen_ai.tool.call.result` as its result content.
+//   tool call    an `execute_tool` span, put under the model call that ended before it began (or whose output messages name its `gen_ai.tool.call.id`): a block in
+//                that call's line, or, with both times and end not before start (a directly nested agent span too), its own assistant line at the span's start under
+//                the call's `requestId`, so its duration is the span's length. It failed iff the span's status code is ERROR (2) or `error.type` is set (stable,
+//                recording-errors.md): the error line is `error.type: status.message`, never the result; a call that did not fail keeps `gen_ai.tool.call.result` as
+//                its result content.
 //   usage        `gen_ai.usage.*`; `input_tokens` includes the cache reads and writes (the registry says it SHOULD), and capture's fields are disjoint, so the uncached
 //                part is input - read - write. A figure the span did not report is not written as zero.
 //   harness      `otel`; the version slot holds the emitting framework from the instrumentation scope name (a closed list plus `other`). Nothing names a working folder.
