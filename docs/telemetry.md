@@ -52,7 +52,7 @@ One per nightly run: a snapshot of the session store, counts and sizes only. If 
 | `unparseable` | Transcript lines that did not parse, plus skeleton files that could not be read. |
 | `rawBytes` | The size of the store's `raw/` folder, in bytes. |
 | `verifyChecked`, `verifyFailed` | How many of `oars sessions verify`'s checks ran, and how many found a violation. |
-| `captureVersions`, `extractorVersions` | What the store holds, not what this build writes: the distinct capture versions (`cv`) of its captured sessions, and the distinct extractor versions (`ev`) its pipeline log records, each sorted ascending. A store with a session behind this build lists two capture versions. |
+| `captureVersions`, `extractorVersions` | What the store holds, not what this build writes: the distinct capture versions (`cv`) of its captured sessions, and the distinct extractor versions (`ev`), each sorted ascending. The extractor version is the one each pipeline step last ran at, so an upgrade leaves only the new version once every step has run again. A store with a session behind this build lists two capture versions. |
 | `harnessVersions`, `models` | The harness versions and model names the store holds, each only if it is on the public list the pool wire uses, else the word `other`. |
 | `outboxBytes`, `egressBytes` | The bytes the pool outbox holds, and the bytes of batches sent in the last seven days (summed from the `wire-send` events below, which the spool keeps only up to its cap, so a very busy week can read low). |
 

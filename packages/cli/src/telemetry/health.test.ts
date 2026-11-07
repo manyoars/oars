@@ -66,7 +66,7 @@ describe('store health at the nightly run', () => {
   it('records the versions the store holds, not the ones this build writes', async () => {
     const staged = stage(slugOf(REPO));
     await deposit(staged.runtime, { allow: [REPO], redactDomains: [], now: () => NOW });
-    // One session captured by an older oars, and a step an older extractor ran: the store now holds two of each.
+    // One session captured by an older oars, and a step an older extractor ran: the capture half holds two versions here; the extractor half is the next test.
     const log = join(staged.storeDir, 'observations.jsonl');
     const lines = readFileSync(log, 'utf8').split('\n');
     const index = lines.findIndex((line) => line.includes('"kind":"session"') && line.includes('"cv":"18"'));
@@ -83,6 +83,26 @@ describe('store health at the nightly run', () => {
     expect(health?.data.extractorVersions).toEqual([11]);
     expect(health?.data.captureVersion).toBeUndefined();
     expect(health?.data.extractorVersion).toBeUndefined();
+  });
+
+  it('lists the extractor version each pipeline step last ran at, not every version the log has seen', async () => {
+    const staged = stage(slugOf(REPO));
+    await deposit(staged.runtime, { allow: [REPO], redactDomains: [], now: () => NOW });
+    const row = (step: 'deposit' | 'verify', ev: string, minute: number): Promise<void> =>
+      appendStep(staged.storeDir, { at: new Date(NOW + minute * 60_000).toISOString(), run: 'r', trigger: 'nightly', step, status: 'ok', ms: 1, in: {}, out: {}, cv: '18', ev, key: null, error: null });
+    // `deposit` ran at 11 and later at 12 (written out of order, as a log can be): only 12 is what it last ran at.
+    await row('deposit', '12', 2);
+    await row('deposit', '11', 1);
+    const first = emitter();
+    await recordStoreHealth(first.telemetry, staged.runtime);
+    expect(events(first.dir, 'store-health')[0]?.data.extractorVersions).toEqual([12]);
+
+    // `verify` last ran at 11 beside `deposit` at 12: both versions are still in the store's steps.
+    await row('verify', '10', 1);
+    await row('verify', '11', 3);
+    const second = emitter();
+    await recordStoreHealth(second.telemetry, staged.runtime);
+    expect(events(second.dir, 'store-health')[0]?.data.extractorVersions).toEqual([11, 12]);
   });
 
   it('reads a store that fails to read as a failure, records it, and does not stop the nightly run', async () => {

@@ -2,7 +2,7 @@
 // holds) and what the run cost. Counts, bytes, and closed words only; the schema checks them again before anything reaches the spool.
 import { readdir, stat } from 'node:fs/promises';
 import { join } from 'node:path';
-import { CAPTURE_VERSION, OLDEST_READABLE_CAPTURE } from '../sessions/schema.js';
+import { CAPTURE_VERSION, OLDEST_READABLE_CAPTURE, type StepRow } from '../sessions/schema.js';
 import { readSteps } from '../sessions/steps.js';
 import { frozenSessions, loadStore, paths, readSkeletons, type SessionsRuntime } from '../sessions/store.js';
 import { LITERAL, publicModel, publicVersion } from '../sessions/public-vocabulary.js';
@@ -60,7 +60,32 @@ const bytesUnder = async (dir: string): Promise<number> => {
 const egressBytes = (dir: string, now: number): number =>
   spoolEvents(dir, 'wire-send').reduce((total, { at, data }) => (data.sent === 1 && typeof data.bytes === 'number' && Date.parse(at) >= now - WEEK_MS ? total + data.bytes : total), 0);
 
-const storeFields = async (runtime: SessionsRuntime): Promise<{ [field: string]: number | number[] | string[] }> => {
+/** What a store-health snapshot holds (the `store-health` fields of `telemetry/schema.ts`, minus the two extras added beside it). */
+interface StoreHealthFields {
+  sessions: number;
+  subagents: number;
+  skeletons: number;
+  unparseable: number;
+  rawBytes: number;
+  verifyChecked: number;
+  verifyFailed: number;
+  captureVersions: number[];
+  extractorVersions: number[];
+  harnessVersions: string[];
+  models: string[];
+}
+
+/** The extractor version each pipeline step last ran at: the log is append-only, so older rows name versions the store no longer holds. A tie on `at` goes to the later row. */
+const lastExtractorVersions = (steps: readonly StepRow[]): string[] => {
+  const latest = new Map<string, StepRow>();
+  for (const step of steps) {
+    const held = latest.get(step.step);
+    if (held === undefined || Date.parse(step.at) >= Date.parse(held.at)) latest.set(step.step, step);
+  }
+  return [...latest.values()].map((step) => step.ev);
+};
+
+const storeFields = async (runtime: SessionsRuntime): Promise<StoreHealthFields> => {
   const { storeDir } = runtime;
   const { skeletons, unreadable } = await readSkeletons(storeDir, undefined, true);
   const store = await loadStore(storeDir);
@@ -76,9 +101,9 @@ const storeFields = async (runtime: SessionsRuntime): Promise<{ [field: string]:
     rawBytes: await bytesUnder(paths(storeDir).raw),
     verifyChecked: results.length,
     verifyFailed: results.filter((result) => result.violations > 0).length,
-    // What the store holds: the `cv` of each captured session and the `ev` each pipeline step ran at. A store with a session behind this build lists two.
+    // What the store holds: the `cv` of each captured session and the `ev` each pipeline step last ran at. A store with a session behind this build lists two.
     captureVersions: versionsHeld(captured.map((session) => session.cv)),
-    extractorVersions: versionsHeld(steps.map((step) => step.ev)),
+    extractorVersions: versionsHeld(lastExtractorVersions(steps)),
     harnessVersions: closedList(captured.flatMap((session) => session.versions), 'version'),
     models: closedList(captured.flatMap((session) => Object.keys(session.models)), 'model'),
   };
