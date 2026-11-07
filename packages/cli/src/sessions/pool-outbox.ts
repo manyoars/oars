@@ -27,6 +27,30 @@ const canonical = (value: unknown): string => {
 /** The batch as one canonical JSON line: sorted keys, no optional whitespace, UTF-8 when written, and a newline at the end. These are the bytes that are hashed, printed, and sent. */
 export const canonicalBytes = (batch: unknown): string => `${canonical(batch)}\n`;
 
+/** The most bytes one request of a deposit carries. The pool refuses a request past 1 MiB, so a batch past this goes in parts, each of them under that cap. */
+export const PART_BYTES = 512 * 1024;
+
+/**
+ * The batch cut into parts of at most `limit` UTF-8 bytes, never inside a character, so the parts join back to exactly the bytes that were hashed. A batch within the limit is one part.
+ */
+export const partsOf = (bytes: string, limit: number = PART_BYTES): string[] => {
+  const parts: string[] = [];
+  let part = '';
+  let size = 0;
+  for (const character of bytes) {
+    const width = Buffer.byteLength(character, 'utf8');
+    if (size + width > limit) {
+      parts.push(part);
+      part = '';
+      size = 0;
+    }
+    part += character;
+    size += width;
+  }
+  parts.push(part);
+  return parts;
+};
+
 export const batchHash = (bytes: string): string => createHash('sha256').update(Buffer.from(bytes, 'utf8')).digest('hex');
 
 /**
