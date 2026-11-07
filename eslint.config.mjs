@@ -4,7 +4,7 @@ import globals from 'globals';
 import tseslint from 'typescript-eslint';
 
 export default defineConfig(
-  { ignores: ['**/dist/**', '**/node_modules/**', 'packages/client/src/generated/**'] },
+  { ignores: ['**/dist/**', '**/node_modules/**', '.claude/**', 'packages/client/src/generated/**'] },
   {
     // An eslint-disable comment would defeat the rules below, so inline directives are ignored (and reported as warnings,
     // which `eslint --max-warnings 0` turns into a failure).

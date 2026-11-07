@@ -6,7 +6,7 @@ import { rolloutLines } from './codex.js';
 import { makeRedactor } from './redact.js';
 import { rolloutLine } from './test-support.js';
 import { hourOf, NO_COVERAGE, OPEN_GATE, ORG_SIZES, parseSkeleton, REPO_VISIBILITIES, skeletonOf, TEAMS, type Coverage, type SessionSkeleton, type SkeletonFrame } from './pool-wire.js';
-import { frame, printOf, prompt, session, sessionsFrom, step, store, storedNames, tool } from './pool-fixture.js';
+import { coverageBytesSkeleton, frame, printOf, prompt, session, sessionsFrom, step, store, storedNames, tool } from './pool-fixture.js';
 
 const KEY_A = '0123456789abcdef';
 const KEY_B = 'fedcba9876543210';
@@ -229,22 +229,12 @@ describe('the hour', () => {
 
 // What the two fields that carry data cost on a skeleton that holds them. The large-deposit fixture has `repo`, `tsFirst`, and every prompt's `ts` null, so it measures only the three `unknown` bands.
 describe('bytes on a fixture that carries a repo key and timestamps', () => {
-  const HOURS = ['2026-11-01T09:10:00.000Z', '2026-11-01T14:20:00.000Z', '2026-11-01T22:30:00.000Z'];
-  const bytesSkeleton = (repo: string | null, timed: boolean): ReturnType<typeof skeletonFrom> => {
-    const framed = frame({ day: '2026-11-01', shell: 'bash' });
-    const from = store({
-      sessions: [session('s1', { frame: framed, repo, tsFirst: timed ? HOURS[0] ?? null : null })],
-      prompts: HOURS.map((ts, index) => prompt('s1', index, { frame: framed, ts: timed ? ts : null })),
-      tools: HOURS.flatMap((_, index) => [0, 1].map((call) => tool('s1', index * 2 + call, 'Read', { steps: [step(index * 2 + call, 0, 'file.read', { native: 'Read' })], prompt: index }))),
-    });
-    return skeletonFrom(from);
-  };
-  const bytesOf = (repo: string | null, timed: boolean): number => JSON.stringify(bytesSkeleton(repo, timed)).length;
+  const bytesOf = (repo: string | null, timed: boolean): number => JSON.stringify(coverageBytesSkeleton(repo, timed)).length;
 
   it('puts the hour on one frame per distinct prompt hour, and the key on every frame', () => {
     // A transcript holds its own `frame` and the `frames` its steps ran in (the transcript's own first), so the key is counted on each of those serialized frames.
     const framesOf = (timed: boolean): SkeletonFrame[] => {
-      const transcript = bytesSkeleton(KEY_A, timed).transcripts[0];
+      const transcript = coverageBytesSkeleton(KEY_A, timed).transcripts[0];
       if (transcript === undefined) throw new Error('no transcript');
       return [transcript.frame, ...transcript.frames];
     };

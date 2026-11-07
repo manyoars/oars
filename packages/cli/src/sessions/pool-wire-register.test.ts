@@ -4,8 +4,8 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { BATCH_FIELDS, canonicalBytes, fieldsOf } from './pool-outbox.js';
-import { FIELD_LIST_VERSION, parseSkeleton, SKELETON_FORMAT } from './pool-wire.js';
-import { VOCAB_VERSION } from './public-vocabulary.js';
+import { parseSkeleton } from './pool-wire.js';
+import { envelopeBytes, REGISTER_FIXTURE } from './pool-fixture.js';
 
 const POOL_DOC = fileURLToPath(new URL('../../../../docs/pool.md', import.meta.url));
 
@@ -65,65 +65,6 @@ export const fieldBytes = (batch: object): Map<string, number> => {
     walk(entry, key);
   }
   return held;
-};
-
-/** The braces, the commas between top-level fields, and the newline: what no field row holds. */
-export const envelopeBytes = (batch: object): number => 2 + Math.max(0, Object.values(batch).filter((held) => held !== undefined).length - 1) + 1;
-
-const FRAME = { harness: 'claude-code', harnessVersion: '2.1.314', model: 'claude-opus-5-5', effort: 'high', day: '2026-11-01', platform: 'linux', shell: 'bash', stack: { languages: ['python'], frameworks: [], size: null, languageShares: [{ language: 'python', languageShare: 'over-50' }, { language: 'other', languageShare: '10-50' }] } };
-const COVERAGE = { repoKey: '0123456789abcdef', orgSize: 'unknown', team: 'solo', repoVisibility: 'private', hour: 14 };
-const REACH = { filled: true, mcp: ['github'], skills: ['commit'], plugins: ['private'] };
-const STEP = { status: 'ok', tokens: 3, ms: 4, remainingTokens: 2, agentType: null, parent: null, frame: 0 };
-
-/** One session at format 3 that holds every field the register names, each once or twice: the register's bytes are measured on this, and say so. */
-export const REGISTER_FIXTURE = {
-  format: SKELETON_FORMAT,
-  vocabVersion: VOCAB_VERSION,
-  fieldsVersion: FIELD_LIST_VERSION,
-  id: '0123456789abcdef',
-  deltas: [{ deltaKind: 'removed', field: 'package', name: 'typescript', registry: 'npm', metric: 'callsPerSession', change: -2 }],
-  timingPrint: null,
-  transcripts: [
-    {
-      merkleRoot: 'a'.repeat(64),
-      leaves: 12,
-      harness: 'claude-code',
-      spawnedIn: null,
-      frame: { ...FRAME, reach: REACH, ...COVERAGE },
-      frames: [{ ...FRAME, reach: REACH, ...COVERAGE }],
-      prompts: [{ cls: 'edit-verify', errors: 0, wallSec: 5, usage: { input: 1, cacheWrite: 2, cacheRead: 3, output: 4, thinking: 5 }, explore: 6, usageResponses: 2, intervention: 'redo', frame: { ...FRAME, hour: 14 } }],
-      tools: [
-        {
-          side: false,
-          prompt: 0,
-          status: 'error',
-          durationMs: 7,
-          errorCode: '429',
-          recoveryCalls: { next: ['shell.exec'], editFollowed: false },
-          keys: ['file_path'],
-          targetClass: 'source',
-          argClass: ['path'],
-          steps: [{ ...STEP, status: 'error', action: 'file.read', native: 'Read', identity: null }],
-        },
-        {
-          side: false,
-          prompt: 0,
-          status: 'ok',
-          durationMs: 7,
-          keys: ['command', 'description'],
-          keysDropped: 1,
-          targetClass: 'none',
-          argClass: ['command', 'text'],
-          steps: [
-            { ...STEP, allocated: true, skill: 'commit', action: 'shell.exec', native: 'Bash', identity: { program: 'npm', sub: null, flags: [], pulls: [{ registry: 'npm', name: 'zod', version: null }] } },
-            { ...STEP, edges: [{ kind: 'next', target: 0 }], action: 'mcp.call', native: 'mcp__github__get_issue', identity: { server: 'github', tool: 'get_issue' } },
-            { ...STEP, edges: [{ kind: 'next', target: 1 }, { kind: 'retried', target: 0 }], action: 'skill.run', native: 'Skill', identity: { skill: 'commit' } },
-            { ...STEP, action: 'web.fetch', native: 'WebFetch', identity: { host: 'github.com' } },
-          ],
-        },
-      ],
-    },
-  ],
 };
 
 const REGISTER = registerRows(readFileSync(POOL_DOC, 'utf8'));
