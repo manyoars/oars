@@ -97,7 +97,9 @@ describe('depositing the Pi source', () => {
   it('is read by default and not when denied, and an allowed name reports nothing missing while a typo does', async () => {
     const s = staged();
     // With nothing named every source is read; a denial keeps this one out.
-    expect((await deposit(s.runtime, options([]))).missing).toEqual([]);
+    const byDefault = await deposit(s.runtime, options([]));
+    expect(byDefault.missing).toEqual([]);
+    expect(byDefault.sources.pi?.read).toBe(2);
     expect((await deposit(s.runtime, options(['!pi']))).sources['pi']).toBeUndefined();
     expect((await deposit(s.runtime, options(['pi']))).missing).toEqual([]);
     expect((await deposit(s.runtime, options(['p1']))).missing).toEqual(['p1']);
