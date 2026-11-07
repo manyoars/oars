@@ -8,7 +8,7 @@ import { runHook } from '../sessions/hooks.js';
 import { readHookCalls } from '../sessions/hook-calls.js';
 import { appendStep } from '../sessions/steps.js';
 import { deposit, loadStore } from '../sessions/store.js';
-import { CAPTURE_VERSION } from '../sessions/schema.js';
+import { CAPTURE_VERSION, EXTRACTOR_VERSION } from '../sessions/schema.js';
 import { cleanup, NOW, stage } from '../sessions/test-support.js';
 import { closedList, recordStoreHealth, type NightlyTelemetry } from './health.js';
 import { spoolEvents, type SpoolEvent } from './read-events.js';
@@ -51,7 +51,7 @@ describe('store health at the nightly run', () => {
       skeletons: readdirSync(join(staged.storeDir, 'skeletons')).length,
       rawBytes: bytesUnder(join(staged.storeDir, 'raw')),
       captureVersions: [Number(CAPTURE_VERSION)],
-      extractorVersions: [12],
+      extractorVersions: [Number(EXTRACTOR_VERSION)],
       unparseable: [...store.sessions, ...store.subagents].reduce((sum, session) => sum + session.badLines, 0),
     });
     expect(store.sessions.length).toBeGreaterThan(0);
