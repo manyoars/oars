@@ -1,6 +1,6 @@
 // Item 4 of t926: each new hook fire (the recovery edge, the table at session start, the table at a prompt) is counted through the hook telemetry as a hit, a miss, or a held read, with the
 // bytes it injected, and a shown or held read is one `recall` event beside it. The events pass the closed schema, so a name or field it does not know would be dropped here.
-import { readFileSync, writeFileSync } from 'node:fs';
+import { writeFileSync } from 'node:fs';
 import { afterEach, describe, expect, it } from 'vitest';
 import { slugOf } from './allow.js';
 import { indexPath, readIndex } from './hook-index.js';
@@ -9,6 +9,7 @@ import { armOf } from './recall-object.js';
 import type { Position, RecoveryEdge } from './recall-next.js';
 import { sanitize } from '../telemetry/schema.js';
 import { deposit } from './store.js';
+import { indexAtOf } from './next-fixtures.js';
 import { cleanup, NOW, stage, type Staged } from './test-support.js';
 
 afterEach(cleanup);
@@ -27,7 +28,7 @@ const staged = async (recovery: { [key: string]: RecoveryEdge[] }, positions: Po
 };
 
 const sessionOn = (made: Staged, arm: 'shown' | 'held', key: string): string => {
-  const at = JSON.parse(readFileSync(indexPath(made.storeDir), 'utf8')).at as string;
+  const at = indexAtOf(made.storeDir);
   for (let i = 0; i < 1000; i++) if (armOf(`s${String(i)}`, [key], at) === arm) return `s${String(i)}`;
   throw new Error('no session found');
 };
