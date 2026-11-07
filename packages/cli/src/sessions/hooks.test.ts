@@ -103,7 +103,8 @@ describe('PostToolUseFailure hook', () => {
     writeFileSync(join(folder, 'dom1.jsonl'), `${one('1').join('\n')}\n`);
     writeFileSync(join(folder, 'dom2.jsonl'), `${one('2').join('\n')}\n`);
     await deposit(staged.runtime, { allow: [REPO], redactDomains: ['corp.example'], now: () => NOW });
-    const output = await runHook('post-tool', JSON.stringify({ session_id: 's2', tool_name: 'Bash', error: 'Exit code 1\ncannot reach build.corp.example' }), staged.runtime, () => NOW);
+    // Exit code 126 shares the signature (the first informative line) but no cell covers it: a covered failure whose top next step is "nothing followed" stays silent, signature line included.
+    const output = await runHook('post-tool', JSON.stringify({ session_id: 's2', tool_name: 'Bash', error: 'Exit code 126\ncannot reach build.corp.example' }), staged.runtime, () => NOW);
     expect(context(output)).toContain('seen in 2 sessions; what followed: nothing recorded');
   });
 });

@@ -157,8 +157,8 @@ const postTool = async (runtime: SessionsRuntime, input: Input, now: () => numbe
     const recall = await recoveryRecall(prepared.next, prepared.asker, action, code, decision);
     return recall.arm === 'shown' ? { output: additional(event, recall.answer.rendered), hit: true, queried: true, recall } : { hit: true, queried: true, recall };
   }
-  // A same-step retry and a local cell too thin to serve both end the lookup: a cell that exists but says nothing is not a reason to fall back to a signature count.
-  if (decision.kind === 'retry' || decision.kind === 'floor') return { hit: false, queried: true };
+  // A same-step retry, a local cell too thin to serve, and a cell whose top is that nothing followed all end the lookup: a cell that exists but says nothing is not a reason to fall back to a signature count.
+  if (decision.kind === 'retry' || decision.kind === 'floor' || decision.kind === 'ended') return { hit: false, queried: true };
   const sig = signatureOf(tool, text, makeRedactor(index?.redactDomains ?? []));
   const found = index?.signatures[sig];
   if (index === undefined || found === undefined || isSignatureRetry(tool, found)) return { hit: false, queried: true };
@@ -313,7 +313,7 @@ export const runHook = async (
   emit('hook', {
     name: event,
     latencyMs: ms,
-    outcome: failed ? 'error' : recall?.arm === 'held' && outcome.output === undefined ? 'held' : outcome.hit ? 'hit' : 'miss',
+    outcome: failed ? 'error' : recall?.arm === 'held' ? 'held' : outcome.hit ? 'hit' : 'miss',
     bytes: Buffer.byteLength(outcome.output ?? ''),
     // The nightly is the scheduled task, not a harness's hook: it names no harness.
     ...frameWords(event === 'nightly' ? undefined : recall?.frame?.harness ?? HOOK_HARNESS, recall?.frame?.harnessVersion ?? stated?.harnessVersion, recall?.frame?.model ?? outcome.model ?? stated?.model),
