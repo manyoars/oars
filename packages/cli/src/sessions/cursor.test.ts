@@ -122,6 +122,31 @@ describe('the Cursor reader', () => {
   });
 });
 
+describe('the Cursor reader: a total the source never recorded', () => {
+  it('leaves a composer with no token counts unobserved, not a measured zero', async () => {
+    const staged = stage();
+    const user = await stageCursor(staged.root, [{ id: 'n', createdAt: 1, lastUpdatedAt: 2, bubbles: [{ type: 1, text: 'hello' }, { type: 2, text: 'hi there' }] }]);
+    const store = await openCursorStore(user);
+    const session = store?.sessions[0];
+    if (store === undefined || session === undefined) throw new Error('no store');
+    const { session: captured, prompts } = capture(store.transcript(session), 'n');
+    expect(captured.usageObserved).toEqual([]);
+    expect(captured.usageResponses).toBe(0);
+    expect(prompts[0]?.usageObserved).toEqual([]);
+    expect(prompts[0]?.usageResponses).toBe(0);
+    store.close();
+  });
+
+  it('labels a count Cursor did record: the categories it reported, over the responses that reported them', async () => {
+    const { store, session } = await opened();
+    const { session: captured, prompts } = capture(store.transcript(session('chat')), 'chat');
+    expect(captured.usageObserved).toEqual(['input', 'output']);
+    expect(captured.usageResponses).toBe(1);
+    expect(prompts[0]?.usageObserved).toEqual(['input', 'output']);
+    store.close();
+  });
+});
+
 describe('the Cursor reader: the Claude Code redaction and caps', () => {
   it('redacts a secret and an email in a prompt and a tool error, cuts a long error at 1,000 characters, and bases a plain folder paths on cwd', async () => {
     const staged = stage();

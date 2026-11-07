@@ -58,6 +58,7 @@ oars records how it is used, on this machine, and says so: on the first run that
 - `oars telemetry status` says whether it is on, which switch decided that, whether the notice was shown, and how large the spool is.
 - `oars telemetry off` stops recording and sending; `oars telemetry on` resumes it and prints the notice again.
 - `oars telemetry show` prints the spool exactly as stored, oldest first.
+- `oars telemetry report` prints your own numbers from the spool (hook latency percentiles, hit rates, and store health over the last 7 and 30 days) with no server and no account, and the fleet's percentile beside each when `OARS_POOL_URL` names a server that serves it.
 - `OARS_TELEMETRY=0` or `DO_NOT_TRACK=1` turns it off for the process, and wins over `oars telemetry on`.
 
 Every event type, with an example, is in [docs/telemetry.md](https://github.com/manyoars/oars/blob/main/docs/telemetry.md).
@@ -180,6 +181,7 @@ Replay is local and read-only on your transcripts; it writes `crossings.jsonl` a
 - `oars pool login --provider github|google` signs in by the provider's device flow, run here, and prints every request before it sends it. `OARS_GITHUB_CLIENT_ID` (or `OARS_GOOGLE_CLIENT_ID` and `OARS_GOOGLE_CLIENT_SECRET`) must be set; an unset one stops the command before anything is sent and names the variable.
 - `oars pool deposit` writes a batch of session skeletons (a closed list of fields, each value redacted first; a host is hashed by the pool on arrival) to an outbox for each session that passes your folder allowlist and the exclusion check, and stops: nothing is sent. `--send <hash>` sends one batch that `outbox` printed and that is unchanged on disk, once this account has accepted the pool covenant (`--accept-covenant <version>`, or an earlier acceptance); before that it reads the covenant, sends no batch, and exits 3 with `covenant_not_accepted`. A hash that was never shown, or a batch that changed, is refused before any request.
 - `deposit`, `outbox`, and `fetch` need `oars pool login` first; without it they exit 3 and name the server.
+- `oars pool coverage [--org-size <band>] [--repo-visibility public|private|unknown]` sets the two coverage bands only you can state, read locally and never from the network; an unset band goes on the wire as `unknown`.
 - `oars pool outbox` prints each batch exactly as it would be sent, with its SHA-256, and `--explain` adds each field's rule.
 - `oars pool fetch --harness-version <version>` fetches that version's signed bundle, verifies it against the key pinned at login, and keeps it locally.
 

@@ -7,7 +7,7 @@ import { bucketFields, deriveCells, ENVIRONMENT_BUCKET, isEnvironmentCell, type 
 import type { Motif } from './motif.js';
 import { bucketOf, floorOf, OTHER, projectedSteps, type SessionSkeleton, type ShellReader, type SkeletonFrame, type SkeletonPrompt, type SkeletonTool, type SkeletonTranscript } from './pool-wire.js';
 import { NO_RECALLS, type RecallGraph } from './recall-consequence.js';
-import { harnessOf, type Frame, type Harness, type PromptClass, type PromptObservation, type SessionObservation, type StepEdge, type StepObservation, type ToolObservation, type ToolStatus, type Usage } from './schema.js';
+import { USAGE_FIELDS, harnessOf, type Frame, type Harness, type PromptClass, type PromptObservation, type SessionObservation, type StepEdge, type StepObservation, type ToolObservation, type ToolStatus, type Usage } from './schema.js';
 import type { Store } from './store.js';
 
 export interface CellRow {
@@ -149,7 +149,8 @@ const sessionRecord = (id: string, parent: string | null, spawnedIn: string | nu
   tools: {},
   files: [],
   fileHashes: [],
-  repo: null,
+  // The store's salted key, so a read that groups by repo works on pooled data from one store (one machine). It joins no cell.
+  repo: frame.repoKey ?? null,
   urls: [],
   searches: [],
   bashCmds: 0,
@@ -165,7 +166,7 @@ const sessionRecord = (id: string, parent: string | null, spawnedIn: string | nu
 });
 
 const promptRecords = (id: string, { harness, prompts }: KnownTranscript): PromptObservation[] =>
-  prompts.map(({ cls, errors, wallSec, usage, explore, frame }, index) => ({
+  prompts.map(({ cls, errors, wallSec, usage, usageResponses, explore, frame }, index) => ({
     kind: 'prompt',
     v: '',
     session: id,
@@ -184,13 +185,16 @@ const promptRecords = (id: string, { harness, prompts }: KnownTranscript): Promp
     model: frame.model ?? '',
     efforts: frame.effort === null ? [] : [frame.effort],
     skills: [],
+    // A category the wire sent as null was never recorded: it reads as a placeholder zero here and is left out of `usageObserved`.
     usage: {
-      input: floorOf('tokens', usage.input),
-      cacheWrite: floorOf('tokens', usage.cacheWrite),
-      cacheRead: floorOf('tokens', usage.cacheRead),
-      output: floorOf('tokens', usage.output),
-      thinking: floorOf('tokens', usage.thinking),
+      input: floorOf('tokens', usage.input ?? 0),
+      cacheWrite: floorOf('tokens', usage.cacheWrite ?? 0),
+      cacheRead: floorOf('tokens', usage.cacheRead ?? 0),
+      output: floorOf('tokens', usage.output ?? 0),
+      thinking: floorOf('tokens', usage.thinking ?? 0),
     },
+    usageObserved: USAGE_FIELDS.filter((field) => usage[field] !== null),
+    ...(usageResponses === undefined ? {} : { usageResponses: floorOf('count', usageResponses) }),
     recovery: [],
     // The lowest value of the bucket, as every other bucketed value counts; a prompt that sent none counts none.
     explore: explore === null ? 0 : floorOf('calls', explore),

@@ -4,6 +4,7 @@ import type { Outcome, RunDeps } from '../cli.js';
 import { CliError, ExitCode } from '../errors.js';
 import { consentOf, markNoticeShown, NOTICE, setEnabled, type Consent } from './consent.js';
 import type { TelemetryRuntime } from './record.js';
+import { readFleet, reportOf, textOf } from './report.js';
 import { readSpool, spoolPaths } from './spool.js';
 
 const STEP = 'telemetry';
@@ -84,4 +85,11 @@ export const telemetryShow = (deps: RunDeps): Outcome => {
   const { dir } = runtimeOf(deps);
   const lines = readSpool(dir);
   return { document: { ok: true, step: STEP, events: lines.flatMap(parsed) }, text: lines.length === 0 ? `The spool is empty (${dir}).` : lines.join('\n') };
+};
+
+/** The user's own numbers from the spool, and the fleet's beside them when a pool server is configured and answers (docs/telemetry.md, "The report"). It writes nothing. */
+export const telemetryReport = async (deps: RunDeps): Promise<Outcome> => {
+  const { dir } = runtimeOf(deps);
+  const report = reportOf(readSpool(dir), deps.now(), await readFleet(deps.env));
+  return { document: { ok: true, step: STEP, ...report }, text: textOf(report, dir) };
 };

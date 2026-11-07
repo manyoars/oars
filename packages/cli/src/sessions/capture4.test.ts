@@ -414,7 +414,7 @@ describe('a version-3 store opened under version 4', () => {
     expect(after.prompts.every((prompt) => prompt.frame !== undefined)).toBe(true);
     expect(before.prompts.every((prompt) => prompt.strata === undefined)).toBe(true);
     expect(after.prompts.every((prompt) => prompt.strata !== undefined)).toBe(true);
-    const unverified = <T extends { rev: number }>(records: T[]): T[] => unrev(records).map((record) => ({ ...record, verify: null, frame: null, strata: null }));
+    const unverified = <T extends { rev: number }>(records: T[]): T[] => unrev(records).map((record) => ({ ...record, verify: null, frame: null, strata: null, usageObserved: undefined, usageResponses: undefined }));
     expect(unverified(after.prompts)).toEqual(unverified(before.prompts));
     expect(unrev(after.errors)).toEqual(unrev(before.errors));
     expect(after.sessions.map((session) => session.promptFingerprint)).toEqual(before.sessions.map((session) => session.promptFingerprint));
