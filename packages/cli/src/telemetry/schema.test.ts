@@ -5,7 +5,9 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { defaultConfigDir } from '../credentials.js';
 import { recordEvent } from './record.js';
-import { ERROR_CLASSES, EVENT_TYPES, errorClassOf, fieldNamesOf, sanitize } from './schema.js';
+import { HARNESSES } from '../sessions/pool-wire.js';
+import { RECALL_FAMILIES } from '../sessions/recall-reads.js';
+import { ERROR_CLASSES, EVENT_TYPES, FETCH_HARNESSES, RECALL_FAMILY_NAMES, errorClassOf, fieldNamesOf, modelWord, sanitize, versionWord } from './schema.js';
 import { readSpool } from './spool.js';
 import { ExitCode } from '../errors.js';
 
@@ -42,7 +44,24 @@ const spoolOf = (feed: (record: (type: string, fields: object) => void) => void)
 
 describe('the closed schema', () => {
   it('knows each event type, one line per type', () => {
-    expect(EVENT_TYPES).toEqual(['command', 'store-health', 'run-cost', 'crash', 'wire', 'wire-send']);
+    expect(EVENT_TYPES).toEqual(['command', 'hook', 'recall', 'deposit', 'fetch', 'store-health', 'run-cost', 'crash', 'wire', 'wire-send']);
+  });
+
+  it('names every harness the pool serves, and every read family a recall serves', () => {
+    for (const name of HARNESSES) expect(FETCH_HARNESSES).toContain(name);
+    for (const family of RECALL_FAMILIES) expect(RECALL_FAMILY_NAMES).toContain(family);
+  });
+
+  it('holds a hook fire to closed words and counts: a model or version off the public list is refused by the schema, and the callers send other', () => {
+    expect(sanitize('hook', { name: 'gate', outcome: 'held', latencyMs: 12, bytes: 0, model: 'claude-opus-4-5', harnessVersion: '2.1.300' })).toEqual({
+      data: { name: 'gate', outcome: 'held', latencyMs: 12, bytes: 0, model: 'claude-opus-4-5', harnessVersion: '2.1.300' },
+      dropped: 0,
+    });
+    expect(sanitize('hook', { name: 'my-hook', outcome: 'maybe', model: 'acme-private-7', harnessVersion: '1.0-acme' })).toEqual({ data: {}, dropped: 4 });
+    expect(modelWord('acme-private-7')).toBe('other');
+    expect(versionWord('1.0-acme')).toBe('other');
+    expect(modelWord('claude-opus-4-5')).toBe('claude-opus-4-5');
+    expect(sanitize('hook', { model: modelWord('acme-private-7') })).toEqual({ data: { model: 'other' }, dropped: 0 });
   });
 
   it.each(EVENT_TYPES)('%s: a home path, command text, a prompt, and a URL fed to every field never reach the spool', (type) => {

@@ -1,10 +1,13 @@
 import { createHash, webcrypto } from 'node:crypto';
-import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { http, HttpResponse } from 'msw';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { run } from '../cli.js';
+import { defaultConfigDir } from '../credentials.js';
 import { ExitCode } from '../errors.js';
+import { readSpool } from '../telemetry/spool.js';
 import { harness, server, useServer, type Harness } from '../test-support.js';
 import { networkSender, poolDeposit, poolServer, type Reply, type Sender } from './pool-command.js';
 import { batchHash, canonicalBytes, FIELD_ROWS, fieldsOf, writeBatch } from './pool-outbox.js';
@@ -16,7 +19,6 @@ import { parseSkeleton, skeletonOf, VOCAB_VERSION, type PinnedKey } from './pool
 import { contentHash } from './read.js';
 import { deposit } from './store.js';
 import { spoolEvents } from '../telemetry/read-events.js';
-import { readSpool } from '../telemetry/spool.js';
 import { addProject, cleanup, NOW, settledClock, stage, type Staged } from './test-support.js';
 
 // The session gates must stop a session before the projection runs; the real projection is wrapped so a test can see whether it was called.
@@ -1022,6 +1024,35 @@ describe('oars pool outbox', () => {
     expect(scene.seen).toEqual([]);
   });
 
+  it('prints every part of a batch past one request, in order under the one hash, and the wire sender then receives those same requests', async () => {
+    const scene = await batched();
+    const file = join(scene.staged.storeDir, 'pool-outbox', outboxFiles(scene)[0] ?? '');
+    const bytes = canonicalBytes({ ...JSON.parse(readFileSync(file, 'utf8')), pad: 'é'.repeat(700_000) });
+    const hash = batchHash(bytes);
+    const folder = join(file, '..');
+    rmSync(file);
+    writeFileSync(join(folder, `${outboxFiles(scene)[0]?.split(/[\\/]/).at(-1)?.split('.')[0] ?? ''}.${hash}.jsonl`), bytes);
+    expect(await scene.cli('pool', 'outbox', '--server', POOL)).toBe(ExitCode.OK);
+    const shown = scene.h.out.join('');
+    expect(printedHashes(scene)).toContain(hash);
+    // The scene holds other batches too; this one's three requests are the last three before its hash line.
+    const requests = shown.slice(0, shown.indexOf(`\nsha256: ${hash}`)).split(/\n(?=POST \/v1\/deposits HTTP\/1\.1\n)/).slice(-3);
+    expect(requests).toHaveLength(3);
+    // Each print: the part header pair, then the body after the blank line, and together the bodies are the batch.
+    const printedBodies = requests.map((request, at) => {
+      const lines = request.split('\n');
+      expect(lines).toContain(`oars-part: ${String(at + 1)}/3`);
+      expect(lines).toContain(`oars-batch: ${hash}`);
+      return request.slice(request.indexOf('\n\n') + 2).replace(/\n$/, '');
+    });
+    expect(printedBodies.join('')).toBe(bytes);
+    const pool = wire({ 'GET /v1/covenant': OPEN_COVENANT, 'POST /v1/deposits': [answer(202, { ok: true, pending: 2 }), answer(202, { ok: true, pending: 1 }), answer(201, { ok: true })] });
+    await poolDeposit(scene.h.deps, sendOptions(hash, pool.via));
+    const posts = pool.requests.filter((request) => request.method === 'POST');
+    expect(posts.map((request) => request.body)).toEqual(printedBodies);
+    expect(posts.map((request) => request.headers.find(([name]) => name === 'oars-part')?.[1])).toEqual(['1/3', '2/3', '3/3']);
+  });
+
   it('records that each batch was shown, one line for each print, and only for what printed', async () => {
     const scene = await batched();
     const outbox = join(scene.staged.storeDir, 'pool-outbox');
@@ -1056,6 +1087,37 @@ describe('oars pool deposit --send', () => {
     expect(posts).toHaveLength(1);
     expect(posts[0]?.body).toBe(batchBytes(scene)[0]);
     expect(batchHash(posts[0]?.body ?? '')).toBe(hash);
+  });
+
+  it('sends a batch past one request in ordered parts under the cap, each naming the whole batch, and stops at a finished deposit', async () => {
+    const scene = await batched();
+    const file = join(scene.staged.storeDir, 'pool-outbox', outboxFiles(scene)[0] ?? '');
+    const bytes = canonicalBytes({ ...JSON.parse(readFileSync(file, 'utf8')), pad: 'é'.repeat(700_000) });
+    const hash = batchHash(bytes);
+    const folder = join(file, '..');
+    rmSync(file);
+    writeFileSync(join(folder, `${outboxFiles(scene)[0]?.split(/[\\/]/).at(-1)?.split('.')[0] ?? ''}.${hash}.jsonl`), bytes);
+    expect(await scene.cli('pool', 'outbox', '--server', POOL)).toBe(ExitCode.OK);
+    const parts = [answer(202, { ok: true, pending: 2 }), answer(202, { ok: true, pending: 1 }), answer(201, { ok: true })];
+    const pool = wire({ 'GET /v1/covenant': OPEN_COVENANT, 'POST /v1/deposits': parts });
+    await poolDeposit(scene.h.deps, sendOptions(hash, pool.via));
+    const posts = pool.requests.filter((request) => request.method === 'POST');
+    expect(posts).toHaveLength(3);
+    expect(posts.map((request) => request.headers.find(([name]) => name === 'oars-part')?.[1])).toEqual(['1/3', '2/3', '3/3']);
+    for (const request of posts) {
+      expect(request.headers.find(([name]) => name === 'oars-batch')?.[1]).toBe(hash);
+      expect(Buffer.byteLength(request.body ?? '', 'utf8')).toBeLessThan(1024 * 1024);
+    }
+    expect(posts.map((request) => request.body).join('')).toBe(bytes);
+    // A part answered 201 means the deposit finished already, so the parts after it are not sent.
+    const finished = wire({ 'GET /v1/covenant': OPEN_COVENANT, 'POST /v1/deposits': answer(201, { ok: true }) });
+    await poolDeposit(scene.h.deps, sendOptions(hash, finished.via));
+    expect(finished.requests.filter((request) => request.method === 'POST')).toHaveLength(1);
+    // A last part that is not 201, and a middle part that is neither 202 nor 201, are refusals.
+    const refused = wire({ 'GET /v1/covenant': OPEN_COVENANT, 'POST /v1/deposits': [answer(202, { ok: true }), answer(202, { ok: true }), answer(400, { error: 'part_mismatch', message: 'no' })] });
+    await expect(poolDeposit(scene.h.deps, sendOptions(hash, refused.via))).rejects.toMatchObject({ problem: { status: 400 } });
+    const early = wire({ 'GET /v1/covenant': OPEN_COVENANT, 'POST /v1/deposits': answer(500, { error: 'boom', message: 'no' }) });
+    await expect(poolDeposit(scene.h.deps, sendOptions(hash, early.via))).rejects.toMatchObject({ problem: { status: 500 } });
   });
 
   it('refuses a batch that was never printed, and sends nothing', async () => {
@@ -1329,6 +1391,17 @@ describe('oars pool fetch', () => {
 
     on(scene, 'get', `/bundle/claude-code/2.1.9/${VOCAB_VERSION}`, () => HttpResponse.json({ payload, signature }));
     expect(await scene.cli('pool', 'fetch', '--harness-version', '2.1.9', '--server', POOL)).toBe(ExitCode.INVALID);
+    expect(replicas(scene)).toEqual([]);
+  });
+
+  it('refuses a validly signed bundle that states no floor, and keeps nothing', async () => {
+    const { scene, sign } = await signedScene();
+    // The signature holds and the version is right: only the missing `floor` is wrong, so a bundle that does not say what floor the pool applied is not served as a read.
+    const payload = bundleBody('2.1.314').replace('"floor":5,', '');
+    expect(payload).not.toContain('floor');
+    on(scene, 'get', `/bundle/claude-code/2.1.314/${VOCAB_VERSION}`, async () => HttpResponse.json({ payload, signature: await sign(payload) }));
+    expect(await scene.cli('pool', 'fetch', '--harness-version', '2.1.314', '--server', POOL, '--json')).toBe(ExitCode.INVALID);
+    expect(scene.document()).toMatchObject({ problem: { code: 'bundle_unverified' } });
     expect(replicas(scene)).toEqual([]);
   });
 
@@ -1756,6 +1829,165 @@ describe('oars pool deposit: local deltas', () => {
   });
 });
 
+describe('pool telemetry: deposit batches and fetches leave counts', () => {
+  const roots: string[] = [];
+  afterEach(() => {
+    for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
+  });
+
+  /** Turns telemetry on for a scene, in a telemetry folder under a temp APPDATA (confirmed to be where the CLI would put it). */
+  const recording = (scene: Scene): string => {
+    const appData = mkdtempSync(join(tmpdir(), 'oars-pool-telemetry-'));
+    roots.push(appData);
+    const configDir = defaultConfigDir({ APPDATA: appData }, 'win32', 'C:\\unused-home');
+    expect(configDir).toBe(appData);
+    const dir = join(configDir, 'oars', 'telemetry');
+    scene.h.deps.telemetry = { dir, platform: 'linux' };
+    return dir;
+  };
+
+  const eventsOf = (dir: string, type: string): { [field: string]: unknown }[] =>
+    readSpool(dir).flatMap((text) => {
+      const parsed: unknown = JSON.parse(text);
+      const data: unknown = at(parsed, 'type') === type ? at(parsed, 'data') : undefined;
+      return typeof data === 'object' && data !== null ? [Object.fromEntries(Object.entries(data))] : [];
+    });
+
+  const OTHER_FOLDER = 'zz-private-repo';
+  const SESSION = '55555555-5555-4555-8555-555555555555';
+  const line = (text: string): string => JSON.stringify({ type: 'user', sessionId: SESSION, cwd: '/w', timestamp: '2026-06-01T00:00:00Z', message: { role: 'user', content: text } });
+
+  /** A store holding only the one session, in a folder the allowlist can admit or not. */
+  const alone = async (lines: string[], allow: string[]): Promise<Scene> => {
+    const scene = setting();
+    rmSync(join(scene.staged.projectsRoot, 'proj'), { recursive: true, force: true });
+    addProject(scene.staged, OTHER_FOLDER, SESSION, lines);
+    await deposit(scene.staged.runtime, { allow: [OTHER_FOLDER], redactDomains: [], now: () => NOW });
+    await signIn(scene);
+    const state = join(scene.staged.storeDir, 'state.json');
+    writeFileSync(state, JSON.stringify({ ...JSON.parse(readFileSync(state, 'utf8')), allow }));
+    return scene;
+  };
+
+  it('a deposit pass records the sessions counted, the batches built, and their bytes', async () => {
+    const scene = setting();
+    await capture(scene);
+    await signIn(scene);
+    const dir = recording(scene);
+    expect(await scene.cli('pool', 'deposit', '--server', POOL)).toBe(ExitCode.OK);
+    const [event, ...rest] = eventsOf(dir, 'deposit');
+    expect(rest).toEqual([]);
+    const sizes = batchBytes(scene).map((bytes) => Buffer.byteLength(bytes));
+    expect(event).toMatchObject({ step: 'build', sessions: outboxFiles(scene).length, batched: outboxFiles(scene).length, excludedFolder: 0, excludedTerm: 0, excludedNoRaw: 0, excludedNoTerms: 0, excludedUnreadable: 0 });
+    expect(event?.bytes).toBe(sizes.reduce((sum, size) => sum + size, 0));
+    expect(event?.bytes).toBeGreaterThan(0);
+  });
+
+  it('a run with an excluded session records a count and no folder', async () => {
+    const scene = await alone([line('a plain request')], ['some-other-folder']);
+    const dir = recording(scene);
+    expect(await scene.cli('pool', 'deposit', '--server', POOL)).toBe(ExitCode.OK);
+    expect(eventsOf(dir, 'deposit')[0]).toMatchObject({ step: 'build', sessions: 1, batched: 0, bytes: 0, excludedFolder: 1, excludedTerm: 0 });
+    const spool = readSpool(dir).join('\n');
+    for (const private_ of [OTHER_FOLDER, 'some-other-folder', SESSION, TERM, 'plain request']) expect(spool).not.toContain(private_);
+  });
+
+  it('a term hit records a count and no term', async () => {
+    const scene = await alone([line(`working at ${TERM}`)], [OTHER_FOLDER]);
+    const dir = recording(scene);
+    expect(await scene.cli('pool', 'deposit', '--server', POOL)).toBe(ExitCode.OK);
+    expect(eventsOf(dir, 'deposit')[0]).toMatchObject({ sessions: 1, batched: 0, excludedFolder: 0, excludedTerm: 1 });
+    const spool = readSpool(dir).join('\n');
+    for (const private_ of [OTHER_FOLDER, SESSION, TERM]) expect(spool).not.toContain(private_);
+  });
+
+  it('prints and returns the same with telemetry on as without', async () => {
+    const [off, on] = [setting(), setting()];
+    for (const scene of [off, on]) {
+      await capture(scene);
+      await signIn(scene);
+    }
+    const dir = recording(on);
+    expect(await off.cli('pool', 'deposit', '--server', POOL, '--json')).toBe(ExitCode.OK);
+    expect(await on.cli('pool', 'deposit', '--server', POOL, '--json')).toBe(ExitCode.OK);
+    expect(on.document()).toEqual(off.document());
+    expect(on.h.out).toEqual(off.h.out);
+    expect(eventsOf(dir, 'deposit')).toHaveLength(1);
+  });
+
+  it('a batch sent records one sent and its bytes', async () => {
+    const scene = await batched();
+    const dir = recording(scene);
+    expect(await scene.cli('pool', 'outbox', '--server', POOL)).toBe(ExitCode.OK);
+    const pool = wire({ 'GET /v1/covenant': OPEN_COVENANT, 'POST /v1/deposits': answer(201, { ok: true }) });
+    await poolDeposit(scene.h.deps, sendOptions(printedHashes(scene)[0] ?? '', pool.via));
+    expect(eventsOf(dir, 'deposit')).toEqual([{ step: 'send', sent: 1, bytes: Buffer.byteLength(batchBytes(scene)[0] ?? '') }]);
+  });
+
+  const bundleBody = (version: string): string => JSON.stringify({ format: 1, harness: 'claude-code', harnessVersion: version, vocabVersion: VOCAB_VERSION, asOf: { pool: 'p' }, cells: [{}], motifs: [], reads: [{}, {}], strata: [] });
+  const BUNDLE = `/bundle/claude-code/2.1.314/${VOCAB_VERSION}`;
+
+  const signed = async (): Promise<{ scene: Scene; reply: () => Promise<Response> }> => {
+    const scene = setting();
+    const { pinned, sign } = await key();
+    await signIn(scene, pinned);
+    const payload = bundleBody('2.1.314');
+    const signature = await sign(payload);
+    return { scene, reply: () => Promise.resolve(HttpResponse.json({ payload, signature }, { headers: { etag: '"tag-1"' } })) };
+  };
+
+  it('a fetch records itself, and a second that the pool answers 304 to records an ETag hit', async () => {
+    const { scene, reply } = await signed();
+    const dir = recording(scene);
+    const answers = [async () => reply(), () => Promise.resolve(new HttpResponse(null, { status: 304 }))];
+    server.use(http.get(`${POOL}${BUNDLE}`, () => (answers.shift() ?? (() => Promise.resolve(new HttpResponse(null, { status: 500 }))))()));
+    expect(await scene.cli('pool', 'fetch', '--harness', 'claude-code', '--harness-version', '2.1.314', '--server', POOL)).toBe(ExitCode.OK);
+    expect(await scene.cli('pool', 'fetch', '--harness', 'claude-code', '--harness-version', '2.1.314', '--server', POOL)).toBe(ExitCode.OK);
+    expect(eventsOf(dir, 'fetch')).toEqual([
+      { harness: 'claude-code', fetches: 1, reads: 2 },
+      { harness: 'claude-code', fetches: 1, etagHits: 1, reads: 2 },
+    ]);
+  });
+
+  it('a fetch the pool refuses still reached the pool: it records a fetch and exits as it did', async () => {
+    const { scene } = await signed();
+    const dir = recording(scene);
+    server.use(http.get(`${POOL}${BUNDLE}`, () => HttpResponse.json({ error: 'server_error', message: 'The pool is down.' }, { status: 500 })));
+    const quiet = await signed();
+    server.use(http.get(`${POOL}${BUNDLE}`, () => HttpResponse.json({ error: 'server_error', message: 'The pool is down.' }, { status: 500 })));
+    const without = await quiet.scene.cli('pool', 'fetch', '--harness', 'claude-code', '--harness-version', '2.1.314', '--server', POOL);
+    expect(without).not.toBe(ExitCode.OK);
+    expect(await scene.cli('pool', 'fetch', '--harness', 'claude-code', '--harness-version', '2.1.314', '--server', POOL)).toBe(without);
+    expect(eventsOf(dir, 'fetch')).toEqual([{ harness: 'claude-code', fetches: 1 }]);
+  });
+
+  it('a bundle that fails verification still reached the pool: it records a fetch and exits as it did, keeping nothing', async () => {
+    const { scene } = await signed();
+    const dir = recording(scene);
+    server.use(http.get(`${POOL}${BUNDLE}`, () => HttpResponse.json({ payload: bundleBody('2.1.314'), signature: 'not-a-signature' })));
+    expect(await scene.cli('pool', 'fetch', '--harness', 'claude-code', '--harness-version', '2.1.314', '--server', POOL, '--json')).toBe(ExitCode.INVALID);
+    expect(scene.document()).toMatchObject({ problem: { code: 'bundle_unverified' } });
+    expect(eventsOf(dir, 'fetch')).toEqual([{ harness: 'claude-code', fetches: 1 }]);
+  });
+
+  it('a 304 to a fetch that named no kept bundle still reached the pool: it records a fetch and exits UNEXPECTED', async () => {
+    const { scene } = await signed();
+    const dir = recording(scene);
+    server.use(http.get(`${POOL}${BUNDLE}`, () => new HttpResponse(null, { status: 304 })));
+    expect(await scene.cli('pool', 'fetch', '--harness', 'claude-code', '--harness-version', '2.1.314', '--server', POOL)).toBe(ExitCode.UNEXPECTED);
+    expect(eventsOf(dir, 'fetch')).toEqual([{ harness: 'claude-code', fetches: 1 }]);
+  });
+
+  it('a fetch the pool caps records a cap hit and still exits as capped', async () => {
+    const { scene } = await signed();
+    const dir = recording(scene);
+    server.use(http.get(`${POOL}${BUNDLE}`, () => HttpResponse.json({ error: 'fetch_cap', message: 'An account without access may fetch 1 per ISO week.' }, { status: 429 })));
+    expect(await scene.cli('pool', 'fetch', '--harness', 'claude-code', '--harness-version', '2.1.314', '--server', POOL, '--json')).toBe(ExitCode.CAPPED);
+    expect(scene.document()).toMatchObject({ problem: { code: 'fetch_cap' } });
+    expect(eventsOf(dir, 'fetch')).toEqual([{ harness: 'claude-code', fetches: 1, capHits: 1 }]);
+  });
+});
+
 describe('wire policing in telemetry', () => {
   const printedAndHash = async (scene: Scene): Promise<string> => {
     expect(await scene.cli('pool', 'outbox', '--server', POOL)).toBe(ExitCode.OK);
@@ -1808,6 +2040,30 @@ describe('wire policing in telemetry', () => {
     expect(spooled(dir, 'wire-send').map((event) => event.data)).toEqual([
       { sent: 1, status: 201, bytes },
       { sent: 0, status: 429, code: 'rate_limited', bytes },
+    ]);
+  });
+
+  it('records one send for a batch sent in parts, on the reply that ends it, with the whole batch\'s bytes', async () => {
+    const scene = await batched();
+    const dir = watched(scene);
+    const file = join(scene.staged.storeDir, 'pool-outbox', outboxFiles(scene)[0] ?? '');
+    const bytes = canonicalBytes({ ...JSON.parse(readFileSync(file, 'utf8')), pad: 'é'.repeat(700_000) });
+    const hash = batchHash(bytes);
+    rmSync(file);
+    writeFileSync(join(file, '..', `${outboxFiles(scene)[0]?.split(/[\\/]/).at(-1)?.split('.')[0] ?? ''}.${hash}.jsonl`), bytes);
+    expect(await scene.cli('pool', 'outbox', '--server', POOL)).toBe(ExitCode.OK);
+    const whole = wire({ 'GET /v1/covenant': OPEN_COVENANT, 'POST /v1/deposits': [answer(202, { ok: true, pending: 2 }), answer(202, { ok: true, pending: 1 }), answer(201, { ok: true })] });
+    await poolDeposit(scene.h.deps, sendOptions(hash, whole.via));
+    expect(whole.requests.filter((request) => request.method === 'POST')).toHaveLength(3);
+    // Not one event per part: three would triple the weekly sent bytes the health report reads.
+    expect(spooled(dir, 'wire-send').map((event) => event.data)).toEqual([{ sent: 1, status: 201, bytes: Buffer.byteLength(bytes) }]);
+    // A first part that is refused ends the batch there: one event, with that status.
+    const refused = wire({ 'GET /v1/covenant': OPEN_COVENANT, 'POST /v1/deposits': answer(500, { error: 'boom', message: 'no' }) });
+    await expect(poolDeposit(scene.h.deps, sendOptions(hash, refused.via))).rejects.toMatchObject({ problem: { status: 500 } });
+    expect(refused.requests.filter((request) => request.method === 'POST')).toHaveLength(1);
+    expect(spooled(dir, 'wire-send').map((event) => event.data)).toEqual([
+      { sent: 1, status: 201, bytes: Buffer.byteLength(bytes) },
+      { sent: 0, status: 500, code: 'boom', bytes: Buffer.byteLength(bytes) },
     ]);
   });
 

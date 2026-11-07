@@ -19,6 +19,7 @@ import type { InstallRuntime, Scope } from './sessions/install.js';
 import type { SessionsRuntime } from './sessions/store.js';
 import { telemetryOff, telemetryOn, telemetryShow, telemetryStatus } from './telemetry/command.js';
 import { recordCrash } from './telemetry/crash.js';
+import { emitOf } from './telemetry/emit.js';
 import { finishTelemetry, observeCommand, type Observed } from './telemetry/observe.js';
 import type { TelemetryRuntime } from './telemetry/record.js';
 
@@ -98,7 +99,7 @@ const printFailure = (deps: RunDeps, json: boolean, error: CliError): void => {
   deps.io.stderr(`${[title ?? error.message, detail, actionUrl].filter((line) => line !== undefined && line !== '').join('\n')}\n`);
 };
 
-const sessionDeps = (deps: RunDeps): SessionsDeps => ({ sessions: deps.sessions, install: deps.install, now: deps.now });
+const sessionDeps = (deps: RunDeps): SessionsDeps => ({ sessions: deps.sessions, install: deps.install, now: deps.now, telemetry: emitOf(deps) });
 
 const buildProgram = (deps: RunDeps, observed: Observed): Command => {
   const program = new Command('oars')
@@ -478,7 +479,7 @@ const buildProgram = (deps: RunDeps, observed: Observed): Command => {
       emit(deps, flag(command.optsWithGlobals(), 'json'), await gateReport(sessionDeps(deps)));
     });
 
-  const pool = program.command('pool').description('sign in to a pool server, deposit closed-vocabulary session skeletons, and fetch signed reads; local capture, recall, and reads need none of it');
+  const pool = program.command('pool').description('sign in to a pool server, deposit session skeletons (a closed list of fields, each value redacted first), and fetch signed reads; local capture, recall, and reads need none of it');
   const serverOption = '--server <url>';
   const serverHelp = 'the pool server, https or plain http to localhost (or OARS_POOL_URL; there is no default)';
 
