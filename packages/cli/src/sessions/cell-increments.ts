@@ -6,7 +6,7 @@ import { bucketFields, deriveCells, ENVIRONMENT_BUCKET, isEnvironmentCell, type 
 import type { Motif } from './motif.js';
 import { bucketOf, floorOf, projectedSteps, type SessionSkeleton, type ShellReader, type SkeletonTranscript } from './pool-wire.js';
 import { NO_RECALLS, type RecallGraph } from './recall-consequence.js';
-import { harnessOf, type PromptObservation, type SessionObservation, type StepObservation, type ToolObservation, type Usage } from './schema.js';
+import { harnessOf, type PromptObservation, type SessionObservation, type StepEdge, type StepObservation, type ToolObservation, type Usage } from './schema.js';
 import type { Store } from './store.js';
 
 export interface CellRow {
@@ -105,7 +105,7 @@ export const projectedStore = (store: Store, read: ShellReader): Store => {
 const NO_USAGE: Usage = { input: 0, cacheWrite: 0, cacheRead: 0, output: 0, thinking: 0 };
 
 /** A skeleton's transcript as the record `deriveCells` reads. Everything a skeleton leaves out stays empty, so no derivation here can come to depend on it unnoticed. */
-const sessionRecord = (id: string, parent: string | null, { harness, frame }: SkeletonTranscript): SessionObservation => ({
+const sessionRecord = (id: string, parent: string | null, spawnedIn: string | null, { harness, frame }: SkeletonTranscript): SessionObservation => ({
   kind: 'session',
   cv: '',
   sid: '',
@@ -114,7 +114,7 @@ const sessionRecord = (id: string, parent: string | null, { harness, frame }: Sk
   parent,
   agentType: null,
   spawnedBy: null,
-  spawnedIn: null,
+  spawnedIn,
   rev: 1,
   at: '',
   bytes: 0,
@@ -181,8 +181,13 @@ const promptRecords = (id: string, { prompts }: SkeletonTranscript): PromptObser
     frame,
   }));
 
-const toolRecords = (id: string, main: string, { tools }: SkeletonTranscript): ToolObservation[] =>
-  tools.map(({ side, prompt, status, durationMs, steps }, n) => ({
+/** A step's place as the store names it: its call's position and its segment. A transcript's steps are numbered across its calls in order, which is what an edge's target counts. */
+const stepPlaces = ({ tools }: SkeletonTranscript): { n: number; seg: number }[] => tools.flatMap(({ steps }, n) => steps.map((_, seg) => ({ n, seg })));
+
+const toolRecords = (id: string, main: string, transcript: SkeletonTranscript, spawner: SkeletonTranscript | null): ToolObservation[] => {
+  const own = stepPlaces(transcript);
+  const spawning = spawner === null ? [] : stepPlaces(spawner);
+  return transcript.tools.map(({ side, prompt, status, durationMs, steps }, n) => ({
     kind: 'tool',
     cv: '',
     sid: '',
@@ -202,19 +207,24 @@ const toolRecords = (id: string, main: string, { tools }: SkeletonTranscript): T
     harnessVersion: null,
     side,
     prompt,
-    steps: steps.map(({ action, native, identity, status: reported, parent, tokens, ms }, seg) => ({
+    steps: steps.map(({ action, native, identity, status: reported, parent, tokens, ms, edges }, seg) => ({
       action,
       native,
       identity,
       status: reported,
       parent,
       seg,
-      edges: [],
+      // A target is read back as the call position and segment it names, in this transcript or, for a `spawned` edge, in the spawning one. A target the transcript does not hold names nothing and is left out.
+      edges: (edges ?? []).flatMap(({ kind, target }): StepEdge[] => {
+        const place = (kind === 'spawned' ? spawning : own)[target];
+        return place === undefined ? [] : [{ kind, n: place.n, seg: place.seg }];
+      }),
       cost: { tokens: tokens === null ? null : floorOf('tokens', tokens), durationMs: ms === null ? null : floorOf('ms', ms) },
       n,
       frameId: '',
     })),
   }));
+};
 
 /** One account's deposits as a store. A session's id is its skeleton's, which the client hashes per account, so it joins nothing across accounts. */
 export const storeOf = (skeletons: readonly SessionSkeleton[]): Store => {
@@ -224,9 +234,10 @@ export const storeOf = (skeletons: readonly SessionSkeleton[]): Store => {
     const main = nameOf(0);
     transcripts.forEach((transcript, index) => {
       const session = nameOf(index);
-      (index === 0 ? store.sessions : store.subagents).push(sessionRecord(session, index === 0 ? null : main, transcript));
+      const spawner = transcript.spawnedIn === null ? null : (transcripts[transcript.spawnedIn] ?? null);
+      (index === 0 ? store.sessions : store.subagents).push(sessionRecord(session, index === 0 ? null : main, transcript.spawnedIn === null ? null : nameOf(transcript.spawnedIn), transcript));
       store.prompts.push(...promptRecords(session, transcript));
-      store.tools.push(...toolRecords(session, main, transcript));
+      store.tools.push(...toolRecords(session, main, transcript, spawner));
     });
   }
   return store;
