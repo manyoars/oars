@@ -96,14 +96,14 @@ An unknown field name a client sends lands in the `extensions` bag of the deposi
 | `field` | future change-effect read: which setting a delta is about | clear | yes | 17 |
 | `fieldsVersion` | the deposit route: stored with each batch so a read can tell the field list it came from | clear | no | 17 |
 | `filled` | `adoption` and `fit` per skill and MCP server: whether a session's reach was recorded at all, so an unfilled reach is not read as no tools | clear | yes | 26 |
-| `flags` | `fit` and `adoption` per flag of a program | clear (public list); thresholded (long tail, `t881`) | yes | 10 |
+| `flags` | `fit` and `adoption` per flag of a program | clear (public list); thresholded (long tail) | yes | 10 |
 | `format` | the deposit route: refuses a format it does not read; stored with each batch | clear | no | 10 |
 | `frame` | container for where a session ran: every cell key reads its members | clear | yes | 80 |
 | `frames` | container for the distinct frames a transcript's steps ran in: a step's `frame` is a position in it, so every per-step cell key reads a member | clear | yes | 21 |
 | `frameworks` | the `framework` stratum | clear (public list) | yes | 45 |
 | `harness` | every bundle is per harness; the action table a step is checked against | clear | yes | 92 |
 | `harnessVersion` | `fit` and `change` per harness version bucket | clear (public releases) | yes | 78 |
-| `host` | `adoption` and `fit` per web host | hashed at ingest (a public host reads clear and a long-tail host thresholded until `t881` moves the hashing to the pool) | yes | 19 |
+| `host` | `adoption` and `fit` per web host | hashed at ingest | yes | 19 |
 | `id` | the ledger's replace-on-redeposit key; no read | clear (an opaque client hash, per account) | yes | 23 |
 | `identity` | container for what a step called: `fit` and `adoption` read its members | clear | yes | 71 |
 | `input` | `cost`: tokens per prompt class, model, and week | clear (bucket) | yes | 9 |
@@ -112,19 +112,19 @@ An unknown field name a client sends lands in the `extensions` bag of the deposi
 | `languageShares` | container for the share of each language: the `languageShare` pair stratum | clear | yes | 78 |
 | `languages` | the `language` stratum | clear (public list) | yes | 66 |
 | `leaves` | the ingest tier check (`access.ts`): a root over no lines is not a real one; no read | clear | partly (while the raw file stays) | 11 |
-| `mcp` | `adoption` and `fit` per MCP server in reach, offered, loaded, or called | clear (public list); thresholded (long tail, `t881`) | yes | 32 |
+| `mcp` | `adoption` and `fit` per MCP server in reach, offered, loaded, or called | clear (public list); thresholded (long tail) | yes | 32 |
 | `merkleRoot` | the ingest tier check (`access.ts`) and the future raw-file audit; no read | clear (an opaque client hash) | partly (while the raw file stays) | 79 |
 | `metric` | future change-effect read (calls per session or thinking tokens) | clear | yes | 26 |
 | `model` | every cell key; `fit` and `cost` per model | clear (public values) | yes | 75 |
 | `ms` | `cost`: the time of a step, as a cell's `durationMs` | clear (bucket) | yes | 30 |
-| `name` | `adoption` and `fit` per named package; the future change-effect read for a package delta | clear (public list); thresholded (long tail, `t881`) | yes | 31 |
-| `native` | the action check at ingest and `fit` per native tool name | clear (public list); thresholded (long tail, `t881`) | yes | 98 |
+| `name` | `adoption` and `fit` per named package; the future change-effect read for a package delta | clear (public list); thresholded (long tail) | yes | 31 |
+| `native` | the action check at ingest and `fit` per native tool name | clear (public list); thresholded (long tail) | yes | 98 |
 | `next` | `recovery`: the first action that followed a failed call is the cell's next action; the other four are held for a later read of longer follow-ups | clear (closed list of actions) | yes | 21 |
 | `output` | `cost`: tokens per prompt class, model, and week | clear (bucket) | yes | 10 |
 | `parent` | `next-step` and `method`: the link from a subagent step to the main-run call that spawned it | clear | yes | 65 |
 | `platform` | the `env:<platform>:<shell>` cell of `fit` | clear | yes | 54 |
 | `plugins` | future `adoption` of plugins in reach (always `private` today, since no plugin list is pinned): the count of plugins, never a name | clear | yes | 42 |
-| `program` | `fit` and `adoption` per shell program | clear (public list); thresholded (long tail, `t881`) | yes | 15 |
+| `program` | `fit` and `adoption` per shell program | clear (public list); thresholded (long tail) | yes | 15 |
 | `prompt` | ties a call to its prompt, so `cost` reads the prompt's class for it | clear | yes | 20 |
 | `prompts` | container for a transcript's prompts: `cost` reads their class, tokens, and wall time | clear | yes | 19 |
 | `pulls` | `adoption` of a pulled package | clear | yes | 14 |
@@ -132,24 +132,24 @@ An unknown field name a client sends lands in the `extensions` bag of the deposi
 | `recoveryCalls` | container for what followed a failed call (`next`, `editFollowed`), present on a call that did not succeed: the `recovery` family reads its members | clear | yes | 19 |
 | `registry` | `adoption` of a pulled package per registry; the future change-effect read for a package delta | clear | yes | 32 |
 | `remainingTokens` | future remaining-work read (the `next-step` form named under What a bundle serves) | clear (bucket) | yes | 95 |
-| `server` | `adoption` and `fit` per MCP server | clear (public list); thresholded (long tail, `t881`) | yes | 17 |
+| `server` | `adoption` and `fit` per MCP server | clear (public list); thresholded (long tail) | yes | 17 |
 | `shell` | the `env:<platform>:<shell>` cell of `fit` | clear | yes | 42 |
 | `side` | keeps a side call out of the main run: the (session, side, prompt) grouping in `cells.ts` | clear | yes | 24 |
 | `size` | the `repoFiles` stratum and the `repoFilesExplore` pair | clear (class) | yes | 33 |
-| `skill` | `adoption` and `fit` per skill | clear (public list); thresholded (long tail, `t881`) | yes | 32 |
-| `skills` | `adoption` and `fit` per skill in reach, called or not | clear (public list); thresholded (long tail, `t881`) | yes | 38 |
+| `skill` | `adoption` and `fit` per skill | clear (public list); thresholded (long tail) | yes | 32 |
+| `skills` | `adoption` and `fit` per skill in reach, called or not | clear (public list); thresholded (long tail) | yes | 38 |
 | `stack` | container for the languages, frameworks, and size class: the strata read its members | clear | yes | 39 |
 | `status` | `tool-day` and `fit` failure rates | clear | yes | 97 |
 | `steps` | container for the steps of a call: every step read | clear | yes | 79 |
-| `sub` | `fit` and `adoption` per subcommand | clear (public list); thresholded (long tail, `t881`) | yes | 10 |
+| `sub` | `fit` and `adoption` per subcommand | clear (public list); thresholded (long tail) | yes | 10 |
 | `thinking` | `cost`: tokens per prompt class; the (effort, thinking) cell | clear (bucket) | yes | 12 |
 | `timingPrint` | none stated: no read, check, or later brief names it (see the t873 report) | clear (an opaque client hash) | yes | 18 |
 | `tokens` | `cost`: tokens per step in a class cell | clear (bucket) | yes | 50 |
-| `tool` | `fit` and `adoption` per public MCP tool | clear (public list); thresholded (long tail, `t881`) | yes | 18 |
+| `tool` | `fit` and `adoption` per public MCP tool | clear (public list); thresholded (long tail) | yes | 18 |
 | `tools` | container for the calls of a transcript: `tool-day`, `fit`, and `method` read their members | clear | yes | 25 |
 | `transcripts` | container for the main run and each subagent: every read | clear | yes | 24 |
 | `usage` | container for a prompt's token buckets: `cost` | clear | yes | 14 |
-| `version` | `adoption` of a pulled package at a version | clear (public list); thresholded (long tail, `t881`) | yes | 14 |
+| `version` | `adoption` of a pulled package at a version | clear (public list); thresholded (long tail) | yes | 14 |
 | `vocabVersion` | the deposit route: stored with each batch so a read can tell the vocabulary it came from | clear | no | 18 |
 | `wallSec` | `cost`: wall time per prompt class | clear (bucket) | yes | 11 |
 
