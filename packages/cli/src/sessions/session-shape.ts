@@ -44,6 +44,8 @@ const PERMISSION_MODES: { readonly [harness in Harness]: ReadonlySet<string> } =
   cursor: new Set(),
   // Grok Build's reader reads no mode (its `current_mode_update` carries one, but this reader does not read it), so no value is documented to keep.
   grok: new Set(),
+  // OpenCode's reader reads no permission mode (a session records the agent, not a mode), so no value is documented to keep.
+  opencode: new Set(),
 };
 
 /**
@@ -62,6 +64,8 @@ const COMPLETE: { readonly [harness in Harness]: { readonly interrupts: boolean;
   cursor: { interrupts: false, rejections: false, denials: false, timing: false },
   // Grok Build's reader writes the prompts and replies with their line times (seconds), and reads no cancel, tool refusal, or hook denial.
   grok: { interrupts: false, rejections: false, denials: false, timing: true },
+  // OpenCode's reader writes each message with its own time (so the runs are real) and reads no interrupt, refusal, or denial: a refused or aborted tool is an error state with a message.
+  opencode: { interrupts: false, rejections: false, denials: false, timing: true },
 };
 
 export type TrustEventKind = 'interrupt' | 'rejection' | 'denial';
