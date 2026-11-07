@@ -98,6 +98,22 @@ describe('a transcript over the 1 MB request cap', () => {
     expect(await keysIn(`staging/${account}/`)).toEqual([]);
   });
 
+  it('refuses a part over 1 MB that declares no length, once it has been read', async () => {
+    const { token, account } = await member();
+    const bytes = transcript(MEGABYTE + 1, 1);
+    // A stream body goes out chunked, with no content-length, so only the size of what was read can refuse it.
+    const stream = new ReadableStream<Uint8Array>({
+      start: (controller) => {
+        controller.enqueue(bytes);
+        controller.close();
+      },
+    });
+    const sent = await pool.miniflare.dispatchFetch(`http://pool.test${partPath(await hex(bytes), 1)}`, { method: 'PUT', body: stream, duplex: 'half', headers: { authorization: `Bearer ${token}`, ...grant } });
+    expect(sent.status).toBe(413);
+    expect(fieldOf(JSON.parse(await sent.text()), 'error')).toBe('too_large');
+    expect(await keysIn(`staging/${account}/`)).toEqual([]);
+  });
+
   it('refuses an empty part', async () => {
     const { token } = await member();
     const sent = await pool.send(partPath('a'.repeat(64), 1), { method: 'PUT', body: new Uint8Array(0) }, token, grant);
