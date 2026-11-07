@@ -52,7 +52,7 @@ const capture = (text: string, sid: string | null, root: string | null) =>
 describe('the CAPTURE 4 fields', () => {
   it('stamps sid on every capture record and records env, repo, fileHashes, and promptFingerprint on the session', () => {
     const result = capture(transcript('/w/app/pkg', '/w/app/src/a.ts'), 'abcd1234', '/w/app');
-    expect(CAPTURE_VERSION).toBe('19');
+    expect(CAPTURE_VERSION).toBe('20');
     for (const record of [result.session, ...result.prompts, ...result.tools, ...result.errorLines]) expect(record).toMatchObject({ cv: CAPTURE_VERSION, sid: 'abcd1234' });
     expect(result.session.env).toEqual({ harness: '2.1.301', oars: '1.2.3', node: 'v99', os: 'plan9' });
     expect(result.session.repo).toMatch(/^[0-9a-f]{16}$/);
@@ -414,7 +414,7 @@ describe('a version-3 store opened under version 4', () => {
     expect(after.prompts.every((prompt) => prompt.frame !== undefined)).toBe(true);
     expect(before.prompts.every((prompt) => prompt.strata === undefined)).toBe(true);
     expect(after.prompts.every((prompt) => prompt.strata !== undefined)).toBe(true);
-    const unverified = <T extends { rev: number }>(records: T[]): T[] => unrev(records).map((record) => ({ ...record, verify: null, frame: null, strata: null }));
+    const unverified = <T extends { rev: number }>(records: T[]): T[] => unrev(records).map((record) => ({ ...record, verify: null, frame: null, strata: null, usageObserved: undefined, usageResponses: undefined }));
     expect(unverified(after.prompts)).toEqual(unverified(before.prompts));
     expect(unrev(after.errors)).toEqual(unrev(before.errors));
     expect(after.sessions.map((session) => session.promptFingerprint)).toEqual(before.sessions.map((session) => session.promptFingerprint));

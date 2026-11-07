@@ -50,7 +50,7 @@ describe('a pool whose deploy lowers the public floor to 3', () => {
     expect(bundle.reads.every((read) => read.floor === 3)).toBe(true);
     expect(bundle.cells.every((cell) => cell.clusters >= 3)).toBe(true);
     const generation = Number(await (await pool.db()).prepare('SELECT generation FROM pool_generation WHERE id = 1').first('generation'));
-    expect(etag).toBe(etagOf('claude-code', VERSION, generation, SERVED.map(({ name }) => name), floorsOf({ PUBLIC_FLOOR: '3', DISCLOSURE_FLOOR: '4', PUBLIC_FLOOR_FAMILIES: 'tool-day=4' }, () => undefined)));
+    expect(etag).toBe(etagOf('claude-code', VERSION, generation, [...SERVED.map(({ name }) => name), 'books'], floorsOf({ PUBLIC_FLOOR: '3', DISCLOSURE_FLOOR: '4', PUBLIC_FLOOR_FAMILIES: 'tool-day=4' }, () => undefined)));
     // The fourth account lifts the family that was on 4 and no other.
     tokens.push(await depositor(pool, '8104'));
     const after = (await fetched(pool, tokens[0] ?? '')).bundle;

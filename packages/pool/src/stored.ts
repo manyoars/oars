@@ -13,6 +13,9 @@ export interface StoredPool {
   environment: Cell[];
   motifs: Motif[];
   strata: StrataCell[];
+  /** Accounts with a deposit in the panel window; left out by a caller that did not read the deposit records. */
+  panel?: number;
+  panelDay?: string;
 }
 
 const LEVELS: ReadonlySet<unknown> = new Set<MotifLevel>(['shape', 'named', 'class']);
@@ -61,6 +64,26 @@ const motifOf = (row: unknown): Motif => {
 export const ENVIRONMENT_CELLS =
   "SELECT motif_id, frame_bucket, grain, day, exposed, sessions, clusters, ok, failed, tokens, duration_ms FROM cells WHERE harness_bucket = ? AND sessions > 0 AND clusters >= ? AND NOT EXISTS (SELECT 1 FROM cells AS other WHERE other.key >= cells.motif_id || '/' AND other.key < cells.motif_id || '0' AND other.grain = cells.grain AND other.day = cells.day AND other.exposed = cells.exposed AND other.sessions > 0 AND other.clusters < ?)";
 
+/** The panel window: four weeks, in days. */
+export const PANEL_DAYS = 28;
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/** Distinct accounts with a counting deposit in the window, input sources left out (`accounts.source`). The `deposits_recent` index reads only the window's rows. */
+export const PANEL_COUNT = "SELECT COUNT(DISTINCT deposits.account) AS accounts FROM deposits JOIN accounts ON accounts.id = deposits.account WHERE deposits.counted_at IS NOT NULL AND deposits.tier <> 'none' AND deposits.counted_at >= ? AND accounts.source = 'user'";
+
+/**
+ * The panel as of a UTC day. The ledger is read on the first fetch of a day and the count kept in the one `panel` row, so a fetch reads that row whatever the pool holds, and a deposit made after
+ * the day's first read is counted from the next day. It is an account count that names no account and is not held to the floor.
+ */
+export const panelOf = async (env: Env, now: number): Promise<{ day: string; accounts: number }> => {
+  const day = new Date(now).toISOString().slice(0, 10);
+  const kept = await env.DB.prepare('SELECT day, accounts FROM panel WHERE id = 1').bind().first();
+  if (fieldOf(kept, 'day') === day) return { day, accounts: numberField(kept, 'accounts') };
+  const accounts = numberField(await env.DB.prepare(PANEL_COUNT).bind(now - PANEL_DAYS * DAY_MS).first(), 'accounts');
+  await env.DB.prepare('INSERT INTO panel (id, day, accounts) VALUES (1, ?, ?) ON CONFLICT (id) DO UPDATE SET day = excluded.day, accounts = excluded.accounts').bind(day, accounts).run();
+  return { day, accounts };
+};
+
 const cellOf = (row: unknown): Cell => ({
   motifId: textField(row, 'motif_id'),
   frameBucket: textField(row, 'frame_bucket'),
@@ -79,21 +102,24 @@ const cellOf = (row: unknown): Cell => ({
  * The rows a bundle is derived from. The cells come with their held counts, whatever they are, so a floor is applied when the bundle is served (`bundleOf`) and never decided here. The queries that do compare a count to a floor
  * (the environment cells, the motifs they name, and the strata) take the floor of the family that reads them, to fetch fewer rows: the environment cells are the `fit` family's, and a stratum is a bundle-level count at the public floor.
  */
-export const storedOf = async (env: Env, harness: string, harnessVersion: string, floors: Floors): Promise<StoredPool> => {
+export const storedOf = async (env: Env, harness: string, harnessVersion: string, floors: Floors, now: number): Promise<StoredPool> => {
   const environmentFloor = floorFor(floors, 'fit');
   const bucket = harnessBucket(harnessVersion);
   const prefix = bucketPrefix(harness, harnessVersion);
   const modelPrefix = `${harness}/${NO_AXES}/`;
-  const [cells, environment, motifs, strata] = await Promise.all([
+  const [cells, environment, motifs, strata, panel] = await Promise.all([
     env.DB.prepare('SELECT motif_id, frame_bucket, grain, day, exposed, sessions, clusters, ok, failed, tokens, duration_ms FROM cells WHERE ((harness_bucket = ? AND substr(frame_bucket, 1, ?) = ?) OR (harness_bucket = ? AND substr(frame_bucket, 1, ?) = ?)) AND sessions > 0').bind(bucket, prefix.length, prefix, NO_AXES, modelPrefix.length, modelPrefix).all(),
     env.DB.prepare(ENVIRONMENT_CELLS).bind(ENVIRONMENT_BUCKET, environmentFloor, environmentFloor).all(),
     env.DB.prepare('SELECT motif FROM motifs WHERE motif_id IN (SELECT motif_id FROM cells WHERE ((harness_bucket = ? AND substr(frame_bucket, 1, ?) = ?) OR (harness_bucket = ? AND substr(frame_bucket, 1, ?) = ?)) AND sessions > 0) OR motif_id IN (SELECT motif_id FROM cells WHERE harness_bucket = ? AND sessions > 0 AND clusters >= ?)').bind(bucket, prefix.length, prefix, NO_AXES, modelPrefix.length, modelPrefix, ENVIRONMENT_BUCKET, environmentFloor).all(),
     env.DB.prepare('SELECT dimension, value, sessions, clusters FROM strata WHERE clusters >= ? AND sessions > 0').bind(floors.public).all(),
+    panelOf(env, now),
   ]);
   return {
     cells: cells.results.map(cellOf),
     environment: environment.results.map(cellOf),
     motifs: motifs.results.map(motifOf),
+    panel: panel.accounts,
+    panelDay: panel.day,
     strata: strata.results.map((row) => {
       const dimension = fieldOf(row, 'dimension');
       if (!isDimension(dimension)) throw new Error('a stored stratum names no dimension');

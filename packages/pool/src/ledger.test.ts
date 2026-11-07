@@ -1,5 +1,5 @@
 // The ledger plane has no expiry: the database refuses a delete of a `deposits` row or a `contributors` record, and a guard over the pool's own source fails
-// when a delete path or a scheduled trigger appears. A legally required erasure would be one new migration that drops the two `*_no_delete` triggers.
+// when a delete path or a scheduled trigger appears. The one scheduled trigger allowed is the telemetry rollup (worker.ts calls `rollupRecent`), whose files name no ledger table. A legally required erasure would be one new migration that drops the two `*_no_delete` triggers.
 import { createHash } from 'node:crypto';
 import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -99,16 +99,44 @@ const LEDGER_DROP = new RegExp(`\\bDROP\\s+TABLE\\s+(IF\\s+EXISTS\\s+)?${LEDGER_
 const SCHEDULED_HANDLER = /\bscheduled\s*(\(|:|=|,|\})/;
 const CRON_CONFIG = /"crons"/;
 
+// The nightly telemetry rollup is the one scheduled job: `worker.ts` may carry the handler when it runs `rollupRecent`, and the Worker config may carry the cron that fires it. The rollup reads the telemetry
+// record and writes its own table, so the files that hold it (checked by the test below) name no ledger table.
+// "Runs it" is exact: there is one `scheduled` in the file, its body is this one statement and nothing else, and the config's cron list is this one entry. Anything more (a second job in the handler, a second cron) is an offence.
+const ROLLUP_BODY = 'await rollupRecent(env, controller.scheduledTime);';
+const ROLLUP_CRONS = '"17 3 * * *"';
+/** The statements of the `scheduled` handler: what lies between the braces of its body, nested blocks included, or undefined when none is found. */
+const scheduledBody = (body: string): string | undefined => {
+  const from = body.search(/\bscheduled\b/);
+  const opening = from < 0 ? null : /(?:=>|\))\s*\{/.exec(body.slice(from));
+  if (opening === null) return undefined;
+  const start = from + opening.index + opening[0].length;
+  let depth = 1;
+  for (let at = start; at < body.length; at += 1) {
+    depth += body[at] === '{' ? 1 : body[at] === '}' ? -1 : 0;
+    if (depth === 0) return body.slice(start, at).trim().replace(/\s+/g, ' ');
+  }
+  return undefined;
+};
+/** True when every `"crons"` in the config is an array of exactly the rollup's one entry. */
+const onlyRollupCron = (body: string): boolean => {
+  const arrays = [...body.matchAll(/"crons"\s*:\s*\[([^\]]*)\]/g)].map((one) => (one[1] ?? '').trim());
+  return arrays.length === (body.match(/"crons"/g) ?? []).length && arrays.every((one) => one === ROLLUP_CRONS);
+};
+const ROLLUP_FILES = ['src/telemetry-rollup.ts', 'src/telemetry-fleet.ts'];
+const LEDGER_NAME = /\b(?:deposits|contributors|raw_objects)\b/i;
+
 /** What in `files` (name to text) would delete from the ledger or run it on a schedule. */
 const offences = (files: { [name: string]: string }): string[] =>
   Object.entries(files).flatMap(([name, text]) => {
     const body = code(text);
+    const rollupHandler = name === 'src/worker.ts' && (body.match(/\bscheduled\b/g) ?? []).length === 1 && scheduledBody(body) === ROLLUP_BODY;
+    const rollupCron = name === 'wrangler.jsonc' && onlyRollupCron(body);
     return [
       ...(LEDGER_DELETE.test(body) ? [`${name}: DELETE FROM the ledger`] : []),
       ...(LEDGER_REPLACE.test(body) ? [`${name}: a REPLACE that deletes a ledger row`] : []),
       ...(LEDGER_DROP.test(body) ? [`${name}: a DROP TABLE that deletes ledger rows`] : []),
-      ...(SCHEDULED_HANDLER.test(body) ? [`${name}: a scheduled handler`] : []),
-      ...(CRON_CONFIG.test(body) ? [`${name}: a cron trigger`] : []),
+      ...(SCHEDULED_HANDLER.test(body) && !rollupHandler ? [`${name}: a scheduled handler`] : []),
+      ...(CRON_CONFIG.test(body) && !rollupCron ? [`${name}: a cron trigger`] : []),
     ];
   });
 
@@ -163,6 +191,44 @@ describe('the pool has no path that deletes the ledger', () => {
     ['a crons array', '{ "triggers": { "crons": ["0 3 * * *"] } }', 'a cron trigger'],
   ])('names %s', (_label, text, offence) => {
     expect(offences({ planted: text })).toEqual([`planted: ${offence}`]);
+  });
+
+  it('lets only the telemetry rollup run on a schedule, and keeps its files clear of the ledger', () => {
+    const files = poolFiles();
+    // The rollup is the one scheduled job: worker.ts carries the handler, its body is exactly the one `rollupRecent` call, and the config carries exactly its one cron.
+    expect(scheduledBody(code(files['src/worker.ts'] ?? ''))).toBe(ROLLUP_BODY);
+    expect(code(files['wrangler.jsonc'] ?? '')).toMatch(CRON_CONFIG);
+    expect(onlyRollupCron(code(files['wrangler.jsonc'] ?? ''))).toBe(true);
+    expect(offences(files)).toEqual([]);
+    for (const name of ROLLUP_FILES) {
+      expect(Object.keys(files), name).toContain(name);
+      expect(code(files[name] ?? ''), name).not.toMatch(LEDGER_NAME);
+    }
+    // The name guard cannot fall behind the ledger tables the delete guard knows: each must match.
+    for (const table of ['deposits', 'contributors', 'raw_objects']) {
+      expect(LEDGER_NAME.test(table), table).toBe(true);
+      expect(new RegExp(`^${LEDGER_TABLE}$`, 'i').test(table), `${table} is a LEDGER_TABLE`).toBe(true);
+    }
+    // A handler that does not run the rollup, or one in another file, is still an offence.
+    expect(offences({ 'src/worker.ts': 'export default { scheduled(event, env) { sweep(env); } }' })).toEqual(['src/worker.ts: a scheduled handler']);
+    const handler = (statements: string): string => `export default { scheduled: async (controller: { scheduledTime: number }, env: Env): Promise<void> => { ${statements} } }`;
+    expect(offences({ 'src/other.ts': handler(ROLLUP_BODY) })).toEqual(['src/other.ts: a scheduled handler']);
+    expect(offences({ 'src/worker.ts': handler(ROLLUP_BODY) })).toEqual([]);
+    expect(offences({ 'src/worker.ts': 'export default { scheduled(controller, env) { await rollupRecent(env, controller.scheduledTime); } }' })).toEqual([]);
+    // A handler that also runs another job, or runs the rollup with a nested block, is an offence however it is ordered.
+    expect(offences({ 'src/worker.ts': handler(`${ROLLUP_BODY} sweep(env);`) })).toEqual(['src/worker.ts: a scheduled handler']);
+    expect(offences({ 'src/worker.ts': handler(`sweep(env); ${ROLLUP_BODY}`) })).toEqual(['src/worker.ts: a scheduled handler']);
+    expect(offences({ 'src/worker.ts': handler(`if (env.DB) { ${ROLLUP_BODY} }`) })).toEqual(['src/worker.ts: a scheduled handler']);
+    // A second handler after the rollup's own is an offence, though the first one is exact.
+    expect(offences({ 'src/worker.ts': `${handler(ROLLUP_BODY)}\nconst again = { scheduled(event, env) { sweep(env); } };` })).toEqual(['src/worker.ts: a scheduled handler']);
+    expect(offences({ 'src/worker.ts': 'export default { fetch }' })).toEqual([]);
+    // The cron list is exactly the rollup's one entry.
+    expect(offences({ 'wrangler.jsonc': '{ "triggers": { "crons": ["17 3 * * *"] } }' })).toEqual([]);
+    expect(offences({ 'wrangler.jsonc': '{ "triggers": { "crons": ["17 3 * * *", "0 * * * *"] } }' })).toEqual(['wrangler.jsonc: a cron trigger']);
+    expect(offences({ 'wrangler.jsonc': '{ "triggers": { "crons": ["0 * * * *"] } }' })).toEqual(['wrangler.jsonc: a cron trigger']);
+    expect(offences({ 'wrangler.jsonc': '{ "triggers": { "crons": ["17 3 * * *"] }, "env": { "x": { "triggers": { "crons": ["5 * * * *"] } } } }' })).toEqual(['wrangler.jsonc: a cron trigger']);
+    expect(offences({ 'wrangler.jsonc': '{ "triggers": { "crons": "17 3 * * *" } }' })).toEqual(['wrangler.jsonc: a cron trigger']);
+    expect(offences({ 'src/other.json': '{ "crons": ["0 3 * * *"] }' })).toEqual(['src/other.json: a cron trigger']);
   });
 
   it('reads a source file in a subfolder of src', () => {
