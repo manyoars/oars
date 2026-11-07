@@ -12,6 +12,7 @@ import { defaultConfigDir } from '../credentials.js';
 import { slugOf } from '../sessions/allow.js';
 import { indexPath, type HookIndex } from '../sessions/hook-index.js';
 import { runHook } from '../sessions/hooks.js';
+import type * as RecallPush from '../sessions/recall-push.js';
 import { armOf } from '../sessions/recall-object.js';
 import { toolShapeId, type RecallRead } from '../sessions/recall-reads.js';
 import { deposit } from '../sessions/store.js';
@@ -20,14 +21,14 @@ import { emitFor, type Emit } from './emit.js';
 import { readSpool } from './spool.js';
 
 // A push's frame names claude-code today (`harnessOf({})`); this stands in for a push made under another harness, so the test can show the frame's harness is the one the hook event carries.
-const pushed = vi.hoisted(() => ({ harness: undefined as string | undefined }));
+const pushed = vi.hoisted(() => ({ harness: '' }));
 vi.mock('../sessions/recall-push.js', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('../sessions/recall-push.js')>();
+  const actual = await importOriginal<typeof RecallPush>();
   return {
     ...actual,
     pushRecall: async (input: Parameters<typeof actual.pushRecall>[0]) => {
       const recall = await actual.pushRecall(input);
-      return recall === undefined || recall.frame === null || pushed.harness === undefined ? recall : { ...recall, frame: { ...recall.frame, harness: pushed.harness } };
+      return recall === undefined || recall.frame === null || pushed.harness === '' ? recall : { ...recall, frame: { ...recall.frame, harness: pushed.harness } };
     },
   };
 });
@@ -35,7 +36,7 @@ vi.mock('../sessions/recall-push.js', async (importOriginal) => {
 const roots: string[] = [];
 afterEach(() => {
   cleanup();
-  pushed.harness = undefined;
+  pushed.harness = '';
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 
