@@ -5,6 +5,7 @@ import { fetchBundle, harnessRequired } from './bundle.js';
 import { covenantAccept, covenantNotAccepted, covenantStatus, depositsClosed, hasAccepted } from './covenant.js';
 import { answer, bound, brake, notConfigured, refuse, type Env } from './http.js';
 import { receivePart } from './parts.js';
+import { recount, repoKeysOf, signalStatements } from './cluster-store.js';
 import { incrementsOf, incrementStatements, markOf, netCellCount, previousOf } from './ingest.js';
 import { accountOf, login } from './identity.js';
 import { hashHosts, hashKey } from './ingest-hash.js';
@@ -79,7 +80,12 @@ const storeDeposit = async (env: Env, account: string, secret: string, text: str
   )
     .bind(account, skeleton.id, stored, DELTAS, tier, countedAt, ingest, skeleton.format, skeleton.vocabVersion, skeleton.fieldsVersion, bag, others, account, limit ?? UNLIMITED, account, skeleton.id, account, skeleton.id, new TextEncoder().encode(stored).length + new TextEncoder().encode(DELTAS).length + new TextEncoder().encode(bag).length, budget ?? UNLIMITED, written > 0 ? 1 : 0, previous?.ingest ?? '');
   // The row and every increment it writes are one transaction; the increments are guarded by the row's `ingest` mark, so a refused deposit writes none of them.
-  const [inserted] = await env.DB.batch([insert, ...incrementStatements(env, account, skeleton.id, ingest, new Date().toISOString().slice(0, 10), next, previous?.increments)]);
+  const arrived = new Date();
+  const [inserted] = await env.DB.batch([
+    insert,
+    ...incrementStatements(env, account, skeleton.id, ingest, arrived.toISOString().slice(0, 10), next, previous?.increments),
+    ...signalStatements(env, account, [account, skeleton.id, ingest], arrived, repoKeysOf(skeleton)),
+  ]);
   if ((inserted?.meta.changes ?? 0) === 0) {
     // The upsert changes nothing in two cases: a brake refused the row, or another deposit of this session set the row after this one read it. Only the second leaves a row with another mark than the one read.
     const held = await markOf(env, account, skeleton.id);
@@ -88,6 +94,9 @@ const storeDeposit = async (env: Env, account: string, secret: string, text: str
     const set = [...(limit === undefined ? [] : [`${String(limit)} deposits`]), ...(budget === undefined ? [] : [`${String(budget)} stored bytes`])];
     return refuse(403, 'deposit_limit', `An operator's brake holds this account to at most ${set.join(' and ')}.`);
   }
+  // The counts the floors compare are clusters of accounts, not accounts (t937): taken once the row and its contributor records are committed, for the cells and strata this batch holds.
+  await recount(env, 'cell', [...next.cells.keys()]);
+  await recount(env, 'stratum', [...next.strata.keys()]);
   return answer(201, { ok: true, id: skeleton.id });
 };
 
