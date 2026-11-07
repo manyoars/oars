@@ -34,8 +34,8 @@ export interface Cell {
    * `usageObserved` is not a measurement). Null when no session recorded any: absent, never a measured 0.
    */
   tokens: number | null;
-  /** How many of `sessions` the `tokens` figure covers; less than `sessions` makes it a partial sum. */
-  tokenSessions: number;
+  /** How many of `sessions` the `tokens` figure covers; less than `sessions` makes it a partial sum. Absent on a cell read back from the pool's stored sums, which carry no coverage count. */
+  tokenSessions?: number;
   durationMs: number;
   /** Whether these counts sit inside a shown recall's consequence window, wholly or in part. It is part of the cell's key, so a motif's exposed and unexposed counts stay apart. */
   exposed: boolean;
