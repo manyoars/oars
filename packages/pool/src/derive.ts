@@ -113,6 +113,7 @@ export const bundleOf = (harness: Harness, harnessVersion: string, stored: Store
     harness,
     harnessVersion,
     vocabVersion: VOCAB_VERSION,
+    floor: floors.public,
     asOf: { pool: pool.version, day: pool.lastDay },
     cells: bundled,
     motifs: motifs.filter((motif) => named.has(motif.motifId)),

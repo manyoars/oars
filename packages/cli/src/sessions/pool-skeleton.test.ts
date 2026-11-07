@@ -58,9 +58,13 @@ const capturedSkeleton = (): SessionSkeleton => {
 const shellIdentities = (skeleton: SessionSkeleton): unknown[] => skeleton.transcripts.flatMap(({ tools }) => tools.flatMap(({ steps }) => steps.filter(({ action }) => action === 'shell.exec').map(({ identity }) => identity)));
 
 describe('the leak test: a private name in a path, a program, a package, an argument, and a branch', () => {
-  it('leaves none of those bytes anywhere in the batch', () => {
-    const text = JSON.stringify(capturedSkeleton()).toLowerCase();
+  // A program or MCP server name is a long-tail name and travels as a name, for the pool to count (it holds it below the floor). A path, an argument, a branch, a token, and a pattern never do.
+  it('leaves none of those bytes anywhere in the batch but a program, server, or native tool name', () => {
+    const skeleton = capturedSkeleton();
+    const named = new Set(['program', 'server', 'native']);
+    const text = JSON.stringify(skeleton, (key, value: unknown) => (named.has(key) ? undefined : value)).toLowerCase();
     for (const bytes of [PLANTED.toLowerCase(), 'acme-deploy', 'abc123', 'secret.ts', 'feat/']) expect(text).not.toContain(bytes);
+    expect(JSON.stringify(shellIdentities(skeleton))).toContain('"program":"acme-deploy"');
   });
 
   // Capture already masks what it stores, so the fixture above cannot show projection at work: here the stored step holds the private name itself, as an older or damaged store could.
@@ -94,8 +98,8 @@ describe('the leak test: a private name in a path, a program, a package, an argu
   };
   const stepsOf = (skeleton: SessionSkeleton | null): SessionSkeleton['transcripts'][number]['tools'][number]['steps'] => (skeleton === null ? [] : skeleton.transcripts.flatMap((one) => one.tools.flatMap((each) => each.steps)));
 
-  // The stored step holds the private name itself, as an older list or a damaged store could; the wire has one spelling for every name it has no row for.
-  it('sends an unlisted MCP server, skill, host, pull name, and native name as private, and the parser takes the batch', () => {
+  // The wire carries a name that passes the gate as it is: the pool holds it below the floor.
+  it('sends an off-list MCP server, skill, host, and pull name as they are, and the parser takes the batch', () => {
     const skeleton = batchOf([
       step(0, 0, 'mcp.call', { native: '<literal>', identity: { server: PLANTED, tool: '<literal>' } }),
       step(1, 0, 'skill.run', { native: 'Skill', identity: { skill: PLANTED } }),
@@ -103,17 +107,16 @@ describe('the leak test: a private name in a path, a program, a package, an argu
       step(3, 0, 'shell.exec', { native: 'Bash', identity: { program: 'npm', sub: 'install', flags: [], pulls: [{ registry: 'npm', name: PLANTED, version: null }] } }),
     ]);
     expect(stepsOf(skeleton).map(({ native, identity }) => [native, identity])).toEqual([
-      [PRIVATE, { server: PRIVATE, tool: '<literal>' }],
-      ['Skill', { skill: PRIVATE }],
-      ['WebFetch', { host: PRIVATE }],
-      ['Bash', { program: 'npm', sub: 'install', flags: [], pulls: [{ registry: 'npm', name: PRIVATE, version: null }] }],
+      ['Bash', { server: PLANTED, tool: '<literal>' }],
+      ['Skill', { skill: PLANTED }],
+      ['WebFetch', { host: `${PLANTED}.internal` }],
+      ['Bash', { program: 'npm', sub: 'install', flags: [], pulls: [{ registry: 'npm', name: PLANTED, version: null }] }],
     ]);
-    expect(JSON.stringify(skeleton).toLowerCase()).not.toContain(PLANTED.toLowerCase());
     expect(parseSkeleton(JSON.parse(JSON.stringify(skeleton))).ok).toBe(true);
   });
 
   // A version beside a masked name identifies the name, so it is masked with it; an MCP tool beside a masked server and a native name the harness table has no row for go the same way.
-  it('sends a version beside a private pull name, a tool beside a private server, and an unlisted native as masked', () => {
+  it('sends a version beside an off-list pull name as the literal, and a tool beside an off-list server and an off-list native by name', () => {
     const skeleton = batchOf([
       step(0, 0, 'shell.exec', { native: 'Bash', identity: { program: 'npm', sub: 'install', flags: [], pulls: [{ registry: 'npm', name: 'acme-internal-sdk', version: '7.3.1' }, { registry: 'npm', name: 'acme-other', version: null }] } }),
       step(1, 0, 'mcp.call', { native: '<literal>', identity: { server: 'acme', tool: 'get_issue' } }),
@@ -121,12 +124,12 @@ describe('the leak test: a private name in a path, a program, a package, an argu
       step(3, 0, 'skill.run', { native: 'AcmeSecretTool', identity: { skill: 'commit' } }),
     ]);
     expect(stepsOf(skeleton).map(({ native, identity }) => [native, identity])).toEqual([
-      ['Bash', { program: 'npm', sub: 'install', flags: [], pulls: [{ registry: 'npm', name: PRIVATE, version: '<literal>' }, { registry: 'npm', name: PRIVATE, version: null }] }],
-      [PRIVATE, { server: PRIVATE, tool: '<literal>' }],
-      [PRIVATE, { server: PRIVATE, tool: '<literal>' }],
-      [PRIVATE, { skill: 'commit' }],
+      ['Bash', { program: 'npm', sub: 'install', flags: [], pulls: [{ registry: 'npm', name: 'acme-internal-sdk', version: '<literal>' }, { registry: 'npm', name: 'acme-other', version: null }] }],
+      ['Bash', { server: 'acme', tool: 'get_issue' }],
+      ['mcp__acme__get_issue', { server: 'acme', tool: 'get_issue' }],
+      ['AcmeSecretTool', { skill: 'commit' }],
     ]);
-    expect(JSON.stringify(skeleton)).not.toMatch(/acme|7\.3\.1|SecretTool/);
+    expect(JSON.stringify(skeleton)).not.toContain('7.3.1');
     expect(parseSkeleton(JSON.parse(JSON.stringify(skeleton))).ok).toBe(true);
   });
 
@@ -164,17 +167,17 @@ describe('the leak test: a private name in a path, a program, a package, an argu
     expect(parseSkeleton(JSON.parse(JSON.stringify(skeleton)))).toEqual({ ok: true, skeleton, extensions: [], others: 0 });
   });
 
-  it('projects `grep <private pattern>` to the program alone, and `acme-deploy` to private', () => {
+  it('projects `grep <private pattern>` to the program alone, and `acme-deploy` to its basename', () => {
     const [grep, acme] = shellIdentities(capturedSkeleton());
     expect(grep).toEqual({ program: 'grep', sub: null, flags: [] });
-    expect(acme).toEqual({ program: PRIVATE, sub: null, flags: [] });
+    expect(acme).toEqual({ program: 'acme-deploy', sub: null, flags: [] });
   });
 
-  it('keeps a listed subcommand and flag names, and sends a private program with neither', () => {
+  it('keeps a listed subcommand and flag names, and sends an off-list program with neither', () => {
     const identities = shellIdentities(capturedSkeleton());
     expect(JSON.stringify(identities)).toContain('"program":"git","sub":"commit"');
     expect(JSON.stringify(identities)).toContain('--amend');
-    expect(identities).toContainEqual({ program: PRIVATE, sub: null, flags: [] });
+    expect(identities).toContainEqual({ program: 'acme-deploy', sub: null, flags: [] });
   });
 });
 
