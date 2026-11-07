@@ -6,7 +6,7 @@ import { recordEvent, type TelemetryRuntime } from './record.js';
 /** What recording needs from a run: where the folder is, the environment's switches, the version, and the clock. */
 export interface Emitter {
   env: NodeJS.ProcessEnv;
-  telemetry: TelemetryRuntime | undefined;
+  telemetry?: TelemetryRuntime | undefined;
   version: string;
   now: () => number;
 }
