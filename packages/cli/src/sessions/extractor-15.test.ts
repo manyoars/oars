@@ -179,7 +179,7 @@ describe('EXTRACTOR_VERSION 15 and CAPTURE_VERSION 22', () => {
   it('counts the buckets over the staged store, for the report', async () => {
     const s = staged();
     await deposit(s.runtime, options);
-    // Store totals over `fixtures/proj` plus the eight added sessions (21 prompts, the Codex marker record included). The same sessions with main's capture log are `MAIN_ERA` above (20 prompts).
+    // Store totals over `fixtures/proj` plus the six added sessions (21 prompts, the Codex marker record included). The same sessions with main's capture log are `MAIN_ERA` above (20 prompts).
     expect(countOf(await loadStore(s.storeDir))).toEqual({ none: 5, 'after-error': 0, redo: 0, revert: 2, 'user-stop': 3, unknown: 11 });
   });
 });
