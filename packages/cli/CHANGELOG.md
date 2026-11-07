@@ -23,6 +23,7 @@ All notable changes to `@manyoars/oars`. Versions follow semver; a release is th
 - A hook that the process deadline ends is still recorded (t876): the `hook` event for that fire says `error` with no bytes, written once before the process exits, so the slowest fires reach the spool.
 - Every hook fire records the harness version and model when its transcript states them (t876): the bare `oars gate hook`, `post-tool`, `stop`, and a `pre-tool` miss now read them from the tail of the input's `transcript_path`, the same bounded read a push uses. The path itself is never recorded.
 - A fetch the pool refuses, and a bundle that fails verification, now record a `fetch` event too (t876): both reached the pool, so `fetches` counts them, with no `reads`. Exit codes are unchanged.
+- A 304 to a `oars pool fetch` that named no kept bundle now records its `fetch` event before it fails, so every fetch that reached the pool counts (t876). A hook that reaches its deadline while the transcript is still being read now keeps its event, recorded without the harness version and model (t876).
 
 ## 0.3.0
 
@@ -64,4 +65,3 @@ Changes since 0.2.0. Four command groups are new (`keys`, `sessions`, `gate`, `p
 ## 0.1.0
 
 - First release: `login`, `logout`, `deploy`, and `status`.
-- A 304 to a `oars pool fetch` that named no kept bundle now records its `fetch` event before it fails, so every fetch that reached the pool counts (t876). A hook that reaches its deadline while the transcript is still being read now keeps its event, recorded without the harness version and model (t876).
