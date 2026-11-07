@@ -85,7 +85,7 @@ export const FIELD_ROWS: { readonly [field: string]: string } = {
   frameworks: 'The frameworks of the project, each from a closed public list; never a path or a name of yours.',
   harness: 'Which harness wrote the session, one of a closed list.',
   harnessVersion: 'The harness version: the name as it is after redaction; `private` when redaction changes it, an exclusion term matches it, it is not a name, or it is over 128 characters. Capture still closes the version, so a real session sends `private` for an off-list one.',
-  host: 'The host of a web fetch or search, only when it is on the public list; else private, or null when the step names no host. The pool replaces a host with a keyed hash on arrival and serves it only once enough accounts report it.',
+  host: 'The host of a web fetch or search, the name as it is after redaction; `private` when redaction changes it, an exclusion term matches it, it is not a name, or it is over 128 characters; null when the step names no host. The pool replaces a host with a keyed hash on arrival and serves it only once enough accounts report it.',
   hour: 'The UTC hour of day, 0 to 23, beside the day; never a minute, a second, or an offset.',
   id: "A hash the client computes per account from the account and the session, so a redeposit replaces and two accounts' sessions cannot be joined. Never the session id.",
   identity: 'What a step called: a shell program with its subcommand and flags, an MCP server and tool, a skill, or a web host, each a name after redaction or `private`; null for an action with none.',
