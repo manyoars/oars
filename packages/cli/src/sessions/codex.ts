@@ -508,7 +508,7 @@ export const rolloutLines = (text: string, fallbackId: string, parentText?: stri
         if (isObj(payload.item)) completed(payload.item, when);
       } else if (kind === 'turn_aborted') {
         // Only `interrupted` is the operator cutting a turn short: `replaced`, `review_ended`, and `budget_limited` are the harness's own (protocol.rs:4580-4585).
-        // It is written as the marker line Claude Code writes, so capture keeps it as a prompt record and the shape counts one interrupt (CAPTURE 21).
+        // It is written as the marker line Claude Code writes, so capture keeps it as a prompt record and the shape counts one interrupt (CAPTURE 22).
         if (payload.reason === 'interrupted') prompted(`${INTERRUPT_MARKER}]`, when);
       } else if (kind === 'agent_message') {
         const message = str(payload.message);

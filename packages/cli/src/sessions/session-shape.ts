@@ -16,7 +16,7 @@ const names = (value: unknown): string[] => (Array.isArray(value) ? value.filter
 
 /** The harness's tool-rejection results, both worded for the operator declining: a classifier or hook denial is policy, and the model carries on. */
 export const REJECTED_RE = /^The user doesn't want to (?:proceed with this tool use|take this action)/;
-/** The harness writes this as a user line when the operator cut a turn short; a rejection is followed by it too, so it is not a second interrupt. The Codex reader writes it for a `turn_aborted` with reason `interrupted` (CAPTURE 21). */
+/** The harness writes this as a user line when the operator cut a turn short; a rejection is followed by it too, so it is not a second interrupt. The Codex reader writes it for a `turn_aborted` with reason `interrupted` (CAPTURE 22). */
 export const INTERRUPT_MARKER = '[Request interrupted by user';
 /**
  * A decline in the fixed text Codex or Gemini CLI writes for a call the operator refused: Codex's `exec command rejected by user` and `patch rejected by user` (events.rs:456-457), and Gemini's `[Operation Cancelled]`
