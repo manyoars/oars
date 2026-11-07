@@ -64,7 +64,7 @@ describe('the count a floor compares', () => {
   it('still clears PUBLIC_FLOOR 5 for five unrelated accounts, and states 5 on every read', async () => {
     await inFreshPool(async (target) => {
       const tokens: string[] = [];
-      for (const id of ['9311', '9312', '9313', '9314', '9315']) tokens.push(await depositor(target, id, [`${id.padStart(16, 'b')}`.slice(-16)]));
+      for (const id of ['9311', '9312', '9313', '9314', '9315']) tokens.push(await depositor(target, id, [id.padStart(16, 'b')]));
       expect(await heldClusters(target)).toEqual([5]);
       const { reads } = await fetched(target, tokens[0] ?? '');
       expect(reads).toBeGreaterThan(0);
