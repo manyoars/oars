@@ -2,6 +2,7 @@ import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
+import { PassThrough } from 'node:stream';
 import { afterEach, describe, expect, it } from 'vitest';
 import { run } from '../cli.js';
 import { ExitCode } from '../errors.js';
@@ -448,7 +449,7 @@ describe('the nightly task on a plain install', () => {
   });
 
   // `--schedule off` is recorded in the sessions store, so a later plain install honors it instead of registering the task again.
-  const withStore = (dir: string, platform: NodeJS.Platform = 'win32') => ({ sessions: { storeDir: join(dir, 'store'), projectsRoot: join(dir, 'projects'), stdin: '', stdout: { write: () => undefined } }, install: runtimeIn(dir, 0, platform), now: () => 0 });
+  const withStore = (dir: string, platform: NodeJS.Platform = 'win32') => ({ sessions: { storeDir: join(dir, 'store'), projectsRoot: join(dir, 'projects'), stdin: new PassThrough(), stdout: { write: () => undefined } }, install: runtimeIn(dir, 0, platform), now: () => 0 });
 
   it('a plain install after --schedule off makes no /Create call', async () => {
     const dir = scratch();
