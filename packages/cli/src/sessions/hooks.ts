@@ -184,6 +184,17 @@ export const hookRuntime = (
   ...io,
 });
 
+/** What the nightly run records with, and nothing for any other hook: the telemetry folder sits beside the session store under the config directory, so `oars telemetry` and the nightly run read and write the same one. The version is read only for the nightly run, so the per-tool hooks never touch the manifest. */
+export const nightlyTelemetry = (
+  event: HookEvent,
+  env: NodeJS.ProcessEnv,
+  platform: NodeJS.Platform,
+  home: string,
+  version: () => string,
+  now: () => number,
+): NightlyTelemetry | undefined =>
+  event === 'nightly' ? { env, telemetry: { dir: join(defaultConfigDir(env, platform, home), 'oars', 'telemetry'), platform }, version: version(), now } : undefined;
+
 /**
  * Runs one hook. It never fails or blocks the session it runs in: whatever happens, it resolves (the process exits 0), and the
  * hook-call line records the outcome, with the failure's first line when there was one, so the record is evidence, not a claim.
