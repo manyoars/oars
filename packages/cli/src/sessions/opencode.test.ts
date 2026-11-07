@@ -27,6 +27,7 @@ const capture = (transcript: string, session: string) =>
   captureSession({
     text: transcript,
     session,
+    harness: 'opencode',
     project: 'p',
     rev: 1,
     at: '2026-01-01T00:00:00Z',
