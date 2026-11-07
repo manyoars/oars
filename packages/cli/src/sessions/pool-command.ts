@@ -10,13 +10,13 @@ import { makeCoverage, readCoverageSetting, writeCoverageSetting } from './cover
 import { checkSession, exclusionPaths, lastWritten, loadTerms, type Reason } from './exclusion.js';
 import { makeRedactor } from './redact.js';
 import { recordSend, recordWire, newTally, tallyBatch } from '../telemetry/wire.js';
-import { discardStale, FIELD_ROWS, fieldsOf, heldBatches, lockedBatch, markShown, outboxFolder, partsOf, removeBatchesExcept, removeBatchOf, staleBatches, unchangedBytes, writeBatch, type LockRefusal } from './pool-outbox.js';
-import { HARNESSES, hasEnded, ORG_SIZES, REPO_VISIBILITIES, SESSION_IDLE_HOURS, isBundleVersion, isHarness, parseSkeleton, sessionsOf, skeletonOf, VOCAB_VERSION, verifyBundle, type SessionRecords, type TranscriptRoot, type WireGate } from './pool-wire.js';
+import { discardStale, FIELD_ROWS, fieldsOf, heldBatches, isMissing, lockedBatch, markShown, outboxFolder, partsOf, removeBatchesExcept, removeBatchOf, staleBatches, unchangedBytes, writeBatch, type LockRefusal } from './pool-outbox.js';
+import { HARNESSES, hasEnded, ORG_SIZES, REPO_VISIBILITIES, SESSION_IDLE_HOURS, isBundleVersion, isHarness, parseSkeleton, sessionsOf, skeletonOf, VOCAB_VERSION, verifyBundle, type BundleFloors, type SessionRecords, type TranscriptRoot, type WireGate } from './pool-wire.js';
 import { carriedDeltas, markDeltasSent, placedOf, sentDeltas } from './pool-delta.js';
 import { Masker, printed, TRANSPORT_HEADERS, waitWords, type Outgoing } from './pool-print.js';
 import { shellReader } from './projection.js';
 import { isVocabularyExpired, REGISTRY_MAX_AGE_DAYS, VOCAB_SNAPSHOT_DATE } from './public-vocabulary.js';
-import { contentHash } from './read.js';
+import { contentHash, FIRST_ORDER_FAMILIES } from './read.js';
 import { isObject, keptReplica, loadSignIns, numberIn, replicaFile, signInOf, signInsFile, textIn, type SignIn } from './pool-replica.js';
 import { harnessOf as sessionHarness, type Harness } from './schema.js';
 import { loadStore, readRedactDomains, readSaved, readSkeletons, type SessionsRuntime } from './store.js';
@@ -497,6 +497,18 @@ export const poolOutbox = async (deps: RunDeps, options: { server?: string | und
   return { document: { ok: true, server, batches: shown, edited, stale }, text };
 };
 
+/**
+ * What the pool says it served a bundle at, printed as the bundle states it: the client holds no floor of its own and applies none (a floor is the pool's deploy setting), so a bundle that states none prints nothing.
+ * A family on a floor of its own is named with it, but only a family this client knows: a key the pool adds later parses and travels in `--json`, and no pool-supplied string reaches the terminal.
+ */
+const floorSentence = (floors: BundleFloors | undefined): string => {
+  if (floors === undefined) return '';
+  const own = Object.entries(floors.families ?? {})
+    .filter(([family]) => FIRST_ORDER_FAMILIES.some((known) => known === family))
+    .map(([family, floor]) => `${family} at ${String(floor)}`);
+  return ` The pool served it at a public floor of ${String(floors.public)} clusters and a disclosure floor of ${String(floors.disclosure)}${own.length === 0 ? '' : `, with ${own.join(' and ')}`}.`;
+};
+
 /** The weekly cap, as a failure of its own code: the bundle on disk is untouched, and the words say when the pool will answer again. */
 const cappedError = (deps: RunDeps, reply: Reply, kept: boolean): CliError => {
   const retryAfter = reply.headers.get('retry-after');
@@ -554,11 +566,11 @@ export const poolFetch = async (deps: RunDeps, options: { server?: string | unde
       emit('fetch', { harness, fetches: 1 });
       throw new CliError('The pool answered 304 to a fetch that named no kept bundle.', ExitCode.UNEXPECTED, FETCH);
     }
-    const { cells, motifs, reads, asOf } = kept.bundle;
+    const { cells, motifs, reads, asOf, floors } = kept.bundle;
     emit('fetch', { harness, fetches: 1, etagHits: 1, reads: reads.length });
     return {
-      document: { ok: true, server, harness, harnessVersion, file, unchanged: true, cells: cells.length, motifs: motifs.length, reads: reads.length, asOf },
-      text: `${harness} ${harnessVersion} is unchanged: the bundle at ${file} is still current (${String(reads.length)} reads, ${String(cells.length)} cells, and ${String(motifs.length)} motifs).`,
+      document: { ok: true, server, harness, harnessVersion, file, unchanged: true, cells: cells.length, motifs: motifs.length, reads: reads.length, asOf, ...(floors === undefined ? {} : { floors }) },
+      text: `${harness} ${harnessVersion} is unchanged: the bundle at ${file} is still current (${String(reads.length)} reads, ${String(cells.length)} cells, and ${String(motifs.length)} motifs).${floorSentence(floors)}`,
     };
   }
   // A refused fetch and a bundle that fails verification both reached the pool, so each is a fetch; only the success adds reads.
@@ -576,11 +588,11 @@ export const poolFetch = async (deps: RunDeps, options: { server?: string | unde
   await mkdir(dirname(file), { recursive: true });
   await writeFile(file, `${JSON.stringify({ ...(isObject(reply.body) ? reply.body : {}), ...(etag === null ? {} : { etag }) })}
 `);
-  const { cells, motifs, reads, asOf } = verified.bundle;
+  const { cells, motifs, reads, asOf, floors } = verified.bundle;
   emit('fetch', { harness, fetches: 1, reads: reads.length });
   return {
-    document: { ok: true, server, harness, harnessVersion, file, unchanged: false, cells: cells.length, motifs: motifs.length, reads: reads.length, asOf },
-    text: `Fetched ${harness} ${harnessVersion}: ${String(reads.length)} reads, ${String(cells.length)} cells, and ${String(motifs.length)} motifs, verified against the pinned key and kept at ${file}.`,
+    document: { ok: true, server, harness, harnessVersion, file, unchanged: false, cells: cells.length, motifs: motifs.length, reads: reads.length, asOf, ...(floors === undefined ? {} : { floors }) },
+    text: `Fetched ${harness} ${harnessVersion}: ${String(reads.length)} reads, ${String(cells.length)} cells, and ${String(motifs.length)} motifs, verified against the pinned key and kept at ${file}.${floorSentence(floors)}`,
   };
 };
 

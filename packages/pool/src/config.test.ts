@@ -5,8 +5,10 @@ import { fieldOf, wranglerConfig } from './test-pool.js';
 describe('wrangler.jsonc', () => {
   const { parsed, text } = wranglerConfig();
 
-  it('commits no account id, route, custom domain, or plain variable', () => {
-    for (const key of ['account_id', 'route', 'routes', 'vars', 'workers_dev', 'env', 'preview_urls']) expect(fieldOf(parsed, key), key).toBeUndefined();
+  it('commits no account id, route, custom domain, or plain variable but the two public floors', () => {
+    for (const key of ['account_id', 'route', 'routes', 'workers_dev', 'env', 'preview_urls']) expect(fieldOf(parsed, key), key).toBeUndefined();
+    // A floor is public by design (it is stated in every bundle), so it is a plain variable; `floors.test.ts` holds these to the defaults in the code.
+    expect(Object.keys(fieldOf(parsed, 'vars') ?? {}).sort()).toEqual(['DISCLOSURE_FLOOR', 'PUBLIC_FLOOR']);
     expect(text).not.toMatch(/manyoars\.com|\.workers\.dev/);
   });
 

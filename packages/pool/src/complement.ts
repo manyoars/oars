@@ -4,6 +4,7 @@
 // pool still serves what it can. The environment cells (`ENVIRONMENT_CELLS`, `stored.ts`) keep their own rule, every part served or the total is not, and their counterparts are also dropped when a bucket cell is withheld (`bundleOf`).
 import { weekStartOf, type Cell } from '../../cli/src/sessions/cells.js';
 import type { Motif } from '../../cli/src/sessions/motif.js';
+import { clears, clustersOf } from './floors.js';
 
 interface Family {
   whole: Cell | null;
@@ -13,7 +14,7 @@ interface Family {
 const compare = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
 
 /** The fewest accounts first, then the earliest day, then the motif, so the choice is the same for the same cells. */
-const smallest = (a: Cell, b: Cell): number => a.clusters - b.clusters || compare(a.day, b.day) || compare(a.motifId, b.motifId);
+const smallest = (a: Cell, b: Cell): number => clustersOf(a) - clustersOf(b) || compare(a.day, b.day) || compare(a.motifId, b.motifId);
 
 const familyOf = (families: Map<string, Family>, key: string): Family => {
   const known = families.get(key);
@@ -47,9 +48,9 @@ export const withheldOf = (held: readonly Cell[], motifs: readonly Motif[], floo
   for (let changed = true; changed; ) {
     changed = false;
     for (const { whole, parts } of families) {
-      if (whole === null || whole.clusters < floor || withheld.has(whole)) continue;
-      if (!parts.some((part) => part.clusters < floor) || parts.some((part) => withheld.has(part))) continue;
-      const [next] = parts.filter((part) => part.clusters >= floor).sort(smallest);
+      if (whole === null || !clears(whole, floor) || withheld.has(whole)) continue;
+      if (!parts.some((part) => !clears(part, floor)) || parts.some((part) => withheld.has(part))) continue;
+      const [next] = parts.filter((part) => clears(part, floor)).sort(smallest);
       if (next === undefined) continue;
       withheld.add(next);
       changed = true;
