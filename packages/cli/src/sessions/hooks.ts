@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { performance } from 'node:perf_hooks';
 import { defaultConfigDir } from '../credentials.js';
 import { noEmit, type Emit } from '../telemetry/emit.js';
-import { frameWords, recallFields } from '../telemetry/fields.js';
+import { frameWords, HOOK_HARNESS, recallFields } from '../telemetry/fields.js';
 import { cursorRoot } from './cursor.js';
 import { SOURCES, sourceLabel } from './sources.js';
 import { signatureOf } from './extract.js';
@@ -255,7 +255,8 @@ export const runHook = async (
     latencyMs: ms,
     outcome: failed ? 'error' : recall?.arm === 'held' ? 'held' : outcome.hit ? 'hit' : 'miss',
     bytes: Buffer.byteLength(outcome.output ?? ''),
-    ...frameWords(recall?.frame?.harnessVersion ?? stated?.harnessVersion, recall?.frame?.model ?? outcome.model ?? stated?.model),
+    // The nightly is the scheduled task, not a harness's hook: it names no harness.
+    ...frameWords(event === 'nightly' ? undefined : recall?.frame?.harness ?? HOOK_HARNESS, recall?.frame?.harnessVersion ?? stated?.harnessVersion, recall?.frame?.model ?? outcome.model ?? stated?.model),
   });
   // A push is a recall: its read is the `fit` family, and its arm is the exposure record, as a count of one.
   if (recall !== undefined) emit('recall', recallFields(recall, ['fit']));
