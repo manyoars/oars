@@ -31,7 +31,7 @@ export class SendLockBusy extends Error {
 // EEXIST means another run holds the file. On Windows an open of a file whose delete is still pending (the holder just released it) answers EPERM or EACCES instead: the same contention, so retry within waitMs.
 const contended = (error: unknown, platform: NodeJS.Platform): boolean => {
   if (!(error instanceof Error)) return false;
-  const code = Reflect.get(error, 'code');
+  const code: unknown = Reflect.get(error, 'code');
   return code === 'EEXIST' || (platform === 'win32' && (code === 'EPERM' || code === 'EACCES'));
 };
 
