@@ -59,6 +59,8 @@ rather than read row by row.
 | C59 | `packages/cli/README.md:115` | the names that leave in pool skeletons are skill, model, harness version, tool, and MCP server names | the wire also carries effort, a shell call's program, subcommand, and flag names, and tool-input key names (`sessions/pool-wire.ts:746`, `:753`, `:928`; `CHANGELOG.md:21`, `:24`) | misleading (understates; fixed) |
 | C60 | `CHANGELOG.md:16` (t903 bullet) | the names leave only through `pool deposit`'s gate, and `pool outbox` prints every byte | the nightly task sends batches it built in the same run without printing them (as C6) | false (fixed) |
 | C61 | `CHANGELOG.md:52` (format 3 bullet) | "Nothing is sent" | the same release ships the nightly send | false (cut) |
+| C62 | `docs/gate.md:134` | the `## Measured` heading and its note about removed figures | the section holds no measurement; the note describes text that is gone | misleading (heading renamed, note cut) |
+| C63 | `packages/pool/package.json:5` | the pool takes session skeletons only | it also takes raw copies (`/v1/raw`) and telemetry (`/v1/telemetry`) | false as worded (fixed) |
 | C39 | `docs/pool.md:7` | the default pool is not deployed yet; a command that reaches it exits 8; a redirect is refused | `errors.ts:91` (unreachable is exit 8), `pool-command.ts:188` `redirect: 'error'` | true |
 | C40 | `docs/sessions-store.md:186` | the store uploads nothing, and telemetry carries nothing from the store | `store-health` carries counts and sizes of the store (`docs/telemetry.md` "store-health"); the pool commands and the nightly send skeletons built from it | false |
 | C41 | `docs/gate.md:134-144` | "Measured": figures from one run over one Windows machine's harness folder | figures from one person's machine; not reproducible from the repository | cannot back |
@@ -114,3 +116,5 @@ stated wherever the default pool or `login.manyoars.com` is named as a destinati
 | C59 | `packages/cli/README.md:115` lists every name class the wire carries |
 | C60 | `CHANGELOG.md:16`: "... only in pool batches built through `pool deposit`'s one gate ..., sent by `deposit --send` or the nightly task, and `pool outbox` prints what is queued when you run it" |
 | C61 | `CHANGELOG.md:52`: "Nothing is sent: " cut |
+| C62 | `docs/gate.md`: heading "What a reading of real transcripts changed", the removed-figures sentence cut |
+| C63 | `packages/pool/package.json`: "takes closed-vocabulary session skeletons, redacted raw copies, and CLI telemetry, and serves signed reads" |
