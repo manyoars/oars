@@ -105,8 +105,8 @@ describe('a holder that lost the store lock', () => {
     seams.open = (file) => {
       if (boundary !== 'state.json' || !stateWritten || !file.endsWith('store.lock')) return;
       checksAfterState++;
-      // The first check protects pending cleanup; the second is compaction's rename fence.
-      if (checksAfterState !== 2) return;
+      // The first check protects pending cleanup, the second is compaction's temp sweep, and the third is its rename fence.
+      if (checksAfterState !== 3) return;
       taken = true;
       secondHolder(staged);
       writeFileSync(index, laterIndex);
@@ -118,9 +118,27 @@ describe('a holder that lost the store lock', () => {
       secondHolder(staged);
       writeFileSync(index, laterIndex);
     };
-    await expect(deposit(staged.runtime, options)).rejects.toThrow('lost the store lock');
+    const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    let written: string[];
+    try {
+      await expect(deposit(staged.runtime, options)).rejects.toThrow('lost the store lock');
+    } finally {
+      written = stderr.mock.calls.map(([text]) => String(text));
+      stderr.mockRestore();
+    }
     expect(taken).toBe(true);
     expect(readFileSync(index, 'utf8')).toBe(laterIndex);
+    // A lost lock must surface from the compaction, not be logged as an ordinary failure and left for refresh's own fence to find.
+    expect(written.filter((text) => text.includes('was not compacted'))).toEqual([]);
+  });
+
+  it('does not sweep temp files when it no longer holds the lock', async () => {
+    const staged = stage();
+    await deposit(staged.runtime, options);
+    const temp = `${paths(staged.storeDir).observations}.4242.tmp`;
+    writeFileSync(temp, 'the later holder is writing this');
+    await expect(withLock(staged.storeDir, () => compactLog(staged.storeDir, 0, () => Promise.resolve(false)))).rejects.toThrow('lost the store lock');
+    expect(readFileSync(temp, 'utf8')).toBe('the later holder is writing this');
   });
 
   it('does not replace the log when it no longer holds the lock', async () => {
