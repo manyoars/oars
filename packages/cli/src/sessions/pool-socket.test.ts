@@ -38,6 +38,7 @@ interface Loopback {
   stop: () => Promise<void>;
 }
 
+// Keeps its socket: the CLI's network sender over a real loopback connection is what these tests cover.
 const listen = async (err: string[]): Promise<Loopback> => {
   const arrivals: Arrival[] = [];
   const answers = new Map<string, Array<(response: ServerResponse) => void>>();

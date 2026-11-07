@@ -13,6 +13,7 @@ import { CAPTURE_VERSION, EXTRACTOR_VERSION, parseStepRow, type StepRow } from '
 import { formatStepCounters, inputKey, newContext, readSteps, runDeposit, runStep, stepCounters, stuckSteps } from './steps.js';
 import type { RecallQuery } from './query.js';
 import { deposit, digest, loadStore, newTrace, refresh } from './store.js';
+import { withoutCells } from './next-fixtures.js';
 import { cleanup, composers, FIXTURES, folders, NOW, stage, stageCursor, type Staged } from './test-support.js';
 
 afterEach(cleanup);
@@ -427,6 +428,7 @@ describe('the steps each hook logs', () => {
 
   it('a lookup hook that finds a recurring signature or a repository history logs matches: 1', async () => {
     const staged = await deposited();
+    await withoutCells(staged.storeDir);
     await runHook('session-start', JSON.stringify({ session_id: 's1', cwd: REPO }), staged.runtime, () => NOW);
     await runHook('post-tool', JSON.stringify({ session_id: 's1', tool_name: 'Bash', error: 'Exit code 2\nbash: -c: line 7: unexpected EOF while looking for matching quote\n' }), staged.runtime, () => NOW);
     const rows = await readSteps(staged.storeDir);

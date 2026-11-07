@@ -164,6 +164,23 @@ describe('the parent link (t869)', () => {
     expect(roundTrip(skeleton)).toEqual(skeleton);
   });
 
+  it('keeps the link of a subagent whose spawner sits on a cycle it is not on', () => {
+    const named = (id: string): ToolObservation[] => linked(id, [20, 21, 22], 5).map((call) => ({ ...call, steps: (call.steps ?? []).map((held) => ({ ...held, parent: 5 })) }));
+    const from = store({
+      sessions: [session('s1', { frame: framed })],
+      subagents: [
+        session('s1~a', { parent: 's1', spawnedIn: 's1~b', agentType: 'Explore', frame: framed }),
+        session('s1~b', { parent: 's1', spawnedIn: 's1~a', agentType: 'Plan', frame: framed }),
+        session('s1~d', { parent: 's1', spawnedIn: 's1~a', agentType: 'Plan', frame: framed }),
+      ],
+      prompts: [prompt('s1', 0, { frame: framed })],
+      tools: [...linked('s1', [3, 5, 8], null), ...named('s1~a'), ...named('s1~b'), ...linked('s1~d', [30, 31, 32], 21)],
+    });
+    const skeleton = skeletonOfStore(from);
+    expect(skeleton.transcripts.map(({ spawnedIn }) => spawnedIn)).toEqual([null, null, null, 1]);
+    expect(roundTrip(skeleton)).toEqual(skeleton);
+  });
+
   it('sends no link for subagents that name each other or themselves, and the parse accepts what it sent', () => {
     const named = (id: string): ToolObservation[] => linked(id, [20, 21, 22], 5).map((call) => ({ ...call, steps: (call.steps ?? []).map((held) => ({ ...held, parent: 5 })) }));
     const from = store({

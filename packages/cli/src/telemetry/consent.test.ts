@@ -82,6 +82,9 @@ describe('the notice', () => {
 
   it('says what is recorded, what is never recorded, what is sent and where, and every switch', () => {
     for (const phrase of ['flag names', 'hook fire, recall, deposit, and fetch', 'counts and closed words', 'install id', 'oars version', 'never', 'Many Oars pool', 'pool server in OARS_POOL_URL', 'Once a night', 'crash', 'never its message', 'oars telemetry show', 'oars telemetry off', 'OARS_TELEMETRY=0', 'DO_NOT_TRACK=1']) expect(NOTICE).toContain(phrase);
+    // The default pool is not deployed (lead 208), and the notice must not claim a destination the code does not reach.
+    expect(NOTICE).toContain('not deployed yet');
+    expect(NOTICE).not.toContain('and only there');
     // Only the store snapshot and the run's cost are nightly: a crash and a deposit's batches are recorded when they happen, and the notice must not say otherwise.
     const nightly = NOTICE.slice(NOTICE.indexOf('Once a night'), NOTICE.indexOf('.', NOTICE.indexOf('Once a night')) + 1);
     expect(nightly).toBe('Once a night it also records counts and sizes of the session store and what the run cost.');

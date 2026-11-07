@@ -31,9 +31,9 @@ const candidatesOf = async (storeDir: string): Promise<Candidate[]> => {
   return found.sort((a, b) => b.modified - a.modified);
 };
 
-/** The newest kept bundle that still verifies against the key pinned for its server; undefined when none was fetched or none verifies. */
+/** The newest kept bundle that still verifies against the key pinned for its server; undefined when none was fetched or none verifies. An unreadable sign-ins file stops the command (`loadSignIns`) and is not read as no bundle. */
 export const lastFetchedBundle = async (storeDir: string): Promise<Bundle | undefined> => {
-  const keys = await loadSignIns(storeDir, 'books').catch(() => []);
+  const keys = await loadSignIns(storeDir, 'books');
   for (const { file, server, harness, version } of await candidatesOf(storeDir)) {
     const key = keys.find((entry) => contentHash(entry.server) === server)?.signingKey;
     if (key === undefined || !isHarness(harness)) continue;
@@ -64,7 +64,7 @@ export const booksLines = (bundle: Bundle | undefined): string[] => {
   return bundle.books === undefined ? ['the last fetched bundle carries no pool books; run oars pool fetch again'] : linesOf(bundle.books);
 };
 
-/** The totals as flat numbers for the health batch to read (t877); a field with no source is null and never 0, and a bundle with no books gives null. */
+/** The totals as flat numbers for the health batch to read; a field with no source is null and never 0, and a bundle with no books gives null. */
 export interface BooksTotals {
   /** Lineage (section 17 rule 6): the floor the served count was held to, the day it was as of, and the day the panel was counted, which a 304 can leave days old. */
   floor: number;
