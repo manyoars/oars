@@ -9,7 +9,7 @@ import { defaultConfigDir } from '../credentials.js';
 import { ExitCode } from '../errors.js';
 import { readSpool } from '../telemetry/spool.js';
 import { harness, server, useServer, type Harness } from '../test-support.js';
-import { networkSender, poolDeposit, poolServer, type Reply, type Sender } from './pool-command.js';
+import { DEFAULT_POOL_URL, networkSender, poolDeposit, poolServer, type Reply, type Sender } from './pool-command.js';
 import { batchHash, canonicalBytes, FIELD_ROWS, fieldsOf, writeBatch } from './pool-outbox.js';
 import type { Outgoing } from './pool-print.js';
 import { REGISTRY_MAX_AGE_DAYS, VOCAB_SNAPSHOT_DATE } from './public-vocabulary.js';
@@ -158,10 +158,11 @@ const capture = (scene: Scene): Promise<unknown> => deposit(scene.staged.runtime
 
 const at = (value: unknown, name: string): unknown => (typeof value === 'object' && value !== null ? Reflect.get(value, name) : undefined);
 
-describe('the pool server is always named', () => {
-  it('has no default, and takes a flag over the environment', () => {
-    expect(() => poolServer({}, 's')).toThrow(/--server or OARS_POOL_URL/);
-    expect(() => poolServer({ OARS_POOL_URL: '' }, 's')).toThrow(/no default/);
+describe('the pool server', () => {
+  it('defaults to the Many Oars pool, and takes a flag over the environment over the default', () => {
+    expect(DEFAULT_POOL_URL).toBe('https://pool.manyoars.com');
+    expect(poolServer({}, 's')).toBe(DEFAULT_POOL_URL);
+    expect(poolServer({ OARS_POOL_URL: '' }, 's')).toBe(DEFAULT_POOL_URL);
     expect(poolServer({ OARS_POOL_URL: 'https://from-env.test' }, 's')).toBe('https://from-env.test');
     expect(poolServer({ OARS_POOL_URL: 'https://from-env.test' }, 's', 'https://from-flag.test')).toBe('https://from-flag.test');
   });
@@ -177,11 +178,11 @@ describe('the pool server is always named', () => {
     for (const hidden of ['https://user:pass@pool.test', 'https://pool.test/path', 'https://pool.test/?q=1', 'https://pool.test/#f']) expect(() => poolServer({}, 's', hidden)).toThrow(/origin only/);
   });
 
-  it('every command exits as a usage error with no server named, and sends nothing', async () => {
+  it('with no server named, a command asks for a sign-in to the Many Oars pool, and sends nothing', async () => {
     const scene = setting();
-    expect(await scene.cli('pool', 'login', '--provider', 'github')).toBe(ExitCode.USAGE);
-    expect(await scene.cli('pool', 'deposit')).toBe(ExitCode.USAGE);
-    expect(await scene.cli('pool', 'fetch')).toBe(ExitCode.USAGE);
+    expect(await scene.cli('pool', 'deposit')).toBe(ExitCode.AUTH);
+    expect(await scene.cli('pool', 'fetch', '--harness-version', '2.1.0')).toBe(ExitCode.AUTH);
+    expect(scene.h.err.join('')).toContain(DEFAULT_POOL_URL);
     expect(scene.seen).toEqual([]);
   });
 
@@ -964,8 +965,9 @@ describe('the pool request that gets no answer', () => {
 describe('oars pool outbox', () => {
   it('asks for a sign-in, and names the server', async () => {
     const scene = setting();
-    expect(await scene.cli('pool', 'outbox')).toBe(ExitCode.USAGE);
+    expect(await scene.cli('pool', 'outbox')).toBe(ExitCode.AUTH);
     expect(await scene.cli('pool', 'outbox', '--server', POOL)).toBe(ExitCode.AUTH);
+    expect(scene.h.err.join('')).toContain(DEFAULT_POOL_URL);
   });
 
   it('says so when there is nothing to print', async () => {
@@ -1148,18 +1150,28 @@ describe('oars pool deposit --send', () => {
     expect(scene.seen).toEqual([]);
   });
 
-  it('is disabled from the command line: every check runs, and then it refuses with no request made', async () => {
+  it('sends from the command line once the covenant is accepted, and sends nothing before', async () => {
     const scene = await batched();
     const hash = await printedAndHash(scene);
-    scene.h.err.length = 0;
-    expect(await scene.cli('pool', 'deposit', '--server', POOL, '--send', hash, '--json')).toBe(ExitCode.CONFLICT);
-    expect(scene.document()).toMatchObject({ problem: { code: 'sending_disabled' } });
-    expect(scene.seen).toEqual([]);
-    // The checks do run first: a hash that was never printed is refused for that, not for the disabled send.
+    let accepted = false;
+    on(scene, 'get', '/v1/covenant', () => HttpResponse.json({ version: 'v1', accepted }));
+    on(scene, 'post', '/v1/covenant/accept', () => {
+      accepted = true;
+      return HttpResponse.json({ ok: true, version: 'v1' });
+    });
+    on(scene, 'post', '/v1/deposits', () => HttpResponse.json({ ok: true }, { status: 201 }));
+    // The lock runs first: a hash that was never printed is refused with no request made.
     expect(await scene.cli('pool', 'deposit', '--server', POOL, '--send', '1'.repeat(64), '--json')).toBe(ExitCode.CONFLICT);
     expect(scene.document()).toMatchObject({ problem: { code: 'batch_unknown' } });
-    expect(await scene.cli('pool', 'deposit', '--server', POOL, '--send', hash)).toBe(ExitCode.CONFLICT);
-    expect(scene.h.err.join('')).toContain('waits on the pool covenant');
+    expect(scene.seen).toEqual([]);
+    // Not yet accepted: the covenant is read, and no batch leaves.
+    expect(await scene.cli('pool', 'deposit', '--server', POOL, '--send', hash, '--json')).toBe(ExitCode.AUTH);
+    expect(scene.document()).toMatchObject({ problem: { code: 'covenant_not_accepted' } });
+    expect(scene.seen.map((entry) => new URL(entry.url).pathname)).toEqual(['/v1/covenant']);
+    scene.seen.length = 0;
+    expect(await scene.cli('pool', 'deposit', '--server', POOL, '--send', hash, '--accept-covenant', 'v1', '--json')).toBe(ExitCode.OK);
+    expect(scene.document()).toMatchObject({ ok: true, sent: true, hash });
+    expect(scene.seen.map((entry) => new URL(entry.url).pathname)).toEqual(['/v1/covenant', '/v1/covenant/accept', '/v1/deposits']);
   });
 
   it('sends a deposit again when the pool answers deposit_conflict, and does not count it as a refusal', async () => {
