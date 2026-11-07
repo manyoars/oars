@@ -57,7 +57,7 @@ describe('the tarball npm pack would make', () => {
     );
   });
 
-  it('lists no TypeScript source, no test file, no test support and no live test', () => {
+  it('lists no TypeScript source, no test file, no test support, no compiled fixture and no live test', () => {
     const unwanted = paths.filter(
       (path) =>
         path.startsWith('src/') ||
@@ -65,6 +65,7 @@ describe('the tarball npm pack would make', () => {
         /\.test\.[cm]?[jt]s$/.test(path) ||
         /(^|\/)test-support\.[cm]?[jt]s$/.test(path) ||
         /\.live\.[cm]?[jt]s$/.test(path) ||
+        /(^|\/)[\w-]*fixtures?\.(d\.ts|[cm]?js)$/.test(path) ||
         (/\.[cm]?ts$/.test(path) && !path.endsWith('.d.ts')),
     );
 
