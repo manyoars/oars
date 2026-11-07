@@ -218,6 +218,19 @@ describe('the counting rules', () => {
     expect(fleetCells(five)).toHaveLength(1);
   });
 
+  it('weighs installs equally in a latency cell: one install with 2,000 fires beside four with one each is not the fleet’s percentile', () => {
+    const slow = LATENCY_EDGES.findIndex((edge) => edge >= 1000);
+    const fast = LATENCY_EDGES.findIndex((edge) => edge >= 10);
+    const latency = (index: number, n: number): Entry => ({ metric: 'hook.pre-tool.latency', dimension: 'harnessVersion', value: '2.1.5', kind: 'latency', n, hits: 0, buckets: [[index, n]] });
+    const rows = [row(daysAgo(1), uuid(1), { entries: [latency(slow, 2000)] }), ...[2, 3, 4, 5].map((at) => row(daysAgo(1), uuid(at), { entries: [latency(fast, 1)] }))];
+    expect(fleetCells(rows)).toEqual([expect.objectContaining({ p50: LATENCY_EDGES[fast], p95: LATENCY_EDGES[slow] })]);
+    // The install's own p50 is the slow edge, which the pooled fires would have served.
+    expect(LATENCY_EDGES[fast]).not.toBe(LATENCY_EDGES[slow]);
+    // An install row with no fires weighs nothing.
+    const empty = { ...latency(fast, 0), buckets: [] };
+    expect(fleetCells([...rows, row(daysAgo(1), uuid(6), { entries: [empty] })])).toHaveLength(1);
+  });
+
   it('measures the share of installs still reporting, and the first day the fleet read was served', () => {
     const entries = [entry('2.1.5', 3, 3)];
     // Five installs report from day 30 to day 20 ago; two go on to report in the last week; one more joins.
