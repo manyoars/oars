@@ -221,6 +221,35 @@ export interface OtelSession {
   file: string;
 }
 
+/** The id a trace's own session takes, and the one nested agents build on: the trace id when it is a plain id, else a digest of it. */
+const tracePart = (trace: string): string => (/^[A-Za-z0-9]{1,64}$/.test(trace) ? trace : digest(trace));
+
+/** The conversation each trace names, from the earliest span that names one. */
+const conversationsOf = (spans: readonly Span[]): Map<string, string> => {
+  const conversationOf = new Map<string, string>();
+  for (const span of [...spans].sort((a, b) => (a.start ?? a.end ?? 0) - (b.start ?? b.end ?? 0))) {
+    const conversation = str(span.attrs['gen_ai.conversation.id']);
+    if (conversation !== undefined && !conversationOf.has(span.trace)) conversationOf.set(span.trace, conversation);
+  }
+  return conversationOf;
+};
+
+/** The session a trace's turns belong to: its conversation's, else its own. */
+const sessionIdOf = (trace: string, conversationOf: ReadonlyMap<string, string>): string => {
+  const conversation = conversationOf.get(trace);
+  return conversation === undefined ? tracePart(trace) : `conv-${digest(conversation)}`;
+};
+
+/**
+ * The single-trace sessions a conversation id folds into a merged one: a trace that names a conversation is no session of its own, but an earlier deposit that read
+ * it before the id arrived (the id sits on the root agent span, which a batch exporter writes last) holds one under the trace's own id. The deposit supersedes that
+ * session with a later rev, only if it holds one.
+ */
+export const supersededSessions = (spans: readonly Span[]): { id: string; by: string }[] => {
+  const conversationOf = conversationsOf(spans);
+  return [...conversationOf.keys()].map((trace) => ({ id: tracePart(trace), by: sessionIdOf(trace, conversationOf) }));
+};
+
 /** The sessions of a set of spans (every trace of every file). */
 export const otelSessions = (spans: readonly Span[]): OtelSession[] => {
   const byId = new Map(spans.map((span) => [`${span.trace}/${span.id}`, span]));
@@ -247,16 +276,8 @@ export const otelSessions = (spans: readonly Span[]): OtelSession[] => {
   }
   const roots = spans.filter((span) => parentOf(span) === undefined);
   const startOf = (span: Span): number => span.start ?? span.end ?? 0;
-  const conversationOf = new Map<string, string>();
-  for (const span of [...spans].sort((a, b) => startOf(a) - startOf(b))) {
-    const conversation = str(span.attrs['gen_ai.conversation.id']);
-    if (conversation !== undefined && !conversationOf.has(span.trace)) conversationOf.set(span.trace, conversation);
-  }
-  const tracePart = (trace: string): string => (/^[A-Za-z0-9]{1,64}$/.test(trace) ? trace : digest(trace));
-  const sessionOfTrace = (trace: string): string => {
-    const conversation = conversationOf.get(trace);
-    return conversation === undefined ? tracePart(trace) : `conv-${digest(conversation)}`;
-  };
+  const conversationOf = conversationsOf(spans);
+  const sessionOfTrace = (trace: string): string => sessionIdOf(trace, conversationOf);
 
   // A unit is an agent span, or a trace root that is not one: whatever owns the model calls and tools beneath it.
   const unitOf = new Map<Span, Unit>();
@@ -456,6 +477,8 @@ export interface OtelFound {
 
 export interface OtelStore {
   sessions: OtelFound[];
+  /** The single-trace sessions a conversation id has folded into a merged one (`supersededSessions`). */
+  superseded: { id: string; by: string }[];
   transcript: (session: OtelFound) => string;
   rejected: number;
   unreadable: { file: string; reason: string }[];
@@ -469,7 +492,7 @@ export const openOtelStore = async (root: string): Promise<OtelStore | undefined
     names = (await readdir(root)).filter((name) => /\.jsonl?$/i.test(name)).sort();
   } catch (error) {
     if (missing(error)) return undefined;
-    return { sessions: [], transcript: () => '', rejected: 0, unreadable: [{ file: root, reason: reasonOf(error, root) }] };
+    return { sessions: [], superseded: [], transcript: () => '', rejected: 0, unreadable: [{ file: root, reason: reasonOf(error, root) }] };
   }
   const unreadable: { file: string; reason: string }[] = [];
   const spans: Span[] = [];
@@ -490,6 +513,7 @@ export const openOtelStore = async (root: string): Promise<OtelStore | undefined
     }
   }
   const built = otelSessions(spans);
+  const superseded = supersededSessions(spans).filter((entry) => SAFE.test(entry.id) && SAFE.test(entry.by));
   let rejected = 0;
   const sessions: OtelFound[] = [];
   const lines = new Map<string, Obj[]>();
@@ -510,6 +534,7 @@ export const openOtelStore = async (root: string): Promise<OtelStore | undefined
   }
   return {
     sessions,
+    superseded,
     rejected,
     unreadable,
     transcript: (session) => {

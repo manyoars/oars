@@ -685,6 +685,21 @@ const commitCapture = async (context: DepositContext, key: string, extract: Capt
   context.state.files[key] = { ...cursor, v: CAPTURE_VERSION, s: context.salt.sid, d: context.domains, repoSize: extract.session.frame?.stack.size ?? null };
 };
 
+/**
+ * Records that a session is superseded: its capture of no turns, marked with the session that holds them now, appended as the next rev (the log is never edited), and its
+ * skeleton removed, since a skeleton is derived and a reader of skeletons would count the session. The cursor records it, so a repeat deposit adds nothing.
+ */
+const commitSupersede = async (context: DepositContext, key: string, extract: Capture, by: string, cursor: { size: number; mtimeMs: number; rev: number }): Promise<void> => {
+  const files = paths(context.runtime.storeDir);
+  extract.session.supersededBy = by;
+  await requireHold(context.held);
+  await appendFile(files.observations, `${JSON.stringify(extract.session)}
+`, { mode: 0o600 });
+  await requireHold(context.held);
+  await rm(join(files.skeletons, `${extract.session.session}.json`), { force: true });
+  context.state.files[key] = { ...cursor, v: CAPTURE_VERSION, s: context.salt.sid, d: context.domains, repoSize: null };
+};
+
 /** Another deposit holds the store lock and the wait ran out: the one failure the Stop hook defers instead of counting as a failed run. */
 export class StoreLockedError extends CliError {
   constructor() {
@@ -958,6 +973,8 @@ const readSource = async (context: DepositContext, source: Source, root: string,
     for (const session of store.sessions) {
       const key = `${source.name}/${session.id}`;
       const previous = context.state.files[key];
+      // A session this store never held has nothing to supersede.
+      if (session.supersededBy !== undefined && previous === undefined) continue;
       if (
         previous !== undefined &&
         previous.size === session.size &&
@@ -998,6 +1015,10 @@ const readSource = async (context: DepositContext, source: Source, root: string,
       });
       // The input names the frame and the action table; the session record carries the harness for `harnessOf`, `books --by harness`, and `measure`.
       extract.session.harness = source.harness;
+      if (session.supersededBy !== undefined) {
+        await commitSupersede(context, key, extract, `${source.name}-${session.supersededBy}`, { size: session.size, mtimeMs: session.mtimeMs, rev });
+        continue;
+      }
       await commitCapture(context, key, extract, { size: session.size, mtimeMs: session.mtimeMs, rev });
       tally(trace, extract, session.subagent !== undefined);
       if (session.subagent === undefined) {
@@ -1421,7 +1442,8 @@ export const loadStore = async (storeDir: string, afterFirstPass?: () => Promise
   const redact = makeRedactor((await readState(storeDir)).redactDomains);
   const agents: (SessionCapture & { parent: string })[] = [];
   for (const { session: written, prompts, tools: writtenTools, errorLines: writtenErrorLines } of captured.values()) {
-    if (written === undefined) continue;
+    // A superseded session holds no turns: the session that folded it in holds them.
+    if (written === undefined || written.supersededBy !== undefined) continue;
     // One tool call is one record: a replay an older capture wrote beside the call is folded here.
     const folded = foldToolRows(writtenTools, writtenErrorLines);
     const session = withoutReplays(written, folded.dropped);
