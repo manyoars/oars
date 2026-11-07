@@ -14,7 +14,7 @@ import { REGISTRY_MAX_AGE_DAYS, VOCAB_SNAPSHOT_DATE } from './public-vocabulary.
 import type * as PoolWire from './pool-wire.js';
 import { session as sessionRow } from './pool-fixture.js';
 import { slugOf } from './allow.js';
-import { parseSkeleton, skeletonOf, VOCAB_VERSION, type PinnedKey } from './pool-wire.js';
+import { parseSkeleton, skeletonOf, VOCAB_VERSION, type PinnedKey, type SkeletonFrame } from './pool-wire.js';
 import { contentHash } from './read.js';
 import { deposit } from './store.js';
 import { addProject, cleanup, NOW, settledClock, stage, type Staged } from './test-support.js';
@@ -1714,14 +1714,10 @@ describe('coverage on the wire (t871)', () => {
     return { scene, repo };
   };
 
-  const frameOfBatch = (scene: Scene, project?: string): { [field: string]: unknown } => {
-    const frames = batchBytes(scene).flatMap((bytes) => {
-      const parsed: unknown = JSON.parse(bytes);
-      const transcripts: unknown = typeof parsed === 'object' && parsed !== null ? Reflect.get(parsed, 'transcripts') : undefined;
-      return Array.isArray(transcripts) ? transcripts.map((transcript: unknown) => (typeof transcript === 'object' && transcript !== null ? Reflect.get(transcript, 'frame') : undefined)) : [];
-    });
-    const found = frames.find((frame: unknown) => typeof frame === 'object' && frame !== null && (project === undefined || Reflect.get(frame, 'model') === project));
-    return typeof found === 'object' && found !== null ? Object.fromEntries(Object.entries(found)) : {};
+  /** The transcript frame of the first batch in the outbox, as the parser reads it. */
+  const frameOfBatch = (scene: Scene): SkeletonFrame | undefined => {
+    const parsed = parseSkeleton(JSON.parse(batchBytes(scene)[0] ?? 'null'));
+    return parsed.ok ? parsed.skeleton.transcripts[0]?.frame : undefined;
   };
 
   it('prints the setting with no flag, and saves each flag on its own', async () => {
@@ -1763,7 +1759,7 @@ describe('coverage on the wire (t871)', () => {
     const git = vi.fn((_root: string, args: readonly string[]) => Promise.resolve(args.includes('log') ? 'ada@example.com\ngrace@example.com\n' : ''));
     expect(await poolDeposit(scene.h.deps, { server: POOL, git })).toMatchObject({ document: { ok: true, batched: 1 } });
     expect(git).toHaveBeenCalledTimes(1);
-    expect(frameOfBatch(scene, 'claude-opus-5-5')).toMatchObject({ orgSize: '2-10', team: 'team', repoVisibility: 'public' });
+    expect(frameOfBatch(scene)).toMatchObject({ orgSize: '2-10', team: 'team', repoVisibility: 'public' });
     const text = batchBytes(scene).join('');
     for (const forbidden of ['ada', 'grace', 'example.com', repo, slugOf(repo)]) expect(text).not.toContain(forbidden);
     rmSync(repo, { recursive: true, force: true });
@@ -1772,9 +1768,9 @@ describe('coverage on the wire (t871)', () => {
   it('states solo for one author, and unknown when git cannot be read', async () => {
     const { scene, repo } = await inRepo();
     expect(await poolDeposit(scene.h.deps, { server: POOL, git: () => Promise.resolve('ada@example.com\n') })).toMatchObject({ document: { batched: 1 } });
-    expect(frameOfBatch(scene, 'claude-opus-5-5')).toMatchObject({ team: 'solo' });
+    expect(frameOfBatch(scene)).toMatchObject({ team: 'solo' });
     expect(await poolDeposit(scene.h.deps, { server: POOL, git: () => Promise.reject(new Error('no git')) })).toMatchObject({ document: { batched: 1 } });
-    expect(frameOfBatch(scene, 'claude-opus-5-5')).toMatchObject({ team: 'unknown' });
+    expect(frameOfBatch(scene)).toMatchObject({ team: 'unknown' });
     rmSync(repo, { recursive: true, force: true });
   });
 });
