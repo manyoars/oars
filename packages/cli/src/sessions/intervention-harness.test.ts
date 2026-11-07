@@ -66,7 +66,7 @@ const codexWith = (wrapped: boolean) => (turns: readonly Turn[]): string => {
         lines.push(rolloutLine(T(next()), 'response_item', { type: 'custom_tool_call', name: 'apply_patch', call_id: call, input: `*** Begin Patch\n*** Update File: ${act.edit}\n@@\n*** End Patch` }));
         lines.push(rolloutLine(T(next()), 'event_msg', { type: 'patch_apply_end', call_id: call, success: true, stdout: 'ok', stderr: '', changes: {} }));
       } else {
-        // Codex writes a shell call as an argv. `wrapped` is the form the CLI sends (`bash -lc <command>`); the adapter joins an argv with spaces, so a wrapped command reads as the wrapper plus one word.
+        // Codex writes a shell call as an argv. `wrapped` is the form the CLI sends (`bash -lc <command>`); the adapter quotes each word of an argv that needs it, so a wrapped command reads as the wrapper plus its quoted script.
         lines.push(rolloutLine(T(next()), 'response_item', { type: 'function_call', name: 'shell', arguments: JSON.stringify({ command: wrapped ? ['bash', '-lc', act.run] : act.run.split(' ') }), call_id: call }));
         lines.push(rolloutLine(T(next()), 'response_item', { type: 'function_call_output', call_id: call, output: `Exit code: ${String(act.exit)}\nWall time: 0.1 seconds\nOutput:\nout` }));
       }
@@ -235,16 +235,23 @@ const SCENARIOS: readonly (readonly [string, Turn[], (PromptIntervention | undef
   ['unknown: the only prompt', [{ text: 'add a field', acts: [{ edit: 'src/a.ts' }] }], ['unknown']],
 ];
 
-// The scenarios whose answer differs by harness, with the reason. Everything else reads as SCENARIOS says on every harness.
-const LIMITS: ReadonlyMap<string, readonly (PromptIntervention | undefined)[]> = new Map([
-  // Codex's CLI sends `bash -lc <command>` as an argv, and the adapter joins it with spaces, so the shell reader sees `bash` take one word (`git`): the segment is `git`, not `git revert`. A git undo
-  // through the wrapped form is not seen on Codex until the adapter quotes the argument; the ask-for-undo form (a prompt head) is.
-  ['codex|revert: the next prompt undoes the edit with git', ['none', 'unknown']],
-]);
-
 describe.each(BUILDERS)('%s', (harness, build) => {
-  it.each(SCENARIOS)('%s', async (name, turns, expected) => {
-    expect(await interventions(harness, build, turns)).toEqual(LIMITS.get(`${harness}|${name}`) ?? expected);
+  it.each(SCENARIOS)('%s', async (_name, turns, expected) => {
+    expect(await interventions(harness, build, turns)).toEqual(expected);
+  });
+});
+
+describe('codex, command sent wrapped in bash -lc', () => {
+  const edit: Turn = { text: 'add a field', acts: [{ edit: 'src/a.ts' }] };
+
+  it('still reads the git undo when its script holds a single quote', async () => {
+    const turns: Turn[] = [edit, { text: 'put it back', acts: [{ run: `echo "it's"; git revert HEAD`, exit: 0 }] }];
+    expect(await interventions('codex', codexWith(true), turns)).toEqual(['revert', 'unknown']);
+  });
+
+  it('reads a wrapped empty script as no undo and no crash', async () => {
+    const turns: Turn[] = [edit, { text: 'put it back', acts: [{ run: '', exit: 0 }] }];
+    expect(await interventions('codex', codexWith(true), turns)).toEqual(['none', 'unknown']);
   });
 });
 

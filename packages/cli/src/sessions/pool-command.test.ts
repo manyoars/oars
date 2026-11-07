@@ -9,7 +9,7 @@ import { defaultConfigDir } from '../credentials.js';
 import { ExitCode } from '../errors.js';
 import { readSpool } from '../telemetry/spool.js';
 import { harness, server, useServer, type Harness } from '../test-support.js';
-import { DEFAULT_POOL_URL, networkSender, poolCoverage, poolDeposit, poolServer, type Reply, type Sender } from './pool-command.js';
+import { DEFAULT_POOL_URL, networkSender, poolCoverage, poolDeposit, poolServer, RAW_PROMPT, type Reply, type Sender } from './pool-command.js';
 import { localNames } from './redact.js';
 import { batchHash, canonicalBytes, FIELD_ROWS, fieldsOf, outboxFolder, writeBatch } from './pool-outbox.js';
 import { markSent, sentHashes } from './pool-sent.js';
@@ -161,6 +161,14 @@ const signIn = async (scene: Scene, signingKey: PinnedKey = FIXED_KEY): Promise<
 const capture = (scene: Scene): Promise<unknown> => deposit(scene.staged.runtime, { allow: ['proj'], redactDomains: [], now: () => NOW });
 
 const at = (value: unknown, name: string): unknown => (typeof value === 'object' && value !== null ? Reflect.get(value, name) : undefined);
+
+describe('the raw prompt states when and what uploads', () => {
+  it('names the nightly task, covenant acceptance, and the skeleton-only/off exception', () => {
+    expect(RAW_PROMPT).toContain('the nightly task uploads');
+    expect(RAW_PROMPT).toContain('once the pool says your account accepted its covenant');
+    expect(RAW_PROMPT).toContain('except a folder you set to skeleton only or off');
+  });
+});
 
 describe('the pool server', () => {
   it('defaults to the Many Oars pool, and takes a flag over the environment over the default', () => {
@@ -2307,6 +2315,11 @@ describe('wire policing in telemetry', () => {
       { sent: 1, status: 201, bytes: Buffer.byteLength(bytes) },
       { sent: 0, status: 500, code: 'boom', bytes: Buffer.byteLength(bytes) },
     ]);
+    // A last part answered 202 never completed the deposit: it ends the batch, records 202, and is refused.
+    const unfinished = wire({ 'GET /v1/covenant': OPEN_COVENANT, 'POST /v1/deposits': [answer(202, { ok: true }), answer(202, { ok: true }), answer(202, { ok: true })] });
+    await expect(poolDeposit(scene.h.deps, sendOptions(hash, unfinished.via))).rejects.toMatchObject({ problem: { status: 202 } });
+    expect(unfinished.requests.filter((request) => request.method === 'POST')).toHaveLength(3);
+    expect(spooled(dir, 'wire-send').map((event) => event.data).at(-1)).toEqual({ sent: 0, status: 202, bytes: Buffer.byteLength(bytes) });
   });
 
   it('records nothing without a telemetry folder, and a send still raises what it did', async () => {
@@ -2541,19 +2554,19 @@ describe('oars pool raw (t884)', () => {
     const shown = scene.h.out.join('');
     expect(shown).toContain('best effort');
     for (const unsafe of ['a host with no dot', 'quoted file contents and command output', 'a secret split across lines', 'images and attachments', 'a JSON env value', 'a common-word account name is masked everywhere', 'a public host name outside a link', 'your username written another way', 'an IPv6 address with a zone or inside a longer word', "another person's hyphenated name in a project folder path"]) expect(shown).toContain(unsafe);
-    expect(shown).toContain('not answered yet');
+    expect(shown).toContain('not answered yet: only skeletons go to the pool');
     scene.h.out.length = 0;
     expect(await scene.cli('pool', 'raw', '--consent', 'yes')).toBe(ExitCode.OK);
     expect(scene.h.out.join('')).toContain('yes: redacted raw copies leave');
     expect(scene.h.out.join('')).not.toContain('best effort');
     expect(await scene.cli('pool', 'raw', '--consent', 'no')).toBe(ExitCode.OK);
-    expect(scene.h.out.join('')).toContain('no: only skeletons leave');
+    expect(scene.h.out.join('')).toContain('no: only skeletons go to the pool');
   });
 
   it('sets and clears a folder switch, and refuses a half-given or unknown option', async () => {
     const scene = setting();
     expect(await scene.cli('pool', 'raw', '--folder', 'proj', '--mode', 'off')).toBe(ExitCode.OK);
-    expect(scene.h.out.join('')).toContain('proj: nothing leaves');
+    expect(scene.h.out.join('')).toContain('proj: nothing sent to the pool');
     expect(await scene.cli('pool', 'raw', '--folder', 'proj', '--mode', 'skeleton')).toBe(ExitCode.OK);
     expect(scene.h.out.join('')).toContain('proj: skeletons only');
     scene.h.out.length = 0;
