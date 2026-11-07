@@ -94,6 +94,8 @@ interface StubProvider {
   approve: (deviceCode: string, user: StubUser) => void;
   /** Makes the token route answer this OAuth error word for the device code, in the shape of each provider (Google's pending is 428, its other words 403 or 400; GitHub's are all 200). */
   script: (deviceCode: string, word: string) => void;
+  /** Drops a code the stub issued, so the provider has no record of it, as after the provider's own expiry sweep. */
+  forget: (deviceCode: string) => void;
   calls: StubCall[];
   /** URLs that answer this OAuth error word, the way a provider refuses a device flow it has switched off. */
   refuse: Map<string, string>;
@@ -149,7 +151,7 @@ const stubProvider = (): StubProvider => {
     if (at === 'https://openidconnect.googleapis.com/v1/userinfo') return json({ sub: found.id, email: found.email, name: found.login });
     return json({ error: `no stub for ${at}` }, 500);
   };
-  return { approve: (code, user) => users.set(code, user), script: (code, word) => scripted.set(code, word), calls, html, forbidden, refuse, outbound };
+  return { approve: (code, user) => users.set(code, user), script: (code, word) => scripted.set(code, word), forget: (code) => users.delete(code), calls, html, forbidden, refuse, outbound };
 };
 
 export interface Answer {

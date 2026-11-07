@@ -247,13 +247,13 @@ describe('oars pool login', () => {
   });
 
   it.each([
-    ['a pool with no client ID', 503, 'not_configured'],
-    ['a provider that would not start', 502, 'provider_error'],
-  ])('names what %s answered at the start, and polls nothing', async (_name, status, code) => {
+    ['a pool with no client ID', 503, 'not_configured', ExitCode.UNREACHABLE],
+    ['a provider that would not start', 502, 'provider_error', ExitCode.UNREACHABLE],
+  ])('names what %s answered at the start, and polls nothing', async (_name, status, code, expected) => {
     const scene = setting();
     server.use(http.post(`${POOL}/v1/login/start`, () => HttpResponse.json({ error: code, message: 'The pool says no.' }, { status })));
     const exit = await scene.cli('pool', 'login', '--provider', 'github', '--server', POOL, '--json');
-    expect(exit).not.toBe(ExitCode.OK);
+    expect(exit).toBe(expected);
     expect(scene.document()).toMatchObject({ problem: { code, status } });
     expect(scene.h.sleeps).toEqual([]);
     expect(existsSync(join(scene.staged.storeDir, 'pool-accounts.json'))).toBe(false);
@@ -281,9 +281,12 @@ describe('oars pool login', () => {
   });
 
   it('needs no provider setting of its own: no client ID or secret is read from the environment', async () => {
-    const scene = setting({ OARS_GITHUB_CLIENT_ID: '', OARS_GOOGLE_CLIENT_ID: '', OARS_GOOGLE_CLIENT_SECRET: '' });
+    const sentinels = ['sentinel-github-client-id', 'sentinel-google-client-id', 'sentinel-google-client-secret'];
+    const scene = setting({ OARS_GITHUB_CLIENT_ID: sentinels[0], OARS_GOOGLE_CLIENT_ID: sentinels[1], OARS_GOOGLE_CLIENT_SECRET: sentinels[2] });
     poolAt(scene);
     expect(await scene.cli('pool', 'login', '--provider', 'google', '--server', POOL)).toBe(ExitCode.OK);
+    const everything = scene.sent() + scene.h.out.join('') + scene.h.err.join('');
+    for (const sentinel of sentinels) expect(everything).not.toContain(sentinel);
   });
 
   it('a second login to the same server keeps one entry and the same pin; another server gets its own', async () => {

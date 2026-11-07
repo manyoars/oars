@@ -96,8 +96,8 @@ describe.each(FLOWS)('the $provider brokered sign-in', ({ provider, clientId, de
 
   it('reads a code the provider has forgotten as expired', async () => {
     const { handle, device } = await startOf(provider);
-    pool.stub.script(device, 'expired_token');
-    expect(fieldOf((await pool.post('/v1/login/poll', { handle })).json, 'status')).toBe('expired');
+    pool.stub.forget(device);
+    expect(await pool.post('/v1/login/poll', { handle })).toEqual({ status: 200, json: { status: 'expired' } });
   });
 
   it('keeps one pseudonym across sign-ins, and a new credential each time', async () => {

@@ -352,8 +352,6 @@ A live read's baseline is not traceable through lineage: the floor counts only t
 
 `POST /v1/telemetry` is unauthenticated and, in the Worker, unlimited, and each request writes one R2 object of up to 1 MiB that never expires: the same rate-limit rule in deploy step 6 is what bounds it, so the pool must not be deployed without that rule.
 
-The pool does not check that the provider token it is sent was issued to the Many Oars client ID, so a token any other app holds for a person would sign in as that person; that is not acceptable once the pool opens, and it closes before deposits open.
-
 ## Where D1's own limits bind
 
 With no cap on contributing, the only ceilings left are D1's. Cloudflare's page (`developers.cloudflare.com/d1/platform/limits`) could not be reached when this was written, so the figures below are from memory and **unverified**: a database holds 10 GB on the paid plan (500 MB on the free plan), and a row (a string, a BLOB, or the table row) holds 2,000,000 bytes.
