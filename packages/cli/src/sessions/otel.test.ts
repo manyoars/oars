@@ -63,7 +63,12 @@ const textOf = (store: Awaited<ReturnType<typeof open>>, id: string): string => 
   if (found === undefined) throw new Error(`no session ${id}`);
   return store.transcript(found);
 };
-const linesOf = (text: string): Obj[] => text.split('\n').filter((raw) => raw !== '').map((raw) => JSON.parse(raw) as Obj);
+const obj = (value: unknown): Obj => (typeof value === 'object' && value !== null && !Array.isArray(value) ? Object.fromEntries(Object.entries(value)) : {});
+const linesOf = (text: string): Obj[] => text.split('\n').filter((raw) => raw !== '').map((raw) => obj(JSON.parse(raw)));
+const present = <T>(value: T | undefined): T => {
+  if (value === undefined) throw new Error('expected a value');
+  return value;
+};
 
 const single = (): object[] => [
   agent(T, 1, undefined, 0, 12, 'where is my order?'),
@@ -115,9 +120,8 @@ describe('a single-agent trace with two tool calls', () => {
     expect(linesOf(textOf(store, T)).every((line) => line.version === 'langchain')).toBe(true);
     const s = stage();
     const dir = stageOtel(s.root, [{ name: 'x.jsonl', lines: [otlpRequest(single(), 'acme.private.tracer')] }]);
-    const other = await openOtelStore(dir);
-    expect(other).toBeDefined();
-    expect(linesOf(other?.transcript(other.sessions[0] ?? ({} as never)) ?? '').every((line) => line.version === 'other')).toBe(true);
+    const other = present(await openOtelStore(dir));
+    expect(linesOf(other.transcript(present(other.sessions[0]))).every((line) => line.version === 'other')).toBe(true);
   });
 
   it('records no working folder or repository', async () => {
@@ -201,13 +205,13 @@ describe('a trace with no usage', () => {
     const store = await open([{ name: 'a.jsonl', spans: [agent(T, 1, undefined, 0, 5, 'hi'), chat(T, 2, 1, 1, 2, { 'gen_ai.output.messages': reply('hello') })] }]);
     const assistant = linesOf(textOf(store, T)).filter((line) => line.type === 'assistant');
     expect(assistant).toHaveLength(1);
-    expect((assistant[0]?.message as Obj).usage).toBeUndefined();
+    expect(obj(assistant[0]?.message).usage).toBeUndefined();
     expect(capture(textOf(store, T)).session.usageObserved).toEqual([]);
   });
 
   it('writes only the figure a span reported', async () => {
     const store = await open([{ name: 'a.jsonl', spans: [agent(T, 1, undefined, 0, 5, 'hi'), chat(T, 2, 1, 1, 2, { 'gen_ai.usage.output_tokens': 9 })] }]);
-    const usage = (linesOf(textOf(store, T)).find((line) => line.type === 'assistant')?.message as Obj).usage;
+    const usage = obj(linesOf(textOf(store, T)).find((line) => line.type === 'assistant')?.message).usage;
     expect(usage).toEqual({ output_tokens: 9 });
     expect(capture(textOf(store, T)).session.usageObserved).toEqual(['output']);
   });
@@ -245,7 +249,7 @@ describe('two traces of one conversation', () => {
     expect(store.sessions).toHaveLength(2);
     const merged = store.sessions.find((entry) => entry.id.startsWith('conv-'));
     expect(merged).toBeDefined();
-    const out = capture(store.transcript(merged ?? ({} as never)));
+    const out = capture(store.transcript(present(merged)));
     expect(out.prompts.map((prompt) => prompt.head)).toEqual(['first question', 'second question']);
   });
 });

@@ -397,7 +397,8 @@ export const otlpValue = (value: unknown): object => {
   if (typeof value === 'boolean') return { boolValue: value };
   if (typeof value === 'number') return Number.isInteger(value) ? { intValue: String(value) } : { doubleValue: value };
   if (Array.isArray(value)) return { arrayValue: { values: value.map(otlpValue) } };
-  return { kvlistValue: { values: Object.entries(value as { [key: string]: unknown }).map(([key, held]) => ({ key, value: otlpValue(held) })) } };
+  if (typeof value !== 'object' || value === null) return { stringValue: String(value) };
+  return { kvlistValue: { values: Object.entries(value).map(([key, held]) => ({ key, value: otlpValue(held) })) } };
 };
 
 export interface OtlpSpanInput {

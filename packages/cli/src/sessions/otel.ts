@@ -311,13 +311,14 @@ export const otelSessions = (spans: readonly Span[]): OtelSession[] => {
     );
     const mine = [...(members.get(unit) ?? []), ...direct].sort((a, b) => startOf(a) - startOf(b) || a.order - b.order);
     const calls: { span: Span; content: Obj[]; line: Obj; end: number; names: string[] }[] = [];
-    const assistant = (span: Span, requestId: string): { content: Obj[]; line: Obj } => {
+    const assistant = (span: Span, requestId: string): { content: Obj[]; line: Obj; message: Obj } => {
       const content: Obj[] = [];
       const t = Math.max(stamp(span.start ?? span.end), begin);
       const model = str(span.attrs['gen_ai.response.model']) ?? str(span.attrs['gen_ai.request.model']);
-      const line: Obj = { ...base, type: 'assistant', uuid: `${unit.session}-${span.id}-a`, requestId, timestamp: iso(t), ...(model === undefined ? {} : { requestedModel: model }), message: { role: 'assistant', content } };
+      const message: Obj = { role: 'assistant', content };
+      const line: Obj = { ...base, type: 'assistant', uuid: `${unit.session}-${span.id}-a`, requestId, timestamp: iso(t), ...(model === undefined ? {} : { requestedModel: model }), message };
       pieces.push({ t, rank: 0, line });
-      return { content, line };
+      return { content, line, message };
     };
     const attach = (callId: string, tool: Span): { content: Obj[] } => {
       const named = calls.find((call) => call.names.includes(callId));
@@ -340,7 +341,7 @@ export const otelSessions = (spans: readonly Span[]): OtelSession[] => {
         attach(span.id, span).content.push({ type: 'tool_use', id: span.id, name: 'invoke_agent', native: 'invoke_agent', input: {} });
         result(span.id, span, span.failed ? failureText(span) : undefined);
       } else if (isModel(span)) {
-        const { content, line } = assistant(span, span.id);
+        const { content, line, message } = assistant(span, span.id);
         const reply = messagesOf(span.attrs['gen_ai.output.messages']).map(textParts).filter((part) => part !== '').join('\n');
         if (reply !== '') content.push({ type: 'text', text: reply });
         const input = count(span.attrs['gen_ai.usage.input_tokens']);
@@ -358,7 +359,7 @@ export const otelSessions = (spans: readonly Span[]): OtelSession[] => {
             ...(output === undefined ? {} : { output_tokens: output }),
             ...(thinking === undefined ? {} : { output_tokens_details: { thinking_tokens: thinking } }),
           };
-          (line.message as Obj).usage = usage;
+          message.usage = usage;
         }
         calls.push({ span, content, line, end: span.end ?? startOf(span), names: namedCalls(span) });
       } else {
