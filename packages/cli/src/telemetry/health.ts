@@ -2,7 +2,8 @@
 // holds) and what the run cost. Counts, bytes, and closed words only; the schema checks them again before anything reaches the spool.
 import { readdir, stat } from 'node:fs/promises';
 import { join } from 'node:path';
-import { CAPTURE_VERSION, EXTRACTOR_VERSION, OLDEST_READABLE_CAPTURE } from '../sessions/schema.js';
+import { CAPTURE_VERSION, OLDEST_READABLE_CAPTURE } from '../sessions/schema.js';
+import { readSteps } from '../sessions/steps.js';
 import { frozenSessions, loadStore, paths, readSkeletons, type SessionsRuntime } from '../sessions/store.js';
 import { LITERAL, publicModel, publicVersion } from '../sessions/public-vocabulary.js';
 import { verifyAll, verifyCaptured } from '../sessions/verify.js';
@@ -37,6 +38,10 @@ export const closedList = (values: readonly string[], kind: 'version' | 'model')
   return other ? [...sorted, OTHER] : sorted;
 };
 
+/** The distinct whole-number versions among the stamps, ascending; a stamp that is not a whole number names no version and is left out. */
+export const versionsHeld = (stamps: readonly string[]): number[] =>
+  [...new Set(stamps.map(Number).filter((stamp) => Number.isSafeInteger(stamp) && stamp >= 0))].sort((a, b) => a - b).slice(-MAX_LIST);
+
 /** Every byte under a folder; a folder that is not there holds none. */
 const bytesUnder = async (dir: string): Promise<number> => {
   let entries;
@@ -55,10 +60,11 @@ const bytesUnder = async (dir: string): Promise<number> => {
 const egressBytes = (dir: string, now: number): number =>
   spoolEvents(dir, 'wire-send').reduce((total, { at, data }) => (data.sent === 1 && typeof data.bytes === 'number' && Date.parse(at) >= now - WEEK_MS ? total + data.bytes : total), 0);
 
-const storeFields = async (runtime: SessionsRuntime): Promise<{ [field: string]: number | string[] }> => {
+const storeFields = async (runtime: SessionsRuntime): Promise<{ [field: string]: number | number[] | string[] }> => {
   const { storeDir } = runtime;
   const { skeletons, unreadable } = await readSkeletons(storeDir, undefined, true);
   const store = await loadStore(storeDir);
+  const steps = await readSteps(storeDir);
   const captured = [...store.sessions, ...store.subagents];
   const frozen = await frozenSessions(runtime, captured.filter((session) => Number(session.cv) >= OLDEST_READABLE_CAPTURE && Number(session.cv) < Number(CAPTURE_VERSION)));
   const results = [...verifyAll(skeletons, skeletons), ...verifyCaptured(captured, store.tools, frozen)];
@@ -70,8 +76,9 @@ const storeFields = async (runtime: SessionsRuntime): Promise<{ [field: string]:
     rawBytes: await bytesUnder(paths(storeDir).raw),
     verifyChecked: results.length,
     verifyFailed: results.filter((result) => result.violations > 0).length,
-    captureVersion: Number(CAPTURE_VERSION),
-    extractorVersion: Number(EXTRACTOR_VERSION),
+    // What the store holds: the `cv` of each captured session and the `ev` each pipeline step ran at. A store with a session behind this build lists two.
+    captureVersions: versionsHeld(captured.map((session) => session.cv)),
+    extractorVersions: versionsHeld(steps.map((step) => step.ev)),
     harnessVersions: closedList(captured.flatMap((session) => session.versions), 'version'),
     models: closedList(captured.flatMap((session) => Object.keys(session.models)), 'model'),
   };

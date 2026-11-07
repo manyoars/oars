@@ -47,12 +47,12 @@ One per nightly run: a snapshot of the session store, counts and sizes only. If 
 | `unparseable` | Transcript lines that did not parse, plus skeleton files that could not be read. |
 | `rawBytes` | The size of the store's `raw/` folder, in bytes. |
 | `verifyChecked`, `verifyFailed` | How many of `oars sessions verify`'s checks ran, and how many found a violation. |
-| `captureVersion`, `extractorVersion` | The capture and extractor versions of this oars. |
+| `captureVersions`, `extractorVersions` | What the store holds, not what this build writes: the distinct capture versions (`cv`) of its captured sessions, and the distinct extractor versions (`ev`) its pipeline log records, each sorted ascending. A store with a session behind this build lists two capture versions. |
 | `harnessVersions`, `models` | The harness versions and model names the store holds, each only if it is on the public list the pool wire uses, else the word `other`. |
 | `outboxBytes`, `egressBytes` | The bytes the pool outbox holds, and the bytes of batches sent in the last seven days (summed from the `wire-send` events below, which the spool keeps only up to its cap, so a very busy week can read low). |
 
 ```json
-{"v":1,"id":"3f2b8c1e-5d4a-4b7e-9c10-2a6f8e1d7b43","at":"2026-11-07T03:00:41.210Z","type":"store-health","cli":"0.4.0","os":"win32","data":{"sessions":212,"subagents":96,"skeletons":308,"unparseable":2,"rawBytes":48211904,"verifyChecked":14,"verifyFailed":0,"captureVersion":18,"extractorVersion":12,"harnessVersions":["2.1.30","2.1.37","other"],"models":["claude-opus-4-5","claude-sonnet-4-5"],"outboxBytes":1204331,"egressBytes":0}}
+{"v":1,"id":"3f2b8c1e-5d4a-4b7e-9c10-2a6f8e1d7b43","at":"2026-11-07T03:00:41.210Z","type":"store-health","cli":"0.4.0","os":"win32","data":{"sessions":212,"subagents":96,"skeletons":308,"unparseable":2,"rawBytes":48211904,"verifyChecked":14,"verifyFailed":0,"captureVersions":[17,18],"extractorVersions":[12],"harnessVersions":["2.1.30","2.1.37","other"],"models":["claude-opus-4-5","claude-sonnet-4-5"],"outboxBytes":1204331,"egressBytes":0}}
 ```
 
 ### `run-cost`

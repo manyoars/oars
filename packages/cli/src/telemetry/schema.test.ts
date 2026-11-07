@@ -87,6 +87,9 @@ describe('the closed schema', () => {
     });
     // A model or version outside the public vocabulary is written `other` by the caller; the schema refuses it if it comes through as it is.
     expect(sanitize('store-health', { models: ['acme-internal-finetune'], harnessVersions: ['build 7 of acme'] })).toEqual({ data: {}, dropped: 2 });
+    // The versions are whole numbers, listed; a stamp that is words, or too many of them, is refused.
+    expect(sanitize('store-health', { captureVersions: [17, 18], extractorVersions: [12] })).toEqual({ data: { captureVersions: [17, 18], extractorVersions: [12] }, dropped: 0 });
+    expect(sanitize('store-health', { captureVersions: ['18'], extractorVersions: Array.from({ length: 33 }, (_, index) => index) })).toEqual({ data: {}, dropped: 2 });
     expect(sanitize('run-cost', { totalMs: 900, parseMs: 400, peakRssMb: 310, failed: 1 })).toEqual({ data: { totalMs: 900, parseMs: 400, peakRssMb: 310, failed: 1 }, dropped: 0 });
     expect(sanitize('crash', { errorClass: 'TypeError', stackHash: '0123456789abcdef' })).toEqual({ data: { errorClass: 'TypeError', stackHash: '0123456789abcdef' }, dropped: 0 });
     expect(sanitize('crash', { errorClass: 'CustomError', stackHash: 'C:\\Users\\someone' })).toEqual({ data: {}, dropped: 2 });
