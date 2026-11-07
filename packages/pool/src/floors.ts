@@ -77,9 +77,6 @@ export const floorsOf = (env: Pick<Env, 'PUBLIC_FLOOR' | 'DISCLOSURE_FLOOR' | 'P
 /** The floor a read family is served at. */
 export const floorFor = (floors: Floors, family: FirstOrderFamily): number => floors.families[family] ?? floors.public;
 
-/** Every floor in force, once each: the cells a bundle holds are read at the lowest of them, and each family then applies its own. */
-export const floorValues = (floors: Floors): number[] => [...new Set([floors.public, ...Object.values(floors.families)])].sort((a, b) => a - b);
-
 /** The floors as the signed bundle states them, in the order of the families so the same bindings sign the same bytes. A family on the public floor is not listed. */
 export const wireFloors = (floors: Floors): BundleFloors => {
   const families = FIRST_ORDER_FAMILIES.flatMap((family) => {
