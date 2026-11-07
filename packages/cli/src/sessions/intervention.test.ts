@@ -243,12 +243,12 @@ const checkoutStep = (prompt: number, flags: string[], cv?: string, target?: 'pa
 });
 
 describe('a checkout captured before CAPTURE 23 keeps its old reading', () => {
-  it('reads a bare checkout with no flag as revert, a branch switch included: the step has no target to say otherwise', () => {
-    expect(derived(['a', 'b'], [edit(0), checkoutStep(1, [], '20')])[0]).toBe('revert');
+  it('reads a bare checkout with no flag as revert, a branch switch included: a target on the step is not read before CAPTURE 23', () => {
+    expect(derived(['a', 'b'], [edit(0), checkoutStep(1, [], '22', 'word')])[0]).toBe('revert');
   });
 
-  it('reads an unlisted flag as none, as it did', () => {
-    expect(derived(['a', 'b'], [edit(0), checkoutStep(1, ['<literal>'], '20')])[0]).toBe('none');
+  it('reads an unlisted flag as none, as it did, whatever target the step holds', () => {
+    expect(derived(['a', 'b'], [edit(0), checkoutStep(1, ['<literal>'], '22', 'path')])[0]).toBe('none');
   });
 
   it('reads the target class from CAPTURE 23: word is none, path is revert even beside an unlisted flag', () => {

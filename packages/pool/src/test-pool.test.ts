@@ -51,4 +51,9 @@ describe('a Worker exception reads as the Worker\'s own error', () => {
     expect((await workerError(failure('boom'))).message).toBe('the Worker threw a non-JSON error: boom');
     expect((await workerError(failure(''))).message).toBe('the Worker threw a non-JSON error: (empty)');
   });
+
+  it('reads a malformed payload header as no payload, not as a URIError', async () => {
+    const error = await workerError(failure('', { 'MF-Experimental-Error-Stack-Payload': '%E0%A4%A' }));
+    expect(error.message).toBe('the Worker threw a non-JSON error: (empty)');
+  });
 });
