@@ -31,6 +31,7 @@
 //                    `hiddenFromTranscript` is the harness writing, not the operator, and its prompt is not read; its response still is
 //   timestamp        epoch milliseconds, `responseTimestamp` for the response. A missing or implausible one is never made up: the time carries forward
 //   modelId          the model
+//   agent            `agent.extensionVersion` (participants/chatAgents.ts:71) is the Copilot Chat extension's version, the harness version, read only when `agent.extensionId.value` is `GitHub.copilot-chat` (a third-party participant carries its own): the newest request that names one
 //   response[]       a markdown part is a bare `{value}` (a string in the old format); `kind:'thinking'` is skipped;
 //                    `kind:'toolInvocationSerialized'` is a tool call (chatService/chatService.ts:1246-1270); `kind:'textEditGroup'` or `'notebookEditGroup'` `{uri}` is a file edited
 //   usage            `completionTokens` on the request, the whole turn's output (model/chatModel.ts:1929-1934, 2086), and `modelTotals[{model, inputTokens, cachedTokens, outputTokens}]`
@@ -48,7 +49,7 @@
 // button of a confirmation is the decline button and writes `{type:5, source:'user'}` (browser/widget/chatContentParts/toolInvocationParts/abstractToolConfirmationSubPart.ts:225,
 // chatTerminalToolConfirmationSubPart.ts:380,507; browser/tools/languageModelToolsService.ts:711), so a user's refusal (`source` `user`) reads as Claude Code's refusal text and
 // stores `user-rejected`; a hook's or a risk assessment's (languageModelToolsService.ts:683,1051) reads as a permission denial. A `{type:5}` with no `source` is the skip after
-// approval (model/chatProgressTypes/chatToolInvocation.ts:516) and has no outcome. The file holds no harness version and no working-directory change.
+// approval (model/chatProgressTypes/chatToolInvocation.ts:516) and has no outcome. The file holds no working-directory change; its one harness version is the Copilot Chat agent's `extensionVersion` (see `agent` above).
 
 import { readdir, readFile, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
@@ -69,6 +70,8 @@ const SHELL_TOOLS: ReadonlySet<string> = new Set(['run_in_terminal', 'run_task',
 const CHANNELS = ['Code', 'Code - Insiders', 'Code - OSS'] as const;
 
 type Obj = { [key: string]: unknown };
+// ExtensionIdentifier compares ids case-insensitively, so this is the lowercase form of `GitHub.copilot-chat`.
+const COPILOT_CHAT_EXTENSION_ID = 'github.copilot-chat';
 const isObj = (value: unknown): value is Obj => typeof value === 'object' && value !== null && !Array.isArray(value);
 const str = (value: unknown): string | undefined => (typeof value === 'string' && value !== '' ? value : undefined);
 const num = (value: unknown): number | undefined => (typeof value === 'number' && Number.isFinite(value) ? value : undefined);
@@ -240,6 +243,10 @@ export const chatLines = (data: Obj, fallbackId: string, folder: string | null):
   };
   for (const request of requests) {
     const when = stamp(request.timestamp);
+    // The extension's version, from the agent VS Code serialized beside the request (ISerializableChatAgentData.extensionVersion); a later request supersedes. A
+    // third-party chat participant is serialized the same way with its own extension's version, so only Copilot Chat's own agent is read (id compared case-insensitively).
+    const extensionVersion = isObj(request.agent) && isObj(request.agent.extensionId) && str(request.agent.extensionId.value)?.toLowerCase() === COPILOT_CHAT_EXTENSION_ID ? str(request.agent.extensionVersion) : undefined;
+    if (extensionVersion !== undefined) base.version = extensionVersion;
     const message = request.message;
     const text = typeof message === 'string' ? str(message) : isObj(message) ? str(message.text) : undefined;
     const hidden = request.isSystemInitiated === true || request.requestHiddenFromTranscript === true || request.hiddenFromTranscript === true;
