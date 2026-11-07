@@ -221,6 +221,25 @@ describe('depositing the OpenCode source', () => {
     expect((await loadStore(s.storeDir)).tools.filter((tool) => tool.session === 'opencode-ses_P').map((tool) => tool.status)).toEqual(['error']);
   });
 
+  it('reads a session again when a part_rows tool part settles in place, which bumps only the session_part row', async () => {
+    const s = await staged();
+    const assistant = ocAssistant('msg_q2', 2, at(2), []);
+    const part = (state: object) => ({ messageId: 'msg_q2', ordinal: 0, type: 'tool', data: ocTool('c1', 'shell', state, at(3)) });
+    const root = await stageOpencode(s.root, [
+      { id: 'ses_Q', directory: join(s.root, 'q'), created: at(0), updated: at(9), messages: [ocUser('msg_q1', 1, at(1), 'build it'), assistant], parts: [part({ status: 'running', input: { command: 'make' } })] },
+    ]);
+    const runtime = { ...s.runtime, sourceRoots: { opencode: root } };
+    expect(await deposit(runtime, options(['opencode']))).toMatchObject({ sessions: 1 });
+    expect((await loadStore(s.storeDir)).tools.filter((tool) => tool.session === 'opencode-ses_Q').map((tool) => tool.status)).not.toContain('error');
+    // Only the part row changes: the session row and the message row (and so the message count) stay as they were.
+    const { DatabaseSync } = await import('node:sqlite');
+    const db = new DatabaseSync(join(root, 'opencode.db'));
+    db.prepare('update session_part set data = ?, time_updated = ? where message_id = ? and ordinal = ?').run(JSON.stringify(part(ocShellDone('make', 'make: *** No rule to make target', 2)).data), at(40), 'msg_q2', 0);
+    db.close();
+    expect(await deposit(runtime, options(['opencode']))).toMatchObject({ sessions: 1, unchanged: 0 });
+    expect((await loadStore(s.storeDir)).tools.filter((tool) => tool.session === 'opencode-ses_Q').map((tool) => tool.status)).toEqual(['error']);
+  });
+
   it('fails open on a database it cannot read: the Claude Code folder is kept, and the problem is named', async () => {
     const s = await staged();
     const project = join(s.projectsRoot, 'mine');
