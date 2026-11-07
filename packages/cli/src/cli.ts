@@ -479,7 +479,7 @@ const buildProgram = (deps: RunDeps, observed: Observed): Command => {
 
   const pool = program.command('pool').description('sign in to a pool server, deposit closed-vocabulary session skeletons, and fetch signed reads; local capture, recall, and reads need none of it');
   const serverOption = '--server <url>';
-  const serverHelp = 'the pool server, https or plain http to localhost (or OARS_POOL_URL; there is no default)';
+  const serverHelp = 'the pool server, https or plain http to localhost (default: OARS_POOL_URL, else https://pool.manyoars.com)';
 
   pool
     .command('login')
@@ -493,8 +493,8 @@ const buildProgram = (deps: RunDeps, observed: Observed): Command => {
 
   pool
     .command('deposit')
-    .description('write a batch to the outbox for each session that passes the folder allowlist and the exclusion check, and stop: nothing is sent, and only counts print. --send <hash> runs the checks that a batch was printed and is unchanged, then stops: sending is disabled in this release')
-    .option('--accept-covenant <version>', 'accept this version of the pool covenant before sending (with --send, which is disabled in this release)')
+    .description('write a batch to the outbox for each session that passes the folder allowlist and the exclusion check, and stop: nothing is sent, and only counts print. --send <hash> sends one batch that oars pool outbox printed and that is unchanged, once this account has accepted the pool covenant')
+    .option('--accept-covenant <version>', 'accept this version of the pool covenant before sending (with --send)')
     .option('--send <hash>', 'the SHA-256 of a batch that oars pool outbox printed')
     .option(serverOption, serverHelp)
     .action(async (_options: OptionValues, command: Command) => {

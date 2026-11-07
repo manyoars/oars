@@ -31,10 +31,12 @@ const SLOW_DOWN_MS = 5000;
 
 const usage = (message: string, step: string): CliError => new CliError(message, ExitCode.USAGE, step);
 
-/** `--server`, else `OARS_POOL_URL`; never a default. A token and a session's shape cross this connection, so plain http goes only to this machine. */
+/** The Many Oars pool, used when neither `--server` nor `OARS_POOL_URL` names another. */
+export const DEFAULT_POOL_URL = 'https://pool.manyoars.com';
+
+/** `--server`, else `OARS_POOL_URL`, else the Many Oars pool. A token and a session's shape cross this connection, so plain http goes only to this machine. */
 export const poolServer = (env: NodeJS.ProcessEnv, step: string, named?: string): string => {
-  const given = named ?? env.OARS_POOL_URL;
-  if (given === undefined || given === '') throw usage('Name the pool server with --server or OARS_POOL_URL; there is no default.', step);
+  const given = named ?? (env.OARS_POOL_URL === undefined || env.OARS_POOL_URL === '' ? DEFAULT_POOL_URL : env.OARS_POOL_URL);
   let url: URL;
   try {
     url = new URL(given);
@@ -138,7 +140,7 @@ interface Call {
   show?: Masker;
 }
 
-/** How a request leaves this machine. The command line passes none and so sends no batch; the lock in `deposit --send` is tested with one. */
+/** How a request leaves this machine. The command line passes none, so a send goes over the network (`networkSender`); a test passes one to read what would leave. */
 export type Sender = (request: Outgoing) => Promise<Reply>;
 
 /** The request exactly as it will be sent: `outbox` prints it, and `ask` hands the same value to `fetch`. */
@@ -178,7 +180,7 @@ const send = async (deps: RunDeps, step: string, request: Outgoing, show: Masker
   return { status: response.status, body, headers: response.headers };
 };
 
-/** The sender a real send would use: the request goes out over the network as built. The command line does not pass it (sending waits on the covenant); the loopback test does, to read what reaches the socket. */
+/** The sender `deposit --send` uses when none is given: the request goes out over the network as built. The loopback test passes it to read what reaches the socket. */
 export const networkSender = (deps: RunDeps, step: string): Sender => (request) => send(deps, step, request, undefined);
 
 /** The server's named refusal, as a failure: its `error` is the problem's code in `--json`. */
@@ -364,18 +366,15 @@ const lockMessages: { [code in LockRefusal]: string } = {
   batch_changed: 'That batch changed on disk after it was printed, or since it was written, so it was not sent. Run oars pool deposit to build it again, then oars pool outbox to print it.',
 };
 
-/** `deposit --send <hash>`: the lock, then (only when a sender is given) the covenant and the request. The body is read and hashed again just before the request. */
+/** `deposit --send <hash>`: the lock, then the covenant (accepted here or before, or nothing is sent), then the request. The body is read and hashed again just before the request. */
 const sendBatch = async (deps: RunDeps, options: { outbox: string; server: string; token: string; hash: string; acceptCovenant: string | undefined; via: Sender | undefined }): Promise<Outcome> => {
-  const { outbox, server, token, hash, via } = options;
+  const { outbox, server, token, hash } = options;
+  const via = options.via ?? networkSender(deps, DEPOSIT);
   if (!/^[0-9a-f]{64}$/.test(hash)) throw usage('--send takes the SHA-256 that oars pool outbox printed: 64 hexadecimal characters.', DEPOSIT);
   const locked = await lockedBatch(outbox, hash);
   if (!locked.ok) {
     const title = lockMessages[locked.code];
     throw new CliError(title, ExitCode.CONFLICT, DEPOSIT, { code: locked.code, title, status: 409 });
-  }
-  if (via === undefined) {
-    const title = 'Sending a batch waits on the pool covenant: this oars does not send one yet. Nothing was sent.';
-    throw new CliError(title, ExitCode.CONFLICT, DEPOSIT, { code: 'sending_disabled', title, status: 409 });
   }
   await openCovenant(deps, server, token, options.acceptCovenant, via);
   const bytes = await unchangedBytes(locked.file, hash);
@@ -403,8 +402,8 @@ export const poolDeposit = async (deps: RunDeps, options: { server?: string | un
   // A client past `registry_max_age` builds no batch (spec Section 1.3): its sessions wait in `A` and nothing is lost. This comes before anything is written or sent.
   const expired = vocabularyExpired(deps);
   if (expired !== undefined) throw expired;
-  // Accepting the covenant is a step of sending, which is disabled in this release: say so rather than exit 0 as though it was accepted.
-  if (options.send === undefined && options.acceptCovenant !== undefined) throw usage('--accept-covenant belongs to --send, and sending is disabled in this release. Nothing was accepted.', DEPOSIT);
+  // Accepting the covenant is a step of sending a batch: alone it would exit 0 as though something had been sent under it.
+  if (options.send === undefined && options.acceptCovenant !== undefined) throw usage('--accept-covenant belongs to --send: it is accepted as a step of sending a batch. Nothing was accepted.', DEPOSIT);
   const outbox = outboxFolder(runtime.storeDir, server);
   if (options.send !== undefined) return sendBatch(deps, { outbox, server, token, hash: options.send, acceptCovenant: options.acceptCovenant, via: options.via });
   const { terms } = exclusionPaths(runtime.projectsRoot, deps.env);
