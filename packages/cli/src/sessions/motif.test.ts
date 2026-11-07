@@ -61,7 +61,7 @@ describe('motif IDs', () => {
 
 describe('stepsOfCall', () => {
   it('takes the action a record captured', () => {
-    expect(stepsOfCall(call({ steps: [captured(0, 0, 'file.write')] }), 'claude-code')).toEqual([{ action: 'file.write', identity: null, status: 'ok', tokens: 0, durationMs: 0 }]);
+    expect(stepsOfCall(call({ steps: [captured(0, 0, 'file.write')] }), 'claude-code')).toEqual([{ action: 'file.write', identity: null, status: 'ok', tokens: null, durationMs: 0 }]);
   });
 
   it('reads a record captured before steps existed through the same action table, under its own harness', () => {
@@ -75,7 +75,7 @@ describe('stepsOfCall', () => {
     const steps = [captured(0, 0, 'shell.exec', { identity: git, cost: { tokens: 7, durationMs: 5 } }), captured(0, 1, 'shell.exec', { identity: npm, status: 'error' })];
     expect(stepsOfCall(call({ tool: 'Bash', status: 'error', steps }), 'claude-code')).toEqual([
       { action: 'shell.exec', identity: git, status: 'ok', tokens: 7, durationMs: 5 },
-      { action: 'shell.exec', identity: npm, status: 'error', tokens: 0, durationMs: 0 },
+      { action: 'shell.exec', identity: npm, status: 'error', tokens: null, durationMs: 0 },
     ]);
   });
 
