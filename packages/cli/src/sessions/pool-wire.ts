@@ -435,7 +435,7 @@ export const skeletonOf = (records: SessionRecords, id: string, read: ShellReade
 };
 
 /**
- * The version bucket of a session that recorded none: Cursor, VS Code Copilot Chat, Gemini, and Grok Build keep no harness version in their local files, so their cells are
+ * The version bucket of a session that recorded none: Cursor, Gemini, and Grok Build keep no harness version in their local files, and neither does a VS Code Copilot Chat session whose requests carry no `agent.extensionVersion`, so their cells are
  * `<harness>/unknown/<model>`. It is the one non-numeric word a bundle can be asked for, so those harnesses are served the cells they have.
  */
 export const UNKNOWN_VERSION = 'unknown';

@@ -509,7 +509,7 @@ describe('a bundle is one harness at one numbered bucket', () => {
 });
 
 describe('a bundle for a harness with no version on record', () => {
-  // Cursor, VS Code Copilot Chat, Gemini, and Grok record no version, so their sessions fill `<harness>/unknown/<model>` cells, which no numbered bundle holds. The route takes `unknown` for them.
+  // Cursor, Gemini, and Grok Build record no version, and neither does a VS Code Copilot Chat session whose requests carry no `agent.extensionVersion`, so their sessions fill `<harness>/unknown/<model>` cells, which no numbered bundle holds. The route takes `unknown` for them.
   const deposits = async (fresh: TestPool, harness: Harness, version: string | null, base: number, count: number): Promise<string> => {
     let reader = '';
     for (let at = 0; at < count; at += 1) {

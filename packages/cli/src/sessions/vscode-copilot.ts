@@ -31,7 +31,7 @@
 //                    `hiddenFromTranscript` is the harness writing, not the operator, and its prompt is not read; its response still is
 //   timestamp        epoch milliseconds, `responseTimestamp` for the response. A missing or implausible one is never made up: the time carries forward
 //   modelId          the model
-//   agent            `agent.extensionVersion` (participants/chatAgents.ts:71) is the Copilot Chat extension's version, the harness version: the newest request that names one
+//   agent            `agent.extensionVersion` (participants/chatAgents.ts:71) is the Copilot Chat extension's version, the harness version, read only when `agent.extensionId.value` is `GitHub.copilot-chat` (a third-party participant carries its own): the newest request that names one
 //   response[]       a markdown part is a bare `{value}` (a string in the old format); `kind:'thinking'` is skipped;
 //                    `kind:'toolInvocationSerialized'` is a tool call (chatService/chatService.ts:1246-1270); `kind:'textEditGroup'` or `'notebookEditGroup'` `{uri}` is a file edited
 //   usage            `completionTokens` on the request, the whole turn's output (model/chatModel.ts:1929-1934, 2086), and `modelTotals[{model, inputTokens, cachedTokens, outputTokens}]`
@@ -70,6 +70,8 @@ const SHELL_TOOLS: ReadonlySet<string> = new Set(['run_in_terminal', 'run_task',
 const CHANNELS = ['Code', 'Code - Insiders', 'Code - OSS'] as const;
 
 type Obj = { [key: string]: unknown };
+// ExtensionIdentifier compares ids case-insensitively, so this is the lowercase form of `GitHub.copilot-chat`.
+const COPILOT_CHAT_EXTENSION_ID = 'github.copilot-chat';
 const isObj = (value: unknown): value is Obj => typeof value === 'object' && value !== null && !Array.isArray(value);
 const str = (value: unknown): string | undefined => (typeof value === 'string' && value !== '' ? value : undefined);
 const num = (value: unknown): number | undefined => (typeof value === 'number' && Number.isFinite(value) ? value : undefined);
@@ -241,8 +243,9 @@ export const chatLines = (data: Obj, fallbackId: string, folder: string | null):
   };
   for (const request of requests) {
     const when = stamp(request.timestamp);
-    // The extension's version, from the agent VS Code serialized beside the request (ISerializableChatAgentData.extensionVersion); a later request supersedes.
-    const extensionVersion = isObj(request.agent) ? str(request.agent.extensionVersion) : undefined;
+    // The extension's version, from the agent VS Code serialized beside the request (ISerializableChatAgentData.extensionVersion); a later request supersedes. A
+    // third-party chat participant is serialized the same way with its own extension's version, so only Copilot Chat's own agent is read (id compared case-insensitively).
+    const extensionVersion = isObj(request.agent) && isObj(request.agent.extensionId) && str(request.agent.extensionId.value)?.toLowerCase() === COPILOT_CHAT_EXTENSION_ID ? str(request.agent.extensionVersion) : undefined;
     if (extensionVersion !== undefined) base.version = extensionVersion;
     const message = request.message;
     const text = typeof message === 'string' ? str(message) : isObj(message) ? str(message.text) : undefined;
