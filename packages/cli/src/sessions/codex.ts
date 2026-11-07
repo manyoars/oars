@@ -36,12 +36,16 @@
 //                       `declined` one (exit code -1, events.rs:552-554) settles as a refusal only where its output is the user's refusal text (`exec command rejected by user`), and nothing otherwise. A `failed` one with exit code -1 is a failure with no exit status (a tool
 //                       failure message, events.rs:538-542; a process with none, async_watcher.rs:213, :409), so its text is the error line. So a backgrounded process keeps its failure and its commit sha
 //                       even with no `write_stdin` poll; only a Legacy rollout leaves it unsettled until a poll, and there the poll settles it
+//   response_item custom_tool_call `exec` / function_call `wait`   Codex 0.166+ code mode (the live 0.166/0.167 store, 2026-11-06; upstream rust-v0.167.0 not yet read): `exec`'s input is a JavaScript cell, not a command; its
+//                       output opens `Script completed`, `Script failed` (+ a `Script error:` part), or `Script running with cell ID <id>`, which is the cell's outcome and never its
+//                       commands'. `wait {cell_id}` polls a cell with the same three headers and settles it, in Paginated mode too
+//   event_msg item_completed CommandExecution, id `exec-<uuid>` (no call owns it, 0.166+)   the command a cell ran, as its own Bash call: exit_code, aggregated_output, duration
 //   event_msg mcp_tool_call_end {call_id, result}   an MCP call's outcome: `result.Err`, or `result.Ok.isError` (protocol.rs:3047, :3076); Legacy mode only
 //   event_msg patch_apply_end {call_id, success, stderr, status}   an apply_patch call's outcome (Legacy mode only); a declined one settles as a refusal only where its stderr is the user's refusal text (`patch rejected by user`), and nothing otherwise, and a
 //                       patch with no end event stays unsettled (a rejected patch is only a `RespondToModel` output, tools/handlers/apply_patch.rs)
 //   event_msg exec_command_end                  never persisted at ac558e2 (policy.rs:165) nor at rust-v0.46.0, so it is not read: the CommandExecution item and the call's output are the two sources
 // Older shapes: the JSON `{output, metadata.exit_code}` wrapper of a shell output (rust-v0.46.0 core/src/tools/mod.rs:186-210).
-// What Codex has no equivalent of (cost) stays at the value capture gives an absent field; message ids and duration are persisted and not read.
+// What Codex has no equivalent of (cost) stays at the value capture gives an absent field; message ids and a call reply's wall time are persisted and not read (a code-mode command item's `duration` is).
 
 import { createReadStream } from 'node:fs';
 import { readdir, readFile, stat } from 'node:fs/promises';
@@ -175,7 +179,7 @@ const iso = (value: unknown): string | undefined => {
 };
 
 /** The tool vocabulary prompt classes and `files` are computed in; a Codex name with no counterpart keeps its own. */
-const SHELL_CALLS = new Set(['shell', 'shell_command', 'exec_command', 'local_shell', 'container.exec', 'write_stdin']);
+const SHELL_CALLS = new Set(['shell', 'shell_command', 'exec_command', 'local_shell', 'container.exec', 'write_stdin', 'exec', 'wait']);
 const PATCH_CALLS = new Set(['apply_patch']);
 /** The namespace upstream fills in for a top-level function (codex-rs/protocol/src/tool_name.rs:6-7); with none and an empty one, it is the plain tool (:46-50). */
 const DEFAULT_FUNCTION_NAMESPACE = 'functions';
@@ -193,12 +197,20 @@ const EXIT_LINE = /^(?:Exit code: |Process exited with code )(-?\d+)\s*$/m;
 const OUTPUT_MARK = /(?:^|\n)Output:\n?/;
 const RUNNING_LINE = /^Process running with session ID (\S+)\s*$/m;
 /**
+ * A code-mode cell's outcome is its output's first line (the live 0.166/0.167 store, 2026-11-06; upstream rust-v0.167.0 not yet read): `Script completed`, `Script failed` (a second part
+ * `Script error:\n<message>` follows), or `Script running with cell ID <id>`. It is the cell's outcome, never its commands': a completed cell can hold
+ * commands that exited nonzero, and those are CommandExecution items of their own.
+ */
+const SCRIPT_HEAD = /^Script (completed|failed|running with cell ID (\S+))[ \t]*(?:\n|$)/;
+const SCRIPT_ERROR = /(?:^|\n)Script error:\n?/;
+/**
  * The message of a call that failed before it produced an exit code, written as the whole output (no `Output:` header): `execution error: ` for a
  * shell call (core/src/tools/events.rs:438), and for the default unified-exec tool (ConfigShellToolType is only `UnifiedExec | Disabled`,
  * protocol/src/openai_models.rs:330-333) `exec_command failed: ` (core/src/tools/handlers/unified_exec/exec_command.rs:270), `write_stdin failed: `
- * (write_stdin.rs:123), and `write_stdin approval failed: ` (:121). `write_stdin rejected: ` (:118) stays unsettled: its reason is the approval policy's.
+ * (write_stdin.rs:123), and `write_stdin approval failed: ` (:121). `wait failed: ` is assumed by analogy with `write_stdin failed: ` (write_stdin.rs:123) and has not
+ * been seen in the live store. `write_stdin rejected: ` (:118) stays unsettled: its reason is the approval policy's.
  */
-const SPAWN_ERROR = /^(?:execution error|exec_command failed|write_stdin(?: approval)? failed): /;
+const SPAWN_ERROR = /^(?:execution error|exec_command failed|wait failed|write_stdin(?: approval)? failed): /;
 /**
  * A declined call is the user's refusal only where its message says so. Codex reports `ToolError::Rejected` as `declined` for a user's refusal and for some
  * runtime rejections, and normalizes only the literal text `rejected by user` (events.rs:448-458): `exec command rejected by user` for a shell call (:456) and
@@ -225,15 +237,26 @@ const bodyText = (raw: unknown): string => {
  * ran (`SPAWN_ERROR` above), was declined (`... rejected by user`, events.rs:456), or is a process with no exit status, whose reply header gets neither line
  * (`None` writes none, context.rs:555-557; its -1 goes to the item only, process_manager.rs:823, :839). An older Codex wrote JSON `{output, metadata.exit_code}` (rust-v0.46.0 core/src/tools/mod.rs:186-210).
  */
-const outcomeOf = (raw: unknown): { text: string; exit: number | undefined; spawnError: boolean; running: string | undefined } => {
+const outcomeOf = (raw: unknown): { text: string; exit: number | undefined; spawnError: boolean; running: string | undefined; script: boolean } => {
   const body = bodyText(raw);
+  const printed = OUTPUT_MARK.exec(body);
+  const script = SCRIPT_HEAD.exec(printed === null ? body : body.slice(0, printed.index));
+  if (script !== null) {
+    const error = SCRIPT_ERROR.exec(body);
+    const output = printed === null ? '' : body.slice(printed.index + printed[0].length, error === null || error.index < printed.index ? undefined : error.index);
+    if (script[1] === 'failed') {
+      const message = error === null ? output : body.slice(error.index + error[0].length);
+      return { text: message.trim() === '' ? 'Script failed' : message, exit: undefined, spawnError: true, running: undefined, script: true };
+    }
+    return { text: output, exit: script[2] === undefined ? 0 : undefined, spawnError: false, running: script[2], script: true };
+  }
   const wrapped = parse(body);
-  if (isObj(wrapped) && typeof wrapped.output === 'string') return { text: wrapped.output, exit: isObj(wrapped.metadata) ? num(wrapped.metadata.exit_code) : undefined, spawnError: false, running: undefined };
+  if (isObj(wrapped) && typeof wrapped.output === 'string') return { text: wrapped.output, exit: isObj(wrapped.metadata) ? num(wrapped.metadata.exit_code) : undefined, spawnError: false, running: undefined, script: false };
   const mark = OUTPUT_MARK.exec(body);
-  if (mark === null) return { text: body, exit: undefined, spawnError: SPAWN_ERROR.test(body), running: undefined };
+  if (mark === null) return { text: body, exit: undefined, spawnError: SPAWN_ERROR.test(body), running: undefined, script: false };
   const head = body.slice(0, mark.index);
   const code = EXIT_LINE.exec(head)?.[1];
-  return { text: body.slice(mark.index + mark[0].length), exit: code === undefined ? undefined : Number(code), spawnError: false, running: RUNNING_LINE.exec(head)?.[1] };
+  return { text: body.slice(mark.index + mark[0].length), exit: code === undefined ? undefined : Number(code), spawnError: false, running: RUNNING_LINE.exec(head)?.[1], script: false };
 };
 
 /**
@@ -294,7 +317,7 @@ export const rolloutLines = (text: string, fallbackId: string, parentText?: stri
   // The assistant lines since the last counted token_count share one response id; the first of them carries its usage.
   let open: Obj | undefined;
   let lastTotal: number | undefined;
-  const calls = new Map<string, { kind: 'shell' | 'patch' | 'other'; ids: string[]; session?: string; dynamic?: true }>();
+  const calls = new Map<string, { kind: 'shell' | 'patch' | 'other'; ids: string[]; session?: string; cell?: true; dynamic?: true }>();
   // The tools the session declared as dynamic (`dynamic_tools`): their output carries no failure signal, only their DynamicToolCall item does.
   const dynamicNames = new Set<string>();
   // A unified-exec process still running, by its session id, to the exec_command that started it: in a Legacy rollout the `write_stdin` that sees it exit settles both.
@@ -310,7 +333,10 @@ export const rolloutLines = (text: string, fallbackId: string, parentText?: stri
   // one has none), so the leading records equal to the parent's, in order, are its copied history, in either mode. Null once it stops matching.
   let copied: { keys: string[]; at: number } | null = null;
   const resolved = new Set<string>();
+  // The stamp before the record being read, so an item's start (its stamp less its duration) is never earlier than the line before it.
+  let before: string | undefined;
   const stamp = (value: unknown): string => {
+    before = at;
     const candidate = iso(value);
     if (candidate !== undefined && (at === undefined || Date.parse(candidate) >= Date.parse(at))) at = candidate;
     return at ?? new Date(0).toISOString();
@@ -328,15 +354,15 @@ export const rolloutLines = (text: string, fallbackId: string, parentText?: stri
   // path: a shell call's `[branch sha]` line is how a commit's sha is found. The output follows an `Exit code 0` line, the shape a Claude Code Bash
   // result has (fixtures/proj/errors-a.jsonl:15): capture marks a result whose text starts `Exit code <nonzero>` as failed (`isErrorResult` in extract.ts), and a
   // call that exited 0 may print such a line (`cat ci.log`). The commit patterns read every line (`COMMIT_LINE` and `HASH_LINE` in extract.ts, both `gm`), so the sha is still found.
-  const result = (id: string, failure: string | undefined, when: string, output = ''): void => {
+  const result = (id: string, failure: string | undefined, when: string, output = '', timed = false): void => {
     sequence += 1;
     lines.push({
       ...base,
       type: 'user',
       uuid: `${fallbackId}-r${String(sequence)}`,
       timestamp: when,
-      // Codex stamps a result with its own time, but the call's start is not paired to it, so no duration is claimed.
-      noDuration: true,
+      // Codex stamps a result with its own time, but the call's start is not paired to it, so no duration is claimed; a CommandExecution item's own `duration` is the exception.
+      ...(timed ? {} : { noDuration: true }),
       message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: id, is_error: failure !== undefined, content: failure ?? (output === '' ? '' : `Exit code 0\n${output}`) }] },
     });
   };
@@ -362,7 +388,8 @@ export const rolloutLines = (text: string, fallbackId: string, parentText?: stri
   };
   // A shell call settles on its exit code, or on a failure to spawn, whether that comes from its own output or from a CommandExecution item. A
   // process still running was remembered by its session id, so in a Legacy rollout the `write_stdin` that polled it and read its exit
-  // code settles both calls (in a Paginated one an item settles only its own exec_command). A poll that failed instead (`write_stdin failed: ...`, `exited` false) says nothing about the process: a
+  // code settles both calls (in a Paginated one an item settles only its own exec_command; a `wait` on a code-mode cell settles the cell in either mode, because
+  // the cell's outcome is its own header and no item carries it). A poll that failed instead (`write_stdin failed: ...`, `exited` false) says nothing about the process: a
   // non-empty write to one with no tty is `StdinClosed` (unified_exec/process_manager.rs:1021-1026) and it runs on, so only the poll is the error.
   const settleShell = (id: string, failure: string | undefined, output: string, when: string, exited = true): void => {
     const known = calls.get(id);
@@ -370,7 +397,7 @@ export const rolloutLines = (text: string, fallbackId: string, parentText?: stri
     resolved.add(id);
     result(id, failure, when, output);
     const pending = known.session === undefined ? undefined : running.get(known.session);
-    if (exited && !paginated && pending !== undefined && !resolved.has(pending)) {
+    if (exited && (!paginated || known.cell === true) && pending !== undefined && !resolved.has(pending)) {
       resolved.add(pending);
       result(pending, failure, when, output);
     }
@@ -393,6 +420,23 @@ export const rolloutLines = (text: string, fallbackId: string, parentText?: stri
     } else if (kind === 'CommandExecution' && id !== undefined && item.status === 'declined' && DECLINED_OUTPUT.test(str(item.aggregated_output) ?? '')) {
       // A `declined` one has exit code -1 (events.rs:552-554); only the user's refusal text settles it, as a refusal.
       settleShell(id, DECLINED_SHELL, '', when);
+    } else if (kind === 'CommandExecution' && (item.status === 'completed' || item.status === 'failed') && (id === undefined || !calls.has(id))) {
+      // A code-mode cell's `exec_command` (Codex 0.166+) is run by the cell's JavaScript, so no call carries the item's `exec-<uuid>` id: the item is the
+      // command's only record, and it is its own Bash call. Binding it to its cell by position would hold for 191 of 193 items in a live 0.167.0 store and fail
+      // for 2, so it is not attempted.
+      const exit = num(item.exit_code);
+      if (id === undefined || resolved.has(id)) return;
+      resolved.add(id);
+      const output = str(item.aggregated_output) ?? '';
+      const spent = isObj(item.duration) ? Math.round((num(item.duration.secs) ?? 0) * 1000 + (num(item.duration.nanos) ?? 0) / 1e6) : undefined;
+      const parsed = Array.isArray(item.parsed_cmd) && item.parsed_cmd.length === 1 && isObj(item.parsed_cmd[0]) ? str(item.parsed_cmd[0].cmd) : undefined;
+      const joined = commandOf(item);
+      // The command array is the launcher then its flags then the text (`pwsh.exe -Command <text>`); a single parsed command is that text alone.
+      const command = parsed !== undefined && (joined === undefined || parsed.length < joined.length) ? parsed : joined;
+      const began = spent === undefined ? when : new Date(Math.max(Date.parse(when) - spent, Date.parse(before ?? when))).toISOString();
+      assistant([{ type: 'tool_use', id, name: 'Bash', native: 'exec_command', input: command === undefined ? {} : { command } }], began);
+      // An item with no exit_code (an Option, skipped when None, items.rs:284-286) keeps its command and has no outcome, as an owned one does.
+      if (exit !== undefined) result(id, failureOf(exit, output), when, output, spent !== undefined);
     } else if (kind === 'CommandExecution' && id !== undefined && (item.status === 'completed' || item.status === 'failed')) {
       // The exec_command's own item: `id` is its call id, written when the process exits, even one the model never polled (header). It carries the
       // real exit code and the output.
@@ -534,9 +578,11 @@ export const rolloutLines = (text: string, fallbackId: string, parentText?: stri
         const action = isObj(payload.action) ? payload.action : {};
         if (id === undefined) continue;
         if (kind === 'local_shell_call' || (namespace === undefined && SHELL_CALLS.has(name))) {
-          const command = commandOf(kind === 'local_shell_call' ? action : input);
-          const polled = name === 'write_stdin' ? (str(input.session_id) ?? (num(input.session_id) === undefined ? undefined : String(num(input.session_id)))) : undefined;
-          calls.set(id, { kind: 'shell', ids: [id], ...(polled === undefined ? {} : { session: polled }) });
+          // A code-mode `exec` call's input is a JavaScript cell, not a command, so it has none.
+          const command = name === 'exec' ? undefined : commandOf(kind === 'local_shell_call' ? action : input);
+          const poll = name === 'wait' ? input.cell_id : input.session_id;
+          const polled = name === 'write_stdin' || name === 'wait' ? (str(poll) ?? (num(poll) === undefined ? undefined : String(num(poll)))) : undefined;
+          calls.set(id, { kind: 'shell', ids: [id], ...(polled === undefined ? {} : { session: name === 'wait' ? `cell:${polled}` : polled }), ...(name === 'exec' || name === 'wait' ? { cell: true as const } : {}) });
           // `native` keeps Codex's own name for the action table (the contract at extract.ts, as cursor.ts does); a `local_shell_call` has no name field.
           assistant([{ type: 'tool_use', id, name: 'Bash', native: kind === 'local_shell_call' ? 'local_shell' : name, input: command === undefined ? {} : { command } }], when);
         } else if (namespace === undefined && PATCH_CALLS.has(name)) {
@@ -562,8 +608,8 @@ export const rolloutLines = (text: string, fallbackId: string, parentText?: stri
             // A shell call settles on its exit code, or on a failure to spawn. A process still running stays unsettled and is remembered by its
             // session id, so in a Legacy rollout the `write_stdin` that sees it exit settles it too. A call declined with the user's refusal text has neither and settles as that refusal; any other declined text stays unsettled.
             if (out.exit === undefined && DECLINED_OUTPUT.test(out.text)) settleShell(id, DECLINED_SHELL, '', when, false);
-            else if (out.exit !== undefined || out.spawnError) settleShell(id, out.spawnError ? out.text : failureOf(out.exit, out.text), out.text, when, out.exit !== undefined);
-            else if (out.running !== undefined && known.session === undefined) running.set(out.running, id);
+            else if (out.exit !== undefined || out.spawnError) settleShell(id, out.spawnError ? out.text : failureOf(out.exit, out.text), out.text, when, out.exit !== undefined || out.script);
+            else if (out.running !== undefined && known.session === undefined) running.set(known.cell === true ? `cell:${out.running}` : out.running, id);
           } else if (known.kind === 'other' && known.dynamic !== true) {
             // Another call's output carries no failure signal (an MCP call's comes from its mcp_tool_call_end), and a patch settles only from its
             // patch_apply_end, because a rejected patch comes back as plain output text (tools/handlers/apply_patch.rs).
