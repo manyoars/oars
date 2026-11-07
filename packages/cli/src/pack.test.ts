@@ -255,7 +255,7 @@ describe('the public text states facts only', () => {
     expect(text).toContain('raw transcripts');
     expect(text).toMatch(/unredacted/);
     expect(text).toContain('except `gold arms`, which sends redacted text through your own Claude subscription');
-    expect(text).toContain('Apart from that and telemetry (on by default, off with `oars telemetry off`, `OARS_TELEMETRY=0`, or `DO_NOT_TRACK=1`; it will send, in a later release, only to a pool server you configure), oars itself sends nothing; the hooks and the MCP tool add recall text to the running session, and your harness sends that to its model like any other context.');
+    expect(text).toContain('Apart from that and telemetry (on by default, off with `oars telemetry off`, `OARS_TELEMETRY=0`, or `DO_NOT_TRACK=1`; it sends only to the pool server in `OARS_POOL_URL`), oars itself sends nothing; the hooks and the MCP tool add recall text to the running session, and your harness sends that to its model like any other context.');
     expect(text).toContain(NOT_OPEN);
     expect(text).toContain('%APPDATA%');
     expect(text).toContain('~/.config');
