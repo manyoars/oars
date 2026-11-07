@@ -63,6 +63,7 @@ export const FIELD_ROWS: { readonly [field: string]: string } = {
   id: "A hash the client computes per account from the account and the session, so a redeposit replaces and two accounts' sessions cannot be joined. Never the session id.",
   identity: 'What a step called, in closed vocabulary: a shell program with its subcommand and flags, an MCP server and tool, a skill, or a web host; null for an action with none.',
   input: 'A bucket of the input tokens in a prompt, a number.',
+  intervention: 'Whether a human stepped in after a prompt\'s work and how, one of a closed list: none, after-error (the prompt\'s last call failed), redo (the next prompt edited the same file), revert (the next prompt undid the edit), or unknown; absent when the prompt predates the signal. An outcome row, not a grade; never the next prompt\'s words.',
   language: 'A programming language of the project, from a closed public list, or other for any language off the list, beside its share bucket.',
   languageShare: 'How much of the files a session touched are in one language, one of four buckets: none, under 10 percent, 10 up to 50, or 50 and over; never a count of files.',
   languageShares: 'The share bucket of each language of the project whose share is known; a language with no share is in the languages list alone.',
