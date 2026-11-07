@@ -271,6 +271,23 @@ describe('retries and completion', () => {
     expect(await keysIn(`raw/${account}/`)).toEqual([]);
   });
 
+  it('refuses a completion whose parts do not hash to the path, and leaves no object and no row', async () => {
+    const { token, account } = await member();
+    const bytes = transcript(Math.round(1.5 * MEGABYTE), 6);
+    const other = await hex(transcript(10, 6));
+    const parts = await sendParts(other, bytes, token);
+    const done = await complete(other, parts, bytes.length, token);
+    expect(done.status).toBe(422);
+    expect(fieldOf(done.json, 'error')).toBe('hash_mismatch');
+    expect(fieldOf(done.json, 'field')).toBe('sha256');
+    expect(await rowsOf(account)).toEqual([]);
+    expect(await keysIn(`raw/${account}/`)).toEqual([]);
+    // The same parts under their own hash complete: the refusal cost the client nothing but the label.
+    const hash = await hex(bytes);
+    await sendParts(hash, bytes, token);
+    expect((await complete(hash, parts, bytes.length, token)).status).toBe(201);
+  }, 60_000);
+
   it('refuses a completion with no parts or bytes named', async () => {
     const { token } = await member();
     for (const body of ['{}', '{"parts":0,"bytes":5}', '{"parts":1}', '{"parts":1.5,"bytes":5}', 'not json']) {
