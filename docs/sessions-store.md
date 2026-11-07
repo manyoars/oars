@@ -1055,7 +1055,7 @@ and the fork holds only its own prompt.
   result (nested model work, `docs/message-types.md:177`), is not a response of the session and is not counted (a known gap).
 - **Absent.** No file records Pi's version (the header's `version` is the file format's), so the skeleton's harness version is empty, the cells are `pi/unknown/<model>`, and a bundle
   for them is asked for as `unknown` (`pool.md`, "What a bundle serves"). There is no interrupt, tool refusal, or hook denial count: an aborted call is a tool error and no more
-  (`session-shape.ts`), so those counts are absent, not zero. There is no per-call duration.
+  (`session-shape.ts`), so those counts are absent, not zero. There is no per-call duration. `setup` and `funnel` are absent (`session-shape.ts`), so the pool reads the session as unfilled.
 - **Subagents and extensions.** Pi has no sub-agent in core (`README.md:19`); the example extension runs `pi --mode json -p --no-session` (`examples/extensions/subagent/index.ts:389`),
   which writes no file, so the parent's `subagent` call is the record. An extension's text is never a prompt: `custom_message` entries, `custom` entries, and messages of role `custom`,
   `hookMessage`, `branchSummary`, and `compactionSummary` are skipped, as are `model_change`, `thinking_level_change`, `label`, and the rest.
