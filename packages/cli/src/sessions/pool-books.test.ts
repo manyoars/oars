@@ -25,6 +25,17 @@ describe('lastFetchedBundle', () => {
     expect((await lastFetchedBundle(dir))?.books?.backlog).toBe(2);
   });
 
+  it('reads a signed bundle whose books block is malformed as no bundle, not as a crash in the printer', async () => {
+    const signer = await pair();
+    await keep(dir, bundleOf({ ...booksOf(), served: 7 } as never), signer);
+    expect(await lastFetchedBundle(dir)).toBeUndefined();
+  });
+
+  it('stops on an unreadable sign-ins file instead of reading it as no bundle', async () => {
+    writeFileSync(join(dir, 'pool-accounts.json'), '{ not json');
+    await expect(lastFetchedBundle(dir)).rejects.toThrow('cannot be read');
+  });
+
   it('is nothing when no fetch kept a bundle, or when the kept one no longer verifies', async () => {
     expect(await lastFetchedBundle(dir)).toBeUndefined();
     const signer = await pair();

@@ -9,7 +9,6 @@ import {
   isVocabularyExpired,
   LANGUAGES,
   PUBLIC_FLAGS,
-  PUBLIC_HOSTS,
   PUBLIC_MCP_SERVERS,
   PUBLIC_MCP_TOOLS,
   PUBLIC_PACKAGES,
@@ -29,7 +28,7 @@ const tables = (map: ReadonlyMap<string, ReadonlySet<string>>): Array<[string, s
 
 /** The curated lists in public-vocabulary.ts that the pool reads (the projection and `pool-wire.ts`), as one digest. */
 const curatedDigest = (): string =>
-  sha256(JSON.stringify([sorted(PUBLIC_PROGRAMS), sorted(BUNDLING_PROGRAMS), tables(PUBLIC_SUBCOMMANDS), sorted(PUBLIC_FLAGS), sorted(PUBLIC_MCP_SERVERS), tables(PUBLIC_MCP_TOOLS), tables(HARNESS_TOOLS), sorted(PUBLIC_SKILLS), tables(HARNESS_AGENT_TYPES), tables(TOOL_INPUT_KEYS), sorted(LANGUAGES), sorted(PUBLIC_HOSTS), sorted(FRAMEWORKS), sorted(PUBLIC_PACKAGES)]));
+  sha256(JSON.stringify([sorted(PUBLIC_PROGRAMS), sorted(BUNDLING_PROGRAMS), tables(PUBLIC_SUBCOMMANDS), sorted(PUBLIC_FLAGS), sorted(PUBLIC_MCP_SERVERS), tables(PUBLIC_MCP_TOOLS), tables(HARNESS_TOOLS), sorted(PUBLIC_SKILLS), tables(HARNESS_AGENT_TYPES), tables(TOOL_INPUT_KEYS), sorted(LANGUAGES), sorted(FRAMEWORKS), sorted(PUBLIC_PACKAGES)]));
 
 interface Manifest {
   snapshotDate: string;
@@ -70,7 +69,7 @@ const PINNED: { readonly [version: string]: { readonly files: { readonly [file: 
       'pypi.json': '4fd0e73a16ec5abcee1c970f7e28cc84af68aaceb0197b8007a8be690878f442',
       'rubygems.json': '0cfec417beb17efdbd60634fe7e6c9252bebc6be5bab086446431099d939be33',
     },
-    curated: '66557363da0f1bee1e7264b5126b8ae8231a483a7e36b89151a41bc52a9ad76f',
+    curated: 'faf8ee9dd0e9a363dd8ff4cc3b832c84fa746b7eb06c079475b7e0bbe2fe42c1',
   },
 };
 
