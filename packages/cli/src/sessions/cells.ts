@@ -34,7 +34,7 @@ export interface Cell {
    * `usageObserved` is not a measurement). Null when no session recorded any: absent, never a measured 0.
    */
   tokens: number | null;
-  /** On a `class` cell, how many of `sessions` recorded input, which is the coverage the `tokens` figure has (a session that recorded input but not every category still counts as covered, so the figure can be partial by category); less than `sessions` makes it a partial sum. Absent on a cell read back from the pool's stored sums, which carry no coverage count. A step cell does not honor it yet: it counts every session as recorded and reads a null step cost as 0 (`motif.ts:61`), which t921 Item 5 fixes. */
+  /** How many of `sessions` recorded the cost `tokens` sums (a class cell: input; a step cell: a step cost), which is the coverage the `tokens` figure has (a session that recorded input but not every category still counts as covered, so the figure can be partial by category); less than `sessions` makes it a partial sum. Absent on a cell read back from a stored sum written before the pool held coverage. */
   tokenSessions?: number;
   /** How many of the cell's prompts the `tokens` figure covers (a step cell counts steps): the divisor of a per-prompt mean, since `tokens` holds only prompts that recorded input. Absent like `tokenSessions`. */
   tokenPrompts?: number;
@@ -161,7 +161,7 @@ interface Tally {
   ok: number;
   failed: number;
   tokens: number;
-  /** The sessions whose tokens `tokens` holds: a step's are measured, a prompt's count only when it recorded input. */
+  /** The sessions whose tokens `tokens` holds: a step's count only when it recorded a cost, a prompt's only when it recorded input. */
   recorded: Set<string>;
   /** The prompts (or steps) behind `tokens`, counted where `recorded` gains a session. */
   recordedUnits: number;
@@ -251,9 +251,12 @@ export const deriveCells = (store: Store, graph: RecallGraph = NO_RECALLS): Cell
         if (status === 'ok') tally.ok += 1;
         if (status === 'error') tally.failed += 1;
         for (const step of window) {
-          tally.tokens += step.tokens;
-          tally.recorded.add(first.parent);
-          tally.recordedUnits += 1;
+          // A step with no recorded cost has no tokens to count, so it joins neither the sum nor the coverage (its duration is still counted).
+          if (step.tokens !== null) {
+            tally.tokens += step.tokens;
+            tally.recorded.add(first.parent);
+            tally.recordedUnits += 1;
+          }
           tally.durationMs += step.durationMs;
         }
       }
@@ -288,9 +291,11 @@ export const deriveCells = (store: Store, graph: RecallGraph = NO_RECALLS): Cell
             const tally = tallyAt(motif, bucket, 'day', failedDay, false);
             tally.sessions.add(first.parent);
             tally.failed += 1;
-            tally.tokens += counted.tokens;
-            tally.recorded.add(first.parent);
-            tally.recordedUnits += 1;
+            if (counted.tokens !== null) {
+              tally.tokens += counted.tokens;
+              tally.recorded.add(first.parent);
+              tally.recordedUnits += 1;
+            }
             tally.durationMs += counted.durationMs;
           }
         }
