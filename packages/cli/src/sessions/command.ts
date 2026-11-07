@@ -22,6 +22,7 @@ import { buildIndex, contextBlock, inRepository, readIndex, type ContextOptions 
 import { ensureSchedule, hookStatus, installHooks, recordSchedule, SCHEDULE_LEFT_OFF, scheduleOptedOut, scheduleStatus, setSchedule, settingsPath, uninstallHooks, type InstallRuntime, type Scope } from './install.js';
 import { serve } from './mcp.js';
 import { refreshPool, servedPool } from './pool.js';
+import { booksLines, lastFetchedBundle } from './pool-books.js';
 import { FAMILIES } from './read.js';
 import { formatNotReadable, notReadable } from './read-readable.js';
 import { formatReads, isFamily, parseSlice, selectReads } from './read-rows.js';
@@ -239,7 +240,8 @@ export const sessionsBooks = async (deps: SessionsDeps, options: { by: BooksBy; 
         ? `No ${options.by === 'pull' ? 'pulls' : 'prompts'} in the --since window.`
         : formatBooks(rows, options.by);
   const scope = await scopeOf(runtime);
-  return { document: { ok: true, by: options.by, rows, newerCaptures: store.newerCaptures, scope }, text: [table, ...skippedNotice(scope), ...newerNotice(store), ...(rows.length === 0 ? [] : [BOOKS_CAVEAT])].join('\n') };
+  const bundle = await lastFetchedBundle(storeDir);
+  return { document: { ok: true, by: options.by, rows, newerCaptures: store.newerCaptures, scope, pool: bundle?.books ?? null }, text: [table, ...skippedNotice(scope), ...newerNotice(store), '', ...booksLines(bundle), ...(rows.length === 0 ? [] : ['', BOOKS_CAVEAT])].join('\n') };
 };
 
 export const sessionsMeasure = async (deps: SessionsDeps, options: { last: number; since: string | undefined; repo?: string }): Promise<Outcome> => {
