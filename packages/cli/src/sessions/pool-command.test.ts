@@ -2151,6 +2151,16 @@ describe('oars pool deposit: the raw copy (t884)', () => {
     expect(scene.sent()).not.toContain(TERM);
   });
 
+  it('names the real command for the raw prompt in the deposit summary until it is answered yes', async () => {
+    const asked = await ready(null);
+    await asked.cli('pool', 'deposit', '--server', POOL);
+    expect(asked.h.out.join('')).toContain('until you answer the raw prompt with oars pool raw --consent yes.');
+    expect(asked.h.out.join('')).not.toContain('raw consent yes');
+    const granted = await ready('granted');
+    await granted.cli('pool', 'deposit', '--server', POOL);
+    expect(granted.h.out.join('')).not.toContain('--consent yes');
+  });
+
   it('lists each raw copy in the outbox with its hash and bytes, and prints the body only with --explain', async () => {
     const scene = await ready('granted');
     await scene.cli('pool', 'deposit', '--server', POOL);
