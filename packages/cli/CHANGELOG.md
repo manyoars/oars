@@ -5,6 +5,7 @@ All notable changes to `@manyoars/oars`. Versions follow semver; a release is th
 ## Unreleased
 
 - OpenCode joins the per-harness proofs (t935): the pool carries a golden batch for `--harness opencode`, and `intervention-harness.test.ts` and `intervention-stop.test.ts` read OpenCode scenarios through its adapter. `docs/sessions-store.md` states what it shows: every bucket but `user-stop` (a refused call, or an interrupt that cuts a call in flight, is an error state, so it reads `after-error`; no interrupt record), no per-call duration, and the `session-shape` column. No reader change: the data folder already follows `XDG_DATA_HOME`.
+- The Pi reader follows `PI_CODING_AGENT_SESSION_DIR` when it is set, reading the session files Pi wrote straight into that folder instead of `<agent folder>/sessions`; Pi now also has a golden bundle in the pool, rows in the two intervention proofs (`user-stop` reads `none` for Pi, as for Grok Build), and a column in the `session-shape` table. No `CAPTURE_VERSION` or `EXTRACTOR_VERSION` change.
 
 ## 0.4.0 (2026-11-07)
 
