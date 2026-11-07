@@ -5,6 +5,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { incrementsOf } from './ingest.js';
 import { parseSkeleton, skeletonOf, verifyBundle, VOCAB_VERSION, type SessionSkeleton } from '../../cli/src/sessions/pool-wire.js';
+import { PROMPT_INTERVENTIONS, type PromptIntervention } from '../../cli/src/sessions/schema.js';
 import { CALL_SHAPE_METHOD } from '../../cli/src/sessions/read.js';
 import { frame, printOf, prompt, session, sessionsFrom, step, store, storedNames, tool } from '../../cli/src/sessions/pool-fixture.js';
 import { sampleSkeleton } from './sample.js';
@@ -245,7 +246,7 @@ describe('a bundle for a harness with no version on record', () => {
 });
 
 /** `skeleton` with the same intervention on every prompt: an outcome row that a pool holds for a later test and serves to nothing. */
-const withIntervention = (skeleton: SessionSkeleton, intervention: 'none' | 'after-error' | 'redo' | 'revert' | 'unknown'): SessionSkeleton => ({
+const withIntervention = (skeleton: SessionSkeleton, intervention: PromptIntervention): SessionSkeleton => ({
   ...skeleton,
   transcripts: skeleton.transcripts.map((transcript) => ({ ...transcript, prompts: transcript.prompts.map((held) => ({ ...held, intervention })) })),
 });
@@ -272,9 +273,20 @@ describe('the intervention outcome is held per prompt and served by nothing (t88
     expect(String(await db.prepare('SELECT extensions FROM deposits').first('extensions'))).toBe('[]');
   });
 
+  it('stores user-stop on the prompt as sent (t912): the pool accepts the member and reads it as itself, not as other', async () => {
+    const { token } = await pool.signIn('github', stubUser('6002'));
+    await pool.post('/v1/covenant/accept', { version: 'v1' }, token);
+    expect((await pool.post('/v1/deposits', withIntervention(sampleSkeleton('0000000000006003'), 'user-stop'), token)).status).toBe(201);
+    const db = await pool.db();
+    const stored = parseSkeleton(JSON.parse(String(await db.prepare("SELECT skeleton FROM deposits WHERE id = '0000000000006003'").first('skeleton'))));
+    if (!stored.ok) throw new Error(`stored skeleton refused: ${stored.field}`);
+    expect(stored.skeleton.transcripts.flatMap((transcript) => transcript.prompts.map((held) => held.intervention))).toEqual(['user-stop']);
+    expect(String(await db.prepare("SELECT extensions FROM deposits WHERE id = '0000000000006003'").first('extensions'))).toBe('[]');
+  });
+
   it('derives the same cells, motifs, and strata with the bucket as without it: no cell reads it', () => {
     const plain = incrementsOf(sampleSkeleton('0000000000006002'));
-    for (const value of ['none', 'after-error', 'redo', 'revert', 'unknown'] as const) {
+    for (const value of PROMPT_INTERVENTIONS) {
       const held = incrementsOf(withIntervention(sampleSkeleton('0000000000006002'), value));
       expect([...held.cells]).toEqual([...plain.cells]);
       expect([...held.strata]).toEqual([...plain.strata]);
@@ -287,14 +299,14 @@ describe('the intervention outcome is held per prompt and served by nothing (t88
     for (const id of ['6101', '6102', '6103', '6104', '6105']) {
       const { token } = await pool.signIn('github', stubUser(id));
       await pool.post('/v1/covenant/accept', { version: 'v1' }, token);
-      expect((await pool.post('/v1/deposits', withIntervention(sampleSkeleton(id.padStart(16, '0')), 'after-error'), token)).status).toBe(201);
+      expect((await pool.post('/v1/deposits', withIntervention(sampleSkeleton(id.padStart(16, '0')), id === '6105' ? 'user-stop' : 'after-error'), token)).status).toBe(201);
       last = token;
     }
     const response = await pool.get(`/bundle/claude-code/2.1.314/${VOCAB_VERSION}`, last);
     const verified = await verifyBundle(response.json, pool.signingKey(), 'claude-code', '2.1.314');
     if (!verified.ok) throw new Error(verified.reason);
     expect(verified.bundle.reads.length).toBeGreaterThan(0);
-    expect(JSON.stringify(response.json)).not.toMatch(/intervention|after-error|revert/);
+    expect(JSON.stringify(response.json)).not.toMatch(/intervention|after-error|revert|user-stop/);
     expect(verified.bundle.reads.map((read) => read.family)).not.toContain('intervention');
   }, 60_000);
 });

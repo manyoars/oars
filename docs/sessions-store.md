@@ -341,6 +341,20 @@ one exception that the test pins: **Codex's `revert` by a git command is not see
 and the shell reader then takes `bash -lc git` as the command, so the segment is `git` and not `git revert`. A Codex session reads `none` there; its `revert` by a request in the next prompt, and
 by an unwrapped argv, is read. No harness is guessed at: a bucket that needs a record the adapter does not fill reads `none` or `unknown` by the table above.
 
+**`user-stop` by harness.** `intervention-stop.test.ts` writes a rejected call and an interrupted turn in each harness's own form, with and without an earlier failed call in the prompt. A harness reads a stop only as far as its adapter fills `stopped`'s two records:
+
+| Harness | Rejected call | Interrupted turn | Why |
+|---------|---------------|------------------|-----|
+| Claude Code | `user-stop` | `user-stop` | Writes the rejection sentence and the `[Request interrupted by user` user line. |
+| Cursor | `user-stop` | `none` | `userDecision` `rejected` becomes the rejection sentence. An aborted terminal call has no outcome and no marker. |
+| VS Code Copilot Chat | `user-stop` | `none` | A `Denied` or user-sourced `Skipped` confirmation becomes the rejection sentence. It reads no interrupt. |
+| Codex | `after-error` | `none` | A declined call is `exec command rejected by user` (or `patch rejected by user`), classed `user-rejected` but not the sentence `stopped` reads. A `turn_aborted` with reason `interrupted` is counted as a trust event and writes no marker prompt. |
+| Gemini CLI | `after-error` | `none` | A cancelled call is `[Operation Cancelled] ...`, not the sentence; the interrupted-reply placeholder is dropped. |
+| Copilot CLI | `none` | `none` | `session.error` and `abort` are not read. |
+| Grok Build | `none` | `none` | No event names a stop. |
+
+A harness that cannot show a stop reads its prompts as the table above says, as before `user-stop` existed. **The limit:** `user-stop` is only as wide as `stopped`. Widening it to Codex's and Gemini's declines (a rule over the `user-rejected` error code) would move `stopped`, which the books and the gold arms read, and is a separate change.
+
 ### Hashing
 
 `target` is a 16-hex SHA-256 of `<salt>\n<path>` (a newline between the two) for a call with a `file_path`, `notebook_path`, or `path`
