@@ -71,7 +71,7 @@ describe('a step names its frame', () => {
     if (first === undefined) throw new Error('no step');
     Reflect.deleteProperty(first, 'frame');
     expect(parseSkeleton(raw)).toEqual({ ok: false, field: 'transcripts[0].tools[0].steps[0].frame', reason: 'missing' });
-    expect(parseSkeleton({ ...clone(midPrompt()), format: 2 })).toEqual({ ok: false, field: 'format', reason: 'not a format this version reads' });
+    expect(parseSkeleton({ ...clone(midPrompt()), format: 2 })).toEqual({ ok: false, field: 'format', reason: 'the form without `errorCode` and `recoveryCalls` (format 2) is no longer read; send format 3' });
   });
 });
 
