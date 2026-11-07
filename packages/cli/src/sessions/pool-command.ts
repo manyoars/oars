@@ -432,7 +432,7 @@ export const postRaw = async (deps: RunDeps, options: { server: string; token: s
 const rawNote = (consent: string | null): string =>
   consent === 'granted' ? '' : consent === 'declined' ? 'You answered no to the raw prompt; oars pool raw --consent yes changes it.' : 'None is queued until you answer the raw prompt with oars pool raw --consent yes.';
 
-/** `deposit --send <hash>`: the send lock the nightly task takes too, then the batch lock, then the covenant (accepted here or before, or nothing is sent), then the request. The body is read and hashed again just before the request. */
+/** `deposit --send <hash>`: the send lock the nightly task takes too, then a skip for a hash already in `sent.log`, then the batch lock, then the covenant (accepted here or before, or nothing is sent), then the request. The body is read and hashed again just before the request. */
 const sendBatch = async (deps: RunDeps, options: { outbox: string; server: string; token: string; hash: string; acceptCovenant: string | undefined; via: Sender | undefined }): Promise<Outcome> => {
   const { outbox, server, token, hash } = options;
   const via = options.via ?? networkSender(deps, DEPOSIT);
@@ -440,6 +440,9 @@ const sendBatch = async (deps: RunDeps, options: { outbox: string; server: strin
   const refuse = (code: string, title: string): CliError => new CliError(title, ExitCode.CONFLICT, DEPOSIT, { code, title, status: 409 });
   try {
     return await withSendLock(outbox, async () => {
+      // The rule the nightly follows: a hash `sent.log` holds is not posted again. Read under the lock, so two runs cannot both see it unsent.
+      const sentAt = (await sentLog(outbox)).get(hash);
+      if (sentAt !== undefined) return { document: { ok: true, server, hash, sent: false, sentAt }, text: `already sent ${hash} at ${sentAt}` };
       const locked = await lockedBatch(outbox, hash);
       if (!locked.ok) throw refuse(locked.code, lockMessages[locked.code]);
       await openCovenant(deps, server, token, options.acceptCovenant, via);
