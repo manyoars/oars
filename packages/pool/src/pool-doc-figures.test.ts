@@ -5,7 +5,7 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { BIG_CALLS, bigSkeleton, COVERAGE_KEY, coverageBytesSkeleton, envelopeBytes, LARGE_STEPS, largeSkeleton, REGISTER_FIXTURE } from '../../cli/src/sessions/pool-fixture.js';
-import { canonicalBytes } from '../../cli/src/sessions/pool-outbox.js';
+import { canonicalBytes, PART_BYTES } from '../../cli/src/sessions/pool-outbox.js';
 import type { SessionSkeleton } from '../../cli/src/sessions/pool-wire.js';
 import { incrementsOf } from './ingest.js';
 import { MAX_ASSEMBLED_BYTES } from './parts.js';
@@ -73,6 +73,7 @@ const figures = async () => {
     'large-steps': LARGE_STEPS,
     'big-calls': BIG_CALLS,
     'join-limit': MAX_ASSEMBLED_BYTES,
+    'join-parts': Math.ceil(MAX_ASSEMBLED_BYTES / PART_BYTES),
     skeleton,
     cells: cells.size,
     'cell-json': cellJson,
@@ -107,7 +108,7 @@ const computed = await figures();
 
 /** The ids of the figures this test computes; a marker naming any other id is a typo. */
 type FigureId = keyof typeof computed;
-const isFigure = (id: string): id is FigureId => id in computed;
+const isFigure = (id: string): id is FigureId => Object.hasOwn(computed, id);
 
 const MARKER = /(\d[\d,.]*)( million)?<!-- figure:([\w-]+)(?:~([\d.]+))? -->/gu;
 
@@ -123,7 +124,7 @@ const markedFigures = (doc: string): Marked[] =>
 const CONSTANTS = new Set(['1,000', '5,000', '2,000,000', '999,999', '100,000', '4,096']);
 
 /** A bare number with a unit that is a limit, a count of kinds, or an example the doc states, not a size the code determines. */
-const UNIT_CONSTANTS = new Set(['64 cells']); // "A row keeps at most 64 cells" (docs/pool.md:294): the telemetry rollup's limit.
+const UNIT_CONSTANTS = new Set(['64 cells']); // "A row keeps at most 64 cells" (docs/pool.md, section "Bounds"): the telemetry rollup's limit.
 
 describe('the figures in docs/pool.md', () => {
   const marked = markedFigures(DOC);
