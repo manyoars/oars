@@ -429,7 +429,7 @@ The families at order 1, in the order they are listed. None adjusts for its conf
 | `next-step` | prefix of one to three actions | counts of the next action | no outcome label, so the most common step is not the right one |
 | `tool-day` | motif, day | failure rate, and share of the day's steps | the day's mix of work, effort, rule commits |
 
-A read's slice and value hold names and numbers only: never a path, a prompt, or an error's text. A local read names what capture keeps (the public lists, else `<literal>`); a read in a pool bundle can also name a long-tail program, server, or skill, which the pool serves only once the floor's accounts report it. A signature appears as its hash, computed the same way on any account. `clusters` is 1 on every row of one operator's store, and `oars sessions read` applies no floor at order 1, because every cell is the operator's own.
+A read's slice and value hold names and numbers only; a local read can name a long-tail program or native tool name (taken from the call's segments, through the open gate, which keeps the name shape but not your redaction or exclusion terms), and a pool read can also name a long-tail server or skill, which the pool serves only at the floor: never a path, a prompt, or an error's text. A signature appears as its hash, computed the same way on any account. `clusters` is 1 on every row of one operator's store, and `oars sessions read` applies no floor at order 1, because every cell is the operator's own.
 
 ### Reads over reads
 
