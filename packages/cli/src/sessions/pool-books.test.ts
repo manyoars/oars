@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { booksLines, booksTotals, lastFetchedBundle } from './pool-books.js';
 import { booksOf, bundleOf, keep, NONE, pair } from './pool-books-fixture.js';
+import { TEST_FLOOR } from './test-support.js';
 
 let dir: string;
 
@@ -66,7 +67,7 @@ describe('booksLines', () => {
 
 describe('booksTotals', () => {
   it('is flat numbers with null for every field that has no source, and null when there are no books', () => {
-    expect(booksTotals(bundleOf(booksOf()))).toEqual({ floor: 5, asOfDay: '2026-11-02', panelDay: '2026-11-07', servedCells: 12, belowFloor: 7, panel: 4, comparisonReadOwners: null, followOnReads: null, readYield: null, costPerServedCell: null, yieldPerServedCell: null });
+    expect(booksTotals(bundleOf(booksOf()))).toEqual({ floor: TEST_FLOOR, asOfDay: '2026-11-02', panelDay: '2026-11-07', servedCells: 12, belowFloor: 7, panel: 4, comparisonReadOwners: null, followOnReads: null, readYield: null, costPerServedCell: null, yieldPerServedCell: null });
     expect(booksTotals(bundleOf(undefined))).toBeNull();
     expect(booksTotals(undefined)).toBeNull();
   });
