@@ -193,15 +193,18 @@ const linesOf = (session: OpencodeSession, rows: { [column: string]: unknown }[]
     if (row.type === 'shell') {
       const command = str(data.command);
       if (command === undefined) continue;
-      const callId = str(data.shellID) ?? id;
       const started = stamp(timeOf(data, 'created'), row.created);
-      lines.push({ ...base(), type: 'assistant', uuid: id, requestId: id, timestamp: started, message: { role: 'assistant', id, content: [{ type: 'tool_use', id: callId, name: 'Bash', native: 'shell', input: { command } }] } });
+      // The operator's own `!cmd` is their turn, not the agent's: Claude Code writes the same act as a user line holding `<bash-input>`, and its output as a
+      // `<bash-stdout>`/`<bash-stderr>` line, so `assistantTurns`, `bashCmds`, and the error rates compare. It carries no tool_use and no tool_result.
+      lines.push({ ...base(), type: 'user', uuid: id, timestamp: started, message: { role: 'user', content: [{ type: 'text', text: `<bash-input>${command}</bash-input>` }] } });
       const status = str(data.status);
       if (status !== 'exited' && status !== 'timeout' && status !== 'killed') continue;
-      const exit = num(data.exit);
       const output = isObj(data.output) ? (str(data.output.output) ?? '') : '';
-      const failure = exit !== undefined && exit !== 0 ? `Exit code ${String(exit)}\n${output}` : status === 'exited' ? undefined : output === '' ? `Shell ${status}` : output;
-      lines.push({ ...base(), type: 'user', uuid: `${id}-result`, timestamp: stamp(timeOf(data, 'completed'), row.created), noDuration: true, message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: callId, is_error: failure !== undefined, content: failure ?? (output === '' ? '' : `Exit code 0\n${output}`) }] } });
+      if (output === '') continue;
+      const exit = num(data.exit);
+      const failed = (exit !== undefined && exit !== 0) || status !== 'exited';
+      const text = failed ? `<bash-stdout></bash-stdout><bash-stderr>${output}</bash-stderr>` : `<bash-stdout>${output}</bash-stdout><bash-stderr></bash-stderr>`;
+      lines.push({ ...base(), type: 'user', uuid: `${id}-result`, timestamp: stamp(timeOf(data, 'completed'), row.created), message: { role: 'user', content: [{ type: 'text', text }] } });
       continue;
     }
     if (row.type !== 'assistant') continue;
