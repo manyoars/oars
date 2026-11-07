@@ -120,14 +120,16 @@ describe('a planted value is on the wire nowhere', () => {
   const line = (type: string, content: unknown): string =>
     JSON.stringify({ type, timestamp: '2026-06-10T00:00:00.000Z', cwd: '/w', message: { role: type, model: 'claude-opus-5-5', content } });
   const call = (id: string, name: string, input: object): string => line('assistant', [{ type: 'tool_use', id, name, input }]);
-  const PLANTED = ['quokka-ledger', 'marmalade-secret', 'zephyr.example.org', 'octopus-pattern', 'walrus --flag'];
+  const PLANTED = ['quokka-ledger', 'marmalade-secret', 'octopus-pattern', 'walrus --flag', 'walrus-urlpath'];
+  // A fetched URL's host is a long-tail name since CAPTURE 24 (t903): it crosses as `identity.host` and the pool hashes it on arrival. The URL's path and the prompt never do.
+  const HOST = 'zephyr.example.org';
 
-  it('keeps every planted path, URL, pattern, command, and text out of a whole batch', () => {
+  it('keeps every planted path, URL path, pattern, command, and text out of a whole batch, and sends a URL host as a name', () => {
     const text = [
       line('user', 'go'),
       call('t1', 'Read', { file_path: 'src/quokka-ledger.ts', offset: 5 }),
       call('t2', 'Grep', { pattern: 'octopus-pattern', path: 'src', glob: '*.marmalade-secret' }),
-      call('t3', 'WebFetch', { url: 'https://zephyr.example.org/a', prompt: 'marmalade-secret' }),
+      call('t3', 'WebFetch', { url: 'https://zephyr.example.org/walrus-urlpath', prompt: 'marmalade-secret' }),
       call('t4', 'Bash', { command: 'walrus --flag', description: 'quokka-ledger' }),
       call('t5', 'WorkspaceHelper', { quokka_key: 1, query: 'marmalade-secret' }),
     ].join('\n');
@@ -136,11 +138,13 @@ describe('a planted value is on the wire nowhere', () => {
     const skeleton = skeletonOfStore(from);
     const batch = JSON.stringify(skeleton);
     for (const value of PLANTED) expect(batch).not.toContain(value);
+    expect(batch.split(HOST)).toHaveLength(2);
     // The key names and the classes did cross.
     const tools = skeleton.transcripts[0]?.tools ?? [];
     expect(tools[0]).toMatchObject({ keys: ['file_path', 'offset'], targetClass: 'source', argClass: ['number', 'path'] });
     expect(tools[1]).toMatchObject({ keys: ['glob', 'path', 'pattern'], targetClass: 'other', argClass: ['path', 'pattern'] });
     expect(tools[2]).toMatchObject({ keys: ['prompt', 'url'], argClass: ['text', 'url'] });
+    expect(tools[2]?.steps[0]?.identity).toEqual({ host: HOST });
     expect(tools[3]).toMatchObject({ keys: ['command', 'description'], argClass: ['command', 'text'] });
     // A tool off the pinned lists sends the names that pass the gate, and its values go nowhere.
     expect(tools[4]).toMatchObject({ keys: ['query', 'quokka_key'], argClass: ['number', 'text'] });
