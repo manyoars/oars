@@ -156,8 +156,11 @@ const redonePrompts = (calls: readonly ToolObservation[], nextOf: ReadonlyMap<nu
   return { redone, immediate };
 };
 
-/** A segment that undoes work in git: a revert or a restore, or a checkout that names no branch or revision (the segment drops a path and a flag, so `git checkout -- <path>` is the bare word pair). */
-const GIT_UNDO = /^git (?:revert|restore)(?: |$)|^git checkout(?: \.)?$/;
+/**
+ * A segment that undoes work in git: a revert that names a commit (a bare `git revert` is `--abort`, `--continue`, or `--quit`, whose flag the segment drops), a restore, or a checkout that names no plain branch or revision
+ * (the segment drops a path, a flag, and a word with a slash or quotes, so `git checkout -- <path>` and `git checkout feature/x` are the same bare word pair).
+ */
+const GIT_UNDO = /^git (?:revert .|restore(?: |$))|^git checkout(?: \.)?$/;
 /** A prompt that begins by asking for the undo, in English: `revert that`, `please undo`, `rollback`. */
 const ASKS_UNDO = /^(?:please )?(?:revert|undo|roll ?back)\b/i;
 
@@ -198,7 +201,12 @@ export const deriveSession = (capture: SessionCapture, redact: Redactor): Derive
   const stopsOf = groupBy(firstCopies(capture.errorLines), (error) => error.prompt);
   const calls = firstCopies(tools);
   const settledOf = groupBy(calls, (tool) => tool.prompt);
-  const nextOf = new Map(capture.prompts.slice(0, -1).map((prompt, position): [number, number] => [prompt.index, capture.prompts[position + 1]?.index ?? prompt.index]));
+  const nextOf = new Map<number, number>();
+  for (let at = 1; at < capture.prompts.length; at++) {
+    const before = capture.prompts[at - 1];
+    const after = capture.prompts[at];
+    if (before !== undefined && after !== undefined) nextOf.set(before.index, after.index);
+  }
   const { redone, immediate } = redonePrompts(calls, nextOf);
   const prompts = capture.prompts.map((prompt, position): PromptObservation => {
     const mine = toolsOf.get(prompt.index) ?? [];
