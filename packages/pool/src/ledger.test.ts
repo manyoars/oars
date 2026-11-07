@@ -91,7 +91,7 @@ const LEDGER_TABLE = `(?:${OPEN}main${CLOSE}\\.)?${OPEN}(?:deposits|contributors
 const LEDGER_DELETE = new RegExp(`\\bDELETE\\s+FROM\\s+${LEDGER_TABLE}`, 'i');
 // `REPLACE` as a conflict clause deletes the row it replaces without running the delete trigger (the test above pins that for the test runtime, not for production D1, so the guard keeps the rule either way), and so does `DROP TABLE`.
 const LEDGER_REPLACE = new RegExp(
-  `\\bREPLACE\\s+INTO\\s+${LEDGER_TABLE}|\\bON\\s+CONFLICT\\s+REPLACE\\b|\\bINSERT\\s+OR\\s+REPLACE\\b|\\bUPDATE\\s+OR\\s+REPLACE\\s+${LEDGER_TABLE}`,
+  `\\bREPLACE\\s+INTO\\s+${LEDGER_TABLE}|\\bON\\s+CONFLICT\\s+REPLACE\\b|\\bUPDATE\\s+OR\\s+REPLACE\\s+${LEDGER_TABLE}`,
   'i',
 );
 const LEDGER_DROP = new RegExp(`\\bDROP\\s+TABLE\\s+(IF\\s+EXISTS\\s+)?${LEDGER_TABLE}`, 'i');
@@ -191,6 +191,11 @@ describe('the pool has no path that deletes the ledger', () => {
     ['a crons array', '{ "triggers": { "crons": ["0 3 * * *"] } }', 'a cron trigger'],
   ])('names %s', (_label, text, offence) => {
     expect(offences({ planted: text })).toEqual([`planted: ${offence}`]);
+  });
+
+  it('lets an upsert on a table outside the ledger through', () => {
+    expect(offences({ planted: 'INSERT OR REPLACE INTO cells (id) VALUES (1)' })).toEqual([]);
+    expect(offences({ planted: 'REPLACE INTO tokens (id) VALUES (1)' })).toEqual([]);
   });
 
   it('lets only the telemetry rollup run on a schedule, and keeps its files clear of the ledger', () => {
