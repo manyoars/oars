@@ -209,6 +209,10 @@ describe('openapi-public.mjs', () => {
             responses: { '200': ok('Charged', '#/components/schemas/ChargeView') },
           },
         },
+        // No tag and an inline response: only the path arm can drop it.
+        '/billing/untagged': {
+          get: { operationId: 'untaggedBilling', responses: { '200': { description: 'Untagged' } } },
+        },
         '/agents/templates': {
           get: {
             tags: ['Agent Templates'],
@@ -233,7 +237,7 @@ describe('openapi-public.mjs', () => {
     };
 
     it('drops a listed operation on a billing path, with a billing tag, or reaching a withheld schema through another schema', () => {
-      const result = run(['getOrder', 'createCharge', 'listTemplates', 'taggedOnly'], withheldSource);
+      const result = run(['getOrder', 'createCharge', 'untaggedBilling', 'listTemplates', 'taggedOnly'], withheldSource);
 
       expect(result.status).toBe(0);
       const out = readOut();
@@ -337,6 +341,37 @@ describe('openapi-public.mjs', () => {
       const out = readOut();
       expect(keysAt(out, 'components', 'schemas', 'Order', 'properties')).toEqual(['id']);
       expect(at(out, 'components', 'schemas', 'Order', 'required')).toEqual(['id']);
+    });
+
+    it('keeps no schema that only a withheld 402 or property reaches, and does not drop an operation whose 402 refs a withheld-named schema', () => {
+      const orderPath = source.paths['/orders/{orderId}'];
+      const withOrphans = {
+        ...source,
+        paths: {
+          ...source.paths,
+          '/orders/{orderId}': {
+            ...orderPath,
+            get: {
+              ...orderPath.get,
+              responses: { ...orderPath.get.responses, '402': ok('Payment required', '#/components/schemas/ChargeView') },
+            },
+          },
+        },
+        components: {
+          ...source.components,
+          schemas: {
+            ...source.components.schemas,
+            ChargeView: { type: 'object', properties: { id: { type: 'string' } } },
+          },
+        },
+      };
+
+      const result = run(['getOrder'], withOrphans);
+
+      expect(result.status).toBe(0);
+      const out = readOut();
+      expect(keysAt(out, 'paths')).toEqual(['/orders/{orderId}']);
+      expect(keysAt(out, 'components', 'schemas')).toEqual(['Order', 'Line', 'Quantity'].sort());
     });
 
     it('drops a 402 response whatever its description says', () => {
