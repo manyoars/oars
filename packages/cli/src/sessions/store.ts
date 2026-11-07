@@ -1118,7 +1118,8 @@ const rawOnlyTranscripts = async (context: DepositContext, project: string, onDi
   // Listed from raw/ itself, so a lost state.json (no entries to name the files) still finds them; a file with no entry counts as behind.
   const behind = (await rawRelatives(root, [])).filter((relative) => {
     const entry = context.state.files[`${prefix}${relative}`];
-    return !onDisk.has(`${prefix}${relative}`) && (entry === undefined || entry.v !== CAPTURE_VERSION || entry.s !== context.salt.sid);
+    // A domain named after the capture changes what the redactor masks, so a file recorded under another domain set is behind too.
+    return !onDisk.has(`${prefix}${relative}`) && (entry === undefined || entry.v !== CAPTURE_VERSION || entry.s !== context.salt.sid || !sameSet(entry.d, context.domains));
   });
   const found: Transcript[] = [];
   for (const relative of behind) {
