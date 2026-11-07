@@ -1,9 +1,8 @@
 // A served cell carries how many of its prompts and sessions recorded input (t921), so the cost read divides by those and not by every settled prompt (V7: an unrecorded field is absent, never a measured zero).
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { verifyBundle, VOCAB_VERSION } from '../../cli/src/sessions/pool-wire.js';
+import { bucketOf, floorOf, verifyBundle, VOCAB_VERSION, type SessionSkeleton } from '../../cli/src/sessions/pool-wire.js';
 import { poolOf } from '../../cli/src/sessions/cells.js';
 import { deriveCost } from '../../cli/src/sessions/read-cost.js';
-import { bucketOf, floorOf, type SessionSkeleton } from '../../cli/src/sessions/pool-wire.js';
 import { store } from '../../cli/src/sessions/pool-fixture.js';
 import type { Env } from './http.js';
 import { sampleSkeleton } from './sample.js';
@@ -53,8 +52,7 @@ const costOf = async (target: TestPool): Promise<{ value: unknown; n: number }[]
     },
   };
   const stored = await storedOf(env, 'claude-code', '2.1.314', Date.parse('2026-11-03T00:00:00Z'));
-  const motifs = new Map(stored.motifs.map((motif) => [motif.motifId, motif]));
-  return deriveCost({ pool: poolOf({ cells: stored.cells, motifs: stored.motifs }, []), store: store({}) }).filter((read) => motifs.size > 0 && read.slice.class === 'edit-verify');
+  return deriveCost({ pool: poolOf({ cells: stored.cells, motifs: stored.motifs }, []), store: store({}) }).filter((read) => read.slice.class === 'edit-verify');
 };
 
 describe('a served class cell carries the coverage of its input', () => {
@@ -94,7 +92,8 @@ describe('rows written before the coverage columns', () => {
       // What a row written under migration 0012 holds: no coverage.
       await db.prepare('UPDATE cells SET token_sessions = NULL, token_prompts = NULL').run();
       await deposit(own, '9106', [withUsage(sampleSkeleton('0000000000009106'), RECORDED, 1)]);
-      expect(fieldOf(await db.prepare('SELECT COUNT(*) AS n FROM cells WHERE token_prompts IS NOT NULL AND key IN (SELECT key FROM cells WHERE sessions = 2)').first(), 'n')).toBe(0);
+      expect(Number(fieldOf(await db.prepare('SELECT COUNT(*) AS n FROM cells WHERE sessions = 2').first(), 'n'))).toBeGreaterThan(0);
+      expect(fieldOf(await db.prepare('SELECT COUNT(*) AS n FROM cells WHERE sessions = 2 AND token_prompts IS NOT NULL').first(), 'n')).toBe(0);
       const [read] = await costOf(own);
       expect(read?.value).toMatchObject({ tokensPerPrompt: null, tokenCoverage: 'unknown' });
     } finally {
