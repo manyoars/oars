@@ -119,6 +119,19 @@ describe('the floor counts standing accounts (S13, t958)', () => {
   }, 180_000);
 });
 
+describe('the cadence rule needs 3 deposit days (t958)', () => {
+  it('keeps two accounts created the same day apart when each deposited once in the same hour, which one cluster held before', async () => {
+    await inFreshPool(async (target) => {
+      for (const id of ['9431', '9432']) {
+        const { token } = await target.signIn('github', { ...stubUser(id), createdAt: '2019-03-04T05:06:07Z' });
+        await target.post('/v1/covenant/accept', { version: 'v1' }, token);
+        expect((await target.post('/v1/deposits', sampleSkeleton('00000000000000c1'), token)).status).toBe(201);
+      }
+      expect(await heldClusters(target)).toEqual([2]);
+    });
+  }, 180_000);
+});
+
 describe('a deposit that joins an account to another', () => {
   it('recounts the cells the account already held: five accounts that cleared a cell with distinct keys then share eight keys elsewhere (their sets overlap at 0.8), and the cell reads 1', async () => {
     await inFreshPool(async (target) => {
