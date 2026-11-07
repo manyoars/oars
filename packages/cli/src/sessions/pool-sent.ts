@@ -5,14 +5,21 @@ import { isMissing } from './pool-outbox.js';
 
 const sentFile = (outbox: string): string => join(outbox, 'sent.log');
 
-export const sentHashes = async (outbox: string): Promise<Set<string>> => {
+/** Each hash that was sent, with the time it was sent. A hash sent twice keeps its first time. */
+export const sentLog = async (outbox: string): Promise<Map<string, string>> => {
+  const log = new Map<string, string>();
   try {
-    return new Set((await readFile(sentFile(outbox), 'utf8')).split('\n').map((line) => line.split(' ')[0] ?? '').filter((hash) => hash !== ''));
+    for (const line of (await readFile(sentFile(outbox), 'utf8')).split('\n')) {
+      const [hash = '', at = ''] = line.split(' ');
+      if (hash !== '' && !log.has(hash)) log.set(hash, at);
+    }
   } catch (error) {
-    if (isMissing(error)) return new Set();
-    throw error;
+    if (!isMissing(error)) throw error;
   }
+  return log;
 };
+
+export const sentHashes = async (outbox: string): Promise<Set<string>> => new Set((await sentLog(outbox)).keys());
 
 export const markSent = async (outbox: string, hash: string, at: number): Promise<void> => {
   await mkdir(outbox, { recursive: true });
