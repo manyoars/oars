@@ -101,9 +101,11 @@ describe('depositing the VS Code Copilot Chat source', () => {
     expect(found?.frame).toMatchObject({ harness: 'vscode-copilot' });
   });
 
-  it('is read only when allowed, and an allowed name reports nothing missing while a typo does', async () => {
+  it('is read by default and not when denied, and an allowed name reports nothing missing while a typo does', async () => {
     const s = staged();
-    await expect(deposit(s.runtime, options([]))).rejects.toThrow(/Nothing to read/);
+    // With nothing named every source is read; a denial keeps this one out.
+    expect((await deposit(s.runtime, options([]))).missing).toEqual([]);
+    expect((await deposit(s.runtime, options(['!vscode-copilot']))).sources['vscode-copilot']).toBeUndefined();
     expect((await deposit(s.runtime, options(['vscode-copilot']))).missing).toEqual([]);
     expect((await deposit(s.runtime, options(['vscode-copilt']))).missing).toEqual(['vscode-copilt']);
   });

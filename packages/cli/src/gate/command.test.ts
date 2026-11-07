@@ -31,7 +31,7 @@ const setup = () => {
 describe('oars gate replay and report', () => {
   it('replays the allowed folder, then reports counts from the file it wrote', async () => {
     const { deps, out, staged } = setup();
-    expect(await run(['gate', 'replay', '--allow', 'gate-app'], deps)).toBe(ExitCode.OK);
+    expect(await run(['gate', 'replay', '--allow', 'gate-app', '--no-registry-state'], deps)).toBe(ExitCode.OK);
     const text = out.join('');
     expect(text).toContain('Crossings: 2');
     expect(text).toContain('registry state not read');
@@ -46,7 +46,7 @@ describe('oars gate replay and report', () => {
 
   it('prints the replay and the report as one JSON document with --json', async () => {
     const { deps, out } = setup();
-    await run(['--json', 'gate', 'replay', '--allow', 'gate-app'], deps);
+    await run(['--json', 'gate', 'replay', '--allow', 'gate-app', '--no-registry-state'], deps);
     expect(JSON.parse(out.join(''))).toMatchObject({ ok: true, run: { crossings: 2, registryRead: false } });
     out.length = 0;
     await run(['--json', 'gate', 'report'], deps);
@@ -90,19 +90,19 @@ describe('oars gate replay and report', () => {
     expect((await gateReport(sessionDeps)).document).toMatchObject({ registryRead: true });
   });
 
-  it('takes --registry-state, which asks the manager only for a name it can ask about', async () => {
+  it('asks the registry by default, only for a name the manager can ask about', async () => {
     const staged = stage();
     addProject(staged, 'url-app', 'one', [call('t1', 'npm install git+https://example.com/x/y.git'), answer('t1')]);
     const h = harness();
     h.deps.sessions = staged.runtime;
-    expect(await run(['gate', 'replay', '--allow', 'url-app', '--registry-state'], h.deps)).toBe(ExitCode.OK);
+    expect(await run(['gate', 'replay', '--allow', 'url-app'], h.deps)).toBe(ExitCode.OK);
     expect(h.out.join('')).toContain('Registry state read');
   });
 
-  it('refuses a replay that names no folder and has no saved allowlist', async () => {
-    const { deps, err } = setup();
-    expect(await run(['gate', 'replay'], deps)).toBe(ExitCode.USAGE);
-    expect(err.join('')).toContain('--allow');
+  it('replays every folder when none is named and no deposit saved an allowlist', async () => {
+    const { deps, out } = setup();
+    expect(await run(['gate', 'replay', '--no-registry-state'], deps)).toBe(ExitCode.OK);
+    expect(out.join('')).toContain('Crossings: 2');
   });
 });
 
@@ -137,7 +137,7 @@ describe('oars gate install, at the moment of opting in', () => {
   it('tells the operator what the hook does: records, notes by default, denies only on block, never allows or changes', async () => {
     const staged = stage();
     const userSettings = join(staged.storeDir, '..', 'claude', 'settings.json');
-    const install = { nodePath: 'node', hookBin: 'hook-bin.js', userSettings, cwd: tmpdir(), schtasks: () => Promise.resolve({ code: 0, output: '' }) };
+    const install = { nodePath: 'node', hookBin: 'hook-bin.js', userSettings, cwd: tmpdir(), platform: 'linux' as const, schtasks: () => Promise.resolve({ code: 0, output: '' }) };
     const outcome = await gateInstall({ sessions: staged.runtime, install, now: () => 0 });
     expect(outcome.text).toContain(
       'It records each crossing in crossings.jsonl, adds a note about a young or missing name by default, and denies a call only if you write `block` in gate-policy.json; it never allows or changes a call.',

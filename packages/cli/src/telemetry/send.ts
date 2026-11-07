@@ -1,6 +1,6 @@
 // The sender: the only code that sends telemetry. It runs from the nightly task, and at most once a day from an interactive command as a detached process; never on a hook path, and
-// nothing waits for it. Before any byte leaves it calls `telemetrySendAllowed` (telemetry on, notice shown) and needs a pool server in `OARS_POOL_URL`, the same setting `oars pool`
-// reads and with the same rules (https, or http to this machine). There is no default server, so with none configured nothing is sent.
+// nothing waits for it. Before any byte leaves it calls `telemetrySendAllowed` (telemetry on, notice shown) and sends to the pool server in `OARS_POOL_URL`, else the Many Oars pool, the same default `oars pool`
+// reads and with the same rules (https, or http to this machine).
 //
 // A batch is up to 250 events. Only a 2xx clears what was sent; anything else (an error status, a redirect, a timeout, a refused connection) keeps the spool for the next try. That makes
 // delivery at least once: a batch the server kept whose answer was lost is sent again.
@@ -41,9 +41,8 @@ export interface SendResult {
   requests: number;
 }
 
-/** The pool server, validated the way `oars pool` does it, or undefined. The pool command's code is loaded only here, so the nightly and the hooks do not pay for it when nothing is to be sent. */
+/** The pool server, validated the way `oars pool` does it, or undefined. The pool command's code is loaded only after sending is allowed, so a run with telemetry off or the notice unshown does not pay for it. */
 const serverOf = async (env: NodeJS.ProcessEnv): Promise<string | undefined> => {
-  if ((env.OARS_POOL_URL ?? '') === '') return undefined;
   try {
     const { poolServer } = await import('../sessions/pool-command.js');
     return poolServer(env, 'telemetry');
@@ -164,12 +163,12 @@ export const sendNightly = (env: NodeJS.ProcessEnv, platform: NodeJS.Platform, h
   sendSpool({ env, dir: join(defaultConfigDir(env, platform, home), 'oars', 'telemetry'), now });
 
 /**
- * Called after an interactive command: starts one detached send, at most once a day, when sending is allowed and a server is configured. The mark is written first, so two commands at
+ * Called after an interactive command: starts one detached send, at most once a day, when sending is allowed. The mark is written first, so two commands at
  * once start one. Nothing here throws or waits, and the run has no way to start a send unless `main.ts` gave it one.
  */
 export const startDailySend = (runtime: TelemetryRuntime, env: NodeJS.ProcessEnv, now: number): void => {
   try {
-    if (runtime.spawnSend === undefined || (env.OARS_POOL_URL ?? '') === '') return;
+    if (runtime.spawnSend === undefined) return;
     if (!telemetrySendAllowed(env, runtime.dir) || !dueForSend(runtime.dir, now)) return;
     writeMark(runtime.dir, now);
     runtime.spawnSend(runtime.dir);
