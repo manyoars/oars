@@ -118,7 +118,7 @@ const buildProgram = (deps: RunDeps, observed: Observed): Command => {
     .command('login')
     .description('sign in with your browser (RFC 8628 device flow)')
     .option('--no-browser', 'print the link and code without opening a browser')
-    .option('--issuer-url <url>', 'the Keycloak realm URL (default: OARS_ISSUER_URL, else Many Oars once it has launched)')
+    .option('--issuer-url <url>', 'the Keycloak realm URL (default: OARS_ISSUER_URL, else the Many Oars issuer)')
     .action(async (_options: OptionValues, command: Command) => {
       const options: OptionValues = command.optsWithGlobals();
       const outcome = await login(deps, {
@@ -181,13 +181,18 @@ const buildProgram = (deps: RunDeps, observed: Observed): Command => {
 
   sessions
     .command('deposit')
-    .description('read session logs from the folders you name into the local observation log; idempotent. Subagent transcripts under each session (<project>/<session>/subagents/) are deposited with their parent, and each raw transcript is hard-linked into the oars archive beside the store')
+    .description('read session logs into the local observation log, from every folder unless --allow names some or --deny keeps some out; idempotent. Subagent transcripts under each session (<project>/<session>/subagents/) are deposited with their parent, and each raw transcript is hard-linked into the oars archive beside the store')
     .option('--allow <folder>', 'a project folder to read: its path, or its name under ~/.claude/projects (repeatable); `cursor`, `codex`, `copilot`, `gemini`, `grok`, and `vscode-copilot` name the Cursor, Codex, Copilot CLI, Gemini CLI, Grok Build, and VS Code Copilot Chat stores. A trailing slash names everything under a folder; * and ? are wildcards', collect)
-    .option('--allow-file <list>', 'a file of --allow entries, one per line (# starts a comment); repeatable, combines with --allow', collect)
+    .option('--allow-file <list>', 'a file of --allow entries, one per line (# starts a comment, and !<entry> keeps a folder out); repeatable, combines with --allow', collect)
+    .option('--deny <folder>', 'a folder never to read, in any form --allow takes (repeatable); saved, and it wins over every --allow until that exact entry is named with --allow', collect)
     .option('--redact-domain <domain>', 'an organization domain to mask in everything written (repeatable)', collect)
     .action(async (_options: OptionValues, command: Command) => {
       const options: OptionValues = command.optsWithGlobals();
-      emit(deps, flag(options, 'json'), await sessionsDeposit(sessionDeps(deps), { allow: list(options, 'allow'), allowFiles: list(options, 'allowFile'), redactDomains: list(options, 'redactDomain') }));
+      emit(
+        deps,
+        flag(options, 'json'),
+        await sessionsDeposit(sessionDeps(deps), { allow: list(options, 'allow'), allowFiles: list(options, 'allowFile'), deny: list(options, 'deny'), redactDomains: list(options, 'redactDomain') }),
+      );
     });
 
   sessions
@@ -385,10 +390,10 @@ const buildProgram = (deps: RunDeps, observed: Observed): Command => {
   hook
     .command('install')
     .description('merge the SessionStart, PostToolUseFailure, and SessionEnd hooks into a settings file (existing hooks are kept) and raise cleanupPeriodDays to at least 365')
-    .option('--scope <scope>', 'user (~/.claude/settings.json), project (./.claude/settings.json), or file (needs --file; the default)', scopeOption)
+    .option('--scope <scope>', 'user (~/.claude/settings.json; the default), project (./.claude/settings.json), or file (needs --file; implied by --file)', scopeOption)
     .option('--file <path>', 'the settings file for --scope file')
     .option('--keep-retention', 'leave cleanupPeriodDays as it is (the harness deletes raw transcripts older than it)')
-    .option('--schedule <mode>', 'nightly: register a Windows task that runs the full deposit and the recurrence refresh daily; off: remove it', (value: string) => {
+    .option('--schedule <mode>', 'nightly: register a Windows task that runs the full deposit and the recurrence refresh daily (a plain install on Windows does this too); off: remove it', (value: string) => {
       if (value !== 'nightly' && value !== 'off') throw new InvalidArgumentError('it must be nightly or off.');
       return value;
     })
@@ -410,7 +415,7 @@ const buildProgram = (deps: RunDeps, observed: Observed): Command => {
   hook
     .command('uninstall')
     .description('remove only the hooks `install` wrote from a settings file (cleanupPeriodDays stays; `install --schedule off` removes the task)')
-    .option('--scope <scope>', 'user, project, or file (needs --file; the default)', scopeOption)
+    .option('--scope <scope>', 'user (the default), project, or file (needs --file; implied by --file)', scopeOption)
     .option('--file <path>', 'the settings file for --scope file')
     .action(async (_options: OptionValues, command: Command) => {
       const options: OptionValues = command.optsWithGlobals();
@@ -430,9 +435,9 @@ const buildProgram = (deps: RunDeps, observed: Observed): Command => {
 
   gate
     .command('replay')
-    .description('find the crossings in your session logs and write them to crossings.jsonl in the sessions store; reads nothing outside the folders you name, and no network unless --registry-state')
-    .option('--allow <folder>', 'a project folder to read, as for `oars sessions deposit` (repeatable); default: the allowlist a deposit saved', collect)
-    .option('--registry-state', 'ask the package manager what the registry holds for each package named (npm view, pip index versions); off by default, and the manager keeps its own cache')
+    .description('find the crossings in your session logs and write them to crossings.jsonl in the sessions store; reads nothing outside the allowlist, and asks the package manager what the registry holds unless --no-registry-state')
+    .option('--allow <folder>', 'a project folder to read, as for `oars sessions deposit` (repeatable); default: the allowlist a deposit saved, else every folder', collect)
+    .option('--no-registry-state', 'do not ask the package manager what the registry holds for each package named (npm view, pip index versions; asked by default, as the live hook does, and the manager keeps its own cache)')
     .action(async (_options: OptionValues, command: Command) => {
       const options: OptionValues = command.optsWithGlobals();
       emit(deps, flag(options, 'json'), await gateReplay(sessionDeps(deps), { allow: list(options, 'allow'), ...(flag(options, 'registryState') ? { registry: managerReader() } : {}) }));
@@ -479,9 +484,9 @@ const buildProgram = (deps: RunDeps, observed: Observed): Command => {
       emit(deps, flag(command.optsWithGlobals(), 'json'), await gateReport(sessionDeps(deps)));
     });
 
-  const pool = program.command('pool').description('sign in to a pool server, deposit closed-vocabulary session skeletons, and fetch signed reads; local capture, recall, and reads need none of it');
+  const pool = program.command('pool').description('sign in to a pool server, deposit session skeletons (a closed list of fields, each value redacted first), and fetch signed reads; local capture, recall, and reads need none of it');
   const serverOption = '--server <url>';
-  const serverHelp = 'the pool server, https or plain http to localhost (or OARS_POOL_URL; there is no default)';
+  const serverHelp = 'the pool server, https or plain http to localhost (default: OARS_POOL_URL, else https://pool.manyoars.com)';
 
   pool
     .command('login')
@@ -495,8 +500,8 @@ const buildProgram = (deps: RunDeps, observed: Observed): Command => {
 
   pool
     .command('deposit')
-    .description('write a batch to the outbox for each session that passes the folder allowlist and the exclusion check, and stop: nothing is sent, and only counts print. --send <hash> runs the checks that a batch was printed and is unchanged, then stops: sending is disabled in this release')
-    .option('--accept-covenant <version>', 'accept this version of the pool covenant before sending (with --send, which is disabled in this release)')
+    .description('write a batch to the outbox for each session that passes the folder allowlist and the exclusion check, and stop: nothing is sent, and only counts print. --send <hash> sends one batch that oars pool outbox printed and that is unchanged, once this account has accepted the pool covenant')
+    .option('--accept-covenant <version>', 'accept this version of the pool covenant before sending (with --send)')
     .option('--send <hash>', 'the SHA-256 of a batch that oars pool outbox printed')
     .option(serverOption, serverHelp)
     .action(async (_options: OptionValues, command: Command) => {

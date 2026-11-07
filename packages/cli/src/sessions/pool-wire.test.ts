@@ -88,7 +88,7 @@ describe('skeletonOf', () => {
     for (const from of [noFrame, noSteps, noPromptFrame]) expect(skeletonFrom(from)).toBeNull();
   });
 
-  it('sends the literal for a stored tool its server no longer lists, so the parser takes the whole session', () => {
+  it('sends a stored tool its server no longer lists by name, so the parser takes the whole session', () => {
     const dropped = step(0, 0, 'mcp.call', { native: 'mcp__github__acme_secret_deploy', identity: { server: 'github', tool: 'acme_secret_deploy' } });
     const kept = step(1, 0, 'mcp.call', { native: 'mcp__github__get_issue', identity: { server: 'github', tool: 'get_issue' } });
     const skeleton = skeletonFrom(
@@ -99,7 +99,7 @@ describe('skeletonOf', () => {
       }),
     );
     expect(skeleton?.transcripts[0]?.tools.map((entry) => entry.steps[0]?.identity)).toEqual([
-      { server: 'github', tool: LITERAL },
+      { server: 'github', tool: 'acme_secret_deploy' },
       { server: 'github', tool: 'get_issue' },
     ]);
     expect(parseSkeleton(JSON.parse(JSON.stringify(skeleton)))).toEqual({ ok: true, skeleton, extensions: [], others: 0 });
@@ -303,9 +303,12 @@ describe('parseSkeleton refuses, and names the field', () => {
     expect(verdictOf(withStep({ native: LITERAL }))).toBe('other');
   });
 
-  it('reads a shell program as a list member or private, never the literal, and a private program holds no subcommand', () => {
+  it('reads a shell program as a name or private, never the literal or a command line, and a private program holds no subcommand', () => {
     expect(verdictOf(withStep({ identity: { program: PRIVATE, sub: null, flags: [] } }))).toBe('accepted');
-    expect(verdictOf(withStep({ identity: { program: LITERAL, sub: null, flags: [] } }))).toBe('other');
+    expect(verdictOf(withStep({ identity: { program: 'acme-deploy', sub: null, flags: [] } }))).toBe('accepted');
+    expect(verdictOf(withStep({ identity: { program: LITERAL, sub: null, flags: [] } }))).toBe(`${stepField}.identity.program`);
+    expect(verdictOf(withStep({ identity: { program: 'rm -rf /home/me', sub: null, flags: [] } }))).toBe(`${stepField}.identity.program`);
+    expect(verdictOf(withStep({ identity: { program: 'x'.repeat(129), sub: null, flags: [] } }))).toBe(`${stepField}.identity.program`);
     expect(verdictOf(withStep({ identity: { program: PRIVATE, sub: 'push', flags: [] } }))).toBe('other');
     expect(verdictOf(withStep({ identity: { program: PRIVATE, sub: null, flags: ['--force'] } }))).toBe(`${stepField}.identity.flags`);
     expect(verdictOf(withStep({ identity: { program: PRIVATE, sub: null, flags: [], pulls: [] } }))).toBe(`${stepField}.identity.pulls`);
@@ -313,19 +316,19 @@ describe('parseSkeleton refuses, and names the field', () => {
     expect(verdictOf(withStep({ identity: { program: 'git', sub: 'push', flags: ['-force'] } }))).toBe('other');
   });
 
-  it('holds MCP, skill, and web identities to their own lists', () => {
+  it('holds MCP, skill, and web identities to the shape of a name', () => {
     expect(verdictOf(withStep({ action: 'mcp.call', native: PRIVATE, identity: { server: 'github', tool: 'get_issue' } }))).toBe('accepted');
     expect(verdictOf(withStep({ action: 'mcp.call', native: 'mcp__github__get_issue', identity: { server: 'github', tool: 'get_issue' } }))).toBe('accepted');
-    expect(verdictOf(withStep({ action: 'mcp.call', native: 'mcp__acme__get_issue', identity: null }))).toBe('other');
-    expect(verdictOf(withStep({ action: 'mcp.call', native: PRIVATE, identity: { server: 'acme', tool: 'x' } }))).toBe('other');
-    expect(verdictOf(withStep({ action: 'skill.run', native: 'Skill', identity: { skill: 'acme-skill' } }))).toBe('other');
+    expect(verdictOf(withStep({ action: 'mcp.call', native: 'mcp__acme__get_issue', identity: null }))).toBe('accepted');
+    expect(verdictOf(withStep({ action: 'mcp.call', native: PRIVATE, identity: { server: 'acme', tool: 'x' } }))).toBe('accepted');
+    expect(verdictOf(withStep({ action: 'skill.run', native: 'Skill', identity: { skill: 'acme-skill' } }))).toBe('accepted');
     expect(verdictOf(withStep({ action: 'mcp.call', native: PRIVATE, identity: { server: PRIVATE, tool: LITERAL } }))).toBe('accepted');
-    expect(verdictOf(withStep({ action: 'mcp.call', native: PRIVATE, identity: { server: LITERAL, tool: LITERAL } }))).toBe('other');
+    expect(verdictOf(withStep({ action: 'mcp.call', native: PRIVATE, identity: { server: LITERAL, tool: LITERAL } }))).toBe(`${stepField}.identity.server`);
     expect(verdictOf(withStep({ action: 'skill.run', native: 'Skill', identity: { skill: PRIVATE } }))).toBe('accepted');
-    expect(verdictOf(withStep({ action: 'skill.run', native: 'Skill', identity: { skill: LITERAL } }))).toBe('other');
+    expect(verdictOf(withStep({ action: 'skill.run', native: 'Skill', identity: { skill: LITERAL } }))).toBe(`${stepField}.identity.skill`);
     expect(verdictOf(withStep({ action: 'web.fetch', native: 'WebFetch', identity: { host: PRIVATE } }))).toBe('accepted');
-    expect(verdictOf(withStep({ action: 'web.fetch', native: 'WebFetch', identity: { host: LITERAL } }))).toBe('other');
-    expect(verdictOf(withStep({ action: 'web.fetch', native: 'WebFetch', identity: { host: 'acme.internal' } }))).toBe('other');
+    expect(verdictOf(withStep({ action: 'web.fetch', native: 'WebFetch', identity: { host: LITERAL } }))).toBe(`${stepField}.identity.host`);
+    expect(verdictOf(withStep({ action: 'web.fetch', native: 'WebFetch', identity: { host: 'acme.internal' } }))).toBe('accepted');
     expect(verdictOf(withStep({ action: 'web.fetch', native: 'WebFetch', identity: { host: 'github.com' } }))).toBe('accepted');
     expect(verdictOf(withStep({ action: 'file.read', native: 'Read', identity: { path: '/home/me' } }))).toBe(`${stepField}.identity`);
   });
@@ -334,9 +337,9 @@ describe('parseSkeleton refuses, and names the field', () => {
     const pull = (over: object): unknown => withStep({ identity: { program: 'npm', sub: null, flags: [], pulls: [{ registry: 'npm', name: 'zod', version: null, ...over }] } });
     expect(verdictOf(pull({}))).toBe('accepted');
     expect(verdictOf(pull({ version: '^4.0.0' }))).toBe('accepted');
-    expect(verdictOf(pull({ name: 'acme-private' }))).toBe('other');
+    expect(verdictOf(pull({ name: 'acme-private' }))).toBe('accepted');
     expect(verdictOf(pull({ name: PRIVATE }))).toBe('accepted');
-    expect(verdictOf(pull({ name: LITERAL }))).toBe('other');
+    expect(verdictOf(pull({ name: LITERAL }))).toBe(`${stepField}.identity.pulls[0].name`);
     expect(verdictOf(pull({ registry: 'acme' }))).toBe('other');
     expect(verdictOf(pull({ version: 'latest-acme' }))).toBe('other');
     // A version beside a masked name identifies the name, so only a null version or the literal travels with `private`.
@@ -354,17 +357,18 @@ describe('parseSkeleton refuses, and names the field', () => {
     for (const version of ['1.0.0-acme-secret', '1.0.0.acme', '1.0.0+abc123']) expect(harness(version)).toBe('other');
   });
 
-  // The server's own list, as capture applies it, so a name only a forged client could write is refused rather than stored.
-  it('takes an MCP tool only when that server lists it', () => {
+  // A tool beside a server travels by name when the harness's spelling delimits the server; a value that is no name is set aside.
+  it('takes an MCP tool by name when it has the shape of one', () => {
     const tool = (server: string, name: string): unknown => withStep({ action: 'mcp.call', native: PRIVATE, identity: { server, tool: name } });
     const native = (name: string): unknown => withStep({ action: 'mcp.call', native: name, identity: { server: 'github', tool: LITERAL } });
-    expect(verdictOf(tool('github', 'acme_secret_deploy'))).toBe('other');
-    expect(verdictOf(tool('postgres', 'get_issue'))).toBe('other');
+    expect(verdictOf(tool('github', 'acme_secret_deploy'))).toBe('accepted');
+    expect(verdictOf(tool('postgres', 'get_issue'))).toBe('accepted');
+    expect(verdictOf(tool('github', 'rm -rf /'))).toBe('other');
     expect(verdictOf(tool('github', LITERAL))).toBe('accepted');
-    expect(verdictOf(native('mcp__github__acme_secret_deploy'))).toBe('other');
+    expect(verdictOf(native('mcp__github__acme_secret_deploy'))).toBe('accepted');
   });
 
-  // Cursor's spelling cannot show where a server name ends, so capture keeps the tool and the native name out; a deposit naming either did not come from capture.
+  // Cursor's spelling cannot show where a server name ends, so capture keeps the tool out; the native name still travels as a name.
   it('takes no MCP tool name from a harness whose spelling cannot delimit the server', () => {
     const fromCursor = (over: object): unknown => {
       const raw = withStep({ action: 'mcp.call', ...over });
@@ -376,7 +380,7 @@ describe('parseSkeleton refuses, and names the field', () => {
     };
     expect(verdictOf(fromCursor({ native: PRIVATE, identity: { server: 'github', tool: LITERAL } }))).toBe('accepted');
     expect(verdictOf(fromCursor({ native: PRIVATE, identity: { server: 'github', tool: 'get_issue' } }))).toBe('other');
-    expect(verdictOf(fromCursor({ native: 'mcp_github_get_issue', identity: { server: 'github', tool: LITERAL } }))).toBe('other');
+    expect(verdictOf(fromCursor({ native: 'mcp_github_get_issue', identity: { server: 'github', tool: LITERAL } }))).toBe('accepted');
   });
 
   // The harness list is the schema's `Harness` union: a skeleton from a harness missing from it is refused whole, so each name needs a pass here.

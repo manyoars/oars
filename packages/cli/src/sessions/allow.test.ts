@@ -1,7 +1,7 @@
 import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { compileAllow, parseAllowList, slugOf } from './allow.js';
+import { compileAllow, denialOf, mergeAllow, parseAllowList, runAllow, slugOf } from './allow.js';
 
 describe('allowlist entries', () => {
   it('matches a folder by exact name or by path', () => {
@@ -47,5 +47,44 @@ describe('a leading ~', () => {
     expect(prefix.allows(`${slugOf(join(home, 'work'))}-app`)).toBe(true);
     expect(compileAllow(['~']).allows(slugOf(home))).toBe(true);
     expect(compileAllow(['~other/x']).allows(slugOf(join(home, 'other', 'x')))).toBe(false);
+  });
+});
+
+describe('the default and denials', () => {
+  it('allows every folder when no entry names one', () => {
+    expect(compileAllow([]).allows('-home-me-work-app')).toBe(true);
+    expect(compileAllow([]).allows('cursor')).toBe(true);
+    expect(compileAllow([]).unmatched(['-home-me-work-app'])).toEqual([]);
+  });
+
+  it('keeps a denied folder out, in every form an allow entry takes, over a wider allow', () => {
+    expect(compileAllow([denialOf('-home-me-secret')]).allows('-home-me-secret')).toBe(false);
+    expect(compileAllow([denialOf('-home-me-secret')]).allows('-home-me-work')).toBe(true);
+    expect(compileAllow(['*-home-me-*', denialOf('*-secret')]).allows('-home-me-secret')).toBe(false);
+    expect(compileAllow(['codex', denialOf('codex')]).allows('codex')).toBe(false);
+    expect(compileAllow([denialOf('-home-me-secret')]).unmatched(['-home-me-work'])).toEqual([]);
+  });
+
+  it('saves a denial until that exact entry is allowed again', () => {
+    expect(mergeAllow(['a'], [denialOf('b')])).toEqual(['a', '!b']);
+    expect(mergeAllow(['a', '!b'], ['b'])).toEqual(['a', 'b']);
+    expect(mergeAllow(['!b'], ['b*'])).toEqual(['!b', 'b*']);
+  });
+
+  it('reads the named folders less every denial, else the saved list', () => {
+    expect(runAllow(['a', '!b'], [])).toEqual(['a', '!b']);
+    expect(runAllow(['a', '!b'], ['c'])).toEqual(['c', '!b']);
+    expect(runAllow(['a'], ['!c'])).toEqual(['a', '!c']);
+    expect(runAllow([], [])).toEqual([]);
+  });
+
+  it('lifts a denial on a list that names no folder without narrowing it: every folder stays in scope', () => {
+    expect(mergeAllow(['!b'], ['b'])).toEqual([]);
+    expect(runAllow(['!b'], ['b'])).toEqual([]);
+    expect(mergeAllow(['!b', '!c'], ['b'])).toEqual(['!c']);
+    expect(runAllow(['!b', '!c'], ['b'])).toEqual(['!c']);
+    // A run that also names another folder narrows to the folders it names, the lifted one among them.
+    expect(mergeAllow(['!b'], ['b', 'c'])).toEqual(['b', 'c']);
+    expect(runAllow(['!b'], ['b', 'c'])).toEqual(['b', 'c']);
   });
 });
