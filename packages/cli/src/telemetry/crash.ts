@@ -10,8 +10,8 @@ export const crashClassOf = (error: unknown): CrashClass => {
   if (!(error instanceof Error)) return 'other';
   // A subclass of a built-in is that built-in; walk up until one is named.
   for (let proto: unknown = Object.getPrototypeOf(error); typeof proto === 'object' && proto !== null; proto = Object.getPrototypeOf(proto)) {
-    const named = Reflect.get(proto, 'constructor');
-    const name = typeof named === 'function' ? named.name : '';
+    const named: unknown = Reflect.get(proto, 'constructor');
+    const name: unknown = typeof named === 'function' ? Reflect.get(named, 'name') : '';
     const found = CRASH_CLASSES.find((known) => known === name && known !== 'other');
     if (found !== undefined) return found;
   }

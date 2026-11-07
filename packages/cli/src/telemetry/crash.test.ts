@@ -8,6 +8,7 @@ import { defaultConfigDir } from '../credentials.js';
 import { ExitCode } from '../errors.js';
 import { harness } from '../test-support.js';
 import { crashClassOf, stackHashOf } from './crash.js';
+import { spoolEvents } from './read-events.js';
 import { readSpool, spoolPaths } from './spool.js';
 
 const roots: string[] = [];
@@ -30,17 +31,17 @@ describe('crash class and stack hash', () => {
   it('names a built-in class, and anything else other', () => {
     expect(crashClassOf(new TypeError('x'))).toBe('TypeError');
     expect(crashClassOf(new RangeError('x'))).toBe('RangeError');
-    class Custom extends Error {}
+    class Custom extends Error {
+      readonly extra = 1;
+    }
     expect(crashClassOf(new Custom('x'))).toBe('Error');
     const renamed = new Error('x');
     renamed.name = `${HOME}\\evil`;
     // The class comes from the constructor chain, so text set as a name is never read, let alone recorded.
     expect(crashClassOf(renamed)).toBe('Error');
-    class Foreign {}
-    Object.setPrototypeOf(Foreign.prototype, Error.prototype);
-    expect(crashClassOf(new Foreign())).toBe('Error');
-    const detached = Object.create(null) as Error;
-    expect(crashClassOf(detached)).toBe('other');
+    // A value that is not an error at all is `other`, whatever it looks like.
+    expect(crashClassOf({ name: 'TypeError', message: 'x', stack: 'x' })).toBe('other');
+    expect(crashClassOf(Object.create(null))).toBe('other');
     expect(crashClassOf('a string')).toBe('other');
     expect(crashClassOf(undefined)).toBe('other');
   });
@@ -97,11 +98,9 @@ describe('the top-level catch', () => {
     const spool = readSpool(dir).join('\n');
     for (const secret of ['someone', 'acme-billing', 'secret.env', 'Users', '/home', 'node_modules/foo']) expect(spool).not.toContain(secret);
     expect(readFileSync(spoolPaths(dir).current, 'utf8')).not.toContain('cannot read');
-    const crash = readSpool(dir)
-      .map((line): unknown => JSON.parse(line))
-      .find((event) => typeof event === 'object' && event !== null && Reflect.get(event, 'type') === 'crash');
-    expect(crash).toMatchObject({ v: 1, type: 'crash', data: { errorClass: 'TypeError' } });
-    expect(Reflect.get(Reflect.get(crash as object, 'data') as object, 'stackHash')).toMatch(/^[0-9a-f]{16}$/);
+    const [crash] = spoolEvents(dir, 'crash');
+    expect(crash).toMatchObject({ data: { errorClass: 'TypeError' } });
+    expect(crash?.data.stackHash).toMatch(/^[0-9a-f]{16}$/);
   });
 
   it('records nothing for a failure the program meant (a usage error)', async () => {
@@ -110,7 +109,6 @@ describe('the top-level catch', () => {
     const made = harness({ APPDATA: appData });
     made.deps.telemetry = { dir: join(appData, 'oars', 'telemetry'), platform: 'linux' };
     await run(['--bogus'], made.deps);
-    const types = readSpool(join(appData, 'oars', 'telemetry')).map((line): unknown => Reflect.get(JSON.parse(line) as object, 'type'));
-    expect(types).toEqual(['command']);
+    expect(spoolEvents(join(appData, 'oars', 'telemetry')).map((event) => event.type)).toEqual(['command']);
   });
 });

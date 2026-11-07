@@ -80,6 +80,23 @@ describe('the closed schema', () => {
     });
   });
 
+  it('admits the health, cost, crash, and wire types as they are built, and refuses what is off their lists', () => {
+    expect(sanitize('store-health', { sessions: 12, models: ['claude-opus-4-5', 'other'], harnessVersions: ['2.1.37'], rawBytes: 4096, readFailed: 0 })).toEqual({
+      data: { sessions: 12, models: ['claude-opus-4-5', 'other'], harnessVersions: ['2.1.37'], rawBytes: 4096, readFailed: 0 },
+      dropped: 0,
+    });
+    // A model or version outside the public vocabulary is written `other` by the caller; the schema refuses it if it comes through as it is.
+    expect(sanitize('store-health', { models: ['acme-internal-finetune'], harnessVersions: ['build 7 of acme'] })).toEqual({ data: {}, dropped: 2 });
+    expect(sanitize('run-cost', { totalMs: 900, parseMs: 400, peakRssMb: 310, failed: 1 })).toEqual({ data: { totalMs: 900, parseMs: 400, peakRssMb: 310, failed: 1 }, dropped: 0 });
+    expect(sanitize('crash', { errorClass: 'TypeError', stackHash: '0123456789abcdef' })).toEqual({ data: { errorClass: 'TypeError', stackHash: '0123456789abcdef' }, dropped: 0 });
+    expect(sanitize('crash', { errorClass: 'CustomError', stackHash: 'C:\\Users\\someone' })).toEqual({ data: {}, dropped: 2 });
+    expect(sanitize('wire', { harness: 'claude-code', fields: ['action', 'harness'], present: [3, 3], fieldBytes: [120, 60], batches: 3, bytes: 900 })).toMatchObject({ dropped: 0 });
+    // Names come from the register: a name outside it, and a number list with a text entry, are refused.
+    expect(sanitize('wire', { fields: ['action', 'secret-project'], present: [1, 'x'] })).toEqual({ data: {}, dropped: 2 });
+    expect(sanitize('wire-send', { sent: 0, status: 429, code: 'rate_limited', bytes: 10 })).toEqual({ data: { sent: 0, status: 429, code: 'rate_limited', bytes: 10 }, dropped: 0 });
+    expect(sanitize('wire-send', { code: 'Rate limited: see https://x.test' })).toEqual({ data: {}, dropped: 1 });
+  });
+
   it('knows no event type it was not given', () => {
     expect(sanitize('prompt', { text: PROMPT })).toBeUndefined();
     expect(fieldNamesOf('prompt')).toEqual([]);
