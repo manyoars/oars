@@ -598,7 +598,7 @@ const cappedError = (deps: RunDeps, reply: Reply, kept: boolean): CliError => {
 const DEFAULT_HARNESS: Harness = 'claude-code';
 
 /** The harnesses a bundle is served for. `otel` reads the framework into the version slot, so no public bundle is keyed by it (lead 219): it is in `HARNESSES` for the wire, not for a fetch. */
-const FETCHABLE = HARNESSES.filter((name) => name !== 'otel');
+const FETCHABLE: readonly Harness[] = HARNESSES.filter((name) => name !== 'otel');
 
 /**
  * The harness a fetch asks for. `--harness` names it, and nothing is printed. Without the flag it is the harness the local store holds the most sessions of, and the choice and the way to
