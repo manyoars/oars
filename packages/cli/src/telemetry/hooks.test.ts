@@ -279,21 +279,50 @@ describe('oars gate hook records one event per fire, after the answer', () => {
     const dir = spoolFolder();
     const emit = emitterAt(dir);
     const exits: number[] = [];
+    // What the spool held at the moment `exit` was called: the process ends there, so a fire written later is lost.
+    const heldAtExit: number[] = [];
     // stdin never resolves, so only the deadline timer can end this fire; the run promise never settles and is not awaited.
     const ended = new Promise<void>((done) => {
       void runHookProcess({
         stdin: () => new Promise<string>(() => undefined),
         deps: (staging) => ({ storeDir: seeded('block'), now: () => Date.now(), clock: () => 0, deadlineMs: 800, stage: staging }),
-        exit: (code) => { exits.push(code); done(); },
+        exit: (code) => { exits.push(code); heldAtExit.push(hooks(dir).length); done(); },
         write: () => Promise.resolve(),
         deadlineMs: 10,
-        record: (one) => { emit('hook', { name: 'gate', ...one }); },
+        // The recorder `hook-main.ts` ships, so an `await` added before its `emit` loses the event at `exit` and fails here.
+        record: fireRecorder(emit),
       });
     });
     await ended;
     expect(exits).toEqual([0]);
+    expect(heldAtExit).toEqual([1]);
     expect(hooks(dir)).toHaveLength(1);
     expect(hooks(dir)[0]?.data).toMatchObject({ name: 'gate', outcome: 'error', bytes: 0 });
+    expect(hooks(dir)[0]?.data).not.toHaveProperty('harnessVersion');
+  });
+
+  it('a transcript read that never resolves still spools the fire when the deadline arrives', async () => {
+    const dir = spoolFolder();
+    const emit = emitterAt(dir);
+    const exits: number[] = [];
+    const heldAtExit: number[] = [];
+    const sent = fireRecorder(emit);
+    const input = JSON.stringify({ ...JSON.parse(call('ls')), transcript_path: join(tmpdir(), 'oars-stalled-transcript.jsonl') });
+    const ended = new Promise<void>((done) => {
+      void runHookProcess({
+        stdin: () => Promise.resolve(input),
+        deps: (staging) => ({ storeDir: seeded('block'), now: () => Date.now(), clock: () => 0, deadlineMs: 800, stage: staging }),
+        exit: (code) => { exits.push(code); heldAtExit.push(hooks(dir).length); done(); },
+        write: () => Promise.resolve(),
+        deadlineMs: 300,
+        // A transcript on a stalled or locked disk: the read with a path never settles, and the deadline's own call carries none.
+        record: (one, transcript) => (transcript === undefined ? sent(one, undefined) : new Promise<void>(() => undefined)),
+      });
+    });
+    await ended;
+    expect(exits).toEqual([0]);
+    expect(heldAtExit).toEqual([1]);
+    expect(hooks(dir)[0]?.data).toMatchObject({ name: 'gate', outcome: 'miss', bytes: 0 });
   });
 
   it('a throw in the recording changes neither the output nor the exit code', async () => {

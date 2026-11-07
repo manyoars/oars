@@ -87,12 +87,20 @@ const run = (args: readonly string[], env: NodeJS.ProcessEnv, cwd: string, input
     child.stdin.end(input);
   });
 
+/** The type of each spooled event, in order. */
+const typesOf = (dir: string): string[] =>
+  readSpool(dir).map((text) => {
+    const parsed: unknown = JSON.parse(text);
+    return String(typeof parsed === 'object' && parsed !== null ? Reflect.get(parsed, 'type') : undefined);
+  });
+
 describe.skipIf(!built)('the built nightly send', () => {
   it('makes one POST /v1/telemetry for the nightly event and leaves the spool empty', async () => {
     const fake = await serve();
     const { root, dir, env } = home();
     expect(await run([hookBin, 'nightly'], { ...env, OARS_POOL_URL: fake.origin }, root)).toBe(0);
-    expect(fake.received).toEqual([{ method: 'POST', url: '/v1/telemetry', events: 1 }]);
+    // The seeded command event, and the `hook` event the nightly run itself records (t876) before it sends.
+    expect(fake.received).toEqual([{ method: 'POST', url: '/v1/telemetry', events: 2 }]);
     expect(readSpool(dir)).toEqual([]);
   }, 60_000);
 
@@ -104,7 +112,8 @@ describe.skipIf(!built)('the built nightly send', () => {
     expect(await run([hookBin, 'session-start'], { ...env, OARS_POOL_URL: fake.origin }, root, '{}')).toBe(0);
     expect(await run([hookBin, 'stop'], { ...env, OARS_POOL_URL: fake.origin }, root, '{}')).toBe(0);
     expect(fake.received).toEqual([]);
-    expect(readSpool(dir)).toHaveLength(1);
+    // The seeded command event, and one `hook` event for each of the three fires (t876).
+    expect(typesOf(dir)).toEqual(['command', 'hook', 'hook', 'hook']);
   }, 60_000);
 
   it('makes no nightly request without a server configured', async () => {
@@ -112,7 +121,7 @@ describe.skipIf(!built)('the built nightly send', () => {
     const { root, dir, env } = home();
     expect(await run([hookBin, 'nightly'], env, root)).toBe(0);
     expect(fake.received).toEqual([]);
-    expect(readSpool(dir)).toHaveLength(1);
+    expect(typesOf(dir)).toEqual(['command', 'hook']);
   }, 60_000);
 });
 
