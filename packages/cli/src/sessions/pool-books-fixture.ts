@@ -4,13 +4,14 @@ import { mkdirSync, utimesSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { contentHash } from './read.js';
 import { BUNDLE_FORMAT, VOCAB_VERSION, type Books, type Bundle } from './pool-wire.js';
+import { TEST_FLOOR } from './test-support.js';
 
 export const SERVER = 'https://pool.example.test';
 
 export const NONE = { state: 'no source yet', reason: 'no source feeds this yet' } as const;
 
 export const booksOf = (over: Partial<Books> = {}): Books => ({
-  floor: 5,
+  floor: TEST_FLOOR,
   format: BUNDLE_FORMAT,
   vocabVersion: VOCAB_VERSION,
   asOf: { pool: 'p1', day: '2026-11-02' },
@@ -23,7 +24,7 @@ export const booksOf = (over: Partial<Books> = {}): Books => ({
   ...over,
 });
 
-export const bundleOf = (books: Books | undefined, harnessVersion = '2.1.314'): Bundle => ({ floor: 5, format: BUNDLE_FORMAT, harness: 'claude-code', harnessVersion, vocabVersion: VOCAB_VERSION, asOf: { pool: 'p1', day: '2026-11-02' }, cells: [], motifs: [], reads: [], strata: [], ...(books === undefined ? {} : { books }) });
+export const bundleOf = (books: Books | undefined, harnessVersion = '2.1.314'): Bundle => ({ floor: TEST_FLOOR, format: BUNDLE_FORMAT, harness: 'claude-code', harnessVersion, vocabVersion: VOCAB_VERSION, asOf: { pool: 'p1', day: '2026-11-02' }, cells: [], motifs: [], reads: [], strata: [], ...(books === undefined ? {} : { books }) });
 
 export const pair = async (): Promise<{ x: string; sign: (text: string) => Promise<string> }> => {
   const made = await webcrypto.subtle.generateKey('Ed25519', true, ['sign', 'verify']);
