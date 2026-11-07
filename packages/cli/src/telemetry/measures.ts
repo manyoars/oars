@@ -22,7 +22,7 @@ export const WINDOWS: readonly number[] = [7, 30];
 const DAY_MS = 86_400_000;
 
 /** The hooks that exist; any other name in a batch is not measured. */
-export const HOOK_NAMES: readonly string[] = ['session-start', 'pre-tool', 'post-tool', 'stop', 'nightly', 'gate'];
+export const HOOK_NAMES: readonly string[] = ['session-start', 'prompt', 'pre-tool', 'post-tool', 'stop', 'nightly', 'gate'];
 
 /** A group value as the program writes it: a version or a word, short, with no space, slash, or quote. Anything else is `other`. */
 const VALUE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,31}$/;
