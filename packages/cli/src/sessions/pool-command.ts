@@ -5,16 +5,17 @@ import { dirname, join } from 'node:path';
 import type { Outcome, RunDeps } from '../cli.js';
 import { CliError, exitCodeForProblem, ExitCode, unreachableError } from '../errors.js';
 import { compileAllow } from './allow.js';
-import { checkSession, exclusionPaths, lastWritten, type Reason } from './exclusion.js';
+import { checkSession, exclusionPaths, lastWritten, loadTerms, type Reason } from './exclusion.js';
+import { makeRedactor } from './redact.js';
 import { discardStale, FIELD_ROWS, fieldsOf, heldBatches, isMissing, lockedBatch, markShown, outboxFolder, removeBatchesExcept, removeBatchOf, staleBatches, unchangedBytes, writeBatch, type LockRefusal } from './pool-outbox.js';
-import { HARNESSES, hasEnded, SESSION_IDLE_HOURS, isBundleVersion, isHarness, parseSkeleton, sessionsOf, skeletonOf, VOCAB_VERSION, verifyBundle, type Bundle, type PinnedKey, type SessionRecords, type TranscriptRoot } from './pool-wire.js';
+import { HARNESSES, hasEnded, SESSION_IDLE_HOURS, isBundleVersion, isHarness, parseSkeleton, sessionsOf, skeletonOf, VOCAB_VERSION, verifyBundle, type Bundle, type PinnedKey, type SessionRecords, type TranscriptRoot, type WireGate } from './pool-wire.js';
 import { carriedDeltas, markDeltasSent, placedOf, sentDeltas } from './pool-delta.js';
 import { Masker, printed, TRANSPORT_HEADERS, waitWords, type Outgoing } from './pool-print.js';
 import { shellReader } from './projection.js';
 import { isVocabularyExpired, REGISTRY_MAX_AGE_DAYS, VOCAB_SNAPSHOT_DATE } from './public-vocabulary.js';
 import { contentHash } from './read.js';
 import { harnessOf as sessionHarness, type Harness } from './schema.js';
-import { loadStore, readSaved, readSkeletons, type SessionsRuntime } from './store.js';
+import { loadStore, readRedactDomains, readSaved, readSkeletons, type SessionsRuntime } from './store.js';
 import { vocabulary } from './vocab-load.js';
 
 const LOGIN = 'pool-login';
@@ -411,6 +412,8 @@ export const poolDeposit = async (deps: RunDeps, options: { server?: string | un
   const allow = compileAllow((await readSaved(runtime.storeDir)).allow);
   const discarded = await discardStale(outbox);
   const counts: DepositCounts = { sessions: 0, batched: 0, excluded: { folder: 0, term: 0, noRaw: 0, noTerms: 0, unreadable: 0 }, uncaptured: 0, notEnded: 0, refused: 0, refusedFields: [], discarded, withdrawn: 0 };
+  // The one gate on a name: the operator's redactor and exclusion terms (t881). Everything else the pool classes itself.
+  const gate: WireGate = { redact: makeRedactor(await readRedactDomains(runtime.storeDir)), terms: await loadTerms(terms) };
   const built = new Set<string>();
   const refusedFields = new Set<string>();
   const roots = new Map<string, TranscriptRoot>((await readSkeletons(runtime.storeDir, undefined, true)).skeletons.map(({ session, merkleRoot, leaves }) => [session, { merkleRoot, leaves }]));
@@ -448,7 +451,7 @@ export const poolDeposit = async (deps: RunDeps, options: { server?: string | un
   const carried = carriedDeltas(account, placed, await sentDeltas(outbox));
   for (const { records, key } of ready) {
     const delta = carried.get(records.main.session);
-    const skeleton = skeletonOf(records, key, shellReader(vocabulary()), contentHash, delta?.entries);
+    const skeleton = skeletonOf(records, key, shellReader(vocabulary()), contentHash, delta?.entries, gate);
     if (skeleton === null) {
       counts.uncaptured += 1;
       await withdraw(key);
