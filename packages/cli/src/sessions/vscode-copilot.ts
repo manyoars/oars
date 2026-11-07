@@ -327,12 +327,14 @@ export const chatLines = (data: Obj, fallbackId: string, folder: string | null):
     const totals = Array.isArray(request.modelTotals) ? request.modelTotals.filter(isObj) : [];
     const completion = num(request.completionTokens);
     const sum = (field: string): number => totals.reduce((total, entry) => total + (num(entry[field]) ?? 0), 0);
-    // `inputTokens` is taken whole: the source does not say whether it includes `cachedTokens`. A zero in `modelTotals` means unknown, so a category summing to zero is left out
-    // rather than written as a measured zero; when no category is left, the request has no usage.
+    // `inputTokens` is taken whole: the source does not say whether it includes `cachedTokens`. A zero `inputTokens` means unknown (the extension API bridge never reports one,
+    // so the zero is a default), so it is left out rather than written as a measured zero. `cachedTokens` and `outputTokens` are values: a zero is kept when a total carried the
+    // field, since a request with no cache hit is a measured zero, and only a field no total carried is left out. When no category is left, the request has no usage.
+    const carried = (field: string): boolean => totals.some((entry) => num(entry[field]) !== undefined);
     const fromTotals: Obj = {
       ...(sum('inputTokens') > 0 ? { input_tokens: sum('inputTokens') } : {}),
-      ...(sum('cachedTokens') > 0 ? { cache_read_input_tokens: sum('cachedTokens') } : {}),
-      ...(sum('outputTokens') > 0 ? { output_tokens: sum('outputTokens') } : {}),
+      ...(carried('cachedTokens') ? { cache_read_input_tokens: sum('cachedTokens') } : {}),
+      ...(carried('outputTokens') ? { output_tokens: sum('outputTokens') } : {}),
     };
     const fromCompletion: Obj = completion !== undefined && completion > 0 ? { output_tokens: completion } : {};
     const counted = totals.length > 0 && Object.keys(fromTotals).length > 0 ? fromTotals : fromCompletion;
