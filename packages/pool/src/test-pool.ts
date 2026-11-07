@@ -115,6 +115,8 @@ interface StubProvider {
   html: Set<string>;
   /** URLs answered 403, the way GitHub answers a call over its rate limit. */
   forbidden: Set<string>;
+  /** Profile URLs answered with this status and the user's real body, the way a proxy or a provider fault can put an id in a non-2xx answer. */
+  statused: Map<string, number>;
   outbound: (request: StubRequest) => Promise<StubResponse>;
 }
 
@@ -124,6 +126,7 @@ const stubProvider = (): StubProvider => {
   const calls: StubCall[] = [];
   const html = new Set<string>();
   const forbidden = new Set<string>();
+  const statused = new Map<string, number>();
   const refuse = new Map<string, string>();
   const scripted = new Map<string, string>();
   let issued = 0;
@@ -159,11 +162,12 @@ const stubProvider = (): StubProvider => {
     if (at === 'https://oauth2.googleapis.com/token') return token(form, true);
     const found = users.get((request.headers.get('authorization') ?? '').replace('Bearer access-', ''));
     if (typeof found !== 'object' || found === null) return json({ error: 'bad token' }, 401);
-    if (at === 'https://api.github.com/user') return json({ id: Number(found.id), login: found.login, email: found.email, name: found.login, ...(found.createdAt === undefined ? {} : { created_at: found.createdAt }) });
-    if (at === 'https://openidconnect.googleapis.com/v1/userinfo') return json({ sub: found.id, email: found.email, name: found.login });
+    const status = statused.get(at) ?? 200;
+    if (at === 'https://api.github.com/user') return json({ id: Number(found.id), login: found.login, email: found.email, name: found.login, ...(found.createdAt === undefined ? {} : { created_at: found.createdAt }) }, status);
+    if (at === 'https://openidconnect.googleapis.com/v1/userinfo') return json({ sub: found.id, email: found.email, name: found.login }, status);
     return json({ error: `no stub for ${at}` }, 500);
   };
-  return { approve: (code, user) => users.set(code, user), script: (code, word) => scripted.set(code, word), forget: (code) => users.delete(code), calls, html, forbidden, refuse, outbound };
+  return { approve: (code, user) => users.set(code, user), script: (code, word) => scripted.set(code, word), forget: (code) => users.delete(code), calls, html, forbidden, statused, refuse, outbound };
 };
 
 export interface Answer {

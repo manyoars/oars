@@ -230,8 +230,9 @@ export const loginPoll = async (request: Request, env: Env): Promise<Response> =
 
   const profile = await profileOf(provider.userUrl, accessToken);
   if (profile === undefined) return refuse(502, 'provider_error', 'The provider could not be reached.');
-  // Only a 401 says the token is bad. GitHub answers a call over its rate limit with 403, so a 403 falls through to provider_error: the token may be fine.
+  // Only a 401 says the token is bad. GitHub answers a call over its rate limit with 403, so any other non-2xx answer is provider_error: the token may be fine. Whatever such a body names, it signs nobody in (S19).
   if (profile.status === 401) return refuse(401, 'login_refused', 'The provider did not accept the token.');
+  if (profile.status < 200 || profile.status >= 300) return refuse(502, 'provider_error', 'The provider did not answer the profile read.');
   const userId = provider.userIdOf(profile.body);
   if (userId === undefined) return refuse(502, 'provider_error', 'The provider did not name the user.');
   return credentialFor(env, signingKey, pseudonymOf(pseudonymKey, pending.provider, userId), provider.createdOf(profile.body));

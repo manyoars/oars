@@ -162,6 +162,21 @@ describe.each(FLOWS)('the $provider brokered sign-in', ({ provider, clientId, de
     }
   });
 
+  // S19: a non-2xx answer whose body still names an id (a proxy, a fault, a provider error page that echoes a profile) signs nobody in, and mints no credential.
+  it.each([403, 500, 503, 302])('signs nobody in when the profile read answers %i with a body that names an id', async (status) => {
+    const { handle, device } = await startOf(provider);
+    pool.stub.approve(device, stubUser('403'));
+    pool.stub.statused.set(userUrl, status);
+    const db = await pool.db();
+    const before = (await db.prepare('SELECT COUNT(*) AS n FROM tokens').first('n')) as number;
+    try {
+      expect(await pool.post('/v1/login/poll', { handle })).toMatchObject({ status: 502, json: { error: 'provider_error' } });
+    } finally {
+      pool.stub.statused.clear();
+    }
+    expect(await db.prepare('SELECT COUNT(*) AS n FROM tokens').first('n')).toBe(before);
+  });
+
   it("is a named provider_error carrying the provider's word when it refuses to start a flow, or answers a word the pool does not know", async () => {
     pool.stub.refuse.set(deviceUrl, 'device_flow_disabled');
     try {
