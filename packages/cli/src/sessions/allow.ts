@@ -3,10 +3,10 @@
 //   a folder prefix        `~/work/` (trailing slash): that folder and everything under it
 //   a glob                 `*-work-*`, `C:\work\app-*`: `*` any run of characters, `?` one character
 // A path is matched through its slug, because Claude Code names a project folder after its working directory with every
-// non-alphanumeric character as `-`.
+// non-alphanumeric character as `-`. An entry that starts with `!` (what `--deny` saves) keeps the folders it names out, whatever
+// else names them. With no entry that is not a denial, every folder is on the list: the default is every folder.
 import { homedir } from 'node:os';
 import { resolve } from 'node:path';
-import { CliError, ExitCode } from '../errors.js';
 
 /** A leading `~` is the home folder, expanded here because a quoted entry or one read from a list file reaches us unexpanded by any shell. */
 export const expandHome = (entry: string): string => (/^~(?:[\\/]|$)/.test(entry) ? homedir() + entry.slice(1) : entry);
@@ -45,12 +45,44 @@ export interface Allow {
   unmatched: (names: readonly string[]) => string[];
 }
 
+/** The prefix `--deny` saves an entry under. */
+export const DENY = '!';
+
+const isDenial = (entry: string): boolean => entry.startsWith(DENY);
+
+export const denialOf = (entry: string): string => `${DENY}${entry}`;
+
 export const compileAllow = (entries: readonly string[]): Allow => {
-  const compiled = entries.map((entry) => ({ entry, matches: matcherOf(expandHome(entry)) }));
+  const compiled = entries.filter((entry) => !isDenial(entry)).map((entry) => ({ entry, matches: matcherOf(expandHome(entry)) }));
+  const denied = entries.filter(isDenial).map((entry) => matcherOf(expandHome(entry.slice(DENY.length))));
   return {
-    allows: (name) => compiled.some((item) => item.matches(name)),
+    allows: (name) => (compiled.length === 0 || compiled.some((item) => item.matches(name))) && !denied.some((matches) => matches(name)),
     unmatched: (names) => compiled.filter((item) => !names.some((name) => item.matches(name))).map((item) => item.entry),
   };
+};
+
+/**
+ * Whether the named entries only lift saved denials: each is denied in `saved`, and `saved` names no folder. On every-folder scope such
+ * an `--allow` drops the denial and adds nothing, because adding the entry would narrow every later run to it.
+ */
+const liftsOnly = (saved: readonly string[], named: readonly string[]): boolean =>
+  named.length > 0 && saved.every(isDenial) && named.every((entry) => saved.includes(denialOf(entry)));
+
+/**
+ * The list a deposit saves: the saved entries and the given ones, where naming a folder again with `--allow` lifts the denial of exactly
+ * that entry. A denial is kept until then, so a later `--allow` of a wider prefix cannot read a denied folder.
+ */
+export const mergeAllow = (saved: readonly string[], given: readonly string[]): string[] => {
+  const kept = saved.filter((entry) => !(isDenial(entry) && given.includes(entry.slice(DENY.length))));
+  const added = liftsOnly(saved, given.filter((entry) => !isDenial(entry))) ? given.filter(isDenial) : given;
+  return [...new Set([...kept, ...added])];
+};
+
+/** What one deposit reads: the folders it names, else the saved list (empty is every folder), less every denial saved or given. */
+export const runAllow = (saved: readonly string[], given: readonly string[]): string[] => {
+  const merged = mergeAllow(saved, given);
+  const named = given.filter((entry) => !isDenial(entry));
+  return named.length === 0 || liftsOnly(saved, named) ? merged : [...named, ...merged.filter(isDenial)];
 };
 
 /** One entry per line; blank lines and lines starting with `#` are skipped. */
@@ -59,9 +91,3 @@ export const parseAllowList = (text: string): string[] =>
     .split(/\r?\n/)
     .map((line) => line.trim())
     .filter((line) => line !== '' && !line.startsWith('#'));
-
-export const requireEntries = (entries: readonly string[]): void => {
-  if (entries.length === 0) {
-    throw new CliError('Nothing to read: pass at least one --allow <folder> or --allow-file <list>. Nothing is read from a folder you have not named.', ExitCode.USAGE, 'usage');
-  }
-};

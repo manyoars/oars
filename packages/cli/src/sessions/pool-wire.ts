@@ -1,10 +1,11 @@
-// What crosses the wire between `oars pool` and the pool server (recall spec Sections 2.5, 4, and 5). A skeleton is one session in closed vocabulary: the records a cell is
+// What crosses the wire between `oars pool` and the pool server (recall spec Sections 2.5, 4, and 5). A skeleton is one session as a closed list of fields, each value redacted first: the records a cell is
 // computed from, with every class A field left out, so any later derivation can run over old data while nothing private leaves. The client builds a skeleton and checks it before
 // sending, and the server parses it again, field by field, because a live URL takes anything from anyone. This file imports nothing from the file system: the Worker bundles it.
 
 import { ACTION_TABLES, CANONICAL_ACTIONS, mcpOf, type CanonicalAction } from './actions.js';
-import { CUSTOM_AGENT, FRAMEWORKS, isPublicMcpTool, isRegistryVersion, LANGUAGES, LITERAL, PRIVATE, publicEffort, publicModel, publicVersion, PUBLIC_FLAGS, PUBLIC_HOSTS, PUBLIC_MCP_SERVERS, PUBLIC_PACKAGES, PUBLIC_PROGRAMS, PUBLIC_SKILLS, projectedAgentType, PUBLIC_SUBCOMMANDS, REPO_SIZES, VOCAB_VERSION, type RepoSize } from './public-vocabulary.js';
+import { CUSTOM_AGENT, FRAMEWORKS, isPublicMcpTool, isRegistryVersion, LANGUAGES, LITERAL, PRIVATE, publicEffort, publicModel, publicVersion, PUBLIC_FLAGS, PUBLIC_PACKAGES, PUBLIC_PROGRAMS, projectedAgentType, PUBLIC_SUBCOMMANDS, REPO_SIZES, VOCAB_VERSION, type RepoSize } from './public-vocabulary.js';
 import type { Cell } from './cells.js';
+import type { Redactor } from './redact.js';
 import type { Motif } from './motif.js';
 import type { Read, ReadAsOf } from './read.js';
 import { recoveryCallsOf, RECOVERY_CALLS, type RecoveryCalls } from './recovery-calls.js';
@@ -77,7 +78,7 @@ export type SkeletonStep = Omit<StepObservation, 'n' | 'seg' | 'frameId' | 'cost
   agentType: string | null;
   /** The step's frame: a position in its transcript's `frames`, the frame of the call that made it, with that call's own model and harness version (t867). The parser refuses a position outside the list. */
   frame: number;
-  /** The skill whose run the step's call sits in, a list member or `private`; absent outside a run. The harness marks no end to a run but stops naming the skill on the next line, and a step carries the skill its call's line named. */
+  /** The skill whose run the step's call sits in, the name after redaction or `private`; absent outside a run. The harness marks no end to a run but stops naming the skill on the next line, and a step carries the skill its call's line named. */
   skill?: string;
 };
 
@@ -108,7 +109,7 @@ export interface LanguageShareEntry {
 }
 
 /**
- * The MCP servers, skills, and plugins in reach of a session, each a list member or `private` (a plugin has no pinned list, so it is always `private`). `filled` says whether the harness recorded a
+ * The MCP servers, skills, and plugins in reach of a session, each the name after redaction or `private` (a plugin has no pinned list, so it is always `private`). `filled` says whether the harness recorded a
  * `setup` or a `funnel` at all: an unfilled reach lists nothing and must not be read as a session with no tools.
  */
 export interface Reach {
@@ -239,7 +240,7 @@ export const sessionsOf = (
   return store.sessions.map((main) => ({ main, transcripts: [main, ...[...(subagents.get(main.session) ?? [])].sort((a, b) => (a.session < b.session ? -1 : 1))].map(recordsOf) }));
 };
 
-/** One command of a shell call as the projection reads it (`projectStoredShell`): a program, its subcommand, and its flags, each a list member or `private`. */
+/** One command of a shell call as the projection reads it (`projectStoredShell`): a program, its subcommand, and its flags, each the name after redaction or `private`. */
 export interface ShellCommand {
   program: string;
   subcommand: string | null;
@@ -255,52 +256,85 @@ const SHORT_FLAG = /^-[A-Za-z]$/;
 /** The flags the wire has a row for: the curated list and a single letter. */
 const isWireFlag = (flag: string): boolean => PUBLIC_FLAGS.has(flag) || SHORT_FLAG.test(flag);
 
-const PRIVATE_COMMAND = { program: PRIVATE, sub: null, flags: [] } satisfies ShellIdentity;
+/** The most characters a name may hold on the wire. A longer value is not a name: it counts as redacted. */
+export const NAME_MAX = 128;
+// A name is a word: letters, digits, and a few joiners, with an optional leading `@` for a scope. A mis-parsed command line, a path, an email, or a quoted string fails it.
+const WIRE_NAME = /^@?[A-Za-z0-9_][A-Za-z0-9_.+-]*(?:[/:][A-Za-z0-9_.+-]+)*$/;
+
+/** Whether a value has the shape of a name (and so can be told from a command line, a path, or an email) and is within `NAME_MAX`. */
+export const isWireName = (name: string): boolean => name.length <= NAME_MAX && WIRE_NAME.test(name);
+
+/** What the client holds against a value before it leaves: the redactor, and the exclusion terms the operator keeps. This is the one gate; the pool assigns every other class. */
+export interface WireGate {
+  readonly redact: Redactor;
+  readonly terms: readonly string[];
+}
+
+/** No redaction and no terms: the name shape and the length limit still apply. A local read, which sends nothing, uses it. */
+export const OPEN_GATE: WireGate = { redact: (text) => text, terms: [] };
+
+/** The redactor leaves the name and each of its underscore-delimited parts as they are: `_` is a word character to it, so a host inside `mcp__git.acme.internal__run` is invisible to a pass over the whole name. */
+const unchanged = (gate: WireGate, name: string): boolean => gate.redact(name) === name && name.split(/_+/).every((part) => gate.redact(part) === part);
 
 /**
- * A projected command as the server's parser reads it. The client's snapshot lists more programs than the curated list the server holds, and a name the server has no row for
- * does not go on the wire (Section 1.2): such a program is `private`, and a subcommand or flag outside the curated lists is dropped, as the projection drops an unlisted one.
+ * A name as the wire holds it: the value itself, or `private` when it counts as redacted. A value counts as redacted when the redactor changes it, it holds an exclusion term, it fails the name shape, or it is over
+ * `NAME_MAX` characters, because a secret, an employer's name, or a mis-parsed command is not a name and nothing downstream can take it back. `keys` (t870) sends its names through this same function.
  */
-const wireCommand = ({ program, subcommand, flags }: ShellCommand): ShellIdentity => {
-  if (!PUBLIC_PROGRAMS.has(program)) return PRIVATE_COMMAND;
-  return { program, sub: subcommand !== null && PUBLIC_SUBCOMMANDS.get(program)?.has(subcommand) === true ? subcommand : null, flags: flags.filter(isWireFlag) };
+export const wireName = (gate: WireGate, name: string): string => {
+  const lower = name.toLowerCase();
+  return isWireName(name) && unchanged(gate, name) && !gate.terms.some((term) => term !== '' && lower.includes(term.toLowerCase())) ? name : PRIVATE;
 };
 
-/** The wire's one spelling of "not admitted": a name the server's list does not hold goes as `private`, whatever the local store spells it. */
-const listed = (allowed: ReadonlySet<string>, name: string): string => (allowed.has(name) ? name : PRIVATE);
+/** The basename of a program as capture read it: a path never goes on the wire. */
+const basenameOf = (program: string): string => program.replace(/^.*[\\/]/, '');
 
-/** A pull in the wire's spelling: its package name is a list member or `private`. A version beside a masked name could identify it, so it goes as `<literal>` (null stays null), the rule capture applies. */
-const wirePull = (pull: PullIdentity): PullIdentity => {
-  const name = listed(PUBLIC_PACKAGES, pull.name);
-  return { ...pull, name, version: name === PRIVATE && pull.version !== null ? LITERAL : pull.version };
+/**
+ * A projected command as the server's parser reads it. A program the server's curated list holds keeps its subcommand and flags, held to the curated lists. Any other program goes as its basename after the gate
+ * (the stored identity reads `<literal>`, so the name comes from the call's segments), with no subcommand or flag: those are not carried for a long-tail program yet.
+ */
+const wireCommand = ({ program, subcommand, flags }: ShellCommand, raw: string | undefined, gate: WireGate): ShellIdentity => {
+  if (PUBLIC_PROGRAMS.has(program)) return { program, sub: subcommand !== null && PUBLIC_SUBCOMMANDS.get(program)?.has(subcommand) === true ? subcommand : null, flags: flags.filter(isWireFlag) };
+  const named = program !== PRIVATE ? program : raw;
+  return { program: named === undefined ? PRIVATE : wireName(gate, basenameOf(named)), sub: null, flags: [] };
 };
 
-/** A non-shell step's identity in the wire's spelling; a shell step's comes from `wireCommand`. */
-const wireIdentity = (identity: StepIdentity, harness: Harness): StepIdentity => {
+/** A pull in the wire's spelling: its package name after the gate. A version beside a name that is not on the public list could identify it, so it goes as `<literal>` (null stays null), the rule capture applies. */
+const wirePull = (pull: PullIdentity, gate: WireGate): PullIdentity => {
+  const name = wireName(gate, pull.name);
+  return { ...pull, name, version: !PUBLIC_PACKAGES.has(name) && pull.version !== null ? LITERAL : pull.version };
+};
+
+/** A non-shell step's identity in the wire's spelling; a shell step's comes from `wireCommand`. `raw` is the harness's own tool name, class A, which an MCP call's masked identity is read back from. */
+const wireIdentity = (identity: StepIdentity, harness: Harness, raw: string, gate: WireGate): StepIdentity => {
   if (identity === null || 'program' in identity) return identity;
   if ('server' in identity) {
-    const server = listed(PUBLIC_MCP_SERVERS, identity.server);
-    // A tool beside a masked server has no list to be checked against, so it goes as the literal. Beside a listed one it goes as itself only where the server's list still holds it
-    // and the harness's spelling delimits the server (the parser's rule); a tool an older list held, or one stored before that rule, goes as the literal rather than refusing the session.
-    const named = server !== PRIVATE && ACTION_TABLES[harness].toolDelimited && isPublicMcpTool(server, identity.tool);
-    return { server, tool: named ? identity.tool : LITERAL };
+    const table = ACTION_TABLES[harness];
+    const parsed = mcpOf(table, raw);
+    const server = wireName(gate, identity.server === LITERAL ? (parsed?.server ?? LITERAL) : identity.server);
+    // A tool beside a masked server has no server to belong to, and a harness that does not delimit the server cannot split the tool from it: both go as the literal.
+    const name = identity.tool === LITERAL ? parsed?.tool : identity.tool;
+    const tool = server === PRIVATE || !table.toolDelimited || name === undefined ? PRIVATE : wireName(gate, name);
+    return { server, tool: tool === PRIVATE ? LITERAL : tool };
   }
-  if ('skill' in identity) return { skill: listed(PUBLIC_SKILLS, identity.skill) };
-  return { host: identity.host === null ? null : listed(PUBLIC_HOSTS, identity.host) };
+  if ('skill' in identity) return { skill: wireName(gate, identity.skill) };
+  return { host: identity.host === null ? null : wireName(gate, identity.host) };
 };
 
 /**
- * A stored tool's steps as the wire holds them: each shell step's identity is replaced by the projected command, and every name the server has no row for (a native name, MCP server,
- * skill, host, or pull name) reads `private`. A `private` program holds no pull, so a stored step whose public program has since left the list carries none. The one place a deposit and a local read take it from.
+ * A stored tool's steps as the wire holds them: each shell step's identity is replaced by the projected command, and every long-tail name (a native name, MCP server, skill, host, program, or pull name) is
+ * sent as it is after the gate, or `private` when it counts as redacted. A `private` program holds no pull. The one place a deposit and a local read take it from.
  */
-export const projectedSteps = (tool: ToolObservation, read: ShellReader, harness: Harness): StepObservation[] => {
+export const projectedSteps = (tool: ToolObservation, read: ShellReader, harness: Harness, gate: WireGate = OPEN_GATE): StepObservation[] => {
   const commands = read(tool);
-  return (tool.steps ?? []).map((step, at) => {
-    const native = admittedNative(harness, step.native) ? step.native : PRIVATE;
-    if (step.action !== 'shell.exec') return { ...step, native, identity: wireIdentity(step.identity, harness) };
-    const command = wireCommand(commands[at] ?? { program: PRIVATE, subcommand: null, flags: [] });
+  const steps = tool.steps ?? [];
+  // `segments` pair with the steps when their counts agree (`projectLiteralStep`): segment `at` is step `at`, and its `run` starts with the program's basename.
+  const segments = tool.segments?.length === steps.length ? tool.segments : undefined;
+  return steps.map((step, at) => {
+    const native = admittedNative(harness, step.native) ? step.native : wireName(gate, step.native === LITERAL ? tool.tool : step.native);
+    if (step.action !== 'shell.exec') return { ...step, native, identity: wireIdentity(step.identity, harness, tool.tool, gate) };
+    const command = wireCommand(commands[at] ?? { program: PRIVATE, subcommand: null, flags: [] }, segments?.[at]?.run.split(' ')[0], gate);
     const pulls = step.identity !== null && 'program' in step.identity ? step.identity.pulls : undefined;
-    return { ...step, native, identity: pulls === undefined || command.program === PRIVATE ? command : { ...command, pulls: pulls.map(wirePull) } };
+    return { ...step, native, identity: pulls === undefined || command.program === PRIVATE ? command : { ...command, pulls: pulls.map((pull) => wirePull(pull, gate)) } };
   });
 };
 
@@ -346,14 +380,14 @@ const wireFrame = (frame: Frame, strata: Strata | undefined): SkeletonFrame => {
   return { ...frame, stack: { ...frame.stack, languageShares: [...shares].map(([language, languageShare]) => ({ language, languageShare })) } };
 };
 
-/** The listed members of `names` and a `private` for each other name, sorted, so a list says how many unlisted ones there are and nothing of what they are. */
-const listedAll = (allowed: ReadonlySet<string>, names: Iterable<string>): string[] => [...new Set(names)].map((name) => listed(allowed, name)).sort();
+/** Each of `names` after the gate (a name that counts as redacted reads `private`), sorted. */
+const listedAll = (gate: WireGate, names: Iterable<string>): string[] => [...new Set(names)].map((name) => wireName(gate, name)).sort();
 
 /**
  * The reach a session's record shows (t867): the servers of the tools its `funnel` offered or loaded and of the MCP tools it called, the skills it called, and the plugins its `setup` names. A record
  * with neither `setup` nor `funnel` is unfilled (a harness that records none, or a capture before version 12) and lists nothing, so the absence is not read as no tools.
  */
-const reachOf = (session: SessionObservation, tools: readonly ToolObservation[], harness: Harness): Reach => {
+const reachOf = (session: SessionObservation, tools: readonly ToolObservation[], harness: Harness, gate: WireGate): Reach => {
   if (session.setup === undefined && session.funnel === undefined) return { filled: false, mcp: [], skills: [], plugins: [] };
   const table = ACTION_TABLES[harness];
   const servers = new Set<string>();
@@ -369,7 +403,7 @@ const reachOf = (session: SessionObservation, tools: readonly ToolObservation[],
       if (identity !== null && 'skill' in identity) skills.add(identity.skill);
     }
   }
-  return { filled: true, mcp: listedAll(PUBLIC_MCP_SERVERS, servers), skills: listedAll(PUBLIC_SKILLS, skills), plugins: (session.setup?.plugins ?? []).map(() => PRIVATE) };
+  return { filled: true, mcp: listedAll(gate, servers), skills: listedAll(gate, skills), plugins: (session.setup?.plugins ?? []).map(() => PRIVATE) };
 };
 
 const transcriptOf = (
@@ -378,6 +412,7 @@ const transcriptOf = (
   spawned: Spawned,
   agentType: string | null,
   read: ShellReader,
+  gate: WireGate,
 ): SkeletonTranscript | null => {
   if (session.frame === undefined || root === null) return null;
   const harness = session.harness ?? 'claude-code';
@@ -404,7 +439,7 @@ const transcriptOf = (
   }
   // The frames the steps ran in: the transcript's own first, then one for each distinct (prompt frame, call model, call harness version) a call shows, so a model that changes in the middle of a prompt
   // reaches the steps that ran on it. A call that recorded neither takes its prompt's frame, or the transcript's before the first prompt.
-  const reach = reachOf(session, tools, harness);
+  const reach = reachOf(session, tools, harness, gate);
   const transcriptFrame: SkeletonFrame = { ...wireFrame(session.frame, session.strata), reach };
   const frames: SkeletonFrame[] = [transcriptFrame];
   const frameAtKey = new Map<string, number>([[JSON.stringify(transcriptFrame), 0]]);
@@ -438,7 +473,7 @@ const transcriptOf = (
     // the calls that shared a prompt still share one, and no position reads as a prompt.
     if (prompt !== null && !promptAt.has(prompt)) promptAt.set(prompt, framedPrompts.length + unrecorded++);
     const promptPosition = prompt === null ? null : (promptAt.get(prompt) ?? null);
-    const projected = projectedSteps(tool, read, harness);
+    const projected = projectedSteps(tool, read, harness, gate);
     exact.push(projected.map(({ cost }) => cost.tokens));
     const frame = frameOfCall(tool, promptPosition);
     const steps = projected.map(({ action, native, identity, status: reported, cost, parent, edges }): SkeletonStep => {
@@ -460,7 +495,7 @@ const transcriptOf = (
       parent: parent === null || spawner === null ? null : (spawner.places.calls.get(parent) ?? null),
       frame,
       ...(arriving.length === 0 ? {} : { edges: arriving }),
-      ...(tool.skill === undefined ? {} : { skill: listed(PUBLIC_SKILLS, tool.skill) }),
+      ...(tool.skill === undefined ? {} : { skill: wireName(gate, tool.skill) }),
       };
     });
     steppedTools.push({ side, prompt: promptPosition, status, durationMs, errorCode, ...(recoveryCalls === null ? {} : { recoveryCalls }), steps });
@@ -494,7 +529,7 @@ export type Print = (durations: readonly number[]) => string;
  * The skeleton of a session; null when any record of it was captured before steps and frames, or a transcript of it has no root, which holds no closed reading to send. The batch holds the main
  * transcript's run first, then each subagent's as its own run; its `id` is the main session's, and its one `timingPrint` is over the main transcript's calls alone.
  */
-export const skeletonOf = (records: SessionRecords, id: string, read: ShellReader, print: Print, deltas: readonly DeltaEntry[] = []): SessionSkeleton | null => {
+export const skeletonOf = (records: SessionRecords, id: string, read: ShellReader, print: Print, deltas: readonly DeltaEntry[] = [], gate: WireGate = OPEN_GATE): SessionSkeleton | null => {
   const mainTools = byCall(records.transcripts[0]?.tools ?? []);
   const places = records.transcripts.map(({ tools }) => placesOf(tools));
   const spawners = places[0]?.calls ?? new Map<number, number>();
@@ -524,7 +559,7 @@ export const skeletonOf = (records: SessionRecords, id: string, read: ShellReade
   for (const [index, entry] of records.transcripts.entries()) {
     const at = spawnerOf[index] ?? null;
     const spawnerPlaces = at === null || cyclic(index) ? undefined : places[at];
-    const transcript = transcriptOf(entry, at === null || spawnerPlaces === undefined ? null : { index: at, places: spawnerPlaces }, index === 0 ? spawned : new Map(), index === 0 ? null : projectedAgentType(entry.session.agentType ?? CUSTOM_AGENT), read);
+    const transcript = transcriptOf(entry, at === null || spawnerPlaces === undefined ? null : { index: at, places: spawnerPlaces }, index === 0 ? spawned : new Map(), index === 0 ? null : projectedAgentType(entry.session.agentType ?? CUSTOM_AGENT), read, gate);
     if (transcript === null) return null;
     transcripts.push(transcript);
   }
@@ -691,6 +726,13 @@ const inSet = (held: Collected, allowed: ReadonlySet<string>, value: unknown, at
   return name === PRIVATE || name === OTHER || allowed.has(name) ? name : unknownValue(held, at, name);
 };
 
+/** A long-tail name field: `private`, `other`, or a name (the pool assigns its class, `packages/pool/src/field-classes.ts`). A value that is no name is refused: a client that sends one has not run its gate. */
+const nameIn = (value: unknown, at: string): string => {
+  const name = textOf(value, at);
+  if (name === PRIVATE || name === OTHER || isWireName(name)) return name;
+  throw new Refused(at, 'not a name');
+};
+
 const exactlyIn = (held: Collected, allowed: ReadonlySet<string>) => (value: unknown, at: string): string => {
   const name = textOf(value, at);
   return allowed.has(name) || name === OTHER ? name : unknownValue(held, at, name);
@@ -737,8 +779,8 @@ const parseReach = (held: Collected, value: unknown, at: string): Reach => {
   const filled = booleanOf(raw.filled, under(at, 'filled'));
   const reach = {
     filled,
-    mcp: listOf(raw.mcp, under(at, 'mcp'), (entry, entryAt) => inSet(held, PUBLIC_MCP_SERVERS, entry, entryAt)),
-    skills: listOf(raw.skills, under(at, 'skills'), (entry, entryAt) => inSet(held, PUBLIC_SKILLS, entry, entryAt)),
+    mcp: listOf(raw.mcp, under(at, 'mcp'), (entry, entryAt) => nameIn(entry, entryAt)),
+    skills: listOf(raw.skills, under(at, 'skills'), (entry, entryAt) => nameIn(entry, entryAt)),
     plugins: listOf(raw.plugins, under(at, 'plugins'), (entry, entryAt) => inSet(held, NO_NAME, entry, entryAt)),
   };
   if (!filled && reach.mcp.length + reach.skills.length + reach.plugins.length > 0) throw new Refused(at, 'an unfilled reach lists nothing');
@@ -785,11 +827,11 @@ const parseUsage = (held: Collected, value: unknown, at: string): SkeletonUsage 
 
 const parsePull = (held: Collected, value: unknown, at: string): PullIdentity => {
   const raw = fieldsOf(held, value, at, ['registry', 'name', 'version']);
-  const name = inSet(held, PUBLIC_PACKAGES, raw.name, under(at, 'name'));
+  const name = nameIn(raw.name, under(at, 'name'));
   const version = orNull(raw.version, under(at, 'version'), (entry, entryAt) => {
     const text = textOf(entry, entryAt);
     // A version beside a masked name could identify it: capture masks the two together.
-    if (name === PRIVATE && text !== LITERAL) throw new Refused(entryAt, 'a private name holds no version');
+    if (!PUBLIC_PACKAGES.has(name) && text !== LITERAL) throw new Refused(entryAt, 'a name off the public list holds no version');
     return text === LITERAL || text === OTHER || isRegistryVersion(text) ? text : unknownValue(held, entryAt, text);
   });
   return { registry: oneOf(held, REGISTRIES, raw.registry, under(at, 'registry')), name, version };
@@ -814,12 +856,11 @@ const parseIdentity = (held: Collected, harness: WireHarness, action: CanonicalA
   }
   if (action === 'shell.exec') {
     const raw = fieldsOf(held, value, at, ['program', 'sub', 'flags'], ['pulls']);
-    // A program is a list member or `private`, and a `private` program holds no subcommand, flag, or pull.
+    // A program is a name, `private`, or `other`; only `other` holds no subcommand, flag, or pull here.
     const program = textOf(raw.program, under(at, 'program'));
-    const known = program === PRIVATE || PUBLIC_PROGRAMS.has(program);
-    if (!known && program !== OTHER) unknownValue(held, under(at, 'program'), program);
+    nameIn(program, under(at, 'program'));
     // The subcommands, flags, and pulls of a program this reader does not know cannot be read against its lists: it takes none, and notes what it left.
-    if (!known) {
+    if (program === OTHER) {
       for (const key of ['sub', 'flags', 'pulls']) if (raw[key] !== undefined && !(raw[key] === null || (Array.isArray(raw[key]) && raw[key].length === 0))) setAside(held, under(at, key), raw[key]);
       return { program: OTHER, sub: null, flags: [] };
     }
@@ -834,7 +875,7 @@ const parseIdentity = (held: Collected, harness: WireHarness, action: CanonicalA
   }
   if (action === 'mcp.call') {
     const raw = fieldsOf(held, value, at, ['server', 'tool']);
-    const server = inSet(held, PUBLIC_MCP_SERVERS, raw.server, under(at, 'server'));
+    const server = nameIn(raw.server, under(at, 'server'));
     const tool = textOf(raw.tool, under(at, 'tool'));
     // The same rule capture applies (`callIdentity`), so a name it would have masked is refused here rather than stored.
     if (harness === OTHER) {
@@ -842,13 +883,13 @@ const parseIdentity = (held: Collected, harness: WireHarness, action: CanonicalA
       if (tool !== OTHER && tool !== LITERAL) setAside(held, under(at, 'tool'), tool);
       return { server, tool: tool === OTHER ? tool : LITERAL };
     }
-    const admitted = tool === LITERAL || tool === OTHER || (ACTION_TABLES[harness].toolDelimited && isPublicMcpTool(server, tool));
+    const admitted = tool === LITERAL || tool === OTHER || (server !== PRIVATE && ACTION_TABLES[harness].toolDelimited && (isPublicMcpTool(server, tool) || isWireName(tool)));
     return { server, tool: admitted ? tool : unknownValue(held, under(at, 'tool'), tool) };
   }
-  if (action === 'skill.run') return { skill: inSet(held, PUBLIC_SKILLS, fieldsOf(held, value, at, ['skill']).skill, under(at, 'skill')) };
+  if (action === 'skill.run') return { skill: nameIn(fieldsOf(held, value, at, ['skill']).skill, under(at, 'skill')) };
   if (action === 'web.fetch' || action === 'web.search') {
     const { host } = fieldsOf(held, value, at, ['host']);
-    return { host: orNull(host, under(at, 'host'), (entry, entryAt) => inSet(held, PUBLIC_HOSTS, entry, entryAt)) };
+    return { host: orNull(host, under(at, 'host'), (entry, entryAt) => nameIn(entry, entryAt)) };
   }
   throw new Refused(at, 'this action has no identity');
 };
@@ -866,12 +907,8 @@ const admittedNative = (harness: WireHarness, native: string): boolean => {
 const parseNative = (held: Collected, harness: WireHarness, value: unknown, at: string): string => {
   const native = textOf(value, at);
   // The tools of a harness this reader does not know are off any table it holds, so they cross as `private`, the way capture masks a name its table lacks.
-  if (harness === OTHER) {
-    if (native === OTHER) return native;
-    if (native !== PRIVATE) setAside(held, at, native);
-    return PRIVATE;
-  }
-  return native === OTHER || admittedNative(harness, native) ? native : unknownValue(held, at, native);
+  if (harness === OTHER) return native === OTHER || isWireName(native) ? native : unknownValue(held, at, native);
+  return native === OTHER || admittedNative(harness, native) || isWireName(native) ? native : unknownValue(held, at, native);
 };
 
 /** A subagent type as the projection leaves it: a built-in of a harness, or `custom`; a custom agent's own name is private and never admitted. */
@@ -901,7 +938,7 @@ const parseStep = (held: Collected, harness: WireHarness, value: unknown, at: st
     parent: orNull(raw.parent, under(at, 'parent'), countOf),
     frame: countOf(raw.frame, under(at, 'frame')),
     ...(raw.edges === undefined ? {} : { edges: listOf(raw.edges, under(at, 'edges'), (entry, entryAt) => parseEdge(held, entry, entryAt)) }),
-    ...(raw.skill === undefined ? {} : { skill: inSet(held, PUBLIC_SKILLS, raw.skill, under(at, 'skill')) }),
+    ...(raw.skill === undefined ? {} : { skill: nameIn(raw.skill, under(at, 'skill')) }),
   };
 };
 
@@ -1126,6 +1163,8 @@ export interface Bundle {
   harness: Harness;
   harnessVersion: string;
   vocabVersion: string;
+  /** The floor the pool applied: it serves a cell, a name, or a count only once this many distinct accounts report it, so every count and denominator here is of values at or above it. */
+  floor: number;
   asOf: ReadAsOf;
   cells: Cell[];
   motifs: Motif[];
@@ -1150,7 +1189,7 @@ export interface PinnedKey {
 const isSignedBundle = (value: unknown): value is SignedBundle => isFields(value) && typeof value.payload === 'string' && typeof value.signature === 'string';
 
 const isBundle = (value: unknown): value is Bundle =>
-  isFields(value) && value.format === BUNDLE_FORMAT && typeof value.harness === 'string' && isHarness(value.harness) && typeof value.harnessVersion === 'string' && typeof value.vocabVersion === 'string' && isFields(value.asOf) && Array.isArray(value.cells) && Array.isArray(value.motifs) && Array.isArray(value.reads) && Array.isArray(value.strata);
+  isFields(value) && value.format === BUNDLE_FORMAT && typeof value.harness === 'string' && isHarness(value.harness) && typeof value.harnessVersion === 'string' && typeof value.vocabVersion === 'string' && typeof value.floor === 'number' && isFields(value.asOf) && Array.isArray(value.cells) && Array.isArray(value.motifs) && Array.isArray(value.reads) && Array.isArray(value.strata);
 
 const signatureHolds = async ({ payload, signature }: SignedBundle, key: PinnedKey): Promise<boolean> => {
   try {

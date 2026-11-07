@@ -2,10 +2,12 @@ import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
+import { PassThrough } from 'node:stream';
 import { afterEach, describe, expect, it } from 'vitest';
 import { run } from '../cli.js';
 import { ExitCode } from '../errors.js';
 import { harness, removeTestDirs } from '../test-support.js';
+import { sessionsHookInstall } from './command.js';
 import { commandOf, effectiveRetention, hookStatus, installHooks, readSettings, scheduleArgs, setSchedule, settingsPath, uninstallHooks, type InstallRuntime } from './install.js';
 
 afterEach(() => {
@@ -19,7 +21,8 @@ const SCRATCH = resolve(tmpdir(), 'oars-scratch');
 const NODE = resolve(SCRATCH, 'node', 'node.exe');
 const HOOK_BIN = resolve(SCRATCH, 'dist', 'hook-bin.js');
 
-const runtimeIn = (dir: string, schtasksCode = 0): InstallRuntime => ({
+const runtimeIn = (dir: string, schtasksCode = 0, platform: NodeJS.Platform = 'linux'): InstallRuntime => ({
+  platform,
   nodePath: NODE,
   hookBin: HOOK_BIN,
   userSettings: join(dir, 'user', 'settings.json'),
@@ -385,6 +388,122 @@ describe('nightly schedule', () => {
     expect(calls.map((args) => args[0])).toEqual(['/Create', '/Delete']);
     await expect(setSchedule(runtimeIn(SCRATCH, 1), 'nightly')).rejects.toThrow('Access is denied');
     expect(await setSchedule(runtimeIn(SCRATCH, 1), 'off')).toContain('No scheduled task');
+  });
+});
+
+describe('the nightly task on a plain install', () => {
+  const plain = { scope: 'file' as const, keepRetention: false, schedule: undefined };
+
+  it('is registered on Windows when it is not, with no flag', async () => {
+    calls.length = 0;
+    const dir = scratch();
+    // The query fails (nothing registered), then the create succeeds.
+    const install: InstallRuntime = {
+      ...runtimeIn(dir, 0, 'win32'),
+      schtasks: (args) => {
+        calls.push(args);
+        return Promise.resolve({ code: args[0] === '/Query' ? 1 : 0, output: '' });
+      },
+    };
+    const outcome = await sessionsHookInstall({ sessions: undefined, install, now: () => 0 }, { ...plain, file: join(dir, 's.json') });
+    expect(calls.map((args) => args[0])).toEqual(['/Query', '/Create']);
+    expect(outcome.text).toContain('Scheduled task OarsSessionsNightly: the full deposit');
+    expect(JSON.stringify(outcome.document)).toContain('daily at 03:00');
+  });
+
+  it('is left as it is on Windows when it is already registered', async () => {
+    calls.length = 0;
+    const dir = scratch();
+    const install = runtimeIn(dir, 0, 'win32');
+    const outcome = await sessionsHookInstall({ sessions: undefined, install, now: () => 0 }, { ...plain, file: join(dir, 's.json') });
+    expect(calls.map((args) => args[0])).toEqual(['/Query']);
+    expect(outcome.text).toContain('Scheduled task OarsSessionsNightly: already registered.');
+  });
+
+  it('does not fail the hook install when Windows refuses the task, and says what to run', async () => {
+    calls.length = 0;
+    const dir = scratch();
+    const install = runtimeIn(dir, 1, 'win32');
+    const outcome = await sessionsHookInstall({ sessions: undefined, install, now: () => 0 }, { ...plain, file: join(dir, 's.json') });
+    expect(calls.map((args) => args[0])).toEqual(['/Query', '/Create']);
+    expect(outcome.text).toContain('Installed SessionStart');
+    expect(outcome.text).toContain('Could not register the scheduled task OarsSessionsNightly');
+    expect(outcome.text).toContain('--schedule nightly');
+  });
+
+  it('is not touched off Windows', async () => {
+    calls.length = 0;
+    const dir = scratch();
+    const install = runtimeIn(dir, 0, 'linux');
+    const outcome = await sessionsHookInstall({ sessions: undefined, install, now: () => 0 }, { ...plain, file: join(dir, 's.json') });
+    expect(calls).toEqual([]);
+    expect(outcome.document).not.toHaveProperty('schedule');
+  });
+
+  it('is not registered again by an explicit --schedule off in the same run', async () => {
+    calls.length = 0;
+    const dir = scratch();
+    const install = runtimeIn(dir, 0, 'win32');
+    await sessionsHookInstall({ sessions: undefined, install, now: () => 0 }, { ...plain, file: join(dir, 's.json'), schedule: 'off' });
+    expect(calls.map((args) => args[0])).toEqual(['/Delete']);
+  });
+
+  // `--schedule off` is recorded in the sessions store, so a later plain install honors it instead of registering the task again.
+  const withStore = (dir: string, platform: NodeJS.Platform = 'win32') => ({ sessions: { storeDir: join(dir, 'store'), projectsRoot: join(dir, 'projects'), stdin: new PassThrough(), stdout: { write: () => undefined } }, install: runtimeIn(dir, 0, platform), now: () => 0 });
+
+  it('a plain install after --schedule off makes no /Create call', async () => {
+    const dir = scratch();
+    const deps = withStore(dir);
+    const file = join(dir, 's.json');
+    calls.length = 0;
+    await sessionsHookInstall(deps, { ...plain, file, schedule: 'off' });
+    expect(readFileSync(join(dir, 'store', 'schedule.json'), 'utf8')).toContain('"off"');
+    calls.length = 0;
+    const outcome = await sessionsHookInstall(deps, { ...plain, file });
+    expect(calls).toEqual([]);
+    expect(outcome.text).toContain('Installed SessionStart');
+    expect(outcome.text).toContain('--schedule nightly');
+    expect(JSON.stringify(outcome.document)).toContain('--schedule off');
+  });
+
+  it('--schedule nightly after --schedule off registers the task and clears the record', async () => {
+    const dir = scratch();
+    const deps = withStore(dir);
+    const file = join(dir, 's.json');
+    await sessionsHookInstall(deps, { ...plain, file, schedule: 'off' });
+    calls.length = 0;
+    await sessionsHookInstall(deps, { ...plain, file, schedule: 'nightly' });
+    expect(calls.map((args) => args[0])).toEqual(['/Create']);
+    expect(existsSync(join(dir, 'store', 'schedule.json'))).toBe(false);
+    calls.length = 0;
+    await sessionsHookInstall(deps, { ...plain, file });
+    expect(calls.map((args) => args[0])).toEqual(['/Query']);
+  });
+
+  it('keeps the opt-out when the nightly registration is refused', async () => {
+    const dir = scratch();
+    const file = join(dir, 's.json');
+    await sessionsHookInstall(withStore(dir), { ...plain, file, schedule: 'off' });
+    const refusing = { ...withStore(dir), install: runtimeIn(dir, 1, 'win32') };
+    await expect(sessionsHookInstall(refusing, { ...plain, file, schedule: 'nightly' })).rejects.toThrow('Access is denied');
+    expect(existsSync(join(dir, 'store', 'schedule.json'))).toBe(true);
+  });
+
+  it('reads an unreadable record as no opt-out', async () => {
+    const dir = scratch();
+    mkdirSync(join(dir, 'store'), { recursive: true });
+    writeFileSync(join(dir, 'store', 'schedule.json'), 'not json');
+    calls.length = 0;
+    // Nothing registered yet: the query fails, then the create succeeds.
+    const install: InstallRuntime = {
+      ...runtimeIn(dir, 0, 'win32'),
+      schtasks: (args) => {
+        calls.push(args);
+        return Promise.resolve({ code: args[0] === '/Query' ? 1 : 0, output: '' });
+      },
+    };
+    await sessionsHookInstall({ ...withStore(dir), install }, { ...plain, file: join(dir, 's.json') });
+    expect(calls.map((args) => args[0])).toEqual(['/Query', '/Create']);
   });
 });
 

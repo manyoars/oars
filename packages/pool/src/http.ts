@@ -13,12 +13,36 @@ export interface PoolDb {
   batch: (statements: readonly Bound[]) => Promise<{ meta: { changes: number } }[]>;
 }
 
+/** One uploaded part of an R2 multipart upload: the binding hands it back and wants the same list at `complete`. */
+export interface RawUploadedPart {
+  partNumber: number;
+  etag: string;
+}
+
+export interface RawMultipart {
+  uploadPart: (partNumber: number, value: Uint8Array) => Promise<RawUploadedPart>;
+  complete: (parts: readonly RawUploadedPart[]) => Promise<unknown>;
+  abort: () => Promise<void>;
+}
+
+/** The part of an R2 binding the raw tier uses (`raw.ts` is the only file that calls it). */
+export interface RawBucket {
+  put: (key: string, value: ArrayBuffer) => Promise<unknown>;
+  get: (key: string) => Promise<{ arrayBuffer: () => Promise<ArrayBuffer> } | null>;
+  delete: (keys: readonly string[]) => Promise<void>;
+  createMultipartUpload: (key: string) => Promise<RawMultipart>;
+}
+
 /** Every value but `DB` is a binding the deploy sets, so a secret lives in the account and never in the config. Unset ones refuse the route that needs them. */
 export interface Env {
   DB: PoolDb;
+  /** The raw tier's R2 bucket. Unset refuses the raw routes. */
+  RAW?: RawBucket;
   PSEUDONYM_KEY?: string;
   /** An Ed25519 private key as a JWK. */
   BUNDLE_SIGNING_KEY?: string;
+  /** The pool-wide HMAC key for a hashed field (a host). Unset refuses every deposit, so a host is never stored in clear. */
+  INGEST_HASH_KEY?: string;
   /** Unset keeps deposits closed. */
   COVENANT_VERSION?: string;
   /** How many bundles an account without access may fetch in one ISO week. */

@@ -39,7 +39,7 @@ export const telemetryStatus = (deps: RunDeps): Outcome => {
     describe(consent),
     `The notice has ${consent.noticeShown ? '' : 'not '}been shown.`,
     `${String(events)} events (${String(bytes)} bytes) in ${dir}.`,
-    'Events are sent only to the pool server in OARS_POOL_URL, and only while telemetry is on and the notice has been shown.',
+    'Events are sent to the Many Oars pool or the pool server in OARS_POOL_URL, and only while telemetry is on and the notice has been shown.',
   ];
   return { document: { ok: true, step: STEP, enabled: consent.enabled, reason: consent.reason, noticeShown: consent.noticeShown, events, bytes, dir }, text: lines.join('\n') };
 };

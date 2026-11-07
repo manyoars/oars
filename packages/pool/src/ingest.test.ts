@@ -204,6 +204,7 @@ describe('two deposits of one session at once', () => {
     let arrived = 0;
     return {
       COVENANT_VERSION: 'v1',
+      INGEST_HASH_KEY: 'a-test-ingest-hash-key',
       DB: {
         batch: (statements) => DB.batch(statements),
         prepare: (sql) => ({
