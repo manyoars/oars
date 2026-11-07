@@ -2,7 +2,7 @@
 import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import type { Outcome } from '../cli.js';
-import { denialOf, parseAllowList } from './allow.js';
+import { denialOf, parseAllowList, runAllow } from './allow.js';
 import { SOURCES, sourceLabel } from './sources.js';
 import { CliError, ExitCode } from '../errors.js';
 import { loadTerms } from './exclusion.js';
@@ -60,11 +60,13 @@ export const sessionsDeposit = async (deps: SessionsDeps, options: { allow: stri
   const runtime = runtimeOf(deps);
   const table = runtime.sources ?? SOURCES;
   const allow = [...options.allow, ...fromFiles.flat(), ...(options.deny ?? []).map(denialOf)];
-  const result = await runDeposit(newContext(runtime.storeDir, deps.now, 'manual'), true, inputKey('manual', allow, options.redactDomains), async (trace) => {
+  const { result, read } = await runDeposit(newContext(runtime.storeDir, deps.now, 'manual'), true, inputKey('manual', allow, options.redactDomains), async (trace) => {
+    // Survival reads the folders this deposit reads, from the list saved before the deposit merges this run's entries into it.
+    const scope = runAllow((await readSaved(runtime.storeDir)).allow, allow);
     const done = await deposit(runtime, { allow, redactDomains: options.redactDomains, now: deps.now }, trace);
-    return { value: done, in: { transcript: done.sessions + done.subagents + done.unchanged } };
+    return { value: { result: done, read: scope }, in: { transcript: done.sessions + done.subagents + done.unchanged } };
   });
-  const survival = await recordSurvival(runtime, (await readSaved(runtime.storeDir)).allow, deps.now);
+  const survival = await recordSurvival(runtime, read, deps.now);
   const lines = [
     `Deposited ${String(result.sessions)} sessions and ${String(result.subagents)} subagent transcripts (${String(result.lines)} lines, ${String(result.badLines)} unparseable) as ${String(result.observations)} observations; ${String(result.unchanged)} files unchanged.`,
     `Read ${String(result.folders.length)} folders; skipped ${String(result.skippedFolders)} not on the allowlist.`,
