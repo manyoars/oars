@@ -26,7 +26,7 @@ describe('errorCode on the wire', () => {
 
   it('refuses format 2 by name, as it refuses format 1', () => {
     const whole = skeletonOf1([call(0, { status: 'ok' })]);
-    expect(parseSkeleton({ ...whole, format: 2 })).toMatchObject({ ok: false, field: 'format', reason: 'the format 2 form is no longer read; send format 3' });;
+    expect(parseSkeleton({ ...whole, format: 2 })).toMatchObject({ ok: false, field: 'format', reason: 'the format 2 form is no longer read; send format 3' });
   });
 
   it('sends the class of each failed call and null for a call that did not fail', () => {
@@ -60,6 +60,16 @@ describe('errorCode on the wire', () => {
     }
     Reflect.set(tools[0] ?? {}, 'errorCode', 7);
     expect(parseSkeleton(raw)).toMatchObject({ ok: false, field: 'transcripts[0].tools[0].errorCode', reason: 'not text' });
+  });
+
+  it('lists the errorCode in the extensions bag before the recoveryCalls keys', () => {
+    const raw = skeletonOf1([call(0, { status: 'error', errorCode: '1' })]);
+    const only = raw.transcripts[0]?.tools[0];
+    Reflect.set(only ?? {}, 'errorCode', 'zzz');
+    Reflect.set(only ?? {}, 'recoveryCalls', { next: [], editFollowed: false, zz: 1 });
+    const parsed = parseSkeleton(raw);
+    if (!parsed.ok) throw new Error(`refused ${parsed.field}`);
+    expect(parsed.extensions.map(({ at }) => at)).toEqual(['transcripts[0].tools[0].errorCode', 'transcripts[0].tools[0].recoveryCalls.zz']);
   });
 
   it('refuses a code on a call that did not fail', () => {

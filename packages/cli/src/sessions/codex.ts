@@ -184,9 +184,12 @@ const PATCH_CALLS = new Set(['apply_patch']);
 /** The namespace upstream fills in for a top-level function (codex-rs/protocol/src/tool_name.rs:6-7); with none and an empty one, it is the plain tool (:46-50). */
 const DEFAULT_FUNCTION_NAMESPACE = 'functions';
 
+/** One word of an argv as a POSIX shell reads it back: left alone when it holds only safe characters, else in single quotes, so `bash -lc 'git revert HEAD'` keeps its script as one word. */
+const quotedWord = (word: string): string => (/^[\w@%+=:,./-]+$/.test(word) ? word : `'${word.replaceAll("'", "'\\''")}'`);
+
 const commandOf = (args: Obj): string | undefined => {
   const command = args.command ?? args.cmd;
-  if (Array.isArray(command)) return command.filter((part): part is string => typeof part === 'string').join(' ');
+  if (Array.isArray(command)) return command.filter((part): part is string => typeof part === 'string').map(quotedWord).join(' ');
   return str(command);
 };
 
