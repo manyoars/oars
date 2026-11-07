@@ -102,6 +102,6 @@ export const bundleOf = (harness: Harness, harnessVersion: string, stored: Store
     motifs: motifs.filter((motif) => named.has(motif.motifId)),
     reads: readsOf(pool),
     strata: [...stored.strata].sort((a, b) => compare(a.dimension, b.dimension) || compare(a.value, b.value)),
-    books: booksOf({ held, served: kept, panel: stored.panel, lineage: { floor: K_CELL, format: BUNDLE_FORMAT, vocabVersion: VOCAB_VERSION, asOf: { pool: pool.version, day: pool.lastDay } } }),
+    books: booksOf({ held, served: kept, panel: stored.panel, panelDay: stored.panelDay, lineage: { floor: K_CELL, format: BUNDLE_FORMAT, vocabVersion: VOCAB_VERSION, asOf: { pool: pool.version, day: pool.lastDay } } }),
   };
 };
