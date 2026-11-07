@@ -300,7 +300,7 @@ describe('the rollup', () => {
     expect(gets).toBe(MAX_BATCHES_PER_RUN);
   });
 
-  it('rolls the two days before today, oldest first', async () => {
+  it('rolls yesterday, then the day before', async () => {
     const { db } = fakeDb();
     const listed: string[] = [];
     const bucket: KeptBucket = {
@@ -311,8 +311,40 @@ describe('the rollup', () => {
       get: () => Promise.resolve(null),
     };
     const now = Date.parse('2026-11-07T03:17:00Z');
-    expect((await rollupRecent({ DB: db, TELEMETRY: bucket }, now)).map((one) => one.day)).toEqual(['2026-11-05', '2026-11-06']);
-    expect(listed).toEqual(['telemetry/2026-11-05/', 'telemetry/2026-11-06/']);
+    expect((await rollupRecent({ DB: db, TELEMETRY: bucket }, now)).map((one) => one.day)).toEqual(['2026-11-06', '2026-11-05']);
+    expect(listed).toEqual(['telemetry/2026-11-06/', 'telemetry/2026-11-05/']);
     expect(now - Date.parse('2026-11-05T00:00:00Z')).toBeLessThan(3 * DAY_MS);
+  });
+
+  describe('one run, two days over the cap', () => {
+    const overCap = (): { bucket: KeptBucket; gets: () => number } => {
+      let gets = 0;
+      return {
+        gets: () => gets,
+        bucket: {
+          list: ({ prefix }) => Promise.resolve({ objects: Array.from({ length: MAX_BATCHES_PER_RUN + 200 }, (_, at) => ({ key: `${prefix}${String(at)}.json` })), truncated: false }),
+          get: () => {
+            gets += 1;
+            return Promise.resolve({ text: () => Promise.resolve(JSON.stringify({ batch: { install: uuid(gets), events: [hook(10)] } })) });
+          },
+        },
+      };
+    };
+
+    it('shares one budget of batch reads, so the total stays at the cap, and says which day was cut', async () => {
+      const { db } = fakeDb();
+      const { bucket, gets } = overCap();
+      const rolled = await rollupRecent({ DB: db, TELEMETRY: bucket }, Date.parse('2026-11-07T03:17:00Z'));
+      expect(gets()).toBeLessThanOrEqual(MAX_BATCHES_PER_RUN);
+      expect(rolled.map((one) => [one.day, one.gets, one.truncated])).toEqual([['2026-11-06', MAX_BATCHES_PER_RUN, true], ['2026-11-05', 0, true]]);
+    });
+
+    it('keeps the rows an earlier night wrote for the day it could not read whole, and writes the day it counts for the first time', async () => {
+      const { db, statements } = fakeDb();
+      const { bucket } = overCap();
+      const rolled = await rollupRecent({ DB: db, TELEMETRY: bucket }, Date.parse('2026-11-07T03:17:00Z'));
+      expect(rolled.map((one) => one.kept)).toEqual([false, true]);
+      expect(statements.filter((sql) => sql.startsWith('DELETE'))).toHaveLength(1);
+    });
   });
 });
