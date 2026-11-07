@@ -1239,7 +1239,7 @@ export const readShell = (command: string, redact: Redactor): ShellRead => {
   }
   return {
     segments: kept.map((held) => ({ run: runOf(held), read: held.read })),
-    steps: kept.map((held) => ({ identity: shellIdentity(held.program, held.args, pullsOfCommand(held.program, held.args).filter(present)), read: held.read, run: runOf(held) })),
+    steps: kept.map((held) => ({ identity: shellIdentity(held.program, held.args, pullsOfCommand(held.program, held.args).filter(present), redact), read: held.read, run: runOf(held) })),
     pulls: [...pulls.values()],
     commitPlan: commitPlanOf(commands),
   };

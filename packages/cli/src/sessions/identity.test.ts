@@ -161,6 +161,12 @@ describe('identity holds public names, and a skill-run, host, and pull name afte
     expect(shell('cargo add serde@1.0.0')[0]?.identity).toMatchObject({ pulls: [{ registry: 'crates', name: 'serde', version: '1.0.0' }] });
   });
 
+  it('masks a pull name whose underscore-delimited part the operator redacts, as it does a host or skill in the same case', () => {
+    // The whole name is unchanged by the redactor (`_` is a word character to it) but its `git.acme.internal` part is not.
+    expect(shell('npm install git.acme.internal_x', ['acme.internal'])[0]?.identity).toMatchObject({ pulls: [{ registry: 'npm', name: '<literal>', version: null }] });
+    expect(stepsOf([{ name: 'Skill', input: { skill: 'git.acme.internal_x' } }], ['acme.internal'])[0]?.identity).toEqual({ skill: '<literal>' });
+  });
+
   it('keeps a private pull name as written, masks its version, and masks a name that is not one', () => {
     expect(shell('npm install @acme-corp/internal-ledger@1.2.3')[0]?.identity).toMatchObject({ pulls: [{ registry: 'npm', name: '@acme-corp/internal-ledger', version: '<literal>' }] });
     expect(shell('npm install acme-only')[0]?.identity).toMatchObject({ pulls: [{ registry: 'npm', name: 'acme-only', version: null }] });

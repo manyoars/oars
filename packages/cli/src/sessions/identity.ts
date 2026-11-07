@@ -3,7 +3,7 @@
 // operator's redaction (CAPTURE 22), and what leaves the machine is decided at the deposit's one gate and by the pool.
 
 import { mcpOf, type ActionTable, type CanonicalAction } from './actions.js';
-import { isWireName, isWirePullName, OPEN_GATE, wireName } from './pool-wire.js';
+import { isWireName, isWirePullName, wireName } from './pool-wire.js';
 import { BUNDLING_PROGRAMS, isPublicMcpTool, isRegistryVersion, LITERAL, PRIVATE, PUBLIC_FLAGS, PUBLIC_MCP_SERVERS, PUBLIC_PACKAGES, PUBLIC_PROGRAMS, PUBLIC_SUBCOMMANDS } from './public-vocabulary.js';
 import type { Redactor } from './redact.js';
 import type { PullEcosystem, PullIdentity, ShellIdentity, StepIdentity, ToolPull } from './schema.js';
@@ -83,11 +83,11 @@ const REGISTRY_OF: { readonly [ecosystem in PullEcosystem]: string } = {
 };
 
 /**
- * A pull with its package name as written (the command was redacted before it was read). A package off the public list can be identified by its version, so the version is masked beside it; a stated version of a listed package stays stated.
+ * A pull with its package name as written (the command was redacted before it was read, and the name is checked once more part by part, as a host and a skill-run name are). A package off the public list can be identified by its version, so the version is masked beside it; a stated version of a listed package stays stated.
  * A name that is not one (a URL, a path, a mask) is `<literal>`.
  */
-export const pullIdentity = (pull: ToolPull): PullIdentity => {
-  const name = keptName(pull.name, OPEN_GATE.redact, isWirePullName);
+export const pullIdentity = (pull: ToolPull, redact: Redactor): PullIdentity => {
+  const name = keptName(pull.name, redact, isWirePullName);
   const showsVersion = PUBLIC_PACKAGES.has(name) && pull.version !== null && isRegistryVersion(pull.version);
   return { registry: REGISTRY_OF[pull.ecosystem], name, version: pull.version === null ? null : showsVersion ? pull.version : LITERAL };
 };
@@ -95,10 +95,10 @@ export const pullIdentity = (pull: ToolPull): PullIdentity => {
 /** A shell step whose program is private or unreadable: its flags are its own, so none are kept. */
 export const UNREAD_SHELL: ShellIdentity = { program: LITERAL, sub: null, flags: [] };
 
-export const shellIdentity = (program: string, args: readonly WordOfCommand[], pulls: readonly ToolPull[]): ShellIdentity => {
+export const shellIdentity = (program: string, args: readonly WordOfCommand[], pulls: readonly ToolPull[], redact: Redactor): ShellIdentity => {
   if (!PUBLIC_PROGRAMS.has(program)) return UNREAD_SHELL;
   const identity: ShellIdentity = { program, sub: subOf(program, args), flags: flagsOf(program, args) };
-  return pulls.length === 0 ? identity : { ...identity, pulls: pulls.map(pullIdentity) };
+  return pulls.length === 0 ? identity : { ...identity, pulls: pulls.map((pull) => pullIdentity(pull, redact)) };
 };
 
 const hostOf = (url: string | undefined, redact: Redactor): { host: string | null } => {
