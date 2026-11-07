@@ -4,12 +4,13 @@
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { CliError, ExitCode } from '../errors.js';
+import { ACTION_TABLES } from './actions.js';
 
 export const RETENTION_FLOOR = 365;
 export const DEFAULT_RETENTION = 30;
 export const TASK_NAME = 'OarsSessionsNightly';
 // The tail of a command this module wrote; anything else in a settings file is the operator's, whatever it is called.
-const OWN_COMMAND = /hook-bin\.js" (?:session-start|pre-tool|post-tool|stop)$/;
+const OWN_COMMAND = /hook-bin\.js" (?:session-start|prompt|pre-tool|post-tool|stop)$/;
 
 /** What the install needs from the machine, so a test can stand in for each. */
 export interface InstallRuntime {
@@ -28,8 +29,8 @@ export interface InstallRuntime {
 export type Scope = 'user' | 'project' | 'file';
 
 interface HookSpec {
-  event: 'SessionStart' | 'PreToolUse' | 'PostToolUseFailure' | 'SessionEnd';
-  arg: 'session-start' | 'pre-tool' | 'post-tool' | 'stop';
+  event: 'SessionStart' | 'UserPromptSubmit' | 'PreToolUse' | 'PostToolUseFailure' | 'SessionEnd';
+  arg: 'session-start' | 'prompt' | 'pre-tool' | 'post-tool' | 'stop';
   /** Tools the group applies to; unset means every one. */
   matcher?: string;
   /** Seconds the harness waits; the hooks' own budgets are far lower, this is the ceiling. */
@@ -38,10 +39,12 @@ interface HookSpec {
 
 const SPECS: readonly HookSpec[] = [
   { event: 'SessionStart', arg: 'session-start', timeout: 5 },
+  // The split-positions table again, only when it changed since this session's last one (`hooks.ts`); a prompt with nothing new costs one node start and prints nothing.
+  { event: 'UserPromptSubmit', arg: 'prompt', timeout: 5 },
   // Every tool (no matcher): the push is gated by the index's fit floors and lift, not by the tool's name, so a sharp read on any tool can fire. The cost is one node start per call.
   { event: 'PreToolUse', arg: 'pre-tool', timeout: 5 },
-  // A failed Bash call arrives as PostToolUseFailure with `error` = "Exit code N ...": PostToolUse itself fires on success only.
-  { event: 'PostToolUseFailure', arg: 'post-tool', timeout: 5, matcher: 'Bash|PowerShell' },
+  // A failed call arrives as PostToolUseFailure (PostToolUse itself fires on success only); a shell tool's `error` starts "Exit code N". Every tool the action table maps can fail into a recovery read, so the matcher is the table's names and the MCP pattern, not the two shells.
+  { event: 'PostToolUseFailure', arg: 'post-tool', timeout: 5, matcher: `${Object.keys(ACTION_TABLES['claude-code'].rows).filter((name) => !name.startsWith('mcp__')).join('|')}|mcp__.*` },
   // SessionEnd fires once per session; Stop fires after every assistant turn and would re-extract the growing transcript each time.
   { event: 'SessionEnd', arg: 'stop', timeout: 30 },
 ];
@@ -54,15 +57,16 @@ interface Json {
 const isObject = (value: unknown): value is Json => typeof value === 'object' && value !== null && !Array.isArray(value);
 
 /**
- * The post-tool command reads the event first in the hook shell (Git Bash on Windows, where the harness runs hooks) and starts node only
- * when the failure text carries `Exit code`: a fresh node costs 250 ms to seconds on Windows, the shell builtins a few milliseconds.
+ * The post-tool command reads the event first in the hook shell (Git Bash on Windows, where the harness runs hooks). For a shell tool it starts node only
+ * when the failure text carries `Exit code` (a refusal or an interrupt has none, and a fresh node costs 250 ms to seconds on Windows, the shell builtins a few
+ * milliseconds); any other tool's failure goes straight to node, because its text has no such line and its recovery read does not need one.
  */
 export const commandOf = (runtime: InstallRuntime, arg: string): string => {
   const launch = `"${runtime.nodePath}" "${runtime.hookBin}" ${arg}`;
   // Fails open: a settings file outlives the build it points at (a cloud worker, a clone with no build), and a hook that cannot start must not fail the session.
   const present = `[ -f "${runtime.hookBin}" ] || exit 0; `;
   if (arg !== 'post-tool') return `${present}${launch}`;
-  return `${present}IFS= read -r event; case "$event" in *'Exit code'*) ;; *) exit 0;; esac; { printf '%s\\n' "$event"; cat; } | ${launch}`;
+  return `${present}IFS= read -r event; case "$event" in '') exit 0;; *'"tool_name":"Bash"'*|*'"tool_name":"PowerShell"'*) case "$event" in *'Exit code'*) ;; *) exit 0;; esac;; esac; { printf '%s\\n' "$event"; cat; } | ${launch}`;
 };
 
 const isOwnHook = (hook: unknown): boolean => isObject(hook) && typeof hook.command === 'string' && OWN_COMMAND.test(hook.command);

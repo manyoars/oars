@@ -10,9 +10,9 @@ const helpOf = async (...argv: string[]): Promise<string> => {
 };
 
 describe('help text states what the code does', () => {
-  it('sessions hook install names all four hooks it writes and the nightly task that sends', async () => {
+  it('sessions hook install names all five hooks it writes and the nightly task that sends', async () => {
     const text = await helpOf('sessions', 'hook', 'install');
-    expect(text).toContain('merge the SessionStart, PreToolUse, PostToolUseFailure, and SessionEnd hooks into a settings file');
+    expect(text).toContain('merge the SessionStart, UserPromptSubmit, PreToolUse, PostToolUseFailure, and SessionEnd hooks into a settings file');
     expect(text).toContain('on Windows register the nightly task (which sends telemetry while telemetry is on, and pool batches only after you accept a pool covenant)');
   });
 

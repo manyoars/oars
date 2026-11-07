@@ -270,12 +270,12 @@ describe('from a deposit to a push', () => {
   const USAGE = { input_tokens: 1, cache_creation_input_tokens: 0, cache_read_input_tokens: 0, output_tokens: 1 };
   const line = (name: string, index: number, over: object): string =>
     JSON.stringify({ uuid: `${name}-${String(index)}`, parentUuid: null, isSidechain: false, timestamp: STAMP, version: '2.1.300', cwd: '/work/app', gitBranch: 'main', ...over });
-  /** A session that calls one shape ten times and fails it twice. */
+  /** A session that calls one shape ten times and fails it six times: a push is held to a shape that fails more often than not (`PUSH_FLOORS`). */
   const failing = (name: string): string[] => [
     line(name, 0, { type: 'user', message: { role: 'user', content: 'look at the monitor' } }),
     ...Array.from({ length: 10 }, (_, call) => [
       line(name, 1 + call * 2, { type: 'assistant', requestId: `${name}-r${String(call)}`, message: { role: 'assistant', model: 'claude-opus-5-5', content: [{ type: 'tool_use', id: `t${String(call)}`, name: 'Monitor', input: { query: 'a typed value' } }], usage: USAGE } }),
-      line(name, 2 + call * 2, { type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: `t${String(call)}`, is_error: call < 2, content: call < 2 ? 'wrong input' : 'fine' }] } }),
+      line(name, 2 + call * 2, { type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: `t${String(call)}`, is_error: call < 6, content: call < 6 ? 'wrong input' : 'fine' }] } }),
     ]).flat(),
   ];
 
@@ -295,11 +295,11 @@ describe('from a deposit to a push', () => {
     await deposit(staged.runtime, { allow: ['proj'], redactDomains: [], now: () => NOW });
     const shape = toolShapeId('Monitor', ['query']);
     const index = await readIndex(staged.storeDir);
-    expect(index?.fit?.[shape]).toMatchObject({ tool: 'Monitor', count: 6, calls: 30 });
+    expect(index?.fit?.[shape]).toMatchObject({ tool: 'Monitor', count: 18, calls: 30 });
     const sid = Array.from({ length: 100 }, (_, at) => `live-${String(at)}`).find((candidate) => armOf(candidate, [shape], index?.at ?? '') === 'shown') ?? '';
     const output = await runHook('pre-tool', call(sid, { tool_input: { query: 'another typed value' } }), staged.runtime, () => NOW + 1);
     expect(specific(output).additionalContext).toContain('Monitor [query]');
-    expect(specific(output).additionalContext).toContain('failed 6 of 30 calls');
+    expect(specific(output).additionalContext).toContain('failed 18 of 30 calls');
     const [recall] = await readRecalls(staged.storeDir);
     expect(recall).toMatchObject({ sid, mode: 'push', arm: 'shown', query: { prefix: [shape] }, answer: { kind: 'hit' } });
   });

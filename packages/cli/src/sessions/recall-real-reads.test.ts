@@ -18,7 +18,7 @@ const stocked = (): Store => {
     sessions: sessions.map((id) => sessionRow(id, { at: '2026-06-02T00:00:00.000Z' })),
     prompts: sessions.map((id) => promptRow(id, 0, { frame: frame({ day: '2026-06-01' }) })),
     errors: ['a', 'b'].map((id) => errorRow(id, 'Monitor | wrong input', { tool: 'Monitor', ts: '2026-06-01T00:00:00.000Z' })),
-    tools: sessions.flatMap((id) => Array.from({ length: 10 }, (_, n) => toolRow(id, n, 'Monitor', { keys: ['query'], status: n === 0 ? 'error' : 'ok', ts: '2026-06-01T00:00:00.000Z' }))),
+    tools: sessions.flatMap((id) => Array.from({ length: 10 }, (_, n) => toolRow(id, n, 'Monitor', { keys: ['query'], status: n < 6 ? 'error' : 'ok', ts: '2026-06-01T00:00:00.000Z' }))),
   });
 };
 
@@ -33,7 +33,7 @@ describe('a recall cites the stored read of the current pool', () => {
     const { reads } = currentOf(store);
     const stored = reads.filter((read) => read.slice.shape === toolShapeId('Monitor', ['query']));
     expect(stored).toHaveLength(1);
-    expect(stored[0]).toMatchObject({ family: 'fit', method: 'call-shape', order: 1, value: { failed: 3, calls: 30 } });
+    expect(stored[0]).toMatchObject({ family: 'fit', method: 'call-shape', order: 1, value: { failed: 18, calls: 30 } });
     expect(fitReads(store)).toHaveLength(1);
   });
 

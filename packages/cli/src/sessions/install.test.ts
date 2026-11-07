@@ -37,13 +37,13 @@ const scratch = (): string => mkdtempSync(join(tmpdir(), 'oars-install-test-'));
 const readJson = readSettings;
 
 describe('hook install', () => {
-  it('creates the settings file with the four entries and the retention floor', async () => {
+  it('creates the settings file with the five entries and the retention floor', async () => {
     const dir = scratch();
     const file = join(dir, 'new', 'settings.json');
     const result = await installHooks(runtimeIn(dir), file, false);
     const written = await readJson(file);
-    expect(result.installed).toEqual(['SessionStart', 'PreToolUse', 'PostToolUseFailure', 'SessionEnd']);
-    for (const event of ['SessionStart', 'PreToolUse', 'PostToolUseFailure', 'SessionEnd']) expect(written).toHaveProperty(['hooks', event]);
+    expect(result.installed).toEqual(['SessionStart', 'UserPromptSubmit', 'PreToolUse', 'PostToolUseFailure', 'SessionEnd']);
+    for (const event of ['SessionStart', 'UserPromptSubmit', 'PreToolUse', 'PostToolUseFailure', 'SessionEnd']) expect(written).toHaveProperty(['hooks', event]);
     expect(JSON.stringify(written.hooks)).toContain('hook-bin.js\\" post-tool');
     expect(written.cleanupPeriodDays).toBe(365);
     expect(result.retention).toBe(`Raised cleanupPeriodDays from 30 (unset, the default) to 365 in ${file}.`);
@@ -102,7 +102,7 @@ describe('hook install', () => {
     const rotation = { hooks: [{ type: 'command', command: 'node rotate-session.js' }] };
     writeFileSync(file, JSON.stringify({ hooks: { Stop: [rotation] } }));
     await installHooks(runtimeIn(dir), file, false);
-    expect(await uninstallHooks(file)).toEqual({ file, removed: ['SessionStart', 'PreToolUse', 'PostToolUseFailure', 'SessionEnd'] });
+    expect(await uninstallHooks(file)).toEqual({ file, removed: ['SessionStart', 'UserPromptSubmit', 'PreToolUse', 'PostToolUseFailure', 'SessionEnd'] });
     const after = await readJson(file);
     expect(after.hooks).toEqual({ Stop: [rotation] });
     expect(after.cleanupPeriodDays).toBe(365);
@@ -138,7 +138,7 @@ describe('hook install', () => {
     const other = join(dir, 'other.json');
     const statuses = await hookStatus(runtime, other);
     expect(statuses.map((item) => [item.scope, item.installed.length, item.retentionDays])).toEqual([
-      ['user', 4, 365],
+      ['user', 5, 365],
       ['project', 0, 30],
       ['file', 0, 30],
     ]);
@@ -171,11 +171,25 @@ describe('hook install', () => {
     expect(statSync(file).isDirectory()).toBe(true);
   });
 
-  it('limits the failure hook to the Bash and PowerShell tools', async () => {
+  it('matches the failure hook to every tool the action table maps, and to MCP calls', async () => {
     const dir = scratch();
     const file = join(dir, 'settings.json');
     await installHooks(runtimeIn(dir), file, true);
-    expect(JSON.stringify((await readJson(file)).hooks)).toContain('"matcher":"Bash|PowerShell"');
+    const groups: unknown = Reflect.get(Object((await readJson(file)).hooks), 'PostToolUseFailure');
+    const matcher = String(Reflect.get(Object(Array.isArray(groups) ? groups[0] : {}), 'matcher'));
+    const names = matcher.split('|');
+    for (const tool of ['Bash', 'PowerShell', 'Read', 'Edit', 'Write', 'Grep', 'WebFetch']) expect(names).toContain(tool);
+    expect(names).toContain('mcp__.*');
+    expect(names.filter((name) => name.startsWith('mcp__') && name !== 'mcp__.*')).toEqual([]);
+  });
+
+  it('installs the prompt hook for UserPromptSubmit with no matcher', async () => {
+    const dir = scratch();
+    const file = join(dir, 'settings.json');
+    await installHooks(runtimeIn(dir), file, true);
+    const groups: unknown = Reflect.get(Object((await readJson(file)).hooks), 'UserPromptSubmit');
+    expect(JSON.stringify(groups)).toContain('hook-bin.js\\" prompt');
+    expect(JSON.stringify(groups)).not.toContain('matcher');
   });
 });
 
@@ -202,6 +216,12 @@ describe('post-tool pre-filter', () => {
   it.skipIf(!available)('launches nothing for an event with no Exit code, and for empty input', () => {
     expect(runCommand(`${JSON.stringify({ tool_name: 'Bash', error: 'The user rejected this tool call', hook_event_name: 'PostToolUseFailure' })}\n`)).toBe('');
     expect(runCommand('')).toBe('');
+  }, 60_000);
+
+  it.skipIf(!available)('sends a failure of a tool that is not a shell to the hook, with or without an Exit code line', () => {
+    const event = JSON.stringify({ tool_name: 'Read', error: 'File does not exist.', hook_event_name: 'PostToolUseFailure' });
+    expect(runCommand(`${event}
+`)).toContain(event);
   }, 60_000);
 
   it.skipIf(!available)('starts no process for an event with no Exit code, and does for one with it', () => {
@@ -515,7 +535,7 @@ describe('oars sessions hook (CLI)', () => {
     deps.install = runtimeIn(dir);
     const file = join(dir, 's.json');
     expect(await run(['sessions', 'hook', 'install', '--scope', 'file', '--file', file, '--schedule', 'nightly'], deps)).toBe(ExitCode.OK);
-    expect(out.join('')).toContain('Installed SessionStart, PreToolUse, PostToolUseFailure, SessionEnd hooks');
+    expect(out.join('')).toContain('Installed SessionStart, UserPromptSubmit, PreToolUse, PostToolUseFailure, SessionEnd hooks');
     expect(out.join('')).toContain('Scheduled task OarsSessionsNightly');
     out.length = 0;
     expect(await run(['sessions', 'hook', 'status', '--file', file], deps)).toBe(ExitCode.OK);
@@ -523,7 +543,7 @@ describe('oars sessions hook (CLI)', () => {
     expect(out.join('')).toContain('Scheduled task OarsSessionsNightly: registered.');
     out.length = 0;
     expect(await run(['sessions', 'hook', 'uninstall', '--file', file, '--json'], deps)).toBe(ExitCode.OK);
-    expect(JSON.parse(out.join(''))).toMatchObject({ ok: true, removed: ['SessionStart', 'PreToolUse', 'PostToolUseFailure', 'SessionEnd'] });
+    expect(JSON.parse(out.join(''))).toMatchObject({ ok: true, removed: ['SessionStart', 'UserPromptSubmit', 'PreToolUse', 'PostToolUseFailure', 'SessionEnd'] });
     out.length = 0;
     expect(await run(['sessions', 'hook', 'uninstall', '--file', file], deps)).toBe(ExitCode.OK);
     expect(out.join('')).toContain('No Many Oars hooks');

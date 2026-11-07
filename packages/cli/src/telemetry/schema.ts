@@ -90,8 +90,8 @@ const DAY_MS = 86_400_000;
 export const ERROR_CLASSES = ['usage', 'auth', 'invalid', 'conflict', 'rate-limited', 'unreachable', 'capped', 'unexpected'] as const;
 export type ErrorClass = (typeof ERROR_CLASSES)[number];
 
-/** Which hook fired: the five session hooks, and `gate` for `oars gate hook`. */
-export const HOOK_NAMES = ['session-start', 'pre-tool', 'post-tool', 'stop', 'nightly', 'gate'] as const;
+/** Which hook fired: the six session hooks, and `gate` for `oars gate hook`. */
+export const HOOK_NAMES = ['session-start', 'prompt', 'pre-tool', 'post-tool', 'stop', 'nightly', 'gate'] as const;
 /** What a hook came to: it found something, found nothing, found something and held it back (the unexposed arm), or failed. */
 export const HOOK_OUTCOMES = ['hit', 'miss', 'held', 'error'] as const;
 /** How a recall was asked and by whom. */

@@ -1,7 +1,7 @@
 // `oars pool`: the only part of the sessions code that talks to a remote. The server is the one named by flag or environment, else the Many Oars pool; nothing leaves until a command that sends is run or, after covenant acceptance, the nightly task sends. Sign-in runs the provider's device flow here and reads no harness token; a session leaves only as a skeleton of a closed list of fields, each value redacted first, and only after the exclusion check found it clean. Local capture, recall,
 // and reads never come through here.
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
-import { dirname, join } from 'node:path';
+import { dirname } from 'node:path';
 import type { Outcome, RunDeps } from '../cli.js';
 import { emitOf } from '../telemetry/emit.js';
 import { CliError, exitCodeForProblem, ExitCode, unreachableError } from '../errors.js';
@@ -10,8 +10,8 @@ import { makeCoverage, readCoverageSetting, writeCoverageSetting } from './cover
 import { checkSession, exclusionPaths, lastWritten, loadTerms, transcriptFilesOf, type Reason } from './exclusion.js';
 import { localNames, makeRedactor, REDACTION_VERSION, redactTranscript } from './redact.js';
 import { recordSend, recordWire, newTally, tallyBatch } from '../telemetry/wire.js';
-import { discardStale, FIELD_ROWS, fieldsOf, heldBatches, isMissing, lockedBatch, markShown, outboxFolder, partsOf, removeBatchesExcept, removeBatchOf, staleBatches, unchangedBytes, writeBatch, type LockRefusal } from './pool-outbox.js';
-import { HARNESSES, hasEnded, ORG_SIZES, REPO_VISIBILITIES, SESSION_IDLE_HOURS, isBundleVersion, isHarness, parseSkeleton, sessionsOf, skeletonOf, VOCAB_VERSION, verifyBundle, type Bundle, type BundleFloors, type PinnedKey, type SessionRecords, type TranscriptRoot, type WireGate } from './pool-wire.js';
+import { discardStale, FIELD_ROWS, fieldsOf, heldBatches, lockedBatch, markShown, outboxFolder, partsOf, removeBatchesExcept, removeBatchOf, staleBatches, unchangedBytes, writeBatch, type LockRefusal } from './pool-outbox.js';
+import { HARNESSES, hasEnded, ORG_SIZES, REPO_VISIBILITIES, SESSION_IDLE_HOURS, isBundleVersion, isHarness, parseSkeleton, sessionsOf, skeletonOf, VOCAB_VERSION, verifyBundle, type BundleFloors, type SessionRecords, type TranscriptRoot, type WireGate } from './pool-wire.js';
 import { carriedDeltas, markDeltasSent, placedOf, sentDeltas } from './pool-delta.js';
 import { Masker, printed, TRANSPORT_HEADERS, waitWords, type Outgoing } from './pool-print.js';
 import { rawAllowed, sendsOf } from './pool-choices.js';
@@ -21,6 +21,7 @@ import { markSent, sentLog } from './pool-sent.js';
 import { shellReader } from './projection.js';
 import { isVocabularyExpired, REGISTRY_MAX_AGE_DAYS, VOCAB_SNAPSHOT_DATE } from './public-vocabulary.js';
 import { contentHash, FIRST_ORDER_FAMILIES } from './read.js';
+import { isObject, keptReplica, loadSignIns, numberIn, replicaFile, signInOf, signInsFile, textIn, type SignIn } from './pool-replica.js';
 import { CAPTURE_VERSION, harnessOf as sessionHarness, type Harness } from './schema.js';
 import { loadStore, readRedactDomains, readSkeletons, readState, updatePoolChoices, type SessionsRuntime } from './store.js';
 import { runGit, type Git } from './survival.js';
@@ -37,6 +38,8 @@ const DEFAULT_INTERVAL_SEC = 5;
 const DEFAULT_EXPIRY_SEC = 900;
 /** RFC 8628: a `slow_down` adds five seconds to every poll after it. */
 const SLOW_DOWN_MS = 5000;
+
+export { isObject, loadSignIns, replicaFile, textIn };
 
 const usage = (message: string, step: string): CliError => new CliError(message, ExitCode.USAGE, step);
 
@@ -60,70 +63,6 @@ export const poolServer = (env: NodeJS.ProcessEnv, step: string, named?: string)
 export const runtimeOf = (deps: RunDeps): SessionsRuntime => {
   if (deps.sessions === undefined) throw new CliError('The session store is not configured in this run.', ExitCode.UNEXPECTED, 'unexpected');
   return deps.sessions;
-};
-
-export const textIn = (value: object, key: string): string | undefined => {
-  const found: unknown = Reflect.get(value, key);
-  return typeof found === 'string' && found !== '' ? found : undefined;
-};
-
-const numberIn = (value: object, key: string): number | undefined => {
-  const found: unknown = Reflect.get(value, key);
-  return typeof found === 'number' && Number.isFinite(found) ? found : undefined;
-};
-
-export const isObject = (value: unknown): value is object => typeof value === 'object' && value !== null;
-
-const keyOf = (value: unknown): PinnedKey | undefined => {
-  if (!isObject(value)) return undefined;
-  const [kty, crv, x] = [textIn(value, 'kty'), textIn(value, 'crv'), textIn(value, 'x')];
-  return kty === 'OKP' && crv === 'Ed25519' && x !== undefined ? { kty, crv, x } : undefined;
-};
-
-/** One server's sign-in, as `login` saved it. */
-interface SignIn {
-  server: string;
-  account: string;
-  token: string;
-  expiresAt: number;
-  /** Pinned at the first login to this server; every bundle is checked against it. */
-  signingKey: PinnedKey;
-}
-
-const signInOf = (value: unknown): SignIn | undefined => {
-  if (!isObject(value)) return undefined;
-  const [server, account, token, expiresAt] = [textIn(value, 'server'), textIn(value, 'account'), textIn(value, 'token'), numberIn(value, 'expiresAt')];
-  const signingKey = keyOf(Reflect.get(value, 'signingKey'));
-  return server === undefined || account === undefined || token === undefined || expiresAt === undefined || signingKey === undefined ? undefined : { server, account, token, expiresAt, signingKey };
-};
-
-
-const signInsFile = (storeDir: string): string => join(storeDir, 'pool-accounts.json');
-
-/** Every saved sign-in. A file that cannot be read stops the command: treating it as empty would forget a pin and trust whatever key the server names next. */
-export const loadSignIns = async (storeDir: string, step: string): Promise<SignIn[]> => {
-  const file = signInsFile(storeDir);
-  let text: string;
-  try {
-    text = await readFile(file, 'utf8');
-  } catch (error) {
-    if (isMissing(error)) return [];
-    throw error;
-  }
-  const damaged = new CliError(`${file} cannot be read. Remove it, then run oars pool login again.`, ExitCode.INVALID, step);
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(text);
-  } catch {
-    throw damaged;
-  }
-  if (!Array.isArray(parsed)) throw damaged;
-  const entries: readonly unknown[] = parsed;
-  return entries.map((entry) => {
-    const signIn = signInOf(entry);
-    if (signIn === undefined) throw damaged;
-    return signIn;
-  });
 };
 
 export const signedIn = async (deps: RunDeps, storeDir: string, server: string, step: string): Promise<SignIn> => {
@@ -632,9 +571,6 @@ export const poolOutbox = async (deps: RunDeps, options: { server?: string | und
   return { document: { ok: true, server, batches: shown, raw: copies.map(({ hash, bytes }) => ({ hash, bytes, ...(sent.has(hash) ? { sent: sent.get(hash) ?? '' } : {}) })), edited, stale }, text };
 };
 
-/** One folder per harness under the server's, so a fetch for one harness never overwrites another's bundle of the same version. */
-export const replicaFile = (storeDir: string, server: string, harness: Harness, harnessVersion: string): string => join(storeDir, 'pool-replica', contentHash(server), harness, `${encodeURIComponent(harnessVersion)}.json`);
-
 /**
  * What the pool says it served a bundle at, printed as the bundle states it: the client holds no floor of its own and applies none (a floor is the pool's deploy setting), so a bundle that states none prints nothing.
  * A family on a floor of its own is named with it, but only a family this client knows: a key the pool adds later parses and travels in `--json`, and no pool-supplied string reaches the terminal.
@@ -645,18 +581,6 @@ const floorSentence = (floors: BundleFloors | undefined): string => {
     .filter(([family]) => FIRST_ORDER_FAMILIES.some((known) => known === family))
     .map(([family, floor]) => `${family} at ${String(floor)}`);
   return ` The pool served it at a public floor of ${String(floors.public)} clusters and a disclosure floor of ${String(floors.disclosure)}${own.length === 0 ? '' : `, with ${own.join(' and ')}`}.`;
-};
-
-/** What an earlier fetch kept: the bundle, checked again against the pinned key, and the ETag the pool sent with it. Nothing readable and verified is nothing kept, and the next fetch is then an ordinary one. */
-const keptReplica = async (file: string, key: PinnedKey, harness: Harness, harnessVersion: string): Promise<{ etag: string | undefined; bundle: Bundle } | undefined> => {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(await readFile(file, 'utf8'));
-  } catch {
-    return undefined;
-  }
-  const verified = await verifyBundle(parsed, key, harness, harnessVersion);
-  return verified.ok ? { etag: isObject(parsed) ? textIn(parsed, 'etag') : undefined, bundle: verified.bundle } : undefined;
 };
 
 /** The weekly cap, as a failure of its own code: the bundle on disk is untouched, and the words say when the pool will answer again. */

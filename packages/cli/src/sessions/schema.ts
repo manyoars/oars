@@ -749,7 +749,7 @@ export interface RecallCall {
 /** One hook invocation, appended to `hook-calls.jsonl` by the hook itself; `measure` counts these per session. Class A: `session`, `at`, `error`; P: `event`, `hit`, `ms`, `startMs`. */
 export interface HookCall {
   at: string;
-  event: 'session-start' | 'pre-tool' | 'post-tool' | 'stop' | 'nightly';
+  event: 'session-start' | 'prompt' | 'pre-tool' | 'post-tool' | 'stop' | 'nightly';
   /** The Claude Code session the hook ran in; null for the nightly run. */
   session: string | null;
   /** Whether the hook had something to say (an injected block, a recall hit, or a session deposited). */
@@ -767,7 +767,7 @@ export const STEPS = ['deposit', 'verify', 'derive', 'label', 'index', 'recall',
 export type Step = (typeof STEPS)[number];
 
 /** The trigger names of spec 4.1 (the ones nothing local starts are in the schema only: `weekly` (A21) and the hosted `sync`, `cron`, `release`, `run-end`, and `run-start`). The SessionEnd hook is `stop`, never `session-end`. */
-export const TRIGGERS = ['session-start', 'pre-tool', 'post-tool', 'stop', 'nightly', 'manual', 'weekly', 'sync', 'cron', 'release', 'run-end', 'run-start'] as const;
+export const TRIGGERS = ['session-start', 'prompt', 'pre-tool', 'post-tool', 'stop', 'nightly', 'manual', 'weekly', 'sync', 'cron', 'release', 'run-end', 'run-start'] as const;
 export type Trigger = (typeof TRIGGERS)[number];
 
 /** `deferred`: a Stop deposit that found the store locked and recorded its session in the pending list. It is neither a success nor a failed run. */

@@ -67,7 +67,7 @@ rather than read row by row.
 | C53 | `docs/pool.md:3` | `oars pool outbox` prints everything queued whenever you run it, before the next nightly send | as C6: the nightly run builds and sends in one pass with `requireShown: false` (`pool-nightly.ts:56-61`) | false (fixed) |
 | C54 | `docs/pool.md:3` | telemetry events are sent to the Many Oars pool, or `OARS_POOL_URL` | as C4: the default pool is not deployed | false (fixed) |
 | C55 | `telemetry/command.ts:43` (`oars telemetry status`) | events are sent to the Many Oars pool or `OARS_POOL_URL` | as C4/C15: the default pool is not deployed | false (fixed; pinned at `telemetry/run.test.ts:167`) |
-| C56 | `cli.ts:393` (`sessions hook install`) | install merges the SessionStart, PostToolUseFailure, and SessionEnd hooks | `sessions/install.ts:40-46` writes four hooks (PreToolUse too) and, on Windows, registers the nightly task, which sends | false (fixed; pinned in `help.test.ts`) |
+| C56 | `cli.ts:393` (`sessions hook install`) | install merges the SessionStart, PostToolUseFailure, and SessionEnd hooks | `sessions/install.ts:40-46` writes five hooks as of the merge with main (PreToolUse and UserPromptSubmit too) and, on Windows, registers the nightly task, which sends | false (fixed; pinned in `help.test.ts`) |
 | C57 | `cli.ts:488` (`oars pool`) | the group deposits session skeletons only | after a yes to the raw prompt, `deposit` also queues redacted raw copies | misleading (fixed; pinned) |
 | C58 | `cli.ts:184` (`sessions deposit`) | each raw transcript is hard-linked | the store keeps a hard link or a copy (`README.md:20`, `:70`) | false as worded (fixed; pinned) |
 | C59 | `packages/cli/README.md:115` | the names that leave in pool skeletons are skill, model, harness version, tool, and MCP server names | the wire also carries effort, a shell call's program, subcommand, and flag names, tool-input key names, a pulled package's name (its version only when `PUBLIC_PACKAGES` holds the name), and a web host sent after redaction (`sessions/pool-wire.ts:378-380` `wirePull`, `:396` host, `:746`, `:753`, `:928`; `CHANGELOG.md:16`, `:21`, `:24`; the pool hashes a host on arrival, `docs/pool.md` Wire field register) | misleading (understates; fixed) |
@@ -116,7 +116,7 @@ stated wherever the default pool or `login.manyoars.com` is named as a destinati
 | C53 | `docs/pool.md:3`: "`oars pool outbox` prints what is queued when you run it, but the nightly task builds new batches and sends them in the same run without printing them first" |
 | C54 | `docs/pool.md:3`: telemetry "sends those events to the pool server in `OARS_POOL_URL`, else to the Many Oars pool, which is not deployed yet ..." |
 | C55 | `oars telemetry status` prints the C15 wording: "pool server in OARS_POOL_URL, else to the Many Oars pool (pool.manyoars.com, not deployed yet ...)"; pin updated |
-| C56 | `cli.ts:393`: "merge the SessionStart, PreToolUse, PostToolUseFailure, and SessionEnd hooks ..., and on Windows register the nightly task (which sends to the pool after you accept its covenant)" |
+| C56 | `cli.ts:393`: "merge the SessionStart, UserPromptSubmit, PreToolUse, PostToolUseFailure, and SessionEnd hooks ..., and on Windows register the nightly task (which sends to the pool after you accept its covenant)", reworded in C66 |
 | C57 | `cli.ts:488`: "... and, after a yes to the raw prompt, redacted raw copies" |
 | C58 | `cli.ts:184`: "hard-linked or copied" |
 | C59 | `packages/cli/README.md:115` lists every name class the wire carries, including a pulled package's name and a web host (fix round 2) |
