@@ -150,7 +150,16 @@ describe('measure', () => {
     // The second session's 99 is a placeholder beside usageObserved: it must not enter the mean.
     const partial = measure(withCoverage([]), [], [], 2);
     expect(partial.last).toMatchObject({ sessions: 2, cacheWritePerSession: 40, cacheWriteSessions: 1 });
-    expect(formatMeasure(partial)).toContain('40 (1 of 2)');
+    const text = formatMeasure(partial);
+    expect(text).toContain('cache-write tokens per session, last: 1 of 2 sessions recorded');
+    expect(text).not.toContain('40 (');
+    // A realistic five-digit mean keeps the row as wide as the header, so the `before` column stays aligned.
+    const wide = measure({ ...withCoverage([]), sessions: [{ ...first, usage: { ...first.usage, cacheWrite: 52_341 }, usageObserved: ['cacheWrite' as const] }, { ...second, usageObserved: [] }] }, [], [], 2);
+    const lines = formatMeasure(wide).split('\n');
+    const header = lines[0] ?? '';
+    const rowOf = lines.find((line) => line.startsWith('cache-write tokens per session ')) ?? '';
+    expect(rowOf).toContain('52341');
+    expect(rowOf).toHaveLength(header.length);
     const none = measure({ ...withCoverage([]), sessions: [{ ...first, usageObserved: [] }, { ...second, usageObserved: [] }] }, [], [], 2);
     expect(none.last).toMatchObject({ cacheWritePerSession: null, cacheWriteSessions: 0 });
     expect(formatMeasure(none)).toContain('n/a');

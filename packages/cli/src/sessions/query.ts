@@ -355,9 +355,11 @@ export const formatMeasure = (result: Measure): string => {
   const cell = (value: number | null): string => (value === null ? '-' : String(value));
   const cacheWrite = (signal: Signal): string => {
     if (signal.cacheWritePerSession === null) return signal.sessions === 0 ? '-' : 'n/a';
-    return signal.cacheWriteSessions < signal.sessions ? `${String(signal.cacheWritePerSession)} (${String(signal.cacheWriteSessions)} of ${String(signal.sessions)})` : String(signal.cacheWritePerSession);
+    return String(signal.cacheWritePerSession);
   };
   const row = (label: string, pick: (signal: Signal) => number | null): string => `${label.padEnd(36)} ${cell(pick(result.last)).padStart(12)} ${cell(pick(result.before)).padStart(12)}`;
+  // A mean over only some of a window's sessions says so on its own line under the table, as `books` does, so a five-digit mean cannot push the `before` column out of line.
+  const coverage = (['last', 'before'] as const).filter((name) => result[name].cacheWriteSessions > 0 && result[name].cacheWriteSessions < result[name].sessions).map((name) => `cache-write tokens per session, ${name}: ${String(result[name].cacheWriteSessions)} of ${String(result[name].sessions)} sessions recorded`);
   return [
     `${(result.since === null ? `G1 signals, last ${String(result.window)} sessions and the ${String(result.window)} before` : `G1 signals, ${String(result.window)} sessions from ${result.since} and the ${String(result.window)} before`).padEnd(36)} ${(result.since === null ? 'last' : 'from').padStart(12)} ${'before'.padStart(12)}`,
     row('sessions in the window', (signal) => signal.sessions),
@@ -365,11 +367,12 @@ export const formatMeasure = (result: Measure): string => {
     ...SOURCES.filter((source) => source.harness !== 'cursor' && ((result.last.otherSessions?.[source.harness] ?? 0) > 0 || (result.before.otherSessions?.[source.harness] ?? 0) > 0)).map((source) => row(`  of which ${source.label}`, (signal) => signal.otherSessions?.[source.harness] ?? 0)),
     row('recurring errors per 100 sessions', (signal) => signal.recurringPer100),
     row('distinct recurring signatures', (signal) => signal.recurringSignatures),
-    // `-` is an empty window; `n/a` is sessions in it that never recorded cache writes; a partial mean says how many sessions it covers.
+    // `-` is an empty window; `n/a` is sessions in it that never recorded cache writes; a partial mean is named in a line under the table.
     `${'cache-write tokens per session'.padEnd(36)} ${cacheWrite(result.last).padStart(12)} ${cacheWrite(result.before).padStart(12)}`,
     row('recall calls per session', (signal) => signal.recallPerSession),
     row('hook recall calls per session', (signal) => signal.hookRecallPerSession),
     row('hook hits per session', (signal) => signal.hookHitsPerSession),
     row('hook deposits per session', (signal) => signal.hookDepositsPerSession),
+    ...coverage,
   ].join('\n');
 };
