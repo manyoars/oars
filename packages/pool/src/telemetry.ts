@@ -13,7 +13,8 @@ export const MAX_BATCH_BYTES = 1024 * 1024;
 const MAX_TYPE_LENGTH = 64;
 /** A blob is cut here when it is indexed; the record keeps the full text. */
 const MAX_BLOB_LENGTH = 128;
-const INSTALL = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+/** The install id the CLI keeps: a random UUID. The rollup reads batches from the record with the same rule. */
+export const INSTALL = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /** One Analytics Engine data point. */
 export interface DataPoint {
