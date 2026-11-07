@@ -67,6 +67,18 @@ const setup = (files: readonly { name: string; lines: readonly object[] }[]) => 
   return { ...s, dir, runtime: { ...s.runtime, sourceRoots: { otel: dir } } };
 };
 
+/** The session records in the log, in order. */
+const sessionRecords = (storeDir: string): { session: string; rev: number; userTurns: number; supersededBy?: string }[] =>
+  readFileSync(paths(storeDir).observations, 'utf8')
+    .split('\n')
+    .filter((line) => line !== '')
+    .map((line): unknown => JSON.parse(line))
+    .flatMap((record) =>
+      typeof record === 'object' && record !== null && 'kind' in record && record.kind === 'session' && 'session' in record && typeof record.session === 'string' && 'rev' in record && typeof record.rev === 'number' && 'userTurns' in record && typeof record.userTurns === 'number'
+        ? [{ session: record.session, rev: record.rev, userTurns: record.userTurns, ...('supersededBy' in record && typeof record.supersededBy === 'string' ? { supersededBy: record.supersededBy } : {}) }]
+        : [],
+    );
+
 /** What each reader counts: the store, `books`, `measure`, `recall`, and `verify`. */
 const counted = async (storeDir: string) => {
   const store = await loadStore(storeDir);
@@ -129,14 +141,15 @@ describe('a trace deposited before its conversation id arrives', () => {
   it('records the supersede as a later rev of the early session, with no turns, rather than editing the early one', async () => {
     const s = setup([early]);
     await deposit(s.runtime, options);
-    const early1 = JSON.parse(readFileSync(paths(s.storeDir).observations, 'utf8').split('\n')[0] ?? '{}') as { rev: number };
+    const first = sessionRecords(s.storeDir).find((record) => record.session === `otel-${T}`);
     writeFileSync(join(s.dir, late.name), `${late.lines.map((line) => JSON.stringify(line)).join('\n')}\n`);
     await deposit(s.runtime, options);
-    const after = readFileSync(paths(s.storeDir).observations, 'utf8');
-    const marked = after.split('\n').filter((line) => line.includes('"supersededBy"'));
+    const marked = sessionRecords(s.storeDir).filter((record) => record.supersededBy !== undefined);
     expect(marked).toHaveLength(1);
-    expect(Number((JSON.parse(marked[0] ?? '{}') as { rev: number }).rev)).toBeGreaterThan(early1.rev);
-    expect(JSON.parse(marked[0] ?? '{}')).toMatchObject({ kind: 'session', session: `otel-${T}`, userTurns: 0, rev: expect.any(Number) as unknown, supersededBy: expect.stringMatching(/^otel-conv-/u) as unknown });
+    expect(marked[0]?.session).toBe(`otel-${T}`);
+    expect(marked[0]?.userTurns).toBe(0);
+    expect(marked[0]?.supersededBy).toMatch(/^otel-conv-/u);
+    expect(marked[0]?.rev).toBeGreaterThan(first?.rev ?? Infinity);
   });
 
   it('records nothing for a trace that was never deposited alone', async () => {
