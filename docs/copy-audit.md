@@ -63,6 +63,7 @@ rather than read row by row.
 | C49 | `CHANGELOG.md:13` | one send lock per outbox, so two runs never post one batch twice | t884 report residual: two waiters that clear a dead guard at once can both take over | cannot back ("never") |
 | C50 | `CHANGELOG.md:51` | telemetry is sent now, to the Many Oars pool | as C4 | false (pool not deployed) |
 | C51 | `CHANGELOG.md:26-28` | the t902 `usageObserved` bullet appears three times | `CHANGELOG.md:26-28`: each line is a prefix of the next (a union-merge leftover) | false (duplicate entry) |
+| C52 | `pool-command.ts:783` (`oars pool raw`) | a folder switched off: "nothing leaves" | `pool-choices.ts`: the switch stops pool sends from that folder; telemetry is not per folder | false as worded |
 
 ## Changes
 
@@ -90,3 +91,8 @@ stated wherever the default pool or `login.manyoars.com` is named as a destinati
 | C42 | the section is "What the gate does not do": no pool read, no sign-in, no way to send a crossing |
 | C49 | "wait for each other instead of posting one batch twice", with the one case t884 left open |
 | C51 | the two shorter copies of the t902 bullet are removed |
+| C9 | package description: the session commands upload nothing but `gold arms`; telemetry and the nightly pool send are named |
+| C15 (notice) | `consent.ts:9`: "oars sends the events ... else to the Many Oars pool (pool.manyoars.com, not deployed yet ...)" |
+| C43 | `cli.ts:180`: "these commands make no model call and no network call, except `gold arms` ...; telemetry is separate" |
+| C46 | raw prompt: the nightly task uploads, after covenant acceptance, except a folder at skeleton only or off |
+| C52 | "nothing sent to the pool"; `pool-command.test.ts` updated |

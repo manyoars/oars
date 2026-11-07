@@ -2553,7 +2553,7 @@ describe('oars pool raw (t884)', () => {
   it('sets and clears a folder switch, and refuses a half-given or unknown option', async () => {
     const scene = setting();
     expect(await scene.cli('pool', 'raw', '--folder', 'proj', '--mode', 'off')).toBe(ExitCode.OK);
-    expect(scene.h.out.join('')).toContain('proj: nothing leaves');
+    expect(scene.h.out.join('')).toContain('proj: nothing sent to the pool');
     expect(await scene.cli('pool', 'raw', '--folder', 'proj', '--mode', 'skeleton')).toBe(ExitCode.OK);
     expect(scene.h.out.join('')).toContain('proj: skeletons only');
     scene.h.out.length = 0;
