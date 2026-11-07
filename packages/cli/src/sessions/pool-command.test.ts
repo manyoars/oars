@@ -631,7 +631,7 @@ describe('oars pool deposit', () => {
     expect(outboxFiles(scene)).toEqual(first);
   });
 
-  // t881 fix rounds 1 and 2: the deposit's own gate (the operator's redact domains) decides what the outbox holds, so this goes through the command and reads the written batch. The host is on the public list, so capture keeps it and only the gate can turn it into `private`.
+  // t881 fix rounds 1 and 2: the deposit's own gate (the operator's redact domains) decides what the outbox holds, so this goes through the command and reads the written batch. The host is on the public list, so capture kept it even before t903 and only the gate can turn it into `private`.
   it('writes private for a name the operator redacts, an off-list program in clear, and a public-list host the operator redacts, as private', async () => {
     const SESSION = '66666666-6666-4666-8666-666666666666';
     const folder = 'gate-repo';
@@ -658,6 +658,32 @@ describe('oars pool deposit', () => {
     expect(written).toContain('"host":"private"');
     expect(written).toContain('"server":"private"');
     expect(written).toContain('"program":"acme-deploy"');
+  });
+
+  // t903: capture keeps a skill-run, host, and pull name as it is after redaction, so the one gate sends an off-list one in clear (the pool hashes the host on arrival); there is no second projection.
+  it('writes an off-list host, skill-run name, and pull name in clear, and the command takes the batch', async () => {
+    const SESSION = '77777777-7777-4777-8777-777777777777';
+    const folder = 'long-tail-repo';
+    const stamp = (n: number): string => `2026-06-01T00:00:0${String(n)}.000Z`;
+    const call = (n: number, name: string, input: object): string =>
+      JSON.stringify({ type: 'assistant', uuid: `l-${String(n)}`, parentUuid: n === 1 ? null : `l-${String(n - 1)}`, isSidechain: false, sessionId: SESSION, timestamp: stamp(n), version: '2.1.300', message: { role: 'assistant', model: 'claude-opus-5-5', content: [{ type: 'tool_use', id: `t${String(n)}`, name, input }] } });
+    const scene = setting();
+    rmSync(join(scene.staged.projectsRoot, 'proj'), { recursive: true, force: true });
+    addProject(scene.staged, folder, SESSION, [
+      JSON.stringify({ type: 'user', uuid: 'l-0', parentUuid: null, isSidechain: false, sessionId: SESSION, cwd: '/w', timestamp: stamp(0), version: '2.1.300', message: { role: 'user', content: 'go' } }),
+      call(1, 'WebFetch', { url: 'https://wiki.longtail-example.dev/page?token=abc123' }),
+      call(2, 'Skill', { skill: 'longtail-release' }),
+      call(3, 'Bash', { command: 'npm install longtail-widget@1.2.3' }),
+    ]);
+    await deposit(scene.staged.runtime, { allow: [folder], redactDomains: [], now: () => NOW });
+    await signIn(scene);
+    expect(await scene.cli('pool', 'deposit', '--server', POOL, '--json')).toBe(ExitCode.OK);
+    const written = batchBytes(scene).join('\n');
+    expect(written).toContain('"host":"wiki.longtail-example.dev"');
+    expect(written).toContain('"skill":"longtail-release"');
+    expect(written).toContain('"name":"longtail-widget"');
+    expect(written).not.toContain('abc123');
+    for (const bytes of batchBytes(scene)) expect(parseSkeleton(JSON.parse(bytes)).ok).toBe(true);
   });
 
   describe('the session gates run before any projection', () => {
@@ -1548,7 +1574,7 @@ describe('oars pool fetch', () => {
     const serve = async (scene: Scene, sign: (text: string) => Promise<string>, harness: string, version = '2.1.314', etag: string | null = null): Promise<Array<{ headers: Headers; printedBefore: string }>> => bundleRoute(scene, version, [await signedReply(sign, version, etag, 2, harness)], harness);
 
     /** A store that holds `count` sessions of each harness, written as the capture log holds them (the fixture's rows, no transcripts). */
-    const holding = (scene: Scene, counts: ReadonlyArray<readonly ['claude-code' | 'cursor' | 'codex', number]>): void => {
+    const holding = (scene: Scene, counts: ReadonlyArray<readonly ['claude-code' | 'cursor' | 'codex' | 'otel', number]>): void => {
       const rows = counts.flatMap(([name, count]) => Array.from({ length: count }, (_, index) => JSON.stringify(sessionRow(`${name}-${String(index)}`, name === 'claude-code' ? {} : { harness: name }))));
       writeFileSync(join(scene.staged.storeDir, 'observations.jsonl'), `${rows.join('\n')}\n`);
     };
@@ -1617,6 +1643,37 @@ describe('oars pool fetch', () => {
       expect(await tied.scene.cli('pool', 'fetch', '--harness-version', '2.1.314', '--server', POOL)).toBe(ExitCode.OK);
       expect(tied.scene.seen[0]?.url).toBe(`${POOL}/bundle/claude-code/2.1.314/${VOCAB_VERSION}`);
       expect(tied.scene.h.err.join('')).toContain('No --harness given: fetching claude-code, no one harness leads your local store, so Claude Code is the default. Pass --harness <name> to fetch another (');
+    });
+
+    it('refuses otel before asking: the pool serves no OpenTelemetry bundle', async () => {
+      const { scene } = await signedScene();
+      expect(await scene.cli('pool', 'fetch', '--harness', 'otel', '--harness-version', '2.1.314', '--server', POOL)).toBe(ExitCode.USAGE);
+      expect(scene.h.err.join('')).toContain('otel has no pool bundle.');
+      expect(scene.h.err.join('')).toContain('Choose one of claude-code, cursor, codex, copilot, gemini, grok, opencode, vscode-copilot.');
+      expect(scene.seen).toEqual([]);
+    });
+
+    it('leaves otel sessions out of the default: an otel-majority store asks for the next harness, or claude-code on a tie', async () => {
+      const next = await signedScene();
+      holding(next.scene, [['otel', 5], ['cursor', 2], ['codex', 1]]);
+      await serve(next.scene, next.sign, 'cursor');
+      expect(await next.scene.cli('pool', 'fetch', '--harness-version', '2.1.314', '--server', POOL)).toBe(ExitCode.OK);
+      expect(next.scene.seen[0]?.url).toBe(`${POOL}/bundle/cursor/2.1.314/${VOCAB_VERSION}`);
+      expect(next.scene.h.err.join('')).toContain('No --harness given: fetching cursor, the harness your local store holds the most sessions of (2 of 3).');
+
+      const tied = await signedScene();
+      holding(tied.scene, [['otel', 5], ['cursor', 1], ['codex', 1]]);
+      await serve(tied.scene, tied.sign, 'claude-code');
+      expect(await tied.scene.cli('pool', 'fetch', '--harness-version', '2.1.314', '--server', POOL)).toBe(ExitCode.OK);
+      expect(tied.scene.seen[0]?.url).toBe(`${POOL}/bundle/claude-code/2.1.314/${VOCAB_VERSION}`);
+      expect(tied.scene.h.err.join('')).toContain('no one harness leads your local store, so Claude Code is the default');
+
+      const only = await signedScene();
+      holding(only.scene, [['otel', 4]]);
+      await serve(only.scene, only.sign, 'claude-code');
+      expect(await only.scene.cli('pool', 'fetch', '--harness-version', '2.1.314', '--server', POOL)).toBe(ExitCode.OK);
+      expect(only.scene.seen[0]?.url).toBe(`${POOL}/bundle/claude-code/2.1.314/${VOCAB_VERSION}`);
+      expect(only.scene.h.err.join('')).toContain('your local store holds no session of a harness the pool serves, so Claude Code is the default');
     });
 
     it('keeps one bundle per harness: two fetches of one version, then a read for each', async () => {

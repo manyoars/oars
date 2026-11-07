@@ -671,23 +671,32 @@ const cappedError = (deps: RunDeps, reply: Reply, kept: boolean): CliError => {
 /** What a fetch asks for when no `--harness` is given, and what it falls back to when no one harness leads the local store. */
 const DEFAULT_HARNESS: Harness = 'claude-code';
 
+/** The harnesses a bundle is served for. `otel` reads the framework into the version slot, so no public bundle is keyed by it (lead 219): it is in `HARNESSES` for the wire, not for a fetch. */
+const FETCHABLE: readonly Harness[] = HARNESSES.filter((name) => name !== 'otel');
+
 /**
  * The harness a fetch asks for. `--harness` names it, and nothing is printed. Without the flag it is the harness the local store holds the most sessions of, and the choice and the way to
- * change it go to stderr before the request: a fetch never picks silently. An empty store or a tie asks for Claude Code's and says so. It reads counts only, and none of them leaves the machine.
+ * change it go to stderr before the request: a fetch never picks silently. An empty store or a tie asks for Claude Code's and says so. Sessions of a harness with no bundle (`otel`) are not counted. It reads counts only, and none of them leaves the machine.
  */
 const fetchHarness = async (deps: RunDeps, storeDir: string, named: string | undefined): Promise<Harness> => {
   if (named !== undefined) {
-    if (!isHarness(named)) throw usage(`${named} is not a harness the pool serves. Choose one of ${HARNESSES.join(', ')}.`, FETCH);
+    if (named === 'otel') throw usage(`otel has no pool bundle. Choose one of ${FETCHABLE.join(', ')}.`, FETCH);
+    if (!isHarness(named)) throw usage(`${named} is not a harness the pool serves. Choose one of ${FETCHABLE.join(', ')}.`, FETCH);
     return named;
   }
   const counts = new Map<Harness, number>();
-  for (const session of (await loadStore(storeDir)).sessions) counts.set(sessionHarness(session), (counts.get(sessionHarness(session)) ?? 0) + 1);
+  const sessions = (await loadStore(storeDir)).sessions;
+  for (const session of sessions) {
+    const harness = sessionHarness(session);
+    if (FETCHABLE.includes(harness)) counts.set(harness, (counts.get(harness) ?? 0) + 1);
+  }
   const [top, runnerUp] = [...counts.entries()].sort((a, b) => b[1] - a[1]);
   const lead = top !== undefined && (runnerUp === undefined || top[1] > runnerUp[1]) ? top : undefined;
   const harness = lead === undefined ? DEFAULT_HARNESS : lead[0];
   const total = [...counts.values()].reduce((sum, count) => sum + count, 0);
-  const why = lead === undefined ? `${total === 0 ? 'your local store is empty' : 'no one harness leads your local store'}, so Claude Code is the default` : `the harness your local store holds the most sessions of (${String(lead[1])} of ${String(total)})`;
-  deps.io.stderr(`No --harness given: fetching ${harness}, ${why}. Pass --harness <name> to fetch another (${HARNESSES.join(', ')}).
+  const none = sessions.length === 0 ? 'your local store is empty' : 'your local store holds no session of a harness the pool serves';
+  const why = lead === undefined ? `${total === 0 ? none : 'no one harness leads your local store'}, so Claude Code is the default` : `the harness your local store holds the most sessions of (${String(lead[1])} of ${String(total)})`;
+  deps.io.stderr(`No --harness given: fetching ${harness}, ${why}. Pass --harness <name> to fetch another (${FETCHABLE.join(', ')}).
 `);
   return harness;
 };
