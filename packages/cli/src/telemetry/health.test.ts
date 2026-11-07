@@ -1,11 +1,12 @@
 // The nightly store-health snapshot and run cost. The store is a fixture and the spool a temp folder; nothing real is read or written.
-import { mkdirSync, mkdtempSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { slugOf } from '../sessions/allow.js';
 import { runHook } from '../sessions/hooks.js';
 import { readHookCalls } from '../sessions/hook-calls.js';
+import { appendStep } from '../sessions/steps.js';
 import { deposit, loadStore } from '../sessions/store.js';
 import { cleanup, NOW, stage } from '../sessions/test-support.js';
 import { closedList, recordStoreHealth, type NightlyTelemetry } from './health.js';
@@ -48,8 +49,8 @@ describe('store health at the nightly run', () => {
       subagents: store.subagents.length,
       skeletons: readdirSync(join(staged.storeDir, 'skeletons')).length,
       rawBytes: bytesUnder(join(staged.storeDir, 'raw')),
-      captureVersion: 18,
-      extractorVersion: 12,
+      captureVersions: [18],
+      extractorVersions: [12],
       unparseable: [...store.sessions, ...store.subagents].reduce((sum, session) => sum + session.badLines, 0),
     });
     expect(store.sessions.length).toBeGreaterThan(0);
@@ -60,6 +61,28 @@ describe('store health at the nightly run', () => {
     const seen = [...store.sessions, ...store.subagents];
     expect(health?.data.harnessVersions).toEqual(closedList(seen.flatMap((session) => session.versions), 'version'));
     expect(health?.data.models).toEqual(closedList(seen.flatMap((session) => Object.keys(session.models)), 'model'));
+  });
+
+  it('records the versions the store holds, not the ones this build writes', async () => {
+    const staged = stage(slugOf(REPO));
+    await deposit(staged.runtime, { allow: [REPO], redactDomains: [], now: () => NOW });
+    // One session captured by an older oars, and a step an older extractor ran: the store now holds two of each.
+    const log = join(staged.storeDir, 'observations.jsonl');
+    const lines = readFileSync(log, 'utf8').split('\n');
+    const index = lines.findIndex((line) => line.includes('"kind":"session"') && line.includes('"cv":"18"'));
+    expect(index).toBeGreaterThanOrEqual(0);
+    lines[index] = (lines[index] ?? '').replace('"cv":"18"', '"cv":"17"');
+    writeFileSync(log, lines.join('\n'));
+    await appendStep(staged.storeDir, { at: new Date(NOW).toISOString(), run: 'r', trigger: 'nightly', step: 'deposit', status: 'ok', ms: 1, in: {}, out: {}, cv: '17', ev: '11', key: null, error: null });
+    const { dir, telemetry } = emitter();
+    await recordStoreHealth(telemetry, staged.runtime);
+
+    const [health] = events(dir, 'store-health');
+    expect(health?.data.readFailed).toBeUndefined();
+    expect(health?.data.captureVersions).toEqual([17, 18]);
+    expect(health?.data.extractorVersions).toEqual([11]);
+    expect(health?.data.captureVersion).toBeUndefined();
+    expect(health?.data.extractorVersion).toBeUndefined();
   });
 
   it('reads a store that fails to read as a failure, records it, and does not stop the nightly run', async () => {
