@@ -458,7 +458,7 @@ describe("the shape's edge cases", () => {
     const plain = codex(rollout(null));
     const declared = codex(rollout([{ type: 'function', name: 'lookup' }]));
     expect(declared.tsFirst).toBe(plain.tsFirst);
-    // The interrupt is a marker user line since CAPTURE 21, so it is the last line time.
+    // The interrupt is a marker user line since CAPTURE 22, so it is the last line time.
     expect(plain.tsLast).toBe(at(600));
     expect(declared.tsLast).toBe(plain.tsLast);
     expect(declared.funnel).toEqual({ offered: ['lookup'] });

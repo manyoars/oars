@@ -1,4 +1,4 @@
-// The staged-store round trip for EXTRACTOR 15 and CAPTURE 21 (t915, section 17 rule 7 of the direction conclusion): the fixtures that carry the three misreads (a checkout of a slashed or quoted branch, a checkout with an unlisted
+// The staged-store round trip for EXTRACTOR 15 and CAPTURE 22 (t915, section 17 rule 7 of the direction conclusion): the fixtures that carry the three misreads (a checkout of a slashed or quoted branch, a checkout with an unlisted
 // path flag, and a Codex or Gemini decline or interrupt), staged into a temp store with the repo's fixtures, a store stamped as main left it (EXTRACTOR 14) refreshed, and every session put on the wire and parsed back.
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -24,7 +24,7 @@ const checkout = (command: string): string[] =>
     JSON.stringify(entry),
   );
 
-/** [session name, command, the bucket at main's versions (EXTRACTOR 14, CAPTURE 20), the bucket now]. */
+/** [session name, command, the bucket at main's versions (EXTRACTOR 14, CAPTURE 21), the bucket now]. */
 const CHECKOUTS: readonly (readonly [string, string, PromptIntervention, PromptIntervention])[] = [
   ['branch-slashed', 'git checkout feature/x', 'revert', 'none'],
   ['branch-quoted', 'git checkout "fix-1"', 'revert', 'none'],
@@ -90,25 +90,25 @@ interface LogRecord {
 }
 const isLogRecord = (value: unknown): value is LogRecord => typeof value === 'object' && value !== null && 'kind' in value && typeof value.kind === 'string';
 /**
- * The store totals (20 prompts) over the staged store with the capture log as main left it (CAPTURE 20), read by EXTRACTOR 15: measured by running this test. Main's own EXTRACTOR 14 reads the two
+ * The store totals (20 prompts) over the staged store with the capture log as main left it (CAPTURE 21), read by EXTRACTOR 15: measured by running this test. Main's own EXTRACTOR 14 reads the two
  * declines as `after-error` (none 5, after-error 2, revert 3, unknown 10, as the review expected), not run here because the old extractor is not in this tree.
  */
 const MAIN_ERA: { [bucket in PromptIntervention]: number } = { none: 5, 'after-error': 0, redo: 0, revert: 3, 'user-stop': 2, unknown: 10 };
 
 const options = { allow: ['proj', 'codex', 'gemini'], redactDomains: [], now: () => NOW };
 
-describe('EXTRACTOR_VERSION 15 and CAPTURE_VERSION 21', () => {
+describe('EXTRACTOR_VERSION 15 and CAPTURE_VERSION 22', () => {
   it('are the versions that read a checkout by its target class and a Codex or Gemini decline as a stop', () => {
     expect(Number(EXTRACTOR_VERSION)).toBeGreaterThanOrEqual(15);
-    expect(Number(CAPTURE_VERSION)).toBeGreaterThanOrEqual(21);
+    expect(Number(CAPTURE_VERSION)).toBeGreaterThanOrEqual(22);
   });
 
-  it('refreshes a store as main left it (CAPTURE 20, EXTRACTOR 14), puts every session on the wire with none refused and extensions empty, and holds a listed intervention on every prompt', async () => {
+  it('refreshes a store as main left it (CAPTURE 21, EXTRACTOR 14), puts every session on the wire with none refused and extensions empty, and holds a listed intervention on every prompt', async () => {
     const s = staged();
     await deposit(s.runtime, options);
     const derived = paths(s.storeDir).derived;
-    // The store as main left it: the stamp is '14' (derived prompts are not stored, so it is all that moves there), and the capture log is rewritten as CAPTURE 20 wrote it:
-    // every record is `cv` '20', a `git checkout` step has no `target` key, and a Codex `turn_aborted` has no marker prompt record.
+    // The store as main left it: the stamp is '14' (derived prompts are not stored, so it is all that moves there), and the capture log is rewritten as CAPTURE 21 wrote it:
+    // every record is `cv` '21', a `git checkout` step has no `target` key, and a Codex `turn_aborted` has no marker prompt record.
     writeFileSync(derived, readFileSync(derived, 'utf8').replaceAll(`"v":"${EXTRACTOR_VERSION}"`, '"v":"14"'));
     const log = paths(s.storeDir).observations;
     const dropped = { markers: 0, targets: 0, rewritten: 0 };
@@ -130,18 +130,18 @@ describe('EXTRACTOR_VERSION 15 and CAPTURE_VERSION 21', () => {
         }
       }
       if (record.cv === CAPTURE_VERSION) {
-        record.cv = '20';
+        record.cv = '21';
         dropped.rewritten += 1;
       }
       kept.push(JSON.stringify(record));
     }
     writeFileSync(log, `${kept.join('\n')}\n`);
-    // The rewrite did something on each count, so the store below is not the CAPTURE 21 store restamped.
+    // The rewrite did something on each count, so the store below is not the CAPTURE 22 store restamped.
     expect(dropped.markers).toBe(1);
     expect(dropped.targets).toBe(4);
     expect(dropped.rewritten).toBeGreaterThan(0);
     const before = await loadStore(s.storeDir);
-    expect(before.tools.every((tool) => Number(tool.cv) <= 20)).toBe(true);
+    expect(before.tools.every((tool) => Number(tool.cv) <= 21)).toBe(true);
     expect(countOf(before)).toEqual(MAIN_ERA);
 
     await refresh(s.runtime, [], '2026-06-10T00:00:00.000Z');
