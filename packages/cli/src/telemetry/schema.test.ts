@@ -64,6 +64,14 @@ describe('the closed schema', () => {
     expect(sanitize('hook', { model: modelWord('acme-private-7') })).toEqual({ data: { model: 'other' }, dropped: 0 });
   });
 
+  it('carries the harness on a hook fire from the closed list, and an old fire without one still parses', () => {
+    expect(sanitize('hook', { name: 'pre-tool', harness: 'codex', latencyMs: 3 })).toEqual({ data: { name: 'pre-tool', harness: 'codex', latencyMs: 3 }, dropped: 0 });
+    expect(sanitize('hook', { name: 'pre-tool', harness: 'other', latencyMs: 3 })).toEqual({ data: { name: 'pre-tool', harness: 'other', latencyMs: 3 }, dropped: 0 });
+    expect(sanitize('hook', { name: 'pre-tool', harness: 'acme-private', latencyMs: 3 })).toEqual({ data: { name: 'pre-tool', latencyMs: 3 }, dropped: 1 });
+    // The schema version stays 1: a field added with no change to what the others mean is additive, so an event written before it is read as it was.
+    expect(sanitize('hook', { name: 'pre-tool', latencyMs: 3 })).toEqual({ data: { name: 'pre-tool', latencyMs: 3 }, dropped: 0 });
+  });
+
   it.each(EVENT_TYPES)('%s: a home path, command text, a prompt, and a URL fed to every field never reach the spool', (type) => {
     const spool = spoolOf((record) => {
       for (const field of fieldNamesOf(type)) {

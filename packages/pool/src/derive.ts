@@ -16,9 +16,10 @@ import { deriveToolDay } from '../../cli/src/sessions/read-tool-day.js';
 import { unitCells, type DeriveFamily, type ReadBody } from '../../cli/src/sessions/read-support.js';
 import type { Harness } from '../../cli/src/sessions/schema.js';
 import type { Store } from '../../cli/src/sessions/store.js';
+import { cellClassOf } from './cell-class.js';
 import { booksOf } from './books.js';
 import { withheldOf } from './complement.js';
-import { clears, floorFor, wireFloors, type Floors } from './floors.js';
+import { cellFloor, clears, floorFor, wireFloors, type Floors } from './floors.js';
 import type { StoredPool } from './stored.js';
 
 /** What a bundle derives, by name: the names are hashed into its ETag, so a change to this list moves the tag of a bundle whose cells did not change. */
@@ -69,7 +70,7 @@ export const bucketPrefix = (harness: string, harnessVersion: string): string =>
 /**
  * What one harness's bundle at one version holds: the stored cells of its (harness, bucket), and beside them its version-free model cells and the environment cells, which key on neither. A share's denominator is the sum of the bundle's served cells (`readsOf`); only what clears the floor leaves.
  * The floors are the deploy's (`floors.ts`), applied here and nowhere else: the stored cells keep their held counts, so a floor that moves needs no redeposit. Each read family is derived from the cells served at its own floor (the public floor unless
- * `floors.families` names it), with complementary withholding computed at that floor, so a family on its own floor holds the same differencing guarantee as one on the public floor. The bundle's `cells` are those served at the public floor,
+ * `floors.families` names it), with complementary withholding computed at that floor, so a family on its own floor holds the same differencing guarantee as one on the public floor. A `clear` cell (`cell-class.ts`) is served at the floor of its class (`cellFloor`), the same number today. The bundle's `cells` are those served at the public floor,
  * and beside them any cell that a read of a family on its own floor cites, since a read must be able to be walked back to the cells it names; a family on a lower floor therefore shows its own cells and no other family's.
  */
 export const bundleOf = (harness: Harness, harnessVersion: string, stored: StoredPool, floors: Floors): Bundle => {
@@ -82,6 +83,7 @@ export const bundleOf = (harness: Harness, harnessVersion: string, stored: Store
   // The environment cells are read with the bucket's, but the pool's last day is the bucket's own: a week held only by another version is not this bundle's, so it cannot age the reads that count weeks since. A bucket with no served cell takes the whole pool's.
   // Everything the bundle states, its version and its last day included, is that of the served cells: a sub-floor cell, or a served one held back (`withheldOf`), would otherwise move `asOf` and `weeksSinceLast`, which would show that it exists.
   const held = [...cells, ...environment];
+  const motifOf = new Map(motifs.map((motif) => [motif.motifId, motif]));
   const poolsAt = new Map<number, { served: Cell[]; pool: Pool }>();
   const poolAt = (floor: number): { served: Cell[]; pool: Pool } => {
     const known = poolsAt.get(floor);
@@ -93,7 +95,7 @@ export const bundleOf = (harness: Harness, harnessVersion: string, stored: Store
     for (const cell of environment) {
       if (withheldBuckets.has(counterpart(cell))) withheld.add(cell);
     }
-    const served = held.filter((cell) => clears(cell, floor) && !withheld.has(cell));
+    const served = held.filter((cell) => clears(cell, cellFloor(floors, floor, cellClassOf(cell, motifOf.get(cell.motifId)))) && !withheld.has(cell));
     const kept = new Set(served);
     // `cells` holds the version-free model cells of every version too, so the bucket's own are taken by its prefix: another version's failure on a later day must not move the day.
     const own = poolOf({ cells: cells.filter((cell) => kept.has(cell) && cell.frameBucket.startsWith(prefix)), motifs }, []);

@@ -16,7 +16,7 @@ afterEach(() => {
   removeTestDirs();
 });
 
-const cell = (day: string, over: Partial<Cell> = {}): Cell => ({ motifId: 'm', frameBucket: 'claude-code/2.1.31x/claude-opus-5-5', grain: 'day', day, sessions: 2, clusters: 1, ok: 1, failed: 1, tokens: 0, durationMs: 0, exposed: false, ...over });
+const cell = (day: string, over: Partial<Cell> = {}): Cell => ({ motifId: 'm', frameBucket: 'claude-code/2.1.31x/claude-opus-5-5', grain: 'day', day, sessions: 2, clusters: 1, ok: 1, failed: 1, tokens: 0, tokenSessions: 2, durationMs: 0, exposed: false, ...over });
 
 const read = (readId: string, inputs: string[], day: string | null = '2026-11-01'): Read => ({ readId, family: 'fit', method: 'm', methodVersion: '1', inputs, order: 1, slice: {}, value: {}, n: 3, clusters: 1, interval: null, asOf: { pool: 'p', day }, basis: 'all' });
 

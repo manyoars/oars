@@ -20,7 +20,7 @@ import { parseSkeleton, skeletonOf, VOCAB_VERSION, type PinnedKey, type Skeleton
 import { contentHash } from './read.js';
 import { deposit } from './store.js';
 import { spoolEvents } from '../telemetry/read-events.js';
-import { addProject, cleanup, NOW, settledClock, stage, type Staged } from './test-support.js';
+import { addProject, cleanup, NOW, settledClock, stage, TEST_FLOOR, type Staged } from './test-support.js';
 
 // The session gates must stop a session before the projection runs; the real projection is wrapped so a test can see whether it was called.
 vi.mock('./pool-wire.js', async (importOriginal) => {
@@ -765,9 +765,9 @@ describe('oars pool deposit', () => {
       });
 
       /** Rewrites every stored session record, the way an older capture or a damaged store would hold it. */
-      const rewriteSessions = (scene: Scene, change: (session: { frame?: { model?: unknown } }) => void): void => {
+      const rewriteSessions = (scene: Scene, change: (session: { frame?: { day?: unknown } }) => void): void => {
         const file = join(scene.staged.storeDir, 'observations.jsonl');
-        const isSession = (record: unknown): record is { kind: 'session'; frame?: { model?: unknown } } => at(record, 'kind') === 'session';
+        const isSession = (record: unknown): record is { kind: 'session'; frame?: { day?: unknown } } => at(record, 'kind') === 'session';
         const lines = readFileSync(file, 'utf8').split('\n').filter((text) => text !== '').map((text) => {
           const record: unknown = JSON.parse(text);
           if (isSession(record)) change(record);
@@ -787,7 +787,7 @@ describe('oars pool deposit', () => {
       it('a session the vocabulary now refuses', async () => {
         const { scene, hash } = await built();
         rewriteSessions(scene, (session) => {
-          if (session.frame !== undefined) session.frame.model = 'acme-private-llm';
+          if (session.frame !== undefined) session.frame.day = 'tomorrow';
         });
         await expectWithdrawn(scene, hash);
       });
@@ -950,8 +950,8 @@ ${user('and goes on')}
     await signIn(scene);
     const file = join(scene.staged.storeDir, 'observations.jsonl');
     const original = readFileSync(file, 'utf8');
-    const isSession = (record: unknown): record is { kind: 'session'; frame?: { model?: unknown } } => at(record, 'kind') === 'session';
-    const rewrite = (change: (session: { frame?: { model?: unknown } }) => void): void => {
+    const isSession = (record: unknown): record is { kind: 'session'; frame?: { day?: unknown } } => at(record, 'kind') === 'session';
+    const rewrite = (change: (session: { frame?: { day?: unknown } }) => void): void => {
       const lines = original.split('\n').filter((line) => line !== '').map((line) => {
         const record: unknown = JSON.parse(line);
         if (isSession(record)) change(record);
@@ -968,13 +968,13 @@ ${user('and goes on')}
     expect(counted).toMatchObject({ batched: 0, uncaptured: at(counted, 'sessions') });
 
     rewrite((session) => {
-      if (session.frame !== undefined) session.frame.model = 'acme-private-llm';
+      if (session.frame !== undefined) session.frame.day = 'tomorrow';
     });
     scene.h.out.length = 0;
     expect(await scene.cli('pool', 'deposit', '--server', POOL)).toBe(ExitCode.OK);
     expect(outboxFiles(scene)).toEqual([]);
-    expect(scene.h.out.join('')).toContain('refused by the vocabulary (transcripts[0].frame.model)');
-    expect(scene.h.out.join('')).not.toContain('acme-private-llm');
+    expect(scene.h.out.join('')).toContain('refused by the vocabulary (transcripts[0].frame.day)');
+    expect(scene.h.out.join('')).not.toContain('tomorrow');
     expect(scene.seen).toEqual([]);
   });
 });
@@ -1348,7 +1348,7 @@ describe('oars pool fetch', () => {
     expect(scene.seen).toEqual([]);
   });
 
-  const bundleBody = (version: string, harness = 'claude-code'): string => JSON.stringify({ format: 1, harness, harnessVersion: version, vocabVersion: VOCAB_VERSION, floor: 5, asOf: { pool: 'p' }, cells: [{}], motifs: [], reads: [{}, {}], strata: [] });
+  const bundleBody = (version: string, harness = 'claude-code'): string => JSON.stringify({ format: 1, harness, harnessVersion: version, vocabVersion: VOCAB_VERSION, floor: TEST_FLOOR, asOf: { pool: 'p' }, cells: [{}], motifs: [], reads: [{}, {}], strata: [] });
 
   const signedScene = async (): Promise<{ scene: Scene; sign: (text: string) => Promise<string> }> => {
     const scene = setting();
@@ -1470,7 +1470,7 @@ describe('oars pool fetch', () => {
   it('refuses a validly signed bundle that states no floor, and keeps nothing', async () => {
     const { scene, sign } = await signedScene();
     // The signature holds and the version is right: only the missing `floor` is wrong, so a bundle that does not say what floor the pool applied is not served as a read.
-    const payload = bundleBody('2.1.314').replace('"floor":5,', '');
+    const payload = bundleBody('2.1.314').replace(`"floor":${String(TEST_FLOOR)},`, '');
     expect(payload).not.toContain('floor');
     const signature = await sign(payload);
     on(scene, 'get', `/bundle/claude-code/2.1.314/${VOCAB_VERSION}`, () => HttpResponse.json({ payload, signature }));
@@ -1513,7 +1513,7 @@ describe('oars pool fetch', () => {
   };
 
   const signedReply = async (sign: (text: string) => Promise<string>, version: string, etag: string | null, reads = 2, harness = 'claude-code'): Promise<() => Response> => {
-    const payload = JSON.stringify({ format: 1, harness, harnessVersion: version, vocabVersion: VOCAB_VERSION, floor: 5, asOf: { pool: 'p' }, cells: [{}], motifs: [], reads: Array.from({ length: reads }, () => ({})), strata: [] });
+    const payload = JSON.stringify({ format: 1, harness, harnessVersion: version, vocabVersion: VOCAB_VERSION, floor: TEST_FLOOR, asOf: { pool: 'p' }, cells: [{}], motifs: [], reads: Array.from({ length: reads }, () => ({})), strata: [] });
     const signature = await sign(payload);
     return () => HttpResponse.json({ payload, signature }, etag === null ? {} : { headers: { etag } });
   };
@@ -2083,7 +2083,7 @@ describe('pool telemetry: deposit batches and fetches leave counts', () => {
     expect(eventsOf(dir, 'deposit')).toEqual([{ step: 'send', sent: 1, bytes: Buffer.byteLength(batchBytes(scene)[0] ?? '') }]);
   });
 
-  const bundleBody = (version: string): string => JSON.stringify({ format: 1, harness: 'claude-code', harnessVersion: version, vocabVersion: VOCAB_VERSION, floor: 5, asOf: { pool: 'p' }, cells: [{}], motifs: [], reads: [{}, {}], strata: [] });
+  const bundleBody = (version: string): string => JSON.stringify({ format: 1, harness: 'claude-code', harnessVersion: version, vocabVersion: VOCAB_VERSION, floor: TEST_FLOOR, asOf: { pool: 'p' }, cells: [{}], motifs: [], reads: [{}, {}], strata: [] });
   const BUNDLE = `/bundle/claude-code/2.1.314/${VOCAB_VERSION}`;
 
   const signed = async (): Promise<{ scene: Scene; reply: () => Promise<Response> }> => {

@@ -3,7 +3,7 @@
 // sending, and the server parses it again, field by field, because a live URL takes anything from anyone. This file imports nothing from the file system: the Worker bundles it.
 
 import { ACTION_TABLES, CANONICAL_ACTIONS, mcpOf, type CanonicalAction } from './actions.js';
-import { CUSTOM_AGENT, FRAMEWORKS, isPublicMcpTool, isRegistryVersion, LANGUAGES, LITERAL, PRIVATE, publicEffort, publicModel, publicVersion, PUBLIC_FLAGS, PUBLIC_PACKAGES, PUBLIC_PROGRAMS, projectedAgentType, PUBLIC_SUBCOMMANDS, REPO_SIZES, VOCAB_VERSION, type RepoSize } from './public-vocabulary.js';
+import { CUSTOM_AGENT, FRAMEWORKS, isPublicMcpTool, isRegistryVersion, LANGUAGES, LITERAL, PRIVATE, publicEffort, publicVersion, PUBLIC_PACKAGES, projectedAgentType, PUBLIC_FLAGS, REPO_SIZES, VOCAB_VERSION, type RepoSize } from './public-vocabulary.js';
 import type { Cell } from './cells.js';
 import type { Redactor } from './redact.js';
 import type { Motif } from './motif.js';
@@ -285,18 +285,18 @@ export interface ShellCommand {
 export type ShellReader = (tool: ToolObservation) => readonly ShellCommand[];
 
 
-const SHORT_FLAG = /^-[A-Za-z]$/;
-
-/** The flags the wire has a row for: the curated list and a single letter. */
-const isWireFlag = (flag: string): boolean => PUBLIC_FLAGS.has(flag) || SHORT_FLAG.test(flag);
-
 /** The most characters a name may hold on the wire. A longer value is not a name: it counts as redacted. */
 export const NAME_MAX = 128;
-// A name is a word: letters, digits, and a few joiners, with an optional leading `@` for a scope. A mis-parsed command line, a path, an email, or a quoted string fails it.
-const WIRE_NAME = /^@?[A-Za-z0-9_][A-Za-z0-9_.+-]*(?:[/:][A-Za-z0-9_.+-]+)*$/;
+// A name is a word: letters, digits, and a few joiners, with an optional leading `@` for a scope. A mis-parsed command line, a path, an email, or a quoted string fails it. A `/` is not a joiner here: a name holding one is a path (`src/acme/plan.md`).
+const WIRE_NAME = /^@?[A-Za-z0-9_][A-Za-z0-9_.+-]*(?::[A-Za-z0-9_.+-]+)*$/;
+// A pull's package `name` is the one place a `/` belongs: a scope (`@scope/pkg`) or a Go module path (`golang.org/x/tools`).
+const WIRE_PULL_NAME = /^@?[A-Za-z0-9_][A-Za-z0-9_.+-]*(?:[/:][A-Za-z0-9_.+-]+)*$/;
 
 /** Whether a value has the shape of a name (and so can be told from a command line, a path, or an email) and is within `NAME_MAX`. */
 export const isWireName = (name: string): boolean => name.length <= NAME_MAX && WIRE_NAME.test(name);
+
+/** The shape of a pull's package name: a name, or a scope or module path with `/` in it. */
+export const isWirePullName = (name: string): boolean => name.length <= NAME_MAX && WIRE_PULL_NAME.test(name);
 
 /** What the client holds against a value before it leaves: the redactor, and the exclusion terms the operator keeps. This is the one gate; the pool assigns every other class. */
 export interface WireGate {
@@ -314,27 +314,46 @@ const unchanged = (gate: WireGate, name: string): boolean => gate.redact(name) =
  * A name as the wire holds it: the value itself, or `private` when it counts as redacted. A value counts as redacted when the redactor changes it, it holds an exclusion term, it fails the name shape, or it is over
  * `NAME_MAX` characters, because a secret, an employer's name, or a mis-parsed command is not a name and nothing downstream can take it back. `keys` (t870) sends its names through this same function.
  */
-export const wireName = (gate: WireGate, name: string): string => {
+export const wireName = (gate: WireGate, name: string, hasShape: (name: string) => boolean = isWireName): string => {
   const lower = name.toLowerCase();
-  return isWireName(name) && unchanged(gate, name) && !gate.terms.some((term) => term !== '' && lower.includes(term.toLowerCase())) ? name : PRIVATE;
+  return hasShape(name) && unchanged(gate, name) && !gate.terms.some((term) => term !== '' && lower.includes(term.toLowerCase())) ? name : PRIVATE;
 };
+
+const FLAG_DASHES = /^-{1,2}/;
+const SHORT_FLAG = /^-[A-Za-z]$/;
+// The long form has its own shape, with no `:` (the joiner `WIRE_NAME` allows for `scope:name`), because `--password:hunter2` is a value joined to its flag and no part of it is a name.
+const LONG_FLAG = /^--[A-Za-z0-9][A-Za-z0-9_.+-]*$/;
+/**
+ * The shape of a flag name: a long flag (two dashes, then a name with no `:`) or a short one (one dash, one letter), or a single-dash token longer than one letter only when the public flag list holds it (`-NoProfile`, `-Command`). A value joined to its flag
+ * fails it: `--token=abc`, `--password:hunter2`, and a short flag with its value attached (`-psecret123`, `-uuser:pass`), which no list holds.
+ */
+const isWireFlag = (flag: string): boolean => SHORT_FLAG.test(flag) || PUBLIC_FLAGS.has(flag) || (flag.length <= NAME_MAX && LONG_FLAG.test(flag));
+
+/** A multi-letter single-dash flag no public list holds (`go test -race`, `-psecret123`): the client before t900 dropped it, so this one does too, and an old and a new client key one motif for one command. */
+const isDroppedFlag = (flag: string): boolean => flag.length > 2 && flag.startsWith('-') && !flag.startsWith('--') && !PUBLIC_FLAGS.has(flag);
+
+/** A flag name as the wire holds it: the name after the one gate, or `private` when it counts as redacted. Only the name is ever read, never a value. */
+const wireFlag = (gate: WireGate, flag: string): string => (isWireFlag(flag) && wireName(gate, flag.replace(FLAG_DASHES, '')) !== PRIVATE ? flag : PRIVATE);
 
 /** The basename of a program as capture read it: a path never goes on the wire. */
 const basenameOf = (program: string): string => program.replace(/^.*[\\/]/, '');
 
 /**
- * A projected command as the server's parser reads it. A program the server's curated list holds keeps its subcommand and flags, held to the curated lists. Any other program goes as its basename after the gate
- * (the stored identity reads `<literal>`, so the name comes from the call's segments), with no subcommand or flag: those are not carried for a long-tail program yet.
+ * A projected command as the server's parser reads it: the program as its basename after the gate (the stored identity reads `<literal>` for a program off the curated list, so the name comes from the call's segments),
+ * and the subcommand and flag names the reader gives, each through the same gate and never a flag value. Which of them the reader holds for a program is capture's; the wire adds no list of its own.
  */
 const wireCommand = ({ program, subcommand, flags }: ShellCommand, raw: string | undefined, gate: WireGate): ShellIdentity => {
-  if (PUBLIC_PROGRAMS.has(program)) return { program, sub: subcommand !== null && PUBLIC_SUBCOMMANDS.get(program)?.has(subcommand) === true ? subcommand : null, flags: flags.filter(isWireFlag) };
   const named = program !== PRIVATE ? program : raw;
-  return { program: named === undefined ? PRIVATE : wireName(gate, basenameOf(named)), sub: null, flags: [] };
+  if (named === undefined) return { program: PRIVATE, sub: null, flags: [] };
+  const sent = wireName(gate, basenameOf(named));
+  // A private program holds no subcommand or flag: the parser refuses one that does.
+  if (sent === PRIVATE) return { program: PRIVATE, sub: null, flags: [] };
+  return { program: sent, sub: subcommand === null ? null : wireName(gate, subcommand), flags: flags.filter((flag) => !isDroppedFlag(flag)).map((flag) => wireFlag(gate, flag)) };
 };
 
 /** A pull in the wire's spelling: its package name after the gate. A version beside a name that is not on the public list could identify it, so it goes as `<literal>` (null stays null), the rule capture applies. */
 const wirePull = (pull: PullIdentity, gate: WireGate): PullIdentity => {
-  const name = wireName(gate, pull.name);
+  const name = wireName(gate, pull.name, isWirePullName);
   return { ...pull, name, version: !PUBLIC_PACKAGES.has(name) && pull.version !== null ? LITERAL : pull.version };
 };
 
@@ -401,10 +420,16 @@ const carrier = (steps: readonly { action: string }[]): number => Math.max(0, st
 type Spawned = ReadonlyMap<number, number>;
 
 /**
+ * A model or harness version string as the wire holds it: the string after the gate (`wireName`), null staying null. The pool assigns its class. Capture's closed value (`<literal>`) goes as it is, the form a client before
+ * t900 sent, so an old and a new client key one closed frame to one pool cell; the parser accepts it.
+ */
+const wireString = (gate: WireGate, value: string | null): string | null => (value === null || value === LITERAL ? value : wireName(gate, value));
+
+/**
  * A stored frame with the UTC hour of `ts` beside its day, and its stack's language shares: each stored share is read through its projection, so a share outside the list is dropped and its language stays in `languages`. A stored
  * language outside the pinned list is `other`, and `other` holds the first share a record gives it. A record captured before the strata holds none.
  */
-const wireFrame = (frame: Frame, strata: Strata | undefined, ts: string | null | undefined): SkeletonFrame => {
+const wireFrame = (frame: Frame, strata: Strata | undefined, gate: WireGate, ts: string | null | undefined): SkeletonFrame => {
   const shares = new Map<string, LanguageShare>();
   for (const { language, share } of strata?.languages ?? []) {
     const held = projectLanguageShare(share);
@@ -412,7 +437,7 @@ const wireFrame = (frame: Frame, strata: Strata | undefined, ts: string | null |
     if (held !== null && !shares.has(name)) shares.set(name, held);
   }
   const hour = hourOf(ts);
-  return { ...frame, stack: { ...frame.stack, languageShares: [...shares].map(([language, languageShare]) => ({ language, languageShare })) }, ...(hour === null ? {} : { hour }) };
+  return { ...frame, harnessVersion: wireString(gate, frame.harnessVersion), model: wireString(gate, frame.model), stack: { ...frame.stack, languageShares: [...shares].map(([language, languageShare]) => ({ language, languageShare })) }, ...(hour === null ? {} : { hour }) };
 };
 
 /** Each of `names` after the gate (a name that counts as redacted reads `private`), sorted. */
@@ -471,7 +496,7 @@ const transcriptOf = (
       explore: projectExplore(strata?.explore),
       ...(usageResponses === undefined ? {} : { usageResponses: bucketOf('count', usageResponses) }),
       ...(intervention === undefined ? {} : { intervention }),
-      frame: wireFrame(frame, strata, ts),
+      frame: wireFrame(frame, strata, gate, ts),
     });
   }
   // The frames the steps ran in: the transcript's own first, then one for each distinct (prompt frame, call model, call harness version) a call shows, so a model that changes in the middle of a prompt
@@ -479,15 +504,15 @@ const transcriptOf = (
   const reach = reachOf(session, tools, harness, gate);
   // The repo key and the bands describe the session, not a prompt, so they sit where the reach does. A session in no repository sends no key, and so does one whose record holds anything but a key's shape: the emitter is the privacy control.
   const where = { reach, ...(session.repo !== null && REPO_KEY.test(session.repo) ? { repoKey: session.repo } : {}), ...coverage };
-  const transcriptFrame: SkeletonFrame = { ...wireFrame(session.frame, session.strata, session.tsFirst), ...where };
+  const transcriptFrame: SkeletonFrame = { ...wireFrame(session.frame, session.strata, gate, session.tsFirst), ...where };
   const frames: SkeletonFrame[] = [transcriptFrame];
   const frameAtKey = new Map<string, number>([[JSON.stringify(transcriptFrame), 0]]);
   const frameOfCall = ({ model, harnessVersion }: ToolObservation, promptPosition: number | null): number => {
     const base = promptPosition === null ? undefined : framedPrompts[promptPosition]?.frame;
     const held: SkeletonFrame = {
       ...(base ?? transcriptFrame),
-      ...(model === undefined ? {} : { model: publicModel(model) }),
-      ...(harnessVersion === null ? {} : { harnessVersion: publicVersion(harnessVersion) }),
+      ...(model === undefined ? {} : { model: wireString(gate, model) }),
+      ...(harnessVersion === null ? {} : { harnessVersion: wireString(gate, harnessVersion) }),
       ...where,
     };
     const key = JSON.stringify(held);
@@ -766,18 +791,28 @@ const inSet = (held: Collected, allowed: ReadonlySet<string>, value: unknown, at
 };
 
 /** A long-tail name field: `private`, `other`, or a name (the pool assigns its class, `packages/pool/src/field-classes.ts`). A value that is no name is refused: a client that sends one has not run its gate. */
-const nameIn = (value: unknown, at: string): string => {
+const nameIn = (value: unknown, at: string, hasShape: (name: string) => boolean = isWireName): string => {
   const name = textOf(value, at);
-  if (name === PRIVATE || name === OTHER || isWireName(name)) return name;
+  if (name === PRIVATE || name === OTHER || hasShape(name)) return name;
   throw new Refused(at, 'not a name');
 };
+
+/** A model or harness version: null, or a long-tail name (`private`, `other`, the older client's literal, or a name). A value that is no name is set aside, as a native name is. */
+const nameOrNull = (held: Collected, value: unknown, at: string): string | null => {
+  if (value === null || value === undefined) return null;
+  const name = textOf(value, at);
+  return name === LITERAL ? name : nameValue(held, name, at);
+};
+
+/** A long-tail name in a field whose value the pool classes: `private`, `other`, or a name; a value that is no name is set aside. */
+const nameValue = (held: Collected, name: string, at: string): string => (name === PRIVATE || name === OTHER || isWireName(name) ? name : unknownValue(held, at, name));
 
 const exactlyIn = (held: Collected, allowed: ReadonlySet<string>) => (value: unknown, at: string): string => {
   const name = textOf(value, at);
   return allowed.has(name) || name === OTHER ? name : unknownValue(held, at, name);
 };
 
-/** `publicModel` and its like hand back what is public and the literal for what is not, so only a value they return unchanged is in the vocabulary. */
+/** `publicEffort` and its like hand back what is public and the literal for what is not, so only a value they return unchanged is in the vocabulary. */
 const heldTo = (held: Collected, isHeld: (value: string | null) => string | null, value: unknown, at: string): string | null => {
   if (value === null || value === undefined) return null;
   const name = textOf(value, at);
@@ -849,8 +884,8 @@ const parseFrame = (held: Collected, value: unknown, at: string): SkeletonFrame 
   });
   return {
     harness: oneOf(held, HARNESSES, raw.harness, under(at, 'harness')),
-    harnessVersion: heldTo(held, publicVersion, raw.harnessVersion, under(at, 'harnessVersion')),
-    model: heldTo(held, publicModel, raw.model, under(at, 'model')),
+    harnessVersion: nameOrNull(held, raw.harnessVersion, under(at, 'harnessVersion')),
+    model: nameOrNull(held, raw.model, under(at, 'model')),
     effort: heldTo(held, publicEffort, raw.effort, under(at, 'effort')),
     day,
     platform: exactlyIn(held, PLATFORMS)(raw.platform, under(at, 'platform')),
@@ -883,7 +918,7 @@ const parseUsage = (held: Collected, value: unknown, at: string): SkeletonUsage 
 
 const parsePull = (held: Collected, value: unknown, at: string): PullIdentity => {
   const raw = fieldsOf(held, value, at, ['registry', 'name', 'version']);
-  const name = nameIn(raw.name, under(at, 'name'));
+  const name = nameIn(raw.name, under(at, 'name'), isWirePullName);
   const version = orNull(raw.version, under(at, 'version'), (entry, entryAt) => {
     const text = textOf(entry, entryAt);
     // A version beside a masked name could identify it: capture masks the two together.
@@ -895,7 +930,7 @@ const parsePull = (held: Collected, value: unknown, at: string): PullIdentity =>
 
 const parseFlag = (held: Collected, value: unknown, at: string): string => {
   const flag = textOf(value, at);
-  return flag === OTHER || isWireFlag(flag) ? flag : unknownValue(held, at, flag);
+  return flag === PRIVATE || flag === OTHER || isWireFlag(flag) ? flag : unknownValue(held, at, flag);
 };
 
 /** What a reader sets aside whole: a part of a step it cannot read against a vocabulary. Its place is noted and its content kept as sent, as for any value it does not know (see `unknownValue`). */
@@ -924,8 +959,8 @@ const parseIdentity = (held: Collected, harness: WireHarness, action: CanonicalA
       if (!(Array.isArray(raw.flags) && raw.flags.length === 0)) throw new Refused(under(at, 'flags'), 'a private program holds no flags');
       if (raw.pulls !== undefined) throw new Refused(under(at, 'pulls'), 'a private program holds no pulls');
     }
-    const subs = PUBLIC_SUBCOMMANDS.get(program) ?? new Set<string>();
-    const sub = orNull(raw.sub, under(at, 'sub'), exactlyIn(held, subs));
+    // A private program holds no subcommand, so one it sends is set aside, as its flags are refused.
+    const sub = orNull(raw.sub, under(at, 'sub'), (entry, entryAt) => (program === PRIVATE ? unknownValue(held, entryAt, textOf(entry, entryAt)) : nameValue(held, textOf(entry, entryAt), entryAt)));
     const flags = listOf(raw.flags, under(at, 'flags'), (entry, entryAt) => parseFlag(held, entry, entryAt));
     return raw.pulls === undefined ? { program, sub, flags } : { program, sub, flags, pulls: listOf(raw.pulls, under(at, 'pulls'), (entry, entryAt) => parsePull(held, entry, entryAt)) };
   }
@@ -1292,6 +1327,7 @@ const isFloor = (value: unknown): value is number => typeof value === 'number' &
 const isFloors = (value: unknown): value is BundleFloors =>
   isFields(value) && isFloor(value.public) && isFloor(value.disclosure) && (value.families === undefined || (isFields(value.families) && Object.values(value.families).every(isFloor)));
 
+// A bundle states the floor it applied (`floor`, t881), and a client cannot tell which floor a bundle without one applied, so a format 1 bundle with no `floor` is refused as not a bundle this version reads.
 const isBundle = (value: unknown): value is Bundle =>
   isFields(value) && value.format === BUNDLE_FORMAT && typeof value.harness === 'string' && isHarness(value.harness) && typeof value.harnessVersion === 'string' && typeof value.vocabVersion === 'string' && typeof value.floor === 'number' && isFields(value.asOf) && Array.isArray(value.cells) && Array.isArray(value.motifs) && Array.isArray(value.reads) && Array.isArray(value.strata) && (value.floors === undefined || isFloors(value.floors));
 
