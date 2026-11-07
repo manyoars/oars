@@ -268,8 +268,8 @@ export const formatBooks = (rows: readonly BooksRow[], by: BooksBy): string => {
     (row) =>
       `${row.key.padEnd(width)} ${String(row.prompts).padStart(8)} ${usage(row, 'cacheRead').padStart(14)} ${usage(row, 'cacheWrite').padStart(13)} ${usage(row, 'output').padStart(11)} ${usage(row, 'thinking').padStart(10)} ${String(row.wallSec).padStart(9)} ${String(row.turns).padStart(7)} ${String(row.errors).padStart(7)} ${(row.verifyAfterEdit === null ? '-' : `${String(Math.round(row.verifyAfterEdit * 100))}%`).padStart(7)} ${String(row.delegated).padStart(13)} ${shareCell(row.verifyPassed).padStart(8)} ${shareCell(row.stopped).padStart(8)} ${shareCell(row.redone).padStart(8)} ${String(row.commits).padStart(8)} ${String(row.settled).padStart(8)} ${shareCell(row.survived).padStart(8)}`,
   );
-  // A column some prompts did not record is a partial sum (or, at 0, absent): say how many did in a line under the table, so the table's columns stay aligned.
-  const coverage = rows.flatMap((row) => BOOKS_USAGE_FIELDS.filter((field) => row.usageRecorded[field] < row.prompts).map((field) => `${row.key} ${USAGE_LABELS[field]}: ${String(row.usageRecorded[field])} of ${String(row.prompts)} prompts recorded`));
+  // A column some prompts did not record is a partial sum: say how many did in a line under the table (a column no prompt recorded prints n/a and needs no line), so the table's columns stay aligned.
+  const coverage = rows.flatMap((row) => BOOKS_USAGE_FIELDS.filter((field) => row.usageRecorded[field] > 0 && row.usageRecorded[field] < row.prompts).map((field) => `${row.key} ${USAGE_LABELS[field]}: ${String(row.usageRecorded[field])} of ${String(row.prompts)} prompts recorded`));
   return [header, ...lines, ...coverage].join('\n');
 };
 

@@ -273,7 +273,8 @@ describe('books outcome columns', () => {
     expect(line).not.toMatch(/\b0\b.*\bn\/a\b/);
     expect(notes).toContain('m cache read: 1 of 2 prompts recorded');
     expect(notes).toContain('m cache write: 1 of 2 prompts recorded');
-    expect(notes).toContain('m thinking: 0 of 2 prompts recorded');
+    // A column already printing n/a needs no "0 of N" line.
+    expect(notes.join('\n')).not.toContain('thinking');
     expect(notes.join('\n')).not.toContain('output');
     expect(header?.length).toBe(line?.length);
   });
