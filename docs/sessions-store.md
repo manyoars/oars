@@ -975,7 +975,7 @@ fork's copied `msg_<event id>_<seq>` rows (`opencode export` of the same session
   migrates into this database at startup (`packages/core/src/database/v1-migration.bun.ts`), so a store OpenCode has not opened since then is not read.
 - **Mapping.** Three tables are read: `session_v2` (`core/src/session/sql.ts:29`), `session_message` (`:87`, one JSON `data` per message), and `session_part` (`:108`). A `user` message's `text` is a prompt.
   An `assistant` message is one model step: its `text` blocks are the response, its `tool` blocks are calls, `reasoning` is not read. Its content is the `session_part` rows when `part_rows` is on, then any
-  inline content (`session/history.ts:90-125`). A `shell` message is the operator's own `!cmd` and is recorded as a shell call. `synthetic`, `system`, `skill`, `compaction`, `idle`, and the two
+  inline content (`session/history.ts:90-125`). A `shell` message is the operator's own `!cmd` and is recorded as Claude Code records it: an operator turn (a `<bash-input>` user line, then a `<bash-stdout>`/`<bash-stderr>` line for its output), with no tool record, no error line, and no agent turn, so `assistantTurns`, `bashCmds`, and error rates compare. `synthetic`, `system`, `skill`, `compaction`, `idle`, and the two
   `...-switched` agent and model messages are not prompts and are not read. A tool call's name is the part's `name` (`core/src/tool/plugin/*.ts`): `shell` is `Bash`, `edit` and `patch` are `Edit`, `write` is
   `Write`, `read` is `Read`, `grep` and `glob` are `Grep` and `Glob`, each keeping its OpenCode name in `native`, which the action table looks up (`ACTION_TABLES.opencode`). A call's files are `path` for
   `edit`, `write`, and `read`, and the `*** Add|Update|Delete File:` and `*** Move to:` headers of a `patch`'s `patchText`; a relative one is joined to the session's folder, so each file is stored once,
@@ -998,7 +998,7 @@ fork's copied `msg_<event id>_<seq>` rows (`opencode export` of the same session
   `retry` are not read. The harness version is `session_v2.version`.
 - **Known gaps.** An MCP tool is named `<server>_<tool>` (`core/src/tool/runtime.ts:290-293`), the same spelling as a built-in's, so it cannot be told apart and reads as an unknown tool with its name
   withheld (`mcp: null`). A `skill` message (the operator running a skill) is not recorded. A tool another plugin registers has no table row and reads `other`. A database from a build older than 2.x, a channel
-  build's file, and `OPENCODE_DB` are not read. A row whose `data` is not JSON is counted as a bad line. Idempotent per session (`opencode/<id>` in `state.json`, the message count and `time_updated`).
+  build's file, and `OPENCODE_DB` are not read. A row whose `data` is not JSON is counted as a bad line. Idempotent per session (`opencode/<id>` in `state.json`, the message count and the newest `time_updated` of the session, its messages, and its parts, because OpenCode settles a tool call, a `!cmd`, and text in place, `projector.ts:337-339`, `:539-560`, `:1076-1113`, which bump only the message and part rows).
 
 ## The outcome gold set
 
