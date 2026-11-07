@@ -118,7 +118,7 @@ describe('deposits per account', () => {
     }
   }, 60_000);
 
-  it('leaves the account unlimited when the binding is not a positive whole number', async () => {
+  it('takes deposits when the binding is not a positive whole number', async () => {
     const limited = await startPool({ MAX_DEPOSITS_PER_ACCOUNT: 'many' });
     try {
       const token = await signedIn(limited, '4003');
@@ -252,7 +252,7 @@ describe('stored bytes per account', () => {
     }
   }, 60_000);
 
-  it('leaves the account unlimited when the binding is not a positive whole number', async () => {
+  it('takes deposits when the binding is not a positive whole number', async () => {
     const limited = await startPool({ MAX_DEPOSIT_BYTES_PER_ACCOUNT: 'many' });
     try {
       const token = await signedIn(limited, '5004');
