@@ -15,6 +15,7 @@ interface Week {
   cls?: BaselinePrompt['cls'];
   status?: BaselineTool['status'];
   usage?: Partial<BaselinePrompt['usage']>;
+  usageObserved?: BaselinePrompt['usageObserved'];
   turns?: number;
 }
 
@@ -29,7 +30,7 @@ const fixture = (weeks: readonly Week[]): { sessions: BaselineSession[]; tools: 
     const session = `s${String(index)}`;
     sessions.push({ session, tsFirst: `${week.start}T12:00:00.000Z`, tools: week.mix ?? { Read: week.calls }, ...(week.harness === undefined ? {} : { harness: week.harness }) });
     tools.push({ session, status: week.status ?? 'ok', durationMs: week.durationMs === undefined ? 50 : week.durationMs });
-    prompts.push({ session, wallSec: week.wallSec ?? 10, cls: week.cls ?? 'mixed', turns: week.turns ?? 4, usage: { ...usage, ...week.usage } });
+    prompts.push({ session, wallSec: week.wallSec ?? 10, cls: week.cls ?? 'mixed', turns: week.turns ?? 4, usage: { ...usage, ...week.usage }, ...(week.usageObserved === undefined ? {} : { usageObserved: week.usageObserved }) });
   });
   return { sessions, tools, prompts };
 };
@@ -229,6 +230,16 @@ describe('selfBaseline', () => {
       // The same output over more turns is a lower rate: 4000 over 8 turns is 500, also an edge, so the upper bin of [500, 1000).
       expect(across('output per turn', at(4000), at(4000), { ...at(4000), turns: 8 })).toBe(1);
       expect(across('output per turn', { ...at(4000), turns: 8 }, { ...at(4000), turns: 8 }, { ...at(4000), turns: 8 })).toBe(0);
+    });
+
+    it('adds no count for a category the source never recorded, whatever the placeholder beside it holds', () => {
+      const dimensions = (week: Partial<Week>): string[] => last([...BASE, { start: '2026-06-01', calls: 1000, ...week }])?.distances.map((entry) => entry.dimension) ?? [];
+      // The usage numbers are nonzero placeholders: only usageObserved says what was measured.
+      expect(dimensions({ usageObserved: ['output'] })).not.toContain('cache-read share');
+      expect(dimensions({ usageObserved: ['output'] })).toContain('output per turn');
+      expect(dimensions({ usageObserved: ['input', 'cacheWrite', 'cacheRead'] })).toContain('cache-read share');
+      expect(dimensions({ usageObserved: ['input', 'cacheWrite', 'cacheRead'] })).not.toContain('output per turn');
+      expect(dimensions({ usageObserved: [] })).toEqual(['tool mix', 'status', 'durationMs', 'wallSec', 'prompt class']);
     });
 
     it('adds no count for zero input or zero turns, so those dimensions are dropped for the week', () => {

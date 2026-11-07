@@ -34,7 +34,7 @@ export type Family = (typeof FAMILIES)[number];
 export const METHODS: { readonly [family in Family]: { readonly name: string; readonly version: string } } = {
   recovery: { name: 'signature-record', version: '2' },
   fit: { name: 'failure-rate', version: '2' },
-  cost: { name: 'per-prompt-by-class', version: '1' },
+  cost: { name: 'per-prompt-by-class', version: '2' },
   change: { name: 'share-in-version-bucket', version: '2' },
   live: { name: 'day-against-trailing-week', version: '2' },
   adoption: { name: 'share-and-span', version: '2' },
