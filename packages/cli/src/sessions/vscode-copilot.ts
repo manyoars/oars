@@ -31,6 +31,7 @@
 //                    `hiddenFromTranscript` is the harness writing, not the operator, and its prompt is not read; its response still is
 //   timestamp        epoch milliseconds, `responseTimestamp` for the response. A missing or implausible one is never made up: the time carries forward
 //   modelId          the model
+//   agent            `agent.extensionVersion` (participants/chatAgents.ts:71) is the Copilot Chat extension's version, the harness version: the newest request that names one
 //   response[]       a markdown part is a bare `{value}` (a string in the old format); `kind:'thinking'` is skipped;
 //                    `kind:'toolInvocationSerialized'` is a tool call (chatService/chatService.ts:1246-1270); `kind:'textEditGroup'` or `'notebookEditGroup'` `{uri}` is a file edited
 //   usage            `completionTokens` on the request, the whole turn's output (model/chatModel.ts:1929-1934, 2086), and `modelTotals[{model, inputTokens, cachedTokens, outputTokens}]`
@@ -240,6 +241,9 @@ export const chatLines = (data: Obj, fallbackId: string, folder: string | null):
   };
   for (const request of requests) {
     const when = stamp(request.timestamp);
+    // The extension's version, from the agent VS Code serialized beside the request (ISerializableChatAgentData.extensionVersion); a later request supersedes.
+    const extensionVersion = isObj(request.agent) ? str(request.agent.extensionVersion) : undefined;
+    if (extensionVersion !== undefined) base.version = extensionVersion;
     const message = request.message;
     const text = typeof message === 'string' ? str(message) : isObj(message) ? str(message.text) : undefined;
     const hidden = request.isSystemInitiated === true || request.requestHiddenFromTranscript === true || request.hiddenFromTranscript === true;
