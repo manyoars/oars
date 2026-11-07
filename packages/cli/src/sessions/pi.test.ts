@@ -180,7 +180,11 @@ describe('the Pi reader', () => {
     expect(usages[2]).toMatchObject({ input_tokens: 0, output_tokens: 12, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 });
     expect(new Set(assistant.map((entry) => entry.requestId)).size).toBe(3);
     expect(assistant.every((entry) => typeof entry.requestId === 'string' && entry.requestId !== '')).toBe(true);
-    expect(extractOf(chain(prompt(1, 'hi'), say(2, 'hello', { usage: undefined }))).session.usage).toMatchObject({ input: 0, output: 0 });
+    // t891: a missing figure is missing, not zero. The placeholder zeros in `usage` are not an observation.
+    const bare = extractOf(chain(prompt(1, 'hi'), say(2, 'hello', { usage: undefined }))).session;
+    expect(bare.usage).toMatchObject({ input: 0, output: 0 });
+    expect(bare.usageObserved).toEqual([]);
+    expect(bare.usageResponses).toBe(0);
   });
 
   it('captures a session from a folder that is not a repository, and puts the header’s cwd on every line', () => {
@@ -300,13 +304,15 @@ describe('the Pi reader', () => {
     expect(out.session.usage).toMatchObject({ input: 20, output: 10 });
   });
 
-  it('counts an image-only prompt as a turn without keeping the image, and joins a prompt’s text blocks', () => {
+  it('keeps an image-only prompt as a line, not a counted turn, without keeping the image, and joins a prompt’s text blocks', () => {
     const lines = linesOf(chain(prompt(1, [{ type: 'image', data: 'AAAA', mimeType: 'image/png' }]), say(2, 'a picture'), prompt(3, [{ type: 'text', text: 'one' }, { type: 'text', text: 'two' }, { type: 'image', data: 'BBBB', mimeType: 'image/png' }]), say(4, 'ok')));
     const users = lines.filter((entry) => entry.type === 'user');
     expect(users).toHaveLength(2);
     expect(JSON.stringify(lines)).not.toContain('AAAA');
     expect(JSON.stringify(lines)).not.toContain('BBBB');
     expect(JSON.stringify(users[1]?.message)).toContain('one\\ntwo');
+    // The line is kept, but capture's turn count wants prompt text (`firstNonEmptyText`, as for a Claude Code or Grok Build image-only prompt), so only the second prompt is a turn.
+    expect(capture(lines.map((entry) => JSON.stringify(entry)).join('\n')).session.userTurns).toBe(1);
   });
 
   it('reads the user’s own !cmd (a bashExecution message) as a shell call with its real exit code', () => {
@@ -316,6 +322,16 @@ describe('the Pi reader', () => {
     expect(out.tools.map((tool) => [tool.tool, tool.status])).toEqual([['Bash', 'ok'], ['Bash', 'error'], ['Bash', 'error'], ['Bash', 'error']]);
     expect(out.errorLines.map((error) => error.line)).toEqual(['it failed', 'Command cancelled', 'unknown']);
     expect(out.session.userTurns).toBe(1);
+  });
+
+  it('keeps a !cmd typed before any prompt: a Bash error, no extra user turn, and no usage from the synthetic response', () => {
+    const events = chain(message(1, { role: 'bashExecution', command: 'git status', output: 'fatal: not a git repository', exitCode: 1, cancelled: false, truncated: false }), prompt(2, 'hi'), say(3, 'hello', { usage: usageOf(10, 5) }));
+    const out = extractOf(events);
+    expect(out.tools.map((tool) => [tool.tool, tool.status])).toEqual([['Bash', 'error']]);
+    expect(out.session.userTurns).toBe(1);
+    expect(out.session.usage).toMatchObject({ input: 10, output: 5 });
+    expect(out.session.usageResponses).toBe(1);
+    expect(out.session.models).toEqual({ 'claude-sonnet-4-5': 1 });
   });
 
   it('names an MCP tool the way Pi registers it, mcp__<server>__<tool>, and keeps an unlisted tool under its own name', () => {

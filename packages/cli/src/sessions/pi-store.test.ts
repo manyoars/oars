@@ -132,6 +132,17 @@ describe('depositing the Pi source', () => {
     expect([...verifyAll(skeletons), ...verifyCaptured(store.sessions, store.tools)].filter((result) => result.violations > 0)).toEqual([]);
   });
 
+  it('holds every verify invariant, including --strict, for a session that opens with the operator’s own !cmd before any prompt', async () => {
+    const s = staged();
+    const bang = piEntry('message', 'e1', null, at(1), { message: { role: 'bashExecution', command: 'git status', output: 'fatal: not a git repository', exitCode: 1, cancelled: false, truncated: false, timestamp: BASE + 1000 } });
+    stagePi(s.root, [{ id: C, cwd: '/x', lines: [piHeader({ id: C, cwd: '/x' }), bang, user('e2', 'e1', 2, 'hi'), assistant('e3', 'e2', 3, [{ type: 'text', text: 'hello' }])] }]);
+    await deposit(s.runtime, options(['pi']));
+    const { skeletons } = await readSkeletons(s.storeDir);
+    const store = await loadStore(s.storeDir);
+    expect(store.tools.map((tool) => [tool.tool, tool.status])).toContainEqual(['Bash', 'error']);
+    expect([...verifyAll(skeletons), ...verifyCaptured(store.sessions, store.tools)].filter((result) => result.violations > 0)).toEqual([]);
+  });
+
   it('skips silently when the runtime names no Pi folder or the folder does not exist', async () => {
     const s = staged();
     expect(await deposit({ ...s.runtime, sourceRoots: {} }, options(['pi']))).toMatchObject({ sessions: 0 });
