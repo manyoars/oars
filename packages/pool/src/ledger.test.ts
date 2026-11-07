@@ -123,7 +123,7 @@ const onlyRollupCron = (body: string): boolean => {
   return arrays.length === (body.match(/"crons"/g) ?? []).length && arrays.every((one) => one === ROLLUP_CRONS);
 };
 const ROLLUP_FILES = ['src/telemetry-rollup.ts', 'src/telemetry-fleet.ts'];
-const LEDGER_NAME = /b(?:deposits|contributors|raw_objects)b/i;
+const LEDGER_NAME = /\b(?:deposits|contributors|raw_objects)\b/i;
 
 /** What in `files` (name to text) would delete from the ledger or run it on a schedule. */
 const offences = (files: { [name: string]: string }): string[] =>
