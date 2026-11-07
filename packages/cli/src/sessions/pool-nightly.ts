@@ -5,8 +5,9 @@ import { writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { RunDeps } from '../cli.js';
 import { ask, DEPOSIT, isObject, networkSender, poolDeposit, poolServer, postBatch, postRaw, runtimeOf, signedIn, textIn, vocabularyExpired, type Sender } from './pool-command.js';
-import { heldBatches, outboxFolder } from './pool-outbox.js';
+import { heldBatches, lockedBatch, outboxFolder } from './pool-outbox.js';
 import { heldRaw } from './pool-raw.js';
+import { withSendLock } from './pool-send-lock.js';
 import { markSent, sentHashes } from './pool-sent.js';
 import { readState } from './store.js';
 
@@ -47,26 +48,32 @@ const night = async (deps: RunDeps, net: Sender, tally: NightlyPool): Promise<Ni
   }
   if (vocabularyExpired(deps) !== undefined) return none('failed');
   if (!(await accepted(deps, server, token, net))) return none('not-accepted');
-  // The outbox is built only for an account that has accepted, then sent: the same gates `oars pool deposit` runs, so nothing queues that a person could not print.
-  await poolDeposit(deps, { server });
   const outbox = outboxFolder(storeDir, server);
-  const done = await sentHashes(outbox);
   tally.outcome = 'sent';
-  for (const batch of (await heldBatches(outbox)).batches) {
-    if (done.has(batch.hash)) continue;
-    await postBatch(deps, { server, token, bytes: batch.bytes, hash: batch.hash, via: net });
-    await markSent(outbox, batch.hash, deps.now());
-    tally.batches += 1;
-  }
-  // Raw goes only with its own yes, read again here so an answer changed since the build wins.
-  if ((await readState(storeDir)).pool.rawConsent === 'granted') {
-    for (const copy of (await heldRaw(outbox)).copies) {
-      if (done.has(copy.hash) || copy.bytes === 0) continue;
-      await postRaw(deps, { server, token, hash: copy.hash, body: copy.body, bytes: copy.bytes, via: net });
-      await markSent(outbox, copy.hash, deps.now());
-      tally.raw += 1;
+  // One sender at a time per outbox, the lock `deposit --send` takes: a second run waits, then finds `sent.log` full and sends nothing twice.
+  await withSendLock(outbox, async () => {
+    // The outbox is built only for an account that has accepted, then sent: the same gates `oars pool deposit` runs, so nothing queues that a person could not print.
+    await poolDeposit(deps, { server });
+    const done = await sentHashes(outbox);
+    for (const batch of (await heldBatches(outbox)).batches) {
+      if (done.has(batch.hash)) continue;
+      // Acceptance is the consent, so nothing was printed first; the file is still read and hashed again just before the request.
+      const locked = await lockedBatch(outbox, batch.hash, { requireShown: false });
+      if (!locked.ok) continue;
+      await postBatch(deps, { server, token, bytes: locked.bytes, hash: batch.hash, via: net });
+      await markSent(outbox, batch.hash, deps.now());
+      tally.batches += 1;
     }
-  }
+    // Raw goes only with its own yes, read again here so an answer changed since the build wins.
+    if ((await readState(storeDir)).pool.rawConsent === 'granted') {
+      for (const copy of (await heldRaw(outbox)).copies) {
+        if (done.has(copy.hash) || copy.bytes === 0) continue;
+        await postRaw(deps, { server, token, hash: copy.hash, body: copy.body, bytes: copy.bytes, via: net });
+        await markSent(outbox, copy.hash, deps.now());
+        tally.raw += 1;
+      }
+    }
+  });
   return tally;
 };
 

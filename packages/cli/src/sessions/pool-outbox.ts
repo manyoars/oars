@@ -257,12 +257,15 @@ const wasShown = async (outbox: string, hash: string): Promise<boolean> => {
 
 export type LockRefusal = 'batch_unknown' | 'batch_not_shown' | 'batch_changed';
 
-/** The lock on `deposit --send`: a batch goes only if it is in the outbox, its hash was printed, and its file still hashes to that hash. The first check that fails names why. */
-export const lockedBatch = async (outbox: string, hash: string, stamp: string = currentStamp()): Promise<{ ok: true; file: string; bytes: string } | { ok: false; code: LockRefusal }> => {
-  const folder = join(outbox, stamp);
+/**
+ * The lock on a send: a batch goes only if it is in the outbox, its hash was printed, and its file still hashes to that hash. The first check that fails names why. The nightly task sends with `requireShown: false`,
+ * because covenant acceptance is its consent and it prints nothing; the other two checks still hold.
+ */
+export const lockedBatch = async (outbox: string, hash: string, options: { stamp?: string; requireShown?: boolean } = {}): Promise<{ ok: true; file: string; bytes: string } | { ok: false; code: LockRefusal }> => {
+  const folder = join(outbox, options.stamp ?? currentStamp());
   const name = (await namesIn(folder)).find((entry) => BATCH_FILE.exec(entry)?.[2] === hash);
   if (name === undefined) return { ok: false, code: 'batch_unknown' };
-  if (!(await wasShown(outbox, hash))) return { ok: false, code: 'batch_not_shown' };
+  if (options.requireShown !== false && !(await wasShown(outbox, hash))) return { ok: false, code: 'batch_not_shown' };
   const file = join(folder, name);
   const bytes = await unchangedBytes(file, hash);
   return bytes === undefined ? { ok: false, code: 'batch_changed' } : { ok: true, file, bytes };

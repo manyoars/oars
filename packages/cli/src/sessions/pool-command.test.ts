@@ -12,6 +12,7 @@ import { harness, server, useServer, type Harness } from '../test-support.js';
 import { DEFAULT_POOL_URL, networkSender, poolDeposit, poolServer, type Reply, type Sender } from './pool-command.js';
 import { batchHash, canonicalBytes, FIELD_ROWS, fieldsOf, outboxFolder, writeBatch } from './pool-outbox.js';
 import { markSent, sentHashes } from './pool-sent.js';
+import { withSendLock } from './pool-send-lock.js';
 import type { Outgoing } from './pool-print.js';
 import { REGISTRY_MAX_AGE_DAYS, VOCAB_SNAPSHOT_DATE } from './public-vocabulary.js';
 import type * as PoolWire from './pool-wire.js';
@@ -2163,6 +2164,56 @@ describe('oars pool deposit: the raw copy (t884)', () => {
     scene.h.out.length = 0;
     await scene.cli('pool', 'outbox', '--explain', '--server', POOL);
     expect(scene.h.out.join('')).toContain(body.slice(0, 200));
+  });
+});
+
+describe('oars pool deposit --send holds the send lock (t884 fix round)', () => {
+  it('waits while another run holds the lock, sends once it is released, and gives up with send_locked when the lock stays held', async () => {
+    const scene = await batched();
+    expect(await scene.cli('pool', 'outbox', '--server', POOL)).toBe(ExitCode.OK);
+    const hash = printedHashes(scene)[0] ?? '';
+    const outbox = outboxFolder(scene.staged.storeDir, POOL);
+    const pool = wire({ 'GET /v1/covenant': OPEN_COVENANT, 'POST /v1/deposits': answer(201, { ok: true }) });
+    let release: () => void = () => undefined;
+    let taken: () => void = () => undefined;
+    const held = new Promise<void>((resolve) => {
+      taken = resolve;
+    });
+    const holder = withSendLock(outbox, () => new Promise<void>((resolve) => {
+      release = resolve;
+      taken();
+    }));
+    await held;
+    const sending = poolDeposit(scene.h.deps, sendOptions(hash, pool.via));
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    expect(pool.requests).toEqual([]);
+    release();
+    await holder;
+    expect(await sending).toMatchObject({ document: { ok: true, hash, sent: true } });
+    expect(pool.requests.filter((request) => request.method === 'POST')).toHaveLength(1);
+  });
+
+  it('refuses with send_locked when a fresh lock stays held past the wait', async () => {
+    const scene = await batched();
+    expect(await scene.cli('pool', 'outbox', '--server', POOL)).toBe(ExitCode.OK);
+    const hash = printedHashes(scene)[0] ?? '';
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      const outbox = outboxFolder(scene.staged.storeDir, POOL);
+      mkdirSync(outbox, { recursive: true });
+      writeFileSync(join(outbox, 'send.lock'), '');
+      const pool = wire({ 'GET /v1/covenant': OPEN_COVENANT, 'POST /v1/deposits': answer(201, { ok: true }) });
+      const sending = poolDeposit(scene.h.deps, sendOptions(hash, pool.via));
+      // The lock waits on the wall clock, so the test moves a clock that only Date reads, a minute at a time, until the wait is over.
+      const clock = setInterval(() => {
+        vi.setSystemTime(Date.now() + 60_000);
+      }, 10);
+      const failed = await sending.catch((error: unknown) => error).finally(() => clearInterval(clock));
+      expect(failed).toMatchObject({ exitCode: ExitCode.CONFLICT, problem: { code: 'send_locked' } });
+      expect(pool.requests).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

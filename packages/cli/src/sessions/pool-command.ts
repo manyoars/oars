@@ -15,6 +15,7 @@ import { carriedDeltas, markDeltasSent, placedOf, sentDeltas } from './pool-delt
 import { Masker, printed, TRANSPORT_HEADERS, waitWords, type Outgoing } from './pool-print.js';
 import { rawAllowed, sendsOf } from './pool-choices.js';
 import { heldRaw, rawParts, removeRawExcept, writeRaw } from './pool-raw.js';
+import { SendLockBusy, withSendLock } from './pool-send-lock.js';
 import { markSent, sentLog } from './pool-sent.js';
 import { shellReader } from './projection.js';
 import { isVocabularyExpired, REGISTRY_MAX_AGE_DAYS, VOCAB_SNAPSHOT_DATE } from './public-vocabulary.js';
@@ -426,25 +427,27 @@ export const postRaw = async (deps: RunDeps, options: { server: string; token: s
   if (done.status !== 200 && done.status !== 201) throw refusal(DEPOSIT, done);
 };
 
-/** `deposit --send <hash>`: the lock, then the covenant (accepted here or before, or nothing is sent), then the request. The body is read and hashed again just before the request. */
+/** `deposit --send <hash>`: the send lock the nightly task takes too, then the batch lock, then the covenant (accepted here or before, or nothing is sent), then the request. The body is read and hashed again just before the request. */
 const sendBatch = async (deps: RunDeps, options: { outbox: string; server: string; token: string; hash: string; acceptCovenant: string | undefined; via: Sender | undefined }): Promise<Outcome> => {
   const { outbox, server, token, hash } = options;
   const via = options.via ?? networkSender(deps, DEPOSIT);
   if (!/^[0-9a-f]{64}$/.test(hash)) throw usage('--send takes the SHA-256 that oars pool outbox printed: 64 hexadecimal characters.', DEPOSIT);
-  const locked = await lockedBatch(outbox, hash);
-  if (!locked.ok) {
-    const title = lockMessages[locked.code];
-    throw new CliError(title, ExitCode.CONFLICT, DEPOSIT, { code: locked.code, title, status: 409 });
+  const refuse = (code: string, title: string): CliError => new CliError(title, ExitCode.CONFLICT, DEPOSIT, { code, title, status: 409 });
+  try {
+    return await withSendLock(outbox, async () => {
+      const locked = await lockedBatch(outbox, hash);
+      if (!locked.ok) throw refuse(locked.code, lockMessages[locked.code]);
+      await openCovenant(deps, server, token, options.acceptCovenant, via);
+      const bytes = await unchangedBytes(locked.file, hash);
+      if (bytes === undefined) throw refuse('batch_changed', lockMessages.batch_changed);
+      await postBatch(deps, { server, token, bytes, hash, via });
+      await markSent(outbox, hash, deps.now());
+      return { document: { ok: true, server, hash, sent: true }, text: `Sent batch ${hash} to ${server}.` };
+    });
+  } catch (error) {
+    if (error instanceof SendLockBusy) throw refuse('send_locked', 'Another oars run is sending from this outbox. Try again in a minute.');
+    throw error;
   }
-  await openCovenant(deps, server, token, options.acceptCovenant, via);
-  const bytes = await unchangedBytes(locked.file, hash);
-  if (bytes === undefined) {
-    const title = lockMessages.batch_changed;
-    throw new CliError(title, ExitCode.CONFLICT, DEPOSIT, { code: 'batch_changed', title, status: 409 });
-  }
-  await postBatch(deps, { server, token, bytes, hash, via });
-  await markSent(outbox, hash, deps.now());
-  return { document: { ok: true, server, hash, sent: true }, text: `Sent batch ${hash} to ${server}.` };
 };
 
 /**
