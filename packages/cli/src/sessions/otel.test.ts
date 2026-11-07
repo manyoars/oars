@@ -124,6 +124,17 @@ describe('a single-agent trace with two tool calls', () => {
     expect(linesOf(other.transcript(present(other.sessions[0]))).every((line) => line.version === 'other')).toBe(true);
   });
 
+  it('names google-adk for a scope that has adk as a word, and not for one that merely contains it', async () => {
+    const versionOf = async (scope: string): Promise<unknown> => {
+      const dir = stageOtel(stage().root, [{ name: 'x.jsonl', lines: [otlpRequest(single(), scope)] }]);
+      const store = present(await openOtelStore(dir));
+      return linesOf(store.transcript(present(store.sessions[0])))[0]?.version;
+    };
+    expect(await versionOf('opentelemetry.instrumentation.adk')).toBe('google-adk');
+    expect(await versionOf('google.adk')).toBe('google-adk');
+    expect(await versionOf('acme.shadkow.tracer')).toBe('other');
+  });
+
   it('records no working folder or repository', async () => {
     const out = capture(textOf(await open([{ name: 'a.jsonl', spans: single() }]), T));
     expect(linesOf(textOf(await open([{ name: 'a.jsonl', spans: single() }]), T)).some((line) => 'cwd' in line)).toBe(false);
@@ -276,6 +287,18 @@ describe('what the conventions leave out or mark unstable', () => {
     expect(capture(textOf(await open([{ name: 'a.jsonl', spans }]), T)).prompts[0]?.head).toBe('as text');
   });
 
+  it('dates a first unit with no time of its own by the earliest timed span it holds, not 1970', async () => {
+    const spans = [
+      span({ trace: T, id: sp(1), name: 'invoke_agent support', attrs: { 'gen_ai.operation.name': 'invoke_agent', 'gen_ai.input.messages': user('go') } }),
+      span({ trace: T, id: sp(2), parent: sp(1), name: 'chat m', start: 5, end: 6, attrs: { 'gen_ai.operation.name': 'chat' } }),
+      span({ trace: T, id: sp(3), parent: sp(1), name: 'execute_tool t', start: 7, end: 8, attrs: { 'gen_ai.operation.name': 'execute_tool', 'gen_ai.tool.name': 't' } }),
+    ];
+    const lines = linesOf(textOf(await open([{ name: 'a.jsonl', spans }]), T));
+    const first = lines.find((line) => line.type === 'user');
+    expect(first?.timestamp).toBe('2026-06-01T10:00:05.000Z');
+    expect(lines.every((line) => typeof line.timestamp === 'string' && !line.timestamp.startsWith('1970'))).toBe(true);
+  });
+
   it('gives a missing time the latest one so far, and reads a trace with no agent span from its root', async () => {
     const spans = [
       span({ trace: T, id: sp(1), name: 'workflow', start: 10, end: 20, attrs: { 'gen_ai.input.messages': user('go') } }),
@@ -316,4 +339,55 @@ describe('where it reads from', () => {
   it('returns nothing for a folder that does not exist', async () => {
     expect(await openOtelStore(join(stage().root, 'nowhere'))).toBeUndefined();
   });
+});
+
+describe('a file with torn lines', () => {
+  const folder = (files: { name: string; lines: readonly unknown[] | string }[]) => openOtelStore(stageOtel(stage().root, files));
+  const request = (spans: readonly object[]): string => JSON.stringify(otlpRequest(spans));
+  // Capture counts a transcript line that is not a JSON object as a bad line, so the count is those lines of the session's transcript.
+  const badLines = (store: NonNullable<Awaited<ReturnType<typeof folder>>>, id: string): number => textOf(store, id).split('\n').filter((raw) => raw !== '' && !raw.startsWith('{"')).length;
+
+  it('counts them on a session that came from that file, not on the oldest session of another file', async () => {
+    const store = await folder([
+      { name: 'a.jsonl', lines: `${request(single())}\n` },
+      { name: 'b.jsonl', lines: `${request([agent(T2, 1, undefined, 100, 112, 'later')])}\n{torn\n` },
+    ]);
+    if (store === undefined) throw new Error('no store');
+    expect(store.sessions.map((found) => found.id)).toEqual([T, T2]);
+    expect(badLines(store, T)).toBe(0);
+    expect(badLines(store, T2)).toBe(1);
+    expect(store.unreadable).toEqual([]);
+  });
+
+  it('names the file in unreadable, with its line count, when no session came from it', async () => {
+    const store = await folder([
+      { name: 'a.jsonl', lines: `${request(single())}\n` },
+      { name: 'b.jsonl', lines: `${request([])}\n{torn\nalso torn\n` },
+    ]);
+    if (store === undefined) throw new Error('no store');
+    expect(badLines(store, T)).toBe(0);
+    expect(store.unreadable).toHaveLength(1);
+    expect(store.unreadable[0]?.file.endsWith('b.jsonl')).toBe(true);
+    expect(store.unreadable[0]?.reason).toBe('2 lines are not JSON');
+  });
+});
+
+describe('a folder that grows', () => {
+  it('reads 2,000 traces of 10 spans each, with a nested agent each, into 4,000 sessions in under two seconds', async () => {
+    const spans: object[] = [];
+    for (let n = 0; n < 2000; n += 1) {
+      const trace = n.toString(16).padStart(32, '0');
+      const at = n * 100;
+      spans.push(agent(trace, 1, undefined, at, at + 50, `question ${String(n)}`));
+      for (let k = 0; k < 4; k += 1) {
+        spans.push(chat(trace, 2 + k * 2, 1, at + k * 10, at + k * 10 + 4, { 'gen_ai.usage.input_tokens': 10, 'gen_ai.usage.output_tokens': 2 }));
+        spans.push(tool(trace, 3 + k * 2, 1, at + k * 10 + 4, at + k * 10 + 8, 'lookup', { 'gen_ai.tool.call.id': `c${String(k)}` }));
+      }
+      spans.push(agent(trace, 20, 1, at + 41, at + 49, undefined, { 'gen_ai.agent.name': 'helper' }));
+    }
+    const started = Date.now();
+    const store = await open([{ name: 'big.jsonl', spans }]);
+    expect(store.sessions).toHaveLength(4000);
+    expect(Date.now() - started).toBeLessThan(2000);
+  }, 30000);
 });
