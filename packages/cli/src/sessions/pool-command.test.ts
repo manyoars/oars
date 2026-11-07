@@ -2281,6 +2281,11 @@ describe('wire policing in telemetry', () => {
       { sent: 1, status: 201, bytes: Buffer.byteLength(bytes) },
       { sent: 0, status: 500, code: 'boom', bytes: Buffer.byteLength(bytes) },
     ]);
+    // A last part answered 202 never completed the deposit: it ends the batch, records 202, and is refused.
+    const unfinished = wire({ 'GET /v1/covenant': OPEN_COVENANT, 'POST /v1/deposits': [answer(202, { ok: true }), answer(202, { ok: true }), answer(202, { ok: true })] });
+    await expect(poolDeposit(scene.h.deps, sendOptions(hash, unfinished.via))).rejects.toMatchObject({ problem: { status: 202 } });
+    expect(unfinished.requests.filter((request) => request.method === 'POST')).toHaveLength(3);
+    expect(spooled(dir, 'wire-send').map((event) => event.data).at(-1)).toEqual({ sent: 0, status: 202, bytes: Buffer.byteLength(bytes) });
   });
 
   it('records nothing without a telemetry folder, and a send still raises what it did', async () => {
