@@ -596,7 +596,10 @@ export const poolFetch = async (deps: RunDeps, options: { server?: string | unde
   }
   if (reply.status === 304) {
     // A 304 answers an If-None-Match, so one to a fetch that sent none is a pool that has lost track of what it was asked.
-    if (kept?.etag === undefined) throw new CliError('The pool answered 304 to a fetch that named no kept bundle.', ExitCode.UNEXPECTED, FETCH);
+    if (kept?.etag === undefined) {
+      emit('fetch', { harness, fetches: 1 });
+      throw new CliError('The pool answered 304 to a fetch that named no kept bundle.', ExitCode.UNEXPECTED, FETCH);
+    }
     const { cells, motifs, reads, asOf } = kept.bundle;
     emit('fetch', { harness, fetches: 1, etagHits: 1, reads: reads.length });
     return {
