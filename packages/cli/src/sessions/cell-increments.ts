@@ -2,6 +2,7 @@
 // increments with `incrementsOf`, and a local read derives its cells with `cellsOf` over the store it holds, projected the way a deposit projects it (`projectedStore`). Both end in the
 // one `cellsOf`, so a session gives the same cells at the pool and on the machine. This file reads no file system: the pool's Worker bundles it.
 
+import { ARG_CLASSES } from './call-shape.js';
 import { bucketFields, deriveCells, ENVIRONMENT_BUCKET, isEnvironmentCell, type CellSet, type Grain } from './cells.js';
 import type { Motif } from './motif.js';
 import { bucketOf, floorOf, OTHER, projectedSteps, type SessionSkeleton, type ShellReader, type SkeletonFrame, type SkeletonPrompt, type SkeletonTool, type SkeletonTranscript } from './pool-wire.js';
@@ -209,7 +210,7 @@ const stepPlaces = ({ tools }: SkeletonTranscript): { n: number; seg: number }[]
 const toolRecords = (id: string, main: string, transcript: KnownTranscript, spawner: SkeletonTranscript | null): ToolObservation[] => {
   const own = stepPlaces(transcript);
   const spawning = spawner === null ? [] : stepPlaces(spawner);
-  return transcript.tools.map(({ side, prompt, status, durationMs, errorCode, steps }, n) => ({
+  return transcript.tools.map(({ side, prompt, status, durationMs, errorCode, keys, targetClass, argClass, steps }, n) => ({
     kind: 'tool',
     cv: '',
     sid: '',
@@ -223,7 +224,10 @@ const toolRecords = (id: string, main: string, transcript: KnownTranscript, spaw
     status: statusOf(status),
     target: null,
     targetBase: null,
-    keys: [],
+    // The names the wire carried, which are the only ones a skeleton-derived store ever holds; `keysDropped` is a count of names not sent and has no stored form.
+    keys: keys ?? [],
+    ...(targetClass === undefined ? {} : { targetClass }),
+    ...(argClass === undefined ? {} : { argClass: ARG_CLASSES.filter((kind) => argClass.includes(kind)).sort() }),
     durationMs,
     toolUseId: '',
     harnessVersion: null,
