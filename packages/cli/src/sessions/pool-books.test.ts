@@ -27,7 +27,9 @@ describe('lastFetchedBundle', () => {
 
   it('reads a signed bundle whose books block is malformed as no bundle, not as a crash in the printer', async () => {
     const signer = await pair();
-    await keep(dir, bundleOf({ ...booksOf(), served: 7 } as never), signer);
+    const books = booksOf();
+    Reflect.set(books, 'served', 7);
+    await keep(dir, bundleOf(books), signer);
     expect(await lastFetchedBundle(dir)).toBeUndefined();
   });
 
