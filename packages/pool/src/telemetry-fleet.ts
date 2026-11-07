@@ -108,13 +108,23 @@ const publicFloorOf = (env: Env): number =>
 /** The last day the nightly run has rolled up as a whole: yesterday, UTC. */
 export const asOfDay = (now: number): string => shiftDay(dayOf(now), -1);
 
-/** `GET /v1/telemetry/fleet`: both windows, ending yesterday. No sign-in and no query: the read depends on nothing the caller sends. */
-export const fleet = async (env: Env, now: number): Promise<Response> => {
+/**
+ * How long an anonymous fleet read may be reused: one hour. The answer only moves when the nightly rollup lands (once a day, and `asOf` is
+ * yesterday), so an hour of staleness shows nobody a different number for long, and a cache in front of the Worker turns a burst of anonymous
+ * reads into at most one D1 read an hour.
+ */
+export const FLEET_MAX_AGE_SECONDS = 3600;
+
+/**
+ * `GET /v1/telemetry/fleet`: both windows, ending yesterday. No query is read, and the answer is the same whoever asks. An anonymous read
+ * (`anonymous`) may be shared and reused for `FLEET_MAX_AGE_SECONDS`; a read that carries a credential is never stored by a shared cache.
+ */
+export const fleet = async (env: Env, now: number, anonymous = true): Promise<Response> => {
   const asOf = asOfDay(now);
   const floor = publicFloorOf(env);
   const rows = await rowsBetween(env, shiftDay(asOf, 1 - Math.max(...WINDOWS)), asOf);
   const windows = WINDOWS.map((days) => ({ days, cells: fleetCells(rows.filter((row) => row.day >= shiftDay(asOf, 1 - days)), floor) }));
-  return answer(200, { asOf, floor, windows });
+  return answer(200, { asOf, floor, windows }, { 'cache-control': anonymous ? `public, max-age=${FLEET_MAX_AGE_SECONDS}` : 'private, no-store' });
 };
 
 // The measurables (conclusion section 15): are installs reporting, and since when has the fleet read been served.

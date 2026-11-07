@@ -64,8 +64,9 @@ export interface Env {
   MAX_DEPOSIT_BYTES_PER_ACCOUNT?: string;
 }
 
-/** The response headers this worker sets: the ETag of a bundle and the `Retry-After` of a spent cap. */
+/** The response headers this worker sets: the ETag of a bundle, the `Retry-After` of a spent cap, and the `Cache-Control` of the fleet read. */
 export interface AnswerHeaders {
+  'cache-control'?: string;
   etag?: string;
   'retry-after'?: string;
 }
