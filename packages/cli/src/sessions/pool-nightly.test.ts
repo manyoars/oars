@@ -328,24 +328,26 @@ describe('withSendLock', () => {
       // The holder's refresh timer exists once its body runs.
       while (inside === 0) await pause();
       const started = Date.now();
-      let outcome: unknown = 'waiting';
+      const outcome: { settled: boolean; error: unknown } = { settled: false, error: undefined };
+      const settled = (): boolean => outcome.settled;
       const second = withSendLock(outbox, () => body(Promise.resolve()), times).then(
         () => {
-          outcome = 'ran';
+          outcome.settled = true;
         },
         (error: unknown) => {
-          outcome = error;
+          outcome.settled = true;
+          outcome.error = error;
         },
       );
       // One refresh interval (a quarter of staleMs) per step; wait for each refresh to land before the next step, so only the fake clock decides how old the lock looks.
-      for (let step = 0; step < 100 && outcome === 'waiting'; step += 1) {
+      for (let step = 0; step < 100 && !settled(); step += 1) {
         const before = statSync(lock).mtimeMs;
         await vi.advanceTimersByTimeAsync(times.staleMs / 4);
-        while (outcome === 'waiting' && statSync(lock).mtimeMs === before) await pause();
+        while (!settled() && statSync(lock).mtimeMs === before) await pause();
       }
       await second;
       expect(Date.now() - started).toBeGreaterThan(times.staleMs);
-      expect(outcome).toBeInstanceOf(SendLockBusy);
+      expect(outcome.error).toBeInstanceOf(SendLockBusy);
       release();
       await first;
       expect(overlapped).toBe(false);
