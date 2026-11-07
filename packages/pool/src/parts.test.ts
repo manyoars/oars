@@ -36,6 +36,9 @@ const sha = (text: string): string => createHash('sha256').update(text, 'utf8').
 
 const partHeaders = (hash: string, index: number, count: number): { [name: string]: string } => ({ 'oars-batch': hash, 'oars-part': `${String(index)}/${String(count)}` });
 
+/** The one text a `SELECT body` row holds. */
+const bodyText = (row: unknown): string => (typeof row === 'object' && row !== null && 'body' in row && typeof row.body === 'string' ? row.body : '');
+
 const rows = async (pool: TestPool, sql: string): Promise<unknown> => (await pool.db()).prepare(sql).first('count');
 
 describe('a deposit past the request cap', () => {
@@ -203,6 +206,8 @@ describe('a deposit past the request cap', () => {
     // Miniflare runs one request at a time here, so the interleave is scripted: a stand-in for D1 that lets the other parts land right after this part's first read.
     const staged: { part: number; body: string }[] = [];
     const piece = 'x'.repeat(1_000_000);
+    // A staged part is sealed text: the base64 of a 12-byte IV, the piece, and a 16-byte tag. The stand-in never opens it, only counts its bytes.
+    const sealedLike = Buffer.alloc(1_000_028).toString('base64');
     let reads = 0;
     const prepare = (sql: string) => ({
       bind: (...values: (string | number | null)[]): Bound => ({
@@ -210,7 +215,7 @@ describe('a deposit past the request cap', () => {
         all: () => {
           reads += 1;
           const seen = staged.map((row) => ({ part: row.part, count: 3, body: row.body, deposit: null }));
-          if (reads === 1) staged.push({ part: 2, body: piece });
+          if (reads === 1) staged.push({ part: 2, body: sealedLike });
           return Promise.resolve({ results: seen });
         },
         run: () => {
@@ -222,7 +227,7 @@ describe('a deposit past the request cap', () => {
     });
     const request = new Request('http://pool.test/v1/deposits', { method: 'POST', headers: partHeaders(sha('three parts, one read behind'), 1, 3), body: piece });
     const env: Env = { DB: { prepare, batch: () => Promise.resolve([]) } };
-    const answered = await receivePart(request, env, 'account', piece, () => Promise.resolve(new Response('stored', { status: 201 })));
+    const answered = await receivePart(request, env, 'account', 'a-secret', piece, () => Promise.resolve(new Response('stored', { status: 201 })));
     // Part 2 landed after part 1 read nothing: both bodies now sit staged, and 2,000,000 bytes cannot join under 1,800,000.
     expect(answered.status).toBe(413);
     expect(staged).toEqual([]);
@@ -241,7 +246,7 @@ describe('a deposit past the request cap', () => {
       const staged = (await db.prepare('SELECT body FROM deposit_parts').all()).results;
       expect(staged).toHaveLength(2);
       for (const row of staged) {
-        const body = String(Object.values(row)[0]);
+        const body = bodyText(row);
         expect(body).not.toContain(host);
         expect(body).not.toContain(early.slice(0, 12));
       }
@@ -258,7 +263,7 @@ describe('a deposit past the request cap', () => {
       const batch = sha(piece + piece);
       await pool.post('/v1/deposits', piece, token, partHeaders(batch, 1, 3));
       await pool.post('/v1/deposits', piece, token, partHeaders(batch, 2, 3));
-      const bodies = (await (await pool.db()).prepare('SELECT body FROM deposit_parts ORDER BY part').all()).results.map((row) => String(Object.values(row)[0]));
+      const bodies = (await (await pool.db()).prepare('SELECT body FROM deposit_parts ORDER BY part').all()).results.map(bodyText);
       expect(bodies[0]).not.toBe(bodies[1]);
     } finally {
       await pool.dispose();
