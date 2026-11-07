@@ -1,4 +1,4 @@
-// A served number sums only cells at or above `K_CELL`. A read's `n` and a share's denominator are counts, and a count that held a sub-floor cell would, set beside a second served
+// A served number sums only cells at or above `DEFAULT_PUBLIC_FLOOR`. A read's `n` and a share's denominator are counts, and a count that held a sub-floor cell would, set beside a second served
 // count, show how large that cell is. Each test holds one served cell and one sub-floor cell and asks what the served number counts.
 import { describe, expect, it } from 'vitest';
 import type { Cell } from '../../cli/src/sessions/cells.js';
@@ -6,7 +6,7 @@ import { namedId, shapeMotif, type Motif, type WindowStep } from '../../cli/src/
 import type { Read } from '../../cli/src/sessions/read.js';
 import type { Harness } from '../../cli/src/sessions/schema.js';
 import { bundleOf } from './derive.js';
-import { DEFAULT_FLOORS, DEFAULT_PUBLIC_FLOOR as K_CELL } from './floors.js';
+import { DEFAULT_FLOORS, DEFAULT_PUBLIC_FLOOR } from './floors.js';
 import type { StoredPool } from './stored.js';
 
 const HARNESS: Harness = 'claude-code';
@@ -49,13 +49,13 @@ const slicedTo = (reads: Read[], motifId: string, grain: 'day' | 'week' = 'day')
 
 describe('a served read counts only cells at the floor', () => {
   it('tool-day `steps` leaves out a sub-floor tool on the same day', () => {
-    const served = slicedTo(readsOf([cellOf(READ.motifId, K_CELL, 10), cellOf(SHELL.motifId, K_CELL - 1, 7)], 'tool-day'), READ.motifId);
+    const served = slicedTo(readsOf([cellOf(READ.motifId, DEFAULT_PUBLIC_FLOOR, 10), cellOf(SHELL.motifId, DEFAULT_PUBLIC_FLOOR - 1, 7)], 'tool-day'), READ.motifId);
     expect(served.value.steps).toBe(10);
     expect(served.value.share).toBe(1);
   });
 
   it('a live read\'s `of` leaves out a sub-floor tool on the same day', () => {
-    const served = slicedTo(readsOf([cellOf(READ.motifId, K_CELL, 10), cellOf(SHELL.motifId, K_CELL - 1, 7)], 'live'), READ.motifId);
+    const served = slicedTo(readsOf([cellOf(READ.motifId, DEFAULT_PUBLIC_FLOOR, 10), cellOf(SHELL.motifId, DEFAULT_PUBLIC_FLOOR - 1, 7)], 'live'), READ.motifId);
     expect(served.value.of).toBe(10);
     expect(served.value.share).toBe(1);
     expect(served.n).toBe(10);
@@ -63,7 +63,7 @@ describe('a served read counts only cells at the floor', () => {
 
   it('a live read\'s baseline sums only served days', () => {
     const before = '2026-11-01';
-    const cells = [cellOf(READ.motifId, K_CELL, 10), cellOf(READ.motifId, K_CELL, 4, { day: before }), cellOf(SHELL.motifId, K_CELL - 1, 6, { day: before })];
+    const cells = [cellOf(READ.motifId, DEFAULT_PUBLIC_FLOOR, 10), cellOf(READ.motifId, DEFAULT_PUBLIC_FLOOR, 4, { day: before }), cellOf(SHELL.motifId, DEFAULT_PUBLIC_FLOOR - 1, 6, { day: before })];
     const served = slicedTo(readsOf(cells, 'live'), READ.motifId);
     // The day before holds 4 served steps and 6 sub-floor ones: the baseline is 4 of 4, not 4 of 10.
     expect(served.value.baseline).toBe(1);
@@ -71,13 +71,13 @@ describe('a served read counts only cells at the floor', () => {
 
   it('fit sums the weeks of one frame at the floor, not a sub-floor week beside them', () => {
     const week = (clusters: number, ok: number, day: string): Cell => cellOf(READ.motifId, clusters, ok, { grain: 'week', day });
-    const served = slicedTo(readsOf([week(K_CELL, 10, '2026-10-26'), week(K_CELL - 1, 4, '2026-11-02')], 'fit'), READ.motifId, 'week');
+    const served = slicedTo(readsOf([week(DEFAULT_PUBLIC_FLOOR, 10, '2026-10-26'), week(DEFAULT_PUBLIC_FLOOR - 1, 4, '2026-11-02')], 'fit'), READ.motifId, 'week');
     expect(served.n).toBe(10);
     expect(served.value.ok).toBe(10);
   });
 
   it('tool-day sums a tool across models at the floor, not a sub-floor model beside them', () => {
-    const served = slicedTo(readsOf([cellOf(READ.motifId, K_CELL, 10), cellOf(READ.motifId, K_CELL - 1, 3, { frameBucket: `${BUCKET}/sonnet` })], 'tool-day'), READ.motifId);
+    const served = slicedTo(readsOf([cellOf(READ.motifId, DEFAULT_PUBLIC_FLOOR, 10), cellOf(READ.motifId, DEFAULT_PUBLIC_FLOOR - 1, 3, { frameBucket: `${BUCKET}/sonnet` })], 'tool-day'), READ.motifId);
     expect(served.n).toBe(10);
     expect(served.value.steps).toBe(10);
   });
@@ -85,7 +85,7 @@ describe('a served read counts only cells at the floor', () => {
 
 describe('two served numbers over one day', () => {
   const served = (sub: number, ok: number): { steps: number; reads: number[]; shape: unknown } => {
-    const bundle = bundleOver([cellOf(READ.motifId, K_CELL, 10), cellOf(SHELL.motifId, K_CELL, 6), cellOf(SEARCH.motifId, sub, ok)]);
+    const bundle = bundleOver([cellOf(READ.motifId, DEFAULT_PUBLIC_FLOOR, 10), cellOf(SHELL.motifId, DEFAULT_PUBLIC_FLOOR, 6), cellOf(SEARCH.motifId, sub, ok)]);
     const days = bundle.reads.filter((read) => read.family === 'tool-day');
     const [first] = days;
     const steps = Number(first?.value.steps);
@@ -94,8 +94,8 @@ describe('two served numbers over one day', () => {
   };
 
   it('shows nothing of a sub-floor cell in `steps` less `n`', () => {
-    const small = served(K_CELL - 1, 2);
-    const large = served(K_CELL - 2, 9);
+    const small = served(DEFAULT_PUBLIC_FLOOR - 1, 2);
+    const large = served(DEFAULT_PUBLIC_FLOOR - 2, 9);
     // The served tools are the only ones `steps` counts, so `steps` less one tool's `n` is the other served tool's `n`, whatever the hidden cell holds.
     expect(small.steps).toBe(16);
     expect(small.steps - 10).toBe(6);
@@ -109,7 +109,7 @@ describe('a live baseline that is sub-floor is null, not zero', () => {
   it('reads `baseline: null` for a tool with no baseline cell at the floor, though another tool is served that day', () => {
     const before = '2026-11-01';
     // READ is served on DAY and sub-floor the day before; SHELL is served the day before, so the baseline has steps, none of them READ's that are served.
-    const cells = [cellOf(READ.motifId, K_CELL, 10), cellOf(READ.motifId, K_CELL - 1, 4, { day: before }), cellOf(SHELL.motifId, K_CELL, 6, { day: before })];
+    const cells = [cellOf(READ.motifId, DEFAULT_PUBLIC_FLOOR, 10), cellOf(READ.motifId, DEFAULT_PUBLIC_FLOOR - 1, 4, { day: before }), cellOf(SHELL.motifId, DEFAULT_PUBLIC_FLOOR, 6, { day: before })];
     const served = slicedTo(readsOf(cells, 'live'), READ.motifId);
     expect(served.value.baseline).toBeNull();
     expect(served.value.ratio).toBeNull();
@@ -223,7 +223,7 @@ describe('a shape and its named cells: complementary withholding', () => {
 describe('the last day a bundle states', () => {
   it('leaves a later sub-floor cell out of `asOf.day` and out of `weeksSinceLast`', () => {
     const week = (clusters: number, day: string): Cell => cellOf(READ.motifId, clusters, 3, { grain: 'week', day });
-    const bundle = bundleOver([week(K_CELL, '2026-10-12'), week(1, '2026-11-02')]);
+    const bundle = bundleOver([week(DEFAULT_PUBLIC_FLOOR, '2026-10-12'), week(1, '2026-11-02')]);
     expect(bundle.asOf.day).toBe('2026-10-12');
     expect(slicedTo(bundle.reads.filter((read) => read.family === 'adoption'), READ.motifId, 'week').value.weeksSinceLast).toBe(0);
   });

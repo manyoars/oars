@@ -1112,7 +1112,7 @@ export interface BundleFloors {
   families?: FamilyFloors;
 }
 
-/** A floor per read family, keyed by the family's name as the pool states it. A client prints what it finds and applies none, so a name this version has never heard of (a family a later pool adds) is carried as stated and not refused. */
+/** A floor per read family, keyed by the family's name as the pool states it. A client applies none and prints only the families it knows, so a name this version has never heard of (a family a later pool adds) is carried as stated and not refused. */
 export interface FamilyFloors {
   [family: string]: number;
 }
@@ -1150,7 +1150,7 @@ const isSignedBundle = (value: unknown): value is SignedBundle => isFields(value
 
 const isFloor = (value: unknown): value is number => typeof value === 'number' && Number.isSafeInteger(value) && value >= 1;
 
-/** The floors a bundle states, or none: a client prints what is here, so a value that is not a whole number of at least 1 is refused and not shown, while a family this client does not know is carried and printed as the pool states it (additive, section 17 rule 3). */
+/** The floors a bundle states, or none: a client prints what is here, so a value that is not a whole number of at least 1 is refused and not shown, while a family this client does not know is carried (in `--json`) and not printed, since `floorSentence` prints only the families this client knows (additive, section 17 rule 3). */
 const isFloors = (value: unknown): value is BundleFloors =>
   isFields(value) && isFloor(value.public) && isFloor(value.disclosure) && (value.families === undefined || (isFields(value.families) && Object.values(value.families).every(isFloor)));
 
