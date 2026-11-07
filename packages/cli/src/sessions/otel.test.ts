@@ -245,6 +245,7 @@ describe('a nested agent', () => {
     const parent = capture(textOf(store, T));
     expect(parent.tools.map((entry) => entry.tool)).toEqual(['invoke_agent', 'ask_hotels']);
     expect(parent.tools.map((entry) => entry.steps?.[0]?.action)).toEqual(['agent.spawn', 'agent.spawn']);
+    expect(parent.tools.map((entry) => entry.durationMs)).toEqual([8000, 8000]);
     expect(parent.prompts).toHaveLength(1);
     expect(capture(textOf(store, `${T}-${sp(3)}`)).tools.map((entry) => entry.tool)).toEqual(['search_flights']);
     expect(capture(textOf(store, `${T}-${sp(7)}`)).tools.map((entry) => entry.tool)).toEqual(['search_hotels']);
