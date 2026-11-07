@@ -149,6 +149,29 @@ An unknown field name a client sends lands in the `extensions` bag of the deposi
 | `vocabVersion` | the deposit route: stored with each batch so a read can tell the vocabulary it came from | clear | no | 18 |
 | `wallSec` | `cost`: wall time per prompt class | clear (bucket) | yes | 11 |
 
+## The raw tier
+
+A locally redacted raw transcript can be sent to the pool, stored, and not served. It is the one place the pool holds content, so the rules are narrow.
+
+**What it takes.** An account that is signed in, has accepted the covenant in force, and has given **raw consent**, which is its own answer, apart from the covenant (the client asks it separately; nothing in the covenant records it). Every request states, as headers, the redaction version the transcript went through (`oars-redaction-version`) and the capture version (`oars-capture-version`), each 1 to 64 letters, digits, dots, dashes, or underscores, and the first request of an account also states `oars-raw-consent: granted`. The pool records the first `granted` (`accounts.raw_consent`) and a later request need not repeat it; a request that states anything else is refused even when consent is held. The covenant check is the deposit's: with `COVENANT_VERSION` unset every raw route is 403 `deposits_closed`.
+
+**What it refuses**, each by name and before any byte is read: 401 `unauthorized`; 403 `deposits_closed`; 403 `covenant_not_accepted`; 422 `redaction_required` (no redaction version, or one that is not a version); 422 `capture_required`; 403 `raw_consent_required`; 503 `not_configured` when the `RAW` bucket is unbound; 413 `too_large` for a part over 1 MB, unread when it declares its length; 422 `empty_part`.
+
+**The upload.** A transcript goes in parts of at most 1 MB, the cap a deposit has, keyed by its SHA-256 (64 lowercase hex, the client's label for it):
+
+- `PUT /v1/raw/:sha256/parts/:n` stores part `n` (1 to 999,999) under `staging/` in R2. A part sent again replaces itself, so a client retries a lost answer freely. For an object that already stands it writes nothing and answers 200 `{ok, stored}`.
+- `POST /v1/raw/:sha256/complete` takes `{parts, bytes}`, joins parts 1 to `parts` into one object `raw/<account>/<sha256>`, checks that they hold exactly `bytes`, and writes the ledger row. 409 `part_missing` names the first part that never arrived; 422 `bytes_mismatch` names the count it found; either leaves no object and no row, and the parts stay for the client to send the rest and complete again. A completion sent again answers 200 `{ok, stored}`.
+
+R2 will not complete a multipart upload from parts under 5 MiB (the last excepted) and wants the others equal, so a 1 MB request cannot be an R2 part. The pool stages each request as its own object, then assembles through an R2 multipart upload, cutting the stream into equal 5 MiB parts; memory holds one 5 MiB buffer and one staged part. The staged parts are deleted once the row is written. A transcript that is never completed leaves its staged parts behind: the deploy steps give the bucket a lifecycle rule that expires `staging/` after 7 days.
+
+**A ledger row, never the bytes.** D1 holds one `raw_objects` row per object: account, SHA-256, bytes, capture version, redaction version, and the time. The bytes are only in R2. The row is ledger class: migration `0011_raw_tier.sql` gives it the never-delete trigger of `deposits` and `contributors`, and `ledger.test.ts` guards it. `raw.test.ts` dumps every D1 table after an upload and fails if the transcript is in any of them.
+
+**It serves nothing in v1.** No route returns a raw byte, a hash, or a count of what an account holds, and the answers to the two uploads carry `ok`, `stored`, or `part` and nothing else. No bundle, read, or `derive` touches the bucket or the table. `raw-serves-nothing.test.ts` fails if any file but `raw.ts` names the binding or the table, if `raw.ts` lists or heads the bucket or builds a response of its own, and if any other method or path under `/v1/raw` answers anything but 404. The raw tier is not licensed or published either: serving it would need a new decision and a change to that test.
+
+**No limit on contribution.** There is no per-account cap on raw objects or bytes, and `MAX_DEPOSITS_PER_ACCOUNT` and `MAX_DEPOSIT_BYTES_PER_ACCOUNT` do not apply to it (`raw.test.ts` sets both to 1 and uploads three transcripts). Storage figures belong to telemetry.
+
+**What the pool cannot check.** It cannot verify redaction: it takes the client's word, in the redaction version it records, that the transcript was redacted and its hosts masked before it was sent, and it runs no scanner over the bytes. It does not recompute the SHA-256 either: the hash is the client's label for the object, and a client that sends bytes under another hash only makes its own object hard to find. Redaction, host masking, and the raw consent prompt are the client's (t884).
+
 ## Routes
 
 | Route | Answer |
@@ -157,6 +180,8 @@ An unknown field name a client sends lands in the `extensions` bag of the deposi
 | `GET /v1/covenant` | `{version, accepted}`. `version` is null when deposits are closed. Sign-in is optional. |
 | `POST /v1/covenant/accept` | Takes `{version}`. 409 `covenant_version` for any version but the one in force. |
 | `POST /v1/deposits` | Takes one skeleton, 1 MB at most. A larger one gets 413 `too_large`, unread when it declares its length. |
+| `PUT /v1/raw/:sha256/parts/:n` | One part of a raw transcript, 1 MB at most (see The raw tier). 200 `{ok, part}`. Refused by name before any byte is read. |
+| `POST /v1/raw/:sha256/complete` | Takes `{parts, bytes}`; joins the parts into one R2 object and writes its ledger row. 201 `{ok, stored}`, 200 when it already stands, 409 `part_missing`, 422 `bytes_mismatch`. |
 | `GET /bundle/:harness/:harnessVersion/:vocabVersion` | A signed bundle for one harness at one version (the harness is a required segment, since a number does not name its harness and two harnesses can share a numbered bucket; 400 `unknown_harness` for a name off the list, 400 `harness_required` on the old two-segment path): `{payload, signature}`, Ed25519 over the payload's exact bytes. The request names no family. It holds the cells for that version's bucket and the reads the pool derives today (fit without call shape, cost, change, live, adoption, method, next-step, and tool-day; recovery and reads above order 1 are not served), the version-free (name, `platform`, `shell`) cells that clear the check under "What a bundle serves", plus rule 3's strata cells (language, framework, repo size, and the two pairs, language with its share and repo size with its explore bucket) counted pool-wide. 401 with no valid credential (`harness_required` is answered with or without one, since the old path is named before any credential is read), 400 `unknown_harness_version` or `unknown_vocab_version` by name, 404 for any other path. The old `/v1/slices/:stack` route is gone. |
 
 ## Bindings
@@ -168,6 +193,7 @@ All of these are set at the deploy, never in `wrangler.jsonc`, which holds no ac
 | `DB` | The D1 database. |
 | `PSEUDONYM_KEY` | The key accounts are hashed under. Changing it makes every account new. |
 | `BUNDLE_SIGNING_KEY` | An Ed25519 private key as a JWK. Clients pin the public half, so changing it fails their next login. |
+| `RAW` | The R2 bucket for the raw tier, bound by name in `wrangler.jsonc` (`oars-pool-raw`). Unset refuses the raw routes with 503 `not_configured`. |
 | `COVENANT_VERSION` | The covenant in force. Leave it unset until the covenant is published. |
 | `FETCH_CAP` | Optional. Bundles one account may fetch per ISO week; a value that is not a positive whole number is 1. |
 | `MAX_DEPOSITS_PER_ACCOUNT` | Optional. Rows one account may hold. |
@@ -193,7 +219,7 @@ Nothing has been deployed or provisioned. Each step is owed once, by the account
 
 1. Create a GitHub OAuth app with device flow enabled, and note its client id. The CLI reads it from `OARS_GITHUB_CLIENT_ID`; the pool holds none of it.
 2. Create a Google OAuth client of type "TVs and Limited Input devices", and note its id and secret, which the CLI reads from `OARS_GOOGLE_CLIENT_ID` and `OARS_GOOGLE_CLIENT_SECRET`.
-3. Run `wrangler d1 create oars-pool` in `packages/pool`. The config binds it by name, so commit no `database_id`.
+3. Run `wrangler d1 create oars-pool` in `packages/pool`. The config binds it by name, so commit no `database_id`. Then create the raw tier's bucket the same way: `wrangler r2 bucket create oars-pool-raw` (the name `wrangler.jsonc` binds), and give it a lifecycle rule that expires objects under the `staging/` prefix after 7 days: `wrangler r2 bucket lifecycle add oars-pool-raw staging-expiry staging/ --expire-days 7`. Keep the bucket private: it takes no public domain and no `r2.dev` URL.
 4. Run `wrangler d1 migrations apply oars-pool --remote` in `packages/pool`.
 5. Run `wrangler secret put` for `PSEUDONYM_KEY` (32 random bytes) and `BUNDLE_SIGNING_KEY`, and leave `COVENANT_VERSION` unset.
 6. Before `wrangler deploy`, add a Cloudflare rate-limiting rule on `/v1/login` (in the dashboard, or with the rulesets API). The route takes no credential and each call spends one read of the provider's profile route from the Worker's address, so without a rule anyone can drive that spend. The Worker holds no limiter of its own.
