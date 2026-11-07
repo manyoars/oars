@@ -5,9 +5,9 @@
 // reader is original. No vendor text promises the format (docs/session-format.md names the file version and says an older file is migrated when loaded, and sends programs to the SDK),
 // so `docs/sessions-store.md` says what a live run would still have to prove.
 //
-// Where it reads from (`piRoot`): `$PI_CODING_AGENT_DIR`, else `~/.pi/agent` (`%USERPROFILE%\.pi\agent` on Windows) (src/config.ts:609-624, docs/environment-variables.md:81). A session is
+// Where it reads from (`piRoot`): `$PI_CODING_AGENT_DIR`, else `~/.pi/agent` (`%USERPROFILE%\.pi\agent` on Windows) (src/config.ts:611, :614, :630-636, docs/environment-variables.md:81). A session is
 // `sessions/--<cwd with its leading separator removed and / \ : turned into ->--/<ISO time with : . turned into ->_<session id>.jsonl` (docs/session-format.md:10-14,
-// session-manager.ts:590-593). The sessions folder can be moved by `--session-dir`, `PI_CODING_AGENT_SESSION_DIR`, or a setting (docs/sessions.md:44); this reader does not follow those.
+// session-manager.ts:590-593). The sessions folder can be moved by `--session-dir`, `PI_CODING_AGENT_SESSION_DIR`, or a setting (docs/sessions.md:60); this reader does not follow those.
 // A file is written only once a conversation exists, then appended to (session-manager.ts:1176-1190). Line 1 is the header and every later line is an entry:
 //   session           {version, id, timestamp, cwd, parentSession?}: `version` is the FILE format's (1 linear, 2 tree, 3 `hookMessage` renamed `custom`), not Pi's; no app version is recorded.
 //                     The session's cwd is fixed (docs/sessions.md:15): a `cd` inside a command is not tracked, and a resume from another folder runs in this one.
@@ -22,9 +22,9 @@
 // root; that path is what is read, and an abandoned branch is not. A version 1 file has no ids and is one chain in file order (session-manager.ts:287-313). A fork or clone is a new file
 // that starts with its parent's path and keeps the old entry times (createBranchedSession, session-manager.ts:1643-1735); its header names `parentSession` and carries the time the
 // copy was made, so an entry timed before that is the parent's and is not this session's.
-// `usage.input` is the uncached part already: Pi takes the cache reads and writes out of the provider's prompt count (openai-completions.ts:1536-1550, openai-responses-shared.ts:636-642;
+// `usage.input` is the uncached part already: Pi takes the cache reads and writes out of the provider's prompt count (packages/ai/src/api/openai-completions.ts:1536-1550, packages/ai/src/api/openai-responses-shared.ts:636-642;
 // Anthropic's `input_tokens` is disjoint), and `reasoning` is inside `output` (docs/message-types.md:90), so the figures map one for one onto capture's disjoint fields. A response that
-// ended in an error or an abort with every figure zero never reached the provider's count (anthropic-messages.ts:824 starts them at zero), so it has no usage rather than a zero one.
+// ended in an error or an abort with every figure zero never reached the provider's count (packages/ai/src/api/anthropic-messages.ts:824 starts them at zero), so it has no usage rather than a zero one.
 // Pi has no sub-agent in core (README.md:19); the example extension runs `pi --no-session` (examples/extensions/subagent/index.ts:389), which writes no file, so the parent's call is the record.
 
 import { open, readdir, readFile, stat } from 'node:fs/promises';
@@ -35,7 +35,7 @@ import { basename, join, posix, win32 } from 'node:path';
 export const piRoot = (env: { [name: string]: string | undefined }, home: string = homedir()): string => {
   const set = env.PI_CODING_AGENT_DIR;
   if (set === undefined || set === '') return join(home, '.pi', 'agent');
-  // Pi expands a leading ~ (config.ts:608-613).
+  // Pi expands a leading ~ (config.ts:614).
   return set === '~' ? home : /^~[/\\]/.test(set) ? join(home, set.slice(2)) : set;
 };
 
