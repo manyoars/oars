@@ -83,7 +83,7 @@ describe('the repo key as capture makes it', () => {
     }).session.repo;
   };
 
-  it('is one key for one repository under one account, from two clones, and two keys under two accounts', () => {
+  it('is one key for one repository under one store salt, from two clones, and two keys under two salts', () => {
     const here = keyOf('/w/app', 'account-one', 'github.com/org/app');
     const clone = keyOf('/elsewhere/app-copy', 'account-one', 'github.com/org/app');
     const other = keyOf('/w/app', 'account-two', 'github.com/org/app');
@@ -93,7 +93,7 @@ describe('the repo key as capture makes it', () => {
     expect(other).not.toBe(here);
   });
 
-  it('is one key for one repository under one account across two harnesses, Claude Code and Codex', () => {
+  it('is one key for one repository under one store salt across two harnesses, Claude Code and Codex', () => {
     const repoRoot = (): string => '/w/app';
     const repoIdentity = (): string => 'origin:github.com/org/app';
     const common = { session: 's', project: 'p', rev: 1, at: 'x', redact: makeRedactor(), salt: 'account-one', sid: null, repoRoot, repoIdentity } as const;
@@ -124,7 +124,7 @@ describe('the repo key as capture makes it', () => {
 });
 
 describe('through the store', () => {
-  it('sets repo on a skeleton-derived store from the key, so a read that groups by repo works within one account', () => {
+  it('sets repo on a skeleton-derived store from the key, so a read that groups by repo works from one store', () => {
     const first = skeletonFrom(stored(KEY_A));
     const second = skeletonFrom(stored(KEY_A));
     const third = skeletonFrom(stored(KEY_B));
