@@ -184,7 +184,7 @@ Replay is local and read-only on your transcripts; it writes `crossings.jsonl` a
 - `deposit`, `outbox`, and `fetch` need `oars pool login` first; without it they exit 3 and name the server.
 - `oars pool coverage [--org-size <band>] [--repo-visibility public|private|unknown]` sets the two coverage bands only you can state, read locally and never from the network; an unset band goes on the wire as `unknown`.
 - `oars pool outbox` prints each batch exactly as it would be sent, with its SHA-256, and `--explain` adds each field's rule.
-- `oars pool fetch --harness-version <version>` fetches that version's signed bundle, verifies it against the key pinned at login, and keeps it locally.
+- `oars pool fetch --harness-version <version>` fetches that version's signed bundle, verifies it against the key pinned at login, and keeps it locally. It prints the public and disclosure floors the bundle states (and any read family on a floor of its own) and holds no floor of its own: the pool sets them, so a change is a deploy and never a new release of oars.
 
 ## The `--json` contract
 
