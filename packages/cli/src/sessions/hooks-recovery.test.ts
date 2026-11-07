@@ -1,0 +1,112 @@
+// Item 2 of t926: the recovery edge at PostToolUseFailure. A retry cell and a below-floor cell stay silent, a served cell is shown with one row, a held cell is held with one row.
+import { readFileSync, writeFileSync } from 'node:fs';
+import { afterEach, describe, expect, it } from 'vitest';
+import { slugOf } from './allow.js';
+import { indexPath, readIndex } from './hook-index.js';
+import { runHook } from './hooks.js';
+import { armOf, readRecalls } from './recall-object.js';
+import { recoveryDecision, recoveryEdgesOf, RECOVERY_FLOOR, type RecoveryEdge } from './recall-next.js';
+import type { Read } from './read.js';
+import { deposit } from './store.js';
+import { cleanup, NOW, stage, type Staged } from './test-support.js';
+
+afterEach(cleanup);
+
+const REPO = 'work/app';
+const edge = (next: string, followed: number): RecoveryEdge => ({ next, followed, of: 20, clusters: 1, readId: 'read:0123456789abcdef', day: '2026-11-01' });
+
+/** A deposited store whose index carries the given local recovery edges. */
+const staged = async (recovery: { [key: string]: RecoveryEdge[] }): Promise<Staged> => {
+  const made = stage(slugOf(REPO));
+  await deposit(made.runtime, { allow: [REPO], redactDomains: [], now: () => NOW });
+  const index = await readIndex(made.storeDir);
+  writeFileSync(indexPath(made.storeDir), JSON.stringify({ ...index, recovery }));
+  return made;
+};
+
+/** A session id whose arm is the one asked for, for the index's pool version. */
+const sessionOn = async (made: Staged, arm: 'shown' | 'held', key: string): Promise<string> => {
+  const at = JSON.parse(readFileSync(indexPath(made.storeDir), 'utf8')).at as string;
+  for (let i = 0; i < 1000; i++) if (armOf(`s${String(i)}`, [key], at) === arm) return `s${String(i)}`;
+  throw new Error('no session found');
+};
+
+const fail = (session: string, error = 'Exit code 1\nnothing seen before'): string => JSON.stringify({ hook_event_name: 'PostToolUseFailure', session_id: session, tool_name: 'Bash', error });
+const text = (output: string | undefined): string => String(JSON.parse(output ?? '{}')?.hookSpecificOutput?.additionalContext ?? '');
+
+describe('the recovery edge at PostToolUseFailure', () => {
+  const KEY = 'shell.exec/1';
+
+  it('shows a served cell once, with one recalls row', async () => {
+    const made = await staged({ [KEY]: [edge('file.read', 12), edge('file.edit', 6)] });
+    const session = await sessionOn(made, 'shown', KEY);
+    const output = await runHook('post-tool', fail(session), made.runtime, () => NOW);
+    expect(text(output)).toContain('after a failed shell.exec (1)');
+    expect(text(output)).toContain('file.read x12');
+    const rows = await readRecalls(made.storeDir);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ sid: session, mode: 'push', arm: 'shown', query: { form: 'question', family: 'recovery', prefix: [KEY] } });
+  });
+
+  it('holds a served cell back for the held arm: nothing printed, one row that keeps what it would have shown', async () => {
+    const made = await staged({ [KEY]: [edge('file.read', 12)] });
+    const session = await sessionOn(made, 'held', KEY);
+    expect(await runHook('post-tool', fail(session), made.runtime, () => NOW)).toBeUndefined();
+    const rows = await readRecalls(made.storeDir);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ arm: 'held' });
+    expect(rows[0]?.answer.rendered).toContain('file.read x12');
+  });
+
+  it('stays silent, with no row, when the top next step is a same-step retry', async () => {
+    const made = await staged({ [KEY]: [edge('shell.exec', 14), edge('file.read', 3)] });
+    expect(await runHook('post-tool', fail(await sessionOn(made, 'shown', KEY)), made.runtime, () => NOW)).toBeUndefined();
+    expect(await readRecalls(made.storeDir)).toEqual([]);
+  });
+
+  it('stays silent, with no row, when a local cell is under the floor', async () => {
+    const made = await staged({ [KEY]: [edge('file.read', RECOVERY_FLOOR - 1)] });
+    expect(await runHook('post-tool', fail(await sessionOn(made, 'shown', KEY)), made.runtime, () => NOW)).toBeUndefined();
+    expect(await readRecalls(made.storeDir)).toEqual([]);
+  });
+
+  it('says nothing for a failure with no session, since the arm is the session', async () => {
+    const made = await staged({ [KEY]: [edge('file.read', 12)] });
+    expect(await runHook('post-tool', JSON.stringify({ tool_name: 'Bash', error: 'Exit code 1\nx' }), made.runtime, () => NOW)).toBeUndefined();
+    expect(await readRecalls(made.storeDir)).toEqual([]);
+  });
+});
+
+describe('recoveryDecision', () => {
+  const local = (edges: RecoveryEdge[]) => ({ recovery: { 'shell.exec/1': edges }, poolVersion: 'local' });
+  const bundle = (edges: RecoveryEdge[]) => ({ poolVersion: 'bundle', recovery: { 'shell.exec/1': edges }, positions: [] });
+
+  it('prefers the bundle, and counts a bundle edge as past the floor', () => {
+    const decision = recoveryDecision(bundle([edge('file.read', 1)]), local([edge('file.edit', 9)]), 'shell.exec', '1');
+    expect(decision).toMatchObject({ kind: 'serve', source: 'bundle', poolVersion: 'bundle' });
+  });
+
+  it('falls back to the local cells when the bundle has none for this action and code', () => {
+    expect(recoveryDecision(bundle([]), local([edge('file.edit', 9)]), 'shell.exec', '2')).toEqual({ kind: 'none' });
+    expect(recoveryDecision(undefined, local([edge('file.edit', 9)]), 'shell.exec', '1')).toMatchObject({ kind: 'serve', source: 'local' });
+  });
+
+  it('serves a tie with the retry, is silent on a strict retry lead and on nothing followed, and holds a local cell to the floor', () => {
+    expect(recoveryDecision(undefined, local([edge('file.edit', 7), edge('shell.exec', 7)]), 'shell.exec', '1').kind).toBe('serve');
+    expect(recoveryDecision(undefined, local([edge('shell.exec', 8), edge('file.edit', 7)]), 'shell.exec', '1').kind).toBe('retry');
+    expect(recoveryDecision(undefined, local([edge('none', 9)]), 'shell.exec', '1').kind).toBe('none');
+    expect(recoveryDecision(undefined, local([edge('file.edit', 4)]), 'shell.exec', '1').kind).toBe('floor');
+    expect(recoveryDecision(undefined, undefined, 'shell.exec', '1').kind).toBe('none');
+  });
+});
+
+describe('recoveryEdgesOf', () => {
+  const read = (next: string, followed: number, week: string, readId: string): Read =>
+    ({ readId, family: 'recovery', slice: { action: 'shell.exec', errorCode: '1', next, week }, value: { followed, of: 10, share: followed / 10 }, n: followed, clusters: 1, asOf: { pool: 'p', day: week } }) as unknown as Read;
+
+  it('sums weeks per next step, cites the heaviest week, ignores other families and names that are not actions, and applies the keep rule to the top', () => {
+    const reads = [read('file.read', 3, '2026-10-26', 'read:a'), read('file.read', 5, '2026-11-02', 'read:b'), read('not an action', 9, '2026-11-02', 'read:c'), { ...read('file.edit', 1, '2026-11-02', 'read:d'), family: 'fit' } as Read];
+    expect(recoveryEdgesOf(reads)['shell.exec/1']).toEqual([{ next: 'file.read', followed: 8, of: 20, clusters: 1, readId: 'read:b', day: '2026-11-02' }]);
+    expect(recoveryEdgesOf(reads, (followed) => followed >= 9)).toEqual({});
+  });
+});

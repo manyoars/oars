@@ -84,7 +84,7 @@ describe('PostToolUseFailure hook', () => {
 
   it('reads a PostToolUse response that starts with Exit code, and says nothing without an index', async () => {
     const { runtime } = await deposited();
-    const input = JSON.stringify({ hook_event_name: 'PostToolUse', tool_name: 'Bash', tool_response: `Exit code 2\n${QUOTING}` });
+    const input = JSON.stringify({ hook_event_name: 'PostToolUse', session_id: 'live', tool_name: 'Bash', tool_response: `Exit code 2\n${QUOTING}` });
     expect(specific(await runHook('post-tool', input, runtime, () => NOW)).hookEventName).toBe('PostToolUse');
     expect(await runHook('post-tool', input, stage().runtime, () => NOW)).toBeUndefined();
   });
@@ -100,7 +100,7 @@ describe('PostToolUseFailure hook', () => {
     writeFileSync(join(folder, 'dom1.jsonl'), `${one('1').join('\n')}\n`);
     writeFileSync(join(folder, 'dom2.jsonl'), `${one('2').join('\n')}\n`);
     await deposit(staged.runtime, { allow: [REPO], redactDomains: ['corp.example'], now: () => NOW });
-    const output = await runHook('post-tool', JSON.stringify({ tool_name: 'Bash', error: 'Exit code 1\ncannot reach build.corp.example' }), staged.runtime, () => NOW);
+    const output = await runHook('post-tool', JSON.stringify({ session_id: 's2', tool_name: 'Bash', error: 'Exit code 1\ncannot reach build.corp.example' }), staged.runtime, () => NOW);
     expect(context(output)).toContain('seen in 2 sessions; what followed: nothing recorded');
   });
 });

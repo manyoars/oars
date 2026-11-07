@@ -5,6 +5,7 @@ import { readFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import type { Read } from './read.js';
 import { resolveReads } from './recall-pool.js';
+import { RECOVERY_FLOOR, positionsOf, recoveryEdgesOf, type Position, type RecoveryEdges } from './recall-next.js';
 import { aboveBaseRate, fitReads, toolShapeId, type RecallRead } from './recall-reads.js';
 import type { SessionObservation } from './schema.js';
 import { expandHome } from './allow.js';
@@ -38,6 +39,13 @@ export interface HookIndex {
   signatures: { [sig: string]: { sessions: number; followed: Array<[string, number]> } };
   /** The call shapes over the fit floors and `PUSH_MIN_LIFT`, by read ID. An index a version before this wrote has none, and a pre-tool hook then pushes nothing. */
   fit?: { [readId: string]: RecallRead };
+  /**
+   * The local pool's recovery edges by `action/errorCode`, only for a failure whose top next step reaches `RECOVERY_FLOOR` (a hook reads this file on every call, so a key it would stay silent on
+   * is not carried). An index a version before this wrote has none, and `PostToolUseFailure` then falls back to `signatures`.
+   */
+  recovery?: RecoveryEdges;
+  /** The local pool's split positions (t782's rule), most observed first. */
+  positions?: Position[];
 }
 
 const topFollowed = (following: { [tool: string]: number }): Array<[string, number]> =>
@@ -124,7 +132,15 @@ export const buildIndex = (store: Store, redactDomains: readonly string[], at: s
       .slice(0, PER_PROJECT);
     if (rows.length > 0) projects[project] = rows;
   }
-  return { at, redactDomains: [...redactDomains], projects, signatures, fit: Object.fromEntries(resolveReads(aboveBaseRate(store, fitReads(store)), reads).map((read) => [toolShapeId(read.tool, read.keys), read])) };
+  return {
+    at,
+    redactDomains: [...redactDomains],
+    projects,
+    signatures,
+    fit: Object.fromEntries(resolveReads(aboveBaseRate(store, fitReads(store)), reads).map((read) => [toolShapeId(read.tool, read.keys), read])),
+    recovery: recoveryEdgesOf(reads, (followed) => followed >= RECOVERY_FLOOR),
+    positions: positionsOf(reads),
+  };
 };
 
 export const indexPath = (storeDir: string): string => join(storeDir, INDEX_FILE);
