@@ -1,6 +1,6 @@
 // The families a bundle serves and does not serve. Recovery is served from cells (t868): what others did next after a failed call, by (failed action, `errorCode`, next action), at the floor of 5 accounts.
-// What stays out is pinned at the boundary that keeps it out, the wire: a signature hash, an outcome, and a tool's input key names are on no skeleton field, so fit's call-shape method and a
-// signature record cannot be derived from stored cells. The tests below (a tool, a step, a transcript, and the skeleton's top level) fail if a later wire gains one of these fields: the name would
+// What stays out is pinned at the boundary that keeps it out, the wire: a signature hash and an outcome are on no skeleton field, so a signature record cannot be derived from stored cells. A tool's
+// input key names have a wire field since t870, but no cell is keyed on them, so fit's call-shape method stays unserved (`docs/pool.md`). The tests below (a tool, a step, a transcript, and the skeleton's top level) fail if a later wire gains one of these fields: the name would
 // stop landing in the bag.
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { incrementsOf } from './ingest.js';
@@ -13,13 +13,11 @@ import { startPool, stubUser, type TestPool } from './test-pool.js';
 
 // The fields a withheld family would read, none of them on the wire today.
 interface WithheldFields {
-  keys?: string[];
   sigHash?: string;
   outcome?: string;
 }
 
 const WITHHELD: readonly (readonly [keyof WithheldFields, string[] | string])[] = [
-  ['keys', ['command']],
   ['sigHash', 'x'],
   ['outcome', 'x'],
 ];
