@@ -13,8 +13,9 @@ on:
 permissions:
   contents: read
 
-# One run per ref. A newer push cancels the older run only on task/* and claude/* branches (the orchestrator's worker branches, which
-# push several times a minute); main, tags, and pull request refs always run to the end so a landed sha keeps its result.
+# A newer push cancels the older run only on task/* and claude/* branches (the orchestrator's worker branches, which push several
+# times a minute), where every run shares the group 'worker'. Any other ref (main, tags, pull requests) gets a group of its own per
+# run, so nothing queues behind another run and nothing is cancelled: a landed sha always keeps its result.
 concurrency:
   group: ci-${{ github.ref }}-${{ (startsWith(github.ref, 'refs/heads/task/') || startsWith(github.ref, 'refs/heads/claude/')) && 'worker' || github.run_id }}
   cancel-in-progress: ${{ startsWith(github.ref, 'refs/heads/task/') || startsWith(github.ref, 'refs/heads/claude/') }}
