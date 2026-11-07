@@ -1,13 +1,14 @@
 // What telemetry measures, in one place: the CLI's own report and the pool's rollup both turn an event into the same `Measure`s, so a user's number and the fleet's are the same number.
 // A measure is one observation in a cell: a latency in milliseconds, or a yes/no that rates are made from. The cell is (metric, dimension, value): `hook.pre-tool.latency` at harness
-// version `2.1.5`. The reader is tolerant on purpose: the pool reads batches kept whole from any client, so a value that does not fit is skipped, never trusted.
+// `claude-code`, version `2.1.5`. The reader is tolerant on purpose: the pool reads batches kept whole from any client, so a value that does not fit is skipped, never trusted.
+import { isHarness } from '../sessions/pool-wire.js';
 
 /** A latency in a cell, or a yes (1) or no (0) that a rate is made from. */
 export type Kind = 'latency' | 'rate';
 
 export interface Measure {
   metric: string;
-  /** What the value groups by: the harness version a hook ran under, or the oars version for a command. */
+  /** What the value groups by: the harness and harness version a hook ran under (`claude-code/2.1.5`), or the oars version for a command. */
   dimension: 'harnessVersion' | 'cli';
   value: string;
   kind: Kind;
@@ -44,11 +45,20 @@ const millis = (value: unknown): number | undefined => (typeof value === 'number
 const latency = (metric: string, dimension: Measure['dimension'], value: string, x: number): Measure => ({ metric, dimension, value, kind: 'latency', x });
 const rate = (metric: string, dimension: Measure['dimension'], value: string, yes: boolean): Measure => ({ metric, dimension, value, kind: 'rate', x: yes ? 1 : 0 });
 
+/**
+ * The value of a hook cell: the harness and its version, `claude-code/2.1.5`, so one version number under two harnesses is two cells. A harness off the closed list is `other`; an event written
+ * before the field existed has none and reads `unrecorded`, never dropped.
+ */
+const hookCellOf = (harness: unknown, version: unknown): string => {
+  const named = harness === undefined ? UNRECORDED : typeof harness === 'string' && isHarness(harness) ? harness : OTHER;
+  return `${named}/${valueOf(version)}`;
+};
+
 /** The measures of a `hook` event: its latency, and whether it found something. A hook that failed is neither a hit nor a miss. */
 const hookMeasures = (data: unknown): Measure[] => {
   const name = fieldOf(data, 'name');
   if (typeof name !== 'string' || !HOOK_NAMES.includes(name)) return [];
-  const version = valueOf(fieldOf(data, 'harnessVersion'));
+  const version = hookCellOf(fieldOf(data, 'harness'), fieldOf(data, 'harnessVersion'));
   const found: Measure[] = [];
   const took = millis(fieldOf(data, 'latencyMs'));
   if (took !== undefined) found.push(latency(`hook.${name}.latency`, 'harnessVersion', version, took));
