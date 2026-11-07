@@ -3,7 +3,8 @@
 // sending, and the server parses it again, field by field, because a live URL takes anything from anyone. This file imports nothing from the file system: the Worker bundles it.
 
 import { ACTION_TABLES, CANONICAL_ACTIONS, mcpOf, type CanonicalAction } from './actions.js';
-import { CUSTOM_AGENT, FRAMEWORKS, isPublicMcpTool, isRegistryVersion, LANGUAGES, LITERAL, PRIVATE, publicEffort, publicVersion, PUBLIC_PACKAGES, projectedAgentType, PUBLIC_FLAGS, REPO_SIZES, VOCAB_VERSION, type RepoSize } from './public-vocabulary.js';
+import { CUSTOM_AGENT, FRAMEWORKS, isPublicMcpTool, isRegistryVersion, LANGUAGES, LITERAL, PRIVATE, publicEffort, publicVersion, PUBLIC_PACKAGES, projectedAgentType, PUBLIC_FLAGS, REPO_SIZES, TOOL_INPUT_KEYS, VOCAB_VERSION, type RepoSize } from './public-vocabulary.js';
+import { ARG_CLASSES, TARGET_CLASSES, type ArgClass, type TargetClass } from './call-shape.js';
 import type { Cell } from './cells.js';
 import type { Redactor } from './redact.js';
 import type { Motif } from './motif.js';
@@ -18,7 +19,7 @@ export const SKELETON_FORMAT = 3;
  * The version of the field list: every field name a batch can hold (`BATCH_FIELDS` in `pool-outbox.ts`). It moves with any field added, so a server told the version knows which names a batch may carry,
  * and a test pins the list to it (`pool-wire-additive.test.ts`). A field is deprecated and left on the list, never removed (conclusion section 17, rule 3).
  */
-export const FIELD_LIST_VERSION = 7;
+export const FIELD_LIST_VERSION = 8;
 export const BUNDLE_FORMAT = 1;
 /** One constant: the pool serves only the vocabulary version the client holds. */
 export { VOCAB_VERSION };
@@ -93,6 +94,14 @@ export interface SkeletonTool {
   errorCode: string | null;
   /** For a failed call, what followed it: the actions of up to the next 5 calls of its prompt and whether an edit was among them. Absent on a call that did not fail. Never a signature, command, or text. */
   recoveryCalls?: RecoveryCalls;
+  /** The call's input key names, sorted (t870): a public tool's from its pinned list in `TOOL_INPUT_KEYS`, any other tool's from the name gate, and none for a tool that went as `private`. Never a value. Absent when none is sent. */
+  keys?: string[];
+  /** A `count` bucket of the key names the call held that were not sent: off a public tool's pinned list, or kept `private` by the gate. Absent when none was dropped. */
+  keysDropped?: number;
+  /** The class of the call's path target, derived at capture from the target's base and suffix (`targetClassOf`): the base name itself does not go. Absent on a call captured before it. */
+  targetClass?: TargetClass | typeof OTHER;
+  /** The classes of the call's arguments as a sorted set, derived at capture (`argClassOf`); never a value. Absent on a call captured before it. */
+  argClass?: Array<ArgClass | typeof OTHER>;
   steps: SkeletonStep[];
 }
 
@@ -335,6 +344,20 @@ const isDroppedFlag = (flag: string): boolean => flag.length > 2 && flag.startsW
 /** A flag name as the wire holds it: the name after the one gate, or `private` when it counts as redacted. Only the name is ever read, never a value. */
 const wireFlag = (gate: WireGate, flag: string): string => (isWireFlag(flag) && wireName(gate, flag.replace(FLAG_DASHES, '')) !== PRIVATE ? flag : PRIVATE);
 
+/**
+ * A call's key names as the wire holds them (t870): names only, never a value. A public tool (one with a pinned input list) sends the names on its list and counts the rest; any other tool sends a name only when it passes the
+ * name gate, and a tool that went as `private` sends none, so a private tool's keys name no private work. `dropped` counts the distinct names not sent.
+ */
+const wireKeys = (stored: readonly string[], native: string | undefined, gate: WireGate): { keys: string[]; dropped: number } => {
+  const distinct = [...new Set(stored)];
+  const listed = native === undefined ? undefined : TOOL_INPUT_KEYS.get(native);
+  const kept = native === undefined || native === PRIVATE ? [] : distinct.filter((name) => (listed === undefined ? wireName(gate, name) !== PRIVATE : listed.has(name)));
+  return { keys: kept.sort(), dropped: distinct.length - kept.length };
+};
+
+/** A stored closed-list member, else dropped: a hand-edited record never puts a value off the list on the wire. */
+const memberOf = <T extends string>(list: readonly T[], value: unknown): T | undefined => list.find((entry) => entry === value);
+
 /** The basename of a program as capture read it: a path never goes on the wire. */
 const basenameOf = (program: string): string => program.replace(/^.*[\\/]/, '');
 
@@ -562,7 +585,23 @@ const transcriptOf = (
       ...(tool.skill === undefined ? {} : { skill: wireName(gate, tool.skill) }),
       };
     });
-    steppedTools.push({ side, prompt: promptPosition, status, durationMs, errorCode, ...(recoveryCalls === null ? {} : { recoveryCalls }), steps });
+    const { keys, dropped } = wireKeys(tool.keys, steps[0]?.native, gate);
+    const targetClass = memberOf(TARGET_CLASSES, tool.targetClass);
+    const stored = tool.argClass;
+    const argClass = stored === undefined ? undefined : ARG_CLASSES.filter((kind) => stored.includes(kind));
+    steppedTools.push({
+      side,
+      prompt: promptPosition,
+      status,
+      durationMs,
+      errorCode,
+      ...(recoveryCalls === null ? {} : { recoveryCalls }),
+      ...(keys.length === 0 ? {} : { keys }),
+      ...(dropped === 0 ? {} : { keysDropped: bucketOf('count', dropped) }),
+      ...(targetClass === undefined ? {} : { targetClass }),
+      ...(argClass === undefined ? {} : { argClass: argClass.sort() }),
+      steps,
+    });
   }
   // A step's remaining tokens are those of the steps after it in its own run; a main-run step also counts the subagent runs its later steps spawned (a run belongs to the spawning call's carrier step).
   // `later` sums the steps that reported tokens; `laterKnown` is how many did, so a run whose later steps all reported nothing stays null instead of reading as zero.
@@ -714,7 +753,7 @@ export const OPTIONAL = {
   frame: ['harnessVersion', 'model', 'effort', 'day', 'shell', 'reach', 'repoKey', 'orgSize', 'team', 'repoVisibility', 'hour'],
   stack: ['size', 'languageShares'],
   prompt: ['wallSec', 'explore', 'usageResponses', 'intervention'],
-  tool: ['prompt', 'durationMs', 'errorCode', 'recoveryCalls'],
+  tool: ['prompt', 'durationMs', 'errorCode', 'recoveryCalls', 'keys', 'keysDropped', 'targetClass', 'argClass'],
   step: ['tokens', 'ms', 'allocated', 'parent', 'skill', 'edges', 'remainingTokens'],
   transcript: ['spawnedIn'],
 } as const satisfies { readonly [level: string]: readonly string[] };
@@ -1051,10 +1090,28 @@ const parseRecovery = (held: Collected, status: SkeletonTool['status'], value: u
   return { next, editFollowed: booleanOf(raw.editFollowed, under(at, 'editFollowed')) };
 };
 
+/**
+ * A call's `keys`: absent is none. A tool with a pinned input list sends names on it, and a name off it reads as `other` and goes to the bag; any other tool's names must have the shape of a name. Key names
+ * only, so a value that is no name shape is not a key.
+ */
+const parseKeys = (held: Collected, native: string | undefined, value: unknown, at: string): string[] | undefined => {
+  if (value === undefined) return undefined;
+  const listed = native === undefined ? undefined : TOOL_INPUT_KEYS.get(native);
+  return listOf(value, at, (entry, entryAt) => {
+    const name = textOf(entry, entryAt);
+    return (listed === undefined ? isWireName(name) : listed.has(name)) ? name : unknownValue(held, entryAt, name);
+  });
+};
+
 const parseTool = (held: Collected, harness: WireHarness, value: unknown, at: string): SkeletonTool => {
   const raw = fieldsOf(held, value, at, ['side', 'status', 'steps'], OPTIONAL.tool);
   const status = oneOf(held, STATUSES, raw.status, under(at, 'status'));
   const recoveryCalls = parseRecovery(held, status, raw.recoveryCalls, under(at, 'recoveryCalls'));
+  const steps = listOf(raw.steps, under(at, 'steps'), (entry, entryAt) => parseStep(held, harness, entry, entryAt));
+  const keys = parseKeys(held, steps[0]?.native, raw.keys, under(at, 'keys'));
+  const keysDropped = raw.keysDropped === undefined ? undefined : bucketIn('count', raw.keysDropped, under(at, 'keysDropped'));
+  const targetClass = raw.targetClass === undefined ? undefined : oneOf(held, TARGET_CLASSES, raw.targetClass, under(at, 'targetClass'));
+  const argClass = raw.argClass === undefined ? undefined : listOf(raw.argClass, under(at, 'argClass'), (entry, entryAt) => oneOf(held, ARG_CLASSES, entry, entryAt));
   return {
     side: booleanOf(raw.side, under(at, 'side')),
     prompt: orNull(raw.prompt, under(at, 'prompt'), countOf),
@@ -1062,7 +1119,11 @@ const parseTool = (held: Collected, harness: WireHarness, value: unknown, at: st
     durationMs: orNull(raw.durationMs, under(at, 'durationMs'), countOf),
     errorCode: parseErrorCode(held, status, raw.errorCode, under(at, 'errorCode')),
     ...(recoveryCalls === undefined ? {} : { recoveryCalls }),
-    steps: listOf(raw.steps, under(at, 'steps'), (entry, entryAt) => parseStep(held, harness, entry, entryAt)),
+    ...(keys === undefined ? {} : { keys }),
+    ...(keysDropped === undefined ? {} : { keysDropped }),
+    ...(targetClass === undefined ? {} : { targetClass }),
+    ...(argClass === undefined ? {} : { argClass }),
+    steps,
   };
 };
 

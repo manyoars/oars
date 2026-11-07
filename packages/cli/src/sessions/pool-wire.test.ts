@@ -67,7 +67,15 @@ const keptAt = (value: unknown): string[] => {
 };
 
 const firstStep = ['transcripts', 0, 'tools', 0, 'steps', 0];
-const withStep = (over: object): unknown => sent(firstStep, JSON.parse(JSON.stringify({ ...shell, n: undefined, seg: undefined, frameId: undefined, edges: undefined, cost: undefined, tokens: null, ms: null, remainingTokens: 0, agentType: null, frame: 0, ...over })));
+const path = (root: unknown, at: Path): unknown => at.reduce((holder: unknown, key) => (isHolder(holder) ? Reflect.get(holder, key) : undefined), root);
+
+/** The sample with its first step replaced. The call's `keys` belong to the sample's own tool, which the replaced step no longer names, so they go with it (`pool-wire-keys.test.ts` holds keys against their tool). */
+const withStep = (over: object): unknown => {
+  const raw = sent(firstStep, JSON.parse(JSON.stringify({ ...shell, n: undefined, seg: undefined, frameId: undefined, edges: undefined, cost: undefined, tokens: null, ms: null, remainingTokens: 0, agentType: null, frame: 0, ...over })));
+  const call = path(raw, ['transcripts', 0, 'tools', 0]);
+  if (isHolder(call)) Reflect.deleteProperty(call, 'keys');
+  return raw;
+};
 const stepField = 'transcripts[0].tools[0].steps[0]';
 
 describe('skeletonOf', () => {
