@@ -525,7 +525,6 @@ export const poolOutbox = async (deps: RunDeps, options: { server?: string | und
 /** One folder per harness under the server's, so a fetch for one harness never overwrites another's bundle of the same version. */
 const replicaFile = (storeDir: string, server: string, harness: Harness, harnessVersion: string): string => join(storeDir, 'pool-replica', contentHash(server), harness, `${encodeURIComponent(harnessVersion)}.json`);
 
-/** What an earlier fetch kept: the bundle, checked again against the pinned key, and the ETag the pool sent with it. Nothing readable and verified is nothing kept, and the next fetch is then an ordinary one. */
 /**
  * What the pool says it served a bundle at, printed as the bundle states it: the client holds no floor of its own and applies none (a floor is the pool's deploy setting), so a bundle that states none prints nothing.
  * A family on a floor of its own is named with it.
@@ -536,6 +535,7 @@ const floorSentence = (floors: BundleFloors | undefined): string => {
   return ` The pool served it at a public floor of ${String(floors.public)} clusters and a disclosure floor of ${String(floors.disclosure)}${own.length === 0 ? '' : `, with ${own.join(' and ')}`}.`;
 };
 
+/** What an earlier fetch kept: the bundle, checked again against the pinned key, and the ETag the pool sent with it. Nothing readable and verified is nothing kept, and the next fetch is then an ordinary one. */
 const keptReplica = async (file: string, key: PinnedKey, harness: Harness, harnessVersion: string): Promise<{ etag: string | undefined; bundle: Bundle } | undefined> => {
   let parsed: unknown;
   try {
