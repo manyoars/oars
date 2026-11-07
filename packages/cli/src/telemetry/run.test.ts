@@ -75,10 +75,9 @@ describe('the first-run notice', () => {
       const storeDir = join(made.dir, '..', 'sessions');
       mkdirSync(storeDir, { recursive: true });
       writeFileSync(join(storeDir, 'gate-policy.json'), '{"classes":{"not-found":"block"}}');
-      const now = new Date();
+      const now = new Date(made.deps.now());
       const answer = { kind: 'registry', v: 1, day: now.toISOString().slice(0, 10), ts: now.toISOString(), folder: folderKey(tmpdir()), class: 'npm-package', state: 'not-found', created: null, name: 'ghost-lib', latest: null };
-      writeFileSync(join(storeDir, 'gate-registry.jsonl'), `${JSON.stringify(answer)}
-`);
+      writeFileSync(join(storeDir, 'gate-registry.jsonl'), `${JSON.stringify(answer)}\n`);
       const call = JSON.stringify({ session_id: 's1', tool_use_id: 'u1', tool_name: 'Bash', tool_input: { command: 'npm install ghost-lib' }, cwd: tmpdir(), permission_mode: 'default', hook_event_name: 'PreToolUse' });
       made.deps.sessions = { storeDir, projectsRoot: join(made.dir, 'projects'), stdin: Readable.from([call]), stdout: { write: () => true } };
       return { ...made, code: await run(['gate', 'hook'], made.deps) };
