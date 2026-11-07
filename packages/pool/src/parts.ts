@@ -1,4 +1,5 @@
 // A deposit past the request cap arrives in parts, each under it, and the server keeps them as one deposit (t880). The parts wait in `deposit_parts`; the last to arrive completes the batch, and the join is stored by the same path as a deposit sent whole.
+import type { HashKey } from './ingest-hash.js';
 import { answer, bodyOf, fieldOf, refuse, textField, type Env } from './http.js';
 
 /** What one stored row can hold: D1 caps a row at 2,000,000 bytes, and the stored skeleton shares the row with its other columns. A batch past this is refused whole, whatever its parts. */
@@ -12,6 +13,48 @@ const SHA256 = /^[0-9a-f]{64}$/;
 const badPart = (message: string): Response => refuse(400, 'bad_part', message, 'oars-part');
 
 const hex = (bytes: ArrayBuffer): string => [...new Uint8Array(bytes)].map((byte) => byte.toString(16).padStart(2, '0')).join('');
+
+/** AES-GCM takes a 96-bit IV and appends a 128-bit tag; a sealed part is the base64 of the IV, then the ciphertext and tag. */
+const IV_BYTES = 12;
+const TAG_BYTES = 16;
+
+/** In chunks, because a spread of a 512 KiB part into one call overflows the stack. */
+const toBase64 = (bytes: Uint8Array): string => {
+  const chunks: string[] = [];
+  for (let at = 0; at < bytes.length; at += 0x8000) chunks.push(String.fromCharCode(...bytes.subarray(at, at + 0x8000)));
+  return btoa(chunks.join(''));
+};
+const fromBase64 = (text: string): Uint8Array => Uint8Array.from(atob(text), (char) => char.charCodeAt(0));
+
+/** The key a part is sealed under: HKDF-SHA-256 over the pool's host-hash secret, bound to the account and the batch, so a part of one batch opens for no other. No new secret: a pool that can hash hosts can seal parts. */
+const sealKey = async (secret: string, account: string, batch: string): Promise<HashKey> => {
+  const source = await crypto.subtle.importKey('raw', new TextEncoder().encode(secret), 'HKDF', false, ['deriveKey']);
+  const info = new TextEncoder().encode(`oars-pool-parts:${account}:${batch}`);
+  return crypto.subtle.deriveKey({ name: 'HKDF', hash: 'SHA-256', salt: new TextEncoder().encode('oars-pool-parts-v1'), info }, source, { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
+};
+
+/** A part's text, sealed with a fresh IV: what `deposit_parts.body` holds, so a host in a staged part is not readable from the table (t907). */
+const seal = async (key: HashKey, text: string): Promise<string> => {
+  const iv = crypto.getRandomValues(new Uint8Array(IV_BYTES));
+  const sealed = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, new TextEncoder().encode(text)));
+  const joined = new Uint8Array(IV_BYTES + sealed.length);
+  joined.set(iv);
+  joined.set(sealed, IV_BYTES);
+  return toBase64(joined);
+};
+
+/** A sealed part's text, or null when it does not open: a wrong key, a changed byte, or text that was never sealed. */
+const open = async (key: HashKey, sealed: string): Promise<string | null> => {
+  try {
+    const bytes = fromBase64(sealed);
+    return new TextDecoder().decode(await crypto.subtle.decrypt({ name: 'AES-GCM', iv: bytes.slice(0, IV_BYTES) }, key, bytes.slice(IV_BYTES)));
+  } catch {
+    return null;
+  }
+};
+
+/** The bytes of the text a sealed part holds, read off its length without opening it, so the staging bound needs no decryption. */
+const plainBytes = (sealed: string): number => Math.max(0, Math.floor(((sealed.length - (sealed.endsWith('==') ? 2 : sealed.endsWith('=') ? 1 : 0)) * 3) / 4) - IV_BYTES - TAG_BYTES);
 
 interface Held {
   part: number;
@@ -27,8 +70,8 @@ const heldParts = async (env: Env, account: string, batch: string): Promise<Held
 
 const forget = (env: Env, account: string, batch: string): Promise<unknown> => env.DB.prepare('DELETE FROM deposit_parts WHERE account = ? AND batch = ?').bind(account, batch).run();
 
-/** One part of a batch, already read and under the request cap. `store` is the path a whole deposit takes. */
-export const receivePart = async (request: Request, env: Env, account: string, body: string, store: (text: string) => Promise<Response>): Promise<Response> => {
+/** One part of a batch, already read and under the request cap. `secret` is the pool's `INGEST_HASH_KEY`, which seals the staged text. `store` is the path a whole deposit takes. */
+export const receivePart = async (request: Request, env: Env, account: string, secret: string, body: string, store: (text: string) => Promise<Response>): Promise<Response> => {
   const found = PART.exec(request.headers.get('oars-part') ?? '');
   const batch = request.headers.get('oars-batch') ?? '';
   const part = Number(found?.[1]);
@@ -45,23 +88,26 @@ export const receivePart = async (request: Request, env: Env, account: string, b
     return badPart('The parts of one batch all name the same count. Send every part again.');
   }
   // Staging is bounded by what the join may hold: a part that takes the held bytes past it is refused now, not when the last part arrives.
-  const staged = before.filter((row) => row.part !== part).reduce((sum, row) => sum + new TextEncoder().encode(row.body).length, new TextEncoder().encode(body).length);
+  const staged = before.filter((row) => row.part !== part).reduce((sum, row) => sum + plainBytes(row.body), new TextEncoder().encode(body).length);
   if (staged > MAX_ASSEMBLED_BYTES) {
     await forget(env, account, batch);
     return refuse(413, 'too_large', `A deposit holds at most ${String(MAX_ASSEMBLED_BYTES)} bytes, in parts or whole.`);
   }
-  // A retried part lands on its own row and changes nothing.
-  await env.DB.prepare('INSERT INTO deposit_parts (account, batch, part, count, body) VALUES (?, ?, ?, ?, ?) ON CONFLICT (account, batch, part) DO NOTHING').bind(account, batch, part, count, body).run();
+  // A retried part lands on its own row and changes nothing. The text is sealed first: no host is written in clear, staged or not.
+  const key = await sealKey(secret, account, batch);
+  await env.DB.prepare('INSERT INTO deposit_parts (account, batch, part, count, body) VALUES (?, ?, ?, ?, ?) ON CONFLICT (account, batch, part) DO NOTHING').bind(account, batch, part, count, await seal(key, body)).run();
   const held = await heldParts(env, account, batch);
   // Parts that arrive together each read a small `before`, so the bound that holds is on what is staged after the insert: past it, nothing of the batch stays.
-  const bytes = new TextEncoder().encode(held.map((row) => row.body).join(''));
-  if (bytes.length > MAX_ASSEMBLED_BYTES) {
+  if (held.reduce((sum, row) => sum + plainBytes(row.body), 0) > MAX_ASSEMBLED_BYTES) {
     await forget(env, account, batch);
     return refuse(413, 'too_large', `A deposit holds at most ${String(MAX_ASSEMBLED_BYTES)} bytes, in parts or whole.`);
   }
   if (held.length < count) return answer(202, { ok: true, pending: count - held.length });
-  const whole = held.map((row) => row.body).join('');
-  if (hex(await crypto.subtle.digest('SHA-256', bytes)) !== batch) {
+  // The join opens every part; one that does not open (a changed byte, another key) is a batch that is not the one named.
+  const opened = await Promise.all(held.map((row) => open(key, row.body)));
+  const whole = opened.every((text) => text !== null) ? opened.join('') : null;
+  const bytes = new TextEncoder().encode(whole ?? '');
+  if (whole === null || hex(await crypto.subtle.digest('SHA-256', bytes)) !== batch) {
     await forget(env, account, batch);
     return refuse(400, 'part_mismatch', 'The parts do not join to the batch that oars-batch names. Send every part again.', 'oars-batch');
   }

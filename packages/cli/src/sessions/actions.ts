@@ -344,6 +344,40 @@ export const ACTION_TABLES: { readonly [harness in Harness]: ActionTable } = {
     toolDelimited: true,
     shells: { bash: 'bash', run_terminal_cmd: 'bash', run_terminal_command: 'bash' },
   },
+  // OpenCode's own names (sst/opencode @ 21bf6b4, packages/core/src/tool/plugin/*.ts, each file's `export const name`): a tool part's `name`. The reader keeps that name in
+  // `native`, which is what this table looks up, and writes `Bash`, `Edit`, `Write`, `Read`, `Grep`, and `Glob` for the extractor. An MCP tool is `<server>_<tool>`
+  // (tool/runtime.ts:290-293), the same spelling as a built-in's, so it cannot be told apart and reads as an unknown tool with its name withheld.
+  opencode: {
+    rows: {
+      shell: 'shell.exec',
+      edit: 'file.edit',
+      patch: 'file.edit',
+      write: 'file.write',
+      read: 'file.read',
+      grep: 'file.search',
+      glob: 'file.search',
+      websearch: 'web.search',
+      webfetch: 'web.fetch',
+      question: 'ask.user',
+      subagent: 'agent.spawn',
+      skill: 'skill.run',
+      todowrite: 'plan.update',
+      // Known public names with no canonical action.
+      experimental_image_generate: 'other',
+      artifact_create: 'other',
+      artifact_read: 'other',
+      artifact_update: 'other',
+      artifact_delete: 'other',
+      schedule_create: 'other',
+      schedule_list: 'other',
+      schedule_pause: 'other',
+      schedule_resume: 'other',
+      schedule_delete: 'other',
+    },
+    mcp: null,
+    toolDelimited: false,
+    shells: { shell: 'bash' },
+  },
 };
 
 /** The MCP call a native name spells, in full, as the transcript wrote it; undefined for any other name. */
