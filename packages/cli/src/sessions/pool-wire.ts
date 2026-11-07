@@ -1160,7 +1160,7 @@ export interface Bundle {
   harness: Harness;
   harnessVersion: string;
   vocabVersion: string;
-  /** The floor the pool applied: it serves a cell, a name, or a count only once this many distinct accounts report it, so every count and denominator here is of values at or above it. */
+  /** The public floor the pool applied (`floors.public`): every cell and read is at or above it except a family on a lower floor of its own, which states its floor on each read and in `floors.families`. */
   floor: number;
   asOf: ReadAsOf;
   cells: Cell[];

@@ -41,6 +41,7 @@ describe('one store at floors 3, 5, and 10', () => {
     expect(motifsOf(five, 'tool-day')).toEqual(['file.read', 'shell.exec']);
     expect(motifsOf(ten, 'tool-day')).toEqual(['file.read']);
     for (const [bundle, floor] of [[three, 3], [five, 5], [ten, 10]] as const) {
+      expect(bundle.floor, `floor ${String(floor)}`).toBe(floor);
       expect(bundle.reads.length).toBeGreaterThan(0);
       expect(bundle.reads.every((read) => read.floor === floor), `floor ${String(floor)}`).toBe(true);
     }
@@ -88,7 +89,7 @@ describe('what the bundle and the ETag carry', () => {
   });
 
   it('adds only optional fields, so an older reader\'s check still accepts the bundle', () => {
-    // The check below is the one a client before the floors ran (`isBundle` at t812): it names the fields it needs and ignores the rest. The new bundle carries every one of them, and `floors` and a read\'s `floor` are the only additions.
+    // The check below is the one a client before the floors ran (`isBundle` at t812): it names the fields it needs and ignores the rest. The new bundle carries every one of them, and `floor` (t881), `floors`, and a read\'s `floor` are the only additions since t812.
     const isOlderBundle = (value: Record<string, unknown>): boolean =>
       value.format === 1 && typeof value.harness === 'string' && typeof value.harnessVersion === 'string' && typeof value.vocabVersion === 'string' && typeof value.asOf === 'object' && Array.isArray(value.cells) && Array.isArray(value.motifs) && Array.isArray(value.reads) && Array.isArray(value.strata);
     const bundle = bundleOver([cellOf(READ.motifId, 6, 12)], at(5, { live: 3 }));
