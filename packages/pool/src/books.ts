@@ -1,6 +1,6 @@
 // The set of four from the pool design notes, set of four, as totals the bundle carries. Served cells are the week cells at or above the floor that the bundle serves; every other week cell the pool holds
 // (sub-floor, or served but withheld by `complement.ts`) is backlog, so the served number never overstates what a reader can see. The backlog is one number: a list of it would name a sub-floor value.
-import type { Cell } from '../../cli/src/sessions/cells.js';
+import { bucketFields, isEnvironmentCell, NO_AXES, type Cell } from '../../cli/src/sessions/cells.js';
 import type { Books, Sourced } from '../../cli/src/sessions/pool-wire.js';
 
 const NONE_YET = (reason: string): Sourced => ({ state: 'no source yet', reason });
@@ -40,7 +40,8 @@ export const booksOf = ({ held, served, panel, panelDay, lineage }: BooksInput):
     }
     total += 1;
     tally(byWeek, cell.day);
-    tally(byTuple, cell.frameBucket);
+    // A tuple row names harness, version bucket, and model. An environment cell names none, and a version-free cell would count its calls a second time beside the versioned cell; both still count in the total and by week.
+    if (!isEnvironmentCell(cell) && bucketFields(cell.frameBucket).harnessBucket !== NO_AXES) tally(byTuple, cell.frameBucket);
   }
   return {
     ...lineage,

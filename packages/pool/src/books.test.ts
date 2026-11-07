@@ -47,6 +47,20 @@ describe('books: served cells and the below-floor backlog', () => {
     expect(books.served.byTuple).toEqual([{ tuple: `${BUCKET}/opus`, cells: 2 }, { tuple: sonnet, cells: 1 }]);
   });
 
+  it('counts an environment cell in the total and by week, and names no tuple for it', () => {
+    const books = booksOver([weekCell(READ.motifId, 6)], { environment: [weekCell(SHELL.motifId, 7, { frameBucket: 'env:linux:bash' })] });
+    expect(books.served.total).toBe(2);
+    expect(books.served.byWeek).toEqual([{ week: WEEK, cells: 2 }]);
+    expect(books.served.byTuple).toEqual([{ tuple: `${BUCKET}/opus`, cells: 1 }]);
+  });
+
+  it('counts a version-free cell in the total and by week, and names no tuple for it, so its calls are not counted again beside the versioned cell', () => {
+    const books = booksOver([weekCell(READ.motifId, 6), weekCell(READ.motifId, 7, { frameBucket: 'claude-code/-/opus' })]);
+    expect(books.served.total).toBe(2);
+    expect(books.served.byWeek).toEqual([{ week: WEEK, cells: 2 }]);
+    expect(books.served.byTuple).toEqual([{ tuple: `${BUCKET}/opus`, cells: 1 }]);
+  });
+
   it('counts a served cell that complementary withholding drops as backlog, so the total never overstates what a reader sees', () => {
     const named = (tool: string): Motif => {
       const steps: WindowStep[] = [{ action: 'mcp.call', identity: { server: 'a', tool } }];
