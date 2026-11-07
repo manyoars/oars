@@ -1,30 +1,14 @@
 // A session past the request cap deposits in parts that the server keeps as one deposit (t880).
 import { createHash } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
-import { frame, printOf, prompt, session, sessionsFrom, step, storedNames, store, tool } from '../../cli/src/sessions/pool-fixture.js';
+import { bigSkeleton } from '../../cli/src/sessions/pool-fixture.js';
 import { canonicalBytes, partsOf } from '../../cli/src/sessions/pool-outbox.js';
-import { parseSkeleton, skeletonOf, type SessionSkeleton } from '../../cli/src/sessions/pool-wire.js';
+import { parseSkeleton } from '../../cli/src/sessions/pool-wire.js';
 import { receivePart } from './parts.js';
 import type { Bound, Env } from './http.js';
 import { startPool, stubUser, type Answer, type TestPool } from './test-pool.js';
 
 const CAP = 1024 * 1024;
-
-/** One session with `calls` shell calls: each a few hundred bytes of skeleton, so a few thousand pass the request cap. */
-const bigSkeleton = (id: string, calls: number): SessionSkeleton => {
-  const framed = frame({ shell: 'bash' });
-  const shell = (n: number) => step(n, 0, 'shell.exec', { native: 'Bash', identity: { program: 'git', sub: 'push', flags: [] } });
-  const [only] = sessionsFrom(
-    store({
-      sessions: [session('s1', { frame: framed })],
-      prompts: [prompt('s1', 0, { frame: framed })],
-      tools: Array.from({ length: calls }, (_, n) => tool('s1', n, 'Bash', { steps: [shell(n)] })),
-    }),
-  );
-  const built = only === undefined ? null : skeletonOf(only, id, storedNames, printOf);
-  if (built === null) throw new Error('no skeleton');
-  return built;
-};
 
 const signedIn = async (pool: TestPool, id: string): Promise<string> => {
   const { token } = await pool.signIn('github', stubUser(id));

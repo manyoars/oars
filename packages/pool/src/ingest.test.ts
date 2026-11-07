@@ -1,10 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { storeOf } from '../../cli/src/sessions/cell-increments.js';
 import { deriveCells } from '../../cli/src/sessions/cells.js';
-import { frame, printOf, prompt, session, sessionsFrom, step, storedNames, store, tool } from '../../cli/src/sessions/pool-fixture.js';
-import { skeletonOf, type SessionSkeleton } from '../../cli/src/sessions/pool-wire.js';
-import type { CanonicalAction } from '../../cli/src/sessions/actions.js';
-import { PUBLIC_PROGRAMS, PUBLIC_SUBCOMMANDS } from '../../cli/src/sessions/public-vocabulary.js';
+import { largeSkeleton } from '../../cli/src/sessions/pool-fixture.js';
+import type { SessionSkeleton } from '../../cli/src/sessions/pool-wire.js';
 import type { Bound, Env, PoolDb } from './http.js';
 import { chunksOf, incrementsOf } from './ingest.js';
 import { sampleSkeleton, withPairs } from './sample.js';
@@ -314,49 +312,6 @@ describe('what stored cells cannot take back', () => {
 
 // A deposit inside the route's 1 MB limit binds far more than 1 MB of cell JSON (a large batch of varied steps runs its cell JSON to about four times the skeleton), and D1 refuses a value over 2 MB, so each payload goes in chunks.
 describe('a large deposit', () => {
-  const NATIVES: [CanonicalAction, string][] = [
-    ['file.read', 'Read'],
-    ['file.edit', 'Edit'],
-    ['file.write', 'Write'],
-    ['file.search', 'Grep'],
-    ['plan.update', 'TodoWrite'],
-    ['shell.exec', 'Bash'],
-    ['shell.exec', 'Bash'],
-    ['shell.exec', 'Bash'],
-    ['shell.exec', 'Bash'],
-  ];
-  const STEPS = 3400;
-  const FLAGS = 'abcdefghijklmnopqrstuvwxyz'.split(/(?:)/u);
-  const programs = [...PUBLIC_PROGRAMS];
-
-  /** One prompt of `STEPS` calls whose actions follow a fixed pseudo-random line, so the windows over it are mostly distinct and so are its cells. */
-  const largeSkeleton = (id: string, steps = STEPS, perCall = 1): SessionSkeleton => {
-    let seed = 7;
-    const next = (): number => {
-      seed = (seed * 1103515245 + 12345) % 2147483648;
-      // The high bits: the low bits of this generator cycle with a short period.
-      return Math.floor(seed / 65536);
-    };
-    const framed = frame({ shell: 'bash', day: '2026-11-01', stack: { languages: ['typescript'], frameworks: [], size: null } });
-    const observed = Array.from({ length: steps }, (_, n) => {
-      const [action, native] = NATIVES[next() % NATIVES.length] ?? NATIVES[0] ?? ['other', 'x'];
-      // A program, one of its subcommands, and a short flag, all from the public vocabulary: thousands of identities, so the named windows over them rarely repeat.
-      const program = programs[next() % programs.length] ?? 'git';
-      const subs = [null, ...(PUBLIC_SUBCOMMANDS.get(program) ?? [])];
-      const identity = action === 'shell.exec' ? { program, sub: subs[next() % subs.length] ?? null, flags: [`-${FLAGS[next() % FLAGS.length] ?? 'a'}`] } : null;
-      return { native, observed: step(n, n % perCall, action, { native, identity }) };
-    });
-    // Several steps to a call carry fewer bytes of call wrapper per step, so a deposit can hold more cells' keys under the route's size limit.
-    const calls = Array.from({ length: Math.ceil(steps / perCall) }, (_, call) => {
-      const held = observed.slice(call * perCall, (call + 1) * perCall);
-      return tool('s1', call, held[0]?.native ?? 'x', { steps: held.map(({ observed: one }) => one) });
-    });
-    const [only] = sessionsFrom(store({ sessions: [session('s1', { frame: framed })], prompts: [prompt('s1', 0, { frame: framed })], tools: calls }));
-    const built = only === undefined ? null : skeletonOf(only, id, storedNames, printOf);
-    if (built === null) throw new Error('no skeleton');
-    return built;
-  };
-
   it('is stored whole when its cells run past the size D1 takes in one value', async () => {
     const skeleton = largeSkeleton('0000000000009101');
     const wanted = incrementsOf(skeleton);
