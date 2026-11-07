@@ -1,5 +1,5 @@
 // What telemetry adds to a hook fire: wall time of the whole process, built `dist/` run as the harness runs it, alternating telemetry off (`OARS_TELEMETRY=0`) and on so drift hits both
-// alike. The fires carry a 200 KB transcript, so the frame read (the 64 KB tail) is inside the "on" number. The brief's line is 5 ms added at the median.
+// alike. The fires carry a 200 KB transcript, and the frame read (the 64 KB tail) runs in both columns, so "added" is the emit's cost alone. The brief's line is 5 ms added at the median.
 //
 //   node scripts/hook-telemetry-cost.mjs [--runs 250]      # needs `npm run build -w packages/cli` first
 //
