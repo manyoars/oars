@@ -3,6 +3,8 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { books, measure, recall } from './query.js';
+import { printOf, storedNames } from './pool-fixture.js';
+import { sessionsOf, skeletonOf } from './pool-wire.js';
 import { deposit, loadStore, paths, readSkeletons } from './store.js';
 import { verifyAll, verifyCaptured } from './verify.js';
 import { cleanup, NOW, otlpRequest, otlpSpan, stage, stageOtel } from './test-support.js';
@@ -109,5 +111,62 @@ describe('a trace deposited before its conversation id arrives', () => {
     expect(after.recallSessions).toEqual(merged.recallSessions);
     expect(after.skeletons).toBe(merged.skeletons);
     expect(after.violations).toEqual([]);
+  });
+
+  it('never reaches the deposit wire: the batches built from the store hold the merged session alone, with each prompt and call once', async () => {
+    const s = setup([early]);
+    await deposit(s.runtime, options);
+    writeFileSync(join(s.dir, late.name), `${late.lines.map((line) => JSON.stringify(line)).join('\n')}\n`);
+    await deposit(s.runtime, options);
+    const roots = new Map((await readSkeletons(s.storeDir, undefined, true)).skeletons.map(({ session, merkleRoot, leaves }) => [session, { merkleRoot, leaves }]));
+    const batches = sessionsOf(await loadStore(s.storeDir), roots).map((records) => skeletonOf(records, '0123456789abcdef', storedNames, printOf));
+    expect(batches).toHaveLength(1);
+    const transcripts = batches.flatMap((batch) => batch?.transcripts ?? []);
+    expect(transcripts.flatMap((transcript) => transcript.prompts)).toHaveLength(2);
+    expect(transcripts.flatMap((transcript) => transcript.tools)).toHaveLength(2);
+  });
+
+  it('records the supersede as a later rev of the early session, with no turns, rather than editing the early one', async () => {
+    const s = setup([early]);
+    await deposit(s.runtime, options);
+    const early1 = JSON.parse(readFileSync(paths(s.storeDir).observations, 'utf8').split('\n')[0] ?? '{}') as { rev: number };
+    writeFileSync(join(s.dir, late.name), `${late.lines.map((line) => JSON.stringify(line)).join('\n')}\n`);
+    await deposit(s.runtime, options);
+    const after = readFileSync(paths(s.storeDir).observations, 'utf8');
+    const marked = after.split('\n').filter((line) => line.includes('"supersededBy"'));
+    expect(marked).toHaveLength(1);
+    expect(Number((JSON.parse(marked[0] ?? '{}') as { rev: number }).rev)).toBeGreaterThan(early1.rev);
+    expect(JSON.parse(marked[0] ?? '{}')).toMatchObject({ kind: 'session', session: `otel-${T}`, userTurns: 0, rev: expect.any(Number) as unknown, supersededBy: expect.stringMatching(/^otel-conv-/u) as unknown });
+  });
+
+  it('records nothing for a trace that was never deposited alone', async () => {
+    const s = setup([early, late]);
+    await deposit(s.runtime, options);
+    expect(readFileSync(paths(s.storeDir).observations, 'utf8')).not.toContain('supersededBy');
+  });
+});
+
+describe('order and repetition', () => {
+  it('comes to the same counts when the id-bearing file is read first', async () => {
+    const merged = await single();
+    const s = setup([{ ...late, name: 'a-late.jsonl' }]);
+    await deposit(s.runtime, options);
+    writeFileSync(join(s.dir, 'b-early.jsonl'), `${early.lines.map((line) => JSON.stringify(line)).join('\n')}\n`);
+    await deposit(s.runtime, options);
+    const after = await counted(s.storeDir);
+    expect(after).toEqual(merged);
+    expect(readFileSync(paths(s.storeDir).observations, 'utf8')).not.toContain('supersededBy');
+  });
+
+  it('adds nothing when the folder is deposited twice after the id arrives', async () => {
+    const s = setup([early]);
+    await deposit(s.runtime, options);
+    writeFileSync(join(s.dir, late.name), `${late.lines.map((line) => JSON.stringify(line)).join('\n')}\n`);
+    await deposit(s.runtime, options);
+    const log = readFileSync(paths(s.storeDir).observations, 'utf8');
+    const again = await deposit(s.runtime, options);
+    expect(again).toMatchObject({ sessions: 0 });
+    expect(readFileSync(paths(s.storeDir).observations, 'utf8')).toBe(log);
+    expect(await counted(s.storeDir)).toEqual(await single());
   });
 });

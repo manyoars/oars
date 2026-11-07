@@ -1093,7 +1093,7 @@ line, and usage is nonzero where the library reports it.
   across files. A file that does not parse is named once as unreadable and skipped; the other files and sources deposit. A torn line in a file that does parse is counted as a bad line on the first session that came from that file, and a file whose torn lines no session came from is named as unreadable with its line count. A deposit only reads. Idempotent per session
   (`otel/<id>` in `state.json`; the size is the count of agent, model, and tool spans it read and the mtime the latest span time, so a file that gains spans is read again).
 - **Mapping.** A session is one `traceId`; traces that share `gen_ai.conversation.id` are one session, each trace a prompt in start-time order, and a trace with no
-  conversation id is its own session. A prompt is one per root agent span (`invoke_agent` or any `invoke_*` operation), else per trace root; its text is the last user message
+  conversation id is its own session. A trace deposited before its conversation id arrives (the id sits on the root agent span, which a batch exporter writes last) is superseded once it does: the next deposit appends a later rev of that early session with no turns and `supersededBy` naming the merged session, and every read skips a session that carries it, so each prompt and call counts once. Nothing is edited; a trace the store never held alone records nothing. A prompt is one per root agent span (`invoke_agent` or any `invoke_*` operation), else per trace root; its text is the last user message
   of `gen_ai.input.messages`, which is Opt-In, so by default the turn is written content-less (as an image-only prompt is). A model call is a `chat`, `generate_content`, or
   `text_completion` span: one assistant line, with the span id as `requestId`. A tool call is an `execute_tool` span, placed in the model call whose output names its
   `gen_ai.tool.call.id`, else the latest model call that ended before it began. It failed iff the span status is ERROR or `error.type` is set; the error line is
@@ -1112,7 +1112,7 @@ line, and usage is nonzero where the library reports it.
   no bundle is fetched for `otel`: `oars pool fetch --harness otel` is refused, and otel sessions are not counted when a fetch without `--harness` picks the harness your store holds most of. A separate framework field is a later change, only if a pooled read needs it.
 - **Content.** Prompts, completions, tool arguments, and tool results are Opt-In attributes. When present they pass only through capture's field classes and redaction; `_ref`
   URIs are never fetched.
-- **Known gaps.** No provider is stored. A trace deposited before its conversation id arrives (the id sits on the root agent span, which a batch exporter writes last) is kept as its own session as well, next to the merged one it later joins. A LangSmith or Langfuse native reader is a later change, only if a field they hold is lost in the OTel form.
+- **Known gaps.** No provider is stored. A LangSmith or Langfuse native reader is a later change, only if a field they hold is lost in the OTel form.
 
 ## The outcome gold set
 
