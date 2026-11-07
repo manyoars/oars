@@ -15,6 +15,8 @@ import { session as sessionRow } from './pool-fixture.js';
 import { parseSkeleton, skeletonOf, VOCAB_VERSION, type PinnedKey } from './pool-wire.js';
 import { contentHash } from './read.js';
 import { deposit } from './store.js';
+import { spoolEvents } from '../telemetry/read-events.js';
+import { readSpool } from '../telemetry/spool.js';
 import { addProject, cleanup, NOW, settledClock, stage, type Staged } from './test-support.js';
 
 // The session gates must stop a session before the projection runs; the real projection is wrapped so a test can see whether it was called.
@@ -1734,5 +1736,68 @@ describe('oars pool deposit: local deltas', () => {
     expect(await deposited(scene)).toBe(ExitCode.OK);
     expect(carriedBy(scene).map(({ entry }) => entry)).toEqual([MODE_DELTA]);
     expect(logOf(scene)).toHaveLength(1);
+  });
+});
+
+describe('wire policing in telemetry', () => {
+  const printedAndHash = async (scene: Scene): Promise<string> => {
+    expect(await scene.cli('pool', 'outbox', '--server', POOL)).toBe(ExitCode.OK);
+    return printedHashes(scene)[0] ?? '';
+  };
+  /** Telemetry for a scene: a temp config folder (APPDATA), with the telemetry folder where main.ts puts it. */
+  const watched = (scene: Scene): string => {
+    scene.h.deps.env.APPDATA = scene.staged.root;
+    const dir = join(scene.staged.root, 'oars', 'telemetry');
+    scene.h.deps.telemetry = { dir, platform: 'linux' };
+    return dir;
+  };
+  const spooled = (dir: string, type: string): { data: { [field: string]: unknown } }[] => spoolEvents(dir, type);
+
+  it('counts the fields of a pass against a hand count of the batches it wrote', async () => {
+    const scene = setting();
+    const dir = watched(scene);
+    await capture(scene);
+    await signIn(scene);
+    expect(await scene.cli('pool', 'deposit', '--server', POOL)).toBe(ExitCode.OK);
+    const batches = batchBytes(scene);
+    expect(batches.length).toBeGreaterThan(0);
+    const events = spooled(dir, 'wire');
+    // One event for the harness of the fixture, with every batch of the pass.
+    expect(events).toHaveLength(1);
+    const data = events[0]?.data ?? {};
+    expect(data.batches).toBe(batches.length);
+    expect(data.bytes).toBe(batches.reduce((sum, bytes) => sum + Buffer.byteLength(bytes.trimEnd()), 0));
+    const fields = Array.isArray(data.fields) ? data.fields.map(String) : [];
+    const at = (name: string): number => fields.indexOf(name);
+    const numbers = (value: unknown): unknown[] => (Array.isArray(value) ? value : []);
+    // `format` is one number in each batch: the hand count reads it from the written bytes.
+    const formats = batches.flatMap((bytes) => [...bytes.matchAll(/"format":(\d+)/g)].map((found) => found[1] ?? ''));
+    expect(numbers(data.present)[at('format')]).toBe(batches.length);
+    expect(numbers(data.fieldBytes)[at('format')]).toBe(formats.join('').length);
+    // Only names the register holds.
+    for (const name of fields) expect(Object.keys(FIELD_ROWS)).toContain(name);
+    expect(readSpool(dir).join('')).not.toContain(TERM);
+  });
+
+  it('records a taken send with its bytes, and a refused one with the pool\'s code', async () => {
+    const scene = await batched();
+    const dir = watched(scene);
+    const hash = await printedAndHash(scene);
+    const taken = wire({ 'GET /v1/covenant': OPEN_COVENANT, 'POST /v1/deposits': answer(201, { ok: true }) });
+    await poolDeposit(scene.h.deps, sendOptions(hash, taken.via));
+    const refused = wire({ 'GET /v1/covenant': OPEN_COVENANT, 'POST /v1/deposits': answer(429, { error: 'rate_limited', message: 'Slow down.' }) });
+    await expect(poolDeposit(scene.h.deps, sendOptions(hash, refused.via))).rejects.toMatchObject({ problem: { code: 'rate_limited' } });
+    const bytes = Buffer.byteLength(batchBytes(scene)[0] ?? '');
+    expect(spooled(dir, 'wire-send').map((event) => event.data)).toEqual([
+      { sent: 1, status: 201, bytes },
+      { sent: 0, status: 429, code: 'rate_limited', bytes },
+    ]);
+  });
+
+  it('records nothing without a telemetry folder, and a send still raises what it did', async () => {
+    const scene = await batched();
+    const hash = await printedAndHash(scene);
+    const refused = wire({ 'GET /v1/covenant': OPEN_COVENANT, 'POST /v1/deposits': answer(500, {}) });
+    await expect(poolDeposit(scene.h.deps, sendOptions(hash, refused.via))).rejects.toMatchObject({ problem: { status: 500 } });
   });
 });

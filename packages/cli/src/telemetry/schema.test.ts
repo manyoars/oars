@@ -41,8 +41,8 @@ const spoolOf = (feed: (record: (type: string, fields: object) => void) => void)
 };
 
 describe('the closed schema', () => {
-  it('knows the command type, one line per type', () => {
-    expect(EVENT_TYPES).toEqual(['command']);
+  it('knows each event type, one line per type', () => {
+    expect(EVENT_TYPES).toEqual(['command', 'store-health', 'run-cost', 'crash', 'wire', 'wire-send']);
   });
 
   it.each(EVENT_TYPES)('%s: a home path, command text, a prompt, and a URL fed to every field never reach the spool', (type) => {
@@ -78,6 +78,31 @@ describe('the closed schema', () => {
       data: { path: ['sessions', 'gold', 'sample'], flags: ['apiUrl', 'json'], durationMs: 41, exitCode: 8, errorClass: 'unreachable' },
       dropped: 0,
     });
+  });
+
+  it('admits the health, cost, crash, and wire types as they are built, and refuses what is off their lists', () => {
+    expect(sanitize('store-health', { sessions: 12, models: ['claude-opus-4-5', 'other'], harnessVersions: ['2.1.37'], rawBytes: 4096, readFailed: 0 })).toEqual({
+      data: { sessions: 12, models: ['claude-opus-4-5', 'other'], harnessVersions: ['2.1.37'], rawBytes: 4096, readFailed: 0 },
+      dropped: 0,
+    });
+    // A model or version outside the public vocabulary is written `other` by the caller; the schema refuses it if it comes through as it is.
+    expect(sanitize('store-health', { models: ['acme-internal-finetune'], harnessVersions: ['build 7 of acme'] })).toEqual({ data: {}, dropped: 2 });
+    // The versions are whole numbers, listed; a stamp that is words, or too many of them, is refused.
+    expect(sanitize('store-health', { captureVersions: [17, 18], extractorVersions: [12] })).toEqual({ data: { captureVersions: [17, 18], extractorVersions: [12] }, dropped: 0 });
+    expect(sanitize('store-health', { captureVersions: ['18'], extractorVersions: Array.from({ length: 33 }, (_, index) => index) })).toEqual({ data: {}, dropped: 2 });
+    expect(sanitize('run-cost', { totalMs: 900, parseMs: 400, peakRssMb: 310, failed: 1 })).toEqual({ data: { totalMs: 900, parseMs: 400, peakRssMb: 310, failed: 1 }, dropped: 0 });
+    expect(sanitize('crash', { errorClass: 'TypeError', stackHash: '0123456789abcdef' })).toEqual({ data: { errorClass: 'TypeError', stackHash: '0123456789abcdef' }, dropped: 0 });
+    expect(sanitize('crash', { errorClass: 'CustomError', stackHash: 'C:\\Users\\someone' })).toEqual({ data: {}, dropped: 2 });
+    expect(sanitize('wire', { harness: 'claude-code', fields: ['action', 'harness'], present: [3, 3], fieldBytes: [120, 60], batches: 3, bytes: 900 })).toMatchObject({ dropped: 0 });
+    // Names come from the register: a name outside it, and a number list with a text entry, are refused.
+    expect(sanitize('wire', { fields: ['action', 'secret-project'], present: [1, 'x'] })).toEqual({ data: {}, dropped: 2 });
+    // The three lists are parallel: when one is refused, the other two would misalign, so all three go.
+    expect(sanitize('wire', { harness: 'claude-code', fields: ['action', 'harness'], present: [3, 'x'], fieldBytes: [120, 60], batches: 3 })).toEqual({ data: { harness: 'claude-code', batches: 3 }, dropped: 3 });
+    expect(sanitize('wire', { fields: ['action', 'secret-project'], present: [1, 2], fieldBytes: [5, 6] })).toEqual({ data: {}, dropped: 3 });
+    // Lists that are each valid but not the same length are not parallel either.
+    expect(sanitize('wire', { fields: ['action', 'harness'], present: [3], fieldBytes: [120, 60] })).toEqual({ data: {}, dropped: 3 });
+    expect(sanitize('wire-send', { sent: 0, status: 429, code: 'rate_limited', bytes: 10 })).toEqual({ data: { sent: 0, status: 429, code: 'rate_limited', bytes: 10 }, dropped: 0 });
+    expect(sanitize('wire-send', { code: 'Rate limited: see https://x.test' })).toEqual({ data: {}, dropped: 1 });
   });
 
   it('knows no event type it was not given', () => {
