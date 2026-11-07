@@ -15,6 +15,8 @@ All notable changes to `@manyoars/oars`. Versions follow semver; a release is th
 - Telemetry now records every recall (t876): a `recall` event from `oars sessions recall`, the `oars_recall` MCP tool, and the `pre-tool` push, holding only how it was asked (`pattern`, `entity`, `question`, `text`, or `legacy`), push or pull, the read families it served from a closed list, hit or miss, counts of reads, evidence rows, and tokens, and its arm (`shown` or `held`). It never holds the query text, a name, or the rendered answer.
 - Telemetry now records deposit passes, sent batches, and fetches (t876): a `deposit` event (sessions counted, batches built and their bytes, and how many sessions each session gate kept out, as counts with no folder, term, or name; a batch sent records `sent` and its bytes) and a `fetch` event (the harness, an ETag hit, a cap hit, and the reads in the bundle). The `oars pool deposit --json` document is unchanged.
 - The first-run telemetry notice, the CLI README, and `docs/telemetry.md` name the hook, recall, deposit, and fetch events, so the notice still lists everything that is recorded (t876).
+- A hook that the process deadline ends is still recorded (t876): the `hook` event for that fire says `error` with no bytes, written once before the process exits, so the slowest fires reach the spool.
+- Every hook fire records the harness version and model when its transcript states them (t876): the bare `oars gate hook`, `post-tool`, `stop`, `nightly`, and a `pre-tool` miss now read them from the tail of the input's `transcript_path`, the same bounded read a push uses. The path itself is never recorded.
 
 ## 0.3.0
 

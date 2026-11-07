@@ -7,6 +7,7 @@ import { performance } from 'node:perf_hooks';
 import { defaultConfigDir } from '../credentials.js';
 import { DEADLINE_MS, type GateHookDeps } from './hook.js';
 import { isLocked, startFill, startHelper } from './hook-fill.js';
+import { fireRecorder } from './hook-record.js';
 import { runHookProcess } from './hook-process.js';
 import { managerReader } from './registry.js';
 import { hookEmitter } from '../telemetry/hook-emit.js';
@@ -46,5 +47,5 @@ await runHookProcess({
   write: (text) => new Promise<void>((done) => process.stdout.write(text, () => { done(); })),
   deadlineMs: DEADLINE_MS + GRACE_MS - performance.now(),
   clock: () => performance.now(),
-  record: (fire) => { emit('hook', { name: 'gate', ...fire }); },
+  record: fireRecorder(emit),
 });

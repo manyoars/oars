@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { GateHookDeps } from '../gate/hook.js';
+import { fireRecorder } from '../gate/hook-record.js';
 import { runHookProcess } from '../gate/hook-process.js';
 import { folderKey } from '../gate/record.js';
 import { defaultConfigDir } from '../credentials.js';
@@ -123,6 +124,34 @@ describe('a session hook records one event per fire', () => {
     expect(logged(dir).filter((event) => event.type === 'recall').map((event) => event.data.arm)).toEqual(['shown', 'held']);
   });
 
+  it('post-tool, stop, and a pre-tool miss carry the frame the transcript states, and a private model goes as other', async () => {
+    const dir = spoolFolder();
+    const { runtime, storeDir } = await deposited();
+    const transcript = join(storeDir, 'frame-transcript.jsonl');
+    writeFileSync(transcript, `${JSON.stringify({ version: '2.1.300', message: { model: 'claude-opus-4-5' } })}\n`);
+    await runHook('post-tool', JSON.stringify({ session_id: 'p', tool_name: 'Bash', tool_response: 'ok', transcript_path: transcript }), runtime, () => NOW, emitterAt(dir));
+    await runHook('stop', JSON.stringify({ transcript_path: transcript }), runtime, () => NOW, emitterAt(dir));
+    await runHook('pre-tool', JSON.stringify({ session_id: 's', tool_name: 'Read', tool_input: { file_path: 'x' }, transcript_path: transcript }), withIndex().runtime, () => NOW, emitterAt(dir));
+    const private_ = join(storeDir, 'private-transcript.jsonl');
+    writeFileSync(private_, `${JSON.stringify({ version: '9.9.9-internal', message: { model: 'acme-internal-finetune-7' } })}\n`);
+    await runHook('post-tool', JSON.stringify({ session_id: 'p', tool_name: 'Bash', tool_response: 'ok', transcript_path: private_ }), runtime, () => NOW, emitterAt(dir));
+    const [post, stopped, miss, other] = hooks(dir);
+    for (const event of [post, stopped, miss]) expect(event?.data).toMatchObject({ harnessVersion: '2.1.300', model: 'claude-opus-4-5' });
+    expect(other?.data.model).toBe('other');
+    expect(readSpool(dir).join('')).not.toContain('acme-internal');
+    expect(readSpool(dir).join('')).not.toContain('frame-transcript');
+  });
+
+  it('a transcript that is missing leaves the fields out and costs the hook nothing', async () => {
+    const dir = spoolFolder();
+    const { runtime, storeDir } = await deposited();
+    await runHook('post-tool', JSON.stringify({ session_id: 'p', tool_name: 'Bash', tool_response: 'ok', transcript_path: join(storeDir, 'missing.jsonl') }), runtime, () => NOW, emitterAt(dir));
+    // A folder where the transcript should be cannot be read: the frame is unknown, the fire still records.
+    await runHook('post-tool', JSON.stringify({ session_id: 'p', tool_name: 'Bash', tool_response: 'ok', transcript_path: storeDir }), runtime, () => NOW, emitterAt(dir));
+    expect(hooks(dir)).toHaveLength(2);
+    for (const event of hooks(dir)) expect(Object.keys(event.data)).not.toContain('model');
+  });
+
   it('a call no read covers is a miss', async () => {
     const dir = spoolFolder();
     await runHook('pre-tool', JSON.stringify({ session_id: 's', tool_name: 'Read', tool_input: { file_path: 'x' } }), withIndex().runtime, () => NOW, emitterAt(dir));
@@ -185,7 +214,7 @@ describe('oars gate hook records one event per fire, after the answer', () => {
   };
 
   /** One run of the process, with or without a recording; what it printed and how it exited. */
-  const fire = async (stdin: string, store: string, emit?: Emit, extra: Partial<GateHookDeps> = {}): Promise<{ printed: string; exits: number[] }> => {
+  const fire = async (stdin: string, store: string, emit?: Emit, extra: Partial<GateHookDeps> = {}, framed = false): Promise<{ printed: string; exits: number[] }> => {
     const printed: string[] = [];
     const exits: number[] = [];
     await runHookProcess({
@@ -194,7 +223,7 @@ describe('oars gate hook records one event per fire, after the answer', () => {
       exit: (code) => { exits.push(code); },
       write: (text) => { printed.push(text); return Promise.resolve(); },
       deadlineMs: 5_000,
-      ...(emit === undefined ? {} : { record: (one) => { emit('hook', { name: 'gate', ...one }); } }),
+      ...(emit === undefined ? {} : { record: framed ? fireRecorder(emit) : (one) => { emit('hook', { name: 'gate', ...one }); } }),
     });
     return { printed: printed.join(''), exits };
   };
@@ -231,6 +260,19 @@ describe('oars gate hook records one event per fire, after the answer', () => {
     const failed = await fire(call('npm install ghost-lib'), seeded('block'), emitterAt(dir), { append: () => Promise.reject(new Error('disk full')) });
     expect(failed).toEqual({ printed: '', exits: [0] });
     expect(hooks(dir)[0]?.data).toMatchObject({ name: 'gate', outcome: 'error', bytes: 0 });
+  });
+
+  it('records the harness version and model the transcript states, on a miss and a hit alike, and never its path', async () => {
+    const dir = spoolFolder();
+    const store = seeded('block');
+    const transcript = join(store, 'bare-transcript.jsonl');
+    writeFileSync(transcript, `${JSON.stringify({ version: '2.1.300', message: { model: 'claude-opus-4-5' } })}\n`);
+    const withPath = (command: string): string => JSON.stringify({ ...JSON.parse(call(command)), transcript_path: transcript });
+    await fire(withPath('ls'), store, emitterAt(dir), {}, true);
+    await fire(withPath('npm install ghost-lib'), store, emitterAt(dir), {}, true);
+    expect(hooks(dir).map((event) => event.data.outcome)).toEqual(['miss', 'hit']);
+    for (const event of hooks(dir)) expect(event.data).toMatchObject({ harnessVersion: '2.1.300', model: 'claude-opus-4-5' });
+    expect(readSpool(dir).join('')).not.toContain('bare-transcript');
   });
 
   it('a hook ended by the deadline records one error event with no bytes, and exits 0 once', async () => {
