@@ -3,6 +3,7 @@ import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { zstdCompressSync } from 'node:zlib';
 import { afterEach, describe, expect, it } from 'vitest';
+import { sessionsVerify } from './command.js';
 import { codexRoot, openCodexStore, rolloutBadLines, rolloutLines } from './codex.js';
 import { captureSession } from './extract.js';
 import { makeRedactor } from './redact.js';
@@ -681,6 +682,16 @@ describe('Paginated rollouts', () => {
     expect(out.errorLines.map((entry) => entry.line)).toEqual(['lookup backend down']);
   });
 
+  it('does not hold a namespaced call unsettled because its bare name equals a declared dynamic tool', () => {
+    begin();
+    const out = extractOf([
+      pmeta({ dynamic_tools: [{ name: 'lookup' }] }),
+      call(2, 'n1', 'lookup', { namespace: 'mcp__notes__' }),
+      ord(line(T(3), 'response_item', { type: 'function_call_output', call_id: 'n1', output: 'text' })),
+    ]);
+    expect(out.tools.map((tool) => [tool.tool, tool.status])).toEqual([['mcp__notes__lookup', 'ok']]);
+  });
+
   it('ignores an item_completed item it has no use for (a Plan) without failing', () => {
     begin();
     const lines = rolloutLines(asText([pmeta(), done(2, { type: 'Plan', id: 'x', text: 'steps' })]), 's');
@@ -905,6 +916,16 @@ describe('Paginated rollouts', () => {
         expect(out.errorLines.map((entry) => entry.line)).toEqual(['boom']);
       });
 
+      it('records a command the user refused inside a cell as a Bash call with the refusal, and a declined one with other text with no outcome', () => {
+        begin();
+        const out = extractOf([
+          pmeta({ cli_version: '0.167.0' }),
+          item(2, 'exec-7', 'rm -rf x', { status: 'declined', exit_code: -1, aggregated_output: 'exec command rejected by user' }),
+          item(3, 'exec-8', 'rm -rf y', { status: 'declined', exit_code: -1, aggregated_output: 'sandbox setup failed' }),
+        ], 'codex');
+        expect(out.tools.map((tool) => [tool.tool, tool.status, tool.errorCode ?? null])).toEqual([['Bash', 'error', 'user-rejected'], ['Bash', 'none', null]]);
+      });
+
       it('holds every verify invariant, including --strict, for the deposited fixture', async () => {
         const s = stage();
         const home = stageCodex(s.root, [{ id: 'aaaaaaaa-0000-4000-8000-000000000001', lines: fixture() }]);
@@ -913,6 +934,7 @@ describe('Paginated rollouts', () => {
         const { skeletons } = await readSkeletons(s.storeDir);
         const store = await loadStore(s.storeDir);
         expect([...verifyAll(skeletons), ...verifyCaptured(store.sessions, store.tools)].filter((entry) => entry.violations > 0)).toEqual([]);
+        expect((await sessionsVerify({ sessions: s.runtime, install: undefined, now: () => NOW }, { session: undefined })).failed).toEqual([]);
       });
     });
 
