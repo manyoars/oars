@@ -17,13 +17,13 @@ import { heldRaw, rawParts, removeRawExcept, writeRaw } from './pool-raw.js';
 import { shellReader } from './projection.js';
 import { isVocabularyExpired, REGISTRY_MAX_AGE_DAYS, VOCAB_SNAPSHOT_DATE } from './public-vocabulary.js';
 import { contentHash } from './read.js';
-import { harnessOf as sessionHarness, type Harness } from './schema.js';
-import { redactTranscript } from './redact.js';
+import { CAPTURE_VERSION, harnessOf as sessionHarness, type Harness } from './schema.js';
+import { REDACTION_VERSION, redactTranscript } from './redact.js';
 import { loadStore, readSkeletons, readState, updatePoolChoices, type SessionsRuntime } from './store.js';
 import { vocabulary } from './vocab-load.js';
 
 const LOGIN = 'pool-login';
-const DEPOSIT = 'pool-deposit';
+export const DEPOSIT = 'pool-deposit';
 const OUTBOX = 'pool-outbox';
 const POOL_DEPOSITS = '/v1/deposits';
 const FETCH = 'pool-fetch';
@@ -51,12 +51,12 @@ export const poolServer = (env: NodeJS.ProcessEnv, step: string, named?: string)
   return url.origin;
 };
 
-const runtimeOf = (deps: RunDeps): SessionsRuntime => {
+export const runtimeOf = (deps: RunDeps): SessionsRuntime => {
   if (deps.sessions === undefined) throw new CliError('The session store is not configured in this run.', ExitCode.UNEXPECTED, 'unexpected');
   return deps.sessions;
 };
 
-const textIn = (value: object, key: string): string | undefined => {
+export const textIn = (value: object, key: string): string | undefined => {
   const found: unknown = Reflect.get(value, key);
   return typeof found === 'string' && found !== '' ? found : undefined;
 };
@@ -66,7 +66,7 @@ const numberIn = (value: object, key: string): number | undefined => {
   return typeof found === 'number' && Number.isFinite(found) ? found : undefined;
 };
 
-const isObject = (value: unknown): value is object => typeof value === 'object' && value !== null;
+export const isObject = (value: unknown): value is object => typeof value === 'object' && value !== null;
 
 const keyOf = (value: unknown): PinnedKey | undefined => {
   if (!isObject(value)) return undefined;
@@ -120,7 +120,7 @@ const loadSignIns = async (storeDir: string, step: string): Promise<SignIn[]> =>
   });
 };
 
-const signedIn = async (deps: RunDeps, storeDir: string, server: string, step: string): Promise<SignIn> => {
+export const signedIn = async (deps: RunDeps, storeDir: string, server: string, step: string): Promise<SignIn> => {
   const found = (await loadSignIns(storeDir, step)).find((entry) => entry.server === server);
   if (found === undefined || found.expiresAt <= deps.now()) throw new CliError(`Not signed in to ${server}. Run oars pool login first.`, ExitCode.AUTH, step);
   return found;
@@ -143,6 +143,11 @@ interface Call {
   ifNoneMatch?: string;
   /** Set for a command that prints what it sends: the print comes first, with these secrets masked. */
   show?: Masker;
+  /** A raw part is a PUT of bytes that are not JSON; every other call is a GET, or a POST when it has a body. */
+  method?: 'PUT';
+  type?: string;
+  /** Headers beyond the usual ones (the raw routes state their redaction and capture versions, and the raw consent). */
+  extra?: Array<[string, string]>;
 }
 
 /** How a request leaves this machine. The command line passes none and so sends no batch; the lock in `deposit --send` is tested with one. */
@@ -155,14 +160,15 @@ const outgoing = (deps: RunDeps, server: string, path: string, init: Call): Outg
   // Node's `fetch` writes `cache-control` and `pragma` itself whenever `if-none-match` is set, so they are named here to be printed.
   if (init.part !== undefined) headers.push(['oars-part', `${String(init.part.index)}/${String(init.part.count)}`], ['oars-batch', init.part.batch]);
   if (init.ifNoneMatch !== undefined) headers.push(['if-none-match', init.ifNoneMatch], ['cache-control', 'no-cache'], ['pragma', 'no-cache']);
+  headers.push(...(init.extra ?? []));
   const body = init.bytes ?? (init.body === undefined ? undefined : JSON.stringify(init.body));
-  if (body !== undefined) headers.push(['content-type', 'application/json']);
+  if (body !== undefined) headers.push(['content-type', init.type ?? 'application/json']);
   headers.push(...TRANSPORT_HEADERS);
-  return { method: body === undefined ? 'GET' : 'POST', url: new URL(path, server), headers, ...(body === undefined ? {} : { body }) };
+  return { method: init.method ?? (body === undefined ? 'GET' : 'POST'), url: new URL(path, server), headers, ...(body === undefined ? {} : { body }) };
 };
 
 /** One call to the pool. A redirect is an error: it could carry a batch or a token somewhere the checks on the named server never saw. */
-const ask = (deps: RunDeps, step: string, server: string, path: string, init: Call, via?: Sender): Promise<Reply> => {
+export const ask = (deps: RunDeps, step: string, server: string, path: string, init: Call, via?: Sender): Promise<Reply> => {
   const request = outgoing(deps, server, path, init);
   return via === undefined ? send(deps, step, request, init.show) : via(request);
 };
@@ -364,7 +370,7 @@ const excludedKey = (reason: Exclude<Reason, 'clean'>): keyof DepositCounts['exc
 const DEPOSIT_CONFLICT = 'deposit_conflict';
 const SEND_ATTEMPTS = 3;
 
-const vocabularyExpired = (deps: RunDeps): CliError | undefined => {
+export const vocabularyExpired = (deps: RunDeps): CliError | undefined => {
   if (!isVocabularyExpired(new Date(deps.now()))) return undefined;
   const title = `This oars is out of date: its vocabulary ${VOCAB_VERSION} was taken on ${VOCAB_SNAPSHOT_DATE}, over ${String(REGISTRY_MAX_AGE_DAYS)} days ago. Upgrade with npm install -g @manyoars/oars, then run oars pool deposit again. Your sessions stay on this machine.`;
   return new CliError(title, ExitCode.CONFLICT, DEPOSIT, { code: 'vocabulary_expired', title, status: 409 });
@@ -380,6 +386,41 @@ const lockMessages: { [code in LockRefusal]: string } = {
 const callsOf = (token: string, bytes: string, hash: string): Call[] => {
   const parts = partsOf(bytes);
   return parts.map((piece, at) => ({ token, bytes: piece, ...(parts.length === 1 ? {} : { part: { index: at + 1, count: parts.length, batch: hash } }) }));
+};
+
+/** One batch to the pool: a batch past one request's bytes goes in parts, in order, each answered 202 until the last completes the deposit with 201. A part sent again is harmless, so the retry covers every part alike. */
+export const postBatch = async (deps: RunDeps, options: { server: string; token: string; bytes: string; hash: string; via: Sender }): Promise<void> => {
+  const { server, token, bytes, hash, via } = options;
+  const calls = callsOf(token, bytes, hash);
+  for (const [at, call] of calls.entries()) {
+    let reply = await ask(deps, DEPOSIT, server, POOL_DEPOSITS, call, via);
+    for (let attempt = 1; attempt < SEND_ATTEMPTS && reply.status === 409 && isObject(reply.body) && textIn(reply.body, 'error') === DEPOSIT_CONFLICT; attempt += 1) {
+      reply = await ask(deps, DEPOSIT, server, POOL_DEPOSITS, call, via);
+    }
+    // 201 on any part means the deposit already finished (this part is a retry), so the rest need not be sent.
+    const ended = reply.status !== 202 || at === calls.length - 1;
+    // One send event per batch, on the reply that ends it, whatever number of parts it took.
+    if (ended) recordSend(deps, { status: reply.status, code: isObject(reply.body) ? textIn(reply.body, 'error') : undefined, bytes: Buffer.byteLength(bytes) });
+    if (reply.status === 201) break;
+    if (ended) throw refusal(DEPOSIT, reply);
+  }
+  emitOf(deps)('deposit', { step: 'send', sent: 1, bytes: Buffer.byteLength(bytes) });
+};
+
+/**
+ * One redacted raw copy to the pool: its parts by PUT, then the completion, which the pool checks against the SHA-256 in the path. Every request states the redaction and capture versions and that the person said yes to the raw prompt;
+ * the caller sends only for a person who did. A part sent again replaces itself, and one for an object that stands writes nothing, so a copy that failed halfway is sent again whole.
+ */
+export const postRaw = async (deps: RunDeps, options: { server: string; token: string; hash: string; body: string; bytes: number; via: Sender }): Promise<void> => {
+  const { server, token, hash, body, bytes, via } = options;
+  const extra: Array<[string, string]> = [['oars-redaction-version', REDACTION_VERSION], ['oars-capture-version', CAPTURE_VERSION], ['oars-raw-consent', 'granted']];
+  const parts = rawParts(body);
+  for (const [at, piece] of parts.entries()) {
+    const reply = await ask(deps, DEPOSIT, server, `/v1/raw/${hash}/parts/${String(at + 1)}`, { token, bytes: piece, method: 'PUT', type: 'application/x-ndjson', extra }, via);
+    if (reply.status !== 200) throw refusal(DEPOSIT, reply);
+  }
+  const done = await ask(deps, DEPOSIT, server, `/v1/raw/${hash}/complete`, { token, body: { parts: parts.length, bytes }, extra }, via);
+  if (done.status !== 200 && done.status !== 201) throw refusal(DEPOSIT, done);
 };
 
 /** `deposit --send <hash>`: the lock, then (only when a sender is given) the covenant and the request. The body is read and hashed again just before the request. */
@@ -401,21 +442,7 @@ const sendBatch = async (deps: RunDeps, options: { outbox: string; server: strin
     const title = lockMessages.batch_changed;
     throw new CliError(title, ExitCode.CONFLICT, DEPOSIT, { code: 'batch_changed', title, status: 409 });
   }
-  // A batch past one request's bytes goes in parts, in order, each answered 202 until the last completes the deposit with 201. A part sent again is harmless, so the retry below covers every part alike.
-  const calls = callsOf(token, bytes, hash);
-  for (const [at, call] of calls.entries()) {
-    let reply = await ask(deps, DEPOSIT, server, POOL_DEPOSITS, call, via);
-    for (let attempt = 1; attempt < SEND_ATTEMPTS && reply.status === 409 && isObject(reply.body) && textIn(reply.body, 'error') === DEPOSIT_CONFLICT; attempt += 1) {
-      reply = await ask(deps, DEPOSIT, server, POOL_DEPOSITS, call, via);
-    }
-    // 201 on any part means the deposit already finished (this part is a retry), so the rest need not be sent.
-    const ended = reply.status !== 202 || at === calls.length - 1;
-    // One send event per batch, on the reply that ends it, whatever number of parts it took.
-    if (ended) recordSend(deps, { status: reply.status, code: isObject(reply.body) ? textIn(reply.body, 'error') : undefined, bytes: Buffer.byteLength(bytes) });
-    if (reply.status === 201) break;
-    if (ended) throw refusal(DEPOSIT, reply);
-  }
-  emitOf(deps)('deposit', { step: 'send', sent: 1, bytes: Buffer.byteLength(bytes) });
+  await postBatch(deps, { server, token, bytes, hash, via });
   return { document: { ok: true, server, hash, sent: true }, text: `Sent batch ${hash} to ${server}.` };
 };
 
