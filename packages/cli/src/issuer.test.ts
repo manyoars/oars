@@ -84,7 +84,7 @@ describe('the issuer oars login uses', () => {
     ['the answer is 500', () => new HttpResponse(null, { status: 500 })],
     ['the answer is not JSON', () => new HttpResponse('<html>maintenance</html>', { status: 200, headers: { 'Content-Type': 'text/html' } })],
   ])(
-    'names pool.manyoars.com and exits 2 when the built-in issuer does not answer discovery (%s)',
+    'names login.manyoars.com and exits 2 when the built-in issuer does not answer discovery (%s)',
     async (_name, answer) => {
       const h = harness({ OARS_ISSUER_URL: '' });
       server.use(http.get(PRODUCTION_DISCOVERY, answer));

@@ -37,7 +37,7 @@ try {
       nightlyTelemetry(event, process.env, process.platform, homedir(), versionOf, Date.now),
     );
     if (output !== undefined) process.stdout.write(output);
-    // The nightly task is where telemetry is sent from; it never throws, and it sends nothing unless telemetry is on, and the notice was shown (the server is OARS_POOL_URL, else the Many Oars pool).
+    // The nightly task is where telemetry is sent from; it never throws, and it sends nothing unless telemetry is on and the notice was shown (the server is OARS_POOL_URL, else the Many Oars pool).
     if (event === 'nightly') await sendNightly(process.env, process.platform, homedir(), Date.now);
   }
 } catch {
