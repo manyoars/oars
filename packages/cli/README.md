@@ -68,7 +68,7 @@ Every event type, with an example, is in [docs/telemetry.md](https://github.com/
 
 What it captures: the Claude Code sessions in the folders you name with `--allow`, and, by name, the sessions of Cursor, Codex, Copilot CLI, Gemini CLI, Grok Build, and VS Code Copilot Chat (`--allow cursor`, `codex`, `copilot`, `gemini`, `grok`, `vscode-copilot`). Where it stores them: `<config>/oars/sessions/` on your machine (`<config>` is `%APPDATA%` on Windows, `$XDG_CONFIG_HOME` or `~/.config` elsewhere). The `raw/` folder in it is on by default and holds raw transcripts (a hard link or copy of each deposited one). Secret masking applies to the log, not to `raw/`: those files are unredacted and keep whatever the transcript held, secrets included. They stay on your machine; apart from `gold arms`, no session command uploads them, and telemetry never carries anything from them. To remove them, see [Remove everything](#remove-everything).
 
-Apart from that and telemetry (on by default, off with `oars telemetry off`, `OARS_TELEMETRY=0`, or `DO_NOT_TRACK=1`; it sends only to a pool server you configure), oars itself sends nothing; the hooks and the MCP tool add recall text to the running session, and your harness sends that to its model like any other context.
+Apart from that and telemetry (on by default, off with `oars telemetry off`, `OARS_TELEMETRY=0`, or `DO_NOT_TRACK=1`; it will send, in a later release, only to a pool server you configure), oars itself sends nothing; the hooks and the MCP tool add recall text to the running session, and your harness sends that to its model like any other context.
 
 ```bash
 # Read the folders you name (a path, or its name under ~/.claude/projects). At least one --allow is required; there is no "all".

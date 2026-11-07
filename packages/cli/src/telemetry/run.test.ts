@@ -7,6 +7,7 @@ import { Readable } from 'node:stream';
 import { afterEach, describe, expect, it } from 'vitest';
 import { run, type RunDeps } from '../cli.js';
 import { defaultConfigDir } from '../credentials.js';
+import { folderKey } from '../gate/record.js';
 import { harness } from '../test-support.js';
 import { NOTICE, consentOf } from './consent.js';
 import { readSpool, spoolPaths } from './spool.js';
@@ -66,14 +67,27 @@ describe('the first-run notice', () => {
     expect(err.join('')).toBe(`${NOTICE}\n`);
   });
 
-  it('is not printed for a hook, and a hook run leaves stdout exactly as it is without telemetry', async () => {
-    const withTelemetry = setup();
-    withTelemetry.deps.sessions = { storeDir: join(withTelemetry.dir, '..', 'sessions'), projectsRoot: join(withTelemetry.dir, 'projects'), stdin: Readable.from(['{}']), stdout: { write: () => true } };
-    const without = setup();
-    without.deps.telemetry = undefined;
-    without.deps.sessions = { storeDir: join(without.dir, '..', 'sessions'), projectsRoot: join(without.dir, 'projects'), stdin: Readable.from(['{}']), stdout: { write: () => true } };
-    expect(await run(['gate', 'hook'], withTelemetry.deps)).toBe(await run(['gate', 'hook'], without.deps));
+  it('is not printed for a hook, and a hook run leaves a non-empty stdout exactly as it is without telemetry', async () => {
+    // A cached not-found answer and a block policy: the hook answers with a deny, so the comparison is between real output, not two empty ones.
+    const hookRun = async (withTelemetry: boolean): Promise<Made & { code: number }> => {
+      const made = setup();
+      if (!withTelemetry) made.deps.telemetry = undefined;
+      const storeDir = join(made.dir, '..', 'sessions');
+      mkdirSync(storeDir, { recursive: true });
+      writeFileSync(join(storeDir, 'gate-policy.json'), '{"classes":{"not-found":"block"}}');
+      const now = new Date();
+      const answer = { kind: 'registry', v: 1, day: now.toISOString().slice(0, 10), ts: now.toISOString(), folder: folderKey(tmpdir()), class: 'npm-package', state: 'not-found', created: null, name: 'ghost-lib', latest: null };
+      writeFileSync(join(storeDir, 'gate-registry.jsonl'), `${JSON.stringify(answer)}
+`);
+      const call = JSON.stringify({ session_id: 's1', tool_use_id: 'u1', tool_name: 'Bash', tool_input: { command: 'npm install ghost-lib' }, cwd: tmpdir(), permission_mode: 'default', hook_event_name: 'PreToolUse' });
+      made.deps.sessions = { storeDir, projectsRoot: join(made.dir, 'projects'), stdin: Readable.from([call]), stdout: { write: () => true } };
+      return { ...made, code: await run(['gate', 'hook'], made.deps) };
+    };
+    const withTelemetry = await hookRun(true);
+    const without = await hookRun(false);
+    expect(withTelemetry.out.join('')).toContain('"permissionDecision":"deny"');
     expect(withTelemetry.out).toEqual(without.out);
+    expect(withTelemetry.code).toBe(without.code);
     expect(withTelemetry.err).toEqual([]);
     expect(consentOf({}, withTelemetry.dir).noticeShown).toBe(false);
   });
@@ -120,6 +134,13 @@ describe('the off switches', () => {
     expect(events(dir).map((event) => field(event, 'data', 'path'))).toEqual([['telemetry', 'on'], []]);
   });
 
+  it('`--json on` carries the notice it records as shown, so a reader of the document sees it', async () => {
+    const { deps, out, dir } = setup();
+    await run(['--json', 'telemetry', 'on'], deps);
+    expect(field(JSON.parse(out.join('')), 'notice')).toBe(NOTICE);
+    expect(consentOf({}, dir).noticeShown).toBe(true);
+  });
+
   it('`on` says so when the environment keeps it off', async () => {
     const { deps, out } = setup({ OARS_TELEMETRY: '0' });
     await run(['telemetry', 'on'], deps);
@@ -144,7 +165,7 @@ describe('oars telemetry status and show', () => {
     expect(text).toContain('Telemetry is on (on by default).');
     expect(text).toContain('The notice has been shown.');
     expect(text).toMatch(/\d+ events \(\d+ bytes\)/);
-    expect(text).toContain('only to a pool server you configure');
+    expect(text).toContain('Events will be sent by a later release, only to a pool server you configure');
   });
 
   it('status names the switch that turned it off', async () => {

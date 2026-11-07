@@ -23,13 +23,17 @@ const URL_TEXT = 'https://internal.example.com/tenants/42?token=abc123';
 const POISON = [HOME_PATH, POSIX_HOME, COMMAND_TEXT, PROMPT, URL_TEXT];
 const FRAGMENTS = ['someone', 'secret-project', 'acme-billing', '.env', 'force', 'internal.example.com', 'refactor', 'payment', 'sk-live', 'abc123', 'tenants'];
 
-const spoolOf = (feed: (record: (type: string, fields: object) => void) => void): string => {
+// The store follows APPDATA (t754): confirm the config folder is the temp one before the telemetry folder goes under it.
+const folder = (): string => {
   const appData = mkdtempSync(join(tmpdir(), 'oars-schema-'));
   roots.push(appData);
-  // The store follows APPDATA (t754): confirm the config folder is the temp one before the telemetry folder goes under it.
   const configDir = defaultConfigDir({ APPDATA: appData }, 'win32', 'C:\\unused-home');
   expect(configDir).toBe(appData);
-  const dir = join(configDir, 'oars', 'telemetry');
+  return join(configDir, 'oars', 'telemetry');
+};
+
+const spoolOf = (feed: (record: (type: string, fields: object) => void) => void): string => {
+  const dir = folder();
   feed((type, fields) => {
     recordEvent({ dir, platform: 'linux', version: '1.2.3', now: () => Date.parse('2026-11-06T10:00:00Z') }, type, fields);
   });
@@ -90,9 +94,7 @@ describe('the closed schema', () => {
   });
 
   it('writes a version it cannot read as unknown, never as free text', () => {
-    const root = mkdtempSync(join(tmpdir(), 'oars-schema-'));
-    roots.push(root);
-    const dir = join(root, 'telemetry');
+    const dir = folder();
     recordEvent({ dir, platform: 'freebsd', version: PROMPT, now: () => 0 }, 'command', { exitCode: 0 });
     expect(JSON.parse(readSpool(dir).join(''))).toMatchObject({ cli: 'unknown', os: 'other' });
   });
