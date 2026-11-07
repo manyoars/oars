@@ -151,7 +151,8 @@ describe('subagent transcripts (A24)', () => {
   it('takes the subagents of a session at its Stop deposit', async () => {
     const { staged, parent } = withSubagents();
     const transcript = join(staged.projectsRoot, 'proj', 'errors-a.jsonl');
-    expect(await depositSession(staged.runtime, transcript, () => NOW)).toBe('not-allowed');
+    // Before any deposit names a folder, every folder is allowed.
+    expect(await depositSession(staged.runtime, transcript, () => NOW)).toBe('deposited');
     await deposit(staged.runtime, { ...options, allow: ['proj'] });
     expect(await depositSession(staged.runtime, transcript, () => NOW)).toBe('unchanged');
     utimesSync(join(parent, 'agent-x.jsonl'), new Date(NOW), new Date(NOW + 1000));

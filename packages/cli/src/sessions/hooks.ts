@@ -125,7 +125,6 @@ interface Timing {
 const nightlyRun = async (runtime: SessionsRuntime, now: () => number, timing: Timing): Promise<Outcome> => {
   // A state.json that cannot be read is a failed deposit run like any other: its error row and the skipped derive row (spec 4.4) are logged.
   const saved = await readSaved(runtime.storeDir).catch((failure: unknown) => runDeposit<Awaited<ReturnType<typeof readSaved>>>(newContext(runtime.storeDir, now, 'nightly'), true, inputKey('nightly', [], []), () => Promise.reject(failure instanceof Error ? failure : new Error(String(failure)))));
-  if (saved.allow.length === 0) return { hit: false, queried: false };
   const result = await runDeposit(newContext(runtime.storeDir, now, 'nightly'), true, inputKey('nightly', saved.allow, saved.redactDomains), async (trace) => {
     const parseStart = timing.clock();
     const done = await deposit(runtime, { allow: saved.allow, redactDomains: saved.redactDomains, now }, trace);

@@ -116,10 +116,11 @@ describe.skipIf(!built)('the built nightly send', () => {
     expect(typesOf(dir)).toEqual(['command', 'hook', 'hook', 'hook']);
   }, 60_000);
 
-  it('makes no nightly request without a server configured', async () => {
+  it('makes no nightly request when the server setting is refused', async () => {
     const fake = await serve();
     const { root, dir, env } = home();
-    expect(await run([hookBin, 'nightly'], env, root)).toBe(0);
+    // Plain http to a host that is not localhost is refused by the validator, so nothing is requested (and an unset setting would reach the real pool).
+    expect(await run([hookBin, 'nightly'], { ...env, OARS_POOL_URL: 'http://pool.example.test' }, root)).toBe(0);
     expect(fake.received).toEqual([]);
     // Nothing leaves, so the seeded command event stays beside the nightly run's own store-health, run-cost, and hook events.
     expect(readSpool(dir)).toHaveLength(4);

@@ -9,6 +9,9 @@
   // them here or in its own copy of this file, and a change is a deploy and never a client release. `PUBLIC_FLOOR_FAMILIES` (`live=3,tool-day=8`) gives single read families a floor of their own; unset, none does.
   "vars": { "PUBLIC_FLOOR": "5", "DISCLOSURE_FLOOR": "2" },
   "d1_databases": [{ "binding": "DB", "database_name": "oars-pool", "migrations_dir": "migrations" }],
-  "r2_buckets": [{ "binding": "TELEMETRY", "bucket_name": "oars-telemetry" }],
+  "r2_buckets": [
+    { "binding": "RAW", "bucket_name": "oars-pool-raw" },
+    { "binding": "TELEMETRY", "bucket_name": "oars-telemetry" }
+  ],
   "analytics_engine_datasets": [{ "binding": "TELEMETRY_EVENTS", "dataset": "oars_telemetry" }]
 }
