@@ -26,7 +26,7 @@ describe('errorCode on the wire', () => {
 
   it('refuses format 2 by name, as it refuses format 1', () => {
     const whole = skeletonOf1([call(0, { status: 'ok' })]);
-    expect(parseSkeleton({ ...whole, format: 2 })).toMatchObject({ ok: false, field: 'format', reason: 'the form without `errorCode` and `recoveryCalls` (format 2) is no longer read; send format 3' });
+    expect(parseSkeleton({ ...whole, format: 2 })).toMatchObject({ ok: false, field: 'format', reason: 'the format 2 form is no longer read; send format 3' });;
   });
 
   it('sends the class of each failed call and null for a call that did not fail', () => {
@@ -47,13 +47,19 @@ describe('errorCode on the wire', () => {
     expect(codes(parsed.skeleton)).toEqual(['user-rejected', 'permission-denied', '429']);
   });
 
-  it('refuses a value outside the closed list with the field named', () => {
+  it('reads a value outside the closed list as other and keeps it in the extensions bag, and refuses a value that is no text with the field named', () => {
     const raw = skeletonOf1([call(0, { status: 'error', errorCode: '1' })]);
     const tools = raw.transcripts[0]?.tools ?? [];
-    for (const bad of ['ENOENT', '', 'Exit code 1', 7]) {
-      Reflect.set(tools[0] ?? {}, 'errorCode', bad);
-      expect(parseSkeleton(raw)).toMatchObject({ ok: false, field: 'transcripts[0].tools[0].errorCode' });
+    for (const sent of ['ENOENT', '', 'Exit code 1']) {
+      Reflect.set(tools[0] ?? {}, 'errorCode', sent);
+      const parsed = parseSkeleton(raw);
+      if (!parsed.ok) throw new Error(`refused ${parsed.field}`);
+      expect(codes(parsed.skeleton)).toEqual(['other']);
+      expect(parsed.extensions).toEqual([{ at: 'transcripts[0].tools[0].errorCode', kind: 'value', value: sent }]);
+      expect(parsed.others).toBe(1);
     }
+    Reflect.set(tools[0] ?? {}, 'errorCode', 7);
+    expect(parseSkeleton(raw)).toMatchObject({ ok: false, field: 'transcripts[0].tools[0].errorCode', reason: 'not text' });
   });
 
   it('refuses a code on a call that did not fail', () => {

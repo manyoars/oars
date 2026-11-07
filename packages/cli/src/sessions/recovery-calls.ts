@@ -4,7 +4,7 @@ import type { CanonicalAction } from './actions.js';
 import type { ToolObservation } from './schema.js';
 
 /** What the scan reads of a call, so a stored call and a skeleton's call both fit: its run, prompt, status, and the action of its first step. */
-export type Followed = Pick<ToolObservation, 'side' | 'prompt' | 'status'> & { steps?: readonly { action: CanonicalAction }[] };
+export type Followed = Pick<ToolObservation, 'side' | 'prompt'> & { status: ToolObservation['status'] | 'other'; steps?: readonly { action: CanonicalAction }[] };
 
 /** How many following calls a failed call lists. */
 export const RECOVERY_CALLS = 5;

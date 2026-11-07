@@ -17,6 +17,9 @@ import { exclusionPaths, sessionsExclusions } from './sessions/exclusion.js';
 import { poolDeposit, poolFetch, poolLogin, poolOutbox } from './sessions/pool-command.js';
 import type { InstallRuntime, Scope } from './sessions/install.js';
 import type { SessionsRuntime } from './sessions/store.js';
+import { telemetryOff, telemetryOn, telemetryShow, telemetryStatus } from './telemetry/command.js';
+import { finishTelemetry, observeCommand, type Observed } from './telemetry/observe.js';
+import type { TelemetryRuntime } from './telemetry/record.js';
 
 /** Everything the CLI takes from its process, so the tests can stand in for each. */
 export interface RunDeps {
@@ -35,6 +38,8 @@ export interface RunDeps {
   sessions?: SessionsRuntime;
   /** Where `oars sessions hook` finds the hook script, the settings files, and schtasks; absent in a run that has none. */
   install?: InstallRuntime;
+  /** Where telemetry keeps its id, settings, and spool; absent in a run that has none, which records nothing. */
+  telemetry?: TelemetryRuntime | undefined;
 }
 
 /** What a command produced: the `--json` document, and the line a human sees instead. */
@@ -94,7 +99,7 @@ const printFailure = (deps: RunDeps, json: boolean, error: CliError): void => {
 
 const sessionDeps = (deps: RunDeps): SessionsDeps => ({ sessions: deps.sessions, install: deps.install, now: deps.now });
 
-const buildProgram = (deps: RunDeps): Command => {
+const buildProgram = (deps: RunDeps, observed: Observed): Command => {
   const program = new Command('oars')
     .description('Many Oars: sign in, manage API keys, and keep a local, searchable record of your own Claude Code sessions')
     .version(deps.version)
@@ -102,7 +107,10 @@ const buildProgram = (deps: RunDeps): Command => {
     .configureOutput({ writeOut: deps.io.stdout, writeErr: deps.io.stderr })
     .option('--json', 'print one JSON document on stdout instead of text')
     .option('--api-url <url>', 'the platform API (default: OARS_API_URL, else https://api.manyoars.com)')
-    .option('--idempotency-key <key>', "the base of the idempotency key (default: a fresh UUID); rerun a failed command with the same key to replay it");
+    .option('--idempotency-key <key>', "the base of the idempotency key (default: a fresh UUID); rerun a failed command with the same key to replay it")
+    .hook('preAction', (_program, action) => {
+      observeCommand(observed, action);
+    });
 
   program
     .command('login')
@@ -515,6 +523,37 @@ const buildProgram = (deps: RunDeps): Command => {
       emit(deps, flag(options, 'json'), await poolFetch(deps, { server: text(options, 'server'), harness: text(options, 'harness'), harnessVersion: text(options, 'harnessVersion') ?? '' }));
     });
 
+  const telemetry = program.command('telemetry').description('what oars records about its own use, on this machine (docs/telemetry.md): status, on, off, and show');
+  const telemetryJson = (command: Command): boolean => flag(command.optsWithGlobals(), 'json');
+
+  telemetry
+    .command('status')
+    .description('whether telemetry is on, which switch decided it, whether the notice was shown, and the size of the spool')
+    .action((_options: OptionValues, command: Command) => {
+      emit(deps, telemetryJson(command), telemetryStatus(deps));
+    });
+
+  telemetry
+    .command('on')
+    .description('turn telemetry on, and print what it records (OARS_TELEMETRY=0 and DO_NOT_TRACK=1 still win)')
+    .action((_options: OptionValues, command: Command) => {
+      emit(deps, telemetryJson(command), telemetryOn(deps));
+    });
+
+  telemetry
+    .command('off')
+    .description('turn telemetry off: nothing more is recorded or sent')
+    .action((_options: OptionValues, command: Command) => {
+      emit(deps, telemetryJson(command), telemetryOff(deps));
+    });
+
+  telemetry
+    .command('show')
+    .description('print the spool exactly as stored: every event telemetry has kept, oldest first')
+    .action((_options: OptionValues, command: Command) => {
+      emit(deps, telemetryJson(command), telemetryShow(deps));
+    });
+
   return program;
 };
 
@@ -524,10 +563,9 @@ const asCliError = (error: unknown): CliError => {
   return new CliError(`Unexpected error: ${error instanceof Error ? error.message : String(error)}`, ExitCode.UNEXPECTED, 'unexpected');
 };
 
-/** Runs one invocation (`argv` without the node and script entries) and returns the exit code. */
-export const run = async (argv: string[], deps: RunDeps): Promise<ExitCode> => {
+const execute = async (argv: string[], deps: RunDeps, observed: Observed): Promise<ExitCode> => {
   try {
-    await buildProgram(deps).parseAsync(argv, { from: 'user' });
+    await buildProgram(deps, observed).parseAsync(argv, { from: 'user' });
     return ExitCode.OK;
   } catch (error) {
     // --help and --version end the parse through exitOverride with exit code 0; commander has already printed them.
@@ -537,4 +575,13 @@ export const run = async (argv: string[], deps: RunDeps): Promise<ExitCode> => {
     if (!(error instanceof CommanderError) || argv.includes('--json')) printFailure(deps, argv.includes('--json'), failure);
     return failure.exitCode;
   }
+};
+
+/** Runs one invocation (`argv` without the node and script entries) and returns the exit code. Telemetry records it afterward and cannot change it. */
+export const run = async (argv: string[], deps: RunDeps): Promise<ExitCode> => {
+  const observed: Observed = { path: [], flags: [] };
+  const startedAt = deps.now();
+  const exit = await execute(argv, deps, observed);
+  finishTelemetry(deps, argv, observed, startedAt, exit);
+  return exit;
 };

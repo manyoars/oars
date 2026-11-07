@@ -98,11 +98,20 @@ describe('recoveryCalls on the wire', () => {
       expect(parseSkeleton(bad)).toMatchObject({ ok: false, field });
     };
 
-    it('refuses a list longer than 5, an action off the list, and a field it does not know', () => {
+    it('refuses a list longer than 5, and an action off the list that the calls themselves do not give', () => {
       const long: CanonicalAction[] = ['file.read', 'file.read', 'file.read', 'file.read', 'file.read', 'file.read'];
       refuse((first) => (first.recoveryCalls = { next: long, editFollowed: false }), 'transcripts[0].tools[0].recoveryCalls.next');
-      refuse((first) => (first.recoveryCalls = { next: ['rm -rf /'], editFollowed: false }), 'transcripts[0].tools[0].recoveryCalls.next[0]');
-      refuse((first) => (first.recoveryCalls = { next: [], editFollowed: false, sigHash: 'abc' }), 'transcripts[0].tools[0].recoveryCalls.sigHash');
+      // An action off the list reads as `other`, which is not what the batch's own calls followed, so the list is a wrong deposit.
+      refuse((first) => (first.recoveryCalls = { next: ['rm -rf /'], editFollowed: false }), 'transcripts[0].tools[0].recoveryCalls');
+    });
+
+    it('keeps a field it does not know in the extensions bag, out of the skeleton', () => {
+      const sent = raw();
+      Reflect.set(toolsOf(sent)[0]?.recoveryCalls ?? {}, 'sigHash', 'abc');
+      const parsed = parseSkeleton(sent);
+      if (!parsed.ok) throw new Error(`refused ${parsed.field}`);
+      expect(parsed.extensions).toEqual([{ at: 'transcripts[0].tools[0].recoveryCalls.sigHash', kind: 'field', value: 'abc' }]);
+      expect(recoveryOf(parsed.skeleton)).toEqual({ next: ['file.read', 'file.edit'], editFollowed: true });
     });
 
     it('refuses recovery on a call that did not fail, and one that disagrees with the calls that followed', () => {

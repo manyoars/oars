@@ -1,6 +1,7 @@
 // The families a bundle serves and does not serve. Recovery is served from cells (t868): what others did next after a failed call, by (failed action, `errorCode`, next action), at the floor of 5 accounts.
 // What stays out is pinned at the boundary that keeps it out, the wire: a signature hash, an outcome, and a tool's input key names are on no skeleton field, so fit's call-shape method and a
-// signature record cannot be derived from stored cells. The refusing tests below (a tool, a step, a transcript, and the skeleton's top level) fail if a later wire gains one of these fields.
+// signature record cannot be derived from stored cells. The tests below (a tool, a step, a transcript, and the skeleton's top level) fail if a later wire gains one of these fields: the name would
+// stop landing in the bag.
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { parseSkeleton, skeletonOf, verifyBundle, VOCAB_VERSION } from '../../cli/src/sessions/pool-wire.js';
 import { CALL_SHAPE_METHOD } from '../../cli/src/sessions/read.js';
@@ -47,29 +48,36 @@ describe('the wire holds no field a withheld family needs', () => {
     expect(parseSkeleton(withTranscript({})).ok).toBe(true);
   });
 
-  it.each(WITHHELD)('refuses a tool that carries `%s`', (field, value) => {
-    expect(parseSkeleton(withTool({ [field]: value })).ok).toBe(false);
+  // The wire no longer refuses a name it does not know: the field lands in the extensions bag, which nothing serves, and the stored skeleton and every cell stay as without it.
+  const keptInBag = (parsed: ReturnType<typeof parseSkeleton>, field: string, value: unknown): void => {
+    if (!parsed.ok) throw new Error(`refused: ${parsed.field} ${parsed.reason}`);
+    expect(parsed.extensions.some(({ at, kind }) => kind === 'field' && at.endsWith(field))).toBe(true);
+    expect(JSON.stringify(parsed.skeleton)).not.toContain(`"${field}":${JSON.stringify(value)}`);
+  };
+
+  it.each(WITHHELD)('keeps a tool that carries `%s` in the bag, out of the skeleton', (field, value) => {
+    keptInBag(parseSkeleton(withTool({ [field]: value })), field, value);
   });
 
-  it.each(WITHHELD)('refuses a step that carries `%s`', (field, value) => {
-    expect(parseSkeleton(withStep({ [field]: value })).ok).toBe(false);
+  it.each(WITHHELD)('keeps a step that carries `%s` in the bag, out of the skeleton', (field, value) => {
+    keptInBag(parseSkeleton(withStep({ [field]: value })), field, value);
   });
 
-  it.each(WITHHELD)('refuses a transcript that carries `%s`', (field, value) => {
-    expect(parseSkeleton(withTranscript({ [field]: value })).ok).toBe(false);
+  it.each(WITHHELD)('keeps a transcript that carries `%s` in the bag, out of the skeleton', (field, value) => {
+    keptInBag(parseSkeleton(withTranscript({ [field]: value })), field, value);
   });
 
-  it('refuses a transcript that carries error rows', () => {
+  it('keeps a transcript that carries error rows in the bag', () => {
     const { first } = firstOf('0000000000000005');
-    expect(parseSkeleton({ ...sampleSkeleton('0000000000000005'), transcripts: [{ ...first, errors: [] }] }).ok).toBe(false);
+    keptInBag(parseSkeleton({ ...sampleSkeleton('0000000000000005'), transcripts: [{ ...first, errors: [] }] }), 'errors', []);
   });
 
-  it('refuses a skeleton that carries error rows at its top level', () => {
-    expect(parseSkeleton({ ...sampleSkeleton('0000000000000002'), errors: [] }).ok).toBe(false);
+  it('keeps a skeleton that carries error rows at its top level in the bag', () => {
+    keptInBag(parseSkeleton({ ...sampleSkeleton('0000000000000002'), errors: [] }), 'errors', []);
   });
 
-  it.each(WITHHELD)('refuses a skeleton that carries %s at its top level', (field, value) => {
-    expect(parseSkeleton({ ...sampleSkeleton('0000000000000006'), [field]: value }).ok).toBe(false);
+  it.each(WITHHELD)('keeps a skeleton that carries `%s` at its top level in the bag', (field, value) => {
+    keptInBag(parseSkeleton({ ...sampleSkeleton('0000000000000006'), [field]: value }), field, value);
   });
 });
 
@@ -132,16 +140,35 @@ describe('the recovery family in a bundle', () => {
     await pool.dispose();
   });
 
-  it('refuses an off-list errorCode at the deposit route', async () => {
+  it('reads an off-list errorCode as other and keeps the value in the extensions bag, never in a cell', async () => {
     const { token } = await pool.signIn('github', stubUser('5099'));
     await pool.post('/v1/covenant/accept', { version: 'v1' }, token);
     const skeleton = failingSkeleton('0000000000005099');
     const response = await pool.post('/v1/deposits', {
       ...skeleton,
-      transcripts: skeleton.transcripts.map((transcript) => ({ ...transcript, tools: transcript.tools.map((entry) => ({ ...entry, errorCode: 'off-list' })) })),
+      transcripts: skeleton.transcripts.map((transcript) => ({ ...transcript, tools: transcript.tools.map((entry, index) => (index === 0 ? { ...entry, errorCode: 'off-list' } : entry)) })),
     }, token);
-    expect(response.status).toBe(422);
-    expect(response.json).toMatchObject({ error: 'closed_vocabulary', field: 'transcripts[0].tools[0].errorCode' });
+    expect(response.status).toBe(201);
+    const db = await pool.db();
+    expect(JSON.parse(String(await db.prepare('SELECT extensions FROM deposits').first('extensions')))).toEqual([{ at: 'transcripts[0].tools[0].errorCode', kind: 'value', value: 'off-list' }]);
+    expect(String(await db.prepare('SELECT skeleton FROM deposits').first('skeleton'))).toContain('"errorCode":"other"');
+    expect(await db.prepare("SELECT COUNT(*) AS count FROM motifs WHERE motif LIKE '%off-list%'").first('count')).toBe(0);
+  });
+
+  it('refuses an errorCode that is no text, and one on a call that succeeded, with the field named', async () => {
+    const { token } = await pool.signIn('github', stubUser('5098'));
+    await pool.post('/v1/covenant/accept', { version: 'v1' }, token);
+    const skeleton = failingSkeleton('0000000000005098');
+    const sentWith = (index: number, errorCode: unknown) => ({
+      ...skeleton,
+      transcripts: skeleton.transcripts.map((transcript) => ({ ...transcript, tools: transcript.tools.map((entry, at) => (at === index ? { ...entry, errorCode } : entry)) })),
+    });
+    const noText = await pool.post('/v1/deposits', sentWith(0, 7), token);
+    expect(noText.status).toBe(422);
+    expect(noText.json).toMatchObject({ error: 'closed_vocabulary', field: 'transcripts[0].tools[0].errorCode' });
+    const onSuccess = await pool.post('/v1/deposits', sentWith(1, '429'), token);
+    expect(onSuccess.status).toBe(422);
+    expect(onSuccess.json).toMatchObject({ error: 'closed_vocabulary', field: 'transcripts[0].tools[1].errorCode' });
   });
 
   const bundleAfter = async (ids: readonly string[]) => {
