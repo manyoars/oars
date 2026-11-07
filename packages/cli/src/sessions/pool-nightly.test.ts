@@ -159,10 +159,11 @@ describe('the nightly pool send', () => {
     expect(pool.requests.some((request) => request.url.pathname === '/v1/covenant/accept')).toBe(false);
   });
 
-  it('exits quietly with no request when no server is set, when not signed in, or when the sign-in has expired', async () => {
+  it('exits quietly with no request when the server is not a URL oars may use, when not signed in (the default pool included), or when the sign-in has expired', async () => {
     for (const [env, signedIn, outcome] of [
-      [{}, true, 'no-server'],
-      [{ OARS_POOL_URL: '' }, true, 'no-server'],
+      // No OARS_POOL_URL means the Many Oars pool (t896); a sign-in saved for another server does not carry over to it.
+      [{}, true, 'not-signed-in'],
+      [{ OARS_POOL_URL: '' }, true, 'not-signed-in'],
       [{ OARS_POOL_URL: 'http://not-local.test' }, true, 'no-server'],
       [{ OARS_POOL_URL: POOL }, false, 'not-signed-in'],
     ] as const) {

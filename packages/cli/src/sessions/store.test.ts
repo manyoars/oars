@@ -1,7 +1,6 @@
 import { appendFileSync, mkdirSync, readFileSync, readdirSync, statSync, utimesSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { CliError, ExitCode } from '../errors.js';
 import { compactLog, deposit, depositSession, derive, loadStore, paths, readCalls, readRedactDomains, readSkeletons, slugOf, withLock } from './store.js';
 import { CAPTURE_VERSION, EXTRACTOR_VERSION } from './schema.js';
 import { addProject, cleanup, NOW, stage } from './test-support.js';
@@ -66,12 +65,12 @@ describe('the domain set is recorded per file', () => {
 });
 
 describe('deposit', () => {
-  it('refuses to run without an --allow', async () => {
+  it('reads every folder without an --allow, and none that a denial names', async () => {
+    const denied = stage();
+    expect((await deposit(denied.runtime, options(['!proj']))).sessions).toBe(0);
     const staged = stage();
-    const error: unknown = await deposit(staged.runtime, options([])).catch((caught: unknown) => caught);
-    expect(error).toBeInstanceOf(CliError);
-    expect(error instanceof CliError && error.exitCode).toBe(ExitCode.USAGE);
-    expect(() => readFileSync(paths(staged.storeDir).observations)).toThrow();
+    expect((await deposit(staged.runtime, options([]))).sessions).toBeGreaterThan(0);
+    expect(readFileSync(paths(staged.storeDir).observations, 'utf8')).not.toBe('');
   });
 
   it('reads only allowed folders, by name or by path, and counts the skipped ones', async () => {

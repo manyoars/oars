@@ -520,6 +520,23 @@ describe('who reads it', () => {
     expect(h.out.join('')).toContain('Commit survival not read this run.');
   });
 
+  it('a manual deposit observes only the folders it read: a saved folder this run did not name is not read', async () => {
+    const other = makeRepo();
+    const otherSha = commitIn(other, 'saved-only');
+    publish(other);
+    const { s } = await staged(other, [{ sha: otherSha }]);
+    const repo = makeRepo();
+    const sha = commitIn(repo, 'named');
+    publish(repo);
+    const project = slugOf(repo);
+    addProject(s, project, 'two', transcript(repo, [{ sha }]));
+    const h = harness();
+    h.deps.sessions = s.runtime;
+    h.deps.now = () => NOW;
+    expect(await run(['sessions', 'deposit', '--allow', project], h.deps)).toBe(ExitCode.OK);
+    expect(lines(s)).toEqual([{ sha, state: 'survived', day: '2026-06-30' }]);
+  });
+
   it('the nightly run observes it, from the saved allowlist', async () => {
     const repo = makeRepo();
     const sha = commitIn(repo, 'kept');
