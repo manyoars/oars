@@ -19,7 +19,7 @@ import { isVocabularyExpired, REGISTRY_MAX_AGE_DAYS, VOCAB_SNAPSHOT_DATE } from 
 import { contentHash } from './read.js';
 import { harnessOf as sessionHarness, type Harness } from './schema.js';
 import { redactTranscript } from './redact.js';
-import { loadStore, readSkeletons, readState, type SessionsRuntime } from './store.js';
+import { loadStore, readSkeletons, readState, updatePoolChoices, type SessionsRuntime } from './store.js';
 import { vocabulary } from './vocab-load.js';
 
 const LOGIN = 'pool-login';
@@ -687,4 +687,33 @@ export const poolFetch = async (deps: RunDeps, options: { server?: string | unde
     document: { ok: true, server, harness, harnessVersion, file, unchanged: false, cells: cells.length, motifs: motifs.length, reads: reads.length, asOf },
     text: `Fetched ${harness} ${harnessVersion}: ${String(reads.length)} reads, ${String(cells.length)} cells, and ${String(motifs.length)} motifs, verified against the pinned key and kept at ${file}.`,
   };
+};
+
+const RAW = 'pool-raw';
+
+/** The raw prompt, in plain words: shown by `oars pool raw` until it is answered, and what the nightly send relies on. Redaction is best effort and the text says so. */
+export const RAW_PROMPT = [
+  'Raw transcripts are separate from the covenant. If you say yes, a redacted copy of each full transcript of every folder you allowed is uploaded to the pool, not only its skeleton.',
+  'Redaction runs on this machine, before anything is queued, and it is best effort: it masks secret shapes it knows, emails, home paths, environment values, and hosts, and it can miss a secret that has no recognizable shape or a name written in prose.',
+  'Say no, or say nothing, and only skeletons leave. Change your mind any time: oars pool raw --consent yes|no. A no stops later sends only; it cannot recall what was already sent.',
+].join('\n');
+
+/** `oars pool raw`: shows the raw prompt and the answer so far; `--consent yes|no` records the answer; `--folder <entry> --mode all|skeleton|off` sets what one folder may send. */
+export const poolRaw = async (deps: RunDeps, options: { consent?: string | undefined; folder?: string | undefined; mode?: string | undefined }): Promise<Outcome> => {
+  const runtime = runtimeOf(deps);
+  if (options.consent !== undefined && options.consent !== 'yes' && options.consent !== 'no') throw usage('--consent takes yes or no.', RAW);
+  if ((options.folder === undefined) !== (options.mode === undefined)) throw usage('--folder and --mode go together: --folder <folder or glob> --mode all|skeleton|off.', RAW);
+  if (options.mode !== undefined && options.mode !== 'all' && options.mode !== 'skeleton' && options.mode !== 'off') throw usage('--mode takes all, skeleton, or off.', RAW);
+  const { folder, mode } = options;
+  const choices = await updatePoolChoices(runtime.storeDir, (current) => {
+    if (options.consent !== undefined) current.rawConsent = options.consent === 'yes' ? 'granted' : 'declined';
+    if (folder !== undefined) {
+      if (mode === 'all') Reflect.deleteProperty(current.folders, folder);
+      else if (mode === 'skeleton' || mode === 'off') current.folders[folder] = mode;
+    }
+  });
+  const answer = choices.rawConsent === null ? 'not answered yet: only skeletons leave' : choices.rawConsent === 'granted' ? 'yes: redacted raw copies leave' : 'no: only skeletons leave';
+  const switched = Object.entries(choices.folders).map(([entry, set]) => `  ${entry}: ${set === 'off' ? 'nothing leaves' : 'skeletons only'}`);
+  const lines = [...(choices.rawConsent === null ? [RAW_PROMPT, ''] : []), `Raw copies: ${answer}.`, ...(switched.length === 0 ? [] : ['Folders switched down:', ...switched])];
+  return { document: { ok: true, rawConsent: choices.rawConsent, folders: choices.folders }, text: lines.join('\n') };
 };
