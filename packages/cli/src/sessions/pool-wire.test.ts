@@ -295,7 +295,7 @@ describe('parseSkeleton refuses, and names the field', () => {
     expect(verdictOf(withStep({ identity: { program: PRIVATE, sub: null, flags: ['--force'] } }))).toBe(`${stepField}.identity.flags`);
     expect(verdictOf(withStep({ identity: { program: PRIVATE, sub: null, flags: [], pulls: [] } }))).toBe(`${stepField}.identity.pulls`);
     expect(verdictOf(withStep({ identity: { program: 'git', sub: 'push', flags: ['-f', '--force'] } }))).toBe('accepted');
-    expect(verdictOf(withStep({ identity: { program: 'git', sub: 'push', flags: ['-force'] } }))).toBe('other'); // a single-dash token longer than one letter may hold a value (`-psecret`), so it is no flag name
+    expect(verdictOf(withStep({ identity: { program: 'git', sub: 'push', flags: ['-force'] } }))).toBe('other'); // a single-dash token longer than one letter may hold a value (`-psecret`), so it is no flag name unless the public flag list holds it (`-NoProfile`)
     expect(verdictOf(withStep({ identity: { program: 'git', sub: 'push', flags: ['--force=1'] } }))).toBe('other');
     expect(verdictOf(withStep({ identity: { program: 'git', sub: 'push', flags: ['--password:hunter2'] } }))).toBe('other'); // a `:` joins a value to a long flag, so it is no flag name
   });
