@@ -71,6 +71,8 @@ describe('PostToolUseFailure through a kept bundle', () => {
     const rows = await readRecalls(made.storeDir);
     expect(rows).toHaveLength(1);
     expect(rows[0]).toMatchObject({ arm: 'shown', poolVersion: 'p1', query: { family: 'recovery', prefix: [KEY] } });
+    expect(rows[0]?.answer.bytes).toBe(Buffer.byteLength(rows[0]?.answer.rendered ?? ''));
+    expect(rows[0]?.answer.bytes).toBeGreaterThan(0);
   });
 
   it('prints only the local edge when the replica is corrupt, and no error', async () => {
@@ -103,6 +105,14 @@ describe('SessionStart through a kept bundle', () => {
     expect(output).toContain('- after file.read: shell.exec 60%, file.edit 40% (n 50)');
     expect(output).not.toContain('(n 24)');
     expect(output).toContain('- after file.search: file.read 60%, file.edit 40% (n 20)');
+    expect(output.indexOf('after file.read')).toBeLessThan(output.indexOf('after file.search'));
+  });
+
+  it("lists the bundle's positions ahead of a local one with more observations", async () => {
+    const { made, transcript } = await setup([positionRead('file.read', { 'shell.exec': 30, 'file.edit': 20 }, 25)], { recovery: [], positions: [localPosition('file.search', 90)] });
+    const output = contextOf(await runHook('session-start', start(sessionOn('shown', 'positions'), transcript), made.runtime, () => NOW));
+    expect(output).toContain('after file.read');
+    expect(output).toContain('after file.search');
     expect(output.indexOf('after file.read')).toBeLessThan(output.indexOf('after file.search'));
   });
 

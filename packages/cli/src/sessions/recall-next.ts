@@ -196,10 +196,11 @@ export const renderPositions = (positions: readonly Position[]): { rendered: str
  */
 export const frameKeyOf = (asker: Asker): string => `${asker.harness}/${asker.harnessVersion === null ? '*' : harnessBucket(asker.harnessVersion)}`;
 
-/** The bundle's and the local pool's positions as one list, a prefix once and the bundle's first. */
+/** The bundle's and the local pool's positions as one list, a prefix once: the bundle's positions by observations, then the local ones it lacks by observations. */
 export const mergePositions = (bundle: readonly Position[], local: readonly Position[]): Position[] => {
+  const byObservations = (a: Position, b: Position): number => b.n - a.n || a.prefix.localeCompare(b.prefix);
   const seen = new Set(bundle.map((position) => position.prefix));
-  return [...bundle, ...local.filter((position) => !seen.has(position.prefix))].sort((a, b) => b.n - a.n || a.prefix.localeCompare(b.prefix));
+  return [...[...bundle].sort(byObservations), ...local.filter((position) => !seen.has(position.prefix)).sort(byObservations)];
 };
 
 export interface Asker {

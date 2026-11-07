@@ -182,7 +182,7 @@ describe('pull', () => {
   it('records a miss for each form and renders nothing', () => {
     for (const input of [{ form: 'pattern', prefix: ['x'] }, { form: 'entity', entity: 'x' }, { form: 'question', family: 'x' }, { form: 'text', text: 'never seen anywhere' }] as const) {
       const made = pull(synthetic(), input, { sid: null, now: NOW, frame: null });
-      expect(made.recall.answer).toEqual({ kind: 'miss', reads: [], tokens: 0, rendered: '', names: [] });
+      expect(made.recall.answer).toEqual({ kind: 'miss', reads: [], tokens: 0, bytes: 0, rendered: '', names: [] });
       expect(made.recall.query.form).toBe(input.form);
     }
   });

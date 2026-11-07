@@ -18,13 +18,18 @@ const miss = (at = AT): Recall =>
 
 describe('the recall object', () => {
   it('holds a miss as answer.kind miss, with no reads and nothing injected', () => {
-    expect(miss().answer).toEqual({ kind: 'miss', reads: [], tokens: 0, rendered: '', names: [] });
+    expect(miss().answer).toEqual({ kind: 'miss', reads: [], tokens: 0, bytes: 0, rendered: '', names: [] });
   });
 
   it('holds a hit with its reads in order and the size of what it shows', () => {
     const hit = makeRecall({ sid: 's', at: AT, frame: null, mode: 'push', query: { form: 'pattern', prefix: ['abc'] }, poolVersion: 'p', arm: 'held', reads: ['r2', 'r1'], rendered: 'x'.repeat(41), names: ['file.read'], evidence: [] });
-    expect(hit.answer).toEqual({ kind: 'hit', reads: ['r2', 'r1'], tokens: 11, rendered: 'x'.repeat(41), names: ['file.read'] });
+    expect(hit.answer).toEqual({ kind: 'hit', reads: ['r2', 'r1'], tokens: 11, bytes: 41, rendered: 'x'.repeat(41), names: ['file.read'] });
     expect(hit.n).toBeNull();
+  });
+
+  it('counts the bytes of what it shows, not its characters', () => {
+    const made = makeRecall({ sid: 's', at: AT, frame: null, mode: 'push', query: { form: 'pattern', prefix: ['abc'] }, poolVersion: 'p', arm: 'shown', reads: ['r'], rendered: 'é→', names: [], evidence: [] });
+    expect(made.answer.bytes).toBe(5);
   });
 
   it('gives the same id to the same event and another to a different one', () => {

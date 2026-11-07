@@ -48,6 +48,8 @@ export interface RecallAnswer {
   reads: string[];
   /** The size of what was injected, or of what a held recall would have injected. */
   tokens: number;
+  /** The UTF-8 bytes of `rendered`: what a hook injected, or would have. Absent on rows written before it was recorded. */
+  bytes?: number;
   /** What the asker saw, or for a held recall would have seen. It holds structured fields only (`recall-render.ts`). */
   rendered: string;
   /** The closed names a follow can match: canonical actions, in the order shown. */
@@ -161,6 +163,7 @@ export const makeRecall = (input: RecallInput): Recall => ({
     kind: input.reads.length === 0 ? 'miss' : 'hit',
     reads: [...input.reads],
     tokens: Math.ceil(input.rendered.length / CHARS_PER_TOKEN),
+    bytes: Buffer.byteLength(input.rendered),
     rendered: input.rendered,
     names: [...input.names],
   },

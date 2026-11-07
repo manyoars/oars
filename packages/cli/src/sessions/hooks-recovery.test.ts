@@ -109,8 +109,8 @@ describe('recoveryDecision', () => {
   });
 
   it('falls back to the local cells when the bundle has none for this action and code', () => {
+    expect(recoveryDecision(bundle([edge('file.read', 9)]), { recovery: { 'shell.exec/2': [edge('file.edit', 9)] }, poolVersion: 'local' }, 'shell.exec', '2')).toMatchObject({ kind: 'serve', source: 'local' });
     expect(recoveryDecision(bundle([]), local([edge('file.edit', 9)]), 'shell.exec', '2')).toEqual({ kind: 'none' });
-    expect(recoveryDecision(undefined, local([edge('file.edit', 9)]), 'shell.exec', '1')).toMatchObject({ kind: 'serve', source: 'local' });
   });
 
   it('serves a tie with the retry, is silent on a strict retry lead and on nothing followed, and holds a local cell to the floor', () => {
