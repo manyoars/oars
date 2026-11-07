@@ -302,4 +302,73 @@ describe('withSendLock', () => {
     writeFileSync(join(root, 'file'), '');
     await expect(withSendLock(join(root, 'file', 'below'), () => Promise.resolve(1))).rejects.toThrow();
   });
+
+  it('keeps the lock for a holder that outlives staleMs while it keeps refreshing, and a second run does not get in', async () => {
+    const outbox = folder();
+    const times = { staleMs: 120, waitMs: 400, pollMs: 10 };
+    let inside = 0;
+    let overlapped = false;
+    const body = async (ms: number): Promise<void> => {
+      inside += 1;
+      overlapped ||= inside > 1;
+      await new Promise((resolve) => setTimeout(resolve, ms));
+      inside -= 1;
+    };
+    const first = withSendLock(outbox, () => body(500), times);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    await expect(withSendLock(outbox, () => body(1), times)).rejects.toBeInstanceOf(SendLockBusy);
+    await first;
+    expect(overlapped).toBe(false);
+    expect(existsSync(join(outbox, 'send.lock'))).toBe(false);
+  });
+
+  it('lets exactly one of two waiters take over a stale lock', async () => {
+    const outbox = folder();
+    mkdirSync(outbox, { recursive: true });
+    const lock = join(outbox, 'send.lock');
+    writeFileSync(lock, 'dead-run');
+    const old = new Date(Date.now() - 60_000);
+    utimesSync(lock, old, old);
+    let inside = 0;
+    let overlapped = false;
+    const body = async (): Promise<void> => {
+      inside += 1;
+      overlapped ||= inside > 1;
+      await new Promise((resolve) => setTimeout(resolve, 80));
+      inside -= 1;
+    };
+    const times = { staleMs: 1000, waitMs: 2000, pollMs: 5 };
+    await Promise.all([withSendLock(outbox, body, times), withSendLock(outbox, body, times), withSendLock(outbox, body, times)]);
+    expect(overlapped).toBe(false);
+    expect(readdirSync(outbox)).toEqual([]);
+  });
+
+  it('removes only its own lock: a lock another run took over is left alone', async () => {
+    const outbox = folder();
+    const lock = join(outbox, 'send.lock');
+    await withSendLock(outbox, () => {
+      writeFileSync(lock, 'another-run');
+      return Promise.resolve();
+    });
+    expect(readFileSync(lock, 'utf8')).toBe('another-run');
+  });
+
+  it('puts back a lock it moved aside that was fresh after all', async () => {
+    const outbox = folder();
+    mkdirSync(outbox, { recursive: true });
+    const lock = join(outbox, 'send.lock');
+    writeFileSync(lock, 'live-run');
+    // The first stat reads the lock as stale; by the time it is moved, its holder has refreshed it.
+    const real = await import('node:fs/promises');
+    let first = true;
+    const seen = { stat: async (path: string) => {
+      const found = await real.stat(path);
+      if (!first) return found;
+      first = false;
+      return { ...found, mtimeMs: found.mtimeMs - 60_000 };
+    } };
+    await expect(withSendLock(outbox, () => Promise.resolve('ran'), { staleMs: 1000, waitMs: 30, pollMs: 5 }, seen)).rejects.toBeInstanceOf(SendLockBusy);
+    expect(readFileSync(lock, 'utf8')).toBe('live-run');
+    expect(readdirSync(outbox)).toEqual(['send.lock']);
+  });
 });
