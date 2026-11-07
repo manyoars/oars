@@ -1,13 +1,15 @@
 // The nightly send (t884 Item 4): after the covenant is accepted the nightly task builds the outbox and sends new batches and, with its own yes, the redacted raw parts. Acceptance is the consent, so with none (or no server, or no sign-in) it sends nothing.
-import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, utimesSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
+import { mkdirSync } from 'node:fs';
 import { harness } from '../test-support.js';
 import { nightlyPoolDeps } from './pool-nightly-deps.js';
 import { nightlyPoolSend } from './pool-nightly.js';
 import type { Reply, Sender } from './pool-command.js';
 import type { Outgoing } from './pool-print.js';
-import { batchHash } from './pool-outbox.js';
+import { batchHash, outboxFolder } from './pool-outbox.js';
+import { SendLockBusy, withSendLock } from './pool-send-lock.js';
 import { deposit, updatePoolChoices } from './store.js';
 import { cleanup, NOW, settledClock, stage, type Staged } from './test-support.js';
 
@@ -216,5 +218,88 @@ describe('the nightly send dependencies', () => {
     expect(await deps.store.read()).toBeUndefined();
     await expect(Promise.all([deps.store.write({ issuerUrl: '', apiUrl: '', email: '', refreshToken: '', accessToken: '', expiresAt: '' }), deps.store.delete(), deps.sleep(1), deps.openBrowser('https://x.test')])).resolves.toBeDefined();
     expect(deps.random()).toBe(0);
+  });
+});
+
+describe('the nightly send takes the send lock (t884 fix round)', () => {
+  it('two nightly sends at once post each batch and each raw copy once', async () => {
+    const here = await scene('granted');
+    const pool = wire(OK_RAW);
+    // A slow pool, so the two runs would interleave if nothing held them apart.
+    const slow: Sender = async (request) => {
+      await new Promise((resolve) => setTimeout(resolve, 15));
+      return pool.via(request);
+    };
+    const [one, two] = await Promise.all([nightlyPoolSend(here.deps, slow), nightlyPoolSend(here.deps, slow)]);
+    expect([one.outcome, two.outcome]).toEqual(['sent', 'sent']);
+    const batches = outboxFiles(here.staged, '.jsonl').length;
+    const copies = outboxFiles(here.staged, '.redacted').length;
+    expect(batches).toBeGreaterThan(0);
+    expect(paths(pool, 'POST').filter((path) => path === '/v1/deposits')).toHaveLength(batches);
+    expect(rawPuts(pool)).toHaveLength(copies);
+    expect(one.batches + two.batches).toBe(batches);
+    expect(one.raw + two.raw).toBe(copies);
+  });
+
+  it('waits while `deposit --send` holds the lock, and releases it afterwards', async () => {
+    const here = await scene('granted');
+    const outbox = outboxFolder(here.staged.storeDir, POOL);
+    const pool = wire(OK_RAW);
+    let release: () => void = () => undefined;
+    let held: () => void = () => undefined;
+    const taken = new Promise<void>((resolve) => {
+      held = resolve;
+    });
+    const holder = withSendLock(outbox, () => new Promise<void>((resolve) => {
+      release = resolve;
+      held();
+    }));
+    await taken;
+    const night = nightlyPoolSend(here.deps, pool.via);
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    expect(paths(pool, 'POST').filter((path) => path === '/v1/deposits')).toEqual([]);
+    release();
+    await holder;
+    expect((await night).outcome).toBe('sent');
+    expect(existsSync(join(outbox, 'send.lock'))).toBe(false);
+  });
+});
+
+describe('withSendLock', () => {
+  const folder = (): string => join(stage().root, 'outbox');
+
+  it('runs one holder at a time and removes the lock file when the holder throws', async () => {
+    const outbox = folder();
+    const order: string[] = [];
+    const first = withSendLock(outbox, async () => {
+      order.push('first in');
+      await new Promise((resolve) => setTimeout(resolve, 60));
+      order.push('first out');
+    });
+    const second = withSendLock(outbox, () => {
+      order.push('second in');
+      return Promise.resolve();
+    });
+    await Promise.all([first, second]);
+    expect(order).toEqual(['first in', 'first out', 'second in']);
+    await expect(withSendLock(outbox, () => Promise.reject(new Error('boom')))).rejects.toThrow('boom');
+    expect(existsSync(join(outbox, 'send.lock'))).toBe(false);
+  });
+
+  it('takes over a lock older than staleMs, and gives up on a fresh one after waitMs', async () => {
+    const outbox = folder();
+    mkdirSync(outbox, { recursive: true });
+    const lock = join(outbox, 'send.lock');
+    writeFileSync(lock, '');
+    await expect(withSendLock(outbox, () => Promise.resolve('ran'), { waitMs: 30, pollMs: 5 })).rejects.toBeInstanceOf(SendLockBusy);
+    const old = new Date(Date.now() - 60_000);
+    utimesSync(lock, old, old);
+    expect(await withSendLock(outbox, () => Promise.resolve('ran'), { staleMs: 1000, waitMs: 30, pollMs: 5 })).toBe('ran');
+  });
+
+  it('passes on an error other than a held lock', async () => {
+    const root = stage().root;
+    writeFileSync(join(root, 'file'), '');
+    await expect(withSendLock(join(root, 'file', 'below'), () => Promise.resolve(1))).rejects.toThrow();
   });
 });
