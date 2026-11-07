@@ -96,7 +96,7 @@ export const cellsOf = (store: Store, graph: RecallGraph = NO_RECALLS): CellSet 
   return { cells, motifs: [...motifs.values()].sort((a, b) => order(a.motifId, b.motifId)) };
 };
 
-/** A local store with each shell step read as a deposit reads it (`projectedSteps`), so its named motifs are the ones the pool holds. */
+/** A local store with each shell step read as a deposit reads it (`projectedSteps`), so its named motifs are the ones the pool holds. It uses the open gate, which keeps the name shape and length but applies no redactor or exclusion term: a local read sends nothing. */
 export const projectedStore = (store: Store, read: ShellReader): Store => {
   const harnesses = new Map([...store.sessions, ...store.subagents].map((session) => [session.session, harnessOf(session)]));
   return { ...store, tools: store.tools.map((tool) => (tool.steps === undefined ? tool : { ...tool, steps: projectedSteps(tool, read, harnesses.get(tool.session) ?? 'claude-code') })) };

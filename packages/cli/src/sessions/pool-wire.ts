@@ -245,11 +245,16 @@ export type ShellReader = (tool: ToolObservation) => readonly ShellCommand[];
 
 /** The most characters a name may hold on the wire. A longer value is not a name: it counts as redacted. */
 export const NAME_MAX = 128;
-// A name is a word: letters, digits, and a few joiners, with an optional leading `@` for a scope. A mis-parsed command line, a path, an email, or a quoted string fails it.
-const WIRE_NAME = /^@?[A-Za-z0-9_][A-Za-z0-9_.+-]*(?:[/:][A-Za-z0-9_.+-]+)*$/;
+// A name is a word: letters, digits, and a few joiners, with an optional leading `@` for a scope. A mis-parsed command line, a path, an email, or a quoted string fails it. A `/` is not a joiner here: a name holding one is a path (`src/acme/plan.md`).
+const WIRE_NAME = /^@?[A-Za-z0-9_][A-Za-z0-9_.+-]*(?::[A-Za-z0-9_.+-]+)*$/;
+// A pull's package `name` is the one place a `/` belongs: a scope (`@scope/pkg`) or a Go module path (`golang.org/x/tools`).
+const WIRE_PULL_NAME = /^@?[A-Za-z0-9_][A-Za-z0-9_.+-]*(?:[/:][A-Za-z0-9_.+-]+)*$/;
 
 /** Whether a value has the shape of a name (and so can be told from a command line, a path, or an email) and is within `NAME_MAX`. */
 export const isWireName = (name: string): boolean => name.length <= NAME_MAX && WIRE_NAME.test(name);
+
+/** The shape of a pull's package name: a name, or a scope or module path with `/` in it. */
+export const isWirePullName = (name: string): boolean => name.length <= NAME_MAX && WIRE_PULL_NAME.test(name);
 
 /** What the client holds against a value before it leaves: the redactor, and the exclusion terms the operator keeps. This is the one gate; the pool assigns every other class. */
 export interface WireGate {
@@ -267,9 +272,9 @@ const unchanged = (gate: WireGate, name: string): boolean => gate.redact(name) =
  * A name as the wire holds it: the value itself, or `private` when it counts as redacted. A value counts as redacted when the redactor changes it, it holds an exclusion term, it fails the name shape, or it is over
  * `NAME_MAX` characters, because a secret, an employer's name, or a mis-parsed command is not a name and nothing downstream can take it back. `keys` (t870) sends its names through this same function.
  */
-export const wireName = (gate: WireGate, name: string): string => {
+export const wireName = (gate: WireGate, name: string, hasShape: (name: string) => boolean = isWireName): string => {
   const lower = name.toLowerCase();
-  return isWireName(name) && unchanged(gate, name) && !gate.terms.some((term) => term !== '' && lower.includes(term.toLowerCase())) ? name : PRIVATE;
+  return hasShape(name) && unchanged(gate, name) && !gate.terms.some((term) => term !== '' && lower.includes(term.toLowerCase())) ? name : PRIVATE;
 };
 
 const FLAG_DASHES = /^-{1,2}/;
@@ -297,7 +302,7 @@ const wireCommand = ({ program, subcommand, flags }: ShellCommand, raw: string |
 
 /** A pull in the wire's spelling: its package name after the gate. A version beside a name that is not on the public list could identify it, so it goes as `<literal>` (null stays null), the rule capture applies. */
 const wirePull = (pull: PullIdentity, gate: WireGate): PullIdentity => {
-  const name = wireName(gate, pull.name);
+  const name = wireName(gate, pull.name, isWirePullName);
   return { ...pull, name, version: !PUBLIC_PACKAGES.has(name) && pull.version !== null ? LITERAL : pull.version };
 };
 
@@ -713,9 +718,9 @@ const inSet = (held: Collected, allowed: ReadonlySet<string>, value: unknown, at
 };
 
 /** A long-tail name field: `private`, `other`, or a name (the pool assigns its class, `packages/pool/src/field-classes.ts`). A value that is no name is refused: a client that sends one has not run its gate. */
-const nameIn = (value: unknown, at: string): string => {
+const nameIn = (value: unknown, at: string, hasShape: (name: string) => boolean = isWireName): string => {
   const name = textOf(value, at);
-  if (name === PRIVATE || name === OTHER || isWireName(name)) return name;
+  if (name === PRIVATE || name === OTHER || hasShape(name)) return name;
   throw new Refused(at, 'not a name');
 };
 
@@ -828,7 +833,7 @@ const parseUsage = (held: Collected, value: unknown, at: string): SkeletonUsage 
 
 const parsePull = (held: Collected, value: unknown, at: string): PullIdentity => {
   const raw = fieldsOf(held, value, at, ['registry', 'name', 'version']);
-  const name = nameIn(raw.name, under(at, 'name'));
+  const name = nameIn(raw.name, under(at, 'name'), isWirePullName);
   const version = orNull(raw.version, under(at, 'version'), (entry, entryAt) => {
     const text = textOf(entry, entryAt);
     // A version beside a masked name could identify it: capture masks the two together.
@@ -1188,6 +1193,7 @@ export interface PinnedKey {
 
 const isSignedBundle = (value: unknown): value is SignedBundle => isFields(value) && typeof value.payload === 'string' && typeof value.signature === 'string';
 
+// A bundle states the floor it applied (`floor`, t881), and a client cannot tell which floor a bundle without one applied, so a format 1 bundle with no `floor` is refused as not a bundle this version reads.
 const isBundle = (value: unknown): value is Bundle =>
   isFields(value) && value.format === BUNDLE_FORMAT && typeof value.harness === 'string' && isHarness(value.harness) && typeof value.harnessVersion === 'string' && typeof value.vocabVersion === 'string' && typeof value.floor === 'number' && isFields(value.asOf) && Array.isArray(value.cells) && Array.isArray(value.motifs) && Array.isArray(value.reads) && Array.isArray(value.strata);
 

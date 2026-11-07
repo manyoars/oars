@@ -19,7 +19,7 @@ import { parseSkeleton, skeletonOf, VOCAB_VERSION, type PinnedKey } from './pool
 import { contentHash } from './read.js';
 import { deposit } from './store.js';
 import { spoolEvents } from '../telemetry/read-events.js';
-import { addProject, cleanup, NOW, settledClock, stage, type Staged } from './test-support.js';
+import { addProject, cleanup, NOW, settledClock, stage, TEST_FLOOR, type Staged } from './test-support.js';
 
 // The session gates must stop a session before the projection runs; the real projection is wrapped so a test can see whether it was called.
 vi.mock('./pool-wire.js', async (importOriginal) => {
@@ -1347,7 +1347,7 @@ describe('oars pool fetch', () => {
     expect(scene.seen).toEqual([]);
   });
 
-  const bundleBody = (version: string, harness = 'claude-code'): string => JSON.stringify({ format: 1, harness, harnessVersion: version, vocabVersion: VOCAB_VERSION, floor: 5, asOf: { pool: 'p' }, cells: [{}], motifs: [], reads: [{}, {}], strata: [] });
+  const bundleBody = (version: string, harness = 'claude-code'): string => JSON.stringify({ format: 1, harness, harnessVersion: version, vocabVersion: VOCAB_VERSION, floor: TEST_FLOOR, asOf: { pool: 'p' }, cells: [{}], motifs: [], reads: [{}, {}], strata: [] });
 
   const signedScene = async (): Promise<{ scene: Scene; sign: (text: string) => Promise<string> }> => {
     const scene = setting();
@@ -1452,7 +1452,7 @@ describe('oars pool fetch', () => {
   };
 
   const signedReply = async (sign: (text: string) => Promise<string>, version: string, etag: string | null, reads = 2, harness = 'claude-code'): Promise<() => Response> => {
-    const payload = JSON.stringify({ format: 1, harness, harnessVersion: version, vocabVersion: VOCAB_VERSION, floor: 5, asOf: { pool: 'p' }, cells: [{}], motifs: [], reads: Array.from({ length: reads }, () => ({})), strata: [] });
+    const payload = JSON.stringify({ format: 1, harness, harnessVersion: version, vocabVersion: VOCAB_VERSION, floor: TEST_FLOOR, asOf: { pool: 'p' }, cells: [{}], motifs: [], reads: Array.from({ length: reads }, () => ({})), strata: [] });
     const signature = await sign(payload);
     return () => HttpResponse.json({ payload, signature }, etag === null ? {} : { headers: { etag } });
   };
@@ -1937,7 +1937,7 @@ describe('pool telemetry: deposit batches and fetches leave counts', () => {
     expect(eventsOf(dir, 'deposit')).toEqual([{ step: 'send', sent: 1, bytes: Buffer.byteLength(batchBytes(scene)[0] ?? '') }]);
   });
 
-  const bundleBody = (version: string): string => JSON.stringify({ format: 1, harness: 'claude-code', harnessVersion: version, vocabVersion: VOCAB_VERSION, floor: 5, asOf: { pool: 'p' }, cells: [{}], motifs: [], reads: [{}, {}], strata: [] });
+  const bundleBody = (version: string): string => JSON.stringify({ format: 1, harness: 'claude-code', harnessVersion: version, vocabVersion: VOCAB_VERSION, floor: TEST_FLOOR, asOf: { pool: 'p' }, cells: [{}], motifs: [], reads: [{}, {}], strata: [] });
   const BUNDLE = `/bundle/claude-code/2.1.314/${VOCAB_VERSION}`;
 
   const signed = async (): Promise<{ scene: Scene; reply: () => Promise<Response> }> => {
