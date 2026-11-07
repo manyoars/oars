@@ -1022,7 +1022,7 @@ line, and usage is nonzero where the library reports it.
   the cursor, the allowlist, `--deny otel`, the nightly run's saved allow, and the fail-open reads are the ones every other source has. No folder, no read: it is opt-in by
   pointing it at traces. Every `*.jsonl` and `*.json` file in it is read, and the spans of all files are joined by `traceId` first, because a collector may split one trace
   across files. A file that does not parse is named once as unreadable and skipped; the other files and sources deposit. A torn line in a file that does parse is counted as a bad line on the first session that came from that file, and a file whose torn lines no session came from is named as unreadable with its line count. A deposit only reads. Idempotent per session
-  (`otel/<id>` in `state.json`; the size is the span count and the mtime the latest span time, so a file that gains spans is read again).
+  (`otel/<id>` in `state.json`; the size is the count of agent, model, and tool spans it read and the mtime the latest span time, so a file that gains spans is read again).
 - **Mapping.** A session is one `traceId`; traces that share `gen_ai.conversation.id` are one session, each trace a prompt in start-time order, and a trace with no
   conversation id is its own session. A prompt is one per root agent span (`invoke_agent` or any `invoke_*` operation), else per trace root; its text is the last user message
   of `gen_ai.input.messages`, which is Opt-In, so by default the turn is written content-less (as an image-only prompt is). A model call is a `chat`, `generate_content`, or
@@ -1032,7 +1032,7 @@ line, and usage is nonzero where the library reports it.
   reads as `skill.run` or `file.read`, `gen_ai.transfer.*` or a child agent as `agent.spawn`, and `mcp.method.name` `tools/call` as `mcp__unnamed__<tool>`: the conventions carry
   no MCP server name.
 - **Timestamps.** Spans carry Unix nanoseconds as decimal strings; each is converted once, to milliseconds, through `BigInt`. A span with no start time takes the latest time so far
-  in its session.
+  in its session; a session's first prompt with no time of its own takes the earliest timed span under it.
 - **Usage.** `gen_ai.usage.input_tokens` includes cache reads and writes (the registry says it SHOULD), so the stored input is `input - cache_read.input_tokens - cache_write.input_tokens`
   (never below 0), with the cache figures kept apart as capture does, and `reasoning.output_tokens` is thinking. A figure a span did not report is not written, and a trace with no
   usage writes no `usage` and observes none (the `usageObserved` rule), not zero.
@@ -1043,7 +1043,7 @@ line, and usage is nonzero where the library reports it.
   no bundle is fetched for `otel`: `oars pool fetch --harness otel` is refused, and otel sessions are not counted when a fetch without `--harness` picks the harness your store holds most of. A separate framework field is a later change, only if a pooled read needs it.
 - **Content.** Prompts, completions, tool arguments, and tool results are Opt-In attributes. When present they pass only through capture's field classes and redaction; `_ref`
   URIs are never fetched.
-- **Known gaps.** No provider is stored. A LangSmith or Langfuse native reader is a later change, only if a field they hold is lost in the OTel form.
+- **Known gaps.** No provider is stored. A trace deposited before its conversation id arrives (the id sits on the root agent span, which a batch exporter writes last) is kept as its own session as well, next to the merged one it later joins. A LangSmith or Langfuse native reader is a later change, only if a field they hold is lost in the OTel form.
 
 ## The outcome gold set
 
