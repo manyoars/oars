@@ -46,7 +46,7 @@ describe('the class of a cell', () => {
   it('is thresholded when any one part is off a list', () => {
     expect(cellClassOf(cellOf('m', `claude-code/${NO_AXES}/acme-private-finetune-v7`, 1), motifOf('m', git()))).toBe('thresholded');
     expect(cellClassOf(cellOf('m', 'claude-code/2.1.31x/acme-private-finetune-v7', 1), motifOf('m', git()))).toBe('thresholded');
-    expect(cellClassOf(cellOf('m', 'claude-code/2.1.31x-acme/claude-sonnet-4-5', 1), motifOf('m', git()))).toBe('thresholded');
+    expect(cellClassOf(cellOf('m', 'claude-code/acme-nightly/claude-sonnet-4-5', 1), motifOf('m', git()))).toBe('thresholded');
     expect(cellClassOf(cellOf('m', frame, 1), motifOf('m', { program: 'acme-deploy', sub: null, flags: [] }))).toBe('thresholded');
     expect(cellClassOf(cellOf('m', frame, 1), motifOf('m', git([], 'acme-sub')))).toBe('thresholded');
     expect(cellClassOf(cellOf('m', frame, 1), motifOf('m', git(['--acme-flag'])))).toBe('thresholded');
