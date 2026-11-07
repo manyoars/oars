@@ -1309,11 +1309,15 @@ describe('oars pool fetch', () => {
       expect(scene.h.out.join('')).not.toContain('floor');
     });
 
-    it('carries a family this client does not know, so a later pool that adds one breaks no released client', async () => {
+    it('parses a family this client does not know and prints none of it, so a later pool that adds one breaks no released client', async () => {
       const { scene, sign } = await signedScene();
       on(scene, 'get', `/bundle/claude-code/2.1.314/${VOCAB_VERSION}`, await floored(sign, { public: 5, disclosure: 2, families: { 'a-later-family': 3 } }));
       expect(await scene.cli('pool', 'fetch', '--harness-version', '2.1.314', '--server', POOL)).toBe(ExitCode.OK);
-      expect(scene.h.out.join('')).toContain('with a-later-family at 3.');
+      const text = scene.h.out.join('');
+      expect(text).toContain('a disclosure floor of 2.');
+      expect(text).not.toContain('a-later-family');
+      expect(await scene.cli('pool', 'fetch', '--harness-version', '2.1.314', '--server', POOL, '--json')).toBe(ExitCode.OK);
+      expect(scene.document()).toMatchObject({ floors: { families: { 'a-later-family': 3 } } });
     });
 
     it.each([{ public: 0, disclosure: 2 }, { public: 5.5, disclosure: 2 }, { public: 5 }, { public: 5, disclosure: 2, families: { live: 0 } }, 'five'])('refuses a signed bundle whose floors are %j, rather than print them', async (floors) => {
