@@ -32,10 +32,10 @@ Under `<config>/oars/sessions/` (`%APPDATA%` on Windows, `$XDG_CONFIG_HOME` or `
 
 ## Capture scope: the allowlist
 
-Capture reads a project folder only when an `--allow` entry names it. The rule is one filter, `allow.allows(folder)`, applied in
-`deposit` (`store.ts`, `depositLocked`) and in the SessionEnd hook (`depositSessionLocked`, which returns `not-allowed` and writes nothing when nothing is pending, and otherwise leaves the filter to `depositSessionInto`, which returns it after the drain; a hook that finds the lock held applies the same filter in `depositSession` before it defers, so an off-allowlist session leaves no pending entry either). Everything else under `~/.claude/projects` is
-out of scope by design ("nothing is read from a folder you have not named"), so a transcript there is never in `state.json`, `raw/`, or any record. That is a
-choice the operator makes, not a gap. Three kinds of folder are left out unless named:
+Capture reads every project folder unless the saved list names some, less every `!` (`--deny`) entry. The rule is one filter, `allow.allows(folder)`, applied in
+`deposit` (`store.ts`, `depositLocked`) and in the SessionEnd hook (`depositSessionLocked`, which returns `not-allowed` and writes nothing when nothing is pending, and otherwise leaves the filter to `depositSessionInto`, which returns it after the drain; a hook that finds the lock held applies the same filter in `depositSession` before it defers, so an off-allowlist session leaves no pending entry either). A folder off the list (one a `--deny` entry names, or one the list leaves out
+once it names folders) is out of scope by design, so a transcript there is never in `state.json`, `raw/`, or any record. That is a
+choice the operator makes, not a gap. Three kinds of folder are read by default and left out once the list names folders, unless it names them too:
 
 - **Other projects.** A repository you never allowed.
 - **Throwaway working directories.** Scratch and test folders under the temp directory, and probe directories a harness job starts in.
@@ -592,8 +592,8 @@ carry `harness: "cursor"`; a record with no `harness` is Claude Code's (`harness
   macOS, `$XDG_CONFIG_HOME/Cursor/User` (else `~/.config/Cursor/User`) on Linux. `deposit` finds it on its own and skips it silently when
   it is absent. It opens the two SQLite files read-only through the built-in `node:sqlite` (Node 24 or later, no dependency), loaded only
   when a Cursor store exists.
-- **Opt-in.** Reading it needs consent like any other source: pass `--allow cursor` (or a glob that matches it, such as `*`). The nightly
-  schedule's allow list is where to add it. Without it the store is not opened.
+- **Read by default.** Like any other source, it is read by default; `--allow` narrows and `--deny cursor` keeps it out. The nightly
+  schedule reuses the saved list.
 - **What maps to what.** One session per composer: `workspaceStorage/<hash>/state.vscdb` (`composer.composerData`) names the composers of a
   workspace, and `workspace.json` names its folder; `globalStorage/state.vscdb` (`cursorDiskKV`) holds the messages (`bubbleId:<composer>:<bubble>`)
   and `composerData:<composer>`. A user bubble is a prompt, an assistant bubble a response; `modelInfo.modelName` is the model; `tokenCount`
@@ -636,7 +636,7 @@ session count is nonzero, there are zero violations, the session has a prompt an
 matching error line. A rollout whose shell outcomes were all lost would still show a session count and zero violations, which is why those are required.
 
 - **Where.** `$CODEX_HOME`, else `~/.codex` (`%USERPROFILE%\.codex` on Windows; `codex-rs/utils/home-dir/src/lib.rs:5-18`): `sessions/YYYY/MM/DD/rollout-<time>-<thread>.jsonl` and
-  `archived_sessions/`; a reverted thread's file is `rollout-<time>-<thread>_<rollout>.jsonl` (`rollout/src/rollout_file_name.rs:12-14`, `:41-47`, `:66-73`), folded into its thread's own session, so a thread is one lineage. Revert exists for a Paginated thread only: it writes a new file that holds the records written after the revert and references the retained prefix of the old file through `session_meta.history_base` (`thread-store/src/local/revert_thread.rs:15-18`, `:198-200`; `protocol.rs:3508-3510`), and its first record takes `history_base.end_ordinal_exclusive` as its ordinal (`rollout/src/ordinal.rs:29-31`). The old file stays intact and still holds the turns the revert dropped, so the reader reads each file only below the start ordinal of the files written after it (the latest revert wins): the retained prefix, then the post-revert records, with the dropped turns gone. A reverted file whose thread is not in the store stays its own session, a subagent of that thread (`<thread>_<rollout>`). A `.jsonl.zst` rollout is decompressed read-only. Opt-in like Cursor: discovered by default, opened only when `--allow codex` (or a matching glob) names it; the nightly run repeats a saved allow.
+  `archived_sessions/`; a reverted thread's file is `rollout-<time>-<thread>_<rollout>.jsonl` (`rollout/src/rollout_file_name.rs:12-14`, `:41-47`, `:66-73`), folded into its thread's own session, so a thread is one lineage. Revert exists for a Paginated thread only: it writes a new file that holds the records written after the revert and references the retained prefix of the old file through `session_meta.history_base` (`thread-store/src/local/revert_thread.rs:15-18`, `:198-200`; `protocol.rs:3508-3510`), and its first record takes `history_base.end_ordinal_exclusive` as its ordinal (`rollout/src/ordinal.rs:29-31`). The old file stays intact and still holds the turns the revert dropped, so the reader reads each file only below the start ordinal of the files written after it (the latest revert wins): the retained prefix, then the post-revert records, with the dropped turns gone. A reverted file whose thread is not in the store stays its own session, a subagent of that thread (`<thread>_<rollout>`). A `.jsonl.zst` rollout is decompressed read-only. Like Cursor: read by default; `--allow` narrows and `--deny codex` keeps it out; the nightly run repeats the saved list.
 - **What a rollout holds** (`codex-rs/rollout/src/policy.rs`, by `session_meta.history_mode`). `paginated` is the mode the CLI writes by default
   (`thread-store/src/local/mod.rs:512-515`; absent `history_mode` means `legacy`, `protocol.rs:949-951`): it persists `item_completed` events holding a `TurnItem`
   (`items.rs:50`) in place of `user_message`, `agent_message`, `patch_apply_end`, and `mcp_tool_call_end` (`policy.rs:142-156`; the items are chosen in `persisted_item_completed_event`, `:232`, `Paginated` arm `:253`), and stamps every record with an `ordinal`
@@ -683,8 +683,8 @@ command with a matching error line, and usage is nonzero (it is written at shutd
   live file; they are read oldest N first, then the live file, as one session. The session's cursor is the sum of its files' sizes and the newest modification
   time, so a new archive or a longer live file reads the session again and a second deposit adds nothing. The cwd comes from the oldest file's `session.start`.
   The live head's `session.journal_link {previousFile, sessionId, version}` is ignored. The order comes from N, ascending (no page states how the archives are
-  numbered); the reader does not follow each head's `previousFile`. Opt-in like Cursor and Codex: discovered by default, opened only when `--allow copilot` names it; the nightly run
-  repeats a saved allow.
+  numbered); the reader does not follow each head's `previousFile`. Like Cursor and Codex: read by default; `--allow` narrows and `--deny copilot` keeps it out; the nightly run
+  repeats the saved list.
 - **Mapping.** `session.start` gives the cwd and `copilotVersion`; `assistant.message.model` the model; `user.message.content` a prompt; `assistant.message` a response.
   A shell call is found by shape, not name (`shellToolInfo` on the start event, or `shellExecution` on the completion, which also marks one the start did not),
   because the schema does not list tool names and the vendor's docs disagree on them; its outcome is the real `shellExecution.exitCode`, which decides whatever
@@ -726,7 +726,7 @@ It is settled only if the session count is nonzero, there are zero violations, t
 - **Where.** The folder that holds one folder per VS Code build: `%APPDATA%` on Windows, `~/Library/Application Support` on macOS, `$XDG_CONFIG_HOME` (else `~/.config`) on Linux; `VSCODE_APPDATA` replaces it.
   The builds read are `Code` (Stable), `Code - Insiders`, and `Code - OSS`; a build with another `nameShort`, a portable install, or `--user-data-dir` is not discovered. Inside a build's `User` folder: `workspaceStorage/<hash>/chatSessions/<id>.json` or `.jsonl`,
   `globalStorage/emptyWindowChatSessions/<id>.json|.jsonl` (a window with no folder, so no working directory), and the older `workspaceStorage/no-workspace/chatSessions`. The `<hash>` leads to a working directory through the sibling `workspace.json`
-  (`{folder}` or `{workspace}`, a uri). Opt-in like Cursor and Codex: discovered by default, opened only when `--allow vscode-copilot` names it; the nightly run repeats a saved allow.
+  (`{folder}` or `{workspace}`, a uri). Like Cursor and Codex: read by default; `--allow` narrows and `--deny vscode-copilot` keeps it out; the nightly run repeats the saved list.
 - **Two file forms.** `.json` is one `ISerializableChatData`. `.jsonl` is a mutation log, one entry per line: `{kind:0,v}` the initial value, `{kind:1,k,v}` a set, `{kind:2,k,v,i}` a push, `{kind:3,k}` a delete. VS Code reads the `.jsonl` first and the `.json` only when that is unreadable. With `chat.useLogSessionStorage` off it writes only the `.json` (`chatSessionStore.ts:353,394`), so a log left from an earlier run is the older file: this reader stats both files, reads the newer first (the `.jsonl` on a tie), and takes the cursor from it, so a changed `.json` is re-read.
   A malformed log line is skipped and counted in the deposit line (VS Code throws on one). A session moved between workspaces is copied and the original kept, so the newest copy of an id is read. Idempotent per session (`vscode-copilot/<id>` in `state.json`, the newest file's size and mtime).
 - **Mapping.** A request is one prompt (`message.text`, or the string in the old format) and one response. A request flagged `isSystemInitiated` or hidden from the transcript is the harness writing, not the operator: its prompt is not read, its response is.
@@ -766,8 +766,8 @@ with the file, and usage is nonzero with `input_tokens` equal to the model's pro
   `chats/<parentSessionId>/<agentId>.jsonl`, deposited as a subagent of `gemini-<parentSessionId>` so session counts stay main sessions; the parent's `invoke_agent` call
   stays. A file at the root of `chats/` whose head says `kind: "subagent"` (written there when no parent is set, `chatRecordingService.ts:787,813-814`) is skipped, as the vendor's own
   listing does (`cli/src/utils/sessionUtils.ts:301`). A file holding a head and the CLI's own context turn (every new chat appends a head, `geminiChat.ts:453`, and the `<session_context>` turn, `geminiChat.ts:453-458`, `environmentContext.ts:69,101-108`, so a launch and quit or a `/clear` leaves them) is no session until
-  a prompt is appended; it is not reported as unreadable. Opt-in like the other sources: discovered by default, opened only when `--allow gemini` names it, read-only, with its own cursor (`gemini/<id>` in
-  `state.json`, size and mtime); the nightly run repeats a saved allow. The prompt log `logs.json`, the `checkpoint-*.json` copies, and the opt-in telemetry file are
+  a prompt is appended; it is not reported as unreadable. Like the other sources: read by default; `--allow` narrows and `--deny gemini` keeps it out; read-only, with its own cursor (`gemini/<id>` in
+  `state.json`, size and mtime); the nightly run repeats the saved list. The prompt log `logs.json`, the `checkpoint-*.json` copies, and the opt-in telemetry file are
   not read (a subset, copies, and off by default).
 - **Mapping.** The file is the vendor's journal, folded the way its loader does: a message `id` written again replaces the earlier record in its place, and
   `$rewindTo`, `$patch`, and a deprecated `$set.messages` apply, with one difference. A history sync (compression, `core/client.ts:724,1294`, and every masking pass,
@@ -834,8 +834,8 @@ that a deposit counts only the child's own prompts.
 - **Where.** `$GROK_HOME` if set and non-empty, else `~/.grok` (`%USERPROFILE%\.grok` on Windows) (`xai-dirs/src/lib.rs:51-57`; `17-sessions.md:18`):
   `sessions/<percent-encoded cwd>/<session id>/`. The cwd is `summary.json` `info.cwd` (a long path's folder name is a hash, so the name is not read). Three files are
   read: `updates.jsonl` ("the authoritative conversation log", `17-sessions.md:42`), `summary.json`, and `usage.json` (not in the documented layout, but `grok usage`
-  prints it). `events.jsonl` is telemetry with no prompt text or cwd, and `chat_history.jsonl` is the model-facing copy; neither is read. Opt-in like Cursor, Codex, and
-  Copilot: discovered by default, opened only when `--allow grok` names it; the nightly run repeats a saved allow. A deposit only reads.
+  prints it). `events.jsonl` is telemetry with no prompt text or cwd, and `chat_history.jsonl` is the model-facing copy; neither is read. Like Cursor, Codex, and
+  Copilot: read by default; `--allow` narrows and `--deny grok` keeps it out; the nightly run repeats the saved list. A deposit only reads.
 - **Mapping.** Each `updates.jsonl` line is `{timestamp, method, params: {sessionId, update}}` with an ACP `update`. `user_message_chunk` text is a prompt (a prompt that is only an image is one too: it is written as an image block with no data, so the turn is counted and the next reply is a new response, `turn.rs:960-962`, `storage/mod.rs:416`; chunks
   merge into one prompt until the agent speaks or `_meta.promptIndex` changes, so a prompt cancelled before its first reply and then retried stays two prompts,
   `turn.rs:890-895`, `storage/mod.rs:1009`; a change between marked and unmarked opens a new prompt too, `storage/mod.rs:1038-1039`, since a `!cmd` prompt carries only a model id, `tool_dispatch.rs:185-187`, while two unmarked chunks merge). Three markers say the text is not the
